@@ -15,9 +15,13 @@
      ,@body))
 
 (ert-deftest drgnx-vsc/every-command-is-registered ()
-  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
-    (dolist (m '(core/basics editor/editing tools/search lang/eglot ui/look))
-      (funcall (plist-get (alist-get m drgnx-modules--table) :setup)))
+  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
+        ;; core/basics turns the trust guards on: put them back as they were, the trusted set untouched
+        (trust-was drgnx-trust-mode) (trusted-content trusted-content))
+    (unwind-protect
+        (dolist (m '(core/basics editor/editing tools/search lang/eglot ui/look))
+          (funcall (plist-get (alist-get m drgnx-modules--table) :setup)))
+      (drgnx-trust-mode (if trust-was 1 -1)))
     (dolist (id '(file-save-as file-new file-reopen-tab file-new-window file-close-window
                                go-recent go-symbol-project go-back go-forward search-file search-replace
                                edit-select-all edit-select-line edit-redo edit-comment edit-delete-line edit-move-up edit-move-down
@@ -133,8 +137,6 @@
     (should (equal (plist-get spec :packages) '(multiple-cursors)))
     (should (eq (plist-get spec :stage) 'idle))))
 
-;;; mod-vscode-cmds-test.el ends here
-
 ;; From the old UI list ("unbounded closed-files list"): the list behind Reopen Closed Tab keeps the newest 30,
 ;; each file once.
 (ert-deftest drgnx-vsc/the-closed-files-list-is-bounded ()
@@ -158,3 +160,5 @@
             (should (= (length drgnx-basics--closed) 30))
             (should (= 1 (seq-count (lambda (f) (equal f again)) drgnx-basics--closed)))))
       (mapc #'delete-file files))))
+
+;;; mod-vscode-cmds-test.el ends here

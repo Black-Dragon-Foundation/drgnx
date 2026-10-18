@@ -17,7 +17,7 @@
          (progn
            (make-directory (concat root "config") t)
            (with-temp-file (concat root "config/agents.eld")
-             (prin1 (list :profiles (list (list "mock" :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
+             (prin1 (list :profiles (list (list "mock" :command (list "sh" (expand-file-name "test/fixtures/mock-acp-stdin.sh" drgnx-dir) (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
                                                                       "-l" (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir)))))
                     (current-buffer)))
            (drgnx-hub-ensure)

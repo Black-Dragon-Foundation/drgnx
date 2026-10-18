@@ -1,17 +1,21 @@
 # Packages
 
 drgnx installs packages in one place only: `drgnx sync`, a command you run. Emacs never installs anything on
-its own, and neither does the daemon at startup, a timer or a module. Installed packages are pinned in a lock,
+its own, and neither does the daemon at startup, a timer, a module or a hook that happens to run inside one of
+your commands (opening a file, say): `package-install`, `package-refresh-contents` and the like are refused from those (with an error saying
+so) and work when you run them yourself: `M-x package-install`, `M-x list-packages`, an Install button, `M-:`. Installed packages are pinned in a lock,
 every downloaded file is kept in a cache, and each sync leaves a **generation** you can go back to at once.
 
 ```
 drgnx sync                  install what drgnx needs (from the archives, the cache and the lock)
 drgnx sync --offline        only the lock and the cache — no network
 drgnx sync --seed DIR       first copy the packages of another Emacs (e.g. ~/.config/emacs/elpa), then sync
+drgnx sync --prune          also remove the packages the manifest no longer needs (listed; rollback restores them)
+drgnx sync --prune --dry-run  only list what --prune would remove
 drgnx upgrade               the newest versions; if they break, the previous generation comes back
 drgnx rollback [N]          the packages of generation N (default: the one before the current one)
 drgnx generations           the generations kept (five)
-drgnx lock                  what the lock pins
+drgnx lock                  what the lock pins (version, and the archive or, for Git, the commit)
 drgnx lock --ship           (maintainers) write the known-good lock drgnx ships from yours
 drgnx safe                  Emacs with drgnx's core only: no modules, no packages
 drgnx bisect [-- CMD…]      find the module that breaks something
@@ -33,15 +37,21 @@ The **manifest** is:
   ```
 
   `:archives` is optional (default: GNU ELPA, NonGNU ELPA, MELPA); a local directory works as an archive;
-  `:archives ()` means none (sync then works from the cache only); `:archive-priorities` (e.g.
-  `(("gnu" . 3) ("nongnu" . 2) ("melpa" . 1))`, package.el's `package-archive-priorities`) makes a package come
-  from the highest priority archive that has it, even when another has a newer version (without it, the newest
-  version wins — usually MELPA's build of the latest commit);
+  `:archives ()` means none (sync then works from the cache only); `:archive-priorities` (package.el's
+  `package-archive-priorities`) makes a package come from the highest priority archive that has it, even when
+  another has a newer version. drgnx's default, when you set neither this key nor `:archives`, is `(("gnu" . 3) ("nongnu" . 2)
+  ("melpa" . 1))`: releases over MELPA's snapshots (magit stays on its NonGNU release instead of moving to the
+  latest commit's build), and MELPA still serves what only it has — a package, or a version a dependency needs.
+  Your own value wins (an alist of `("archive-name" . NUMBER)`; anything else is reported), `:archive-priorities ()`
+  included, and so does your own `:archives` list: package.el ranks an archive that is not listed below every listed one,
+  so the default would put yours under MELPA; rank them yourself to prefer releases. With no priorities the newest
+  version wins, usually MELPA's build of the latest commit;
 - what `use-package … :ensure` asked for in a session, or an external module's files (gryphn) would have
   installed. In drgnx `:ensure` installs nothing: it records the package use-package would have installed
   (`:ensure t` the package itself, `:ensure other` that one, `:ensure nil` none) in
-  `~/.local/state/drgnx/packages-wanted.eld` and says so in `*Messages*`; the next `drgnx sync` installs it and
-  forgets the want.
+  `~/.local/state/drgnx/packages-wanted.eld` and says so in `*Messages*`; the next `drgnx sync` installs it. The want stays
+  in that file (so the package stays in the manifest, and `drgnx sync --prune` keeps it); delete the name from the file
+  when you no longer want it.
 
 `drgnx sync` resolves each package of the manifest with its dependencies (package.el — one that no archive has
 is reported and does not stop the others), downloads what is missing into `~/.cache/drgnx/packages/` (an HTTP
@@ -51,7 +61,16 @@ byte-compiles, compiles to native code ahead of time (when your Emacs has native
 at startup. A download or an install that fails stops the sync with nothing changed, and a file that did not
 install is removed from the cache. A download or a lock write that stops half way (an error, `C-g`) leaves no
 partial file; what a killed sync left (`*.part` in the cache, `.drgnx.lock.eld.tmp-*`) the next sync removes. A file that does not compile (byte or native) is not a failure: the package is
-installed, runs that file less compiled, and the sync prints a `WARNING` line naming the package and the file. Sync never removes a package: one installed by hand stays and is locked too.
+installed, runs that file less compiled, and the sync prints a `WARNING` line naming the package and the file (compat's per-version files for versions your Emacs already has, such as `compat-29.el` on Emacs 30, are never
+loaded and are not compiled to native code, so they never warn).
+
+A plain sync never removes a package: one that left the manifest (a module turned off) or was installed by hand
+stays and is locked too. `drgnx sync --prune` removes them: every installed package the manifest does not name and
+no package of the manifest requires — hand-installed ones included. Packages that `use-package … :ensure` or an
+external module asked for count as named. It is never automatic, it lists what it removed (`pruned: …`), it removes
+nothing while a package is missing, and it first keeps a generation of the state before, so `drgnx rollback`
+brings them back. `drgnx sync --prune --dry-run` only prints `would prune: …` (from the packages installed now and
+the current manifest) and changes nothing.
 
 ### Packages from Git
 
@@ -82,11 +101,31 @@ lock to the archives' versions. An unreadable lock is an error, never silently r
 
 The packages of the manifest that the lock has install at their locked versions, together with what their lock
 entries require — not with what the archives' newest versions would need — so a lock installs as the set it was
-made from even when an archive has moved on (MELPA builds every commit). A locked package that a built-in one
-already satisfies at the version required (e.g. `compat` on a newer Emacs) is not installed, as package.el would
-not; a requirement the lock does not have is resolved from the archives. Packages install after the packages they
+made from even when an archive has moved on (MELPA builds every commit). A locked package that is there
+only because another package requires it, and that a built-in one already satisfies at the version required (e.g.
+`compat` on a newer Emacs), is not installed, as package.el would not (a package the manifest itself names is
+installed as locked); a requirement the lock does not have is resolved from the archives, except one on a Git-sourced
+package, which installs from its source. Packages install after the packages they
 require. Each archive entry also records its download's size (`:size`), which onboarding uses to say how much it
 would download.
+
+**A locked version the archive no longer serves.** MELPA keeps only its newest build of a package, so a snapshot you
+locked vanishes within days. When an archive's contents carry the commit a version was built from and its repository
+(MELPA's do, and some of GNU ELPA's), the lock records them as `:commit` and `:url` next to the usual entry. If a later
+sync finds that version gone from every archive and from the cache, it rebuilds the package from that commit — the same
+way a [Git package](#packages-from-git) is installed (cloned into the package cache, never asking for a password),
+named with the locked version, so the lock stays as it was and the next sync finds it installed — and prints a `WARNING`
+saying so. Nothing is installed through `package-build`: the files are the repository's, so a package whose MELPA recipe
+picks other files than a plain checkout holds (a `:files` recipe) may not build the same; and MELPA's `:url` is
+sometimes a homepage, not a repository. The commit must be a full id (40 or 64 hex characters, not a branch, a tag or a prefix) and the checkout must resolve to
+it, since it is the only check the rebuilt files get; the URL must be an `https://` one or a local directory (git runs
+with only those protocols allowed, whatever your git configuration says: no `ext::`, no `ssh://`). The package's
+`NAME.el` is taken at the top of the repository, else from `lisp/`. GNU ELPA's commit is on its own branch and may be
+missing from the `:url` repository. When the commit cannot be had (no such repository, no such commit, any of the above)
+or the lock has none (entries written by an older drgnx, until the package is upgraded or installed again), the package is reported
+`MISSING` with the reason, the installed version is kept and the lock stays as it was — it is never silently
+replaced by the archive's version; `drgnx upgrade` is the way to take that. The shipped lock's pins stay soft instead
+(see below): they fall back to the archive's version. `--offline` does not rebuild (it says "sync online to rebuild it from its commit").
 
 `drgnx sync --offline` installs exactly the lock from the cache: on a new machine, copy the cache and the lock and
 sync without network. A manifest package the lock does not have is reported ("sync online once").
@@ -111,6 +150,14 @@ at the shipped versions, the command exits 0, and the lock records what was inst
 of the lock drops the mark; from then on your lock is the one that counts — it always wins over the shipped one, a
 locked version nobody has is reported as above (never replaced), a later sync keeps your versions, and `drgnx
 upgrade` moves them on.
+
+**A module you turn on later uses it too.** Your lock holds the packages installed so far, so a package a newly enabled
+module asks for is not in it. `drgnx sync` then takes that package's version from the shipped lock (and what it needs,
+and a Git package's commit) as a soft pin, the same way as the first sync: a version no archive serves any more falls
+back to the archive's current one with a `WARNING`, and the pin you already have in your own lock is never replaced. A
+package that is already installed (by hand, say) is left as it is; `drgnx upgrade`, `--offline` and `--seed` do not
+consult the shipped lock. Whenever a change adds or changes a module's package, the shipped lock is refreshed in the
+same change (`drgnx lock --ship`), and a unit test fails when a package a module names has no entry in it.
 
 The first sync needs the network; offline (`--offline`, with the archives' files in the cache) it installs what the
 cache has and names the packages it could not get — a Git package always needs one online sync for its clone — and
@@ -151,9 +198,9 @@ on a file system without them, every sync copies the packages twice; five kept).
 is recompiled. `drgnx upgrade` snapshots the packages first, takes every package to the archive's newest version,
 then runs a smoke test (a fresh Emacs that activates drgnx's packages and loads each package of the manifest that
 has a file of its name); if the upgrade or the smoke test fails, the snapshot and its lock come back and the output
-says why. Without `:archive-priorities`, the newest version wins: a first `drgnx upgrade` after the shipped lock moves
-packages it took from GNU or NonGNU ELPA releases (magit, …) to MELPA's latest builds where MELPA has them — set
-priorities ([above](#what-gets-installed)) to stay on releases.
+says why. With the default archive priorities ([above](#what-gets-installed)) an upgrade keeps the packages that come from GNU or
+NonGNU ELPA releases (magit, …) on their newest release rather than moving them to MELPA's latest builds; set your own
+priorities, or `:archive-priorities ()`, to take the newest version wherever it is.
 
 A running drgnx keeps the packages it loaded: **restart it** after a sync, upgrade or rollback (the command says
 so). One writer at a time: a sync, upgrade or rollback refuses while another runs; a lock left by one that died is
@@ -169,14 +216,16 @@ after a reboot does not hold it, and of two commands taking over the same stale 
   your files are untouched), starts drgnx and asks whether the problem showed, and halves again — about log2(N)
   rounds. `drgnx bisect -- CMD ARGS…` runs CMD instead of asking (a non-zero exit means "the problem showed";
   `DRGNX_CONFIG_DIR` points at the copy).
-- `drgnx doctor` reports packages the manifest needs that are not installed, a missing or unreadable lock, and the
-  generations kept.
+- `drgnx doctor` reports packages the manifest needs that are not installed (not those your Emacs ships, such as
+  `eglot`), a missing or unreadable lock, and the generations kept.
 
 ## Running drgnx as a daemon
 
 `drgnx service-unit` prints a systemd user unit (`Type=notify`, `emacs --fg-daemon=drgnx
 --init-directory=<checkout>/init`); `drgnx service-unit DIR` writes `DIR/drgnx.service`. drgnx never installs or
-enables it. The unit runs the Emacs that ran the command — `$DRGNX_EMACS`, default `emacs` — by its full path
+enables it. A daemon that fails is restarted after 2 seconds and
+started at most 3 times a minute (after that, `systemctl --user reset-failed drgnx`), so a second drgnx holding the
+server name does not loop. The unit runs the Emacs that ran the command — `$DRGNX_EMACS`, default `emacs` — by its full path
 (quoted for systemd, so paths with spaces work). Choose another one when you write the unit, e.g.
 `DRGNX_EMACS=emacs-pgtk drgnx service-unit DIR` on Fedora where `emacs` may be another build. To run it next to your current Emacs daemon:
 
@@ -208,7 +257,7 @@ module and refusing entries without a hash or commit, an interrupted first sync 
 pin nobody serves falling back (with a warning, its dependents installed) while a user's own lock still reports it,
 `--seed` keeping the seeded versions, a requirement beyond the lock installed and a locked package a built-in
 satisfies left out (each test has its own shipped lock in a temp dir, never the checkout's). HTTP downloads run against a loopback server in the test
-Emacs itself (a 200 is saved byte for byte; a 404 saves nothing). `test/unit/pkg-git-test.el`: packages from local Git
+Emacs itself (a 200 is saved byte for byte; a 404 saves nothing). `test/unit/pkg-melpa-pin-test.el`: the lock recording an archive's commit and URL, and a version gone from the archive rebuilt from its commit in a local Git repository (also from an empty directory, and before a package that needs it), reported missing and kept when the lock has no commit, the commit cannot be had or the URL is no repository, left alone while the archive serves it, soft for the shipped lock, not attempted offline. `test/unit/pkg-shipped-lock-test.el`: the shipped lock as soft pins for a module turned on later (its version, its dependencies, the user's lock winning, an unserved pin falling back, a package installed by hand left alone, no effect on upgrade, `--offline` or `--seed`, a Git package at the shipped commit) and the coverage test (every package a module names is in `etc/drgnx.lock.eld`). `test/unit/pkg-priorities-test.el`: the default archive priorities (an upgrade keeps a NonGNU release over a newer MELPA snapshot, still takes a newer release, a MELPA-only dependency still resolves, a priority of the user's own wins). `test/unit/pkg-git-test.el`: packages from local Git
 repositories — the commit and dependencies, the lock holding the commit until upgrade, offline from the cached clone,
 a missing `:rev`, no version header, a module's package with drgnx's Git source, an offline first sync naming the Git
 package it could not get and installing the rest.

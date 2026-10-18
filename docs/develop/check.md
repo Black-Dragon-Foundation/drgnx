@@ -13,14 +13,19 @@ It runs in phases:
 
 1. **Build.** An error stops everything.
 2. **In parallel:**
-   - the unit suite in `--shards` batch Emacs (4);
+   - the unit suite in `--shards` shards (4), each running its test files one after another, every file in an
+     Emacs of its own (as `bin/drgnx test` does — see [harness.md](harness.md#one-emacs-per-test-file)), with one
+     merged summary per shard;
    - the test/ui session;
+   - the terminal tier (`bin/drgnx test --tty`: Emacs sessions in private tmux servers, every file in an Emacs of its
+     own), when tmux is installed; not with `--no-gui`;
    - the live tests in shards.
 
-   GUI jobs (each starts headless Emacs sessions) run no more at a time than free memory allows: 1 GiB each beyond
+   GUI jobs (each starts headless Emacs sessions; the terminal tier counts as one) run no more at a time than free memory allows: 1 GiB each beyond
    1.5 GiB kept free, at least one, at most four.
 3. **The unit tests tagged `:timing`, alone.** They assert how long something takes (`:tags '(:timing)` on the
-   `ert-deftest`); `bin/drgnx test` still runs them with the rest.
+   `ert-deftest`); `bin/drgnx test` still runs them with the rest. This job keeps one Emacs for every file
+   (`DRGNX_TEST_ONE_PROCESS=1`): its 16 tests would cost less than an Emacs for each of the ~140 files.
 4. **The scenario tier, alone.** Its scenarios hold frame budgets; a frame from the daemon in under 500 ms failed
    at 514 ms next to the parallel phase.
 5. **The bench, alone.**

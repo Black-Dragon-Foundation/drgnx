@@ -27,11 +27,14 @@
     (should (string-search "quoted form of \"/tmp/a\\\\b\\\"c/drgnx\""
                            (drgnx-macos-applet-source "/tmp/a\\b\"c/drgnx")))))
 
-(ert-deftest drgnx-macos/document-types-cover-folders-and-code ()
+(ert-deftest drgnx-macos/document-types-are-folders-and-text-code-only ()
   (let* ((types (append (drgnx-macos-document-types) nil))
          (utis (apply #'append (mapcar (lambda (ty) (append (plist-get ty :LSItemContentTypes) nil)) types))))
-    (dolist (u '("public.folder" "public.text" "public.source-code" "public.script" "public.data"))
+    (dolist (u '("public.folder" "public.text" "public.source-code" "public.script"))
       (should (member u utis)))
+    ;; M12a-35: public.data would offer drgnx for nearly every file (images, PDFs...); Other... still reaches any file
+    (should-not (member "public.data" utis))
+    (should (= 4 (length utis)))
     (dolist (ty types)
       (should (equal (plist-get ty :CFBundleTypeRole) "Editor"))
       (should (equal (plist-get ty :LSHandlerRank) "Alternate"))

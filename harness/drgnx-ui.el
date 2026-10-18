@@ -127,22 +127,26 @@ EXIT is the symbol `timeout' when the process had to be killed."
         (drgnx-ui--fail "config %S: no init.el in %s" config dir))
       (directory-file-name (file-truename dir)))))
 
+(defun drgnx-ui-private-tmp-dir (name what)
+  "The directory NAME in `temporary-file-directory', made private (mode 0700) if it is not there; it is checked
+to be yours.  WHAT says what it holds, for the error."
+  (let ((dir (expand-file-name name temporary-file-directory)))
+    (drgnx-ui--make-private-dir dir)
+    ;; /tmp is shared: anyone may have made this name first (or a symlink to elsewhere)
+    (let ((attrs (file-attributes dir 'integer)))
+      (unless (and (eq (file-attribute-type attrs) t)
+                   (eql (file-attribute-user-id attrs) (user-uid))
+                   (equal (file-attribute-modes attrs) "drwx------"))
+        (drgnx-ui--fail "%s must be a directory of yours with mode 0700 (%s)" dir what)))
+    dir))
+
 (defun drgnx-ui-runtime-dir ()
   "$XDG_RUNTIME_DIR, or a private fallback where it is unset (containers): the sessions'
 Wayland displays and server sockets live here."
   (let ((xdg (getenv "XDG_RUNTIME_DIR")))
     (if (and xdg (not (string-empty-p xdg)))
         (directory-file-name xdg)
-      (let ((dir (expand-file-name (format "drgnx-ui-%d" (user-uid)) temporary-file-directory)))
-        (drgnx-ui--make-private-dir dir)
-        ;; /tmp is shared: anyone may have made this name first (or a symlink to elsewhere)
-        (let ((attrs (file-attributes dir 'integer)))
-          (unless (and (eq (file-attribute-type attrs) t)
-                       (eql (file-attribute-user-id attrs) (user-uid))
-                       (equal (file-attribute-modes attrs) "drwx------"))
-            (drgnx-ui--fail "%s must be a directory of yours with mode 0700 (it holds the sessions' sockets)"
-                            dir)))
-        dir))))
+      (drgnx-ui-private-tmp-dir (format "drgnx-ui-%d" (user-uid)) "it holds the sessions' sockets"))))
 
 (defun drgnx-ui-socket-dir (name &optional root)
   "Directory for session NAME's server socket: short, private, keyed by the state ROOT.
@@ -178,6 +182,7 @@ MONITORS: how many virtual monitors of SIZE (default 1)."
       (make-directory run)                ; signals if it exists: never reuse a run dir
       (make-directory init)
       (make-directory (expand-file-name "out" run))
+      (make-directory (expand-file-name "tmp" run))     ; the session's TMPDIR: gone with the run dir
       (when (file-directory-p sock) (delete-directory sock t))   ; stale, from a crashed session
       (drgnx-ui--make-private-dir sock)
       (drgnx-ui--write (expand-file-name "early-init.el" init) drgnx-ui--early-init)
@@ -197,12 +202,32 @@ MONITORS: how many virtual monitors of SIZE (default 1)."
         (drgnx-ui--save sess)
         sess))))
 
+(defvar drgnx-ui-session-extra-env nil
+  "\"K=V\" strings added to the environment of the sessions started while this is bound, after the session's own
+variables (a later entry wins): a test puts a package's directory on the daemon's load path with EMACSLOADPATH
+\(`drgnx-tty-session-kitty-start').  Nil for every session the CLI and the MCP server start.  Only names in
+`drgnx-ui-session-extra-env-names' are taken; anything else signals.")
+
+(defconst drgnx-ui-session-extra-env-names '("EMACSLOADPATH")
+  "The variables `drgnx-ui-session-extra-env' may set.  Not HOME, DISPLAY, the bus, XDG_RUNTIME_DIR or TMPDIR:
+a later entry wins, so one of those would move a session out of its run directory or onto the user's desktop.")
+
+(defun drgnx-ui--check-extra-env (env)
+  "ENV (\"K=V\" strings) when every name is in `drgnx-ui-session-extra-env-names'; else signal."
+  (dolist (kv env env)
+    (let ((name (and (stringp kv) (string-match "\\`\\([^=]+\\)=" kv) (match-string 1 kv))))
+      (unless (member name drgnx-ui-session-extra-env-names)
+        (drgnx-ui--fail "drgnx-ui-session-extra-env: %S is not one of %s" kv
+                        (string-join drgnx-ui-session-extra-env-names ", "))))))
+
 (defun drgnx-ui-session-env (sess &optional extra)
-  "Environment (\"K=V\" strings) for SESS: the allowlist, the session's variables, EXTRA."
+  "Environment (\"K=V\" strings) for SESS: the allowlist, the session's variables, `drgnx-ui-session-extra-env'
+\(checked: `drgnx-ui--check-extra-env'), EXTRA."
   (append (delq nil (mapcar (lambda (k) (let ((v (getenv k))) (and v (concat k "=" v))))
                             drgnx-ui-keep-env))
           (list (concat "DRGNX_UI_NAME=" (plist-get sess :name))
                 (concat "DRGNX_UI_RUN=" (plist-get sess :run))
+                (concat "TMPDIR=" (expand-file-name "tmp" (plist-get sess :run)))
                 (concat "DRGNX_UI_HARNESS=" (directory-file-name drgnx-ui-harness-dir))
                 (concat "DRGNX_UI_CONFIG=" (plist-get sess :config_dir))
                 (concat "XDG_RUNTIME_DIR=" (drgnx-ui-runtime-dir))
@@ -218,6 +243,7 @@ MONITORS: how many virtual monitors of SIZE (default 1)."
                 (concat "XDG_STATE_HOME=" (expand-file-name "state" (plist-get sess :run)))
                 ;; …and its packages: never the user's ~/.local/share/drgnx (M5 review I9)
                 (concat "DRGNX_DATA_DIR=" (expand-file-name "drgnx-data" (plist-get sess :run))))
+          (drgnx-ui--check-extra-env drgnx-ui-session-extra-env)
           extra))
 
 (defun drgnx-ui-env-argv (env)

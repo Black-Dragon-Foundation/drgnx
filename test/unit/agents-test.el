@@ -16,7 +16,7 @@
   (declare (indent 2))
   `(let* ((state (make-temp-file "drgnx-mock-state" t))
           (drgnx-agents-profiles
-           (list (list "mock" :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "-l" drgnx-agents-test--mock)
+           (list (list "mock" :command (list "sh" (expand-file-name "test/fixtures/mock-acp-stdin.sh" drgnx-dir) (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "-l" drgnx-agents-test--mock)
                        :env (append (list (concat "MOCK_ACP_STATE=" state)) (plist-get ,opts :env))
                        :mode (or (plist-get ,opts :mode) 'queue))))
           (drgnx-agents--sessions nil)
@@ -33,7 +33,6 @@
 (defun drgnx-agents-test--idle (s) (drgnx-agents-test--wait (lambda () (eq (drgnx-agent-session-status s) 'idle))))
 
 (ert-deftest drgnx-agents/a-turn-fills-the-transcript ()
-  (skip-unless (file-readable-p "/proc/self/fd/0"))
   (drgnx-agents-test--with s nil
     (should (drgnx-agents-test--wait (lambda () (drgnx-agent-session-commands s))))
     (should (equal (mapcar (lambda (c) (plist-get c :name)) (drgnx-agent-session-commands s)) '("compact" "review")))
@@ -47,7 +46,6 @@
 
 (ert-deftest drgnx-agents/sending-during-a-turn-queues-and-never-cancels ()
   ;; The spec's first rule: queued, delivered once, in order, after the turn; the turn not cancelled.
-  (skip-unless (file-readable-p "/proc/self/fd/0"))
   (drgnx-agents-test--with s nil
     (drgnx-agents-send s "slow one")
     (drgnx-agents-send s "second")
@@ -62,7 +60,6 @@
     (should (string-match-p "part 10" (car (drgnx-agents-test--texts s 'agent))))))
 
 (ert-deftest drgnx-agents/steer-mode-reaches-the-running-turn ()
-  (skip-unless (file-readable-p "/proc/self/fd/0"))
   (drgnx-agents-test--with s '(:mode steer)
     (drgnx-agents-send s "slow one")
     (drgnx-agents-send s "go left")
@@ -73,7 +70,6 @@
     (should (plist-get (car (last (seq-filter (lambda (e) (eq (plist-get e :type) 'user)) (drgnx-agent-session-entries s)))) :steer))))
 
 (ert-deftest drgnx-agents/steer-without-the-capability-queues ()
-  (skip-unless (file-readable-p "/proc/self/fd/0"))
   (drgnx-agents-test--with s '(:mode steer :env ("MOCK_ACP_NO_STEER=1"))
     (drgnx-agents-send s "slow one")
     (drgnx-agents-send s "go left")
@@ -81,7 +77,6 @@
 
 (ert-deftest drgnx-agents/stop-ends-the-turn-within-a-second-and-keeps-the-queue ()
   :tags '(:timing)                                      ; a quiet machine: bin/drgnx check runs it alone
-  (skip-unless (file-readable-p "/proc/self/fd/0"))
   (drgnx-agents-test--with s nil
     (drgnx-agents-send s "slow one")
     (drgnx-agents-send s "later")
@@ -97,7 +92,6 @@
 
 (ert-deftest drgnx-agents/permission-requests-wait-for-an-answer ()
   ;; Never a minibuffer question: a pending item the viewer answers.
-  (skip-unless (file-readable-p "/proc/self/fd/0"))
   (drgnx-agents-test--with s nil
     (let ((inhibit-interaction t))
       (drgnx-agents-send s "permission please")
@@ -110,7 +104,6 @@
       (should (member "permission: allow" (drgnx-agents-test--texts s 'agent))))))
 
 (ert-deftest drgnx-agents/stop-answers-pending-permissions-cancelled ()
-  (skip-unless (file-readable-p "/proc/self/fd/0"))
   (drgnx-agents-test--with s nil
     (drgnx-agents-send s "permission please")
     (should (drgnx-agents-test--wait (lambda () (drgnx-agent-session-permissions s))))
@@ -119,7 +112,6 @@
     (should (drgnx-agents-test--idle s))))
 
 (ert-deftest drgnx-agents/tool-calls-plans-and-subagents ()
-  (skip-unless (file-readable-p "/proc/self/fd/0"))
   (drgnx-agents-test--with s nil
     (drgnx-agents-send s "tool plan subagent")
     (should (drgnx-agents-test--idle s))
@@ -134,7 +126,6 @@
       (should (equal (mapcar (lambda (x) (plist-get x :status)) (plist-get plan :entries)) '("completed" "in_progress" "pending"))))))
 
 (ert-deftest drgnx-agents/an-agent-that-dies-says-so-and-keeps-the-queue ()
-  (skip-unless (file-readable-p "/proc/self/fd/0"))
   (drgnx-agents-test--with s nil
     (drgnx-agents-send s "crash")
     (drgnx-agents-send s "after")
@@ -143,7 +134,6 @@
     (should (equal (drgnx-agent-session-queue s) '("after")))))
 
 (ert-deftest drgnx-agents/take-over-resumes-a-session ()
-  (skip-unless (file-readable-p "/proc/self/fd/0"))
   (drgnx-agents-test--with s nil
     (drgnx-agents-send s "remember me")
     (should (drgnx-agents-test--idle s))
@@ -156,7 +146,6 @@
 
 (ert-deftest drgnx-agents/compact-lowers-the-context ()
   ;; The parity rule (kb: agent-viewer-openrouter-parity): context %, /compact, slash commands.
-  (skip-unless (file-readable-p "/proc/self/fd/0"))
   (drgnx-agents-test--with s nil
     (drgnx-agents-send s (make-string 300 ?w))
     (should (drgnx-agents-test--idle s))
@@ -173,7 +162,6 @@
 
 (ert-deftest drgnx-agents/a-late-answer-to-a-stopped-turn-never-ends-the-next ()
   ;; C1: the agent answers the cancel after the 1 s deadline; the next turns stay in order, one at a time.
-  (skip-unless (file-readable-p "/proc/self/fd/0"))
   (drgnx-agents-test--with s '(:env ("MOCK_ACP_LATE_CANCEL=2"))
     (drgnx-agents-send s "slow one")
     (sleep-for 0.3)
@@ -193,7 +181,6 @@
 
 (ert-deftest drgnx-agents/interrupt-mode-sends-the-message-after-the-cancel ()
   ;; I3
-  (skip-unless (file-readable-p "/proc/self/fd/0"))
   (drgnx-agents-test--with s '(:mode interrupt)
     (drgnx-agents-send s "slow one")
     (drgnx-agents-send s "now this")
@@ -203,9 +190,8 @@
 
 (ert-deftest drgnx-agents/a-message-sent-while-starting-is-delivered ()
   ;; I4
-  (skip-unless (file-readable-p "/proc/self/fd/0"))
   (let* ((drgnx-agents-profiles
-          (list (list "mock" :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "-l" drgnx-agents-test--mock))))
+          (list (list "mock" :command (list "sh" (expand-file-name "test/fixtures/mock-acp-stdin.sh" drgnx-dir) (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "-l" drgnx-agents-test--mock))))
          (drgnx-agents--sessions nil)
          (s (drgnx-agents-start "mock" temporary-file-directory)))
     (unwind-protect
@@ -218,7 +204,6 @@
 
 (ert-deftest drgnx-agents/two-sessions-of-a-profile-have-their-own-names ()
   ;; I13
-  (skip-unless (file-readable-p "/proc/self/fd/0"))
   (drgnx-agents-test--with s nil
     (let ((s2 (drgnx-agents-start "mock" temporary-file-directory)))
       (should-not (equal (drgnx-agent-session-name s) (drgnx-agent-session-name s2))))))
@@ -235,7 +220,6 @@
 
 (ert-deftest drgnx-agents/steering-that-fails-queues-the-message ()
   ;; I12: a request (not a notification): an error puts the text in the queue
-  (skip-unless (file-readable-p "/proc/self/fd/0"))
   (drgnx-agents-test--with s '(:mode steer :env ("MOCK_ACP_STEER_FAILS=1"))
     (drgnx-agents-send s "slow one")
     (drgnx-agents-send s "go left")

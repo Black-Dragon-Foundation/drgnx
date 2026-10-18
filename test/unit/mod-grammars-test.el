@@ -4,9 +4,12 @@
 (load (expand-file-name "modules/lang/drgnx-grammars" drgnx-dir) nil t)
 
 (defmacro drgnx-grammars-test--with (&rest body)
-  "BODY with no grammar available, prompts that fail, and the hints forgotten; buffers made in it killed after."
+  "BODY with no grammar available, prompts that fail, and the hints forgotten; buffers made in it killed after.
+The remaps and file modes an install adds stay in BODY: left behind, every later Python file of the suite would
+start `python-ts-mode', which on Emacs 31 asks to install a missing grammar (in batch: an end of stdin)."
   (declare (indent 0))
-  `(let ((drgnx-grammars--hinted nil) (made nil))
+  `(let ((drgnx-grammars--hinted nil) (made nil)
+         (major-mode-remap-alist (copy-alist major-mode-remap-alist)) (auto-mode-alist (copy-alist auto-mode-alist)))
      (cl-letf (((symbol-function 'treesit-language-available-p) (lambda (&rest _) nil))
                ((symbol-function 'read-string) (lambda (&rest _) (error "Prompted")))
                ((symbol-function 'y-or-n-p) (lambda (&rest _) (error "Prompted")))

@@ -10,6 +10,8 @@ drgnx file.py "My Project"   # a file in an editor and a folder; quote names wit
 drgnx open                   # drgnx with the windows as you left them
 drgnx open -- -odd-name.txt  # anything after -- is a path, even when it starts with -
 drgnx open --wait notes.md   # returns when you are done with the file: drgnx as $EDITOR
+drgnx -t .                   # this folder, in this terminal (also: drgnx open -t .)
+drgnx --gui .                # this folder, in a window, even over SSH or without a display
 ```
 
 `drgnx` lives in `~/.local/bin`; "command not found" means that is not on your PATH yet — open a new terminal window
@@ -24,9 +26,13 @@ spaces, accents (`café.py`) and iCloud folders work. A file that does not exist
 What happens:
 
 - **drgnx is not running:** it starts in the background (an Emacs daemon named `drgnx`, with the Emacs drgnx was
-  installed with — see [install.md](install.md)), and the paths open as soon as it answers (it is given 10 s; its
-  startup messages go to `~/.local/state/drgnx/daemon.log`). On Linux, when the systemd user unit `drgnx` is installed
-  and enabled ([packages.md](packages.md#running-drgnx-as-a-daemon)), drgnx starts that unit instead.
+  installed with — see [install.md](install.md)), and the paths open as soon as it answers (it is given 30 s, or
+  `DRGNX_OPEN_WAIT` seconds, a whole number above 0 counted on the clock; anything else is refused with a note and 30
+  is used; it says "still starting" after a third of that; its startup messages are added to
+  `~/.local/state/drgnx/daemon.log`). On Linux, when the systemd user unit `drgnx` is installed and enabled ([packages.md](packages.md#running-drgnx-as-a-daemon)), drgnx starts that unit instead.
+  Two `drgnx` commands started at once make one daemon and one window: the second waits for the first (a lock,
+  `~/.local/state/drgnx/open-drgnx.lock`, dropped as stale 15 s after the wait above, 45 s by default, if its owner
+  died). A window that takes more than 10 s to appear is not waited for further.
 - **No window is open:** a window opens, with the layout you left — groups, tabs, docks, Explorer folders
   ([workbench.md](workbench.md#the-layout-survives-a-restart)) — and the paths in front of it.
 - **A window is open:** the paths open there and the window comes to the front.
@@ -38,6 +44,42 @@ open as a directory listing. A **file** opens in the editor. drgnx started by ha
 
 Inside drgnx, **File → Open Folder…** (palette; `C-k C-o` in the VS Code profile, `SPC f o` in Vim's) asks for a
 folder and shows it the same way.
+
+## In a terminal: `drgnx -t`
+
+`drgnx -t [PATH…]` (or `drgnx open -t [PATH…]`) opens a **terminal frame** of the same drgnx, in the terminal you ran
+it in, instead of a window: the daemon is started first if it is not running (as above), then the command becomes
+`emacsclient -t -s drgnx` and shows the paths — each folder as the Explorer's folder, each file in an editor — in the new
+frame. Leave the frame as you leave any client (`C-x C-c`, or close the terminal); the daemon and its windows keep
+running. No window is made or raised: a folder opens in the terminal frame even while a desktop window is open (so
+does File → Open Folder… typed in a terminal frame). With no path, you get the frame as it stands.
+
+You do not have to type `-t` in two cases: `drgnx` picks the terminal by itself when you are in an **SSH session**
+(`SSH_CONNECTION` or `SSH_TTY` is set, even if a display is forwarded) and, on Linux, when there is **no display**
+(neither `DISPLAY` nor `WAYLAND_DISPLAY`; a text console) — but only when `drgnx` is run at a terminal (its standard
+input and output are one). A script, a launcher or an editor hook gets a window, as without these, and no terminfo
+question. Everywhere else `drgnx` opens a window, as above, and `-t` is how you ask for the terminal.
+
+`drgnx --gui [PATH…]` (or `drgnx open --gui [PATH…]`) is the opposite: it skips that choice and opens a window, for
+an SSH session with a forwarded display, or a machine where the display is not in the environment. `-t` and `--gui`
+together are an error (exit 2). `drgnx open --wait FILE…` in a terminal waits there, as before.
+
+**Unknown terminal type.** (Checked after the opt-in below: a frame that opens in another terminal does not need this one's description.) A terminal frame needs the terminal's description (terminfo) on the machine running Emacs.
+When `infocmp "$TERM"` fails there (typically `xterm-kitty` or `xterm-ghostty` over SSH), `drgnx -t` stops with exit 1
+and says how to fix it, instead of drawing a broken screen:
+
+```sh
+kitten ssh HOST                          # kitty: copies its terminal description to HOST (use it instead of ssh)
+infocmp -x | ssh HOST -- tic -x -        # any terminal: run where the terminal works; HOST is the machine running drgnx
+TERM=xterm-256color drgnx -t             # this once, with a terminal type the machine knows
+```
+
+**A terminal that cannot send every key.** GNOME Terminal and the other VTE terminals, Apple's Terminal and the
+Linux console cannot send chords such as `C-S-p`. If you set `drgnx-tty-open-in` (off by default; see
+[terminal.md](terminal.md)), `drgnx -t` in one of those starts the capable terminal you chose, detached, with
+`emacsclient -t -s drgnx …` inside it, and returns. Over SSH, or with no display, it never does: `drgnx` decides
+that from the terminal you typed it in (as for picking the terminal above), not from the daemon, which usually runs
+on the desktop.
 
 ## Waiting for you: drgnx as `$EDITOR`
 
@@ -63,7 +105,7 @@ Finder and Spotlight find it, and you can keep it in the Dock. The installer put
 - **Open it** (Finder, Spotlight, the Dock): the same as `drgnx open` — drgnx with your windows, started in the
   background if it is not running. The very first time, the Welcome opens ([onboarding.md](onboarding.md)).
 - **Open folders and files with it:** drop them on its Dock icon, or choose drgnx in Finder's **Open With** (right-click
-  a folder or a file). Open With offers drgnx for folders and for almost every file, as it does code editors. They
+  a folder or a file). Open With offers drgnx for folders, text and code files, as VS Code does (not for images, PDFs and the like; Open With → **Other…** reaches any file). They
   open as `drgnx PATH` would open them — a folder in the Explorer, a file in an editor. drgnx is offered there, never
   made the default app for anything (set that yourself with Get Info → Open with → Change All, if you like).
 - **Its windows are Emacs's.** drgnx runs in Emacs: while it runs, the Dock and ⌘Tab show it as **Emacs**, with the
@@ -79,7 +121,7 @@ It runs `<checkout>/bin/drgnx open -- PATH…`, each path passed through `quoted
 quotes stay one argument, with Homebrew's `/opt/homebrew/bin` and `/usr/local/bin` first on PATH (an app gets only
 `/usr/bin:/bin:/usr/sbin:/sbin`; drgnx itself runs the Emacs the installer recorded). Its Info.plist names it `drgnx`
 (`org.drgnx.app`), lists folders (`public.folder`) and text and source files (`public.text`, `public.source-code`,
-`public.script`, `public.data`) as documents it can edit, as an alternate, and it carries Emacs's icon (from the
+`public.script`; JSON and YAML conform to `public.text`) as documents it can edit, as an alternate, and it carries Emacs's icon (from the
 Emacs.app drgnx runs in, else `/Applications/Emacs.app`). `drgnx macos-app` builds it with `osacompile`, edits the
 Info.plist with `plutil`, signs it again (ad hoc, `codesign --sign -`: the edits break osacompile's signature, and
 Apple silicon runs no app with a broken one), replaces the drgnx.app that was there (no other app is touched), and
@@ -100,9 +142,11 @@ the palette) — drgnx does one of two things, your choice:
 - **Quit when the last window closes:** closing the last window quits drgnx.
 
 Quitting — Quit drgnx, or closing the last window in quit mode — first offers to save each file with changes, and
-each New Untitled buffer (tab) you typed in (it asks for a file name). Press Ctrl+G (`C-g`, Emacs' cancel), or keep one unsaved and then answer no to "quit and lose the changes?", and drgnx stays running with
-everything open: nothing is lost. A drgnx that is not a daemon has nothing to keep running, so closing its last
-window always quits (asking the same way).
+each New Untitled buffer (tab) you typed in (it asks for a file name); the `*scratch*` buffer is not offered. Press
+Ctrl+G (`C-g`, Emacs' cancel), or keep one unsaved and then answer no to "quit and lose the changes?", and drgnx
+stays running with everything open: nothing is lost. If terminals or other programs are still running, drgnx then
+asks once whether to quit and stop them (no keeps everything running). A drgnx that is not a daemon has nothing to
+keep running, so closing its last window always quits (asking the same way).
 
 Onboarding's Daemon and Desktop step asks it once ([onboarding.md](onboarding.md#the-steps)).
 Change the choice with **Preferences: Keep drgnx Running in the Background** (palette, Options menu): it switches

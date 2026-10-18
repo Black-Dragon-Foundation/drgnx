@@ -2,7 +2,10 @@
 (require 'ert)
 (require 'drgnx)
 (load (expand-file-name "modules/tools/drgnx-ai-ui" drgnx-dir) nil t)
+(require 'drgnx-ai-probe)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
+
+(defvar drgnx-ai-edit-test--delay nil "Seconds the mock waits before it answers.")
 
 (defmacro drgnx-ai-edit-test--with (answer &rest body)
   "BODY with the `edit' role on provider `o' (Ollama), served by a mock answering ANSWER (a string) to every chat."
@@ -16,7 +19,9 @@
          (progn
            (make-directory (concat root "config") t)
            (with-temp-file script
-             (prin1 (list (list :path "/api/chat" :body (json-serialize (list :message (list :content ,answer))))) (current-buffer)))
+             (prin1 (list (append (list :path "/api/chat" :body (json-serialize (list :message (list :content ,answer))))
+                                  (and drgnx-ai-edit-test--delay (list :delay drgnx-ai-edit-test--delay))))
+                    (current-buffer)))
            (with-temp-file (concat root "config/ai.eld")
              (prin1 `(:version 1 :providers ((o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" port) :caps (chat fim)))
                                :roles ((edit (o . "m"))))
@@ -166,6 +171,61 @@
         (should-not (buffer-live-p review))
         (should (equal (buffer-string) "(defun a ()\n  1)\n"))))))
 
+(defun drgnx-ai-edit-test--tmp-dirs ()
+  "The drgnx-ai-edit directories in the temporary directory now."
+  (directory-files temporary-file-directory t "\\`drgnx-ai-edit" t))
+
+(ert-deftest drgnx-ai-edit/second-edit-own-review-no-leak ()
+  ;; two reviews of one buffer: two buffers, each with its own copy directory that goes with it
+  (with-temp-buffer
+    (insert "(defun a ()\n  1)\n")
+    (let* ((src (current-buffer)) (s (copy-marker (point-min))) (e (copy-marker (point-max)))
+           (r1 (drgnx-ai--edit-review src s e "(defun a ()\n  10)\n"))
+           (r2 (drgnx-ai--edit-review src s e "(defun a ()\n  100)\n"))
+           (d1 (plist-get (buffer-local-value 'drgnx-ai--edit r1) :dir))
+           (d2 (plist-get (buffer-local-value 'drgnx-ai--edit r2) :dir)))
+      (should-not (eq r1 r2))
+      (should-not (equal d1 d2))
+      (should (string-search "+  10)" (with-current-buffer r1 (buffer-string))))
+      (should (string-search "+  100)" (with-current-buffer r2 (buffer-string))))
+      (kill-buffer r1)
+      (should-not (file-directory-p d1))
+      (should (file-directory-p d2))
+      (kill-buffer r2)
+      (should-not (file-directory-p d2))
+      (should-not (drgnx-ai-edit-test--tmp-dirs)))))
+
+(ert-deftest drgnx-ai-edit/a-failing-diff-leaves-no-directory ()
+  (let ((before (drgnx-ai-edit-test--tmp-dirs)))
+    (with-temp-buffer
+      (insert "(defun a ()\n  1)\n")
+      (cl-letf (((symbol-function 'diff-no-select) (lambda (&rest _) (error "no diff here"))))
+        (should-error (drgnx-ai--edit-review (current-buffer) (copy-marker (point-min)) (copy-marker (point-max)) "x\n")))
+      (should (equal (drgnx-ai-edit-test--tmp-dirs) before))
+      (should-not (seq-find (lambda (b) (string-prefix-p "*AI edit" (buffer-name b))) (buffer-list))))))
+
+(ert-deftest drgnx-ai-edit/apply-hunk-runs-no-mode-hook ()
+  ;; the review's copy is only text for diff to patch: visiting it must not start the buffer's major mode
+  (let ((ran 0) (hook (lambda () (setq ran (1+ ran)))))
+    (add-hook 'emacs-lisp-mode-hook hook)
+    (unwind-protect
+        (with-temp-buffer
+          (insert "(defun a ()\n  1)\n")
+          (setq buffer-file-name (expand-file-name "now-x.el" temporary-file-directory))
+          (let* ((review (drgnx-ai--edit-review (current-buffer) (copy-marker (point-min)) (copy-marker (point-max))
+                                                "(defun a ()\n  10)\n")))
+            (unwind-protect
+                (with-current-buffer review
+                  (goto-char (point-min)) (diff-hunk-next)
+                  (let ((inhibit-message t)) (drgnx-ai-edit-apply-hunk))
+                  (let ((cb (find-buffer-visiting (plist-get drgnx-ai--edit :copy))))
+                    (should cb)
+                    (should (eq (buffer-local-value 'major-mode cb) 'fundamental-mode))
+                    (should (string-search "10" (with-current-buffer cb (buffer-string))))))
+              (kill-buffer review)))
+          (should (= ran 0)))
+      (remove-hook 'emacs-lisp-mode-hook hook))))
+
 (ert-deftest drgnx-ai-edit/no-provider-says-why-and-changes-nothing ()
   (drgnx-ai-edit-test--with "never"
     (let ((drgnx-ai-detected nil) (said nil))
@@ -178,6 +238,46 @@
         (should (seq-find (lambda (m) (string-match-p "AI edit: no answer" m)) said))
         (should-not (drgnx-ai-edit-test--review 0.2))
         (should (equal (buffer-string) "x\n"))))))
+
+(defun drgnx-ai-edit-test--curls ()
+  "The live request processes."
+  (seq-filter (lambda (p) (and (equal (process-name p) "drgnx-ai") (process-live-p p))) (process-list)))
+
+(ert-deftest drgnx-ai-edit/stop-cancels-request ()
+  (let ((drgnx-ai-edit-test--delay 1.5) (said nil))
+    (drgnx-ai-edit-test--with "(defun a ()\n  10)\n"
+      (with-temp-buffer
+        (insert "(defun a ()\n  1)\n")
+        (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+          (drgnx-ai-edit "times ten" (point-min) (point-max))
+          (should (= 1 (length (drgnx-ai-edit-test--curls))))
+          (should (= 1 (length drgnx-ai--active)))
+          (drgnx-ai-stop)
+          (should-not drgnx-ai--active)
+          (should-not (drgnx-ai-edit-test--curls))                       ; the process is gone
+          (accept-process-output nil 2.0)                                ; past the mock's answer
+          (should-not (drgnx-ai-edit-test--review 0.1))                  ; the callback never ran
+          (should-not (seq-find (lambda (m) (string-match-p "no answer" m)) said))
+          (should (seq-find (lambda (m) (string-match-p "stopped" m)) said))
+          ;; nothing in flight: it says so
+          (drgnx-ai-stop)
+          (should (string-match-p "nothing" (car said))))))))
+
+(ert-deftest drgnx-ai-edit/a-request-that-fails-to-start-is-not-left-stoppable ()
+  (let ((drgnx-ai--active nil) (said nil))
+    (should-error (drgnx-ai--track (lambda (_done) (error "cannot start"))))
+    (should-not drgnx-ai--active)
+    (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+      (drgnx-ai-stop))
+    (should (string-match-p "nothing" (car said)))))
+
+(ert-deftest drgnx-ai-edit/a-finished-request-is-no-longer-stoppable ()
+  (drgnx-ai-edit-test--with "(defun a ()\n  10)\n"
+    (with-temp-buffer
+      (insert "(defun a ()\n  1)\n")
+      (drgnx-ai-edit "times ten" (point-min) (point-max))
+      (should (drgnx-ai-edit-test--review))
+      (should-not drgnx-ai--active))))
 
 (ert-deftest drgnx-ai-edit/never-on-c-i ()
   ;; C-i is Tab in a terminal: inline edit must never take it, in any profile

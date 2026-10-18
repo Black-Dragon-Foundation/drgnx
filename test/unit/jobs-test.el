@@ -41,6 +41,49 @@
      (should (eql (plist-get (drgnx-jobs-get id) :exit) 0))
      (should (string-match-p "done" (drgnx-jobs-log id))))))
 
+(defun drgnx-jobs-test--survives-its-starter ()
+  "A job's launcher detaches it from the Emacs that started it, which is still running.
+Emacs's own children already lead a session, so `its session differs' proves nothing.  What a detaching launcher
+changes is the parent: the job is not the starter's child (a plain `call-process' would leave it that), and
+killing the starter's whole process group does not take the job along."
+  (drgnx-jobs-test--with
+   (let* ((idfile (expand-file-name "starter-id" root))
+          (starter (make-process
+                    :name "drgnx-jobs-starter" :noquery t :connection-type 'pipe :buffer nil
+                    :command (list (expand-file-name invocation-name invocation-directory)
+                                   "--batch" "-Q" "-L" (file-name-directory (locate-library "drgnx-jobs"))
+                                   "-l" "drgnx-jobs"
+                                   "--eval" (format "(setq drgnx-jobs--setsid %S)" drgnx-jobs--setsid)
+                                   "--eval" (format (concat "(progn (write-region (drgnx-jobs-start \"test\" "
+                                                            "'(\"sh\" \"-c\" \"sleep 4; echo done\")) "
+                                                            "nil %S) (sleep-for 60))")
+                                                    idfile))))
+          (spid (process-id starter)) id)
+     (unwind-protect
+         (progn
+           (should (drgnx-jobs-test--wait (lambda () (file-exists-p idfile))))
+           (setq id (drgnx-jobs--text idfile))
+           (should (drgnx-jobs-test--wait (lambda () (eq (drgnx-jobs-test--status id) 'running))))
+           (should (process-live-p starter))
+           (let ((pid (plist-get (drgnx-jobs-get id) :pid)))
+             (should-not (eql (alist-get 'ppid (process-attributes pid)) spid))   ; not the starter's child
+             (ignore-errors (signal-process (- spid) 'SIGKILL))                   ; the starter's whole group
+             (signal-process spid 'SIGKILL)
+             (should (drgnx-jobs-test--wait (lambda () (not (process-live-p starter))) 5))
+             (sleep-for 0.3)
+             (should (eq (drgnx-jobs-test--status id) 'running))
+             (should (process-attributes pid)))
+           (should (drgnx-jobs-test--wait (lambda () (eq (drgnx-jobs-test--status id) 'exited))))
+           (should (string-match-p "done" (drgnx-jobs-log id))))
+       (when (process-live-p starter) (delete-process starter))))))
+
+(ert-deftest drgnx-jobs/a-job-survives-its-starter-and-is-not-its-child ()
+  (drgnx-jobs-test--survives-its-starter))
+
+(ert-deftest drgnx-jobs/a-job-survives-its-starter-without-setsid ()
+  (skip-unless (executable-find "perl"))
+  (let ((drgnx-jobs--setsid nil)) (drgnx-jobs-test--survives-its-starter)))
+
 (ert-deftest drgnx-jobs/a-job-outlives-the-emacs-that-started-it ()
   (drgnx-jobs-test--outlives))
 
@@ -68,7 +111,8 @@
        (when (assq 'sess attrs) (should (eql (alist-get 'sess attrs) pid))))   ; macOS's attributes have no session
      (drgnx-jobs-stop id)
      (should (drgnx-jobs-test--wait (lambda () (memq (drgnx-jobs-test--status id) '(exited stopped))) 3))
-     (should-not (seq-find (lambda (p) (string-match-p (regexp-quote marker) (or (cdr (assq 'args (process-attributes p))) "")))
+     (should-not (seq-find (lambda (p)
+                             (string-match-p (regexp-quote marker) (or (cdr (assq 'args (process-attributes p))) "")))
                            (list-system-processes))))))
 
 (ert-deftest drgnx-jobs/stop-ends-the-whole-job ()
@@ -86,10 +130,12 @@
                  (with-temp-file sysctl (insert "#!/bin/sh\n[ \"$*\" = \"-n kern.bootsessionuuid\" ] || exit 1\n" body))
                  (set-file-modes sysctl #o755))))
     (unwind-protect
-        (let ((exec-path (list bin)) (system-type 'darwin)
+        ;; a found id is kept (M12a-8): the cache is reset for each question
+        (let ((exec-path (list bin)) (system-type 'darwin) (drgnx-jobs--boot-id-cache nil)
               (process-environment (cons (concat "PATH=" bin path-separator (getenv "PATH")) process-environment)))
           (funcall fake "echo '  9D3B5C2E-1F4A-4B6C-8E7D-0A1B2C3D4E5F  '\n")
           (should (equal (drgnx-jobs--boot-id) "9D3B5C2E-1F4A-4B6C-8E7D-0A1B2C3D4E5F"))
+          (setq drgnx-jobs--boot-id-cache nil)
           (funcall fake "exit 3\n")
           (should-not (drgnx-jobs--boot-id))
           (funcall fake "echo\n")
@@ -143,7 +189,8 @@
    (let* ((id "20261017-000000-3") (dir (expand-file-name (concat "drgnx/jobs/" id) (getenv "XDG_STATE_HOME")))
           (start (alist-get 'start (process-attributes (emacs-pid))))
           (write (lambda (s) (with-temp-file (expand-file-name "job.eld" dir)
-                               (prin1 (list :id id :name "me" :launcher 'detached :boot (drgnx-jobs--boot-id) :start s) (current-buffer))))))
+                               (prin1 (list :id id :name "me" :launcher 'detached :boot (drgnx-jobs--boot-id) :start s)
+                                      (current-buffer))))))
      (make-directory dir t)
      (unwind-protect
          (progn
@@ -177,3 +224,52 @@
        (should (plist-get (drgnx-jobs--read job-file) :start))
        (should (equal (plist-get (drgnx-jobs--read job-file) :boot) (drgnx-jobs--boot-id)))
        (should (eq (drgnx-jobs-test--status id) 'running))))))
+
+;;;; The systemd launcher: systemd-run's ExecStart treats `$' specially
+
+(ert-deftest drgnx-jobs/the-systemd-argv-escapes-dollars-for-execstart ()
+  ;; systemd turns `$$' into `$' (and substitutes `${NAME}'): the shell must get the wrapper's original text
+  (let* ((line (drgnx-jobs--wrapper "/tmp/j/" '("sh" "-c" "echo ${HOME} $1")))
+         (args (drgnx-jobs--systemd-args "id1" "/tmp" line nil))
+         (sent (car (last args))))
+    (should (string-search "echo $$ >" line))                       ; the wrapper does need its own pid
+    (should (equal (seq-take (last args 3) 2) '("sh" "-c")))
+    (should (equal sent (string-replace "$" "$$" line)))
+    (should (equal (string-replace "$$" "$" sent) line))))          ; systemd's unescaping gives it back
+
+(ert-deftest drgnx-jobs/boot-id-asked-once ()
+  ;; M12a-8: on macOS the boot id is a `sysctl' process; every `drgnx-jobs-get' of a live job asks for it
+  (let ((drgnx-jobs--boot-id-cache nil) (system-type 'darwin) (calls 0))
+    (cl-letf (((symbol-function 'call-process)
+               (lambda (program &rest _) (when (equal program "sysctl") (cl-incf calls) (insert "UUID-1\n")) 0)))
+      (should (equal (drgnx-jobs--boot-id) "UUID-1"))
+      (should (equal (drgnx-jobs--boot-id) "UUID-1"))
+      (should (= calls 1)))))
+
+(ert-deftest drgnx-jobs/no-setsid-no-perl-says-so ()
+  ;; M12a-9: a clear error before anything is created or run, not a "file is missing" from `call-process'
+  (drgnx-jobs-test--with
+   (let ((drgnx-jobs--setsid nil) (ran nil) (real-find (symbol-function 'executable-find)))
+     (cl-letf (((symbol-function 'executable-find)
+                (lambda (name &rest r) (and (not (equal name "perl")) (apply real-find name r))))
+               ((symbol-function 'call-process) (lambda (&rest a) (push a ran) 0)))
+       (let ((err (should-error (drgnx-jobs-start "x" '("true")) :type 'user-error)))
+         (should (equal (cadr err) "Detached jobs need setsid or perl"))))
+     (should-not ran)
+     (should-not (drgnx-jobs-list)))))
+
+(ert-deftest drgnx-jobs/no-wait-stamps-before-exit ()
+  ;; M12a-44: Emacs exiting before the stamping timer fires still leaves :boot and :start (the hook runs once)
+  (skip-unless (executable-find "setsid"))
+  (drgnx-jobs-test--with
+   (let ((kill-emacs-hook nil) id dir hooks)
+     (cl-letf (((symbol-function 'run-at-time) (lambda (&rest _) (timer-create))))   ; a timer that never fires
+       (setq id (drgnx-jobs-start "short-lived" '("sleep" "3") :no-wait t)))
+     (setq dir (drgnx-jobs--dir id) hooks kill-emacs-hook)
+     (should (= (length hooks) 1))
+     (should (drgnx-jobs-test--wait (lambda () (file-exists-p (expand-file-name "pid" dir)))))
+     (should-not (plist-get (drgnx-jobs--read (expand-file-name "job.eld" dir)) :start))
+     (mapc #'funcall hooks)
+     (should-not kill-emacs-hook)                                 ; once: the hook removed itself
+     (should (plist-get (drgnx-jobs--read (expand-file-name "job.eld" dir)) :start))
+     (should (equal (plist-get (drgnx-jobs--read (expand-file-name "job.eld" dir)) :boot) (drgnx-jobs--boot-id))))))

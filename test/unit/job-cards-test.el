@@ -107,6 +107,38 @@
       (should (equal (plist-get (car (drgnx-coord-inbox "s-a")) :text) "the second"))
       (should (equal (plist-get (drgnx-coord-message mid) :state) "acted")))))
 
+;; M9b4-1: a message that needs no answer is dismissed: acted on, nothing sent back
+(ert-deftest drgnx-job-cards/a-message-is-dismissed-without-a-reply ()
+  (drgnx-job-cards-test--running
+    (let ((mid (plist-get (drgnx-coord-send :job id :sender "s-a" :recipient "user" :text "[fyi] done early" :seen (drgnx-coord-version)) :id)))
+      (should (drgnx-hub-call-sync "job/dismiss" (list :message mid)))
+      (should (equal (plist-get (drgnx-coord-message mid) :state) "acted"))
+      (should-not (drgnx-coord-inbox "s-a"))                ; nobody was answered
+      (should (equal (plist-get (seq-find (lambda (m) (equal (plist-get m :id) mid)) (plist-get (drgnx-job-summary id) :messages)) :state)
+                     "acted"))
+      (should-error (drgnx-hub-call-sync "job/dismiss" (list :message 99999))))))
+
+;; the hub's job/dismiss is this function (the body lives in drgnx-job.el, with `drgnx-job-reply')
+(ert-deftest drgnx-job-cards/dismissing-is-a-job-function ()
+  (drgnx-job-cards-test--running
+    (let ((mid (plist-get (drgnx-coord-send :job id :sender "s-a" :recipient "user" :text "[fyi] done" :seen (drgnx-coord-version)) :id)))
+      (should (drgnx-job-dismiss mid))
+      (should (equal (plist-get (drgnx-coord-message mid) :state) "acted"))
+      (should-error (drgnx-job-dismiss 99999) :type 'user-error)
+      (let ((other (plist-get (drgnx-coord-send :job id :sender "s-a" :recipient "s-b" :text "hello b" :seen (drgnx-coord-version)) :id)))
+        (should-error (drgnx-job-dismiss other) :type 'user-error)))))
+
+;; only a job's own message to the user can be dismissed: an agent's message to another agent stays queued
+(ert-deftest drgnx-job-cards/only-a-message-to-the-user-can-be-dismissed ()
+  (drgnx-job-cards-test--running
+    (let ((mid (plist-get (drgnx-coord-send :job id :sender "s-a" :recipient "s-b" :text "hello b" :seen (drgnx-coord-version)) :id)))
+      (should-error (drgnx-hub-call-sync "job/dismiss" (list :message mid)))
+      (should (equal (plist-get (drgnx-coord-message mid) :state) "queued"))
+      (should (seq-find (lambda (m) (equal (plist-get m :id) mid)) (drgnx-coord-queued))))     ; still to be delivered
+    (let ((mid (plist-get (drgnx-coord-send :job nil :sender "s-a" :recipient "user" :text "no job" :seen (drgnx-coord-version)) :id)))
+      (should-error (drgnx-hub-call-sync "job/dismiss" (list :message mid)))
+      (should-not (equal (plist-get (drgnx-coord-message mid) :state) "acted")))))
+
 (ert-deftest drgnx-job-cards/a-change-is-a-job-event ()
   (drgnx-job-cards-test--running
     (let ((events nil))

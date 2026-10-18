@@ -23,10 +23,33 @@ Mac) opens the Agents tab. Profiles live in
 the agent advertises steering — sent as `_session/steering`; if the agent refuses, the message is queued instead) or
 `interrupt` (stop the turn, then send). A profile whose program is not installed gives a session that says so. Keys and tokens are
 never written there — the agent reads them from its environment or its own login. The built-in `claude` profile
-runs the unmodified `claude-agent-acp` (npm package `@zed-industries/claude-agent-acp`) when it is installed, with
+runs the unmodified `claude-agent-acp` (npm package `@agentclientprotocol/claude-agent-acp`) when it is installed, with
 your own Claude login. Onboarding's Agents step installs Claude Code, Node and that adapter if they are missing
 (asked first), opens a terminal for the login and checks that the profile starts
 ([onboarding.md](onboarding.md#setting-claude-code-up)); to check it again later, run Onboarding: Agents.
+
+**Which adapter runs.** The deprecated package `@zed-industries/claude-agent-acp` (frozen at 0.23.1, which drgnx
+installed before) installs a program of the same name. It never tells drgnx which MCP server a tool comes from, so the
+jobs permission check can only go by the tool's name. A profile whose command is the bare `claude-agent-acp` (the
+built-in ones) runs the first `claude-agent-acp` on the `PATH` that belongs to `@agentclientprotocol/claude-agent-acp`,
+read from the `package.json` the program links into; failing that, the first one on the `PATH`. When that is the
+deprecated package it still runs, and the first time in each Emacs a message says how to move. `drgnx doctor`
+warns about it too (check `claude-adapter`, which also wants version 0.93.0 or newer). The one-line fix replaces it
+in the same npm prefix:
+
+```sh
+npm uninstall -g --prefix PREFIX @zed-industries/claude-agent-acp && npm install -g --prefix PREFIX @agentclientprotocol/claude-agent-acp
+```
+
+The doctor and the message fill in `PREFIX` (a prefix in your home folder is written `~/…`, for the shell to
+expand). The old package is removed first because npm will not install a program over another package's. drgnx
+never runs this command for you: until you do, the old adapter keeps working. An adapter that is not in a global npm
+prefix (pnpm, volta, a project's `node_modules`) gets no npm command: the advice is to replace it, with the tool that
+installed it, by `@agentclientprotocol/claude-agent-acp` 0.93.0 or newer. A pre-release version is compared without
+its suffix (`0.93.1-rc.1` counts as 0.93.1). drgnx reads only a regular `package.json` of at most 64 KiB; anything
+else counts as a program of no known package. A copy of the program (no link) with both packages beside it counts
+the same way, since drgnx cannot tell which one it came from. A command given as a path
+(`:command ("/opt/x/claude-agent-acp")`) runs exactly that program.
 
 A session's **transcript** (RET on its row; opens in the editor) shows:
 
@@ -43,7 +66,7 @@ running turn — it ends within a second, pending permission requests are answer
 rejected, and queued messages wait (Deliver Queued Messages, `C-c C-d`, sends them; Edit Queued Message changes or
 removes one before it is sent). If the agent answers the cancel late, its last words are dropped and nothing new
 is sent until that answer came — never two turns at once. Answer Agent picks an option for a pending permission. Take Over Agent Session resumes a session by its id
-(the agent replays it), when the agent can load sessions. The **context** column shows how full the agent's
+(the agent replays it), when the agent can load sessions (otherwise the new session ends and says why). The **context** column shows how full the agent's
 context is (from the agent's `usage_update`, or usage in its answer). The **Last** column shows how long ago the
 agent last did something (`30s`, `5m`, `2h`, `3d`), as this Emacs saw it. While the list is on screen, it is redrawn every 30
 seconds so the ages stay current, and the cursor stays on its row. When the list is not shown, nothing runs. The Agent layout ([layouts.md](layouts.md)) puts this list on the right and the chat of the agent that
@@ -51,6 +74,8 @@ acted last beside your file.
 
 Nothing an agent asks is ever a question in the minibuffer: the agent waits, the Agents tab says "1 to answer",
 and you answer when you look.
+
+Each agent's own settings (its routes and billing, MCP servers, hooks and skills) are on its settings page: `,` on a session's row, or Agents: Settings ([agent-settings.md](agent-settings.md)).
 
 ## Reviewing an agent's edits
 
@@ -66,20 +91,24 @@ edits included; both need absolute paths.
 
 Background work that must survive a closed frame, a restart of Emacs or an interrupted chat runs as a **job**: a
 systemd user unit (`systemd-run --user`) where systemd runs your session, else its own process group (the detached
-launcher: `setsid`, or on macOS, which has no `setsid`, the perl every Mac has). Each job has
+launcher: `setsid`, or on macOS, which has no `setsid`, the perl every Mac has; with neither, starting a job says
+"Detached jobs need setsid or perl" and creates nothing). Each job has
 a directory under `~/.local/state/drgnx/jobs/` (its command, log, pid and exit code), so any Emacs lists it in the
-Agents tab (running, exited N, stopped, gone), shows its log (Show Job Log) and stops it (Stop Job). A job's pid is
+Agents tab (running, exited N, stopped, gone), shows its log (Show Job Log) and stops it (Stop Job: under systemd it returns once the job's unit is down, but after
+`drgnx-jobs-stop-wait` seconds, 3 by default, at the latest; a job that ignores TERM is left to systemd, which kills it
+after 90 s). A job's pid is
 trusted only within the boot that started it and for the process it started (a pid reused after a reboot is "gone",
-never signalled). A job can be memory-capped (`:memory-max "1G"` in `drgnx-jobs-start`: systemd's `MemoryMax`, no swap;
+never signalled). Under systemd the job's wrapper line passes through the unit's ExecStart, which reads `$$` as `$`, so drgnx doubles
+every `$` in it: the `pid` file holds the job shell's real pid, and the job reads as running and can be stopped. A job can be memory-capped (`:memory-max "1G"` in `drgnx-jobs-start`: systemd's `MemoryMax`, no swap;
 `:nice 10` lowers its priority (`Nice=`); the detached launcher can do neither and ignores both). `:no-wait t`
 returns without waiting for the job's pid (the boot and start time that make it trustworthy are stamped from a short
-timer): for callers in a timer that must not block, such as drgnx starting the local AI runner again. Sessions and jobs started on a task get it as `DRGNX_TASK`, and the commits they make are
+timer, or at once when Emacs exits first): for callers in a timer that must not block, such as drgnx starting the local AI runner again. Sessions and jobs started on a task get it as `DRGNX_TASK`, and the commits they make are
 recorded for it ([Work tracker](work.md)).
 
 ## The hub and the gateway
 
-Agents on **OpenRouter, Ollama or your own Anthropic key** (profiles with `:ai claude-openrouter`, `claude-ollama`,
-`claude-anthropic`) do not get your key: they talk to the **gateway**, a local HTTP server in drgnx's **hub**, with a
+Agents on **OpenRouter, Ollama, your own Anthropic key, Kimi or DeepSeek** (profiles with `:ai claude-openrouter`,
+`claude-ollama`, `claude-anthropic`, `claude-moonshot`, `claude-deepseek`) do not get your key: they talk to the **gateway**, a local HTTP server in drgnx's **hub**, with a
 token of their own. The gateway checks the token, adds the real key, forwards each request and streams the answer
 back as it comes (it adds well under 50 ms before the first token). For each answer it counts the tokens the
 provider reports — spend per job, task and agent, kept in the work tracker's database — and when a provider fails
@@ -91,13 +120,36 @@ own login, which drgnx only launches and never reads.
 
 The **hub** is a background process (a durable job: it outlives the Emacs that started it, and a later Emacs finds
 it again). The first agent that needs it starts it; `drgnx hub start|stop|status [--json]` manages it by hand. Keys
-reach it from its environment, from auth-source files that never ask, or from the command you ran (a key in
-`~/.authinfo.gpg` is read then) — and stay in its memory; tokens are kept only as hashes, so a restarted hub still
-takes them; an agent's token is revoked when it exits. The hub keeps the environment, `PATH` included, of the Emacs
+reach it over its private socket from the Emacs or `drgnx hub start` that starts or uses it (never through its
+environment), from auth-source files that never ask, or from the command you ran (a key in `~/.authinfo.gpg` is read
+then) — and stay in its memory (a restarted hub gets them again when Emacs reconnects to it); tokens are kept only as hashes, so a restarted hub still
+takes them; an agent's token is revoked when it exits, or once the Emacs that started it is gone (a crash). The hub keeps the environment, `PATH` included, of the Emacs
 that started it: when an agent's program was installed while a hub ran (onboarding's Agents step, say), run
 `drgnx hub stop` (its durable sessions end), so the hub the next durable session starts finds the program.
 With no hub to be had, an agent goes to its provider directly and says so. The Agents list's **Via**
 column shows which.
+
+## Kimi and DeepSeek
+
+Claude Code also runs on Kimi and DeepSeek, with the same agent and the same tools; only the model behind it changes.
+Four built-in profiles (listed in New Agent Session… and on the Claude page of Agent Settings, with how each is
+billed):
+
+| Profile | Goes to | Key | Billed by |
+|---|---|---|---|
+| `claude (Kimi)` | Moonshot's own API | `MOONSHOT_API_KEY` | Moonshot, per token |
+| `claude (DeepSeek)` | DeepSeek's own API | `DEEPSEEK_API_KEY` | DeepSeek, per token |
+| `claude (Kimi via OpenRouter)` | OpenRouter | `OPENROUTER_API_KEY` | OpenRouter |
+| `claude (DeepSeek via OpenRouter)` | OpenRouter | `OPENROUTER_API_KEY` | OpenRouter |
+
+Like the other provider profiles they go through the gateway when a hub is available: the agent holds a token, never
+the key. Without a key the session does not start and the message names the variable and the keyring host to put it
+under. Each session gets its route in its own environment (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, the model
+names); drgnx writes nothing to `~/.claude/settings.json`, so the plain `claude` profile keeps using your login. No
+agent inherits the other vendors' keys from Emacs's environment (`drgnx-agents-scrubbed-env`; the plain `claude`
+profile keeps Claude Code's own variables). The API keys are billed
+per token; Kimi's coding membership is a different endpoint these profiles do not use. Moonshot and DeepSeek have no
+`:price`, so the gateway counts their spend as zero. Details and the model names: [AI](ai.md#agents).
 
 ## Durable sessions
 
@@ -106,7 +158,25 @@ you close Emacs, and the next Emacs shows it again in the Agents tab — its who
 requests and edits to review — and drives it the same way (send, Stop, answer, review). Emacs mirrors the hub's
 sessions when it is idle whenever a hub is running (and looks again every 30 s); it never starts a hub for that.
 Durable sessions live as long as the hub: if the hub ends (`drgnx hub stop`, a crash), its sessions end too, and the
-Agents tab shows them as exited.
+Agents tab shows them as exited. The next hub (the next durable session, an agent that needs the gateway, or `drgnx
+hub start`) resumes them when their agent can load sessions: each comes back idle with its history,
+though a turn that was running when the hub ended is lost; a job's agents are not resumed (the job starts their
+tasks again).
+
+## What agents get
+
+Every agent drgnx starts gets MCP servers in its ACP `session/new`: the **coordination tools** (see below) by default,
+and, when you ask for it, the **search tool** (`drgnx search mcp`, [search.md](search.md#the-mcp-tool)) for the project
+the agent works in. `agents.eld` holds the choice, next to `:profiles`:
+
+```elisp
+(:default "claude"                   ; what New Agent Session… offers on Return
+ :mcp (coordination search))         ; the servers; absent: coordination only; () gives none
+```
+
+Onboarding's Agents step asks for both and writes them without touching the rest of the file (comments stay); you can
+edit them by hand too. The search tool lets an agent read the indexed code of any of your projects, so it is off until
+you say yes.
 
 ## Working together
 
@@ -127,6 +197,51 @@ minutes the task is free again (the job window, M9b.4, will show it; messages an
 too). **Jobs** put several agents to work through a plan you approve, each task in its own worktree, reviewed and
 merged into the job's branch: [jobs.md](jobs.md). Developer details: [coordination.md](../develop/coordination.md).
 
+## Agents outside drgnx
+
+Agents you run outside drgnx can report to it too: Claude Code in a terminal or in Zed, Codex, gry workers and their
+subagents. Give the agent drgnx's coordination server as one more MCP server (stdio), with `KIND` set to the kind of
+agent (`claude`, `codex`, `zed`, …: a short lower-case name):
+
+- command: `<checkout>/bin/drgnx`
+- arguments: `coord mcp --kind KIND`
+
+For Claude Code, that is `claude mcp add drgnx -- <checkout>/bin/drgnx coord mcp --kind claude`. For Codex, it is a
+`[mcp_servers.drgnx]` table in `~/.codex/config.toml` with `command` and `args` set as above. Each agent's settings
+page can add it for you.
+
+The agent must start the server in its project folder. drgnx takes the folder the server starts in (its git
+worktree) as the place the agent works. A server started in your home folder, or at `/`, can say hello, but its
+file reports are refused.
+
+The agent then gets four tools to report with:
+- **hello**: who it is and where it works;
+- **report_edit**: the files it changed (paths only);
+- **report_test**: the tests it ran and how they went;
+- **ask_user**: a question that waits for you, never a prompt.
+
+It also gets the messages and the decision log, like drgnx's own agents. Its reports are recorded now, and the Work
+cockpit is where they will show. **Coming with the Work cockpit** (later in this milestone): each reporting agent
+shown with its name, folder and branch, the files it changed with their diff since it said hello, its test runs and
+its questions. You will answer a question there, and your answer will reach the agent as a message.
+
+What an outside agent cannot do:
+- **pass for another agent.** Its identity comes from its own process (`ext:KIND:PID-HASH`: its process id and when
+  that process started), never from what it says. A name it gives is only a label.
+- **touch drgnx's jobs.** It cannot claim, update or finish a job's tasks, or record decisions; it is told to report
+  its work instead. It asks you with ask_user rather than the escalate tool of drgnx's own job agents; anything else it sends you is a
+  message, never a question waiting on you, whatever it says.
+- **report a file outside the folder it was started in** (that folder's git worktree), a path with `..`, a symlink
+  that leads out, or a remote file.
+- **flood you.** It may make 20 reports and messages a minute together (`drgnx-coord-report-rate`). Past that, they
+  are held, and nothing is written. One card an hour tells you which agent is reporting too fast. Its questions and
+  messages are cut to 2,000 characters, and characters that hide or reorder text (controls, BiDi overrides) become
+  spaces.
+
+**Coming with the Work cockpit:** an agent that does not report — no drgnx server in its config, or it never says
+hello — will still show there when it works in a git worktree, with the worktree's changes and its ledger, marked
+**not reporting**.
+
 ## Plans and the board
 
 Imported plan checklists (Onboarding: Import Projects, with TODOs) remember where they came from (`:PLAN_FILE:`,
@@ -142,15 +257,22 @@ run it, with the plan's own encoding and line endings — and leaves alone a pla
 - `test/unit/gateway-test.el`, `test/unit/hub-test.el`, `test/unit/http-test.el`, `test/unit/agents-gateway-test.el`
   — the gateway against mock providers (streaming, tokens, keys, spend, budget, fallback, a hang-up, a 1 MB body),
   the hub (socket, events, restart, one hub, outliving its starter, the CLI), agents' environments.
+- `test/unit/agents-profiles-test.el` — the Kimi and DeepSeek profiles ([above](#kimi-and-deepseek)).
 - `test/unit/acp-test.el` — the transport against a mock agent: requests, notifications, the agent's own requests,
   split / malformed / 1 MB lines, the agent exiting with its error output.
 - `test/unit/agents-test.el` — sessions: a turn's transcript, queueing during a turn (delivered in order, never
   cancelling), steering (and its fallback), Stop within a second, permissions, tool calls, plans and subagents, a
   dying agent, Take Over, `/compact`.
+- `test/unit/agents-adapter-test.el` — which adapter runs, from fake npm prefixes with `package.json` files only (no
+  npm, no agent): the maintained package wins wherever it is on the `PATH`, the deprecated one still runs and says so
+  once with its fix, an old version, a copy instead of a link, a program of no known package, other commands left
+  alone, sessions and jobs starting the chosen program, and the doctor's fact.
 - `test/unit/jobs-test.el`, `test/unit/agents-ui-test.el` (the transcript, the list, hunk-by-hunk review),
   `test/unit/plans-sync-test.el`, `test/live/drgnx-agents-test.el` (queue, Stop and the dock in a GUI session).
 - `test/unit/agents-parity-test.el` — slash commands, context %, `/compact` lowering it: against the mock, or against
   a real profile with `DRGNX_AGENT_PROFILE=NAME` (uses your subscription or key, and the network).
 
 The mock agent (`test/fixtures/mock-acp.el`) is a batch Emacs whose turns are chosen by words in the prompt
-(`slow`, `tool`, `plan`, `subagent`, `permission`, `write PATH`, `crash`, `/compact`).
+(`slow`, `tool`, `plan`, `subagent`, `permission`, `write PATH`, `crash`, `/compact`). Tests start it through
+`test/fixtures/mock-acp-stdin.sh` (`sh mock-acp-stdin.sh emacs --batch -Q -l mock-acp.el`), which copies its stdin into
+a FIFO the mock reads while a turn streams; without the wrapper it reads `/proc/PID/fd/0`, which only Linux has.

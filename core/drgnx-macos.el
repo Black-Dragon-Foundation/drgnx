@@ -48,11 +48,13 @@ Every path reaches the shell through `quoted form of' — spaces, accents and qu
 
 (defun drgnx-macos-document-types ()
   "The CFBundleDocumentTypes of drgnx.app (a vector of plists, for `json-serialize'): folders, and text and
-source files, as an editor that is not the default (Alternate) — drgnx is offered, never imposed."
+source files, as an editor that is not the default (Alternate) — drgnx is offered, never imposed.
+public.json and the YAML types conform to public.text.  Not public.data: it would offer drgnx for nearly every
+file; Open With → Other... reaches any file."
   (vector (list :CFBundleTypeName "Folder" :CFBundleTypeRole "Editor" :LSHandlerRank "Alternate"
                 :LSItemContentTypes ["public.folder"])
           (list :CFBundleTypeName "Text and source code" :CFBundleTypeRole "Editor" :LSHandlerRank "Alternate"
-                :LSItemContentTypes ["public.text" "public.source-code" "public.script" "public.data"])))
+                :LSItemContentTypes ["public.text" "public.source-code" "public.script"])))
 
 (defun drgnx-macos--icon ()
   "Emacs's icon: of the Emacs.app this Emacs runs from, else of /Applications/Emacs.app; nil if neither has one."

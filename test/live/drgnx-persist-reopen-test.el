@@ -53,8 +53,8 @@
                           (not (equal (butlast (setq after (drgnx-persist-reopen--eval sess drgnx-persist-reopen--layout))) (butlast before))))
                 (sleep-for 0.2))
               (should (equal (butlast after) (butlast before)))
-              ;; The two halves of the split come back within a few pixels (sidebar and divider rounding).
+              ;; The two halves of the split come back to the pixel (M12a-14: window-state-put alone swapped 230/234).
               (should (= (length (car (last after))) (length (car (last before)))))
-              (should (cl-every (lambda (a b) (<= (abs (- a b)) 8)) (car (last after)) (car (last before)))))))
+              (should (cl-every (lambda (a b) (<= (abs (- a b)) 1)) (car (last after)) (car (last before)))))))
       (drgnx-ui-stop name)
       (delete-directory root t))))

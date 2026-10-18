@@ -88,6 +88,7 @@ from agents.eld's :routes when nil.")
 
 (declare-function drgnx-ai-agent-gateway-chain "drgnx-ai")
 (declare-function drgnx-ai-provider "drgnx-ai")
+(declare-function drgnx-hub-note-permission-answer "drgnx-hub")
 (defvar drgnx-ai-gateway-kinds)
 (defvar drgnx-job-review)
 
@@ -268,6 +269,33 @@ ends it (DONE is not called; TASK is no longer busy).  The process."
     (ignore-errors (process-send-eof p))               ; like call-process: git (a hook) reads nothing
     p))
 
+(defun drgnx-job--first-line (file)
+  "FILE's first line, trimmed, or nil when it cannot be read."
+  (ignore-errors (with-temp-buffer (insert-file-contents file nil 0 4096)
+                                   (string-trim (buffer-substring (point-min) (line-end-position))))))
+
+(defun drgnx-job-git-head (dir)
+  "The commit DIR's git checkout is at (HEAD), read from the repository's files — no git process, so it costs nothing
+on an agent's change — or nil (not a checkout, a remote name, a ref it cannot find).  A linked worktree's `.git' file
+and `commondir', loose refs and `packed-refs' are followed."
+  (when-let* (((stringp dir)) ((not (string-match-p "\\`/[^/|:]+[:|]" dir)))   ; never a remote (TRAMP) name
+              (top (locate-dominating-file dir ".git"))
+              (dotgit (expand-file-name ".git" top))
+              (gitdir (if (file-directory-p dotgit) dotgit
+                        (let ((line (drgnx-job--first-line dotgit)))
+                          (and line (string-match "\\`gitdir: *\\(.+\\)" line) (expand-file-name (match-string 1 line) top)))))
+              (head (drgnx-job--first-line (expand-file-name "HEAD" gitdir))))
+    (if (not (string-match "\\`ref: *\\(refs/.+\\)" head))
+        (and (string-match-p "\\`[0-9a-f]\\{40,64\\}\\'" head) head)
+      (let* ((ref (match-string 1 head))
+             (common (let ((c (drgnx-job--first-line (expand-file-name "commondir" gitdir)))) (if c (expand-file-name c gitdir) gitdir)))
+             (sha (or (drgnx-job--first-line (expand-file-name ref gitdir)) (drgnx-job--first-line (expand-file-name ref common))
+                      (ignore-errors
+                        (with-temp-buffer
+                          (insert-file-contents (expand-file-name "packed-refs" common))
+                          (and (re-search-forward (concat "^\\([0-9a-f]+\\) " (regexp-quote ref) "$") nil t) (match-string 1)))))))
+        (and sha (string-match-p "\\`[0-9a-f]\\{40,64\\}\\'" sha) sha)))))
+
 (defun drgnx-job--repo (job) (plist-get (drgnx-coord-job job) :repo))
 (defun drgnx-job--job-tree (job) (expand-file-name (format ".claude/worktrees/%s/" job) (drgnx-job--repo job)))
 (defun drgnx-job--task-tree (job n) (expand-file-name (format ".claude/worktrees/%s-%d/" job n) (drgnx-job--repo job)))
@@ -335,6 +363,10 @@ process of its own: the agent starts when it is there."
   (let* ((n (plist-get task :n)) (tree (drgnx-job--task-tree id n))
          (profile (or profile (car (drgnx-job-route (intern (or (plist-get task :role) "implement"))))))
          (s (drgnx-agents-start profile tree (plist-get task :id) id))
+         ;; its edits are against where its worktree starts (the cockpit's diffs), not where the job's branch is later
+         (_ (with-demoted-errors "drgnx job: agent not registered: %S"
+              (drgnx-coord-agent-register :id (drgnx-agent-session-id s) :kind "job" :name (drgnx-agent-session-name s) :cwd tree :worktree tree
+                                          :branch (format "job/%s-%d" id n) :base (drgnx-job-git-head tree) :task (plist-get task :id))))
          (body (plist-get (seq-find (lambda (x) (= (plist-get x :n) n)) (plist-get (plist-get (drgnx-coord-job id) :data) :tasks)) :body)))
     (drgnx-coord-force-status (plist-get task :id) "claimed" (drgnx-agent-session-id s))
     (puthash (drgnx-agent-session-id s)
@@ -478,7 +510,7 @@ job on."
         (remhash sid drgnx-job--reviewing)
         (let ((verdict (drgnx-job--verdict s)))
           (drgnx-agents-kill s)
-          (drgnx-job--reviewed job reviewer verdict)))))
+          (drgnx-job--reviewed job reviewer verdict sid)))))
     (when (or (eq (drgnx-agent-session-status s) 'exited)
               (and (drgnx-job--turn-over-p s)
                    (equal (plist-get (drgnx-coord-task (drgnx-agent-session-task s)) :status) "in-review")))
@@ -528,9 +560,14 @@ commit to the job's branch, a card: there is nothing to review."
           ((string-match "\\`VERDICT: *pass" line) 'pass)
           ((string-match "\\`VERDICT: *fail:? *\\(.*\\)" line) (cons 'fail (string-trim (match-string 1 line)))))))
 
-(defun drgnx-job--reviewed (id task-id verdict)
-  "TASK-ID of job ID was reviewed: pass → merged; fail → back to an agent with the reasons (the user after
-`drgnx-job-review-tries'); no verdict → the user."
+(defun drgnx-job--reviewed (id task-id verdict &optional reviewer)
+  "TASK-ID of job ID was reviewed (by session REVIEWER): pass → merged; fail → back to an agent with the reasons (the
+user after `drgnx-job-review-tries'); no verdict → the user.  Each is a `review' event (:verdict pass or fail; no
+data without a verdict)."
+  (drgnx-coord-event-add-best-effort
+   :agent reviewer :job id :task task-id :kind "review"
+   :summary (pcase verdict ('pass "pass") (`(fail . ,reasons) (format "fail: %s" reasons)) (_ "the reviewer gave no verdict"))
+   :data (pcase verdict ('pass (list :verdict 'pass)) (`(fail . ,_) (list :verdict 'fail))))
   (let* ((job (drgnx-coord-job id)) (data (plist-get job :data)) (task (drgnx-coord-task task-id)))
     (pcase verdict
       ('pass (drgnx-job--merge id task))
@@ -554,24 +591,56 @@ goes to the user.  The merge itself is a git process of its own (a hook may be s
      ((gethash tid drgnx-job--busy))                                  ; being merged
      ((eql 0 (car (drgnx-job--git tree "merge-base" "--is-ancestor" branch "HEAD")))   ; merged before
       (drgnx-coord-force-status tid "done" (plist-get task :agent)))
+     ((drgnx-job--merging-p id) (drgnx-job--merge-later id tid) (drgnx-job--changed id))   ; one merge at a time
      (t (drgnx-job--git-async tree (list "merge" "--no-ff" "-q" "-m" (format "Merge %s: %s" tid (plist-get task :title)) branch)
                               (lambda (merged) (drgnx-job--merged id task merged)) id tid)
         (puthash tid "merging" drgnx-job--busy)
         (drgnx-job--changed id)))))
+
+(defvar drgnx-job--merge-queue (make-hash-table :test #'equal)
+  "Job id → its task ids whose merge waits (busy \"queued\"), in order: one git merge at a time in a job's worktree —
+two at once fail on its HEAD (\"cannot lock ref\").")
+(defvar drgnx-job--merge-retried (make-hash-table :test #'equal)
+  "Task id → t once its merge failed without a conflict and was queued again.")
+
+(defun drgnx-job--merging-p (id)
+  "Does a git merge run in job ID's worktree?"
+  (seq-some (lambda (task) (equal (gethash (plist-get task :id) drgnx-job--busy) "merging")) (drgnx-coord-tasks id)))
+
+(defun drgnx-job--merge-later (id tid)
+  "Merge TID into job ID's branch after the merges before it (`drgnx-job--merge-next')."
+  (puthash tid "queued" drgnx-job--busy)
+  (unless (member tid (gethash id drgnx-job--merge-queue))
+    (puthash id (append (gethash id drgnx-job--merge-queue) (list tid)) drgnx-job--merge-queue)))
+
+(defun drgnx-job--merge-next (id)
+  "Start the merge that waits first in job ID's queue, unless one runs."
+  (unless (drgnx-job--merging-p id)
+    (when-let* ((tid (pop (gethash id drgnx-job--merge-queue))))
+      (remhash tid drgnx-job--busy)
+      (drgnx-job--merge id (drgnx-coord-task tid)))))
 
 (defun drgnx-job--merged (id task merged)
   "TASK of job ID was merged by git (MERGED: (EXIT . OUTPUT)): done; or, aborted, the user's."
   (let ((tree (drgnx-job--job-tree id)) (tid (plist-get task :id)))
     (remhash tid drgnx-job--busy)
     (if (eql 0 (car merged))
-        (drgnx-coord-force-status tid "done" (plist-get task :agent))
+        (progn (drgnx-coord-force-status tid "done" (plist-get task :agent))
+               (drgnx-coord-event-add-best-effort :agent (plist-get task :agent) :job id :task tid :kind "status"
+                                                  :summary (format "%s merged into job/%s" tid id)
+                                                  :data (list :status "merged" :into (concat "job/" id))))
       (let ((files (split-string (cdr (drgnx-job--git tree "diff" "--name-only" "--diff-filter=U")) "\n" t)))
         (unless (eql 0 (car (drgnx-job--git tree "merge" "--abort")))
           (drgnx-job--git tree "reset" "--merge"))             ; no merge to abort (git was cut off before it began one)
-        (drgnx-job--card id tid "merge-conflict"
-                         (if files
-                             (format "merging into job/%s conflicts in: %s" id (string-join files ", "))
-                           (format "merge failed: %s" (cdr merged))))))   ; no conflict: a hook, git's own refusal
+        (cond (files (drgnx-job--card id tid "merge-conflict"
+                                      (format "merging into job/%s conflicts in: %s" id (string-join files ", "))))
+              ;; no conflict (a lock another git held, a hook): once more, after what merges now — then the user
+              ((and (integerp (car merged)) (not (gethash tid drgnx-job--merge-retried)))
+               (puthash tid t drgnx-job--merge-retried)
+               (drgnx-job--merge-later id tid))
+              (t (remhash tid drgnx-job--merge-retried)
+                 (drgnx-job--card id tid "merge-failed" (format "merge failed: %s" (cdr merged)))))))
+    (drgnx-job--merge-next id)
     (drgnx-job--step-later id)
     (drgnx-job--changed id)))
 
@@ -615,12 +684,22 @@ goes to the user.  The merge itself is a git process of its own (a hook may be s
 (defconst drgnx-job--provider-limit "\\(?:^\\|[^0-9]\\)429\\(?:[^0-9]\\|$\\)\\|rate.?limit\\|overloaded\\|quota\\|too many requests"
   "What a provider at its limit says (case ignored).")
 
+(defun drgnx-job--error-data-text (data)
+  "The text of a JSON-RPC error's DATA, where an agent may put the provider's own error: DATA itself when it is a
+string; of an object, its message, details and reason."
+  (cond ((stringp data) data)
+        ((and (consp data) (keywordp (car data)))
+         (mapconcat (lambda (k) (let ((v (plist-get data k))) (if v (format "%s" v) ""))) '(:message :details :reason) "\n"))
+        (t "")))
+
 (defun drgnx-job--provider-limit-p (s err)
-  "Does ERR (a turn's error) of S — or S's stderr, when the agent died of it — say its provider is at its limit?"
+  "Does ERR (a turn's error) of S — its message or data, or S's stderr, when the agent died of it — say its provider
+is at its limit?"
   (or (eql (plist-get err :code) 429)
       (let ((case-fold-search t))
         (string-match-p drgnx-job--provider-limit
                         (concat (format "%s" (plist-get err :message)) "\n"
+                                (drgnx-job--error-data-text (plist-get err :data)) "\n"
                                 (and (eq (drgnx-agent-session-status s) 'exited) (or (drgnx-agent-session-stderr s) "")))))))
 
 (defun drgnx-job--agent-error (s err)
@@ -707,23 +786,100 @@ reaches the network unseen.")
   '((review :allow (read search think))
     (t :allow (read edit delete move search think execute other)))
   "Per role: the tool kinds allowed without asking (paths inside the worktree, no outward command).  `t': any other
-role.  Everything else — network (fetch), outward commands, paths outside the worktree — goes to the user.")
+role.  Everything else — network (fetch), outward commands, paths outside the worktree, tools of MCP servers other
+than drgnx's own — goes to the user.")
+
+(defconst drgnx-job--own-mcp-servers '("drgnx" "drgnx-search")
+  "drgnx's own MCP servers, the ones drgnx gives an agent's session: the coordination tools (drgnx-coord-mcp.el) and
+the search tool (drgnx-search-mcp.el).")
+
+(defconst drgnx-job--own-mcp-tool
+  (concat "\\`mcp__\\(" (regexp-opt drgnx-job--own-mcp-servers) "\\)__[a-z]+\\(?:_[a-z]+\\)*\\'")
+  "The name of a tool of one of drgnx's own MCP servers (group 1: the server): no `__' after the server's name, so a
+server whose name only starts with drgnx's (`drgnx__x') is not taken for it.")
+
+(defconst drgnx-job--unnamed-tool-titles '("" "Use tool?" "Unknown Tool")
+  "Titles claude-agent-acp gives a tool call whose name it cannot show: what the tool is is unknown.")
+
+(defun drgnx-job--mcp-tool (tool)
+  "Whose MCP tool the ACP TOOL call is: nil when it is none (no name `mcp__…' in `_meta.claudeCode.toolName' or the
+title, no `_meta.claudeCode.mcpServer'); `drgnx' when it is a tool of one of drgnx's own servers — every name it has
+is one of the same server, and the server, when named, is that one as drgnx gave it to the session (source `dynamic';
+a server of the user's configuration says `user', `project', `local', `plugin'…; the adapter drgnx installs names
+none, only the tool); `user' otherwise, for the user's servers and anything that cannot be told apart from one."
+  (let* ((cc (plist-get (plist-get tool :_meta) :claudeCode))
+         (server (plist-get cc :mcpServer))
+         (names (seq-filter #'stringp (list (plist-get cc :toolName) (plist-get tool :title))))
+         (case-fold-search nil)
+         (owners (mapcar (lambda (n) (and (string-match drgnx-job--own-mcp-tool n) (match-string 1 n))) names)))
+    (cond ((and (null server) (not (seq-some (lambda (n) (string-prefix-p "mcp__" n)) names))) nil)
+          ((and (car owners) (seq-every-p (lambda (o) (equal o (car owners))) owners)
+                (or (null server) (and (equal (plist-get server :name) (car owners)) (equal (plist-get server :source) "dynamic"))))
+           'drgnx)
+          (t 'user))))
+
+(defun drgnx-job--agent-config-p (path tree)
+  "Does PATH, inside TREE, configure the agents that work in TREE — a `.claude' directory or anything in it, at any
+depth (settings: a permission mode, allow rules, hooks; skills), or a `.mcp.json' anywhere in TREE?  Once `//', `..'
+and symlinks are resolved; case ignored, for a file system that ignores it.  A PATH that cannot be placed inside TREE
+counts as one (fail closed)."
+  (let* ((true (file-truename (replace-regexp-in-string "\\`//+" "/" (expand-file-name path tree))))
+         (rel (file-relative-name true (file-truename tree)))
+         (case-fold-search t))
+    (or (file-name-absolute-p rel) (string-match-p "\\`\\.\\.\\(?:/\\|\\'\\)" rel)
+        (string-match-p "\\(?:\\`\\|/\\)\\.claude\\(?:/\\|\\'\\)\\|\\(?:\\`\\|/\\)\\.mcp\\.json\\'" rel))))
+
+(defun drgnx-job--names-agent-config-p (line tree)
+  "Does command LINE name the agents' configuration: a `.mcp.json', or a `.claude' (`.claude/', `.claude.json'…) that
+is not just part of the path of TREE itself (the worktree, `…/.claude/worktrees/NAME', with no `..' and no other
+`.claude' after it)?  Case ignored.  Best effort, like `drgnx-job--outward-commands': a shell can build a name unseen."
+  (let ((case-fold-search t) (start 0) (found nil)
+        (own (delete-dups (list (directory-file-name (expand-file-name tree)) (directory-file-name (file-truename tree))))))
+    (if (string-match-p "\\.mcp\\.json" line) t
+      (while (and (not found) (string-match "\\.claude\\(?:[^[:alnum:]_-]\\|\\'\\)" line start))
+        (let ((b (match-beginning 0)))
+          (setq start (1+ b))
+          (unless (seq-some
+                   (lambda (o)                      ; B is in an occurrence of TREE's path that ends there
+                     (let ((p (string-search o line (max 0 (- b (length o))))))
+                       (and p (<= p b) (< b (+ p (length o)))
+                            ;; the path goes on (group 1) to where the word ends
+                            (eq (string-match (concat (regexp-quote o) "\\(/[^[:space:];&|()<>`'\"]*\\)?"
+                                                      "\\(?:[[:space:];&|()<>`'\"]\\|\\'\\)")
+                                              line p)
+                                p)
+                            (let ((rest (or (match-string 1 line) "")))
+                              (not (or (string-search ".." rest) (string-match-p "\\.claude" rest)))))))
+                   own)
+            (setq found t))))
+      found)))
 
 (defun drgnx-job--inside-p (path tree)
   "Is PATH inside TREE, once `..' and symlinks are resolved?"
   (and (stringp path) (file-in-directory-p (file-truename (expand-file-name path tree)) (file-truename tree))))
 
 (defun drgnx-job-policy (role tool tree)
-  "`allow' or `ask': the policy of ROLE (a string) for the ACP TOOL call (its :kind, :title, :locations) of an agent
-working in TREE."
-  (let* ((kind (intern (or (plist-get tool :kind) "other")))
+  "`allow' or `ask': the policy of ROLE (a string) for the ACP TOOL call (its :kind, :title, :locations, :_meta) of an
+agent working in TREE.  A tool of an MCP server other than drgnx's own asks, whatever its kind: the user's servers can
+reach anything (mail, a database).  So does an `other' call whose tool cannot be named, a kind that is not a string,
+and a change to the agents' own configuration in TREE (`.claude/', `.mcp.json'): a permission mode set there would
+hold for every agent that works in TREE after it."
+  (let* ((kind (let ((k (plist-get tool :kind))) (cond ((null k) 'other) ((stringp k) (intern k)))))
          (allowed (plist-get (cdr (or (assq (intern (or role "implement")) drgnx-job-policies) (assq t drgnx-job-policies))) :allow))
          (paths (delq nil (mapcar (lambda (l) (plist-get l :path)) (append (plist-get tool :locations) nil))))
          (case-fold-search nil))
     (cond
+     ((null kind) 'ask)
      ((not (seq-every-p (lambda (p) (drgnx-job--inside-p p tree)) paths)) 'ask)
+     ((and (not (memq kind '(read search))) (seq-some (lambda (p) (drgnx-job--agent-config-p p tree)) paths)) 'ask)
+     ((eq (drgnx-job--mcp-tool tool) 'user) 'ask)
+     ((and (eq kind 'other)
+           (not (seq-some (lambda (n) (and (stringp n) (not (member n drgnx-job--unnamed-tool-titles))))
+                          (list (plist-get tool :title) (plist-get (plist-get (plist-get tool :_meta) :claudeCode) :toolName)))))
+      'ask)
      ((and (eq kind 'execute)
-           (string-match-p drgnx-job--outward-commands (concat (or (plist-get tool :title) "") "\n" (drgnx-job--command tool))))
+           (let ((line (concat (or (plist-get tool :title) "") "\n" (drgnx-job--command tool))))
+             (or (string-match-p drgnx-job--outward-commands line) (drgnx-job--names-agent-config-p line tree))))
       'ask)
      ((memq kind allowed) 'allow)
      ;; a reviewer reads the diff
@@ -797,6 +953,7 @@ S: the session whose request waits (it goes back to work once answered, or, gone
     ("write" '(("reject" "Reject")))
     ("merge-conflict" '(("retry" "Let the agent resolve it") ("merge" "Merge again (I resolved it)") ("drop" "Drop the task")
                         ("open" "Open the job's worktree")))
+    ("merge-failed" '(("merge" "Merge again") ("drop" "Drop the task") ("open" "Open the job's worktree")))   ; no conflict
     ("review" '(("accept" "Merge as it is") ("retry" "Back to an agent") ("drop" "Drop the task")))
     ((or "fallback" "agent" "stalled") (append (and (plist-get (plist-get card :data) :review) '(("review" "Review now")))   ; a finished task
                                                '(("retry" "Retry") ("drop" "Drop the task"))))
@@ -824,9 +981,12 @@ S: the session whose request waits (it goes back to work once answered, or, gone
   (let* ((data (plist-get card :data)) (s (or (drgnx-agents-get (plist-get data :sid)) (user-error "The agent is gone")))
          (req (plist-get data :request)))
     (if-let* ((p (seq-find (lambda (p) (equal (plist-get p :id) req)) (drgnx-agent-session-permissions s))))
-        (drgnx-agents-answer-permission
-         s p (plist-get (seq-find (lambda (o) (equal (plist-get o :kind) (if allow "allow_once" "reject_once"))) (append (plist-get p :options) nil))
-                        :optionId))
+        (let ((option (plist-get (seq-find (lambda (o) (equal (plist-get o :kind) (if allow "allow_once" "reject_once")))
+                                           (append (plist-get p :options) nil))
+                                 :optionId)))
+          ;; the user's answer, through the card: the hub's `answer' event says so
+          (when (fboundp 'drgnx-hub-note-permission-answer) (drgnx-hub-note-permission-answer s req option "user"))
+          (drgnx-agents-answer-permission s p option))
       (if-let* ((r (seq-find (lambda (r) (equal (plist-get r :id) req)) (drgnx-agent-session-reviews s))))
           (drgnx-agents-finish-review s r t)
         (user-error "The request was answered already")))
@@ -893,6 +1053,16 @@ S: the session whose request waits (it goes back to work once answered, or, gone
     (drgnx-job--changed (plist-get m :job))
     t))
 
+(defun drgnx-job-dismiss (mid)
+  "The user dismisses message MID — a message that needs no answer: it is acted on, nothing is sent back.  Only a
+job's own message to the user can be dismissed: an agent's message to another agent must still be delivered."
+  (let ((m (or (drgnx-coord-message mid) (user-error "No message %s" mid))))
+    (unless (and (equal (plist-get m :recipient) "user") (plist-get m :job))
+      (user-error "Not a message of a job to the user"))
+    (drgnx-coord-mark mid "acted")
+    (drgnx-job--changed (plist-get m :job))
+    t))
+
 (defvar drgnx-job--gated (make-hash-table :test #'equal) "Session id → the log version it was last told of at the gate.")
 
 (defun drgnx-job-enforced-p (s)
@@ -937,9 +1107,12 @@ its worktree done at once; anything else waits for the user as a card (nil: the 
          ;; an absolute path only: the check and the write must mean the same file
          (let ((path (plist-get params :path)) (content (plist-get params :content)))
            (if (and (stringp content) (drgnx-agents--path-ok-p path) (drgnx-job--inside-p path tree)
-                    (not (equal (drgnx-job--role s) "review")))
+                    (not (drgnx-job--agent-config-p path tree)) (not (equal (drgnx-job--role s) "review")))
                (progn (make-directory (file-name-directory path) t)
                       (let ((coding-system-for-write 'utf-8-unix)) (write-region content nil path nil 'silent))
+                      (drgnx-coord-event-add-best-effort :agent (drgnx-agent-session-id s) :job job :task task :kind "edit"
+                                                         :summary (format "wrote %s" (file-name-nondirectory path))
+                                                         :data (list :root tree :paths (list path)))
                       (list :result nil))
              (drgnx-job--card job task "write" (format "write %s" path) s (list :request id))
              nil)))))))
@@ -969,6 +1142,8 @@ back in review, with the work of the agent that did it."
   (dolist (p (process-list))                       ; its worktree adds and merges end too; resume starts them again
     (when (and (process-get p :job) (equal (process-get p :job) id) (process-live-p p))
       (process-put p :stopped t) (delete-process p)))
+  (dolist (tid (gethash id drgnx-job--merge-queue)) (remhash tid drgnx-job--busy))   ; the merges that waited too
+  (remhash id drgnx-job--merge-queue)
   (dolist (s (drgnx-agents-sessions))
     (when (and (equal (drgnx-agent-session-job s) id) (not (eq (drgnx-agent-session-status s) 'exited)))
       (drgnx-agents-kill s)))

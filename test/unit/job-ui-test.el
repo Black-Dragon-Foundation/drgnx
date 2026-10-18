@@ -99,6 +99,28 @@
       (drgnx-job-ui--refresh "j1"))
     (should (string-search "No drgnx hub" (drgnx-job-ui-test--text 'cards)))))
 
+(ert-deftest drgnx-job-ui/a-deleted-job-closes-its-window ()
+  ;; M9b4-9: a restored window of a job the hub does not know is closed (its frame, its buffers), not kept with a
+  ;; "No drgnx hub" note that looks again every 10 s.
+  (drgnx-job-ui-test--with
+    (drgnx-job-ui--draw "j1" drgnx-job-ui-test--summary)
+    (let ((closed nil) (drgnx-job-ui--retry nil)
+          (orig-param (symbol-function 'frame-parameter)))
+      (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (_m _p &optional cb) (funcall cb nil "No job j1")))
+                ((symbol-function 'frame-list) (lambda () (list 'job-frame 'other-frame)))
+                ((symbol-function 'frame-parameter)
+                 (lambda (f p) (if (symbolp f) (and (eq f 'job-frame) (eq p 'drgnx-job) "j1") (funcall orig-param f p))))
+                ((symbol-function 'delete-frame) (lambda (f &rest _) (push f closed))))
+        (drgnx-job-ui--refresh "j1"))
+      (should (equal closed '(job-frame)))
+      (should-not (drgnx-job-ui--live-p "j1"))
+      (should-not (timerp drgnx-job-ui--retry))
+      ;; a hub that is not there is another matter: the window stays and looks again
+      (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (_m _p &optional cb) (funcall cb nil "No drgnx hub runs"))))
+        (drgnx-job-ui--refresh "j1"))
+      (should (drgnx-job-ui--live-p "j1"))
+      (when (timerp drgnx-job-ui--retry) (cancel-timer drgnx-job-ui--retry) (setq drgnx-job-ui--retry nil)))))
+
 (ert-deftest drgnx-job-ui/the-badge-counts-what-needs-you ()
   (let ((drgnx-job-ui--badge "") (answer nil))
     (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (_m _p &optional cb) (funcall cb answer nil))))
@@ -113,9 +135,9 @@
       (should (equal drgnx-job-ui--badge "")))))
 
 (ert-deftest drgnx-job-ui/a-new-card-notifies-once ()
+  ;; when and what is sent, whatever the platform: the send itself (osascript on macOS, D-Bus elsewhere) is stubbed
   (let ((sent nil) (drgnx-job-ui-notify t) (drgnx-job-ui--notified (make-hash-table :test #'equal)))
-    (cl-letf (((symbol-function 'drgnx-job-ui--desktop-p) (lambda () t))
-              ((symbol-function 'notifications-notify) (lambda (&rest args) (push args sent)))
+    (cl-letf (((symbol-function 'drgnx-job-ui--send) (lambda (title body) (push (list :title title :body body) sent)))
               ((symbol-function 'drgnx-hub-call) #'ignore))
       (drgnx-job-ui--event "card" '(:id 11 :job "j1" :kind "budget" :title "spent 1.2 of 1.0 USD: paused"))
       (should-not sent)                                     ; never inside the hub's event handler (D-Bus may hang)
@@ -149,8 +171,6 @@
         (should (with-temp-buffer (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir))
                                   (search-forward (format "(%s " id) nil t)))))))
 
-;;; job-ui-test.el ends here
-
 ;; From the old UI list ("stale status values after gry failures"): a status that cannot be read says nothing
 ;; instead of keeping the last count.
 (ert-deftest drgnx-job-ui/the-badge-clears-when-the-hub-cannot-answer ()
@@ -170,3 +190,142 @@
       (drgnx-job-ui--hub-gone))
     (should (equal drgnx-job-ui--badge ""))
     (should-not drgnx-job-ui--badge-job)))
+
+;; From pass A (M9b4-2, M9b4-8): what a clash card says when no recommendation comes.
+(ert-deftest drgnx-job-ui/a-clash-without-a-recommendation-says-why ()
+  (drgnx-job-ui-test--with
+    (let ((s (copy-tree drgnx-job-ui-test--summary)))
+      (let ((d (plist-get (nth 1 (plist-get s :cards)) :data)))
+        (plist-put d :recommendation :null))
+      (drgnx-job-ui--draw "j1" (copy-tree s))
+      (should (string-search "reading both sides" (drgnx-job-ui-test--text 'cards)))
+      (plist-put (plist-get (nth 1 (plist-get s :cards)) :data) :no-recommendation t)
+      (drgnx-job-ui--draw "j1" (copy-tree s))
+      (should (string-search "gave no recommendation" (drgnx-job-ui-test--text 'cards)))
+      (should-not (string-search "reading both sides" (drgnx-job-ui-test--text 'cards)))
+      (plist-put (plist-get (nth 1 (plist-get s :cards)) :data) :reviewer-gone t)
+      (drgnx-job-ui--draw "j1" (copy-tree s))
+      (should (string-search "No reviewer is coming" (drgnx-job-ui-test--text 'cards)))
+      (should-not (string-search "reading both sides" (drgnx-job-ui-test--text 'cards))))))
+
+(ert-deftest drgnx-job-ui/discuss-opens-transcript ()
+  (drgnx-job-ui-test--with
+    (let ((opened nil) (calls nil)
+          (s (copy-tree drgnx-job-ui-test--summary)))
+      (plist-put (plist-get (nth 1 (plist-get s :cards)) :data) :reviewer "s-rev")   ; the reviewer's session, on the card
+      (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "why A?"))
+                ((symbol-function 'drgnx-job-ui--schedule) #'ignore)
+                ((symbol-function 'drgnx-job-ui--transcript) (lambda (id) (push id opened)))
+                ((symbol-function 'drgnx-hub-call)
+                 (lambda (method params &optional cb)
+                   (push (cons method params) calls)
+                   (funcall cb (if (equal method "job/status") s t) nil))))
+        (drgnx-job-ui--act "j1" (nth 1 (plist-get s :cards)) "discuss"))
+      (should (equal (assoc "job/card" calls) '("job/card" :card 8 :action "discuss" :arg "why A?")))
+      (should (equal opened '("s-rev"))))))
+
+;; M9b4-1: a message that needs no answer is dismissed, not replied to.
+(ert-deftest drgnx-job-ui/dismiss-clears-the-badge ()
+  (drgnx-job-ui-test--with
+    (drgnx-job-ui--draw "j1" drgnx-job-ui-test--summary)
+    (should (drgnx-job-ui-test--button 'cards "Dismiss"))
+    (let ((calls nil) (again nil))
+      (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (method params &optional cb) (push (cons method params) calls) (when cb (funcall cb t nil))))
+                ((symbol-function 'drgnx-job-ui--schedule) (lambda (job) (push (list 'window job) again)))
+                ((symbol-function 'drgnx-job-ui--schedule-recount) (lambda () (push 'badge again))))
+        (button-activate (drgnx-job-ui-test--button 'cards "Dismiss")))
+      (should (equal (assoc "job/dismiss" calls) '("job/dismiss" :message 3)))
+      (should (member 'badge again))                        ; the badge counts again
+      (should (member '(window "j1") again))))
+  ;; once the hub has marked it acted, the recount gives 0
+  (should (= 0 (car (drgnx-job-ui--count '((:id "j1" :status "running" :cards :null :messages ((:id 3 :state "acted")))))))))
+
+;; M9b4-14: the notification goes where the platform has one.
+(ert-deftest drgnx-job-ui/notify-backend-choice ()
+  (let ((made nil) (said nil))
+    (cl-letf (((symbol-function 'make-process) (lambda (&rest args) (push args made) 'proc))
+              ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said)))
+              ((symbol-function 'executable-find) (lambda (c &rest _) (and (equal c "osascript") "/usr/bin/osascript")))
+              ((symbol-function 'drgnx-job-ui--desktop-p) (lambda () nil))
+              ((symbol-function 'notifications-notify) (lambda (&rest _) (push 'dbus made))))
+      ;; macOS: a fixed script (`on run argv'), the text only as argv items after "--": nothing of it is ever script
+      (let ((system-type 'darwin))
+        (drgnx-job-ui--send "say \"hi\" \\ \" & (do shell script \"touch x\") & \"" "j1 — body\nnext -e"))
+      (should (= 1 (length made)))
+      (should (equal (plist-get (car made) :command)
+                     '("osascript" "-e" "on run argv"
+                       "-e" "display notification (item 1 of argv) with title (item 2 of argv)"
+                       "-e" "end run" "--"
+                       "j1 — body next -e" "say \"hi\" \\ \" & (do shell script \"touch x\") & \"")))
+      (should-not said)
+      ;; macOS without osascript, Linux without D-Bus, Windows: the message
+      (setq made nil)
+      (cl-letf (((symbol-function 'executable-find) #'ignore))
+        (let ((system-type 'darwin)) (drgnx-job-ui--send "t" "b")))
+      (dolist (type '(gnu/linux windows-nt)) (let ((system-type type)) (drgnx-job-ui--send "t" "b")))
+      (should-not made)
+      (should (= 3 (length said)))
+      ;; Linux with D-Bus: notifications
+      (cl-letf (((symbol-function 'drgnx-job-ui--desktop-p) (lambda () t)))
+        (let ((system-type 'gnu/linux)) (drgnx-job-ui--send "t" "b")))
+      (should (equal made '(dbus))))))
+
+;; an acted message offers nothing more to do
+(ert-deftest drgnx-job-ui/an-acted-message-has-no-buttons ()
+  (drgnx-job-ui-test--with
+    (let ((s (copy-tree drgnx-job-ui-test--summary)))
+      (plist-put (car (plist-get s :messages)) :state "acted")
+      (drgnx-job-ui--draw "j1" s)
+      (should (string-search "which one?" (drgnx-job-ui-test--text 'cards)))
+      (should-not (drgnx-job-ui-test--button 'cards "Reply…"))
+      (should-not (drgnx-job-ui-test--button 'cards "Dismiss")))))
+
+;; a failed osascript says so once and is not tried again
+(ert-deftest drgnx-job-ui/a-failed-osascript-says-so-once ()
+  (let ((made nil) (said nil) (sentinel nil))
+    (cl-letf (((symbol-function 'make-process) (lambda (&rest args) (push args made) (setq sentinel (plist-get args :sentinel)) 'proc))
+              ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said)))
+              ((symbol-function 'executable-find) (lambda (&rest _) "/usr/bin/osascript"))
+              ((symbol-function 'process-status) (lambda (_p) 'exit))
+              ((symbol-function 'process-exit-status) (lambda (_p) 1)))
+      (let ((system-type 'darwin)) (drgnx-job-ui--send "t" "b"))
+      (should (functionp sentinel))
+      (funcall sentinel 'proc "exited abnormally with code 1\n")
+      (should (= 1 (length said)))
+      (should (string-search "b" (car said)))
+      (should (= 1 (length made))))                         ; no second try
+    (setq said nil)
+    (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said)))
+              ((symbol-function 'process-status) (lambda (_p) 'exit))
+              ((symbol-function 'process-exit-status) (lambda (_p) 0)))
+      (funcall sentinel 'proc "finished\n")
+      (should-not said))))
+
+;; Discuss: a reviewer not mirrored yet is looked for once more, then said
+(ert-deftest drgnx-job-ui/discuss-looks-once-more-for-a-reviewer-not-mirrored-yet ()
+  (let ((timers nil) (said nil) (tries 0))
+    (cl-letf (((symbol-function 'drgnx-job-ui--transcript) (lambda (_id) (cl-incf tries) (user-error "Agent s-rev is not mirrored here (yet)")))
+              ((symbol-function 'run-at-time) (lambda (_time _repeat fn &rest args) (push (cons fn args) timers) 'timer))
+              ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+      (drgnx-job-ui--open-transcript "s-rev" t)
+      (should (= 1 tries))
+      (should-not said)
+      (should (= 1 (length timers)))                        ; one retry scheduled
+      (apply (caar timers) (cdar timers))
+      (should (= 2 tries))
+      (should (= 1 (length timers)))                        ; and not another
+      (should (= 1 (length said)))
+      (should (string-search "not mirrored" (car said))))))
+
+;; M12a-70
+(ert-deftest drgnx-job-ui/badge-mode-adds-and-removes-its-disconnect-hook ()
+  (let ((drgnx-hub-disconnect-functions nil) (drgnx-hub-event-functions nil) (global-mode-string nil) (drgnx-job-ui-badge-mode nil))
+    (cl-letf (((symbol-function 'drgnx-job-ui--schedule-recount) #'ignore))
+      (drgnx-job-ui-badge-mode 1)
+      (should (memq #'drgnx-job-ui--badge-clear drgnx-hub-disconnect-functions))
+      (should (memq #'drgnx-job-ui--event drgnx-hub-event-functions))
+      (drgnx-job-ui-badge-mode -1)
+      (should-not (memq #'drgnx-job-ui--badge-clear drgnx-hub-disconnect-functions))
+      (should-not (memq #'drgnx-job-ui--event drgnx-hub-event-functions)))))
+
+;;; job-ui-test.el ends here

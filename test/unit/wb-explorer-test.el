@@ -174,7 +174,9 @@
       (dotimes (i 5000) (write-region "" nil (expand-file-name (format "f%04d.txt" i) big) nil 'silent))
       (drgnx-explorer-refresh)
       (drgnx-explorer-children big)                         ; listing cached: measure the rows
-      (let ((bytes (drgnx-test--allocated (lambda () (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "big"))))))
+      ;; the rows only: watching the folder is the file-notify backend's cost (kqueue, on macOS, lists the folder)
+      (let ((bytes (cl-letf (((symbol-function 'drgnx-explorer--sync-watches) #'ignore))
+                     (drgnx-test--allocated (lambda () (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "big")))))))
         (should (< bytes (* 3 1024 1024)))))))
 
 ;;;; Review fixes

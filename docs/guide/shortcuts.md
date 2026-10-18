@@ -49,6 +49,7 @@ one. The palette's counts stay on this machine (`command-usage.eld` in drgnx's s
 | `r` | Reset Keybinding: the command gets its profile's keys again |
 | `R` | Reset All Keybindings, after a confirmation |
 | `p` | Switch Profile… |
+| `t` | Set the Terminal Fallback: the Alt+Shift key a terminal that cannot send this key sends instead (see below) |
 
 The filters combine. These keys are the same in every profile (in the Vim profile the page starts in Emacs state).
 
@@ -80,9 +81,19 @@ A **prefix clash** is flagged the same way: the key is the start of another comm
 
 ## Terminal mark
 
-`†` marks keys a terminal without the kitty keyboard protocol cannot send: keys with Super (`s-`), Hyper or Alt,
-`C-S-` on a character (`C-S-p`), and `C-` on a character other than a letter, `@ [ \ ] ^ _ ?` or space (`C-.`,
-`C-1`, `C-/`). They work in a graphical frame.
+`†` marks keys a terminal cannot send. In a terminal window it is this terminal: one with the kitty keyboard
+protocol or modifyOtherKeys marks fewer keys, a plain one more. In a graphical window it is a terminal without the
+kitty keyboard protocol: keys with Super (`s-`), Hyper or Alt, `C-S-` on a character (`C-S-p`), and `C-` on a
+character other than a letter, `@ [ \ ] ^ _ ? ` or space (`C-.`, `C-1`, `C-/`). They work in a graphical frame.
+
+Hover the mark, or look at it in a terminal window: the text names what to press there, "here: Alt+Shift+F" or
+"here: F6 p" (see [Legacy terminals](terminal.md#legacy-terminals-altshift-and-f6)); where the terminal has no
+fallback it says so. The page's keys stay the profile's own, as written in `keys.eld`.
+
+**Set the Terminal Fallback** (`t`) on a marked row picks another Alt+Shift key for the chord, such as `M-Z`, and
+writes `(:tty-fallback (("C-S-p" . "M-Z")))` into `keys.eld` (`drgnx-keys-edit-set-tty-fallback`; comments stay, Undo
+takes it back). A key that cannot be used is refused with the reason: reserved, one of Emacs's, in your profile, kept by the
+terminal, or the fallback of another chord.
 
 ## Undo and reset
 

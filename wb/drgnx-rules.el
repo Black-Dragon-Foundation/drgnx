@@ -15,10 +15,13 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'drgnx-wb)
+(require 'drgnx-paths)
+(require 'drgnx-modules-helpers)
 
 (defvar drgnx-rules--table nil
   "Rules, tried first to last: (MATCHER PLACE . PROPS).  `drgnx-wb-place' puts new ones first.")
 (defvar drgnx-rules--places nil "Alist PLACE → function (BUFFER ALIST PROPS) → window or nil.")
+(defvar drgnx-rules--missing nil "Places a rule named while undefined, noted once each (the editor took the buffer).")
 (defvar drgnx-wb-unrouted nil "Buffers no rule matched, newest first: plists (:buffer :mode :time).")
 (defconst drgnx-rules--unrouted-max 200)
 
@@ -26,16 +29,59 @@
   "Send buffers matching MATCHER to PLACE (with PROPS, e.g. :tab).  Returns MATCHER.
 MATCHER: a major-mode symbol or a list of them (derived modes match too), a buffer-name regexp,
 or a predicate (a lambda, not a symbol) called with the buffer name and the display action.
-Later rules are tried first; a rule with the same MATCHER is replaced where it stands."
-  (if-let* ((cell (assoc matcher drgnx-rules--table)))
-      (setcdr cell (cons place props))
-    (push (cons matcher (cons place props)) drgnx-rules--table))
-  matcher)
+Later rules are tried first; a rule with the same MATCHER is replaced where it stands.
+Called from a module's setup, the rule claims its matcher and records its undo: the rule it
+replaced put back, or `drgnx-wb-unplace' — only while the rule is still the one placed here.  Two
+modules placing the same matcher may be torn down in either order."
+  (let* ((rec (drgnx-modules--recording-p))
+         (cell (assoc matcher drgnx-rules--table)) (previous (cdr cell)) (rule (cons place props)))
+    (if cell
+        (setcdr cell rule)
+      (push (cons matcher rule) drgnx-rules--table))
+    (when rec
+      (let* ((target (list 'rule matcher)) (box (drgnx-module--claim target previous)))
+        (drgnx-modules-push-undo
+         (format "rule %S" matcher)
+         (lambda ()
+           (drgnx-module--release
+            target box
+            (lambda () (eq (cdr (assoc matcher drgnx-rules--table)) rule))
+            (lambda (prev)
+              (if prev (setcdr (assoc matcher drgnx-rules--table) prev) (drgnx-wb-unplace matcher))))))))
+    matcher))
+
+(defun drgnx-wb-unplace (matcher)
+  "Remove the rule whose matcher is `equal' to MATCHER; the other rules stay.  Non-nil when it was there."
+  (when-let* ((cell (assoc matcher drgnx-rules--table)))
+    (setq drgnx-rules--table (delq cell drgnx-rules--table))
+    t))
 
 (defun drgnx-wb-define-place (place fn)
-  "Define PLACE: FN takes (BUFFER ALIST PROPS) and returns the window it showed BUFFER in, or nil."
-  (setf (alist-get place drgnx-rules--places) fn)
+  "Define PLACE: FN takes (BUFFER ALIST PROPS) and returns the window it showed BUFFER in, or nil.
+Called from a module's setup, the definition claims PLACE and records its undo: the function it
+replaced put back, or `drgnx-wb-undefine-place' — only while PLACE is still FN.  Two modules
+defining the same place may be torn down in either order."
+  (let ((rec (drgnx-modules--recording-p)) (previous (alist-get place drgnx-rules--places)))
+    (setf (alist-get place drgnx-rules--places) fn)
+    (setq drgnx-rules--missing (delq place drgnx-rules--missing))
+    (when rec
+      (let* ((target (list 'place place)) (box (drgnx-module--claim target previous)))
+        (drgnx-modules-push-undo
+         (format "place %s" place)
+         (lambda ()
+           (drgnx-module--release
+            target box
+            (lambda () (eq (alist-get place drgnx-rules--places) fn))
+            (lambda (prev)
+              (if prev (setf (alist-get place drgnx-rules--places) prev) (drgnx-wb-undefine-place place)))))))))
   place)
+
+(defun drgnx-wb-undefine-place (place)
+  "Remove PLACE.  A rule that still names it sends its buffers to the editor (with a one-time message).
+Non-nil when PLACE was defined."
+  (when (assq place drgnx-rules--places)
+    (setq drgnx-rules--places (assq-delete-all place drgnx-rules--places))
+    t))
 
 (defun drgnx-rules--internal-p (name) (string-prefix-p " " name))
 
@@ -86,6 +132,11 @@ buffer itself calls this (*Completions* and *Process List* are filled by it)."
   (let ((rule (drgnx-wb-rule-for buffer (cons nil alist))))
     (unless rule (drgnx-rules--log buffer))
     (let ((place (or (car rule) 'editor)) (drgnx-rules--placing t))
+      (unless (alist-get place drgnx-rules--places)
+        (unless (memq place drgnx-rules--missing)
+          (push place drgnx-rules--missing)
+          (message "drgnx: no place %s (its module is off?); showing the buffer in the editor" place))
+        (setq place 'editor))
       (funcall (or (alist-get place drgnx-rules--places) (error "drgnx: no place %s" place))
                buffer alist (cdr rule)))))
 
@@ -180,7 +231,9 @@ left and right docks run the frame's full height, the panel sits under the edito
           (unless (assq p window-persistent-parameters) (push (cons p t) window-persistent-parameters)))
         (advice-add 'display-buffer-in-side-window :around #'drgnx-rules--side-window)
         (advice-add 'balance-windows :around #'drgnx-rules--balance)
-        (add-hook 'minibuffer-setup-hook #'drgnx-rules--minibuffer-setup))
+        (add-hook 'minibuffer-setup-hook #'drgnx-rules--minibuffer-setup)
+        (add-hook 'emacs-startup-hook #'drgnx-rules--write-report))
+    (remove-hook 'emacs-startup-hook #'drgnx-rules--write-report)
     (advice-remove 'display-buffer-in-side-window #'drgnx-rules--side-window)
     (advice-remove 'balance-windows #'drgnx-rules--balance)
     (remove-hook 'minibuffer-setup-hook #'drgnx-rules--minibuffer-setup)
@@ -189,6 +242,23 @@ left and right docks run the frame's full height, the panel sits under the edito
           (seq-remove (lambda (c) (memq (car c) drgnx-rules--persistent)) window-persistent-parameters))
     (pcase-dolist (`(,var . ,val) drgnx-rules--saved) (set var val))
     (setq drgnx-rules--saved nil)))
+
+;;;; The report for `drgnx doctor'
+
+(defun drgnx-rules-report ()
+  "What the doctor needs to know about the rules now: (:time … :display-buffer-entry t-or-nil)."
+  (list :time (format-time-string "%FT%T%z")
+        :display-buffer-entry (and (member drgnx-rules--entry display-buffer-alist) t)))
+
+(defun drgnx-rules--write-report ()
+  "Write `drgnx-rules-report' to wb-report.eld in the state dir (after init, on `emacs-startup-hook': a user
+`setq' of `display-buffer-alist' in the configuration has run by then).  Never prompts; an error is ignored."
+  (ignore-errors
+    (let* ((file (expand-file-name "wb-report.eld" (drgnx-state-dir)))
+           (tmp (progn (make-directory (file-name-directory file) t)
+                       (make-temp-file (expand-file-name ".wb-report-" (file-name-directory file))))))
+      (with-temp-file tmp (prin1 (drgnx-rules-report) (current-buffer)))
+      (rename-file tmp file t))))
 
 (defun drgnx-wb-show-unrouted ()
   "List the buffers no rule matched (each one is a rule to add)."

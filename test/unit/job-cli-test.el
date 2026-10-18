@@ -19,7 +19,7 @@
           (make-directory (concat root "config") t) (make-directory (concat root "home") t)
           (make-directory (concat repo "docs/plans") t)
           (with-temp-file (concat root "config/agents.eld")   ; mock agents on every route: nothing real starts
-            (prin1 `(:profiles (("mock" :command (,(expand-file-name invocation-name invocation-directory) "--batch" "-Q"
+            (prin1 `(:profiles (("mock" :command ("sh" ,(expand-file-name "test/fixtures/mock-acp-stdin.sh" drgnx-dir) ,(expand-file-name invocation-name invocation-directory) "--batch" "-Q"
                                                   "-l" ,(expand-file-name "test/fixtures/mock-acp.el" drgnx-dir))))
                                :routes ((implement . "mock") (review . "mock")))
                    (current-buffer)))
@@ -36,14 +36,18 @@
             (should (string-search "estimate" (cdr p)))
             (should (equal (plist-get (funcall status) :status) "proposed"))
             (should (equal (plist-get (funcall status) :budget) 2))
-            (should (= (car (funcall cli "job" "approve" id)) 0))
-            (should (equal (plist-get (funcall status) :status) "running"))
-            (should (= (length (plist-get (funcall status) :tasks)) 2))
+            (let ((before (mapcar (lambda (task) (plist-get task :status)) (plist-get (funcall status) :tasks))))
+              (should (= (car (funcall cli "job" "approve" id)) 0))
+              ;; started: running, or already done (a fast machine finishes the mock's tasks before this asks)
+              (let ((s (funcall status)))
+                (should (member (plist-get s :status) '("running" "done")))
+                (should (= (length (plist-get s :tasks)) 2))
+                (should-not (equal (mapcar (lambda (task) (plist-get task :status)) (plist-get s :tasks)) before))))
             (should (string-search id (cdr (funcall cli "job" "status"))))          ; every job, as text
             (should (= (car (funcall cli "job" "stop" id)) 0))
             (should (equal (plist-get (funcall status) :status) "stopped"))
             (should (= (car (funcall cli "job" "resume" id "--budget" "5")) 0))
-            (should (equal (plist-get (funcall status) :status) "running"))
+            (should (member (plist-get (funcall status) :status) '("running" "done")))
             (should (equal (plist-get (funcall status) :budget) 5))
             (should (= (car (funcall cli "job" "approve" "job-nope")) 1))))
       (funcall cli "hub" "stop")

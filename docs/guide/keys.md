@@ -36,7 +36,7 @@ The onboarding flow will ask which one you want (VS Code preselected).
 | Focus Explorer / Buffers | palette / `C-k e` | `C-x M-e` / `C-x C-b` | `SPC E` / `SPC ,` |
 | View: Explorer / View: Search | `C-S-e` / `C-S-f` | palette / palette | palette / `SPC /` |
 | Replace in Files | `C-S-h` | `C-c s r` | `SPC s r` |
-| Toggle Panel / Right Dock | ``C-` `` / `C-M-b` | — / — | `SPC j` / `SPC R` |
+| Toggle Panel / Right Dock | ``C-` ``, `C-j` / `C-M-b` | — / — | `SPC j` / `SPC R` |
 | Close Tab / Next / Previous | `C-<f4>` / `C-<next>` / `C-<prior>` | — / Emacs' `C-x <right>` / `C-x <left>` | `SPC b d` / `SPC b n` / `SPC b p` |
 | Split Editor Right / Down | ``C-\`` / ``C-k C-\`` | Emacs' `C-x 3` / `C-x 2` | `SPC w v` / `SPC w s` |
 | Focus Group 1–3 / Move Editor to Next Group | `C-1`–`C-3` / `C-M-<right>` | `C-x o` / — | `SPC 1`–`SPC 3` / `SPC w m` |
@@ -58,6 +58,42 @@ else the command's own, else the profile's.
 
 "—" means the profile has no key for it; every command is always in the palette. Vim's keys are leader keys in
 evil's normal state. On **macOS** the VS Code profile uses Cmd (`s-`) as VS Code does there — see below.
+
+In a terminal window drgnx has the mouse, so the terminal's own selection is **Shift+drag** in most terminals
+(Option+drag in iTerm2; other terminals may use their own modifier); see [terminal.md](terminal.md#mouse).
+
+The same keys work in a terminal window when the terminal can send them: `C-S-p`, `` C-` ``, `C-.` and the other
+chords need modifyOtherKeys (xterm, WezTerm; tmux with `extended-keys on`) or the kitty keyboard
+protocol (kitty, foot, Alacritty, Ghostty). drgnx turns on one of them, modifyOtherKeys where the terminal has it, because
+`C-g` then stops everything; no profile has a second, terminal-only set of keys. In a terminal that has neither, such as GNOME Terminal or Ptyxis, `C-S-p`
+arrives as `C-p`: open the palette with **F1** instead (VS Code keys; `M-x` in every profile). drgnx writes down
+which of your keys that terminal cannot send. See [terminal.md](terminal.md#keys); the page opens with the three ways to run
+drgnx (a graphical window, a capable terminal, a legacy one with Alt+Shift and F6).
+
+## Copy, cut and paste
+
+| Command | VS Code | Emacs | Vim |
+|---|---|---|---|
+| Copy / Cut / Paste (in a file) | `C-c` / `C-x` / `C-v` | `M-w` / `C-w` / `C-y` | `y` / `d` in visual state, `p` |
+
+In the VS Code profile `C-c` and `C-x` copy and cut **only while text is selected** (as Emacs's CUA mode does); with
+no selection they are Emacs's prefixes, so `C-x C-s`, `C-c C-c` in a mode and the rest work as always. A selection
+the mark leaves empty (`C-SPC` and no move) counts as none. `C-v` always pastes, replacing the selection if there is
+one, in one undo step; it no longer scrolls (PageDown does). In a read-only buffer Cut copies, and Paste says the
+buffer is read-only. The Explorer keeps its own `C-c` / `C-x` / `C-v` for files (see [workbench.md](workbench.md)):
+they are in its own keymap, which beats the global `C-v`, and the Explorer never selects text, so the selection-only
+`C-c` / `C-x` stay out of its way. On a Mac they are `s-c`, `s-x` and `s-v`.
+
+The Emacs and Vim profiles keep their own keys, and so does "Emacs editing + VS Code app keys": only the VS Code
+editing layer takes `C-c`, `C-x` and `C-v`.
+
+**Prefix habits with a selection.** `C-c` and `C-x` are also the start of Emacs's own keys (`C-x b`, `C-x C-s`, a
+mode's `C-c C-c`, the agent and comint buffers' `C-c C-c`). With a selection they wait `drgnx-editing-prefix-delay`
+(0.3 seconds; `M-x customize-variable`; `nil` acts at once) for the next key, as CUA mode does: a key that arrives in
+time drops the selection and goes on as the prefix, so nothing is cut or lost; none, and `C-c` copies and `C-x`
+cuts. So `C-x C-s`, `C-x b` and `C-c C-c` work with a selection when typed at your normal speed, and a lone `C-c`
+or `C-x` acts after a short pause; `C-g` in that moment just drops the selection. A keyboard macro that recorded a
+pause and then a cut replays without the pause, so the key after it becomes a prefix. Cmd+C and Cmd+X on a Mac are no prefix and act at once.
 
 ## On a Mac
 
@@ -118,17 +154,19 @@ And the Mac's text editing, as in every Mac app (Linux has VS Code's Linux keys 
 | Delete Word Left / Delete to Line Start | `C-<backspace>` / — | `M-<backspace>` / `s-<backspace>` |
 
 Line Start goes to the first non-blank character, and from there to the very start, as VS Code's Home. With Shift
-they select. Cmd+H (hide), Cmd+M (minimise), Cmd+` (next window), Cmd+Space and Cmd+Tab stay macOS'; Cmd+C, Cmd+V,
-Cmd+X and Cmd+Z are Emacs' own Mac keys (copy, paste, cut, undo). The Emacs and Vim profiles keep their own keys
+they select. Cmd+H (hide), Cmd+M (minimise), Cmd+` (next window), Cmd+Space and Cmd+Tab stay macOS'; Cmd+Z is Emacs'
+own Mac key (undo), and in the VS Code profile Cmd+C and Cmd+X copy and cut a selection and Cmd+V pastes (see
+[Copy, cut and paste](#copy-cut-and-paste)). The Emacs and Vim profiles keep their own keys
 (`C-a`, `M-f`, `0`, `w`, …).
 
 **Modifier keys.** With the VS Code profile (also as the app layer under Emacs or Vim editing) drgnx sets, on a Mac:
 Cmd is `s-` (super), the **left Option is Meta** (`M-`: Option+← moves by word, Option+Cmd+→ is next tab), and the
 **right Option types characters** (`@ # { [ €`). Other Mac apps type characters with either Option, which on German,
-French and many other layouts is how you type `@ # { [`: so on a Mac, Look and Keys asks once "Do you type @ # { [
-with Option? (German, French, … keyboards)". **Yes:** the left Option types characters too, for ordinary keys, and
+French and many other layouts is how you type `@ # { [`: so on a Mac, Look and Keys asks "Left Option key (types
+characters: @ # { [ on German, French, … keyboards)", offering your saved answer on Return (Meta before you have
+answered). **Types characters:** the left Option types characters too, for ordinary keys, and
 stays Meta for the arrows and other function keys and the mouse — Option+← / → still move by word
-(`ns-alternate-modifier` is `(:ordinary none :function meta :mouse meta)`); **no:** the left Option is Meta, as above.
+(`ns-alternate-modifier` is `(:ordinary none :function meta :mouse meta)`); **Meta:** the left Option is Meta, as above.
 The answer is saved in `keys.eld` as `:mac-option characters` or `:mac-option meta` (edit it there too); without
 interaction (`drgnx onboard --non-interactive`) nothing changes. Switching to the Emacs or Vim profile puts back what
 was there. (GNU Emacs' `ns-` variables and the Mac port's `mac-` ones are both handled.)
@@ -179,6 +217,16 @@ cannot be bound, a prefix it replaces) joins the list and the report then.
 - `:map` is a keymap symbol or `(FEATURE . KEYMAP)` for a keymap that exists once FEATURE is loaded.
 - `:mac` gives a different key on macOS: `(palette "C-c p" :mac "s-p")`; `:mac ()` is no key there, and
   `(quit :none "reason" :mac "s-q")` a key only there.
+- `:everywhere` names keys that must work in every mode: ``(toggle-panel "C-`" :everywhere "C-j")`` binds `C-j`
+  as usual and also in a keymap that comes before every major and minor mode map, so lisp-interaction or Org mode
+  cannot take it. Use it for one-stroke keys of the global keymap only; the minibuffer keeps its own keys.
+  Switching profiles or applying keys again removes the keymap. On macOS an entry with `:mac` has no `:everywhere`
+  keys there; without `:mac` they become Cmd keys like the others. A binding of the same key in a mode's keymap
+  from `keys.eld` (or a higher layer) wins in that mode, and the key sheet lists the conflict.
+  With the VS Code keys `C-j` toggles the panel everywhere, which also replaces Org's `C-j`, lisp-interaction's
+  `eval-print-last-sexp`, ielm's and term's; to keep a mode's `C-j`, write ``(toggle-panel "C-`" "M-j")`` in
+  `keys.eld`. It applies only when the profile also owns the editing keys: with "Emacs editing + VS Code app keys"
+  or Vim editing, `C-j` stays the editing layer's in modes and Toggle Panel has it only where Emacs' global key was.
 - A mistake never breaks startup: an unreadable file, an unknown command or an invalid key is a problem on the key
   sheet and in the doctor, and everything else still applies.
 - Keyboard Profile… rewrites only `:layers` and keeps the rest of the file.
@@ -195,6 +243,17 @@ cannot be bound, a prefix it replaces) joins the list and the report then.
   by the editor. If `keys.eld` has been changed since (by you, another session, or Keyboard Profile…), undo refuses and
   writes nothing. The keys apply at once after every change. Changes made inside `drgnx-keys-edit-one-step` are one
   step (the editor's Replace: the key taken from other commands and given to this one).
+
+In a terminal that cannot send `C-S-` chords and the like (GNOME Terminal, Ptyxis, Terminal.app), each chord of the
+profile is typed as Alt+Shift with the key where that is free (`C-S-f` as Alt+Shift+F), or as F6 then the key
+(`C-S-p` as F6 p), always: see [Legacy terminals](terminal.md#legacy-terminals-altshift-and-f6). `:tty-fallback` in
+`keys.eld` gives a chord another Alt key, `(:tty-fallback (("C-S-p" . "M-Z")))`, if that key is free.
+
+In such a terminal every surface shows a key the way that terminal can send it: the command palette shows
+`F6 p` for the palette itself and `M-F` (Alt+Shift+F) for Search in Project, the "next time" tips say the same, the
+menus (which keep their text as you change buffers) always show the F6 form, `F6 f`, and the key sheet (`C-h C-k`, `C-k C-r` in VS Code keys) ends with a section, "Keys this terminal cannot send, and
+what to press here", that lists each such key with both forms. In a graphical window, and in a terminal that sends the
+key, nothing changes. The markdown cheat sheet (`drgnx-surfaces-export-markdown`) always has the profile's own keys.
 
 The Keyboard Shortcuts editor (Preferences: Keyboard Shortcuts) changes these keys for you: [shortcuts.md](shortcuts.md).
 

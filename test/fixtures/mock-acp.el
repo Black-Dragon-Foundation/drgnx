@@ -1,13 +1,15 @@
 ;;; mock-acp.el --- A mock ACP agent for tests: batch Emacs, JSON-RPC 2.0, one object per line -*- lexical-binding: t -*-
-;; emacs --batch -Q -l mock-acp.el
-;; Its stdin is read by a `cat' of /proc/PID/fd/0, so messages (session/cancel) arrive while a turn
-;; streams (Linux).  What a turn does depends on words in the prompt:
+;; sh mock-acp-stdin.sh emacs --batch -Q -l mock-acp.el
+;; Its stdin is read by a `cat', so messages (session/cancel) arrive while a turn streams: of the FIFO
+;; in MOCK_ACP_IN (made by mock-acp-stdin.sh, which copies stdin into it: any POSIX system), else of
+;; /proc/PID/fd/0 (Linux).  What a turn does depends on words in the prompt:
 ;;   slow        ten chunks, 0.3 s apart (a turn to send into, to stop)
 ;;   tool        a tool call, pending then completed
 ;;   plan        a plan with three entries
 ;;   subagent    a Task tool call with two child tool calls (_meta.parentToolCallId)
 ;;   permission  asks session/request_permission, then says which option it got
-;;   write PATH  reads PATH (fs/read_text_file), proposes an edit (fs/write_text_file), says the answer
+;;   write PATH  reads PATH (fs/read_text_file), proposes an edit (fs/write_text_file) inside an edit tool call
+;;               with the diff (as claude-agent-acp's Write), says the answer
 ;;   crash       exits 3, "mock crashed" on stderr
 ;;   commit      commits in its directory: "agent work for $DRGNX_TASK"
 ;;   /compact    the context shrinks
@@ -66,7 +68,14 @@ decision log, complete the task; say what happened."
                                                 (shell-quote-argument task) file file (shell-quote-argument (concat "work for " task)))))
   (let* ((d (mock--mcp-call sid "read_decisions" "{\"since\":0}"))
          (v (or (ignore-errors (plist-get (json-parse-string d :object-type 'plist) :version)) 0))
-         (r (mock--mcp-call sid "complete_task" (format "{\"task\":%S,\"seen_version\":%d}" task v))))
+         (r (mock--mcp-call sid "complete_task" (format "{\"task\":%S,\"seen_version\":%d}" task v)))
+         (tries 0))
+    ;; like a real agent: a held write (the decision log moved on) is read and retried at the version it names, and so is
+    ;; a call that got no answer in time — a task never ends open because a decision came in meanwhile
+    (while (and (< (cl-incf tries) 4) (or (null r) (string-prefix-p "HELD:" r)))
+      (let ((held (and r (string-match "seen_version \\([0-9]+\\)" r) (string-to-number (match-string 1 r)))))
+        (setq r (mock--mcp-call sid "complete_task" (format "{\"task\":%S,\"seen_version\":%d}" task
+                                                            (or held (ignore-errors (plist-get (json-parse-string (mock--mcp-call sid "read_decisions" "{\"since\":0}") :object-type 'plist) :version)) 0))))))
     (mock--steps sid (list (cons 0 (lambda () (mock--say sid (format "task done: %s" r))))))))
 
 (defun mock--coord (sid tool args)
@@ -194,8 +203,13 @@ decision log, complete the task; say what happened."
                    (lambda (res)
                      (let* ((lines (split-string (or (plist-get (car res) :content) "") "\n"))
                             (new (concat "CHANGED " (car lines) "\n" (string-join (cdr lines) "\n") "ADDED LINE\n")))
+                       ;; as claude-agent-acp's Write does: an edit tool call with the diff, around the write request
+                       (mock--update sid (list :sessionUpdate "tool_call" :toolCallId "w1" :title (concat "Write " path) :kind "edit"
+                                               :status "pending" :content (vector (list :type "diff" :path path :newText new))))
                        (mock--ask "fs/write_text_file" (list :sessionId sid :path path :content new)
                                   (lambda (res2)
+                                    (mock--update sid (list :sessionUpdate "tool_call_update" :toolCallId "w1"
+                                                            :status (if (cdr res2) "failed" "completed")))
                                     (mock--steps sid (list (cons 0 (lambda () (mock--say sid (if (cdr res2) "write refused" "write done")))))))))))))
      (t
       (mock--steps
@@ -265,7 +279,8 @@ decision log, complete the task; say what happened."
      (id (mock--error id -32601 (format "%s: no such method" method))))))
 
 (defvar mock--buf "")
-(make-process :name "mock-in" :command (list "cat" (format "/proc/%d/fd/0" (emacs-pid))) :connection-type 'pipe
+(make-process :name "mock-in" :command (list "cat" (or (getenv "MOCK_ACP_IN") (format "/proc/%d/fd/0" (emacs-pid))))
+              :connection-type 'pipe
               :coding 'utf-8-unix :noquery t
               :filter (lambda (_p s)
                         (setq mock--buf (concat mock--buf s))

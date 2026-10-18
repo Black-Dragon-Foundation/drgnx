@@ -433,6 +433,17 @@ project's."
           (should (equal (drgnx-search-chunk-test--paths root) '("real.txt"))))
       (delete-directory outside t))))
 
+(ert-deftest drgnx-search-files/a-git-that-ends-before-its-input-does-is-no-error ()
+  "A git that reads nothing (`rev-parse', `--version') can be gone before the last piece or the end of the input is
+sent; sending to a finished process signals, which showed as a failed listing (a flake under load).  Made certain
+here: the end of input is sent only after git has ended."
+  (let ((drgnx-search--git-deadline (+ (float-time) 10)) (eof (symbol-function 'process-send-eof)))
+    (cl-letf (((symbol-function 'process-send-eof)
+               (lambda (p) (while (process-live-p p) (accept-process-output p 0.05)) (funcall eof p))))
+      (let ((r (drgnx-search--git-run-timed "" '("--version"))))
+        (should (eql 0 (car r)))
+        (should (string-prefix-p "git version" (nth 1 r)))))))
+
 (ert-deftest drgnx-search-files/does-not-depend-on-the-locale ()
   "Every git call runs with LC_ALL=C and no LANGUAGE (git's messages are translated otherwise, and the code reads
 them): checked on the environment each call gets — a machine without the German locale would pass anyway."
@@ -500,6 +511,36 @@ them): checked on the environment each call gets — a machine without the Germa
   (drgnx-search-chunk-test--repo '(("a.txt" . "a\n"))
     (let ((drgnx-search-git-timeout 30))              ; plenty: the timed path lists the same files
       (should (equal (mapcar #'car (drgnx-search-files root)) '("a.txt"))))))
+
+(ert-deftest drgnx-search-files/a-git-gone-before-its-stderr-ends-is-not-waited-for ()
+  ;; git's exit can be seen before the end of its stderr pipe (macOS: often); here a child holds that pipe
+  ;; a little longer.  Once git is gone, the timed path still reads that end instead of spinning to the deadline.
+  (skip-unless (and (executable-find "git") (executable-find "sleep")))
+  (drgnx-search-chunk-test--repo '(("a.txt" . "a\n"))
+    (let* ((git (executable-find "git")) (bin (make-temp-file "drgnx-late-stderr" t))
+           (exec-path (cons bin exec-path)))
+      (unwind-protect
+          (progn
+            (with-temp-file (expand-file-name "git" bin)
+              (insert "#!/bin/sh\nsleep 0.3 </dev/null >/dev/null &\nexec " (shell-quote-argument git) " \"$@\"\n"))
+            (set-file-modes (expand-file-name "git" bin) #o755)
+            (let ((t0 (float-time)) (drgnx-search-git-timeout 10))
+              (should (equal (mapcar #'car (drgnx-search-files root)) '("a.txt")))
+              (should (< (- (float-time) t0) 5))))
+        (delete-directory bin t)))))
+
+(ert-deftest drgnx-search-files/a-git-gone-before-its-input-ends-is-no-error ()
+  ;; git need not read its input: it may exit before the end of it is sent (A-44)
+  (drgnx-search-chunk-test--repo '(("a.txt" . "a\n"))
+    (cl-flet ((late (orig &optional p)
+                (let ((end (+ (float-time) 2)))
+                  (while (and (process-live-p p) (< (float-time) end)) (accept-process-output p 0.05)))
+                (funcall orig p)))
+      (advice-add 'process-send-eof :around #'late)
+      (unwind-protect
+          (let ((drgnx-search-git-timeout 30))
+            (should (equal (mapcar #'car (drgnx-search-files root)) '("a.txt"))))
+        (advice-remove 'process-send-eof #'late)))))
 
 (ert-deftest drgnx-search-toplevel/through-a-symlink-below-the-top ()
   "The top keeps DIR's spelling and is right when DIR is reached through a symlink to a directory deeper down."

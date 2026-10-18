@@ -14,6 +14,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-keys)
+(require 'drgnx-tty-fallback)
 
 (defconst drgnx-keys-edit--header
   ";; drgnx keys (docs/guide/keys.md): :layers — profile stack, :bind — (ID KEY… [:map M]),\n;; :unbind — (ID…)\n"
@@ -137,10 +138,15 @@ that list.  Any other value is a `user-error': it is never replaced."
     (when (or (null id) (eq (drgnx-keys-edit--element-id (nth 2 e)) id))
       (drgnx-keys-edit--delete-element (nth 0 e) (nth 1 e)))))
 
+(defun drgnx-keys-edit--same-id-p (a b)
+  "Whether the list elements' ids A and B are the same: command ids (symbols) by identity, chords (key
+strings) as keys."
+  (if (and (stringp a) (stringp b)) (drgnx-keys-edit--same-key-p a b) (eq a b)))
+
 (defun drgnx-keys-edit--put (key id text)
   "Make TEXT (an element) the one for ID in KEY's list: replace the first, drop other copies, or add at the end."
   (drgnx-keys-edit--ensure-list key)
-  (let* ((found (seq-filter (lambda (e) (eq (drgnx-keys-edit--element-id (nth 2 e)) id))
+  (let* ((found (seq-filter (lambda (e) (drgnx-keys-edit--same-id-p (drgnx-keys-edit--element-id (nth 2 e)) id))
                             (car (drgnx-keys-edit--elements key)))))
     (if found
         (progn (dolist (e (reverse (cdr found))) (drgnx-keys-edit--delete-element (nth 0 e) (nth 1 e)))
@@ -352,6 +358,38 @@ to.  Returns non-nil if written; nil when ID does not have KEY."
    (lambda (main mac)
      (let ((main2 (drgnx-keys-edit--without main key)) (mac2 (if (listp mac) (drgnx-keys-edit--without mac key) mac)))
        (unless (and (equal main main2) (equal mac mac2)) (list main2 mac2))))))
+
+;;;; The terminal fallback
+
+(defun drgnx-keys-edit--tty-fallback-problem (chord key)
+  "Why KEY (an Alt+Shift key, \"M-Z\") cannot be the fallback of CHORD in a legacy terminal, or nil when it can:
+CHORD must be one the active key profile has and a legacy terminal cannot send; KEY goes through the layer's own
+checks (`drgnx-tty-fallback--why-not'): not reserved, not Emacs's or the profile's, not kept by the selected
+terminal, not already another chord's fallback in keys.eld."
+  (let* ((keys (drgnx-tty-fallback--profile-keys))
+         (needed (drgnx-tty-fallback-chords keys))
+         (frame (selected-frame))
+         (caps (and (not (display-graphic-p frame)) (terminal-parameter (frame-terminal frame) 'drgnx-tty-caps)))
+         (takes (plist-get (and caps (drgnx-tty-terminal (plist-get caps :id))) :takes))
+         (taken (seq-filter (lambda (o) (and (consp o) (stringp (car o)) (stringp (cdr o))
+                                             (not (drgnx-keys-edit--same-key-p (car o) chord))))
+                            (drgnx-tty-fallback--overrides))))
+    (if (not (seq-some (lambda (c) (drgnx-keys-edit--same-key-p c chord)) needed))
+        (format "%s needs no fallback: the profile has no such key, or a plain terminal sends it" chord)
+      (drgnx-tty-fallback--why-not key (or (bound-and-true-p drgnx-keys--defaults) global-map) keys takes taken))))
+
+;;;###autoload
+(defun drgnx-keys-edit-set-tty-fallback (chord key)
+  "Make KEY (Alt plus a character, \"M-Z\") the key a legacy terminal sends for CHORD (\"C-S-p\"): the entry
+\"(CHORD . KEY)\" of keys.eld's `:tty-fallback', replacing the chord's earlier one.  A KEY the layer could not
+use (reserved, Emacs's or the profile's, kept by the terminal, another chord's) is a `user-error' with the reason,
+and nothing is written.  Returns non-nil if written."
+  (drgnx-keys-edit--check-key chord)
+  (drgnx-keys-edit--check-key key)
+  (when-let* ((why (drgnx-keys-edit--tty-fallback-problem chord key)))
+    (user-error "%s" why))
+  (drgnx-keys-edit--modify
+   (lambda () (drgnx-keys-edit--put :tty-fallback chord (format "(%S . %S)" chord key)))))
 
 ;;;###autoload
 (defun drgnx-keys-edit-reset (id)

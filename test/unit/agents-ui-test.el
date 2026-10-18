@@ -104,11 +104,10 @@
 
 (ert-deftest drgnx-agents-ui/an-agent-edit-is-reviewed-hunk-by-hunk ()
   ;; The agent proposes two changes (first line, a new last line); the user takes the first only.
-  (skip-unless (file-readable-p "/proc/self/fd/0"))
   (let* ((dir (make-temp-file "drgnx-review" t))
          (file (expand-file-name "f.txt" dir))
          (drgnx-agents-profiles
-          (list (list "mock" :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "-l" drgnx-agents-ui-test--mock))))
+          (list (list "mock" :command (list "sh" (expand-file-name "test/fixtures/mock-acp-stdin.sh" drgnx-dir) (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "-l" drgnx-agents-ui-test--mock))))
          (drgnx-agents--sessions nil)
          (drgnx-agents-changed-functions nil))
     (write-region (mapconcat (lambda (i) (format "line %d" i)) (number-sequence 1 12) "\n") nil file nil 'silent)

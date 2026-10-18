@@ -29,11 +29,12 @@
 (defun drgnx-perf--round (x) (if (floatp x) (/ (round (* x 10)) 10.0) x))
 
 (defun drgnx-perf-rss-kb ()
-  "This Emacs's resident memory in kB (Linux), or 0."
+  "This Emacs's resident memory in kB: /proc/self/status (Linux), else `process-attributes' (macOS), or 0."
   (or (ignore-errors
         (with-temp-buffer
           (insert-file-contents "/proc/self/status")
           (when (re-search-forward "^VmRSS:[ \t]+\\([0-9]+\\)" nil t) (string-to-number (match-string 1)))))
+      (alist-get 'rss (process-attributes (emacs-pid)))
       0))
 
 ;;;; Recording input latency, GC, memory

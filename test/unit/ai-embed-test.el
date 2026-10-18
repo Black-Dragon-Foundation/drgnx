@@ -1,6 +1,7 @@
 ;;; ai-embed-test.el --- batch tests: embeddings along the embed role (TEI, Ollama, llama.cpp, OpenAI-compatible) -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx-ai-client)
+(require 'drgnx-ai-probe)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
 
 (defmacro drgnx-ai-embed-test--with (spec chain &rest body)
@@ -134,3 +135,43 @@
 (ert-deftest drgnx-ai-embed/sync-of-nothing-asks-nobody ()
   (drgnx-ai-embed-test--with nil '((dead . "m"))
     (should (equal [] (drgnx-ai-embed-sync [] :timeout 5)))))
+
+(ert-deftest drgnx-ai-embed/a-vector-whose-norm-underflows-is-still-unit-length ()
+  ;; the squares of 1e-200 are 0.0: the norm is, but the vector is not, zero
+  (drgnx-ai-embed-test--with '((:path "/embed" :body "[[3e-200,4e-200,0],[0,0,0]]")) '((tei))
+    (let ((r (drgnx-ai-embed-test--request ["one" "two"])))
+      (should (< (abs (- 1.0 (drgnx-ai-embed-test--norm (aref (car r) 0)))) 1e-6))
+      (should (< (abs (- 0.6 (aref (aref (car r) 0) 0))) 1e-6))
+      (should (equal (aref (car r) 1) [0.0 0.0 0.0])))))
+
+(ert-deftest drgnx-ai-embed/sync-tells-who-answered-per-request ()
+  ;; :on-answer hears this request's info; the global is only a mirror of the last one
+  (drgnx-ai-embed-test--with '((:path "/embed" :body "[[3,4,0]]")) '((dead . "m") (tei))
+    (let (got)
+      (drgnx-ai-embed-sync ["one"] :timeout 5 :on-answer (lambda (info) (setq got info)))
+      (should (eq 'tei (plist-get got :provider)))
+      (should (equal '(dead) (mapcar #'car (plist-get got :fallbacks)))))))
+
+(ert-deftest drgnx-ai-embed/sync-cancels-its-request-on-quit ()
+  (drgnx-ai-embed-test--with '((:path "/embed" :body "[[3,4,0]]")) '((tei))
+    (let ((cancelled nil) (orig (symbol-function 'drgnx-ai-cancel)))
+      (cl-letf (((symbol-function 'accept-process-output) (lambda (&rest _) (signal 'quit nil)))
+                ((symbol-function 'drgnx-ai-cancel) (lambda (h) (setq cancelled t) (funcall orig h))))
+        (should (eq 'quit (condition-case e (drgnx-ai-embed-sync ["one"] :timeout 5) (quit (car e))))))
+      (should cancelled))))
+
+(ert-deftest drgnx-ai-embed/timeout-nil-means-no-limit ()
+  (drgnx-ai-embed-test--with '((:path "/embed" :body "[[3,4,0],[0,0,2]]")) '((tei))
+    (drgnx-ai-embed-test--check (cons (drgnx-ai-embed-sync ["one" "two"] :timeout nil) nil))
+    (let (result)
+      (drgnx-ai-request 'embed 'embed (list :inputs ["one" "two"]) (lambda (v info) (setq result (cons v info))) :timeout nil)
+      (let ((deadline (+ (float-time) 15)))
+        (while (and (not result) (< (float-time) deadline)) (accept-process-output nil 0.02)))
+      (drgnx-ai-embed-test--check result))))
+
+(ert-deftest drgnx-ai-embed/an-empty-async-request-is-never-sent ()
+  (drgnx-ai-embed-test--with nil '((tei))
+    (let ((r (drgnx-ai-embed-test--request [])))
+      (should (equal [] (car r)))
+      (should-not (plist-get (cdr r) :error))
+      (should-not (file-exists-p log)))))

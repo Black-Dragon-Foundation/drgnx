@@ -25,6 +25,8 @@
 (declare-function websocket-close "websocket")
 (declare-function websocket-openp "websocket")
 (declare-function websocket-frame-text "websocket")
+;; only in an Emacs with image support (Homebrew's terminal Emacs has none): each call is in `ignore-errors'
+(declare-function image-flush "image.c" (spec &optional frame))
 (declare-function drgnx-jobs-start "drgnx-jobs")
 (declare-function drgnx-jobs-get "drgnx-jobs")
 (declare-function drgnx-jobs-list "drgnx-jobs")
@@ -510,6 +512,8 @@ only the newest waits to be drawn."
   "Watch the browser for agents (starting it when it is not running)."
   (interactive)
   ;; before Chrome starts: a browser nobody can watch would only be left running
+  (unless (display-images-p)
+    (user-error "Live: the Live view shows the page as an image, which needs a graphical frame; this terminal cannot show it (docs/guide/live.md)"))
   (condition-case nil (require 'websocket)
     (error (user-error "Live: the Live view needs the websocket package (Preferences: Modules, docs/guide/live.md)")))
   (let ((endpoint (drgnx-live-browser)) (buf (get-buffer-create drgnx-live-buffer-name)))

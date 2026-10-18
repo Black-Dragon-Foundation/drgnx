@@ -169,13 +169,14 @@ GC, another process — then does not decide the number."
 
 ;;;; treemacs
 
-(defun drgnx-bench--treemacs (root elpa)
+(defun drgnx-bench--treemacs (root elpa scratch)
+  "Measure treemacs on the fixture ROOT (packages in ELPA); its persist files go into the dir SCRATCH."
   (when (and elpa (file-directory-p elpa))
     (dolist (d (directory-files elpa t "\\`[^.]"))
       (when (file-directory-p d) (add-to-list 'load-path d)))
     (when (require 'treemacs nil t)
-      (setq treemacs-persist-file (make-temp-file "drgnx-bench-treemacs-persist")
-            treemacs-last-error-persist-file (make-temp-file "drgnx-bench-treemacs-errors"))
+      (setq treemacs-persist-file (expand-file-name "treemacs-persist" scratch)
+            treemacs-last-error-persist-file (expand-file-name "treemacs-errors" scratch))
       (treemacs-git-mode -1)
       (treemacs-filewatch-mode -1)
       (treemacs-follow-mode -1)
@@ -294,8 +295,10 @@ GC, another process — then does not decide the number."
   "Measure drgnx, treemacs (when ELPA has it) and ibuffer on the fixture ROOT; JSON for the controller."
   (setq drgnx-bench--errors nil drgnx-bench--gc nil drgnx-bench--last-gc nil)
   (let* ((inhibit-message t)
+         (scratch (make-temp-file "drgnx-bench-treemacs-" t))
          (explorer (drgnx-bench--drgnx root))
-         (treemacs (drgnx-bench--treemacs root elpa))
+         (treemacs (unwind-protect (drgnx-bench--treemacs root elpa scratch)
+                     (delete-directory scratch t)))
          (buffers (drgnx-bench--buffers root)))
     (drgnx-uitest--json
      (list :drgnx (append explorer (car buffers))

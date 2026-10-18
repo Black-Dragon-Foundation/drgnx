@@ -29,26 +29,26 @@ A job's control room — its own window on a graphical display, so it can sit on
   the agents at work, each with **Transcript** and **Message…**;
 - **middle — what needs you:** the cards, each with its actions as buttons (a clash shows both sides and the
   reviewer's recommendation; **Accept the reviewer** is there only when it recommended a side; a clash whose reviewer
-  was lost twice says so), then the messages agents sent you, each with **Reply…**;
+  was lost twice says so), then the messages agents sent you, each with **Reply…** (answers the agent) or **Dismiss** (needs no answer: it is acted on, and stops counting in the badge);
 - **right — the decision log,** newest first: replaced decisions dimmed, disputed ones (in an open clash) marked.
 
 It follows the hub's events and redraws only what changed (at most twice a second). Closing it stops nothing; it
-comes back when Emacs restarts (with the workbench's windows). Without a hub it says so, and fills in when the hub
-runs again.
+comes back when Emacs restarts at the position and size it had (with the workbench's windows). Without a hub it says
+so, and fills in when the hub runs again; if the hub does not know the job (it was deleted), the window closes.
 
 You do not have to watch it: while something of a job needs you, the mode line shows **⚑N** (the cards and messages
 waiting; a click opens the job with the newest; it disappears when the hub cannot be asked, rather than showing the
-last count), and each new card is a desktop notification (D-Bus; else a message
+last count), and each new card is a desktop notification (D-Bus on Linux; `osascript` on macOS; else a message
 in the echo area — `drgnx-job-ui-notify` nil turns them off). Neither ever asks you anything. What needs you is a **card** with its actions — the proposal (Approve, Reject), a permission (Allow, Reject),
 a merge conflict (let the agent resolve it, merge again after you resolved it, drop the task), a review that failed
 (merge as it is, back to an agent, drop), a stuck or failed agent (retry, drop), the budget (resume with more, stop);
-each acts once. Messages agents send you are listed with a Reply.
+each acts once. Messages agents send you are listed with a Reply and a Dismiss.
 
 **Clashes** are found by rules, not guessed: two agents deciding opposite things about one subject (build it / don't),
 an agent deciding about another task, a task changing files a won't-build decision covers (its review waits), an
 agent that keeps acting on an old decision log, two tasks changing the same files (a note, nothing waits). A clash
 card shows both sides and the decisions each relies on; a reviewer agent recommends one, and you **Accept the
-reviewer**, **Pick A**, **Pick B** or **Discuss** (talk it through with the reviewer). Your choice becomes your
+reviewer**, **Pick A**, **Pick B** or **Discuss** (talk it through with the reviewer; its transcript opens). When no recommendation is coming the card says so: the reviewer gave none, or none is coming (Discuss starts one again). Your choice becomes your
 decision, and every agent of the job is told. Your own decisions always win: an agent contradicting one is overruled
 at once, without a card. Every command goes through the hub, starting it when needed
 ([agents.md](agents.md#the-hub-and-the-gateway)).
@@ -152,3 +152,37 @@ against a hub in a child process), `job-cards-test.el` (cards and their actions)
 `job-ui-test.el` and `test/ui/job-window-test.el` (the window, the badge, notifications), `job-exit-test.el` (a
 four-task job end to end with automatic start, no credential file opened under a fake HOME, closing the window);
 the perf workload `job-window` ([perf.md](../develop/perf.md)). Developer details: [coordination.md](../develop/coordination.md#jobs).
+
+## MCP tools, the agents' configuration and provider errors
+
+- **MCP tools ask.** A job's agent may use drgnx's own MCP servers without asking: the coordination tools
+  (`mcp__drgnx__…`: messages, decisions, task status) and, when you gave agents search, `mcp__drgnx-search__search`.
+  A tool from any other MCP server — the servers in your own Claude Code configuration, a project's, a plugin's —
+  waits for you as a **permission card**, whatever kind the agent gives the call: such a server can reach your mail,
+  a database, anything. Nothing an agent says (a message to you, an escalation, its tool's input) answers the card;
+  Allow lets the call through, Reject refuses it. drgnx tells its own servers apart by the tool's name (`mcp__`, the
+  server's name, `__` and a name with no further `__`) and, where the adapter names the server
+  (`_meta.claudeCode.mcpServer`, sent by `@agentclientprotocol/claude-agent-acp`), by that server being the same one
+  as drgnx gave the session (source `dynamic`). The adapter drgnx installs today names no server, so there a server
+  of yours that is itself called `drgnx` or `drgnx-search` is taken for drgnx's. A call whose tool cannot be named,
+  or whose kind is not a string, asks. Other calls of the kind `other` (loading a skill, a to-do list) are allowed
+  as before. A tool that Claude Code itself allows from your settings (`permissions.allow`) never asks anyone,
+  drgnx included.
+- **The agents' configuration asks.** A change to a `.claude/` directory at any depth of the worktree (its settings
+  can set a permission mode such as `bypassPermissions`, allow rules or hooks, and hold for the reviewer and every
+  agent that works in the worktree after it; nested ones hold skills) or to a `.mcp.json` anywhere in the worktree
+  is a card: an edit, a delete, a move, a direct write, with `//`, `..` and symlinks resolved; a path that cannot be
+  placed inside the worktree asks too. A command that names `.claude` or `.mcp.json` asks as well (the worktree's
+  own absolute path, `…/.claude/worktrees/ID-N`, does not count); like the rest of the command check, this is best
+  effort.
+- **What the cards do not hold.** Until job agents run in a sandbox, they run as your user. The command check above
+  is not a sandbox: a command an agent may run in its worktree can also reach drgnx's hub and answer a card itself,
+  start an MCP server's program directly, or write files the checks do not see. The cards keep an agent's tool
+  calls in front of you; they do not contain an agent that sets out to get past them. Give jobs only plans and
+  repositories you would let an agent work on unwatched.
+- **A provider's limit in the error's data.** Besides the message (and a dead agent's stderr), drgnx reads the
+  JSON-RPC error's `data` — a string, or an object's `message`, `details` and `reason` — for a provider at its
+  limit (an agent may answer `Internal error` with the provider's `429 Too Many Requests` in `data`).
+
+Tests: `test/unit/job-mcp-policy-test.el` (drgnx's servers allowed, a user's server asks, a denial blocks, an agent
+cannot approve its own request, the agents' configuration in the worktree, the limit in an error's data).

@@ -82,6 +82,90 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
       (should (eq (car r) 'ok))
       (should (string-match-p "Chat (module extra/llm) is on" (cadr r))))))
 
+(ert-deftest drgnx-ai-onboard/role-written-only-after-answer ()
+  ;; A provider that never answers leaves ai.eld's roles as they were, and the three test calls share one
+  ;; budget: the step ends within about the budget, not 3 ×.  Roles that ran out of time read "not tested".
+  (drgnx-ai-onboard-test--with
+    (let ((before (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld"))) (t0 (float-time)) r
+          (drgnx-onboard-ai-test-budget 2))
+      (cl-letf (((symbol-function 'drgnx-ai-request) (lambda (&rest _) nil)))
+        (setq r (drgnx-onboard--ai-found '(:interactive nil))))
+      (should (< (- (float-time) t0) 6))
+      (should (= (nth 2 r) 0))
+      (should (= (nth 3 r) 3))
+      (should (string-match-p "not tested" (cadr r)))
+      (should-not (string-match-p "did not answer" (cadr r)))
+      (should (equal before (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld")))))))
+
+;; A project's ai.eld routes roles for that project only: the roles onboarding writes into the user's ai.eld start
+;; from the user's own chain, never from the project's.
+(defun drgnx-ai-onboard-test--user-chain (root role)
+  (alist-get role (plist-get (with-temp-buffer (insert-file-contents (concat root "config/ai.eld")) (read (current-buffer))) :roles)))
+
+(ert-deftest drgnx-ai-onboard/a-projects-route-never-reaches-the-global-ai-eld ()
+  (drgnx-ai-onboard-test--with
+    (make-directory (concat root "proj/.drgnx") t)
+    (with-temp-file (concat root "proj/.drgnx/ai.eld")
+      (prin1 '(:version 1 :roles ((chat (theirs . "paid/m")) (edit (theirs . "paid/m")) (complete (theirs . "paid/m")))) (current-buffer)))
+    (let ((default-directory (concat root "proj/")))
+      ;; the project's route is what the roles use here …
+      (should (equal (drgnx-ai-role 'chat) '((theirs . "paid/m"))))
+      (let ((r (drgnx-onboard--ai-found '(:interactive nil))))
+        (should (memq (car r) '(ok warn)))
+        ;; … but what the step wrote into ai.eld is the found provider on the user's own chain
+        (dolist (role '(complete edit chat))
+          (should-not (assq 'theirs (drgnx-ai-onboard-test--user-chain root role)))
+          (should (assq 'o (drgnx-ai-onboard-test--user-chain root role)))))
+      (drgnx-onboard--put-first 'chat '(o . "llama3:8b"))
+      (should-not (assq 'theirs (drgnx-ai-onboard-test--user-chain root 'chat)))
+      (should (equal (car (drgnx-ai-onboard-test--user-chain root 'chat)) '(o . "llama3:8b"))))))
+
+;; M9-6 review I1: the three calls run side by side
+(defun drgnx-ai-onboard-test--slow-request (delay timers)
+  "A `drgnx-ai-request' whose provider answers DELAY seconds later; the timers it starts go on the list in TIMERS (a cell)."
+  (lambda (_role _kind _payload callback &rest _)
+    (push (run-at-time delay nil (lambda () (funcall callback "OK" nil))) (car timers))
+    nil))
+
+(ert-deftest drgnx-ai-onboard/the-role-tests-run-side-by-side ()
+  ;; A provider that takes 2.5 s per call answers all three roles within the budget: one wait, not three in a row.
+  (drgnx-ai-onboard-test--with
+    (let ((timers (list nil)) (t0 (float-time)) r (drgnx-onboard-ai-test-budget 8))
+      (unwind-protect
+          (cl-letf (((symbol-function 'drgnx-ai-request) (drgnx-ai-onboard-test--slow-request 2.5 timers)))
+            (setq r (drgnx-onboard--ai-found '(:interactive nil)))
+            (should (< (- (float-time) t0) 5.5))            ; three in a row: 7.5 s
+            (should (= (nth 2 r) 3))
+            (should (= (nth 3 r) 0))
+            (should (eq (car r) 'ok)))
+        (mapc #'cancel-timer (car timers))))))
+
+(ert-deftest drgnx-ai-onboard/a-slow-provider-is-not-tested-and-never-sets-ai-up ()
+  ;; Calls still waiting when the budget is up read "not tested", are not counted as asked, and the interactive step
+  ;; does not offer "Set up AI with" for them.
+  (drgnx-ai-onboard-test--with
+    (let ((timers (list nil)) (drgnx-onboard-ai-test-budget 2) r (before (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld"))))
+      (unwind-protect
+          (cl-letf (((symbol-function 'drgnx-ai-request) (drgnx-ai-onboard-test--slow-request 30 timers))
+                    ((symbol-function 'completing-read) (lambda (&rest _) (error "asked")))
+                    ((symbol-function 'y-or-n-p) (lambda (&rest _) (error "asked"))))
+            (setq r (drgnx-onboard--ai-found '(:interactive t)))
+            (should (equal (list (nth 2 r) (nth 3 r)) '(0 3)))
+            (should (eq (car r) 'warn))
+            (should (string-match-p "complete: o/qwen2.5-coder:1.5b not tested" (cadr r)))
+            (let ((step (drgnx-onboard--ai-step '(:interactive t))))
+              (should (eq (car step) 'warn))
+              (should (string-match-p "not tested" (cadr step))))
+            (should (equal before (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld")))))
+        (mapc #'cancel-timer (car timers))))))
+
+(ert-deftest drgnx-ai-onboard/a-provider-that-refuses-at-once-did-not-answer ()
+  (drgnx-ai-onboard-test--with
+    (cl-letf (((symbol-function 'drgnx-ai-request) (lambda (_r _k _p callback &rest _) (funcall callback nil '(:error "refused")) nil)))
+      (let ((r (drgnx-onboard--ai-found '(:interactive nil))))
+        (should (equal (list (nth 2 r) (nth 3 r)) '(0 0)))
+        (should (string-match-p "did not answer" (cadr r)))))))
+
 ;;;; Setting AI up: the room, the models, Ollama, LM Studio, OpenRouter
 
 (defun drgnx-ai-onboard-test--script (file text)
@@ -125,6 +209,7 @@ with BODY."
                                              (concat "PATH=" bin ":" (getenv "PATH")))
                                        process-environment))
           (exec-path (cons bin exec-path))
+          (drgnx-ai--security-program (concat bin "security"))
           (drgnx-ai-presets `((openrouter :name "OpenRouter" :kind openai :url ,(concat url "/or/v1") :key-env "OPENROUTER_API_KEY"
                                           :caps (chat fim embed))
                               (ollama :name "Ollama" :kind ollama :url ,url :caps (chat fim embed))
@@ -160,10 +245,18 @@ with BODY."
             (concat (funcall log-line "open") "[ -n \"$FAKE_NO_LMS\" ] && exit 0\nmkdir -p \"$HOME/.lmstudio/bin\" && cp " tpl "lms \"$HOME/.lmstudio/bin/lms\"\n"))
            (drgnx-ai-onboard-test--script
             (concat bin "sysctl")
-            "[ \"$2\" = hw.memsize ] && { echo ${FAKE_MEMSIZE:-17179869184}; exit 0; }\nexit 1\n")
+            (concat "[ \"$2\" = hw.memsize ] && { echo ${FAKE_MEMSIZE:-17179869184}; exit 0; }\n"
+                    "[ \"$2\" = hw.optional.arm64 ] && { echo ${FAKE_ARM64:-1}; exit 0; }\nexit 1\n"))
            (drgnx-ai-onboard-test--script
             (concat bin "security")
-            (concat (funcall log-line "security") "cat > " root "security.stdin\n"))
+            ;; `-i' stdin is kept; `find-internet-password' answers with its `-w "…"' word, unquoted (the read-back)
+            (concat (funcall log-line "security")
+                    "case \"$1\" in\n"
+                    " find-internet-password) [ -f " root "security.stdin ] || exit 44\n"
+                    "   sed -n 's/.* -w \"\\(.*\\)\"$/\\1/p' " root "security.stdin | sed 's/\\\\\\(.\\)/\\1/g'; exit 0;;\n"
+                    " delete-internet-password) exit 0;;\n"
+                    "esac\n"
+                    "cat > " root "security.stdin\n"))
            (drgnx-ai-onboard-test--script (concat bin "fake-serve") (concat (funcall log-line "fake-serve") "exec sleep 30\n"))
            (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'macos)))
              ,@body))
@@ -190,12 +283,30 @@ with BODY."
     (unwind-protect
         (progn
           (drgnx-ai-onboard-test--script (concat bin "sysctl")
-                                         "[ \"$2\" = hw.memsize ] && { echo $FAKE_MEMSIZE; exit 0; }\nexit 1\n")
+                                         (concat "[ \"$2\" = hw.memsize ] && { echo $FAKE_MEMSIZE; exit 0; }\n"
+                                                 "[ \"$2\" = hw.optional.arm64 ] && [ -n \"$FAKE_ARM64\" ] && { echo $FAKE_ARM64; exit 0; }\nexit 1\n"))
           (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'macos)))
-            (let ((process-environment (cons "FAKE_MEMSIZE=17179869184" process-environment)))
+            (let ((process-environment (append '("FAKE_MEMSIZE=17179869184" "FAKE_ARM64=1") process-environment)))
               (should (equal (drgnx-ai-vram) '(:total 10922 :used 0 :unified t))))
-            (let ((process-environment (cons "FAKE_MEMSIZE=8589934592" process-environment)))
+            (let ((process-environment (append '("FAKE_MEMSIZE=8589934592" "FAKE_ARM64=1") process-environment)))
               (should (equal (drgnx-ai-vram) '(:total 5461 :used 0 :unified t))))))
+      (delete-directory bin t))))
+
+(ert-deftest drgnx-ai/intel-mac-is-not-unified ()
+  ;; an Intel Mac's RAM is not GPU memory: a 7B model would run on the CPU.  No room is claimed (the smallest models)
+  (let* ((bin (file-name-as-directory (make-temp-file "drgnx-ai-sysctl" t)))
+         (exec-path (cons bin exec-path))
+         (process-environment (cons (concat "PATH=" bin ":" (getenv "PATH")) process-environment)))
+    (unwind-protect
+        (progn
+          (drgnx-ai-onboard-test--script (concat bin "sysctl")
+                                         (concat "[ \"$2\" = hw.memsize ] && { echo $FAKE_MEMSIZE; exit 0; }\n"
+                                                 "[ \"$2\" = hw.optional.arm64 ] && [ -n \"$FAKE_ARM64\" ] && { echo $FAKE_ARM64; exit 0; }\nexit 1\n"))
+          (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'macos)))
+            (dolist (arm64 '("FAKE_ARM64=0" "FAKE_ARM64="))        ; arm64 0, or no such key (older Intel Macs)
+              (let ((process-environment (append (list "FAKE_MEMSIZE=34359738368" arm64) process-environment)))
+                (should-not (plist-get (drgnx-ai-vram) :unified))
+                (should-not (drgnx-ai-vram))))))
       (delete-directory bin t))))
 
 (ert-deftest drgnx-ai/default-models-fit-the-room ()
@@ -297,6 +408,130 @@ with BODY."
                 (should-not (string-search "sk-or-test-123" (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld")))))))
         (delete-process mock)))))
 
+(ert-deftest drgnx-ai-onboard/cli-exit-stops-the-job ()
+  ;; `drgnx onboard' in batch: while a job is waited on, ending Emacs (Ctrl-C) stops the job; the entry is gone
+  ;; once the wait is over.
+  (drgnx-ai-onboard-test--with-mac nil
+    (should noninteractive)
+    (let ((before kill-emacs-hook) (during nil) (r nil))
+      (run-at-time 1 nil (lambda ()
+                           (setq during kill-emacs-hook)
+                           (dolist (f (seq-difference kill-emacs-hook before)) (funcall f))))   ; what exiting runs
+      (setq r (drgnx-onboard--job "Sleeping" (list "sleep" "30") 15))
+      (should (> (length during) (length before)))
+      (should (equal kill-emacs-hook before))
+      (should (eq (car r) 'fail))
+      (should-not (seq-find (lambda (j) (eq (plist-get j :status) 'running)) (drgnx-jobs-list))))))
+
+(ert-deftest drgnx-ai-onboard/a-real-ctrl-c-stops-the-job ()
+  ;; The same with a real SIGINT: a batch Emacs waiting on a job ends on it without unwinding, and its
+  ;; `kill-emacs-hook' entry stops the job.  (`env --default-signal=INT': a background job ignores SIGINT.)
+  (skip-unless (eql 0 (call-process "env" nil nil nil "--default-signal=INT" "true")))
+  (let* ((root (file-name-as-directory (make-temp-file "drgnx-sigint" t)))
+         (process-environment (append (list (concat "HOME=" root "home") (concat "DRGNX_CONFIG_DIR=" root "config")
+                                            (concat "XDG_STATE_HOME=" root "state") (concat "DRGNX_DATA_DIR=" root "data")
+                                            "DRGNX_JOBS_LAUNCHER=detached")
+                                      process-environment))
+         (child nil))
+    (unwind-protect
+        (progn
+          (make-directory (concat root "home") t)
+          (setq child (make-process :name "drgnx-sigint" :connection-type 'pipe :noquery t :buffer nil
+                                    :command (list "env" "--default-signal=INT" (expand-file-name invocation-name invocation-directory)
+                                                   "--batch" "-Q" "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-onboard"
+                                                   "--eval" "(drgnx-onboard--job \"Sleeping\" (list \"sleep\" \"60\"))")))
+          (should (drgnx-onboard--wait (lambda () (seq-find (lambda (j) (eq (plist-get j :status) 'running)) (drgnx-jobs-list))) 20))
+          (sleep-for 1)                 ; the child has put its hook in
+          (signal-process child 'SIGINT)
+          (should (drgnx-onboard--wait (lambda () (not (process-live-p child))) 10))
+          (should (drgnx-onboard--wait (lambda () (not (seq-find (lambda (j) (eq (plist-get j :status) 'running)) (drgnx-jobs-list)))) 10)))
+      (when (and child (process-live-p child)) (kill-process child))
+      (dolist (j (drgnx-jobs-list)) (ignore-errors (drgnx-jobs-stop (plist-get j :id))))
+      (delete-directory root t))))
+
+(defvar drgnx-ai-onboard-test--job-what nil "The job `drgnx-onboard--job' is waiting on (the test's view).")
+
+(ert-deftest drgnx-ai-onboard/pull-has-no-hour-limit ()
+  ;; A model download (and the full-ai package sync) waits without the one-hour cap: C-g stops it, the progress shows.
+  (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--ollama-answers
+    (let ((waits nil) (job (symbol-function 'drgnx-onboard--job)) (until (symbol-function 'drgnx-onboard--until)))
+      (cl-letf (((symbol-function 'completing-read) (drgnx-ai-onboard-test--answer '(("Set up AI with" . "ollama"))))
+                ((symbol-function 'y-or-n-p) (lambda (&rest _) t))
+                ((symbol-function 'drgnx-onboard--job)
+                 (lambda (what &rest args)
+                   (let ((drgnx-ai-onboard-test--job-what what)) (apply job what args))))
+                ((symbol-function 'drgnx-onboard--until)
+                 (lambda (pred secs)
+                   (push (cons drgnx-ai-onboard-test--job-what secs) waits)
+                   (funcall until pred secs))))
+        (drgnx-onboard--ai-step '(:interactive t)))
+      (let ((pulls (seq-filter (lambda (w) (string-prefix-p "Downloading" (or (car w) ""))) waits)))
+        (should (= (length pulls) 3))
+        (dolist (w pulls) (should (or (null (cdr w)) (>= (cdr w) (* 6 3600)))))))))
+
+(ert-deftest drgnx-ai-onboard/the-package-sync-has-no-hour-limit ()
+  (let ((seen nil))
+    (cl-letf (((symbol-function 'drgnx-onboard--job) (lambda (_what _command &optional secs) (setq seen (list secs)) 'ok)))
+      (drgnx-onboard--sync-job))
+    (should (equal seen '(:none)))))
+
+(ert-deftest drgnx-ai-onboard/estimate-skips-models-present ()
+  ;; A re-run's "about N GB to download" counts only the models the provider does not list yet.
+  (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--ollama-answers
+    (let* ((names (delete-dups (mapcar #'cdr (drgnx-onboard--local-models)))) (prompts nil))
+      (should (> (length names) 1))
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (p) (push p prompts) nil)))
+        (setq drgnx-ai-detected nil)
+        (drgnx-onboard--local-setup 'ollama '(:interactive t))
+        (setq drgnx-ai-detected `((ollama :up t :models ,(append (remove (nth 1 names) names) '("other:1b")))))   ; one missing
+        (drgnx-onboard--local-setup 'ollama '(:interactive t))
+        (setq drgnx-ai-detected `((ollama :up t :models ,(mapcar (lambda (n) (concat n ":latest")) names))))
+        (drgnx-onboard--local-setup 'ollama '(:interactive t)))
+      (let ((gb (mapcar (lambda (p) (and (string-match "about \\([0-9.]+\\) GB" p) (string-to-number (match-string 1 p))))
+                        (nreverse prompts))))
+        (should (> (nth 0 gb) (nth 1 gb) 0.0))          ; fewer to download than from nothing, still some
+        (should (= (nth 2 gb) 0.0))))))                    ; all there (also as name:latest): nothing
+
+(ert-deftest drgnx-ai-onboard/last-line-has-no-escapes ()
+  ;; A progress bar's last state, without ANSI escapes or the carriage-return redraws before it; only the end of a
+  ;; big log is read.
+  (let* ((dir (file-name-as-directory (make-temp-file "drgnx-lastline" t)))
+         (log (concat dir "log")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-jobs--dir) (lambda (_id) dir)))
+          (write-region "pulling manifest\n\e[?25l\e[2K\rpulling 10%\r\e[2K\rpulling 40%\n" nil log nil 'silent)
+          (should (equal (drgnx-onboard--last-line "x") "pulling 40%"))
+          (write-region "\e[1m\e[32mdone\e[0m\n" nil log nil 'silent)
+          (should (equal (drgnx-onboard--last-line "x") "done"))
+          ;; a log of megabytes: the end is read, not the whole file
+          (write-region (concat (make-string 3000000 ?x) "\nlast words\n") nil log nil 'silent)
+          (let ((read 0))
+            (advice-add 'insert-file-contents :filter-return (lambda (r) (cl-incf read (cadr r)) r) '((name . lastline-count)))
+            (unwind-protect (should (equal (drgnx-onboard--last-line "x") "last words"))
+              (advice-remove 'insert-file-contents 'lastline-count))
+            (should (<= read 8192))))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-ai-onboard/typed-key-cleared-and-env-noted ()
+  ;; The string `read-passwd' returned is zeroed once the key is stored (the in-memory key is a copy); with
+  ;; OPENROUTER_API_KEY set the environment's key wins over the stored one, and the result says so.
+  (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--openai-answers
+    (let ((mock (drgnx-ai-test-mock-llm port script llm-log)) (typed nil))
+      (unwind-protect
+          (let ((system-type 'darwin) (noninteractive nil)
+                (process-environment (cons "OPENROUTER_API_KEY=sk-env-456" process-environment)))
+            (cl-letf (((symbol-function 'read-passwd) (lambda (&rest _) (setq typed (copy-sequence "sk-or-test-123"))))
+                      ((symbol-function 'auth-source-search)
+                       (lambda (&rest _) (and (file-exists-p (concat root "security.stdin"))
+                                              (list (list :secret "sk-or-test-123"))))))
+              (let ((r (drgnx-onboard--ai-setup 'openrouter '(:interactive t))))
+                (should (string-search "sk-or-test-123" (drgnx-ai-onboard-test--slurp (concat root "security.stdin"))))
+                (should (equal typed (make-string (length typed) 0)))      ; cleared, not just dropped
+                (should (equal (drgnx-ai-key 'openrouter) "sk-env-456"))
+                (should (string-match-p "OPENROUTER_API_KEY is set in the environment, which wins over the stored key" (cadr r)))
+                (should-not (string-search "sk-env-456" (cadr r))))))
+        (delete-process mock)))))
+
 (ert-deftest drgnx-onboard/openrouter-from-the-cli-asks-for-no-key ()
   (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--openai-answers
     (cl-letf (((symbol-function 'read-passwd) (lambda (&rest _) (error "Asked for a key in batch"))))
@@ -383,7 +618,7 @@ with BODY."
             (should-not (drgnx-module-disabled-p 'extra/llm))
             (should (equal (caar jobs) "Installing the packages"))
             (should (equal (last (cdar jobs) 2) (list (expand-file-name "bin/drgnx" drgnx-dir) "sync")))
-            (should (string-match-p "restart drgnx" (cdr r))))
+            (should (string-match-p "loads at drgnx's next start" (cdr r))))      ; batch: no Finish offer promised
           (should drgnx-onboard--restart-needed)
           ;; on, not installed, without interaction: says how; nothing runs
           (setq jobs nil)
@@ -395,7 +630,7 @@ with BODY."
           (let ((r (drgnx-onboard--chat-module '(:interactive t))))
             (should (car r))
             (should-not jobs)
-            (should (string-match-p "from the next start" (cdr r))))
+            (should (string-match-p "loads at drgnx's next start" (cdr r))))
           (drgnx-modules-write-state (list :disabled '(extra/llm)))
           (drgnx-onboard--chat-module '(:interactive t))
           (should-not jobs)

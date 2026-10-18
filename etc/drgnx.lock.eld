@@ -92,6 +92,11 @@
 		    :size 40960 :requires
 		    ((compat "31.0") (cond-let "1.1")) :summary
 		    "Show current command and its binding")
+	   (kkp :version "20260706.858" :archive "melpa" :kind tar
+		:file "kkp-20260706.858.tar" :sha256
+		"1ef566f8cc68cc0bf8cb3ee4aaffa63b258be8621a89229d2d3b2df4b945c8e5"
+		:size 71680 :requires ((compat "29.1.3.4")) :summary
+		"Enable support for the Kitty Keyboard Protocol")
 	   (llama :version "1.0.6" :archive "nongnu" :kind tar :file
 		  "llama-1.0.6.tar" :sha256
 		  "eafea6f32985ebf2c0266cdeff3a7b72eaf674c7a51e1c424fbc0e4166310337"
@@ -155,6 +160,11 @@
 		  "59eab71cedb9424277144bb862b967a7db0f25e248e69d07ac66bf1da3a142aa"
 		  :size 92160 :requires nil :summary
 		  "Visual undo tree")
+	   (websocket :version "1.16" :archive "gnu" :kind tar :file
+		      "websocket-1.16.tar" :sha256
+		      "b11ff735b0ac1d94d0024c63371e192c5e36c6f3619cf78ea08eaa4f963cc32a"
+		      :size 122880 :requires ((cl-lib "0.5")) :summary
+		      "Emacs WebSocket client and server")
 	   (wgrep :version "3.0.0" :archive "nongnu" :kind tar :file
 		  "wgrep-3.0.0.tar" :sha256
 		  "ff73b18324a80176d050344a764f8a176ff2d52fb00e3475f1b5c9dc8d2749a2"

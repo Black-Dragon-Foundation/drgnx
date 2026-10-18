@@ -10,10 +10,14 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'drgnx-registry)
+(require 'drgnx-modules-record)
+(require 'drgnx-modules-helpers)
 (require 'drgnx-paths)
 (require 'easymenu)
 (require 'seq)
+(require 'drgnx-tty-fallback)
 
 (defvar which-key-replacement-alist)   ; which-key, when present
 (defvar drgnx-keys-last)               ; drgnx-keys (loaded after this file)
@@ -24,21 +28,47 @@
 
 ;;;; Keys and running
 
-(defun drgnx-surfaces-key (cmd)
+(defun drgnx-surfaces--here (key)
+  "KEY (a key string) as the selected frame's terminal sends it (`drgnx-tty-sendable-key'): the Alt+Shift key or
+the F6 form for a chord a legacy terminal cannot send, KEY itself on a graphical frame or where the terminal sends
+it.  Reads what drgnx found about the terminal when it opened (never asks it), in the current buffer, which is
+where the command would run."
+  (or (ignore-errors (drgnx-tty-sendable-key (selected-frame) key)) key))
+
+(defun drgnx-surfaces--always (key)
+  "KEY (a key string) as the selected frame's terminal can send it whatever buffer is current: each chord it cannot
+send as its F6 form (the layer's table, no check of the current buffer's maps), KEY itself on a graphical frame, where
+the terminal sends it, or when the terminal has no fallback layer."
+  (or (ignore-errors
+        (let* ((frame (selected-frame))
+               (table (and drgnx-tty-fallback (not (display-graphic-p frame))
+                           (terminal-parameter (frame-terminal frame) 'drgnx-tty-fallback-table))))
+          (if (or (null table) (drgnx-tty-frame-sends-p frame key)) key
+            (mapconcat (lambda (ev)
+                         (let ((row (cdr (drgnx-tty-fallback--row table ev))))
+                           (or (plist-get row :prefix) (plist-get row :alt) (key-description (vector ev)))))
+                       (key-parse key) " "))))
+      key))
+
+(defun drgnx-surfaces-key (cmd &optional plain)
   "Display string for CMD's first active key, a key in a mode's keymap suffixed with that
-keymap; \"\" if none."
+keymap; \"\" if none.  The key is shown as the selected frame's terminal can send it, unless PLAIN is t
+\(the markdown export: the same on every frame).  PLAIN `menu': the form that is right in every buffer (F6 then the
+key, never an Alt+Shift key a mode may rebind), for text a menu keeps while the buffer changes."
   (pcase (car (drgnx-cmd-bound cmd))
     ('nil "")
     (`(,key . ,map)
-     (let ((mapsym (cdr (drgnx-commands--keymap-spec map))))
+     (let ((mapsym (cdr (drgnx-commands--keymap-spec map)))
+           (key (pcase plain ('nil (drgnx-surfaces--here key)) ('menu (drgnx-surfaces--always key)) (_ key))))
        (if (eq mapsym 'global-map) key
          (format "%s (in %s)" key (string-remove-suffix "-mode-map" (string-remove-suffix "-map" (symbol-name mapsym)))))))))
 
 (defun drgnx-surfaces--any-key (cmd)
-  "CMD's active key, else whatever key currently runs its command."
-  (or (car (car (drgnx-cmd-bound cmd)))
-      (let ((c (drgnx-cmd-command cmd)))
-        (when-let* ((k (and (symbolp c) (where-is-internal c nil t)))) (key-description k)))))
+  "CMD's active key, else whatever key currently runs its command; as the selected frame's terminal sends it."
+  (when-let* ((key (or (car (car (drgnx-cmd-bound cmd)))
+                       (let ((c (drgnx-cmd-command cmd)))
+                         (when-let* ((k (and (symbolp c) (where-is-internal c nil t)))) (key-description k))))))
+    (drgnx-surfaces--here key)))
 
 (defun drgnx-surfaces-tip (cmd)
   "Echo how CMD could have been run with a key, keeping any message the command printed.
@@ -187,26 +217,143 @@ Sets `drgnx-surfaces--usage-bad' when something was left out."
   '(("File" . file) ("Edit" . edit) ("Options" . options) ("Buffers" . buffer) ("Tools" . tools) ("Help" . help-menu))
   "Menu-bar names Emacs already defines, with their menu-bar keys.")
 
+(defvar drgnx-surfaces--menu-items (make-hash-table :test #'eq)
+  "What `drgnx-surfaces-build-menus' put in the menu bar: command id → `drgnx-surfaces--menu-rec'.")
+
+(defvar drgnx-surfaces--menu-seq 0 "Counts the records made, to undo them newest first.")
+
+(cl-defstruct (drgnx-surfaces--menu-rec (:constructor drgnx-surfaces--menu-rec-make) (:copier nil))
+  "One menu-bar item the registry added, with what undoing it takes."
+  id cmd seq
+  root names title   ; where easy-menu put it: the menu keymap, the submenu path under it, the item name
+  target box         ; its claim on the item (`drgnx-module--claim'): two commands may share a title
+  ours)              ; the binding it added (the cell's cdr), to see whether someone else changed it since
+
+(defvar drgnx-surfaces--menu-created nil
+  "Submenus the registry's items made, as (ROOT . NAMES), deepest and newest first; each goes
+again once it is empty (the item that made it may leave before the others that share it).")
+
+(defun drgnx-surfaces--menu-root (cmd)
+  "CMD's menu path as (ROOT . NAMES): the menu-bar keymap to add to, and the submenus under it.
+Always the GLOBAL menu bar: easy-menu's nil map means the buffer's local one."
+  (let* ((path (drgnx-cmd-menu cmd))
+         (builtin (cdr (assoc (car path) drgnx-surfaces--builtin-menus))))
+    (if builtin
+        (cons (lookup-key global-map (vector 'menu-bar builtin)) (cdr path))
+      (cons (lookup-key global-map [menu-bar]) path))))
+
+(defun drgnx-surfaces--menu-submenu (root names)
+  "The submenu of ROOT at path NAMES, or nil when it does not exist (`easy-menu-get-map' would make it)."
+  (let ((m root))
+    (while (and names (keymapp m))
+      (setq m (easy-menu-lookup-name m (pop names))))
+    (and (keymapp m) m)))
+
+(defun drgnx-surfaces--menu-cell (root names title)
+  "The cons cell of the item TITLE in the submenu NAMES of ROOT, or nil."
+  (when-let* ((leaf (drgnx-surfaces--menu-submenu root names)))
+    (assq (easy-menu-intern title) (cdr leaf))))
+
+(defun drgnx-surfaces--menu-add (cmd item)
+  "Add ITEM, CMD's menu entry, to the menu bar.  The first time, claim the item and remember
+what was there before; later times replace the item where it stands."
+  (pcase-let* ((`(,root . ,names) (drgnx-surfaces--menu-root cmd))
+               (title (drgnx-cmd-title cmd))
+               (rec (gethash (drgnx-cmd-id cmd) drgnx-surfaces--menu-items)))
+    (unless rec
+      (let* ((live (cl-loop for n from (length names) downto 0
+                            when (drgnx-surfaces--menu-submenu root (seq-take names n)) return n))
+             (raw (and (= live (length names)) (drgnx-surfaces--menu-cell root names title)))
+             (target (cons 'menu (append (drgnx-cmd-menu cmd) (list title)))))
+        (setq rec (drgnx-surfaces--menu-rec-make
+                   :id (drgnx-cmd-id cmd) :cmd cmd :seq (cl-incf drgnx-surfaces--menu-seq)
+                   :root root :names names :title title :target target
+                   :box (drgnx-module--claim target (cons raw (cdr raw)))))
+        (puthash (drgnx-cmd-id cmd) rec drgnx-surfaces--menu-items)
+        (cl-loop for n from (1+ live) to (length names)
+                 do (push (cons root (seq-take names n)) drgnx-surfaces--menu-created))))
+    (easy-menu-add-item root names item)
+    (setf (drgnx-surfaces--menu-rec-ours rec) (cdr (drgnx-surfaces--menu-cell root names title)))))
+
+(defun drgnx-surfaces--menu-undo (rec)
+  "Put the menu bar back as it was before REC's item: the replaced item, or the item gone and
+the submenus the registry made, once empty.  What someone else changed since stays, and so
+does an item another command with the same title shows (the claim hands over what it found)."
+  (let ((root (drgnx-surfaces--menu-rec-root rec)) (names (drgnx-surfaces--menu-rec-names rec))
+        (title (drgnx-surfaces--menu-rec-title rec)))
+    (drgnx-module--release
+     (drgnx-surfaces--menu-rec-target rec) (drgnx-surfaces--menu-rec-box rec)
+     (lambda ()
+       (let ((cell (drgnx-surfaces--menu-cell root names title)))
+         (and cell (eq (cdr cell) (drgnx-surfaces--menu-rec-ours rec)))))
+     (lambda (prev)
+       (if (car prev)
+           (setcdr (car prev) (cdr prev))
+         (easy-menu-remove-item root names title))))
+    (setq drgnx-surfaces--menu-created
+          (seq-remove (lambda (made)
+                        (let ((sub (drgnx-surfaces--menu-submenu (car made) (cdr made))))
+                          (when (or (null sub) (not (seq-some #'consp (cdr sub))))
+                            (when sub (easy-menu-remove-item (car made) (butlast (cdr made)) (car (last (cdr made)))))
+                            t)))
+                      drgnx-surfaces--menu-created))))
+
+(defun drgnx-surfaces--menu-retract ()
+  "Take the items of commands that are no longer registered (undefined, or defined again) out
+of the menu bar, newest first.  The other items stay where they are."
+  (let (stale)
+    (maphash (lambda (id rec)
+               (unless (eq (drgnx-commands-get id) (drgnx-surfaces--menu-rec-cmd rec)) (push rec stale)))
+             drgnx-surfaces--menu-items)
+    (dolist (rec (sort stale (lambda (a b) (> (drgnx-surfaces--menu-rec-seq a) (drgnx-surfaces--menu-rec-seq b)))))
+      (remhash (drgnx-surfaces--menu-rec-id rec) drgnx-surfaces--menu-items)
+      (drgnx-surfaces--menu-undo rec))))
+
 (defun drgnx-surfaces-build-menus ()
-  "Put every registry entry with a :menu path into the menu bar (idempotent)."
+  "Put every registry entry with a :menu path into the menu bar (idempotent).  The menu bar is global and keeps
+its text while the buffer changes: on a terminal frame its key texts are the F6 forms (right in every buffer),
+and they are made for the selected frame's terminal (`drgnx-surfaces--update-menus').  A command no longer
+registered (a module torn down) leaves the menu bar as it was before it came."
+  (drgnx-surfaces--menu-retract)
   (dolist (cmd (drgnx-commands-all))
     (when (and (drgnx-cmd-menu cmd) (drgnx-surfaces--showable-p cmd))
-      (let* ((path (drgnx-cmd-menu cmd))
-             (builtin (cdr (assoc (car path) drgnx-surfaces--builtin-menus)))
-             (item (vector (drgnx-cmd-title cmd) (drgnx-surfaces--item-command cmd)
-                           :help (or (drgnx-cmd-doc cmd) "")
-                           :keys (drgnx-surfaces-key cmd))))
-        ;; Always the GLOBAL menu bar: easy-menu's nil map means the buffer's local one.
-        (if builtin
-            (easy-menu-add-item (lookup-key global-map (vector 'menu-bar builtin)) (cdr path) item)
-          (easy-menu-add-item (lookup-key global-map [menu-bar]) path item))))))
+      (drgnx-surfaces--menu-add cmd (vector (drgnx-cmd-title cmd) (drgnx-surfaces--item-command cmd)
+                                            :help (or (drgnx-cmd-doc cmd) "")
+                                            :keys (drgnx-surfaces-key cmd 'menu))))))
 
 ;;;; Right-click menus
 
 (defvar drgnx-surfaces-contexts nil "Alist CONTEXT → predicate taking the click event.")
 
 (defun drgnx-surfaces-define-context (context predicate)
-  (setf (alist-get context drgnx-surfaces-contexts) predicate))
+  "Define right-click CONTEXT as PREDICATE, a function of the click event.
+Defined by a module's setup, it is undone with the module (a claim, `drgnx-module--claim'): the
+context it replaced comes back, or it goes (`drgnx-surfaces-undefine-context'), unless someone
+defined it again since.  Two modules defining one context may be torn down in either order."
+  (let* ((rec (drgnx-modules--recording-p))
+         (old (and rec (assq context drgnx-surfaces-contexts) (list (alist-get context drgnx-surfaces-contexts)))))   ; (PREDICATE) or nil
+    (setf (alist-get context drgnx-surfaces-contexts) predicate)
+    (when rec
+      (let* ((target (list 'context context))
+             (box (drgnx-module--claim target old)))
+        (drgnx-modules-push-undo
+         (format "context %s" context)
+         (lambda ()
+           (drgnx-module--release
+            target box
+            (lambda () (eq (alist-get context drgnx-surfaces-contexts) predicate))
+            (lambda (prev)
+              (if prev
+                  (setf (alist-get context drgnx-surfaces-contexts) (car prev))
+                (drgnx-surfaces-undefine-context context))))))))
+    predicate))
+
+(defun drgnx-surfaces-undefine-context (context)
+  "Remove right-click CONTEXT; the commands that name it no longer show in that menu.
+Returns CONTEXT when it was defined, else nil."
+  (when (assq context drgnx-surfaces-contexts)
+    (setf (alist-get context drgnx-surfaces-contexts nil 'remove) nil)
+    context))
 
 (drgnx-surfaces-define-context 'region (lambda (_) (use-region-p)))
 (drgnx-surfaces-define-context 'code (lambda (_) (derived-mode-p 'prog-mode)))
@@ -268,34 +415,59 @@ write into the keymap, which would make an unbound key a prefix (which-key shows
                         (concat "right-click: " (mapconcat #'symbol-name (drgnx-cmd-context cmd) ", ")))))
    "; "))
 
-(defun drgnx-surfaces-sheet-rows ()
+(defun drgnx-surfaces-sheet-rows (&optional here)
   "Rows (CATEGORY KEY TITLE MOUSE DOC) for available entries, sorted by category then title.
-Uses registry keys only (no `where-is'), so the output is the same in every Emacs session."
-  (sort (mapcar (lambda (c) (list (drgnx-cmd-category c) (drgnx-surfaces-key c) (drgnx-cmd-title c)
+Uses registry keys only (no `where-is'), so the output is the same in every Emacs session, unless HERE: then
+each KEY is shown as the selected frame's terminal sends it (the F1 sheet)."
+  (sort (mapcar (lambda (c) (list (drgnx-cmd-category c) (drgnx-surfaces-key c (not here)) (drgnx-cmd-title c)
                                   (drgnx-surfaces--mouse-path c) (or (drgnx-cmd-doc c) "")))
                 (seq-filter #'drgnx-commands-available-p (drgnx-commands-all)))
         (lambda (a b) (or (string< (car a) (car b))
                           (and (string= (car a) (car b)) (string< (nth 2 a) (nth 2 b)))))))
 
+(defun drgnx-surfaces--limited-lines ()
+  "Lines for the keys the selected frame's terminal cannot send, each with what to press instead: the key as drgnx
+shows it elsewhere, its title, then the Alt+Shift key and the F6 form (or that nothing works, when the terminal has
+no fallback layer).  Nil on a graphical frame and on a terminal that sends every key."
+  (let ((frame (selected-frame)) lines)
+    (dolist (c (seq-filter #'drgnx-commands-available-p (drgnx-commands-all)))
+      (when-let* ((key (car (car (drgnx-cmd-bound c))))
+                  ((not (ignore-errors (drgnx-tty-frame-sends-p frame key)))))
+        (let* ((here (drgnx-surfaces--here key))
+               (always (drgnx-surfaces--always key))
+               (forms (delete-dups (delq nil (list (and (not (equal here key)) here)
+                                                   (and (not (equal always key)) always))))))
+          (push (format "  %-24s %-36s %s" key (drgnx-cmd-title c)
+                        (if forms
+                            (mapconcat #'drgnx-tty-fallback-label forms ", or ")
+                          "this terminal cannot send it; use the palette (F1)"))
+                lines))))
+    (sort lines #'string<)))
+
 (defun drgnx-surfaces-cheatsheet ()
-  "Show every drgnx command: key, title and where to click."
+  "Show every drgnx command: key, title and where to click.  The keys are the ones this terminal can send."
   (interactive)
-  (with-help-window "*drgnx keys*"
-    (with-current-buffer standard-output
-      (insert "drgnx keys — every command, its key and where to click.\n")
-      (let (cat)
-        (dolist (r (drgnx-surfaces-sheet-rows))
-          (unless (equal cat (car r))
-            (setq cat (car r))
-            (insert "\n" (propertize cat 'face 'drgnx-sheet-heading) "\n"))
-          (insert (format "  %-24s %-36s %s\n" (nth 1 r) (nth 2 r) (nth 3 r)))))
-      ;; The active key profiles' conflicts and problems (drgnx-keys, docs/guide/keys.md).
-      (when (fboundp 'drgnx-keys-conflict-lines)
-        (pcase-dolist (`(,title . ,lines) `(("Key conflicts (the later layer won)" . ,(drgnx-keys-conflict-lines))
-                                            ("Key problems" . ,(plist-get drgnx-keys-last :problems))))
-          (when lines
-            (insert "\n" (propertize title 'face 'drgnx-sheet-heading) "\n")
-            (dolist (l lines) (insert "  " l "\n"))))))))
+  ;; computed here: the keys depend on the buffer and frame the sheet is asked from, not on the help buffer
+  (let ((rows (drgnx-surfaces-sheet-rows t)) (limited (drgnx-surfaces--limited-lines)))
+    (with-help-window "*drgnx keys*"
+      (with-current-buffer standard-output
+        (insert "drgnx keys — every command, its key and where to click.\n")
+        (let (cat)
+          (dolist (r rows)
+            (unless (equal cat (car r))
+              (setq cat (car r))
+              (insert "\n" (propertize cat 'face 'drgnx-sheet-heading) "\n"))
+            (insert (format "  %-24s %-36s %s\n" (nth 1 r) (nth 2 r) (nth 3 r)))))
+        (when limited
+          (insert "\n" (propertize "Keys this terminal cannot send, and what to press here" 'face 'drgnx-sheet-heading) "\n")
+          (dolist (l limited) (insert l "\n")))
+        ;; The active key profiles' conflicts and problems (drgnx-keys, docs/guide/keys.md).
+        (when (fboundp 'drgnx-keys-conflict-lines)
+          (pcase-dolist (`(,title . ,lines) `(("Key conflicts (the later layer won)" . ,(drgnx-keys-conflict-lines))
+                                              ("Key problems" . ,(plist-get drgnx-keys-last :problems))))
+            (when lines
+              (insert "\n" (propertize title 'face 'drgnx-sheet-heading) "\n")
+              (dolist (l lines) (insert "  " l "\n")))))))))
 
 (defun drgnx-surfaces--md (s) (replace-regexp-in-string "|" "\\\\|" s))
 
@@ -340,9 +512,34 @@ which asks \"changed on disk; really edit?\" when FILE is open in a stale buffer
 
 ;;;; Refresh
 
+(defvar drgnx-surfaces--menu-signature nil
+  "What the menu bar's key texts were built for: the selected terminal frame's terminal, its caps and fallback
+table (nil on a graphical frame).")
+
+(defun drgnx-surfaces--terminal-signature ()
+  (let ((frame (selected-frame)))
+    (unless (display-graphic-p frame)
+      (let ((term (frame-terminal frame)))
+        (list term (terminal-parameter term 'drgnx-tty-caps) (terminal-parameter term 'drgnx-tty-fallback-table))))))
+
+(defun drgnx-surfaces--update-menus ()
+  "For `menu-bar-update-hook': the menu bar is global, its key texts are made for one terminal at a time, so
+build them again when the selected frame's terminal is another one or its keys changed (kkp came on).  Menus are
+per terminal, not per buffer: the texts come from the terminal's own table without the current buffer's maps
+(`drgnx-surfaces-key' with `menu'), so a buffer that rebinds an Alt+Shift key never makes a menu lie.
+Reads what drgnx already found; asks nothing."
+  (condition-case nil
+      (let ((sig (drgnx-surfaces--terminal-signature)))
+        (unless (equal sig drgnx-surfaces--menu-signature)
+          (setq drgnx-surfaces--menu-signature sig)
+          (drgnx-surfaces-build-menus)))
+    (error nil)))
+
 (defun drgnx-surfaces-refresh ()
   "Regenerate menus and which-key labels and install the context-menu hook (idempotent)."
   (drgnx-surfaces-build-menus)
+  (setq drgnx-surfaces--menu-signature (drgnx-surfaces--terminal-signature))
+  (add-hook 'menu-bar-update-hook #'drgnx-surfaces--update-menus)
   (drgnx-surfaces-apply-which-key)
   (add-hook 'context-menu-functions #'drgnx-surfaces-context-menu 90)
   ;; Right-click menus need the mode (also in a daemon, whose init has no graphic frame).

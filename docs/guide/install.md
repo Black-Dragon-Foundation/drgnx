@@ -44,10 +44,13 @@ machine at any time.
 7. **macOS: the drgnx app.** Installs `~/Applications/drgnx.app` (`drgnx macos-app`: Finder, Spotlight, the Dock,
    Open With — [opening.md](opening.md#on-macos-the-drgnx-app)); if that fails it warns and goes on.
 8. **PATH:** if `~/.local/bin` is not on your `PATH`, it offers to add one line to `~/.profile` (`~/.zprofile`
-   when your shell is zsh) — only when you answer yes; with `--yes` it only prints the line and that file.
+   when your shell is zsh; with `SHELL` unset, `~/.zprofile` if it exists) — only when you answer yes; with `--yes`
+   it only prints the line and that file.
 9. **Checks** it all: runs `drgnx doctor` with the Emacs it found or installed — after the app and the PATH line, so
-   it checks what is there. On a Mac `drgnx` counts as on PATH when `~/.local/bin/drgnx` exists and `~/.zprofile`
-   puts `~/.local/bin` on PATH (what a new Terminal sees), also in a drgnx the app started, whose own PATH lacks it.
+   it checks what is there. On a Mac `drgnx` counts as on PATH when `~/.local/bin/drgnx` exists and your shell's
+   profile (`~/.zprofile` for zsh or, with `SHELL` unset, when it exists; else `~/.profile`) puts `~/.local/bin` on PATH (`export PATH=…`, or in zsh
+   `path=(… ~/.local/bin …)` / `path+=(…)`; what a new Terminal sees), also in a drgnx the app started, whose own PATH
+   lacks it.
 10. **macOS: opens drgnx** (the app just installed), so the first start's Welcome takes over — only in a desktop
    session: not over SSH, and not under `--yes` without a terminal.
 
@@ -119,14 +122,14 @@ The details:
   installer (`/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`).
   Under `--yes` that installer runs with `NONINTERACTIVE=1` and cannot ask for your password: run `sudo -v`
   first, or leave `--yes` out. Afterwards the installer evaluates `brew shellenv` for itself and offers to add the
-  line `eval "$(/opt/homebrew/bin/brew shellenv)"` (`/usr/local/bin/brew` on Intel) to `~/.zprofile` — only when you answer yes;
-  with `--yes` it only prints the line.
+  line `eval "$(/opt/homebrew/bin/brew shellenv)"` (`/usr/local/bin/brew` on Intel) to your shell's profile (`~/.zprofile`
+  for zsh, the macOS default; else `~/.profile`) — only when you answer yes; with `--yes` it only prints the line.
 - **Intel Homebrew on Apple silicon** (`/usr/local/bin/brew` on an arm64 Mac) runs under Rosetta. It is used, and the
   plan warns about it.
 - **Your Emacs configuration is never touched.** `~/.emacs.d` and `~/.config/emacs` are neither read nor written;
   drgnx starts with its own `--init-directory`.
 - **The drgnx app.** Before the doctor it installs `~/Applications/drgnx.app` — drgnx in Finder, Spotlight and the
-  Dock, and in Open With for folders and almost any file ([opening.md](opening.md#on-macos-the-drgnx-app)). A failure
+  Dock, and in Open With for folders, text and code files ([opening.md](opening.md#on-macos-the-drgnx-app)). A failure
   only warns (run `drgnx macos-app` later). It is never put in `/Applications` and never starts at login.
 - The last lines are "Done." and how to open drgnx next time — Spotlight (⌘Space, type "drgnx") or Launchpad, or
   `drgnx .` in a project — and that to keep it in the Dock you drag `~/Applications/drgnx.app` there, not the Emacs
@@ -194,7 +197,25 @@ one line per check, `OK`, `WARN` or `FAIL`, with a fix under anything that is no
 pgtk Emacs; on a Mac, which has no mutter, D-Bus or pgtk, only ImageMagick). On a Mac the doctor also checks that the
 drgnx app is installed (fix: `drgnx macos-app`), that Homebrew is there (also looked for in `/opt/homebrew/bin` and
 `/usr/local/bin`, in case it is not on PATH) and that the `drgnx` command is on PATH (fix: add `~/.local/bin` to PATH in
-`~/.zprofile`) — each only a warning. Details: [core.md](../develop/core.md#doctor-drgnx-doctorel).
+your shell's profile, `~/.zprofile` for zsh or, with `SHELL` unset, when it exists; else `~/.profile`) — each only a warning.
+The `claude-adapter` check reads the `package.json` of the Claude Code adapter that the `claude` agent profiles would
+run, without running it. It wants `@agentclientprotocol/claude-agent-acp` 0.93.0 or newer. The deprecated
+`@zed-industries/claude-agent-acp`, an older version, or a program of no package drgnx knows is a warning, with the
+one-line command that fixes it, or advice when the adapter is not in a global npm prefix ([agents.md](agents.md#sessions)). No adapter is only a notice. Details: [core.md](../develop/core.md#doctor-drgnx-doctorel).
+
+A terminal-only Emacs (no graphical build) passes the `gui` check: drgnx runs in terminals, with no images and one font
+size, and popups in the bottom lane on Emacs 30.2.
+
+**The Terminal group.** Run from a terminal, the doctor also checks that terminal: `terminal` (which one it is, its
+`TERM` and terminfo), `terminal-colours`, `terminal-mouse`, `terminal-keys` (the kitty keyboard protocol,
+modifyOtherKeys or neither; for a terminal that sends neither, a table of the shortcuts it cannot send with the
+Alt+Shift key and the F6 form that stand for each, and the terminals that would send them: the ones you have installed,
+else the install command for your system), `terminal-clipboard` (copy to your clipboard by OSC 52), `terminal-tmux`
+(inside tmux, the lines to add to `~/.tmux.conf`; drgnx never edits it), `terminal-ssh` (over SSH, whether this machine
+has your terminal's terminfo) and `terminal-popups`. Outside a terminal it says `not run from a terminal` and nothing
+more. Nothing in it prompts or installs anything; inside tmux it asks tmux once (1 second at most). Each warning
+carries its fix. In drgnx, **Check This Terminal** (Help, in the palette) shows the same group for the terminal window
+you are in. Details: [terminal.md](terminal.md#check-this-terminal).
 
 ## Uninstall
 
@@ -211,7 +232,8 @@ On macOS, also `rm -rf ~/Applications/drgnx.app`, and if you want them gone:
   `openrouter.ai` in Keychain Access);
 - what onboarding installed, each only if it did: `brew uninstall ollama` (models: `ollama rm NAME` first, or
   `~/.ollama`), `brew uninstall --cask lm-studio` (models in `~/.lmstudio`), `npm uninstall -g
-  @zed-industries/claude-agent-acp`, `brew uninstall node`, `brew uninstall --cask claude-code`.
+  @agentclientprotocol/claude-agent-acp` (or `@zed-industries/claude-agent-acp`, the deprecated package earlier
+  versions installed; add `--prefix ~/.local` if it is there), `brew uninstall node`, `brew uninstall --cask claude-code`.
 
 A source-built Emacs: `make uninstall` in the build directory (`~/.cache/drgnx/build/emacs-31.1`, or under `$XDG_CACHE_HOME` if you set it) before deleting the cache (or
 remove `~/.local/bin/emacs*`, `~/.local/share/emacs`, `~/.local/libexec/emacs`). A packaged Emacs: remove it

@@ -17,7 +17,7 @@
          (progn
            (make-directory (concat root "config") t)
            (with-temp-file (concat root "config/agents.eld")
-             (prin1 (list :profiles (list (list "mock" :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
+             (prin1 (list :profiles (list (list "mock" :command (list "sh" (expand-file-name "test/fixtures/mock-acp-stdin.sh" drgnx-dir) (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
                                                                       "-l" (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir)))))
                     (current-buffer)))
            (drgnx-hub-ensure)
@@ -102,8 +102,6 @@
                  (lambda () (let ((m (drgnx-agents-mirror-test--mirror id))) (and m (equal (drgnx-agent-session-entries m) hub))))
                  5))))))
 
-;;; agents-mirror-test.el ends here
-
 ;; From the old UI list ("a malformed RUN_STARTED aborting the board refresh"): one unreadable record from the
 ;; hub must not stop the others from being mirrored.
 (ert-deftest drgnx-agents-mirror/a-malformed-session-record-does-not-abort-the-sync ()
@@ -128,3 +126,34 @@
       (drgnx-agents-mirror--apply-entries m '((0 "(:text \"one\")") (1 "(:text \"cut off") (2 "(:text \"three\")"))))
     (should (equal (plist-get (nth 0 (drgnx-agent-session-entries m)) :text) "one"))
     (should (equal (plist-get (nth 2 (drgnx-agent-session-entries m)) :text) "three"))))
+
+(ert-deftest drgnx-agents-mirror/an-old-snapshot-never-overwrites ()
+  ;; a snapshot that came while the transcript was fetched, numbered before the fetch's answer, is older than it
+  (let ((drgnx-agents--sessions nil) (answer nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-hub-call)
+                   (lambda (method _params &optional cb) (when (equal method "agents/get") (setq answer cb)))))
+          (let ((m (drgnx-agents--make :remote "s-o" :id "s-o")))
+            (push m drgnx-agents--sessions)
+            (drgnx-agents-mirror--fetch m)
+            (drgnx-agents-mirror--event "agent" (list :id "s-o" :seq 3 :lisp "(:id \"s-o\" :name \"old\" :status busy)"))
+            (funcall answer (list :seq 5 :lisp "(:id \"s-o\" :name \"new\" :status idle)" :entries "((:text \"hi\"))") nil)
+            (should (equal (drgnx-agent-session-name m) "new"))
+            ;; and later, live: an older number is skipped, a newer one applied
+            (drgnx-agents-mirror--event "agent" (list :id "s-o" :seq 5 :lisp "(:id \"s-o\" :name \"old\" :status busy)"))
+            (should (equal (drgnx-agent-session-name m) "new"))
+            (drgnx-agents-mirror--event "agent" (list :id "s-o" :seq 6 :lisp "(:id \"s-o\" :name \"newer\" :status idle)"))
+            (should (equal (drgnx-agent-session-name m) "newer"))))
+      (drgnx-agents-mirror-stop))))
+
+(ert-deftest drgnx-agents-mirror/a-non-list-record-is-skipped ()
+  ;; readable but of the wrong type (a number, a string, nil): never a snapshot or an entry
+  (let ((drgnx-agents--sessions nil) (inhibit-message t))
+    (should-not (drgnx-agents-mirror--read "42"))
+    (should-not (drgnx-agents-mirror--read "\"text\""))
+    (should-not (drgnx-agents-mirror--read "nil"))
+    (should (equal (drgnx-agents-mirror--read "(:id \"s\")") '((:id "s"))))
+    (drgnx-agents-mirror--event "agent" (list :id "s-n" :seq 1 :lisp "42"))
+    (should-not drgnx-agents--sessions)))
+
+;;; agents-mirror-test.el ends here

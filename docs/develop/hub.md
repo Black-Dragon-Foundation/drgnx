@@ -10,9 +10,11 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   itself — Emacs's child already leads its own process group, and setsid(2) refuses a group leader. Either way the
   hub leads its own session and process group and outlives the Emacs that started it. A job's pid is checked
   against the boot it was started in: Linux's `boot_id`, macOS's `sysctl -n kern.bootsessionuuid` (not
-  `kern.boottime`, which moves when the clock is set). It gets the starting Emacs's drgnx and XDG directories and
-  provider keys (when set) as its environment; under systemd only named variables pass (`--setenv=NAME`), so no
-  value is ever in a command line.
+  `kern.boottime`, which moves when the clock is set). It gets the starting Emacs's drgnx and XDG directories as its
+  environment (under systemd only named variables pass, `--setenv=NAME`, so no value is in a command line) and never
+  a provider key: a systemd unit keeps its environment where `systemctl --user show` prints it, and the detached
+  launcher passes the starting Emacs's environment on, so `drgnx-hub-ensure` unsets every provider's `:key-env` for
+  it. Keys come over the socket instead (`gateway/keys`, below).
   Its main loop is `accept-process-output` plus the event drain batch Emacs needs (queued events hold back
   sentinels). SIGTERM or `shutdown` removes its socket. It starts with SIGPIPE ignored (`trap '' PIPE`): the
   editing Emacs that launches it does not ignore it, and a write to a connection an agent closed must be an error,
@@ -30,16 +32,24 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
 
 `drgnx-hub-socket`: `$XDG_RUNTIME_DIR/drgnx/hub-HASH.sock` (HASH: the first 8 hex digits of the SHA-1 of the data
 dir), else `<state>/hub/hub-HASH.sock`; a path over 103 bytes (macOS's limit, the closing NUL included in 104; Linux
-allows 107) — a deep state dir — moves to `drgnx-hub-UID/` in the temporary directory.
-Its directory is mode 0700 and must be the user's own. One JSON object per line:
+allows 107) — a deep state dir — moves to `drgnx-hub-UID/` in the temporary directory. The bytes are counted as the
+system sees the name, encoded (`file-name-coding-system`: macOS decomposes "é" into 3 bytes).
+Its directory is mode 0700 (made so from the start, with any parents it needs) and must be the user's own directory
+— never a link, which would be followed (`drgnx-hub--private-dir`). A client checks the same before it pings, connects or sends
+anything (`drgnx-hub--untrusted`): the directory a real directory (not a link) of the user's with no access for
+others, and the socket the user's; a directory that is missing is refused too (what is checked is then connected to
+by path, and a missing one could be another user's by then). Otherwise it refuses ("Not connecting to the drgnx hub: … is open to other users")
+and never hands over keys — on the `/tmp` fallback another local user could have made the directory first. The
+coordination server's `coord/notify` checks the same. One JSON object per line:
 
 | Request (`{"id", "method", "params"}`) | Result |
 |---|---|
 | `ping` | `{pid}` |
 | `status` | `{pid, socket, gateway_port, registrations, started}` |
 | `subscribe` | `true`; then events `{"event", "data"}` on this connection |
-| `gateway/register` `{job, task, agent, chain: [[provider, model-or-null]…], budget, keys: {provider: key}}` | `{token, url}` |
+| `gateway/register` `{job, task, agent, chain: [[provider, model-or-null]…], budget, keys: {provider: key}, owner, openrouter}` | `{token, url, openrouter}` (the restrictions kept; absent when none; restrictions that do not read are an error) |
 | `gateway/unregister` `{token}` | `true` |
+| `gateway/keys` `{keys: {provider: key}}` | `true`: the keys go to the gateway's memory |
 | `spend` `{job?, task?, agent?}` | `{input, output, cost, requests}` |
 | `shutdown` | `true`, then the hub exits |
 
@@ -49,44 +59,130 @@ Its directory is mode 0700 and must be the user's own. One JSON object per line:
 | `agents/send` `{id, text}`, `agents/stop` `{id}`, `agents/kill` `{id}` | `true` |
 | `agents/permission` `{id, request, option}` | `true` — the user's answer: the only way a permission is answered |
 | `agents/do` `{id, op, n?, text?, item?, reject?}` | `true`: `deliver-queue`, `unqueue`, `requeue`, `review` |
-| `coord/notify` (a notification: no id, no answer) | delivery runs now ([coordination.md](coordination.md)) |
+| `coord/notify` (a notification: no id, no answer) | delivery runs now ([coordination.md](coordination.md)), and the new events go out |
+| `events/since` `{since?, limit?}` | `{since, last, events: [...]}`: the events after `since` (0), oldest first, at most `limit` (200; at most 1000) |
 | `job/propose` `{plan, repo?, budget?, auto?}`, `job/approve` `{id, budget?}`, `job/stop` `{id}`, `job/resume` `{id, budget?}` | the job (`drgnx-job-summary`) |
 | `job/status` `{id?, decisions?}` | the job (with its decision log when `decisions` is true), or `{jobs: [...]}` |
 | `job/card` `{card, action, arg?}` | the job, after the user's action on a card (once: a settled card is an error) |
 | `job/reply` `{message, text}` | `true`: the user's answer to an agent's message |
+| `job/dismiss` `{message}` | `true`: the message is acted on without an answer (the badge stops counting it) |
 
-Errors: `{"id", "error": {"message"}}`. Snapshots and transcript entries travel as **printed Lisp** (`lisp`,
+Errors: `{"id", "error": {"message"}}`. A line that is not JSON is answered with an error too when its `"id"` can be
+read (otherwise it is dropped); a line over 1 MiB closes its connection. A client that reads slowly is never dropped for it: once its
+socket's buffer is full, `process-send-string` waits and runs timers and filters meanwhile, and what comes for that
+client then is queued and written in order after the write (`drgnx-hub--enqueue`, `drgnx-hub--drain`; a broadcast
+queues its event for every subscriber before it writes to any, so a newer event never reaches one before an older; never a write one level deeper, which
+would nest until `excessive-lisp-nesting` lands anywhere in the hub). A client that stopped reading (a suspended
+Emacs) is dropped (logged) when its queue passes `drgnx-hub-client-max-queued` (16 MiB), wherever its write is, or a
+write to it makes no progress for longer than `drgnx-hub-client-stuck-after` (10 s; checked also on the hub's tick,
+when nothing more comes for it). A line goes out 8 KB at a time (`drgnx-hub--piece`), each piece progress: a write that fills the client's
+socket waits 20 ms before Emacs tries again, and macOS's local sockets hold 8 KB (Linux's ~200 KB), so a snapshot of a
+few MB takes seconds there (the hub writes ~400 KB/s to a client on macOS) and must not count as a stopped client. Only
+the innermost write in progress is judged by time (`drgnx-hub--writing`): one beneath it cannot go on meanwhile, so it gets
+back the time each write above it took (only that: a stopped client beneath writes to others is still dropped); its Emacs
+connects again (the Agents module's idle timer, the job window's refresh) — meanwhile it shows the hub's sessions as
+ended.
+Snapshots and transcript entries travel as **printed Lisp** (`lisp`,
 `entries`): JSON would lose the difference between a symbol and a string in an entry; both ends are Emacs. Events: from the gateway `request` (job, task, agent, provider, model, status, input, output, cost), `fallback`
 (agent, from, to, why), `budget` (job, spent, budget); from jobs `card` (id, job, task, kind, title), `job` (id: its status, tasks or open cards changed) and `fallback` (job, task,
 agent, from, to, why); from sessions `agent` (id, seq, lisp — the snapshot) and
 `agent-entries` (id, seq, entries: [[index, lisp]…], the entries new or changed since the last time — entries change
 in place: chunks appended, tool calls updated), at most one of each per session per 50 ms; `lease-released` (task,
-agent, job).
+agent, job); `events` (below).
 
 **Mirrors** (`core/drgnx-agents-mirror.el`): the editing Emacs keeps a `drgnx-agent-session` per hub session (`remote`
 = its id) filled from these events; an action on a mirror goes to the hub (`drgnx-agents--remote`, never waiting).
 A new Emacs fetches each transcript once (`agents/get`, which answers the session's change number `seq`) and keeps
 the events that arrive meanwhile, then applies only those numbered after it — events and answers come on different
-connections, so their order is not given. A record that cannot be read (a session snapshot, a transcript entry) is
-skipped with a message; it never stops the records after it.
+connections, so their order is not given; a snapshot (`agent`) or entries numbered at or before what a mirror has are
+skipped, so an older snapshot never overwrites a newer one. A record that cannot be read (a session snapshot, a
+transcript entry), or that is not a list (a number, a string), is skipped with a message; it never stops the records
+after it.
 
 One hub per socket: a second finds the first answering `ping`, or holding the lock — `SOCKET.lock/`, a directory
-made atomically with the hub's pid — and exits with status 3 (a hub too busy to answer a ping keeps its socket). A
+made atomically with the hub's pid — and exits with status 3 (a hub too busy to answer a ping keeps its socket); a hub that cannot start for any other
+reason exits with status 1. A
 lock whose process is gone (or a zombie) is taken over. A hub removes its socket and lock when it stops, and only if
 the lock is still its own. Client side: `drgnx-hub-ensure` (start if needed; commands and the CLI only — it waits),
-`drgnx-hub-call` (asynchronous), `drgnx-hub-call-sync`, `drgnx-hub-connect` + `drgnx-hub-event-functions`. The unit
+`drgnx-hub-call` (asynchronous), `drgnx-hub-call-sync`, `drgnx-hub-connect` (one subscription, even when called
+again before the hub answers — up to `drgnx-hub-subscribe-deadline`, 5 s, after which an unanswered one is given up
+and the next call subscribes again; each new one hands over the keys this Emacs holds) + `drgnx-hub-event-functions`. The unit
 runner sets `DRGNX_NO_HUB_START=1`: a test never starts a hub that would outlive the suite unless it unsets it (the
-hub's own tests do, and stop what they start).
+hub's own tests do, and stop what they start). It also sets `DRGNX_HUB_PARENT_PID` to its own pid, which a hub
+inherits: a hub whose parent is gone exits (checked each second), so an interrupted run leaves none behind.
+
+## Events
+
+The hub turns what happens into events in the store's event log ([coordination.md](coordination.md), `event`):
+
+- **Native sessions** (`drgnx-hub--session-events`, on each change of a session):
+  - **its life:** `start` when the hub first sees it (data `:head`, the commit its folder is at, read from the
+    repository's files by `drgnx-job-git-head`, never a git process), `stop` when it exits;
+  - **its turns:** `start` and `stop` with data `(:turn t …)` — `:turn` first, so readers tell them from a life's
+    with a prefix test; the cockpit's life, `:stopped` and timeline leave them out;
+  - **edits:** an edit tool call it completed (`edit`: kind edit, delete or move, with the paths of its diffs, at most
+    100 then `:more N`), once per call, before the turn's `stop`. A write request is the edit when there is one — the
+    user accepts it (`agents/do` `review`; a rejected one is none) or a job's policy writes it — and the tool call an
+    adapter reports for the same write (claude-agent-acp's Write and Edit do) leaves out the paths this turn recorded
+    already: one `edit` per write. The scan starts at the first tool call that may still change, so a streamed turn
+    is not walked again on each chunk;
+  - **permissions:** a permission it asks (`question`, `:permission ID`) and its answer (`answer`, `:question EVENT-ID
+    :permission ID :by BY :option OPTION`): by `user` (the `agents/permission` request, a job's card:
+    `drgnx-hub-note-permission-answer`; the event's agent is then `user`), else by `drgnx` with no option — cancelled
+    (Stop) or dropped when the agent ended.
+- **Jobs** (`core/drgnx-job.el`): a reviewer's verdict (`review`, `:verdict pass` or `fail`, the reasons in the
+  summary; no data without a verdict); a merge into the job's branch (`status`, `:status "merged" :into job/ID`); a
+  write a job agent's policy allows (`edit`). A task's agent is registered (`drgnx-coord-agent-register`, kind `job`)
+  with its worktree, branch and `base`, the commit the worktree is at when it starts: the cockpit diffs its edits
+  against it (an agent that retries a task after a failed review starts from the earlier attempt's commits, so its
+  diff is the retry's own), and shows it as its job's agent only while the job is shown.
+- **Retention:** the hub's housekeeping (every 30 ticks, a minute) calls `drgnx-coord-events-prune-daily`: by age once
+  a day, and on every call the row cap (`drgnx-coord-event-max-rows`).
+
+Subscribers get them as `events` (`:since ID :last ID :events [{id, at, agent, job, task, kind, summary, data}…]`,
+`data` as printed Lisp, the text the store holds, never read and printed again — read it with `read-eval` off), at
+most one every `drgnx-hub-events-interval` (0.25 s) and 200 a time. The hub's session events and `coord/notify`
+schedule a broadcast at once; its tick (2 s) catches what other processes wrote and the job events above, which go out
+within those 2 s. Event ids are never reused (`autoincrement`), so a pruned log never sends an id twice. A new hub
+starts after the last event there is; a client catching up asks `events/since`. In an editor, the `test` events with
+counts reach the status bar (`drgnx-statusbar-note-tests`, when it is loaded) through `drgnx-hub--note-tests`, which
+`drgnx-hub-connect` adds to `drgnx-hub-event-functions` and `drgnx-hub-disconnect` removes.
+
+## Sessions across a restart
+
+On each change to a session the hub keeps `<state>/hub/sessions.eld` (mode 0600, written like registrations.eld,
+only when it differs): `(:id :name :profile :cwd :acp-id :task)` of each live session the agent made, oldest first —
+not a job's (a job frees the task of an agent the hub took with it and starts it again). A hub that starts, once it
+serves, resumes each with `drgnx-agents-take-over` (ACP `session/load`) under its own id and name (messages and
+spend follow them); a file that is not a list of sessions is logged and resumes none: the agent replays the
+history into the transcript and the session is idle; an editor that reconnects fetches it again (`agents/get`). A
+session whose agent cannot load sessions (no `loadSession`, or an error) ends and says why, and so leaves the file.
+What was in flight is gone: a turn that was running, the queue, a pending permission or edit.
 
 ## Registrations
 
 `gateway/register` returns a token of 64 hex digits (32 bytes of `/dev/urandom`). The hub keeps
-`<state>/hub/registrations.eld` (mode 0600): `((SHA256-OF-TOKEN . REGISTRATION)…)` — never a token, never a key — and
-reads it back when it starts; it also keeps the gateway's port (`<state>/hub/port`) and binds it again, so agents
+`<state>/hub/registrations.eld` (mode 0600): `((SHA256-OF-TOKEN . REGISTRATION)…)` — never a token, never a key —
+written to a temporary file beside it, synced to disk (`write-region-inhibit-fsync` nil; the directory is not
+synced, which Emacs cannot do) and renamed over it (a hub or a machine that dies mid-write leaves the old one whole), and
+reads it back when it starts (a file it cannot read is logged: those agents register again); it also keeps the gateway's port (`<state>/hub/port`) and binds it again, so agents
 keep working across a hub restart (when the port is taken meanwhile, a new one is used and the log says so). A
-session's token is unregistered when its agent exits or is killed. Keys sent in `keys` live in the hub's
-memory only (`drgnx-gateway-set-key`); after a restart they come again from the environment, quiet auth-source files,
-or the next command that registers.
+session's token is unregistered when its agent exits or is killed. Tokens have no expiry; instead a registration
+names its `owner`, the pid of the Emacs that registered it (`drgnx-agents--gateway` sends its own: the agent is its
+child, and a hub's own sessions are the hub's), and the hub drops those whose owner is gone (`drgnx-hub--alive-p`: a
+zombie counts as gone) when it starts and on each tick (2 s) — a crashed editor never unregisters its agents' tokens.
+A registration without an owner (kept before owners were) or with one that is not a pid stays until it is unregistered. A pid the system has given to a new process since
+keeps its registrations until that one ends too. The last key handed over for a provider wins: two editors with different keys for it (separate billing) swap
+the hub's on each reconnect. Keys sent in `keys` live in the hub's
+memory only (`drgnx-gateway-set-key`, and `drgnx-ai--keys` for the agents it starts), never in a file. `drgnx-hub-ensure` (a command, the CLI's `drgnx hub start`)
+hands the hub the keys its Emacs already holds, asking no one (`drgnx-hub--held-keys`: a provider's environment
+variable, else a key loaded this session), with `gateway/keys` after the hub answers, and `drgnx-hub-connect` does so again with each new subscription: a
+restarted hub has no key a command gave its predecessor (a `.gpg` one) until an editor connects again — the Agents
+module's idle timer looks every 30 s — and its requests until then fail over or answer "no key". The hub never looks a key up where that may ask
+(a `.gpg` file, the Keychain, a keyring): an agent it starts (`agents/start`, a job's, a resumed one) uses the keys
+editors handed over, its environment or quiet auth-source files (`drgnx-ai-key` without INTERACTIVE), and with none for
+any provider of its chain it does not start: "No key for openrouter in the drgnx hub: an editor hands its keys over
+when it connects (or run drgnx hub start where the key is set)".
 
 ## Forwarding
 
