@@ -746,6 +746,10 @@ for a timer. Load it with `(load (expand-file-name "test/fixtures/clock-fixture"
   by `run-at-time` are stamped by Emacs from the real clock; a `:before` advice on `timer--activate` moves them onto
   the virtual clock, so a timer made at virtual *v* with delay *d* is due at *v* + *d*, also after an advance (a delay
   of 2 ms or more is rounded to the millisecond: Emacs stamps the timer a few microseconds before the advice runs).
+  Before the lists are swapped, the macro advises and unadvises each primitive it advises once, on scratch lists: Emacs 31
+  compiles a native advice trampoline on the first `advice-add` of a primitive, and logging that compile arms
+  `undo-auto--boundary-timer`. That timer, and any like it armed during the body, is cancelled by the macro (it is
+  Emacs's, not the code under test's), so it never counts as pending.
   Nesting is an error. The times a test passes (`SECS` of advance and idle, `:input-at`) are snapped the same way: a
   number within a microsecond of a whole millisecond is that exact millisecond, so `run-at-time 0.3` then
   `drgnx-test-advance 0.3` always fires (0.3 is not exact in binary). `(float-time nil)` is the real time, `(float-time)`
