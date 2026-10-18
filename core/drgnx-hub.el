@@ -345,6 +345,8 @@ a pid.  How many went."
     ("job/reply" (drgnx-job-reply (plist-get params :message) (plist-get params :text)))
     ("job/dismiss"                                          ; a message that needs no answer: acted on, nothing sent
      (let ((m (or (drgnx-coord-message (plist-get params :message)) (error "No message %s" (plist-get params :message)))))
+       ;; only a job's own message to the user: an agent's message to another agent must still be delivered
+       (unless (and (equal (plist-get m :recipient) "user") (plist-get m :job)) (error "Not a message of a job to the user"))
        (drgnx-coord-mark (plist-get m :id) "acted")
        (drgnx-job--changed (plist-get m :job))
        t))
