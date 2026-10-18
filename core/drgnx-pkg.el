@@ -416,6 +416,9 @@ archive signs) before it enters the cache; the cached path.  Any failure is a `d
 (defun drgnx-pkg--unpack (desc file)
   "Install DESC from the package FILE into `package-user-dir' (byte-compiled; no native code yet).  A
 file that does not byte-compile is a warning (the package runs it uncompiled)."
+  ;; Loaded first: the wrapper below calls, and afterwards puts back, the real function.  Captured as an autoload,
+  ;; the first package's compile loads bytecomp, the autoload comes back and every later call fails (symbolp).
+  (require 'bytecomp)
   (with-temp-buffer
     (set-buffer-multibyte nil)
     (insert-file-contents-literally file)
