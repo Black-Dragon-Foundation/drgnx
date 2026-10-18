@@ -27,7 +27,7 @@ nobody trusted.  Buffers BODY opens are killed after it."
                   (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment)))
              (unwind-protect
                  (let ((trusted-content nil) (tramp-ignored-file-name-regexp nil)
-                       (ffap-machine-p-known 'ping))
+                       (ffap-machine-p-known 'ping) (remote-file-name-inhibit-auto-save-visited nil))
                    (drgnx-trust-mode 1)
                    (unwind-protect (progn ,@body) (drgnx-trust-mode -1)))
                (dolist (b (buffer-list))
@@ -315,15 +315,22 @@ connects) goes on, anything else returns its first argument."
       (drgnx-trust-mode -1)
       (should (eq ffap-machine-p-known 'accept)))
     (drgnx-trust-mode 1)
-    ;; not set by drgnx, pinned at Emacs's defaults and reported (auto-save-visited-mode, off in drgnx, would save
-    ;; remote files: its inhibit option defaults to nil on 30.2 and 31.1)
+    ;; auto-save-visited-mode, if the user turns it on, never saves remote files (Emacs's default, nil, would)
+    (should (eq remote-file-name-inhibit-auto-save-visited t))
+    (drgnx-trust-mode -1)
+    (should-not remote-file-name-inhibit-auto-save-visited)
+    (let ((remote-file-name-inhibit-auto-save-visited 'yes))   ; a value the user set stays
+      (drgnx-trust-mode 1)
+      (should (eq remote-file-name-inhibit-auto-save-visited 'yes))
+      (drgnx-trust-mode -1)
+      (should (eq remote-file-name-inhibit-auto-save-visited 'yes)))
+    (drgnx-trust-mode 1)
+    ;; not set by drgnx, pinned at Emacs's defaults and reported
     (should-not enable-remote-dir-locals)
     (should-not auto-revert-remote-files)
-    (should-not remote-file-name-inhibit-auto-save-visited)
-    (should-not auto-save-visited-mode)
     (let ((s (drgnx-trust-guards-status)))
       (should (equal (list (plist-get s :enable-remote-dir-locals) (plist-get s :auto-revert-remote-files)
                            (plist-get s :remote-file-name-inhibit-auto-save-visited))
-                     '(nil nil nil))))))
+                     '(nil nil t))))))
 
 ;;; trust-test.el ends here

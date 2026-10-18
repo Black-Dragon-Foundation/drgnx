@@ -294,6 +294,18 @@ its files.  Kept in drgnx's state (trusted-folders.eld)."
          (when (eq ffap-machine-p-known 'reject) (setq ffap-machine-p-known 'ping))
          (setq drgnx-trust--ffap-set nil))))
 
+(defvar drgnx-trust--auto-save-set nil
+  "drgnx set `remote-file-name-inhibit-auto-save-visited' to t (from its default, nil).")
+
+(defun drgnx-trust--auto-save-guard (on)
+  "Set (ON non-nil) `remote-file-name-inhibit-auto-save-visited' to t while it is at its default, so that
+`auto-save-visited-mode', if the user turns it on, never saves a remote file; put the default back after."
+  (cond ((and on (null remote-file-name-inhibit-auto-save-visited))
+         (setq remote-file-name-inhibit-auto-save-visited t drgnx-trust--auto-save-set t))
+        ((and (not on) drgnx-trust--auto-save-set)
+         (when (eq remote-file-name-inhibit-auto-save-visited t) (setq remote-file-name-inhibit-auto-save-visited nil))
+         (setq drgnx-trust--auto-save-set nil))))
+
 ;;;; The mode, and what other parts of drgnx ask
 
 (define-minor-mode drgnx-trust-mode
@@ -304,6 +316,7 @@ its files.  Kept in drgnx's state (trusted-folders.eld)."
         (drgnx-trust--add (append (drgnx-trust--builtin) (drgnx-trust-folders)))
         (drgnx-trust--tramp-guard t)
         (drgnx-trust--ffap-guard t)
+        (drgnx-trust--auto-save-guard t)
         ;; eglot's diagnostics come from a language server, not from running the file: safe on every build
         (function-put 'eglot-flymake-backend 'flymake-always-safe t)
         (if (featurep 'flymake) (drgnx-trust--flymake-guard) (eval-after-load 'flymake #'drgnx-trust--flymake-guard))
@@ -316,6 +329,7 @@ its files.  Kept in drgnx's state (trusted-folders.eld)."
         (dolist (b (buffer-list)) (with-current-buffer b (drgnx-trust--update))))
     (drgnx-trust--tramp-guard nil)
     (drgnx-trust--ffap-guard nil)
+    (drgnx-trust--auto-save-guard nil)
     (advice-remove 'flymake--run-backend #'drgnx-trust--flymake-run-backend)
     (remove-hook 'before-hack-local-variables-hook #'drgnx-trust--drop-shorthands)
     (advice-remove 'compilation-get-file-structure #'drgnx-trust--compile-file-args)
@@ -330,9 +344,10 @@ its files.  Kept in drgnx's state (trusted-folders.eld)."
 :mode — `drgnx-trust-mode'; :tramp — drgnx's part of `tramp-ignored-file-name-regexp' is there; :flymake —
 `emacs' (this Emacs checks trust itself), `drgnx' (drgnx's check), `on-load' (added when Flymake loads) or nil;
 :eglot-safe — eglot's backend runs in untrusted buffers; :shorthands, :compile — those guards are on;
-:ffap — `ffap-machine-p-known' is `reject'; :enable-remote-dir-locals, :auto-revert-remote-files,
-:remote-file-name-inhibit-auto-save-visited — those settings, as they are (drgnx does not set them; Emacs's
-defaults are nil); :trusted — `trusted-content'."
+:ffap — `ffap-machine-p-known' is `reject'; :remote-file-name-inhibit-auto-save-visited — that setting (drgnx
+sets t while it is at its default); :enable-remote-dir-locals, :auto-revert-remote-files — those settings, as
+they are (drgnx does not set them; Emacs's defaults, nil, keep them off remote files); :trusted —
+`trusted-content'."
   (list :mode drgnx-trust-mode
         :tramp (and (stringp (bound-and-true-p tramp-ignored-file-name-regexp))
                     (string-search drgnx-trust-tramp-ignored-regexp tramp-ignored-file-name-regexp) t)

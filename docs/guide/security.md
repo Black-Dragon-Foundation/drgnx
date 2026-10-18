@@ -51,6 +51,8 @@ shorthands come back, without reopening them.
 - **Host names in text.** `ffap` (find file at point) never pings a host name it finds in text
   (`ffap-machine-p-known` is set to `reject` while you leave it at its default). Emacs's own defaults already keep
   directory-local variables and auto-revert away from remote files; drgnx leaves them as they are.
+- **Auto-saving remote files.** If you turn on `auto-save-visited-mode`, it saves local files only:
+  `remote-file-name-inhibit-auto-save-visited` is set to t while you leave it at its default (nil).
 
 ## When something you trust is held back
 
