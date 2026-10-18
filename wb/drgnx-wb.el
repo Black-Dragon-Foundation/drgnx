@@ -15,6 +15,7 @@
 (require 'seq)
 (require 'drgnx-signal)
 (require 'drgnx-modules-helpers)
+(require 'drgnx-state-intent)
 
 (defcustom drgnx-wb-dock-columns 32
   "Width of the left dock, in columns, the first time it shows (later: the width it had)."
@@ -131,9 +132,10 @@ It is `explorer' unless another view with sections was chosen (a stale choice fa
           (funcall fn w))))))
 
 (defun drgnx-wb-hide-sidebar ()
-  "Hide the left dock, remembering its pixel width for the next show."
+  "Hide the left dock, remembering its pixel width for the next show.
+The width is noted `:by auto' (`drgnx-state-note-intent'): a width you chose is kept instead."
   (when-let* ((windows (drgnx-wb--dock-windows)))
-    (set-frame-parameter nil 'drgnx-wb-dock-px (window-pixel-width (car windows)))
+    (drgnx-state-note-intent nil :sizes 'left (window-pixel-width (car windows)) :by 'auto)
     (when (memq (selected-window) windows) (drgnx-wb-focus-editor))
     (dolist (w windows) (when (window-live-p w) (delete-window w)))))
 
@@ -151,10 +153,10 @@ sidebar is shown first.  A view with no sections is a `user-error' and changes n
   (let ((in-dock (memq (selected-window) (drgnx-wb--dock-windows))))
     (unless (and (eq view (drgnx-wb-sidebar-view)) (drgnx-wb-sidebar-showing-p))
       (when-let* ((windows (drgnx-wb--dock-windows)))
-        (set-frame-parameter nil 'drgnx-wb-dock-px (window-pixel-width (car windows)))
+        (drgnx-state-note-intent nil :sizes 'left (window-pixel-width (car windows)) :by 'auto)
         (when in-dock (drgnx-wb-focus-editor))
         (dolist (w windows) (when (window-live-p w) (delete-window w))))
-      (set-frame-parameter nil 'drgnx-wb-view view)
+      (drgnx-state-note-intent nil :view nil view)            ; who asked: the running write's, or the default
       (drgnx-wb-show-sidebar)
       (when-let* ((_ in-dock) (w (car (drgnx-wb--dock-windows))))
         (select-window w)))))
