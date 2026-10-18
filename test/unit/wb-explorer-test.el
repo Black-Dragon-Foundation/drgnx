@@ -366,6 +366,28 @@
         (should (directory-files trash nil "README" t))
         (should-not (member '(1 "README.md") (drgnx-explorer-test--rows)))))))
 
+(ert-deftest drgnx-explorer/the-gio-trash-ends-by-refreshing-the-explorer-from-any-buffer ()
+  ;; A-40: the sentinel runs in whatever buffer is current; the rows it refreshes are the Explorer's buffer-local ones.
+  (drgnx-explorer-test--with root
+    (let* ((bin (make-temp-file "drgnx-gio" t)) (script (expand-file-name "gio" bin))
+           (file (expand-file-name "README.md" root)) (other (generate-new-buffer " *drgnx-other*")))
+      (unwind-protect
+          (progn
+            (with-temp-file script (insert "#!/bin/sh\nrm -- \"$3\"\n"))     ; `gio trash -- PATH'
+            (set-file-modes script #o755)
+            (should (member '(1 "README.md") (drgnx-explorer-test--rows)))
+            (let ((exec-path (cons bin exec-path)))
+              (with-current-buffer other (should (drgnx-explorer--gio-trash file))))
+            (let ((deadline (+ (float-time) 10)))
+              (while (and (seq-some (lambda (p) (string-prefix-p "drgnx-gio-trash" (process-name p))) (process-list))
+                          (< (float-time) deadline))
+                (drgnx-run-ert-drain-events)             ; a queued file-notify event would hold the sentinel back
+                (sit-for 0.05)))                          ; the sentinel has run when its process is gone
+            (should-not (file-exists-p file))
+            (should-not (member '(1 "README.md") (drgnx-explorer-test--rows))))
+        (kill-buffer other)
+        (delete-directory bin t)))))
+
 (ert-deftest drgnx-explorer/copy-cut-paste ()
   (drgnx-explorer-test--with root
     (drgnx-explorer-test--answering nil
