@@ -107,7 +107,9 @@ memory cap, no lower priority) — wrap it yourself if you need that, for exampl
 
 `path` is not limited to the server's own project: the agent can search **any git project of yours that already has an
 index** (read-only — the tool never indexes and never edits; a project without an index is an error result). Give an
-agent the server only if it may read the indexed code of all your projects.
+agent the server only if it may read the indexed code of all your projects. A sandboxed job agent's server is the
+exception: the hub pins it to the job's project, so a `path` outside that project is an error result, and any path
+inside it searches the project itself.
 
 The answer is the text `query` prints: one `PATH:LINE: first line` per hit, and a last line `note: …` when the answer is
 partial. With no index the tool returns an error result — "no index for ROOT — run `drgnx search index ROOT` or Search:

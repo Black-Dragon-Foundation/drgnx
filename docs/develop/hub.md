@@ -170,9 +170,13 @@ A sandboxed session's agent reaches drgnx's MCP servers through a dir of its own
   `drgnx-hub--private-dir`: mode 0700, this user's, never a link. SID is a name (letters, digits, `-`, `_`), never a
   path. A socket's path there must fit 103 bytes, or there is no dir.
 - **Sockets.** `(drgnx-sandbox-mcp-open S &optional SEARCH)` listens on `mcp.sock` (coordination) and, when SEARCH
-  is given, on `search.sock`. SEARCH is the project's root; for a snapshot job pass the repository, never the task
-  folder, because the search server runs git in its root. It sets S's `mcp-dir` and returns the dir. `hub.sock` is
-  kept in the same dir for the hub protocol's agent class, which is not served yet.
+  is given, on `search.sock`. SEARCH is the job's project root, given by name and spelled as its index is: a value
+  that is not a string, or a root that is S's folder or lies inside it, is an error, because the search server runs
+  git in its root and nothing outside the sandbox runs git in a task folder. The search server is **pinned** to that
+  root (`DRGNX_SEARCH_PINNED=1`): a `path` argument outside it is refused, and one inside it searches the root, so
+  no git runs where the agent points and no other project's index is read (`drgnx-search-mcp--pinned-root`). It sets
+  S's `mcp-dir` and returns the dir. `hub.sock` is kept in the same dir for the hub protocol's agent class, which is
+  not served yet.
 - **One server per connection, outside the sandbox.** The hub starts the server of `drgnx-coord-mcp-server-spec`
   (or `drgnx-search-mcp-server-spec`) as a child of its own. Its environment is the hub's, with `DRGNX_AGENT` = S's
   id, `DRGNX_JOB` and `DRGNX_TASK` = S's, and the data-dir variables set from the spec. The hub's own

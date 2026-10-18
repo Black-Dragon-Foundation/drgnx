@@ -679,10 +679,10 @@ so no `_meta' at all, for any other."
   "The `mcpServers' S's agent gets: the coordination tools, as S's name, and the search tool for S's project when
 agents.eld asks for it (`drgnx-agents-mcp-names').  A sandboxed session (its `mcp-dir' set by
 `drgnx-sandbox-mcp-open') gets bridges to its own sockets instead: the hub runs the servers outside, as S."
-  (if (drgnx-agent-session-mcp-dir s)
-      (progn (require 'drgnx-sandbox-mcp)
-             (vconcat (drgnx-sandbox-mcp-server-specs s (drgnx-sandbox-mcp-inside-dir s))))
-    (drgnx-agents--stdio-mcp-servers s)))
+  (vconcat (if (drgnx-agent-session-mcp-dir s)
+               (progn (require 'drgnx-sandbox-mcp)
+                      (drgnx-sandbox-mcp-server-specs s (drgnx-sandbox-mcp-inside-dir s)))
+             (drgnx-agents--stdio-mcp-servers s))))
 
 (defun drgnx-agents--close-mcp (s)
   "S's agent is gone: its own MCP sockets close and their servers end (`drgnx-sandbox-mcp-close')."

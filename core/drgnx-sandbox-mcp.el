@@ -73,20 +73,30 @@ it would pass 103 bytes.  Returned without a trailing slash."
   "The hub's processes for session SID: listeners, connections, servers and their stderr pipes."
   (seq-filter (lambda (p) (equal (process-get p :drgnx-sandbox-mcp) sid)) (process-list)))
 
+(defun drgnx-sandbox-mcp--search-root (s search)
+  "SEARCH as the root S's search server is pinned to (a true name), or an error: it must be an existing directory
+given by name — the job's project — and never S's folder nor inside it.  The search server runs git in its root,
+and nothing outside the sandbox runs git in a task folder."
+  (unless (stringp search) (error "The search root is the job's project, given by name: not %S" search))
+  (let ((root (directory-file-name (file-truename (expand-file-name search))))
+        (cwd (directory-file-name (file-truename (drgnx-agent-session-cwd s)))))
+    (unless (file-directory-p root) (error "The search root %s is not a directory" root))
+    (when (string-prefix-p (file-name-as-directory cwd) (file-name-as-directory root))
+      (error "The search root %s is the session's own folder or inside it: give the job's project" root))
+    root))
+
 (defun drgnx-sandbox-mcp-open (s &optional search)
   "Serve drgnx's MCP servers to session S through its own dir (`drgnx-sandbox-mcp-dir'), and return the dir.
-The hub listens on mcp.sock there, and on search.sock when SEARCH is non-nil: SEARCH is the project's root (a
-string), or S's own folder for any other value.  For a snapshot job, pass the repository: the search server runs
-git in its root, and nothing outside the sandbox runs git in a task folder.  Sets S's `mcp-dir', so its agent
+The hub listens on mcp.sock there, and on search.sock when SEARCH is given: the job's project root, to which the
+search server is pinned (`drgnx-sandbox-mcp--search-root' says what is refused).  Sets S's `mcp-dir', so its agent
 gets bridges to these sockets (`drgnx-agents--mcp-servers').  An S already open is closed first."
   (drgnx-sandbox-mcp-close s)
-  (let ((dir (drgnx-sandbox-mcp-dir (drgnx-agent-session-id s))))
+  (let ((root (and search (drgnx-sandbox-mcp--search-root s search)))
+        (dir (drgnx-sandbox-mcp-dir (drgnx-agent-session-id s))))
     (condition-case err
         (progn
           (drgnx-sandbox-mcp--listen s dir "mcp.sock" 'coord)
-          (when search
-            (drgnx-sandbox-mcp--listen s dir "search.sock"
-                                       (expand-file-name (if (stringp search) search (drgnx-agent-session-cwd s)))))
+          (when root (drgnx-sandbox-mcp--listen s dir "search.sock" root))
           (setf (drgnx-agent-session-mcp-dir s) dir))
       (error (setf (drgnx-agent-session-mcp-dir s) dir)
              (drgnx-sandbox-mcp-close s)
@@ -146,14 +156,18 @@ to call again."
 
 (defun drgnx-sandbox-mcp--start (conn)
   "Start CONN's server outside the sandbox, its identity set from the session alone: the spec's variables, and no
-DRGNX_AGENT, DRGNX_AGENT_KIND, DRGNX_JOB or DRGNX_TASK of the hub's own.  It works in the session's dir, never in
-the task folder: the coordination server runs git where it starts."
-  (let* ((spec (drgnx-sandbox-mcp--spec (process-get conn :session) (process-get conn :serves)))
+DRGNX_AGENT, DRGNX_AGENT_KIND, DRGNX_JOB or DRGNX_TASK of the hub's own.  A search server is pinned to its root
+\(DRGNX_SEARCH_PINNED: `drgnx-search-mcp--call').  It works in the session's dir, never in the task folder: the
+coordination server runs git where it starts."
+  (let* ((serves (process-get conn :serves))
+         (spec (drgnx-sandbox-mcp--spec (process-get conn :session) serves))
          (sid (process-get conn :drgnx-sandbox-mcp))
          (default-directory (file-name-as-directory (process-get conn :dir)))
          (process-environment (append (mapcar (lambda (e) (concat (plist-get e :name) "=" (plist-get e :value)))
                                               (plist-get spec :env))
-                                      '("DRGNX_AGENT" "DRGNX_AGENT_KIND" "DRGNX_JOB" "DRGNX_TASK")   ; unset
+                                      (and (stringp serves) '("DRGNX_SEARCH_PINNED=1"))
+                                      '("DRGNX_AGENT" "DRGNX_AGENT_KIND" "DRGNX_JOB" "DRGNX_TASK" ; unset
+                                        "DRGNX_SEARCH_PINNED")
                                       process-environment))
          (err (make-pipe-process :name (format "drgnx-sandbox-mcp %s stderr" sid) :noquery t :coding 'binary
                                  :filter #'ignore :sentinel #'ignore))

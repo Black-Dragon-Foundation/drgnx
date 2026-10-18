@@ -13,20 +13,23 @@
 (defvar drgnx-sandbox-mcp-test--id 0)
 
 (defmacro drgnx-sandbox-mcp-test--with (&rest body)
-  "BODY with ROOT a temporary dir holding the environment's HOME, runtime, data and state dirs, and A and B two
-sessions of job j (tasks 1 and 2).  Both are closed after."
+  "BODY with ROOT a temporary dir holding the environment's HOME, runtime, data and state dirs, REPO a project in
+HOME, TREE a task folder in it, and A and B two sessions of job j (tasks 1 and 2) working in TREE.  Both are closed
+after."
   (declare (indent 0))
   `(let* ((root (directory-file-name (file-truename (make-temp-file "drgnx-sbm" t))))
+          (repo (concat root "/home/repo")) (tree (concat repo "/.claude/worktrees/j-1"))
           (process-environment (append (list (concat "HOME=" root "/home") (concat "XDG_RUNTIME_DIR=" root "/run")
                                              (concat "XDG_STATE_HOME=" root "/state") (concat "DRGNX_DATA_DIR=" root "/data")
                                              (concat "DRGNX_CONFIG_DIR=" root "/config"))
                                        process-environment))
           (drgnx-work-db--handles nil)
-          (a (drgnx-agents--make :id "s-aaaa0001" :name "a" :cwd (concat root "/home") :job "j" :task "1"))
-          (b (drgnx-agents--make :id "s-bbbb0002" :name "b" :cwd (concat root "/home") :job "j" :task "2")))
+          (a (drgnx-agents--make :id "s-aaaa0001" :name "a" :cwd tree :job "j" :task "1"))
+          (b (drgnx-agents--make :id "s-bbbb0002" :name "b" :cwd tree :job "j" :task "2")))
      (unwind-protect
          (progn
            (dolist (d '("/home" "/run" "/data" "/state" "/config")) (make-directory (concat root d) t))
+           (make-directory tree t)
            (drgnx-coord-job-create :id "j" :tasks '((:n 1 :title "one") (:n 2 :title "two")))
            ,@body)
        (drgnx-sandbox-mcp-close a)
@@ -80,6 +83,25 @@ sessions of job j (tasks 1 and 2).  Both are closed after."
   (seq-filter (lambda (p) (and (process-live-p p) (eq (process-type p) 'real)
                                (equal (process-get p :drgnx-sandbox-mcp) (drgnx-agent-session-id s))))
               (process-list)))
+
+(defun drgnx-sandbox-mcp-test--fake-git (root)
+  "`process-environment' with a git first on PATH that only notes where it ran (`pwd -P', in ROOT/git-ran)."
+  (let ((bin (concat root "/bin")))
+    (make-directory bin t)
+    (write-region (format "#!/bin/sh\npwd -P >> '%s/git-ran'\nexit 128\n" root) nil (concat bin "/git") nil 'silent)
+    (set-file-modes (concat bin "/git") #o755)
+    (cons (concat "PATH=" bin path-separator (getenv "PATH")) process-environment)))
+
+(defun drgnx-sandbox-mcp-test--git-ran (root)
+  "The dirs the fake git ran in, oldest first."
+  (let ((file (concat root "/git-ran")))
+    (and (file-exists-p file)
+         (split-string (with-temp-buffer (insert-file-contents file) (buffer-string)) "\n" t))))
+
+(defun drgnx-sandbox-mcp-test--call (p tool args)
+  "Call TOOL with ARGS on P: (TEXT . IS-ERROR)."
+  (let ((r (plist-get (drgnx-sandbox-mcp-test--rpc p "tools/call" (list :name tool :arguments args)) :result)))
+    (cons (plist-get (aref (plist-get r :content) 0) :text) (plist-get r :isError))))
 
 (defun drgnx-sandbox-mcp-test--environ (pid)
   "PID's environment (Linux /proc), or nil where it cannot be read."
@@ -179,7 +201,7 @@ sessions of job j (tasks 1 and 2).  Both are closed after."
 
 (ert-deftest drgnx-sandbox-mcp/close-removes-everything ()
   (drgnx-sandbox-mcp-test--with
-    (let* ((dir (drgnx-sandbox-mcp-open a (concat root "/home")))
+    (let* ((dir (drgnx-sandbox-mcp-open a repo))
            (c (drgnx-sandbox-mcp-test--connect (expand-file-name "mcp.sock" dir))))
       (should (drgnx-sandbox-mcp-test--whoami c))
       (should (drgnx-sandbox-mcp-test--servers a))
@@ -220,7 +242,7 @@ sessions of job j (tasks 1 and 2).  Both are closed after."
 
 (ert-deftest drgnx-sandbox-mcp/search-only-when-asked ()
   (drgnx-sandbox-mcp-test--with
-    (let ((da (drgnx-sandbox-mcp-open a)) (db (drgnx-sandbox-mcp-open b (concat root "/home"))))
+    (let ((da (drgnx-sandbox-mcp-open a)) (db (drgnx-sandbox-mcp-open b repo)))
       (should-not (file-exists-p (expand-file-name "search.sock" da)))
       (should (equal (mapcar (lambda (e) (plist-get e :name)) (drgnx-sandbox-mcp-server-specs a "/run/drgnx")) '("drgnx")))
       (should (file-exists-p (expand-file-name "search.sock" db)))
@@ -233,6 +255,47 @@ sessions of job j (tasks 1 and 2).  Both are closed after."
              (r (drgnx-sandbox-mcp-test--rpc c "initialize" (list :protocolVersion "2025-06-18" :capabilities (make-hash-table)
                                                                   :clientInfo (list :name "t" :version "1")))))
         (should (equal (plist-get (plist-get (plist-get r :result) :serverInfo) :name) "drgnx-search"))
-        (should (member (concat root "/home") (process-command (car (drgnx-sandbox-mcp-test--servers b)))))))))
+        (should (member repo (process-command (car (drgnx-sandbox-mcp-test--servers b)))))))))
+
+(ert-deftest drgnx-sandbox-mcp/search-path-pinned ()
+  (drgnx-sandbox-mcp-test--with
+    ;; the root is the project, given: never the task folder, nor anything in it
+    (should-error (drgnx-sandbox-mcp-open a t))
+    (should-error (drgnx-sandbox-mcp-open a tree))
+    (should-error (drgnx-sandbox-mcp-open a (concat tree "/sub")))
+    (should-not (drgnx-agent-session-mcp-dir a))
+    (let* ((other (concat root "/home/other"))
+           (process-environment (drgnx-sandbox-mcp-test--fake-git root))
+           (dir (progn (make-directory other t) (drgnx-sandbox-mcp-open a repo)))
+           (c (drgnx-sandbox-mcp-test--connect (expand-file-name "search.sock" dir))))
+      ;; a `path' outside the root is refused; one inside searches the root
+      (let ((r (drgnx-sandbox-mcp-test--call c "search" (list :query "x" :path other))))
+        (should (cdr r))
+        (should (string-match-p "outside" (car r))))
+      (let ((r (drgnx-sandbox-mcp-test--call c "search" (list :query "x" :path tree))))
+        (should (string-match-p (regexp-quote repo) (car r))))
+      ;; and git ran neither in the other project nor in the task folder
+      (should-not (seq-find (lambda (d) (not (equal d repo))) (drgnx-sandbox-mcp-test--git-ran root))))))
+
+(ert-deftest drgnx-sandbox-mcp/job-hello-keeps-the-hubs-row ()
+  (drgnx-sandbox-mcp-test--with
+    ;; as `drgnx-job--launch-task' registers a job's agent
+    (drgnx-coord-agent-register :id "s-aaaa0001" :kind "job" :name "a" :cwd tree :worktree tree :branch "job/j-1"
+                                :base "abc1234")
+    (let* ((process-environment (drgnx-sandbox-mcp-test--fake-git root))
+           (c (drgnx-sandbox-mcp-test--connect (expand-file-name "mcp.sock" (drgnx-sandbox-mcp-open a))))
+           (r (drgnx-sandbox-mcp-test--call c "hello" (list :cwd "/" :branch "evil" :name "someone else")))
+           (hello (json-parse-string (car r) :object-type 'plist :null-object nil)))
+      (should-not (cdr r))
+      (should (equal (plist-get hello :agent) "s-aaaa0001"))
+      (should (equal (plist-get hello :cwd) tree))
+      (should (equal (plist-get hello :base) "abc1234"))
+      (let ((row (drgnx-coord-agent "s-aaaa0001")))
+        (should (equal (list (plist-get row :cwd) (plist-get row :worktree) (plist-get row :branch) (plist-get row :base)
+                             (plist-get row :name))
+                       (list tree tree "job/j-1" "abc1234" "a"))))
+      ;; its edits are the task folder's
+      (should-not (cdr (drgnx-sandbox-mcp-test--call c "report_edit" (list :paths (vector (concat tree "/a.el"))))))
+      (should-not (drgnx-sandbox-mcp-test--git-ran root)))))
 
 ;;; sandbox-mcp-test.el ends here
