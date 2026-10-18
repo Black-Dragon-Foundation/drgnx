@@ -715,8 +715,9 @@ be read."
 gets, from the sentinel, ((:file :added :removed :status new|modified|deleted)…), (:too-large BYTES) when git's
 list of changed or untracked files passes `drgnx-cockpit-diff-max-bytes' (git is ended then), or (:error MESSAGE).
 Only regular files inside the folder are listed (`drgnx-cockpit--file-ok'): never a device, FIFO, socket or a link out
-of it.  At most `drgnx-cockpit-changed-files-max' are checked, those of them that may be shown listed, then (:more N)
-for the rest; untracked files' lines are counted until `drgnx-cockpit-count-bytes-max' bytes are read (after that
+of it; those refused are counted, as (:refused N), so that a change is never taken for none.  At most
+`drgnx-cockpit-changed-files-max' are checked, those of them that may be shown listed, then (:more N) for the rest;
+untracked files' lines are counted until `drgnx-cockpit-count-bytes-max' bytes are read (after that
 :added is nil)."
   (let ((dir (plist-get source :dir)) (paths (plist-get source :paths)))
     (if (not (stringp dir))
@@ -740,7 +741,7 @@ DIR is local (git ran there) and the names are git's own, relative to it: no fil
   (let* ((file-name-handler-alist nil)
          (truedir (file-name-as-directory (file-truename dir)))
          (known (make-hash-table :test #'equal)) (new (make-hash-table :test #'equal)) (memo (make-hash-table :test #'equal))
-         (budget drgnx-cockpit-count-bytes-max) (checked 0) (out nil))
+         (budget drgnx-cockpit-count-bytes-max) (checked 0) (refused 0) (out nil))
     (dolist (f files) (puthash (plist-get f :file) t known))
     (let ((extra nil))
       (dolist (f untracked)
@@ -756,9 +757,10 @@ DIR is local (git ran there) and the names are git's own, relative to it: no fil
                 (when (and size (<= size budget))
                   (setq budget (- budget size))
                   (plist-put f :added (drgnx-cockpit--lines abs)))))
-            (push f out)))))
+            (push f out))
+          (unless ok (setq refused (1+ refused))))))
     ;; the rest only counted (not checked one by one)
-    (nconc (nreverse out) (and files (list (list :more (length files)))))))
+    (nconc (nreverse out) (and (> refused 0) (list (list :refused refused))) (and files (list (list :more (length files)))))))
 
 (defun drgnx-cockpit-file-diff (source file callback)
   "Ask git, asynchronously, for FILE's diff in SOURCE (`drgnx-cockpit-edit-source') against its base — an untracked

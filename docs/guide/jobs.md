@@ -150,20 +150,32 @@ the job's branch:
 - `review` (the default): its reviewer's pass, as above.
 - `review+accept`: the pass, then every file its agent changed accepted by you. Until then the task waits on you
   with a `review` card: "waiting on your review: N of M files accepted". **Open its edits** shows the agent's edits
-  ([cockpit.md](cockpit.md#an-agents-edits)), where `a` accepts a file. Once every file is accepted the task is
-  merged, within the hub's next tick (2 s).
+  ([cockpit.md](cockpit.md#an-agents-edits)), where `a` accepts a file. Once every file is accepted and its
+  worktree is clean, the task is merged, within the hub's next tick (2 s).
 
 The details:
 
-- **Which files.** The files are the ones its edits show: what its agent changed against where its worktree started,
-  committed or not, new files too.
+- **Which files.** The files are the ones its edits show: what the task changed against where its worktree started.
+  Every agent of the task counts, not only the last one. The task's first base is kept with the job, and every
+  later agent (Back to an agent, a fall-back, a reassign) is compared with it. Its edits show the same files, and
+  marks are per agent: accept them again in the new agent's edits.
+- **A clean worktree.** Only commits are merged, so the task merges only when its worktree has nothing uncommitted
+  or untracked (`git status` is empty). A file you reverted in its edits, or a new file nobody committed, makes the
+  card say "its worktree has uncommitted changes": commit or discard them, or use **Merge as it is**.
 - **What counts as accepted.** A file counts only while it is unchanged since you accepted it: the mark's hash must
   be the hash of the file's diff now. A file changed again (a new commit in the task's branch) needs accepting again.
-- **When files cannot be checked.** A file whose diff the edits cannot show (too large, not a regular file) cannot
-  be accepted. Neither can a task with more changed files than `drgnx-cockpit-changed-files-max`. For those, use
-  **Merge as it is**.
+  A renamed file is its old name deleted and its new name added: accept the new name, and a deleted file too.
+- **When files cannot be checked.** Some files count but can never be accepted, so the task waits:
+  - a file the edits refuse to show (a link out of the worktree, a dangling link, a submodule);
+  - a file whose diff is too large to show;
+  - the files past `drgnx-cockpit-changed-files-max`.
+
+  A task whose edits show no file at all never merges by itself either. For all of these, use **Merge as it is**.
 - **Your other actions.** Accepting never merges by itself, and the card's other actions stay yours: **Merge as it
   is** (merge now, whatever is accepted), **Back to an agent**, **Drop the task**.
+- **Checked again.** The card looks again on the hub's tick when a mark, the task's commit, its index or its
+  worktree folder changes, and every 5 s while the worktree is not clean. Just before it merges, it checks that
+  nothing changed since the look.
 
 A job keeps the gate it was proposed with: the hub runs it, and it does not read your `config.el`. **Start Job from
 Plan…** and **Start as Job** take your option with them. `drgnx job propose` gives the hub's default, `review`.

@@ -59,6 +59,20 @@
         (should (equal (plist-get (drgnx-coord-card cid) :state) "settled"))
         (should (equal (drgnx-job-run-test--status id 2) "ready"))
         (should (equal (alist-get t2 (plist-get (plist-get (drgnx-coord-job id) :data) :profiles) nil nil #'equal) "mock2")))
+      ;; a task in review is not reassigned (its reviewer would answer for another agent's work), and a verdict for a
+      ;; task no longer in review is ignored: nothing merges
+      (drgnx-coord-force-status t2 "in-review" nil)
+      (should-error (drgnx-job-cockpit-test--call "job/reassign" :task t2 :profile "mock2"))
+      (drgnx-coord-force-status t2 "ready" nil)
+      (drgnx-job--reviewed id t2 'pass)
+      (should-not (gethash t2 drgnx-job--busy))
+      (should (equal (drgnx-job-run-test--status id 2) "ready"))
+      ;; a reason is bounded and cleaned: no control or bidi characters reach the store or the cockpit
+      (drgnx-job-cockpit-test--call "job/block" :task t2 :reason (concat "a\e[31mb‮c\tz" (make-string 10000 ?x)))
+      (let ((why (alist-get t2 (plist-get (plist-get (drgnx-coord-job id) :data) :blocked) nil nil #'equal)))
+        (should (<= (length why) 500))
+        (should (string-prefix-p "a [31mb c z" why))
+        (should-not (string-match-p "[[:cntrl:]‪-‮⁦-⁩]" why)))
       ;; a finished task is not reassigned, blocked or moved
       (drgnx-coord-force-status t2 "done" nil)
       (should-error (drgnx-job-cockpit-test--call "job/reassign" :task t2 :profile "mock"))
@@ -79,7 +93,12 @@
       ;; a task with no needs is a job of one task; a number the plan does not have is an error
       (should (equal (mapcar (lambda (task) (plist-get task :n)) (drgnx-coord-tasks (plist-get (drgnx-job-cockpit-test--call "job/start-task" :plan plan :n 2) :id)))
                      '(2)))
-      (should-error (drgnx-job-cockpit-test--call "job/start-task" :plan plan :n 9)))))
+      (should-error (drgnx-job-cockpit-test--call "job/start-task" :plan plan :n 9))
+      ;; no task number (or not a whole one) is an error, never the whole plan
+      (let ((jobs (length (drgnx-coord-jobs))))
+        (should-error (drgnx-job-cockpit-test--call "job/start-task" :plan plan))
+        (should-error (drgnx-job-cockpit-test--call "job/start-task" :plan plan :n 4.0))
+        (should (= (length (drgnx-coord-jobs)) jobs))))))
 
 (ert-deftest drgnx-job-cockpit/plan-files-are-never-written ()
   (drgnx-job-run-test--with drgnx-job-cockpit-test--five
@@ -154,11 +173,65 @@ show (`drgnx-cockpit-edit-source', `drgnx-cockpit-file-diff'), or HASH."
       (drgnx-job-cockpit-test--accept agent "second.txt")
       (should (drgnx-job-run-test--wait (lambda () (string-search "1 of 2" (plist-get (drgnx-job-cockpit-test--gate-card id) :title))) 15))
       (should-not (equal (drgnx-job-run-test--status id 1) "done"))
-      ;; every file accepted: it merges
+      ;; a rename and a delete: the old name goes, the new one and the deleted file are to accept
+      (drgnx-job-run-test--git tree "mv" "second.txt" "renamed.txt")
+      (drgnx-job-run-test--git tree "rm" "-q" "README")
+      (drgnx-job-run-test--git tree "commit" "-q" "-m" "rename and delete")
+      (should (drgnx-job-run-test--wait (lambda () (string-search "0 of 3" (plist-get (drgnx-job-cockpit-test--gate-card id) :title))) 15))
+      (drgnx-job-cockpit-test--accept agent "renamed.txt")
+      (drgnx-job-cockpit-test--accept agent "README")
+      (should (drgnx-job-run-test--wait (lambda () (string-search "2 of 3" (plist-get (drgnx-job-cockpit-test--gate-card id) :title))) 15))
+      ;; every file accepted, but the worktree has a change no commit holds: nothing merges
+      (write-region "scratch\n" nil (concat tree "scratch.txt") nil 'silent)
+      (drgnx-job-cockpit-test--accept agent "scratch.txt")
       (drgnx-job-cockpit-test--accept agent "task.txt")
-      (should (drgnx-job-run-test--wait (lambda () (equal (drgnx-job-run-test--status id 1) "done")) 20))
+      (should (drgnx-job-run-test--wait (lambda () (let ((title (plist-get (drgnx-job-cockpit-test--gate-card id) :title)))
+                                                     (and (string-search "4 of 4" title) (string-search "uncommitted" title))))
+                                        15))
+      (should-not (equal (drgnx-job-run-test--status id 1) "done"))
+      ;; the worktree clean again, every file accepted: it merges
+      (delete-file (concat tree "scratch.txt"))
+      (should (drgnx-job-run-test--wait (lambda () (equal (drgnx-job-run-test--status id 1) "done")) 30))
       (should-not (drgnx-job-cockpit-test--gate-card id))
       (should (string-search (format "Merge %s#1" id) (drgnx-job-run-test--git repo "log" "--format=%s" (concat "job/" id)))))))
+
+(ert-deftest drgnx-job-cockpit/gate-counts-every-agent-of-the-task ()
+  ;; a second agent of the task (back to an agent, a fall-back, a reassign) is registered with the task's first base:
+  ;; the gate counts every agent's commits; a file the edits cannot show counts and is never accepted
+  (drgnx-job-run-test--with "# One\n\n### Task 1: first\n"
+    (let* ((drgnx-job-max-agents 0)
+           (id (plist-get (drgnx-job-cockpit-test--call "job/propose" :plan plan :gate "review+accept") :id))
+           (tid (concat id "#1")) (tree nil) (base nil) (a nil) (b nil))
+      (drgnx-job-approve id)
+      (drgnx-coord-job-set id :status "paused")        ; its agents get no prompt: the test makes their commits
+      (setq tree (drgnx-job--task-tree id 1))
+      (drgnx-job--git repo "worktree" "add" "-q" "-b" (format "job/%s-1" id) tree (concat "job/" id))
+      (setq base (drgnx-job-git-head tree))
+      (drgnx-job--launch-task id (drgnx-coord-task tid))
+      (setq a (plist-get (drgnx-coord-task tid) :agent))
+      (should (equal (plist-get (drgnx-coord-agent a) :base) base))
+      (write-region "a\n" nil (concat tree "a.txt") nil 'silent)
+      (drgnx-job-run-test--git tree "add" "a.txt")
+      (drgnx-job-run-test--git tree "commit" "-q" "-m" "a")
+      (drgnx-job--launch-task id (drgnx-coord-task tid) "mock")
+      (setq b (plist-get (drgnx-coord-task tid) :agent))
+      (should-not (equal a b))
+      (should (equal (plist-get (drgnx-coord-agent b) :base) base))   ; not the HEAD at its launch
+      (write-region "b\n" nil (concat tree "b.txt") nil 'silent)
+      (write-region "outside\n" nil (concat root "outside.txt") nil 'silent)
+      (make-symbolic-link (concat root "outside.txt") (concat tree "key"))
+      (drgnx-job-run-test--git tree "add" "b.txt" "key")
+      (drgnx-job-run-test--git tree "commit" "-q" "-m" "b")
+      (dolist (s drgnx-agents--sessions) (ignore-errors (drgnx-agents-kill s)))
+      (drgnx-coord-job-set id :status "running")
+      (let ((cid (drgnx-job--card id tid "review" "waiting on your review" nil (list :gate t :agent b))))
+        (drgnx-job--gate-check id cid)
+        (should (drgnx-job-run-test--wait (lambda () (string-search "0 of 3" (plist-get (drgnx-coord-card cid) :title))) 15))
+        (drgnx-job-cockpit-test--accept b "a.txt")
+        (drgnx-job-cockpit-test--accept b "b.txt")
+        (should (drgnx-job-run-test--wait (lambda () (string-search "2 of 3" (plist-get (drgnx-coord-card cid) :title))) 15))
+        (should (equal (plist-get (drgnx-coord-card cid) :state) "open"))
+        (should-not (equal (drgnx-job-run-test--status id 1) "done"))))))
 
 (ert-deftest drgnx-job-cockpit/gate-merge-as-it-is-stays-the-user-s ()
   (drgnx-job-run-test--with "# One\n\n### Task 1: first\n"

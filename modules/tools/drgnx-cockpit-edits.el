@@ -467,7 +467,7 @@ then diff the new ones, FILES and those whose counts moved."
   (if-let* ((err (plist-get r :error)))
       (progn (drgnx-cockpit-edits--show-note (format "cannot list its changes: %s" err))
              (drgnx-cockpit-edits--finish))
-    (let* ((entries (seq-remove (lambda (e) (plist-get e :more)) r))
+    (let* ((entries (seq-filter (lambda (e) (plist-get e :file)) r))   ; not (:more N) or (:refused N)
            (names (mapcar (lambda (e) (plist-get e :file)) entries))
            (todo nil))
       (setq drgnx-cockpit-edits--more (or (seq-some (lambda (e) (plist-get e :more)) r) 0))

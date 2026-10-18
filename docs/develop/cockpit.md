@@ -97,6 +97,8 @@ before, a folder whose HEAD could not be read), the job branch's fork point (`gi
   `(:too-large BYTES)` or `(:error MSG)`.
   - It checks at most `drgnx-cockpit-changed-files-max` (500) files and lists those of them it may show, then
     `(:more N)` for the rest, so its sentinel stays bounded however many files are refused.
+  - The checked files it refuses to show (`drgnx-cockpit--file-ok`) are counted as `(:refused N)` before `(:more N)`:
+    the edits pane ignores both, and the merge gate counts them as files that can never be accepted.
   - Each of git's two lists is capped at `drgnx-cockpit-diff-max-bytes` (1 MB) while git writes; past it the answer is
     `(:too-large BYTES)`. A silent worktree whose list is too large is still found, with `:changed` nil.
   - The names on `--summary` lines, which git C-quotes even under `-z` (a quote, a backslash, a control character),

@@ -359,7 +359,8 @@ a pid.  How many went."
        (drgnx-job-summary id)))
     ;; Start as Job (the Work graph): task N of a plan and the tasks it needs, proposed — the plan is only read
     ("job/start-task"
-     (let ((id (drgnx-job-propose (plist-get params :plan) :only (plist-get params :n) :gate (drgnx-hub--value (plist-get params :gate)))))
+     (let ((id (progn (unless (natnump (plist-get params :n)) (error "job/start-task wants n, a task's number"))   ; never the whole plan
+                      (drgnx-job-propose (plist-get params :plan) :only (plist-get params :n) :gate (drgnx-hub--value (plist-get params :gate))))))
        (when (and (eq (plist-get params :auto) t) (equal (plist-get (drgnx-coord-job id) :status) "proposed"))
          (drgnx-job-approve id))
        (drgnx-job-summary id)))

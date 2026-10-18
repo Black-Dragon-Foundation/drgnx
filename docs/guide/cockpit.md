@@ -98,9 +98,11 @@ proposed.
 
 - **Reassign Task…** (`R`): a job's task goes to an agent of the profile you pick, from now on. When an agent
   works on it, or it waits on you with a card, that agent ends and its card is settled: the task is ready for a
-  new agent, as a card's Retry does. A task not started yet just starts on that profile. Its fall-back profiles are
+  new agent, as a card's Retry does. A task not started yet just starts on that profile. A task in review is refused until
+  its review is over: its reviewer would otherwise answer about the next agent's work. Its fall-back profiles are
   the ones after it on its role's route ([jobs.md](jobs.md#routes-and-the-estimate)), none when it is not on the route.
-- **Mark Blocked / Unblock** (`b`): asks why, then no agent starts on the task until you unblock it. An agent
+- **Mark Blocked / Unblock** (`b`): asks why (kept as one line of at most 500 characters; control and bidi-control
+  characters become spaces), then no agent starts on the task until you unblock it. An agent
   already working on it goes on. The graph shows the state `blocked`, and What needs you lists the task as blocked.
 - **Run Earlier / Run Later** (`M-<up>`, `M-<down>`): moves the task one place in its job's run order, among the
   tasks not done. When more tasks are ready than `drgnx-job-max-agents`, the earlier ones get agents first. The

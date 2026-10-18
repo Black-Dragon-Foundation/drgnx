@@ -398,7 +398,9 @@
     (let ((src (list :dir wt-a :base sha)) files diffs)
       (drgnx-cockpit-changed-files src (lambda (r) (setq files (list r))))
       (should (drgnx-cockpit-fixture-wait (lambda () files)))
-      (should (equal (sort (mapcar (lambda (f) (plist-get f :file)) (car files)) #'string<) '("README" "big.txt" "new.txt")))
+      (should (equal (sort (delq nil (mapcar (lambda (f) (plist-get f :file)) (car files))) #'string<) '("README" "big.txt" "new.txt")))
+      ;; …but counted: the merge gate must not take them for no change
+      (should (<= 2 (or (seq-some (lambda (f) (plist-get f :refused)) (car files)) 0) 3))   ; zero, key (git may skip the FIFO)
       (let ((drgnx-cockpit-diff-max-bytes 200))
         (dolist (f '("zero" "key" "pipe" "../../../../secret.txt" "big.txt" "README"))
           (drgnx-cockpit-file-diff src f (lambda (r) (push (cons f r) diffs))))
