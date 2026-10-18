@@ -770,8 +770,11 @@ visibility), `drgnx-state-frame-size` (`(:cols :lines :width :height)`).
 kind (a dock's section, an editor's layouts pane or editor kind; an area's front tab only through its buffer) —
 allocating nothing (about 3.5 µs on a 7-window frame, byte-compiled). A frame it has a record of is not classified
 again (only its parent and its life can change, and `terminal-name` makes a string). Only on a difference does it
-take the record anew. Every record replaced, by an observation or by `drgnx-state-use-editor`, goes through one
-internal function, `drgnx-state--put`; records are never changed in place. While it runs, a change made meanwhile
+take the record anew. A frame that has just become the selected frame, with its windows unchanged, keeps its record
+and emits `selected-changed` (Events, below). Only the mode's hooks see a frame switch: a sync or a write may run
+inside `with-selected-frame` (a restore per frame), and the frame it selects for a moment is not the user's. Every record replaced, by an observation or by
+`drgnx-state-use-editor`, goes through one internal function, `drgnx-state--put`; records are never changed in
+place. While it runs, a change made meanwhile
 waits for the next observation. `drgnx-state-mode` (global; `core/workbench` turns
 it on) runs it from five named functions: the default value of `window-state-change-functions` (any change from
 any source, before the frame is drawn), `post-command-hook` at depth −90 (the selected frame, even when redisplay
@@ -789,13 +792,59 @@ redisplay: batch tests call `drgnx-state-sync`. Writes run inside `(drgnx-state-
 `drgnx-state--writing` is `(:by BY)` while BODY runs, and FRAME is observed at the end. BY defaults to
 `drgnx-state-default-by`: `user` inside a command, `auto` outside.
 
+**Events.** `(drgnx-state-subscribe EVENT FN :lane LANE)` calls FN with a plist when EVENT happens;
+`drgnx-state-unsubscribe` stops it. FN is a named function: a lambda is refused, so it can be removed and named in
+reports. Each (EVENT FN) pair is subscribed once; subscribing it on the other lane moves it. Called from a module's
+setup, the subscription records its undo, "state subscription EVENT FN". The undo removes FN only if it was not
+subscribed before, and only while it is still on that lane; two modules may be torn down in either order
+(`drgnx-module--claim`). The events are diffed where a record is replaced (`drgnx-state--put`, after the new record
+is stored), so an observation and `drgnx-state-use-editor` both emit them. An event nobody subscribes to is not
+computed. In one observation they go out in this order; `frame-removed` comes on its own:
+
+| Event | When | Data |
+|---|---|---|
+| `frame-added` | a `gui` or `tty` frame is first recorded | `:frame :kind` |
+| `frame-kind` | its kind, `drgnx-frame-role` or `drgnx-monitor` changed (seen at `drgnx-state-sync`) | `:frame :old :new`, each `(:kind :role :monitor)` |
+| `frame-resized` | its text columns or lines, or its pixel size, changed | `:frame :old :new`, each `(:cols :lines :width :height)` |
+| `windows-changed` | a window came or went, or shows another buffer or role | `:frame :windows` |
+| `groups-changed` | editor windows came or went | `:frame :added :removed` |
+| `pane-hidden` | a pane kind stopped showing in a window: its window went, an area's front tab changed, a dock shows another section | `:frame :kind :window :cause :by` |
+| `pane-shown` | a pane kind started showing in a window (a kind moved to a new window is hidden, then shown) | `:frame :kind :window :cause :by` |
+| `pane-resized` | the edges of a pane's window or an editor window changed | `:frame :window :kind :old :new :cause :by` (edges `(LEFT TOP WIDTH HEIGHT)`) |
+| `selected-changed` | the frame's selected window changed, or the frame became the selected frame | `:frame :window :old-window :old-frame` |
+| `editor-changed` | the frame's MRU editor window, or its buffer, changed (`C-x o` between two windows of one buffer too) | `:frame :window :buffer :old-window :old-buffer` |
+| `frame-removed` | the frame's record went (`delete-frame-functions`, or it is no workbench frame any more); the frame is still live | `:frame` |
+
+A frame's first record emits `frame-added`, then everything it shows as new: `windows-changed`, `groups-changed`,
+`pane-shown`, `selected-changed`, `editor-changed`.
+
+**`:cause` and `:by`** say who changed a pane. `write` with `:by` from the write (`user`, `auto`, `layout`,
+`restore`, `teardown`, `other`; `drgnx-state-with-write`). `user` with `:by user`: a command in
+`drgnx-state-user-resize-commands` (a user option; a mouse drag on a divider is that command's own loop, so every
+step observed during it counts). Else `other` with `:by` nil: Emacs fitting a popup, the minibuffer growing, the
+window manager resizing the frame, a package.
+
+**Two lanes.** `now` (`:lane 'now`) calls FN inside the observation, possibly during redisplay, before the frame
+is drawn: for cheap reactions only. It may update a mode line, set a window parameter (chrome), start or cancel a
+timer, or choose the editor (`drgnx-state-use-editor`, which emits its own `editor-changed`). It never moves a
+window, scans buffers or calls a process. A change it makes waits for the next observation, and the jank guard
+counts a window it moves. `idle` (the default) queues the call: one per FN, event, frame and kind (the data's
+`:kind`), with the last data. One one-shot idle timer (`drgnx-signal-delay`, 0.05 s) makes them, oldest first; the
+handler reads the records then. Every call binds `inhibit-interaction`, so a subscriber that prompts gets an error.
+An error is recorded in `drgnx-signal-errors` as `"EVENT FN: message"` (newest first, at most 20), never raised.
+Subscribers of one event run in subscription order.
+
 **The fixture** (`test/fixtures/state-fixture.el`): `(drgnx-test-with-state BODY…)` runs BODY with a fresh store
 and bus and the store's hooks off. It saves every bound variable listed in `drgnx-state-test--variables` (the
-store's tables, `drgnx-signal--subscribers`, `--state`, `--posted`, `--timer`, `--editor-window`,
-`drgnx-signal-errors`) and restores them with `set` afterwards, never `let`; timers are cancelled on the way in and
-out. A task that adds store or bus state adds its variable there. `(drgnx-test-use-editor WINDOW)` makes WINDOW
+store's tables, its subscribers, idle queue and timer, `drgnx-signal--subscribers`, `--state`, `--posted`,
+`--timer`, `--editor-window`, `drgnx-signal-errors`) and restores them with `set` afterwards, never `let`; timers are
+cancelled on the way in and out. A batch test delivers the idle lane by calling `drgnx-state--deliver-idle`. A task that adds store or bus state adds its variable there. `(drgnx-test-use-editor WINDOW)` makes WINDOW
 the MRU editor through `drgnx-state-use-editor` (and, until the bus reads the store, sets
-`drgnx-signal--editor-window`). Tests never set bus internals by hand. Test: `test/unit/wb-state-test.el`.
+`drgnx-signal--editor-window`). Tests never set bus internals by hand. Tests: `test/unit/wb-state-test.el`, `test/unit/wb-state-events-test.el`
+(one per event, the lanes, `:cause`); the terminal tier's `test/tty/state-test.el` (a split made by a timer is seen
+with no command run; two clients: per-frame editors, a resized terminal); the GUI tier's `test/ui/state-ui-test.el`
+(with `now` subscribers on, splits, `C-x o`, a popup and a frame resize leave no jank-guard entry from the store; a
+minibuffer-only frame is no workbench frame).
 
 ## Tests
 
