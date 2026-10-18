@@ -96,7 +96,7 @@ test_batch_emacs() { # SIGPIPE ignored, as the hub runs (tests serve one in-proc
 test_batch() { run_in_tmp test_batch_emacs; }
 
 env_eval() { # FORM — evaluate with harness/drgnx-env.el loaded, print the result
-  "$(emacs_bin)" --batch -Q -L "$here/harness" -l drgnx-env --eval "(princ (or $1 \"\"))"
+  "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -l drgnx-env --eval "(princ (or $1 \"\"))"
 }
 
 test_container() { # [--ui] — the batch (or GUI) tier inside a fedora:45 / Emacs 31.1 container
@@ -187,42 +187,72 @@ client() { # emacsclient to drgnx's server ($DRGNX_SERVER_NAME, default drgnx); 
   "$(emacsclient_bin)" -a false -s "${DRGNX_SERVER_NAME:-drgnx}" "$@"
 }
 
-open_wait() { # seconds to wait for a starting daemon: $DRGNX_OPEN_WAIT, default 30 (a cold start natively compiles)
+open_wait_init() { # OPEN_WAIT: seconds to wait for a starting daemon, $DRGNX_OPEN_WAIT, default 30 (a cold start natively compiles)
+  [[ -z "${OPEN_WAIT:-}" ]] || return 0
   local w="${DRGNX_OPEN_WAIT:-30}"
-  if [[ "$w" =~ ^[0-9]+$ ]] && ((w > 0)); then printf '%s' "$w"; else printf 30; fi
+  if [[ "$w" =~ ^[0-9]+$ ]] && ((10#$w > 0)); then OPEN_WAIT=$((10#$w))     # 10#: "08" is eight, not a bad octal
+  else echo "drgnx: DRGNX_OPEN_WAIT must be a whole number of seconds above 0, not '$w': using 30" >&2; OPEN_WAIT=30; fi
+}
+
+probe() { # emacsclient for a question to the daemon: it answers within 5 s or it counts as not answering
+  client --timeout=5 "$@"
 }
 
 open_lock() { # one `drgnx open' at a time decides whether to start the daemon and open a window (a mkdir lock)
-  local wait stale i since lock="${XDG_STATE_HOME:-$HOME/.local/state}/drgnx/open-${DRGNX_SERVER_NAME:-drgnx}.lock"
+  local stale deadline token since owner nostamp="" lock="${XDG_STATE_HOME:-$HOME/.local/state}/drgnx/open-${DRGNX_SERVER_NAME:-drgnx}.lock"
   mkdir -p "${lock%/*}" 2>/dev/null || return 0     # nowhere to keep a lock: go on without
-  wait="$(open_wait)"; stale=$((wait > 25 ? wait + 5 : 30))   # a holder is done within the wait; older: its owner is gone
-  for ((i = 0; i < stale * 10 + 50; i++)); do
-    if mkdir "$lock" 2>/dev/null; then date +%s >"$lock/since"; OPEN_LOCK="$lock"; return 0; fi
-    since="$(cat "$lock/since" 2>/dev/null || true)"
-    if { [[ "$since" =~ ^[0-9]+$ ]] && (($(date +%s) - since > stale)); } || ((i == stale * 10)); then
-      mv "$lock" "$lock.stale.$$" 2>/dev/null && rm -rf "$lock.stale.$$"     # one winner among those who find it stale
+  open_wait_init
+  stale=$((OPEN_WAIT + 15))                         # a holder is done within the wait; older: its owner is gone
+  deadline=$((SECONDS + stale + 10))
+  token="$$.$RANDOM$RANDOM"
+  while ((SECONDS < deadline)); do
+    if mkdir "$lock" 2>/dev/null; then
+      printf '%s\n' "$token" >"$lock/owner"; date +%s >"$lock/since"
+      OPEN_LOCK="$lock" OPEN_TOKEN="$token"; return 0
+    fi
+    since="$(cat "$lock/since" 2>/dev/null || true)" owner="$(cat "$lock/owner" 2>/dev/null || true)"
+    if [[ "$since" =~ ^[0-9]+$ ]]; then
+      nostamp=""
+      if (($(date +%s) - since > stale)); then open_steal "$lock" "$owner"; fi
+    else   # made a moment ago, or its owner died before stamping it: stale after 5 s without a stamp
+      [[ -n "$nostamp" ]] || nostamp=$SECONDS
+      if ((SECONDS - nostamp >= 5)); then open_steal "$lock" "$owner"; nostamp=""; fi
     fi
     sleep 0.1
   done
 }
 
-open_unlock() { if [[ -n "${OPEN_LOCK:-}" ]]; then rm -rf "$OPEN_LOCK"; OPEN_LOCK=""; fi; }
+open_steal() { # LOCK OWNER — remove a stale lock, but only the one seen (OWNER's); a fresh lock made meanwhile stays
+  local lock="$1" owner="$2" grab="$1.stale.$$"
+  mv "$lock" "$grab" 2>/dev/null || return 0         # one winner among those who find it stale
+  if [[ "$(cat "$grab/owner" 2>/dev/null || true)" == "$owner" ]]; then rm -rf "$grab" || true
+  elif [[ ! -e "$lock" ]] && mv "$grab" "$lock" 2>/dev/null; then :   # someone's fresh lock: put it back
+  else rm -rf "$grab" || true; fi
+}
+
+open_unlock() { # only the lock this command made: a stolen one is another command's now
+  if [[ -n "${OPEN_LOCK:-}" ]]; then
+    if [[ "$(cat "$OPEN_LOCK/owner" 2>/dev/null || true)" == "${OPEN_TOKEN:-}" ]]; then rm -rf "$OPEN_LOCK" || true; fi
+    OPEN_LOCK=""
+  fi
+}
 
 open_ensure_window() { # drgnx's daemon is running and has a window; under the lock, so two opens make one of each
-  local i
-  client -e t >/dev/null 2>&1 || open_start || return 1
-  if [[ "$(client -e '(drgnx-session-gui-frame-p)' 2>/dev/null)" != t ]]; then
+  local deadline
+  probe -e t >/dev/null 2>&1 || open_start || return 1
+  if [[ "$(probe -e '(drgnx-session-gui-frame-p)' 2>/dev/null)" != t ]]; then
     client -n -c >/dev/null || return 1
-    for ((i = 0; i < 50; i++)); do   # -n returns before the window exists: the next open must see it
-      [[ "$(client -e '(drgnx-session-gui-frame-p)' 2>/dev/null)" == t ]] && break
+    deadline=$((SECONDS + 10))
+    while ((SECONDS < deadline)); do   # -n returns before the window exists: the next open must see it
+      [[ "$(probe -e '(drgnx-session-gui-frame-p)' 2>/dev/null)" == t ]] && break
       sleep 0.1
     done
   fi
 }
 
-open_start() { # start drgnx's daemon (the systemd unit when it is enabled), wait for its server (open_wait)
-  local name="${DRGNX_SERVER_NAME:-drgnx}" log i wait
-  wait="$(open_wait)"
+open_start() { # start drgnx's daemon (the systemd unit when it is enabled), wait for its server (OPEN_WAIT seconds)
+  local name="${DRGNX_SERVER_NAME:-drgnx}" log deadline notice noticed=""
+  open_wait_init
   if [[ "$name" == drgnx ]] && command -v systemctl >/dev/null 2>&1 && systemctl --user is-enabled --quiet drgnx 2>/dev/null; then
     systemctl --user start drgnx || return 1
   else
@@ -236,12 +266,15 @@ open_start() { # start drgnx's daemon (the systemd unit when it is enabled), wai
            "$(emacs_bin)" --bg-daemon="$name" --init-directory="$here/init" </dev/null >>"$log" 2>&1
     fi
   fi
-  for ((i = 0; i < wait * 10; i++)); do
-    client -e t >/dev/null 2>&1 && return 0
-    if ((i == wait * 10 / 3)); then echo "drgnx: drgnx is still starting (waiting up to $wait s)…" >&2; fi
+  deadline=$((SECONDS + OPEN_WAIT)) notice=$((SECONDS + OPEN_WAIT / 3))   # wall-clock seconds: a poll takes more than its sleep
+  while ((SECONDS < deadline)); do
+    probe -e t >/dev/null 2>&1 && return 0
+    if [[ -z "$noticed" ]] && ((SECONDS >= notice)); then
+      echo "drgnx: drgnx is still starting (waiting up to $OPEN_WAIT s)…" >&2; noticed=1
+    fi
     sleep 0.1
   done
-  echo "drgnx: drgnx did not start within $wait s (its messages: ${log:-journalctl --user -u drgnx}; try: drgnx doctor)" >&2
+  echo "drgnx: drgnx did not start within $OPEN_WAIT s (its messages: ${log:-journalctl --user -u drgnx}; try: drgnx doctor)" >&2
   return 1
 }
 
@@ -252,7 +285,7 @@ elisp_string() { # $1 as the inside of an Emacs Lisp string literal
 
 open_check() { # CI: start the daemon if needed, print its Emacs version, stop it again if this started it
   local started="" out i
-  if ! client -e t >/dev/null 2>&1; then open_start || return 1; started=1; fi
+  if ! probe -e t >/dev/null 2>&1; then open_start || return 1; started=1; fi
   if ! out="$(client -e '(emacs-version)' 2>&1)"; then
     echo "drgnx: drgnx's server did not answer: $out" >&2
     [[ -n "$started" ]] && client -e '(kill-emacs)' >/dev/null 2>&1
@@ -261,7 +294,7 @@ open_check() { # CI: start the daemon if needed, print its Emacs version, stop i
   out="${out#\"}"; printf '%s\n' "${out%\"}"
   if [[ -n "$started" ]]; then
     client -e '(kill-emacs)' >/dev/null 2>&1 || true
-    for ((i = 0; i < 50; i++)); do client -e t >/dev/null 2>&1 || return 0; sleep 0.1; done
+    for ((i = 0; i < 50; i++)); do probe -e t >/dev/null 2>&1 || return 0; sleep 0.1; done
     echo "drgnx: the daemon this started did not stop" >&2; return 1
   fi
 }
@@ -285,7 +318,7 @@ cmd_open() { # [--check] [--wait] [PATH…] — open PATHs (none: the windows as
     echo "drgnx: open --wait opens files, not folders: it returns when you are done with them (C-x #)" >&2; return 2
   fi
   OPEN_LOCK=""
-  trap open_unlock EXIT; trap 'exit 130' INT TERM    # the lock never outlives this command
+  trap open_unlock EXIT; trap 'exit 130' INT TERM; trap 'exit 129' HUP    # the lock never outlives this command
   open_lock
   if [[ -n "$wait" && "$(uname -s)" != Darwin && -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
     client -e t >/dev/null 2>&1 || open_start || return 1

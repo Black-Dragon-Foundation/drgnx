@@ -154,13 +154,14 @@ logging to PATHLOG), CONFIG (a DRGNX_CONFIG_DIR) and ENV (the environment lists 
 
 (defun drgnx-bin-test--open-fakes (dir pathdir)
   "Fake `emacs', `emacsclient' and `systemctl' in PATHDIR.  State files in DIR: running (the server
-answers), gui (a window is open), enabled (the systemd unit is), delay (seconds the daemon takes to answer
+answers), gui (a window is open), enabled (the systemd unit is), slow-probe (each `-e t' takes 0.3 s), delay (seconds the daemon takes to answer
 once started, or `never'; absent: at once).  emacsclient logs each call to
 client.log, one line per call, every argument followed by \\037; emacs and systemctl log theirs."
   (let ((f (lambda (name) (shell-quote-argument (expand-file-name name dir)))))
     (dolist (spec `(("emacsclient"
                      ,(format "printf '%%s\\037' \"$@\" >> %s; echo >> %s
 for a in \"$@\"; do last=\"$a\"; [ \"$a\" = -c ] && c=1; done
+[ \"$last\" = t ] && [ -f \"${0%%/*}/../slow-probe\" ] && sleep 0.3
 if [ -n \"$c\" ]; then
   if [ -f %s ]; then (sleep 0.5; touch %s) >/dev/null 2>&1 & else touch %s; fi
 fi
@@ -211,6 +212,10 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
   "An emacsclient call to the test's server with ARGS, as the fake logs it."
   (append (list "-a" "false" "-s" drgnx-bin-test--server) args))
 
+(defun drgnx-bin-test--p (&rest args)
+  "A question to the test's server with ARGS: an emacsclient call that gives up after 5 s."
+  (apply #'drgnx-bin-test--c "--timeout=5" args))
+
 (defconst drgnx-bin-test--load-keys "(progn (require 'drgnx-ai) (drgnx-ai-load-keys-soon))"
   "What `drgnx open' asks the daemon after raising its window: the AI keys, once per daemon (from a timer).")
 
@@ -225,8 +230,8 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
       (let ((drgnx-bin-test--cwd dir))
         (should (equal (drgnx-bin-test--call drgnx-bin-test--bin env "open" "My Project/café.py" "sub") '(0 . ""))))
       (should (equal (drgnx-bin-test--client-calls dir)
-                     (list (drgnx-bin-test--c "-e" "t")
-                           (drgnx-bin-test--c "-e" "(drgnx-session-gui-frame-p)")
+                     (list (drgnx-bin-test--p "-e" "t")
+                           (drgnx-bin-test--p "-e" "(drgnx-session-gui-frame-p)")
                            (drgnx-bin-test--c "-n" "-e" "(drgnx-session-raise)")
                            (drgnx-bin-test--c "-n" "-e" drgnx-bin-test--load-keys)
                            (drgnx-bin-test--c "-n" "--" file)
@@ -238,10 +243,10 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
       (let ((drgnx-bin-test--cwd dir))
         (drgnx-bin-test--call drgnx-bin-test--bin env "open" "My Project/café.py"))
       (should (equal (drgnx-bin-test--client-calls dir)
-                     (list (drgnx-bin-test--c "-e" "t")
-                           (drgnx-bin-test--c "-e" "(drgnx-session-gui-frame-p)")
+                     (list (drgnx-bin-test--p "-e" "t")
+                           (drgnx-bin-test--p "-e" "(drgnx-session-gui-frame-p)")
                            (drgnx-bin-test--c "-n" "-c")
-                           (drgnx-bin-test--c "-e" "(drgnx-session-gui-frame-p)")   ; it waits for the window
+                           (drgnx-bin-test--p "-e" "(drgnx-session-gui-frame-p)")   ; it waits for the window
                            (drgnx-bin-test--c "-n" "-e" "(drgnx-session-raise)")
                            (drgnx-bin-test--c "-n" "-e" drgnx-bin-test--load-keys)
                            (drgnx-bin-test--c "-n" "--" file)))))))
@@ -255,12 +260,12 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
                            (expand-file-name "init" drgnx-bin-test--root))))
     (should (string-empty-p (drgnx-bin-test--slurp (expand-file-name "systemctl.log" dir))))
     (let ((calls (drgnx-bin-test--client-calls dir)))
-      (should (equal (car calls) (drgnx-bin-test--c "-e" "t")))
+      (should (equal (car calls) (drgnx-bin-test--p "-e" "t")))
       ;; polled until the server answers, then: no window yet, so one is made — restore only (no path)
-      (should (equal (seq-remove (lambda (c) (equal c (drgnx-bin-test--c "-e" "t"))) calls)
-                     (list (drgnx-bin-test--c "-e" "(drgnx-session-gui-frame-p)")
+      (should (equal (seq-remove (lambda (c) (equal c (drgnx-bin-test--p "-e" "t"))) calls)
+                     (list (drgnx-bin-test--p "-e" "(drgnx-session-gui-frame-p)")
                            (drgnx-bin-test--c "-n" "-c")
-                           (drgnx-bin-test--c "-e" "(drgnx-session-gui-frame-p)")   ; it waits for the window
+                           (drgnx-bin-test--p "-e" "(drgnx-session-gui-frame-p)")   ; it waits for the window
                            (drgnx-bin-test--c "-n" "-e" "(drgnx-session-raise)")
                            (drgnx-bin-test--c "-n" "-e" drgnx-bin-test--load-keys)))))))
 
@@ -335,6 +340,88 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
       (should (eql 0 (car (drgnx-bin-test--call drgnx-bin-test--bin env "open"))))
       (should (equal (drgnx-bin-test--slurp log) "earlier start\nfake daemon started\n")))))
 
+(defun drgnx-bin-test--lock (dir)
+  (expand-file-name (format "state/drgnx/open-%s.lock" drgnx-bin-test--server) dir))
+
+(ert-deftest drgnx-bin/open-waits-count-seconds-not-polls ()
+  ;; Each poll costs its sleep and a client call (0.3 s here): 20 polls would be 8 s, not the 2 s asked for.
+  (drgnx-bin-test--with-open
+    (write-region "never" nil (expand-file-name "delay" dir))
+    (drgnx-bin-test--touch dir "slow-probe")
+    (let* ((start (float-time))
+           (r (drgnx-bin-test--call drgnx-bin-test--bin (cons "DRGNX_OPEN_WAIT=2" env) "open")))
+      (should (eql 1 (car r)))
+      (should (string-search "did not start within 2 s" (cdr r)))
+      (should (< (- (float-time) start) 4.5)))))
+
+(ert-deftest drgnx-bin/open-wait-is-decimal-and-a-bad-value-is-refused ()
+  (drgnx-bin-test--with-open
+    (dolist (v '("08" "09"))                      ; octal in bash arithmetic
+      (let ((r (drgnx-bin-test--call drgnx-bin-test--bin (cons (concat "DRGNX_OPEN_WAIT=" v) env) "open")))
+        (should (eql 0 (car r)))
+        (should (string-empty-p (cdr r)))
+        (delete-file (expand-file-name "running" dir))))
+    (dolist (v '("abc" "0" "-3" "2.5"))
+      (let ((r (drgnx-bin-test--call drgnx-bin-test--bin (cons (concat "DRGNX_OPEN_WAIT=" v) env) "open")))
+        (should (eql 0 (car r)))                 ; the default (30 s) is used
+        (should (string-search "DRGNX_OPEN_WAIT must be a whole number of seconds above 0" (cdr r)))
+        (delete-file (expand-file-name "running" dir))))))
+
+(ert-deftest drgnx-bin/the-still-starting-notice-comes-while-waiting ()
+  (drgnx-bin-test--with-open
+    (write-region "3" nil (expand-file-name "delay" dir))
+    (let* ((out "") (done nil)
+           (process-environment (append (cons "DRGNX_OPEN_WAIT=6" env) process-environment))
+           (proc (make-process :name "drgnx-open" :command (list drgnx-bin-test--bin "open") :connection-type 'pipe
+                               :noquery t :filter (lambda (_p s) (setq out (concat out s)))
+                               :sentinel (lambda (_p _e) (setq done t)))))
+      (unwind-protect
+          (let ((limit (+ (float-time) 2.5)))      ; the notice is due after 2 s, the daemon answers after 3 s
+            (while (and (not (string-search "still starting" out)) (< (float-time) limit))
+              (accept-process-output proc 0.1))
+            (should (string-search "still starting" out))
+            (should (process-live-p proc))
+            (while (not done) (accept-process-output proc 0.1))
+            (should (eql 0 (process-exit-status proc))))
+        (when (process-live-p proc) (delete-process proc))))))
+
+(ert-deftest drgnx-bin/the-open-lock-is-released-when-open-fails-or-is-stopped ()
+  (drgnx-bin-test--with-open
+    (let ((lock (drgnx-bin-test--lock dir)))
+      ;; a daemon that never answers
+      (write-region "never" nil (expand-file-name "delay" dir))
+      (should (eql 1 (car (drgnx-bin-test--call drgnx-bin-test--bin (cons "DRGNX_OPEN_WAIT=1" env) "open"))))
+      (should-not (file-exists-p lock))
+      ;; stopped while it waits: TERM and a closed terminal (HUP); a background job cannot be sent INT
+      (dolist (sig '("TERM" "HUP"))
+        (drgnx-bin-test--call "bash" (append (list (concat "DRGNX_BIN=" drgnx-bin-test--bin) (concat "SIG=" sig)
+                                                   "DRGNX_OPEN_WAIT=20")
+                                             env)
+                              "-c" "\"$DRGNX_BIN\" open & pid=$!; sleep 1; kill -s \"$SIG\" \"$pid\"; wait \"$pid\"")
+        (should-not (file-exists-p lock))
+        (delete-file (expand-file-name "running" dir))))))
+
+(ert-deftest drgnx-bin/an-open-never-removes-a-lock-that-became-another-opens ()
+  ;; The lock was taken over while this open waited for its daemon: when it finishes, the lock is not its own.
+  (drgnx-bin-test--with-open
+    (let ((lock (drgnx-bin-test--lock dir)))
+      (write-region "2" nil (expand-file-name "delay" dir))
+      (drgnx-bin-test--call "bash" (append (list (concat "DRGNX_BIN=" drgnx-bin-test--bin) (concat "LOCK=" lock)
+                                                 "DRGNX_OPEN_WAIT=6")
+                                           env)
+                            "-c" "\"$DRGNX_BIN\" open & sleep 1; echo someone-else > \"$LOCK/owner\"; wait")
+      (should (equal (drgnx-bin-test--slurp (expand-file-name "owner" lock)) "someone-else\n")))))
+
+(ert-deftest drgnx-bin/a-lock-without-a-stamp-is-taken-over-after-a-few-seconds ()
+  (drgnx-bin-test--with-open
+    (let ((lock (drgnx-bin-test--lock dir)) (start (float-time)))
+      (make-directory lock t)                    ; made, its owner died before it stamped it
+      (should (eql 0 (car (drgnx-bin-test--call drgnx-bin-test--bin env "open"))))
+      (should (>= (- (float-time) start) 3.5))   ; whole seconds: 5 of them can be 4.01 s
+      (should (< (- (float-time) start) 9))
+      (should-not (file-exists-p lock))
+      (should (string-search "--bg-daemon=" (drgnx-bin-test--slurp (expand-file-name "emacs.log" dir)))))))
+
 (ert-deftest drgnx-session/the-systemd-unit-is-started-when-enabled ()
   (drgnx-bin-test--with-open
     (let ((env (cons "DRGNX_SERVER_NAME" env)))   ; unset: the default name, `drgnx' (fake emacsclient)
@@ -343,7 +430,7 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
       (should (equal (drgnx-bin-test--slurp (expand-file-name "systemctl.log" dir))
                      "--user is-enabled --quiet drgnx\n--user start drgnx\n"))
       (should (string-empty-p (drgnx-bin-test--slurp (expand-file-name "emacs.log" dir))))
-      (should (equal (car (drgnx-bin-test--client-calls dir)) '("-a" "false" "-s" "drgnx" "-e" "t"))))))
+      (should (equal (car (drgnx-bin-test--client-calls dir)) '("-a" "false" "-s" "drgnx" "--timeout=5" "-e" "t"))))))
 
 (ert-deftest drgnx-session/paths-with-spaces-and-accents-stay-one-argument ()
   (drgnx-bin-test--with-open
