@@ -1138,6 +1138,31 @@ end: a program you chose earlier on the PATH keeps winning."
                         (when (drgnx-onboard--platform-job tool) (format ", or in a terminal: %s" (drgnx-onboard--install-text tool)))
                         (if log (format " (log: %s)" (abbreviate-file-name log)) "")))))
 
+(declare-function drgnx-agents-default-profile "drgnx-agents")
+(declare-function drgnx-agents-profile-names "drgnx-agents")
+(declare-function drgnx-agents-mcp-names "drgnx-agents")
+(declare-function drgnx-agents-set-setting "drgnx-agents")
+
+(defun drgnx-onboard--agents-offers ()
+  "Ask (interactive only) which profile New Agent Session offers on Return and which MCP servers the agents drgnx
+starts get — the coordination tools and the search tool — and save both in agents.eld.  The sentence for the step's
+result."
+  (require 'drgnx-agents)
+  (let* ((now (drgnx-agents-mcp-names))
+         (profile (drgnx-onboard--choose "Default agent profile" (drgnx-agents-profile-names) (drgnx-agents-default-profile)))
+         (mcp (delq nil (list (and (y-or-n-p (format "Give the agents drgnx starts its coordination tools (tasks, messages, the decision log)%s? "
+                                                     (if (memq 'coordination now) " — now on" " — now off")))
+                                   'coordination)
+                              (and (y-or-n-p (format "Give them its search tool too (they can read the indexed code of all your projects)%s? "
+                                                     (if (memq 'search now) " — now on" " — now off")))
+                                   'search)))))
+    (condition-case err
+        (progn (drgnx-agents-set-setting :default profile)
+               (drgnx-agents-set-setting :mcp mcp)
+               (format "default agent profile: %s; tools for agents: %s" profile
+                       (if mcp (mapconcat #'symbol-name mcp ", ") "none")))
+      (user-error (format "not saved (%s)" (cadr err))))))
+
 (defun drgnx-onboard--claude-check (ctx)
   "Claude Code is installed: its login (`claude auth status'), then the claude profile's agent (ACP initialize).  A
 login that is missing — or that the CLI cannot tell — is offered a terminal running `claude' (interactive); the step
@@ -1162,12 +1187,13 @@ then ends `info', waiting for you to run it again (Done).  A login that cannot b
         (if (not ok)
             (list 'fail (format "Claude Code is installed, but %s — run claude-agent-acp in a terminal to see why, then this step again" text))
           (list (if unknown 'info 'ok)
-                (format "Claude Code is installed%s; %s — Agents: New Agent Session… starts it%s"
+                (format "Claude Code is installed%s; %s — Agents: New Agent Session… starts it%s%s"
                         (if unknown ", but drgnx could not tell whether it is logged in (run claude and type /login if it is not)" ", logged in")
                         text
                         (if added (format " (added %s to this Emacs's PATH: add it to your shell's PATH too%s)" (string-join added ", ")
                                           (if (drgnx-onboard--hub-running-p) "; the hub keeps its old PATH: drgnx hub stop, then start a durable session again" ""))
-                          "")))))))))
+                          "")
+                        (if (and interactive (not unknown)) (concat "; " (drgnx-onboard--agents-offers)) "")))))))))
 
 (defun drgnx-onboard--agents-step (ctx)
   "Claude Code for the agent panel: `claude' (a VS Code extension's bundled copy does not count), Node and the

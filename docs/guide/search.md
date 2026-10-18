@@ -121,8 +121,8 @@ To give an agent the tool, add the server to the agent's own MCP configuration, 
 claude mcp add drgnx-search -- /path/to/drgnx/bin/drgnx search mcp /path/to/project
 ```
 
-(add `-e NAME=value` for the key variable of a hosted `embed` provider). drgnx does **not** add this server to the agents
-it starts by itself; `drgnx-search-mcp-server-spec` (core/drgnx-search-mcp.el) returns the ACP `mcpServers` entry for a
+(add `-e NAME=value` for the key variable of a hosted `embed` provider). drgnx adds this server to the agents it starts by itself
+only when `agents.eld` says `:mcp (… search)` (Onboarding's Agents step asks; [agents.md](agents.md#what-agents-get)); `drgnx-search-mcp-server-spec` (core/drgnx-search-mcp.el) returns the ACP `mcpServers` entry for a
 project — command, arguments and the environment: the state and config directories (`XDG_*_HOME`, `DRGNX_*_DIR`) and
 **never a key**, because the entry is handed to the agent — for a profile or a script that wants to pass it in
 `session/new`.

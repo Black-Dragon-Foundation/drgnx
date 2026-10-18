@@ -75,7 +75,7 @@ never signalled). Under systemd the job's wrapper line passes through the unit's
 every `$` in it: the `pid` file holds the job shell's real pid, and the job reads as running and can be stopped. A job can be memory-capped (`:memory-max "1G"` in `drgnx-jobs-start`: systemd's `MemoryMax`, no swap;
 `:nice 10` lowers its priority (`Nice=`); the detached launcher can do neither and ignores both). `:no-wait t`
 returns without waiting for the job's pid (the boot and start time that make it trustworthy are stamped from a short
-timer): for callers in a timer that must not block, such as drgnx starting the local AI runner again. Sessions and jobs started on a task get it as `DRGNX_TASK`, and the commits they make are
+timer, or at once when Emacs exits first): for callers in a timer that must not block, such as drgnx starting the local AI runner again. Sessions and jobs started on a task get it as `DRGNX_TASK`, and the commits they make are
 recorded for it ([Work tracker](work.md)).
 
 ## The hub and the gateway
@@ -109,6 +109,21 @@ requests and edits to review — and drives it the same way (send, Stop, answer,
 sessions when it is idle whenever a hub is running (and looks again every 30 s); it never starts a hub for that.
 Durable sessions live as long as the hub: if the hub ends (`drgnx hub stop`, a crash), its sessions end too, and the
 Agents tab shows them as exited.
+
+## What agents get
+
+Every agent drgnx starts gets MCP servers in its ACP `session/new`: the **coordination tools** (see below) by default,
+and, when you ask for it, the **search tool** (`drgnx search mcp`, [search.md](search.md#the-mcp-tool)) for the project
+the agent works in. `agents.eld` holds the choice, next to `:profiles`:
+
+```elisp
+(:default "claude"                   ; what New Agent Session… offers on Return
+ :mcp (coordination search))         ; the servers; absent: coordination only; () gives none
+```
+
+Onboarding's Agents step asks for both and writes them without touching the rest of the file (comments stay); you can
+edit them by hand too. The search tool lets an agent read the indexed code of any of your projects, so it is off until
+you say yes.
 
 ## Working together
 

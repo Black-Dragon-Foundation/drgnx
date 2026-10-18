@@ -151,6 +151,14 @@ again — `ok` when it answers; otherwise the step fails, saying whether the pro
 its error output) or did not answer. Then Agents: New Agent Session… starts it in the agent panel
 ([agents.md](agents.md)).
 
+**The defaults for your agents.** Once the check is `ok`, run interactively, the step asks three more things and
+saves the answers in `agents.eld` ([agents.md](agents.md#what-agents-get)): the **default agent profile** (what Agents:
+New Agent Session… offers on Return; Return alone keeps the one you have), whether the agents drgnx starts get its
+**coordination tools** (tasks, messages, the decision log; on until you say otherwise) and whether they get its
+**search tool** too (off: it lets an agent read the indexed code of all your projects). The result names the answers.
+Running the step again shows your current answers. An `agents.eld` that cannot be read is left alone and the result says
+so. `drgnx onboard --non-interactive` asks nothing and changes nothing.
+
 With `--non-interactive` nothing is installed, no terminal opens, no question is asked: the step is "info" and lists
 exactly the commands that would set it up; when everything is installed it only checks the login and the agent.
 

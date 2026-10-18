@@ -58,6 +58,25 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
   (delete-dups (mapcar #'car (append drgnx-agents-profiles (plist-get (drgnx-agents--read-file) :profiles)
                                      drgnx-agents-builtin-profiles))))
 
+(defun drgnx-agents-default-profile ()
+  "The profile New Agent Session offers on Return: agents.eld's `:default' when it names a profile, else claude."
+  (let ((d (plist-get (drgnx-agents--read-file) :default)))
+    (if (and (stringp d) (member d (drgnx-agents-profile-names))) d "claude")))
+
+(defun drgnx-agents-mcp-names ()
+  "The MCP servers agents get, from agents.eld's `:mcp' (`coordination', `search'): the coordination tools alone
+until it says otherwise."
+  (let ((file (drgnx-agents--read-file)))
+    (if (plist-member file :mcp) (plist-get file :mcp) '(coordination))))
+
+(declare-function drgnx-keys--save-key "drgnx-keys")
+
+(defun drgnx-agents-set-setting (key value)
+  "Save VALUE as KEY (`:default', `:mcp') in agents.eld: only that value changes, comments and the rest stay.  A file
+that cannot be read is a `user-error' and is not changed."
+  (require 'drgnx-keys)
+  (drgnx-keys--save-key key value (expand-file-name "agents.eld" (drgnx-user-dir)) ";; drgnx agents (docs/guide/agents.md)\n"))
+
 (defun drgnx-agents--changed (s) (run-hook-with-args 'drgnx-agents-changed-functions s))
 
 ;;;; Transcript
@@ -311,13 +330,22 @@ can carry it, else the provider's (keys resolved now, never kept) — DRGNX_TASK
 
 (declare-function drgnx-coord-mcp-server-spec "drgnx-coord-mcp")
 
+(declare-function drgnx-search-mcp-server-spec "drgnx-search-mcp")
+
 (defun drgnx-agents--mcp-servers (s)
-  "The `mcpServers' S's agent gets: the coordination tools, as S's name."
-  (if (not drgnx-agents-coordination) []
-    (require 'drgnx-coord-mcp)
-    ;; its identity is its id: a name (\"profile · dir\") repeats across hubs and editors
-    (vector (drgnx-coord-mcp-server-spec (drgnx-agent-session-id s) :job (drgnx-agent-session-job s)
-                                         :task (drgnx-agent-session-task s)))))
+  "The `mcpServers' S's agent gets: the coordination tools, as S's name, and the search tool for S's project when
+agents.eld asks for it (`drgnx-agents-mcp-names')."
+  (let ((names (drgnx-agents-mcp-names)))
+    (vconcat
+     (and drgnx-agents-coordination (memq 'coordination names)
+          (progn (require 'drgnx-coord-mcp)
+                 ;; its identity is its id: a name (\"profile · dir\") repeats across hubs and editors
+                 (list (drgnx-coord-mcp-server-spec (drgnx-agent-session-id s) :job (drgnx-agent-session-job s)
+                                                    :task (drgnx-agent-session-task s)))))
+     (and (memq 'search names)
+          (with-demoted-errors "drgnx agents: the search tool: %S"
+            (require 'drgnx-search-mcp)
+            (list (drgnx-search-mcp-server-spec (drgnx-agent-session-cwd s))))))))
 
 (defun drgnx-agents-get (id) (seq-find (lambda (s) (equal (drgnx-agent-session-id s) id)) drgnx-agents--sessions))
 

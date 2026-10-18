@@ -514,15 +514,16 @@ French, … layouts; Option+← / → still move by word) or `meta' — in keys.
   (drgnx-keys--save-key :mac-option option)
   (when drgnx-keys-last (drgnx-keys-apply)))
 
-(defun drgnx-keys--save-key (key data)
-  "Write DATA as KEY's value into keys.eld: only that value changes; comments and layout stay."
-  (let* ((file (drgnx-keys-file))
+(defun drgnx-keys--save-key (key data &optional file header)
+  "Write DATA as KEY's value into keys.eld (FILE: another .eld, started with HEADER): only that value changes;
+comments and layout stay."
+  (let* ((file (or file (drgnx-keys-file)))
          (value (prin1-to-string data))
          (text (with-temp-buffer
                  (if (file-exists-p file)
                      (insert-file-contents file)
-                   (insert ";; drgnx keys (docs/guide/keys.md): :layers — profile stack, :bind — (ID KEY… [:map M]),\n"
-                           ";; :unbind — (ID…)\n"))
+                   (insert (or header (concat ";; drgnx keys (docs/guide/keys.md): :layers — profile stack, :bind — (ID KEY… [:map M]),\n"
+                                              ";; :unbind — (ID…)\n"))))
                  (set-syntax-table emacs-lisp-mode-syntax-table)
                  (goto-char (point-min))
                  (forward-comment (buffer-size))

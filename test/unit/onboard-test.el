@@ -550,6 +550,9 @@ Returns (RESULT PROMPTS)."
 (defun drgnx-onboard-test--slurp (file)
   (if (file-exists-p file) (with-temp-buffer (insert-file-contents file) (buffer-string)) ""))
 
+;; Kept at load time: the macro below stubs it, the tests of the offers put it back.
+(defconst drgnx-onboard-test--offers (symbol-function 'drgnx-onboard--agents-offers))
+
 (defmacro drgnx-onboard-test--claude (platform &rest body)
   "BODY on PLATFORM (`macos' or `linux') with a temp HOME and a PATH of fakes only (the basic tools linked in): nothing
 is installed — `brew install --cask claude-code', `curl … | bash' (the Linux installer: a fake script), `brew install
@@ -603,7 +606,9 @@ says logged in when HOME has .logged-in (FAKE_OLD_CLAUDE: an old CLI that has no
             (concat (funcall log-line "curl")
                     "echo 'mkdir -p $HOME/.local/bin; cp " tpl "claude $HOME/.local/bin/claude; echo Installed'\n"))
            (drgnx-onboard-test--script (concat bin "dnf") "exit 0\n")
-           (cl-letf (((symbol-function 'drgnx-platform) (lambda () ,platform)))
+           ;; the agent defaults are asked after a good check (their own tests below turn the question back on)
+           (cl-letf (((symbol-function 'drgnx-platform) (lambda () ,platform))
+                     ((symbol-function 'drgnx-onboard--agents-offers) #'ignore))
              ,@body))
        (dolist (j (drgnx-jobs-list)) (drgnx-jobs-stop (plist-get j :id)))
        (when-let* ((b (get-buffer "*Claude login*")))
@@ -1134,5 +1139,83 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
            (r (cl-letf (((symbol-function 'y-or-n-p) (car asked))) (drgnx-onboard--agents-step '(:interactive t)))))
       (should (eq (car r) 'fail))
       (should (string-match-p "or in a terminal: curl -fsSL https://claude.ai/install.sh | bash" (cadr r))))))
+
+;; M6-1: the Agents step offers the MCP servers agents get and a default profile
+
+(defun drgnx-onboard-test--offers-answers (profile coordination search)
+  "Stubs for the questions: (COMPLETING-READ-STUB . Y-OR-N-STUB) answering PROFILE, COORDINATION and SEARCH; they
+record the prompts and the default in the lists they return as the cars of (PROMPTS . DEFAULTS)."
+  (let ((prompts (list nil)) (defaults (list nil)))
+    (list (lambda (prompt _choices &optional _p _r _i _h def &rest _) (push prompt (car prompts)) (push def (car defaults)) profile)
+          (lambda (prompt) (push prompt (car prompts)) (if (string-match-p "search" prompt) search coordination))
+          prompts defaults)))
+
+(ert-deftest drgnx-ai-onboard/agents-offer-mcp-servers-and-a-default-profile ()
+  (drgnx-onboard-test--claude 'macos
+    (drgnx-onboard-test--installed
+     (write-region "" nil (concat home ".logged-in"))
+     (let* ((a (drgnx-onboard-test--offers-answers "claude (Ollama)" t t))
+            (file (expand-file-name "agents.eld" (drgnx-user-dir)))
+            (r (cl-letf (((symbol-function 'drgnx-onboard--agents-offers) drgnx-onboard-test--offers)
+                         ((symbol-function 'completing-read) (nth 0 a)) ((symbol-function 'y-or-n-p) (nth 1 a)))
+                 (drgnx-onboard--agents-step '(:interactive t)))))
+       (should (eq (car r) 'ok))
+       (should (string-match-p "default agent profile: claude (Ollama)" (cadr r)))
+       (should (string-match-p "coordination, search" (cadr r)))
+       (should (equal (car (car (nth 3 a))) "claude"))        ; Return alone: the built-in claude profile
+       (let ((saved (drgnx-onboard-test--read file)))
+         (should (equal (plist-get saved :default) "claude (Ollama)"))
+         (should (equal (plist-get saved :mcp) '(coordination search))))
+       (should (equal (drgnx-agents-default-profile) "claude (Ollama)"))
+       ;; the next run offers what was chosen
+       (let ((b (drgnx-onboard-test--offers-answers "claude (Ollama)" t nil)))
+         (cl-letf (((symbol-function 'drgnx-onboard--agents-offers) drgnx-onboard-test--offers)
+                   ((symbol-function 'completing-read) (nth 0 b)) ((symbol-function 'y-or-n-p) (nth 1 b)))
+           (should (string-match-p "tools for agents: coordination\\'" (cadr (drgnx-onboard--agents-step '(:interactive t))))))
+         (should (equal (car (car (nth 3 b))) "claude (Ollama)")))
+       ;; the sessions started now get both servers; one agent, one search server for its own project
+       (let ((s (drgnx-agents--make :id "s1" :name "s1" :cwd root)))
+         (should (equal (mapcar (lambda (e) (plist-get e :name)) (drgnx-agents--mcp-servers s)) '("drgnx")))
+         (drgnx-agents-set-setting :mcp '(coordination search))
+         (let ((servers (drgnx-agents--mcp-servers s)))
+           (should (equal (mapcar (lambda (e) (plist-get e :name)) servers) '("drgnx" "drgnx-search")))
+           (should (equal (aref (plist-get (aref servers 1) :args) (1- (length (plist-get (aref servers 1) :args))))
+                          (directory-file-name root)))))))))
+
+(ert-deftest drgnx-ai-onboard/agent-defaults-are-never-asked-without-interaction ()
+  (drgnx-onboard-test--claude 'macos
+    (drgnx-onboard-test--installed
+     (write-region "" nil (concat home ".logged-in"))
+     (cl-letf (((symbol-function 'drgnx-onboard--agents-offers) drgnx-onboard-test--offers)
+               ((symbol-function 'completing-read) (lambda (&rest _) (error "asked")))
+               ((symbol-function 'y-or-n-p) (lambda (&rest _) (error "asked"))))
+       (let ((r (drgnx-onboard--agents-step '(:interactive nil))))
+         (should (eq (car r) 'ok))
+         (should-not (string-match-p "default agent profile" (cadr r)))))
+     (should-not (file-exists-p (expand-file-name "agents.eld" (drgnx-user-dir))))
+     ;; and the servers stay as before: the coordination tools only
+     (should (equal (drgnx-agents-mcp-names) '(coordination)))
+     (should (equal (drgnx-agents-default-profile) "claude")))))
+
+(ert-deftest drgnx-ai-onboard/agent-defaults-keep-the-rest-of-agents-eld ()
+  (drgnx-onboard-test--claude 'macos
+    (let ((file (expand-file-name "agents.eld" (drgnx-user-dir))) (a (drgnx-onboard-test--offers-answers "mine" nil nil)))
+      (write-region ";; my agents\n(:profiles ((\"mine\" :command (\"x\"))) :routes nil)\n" nil file nil 'silent)
+      (cl-letf (((symbol-function 'completing-read) (nth 0 a)) ((symbol-function 'y-or-n-p) (nth 1 a)))
+        (should (string-match-p "tools for agents: none" (funcall drgnx-onboard-test--offers))))
+      (let ((text (drgnx-onboard-test--slurp file)))
+        (should (string-prefix-p ";; my agents" text))
+        (let ((saved (drgnx-onboard-test--read file)))
+          (should (equal (plist-get saved :default) "mine"))
+          (should (plist-member saved :mcp))
+          (should-not (plist-get saved :mcp))
+          (should (equal (plist-get saved :profiles) '(("mine" :command ("x")))))
+          (should (plist-member saved :routes))))
+      (should (equal (drgnx-agents--mcp-servers (drgnx-agents--make :id "s1" :name "s1" :cwd root)) []))
+      ;; a file that cannot be read is not touched; the result says so
+      (write-region "(:profiles" nil file nil 'silent)
+      (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "claude")) ((symbol-function 'y-or-n-p) (nth 1 a)))
+        (should (string-match-p "agents.eld cannot be read" (funcall drgnx-onboard-test--offers))))
+      (should (equal (drgnx-onboard-test--slurp file) "(:profiles")))))
 
 ;;; onboard-test.el ends here
