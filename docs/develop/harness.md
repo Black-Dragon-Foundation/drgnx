@@ -446,3 +446,40 @@ Helpers (`harness/drgnx-scenario.el`): `drgnx-scenario-check OK EXPLANATION REPO
 git repo, removed afterwards with its file and dired buffers and the Explorer roots in it; fixtures of yours older than a
 day — a run killed at its timeout — are deleted when the next is made), `drgnx-scenario-load-driver`. The results file adds `tests` (every test with its
 result) and `known_red` (name, summary, trace) — see [scenarios.md](scenarios.md) for the scenarios themselves.
+
+## Terminal tier
+
+`test/tty/` tests drgnx in a terminal. They run in batch Emacs under `drgnx-run-ert-batch` (temp HOME and XDG
+dirs) and drive the session through `harness/drgnx-tty-session.el`:
+
+- **Session:** a run directory prepared as for a GUI session (`drgnx-ui-prepare-run`: generated init, its own server
+  socket), named `drgnx-tty-PID-N`. Its Emacs runs in a pane of a **private tmux server**, `tmux -L drgnx-tty-PID-N
+  -f /dev/null`, with `TMUX_TMPDIR` in the run directory, so the socket is under it too. Without `:daemon` the pane
+  runs `emacs -nw`. With `:daemon`, window 0 runs `emacs --fg-daemon` and window 1 runs `emacsclient -t`.
+  `drgnx-tty-session-client` opens more clients, each in its own window. `drgnx-tty-session-pty-start` opens a client
+  under Emacs's own pty that never answers a query: a silent terminal.
+- **Isolation:** every program runs under `env -i` with the GUI harness's allowlist. HOME, `XDG_CONFIG_HOME`,
+  `XDG_DATA_HOME`, `XDG_CACHE_HOME` and `XDG_STATE_HOME` are in the run directory, and `TMUX` is unset. The user's tmux
+  server and `~/.tmux.conf` are never used. The server gets `set-clipboard on`, `extended-keys on`, `window-size
+  manual`, `status off`, `mouse off` (the application gets the mouse bytes) and `default-shell /bin/sh`. `:options`
+  adds more tmux commands for one test.
+- **Cleanup:** `drgnx-tty-session-stop` asks Emacs to exit, kills the tmux server and anything still running from the
+  run directory, then removes the run and socket directories. `drgnx-tty-session-with` stops the session even when
+  the test fails, and `kill-emacs-hook` stops any session a test left running.
+- **Input is raw bytes:** `drgnx-tty-session-send` uses `tmux send-keys -H`, one argument per byte. A test proved
+  this delivers every byte unchanged; `paste-buffer -r -d` showed ESC as `^[`. Keys are encoded the way a kitty
+  keyboard protocol, modifyOtherKeys or legacy terminal sends them (`drgnx-tty-session-key`). Mouse input uses
+  SGR reports on 1-based cells (`-click`, `-wheel`, `-drag`).
+- **Output:** the screen comes from `capture-pane` (`-screen`, `-find`, `-wait-screen`, `-quiet`). The paste buffer
+  shows what OSC 52 copied (`-clipboard`), and `-pane-flags` reports the pane's mouse and key modes. The inner Emacs's
+  state comes through its socket (`-eval`, `-wait`).
+
+Run it (until `bin/drgnx test --tty` exists):
+
+```
+emacs --batch -Q --eval '(setq load-prefer-newer t)' -L harness -L core -L wb -l harness/run-ert.el \
+  -f drgnx-run-ert-batch "$PWD/test/tty"
+```
+
+In a container, use `test/container/Containerfile.tty`. `--build-arg FEDORA=44` gives Emacs 30.2 and `45` gives 31.1;
+the image has tmux, plus kitty and mutter for the exit test. Run it with the GUI tier's security options.
