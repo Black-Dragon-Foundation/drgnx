@@ -77,6 +77,15 @@ goes through the gateway; profiles drgnx cannot price (a subscription) are liste
 proposal also warns about a profile on a route whose provider has no `:price` in `ai.eld`: the gateway cannot count
 what it spends, so the budget would not stop it.
 
+**Only job-safe profiles run a job's agents.** A job's agent works unwatched in a repository you may not have
+written, and that repository's own settings (`.claude/settings.json`, a `.gemini/` folder, …) could let its agent act
+without asking. drgnx can switch them off only for Claude Code, so a job runs only profiles that say `:job-safe t`
+and run Claude Code's adapter: drgnx's built-in ones (on macOS not the plain `claude`, whose subscription token is in
+the Keychain: use a gateway profile there). A task or review routed to any other profile (a Gemini CLI or Codex
+profile, one of yours without `:job-safe`, a profile that does not exist) starts no agent; it gets an **agent** card
+that says why and names the profiles to route it to. Change `:routes`, then Retry (or Review now). Details in
+[agents.md](agents.md#jobs-and-your-claude-settings).
+
 ## While it runs
 
 - **Worktrees:** the job's branch `job/ID` (from your HEAD when you approved) in `.claude/worktrees/ID`; each task
@@ -163,10 +172,13 @@ the perf workload `job-window` ([perf.md](../develop/perf.md)). Developer detail
   Allow lets the call through, Reject refuses it. drgnx tells its own servers apart by the tool's name (`mcp__`, the
   server's name, `__` and a name with no further `__`) and, where the adapter names the server
   (`_meta.claudeCode.mcpServer`, sent by `@agentclientprotocol/claude-agent-acp`), by that server being the same one
-  as drgnx gave the session (source `dynamic`). The adapter drgnx installs today names no server, so there a server
-  of yours that is itself called `drgnx` or `drgnx-search` is taken for drgnx's. A call whose tool cannot be named,
-  or whose kind is not a string, asks. Other calls of the kind `other` (loading a skill, a to-do list) are allowed
-  as before.
+  as drgnx gave the session (source `dynamic`). A job's Claude starts no server of your configuration at all (see
+  below), and a profile's own `:mcp-servers` cannot take the names `drgnx` or `drgnx-search`, so no other server
+  passes for drgnx's. A call whose tool cannot be named, or whose kind is not a string, asks. Other calls of the
+  kind `other` (loading a skill, a to-do list) are allowed as before.
+- **Another server's resources ask.** Claude Code's `ReadMcpResourceTool` and `ListMcpResourcesTool` read an MCP
+  server's resources; the server is the call's `server` input. They go through without asking only for `drgnx` and
+  `drgnx-search`; for any other server, or with no server (every server's), they are a permission card.
 - **Your allow rules no longer pre-allow inside jobs.** A job's Claude Code session ignores the allow rules and hooks
   of your user, project and local settings, bypass mode, and every MCP server but drgnx's (a repository's
   `.mcp.json` included): drgnx sends it these options with `session/new` and `session/load`. It also sets the
@@ -191,4 +203,7 @@ the perf workload `job-window` ([perf.md](../develop/perf.md)). Developer detail
   limit (an agent may answer `Internal error` with the provider's `429 Too Many Requests` in `data`).
 
 Tests: `test/unit/job-mcp-policy-test.el` (drgnx's servers allowed, a user's server asks, a denial blocks, an agent
-cannot approve its own request, the agents' configuration in the worktree, the limit in an error's data).
+cannot approve its own request, the agents' configuration in the worktree, the limit in an error's data);
+`test/unit/job-safe-test.el` (built-ins job-safe, a user's profile not unless it runs Claude and says so, the plain
+`claude` refused on macOS, a refused profile gives a card and no agent, another server's resources ask, a profile's
+MCP servers after drgnx's and never under drgnx's names).

@@ -10,9 +10,13 @@
         (error "git %S: %s" args (buffer-string)))
       (string-trim (buffer-string)))))
 
+(defvar drgnx-job-run-test--safe t
+  "Non-nil: in `drgnx-job-run-test--with', every profile runs job agents (the mock agents are not Claude Code, so none
+is job-safe); nil: `drgnx-job-safe-p' decides (job-safe-test.el).")
+
 (defmacro drgnx-job-run-test--with (plan-text &rest body)
   "BODY with drgnx's dirs in ROOT, a git repo REPO (one commit), PLAN-TEXT as PLAN in it, the hub served here and the
-profile \"mock\" on every route."
+profile \"mock\" on every route, taken for job-safe (`drgnx-job-run-test--safe')."
   (declare (indent 1))
   `(let* ((root (file-name-as-directory (make-temp-file "drgnx-job-run" t)))
           (repo (concat root "repo/")) (plan (concat repo "docs/plans/p.md"))
@@ -27,35 +31,38 @@ profile \"mock\" on every route."
            (list (list "mock" :command (list "sh" (expand-file-name "test/fixtures/mock-acp-stdin.sh" drgnx-dir) (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
                                              "-l" (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir)))))
           (drgnx-job-routes '((implement . "mock") (test . "mock") (docs . "mock") (review . "mock")))
-          (drgnx-job-auto-start nil) (drgnx-job-max-agents 3))
-     (unwind-protect
-         (progn
-           (make-directory (concat root "config") t) (make-directory (concat repo "docs/plans") t)
-           (write-region "x\n" nil (concat repo "README") nil 'silent)
-           (write-region ,plan-text nil plan nil 'silent)
-           (drgnx-job-run-test--git repo "init" "-q" "-b" "main")
-           (drgnx-job-run-test--git repo "add" "-A")
-           (drgnx-job-run-test--git repo "commit" "-q" "-m" "start")
-           (drgnx-hub-serve (drgnx-hub-socket))
-           ;; the hub's memory of jobs is this test's: ids repeat across tests (fresh stores, second-based ids)
-           (dolist (h (list drgnx-job--prompts drgnx-job--reviewers drgnx-job--reviewing
-                            drgnx-job--turns-seen drgnx-job--step-pending drgnx-job--signatures drgnx-job--busy))
-             (clrhash h))
-           (when (featurep 'drgnx-job-clash) (clrhash drgnx-job-clash--starts) (clrhash drgnx-job-clash--checked))
-           ,@body)
-       (dolist (p (process-list))                         ; a git of the job still running: its sentinel must not reach the next test
-         (when (string-prefix-p "drgnx-git" (process-name p)) (set-process-sentinel p #'ignore) (delete-process p)))
-       (dolist (s drgnx-agents--sessions) (ignore-errors (drgnx-agents-kill s)))
-       (drgnx-hub-disconnect)
-       (drgnx-hub-stop)
-       (drgnx-work-db-close-all)
-       ;; agents (and their MCP servers) may still be writing in the worktrees as they end: wait, then delete
-       (let ((deadline (+ (float-time) 3)))
-         (while (and (seq-some (lambda (p) (and (process-live-p p) (not (eq (process-type p) 'network)))) (process-list))
-                     (< (float-time) deadline))
-           (accept-process-output nil 0.05)))
-       (condition-case nil (delete-directory root t)
-         (file-error (accept-process-output nil 0.3) (delete-directory root t))))))
+          (drgnx-job-auto-start nil) (drgnx-job-max-agents 3)
+          (drgnx-job-run-test--real-safe-p (symbol-function 'drgnx-job-safe-p)))
+     (cl-letf (((symbol-function 'drgnx-job-safe-p)
+                (lambda (profile) (or drgnx-job-run-test--safe (funcall drgnx-job-run-test--real-safe-p profile)))))
+       (unwind-protect
+           (progn
+             (make-directory (concat root "config") t) (make-directory (concat repo "docs/plans") t)
+             (write-region "x\n" nil (concat repo "README") nil 'silent)
+             (write-region ,plan-text nil plan nil 'silent)
+             (drgnx-job-run-test--git repo "init" "-q" "-b" "main")
+             (drgnx-job-run-test--git repo "add" "-A")
+             (drgnx-job-run-test--git repo "commit" "-q" "-m" "start")
+             (drgnx-hub-serve (drgnx-hub-socket))
+             ;; the hub's memory of jobs is this test's: ids repeat across tests (fresh stores, second-based ids)
+             (dolist (h (list drgnx-job--prompts drgnx-job--reviewers drgnx-job--reviewing
+                              drgnx-job--turns-seen drgnx-job--step-pending drgnx-job--signatures drgnx-job--busy))
+               (clrhash h))
+             (when (featurep 'drgnx-job-clash) (clrhash drgnx-job-clash--starts) (clrhash drgnx-job-clash--checked))
+             ,@body)
+         (dolist (p (process-list))                         ; a git of the job still running: its sentinel must not reach the next test
+           (when (string-prefix-p "drgnx-git" (process-name p)) (set-process-sentinel p #'ignore) (delete-process p)))
+         (dolist (s drgnx-agents--sessions) (ignore-errors (drgnx-agents-kill s)))
+         (drgnx-hub-disconnect)
+         (drgnx-hub-stop)
+         (drgnx-work-db-close-all)
+         ;; agents (and their MCP servers) may still be writing in the worktrees as they end: wait, then delete
+         (let ((deadline (+ (float-time) 3)))
+           (while (and (seq-some (lambda (p) (and (process-live-p p) (not (eq (process-type p) 'network)))) (process-list))
+                       (< (float-time) deadline))
+             (accept-process-output nil 0.05)))
+         (condition-case nil (delete-directory root t)
+           (file-error (accept-process-output nil 0.3) (delete-directory root t)))))))
 
 (defun drgnx-job-run-test--wait (pred &optional secs)
   (let ((deadline (+ (float-time) (or secs 15))))

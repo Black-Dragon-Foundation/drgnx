@@ -38,21 +38,22 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
 `turn-end': the work tracker records the commits each turn made (docs/guide/work.md).")
 
 (defconst drgnx-agents-builtin-profiles
-  '(("claude" :command ("claude-agent-acp") :mode queue :doc "Claude through the unmodified agent (subscription or API key)")
-    ("claude (OpenRouter)" :command ("claude-agent-acp") :mode queue :ai claude-openrouter
+  '(("claude" :command ("claude-agent-acp") :mode queue :job-safe t :doc "Claude through the unmodified agent (subscription or API key)")
+    ("claude (OpenRouter)" :command ("claude-agent-acp") :mode queue :job-safe t :ai claude-openrouter
      :doc "Claude Code on OpenRouter (your OpenRouter key, from the environment or auth-source)")
-    ("claude (Ollama)" :command ("claude-agent-acp") :mode queue :ai claude-ollama :doc "Claude Code on a local Ollama model")
-    ("claude (Kimi)" :command ("claude-agent-acp") :mode queue :ai claude-moonshot :model "kimi-k3"
+    ("claude (Ollama)" :command ("claude-agent-acp") :mode queue :job-safe t :ai claude-ollama :doc "Claude Code on a local Ollama model")
+    ("claude (Kimi)" :command ("claude-agent-acp") :mode queue :job-safe t :ai claude-moonshot :model "kimi-k3"
      :doc "Claude Code on Kimi through Moonshot's own API (MOONSHOT_API_KEY or auth-source for api.moonshot.ai; billed per token by Moonshot)")
-    ("claude (DeepSeek)" :command ("claude-agent-acp") :mode queue :ai claude-deepseek :model "deepseek-v4-pro"
+    ("claude (DeepSeek)" :command ("claude-agent-acp") :mode queue :job-safe t :ai claude-deepseek :model "deepseek-v4-pro"
      :doc "Claude Code on DeepSeek through its own API (DEEPSEEK_API_KEY or auth-source for api.deepseek.com; billed per token by DeepSeek)")
-    ("claude (Kimi via OpenRouter)" :command ("claude-agent-acp") :mode queue :ai claude-openrouter :model "moonshotai/kimi-k3"
+    ("claude (Kimi via OpenRouter)" :command ("claude-agent-acp") :mode queue :job-safe t :ai claude-openrouter :model "moonshotai/kimi-k3"
      :doc "Claude Code on Kimi through OpenRouter (OPENROUTER_API_KEY or auth-source for openrouter.ai; billed by OpenRouter)")
-    ("claude (DeepSeek via OpenRouter)" :command ("claude-agent-acp") :mode queue :ai claude-openrouter
+    ("claude (DeepSeek via OpenRouter)" :command ("claude-agent-acp") :mode queue :job-safe t :ai claude-openrouter
      :model "deepseek/deepseek-v4-pro"
      :doc "Claude Code on DeepSeek through OpenRouter (OPENROUTER_API_KEY or auth-source for openrouter.ai; billed by OpenRouter)"))
   "Profiles drgnx offers without setup; :ai names the provider environment the agent gets when it starts
-(`drgnx-ai-agent-env').")
+\(`drgnx-ai-agent-env'); :job-safe, that a job may run it (`drgnx-job-safe-p': Claude Code, whose job sessions
+ignore a repository's own settings).")
 
 ;;;; The Claude Code adapter
 
@@ -669,9 +670,26 @@ so no `_meta' at all, for any other."
 
 (declare-function drgnx-search-mcp-server-spec "drgnx-search-mcp")
 
+(defconst drgnx-agents-own-mcp-servers '("drgnx" "drgnx-search")
+  "The names of drgnx's own MCP servers, the ones drgnx gives an agent's session: the coordination tools
+\(drgnx-coord-mcp.el) and the search tool (drgnx-search-mcp.el).  No server of a profile's `:mcp-servers' takes them.")
+
+(defun drgnx-agents--profile-mcp-servers (s)
+  "The `:mcp-servers' of S's profile (ACP `mcpServers' entries the user wrote in agents.eld), those that are a plist
+with a name: one that takes a name of `drgnx-agents-own-mcp-servers' is left out, and a message says so (a job's
+permission check lets drgnx's own servers through)."
+  (seq-filter (lambda (e)
+                (and (plistp e) (stringp (plist-get e :name))
+                     (or (not (member (plist-get e :name) drgnx-agents-own-mcp-servers))
+                         (progn (message "drgnx agents: profile %s: MCP server %s left out (the name is drgnx's own)"
+                                         (drgnx-agent-session-profile s) (plist-get e :name))
+                                nil))))
+              (plist-get (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))) :mcp-servers)))
+
 (defun drgnx-agents--mcp-servers (s)
   "The `mcpServers' S's agent gets: the coordination tools, as S's name, and the search tool for S's project when
-agents.eld asks for it (`drgnx-agents-mcp-names')."
+agents.eld asks for it (`drgnx-agents-mcp-names'), then the servers of S's profile
+\(`drgnx-agents--profile-mcp-servers'), for a job's session too."
   (let ((names (drgnx-agents-mcp-names)))
     (vconcat
      (and drgnx-agents-coordination (memq 'coordination names)
@@ -682,7 +700,8 @@ agents.eld asks for it (`drgnx-agents-mcp-names')."
      (and (memq 'search names)
           (with-demoted-errors "drgnx agents: the search tool: %S"
             (require 'drgnx-search-mcp)
-            (list (drgnx-search-mcp-server-spec (drgnx-agent-session-cwd s))))))))
+            (list (drgnx-search-mcp-server-spec (drgnx-agent-session-cwd s)))))
+     (drgnx-agents--profile-mcp-servers s))))
 
 (defun drgnx-agents-get (id) (seq-find (lambda (s) (equal (drgnx-agent-session-id s) id)) drgnx-agents--sessions))
 

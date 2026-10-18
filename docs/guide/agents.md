@@ -21,7 +21,12 @@ Mac) opens the Agents tab. Profiles live in
 
 `:command` is the agent program; `:mode` is what a message to a busy agent does: `queue` (default), `steer` (when
 the agent advertises steering — sent as `_session/steering`; if the agent refuses, the message is queued instead) or
-`interrupt` (stop the turn, then send). A profile whose program is not installed gives a session that says so. Keys and tokens are
+`interrupt` (stop the turn, then send). A profile whose program is not installed gives a session that says so.
+`:mcp-servers` lists MCP servers of your own for every session of the profile, job sessions included, after drgnx's
+own: ACP `mcpServers` entries, written with vectors where ACP has arrays, e.g.
+`:mcp-servers ((:name "docs" :command "docs-mcp" :args ["--read-only"] :env []))`. An entry named `drgnx` or
+`drgnx-search` (drgnx's own servers) is left out, and a message says so. `:job-safe t` lets a [job](jobs.md) run the
+profile (see [Jobs and your Claude settings](#jobs-and-your-claude-settings)). Keys and tokens are
 never written there — the agent reads them from its environment or its own login. The built-in `claude` profile
 runs the unmodified `claude-agent-acp` (npm package `@agentclientprotocol/claude-agent-acp`) when it is installed, with
 your own Claude login. Onboarding's Agents step installs Claude Code, Node and that adapter if they are missing
@@ -239,7 +244,14 @@ load (which settings files Claude reads is left as it is: they are content, and 
 can make the agent do). Claude Code's own sandbox is off in a job: drgnx's is the boundary.
 
 Your own sessions (New Agent Session…, Take Over) and agents other than Claude get none of this. Other agents
-(Gemini CLI, Codex) have no such switch yet. On a machine whose administrator installed a `managed-settings.json`
+(Gemini CLI, Codex) have no such switch yet, so a job runs only **job-safe** profiles (`drgnx-job-safe-p`): those
+whose options say `:job-safe t` and that run Claude Code's adapter (the same test as above, so a job-safe profile
+always gets these options). drgnx's built-in profiles say so; a profile of yours that runs the adapter may say so
+too, and one that runs any other agent is never job-safe, whatever it says. On macOS a profile without `:ai` (the
+plain `claude`, which logs in with your subscription, its token in the Keychain) is not job-safe: jobs there use the
+gateway profiles. A job routed to a profile that is not job-safe starts no agent: the task gets an **agent** card
+that says why and names the profiles that may run it ([jobs.md](jobs.md#routes-and-the-estimate)). Since a job's
+Claude starts only drgnx's MCP servers, list a server you want in jobs as the profile's `:mcp-servers`. On a machine whose administrator installed a `managed-settings.json`
 (`/etc/claude-code/` on Linux, `/Library/Application Support/ClaudeCode/` on macOS), Claude Code uses the
 administrator's policy instead of drgnx's unless that file sets `"parentSettingsBehavior": "merge"`; the refusal of
 bypass mode, the `default` mode and the MCP lock hold either way.
