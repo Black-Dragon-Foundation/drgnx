@@ -280,11 +280,17 @@ the usage counts go there, never the user's), no usage counted, and every bindin
     (should-not (string-prefix-p "!" (drgnx-shortcuts-test--line 'sc-k)))
     (drgnx-shortcuts-test--goto 'sc-k)
     (should (string-search "Emacs' kill-line" (get-text-property (1- (pos-eol)) 'help-echo)))
-    ;; the same made by you in keys.eld: a conflict
+    ;; a keys.eld chord under that prefix (the profile already made C-k one): nothing more is taken, no conflict
     (drgnx-keys-edit-bind 'sc-d "C-k C-d")
     (drgnx-shortcuts)
-    (should (plist-get (drgnx-shortcuts-test--row 'sc-d) :conflicts))
-    (should (string-prefix-p "!" (drgnx-shortcuts-test--line 'sc-d)))
+    (should-not (plist-get (drgnx-shortcuts-test--row 'sc-d) :conflicts))
+    (should (equal (plist-get (drgnx-shortcuts-test--row 'sc-d) :over) '("kill-line (C-k)")))
+    (should-not (string-prefix-p "!" (drgnx-shortcuts-test--line 'sc-d)))
+    ;; a keys.eld chord under an Emacs default the profile left alone (C-a): a conflict
+    (drgnx-keys-edit-bind 'sc-g "C-a C-9")
+    (drgnx-shortcuts)
+    (should (plist-get (drgnx-shortcuts-test--row 'sc-g) :conflicts))
+    (should (string-prefix-p "!" (drgnx-shortcuts-test--line 'sc-g)))
     ;; a key an active layer claims: a conflict, also when the profile's key wins
     (drgnx-keys-use '((beta editing) (alpha app editing window)))
     (should (seq-find (lambda (c) (eq (plist-get c :kind) 'claim)) (plist-get drgnx-keys-last :conflicts)))

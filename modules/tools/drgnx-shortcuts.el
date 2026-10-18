@@ -95,6 +95,18 @@ other than a letter, @ [ \\ ] ^ _ ? or space (a terminal without the kitty keybo
        (plist-get (plist-get conflict :winner) :id)
        (seq-every-p (lambda (l) (not (or (plist-get l :id) (plist-get l :layer)))) (plist-get conflict :losers))))
 
+(defun drgnx-shortcuts--under-profile-prefix-p (conflict all)
+  "Non-nil if CONFLICT is a keys.eld key under a prefix the active profile already took from the same Emacs default
+\(VS Code's C-k over kill-line, then C-k C-9 of yours): it takes nothing more, so no conflict on the page.  ALL: every
+conflict of the resolution."
+  (and (eq (plist-get conflict :kind) 'prefix)
+       (eq (plist-get (plist-get conflict :winner) :layer) 'user)
+       (seq-every-p (lambda (l) (not (or (plist-get l :id) (plist-get l :layer)))) (plist-get conflict :losers))
+       (seq-some (lambda (c) (and (not (eq c conflict)) (drgnx-shortcuts--over-default-p c)
+                                  (equal (plist-get c :losers) (plist-get conflict :losers))
+                                  (equal (plist-get c :map) (plist-get conflict :map))))
+                 all)))
+
 (defun drgnx-shortcuts--rows ()
   "One plist per registry command: :id :cmd :title :category :keys ((KEY . MAP-SPEC)…) :native :source :where
 :conflicts (TEXT…) :over (the Emacs defaults its profile keys shadow) :changed."
@@ -103,7 +115,8 @@ other than a letter, @ [ \\ ] ^ _ ? or space (a terminal without the kitty keybo
          (changed (append (mapcar #'car-safe (plist-get user :bind)) (plist-get user :unbind))))
     (dolist (b (plist-get drgnx-keys-last :bindings)) (push b (gethash (plist-get b :id) by-id)))
     (dolist (c (plist-get drgnx-keys-last :conflicts))
-      (if (drgnx-shortcuts--over-default-p c)
+      (if (or (drgnx-shortcuts--over-default-p c)
+              (drgnx-shortcuts--under-profile-prefix-p c (plist-get drgnx-keys-last :conflicts)))
           (dolist (l (plist-get c :losers))
             (cl-pushnew (plist-get l :claim) (gethash (plist-get (plist-get c :winner) :id) over) :test #'equal))
         (dolist (p (cons (plist-get c :winner) (plist-get c :losers)))

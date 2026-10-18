@@ -21,7 +21,9 @@ only one within the same place: the same key in two views is not.
 
 A profile's key over one of Emacs' own keys is not a conflict: the profile chose it (VS Code's `C-k` chords take
 `C-k`, `kill-line`, as a prefix). Hover over the Where column to see what it is over ("Over Emacs' kill-line
-(C-k)"); the key sheet and the doctor list these too. The same key in your `keys.eld`, a key another active layer
+(C-k)"); the key sheet and the doctor list these too. Neither is a chord of yours under such a prefix (`C-k C-9`
+in VS Code keys: the profile already made `C-k` one). Your `keys.eld` taking one of Emacs' keys the profile left
+alone (a chord under `C-a`), a key another active layer
 claims (the Emacs layer's keys in "Emacs editing + VS Code app keys", Vim's keys) and two drgnx commands on one
 key are conflicts.
 
