@@ -12,7 +12,11 @@
 ;; output is read meanwhile).  So the bridge runs in step: after it forwards a request (a message with an `id' and a
 ;; `method') it reads the socket until that id's answer has come back, and only then reads stdin again.  That is all
 ;; the parsing it does: each line must be one JSON object no larger than `drgnx-mcp-bridge-max-line', or the bridge
-;; ends (status 1) without forwarding it.
+;; ends (status 1) without forwarding it.  A batch (a top-level array) is malformed: MCP 2025-06-18 has none.
+;;
+;; The bridge is not a security boundary: anything in the sandbox can reach the socket itself.  The hub side owns
+;; size limits, frame checks and recovery from a wedged server.  A server request made during a call deadlocks (see
+;; the docs); drgnx's servers make none.
 
 ;;; Code:
 (require 'subr-x)
@@ -75,12 +79,14 @@ Signals `error' once the unfinished line passes `drgnx-mcp-bridge-max-line' byte
     (terpri)))
 
 (defun drgnx-mcp-bridge--filter (proc chunk)
+  "Split CHUNK from the server (PROC) into lines and write each to stdout.
+A line too large or not a JSON object ends the bridge with status 1, unwritten."
   (condition-case err
       (drgnx-mcp-bridge--feed (process-get proc :lines) chunk #'drgnx-mcp-bridge--from-server)
     (error (drgnx-mcp-bridge--die 1 (format "from the server: %s" (error-message-string err))))))
 
 (defun drgnx-mcp-bridge--sentinel (proc _event)
-  ;; the server closed: whatever it had not finished is dropped
+  "End the bridge with status 0 once the server (PROC) has closed; an unfinished line from it is dropped."
   (unless (process-live-p proc) (drgnx-mcp-bridge--die 0 nil)))
 
 (defun drgnx-mcp-bridge-main ()

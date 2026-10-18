@@ -109,6 +109,40 @@
       (should (equal (gethash "line" (gethash "result" (nth 1 out))) (nth 1 drgnx-mcp-bridge-test--got))))
     (should (process-live-p bridge))))
 
+(ert-deftest drgnx-mcp-bridge/a-server-request-does-not-end-the-wait ()
+  ;; during a call the server asks the client something (an id and a method): it is written at once, and the
+  ;; call's answer, sent later, still comes through without another input line.  Its id is the call's own (each side
+  ;; numbers its requests): only an answer, which has no method, ends the wait
+  (let ((timer nil))
+    (drgnx-mcp-bridge-test--with
+        (lambda (conn line)
+          (process-send-string conn "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"roots/list\"}\n")
+          (setq timer (run-at-time 0.3 nil #'drgnx-mcp-bridge-test--echo conn line)))
+      (unwind-protect
+          (progn
+            (setq bridge (drgnx-mcp-bridge-test--start sock))
+            (drgnx-mcp-bridge-test--send bridge '(:jsonrpc "2.0" :id 7 :method "tools/call"))
+            (should (drgnx-mcp-bridge-test--wait (lambda () (= 2 (length (drgnx-mcp-bridge-test--out bridge))))))
+            (let ((out (drgnx-mcp-bridge-test--out bridge)))
+              (should (equal (gethash "method" (nth 0 out)) "roots/list"))
+              (should (equal (gethash "id" (nth 1 out)) 7))))
+        (when timer (cancel-timer timer))))))
+
+(ert-deftest drgnx-mcp-bridge/an-idle-notification-waits-for-the-next-line ()
+  ;; the documented limit: what the server sends while no request is pending reaches the agent with its next line
+  (drgnx-mcp-bridge-test--with #'drgnx-mcp-bridge-test--echo
+    (setq bridge (drgnx-mcp-bridge-test--start sock))
+    (should (drgnx-mcp-bridge-test--wait (lambda () drgnx-mcp-bridge-test--conns)))
+    (process-send-string (car drgnx-mcp-bridge-test--conns)
+                         "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/message\",\"params\":{}}\n")
+    (accept-process-output nil 0.5)
+    (should (equal (drgnx-mcp-bridge-test--written bridge) ""))
+    (drgnx-mcp-bridge-test--send bridge '(:jsonrpc "2.0" :id 1 :method "ping"))
+    (should (drgnx-mcp-bridge-test--wait (lambda () (= 2 (length (drgnx-mcp-bridge-test--out bridge))))))
+    (let ((out (drgnx-mcp-bridge-test--out bridge)))
+      (should (equal (gethash "method" (nth 0 out)) "notifications/message"))
+      (should (equal (gethash "id" (nth 1 out)) 1)))))
+
 (ert-deftest drgnx-mcp-bridge/long-and-unicode-lines ()
   ;; a 1 MB line with U+061C (Arabic letter mark) and other non-ASCII text arrives intact, both ways
   (drgnx-mcp-bridge-test--with #'drgnx-mcp-bridge-test--echo
