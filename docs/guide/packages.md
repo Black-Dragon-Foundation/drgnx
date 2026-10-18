@@ -43,8 +43,9 @@ The **manifest** is:
 - what `use-package … :ensure` asked for in a session, or an external module's files (gryphn) would have
   installed. In drgnx `:ensure` installs nothing: it records the package use-package would have installed
   (`:ensure t` the package itself, `:ensure other` that one, `:ensure nil` none) in
-  `~/.local/state/drgnx/packages-wanted.eld` and says so in `*Messages*`; the next `drgnx sync` installs it and
-  forgets the want.
+  `~/.local/state/drgnx/packages-wanted.eld` and says so in `*Messages*`; the next `drgnx sync` installs it. The want stays
+  in that file (so the package stays in the manifest, and `drgnx sync --prune` keeps it); delete the name from the file
+  when you no longer want it.
 
 `drgnx sync` resolves each package of the manifest with its dependencies (package.el — one that no archive has
 is reported and does not stop the others), downloads what is missing into `~/.cache/drgnx/packages/` (an HTTP

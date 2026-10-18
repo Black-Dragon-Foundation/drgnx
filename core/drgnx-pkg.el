@@ -733,12 +733,6 @@ than V2 needs\")."
       (mapc #'visit descs))
     (nreverse out)))
 
-(defun drgnx-pkg--forget-wants (installed)
-  "Drop INSTALLED (names) from the packages use-package :ensure asked for."
-  (let* ((file (drgnx-pkg-wanted-file)) (old (ignore-errors (drgnx-pkg--read-file file))))
-    (when (seq-intersection old installed)
-      (with-temp-file file (prin1 (seq-difference old installed) (current-buffer))))))
-
 (defun drgnx-pkg--prune (manifest)
   "Delete from the packages directory being built (`package-user-dir') every package that MANIFEST neither
 names nor needs, through the requirements of the installed ones; the names deleted, sorted."
@@ -846,7 +840,6 @@ warning), never a missing package."
         (drgnx-pkg--native-compile (delq nil (mapcar (lambda (n) (when-let* ((d (drgnx-pkg--installed-desc n))) (package-desc-dir d)))
                                                      installed)))
         (drgnx-pkg--quickstart)
-        (drgnx-pkg--forget-wants installed)
         (unless (car missing)
           (drgnx-pkg-write-lock
            (mapcar (lambda (p)

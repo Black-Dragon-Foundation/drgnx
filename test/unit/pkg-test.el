@@ -482,14 +482,15 @@
     (drgnx-pkg-ensure 'plain-pkg-x '(t) nil)
     (should (equal (drgnx-pkg--read-file (drgnx-pkg-wanted-file)) '(other-pkg-x pinned-pkg-x plain-pkg-x)))))
 
-(ert-deftest drgnx-pkg/installed-wants-are-forgotten ()
+(ert-deftest drgnx-pkg/installed-wants-are-kept ()
+  ;; C1: the want outlives the sync that installed it (it is what keeps the package out of `sync --prune').
   (drgnx-pkg-test--with root
     (drgnx-pkg-ensure 'fa '(t) nil)
     (drgnx-pkg-test--want root)
     (should (plist-get (drgnx-pkg-test--sync root :archives `(("fx" . ,(drgnx-pkg-test--archive (concat root "arch") '((fa "1.0"))))))
                        :ok))
     (should (equal (drgnx-pkg-test--installed) '("fa-1.0")))
-    (should-not (drgnx-pkg--read-file (drgnx-pkg-wanted-file)))))
+    (should (equal (drgnx-pkg--read-file (drgnx-pkg-wanted-file)) '(fa)))))
 
 (ert-deftest drgnx-pkg/rollback-waits-for-no-sync ()
   ;; I7: rollback takes the sync lock too.
@@ -995,6 +996,20 @@ fy with a newer fa 2.0.  Returns (FX FY FA-1.0-ENTRY)."
         (should (string-match-p "^pruned: fc$" (with-output-to-string (drgnx-pkg--report r))))
         (drgnx-pkg-rollback before)
         (should (equal (drgnx-pkg-test--installed) '("fa-1.0" "fb-1.0" "fc-1.0")))))))
+
+(ert-deftest drgnx-pkg/sync-prune-keeps-what-use-package-ensure-asked-for ()
+  ;; C1: a want recorded by :ensure (or an external module) stays in the manifest after the sync that installed it,
+  ;; so a later --prune does not remove it.
+  (drgnx-pkg-test--with root
+    (let ((arch (drgnx-pkg-test--archive (concat root "arch") '((fa "1.0") (fz "1.0")))))
+      (drgnx-pkg-test--want root 'fa)
+      (drgnx-pkg-ensure 'fz '(t))
+      (should (plist-get (drgnx-pkg-test--sync root :archives `(("fx" . ,arch))) :ok))
+      (should (equal (drgnx-pkg-test--installed) '("fa-1.0" "fz-1.0")))
+      (let ((r (drgnx-pkg-test--sync root :archives `(("fx" . ,arch)) :prune t)))
+        (should (plist-get r :ok))
+        (should-not (plist-get r :pruned)))
+      (should (equal (drgnx-pkg-test--installed) '("fa-1.0" "fz-1.0"))))))
 
 (ert-deftest drgnx-pkg/sync-prune-removes-nothing-while-something-is-missing ()
   ;; A sync that could not install everything prunes nothing.
