@@ -16,6 +16,13 @@
 (defvar eglot--managed-mode)
 (defvar yaml-indent-offset)
 (defvar drgnx-statusbar-test--offset nil "An indentation variable of a test.")
+(require 'which-func)                   ; its own table and variables, as in a session that turned it on
+;; keycast and evil are never loaded here: their variables are declared special, so the tests bind them dynamically
+(defvar keycast-mode-line-mode)
+(defvar keycast--this-command-keys)
+(defvar evil-local-mode)
+(defvar evil-mode-line-tag)
+(defvar evil-mode-line-format)
 
 (defmacro drgnx-statusbar-test--with (&rest body)
   "BODY with the status bar's segments, lists and error record kept away from the rest of the test process.
@@ -1022,6 +1029,82 @@ Segments a, b, c are defined: their text is A, B, C."
             (should-not (string-match-p "TRUST" (drgnx-statusbar-mode-line)))
             ;; a plain string is shown as it is
             (let ((global-mode-string " 12:30")) (should (string-match-p "12:30" (drgnx-statusbar-mode-line))))))))))
+
+(ert-deftest drgnx-statusbar/misc-shows-keycast-which-function-and-evils-state ()
+  "What other packages put in the stock mode line shows in `misc': keycast's key, which-function's name (from its
+own cache), evil's state tag, other entries of `mode-line-misc-info'; each change redraws the memoized bar."
+  (drgnx-statusbar-test--with
+    (drgnx-statusbar-test--state
+      (drgnx-statusbar--define-defaults)
+      (let ((drgnx-statusbar-left '(misc)) (drgnx-statusbar-right nil)
+            (global-mode-string nil) (mode-line-process nil) (defining-kbd-macro nil)
+            (keycast-mode-line-mode nil) (keycast--this-command-keys nil)
+            (which-function-mode nil) (which-func-display 'mode)
+            (which-func-table (make-hash-table :test #'eq :weakness 'key))
+            (evil-mode-line-format 'before)
+            (mode-line-misc-info (copy-sequence mode-line-misc-info))
+            (formats 0))
+        (cl-letf (((symbol-function 'keycast-format)
+                   (lambda (_format) (concat (key-description keycast--this-command-keys) " next-line")))
+                  ((symbol-function 'force-mode-line-update) #'ignore)
+                  ;; a batch Emacs formats every mode-line construct as "": count the calls, show :eval forms
+                  ((symbol-function 'format-mode-line)
+                   (lambda (c &rest _)
+                     (setq formats (1+ formats))
+                     (mapconcat (lambda (e) (cond ((stringp e) e) ((eq (car-safe e) :eval) (eval (cadr e) t)) (t "")))
+                                (if (and (consp c) (not (eq (car c) :eval))) c (list c)) ""))))
+          (drgnx-statusbar-test--in-buffer #'emacs-lisp-mode
+            (should-not (string-match-p "next-line" (drgnx-statusbar-mode-line)))
+            ;; Show Keys As I Type (keycast-mode-line-mode): the key of the last command
+            (setq keycast-mode-line-mode t keycast--this-command-keys [?\C-n])
+            (should (string-match-p "C-n next-line" (drgnx-statusbar-mode-line)))
+            (setq keycast--this-command-keys [?\C-p])                 ; the next command, point did not move
+            (should (string-match-p "C-p next-line" (drgnx-statusbar-mode-line)))
+            (setq keycast-mode-line-mode nil)
+            (should-not (string-match-p "next-line" (drgnx-statusbar-mode-line)))
+            ;; which-function-mode: the name its idle timer cached for this window
+            (setq which-function-mode t)
+            (setq-local which-func-mode t)
+            (puthash (selected-window) "my-function" which-func-table)
+            (should (string-match-p "my-function" (drgnx-statusbar-mode-line)))
+            (puthash (selected-window) "other-function" which-func-table)
+            (should (string-match-p "other-function" (drgnx-statusbar-mode-line)))
+            (let ((which-func-display 'header))                       ; you asked for it in the header line
+              (should-not (drgnx-statusbar--seg-misc)))
+            (setq which-function-mode nil)
+            ;; evil's state tag (a Vim profile without drgnx's modal module)
+            (setq-local evil-local-mode t)
+            (setq-local evil-mode-line-tag " <N> ")
+            (should (string-match-p "<N>" (drgnx-statusbar-mode-line)))
+            (setq-local evil-mode-line-tag " <I> ")
+            (should (string-match-p "<I>" (drgnx-statusbar-mode-line)))
+            (cl-letf (((symbol-function 'drgnx-modal-mode-line) (lambda () "INSERT")))   ; modal shows it: not twice
+              (should-not (string-match-p "<I>" (or (drgnx-statusbar--seg-misc) ""))))
+            (setq-local evil-local-mode nil)
+            ;; nothing extra in `mode-line-misc-info': nothing is formatted on a redisplay
+            (drgnx-statusbar-mode-line)
+            (let ((before formats))
+              (dotimes (_ 5) (drgnx-statusbar-mode-line))
+              (should (= formats before)))
+            ;; another package's entry there shows; eglot's (the lsp segment has it) does not
+            (push '(eglot--managed-mode (" [" "eglot:x" "] ")) mode-line-misc-info)
+            (push '(:eval "PKG-MARK") mode-line-misc-info)
+            (should (string-match-p "PKG-MARK" (drgnx-statusbar-mode-line)))
+            (should-not (string-match-p "eglot:x" (drgnx-statusbar-mode-line)))))))))
+
+(ert-deftest drgnx-statusbar/keycast-redraws-every-bar-after-each-command ()
+  "Keycast's text changes with every command, even one that moves nothing: while it is on, each command redraws."
+  (let ((all 0) (drgnx-statusbar--last (make-vector 5 nil)) (keycast-mode-line-mode nil))
+    (cl-letf (((symbol-function 'force-mode-line-update) (lambda (&optional a) (when a (setq all (1+ all)))))
+              ((symbol-function 'drgnx-signal-post) #'ignore))
+      (with-temp-buffer
+        (drgnx-statusbar--post-command)
+        (setq all 0)
+        (drgnx-statusbar--post-command)                 ; nothing changed, keycast off: no redraw of every bar
+        (should (= all 0))
+        (setq keycast-mode-line-mode t)
+        (drgnx-statusbar--post-command)
+        (should (= all 1))))))
 
 (defvar drgnx-statusbar-test--refreshing nil "Non-nil inside the status bar's refresh (other timers may redraw too).")
 (defvar drgnx-statusbar-test--refreshes 0 "How many refreshes ran.")

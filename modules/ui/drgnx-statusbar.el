@@ -303,8 +303,8 @@ COMPACT: only the segments of `drgnx-statusbar-compact' (on the right); `quiet':
 
 (defcustom drgnx-statusbar-modes '(prog-mode text-mode conf-mode)
   "Major modes (and the modes derived from them) whose buffers get the status bar.
-So does any buffer that visits a file, and an Untitled editor.  Every other buffer (Magit, Dired, help, Info, shells, compilation, drgnx's
-own panes) keeps its own mode line."
+So does any buffer that visits a file, and an Untitled editor.  Every other buffer (Magit, Dired, help, Info, shells,
+compilation, drgnx's own panes) keeps its own mode line, except the start page (`drgnx-statusbar-quiet-modes')."
   :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
 
 (defun drgnx-statusbar--own-mode-line-p ()
@@ -363,11 +363,15 @@ Weak on the window, so a deleted window's entry goes with it; emptied when the m
       (bound-and-true-p eglot--managed-mode) (bound-and-true-p eglot--cached-server) (drgnx-statusbar--eglot-live-p)
       (drgnx-statusbar--indent-width)
       (bound-and-true-p drgnx-modal-state) (bound-and-true-p drgnx-job-ui--badge) (bound-and-true-p drgnx-face-glyphs)
+      (bound-and-true-p evil-mode-line-tag) (drgnx-statusbar--which-func w)
+      ;; keycast's keys: a new vector after every command (its text changes even when nothing else did)
+      (and (bound-and-true-p keycast-mode-line-mode) (bound-and-true-p keycast--this-command-keys))
       drgnx-statusbar-left drgnx-statusbar-right drgnx-statusbar-compact drgnx-statusbar-drop-order
       drgnx-statusbar-quiet
       global)
     "What a window's bar depends on, evaluated in its buffer with W the window, WIDTH its width, COMPACT whether it
-shows the compact bar and GLOBAL the text of `global-mode-string'.  Compared with `eql' (GLOBAL, the last, with
+shows the compact bar and GLOBAL the text of `global-mode-string' and of the other entries of `mode-line-misc-info'
+\(`drgnx-statusbar--global-text').  Compared with `eql' (GLOBAL, the last, with
 `equal'): a value that is the same object means the same text.  drgnx's own segments are covered by
 `drgnx-statusbar--tick'; the rest are the buffer-locals and caches the default segments read.  A segment of your own
 that shows something else is drawn again when point moves, the text changes or `(drgnx-statusbar-refresh t)' runs."))
@@ -383,23 +387,44 @@ that shows something else is drawn again when point moves, the text changes or `
   "A memo vector: the values of `drgnx-statusbar--memo-forms', then BAR."
   `(vector ,@drgnx-statusbar--memo-forms ,bar))
 
+(defvar drgnx-statusbar-misc-info-skip)
+
+(defun drgnx-statusbar--misc-info-others-p ()
+  "Non-nil when `mode-line-misc-info' has an entry the bar does not show some other way
+\(`drgnx-statusbar-misc-info-skip').  Compares, allocates nothing."
+  (let ((l mode-line-misc-info) (found nil))
+    (while (and (consp l) (not found))
+      (let ((e (car l)))
+        (unless (or (equal e "") (and (consp e) (memq (car e) drgnx-statusbar-misc-info-skip))) (setq found t)))
+      (setq l (cdr l)))
+    found))
+
 (defun drgnx-statusbar--global-text ()
-  "The text of `global-mode-string' without the entries of `drgnx-statusbar-misc-exclude', trimmed; nil when empty.
+  "The text of `global-mode-string' without the entries of `drgnx-statusbar-misc-exclude', and of the entries of
+`mode-line-misc-info' other packages added (not those of `drgnx-statusbar-misc-info-skip'), trimmed; nil when empty.
 Other modules' marks change without telling the bar, so this runs on every redisplay of a bar: when no entry is left
 to show, it compares and allocates nothing."
-  (let ((g global-mode-string))
-    (cond ((stringp g) (let ((s (string-trim g))) (unless (string-empty-p s) s)))
-          ((and (consp g)
-                (let ((found nil))
-                  (while (and g (not found))
-                    (unless (or (equal (car g) "") (member (car g) drgnx-statusbar-misc-exclude)) (setq found t))
-                    (setq g (cdr g)))
-                  found))
-           (let ((s (string-trim (or (drgnx-statusbar--construct-text
-                                      (seq-remove (lambda (e) (member e drgnx-statusbar-misc-exclude))
-                                                  global-mode-string))
-                                     ""))))
-             (unless (string-empty-p s) s))))))
+  (let* ((g global-mode-string)
+         (global (cond ((stringp g) (let ((s (string-trim g))) (unless (string-empty-p s) s)))
+                       ((and (consp g)
+                             (let ((found nil))
+                               (while (and g (not found))
+                                 (unless (or (equal (car g) "") (member (car g) drgnx-statusbar-misc-exclude))
+                                   (setq found t))
+                                 (setq g (cdr g)))
+                               found))
+                        (let ((s (string-trim (or (drgnx-statusbar--construct-text
+                                                   (seq-remove (lambda (e) (member e drgnx-statusbar-misc-exclude))
+                                                               global-mode-string))
+                                                  ""))))
+                          (unless (string-empty-p s) s)))))
+         (others (when (drgnx-statusbar--misc-info-others-p)
+                   (let ((s (string-trim (format-mode-line
+                                          (seq-remove (lambda (e) (and (consp e)
+                                                                       (memq (car e) drgnx-statusbar-misc-info-skip)))
+                                                      mode-line-misc-info)))))
+                     (unless (string-empty-p s) s)))))
+    (if (and global others) (concat others " " global) (or others global))))
 
 (defun drgnx-statusbar--bar (w width compact)
   "The escaped bar of window W (WIDTH columns, COMPACT or full): the memoized one when nothing it shows changed."
@@ -434,7 +459,10 @@ other buffer: the stock mode line.  An error shows nothing and is recorded once,
 (defvar drgnx-statusbar--last (make-vector 5 nil) "[BUFFER WINDOW POINT TICK MARK-ACTIVE] as of the last command.")
 
 (defun drgnx-statusbar--post-command ()
-  "A mode line made by `:eval' does not know it shows the point: ask for a redraw when what it shows changed."
+  "A mode line made by `:eval' does not know it shows the point: ask for a redraw when what it shows changed.
+While Show Keys As I Type (keycast) is on, every command changes the bar: every bar is redrawn (the editor's too
+when you type in a side pane)."
+  (when (bound-and-true-p keycast-mode-line-mode) (force-mode-line-update t))
   (let ((l drgnx-statusbar--last) (b (current-buffer)) (w (selected-window)))
     (let ((pt (window-point w)) (tick (buffer-chars-modified-tick)))
       (unless (and (eq (aref l 0) b) (eq (aref l 1) w) (eql (aref l 2) pt) (eql (aref l 3) tick)
@@ -853,12 +881,48 @@ Only what the mode line already holds (no lookups)."
         ((and (consp c) (seq-every-p #'stringp c)) (apply #'concat c))
         (t (format-mode-line c))))
 
+(defcustom drgnx-statusbar-misc-info-skip '(global-mode-string which-function-mode which-func-mode eglot--managed-mode)
+  "Entries of `mode-line-misc-info' the `misc' segment does not format: those (SYMBOL …) whose SYMBOL is here.
+`global-mode-string' and which-function are shown from what they hold (the function's name from which-func's own
+cache); eglot's entry is what the `lsp' segment shows.  Every other entry another package adds shows in `misc'."
+  :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
+
+(defun drgnx-statusbar--which-func (w)
+  "The function name `which-function-mode' cached for window W (its idle timer fills the table), or nil: off, not
+in this buffer, or shown in the header line instead (`which-func-display').  A table read, nothing is worked out."
+  (and (bound-and-true-p which-function-mode) (bound-and-true-p which-func-mode)
+       (memq (bound-and-true-p which-func-display) '(mode mode-and-header))
+       (boundp 'which-func-table) (hash-table-p which-func-table)
+       (let ((name (gethash w which-func-table))) (and (stringp name) name))))
+
+(defun drgnx-statusbar--evil-tag ()
+  "evil's state tag (\" <N> \") while evil is on in this buffer and drgnx's modal module does not show the state."
+  (and (bound-and-true-p evil-local-mode) (bound-and-true-p evil-mode-line-format)
+       (not (fboundp 'drgnx-modal-mode-line))
+       (let ((tag (bound-and-true-p evil-mode-line-tag))) (and (stringp tag) tag))))
+
+(defun drgnx-statusbar--keycast ()
+  "The key and command of Show Keys As I Type (`keycast-mode-line-mode'), formatted by keycast, or nil."
+  (and (bound-and-true-p keycast-mode-line-mode) (fboundp 'keycast-format)
+       (let ((s (keycast-format (bound-and-true-p keycast-mode-line-format)))) (and (stringp s) s))))
+
+(defun drgnx-statusbar--trim (s)
+  "S without the spaces at its ends (no regexp: this runs whenever the bar is built)."
+  (let ((b 0) (e (length s)))
+    (while (and (< b e) (memq (aref s b) '(?\s ?\t ?\n))) (setq b (1+ b)))
+    (while (and (> e b) (memq (aref s (1- e)) '(?\s ?\t ?\n))) (setq e (1- e)))
+    (if (and (= b 0) (= e (length s))) s (substring s b e))))
+
 (defun drgnx-statusbar--seg-misc ()
-  "What stock Emacs would show beside the file: the process of the buffer, `global-mode-string' (without the job badge),
-a keyboard macro being recorded, narrowing, and a remote directory."
+  "What stock Emacs would show beside the file: evil's state tag, keycast's key, a keyboard macro being recorded,
+narrowing, a remote directory, the process of the buffer, which-function's name, the entries other packages added to
+`mode-line-misc-info' and `global-mode-string' (without the job badge)."
   (let* ((global (if (eq drgnx-statusbar--global :unset) (drgnx-statusbar--global-text) drgnx-statusbar--global))
+         (which (drgnx-statusbar--which-func (drgnx-statusbar-source-window)))
          (parts (delq nil
-                      (list (and defining-kbd-macro
+                      (list (drgnx-statusbar--evil-tag)
+                            (drgnx-statusbar--keycast)
+                            (and defining-kbd-macro
                                  (propertize (format "%s Rec" (drgnx-statusbar--glyph 'dot)) 'face 'error))
                             (and (buffer-narrowed-p) "Narrowed")
                             (when-let* (((stringp default-directory))
@@ -867,8 +931,9 @@ a keyboard macro being recorded, narrowing, and a remote directory."
                                         ((not (string-empty-p host))))
                               (format "Remote: %s" host))
                             (drgnx-statusbar--construct-text mode-line-process)
+                            (and which (propertize which 'face 'which-func))
                             (drgnx-statusbar--construct-text global)))))
-    (let ((text (string-join (seq-remove #'string-empty-p (mapcar #'string-trim parts)) " ")))
+    (let ((text (string-join (seq-remove #'string-empty-p (mapcar #'drgnx-statusbar--trim parts)) " ")))
       (unless (string-empty-p text) text))))
 
 (defun drgnx-statusbar--seg-modal ()

@@ -127,7 +127,7 @@ Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch.
 | `jobs` | `◎ 2 jobs` while jobs run, and `⚑1` when cards of jobs wait on you | job status |
 | `agents` | `◎ 1 busy`, and `◐ 1 waiting on you` (in the error colour) when something waits for your answer | the Agents tab |
 | `modal` | the modal-editing state (`NORMAL`, `INSERT` …), when that module is loaded | |
-| `misc` | what stock Emacs shows beside the file: the buffer's process (`:run`), a keyboard macro being recorded (`● Rec`), `Narrowed`, `Remote: host`, and the entries of `global-mode-string` (the clock, a battery, other modules' marks) without the job badge | |
+| `misc` | what stock Emacs shows beside the file: evil's state tag (`<N>`, Vim profile, until drgnx's modal module shows it in `modal`), the last key and command of **Show Keys As I Type** (keycast), a keyboard macro being recorded (`● Rec`), `Narrowed`, `Remote: host`, the buffer's process (`:run`), the function point is in (`which-function-mode`), and what other packages add to `mode-line-misc-info` and `global-mode-string` (the clock, a battery, other modules' marks) without the job badge | |
 
 | Right | Shows | Click |
 |---|---|---|
@@ -176,7 +176,13 @@ hub). `⚑1` is the job badge's count of cards and messages waiting on you.
 returns how many things wait for you. drgnx counts the agents' permission requests and edits to review; a module of
 your own can add a function and call `drgnx-statusbar-refresh` when its count changes.
 
-**Other modules' marks.** Anything a package puts on `global-mode-string` shows in `misc`, with no change to the bar.
+**Other modules' marks.** Anything a package puts on `global-mode-string` or `mode-line-misc-info` shows in `misc`,
+with no change to the bar; such entries are formatted at each redisplay of the bar, as stock Emacs does, and with
+none there nothing is. Three packages that write into the stock mode line are read from what they already hold
+instead: keycast (Show Keys As I Type: its key and command, which change with every command, so while it is on every
+command redraws the bars), `which-function-mode` (the name its idle timer cached for the window; nothing when you
+asked for it in the header line) and evil (its state tag). eglot's entry in `mode-line-misc-info` is left out: the
+`lsp` segment shows the server (`drgnx-statusbar-misc-info-skip`).
 
 The bar is redrawn after every command that moved point, changed the text or selected another window (both windows
 trade the full and the compact bar a moment later, when the most recently used editor window is settled), and when
@@ -201,6 +207,7 @@ and a segment of your own that has not called `(drgnx-statusbar-refresh t)`.
 | `drgnx-statusbar-quiet-modes` | `(drgnx-start-mode)` | the modes that get the quiet bar |
 | `drgnx-statusbar-quiet` | `(branch agents jobs tests misc)` | the quiet bar's segments, on the left |
 | `drgnx-statusbar-misc-exclude` | the job badge | entries of `global-mode-string` that `misc` leaves out |
+| `drgnx-statusbar-misc-info-skip` | `global-mode-string`, which-function's and eglot's entries | entries of `mode-line-misc-info` that `misc` does not format (shown another way) |
 | `drgnx-statusbar-test-command-regexp` | `\_<test\_>` | a compilation whose command matches is a test run |
 | `drgnx-statusbar-test-count-regexps` | ERT's and `bin/drgnx test --ui`'s summary lines | where the counts come from |
 | `drgnx-statusbar-waiting` (face) | inherits `error` | the colour of the waiting count |

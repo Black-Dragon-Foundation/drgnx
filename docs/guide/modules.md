@@ -134,7 +134,7 @@ key profile ([keys.md](keys.md)); faces inherit theme faces (no colours). See [c
 | `extra/wgrep` | idle | Edit Results / Apply Edited Results in search results (needs wgrep) |
 | `extra/hunks` | idle | changed lines in the gutter; Show / Revert / Stage Change (needs diff-hl) |
 | `extra/blame` | idle | inline blame: the current line's author, age and commit subject at its end; Blame: Show Commit of Line ([git.md](git.md)) |
-| `extra/keycast` | idle | Show Keys As I Type (needs keycast) |
+| `extra/keycast` | idle | Show Keys As I Type (needs keycast): the key and command in the status bar's `misc` segment (in the stock mode line elsewhere) |
 | `extra/llm` | idle | LLM Menu, Send to LLM (needs gptel; its model and key are gptel's configuration) |
 | `extra/windows` | idle | Pick Window: a letter on every window, type it to go there (needs ace-window) |
 | `extra/magit` | idle | Source Control opens magit (needs magit) |
