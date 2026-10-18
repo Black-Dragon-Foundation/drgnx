@@ -642,7 +642,7 @@ that took VS Code's C-S-h and F2 (the rest of the replace module is not modelled
     (agents-reply "RET" drgnx-agents-transcript-mode-map)
     (agents-review-done "C-c C-c" drgnx-agents-review-mode-map)
     (agents-review-reject "C-c C-k" drgnx-agents-review-mode-map)
-    (ai-accept-word "C-<right>" drgnx-ai-ghost-showing-map) (ai-dismiss "<escape>" drgnx-ai-ghost-showing-map)
+    (ai-accept-word "C-<right>" drgnx-ai-ghost-showing-map) (ai-dismiss "C-g" drgnx-ai-ghost-showing-map)
     (ai-tab "TAB" drgnx-ai-ghost-mode-map) (ai-edit "C-k C-e" nil)
     (ai-edit-apply-hunk "C-c C-a" drgnx-ai-edit-review-mode-map)
     (ai-edit-done "C-c C-c" drgnx-ai-edit-review-mode-map) (ai-edit-reject "C-c C-k" drgnx-ai-edit-review-mode-map)

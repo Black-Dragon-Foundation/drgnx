@@ -81,7 +81,7 @@
         (ai-accept :none "Tab while a suggestion shows; the palette")
         (ai-accept-word "C-<right>" :map drgnx-ai-ghost-showing-map)
         (ai-accept-line :none "the palette")
-        (ai-dismiss "<escape>" :map drgnx-ai-ghost-showing-map)
+        (ai-dismiss "C-g" :map drgnx-ai-ghost-showing-map)
         (ai-complete-toggle :none "in the palette")
         (ai-edit "C-k C-e")
         (ai-edit-apply-hunk "C-c C-a" :map drgnx-ai-edit-review-mode-map :mac "C-c C-a")

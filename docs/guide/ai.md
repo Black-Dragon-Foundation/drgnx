@@ -75,7 +75,11 @@ question. Anything else you do clears it and drops the question in flight.
 |---|---|---|
 | `Tab` | accept it all | see below |
 | `C-<right>` (Mac: ⌘→) | accept its next word | the usual (`right-word`; Mac: line end) |
-| `Escape` | dismiss it | the usual |
+| `C-g` | dismiss it | the usual (cancel) |
+
+Escape is not bound while a suggestion shows, so `Esc x` still works as `M-x`; any other key or command also drops
+the suggestion. Under the Vim profile (evil), nothing is asked in normal or visual state, only while you type
+(insert state, or Emacs state).
 
 **Accept Suggestion Line** and **Toggle AI Completion** are in the palette. With no `complete` provider running,
 nothing is asked, and drgnx says so once; it looks for running providers again at most once a minute.

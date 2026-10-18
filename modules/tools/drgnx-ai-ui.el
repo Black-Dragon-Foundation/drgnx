@@ -5,7 +5,7 @@
 ;;; Commentary:
 ;; Ghost text: a pause in a code buffer asks the `complete' role to fill in the middle (the text before and after
 ;; point); the answer shows after point, dimmed, only if nothing moved or changed meanwhile, and any other command
-;; clears it.  Accept it whole (Tab), a word (C-<right>, bound only while it shows) or a line; Escape dismisses it.
+;; clears it.  Accept it whole (Tab), a word (C-<right>, bound only while it shows) or a line; C-g dismisses it (Escape stays Meta).
 ;; Tab is one arbiter: a suggestion → accept; a completion popup → its own Tab; a snippet field → the next field;
 ;; an org/outline heading → cycle; otherwise indent.  See docs/guide/ai.md.
 
@@ -77,9 +77,13 @@ Keychain or the keyring), or nil."
   (car (seq-find (lambda (step) (and (plist-get (drgnx-ai-provider (car step)) :key-env) (not (drgnx-ai-key (car step)))))
                  (drgnx-ai-role 'complete))))
 
+(defun drgnx-ai-ghost--typing-p ()
+  "Non-nil unless evil is on and this buffer is in a state that does not type (normal, visual, …)."
+  (or (not (bound-and-true-p evil-local-mode)) (memq (bound-and-true-p evil-state) '(insert emacs))))
+
 (defun drgnx-ai-ghost--trigger ()
   "Ask for a suggestion at point (the pause has come).  Says once when no provider completes."
-  (when (and drgnx-ai-ghost-mode (not buffer-read-only))
+  (when (and drgnx-ai-ghost-mode (not buffer-read-only) (drgnx-ai-ghost--typing-p))
     (if (not (drgnx-ai-ghost--available-p))
         (progn
           (unless drgnx-ai-ghost--said-unavailable
