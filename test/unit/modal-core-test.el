@@ -282,14 +282,49 @@
         (kill-buffer buf)
         (setq-default mode-line-format before)))))
 
-(ert-deftest drgnx-modal/a-failed-stop-leaves-the-states ()
+(ert-deftest drgnx-modal/a-failed-stop-still-takes-the-modal-keys-out ()
+  ;; The engine's stop signals: the buffers lose their state all the same, so SPC is not left a leader with no engine.
+  (drgnx-modal-test--with-leader
+    (let ((drgnx-modal-engines nil) (drgnx-modal-running nil) (drgnx-keys-profiles drgnx-modal-test--profiles)
+          (before (default-value 'mode-line-format)))
+      (unwind-protect
+          (progn
+            (drgnx-modal-define-engine 'evil :start #'drgnx-modal-indicator-on :stop (lambda () (error "boom")))
+            (drgnx-modal-sync-engine '((vim editing)))
+            (with-temp-buffer
+              (drgnx-modal-set-state 'normal)
+              (should (drgnx-modal-test--leader-p))
+              (should (null (drgnx-modal-sync-engine '((vscode app editing window)))))
+              (should (null drgnx-modal-state))
+              (should-not (drgnx-modal-test--leader-p))
+              (should (null drgnx-modal-running))
+              (should-not (member '(:eval (drgnx-modal-mode-line)) (default-value 'mode-line-format)))))
+        (setq-default mode-line-format before)))))
+
+(ert-deftest drgnx-modal/typing-p-is-true-where-keys-type ()
+  ;; Engine-neutral: a key types in insert, replace and emacs state, and where no engine runs; not in the others.
   (let ((drgnx-modal-engines nil) (drgnx-modal-running nil) (drgnx-keys-profiles drgnx-modal-test--profiles))
-    (drgnx-modal-define-engine 'evil :start #'ignore :stop (lambda () (error "boom")))
-    (drgnx-modal-sync-engine '((vim editing)))
     (with-temp-buffer
-      (drgnx-modal-set-state 'normal)
+      (should (drgnx-modal-typing-p))
+      (drgnx-modal-define-engine 'evil :start (lambda () (drgnx-modal-init-buffer)) :stop #'ignore)
+      (drgnx-modal-sync-engine '((vim editing)))
+      (should (eq drgnx-modal-state 'normal))
+      (should-not (drgnx-modal-typing-p))
+      (dolist (s '(insert replace emacs))
+        (drgnx-modal-set-state s)
+        (should (drgnx-modal-typing-p)))
+      (dolist (s '(normal motion visual visual-line visual-block operator))
+        (drgnx-modal-set-state s)
+        (should-not (drgnx-modal-typing-p)))
       (drgnx-modal-sync-engine '((vscode app editing window)))
-      (should (eq drgnx-modal-state 'normal)))))
+      (should (drgnx-modal-typing-p)))))
+
+(ert-deftest drgnx-modal/mode-line-propertizes-nothing-per-redisplay ()
+  ;; Redisplay code reads cached state: the same string comes back every time.
+  (with-temp-buffer
+    (dolist (s '(normal insert visual emacs))
+      (drgnx-modal-set-state s)
+      (should (eq (drgnx-modal-mode-line) (drgnx-modal-mode-line))))))
 
 (ert-deftest drgnx-modal/sync-without-a-registered-engine-is-quiet ()
   (let ((drgnx-modal-engines nil) (drgnx-modal-running nil) (drgnx-keys-profiles drgnx-modal-test--profiles))

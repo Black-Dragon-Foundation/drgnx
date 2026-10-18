@@ -110,8 +110,9 @@ Nothing in it needs evil, and `test/unit/modal-core-test.el` drives it with a fa
 - **Maps.** `drgnx-modal-leader-map` holds the leader keys (`SPC …`, `C-w …`), `drgnx-modal-panel-map` the keys
   that exist only in panels. Both are emulation maps (`drgnx-modal--leader-alist`, `drgnx-modal--panel-alist`),
   switched per buffer; `drgnx-modal-order-alists` puts them in front of the engine's in
-  `emulation-mode-map-alists` after `drgnx-keys--everywhere-alist` and before the AI ghost text's (those two
-  have their place whether or not they exist yet), and `drgnx-modal-sync-engine` calls it after an engine starts.
+  `emulation-mode-map-alists` after `drgnx-keys--everywhere-alist` and before the AI ghost text's (the ghost's has
+  its place whether or not it exists yet; the everywhere alist is in the list only while there are `:everywhere`
+  keys, and goes back in at the front, its place), and `drgnx-modal-sync-engine` calls it after an engine starts.
   A module whose keys must beat the engine's too (Esc and `q` closing a pane, the quick-help card) adds its alist's
   symbol to `drgnx-modal-front-alists` when its map comes on and calls `drgnx-modal-order-alists`: those go right
   after the panel alist, before the ghost text's.
@@ -129,7 +130,11 @@ Nothing in it needs evil, and `test/unit/modal-core-test.el` drives it with a fa
 - **Indicator.** `(drgnx-modal-mode-line)` returns the state name (` NORMAL `, ` V-LINE `, …) in
   `drgnx-modal-normal`, `-insert`, `-visual` or `-emacs`, which inherit theme faces. It is one self-contained
   construct, `(:eval (drgnx-modal-mode-line))`, that any mode-line layout can place;
-  `drgnx-modal-indicator-on` / `-off` add and remove it at the front of the default `mode-line-format`.
+  `drgnx-modal-indicator-on` / `-off` add and remove it at the front of the default `mode-line-format`. The strings
+  are made once (`drgnx-modal--indicator-texts`); redisplay only looks one up.
+- **Typing.** `(drgnx-modal-typing-p)` says whether a printable key types in this buffer: no engine runs here, or
+  the state is insert, replace or emacs. Code that passes a key on to the buffer (a closing key) asks it instead of
+  naming an engine.
 - **Selection.** An engine sets `drgnx-modal-selection-function`; `(drgnx-modal-selection)` returns
   `(BEG . END)` from it, else from the active region, else nil.
 - **Engines.** `(drgnx-modal-define-engine NAME :module M :start F :stop F)` registers one. A key profile asks for
@@ -195,8 +200,12 @@ Module `editor/evil` (`:default 'off`, startup stage; packages `evil`, `evil-col
 module defaults with `setopt` (`evil-undo-system` `undo-redo`, `evil-search-module` `evil-search`, `evil-want-minibuffer`
 nil, `evil-mode-line-format` nil; the user's `setopt` in config.el runs later), registers the engine with
 `drgnx-modal-define-engine` and the command Toggle Modal Editing, and calls `drgnx-modal-sync-engine`. `drgnx-evil-start`
-and `-stop` are exact opposites and the only owners of what the engine adds (hooks, advice, variable watchers, saved
-variables); a failing start undoes what it did.
+and `-stop` own what the engine adds (hooks, advice, variable watchers, saved variables): the stop takes it all out
+again, except the `eval-after-load` entries (`multiple-cursors-core`, `term/xterm`, the initial state of a mode whose
+library loads later), which stay and do nothing while the engine is off (each checks `drgnx-evil--active`), and
+evil-collection's registrations, which only bind keys in evil's own maps (inactive without evil). A failing start
+undoes what it did. When an engine's stop signals, `drgnx-modal-sync-engine` still clears every buffer's state and
+the indicator.
 
 - **States.** The core's `drgnx-modal-panel-modes` and `-form-modes` start in emacs state and `-input-modes` in insert
   state (`drgnx-evil--initial-states`, set again when the mode's library loads and when a list grows); every state
@@ -208,7 +217,8 @@ variables); a failing start undoes what it did.
   the flag `no-collection`); the unimpaired keys follow the engine; multiple cursors switch to emacs state through
   `drgnx-evil--mc-hooks`.
 - **Insert-state keys.** `drgnx-evil--insert-bindings` is on only in the pure Vim stack (`drgnx-modal-sync-functions` calls
-  `drgnx-evil--insert-for-layers`), via `evil-disable-insert-state-bindings`.
+  `drgnx-evil--insert-for-layers`), through `evil-update-insert-state-bindings` (it does nothing when you set
+  `evil-disable-insert-state-bindings`).
 - **Ex commands and window keys.** `drgnx-evil-ex-routes` (`:w`, `:wa`, `:e`) are redefined with `evil-ex-define-cmd`, keeping
   evil's argument properties; evil's quit and split commands are `:around` advice (`drgnx-evil--advice-pairs`) that call
   evil's own when the workbench is off. In a buffer another program waits for, the quit advice ends the edit first

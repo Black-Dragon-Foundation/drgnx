@@ -35,10 +35,10 @@ loaded, so there is never a session with Vim keys and no Vim editing:
   turns the module on and runs `drgnx sync` as a job (its progress in the echo area), then starts evil and switches.
   No changes nothing. A sync or start that fails, or `C-g` during the sync, keeps your keys and turns the module back
   off; a failure says why, with the log. In `drgnx safe` (no modules run) the keys stay as they are.
-- Called from code instead of as a command (`emacsclient -e`, a daemon, `drgnx onboard --non-interactive`), nothing
-  is asked: `editor/evil` is turned on and the stack is written to `keys.eld` as `:pending-layers`, your keys stay
-  as they are, and the message says "Vim needs drgnx sync". After `drgnx sync` the next start switches to it (and
-  takes `:pending-layers` out).
+- Called from code instead of as a command (`emacsclient -e`, a daemon, `drgnx onboard --non-interactive`) when
+  evil is not installed, nothing is asked: `editor/evil` is turned on and the stack is written to `keys.eld` as
+  `:pending-layers`, your keys stay as they are, and the message says "Vim needs drgnx sync". After `drgnx sync`
+  the next start switches to it (and takes `:pending-layers` out). With evil installed it switches at once.
 - A Vim stack in `keys.eld` without evil (uninstalled, say) still starts: the palette keeps `C-S-p` and `F1`, Leader
   Menu `M-SPC`; `SPC` types a space, and `editor/evil` waits for its packages (Preferences: Modules).
 - Choosing VS Code or Emacs again turns `editor/evil` off from the next start, and drops a pending Vim stack.
@@ -132,8 +132,8 @@ later (Meow is the candidate):
 - **Your settings win.** The module sets evil's defaults (`evil-undo-system` `undo-redo`, `evil-want-C-u-scroll`,
   `evil-search-module` `evil-search`, no evil in the minibuffer) before your `config.el`, so your `setopt` is last. A
   cursor variable you set (`evil-normal-state-cursor` …) is kept.
-- **AI ghost text** shows in insert state only; one `Esc` drops a suggestion and leaves insert state, `Tab` takes it,
-  and Edit with AI (`SPC a e`) rewrites the visual selection ([ai.md](ai.md)).
+- **AI ghost text** shows in insert state (and Emacs state, where keys type too); one `Esc` drops a suggestion and
+  leaves insert state, `Tab` takes it, and Edit with AI (`SPC a e`) rewrites the visual selection ([ai.md](ai.md)).
 - **Caps Lock as Esc** is the operating system's job (a keyboard setting), not drgnx's.
 
 ### Leader keys

@@ -82,6 +82,12 @@ only in a panel's emacs state; neither while `drgnx-modal-keys-off' is set here.
     (force-mode-line-update)
     state))
 
+(defun drgnx-modal-typing-p ()
+  "Non-nil when a printable key types in this buffer as far as the modal engine goes: no engine runs here, or the
+state is insert, replace or emacs.  Engine-neutral, for code that must know whether a key it passes on would type
+\(a closing key re-queued to the buffer) or run the engine's command (`q' records a macro in normal state)."
+  (or (null drgnx-modal-state) (and (memq drgnx-modal-state '(insert replace emacs)) t)))
+
 (defun drgnx-modal-initial-state ()
   "The state this buffer starts in: emacs in a form or a panel (no modal keys), insert in an input buffer,
 else normal.  Engines share it so they agree."
@@ -147,8 +153,10 @@ when it turns the map off.")
   "Put drgnx's emulation keymaps in front of the engine's in `emulation-mode-map-alists'.
 The order: `drgnx-keys--everywhere-alist' (keys that work in every state beat the engine's), the leader
 alist, the panel alist, the modules' `drgnx-modal-front-alists', `drgnx-ai-ghost--emulation', then the rest as
-it was.  The four of the core always have their place, bound or not: Emacs skips an unbound symbol in the list,
-and a later `add-to-list' of the ghost's finds it already there.  Safe to call again; `drgnx-modal-sync-engine'
+it was.  The leader, panel and ghost alists always have their place, bound or not: Emacs skips an unbound symbol in
+the list, and a later `add-to-list' of the ghost's finds it already there.  The everywhere alist is in the list only
+while there are `:everywhere' keys (`drgnx-keys--set-everywhere' takes it out and puts it back with `add-to-list',
+at the front: its place).  Safe to call again; `drgnx-modal-sync-engine'
 calls it after an engine starts, and the engine when it pushed its maps in front again."
   (let ((front `(drgnx-keys--everywhere-alist drgnx-modal--leader-alist drgnx-modal--panel-alist
                                               ,@drgnx-modal-front-alists drgnx-ai-ghost--emulation)))
@@ -170,20 +178,19 @@ calls it after an engine starts, and the engine when it pushed its maps in front
   "Mode-line state indicator in emacs state."
   :group 'drgnx)
 
+(defconst drgnx-modal--indicator-texts
+  (mapcar (lambda (e) (cons (car e) (propertize (nth 1 e) 'face (nth 2 e))))
+          '((normal " NORMAL " drgnx-modal-normal) (operator " NORMAL " drgnx-modal-normal)
+            (motion " MOTION " drgnx-modal-normal) (insert " INSERT " drgnx-modal-insert)
+            (visual " VISUAL " drgnx-modal-visual) (visual-line " V-LINE " drgnx-modal-visual)
+            (visual-block " V-BLOCK " drgnx-modal-visual) (replace " REPLACE " drgnx-modal-visual)
+            (emacs " EMACS " drgnx-modal-emacs)))
+  "Alist state → the indicator's string with the state's face, made once (redisplay only looks it up).")
+
 (defun drgnx-modal-mode-line ()
   "The state indicator as a string with the state's face (\"\" when no modal engine runs in this buffer).
 Self-contained: place `(:eval (drgnx-modal-mode-line))' anywhere in a mode-line layout."
-  (pcase-let ((`(,text . ,face)
-               (pcase drgnx-modal-state
-                 ((or 'normal 'operator) '(" NORMAL " . drgnx-modal-normal))
-                 ('motion '(" MOTION " . drgnx-modal-normal))
-                 ('insert '(" INSERT " . drgnx-modal-insert))
-                 ('visual '(" VISUAL " . drgnx-modal-visual))
-                 ('visual-line '(" V-LINE " . drgnx-modal-visual))
-                 ('visual-block '(" V-BLOCK " . drgnx-modal-visual))
-                 ('replace '(" REPLACE " . drgnx-modal-visual))
-                 ('emacs '(" EMACS " . drgnx-modal-emacs)))))
-    (if text (propertize text 'face face) "")))
+  (or (alist-get drgnx-modal-state drgnx-modal--indicator-texts) ""))
 
 (defconst drgnx-modal--indicator '(:eval (drgnx-modal-mode-line)) "The mode-line construct of the indicator.")
 
@@ -278,11 +285,11 @@ is written again (it said what ran before the after-apply functions started it) 
       (when drgnx-modal-running
         (let ((stop (plist-get (alist-get drgnx-modal-running drgnx-modal-engines) :stop)))
           (condition-case err
-              (progn (when stop (funcall stop))
-                     (drgnx-modal--reset-buffers)
-                     (setq drgnx-modal-running nil))
-            (error (message "drgnx: stopping %s failed: %s" drgnx-modal-running (error-message-string err))
-                   (setq drgnx-modal-running nil)))))
+              (when stop (funcall stop))
+            (error (message "drgnx: stopping %s failed: %s" drgnx-modal-running (error-message-string err))))
+          ;; whether or not the stop worked: no buffer keeps the modal keys of an engine that is not running
+          (drgnx-modal--reset-buffers)
+          (setq drgnx-modal-running nil)))
       (when want
         (condition-case err
             (progn (when-let* ((start (plist-get (alist-get want drgnx-modal-engines) :start)))
