@@ -9,14 +9,15 @@
 
 (defmacro drgnx-session-test--with (spec &rest body)
   "BODY with the stubs SPEC asks for, in a temp config dir.
-SPEC: (:keep-running BOOL :daemon BOOL :windows LIST :save FN :unsaved LIST :confirm BOOL :processes LIST) — :windows the
-frames that count as windows, :unsaved the file buffers still changed after the save, :processes what `process-list' returns.  Binds KILLED (non-nil once
-`kill-emacs' ran), DELETED (frames deleted), SAVED (calls of `save-some-buffers') and ASKED (confirmations)."
+SPEC: (:keep-running BOOL :daemon BOOL :windows LIST :save FN :unsaved LIST :confirm BOOL :processes LIST)
+— :windows the frames that count as windows, :unsaved the file buffers still changed after the save, :processes
+what `process-list' returns.  Binds KILLED (non-nil once `kill-emacs' ran), DELETED (frames deleted), SAVED (calls
+of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save', then each question's text)."
   (declare (indent 1))
   `(let* ((dir (make-temp-file "drgnx-session-test" t))
           (process-environment (cons (concat "DRGNX_CONFIG_DIR=" dir) process-environment))
           (drgnx-keep-running ,(plist-get spec :keep-running))
-          (killed nil) (deleted nil) (saved 0) (asked 0))
+          (killed nil) (deleted nil) (saved 0) (asked 0) (events nil))
      (unwind-protect
          (cl-letf (((symbol-function 'daemonp) (lambda () ,(plist-get spec :daemon)))
                    ((symbol-function 'drgnx-session--windows) (lambda () ,(plist-get spec :windows)))
@@ -24,11 +25,12 @@ frames that count as windows, :unsaved the file buffers still changed after the 
                    ((symbol-function 'kill-emacs) (lambda (&rest _) (setq killed t)))
                    ((symbol-function 'delete-frame) (lambda (&optional f _force) (push f deleted)))
                    ((symbol-function 'save-some-buffers)
-                    (lambda (&rest _) (cl-incf saved) (funcall (or ,(plist-get spec :save) #'ignore))))
+                    (lambda (&rest _) (cl-incf saved) (push 'save events) (funcall (or ,(plist-get spec :save) #'ignore))))
                    ((symbol-function 'drgnx-session--unsaved-buffers) (lambda () ,(plist-get spec :unsaved)))
                    ((symbol-function 'process-list) (lambda () ,(plist-get spec :processes)))
-                   ((symbol-function 'yes-or-no-p) (lambda (&rest _) (cl-incf asked) ,(plist-get spec :confirm))))
-           (ignore killed deleted saved asked)
+                   ((symbol-function 'yes-or-no-p)
+                    (lambda (prompt) (cl-incf asked) (push prompt events) ,(plist-get spec :confirm))))
+           (ignore killed deleted saved asked events)
            ,@body)
        (delete-directory dir t))))
 
@@ -95,30 +97,50 @@ frames that count as windows, :unsaved the file buffers still changed after the 
 ;; M12a-28: the programs a quit would stop are asked about, once.
 (ert-deftest drgnx-session/quit-asks-once-for-running-processes ()
   (let ((p (make-process :name "drgnx-session-test-sleep" :command '("sleep" "30") :noquery nil))
-        (q (make-process :name "drgnx-session-test-quiet" :command '("sleep" "30") :noquery t)))
+        (q (make-process :name "drgnx-session-test-quiet" :command '("sleep" "30") :noquery t))
+        (r (make-process :name "drgnx-session-test-second" :command '("sleep" "30") :noquery nil)))
     (unwind-protect
         (progn
           ;; "no": asked once, and drgnx stays
           (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :processes (list p q) :confirm nil)
             (drgnx-session-quit)
+            (should (= saved 1))
             (should (= asked 1))
+            (should (string-match-p "\\`1 program is still running (drgnx-session-test-sleep)" (car events)))
             (should-not killed))
           ;; "yes": asked once, quits
-          (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :processes (list p p q) :confirm t)
+          (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :processes (list p q) :confirm t)
             (drgnx-session-quit)
+            (should (= saved 1))
             (should (= asked 1))
             (should killed))
           ;; a process that does not ask on exit does not count
           (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :processes (list q) :confirm nil)
             (drgnx-session-quit)
+            (should (= saved 1))
             (should (= asked 0))
             (should killed))
-          ;; unsaved changes and a running program: two questions, the first "no" ends it
-          (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :unsaved (list 'buf) :processes (list p) :confirm nil)
+          ;; unsaved changes and a running program, the first "no": that ends it, the programs are not asked about
+          (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :unsaved (list 'buf)
+                                                   :processes (list p) :confirm nil)
             (should-not (drgnx-session-quit-confirm))
-            (should (= asked 1))))
+            (should (= saved 1))
+            (should (= asked 1))
+            (should (string-match-p "not saved" (car events))))
+          ;; both "yes": save, then the changes question, then the programs question; then it quits
+          (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :unsaved (list 'buf)
+                                                   :processes (list p q r) :confirm t)
+            (drgnx-session-quit)
+            (should (= saved 1))
+            (should (= asked 2))
+            (should killed)
+            (let ((order (reverse events)))
+              (should (eq (nth 0 order) 'save))
+              (should (string-match-p "not saved; quit and lose" (nth 1 order)))
+              (should (string-match-p "\\`2 programs are still running" (nth 2 order))))))
       (delete-process p)
-      (delete-process q))))
+      (delete-process q)
+      (delete-process r))))
 
 ;; M12a-33: a changed *scratch* is not a buffer whose changes would be lost.
 (ert-deftest drgnx-session/scratch-is-not-offered ()
@@ -131,7 +153,7 @@ frames that count as windows, :unsaved the file buffers still changed after the 
           (should (buffer-modified-p scratch))
           (should (memq untitled (drgnx-session--unsaved-buffers)))
           (should-not (memq scratch (drgnx-session--unsaved-buffers))))
-      (with-current-buffer scratch (set-buffer-modified-p nil))
+      (with-current-buffer scratch (erase-buffer) (set-buffer-modified-p nil))
       (kill-buffer untitled))))
 
 (ert-deftest drgnx-session/the-choice-is-remembered ()

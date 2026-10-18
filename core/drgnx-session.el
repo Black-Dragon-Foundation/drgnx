@@ -125,9 +125,10 @@ a caller that quits afterwards never gets there."
                                                   (length unsaved) (if (cdr unsaved) "s are" " is")))))
            (message "drgnx keeps running; nothing was lost")
            nil)
-          ((when-let* ((running (delete-dups (drgnx-session--running-programs))))
-             (not (yes-or-no-p (format "%d program%s running (a terminal, a shell); quit and stop %s? "
-                                       (length running) (if (cdr running) "s are" " is") (if (cdr running) "them" "it")))))
+          ((when-let* ((running (drgnx-session--running-programs)))
+             (not (yes-or-no-p (format "%d program%s still running (%s); quit and stop %s? "
+                                       (length running) (if (cdr running) "s are" " is")
+                                       (mapconcat #'process-name running ", ") (if (cdr running) "them" "it")))))
            (message "drgnx keeps running; nothing was stopped")
            nil)
           (t t))))
