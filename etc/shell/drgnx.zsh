@@ -14,7 +14,14 @@ if (( ${+functions[compdef]} )); then
 fi
 
 # Inside eat only: its integration file is what makes a prompt clear "a program is running".  Eat refuses to
-# enable itself twice, so a line of your own that sources it is harmless.
+# enable itself twice, so a line of your own that sources it is harmless.  It hands Emacs your history with
+# tail on $HISTFILE: without a readable HISTFILE (zsh sets none by default) that would print an error at every start,
+# so it then sees /dev/null instead, for the moment it is sourced; your HISTFILE stays as it was.
 if [[ ${INSIDE_EMACS-} == *eat* && -n ${EAT_SHELL_INTEGRATION_DIR-} && -r ${EAT_SHELL_INTEGRATION_DIR-}/zsh ]]; then
-  source "$EAT_SHELL_INTEGRATION_DIR/zsh"
+  if [[ -r ${HISTFILE-} ]]; then
+    source "$EAT_SHELL_INTEGRATION_DIR/zsh"
+  else
+    _drgnx_eat() { local HISTFILE=/dev/null; source "$EAT_SHELL_INTEGRATION_DIR/zsh"; }
+    _drgnx_eat; unfunction _drgnx_eat
+  fi
 fi

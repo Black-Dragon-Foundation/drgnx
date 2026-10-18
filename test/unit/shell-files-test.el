@@ -152,6 +152,28 @@ ARGS replace the shell's usual arguments before the script."
                 (should (equal (nth 1 r) (if (cadr case) "defined\n" "none\n")))))))
       (delete-directory integ t))))
 
+(ert-deftest drgnx-shell-files/eat-integration-without-a-history-file-is-silent ()
+  ;; eat's integration hands its history to Emacs with `tail -n N "$HISTFILE"': an unset HISTFILE (zsh's default) or
+  ;; one not written yet printed "tail: cannot open …" at every start of drgnx's terminal (test/live/drgnx-terminal-test.el).  The shell's
+  ;; own HISTFILE is left as it was.
+  (let ((integ (make-temp-file "drgnx-eat" t)))
+    (unwind-protect
+        (progn
+          (dolist (shell '(zsh bash))
+            (with-temp-file (expand-file-name (symbol-name shell) integ)
+              (insert "__eat_enable_integration () { __drgnx_marker=hit; tail -n 5 \"$HISTFILE\" > /dev/null; }\n"
+                      "__eat_enable_integration\n")))
+          (dolist (shell '(zsh bash))
+            (dolist (case '(("unset HISTFILE" "unset") ("HISTFILE=$HOME/never-written" "/never-written")))
+              (let ((r (drgnx-shell-files-test--run
+                        shell (format "%s; %s; echo \"marker=${__drgnx_marker-unset} hist=${HISTFILE-unset}\""
+                                      (car case) (drgnx-shell-files-test--source shell))
+                        (list "INSIDE_EMACS=31.1,eat" (concat "EAT_SHELL_INTEGRATION_DIR=" integ)))))
+                (should (equal (list shell case (nth 0 r) (nth 2 r)) (list shell case 0 "")))
+                (should (string-prefix-p "marker=hit hist=" (nth 1 r)))
+                (should (string-suffix-p (concat (cadr case) "\n") (nth 1 r)))))))
+      (delete-directory integ t))))
+
 (ert-deftest drgnx-shell-files/fish-emits-eats-sequences ()
   (unless (drgnx-shell-files-test--exe 'fish) (ert-skip "fish is not installed here (the container tier runs this)"))
   (let* ((env '("INSIDE_EMACS=31.1,eat" "EAT_SHELL_INTEGRATION_DIR=/nonexistent"))

@@ -24,7 +24,10 @@ What the line does:
 - **Inside drgnx's terminal only**, eat's shell integration: eat learns the directory you are in (the terminal's
   `default-directory` follows `cd`), where each prompt starts, whether the last command failed (the margin mark), and
   whether a command is running. In zsh and bash the line sources the integration file that comes with eat. Eat
-  ships none for fish, so `drgnx.fish` has its own few lines for it.
+  ships none for fish, so `drgnx.fish` has its own few lines for it. Eat's file also hands Emacs your shell history
+  with `tail` on `$HISTFILE`; when that is not a readable file (zsh sets no `HISTFILE` unless your rc does, and bash's
+  is not written until your first shell exits) the file is sourced with `HISTFILE=/dev/null` for that moment only, so
+  no `tail: cannot open` greets you, and your `HISTFILE` stays as it was.
 
 What it never does:
 
