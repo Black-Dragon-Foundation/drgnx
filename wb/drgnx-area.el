@@ -180,8 +180,9 @@ Returns non-nil when TAB was defined."
         (ignore-errors (window-resize w (- px (if horizontal (window-pixel-width w) (window-pixel-height w)))
                                       horizontal nil t))))
     (set-window-parameter w 'quit-restore nil)  ; `q' there must not go back to the window of its birth
-    (window-preserve-size w horizontal t)
     (set-window-scroll-bars w nil nil nil nil t)
+    ;; After the scroll bars: Emacs keeps the size only while it equals the body size it recorded (I11)
+    (window-preserve-size w horizontal t)
     w))
 
 (declare-function drgnx-popup--end "drgnx-popup")
@@ -192,7 +193,11 @@ Returns non-nil when TAB was defined."
 
 (defun drgnx-wb-set-area-buffer (window buffer)
   "Show BUFFER in the area or lane WINDOW, which stays dedicated (`set-window-buffer' would undo it)."
-  (unless (eq (window-buffer window) buffer) (set-window-buffer window buffer))
+  (unless (eq (window-buffer window) buffer)
+    (set-window-buffer window buffer)
+    ;; Emacs preserves a size only for the buffer it was set with: set it again for this one (I11)
+    (when-let* ((area (window-parameter window 'drgnx-role)) ((alist-get area drgnx-wb--areas)))
+      (window-preserve-size window (drgnx-area--horizontal-p area) t)))
   (set-window-dedicated-p window 'drgnx))
 
 (defun drgnx-wb-area-show (area &optional tab buffer)
@@ -210,6 +215,8 @@ Returns the window — the same one across tab switches."
         (set-window-point w (nth 2 saved)))
       (drgnx-area--set-state area (plist-put (copy-sequence (drgnx-area--state area)) :tab tab))
       (set-window-parameter w 'header-line-format (drgnx-area--tab-row area))
+      ;; After the tab row: Emacs keeps the size only while it equals the body size it recorded (I11)
+      (window-preserve-size w (drgnx-area--horizontal-p area) t)
       (with-current-buffer buffer (add-hook 'kill-buffer-hook #'drgnx-area--killed nil t))
       w)))
 

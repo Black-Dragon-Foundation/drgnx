@@ -25,9 +25,9 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
 
 (ert-deftest drgnx-ui/prepare-minimal-layout ()
   (drgnx-ui-test--with-state
-    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-1" nil "1600x900" root))
+    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-1-00000a" nil "1600x900" root))
            (run (plist-get s :run)))
-      (should (equal (file-name-nondirectory (plist-get s :socket)) "drgnx-ui-1"))
+      (should (equal (file-name-nondirectory (plist-get s :socket)) "drgnx-ui-1-00000a"))
       (should (= (file-modes (file-name-directory (plist-get s :socket))) #o700))
       (should (string-search "prelude.el" (drgnx-ui-test--slurp (expand-file-name "init/early-init.el" run))))
       (should (string-search "drgnx-ui-load-config" (drgnx-ui-test--slurp (expand-file-name "init/init.el" run))))
@@ -39,19 +39,19 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
   (drgnx-ui-test--with-state
     (let* ((deep (expand-file-name (make-string 150 ?d) root))
            (process-environment (cons (concat "DRGNX_UI_STATE=" deep) process-environment))
-           (s (drgnx-ui-prepare-run "drgnx-ui-1")))
+           (s (drgnx-ui-prepare-run "drgnx-ui-1-00000a")))
       (should (< (length (plist-get s :socket)) 100))
       (should-not (string-prefix-p deep (plist-get s :socket)))
       (should (member (concat "DRGNX_UI_SOCKET_DIR=" (directory-file-name (file-name-directory (plist-get s :socket))))
                       (drgnx-ui-session-env s)))
-      (drgnx-ui-stop "drgnx-ui-1")
+      (drgnx-ui-stop "drgnx-ui-1-00000a")
       (should-not (file-exists-p (file-name-directory (plist-get s :socket))))
       (should-not (file-exists-p (drgnx-ui-socket-dir "" deep))))))   ; the per-root dir, once empty
 
 (ert-deftest drgnx-ui/socket-dirs-differ-between-state-roots ()
   (drgnx-ui-test--with-state
-    (let* ((a (drgnx-ui-prepare-run "drgnx-ui-1" nil nil (expand-file-name "a" root)))
-           (b (drgnx-ui-prepare-run "drgnx-ui-1" nil nil (expand-file-name "b" root))))
+    (let* ((a (drgnx-ui-prepare-run "drgnx-ui-1-00000a" nil nil (expand-file-name "a" root)))
+           (b (drgnx-ui-prepare-run "drgnx-ui-1-00000a" nil nil (expand-file-name "b" root))))
       (should-not (equal (plist-get a :socket) (plist-get b :socket)))
       (dolist (s (list a b)) (delete-directory (file-name-directory (plist-get s :socket)) t)))))
 
@@ -60,7 +60,7 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
     (let ((cfg (expand-file-name "cfg" root)))
       (dolist (d '("lisp" "extras" "elpa")) (make-directory (expand-file-name d cfg) t))
       (dolist (f '("init.el" "custom.el" "history")) (write-region ";;\n" nil (expand-file-name f cfg)))
-      (let* ((s (drgnx-ui-prepare-run "drgnx-ui-2" cfg "800x600" root))
+      (let* ((s (drgnx-ui-prepare-run "drgnx-ui-2-00000a" cfg "800x600" root))
              (init (expand-file-name "init" (plist-get s :run))))
         (should (file-symlink-p (expand-file-name "lisp" init)))
         (should (file-symlink-p (expand-file-name "extras" init)))
@@ -72,22 +72,22 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
 
 (ert-deftest drgnx-ui/prepare-never-reuses-a-run-dir ()
   (drgnx-ui-test--with-state
-    (drgnx-ui-prepare-run "drgnx-ui-1" nil "1600x900" root)
-    (should-error (drgnx-ui-prepare-run "drgnx-ui-1" nil "1600x900" root))))
+    (drgnx-ui-prepare-run "drgnx-ui-1-00000a" nil "1600x900" root)
+    (should-error (drgnx-ui-prepare-run "drgnx-ui-1-00000a" nil "1600x900" root))))
 
 (ert-deftest drgnx-ui/prepare-rejects-bad-size-and-config ()
   (drgnx-ui-test--with-state
-    (should-error (drgnx-ui-prepare-run "drgnx-ui-3" nil "big" root) :type 'drgnx-ui-error)
-    (should-error (drgnx-ui-prepare-run "drgnx-ui-4" (expand-file-name "nope" root) "1600x900" root)
+    (should-error (drgnx-ui-prepare-run "drgnx-ui-3-00000a" nil "big" root) :type 'drgnx-ui-error)
+    (should-error (drgnx-ui-prepare-run "drgnx-ui-4-00000a" (expand-file-name "nope" root) "1600x900" root)
                   :type 'drgnx-ui-error)))
 
 (ert-deftest drgnx-ui/env-is-allowlisted ()
   (drgnx-ui-test--with-state
     (let* ((process-environment (cons "DRGNX_FAKE_API_KEY=x" process-environment))
-           (s (drgnx-ui-prepare-run "drgnx-ui-5" nil "1600x900" root))
+           (s (drgnx-ui-prepare-run "drgnx-ui-5-00000a" nil "1600x900" root))
            (env (drgnx-ui-session-env s)))
       (should-not (seq-find (lambda (kv) (string-prefix-p "DRGNX_FAKE_API_KEY=" kv)) env))
-      (should (member "DRGNX_UI_NAME=drgnx-ui-5" env))
+      (should (member "DRGNX_UI_NAME=drgnx-ui-5-00000a" env))
       (should (member "DRGNX_NO_LANGUAGE_SERVERS=1" env))      ; no pyright per fixture project (a test opts in)
       (should (member (concat "EMACS_SOCKET_NAME=" (plist-get s :socket)) env))
       (should (equal (drgnx-ui-env-argv '("A=1")) '("env" "-i" "A=1"))))))
@@ -97,30 +97,64 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
   (drgnx-ui-test--with-state
     (let* ((keys '("OPENROUTER_API_KEY" "ANTHROPIC_API_KEY" "ANTHROPIC_AUTH_TOKEN" "OPENAI_API_KEY"))
            (process-environment (append (mapcar (lambda (k) (concat k "=x")) keys) process-environment))
-           (s (drgnx-ui-prepare-run "drgnx-ui-5" nil "1600x900" root))
+           (s (drgnx-ui-prepare-run "drgnx-ui-5-00000a" nil "1600x900" root))
            (argv (drgnx-ui-launch-argv s)))
       (should (equal (seq-take (member "env" argv) 2) '("env" "-i")))
       (dolist (k keys)
         (should-not (seq-find (lambda (a) (string-prefix-p (concat k "=") a)) argv)))
-      (drgnx-ui-stop "drgnx-ui-5"))))
+      (drgnx-ui-stop "drgnx-ui-5-00000a"))))
+
+(ert-deftest drgnx-ui/mutter-caches-stay-in-the-run-dir ()
+  ;; M12c-12-5: mutter and the session's Emacs write their font and GL shader caches under RUN, never ~/.cache
+  (drgnx-ui-test--with-state
+    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-5-00000a" nil "1600x900" root nil nil "mutter"))
+           (env (drgnx-ui-session-env s))
+           (cache (expand-file-name "xdg/cache" (plist-get s :run))))
+      (should (member (concat "XDG_CACHE_HOME=" cache) env))
+      (should (member (concat "MESA_SHADER_CACHE_DIR=" (expand-file-name "mesa" cache)) env))
+      (should-not (seq-find (lambda (kv) (and (string-prefix-p "XDG_CACHE_HOME=" kv)
+                                              (not (equal kv (concat "XDG_CACHE_HOME=" cache)))))
+                            env)))))
+
+(ert-deftest drgnx-ui/session-ids-are-never-reused ()
+  ;; HARNESS-SESS-2: agents in other worktrees addressed each other's sessions when a stopped session's name came
+  ;; back (the lowest free drgnx-ui-N).  An id is drgnx-ui-N-HEX: N one above the highest in this state root, HEX
+  ;; from the pid and the time; a stopped session's id is refused, never handed out again.
+  (drgnx-ui-test--with-state
+    (let* ((first (plist-get (drgnx-ui-claim-run nil "1600x900" root) :name))
+           (ids (list first)))
+      (should (string-match-p "\\`drgnx-ui-1-[0-9a-f]\\{6\\}\\'" first))
+      (should (string-match-p drgnx-ui-name-regexp first))
+      ;; a second one while the first runs: one above the highest
+      (let ((second (plist-get (drgnx-ui-claim-run nil "1600x900" root) :name)))
+        (should (string-prefix-p "drgnx-ui-2-" second))
+        (drgnx-ui-stop second))
+      (drgnx-ui-stop first)
+      (should-error (drgnx-ui-own-session first) :type 'drgnx-ui-refused)
+      (dotimes (_ 20)
+        (let ((name (plist-get (drgnx-ui-claim-run nil "1600x900" root) :name)))
+          (should-not (member name ids))
+          (push name ids)
+          (drgnx-ui-stop name)
+          (should-error (drgnx-ui-own-session name) :type 'drgnx-ui-refused))))))
 
 (ert-deftest drgnx-ui/compositor-argv ()
   (drgnx-ui-test--with-state
-    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-6" nil "1024x768" root))
+    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-6-00000a" nil "1024x768" root))
            (argv (drgnx-ui-compositor-argv s)))
       (should (equal (seq-take argv 3) '("dbus-run-session" "--" "mutter")))
       (dolist (flag '("--headless" "--wayland" "--no-x11")) (should (member flag argv)))
       (should (equal (cadr (member "--virtual-monitor" argv)) "1024x768"))
-      (should (equal (cadr (member "--wayland-display" argv)) "drgnx-ui-6"))
+      (should (equal (cadr (member "--wayland-display" argv)) "drgnx-ui-6-00000a"))
       (should-not (member "-Q" argv))
       (should (equal (cadr (member "--init-directory" argv))
                      (expand-file-name "init" (plist-get s :run)))))))
 
 (ert-deftest drgnx-ui/launch-argv ()
   (drgnx-ui-test--with-state
-    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-1" nil "1600x900" root))
+    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-1-00000a" nil "1600x900" root))
            (argv (drgnx-ui-launch-argv s)))
-      (should (equal (seq-take argv 6) '("systemd-run" "--user" "--quiet" "--collect" "--unit" "drgnx-ui-1")))
+      (should (equal (seq-take argv 6) '("systemd-run" "--user" "--quiet" "--collect" "--unit" "drgnx-ui-1-00000a")))
       (should (member "RuntimeMaxSec=1800" argv))
       (should (member "MemoryMax=3G" argv))
       ;; CHK-2: a stop returns within the check's 15 s grace (systemd's default is 90 s before it kills what is left)
@@ -138,14 +172,17 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
 
 (ert-deftest drgnx-ui/next-name-skips-stale-dirs ()
   (drgnx-ui-test--with-state
-    (make-directory (expand-file-name "drgnx-ui-1" root))
-    (should (equal (drgnx-ui-next-name root) "drgnx-ui-2"))))
+    (make-directory (expand-file-name "drgnx-ui-1-00000a" root))
+    (should (string-match-p "\\`drgnx-ui-2-[0-9a-f]\\{6\\}\\'" (drgnx-ui-next-name root)))
+    ;; a run dir of the old shape (drgnx-ui-N) counts too
+    (make-directory (expand-file-name "drgnx-ui-5" root))
+    (should (string-prefix-p "drgnx-ui-6-" (drgnx-ui-next-name root)))))
 
 (ert-deftest drgnx-ui/reap-removes-stale-dirs ()
   (drgnx-ui-test--with-state
-    (drgnx-ui-prepare-run "drgnx-ui-7" nil "1600x900")
-    (should (member "drgnx-ui-7" (append (drgnx-ui-reap) nil)))
-    (should-not (file-exists-p (expand-file-name "drgnx-ui-7" root)))))
+    (drgnx-ui-prepare-run "drgnx-ui-7-00000a" nil "1600x900")
+    (should (member "drgnx-ui-7-00000a" (append (drgnx-ui-reap) nil)))
+    (should-not (file-exists-p (expand-file-name "drgnx-ui-7-00000a" root)))))
 
 (ert-deftest drgnx-ui/reap-removes-old-kept-test-runs ()
   ;; DEFERRED M2-5: a failed --ui/--scenario run keeps its run dir for debugging, but not for ever
@@ -192,25 +229,25 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
 
 (ert-deftest drgnx-ui/reap-leaves-other-state-roots-alone ()
   (drgnx-ui-test--with-state
-    (let ((units "drgnx-ui-41.service loaded active running x\ndrgnx-ui-42.service loaded active running y\n")
-          (cmdlines `(("drgnx-ui-41" . ,(format "argv[]=env DRGNX_UI_RUN=%s/drgnx-ui-41 ..." root))
-                      ("drgnx-ui-42" . "argv[]=env DRGNX_UI_RUN=/elsewhere/drgnx-ui-42 ..."))))
+    (let ((units "drgnx-ui-41-00000a.service loaded active running x\ndrgnx-ui-42-00000a.service loaded active running y\n")
+          (cmdlines `(("drgnx-ui-41-00000a" . ,(format "argv[]=env DRGNX_UI_RUN=%s/drgnx-ui-41-00000a ..." root))
+                      ("drgnx-ui-42-00000a" . "argv[]=env DRGNX_UI_RUN=/elsewhere/drgnx-ui-42-00000a ..."))))
       (should (equal (drgnx-ui-reap-targets root units (lambda (n) (alist-get n cmdlines nil nil #'equal)))
-                     '("drgnx-ui-41"))))))
+                     '("drgnx-ui-41-00000a"))))))
 
 (ert-deftest drgnx-ui/foreign-sessions-refused ()
   (drgnx-ui-test--with-state
-    (dolist (name '("server" "../drgnx-ui-1" "/run/user/1000/emacs/server" "drgnx-ui-1x" "drgnx-ui-9" 7))
+    (dolist (name '("server" "../drgnx-ui-1-00000a" "/run/user/1000/emacs/server" "drgnx-ui-1x" "drgnx-ui-9-00000a" 7))
       (should-error (drgnx-ui-own-session name) :type 'drgnx-ui-refused))))
 
 (ert-deftest drgnx-ui/own-session-needs-its-socket ()
   (drgnx-ui-test--with-state
-    (let ((s (drgnx-ui-prepare-run "drgnx-ui-3" nil "1600x900")))
-      (should-error (drgnx-ui-own-session "drgnx-ui-3") :type 'drgnx-ui-refused)
+    (let ((s (drgnx-ui-prepare-run "drgnx-ui-3-00000a" nil "1600x900")))
+      (should-error (drgnx-ui-own-session "drgnx-ui-3-00000a") :type 'drgnx-ui-refused)
       (let ((server (make-network-process :name "drgnx-ui-test-sock" :family 'local :server t
                                           :service (plist-get s :socket) :noquery t)))
         (unwind-protect
-            (should (equal (plist-get (drgnx-ui-own-session "drgnx-ui-3") :name) "drgnx-ui-3"))
+            (should (equal (plist-get (drgnx-ui-own-session "drgnx-ui-3-00000a") :name) "drgnx-ui-3-00000a"))
           (delete-process server))))))
 
 (ert-deftest drgnx-ui/composite-argv ()
@@ -221,14 +258,14 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
   (should-error (drgnx-ui-act '(:socket "/nonexistent") '(:fly 1)) :type 'drgnx-ui-error))
 
 (ert-deftest drgnx-ui/cli-args ()
-  (should (equal (drgnx-ui--parse-args '("drgnx-ui-1" "--buffer" "*scratch*" "--hold-ms" "300"))
-                 '(("drgnx-ui-1") :buffer "*scratch*" :hold_ms "300"))))
+  (should (equal (drgnx-ui--parse-args '("drgnx-ui-1-00000a" "--buffer" "*scratch*" "--hold-ms" "300"))
+                 '(("drgnx-ui-1-00000a") :buffer "*scratch*" :hold_ms "300"))))
 
 (ert-deftest drgnx-ui/cli-click-needs-pixel-coordinates ()
   ;; DEFERRED M1-3: a missing or non-numeric X/Y used to click at (0,0)
-  (should (equal (drgnx-ui--click-action '("drgnx-ui-1" "10" "20") '(:count "2")) '(:x 10 :y 20 :count 2)))
-  (dolist (pos '(("drgnx-ui-1") ("drgnx-ui-1" "10") ("drgnx-ui-1" "a" "3") ("drgnx-ui-1" "-1" "3")
-                 ("drgnx-ui-1" "1.5" "3") ("drgnx-ui-1" "10" "20px")))
+  (should (equal (drgnx-ui--click-action '("drgnx-ui-1-00000a" "10" "20") '(:count "2")) '(:x 10 :y 20 :count 2)))
+  (dolist (pos '(("drgnx-ui-1-00000a") ("drgnx-ui-1-00000a" "10") ("drgnx-ui-1-00000a" "a" "3") ("drgnx-ui-1-00000a" "-1" "3")
+                 ("drgnx-ui-1-00000a" "1.5" "3") ("drgnx-ui-1-00000a" "10" "20px")))
     (should-error (drgnx-ui--click-action pos nil) :type 'drgnx-ui-error)))
 
 (ert-deftest drgnx-ui/launcher-choice ()
@@ -241,12 +278,12 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
 (ert-deftest drgnx-ui/runtime-dir-fallback-without-xdg ()
   (drgnx-ui-test--with-state
     (let* ((process-environment (cons "XDG_RUNTIME_DIR" process-environment))   ; unset
-           (s (drgnx-ui-prepare-run "drgnx-ui-1")))
+           (s (drgnx-ui-prepare-run "drgnx-ui-1-00000a")))
       (should (equal (drgnx-ui-runtime-dir)
                      (expand-file-name (format "drgnx-ui-%d" (user-uid)) temporary-file-directory)))
       (should (= (file-modes (drgnx-ui-runtime-dir)) #o700))
       (should (member (concat "XDG_RUNTIME_DIR=" (drgnx-ui-runtime-dir)) (drgnx-ui-session-env s)))
-      (drgnx-ui-stop "drgnx-ui-1"))))
+      (drgnx-ui-stop "drgnx-ui-1-00000a"))))
 
 (ert-deftest drgnx-ui/runtime-dir-fallback-must-be-private ()
   ;; DEFERRED M1-8: an existing /tmp/drgnx-ui-UID is used only if it is our own directory, mode 0700 —
@@ -271,26 +308,32 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
 
 (ert-deftest drgnx-ui/next-name-skips-taken-wayland-displays ()
   (drgnx-ui-test--with-state
-    (write-region "" nil (expand-file-name "drgnx-ui-1" runtime))
-    (should (equal (drgnx-ui-next-name root) "drgnx-ui-2"))))
+    (write-region "" nil (expand-file-name "drgnx-ui-1-00000a" runtime))
+    (should (string-prefix-p "drgnx-ui-2-" (drgnx-ui-next-name root)))
+    ;; and an id whose display is taken (another state root's session) is drawn again
+    (let* ((taken (drgnx-ui-next-name root)) (drawn (list taken)) (orig (symbol-function 'md5)))
+      (write-region "" nil (expand-file-name taken runtime))
+      (cl-letf (((symbol-function 'md5)
+                 (lambda (&rest args) (if (cdr drawn) (apply orig args) (push t drawn) (substring taken -6)))))
+        (should-not (equal (drgnx-ui-next-name root) taken))))))
 
 (ert-deftest drgnx-ui/stop-asks-emacs-to-exit-before-stopping-the-unit ()
   ;; SIGTERM to the whole unit can take the compositor first: Emacs loses its display and exits
   ;; without its kill-emacs-hook (no layout saved).  Emacs is asked to exit first.
   (drgnx-ui-test--with-state
-    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-5")) (calls nil))
+    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-5-00000a")) (calls nil))
       (make-directory (file-name-directory (plist-get s :socket)) t)
       (write-region "" nil (plist-get s :socket))
       (cl-letf (((symbol-function 'drgnx-ui--ask-to-exit) (lambda (sock &rest _) (push (list 'ask sock) calls)))
                 ((symbol-function 'drgnx-ui--unit-owned-p) (lambda (&rest _) t))
                 ((symbol-function 'drgnx-ui--run) (lambda (&rest a) (push (cons 'run a) calls))))
-        (drgnx-ui-stop "drgnx-ui-5"))
+        (drgnx-ui-stop "drgnx-ui-5-00000a"))
       (setq calls (nreverse calls))
       (should (equal (car calls) (list 'ask (plist-get s :socket))))
       (should (equal (car (cadr calls)) 'run)))))
 
 (ert-deftest drgnx-ui/a-session-runs-at-most-its-budget ()
-  (let ((sess (list :name "drgnx-ui-9" :run "/tmp/x" :size "800x600" :socket "/tmp/s")))
+  (let ((sess (list :name "drgnx-ui-9-00000a" :run "/tmp/x" :size "800x600" :socket "/tmp/s")))
     (should (member "RuntimeMaxSec=1800" (let ((process-environment (cons "DRGNX_UI_MAX_RUNTIME" process-environment)))
                                            (drgnx-ui-launch-argv sess))))
     (should (member "RuntimeMaxSec=2700" (let ((process-environment (cons "DRGNX_UI_MAX_RUNTIME=2700" process-environment)))
@@ -298,7 +341,7 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
 
 (ert-deftest drgnx-ui/detached-launch-is-capped ()
   ;; DEFERRED M1-6: the systemd launcher has RuntimeMaxSec and MemoryMax; the detached one needs the same caps
-  (let ((sess (list :name "drgnx-ui-9" :run "/tmp/x" :size "800x600" :socket "/tmp/s"))
+  (let ((sess (list :name "drgnx-ui-9-00000a" :run "/tmp/x" :size "800x600" :socket "/tmp/s"))
         (calls nil))
     (cl-letf (((symbol-function 'call-process) (lambda (&rest a) (push a calls) 0))
               ((symbol-function 'drgnx-ui--read-pgid) (lambda (&rest _) "123")))
@@ -314,8 +357,8 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
 
 (ert-deftest drgnx-ui/stop-removes-the-wayland-display-socket ()
   (drgnx-ui-test--with-state
-    ;; a name no real session has (tests run next to live shards' sessions: drgnx-ui-4 may be one)
-    (let ((name (format "drgnx-ui-%d" (+ 900000 (random 99999)))))
+    ;; a name no real session has (tests run next to live shards' sessions: drgnx-ui-4-00000a may be one)
+    (let ((name (format "drgnx-ui-%d-00000a" (+ 900000 (random 99999)))))
       (drgnx-ui-prepare-run name)
       (dolist (f (list name (concat name ".lock"))) (write-region "" nil (expand-file-name f runtime)))
       (drgnx-ui-stop name)
@@ -326,18 +369,18 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
   (should-not (drgnx-ui--group-ours-p "1" "/any/run"))
   (should-not (drgnx-ui--group-ours-p "0" "/any/run"))
   (should-not (drgnx-ui--group-ours-p nil "/any/run"))
-  (should-not (drgnx-ui--group-ours-p (number-to-string (emacs-pid)) "/not/this/run/drgnx-ui-1")))
+  (should-not (drgnx-ui--group-ours-p (number-to-string (emacs-pid)) "/not/this/run/drgnx-ui-1-00000a")))
 
 (ert-deftest drgnx-ui/stop-ends-the-group-of-a-partly-started-detached-session ()
   ;; DEFERRED M1-7: a run dir whose session.json has no :launcher yet (start failed before saving it)
   ;; but holds a pgid file is a detached session: stop ends its group, not a systemd unit
   (drgnx-ui-test--with-state
-    (let ((run (expand-file-name "drgnx-ui-3" root)) (groups nil))
+    (let ((run (expand-file-name "drgnx-ui-3-00000a" root)) (groups nil))
       (make-directory run)
       (write-region "12345\n" nil (expand-file-name "pgid" run))
       (cl-letf (((symbol-function 'drgnx-ui--stop-group) (lambda (pgid r) (push (list pgid r) groups)))
                 ((symbol-function 'drgnx-ui--unit-owned-p) (lambda (&rest _) (error "not a unit"))))
-        (drgnx-ui-stop "drgnx-ui-3"))
+        (drgnx-ui-stop "drgnx-ui-3-00000a"))
       (should (equal groups (list (list "12345" run))))
       (should-not (file-exists-p run)))))
 
@@ -352,12 +395,13 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
                    (drgnx-ui--fail "setsid did not start %s" (plist-get s :name))))
                 ((symbol-function 'drgnx-ui--stop-group) (lambda (pgid r) (push (list pgid r) groups))))
         (should-error (drgnx-ui--claim-and-launch nil "1600x900" root) :type 'drgnx-ui-error))
-      (should (equal groups (list (list "12345" (expand-file-name "drgnx-ui-1" root)))))
-      (should-not (file-exists-p (expand-file-name "drgnx-ui-1" root))))))
+      (should (equal (mapcar #'car groups) '("12345")))
+      (should (string-match-p drgnx-ui-name-regexp (file-name-nondirectory (cadr (car groups)))))
+      (should-not (file-exists-p (cadr (car groups)))))))
 
 (ert-deftest drgnx-ui/daemon-session-argv ()
   (drgnx-ui-test--with-state
-    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-8" nil "1600x900" root t))
+    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-8-00000a" nil "1600x900" root t))
            (argv (drgnx-ui-compositor-argv s)))
       (should (eq (plist-get s :daemon) t))
       (should (member "--fg-daemon" argv))
@@ -391,17 +435,17 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
   ;; A session's drgnx config and state live in its run dir, not in ~/.config/drgnx and
   ;; ~/.local/state (a drgnx session writes keys-report.eld on every boot).
   (drgnx-ui-test--with-state
-    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-1"))
+    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-1-00000a"))
            (env (drgnx-ui-session-env s)))
       (should (member (concat "DRGNX_CONFIG_DIR=" (expand-file-name "drgnx-config" (plist-get s :run))) env))
       (should (member (concat "XDG_STATE_HOME=" (expand-file-name "state" (plist-get s :run))) env))
       (should (member (concat "DRGNX_DATA_DIR=" (expand-file-name "drgnx-data" (plist-get s :run))) env))
-      (drgnx-ui-stop "drgnx-ui-1"))))
+      (drgnx-ui-stop "drgnx-ui-1-00000a"))))
 
 (ert-deftest drgnx-ui/extra-env-reaches-the-sessions-started-under-it ()
   ;; the kitty exit test puts kkp on its daemon's load path; other sessions get nothing extra
   (drgnx-ui-test--with-state
-    (let ((s (drgnx-ui-prepare-run "drgnx-ui-1")))
+    (let ((s (drgnx-ui-prepare-run "drgnx-ui-1-00000a")))
       (should-not (seq-find (lambda (kv) (string-prefix-p "EMACSLOADPATH=" kv)) (drgnx-ui-launch-argv s)))
       (let ((drgnx-ui-session-extra-env '("EMACSLOADPATH=/elpa/kkp:")))
         (should (member "EMACSLOADPATH=/elpa/kkp:" (drgnx-ui-launch-argv s)))
@@ -412,22 +456,22 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
         (let ((drgnx-ui-session-extra-env (list kv)))
           (should-error (drgnx-ui-session-env s) :type 'drgnx-ui-error)
           (should-error (drgnx-ui-launch-argv s) :type 'drgnx-ui-error)))
-      (drgnx-ui-stop "drgnx-ui-1"))))
+      (drgnx-ui-stop "drgnx-ui-1-00000a"))))
 
 (ert-deftest drgnx-ui/a-session-has-a-temp-dir-in-its-run-dir ()
   ;; TMP-1: what the session's Emacs and its tests put in /tmp goes in the run dir, removed with it.
   (drgnx-ui-test--with-state
-    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-1"))
+    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-1-00000a"))
            (tmp (expand-file-name "tmp" (plist-get s :run))))
       (should (member (concat "TMPDIR=" tmp) (drgnx-ui-session-env s)))
       (should (file-directory-p tmp))
-      (drgnx-ui-stop "drgnx-ui-1")
+      (drgnx-ui-stop "drgnx-ui-1-00000a")
       (should-not (file-exists-p tmp)))))
 
 (ert-deftest drgnx-ui/two-monitors ()
   ;; mutter gets one --virtual-monitor per monitor (multi-window tests).
   (drgnx-ui-test--with-state
-    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-7" nil "1024x768" root nil 2))
+    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-7-00000a" nil "1024x768" root nil 2))
            (argv (drgnx-ui-compositor-argv s)))
       (should (= 2 (seq-count (lambda (a) (equal a "--virtual-monitor")) argv)))
       (should (= 2 (plist-get (drgnx-ui--parse-json (with-temp-buffer (insert-file-contents (expand-file-name "session.json" (plist-get s :run))) (buffer-string))) :monitors))))))
@@ -438,14 +482,14 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
   (drgnx-ui-test--with-state
     (let ((orig (symbol-function 'drgnx-ui-next-name)) (first t))
       (cl-letf (((symbol-function 'drgnx-ui-next-name)
-                 (lambda (r) (if first (progn (setq first nil) (make-directory (expand-file-name "drgnx-ui-1" r)) "drgnx-ui-1")
+                 (lambda (r) (if first (progn (setq first nil) (make-directory (expand-file-name "drgnx-ui-1-00000a" r)) "drgnx-ui-1-00000a")
                                (funcall orig r)))))
         (let ((s (drgnx-ui-claim-run nil "1600x900" root)))
-          (should (equal (plist-get s :name) "drgnx-ui-2")))))))
+          (should (string-prefix-p "drgnx-ui-2-" (plist-get s :name))))))))
 
 (ert-deftest drgnx-ui/a-unit-name-another-session-holds-moves-on-to-the-next ()
   ;; unit names are global to the user: a session of another state root (a parallel shard) may hold
-  ;; drgnx-ui-1 while this root has no run of that name — systemd says so, and the start takes the next name
+  ;; drgnx-ui-1-00000a while this root has no run of that name — systemd says so, and the start takes the next name
   (drgnx-ui-test--with-state
     (let ((tries nil) (stopped nil))
       (cl-letf (((symbol-function 'drgnx-ui-launcher) (lambda () "systemd"))
@@ -455,12 +499,12 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
                  (lambda (&rest args)
                    (let ((unit (cadr (member "--unit" args))))
                      (push unit tries)
-                     (if (equal unit "drgnx-ui-1")
-                         (cons 1 "Failed to start transient service unit: Unit drgnx-ui-1.service was already loaded or has a fragment file.")
+                     (if (null (cdr tries))   ; the first id tried
+                         (cons 1 "Failed to start transient service unit: Unit drgnx-ui-1-00000a.service was already loaded or has a fragment file.")
                        (cons 0 ""))))))
         (let ((s (drgnx-ui--claim-and-launch nil "1600x900" root)))
-          (should (equal (plist-get s :name) "drgnx-ui-2"))
-          (should (equal stopped '("drgnx-ui-1"))))))))
+          (should (string-prefix-p "drgnx-ui-2-" (plist-get s :name)))
+          (should (equal stopped (last tries))))))))
 
 (ert-deftest drgnx-ui/a-unit-that-already-exists-moves-on-too ()
   ;; CHK-4: systemd also refuses a taken name as "Unit … already exists" (UnitExists); parallel shards hit either wording
@@ -473,28 +517,28 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
                  (lambda (&rest args)
                    (let ((unit (cadr (member "--unit" args))))
                      (push unit tries)
-                     (if (equal unit "drgnx-ui-1")
-                         (cons 1 "Failed to start transient service unit: Unit drgnx-ui-1.service already exists.")
+                     (if (null (cdr tries))   ; the first id tried
+                         (cons 1 "Failed to start transient service unit: Unit drgnx-ui-1-00000a.service already exists.")
                        (cons 0 ""))))))
         (let ((s (drgnx-ui--claim-and-launch nil "1600x900" root)))
-          (should (equal (plist-get s :name) "drgnx-ui-2"))
-          (should (equal stopped '("drgnx-ui-1"))))))))
+          (should (string-prefix-p "drgnx-ui-2-" (plist-get s :name)))
+          (should (equal stopped (last tries))))))))
 
 (ert-deftest drgnx-ui/a-test-process-ending-stops-the-sessions-it-started ()
   ;; bin/drgnx check (and the test-* tiers) set DRGNX_UI_STOP_ON_EXIT: a test process that is ended — a
   ;; timeout, C-c — stops its own sessions on the way out; `drgnx ui start' sessions are meant to outlive it
   (let ((drgnx-ui--own nil) (stopped nil))
     (cl-letf (((symbol-function 'drgnx-ui-stop) (lambda (n) (push (cons n (getenv "DRGNX_UI_STATE")) stopped))))
-      (drgnx-ui--own-add "drgnx-ui-7" "/tmp/root-a")
+      (drgnx-ui--own-add "drgnx-ui-7-00000a" "/tmp/root-a")
       (let ((process-environment (cons "DRGNX_UI_STOP_ON_EXIT" process-environment)))   ; unset
         (drgnx-ui--stop-own-on-exit)
         (should-not stopped))
       (let ((process-environment (cons "DRGNX_UI_STOP_ON_EXIT=1" process-environment)))
         (drgnx-ui--stop-own-on-exit)
-        (should (equal stopped '(("drgnx-ui-7" . "/tmp/root-a")))))))     ; in the root it was started in
+        (should (equal stopped '(("drgnx-ui-7-00000a" . "/tmp/root-a")))))))     ; in the root it was started in
   (let ((drgnx-ui--own nil))
-    (drgnx-ui--own-add "drgnx-ui-8" "/tmp/r")
-    (drgnx-ui--own-remove "drgnx-ui-8")                                   ; a session stopped normally is forgotten
+    (drgnx-ui--own-add "drgnx-ui-8-00000a" "/tmp/r")
+    (drgnx-ui--own-remove "drgnx-ui-8-00000a")                                   ; a session stopped normally is forgotten
     (should-not drgnx-ui--own)))
 
 (ert-deftest drgnx-ui/ending-stops-all-own-units-without-blocking-before-it-waits ()
@@ -503,14 +547,14 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
     (cl-letf (((symbol-function 'drgnx-ui-stop) (lambda (n) (push (list 'stop n) events)))
               ((symbol-function 'drgnx-ui--unit-owned-p) (lambda (n run) (and (string-suffix-p n run) t)))
               ((symbol-function 'drgnx-ui--run) (lambda (&rest args) (push (cons 'run args) events) (cons 0 ""))))
-      (drgnx-ui--own-add "drgnx-ui-7" "/tmp/root-a")
-      (drgnx-ui--own-add "drgnx-ui-8" "/tmp/root-b")
+      (drgnx-ui--own-add "drgnx-ui-7-00000a" "/tmp/root-a")
+      (drgnx-ui--own-add "drgnx-ui-8-00000a" "/tmp/root-b")
       (let ((process-environment (cons "DRGNX_UI_STOP_ON_EXIT=1" process-environment)))
         (drgnx-ui--stop-own-on-exit))
       (should (equal (reverse events)
-                     '((run "systemctl" "--user" "stop" "--no-block" "drgnx-ui-8")
-                       (run "systemctl" "--user" "stop" "--no-block" "drgnx-ui-7")
-                       (stop "drgnx-ui-8") (stop "drgnx-ui-7")))))))
+                     '((run "systemctl" "--user" "stop" "--no-block" "drgnx-ui-8-00000a")
+                       (run "systemctl" "--user" "stop" "--no-block" "drgnx-ui-7-00000a")
+                       (stop "drgnx-ui-8-00000a") (stop "drgnx-ui-7-00000a")))))))
 
 (ert-deftest drgnx-check/the-grace-covers-a-session-stop ()
   ;; ask-to-exit (3 s + 5 s) + TimeoutStopSec (10 s) + margin
@@ -526,7 +570,7 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
                  (cond ((string-search "api-keys \"bad\"" form) (drgnx-ui--fail "no such key"))
                        ((string-search "api-status" form) '(:busy :false :settled t))
                        (t '(:ok t))))))
-      (let ((err (should-error (drgnx-ui-measure '(:name "drgnx-ui-1") '((:keys "a") (:keys "bad") (:keys "c")))
+      (let ((err (should-error (drgnx-ui-measure '(:name "drgnx-ui-1-00000a") '((:keys "a") (:keys "bad") (:keys "c")))
                                :type 'drgnx-ui-error)))
         (should (string-match-p "action 2 (:keys .*bad.*): no such key" (error-message-string err))))
       (should (equal (car calls) "(drgnx-uitest-api-measure-end)"))

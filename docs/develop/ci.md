@@ -45,7 +45,8 @@ Installing Emacs and the GUI stack into Fedora took about a minute per job, so t
 `Test images` and pulled. A job pulls the image tagged with the hash of the Containerfile it checked out; when
 there is none yet (the push that changes the Containerfile), it builds the image itself, so a job never runs on
 an image from another Containerfile. `bin/drgnx test --container` uses `DRGNX_TEST_IMAGE` (and `--ui`
-`DRGNX_TEST_GUI_IMAGE`) instead of building when set — locally too:
+`DRGNX_TEST_GUI_IMAGE`; `--ui --compositor kwin|niri` `DRGNX_TEST_WM_IMAGE`, from `Containerfile.wm`, which no CI job
+builds or runs yet) instead of building when set — locally too:
 
 ```
 DRGNX_TEST_IMAGE=ghcr.io/black-dragon-foundation/drgnx-test:f45 bin/drgnx test --container

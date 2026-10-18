@@ -18,6 +18,7 @@
 (require 'subr-x)
 (require 'drgnx-paths)
 (require 'drgnx-tty-recommend)   ; the terminal table, tmux, the fallback keys and the recommendation (all read-only)
+(require 'drgnx-platform)        ; the window manager (the Desktop row)
 
 (declare-function package-built-in-p "package")
 
@@ -237,6 +238,7 @@ off), or inside a session, the mode is read as it is and never switched: an off 
            :ai-up (drgnx-doctor--ai-up)
            :search (drgnx-doctor--search)
            :terminal (drgnx-doctor-terminal-facts)
+           :window-manager (drgnx-platform-doctor-facts)
            ;; whether a key is set, from the environment only: the doctor never opens auth-source (it may prompt)
            :ai-keys (let ((k (getenv "OPENROUTER_API_KEY"))) (and k (not (string-empty-p k)) '(openrouter)))
            :ai-complete (ignore-errors (require 'drgnx-ai) (cdr (car (drgnx-ai-role 'complete))))
@@ -768,6 +770,56 @@ what its table row or tmux's extended-keys say), nil when that cannot be told."
    (if (version< (plist-get f :version) "31.1")
        (list 'info "popups in the bottom lane; 31.1 has floating ones" nil)
      (list 'ok "popups float over the text (child frames)" nil))))
+
+;;;; Desktop: the window manager (core/drgnx-platform.el)
+
+(defconst drgnx-doctor--wm-packages
+  '((sway :pkg "sway") (i3 :pkg "i3" :arch "i3-wm") (hyprland :pkg "hyprland" :fedora nil) (niri :pkg "niri"))
+  "Adapter → plist: :pkg, the package with the adapter's tool (Fedora 45's names, the m12c facts); a family's key
+(:fedora, :debian, :arch) names that family's package instead, nil when its repositories lack it (Fedora has no
+Hyprland; on Arch `i3' is a group and `i3-wm' has i3-msg).")
+
+(defun drgnx-doctor--wm-install (wm os)
+  "The command that installs the tool of WM on OS (`drgnx-tty-os'), or how to get it; never runs it."
+  (when-let* ((entry (alist-get wm drgnx-doctor--wm-packages)))
+    (let* ((family (drgnx-tty--family os))
+           (key (and (memq family '(fedora debian arch)) (intern (format ":%s" family))))
+           (pkg (if (and key (plist-member entry key)) (plist-get entry key) (plist-get entry :pkg))))
+      (unless pkg (setq pkg (plist-get entry :pkg) family nil))
+      (pcase family
+        ('fedora (concat (if (plist-get os :ostree) "rpm-ostree install " "sudo dnf install ") pkg))
+        ('debian (concat "sudo apt install " pkg))
+        ('arch (concat "sudo pacman -S " pkg))
+        (_ (format "install %s with your package manager" pkg))))))
+
+(defun drgnx-doctor--window-manager (wf)
+  "The Desktop row (STATUS DETAIL FIX) from WF, `drgnx-platform-doctor-facts'."
+  (let* ((title (plist-get wf :title)) (n (plist-get wf :monitors)) (tool (plist-get wf :tool))
+         (can (plist-get wf :can-move)))
+    (pcase (plist-get wf :wm)
+      ((or 'none 'tty)
+       (list 'info "no graphical session here: run drgnx doctor in your desktop's terminal to check its window manager" nil))
+      ('other-wayland
+       (list 'info (format "%s (Wayland): no adapter; drgnx leaves window placement to it"
+                           (or (plist-get wf :desktop) "this compositor"))
+             nil))
+      ('gnome (list 'ok "GNOME (Wayland): apps cannot move windows; use Super+Shift+←/→" nil))
+      (wm (cond ((and tool (not (plist-get wf :tool-found)))
+                 (list 'warn (format "%s: %s not found: Move to Monitor and restore need it" title tool)
+                       (drgnx-doctor--wm-install wm (drgnx-tty-os))))
+                ((and tool (not (plist-get wf :answers)))
+                 (list 'warn (format "%s did not answer within %g s" title drgnx-platform-doctor-timeout)
+                       (format "run drgnx doctor from a terminal inside your %s session" title)))
+                ((not (eq can t)) (list 'warn (format "%s: %s" title (car can)) (cdr can)))
+                (t (list 'ok (format "%s%s%s: Move to Monitor and restore work%s" title
+                                     (if-let* ((v (plist-get wf :version))) (concat " " v) "")
+                                     (if n (format ", %d monitor%s" n (if (= n 1) "" "s")) "")
+                                     (if (plist-get wf :frame-positions) " (frame positions)" ""))
+                         nil)))))))
+
+(drgnx-doctor-define 'window-manager :group "Desktop"
+                     :doc "The window manager, its monitors, and whether Move to Monitor and restore work there"
+                     :check (lambda (f) (when-let* ((wf (plist-get f :window-manager))) (drgnx-doctor--window-manager wf))))
 
 ;;;; Running and reporting
 

@@ -146,22 +146,26 @@ env_eval() { # FORM — evaluate with harness/drgnx-env.el loaded, print the res
   "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -l drgnx-env --eval "(princ (or $1 \"\"))"
 }
 
-test_container() { # [--ui | --tty [--fedora 44|45]] — the batch (GUI, terminal) tier inside a fedora:45 / Emacs 31.1 container
+test_container() { # [--ui [--compositor C] | --tty [--fedora 44|45]] — the batch (GUI, terminal) tier inside a fedora:45 / Emacs 31.1 container
   # DRGNX_TEST_IMAGE / DRGNX_TEST_GUI_IMAGE / DRGNX_TEST_TTY_IMAGE: use that image (CI pulls a prebuilt one) instead of building it
   # --tty --fedora 44 runs the terminal tier on Fedora 44's Emacs 30.2 (default 45: Emacs 31.1)
-  local rt mount image file elpa prebuilt="${DRGNX_TEST_IMAGE:-}" args=() cmd=(bin/drgnx test) build=() tier="" fedora=""
+  local rt mount image file elpa prebuilt="${DRGNX_TEST_IMAGE:-}" args=() cmd=(bin/drgnx test) build=() tier="" fedora="" compositor=""
   while (($#)); do
     case "$1" in
       --ui|--tty)
         if [[ -n "$tier" && "$tier" != "${1#--}" ]]; then echo "drgnx: test --container takes --ui or --tty, not both" >&2; return 2; fi
         tier="${1#--}" ;;
       --fedora) fedora="${2:-?}"; if (($# > 1)); then shift; fi ;;
-      *) echo "drgnx: unknown option for test --container: $1 (--ui | --tty [--fedora 44|45])" >&2; return 2 ;;
+      --compositor) compositor="${2:-}"; ui_compositor_ok "$compositor" || return 2; shift ;;
+      *) echo "drgnx: unknown option for test --container: $1 (--ui [--compositor C] | --tty [--fedora 44|45])" >&2; return 2 ;;
     esac
     shift
   done
   if [ -n "$fedora" ] && { [ "$tier" != tty ] || [[ ! "$fedora" =~ ^(44|45)$ ]]; }; then
     echo "drgnx: --fedora 44|45 goes with --tty (the terminal tier's image); got: $fedora" >&2; return 2
+  fi
+  if [ -n "$compositor" ] && [ "$tier" != ui ]; then
+    echo "drgnx: --compositor goes with --ui (the GUI tier)" >&2; return 2
   fi
   rt="${DRGNX_CONTAINER:-$(env_eval '(drgnx-env-container-runtime)')}"   # set: no host Emacs needed (CI)
   [ -n "$rt" ] || { echo "drgnx: no container runtime found (podman, docker, nerdctl); set DRGNX_CONTAINER" >&2; return 1; }
@@ -169,8 +173,16 @@ test_container() { # [--ui | --tty [--fedora 44|45]] — the batch (GUI, termina
   image=drgnx-test:f45; file=Containerfile
   if [ "$tier" = ui ]; then
     image=drgnx-test-gui:f45; file=Containerfile.gui; cmd=(bin/drgnx test --ui); prebuilt="${DRGNX_TEST_GUI_IMAGE:-}"
-    args=(--security-opt seccomp=unconfined --security-opt label=disable)
+    local comp="${DRGNX_UI_COMPOSITOR:-}"
+    if [ -n "$compositor" ]; then cmd+=(--compositor "$compositor"); comp="$compositor"; fi
+    # KWin and niri are in an image of their own (Containerfile.wm); DRGNX_TEST_WM_IMAGE: a prebuilt one
+    case "$comp" in kwin|niri) image=drgnx-test-wm:f45; file=Containerfile.wm; prebuilt="${DRGNX_TEST_WM_IMAGE:-}" ;; esac
+    # --memory: a GUI run (sessions, compositors, the X11 Emacs) must never push the host into the OOM killer;
+    # --memory-swap the same: no swap on top.  DRGNX_TEST_GUI_MEMORY (default 3g) for a bigger run
+    local mem="${DRGNX_TEST_GUI_MEMORY:-3g}"
+    args=(--memory "$mem" --memory-swap "$mem" --security-opt seccomp=unconfined --security-opt label=disable)
     mount="$here:/src:ro"
+    if [ -n "${DRGNX_UI_COMPOSITOR:-}" ]; then args+=(-e "DRGNX_UI_COMPOSITOR=$DRGNX_UI_COMPOSITOR"); fi
   elif [ "$tier" = tty ]; then
     fedora="${fedora:-45}"
     image="drgnx-test-tty:f$fedora"; file=Containerfile.tty; cmd=(bin/drgnx test --tty); prebuilt="${DRGNX_TEST_TTY_IMAGE:-}"
@@ -187,9 +199,15 @@ test_container() { # [--ui | --tty [--fedora 44|45]] — the batch (GUI, termina
   fi
   echo "container runtime: $rt" >&2
   if [ -n "$prebuilt" ]; then
+    # an image reference, never an option: it follows the run's options on the command line
+    [[ $prebuilt =~ ^[A-Za-z0-9][A-Za-z0-9._/:@-]*$ ]] || { echo "drgnx: '$prebuilt' is not an image reference" >&2; return 2; }
     image="$prebuilt"; echo "image: $image (prebuilt)" >&2
   else
-    "$rt" build -q -t "$image" ${build[@]+"${build[@]}"} -f "$here/test/container/$file" "$here/test/container" >/dev/null
+    # an image build is capped too: an uncapped one once pushed the host into the OOM killer
+    # (DRGNX_TEST_BUILD_MEMORY, default 3g; podman only, as docker's buildx ignores --memory)
+    local bmem="${DRGNX_TEST_BUILD_MEMORY:-3g}" bargs=()
+    [ "$rt" = podman ] && bargs=(--memory "$bmem" --memory-swap "$bmem")
+    "$rt" build ${bargs[@]+"${bargs[@]}"} -q -t "$image" ${build[@]+"${build[@]}"} -f "$here/test/container/$file" "$here/test/container" >/dev/null
   fi
   # a narrowed run stays narrow inside the container: the selector goes in with its value
   if [ -n "${DRGNX_TEST_SELECTOR:-}" ]; then args+=(-e "DRGNX_TEST_SELECTOR=$DRGNX_TEST_SELECTOR"); fi
@@ -248,20 +266,28 @@ test_install() { # [NAME…] — install.sh end to end in fresh containers (slow
   ((${#failed[@]} == 0)) || { echo "install tests failed: ${failed[*]}" >&2; return 1; }
 }
 
+ui_compositor_ok() { # C — is C a compositor a GUI session can run under (harness/drgnx-ui.el)?
+  case "$1" in
+    mutter|sway|x11|i3|kwin|niri) return 0 ;;
+    *) echo "drgnx: --compositor takes mutter, sway, x11, i3, kwin or niri, not '$1'" >&2; return 1 ;;
+  esac
+}
+
 cmd_test() {
   case "${1:-}" in
     "") test_batch ;;
     --one-process) export DRGNX_TEST_ONE_PROCESS=1; test_batch ;;   # every test file in one Emacs (hunting a leak across files)
     --install) shift; test_install "$@" ;;
     --tty) test_tty ;;
-    --ui) run_in_tmp ui_exec test-ui ;;
+    --ui) if [ "${2:-}" = --compositor ]; then ui_compositor_ok "${3:-}" || exit 2; export DRGNX_UI_COMPOSITOR="$3"; fi
+          run_in_tmp ui_exec test-ui ;;
     --scenario) shift; run_in_tmp ui_exec test-scenario "$@" ;;
     --bench) run_in_tmp ui_exec test-bench ;;
     --perf) shift; [ "${1:-}" = --audit ] && export DRGNX_PERF_AUDIT=1; run_in_tmp ui_exec test-perf ;;
     --soak) shift; run_in_tmp ui_exec test-soak "${1:-30}" ;;
     --container) shift; test_container "$@" ;;
     --podman) shift; DRGNX_CONTAINER=podman test_container "$@" ;;
-    *) echo "usage: drgnx test [--one-process | --ui | --tty | --scenario [--config C] | --bench | --perf [--audit] | --soak [MIN] | --container [--ui | --tty [--fedora 44|45]] | --install [NAME…]]" >&2; exit 2 ;;
+    *) echo "usage: drgnx test [--one-process | --ui [--compositor C] | --tty | --scenario [--config C] | --bench | --perf [--audit] | --soak [MIN] | --container [--ui [--compositor C] | --tty [--fedora 44|45]] | --install [NAME…]]" >&2; exit 2 ;;
   esac
 }
 
@@ -516,7 +542,8 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx test [--one-process]
                                batch tests, each test file in an Emacs of its own
                                (--one-process: all in one Emacs, to find a leak across files)
-       drgnx test --ui         GUI tests in a headless session (mutter)
+       drgnx test --ui [--compositor mutter|sway|x11|i3|kwin|niri]
+                               GUI tests in a headless session (mutter; or sway, Xvfb, Xvfb with i3, KWin, niri)
        drgnx test --tty        terminal tests: Emacs in private tmux servers (needs tmux; docs/develop/harness.md)
        drgnx test --bench      the workbench vs treemacs and ibuffer, timed in a GUI session
        drgnx test --perf [--audit]
@@ -525,8 +552,9 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx test --soak [MIN] the workloads in a loop for MIN minutes (30); memory must hold
        drgnx test --scenario [--config drgnx|gryphn|DIR]
                                behaviour scenarios in a session of that configuration
-       drgnx test --container [--ui]
-                               the same inside a fedora:45 / Emacs 31.1 container
+       drgnx test --container [--ui [--compositor C]]
+                               the same inside a fedora:45 / Emacs 31.1 container (GUI: capped at 3 GB, no swap;
+                               DRGNX_TEST_GUI_MEMORY overrides; image builds 3 GB, DRGNX_TEST_BUILD_MEMORY)
                                (podman, else docker, else nerdctl; DRGNX_CONTAINER overrides)
        drgnx test --container --tty [--fedora 44|45]
                                the terminal tier in a container (44: Emacs 30.2, 45: Emacs 31.1; default 45)

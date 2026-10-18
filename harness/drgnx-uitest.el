@@ -189,10 +189,22 @@ without input still gives followers and timers their chance)."
 (defvar drgnx-uitest-record--gc0 nil)
 (defvar drgnx-uitest-record--guard0 0)
 (defvar drgnx-uitest--targets nil "Ids of windows the measured input was aimed at.")
+(defvar drgnx-uitest-record--frame nil
+  "The root frame when the measurement began.  The recorder stays on it: a frame made meanwhile comes
+first in `frame-list' and would otherwise become the root frame.")
+(defvar drgnx-uitest-record--size nil "The measured frame's pixel size (W . H) at the last snapshot.")
+
+(defun drgnx-uitest-record--root ()
+  "The frame the recorder watches: the measurement's (even once deleted), else the root frame."
+  (or drgnx-uitest-record--frame (drgnx-uitest-root-frame)))
+
+(defun drgnx-uitest-record--frame-size (frame)
+  "FRAME's pixel size as (WIDTH . HEIGHT)."
+  (cons (frame-pixel-width frame) (frame-pixel-height frame)))
 
 (defun drgnx-uitest-record--signatures ()
-  "Alist of (ID . SIGNATURE) for the root frame's windows and its minibuffer."
-  (let ((f (drgnx-uitest-root-frame)))
+  "Alist of (ID . SIGNATURE) for the measured frame's windows and its minibuffer."
+  (let ((f (drgnx-uitest-record--root)))
     (cons (cons "mini" (list :height (window-pixel-height (minibuffer-window f))))
           (mapcar (lambda (w)
                     (cons (drgnx-uitest-window-id w)
@@ -209,8 +221,18 @@ without input still gives followers and timers their chance)."
   (setq drgnx-uitest-record--last-change (float-time)))
 
 (defun drgnx-uitest-record--snapshot (cause)
-  "Record every window whose signature changed since the last snapshot, as caused by CAUSE."
-  (let ((now (drgnx-uitest-record--signatures)))
+  "Record every window whose signature changed since the last snapshot, as caused by CAUSE.
+When CAUSE is `other' (no command or timer ran) and the frame's pixel size changed since the last
+snapshot, the window manager resized it (a tiling WM halving it for a new window, say): `wm:resize'.
+Once the measured frame is deleted nothing more is recorded: another frame's windows are not its windows,
+and that frame's other size is no WM resize."
+  (when-let* ((frame (drgnx-uitest-record--root))
+              ((frame-live-p frame))
+              (now (drgnx-uitest-record--signatures))
+              (size (drgnx-uitest-record--frame-size frame)))
+    (when (and (equal cause "other") drgnx-uitest-record--size (not (equal size drgnx-uitest-record--size)))
+      (setq cause "wm:resize"))
+    (setq drgnx-uitest-record--size size)
     (dolist (cell now)
       (let ((old (assoc (car cell) drgnx-uitest-record--sigs)))
         (unless (equal (cdr old) (cdr cell))
@@ -283,47 +305,53 @@ is not."
 (defun drgnx-uitest-jank-report (log t0 initial targets last-input)
   "Summarise recorder LOG (oldest first) of a measurement started at T0.
 INITIAL is the signature alist at T0, TARGETS the ids of windows the input was
-aimed at (their changes are not collateral), LAST-INPUT the time of the last event."
+aimed at (their changes are not collateral), LAST-INPUT the time of the last event.
+Changes caused by `wm:resize' (the window manager resized the frame) count as layout, never as
+collateral or a snap-back."
   (let ((last-change t0) (layout 0) (chrome 0) (echo 0) (scrolls 0) (osc 0) (collateral nil)
-        (timer-moves 0) (causes nil) (trace nil)
+        (timer-moves 0) (wm-resizes 0) (causes nil) (trace nil)
         (history (mapcar (lambda (c) (list (car c) (cdr c))) initial)))
     (dolist (e log)
       (setq last-change (max last-change (car e)))
       (pcase e
         (`(,_ scroll . ,_) (cl-incf scrolls))
         (`(,time change ,id ,old ,new . ,rest)
-         (let ((cause (or (car rest) "other")))
+         (let* ((cause (or (car rest) "other"))
+                (wm (equal cause "wm:resize")))
            (if (assoc cause causes) (cl-incf (cdr (assoc cause causes))) (push (cons cause 1) causes))
            (when (and (string-prefix-p "timer:" cause) (not (equal id "mini"))) (cl-incf timer-moves))
+           (when wm (cl-incf wm-resizes))
            (when (< (length trace) 50)
-             (push (drgnx-uitest--trace-step (round (* 1000 (- time t0))) cause id old new) trace)))
-         (if (equal id "mini")
-             (cl-incf echo)
-           (when (or (null old) (null new)
-                     (not (equal (plist-get old :edges) (plist-get new :edges))))
-             (cl-incf layout))
-           (when (and old new (not (and (equal (plist-get old :header) (plist-get new :header))
-                                        (equal (plist-get old :modeline) (plist-get new :modeline)))))
-             (cl-incf chrome))
-           (unless (member id targets) (cl-pushnew id collateral :test #'equal)))
-         ;; Snap-backs are per field: point returning to where it was is one even if the
-         ;; window's edges changed in between.
-         (let ((h (assoc id history)) (snapped nil))
-           (if (null h)
-               (push (list id new) history)
-             (dolist (field (drgnx-uitest--plist-keys new))
-               (let ((now (plist-get new field))
-                     (seen (mapcar (lambda (sig) (plist-get sig field)) (cdr h))))
-                 (when (and (not (equal now (car seen))) (member now (cdr seen)))
-                   (setq snapped t))))
-             (when snapped (cl-incf osc))
-             (setcdr h (cons new (cdr h))))))))
+             (push (drgnx-uitest--trace-step (round (* 1000 (- time t0))) cause id old new) trace))
+           (if (equal id "mini")
+               (cl-incf echo)
+             (when (or (null old) (null new)
+                       (not (equal (plist-get old :edges) (plist-get new :edges))))
+               (cl-incf layout))
+             (when (and old new (not (and (equal (plist-get old :header) (plist-get new :header))
+                                          (equal (plist-get old :modeline) (plist-get new :modeline)))))
+               (cl-incf chrome))
+             (unless (or wm (member id targets)) (cl-pushnew id collateral :test #'equal)))
+           ;; Snap-backs are per field: point returning to where it was is one even if the
+           ;; window's edges changed in between.  The WM's resizes are history, never a snap-back.
+           (let ((h (assoc id history)) (snapped nil))
+             (if (null h)
+                 (push (list id new) history)
+               (unless wm
+                 (dolist (field (drgnx-uitest--plist-keys new))
+                   (let ((now (plist-get new field))
+                         (seen (mapcar (lambda (sig) (plist-get sig field)) (cdr h))))
+                     (when (and (not (equal now (car seen))) (member now (cdr seen)))
+                       (setq snapped t)))))
+               (when snapped (cl-incf osc))
+               (setcdr h (cons new (cdr h)))))))))
     (list :settle_ms (max 0 (round (* 1000 (- last-change (max t0 last-input)))))
           :layout_changes layout
           :collateral_moves (length collateral)
           :collateral (vconcat (reverse collateral))
           :oscillations osc :chrome_changes chrome :echo_changes echo :scrolls scrolls
           :timer_moves timer-moves
+          :wm_resizes wm-resizes
           :causes (vconcat (mapcar (lambda (c) (list :cause (car c) :count (cdr c))) (reverse causes)))
           :trace (vconcat (reverse trace)))))
 
@@ -348,8 +376,9 @@ aimed at (their changes are not collateral), LAST-INPUT the time of the last eve
   (when (windowp window)
     (cl-pushnew (drgnx-uitest-window-id window) drgnx-uitest--targets :test #'equal)))
 
-(defun drgnx-uitest-measure-begin ()
-  "Start recording visible changes for a jank report."
+(defun drgnx-uitest-measure-begin (&optional frame)
+  "Start recording visible changes of FRAME (default: the root frame) for a jank report."
+  (setq frame (or frame (drgnx-uitest-root-frame)))
   (setq drgnx-uitest--targets nil
         drgnx-uitest-record--log nil
         drgnx-uitest-record--scroll-starts      ; the starts now: a redraw that keeps them is no scroll
@@ -360,9 +389,11 @@ aimed at (their changes are not collateral), LAST-INPUT the time of the last eve
         drgnx-uitest-record--redisplays 0
         drgnx-uitest-record--gc0 (cons gcs-done gc-elapsed)
         drgnx-uitest-record--guard0 (length drgnx-jank-guard-log)
+        drgnx-uitest-record--frame frame
+        drgnx-uitest-record--size (drgnx-uitest-record--frame-size frame)
         drgnx-uitest-record--sigs (copy-tree (drgnx-uitest-record--signatures))
         drgnx-uitest-record--initial (copy-tree drgnx-uitest-record--sigs))
-  (drgnx-uitest--note-target (frame-selected-window (drgnx-uitest-root-frame)))
+  (drgnx-uitest--note-target (frame-selected-window frame))
   (drgnx-uitest--note-target (selected-window))      ; the window with focus (a second frame's too)
   (add-hook 'window-scroll-functions #'drgnx-uitest-record--on-scroll)
   (add-hook 'pre-redisplay-functions #'drgnx-uitest-record--on-redisplay)
@@ -383,7 +414,7 @@ aimed at (their changes are not collateral), LAST-INPUT the time of the last eve
   (remove-hook 'pre-redisplay-functions #'drgnx-uitest-record--on-redisplay)
   (remove-hook 'pre-command-hook #'drgnx-uitest-record--before-command)
   (remove-hook 'post-command-hook #'drgnx-uitest-record--after-command)
-  (setq drgnx-uitest-record--command nil)
+  (setq drgnx-uitest-record--command nil drgnx-uitest-record--frame nil drgnx-uitest-record--size nil)
   (advice-remove 'timer-event-handler #'drgnx-uitest-record--after-timer)
   ;; No target is added here: a window a timer focused after the input is collateral.  Targets are
   ;; the start's windows, the windows of mouse events and those focus moved to after a command.

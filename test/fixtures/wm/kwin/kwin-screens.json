@@ -1,0 +1,26 @@
+[
+ {
+  "name": "Virtual-0",
+  "manufacturer": "",
+  "model": "",
+  "serialNumber": "",
+  "geometry": {
+   "x": 0,
+   "y": 0,
+   "width": 1280,
+   "height": 800
+  }
+ },
+ {
+  "name": "Virtual-1",
+  "manufacturer": "",
+  "model": "",
+  "serialNumber": "",
+  "geometry": {
+   "x": 1280,
+   "y": 0,
+   "width": 1280,
+   "height": 800
+  }
+ }
+]

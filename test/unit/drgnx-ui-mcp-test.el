@@ -3,7 +3,7 @@
 (require 'drgnx-ui-mcp)
 
 (defconst drgnx-ui-mcp-test--tools
-  '("ui_start" "ui_frame" "ui_stop" "ui_list" "ui_state" "ui_screenshot" "ui_click" "ui_keys" "ui_type" "ui_wait" "ui_measure" "ui_diff" "ui_record" "ui_perf"))
+  '("ui_start" "ui_frame" "ui_stop" "ui_list" "ui_state" "ui_screenshot" "ui_click" "ui_keys" "ui_type" "ui_wait" "ui_measure" "ui_diff" "ui_record" "ui_perf" "ui_wm"))
 
 (defmacro drgnx-ui-mcp-test--with-state (&rest body)
   (declare (indent 0))
@@ -39,7 +39,7 @@
 
 (ert-deftest drgnx-ui-mcp/foreign-sessions-refused ()
   (drgnx-ui-mcp-test--with-state
-    (dolist (session '("server" "../../emacs/server" "drgnx-ui-1"))
+    (dolist (session '("server" "../../emacs/server" "drgnx-ui-1-00000a"))
       (let ((r (drgnx-ui-mcp-test--call "ui_state" (list :session session))))
         (should (eq (plist-get r :isError) t))
         (should (string-search "refused" (drgnx-ui-mcp-test--text r)))))))

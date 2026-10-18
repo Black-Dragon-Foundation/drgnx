@@ -795,6 +795,166 @@ volta, a project's `node_modules`). None is INFO. A `package.json` is read only 
 pre-release version is compared without its `-…`/`+…` suffix. Tests: `test/unit/doctor-test.el` and
 `test/unit/agents-adapter-test.el`.
 
+The **Desktop** group's `window-manager` row reads the fact `:window-manager`, `(drgnx-platform-doctor-facts
+&optional FRAME)` (see [Window managers](#window-managers-drgnx-platformel)); onboarding step 7 shows the same row
+for the selected frame. Tests: `test/unit/doctor-wm-test.el`, `test/unit/onboard-wm-test.el`.
+
+## Window managers (`drgnx-platform.el`)
+
+Emacs cannot move a frame to another monitor by itself under Wayland, and a tiling window manager ignores
+`set-frame-position`. An *adapter* knows one window manager (or none): its monitors, which one a frame is on, and
+how to move a frame. Nothing here blocks, prompts or signals on an automatic path (frame creation,
+monitors-changed, restore): every window-manager call is asynchronous with a deadline.
+
+**Detection** is per frame, from the frame's own environment (`(getenv VAR frame)`, else the daemon's), because
+one daemon serves frames from several sessions. `(drgnx-platform-detect ENV WINDOW-SYSTEM)` is pure (ENV is a
+function VAR -> value) and tries the adapters in definition order:
+
+| Window system | Order |
+|---|---|
+| `ns`, and batch Emacs on macOS (`drgnx doctor` in Terminal.app) | `ns` |
+| `pgtk` | `sway` (`SWAYSOCK`), `hyprland` (`HYPRLAND_INSTANCE_SIGNATURE`), `niri` (`NIRI_SOCKET`), `kwin` (`XDG_CURRENT_DESKTOP` lists `KDE`), `gnome` (lists `GNOME`), else `other-wayland` (also pgtk with only `DISPLAY`) |
+| `x` | with `WAYLAND_DISPLAY` (Emacs on XWayland): the compositor's adapter, as for pgtk. Otherwise `i3` (`I3SOCK`, or the root window's `I3_SOCKET_PATH`; only checked for existence), else `x11` |
+| terminal frame | `tty` |
+| none (batch) | `WAYLAND_DISPLAY` stands for pgtk, `DISPLAY` for x; neither: `none` |
+
+`(drgnx-platform-wm &optional FRAME)` returns the name and caches it in the frame parameter `drgnx-platform-wm`;
+it never starts a process. A terminal frame counts as a workbench frame elsewhere, so commands check
+`display-graphic-p` themselves (the `tty` adapter explains).
+
+**Calls.** `(drgnx-platform-call ARGV :env :timeout :callback)` runs a program without blocking. The callback gets
+`ok`, `error` or `timeout` and the output, exactly once, never before the function returns; at the deadline the
+process is killed and its later output dropped; a missing program is an `error` ("PROGRAM is not installed"); an
+error in the callback is shown with `message`; standard error is read to the end before a failed call is reported;
+output is decoded as UTF-8. Deadlines: `drgnx-platform-command-timeout` (2 s, commands),
+`drgnx-platform-restore-timeout` (5 s, restoring frames), `drgnx-platform-doctor-timeout` (1 s, the doctor's and
+typed commands' `drgnx-platform-call-sync`). `(drgnx-platform-process-env FRAME)` gives the session variables of
+the frame as `"K=V"` strings for `:env`; an adapter function calls `(drgnx-platform-ctx-call CTX ARGV CALLBACK)`,
+which adds them and the deadline of the operation.
+
+**Monitors** are plists `(:name :make :model :serial :geometry (X Y W H))`. `(drgnx-platform-number-monitors)`
+sorts them left to right, then top to bottom and adds `:number` and `:label` ("1 — eDP-1, 1920×1200", "2 — DP-2,
+2560×1440, right of 1"). `(drgnx-platform-match-monitor SAVED MONITORS)` finds a saved monitor again: make, model
+and serial (all non-empty), else the name, else the geometry. Under pgtk Emacs' monitor `name` is GDK's model
+string ("Unknown" under sway), not the compositor's output name, and Emacs lists monitors in no stable order: an
+adapter that talks to a compositor matches Emacs' monitors to the compositor's by geometry. For that reason the
+monitors drgnx builds from a pgtk frame's `display-monitor-attributes-list` (the gnome adapter's) get the name
+`""`: a name is identity only when an adapter that knows the compositor vouches for it (X11 and XWayland report
+the real connector names).
+
+**Public operations** (all take a callback; `(:error MESSAGE)` instead of a signal, whatever the adapter does:
+a signal in its function, in its reply (a monitor list that cannot be numbered) or in a timer of its own; an adapter
+that does not answer within its deadline plus `drgnx-platform-watchdog-margin` (1 s) gets `(:error "timed out")`,
+once; a `:detect` function that signals matches nothing): `drgnx-platform-monitors`,
+`drgnx-platform-frame-monitor`, `drgnx-platform-move-frame` (a command's path, 2 s), `drgnx-platform-place-frame`
+(restoring, 5 s) and `drgnx-platform-can-move` -> `t` or `(REASON . FIX)`, e.g. GNOME: "GNOME does not let apps
+move their windows", fix "press Super+Shift+→ or Super+Shift+←".
+
+**Built in:** `x11` and `ns` (frame positions: the move keeps the frame's `fullscreen` value, clears it, sets
+`left`/`top` to the target's workarea origin and re-applies it; a negative coordinate is written `(+ N)`, because a
+plain negative integer counts from the right or bottom edge. macOS native fullscreen, a Space of its own, is for the
+macOS tier to check), `gnome` (explains; the doctor asks Mutter's
+`DisplayConfig` for the monitors, within 1 s), `other-wayland` (names the compositor, tells the user to use its
+own key), `tty` and `none`. `sway`, `i3`, `hyprland`, `niri` and `kwin` are declared (detection, title, tool,
+version command) and have monitor and move functions, described below; `hyprland` and `niri` are marked
+`reported`, because their moves are tested on recorded or documented replies and not yet run on the real compositor
+with two outputs; `kwin` is `verified` (run headless with two outputs in the window managers' container tier).
+
+**sway and i3** share one implementation over `swaymsg` / `i3-msg` (section "sway and i3" of
+`drgnx-platform.el`). Monitors come from `-t get_outputs` (active outputs only; the output `name` is what the move
+command takes, and the monitor is matched to Emacs' by geometry). Moving is limited to Emacs' own window while
+it has focus: `-t get_tree`, the focused window must be this process (sway: `pid`; i3, whose tree has no pid: the
+`window` equal to the frame's `outer-window-id`) and the frame must have focus (`frame-focus-state`), else
+`(:error "drgnx moves only its own window while it has focus: ...")`; then `[con_id=N] move container to output
+NAME` (i3: `[id=XID]`) and `[…] focus` (the move does not carry focus), plus `fullscreen enable` for a fullscreen
+window (`fullscreen enable global` for a global one). An output name with anything but letters, digits and `_.:-`
+is double-quoted, so it stays one argument. If the move worked but the follow-up did not, the error says so ("the
+window was moved but focus was not restored"); the callback has no success-with-warning. Restoring (`:place`) cannot rely on focus: the frame's `title` parameter is set to `drgnx [placing PID-N]`,
+the tree is read at 0.1, 0.3, 0.7, 1.5 and 3 s (then every second) until a window with this pid and title shows
+(i3: the window with the frame's X id; no title), the window is moved without taking focus, and the title is
+put back whatever happens. All calls of one operation share its deadline (the second call gets what is left), so
+the core's watchdog never fires first. Messages: "sway: swaymsg is not installed, so drgnx cannot move windows",
+"sway did not answer within 2 s; the window was not moved", or sway's own `error` text.
+
+**Hyprland and niri** (status `reported`: written from the sources and documented replies; niri runs in the window
+managers' container tier, nested in a headless sway with its one output, where its output list, a restore's placement,
+a command's move to that output and the refusal of an unknown output are checked — the move between two outputs is
+not). Monitors come from `hyprctl -j monitors` (mode size divided by the scale, so the geometry is the
+logical one Emacs sees) and `niri msg --json outputs`. The monitor a frame is on is Emacs' own answer for both
+(`frame-monitor-attributes`, matched by geometry). A command move acts on the focused window only when its pid
+is Emacs' and the frame has focus (`frame-focus-state`); otherwise `(:error "drgnx moves only its own window while
+it has focus: ...")`. A restore sets the frame's `title` to `drgnx [placing PID-N]`, looks the window up by Emacs'
+pid and that title at 0.1, 0.3, 0.7, 1.5 and 3 s, moves it without taking focus and puts the title back in every
+case. All calls of one move share the operation's single deadline, so the watchdog margin is not raised. Hyprland
+0.56 has two config types and `hyprctl dispatch` differs: a Lua config takes
+`hl.dsp.window.move({ window = "address:0x…", monitor = "NAME", follow = … })`; a hyprlang config takes
+`focuswindow address:0x…` and `movewindow mon:NAME [silent]` (and the focus is given back after a silent one). The
+Lua form is tried first; the answer "Invalid dispatcher" marks a hyprlang instance, remembered per
+`HYPRLAND_INSTANCE_SIGNATURE`. niri answers an unknown output with exit 0 and no effect, so the output is looked up
+first and an unknown one is an error; the move is `niri msg action move-window-to-monitor --id ID OUTPUT`. (niri warps the
+cursor to the target output on a restore too; that cannot be turned off). A hyprlang config splits a dispatcher's
+arguments at spaces and commas, so a monitor name with whitespace, `,` or `;` is refused there; if the silent move fails after
+the window was focused, the window that had the focus gets it back (best effort, a call of its own).
+
+**KWin** (Plasma 6, status `verified`) has no tool, so the adapter loads a JavaScript file into KWin through its
+scripting D-Bus API (`org.kde.KWin` `/Scripting` `loadScript`, then `start`, which runs the loaded scripts not running yet — not `run` on
+`/Scripting/Script<id>`: KWin numbers a script by how many are loaded, so after an unload two calls at once can
+share an id, and `run` would run the other call's script) and the script
+answers with `callDBus` to a `Reply(s)` method Emacs registers for the length of the call. Only Emacs' own
+`dbus.el` is used (no `qdbus`), and only `dbus-call-method-asynchronously` with the call's deadline as `:timeout`,
+so restore may use it. The method lives under Emacs' unique bus name at an object path of its own per call:
+`dbus-register-service` and `dbus-unregister-service` wait for the bus (RequestName, ReleaseName) and a well-known
+name would make two calls share a reply. The script, the object and the temporary file (mode 0600) are removed on
+success, error and deadline alike. `:monitors` lists `workspace.screens`; `:move` (the command) refuses a frame without focus,
+as every adapter does, and moves KWin's active window only if it is Emacs' (by pid) and this very frame (its caption:
+the frame's title, else its name), so never another frame of this Emacs; `:place` (restore) sets the frame's `title` to
+`drgnx [placing PID-N]` (as sway, Hyprland and niri do), finds Emacs' window by pid and that title (else the only
+normal window of that pid) from 0.1 s on, tries again while KWin does not know the title yet, and puts the title back
+in every case — so a main window showing the same buffer (the same default title) is never the one moved. KWin places a new window when it first shows
+it, which can come after a restore's move: so `:place` checks Emacs' own answer at 0.1, 0.3, 0.7, 1.5 and 3 s and
+moves again while the frame is elsewhere, within the restore deadline ("KWin keeps the window on another screen; it
+was not placed" when it never gets there). Without D-Bus support or a session bus, `:can-move` says so with a fix. The
+monitor a frame is on is Emacs' own answer (`frame-monitor-attributes`, matched to a screen by geometry): Next and
+Previous need it, and so does the monitor a restore saves. `:timeout` goes right after the handler in every
+`dbus-call-method-asynchronously`: dbus.el sends a `:timeout` placed after the method's arguments as one more
+argument, and the call fails ("Wrong type argument: D-Bus, :timeout"). A D-Bus error reply (KWin not running) ends
+the call at once with that error; a silent KWin ends it at the deadline. Run against
+`kwin_wayland --virtual` with two outputs (`test/live/drgnx-wm-other-test.el`); not run on a full Plasma session.
+
+**Another compositor** (river, Wayfire, labwc, Cosmic, ...): call `drgnx-platform-define-adapter` from your
+config. A new name goes before `x11` (so an adapter for an X window manager such as bspwm, awesome or xmonad
+wins over plain X) and before the catch-alls `tty`, `other-wayland` and `none`; its `:detect` is tried after the
+built-in compositors. Defining an existing name replaces only the keys you give.
+
+```elisp
+(drgnx-platform-define-adapter
+ 'labwc :title "labwc" :status 'reported
+ :detect (lambda (env wsys) (and (memq wsys '(pgtk x)) (funcall env "LABWC_PID") t))
+ :monitors (lambda (ctx callback)          ; CTX: (:frame :env :wm :timeout)
+             (drgnx-platform-ctx-call ctx '("wlr-randr" "--json")
+                                      (lambda (status out)
+                                        (funcall callback (if (eq status 'ok) (my-parse out) (list :error out))))))
+ :move (lambda (ctx monitor callback) ...))  ; CALLBACK: `ok' or (:error MESSAGE)
+```
+
+Keys: `:detect` (fn ENV WINDOW-SYSTEM), `:title`, `:tool` (program or nil), `:version` (argv or nil), `:status`
+(`verified` = tested against the real thing, `reported` = from documentation), `:monitors` and `:frame-monitor`
+(fn CTX CALLBACK), `:move` and `:place` (fn CTX MONITOR CALLBACK; `:place` defaults to `:move`), `:can-move`
+(fn CTX -> `t` or `(REASON . FIX)`), `:doctor` (fn ENV -> plist `:monitors`, `:answers`; synchronous).
+
+**The doctor.** `(drgnx-platform-doctor-facts &optional FRAME)` -> `(:wm :title :version :monitors :tool :tool-found
+:answers :can-move :status :frame-positions :desktop)`, for `drgnx doctor` and commands only (synchronous). FRAME
+defaults to the selected frame (batch: the process environment); a terminal frame or batch is placed by its
+environment, and over SSH (`SSH_CONNECTION`, `SSH_TTY`) or without a display `:wm` is `none`. The version comes from
+the adapter's `:version` argv, the program's own version flag with no IPC (`sway --version`, `i3 --version`,
+`Hyprland --version`, `niri --version`, `kwin_wayland --version`); then at most one read-only query, the adapter's
+`:doctor` (sway and i3 `get_outputs`, `hyprctl -j monitors`, `niri msg --json outputs`, Mutter's `DisplayConfig`,
+`xrandr --listmonitors` in batch), skipped when the tool is missing or the version call timed out; each within
+`drgnx-platform-doctor-timeout`. `x11` has no `:tool`: it moves frames by position, and xrandr only counts monitors.
+
+Tests use `test/fixtures/wm/fake-wm.sh`, linked as `swaymsg`, `i3-msg`, `hyprctl` and `niri` into a temp bin: it logs
+its arguments, prints the recorded reply a regexp picks (`DRGNX_FAKE_WM_MAP`) and can sleep or fail.
+
 ## Tests
 
 Batch: `test/unit/core-*-test.el`. The batch runner (`harness/run-ert.el`) gives the suite a temp HOME and drgnx

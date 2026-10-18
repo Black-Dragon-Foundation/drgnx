@@ -256,6 +256,18 @@ the graphical window"; focus stays in the terminal (you may be over SSH). With n
 comes back on the graphical display only, never laid out over a terminal window; with no graphical window, it is not
 restored.
 
+**Monitors.** Each window also remembers the monitor it was on (its make, model, serial, name and place, and whether it
+was full screen or maximized), and the other windows go back to it after a restart, on the window managers that let
+drgnx move a window (see [Several monitors](#several-windows)). Where Emacs itself knows only a window's place (on
+Wayland), drgnx asks the window manager which of its monitors is there, so the serial and name are what is
+remembered; after a move it keeps the monitor it moved the window to. The monitor is found by its serial, else its
+name, else its place, never by the number it had; if it is not connected any more, the window stays where your window
+manager opened it and drgnx says so in one message ("1 window's monitor is not connected (DELL U2720Q); the window
+manager placed it"). The main window, windows opened for `$EDITOR` (terminal and EDITOR frames) and job windows are never moved. This happens after the
+layout is back, in the background, with a few seconds' limit: a window manager that does not answer costs nothing but
+one message. Where drgnx cannot tell which monitor a window is on (GNOME, other Wayland compositors, a terminal) nothing is
+saved and nothing is moved.
+
 ### Several windows
 
 Every frame (OS window) is its own workbench. The first one is the **main** window; windows opened later are
@@ -266,7 +278,51 @@ also has the open files that are a tab nowhere — and the Buffers panel lists t
 Buffers: Show All Windows (palette · `SPC b a`) lists all. `C-x b` lists the buffers of the window you work in
 first and every other buffer after them: it sorts, it never hides one (the order is set on the `buffer` completion
 category, in `completion-category-overrides`; a `display-sort-function` of your own there stays). A help or results buffer shown from a window opens that
-window's panel; nothing moves in the other window. drgnx never places or sizes a window: your window manager does.
+window's panel; nothing moves in the other window. **drgnx moves a window only when you ask or on restore, and never sizes one**: the three commands below move the window you are in, and a restore puts each extra window back on its monitor ([the layout survives a restart](#the-layout-survives-a-restart)); the main window, other apps' windows and every size stay with your window manager.
+
+**Several monitors.** Move to Monitor… (palette · the window's right-click menu, shown only when more than one
+monitor is known), Move to Next Monitor and Move to Previous Monitor (palette; they wrap round) move the window you
+are in to another monitor. The picker lists the monitors as the window manager names them, numbered left to right:
+`2 — DP-2, 2560×1440, right of 1`. A command never waits for the window manager (the picker alone waits,
+for the list, a few seconds at most): it says "Moving…" and then "Moved to monitor 2 (DP-2)", or why it could not, in the echo area. The
+commands exist only in graphical windows and work on sway, i3, Hyprland, niri, KWin and plain X11 or macOS; on GNOME
+(which does not let apps move their windows) and on other Wayland compositors they say so and name the key that does
+(on GNOME, Super+Shift+→ or ←). A window manager moves only the window that has focus, so a move is refused with a
+plain message while another app has it. None of the three has a key by default (`:none` in every profile): bind them
+in your key profile or use the palette.
+
+**What each window manager allows.** drgnx finds the window manager from the window's own environment (one drgnx
+can serve windows on several desktops). `drgnx doctor` shows the row for yours ([install.md](install.md#drgnx-doctor)).
+*Verified* means a test tier runs it against the real program; *reported* means it was written from the program's
+documentation and recorded replies and has not run here yet.
+
+| Window manager | Found by | Move to Monitor, restore | Status |
+|---|---|---|---|
+| sway | `SWAYSOCK` | yes (`swaymsg`): the window you are in, while it has focus; restore by window | verified (sway tier) |
+| i3 | `I3SOCK`, or the root window's `I3_SOCKET_PATH` | yes (`i3-msg`) | verified (i3 tier) |
+| Hyprland | `HYPRLAND_INSTANCE_SIGNATURE` | yes (`hyprctl`) | reported |
+| niri | `NIRI_SOCKET` | yes (`niri msg`); a restore warps the pointer to the target output (niri cannot be told not to) | reported (the container runs it with one output only) |
+| KDE Plasma 6 (KWin) | `XDG_CURRENT_DESKTOP` lists KDE | yes (KWin's scripting over D-Bus) | verified (KWin in the container) |
+| plain X11 (another X window manager) | `DISPLAY` without `WAYLAND_DISPLAY` | yes, by frame position | verified (x11 tier) |
+| macOS | a Cocoa window | yes, by frame position | reported (not run by a tier yet) |
+| GNOME (Mutter) | `XDG_CURRENT_DESKTOP` lists GNOME | no: GNOME does not let apps move windows; the commands say so — press **Super+Shift+→** or **Super+Shift+←** (GNOME's "Move window one monitor to the right/left"); a restore leaves placement to GNOME | GNOME's message unit-tested; the mutter tier verifies the other-Wayland path (it sets no `XDG_CURRENT_DESKTOP`): the command refuses, names the compositor's own key, moves nothing |
+| another Wayland compositor (river, Wayfire, labwc, Cosmic…) | `WAYLAND_DISPLAY` and none of the above | no: the commands say so and point to its own key | — |
+
+**Floating drgnx's windows.** A tiling window manager tiles drgnx's extra windows like any other. If you want them
+floating, tell your window manager; drgnx writes no rules for it. The app id (Wayland) or class is the Emacs
+program's name (`emacs`, or `emacs-pgtk` for that build) and the title starts with the buffer's name, as Emacs sets it (`frame-title-format`); a
+rule by title matches whichever window shows that buffer. For example, every Emacs window floating, or only the
+windows showing a Markdown file:
+
+```
+# sway (~/.config/sway/config)
+for_window [app_id="^emacs"] floating enable
+for_window [app_id="^emacs" title="\.md"] floating enable
+
+# Hyprland (hyprland.conf)
+windowrulev2 = float, class:^(emacs.*)$
+windowrulev2 = float, class:^(emacs.*)$, title:.*\.md.*
+```
 
 **In a terminal.** A terminal window — `emacsclient -t`, `emacs -nw` — is a workbench window too: the same docks,
 groups, tab line, breadcrumb, panel and status bar, and the first one is the main window (a daemon's own hidden
@@ -402,10 +458,17 @@ What "nothing moves on its own" means, each pinned by a test in a GUI session wi
 | I8 | 50 commands that display buffers: no split, no resize, no frame, nothing unrouted | `drgnx-inv/i8-fuzz-of-fifty-commands` (`test/fixtures/fuzz-commands.eld`) |
 | I9 | No window moved from a timer or a window change hook except the caller's own | every report's `guard_violations` = 0 |
 | I10 | Each step settles within 250 ms, without oscillation | `drgnx-inv/i1-i9-i10-explorer-and-buffers-flows` |
+| I11 | Under a tiling window manager, a resize the WM makes goes to the editors: docks and panel keep their pixel size | `drgnx-wm/i11-docks-keep-their-size-when-the-wm-resizes`, `drgnx-wm/popups-under-tiling-leave-no-trace` (`test/live/drgnx-tiling-test.el`, sway tier: `bin/drgnx test --container --ui --compositor sway`) |
+| I12 | Across monitors, drgnx moves a window only when asked (Move to Monitor, Next, Previous) and in the restore of auxiliary windows; a restore moves no other window and no other app | `drgnx-wm/move-to-monitor-2-and-back`, `drgnx-wm/a-fullscreen-window-stays-fullscreen-on-its-new-monitor`, `drgnx-wm/restore-puts-the-aux-window-back-on-its-monitor`, `drgnx-wm/a-missing-monitor-on-restore-is-skipped`, `drgnx-wm/a-restore-under-sway-moves-nothing-else`, `drgnx-wm/mutter-explains-and-moves-nothing` (`test/live/drgnx-wm-test.el`; see Tests) |
 
 Two Emacs behaviours the workbench corrects so that these hold: `balance-windows` on a whole frame (finder calls
 it) balances only the editors, and a package calling `display-buffer-in-side-window` directly still gets the place
 its buffer's rule names.
+
+I11 holds while the docks fit: if the window manager makes the frame narrower than the docks' widths plus the
+smallest editor, Emacs shrinks everything in proportion (by default the left dock is 32 columns, the right dock 50
+and an editor at least 10 — with both docks shown, a frame needs about 92 columns). One limit remains: after you drag
+a dock's or the panel's edge, the next resize by the window manager scales that dock again.
 
 ## Tests
 
@@ -414,6 +477,25 @@ by real key presses: no focus taken, width identical over 10 hide/show cycles, t
 the ten Explorer and Buffers scenarios of [scenarios.md](../develop/scenarios.md), plus two for live updates (a folder
 appearing during a held click; a folder appearing while browsing), are green on drgnx (`bin/drgnx test
 --scenario --config drgnx`; driver `test/scenario/drivers/drgnx.el`).
+
+### Moving windows between monitors, live
+
+`test/live/drgnx-wm-test.el` runs the move and restore commands against a real window manager, two monitors of
+1280x800 each, config `drgnx`, a temporary state root, in the harness's own compositor only (never yours). Each test
+runs in the tier that names its compositor and is skipped in the others:
+
+| Tier | Run | Tests |
+|---|---|---|
+| sway | `bin/drgnx test --container --ui --compositor sway` | all but the mutter one: move to monitor 2 and back, fullscreen kept, restore, a missing monitor, a restore moves nothing else |
+| x11 (Xvfb, no window manager) | `... --compositor x11` | move and back, fullscreen kept, restore |
+| i3 | `... --compositor i3` | move and back |
+| kwin (`test/live/drgnx-wm-other-test.el`, the window managers' image) | `... --compositor kwin` | move to monitor 2 and back with Next, restore onto monitor 2 |
+| niri (one output only) | `... --compositor niri` | detection, the output list, a restore's placement, a move, and an output niri does not have refused; no move between two outputs |
+| mutter (the default) | `bin/drgnx test --container --ui` | the other-Wayland path (the session sets no `XDG_CURRENT_DESKTOP`, so not GNOME's own message): the command explains it cannot drive the compositor, names its own key, and moves nothing |
+
+Narrow a run with `DRGNX_TEST_SELECTOR='"^drgnx-wm/"'`. Under sway the session's seat has no keyboard, so Emacs never
+hears the focus-in event a focused window gets; the move tests deliver it themselves (sway's own focus, in its
+tree, is the real one).
 
 ## Remote folders in the Explorer
 

@@ -102,3 +102,84 @@
         (drgnx-uitest-record--on-scroll (selected-window) (window-start))
         (should-not (seq-find (lambda (e) (eq (nth 1 e) 'scroll)) drgnx-uitest-record--log)))
     (drgnx-uitest-measure-end)))
+
+;; M12c: a tiling WM resizes the frame itself (a new window halves it, a `resize' command).  The recorder
+;; books those changes to `wm:resize': counted as layout, never as collateral or a snap-back.
+(ert-deftest drgnx-uitest/a-wm-resize-is-not-collateral ()
+  (let* ((a (drgnx-test--sig)) (b (drgnx-test--sig :edges '(0 0 5 10)))
+         (log (list (list 1.1 'change "w1" a b "wm:resize") (list 1.1 'change "w2" a b "wm:resize")))
+         (r (drgnx-uitest-jank-report log 1.0 (list (cons "w1" a) (cons "w2" a)) nil 1.0)))
+    (should (= (plist-get r :collateral_moves) 0))
+    (should (= (plist-get r :wm_resizes) 2))
+    (should (= (plist-get r :layout_changes) 2))))
+
+(ert-deftest drgnx-uitest/a-wm-resize-back-is-no-oscillation ()
+  ;; The WM halves the frame, then gives it its width back: two resizes, no snap-back.
+  (let* ((a (drgnx-test--sig)) (b (drgnx-test--sig :edges '(0 0 5 10)))
+         (log (list (list 1.1 'change "w1" a b "wm:resize") (list 1.2 'change "w1" b a "wm:resize")))
+         (r (drgnx-uitest-jank-report log 1.0 (list (cons "w1" a)) nil 1.0)))
+    (should (= (plist-get r :oscillations) 0))
+    (should (= (plist-get r :wm_resizes) 2))
+    (should (= (plist-get r :collateral_moves) 0))))
+
+(defmacro drgnx-uitest-test--resized (size-before &rest body)
+  "BODY with the recorder's last frame size SIZE-BEFORE, the frame now 640x400, and no window seen yet."
+  (declare (indent 1))
+  `(let ((drgnx-uitest-record--sigs nil) (drgnx-uitest-record--log nil)
+         (drgnx-uitest-record--last-change 0.0) (drgnx-uitest-record--frame nil)
+         (drgnx-uitest-record--size ,size-before))
+     (cl-letf (((symbol-function 'drgnx-uitest-record--frame-size) (lambda (_frame) '(640 . 400))))
+       ,@body)))
+
+(defun drgnx-uitest-test--causes ()
+  (delete-dups (mapcar (lambda (e) (nth 5 e)) drgnx-uitest-record--log)))
+
+(ert-deftest drgnx-uitest/a-frame-resize-no-command-made-is-the-wms ()
+  (drgnx-uitest-test--resized '(1280 . 400)
+    (drgnx-uitest-record--snapshot "other")
+    (should (equal (drgnx-uitest-test--causes) '("wm:resize")))
+    (should (equal drgnx-uitest-record--size '(640 . 400)))
+    ;; the next snapshot, the size unchanged: `other' again
+    (setq drgnx-uitest-record--sigs nil drgnx-uitest-record--log nil)
+    (drgnx-uitest-record--snapshot "other")
+    (should (equal (drgnx-uitest-test--causes) '("other")))))
+
+(ert-deftest drgnx-uitest/a-frame-resize-during-a-command-stays-the-commands ()
+  (drgnx-uitest-test--resized '(1280 . 800)
+    (drgnx-uitest-record--snapshot "command:toggle-frame-fullscreen")
+    (should (equal (drgnx-uitest-test--causes) '("command:toggle-frame-fullscreen")))
+    (should (equal drgnx-uitest-record--size '(640 . 400)))))      ; the command's resize is not the WM's later
+
+(ert-deftest drgnx-uitest/the-measurement-keeps-its-frame ()
+  ;; A frame made during a measurement comes first in `frame-list': the recorder stays on the frame it began
+  ;; with, so the new frame's windows are not taken for the old ones' deletion.
+  (drgnx-uitest-measure-begin)
+  (unwind-protect
+      (progn
+        (should (eq drgnx-uitest-record--frame (drgnx-uitest-root-frame)))
+        (should (equal drgnx-uitest-record--size
+                       (drgnx-uitest-record--frame-size (drgnx-uitest-root-frame))))
+        ;; the snapshots read that frame, whatever comes first in `frame-list' now
+        (cl-letf (((symbol-function 'drgnx-uitest-root-frame) (lambda () (error "Not the measured frame"))))
+          (should (assoc "mini" (drgnx-uitest-record--signatures)))))
+    (drgnx-uitest-measure-end)))
+
+(ert-deftest drgnx-uitest/measure-begin-takes-the-frame ()
+  ;; A test that made a second frame measures the first one: the targets and the snapshots are FRAME's.
+  (cl-letf (((symbol-function 'drgnx-uitest-root-frame) (lambda () (error "Not the given frame"))))
+    (drgnx-uitest-measure-begin (selected-frame))
+    (unwind-protect
+        (should (eq drgnx-uitest-record--frame (selected-frame)))
+      (should (plist-member (drgnx-uitest-measure-end) :wm_resizes))))
+  (should-not drgnx-uitest-record--frame)
+  (should-not drgnx-uitest-record--size))
+
+(ert-deftest drgnx-uitest/a-dead-measured-frame-books-nothing ()
+  ;; The measured frame was deleted: no later change is recorded (another frame's windows are not its windows,
+  ;; and that frame's other size is no WM resize).
+  (let* ((orig (symbol-function 'frame-live-p))
+         (drgnx-uitest-record--frame 'drgnx-test-dead-frame) (drgnx-uitest-record--size '(1 . 1))
+         (drgnx-uitest-record--sigs nil) (drgnx-uitest-record--log nil) (drgnx-uitest-record--last-change 0.0))
+    (cl-letf (((symbol-function 'frame-live-p) (lambda (f) (and (not (eq f 'drgnx-test-dead-frame)) (funcall orig f)))))
+      (drgnx-uitest-record--snapshot "other"))
+    (should-not drgnx-uitest-record--log)))

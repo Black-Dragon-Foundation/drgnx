@@ -11,9 +11,9 @@ how every drgnx UI change is developed and verified.
 | `bin/drgnx test` | ERT suites in `test/unit/` (batch Emacs, SIGPIPE ignored — as the hub runs: tests serve one in-process, and a write to a client that left must fail as an error, not kill the run) | the host |
 | `bin/drgnx test --scenario [--config C]` | behaviour scenarios in `test/scenario/` inside a session of configuration C (default `drgnx`; `gryphn` is skipped where that config is absent) | the host (needs mutter) |
 | `bin/drgnx test --container` | the batch tier in a `fedora:45` container (Emacs 31.1, drgnx's baseline); `DRGNX_TEST_IMAGE` / `DRGNX_TEST_GUI_IMAGE` use a prebuilt image ([ci.md](ci.md)) | podman, docker or nerdctl |
-| `bin/drgnx test --container --ui` | the GUI tier in a container (mutter renders without a GPU) | podman, docker or nerdctl |
+| `bin/drgnx test --container --ui [--compositor C]` | the GUI tier in a container (mutter renders without a GPU; sway, Xvfb and i3 are in the image too; `kwin` and `niri` run in an image of their own — see [Compositors](#compositors)), capped at 3 GB with no swap on top (`--memory 3g --memory-swap 3g`; `DRGNX_TEST_GUI_MEMORY` sets another size) | podman, docker or nerdctl |
+| `bin/drgnx test --ui [--compositor C]` | GUI ERT suites in `test/ui/` inside a headless session, then live ERT suites in `test/live/` (batch Emacs starting real sessions); `--compositor sway\|x11\|i3\|kwin\|niri` runs every session of the tier under that compositor (`DRGNX_UI_COMPOSITOR`) | the host (needs mutter, or that compositor) |
 | `bin/drgnx test --tty` / `--container --tty [--fedora 44 or 45]` | the terminal tier in `test/tty/`: drgnx in Emacs sessions inside private tmux servers — see [Terminal tier](#terminal-tier) | the host (needs tmux); a container |
-| `bin/drgnx test --ui` | GUI ERT suites in `test/ui/` inside a headless session, then live ERT suites in `test/live/` (batch Emacs starting real sessions) | the host (needs mutter) |
 | `bin/drgnx test --bench` | the workbench timed against treemacs and ibuffer in a GUI session on a 25k-file project — see [workbench.md](../guide/workbench.md#performance) | the host (needs mutter); treemacs from `$DRGNX_BENCH_ELPA` |
 | `bin/drgnx test --perf` / `--soak [MIN]` | input latency, frames, GC, startup and memory against budgets; the memory soak — see [perf.md](perf.md) | the host (needs mutter) |
 | `bin/drgnx test --install [NAME…]` | `install.sh` end to end in fresh distribution containers: source builds on Fedora 44, Debian 13, Ubuntu 26.04, packages on Fedora 45 and Arch; then the doctor, a second run (no-op), on Fedora packages emacs-nw installed beside emacs-pgtk (`emacs` must stay the pgtk build) and `--dry-run` (no changes) — see [install.md](../guide/install.md) | podman, docker or nerdctl; slow, network |
@@ -96,7 +96,8 @@ environment, which a Lisp `setenv` does not reach, so a test that loads it would
 and without `DISPLAY`, `WAYLAND_DISPLAY`, `SWAYSOCK`, `I3SOCK`, `HYPRLAND_INSTANCE_SIGNATURE` and `NIRI_SOCKET`; the runner
 binds the same inside Emacs and gives `XDG_RUNTIME_DIR` a private directory (mode 700) in the run's temp directory. A test
 that needs a bus, a display or a runtime directory sets its own with `process-environment`. The GUI tiers run their own
-session and are not changed. `bin/drgnx test --container` passes `$DRGNX_TEST_SELECTOR` into the container. A test file that
+session and are not changed. `bin/drgnx test --container` passes `$DRGNX_TEST_SELECTOR` into the container, and `bin/drgnx
+test --ui` into the session that runs `test/ui/`, so a narrowed GUI run stays narrow. A test file that
 does not read or load (an unbalanced paren) fails the run: the runner prints the file and the error and counts it as a
 failure, so a broken file cannot look green.
 
@@ -137,7 +138,8 @@ read: no prompt, no display. The `drgnx-fingerprint/cheap-costs-under-2-ms` and 
 ## Sessions
 
 A session is GUI Emacs (pgtk) under `mutter --headless` inside its own `dbus-run-session`, with a virtual
-monitor (default 1600×900) and a Wayland display named after the session. Nothing is shown on your screen
+monitor (default 1600×900) and a Wayland display named after the session (or under headless sway, Xvfb, or Xvfb with
+i3: see [Compositors](#compositors)). Nothing is shown on your screen
 and nothing talks to your own Emacs.
 
 **Run directory** (`$XDG_STATE_HOME/drgnx/ui/<name>/`, override with `DRGNX_UI_STATE`):
@@ -168,7 +170,8 @@ Unix socket paths are limited to ~108 bytes; the hash keeps two state roots (say
   XDG_RUNTIME_DIR GRYPHN_EMACS_DIR DRGNX_UITEST_SETTLE_SCALE` + `DRGNX_UI_*`), `auth-sources` is nil.
 - Your drgnx files are never touched: a session gets its own `DRGNX_CONFIG_DIR` (`RUN/drgnx-config`) and
   `XDG_STATE_HOME` (`RUN/state`), so it neither reads `~/.config/drgnx` (keys.eld, …) nor writes
-  `~/.local/state` (the key report). `XDG_CACHE_HOME` is kept: font and shader caches would be rebuilt every start.
+  `~/.local/state` (the key report). Caches too: `XDG_CACHE_HOME` and `MESA_SHADER_CACHE_DIR` are under `RUN/xdg/cache`
+  for every compositor, so nothing (fontconfig, Mesa's shader cache) is written to `~/.cache`; they are rebuilt every start.
 - No language servers: `DRGNX_NO_LANGUAGE_SERVERS=1`, so a scenario's fixture projects do not each start one (a run
   once had 12 pyrights); a test that needs a server sets it to "" in its session.
 - Deterministic look: no startup screen, no blinking cursor, no bell, no dialog boxes.
@@ -225,7 +228,11 @@ It snapshots the signatures **just before and right after every command** (`pre-
 **every timer** (advice on `timer-event-handler`), and polls once per tick, so each change is attributed to its
 cause: the innermost command or timer running when it happened (`command:NAME`, `timer:FUNCTION` — a timer
 that runs inside another timer's or a command's `sit-for` keeps its own changes), or `other` when neither ran
-(process output — filters and sentinels are called from C and cannot be intercepted — or redisplay). A scroll
+(process output — filters and sentinels are called from C and cannot be intercepted — or redisplay). An `other`
+change seen while the frame's pixel size changed is `wm:resize`: the window manager resized the frame; a resize
+during a command or timer keeps that command's or timer's name. The recorder stays on the frame it began with,
+even if a frame made during the measurement comes first in `frame-list` (`(drgnx-uitest-measure-begin FRAME)`
+measures another frame than the root one); once that frame is deleted, nothing more is recorded. A scroll
 counts only when a window's start really changes. A timer that moves point with `goto-char` inside
 `with-selected-window` (no window function called) is still caught and named.
 The report:
@@ -242,6 +249,7 @@ The report:
 | `gc_count`, `gc_ms` | garbage collections during the measurement |
 | `guard_violations`, `guard` | window-moving calls made from timers or window change hooks (see Guard) |
 | `timer_moves` | window changes made by timers (any window) |
+| `wm_resizes` | window changes caused by `wm:resize`: the window manager resized the frame (a tiling WM halving it for a new window, a `resize` command) — counted in `layout_changes`, never collateral or an oscillation (I11) |
 | `causes` | `[{cause, count}]` — every command and timer that changed something |
 | `trace` | `[{t_ms, cause, window, fields, from, to}]` in order (≤ 50): what changed, when, and why |
 | `settled` | false if the session did not settle before the timeout |
@@ -329,16 +337,18 @@ Output is JSON on stdout; errors go to stderr with exit status 1. Arguments and 
 caller's locale (without a UTF-8 locale Emacs passes the arguments on as raw bytes; the CLI decodes them).
 
 ```sh
-bin/drgnx ui start [--config minimal|gryphn|DIR] [--size 1600x900]   # → {"name":"drgnx-ui-1", …, "ready":{…}}
+bin/drgnx ui start [--config minimal|gryphn|DIR] [--size 1600x900]   # → {"name":"drgnx-ui-1-3f9a0c", …, "ready":{…}}
+bin/drgnx ui start --compositor sway --monitors 2 [--daemon]         # see Compositors
+bin/drgnx ui wm drgnx-ui-1-3f9a0c                       # the session's own sway/i3 tree (read only; kwin/niri: name only)
 bin/drgnx ui ls                                  # sessions of this state root
-bin/drgnx ui state drgnx-ui-1                    # frame, windows, child frames
-bin/drgnx ui shot drgnx-ui-1 [out.png]           # screenshot, child frames composited
-bin/drgnx ui click drgnx-ui-1 300 200 [--button 1] [--count 2] [--hold-ms 300]
-bin/drgnx ui click drgnx-ui-1 --buffer treemacs-mode --text README.md
-bin/drgnx ui keys drgnx-ui-1 "C-x b"             # kbd syntax
-bin/drgnx ui type drgnx-ui-1 "hello"
-bin/drgnx ui measure drgnx-ui-1 '[{"keys":"C-x 2"},{"x":10,"y":10}]'
-bin/drgnx ui stop drgnx-ui-1 | bin/drgnx ui reap
+bin/drgnx ui state drgnx-ui-1-3f9a0c                    # frame, windows, child frames
+bin/drgnx ui shot drgnx-ui-1-3f9a0c [out.png]           # screenshot, child frames composited
+bin/drgnx ui click drgnx-ui-1-3f9a0c 300 200 [--button 1] [--count 2] [--hold-ms 300]
+bin/drgnx ui click drgnx-ui-1-3f9a0c --buffer treemacs-mode --text README.md
+bin/drgnx ui keys drgnx-ui-1-3f9a0c "C-x b"             # kbd syntax
+bin/drgnx ui type drgnx-ui-1-3f9a0c "hello"
+bin/drgnx ui measure drgnx-ui-1-3f9a0c '[{"keys":"C-x 2"},{"x":10,"y":10}]'
+bin/drgnx ui stop drgnx-ui-1-3f9a0c | bin/drgnx ui reap
 ```
 
 Input commands wait until the session settles and print the jank report. `click` takes X and Y as non-negative
@@ -350,17 +360,29 @@ the error names it: `action 2 (:keys "bad"): …`; later actions are not sent. `
 
 ## Ownership and cleanup
 
-Only sessions this harness created can be addressed. A name must match `drgnx-ui-N`, its run directory must
+**Session ids are never reused.** A session's id is `drgnx-ui-N-HEX`: N one above the highest in the state root
+(and the runtime directory's Wayland displays), HEX six hex digits from the pid, the time and a counter; the run
+directory `ROOT/<id>` claims it (creating it fails when it exists, and the next id is drawn). Ids used to be the
+lowest free `drgnx-ui-N`, so a stopped session's name came back for the next start — and agents in other worktrees,
+sharing the state root, twice drove each other's sessions. Now an id names one session only: once it is stopped,
+every command given that id is refused ("no harness session"). The socket's directory is the id without
+`drgnx-ui-` (a socket path holds 108 bytes); runs of the old `drgnx-ui-N` shape (an older checkout's) are not
+addressed or reaped from here. **Once, after updating** (when no older checkout runs sessions any more), clean up the
+old-shape ones by hand: `systemctl --user list-units 'drgnx-ui-*'`, then `systemctl --user stop drgnx-ui-N` for each
+unit without a `-HEX` suffix, and delete the `drgnx-ui-N` run directories (no suffix) under the state root.
+
+Only sessions this harness created can be addressed. A name must match `drgnx-ui-N-HEX`, its run directory must
 exist under the state root (`$DRGNX_UI_STATE`, default `$XDG_STATE_HOME/drgnx/ui`), and its socket must be the
-one the harness assigned. Anything else — `server`, another Emacs's socket path, `../…` — is refused, so the
-user's own Emacs can never be driven. `emacsclient` is always called with `-a false`, so a missing socket can
+one the harness assigned; the `name` and `run` in its session.json must be the ones the harness computed (the
+session's Emacs can write that file, and a forged name would point frames and WM calls at another session). Anything
+else — `server`, another Emacs's socket path, `../…` — is refused, so the user's own Emacs can never be driven. `emacsclient` is always called with `-a false`, so a missing socket can
 never make it start a new Emacs daemon (as `ALTERNATE_EDITOR=""` would).
 
 `stop` first asks the session's Emacs to exit (`emacsclient --eval (kill-emacs)`, up to 5 s — its exit hooks run, so
 the layout is saved as on a real exit), then ends the session and removes its run and socket directories and mutter's
 Wayland socket. It only ever
 stops what belongs to the current state root: a systemd unit only if its command line names this root's run
-directory (unit names are global — another checkout may run `drgnx-ui-1` too), a detached process group only if
+directory (unit names are global — another checkout may run a session of the same id, however unlikely), a detached process group only if
 one of its members names the run directory (a stale `pgid` file may point at a reused id; ids 0 and 1 are never
 signalled), and a Wayland display only when no process serves it any more. `reap` does that for every session of the
 current state root — run directories, plus live units whose command line points into it — and leaves sessions
@@ -393,10 +415,92 @@ session launcher         systemd         # or detached (process group, no system
 - **Container runtime on the host:** `--container` uses `$DRGNX_CONTAINER` if set, else the first of
   `podman`, `docker`, `nerdctl` on `PATH` (Rancher Desktop provides `docker` in moby mode and `nerdctl` in
   containerd mode). `--podman` is short for `DRGNX_CONTAINER=podman … --container`.
-- **GUI tier in a container:** `test/container/Containerfile.gui` (fedora:45 + `emacs-pgtk mutter dbus-daemon
-  mesa-dri-drivers ImageMagick`, ~1.8 GB). mutter falls back to a surfaceless software renderer, so no GPU is
+- **GUI tier in a container:** `test/container/Containerfile.gui` (fedora:45 + `emacs-pgtk mutter sway i3
+  xorg-x11-server-Xvfb xrandr xprop emacs-lucid dbus-daemon mesa-dri-drivers ImageMagick procps-ng util-linux`, ~2.15 GB),
+  run with `--memory 3g --memory-swap 3g` (`DRGNX_TEST_GUI_MEMORY` overrides). mutter falls back to a surfaceless software renderer, so no GPU is
   needed. The container needs `--security-opt seccomp=unconfined --security-opt label=disable`: GTK loads icons
   through glycin, whose `bwrap` sandbox cannot create namespaces under the default policy, and Emacs aborts.
+- **Window managers' image:** `--compositor kwin` and `--compositor niri` run in `drgnx-test-wm:f45`, built from
+  `test/container/Containerfile.wm` (fedora:45 + `emacs-pgtk kwin niri sway dbus-daemon mesa-dri-drivers procps-ng
+  util-linux`, ~2.3 GB; `kwin_wayland` and `sway` lose their `cap_sys_nice` file capability, which the container does
+  not grant), with the same cap and security options. `DRGNX_UI_COMPOSITOR=kwin|niri` without `--compositor` picks it
+  too. `DRGNX_TEST_WM_IMAGE` uses a prebuilt one (`DRGNX_TEST_GUI_IMAGE` does not apply: that image has neither).
+- **Image builds are capped** like the runs: with podman, `podman build --memory 3g --memory-swap 3g`
+  (`DRGNX_TEST_BUILD_MEMORY` sets another size; docker's buildx ignores `--memory`, so it gets none). A prebuilt image
+  override (`DRGNX_TEST_IMAGE`, `DRGNX_TEST_GUI_IMAGE`, `DRGNX_TEST_WM_IMAGE`) must be an image reference (letters, digits,
+  `._/:@-`, not starting with `-`): anything else exits 2 before a container runs.
+
+## Compositors
+
+A session runs under one of six compositors (`drgnx ui start --compositor C`, MCP `ui_start {compositor}`, or for a
+whole test tier `bin/drgnx test --ui --compositor C`, which sets `DRGNX_UI_COMPOSITOR`; the default is mutter). Each
+has `--monitors N` monitors of the session's size, side by side; each runs inside the same systemd unit (or detached
+process group) with the same caps (`MemoryMax=3G`, `RuntimeMaxSec`) and the same `env -i` allowlist.
+
+| Compositor | What runs | Emacs | What it isolates |
+|---|---|---|---|
+| `mutter` | `dbus-run-session -- mutter --headless --wayland --no-x11 --virtual-monitor WxH…` | pgtk, full screen | its Wayland display (named after the session) in `$XDG_RUNTIME_DIR` |
+| `sway` | `dbus-run-session -- sway -c RUN/sway.conf` with `WLR_BACKENDS=headless`, `WLR_HEADLESS_OUTPUTS=N`, `WLR_RENDERER=pixman`, `WLR_LIBINPUT_NO_DEVICES=1` (no GPU, seat or input devices) | pgtk, tiled (no `--fullscreen`), on `HEADLESS-1` | a runtime directory of its own (`$XDG_RUNTIME_DIR/drgnx-ui/<hash>/<name>-xdg`, mode 0700) for sway's IPC socket (pinned there with `SWAYSOCK=…/sway-ipc.sock`) and its Wayland display; XWayland is off, so no X display in the shared `/tmp` |
+| `x11` | `dbus-run-session -- sh -c SCRIPT`: `Xvfb :N -noreset -auth RUN/Xauthority -displayfd 3 -screen 0 (N·W)xHx24`, one `xrandr --setmonitor XVFB-k` per monitor | the X11 build (`$DRGNX_UI_X11_EMACS`, else `emacs-lucid`) with `--no-x-resources`: it reads no `~/.Xdefaults`, `$XENVIRONMENT` or app-defaults | its own bus and runtime directory (as sway); a display `:N` reserved for it; only clients with its cookie (`RUN/Xauthority`, `XAUTHORITY`) can connect; no `WAYLAND_DISPLAY` |
+| `i3` | the same, then `i3 -c RUN/i3.conf` (no bar, no borders), focused on `XVFB-1` | the X11 build, with `I3SOCK` set as i3 sets it for its children | as x11, and i3's IPC socket in the session's socket directory (`ipc-socket` in the config) |
+| `kwin` | `dbus-run-session -- kwin_wayland --virtual --width W --height H --output-count N --socket wayland-1 --no-lockscreen --no-global-shortcuts --exit-with-session "EMACS ARGS"` (outputs `Virtual-0…`, side by side), with `XDG_CURRENT_DESKTOP=KDE`, `KDE_FULL_SESSION=true`, `XDG_SESSION_TYPE=wayland` | pgtk, placed by KWin; KWin exits when it does | its own bus (KWin's scripting API, which the adapter uses, is on it) and runtime directory (as sway); no XWayland; `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_CACHE_HOME` (and `MESA_SHADER_CACHE_DIR`) under `RUN/xdg/`, so KWin never reads or writes `~/.config/kwinrc` or `kwinoutputconfig.json` — the session's Emacs gets them too (fontconfig, GTK settings), so a kwin session reads less of `~` than the others |
+| `niri` | the sway session with one output, whose config runs `niri -c RUN/niri.kdl` instead of Emacs; niri (its winit backend, a window on sway: niri has no headless backend) spawns `sh RUN/niri-session.sh` | pgtk, without sway's `SWAYSOCK`/`I3SOCK` (Emacs must see niri); after it, `niri msg action quit` ends niri and sway | as sway; `xwayland-satellite { off; }`, so no X display in the shared `/tmp`; `XDG_CACHE_HOME` and `MESA_SHADER_CACHE_DIR` under `RUN/xdg/cache`, so niri's GL writes no shader cache to `~/.cache`. **One output only** (`winit`): `--monitors 2` is refused |
+
+The configs are generated per session: `sway.conf` (one `output HEADLESS-k resolution WxH position X 0` per monitor,
+`default_border none`, `exec` of the session's Emacs followed by `swaymsg exit` — sway lives as long as Emacs, as mutter
+does with `--`) and `i3.conf`. Nothing is included: never `~/.config/sway`, `~/.config/i3` or `/etc/sway`. The X11
+session's shell ends i3 and Xvfb when Emacs ends, and they die with that shell even when it is killed (`setpriv
+--pdeathsig KILL`). Why `emacs-lucid` and `-noreset`: the GTK X11 build sees one monitor under Xvfb, and without
+`-noreset` Xvfb drops the monitors when the last client (`xrandr`) disconnects.
+
+**Paths.** The harness writes its paths into the WM configs and shell lines as they are, so they must stay plain: for
+sway, the Emacs binary, the run directory and the init directory must not contain quotes, `$`, backslashes or newlines; i3's socket
+path, KWin's session command (the Emacs binary, the init directory: KWin splits it at spaces) and the path of
+`niri-session.sh` (in niri's config) may hold only letters, digits and `-_./+@%:=,`. A session whose paths do not qualify fails to start and says why.
+The socket paths must also fit a socket address: the session's runtime directory is short
+(`$XDG_RUNTIME_DIR/drgnx-ui/<hash>/<name>-xdg`), and sway's socket path is refused above 100 bytes.
+
+**X displays.** A number is picked from `:90` up: free when no X lock or socket has it and `make-directory` of
+`$XDG_RUNTIME_DIR/drgnx-ui/x11/N` succeeds (atomic, shared by every state root of the user; the directory names the
+session that holds it). One whose session is gone is taken over under a lock (`x11/.lock`, made with
+`make-directory`, waited for at most 2 s, taken over when older than 10 s), and is checked again under it: of two starts
+that found it stale, only the first gets it. Xvfb is ready when it writes the number to
+`RUN/xvfb.ready` (`-displayfd`); if it exits first (another X server took the number after all), the session ends and the
+start reports it.
+
+`stop` also removes what a killed compositor leaves: the session's runtime directory once no process names its run
+directory, and for x11/i3 — only for the display the harness reserved for that session, never a number session.json
+merely names — the X socket and lock once the session's own Xvfb (`RUN/xvfb.pid`) is dead, had listened on that number (it wrote
+it to `RUN/xvfb.ready`; an Xvfb that failed to bind owned nothing) and if they are yours; then the reservation, which a
+start that fails after taking it also gives back at once. `ui frame` opens the frame on the session's own display (`WAYLAND_DISPLAY` and `XDG_RUNTIME_DIR` of the
+session's runtime directory — sway's display, KWin's `wayland-1`, or niri's, the one its IPC socket
+`niri.wayland-N.PID.sock` names, never the sway niri runs in — or `DISPLAY=:N` and its `XAUTHORITY`), never the caller's. Its emacsclient gets nothing else of the
+caller's but the allowlist: server.el gives a frame its client's environment and drgnx reads the window-manager
+variables from the frame first, so a caller's `SWAYSOCK`, `NIRI_SOCKET`, `XDG_CURRENT_DESKTOP` or session bus would
+point the frame at the caller's desktop (a kwin session's frame opened from GNOME would read as GNOME); without them
+the frame falls back to the session's own. A `test --ui` session runs in a
+transient scope (`systemd-run --user --scope`, `MemoryMax=3G`) where there is a systemd user session, stopped when the
+run ends, so nothing it started outlives it.
+
+**`ui_wm`** (`drgnx ui wm NAME`) reads the session's window-manager tree, read only: `swaymsg -s SOCK -t get_tree -r` or
+`i3-msg -s SOCK -t get_tree`. SOCK comes from the harness's own state, never from session.json — sway's pinned
+socket in the session's runtime directory, i3's `ipc-socket` from the i3.conf it wrote — and must be a socket of yours
+(not a symlink); the tools run without the caller's `$SWAYSOCK`/`$I3SOCK`, so it can never read your desktop's WM. A
+failure quotes the tool's stderr. Tests may also send the session's WM a command with `drgnx-ui-wm-command` (not offered by
+the CLI or MCP). Under KWin and niri `ui_wm` answers `{wm: "kwin"}` or `{wm: "niri"}` and reads no window list (KWin
+has no tool; its scripting API is on the session's private bus): their live tests ask Emacs which monitor a frame is
+on (`frame-monitor-attributes`, from the compositor's Wayland output events).
+
+**Running them:** on a host with sway (or Xvfb, `xrandr`, `emacs-lucid`, i3) `bin/drgnx test --ui --compositor C` works
+as it is; elsewhere a session start fails with `sway is not installed here: run bin/drgnx test --container --ui
+--compositor sway` (likewise `Xvfb …`, `i3 …`), and that command runs the tier in the GUI image, which has all of them.
+The live tests of the backends (`test/live/drgnx-compositor-test.el`, `drgnx-wm/…`) each run only in their compositor's
+tier: `DRGNX_TEST_SELECTOR='"^drgnx-wm/"' bin/drgnx test --container --ui --compositor sway` (then `x11`, `i3`).
+`kwin_wayland` and `niri` (and sway, for niri) are needed on a host; elsewhere `--compositor kwin|niri` runs in the
+window managers' image. Their live tests are `test/live/drgnx-wm-other-test.el`: under KWin (two outputs) a
+command's move to monitor 2 and back with Next, and a restore that puts the aux window back on monitor 2; under niri
+(one output) detection, the output list, a restore's placement, a command's move and the refusal of an output niri
+does not have — the move between two outputs cannot run there.
 
 ## Real-tool tests
 
@@ -432,7 +536,8 @@ claude mcp add -s user drgnx-ui -- /path/to/drgnx/bin/drgnx ui mcp
 
 | Tool | Arguments | Returns |
 |---|---|---|
-| `ui_start` | `config` (minimal, gryphn, a directory), `size`, `daemon`, `monitors` (virtual monitors of that size, for multi-window tests) | the session (name, socket, ready) |
+| `ui_start` | `config` (minimal, gryphn, a directory), `size`, `daemon`, `monitors` (virtual monitors of that size, for multi-window tests), `compositor` (`mutter`, `sway`, `x11`, `i3`, `kwin`, `niri`; default mutter or `$DRGNX_UI_COMPOSITOR`) | the session (name, socket, ready) |
+| `ui_wm` | `session` | read only: `{wm: "sway"\|"i3", tree}` — the session's own WM tree (`get_tree`); `{wm: "kwin"\|"niri"}` (no tree); `{wm: "none"}` under mutter and bare X11 |
 | `ui_frame` | `session` (a daemon session) | `{exit, output, client_ms, visible_ms, hooks}` |
 | `ui_stop` | `session` | `{stopped}` |
 | `ui_list` | — | sessions of the state root |
@@ -461,8 +566,9 @@ results with `isError`, never a crashed server (a reply that cannot be written a
 - The guard sees window moves from timers and from the window change hooks above, not from other hooks
   (`buffer-list-update-hook`, …) — the workbench change bus covers those. A hook member added buffer-locally is not wrapped.
 - Input is synthetic (no real pointer hover or OS-level drag yet); clicks target the root frame.
-- Wayland via mutter only; X11 (Xvfb) and tiling WMs (sway headless) come later. macOS needs a different capture
-  backend (`x-export-frames` exists only on Cairo builds).
+- Compositors: mutter, sway, Xvfb, Xvfb with i3, KWin and niri (see Compositors); niri has one output only (it runs
+  nested, as a window of a headless sway); Hyprland has no session backend (not packaged in Fedora).
+  macOS needs a different capture backend (`x-export-frames` exists only on Cairo builds).
 - A GUI run's exit status is only pass/fail (mutter); `results.json` has the details.
 
 ## Scenario tier

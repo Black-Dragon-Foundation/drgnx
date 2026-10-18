@@ -1,0 +1,17 @@
+sway/get_outputs.json: recorded 2026-10-18 from a real headless sway 1.12 session in the GUI container (Fedora 45, WLR_BACKENDS=headless, two outputs), `swaymsg -t get_outputs`
+sway/get_outputs-one-disabled.json: recorded 2026-10-18 from the same session after `swaymsg output HEADLESS-2 disable`, `swaymsg -t get_outputs` (inactive output: active false, zero rect)
+sway/get_tree.json: recorded 2026-10-18 from the same session, `swaymsg -t get_tree`; one pgtk Emacs 31.1 frame (con 7, pid 9, title "drgnx - workbench") focused on HEADLESS-1
+sway/get_tree-unfocused.json: recorded 2026-10-18 from the same session, `swaymsg -t get_tree`; the Emacs con 7 (pid 9) is not focused, a second Emacs process (con 10, pid 3472, title "other emacs") is
+i3/get_outputs.json: recorded 2026-10-18 from a real i3 4.25.1 session on Xvfb in the GUI container (monitors left/right made with xrandr --setmonitor, Xvfb -noreset), `i3-msg -t get_outputs`
+i3/get_tree.json: recorded 2026-10-18 from the same session, `i3-msg -t get_tree`; one emacs-lucid 31.1 frame (window 6291785, title "drgnx - workbench") focused on output left (i3 nodes carry no pid)
+i3/get_tree-unfocused.json: recorded 2026-10-18 from the same session, `i3-msg -t get_tree`; the Emacs (window 6291785) is not focused, a second Emacs (window 8388937, "other emacs") is
+hyprland/monitors.json: from the Hyprland v0.56.2 source (src/debug/HyprCtl.cpp getMonitorData, JSON branch), values invented, 2026-10-18; Hyprland is not packaged in Fedora 45 and was not run
+hyprland/clients.json: from the Hyprland v0.56.2 source (src/debug/HyprCtl.cpp getWindowData, JSON branch), values invented, 2026-10-18; not recorded from a running Hyprland
+niri/outputs.json: recorded 2026-10-18 from a real niri 26.04 session (winit backend nested in headless sway, one output "winit") in the GUI container, `niri msg --json outputs`
+niri/windows.json: recorded 2026-10-18 from the same session, `niri msg --json windows`; one pgtk Emacs window (id 2, pid 118)
+niri/workspaces.json: recorded 2026-10-18 from the same session, `niri msg --json workspaces`
+kwin/kwin-screens.json: recorded 2026-10-18 from a real kwin_wayland 6.7.5 --virtual --output-count 2 session in the GUI container; the output of kwin/probe.js (workspace.screens) delivered through callDBus to an Emacs-registered service
+kwin/kwin-windows.json: recorded 2026-10-18 from the same session; the windows part of kwin/probe.js's output with two Emacs processes (pid 296 "drgnx - workbench", pid 877 "other emacs", the latter active)
+kwin/probe.js: the KWin script that produced the two kwin files (loaded with org.kde.kwin.Scripting.loadScript, started with org.kde.kwin.Script.run)
+hyprland/activewindow.json: `hyprctl -j activewindow` shape from the Hyprland v0.56.2 source (src/debug/HyprCtl.cpp activeWindowRequest: the window object of getWindowData), values invented, 2026-10-18: the first window of hyprland/clients.json (the Emacs one); not recorded from a running Hyprland
+hyprland/activewindow-other.json: the same shape and the same invented values, the second window of hyprland/clients.json (another app with focus); not recorded from a running Hyprland

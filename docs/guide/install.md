@@ -223,6 +223,23 @@ more. Nothing in it prompts or installs anything; inside tmux it asks tmux once 
 carries its fix. In drgnx, **Check This Terminal** (Help, in the palette) shows the same group for the terminal window
 you are in. Details: [terminal.md](terminal.md#check-this-terminal).
 
+**The Desktop group.** `window-manager`: which window manager this desktop runs, its version and how many monitors it
+has, and what drgnx can do there ([workbench.md](workbench.md) on Move to Monitor). Run it from a terminal
+inside your desktop session: the doctor reads the window manager from that terminal's environment. It asks the
+program's own `--version` and makes one read-only query (sway's outputs, for example), each within 1 second; it never
+installs anything and never asks.
+
+| Desktop | The row |
+|---|---|
+| sway, i3, Hyprland, niri, KDE Plasma (KWin) | `ok sway 1.10, 2 monitors: Move to Monitor and restore work` (the version and count left out when unknown) |
+| X11 (another X window manager), macOS | `ok X11, 2 monitors: Move to Monitor and restore work (frame positions)` |
+| GNOME | `ok GNOME (Wayland): apps cannot move windows; use Super+Shift+←/→` |
+| its tool missing | `warn Hyprland: hyprctl not found: Move to Monitor and restore need it`, fix: the install line for this system (`sudo dnf install sway`, `sudo apt install sway`, `sudo pacman -S sway`; else "install PKG with your package manager"; Fedora has no Hyprland package; on Arch i3's is `i3-wm`) |
+| no answer within 1 s | `warn sway did not answer within 1 s`, fix: run drgnx doctor from a terminal inside your sway session |
+| KWin without D-Bus or a session bus | `warn` with the reason and its fix |
+| another Wayland compositor | `info river (Wayland): no adapter; drgnx leaves window placement to it` |
+| over SSH, or no display | `info no graphical session here: run drgnx doctor in your desktop's terminal to check its window manager` |
+
 ## Uninstall
 
 ```sh

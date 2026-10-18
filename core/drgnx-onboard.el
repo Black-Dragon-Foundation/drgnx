@@ -1323,13 +1323,29 @@ terminal nothing."
          (rec (and caps (ignore-errors (drgnx-tty-recommendation caps (drgnx-tty-os))))))
     (concat (drgnx-tty-onboard-note (plist-get caps :id)) (if rec (concat " " (plist-get rec :text)) ""))))
 
+(declare-function drgnx-doctor-check "drgnx-doctor")
+(declare-function drgnx-platform-doctor-facts "drgnx-platform")
+
+(defun drgnx-onboard--desktop-note ()
+  "The doctor's Desktop row for the selected frame (`drgnx-platform-doctor-facts'): its detail, and its fix in
+parentheses when it is not ok.  Never prompts, never installs."
+  (require 'drgnx-doctor)
+  (condition-case err
+      (pcase-let ((`(,status ,detail ,fix)
+                   (drgnx-doctor-check 'window-manager
+                                       (list :window-manager (drgnx-platform-doctor-facts (selected-frame))))))
+        (concat detail (if (and fix (not (eq status 'ok))) (format " (%s)" fix) "")))
+    (error (format "not checked (%s)" (error-message-string err)))))
+
 (defun drgnx-onboard--daemon-step (ctx)
   "Keep running or quit (asked once), then macOS: the drgnx app; Linux: the systemd unit and desktop entry.  The
-result ends with the terminal note (`drgnx-onboard--terminal-note')."
+result reads: keep running; that platform part; the terminal note (`drgnx-onboard--terminal-note'); the desktop
+\(`drgnx-onboard--desktop-note')."
   (let ((keep (drgnx-onboard--keep-running ctx)))
     (pcase-let ((`(,status ,message) (if (eq (drgnx-platform) 'macos) (drgnx-onboard--macos-app ctx)
                                        (drgnx-onboard--linux-desktop ctx))))
-      (list status (concat message "; " keep ". " (drgnx-onboard--terminal-note))))))
+      (list status (concat keep "; " message ". " (drgnx-onboard--terminal-note)
+                           "; desktop: " (drgnx-onboard--desktop-note))))))
 
 (defun drgnx-onboard--linux-desktop (ctx)
   (require 'drgnx-pkg)

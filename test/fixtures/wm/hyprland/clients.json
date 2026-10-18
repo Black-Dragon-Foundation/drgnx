@@ -1,0 +1,88 @@
+[
+  {
+    "address": "0x5581a3c4d2f0",
+    "mapped": true,
+    "hidden": false,
+    "visible": true,
+    "acceptsInput": true,
+    "at": [
+      10,
+      10
+    ],
+    "size": [
+      2540,
+      1420
+    ],
+    "workspace": {
+      "id": 1,
+      "name": "1"
+    },
+    "floating": false,
+    "monitor": 0,
+    "class": "emacs",
+    "title": "drgnx - workbench",
+    "initialClass": "emacs",
+    "initialTitle": "drgnx - workbench",
+    "pid": 4242,
+    "xwayland": false,
+    "pinned": false,
+    "pinFullscreened": false,
+    "fullscreen": 0,
+    "fullscreenClient": 0,
+    "fullscreenHandler": "layout",
+    "allowedOverFullscreen": false,
+    "grouped": [],
+    "tags": [],
+    "swallowing": "0x0",
+    "focusHistoryID": 0,
+    "inhibitingIdle": false,
+    "xdgTag": "",
+    "xdgDescription": "",
+    "contentType": "none",
+    "tearingHint": false,
+    "stableId": "1a2b3c"
+  },
+  {
+    "address": "0x5581a3c5e810",
+    "mapped": true,
+    "hidden": false,
+    "visible": true,
+    "acceptsInput": true,
+    "at": [
+      2570,
+      10
+    ],
+    "size": [
+      1900,
+      1060
+    ],
+    "workspace": {
+      "id": 2,
+      "name": "2"
+    },
+    "floating": false,
+    "monitor": 1,
+    "class": "foot",
+    "title": "foot",
+    "initialClass": "foot",
+    "initialTitle": "foot",
+    "pid": 4343,
+    "xwayland": false,
+    "pinned": false,
+    "pinFullscreened": false,
+    "fullscreen": 0,
+    "fullscreenClient": 0,
+    "fullscreenHandler": "layout",
+    "allowedOverFullscreen": false,
+    "grouped": [],
+    "tags": [],
+    "swallowing": "0x0",
+    "focusHistoryID": 1,
+    "inhibitingIdle": false,
+    "xdgTag": "",
+    "xdgDescription": "",
+    "contentType": "none",
+    "tearingHint": false,
+    "stableId": "2b3c4d"
+  }
+]
