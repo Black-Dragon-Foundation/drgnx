@@ -7,7 +7,7 @@ folder to the host.
 | Command | What it does |
 |---|---|
 | Remote: Open Remote… | Pick an ssh host, a podman container or another host, then a folder on it. The folder becomes the Explorer's first folder. |
-| Remote: Reconnect | Bring a lost connection back. Buffers, their unsaved changes, point and language servers carry on. |
+| Remote: Reconnect | Bring a lost connection back. Buffers, their unsaved changes and point stay; the host's language servers are stopped and started again. |
 
 Keys: in the Vim profile `SPC r o` and `SPC r r`. In the VS Code and Emacs profiles the commands are in the palette
 (and the segment on the status line, below); `C-x C-f /ssh:HOST:/path` works as it always did.
@@ -74,6 +74,11 @@ guard, while the module is on, TRAMP's login, password, yes/no, one-time-code an
 unless the code asking is part of a command of yours (a key you press, `M-x`, a click) or Open Remote… or Reconnect
 asked for it. A timer, a process filter or a sentinel is never part of your command, even when it fires
 while the command waits: its login gets an error message, never a hidden question.
+
+Auto-save files of remote buffers go to a private folder (mode 0700) in drgnx's state directory
+(`~/.local/state/drgnx/tramp-auto-save/`, the module sets `tramp-auto-save-directory` unless you set it yourself). So
+TRAMP never asks "Autosave file on local temporary directory, do you want to continue?" for a file owned by root (every
+file of a container that runs as root), from a visit, a daemon or a sentinel alike.
 
 ## Limits
 

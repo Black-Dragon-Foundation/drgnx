@@ -474,6 +474,47 @@ choice of two nobody has."
     (should-not (advice-member-p #'drgnx-remote--timer-without-command 'timer-event-handler))
     (dolist (a actions) (should-not (advice-member-p #'drgnx-remote--guard-prompt a)))))
 
+(ert-deftest drgnx-remote/a-root-owned-remote-file-never-asks-about-its-auto-save ()
+  ;; TRAMP asks "Autosave file on local temporary directory, do you want to continue?" for a file owned by root (every
+  ;; container's) whose auto-save file would land in the temp dir — from `find-file', a sentinel or the daemon alike.
+  ;; The module gives remote auto-saves a private folder (0700) in drgnx's state dir, outside the temp dir.
+  (drgnx-remote-test--with
+    (let* ((tmp (file-name-as-directory (expand-file-name "tmp" dir)))
+           (temporary-file-directory tmp)
+           (auto-save-file-name-transforms `(("\\`/[^/]*:\\([^/]*/\\)*\\([^/]*\\)\\'" ,(concat tmp "\\2") t)))
+           (auto-save-default t) (tramp-allow-unsafe-temporary-files nil) (tramp-auto-save-directory nil)
+           (process-environment (cons (concat "XDG_STATE_HOME=" dir "state") process-environment))
+           (global-mode-string nil) (pre pre-command-hook) (post post-command-hook)
+           (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
+           (file (concat (drgnx-remote-test--root dir) "root.txt"))
+           (real (symbol-function 'file-attributes)))
+      (make-directory tmp)
+      (write-region "x\n" nil (expand-file-name "src/root.txt" dir))
+      (cl-letf (((symbol-function 'yes-or-no-p) (lambda (prompt) (ert-fail (list "asked" prompt))))
+                ((symbol-function 'file-attributes)       ; the remote file is root's
+                 (lambda (f &optional id)
+                   (let ((a (funcall real f id)))
+                     (if (and a (file-remote-p f)) (append (list (nth 0 a) (nth 1 a) 0) (nthcdr 3 a)) a)))))
+        (unwind-protect
+            (progn
+              (drgnx-remote--setup)
+              (let ((b (find-file-noselect file)))
+                (unwind-protect
+                    (with-current-buffer b ; (batch turns no auto-save on: the name is asked for as auto-save-mode does)
+                      (should (string-prefix-p (expand-file-name "state/drgnx/" dir) (make-auto-save-file-name))))
+                  (kill-buffer b)))
+              (should (= (file-modes tramp-auto-save-directory) #o700)))
+          (drgnx-remote--teardown)
+          (setq pre-command-hook pre post-command-hook post)))
+      (should-not tramp-auto-save-directory)
+      ;; the user's own folder is theirs: kept, and left after the teardown
+      (let ((tramp-auto-save-directory (expand-file-name "mine/" dir)))
+        (unwind-protect (progn (drgnx-remote--setup)
+                               (should (equal tramp-auto-save-directory (expand-file-name "mine/" dir))))
+          (drgnx-remote--teardown)
+          (setq pre-command-hook pre post-command-hook post))
+        (should (equal tramp-auto-save-directory (expand-file-name "mine/" dir)))))))
+
 ;;;; A timer, a filter or a sentinel is not a command of the user's
 
 (ert-deftest drgnx-remote/a-timer-a-filter-and-a-sentinel-get-no-command ()

@@ -195,7 +195,6 @@ session has a private one of its own, in which podman finds none of its containe
          (drgnx-lang--remote-wanted (make-hash-table :test #'equal))
          (drgnx-lang--remote-hinted nil) (drgnx-lang--remote-pending nil) (drgnx-lang--user-command nil)
          (drgnx-remote-may-prompt nil)
-         (tramp-allow-unsafe-temporary-files t)         ; root's files in a container: TRAMP would ask about the auto-save file
          (drgnx-explorer--roots nil) (drgnx-explorer--cache (make-hash-table :test #'equal))
          (drgnx-explorer--expanded (make-hash-table :test #'equal))
          (global-mode-string global-mode-string))

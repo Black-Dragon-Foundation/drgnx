@@ -293,8 +293,25 @@ attach a buffer to a server on the strength of the attaching that is going on."
   "Before `command-error-function': a command that ends in an error or C-g runs no `post-command-hook'."
   (setq drgnx-lang--user-command nil))
 
+(defvar tramp-auto-save-directory)
+
+(defvar drgnx-remote--auto-save-directory nil
+  "The folder `drgnx-remote--setup' gave TRAMP's auto-save files, or nil when the user had set one of their own.")
+
+(defun drgnx-remote--private-auto-saves ()
+  "Unless the user set `tramp-auto-save-directory', make it a private folder (0700) in drgnx's state dir.  Outside
+the temp dir, a root-owned remote file (any container's) has its auto-save file there without TRAMP asking
+\"Autosave file on local temporary directory, do you want to continue?\" — a question that would freeze a daemon or a
+sentinel that visits it."
+  (unless (bound-and-true-p tramp-auto-save-directory)
+    (let ((d (file-name-as-directory (expand-file-name "tramp-auto-save" (drgnx-state-dir)))))
+      (with-file-modes #o700 (make-directory d t))
+      (set-file-modes d #o700)
+      (setq tramp-auto-save-directory d drgnx-remote--auto-save-directory d))))
+
 (defun drgnx-remote--setup ()
-  "Define the commands, put the segment on the mode line, follow the user's commands and guard TRAMP's questions."
+  "Define the commands, put the segment on the mode line, follow the user's commands, guard TRAMP's questions and
+keep remote auto-save files in a private folder."
   (drgnx-command-define 'remote-open :category "Remote" :title "Open Remote…" :command #'drgnx-remote-open
                         :doc "Edit on another machine: pick an ssh host or a podman container, then a folder")
   (drgnx-command-define 'remote-reconnect :category "Remote" :title "Reconnect" :command #'drgnx-remote-reconnect
@@ -304,7 +321,8 @@ attach a buffer to a server on the strength of the attaching that is going on."
   (add-hook 'post-command-hook #'drgnx-remote--command-end)
   (add-function :before command-error-function #'drgnx-remote--command-failed)
   (advice-add 'timer-event-handler :around #'drgnx-remote--timer-without-command)
-  (dolist (f drgnx-remote--prompt-functions) (advice-add f :around #'drgnx-remote--guard-prompt)))
+  (dolist (f drgnx-remote--prompt-functions) (advice-add f :around #'drgnx-remote--guard-prompt))
+  (drgnx-remote--private-auto-saves))
 
 (defun drgnx-remote--teardown ()
   "Undo `drgnx-remote--setup' except the commands (modules are switched off at the next start; tests use this)."
@@ -314,7 +332,10 @@ attach a buffer to a server on the strength of the attaching that is going on."
   (remove-function command-error-function #'drgnx-remote--command-failed)
   (advice-remove 'timer-event-handler #'drgnx-remote--timer-without-command)
   (dolist (f drgnx-remote--prompt-functions) (advice-remove f #'drgnx-remote--guard-prompt))
-  (setq drgnx-lang--user-command nil))
+  (when (and drgnx-remote--auto-save-directory
+             (equal (bound-and-true-p tramp-auto-save-directory) drgnx-remote--auto-save-directory))
+    (setq tramp-auto-save-directory nil))
+  (setq drgnx-remote--auto-save-directory nil drgnx-lang--user-command nil))
 
 (drgnx-module-define 'tools/remote
                      :doc "Open Remote… (ssh hosts, podman containers), a status-line segment, Reconnect, language servers on the remote side"
