@@ -292,6 +292,21 @@
           (drgnx-editing-copy))
         (should (equal unread-command-events '((t . 3))))))))
 
+(ert-deftest drgnx-editing/c-g-within-the-delay-quits-and-cuts-nothing ()
+  (drgnx-edit-clip-test--keys '((vscode app editing window))
+    (drgnx-edit-clip-test--buffer "hello drgnx"
+      (drgnx-edit-clip-test--select 1 6)
+      (let ((unread-command-events nil) (this-command 'drgnx-editing-cut) quit)
+        (cl-letf (((symbol-function 'this-command-keys-vector) (lambda () [24]))
+                  ((symbol-function 'read-key) (lambda (&rest _) ?\C-g))
+                  ((symbol-function 'keyboard-quit) (lambda () (setq quit t))))   ; a real quit would abort ert
+          (drgnx-editing-cut))
+        (should quit)
+        (should-not unread-command-events))
+      (should-not (region-active-p))
+      (should-not kill-ring)
+      (should (equal (buffer-string) "hello drgnx")))))
+
 (ert-deftest drgnx-editing/paste-with-an-empty-kill-ring-changes-nothing ()
   (drgnx-edit-clip-test--keys '((vscode app editing window))
     (drgnx-edit-clip-test--buffer "hello world"

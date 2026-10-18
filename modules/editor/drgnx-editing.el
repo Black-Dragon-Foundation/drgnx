@@ -247,8 +247,10 @@ untouched.  Only runs as a typed command, and the wait ends at the delay."
     (if (and drgnx-editing-prefix-delay (drgnx-editing--region-key-p) (drgnx-editing--prefix-key-p keys))
         (if-let* ((event (condition-case nil        ; a keyboard macro that ends here has no next key
                              (with-timeout (drgnx-editing-prefix-delay nil) (read-key))
-                           (error nil))))
-            (drgnx-editing--hand-back (append (listify-key-sequence keys) (list event)))
+                           (args-out-of-range nil))))
+            (if (eq event ?\C-g)
+                (progn (deactivate-mark) (keyboard-quit))    ; C-x C-g would be undefined
+              (drgnx-editing--hand-back (append (listify-key-sequence keys) (list event))))
           (funcall action))
       (funcall action))))
 

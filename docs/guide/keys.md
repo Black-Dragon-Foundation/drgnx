@@ -91,7 +91,8 @@ mode's `C-c C-c`, the agent and comint buffers' `C-c C-c`). With a selection the
 (0.3 seconds; `M-x customize-variable`; `nil` acts at once) for the next key, as CUA mode does: a key that arrives in
 time drops the selection and goes on as the prefix, so nothing is cut or lost; none, and `C-c` copies and `C-x`
 cuts. So `C-x C-s`, `C-x b` and `C-c C-c` work with a selection when typed at your normal speed, and a lone `C-c`
-or `C-x` acts after a short pause. Cmd+C and Cmd+X on a Mac are no prefix and act at once.
+or `C-x` acts after a short pause; `C-g` in that moment just drops the selection. A keyboard macro that recorded a
+pause and then a cut replays without the pause, so the key after it becomes a prefix. Cmd+C and Cmd+X on a Mac are no prefix and act at once.
 
 ## On a Mac
 
