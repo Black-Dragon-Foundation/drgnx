@@ -110,6 +110,26 @@ to OR-LOG, OPENROUTER_API_KEY unset."
       (should (= (hash-table-count drgnx-gateway--registrations) 1))
       (should (gethash (secure-hash 'sha256 token) drgnx-gateway--registrations)))))
 
+(ert-deftest drgnx-hub/registrations-survive-a-torn-write ()
+  ;; a file cut off mid-write (the old in-place write, a full disk) is logged and the hub serves; a save writes a
+  ;; temporary file and renames it over the old one (a new inode), leaves no temporary file, and is 0600
+  (drgnx-hub-test--with
+    (let ((file (expand-file-name "hub/registrations.eld" (drgnx-state-dir))) (logged nil))
+      (make-directory (file-name-directory file) t)
+      (write-region "((\"abc\" :job \"j\" :chain" nil file nil 'silent)
+      (cl-letf (((symbol-function 'message)
+                 (lambda (fmt &rest args) (when fmt (push (apply #'format-message fmt args) logged)) nil)))
+        (drgnx-hub-serve (drgnx-hub-socket)))
+      (should (seq-some (lambda (m) (string-search "registrations.eld" m)) logged))
+      (should (drgnx-hub-call-sync "ping" nil))
+      (drgnx-hub-call-sync "gateway/register" '(:chain [["openrouter" nil]]))
+      (let ((inode (file-attribute-inode-number (file-attributes file))))
+        (drgnx-hub-call-sync "gateway/register" '(:chain [["openrouter" nil]]))
+        (should-not (equal (file-attribute-inode-number (file-attributes file)) inode)))
+      (should (equal (directory-files (file-name-directory file) nil "regist") '("registrations.eld")))
+      (should (equal (file-modes file) #o600))
+      (should (= (length (with-temp-buffer (insert-file-contents file) (read (current-buffer)))) 2)))))
+
 (ert-deftest drgnx-hub/a-second-hub-exits ()
   (drgnx-hub-test--with
     (drgnx-hub-serve (drgnx-hub-socket))

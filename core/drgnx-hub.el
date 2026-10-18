@@ -145,18 +145,27 @@ With LIMIT, a line longer than LIMIT closes CONN: nothing after it is read."
 ;;;; The hub side
 
 (defun drgnx-hub--save-registrations ()
-  (let ((file (drgnx-hub--registrations-file)))
-    (make-directory (file-name-directory file) t)
-    (with-file-modes #o600
-      (with-temp-file file
-        (let ((print-length nil) (print-level nil)) (prin1 (drgnx-gateway-registrations) (current-buffer)))))
-    (set-file-modes file #o600)))
+  "Keep the registrations (mode 0600): written to a temporary file beside the old one, then renamed over it, so a hub
+that dies mid-write leaves the old file whole."
+  (let* ((file (drgnx-hub--registrations-file))
+         (tmp (progn (make-directory (file-name-directory file) t)
+                     (with-file-modes #o600 (make-temp-file (concat file "-"))))))
+    (unwind-protect
+        (with-temp-buffer
+          (let ((print-length nil) (print-level nil)) (prin1 (drgnx-gateway-registrations) (current-buffer)))
+          (let ((coding-system-for-write 'utf-8-unix)) (write-region nil nil tmp nil 'silent))
+          (set-file-modes tmp #o600)
+          (rename-file tmp file t))
+      (when (file-exists-p tmp) (delete-file tmp)))))
 
 (defun drgnx-hub--load-registrations ()
+  "Take back the registrations a previous hub kept; a file that cannot be read is logged (its agents register again)."
   (let ((file (drgnx-hub--registrations-file)))
     (when (file-readable-p file)
-      (drgnx-gateway-load-registrations
-       (ignore-errors (with-temp-buffer (insert-file-contents file) (read (current-buffer))))))))
+      (condition-case err
+          (drgnx-gateway-load-registrations (with-temp-buffer (insert-file-contents file) (read (current-buffer))))
+        (error (message "drgnx hub: %s cannot be read (%s): agents registered before must register again"
+                        file (error-message-string err)))))))
 
 (defun drgnx-hub--chain (chain)
   "A chain from JSON ([[provider, model-or-null]…]) as ((PROVIDER . MODEL)…)."

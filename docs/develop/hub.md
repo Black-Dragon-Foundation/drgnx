@@ -85,8 +85,9 @@ hub's own tests do, and stop what they start).
 ## Registrations
 
 `gateway/register` returns a token of 64 hex digits (32 bytes of `/dev/urandom`). The hub keeps
-`<state>/hub/registrations.eld` (mode 0600): `((SHA256-OF-TOKEN . REGISTRATION)…)` — never a token, never a key — and
-reads it back when it starts; it also keeps the gateway's port (`<state>/hub/port`) and binds it again, so agents
+`<state>/hub/registrations.eld` (mode 0600): `((SHA256-OF-TOKEN . REGISTRATION)…)` — never a token, never a key —
+written to a temporary file beside it and renamed over it (a hub that dies mid-write leaves the old one whole), and
+reads it back when it starts (a file it cannot read is logged: those agents register again); it also keeps the gateway's port (`<state>/hub/port`) and binds it again, so agents
 keep working across a hub restart (when the port is taken meanwhile, a new one is used and the log says so). A
 session's token is unregistered when its agent exits or is killed. Keys sent in `keys` live in the hub's
 memory only (`drgnx-gateway-set-key`); after a restart they come again from the environment, quiet auth-source files,
