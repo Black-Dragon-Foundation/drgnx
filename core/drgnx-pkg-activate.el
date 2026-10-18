@@ -6,8 +6,9 @@
 ;; A session activates the packages directory `drgnx sync' fills (its quickstart file, no scan, no
 ;; network) and installs nothing: use-package's :ensure only records the package for the next sync,
 ;; and package-install, package-refresh-contents and friends called from automatic code (startup,
-;; timers, hooks with no command running) signal instead of reaching the network.  A package the
-;; user installs with M-x package-install still installs (into the same directory).  See
+;; timers, hooks — also those running inside a user command — and `drgnx-automatic' code) signal instead
+;; of reaching the network.  A package the user installs with a command they run (M-x package-install,
+;; list-packages, an Install button) still installs (into the same directory).  See
 ;; docs/guide/packages.md.
 
 ;;; Code:
@@ -73,18 +74,30 @@ ARGS are the :ensure values, read as use-package does: nil nothing, t NAME, a sy
 (defun drgnx-pkg--in-timer-p ()
   (seq-some (lambda (f) (memq (cadr f) '(timer-event-handler internal-timer-start-idle))) (backtrace-frames)))
 
-(defun drgnx-pkg--installing-command-p (command)
-  "Is COMMAND (a symbol) one that installs: a `package-*' command, or one with the `drgnx-installs' property?
-A hook that runs inside any other command (find-file, …) is not the user asking to install."
-  (and (symbolp command)
-       (or (string-prefix-p "package-" (symbol-name command)) (get command 'drgnx-installs))))
+(defun drgnx-pkg--in-hook-p ()
+  "Is a hook running (a hook runner is on the stack)?  A hook inside a user command (find-file, a mode) is
+not the user asking to install."
+  (seq-some (lambda (f) (memq (cadr f) '(run-hooks run-hook-with-args run-hook-with-args-until-success
+                                                   run-hook-with-args-until-failure run-hook-wrapped run-mode-hooks)))
+            (backtrace-frames)))
+
+(defvar drgnx-guard--automatic)
+
+(defun drgnx-pkg--automatic-context ()
+  "Why the current context is not the user's own doing, or nil."
+  (cond ((not after-init-time) "startup")
+        ((null this-command) "automatic code")
+        ((drgnx-pkg--in-timer-p) "a timer")
+        ((bound-and-true-p drgnx-guard--automatic) "automatic code")
+        ((drgnx-pkg--in-hook-p) "a hook")))
 
 (defun drgnx-pkg--guard (orig &rest args)
-  "Around ORIG (an install or refresh): signal unless the user's install command is running."
-  (if (or (not after-init-time) (not (drgnx-pkg--installing-command-p this-command)) (drgnx-pkg--in-timer-p))
+  "Around ORIG (an install or refresh): signal when the call comes from startup, a timer, a hook or other
+automatic code; a command the user runs (M-x, a menu button, M-:) may install."
+  (if-let* ((why (drgnx-pkg--automatic-context)))
       (signal 'drgnx-pkg-error
-              (list (format "drgnx installs packages only with `drgnx sync' (refused %s %S from automatic code)"
-                            (if (symbolp orig) orig "an install") args)))
+              (list (format "drgnx installs packages only with `drgnx sync' or a command you run (refused %s %S from %s)"
+                            (if (symbolp orig) orig "an install") args why)))
     (apply orig args)))
 
 (define-minor-mode drgnx-pkg-guard-mode

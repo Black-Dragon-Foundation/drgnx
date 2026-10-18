@@ -268,23 +268,29 @@
     (drgnx-pkg-guard-mode -1))
   (should-not (advice-member-p #'drgnx-pkg--guard 'package-install)))
 
-(ert-deftest drgnx-pkg/the-guard-refuses-installs-from-hooks-in-other-commands ()
-  ;; M5-8: a hook running inside some other user command (find-file, …) is not the user asking to install;
-  ;; only a package-* command, or a drgnx command marked with the `drgnx-installs' property, is.
+(defvar drgnx-pkg-test--hook nil)
+(defvar drgnx-guard--automatic)
+
+(ert-deftest drgnx-pkg/the-guard-refuses-installs-from-hooks-in-user-commands ()
+  ;; M5-8: a hook running inside a user command (find-file, …) is not the user asking to install.
+  (let ((orig (lambda (&rest _) 'installed)) (after-init-time (current-time)) (this-command 'find-file))
+    (dolist (runner '(run-hooks run-hook-with-args run-hook-with-args-until-success run-hook-with-args-until-failure))
+      (let ((drgnx-pkg-test--hook (list (lambda (&rest _) (drgnx-pkg--guard orig 'foo)))))
+        (let ((err (should-error (funcall runner 'drgnx-pkg-test--hook) :type 'drgnx-pkg-error)))
+          (should (string-match-p "hook" (cadr err)))
+          (should-not (string-match-p "automatic code" (cadr err))))))
+    (let ((drgnx-pkg-test--hook (list (lambda () (drgnx-pkg--guard orig 'foo)))))   ; a mode hook
+      (should-error (run-mode-hooks 'drgnx-pkg-test--hook) :type 'drgnx-pkg-error))
+    (let ((drgnx-guard--automatic t))                              ; inside drgnx-automatic
+      (should-error (drgnx-pkg--guard orig 'foo) :type 'drgnx-pkg-error))))
+
+(ert-deftest drgnx-pkg/the-guard-allows-installs-the-user-started ()
+  ;; Review I1: M-x list-packages, describe-package's Install button (push-button), M-: and a third-party command
+  ;; are the user's own: only hooks, timers, startup and automatic code are refused.
   (let ((orig (lambda (&rest _) 'installed)) (after-init-time (current-time)))
-    (let ((this-command 'find-file))
-      (should-error (drgnx-pkg--guard orig 'foo) :type 'drgnx-pkg-error))
-    (let ((this-command (lambda () (interactive))))
-      (should-error (drgnx-pkg--guard orig 'foo) :type 'drgnx-pkg-error))
-    (dolist (c '(package-install package-menu-execute package-upgrade-all))
+    (dolist (c '(list-packages push-button eval-expression package-install package-menu-execute auto-package-update-now))
       (let ((this-command c))
-        (should (eq (drgnx-pkg--guard orig 'foo) 'installed))))
-    (unwind-protect
-        (let ((this-command 'drgnx-pkg-test--installing-command))   ; a drgnx command marked as installing
-          (should-error (drgnx-pkg--guard orig 'foo) :type 'drgnx-pkg-error)
-          (put 'drgnx-pkg-test--installing-command 'drgnx-installs t)
-          (should (eq (drgnx-pkg--guard orig 'foo) 'installed)))
-      (put 'drgnx-pkg-test--installing-command 'drgnx-installs nil))))
+        (should (eq (drgnx-pkg--guard orig 'foo) 'installed))))))
 
 (ert-deftest drgnx-pkg/use-package-ensure-only-records ()
   (drgnx-pkg-test--with root
