@@ -115,6 +115,7 @@
       ;; the editor is still there, with its buffer, and nothing went wrong
       (should (equal (drgnx-tty-session-eval s '(buffer-name (window-buffer (drgnx-wb-editor-window)))) buffer))
       (should (drgnx-tty-session-eval s '(window-live-p (drgnx-wb-editor-window))))
+      (should-not (drgnx-tty-session-eval s 'drgnx-hooks-problems))
       (should-not (drgnx-tty-session-eval
                    s '(with-current-buffer "*Messages*"
                         (save-excursion (goto-char (point-min))
@@ -145,3 +146,34 @@
     (should (drgnx-tty-session-eval s '(window-live-p (drgnx-wb-editor-window))))
     (drgnx-tty-layout-test--resize s "130x40")
     (drgnx-tty-session-wait s '(and (drgnx-wb--dock-windows) (drgnx-wb-area-window 'panel)))))
+
+(ert-deftest drgnx-tty-layout/a-dragged-divider-survives-a-resize ()
+  (drgnx-tty-session-with (s :size "160x50")
+    (drgnx-tty-layout-test--ready s)
+    (drgnx-tty-session-wait s '(drgnx-wb--dock-windows))
+    (drgnx-tty-session-wait-screen s "EXPLORER")
+    (let ((border (drgnx-tty-session-eval s '(nth 2 (window-edges (car (drgnx-wb--dock-windows))))))
+          (dock (lambda () (drgnx-tty-session-eval s '(window-total-width (car (drgnx-wb--dock-windows)))))))
+      (should (= (funcall dock) 40))
+      (drgnx-tty-session-drag s (cons border 10) (cons (+ border 6) 10))
+      (drgnx-tty-session-wait s '(= (window-total-width (car (drgnx-wb--dock-windows))) 46))
+      ;; the terminal narrows and shortens: the panel follows its fraction, the sidebar keeps the width you gave it
+      (drgnx-tty-layout-test--resize s "140x40")
+      (drgnx-tty-session-wait s '(= (window-total-height (drgnx-wb-area-window 'panel)) 12))
+      (drgnx-tty-session-quiet s)
+      (should (= (funcall dock) 46)))))
+
+(ert-deftest drgnx-tty-layout/opening-leaves-the-selected-window-alone ()
+  (dolist (daemon '(nil t))
+    (drgnx-tty-session-with (s :size "120x40" :daemon daemon)
+      (drgnx-tty-session-wait-screen s "EXPLORER" 20)
+      (drgnx-tty-session-quiet s)
+      (let ((form '(list (eq (selected-window) (drgnx-wb-editor-window))
+                         (buffer-name (window-buffer (selected-window)))
+                         (and (drgnx-wb--dock-windows) t))))
+        (should (equal (if daemon
+                           (drgnx-tty-session-eval
+                            s `(with-selected-frame (car (seq-filter (lambda (f) (frame-parameter f 'client)) (frame-list)))
+                                 ,form))
+                         (drgnx-tty-session-eval s form))
+                       '(t "*scratch*" t)))))))
