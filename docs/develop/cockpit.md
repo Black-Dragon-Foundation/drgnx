@@ -242,10 +242,13 @@ user's side is in [cockpit.md](../guide/cockpit.md#an-agents-edits).
   - Its own commands: `n`/`p` (files), `TAB`/`S-TAB` (hunks) and `RET` (`drgnx-cockpit-edits-visit`: the file from the
     agent's folder, at the new-side line), all from the section data, plus `a`, `r` and `c`. Below them is
     `special-mode-map`, and nothing else.
-- **A neutral folder.** `default-directory` is the temp folder (`drgnx-cockpit-edits--neutral-dir`). The agent's
+- **A neutral folder.** `default-directory` is an empty folder of the pane's own (`drgnx-cockpit-edits--neutral-dir`:
+  `make-temp-file … t` under `temporary-file-directory`, mode 0700), removed (while empty) by its `kill-buffer-hook`. The agent's
   folder lives only in `drgnx-cockpit-edits--source`, which only the pane's own commands use. VC (`C-x v u`, `C-x v
   v`), `epatch`/`ediff-patch-file`, `compile` and shells in the pane find nothing of the agent's.
-  `drgnx-cockpit-edits--agent`, `--id` and `--source` are permanent-local.
+  `drgnx-cockpit-edits--agent`, `--id`, `--source` and `--neutral` are permanent-local.
+- **No clones.** The mode has `no-clone` and `no-clone-indirect`: a clone would share the pane's timers and watches, and
+  killing it would stop the original's updates.
 - **No other mode.** A local `change-major-mode-hook` (`drgnx-cockpit-edits--keep-mode`) signals a `user-error`, so `M-x
   diff-mode` (or any mode) cannot turn the pane into a patch buffer.
 - **No undo** (`buffer-disable-undo`), no dir-local variables.
@@ -379,7 +382,10 @@ nothing reads, and no process sentinel runs while it waits. It covers:
 - the pane is no diff or patch buffer: special-mode, the neutral folder, its map holding only its own commands over
   special-mode's (menu items too), `diff-mode` and `fundamental-mode` refused, `vc-deduce-fileset` naming nothing of the
   agent's and `vc-revert` changing no file, `ediff-patch-file` offered no folder of the agent's, `RET` opening the
-  right file at the right line, `TAB`/`S-TAB` by hunk;
+  right file at the right line, `TAB`/`S-TAB` by hunk; the pane's folder empty, private (0700), under the fixture's
+  `temporary-file-directory` and gone with the pane;
+- no clone (`clone-buffer`, `clone-indirect-buffer` refused); `diff-apply-hunk`/`diff-apply-buffer` by name and `g`
+  change no file (`g` only lists again);
 - a revert checked again after the question: the task taken up again, or another agent come in through a link, turns
   it into a request;
 - comments queued, the line a diff line stands for, the hub routes (an exited mirror gets a message in the store);

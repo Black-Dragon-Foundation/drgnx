@@ -101,7 +101,7 @@ press `RET`) and that agent's file changes since it started open in the editor a
 |---|---|---|
 | `n`, `p` | Next / Previous Changed File (`cockpit-edits-next-file`, `cockpit-edits-previous-file`) | moves to the next or previous file's header line |
 | `TAB`, `S-TAB` | Next / Previous Hunk (`cockpit-edits-next-hunk`, `cockpit-edits-previous-hunk`) | moves to the next or previous hunk |
-| `RET` | Open File at Line (`cockpit-edits-visit`) | opens the file, from the agent's folder, at the line the diff line stands for |
+| `RET` | Open File at Line (`cockpit-edits-visit`) | opens the real file (writable), from the agent's folder, at the line the diff line stands for |
 | `a` | Accept File (`cockpit-accept-file`) | marks the file accepted with the hash of the diff you see. The mark counts toward the task's merge gate. It never merges or commits anything. When the agent changes the file again, the header says `changed since accepted`: the mark keeps the hash you accepted, and the merge gate compares it with the diff's. |
 | `r` | Revert File… (`cockpit-revert-file`) | asks the agent to undo its changes to the file. The message `[revert] please undo your changes to FILE` is queued for it and never interrupts it. See below for the one case where the file is put back here. |
 | `c` | Comment on Line… (`cockpit-comment`) | asks for a comment and queues `[comment] FILE:LINE: TEXT` for the agent. LINE is the file's line that the diff line at point stands for. |
@@ -111,10 +111,13 @@ The keys are the same in the VS Code, Emacs and Vim profiles: the buffer starts 
 
 **Read-only.** The pane is text in diff-mode's colours, not a diff buffer. Nothing outside its own commands acts on
 the agent's files:
-- its folder (`default-directory`) is the temp folder, not the agent's, so VC (`C-x v u`, `C-x v v`), `ediff-patch-file`,
-  `compile` or a shell started from it find nothing of the agent's;
-- it cannot be switched to another mode (`M-x diff-mode` is refused);
+- its folder (`default-directory`) is an empty private folder of its own (removed with the pane), not the agent's,
+  so VC (`C-x v u`, `C-x v v`), `ediff-patch-file`, `compile` or a shell started from it find nothing of the agent's;
+- it cannot be switched to another mode (`M-x diff-mode` is refused), or cloned;
 - it has no Diff menu.
+
+`RET` opens the agent's real file, and that buffer is an ordinary, writable one: what you change and save there
+changes the agent's worktree.
 
 `r` and `c` are the way to act on an agent's change.
 

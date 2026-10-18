@@ -116,6 +116,7 @@ reported); a file already listed is diffed again at once.")
 (defvar-local drgnx-cockpit-edits--watches nil "Hash folder → its file watch.")
 (defvar-local drgnx-cockpit-edits--store-key nil "The store's data version and change count at the last look.")
 (defvar-local drgnx-cockpit-edits--event-id 0 "The last event the pane read: edits reported after it are new.")
+(defvar-local drgnx-cockpit-edits--neutral nil "The pane's own empty folder (`drgnx-cockpit-edits--neutral-dir').")
 (defvar-local drgnx-cockpit-edits--quiet-gap nil
   "Seconds between the check's own listings: nil (`drgnx-cockpit-edits-check-interval') until one finds nothing new,
 then twice the last, up to `drgnx-cockpit-edits--quiet-max'.  Any change heard of resets it.")
@@ -606,7 +607,10 @@ while a long one runs)."
   (setq drgnx-cockpit-edits--timer nil drgnx-cockpit-edits--check-timer nil drgnx-cockpit-edits--flush-timer nil)
   (when (hash-table-p drgnx-cockpit-edits--watches)
     (maphash (lambda (_ w) (ignore-errors (file-notify-rm-watch w))) drgnx-cockpit-edits--watches)
-    (clrhash drgnx-cockpit-edits--watches)))
+    (clrhash drgnx-cockpit-edits--watches))
+  ;; its private folder goes too (only while empty: nothing put there by hand is deleted)
+  (when (and (stringp drgnx-cockpit-edits--neutral) (file-directory-p drgnx-cockpit-edits--neutral))
+    (ignore-errors (delete-directory drgnx-cockpit-edits--neutral))))
 
 ;;;; The buffer and its mode
 
@@ -637,9 +641,10 @@ buffer that other commands (diff-mode, VC, ediff) would apply."
   (user-error "An agent's edits stay as they are: r asks the agent to undo a file, c comments on a line"))
 
 (defun drgnx-cockpit-edits--neutral-dir ()
-  "The pane's `default-directory': the temp folder, never the agent's — so VC, patch, compile and shells in the pane
-find nothing of the agent's to act on.  The agent's folder lives in `drgnx-cockpit-edits--source'."
-  (file-name-as-directory (expand-file-name temporary-file-directory)))
+  "A new empty folder of the pane's own (mode 0700, under `temporary-file-directory'), removed when the pane is killed:
+its `default-directory', never the agent's — so VC, patch, compile and shells in the pane find nothing of the agent's
+(or anyone's) to act on.  The agent's folder lives in `drgnx-cockpit-edits--source'."
+  (file-name-as-directory (with-file-modes #o700 (make-temp-file "drgnx-edits-" t))))
 
 (defvar drgnx-cockpit-edits-mode-map
   (let ((m (make-sparse-keymap))) (set-keymap-parent m special-mode-map) m)
@@ -649,7 +654,8 @@ find nothing of the agent's to act on.  The agent's folder lives in `drgnx-cockp
   "An agent's edits as a live diff: a header line per file, its diff below (docs/guide/cockpit.md).  It is text,
 not a diff-mode buffer, and its `default-directory' is a neutral folder: nothing outside its own commands acts on
 the agent's files."
-  (setq truncate-lines t default-directory (drgnx-cockpit-edits--neutral-dir))
+  (setq truncate-lines t drgnx-cockpit-edits--neutral (drgnx-cockpit-edits--neutral-dir)
+        default-directory drgnx-cockpit-edits--neutral)
   (buffer-disable-undo)
   (setq-local font-lock-defaults '(drgnx-cockpit-edits--font-lock-keywords t))
   (setq-local revert-buffer-function #'drgnx-cockpit-edits--revert)
@@ -657,8 +663,11 @@ the agent's files."
   (add-hook 'window-buffer-change-functions #'drgnx-cockpit-edits--shown nil t)
   (add-hook 'kill-buffer-hook #'drgnx-cockpit-edits--unwatch nil t))
 
-(dolist (v '(drgnx-cockpit-edits--agent drgnx-cockpit-edits--id drgnx-cockpit-edits--source))
+(dolist (v '(drgnx-cockpit-edits--agent drgnx-cockpit-edits--id drgnx-cockpit-edits--source drgnx-cockpit-edits--neutral))
   (put v 'permanent-local t))
+;; a clone would share the pane's timers and watches (killing it would stop the original's updates): none
+(put 'drgnx-cockpit-edits-mode 'no-clone t)
+(put 'drgnx-cockpit-edits-mode 'no-clone-indirect t)
 
 (defun drgnx-cockpit-edits--teardown ()
   "Undo the module's part for agents' edits: kill every edits pane (each one's `kill-buffer-hook' ends its timers and

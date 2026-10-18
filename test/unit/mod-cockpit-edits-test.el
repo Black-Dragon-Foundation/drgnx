@@ -19,6 +19,10 @@
 (defun drgnx-cockpit-edits-test--settle (buffer)
   (should (drgnx-cockpit-fixture-wait (lambda () (drgnx-cockpit-edits-test--settled-p buffer)))))
 
+(defun drgnx-cockpit-edits-test--tmp (root)
+  "A temp folder inside the fixture's ROOT (made): tests never put the pane's folder in the real one."
+  (let ((d (concat root "tmp/"))) (make-directory d t) d))
+
 (defmacro drgnx-cockpit-edits-test--with (agent &rest body)
   "BODY in the cockpit fixture with AGENT's edits pane E shown in the selected window and loaded; the hub's sessions
 the fixture's (SESSIONS); NOTIFIED counts the hub told of a message.  File watches are recorded in WATCHES (descriptor → (DIR CALLBACK)), never real ones: in
@@ -28,6 +32,7 @@ The pane is killed after, and must leave no timer or watch behind."
   `(drgnx-cockpit-fixture-with
      (let ((drgnx-cockpit-edits--draws 0) (drgnx-cockpit-edits-check-interval 3600) (drgnx-cockpit-edits--list-every 0)
            (drgnx-cockpit-edits--last nil) (config (current-window-configuration))
+           (temporary-file-directory (drgnx-cockpit-edits-test--tmp root))
            (watches (make-hash-table)) (watch-n 0) (notified 0))
        (cl-letf (((symbol-function 'drgnx-cockpit-sessions) (lambda () sessions))
                  ((symbol-function 'drgnx-cockpit-edits--notify-hub) (lambda () (cl-incf notified)))
@@ -42,8 +47,10 @@ The pane is killed after, and must leave no timer or watch behind."
                  (set-buffer e)
                  (drgnx-cockpit-edits-test--settle e)
                  ,@body)
-             (let ((timers (with-current-buffer e (list drgnx-cockpit-edits--timer drgnx-cockpit-edits--check-timer))))
+             (let ((timers (with-current-buffer e (list drgnx-cockpit-edits--timer drgnx-cockpit-edits--check-timer)))
+                   (own (buffer-local-value 'drgnx-cockpit-edits--neutral e)))
                (kill-buffer e)
+               (should-not (file-exists-p own))                     ; its own folder went with it
                (dolist (tm timers) (should-not (and (timerp tm) (memq tm timer-list))))   ; the buffer owned them
                (should (zerop (hash-table-count watches))))
              (set-window-configuration config)))))))
@@ -222,6 +229,39 @@ The pane is killed after, and must leave no timer or watch behind."
                        '("[comment] README:1: two" "[comment] README:1: three")))
         (should (= 3 notified))))))
 
+(ert-deftest drgnx-cockpit-edits/the-pane-is-never-cloned ()
+  ;; a clone would share the pane's timers and watches: killing it would stop the original's updates
+  (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
+    (let ((n (length (buffer-list))))
+      (should-error (clone-buffer))
+      (should-error (clone-indirect-buffer nil nil))
+      (should (= n (length (buffer-list))))
+      (should (timerp drgnx-cockpit-edits--check-timer)))))
+
+(ert-deftest drgnx-cockpit-edits/diff-commands-by-name-and-g-change-no-file ()
+  (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
+    (let ((status (drgnx-cockpit-fixture-git wt-a "status" "--porcelain"))
+          (readme (lambda () (with-temp-buffer (insert-file-contents (concat wt-a "README")) (buffer-string)))))
+      ;; M-x diff-apply-hunk in the pane: it finds no file of the agent's from the pane's own folder (and the user is
+      ;; asked for one, here refused)
+      (drgnx-cockpit-edits-test--goto "README" "+more")
+      (cl-letf (((symbol-function 'read-file-name) (lambda (&rest _) (error "Asked for a file")))
+                ((symbol-function 'yes-or-no-p) #'always) ((symbol-function 'y-or-n-p) #'always))
+        (ignore-errors (call-interactively #'diff-apply-hunk))
+        (ignore-errors (call-interactively #'diff-apply-buffer)))
+      (should (equal (funcall readme) "readme\nmore\n"))
+      (should (equal status (drgnx-cockpit-fixture-git wt-a "status" "--porcelain")))
+      ;; g lists the changes again, and only that: no question, no file touched, the same files shown
+      (set-buffer e)
+      (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) (ert-fail "Asked")))
+                ((symbol-function 'y-or-n-p) (lambda (&rest _) (ert-fail "Asked"))))
+        (revert-buffer)
+        (should drgnx-cockpit-edits--list-dirty)
+        (drgnx-cockpit-edits-test--settle e))
+      (should (equal drgnx-cockpit-edits--files '("README" "new.txt")))
+      (should (equal (funcall readme) "readme\nmore\n"))
+      (should (equal status (drgnx-cockpit-fixture-git wt-a "status" "--porcelain"))))))
+
 (ert-deftest drgnx-cockpit-edits/the-graph-opens-an-agents-edits ()
   (drgnx-cockpit-fixture-with
     (let ((drgnx-cockpit-graph-current-filter nil) (drgnx-cockpit--timer nil) (drgnx-cockpit--check-timer nil)
@@ -273,7 +313,7 @@ The pane is killed after, and must leave no timer or watch behind."
 (ert-deftest drgnx-cockpit-edits/a-native-session-is-never-reverted-here ()
   ;; a chat session stopped in a linked worktree (the user may work there): a request, never a question
   (drgnx-cockpit-fixture-with
-    (let ((drgnx-cockpit-edits--last nil) (ledger (concat wt-b ".superpowers/sdd/p/progress.md")))
+    (let ((drgnx-cockpit-edits--last nil) (temporary-file-directory (drgnx-cockpit-edits-test--tmp root)) (ledger (concat wt-b ".superpowers/sdd/p/progress.md")))
       (drgnx-coord-agent-register :id "s-9" :name "chat" :cwd (directory-file-name wt-b))
       (cl-letf (((symbol-function 'drgnx-cockpit-sessions) (lambda () sessions))   ; s-9 is not among them: "stopped"
                 ((symbol-function 'drgnx-cockpit-edits--notify-hub) #'ignore)
@@ -338,7 +378,8 @@ from the hub's list; its session here is MIRROR (nil: none; set it).  Questions 
 NOTIFIED counts the hub told; (INBOX) is s-1's messages; (SLURP FILE) a file's text."
   (declare (indent 0))
   `(drgnx-cockpit-fixture-with
-     (let ((drgnx-cockpit-edits--last nil) (asked nil) (answer t) (mirror nil) (notified 0))
+     (let ((drgnx-cockpit-edits--last nil) (temporary-file-directory (drgnx-cockpit-edits-test--tmp root))
+           (asked nil) (answer t) (mirror nil) (notified 0))
        (drgnx-cockpit-fixture-git repo "branch" "job/jx" "main")
        (drgnx-cockpit-fixture-git repo "worktree" "add" "-q" "-b" "job/jx-2" tree "job/jx")
        (drgnx-cockpit-fixture-write (concat tree "README") "readme\nby the job\n")
@@ -455,7 +496,10 @@ NOTIFIED counts the hub told; (INBOX) is s-1's messages; (SLURP FILE) a file's t
       ;; text in special-mode, in a neutral folder; the agent's folder only in its own variable
       (should (derived-mode-p 'special-mode))
       (should-not (derived-mode-p 'diff-mode))
-      (should (equal default-directory (drgnx-cockpit-edits--neutral-dir)))
+      (should (equal default-directory drgnx-cockpit-edits--neutral))
+      (should (string-prefix-p temporary-file-directory default-directory))   ; under the fixture's temp folder
+      (should (null (directory-files default-directory nil directory-files-no-dot-files-regexp)))
+      (should (= #o700 (file-modes default-directory)))
       (should-not (funcall agent-path-p default-directory))
       (should (equal (plist-get drgnx-cockpit-edits--source :dir) wt-a))
       ;; its map: its own commands over special-mode's, nothing else
