@@ -715,21 +715,28 @@ dirs and every tool's config), nor in ~/.ssh: not from `PATH', not through a lin
 (ert-deftest drgnx-sandbox/toolchain-roots-links-reach-no-dirs ()
   "A link in a `PATH' dir that leads into no toolchain layout gives its target file alone: never the dir it is in
 nor a dir it leads to — another repo, dotfiles with a key, notes — and nothing at all in ~/.config, ~/.local/share
-or ~/.cache but a known layout.  Every root passes `:read' validation."
+or ~/.cache but a known layout.  The file must be a program: executable, not directly in HOME, its name none of
+`drgnx-sandbox-secret-files' — so a link to ~/.netrc or a key brings nothing.  Every root passes `:read' validation."
   (drgnx-sandbox-test--toolchains
     (dolist (d '("/dotfiles" "/src/otherrepo/.git" "/notes" "/.config/gh" "/.local/share/keyrings" "/.cache/x"))
       (make-directory (concat home d) t))
     (dolist (f '("/dotfiles/sync.sh" "/dotfiles/id_ed25519" "/src/otherrepo/run.sh" "/notes/n.org" "/.config/gh/hosts.yml"
-                 "/.local/share/keyrings/login.keyring" "/.cache/x/tool"))
+                 "/.local/share/keyrings/login.keyring" "/.cache/x/tool" "/.netrc" "/dotfiles/.env" "/run-me"))
       (write-region "x" nil (concat home f) nil 'silent))
+    ;; programs: the two scripts; and, executable but refused, a .env and a file directly in HOME
+    (dolist (f '("/dotfiles/sync.sh" "/src/otherrepo/run.sh" "/dotfiles/.env" "/run-me" "/.cache/x/tool"))
+      (set-file-modes (concat home f) #o755))
     (pcase-dolist (`(,name . ,target) '(("sync" . "/dotfiles/sync.sh") ("run" . "/src/otherrepo/run.sh") ("notesdir" . "/notes")
                                         ("ghx" . "/.config/gh/hosts.yml") ("kr" . "/.local/share/keyrings/login.keyring")
-                                        ("cx" . "/.cache/x/tool") ("cfg" . "/.config/gh")))
+                                        ("cx" . "/.cache/x/tool") ("cfg" . "/.config/gh")
+                                        ("netrc" . "/.netrc") ("key" . "/dotfiles/id_ed25519")
+                                        ("env" . "/dotfiles/.env") ("runme" . "/run-me")))
       (make-symbolic-link (concat home target) (concat home "/.local/bin/" name)))
     (let ((roots (drgnx-sandbox-toolchain-roots path-dirs home)))
       (dolist (r roots)
         (ert-info (r)
-          (dolist (closed '("/notes" "/.config" "/.cache" "/.local/share/keyrings" "/dotfiles/id_ed25519" "/src/otherrepo/.git"))
+          (dolist (closed '("/notes" "/.config" "/.cache" "/.local/share/keyrings" "/dotfiles/id_ed25519" "/src/otherrepo/.git"
+                            "/.netrc" "/dotfiles/.env" "/run-me"))
             (should-not (drgnx-sandbox-test--within-p r (concat home closed))))
           (dolist (dir '("/dotfiles" "/src" "/src/otherrepo" "/.local/share"))
             (should-not (equal r (concat home dir))))))
@@ -781,7 +788,25 @@ package finds its own files; layouts match whole path components only."
       (let ((h (file-name-as-directory home)))
         (should (equal (drgnx-sandbox--toolchain-root (concat h "go/binx/foo") h) (concat h "go/binx/foo")))
         (should (equal (drgnx-sandbox--toolchain-root (concat h ".cargo/binaries") h) (concat h ".cargo/binaries")))
-        (should (equal (drgnx-sandbox--toolchain-root (concat h "go/bin") h) (concat h "go/bin")))))))
+        (should (equal (drgnx-sandbox--toolchain-root (concat h "go/bin") h) (concat h "go/bin")))
+        ;; mise's installs only in its data dir: ~/.local/share/mise, $XDG_DATA_HOME/mise or $MISE_DATA_DIR
+        (let ((process-environment (append '("MISE_DATA_DIR" "XDG_DATA_HOME") process-environment)))
+          (should (equal (drgnx-sandbox--toolchain-root (concat h ".local/share/mise/installs/node/20/bin") h)
+                         (concat h ".local/share/mise/installs/node/20")))
+          (dolist (p '(".config/mise/installs/x/1/bin" "src/mise/installs/x/1/bin" "tools/mise/installs/x/1/bin"))
+            (should (equal (drgnx-sandbox--toolchain-root (concat h p) h) (concat h p)))))
+        (make-directory (concat h "tools/mise") t)
+        (make-directory (concat h "xdg/mise") t)
+        ;; $MISE_DATA_DIR wins over $XDG_DATA_HOME, as in mise
+        (let ((process-environment (append (list (concat "MISE_DATA_DIR=" h "tools/mise") (concat "XDG_DATA_HOME=" h "xdg"))
+                                           process-environment)))
+          (should (equal (drgnx-sandbox--toolchain-root (concat h "tools/mise/installs/x/1/bin") h)
+                         (concat h "tools/mise/installs/x/1")))
+          (should (equal (drgnx-sandbox--toolchain-root (concat h "xdg/mise/installs/x/1/bin") h)
+                         (concat h "xdg/mise/installs/x/1/bin"))))
+        (let ((process-environment (append (list "MISE_DATA_DIR" (concat "XDG_DATA_HOME=" h "xdg")) process-environment)))
+          (should (equal (drgnx-sandbox--toolchain-root (concat h "xdg/mise/installs/x/1/bin") h)
+                         (concat h "xdg/mise/installs/x/1"))))))))
 
 (ert-deftest drgnx-sandbox/check-never-wedges ()
   "An error while the probes are built, or while their answer is made, still answers every caller and ends the

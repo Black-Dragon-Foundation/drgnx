@@ -225,7 +225,7 @@ there need, as sorted true names: dirs, and single files. A known **toolchain la
 
 | Layout | Root |
 |---|---|
-| `…/mise/installs/TOOL/VER/…` (any mise data dir under `~`) | `…/mise/installs/TOOL/VER` |
+| `~/.local/share/mise/installs/TOOL/VER/…`, or in the data dir `$MISE_DATA_DIR` (else `$XDG_DATA_HOME/mise`) names, where that is under `~` | `…/mise/installs/TOOL/VER` |
 | `~/.cargo/bin` | `~/.cargo/bin`, and `~/.rustup/toolchains` where it exists (cargo's proxies run them) |
 | `~/.rustup/toolchains/…` | `~/.rustup/toolchains` |
 | `~/go/bin` | `~/go/bin` |
@@ -239,7 +239,9 @@ there need, as sorted true names: dirs, and single files. A known **toolchain la
   the dir itself (`~/.local/bin`, `~/.bun/bin`).
 - **Each link inside such a dir** gives the root of the layout it leads into (`~/.local/bin/python` → mise's python).
   A link into no layout gives **its target file alone**, read-only: `~/.local/bin/sync` → `~/dotfiles/sync.sh` binds
-  that script, never `~/dotfiles` with the key beside it. A link to a dir in no layout gives nothing.
+  that script, never `~/dotfiles` with the key beside it. The file must be a program: a regular file with an execute
+  bit, not directly in `~` (`~/.netrc`, `~/.npmrc`), its name none of `drgnx-sandbox-secret-files`; so a link to
+  `~/.netrc` or to `~/dotfiles/id_ed25519` gives nothing. A link to a dir in no layout gives nothing.
 - **A link into drgnx's own data dir or checkout gives nothing** (install.sh's `~/.local/bin/drgnx` →
   `~/.local/share/drgnx/drgnx/bin/drgnx`). drgnx's files reach a sandbox only through the explicit bind the hub
   makes for what needs them (the MCP bridge), never through `PATH`.
@@ -313,7 +315,12 @@ The check runs its probes side by side once per hub start, so it costs about as 
 - **A script linked from `PATH` gets only itself.** A link into no layout binds the target file alone, so a script
   that loads files beside it, or a tool installed in a layout drgnx does not know, fails inside. A pipx or uv venv's
   `python` is a link to the interpreter it was made from: that interpreter must be a root too (a system one, or one
-  of mise's or uv's on `PATH`). The fix is a layout entry, or `:sandbox-read` for that profile.
+  of mise's or uv's on `PATH`). The fix is a layout entry, or `:sandbox-read` for that profile. A linked file that is
+  not executable, or sits directly in `~`, is never bound.
+- **`PATH` dirs under `~/.config`, `~/.local/share` or `~/.cache` are dropped** unless they are a known layout:
+  Doom Emacs's `~/.config/emacs/bin`, composer's `~/.config/composer/vendor/bin`, mise's shims. Those dirs sit beside
+  config and tokens, so drgnx does not guess. Add one with `:sandbox-read` in that profile (`agents.eld`) to have it
+  inside.
 - **Secret files are looked for at fixed places** in each root (`drgnx-sandbox-secret-files`), not throughout a
   toolchain's tree. The layout roots are install dirs, where that is enough.
 

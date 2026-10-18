@@ -669,14 +669,27 @@ check that runs still answers its own callers, but its answer is not kept, and l
 ;;;; Toolchains
 
 (defconst drgnx-sandbox--toolchain-layouts
-  '("\\(?:.*/\\)?mise/installs/[^/]+/[^/]+" "\\.cargo/bin" "\\.rustup/toolchains" "go/bin" "\\.nvm/versions/node/[^/]+"
+  '("\\.local/share/mise/installs/[^/]+/[^/]+" "\\.cargo/bin" "\\.rustup/toolchains" "go/bin" "\\.nvm/versions/node/[^/]+"
     "\\.npm-global" "\\.local/lib/node_modules/\\(?:@[^/]+/\\)?[^/]+" "\\.local/share/pipx/venvs/[^/]+"
     "\\.local/pipx/venvs/[^/]+" "\\.local/share/uv/tools/[^/]+" "\\.local/share/uv/python/[^/]+"
     "\\.local/share/claude/versions")
   "Where a toolchain installs under HOME, as regexps on a path relative to HOME, each matching whole path
-components from the start: what one matches is the root.  mise's installs/TOOL/VER, cargo, rustup, go, nvm, npm's
-prefix (~/.npm-global, or ~/.local's node_modules/PKG), pipx's and uv's tool venvs and uv's Pythons, Claude Code's
+components from the start: what one matches is the root.  mise's installs/TOOL/VER in its default data dir (and in
+the one $MISE_DATA_DIR or $XDG_DATA_HOME names: `drgnx-sandbox--layouts'), cargo, rustup, go, nvm, npm's prefix
+\(~/.npm-global, or ~/.local's node_modules/PKG), pipx's and uv's tool venvs and uv's Pythons, Claude Code's
 versioned binaries.")
+
+(defun drgnx-sandbox--layouts (home)
+  "`drgnx-sandbox--toolchain-layouts', with mise's installs/TOOL/VER in the data dir the environment gives it
+\($MISE_DATA_DIR, else $XDG_DATA_HOME/mise) where that is inside HOME (a true name with a slash)."
+  (let* ((env (lambda (v) (let ((d (getenv v))) (and d (file-name-absolute-p d) d))))
+         (data (or (funcall env "MISE_DATA_DIR")
+                   (let ((x (funcall env "XDG_DATA_HOME"))) (and x (expand-file-name "mise" x)))))
+         (true (and data (drgnx-sandbox--truename data))))
+    (if (and true (string-prefix-p home true) (> (length true) (length home)))
+        (cons (concat (regexp-quote (substring true (length home))) "/installs/[^/]+/[^/]+")
+              drgnx-sandbox--toolchain-layouts)
+      drgnx-sandbox--toolchain-layouts)))
 
 (defconst drgnx-sandbox--toolchain-also '((".cargo/bin" . ".rustup/toolchains"))
   "A root (relative to HOME) → another root it runs: cargo's proxies run rustup's toolchains.")
@@ -689,10 +702,10 @@ root but a known layout (`drgnx-sandbox--toolchain-layouts').")
   "Dirs of HOME no toolchain root is in: keys and credentials.")
 
 (defun drgnx-sandbox--toolchain-layout (path home)
-  "The root of the toolchain layout PATH is in (`drgnx-sandbox--toolchain-layouts'), or nil.  PATH is a true name
-strictly inside HOME (a true name with a slash)."
+  "The root of the toolchain layout PATH is in (`drgnx-sandbox--layouts'), or nil.  PATH is a true name strictly
+inside HOME (a true name with a slash)."
   (let ((rel (substring path (length home))))
-    (cl-loop for re in drgnx-sandbox--toolchain-layouts
+    (cl-loop for re in (drgnx-sandbox--layouts home)
              when (string-match (concat "\\`\\(" re "\\)\\(?:/\\|\\'\\)") rel)
              return (concat home (match-string 1 rel)))))
 
@@ -700,6 +713,15 @@ strictly inside HOME (a true name with a slash)."
   "PATH's install root: the root of the toolchain layout it is in, else PATH itself (see
 `drgnx-sandbox--toolchain-layout')."
   (or (drgnx-sandbox--toolchain-layout path home) path))
+
+(defun drgnx-sandbox--program-file-p (file home)
+  "May FILE, a link's target in no toolchain layout, be bound alone: is it a program — a regular file with an
+execute bit, not directly in HOME (a true name with a slash; ~/.netrc, ~/.npmrc live there), its name none of
+`drgnx-sandbox-secret-files'?"
+  (let ((name (file-name-nondirectory file)))
+    (and (file-regular-p file) (file-executable-p file)
+         (not (string= (file-name-directory file) home))
+         (not (cl-some (lambda (s) (string= name (file-name-nondirectory s))) drgnx-sandbox-secret-files)))))
 
 (defun drgnx-sandbox--root-ok-p (root home)
   "May ROOT be a toolchain root, HOME's (with a slash) true name: strictly inside it; not ~/.local, nor in ~/.ssh,
@@ -743,7 +765,7 @@ root inside another is left to it.  Dirs outside HOME are the system's reads."
                   (when (and target (string-prefix-p home target) (file-exists-p target)
                              (not (cl-some (lambda (o) (drgnx-sandbox--within-p target o)) own)))
                     (funcall add (or (drgnx-sandbox--toolchain-layout target home)
-                                     (and (file-regular-p target) target))))))))))
+                                     (and (drgnx-sandbox--program-file-p target home) target))))))))))
       ;; what Task 3's rules refuse to read is never a root either
       (let* ((ctx (drgnx-sandbox--context))
              (all (cl-remove-if (lambda (r)
