@@ -28,7 +28,7 @@
   "Request URL (POST BODY, a plist, when given) with KEY as a bearer token; CALLBACK gets (STATUS TEXT): the HTTP
 status (0 when no answer came) and the answer.  Returns the process."
   (let* ((config (concat "url = " (drgnx-ai--config-string url) "\n"
-                         (format "max-time = %s\n" timeout)
+                         (if timeout (format "max-time = %s\n" timeout) "")   ; nil: no limit
                          "silent\nshow-error\n"
                          "write-out = \"\\n%{http_code}\"\n"
                          (if body (concat "header = \"Content-Type: application/json\"\n"
@@ -87,10 +87,14 @@ status (0 when no answer came) and the answer.  Returns the process."
 or a number that is not finite."
   (when (and (vectorp v) (> (length v) 0) (cl-every #'numberp v))
     (let* ((f (vconcat (mapcar #'float v)))
-           (norm (sqrt (cl-loop for x across f sum (* x x)))))
+           (big (cl-loop for x across f maximize (abs x))))
       (when (cl-every (lambda (x) (< (abs x) 1.0e+INF)) f)
-        (cond ((zerop norm) f)
-              ((< norm 1.0e+INF) (vconcat (mapcar (lambda (x) (/ x norm)) f))))))))
+        (if (zerop big) f
+          ;; scaled by the largest entry first: squares of tiny numbers underflow to 0 (a nonzero vector with norm 0)
+          ;; and of huge ones overflow
+          (let* ((s (vconcat (mapcar (lambda (x) (/ x big)) f)))
+                 (norm (sqrt (cl-loop for x across s sum (* x x)))))
+            (vconcat (mapcar (lambda (x) (/ x norm)) s))))))))
 
 (defun drgnx-ai--embeddings (provider json)
   "The vectors in a parsed embedding answer JSON from PROVIDER, each of length 1, or nil when it is not that."
@@ -141,7 +145,12 @@ a command the user ran (keys may come from sources that ask, see `drgnx-ai-key')
 `drgnx-ai-cancel'."
   (let ((h (drgnx-ai--make-request :callback callback :chain (or chain (drgnx-ai-role role)) :kind kind :payload payload
                                    :timeout timeout :interactive interactive)))
-    (drgnx-ai--next h)
+    (if (and (eq kind 'embed) (zerop (length (plist-get payload :inputs))))
+        ;; nothing to embed: no provider is asked (and no key looked up)
+        (run-at-time 0 nil (lambda ()
+                             (unless (drgnx-ai-request-cancelled h)
+                               (funcall callback [] (list :provider nil :model nil :fallbacks nil)))))
+      (drgnx-ai--next h))
     h))
 
 (defun drgnx-ai--next (h)
@@ -190,13 +199,16 @@ a command the user ran (keys may come from sources that ask, see `drgnx-ai-key')
 (define-error 'drgnx-ai-embed-error "Embeddings failed")
 
 (defvar drgnx-ai-embed-last-info nil
-  "INFO (:provider :model :fallbacks) of the last answer `drgnx-ai-embed-sync' returned: who gave the vectors.")
+  "INFO (:provider :model :fallbacks) of the last answer `drgnx-ai-embed-sync' returned: who gave the vectors.
+A mirror for callers that read it after the call; two requests in flight overwrite each other, so a caller that
+needs its own request's answer passes `:on-answer' instead.")
 
-(cl-defun drgnx-ai-embed-sync (inputs &key (timeout 30) interactive chain)
+(cl-defun drgnx-ai-embed-sync (inputs &key (timeout 30) interactive chain on-answer)
   "The vectors (a vector of float vectors of length 1) of the vector INPUTS from the `embed' role (or CHAIN,
-\((PROVIDER . MODEL)…), instead), waiting for them.  Each provider gets TIMEOUT seconds;
-`drgnx-ai-embed-last-info' tells who answered.  Signals `drgnx-ai-embed-error' with the providers'
-reasons when none answers.
+\((PROVIDER . MODEL)…), instead), waiting for them.  Each provider gets TIMEOUT seconds (nil: no limit).
+ON-ANSWER, a function, is called with this request's INFO (:provider :model :fallbacks) when it was answered;
+`drgnx-ai-embed-last-info' mirrors the last one.  Signals `drgnx-ai-embed-error' with the providers'
+reasons when none answers.  C-g ends the request (its curl is killed).
 Only for batch processes and commands the user ran (INTERACTIVE as for `drgnx-ai-request'): it waits, so never
 from a timer, hook or sentinel."
   (if (zerop (length inputs)) []
@@ -204,12 +216,16 @@ from a timer, hook or sentinel."
            (chain (or chain (drgnx-ai-role 'embed)))
            (h (drgnx-ai-request 'embed 'embed (list :inputs inputs) (lambda (v info) (setq result (cons v info)))
                                 :timeout timeout :chain chain :interactive interactive))
-           (deadline (+ (float-time) (* timeout (1+ (length chain))))))
-      (while (and (not result) (< (float-time) deadline))
-        (let ((p (drgnx-ai-request-process h)))
-          (accept-process-output (and p (process-live-p p) p) 0.05)))
-      (unless result (drgnx-ai-cancel h))
-      (if (car result) (progn (setq drgnx-ai-embed-last-info (cdr result)) (car result))
+           (deadline (and timeout (+ (float-time) (* timeout (1+ (length chain)))))))
+      (unwind-protect
+          (while (and (not result) (or (null deadline) (< (float-time) deadline)))
+            (let ((p (drgnx-ai-request-process h)))
+              (accept-process-output (and p (process-live-p p) p) 0.05)))
+        (unless result (drgnx-ai-cancel h)))
+      (if (car result)
+          (progn (setq drgnx-ai-embed-last-info (cdr result))
+                 (when on-answer (funcall on-answer (cdr result)))
+                 (car result))
         (signal 'drgnx-ai-embed-error (list (or (plist-get (cdr result) :error) "timed out")))))))
 
 (defun drgnx-ai-cancel (h)

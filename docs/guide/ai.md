@@ -62,7 +62,10 @@ as having none — `drgnx-ai-vram`), else `:3b`, else the 1.5B too; LM Studio se
 The `embed` role works like the others: its chain is tried in order and the next provider answers when one is down, has
 no key, or sends something that is not a vector per text. TEI needs no model (`(tei)`); for Ollama, llama.cpp and the
 OpenAI-compatible runners the chain names one, for example `(ollama . "nomic-embed-text")`. Providers that can embed
-list `embed` in their `:caps`.
+list `embed` in their `:caps`. Vectors come back scaled to length 1, even when the numbers are so small that their
+squares underflow; an empty request asks nobody. For Lisp callers, `drgnx-ai-embed-sync` takes `:timeout nil` (no
+limit), ends its request on C-g, and reports who answered through `:on-answer` (`drgnx-ai-embed-last-info` is only a
+mirror of the last answer).
 
 ## Ghost text and Tab
 
