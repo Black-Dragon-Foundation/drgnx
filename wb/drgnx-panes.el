@@ -49,13 +49,30 @@
   (alist-get (plist-get (drgnx-pane-kind kind) :home) drgnx-pane--areas))
 
 (defun drgnx-pane--buffer (spec kind)
-  "The buffer KIND shows when nothing else is given: SPEC's :buffer or :placeholder function, else a blank one."
-  (let ((fn (or (plist-get spec :buffer) (plist-get spec :placeholder))))
-    (cond ((functionp fn) (funcall fn))
+  "The buffer KIND shows when nothing else is given.
+SPEC's :buffer (a function, a buffer, or a name made if missing), else its :placeholder function, else a blank one."
+  (let ((b (plist-get spec :buffer)))
+    (cond ((functionp b) (funcall b))
+          ((stringp b) (get-buffer-create b))
+          ((buffer-live-p b) b)
+          ((functionp (plist-get spec :placeholder)) (funcall (plist-get spec :placeholder)))
           (t (or (get-buffer (format " *drgnx %s*" kind))
                  (with-current-buffer (get-buffer-create (format " *drgnx %s*" kind) t)
                    (special-mode)
                    (current-buffer)))))))
+
+(defun drgnx-pane--editor-matcher (spec)
+  "The `drgnx-wb-place' matcher an `editor' SPEC with a named :buffer installs, or nil."
+  (when (eq (plist-get spec :home) 'editor)
+    (let ((b (plist-get spec :buffer)))
+      (when-let* ((name (cond ((stringp b) b) ((bufferp b) (buffer-name b)))))
+        (concat "\\`" (regexp-quote name) "\\'")))))
+
+(defun drgnx-pane--remember (kind buffer)
+  "Remember BUFFER as the last one KIND showed on the selected frame (an editor kind's window is found by it)."
+  (let ((all (copy-alist (frame-parameter nil 'drgnx-pane-last))))
+    (setf (alist-get kind all) buffer)
+    (set-frame-parameter nil 'drgnx-pane-last all)))
 
 ;;;; The `areas' backend: forwards to today's docks
 
@@ -67,6 +84,9 @@
                 (spec (alist-get area drgnx-wb--areas)))
       (setf (alist-get area drgnx-wb--areas)
             (plist-put (copy-sequence spec) :tabs (assq-delete-all kind (copy-sequence (plist-get spec :tabs)))))))
+  (when-let* ((matcher (and old (drgnx-pane--editor-matcher old)))
+              ((not (equal matcher (drgnx-pane--editor-matcher spec)))))
+    (setq drgnx-rules--table (assoc-delete-all matcher drgnx-rules--table)))
   (pcase (plist-get spec :home)
     ('left
      (drgnx-wb-define-section
@@ -75,12 +95,12 @@
       :height (plist-get spec :height) :view (plist-get spec :view)
       :on-show (plist-get spec :on-show) :on-focus (plist-get spec :on-focus)))
     ((or 'bottom 'right)
-     (drgnx-wb-define-tab (drgnx-pane--area kind) kind :title (plist-get spec :title)
+     (drgnx-wb-define-tab (alist-get (plist-get spec :home) drgnx-pane--areas) kind
+                          :title (plist-get spec :title)
                           :placeholder (lambda () (drgnx-pane--buffer (drgnx-pane--spec kind) kind))))
     ('editor
-     (when-let* ((b (plist-get spec :buffer))
-                 (name (cond ((stringp b) b) ((bufferp b) (buffer-name b)))))
-       (drgnx-wb-place (concat "\\`" (regexp-quote name) "\\'") 'editor)))))
+     (when-let* ((matcher (drgnx-pane--editor-matcher spec)))
+       (drgnx-wb-place matcher 'editor)))))
 
 (defun drgnx-pane--areas-window (kind &optional frame)
   (let ((spec (drgnx-pane--spec kind)))
@@ -91,35 +111,48 @@
          (with-selected-frame (or frame (selected-frame))
            (and (eq (drgnx-wb-area-tab area) kind) (drgnx-wb-area-window area frame)))))
       ('editor
-       (let ((b (plist-get spec :buffer)))
-         (when-let* ((b (if (stringp b) (get-buffer b) b)) ((bufferp b)))
-           (get-buffer-window b (or frame t))))))))
+       (let* ((b (alist-get kind (frame-parameter frame 'drgnx-pane-last)))
+              (b (if (buffer-live-p b) b
+                   (let ((s (plist-get spec :buffer))) (if (stringp s) (get-buffer s) s)))))
+         (and (buffer-live-p b) (get-buffer-window b (or frame (selected-frame)))))))))
 
 (defun drgnx-pane--areas-show (kind buffer select)
   (let* ((spec (drgnx-pane--spec kind)) (home (plist-get spec :home))
          (selected (selected-window)))
+    ;; A view swap deletes the dock windows and would move focus to the new dock: leave the dock first.
+    (when (and (eq home 'left) (not select) (eq (window-parameter selected 'drgnx-role) 'dock))
+      (drgnx-wb-focus-editor))
     (prog1
         (pcase home
           ('left
-           (drgnx-wb-show-view (or (plist-get spec :view) 'explorer))
-           (if select (progn (drgnx-wb-focus-section kind) (drgnx-wb-section-window kind))
-             (drgnx-wb-section-window kind)))
+           (let ((was (drgnx-wb-section-window kind)))
+             (drgnx-wb-show-view (or (plist-get spec :view) 'explorer))
+             (let ((w (drgnx-wb-section-window kind)))
+               (when (and w select) (drgnx-wb-focus-section kind))
+               ;; a dock that was hidden or swapped in ran :on-show itself; an already shown section needs it now
+               (when-let* ((fn (plist-get spec :on-show)) (_ (and was w))) (funcall fn w))
+               w)))
           ((or 'bottom 'right)
            (let ((w (drgnx-wb-area-show (drgnx-pane--area kind) kind buffer)))
              (when-let* ((fn (plist-get spec :on-show))) (funcall fn w))
              (when select (select-window w))
              w))
           ('editor
-           (let ((b (or buffer (drgnx-pane--buffer spec kind))))
-             (drgnx-wb-show-in-editor b select))))
+           (let* ((b (or buffer (drgnx-pane--buffer spec kind)))
+                  (w (drgnx-wb-show-in-editor b select)))
+             (drgnx-pane--remember kind b)
+             (when-let* ((fn (plist-get spec :on-show))) (funcall fn w))
+             w)))
       (unless (or select (eq (selected-window) selected) (not (window-live-p selected)))
         (select-window selected 'norecord)))))
 
 (defun drgnx-pane--areas-hide (kind)
   (pcase (plist-get (drgnx-pane--spec kind) :home)
-    ('left (drgnx-wb-hide-sidebar))      ; the dock hides as a whole
-    ((or 'bottom 'right)
-     (when (drgnx-pane--areas-window kind) (drgnx-wb-area-hide (drgnx-pane--area kind))))))
+    ((or 'left 'bottom 'right)
+     (when (drgnx-pane--areas-window kind)
+       (if (eq (plist-get (drgnx-pane--spec kind) :home) 'left)
+           (drgnx-wb-hide-sidebar)      ; the dock hides as a whole
+         (drgnx-wb-area-hide (drgnx-pane--area kind)))))))
 
 (defun drgnx-pane--areas-focus (kind)
   (let ((w (drgnx-pane--areas-show kind nil t)))
@@ -147,42 +180,50 @@ the grid registers `grid' here.  :define takes (KIND SPEC OLD-SPEC), :show (KIND
                                        on-focus stack)
   "Define pane KIND (a symbol); re-defining replaces.  Returns KIND.
 HOME is `left', `bottom', `right' or `editor' (default `bottom').  TITLE is a string (a left kind's may be a
-function).  BUFFER: a function returning the kind's buffer (an `editor' kind: its buffer's name, which
-`drgnx-wb-place' sends to the editor).  PLACEHOLDER: a function returning the buffer shown while there is
-none.  SIZE: columns or lines the first time (the grid reads it; the docks keep their own).  VIEW: the sidebar
-view a `left' kind belongs to.  SLOT and HEIGHT: as `drgnx-wb-define-section's.  FILL: a function of the
-window, as `drgnx-layouts-define-pane's filler.  ON-SHOW and ON-FOCUS: functions of the window.  STACK: the
-kind this one stacks with by default (the grid reads it)."
+function).  BUFFER: a function returning the kind's buffer, or a buffer, or a buffer name (made when
+missing); an `editor' kind with a name or buffer also gets a `drgnx-wb-place' rule sending it to the editor.
+PLACEHOLDER: a function returning the buffer shown while there is none.
+SIZE: columns or lines the first time (the grid reads it; the docks keep their own).
+VIEW: the sidebar view a `left' kind belongs to.
+SLOT and HEIGHT: as `drgnx-wb-define-section's.
+FILL: a function of the window, as `drgnx-layouts-define-pane's filler.
+ON-SHOW and ON-FOCUS: functions of the window.
+STACK: the kind this one stacks with by default (the grid reads it)."
   (let ((home (or home 'bottom)))
     (unless (memq home drgnx-pane--homes) (user-error "Bad pane home %s" home))
     (let ((spec (list :title title :buffer buffer :placeholder placeholder :home home :size size :view view
-                      :slot slot :height height :fill fill :on-show on-show :on-focus on-focus :stack stack)))
-      (let ((old (drgnx-pane-kind kind)))
-        (if old (setf (alist-get kind drgnx-pane--kinds) spec)       ; a new kind goes last, a redefined one stays put
-          (setq drgnx-pane--kinds (append drgnx-pane--kinds (list (cons kind spec)))))
-        (drgnx-pane--call :define kind spec old))
+                      :slot slot :height height :fill fill :on-show on-show :on-focus on-focus :stack stack))
+          (old (drgnx-pane-kind kind)))
+      (drgnx-pane--call :define kind spec old)         ; first: an error leaves the kinds as they were
+      (if old (setf (alist-get kind drgnx-pane--kinds) spec)       ; a new kind goes last, a redefined one stays put
+        (setq drgnx-pane--kinds (append drgnx-pane--kinds (list (cons kind spec)))))
       (when fill
         (with-eval-after-load 'drgnx-layouts (drgnx-layouts-define-pane kind fill)))
       kind)))
 
 (cl-defun drgnx-pane-show (kind &key buffer select)
   "Show pane KIND, with BUFFER if given, and return its window.
-It never changes the selected window unless SELECT is non-nil."
+It never changes the selected window unless SELECT is non-nil.  A left kind ignores BUFFER (a section's
+buffer is its own)."
   (drgnx-pane--spec kind)
   (drgnx-pane--call :show kind buffer select))
 
 (defun drgnx-pane-hide (kind)
-  "Hide pane KIND (a left kind hides its whole dock; an editor kind cannot hide)."
+  "Hide pane KIND when it shows; a kind that is not shown (another view's, a tab behind another) is left alone.
+A left kind hides its whole dock.  An editor kind has no hide: it does nothing."
   (drgnx-pane--spec kind)
   (drgnx-pane--call :hide kind))
 
 (defun drgnx-pane-window (kind &optional frame)
-  "The window showing pane KIND on FRAME, or nil."
+  "The window showing pane KIND on FRAME, or nil.
+Nil for a kind that is not the front tab of its area or not in the dock's view.  An editor kind's window is the
+one showing the last buffer `drgnx-pane-show' or `drgnx-pane-focus' put there on FRAME."
   (drgnx-pane--spec kind)
   (drgnx-pane--call :window kind frame))
 
 (defun drgnx-pane-toggle (kind)
-  "Hide pane KIND when it shows, else show it (without selecting)."
+  "Hide pane KIND when it shows, else show it (without selecting).
+An editor kind has no hide, so toggling one that shows does nothing."
   (if (drgnx-pane-window kind) (drgnx-pane-hide kind) (drgnx-pane-show kind)))
 
 (defun drgnx-pane-focus (kind)

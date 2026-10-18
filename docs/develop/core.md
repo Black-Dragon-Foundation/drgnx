@@ -153,7 +153,25 @@ the selected window unless `:select` is given. `drgnx-pane-backend` (`areas`) sa
 a `left` kind to `drgnx-wb-define-section`, a `bottom` or `right` kind to `drgnx-wb-define-tab` (areas `panel` and
 `right`), an `editor` kind (its `:buffer` a name) to a `drgnx-wb-place` rule, and `:fill` to
 `drgnx-layouts-define-pane`. A backend is an entry in `drgnx-pane--backends` (the functions for `:define`, `:show`,
-`:hide`, `:window`, `:focus`); the tiled grid registers `grid` there. Test: `test/unit/wb-panes-test.el`.
+`:hide`, `:window`, `:focus`); the tiled grid registers `grid` there. Switching backends and replaying the
+defined kinds into the new one is the grid's job (B3), not done here. Test: `test/unit/wb-panes-test.el`.
+
+What the `areas` backend does with the edges:
+
+- `:buffer` is a function, a buffer, or a buffer name (made when missing). A left kind ignores `show :buffer`
+  (a section's buffer is its own).
+- `hide` does nothing for a kind that is not shown: another view's left kind, or a bottom or right kind that is not
+  the area's front tab. Hiding a left kind hides the whole left dock. An editor kind has no hide (so `toggle` of
+  one that shows does nothing).
+- `drgnx-pane-window` is nil for a non-front tab and for a left kind of another view. An editor kind's window is the
+  one showing the last buffer `show` or `focus` put there on that frame (a function `:buffer` or a `show :buffer`
+  included).
+- `:size` and `:stack` are stored for the grid and not applied; the docks keep their own sizes.
+- `:on-show` runs on every `show`, for every home.
+- `show` without `:select` never moves focus. A view swap from a window inside the left dock leaves the dock
+  first, so focus ends in the editor window rather than in the new dock.
+- Redefining a kind with another home takes it out of its old dock; an editor kind's place rule goes when its
+  `:buffer` or home changes.
 
 ## Tests
 

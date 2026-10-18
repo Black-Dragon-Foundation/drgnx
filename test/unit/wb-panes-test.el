@@ -160,7 +160,156 @@
    ;; moving a kind to another home leaves it in one kind list
    (drgnx-pane-define-kind 'pane-term :title "Two" :home 'right)
    (should (equal '(pane-term) (drgnx-pane-kinds 'right)))
-   (should-not (drgnx-pane-kinds 'editor))))
+   (should-not (drgnx-pane-kinds 'editor))
+   (should-not (assq 'pane-term (plist-get (alist-get 'panel drgnx-wb--areas) :tabs)))
+   (should (assq 'pane-term (plist-get (alist-get 'right drgnx-wb--areas) :tabs)))
+   ;; a left kind moves to another home: its section goes
+   (drgnx-pane-define-kind 'pane-tree :home 'left :buffer (drgnx-panes-test--buffer " *drgnx pane-tree*"))
+   (should (assq 'pane-tree drgnx-wb--sections))
+   (drgnx-pane-define-kind 'pane-tree :home 'bottom)
+   (should-not (assq 'pane-tree drgnx-wb--sections))
+   (should (assq 'pane-tree (plist-get (alist-get 'panel drgnx-wb--areas) :tabs)))
+   (drgnx-pane-define-kind 'pane-tree :home 'left :buffer (drgnx-panes-test--buffer " *drgnx pane-tree*"))
+   (should (assq 'pane-tree drgnx-wb--sections))
+   (should-not (assq 'pane-tree (plist-get (alist-get 'panel drgnx-wb--areas) :tabs)))))
+
+(ert-deftest drgnx-panes/an-editor-kind-shows-its-named-buffer ()
+  (drgnx-panes-test--with
+   (drgnx-pane-define-kind 'pane-notes :home 'editor :buffer "*pane-notes*")
+   (let* ((editor (selected-window)) (w (drgnx-pane-show 'pane-notes)))
+     (should (eq w editor))
+     (should (equal "*pane-notes*" (buffer-name (window-buffer w))))
+     (should (eq w (drgnx-pane-window 'pane-notes))))
+   ;; a buffer object works the same
+   (let ((b (get-buffer-create "*pane-notes-b*")))
+     (unwind-protect
+         (progn (drgnx-pane-define-kind 'pane-obj :home 'editor :buffer b)
+                (should (eq b (window-buffer (drgnx-pane-show 'pane-obj)))))
+       (kill-buffer b)))))
+
+(ert-deftest drgnx-panes/an-editor-kind-window-follows-the-last-buffer-shown ()
+  (drgnx-panes-test--with
+   (let ((made (lambda () (get-buffer-create "*pane-notes*"))) (other (generate-new-buffer "*pane-other*")))
+     (unwind-protect
+         (progn
+           (drgnx-pane-define-kind 'pane-fn :home 'editor :buffer made)
+           (should-not (drgnx-pane-window 'pane-fn))
+           (let ((w (drgnx-pane-show 'pane-fn)))
+             (should (eq w (drgnx-pane-window 'pane-fn)))
+             (should (eq w (drgnx-pane-window 'pane-fn (selected-frame)))))
+           (let ((w (drgnx-pane-show 'pane-fn :buffer other)))     ; a buffer passed to show
+             (should (eq (window-buffer w) other))
+             (should (eq w (drgnx-pane-window 'pane-fn))))
+           (switch-to-buffer "*scratch*")
+           (should-not (drgnx-pane-window 'pane-fn))
+           (drgnx-pane-focus 'pane-fn)
+           (should (eq (selected-window) (drgnx-pane-window 'pane-fn)))
+           (drgnx-pane-toggle 'pane-fn)                            ; an editor kind has no hide
+           (should (drgnx-pane-window 'pane-fn)))
+       (kill-buffer other)))))
+
+(ert-deftest drgnx-panes/redefining-an-editor-kind-drops-its-place-rule ()
+  (drgnx-panes-test--with
+   (drgnx-pane-define-kind 'pane-notes :home 'editor :buffer "*pane-notes*")
+   (should (eq 'editor (car (drgnx-wb-rule-for "*pane-notes*"))))
+   (drgnx-pane-define-kind 'pane-notes :home 'editor :buffer "*pane-notes-2*")
+   (should-not (eq 'editor (car (drgnx-wb-rule-for "*pane-notes*"))))
+   (should (eq 'editor (car (drgnx-wb-rule-for "*pane-notes-2*"))))
+   (drgnx-pane-define-kind 'pane-notes :home 'bottom)
+   (should-not (eq 'editor (car (drgnx-wb-rule-for "*pane-notes-2*"))))))
+
+(ert-deftest drgnx-panes/hiding-a-left-kind-of-another-view-does-nothing ()
+  (drgnx-panes-test--with
+   (drgnx-pane-define-kind 'pane-tree :home 'left :slot 0 :buffer (drgnx-panes-test--buffer " *drgnx pane-tree*"))
+   (drgnx-pane-define-kind 'pane-find :home 'left :view 'search :slot 0
+                           :buffer (drgnx-panes-test--buffer " *drgnx pane-find*"))
+   (let ((w (drgnx-pane-show 'pane-tree)))
+     (drgnx-pane-hide 'pane-find)              ; not in the shown view
+     (should (eq w (drgnx-pane-window 'pane-tree)))
+     (should-not (drgnx-pane-window 'pane-find))
+     (drgnx-pane-hide 'pane-tree)
+     (should-not (drgnx-pane-window 'pane-tree))
+     (should-not (drgnx-wb-sidebar-showing-p))
+     (drgnx-pane-hide 'pane-tree))))           ; hidden already: nothing
+
+(ert-deftest drgnx-panes/a-view-swap-from-inside-the-dock-keeps-focus-out-of-it ()
+  (drgnx-panes-test--with
+   (drgnx-pane-define-kind 'pane-tree :home 'left :slot 0 :buffer (drgnx-panes-test--buffer " *drgnx pane-tree*"))
+   (drgnx-pane-define-kind 'pane-find :home 'left :view 'search :slot 0
+                           :buffer (drgnx-panes-test--buffer " *drgnx pane-find*"))
+   (let ((editor (selected-window)))
+     (select-window (drgnx-pane-show 'pane-tree))
+     (let ((w (drgnx-pane-show 'pane-find)))             ; the view changes, the old dock window dies
+       (should (eq w (drgnx-pane-window 'pane-find)))
+       (should-not (eq (selected-window) w))
+       (should (eq (selected-window) editor)))
+     ;; the same view: the dock window stays selected
+     (select-window (drgnx-pane-window 'pane-find))
+     (let ((dock (selected-window)))
+       (drgnx-pane-show 'pane-find)
+       (should (eq (selected-window) dock)))
+     ;; with :select it does move
+     (select-window editor)
+     (drgnx-pane-show 'pane-tree :select t)
+     (should (eq (selected-window) (drgnx-pane-window 'pane-tree))))))
+
+(ert-deftest drgnx-panes/a-left-kind-s-on-show-runs-on-every-show ()
+  (drgnx-panes-test--with
+   (let (shown)
+     (drgnx-pane-define-kind 'pane-tree :home 'left :slot 0 :on-show (lambda (w) (push w shown))
+                             :buffer (drgnx-panes-test--buffer " *drgnx pane-tree*"))
+     (drgnx-pane-show 'pane-tree)                        ; the dock appears: once
+     (should (= 1 (length shown)))
+     (drgnx-pane-show 'pane-tree)                        ; already shown: once more
+     (should (= 2 (length shown)))
+     (should (eq (car shown) (drgnx-pane-window 'pane-tree))))))
+
+(ert-deftest drgnx-panes/the-minibuffer-window-stays-selected ()
+  (drgnx-panes-test--with
+   (drgnx-pane-define-kind 'pane-term :home 'bottom :placeholder (drgnx-panes-test--buffer " *drgnx pane-term*"))
+   (drgnx-pane-define-kind 'pane-tree :home 'left :buffer (drgnx-panes-test--buffer " *drgnx pane-tree*"))
+   (let ((editor (selected-window)) (mini (minibuffer-window)))
+     (unwind-protect
+         (progn
+           (select-window mini)
+           (drgnx-pane-show 'pane-term)
+           (drgnx-pane-show 'pane-tree)
+           (should (eq (selected-window) mini)))
+       (select-window editor)))))
+
+(ert-deftest drgnx-panes/show-from-a-timer-or-another-buffer-keeps-focus ()
+  (drgnx-panes-test--with
+   (drgnx-pane-define-kind 'pane-term :home 'bottom :placeholder (drgnx-panes-test--buffer " *drgnx pane-term*"))
+   (let ((editor (selected-window)) (ran nil))
+     (with-temp-buffer
+       (drgnx-pane-show 'pane-term)
+       (should (eq (selected-window) editor)))
+     (drgnx-pane-hide 'pane-term)
+     (run-with-timer 0 nil (lambda () (drgnx-pane-show 'pane-term) (setq ran t)))
+     (sleep-for 0.2)
+     (should ran)
+     (should (drgnx-pane-window 'pane-term))
+     (should (eq (selected-window) editor)))))
+
+(ert-deftest drgnx-panes/showing-again-moves-no-window ()
+  (drgnx-panes-test--with
+   (drgnx-pane-define-kind 'pane-term :home 'bottom :placeholder (drgnx-panes-test--buffer " *drgnx pane-term*"))
+   (drgnx-pane-define-kind 'pane-chat :home 'right :placeholder (drgnx-panes-test--buffer " *drgnx pane-chat*"))
+   (drgnx-pane-define-kind 'pane-tree :home 'left :buffer (drgnx-panes-test--buffer " *drgnx pane-tree*"))
+   (let ((kinds '(pane-term pane-chat pane-tree)))
+     (dolist (k kinds) (drgnx-pane-show k))
+     (let ((edges (mapcar (lambda (w) (cons w (window-pixel-edges w))) (window-list nil 'nomini))))
+       (dolist (k kinds) (drgnx-pane-show k))
+       (should (equal edges (mapcar (lambda (w) (cons w (window-pixel-edges w))) (window-list nil 'nomini))))))))
+
+(ert-deftest drgnx-panes/a-failing-define-leaves-the-kinds-alone ()
+  (drgnx-panes-test--with
+   (drgnx-pane-define-kind 'pane-term :home 'bottom :title "One")
+   (let ((drgnx-pane-backend 'nope))
+     (should-error (drgnx-pane-define-kind 'pane-term :home 'bottom :title "Two"))
+     (should-error (drgnx-pane-define-kind 'pane-new :home 'bottom)))
+   (should (equal "One" (plist-get (drgnx-pane-kind 'pane-term) :title)))
+   (should-not (drgnx-pane-kind 'pane-new))))
 
 (ert-deftest drgnx-panes/an-unknown-backend-is-an-error ()
   (drgnx-panes-test--with
