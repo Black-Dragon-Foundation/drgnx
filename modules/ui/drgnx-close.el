@@ -17,6 +17,7 @@
 (require 'subr-x)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
+(require 'drgnx-modal)
 (require 'drgnx-chrome)
 (require 'drgnx-popup)
 
@@ -66,10 +67,12 @@ elsewhere, the Meta prefix: an ESC goes back to the reader.  Anything else unbou
 
 (defun drgnx-close-pane ()
   "Close the pane you are in: end a popup, hide the panel or the right dock, hide the sidebar; focus goes to the
-editor.  Typed as Esc or q in a buffer you can edit, it is the key's own command instead (q types a q)."
+editor.  Typed as Esc or q in a buffer you can edit, it is the key's own command instead (q types a q); so is Esc in
+the modal engine's visual state (it leaves the selection)."
   (interactive)
   (if (and (memq last-command-event '(escape ?q))
-           (or (not buffer-read-only) (drgnx-close--input-buffer-p (current-buffer))))
+           (or (not buffer-read-only) (drgnx-close--input-buffer-p (current-buffer))
+               (and (eq last-command-event 'escape) (eq drgnx-modal-state 'visual))))
       (drgnx-close--underneath)
     (let ((w (selected-window)))
       (pcase (drgnx-chrome--role w)
@@ -84,10 +87,14 @@ editor.  Typed as Esc or q in a buffer you can edit, it is the key's own command
   (if drgnx-close-mode
       (progn
         (add-to-list 'emulation-mode-map-alists 'drgnx-close--emulation)
+        ;; in front of the modal engine's maps (evil's normal state takes Esc and q), after quick help's
+        (add-to-list 'drgnx-modal-front-alists 'drgnx-close--emulation t)
+        (drgnx-modal-order-alists)
         (add-hook 'window-selection-change-functions #'drgnx-close--update)
         (add-hook 'window-buffer-change-functions #'drgnx-close--update)
         (drgnx-close--update))
-    (setq emulation-mode-map-alists (delq 'drgnx-close--emulation emulation-mode-map-alists))
+    (setq drgnx-modal-front-alists (delq 'drgnx-close--emulation drgnx-modal-front-alists)
+          emulation-mode-map-alists (delq 'drgnx-close--emulation emulation-mode-map-alists))
     (remove-hook 'window-selection-change-functions #'drgnx-close--update)
     (remove-hook 'window-buffer-change-functions #'drgnx-close--update)
     (setq drgnx-close--here nil)))

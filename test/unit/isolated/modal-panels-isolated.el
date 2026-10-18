@@ -14,6 +14,9 @@
 (load (expand-file-name "test/fixtures/modal-elpa" drgnx-dir) nil t)
 
 (defvar evil-state)
+(defvar drgnx-close--here)
+(declare-function evil-visual-char "evil-commands")
+(declare-function drgnx-close-pane "drgnx-close")
 (declare-function evil-normal-state "evil-states")
 (declare-function evil-insert-state "evil-states")
 (declare-function evil-emacs-state "evil-states")
@@ -259,6 +262,29 @@
     (drgnx-modal-panels-test--explorer root
       (drgnx-modal-panels-test--press "<escape>")
       (should (equal (drgnx-modal-panels-test--calls) '((focus-editor)))))))
+
+(ert-deftest drgnx-modal-panels/close-and-quick-help-keys-beat-evil ()
+  ;; M12f-A7-1, A-R2: quick help's and Close Pane's maps sit in front of evil's, quick help's first, so Esc and q
+  ;; close a read-only pane in normal state too (evil's normal state took them); Esc in visual state stays evil's
+  (drgnx-modal-panels-test--with
+    (let ((pos (lambda (a) (or (cl-position a emulation-mode-map-alists) (ert-fail (list "not in the list" a))))))
+      (should (< (funcall pos 'drgnx-quickhelp--emulation) (funcall pos 'drgnx-close--emulation)
+                 (funcall pos 'evil-mode-map-alist))))
+    (let ((b (generate-new-buffer "*drgnx-close-evil*")))
+      (unwind-protect
+          (drgnx-modal-panels-test--show b
+            (insert "one\ntwo\n")
+            (setq buffer-read-only t)
+            (goto-char (point-min))
+            (evil-normal-state)
+            (let ((drgnx-close--here t))
+              (should (eq (key-binding [escape]) #'drgnx-close-pane))
+              (should (eq (key-binding "q") #'drgnx-close-pane))
+              (evil-visual-char)
+              (should (eq evil-state 'visual))
+              (drgnx-modal-panels-test--press "<escape>")
+              (should (eq evil-state 'normal))))
+        (kill-buffer b)))))
 
 (ert-deftest drgnx-modal-panels/g-refreshes-diff-review-prs ()
   ;; A-34: g is the mode's revert key, as without evil.

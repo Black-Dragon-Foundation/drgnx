@@ -10,6 +10,7 @@
   (declare (indent 0))
   `(let ((drgnx-quickhelp--request 0) (drgnx-quickhelp--timer nil) (drgnx-quickhelp--origin nil)
          (drgnx-quickhelp--strip nil) (drgnx-quickhelp--showing nil) (emulation-mode-map-alists emulation-mode-map-alists)
+         (drgnx-modal-front-alists drgnx-modal-front-alists)
          (drgnx-quickhelp--card-up nil) (drgnx-quickhelp--unmap-timer nil)
          (drgnx-quickhelp--active nil) (drgnx-quickhelp-hover nil)
          (drgnx-quickhelp--hover-timer nil) (drgnx-quickhelp--poll nil) (drgnx-quickhelp--rest nil)
@@ -212,6 +213,10 @@
       (setq-local eldoc-documentation-functions (list (lambda (cb) (funcall cb "(LIST)" :thing 'car))))
       ;; the showing map (Esc and q from the profiles) is on exactly while a card is up
       (should (memq 'drgnx-quickhelp--emulation (progn (drgnx-quickhelp-setup) emulation-mode-map-alists)))
+      ;; first of the maps in front of the modal engine's (evil's normal state would take Esc and q)
+      (should (eq (car drgnx-modal-front-alists) 'drgnx-quickhelp--emulation))
+      (should (< (cl-position 'drgnx-quickhelp--emulation emulation-mode-map-alists)
+                 (or (cl-position 'drgnx-ai-ghost--emulation emulation-mode-map-alists) 0)))
       (should (eq (cdr (car drgnx-quickhelp--emulation)) drgnx-quickhelp-showing-map))
       (should-not drgnx-quickhelp--showing)
       (let ((keys nil))
@@ -255,7 +260,21 @@
             (should-not drgnx-quickhelp--showing)
             (should (equal unread-command-events '((no-record . ?q))))
             ;; read again with the card gone, the key is the buffer's own
-            (should (eq (key-binding (vector (cdar unread-command-events))) #'self-insert-command))))))))
+            (should (eq (key-binding (vector (cdar unread-command-events))) #'self-insert-command)))
+          ;; Vim's normal state in a buffer you can edit: q is not typing there (it would record a macro), so it
+          ;; only closes the card
+          (setq keys [?q])
+          (call-interactively #'drgnx-quickhelp-show)
+          (setq-local drgnx-modal-state 'normal)
+          (let ((unread-command-events nil))
+            (call-interactively #'drgnx-quickhelp-close)
+            (should-not (drgnx-quickhelp-shown-p))
+            (should-not unread-command-events))
+          (setq-local drgnx-modal-state 'insert)
+          (call-interactively #'drgnx-quickhelp-show)
+          (let ((unread-command-events nil))
+            (call-interactively #'drgnx-quickhelp-close)
+            (should (equal unread-command-events '((no-record . ?q))))))))))
 
 (ert-deftest drgnx-quickhelp/again-replaces-a-hover-card-with-the-one-at-point ()
   (drgnx-quickhelp-test--with

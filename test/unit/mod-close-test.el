@@ -125,6 +125,25 @@ their own (a test never changes the shipped map or `emulation-mode-map-alists').
       (should (equal (with-current-buffer b (buffer-string)) "q"))
       (should (drgnx-wb-area-window 'panel)))))
 
+(ert-deftest drgnx-close/esc-in-visual-state-is-the-engine-s ()
+  ;; with the close map in front of the modal engine's, Esc in visual state still leaves visual state (the engine's
+  ;; Esc), and the pane stays; q there and Esc in normal state close it
+  (drgnx-close-test--with
+    (drgnx-close-test--results)
+    (select-window (drgnx-wb-area-window 'panel))
+    (let ((left nil))
+      (use-local-map (let ((m (make-sparse-keymap)))      ; the engine's Esc, underneath (special-mode-map untouched)
+                       (set-keymap-parent m (current-local-map))
+                       (define-key m [escape] (lambda () (interactive) (setq left t)))
+                       m))
+      (setq-local drgnx-modal-state 'visual)
+      (drgnx-close-test--press 'escape)
+      (should left)
+      (should (drgnx-wb-area-window 'panel))
+      (setq-local drgnx-modal-state 'normal)
+      (drgnx-close-test--press 'escape)
+      (should-not (drgnx-wb-area-window 'panel)))))
+
 (ert-deftest drgnx-close/an-unbound-esc-stays-the-meta-prefix ()
   ;; Esc with no command of its own goes back to the reader as ESC, so ESC x is M-x: no ding
   (drgnx-close-test--with
@@ -216,17 +235,23 @@ their own (a test never changes the shipped map or `emulation-mode-map-alists').
       (should (eq (selected-window) editor)))))
 
 (ert-deftest drgnx-close/the-mode-owns-its-hooks-and-map ()
-  (let ((emulation-mode-map-alists emulation-mode-map-alists) (drgnx-close-mode nil))
+  (let ((emulation-mode-map-alists emulation-mode-map-alists) (drgnx-close-mode nil)
+        (drgnx-modal-front-alists '(drgnx-quickhelp--emulation)))
     (unwind-protect
         (progn
           (drgnx-close-mode 1) (drgnx-close-mode 1)       ; idempotent
           (should (= 1 (cl-count 'drgnx-close--emulation emulation-mode-map-alists)))
+          ;; in front of the modal engine's maps (evil's normal state would take Esc and q), after quick help's
+          (should (equal drgnx-modal-front-alists '(drgnx-quickhelp--emulation drgnx-close--emulation)))
+          (should (< (cl-position 'drgnx-quickhelp--emulation emulation-mode-map-alists)
+                     (cl-position 'drgnx-close--emulation emulation-mode-map-alists)))
           (should (eq (cdr (car drgnx-close--emulation)) drgnx-close-mode-map))
           (should (eq (car (car drgnx-close--emulation)) 'drgnx-close--here))
           (should (memq #'drgnx-close--update window-selection-change-functions))
           (should (memq #'drgnx-close--update window-buffer-change-functions))
           (drgnx-close-mode -1)
           (should-not (memq 'drgnx-close--emulation emulation-mode-map-alists))
+          (should (equal drgnx-modal-front-alists '(drgnx-quickhelp--emulation)))
           (should-not (memq #'drgnx-close--update window-selection-change-functions))
           (should-not (memq #'drgnx-close--update window-buffer-change-functions)))
       (drgnx-close-mode -1))))

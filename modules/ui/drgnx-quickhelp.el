@@ -23,6 +23,7 @@
 (require 'eldoc)
 (require 'thingatpt)
 (require 'drgnx-registry)
+(require 'drgnx-modal)
 (declare-function drgnx-face-glyph "drgnx-face")
 (declare-function eldoc--format-doc-buffer "eldoc")
 
@@ -493,12 +494,14 @@ one at point."
   "Put the quick help card away.
 On a card that came from hovering, the key then does what it does without the card (q types a q, Esc is Esc): a
 card you did not ask for never eats a key.  On any card, a letter (q) typed in a buffer you can edit is typed: the
-card moves out of the way while you type.  Esc and \\`C-g' only close it."
+card moves out of the way while you type — unless the modal engine's state does not type there
+\(`drgnx-modal-typing-p': q would record a macro in Vim's normal state), where it only closes the card.  Esc and
+\\`C-g' only close it."
   (interactive)
   (let* ((hover (and drgnx-quickhelp--origin (not (plist-get drgnx-quickhelp--origin :key))))
          (keys (this-command-keys-vector))
          (typed (and (= (length keys) 1) (characterp (aref keys 0)) (>= (aref keys 0) ?\s) (/= (aref keys 0) ?\d)
-                     (not buffer-read-only))))
+                     (not buffer-read-only) (drgnx-modal-typing-p))))
     (drgnx-quickhelp-hide)                                ; the showing map is off from here
     ;; the key again, read as if the card had not been there (not recorded twice in macros or the lossage)
     (when (and (or hover typed) (> (length keys) 0))
@@ -645,6 +648,9 @@ on and a graphical frame focused, `drgnx-quickhelp--hover-step'.  Looks go on wh
                         :map 'drgnx-quickhelp-showing-map :when #'drgnx-quickhelp-shown-p
                         :doc "Put the quick help card away (a card from hovering lets the key through)")
   (add-to-list 'emulation-mode-map-alists 'drgnx-quickhelp--emulation)
+  ;; first in front of the modal engine's maps (evil's normal state takes Esc and q), then Close Pane's
+  (add-to-list 'drgnx-modal-front-alists 'drgnx-quickhelp--emulation)
+  (drgnx-modal-order-alists)
   (setq drgnx-quickhelp--active t)
   (drgnx-quickhelp--apply-hover))
 

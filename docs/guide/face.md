@@ -302,7 +302,8 @@ read-only buffer.
 It goes away when you type, run any other command, switch window or buffer, press `C-g`, `Esc` or `q` (**Close
 Quick Help**, in every profile), or click its `×`. `q` closes it without typing only in a buffer you cannot edit
 (help, a listing); in one you type into, `q` is typed like any other letter and the card moves out of the way, so
-`query` keeps its `q`. A card that came from hovering never eats a key: `q` or `Esc` put it away and then do what
+`query` keeps its `q`. In the Vim profile that is so only in insert and Emacs state: in normal state `q` closes the
+card (it would start a macro recording), and quick help's keys come before evil's. A card that came from hovering never eats a key: `q` or `Esc` put it away and then do what
 they always do. It also goes when the mouse leaves the symbol and the
 card. Only scrolling the card itself and its buttons keep it.
 
