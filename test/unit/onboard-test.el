@@ -1027,4 +1027,25 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
       (should (equal (car (last exec-path)) dir))
       (should (equal (getenv "PATH") (concat bin path-separator dir))))))
 
+(require 'drgnx-hub)                    ; so a stub of `drgnx-hub-running-p' is not replaced by the load
+
+(ert-deftest drgnx-ai-onboard/path-added-with-a-hub-says-hub-stop ()
+  ;; The hub keeps the PATH it started with: when the step added a directory and a hub runs, the result says so.
+  (drgnx-onboard-test--claude 'macos
+    (drgnx-onboard-test--have bin "claude")
+    (write-region "" nil (concat home ".logged-in"))
+    (drgnx-onboard-test--adapter-in-local-bin root home)
+    (cl-letf (((symbol-function 'drgnx-hub-running-p) (lambda () t)))
+      (let ((r (drgnx-onboard--agents-step '(:interactive nil))))
+        (should (eq (car r) 'ok))
+        (should (string-match-p "the hub keeps its old PATH: drgnx hub stop" (cadr r)))))
+    ;; no hub: no word of it; nothing added (the directory is on the PATH now): no word either
+    (setq exec-path (list bin) process-environment (cons (concat "PATH=" bin) process-environment))
+    (cl-letf (((symbol-function 'drgnx-hub-running-p) (lambda () nil)))
+      (should-not (string-match-p "hub" (cadr (drgnx-onboard--agents-step '(:interactive nil))))))
+    (cl-letf (((symbol-function 'drgnx-hub-running-p) (lambda () t)))
+      (setq exec-path (list bin (concat home ".local/bin")))
+      (setenv "PATH" (concat bin path-separator home ".local/bin"))
+      (should-not (string-match-p "hub" (cadr (drgnx-onboard--agents-step '(:interactive nil))))))))
+
 ;;; onboard-test.el ends here

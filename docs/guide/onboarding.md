@@ -132,7 +132,7 @@ the command in a terminal; a new run skips what is installed. Where the adapter 
 `PATH` (`~/.local/bin`, or beside Homebrew), drgnx adds that directory to the end of the `PATH` of the running Emacs (a program you chose earlier on the
 `PATH` keeps winning) and says so; put it in your shell's `PATH` too for the next start. The agent panel's sessions run in drgnx itself and see it at
 once; the **hub** (durable sessions, [agents.md](agents.md#the-hub-and-the-gateway)) keeps the `PATH` it started with:
-if one ran before this step (`drgnx hub status`), run `drgnx hub stop` — it ends the hub's durable sessions — and the
+when the step added a directory and a hub runs, its result says so; run `drgnx hub stop` — it ends the hub's durable sessions — and the
 next durable session starts a hub that finds the new programs.
 
 **The login.** The step asks `claude auth status` (exit status and its `loggedIn` answer only). When Claude Code is

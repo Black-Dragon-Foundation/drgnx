@@ -1041,6 +1041,13 @@ end: a program you chose earlier on the PATH keeps winning."
     (setenv "PATH" (concat (getenv "PATH") path-separator dir))
     dir))
 
+(declare-function drgnx-hub-running-p "drgnx-hub")
+
+(defun drgnx-onboard--hub-running-p ()
+  "Does a hub run (one quiet look at its socket, a second at most)?  It keeps the PATH it started with."
+  (require 'drgnx-hub)
+  (drgnx-hub-running-p))
+
 (defun drgnx-onboard--claude-login-state (claude)
   "Is CLAUDE logged in: `yes', `no' or `unknown' (a CLI without `auth status', or one that does not answer)?  Asks
 `claude auth status' and reads only its loggedIn answer — never Claude's credentials."
@@ -1135,7 +1142,9 @@ then ends `info', waiting for you to run it again (Done).  A login that cannot b
                 (format "Claude Code is installed%s; %s — Agents: New Agent Session… starts it%s"
                         (if unknown ", but drgnx could not tell whether it is logged in (run claude and type /login if it is not)" ", logged in")
                         text
-                        (if added (format " (added %s to this Emacs's PATH: add it to your shell's PATH too)" (string-join added ", ")) "")))))))))
+                        (if added (format " (added %s to this Emacs's PATH: add it to your shell's PATH too%s)" (string-join added ", ")
+                                          (if (drgnx-onboard--hub-running-p) "; the hub keeps its old PATH: drgnx hub stop, then start a durable session again" ""))
+                          "")))))))))
 
 (defun drgnx-onboard--agents-step (ctx)
   "Claude Code for the agent panel: `claude' (a VS Code extension's bundled copy does not count), Node and the
