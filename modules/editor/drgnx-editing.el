@@ -196,6 +196,88 @@
   (cond ((not (bolp)) (kill-line 0))
         ((not (bobp)) (delete-char -1))))
 
+;;;; Copy, cut and paste (the VS Code profile's C-c, C-x, C-v)
+
+(defvar drgnx-editing-region-map (make-sparse-keymap)
+  "Keys active only while the mark is active: the VS Code profile's C-c and C-x (copy and cut).
+Without a selection they stay Emacs' prefixes.")
+
+(defvar drgnx-editing--region-alist (list (cons 'mark-active drgnx-editing-region-map))
+  "`emulation-mode-map-alists' entry: `drgnx-editing-region-map' while the mark is active.")
+
+(defun drgnx-editing--region-key-p ()
+  "Non-nil if the key that ran this command is one of `drgnx-editing-region-map' (not the palette)."
+  (let ((keys (this-command-keys-vector)))
+    (and (> (length keys) 0) (eq (lookup-key drgnx-editing-region-map keys) this-command))))
+
+(defcustom drgnx-editing-prefix-delay 0.3
+  "Seconds C-c or C-x wait with a selection for a key that makes it Emacs' prefix; nil: act at once.
+In the VS Code profile C-c copies and C-x cuts the selection.  Typed as the start of `C-x b', `C-x C-s' or a
+mode's `C-c C-c', they would cut or copy the text first.  So they wait this long for the next key: one that
+arrives in time drops the selection and goes on as the prefix; none, and they copy or cut.  Like CUA mode's
+prefix delay.  Keys that are no prefix (Cmd+C on a Mac) act at once."
+  :type '(choice (const :tag "Act at once" nil) (number :tag "Seconds"))
+  :group 'drgnx)
+
+(defun drgnx-editing--prefix-key-p (keys)
+  "Non-nil if KEYS (a vector) start a prefix sequence without the selection-only map."
+  (and (> (length keys) 0)
+       (let ((emulation-mode-map-alists (remq 'drgnx-editing--region-alist emulation-mode-map-alists)))
+         (keymapp (key-binding keys)))))
+
+(defun drgnx-editing--hand-back (events)
+  "Drop the selection and give EVENTS to Emacs as typed.
+They are `(t . EVENT)': a keyboard macro that is recording has them already."
+  (deactivate-mark)
+  (setq prefix-arg current-prefix-arg
+        unread-command-events (append (mapcar (lambda (e) (cons t e)) events) unread-command-events)))
+
+(defun drgnx-editing--no-selection (what)
+  "Called by a region command without a selection.  Typed as its key, give the key back to Emacs
+(an empty selection, the mark set and not moved, is not one); from the palette, say what is missing."
+  (if (not (drgnx-editing--region-key-p))
+      (user-error "Select something to %s first" what)
+    (drgnx-editing--hand-back (listify-key-sequence (this-command-keys-vector)))))
+
+(defun drgnx-editing--with-selection (action)
+  "Run ACTION on the selection.  Typed as a prefix key (C-c, C-x), first wait
+`drgnx-editing-prefix-delay' for a next key: if one comes, it is the prefix after all and the selection stays
+untouched.  Only runs as a typed command, and the wait ends at the delay."
+  (let ((keys (this-command-keys-vector)))
+    (if (and drgnx-editing-prefix-delay (drgnx-editing--region-key-p) (drgnx-editing--prefix-key-p keys))
+        (if-let* ((event (condition-case nil        ; a keyboard macro that ends here has no next key
+                             (with-timeout (drgnx-editing-prefix-delay nil) (read-key))
+                           (args-out-of-range nil))))
+            (if (eq event ?\C-g)
+                (progn (deactivate-mark) (keyboard-quit))    ; C-x C-g would be undefined
+              (drgnx-editing--hand-back (append (listify-key-sequence keys) (list event))))
+          (funcall action))
+      (funcall action))))
+
+(defun drgnx-editing-copy ()
+  "Copy the selection."
+  (interactive)
+  (if (use-region-p)
+      (drgnx-editing--with-selection (lambda () (call-interactively #'kill-ring-save)))
+    (drgnx-editing--no-selection "copy")))
+
+(defun drgnx-editing-cut ()
+  "Cut the selection (in a read-only buffer, copy it)."
+  (interactive)
+  (if (use-region-p)
+      (drgnx-editing--with-selection (lambda () (let ((kill-read-only-ok t)) (call-interactively #'kill-region))))
+    (drgnx-editing--no-selection "cut")))
+
+(defun drgnx-editing-paste (&optional arg)
+  "Paste the last copy, replacing the selection.  ARG as for `yank'.
+With nothing to paste, nothing changes.  The clipboard is read once: the first `current-kill' puts it in the
+kill ring, so a hung owner or a terminal that refuses the read costs its timeout once."
+  (interactive "*P")
+  (current-kill 0)                      ; signals an empty kill ring before the selection goes
+  (when (use-region-p) (delete-region (region-beginning) (region-end)))
+  (deactivate-mark)
+  (let ((interprogram-paste-function nil)) (yank arg)))
+
 (drgnx-module-define 'editor/editing
                      :doc "Fold, change case, expand and shrink the selection, go to line."
                      :stage 'startup
@@ -230,9 +312,13 @@
                                         (edit-delete-word-back "Delete Word Left" drgnx-editing-delete-word-back "Delete the word before the cursor")
                                         (edit-delete-line-back "Delete to Line Start" drgnx-editing-delete-line-back "Delete from the cursor to the line's start")
                                         (go-back "Back" xref-go-back "Return to where you jumped from")
-                                        (go-forward "Forward" xref-go-forward "Undo a Back")))
+                                        (go-forward "Forward" xref-go-forward "Undo a Back")
+                                        (edit-copy "Copy" drgnx-editing-copy "Copy the selection")
+                                        (edit-cut "Cut" drgnx-editing-cut "Cut the selection")
+                                        (edit-paste "Paste" drgnx-editing-paste "Paste the last copy, replacing the selection")))
                          (drgnx-command-define id :category (if (string-prefix-p "go-" (symbol-name id)) "Go" "Edit") :title title
-                                               :command fn :scope 'editing :doc doc))))
+                                               :command fn :scope 'editing :doc doc))
+                       (add-to-list 'emulation-mode-map-alists 'drgnx-editing--region-alist)))
 
 (provide 'drgnx-editing)
 ;;; drgnx-editing.el ends here

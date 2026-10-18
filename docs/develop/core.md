@@ -14,6 +14,9 @@ core/drgnx.el        drgnx-init: guard on, staged hooks armed, keep-running choi
                      safe — skips packages and modules)
 core/drgnx-session.el  drgnx PATH's Emacs side, Open Folder…, keep running or quit, Quit drgnx (../guide/opening.md)
 core/drgnx-macos.el  the drgnx app on macOS (drgnx macos-app; ../guide/opening.md)
+core/drgnx-tty.el    terminals, batch-safe: which one, what it can do, keys it can send, terminfo, tmux (../guide/terminal.md)
+core/drgnx-tty-recommend.el  a terminal that sends every key: installed ones, the install command per OS, the opt-in opener
+core/drgnx-tty-fallback.el   keys a legacy terminal cannot send: their Alt+Shift and F6 forms, drgnx-tty-sendable-key (the layer: modules/ui/drgnx-tty-fallback-layer.el)
 modules/<category>/drgnx-<name>.el   one drgnx-module-define per file
 ```
 
@@ -126,7 +129,7 @@ machine is ready, and gives a fix for anything that is not:
 OK    emacs-version        Emacs 31.1                 (30.2: WARN — works, 31.1 recommended; older: FAIL)
 OK    native-compilation   native compilation works   (built without it, or libgccjit broken: FAIL)
 OK    tree-sitter          tree-sitter available
-OK    gui                  graphical build (pgtk)     (terminal-only: WARN)
+OK    gui                  graphical build (pgtk)     (terminal-only: OK, with a note)
 WARN  security             known issues up to 31.1, fixed in 31.2 (TRAMP, Flymake, read-symbol-shorthands)
 OK    git                  git found
 ```
@@ -142,6 +145,15 @@ warnings with their facts: `macos-app` (`~/Applications/drgnx.app` exists; fix `
 PATH, `/opt/homebrew/bin/brew` or `/usr/local/bin/brew`; the doctor may run without Homebrew on PATH) and
 `drgnx-on-path` (fix: `~/.local/bin` in the shell's profile: `~/.zprofile` for zsh (or, with `SHELL` unset, when it exists), else `~/.profile`, as
 `drgnx-doctor--shell-profile` says; the same rule as `install.sh`).
+
+A check that returns nil is absent from the results; `drgnx-doctor-run` also takes a group name to run one group.
+The **Terminal** group (`terminal`, `terminal-colours`, `terminal-mouse`, `terminal-keys`, `terminal-clipboard`,
+`terminal-tmux`, `terminal-ssh`, `terminal-popups`) reads the fact `:terminal`, which `drgnx-doctor-terminal-facts`
+gathers: `drgnx-tty-facts` (the environment of the process the doctor runs in; inside tmux one `tmux show`, 1 s),
+`:caps` and the fallback rows from the newest entry of `terminal-report.eld` for that kind of terminal, and `:os`.
+Check This Terminal (`ui/terminal`) runs the same group with the selected terminal window's own capabilities and its
+client's environment. A detail of several lines (the key table) is printed indented. See
+[terminal.md](../guide/terminal.md#check-this-terminal).
 
 ## Window managers (`drgnx-platform.el`)
 

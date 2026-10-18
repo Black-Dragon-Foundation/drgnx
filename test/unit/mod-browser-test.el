@@ -44,6 +44,23 @@
       (funcall thunk))
     (nreverse out)))
 
+(ert-deftest drgnx-browser/a-text-frame-says-so-and-opens-the-system-browser ()
+  ;; an Emacs with WebKit still cannot show a page in a terminal frame (batch has none graphical)
+  (drgnx-browser-test--with
+    (let ((had (featurep 'xwidget-internal)) opened msgs)
+      (unwind-protect
+          (progn
+            (provide 'xwidget-internal)
+            (should-not (drgnx-browser-webkit-p))
+            (cl-letf (((symbol-function 'browse-url) (lambda (u &rest _) (push u opened))))
+              (setq msgs (drgnx-browser-test--messages (lambda () (drgnx-browser-open "https://example.org")))))
+            (should (equal opened '("https://example.org")))
+            (should (= 1 (length msgs)))
+            (should (string-match-p "this terminal cannot show a web page" (car msgs)))
+            (should-not (string-match-p "no WebKit" (car msgs)))
+            (should (string-match-p "terminal cannot show a web page" (with-current-buffer (drgnx-browser--placeholder) (buffer-string)))))
+        (unless had (setq features (delq 'xwidget-internal features)))))))
+
 (ert-deftest drgnx-browser/xwidget-or-fallback ()
   (drgnx-browser-test--with
     ;; without WebKit: the system browser, and one message naming the reason (only the first time)

@@ -348,3 +348,40 @@ in `applied'."
        (setq-default buffer-file-coding-system old))
      (should (equal (string-to-list (string-to-unibyte (with-temp-buffer (insert-file-contents-literally file) (buffer-string))))
                     '(59 59 32 195 169 10))))))
+
+(ert-deftest drgnx-keys-edit/sets-a-tty-fallback ()
+  (drgnx-keys-edit-test--with-dir
+   (drgnx-keys-edit-test--put drgnx-keys-edit-test--sample)
+   ;; the profile has three chords a legacy terminal cannot send, and M-J
+   (setq drgnx-keys-last '(:bindings ((:id palette :key "C-S-p" :map nil) (:id search :key "C-S-f" :map nil)
+                                      (:id explorer :key "C-S-e" :map nil) (:id panel :key "M-J" :map nil)
+                                      (:id other :key "C-c a" :map nil))))
+   (should (drgnx-keys-edit-set-tty-fallback "C-S-p" "M-Z"))
+   (let ((text (drgnx-keys-edit-test--text)) (user (drgnx-keys-read-user)))
+     (should (equal (plist-get user :tty-fallback) '(("C-S-p" . "M-Z"))))
+     ;; comments, layers and the other entries are as they were
+     (dolist (c '(";; my keys, hand written" "; the stack" "; mine" ";; a note about line numbers" ";; no key for this"))
+       (should (string-search c text)))
+     (should (equal (plist-get user :layers) '((emacs editing) (vscode app window))))
+     (should (equal (plist-get user :bind) '((palette "C-c p") (line-numbers "C-c l" "<f9>")))))
+   (should (= applied 1))
+   ;; another chord is added; the same chord again replaces its entry
+   (drgnx-keys-edit-set-tty-fallback "C-S-e" "M-Y")
+   (drgnx-keys-edit-set-tty-fallback "C-S-p" "M-Q")
+   (should (equal (plist-get (drgnx-keys-read-user) :tty-fallback) '(("C-S-p" . "M-Q") ("C-S-e" . "M-Y"))))
+   ;; a key that clashes is refused with the reason, and nothing is written
+   (let ((before (drgnx-keys-edit-test--text)) (n applied))
+     (dolist (case '(("C-S-f" "M-v" "Emacs's")            ; scroll-down-command
+                     ("C-S-f" "M-P" "reserved")           ; the start of a terminal's reply
+                     ("C-S-f" "M-J" "bound in the key profile")
+                     ("C-S-f" "M-Y" "already the fallback of C-S-e")
+                     ("C-S-f" "<f5>" "not Alt with a character key")
+                     ("C-c a" "M-W" "needs no fallback")   ; a plain terminal sends it
+                     ("C-S-q" "M-W" "needs no fallback"))) ; the profile has no such chord
+       (let ((err (should-error (drgnx-keys-edit-set-tty-fallback (nth 0 case) (nth 1 case)) :type 'user-error)))
+         (should (string-search (nth 2 case) (cadr err)))))
+     (should (equal before (drgnx-keys-edit-test--text)))
+     (should (= applied n)))
+   ;; Undo takes back the last change
+   (drgnx-keys-edit-undo)
+   (should (equal (plist-get (drgnx-keys-read-user) :tty-fallback) '(("C-S-p" . "M-Z") ("C-S-e" . "M-Y"))))))

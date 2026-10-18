@@ -218,6 +218,31 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
       (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
       (delete-directory dir t))))
 
+(ert-deftest drgnx-session/a-folder-opened-in-a-terminal-frame-opens-there ()
+  ;; `drgnx -t DIR' (and Open Folder… typed in a terminal window) runs in the client's terminal frame: the
+  ;; graphical window is neither raised nor focused, and the Explorer is focused in the terminal frame.  On the
+  ;; initial terminal (batch Emacs's, a daemon's own frame: bin/drgnx's graphical path) it still raises.
+  (let ((drgnx-explorer-buffer-name " *drgnx-session-test-explorer*")
+        (dir (file-name-as-directory (make-temp-file "drgnx-session-open" t)))
+        (term "/dev/pts/3") (raised 0) focused-in roots)
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-session-raise) (lambda () (cl-incf raised)))
+                  ((symbol-function 'terminal-name) (lambda (&optional _) term))
+                  ((symbol-function 'drgnx-explorer-roots) (lambda () nil))
+                  ((symbol-function 'drgnx-explorer-set-roots) (lambda (r) (setq roots r)))
+                  ((symbol-function 'drgnx-explorer-focus) (lambda () (setq focused-in (selected-frame)))))
+          (get-buffer-create drgnx-explorer-buffer-name)
+          (should-not (display-graphic-p))
+          (should (drgnx-session-open-folder dir))
+          (should (= raised 0))
+          (should (eq focused-in (selected-frame)))
+          (should (equal roots (list dir)))
+          (setq term "initial_terminal")
+          (drgnx-session-open-folder dir)
+          (should (= raised 1)))
+      (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
+      (delete-directory dir t))))
+
 (ert-deftest drgnx-session/no-window-in-batch ()
   ;; A daemon's (or batch Emacs's) own terminal frame is not a window.
   (should-not (drgnx-session-gui-frame-p))

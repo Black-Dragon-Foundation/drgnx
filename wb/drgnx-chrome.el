@@ -10,7 +10,8 @@
 ;; only.  The chrome lives in window parameters, which win over any mode's own
 ;; `header-line-format', `tab-line-format' or `mode-line-format', so no buffer can make a
 ;; window's text jump.  New windows get their chrome before they are first drawn (the change
-;; bus's window setup); tabs and breadcrumbs follow the bus's edges.  See docs/guide/workbench.md.
+;; bus's window setup); tabs and breadcrumbs follow the bus's edges.  A frame whose parameter
+;; `drgnx-chrome-breadcrumb' is `off' (a terminal frame below 30 lines) has no breadcrumb row.  See docs/guide/workbench.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -233,10 +234,12 @@ scopes: modules/editor/drgnx-sticky.el); re-apply the chrome after changing it."
      (drgnx-chrome--set w 'tab-line-format (let ((s (drgnx-chrome--tab-line w))) (if (equal s "") " " s)))
      (drgnx-chrome--set w 'header-line-format
                         (with-current-buffer (window-buffer w)
-                          (if (and (local-variable-p 'header-line-format) header-line-format)
-                              drgnx-chrome--own-header
-                            (let ((tail (buffer-local-value 'drgnx-chrome-header-tail (window-buffer w))))
-                              (if tail (list (drgnx-chrome-breadcrumb w) tail) (drgnx-chrome-breadcrumb w))))))
+                          (cond ((and (local-variable-p 'header-line-format) header-line-format)
+                                 drgnx-chrome--own-header)
+                                ;; a short terminal frame has no row to spare (ui/terminal-layout sets this)
+                                ((eq (frame-parameter (window-frame w) 'drgnx-chrome-breadcrumb) 'off) 'none)
+                                (t (let ((tail (buffer-local-value 'drgnx-chrome-header-tail (window-buffer w))))
+                                     (if tail (list (drgnx-chrome-breadcrumb w) tail) (drgnx-chrome-breadcrumb w)))))))
      (drgnx-chrome--set w 'mode-line-format drgnx-chrome--mode-line))
     ((or 'dock 'area)
      (drgnx-chrome--set w 'tab-line-format 'none)

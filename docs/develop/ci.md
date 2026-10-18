@@ -6,6 +6,7 @@ GitHub Actions runs the same commands you run locally; nothing in CI is CI-only.
 |---|---|---|
 | `CI` (`.github/workflows/ci.yml`) | every push to `main`, every pull request, on demand | the unit suite on **Emacs 31.1** (Fedora 45, `bin/drgnx test --container`) and **Emacs 30.2** (Ubuntu 26.04, `bin/drgnx test`); `shellcheck --severity=warning` on `install.sh`, `bin/drgnx` and the pre-commit hook; the leak scan |
 | `GUI tier` (`.github/workflows/gui.yml`) | nightly, on demand | `bin/drgnx test --container --ui`: real Emacs 31.1 (pgtk) sessions under headless mutter |
+| `Terminal tier` (`.github/workflows/tty.yml`) | nightly, on demand | `bin/drgnx test --container --tty --fedora 44` and `45`: the terminal tests (Emacs in tmux) on Emacs 30.2 and 31.1 |
 | `macOS` (`.github/workflows/macos.yml`) | `unit`: every push to `main`, every pull request, on demand; `install`: weekly (Wednesday), on demand | on macOS 27 (`xcode-27`, Apple silicon: GitHub names macOS images after their Xcode now): `unit` installs Emacs and ripgrep with Homebrew, checks that `install.sh` parses under macOS's bash 3.2 (`/bin/bash -n`), prints its plan (`--dry-run`) and runs `bin/drgnx test`; `install` runs `install.sh --yes` for real on the checkout (Homebrew's emacs-plus), then `drgnx doctor`, `drgnx sync` (a first sync from the shipped lock), `drgnx macos-app` and `drgnx open --check`. A newer run cancels an older one of the same event and ref only, so a push to `main` never cancels the weekly install |
 | `Test images` (`.github/workflows/images.yml`) | a push changing `test/container/`, weekly, on demand | builds the two Fedora test images and pushes them to `ghcr.io/black-dragon-foundation/drgnx-test` and `drgnx-test-gui`, tagged with the Containerfile's hash (and `f45`) |
 
@@ -22,6 +23,7 @@ Mac UI is checked by hand with the session checklist. The weekly `install` job i
 ```
 bin/drgnx test --container          # the Emacs 31.1 job (podman, docker or nerdctl)
 bin/drgnx test --container --ui     # the nightly GUI tier
+bin/drgnx test --container --tty --fedora 44   # the nightly terminal tier (44: Emacs 30.2, 45: Emacs 31.1)
 .githooks/pre-commit --all          # the leak scan over every tracked file
 ```
 

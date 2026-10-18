@@ -199,6 +199,20 @@ drgnx app is installed (fix: `drgnx macos-app`), that Homebrew is there (also lo
 `/usr/local/bin`, in case it is not on PATH) and that the `drgnx` command is on PATH (fix: add `~/.local/bin` to PATH in
 your shell's profile, `~/.zprofile` for zsh or, with `SHELL` unset, when it exists; else `~/.profile`) — each only a warning. Details: [core.md](../develop/core.md#doctor-drgnx-doctorel).
 
+A terminal-only Emacs (no graphical build) passes the `gui` check: drgnx runs in terminals, with no images and one font
+size, and popups in the bottom lane on Emacs 30.2.
+
+**The Terminal group.** Run from a terminal, the doctor also checks that terminal: `terminal` (which one it is, its
+`TERM` and terminfo), `terminal-colours`, `terminal-mouse`, `terminal-keys` (the kitty keyboard protocol,
+modifyOtherKeys or neither; for a terminal that sends neither, a table of the shortcuts it cannot send with the
+Alt+Shift key and the F6 form that stand for each, and the terminals that would send them: the ones you have installed,
+else the install command for your system), `terminal-clipboard` (copy to your clipboard by OSC 52), `terminal-tmux`
+(inside tmux, the lines to add to `~/.tmux.conf`; drgnx never edits it), `terminal-ssh` (over SSH, whether this machine
+has your terminal's terminfo) and `terminal-popups`. Outside a terminal it says `not run from a terminal` and nothing
+more. Nothing in it prompts or installs anything; inside tmux it asks tmux once (1 second at most). Each warning
+carries its fix. In drgnx, **Check This Terminal** (Help, in the palette) shows the same group for the terminal window
+you are in. Details: [terminal.md](terminal.md#check-this-terminal).
+
 ## Uninstall
 
 ```sh

@@ -385,6 +385,22 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
       (should (member (concat "DRGNX_DATA_DIR=" (expand-file-name "drgnx-data" (plist-get s :run))) env))
       (drgnx-ui-stop "drgnx-ui-1"))))
 
+(ert-deftest drgnx-ui/extra-env-reaches-the-sessions-started-under-it ()
+  ;; the kitty exit test puts kkp on its daemon's load path; other sessions get nothing extra
+  (drgnx-ui-test--with-state
+    (let ((s (drgnx-ui-prepare-run "drgnx-ui-1")))
+      (should-not (seq-find (lambda (kv) (string-prefix-p "EMACSLOADPATH=" kv)) (drgnx-ui-launch-argv s)))
+      (let ((drgnx-ui-session-extra-env '("EMACSLOADPATH=/elpa/kkp:")))
+        (should (member "EMACSLOADPATH=/elpa/kkp:" (drgnx-ui-launch-argv s)))
+        ;; the caller's EXTRA still comes last
+        (should (equal (last (drgnx-ui-session-env s '("EMACSLOADPATH=/other:"))) '("EMACSLOADPATH=/other:"))))
+      ;; only names on the allow-list: nothing can move the session's home, display, bus or temp dir
+      (dolist (kv '("HOME=/x" "DISPLAY=:0" "DBUS_SESSION_BUS_ADDRESS=x" "XDG_RUNTIME_DIR=/x" "TMPDIR=/x" "no-equals"))
+        (let ((drgnx-ui-session-extra-env (list kv)))
+          (should-error (drgnx-ui-session-env s) :type 'drgnx-ui-error)
+          (should-error (drgnx-ui-launch-argv s) :type 'drgnx-ui-error)))
+      (drgnx-ui-stop "drgnx-ui-1"))))
+
 (ert-deftest drgnx-ui/a-session-has-a-temp-dir-in-its-run-dir ()
   ;; TMP-1: what the session's Emacs and its tests put in /tmp goes in the run dir, removed with it.
   (drgnx-ui-test--with-state

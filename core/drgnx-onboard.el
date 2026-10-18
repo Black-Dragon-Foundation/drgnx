@@ -20,6 +20,8 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-session)
+(require 'drgnx-tty)
+(require 'drgnx-tty-recommend)
 
 (defvar drgnx-onboard--steps nil "Alist ID → plist (:title :doc :order :run :check).")
 (defvar drgnx-onboard--current nil "The id of the step running now.")
@@ -1287,12 +1289,22 @@ keep running.  Saved (session.eld); returns the sentence for the step's result."
                              (abbreviate-file-name (drgnx-macos-install-app)) drgnx-onboard-macos-open-text)))
           (t (list 'info (format "the drgnx app is not installed — to install it into %s: drgnx macos-app" where))))))
 
+(defun drgnx-onboard--terminal-note ()
+  "The terminals drgnx works best in and, in a terminal frame, that terminal's row (`drgnx-tty-onboard-note'); for a
+terminal that cannot send every key, also what to install (`drgnx-tty-recommendation': it only says, nothing is
+installed).  Reads what drgnx found when the terminal opened (the terminal parameter `drgnx-tty-caps'); asks the
+terminal nothing."
+  (let* ((caps (and (not (display-graphic-p)) (terminal-parameter nil 'drgnx-tty-caps)))
+         (rec (and caps (ignore-errors (drgnx-tty-recommendation caps (drgnx-tty-os))))))
+    (concat (drgnx-tty-onboard-note (plist-get caps :id)) (if rec (concat " " (plist-get rec :text)) ""))))
+
 (defun drgnx-onboard--daemon-step (ctx)
-  "Keep running or quit (asked once), then macOS: the drgnx app; Linux: the systemd unit and desktop entry."
+  "Keep running or quit (asked once), then macOS: the drgnx app; Linux: the systemd unit and desktop entry.  The
+result ends with the terminal note (`drgnx-onboard--terminal-note')."
   (let ((keep (drgnx-onboard--keep-running ctx)))
     (pcase-let ((`(,status ,message) (if (eq (drgnx-platform) 'macos) (drgnx-onboard--macos-app ctx)
                                        (drgnx-onboard--linux-desktop ctx))))
-      (list status (concat message "; " keep)))))
+      (list status (concat message "; " keep ". " (drgnx-onboard--terminal-note))))))
 
 (defun drgnx-onboard--linux-desktop (ctx)
   (require 'drgnx-pkg)

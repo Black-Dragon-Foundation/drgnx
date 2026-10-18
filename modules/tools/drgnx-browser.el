@@ -46,9 +46,16 @@ shown again by the Browser layout.")
 (defconst drgnx-browser--no-webkit
   "no WebKit in this Emacs (it was built without xwidgets), so pages open in your system browser; see docs/guide/browser.md")
 
+(defconst drgnx-browser--no-page-here
+  "this terminal cannot show a web page (only a graphical frame can), so pages open in your system browser; see docs/guide/browser.md")
+
 (defun drgnx-browser-webkit-p ()
-  "Does this Emacs have WebKit (xwidgets)?"
-  (featurep 'xwidget-internal))
+  "Can the selected frame show a WebKit page?  This Emacs has WebKit (xwidgets) and the frame is graphical."
+  (and (featurep 'xwidget-internal) (display-graphic-p) t))
+
+(defun drgnx-browser--why-not ()
+  "Why `drgnx-browser-webkit-p' is nil here, in words."
+  (if (featurep 'xwidget-internal) drgnx-browser--no-page-here drgnx-browser--no-webkit))
 
 ;;;; Addresses
 
@@ -115,7 +122,7 @@ The pane takes the focus, unless KEEP-FOCUS (a timer opening a page must not mov
         (progn
           (unless drgnx-browser--told
             (setq drgnx-browser--told t)
-            (message "drgnx: %s" drgnx-browser--no-webkit))
+            (message "drgnx: %s" (drgnx-browser--why-not)))
           (browse-url url))
       (let ((pane (drgnx-browser--pane t)))
         (if (buffer-live-p drgnx-browser--buffer)
@@ -147,7 +154,8 @@ The pane takes the focus, unless KEEP-FOCUS (a timer opening a page must not mov
       (erase-buffer)
       (insert "No page yet — Browser: Open URL… opens one here.\n")
       (unless (drgnx-browser-webkit-p)
-        (insert "\nThis Emacs has no WebKit, so pages open in your system browser; see docs/guide/browser.md.\n")))
+        (insert "\n" (if (featurep 'xwidget-internal) "This terminal cannot show a web page" "This Emacs has no WebKit")
+                ", so pages open in your system browser; see docs/guide/browser.md.\n")))
     (current-buffer)))
 
 (defun drgnx-browser--fill (pane)

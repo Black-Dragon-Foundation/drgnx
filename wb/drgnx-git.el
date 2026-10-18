@@ -19,7 +19,7 @@
 (defface drgnx-git-added '((t :inherit vc-locally-added-state)) "An added or untracked file." :group 'drgnx)
 (defface drgnx-git-deleted '((t :inherit vc-removed-state)) "A deleted file." :group 'drgnx)
 (defface drgnx-git-conflict '((t :inherit vc-conflict-state)) "A file with merge conflicts." :group 'drgnx)
-(defface drgnx-git-ignored '((t :inherit shadow)) "An ignored file or folder." :group 'drgnx)
+(defface drgnx-git-ignored '((t :inherit (shadow italic))) "An ignored file or folder." :group 'drgnx)
 
 (defconst drgnx-git--looks
   '((conflict "C" drgnx-git-conflict 6) (deleted "D" drgnx-git-deleted 5) (modified "M" drgnx-git-modified 4)
