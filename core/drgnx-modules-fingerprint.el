@@ -254,11 +254,14 @@ function (about 12 ms): once per test file.  The diff of two full ones reads `:a
           (file-relative-name f drgnx-dir)
         f))))
 
+(declare-function drgnx-timer-describe "drgnx-timer")
+
 (defun drgnx-modules-fingerprint--source (item)
   "The file that defined the function, advice, timer function or feature of ITEM, or nil."
   (let* ((kind (car (car item))) (obj (cdr item))
          (fn (pcase kind
-               ('timer (and (timerp obj) (timer--function obj)))
+               ('timer (and (timerp obj) (let ((d (and (fboundp 'drgnx-timer-describe) (drgnx-timer-describe obj))))
+                                           (if d (plist-get d :fn) (timer--function obj)))))
                ((or 'hook 'advice 'function-variable 'registry) obj)
                (_ nil))))
     (drgnx-modules-fingerprint--normalize-file
@@ -276,9 +279,13 @@ function (about 12 ms): once per test file.  The diff of two full ones reads `:a
   (let* ((key (car item)) (kind (car key)) (obj (cdr item)))
     (pcase kind
       ('timer
-       (let ((fn (and (timerp obj) (timer--function obj))) (rep (and (timerp obj) (timer--repeat-delay obj))))
-         (format "timer%s %s%s %s" (if (cdr key) " idle" "") sign
-                 (drgnx-modules-fingerprint--clip fn) (if rep (format "repeat %s" rep) "once"))))
+       (let ((layer (and (timerp obj) (fboundp 'drgnx-timer-describe) (drgnx-timer-describe obj)))
+             (fn (and (timerp obj) (timer--function obj))) (rep (and (timerp obj) (timer--repeat-delay obj))))
+         (if layer                      ; every layer timer's function is `drgnx-timer--fire': name its key and owner
+             (format "timer %s%S (%s) %s%s%s" sign (plist-get layer :key) (plist-get layer :owner)
+                     (plist-get layer :fn) (if (cdr key) " idle" "") (if rep (format " repeat %s" rep) ""))
+           (format "timer%s %s%s %s" (if (cdr key) " idle" "") sign
+                   (drgnx-modules-fingerprint--clip fn) (if rep (format "repeat %s" rep) "once")))))
       ('buffer (format "buffer %s%s" sign (cadr key)))
       ('process (format "process %s%s" sign (cadr key)))
       (_                                ; KIND NAME +REST, e.g. "hook find-file-hook +my-fn"

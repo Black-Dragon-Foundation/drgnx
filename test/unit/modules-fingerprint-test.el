@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-modules-fingerprint)
+(require 'drgnx-timer)
 
 (defvar drgnx-keys--applied)                  ; let-bound by one test
 (defvar drgnx-fp-test-hook nil "A hook the fingerprint reads in these tests.")
@@ -83,6 +84,24 @@
                             (drgnx-modules-fingerprint-diff before (drgnx-modules-fingerprint)))))
       (mapc (lambda (tm) (when tm (cancel-timer tm))) (list repeating once idle)))
     (should-not (drgnx-fp-test--ours (drgnx-modules-fingerprint-diff before (drgnx-modules-fingerprint))))))
+
+(ert-deftest drgnx-fingerprint/a-layer-timer-is-named-by-key-and-owner ()
+  ;; Every layer timer's Emacs function is `drgnx-timer--fire': the line names the key, the owner and the real function.
+  (let ((before (drgnx-modules-fingerprint)))
+    (unwind-protect
+        (progn
+          (drgnx-timer-start 'fp-once 1000 #'drgnx-fp-test-timer-fn)
+          (drgnx-timer-start 'fp-rep 1000 #'drgnx-fp-test-timer-fn :repeat 5 :owner :core)
+          (drgnx-timer-start 'fp-idle 1000 #'drgnx-fp-test-timer-fn :idle t)
+          (let* ((diff (drgnx-modules-fingerprint-diff before (drgnx-modules-fingerprint)))
+                 (whats (drgnx-fp-test--whats diff)))
+            (should (= 3 (length whats)))
+            (should (member "timer +fp-once (:core) drgnx-fp-test-timer-fn" whats))
+            (should (member "timer +fp-rep (:core) drgnx-fp-test-timer-fn repeat 5" whats))
+            (should (cl-some (lambda (w) (string-match-p "\\`timer \\+fp-idle (:core) drgnx-fp-test-timer-fn idle" w)) whats))
+            (should-not (cl-some (lambda (w) (string-search "drgnx-timer--fire" w)) whats))
+            (should (cl-every (lambda (d) (string-suffix-p "modules-fingerprint-test.el" (plist-get d :source))) diff))))
+      (dolist (k '(fp-once fp-rep fp-idle)) (drgnx-timer-cancel k)))))
 
 (ert-deftest drgnx-fingerprint/a-registry-key-shows ()
   (drgnx-fp-test--with-reads

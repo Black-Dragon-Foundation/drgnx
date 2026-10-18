@@ -275,6 +275,17 @@ AGENTS.md asks of every global hook and advice ("named, with an owner", no lambd
   `-alist-put`, `-face-spec`) makes its change inside `drgnx-modules--quietly`. A raw call is a fallback; use the
   helper.
 
+### A run's end
+
+A module's setup run has a token (`drgnx-modules--runs`). It ends when the module is turned off, when its setup is
+rolled back, and when its setup runs again while the token is still there (a `:teardown 'restart` module run again).
+`drgnx-modules--end-run MODULE` drops the token and then calls each function of `drgnx-modules-run-end-functions`
+with MODULE, under `condition-case` and with `inhibit-interaction` t; a failure becomes a problem
+`"run end: FN: MESSAGE"` in the teardown's, the rollback's or the new run's problems, and the next function still
+runs. `drgnx-timer.el` adds `drgnx-timer-cancel-owner` at load: **a module's layer timers die before its `:teardown`
+runs**, whether the setup, deferred work (`drgnx-modules-with-owner`) or a later hook with `:owner` started them,
+and their keys leave the table. A timer owned by a buffer or a process is not the module's and stays.
+
 ### The safety net: what a setup reaches through Emacs's own doors
 
 Code a setup reaches that does not push its own undo — wb modes, the setup functions of `wb/` libraries, packages'
@@ -289,12 +300,11 @@ no call goes through the net; what stays is two properties `advice-remove` leave
 | `add-hook` on a hook's global value | the function was not on it before | `remove-hook`, if it is still there |
 | `advice-add` | `advice-member-p` was nil before | `advice-remove`, if still there |
 | `add-to-list` on a list's global value | the element was not a member before (same test as `add-to-list`) | remove that one element, if still a member; others' additions stay |
-| a new timer (`timer-list`, `timer-idle-list` compared before and after) | it is not one of Emacs's own (below) | `cancel-timer`, if still pending |
+| a new timer (`timer-list`, `timer-idle-list` compared before and after) | its function is a symbol defined under `drgnx-dir` (a layer timer is skipped: its run token owns it; anything else is *left*, below) | `cancel-timer`, if still pending |
 | a global minor mode newly in `global-minor-modes` | it was off before | `(MODE -1)`, if still on; pushed after everything the setup pushed, so modes go off first and their own off code runs before the hook and timer undos. This is the one break in last in, first out: a mode goes off before undos the setup pushed after turning it on |
 | a feature newly in `features` | always | none: kept for the report, `(drgnx-modules-features-of MODULE)` |
 
-Labels read `hook HOOK FN`, `advice SYMBOL FN`, `list VAR ELEMENT`, `timer FN`, `mode MODE` (`a lambda` for an
-anonymous function), cut to 100 characters. The undos make teardown and rollback complete for these doors.
+Labels read `hook HOOK FN`, `advice SYMBOL FN`, `list VAR ELEMENT`, `timer FN`, `mode MODE`, cut to 100 characters. The undos make teardown and rollback complete for these doors.
 
 The net's undos are unconditional: they check that the thing is still there, not whether another module still
 needs it. So a change made by a claim-aware API — one whose undo hands over to another module's claim (the helpers
@@ -310,11 +320,15 @@ What it does **not** record:
 - **`add-to-list` on `global-minor-modes` or `local-minor-modes`**: Emacs 31's `define-minor-mode` keeps them that
   way; the modes are compared after the setup instead.
 - **A drgnx helper's own changes** (`drgnx-modules--quietly`, above).
-- **Emacs's own timers.** Emacs's libraries start singleton timers lazily from code a setup calls (an edit starts
-  undo's boundary timer, a buffer's jit-lock its context timer) and keep them in a variable; cancelled, they would
-  stay dead for the session (undo boundaries for process output would stop). A timer whose function is defined
-  under `lisp-directory` (or preloaded), or that sits in one of `drgnx-modules--emacs-timer-variables` (jit-lock's
-  lambdas), is left alone.
+- **Timers drgnx did not make are left, and listed.** The net cancels a timer only when its function is a symbol
+  defined under `drgnx-dir`. Anything else — Emacs, an ELPA package, a user's module outside `drgnx-dir`, a lambda —
+  may be a library's singleton, started lazily from code a setup calls (an edit starts undo's boundary timer, a buffer's
+  jit-lock its context timer) and kept in a variable; cancelled, it would stay dead for the session (undo boundaries
+  for process output would stop). Such a timer stays pending, and the module's report says so: `:left`, a list of
+  `"timer FN (FILE)"` (FILE is where FN is defined, `no file` when it is not) or `"timer a lambda"`, newest first. It
+  is cleared when the module's run starts and is in `modules-report.eld`. Read it as "this module's setup started
+  these, and turning it off did not stop them": a line for a function that is the module's own means the module should
+  start it through `drgnx-timer-start`, which ends it with the run.
 - **Global modes are owned by the first module that turns them on.** "Newly on" is all the net sees: when module
   A turns `drgnx-signal-mode` on and B relies on it, tearing A down turns it off. Modes a module shares go through
   an option (`drgnx-module-set`, claim-aware) or B's `:teardown`/`requires`. And a mode a setup turns *off* is not

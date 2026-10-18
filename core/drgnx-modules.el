@@ -24,7 +24,7 @@
 (require 'drgnx-modules-helpers)
 
 (defvar drgnx-modules--table nil "Alist NAME → plist (:doc :stage … :file), in definition order.")
-(defvar drgnx-modules--report nil "Alist NAME → plist (:stage :ms :status :error :missing).")
+(defvar drgnx-modules--report nil "Alist NAME → plist (:stage :ms :status :error :missing :problems :left).")
 (defvar drgnx-modules--state nil "The user's modules.eld, read once.")
 (defconst drgnx-modules-stages '(startup idle first-frame first-file first-input))
 (defconst drgnx-modules-state-version 2
@@ -161,7 +161,8 @@ the new state."
 
 (defun drgnx-modules--record (name stage ms status &optional err missing problems)
   (setf (alist-get name drgnx-modules--report)
-        (list :stage stage :ms ms :status status :error err :missing missing :problems problems)))
+        (list :stage stage :ms ms :status status :error err :missing missing :problems problems
+              :left (alist-get name drgnx-modules--left))))
 
 (defun drgnx-modules--ok-p (name) (eq (plist-get (alist-get name drgnx-modules--report) :status) 'ok))
 
@@ -240,7 +241,8 @@ load is reported as module <category>/<file name>, naming the library it loaded 
           (prin1 (mapcar (lambda (m) (cons (car m) (list :status (plist-get (cdr m) :status)
                                                          :error (plist-get (cdr m) :error)
                                                          :missing (plist-get (cdr m) :missing)
-                                                         :problems (plist-get (cdr m) :problems))))
+                                                         :problems (plist-get (cdr m) :problems)
+                                                         :left (plist-get (cdr m) :left))))
                          drgnx-modules--report)
                  (current-buffer)))))))
 
