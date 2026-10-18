@@ -11,7 +11,7 @@ drgnx sync --seed DIR       first copy the packages of another Emacs (e.g. ~/.co
 drgnx upgrade               the newest versions; if they break, the previous generation comes back
 drgnx rollback [N]          the packages of generation N (default: the one before the current one)
 drgnx generations           the generations kept (five)
-drgnx lock                  what the lock pins
+drgnx lock                  what the lock pins (version, and the archive or, for Git, the commit)
 drgnx lock --ship           (maintainers) write the known-good lock drgnx ships from yours
 drgnx safe                  Emacs with drgnx's core only: no modules, no packages
 drgnx bisect [-- CMD…]      find the module that breaks something
@@ -82,9 +82,11 @@ lock to the archives' versions. An unreadable lock is an error, never silently r
 
 The packages of the manifest that the lock has install at their locked versions, together with what their lock
 entries require — not with what the archives' newest versions would need — so a lock installs as the set it was
-made from even when an archive has moved on (MELPA builds every commit). A locked package that a built-in one
-already satisfies at the version required (e.g. `compat` on a newer Emacs) is not installed, as package.el would
-not; a requirement the lock does not have is resolved from the archives. Packages install after the packages they
+made from even when an archive has moved on (MELPA builds every commit). A locked package that is there
+only because another package requires it, and that a built-in one already satisfies at the version required (e.g.
+`compat` on a newer Emacs), is not installed, as package.el would not (a package the manifest itself names is
+installed as locked); a requirement the lock does not have is resolved from the archives, except one on a Git-sourced
+package, which installs from its source. Packages install after the packages they
 require. Each archive entry also records its download's size (`:size`), which onboarding uses to say how much it
 would download.
 

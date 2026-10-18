@@ -937,4 +937,22 @@ fy with a newer fa 2.0.  Returns (FX FY FA-1.0-ENTRY)."
         (should-not (plist-get r :missing)))
       (should (equal (drgnx-pkg-test--installed) '("fa-2.0" "fb-1.0"))))))
 
+(ert-deftest drgnx-pkg/two-dropped-pins-re-plan-twice ()
+  ;; M12a-56: dropping fc's pin (gone; fc 1.1 needs fa 2.0) makes fa's pin 1.0 too old: a second round drops it too.
+  (drgnx-pkg-test--with root
+    (let* ((fx (drgnx-pkg-test--archive (concat root "fx") '((fa "1.0"))))
+           (old-fa (drgnx-pkg-test--entry fx 'fa "1.0"))
+           (fy (drgnx-pkg-test--archive (concat root "fy") '((fa "2.0")))))
+      (drgnx-pkg-test--archive fx '((fa "1.0") (fc "1.0" ((fa "1.0")))))
+      (let ((old-fc (drgnx-pkg-test--entry fx 'fc "1.0" '((fa "1.0")))))
+        (drgnx-pkg-test--archive fx '((fa "1.0") (fc "1.1" ((fa "2.0")))))
+        (drgnx-pkg-test--ship (list old-fa old-fc)))
+      (drgnx-pkg-test--want root 'fc)
+      (let ((r (drgnx-pkg-test--sync root :archives `(("fx" . ,fx) ("fy" . ,fy)))))
+        (should (plist-get r :ok))
+        (should-not (plist-get r :missing))
+        (should (member "fc: shipped 1.0 no longer served; installed 1.1" (plist-get r :warnings)))
+        (should (member "fa: shipped 1.0 is older than 2.0 needs; installed 2.0" (plist-get r :warnings))))
+      (should (equal (drgnx-pkg-test--installed) '("fa-2.0" "fc-1.1"))))))
+
 ;;; pkg-test.el ends here
