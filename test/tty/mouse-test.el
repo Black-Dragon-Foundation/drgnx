@@ -142,8 +142,9 @@ a.txt in the editor, wait until both are on the screen.  Returns the project dir
     (should (equal (drgnx-tty-session-eval s drgnx-tty-mouse-test--editor-buffer) "a.txt"))
     (should-not (drgnx-tty-session-find s "b\\.txt ×"))))
 
-(ert-deftest drgnx-tty-mouse/breadcrumb-click ()
-  ;; a click on the breadcrumb arrives as a header-line click in the editor window (nothing binds it, but the
+(ert-deftest drgnx-tty-mouse/a-breadcrumb-click-is-delivered ()
+  ;; event delivery only: drgnx binds no breadcrumb click; the test's own handler sees it arrive as a
+  ;; header-line click in the editor window (nothing binds it, but the
   ;; terminal's event must reach Emacs as one, and the editor must stay as it was)
   (drgnx-tty-session-with (s :size "120x40")
     (drgnx-tty-mouse-test--project s)
@@ -224,5 +225,50 @@ a.txt in the editor, wait until both are on the screen.  Returns the project dir
     (should (eq (drgnx-tty-mouse-test--flag s 1) 1))
     (drgnx-tty-session-eval s '(progn (customize-set-variable 'drgnx-tty-mouse nil) t))
     (should (eq (drgnx-tty-mouse-test--flag s 0) 0))))
+
+;;;; Each terminal's mouse strings stay its own
+
+(defconst drgnx-tty-mouse-test--clients
+  '(seq-filter (lambda (f) (and (frame-live-p f) (frame-parameter f 'client))) (frame-list))
+  "A form, in the inner daemon: its client frames, newest first.")
+
+(defconst drgnx-tty-mouse-test--strings
+  `(let ((on (xterm-mouse-tracking-enable-sequence)) (off (xterm-mouse-tracking-disable-sequence)))
+     (mapcar (lambda (f) (let ((term (frame-terminal f)))
+                           (list (seq-count (lambda (s) (equal s on)) (terminal-parameter term 'tty-mode-set-strings))
+                                 (seq-count (lambda (s) (equal s off)) (terminal-parameter term 'tty-mode-reset-strings)))))
+             ,drgnx-tty-mouse-test--clients))
+  "A form: for each client's terminal, how many mouse enable strings it re-sends on resume and disable strings
+on suspend or exit.")
+
+(ert-deftest drgnx-tty-mouse/toggling-keeps-each-terminal-s-strings-on-itself ()
+  ;; Emacs 30.2 stores a terminal's enable and disable strings on the selected terminal: toggled from one client,
+  ;; the other's must still be its own, once each, and none when off (a resume must not turn it back on)
+  (drgnx-tty-session-with (s :daemon t :size "120x40")
+    (let ((c (drgnx-tty-session-client s)))
+      (should (eq (drgnx-tty-mouse-test--flag c 1) 1))
+      (should (equal (drgnx-tty-session-eval s drgnx-tty-mouse-test--strings) '((1 1) (1 1))))
+      (drgnx-tty-session-eval s `(with-selected-frame (car (last ,drgnx-tty-mouse-test--clients))
+                                   (customize-set-variable 'drgnx-tty-mouse nil) t))
+      (should (eq (drgnx-tty-mouse-test--flag c 0) 0))
+      (should (eq (drgnx-tty-mouse-test--flag s 0) 0))
+      (should (equal (drgnx-tty-session-eval s drgnx-tty-mouse-test--strings) '((0 0) (0 0))))
+      (drgnx-tty-session-eval s `(with-selected-frame (car (last ,drgnx-tty-mouse-test--clients))
+                                   (customize-set-variable 'drgnx-tty-mouse t) t))
+      (should (eq (drgnx-tty-mouse-test--flag c 1) 1))
+      (should (equal (drgnx-tty-session-eval s drgnx-tty-mouse-test--strings) '((1 1) (1 1)))))))
+
+(ert-deftest drgnx-tty-mouse/a-client-that-exits-gives-its-terminal-the-mouse-back ()
+  (drgnx-tty-session-with (s :daemon t :size "120x40")
+    (let ((c (drgnx-tty-session-client s)))
+      (should (eq (drgnx-tty-mouse-test--flag c 1) 1))
+      ;; toggled from the other client first, so its strings were set from another terminal
+      (drgnx-tty-session-eval s `(with-selected-frame (car (last ,drgnx-tty-mouse-test--clients))
+                                   (customize-set-variable 'drgnx-tty-mouse nil)
+                                   (customize-set-variable 'drgnx-tty-mouse t) t))
+      (should (eq (drgnx-tty-mouse-test--flag c 1) 1))
+      (drgnx-tty-session-eval s `(progn (delete-frame (car ,drgnx-tty-mouse-test--clients)) t))
+      (drgnx-tty-session-wait-screen c "\\[emacsclient exited")
+      (should (eq (drgnx-tty-mouse-test--flag c 0) 0)))))
 
 ;;; mouse-test.el ends here

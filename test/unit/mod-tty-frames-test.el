@@ -149,6 +149,13 @@ strings; the real frame is not touched), an empty cache and no terminal to ask: 
                              (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir))
                              (buffer-string))))))
 
+(ert-deftest drgnx-tty-frames/toggle-mouse-is-a-registered-command ()
+  (funcall (plist-get (alist-get 'ui/terminal drgnx-modules--table) :setup))
+  (let ((c (drgnx-commands-get 'terminal-toggle-mouse)))
+    (should c)
+    (should (equal (list (drgnx-cmd-category c) (drgnx-cmd-title c) (drgnx-cmd-command c))
+                   '("Terminal" "Toggle Mouse in Terminal Windows" drgnx-tty-frames-toggle-mouse)))))
+
 (ert-deftest drgnx-tty-frames/toggle-mouse-saves-only-when-run-interactively ()
   (let (saved set (drgnx-tty-mouse t))
     (cl-letf (((symbol-function 'customize-save-variable) (lambda (sym val &rest _) (push (list sym val) saved)))

@@ -15,7 +15,7 @@
 ;;   result is in the terminal parameter `drgnx-tty-caps'.
 ;; - The mouse: `xterm-mouse-mode' (SGR reports) on while `drgnx-tty-mouse' is t, started from a terminal frame's
 ;;   setup, never for a graphical frame; Toggle Mouse in Terminal Windows.  The terminal's own selection is then
-;;   Shift+drag.
+;;   Shift+drag.  Each terminal keeps its own enable and disable strings (Emacs 30.2 puts them on the selected one).
 ;; - `drgnx-tty-frames-write-report': terminal-report.eld in the state dir — each terminal's capabilities and
 ;;   the active profile's keys it cannot send — for the doctor and the key sheet; written whole, then renamed
 ;;   into place.  `drgnx-tty-frames-refresh-report' writes it again (ui/terminal-keys, once kkp is on).
@@ -47,6 +47,8 @@
 (declare-function xterm-mouse-mode "xt-mouse")
 (declare-function turn-on-xterm-mouse-tracking-on-terminal "xt-mouse")
 (declare-function turn-off-xterm-mouse-tracking-on-terminal "xt-mouse")
+(declare-function xterm-mouse-tracking-enable-sequence "xt-mouse")
+(declare-function xterm-mouse-tracking-disable-sequence "xt-mouse")
 
 (defvar drgnx-tty-frames-query-timeout 0.2
   "Seconds to wait for a terminal's answer to XTVERSION (a late answer is still taken off the input).")
@@ -173,8 +175,8 @@ it once kkp is on).  Never signals: errors go to `drgnx-hooks-problems'."
 
 (defcustom drgnx-tty-mouse t
   "Non-nil: the mouse works in terminal windows (clicks, wheel, dragging dividers, the Explorer, tabs, menus).
-The terminal's own selection and paste are then Shift+drag (Option+drag in iTerm2).  Nil: the terminal keeps the
-mouse.  Toggle Mouse in Terminal Windows changes it."
+The terminal's own selection is then Shift+drag in most terminals (Option+drag in iTerm2; kitty's modifier is a
+setting).  Nil: the terminal keeps the mouse.  Toggle Mouse in Terminal Windows changes it."
   :type 'boolean :group 'drgnx :initialize #'custom-initialize-default
   :set (lambda (sym val) (set-default sym val) (drgnx-tty-frames-mouse-apply)))
 
@@ -197,10 +199,32 @@ frame is left alone: a graphical frame never gets `xterm-mouse-mode'.  Never ask
       (if wanted
           (unless xterm-mouse-mode (xterm-mouse-mode 1))
         (when xterm-mouse-mode (xterm-mouse-mode -1)))
+      ;; Emacs 30.2's turn-on and turn-off keep the enable and disable strings on the SELECTED terminal: each
+      ;; terminal is handled from a frame of its own
       (dolist (f frames)
-        (if (memq f wanted)
-            (turn-on-xterm-mouse-tracking-on-terminal (frame-terminal f))
-          (turn-off-xterm-mouse-tracking-on-terminal (frame-terminal f)))))))
+        (with-selected-frame f
+          (if (memq f wanted)
+              (turn-on-xterm-mouse-tracking-on-terminal (frame-terminal f))
+            (turn-off-xterm-mouse-tracking-on-terminal (frame-terminal f)))))
+      (drgnx-tty-frames--mouse-strings frames))))
+
+(defun drgnx-tty-frames--mouse-strings (frames)
+  "Each terminal of FRAMES re-sends the mouse enable string on resume (and the disable string on suspend or
+exit) once while its mouse is on, never while it is off.  Emacs 30.2 may have left them on another terminal
+\(`xterm-mouse-mode' turns every terminal on from the selected one), and its turn-off removes them with `remq',
+which misses them."
+  (let ((on (xterm-mouse-tracking-enable-sequence)) (off (xterm-mouse-tracking-disable-sequence)))
+    (dolist (term (delete-dups (mapcar #'frame-terminal frames)))
+      (when (terminal-live-p term)
+        (let ((tracking (terminal-parameter term 'xterm-mouse-mode)))
+          (set-terminal-parameter term 'tty-mode-set-strings
+                                  (append (and tracking (list on))
+                                          (seq-remove (lambda (s) (equal s on))
+                                                      (terminal-parameter term 'tty-mode-set-strings))))
+          (set-terminal-parameter term 'tty-mode-reset-strings
+                                  (append (and tracking (list off))
+                                          (seq-remove (lambda (s) (equal s off))
+                                                      (terminal-parameter term 'tty-mode-reset-strings)))))))))
 
 (defun drgnx-tty-frames-toggle-mouse ()
   "Turn the mouse in terminal windows on or off; run interactively, the choice is saved."
