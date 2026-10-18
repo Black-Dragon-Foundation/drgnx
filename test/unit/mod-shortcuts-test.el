@@ -332,12 +332,17 @@ table is the terminal's, as the layer would have put it there for a legacy termi
                             (drgnx-tty-fallback-for-terminal (drgnx-tty-fallback-active-table) caps) params))))
        (when caps (puthash '(kx-sc . drgnx-tty-caps) caps params))
        (rebuild)
-       (cl-letf (((symbol-function 'drgnx-tty-fallback-apply) #'rebuild)
-                 ((symbol-function 'frame-terminal) (lambda (&optional _) 'kx-sc))
-                 ((symbol-function 'display-graphic-p) (lambda (&optional _) (null caps)))
-                 ((symbol-function 'terminal-parameter) (lambda (term p) (gethash (cons term p) params)))
-                 ((symbol-function 'set-terminal-parameter) (lambda (term p v) (puthash (cons term p) v params))))
-         ,@body))))
+       ;; the layer's advice on `drgnx-keys-apply', here as the test's own (the real one is there only after ui/terminal's
+       ;; setup ran in the session)
+       (advice-add 'drgnx-keys-apply :after #'rebuild '((name . kx-sc-rebuild)))
+       (unwind-protect
+           (cl-letf (((symbol-function 'drgnx-tty-fallback-apply) #'rebuild)
+                     ((symbol-function 'frame-terminal) (lambda (&optional _) 'kx-sc))
+                     ((symbol-function 'display-graphic-p) (lambda (&optional _) (null caps)))
+                     ((symbol-function 'terminal-parameter) (lambda (term p) (gethash (cons term p) params)))
+                     ((symbol-function 'set-terminal-parameter) (lambda (term p v) (puthash (cons term p) v params))))
+             ,@body)
+         (advice-remove 'drgnx-keys-apply 'kx-sc-rebuild)))))
 
 (defun drgnx-shortcuts-test--mark-echo (id)
   "The help-echo of the † on command ID's line, or nil without one."

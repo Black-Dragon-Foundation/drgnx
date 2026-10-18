@@ -65,7 +65,9 @@ scroll by lines as always. **Toggle Smooth Scrolling**. Module `ui/smooth`.
 
 When the start of the function, class or block you are in has scrolled off the top, its first line shows in the
 header, after the breadcrumb — up to three enclosing scopes, outermost first: `src › shape.py › class Shape: › def
-area(self):`. The header line is always there (the breadcrumb), so nothing moves as you scroll. Scopes come from
+area(self):`. The header line is always there (the breadcrumb), so nothing moves as you scroll — except in a terminal window with
+fewer than 30 frame lines (31 terminal rows with the menu bar on), where the breadcrumb row is off and the scopes,
+which share its row, are hidden too. Scopes come from
 tree-sitter when the buffer has a parser (functions, methods, classes, structs, …), else from indentation; each
 position is worked out once, and again only when the text above the window's top changes. **Toggle Sticky Scroll** for this buffer. Module `editor/sticky` (drgnx's own; a buffer
 can add to the header the same way: `drgnx-chrome-header-tail`).

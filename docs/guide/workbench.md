@@ -170,8 +170,10 @@ Every window's chrome is decided by its **role**, never by its buffer: an **edit
 breadcrumb header and a mode line; a **dock** section has its title only; the **panel** and the **right dock** have
 their tab row only; a popup has none. The chrome lives in window parameters, so a mode that sets its own header or
 mode line (ibuffer, Info) cannot change a window's height — text never jumps (invariant I3). A terminal window
-shorter than 30 lines has no breadcrumb row (the frame parameter `drgnx-chrome-breadcrumb` is `off`, set by the
-terminal layout); it comes back with room, and a buffer's own header line (column headings) stays.
+needs at least 30 frame lines for the breadcrumb row, which is 31 terminal rows with the menu bar on (the menu bar
+is not a frame line); with fewer, the frame parameter `drgnx-chrome-breadcrumb` is `off` (set by the terminal layout)
+and the row is gone, sticky scroll's scopes with it. It comes back with room, and a buffer's own header line (column
+headings) stays.
 
 - **Tabs**: the buffers an editor window has shown, in the order they were opened; switching never reorders them.
   Click a tab to show it, `×` or middle-click closes it (the buffer stays open — close it in the Buffers panel).

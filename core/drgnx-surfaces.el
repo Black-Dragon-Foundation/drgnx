@@ -32,15 +32,31 @@ it.  Reads what drgnx found about the terminal when it opened (never asks it), i
 where the command would run."
   (or (ignore-errors (drgnx-tty-sendable-key (selected-frame) key)) key))
 
+(defun drgnx-surfaces--always (key)
+  "KEY (a key string) as the selected frame's terminal can send it whatever buffer is current: each chord it cannot
+send as its F6 form (the layer's table, no check of the current buffer's maps), KEY itself on a graphical frame, where
+the terminal sends it, or when the terminal has no fallback layer."
+  (or (ignore-errors
+        (let* ((frame (selected-frame))
+               (table (and drgnx-tty-fallback (not (display-graphic-p frame))
+                           (terminal-parameter (frame-terminal frame) 'drgnx-tty-fallback-table))))
+          (if (or (null table) (drgnx-tty-frame-sends-p frame key)) key
+            (mapconcat (lambda (ev)
+                         (let ((row (cdr (drgnx-tty-fallback--row table ev))))
+                           (or (plist-get row :prefix) (plist-get row :alt) (key-description (vector ev)))))
+                       (key-parse key) " "))))
+      key))
+
 (defun drgnx-surfaces-key (cmd &optional plain)
   "Display string for CMD's first active key, a key in a mode's keymap suffixed with that
-keymap; \"\" if none.  The key is shown as the selected frame's terminal can send it, unless PLAIN
-\(the markdown export: the same on every frame)."
+keymap; \"\" if none.  The key is shown as the selected frame's terminal can send it, unless PLAIN is t
+\(the markdown export: the same on every frame).  PLAIN `menu': the form that is right in every buffer (F6 then the
+key, never an Alt+Shift key a mode may rebind), for text a menu keeps while the buffer changes."
   (pcase (car (drgnx-cmd-bound cmd))
     ('nil "")
     (`(,key . ,map)
      (let ((mapsym (cdr (drgnx-commands--keymap-spec map)))
-           (key (if plain key (drgnx-surfaces--here key))))
+           (key (pcase plain ('nil (drgnx-surfaces--here key)) ('menu (drgnx-surfaces--always key)) (_ key))))
        (if (eq mapsym 'global-map) key
          (format "%s (in %s)" key (string-remove-suffix "-mode-map" (string-remove-suffix "-map" (symbol-name mapsym)))))))))
 
@@ -199,14 +215,16 @@ Sets `drgnx-surfaces--usage-bad' when something was left out."
   "Menu-bar names Emacs already defines, with their menu-bar keys.")
 
 (defun drgnx-surfaces-build-menus ()
-  "Put every registry entry with a :menu path into the menu bar (idempotent)."
+  "Put every registry entry with a :menu path into the menu bar (idempotent).  The menu bar is global and keeps
+its text while the buffer changes: on a terminal frame its key texts are the F6 forms (right in every buffer),
+and they are made for the selected frame's terminal (`drgnx-surfaces--update-menus')."
   (dolist (cmd (drgnx-commands-all))
     (when (and (drgnx-cmd-menu cmd) (drgnx-surfaces--showable-p cmd))
       (let* ((path (drgnx-cmd-menu cmd))
              (builtin (cdr (assoc (car path) drgnx-surfaces--builtin-menus)))
              (item (vector (drgnx-cmd-title cmd) (drgnx-surfaces--item-command cmd)
                            :help (or (drgnx-cmd-doc cmd) "")
-                           :keys (drgnx-surfaces-key cmd))))
+                           :keys (drgnx-surfaces-key cmd 'menu))))
         ;; Always the GLOBAL menu bar: easy-menu's nil map means the buffer's local one.
         (if builtin
             (easy-menu-add-item (lookup-key global-map (vector 'menu-bar builtin)) (cdr path) item)
@@ -298,9 +316,9 @@ no fallback layer).  Nil on a graphical frame and on a terminal that sends every
       (when-let* ((key (car (car (drgnx-cmd-bound c))))
                   ((not (ignore-errors (drgnx-tty-frame-sends-p frame key)))))
         (let* ((here (drgnx-surfaces--here key))
-               (row (and drgnx-tty-fallback (= (length (key-parse key)) 1)
-                         (cdr (assoc key (terminal-parameter (frame-terminal frame) 'drgnx-tty-fallback-table)))))
-               (forms (delete-dups (delq nil (list (and (not (equal here key)) here) (plist-get row :prefix))))))
+               (always (drgnx-surfaces--always key))
+               (forms (delete-dups (delq nil (list (and (not (equal here key)) here)
+                                                   (and (not (equal always key)) always))))))
           (push (format "  %-24s %-36s %s" key (drgnx-cmd-title c)
                         (if forms
                             (mapconcat #'drgnx-tty-fallback-label forms ", or ")
@@ -388,7 +406,9 @@ table (nil on a graphical frame).")
 
 (defun drgnx-surfaces--update-menus ()
   "For `menu-bar-update-hook': the menu bar is global, its key texts are made for one terminal at a time, so
-build them again when the selected frame's terminal is another one or its keys changed (kkp came on).
+build them again when the selected frame's terminal is another one or its keys changed (kkp came on).  Menus are
+per terminal, not per buffer: the texts come from the terminal's own table without the current buffer's maps
+(`drgnx-surfaces-key' with `menu'), so a buffer that rebinds an Alt+Shift key never makes a menu lie.
 Reads what drgnx already found; asks nothing."
   (condition-case nil
       (let ((sig (drgnx-surfaces--terminal-signature)))

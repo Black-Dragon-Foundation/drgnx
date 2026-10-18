@@ -6,7 +6,7 @@
 (require 'drgnx-palette)
 (require 'drgnx-tty-fallback)
 
-(defconst tty-sheet-test--keys '("C-S-p" "C-S-f" "C-c a") "The keys of the test commands: the profile's keys.")
+(defconst tty-sheet-test--keys '("C-S-p" "C-S-f" "C-c a" "C-k C-S-f") "The keys of the test commands: the profile's keys.")
 
 (defconst tty-sheet-test--legacy '(:id vte :keys legacy :folded nil :colors 256) "A VTE's caps.")
 (defconst tty-sheet-test--kkp '(:id kitty :keys kkp :folded nil :colors 256) "A kitty's caps.")
@@ -25,7 +25,8 @@ CAPS nil is a graphical frame."
      (drgnx-command-define 'palette :title "Command Palette" :category "Commands" :command #'tty-sheet-test--noop)
      (drgnx-command-define 'search :title "Search in Project" :category "Search" :command #'tty-sheet-test--noop)
      (drgnx-command-define 'plain :title "Plain" :category "Search" :command #'tty-sheet-test--noop)
-     (pcase-dolist (`(,id . ,key) '((palette . "C-S-p") (search . "C-S-f") (plain . "C-c a")))
+     (drgnx-command-define 'chain :title "Chain" :category "Search" :command #'tty-sheet-test--noop)
+     (pcase-dolist (`(,id . ,key) '((palette . "C-S-p") (search . "C-S-f") (plain . "C-c a") (chain . "C-k C-S-f")))
        (setf (drgnx-cmd-bound (drgnx-commands-get id)) (list (cons key nil))))
      (when caps
        (puthash '(kx-sheet . drgnx-tty-caps) caps params)
@@ -75,6 +76,40 @@ CAPS nil is a graphical frame."
     (should-not (string-search tty-sheet-test--heading (tty-sheet-test--sheet))))
   (tty-sheet-test--on nil
     (should-not (string-search tty-sheet-test--heading (tty-sheet-test--sheet)))))
+
+(ert-deftest drgnx-surfaces/the-sheet-shows-what-to-type-for-a-chord-sequence ()
+  ;; a sequence with a chord a legacy terminal cannot send is typed with that chord mapped, not "cannot send"
+  (tty-sheet-test--on tty-sheet-test--legacy
+    (let* ((sheet (tty-sheet-test--sheet))
+           (section (substring sheet (string-search tty-sheet-test--heading sheet)))
+           (line (tty-sheet-test--line section "C-k C-S-f")))
+      (should line)
+      (should (string-search "Ctrl+K Alt+Shift+F" line))
+      (should (string-search "Ctrl+K F6 f" line))
+      (should-not (string-search "cannot send" line)))
+    ;; where Alt+Shift+F is bound by the buffer's mode, the F6 form is the one given
+    (with-temp-buffer
+      (use-local-map (let ((m (make-sparse-keymap))) (define-key m (key-parse "M-F") #'ignore) m))
+      (let* ((sheet (tty-sheet-test--sheet))
+             (line (tty-sheet-test--line (substring sheet (string-search tty-sheet-test--heading sheet)) "C-k C-S-f")))
+        (should (string-search "Ctrl+K F6 f" line))
+        (should-not (string-search "cannot send" line))))))
+
+(ert-deftest drgnx-surfaces/menus-show-the-key-that-is-right-in-every-buffer ()
+  ;; the menu bar keeps its text while the buffer changes: the F6 form, never an Alt+Shift key a mode may rebind
+  (tty-sheet-test--on tty-sheet-test--legacy
+    (let ((cmd (drgnx-commands-get 'search)))
+      (should (equal (drgnx-surfaces-key cmd) "M-F"))
+      (should (equal (drgnx-surfaces-key cmd 'menu) "<f6> f"))
+      (with-temp-buffer
+        (use-local-map (let ((m (make-sparse-keymap))) (define-key m (key-parse "M-F") #'ignore) m))
+        (should (equal (drgnx-surfaces-key cmd 'menu) "<f6> f")))
+      (should (equal (drgnx-surfaces-key (drgnx-commands-get 'plain) 'menu) "C-c a"))
+      (should (equal (drgnx-surfaces-key (drgnx-commands-get 'chain) 'menu) "C-k <f6> f"))))
+  (tty-sheet-test--on tty-sheet-test--kkp
+    (should (equal (drgnx-surfaces-key (drgnx-commands-get 'search) 'menu) "C-S-f")))
+  (tty-sheet-test--on nil
+    (should (equal (drgnx-surfaces-key (drgnx-commands-get 'search) 'menu) "C-S-f"))))
 
 (ert-deftest drgnx-surfaces/the-sheet-says-so-when-the-layer-is-off ()
   (tty-sheet-test--on tty-sheet-test--legacy
