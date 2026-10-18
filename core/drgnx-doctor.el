@@ -399,7 +399,8 @@ MODEL), as a sentence, or nil."
                      :check (lambda (f)
                               (let* ((r (plist-get f :keys-report)) (modal (plist-get r :modal))
                                      (engine (plist-get modal :engine))
-                                     (module-status (plist-get (alist-get (and engine (intern (format "editor/%s" engine)))
+                                     (module-status (plist-get (alist-get (or (plist-get modal :module) ; a report before :module: evil's
+                                                                              (and engine (intern (format "editor/%s" engine))))
                                                                           (plist-get f :modules-report))
                                                                :status))
                                      (m-spc (and (equal (plist-get r :leader-menu-key) "M-SPC")
@@ -412,6 +413,7 @@ MODEL), as a sentence, or nil."
                                                                           "installed, not running: restart drgnx")))
                                              "drgnx sync, then restart — or Keyboard Profile… to choose another"))
                                       ((plist-get modal :pending) (list 'info (funcall say "Vim waits for drgnx sync") "drgnx sync"))
+                                      ((plist-get modal :suspended) (list 'ok "modal editing is off for this session" nil))
                                       ((null engine) (list 'ok "no modal engine needed" nil))
                                       ((and m-spc (string-search "GNOME" (or (plist-get f :desktop) "")))
                                        (list 'info (funcall say "Alt+Space opens GNOME's window menu before drgnx sees it: Settings → Keyboard → Keyboard Shortcuts → Windows")

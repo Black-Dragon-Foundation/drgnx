@@ -149,8 +149,11 @@ for those layers, however often the keys are applied again (Toggle Modal Editing
   says where the leader works, from `:maps`: "normal, visual, motion state and panels", the Shortcuts "where" column).
   `drgnx-modal-default-notes` are lines the key sheet and `keys-report.eld` append to the conflicts: what the modal keys
   take from Emacs' defaults that the resolver does not report without an Emacs layer (the Leader Menu on `M-SPC`
-  over `cycle-spacing`). `keys-report.eld` also carries `:modal (:engine :running :pending)` and `:leader-menu-key`,
-  and is written again when the engine starts or stops (while modal editing is toggled off `:engine` is nil, and the leader's which-key labels go); `:pending` is `:pending-layers` of keys.eld, read as data. The doctor's `modal` check reads them.
+  over `cycle-spacing`). `keys-report.eld` also carries `:modal (:engine :module :running :pending :suspended)` and
+  `:leader-menu-key`, and is written again when the engine starts or stops (while modal editing is toggled off
+  `:engine` is nil and `:suspended` t, and the leader's which-key labels go); `:module` is the engine's module (the
+  doctor runs without the modal core); `:pending` is `:pending-layers` of keys.eld, read as data. The doctor's `modal`
+  check reads them: "modal editing is off for this session" while toggled off.
 - **Where keys go** (`core/drgnx-keys-modal.el`, pure, used by `drgnx-keys-resolve`). `drgnx-keys-modal-leader-p`
   tells a leader key (`SPC f f`, `C-w h`) from the rest; `drgnx-keys-modal-key-map` binds a leader key in the
   profile's `:map` (`drgnx-modal-leader-map`) whatever the entry says, any other key in the entry's map, the

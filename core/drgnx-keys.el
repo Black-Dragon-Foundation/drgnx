@@ -701,20 +701,25 @@ Code's C-k chords over kill-line) are one line."
 (defvar drgnx-modal-running)
 (declare-function drgnx-modal-engine-for "drgnx-modal")
 (declare-function drgnx-modal-default-notes "drgnx-modal")
+(declare-function drgnx-modal--engine-module "drgnx-modal-choose")
 
 (defvar drgnx-modal-suspended)
 
 (defun drgnx-keys--report-modal ()
-  "The report's `:modal': (:engine ENGINE :running BOOL :pending LAYERS).  ENGINE is the modal engine the stack in
-force needs (nil without one, and nil while the user has turned modal editing off for these layers: the engine is
-not wanted, not missing), RUNNING whether it runs, PENDING the layers a non-interactive choice of Vim keys left
-waiting for `drgnx sync' (`:pending-layers' in keys.eld, read as data; nil when none)."
+  "The report's `:modal': (:engine ENGINE :module MODULE :running BOOL :pending LAYERS :suspended BOOL).  ENGINE is
+the modal engine the stack in force needs (nil without one, and nil while the user has turned modal editing off for
+these layers: the engine is not wanted, not missing; SUSPENDED says so), MODULE the module that provides it (for the
+doctor, which runs without the modal core), RUNNING whether it runs, PENDING the layers a non-interactive choice of
+Vim keys left waiting for `drgnx sync' (`:pending-layers' in keys.eld, read as data; nil when none)."
   (let* ((layers (plist-get drgnx-keys-last :layers))
-         (engine (and (fboundp 'drgnx-modal-engine-for)
-                      (not (and (bound-and-true-p drgnx-modal-suspended) (equal (car drgnx-modal-suspended) layers)))
+         (suspended (and (bound-and-true-p drgnx-modal-suspended) (equal (car drgnx-modal-suspended) layers) t))
+         (engine (and (fboundp 'drgnx-modal-engine-for) (not suspended)
                       (ignore-errors (drgnx-modal-engine-for layers)))))
-    (list :engine engine :running (and engine (eq engine drgnx-modal-running) t)
-          :pending (let ((drgnx-keys-problems nil)) (plist-get (drgnx-keys-read-user) :pending-layers)))))
+    (list :engine engine
+          :module (and engine (fboundp 'drgnx-modal--engine-module) (drgnx-modal--engine-module engine))
+          :running (and engine (eq engine drgnx-modal-running) t)
+          :pending (let ((drgnx-keys-problems nil)) (plist-get (drgnx-keys-read-user) :pending-layers))
+          :suspended suspended)))
 
 (defun drgnx-keys--leader-menu-key ()
   "The key the Leader Menu is on in the global map (\"M-SPC\" in the Vim profile), or nil."

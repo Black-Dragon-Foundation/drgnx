@@ -126,10 +126,12 @@ no registered modal engine; every binding is undone after."
 (ert-deftest drgnx-modal-report/report-carries-the-modal-state ()
   (drgnx-modal-report-test--live
     (drgnx-keys-use drgnx-modal-report-test--vim)
-    (should (equal (plist-get (drgnx-modal-report-test--report) :modal) '(:engine evil :running nil :pending nil)))
+    (should (equal (plist-get (drgnx-modal-report-test--report) :modal)
+                   '(:engine evil :module editor/evil :running nil :pending nil :suspended nil)))
     (should (equal (plist-get (drgnx-modal-report-test--report) :leader-menu-key) "M-SPC"))
     (drgnx-keys-use drgnx-modal-report-test--vscode)
-    (should (equal (plist-get (drgnx-modal-report-test--report) :modal) '(:engine nil :running nil :pending nil)))
+    (should (equal (plist-get (drgnx-modal-report-test--report) :modal)
+                   '(:engine nil :module nil :running nil :pending nil :suspended nil)))
     (should-not (plist-get (drgnx-modal-report-test--report) :leader-menu-key))))
 
 (ert-deftest drgnx-modal-report/report-reads-pending-layers-as-data ()
@@ -150,9 +152,11 @@ no registered modal engine; every binding is undone after."
       (drgnx-modal-define-engine 'evil :module 'editor/evil :start #'ignore :stop #'ignore)
       (let ((drgnx-keys-after-apply-functions (list #'drgnx-modal-sync-engine)))
         (drgnx-keys-use drgnx-modal-report-test--vim)
-        (should (equal (plist-get (drgnx-modal-report-test--report) :modal) '(:engine evil :running t :pending nil)))
+        (should (equal (plist-get (drgnx-modal-report-test--report) :modal)
+                       '(:engine evil :module editor/evil :running t :pending nil :suspended nil)))
         (drgnx-keys-use drgnx-modal-report-test--vscode)
-        (should (equal (plist-get (drgnx-modal-report-test--report) :modal) '(:engine nil :running nil :pending nil)))))))
+        (should (equal (plist-get (drgnx-modal-report-test--report) :modal)
+                       '(:engine nil :module nil :running nil :pending nil :suspended nil)))))))
 
 ;;;; The doctor
 
@@ -171,9 +175,11 @@ no registered modal engine; every binding is undone after."
       (setq drgnx-modal-suspended (list drgnx-modal-report-test--vim))
       (drgnx-modal-sync-engine)
       (should-not drgnx-modal-running)
-      (should (equal (plist-get (drgnx-modal-report-test--report) :modal) '(:engine nil :running nil :pending nil)))
-      (should (eq (car (drgnx-doctor-check 'modal (drgnx-modal-report-test--facts :keys-report (drgnx-modal-report-test--report))))
-                  'ok))
+      (should (equal (plist-get (drgnx-modal-report-test--report) :modal)
+                     '(:engine nil :module nil :running nil :pending nil :suspended t)))
+      (let ((r (drgnx-doctor-check 'modal (drgnx-modal-report-test--facts :keys-report (drgnx-modal-report-test--report)))))
+        (should (eq (car r) 'ok))
+        (should (string-search "modal editing is off for this session" (nth 1 r))))
       (when (featurep 'which-key) (should-not (drgnx-modal-report-test--label "SPC f f")))
       ;; and back on
       (setq drgnx-modal-suspended nil)
@@ -219,6 +225,14 @@ no registered modal engine; every binding is undone after."
     ;; no report yet, or one from before the modal state was reported
     (should (eq (car (drgnx-doctor-check 'modal (drgnx-modal-report-test--facts))) 'info))
     (should (eq (car (drgnx-doctor-check 'modal (drgnx-modal-report-test--facts :keys-report '(:layers ((vscode app)))))) 'ok))))
+
+(ert-deftest drgnx-modal-report/doctor-finds-the-engine-module-in-the-report ()
+  ;; The engine's module comes from the report (the session knows it), not from the engine's name.
+  (let ((r (drgnx-doctor-check 'modal (drgnx-modal-report-test--facts
+                                       :keys-report '(:modal (:engine meow :module editor/modal-meow :running nil))
+                                       :modules-report '((editor/modal-meow :status missing-packages))))))
+    (should (eq (car r) 'warn))
+    (should (string-search "Vim keys need meow (not installed)" (nth 1 r)))))
 
 (ert-deftest drgnx-modal-report/doctor-says-vim-waits-for-sync ()
   (let ((r (drgnx-doctor-check 'modal (drgnx-modal-report-test--facts
