@@ -34,7 +34,8 @@ and no frame opens.
   only when it recommended a side; a clash whose reviewer was lost twice says so), then the messages agents sent
   you, each with **Reply…** (answers the agent) or **Dismiss** (needs no answer: it is acted on, and stops counting
   in the badge). Below them, the job's tasks (each one's status, profile and what it waits on), the budget, spent
-  against the limit, and the agents at work, each with **Transcript** and **Message…**.
+  against the limit, and the agents at work, each with **Transcript** and **Message…** (queued: the agent gets it,
+marked as yours, when its turn ends).
 - **Decisions** (pane `decisions`; **Show Decisions**, `cockpit-decisions`): the job's decision log, newest first:
   replaced decisions dimmed, disputed ones (in an open clash) marked.
 

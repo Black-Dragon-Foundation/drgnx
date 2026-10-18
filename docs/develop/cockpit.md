@@ -530,6 +530,11 @@ side is in [jobs.md](../guide/jobs.md#a-job-in-the-work-cockpit).
 - **Kept in `drgnx-job-ui.el`:** the Plan Job commands (`job-show` is now "Show Job in Work…"), the ⚑ badge mode for
   those without the status bar (a click: `drgnx-job-ui-show` of the newest card's job, else
   `drgnx-cockpit-show-jobs`), and notifications.
+- **What reaches an agent.** Reply… is the hub's `job/reply` (`drgnx-job-reply`: `drgnx-coord-send` from the user,
+  `:answers` the agent's message); Message… is `drgnx-coord-send` from the user to the agent, then `coord/notify`.
+  Neither is a raw prompt (`agents/send`): the hub gives both under the user's header (`drgnx-hub--message-prompt`),
+  and the agent's own words (the question answered) only on a quoted line. Discuss is the clash code's
+  (`drgnx-job-card-act`), which quotes the user's text to the reviewer.
 - **One count of what needs you,** in `drgnx-job-ui.el`: `drgnx-job-ui-needs-you-count JOBS` gives `(N . NEWEST-JOB)`
   (open cards and messages not acted on, of proposed, running and paused jobs), and `drgnx-job-ui-waiting-p JOB` says
   whether a job counts. `drgnx-job-ui-note-jobs JOBS` keeps the count and the badge; the badge's own `job/status` and

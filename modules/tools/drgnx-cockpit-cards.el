@@ -20,6 +20,7 @@
 (require 'button)
 (require 'drgnx-registry)
 (require 'drgnx-panes)
+(require 'drgnx-coord)                                ; Message…: the user's text, left in the store
 ;; the jobs module's count of what needs you (the badge's), beside this file
 (unless (featurep 'drgnx-job-ui)
   (load (expand-file-name "drgnx-job-ui" (file-name-directory (or load-file-name buffer-file-name))) nil t))
@@ -31,7 +32,9 @@
 (declare-function drgnx-hub-connect "drgnx-hub")
 (declare-function drgnx-agents-mirror--find "drgnx-agents-mirror")
 (declare-function drgnx-agents-ui-transcript "drgnx-agents-ui")
-(declare-function drgnx-agents-send "drgnx-agents")
+(declare-function drgnx-coord-send "drgnx-coord")
+(declare-function drgnx-coord-version "drgnx-coord")
+(declare-function drgnx-coord-message "drgnx-coord")
 (declare-function drgnx-job-ui--schedule-recount "drgnx-job-ui")
 (declare-function drgnx-layouts-apply "drgnx-layouts")
 (declare-function drgnx-layouts-names "drgnx-layouts")
@@ -140,7 +143,7 @@ spaces (a dock is narrow: a button is never cut in two)."
         (insert (format "  %s  %s  %s  %s%s\n    " id (plist-get a :profile) (plist-get a :status)
                         (or (drgnx-cockpit-cards--v (plist-get a :task)) "") (if (drgnx-cockpit-cards--v (plist-get a :review)) "  (reviewer)" "")))
         (drgnx-cockpit-cards--button "Transcript" (lambda () (drgnx-cockpit-cards--transcript id)))
-        (drgnx-cockpit-cards--button "Message…" (lambda () (drgnx-cockpit-cards--message id)))
+        (drgnx-cockpit-cards--button "Message…" (lambda () (drgnx-cockpit-cards--message job id)))
         (insert "\n")))))
 
 (defun drgnx-cockpit-cards--insert-card (job c &optional repo)
@@ -417,8 +420,18 @@ job's repository, for Open."
   (require 'drgnx-agents-ui nil t)
   (drgnx-agents-ui-transcript (drgnx-cockpit-cards--mirror id)))
 
-(defun drgnx-cockpit-cards--message (id)
-  (drgnx-agents-send (drgnx-cockpit-cards--mirror id) (read-string (format "Message to %s: " id))))
+(defun drgnx-cockpit-cards--message (job id)
+  "Ask for a message to agent ID of JOB and leave it in the store as the user's (`drgnx-coord-send', no sender): the
+hub gives it to the agent when its turn ends, under the user's header (`drgnx-hub--message-prompt'), never
+interrupting it and never as a raw prompt."
+  (let ((text (read-string (format "Message to %s (queues, never interrupts): " id))))
+    (when (string-blank-p text) (user-error "An empty message: nothing sent"))
+    (let ((r (drgnx-coord-send :job job :recipient id :text text :seen (drgnx-coord-version))))
+      (if (equal (plist-get r :state) "held")
+          (message "drgnx: held, not sent — %s" (or (plist-get (drgnx-coord-message (plist-get r :id)) :reason) "too many messages"))
+        (drgnx-cockpit-cards--hub)
+        (ignore-errors (drgnx-hub-call "coord/notify" nil #'ignore))))   ; deliver now, when the agent is free
+    (drgnx-cockpit-cards--changed)))
 
 ;;;; The filter and showing the parts
 
