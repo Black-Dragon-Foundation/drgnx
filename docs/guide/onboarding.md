@@ -7,6 +7,11 @@ your current choices. Progress is kept in `~/.local/state/drgnx/onboarding.eld`:
 first step not done (`--again` runs every step; `--step ID` runs that one), and a step that fails is shown failed
 with how to fix it — it never stops the others.
 
+`onboarding.eld` is a config file ([reference](../reference/config.md#onboardingeld)). Two runs at once (the command
+line and the daemon) each keep their own steps: a step is recorded under the file's lock, on a fresh read. A file
+that cannot be read is copied aside to `onboarding.eld.bak-<time>` and started again (every step shows as not run) —
+your copy is never lost; a file from an earlier drgnx reads as it is.
+
 **The first start opens the Welcome by itself.** When drgnx's first window shows and onboarding has never run on
 this machine (no `onboarding.eld`), the Welcome opens a moment later — from a timer, after your layout is back; it
 asks nothing until you run a step. It does this once: opening it leaves `onboarding.eld` behind (with no step done),

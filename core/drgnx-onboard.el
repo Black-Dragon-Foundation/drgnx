@@ -17,6 +17,8 @@
 (require 'subr-x)
 (require 'tabulated-list)
 (require 'drgnx-paths)
+(require 'drgnx-file)
+(require 'drgnx-config)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-session)
@@ -41,23 +43,39 @@ a plist (:interactive BOOL :options PLIST).  STATUS: ok, info, warn or fail."
 
 ;;;; Progress
 
-(defun drgnx-onboard-state-file () (expand-file-name "onboarding.eld" (drgnx-state-dir)))
+(drgnx-config-define 'onboarding
+                     :file "onboarding.eld" :dir 'state :shape 'alist :version 1 :reload 'mtime :last-good t :default nil
+                     :schema '(alist symbol
+                                     (plist (:status symbol "How the step ended: ok, info, warn or fail")
+                                            (:message (or string null) "What it said")
+                                            (:time (or string null) "When it ended")))
+                     :header ";; drgnx: which onboarding steps ran, written by Onboarding (docs/guide/onboarding.md)\n"
+                     :doc "Which onboarding steps ran and how they ended, so a run resumes where it stopped.")
+
+(defun drgnx-onboard-state-file () (drgnx-config-file 'onboarding))
 
 (defun drgnx-onboard-state ()
-  "Alist ID → (:status :message :time) of the steps run so far."
-  (and (file-readable-p (drgnx-onboard-state-file))
-       (ignore-errors (with-temp-buffer (insert-file-contents (drgnx-onboard-state-file)) (read (current-buffer))))))
+  "Alist ID → (:status :message :time) of the steps run so far.  A file that cannot be read gives nil (and the
+doctor names its mistake).  Do not change the value: it is shared."
+  (drgnx-config-get 'onboarding))
 
 (defun drgnx-onboard--write-state (state)
-  (make-directory (file-name-directory (drgnx-onboard-state-file)) t)
-  (let ((tmp (make-temp-file (expand-file-name ".onboarding-" (file-name-directory (drgnx-onboard-state-file))))))
-    (with-temp-file tmp (let ((print-length nil)) (prin1 state (current-buffer))))
-    (rename-file tmp (drgnx-onboard-state-file) t)))
+  "Write STATE, the whole alist, as onboarding.eld."
+  (drgnx-file-write (drgnx-onboard-state-file) state
+                    :header (plist-get (drgnx-config-definition 'onboarding) :header) :pretty t))
 
 (defun drgnx-onboard--record (id status message)
-  (let ((state (drgnx-onboard-state)))
-    (setf (alist-get id state) (list :status status :message message :time (format-time-string "%FT%T%z")))
-    (drgnx-onboard--write-state state)))
+  "Record that step ID ended with STATUS and MESSAGE.  Under the file's lock and on a fresh read, so the command
+line and the daemon each keep their steps; a file that cannot be read is copied aside (`drgnx-file-backup') and
+started again."
+  (drgnx-file-update
+   (drgnx-onboard-state-file)
+   (lambda (state)
+     (let ((entry (list :status status :message message :time (format-time-string "%FT%T%z")))
+           (cell (assq id state)))
+       (if cell (progn (setcdr cell entry) state) (append state (list (cons id entry))))))
+   :on-unreadable 'backup :pretty t
+   :header (plist-get (drgnx-config-definition 'onboarding) :header)))
 
 (cl-defun drgnx-onboard-run (&key only non-interactive resume options)
   "Run the steps (ONLY: a list of ids) in order; RESUME skips steps done (ok or info) before.

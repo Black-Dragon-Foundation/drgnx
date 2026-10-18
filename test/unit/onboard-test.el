@@ -4,6 +4,8 @@
 (require 'drgnx-onboard)
 (require 'drgnx-projects)
 (require 'drgnx-macos)
+(require 'drgnx-doctor)
+(require 'drgnx-config-doc)
 
 (defmacro drgnx-onboard-test--with (root &rest body)
   "BODY with ROOT a temp dir holding config, state, data and org dirs."
@@ -1309,5 +1311,136 @@ record the prompts and the default in the lists they return as the cars of (PROM
       (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "claude")) ((symbol-function 'y-or-n-p) (nth 1 a)))
         (should (string-match-p "agents.eld has a mistake" (funcall drgnx-onboard-test--offers))))
       (should (equal (drgnx-onboard-test--slurp file) "(:profiles")))))
+
+;;;; Task 19: onboarding.eld on the config layer
+
+(load (expand-file-name "test/fixtures/config-fixture" drgnx-dir) nil t)
+
+(defun drgnx-onboard-test--bytes (file)
+  "FILE's bytes as a unibyte string, nil when missing."
+  (when (file-exists-p file)
+    (with-temp-buffer (set-buffer-multibyte nil) (insert-file-contents-literally file) (buffer-string))))
+
+(defun drgnx-onboard-test--baks ()
+  "The backups of onboarding.eld."
+  (directory-files (drgnx-state-dir) t "\\`onboarding\\.eld\\.bak-"))
+
+(defun drgnx-onboard-test--children (forms)
+  "Run each of FORMS (strings) in a child `emacs --batch' with this run's environment; wait for all (30 s bound)."
+  (let* ((at (+ (float-time) 2)) (bufs nil)
+         (procs (mapcar
+                 (lambda (form)
+                   (let ((b (generate-new-buffer " *onboard-child*" t)))
+                     (push b bufs)
+                     (make-process
+                      :name "onboard-child" :buffer b :noquery t
+                      :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
+                                     "--eval" (format "(setq load-path '%S load-prefer-newer t)" load-path)
+                                     "--eval" "(require 'drgnx-onboard)"
+                                     "--eval" (format "(progn (sleep-for (max 0 (- %f (float-time)))) %s)" at form)))))
+                 forms))
+         (deadline (+ (float-time) 30)))
+    (unwind-protect
+        (progn
+          (while (and (cl-some #'process-live-p procs) (< (float-time) deadline)) (accept-process-output nil 0.05))
+          (dolist (p procs) (should (not (process-live-p p))))
+          (cl-loop for p in procs for b in (reverse bufs)
+                   do (should (equal (list (process-exit-status p) (with-current-buffer b (buffer-string)))
+                                     (list 0 (with-current-buffer b (buffer-string)))))))
+      (mapc #'delete-process procs)
+      (mapc #'kill-buffer bufs))))
+
+(ert-deftest drgnx-onboard/the-definition ()
+  (drgnx-test-with-config
+    (should (drgnx-config-defined-p 'onboarding))
+    (let ((def (drgnx-config-definition 'onboarding)))
+      (should (equal (plist-get def :file) "onboarding.eld"))
+      (should (eq (plist-get def :dir) 'state))
+      (should (eq (plist-get def :shape) 'alist)))
+    (should (equal (drgnx-onboard-state-file) (drgnx-config-file 'onboarding)))
+    (should-not (drgnx-onboard-state))))
+
+(ert-deftest drgnx-onboard/an-older-file-keeps-working-and-keeps-its-steps ()
+  ;; The form every earlier drgnx wrote: one line of `prin1', no header, a step with a nil message.
+  (drgnx-test-with-config
+    (drgnx-test-config-put 'onboarding
+                           "((environment :status ok :message \"fine\" :time \"2026-10-01T10:00:00+0000\") (ai :status warn :message nil :time \"2026-10-01T10:01:00+0000\"))")
+    (should (eq (plist-get (alist-get 'environment (drgnx-onboard-state)) :status) 'ok))
+    (should-not (drgnx-config-problem 'onboarding))
+    (drgnx-onboard--record 'projects 'info "none")
+    (let ((state (drgnx-onboard-state)))
+      (should (equal (mapcar #'car state) '(environment ai projects)))
+      (should (equal (plist-get (alist-get 'environment state) :message) "fine"))
+      (should (eq (plist-get (alist-get 'ai state) :status) 'warn))
+      (should (equal (plist-get (alist-get 'projects state) :message) "none")))
+    (should-not (drgnx-onboard-test--baks))))
+
+(ert-deftest drgnx-onboard/record-replaces-its-step-and-keeps-other-entries-and-keys ()
+  (drgnx-test-with-config
+    (drgnx-test-config-put 'onboarding
+                           "((a :status ok :message \"x\" :time \"t\" :extra 7) (b :status fail :message \"y\" :time \"t\"))")
+    (drgnx-onboard--record 'b 'ok "fixed")
+    (let ((state (drgnx-onboard-state)))
+      (should (equal (mapcar #'car state) '(a b)))
+      (should (equal (plist-get (alist-get 'a state) :extra) 7))
+      (should (eq (plist-get (alist-get 'b state) :status) 'ok))
+      (should (equal (plist-get (alist-get 'b state) :message) "fixed"))
+      (should (stringp (plist-get (alist-get 'b state) :time))))
+    (should-not (drgnx-config-problem 'onboarding))))
+
+(ert-deftest drgnx-onboard/a-new-file-has-the-header-and-reads-back ()
+  (drgnx-test-with-config
+    (drgnx-onboard--record 'a 'ok "one")
+    (should (string-prefix-p ";;" (drgnx-test-config-text 'onboarding)))
+    (should (equal (mapcar #'car (drgnx-config-reread 'onboarding)) '(a)))))
+
+(ert-deftest drgnx-onboard/two-processes-record-different-steps-both-kept ()
+  (drgnx-test-with-config
+    (drgnx-onboard--record 'seed 'ok "seed")
+    (drgnx-onboard-test--children
+     (list "(drgnx-onboard--record 'one 'ok \"from one\")"
+           "(drgnx-onboard--record 'two 'warn \"from two\")"
+           "(drgnx-onboard--record 'three 'info \"from three\")"))
+    (let ((state (drgnx-config-reread 'onboarding)))
+      (should (equal (sort (mapcar #'car state) (lambda (a b) (string< a b))) '(one seed three two)))
+      (should (equal (plist-get (alist-get 'two state) :message) "from two"))
+      (should (eq (plist-get (alist-get 'three state) :status) 'info)))
+    (should-not (drgnx-onboard-test--baks))))
+
+(ert-deftest drgnx-onboard/an-unreadable-state-is-backed-up ()
+  (drgnx-test-with-config
+    (let* ((bad "((environment :status ok :message \"half")
+           (file (drgnx-test-config-put 'onboarding bad)))
+      (should (drgnx-config-problem 'onboarding))
+      (should-not (drgnx-onboard-state))                    ; reading tolerates it: nothing is done
+      (drgnx-onboard--record 'environment 'ok "again")
+      (let ((baks (drgnx-onboard-test--baks)))
+        (should (= (length baks) 1))
+        (should (equal (drgnx-onboard-test--bytes (car baks)) bad)))   ; the user's bytes, kept
+      (should (eq (plist-get (alist-get 'environment (drgnx-onboard-state)) :status) 'ok))
+      (should-not (drgnx-config-problem 'onboarding))
+      (should (file-exists-p file)))))
+
+(ert-deftest drgnx-onboard/write-state-writes-the-state-whole-and-nil-leaves-an-empty-file ()
+  (drgnx-test-with-config
+    (drgnx-onboard--write-state nil)
+    (should (file-exists-p (drgnx-onboard-state-file)))
+    (should-not (drgnx-onboard-state))
+    (should-not (drgnx-config-problem 'onboarding))
+    (drgnx-onboard--write-state '((a :status ok :message "m" :time "t")))
+    (should (equal (drgnx-config-reread 'onboarding) '((a :status ok :message "m" :time "t"))))))
+
+(ert-deftest drgnx-onboard/an-unreadable-file-is-never-written-by-a-read ()
+  ;; Reading (the Welcome, the doctor, resume) writes nothing, whatever the file holds.
+  (drgnx-test-with-config
+    (let* ((bad "(this is not an alist")
+           (file (drgnx-test-config-put 'onboarding bad)))
+      (drgnx-onboard-state) (drgnx-onboard--welcome-due-p) (drgnx-onboard-run :only '(no-such-step) :non-interactive t)
+      (should (equal (drgnx-onboard-test--bytes file) bad))
+      (should-not (drgnx-onboard-test--baks)))))
+
+(ert-deftest drgnx-onboard/the-doctor-and-the-reference-know-onboarding ()
+  (should (memq 'drgnx-onboard drgnx-doctor-config-features))
+  (should (member '(require drgnx-onboard) drgnx-config-doc-sources)))
 
 ;;; onboard-test.el ends here

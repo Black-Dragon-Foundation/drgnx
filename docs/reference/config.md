@@ -40,6 +40,18 @@ Your own layouts; the built-in ones are not stored.
 | `* :px :panel` | natnum or null | no |  |
 | `* :px :right` | natnum or null | no |  |
 
+## onboarding.eld
+
+Folder: state. Format: 1. Read: when it changes. On a mistake: its last good copy, else the defaults.
+
+Which onboarding steps ran and how they ended, so a run resumes where it stopped.
+
+| Key | Type | Required | What |
+| --- | --- | --- | --- |
+| `* :status` | symbol | no | How the step ended: ok, info, warn or fail |
+| `* :message` | string or null | no | What it said |
+| `* :time` | string or null | no | When it ended |
+
 ## projects.eld
 
 Folder: config. Format: 1. Read: when it changes. On a mistake: its last good copy, else the defaults.
