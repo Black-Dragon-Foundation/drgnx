@@ -324,10 +324,10 @@ Looked at every half second, 60 s at most; never waits."
 
 (defun drgnx-browser--define-commands ()
   (pcase-dolist (`(,id ,title ,fn ,doc)
-                 '((browser-open "Browser: Open URL…" drgnx-browser-open "A web page (or a search) in the pane beside the editor")
-                   (browser-test-report "Browser: Test Report" drgnx-browser-test-report "The newest Playwright report or trace of this project")
-                   (browser-agent-page "Browser: Agent's Page" drgnx-browser-agent-page "The page the agent's Playwright session is on, with its screenshot")
-                   (browser-go "Browser: Go to Address…" drgnx-browser-go "Another address or search in this page")))
+                 '((browser-open "Open URL…" drgnx-browser-open "A web page (or a search) in the pane beside the editor")
+                   (browser-test-report "Test Report" drgnx-browser-test-report "The newest Playwright report or trace of this project")
+                   (browser-agent-page "Agent's Page" drgnx-browser-agent-page "The page the agent's Playwright session is on, with its screenshot")
+                   (browser-go "Go to Address…" drgnx-browser-go "Another address or search in this page")))
     (drgnx-command-define id :category "Browser" :title title :command fn :doc doc :scope 'window
                           :map (and (eq id 'browser-go) '(drgnx-browser . drgnx-browser-mode-map))
                           :when (and (eq id 'browser-go) (lambda () (bound-and-true-p drgnx-browser-mode))))))

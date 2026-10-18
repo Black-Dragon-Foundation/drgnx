@@ -356,3 +356,11 @@
     (drgnx-browser-test--with (ignore))
     (read-event nil nil 0.01)                           ; a terminal frame takes its new size at the next wait
     (should (equal (cons (frame-width) (frame-height)) size))))
+
+(ert-deftest drgnx-browser/command-labels-say-browser-once ()
+  ;; The palette shows "Category: Title": the titles must not repeat the category.
+  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
+    (drgnx-browser--define-commands)
+    (should (equal (mapcar (lambda (id) (drgnx-commands-label (drgnx-commands-get id)))
+                           '(browser-open browser-test-report browser-agent-page browser-go))
+                   '("Browser: Open URL…" "Browser: Test Report" "Browser: Agent's Page" "Browser: Go to Address…")))))
