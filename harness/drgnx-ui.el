@@ -357,9 +357,13 @@ OVERRIDE (from $DRGNX_UI_LAUNCHER) wins."
                                  (drgnx-ui-compositor-argv sess))
                          " "))
          (deadline (+ (float-time) 5)))
+    ;; The caps of the systemd launcher: RuntimeMaxSec (timeout TERMs the group, KILLs it 10 s later) and a
+    ;; virtual-memory ulimit (generous, since a GL stack maps a lot; MemoryMax=3G is the systemd one).
     (call-process "setsid" nil 0 nil "-f" "sh" "-c"
-                  (format "echo $$ > %s; exec %s > %s 2>&1"
-                          (shell-quote-argument (expand-file-name "pgid" run)) cmd
+                  (format "echo $$ > %s; ulimit -v %d 2>/dev/null; exec timeout -k 10 %s %s > %s 2>&1"
+                          (shell-quote-argument (expand-file-name "pgid" run))
+                          (* 16 1024 1024)
+                          (shell-quote-argument (or (getenv "DRGNX_UI_MAX_RUNTIME") "1800")) cmd
                           (shell-quote-argument (expand-file-name "session.log" run))))
     (while (and (not (drgnx-ui--read-pgid run)) (< (float-time) deadline))
       (sleep-for 0.02))

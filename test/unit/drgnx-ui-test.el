@@ -282,6 +282,22 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
     (should (member "RuntimeMaxSec=2700" (let ((process-environment (cons "DRGNX_UI_MAX_RUNTIME=2700" process-environment)))
                                            (drgnx-ui-launch-argv sess))))))
 
+(ert-deftest drgnx-ui/detached-launch-is-capped ()
+  ;; DEFERRED M1-6: the systemd launcher has RuntimeMaxSec and MemoryMax; the detached one needs the same caps
+  (let ((sess (list :name "drgnx-ui-9" :run "/tmp/x" :size "800x600" :socket "/tmp/s"))
+        (calls nil))
+    (cl-letf (((symbol-function 'call-process) (lambda (&rest a) (push a calls) 0))
+              ((symbol-function 'drgnx-ui--read-pgid) (lambda (&rest _) "123")))
+      (drgnx-ui--launch-detached sess)
+      (let ((cmd (car (last (car calls)))))
+        (should (string-match-p "ulimit -v [0-9]+ " cmd))
+        (should (string-match-p "exec timeout -k 10 1800 env " cmd))
+        (should (string-match-p "pgid; ulimit" cmd)))
+      (setq calls nil)
+      (let ((process-environment (cons "DRGNX_UI_MAX_RUNTIME=2700" process-environment)))
+        (drgnx-ui--launch-detached sess))
+      (should (string-match-p "exec timeout -k 10 2700 env " (car (last (car calls))))))))
+
 (ert-deftest drgnx-ui/stop-removes-the-wayland-display-socket ()
   (drgnx-ui-test--with-state
     ;; a name no real session has (tests run next to live shards' sessions: drgnx-ui-4 may be one)
