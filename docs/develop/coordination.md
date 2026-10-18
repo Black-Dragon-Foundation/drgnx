@@ -56,7 +56,8 @@ working from the old one. So the shared state is explicit, versioned, and **enfo
   card-settle (`card`; an `ask` card is a `question`, see below), card-set (`card`, when its state changes: a reopened
   card shows) and job-set (`job`, when its status changes). A held write (behind the log) or a refused claim writes
   nothing. `edit`, `test`, `start`, `stop`, `review`, `accept`, `revert`, `answer` and `comment` are written by their
-  own sources through `drgnx-coord-event-add`.
+  own sources through `drgnx-coord-event-add` — for the hub's sessions and jobs (turns, edits, permissions, verdicts,
+  merges), the hub ([hub.md](hub.md#events)).
 - **What `data` may hold:** small, readable data — a plist of strings, numbers, symbols and lists of those; anything
   else (a buffer, a function, a hash table) is an error. It is printed with `print-length` 100 (a longer list keeps its
   first 100 elements and ends in the symbol `...`) at any depth; over 4096 characters only `(:truncated t :size N)` is kept. It is read back with `read-eval` off. An `edit` event

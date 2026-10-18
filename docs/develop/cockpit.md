@@ -80,9 +80,9 @@ matches a node whose title or path contains it, or one of its ancestors' (case i
 
 A job agent's task comes from its session's `:task`, else the task it holds and works on.
 
-**Two exact bases are still to come.** A job agent's registry `base` should be the task's HEAD at its start, and a
-native session's `start` event should carry `:head`. Until their writers record them (the hub, C3), the job
-branch's fork point (`git diff --merge-base`) or HEAD is used.
+**The exact bases** come from the hub ([hub.md](hub.md#events)): a job agent is registered with the commit its
+worktree starts at as `base`, and a native session's first `start` event carries `:head`. Without them (an agent from
+before, a folder whose HEAD could not be read), the job branch's fork point (`git diff --merge-base`) or HEAD is used.
 
 `--merge-base` needs git 2.30 or later.
 

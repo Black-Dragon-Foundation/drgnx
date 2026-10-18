@@ -268,6 +268,33 @@ ends it (DONE is not called; TASK is no longer busy).  The process."
     (ignore-errors (process-send-eof p))               ; like call-process: git (a hook) reads nothing
     p))
 
+(defun drgnx-job--first-line (file)
+  "FILE's first line, trimmed, or nil when it cannot be read."
+  (ignore-errors (with-temp-buffer (insert-file-contents file nil 0 4096)
+                                   (string-trim (buffer-substring (point-min) (line-end-position))))))
+
+(defun drgnx-job-git-head (dir)
+  "The commit DIR's git checkout is at (HEAD), read from the repository's files — no git process, so it costs nothing
+on an agent's change — or nil (not a checkout, a remote name, a ref it cannot find).  A linked worktree's `.git' file
+and `commondir', loose refs and `packed-refs' are followed."
+  (when-let* (((stringp dir)) ((not (string-match-p "\\`/[^/|:]+[:|]" dir)))   ; never a remote (TRAMP) name
+              (top (locate-dominating-file dir ".git"))
+              (dotgit (expand-file-name ".git" top))
+              (gitdir (if (file-directory-p dotgit) dotgit
+                        (let ((line (drgnx-job--first-line dotgit)))
+                          (and line (string-match "\\`gitdir: *\\(.+\\)" line) (expand-file-name (match-string 1 line) top)))))
+              (head (drgnx-job--first-line (expand-file-name "HEAD" gitdir))))
+    (if (not (string-match "\\`ref: *\\(refs/.+\\)" head))
+        (and (string-match-p "\\`[0-9a-f]\\{40,64\\}\\'" head) head)
+      (let* ((ref (match-string 1 head))
+             (common (let ((c (drgnx-job--first-line (expand-file-name "commondir" gitdir)))) (if c (expand-file-name c gitdir) gitdir)))
+             (sha (or (drgnx-job--first-line (expand-file-name ref gitdir)) (drgnx-job--first-line (expand-file-name ref common))
+                      (ignore-errors
+                        (with-temp-buffer
+                          (insert-file-contents (expand-file-name "packed-refs" common))
+                          (and (re-search-forward (concat "^\\([0-9a-f]+\\) " (regexp-quote ref) "$") nil t) (match-string 1)))))))
+        (and sha (string-match-p "\\`[0-9a-f]\\{40,64\\}\\'" sha) sha)))))
+
 (defun drgnx-job--repo (job) (plist-get (drgnx-coord-job job) :repo))
 (defun drgnx-job--job-tree (job) (expand-file-name (format ".claude/worktrees/%s/" job) (drgnx-job--repo job)))
 (defun drgnx-job--task-tree (job n) (expand-file-name (format ".claude/worktrees/%s-%d/" job n) (drgnx-job--repo job)))
@@ -335,6 +362,10 @@ process of its own: the agent starts when it is there."
   (let* ((n (plist-get task :n)) (tree (drgnx-job--task-tree id n))
          (profile (or profile (car (drgnx-job-route (intern (or (plist-get task :role) "implement"))))))
          (s (drgnx-agents-start profile tree (plist-get task :id) id))
+         ;; its edits are against where its worktree starts (the cockpit's diffs), not where the job's branch is later
+         (_ (with-demoted-errors "drgnx job: agent not registered: %S"
+              (drgnx-coord-agent-register :id (drgnx-agent-session-id s) :name (drgnx-agent-session-name s) :cwd tree :worktree tree
+                                          :branch (format "job/%s-%d" id n) :base (drgnx-job-git-head tree) :task (plist-get task :id))))
          (body (plist-get (seq-find (lambda (x) (= (plist-get x :n) n)) (plist-get (plist-get (drgnx-coord-job id) :data) :tasks)) :body)))
     (drgnx-coord-force-status (plist-get task :id) "claimed" (drgnx-agent-session-id s))
     (puthash (drgnx-agent-session-id s)
@@ -478,7 +509,7 @@ job on."
         (remhash sid drgnx-job--reviewing)
         (let ((verdict (drgnx-job--verdict s)))
           (drgnx-agents-kill s)
-          (drgnx-job--reviewed job reviewer verdict)))))
+          (drgnx-job--reviewed job reviewer verdict sid)))))
     (when (or (eq (drgnx-agent-session-status s) 'exited)
               (and (drgnx-job--turn-over-p s)
                    (equal (plist-get (drgnx-coord-task (drgnx-agent-session-task s)) :status) "in-review")))
@@ -528,9 +559,14 @@ commit to the job's branch, a card: there is nothing to review."
           ((string-match "\\`VERDICT: *pass" line) 'pass)
           ((string-match "\\`VERDICT: *fail:? *\\(.*\\)" line) (cons 'fail (string-trim (match-string 1 line)))))))
 
-(defun drgnx-job--reviewed (id task-id verdict)
-  "TASK-ID of job ID was reviewed: pass → merged; fail → back to an agent with the reasons (the user after
-`drgnx-job-review-tries'); no verdict → the user."
+(defun drgnx-job--reviewed (id task-id verdict &optional reviewer)
+  "TASK-ID of job ID was reviewed (by session REVIEWER): pass → merged; fail → back to an agent with the reasons (the
+user after `drgnx-job-review-tries'); no verdict → the user.  Each is a `review' event (:verdict pass or fail; no
+data without a verdict)."
+  (drgnx-coord-event-add-best-effort
+   :agent reviewer :job id :task task-id :kind "review"
+   :summary (pcase verdict ('pass "pass") (`(fail . ,reasons) (format "fail: %s" reasons)) (_ "the reviewer gave no verdict"))
+   :data (pcase verdict ('pass (list :verdict 'pass)) (`(fail . ,_) (list :verdict 'fail))))
   (let* ((job (drgnx-coord-job id)) (data (plist-get job :data)) (task (drgnx-coord-task task-id)))
     (pcase verdict
       ('pass (drgnx-job--merge id task))
@@ -564,7 +600,10 @@ goes to the user.  The merge itself is a git process of its own (a hook may be s
   (let ((tree (drgnx-job--job-tree id)) (tid (plist-get task :id)))
     (remhash tid drgnx-job--busy)
     (if (eql 0 (car merged))
-        (drgnx-coord-force-status tid "done" (plist-get task :agent))
+        (progn (drgnx-coord-force-status tid "done" (plist-get task :agent))
+               (drgnx-coord-event-add-best-effort :agent (plist-get task :agent) :job id :task tid :kind "status"
+                                                  :summary (format "%s merged into job/%s" tid id)
+                                                  :data (list :status "merged" :into (concat "job/" id))))
       (let ((files (split-string (cdr (drgnx-job--git tree "diff" "--name-only" "--diff-filter=U")) "\n" t)))
         (unless (eql 0 (car (drgnx-job--git tree "merge" "--abort")))
           (drgnx-job--git tree "reset" "--merge"))             ; no merge to abort (git was cut off before it began one)
@@ -950,6 +989,9 @@ its worktree done at once; anything else waits for the user as a card (nil: the 
                     (not (equal (drgnx-job--role s) "review")))
                (progn (make-directory (file-name-directory path) t)
                       (let ((coding-system-for-write 'utf-8-unix)) (write-region content nil path nil 'silent))
+                      (drgnx-coord-event-add-best-effort :agent (drgnx-agent-session-id s) :job job :task task :kind "edit"
+                                                         :summary (format "wrote %s" (file-name-nondirectory path))
+                                                         :data (list :root tree :paths (list path)))
                       (list :result nil))
              (drgnx-job--card job task "write" (format "write %s" path) s (list :request id))
              nil)))))))

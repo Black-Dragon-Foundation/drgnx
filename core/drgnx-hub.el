@@ -296,7 +296,9 @@ a pid.  How many went."
     ("gateway/register" (drgnx-hub-register params))
     ("gateway/unregister" (drgnx-gateway-unregister (plist-get params :token)) (drgnx-hub--save-registrations) t)
     ("gateway/keys" (drgnx-hub--set-keys (plist-get params :keys)) t)
+    ("events/since" (drgnx-hub--events-since params))
     ("coord/notify" (run-at-time 0 nil #'drgnx-hub--deliver)   ; a coordination server wrote: deliver now, look for clashes
+     (drgnx-hub--events-soon)                                    ; and send its events
      (run-at-time 0 nil (lambda () (dolist (j (drgnx-coord-jobs "running")) (with-demoted-errors "drgnx job: %S" (drgnx-job-clash-scan j)))))
      t)   ; a coordination server wrote: deliver now
     ("spend" (drgnx-work-db-spend :job (plist-get params :job) :task (plist-get params :task) :agent (plist-get params :agent)))
@@ -326,11 +328,12 @@ a pid.  How many went."
          ("deliver-queue" (drgnx-agents-deliver-queue s))
          ("unqueue" (drgnx-agents-unqueue s n))
          ("requeue" (drgnx-agents-requeue s n (plist-get params :text)))
-         ("review" (drgnx-agents-finish-review
-                    s (or (seq-find (lambda (r) (equal (format "%s" (plist-get r :id)) (format "%s" (plist-get params :item))))
-                                    (drgnx-agent-session-reviews s))
-                          (error "No such review"))
-                    (plist-get params :reject)))
+         ("review" (let ((item (or (seq-find (lambda (r) (equal (format "%s" (plist-get r :id)) (format "%s" (plist-get params :item))))
+                                             (drgnx-agent-session-reviews s))
+                                   (error "No such review")))
+                         (reject (drgnx-hub--value (plist-get params :reject))))
+                     (drgnx-agents-finish-review s item reject)
+                     (unless reject (drgnx-hub--review-edit s item))))
          (op (error "No action %s" op)))
        t))
     ;; jobs (drgnx-job.el): every answer is the job as `drgnx-job-summary' has it
@@ -455,11 +458,140 @@ is logged: it never stops the hub from starting."
 (defun drgnx-hub--agent-changed (s)
   "Session S changed: tell subscribers soon (one message per burst of changes)."
   (with-demoted-errors "drgnx hub: sessions not kept: %S" (drgnx-hub--save-sessions))
+  (with-demoted-errors "drgnx hub: no events: %S" (drgnx-hub--session-events s))
   (when (drgnx-agents-free-p s) (run-at-time 0.1 nil #'drgnx-hub--deliver))   ; free again: what waited goes now
   (let ((id (drgnx-agent-session-id s)))
     (unless (gethash id drgnx-hub--flush-timers)
       (puthash id (run-at-time 0.05 nil (lambda () (remhash id drgnx-hub--flush-timers) (drgnx-hub--flush s)))
                drgnx-hub--flush-timers))))
+
+;;;; Events: what the agents here do, in the store's event log, and to subscribers in batches
+
+(defconst drgnx-hub-events-interval 0.25 "Seconds between two `events' broadcasts, at the most often.")
+(defconst drgnx-hub--events-batch 500 "The most events one `events' broadcast carries; more go in the next one.")
+(defvar drgnx-hub--events-sent 0 "The id of the last event subscribers were sent.")
+(defvar drgnx-hub--events-timer nil "The `events' broadcast that is due (`drgnx-hub--events-soon').")
+(defvar drgnx-hub--event-state (make-hash-table :test #'equal)
+  "Session id → what its last events were derived from (`drgnx-hub--session-events'): (:busy BOOL :from N
+:permissions ((REQUEST-ID . QUESTION-EVENT-ID)…) :tools (TOOL-CALL-ID…)).  A session's entry goes when it exits, and
+all of them when the hub stops.")
+
+(defun drgnx-hub--event-add (s kind summary &optional data)
+  "Add an event of KIND by session S (its job and task) — best effort: a busy store drops it — and broadcast soon.
+Its id, or nil."
+  (prog1 (drgnx-coord-event-add-best-effort :agent (drgnx-agent-session-id s) :job (drgnx-agent-session-job s)
+                                            :task (drgnx-agent-session-task s) :kind kind :summary summary :data data)
+    (drgnx-hub--events-soon)))
+
+(defun drgnx-hub--edit-paths (paths)
+  "PATHS as an `edit' event's data: at most 100 of them, then :more N for the rest."
+  (append (list :paths (seq-take paths 100)) (and (nthcdr 100 paths) (list :more (- (length paths) 100)))))
+
+(defun drgnx-hub--tool-edits (s from seen)
+  "Session S's edit tool calls (kind edit, delete or move; children too) completed in its entries from index FROM,
+whose ids are not in SEEN: each becomes an `edit' event with the paths of its diffs.  The ids now seen."
+  (cl-labels ((walk (entries)
+                (dolist (e entries)
+                  (when (eq (plist-get e :type) 'tool)
+                    (let ((id (plist-get e :id)))
+                      (when (and (member (plist-get e :kind) '("edit" "delete" "move")) (equal (plist-get e :status) "completed")
+                                 id (not (member id seen)))
+                        (push id seen)
+                        (let ((paths (delete-dups (delq nil (mapcar (lambda (c) (and (equal (plist-get c :type) "diff")
+                                                                                     (stringp (plist-get c :path)) (plist-get c :path)))
+                                                                    (append (plist-get e :content) nil))))))
+                          (drgnx-hub--event-add s "edit" (format "%s" (or (plist-get e :title) "an edit"))
+                                                (and paths (append (list :root (drgnx-agent-session-cwd s)) (drgnx-hub--edit-paths paths))))))
+                      (walk (plist-get e :children)))))))
+    (walk (nthcdr from (drgnx-agent-session-entries s))))
+  seen)
+
+(defun drgnx-hub--session-events (s)
+  "What changed in session S as events, from what it was the last time (`drgnx-hub--event-state'): a turn's start
+\(`start', with the HEAD of its folder as :head) and end (`stop'); an edit tool call it completed (`edit', with the
+paths of its diffs); a permission it asks (`question', :permission ID) and the answer to it (`answer', :question
+EVENT-ID).  An exited session's open permissions are answered (they never will be)."
+  (let* ((id (drgnx-agent-session-id s)) (old (gethash id drgnx-hub--event-state))
+         (exited (eq (drgnx-agent-session-status s) 'exited))
+         (busy (eq (drgnx-agent-session-status s) 'busy))
+         (from (if (and busy (not (plist-get old :busy))) (length (drgnx-agent-session-entries s)) (or (plist-get old :from) 0)))
+         (asked (plist-get old :permissions)) (now nil) (tools (plist-get old :tools)))
+    (when (and busy (not (plist-get old :busy)))
+      (setq tools nil)
+      (drgnx-hub--event-add s "start" "turn started"
+                            (when-let* ((head (drgnx-job-git-head (drgnx-agent-session-cwd s)))) (list :head head))))
+    (when (or busy (plist-get old :busy)) (setq tools (drgnx-hub--tool-edits s from tools)))
+    (unless exited
+      (dolist (p (drgnx-agent-session-permissions s))
+        (let ((pid (plist-get p :id)))
+          (push (or (assoc pid asked)
+                    (cons pid (drgnx-hub--event-add s "question" (format "permission: %s" (or (plist-get p :title) "a tool call"))
+                                                    (list :permission pid))))
+                now))))
+    (dolist (a asked)
+      (when (and (cdr a) (not (assoc (car a) now)))
+        (drgnx-hub--event-add s "answer" (if exited "permission dropped: the agent ended" "permission answered")
+                              (list :question (cdr a) :permission (car a)))))
+    (when (and (plist-get old :busy) (not busy))
+      (drgnx-hub--event-add s "stop" (let ((last (car (last (drgnx-agent-session-entries s)))))
+                                       (if (eq (plist-get last :type) 'stop) (format "turn ended (%s)" (plist-get last :stop)) "turn ended"))))
+    (if exited (remhash id drgnx-hub--event-state)
+      (puthash id (list :busy busy :from from :permissions (nreverse now) :tools tools) drgnx-hub--event-state))))
+
+(defun drgnx-hub--review-edit (s item)
+  "The user accepted session S's write request ITEM (a review): an `edit' event of its path."
+  (drgnx-hub--event-add s "edit" (format "wrote %s" (file-name-nondirectory (plist-get item :path)))
+                        (append (list :root (drgnx-agent-session-cwd s)) (drgnx-hub--edit-paths (list (plist-get item :path))))))
+
+(defun drgnx-hub--events-soon ()
+  "Send subscribers the new events soon: one `events' event per `drgnx-hub-events-interval' at the most often."
+  (unless (memq drgnx-hub--events-timer timer-list)
+    (setq drgnx-hub--events-timer (run-at-time drgnx-hub-events-interval nil #'drgnx-hub--events-send))))
+
+(defun drgnx-hub--events-check ()
+  "Events another process added (a coordination server, the CLI) go out too (the hub's tick)."
+  (when (> (or (caar (sqlite-select (drgnx-work-db) "select max(id) from event")) 0) drgnx-hub--events-sent)
+    (drgnx-hub--events-soon)))
+
+(defun drgnx-hub--event-json (e)
+  "Event E for JSON: (:id :at :agent :job :task :kind :summary :data), its data as Lisp text (read it with `read-eval'
+off) so nothing in it is lost."
+  (list :id (plist-get e :id) :at (plist-get e :at) :agent (plist-get e :agent) :job (plist-get e :job)
+        :task (plist-get e :task) :kind (plist-get e :kind) :summary (plist-get e :summary)
+        :data (let ((d (plist-get e :data))) (and d (drgnx-hub--lisp d)))))
+
+(defun drgnx-hub--events-send ()
+  "Broadcast `events' (:since ID :last ID :events […]): the events added since the last broadcast."
+  (setq drgnx-hub--events-timer nil)
+  (with-demoted-errors "drgnx hub: events not sent: %S"
+    (let ((since drgnx-hub--events-sent) (new (drgnx-coord-events :since drgnx-hub--events-sent :limit drgnx-hub--events-batch)))
+      (when new
+        (setq drgnx-hub--events-sent (plist-get (car (last new)) :id))
+        (drgnx-hub--broadcast 'events (list :since since :last drgnx-hub--events-sent
+                                            :events (vconcat (mapcar #'drgnx-hub--event-json new))))
+        (when (= (length new) drgnx-hub--events-batch) (drgnx-hub--events-soon))))))
+
+(defun drgnx-hub--events-since (params)
+  "`events/since' for a client catching up: the events after :since (0), oldest first, at most :limit (200, at most
+1000) — (:since ID :last ID :events […]), as `events' sends them."
+  (let* ((since (let ((v (drgnx-hub--value (plist-get params :since)))) (if (natnump v) v 0)))
+         (limit (let ((v (drgnx-hub--value (plist-get params :limit)))) (if (and (natnump v) (> v 0)) (min v 1000) 200)))
+         (rows (drgnx-coord-events :since since :limit limit)))
+    (list :since since :last (if rows (plist-get (car (last rows)) :id) since)
+          :events (vconcat (mapcar #'drgnx-hub--event-json rows)))))
+
+(declare-function drgnx-statusbar-note-tests "drgnx-statusbar")
+(defvar read-eval)                      ; so a let binds it dynamically in compiled code
+
+(defun drgnx-hub--note-tests (event data)
+  "In an editor: the test runs among the `events' the hub sent reach the status bar (`drgnx-statusbar-note-tests',
+when it is loaded)."
+  (when (and (equal event "events") (fboundp 'drgnx-statusbar-note-tests))
+    (dolist (e (append (plist-get data :events) nil))
+      (when (equal (plist-get e :kind) "test")
+        (let ((d (and (stringp (plist-get e :data)) (ignore-errors (let ((read-eval nil)) (car (read-from-string (plist-get e :data))))))))
+          (when (and (proper-list-p d) (or (natnump (plist-get d :passed)) (natnump (plist-get d :failed))))
+            (drgnx-statusbar-note-tests (or (plist-get d :passed) 0) (or (plist-get d :failed) 0) (plist-get e :agent))))))))
 
 ;;;; Delivery: messages and decisions reach agents without interrupting them
 
@@ -509,7 +641,8 @@ for an agent that is not here (or exited) stays queued."
 (defun drgnx-hub--housekeeping ()
   "Renew the claims of the agents working here; release those whose lease ran out, and say so."
   (dolist (s (drgnx-hub--live-sessions)) (drgnx-coord-renew (drgnx-agent-session-id s)))
-  (dolist (r (drgnx-coord-release-stale)) (drgnx-hub--broadcast 'lease-released r)))
+  (dolist (r (drgnx-coord-release-stale)) (drgnx-hub--broadcast 'lease-released r))
+  (drgnx-coord-events-prune-daily))     ; at most once a day; never signals
 
 (defun drgnx-hub--tick ()
   (with-demoted-errors "drgnx hub: %S"
@@ -517,6 +650,7 @@ for an agent that is not here (or exited) stays queued."
     (drgnx-job-tick)
     (drgnx-hub--prune-registrations)
     (drgnx-hub--drop-stuck)
+    (drgnx-hub--events-check)
     (when (zerop (% (cl-incf drgnx-hub--ticks) 30)) (drgnx-hub--housekeeping))))
 
 (defun drgnx-hub--flush (s)
@@ -597,6 +731,8 @@ Signals an error when a hub already serves there."
   (add-hook 'drgnx-agents-error-functions #'drgnx-job--agent-error)
   (add-hook 'drgnx-gateway-event-functions #'drgnx-job--gateway-event)
   (setq drgnx-hub--tick-timer (run-at-time 2 2 #'drgnx-hub--tick))
+  ;; subscribers get the events from now on (`events/since' has the ones before)
+  (setq drgnx-hub--events-sent (or (caar (sqlite-select (drgnx-work-db) "select max(id) from event")) 0))
   (setq drgnx-hub--started (format-time-string "%FT%T%z")
         drgnx-hub--server
         (make-network-process :name "drgnx-hub" :family 'local :server t :service socket :noquery t
@@ -630,6 +766,9 @@ Signals an error when a hub already serves there."
   (setq drgnx-hub--exit-timer nil)
   (when (timerp drgnx-hub--tick-timer) (cancel-timer drgnx-hub--tick-timer))
   (setq drgnx-hub--tick-timer nil)
+  (when (timerp drgnx-hub--events-timer) (cancel-timer drgnx-hub--events-timer))
+  (setq drgnx-hub--events-timer nil)
+  (clrhash drgnx-hub--event-state)
   (clrhash drgnx-hub--told)
   (clrhash drgnx-hub--sent)
   (setq drgnx-hub--saved-sessions nil)
@@ -695,6 +834,7 @@ error, or when it does not answer."
 (defun drgnx-hub-disconnect ()
   (dolist (c (list drgnx-hub--client drgnx-hub--events drgnx-hub--subscribing)) (when (process-live-p c) (delete-process c)))
   (setq drgnx-hub--client nil drgnx-hub--events nil drgnx-hub--subscribing nil)
+  (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--note-tests)
   (clrhash drgnx-hub--pending))
 
 (defun drgnx-hub-running-p ()
@@ -766,6 +906,7 @@ hand it the keys this Emacs holds.  t, or an error saying why not."
                                   (when (eq drgnx-hub--subscribing p) (setq drgnx-hub--subscribing nil))
                                   (run-hooks 'drgnx-hub-disconnect-functions))))
       (drgnx-hub--send c (list :id 0 :method "subscribe" :params (make-hash-table)))
+      (add-hook 'drgnx-hub-event-functions #'drgnx-hub--note-tests)   ; removed by `drgnx-hub-disconnect'
       ;; a hub keeps keys in memory only: one that restarted has none, so each new subscription gives them again
       (with-demoted-errors "drgnx hub: keys not handed over: %S" (drgnx-hub--send-keys)))))
 

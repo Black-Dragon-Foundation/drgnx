@@ -59,7 +59,8 @@ coordination server's `coord/notify` checks the same. One JSON object per line:
 | `agents/send` `{id, text}`, `agents/stop` `{id}`, `agents/kill` `{id}` | `true` |
 | `agents/permission` `{id, request, option}` | `true` — the user's answer: the only way a permission is answered |
 | `agents/do` `{id, op, n?, text?, item?, reject?}` | `true`: `deliver-queue`, `unqueue`, `requeue`, `review` |
-| `coord/notify` (a notification: no id, no answer) | delivery runs now ([coordination.md](coordination.md)) |
+| `coord/notify` (a notification: no id, no answer) | delivery runs now ([coordination.md](coordination.md)), and the new events go out |
+| `events/since` `{since?, limit?}` | `{since, last, events: [...]}`: the events after `since` (0), oldest first, at most `limit` (200; at most 1000) |
 | `job/propose` `{plan, repo?, budget?, auto?}`, `job/approve` `{id, budget?}`, `job/stop` `{id}`, `job/resume` `{id, budget?}` | the job (`drgnx-job-summary`) |
 | `job/status` `{id?, decisions?}` | the job (with its decision log when `decisions` is true), or `{jobs: [...]}` |
 | `job/card` `{card, action, arg?}` | the job, after the user's action on a card (once: a settled card is an error) |
@@ -84,7 +85,7 @@ Snapshots and transcript entries travel as **printed Lisp** (`lisp`,
 agent, from, to, why); from sessions `agent` (id, seq, lisp — the snapshot) and
 `agent-entries` (id, seq, entries: [[index, lisp]…], the entries new or changed since the last time — entries change
 in place: chunks appended, tool calls updated), at most one of each per session per 50 ms; `lease-released` (task,
-agent, job).
+agent, job); `events` (below).
 
 **Mirrors** (`core/drgnx-agents-mirror.el`): the editing Emacs keeps a `drgnx-agent-session` per hub session (`remote`
 = its id) filled from these events; an action on a mirror goes to the hub (`drgnx-agents--remote`, never waiting).
@@ -106,6 +107,30 @@ and the next call subscribes again; each new one hands over the keys this Emacs 
 runner sets `DRGNX_NO_HUB_START=1`: a test never starts a hub that would outlive the suite unless it unsets it (the
 hub's own tests do, and stop what they start). It also sets `DRGNX_HUB_PARENT_PID` to its own pid, which a hub
 inherits: a hub whose parent is gone exits (checked each second), so an interrupted run leaves none behind.
+
+## Events
+
+The hub turns what happens into events in the store's event log ([coordination.md](coordination.md), `event`):
+
+- **Native sessions** (`drgnx-hub--session-events`, on each change of a session): a turn's start (`start`, data
+  `:head` — the commit its folder is at, read from the repository's files by `drgnx-job-git-head`, never a git
+  process) and its end (`stop`); an edit tool call it completed (`edit`: kind edit, delete or move, with the paths of
+  its diffs, at most 100 then `:more N`), once per call, before the turn's `stop`; a permission it asks (`question`,
+  `:permission ID`) and its answer (`answer`, `:question EVENT-ID`) — a session that exits answers its open ones. A
+  write request the user accepts (`agents/do` `review`) is an `edit` of its path; a rejected one is none.
+- **Jobs** (`core/drgnx-job.el`): a reviewer's verdict (`review`, `:verdict pass` or `fail`, the reasons in the
+  summary; no data without a verdict); a merge into the job's branch (`status`, `:status "merged" :into job/ID`); a
+  write a job agent's policy allows (`edit`). A task's agent is registered (`drgnx-coord-agent-register`) with its
+  worktree, branch and `base`, the commit the worktree is at when it starts: the cockpit diffs its edits against it.
+- **Retention:** the hub's housekeeping (every 30 ticks) calls `drgnx-coord-events-prune-daily`.
+
+Subscribers get them as `events` (`:since ID :last ID :events [{id, at, agent, job, task, kind, summary, data}…]`,
+`data` as printed Lisp — read it with `read-eval` off), at most one every `drgnx-hub-events-interval` (0.25 s) and
+500 a time: the hub's own adds and `coord/notify` schedule a broadcast, and its tick (2 s) catches what other
+processes wrote. A new hub starts after the last event there is; a client catching up asks `events/since`. In an
+editor, the `test` events with counts reach the status bar (`drgnx-statusbar-note-tests`, when it is loaded) through
+`drgnx-hub--note-tests`, which `drgnx-hub-connect` adds to `drgnx-hub-event-functions` and `drgnx-hub-disconnect`
+removes.
 
 ## Sessions across a restart
 
