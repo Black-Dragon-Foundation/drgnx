@@ -169,6 +169,39 @@
     (should (equal drgnx-job-ui--badge ""))
     (should-not drgnx-job-ui--badge-job)))
 
+;; From pass A (M9b4-2, M9b4-8): what a clash card says when no recommendation comes.
+(ert-deftest drgnx-job-ui/a-clash-without-a-recommendation-says-why ()
+  (drgnx-job-ui-test--with
+    (let ((s (copy-tree drgnx-job-ui-test--summary)))
+      (let ((d (plist-get (nth 1 (plist-get s :cards)) :data)))
+        (plist-put d :recommendation :null))
+      (drgnx-job-ui--draw "j1" (copy-tree s))
+      (should (string-search "reading both sides" (drgnx-job-ui-test--text 'cards)))
+      (plist-put (plist-get (nth 1 (plist-get s :cards)) :data) :no-recommendation t)
+      (drgnx-job-ui--draw "j1" (copy-tree s))
+      (should (string-search "gave no recommendation" (drgnx-job-ui-test--text 'cards)))
+      (should-not (string-search "reading both sides" (drgnx-job-ui-test--text 'cards)))
+      (plist-put (plist-get (nth 1 (plist-get s :cards)) :data) :reviewer-gone t)
+      (drgnx-job-ui--draw "j1" (copy-tree s))
+      (should (string-search "No reviewer is coming" (drgnx-job-ui-test--text 'cards)))
+      (should-not (string-search "reading both sides" (drgnx-job-ui-test--text 'cards))))))
+
+(ert-deftest drgnx-job-ui/discuss-opens-transcript ()
+  (drgnx-job-ui-test--with
+    (let ((opened nil) (calls nil)
+          (s (copy-tree drgnx-job-ui-test--summary)))
+      (plist-put (plist-get (nth 1 (plist-get s :cards)) :data) :reviewer "s-rev")   ; the reviewer's session, on the card
+      (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "why A?"))
+                ((symbol-function 'drgnx-job-ui--schedule) #'ignore)
+                ((symbol-function 'drgnx-job-ui--transcript) (lambda (id) (push id opened)))
+                ((symbol-function 'drgnx-hub-call)
+                 (lambda (method params &optional cb)
+                   (push (cons method params) calls)
+                   (funcall cb (if (equal method "job/status") s t) nil))))
+        (drgnx-job-ui--act "j1" (nth 1 (plist-get s :cards)) "discuss"))
+      (should (equal (assoc "job/card" calls) '("job/card" :card 8 :action "discuss" :arg "why A?")))
+      (should (equal opened '("s-rev"))))))
+
 ;; M9b4-1: a message that needs no answer is dismissed, not replied to.
 (ert-deftest drgnx-job-ui/dismiss-clears-the-badge ()
   (drgnx-job-ui-test--with

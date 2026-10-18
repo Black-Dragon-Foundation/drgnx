@@ -48,7 +48,7 @@ each acts once. Messages agents send you are listed with a Reply and a Dismiss.
 an agent deciding about another task, a task changing files a won't-build decision covers (its review waits), an
 agent that keeps acting on an old decision log, two tasks changing the same files (a note, nothing waits). A clash
 card shows both sides and the decisions each relies on; a reviewer agent recommends one, and you **Accept the
-reviewer**, **Pick A**, **Pick B** or **Discuss** (talk it through with the reviewer). Your choice becomes your
+reviewer**, **Pick A**, **Pick B** or **Discuss** (talk it through with the reviewer; its transcript opens). When no recommendation is coming the card says so: the reviewer gave none, or none is coming (Discuss starts one again). Your choice becomes your
 decision, and every agent of the job is told. Your own decisions always win: an agent contradicting one is overruled
 at once, without a card. Every command goes through the hub, starting it when needed
 ([agents.md](agents.md#the-hub-and-the-gateway)).
