@@ -988,6 +988,20 @@ What the `areas` backend does with the edges:
 - Redefining a kind with another home takes it out of its old dock; an editor kind's place rule goes when its
   `:buffer` or home changes.
 
+## Read and write through drgnx-file
+
+A file drgnx keeps (a config file, a state file, a report) is read and written through `drgnx-file`
+(`core/drgnx-file.el`): it takes a lock, writes atomically, backs the file up and refuses to overwrite one it
+could not read or one a newer drgnx wrote. Do not call `with-temp-file`, `write-region` or `rename-file`, or read
+a file by `insert-file-contents` followed by `read`, in `core/`, `wb/` or `modules/`.
+`test/unit/lint-files-test.el` reads those files form by form and fails on such a form (a flagged site is
+`(FILE FN WHAT)`; `WHAT` is the function, or `read-site`) unless `test/lint-files-allowed.eld` has a row
+`(:file F :fn FN :what WHAT :why "…" :until N)`. `:until` is the task of the config-layer plan that ports the
+site, and the port deletes the row (a row that matches nothing fails the second test). A row marked `never` is a
+site that is not drgnx's own file, and its `:why` starts with the reason: `"a user's file"`, `"a temporary file"`,
+`"a directory move"`, `"its own lock protocol"`, `"age writes it"` or `"a developer tool"`. A new site is a new
+row only when it is one of those.
+
 ## Tests
 
 Batch: `test/unit/core-*-test.el`. The batch runner (`harness/run-ert.el`) gives the suite a temp HOME and drgnx
