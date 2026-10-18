@@ -199,7 +199,11 @@ again, even after you archived or deleted it (drgnx remembers what it imported);
 syntax (tags, a property drawer, COMMENT) is quoted. The board is edited as text and written back with its
 encoding, line endings, file modes and symlink; nothing on it is moved or rewritten. If the board has unsaved
 changes in this Emacs, or another Emacs is editing it, the step stops and asks you to save first. Projects are also listed in `~/.config/drgnx/projects.eld` and
-remembered by project.el (its list lives in `~/.local/state/drgnx/projects`).
+remembered by project.el (its list lives in `~/.local/state/drgnx/projects`). A `projects.eld` with a mistake is never
+overwritten: Import Projects stops before it touches the board and says where the mistake is (and likewise for a file a
+newer drgnx wrote); the work tracker and search keep using its last good copy meanwhile. Two imports at once both land:
+`projects.eld` and the record of what was imported (`projects-imported.eld`) are changed under a lock, adding to what is
+there. Comments and keys of your own in `projects.eld` stay as they are.
 
 The scan goes at most three levels below each root, never into a repository, a hidden or symlinked directory or
 `node_modules`/`target`/`build`/`dist`, and stops after five seconds — then the step warns and says where it stopped
