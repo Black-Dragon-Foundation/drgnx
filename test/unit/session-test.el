@@ -160,8 +160,9 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
   (drgnx-session-test--with (:keep-running t)
     (drgnx-session-set-keep-running nil)
     (should-not drgnx-keep-running)
-    (should (equal (with-temp-buffer (insert-file-contents (expand-file-name "session.eld" dir)) (read (current-buffer)))
-                   '(:keep-running nil)))
+    (let ((data (with-temp-buffer (insert-file-contents (expand-file-name "session.eld" dir)) (read (current-buffer)))))
+      (should (plist-member data :keep-running))
+      (should-not (plist-get data :keep-running)))
     (setq drgnx-keep-running t)
     (drgnx-session-load)                      ; what the next start does
     (should-not drgnx-keep-running)
@@ -171,9 +172,11 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
     (should (eq drgnx-keep-running t))
     ;; no file, or a broken one: the default stays
     (delete-file (expand-file-name "session.eld" dir))
+    (drgnx-config-reread 'session)            ; the config layer reads session.eld once per start
     (drgnx-session-load)
     (should (eq drgnx-keep-running t))
     (write-region "(:keep-running" nil (expand-file-name "session.eld" dir))
+    (drgnx-config-reread 'session)
     (drgnx-session-load)
     (should (eq drgnx-keep-running t))))
 
