@@ -1,0 +1,27 @@
+# Real-tool tier: the live tests that need an external program drgnx drives (test/live/dape-live-test.el: dape with
+# debugpy; test/live/mermaid-live-test.el: the Markdown module's job with mmdc and Chromium).  Without them those
+# tests skip, so the host and CI tiers never need these.  Build it only with >= 3 GB of memory free, and cap every
+# build and run: podman build --memory 3g --memory-swap 3g -t drgnx-test-tools:f45 -f Containerfile.tools .
+# (docs/develop/harness.md, "Real-tool tests").
+FROM registry.fedoraproject.org/fedora:45
+RUN dnf -y install emacs-pgtk diffutils git python3 python3-pip nodejs nodejs-npm chromium-headless curl \
+    && dnf clean all
+
+# debugpy (Fedora has no package for it).
+RUN python3 -m pip install --no-cache-dir debugpy==1.8.22
+
+# dape at the version etc/drgnx.lock.eld pins, checked against its checksum, into a directory the tests find through
+# DRGNX_TOOLS_ELPA (they never use the user's ~/.config/emacs/elpa).
+ENV DRGNX_TOOLS_ELPA=/opt/drgnx-elpa
+RUN curl -sSfL -o /tmp/dape.tar https://elpa.gnu.org/packages/dape-0.27.1.tar \
+    && echo "67d5f1d4f5ad5abc66a65582f5ce2c5125f864ea5256afb423fc79f5000243d9  /tmp/dape.tar" | sha256sum -c - \
+    && mkdir -p "$DRGNX_TOOLS_ELPA" && tar -xf /tmp/dape.tar -C "$DRGNX_TOOLS_ELPA" && rm /tmp/dape.tar
+
+# mmdc: mermaid-cli with the system Chromium (no download of its own).  Chromium cannot sandbox as root inside a
+# container, so the mmdc on PATH is a wrapper that adds --no-sandbox; the module's own command line is untouched.
+ENV PUPPETEER_SKIP_DOWNLOAD=1
+RUN npm install -g @mermaid-js/mermaid-cli@12.0.0 && npm cache clean --force \
+    && chromium=/usr/lib64/chromium-browser/headless_shell && test -x "$chromium" \
+    && printf '{"executablePath":"%s","args":["--no-sandbox","--disable-gpu"]}\n' "$chromium" > /etc/drgnx-puppeteer.json \
+    && real="$(command -v mmdc)" && mv "$real" "$real.real" \
+    && printf '#!/bin/sh\nexec %s.real -p /etc/drgnx-puppeteer.json "$@"\n' "$real" > "$real" && chmod +x "$real"
