@@ -137,14 +137,21 @@ nil when the Leader Menu is on another key, or the resolver reported that key al
 
 ;;;; Order of the emulation maps
 
+(defvar drgnx-modal-front-alists nil
+  "Emulation alists (symbols) of modules whose keys must beat the modal engine's, like Esc and q closing a pane or
+the quick-help card's keys: `drgnx-modal-order-alists' puts them right after the panel alist, in this order.  A
+module adds its symbol here when it turns its map on and calls `drgnx-modal-order-alists'; it takes it out again
+when it turns the map off.")
+
 (defun drgnx-modal-order-alists ()
   "Put drgnx's emulation keymaps in front of the engine's in `emulation-mode-map-alists'.
 The order: `drgnx-keys--everywhere-alist' (keys that work in every state beat the engine's), the leader
-alist, the panel alist, `drgnx-ai-ghost--emulation', then the rest as it was.  All four always have their
-place, bound or not: Emacs skips an unbound symbol in the list, and a later `add-to-list' of the ghost's
-finds it already there.  Safe to call again; `drgnx-modal-sync-engine' calls it after an engine starts."
-  (let ((front '(drgnx-keys--everywhere-alist drgnx-modal--leader-alist drgnx-modal--panel-alist
-                                              drgnx-ai-ghost--emulation)))
+alist, the panel alist, the modules' `drgnx-modal-front-alists', `drgnx-ai-ghost--emulation', then the rest as
+it was.  The four of the core always have their place, bound or not: Emacs skips an unbound symbol in the list,
+and a later `add-to-list' of the ghost's finds it already there.  Safe to call again; `drgnx-modal-sync-engine'
+calls it after an engine starts, and the engine when it pushed its maps in front again."
+  (let ((front `(drgnx-keys--everywhere-alist drgnx-modal--leader-alist drgnx-modal--panel-alist
+                                              ,@drgnx-modal-front-alists drgnx-ai-ghost--emulation)))
     (setq emulation-mode-map-alists
           (append front (seq-remove (lambda (e) (memq e front)) emulation-mode-map-alists)))))
 

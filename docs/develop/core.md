@@ -112,6 +112,9 @@ Nothing in it needs evil, and `test/unit/modal-core-test.el` drives it with a fa
   switched per buffer; `drgnx-modal-order-alists` puts them in front of the engine's in
   `emulation-mode-map-alists` after `drgnx-keys--everywhere-alist` and before the AI ghost text's (those two
   have their place whether or not they exist yet), and `drgnx-modal-sync-engine` calls it after an engine starts.
+  A module whose keys must beat the engine's too (Esc and `q` closing a pane, the quick-help card) adds its alist's
+  symbol to `drgnx-modal-front-alists` when its map comes on and calls `drgnx-modal-order-alists`: those go right
+  after the panel alist, before the ghost text's.
 - **State.** An engine calls `(drgnx-modal-set-state STATE)` on every change (`normal insert visual visual-line
   visual-block replace motion operator emacs`, nil when no engine runs in the buffer). The leader map is on in
   `normal`, `motion` and the visual states, and in a panel's `emacs` state; the panel map only in a panel's `emacs`

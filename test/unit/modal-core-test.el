@@ -167,6 +167,24 @@
       (drgnx-modal-order-alists)
       (should (equal emulation-mode-map-alists once)))))
 
+(ert-deftest drgnx-modal/modules-alists-go-after-the-panel-and-before-the-engine ()
+  ;; A module's keys that must beat the engine's (Esc and q closing a pane, the quick-help card) have their place
+  ;; right after the panel map, in the order the module list gives, also when the engine pushed its own in front.
+  (let ((drgnx-modal-front-alists '(test-close--emulation test-quickhelp--emulation))
+        (emulation-mode-map-alists '(test-quickhelp--emulation evil-mode-map-alist test-close--emulation other)))
+    (drgnx-modal-order-alists)
+    (should (equal emulation-mode-map-alists
+                   '(drgnx-keys--everywhere-alist drgnx-modal--leader-alist drgnx-modal--panel-alist
+                                                  test-close--emulation test-quickhelp--emulation
+                                                  drgnx-ai-ghost--emulation evil-mode-map-alist other)))
+    (push 'evil-mode-map-alist emulation-mode-map-alists)      ; evil's cl-pushnew on evil-local-mode
+    (setq emulation-mode-map-alists (delete-dups emulation-mode-map-alists))
+    (drgnx-modal-order-alists)
+    (should (equal (seq-take emulation-mode-map-alists 7)
+                   '(drgnx-keys--everywhere-alist drgnx-modal--leader-alist drgnx-modal--panel-alist
+                                                  test-close--emulation test-quickhelp--emulation
+                                                  drgnx-ai-ghost--emulation evil-mode-map-alist)))))
+
 (ert-deftest drgnx-modal/alists-keep-their-place-when-the-ghost-comes-late ()
   (let ((emulation-mode-map-alists '(evil-mode-map-alist other)))
     (drgnx-modal-order-alists)
