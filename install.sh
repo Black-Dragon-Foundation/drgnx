@@ -7,6 +7,9 @@
 #   curl -fsSLO https://raw.githubusercontent.com/Black-Dragon-Foundation/drgnx/main/install.sh
 #   less install.sh && bash install.sh --dry-run && bash install.sh
 #
+# With --config URL (or --chezmoi URL) it then hands over to "drgnx bootstrap", which sets this machine up
+# from your configuration repository; the URL is https or a local path, and is never evaluated.
+#
 # What it does is printed as a plan before anything happens. Every step that needs root is announced
 # and confirmed (unless --yes). It never edits your shell startup files without asking. Running it again
 # is safe. Everything is a function; nothing runs until `main` on the last line, so a truncated download
@@ -41,12 +44,19 @@ usage: install.sh [options]
   --method M         auto (default) | package | source | keep (do not install Emacs)
                      | formula (macOS: Homebrew's emacs-plus@31, built from source)
   --branch B         drgnx branch to check out (default main)
+  --config URL       then set this machine up from your configuration repository: runs
+                     "drgnx bootstrap --config URL" (an https URL or a local path; asks before keys,
+                     desktop and shell)
+  --chezmoi URL      the same with a chezmoi source repository (cannot be combined with --config)
+  --identity FILE    an age identity file for the secrets in the configuration (with --config or
+                     --chezmoi; passed on as a path, never read here; mode 600)
   -h, --help         this help
 EOF
 }
 
 parse_args() {
   DRY_RUN=0 YES=0 PREFIX="$HOME/.local" DIR="$HOME/.local/share/drgnx/drgnx" SOURCE_DIR="" METHOD=auto BRANCH=main
+  CONFIG="" CHEZMOI="" IDENTITY="" CONFIG_LOCAL=0
   while (($#)); do
     case "$1" in
       --dry-run) DRY_RUN=1 ;;
@@ -56,17 +66,49 @@ parse_args() {
       --source-dir) need_value "$1" "${2-}" "a directory"; SOURCE_DIR="$2"; shift ;;
       --method) need_value "$1" "${2-}" "a value"; METHOD="$2"; shift ;;
       --branch) need_value "$1" "${2-}" "a value"; BRANCH="$2"; shift ;;
+      --config) need_value "$1" "${2-}" "a URL or a path"; config_ref CONFIG "$1" "$2"; shift ;;
+      --chezmoi) need_value "$1" "${2-}" "a URL or a path"; config_ref CHEZMOI "$1" "$2"; shift ;;
+      --identity) need_value "$1" "${2-}" "a file"; IDENTITY="$(abs_path "$(home_path "$2")")"; shift ;;
       -h|--help) usage; exit 0 ;;
       *) usage >&2; die 2 "unknown option: $1" ;;
     esac
     shift
   done
   case "$METHOD" in auto|package|source|keep|formula) ;; *) die 2 "--method must be auto, package, source, keep or formula" ;; esac
+  if [[ -n "$CONFIG" && -n "$CHEZMOI" ]]; then die 2 "--config and --chezmoi cannot be used together"; fi
+  if [[ -n "$IDENTITY" && -z "$CONFIG$CHEZMOI" ]]; then die 2 "--identity needs --config or --chezmoi"; fi
+  HANDOVER=0 BOOTSTRAP_ARGS=()   # the hand-over to `drgnx bootstrap' (Task 12): always an array, never a string to eval
+  if [[ -n "$CONFIG" ]]; then HANDOVER=1 BOOTSTRAP_ARGS=(--config "$CONFIG"); fi
+  if [[ -n "$CHEZMOI" ]]; then HANDOVER=1 BOOTSTRAP_ARGS=(--chezmoi "$CHEZMOI"); fi
+  if [[ -n "$IDENTITY" ]]; then BOOTSTRAP_ARGS+=(--identity "$IDENTITY"); fi
+  if ((YES)); then BOOTSTRAP_ARGS+=(--yes); fi
   if [[ -n "$SOURCE_DIR" ]]; then DIR="$SOURCE_DIR"; fi
   PREFIX="$(abs_path "$PREFIX")" DIR="$(abs_path "$DIR")"   # links and the build tree need absolute paths
 }
 
 need_value() { [[ -n "$2" ]] || { usage >&2; die 2 "$1 needs $3"; }; }   # OPTION VALUE WHAT — a bad option: exit 2
+
+home_path() { case "$1" in "~/"*) printf '%s' "$HOME/${1#"~/"}" ;; *) printf '%s' "$1" ;; esac; }   # ~/x → $HOME/x
+
+# VAR OPTION VALUE — set VAR to VALUE if it is an https URL (no user name or password in it, no blank) or a
+# local path (made absolute); anything else (http, ssh, git@host:…, file://, ext::…) is a bad option: exit 2.
+# The value is data from here on: it is only ever quoted or passed as one argument, never evaluated, and never
+# echoed in an error (it may hold a password).
+config_ref() {
+  local var="$1" opt="$2" v="$3" rest
+  local why="$opt takes an https URL or a local path (not http, ssh, git@host:, file:// or a URL with a password: use a git credential helper for private repositories)"
+  if [[ "$v" == *[[:cntrl:]]* ]]; then die 2 "$why"; fi
+  case "$v" in
+    https://*)
+      rest="${v#https://}"
+      if [[ -z "${rest%%/*}" || "${rest%%/*}" == *@* || "$rest" == *[[:space:]]* ]]; then die 2 "$why"; fi
+      printf -v "$var" '%s' "$v" ;;
+    *)
+      if [[ "$v" =~ ^[^/]*: ]]; then die 2 "$why"; fi          # a scheme, or scp-style host:path
+      printf -v "$var" '%s' "$(abs_path "$(home_path "$v")")"
+      CONFIG_LOCAL=1 ;;
+  esac
+}
 
 abs_path() { case "$1" in /*) printf '%s' "$1" ;; *) printf '%s/%s' "$PWD" "$1" ;; esac; }
 
@@ -284,10 +326,18 @@ print_plan() {
   say "4. Compile drgnx (drgnx build: byte-compiled, natively compiled as it loads)"
   if [[ "$OS" == macos ]]; then
     say "5. Install the drgnx app into $HOME/Applications/drgnx.app (Finder, Spotlight, the Dock, Open With)"
-    say "6. Run drgnx doctor"
-    say "7. Open the drgnx app"
-  else
+    if ((!HANDOVER)); then say "6. Run drgnx doctor"; say "7. Open the drgnx app"; fi
+  elif ((!HANDOVER)); then
     say "5. Run drgnx doctor"
+  fi
+  if ((HANDOVER)); then   # bootstrap runs the doctor, and the desktop step opens drgnx
+    local line
+    printf -v line '%q ' "${BOOTSTRAP_ARGS[@]}"
+    if ((YES)); then
+      say "Then: drgnx bootstrap ${line}(--yes confirms only the age/chezmoi install: rc files, commits and chezmoi apply still wait for you)"
+    else
+      say "Then: drgnx bootstrap ${line}(asks before keys, desktop and shell)"
+    fi
   fi
 }
 
@@ -512,12 +562,13 @@ link_drgnx() {
 }
 
 remember_emacs() { # drgnx commands run in the Emacs just installed, even when it is not `emacs' on PATH (macOS)
-  local cfg="${DRGNX_CONFIG_DIR:-$HOME/.config/drgnx}" e
+  # in drgnx's data dir: the path is this machine's, and the config dir travels to others
+  local dir="${DRGNX_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/drgnx}" e
   e="$(command -v "$EMACS_BIN" 2>/dev/null || true)"
   e="${e:-$EMACS_BIN}"
   [[ "$e" == /* ]] || warn "the Emacs ($e) is not an absolute path, which drgnx ignores: it will use the emacs on your PATH (or set DRGNX_EMACS)"
-  { mkdir -p "$cfg" && printf '%s\n' "$e" >"$cfg/emacs"; } ||
-    warn "could not record the Emacs in $cfg/emacs: drgnx will use the emacs on your PATH (or set DRGNX_EMACS)"
+  { mkdir -p "$dir" && printf '%s\n' "$e" >"$dir/emacs"; } ||
+    warn "could not record the Emacs in $dir/emacs: drgnx will use the emacs on your PATH (or set DRGNX_EMACS)"
 }
 
 offer_rc_line() { # RC LINE — add LINE to the startup file RC only if the user says yes (--yes does not count)
@@ -546,6 +597,32 @@ open_app() { # APP — the first start opens the Welcome; only in a desktop sess
   open -a "$1" || warn "could not open $1: open drgnx with Spotlight (⌘Space, type \"drgnx\")"
 }
 
+check_handover() { # before anything is installed: a local configuration is there, the identity file is private
+  if ((CONFIG_LOCAL)) && [[ ! -e "${CONFIG:-$CHEZMOI}" ]]; then
+    die 2 "the configuration ${CONFIG:-$CHEZMOI} does not exist"
+  fi
+  [[ -n "$IDENTITY" ]] || return 0
+  local q mode
+  printf -v q '%q' "$IDENTITY"
+  if [[ ! -f "$IDENTITY" || ! -r "$IDENTITY" ]]; then die 2 "the identity file $q is not a readable file"; fi
+  mode="$(ls -ldL -- "$IDENTITY" | cut -c5-10)"          # group and others: never the content
+  if [[ "$mode" != "------" ]]; then die 2 "the identity file $q can be read by other users: chmod 600 $q, then run this again"; fi
+}
+
+hand_over() { # `drgnx bootstrap' decides everything from here (keys, desktop, shell): its exit code is ours
+  local rc=0
+  say ""
+  say "Handing over to drgnx bootstrap…"
+  # its questions go to the terminal; with none (or under --yes without one) it gets no input at all —
+  # never the pipe of `curl … | bash', which carries this script
+  if have_tty; then
+    DRGNX_EMACS="$EMACS_BIN" "$DIR/bin/drgnx" bootstrap "${BOOTSTRAP_ARGS[@]}" </dev/tty || rc=$?
+  else
+    DRGNX_EMACS="$EMACS_BIN" "$DIR/bin/drgnx" bootstrap "${BOOTSTRAP_ARGS[@]}" </dev/null || rc=$?
+  fi
+  exit "$rc"
+}
+
 path_hint() {
   case ":$PATH:" in *":$PREFIX/bin:"*) return ;; esac
   local rc line="export PATH=\"$PREFIX/bin:\$PATH\""
@@ -563,6 +640,7 @@ main() {
   find_brew
   print_plan
   if ((DRY_RUN)); then exit 0; fi
+  check_handover
   if ((!YES)) && ! have_tty; then
     die 3 "no terminal to ask questions on — re-run with --yes, or download install.sh and run it (see $DOCS_URL)"
   fi
@@ -583,6 +661,7 @@ main() {
   local app=""   # the app and the PATH line first: the doctor checks them
   if [[ "$OS" == macos ]] && install_app; then app="$HOME/Applications/drgnx.app"; fi
   path_hint
+  if ((HANDOVER)); then hand_over; fi
   say ""
   DRGNX_EMACS="$EMACS_BIN" "$DIR/bin/drgnx" doctor || warn "the doctor found problems (above)"
   say ""

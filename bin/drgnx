@@ -5,12 +5,15 @@ here="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 
 emacs_bin() { # the one Emacs every subcommand runs in: $DRGNX_EMACS, else the one install.sh recorded (an absolute path), else PATH's
   if [[ -n "${DRGNX_EMACS:-}" ]]; then printf '%s\n' "$DRGNX_EMACS"; return; fi
-  local file="${DRGNX_CONFIG_DIR:-$HOME/.config/drgnx}/emacs" line=""
-  if [[ -f "$file" ]]; then   # first line only, as a path: never evaluated
+  local file line
+  # the record is machine-local, so it lives in the data dir; the config dir's is where older installs wrote it
+  for file in "${DRGNX_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/drgnx}/emacs" "${DRGNX_CONFIG_DIR:-$HOME/.config/drgnx}/emacs"; do
+    [[ -f "$file" ]] || continue   # first line only, as a path: never evaluated
+    line=""
     IFS= read -r line <"$file" || true
     line="${line#"${line%%[![:space:]]*}"}"; line="${line%"${line##*[![:space:]]}"}"
     if [[ "$line" == /* && -f "$line" && -x "$line" ]]; then printf '%s\n' "$line"; return; fi
-  fi
+  done
   echo emacs
 }
 
@@ -467,6 +470,9 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx bisect [-- CMD…]  find the module that breaks (CMD fails, or you say so)
        drgnx service-unit [DIR]
                                the systemd user unit (printed, or written to DIR; never installed)
+       drgnx shell install [--shell zsh|bash|fish] [--yes]
+                               add one line to your shell's rc file, after you say yes (--yes: print it,
+                               write nothing); drgnx shell line prints the line (docs/guide/shell.md)
        drgnx ui COMMAND        headless GUI Emacs sessions: start, stop, ls, reap, state, shot,
                                click, keys, type, measure (drgnx ui --help; docs/develop/harness.md)
 USAGE
@@ -512,6 +518,10 @@ case "${1:-help}" in
         shift
         "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
               -l drgnx-keys-diff -f drgnx-keys-diff-cli -- "$@" ;;
+  shell) shift
+        DRGNX_STDIN_TTY=$([ -t 0 ] && echo 1 || echo 0) \
+        "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+              -l drgnx-shell -f drgnx-shell-cli -- "$@" ;;
   check) shift; run_in_tmp_shards check_emacs "$@" ;;
   fmt) shift
         "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \

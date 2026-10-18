@@ -44,6 +44,7 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n __fish_use_subcommand -a keys -d 'Compare key profiles'
     complete -c drgnx -n __fish_use_subcommand -a safe -d "Emacs with drgnx's core only"
     complete -c drgnx -n __fish_use_subcommand -a help -d 'Show drgnx usage'
+    complete -c drgnx -n __fish_use_subcommand -a shell -d 'Add the drgnx line to your shell rc file'
 
     # Commands that take no file: no file names after them.
     complete -c drgnx -n '__fish_seen_subcommand_from doctor build upgrade rollback generations lock macos-app check test hub' -f
@@ -120,6 +121,11 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n '__fish_seen_subcommand_from ui; and __fish_seen_subcommand_from click' -l button -x -d 'Button'
     complete -c drgnx -n '__fish_seen_subcommand_from ui; and __fish_seen_subcommand_from click' -l count -x -d 'Count'
     complete -c drgnx -n '__fish_seen_subcommand_from ui; and __fish_seen_subcommand_from click' -l hold-ms -x -d 'Hold in ms'
+    complete -c drgnx -n '__fish_seen_subcommand_from shell' -f
+    complete -c drgnx -n '__fish_seen_subcommand_from shell; and not __fish_seen_subcommand_from install line' -a install -d 'Add the line to your rc file, after you say yes'
+    complete -c drgnx -n '__fish_seen_subcommand_from shell; and not __fish_seen_subcommand_from install line' -a line -d 'Print the line'
+    complete -c drgnx -n '__fish_seen_subcommand_from shell; and __fish_seen_subcommand_from install line' -l shell -x -a 'zsh bash fish' -d 'Which shell'
+    complete -c drgnx -n '__fish_seen_subcommand_from shell; and __fish_seen_subcommand_from install' -l yes -d 'Print the line, write nothing'
 
     # Inside eat only.  The prompt-end mark is bash and zsh only: fish cannot add it without redefining fish_prompt.
     if string match -q '*eat*' -- "$INSIDE_EMACS"; and set -q EAT_SHELL_INTEGRATION_DIR

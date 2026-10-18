@@ -41,7 +41,8 @@ is good or builds the signed GNU release with native compilation. On macOS, run 
 (after asking) and Emacs from it, adds a **drgnx** app to `~/Applications` and opens it, and the Welcome sets up keys,
 AI and Claude Code; afterwards open drgnx with Spotlight (⌘Space, type "drgnx") or Launchpad, or run `drgnx .` in a
 project, like `code .`; to keep it in the Dock, drag `~/Applications/drgnx.app` there.
-`--dry-run` shows the plan only. Details,
+`--dry-run` shows the plan only. On a second machine, `bash -s -- --config URL` (after the `| bash`) also sets it up from
+your configuration repository ([docs/guide/second-machine.md](docs/guide/second-machine.md)). Details,
 manual install and uninstall: [docs/guide/install.md](docs/guide/install.md). Check a machine with `drgnx doctor`.
 
 ## Documentation

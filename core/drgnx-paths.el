@@ -28,10 +28,12 @@
   (file-name-as-directory (expand-file-name "drgnx" (or (getenv "XDG_CACHE_HOME") "~/.cache"))))
 
 (defun drgnx-data-dir ()
-  "drgnx data: $DRGNX_DATA_DIR, else $XDG_DATA_HOME/drgnx/ (default ~/.local/share/drgnx/)."
-  (file-name-as-directory
-   (expand-file-name (or (getenv "DRGNX_DATA_DIR")
-                         (expand-file-name "drgnx" (or (getenv "XDG_DATA_HOME") "~/.local/share"))))))
+  "drgnx data: $DRGNX_DATA_DIR, else $XDG_DATA_HOME/drgnx/ (default ~/.local/share/drgnx/).  An empty variable
+counts as unset, as in bin/drgnx and install.sh (\"${VAR:-…}\"), so all three pick the same dir."
+  (let ((data (getenv "DRGNX_DATA_DIR")) (xdg (getenv "XDG_DATA_HOME")))
+    (file-name-as-directory
+     (expand-file-name (if (member data '(nil "")) (expand-file-name "drgnx" (if (member xdg '(nil "")) "~/.local/share" xdg))
+                         data)))))
 
 (defun drgnx-elpa-dir ()
   "The packages every session uses — a fixed real path (generations are copied into it)."

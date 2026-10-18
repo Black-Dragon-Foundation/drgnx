@@ -23,8 +23,10 @@ modules/<category>/drgnx-<name>.el   one drgnx-module-define per file
 
 `drgnx-dir` is the checkout (code only, never written to). User configuration: `(drgnx-user-dir)` —
 `$DRGNX_CONFIG_DIR` or `~/.config/drgnx/`. State and caches: `(drgnx-state-dir)` and `(drgnx-cache-dir)` under
-the XDG directories. Packages: `(drgnx-data-dir)` — `$DRGNX_DATA_DIR` or `~/.local/share/drgnx/` — holds `elpa/`
-(the packages every session uses) and `generations/`; `(drgnx-package-cache-dir)` keeps downloaded package files
+the XDG directories. Packages: `(drgnx-data-dir)` — `$DRGNX_DATA_DIR`, else `$XDG_DATA_HOME/drgnx/`, else `~/.local/share/drgnx/`; an
+empty variable counts as unset, as in `bin/drgnx` and `install.sh` — holds `elpa/`
+(the packages every session uses), `generations/` and this machine's files that must not travel (`emacs`,
+`systemd/`, `applications/`: [second-machine.md](../guide/second-machine.md)); `(drgnx-package-cache-dir)` keeps downloaded package files
 ([packages.md](../guide/packages.md)).
 Started with `--init-directory <checkout>/init`, Emacs keeps its own state (`user-emacs-directory`: auto-save list,
 histories) in `(drgnx-state-dir)emacs/` and native code in `(drgnx-cache-dir)eln-cache/` (`init/early-init.el`), so
@@ -111,8 +113,9 @@ never shadows newer source. The build must stay warning-free (`test/unit/build-t
 ## The Emacs `bin/drgnx` runs in
 
 The shell function `emacs_bin` picks the one Emacs every subcommand uses: `$DRGNX_EMACS`, else the first line of
-`$DRGNX_CONFIG_DIR/emacs` (default `~/.config/drgnx/emacs`, written by `install.sh`'s `remember_emacs`) when it
-names an executable file, else `emacs`. The file is read as a path, never evaluated. A new subcommand calls
+the data dir's `emacs` (`$DRGNX_DATA_DIR/emacs`, default `~/.local/share/drgnx/emacs`, written by `install.sh`'s
+`remember_emacs`) when it names an executable file, then the same of `$DRGNX_CONFIG_DIR/emacs` (where older
+installs wrote it), else `emacs`. The files are read as paths, never evaluated. A new subcommand calls
 `"$(emacs_bin)"`, never a bare `emacs`. All of them run with `load-prefer-newer`, so a stale `.elc` after a pull
 never prints before the output. `emacsclient_bin` is that Emacs's `emacsclient` (beside it, or in an Emacs.app's
 `Contents/MacOS/bin/`; else PATH's) — what `drgnx open` and `drgnx PATH` talk to the daemon with

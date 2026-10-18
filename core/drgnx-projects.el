@@ -19,6 +19,7 @@
 (require 'subr-x)
 (require 'project)
 (require 'drgnx-paths)
+(require 'drgnx-portable)
 
 (defvar org-directory)
 (defvar project--list)
@@ -233,21 +234,35 @@ markdown FILE remembers it (:PLAN_FILE:, :PLAN_TEXT:) for `drgnx-projects-sync-p
 
 (defun drgnx-projects-file () (expand-file-name "projects.eld" (drgnx-user-dir)))
 
+(defun drgnx-projects--with-root (p f)
+  "Project plist P with its :root passed through F (P itself when it has no string root)."
+  (let ((root (plist-get p :root)))
+    (if (stringp root) (plist-put (copy-sequence p) :root (funcall f root)) p)))
+
 (defun drgnx-projects-read ()
-  "projects.eld: (:version 1 :projects ((:name :root :url)…))."
-  (or (and (file-readable-p (drgnx-projects-file))
-           (ignore-errors (with-temp-buffer (insert-file-contents (drgnx-projects-file)) (read (current-buffer)))))
-      (list :version 1 :projects nil)))
+  "projects.eld: (:version 1 :projects ((:name :root :url)…)), each :root absolute (the file writes \"~/…\" under
+home, so it travels: docs/guide/second-machine.md)."
+  (let ((data (or (and (file-readable-p (drgnx-projects-file))
+                       (let ((d (ignore-errors (with-temp-buffer (insert-file-contents (drgnx-projects-file)) (read (current-buffer))))))
+                         (and (consp d) d)))
+                  (list :version 1 :projects nil))))
+    (plist-put data :projects (mapcar (lambda (p) (drgnx-projects--with-root p #'expand-file-name)) (plist-get data :projects)))))
 
 (defun drgnx-projects--remember (entries)
   (let* ((data (drgnx-projects-read))
-         (known (mapcar (lambda (p) (plist-get p :root)) (plist-get data :projects)))
-         (new (seq-remove (lambda (e) (member (plist-get e :root) known)) entries)))
+         ;; compared as true names: a root spelled through a link to home is the one read back as ~/… (once)
+         (known (mapcar (lambda (p) (let ((r (plist-get p :root))) (and (stringp r) (drgnx-projects--norm r))))
+                        (plist-get data :projects)))
+         (new (seq-filter (lambda (e) (let ((n (drgnx-projects--norm (plist-get e :root))))
+                                        (unless (member n known) (push n known))))
+                          entries)))
     (when new
       (make-directory (file-name-directory (drgnx-projects-file)) t)
       (with-temp-file (drgnx-projects-file)
         (insert ";; drgnx projects (written by Onboarding: Import Projects)\n")
-        (pp (list :version 1 :projects (append (plist-get data :projects) new)) (current-buffer))))
+        (pp (list :version 1 :projects (mapcar (lambda (p) (drgnx-projects--with-root p #'drgnx-portable-path))
+                                               (append (plist-get data :projects) new)))
+            (current-buffer))))
     ;; project.el's list in drgnx's state dir: the session's own list when it already uses that file
     ;; (so it learns them too), else a fresh read of that file (the command line).
     (let ((ours (expand-file-name "projects" (drgnx-state-dir))))

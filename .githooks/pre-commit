@@ -7,7 +7,9 @@ patterns=(
   'sk-or-v1-[A-Za-z0-9]{20,}'          # OpenRouter keys
   'sk-ant-[A-Za-z0-9_-]{20,}'          # Anthropic keys
   'sk-[A-Za-z0-9]{32,}'                # OpenAI-style keys
+  '(^|[^A-Za-z0-9])sk-(proj|svcacct|admin)-[A-Za-z0-9_-]{20,}'  # OpenAI project, service account, admin keys (not inside a word: desk-admin-…)
   'gh[pousr]_[A-Za-z0-9]{30,}'         # GitHub tokens
+  'github_pat_[A-Za-z0-9_]{22,}'       # GitHub fine-grained tokens
   'AKIA[0-9A-Z]{16}'                   # AWS access keys
   '-----BEGIN [A-Z ]*PRIVATE KEY-----'
   '/home/[a-z][a-z0-9_-]*/'            # absolute home paths

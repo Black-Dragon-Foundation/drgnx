@@ -29,6 +29,7 @@ commands=(
   'keys:compare key profiles'
   'safe:Emacs with drgnx'"'"'s core only'
   'help:usage'
+  'shell:add the drgnx line to your shell rc file'
 )
 
 if (( CURRENT == 2 )); then
@@ -142,6 +143,16 @@ case $cmd in
     fi ;;
   service-unit)
     _arguments '*:directory:_files -/' ;;
+  shell)
+    if (( CURRENT == 2 )); then
+      _values 'shell command' 'install[add the line to your rc file, after you say yes]' 'line[print the line]'
+    else
+      shift words; (( CURRENT-- ))
+      case $sub in
+        install) _arguments '--shell[shell]:shell:(zsh bash fish)' '--yes[print the line, write nothing]' ;;
+        line) _arguments '--shell[shell]:shell:(zsh bash fish)' ;;
+      esac
+    fi ;;
   *)
     _files ;;
 esac
