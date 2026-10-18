@@ -209,7 +209,9 @@ it has focus: `-t get_tree`, the focused window must be this process (sway: `pid
 `window` equal to the frame's `outer-window-id`) and the frame must have focus (`frame-focus-state`), else
 `(:error "drgnx moves only its own window while it has focus: ...")`; then `[con_id=N] move container to output
 NAME` (i3: `[id=XID]`) and `[…] focus` (the move does not carry focus), plus `fullscreen enable` for a fullscreen
-window. Restoring (`:place`) cannot rely on focus: the frame's `title` parameter is set to `drgnx [placing PID-N]`,
+window (`fullscreen enable global` for a global one). An output name with anything but letters, digits and `_.:-`
+is double-quoted, so it stays one argument. If the move worked but the follow-up did not, the error says so ("the
+window was moved but focus was not restored"); the callback has no success-with-warning. Restoring (`:place`) cannot rely on focus: the frame's `title` parameter is set to `drgnx [placing PID-N]`,
 the tree is read at 0.1, 0.3, 0.7, 1.5 and 3 s (then every second) until a window with this pid and title shows
 (i3: the window with the frame's X id; no title), the window is moved without taking focus, and the title is
 put back whatever happens. All calls of one operation share its deadline (the second call gets what is left), so

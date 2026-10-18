@@ -638,7 +638,7 @@ An inactive output stays in the reply with a zero rectangle and is left out.  i3
                                (or (plist-get node :pid) (plist-get node :window)))
                       (push (list :id (plist-get node :id) :pid (plist-get node :pid) :name (plist-get node :name)
                                   :output output :focused (plist-get node :focused)
-                                  :fullscreen (let ((m (plist-get node :fullscreen_mode))) (and (numberp m) (> m 0)))
+                                  :fullscreen (let ((m (plist-get node :fullscreen_mode))) (and (memql m '(1 2)) m))
                                   :window (plist-get node :window))
                             out))
                     (dolist (c (append (plist-get node :nodes) (plist-get node :floating_nodes)))
@@ -682,6 +682,7 @@ An inactive output stays in the reply with a zero rectangle and is left out.  i3
   "MONITOR's output name as the argument of `move container to output', quoted when it needs it."
   (let ((name (plist-get monitor :name)))
     (unless (drgnx-platform--filled name) (error "this monitor has no output name, so drgnx cannot move the window to it"))
+    (when (string-match-p "[[:cntrl:]]" name) (error "this monitor's output name has a control character, so drgnx cannot move the window to it"))
     (if (string-match-p "\\`[A-Za-z0-9_.:-]+\\'" name) name
       (concat "\"" (replace-regexp-in-string "[\"\\]" "\\\\\\&" name) "\""))))
 
@@ -723,10 +724,10 @@ WHAT, when given, ends the timeout message (\"the window was not moved\")."
        (funcall k (and (not err) (drgnx-platform-wm--parse out)) err)))))
 
 (defun drgnx-platform-wm--command (wm ctx until what command fail k)
-  "Run COMMAND (one argument); K gets nil or the message of the failure."
+  "Run COMMAND (one argument); K gets nil or the message of the failure, and the call's STATUS."
   (drgnx-platform-wm--run
    wm ctx until (list command) fail
-   (lambda (status out) (funcall k (drgnx-platform-wm--failure wm ctx status out what)))))
+   (lambda (status out) (funcall k (drgnx-platform-wm--failure wm ctx status out what) status))))
 
 (defun drgnx-platform-wm--monitors (wm ctx callback)
   "The adapter's :monitors for WM."
@@ -743,20 +744,30 @@ WHAT, when given, ends the timeout message (\"the window was not moved\")."
 
 (defun drgnx-platform-wm--move-con (wm ctx until con monitor focus callback)
   "Move CON to MONITOR's output; with FOCUS take focus again, and keep a fullscreen window fullscreen.
-Task 1 found fullscreen kept by the move; `fullscreen enable' is idempotent, so it is re-applied anyway.
-CALLBACK gets `ok' or (:error MESSAGE)."
+Task 1 found fullscreen kept by the move; `fullscreen enable' is idempotent, so it is re-applied anyway
+\(mode 1: on its output; mode 2: `fullscreen enable global').  CALLBACK gets `ok' or (:error MESSAGE).
+The core's callback has no \"succeeded with a warning\", so when the move worked and the follow-up did not,
+the error says the window WAS moved and what was not restored."
   (let* ((sel (drgnx-platform-wm--selector wm con)) (what "the window was not moved")
-         (fail callback))
+         (fail callback)
+         (fs (pcase (plist-get con :fullscreen) (1 "fullscreen enable") (2 "fullscreen enable global"))))
     (drgnx-platform-wm--command
      wm ctx until what (format "%s move container to output %s" sel (drgnx-platform-wm--output-arg monitor)) fail
-     (lambda (err)
-       (let ((more (append (and focus (list (format "%s focus" sel)))
-                           (and (plist-get con :fullscreen) (list (format "%s fullscreen enable" sel))))))
+     (lambda (err _status)
+       (let* ((more (append (and focus (list (format "%s focus" sel)))
+                            (and fs (list (format "%s %s" sel fs)))))
+              (lost (if focus "focus" "fullscreen"))
+              (what (format "the window was moved but %s was not restored" lost)))
          (cond (err (funcall callback (list :error err)))
                ((null more) (funcall callback 'ok))
                (t (drgnx-platform-wm--command
                    wm ctx until what (string-join more "; ") fail
-                   (lambda (err) (funcall callback (if err (list :error err) 'ok)))))))))))
+                   (lambda (err status)
+                     (funcall callback
+                              (cond ((null err) 'ok)
+                                    ;; a timeout message already ends with WHAT
+                                    ((eq status 'timeout) (list :error err))
+                                    (t (list :error (format "%s: %s (%s)" (drgnx-platform-wm--label wm) what err))))))))))))))
 
 (defun drgnx-platform-wm--own-focused-con (wm tree frame)
   "The focused window con of TREE when it is FRAME's own and FRAME has focus, else nil."

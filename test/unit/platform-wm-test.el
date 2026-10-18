@@ -33,7 +33,17 @@
    (lambda (n) (when (equal (gethash "id" n) 7)
                  (puthash "pid" (emacs-pid) n)
                  (when title (puthash "name" title n))
-                 (when fullscreen (puthash "fullscreen_mode" 1 n))))))
+                 (when fullscreen (puthash "fullscreen_mode" (if (numberp fullscreen) fullscreen 1) n))))))
+
+(defmacro drgnx-platform-wm-test--leaving-no-timer (&rest body)
+  "Run BODY, let pending zero-second timers run, and fail on any timer (or idle timer) BODY left behind."
+  (declare (indent 0))
+  (let ((before (make-symbol "before")) (idle (make-symbol "idle")))
+    `(let ((,before (copy-sequence timer-list)) (,idle (copy-sequence timer-idle-list)))
+       (prog1 (progn ,@body)
+         (drgnx-platform-test--await (lambda () nil) 0.1)
+         (should-not (cl-set-difference timer-list ,before))
+         (should-not (cl-set-difference timer-idle-list ,idle))))))
 
 (defconst drgnx-platform-wm-test--map
   "get_tree get_tree\nget_outputs get_outputs\n(move container|focus|fullscreen) ok\n"
@@ -184,8 +194,9 @@
                                     (run-at-time 0.3 nil (lambda ()
                                                            (setq seen (frame-parameter frame 'title))
                                                            (drgnx-platform-wm-test--write "get_tree.json" (drgnx-platform-wm-test--ours seen))))
-                                    (should (eq 'ok (drgnx-platform-wm-test--result
-                                                     (lambda (cb) (drgnx-platform-place-frame frame (drgnx-platform-wm-test--monitor "HEADLESS-2" 1280) cb)))))
+                                    (should (eq 'ok (drgnx-platform-wm-test--leaving-no-timer
+                                                      (drgnx-platform-wm-test--result
+                                                       (lambda (cb) (drgnx-platform-place-frame frame (drgnx-platform-wm-test--monitor "HEADLESS-2" 1280) cb))))))
                                     (should (string-match-p (format "\\`drgnx \\[placing %d-[0-9]+\\]\\'" (emacs-pid)) seen))
                                     (should (equal "before" (frame-parameter frame 'title)))
                                     (let ((cmds (drgnx-platform-wm-test--commands)))
@@ -200,8 +211,9 @@
                                 (drgnx-platform-test--with-frame 'pgtk '("SWAYSOCK=/s" "WAYLAND_DISPLAY=wayland-1")
                                   (set-frame-parameter frame 'title "before")
                                   (let* ((drgnx-platform-restore-timeout 0.5) (start (float-time))
-                                         (res (drgnx-platform-wm-test--result
-                                               (lambda (cb) (drgnx-platform-place-frame frame (drgnx-platform-wm-test--monitor "HEADLESS-2" 1280) cb))))
+                                         (res (drgnx-platform-wm-test--leaving-no-timer
+                                                (drgnx-platform-wm-test--result
+                                                 (lambda (cb) (drgnx-platform-place-frame frame (drgnx-platform-wm-test--monitor "HEADLESS-2" 1280) cb)))))
                                          (took (- (float-time) start)))
                                     (should (eq :error (car-safe res)))
                                     (should (stringp (cadr res)))
@@ -308,6 +320,95 @@
                                   (should (equal "before" (frame-parameter frame 'title)))
                                   (should (equal (drgnx-platform-wm-test--commands)
                                                  '("-t get_tree" "[id=6291785] move container to output right"))))))
+
+;;;; Fix round 1
+
+(drgnx-platform-test--deftest drgnx-platform-wm/output-names-are-quoted-so-they-stay-one-argument ()
+                              (dolist (row '(("HEADLESS-2" . "HEADLESS-2") ("DP-1" . "DP-1") ("eDP-1" . "eDP-1") ("Virtual_0.1:x" . "Virtual_0.1:x")
+                                             ("Dell U2720Q" . "\"Dell U2720Q\"")
+                                             ("a;b" . "\"a;b\"") ("a,b" . "\"a,b\"")
+                                             ("a\"b" . "\"a\\\"b\"") ("a\\b" . "\"a\\\\b\"")
+                                             ("x\" ; exec evil ; \"" . "\"x\\\" ; exec evil ; \\\"\"")
+                                             ("[con_id=1]" . "\"[con_id=1]\"")))
+                                (should (equal (cdr row) (drgnx-platform-wm--output-arg (list :name (car row))))))
+                              (should-error (drgnx-platform-wm--output-arg (list :name "")))
+                              (should-error (drgnx-platform-wm--output-arg (list :name "a\nb")))
+                              (should-error (drgnx-platform-wm--output-arg (list :geometry '(0 0 1 1)))))
+
+(drgnx-platform-test--deftest drgnx-platform-wm/a-move-to-an-odd-output-name-sends-one-quoted-argument ()
+                              (drgnx-platform-wm-test--with-replies (("get_tree.json" . (drgnx-platform-wm-test--ours)))
+                                (drgnx-platform-test--with-frame 'pgtk '("SWAYSOCK=/s" "WAYLAND_DISPLAY=wayland-1")
+                                  (drgnx-platform-wm-test--focused t
+                                    (should (eq 'ok (drgnx-platform-wm-test--result
+                                                     (lambda (cb) (drgnx-platform-move-frame frame (drgnx-platform-wm-test--monitor "Dell \"A\\B\"; x,y" 1280) cb)))))
+                                    (should (equal (nth 1 (drgnx-platform-wm-test--commands))
+                                                   "[con_id=7] move container to output \"Dell \\\"A\\\\B\\\"; x,y\""))))))
+
+(drgnx-platform-test--deftest drgnx-platform-wm/a-move-that-worked-but-lost-focus-says-the-window-was-moved ()
+                              (drgnx-platform-wm-test--with-replies (("get_tree.json" . (drgnx-platform-wm-test--ours))
+                                                                     ("fail.json" . "[{\"success\":false,\"error\":\"Cannot focus\"}]"))
+                                (drgnx-platform-test--with-frame 'pgtk '("SWAYSOCK=/s" "WAYLAND_DISPLAY=wayland-1")
+                                  (drgnx-platform-wm-test--focused t
+                                    (let ((process-environment (cons "DRGNX_FAKE_WM_MAP=get_tree get_tree\nmove container ok\nfocus fail\n" process-environment)))
+                                      (should (equal '(:error "sway: the window was moved but focus was not restored (Cannot focus)")
+                                                     (drgnx-platform-wm-test--result
+                                                      (lambda (cb) (drgnx-platform-move-frame frame (drgnx-platform-wm-test--monitor "HEADLESS-2" 1280) cb)))))
+                                      (should (= 3 (length (drgnx-platform-wm-test--commands)))))))))
+
+(drgnx-platform-test--deftest drgnx-platform-wm/a-silent-follow-up-says-the-window-was-moved ()
+                              ;; the get_tree and the move answer at once, the focus call hangs: the timeout message ends with what is true
+                              (drgnx-platform-wm-test--with-replies (("get_tree.json" . (drgnx-platform-wm-test--ours)))
+                                (let ((wrapper (executable-find "swaymsg")))
+                                  ;; swaymsg becomes a wrapper: a focus command hangs, everything else is the fake tool
+                                  (delete-file wrapper)
+                                  (with-temp-file wrapper
+                                    (insert "#!/bin/bash\ncase \"$*\" in *focus*) exec sleep 5;; esac\nexec -a swaymsg \"$FAKE\" \"$@\"\n"))
+                                  (set-file-modes wrapper #o755)
+                                  (drgnx-platform-test--with-frame 'pgtk '("SWAYSOCK=/s" "WAYLAND_DISPLAY=wayland-1")
+                                    (drgnx-platform-wm-test--focused t
+                                      (let* ((process-environment
+                                              (cons (concat "FAKE=" (expand-file-name "test/fixtures/wm/fake-wm.sh" drgnx-dir))
+                                                    process-environment))
+                                             (drgnx-platform-command-timeout 0.5))
+                                        (should (equal '(:error "sway did not answer within 0.5 s; the window was moved but focus was not restored")
+                                                       (drgnx-platform-wm-test--result
+                                                        (lambda (cb) (drgnx-platform-move-frame frame (drgnx-platform-wm-test--monitor "HEADLESS-2" 1280) cb)))))))))))
+
+(drgnx-platform-test--deftest drgnx-platform-wm/fullscreen-is-re-applied-for-its-own-mode ()
+                              (dolist (row '((1 . "[con_id=7] focus; [con_id=7] fullscreen enable")
+                                             (2 . "[con_id=7] focus; [con_id=7] fullscreen enable global")
+                                             (0 . "[con_id=7] focus")
+                                             (3 . "[con_id=7] focus")))
+                                (drgnx-platform-wm-test--with-replies (("get_tree.json" . (drgnx-platform-wm-test--ours nil (car row))))
+                                  (drgnx-platform-test--with-frame 'pgtk '("SWAYSOCK=/s" "WAYLAND_DISPLAY=wayland-1")
+                                    (drgnx-platform-wm-test--focused t
+                                      (should (eq 'ok (drgnx-platform-wm-test--result
+                                                       (lambda (cb) (drgnx-platform-move-frame frame (drgnx-platform-wm-test--monitor "HEADLESS-2" 1280) cb)))))
+                                      (should (equal (nth 2 (drgnx-platform-wm-test--commands)) (cdr row))))))))
+
+(drgnx-platform-test--deftest drgnx-platform-wm/i3-calls-carry-the-frames-i3sock-and-a-failed-command-gives-its-error ()
+                              (drgnx-platform-wm-test--with-replies (("get_tree.json" . (drgnx-platform-wm-test--text "i3/get_tree.json"))
+                                                                     ("get_outputs.json" . (drgnx-platform-wm-test--text "i3/get_outputs.json"))
+                                                                     ("fail.json" . "[{\"success\":false,\"error\":\"No output matched\"}]"))
+                                (drgnx-platform-test--with-frame 'x '("I3SOCK=/frame/i3.sock" "DISPLAY=:0")
+                                  (set-frame-parameter frame 'outer-window-id "6291785")
+                                  (should-not (getenv "I3SOCK"))
+                                  (drgnx-platform-wm-test--focused t
+                                    (drgnx-platform-wm-test--result (lambda (cb) (drgnx-platform-monitors frame cb)))
+                                    (should (eq 'ok (drgnx-platform-wm-test--result
+                                                     (lambda (cb) (drgnx-platform-move-frame frame (drgnx-platform-wm-test--monitor "right" 1280) cb)))))
+                                    (let ((process-environment (cons "DRGNX_FAKE_WM_MAP=get_tree get_tree\nmove container fail\n" process-environment)))
+                                      ;; exit 2 with the JSON on stdout, as i3 answers an unknown output
+                                      (should (equal '(:error "No output matched")
+                                                     (drgnx-platform-wm-test--result
+                                                      (lambda (cb) (drgnx-platform-move-frame frame (drgnx-platform-wm-test--monitor "nowhere" 1280) cb))))))
+                                    (let ((envs (with-temp-buffer (insert-file-contents (concat drgnx-platform-test--log ".env"))
+                                                                  (split-string (buffer-string) "\n" t))))
+                                      (should (= (length envs) (length (drgnx-platform-test--log-lines))))
+                                      (should (>= (length envs) 6))
+                                      (dolist (e envs) (should (string-match-p "\\`SWAYSOCK= I3SOCK=/frame/i3.sock " e))))
+                                    (should-not (cl-some (lambda (c) (string-match-p "nowhere.*focus\\|focus.*nowhere" c)) (drgnx-platform-wm-test--commands)))
+                                    (should (equal "[id=6291785] move container to output nowhere" (car (last (drgnx-platform-wm-test--commands)))))))))
 
 (provide 'platform-wm-test)
 ;;; platform-wm-test.el ends here
