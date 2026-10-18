@@ -402,7 +402,7 @@ a task whose provider failed to the next profile (drgnx-job.el).  Called in the 
                        (lambda (r)
                          (if (cdr r) (drgnx-agents--failed s (cdr r))
                            (setf (drgnx-agent-session-capabilities s) (plist-get (car r) :agentCapabilities))
-                           (funcall on-ready meta))))))
+                           (funcall on-ready (prog1 meta (setq meta nil))))))))   ; keys in it: not kept once sent
 
 (defun drgnx-agents--failed (s err)
   (drgnx-agents--add s (list :type 'error :text (format "%s" (or (plist-get err :message) err))))
@@ -578,27 +578,82 @@ can carry it, else the provider's (keys resolved now, never kept) — DRGNX_TASK
         :strictMcpConfig t
         :settings '(:sandbox (:enabled :false)))
   "The options a job session's Claude Code gets (`_meta.claudeCode.options' of claude-agent-acp), so that nothing
-pre-allows a tool in a job: bypass mode gone from every settings tier; as the policy tier, allow rules and hooks of
-the user, project and local settings ignored and bypass and auto modes disabled; only drgnx's MCP servers (no
-.mcp.json, user, plugin or agent servers); Claude Code's own sandbox off, as drgnx's sandbox is the boundary.
-`settingSources' is left to the adapter, so CLAUDE.md, skills and every tier's deny and ask rules still apply.
+pre-allows a tool in a job: bypass mode gone from every settings tier; as the policy tier, every permission rule
+\(allow, deny and ask) and hook of the user, project and local settings ignored and bypass and auto modes disabled;
+only drgnx's MCP servers (no .mcp.json, user, plugin or agent servers); Claude Code's own sandbox off, as drgnx's
+sandbox is the boundary.  `drgnx-agents--session-meta' adds the deny and ask rules of those settings to the policy
+tier, so they still apply.  `settingSources' is left to the adapter, so CLAUDE.md and skills load.
 docs/guide/agents.md, \"Jobs and your Claude settings\".")
 
+(defun drgnx-agents--claude-adapter-p (command)
+  "Does the profile COMMAND (a list) run Claude Code's ACP adapter?  Told by the package.json of the program it
+starts (`drgnx-agents-command', `drgnx-agents--adapter-package': the maintained package or the deprecated one), never
+by a file name, so a wrapper or a program that only has claude in its name is not the adapter."
+  (let ((program (and (stringp (car command)) (executable-find (car (drgnx-agents-command command))))))
+    (and program
+         (member (plist-get (drgnx-agents--adapter-package program) :name)
+                 (list drgnx-agents-claude-package drgnx-agents-claude-old-package))
+         t)))
+
+(defun drgnx-agents--env-object (env)
+  "ENV (\"NAME=value\" strings, and bare names that unset) as the agent's process sees it, a plist (:NAME VALUE…):
+the first entry of a name decides, so a bare name before a value leaves it out."
+  (let (seen object)
+    (dolist (e env)
+      (let* ((i (string-search "=" e)) (name (if i (substring e 0 i) e)))
+        (unless (or (equal name "") (member name seen))
+          (push name seen)
+          (when i (setq object (plist-put object (intern (concat ":" name)) (substring e (1+ i))))))))
+    object))
+
+(defconst drgnx-agents--claude-settings-max 1048576 "The largest Claude settings file drgnx reads, in bytes.")
+
+(defun drgnx-agents--claude-rules (file &optional within)
+  "The deny and ask rules of the Claude settings FILE, as (DENY . ASK), lists of strings; nil when FILE is not a
+regular file (a link is not followed), is larger than `drgnx-agents--claude-settings-max', is not inside the
+directory WITHIN (when given, after links are resolved) or does not parse.  Never signals: a task folder's files are
+the agent's to write, and are read only as these strings."
+  (when (and (file-regular-p file) (not (file-symlink-p file))
+             (<= (or (file-attribute-size (file-attributes file)) 0) drgnx-agents--claude-settings-max)
+             (or (not within) (file-in-directory-p (file-truename file) (file-truename within))))
+    (let ((perms (ignore-errors
+                   (with-temp-buffer
+                     (insert-file-contents file nil 0 drgnx-agents--claude-settings-max)
+                     (plist-get (json-parse-buffer :object-type 'plist :array-type 'list :null-object nil :false-object nil)
+                                :permissions)))))
+      (and (plistp perms)
+           (cl-flet ((strings (key) (let ((v (plist-get perms key))) (and (proper-list-p v) (seq-filter #'stringp v)))))
+             (cons (strings :deny) (strings :ask)))))))
+
+(defun drgnx-agents--claude-deny-ask (env cwd)
+  "The deny and ask rules of Claude's user settings (settings.json in CLAUDE_CONFIG_DIR as ENV sets it, else
+~/.claude) and of CWD's project and local settings (.claude/settings.json, .claude/settings.local.json), as
+\(DENY . ASK), without duplicates."
+  (let* ((config (let ((process-environment (append env process-environment)))
+                   (or (getenv "CLAUDE_CONFIG_DIR") (expand-file-name "~/.claude"))))
+         (all (list (drgnx-agents--claude-rules (expand-file-name "settings.json" config))
+                    (drgnx-agents--claude-rules (expand-file-name ".claude/settings.json" cwd) cwd)
+                    (drgnx-agents--claude-rules (expand-file-name ".claude/settings.local.json" cwd) cwd))))
+    (cons (delete-dups (apply #'append (mapcar #'car all))) (delete-dups (apply #'append (mapcar #'cdr all))))))
+
 (defun drgnx-agents--session-meta (s env)
-  "The `_meta' S's session/new and session/load carry: for a session of a job whose profile runs Claude Code
-\(`drgnx-agents--command-agent' is `claude'), (:claudeCode (:options OPTS)), OPTS being
-`drgnx-agents-job-claude-options' and `:env', ENV (the \"NAME=value\" strings S's agent was started with) as an
-object, the first of a name winning as in the agent's environment; nil, so no `_meta' at all, for any other."
+  "The `_meta' S's session/new and session/load carry: for a session of a job whose profile runs Claude Code's
+adapter (`drgnx-agents--claude-adapter-p'), (:claudeCode (:options OPTS)), OPTS being
+`drgnx-agents-job-claude-options' with the deny and ask rules of the user's and S's folder's Claude settings added
+to its policy tier's permissions (`drgnx-agents--claude-deny-ask'; never an allow rule) and `:env', ENV (the
+\"NAME=value\" strings S's agent was started with) as the agent's process sees it (`drgnx-agents--env-object'); nil,
+so no `_meta' at all, for any other."
   (and (drgnx-agent-session-job s)
-       (eq (drgnx-agents--command-agent (plist-get (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))) :command))
-           'claude)
-       (let (object)
-         (dolist (e env)
-           (when (string-match "\\`\\([^=]+\\)=" e)
-             (let ((key (intern (concat ":" (match-string 1 e)))))
-               (unless (plist-member object key)
-                 (setq object (plist-put object key (substring e (match-end 0))))))))
-         (list :claudeCode (list :options (append drgnx-agents-job-claude-options (list :env object)))))))
+       (drgnx-agents--claude-adapter-p (plist-get (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))) :command))
+       (let* ((options (copy-tree drgnx-agents-job-claude-options))
+              (managed (plist-get options :managedSettings))
+              (rules (drgnx-agents--claude-deny-ask env (drgnx-agent-session-cwd s)))
+              (permissions (append (plist-get managed :permissions)
+                                   (and (car rules) (list :deny (vconcat (car rules))))
+                                   (and (cdr rules) (list :ask (vconcat (cdr rules)))))))
+         (list :claudeCode
+               (list :options (append (plist-put options :managedSettings (plist-put managed :permissions permissions))
+                                      (list :env (drgnx-agents--env-object env))))))))
 
 (defvar drgnx-agents-coordination t
   "Non-nil: every agent gets drgnx's coordination tools (an MCP server, docs/develop/coordination.md).")
@@ -661,16 +716,43 @@ the commits each turn makes are recorded for it.  JOB: the coordination job it b
      s (lambda ()
          (drgnx-agents--connect
           s (lambda (meta)
-              (drgnx-acp-request (drgnx-agent-session-conn s) "session/new"
-                                 (append (list :cwd (drgnx-agent-session-cwd s) :mcpServers (drgnx-agents--mcp-servers s))
-                                         (and meta (list :_meta meta)))
-                                 (lambda (r)
-                                   (if (cdr r) (drgnx-agents--failed s (cdr r))
-                                     (setf (drgnx-agent-session-acp-id s) (plist-get (car r) :sessionId)
-                                           (drgnx-agent-session-status s) 'idle)
-                                     (drgnx-agents--changed s)
-                                     (drgnx-agents--next s))))))))
+              (let ((pin (and meta t)))
+                (drgnx-agents--request
+                 s "session/new"
+                 (append (list :cwd (drgnx-agent-session-cwd s) :mcpServers (drgnx-agents--mcp-servers s))
+                         (and meta (list :_meta meta)))
+                 (lambda (r)
+                   (if (cdr r) (drgnx-agents--failed s (cdr r))
+                     (setf (drgnx-agent-session-acp-id s) (plist-get (car r) :sessionId))
+                     (drgnx-agents--pin-mode s pin #'drgnx-agents--ready)))))))))
     s))
+
+(defun drgnx-agents--ready (s)
+  "S's agent made or loaded its session: S is idle, and what waited goes."
+  (setf (drgnx-agent-session-status s) 'idle)
+  (drgnx-agents--changed s)
+  (drgnx-agents--next s))
+
+(defun drgnx-agents--request (s method params callback)
+  "Send request METHOD with PARAMS to S's agent, CALLBACK as in `drgnx-acp-request'.  Params that cannot be
+written as JSON (an environment value that is not valid UTF-8) end S, with a message that never shows them."
+  (condition-case nil
+      (drgnx-acp-request (drgnx-agent-session-conn s) method params callback)
+    (error (drgnx-agents--add s (list :type 'error :text (format "drgnx could not send %s to the agent: a value in it (an environment variable of the profile?) cannot be written as JSON" method)))
+           (drgnx-agents-kill s))))
+
+(defun drgnx-agents--pin-mode (s pin then)
+  "With PIN (a job session of Claude Code's adapter, `drgnx-agents--session-meta'), set S's permission mode to
+`default' (ACP session/set_mode) and call THEN with S once the agent agrees; a refusal ends S, so it never takes a
+turn in a mode its settings chose (acceptEdits, auto, or a resumed session's).  Without PIN, THEN at once."
+  (if (not pin) (funcall then s)
+    (drgnx-agents--request
+     s "session/set_mode" (list :sessionId (drgnx-agent-session-acp-id s) :modeId "default")
+     (lambda (r)
+       (if (not (cdr r)) (funcall then s)
+         (drgnx-agents--add s (list :type 'error :text (format "the agent's permission mode could not be set to default (%s): the session ends"
+                                                               (or (plist-get (cdr r) :message) (cdr r)))))
+         (drgnx-agents-kill s))))))
 
 (defun drgnx-agents-take-over (profile cwd session-id &optional task id name job)
   "Resume the agent session SESSION-ID (from another client, or one that ended) with PROFILE in CWD:
@@ -687,15 +769,15 @@ hub resuming its sessions: messages and spend follow them)."
           s (lambda (meta)
               (if (memq (plist-get (drgnx-agent-session-capabilities s) :loadSession) '(nil :false))
                   (progn (drgnx-agents--failed s "this agent cannot resume sessions (no session/load)") (drgnx-agents-kill s))
-                (drgnx-acp-request (drgnx-agent-session-conn s) "session/load"
-                                   (append (list :sessionId session-id :cwd (drgnx-agent-session-cwd s)
-                                                 :mcpServers (drgnx-agents--mcp-servers s))
-                                           (and meta (list :_meta meta)))
-                                   (lambda (r)
-                                     (if (cdr r) (progn (drgnx-agents--failed s (cdr r)) (drgnx-agents-kill s))
-                                       (setf (drgnx-agent-session-status s) 'idle)
-                                       (drgnx-agents--changed s)
-                                       (drgnx-agents--next s)))))))))
+                (let ((pin (and meta t)))
+                  (drgnx-agents--request
+                   s "session/load"
+                   (append (list :sessionId session-id :cwd (drgnx-agent-session-cwd s)
+                                 :mcpServers (drgnx-agents--mcp-servers s))
+                           (and meta (list :_meta meta)))
+                   (lambda (r)
+                     (if (cdr r) (progn (drgnx-agents--failed s (cdr r)) (drgnx-agents-kill s))
+                       (drgnx-agents--pin-mode s pin #'drgnx-agents--ready))))))))))
     s))
 
 (defun drgnx-agents-free-p (s)

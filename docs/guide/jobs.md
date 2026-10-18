@@ -168,9 +168,11 @@ the perf workload `job-window` ([perf.md](../develop/perf.md)). Developer detail
   or whose kind is not a string, asks. Other calls of the kind `other` (loading a skill, a to-do list) are allowed
   as before.
 - **Your allow rules no longer pre-allow inside jobs.** A job's Claude Code session ignores the allow rules and hooks
-  of your user, project and local settings, bypass and auto modes, and every MCP server but drgnx's (a repository's
-  `.mcp.json` included): drgnx sends it these options with `session/new` and `session/load`. The deny and ask rules,
-  `CLAUDE.md` and skills still apply, and your own sessions are unchanged. Details in
+  of your user, project and local settings, bypass mode, and every MCP server but drgnx's (a repository's
+  `.mcp.json` included): drgnx sends it these options with `session/new` and `session/load`. It also sets the
+  session's mode to `default` before the first turn, so no `auto` or `acceptEdits` default mode from any settings
+  file applies; an agent that refuses ends the session. The deny and ask rules of those settings still apply (drgnx
+  copies them into the policy tier), so do `CLAUDE.md` and skills, and your own sessions are unchanged. Details in
   [agents.md](agents.md#jobs-and-your-claude-settings).
 - **The agents' configuration asks.** A change to a `.claude/` directory at any depth of the worktree (its settings
   can set a permission mode such as `bypassPermissions`, allow rules or hooks, and hold for the reviewer and every

@@ -181,31 +181,41 @@ you say yes.
 ## Jobs and your Claude settings
 
 A [job](jobs.md)'s agent works unwatched, in a repository you may not have written, so nothing in a settings file may
-let it act without asking. When a job runs a profile on Claude Code, its `session/new` and `session/load` carry
+let it act without asking. When a job runs a profile on Claude Code's adapter (told by the package of the program
+it starts, `@agentclientprotocol/claude-agent-acp`, not by its name), its `session/new` and `session/load` carry
 options for the adapter (`_meta.claudeCode.options`, `drgnx-agents-job-claude-options`), and that session's Claude
 **ignores**:
 
-- the **allow rules and hooks** of your user settings (`~/.claude/settings.json`), the project's
-  (`.claude/settings.json`) and the local ones (`.claude/settings.local.json`) — drgnx passes them as the policy tier
-  (`allowManagedPermissionRulesOnly`, `allowManagedHooksOnly`), so a tool you allowed for your own sessions asks in
-  a job;
-- **bypass mode** (`bypassPermissions`, `--dangerously-skip-permissions`) from any tier, and **auto mode**;
+- the **allow rules and hooks** of your user settings (`~/.claude/settings.json`, or `settings.json` in
+  `CLAUDE_CONFIG_DIR`), the project's (`.claude/settings.json`) and the local ones (`.claude/settings.local.json`) —
+  drgnx passes the policy tier (`allowManagedPermissionRulesOnly`, `allowManagedHooksOnly`), so a tool you allowed
+  for your own sessions asks in a job;
+- **bypass mode** (`bypassPermissions`, `--dangerously-skip-permissions`) from any tier;
+- **any default mode**: once the session is made or loaded, drgnx sets its mode to `default` (ACP
+  `session/set_mode`) before it takes a turn, so neither `auto` nor `acceptEdits` from any settings file, nor the
+  mode a resumed session last had, applies. An agent that refuses ends the session (the job then falls back or
+  shows a card);
 - **MCP servers** other than drgnx's own: a repository's `.mcp.json`, your user and plugin servers and those of
   agent definitions are not started (`strictMcpConfig`).
 
-What **still applies**: the deny and ask rules of every tier, `CLAUDE.md`, skills and agent definitions (which
-settings files Claude reads is left as it is: they are content, and the permission check bounds what they can make
-the agent do). Claude Code's own sandbox is off in a job: drgnx's is the boundary. A default mode of `acceptEdits`
-in your user or local settings still applies; edits in the task's folder are allowed in a job anyway.
+The policy tier makes Claude ignore the deny and ask rules of those files too, so drgnx copies them into it: the
+**deny and ask rules** of your user, project and local settings still apply (an allow rule is never copied). drgnx
+reads those files when the session starts: only regular files (not links) inside the task's folder for the project
+and local ones, up to 1 MB, that parse as JSON; any other is skipped. `CLAUDE.md`, skills and agent definitions still
+load (which settings files Claude reads is left as it is: they are content, and the permission check bounds what they
+can make the agent do). Claude Code's own sandbox is off in a job: drgnx's is the boundary.
 
 Your own sessions (New Agent Session…, Take Over) and agents other than Claude get none of this. Other agents
 (Gemini CLI, Codex) have no such switch yet. On a machine whose administrator installed a `managed-settings.json`
 (`/etc/claude-code/` on Linux, `/Library/Application Support/ClaudeCode/` on macOS), Claude Code uses the
 administrator's policy instead of drgnx's unless that file sets `"parentSettingsBehavior": "merge"`; the refusal of
-bypass mode and the MCP lock hold either way.
+bypass mode, the `default` mode and the MCP lock hold either way.
 
 Tests: `test/unit/agents-claude-options-test.el` (what job sessions send through `session/new` and `session/load`,
-nothing for your sessions or other agents, a repository's bypass settings and `.mcp.json` changing nothing sent).
+the mode set before any turn and a refusal ending the session, deny and ask rules copied and allow rules never,
+settings files that are links or do not parse skipped, nothing for your sessions, for other agents or for a program
+that only has claude in its name, a repository's bypass settings and `.mcp.json` changing nothing sent, an
+environment value JSON cannot carry ending the start without showing it).
 
 ## Working together
 
@@ -305,6 +315,7 @@ run it, with the plan's own encoding and line endings — and leaves alone a pla
 
 The mock agent (`test/fixtures/mock-acp.el`) is a batch Emacs whose turns are chosen by words in the prompt
 (`slow`, `tool`, `plan`, `subagent`, `permission`, `write PATH`, `crash`, `/compact`, `meta`: the `_meta` its
-`session/new` or `session/load` got). Tests start it through
+`session/new` or `session/load` got, `mode`: the mode `session/set_mode` set; `MOCK_ACP_SET_MODE_FAILS` and
+`MOCK_ACP_SET_MODE_SLOW=SECS` make it refuse or answer late). Tests start it through
 `test/fixtures/mock-acp-stdin.sh` (`sh mock-acp-stdin.sh emacs --batch -Q -l mock-acp.el`), which copies its stdin into
 a FIFO the mock reads while a turn streams; without the wrapper it reads `/proc/PID/fd/0`, which only Linux has.
