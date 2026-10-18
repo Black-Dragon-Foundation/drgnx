@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'drgnx)
 (load (expand-file-name "modules/editor/drgnx-sticky" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defun drgnx-sticky-test--elisp (n)
   "A buffer text: a defun of N body lines."
@@ -138,6 +139,18 @@
         (drgnx-sticky-test--start-at-line (+ 5000 (* i 40)))
         (drgnx-sticky--segment (selected-window)))
       (should (< (/ (- (float-time) t0) 100) 0.002)))))
+
+(ert-deftest drgnx-sticky/turning-the-module-off-turns-sticky-scroll-off-in-live-buffers ()
+  (let ((b (generate-new-buffer "sticky-off")))
+    (unwind-protect
+        (progn
+          (drgnx-test-with-modules '(editor/sticky) :strict t
+                                   (should (memq #'drgnx-sticky--maybe prog-mode-hook))
+                                   (with-current-buffer b (emacs-lisp-mode) (drgnx-sticky-mode 1))
+                                   (should (buffer-local-value 'drgnx-sticky-mode b)))
+          (should-not (buffer-local-value 'drgnx-sticky-mode b))
+          (should-not (memq #'drgnx-sticky--maybe prog-mode-hook)))
+      (kill-buffer b))))
 
 ;;; mod-sticky-test.el ends here
 
