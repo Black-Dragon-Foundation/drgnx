@@ -102,13 +102,17 @@ again; the message after a write says so.
 - **MCP server** (`t`, **[Test]**): drgnx starts a separate Emacs, which starts the server (or connects to its URL),
   asks for its tools and ends it. The editor never waits. The row shows "testing…", then `ok, N tools`, `failed: …`,
   `needs a login` (with the agent's way to log in) or `no answer (timed out)` after 20 seconds. Anything the server
-  prints is masked before it is shown or kept. An `inactive` server (for example from a Codex project you have not
-  trusted) starts only after you confirm, with its command shown.
+  prints is masked before it is shown or kept. A server from the project's files, or an `inactive` one (for example
+  from a Codex project you have not trusted), starts only after you confirm, with its command or URL shown.
 - **Test All** (`T`, **[Test All]**): every MCP server the agent would start. Inactive and off servers are skipped
   (the message says how many). The project's own servers (from files in the project) start only after one question
   that lists their commands. Hooks are never run by Test All.
 - **Hook** (**[Test (runs the command)]**): this runs the hook's command for real, in the project, with a sample
   event on its input. It asks "Run COMMAND for real?" first. The row shows its exit status.
+
+What runs is what you confirmed: Test, Edit and Remove read the item from its file again, and if it is no longer
+what the page shows (someone changed the file), they stop with "changed on disk: Refresh (g)". Test All skips such
+a server and says so.
 
 The last result of each item is kept, masked, in `agent-checks.eld` in drgnx's state directory, so the page shows it
 again with its age.

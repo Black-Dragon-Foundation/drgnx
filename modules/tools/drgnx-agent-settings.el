@@ -52,7 +52,7 @@
 (defvar-local drgnx-agent-settings--data nil "What `drgnx-agent-config-read' returned for this page.")
 
 (defvar drgnx-agent-settings--running (make-hash-table :test #'equal)
-  "Items whose Test runs now: (KIND SECTION NAME FILE) → t.")
+  "Items whose Test runs now: ((KIND SECTION NAME FILE) . ORDINAL) → t.")
 
 (defconst drgnx-agent-settings--sections '((mcp . "MCP Servers") (hook . "Hooks") (skill . "Skills"))
   "The sections of a page, top to bottom.")
@@ -132,7 +132,7 @@
 
 (defun drgnx-agent-settings--test-status (item)
   "The last Test of ITEM with its age, or that it runs now; \"\" when it never ran."
-  (if (gethash (drgnx-agent-settings--key item) drgnx-agent-settings--running)
+  (if (gethash (drgnx-agent-settings--ref item) drgnx-agent-settings--running)
       (propertize "testing…" 'face 'drgnx-agent-settings-dim)
     (let* ((r (cdr (assoc (drgnx-agent-settings--key item) drgnx-agent-settings--results)))
            (age (and r (plist-get r :at) (concat "Test " (drgnx-agent-settings--ago (- (float-time) (plist-get r :at))) ": "))))
@@ -346,7 +346,7 @@
     (dolist (line (drgnx-agent-settings--detail item))
       (insert (make-string (+ 4 width) ?\s) (propertize line 'face 'drgnx-agent-settings-dim) "\n"))
     ;; only the key: a copy of the text (kill-ring-save, yank) must never carry the item
-    (put-text-property start (point) 'drgnx-agent-settings-item (drgnx-agent-settings--key item))))
+    (put-text-property start (point) 'drgnx-agent-settings-item (drgnx-agent-settings--ref item))))
 
 (defun drgnx-agent-settings--insert-section (section title)
   "The SECTION of the page under TITLE, with its buttons and rows."
@@ -371,7 +371,7 @@
 (defun drgnx-agent-settings--render ()
   "Draw the page from what was read last; only the last Test results are read here (once)."
   (let ((inhibit-read-only t)
-        (drgnx-agent-settings--results (drgnx-agent-settings--saved-results)))
+        (drgnx-agent-settings--results (ignore-errors (drgnx-agent-check-results))))
     (erase-buffer)
     (drgnx-agent-settings--insert-agents)
     (drgnx-agent-settings--insert-problems)
@@ -394,15 +394,6 @@
         (set-window-start w (at start) t)
         (set-window-point w (at pt))))))
 
-(defun drgnx-agent-settings--saved-results ()
-  "The last Test results of every item, read once: ((KIND SECTION NAME FILE) . RESULT)…."
-  (ignore-errors
-    (if (fboundp 'drgnx-agent-check--read-all)
-        (drgnx-agent-check--read-all)
-      ;; Task 7's file without its reader: one read per item on the page
-      (mapcar (lambda (i) (cons (drgnx-agent-settings--key i) (drgnx-agent-check-last i)))
-              (plist-get drgnx-agent-settings--data :items)))))
-
 (defun drgnx-agent-settings--sanitize (item)
   "ITEM as the page keeps it: environment and header values gone, the command, arguments, URL and problem masked,
 and its status from the files (`:cheap', worked out from the whole ITEM).  Test and the edits read the item again."
@@ -423,23 +414,57 @@ and its status from the files (`:cheap', worked out from the whole ITEM).  Test 
     (when (plist-get out :problem) (setq out (plist-put out :problem (funcall mask (plist-get out :problem)))))
     (plist-put out :cheap (cons (car cheap) (funcall mask (cdr cheap))))))
 
-(defun drgnx-agent-settings--read ()
-  "Read the agent's settings for the page (files only); the page keeps them without secret values."
+(defun drgnx-agent-settings--number (items)
+  "ITEMS, each with `:ordinal': its rank among the items with the same key (two hooks of one event and matcher in
+one file share a key)."
+  (let ((seen (make-hash-table :test #'equal)))
+    (mapcar (lambda (item)
+              (let* ((key (drgnx-agent-settings--key item)) (n (gethash key seen 0)))
+                (puthash key (1+ n) seen)
+                (plist-put (copy-sequence item) :ordinal n)))
+            items)))
+
+(defun drgnx-agent-settings--ref (item)
+  "What a row of the page points to: (KEY . ORDINAL)."
+  (cons (drgnx-agent-settings--key item) (plist-get item :ordinal)))
+
+(defun drgnx-agent-settings--read-config ()
+  "Everything the agent has configured, as `drgnx-agent-config-read' gives it, the items numbered; an unexpected
+error is signalled as `drgnx-agent-config-unreadable' with a fixed message (its own text may quote a file)."
   (let ((data (condition-case nil
                   (drgnx-agent-config-read drgnx-agent-settings--kind drgnx-agent-settings--root)
-                ;; an unexpected error's text may quote a file: a fixed message
-                (error (list :problems (list (list (drgnx-agent-config-home drgnx-agent-settings--kind) nil
-                                                   "could not be read")))))))
+                (error (signal 'drgnx-agent-config-unreadable
+                               (list (drgnx-agent-config-home drgnx-agent-settings--kind) nil "could not be read"))))))
+    (plist-put (copy-sequence data) :items (drgnx-agent-settings--number (plist-get data :items)))))
+
+(defun drgnx-agent-settings--read ()
+  "Read the agent's settings for the page (files only); the page keeps them without secret values."
+  (let ((data (condition-case err
+                  (drgnx-agent-settings--read-config)
+                (drgnx-agent-config-unreadable (list :problems (list (cdr err)))))))
     (setq drgnx-agent-settings--data
-          (plist-put (copy-sequence data) :items (mapcar #'drgnx-agent-settings--sanitize (plist-get data :items))))))
+          (plist-put data :items (mapcar #'drgnx-agent-settings--sanitize (plist-get data :items))))))
+
+(defun drgnx-agent-settings--fresh-items ()
+  "The items as their files hold them now (with their values); a `user-error' when they cannot be read."
+  (condition-case nil
+      (plist-get (drgnx-agent-settings--read-config) :items)
+    (drgnx-agent-config-unreadable
+     (user-error "%s's settings could not be read: Refresh (g)" (drgnx-agent-config-title drgnx-agent-settings--kind)))))
+
+(defun drgnx-agent-settings--match (item items)
+  "The one of ITEMS (read just now) that the page's ITEM shows, when it is still as the page shows it, else nil."
+  (when-let* ((found (seq-find (lambda (i) (equal (drgnx-agent-settings--ref i) (drgnx-agent-settings--ref item)))
+                               items)))
+    (let ((clean (drgnx-agent-settings--sanitize found)))
+      (and (cl-every (lambda (p) (equal (plist-get clean p) (plist-get item p))) '(:spec :enabled :inactive :from))
+           found))))
 
 (defun drgnx-agent-settings--fresh (item)
-  "ITEM as its file holds it now (with its values), for a Test or a write; a `user-error' when it is gone."
-  (let ((key (drgnx-agent-settings--key item)))
-    (or (seq-find (lambda (i) (equal (drgnx-agent-settings--key i) key))
-                  (plist-get (drgnx-agent-config-read drgnx-agent-settings--kind drgnx-agent-settings--root) :items))
-        (user-error "%s is no longer in %s: Refresh (g) to see what is there" (plist-get item :name)
-                    (abbreviate-file-name (or (plist-get item :file) "its file"))))))
+  "ITEM as its file holds it now (with its values), for a Test or a write.  A `user-error' when it is gone or is
+no longer what the page shows (what was confirmed must be what runs)."
+  (or (drgnx-agent-settings--match item (drgnx-agent-settings--fresh-items))
+      (user-error "%s changed on disk: Refresh (g)" (plist-get item :name))))
 
 (defun drgnx-agent-settings--filter-substring (beg end &optional delete)
   "`filter-buffer-substring-function' of a page: copied text carries none of the page's own properties."
@@ -489,9 +514,9 @@ and its status from the files (`:cheap', worked out from the whole ITEM).  Test 
 (defun drgnx-agent-settings--item-at-point (&optional what)
   "The item on this line, as the page keeps it (no secret values); a `user-error' naming WHAT when there is none."
   (drgnx-agent-settings--page)
-  (let ((key (or (get-text-property (point) 'drgnx-agent-settings-item)
+  (let ((ref (or (get-text-property (point) 'drgnx-agent-settings-item)
                  (get-text-property (line-beginning-position) 'drgnx-agent-settings-item))))
-    (or (and key (seq-find (lambda (i) (equal (drgnx-agent-settings--key i) key))
+    (or (and ref (seq-find (lambda (i) (equal (drgnx-agent-settings--ref i) ref))
                            (plist-get drgnx-agent-settings--data :items)))
         (user-error "No MCP server, hook or skill on this line%s" (if what (concat " to " what) "")))))
 
@@ -585,7 +610,7 @@ Interactively: the agent of the session at point (in the Agents list or a transc
 
 (defun drgnx-agent-settings--start-test (item)
   "Test ITEM in its own process; the page shows the result when it comes."
-  (let ((key (drgnx-agent-settings--key item))
+  (let ((key (drgnx-agent-settings--ref item))
         (buffer (current-buffer))
         (root (or drgnx-agent-settings--root (expand-file-name "~/"))))
     (puthash key t drgnx-agent-settings--running)
@@ -612,14 +637,20 @@ Interactively: the agent of the session at point (in the Agents list or a transc
 
 (defun drgnx-agent-settings-test ()
   "Test the MCP server on this line (start it, list its tools), or run the hook on this line for real.
-An inactive server (one the agent ignores, such as an untrusted project's) is started only after a confirmation."
+A server from the project's files, or an inactive one (that the agent ignores, such as an untrusted project's), is
+started only after a confirmation that shows what it starts."
   (interactive)
   (let ((item (drgnx-agent-settings--item-at-point "test")))
     (pcase (plist-get item :section)
       ('mcp
-       (when (or (not (plist-get item :inactive))
-                 (yes-or-no-p (format "%s is inactive (%s). Start %s anyway? " (plist-get item :name)
-                                      (plist-get item :inactive) (drgnx-agent-settings--runs item))))
+       (when (or (not (or (plist-get item :inactive) (eq (plist-get item :from) 'project)))
+                 (yes-or-no-p (format "%s is %s. Start %s? " (plist-get item :name)
+                                      (string-join
+                                       (delq nil (list (and (eq (plist-get item :from) 'project) "from the project's files")
+                                                       (and (plist-get item :inactive)
+                                                            (concat "inactive: " (plist-get item :inactive)))))
+                                       " and ")
+                                      (drgnx-agent-settings--runs item))))
          (drgnx-agent-settings--start-test (drgnx-agent-settings--fresh item))))
       ('hook
        (let ((command (plist-get (plist-get item :spec) :command)))
@@ -635,12 +666,15 @@ real, so each is tested on its own."
   (interactive)
   (drgnx-agent-settings--page)
   (let* ((all (seq-filter (lambda (i) (and (eq (plist-get i :section) 'mcp)
-                                           (not (gethash (drgnx-agent-settings--key i) drgnx-agent-settings--running))))
+                                           (not (gethash (drgnx-agent-settings--ref i) drgnx-agent-settings--running))))
                           (plist-get drgnx-agent-settings--data :items)))
-         (skipped (seq-filter (lambda (i) (or (plist-get i :inactive) (not (plist-get i :enabled)))) all))
+         (skip-p (lambda (i) (or (plist-get i :inactive) (not (plist-get i :enabled)))))
+         (skipped (seq-filter skip-p all))
          (servers (seq-difference all skipped #'eq))
          (project (seq-filter (lambda (i) (eq (plist-get i :from) 'project)) servers))
-         (declined nil))
+         (declined nil)
+         (changed 0)
+         (started 0))
     (when (and project
                (not (yes-or-no-p (format "Start %s from the project's files: %s? "
                                          (if (cdr project) (format "%d servers" (length project)) "a server")
@@ -650,14 +684,19 @@ real, so each is tested on its own."
       (setq servers (seq-difference servers project #'eq)
             declined (length project)))
     (when servers
-      (let ((fresh (plist-get (drgnx-agent-config-read drgnx-agent-settings--kind drgnx-agent-settings--root) :items)))
+      (let ((fresh (drgnx-agent-settings--fresh-items)))
         (dolist (i servers)
-          (when-let* ((item (seq-find (lambda (f) (equal (drgnx-agent-settings--key f) (drgnx-agent-settings--key i)))
-                                      fresh)))
-            (drgnx-agent-settings--start-test item)))))
-    (message "%s%s%s"
-             (if servers (format "Testing %d MCP server%s" (length servers) (if (cdr servers) "s" "")) "No MCP server tested")
+          ;; what runs is what the page showed and was confirmed: a server changed on disk is skipped, and the
+          ;; file's own state is checked again
+          (let ((item (drgnx-agent-settings--match i fresh)))
+            (cond ((or (null item) (funcall skip-p item)
+                       (and (eq (plist-get item :from) 'project) (not (memq i project))))
+                   (cl-incf changed))
+                  (t (cl-incf started) (drgnx-agent-settings--start-test item)))))))
+    (message "%s%s%s%s"
+             (if (> started 0) (format "Testing %d MCP server%s" started (if (= started 1) "" "s")) "No MCP server tested")
              (if skipped (format "; %d skipped (inactive or off)" (length skipped)) "")
+             (if (> changed 0) (format "; %d skipped (changed on disk: Refresh)" changed) "")
              (if declined (format "; %d project server%s not started" declined (if (= declined 1) "" "s")) ""))))
 
 ;;;;; Writing

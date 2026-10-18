@@ -58,8 +58,8 @@ user hook, a user skill and a CLAUDE.md."
          (clrhash drgnx-agent-settings--running)))))
 
 (defun drgnx-agent-settings-test--name-here ()
-  "The name of the item on this line (its key, (KIND SECTION NAME FILE), is the text property)."
-  (nth 2 (get-text-property (point) 'drgnx-agent-settings-item)))
+  "The name of the item on this line (the text property is ((KIND SECTION NAME FILE) . ORDINAL))."
+  (nth 2 (car (get-text-property (point) 'drgnx-agent-settings-item))))
 
 (defun drgnx-agent-settings-test--item-line (name)
   "The text of the first line of the item called NAME on the page in the current buffer."
@@ -231,7 +231,14 @@ A `completing-read' answer is the first candidate that starts with it.  The prom
         (with-current-buffer (drgnx-agent-settings-open 'claude root)
           (drgnx-agent-settings-test--goto-item "docs")
           (drgnx-agent-settings-test--clear-messages)
-          (call-interactively #'drgnx-agent-settings-test)
+          ;; a server from the project's files: asked first, with what it reaches; no: nothing starts
+          (drgnx-agent-settings-test--answering (list nil)
+            (call-interactively #'drgnx-agent-settings-test))
+          (should (equal (car drgnx-agent-settings-test--prompts)
+                         "docs is from the project's files. Start https://example.invalid/mcp? "))
+          (should-not callbacks)
+          (drgnx-agent-settings-test--answering (list t)
+            (call-interactively #'drgnx-agent-settings-test))
           (should (equal (plist-get (car (car callbacks)) :name) "docs"))
           ;; the check gets the item as it is in the file (the page itself holds no values)
           (should (equal (cdr (assoc "X-Api" (plist-get (plist-get (car (car callbacks)) :spec) :headers)))
@@ -421,5 +428,134 @@ A `completing-read' answer is the first candidate that starts with it.  The prom
             (should-not (plist-get r :problems))))
         (should (seq-find (lambda (b) (and (eq (plist-get b :id) 'agent-settings) (equal (plist-get b :key) "SPC a c")))
                           (plist-get (resolve 'vim) :bindings)))))))
+
+;;;; Fix round 2
+
+(defun drgnx-agent-settings-test--goto-ref (name ordinal)
+  "Go to the row of the ORDINAL-th item called NAME."
+  (goto-char (point-min))
+  (while (not (let ((ref (get-text-property (point) 'drgnx-agent-settings-item)))
+                (and ref (equal (nth 2 (car ref)) name) (eql (cdr ref) ordinal))))
+    (when (eobp) (error "No item %s #%s on the page" name ordinal))
+    (forward-line 1)))
+
+(defun drgnx-agent-settings-test--hooks (&rest commands)
+  "Claude Code's user settings with one PreToolUse/Bash group running COMMANDS (each a command or (COMMAND TIMEOUT))."
+  (drgnx-agent-settings-test--write
+   (expand-file-name "settings.json" (getenv "CLAUDE_CONFIG_DIR"))
+   (format "{\n  \"hooks\": {\n    \"PreToolUse\": [\n      {\"matcher\": \"Bash\", \"hooks\": [%s]}\n    ]\n  }\n}\n"
+           (mapconcat (lambda (c)
+                        (if (consp c)
+                            (format "{\"type\": \"command\", \"command\": \"%s\", \"timeout\": %d}" (car c) (cadr c))
+                          (format "{\"type\": \"command\", \"command\": \"%s\"}" c)))
+                      commands ", "))))
+
+(ert-deftest drgnx-agent-settings/secrets-in-args-url-and-hook-command-never-on-the-page ()
+  (drgnx-agent-settings-test--env
+    (drgnx-agent-settings-test--write
+     (expand-file-name ".claude.json" (getenv "CLAUDE_CONFIG_DIR"))
+     "{\"mcpServers\": {\"a\": {\"command\": \"srv\", \"args\": [\"--token\", \"ARGSECRET0123456789\"]},\n \"b\": {\"type\": \"http\", \"url\": \"https://x.invalid/mcp?api_key=URLSECRET0123456789\"}}}\n")
+    (drgnx-agent-settings-test--hooks "curl -H 'Authorization: Bearer HOOKSECRET0123456789' https://x.invalid")
+    (with-current-buffer (drgnx-agent-settings-open 'claude root)
+      (let ((text (prin1-to-string (buffer-string))))
+        (dolist (secret '("ARGSECRET0123456789" "URLSECRET0123456789" "HOOKSECRET0123456789"))
+          (should-not (string-search secret text)))
+        (should (string-search "--token ••••" text))
+        (should (string-search "api_key=••••" text))
+        (should (string-match-p "runs: curl -H 'Authorization: \\(Bearer \\)?••••' https://x.invalid" text))))))
+
+(ert-deftest drgnx-agent-settings/kill-region-and-copy-region-as-kill-stay-clean ()
+  (drgnx-agent-settings-test--env
+    (with-current-buffer (drgnx-agent-settings-open 'claude root)
+      (let ((kill-ring nil) (kill-read-only-ok t))
+        (copy-region-as-kill (point-min) (point-max))
+        (kill-region (point-min) (point-max))
+        (should (= (length kill-ring) 2))
+        (dolist (text kill-ring)
+          (should-not (text-property-not-all 0 (length text) 'drgnx-agent-settings-item nil text))
+          (should-not (string-search drgnx-agent-settings-test--secret (prin1-to-string text)))
+          (should-not (string-search drgnx-agent-settings-test--header-secret (prin1-to-string text))))))))
+
+(ert-deftest drgnx-agent-settings/hook-timeout-none-removes-it ()
+  (drgnx-agent-settings-test--env
+    (drgnx-agent-settings-test--hooks '("echo drgnx-hook" 30))
+    (with-current-buffer (drgnx-agent-settings-open 'claude root)
+      (drgnx-agent-settings-test--goto-item "PreToolUse Bash")
+      ;; event, matcher, command (empty: keep), timeout: none
+      (drgnx-agent-settings-test--answering (list "PreToolUse" "Bash" "" "none")
+        (call-interactively #'drgnx-agent-settings-edit))
+      (should (string-search "none or 0: no timeout" (car drgnx-agent-settings-test--prompts)))
+      (let ((text (drgnx-agent-settings-test--read (expand-file-name "settings.json" (getenv "CLAUDE_CONFIG_DIR")))))
+        (should (string-search "echo drgnx-hook" text))
+        (should-not (string-search "timeout" text))))))
+
+(ert-deftest drgnx-agent-settings/an-unexpected-read-error-says-could-not-be-read ()
+  (drgnx-agent-settings-test--env
+    (let ((page (drgnx-agent-settings-open 'claude root)))
+      (cl-letf (((symbol-function 'drgnx-agent-config-read)
+                 (lambda (&rest _) (error "Parse error near QUOTEDFILETEXT"))))
+        (with-current-buffer page
+          ;; Test reads the item again: refused with the fixed text
+          (drgnx-agent-settings-test--goto-item "github")
+          (let ((err (should-error (call-interactively #'drgnx-agent-settings-test) :type 'user-error)))
+            (should (string-search "could not be read" (cadr err)))
+            (should-not (string-search "QUOTEDFILETEXT" (cadr err))))
+          ;; the page read again: one problem with the fixed text
+          (drgnx-agent-settings-refresh)
+          (should (string-search "could not be read" (buffer-string)))
+          (should-not (string-search "QUOTEDFILETEXT" (buffer-string))))))))
+
+(ert-deftest drgnx-agent-settings/two-hooks-with-one-key-are-two-rows ()
+  (drgnx-agent-settings-test--env
+    (drgnx-agent-settings-test--hooks "echo first" "echo second")
+    (drgnx-agent-settings-test--counting-checks
+      (with-current-buffer (drgnx-agent-settings-open 'claude root)
+        ;; Test on the second asks about the second, and runs the second
+        (drgnx-agent-settings-test--goto-ref "PreToolUse Bash" 1)
+        (let ((ran nil))
+          (cl-letf (((symbol-function 'drgnx-agent-check-hook)
+                     (lambda (item &rest _) (push (plist-get (plist-get item :spec) :command) ran) nil)))
+            (drgnx-agent-settings-test--answering (list t)
+              (call-interactively #'drgnx-agent-settings-test)))
+          (should (equal (car drgnx-agent-settings-test--prompts) "Run echo second for real? "))
+          (should (equal ran '("echo second"))))
+        ;; Remove on the second removes the second
+        (drgnx-agent-settings-test--goto-ref "PreToolUse Bash" 1)
+        (drgnx-agent-settings-test--answering (list t)
+          (call-interactively #'drgnx-agent-settings-remove))
+        (let ((text (drgnx-agent-settings-test--read (expand-file-name "settings.json" (getenv "CLAUDE_CONFIG_DIR")))))
+          (should (string-search "echo first" text))
+          (should-not (string-search "echo second" text)))))))
+
+(ert-deftest drgnx-agent-settings/a-file-changed-on-disk-runs-nothing ()
+  (drgnx-agent-settings-test--env
+    (drgnx-agent-settings-test--counting-checks
+      (with-current-buffer (drgnx-agent-settings-open 'claude root)
+        (drgnx-agent-settings-test--hooks "echo CHANGED")
+        (drgnx-agent-settings-test--goto-item "PreToolUse Bash")
+        (let ((err (drgnx-agent-settings-test--answering (list t)
+                     (should-error (call-interactively #'drgnx-agent-settings-test) :type 'user-error))))
+          (should (string-search "changed on disk: Refresh (g)" (cadr err))))
+        (should (equal (car drgnx-agent-settings-test--prompts) "Run echo drgnx-hook for real? "))
+        (should (= hooks 0))
+        ;; Test All: a server changed since the page was drawn is skipped, said so
+        (drgnx-agent-settings-test--write
+         (expand-file-name ".claude.json" (getenv "CLAUDE_CONFIG_DIR"))
+         "{\"mcpServers\": {\"github\": {\"command\": \"something-else\"}}}\n")
+        (drgnx-agent-settings-test--clear-messages)
+        (drgnx-agent-settings-test--answering (list nil)
+          (call-interactively #'drgnx-agent-settings-test-all))
+        (should-not started)
+        (should (string-search "1 skipped (changed on disk" (drgnx-agent-settings-test--messages)))))))
+
+(ert-deftest drgnx-agent-settings/test-results-read-once-per-drawing ()
+  (drgnx-agent-settings-test--env
+    (let ((calls 0))
+      (cl-letf (((symbol-function 'drgnx-agent-check-results) (lambda () (cl-incf calls) nil))
+                ((symbol-function 'drgnx-agent-check-last) (lambda (&rest _) (error "Read once, not per item"))))
+        (with-current-buffer (drgnx-agent-settings-open 'claude root)
+          (should (= calls 1))
+          (drgnx-agent-settings-refresh)
+          (should (= calls 2)))))))
 
 ;;; mod-agent-settings-test.el ends here

@@ -171,6 +171,7 @@ JSON that is tab-indented is re-written with 2 spaces; arrays are always written
 The `claude` methods of the three generic functions, and `drgnx-agent-config-claude-routes`. Read: the files below;
 write: only the entry that changed, with one backup next to the file. Credential files are never opened; no key is
 looked up.
+`drgnx-agent-config-claude-hook-events`: Claude Code's hook events, offered by the settings page (other names may be typed).
 
 | What | Where |
 | --- | --- |
@@ -240,6 +241,8 @@ makes Kimi Code reject the whole file, so drgnx refuses it.
 
 The `codex` methods of the three generic functions, `drgnx-agent-config-codex-trusted-p`, `-routes`, `-openrouter-snippet`
 and `-add-openrouter`. Formats checked against codex 0.163.0. Credential files (`auth.json`) are never opened.
+`drgnx-agent-config-codex-hook-events`: Codex's hook events, offered by the settings page (other names may be typed).
+A config.toml that does not parse is a problem "not valid TOML" with its line, never the parser's text (it quotes the file).
 
 | What | Where |
 | --- | --- |
@@ -312,6 +315,7 @@ they never create a scope in the user's systemd manager.
 | `(drgnx-agent-check-hook ITEM ROOT CALLBACK)` | Runs the hook's command with `sh -c` in ROOT (in the same memory cap), the sample event as JSON on stdin, for the hook's timeout (Gemini's is milliseconds) or 60 seconds. The command travels in the environment (`DRGNX_HOOK_COMMAND`, unset before it runs), not on a command line. CALLBACK gets `(:exit N :stdout S :stderr S :time F)`, masked, 16 KB each; a hook that ran out of time has `:exit nil :timeout t`; one that could not start has `:exit nil :error S`. |
 | `(drgnx-agent-check-sample-event KIND EVENT ROOT)` | The event as an alist. Claude Code and Kimi Code: `session_id`, `transcript_path`, `cwd`, `hook_event_name` and per event `tool_name` `Bash` with `tool_input` `{"command": "echo drgnx-hook-test"}` (and `tool_response`, `prompt`, `source`, `trigger`, … as the event has them). Codex: the same plus `model` and `turn_id`. Gemini: its own events (`BeforeTool` with `run_shell_command`, `BeforeAgent` with `prompt`, …) and `timestamp`. The Codex and Gemini fields are the builder's table from their documentation, not checked against a running agent. |
 | `(drgnx-agent-check-remember ITEM RESULT)`, `(drgnx-agent-check-last ITEM)` | The last result per `(KIND SECTION NAME FILE)` in `(drgnx-state-dir)/agent-checks.eld` (0600), masked, with `:at` (the time). |
+| `(drgnx-agent-check-results)` | Every remembered result in one read, `((KIND SECTION NAME FILE) . RESULT)…` (the settings page reads it once per drawing). |
 
 Ending a check: the child Emacs and the scope it runs in are named (`systemd-run --scope --unit=drgnx-check-PID-N`); at
 the timeout this Emacs runs `systemctl --user kill --signal=KILL` on the scope as an asynchronous process, so the editing

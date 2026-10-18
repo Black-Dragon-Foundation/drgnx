@@ -279,9 +279,13 @@ character for bytes that are not valid UTF-8."
                (and (listp data) (cl-every #'consp data) data)))
         nil)))
 
+(defun drgnx-agent-check-results ()
+  "Every remembered result, masked, read once: an alist ((KIND SECTION NAME FILE) . RESULT)."
+  (drgnx-agent-check--read-all))
+
 (defun drgnx-agent-check-last (item)
   "The last remembered result of checking ITEM, or nil."
-  (cdr (assoc (drgnx-agent-check--key item) (drgnx-agent-check--read-all))))
+  (cdr (assoc (drgnx-agent-check--key item) (drgnx-agent-check-results))))
 
 (defun drgnx-agent-check-remember (item result)
   "Keep RESULT as the last result of checking ITEM, masked, with the time (`:at')."
