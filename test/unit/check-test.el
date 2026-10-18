@@ -181,3 +181,26 @@
               ((symbol-function 'process-attributes) (lambda (pid) (cdr (assq pid procs)))))
       (should-not (drgnx-check--group-running-p 100))
       (should (drgnx-check--group-running-p 200)))))
+
+(ert-deftest drgnx-check/shards-run-files-apart ()
+  ;; Each unit shard runs every file of its share in an Emacs of its own (a hook or feature one file leaves never
+  ;; reaches the next); the timing tests, alone in their phase, keep one Emacs.
+  (drgnx-check-test--with dir
+    (let ((root (concat dir "root/")))
+      (make-directory (concat root "test/unit") t)
+      (dolist (d '("harness" "core" "wb")) (make-symbolic-link (expand-file-name d drgnx-dir) (concat root d)))
+      (with-temp-file (concat root "test/unit/a-leaks-test.el")
+        (insert "(require 'ert)\n(defun iso-check--leaked () nil)\n(ert-deftest iso-check-a/leaks () (add-hook 'kill-buffer-hook #'iso-check--leaked) (provide 'iso-check--fake))\n"))
+      (with-temp-file (concat root "test/unit/b-clean-test.el")
+        (insert "(require 'ert)\n(ert-deftest iso-check-b/clean () (should-not (featurep 'iso-check--fake)) (should-not (memq 'iso-check--leaked (default-value 'kill-buffer-hook))))\n"))
+      (let* ((plan (drgnx-check-plan :root root :unit-shards 1 :gui nil :dir dir))
+             (unit (seq-find (lambda (j) (equal (plist-get j :name) "unit-1")) plan))
+             (timing (seq-find (lambda (j) (equal (plist-get j :name) "unit-timing")) plan))
+             (r (drgnx-check-run (list unit) :dir dir :jobs 1 :gui-slots 1)))
+        (should (plist-get r :ok))
+        (let ((json (json-parse-string (with-temp-buffer (insert-file-contents (concat dir "unit-1.json")) (buffer-string))
+                                       :object-type 'plist)))
+          (should (equal (list (plist-get json :passed) (plist-get json :failed)) '(2 0)))
+          (should (= 2 (length (plist-get json :files)))))
+        (should-not (member "DRGNX_TEST_ONE_PROCESS=1" (plist-get unit :env)))
+        (should (member "DRGNX_TEST_ONE_PROCESS=1" (plist-get timing :env)))))))

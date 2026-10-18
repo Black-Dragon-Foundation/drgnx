@@ -206,6 +206,7 @@ test_install() { # [NAME…] — install.sh end to end in fresh containers (slow
 cmd_test() {
   case "${1:-}" in
     "") test_batch ;;
+    --one-process) export DRGNX_TEST_ONE_PROCESS=1; test_batch ;;   # every test file in one Emacs (hunting a leak across files)
     --install) shift; test_install "$@" ;;
     --ui) run_in_tmp ui_exec test-ui ;;
     --scenario) shift; run_in_tmp ui_exec test-scenario "$@" ;;
@@ -214,7 +215,7 @@ cmd_test() {
     --soak) shift; run_in_tmp ui_exec test-soak "${1:-30}" ;;
     --container) shift; test_container "$@" ;;
     --podman) shift; DRGNX_CONTAINER=podman test_container "$@" ;;
-    *) echo "usage: drgnx test [--ui | --scenario [--config C] | --bench | --perf [--audit] | --soak [MIN] | --container [--ui] | --install [NAME…]]" >&2; exit 2 ;;
+    *) echo "usage: drgnx test [--one-process | --ui | --scenario [--config C] | --bench | --perf [--audit] | --soak [MIN] | --container [--ui] | --install [NAME…]]" >&2; exit 2 ;;
   esac
 }
 
@@ -383,7 +384,9 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx build             byte-compile drgnx (core, wb, modules); native compilation follows on load
        drgnx doctor [--json] [--dev]
                                is this machine ready for drgnx? (--dev: also the tools to develop it)
-       drgnx test              batch tests
+       drgnx test [--one-process]
+                               batch tests, each test file in an Emacs of its own
+                               (--one-process: all in one Emacs, to find a leak across files)
        drgnx test --ui         GUI tests in a headless session (mutter)
        drgnx test --bench      the workbench vs treemacs and ibuffer, timed in a GUI session
        drgnx test --perf [--audit]

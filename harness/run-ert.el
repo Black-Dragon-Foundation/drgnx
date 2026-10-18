@@ -89,6 +89,156 @@ summary to RESULTS-FILE.  Return t if every test passed."
          nil results-file nil 'silent)))
     (null failures)))
 
+;;;; One Emacs per test file
+
+(defconst drgnx-run-ert--self (or load-file-name buffer-file-name) "This file: every per-file Emacs loads it.")
+
+(defvar drgnx-run-ert--file-processes nil "The per-file Emacsen running now; they end with the run.")
+
+(defvar drgnx-run-ert--file-dirs nil "The temp directories of the per-file Emacsen running now.")
+
+(defun drgnx-run-ert--env-number (var default)
+  "The whole number above 0 in the environment variable VAR, else DEFAULT."
+  (let ((s (getenv var)))
+    (if (and s (string-match-p "\\`[1-9][0-9]*\\'" s)) (string-to-number s) default)))
+
+(defun drgnx-run-ert--end-process (p &optional grace)
+  "End P and what it started (its process group, as Emacs starts each process): TERM, GRACE seconds (default 5)
+to clean up, then KILL."
+  (ignore-errors (signal-process (- (process-id p)) 'TERM))
+  (let ((deadline (+ (float-time) (or grace 5))))
+    (while (and (process-live-p p) (< (float-time) deadline)) (accept-process-output p 0.05)))
+  (ignore-errors (signal-process (- (process-id p)) 'KILL))
+  (while (process-live-p p) (accept-process-output p 0.05)))
+
+(defun drgnx-run-ert--end-files ()
+  "`kill-emacs-hook' of a per-file run (C-c, TERM): end the files' Emacsen, which run in process groups of their own,
+and remove their temp directories."
+  (dolist (p drgnx-run-ert--file-processes)
+    (when (process-live-p p) (ignore-errors (signal-process (- (process-id p)) 'TERM))))
+  (dolist (d drgnx-run-ert--file-dirs) (ignore-errors (delete-directory d t))))
+
+(defun drgnx-run-ert--start-file (file tmp json buffer)
+  "Start an Emacs that runs the test FILE alone (`drgnx-run-ert-batch', this Emacs's `load-path' and environment),
+in the temp directory TMP (its DRGNX_RUN_TMP: used, never deleted, by it), its summary to JSON.  Its output goes
+to BUFFER, or to this Emacs's standard error when BUFFER is nil."
+  (let* ((process-environment (append (list (concat "DRGNX_TEST_RESULTS=" json) "DRGNX_TEST_ONE_PROCESS=1"
+                                            (concat "DRGNX_RUN_TMP=" tmp))
+                                      process-environment))
+         (p (make-process
+             :name (concat "drgnx-test-file " (file-name-nondirectory file)) :noquery t :connection-type 'pipe
+             :coding 'utf-8
+             :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
+                            "--eval" (format "(setq load-prefer-newer %S load-path '%S)" load-prefer-newer load-path)
+                            "-l" drgnx-run-ert--self "-f" "drgnx-run-ert-batch" file)
+             :filter (lambda (_ s) (if buffer
+                                       (with-current-buffer buffer (goto-char (point-max)) (insert s))
+                                     (princ s #'external-debugging-output)))
+             :sentinel #'ignore)))
+    (process-send-eof p)                ; stdin at its end: a stray prompt in a test fails, never waits
+    (push p drgnx-run-ert--file-processes)
+    p))
+
+(defun drgnx-run-ert--read-summary (json)
+  "The summary in the file JSON, or nil (missing or unreadable)."
+  (ignore-errors (json-parse-string (with-temp-buffer (insert-file-contents json) (buffer-string)) :object-type 'plist)))
+
+(defun drgnx-run-ert--merge (done timeout)
+  "One summary of the ended files DONE (each :file :exit :seconds :timed-out :summary), in the shape of a
+one-Emacs run plus :files.  A file whose Emacs timed out (after TIMEOUT s), died or exited non-zero without a
+failed test is a failure named after the file."
+  (let ((total 0) (passed 0) failures known-red tests files)
+    (dolist (f done)
+      (let* ((s (plist-get f :summary)) (exit (plist-get f :exit))
+             (why (cond ((plist-get f :timed-out) (format "its Emacs timed out after %d s (DRGNX_TEST_FILE_TIMEOUT)" timeout))
+                        ((null s) (format "its Emacs ended (exit %s) without a summary" exit))
+                        ((and (not (eql exit 0)) (eql 0 (plist-get s :failed))) (format "its Emacs exited %s" exit)))))
+        (when s
+          (cl-incf total (plist-get s :total))
+          (cl-incf passed (plist-get s :passed))
+          (setq failures (append failures (plist-get s :failures) nil)
+                known-red (append known-red (plist-get s :known_red) nil)
+                tests (append tests (plist-get s :tests) nil)))
+        (when why
+          (cl-incf total)
+          (setq failures (append failures (list (list :name (concat "file " (file-name-nondirectory (plist-get f :file)))
+                                                      :condition why)))))
+        (push (list :file (plist-get f :file) :exit exit :seconds (plist-get f :seconds)) files)))
+    (list :total total :passed passed :failed (length failures) :failures (vconcat failures)
+          :known_red (vconcat known-red) :tests (vconcat tests) :files (vconcat (nreverse files)))))
+
+(defun drgnx-run-ert--file-selected-p (file selector)
+  "Whether the test FILE can hold a test SELECTOR picks: with a string selector (a regexp on test names), only a
+file that defines such a test by name; any other selector, every file.  A narrow run then starts an Emacs only for
+the files it needs."
+  (or (not (stringp selector))
+      (with-temp-buffer
+        (insert-file-contents file)
+        (let ((found nil))
+          (while (and (not found) (re-search-forward "(ert-deftest[ \t\n]+\\([^][ \t\n()\"';]+\\)" nil t))
+            (setq found (string-match-p selector (match-string 1))))
+          found))))
+
+(defun drgnx-run-ert-files (files results-file &optional tmp-parent)
+  "Run each test file of FILES in an Emacs of its own, as Emacs's own `make check' does: a hook, timer, feature or
+variable one file leaves never reaches the next.  Each gets this Emacs's `load-path' and environment (selector,
+eln directory, no desktop), a temp directory of its own made in TMP-PARENT (default `temporary-file-directory') and
+removed when it ends, and writes its own summary; one merged summary goes to RESULTS-FILE.  DRGNX_TEST_JOBS files
+run at once (default 1); one that runs DRGNX_TEST_FILE_TIMEOUT seconds (default 300) is ended.  Return t when every
+file passed."
+  (let* ((selector (let ((s (getenv "DRGNX_TEST_SELECTOR"))) (and s (not (string-empty-p s)) (car (read-from-string s)))))
+         (files (cl-remove-if-not (lambda (f) (drgnx-run-ert--file-selected-p f selector)) files))
+         (jobs (drgnx-run-ert--env-number "DRGNX_TEST_JOBS" 1))
+         (timeout (drgnx-run-ert--env-number "DRGNX_TEST_FILE_TIMEOUT" 300))
+         (out-dir (make-temp-file "drgnx-files" t))
+         (queue (cl-loop for file in files for i from 1
+                         collect (list :file file :json (expand-file-name (format "%d.json" i) out-dir))))
+         (count (length queue)) (running nil) (done nil) (t0 (float-time)))
+    (add-hook 'kill-emacs-hook #'drgnx-run-ert--end-files)
+    (unwind-protect
+        (while (or queue running)
+          (while (and queue (< (length running) jobs))
+            (let* ((f (pop queue)) (buffer (and (> jobs 1) (generate-new-buffer " *drgnx-test-file*")))
+                   ;; named as bin/drgnx names a run's directory, so the file's runner takes it as given
+                   (tmp (let ((temporary-file-directory (file-name-as-directory (or tmp-parent temporary-file-directory))))
+                          (make-temp-file "drgnx-run." t))))
+              (unless buffer (message "drgnx: %s (%d/%d)" (plist-get f :file) (- count (length queue)) count))
+              (push tmp drgnx-run-ert--file-dirs)
+              (push (append f (list :buffer buffer :start (float-time) :tmp tmp
+                                    :process (drgnx-run-ert--start-file (plist-get f :file) tmp (plist-get f :json) buffer)))
+                    running)))
+          (accept-process-output nil 0.05)
+          (dolist (f (copy-sequence running))
+            (let ((p (plist-get f :process)))
+              (when (and (process-live-p p) (> (- (float-time) (plist-get f :start)) timeout))
+                (message "drgnx: %s ran %d s: ending it" (plist-get f :file) timeout)
+                (plist-put f :timed-out t)
+                (drgnx-run-ert--end-process p))
+              (unless (process-live-p p)
+                (setq running (delq f running)
+                      drgnx-run-ert--file-processes (delq p drgnx-run-ert--file-processes)
+                      drgnx-run-ert--file-dirs (delete (plist-get f :tmp) drgnx-run-ert--file-dirs))
+                (ignore-errors (delete-directory (plist-get f :tmp) t))
+                (when-let* ((buffer (plist-get f :buffer)))
+                  (message "drgnx: %s" (plist-get f :file))
+                  (princ (with-current-buffer buffer (buffer-string)) #'external-debugging-output)
+                  (kill-buffer buffer))
+                (push (append f (list :exit (process-exit-status p) :seconds (- (float-time) (plist-get f :start))
+                                      :summary (drgnx-run-ert--read-summary (plist-get f :json))))
+                      done)))))
+      (drgnx-run-ert--end-files)
+      (delete-directory out-dir t))
+    (let ((summary (drgnx-run-ert--merge (sort done (lambda (a b) (< (cl-position (plist-get a :file) files :test #'equal)
+                                                                     (cl-position (plist-get b :file) files :test #'equal))))
+                                         timeout)))
+      (message "\ndrgnx: %d test files, each in an Emacs of its own: %d tests, %d as expected, %d unexpected (%.0f s)"
+               count (plist-get summary :total) (plist-get summary :passed) (plist-get summary :failed) (- (float-time) t0))
+      (cl-loop for f across (plist-get summary :failures) do (message "   FAILED  %s" (plist-get f :name)))
+      (when results-file
+        (let ((coding-system-for-write 'utf-8-unix))
+          (write-region (decode-coding-string (json-serialize summary) 'utf-8) nil results-file nil 'silent)))
+      (zerop (plist-get summary :failed)))))
+
 (defvar project-list-file)
 
 (defconst drgnx-run-ert--dead-bus "unix:path=/nonexistent/drgnx-unit-test"
@@ -153,6 +303,8 @@ exit 0 or 1."
         load-path (mapcar (lambda (d) (if (stringp d) (expand-file-name d) d)) load-path))
   (let* ((args (prog1 (mapcar #'expand-file-name command-line-args-left) (setq command-line-args-left nil)))
          (dir (if (and (= (length args) 1) (file-directory-p (car args))) (car args) args))
+         ;; each test file in an Emacs of its own, unless DRGNX_TEST_ONE_PROCESS=1 (`bin/drgnx test --one-process')
+         (one-process (equal (getenv "DRGNX_TEST_ONE_PROCESS") "1"))
          ;; native trampolines: drgnx's directory, never the user's ~/.config/emacs/eln-cache (both before HOME changes)
          (eln (drgnx-run-ert--eln-dir))
          (user-eln (file-name-as-directory (expand-file-name "eln-cache/" user-emacs-directory)))
@@ -181,6 +333,8 @@ exit 0 or 1."
                   (list "DRGNX_TEST_ISOLATED=1")
                   ;; …every Emacs this run starts compiles its trampolines into the same directory, once
                   (and eln (list (concat "DRGNX_TEST_ELN_DIR=" eln)))
+                  ;; …a test that runs the runner gets one Emacs per file unless it says otherwise
+                  (list "DRGNX_TEST_ONE_PROCESS")
                   ;; …a test that runs the runner or bin/drgnx again must not reuse (and delete) this directory
                   (list "DRGNX_RUN_TMP")
                   ;; …nor start a durable hub that would outlive it (the hub's own tests unset this)
@@ -202,7 +356,12 @@ exit 0 or 1."
          (abbreviated-home-dir nil)                     ; recomputed for the temp home
          ;; project.el remembers projects it sees: never in the user's own Emacs's list
          (project-list-file (expand-file-name "projects" tmp))
-         (ok (drgnx-run-ert dir (getenv "DRGNX_TEST_RESULTS"))))
+         (ok (if one-process
+                 (drgnx-run-ert dir (getenv "DRGNX_TEST_RESULTS"))
+               ;; each file's directory as deep as this one (a socket path has ~104 bytes): in the run's given
+               ;; directory, else beside this run's own (check's shards: in check's)
+               (drgnx-run-ert-files (drgnx-run-ert--files dir) (getenv "DRGNX_TEST_RESULTS")
+                                    (if given tmp (file-name-directory (directory-file-name own)))))))
     (when own (delete-directory own t))
     (kill-emacs (if ok 0 1))))
 

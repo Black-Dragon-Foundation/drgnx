@@ -97,11 +97,12 @@ results go (default: none)."
                                :env (append (list "DRGNX_TEST_SELECTOR=(not (tag :timing))") (funcall results name)
                                             drgnx-check-unit-env))
                       jobs))
-    ;; the unit tests that measure time, alone once the parallel phase is over
+    ;; the unit tests that measure time, alone once the parallel phase is over, in one Emacs (16 tests: an Emacs
+    ;; for each of ~140 files would cost more than they take; each shard above runs a file per Emacs)
     (push (funcall job "unit-timing" 3 'unit
                    (append (list (drgnx-check--emacs) "--batch" "-Q" "--eval" "(setq load-prefer-newer t)")
                            paths (list "-l" run-ert "-f" "drgnx-run-ert-batch" (expand-file-name "test/unit" root)))
-                   :env (append (list "DRGNX_TEST_SELECTOR=(tag :timing)") (funcall results "unit-timing")
+                   :env (append (list "DRGNX_TEST_SELECTOR=(tag :timing)" "DRGNX_TEST_ONE_PROCESS=1") (funcall results "unit-timing")
                                 drgnx-check-unit-env))
           jobs)
     (when gui

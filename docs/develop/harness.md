@@ -25,14 +25,39 @@ how every drgnx UI change is developed and verified.
 `$DRGNX_TEST_RESULTS` when set; the summary is the source of truth for GUI runs, whose exit status is only
 pass/fail. `$DRGNX_TEST_SELECTOR` (an ERT selector, e.g. `(tag :timing)`) picks the tests a run takes.
 
+### One Emacs per test file
+
+`bin/drgnx test` and each unit shard of `bin/drgnx check` run every test file in a batch Emacs of its own, as Emacs's
+own `make check` does: a hook, timer, advice, feature or variable a file leaves behind never reaches the next file,
+so a test cannot pass or fail because of the file that happened to run before it. Within a file, ERT still runs the
+tests in name order in one Emacs. Each file's Emacs gets the runner's `load-path` and environment — the temp HOME
+and XDG directories, the dead session bus, `$DRGNX_TEST_SELECTOR` (applied inside each file), the trampoline
+directory below — and a temp directory (and HOME) of its own, removed when it ends: inside `$DRGNX_RUN_TMP` under
+`bin/drgnx test`, beside the runner's own under `check`, never deeper than a single Emacs's would be (a Unix socket
+path has ~104 bytes). It writes its own summary; the runner merges them into one, in the same shape, plus `"files"`
+(`[{"file","exit","seconds"}]`). A file whose Emacs dies (a test calls `kill-emacs`), exits non-zero without a failed
+test, or runs longer than `$DRGNX_TEST_FILE_TIMEOUT` seconds (default 300; it gets TERM, 5 s, then KILL, with what it
+started) is a failure named `file NAME-test.el`, and the other files still run. Files run one after another;
+`$DRGNX_TEST_JOBS` runs that many at once (their output is then printed whole as each ends). Interrupting the run ends
+the files' Emacsen too.
+
+With a name selector (a string: a regexp on test names), only the files that define a matching test (`(ert-deftest
+NAME`) get an Emacs, so a narrow run stays quick; any other selector (a tag, `(not …)`) runs every file.
+
+`bin/drgnx test --one-process` (or `DRGNX_TEST_ONE_PROCESS=1`) runs every file in one Emacs instead: for hunting a
+leak from one file into another (run the files in question this way; a test that fails only here depends on what an
+earlier file left). `bin/drgnx check`'s `unit-timing` job uses it too (16 tests across all files). The runner unsets
+the variable for the tests themselves, so a test that runs the runner gets one Emacs per file unless it sets it. The
+GUI and live tiers and the tests that start an Emacs of their own keep their own runners.
+
 ### Native trampolines
 
 A test that `cl-letf`s a primitive (`buffer-list`, `message`, …) makes Emacs compile a native trampoline, which it
 writes to the first writable directory of `native-comp-eln-load-path` — by default the user's
 `~/.config/emacs/eln-cache`, fixed when Emacs started, before the runner swaps HOME. The runner puts a directory of
 drgnx's first in that list and drops the user's own eln-cache from it (so a test neither writes nor reads there), and
-exports it as `$DRGNX_TEST_ELN_DIR`: every Emacs of the run (a test that runs the runner, `check`'s shards) uses the
-same one, so each trampoline is compiled once. `native-comp-enable-subr-trampolines` set to a directory would not do:
+exports it as `$DRGNX_TEST_ELN_DIR`: every Emacs of the run (each file's, a test that runs the runner, `check`'s shards)
+uses the same one, so each trampoline is compiled once. `native-comp-enable-subr-trampolines` set to a directory would not do:
 Emacs looks for an existing trampoline only along `native-comp-eln-load-path`. The directory is
 `$XDG_CACHE_HOME/drgnx/test-eln/EMACS-VERSION/` (`~/.cache/…`, read before HOME is swapped), kept between runs: a full
 unit run compiles ~60 trampolines at ~0.2 s each, which would cost every run 12–15 s. It is drgnx's own and holds only

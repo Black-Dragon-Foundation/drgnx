@@ -200,14 +200,16 @@
           (make-directory parent) (make-directory suite)
           (with-temp-file (expand-file-name "die-test.el" suite)
             (insert (format "(require 'ert)\n(ert-deftest die-quits ()\n  (make-temp-file \"leaked\" t)\n  (write-region temporary-file-directory nil %S)\n  (kill-emacs 3))\n" probe)))
-          (let ((process-environment (append (list (concat "TMPDIR=" parent) "DRGNX_TEST_SELECTOR" "DRGNX_TEST_RESULTS")
-                                             process-environment)))
-            (should (eql 3 (call-process (expand-file-name invocation-name invocation-directory) nil nil nil
-                                         "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
-                                         "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch" suite))))
-          (should (string-prefix-p (file-name-as-directory parent)
-                                   (with-temp-buffer (insert-file-contents probe) (buffer-string))))
-          (should-not (directory-files parent nil directory-files-no-dot-files-regexp)))
+          ;; one Emacs: the runner itself dies; per file: the file's Emacs dies, the run goes on and fails
+          (pcase-dolist (`(,mode . ,exit) '(("DRGNX_TEST_ONE_PROCESS=1" . 3) ("DRGNX_TEST_ONE_PROCESS" . 1)))
+            (let ((process-environment (append (list (concat "TMPDIR=" parent) "DRGNX_TEST_SELECTOR" "DRGNX_TEST_RESULTS" mode)
+                                               process-environment)))
+              (should (eql exit (call-process (expand-file-name invocation-name invocation-directory) nil nil nil
+                                              "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
+                                              "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch" suite))))
+            (should (string-prefix-p (file-name-as-directory parent)
+                                     (with-temp-buffer (insert-file-contents probe) (buffer-string))))
+            (should-not (directory-files parent nil directory-files-no-dot-files-regexp))))
       (delete-directory tmp t))))
 
 (ert-deftest drgnx-run-ert/a-given-run-dir-is-never-deleted-and-a-wrong-one-is-ignored ()
@@ -313,3 +315,126 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
   (when (getenv "DRGNX_TEST_ISOLATED")
     (should (equal (file-name-as-directory (getenv "DRGNX_TEST_ELN_DIR"))
                    (file-name-as-directory (car native-comp-eln-load-path))))))
+
+(defun drgnx-run-ert-test--suite (dir files)
+  "Write FILES, an alist NAME → contents, into the directory DIR (made)."
+  (make-directory dir t)
+  (pcase-dolist (`(,name . ,text) files)
+    (with-temp-file (expand-file-name name dir) (insert "(require 'ert)\n" text "\n"))))
+
+(ert-deftest drgnx-run-ert/files-do-not-share-an-emacs ()
+  ;; Each test file runs in an Emacs of its own, as Emacs's own `make check' does: a hook a test leaves and a
+  ;; feature it loads are gone for the next file.  ERT runs tests in name order, so in one Emacs the leak comes first.
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-iso" t)))
+         (suite (expand-file-name "suite" tmp)) (results (expand-file-name "r.json" tmp)))
+    (unwind-protect
+        (progn
+          (drgnx-run-ert-test--suite
+           suite
+           '(("a-leaks-test.el" . "(defun iso-test--leaked () nil)
+(ert-deftest iso-a/leaks () (add-hook 'kill-buffer-hook #'iso-test--leaked) (provide 'iso-test--fake-feature))")
+             ("b-clean-test.el" . "(ert-deftest iso-b/sees-nothing ()
+  (should-not (featurep 'iso-test--fake-feature))
+  (should-not (memq 'iso-test--leaked (default-value 'kill-buffer-hook))))")))
+          (should (eql 0 (drgnx-run-ert-test--batch suite results)))
+          (let ((r (drgnx-run-ert-test--json results)))
+            (should (equal (list (plist-get r :total) (plist-get r :passed) (plist-get r :failed)) '(2 2 0)))
+            (should (= 2 (length (plist-get r :files)))))
+          ;; --one-process: one Emacs, the leak reaches the second file
+          (should (eql 1 (drgnx-run-ert-test--batch suite results "DRGNX_TEST_ONE_PROCESS=1")))
+          (should (equal (plist-get (aref (plist-get (drgnx-run-ert-test--json results) :failures) 0) :name)
+                         "iso-b/sees-nothing")))
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-run-ert/a-crashing-file-is-named ()
+  ;; A file whose Emacs dies (a test calls `kill-emacs') or hangs past DRGNX_TEST_FILE_TIMEOUT is a failure that
+  ;; names the file; the other files still run and count.
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-iso" t)))
+         (suite (expand-file-name "suite" tmp)) (results (expand-file-name "r.json" tmp)) (out nil) (code nil))
+    (unwind-protect
+        (progn
+          (drgnx-run-ert-test--suite suite '(("crash-test.el" . "(ert-deftest iso-crash/dies () (kill-emacs 7))")
+                                             ("fine-test.el" . "(ert-deftest iso-fine/ok () (should t))")
+                                             ("hang-test.el" . "(ert-deftest iso-hang/waits () (sleep-for 60))")))
+          (let ((process-environment (append (list (concat "DRGNX_TEST_RESULTS=" results) "DRGNX_TEST_FILE_TIMEOUT=3"
+                                                   "DRGNX_TEST_SELECTOR")
+                                             process-environment)))
+            (setq out (with-temp-buffer
+                        (setq code (call-process (expand-file-name invocation-name invocation-directory) nil t nil
+                                                 "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
+                                                 "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch" suite))
+                        (buffer-string))))
+          (should (eql 1 code))
+          (let* ((r (drgnx-run-ert-test--json results))
+                 (names (mapcar (lambda (f) (plist-get f :name)) (plist-get r :failures))))
+            (should (equal (plist-get r :passed) 1))
+            (should (equal (plist-get r :failed) 2))
+            (should (seq-find (lambda (n) (string-match-p "crash-test\\.el" n)) names))
+            (should (seq-find (lambda (n) (string-match-p "hang-test\\.el" n)) names))
+            (should (string-match-p "timed out" (plist-get (seq-find (lambda (f) (string-match-p "hang-test" (plist-get f :name)))
+                                                                     (plist-get r :failures))
+                                                           :condition))))
+          (should (string-match-p "crash-test\\.el" out)))
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-run-ert/summaries-are-merged ()
+  ;; One summary of the same shape as a one-Emacs run (bin/drgnx check reads it), plus each file's exit and time.
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-iso" t)))
+         (suite (expand-file-name "suite" tmp)) (results (expand-file-name "r.json" tmp)))
+    (unwind-protect
+        (progn
+          (drgnx-run-ert-test--suite
+           suite '(("one-test.el" . "(ert-deftest iso-one/passes () (should t))\n(ert-deftest iso-one/fails () (should nil))")
+                   ("two-test.el" . "(ert-deftest iso-two/passes () (should t))\n(ert-deftest iso-two/skips () (skip-unless nil))")))
+          (should (eql 1 (drgnx-run-ert-test--batch suite results)))
+          (let ((r (drgnx-run-ert-test--json results)))
+            (should (equal (list (plist-get r :total) (plist-get r :passed) (plist-get r :failed)) '(4 2 1)))     ; a skip is neither
+            (should (equal (mapcar (lambda (f) (plist-get f :name)) (plist-get r :failures)) '("iso-one/fails")))
+            (should (equal (plist-get r :known_red) []))
+            (should (equal (sort (mapcar (lambda (te) (plist-get te :name)) (plist-get r :tests)) #'string<)
+                           '("iso-one/fails" "iso-one/passes" "iso-two/passes" "iso-two/skips")))
+            (should (seq-every-p (lambda (te) (and (stringp (plist-get te :file)) (numberp (plist-get te :seconds))))
+                                 (plist-get r :tests)))
+            (let ((files (plist-get r :files)))
+              (should (equal (mapcar (lambda (f) (file-name-nondirectory (plist-get f :file))) files) '("one-test.el" "two-test.el")))
+              (should (equal (mapcar (lambda (f) (plist-get f :exit)) files) '(1 0)))
+              (should (seq-every-p (lambda (f) (numberp (plist-get f :seconds))) files)))))
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-run-ert/a-files-temp-dir-is-no-deeper-than-the-runs ()
+  ;; A Unix socket path has ~104 bytes (the hub's tests make one below the temp dir): a file's Emacs gets a directory
+  ;; of its own one level below the run's TMPDIR, as a one-Emacs run's is, never one below the runner's, and it is
+  ;; gone afterwards.  bin/drgnx's DRGNX_RUN_TMP: inside it; standalone (check's shards): beside the runner's.
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-iso" t)))
+         (parent (expand-file-name "parent/" tmp)) (given (expand-file-name "drgnx-run.abcdef/" parent))
+         (suite (expand-file-name "suite" tmp)) (probe (expand-file-name "probe" tmp)))
+    (unwind-protect
+        (progn
+          (make-directory given t)
+          (drgnx-run-ert-test--suite suite `(("where-test.el" . ,(format "(ert-deftest iso-where/tmp () (write-region temporary-file-directory nil %S))" probe))))
+          (pcase-dolist (`(,run-tmp . ,under) `(("DRGNX_RUN_TMP" . ,parent) (,(concat "DRGNX_RUN_TMP=" given) . ,given)))
+            (should (eql 0 (drgnx-run-ert-test--run-suite suite (concat "TMPDIR=" parent) run-tmp)))
+            (let ((seen (with-temp-buffer (insert-file-contents probe) (buffer-string))))
+              (should (string-match-p (concat "\\`" (regexp-quote under) "drgnx-run\\.[A-Za-z0-9]\\{6\\}/\\'") seen))
+              (should-not (file-exists-p seen))))
+          (should (equal (directory-files parent nil directory-files-no-dot-files-regexp) '("drgnx-run.abcdef"))))
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-run-ert/a-narrow-run-starts-an-emacs-only-for-its-files ()
+  ;; A name selector (a regexp) starts an Emacs only for the files that define a test it names; any other selector
+  ;; (a tag can come from anywhere) runs every file.
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-iso" t)))
+         (suite (expand-file-name "suite" tmp)) (results (expand-file-name "r.json" tmp))
+         (files (lambda (selector)
+                  (drgnx-run-ert-test--batch suite results (concat "DRGNX_TEST_SELECTOR=" selector))
+                  (mapcar (lambda (f) (file-name-nondirectory (plist-get f :file)))
+                          (plist-get (drgnx-run-ert-test--json results) :files)))))
+    (unwind-protect
+        (progn
+          (drgnx-run-ert-test--suite
+           suite '(("one-test.el" . "(ert-deftest iso-one/a () (should t))")
+                   ("two-test.el" . "(ert-deftest\n    iso-two/b () :tags '(:timing) (should t))")))
+          (should (equal (funcall files "\"^iso-two/\"") '("two-test.el")))
+          (should (equal (funcall files "\"iso-\\\\(one\\\\|nothing\\\\)\"") '("one-test.el")))
+          (should (equal (funcall files "(tag :timing)") '("one-test.el" "two-test.el"))))
+      (delete-directory tmp t))))

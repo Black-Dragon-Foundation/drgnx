@@ -784,3 +784,22 @@ while :; do wait; done" job job job job job)))
       (delete-directory dir t))))
 
 ;;; bin-test.el ends here
+
+(ert-deftest drgnx-bin/test-one-process-flag ()
+  ;; `bin/drgnx test' runs each test file in an Emacs of its own; --one-process keeps them all in one (for hunting a
+  ;; leak across files): the runner reads DRGNX_TEST_ONE_PROCESS.
+  (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
+         (parent (expand-file-name "parent" dir))
+         (seen (expand-file-name "seen" dir))
+         (emacs (drgnx-bin-test--fake-emacs (expand-file-name "fake-emacs" dir)
+                                            (format "echo \"${DRGNX_TEST_ONE_PROCESS-unset}\" >> %s" seen)))
+         (drgnx-bin-test--cwd dir))
+    (unwind-protect
+        (progn
+          (make-directory parent)
+          (dolist (args '(("test") ("test" "--one-process")))
+            (should (eql 0 (car (apply #'drgnx-bin-test--call drgnx-bin-test--bin
+                                       (drgnx-bin-test--env dir parent (concat "DRGNX_EMACS=" emacs) "DRGNX_TEST_ONE_PROCESS")
+                                       args)))))
+          (should (equal (split-string (drgnx-bin-test--slurp seen) "\n" t) '("unset" "1"))))
+      (delete-directory dir t))))
