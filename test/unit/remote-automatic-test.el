@@ -22,6 +22,7 @@
 (load (expand-file-name "modules/extra/drgnx-blame" drgnx-dir) nil t)
 (load (expand-file-name "modules/editor/drgnx-sticky" drgnx-dir) nil t)
 (load (expand-file-name "modules/extra/drgnx-hunks" drgnx-dir) nil t)
+(load (expand-file-name "modules/tools/drgnx-ai-ui" drgnx-dir) nil t)
 
 (defconst drgnx-remote-auto--elpa (expand-file-name (or (getenv "DRGNX_USER_ELPA") "~/.config/emacs/elpa"))
   "The user's ELPA, read-only, where diff-hl is when installed.")
@@ -407,15 +408,45 @@ buffer is not affected."
             (setq-default diff-hl-disable-on-remote default)))
       (delete-directory cfg t))))
 
-;;;; Pending: the link followers (pass C batch C1)
+;;;; The link followers (M2-6 c)
 
 (ert-deftest drgnx-remote/links-in-tool-output-never-open-a-remote ()
-  "PENDING until pass C batch C1 lands `drgnx-trust-link-ok-p': a transcript and a Work row naming a remote file
-open nothing remote unless the source buffer is remote (M2-6 c)."
+  "A transcript and a Work row naming a remote file open nothing remote unless the source buffer is remote (M2-6 c)."
   (skip-unless (fboundp 'drgnx-trust-link-ok-p))
   (drgnx-remote-auto--with
     (should-not (drgnx-trust-link-ok-p (concat root "app.py")))
     (should (= drgnx-tramp-mock-sends 0))))
+
+;; AI review links: the Sources buttons of an Ask the Codebase answer
+(defun drgnx-remote-auto--source-button (file root)
+  "The answer buffer for a snippet naming FILE under ROOT; its Sources button, pushed."
+  (with-current-buffer (drgnx-ai--answer-buffer "q?" "a." (list (list :file file :line 1 :text "")) root)
+    (goto-char (point-min))
+    (push-button (next-single-property-change (point) 'button))
+    (current-buffer)))
+
+(ert-deftest drgnx-remote/ai-review-links-never-open-a-remote-from-local-text ()
+  "An AI answer about a local folder whose source names a remote file opens nothing; a local source opens (M2-6 c)."
+  (drgnx-remote-auto--with
+    (let ((remote-file (concat root "app.py")) (local-file (expand-file-name "l.py" ldir)))
+      (unwind-protect
+          (progn
+            (setq drgnx-tramp-mock-sends 0)
+            (drgnx-remote-auto--source-button remote-file ldir)       ; the model or a file name smuggled the remote name in
+            (drgnx-remote-auto--none 'ai-link-remote-from-local)         ; before anything here looks at the name
+            (should-not (cl-some (lambda (b) (equal (buffer-file-name b) remote-file)) (buffer-list)))
+            (drgnx-remote-auto--source-button "l.py" ldir)             ; a local source still opens
+            (should (find-buffer-visiting local-file)))
+        (when (get-buffer "*AI answer*") (kill-buffer "*AI answer*"))))))
+
+(ert-deftest drgnx-remote/ai-review-links-follow-when-the-answer-is-about-the-remote-folder ()
+  "The user asked about a remote folder (source buffer remote): its links open (M2-6 c)."
+  (drgnx-remote-auto--with
+    (unwind-protect
+        (progn
+          (drgnx-remote-auto--source-button "app.py" root)
+          (should (find-buffer-visiting (concat root "app.py"))))
+      (when (get-buffer "*AI answer*") (kill-buffer "*AI answer*")))))
 
 (provide 'remote-automatic-test)
 ;;; remote-automatic-test.el ends here
