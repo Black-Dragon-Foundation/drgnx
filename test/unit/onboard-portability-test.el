@@ -194,6 +194,79 @@ Returns (RESULT QUESTIONS)."
             (should (null calls))
             (should (string-match-p "age is not there" (cadr (car r))))))))))
 
+(defun drgnx-onboard-portability-test--script (file text)
+  "An executable shell script FILE with body TEXT."
+  (make-directory (file-name-directory file) t)
+  (write-region (concat "#!/bin/sh\n" text "\n") nil file nil 'silent)
+  (set-file-modes file #o755))
+
+(ert-deftest drgnx-onboard-portability/the-users-hooks-and-signing-never-run ()
+  ;; The user's global config names a hooks directory and signs every commit: neither runs for drgnx's commit.
+  (drgnx-onboard-portability-test--with root
+    (let ((marker (concat root "ran")))
+      (dolist (hook '("pre-commit" "commit-msg" "post-commit" "post-checkout"))
+        (drgnx-onboard-portability-test--script (concat root "hooks/" hook) (format "echo %s >> '%s'" hook marker)))
+      (drgnx-onboard-portability-test--script (concat root "gpg") (format "echo gpg >> '%s'; sleep 30; exit 1" marker))
+      (drgnx-onboard-portability-test--script (concat root "templates/hooks/post-commit") (format "echo template >> '%s'" marker))
+      (write-region (format "[core]\n\thooksPath = %shooks\n[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = %sgpg\n[init]\n\ttemplateDir = %stemplates\n"
+                            root root root)
+                    nil (concat root "gitconfig") nil 'silent)
+      (let* ((process-environment (cons (concat "GIT_CONFIG_GLOBAL=" root "gitconfig") process-environment))
+             (start (float-time))
+             (r (drgnx-onboard-portability-test--run t '(("git repository" . t)))))
+        (should (< (- (float-time) start) 10))
+        (should (eq (car (car r)) 'ok))
+        (should (equal (drgnx-onboard-portability-test--git (concat root "config") "rev-list" "--count" "HEAD") "1"))
+        (should-not (file-exists-p marker))))))
+
+(ert-deftest drgnx-onboard-portability/a-hung-git-fails-with-a-clear-problem ()
+  (drgnx-onboard-portability-test--with root
+    (drgnx-onboard-portability-test--script (concat root "bin/git") "sleep 30")
+    (let* ((drgnx-onboard-call-timeout 0.5)
+           (start (float-time))
+           (r (drgnx-onboard-portability-test--run t '(("git repository" . t)))))
+      (should (< (- (float-time) start) 10))
+      (should (eq (car (car r)) 'warn))
+      (should (string-match-p "git init did not finish within 0.5 s" (cadr (car r)))))))
+
+(ert-deftest drgnx-onboard-portability/inside-another-repository-no-init ()
+  (drgnx-onboard-portability-test--with root
+    (drgnx-onboard-portability-test--git root "init" "-q")   ; the temp root holds config/: an enclosing work tree
+    (should (eq (car (drgnx-onboard--config-source)) 'inside))
+    (let ((r (drgnx-onboard-portability-test--run t)))   ; no question: none matches
+      (should-not (file-exists-p (concat root "config/.git")))
+      (should (null (cadr r)))
+      (should (string-match-p (concat "inside the git repository " (regexp-quote (directory-file-name root)))
+                              (cadr (car r)))))))
+
+(ert-deftest drgnx-onboard-portability/credentials-in-a-remote-never-show ()
+  (dolist (c '(("http://u:tok@h.example/x.git" . "http://h.example/x.git")
+               ("ssh://u:pw@h.example/x.git" . "ssh://h.example/x.git")
+               ("https://u:tok@h.example/x.git?private_token=abc#frag" . "https://h.example/x.git")
+               ("git@h.example:ana/x.git" . "git@h.example:ana/x.git")))
+    (should (equal (drgnx-onboard--remote-label (car c)) (cdr c))))
+  (should (equal (drgnx-onboard--https-remote "https://u:tok@h.example/x.git?private_token=abc") "https://h.example/x.git"))
+  (drgnx-onboard-portability-test--with root
+    (let ((config (concat root "config")))
+      (drgnx-onboard-portability-test--git config "init" "-q")
+      (dolist (url '("http://u:tok@h.example/x.git" "ssh://u:pw@h.example/x.git"))
+        (drgnx-onboard-portability-test--git config "remote" "remove" "origin")
+        (drgnx-onboard-portability-test--git config "remote" "add" "origin" url)
+        (drgnx-onboard-run :only '(portability) :non-interactive t)   ; the result is saved in onboarding.eld
+        (let ((saved (with-temp-buffer (insert-file-contents (drgnx-onboard-state-file)) (buffer-string))))
+          (should (string-match-p "h\\.example/x\\.git" saved))
+          (should-not (string-match-p "u:tok\\|u:pw\\|tok@\\|pw@" saved)))))))
+
+(ert-deftest drgnx-onboard-portability/no-export-question-when-secrets-age-is-there ()
+  (drgnx-onboard-portability-test--with root
+    (write-region "age ciphertext\n" nil (concat root "config/secrets.age") nil 'silent)
+    (let ((calls nil))
+      (cl-letf (((symbol-function 'drgnx-onboard--keys-to-export-p) (lambda () (push 'keyring calls) t))
+                ((symbol-function 'drgnx-secrets-export-keys) (lambda () (push 'export calls))))
+        (let ((r (drgnx-onboard-portability-test--run t '(("git repository" . nil)))))   ; the export question fails
+          (should (null calls))
+          (should (string-match-p "secrets.age is there" (cadr (car r)))))))))
+
 (ert-deftest drgnx-onboard-portability/the-keyring-is-not-opened-in-batch ()
   ;; Only a step run in drgnx's window looks into the keyring (whether there is a key to export).
   (let ((opened nil))

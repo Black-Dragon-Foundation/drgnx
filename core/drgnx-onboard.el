@@ -1359,6 +1359,7 @@ last, the shell integration line."
 
 (declare-function drgnx-portable-move-machine-local "drgnx-portable")
 (declare-function drgnx-portable-config-problems "drgnx-portable")
+(declare-function drgnx-secrets-file "drgnx-secrets")
 (declare-function drgnx-secrets-keyring-p "drgnx-secrets")
 (declare-function drgnx-secrets--entries "drgnx-secrets")
 (declare-function drgnx-secrets--wipe-entries "drgnx-secrets")
@@ -1366,13 +1367,28 @@ last, the shell integration line."
 (defvar drgnx-portable-machine-local)
 (defvar drgnx-portable-install-url)
 
+(defvar drgnx-onboard-call-timeout 30
+  "Seconds a program step 8 runs (git, chezmoi) may take before it is stopped.")
+
 (defun drgnx-onboard--call (program &rest args)
-  "Run PROGRAM with ARGS (stdin empty, no terminal prompt): (EXIT . OUTPUT), OUTPUT trimmed; nil when PROGRAM
-cannot run."
+  "Run PROGRAM with ARGS (stdin empty, no terminal prompt), for at most `drgnx-onboard-call-timeout' seconds:
+\(EXIT . OUTPUT), OUTPUT trimmed; (timeout . TEXT) when it was stopped; nil when PROGRAM cannot run."
   (with-temp-buffer
     (let* ((process-environment (cons "GIT_TERMINAL_PROMPT=0" process-environment))
-           (exit (condition-case nil (apply #'call-process program nil t nil args) (file-error nil))))
-      (and (integerp exit) (cons exit (string-trim (buffer-string)))))))
+           (buf (current-buffer))
+           (proc (condition-case nil
+                     (make-process :name "drgnx-onboard-call" :buffer buf :command (cons program args)
+                                   :connection-type 'pipe :noquery t :sentinel #'ignore)
+                   (file-error nil)))
+           (deadline (+ (float-time) drgnx-onboard-call-timeout)))
+      (when proc
+        (process-send-eof proc)
+        (while (and (process-live-p proc) (< (float-time) deadline))
+          (accept-process-output proc 0.05))
+        (if (process-live-p proc)
+            (progn (delete-process proc)
+                   (cons 'timeout (format "did not finish within %s s" drgnx-onboard-call-timeout)))
+          (cons (process-exit-status proc) (string-trim (buffer-string))))))))
 
 (defun drgnx-onboard--git-remote (dir)
   "The remote of the git repository DIR: origin's URL, else the first remote's; nil without one."
@@ -1387,7 +1403,8 @@ cannot run."
 
 (defun drgnx-onboard--config-source ()
   "Where the config dir comes from: (git . REMOTE-OR-NIL) when it is a git work tree of its own, (chezmoi .
-SOURCE) when chezmoi manages it (`chezmoi source-path DIR', read-only), else (none)."
+SOURCE) when chezmoi manages it (`chezmoi source-path DIR', read-only), (inside . TOP) when it lies in the work
+tree of another repository TOP, else (none)."
   (let* ((dir (directory-file-name (drgnx-user-dir)))
          (top (and (file-directory-p dir) (executable-find "git")
                    (drgnx-onboard--call "git" "-C" dir "rev-parse" "--show-toplevel")))
@@ -1396,16 +1413,22 @@ SOURCE) when chezmoi manages it (`chezmoi source-path DIR', read-only), else (no
     (cond ((and (eql (car top) 0) (equal (file-truename (cdr top)) (file-truename dir)))
            (cons 'git (drgnx-onboard--git-remote dir)))
           ((and (eql (car source) 0) (not (string-empty-p (cdr source)))) (cons 'chezmoi (cdr source)))
+          ((and (eql (car top) 0) (not (string-empty-p (cdr top)))) (cons 'inside (cdr top)))
           (t (list 'none)))))
 
-(defun drgnx-onboard--https-remote (remote)
-  "REMOTE as install.sh takes it — an https URL, any user or password left out — or nil."
-  (when (and remote (string-match "\\`https://\\(?:[^/@]*@\\)?\\([^/@[:space:][:cntrl:]]+/[^[:space:][:cntrl:]]*\\)\\'" remote))
-    (concat "https://" (match-string 1 remote))))
-
 (defun drgnx-onboard--remote-label (remote)
-  "REMOTE to show: the https form (no password), or REMOTE when it is not https (an ssh remote holds none)."
-  (or (drgnx-onboard--https-remote remote) remote))
+  "REMOTE to show or save: a URL of any scheme without its user, password, query and fragment (\"ssh://u:pw@h/x\"
+→ \"ssh://h/x\"); the scp form \"git@host:path\" (a user, never a password) as it is."
+  (when remote
+    (let ((r (replace-regexp-in-string "[?#].*\\'" "" remote)))
+      (if (string-match "\\`\\([A-Za-z][A-Za-z0-9+.-]*://\\)[^/]*@" r)
+          (concat (match-string 1 r) (substring r (match-end 0)))
+        r))))
+
+(defun drgnx-onboard--https-remote (remote)
+  "REMOTE as install.sh takes it — an https URL, without user, password, query or fragment — or nil."
+  (let ((r (drgnx-onboard--remote-label remote)))
+    (and r (string-match-p "\\`https://[^/@[:space:][:cntrl:]]+/[^[:space:][:cntrl:]]*\\'" r) r)))
 
 (defun drgnx-onboard--keys-to-export-p ()
   "Non-nil when this machine's keyring holds a provider key that secrets.age would carry.  It opens the keyring,
@@ -1418,15 +1441,23 @@ so only in drgnx's window (never batch: `drgnx onboard' says the command instead
          (error nil))))
 
 (defun drgnx-onboard--make-repo (dir)
-  "git init DIR, add everything but the machine-local items, one commit.  Returns (STATUS SENTENCE)."
+  "git init DIR, add everything but the machine-local items, one commit.  Returns (STATUS SENTENCE).
+The user's git hooks, templates and commit signing are left out (a hook or a pinentry would run inside this
+step), and every git call is bounded (`drgnx-onboard--call')."
   (let* ((shown (drgnx-portable-path dir))
-         (init (drgnx-onboard--call "git" "-C" dir "init" "-q"))
+         (git (lambda (&rest args)
+                (apply #'drgnx-onboard--call "git" "-c" "core.hooksPath=/dev/null" "-c" "commit.gpgsign=false" "-C" dir args)))
+         (init (funcall git "init" "-q" "--template="))
          (add (and (eql (car init) 0)
-                   (apply #'drgnx-onboard--call "git" "-C" dir "add" "-A" "--" "."
+                   (apply git "add" "-A" "--" "."
                           (mapcar (lambda (i) (concat ":(exclude)" (directory-file-name i))) drgnx-portable-machine-local))))
-         (commit (and (eql (car add) 0) (drgnx-onboard--call "git" "-C" dir "commit" "-q" "-m" "drgnx configuration"))))
-    (cond ((not (eql (car init) 0)) (list 'warn (format "git init failed in %s: %s" shown (cdr init))))
-          ((not (eql (car add) 0)) (list 'warn (format "made %s a git repository, but git add failed: %s" shown (cdr add))))
+         (commit (and (eql (car add) 0)
+                      (funcall git "commit" "-q" "--no-verify" "--no-gpg-sign" "-m" "drgnx configuration")))
+         (why (lambda (what r) (if (eq (car r) 'timeout) (format "%s %s" what (cdr r))
+                                 (format "%s failed: %s" what (or (cdr r) "git could not run"))))))
+    (cond ((not (eql (car init) 0)) (list 'warn (format "%s in %s" (funcall why "git init" init) shown)))
+          ((not (eql (car add) 0)) (list 'warn (format "made %s a git repository, but %s" shown (funcall why "git add" add))))
+          ((eq (car commit) 'timeout) (list 'warn (format "made %s a git repository, but %s" shown (funcall why "git commit" commit))))
           ((not (eql (car commit) 0))
            (list 'info (format "made %s a git repository; the commit needs your git identity: git config --global user.name \"Your Name\"; git config --global user.email you@example.org; then: git -C %s commit -m \"drgnx configuration\""
                                shown shown)))
@@ -1454,6 +1485,9 @@ terminal.  Without interaction it only reports."
                 (if remote (format "config: %s is a git repository (remote %s)" shown (drgnx-onboard--remote-label remote))
                   (format "config: %s is a git repository with no remote: add one of your choice and push it" shown))))
       (`(chezmoi . ,src) (funcall say 'ok (format "config: chezmoi manages %s (source %s)" shown (drgnx-portable-path src))))
+      (`(inside . ,top)
+       (funcall say 'info (format "config: %s is inside the git repository %s, so it travels with that one; no repository of its own is made"
+                                  shown (drgnx-portable-path top))))
       (_
        (if (not (and ask (file-directory-p dir) (executable-find "git")))
            (funcall say 'info (format "config: %s is not a git repository%s" shown
@@ -1478,6 +1512,8 @@ terminal.  Without interaction it only reports."
     (when (and (not (eq (car source) 'chezmoi)) (drgnx-onboard--chezmoi))
       (funcall say 'ok (format "chezmoi: to keep it with your dotfiles, chezmoi add %s (secrets.age as a plain file, not --encrypt: it is encrypted already)" shown)))
     (cond ((not ask))
+          ((progn (require 'drgnx-secrets) (file-exists-p (drgnx-secrets-file)))
+           (funcall say 'ok "keys: secrets.age is there (Portability: Export Keys replaces it)"))
           ((not (drgnx-onboard--keys-to-export-p))
            (funcall say 'ok "keys: drgnx secrets export (on a terminal) carries your provider keys, encrypted, in secrets.age"))
           ((not (y-or-n-p "Export your provider keys to secrets.age, encrypted with a passphrase? "))

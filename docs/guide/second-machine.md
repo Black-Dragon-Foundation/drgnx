@@ -53,12 +53,15 @@ Onboarding's **Portability** step (Help → Welcome, or `drgnx onboard --step po
 asks before it changes anything:
 
 1. **Where your config comes from.** A git repository of its own (the config dir is the top of the work tree), with
-   its remote; chezmoi, when `chezmoi source-path ~/.config/drgnx` says it manages it; or neither.
+   its remote; chezmoi, when `chezmoi source-path ~/.config/drgnx` says it manages it; the work tree of another
+   repository (a dotfiles repository holding `~/.config`, say) — then it travels with that one, and the step names it
+   and offers no repository of its own; or none. A remote is shown without any user name, password or query.
 2. **A git repository, when you say yes.** When the config dir is neither, the step first moves the machine-local
    files above to the data dir. If a file holds a key in plain text, it stops there: the step warns, names the
    file and commits nothing; move the key to your keyring ([ai.md](ai.md#keys)) and run the step again. Otherwise
    it asks "Make ~/.config/drgnx a git repository (you push it to a remote of your choice)?" — yes runs `git init`,
-   `git add` (never the machine-local items) and one commit, "drgnx configuration". That is all: drgnx never adds a
+   `git add` (never the machine-local items) and one commit, "drgnx configuration" — without your git hooks,
+   templates or commit signing, and each git command stopped after 30 seconds. That is all: drgnx never adds a
    remote, never pushes and never commits again. Add a remote and push yourself:
 
    ```sh
@@ -73,7 +76,8 @@ asks before it changes anything:
    nothing of chezmoi's here but `chezmoi source-path`.
 4. **Your keys.** In drgnx's window, when your keyring holds a provider key, it asks "Export your provider keys to
    secrets.age, encrypted with a passphrase?" — yes installs age if it is missing (asked, like every install) and
-   opens the Export Keys terminal ([below](#your-provider-keys-secretsage)). Commit `secrets.age` with the rest
+   opens the Export Keys terminal ([below](#your-provider-keys-secretsage)). With a `secrets.age` there already it
+   does not ask (Portability: Export Keys replaces it). Commit `secrets.age` with the rest
    yourself. `drgnx onboard` on a terminal never opens the keyring here; it names `drgnx secrets export`.
 5. **The next machine's command:**
 
