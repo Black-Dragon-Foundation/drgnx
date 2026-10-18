@@ -202,6 +202,13 @@ load is reported as module <category>/<file name>, naming the library it loaded 
 (defvar use-package-ensure-function)
 (declare-function package-desc-name "package")
 
+(defvar drgnx-loading-external nil
+  "Non-nil while drgnx loads the files of an external module (modules.eld :external).
+The contract an external module honours (docs/guide/modules.md): code that changes what drgnx's key
+profiles own -- global keymap sets, fixes for the CUA keys, popper setup -- is skipped under it:
+`(unless (bound-and-true-p drgnx-loading-external) ...)'.  The binding is dynamic, so it is nil again
+when the load ends, whether the feature loaded or failed.")
+
 (defun drgnx-modules--require-external (feature)
   "Require FEATURE without letting it install or refresh anything: `use-package :ensure', :vc and
 direct installs are recorded instead.  Returns (ERROR-or-nil . WANTED-PACKAGES)."
@@ -219,7 +226,8 @@ direct installs are recorded instead.  Returns (ERROR-or-nil . WANTED-PACKAGES).
               ((symbol-function 'package-install) (lambda (p &rest _) (funcall want p)))
               ((symbol-function 'package-vc-install) (lambda (p &rest _) (funcall want p)))
               ((symbol-function 'package-vc-install-from-checkout) (lambda (_dir name &rest _) (funcall want name))))
-      (let* ((use-package-ensure-function (lambda (name &rest _) (funcall want name)))
+      (let* ((drgnx-loading-external t)
+             (use-package-ensure-function (lambda (name &rest _) (funcall want name)))
              (err (condition-case e (progn (require feature) nil) (error (error-message-string e)))))
         (cons err (delete-dups (nreverse wanted)))))))
 
