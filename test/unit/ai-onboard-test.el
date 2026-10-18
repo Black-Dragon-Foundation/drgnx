@@ -137,6 +137,7 @@ with BODY."
                                              (concat "PATH=" bin ":" (getenv "PATH")))
                                        process-environment))
           (exec-path (cons bin exec-path))
+          (drgnx-ai--security-program (concat bin "security"))
           (drgnx-ai-presets `((openrouter :name "OpenRouter" :kind openai :url ,(concat url "/or/v1") :key-env "OPENROUTER_API_KEY"
                                           :caps (chat fim embed))
                               (ollama :name "Ollama" :kind ollama :url ,url :caps (chat fim embed))

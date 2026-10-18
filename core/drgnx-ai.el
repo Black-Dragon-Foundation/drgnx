@@ -205,6 +205,9 @@ later — after the window it opened shows, never inside its emacsclient call.  
   (or (not (string-empty-p (or (getenv "DBUS_SESSION_BUS_ADDRESS") "")))
       (let ((run (getenv "XDG_RUNTIME_DIR"))) (and run (file-exists-p (expand-file-name "bus" run))))))
 
+(defvar drgnx-ai--security-program "/usr/bin/security"
+  "The macOS Keychain tool, by its absolute name: a `security' elsewhere on `exec-path' never gets a key.")
+
 (defvar drgnx-ai--store-timeout 120
   "Seconds to wait for the Keychain or keyring program (an unlock dialog can take a while).")
 
@@ -245,7 +248,7 @@ key and it must match, else a `user-error'."
     (when (or (not (stringp key)) (string-empty-p key) (string-match-p "[\n\r]" key))
       (user-error "The key is empty or has more than one line"))
     (cond
-     (mac (unless (executable-find "security")
+     (mac (unless (file-executable-p drgnx-ai--security-program)
             (user-error "No `security' program found: the macOS Keychain is needed to store a key")))
      ((not (executable-find "secret-tool"))
       (user-error "No `secret-tool' found: install libsecret-tools (Debian, Ubuntu), libsecret (Fedora, Arch) to store a key in your keyring"))
@@ -253,7 +256,7 @@ key and it must match, else a `user-error'."
       (user-error "No D-Bus session: the keyring is unreachable here; set %s instead" env)))
     (let ((status (if mac
                       (drgnx-ai--run-with-stdin
-                       "security" '("-i")
+                       drgnx-ai--security-program '("-i")
                        (format "add-internet-password -U -a drgnx -s %s -r htps -w %s\n"
                                (drgnx-ai--security-quote host) (drgnx-ai--security-quote key)))
                     (drgnx-ai--run-with-stdin

@@ -106,7 +106,7 @@ Keychain and keyring are never reached."
                (with-temp-file script
                  (insert "#!/bin/sh\nPATH=/usr/bin:/bin\nprintf '%s\\n' \"$@\" > " ,log name ".argv\nreadlink /proc/self/fd/0 > " ,log name ".fd0 2>/dev/null\n${FAKE_SLEEP:+sleep $FAKE_SLEEP}\ncat > " ,log name ".stdin\nexit ${FAKE_EXIT:-0}\n"))
                (set-file-modes script #o755)))
-           (let ((system-type ,system) (exec-path (list ,bin))
+           (let ((system-type ,system) (exec-path (list ,bin)) (drgnx-ai--security-program (concat ,bin "security"))
                  (process-environment (append (list (concat "PATH=" ,bin) "DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/drgnx-test-bus")
                                               process-environment)))
              ,@body))
@@ -300,7 +300,8 @@ Keychain and keyring are never reached."
 (ert-deftest drgnx-ai/without-a-secret-store-it-says-what-to-install ()
   (drgnx-ai-test--with root
     (drgnx-ai-test--with-fake-store 'darwin bin log
-      (let ((exec-path nil) (process-environment (cons "PATH=/nonexistent" process-environment)))
+      (let ((exec-path nil) (drgnx-ai--security-program (concat bin "no-security"))
+            (process-environment (cons "PATH=/nonexistent" process-environment)))
         (should (string-match-p "security" (cadr (should-error (drgnx-ai-store-key 'openrouter "sk-or-test-123") :type 'user-error))))))
     (drgnx-ai-test--with-fake-store 'gnu/linux bin log
       (let ((exec-path nil) (process-environment (cons "PATH=/nonexistent" process-environment)))
@@ -308,6 +309,15 @@ Keychain and keyring are never reached."
       (let ((process-environment (cons "DBUS_SESSION_BUS_ADDRESS" (cons "XDG_RUNTIME_DIR=/nonexistent" process-environment))))
         (should (string-match-p "D-Bus" (cadr (should-error (drgnx-ai-store-key 'openrouter "sk-or-test-123") :type 'user-error)))))
       (should-error (drgnx-ai-store-key 'ollama "x") :type 'user-error))))                ; a local runner has no key
+
+(ert-deftest drgnx-ai/security-is-the-system-one-on-macos ()
+  ;; a `security' earlier on the path (a stray script, a Homebrew tool) must never get the key
+  (should (equal (default-value 'drgnx-ai--security-program) "/usr/bin/security"))
+  (drgnx-ai-test--with root
+    (drgnx-ai-test--with-fake-store 'darwin bin log
+      (let ((drgnx-ai--security-program (concat bin "not-here")))      ; not the real one either: the store is never reached
+        (should-error (drgnx-ai-store-key 'openrouter "sk-or-test-123") :type 'user-error)
+        (should-not (file-exists-p (concat log "security.argv")))))))      ; the fake on the path was not run
 
 (ert-deftest drgnx-ai/agent-profiles-get-their-environment-when-they-start ()
   (drgnx-ai-test--with root
