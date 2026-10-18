@@ -30,6 +30,7 @@
  (:file "core/drgnx-job-snapshot.el" :fn drgnx-job-snapshot--refresh-store :what rename-file :why "a directory move: a snapshot store built as STORE.part, then renamed" :until never)
  (:file "core/drgnx-job-snapshot.el" :fn drgnx-job-snapshot--task-copy :what write-region :why "a temporary file: a job snapshot's git config" :until never)
  (:file "core/drgnx-job.el" :fn drgnx-job--write-inside :what rename-file :why "a user's file: the job worktree write" :until never)
+ (:file "core/drgnx-keys.el" :fn drgnx-keys--read-file :what read-site :why "Lisp source: the shipped key profiles keys/*.eld, read from the checkout and never written" :until never)
  (:file "core/drgnx-macos.el" :fn drgnx-macos-install-app :what rename-file :why "a directory move: the app bundle" :until never)
  (:file "core/drgnx-modules-helpers.el" :fn drgnx-module--scan :what read-site :why "Lisp source: module source read, never run" :until never)
  (:file "core/drgnx-onboard.el" :fn drgnx-onboard-state :what read-site :why "onboarding.eld" :until 19)
