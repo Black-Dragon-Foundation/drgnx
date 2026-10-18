@@ -35,8 +35,9 @@ A task that exists only in its plan file (no job runs it) is read-only here. The
 border.
 
 **Silent worktrees.** A worktree with changes that no agent reports from shows as an agent of its own, `silent`,
-"not reporting". When the tracker knows its plan, it hangs under that plan. The graph looks for these while it
-shows:
+"not reporting": to make an agent in it report, add drgnx on its settings page
+([agent-settings.md](agent-settings.md#report-to-drgnx)). When the tracker knows its plan, it hangs under that plan.
+The graph looks for these while it shows:
 - in the repositories the store knows (jobs' and plans', and those registered agents work in);
 - at most every `drgnx-cockpit-silent-interval` (45 s), and after each work-tracker scan;
 - with one git process per repository, and never in a remote (TRAMP) one.

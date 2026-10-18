@@ -146,6 +146,18 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
       (should (equal (mapcar (lambda (m) (plist-get m :text)) (drgnx-coord-inbox "ext:claude-code:42" '("queued")))
                      '("carry on"))))))
 
+(ert-deftest drgnx-cockpit-feed/a-silent-worktree-says-how-to-make-it-report ()
+  (drgnx-cockpit-feed-test--with
+    (should (eq (drgnx-cockpit-feed--footer-key "silent:/work/wt-b") 'silent))
+    (let ((text (drgnx-cockpit-feed--footer-text "silent:/work/wt-b" 'silent)))
+      (should (string-search "not reporting — add drgnx on its settings page" text))
+      (should-not (string-search "an outside agent" text)))
+    ;; a terminal that does not write UTF-8 gets ASCII
+    (cl-letf (((symbol-function 'drgnx-cockpit-graph--ascii-p) #'always))
+      (let ((text (drgnx-cockpit-feed--footer-text "silent:/work/wt-b" 'silent)))
+        (should (string-search "not reporting - add drgnx on its settings page" text))
+        (should-not (string-match-p "[^[:ascii:]]" text))))))
+
 (ert-deftest drgnx-cockpit-feed/answer-routes-by-kind-of-agent ()
   (drgnx-cockpit-feed-test--with
     (drgnx-coord-send :sender "ext:claude-code:42" :recipient "user" :text "[escalation] rename it?" :question t)

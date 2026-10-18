@@ -387,7 +387,7 @@ A `completing-read' answer is the first candidate that starts with it.  The prom
 (defconst drgnx-agent-settings-test--ids
   '(agent-settings agent-settings-here agent-settings-refresh agent-settings-test agent-settings-test-all
                    agent-settings-add agent-settings-edit agent-settings-remove agent-settings-toggle
-                   agent-settings-new-skill agent-settings-open-file agent-settings-other))
+                   agent-settings-new-skill agent-settings-open-file agent-settings-other agent-settings-report))
 
 (ert-deftest drgnx-agent-settings/keys-in-all-three-profiles ()
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
@@ -422,6 +422,8 @@ A `completing-read' answer is the first candidate that starts with it.  The prom
                                  (list :id 'agent-settings-edit :key "e"
                                        :map '(drgnx-agent-settings . drgnx-agent-settings-mode-map) :layer profile))))
             (should (seq-find (lambda (b) (and (eq (plist-get b :id) 'agent-settings-here) (equal (plist-get b :key) ",")))
+                              (plist-get r :bindings)))
+            (should (seq-find (lambda (b) (and (eq (plist-get b :id) 'agent-settings-report) (equal (plist-get b :key) "R")))
                               (plist-get r :bindings)))
             ;; no new conflict, no problem
             (should (equal (plist-get r :conflicts) (alist-get profile before)))
@@ -593,5 +595,134 @@ A `completing-read' answer is the first candidate that starts with it.  The prom
         (should (eq (car (drgnx-agent-config-cheap-status (funcall item '(:command "./srv" :cwd "tools")) root)) 'ok))
         (should (eq (car (drgnx-agent-config-cheap-status (funcall item '(:command "./tools/srv")) home))
                     'missing-command))))))
+
+;;;; Report to drgnx (C11)
+
+(defun drgnx-agent-settings-test--await (pred)
+  "Wait (for a fake CLI) until PRED is non-nil; the value."
+  (let ((deadline (+ (float-time) 15)) v)
+    (while (and (not (setq v (funcall pred))) (< (float-time) deadline)) (accept-process-output nil 0.05))
+    v))
+
+(defun drgnx-agent-settings-test--argv-with (word)
+  (seq-find (lambda (l) (string-search word l)) (drgnx-agent-config-test-argv)))
+
+(defconst drgnx-agent-settings-test--codex-toml
+  "# my codex\nmodel = \"gpt-x\"\n\n[mcp_servers.docs]\ncommand = \"npx\"\nargs = [\"-y\", \"docs\"]\n"
+  "Codex's user config: a comment, a setting and a server, which a write must leave as they are.")
+
+(ert-deftest drgnx-agent-settings/report-adds-the-drgnx-server ()
+  (drgnx-agent-settings-test--env
+    ;; Claude Code: the CLI is asked (argv logged by the fake), at user scope, with the outside server's command
+    (with-current-buffer (drgnx-agent-settings-open 'claude root)
+      (drgnx-agent-settings-test--answering (list t)
+        (call-interactively #'drgnx-agent-settings-report))
+      (should (string-search "drgnx" (car drgnx-agent-settings-test--prompts)))
+      (let ((line (drgnx-agent-settings-test--await (lambda () (drgnx-agent-settings-test--argv-with "mcp add-json drgnx")))))
+        (should line)
+        (should (string-search "\"coord\",\"mcp\",\"--kind\",\"claude\"" line))
+        (should (string-suffix-p "--scope user" line))
+        (should-not (string-search "env" line))))      ; no token or key travels with it
+    ;; Codex: [mcp_servers.drgnx] is appended, the rest of the file is byte-identical
+    (let ((file (expand-file-name "config.toml" (getenv "CODEX_HOME"))))
+      (drgnx-agent-settings-test--write file drgnx-agent-settings-test--codex-toml)
+      (with-current-buffer (drgnx-agent-settings-open 'codex root)
+        (should (string-search "Reports to drgnx: no" (buffer-string)))
+        (drgnx-agent-settings-test--answering (list t)
+          (call-interactively #'drgnx-agent-settings-report))
+        (let ((after (drgnx-agent-settings-test--read file)))
+          (should (string-prefix-p drgnx-agent-settings-test--codex-toml after))
+          (should (string-search "[mcp_servers.drgnx]" after))
+          (should (string-search "\"--kind\", \"codex\"" after))
+          (should-not (string-search "env" (substring after (length drgnx-agent-settings-test--codex-toml)))))
+        (should (string-search "Reports to drgnx: yes" (buffer-string)))))
+    ;; Gemini and Kimi Code: a drgnx server with the same command, in their own user files
+    (dolist (kind '(gemini kimi))
+      (with-current-buffer (drgnx-agent-settings-open kind root)
+        (drgnx-agent-settings-test--answering (list t)
+          (call-interactively #'drgnx-agent-settings-report))
+        (should (string-search "Reports to drgnx: yes" (buffer-string)))
+        (should (member (format "%s" kind) (append (plist-get (plist-get (drgnx-agent-settings--reporting-item) :spec) :args) nil)))))
+    ;; declining writes nothing
+    (let ((file (expand-file-name "settings.json" (expand-file-name ".gemini" (getenv "GEMINI_CLI_HOME")))))
+      (delete-file file)
+      (with-current-buffer (drgnx-agent-settings-open 'gemini root)
+        (should (string-search "Reports to drgnx: no" (buffer-string)))
+        (drgnx-agent-settings-test--answering (list nil)
+          (call-interactively #'drgnx-agent-settings-report))
+        (should-not (file-exists-p file))))))
+
+(ert-deftest drgnx-agent-settings/report-again-removes-it ()
+  (drgnx-agent-settings-test--env
+    ;; Codex: add, then again: the file is what it was
+    (let ((file (expand-file-name "config.toml" (getenv "CODEX_HOME"))))
+      (drgnx-agent-settings-test--write file drgnx-agent-settings-test--codex-toml)
+      (with-current-buffer (drgnx-agent-settings-open 'codex root)
+        (drgnx-agent-settings-test--answering (list t t)
+          (call-interactively #'drgnx-agent-settings-report)
+          (should (string-search "Reports to drgnx: yes" (buffer-string)))
+          (call-interactively #'drgnx-agent-settings-report))
+        (should (equal (drgnx-agent-settings-test--read file) drgnx-agent-settings-test--codex-toml))
+        (should (string-search "Reports to drgnx: no" (buffer-string)))))
+    ;; Claude Code: a drgnx server in the user's file is removed through the CLI
+    (drgnx-agent-settings-test--write
+     (expand-file-name ".claude.json" (getenv "CLAUDE_CONFIG_DIR"))
+     "{\n  \"mcpServers\": {\n    \"drgnx\": {\"type\": \"stdio\", \"command\": \"/x/bin/drgnx\", \"args\": [\"coord\", \"mcp\", \"--kind\", \"claude\"]}\n  }\n}\n")
+    (with-current-buffer (drgnx-agent-settings-open 'claude root)
+      (drgnx-agent-settings-test--answering (list t)
+        (call-interactively #'drgnx-agent-settings-report))
+      (should (drgnx-agent-settings-test--await
+               (lambda () (drgnx-agent-settings-test--argv-with "mcp remove drgnx --scope user")))))))
+
+(ert-deftest drgnx-agent-settings/the-page-says-whether-it-reports ()
+  (drgnx-agent-settings-test--env
+    (with-current-buffer (drgnx-agent-settings-open 'claude root)
+      (should (string-search "Reports to drgnx: no" (buffer-string)))
+      (should (string-search "[Add drgnx]" (buffer-string)))
+      ;; reading the page writes nothing and starts nothing
+      (should-not (drgnx-agent-config-test-argv)))
+    (drgnx-agent-settings-test--write
+     (expand-file-name ".mcp.json" root)
+     "{\n  \"mcpServers\": {\"drgnx\": {\"type\": \"stdio\", \"command\": \"/x/bin/drgnx\", \"args\": [\"coord\", \"mcp\", \"--kind\", \"claude\"]}}\n}\n")
+    (with-current-buffer (drgnx-agent-settings-open 'claude root)
+      (should (string-search "Reports to drgnx: yes" (buffer-string)))
+      (should (string-search "[Remove drgnx]" (buffer-string)))
+      ;; the button is on the page's map too
+      (goto-char (point-min))
+      (search-forward "[Remove drgnx]")
+      (should (button-at (1- (point)))))))
+
+;;;; Fix round 1
+
+(ert-deftest drgnx-agent-settings/report-keeps-an-existing-gemini-or-kimi-file ()
+  ;; the file has other settings (written as drgnx writes JSON): they stay, and taking drgnx out gives the file back
+  (drgnx-agent-settings-test--env
+    (dolist (case (list (list 'gemini (expand-file-name "settings.json" (expand-file-name ".gemini" (getenv "GEMINI_CLI_HOME")))
+                              "{\n  \"theme\": \"dark\",\n  \"mcpServers\": {\n    \"docs\": {\n      \"command\": \"npx\",\n      \"args\": [\n        \"-y\",\n        \"docs\"\n      ]\n    }\n  },\n  \"general\": {\n    \"vimMode\": true\n  }\n}\n")
+                        (list 'kimi (expand-file-name "mcp.json" (getenv "KIMI_CODE_HOME"))
+                              "{\n  \"mcpServers\": {\n    \"docs\": {\n      \"command\": \"npx\",\n      \"args\": [\n        \"-y\",\n        \"docs\"\n      ]\n    }\n  }\n}\n")))
+      (pcase-let ((`(,kind ,file ,text) case))
+        (drgnx-agent-settings-test--write file text)
+        (with-current-buffer (drgnx-agent-settings-open kind root)
+          (drgnx-agent-settings-test--answering (list t t)
+            (call-interactively #'drgnx-agent-settings-report)
+            (let ((after (drgnx-agent-settings-test--read file)))
+              (should (string-search "\"drgnx\"" after))
+              (should (string-search "\"docs\": {\n      \"command\": \"npx\",\n      \"args\": [\n        \"-y\",\n        \"docs\"\n      ]\n    }" after))
+              (when (eq kind 'gemini)
+                (should (string-search "\"theme\": \"dark\"" after))
+                (should (string-search "\"general\": {\n    \"vimMode\": true\n  }" after))))
+            (should (string-search "Reports to drgnx: yes" (buffer-string)))
+            (call-interactively #'drgnx-agent-settings-report))
+          (should (equal (drgnx-agent-settings-test--read file) text)))))))
+
+(ert-deftest drgnx-agent-settings/a-disabled-drgnx-server-is-not-reporting ()
+  (drgnx-agent-settings-test--env
+    (drgnx-agent-settings-test--write
+     (expand-file-name "config.toml" (getenv "CODEX_HOME"))
+     "[mcp_servers.drgnx]\ncommand = \"/x/bin/drgnx\"\nargs = [\"coord\", \"mcp\", \"--kind\", \"codex\"]\nenabled = false\n")
+    (with-current-buffer (drgnx-agent-settings-open 'codex root)
+      (should (string-search "Reports to drgnx: no (disabled)" (buffer-string)))
+      (should-not (string-search "Reports to drgnx: yes" (buffer-string))))))
 
 ;;; mod-agent-settings-test.el ends here

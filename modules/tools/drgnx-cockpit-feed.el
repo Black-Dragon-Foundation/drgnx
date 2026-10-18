@@ -369,8 +369,10 @@ as many lines as its tallest window shows below its head and above its last line
      'drgnx-cockpit-event eid 'drgnx-cockpit-question question)))
 
 (defun drgnx-cockpit-feed--footer-key (agent)
-  "What the last lines of AGENT's buffer say: `session' (its transcript is here), `outside' or `none'."
+  "What the last lines of AGENT's buffer say: `session' (its transcript is here), `silent' (a worktree nobody
+reports from), `outside' or `none'."
   (cond ((drgnx-cockpit-feed--session agent) 'session)
+        ((and (stringp agent) (string-prefix-p "silent:" agent)) 'silent)
         ((drgnx-cockpit-feed--outside-p agent) 'outside)
         (t 'none)))
 
@@ -382,6 +384,7 @@ as many lines as its tallest window shows below its head and above its last line
                                                   (lambda (_) (drgnx-cockpit-feed--transcript agent))
                                                   'help-echo "Every message, tool call and permission of this agent"))
             ('outside (propertize "no transcript: an outside agent" 'face 'drgnx-cockpit-edge))
+            ('silent (propertize (drgnx-cockpit-feed--glyphs "not reporting — add drgnx on its settings page") 'face 'drgnx-cockpit-edge))
             (_ (propertize "no transcript in this Emacs" 'face 'drgnx-cockpit-edge)))
           "\n"
           (drgnx-cockpit-feed--button (drgnx-cockpit-feed--glyphs "Reply… (queues, never interrupts)")
