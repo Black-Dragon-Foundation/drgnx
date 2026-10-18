@@ -19,7 +19,8 @@
 (defconst drgnx-ui-repo-dir (file-name-directory (directory-file-name drgnx-ui-harness-dir)))
 (defconst drgnx-ui-name-regexp "\\`drgnx-ui-[0-9]+\\'")
 (defconst drgnx-ui-keep-env
-  '("HOME" "USER" "LOGNAME" "LANG" "LC_ALL" "PATH" "GRYPHN_EMACS_DIR" "DRGNX_STARTUP_TRACE")
+  '("HOME" "USER" "LOGNAME" "LANG" "LC_ALL" "PATH" "GRYPHN_EMACS_DIR" "DRGNX_STARTUP_TRACE"
+    "DRGNX_UITEST_SETTLE_SCALE")
   "The only variables a session inherits; everything else (keys, tokens) stays out.")
 (defconst drgnx-ui-link '("extras" "lisp" "site-lisp" "tree-sitter" "snippets" "themes")
   "Code directories of an external config, linked read-only into the session.")

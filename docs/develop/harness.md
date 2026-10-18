@@ -61,7 +61,7 @@ Unix socket paths are limited to ~108 bytes; the hash keeps two state roots (say
 - No network and no installs: `url-retrieve*`, `package-install`/`-refresh-contents`/`-vc-install`/`-upgrade*`
   and `treesit-install-language-grammar` signal an error.
 - No secrets: the environment is rebuilt from an allowlist (`HOME USER LOGNAME LANG LC_ALL PATH
-  XDG_RUNTIME_DIR GRYPHN_EMACS_DIR` + `DRGNX_UI_*`), `auth-sources` is nil.
+  XDG_RUNTIME_DIR GRYPHN_EMACS_DIR DRGNX_UITEST_SETTLE_SCALE` + `DRGNX_UI_*`), `auth-sources` is nil.
 - Your drgnx files are never touched: a session gets its own `DRGNX_CONFIG_DIR` (`RUN/drgnx-config`) and
   `XDG_STATE_HOME` (`RUN/state`), so it neither reads `~/.config/drgnx` (keys.eld, …) nor writes
   `~/.local/state` (the key report). `XDG_CACHE_HOME` is kept: font and shader caches would be rebuilt every start.
@@ -109,7 +109,7 @@ skip redisplay and hide the very jank we want to see.
 In GUI ERT tests, `(drgnx-uitest-run EVENTS)` delivers the events and waits until settled: it runs a nested
 command loop (`recursive-edit`), so the events execute as real commands while the test waits. Its default timeout is 5 s times
 `(drgnx-uitest-settle-scale)`: the 1-minute load average per CPU (at least 1, at most 8), so a loaded machine
-settles slower without a failing test; `DRGNX_UITEST_SETTLE_SCALE=N` sets the factor, and an explicit
+settles slower without a failing test; `DRGNX_UITEST_SETTLE_SCALE=N` (reaches sessions through the allowlist) sets the factor, and an explicit
 TIMEOUT argument is never scaled.
 
 ## Jank report
