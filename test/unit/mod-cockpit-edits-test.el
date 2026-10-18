@@ -75,7 +75,6 @@ The pane is killed after, and must leave no timer or watch behind."
 
 (ert-deftest drgnx-cockpit-edits/lists-changed-files-with-counts ()
   (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
-    (should (derived-mode-p 'diff-mode))
     (should (eq buffer-undo-list t))                                  ; a generated buffer: no undo
     (should (equal drgnx-cockpit-edits--files '("README" "new.txt")))
     ;; FILE +A −B per file, its diff below
@@ -84,12 +83,14 @@ The pane is killed after, and must leave no timer or watch behind."
     (drgnx-cockpit-edits-test--goto "README" "+more")
     (drgnx-cockpit-edits-test--goto "new.txt" "+new")
     (should (string-match-p "2 files changed" (car header-line-format)))
-    ;; the header's parts keep their faces under diff-mode's
+    ;; the header's parts keep their faces under the diff colours; diff lines get diff-mode's faces
     (drgnx-cockpit-edits-test--goto "README")
     (should (eq (get-text-property (point) 'drgnx-cockpit-edits-face) 'drgnx-cockpit-edits-file))
     (font-lock-ensure)
     (should (eq (get-text-property (point) 'face) 'drgnx-cockpit-edits-file))
     (should (eq (get-text-property (+ (point) 7) 'face) 'drgnx-cockpit-edits-added))
+    (should (eq (save-excursion (drgnx-cockpit-edits-test--goto "README" "+more") (get-text-property (point) 'face)) 'diff-added))
+    (should (eq (save-excursion (drgnx-cockpit-edits-test--goto "README" "@@") (get-text-property (point) 'face)) 'diff-hunk-header))
     ;; n and p move by file
     (goto-char (point-min))
     (drgnx-cockpit-edits-next-file)
@@ -246,14 +247,16 @@ The pane is killed after, and must leave no timer or watch behind."
 (ert-deftest drgnx-cockpit-edits/keys-in-every-profile ()
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil) (kinds nil))
     (cl-letf (((symbol-function 'drgnx-pane-define-kind) (lambda (kind &rest props) (push (cons kind props) kinds))))
-      (unwind-protect (funcall (plist-get (alist-get 'tools/cockpit drgnx-modules--table) :setup))
-        (drgnx-cockpit-edits--teardown)))
+      (funcall (plist-get (alist-get 'tools/cockpit drgnx-modules--table) :setup)))
     (should (eq (plist-get (alist-get 'agent-edits kinds) :home) 'editor))
     (pcase-dolist (`(,id ,fn) '((cockpit-accept-file drgnx-cockpit-edits-accept-file)
                                 (cockpit-revert-file drgnx-cockpit-edits-revert-file)
                                 (cockpit-comment drgnx-cockpit-edits-comment)
                                 (cockpit-edits-next-file drgnx-cockpit-edits-next-file)
-                                (cockpit-edits-previous-file drgnx-cockpit-edits-previous-file)))
+                                (cockpit-edits-previous-file drgnx-cockpit-edits-previous-file)
+                                (cockpit-edits-visit drgnx-cockpit-edits-visit)
+                                (cockpit-edits-next-hunk drgnx-cockpit-edits-next-hunk)
+                                (cockpit-edits-previous-hunk drgnx-cockpit-edits-previous-hunk)))
       (should (eq (drgnx-cmd-command (drgnx-commands-get id)) fn))
       (should (eq (drgnx-cmd-map (drgnx-commands-get id)) 'drgnx-cockpit-edits-mode-map))))
   (should (eq (alist-get 'task (eval (car (get 'drgnx-cockpit-open-functions 'standard-value)) t)) 'drgnx-cockpit-edits-open-task))
@@ -263,7 +266,8 @@ The pane is killed after, and must leave no timer or watch behind."
                                              (read (current-buffer)))
                            :bind)))
       (dolist (row '((cockpit-accept-file "a") (cockpit-revert-file "r") (cockpit-comment "c")
-                     (cockpit-edits-next-file "n") (cockpit-edits-previous-file "p")))
+                     (cockpit-edits-next-file "n") (cockpit-edits-previous-file "p") (cockpit-edits-visit "RET")
+                     (cockpit-edits-next-hunk "TAB") (cockpit-edits-previous-hunk "<backtab>")))
         (should (equal (assq (car row) bind) row))))))
 
 (ert-deftest drgnx-cockpit-edits/a-native-session-is-never-reverted-here ()
@@ -408,6 +412,30 @@ NOTIFIED counts the hub told; (INBOX) is s-1's messages; (SLURP FILE) a file's t
     (should (equal (inbox) (make-list 2 "[revert] please undo your changes to README")))
     (should (equal (slurp (concat tree "README")) "readme\nby the job\n"))))
 
+(ert-deftest drgnx-cockpit-edits/a-revert-checks-again-after-the-question ()
+  (drgnx-cockpit-edits-test--job
+    (setq mirror (drgnx-agents--make :id "m-1" :remote "s-1" :name "claude · jx#2" :status 'exited))
+    (drgnx-coord-force-status "jx#2" "done" "s-1")
+    ;; while the question waits, the task is taken up again: a request instead, the file kept
+    (cl-letf (((symbol-function 'yes-or-no-p) (lambda (prompt) (push prompt asked) (drgnx-coord-force-status "jx#2" "running" "s-1") t)))
+      (drgnx-cockpit-edits-revert-file "README"))
+    (should (= 1 (length asked)))
+    (should (equal (slurp (concat tree "README")) "readme\nby the job\n"))
+    (should (equal (inbox) '("[revert] please undo your changes to README")))
+    ;; another agent comes to work in it (through a link to it: true names count)
+    (drgnx-coord-force-status "jx#2" "done" "s-1")
+    (let ((link (concat root "link-to-tree")))
+      (make-symbolic-link (directory-file-name tree) link)
+      (cl-letf (((symbol-function 'yes-or-no-p)
+                 (lambda (prompt) (push prompt asked) (drgnx-coord-agent-register :id "ext:zed:9" :kind "zed" :cwd link) t)))
+        (drgnx-cockpit-edits-revert-file "n2.txt")))
+    (should (= 2 (length asked)))
+    (should (file-exists-p (concat tree "n2.txt")))
+    (should (equal (inbox) '("[revert] please undo your changes to README" "[revert] please undo your changes to n2.txt")))
+    ;; and from then on it is a request without a question
+    (drgnx-cockpit-edits-revert-file "README")
+    (should (= 2 (length asked)))))
+
 (ert-deftest drgnx-cockpit-edits/a-git-failure-never-deletes ()
   (drgnx-cockpit-edits-test--job
     (setq mirror (drgnx-agents--make :id "m-1" :remote "s-1" :name "claude · jx#2" :status 'exited))
@@ -420,46 +448,69 @@ NOTIFIED counts the hub told; (INBOX) is s-1's messages; (SLURP FILE) a file's t
     (should (equal (slurp (concat tree "README")) "readme\nby the job\n"))
     (should-not (drgnx-coord-events :agent "s-1" :kinds '("revert")))))
 
-(ert-deftest drgnx-cockpit-edits/diff-mode-never-writes-from-here ()
+(ert-deftest drgnx-cockpit-edits/the-pane-is-no-diff-or-patch-buffer ()
   (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
-    (let ((allowed (append drgnx-cockpit-edits--kept '(drgnx-cockpit-edits-read-only)))
-          (cmds nil))
-      ;; the pane's maps (its own and its parents): no Diff menu, only motions, visits and its own commands
-      (should-not (keymapp (lookup-key drgnx-cockpit-edits-mode-map [menu-bar Diff])))
-      (should-not (key-binding [menu-bar Diff]))
-      (cl-labels ((walk (map) (map-keymap (lambda (_ b)
-                                            (cond ((keymapp b) (walk b))
-                                                  ((eq (car-safe b) 'menu-item)
-                                                   (if (keymapp (nth 2 b)) (walk (nth 2 b)) (push (nth 2 b) cmds)))
-                                                  ((symbolp b) (push b cmds))))
-                                          map)))
-        (walk drgnx-cockpit-edits-mode-map))
-      (dolist (c (delete-dups cmds))
-        (when (and c (symbolp c) (string-prefix-p "diff-" (symbol-name c))) (should (memq c allowed)))
-        (should-not (memq c drgnx-cockpit-edits--refused)))
-      ;; keys that apply in diff-mode do nothing here
-      (dolist (k '("C-c C-a" "C-c RET a" "C-c C-r" "C-c C-s"))
-        (should-not (memq (key-binding (kbd k)) drgnx-cockpit-edits--refused)))
-      ;; M-x, a menu of another map, any caller: the module's advice refuses them in the pane, the file stays
-      (unwind-protect
-          (progn
-            (drgnx-cockpit-edits--guard)
-            (drgnx-cockpit-edits--guard)                                 ; idempotent
-            (dolist (f drgnx-cockpit-edits--refused)
-              (should (advice-member-p #'drgnx-cockpit-edits--refuse f)))
-            (drgnx-cockpit-edits-test--goto "README" "+more")
-            (dolist (f '(diff-reverse-direction diff-apply-buffer diff-apply-hunk diff-hunk-kill))
-              (should-error (let ((current-prefix-arg '(4))) (call-interactively f)) :type 'user-error))
-            (should (equal (with-temp-buffer (insert-file-contents (concat wt-a "README")) (buffer-string)) "readme\nmore\n"))
-            (should (drgnx-cockpit-edits-test--header "README"))         ; the buffer as it was
-            ;; elsewhere diff-mode is itself
-            (with-temp-buffer (diff-mode) (should-not (drgnx-cockpit-edits--refuse))))
-        (drgnx-cockpit-edits--teardown))
-      (dolist (f drgnx-cockpit-edits--refused) (should-not (advice-member-p #'drgnx-cockpit-edits--refuse f)))
-      ;; C-x C-q twice never brings diff-mode's read-only map back
-      (let ((inhibit-message t)) (read-only-mode -1) (read-only-mode 1))
-      (should-not (bound-and-true-p diff-mode-read-only))
-      (should buffer-read-only))))
+    (let ((readme (lambda () (with-temp-buffer (insert-file-contents (concat wt-a "README")) (buffer-string))))
+          (agent-path-p (lambda (x) (and (stringp x) (string-prefix-p (file-truename wt-a) (file-truename x))))))
+      ;; text in special-mode, in a neutral folder; the agent's folder only in its own variable
+      (should (derived-mode-p 'special-mode))
+      (should-not (derived-mode-p 'diff-mode))
+      (should (equal default-directory (drgnx-cockpit-edits--neutral-dir)))
+      (should-not (funcall agent-path-p default-directory))
+      (should (equal (plist-get drgnx-cockpit-edits--source :dir) wt-a))
+      ;; its map: its own commands over special-mode's, nothing else
+      (let ((special nil) (cmds nil))
+        (cl-labels ((walk (map fn) (map-keymap (lambda (_ b)
+                                                 (cond ((keymapp b) (walk b fn))
+                                                       ((eq (car-safe b) 'menu-item)
+                                                        (if (keymapp (nth 2 b)) (walk (nth 2 b) fn) (funcall fn (nth 2 b))))
+                                                       ((symbolp b) (funcall fn b))))
+                                               map)))
+          (walk special-mode-map (lambda (c) (push c special)))
+          (walk drgnx-cockpit-edits-mode-map (lambda (c) (push c cmds))))
+        (should-not (keymapp (lookup-key drgnx-cockpit-edits-mode-map [menu-bar Diff])))
+        (dolist (c (delete-dups cmds))
+          (should (or (null c) (memq c special) (string-prefix-p "drgnx-cockpit-edits" (symbol-name c))))))
+      ;; no other mode: M-x diff-mode (or any) is refused, the pane stays as it is
+      (should-error (diff-mode) :type 'user-error)
+      (should-error (fundamental-mode) :type 'user-error)
+      (should (eq major-mode 'drgnx-cockpit-edits-mode))
+      (should (equal drgnx-cockpit-edits--files '("README" "new.txt")))
+      ;; VC finds nothing of the agent's here: C-x v u changes no file
+      (drgnx-cockpit-edits-test--goto "README" "+more")
+      (let ((fileset (condition-case nil (vc-deduce-fileset t) (error nil))))
+        (should-not (seq-some agent-path-p (cadr fileset))))
+      (cl-letf (((symbol-function 'yes-or-no-p) #'always) ((symbol-function 'y-or-n-p) #'always))
+        (ignore-errors (call-interactively #'vc-revert)))
+      (should (equal (funcall readme) "readme\nmore\n"))
+      (should (equal (drgnx-cockpit-fixture-git wt-a "status" "--porcelain") "M README\n?? new.txt"))
+      ;; ediff-patch-file has no file of the agent's to patch: it asks, from the neutral folder
+      (require 'ediff)
+      (let ((asked nil))
+        (cl-letf (((symbol-function 'read-file-name) (lambda (&rest a) (push a asked) (error "Asked for a file"))))
+          (ignore-errors (ediff-patch-file nil (current-buffer))))
+        (should asked)
+        (should-not (seq-some (lambda (a) (seq-some agent-path-p (cdr a))) asked)))
+      (should (equal (funcall readme) "readme\nmore\n"))
+      ;; RET opens the file, from the agent's folder, at the line the diff line stands for
+      (set-buffer e)
+      (drgnx-cockpit-edits-test--goto "README" "+more")
+      (let ((pane (current-buffer)) (b nil))
+        (save-window-excursion
+          (setq b (drgnx-cockpit-edits-visit))
+          (should (equal (buffer-file-name b) (concat wt-a "README")))
+          (should (= 2 (with-current-buffer b (line-number-at-pos)))))
+        (kill-buffer b)
+        (set-buffer pane))
+      ;; TAB and S-TAB move by hunk
+      (goto-char (point-min))
+      (drgnx-cockpit-edits-next-hunk)
+      (should (looking-at "@@ -1 \\+1,2 @@"))
+      (drgnx-cockpit-edits-next-hunk)
+      (should (looking-at "@@ -0,0 \\+1 @@"))
+      (drgnx-cockpit-edits-previous-hunk)
+      (should (looking-at "@@ -1 \\+1,2 @@"))
+      (should-error (drgnx-cockpit-edits-previous-hunk) :type 'user-error))))
 
 (ert-deftest drgnx-cockpit-edits/a-silent-worktree-takes-no-messages-and-shows-first-writes ()
   (drgnx-cockpit-edits-test--with (concat "silent:" (directory-file-name wt-b))

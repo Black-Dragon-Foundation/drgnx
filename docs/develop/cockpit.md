@@ -220,10 +220,10 @@ why a change touches as few bands as it can.
 ## An agent's edits (`drgnx-cockpit-edits.el`)
 
 `modules/tools/drgnx-cockpit-edits.el` draws one agent's edits as a live diff: pane kind `agent-edits` (home
-`editor`), buffer `*edits: ID*` in `drgnx-cockpit-edits-mode` (from `diff-mode`). The graph's openers for tasks and
-agents (`drgnx-cockpit-edits-open-task`, `drgnx-cockpit-edits-open-agent` in `drgnx-cockpit-open-functions`) pass the
-model's agent plist, so a silent worktree keeps its folder and base. The user's side is in
-[cockpit.md](../guide/cockpit.md#an-agents-edits).
+`editor`), buffer `*edits: ID*` in `drgnx-cockpit-edits-mode` (text in diff-mode's colours, not a diff-mode
+buffer). The graph's openers for tasks and agents (`drgnx-cockpit-edits-open-task`, `drgnx-cockpit-edits-open-agent`
+in `drgnx-cockpit-open-functions`) pass the model's agent plist, so a silent worktree keeps its folder and base. The
+user's side is in [cockpit.md](../guide/cockpit.md#an-agents-edits).
 
 ### The buffer
 
@@ -231,34 +231,26 @@ model's agent plist, so a silent worktree keeps its folder and base. The user's 
   text property `drgnx-cockpit-edits-file`, whose value is the file's string from `drgnx-cockpit-edits--files` (the
   same object for the whole section, so a section ends where the property changes).
 - **Finding a section** walks the property changes, one step per section.
-- **Header faces.** diff-mode's last font-lock keyword gives every other line `diff-context`. The header's parts carry
-  `drgnx-cockpit-edits-face`, and a matcher placed before diff-mode's keywords
-  (`drgnx-cockpit-edits--fontify-headers`) copies it to `face`. diff-mode's keywords then leave those lines alone.
-  `font-lock-face` covers buffers without font-lock.
-- **diff-mode, adjusted:**
-  - its read-only key map (`diff-mode-read-only`) is off, and that map sits under the mode's own instead;
-  - its change tracking (hunk-header fixing after hand edits) is unregistered;
-  - `diff-refine` and `diff-font-lock-syntax` are off, because each would read files or run diff during redisplay.
-- **No undo** (`buffer-disable-undo`), no dir-local variables, and `default-directory` is the agent's folder when it
-  is local, so `RET` opens the file.
-- **Nothing writes from here.**
-  - **The mode map does not inherit `diff-mode-map`.** Its parent (`drgnx-cockpit-edits--kept-map`) holds only
-    diff-mode's own keys for its motions and visits (`drgnx-cockpit-edits--kept`), over `special-mode-map`. So the
-    Diff menu and diff-mode's `C-c` keys are not there. `define-derived-mode` keeps a parent that is already set.
-  - **The refused commands** (`drgnx-cockpit-edits--refused`, 20 of them) are:
-    - those that write a file: apply a hunk or the buffer, `diff-revert-and-kill-hunk` (Emacs 31), ediff, delete
-      trailing whitespace, change-log entries, wiggle;
-    - those that edit the buffer: reverse, kill a hunk or a file, kill applied hunks or junk, split, convert the
-      format, ignore whitespace, refresh, fix up, narrow, `diff-undo`.
-
-    Each gets the module's named `:before` advice `drgnx-cockpit-edits--refuse` (installed by `--setup`, idempotent;
-    `drgnx-cockpit-edits--teardown` removes it). In the pane it signals the `user-error`, also from `M-x` and before
-    the command's interactive spec reads a region or prefix: its own interactive spec is a function of the
-    original's. They are also remapped in the mode map, as is `undo`.
-  - **diff-mode's local `read-only-mode-hook` is killed,** so `C-x C-q` twice cannot turn `diff-mode-read-only` (and
-    its key map) back on.
-
-  A test walks the pane's maps, `menu-item`s included: no Diff menu, and no `diff-` command but the kept ones.
+- **Text, not a diff-mode buffer.** `drgnx-cockpit-edits-mode` derives from `special-mode`. Guarding diff-mode command
+  by command left ways in: menus, `M-x`, VC reading the buffer as a patch, `ediff-patch-file`. So none of diff-mode's
+  code, commands or maps is in it:
+  - Only diff-mode's *faces* are used (`diff-header`, `diff-file-header`, `diff-hunk-header`, `diff-added`,
+    `diff-removed`), through a few font-lock keywords of the pane's own (`drgnx-cockpit-edits--font-lock-keywords`).
+  - The header's parts carry `drgnx-cockpit-edits-face`, and a matcher placed first
+    (`drgnx-cockpit-edits--fontify-headers`) copies it to `face`, so the diff keywords leave those lines alone.
+    `font-lock-face` covers buffers without font-lock.
+  - Its own commands: `n`/`p` (files), `TAB`/`S-TAB` (hunks) and `RET` (`drgnx-cockpit-edits-visit`: the file from the
+    agent's folder, at the new-side line), all from the section data, plus `a`, `r` and `c`. Below them is
+    `special-mode-map`, and nothing else.
+- **A neutral folder.** `default-directory` is the temp folder (`drgnx-cockpit-edits--neutral-dir`). The agent's
+  folder lives only in `drgnx-cockpit-edits--source`, which only the pane's own commands use. VC (`C-x v u`, `C-x v
+  v`), `epatch`/`ediff-patch-file`, `compile` and shells in the pane find nothing of the agent's.
+  `drgnx-cockpit-edits--agent`, `--id` and `--source` are permanent-local.
+- **No other mode.** A local `change-major-mode-hook` (`drgnx-cockpit-edits--keep-mode`) signals a `user-error`, so `M-x
+  diff-mode` (or any mode) cannot turn the pane into a patch buffer.
+- **No undo** (`buffer-disable-undo`), no dir-local variables.
+- **Nothing global.** `drgnx-cockpit-edits--teardown` (for the coming module teardown) only kills the panes; each one's
+  `kill-buffer-hook` ends its timers and watches.
 - **The header line** is text cached at each patch: the agent, counts, base, "stopped" (positive evidence only) and
   the keys (`a accept · r revert · c comment · n/p files`).
 
@@ -325,8 +317,11 @@ holds that.
   - the source is a job's with `:job-worktree` (the task worktree drgnx made, with its jtask row). Never `outside`
     (`hello` registers its cwd's toplevel as its worktree, which may be the user's, and its stop events can be forged),
     `native` or `silent` (the user may work there);
-  - git says the folder is a worktree's top (`rev-parse --show-toplevel`) on the job's branch (`job/JOB`, `job/JOB-…`);
-  - no other live session or registered agent has its cwd or worktree in it (`drgnx-cockpit-edits--alone-p`);
+  - git says the folder is a worktree's top (`rev-parse --show-toplevel`, true names) on exactly its task's branch
+    (`job/JOB-N`);
+  - no other live session or registered agent has its cwd or worktree in it, by true names
+    (`drgnx-cockpit-edits--alone-p`). An agent that never registered (a shell, an editor of the user's) cannot be seen;
+    the job's worktree is drgnx's own, made for that task, and the question names the folder;
   - its folder is local and a linked worktree (its top has a `.git` file, so it is never the main checkout);
   - the file passes `drgnx-cockpit--file-ok`;
   - positive evidence that the agent stopped (`drgnx-cockpit-edits--stopped-p`):
@@ -345,8 +340,10 @@ holds that.
   - `Put F back as abc12345 has it, in WT, discarding the agent's changes? `
   - or `Delete new file F in WT (the agent's own worktree)? `
 
-  Then `git checkout COMMIT -- FILE`, or `delete-file` (a regular file only), and a `revert` event (`:direct t :to
-  COMMIT`; a request is `:requested t`).
+  After "yes", the source is read again and `--direct-p` and the plan are run again. If either changed (the task
+  was taken up again, another agent came, the base moved), it becomes a request instead. Only then `git checkout
+  COMMIT -- FILE`, or `delete-file` (a regular file only), and a `revert` event (`:direct t :to COMMIT`; a request is
+  `:requested t`).
 - **Comment** reads the text (a command, so it may ask) and queues `[comment] FILE:LINE: TEXT`. File names in
   prompts, messages and echoes are masked (`drgnx-wb-display-name`).
   - LINE is the new-side line of the diff line at point: the hunk's `+N` plus the context and added lines before it.
@@ -379,9 +376,12 @@ nothing reads, and no process sentinel runs while it waits. It covers:
 - a git failure (no such base): an error before any question, nothing deleted;
 - a silent worktree: no message (said); a first write in a new folder shows without `g`; quiet listings space out
   4, 8, 10 s and a change resets them; the header's key hint;
-- diff-mode never writes: no Diff menu, the pane's maps (menu items too) reach only kept commands, the advice (idempotent,
-  removed by teardown) refuses `diff-reverse-direction`, `diff-apply-buffer`, `diff-apply-hunk`, `diff-hunk-kill`
-  called interactively with a prefix (the file unchanged), and `C-x C-q` twice keeps diff-mode's read-only map off;
+- the pane is no diff or patch buffer: special-mode, the neutral folder, its map holding only its own commands over
+  special-mode's (menu items too), `diff-mode` and `fundamental-mode` refused, `vc-deduce-fileset` naming nothing of the
+  agent's and `vc-revert` changing no file, `ediff-patch-file` offered no folder of the agent's, `RET` opening the
+  right file at the right line, `TAB`/`S-TAB` by hunk;
+- a revert checked again after the question: the task taken up again, or another agent come in through a link, turns
+  it into a request;
 - comments queued, the line a diff line stands for, the hub routes (an exited mirror gets a message in the store);
 - the graph opening an agent's edits from a task or an agent;
 - the keys in every profile.

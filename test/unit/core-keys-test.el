@@ -656,7 +656,8 @@ that took VS Code's C-S-h and F2 (the rest of the replace module is not modelled
     ;; M12f: an agent's edits
     (cockpit-accept-file "a" drgnx-cockpit-edits-mode-map) (cockpit-revert-file "r" drgnx-cockpit-edits-mode-map)
     (cockpit-comment "c" drgnx-cockpit-edits-mode-map) (cockpit-edits-next-file "n" drgnx-cockpit-edits-mode-map)
-    (cockpit-edits-previous-file "p" drgnx-cockpit-edits-mode-map))
+    (cockpit-edits-previous-file "p" drgnx-cockpit-edits-mode-map) (cockpit-edits-next-hunk "TAB" drgnx-cockpit-edits-mode-map)
+    (cockpit-edits-previous-hunk "<backtab>" drgnx-cockpit-edits-mode-map) (cockpit-edits-visit "RET" drgnx-cockpit-edits-mode-map))
   "The VS Code profile's resolved keys on Linux before M12a gave it its macOS keys: (ID KEY MAP).")
 
 (ert-deftest drgnx-keys/linux-is-unchanged ()

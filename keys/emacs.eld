@@ -300,4 +300,7 @@
         (cockpit-revert-file "r")
         (cockpit-comment "c")
         (cockpit-edits-next-file "n")
-        (cockpit-edits-previous-file "p")))
+        (cockpit-edits-previous-file "p")
+        (cockpit-edits-visit "RET")
+        (cockpit-edits-next-hunk "TAB")
+        (cockpit-edits-previous-hunk "<backtab>")))

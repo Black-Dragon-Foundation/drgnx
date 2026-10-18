@@ -88,8 +88,7 @@ press `RET`) and that agent's file changes since it started open in the editor a
 `agent-edits`, and its buffer is `*edits: AGENT*`.
 
 - **One section per changed file.** A header line comes first: `FILE +A −B`, then `new` or `deleted`, then its
-  review mark (`✓ accepted`, or `changed since accepted`). The file's diff follows, with diff-mode's colours and keys:
-  `TAB` moves by hunk and `RET` opens the file at that line.
+  review mark (`✓ accepted`, or `changed since accepted`). The file's diff follows, in diff-mode's colours.
 - **The header line** at the top names the agent and counts the files changed and the files you accepted. It also
   says what the changes are compared against, whether the agent is known to be stopped, and the keys (`a accept ·
   r revert · c comment · n/p files`).
@@ -101,6 +100,8 @@ press `RET`) and that agent's file changes since it started open in the editor a
 | Key | Command | Does |
 |---|---|---|
 | `n`, `p` | Next / Previous Changed File (`cockpit-edits-next-file`, `cockpit-edits-previous-file`) | moves to the next or previous file's header line |
+| `TAB`, `S-TAB` | Next / Previous Hunk (`cockpit-edits-next-hunk`, `cockpit-edits-previous-hunk`) | moves to the next or previous hunk |
+| `RET` | Open File at Line (`cockpit-edits-visit`) | opens the file, from the agent's folder, at the line the diff line stands for |
 | `a` | Accept File (`cockpit-accept-file`) | marks the file accepted with the hash of the diff you see. The mark counts toward the task's merge gate. It never merges or commits anything. When the agent changes the file again, the header says `changed since accepted`: the mark keeps the hash you accepted, and the merge gate compares it with the diff's. |
 | `r` | Revert File… (`cockpit-revert-file`) | asks the agent to undo its changes to the file. The message `[revert] please undo your changes to FILE` is queued for it and never interrupts it. See below for the one case where the file is put back here. |
 | `c` | Comment on Line… (`cockpit-comment`) | asks for a comment and queues `[comment] FILE:LINE: TEXT` for the agent. LINE is the file's line that the diff line at point stands for. |
@@ -108,16 +109,20 @@ press `RET`) and that agent's file changes since it started open in the editor a
 
 The keys are the same in the VS Code, Emacs and Vim profiles: the buffer starts in Emacs state under evil.
 
-**Read-only.** The pane keeps only diff-mode's motions and visits (`TAB`, `S-TAB`, `{`, `}`, `RET`, `o`): it has no
-Diff menu and none of diff-mode's `C-c` keys. diff-mode's commands that would write a file or this buffer are refused
-in it however they are called, from `M-x` too: applying a hunk or the whole diff, reversing, killing or splitting
-hunks, ediff, converting the format, fixing whitespace, change-log entries, narrowing and undo. They say that `r` and
-`c` are the way to act on an agent's change.
+**Read-only.** The pane is text in diff-mode's colours, not a diff buffer. Nothing outside its own commands acts on
+the agent's files:
+- its folder (`default-directory`) is the temp folder, not the agent's, so VC (`C-x v u`, `C-x v v`), `ediff-patch-file`,
+  `compile` or a shell started from it find nothing of the agent's;
+- it cannot be switched to another mode (`M-x diff-mode` is refused);
+- it has no Diff menu.
+
+`r` and `c` are the way to act on an agent's change.
 
 **When `r` puts a file back itself.** Only when all of these hold. Anything else is a request to the agent.
 - The agent is a job's, and the folder is its task's worktree: the `.claude/worktrees/JOB-N/` that drgnx made for
-  that task. git must say that the folder is a worktree's top and that it is on the job's branch (`job/JOB…`), and no
-  other session or registered agent may work in it.
+  that task. git must say that the folder is a worktree's top and that it is on that task's branch (`job/JOB-N`), and
+  no other session or registered agent may work in it. An agent that never registered (your own shell or editor in
+  that folder) cannot be seen, so check the folder the question names.
 
   Everything else is only ever a request: an outside agent (the worktree it registered may be your own, and its
   reports cannot prove it stopped), a chat session's folder, a silent worktree and the main checkout. That holds even
@@ -130,6 +135,9 @@ hunks, ediff, converting the format, fixing whitespace, change-log entries, narr
 You are then asked exactly what will happen, with the names shown safely and the folder shortened:
 - `Put FILE back as abc12345 has it, in WORKTREE, discarding the agent's changes?`
 - or, for a file the base does not have: `Delete new file FILE in WORKTREE (the agent's own worktree)?`
+
+After you say yes, everything is checked again. If the agent has started again, another agent has come, or the base
+has moved, it becomes a request to the agent instead.
 
 **How a message reaches the agent.** It is always queued. Sending a message never cancels the agent's work.
 
