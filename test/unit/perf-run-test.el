@@ -79,4 +79,15 @@ after another (the last repeats).  Binds `history' (the history file) and `start
     (should (eql (plist-get (json-parse-string (with-temp-buffer (insert-file-contents history) (buffer-string)) :object-type 'plist) :load)
                  2.0))))
 
+
+(ert-deftest drgnx-perf-run/the-soak-census-fails-a-cache-over-its-cap ()
+  (let* ((rows (vector (vector "git-status" "cache" 17 16) (vector "explorer-listing" "cache" 64 64)
+                       (vector "statusbar-bar" "memo" 3 :null) (vector "windows" "cache" 900 :null)))
+         (r (drgnx-perf-run--census-lines rows)))
+    (should (equal '("  cache git-status 17/16" "  cache explorer-listing 64/64" "  memo statusbar-bar 3"
+                     "  cache windows 900")
+                   (car r)))
+    (should (equal '("git-status holds 17, over its cap of 16") (cdr r)))
+    (should-not (cdr (drgnx-perf-run--census-lines [])))))
+
 ;;; perf-run-test.el ends here
