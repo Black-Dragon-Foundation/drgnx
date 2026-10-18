@@ -86,7 +86,8 @@ with `:geometry' (pixel left top width height) when it is graphical."
             :main (window-state-get (window-main-window) t)
             :groups (mapcar (lambda (g) (list :tabs (or (nth 2 (assq g drgnx-persist--pending))   ; still loading
                                                         (delq nil (mapcar #'buffer-file-name (drgnx-chrome-tabs g))))
-                                              :shown (buffer-file-name (window-buffer g))))
+                                              :shown (buffer-file-name (window-buffer g))
+                                              :px (window-pixel-width g)))
                             (drgnx-groups-list))
             :extra (drgnx-persist--extra)))))
 
@@ -276,8 +277,20 @@ idle (never a question at start)."
       (when (plist-get left :shown) (drgnx-wb-show-sidebar))
       (when (plist-get panel :shown) (drgnx-wb-area-show 'panel (plist-get panel :tab)))
       (when (plist-get right :shown) (drgnx-wb-area-show 'right (plist-get right :tab))))
+    (drgnx-persist--fit-groups (plist-get state :groups))
     (drgnx-chrome-apply))
   t)
+
+(defun drgnx-persist--fit-groups (specs)
+  "Put the editor groups back to the pixel widths SPECS (the groups' states) hold.  `window-state-put' works in
+columns, so two halves of a split can come back 4 px apart or swapped (230/234 -> 234/230); the docks are in place
+by now, so what is left is exact.  Every group but the last (it takes the rest); a width that cannot be had, or a
+state that holds none, leaves that group as it is."
+  (cl-loop for (g . more) on (drgnx-groups-list) for spec in specs
+           for px = (plist-get spec :px)
+           when (and more (integerp px) (window-live-p g) (/= px (window-pixel-width g)))
+           do (let ((window-resize-pixelwise t))     ; else a 4 px change is rounded to whole columns and lost
+                (ignore-errors (window-resize g (- px (window-pixel-width g)) t nil t)))))
 
 (defun drgnx-persist--gui-frame ()
   "The graphical frame to restore into or save from (a daemon's F1 is not one)."
