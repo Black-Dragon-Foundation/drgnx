@@ -362,6 +362,46 @@ it and 28.2 ms without (5 runs each, within the runs' noise); the budget is 5 ms
 `test/unit/modules-record-test.el` covers it, including `startup-is-unchanged`: the shipped modules' startup stage
 gives the same statuses and commands with the recorder as without it.
 
+### Writing a module that can be turned off
+
+**Every module can be turned off.** A module's `:setup` changes global state only through recorded doors: drgnx's
+`define` functions, `drgnx-module-hook` / `drgnx-module-advice` (named, paired with their removal) or `add-hook` /
+`advice-add` of a named function, timers, `add-to-list`, global minor modes, `drgnx-module-set` for another
+package's options, `drgnx-module-alist-put` for alist keys, `drgnx-module-face-spec` for face specs and
+`drgnx-module-define-key` for remaps in global maps. Anything else — a theme, a connection, live frames'
+parameters, a mode turned on in live buffers, a sub-module's own state — is undone by the module's `:teardown`
+(which calls the sub-modules' off functions), or the module declares `:teardown 'restart`. A test never stubs a
+setup to keep its effects out of the process: it sets the module up and tears it down. Code a setup defers
+(`eval-after-load`, a timer callback) runs inside `drgnx-modules-with-owner`. Files under `modules/` register
+nothing at top level. A new registry calls `drgnx-modules-push-undo` and has an undefine. Tests that set modules up
+use `drgnx-test-with-modules` ([harness.md](harness.md)), and `bin/drgnx test --leaks` reports nothing for the
+tests you add.
+
+`test/unit/lint-teardown-test.el` checks it:
+
+- `drgnx-teardown/every-module-leaves-nothing` sets each shipped module up alone with
+  `(drgnx-test-with-modules (list M) :strict t)` and turns it off: the state after equals the state before (features
+  excepted). One assertion per module, so a failure names the module and what it left. Packages come from the
+  user's ELPA when present (read-only, `DRGNX_USER_ELPA`), and no outside program is found, so none starts; a module
+  whose packages are missing does not set up, and the test's message says which were not set up.
+  `drgnx-teardown/off-on-off-is-off` turns each one off and on again in between: the second setup must set up
+  exactly what the first did (no stacked timers, no idempotence guard that outlived the teardown).
+  `restart` modules are not set up.
+- `drgnx-lint/modules-register-nothing-at-load`: a registration (`add-hook`, `advice-add`, `add-to-list`, a timer,
+  a drgnx `define`…) that runs when a module file loads fails — it runs outside every setup, so nothing records it.
+- `drgnx-lint/raw-global-forms-need-a-teardown`: in a module file, `with-eval-after-load` or an `eval-after-load`
+  without `drgnx-modules-with-owner`, `setf (alist-get … VAR)` on a global variable, `face-spec-set`,
+  `custom-set-*`, `setopt`, `setq-default`, `define-key global-map`, `default-frame-alist` and
+  `modify-frame-parameters` fail unless the module has a `:teardown`. Two fail whatever it has: a lambda on a global
+  hook (name it) and `drgnx-modules-with-owner` directly inside `with-eval-after-load` (evaluated only when the
+  feature loads, it names no module and never runs).
+
+Modules not converted yet are on `drgnx-teardown--not-yet`, each with the migration batch that converts it; the
+dynamic check and the raw-forms lint skip them, and the test's message counts them. Known top-level registrations
+waiting for their batch are on `drgnx-teardown--load-registrations`; an entry whose registration is gone fails
+too. Both lists shrink to empty. A file under `modules/` that defines no module is listed in
+`drgnx-teardown--library-files` with the module that uses it.
+
 ## Build (`drgnx-build.el`)
 
 `bin/drgnx build` byte-compiles `core/`, `wb/` and `modules/` in place (`.elc` files are not tracked); with native

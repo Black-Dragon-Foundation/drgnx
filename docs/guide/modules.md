@@ -139,6 +139,9 @@ affected: they reach the registry and the palette as before.
 
 Every command goes through the registry (`drgnx-command-define`) and gets a key — or `:none` with a reason — in each
 key profile ([keys.md](keys.md)); faces inherit theme faces (no colours). See [core.md](../develop/core.md) for the registry.
+Every module must turn off cleanly: its setup changes global state only through doors that record it, and a
+`:teardown` undoes the rest — the rule and the test that checks it are in
+[core.md](../develop/core.md#writing-a-module-that-can-be-turned-off).
 
 ## Shipped modules
 
