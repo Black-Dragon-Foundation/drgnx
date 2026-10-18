@@ -581,8 +581,9 @@ says logged in when HOME has .logged-in (FAKE_OLD_CLAUDE: an old CLI that has no
                     " *) exec sleep 30;;\nesac\n"))
            (drgnx-onboard-test--script
             (concat tpl "claude-agent-acp")
-            (format "if [ -n \"$FAKE_ACP\" ]; then eval \"$FAKE_ACP\"; fi\nPATH=%s; exec %s --batch -Q -l %s\n"
+            (format "if [ -n \"$FAKE_ACP\" ]; then eval \"$FAKE_ACP\"; fi\nPATH=%s; exec sh %s %s --batch -Q -l %s\n"
                     (shell-quote-argument real-path)     ; the emacs launcher script needs the real one
+                    (shell-quote-argument (expand-file-name "test/fixtures/mock-acp-stdin.sh" drgnx-dir))
                     (shell-quote-argument (expand-file-name invocation-name invocation-directory))
                     (shell-quote-argument (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir))))
            (drgnx-onboard-test--script (concat tpl "node") "exit 0\n")

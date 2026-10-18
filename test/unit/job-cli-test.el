@@ -19,7 +19,7 @@
           (make-directory (concat root "config") t) (make-directory (concat root "home") t)
           (make-directory (concat repo "docs/plans") t)
           (with-temp-file (concat root "config/agents.eld")   ; mock agents on every route: nothing real starts
-            (prin1 `(:profiles (("mock" :command (,(expand-file-name invocation-name invocation-directory) "--batch" "-Q"
+            (prin1 `(:profiles (("mock" :command ("sh" ,(expand-file-name "test/fixtures/mock-acp-stdin.sh" drgnx-dir) ,(expand-file-name invocation-name invocation-directory) "--batch" "-Q"
                                                   "-l" ,(expand-file-name "test/fixtures/mock-acp.el" drgnx-dir))))
                                :routes ((implement . "mock") (review . "mock")))
                    (current-buffer)))

@@ -1,7 +1,8 @@
 ;;; mock-acp.el --- A mock ACP agent for tests: batch Emacs, JSON-RPC 2.0, one object per line -*- lexical-binding: t -*-
-;; emacs --batch -Q -l mock-acp.el
-;; Its stdin is read by a `cat' of /proc/PID/fd/0, so messages (session/cancel) arrive while a turn
-;; streams (Linux).  What a turn does depends on words in the prompt:
+;; sh mock-acp-stdin.sh emacs --batch -Q -l mock-acp.el
+;; Its stdin is read by a `cat', so messages (session/cancel) arrive while a turn streams: of the FIFO
+;; in MOCK_ACP_IN (made by mock-acp-stdin.sh, which copies stdin into it: any POSIX system), else of
+;; /proc/PID/fd/0 (Linux).  What a turn does depends on words in the prompt:
 ;;   slow        ten chunks, 0.3 s apart (a turn to send into, to stop)
 ;;   tool        a tool call, pending then completed
 ;;   plan        a plan with three entries
@@ -265,7 +266,8 @@ decision log, complete the task; say what happened."
      (id (mock--error id -32601 (format "%s: no such method" method))))))
 
 (defvar mock--buf "")
-(make-process :name "mock-in" :command (list "cat" (format "/proc/%d/fd/0" (emacs-pid))) :connection-type 'pipe
+(make-process :name "mock-in" :command (list "cat" (or (getenv "MOCK_ACP_IN") (format "/proc/%d/fd/0" (emacs-pid))))
+              :connection-type 'pipe
               :coding 'utf-8-unix :noquery t
               :filter (lambda (_p s)
                         (setq mock--buf (concat mock--buf s))

@@ -17,6 +17,9 @@ The macOS workflow has no GUI tier: the GUI tests (`--ui`) stay Linux-only (they
 Mac UI is checked by hand with the session checklist. The weekly `install` job is a real install on a fresh runner
 (it installs Emacs with Homebrew); it stays out of the per-push run.
 
+The unit suite runs on both systems, so a test never assumes Linux: no `/proc` (the mock ACP agent is started through
+`test/fixtures/mock-acp-stdin.sh`, which hands it its stdin through a FIFO).
+
 ## Reproduce a job locally
 
 ```
