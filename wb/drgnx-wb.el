@@ -14,6 +14,7 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'drgnx-signal)
+(require 'drgnx-modules-record)
 
 (defcustom drgnx-wb-dock-columns 32
   "Width of the left dock, in columns, the first time it shows (later: the width it had)."
@@ -46,9 +47,30 @@ follower is not a jank-guard violation (invariant I9).")
 :buffer FUNCTION-RETURNING-A-BUFFER :height FRACTION-OF-THE-DOCK :on-show FUNCTION-OF-THE-WINDOW
 :on-focus FUNCTION-OF-THE-WINDOW, run when `drgnx-wb-focus-section' focuses it,
 :view SYMBOL, the sidebar view the section belongs to, default `explorer').
-A function title is asked each time the dock shows (a panel's filter stays in its title)."
-  (setf (alist-get name drgnx-wb--sections) spec)
-  name)
+A function title is asked each time the dock shows (a panel's filter stays in its title).
+Called from a module's setup, the definition records its undo: `drgnx-wb-undefine-section', or the
+section it replaced put back — either only while the section is still the one defined here."
+  (let ((previous (assq name drgnx-wb--sections)))
+    (setq previous (and previous (cdr previous)))
+    (setf (alist-get name drgnx-wb--sections) spec)
+    (drgnx-modules-push-undo
+     (format "section %s" name)
+     (lambda ()
+       (when (eq (alist-get name drgnx-wb--sections) spec)
+         (drgnx-wb-undefine-section name)
+         (when previous (setf (alist-get name drgnx-wb--sections) previous)))))
+    name))
+
+(defun drgnx-wb-undefine-section (name)
+  "Remove dock section NAME and close its window wherever a dock shows it (the dock keeps its
+other sections).  Returns non-nil when NAME was defined."
+  (let ((defined (assq name drgnx-wb--sections)))
+    (setq drgnx-wb--sections (assq-delete-all name drgnx-wb--sections))
+    (dolist (frame (frame-list))
+      (when-let* ((w (drgnx-wb-section-window name frame)))
+        (when (eq (selected-window) w) (drgnx-wb-focus-editor))
+        (delete-window w)))
+    (and defined t)))
 
 (defun drgnx-wb-section-window (name &optional frame)
   "The window showing dock section NAME on FRAME, or nil."

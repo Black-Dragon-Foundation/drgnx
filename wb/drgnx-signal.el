@@ -16,6 +16,7 @@
 ;;; Code:
 (require 'cl-lib)
 (require 'seq)
+(require 'drgnx-modules-record)
 
 (defvar drgnx-signal-delay 0.05 "Idle seconds before raw events are flushed as edges.")
 (defvar drgnx-signal--subscribers nil "Alist EVENT → list of functions, in subscription order.")
@@ -25,12 +26,15 @@
 (defvar drgnx-signal-errors nil "Recent subscriber errors (newest first).")
 
 (defun drgnx-signal-subscribe (event fn)
-  "Call FN with the event's data whenever EVENT is emitted (once per FN)."
+  "Call FN with the event's data whenever EVENT is emitted (once per FN).
+Called from a module's setup, a new subscription records its removal (module teardown)."
   (unless (memq fn (alist-get event drgnx-signal--subscribers))
     (setf (alist-get event drgnx-signal--subscribers)
-          (append (alist-get event drgnx-signal--subscribers) (list fn)))))
+          (append (alist-get event drgnx-signal--subscribers) (list fn)))
+    (drgnx-modules-push-undo (format "signal %s" event) (lambda () (drgnx-signal-unsubscribe event fn)))))
 
 (defun drgnx-signal-unsubscribe (event fn)
+  "Stop calling FN for EVENT."
   (setf (alist-get event drgnx-signal--subscribers) (remq fn (alist-get event drgnx-signal--subscribers))))
 
 (defun drgnx-signal-user-buffer-p (buffer)

@@ -16,6 +16,7 @@
 (require 'seq)
 (require 'drgnx-wb)
 (require 'drgnx-paths)
+(require 'drgnx-modules-record)
 
 (defvar drgnx-rules--table nil
   "Rules, tried first to last: (MATCHER PLACE . PROPS).  `drgnx-wb-place' puts new ones first.")
@@ -27,16 +28,45 @@
   "Send buffers matching MATCHER to PLACE (with PROPS, e.g. :tab).  Returns MATCHER.
 MATCHER: a major-mode symbol or a list of them (derived modes match too), a buffer-name regexp,
 or a predicate (a lambda, not a symbol) called with the buffer name and the display action.
-Later rules are tried first; a rule with the same MATCHER is replaced where it stands."
-  (if-let* ((cell (assoc matcher drgnx-rules--table)))
-      (setcdr cell (cons place props))
-    (push (cons matcher (cons place props)) drgnx-rules--table))
-  matcher)
+Later rules are tried first; a rule with the same MATCHER is replaced where it stands.
+Called from a module's setup, the rule records its undo: `drgnx-wb-unplace', or the rule it
+replaced put back — either only while the rule is still the one placed here."
+  (let* ((cell (assoc matcher drgnx-rules--table)) (previous (cdr cell)) (rule (cons place props)))
+    (if cell
+        (setcdr cell rule)
+      (push (cons matcher rule) drgnx-rules--table))
+    (drgnx-modules-push-undo
+     (format "rule %S" matcher)
+     (lambda ()
+       (when-let* ((cell (assoc matcher drgnx-rules--table)) ((eq (cdr cell) rule)))
+         (if previous (setcdr cell previous) (drgnx-wb-unplace matcher)))))
+    matcher))
+
+(defun drgnx-wb-unplace (matcher)
+  "Remove the rule whose matcher is `equal' to MATCHER; the other rules stay.  Non-nil when it was there."
+  (when-let* ((cell (assoc matcher drgnx-rules--table)))
+    (setq drgnx-rules--table (delq cell drgnx-rules--table))
+    t))
 
 (defun drgnx-wb-define-place (place fn)
-  "Define PLACE: FN takes (BUFFER ALIST PROPS) and returns the window it showed BUFFER in, or nil."
-  (setf (alist-get place drgnx-rules--places) fn)
+  "Define PLACE: FN takes (BUFFER ALIST PROPS) and returns the window it showed BUFFER in, or nil.
+Called from a module's setup, the definition records its undo: `drgnx-wb-undefine-place', or the
+function it replaced put back — either only while PLACE is still FN."
+  (let ((previous (alist-get place drgnx-rules--places)))
+    (setf (alist-get place drgnx-rules--places) fn)
+    (drgnx-modules-push-undo
+     (format "place %s" place)
+     (lambda ()
+       (when (eq (alist-get place drgnx-rules--places) fn)
+         (if previous (setf (alist-get place drgnx-rules--places) previous) (drgnx-wb-undefine-place place))))))
   place)
+
+(defun drgnx-wb-undefine-place (place)
+  "Remove PLACE.  A rule that still names it falls into the \"no place\" error, so remove the rules first.
+Non-nil when PLACE was defined."
+  (when (assq place drgnx-rules--places)
+    (setq drgnx-rules--places (assq-delete-all place drgnx-rules--places))
+    t))
 
 (defun drgnx-rules--internal-p (name) (string-prefix-p " " name))
 

@@ -143,6 +143,23 @@ stack — the code that knows what it changed knows how to change it back):
   changes anything, so off, on, off is the same as off once, and two undos of the same thing (a `:teardown` that
   calls a sub-module's off function, then the stack) leave it undone once.
 
+#### Workbench registries (`wb/`)
+
+The workbench's registries push their own undo, so a module that defines a section, a tab, a rule, a place or a
+bus subscription in its setup leaves none behind. Each undo changes the entry only while it is still the one this
+module defined; a definition that replaced an entry puts the previous one back instead of removing it.
+
+| Define | Undo (also callable on its own) | Open panes |
+|---|---|---|
+| `drgnx-wb-define-section` | `(drgnx-wb-undefine-section NAME)` | the section's dock window closes (focus leaves it first); the dock keeps its other sections. A restored previous section shows again the next time the dock is shown. |
+| `drgnx-wb-define-tab` | `(drgnx-wb-undefine-tab AREA TAB)` | where the area shows the tab it shows the next tab in the same window (the one before for the last tab), or hides when it was the only one; the tab row is redrawn and the frame's saved buffer for the tab dropped. |
+| `drgnx-wb-place` | `(drgnx-wb-unplace MATCHER)` (`equal`) | none: rules decide only where a buffer goes next. |
+| `drgnx-wb-define-place` | `(drgnx-wb-undefine-place PLACE)` | none. Remove the rules that name a place first: a rule naming an undefined place raises "no place". |
+| `drgnx-signal-subscribe` | `drgnx-signal-unsubscribe` | none. Recorded only when the function was not subscribed yet, so a second subscription of the same function is not the module's to remove. |
+
+The `add-function` on `after-focus-change-function` (Explorer and Buffers panel) pushes its `remove-function`
+beside it, by the advice's name. Areas (`drgnx-wb-define-area`) are not undone: they belong to the workbench.
+
 ## Build (`drgnx-build.el`)
 
 `bin/drgnx build` byte-compiles `core/`, `wb/` and `modules/` in place (`.elc` files are not tracked); with native
