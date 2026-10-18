@@ -61,6 +61,12 @@ A session's **transcript** (RET on its row; opens in the editor) shows:
 - "working…" with a **[Stop]** button, the queued messages (each with **[×]** to remove it; **[Deliver]** after a
   Stop), and how the agent exited if it did (with the end of its error output).
 
+A transcript is drawn only while a window shows it, at most ten times a second: what the agent streams is added at
+the end of its answer, and only a part that changed (a tool call's status, a permission answered) is drawn again, so a
+long transcript costs no more to follow than a short one. A transcript you are not looking at draws nothing; when it
+shows again it catches up at once. Scrolled to the end, it follows what comes in; scrolled up to read, it keeps your
+place while the agent streams. `g` redraws it at once.
+
 Agents: Send to Agent (RET in a transcript) sends; Stop Agent (`C-c C-c` in a transcript, or [Stop]) cancels the
 running turn — it ends within a second, pending permission requests are answered "cancelled", pending edits
 rejected, and queued messages wait (Deliver Queued Messages, `C-c C-d`, sends them; Edit Queued Message changes or
@@ -273,12 +279,15 @@ run it, with the plan's own encoding and line endings — and leaves alone a pla
   npm, no agent): the maintained package wins wherever it is on the `PATH`, the deprecated one still runs and says so
   once with its fix, an old version, a copy instead of a link, a program of no known package, other commands left
   alone, sessions and jobs starting the chosen program, and the doctor's fact.
-- `test/unit/jobs-test.el`, `test/unit/agents-ui-test.el` (the transcript, the list, hunk-by-hunk review),
+- `test/unit/jobs-test.el`, `test/unit/agents-ui-test.el` (the transcript, the list, hunk-by-hunk review; the
+  transcript's view: a thousand chunks grow one row, a grow costs the same on a 4 kB and a 400 kB answer, a hidden
+  transcript draws nothing, a tool's status or a permission draws one row, the tail is followed and a reader scrolled up
+  stays put), `test/ui/view-ui-test.el` (typing beside a streaming transcript: no jank),
   `test/unit/plans-sync-test.el`, `test/live/drgnx-agents-test.el` (queue, Stop and the dock in a GUI session).
 - `test/unit/agents-parity-test.el` — slash commands, context %, `/compact` lowering it: against the mock, or against
   a real profile with `DRGNX_AGENT_PROFILE=NAME` (uses your subscription or key, and the network).
 
 The mock agent (`test/fixtures/mock-acp.el`) is a batch Emacs whose turns are chosen by words in the prompt
-(`slow`, `tool`, `plan`, `subagent`, `permission`, `write PATH`, `crash`, `/compact`). Tests start it through
+(`slow`, `stream N`, `tool`, `plan`, `subagent`, `permission`, `write PATH`, `crash`, `/compact`). Tests start it through
 `test/fixtures/mock-acp-stdin.sh` (`sh mock-acp-stdin.sh emacs --batch -Q -l mock-acp.el`), which copies its stdin into
 a FIFO the mock reads while a turn streams; without the wrapper it reads `/proc/PID/fd/0`, which only Linux has.

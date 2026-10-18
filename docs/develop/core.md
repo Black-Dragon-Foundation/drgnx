@@ -410,9 +410,11 @@ timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run
   lives; its sentinel (or the job runner) must call `(drgnx-timer-cancel-owner PROCESS)` when it dies, which also
   forgets the last runs of its `:min-interval` keys. `:core` lives as long as Emacs (the hub tick, the idle GC under
   the key `gc-idle`, the job stamp poll `(jobs-stamp . ID)`, the usage write `surfaces-usage`).
-  Module repeats are keyed this way: `tools/agents` owns `agents-ui-mirror` (idle, every 30 s) and `tools/jobs` owns
+  Module repeats are keyed this way: `tools/agents` owns `agents-ui-mirror` (idle, every 30 s; its first look is the
+  one-shot `agents-ui-mirror-first`, 3 s into the first pause) and `tools/jobs` owns
   `job-ui-recount-idle` (idle, every 60 s), so a second setup replaces the timer instead of stacking another, and
   turning the module off ends it. Timers started later (from a command or a hook) name their module with `:owner`:
+  `tools/agents` owns the Agents list's print `agents-ui-redraw` (`drgnx-timer-soon` 0.1 s, from a session's change),
   `ui/face` owns quick help's `quickhelp-timeout`, `-unmap`, `-look` and `-hover` and the start page's
   `start-first-frame`, `ui/terminal-popups` the debounced `tty-popups-show`, `ui/terminal` the per-frame
   `(tty-fallback-hint . FRAME)`, `tools/jobs` the coalesced `job-ui-recount`, `tools/ai` the `ai-probe` one-shot; the
@@ -829,6 +831,19 @@ OFFSET LINE)`, KEY being `(funcall KEY-AT POS)` and OFFSET the distance from the
 above POS with the same key). `(drgnx-view-restore-places PLACES POS-OF)` puts each back at `(+ (funcall POS-OF KEY)
 OFFSET)`, or at the start of LINE (clamped) when POS-OF returns nil; dead windows are skipped, and the windows move
 inside `drgnx-wb-with-owned-windows`. The macro is save, BODY, restore, and returns BODY's value.
+
+### A client: the agent transcript
+
+`tools/agents` defines `agent-transcript` in its setup (`modules/tools/drgnx-agents-ui.el`; `:follow-tail t`,
+`:key-test 'eq`, the default DELAY and SLICE). Its rows are `:commands`, each entry plist that shows something, each
+permission and review plist, `:status` and `:queue`. An `agent` entry renders as `(TEXT . "\n\n")` and a `thought` as
+`("… " TEXT . "\n")`, so a streamed chunk is a GROW of `(substring TEXT BODY-LENGTH)`. The agent's process filter only
+touches the view (`drgnx-agents-ui--changed`). SYNC has a fast path: when the session's lists are `eq` to those of
+the last sync, the entries list is as long (a `delq` keeps its head) and no tool or plan entry still running changed
+(they change in place: compared by signature), it only compares each running text's length with its drawn body and
+marks a grow; otherwise `drgnx-view-sync-rows` diffs the rows. A grow draw allocates the same on a 4 kB and a 400 kB
+answer (`drgnx-agents-ui/grow-allocation-is-independent-of-size`). The footer rows follow the entries, so a new
+entry while a turn runs is an insert, not an append.
 
 ### Reads
 

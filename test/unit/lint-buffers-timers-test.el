@@ -185,7 +185,7 @@ lambda or not)."
     (nreverse out)))
 
 (defconst drgnx-lint-timers--not-yet
-  '(("modules/tools/drgnx-agents-ui.el" 3)
+  '(("modules/tools/drgnx-agents-ui.el" 1)
     ("modules/tools/drgnx-replace.el" 3)
     ("modules/ui/drgnx-statusbar.el" 1)
     ("modules/ui/drgnx-topline.el" 1)

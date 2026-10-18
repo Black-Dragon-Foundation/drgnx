@@ -12,6 +12,7 @@
  (tabs (:input :p95) 16) (tabs (:input :max) 50)
  (explorer (:input :p95) 16) (explorer (:input :max) 50)
  (agent-typing (:input :p95) 16) (agent-typing (:input :max) 50)
+ (agent-stream (:input :p95) 16) (agent-stream (:input :max) 50)
  ;; cockpit-cards: PROVISIONAL — the job-window rows renamed (M12f, the job window is the cockpit's), measured on a
  ;; busy machine; part C's close (C12) confirms them
  (cockpit-cards (:input :p95) 16) (cockpit-cards (:input :max) 50)
