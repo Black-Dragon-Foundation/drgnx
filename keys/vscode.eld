@@ -361,4 +361,7 @@
         (cockpit-block "b")
         (cockpit-run-earlier "M-<up>")
         (cockpit-run-later "M-<down>")
-        (cockpit-start-as-job "s")))
+        (cockpit-start-as-job "s")
+        (config-open :none "drgnx-only; in the palette")
+        (config-reset :none "a rare, deliberate choice; in the palette")
+        (config-migrate :none "a rare, deliberate choice; in the palette")))
