@@ -146,5 +146,24 @@ says so; nothing is signalled and the file is not touched."
       (should (= 1 (length msgs)))
       (should (string-match-p "not saved" (car msgs))))))
 
+(ert-deftest drgnx-persist-file/a-propertized-extra-never-fails-the-save ()
+  "A state function's value with text properties is saved without them; one with something unprintable costs only
+its own keys, with one message naming it."
+  (drgnx-persist-file-test--with dir
+    (let* ((drgnx-persist--extra-reported nil)
+           (props (lambda () (list :mine (propertize "x" 'face 'bold) :list (list (propertize "y" 'a 1))
+                                   :vec (vector (propertize "z" 'b 2)) :dotted (cons 1 (propertize "w" 'c 3)))))
+           (bad (lambda () (list :hash (make-hash-table))))
+           (ok (lambda () (list :other 1)))
+           (drgnx-persist-state-functions (list props bad ok)))
+      (cl-letf (((symbol-function 'drgnx-persist-state)
+                 (lambda (&optional _f) (list :role 'main :main '(leaf) :extra (drgnx-persist--extra)))))
+        (should (drgnx-persist-save drgnx-persist-file (list (selected-frame)))))
+      (let ((extra (plist-get (car (plist-get (drgnx-persist--read drgnx-persist-file) :frames)) :extra)))
+        (should (equal extra (list :mine "x" :list '("y") :vec ["z"] :dotted '(1 . "w") :other 1)))
+        (should-not (text-properties-at 0 (plist-get extra :mine))))
+      (should (= 1 (length msgs)))
+      (should (string-match-p "state function .*left out" (car msgs))))))
+
 (provide 'wb-persist-file-test)
 ;;; wb-persist-file-test.el ends here

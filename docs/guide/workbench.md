@@ -238,8 +238,9 @@ restore failed is not tried again). A file that client asked for is shown in fro
 it after the restore); add a function to `drgnx-persist-after-restore-functions` (called with the restored frame, after
 every restore, never prompting; the other windows of a saved workbench are not passed to it) to do something of your
 own at that moment. To keep data of your own in the saved state, add a function to `drgnx-persist-state-functions`
-that returns a plist of namespaced keys (`:mymodule-thing`) with readable values only; one that returns anything else
-is left out (said once) without costing the other functions' keys.
+that returns a plist of namespaced keys (`:mymodule-thing`) with plain values only (symbols, numbers, strings, lists, vectors; text properties of strings are dropped); one that
+returns anything else (a buffer, a hash table, a record) is left out (said once) without costing the other functions'
+keys or the save.
 
 Each group's shown file opens at once and its other tabs open while you are idle, all within the first pause (typing
 stops them until your next pause, which carries on with the rest); nothing asks anything at start (no

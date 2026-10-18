@@ -130,6 +130,28 @@ window manager places the window then); the size is cut to the work area, from t
 (defvar drgnx-persist--extra-reported nil
   "The state functions already reported as failing or returning something unusable (said once each).")
 
+(defun drgnx-persist--plain-p (x &optional depth)
+  "Non-nil if X is plain data the state file can hold: symbols, numbers, strings (text properties are dropped by
+`drgnx-persist--no-props'), conses and vectors, nested less than 32 deep and with no circular list."
+  (setq depth (or depth 0))
+  (cond ((or (symbolp x) (numberp x) (stringp x)) t)
+        ((>= depth 32) nil)
+        ((vectorp x) (seq-every-p (lambda (e) (drgnx-persist--plain-p e (1+ depth))) x))
+        ((consp x) (let ((n 0))
+                     (while (and (consp x) (< (setq n (1+ n)) 100000) (drgnx-persist--plain-p (car x) (1+ depth)))
+                       (setq x (cdr x)))
+                     (and (not (consp x)) (drgnx-persist--plain-p x (1+ depth)))))))
+
+(defun drgnx-persist--no-props (x)
+  "X (checked by `drgnx-persist--plain-p') as a copy whose strings have no text properties: the file layer refuses
+a string with properties, which would fail the whole save."
+  (cond ((stringp x) (substring-no-properties x))
+        ((consp x) (let (acc)
+                     (while (consp x) (push (drgnx-persist--no-props (car x)) acc) (setq x (cdr x)))
+                     (nconc (nreverse acc) (drgnx-persist--no-props x))))
+        ((vectorp x) (vconcat (mapcar #'drgnx-persist--no-props x)))
+        (t x)))
+
 (defun drgnx-persist--extra ()
   "The plist the functions of `drgnx-persist-state-functions' return, joined (the selected frame's).
 A function's result counts only if it is a proper plist that can be read back (no buffer, marker or
@@ -139,9 +161,8 @@ other object); otherwise that function is skipped and said once, and the others'
      'drgnx-persist-state-functions
      (lambda (fn)
        (let ((r (condition-case err (funcall fn) (error (cons 'drgnx-persist-error (error-message-string err))))))
-         (cond ((and (proper-list-p r) (cl-evenp (length r))
-                     (let ((print-length nil) (print-level nil) (print-circle nil)) (readablep r))) ; the user's print settings cut a list short
-                (setq extra (append extra r)))
+         (cond ((and (proper-list-p r) (cl-evenp (length r)) (drgnx-persist--plain-p r))
+                (setq extra (append extra (drgnx-persist--no-props r))))
                ((memq fn drgnx-persist--extra-reported))
                (t (push fn drgnx-persist--extra-reported)
                   (message "drgnx: state function %S left out of the saved workbench: %s" fn
@@ -167,7 +188,8 @@ session never overwrites the desktop layout."
       (drgnx-persist--graphical-only)
     (let ((file (or file (drgnx-persist--file)))
           (state (list :version drgnx-persist-version
-                       :frames (mapcar #'drgnx-persist-state (or frames (drgnx-persist--frames))))))
+                       :frames (mapcar (lambda (f) (drgnx-persist--no-props (drgnx-persist-state f)))
+                                       (or frames (drgnx-persist--frames))))))
       (condition-case nil
           (progn (drgnx-file-update file (lambda (old)
                                            (when (drgnx-persist--newer-p old) (signal 'drgnx-persist-newer nil))
