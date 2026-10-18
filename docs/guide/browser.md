@@ -44,6 +44,6 @@ This is the same page, not a live view: the agent's own browser is its own.
 `drgnx-browser-open` takes a URL. `drgnx-browser-newest` returns the newest report or trace under a directory as
 `(:kind report|trace :path PATH)`. `drgnx-browser-agent-url` and `drgnx-browser-agent-screenshot` read a session's tool
 calls (each tool entry keeps the `:url` of its raw input, nothing else of it). The module registers the layouts shape `editor+browser`
-in `drgnx-layouts-shapes`.
+with `drgnx-layouts-define-shape` and its pane filler with `drgnx-layouts-define-pane`; turning the module off removes both.
 
 The GUI test `test/ui/editor-m11c1-test.el` shows the Browser layout without WebKit (a screenshot).

@@ -173,6 +173,32 @@ groups, KIND `agent' or `browser'."
   "The editor groups as they are."
   nil)
 
+(defun drgnx-layouts--registry-put (registry key value)
+  "Set REGISTRY (a symbol whose value is an alist) so KEY maps to VALUE, or has no entry when VALUE is nil.
+The alist is rebuilt, never changed in place: the built-ins are quoted constants, and a test's
+`copy-sequence' of the registry shares its cells."
+  (set registry (let ((rest (seq-remove (lambda (e) (eq (car-safe e) key)) (symbol-value registry))))
+                  (if value (cons (cons key value) rest) rest))))
+
+(defun drgnx-layouts-define-shape (shape fn)
+  "Teach the layouts the editor SHAPE: FN, a function of the editor window, arranges the editor area.
+Returns SHAPE.  A layout whose `:editor' is SHAPE uses it.  In a module's setup the registration is
+undone with the module (the entry that was there before comes back, unless someone has set another
+since); the layouts that name SHAPE keep it and arrange as `one' while it is gone."
+  (let ((previous (alist-get shape drgnx-layouts-shapes)))
+    (drgnx-layouts--registry-put 'drgnx-layouts-shapes shape fn)
+    (drgnx-modules-push-undo
+     (format "layout shape %s" shape)
+     (lambda ()
+       (when (eq (alist-get shape drgnx-layouts-shapes) fn)
+         (drgnx-layouts--registry-put 'drgnx-layouts-shapes shape previous)))))
+  shape)
+
+(defun drgnx-layouts-undefine-shape (shape)
+  "Remove the editor SHAPE; a layout that names it arranges as `one' from now on.  Layouts are not touched."
+  (drgnx-layouts--registry-put 'drgnx-layouts-shapes shape nil)
+  nil)
+
 (defun drgnx-layouts--current-agent ()
   "The running agent session that acted last (the newest on a tie), or nil."
   (when (fboundp 'drgnx-agents-sessions)
@@ -215,11 +241,25 @@ Nothing happens for a SPEC that names no group.  Returns the pane."
 
 (defun drgnx-layouts-define-pane (kind filler)
   "Teach the layouts a pane of KIND: FILLER (a function of the pane window) fills it.  Panes of KIND already
-marked in a live frame (found again after a restart before this module set up) are filled now."
-  (setf (alist-get kind drgnx-layouts-pane-fillers) filler)
+marked in a live frame (found again after a restart before this module set up) are filled now.  In a
+module's setup the registration is undone with the module (`drgnx-layouts-undefine-pane'; the previous
+filler comes back, unless someone has set another since)."
+  (let ((previous (alist-get kind drgnx-layouts-pane-fillers)))
+    (drgnx-layouts--registry-put 'drgnx-layouts-pane-fillers kind filler)
+    (drgnx-modules-push-undo
+     (format "layout pane %s" kind)
+     (lambda ()
+       (when (eq (alist-get kind drgnx-layouts-pane-fillers) filler)
+         (drgnx-layouts--registry-put 'drgnx-layouts-pane-fillers kind previous)))))
   (dolist (f (frame-list))
     (dolist (w (window-list f 'nomini))
       (when (eq (window-parameter w 'drgnx-layouts-pane) kind) (ignore-errors (funcall filler w))))))
+
+(defun drgnx-layouts-undefine-pane (kind)
+  "Forget how to fill panes of KIND.  Panes of KIND already shown keep their window and mark until the next
+layout removes them (their intent, the saved arrangements, is untouched); defining the kind again fills them."
+  (drgnx-layouts--registry-put 'drgnx-layouts-pane-fillers kind nil)
+  nil)
 
 (defun drgnx-layouts--panes-of (value)
   "VALUE (a list of (INDEX . KIND), or one such pair as older workbenches saved) as a clean list of pairs."
