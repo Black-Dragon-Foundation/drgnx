@@ -678,8 +678,9 @@ row again; a row rendered as a plain string, or a type without GROW, is rendered
 
 `(drgnx-view-attach NAME &key buffer start)` sets the buffer-local `drgnx-view`, `buffer-undo-list` to t, and makes
 START a marker (insertion type nil; default `point-min`). When START is `point-min` the buffer becomes read-only;
-otherwise each drawn row gets `read-only` with `rear-nonsticky`, so text above START (replace's widgets) and after the
-last row stays editable. Attaching again removes the old view's rows first and releases its marker.
+otherwise each drawn row gets `read-only`, and its last character (the newline) `rear-nonsticky`: typing inside a row
+is refused (the text would inherit `read-only`), while text above START (replace's widgets) and after the last row
+stays editable. Text typed between two rows is not refused; the self-check below resets the view when it finds it. Attaching again removes the old view's rows first and releases its marker.
 
 ### Marks
 

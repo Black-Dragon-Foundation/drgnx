@@ -39,8 +39,11 @@
 (defconst drgnx-view--all (make-symbol "all")
   "The key `drgnx-view-dirty' stores in the dirty table for KEYS t: every row.")
 
-(defconst drgnx-view--read-only '(read-only t rear-nonsticky (read-only))
-  "Text properties of a drawn row when the buffer is not read-only: the row cannot be edited, text after it can.")
+(defconst drgnx-view--read-only '(read-only t)
+  "Text properties of a drawn row's text when the buffer is not read-only (see `drgnx-view--protect').")
+
+(defconst drgnx-view--last-char '(rear-nonsticky (read-only))
+  "Text properties of a drawn row's last character: text typed after the row does not inherit `read-only'.")
 
 (defconst drgnx-view--stat-names
   [:rows-drawn :rows-grown :appended :removed :slices :max-slice-rows :full-draws :stale-skips]
@@ -317,6 +320,13 @@ An AFTER that is neither appends KEYS.  A key already shown or pending is left w
         (drgnx-view--record view message)
         (drgnx-view--error-text key message)))))
 
+(defun drgnx-view--protect (beg end row-end)
+  "Make BEG..END of a row ending at ROW-END read-only, unless the whole buffer is.  Only the row's last character is
+rear-nonsticky: an insertion inside the row would inherit `read-only' and is refused, one after the row is not."
+  (unless buffer-read-only
+    (add-text-properties beg end drgnx-view--read-only)
+    (add-text-properties (1- row-end) row-end drgnx-view--last-char)))
+
 (defun drgnx-view--put-row (view key pos text)
   "Insert TEXT, KEY's row (a string or (BODY . SUFFIX)), at POS; note its body; return its length."
   (goto-char pos)
@@ -325,7 +335,7 @@ An AFTER that is neither appends KEYS.  A key already shown or pending is left w
              (puthash key (length (car text)) (drgnx-view--bodies view)))
     (insert text)
     (remhash key (drgnx-view--bodies view)))
-  (unless buffer-read-only (add-text-properties pos (point) drgnx-view--read-only))
+  (drgnx-view--protect pos (point) (point))
   (cl-incf (aref (drgnx-view--stats view) 0))
   (- (point) pos))
 
@@ -342,7 +352,7 @@ A GROW that signals or returns a non-string draws the error row."
                   ((equal text "") len)
                   (t (goto-char (+ pos body))
                      (insert text)
-                     (unless buffer-read-only (add-text-properties (+ pos body) (point) drgnx-view--read-only))
+                     (drgnx-view--protect (+ pos body) (point) (+ pos len (length text)))
                      (puthash key (+ body (length text)) (drgnx-view--bodies view))
                      (cl-incf (aref (drgnx-view--stats view) 1))
                      (+ len (length text)))))
