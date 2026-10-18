@@ -335,8 +335,9 @@ It shows itself only where nothing is lost: in the editor window you used last, 
 `*scratch*` that you have not typed in — never over a file or your own text, never while the first-run Welcome is
 still to come (it goes first), and never by splitting a window, moving focus to another window or asking you
 anything. It looks at that when drgnx's first window opens (a moment after, once the files you asked for and your saved
-layout are there), when a new window opens on a running drgnx (`emacsclient -c`), and when the last
-file tab of the editor closes. Going to `*scratch*` yourself, with files still open, leaves it alone. In a terminal it
+layout are there), when a new window opens on a running drgnx (`emacsclient -c`), when the last
+file tab of the editor closes, and when you close the first-run Welcome (so on a first run the page comes right after
+it). Going to `*scratch*` yourself, with files still open, leaves it alone. In a terminal it
 is the same page in the same place.
 
 **Don't show this again** keeps your choice in `face.eld` in drgnx's state directory (`:start-dismissed`) and puts

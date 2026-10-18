@@ -11,7 +11,8 @@
 ;; It shows itself, only where nothing is lost: in the editor window used last, when that window shows `*scratch*'
 ;; (never a file), by changing that window's buffer — it never splits a window, never selects another one and never
 ;; asks anything, because it runs from hooks (`drgnx-persist-after-restore-functions', `server-after-make-frame-hook',
-;; the first window of a start, and the moment the last file tab of the editor closes).  "Don't show this again" is
+;; the first window of a start, the moment the last file tab of the editor closes, and when the first-run Welcome
+;; closes).  "Don't show this again" is
 ;; kept in face.eld (`:start-dismissed', see `drgnx-face-state'); Show Start Page still shows it on request.  The
 ;; page is a tab only while it is shown (`drgnx-chrome-transient-tabs').  See docs/guide/face.md ("The start page").
 
@@ -68,7 +69,8 @@
 
 (defvar drgnx-start--timer nil "The idle timer that shows the page after a start's first window, or nil.")
 (defvar drgnx-start--after-file nil
-  "Non-nil when the editor used last showed a file at the previous `editor-changed' (a boolean, not the buffer).")
+  "Non-nil when the editor used last showed a file (or the first-run Welcome) at the previous `editor-changed' (a
+boolean, not the buffer).")
 
 ;;;; The page
 
@@ -239,12 +241,17 @@ comes first on a first run."
       (let ((w (drgnx-start--window (selected-frame))))
         (not (and w (seq-some #'buffer-file-name (drgnx-chrome-tabs w)))))))
 
+(defconst drgnx-start--welcome-buffer-name "*drgnx Welcome*" "The first-run Welcome's buffer (core/onboard).")
+
 (defun drgnx-start--on-editor-changed (buffer)
-  "From the bus's `editor-changed' (BUFFER is the editor now shown): when the editor went from a file to
-`*scratch*' and no file tab is left, show the page — the last file closed.  Going to `*scratch*' from anything else
-is the user's own doing and stays."
+  "From the bus's `editor-changed' (BUFFER is the editor now shown): when the editor went from a file, or from the
+first-run Welcome, to `*scratch*' and no file tab is left, show the page — the last file closed, or the Welcome did.
+Going to `*scratch*' from anything else is the user's own doing and stays."
   (let ((was-file drgnx-start--after-file))
-    (setq drgnx-start--after-file (and (buffer-live-p buffer) (buffer-file-name buffer) t))
+    (setq drgnx-start--after-file
+          (and (buffer-live-p buffer)
+               (or (buffer-file-name buffer) (equal (buffer-name buffer) drgnx-start--welcome-buffer-name))
+               t))
     (when (and was-file (not noninteractive) (buffer-live-p buffer)
                (equal (buffer-name buffer) "*scratch*") (drgnx-start--no-file-tabs-p))
       (drgnx-start-maybe-show))))

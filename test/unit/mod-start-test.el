@@ -288,6 +288,20 @@ absolute local name expanded against a remote folder) passes; everything else, \
       (should-not (drgnx-start-test--shown-p))
       (should-not (get-buffer "*drgnx start*")))))
 
+(ert-deftest drgnx-start/the-page-shows-when-the-first-run-welcome-closes ()
+  "On a first run the Welcome takes the editor; the person the page is for sees it when they close the Welcome."
+  (drgnx-start-test--with 'vscode
+    (let ((noninteractive nil) (welcome (get-buffer-create "*drgnx Welcome*")))
+      (unwind-protect
+          (progn
+            (set-window-buffer (selected-window) welcome)
+            (drgnx-start--on-editor-changed welcome)          ; the Welcome is the editor
+            (kill-buffer welcome)                             ; closed: the window shows *scratch* again
+            (set-window-buffer (selected-window) (get-scratch-buffer-create))
+            (drgnx-start--on-editor-changed (get-scratch-buffer-create))
+            (should (drgnx-start-test--shown-p)))
+        (when (buffer-live-p welcome) (kill-buffer welcome))))))
+
 (ert-deftest drgnx-start/the-welcome-comes-first ()
   (drgnx-start-test--with 'vscode
     (cl-letf (((symbol-function 'drgnx-onboard--welcome-due-p) (lambda () t)))
