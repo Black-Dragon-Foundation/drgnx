@@ -174,6 +174,40 @@
       (should (eq (car r) 'warn))
       (should (string-search "no command nope" (nth 1 r))))))
 
+(ert-deftest drgnx-doctor/modules-check-says-stale-and-disabled ()
+  (let* ((report '((a :status ok) (b :status disabled)))
+         (r (drgnx-doctor-check 'modules (drgnx-doctor-test--facts :modules-report report
+                                                                   :modules-report-time (- (float-time) 3.5 3600 3600)))))
+    (should (eq (car r) 'ok))
+    (should (string-search "1 ok" (nth 1 r)))
+    (should (string-search "1 off" (nth 1 r)))
+    (should (string-search "from the last session, 2 h ago" (nth 1 r))))
+  (let ((r (drgnx-doctor-check 'modules (drgnx-doctor-test--facts :modules-report '((a :status disabled))
+                                                                  :modules-report-time (- (float-time) 90)))))
+    (should (string-search "0 ok, 1 off" (nth 1 r)))
+    (should (string-search "1 min ago" (nth 1 r))))
+  ;; a failure keeps its verdict and says how old the report is; without a time, no age
+  (let ((r (drgnx-doctor-check 'modules (drgnx-doctor-test--facts :modules-report '((a :status failed :error "boom"))
+                                                                  :modules-report-time (- (float-time) 3 (* 3 86400))))))
+    (should (eq (car r) 'fail))
+    (should (string-search "a: boom" (nth 1 r)))
+    (should (string-search "3 d ago" (nth 1 r))))
+  (should-not (string-search "ago" (nth 1 (drgnx-doctor-check 'modules (drgnx-doctor-test--facts :modules-report '((a :status ok))))))))
+
+(ert-deftest drgnx-doctor/modules-report-time-fact ()
+  (let* ((state (make-temp-file "drgnx-state" t))
+         (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment))
+         (facts (lambda () (cl-letf (((symbol-function 'drgnx-doctor--search) #'ignore)) (drgnx-doctor-facts)))))
+    (unwind-protect
+        (progn
+          (should-not (plist-get (funcall facts) :modules-report-time))
+          (make-directory (expand-file-name "drgnx" state))
+          (with-temp-file (expand-file-name "drgnx/modules-report.eld" state) (prin1 '((a :status ok)) (current-buffer)))
+          (set-file-times (expand-file-name "drgnx/modules-report.eld" state) (time-subtract nil 7200))
+          (let ((age (- (float-time) (plist-get (funcall facts) :modules-report-time))))
+            (should (< 7190 age 7300))))
+      (delete-directory state t))))
+
 (ert-deftest drgnx-doctor/builtin-in-manifest-is-not-missing ()
   ;; eglot ships with Emacs: a manifest that names it needs no install.
   (should (eq (car (drgnx-doctor-check 'packages (drgnx-doctor-test--facts :packages '(:manifest (eglot) :installed () :lock t))))

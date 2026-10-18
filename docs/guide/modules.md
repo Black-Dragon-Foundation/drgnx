@@ -17,7 +17,8 @@ file that does not load says `(in <library>)` when the error came from a library
 `needs <module>`, `disabled` — its stage, how long it took, and whether it runs at the next start; `RET`
 turns the module on that row off (or back on) from the next start. A column header sorts by it (ms as a number, Stage
 in the order of the stages); an external module's row says its path and features. `drgnx doctor` reports failed modules and modules
-waiting for packages, from the last session.
+waiting for packages, from the last session; when all is well it counts the modules that run and those that are
+off ("12 ok, 3 off"), and every answer says how old the report is ("from the last session, 2 h ago").
 
 ## Packages
 

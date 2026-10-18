@@ -132,6 +132,7 @@ on PATH."
            :pgtk-emacs (or (featurep 'pgtk) (and (executable-find "emacs-pgtk") t))
            :keys-report (drgnx-doctor--keys-report)
            :modules-report (drgnx-doctor--state-file "modules-report.eld")
+           :modules-report-time (drgnx-doctor--state-file-time "modules-report.eld")
            :onboarding (drgnx-doctor--state-file "onboarding.eld")
            :packages (condition-case err (progn (require 'drgnx-pkg) (drgnx-pkg-status))
                        (error (list :error (error-message-string err))))
@@ -146,11 +147,27 @@ on PATH."
            :vram (ignore-errors (require 'drgnx-ai-probe) (drgnx-ai-vram)))
      (and (eq (drgnx-platform) 'macos) (drgnx-doctor--macos-facts)))))
 
+(defun drgnx-doctor--state-path (name)
+  "The file NAME in the state dir."
+  (expand-file-name (concat "drgnx/" name) (or (getenv "XDG_STATE_HOME") "~/.local/state")))
+
 (defun drgnx-doctor--state-file (name)
   "The .eld file NAME the last drgnx session wrote in the state dir, read, or nil."
-  (let ((file (expand-file-name (concat "drgnx/" name) (or (getenv "XDG_STATE_HOME") "~/.local/state"))))
+  (let ((file (drgnx-doctor--state-path name)))
     (when (file-readable-p file)
       (ignore-errors (with-temp-buffer (insert-file-contents file) (read (current-buffer)))))))
+
+(defun drgnx-doctor--state-file-time (name)
+  "When the state file NAME was last written (seconds since the epoch), or nil."
+  (when-let* ((attrs (file-attributes (drgnx-doctor--state-path name))))
+    (float-time (file-attribute-modification-time attrs))))
+
+(defun drgnx-doctor--age (time)
+  "TIME (seconds since the epoch) as how long ago: \"N min ago\", \"N h ago\" or \"N d ago\"."
+  (let ((s (max 0 (- (float-time) time))))
+    (cond ((< s 3600) (format "%d min ago" (floor s 60)))
+          ((< s 172800) (format "%d h ago" (floor s 3600)))
+          (t (format "%d d ago" (floor s 86400))))))
 
 (defun drgnx-doctor--keys-report ()
   "The key report the last drgnx session wrote (keys-report.eld in the state dir), or nil."
@@ -206,19 +223,27 @@ on PATH."
                               (let* ((r (plist-get f :modules-report))
                                      (failed (seq-filter (lambda (m) (eq (plist-get (cdr m) :status) 'failed)) r))
                                      (waiting (seq-filter (lambda (m) (eq (plist-get (cdr m) :status) 'missing-packages)) r))
-                                     (problems (seq-filter (lambda (m) (plist-get (cdr m) :problems)) r)))
-                                (cond ((null r) (list 'info "no module report yet — start drgnx once" nil))
-                                      (failed (list 'fail (mapconcat (lambda (m) (format "%s: %s" (car m) (plist-get (cdr m) :error))) failed "; ")
-                                                    "see Preferences: Modules; turn the module off there or report the error"))
-                                      (waiting (list 'warn (format "waiting for packages: %s"
-                                                                   (mapconcat (lambda (m) (format "%s (%s)" (car m)
-                                                                                                  (mapconcat #'symbol-name (plist-get (cdr m) :missing) " ")))
-                                                                              waiting ", "))
-                                                     "drgnx sync installs them (M5); until then these modules stay off"))
-                                      (problems (list 'warn (mapconcat (lambda (m) (format "%s: %s" (car m) (string-join (plist-get (cdr m) :problems) "; ")))
-                                                                       problems "; ")
-                                                      "see the module's documentation"))
-                                      (t (list 'ok (format "%d modules ok" (length r)) nil))))))
+                                     (problems (seq-filter (lambda (m) (plist-get (cdr m) :problems)) r))
+                                     (off (seq-count (lambda (m) (eq (plist-get (cdr m) :status) 'disabled)) r))
+                                     (time (plist-get f :modules-report-time))
+                                     (res
+                                      (cond ((null r) (list 'info "no module report yet — start drgnx once" nil))
+                                            (failed (list 'fail (mapconcat (lambda (m) (format "%s: %s" (car m) (plist-get (cdr m) :error))) failed "; ")
+                                                          "see Preferences: Modules; turn the module off there or report the error"))
+                                            (waiting (list 'warn (format "waiting for packages: %s"
+                                                                         (mapconcat (lambda (m) (format "%s (%s)" (car m)
+                                                                                                        (mapconcat #'symbol-name (plist-get (cdr m) :missing) " ")))
+                                                                                    waiting ", "))
+                                                           "drgnx sync installs them (M5); until then these modules stay off"))
+                                            (problems (list 'warn (mapconcat (lambda (m) (format "%s: %s" (car m) (string-join (plist-get (cdr m) :problems) "; ")))
+                                                                             problems "; ")
+                                                            "see the module's documentation"))
+                                            (t (list 'ok (format "%d ok, %d off" (- (length r) off) off) nil)))))
+                                ;; the report is from the last session: say how old it is
+                                (if (and time (not (eq (car res) 'info)))
+                                    (list (car res) (format "%s (from the last session, %s)" (nth 1 res) (drgnx-doctor--age time))
+                                          (nth 2 res))
+                                  res))))
 
 (drgnx-doctor-define 'packages :group "drgnx" :doc "The packages drgnx needs are installed (drgnx sync), with a lock"
                      :check (lambda (f)
