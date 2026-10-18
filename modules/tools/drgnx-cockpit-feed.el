@@ -70,7 +70,8 @@
 (defvar drgnx-cockpit-feed--buffers nil "The feed's live buffers (what happened, the timeline): they own its hooks.")
 (defvar drgnx-cockpit-feed--timer nil "The update on its way: one at a time.")
 (defvar drgnx-cockpit-feed--check-timer nil "The repeating look at the store, while a feed buffer lives.")
-(defvar drgnx-cockpit-feed--waiting nil "(KEY . COUNT): `drgnx-cockpit-waiting-count' for the store at KEY.")
+(defvar drgnx-cockpit-feed--waiting nil
+  "(KEY QUESTIONS . TOTAL): `drgnx-cockpit-feed--waiting-pair' for the store at KEY.")
 (defvar drgnx-cockpit-feed--told nil "The waiting count the status bar was last told of (`drgnx-cockpit-feed-tell-statusbar').")
 (defvar drgnx-cockpit-feed--in-flight nil
   "The questions whose answer is on its way to the hub: ((QUESTION . SENT-AT)…), QUESTION an event id or (card . ID).
@@ -687,7 +688,7 @@ questions (`drgnx-cockpit-feed--old').  Their keys."
     (setq drgnx-cockpit-feed--old (drgnx-cockpit-feed--old-chips open))
     (drgnx-cockpit-feed--ensure-rows)
     (erase-buffer)
-    (setq drgnx-cockpit-feed--head (drgnx-cockpit-feed--head-text (drgnx-cockpit-waiting-count)))
+    (setq drgnx-cockpit-feed--head (drgnx-cockpit-feed--head-text (drgnx-cockpit-feed--head-count)))
     (insert drgnx-cockpit-feed--head "\n")
     (dolist (row drgnx-cockpit-feed--rows)
       (pcase-let ((`(,text ,marks) (drgnx-cockpit-feed--row-text row drgnx-cockpit-feed--fit open)))
@@ -722,7 +723,7 @@ events a second) leaves the older of them out of the rows until the timeline is 
       (when cards-changed (push "" touched))
       (unless (eql width drgnx-cockpit-feed--fit)
         (setq drgnx-cockpit-feed--fit width touched (mapcar #'car drgnx-cockpit-feed--rows)))
-      (let ((head (drgnx-cockpit-feed--head-text (drgnx-cockpit-waiting-count))))
+      (let ((head (drgnx-cockpit-feed--head-text (drgnx-cockpit-feed--head-count))))
         (unless (equal-including-properties head drgnx-cockpit-feed--head)
           (setq drgnx-cockpit-feed--head head)
           (drgnx-cockpit-feed--replace-line 1 head)))
@@ -770,17 +771,29 @@ events a second) leaves the older of them out of the rows until the timeline is 
 
 ;;;; Questions everywhere
 
-(defun drgnx-cockpit-waiting-count ()
-  "How many questions wait on you: the open escalations and `ask_user' questions, and the open ask cards — what the
-graph marks, without the permissions (the status bar counts those from the sessions).  Cached: one query when the
-store and `drgnx-cockpit-include-closed-jobs' did not change since the last call.  For the status bar
-\(`drgnx-statusbar-waiting-functions')."
+(defun drgnx-cockpit-feed--waiting-pair ()
+  "(QUESTIONS . TOTAL), cached as `(STORE-KEY QUESTIONS . TOTAL)' in `drgnx-cockpit-feed--waiting'.
+QUESTIONS: the open questions the jobs count does not hold — not an ask card (`:card' in its data) and not a job's
+message (`:message' in its data and a `:job').  TOTAL: today's number (every open question, and the open ask cards
+no question names), which the timeline's head shows."
   (let ((key (cons drgnx-cockpit-include-closed-jobs (drgnx-cockpit--db-key))))
     (if (equal key (car drgnx-cockpit-feed--waiting)) (cdr drgnx-cockpit-feed--waiting)
       (let* ((qs (drgnx-cockpit-feed--open-questions))
-             (n (+ (length qs) (length (drgnx-cockpit-feed--open-cards)))))
-        (setq drgnx-cockpit-feed--waiting (cons key n))
-        n))))
+             (own (seq-count (lambda (q) (let ((d (plist-get q :data)))
+                                           (not (or (plist-get d :card) (and (plist-get d :message) (plist-get q :job))))))
+                             qs))
+             (pair (cons own (+ (length qs) (length (drgnx-cockpit-feed--open-cards))))))
+        (setq drgnx-cockpit-feed--waiting (cons key pair))
+        pair))))
+
+(defun drgnx-cockpit-waiting-count ()
+  "How many questions wait on you that no other count holds (see `drgnx-cockpit-feed--waiting-pair'): for the status
+bar's `drgnx-statusbar-waiting-functions', next to the jobs count."
+  (car (drgnx-cockpit-feed--waiting-pair)))
+
+(defun drgnx-cockpit-feed--head-count ()
+  "Everything waiting on you that the timeline marks: its head's number."
+  (cdr (drgnx-cockpit-feed--waiting-pair)))
 
 (defun drgnx-cockpit-feed--open-cards ()
   "The open ask cards (of open jobs, unless `drgnx-cockpit-include-closed-jobs') that no open question
@@ -966,7 +979,8 @@ when it has one (`drgnx-cockpit-answer'), else a message it gets when its turn e
 ;;;; The module's part
 
 (defun drgnx-cockpit-feed--setup ()
-  "tools/cockpit's setup, the feed's part: the `happened' and `timeline' pane kinds and their commands."
+  "tools/cockpit's setup, the feed's part: the `happened' and `timeline' pane kinds, their commands, and the
+questions only the cockpit counts in the status bar (`drgnx-cockpit-waiting-count')."
   (drgnx-pane-define-kind 'happened :title " WHAT HAPPENED" :home 'right :placeholder #'drgnx-cockpit-feed--happened-placeholder
                           :on-show #'drgnx-cockpit-feed--on-show)
   (drgnx-pane-define-kind 'timeline :title " TIMELINE" :home 'bottom :buffer #'drgnx-cockpit-timeline-buffer
@@ -976,7 +990,9 @@ when it has one (`drgnx-cockpit-answer'), else a message it gets when its turn e
   (drgnx-command-define 'cockpit-happened :category "Work" :title "Show What Happened…" :command #'drgnx-cockpit-happened-show
                         :doc "One agent's events, one line each: decisions, edits, tests, questions")
   (drgnx-command-define 'cockpit-timeline :category "Work" :title "Show Timeline" :command #'drgnx-cockpit-timeline-show
-                        :doc "Every agent's events as chips, one row per agent"))
+                        :doc "Every agent's events as chips, one row per agent")
+  ;; the questions no jobs count holds join the status bar's "waiting on you"
+  (add-hook 'drgnx-statusbar-waiting-functions #'drgnx-cockpit-waiting-count))
 
 (provide 'drgnx-cockpit-feed)
 ;;; drgnx-cockpit-feed.el ends here

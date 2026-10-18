@@ -193,10 +193,14 @@ fixture is a temp project with:
     A row shows its newest chips that fit its window (its widest, else 80 columns, less one). Chip widths are
     measured then, never on redisplay. A width change refits every row. Windows on a rewritten line keep their
     column.
-- **`(drgnx-cockpit-waiting-count)`**: the open questions (escalations, `ask_user`) and the open ask cards not asked
-  again, the model's `:questions` without permissions. Cached as `(STORE-KEY . N)`: one query when nothing changed.
-  Its key also holds `drgnx-cockpit-include-closed-jobs`. It is meant for the status bar's
-  `drgnx-statusbar-waiting-functions`.
+- **`(drgnx-cockpit-waiting-count)`**: the open questions (escalations, `ask_user`) that the jobs count
+  (`drgnx-job-ui-needs-you`) does not already hold: not an ask card (a question whose data names `:card`) and not a
+  job's message to you (data with `:message` and a `:job`). tools/cockpit's setup puts it on the status bar's
+  `drgnx-statusbar-waiting-functions`, so an ask card shows once there, as the jobs segment's ⚑.
+  `(drgnx-cockpit-feed--head-count)` is the timeline head's number: every open question and the open ask cards not
+  asked again, the model's `:questions` without permissions. Both come from `drgnx-cockpit-feed--waiting-pair`, cached
+  as `(STORE-KEY QUESTIONS . TOTAL)`: one query when nothing changed. Its key also holds
+  `drgnx-cockpit-include-closed-jobs`.
 - **`(drgnx-cockpit-feed-tell-statusbar)`**: calls `drgnx-statusbar-refresh` (when it is loaded) when the waiting count
   changed since the bar was last told (it counts as told once the refresh returned). The graph's check and the feed's check call it every
   `drgnx-cockpit-check-interval` while their buffers live, so the bar moves when another process asks, without a hub

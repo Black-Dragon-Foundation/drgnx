@@ -5,6 +5,11 @@
 (require 'drgnx-agents)
 (load (expand-file-name "test/fixtures/cockpit-fixture" drgnx-dir) nil t)   ; a project, a job, worktrees, events
 (load (expand-file-name "modules/tools/drgnx-cockpit" drgnx-dir) nil t)
+(load (expand-file-name "modules/ui/drgnx-statusbar" drgnx-dir) nil t)   ; what needs you, counted once in the bar
+(load (expand-file-name "modules/tools/drgnx-job-ui" drgnx-dir) nil t)
+(defvar drgnx-job-ui--badge)
+(defvar drgnx-job-ui--badge-job)
+(defvar drgnx-job-ui--needs-you)
 
 (defvar drgnx-cockpit-feed-test--hub nil "The hub calls a test saw, newest first: ((METHOD PARAMS)…).")
 
@@ -304,7 +309,7 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
         (drgnx-cockpit-feed--check)
         (should (= refreshes 3))
         ;; a refresh that fails leaves the count untold: the next check tries again
-        (drgnx-coord-send :sender "s-1" :recipient "user" :text "[escalation] and then?" :question t :job "jx")
+        (drgnx-coord-send :sender "s-1" :recipient "user" :text "[escalation] and then?" :question t)
         (cl-letf (((symbol-function 'drgnx-statusbar-refresh) (lambda (&rest _) (error "bar broken"))))
           (drgnx-cockpit-feed--check))
         (should (= refreshes 3))
@@ -441,9 +446,10 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
                                               :waiting)))
            (n0 (drgnx-cockpit-waiting-count)))
       (set-window-buffer (selected-window) b)
-      ;; the count the status bar shows is the model's open questions (the escalation and the reopened card)
-      (should (= n0 2))
-      (should (= n0 (length (plist-get (drgnx-cockpit-model :sessions sessions) :questions))))
+      ;; the count the status bar shows leaves to the jobs count what it holds: the escalation of job jx (a message
+      ;; of the job) and the reopened card; the timeline's head still counts the model's open questions
+      (should (= n0 0))
+      (should (= (drgnx-cockpit-feed--head-count) (length (plist-get (drgnx-cockpit-model :sessions sessions) :questions))))
       (should-not (funcall waiting-p task5))
       ;; s-2 asks: the graph marks its task, the status bar's count goes up, the timeline gets a waiting chip
       (drgnx-coord-send :sender "s-2" :recipient "user" :text "[escalation] tabs or spaces?" :question t)
@@ -486,7 +492,45 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
           (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "this way")))
             (call-interactively #'drgnx-cockpit-answer))))
       (should (assoc "job/reply" drgnx-cockpit-feed-test--hub))
-      (should (= (drgnx-cockpit-waiting-count) (1- n0))))))
+      (should (= (drgnx-cockpit-waiting-count) n0)))))           ; that one was the jobs count's
+
+(ert-deftest drgnx-cockpit-feed/an-ask-card-is-left-to-the-jobs-count ()
+  ;; notices Phase 0: an ask card is a question event naming the card, and the jobs count (C8) holds it already
+  (drgnx-cockpit-feed-test--with
+    (let ((n0 (drgnx-cockpit-waiting-count)) (h0 (drgnx-cockpit-feed--head-count)))
+      (drgnx-coord-card-create :job "jx" :kind "ask" :title "go?")
+      (should (= (drgnx-cockpit-waiting-count) n0))
+      (should (= (drgnx-cockpit-feed--head-count) (1+ h0))))))
+
+(ert-deftest drgnx-cockpit-feed/a-job-message-question-is-left-to-the-jobs-count ()
+  ;; an escalation sent with a job is also a message of the job to you, which the jobs count holds
+  (drgnx-cockpit-feed-test--with
+    (let ((n0 (drgnx-cockpit-waiting-count)))
+      (drgnx-coord-send :sender "s-1" :recipient "user" :text "[escalation] ok?" :job "jx")
+      (should (= (drgnx-cockpit-waiting-count) n0))
+      (drgnx-coord-send :sender "s-1" :recipient "user" :text "[escalation] ok?")
+      (should (= (drgnx-cockpit-waiting-count) (1+ n0))))))
+
+(ert-deftest drgnx-cockpit-feed/an-ask-card-shows-once-in-the-status-bar ()
+  ;; the jobs segment's ⚑ and the agents segment's "waiting on you" never both count one ask card
+  (drgnx-cockpit-feed-test--with
+    (let ((drgnx-statusbar--tick 0) (drgnx-statusbar--agents-state nil) (drgnx-statusbar--jobs-state nil)
+          (drgnx-statusbar--refresh-timer nil) (drgnx-statusbar--redraw-wanted nil)
+          (drgnx-statusbar--jobs-wanted nil) (drgnx-statusbar--jobs-pending nil) (drgnx-statusbar--errors nil)
+          (drgnx-statusbar--state-texts (make-hash-table :test #'eq))
+          (drgnx-statusbar--segments (make-hash-table :test #'eq))
+          (drgnx-statusbar-waiting-functions (list #'drgnx-statusbar-agents-waiting))
+          (drgnx-job-ui--badge "") (drgnx-job-ui--badge-job nil) (drgnx-job-ui--needs-you nil))
+      (add-hook 'drgnx-statusbar-waiting-functions #'drgnx-cockpit-waiting-count)   ; as tools/cockpit's setup does
+      (drgnx-statusbar--define-defaults)
+      (let ((cid (drgnx-coord-card-create :job "jx" :kind "ask" :title "go?"))
+            (seg (lambda (id) (when-let* ((s (funcall (plist-get (gethash id drgnx-statusbar--segments) :fn))))
+                                (substring-no-properties s)))))
+        (drgnx-job-ui-note-jobs (list (list :id "jx" :status "running" :messages nil
+                                            :cards (list (list :id cid :kind "ask" :title "go?")))))
+        (drgnx-statusbar--refresh-now)
+        (should (equal (funcall seg 'jobs) "⚑1"))
+        (should-not (string-search "waiting on you" (or (funcall seg 'agents) "")))))))
 
 (ert-deftest drgnx-cockpit-feed/terminals-get-the-same-text-in-ascii ()
   (drgnx-cockpit-feed-test--with
@@ -529,9 +573,12 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
           (should-not (marker-buffer m)))))))
 
 (ert-deftest drgnx-cockpit-feed/commands-and-keys-in-every-profile ()
-  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil) (kinds nil))
+  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil) (kinds nil)
+        (drgnx-statusbar-waiting-functions (list #'drgnx-statusbar-agents-waiting)))
     (cl-letf (((symbol-function 'drgnx-pane-define-kind) (lambda (kind &rest props) (push (cons kind props) kinds))))
       (funcall (plist-get (alist-get 'tools/cockpit drgnx-modules--table) :setup)))
+    ;; the questions only the cockpit counts reach the status bar's "waiting on you"
+    (should (memq #'drgnx-cockpit-waiting-count drgnx-statusbar-waiting-functions))
     (should (eq (plist-get (alist-get 'happened kinds) :home) 'right))
     (should (eq (plist-get (alist-get 'timeline kinds) :home) 'bottom))
     (pcase-dolist (`(,id ,fn ,map) '((cockpit-answer drgnx-cockpit-answer drgnx-cockpit-map)

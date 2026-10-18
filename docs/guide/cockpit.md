@@ -245,8 +245,9 @@ you            answered
 **Questions everywhere.** A question waiting on you shows in the graph (`◐` and a red dot) and in the timeline (a
 `◐` chip in the waiting face, red). What happened marks its line the same way, and its first line names the agent's
 oldest open question, so it stays in view after its line scrolls away. An answered question loses the mark.
-`drgnx-cockpit-waiting-count` gives how many wait, for the status bar's "waiting on you" count (the status bar does
-not count them yet). Escalations, `ask_user` questions and ask cards count. Permissions show in the graph, and their
+The timeline's head counts escalations, `ask_user` questions and ask cards. The status bar's "waiting on you" adds
+the questions no job holds (`drgnx-cockpit-waiting-count`); an ask card and a job's message to you are its jobs
+segment's ⚑, so each shows once. Permissions show in the graph, and their
 own count is the status bar's. While the graph or a feed pane is open, its check (every
 `drgnx-cockpit-check-interval`) tells the status bar when the number changed, so it moves even when another process
 asked.

@@ -175,8 +175,9 @@ hub). `⚑1` is the jobs' one count of cards and messages waiting on you (`drgnx
 badge shows too). A click opens What Needs You for every job in the Work cockpit.
 
 **Waiting on you.** The number in `◐ 1 waiting on you` is the sum of `drgnx-statusbar-waiting-functions`: each
-returns how many things wait for you. drgnx counts the agents' permission requests and edits to review; a module of
-your own can add a function and call `drgnx-statusbar-refresh` when its count changes.
+returns how many things wait for you. drgnx counts the agents' permission requests and edits to review, and the Work
+cockpit adds the questions no job holds; an ask card or a job's message to you is the jobs segment's `⚑`, never both.
+A module of your own can add a function and call `drgnx-statusbar-refresh` when its count changes.
 
 **Other modules' marks.** Anything a package puts on `global-mode-string` or `mode-line-misc-info` shows in `misc`,
 with no change to the bar; such entries are formatted at each redisplay of the bar, as stock Emacs does, and with
