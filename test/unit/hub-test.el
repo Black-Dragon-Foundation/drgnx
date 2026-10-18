@@ -261,9 +261,13 @@ to OR-LOG, OPENROUTER_API_KEY unset."
       (write-region "" nil state nil 'silent)         ; a state dir that is a plain file: no socket dir under it
       (let* ((process-environment (append (list "XDG_RUNTIME_DIR" (concat "XDG_STATE_HOME=" state)) process-environment))
              (out (generate-new-buffer " *hub-err*" t))
-             (rc (call-process (expand-file-name invocation-name invocation-directory) nil out nil "--batch" "-Q"
-                               "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-hub" "-f" "drgnx-hub-main")))
-        (should (= rc 1))
+             ;; never waited for without a limit: a hub that starts after all would serve until this Emacs ends
+             (p (make-process :name "hub-err" :buffer out :noquery t
+                              :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
+                                             "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-hub" "-f" "drgnx-hub-main"))))
+        (unless (drgnx-hub-test--wait (lambda () (not (process-live-p p))) 20) (delete-process p))
+        (should (eq (process-status p) 'exit))
+        (should (= (process-exit-status p) 1))
         (should (string-search "drgnx hub: " (with-current-buffer out (buffer-string))))
         (kill-buffer out)))))
 
@@ -503,6 +507,8 @@ to OR-LOG, OPENROUTER_API_KEY unset."
   ;; Emacs can pass the limit once encoded
   (require 'ucs-normalize)
   (drgnx-hub-test--with
+    ;; a temporary dir too deep to leave room for the name (macOS's /var/folders/…/T/ can be) has nothing to test
+    (skip-unless (> (- 103 24 8 (string-bytes root)) 0))
     (let* ((file-name-coding-system 'utf-8-hfs)
            ;; 4 × "é", then r…: the socket ($RUN/drgnx/hub-HASH.sock, 24 bytes past it) is 103 bytes in Emacs, 107 encoded
            (run (concat root (make-string 4 ?é) (make-string (- 103 24 8 (string-bytes root)) ?r)))
