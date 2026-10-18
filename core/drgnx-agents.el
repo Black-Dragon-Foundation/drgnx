@@ -22,7 +22,8 @@
 
 (cl-defstruct (drgnx-agent-session (:constructor drgnx-agents--make) (:copier nil))
   name profile cwd conn acp-id (status 'starting) entries queue (mode 'queue) capabilities usage commands
-  permissions reviews stderr exit stopping paused turn draining task via gateway id job remote)
+  permissions reviews stderr exit stopping paused turn draining task via gateway id job remote
+  mcp-dir)                              ; a sandboxed session's own socket dir (drgnx-sandbox-mcp.el), or nil
 
 (defvar drgnx-agents-profiles nil
   "Alist NAME → plist (:command LIST :env (\"NAME=value\"…) :mode queue|steer|interrupt).  Read from
@@ -396,6 +397,7 @@ a task whose provider failed to the next profile (drgnx-job.el).  Called in the 
                                                  (drgnx-agent-session-exit s) status
                                                  (drgnx-agent-session-stderr s) stderr)
                                            (drgnx-agents--release-gateway s)
+                                           (drgnx-agents--close-mcp s)
                                            (drgnx-agents--changed s)))))
     (setf (drgnx-agent-session-conn s) conn (drgnx-agent-session-mode s) (or (plist-get profile :mode) 'queue))
     (drgnx-acp-request conn "initialize"
@@ -686,6 +688,10 @@ so no `_meta' at all, for any other."
 
 (declare-function drgnx-search-mcp-server-spec "drgnx-search-mcp")
 
+(declare-function drgnx-sandbox-mcp-server-specs "drgnx-sandbox-mcp" (s inside-dir))
+(declare-function drgnx-sandbox-mcp-inside-dir "drgnx-sandbox-mcp" (s))
+(declare-function drgnx-sandbox-mcp-close "drgnx-sandbox-mcp" (s))
+
 (defconst drgnx-agents-own-mcp-servers '("drgnx" "drgnx-search")
   "The names of drgnx's own MCP servers, the ones drgnx gives an agent's session: the coordination tools
 \(drgnx-coord-mcp.el) and the search tool (drgnx-search-mcp.el).  No server of a profile's `:mcp-servers' takes them.")
@@ -705,7 +711,21 @@ permission check lets drgnx's own servers through)."
 (defun drgnx-agents--mcp-servers (s)
   "The `mcpServers' S's agent gets: the coordination tools, as S's name, and the search tool for S's project when
 agents.eld asks for it (`drgnx-agents-mcp-names'), then the servers of S's profile
-\(`drgnx-agents--profile-mcp-servers'), for a job's session too."
+\(`drgnx-agents--profile-mcp-servers'), for a job's session too.  A sandboxed session (its `mcp-dir' set by
+`drgnx-sandbox-mcp-open') gets bridges to its own sockets instead of the first two: the hub runs the servers
+outside, as S."
+  (vconcat (if (drgnx-agent-session-mcp-dir s)
+               (progn (require 'drgnx-sandbox-mcp)
+                      (drgnx-sandbox-mcp-server-specs s (drgnx-sandbox-mcp-inside-dir s)))
+             (drgnx-agents--stdio-mcp-servers s))
+           (drgnx-agents--profile-mcp-servers s)))
+
+(defun drgnx-agents--close-mcp (s)
+  "S's agent is gone: its own MCP sockets close and their servers end (`drgnx-sandbox-mcp-close')."
+  (when (drgnx-agent-session-mcp-dir s) (drgnx-sandbox-mcp-close s)))
+
+(defun drgnx-agents--stdio-mcp-servers (s)
+  "The servers S's agent starts itself (`drgnx-agents--mcp-servers')."
   (let ((names (drgnx-agents-mcp-names)))
     (vconcat
      (and drgnx-agents-coordination (memq 'coordination names)
@@ -716,8 +736,7 @@ agents.eld asks for it (`drgnx-agents-mcp-names'), then the servers of S's profi
      (and (memq 'search names)
           (with-demoted-errors "drgnx agents: the search tool: %S"
             (require 'drgnx-search-mcp)
-            (list (drgnx-search-mcp-server-spec (drgnx-agent-session-cwd s)))))
-     (drgnx-agents--profile-mcp-servers s))))
+            (list (drgnx-search-mcp-server-spec (drgnx-agent-session-cwd s))))))))
 
 (defun drgnx-agents-get (id) (seq-find (lambda (s) (equal (drgnx-agent-session-id s) id)) drgnx-agents--sessions))
 
@@ -992,6 +1011,7 @@ is `interrupt'."
     (drgnx-agents--remote s "agents/kill" nil) (cl-return-from drgnx-agents-kill))
   (when-let* ((c (drgnx-agent-session-conn s))) (drgnx-acp-stop c))
   (drgnx-agents--release-gateway s)
+  (drgnx-agents--close-mcp s)
   (setf (drgnx-agent-session-status s) 'exited)
   (drgnx-agents--changed s))
 

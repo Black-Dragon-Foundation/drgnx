@@ -480,7 +480,7 @@ emacs --batch -Q --eval "(setq load-prefer-newer t)" -L CORE -l drgnx-mcp-bridge
 
 `drgnx-mcp-bridge-command SOCKET` builds that argv (through `drgnx-command-ignoring-sigpipe`, like the other MCP
 servers). The socket a connection comes in on tells the hub which session it is: nothing inside the sandbox names the
-agent, so nothing there can claim to be another.
+agent, so nothing there can claim to be another. The hub's side is in [hub.md](hub.md#per-session-sockets).
 
 What the bridge does, and nothing more:
 
