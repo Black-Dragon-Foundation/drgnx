@@ -24,7 +24,9 @@
   (drgnx-tty-session-eval
    sess `(with-temp-buffer
            (insert ,text)
-           (kill-ring-save (point-min) (point-max))
+           ;; as the command loop runs the copy command: editor/clipboard sends only copies and cuts to the clipboard
+           (let ((this-command 'kill-ring-save))
+             (kill-ring-save (point-min) (point-max)))
            t)))
 
 (ert-deftest drgnx-tty-clip/copy-reaches-the-terminal-clipboard ()

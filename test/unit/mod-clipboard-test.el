@@ -1,0 +1,319 @@
+;;; mod-clipboard-test.el --- batch tests: the editor/clipboard module (clipboard managers; M12b Task 14b) -*- lexical-binding: t -*-
+;; Everything runs in a temp HOME with fake config files; the process list is stubbed, and `gsettings' is a script
+;; in a temp directory that is the only directory on `exec-path' (the real one is never run).  The cut function is
+;; a recorder, never the system clipboard.
+(require 'ert)
+(require 'drgnx)
+(load (expand-file-name "modules/editor/drgnx-editing" drgnx-dir) nil t)
+(load (expand-file-name "modules/editor/drgnx-clipboard" drgnx-dir) nil t)
+
+(defvar x-selection-timeout)
+(defvar pgtk-selection-timeout)
+(defvar drgnx-clip-test--pushed nil "What the recorder cut function was given, newest first.")
+(defvar drgnx-clip-test--bin nil "The temp directory that is the whole `exec-path'.")
+(defvar drgnx-clip-test--home nil)
+
+(defmacro drgnx-clip-test--env (paste-function &rest body)
+  "BODY in an isolated session: temp HOME, a recorder as the cut function, PASTE-FUNCTION as the paste function,
+no module state, both timeouts at the standard 0, and nothing on `exec-path' (so no gsettings).  The module is
+uninstalled afterwards."
+  (declare (indent 1))
+  `(let* ((drgnx-clip-test--home (make-temp-file "drgnx-clip" t))
+          (drgnx-clip-test--bin (expand-file-name "bin" drgnx-clip-test--home))
+          (process-environment (append (list (concat "HOME=" drgnx-clip-test--home) "XDG_CONFIG_HOME")
+                                       process-environment))
+          (exec-path (list drgnx-clip-test--bin))
+          (drgnx-clip-test--pushed nil)
+          (interprogram-cut-function (lambda (text) (push text drgnx-clip-test--pushed)))
+          (interprogram-paste-function ,paste-function)
+          (kill-ring nil) (kill-ring-yank-pointer nil) (kill-do-not-save-duplicates nil)
+          (pre-command-hook nil) (after-make-frame-functions nil)
+          (select-active-regions t) (x-selection-timeout 0) (pgtk-selection-timeout 0)
+          (drgnx-clipboard-kills 'region) (drgnx-clipboard-force nil)
+          (drgnx-clipboard-publish-selection 'auto) (drgnx-clipboard-read-timeout 1.5)
+          (drgnx-clipboard--installed nil) (drgnx-clipboard--orig-cut nil) (drgnx-clipboard--orig-paste nil)
+          (drgnx-clipboard--decision nil) (drgnx-clipboard--warned nil) (drgnx-clipboard--timeout-set nil)
+          (drgnx-clipboard--state nil) (drgnx-clipboard--saved-regions nil) (drgnx-clipboard--graphical-seen nil)
+          (drgnx-clipboard--generation 0))
+     (make-directory drgnx-clip-test--bin t)
+     (unwind-protect (progn ,@body)
+       (drgnx-clipboard-uninstall)
+       (delete-directory drgnx-clip-test--home t))))
+
+(defun drgnx-clip-test--as (command thunk)
+  "Run THUNK as one run of COMMAND (as the command loop does: `this-command' and a fresh command)."
+  (let ((this-command command) (real-this-command command))
+    (drgnx-clipboard--new-command)
+    (funcall thunk)))
+
+(defun drgnx-clip-test--file (relative text)
+  "Write TEXT to RELATIVE under the temp HOME."
+  (let ((file (expand-file-name relative drgnx-clip-test--home)))
+    (make-directory (file-name-directory file) t)
+    (with-temp-file file (insert text))
+    file))
+
+(defmacro drgnx-clip-test--x11 (processes &rest body)
+  "BODY on an X11 frame with PROCESSES (a list of names) running."
+  (declare (indent 1))
+  `(cl-letf (((symbol-function 'drgnx-clipboard--graphical-p) (lambda (&optional _f) t))
+             ((symbol-function 'drgnx-clipboard--process-names) (lambda () ,processes)))
+     ,@body))
+
+(defun drgnx-clip-test--select (beg end)
+  "Select BEG to END, point at END, as a Shift-arrow selection leaves it."
+  (setq-local transient-mark-mode t)
+  (set-mark beg)
+  (goto-char end)
+  (activate-mark))
+
+;;;; Kills
+
+(ert-deftest drgnx-clip/other-kills-stay-in-the-kill-ring ()
+  (dolist (command '(kill-line kill-word backward-kill-word kill-whole-line))
+    (drgnx-clip-test--env nil
+      (drgnx-clipboard-install)
+      (with-temp-buffer
+        (insert "alpha beta\ngamma")
+        (goto-char 6)
+        (drgnx-clip-test--as command (lambda () (call-interactively command)))
+        (should kill-ring)
+        (should-not drgnx-clip-test--pushed)))))
+
+(ert-deftest drgnx-clip/copy-and-cut-push-once ()
+  (dolist (spec `((kill-region . ,(lambda () (kill-region (region-beginning) (region-end))))
+                  (kill-ring-save . ,(lambda () (kill-ring-save (region-beginning) (region-end))))
+                  (drgnx-editing-copy . ,#'drgnx-editing-copy)
+                  (drgnx-editing-cut . ,#'drgnx-editing-cut)))
+    (drgnx-clip-test--env nil
+      (drgnx-clipboard-install)
+      (with-temp-buffer
+        (insert "alpha beta")
+        (drgnx-clip-test--select 1 6)
+        (drgnx-clip-test--as (car spec) (cdr spec))
+        (should (equal drgnx-clip-test--pushed '("alpha")))))))
+
+(ert-deftest drgnx-clip/one-push-per-command ()
+  ;; several kills inside one command (appends) reach the clipboard once; the next command pushes again
+  (drgnx-clip-test--env nil
+    (drgnx-clipboard-install)
+    (drgnx-clip-test--as 'kill-region (lambda () (kill-new "one") (kill-append " two" nil)))
+    (should (= (length drgnx-clip-test--pushed) 1))
+    (drgnx-clip-test--as 'kill-region (lambda () (kill-new "three")))
+    (should (= (length drgnx-clip-test--pushed) 2))))
+
+(ert-deftest drgnx-clip/kills-all-is-emacs-behaviour ()
+  (drgnx-clip-test--env nil
+    (drgnx-clipboard-install)
+    (setq drgnx-clipboard-kills 'all)
+    (with-temp-buffer
+      (insert "alpha beta")
+      (goto-char 1)
+      (drgnx-clip-test--as 'kill-word (lambda () (kill-word 1) (kill-new "again")))
+      (should (equal drgnx-clip-test--pushed '("again" "alpha"))))))
+
+(ert-deftest drgnx-clip/force-pushes ()
+  (drgnx-clip-test--env nil
+    (drgnx-clipboard-install)
+    (drgnx-clip-test--as 'some-command (lambda () (kill-new "a path")))
+    (should-not drgnx-clip-test--pushed)
+    (drgnx-clip-test--as 'some-command (lambda () (let ((drgnx-clipboard-force t)) (kill-new "a path"))))
+    (should (equal drgnx-clip-test--pushed '("a path")))))
+
+(ert-deftest drgnx-clip/the-command-loop-decides ()
+  ;; real keys: C-k stays in the kill ring, C-w reaches the clipboard once
+  (drgnx-clip-test--env nil
+    (drgnx-clipboard-install)
+    (save-window-excursion
+      (let ((buf (generate-new-buffer " *clip-keys*")))
+        (unwind-protect
+            (progn
+              (switch-to-buffer buf)
+              (insert "alpha beta\ngamma")
+              (setq-local transient-mark-mode t)
+              (goto-char 1)
+              (execute-kbd-macro (kbd "C-k"))
+              (should-not drgnx-clip-test--pushed)
+              (should (equal (car kill-ring) "alpha beta"))
+              (set-mark 1)
+              (goto-char (point-max))
+              (execute-kbd-macro (kbd "C-w"))
+              (should (equal drgnx-clip-test--pushed '("\ngamma"))))
+          (kill-buffer buf))))))
+
+(ert-deftest drgnx-clip/yank-prefers-a-newer-system-clipboard ()
+  ;; unchanged from Emacs: the paste function's answer wins over the kill ring
+  (drgnx-clip-test--env (lambda () "from another app")
+    (drgnx-clipboard-install)
+    (kill-new "mine")
+    (with-temp-buffer (yank) (should (equal (buffer-string) "from another app")))))
+
+;;;; The owner that does not answer
+
+(ert-deftest drgnx-clip/a-failing-paste-falls-back-to-the-kill-ring ()
+  (let ((messages nil))
+    (drgnx-clip-test--env (lambda () (error "Timed out waiting for reply from selection owner"))
+      (drgnx-clipboard-install)
+      (kill-new "from emacs")
+      (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) messages))))
+        (with-temp-buffer
+          (yank)
+          (should (equal (buffer-string) "from emacs"))
+          (yank)
+          (should (equal (buffer-string) "from emacsfrom emacs"))))
+      (should (equal (seq-filter (lambda (m) (string-prefix-p "drgnx:" m)) messages)
+                     '("drgnx: the clipboard owner didn't answer in 1.5 s; pasted from Emacs's own copies"))))))
+
+(ert-deftest drgnx-clip/the-timeout-is-set-only-at-the-standard-value ()
+  (drgnx-clip-test--env nil
+    (setq x-selection-timeout 0 pgtk-selection-timeout 3000)   ; the user chose pgtk's
+    (drgnx-clipboard-install)
+    (should (= x-selection-timeout 1500))
+    (should (= pgtk-selection-timeout 3000))
+    (drgnx-clipboard-uninstall)
+    (should (= x-selection-timeout 0))
+    (should (= pgtk-selection-timeout 3000)))
+  ;; nil leaves them alone
+  (drgnx-clip-test--env nil
+    (setq drgnx-clipboard-read-timeout nil)
+    (drgnx-clipboard-install)
+    (should (= x-selection-timeout 0))))
+
+;;;; Selecting
+
+(ert-deftest drgnx-clip/klipper-syncing-turns-publishing-off ()
+  (drgnx-clip-test--env nil
+    (drgnx-clip-test--file ".config/klipperrc" "[General]\nKeepClipboardContents=true\nSyncClipboards=true\n")
+    (drgnx-clip-test--x11 '("bash" "klipper")
+      (drgnx-clipboard-install)
+      (should-not select-active-regions)
+      (let ((facts (drgnx-clipboard-doctor-facts)))
+        (should (eq (plist-get facts :manager) 'klipper))
+        (should (equal (plist-get facts :changed) '(select-active-regions)))
+        (should (eq (plist-get facts :kills) 'region))
+        (should (= (plist-get facts :read-timeout) 1.5))))))
+
+(ert-deftest drgnx-clip/klipper-not-syncing-or-not-running-changes-nothing ()
+  (drgnx-clip-test--env nil
+    (drgnx-clip-test--file ".config/klipperrc" "[General]\nSyncClipboards=false\n")
+    (drgnx-clip-test--x11 '("klipper")
+      (drgnx-clipboard-install)
+      (should select-active-regions)
+      (should-not (plist-get (drgnx-clipboard-doctor-facts) :manager))))
+  (drgnx-clip-test--env nil
+    (drgnx-clip-test--file ".config/klipperrc" "[General]\nSyncClipboards=true\n")
+    (drgnx-clip-test--x11 '("bash")
+      (drgnx-clipboard-install)
+      (should select-active-regions)))
+  ;; a terminal frame is not looked at
+  (drgnx-clip-test--env nil
+    (drgnx-clip-test--file ".config/klipperrc" "[General]\nSyncClipboards=true\n")
+    (cl-letf (((symbol-function 'drgnx-clipboard--process-names) (lambda () '("klipper"))))
+      (drgnx-clipboard-install)
+      (should select-active-regions))))
+
+(ert-deftest drgnx-clip/copyq-taking-the-selection-turns-publishing-off ()
+  (drgnx-clip-test--env nil
+    (drgnx-clip-test--file ".config/copyq/copyq.conf" "[Options]\ncheck_selection=true\n")
+    (drgnx-clip-test--x11 '("copyq")
+      (drgnx-clipboard-install)
+      (should-not select-active-regions)
+      (should (eq (plist-get (drgnx-clipboard-doctor-facts) :manager) 'copyq))))
+  (drgnx-clip-test--env nil
+    (drgnx-clip-test--file ".config/copyq/copyq.conf" "[Options]\ncopy_selection=false\ncheck_selection=false\n")
+    (drgnx-clip-test--x11 '("copyq")
+      (drgnx-clipboard-install)
+      (should select-active-regions))))
+
+(defun drgnx-clip-test--gsettings (script)
+  "Put a fake gsettings in the temp bin directory; SCRIPT is its shell body (`$3' is the key asked)."
+  (let ((file (expand-file-name "gsettings" drgnx-clip-test--bin)))
+    (with-temp-file file (insert "#!/bin/sh\n" script "\n"))
+    (set-file-modes file #o755)))
+
+(defun drgnx-clip-test--wait (pred seconds)
+  (let ((deadline (+ (float-time) seconds)))
+    (while (and (not (funcall pred)) (< (float-time) deadline)) (accept-process-output nil 0.05))
+    (funcall pred)))
+
+(ert-deftest drgnx-clip/gpaste-syncing-is-found-without-blocking ()
+  (drgnx-clip-test--env nil
+    (drgnx-clip-test--gsettings "echo true")
+    (drgnx-clip-test--x11 '("bash")
+      (let ((t0 (float-time)))
+        (drgnx-clipboard-install)
+        (should (< (- (float-time) t0) 0.3)))         ; the asks run in the background
+      (should select-active-regions)                  ; not known yet
+      (should (drgnx-clip-test--wait (lambda () (not select-active-regions)) 3))
+      (should (eq (plist-get (drgnx-clipboard-doctor-facts) :manager) 'gpaste))))
+  ;; one of the two settings off: not syncing
+  (drgnx-clip-test--env nil
+    (drgnx-clip-test--gsettings "[ \"$3\" = primary-to-history ] && echo false || echo true")
+    (drgnx-clip-test--x11 '("bash")
+      (drgnx-clipboard-install)
+      (drgnx-clip-test--wait (lambda () nil) 0.5)
+      (should select-active-regions))))
+
+(ert-deftest drgnx-clip/a-gsettings-that-hangs-is-given-up-after-a-second ()
+  (drgnx-clip-test--env nil
+    (drgnx-clip-test--gsettings "sleep 30; echo true")
+    (drgnx-clip-test--x11 '("bash")
+      (let ((t0 (float-time)))
+        (drgnx-clipboard-install)
+        (should (< (- (float-time) t0) 0.3)))
+      (drgnx-clip-test--wait (lambda () nil) 1.5)
+      (should select-active-regions)
+      (should-not (plist-get (drgnx-clipboard-doctor-facts) :manager))
+      (should-not (seq-filter (lambda (p) (string-prefix-p "drgnx-gpaste" (process-name p))) (process-list))))))
+
+(ert-deftest drgnx-clip/the-setting-overrides-detection ()
+  ;; t: published even where a manager syncs
+  (drgnx-clip-test--env nil
+    (setq drgnx-clipboard-publish-selection t)
+    (drgnx-clip-test--file ".config/klipperrc" "[General]\nSyncClipboards=true\n")
+    (drgnx-clip-test--x11 '("klipper")
+      (setq select-active-regions nil)
+      (drgnx-clipboard-install)
+      (should select-active-regions)))
+  ;; nil: never, with no manager at all
+  (drgnx-clip-test--env nil
+    (setq drgnx-clipboard-publish-selection nil)
+    (drgnx-clip-test--x11 '("bash")
+      (drgnx-clipboard-install)
+      (should-not select-active-regions))))
+
+(ert-deftest drgnx-clip/uninstall-puts-everything-back ()
+  (drgnx-clip-test--env #'ignore
+    (let ((cut interprogram-cut-function))
+      (drgnx-clip-test--file ".config/klipperrc" "[General]\nSyncClipboards=true\n")
+      (drgnx-clip-test--x11 '("klipper")
+        (drgnx-clipboard-install)
+        (should-not (eq interprogram-cut-function cut))
+        (drgnx-clipboard-uninstall)
+        (should (eq interprogram-cut-function cut))
+        (should (eq interprogram-paste-function #'ignore))
+        (should select-active-regions)
+        (should (= x-selection-timeout 0))
+        (should-not (memq #'drgnx-clipboard--new-command pre-command-hook))))))
+
+;;;; The module
+
+(ert-deftest drgnx-clip/a-disabled-module-changes-nothing ()
+  (drgnx-clip-test--env #'ignore
+    (let ((cut interprogram-cut-function) (drgnx-modules--report nil)
+          (spec (alist-get 'editor/clipboard drgnx-modules--table)))
+      (should spec)
+      (cl-letf (((symbol-function 'drgnx-module-disabled-p) (lambda (_m) t)))
+        (drgnx-modules--run-one 'editor/clipboard spec 'startup))
+      (should (eq interprogram-cut-function cut))
+      (should (eq interprogram-paste-function #'ignore))
+      (should (= x-selection-timeout 0))
+      (should select-active-regions)
+      (should-not pre-command-hook)
+      ;; enabled, the same call installs it
+      (cl-letf (((symbol-function 'drgnx-module-disabled-p) (lambda (_m) nil)))
+        (drgnx-modules--run-one 'editor/clipboard spec 'startup))
+      (should (eq interprogram-cut-function #'drgnx-clipboard--cut)))))
+
+(provide 'mod-clipboard-test)
+;;; mod-clipboard-test.el ends here
