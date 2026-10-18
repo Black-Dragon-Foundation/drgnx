@@ -7,7 +7,8 @@ Using drgnx.
 - [Install](guide/install.md): install.sh, per-platform guide (on a Mac: Homebrew, Emacs, the drgnx app, step by step), source build, `drgnx doctor`, uninstall.
 - [Onboarding](guide/onboarding.md): `drgnx onboard` and Help → Welcome — new to Emacs, environment, keys and packages, projects onto the board, AI (Ollama, LM Studio, OpenRouter), Claude Code, keep running or quit.
 - [Opening drgnx](guide/opening.md): `drgnx .`, `drgnx PATH`, `drgnx open` (like `code .`, one drgnx); the drgnx app on macOS (Finder, Spotlight, Dock, Open With); keep running in the background or quit when the last window closes.
-- [Workbench](guide/workbench.md): the sidebar — Explorer and Buffers panel — the change bus, performance vs treemacs/ibuffer.
+- [Workbench](guide/workbench.md): the sidebar — Explorer and Buffers panel — the change bus, performance vs treemacs/ibuffer;
+  several monitors: what each window manager allows (sway, i3, Hyprland, niri, KDE, X11, macOS; GNOME's key), floating rules.
 - [Keys](guide/keys.md): VS Code, Emacs and Vim key profiles, the Mac keys (⌘P, ⌘⇧P, …), layers, keys.eld, conflicts.
 - [Modules](guide/modules.md): stages, packages, flags, modules.eld, Preferences: Modules, writing a module.
 - [Packages](guide/packages.md): `drgnx sync`, the lock, the cache, generations, rollback, upgrade, safe mode, bisect.
