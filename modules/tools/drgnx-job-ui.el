@@ -136,8 +136,9 @@
         (let ((id (plist-get m :id)))
           (insert (format "  from %s (%s): %s\n  " (plist-get m :sender) (plist-get m :state)
                           (replace-regexp-in-string "[\n\r]+" " ⏎ " (format "%s" (plist-get m :text)))))
-          (drgnx-job-ui--button "Reply…" (lambda () (drgnx-job-ui--reply job id)))
-          (drgnx-job-ui--button "Dismiss" (lambda () (drgnx-job-ui--dismiss job id)))
+          (unless (equal (plist-get m :state) "acted")      ; dismissed or answered: nothing more to do
+            (drgnx-job-ui--button "Reply…" (lambda () (drgnx-job-ui--reply job id)))
+            (drgnx-job-ui--button "Dismiss" (lambda () (drgnx-job-ui--dismiss job id))))
           (insert "\n"))))))
 
 (defun drgnx-job-ui--insert-log (_job s)
@@ -405,18 +406,19 @@ jobs only — and the job with the newest card."
         ;; later, not in the hub's event handler: a D-Bus call that hangs must not hold the filter
         (run-at-time 0 nil (lambda () (with-demoted-errors "drgnx: %S" (drgnx-job-ui--send "drgnx: a job needs you" body))))))))
 
-(defun drgnx-job-ui--applescript-string (s)
-  "S as an AppleScript string literal (one line: backslashes and quotes escaped)."
-  (concat "\"" (replace-regexp-in-string "[\\\"]" "\\\\\\&" (replace-regexp-in-string "[\n\r]+" " " s)) "\""))
-
 (defun drgnx-job-ui--send (title body)
   "Tell the user TITLE and BODY where the platform has a notification: macOS through `osascript' (a process that
-never waits; the text is one argument, no shell), elsewhere D-Bus; else a message.  Never a prompt."
+never waits; a fixed script, the text only as arguments to it: nothing of it is script, no shell), elsewhere D-Bus;
+else a message.  A failed osascript says so once.  Never a prompt."
   (cond ((and (eq system-type 'darwin) (executable-find "osascript"))
          (make-process :name "drgnx-notify" :noquery t :connection-type 'pipe
-                       :command (list "osascript" "-e"
-                                      (format "display notification %s with title %s"
-                                              (drgnx-job-ui--applescript-string body) (drgnx-job-ui--applescript-string title)))))
+                       :command (list "osascript" "-e" "on run argv"
+                                      "-e" "display notification (item 1 of argv) with title (item 2 of argv)"
+                                      "-e" "end run" "--"
+                                      (replace-regexp-in-string "[\n\r]+" " " body) (replace-regexp-in-string "[\n\r]+" " " title))
+                       :sentinel (lambda (p _event)
+                                   (when (and (memq (process-status p) '(exit signal)) (/= 0 (process-exit-status p)))
+                                     (message "drgnx: the macOS notification failed (%s — %s)" title body)))))
         ((and (not (memq system-type '(darwin windows-nt))) (drgnx-job-ui--desktop-p))
          (notifications-notify :title title :body body))
         (t (message "%s — %s" title body))))

@@ -226,12 +226,15 @@
               ((symbol-function 'executable-find) (lambda (c &rest _) (and (equal c "osascript") "/usr/bin/osascript")))
               ((symbol-function 'drgnx-job-ui--desktop-p) (lambda () nil))
               ((symbol-function 'notifications-notify) (lambda (&rest _) (push 'dbus made))))
-      ;; macOS: osascript, asynchronously, the text escaped as an AppleScript string (one argv element: no shell)
+      ;; macOS: a fixed script (`on run argv'), the text only as argv items after "--": nothing of it is ever script
       (let ((system-type 'darwin))
-        (drgnx-job-ui--send "drgnx: a job needs you" "j1 — say \"hi\" \\ now\nnext"))
+        (drgnx-job-ui--send "say \"hi\" \\ \" & (do shell script \"touch x\") & \"" "j1 — body\nnext -e"))
       (should (= 1 (length made)))
       (should (equal (plist-get (car made) :command)
-                     '("osascript" "-e" "display notification \"j1 — say \\\"hi\\\" \\\\ now next\" with title \"drgnx: a job needs you\"")))
+                     '("osascript" "-e" "on run argv"
+                       "-e" "display notification (item 1 of argv) with title (item 2 of argv)"
+                       "-e" "end run" "--"
+                       "j1 — body next -e" "say \"hi\" \\ \" & (do shell script \"touch x\") & \"")))
       (should-not said)
       ;; macOS without osascript, Linux without D-Bus, Windows: the message
       (setq made nil)
@@ -244,6 +247,53 @@
       (cl-letf (((symbol-function 'drgnx-job-ui--desktop-p) (lambda () t)))
         (let ((system-type 'gnu/linux)) (drgnx-job-ui--send "t" "b")))
       (should (equal made '(dbus))))))
+
+;; an acted message offers nothing more to do
+(ert-deftest drgnx-job-ui/an-acted-message-has-no-buttons ()
+  (drgnx-job-ui-test--with
+    (let ((s (copy-tree drgnx-job-ui-test--summary)))
+      (plist-put (car (plist-get s :messages)) :state "acted")
+      (drgnx-job-ui--draw "j1" s)
+      (should (string-search "which one?" (drgnx-job-ui-test--text 'cards)))
+      (should-not (drgnx-job-ui-test--button 'cards "Reply…"))
+      (should-not (drgnx-job-ui-test--button 'cards "Dismiss")))))
+
+;; a failed osascript says so once and is not tried again
+(ert-deftest drgnx-job-ui/a-failed-osascript-says-so-once ()
+  (let ((made nil) (said nil) (sentinel nil))
+    (cl-letf (((symbol-function 'make-process) (lambda (&rest args) (push args made) (setq sentinel (plist-get args :sentinel)) 'proc))
+              ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said)))
+              ((symbol-function 'executable-find) (lambda (&rest _) "/usr/bin/osascript"))
+              ((symbol-function 'process-status) (lambda (_p) 'exit))
+              ((symbol-function 'process-exit-status) (lambda (_p) 1)))
+      (let ((system-type 'darwin)) (drgnx-job-ui--send "t" "b"))
+      (should (functionp sentinel))
+      (funcall sentinel 'proc "exited abnormally with code 1\n")
+      (should (= 1 (length said)))
+      (should (string-search "b" (car said)))
+      (should (= 1 (length made))))                         ; no second try
+    (setq said nil)
+    (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said)))
+              ((symbol-function 'process-status) (lambda (_p) 'exit))
+              ((symbol-function 'process-exit-status) (lambda (_p) 0)))
+      (funcall sentinel 'proc "finished\n")
+      (should-not said))))
+
+;; Discuss: a reviewer not mirrored yet is looked for once more, then said
+(ert-deftest drgnx-job-ui/discuss-looks-once-more-for-a-reviewer-not-mirrored-yet ()
+  (let ((timers nil) (said nil) (tries 0))
+    (cl-letf (((symbol-function 'drgnx-job-ui--transcript) (lambda (_id) (cl-incf tries) (user-error "Agent s-rev is not mirrored here (yet)")))
+              ((symbol-function 'run-at-time) (lambda (_time _repeat fn &rest args) (push (cons fn args) timers) 'timer))
+              ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+      (drgnx-job-ui--open-transcript "s-rev" t)
+      (should (= 1 tries))
+      (should-not said)
+      (should (= 1 (length timers)))                        ; one retry scheduled
+      (apply (caar timers) (cdar timers))
+      (should (= 2 tries))
+      (should (= 1 (length timers)))                        ; and not another
+      (should (= 1 (length said)))
+      (should (string-search "not mirrored" (car said))))))
 
 ;; M12a-70
 (ert-deftest drgnx-job-ui/badge-mode-adds-and-removes-its-disconnect-hook ()
