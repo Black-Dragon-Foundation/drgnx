@@ -1051,11 +1051,16 @@ end: a program you chose earlier on the PATH keeps winning."
 (defun drgnx-onboard--claude-login-state (claude)
   "Is CLAUDE logged in: `yes', `no' or `unknown' (a CLI without `auth status', or one that does not answer)?  Asks
 `claude auth status' and reads only its loggedIn answer — never Claude's credentials."
-  (let* ((out "")
-         (p (make-process :name "drgnx-claude-auth" :command (list claude "auth" "status") :connection-type 'pipe :noquery t
-                          :filter (lambda (_p s) (setq out (concat out s))))))
-    (unless (drgnx-onboard--wait (lambda () (not (process-live-p p))) drgnx-onboard-login-wait)
-      (delete-process p))
+  (let* ((out "") (p nil) (done nil))
+    ;; the process is made inside the unwind-protect: a C-g at any point ends it
+    (unwind-protect
+        (progn
+          (setq p (make-process :name "drgnx-claude-auth" :command (list claude "auth" "status") :connection-type 'pipe :noquery t
+                                :filter (lambda (_p s) (setq out (concat out s)))))
+          (unless (drgnx-onboard--wait (lambda () (not (process-live-p p))) drgnx-onboard-login-wait)
+            (delete-process p))
+          (setq done t))
+      (when (and (not done) p (process-live-p p)) (delete-process p)))
     (cond ((string-match "\"loggedIn\"[ \t]*:[ \t]*\\(true\\|false\\)" out)
            (if (equal (match-string 1 out) "true") 'yes 'no))
           ((and (not (process-live-p p)) (eql (process-exit-status p) 0)) 'yes)

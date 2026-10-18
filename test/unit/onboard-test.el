@@ -1061,4 +1061,14 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
       (cl-letf (((symbol-function 'y-or-n-p) (car asked))) (drgnx-onboard--agents-step '(:interactive t)))
       (should-not (string-match-p "VS Code" (car (car (cdr asked))))))))
 
+;; M12a-48, -49, -50: the Agents step's smaller corners
+
+(ert-deftest drgnx-ai-onboard/quit-during-auth-status-kills-it ()
+  ;; C-g while `claude auth status' is being waited for leaves nothing running, and quits on
+  (drgnx-onboard-test--claude 'macos
+    (drgnx-onboard-test--script (concat bin "slow-claude") "exec sleep 30\n")
+    (cl-letf (((symbol-function 'drgnx-onboard--wait) (lambda (&rest _) (signal 'quit nil))))
+      (should (eq 'quit (condition-case nil (drgnx-onboard--claude-login-state (concat bin "slow-claude")) (quit 'quit)))))
+    (should-not (seq-some (lambda (p) (and (string-prefix-p "drgnx-claude-auth" (process-name p)) (process-live-p p))) (process-list)))))
+
 ;;; onboard-test.el ends here
