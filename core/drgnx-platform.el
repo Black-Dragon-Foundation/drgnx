@@ -592,5 +592,250 @@ connection has been made yet).  The doctor reports the daemon's session."
 
 (setq drgnx-platform--registering-builtins nil)
 
+;;;; sway and i3
+;; Both speak the same IPC through swaymsg and i3-msg (`-t get_outputs', `-t get_tree', a command string with a
+;; criteria prefix), so one set of functions serves both; WM is `sway' or `i3'.  Facts: m12c facts, "sway IPC
+;; facts" and "X11: Xvfb and i3".  sway finds a window by `pid' and title (con_id); i3 has no pid in its tree and
+;; finds it by the X window id, which is the frame parameter `outer-window-id'.
+
+(defconst drgnx-platform-wm--refusal
+  "drgnx moves only its own window while it has focus: click this window, then run the command again"
+  "Why a move is refused when the focused window is not this frame.")
+
+(defconst drgnx-platform-wm--place-polls '(0.1 0.3 0.7 1.5 3.0)
+  "Seconds after the start of a placement at which the tree is read; later one more every second.")
+
+(defvar drgnx-platform-wm--place-counter 0 "Makes each placing title unique.")
+
+(defun drgnx-platform-wm--parse (text)
+  "TEXT (JSON) as plists and lists (null and false are nil), or nil when it is not JSON."
+  (and (stringp text) (not (string-blank-p text))
+       (condition-case nil
+           (json-parse-string text :object-type 'plist :array-type 'list :null-object nil :false-object nil)
+         (error nil))))
+
+(defun drgnx-platform-wm--sway-monitors (json)
+  "Monitor plists (:name :make :model :serial :geometry) of the active outputs in JSON, a `get_outputs' reply.
+An inactive output stays in the reply with a zero rectangle and is left out.  i3 has no make, model or serial."
+  (let (out)
+    (dolist (o (drgnx-platform-wm--parse json))
+      (when (and (consp o) (plist-get o :active))
+        (let ((r (plist-get o :rect)))
+          (push (list :name (or (plist-get o :name) "") :make (or (plist-get o :make) "")
+                      :model (or (plist-get o :model) "") :serial (or (plist-get o :serial) "")
+                      :geometry (list (plist-get r :x) (plist-get r :y) (plist-get r :width) (plist-get r :height)))
+                out))))
+    (nreverse out)))
+
+(defun drgnx-platform-wm--cons (tree)
+  "The window cons of TREE (a `get_tree' reply, parsed), depth first, as plists
+\(:id :pid :name :output :fullscreen :focused :window).  Split containers, workspaces and outputs are not windows."
+  (let (out)
+    (cl-labels ((walk (node output)
+                  (let ((type (plist-get node :type)))
+                    (when (equal type "output") (setq output (plist-get node :name)))
+                    (when (and (member type '("con" "floating_con"))
+                               (or (plist-get node :pid) (plist-get node :window)))
+                      (push (list :id (plist-get node :id) :pid (plist-get node :pid) :name (plist-get node :name)
+                                  :output output :focused (plist-get node :focused)
+                                  :fullscreen (let ((m (plist-get node :fullscreen_mode))) (and (numberp m) (> m 0)))
+                                  :window (plist-get node :window))
+                            out))
+                    (dolist (c (append (plist-get node :nodes) (plist-get node :floating_nodes)))
+                      (walk c output)))))
+      (walk tree nil))
+    (nreverse out)))
+
+(defun drgnx-platform-wm--sway-focused (tree)
+  "The focused window con of TREE (:id :pid :output :fullscreen :name ...), or nil."
+  (seq-find (lambda (c) (plist-get c :focused)) (drgnx-platform-wm--cons tree)))
+
+(defun drgnx-platform-wm--sway-find (tree pid title)
+  "The window con of TREE with process PID and the window title TITLE, or nil."
+  (seq-find (lambda (c) (and (eql (plist-get c :pid) pid) (equal (plist-get c :name) title)))
+            (drgnx-platform-wm--cons tree)))
+
+(defun drgnx-platform-wm--i3-find (tree xid)
+  "The window con of TREE whose X window id is XID, or nil."
+  (seq-find (lambda (c) (eql (plist-get c :window) xid)) (drgnx-platform-wm--cons tree)))
+
+(defun drgnx-platform-wm--label (wm) (if (eq wm 'i3) "i3" "sway"))
+(defun drgnx-platform-wm--tool (wm) (if (eq wm 'i3) "i3-msg" "swaymsg"))
+
+(defun drgnx-platform-wm--need-tool (wm)
+  "Signal the message for a missing tool; the operation turns it into (:error MESSAGE)."
+  (unless (executable-find (drgnx-platform-wm--tool wm))
+    (error "%s: %s is not installed, so drgnx cannot move windows"
+           (drgnx-platform-wm--label wm) (drgnx-platform-wm--tool wm))))
+
+(defun drgnx-platform-wm--xid (frame)
+  "FRAME's X window id (its `outer-window-id' parameter) as a number."
+  (let ((id (frame-parameter frame 'outer-window-id)))
+    (or (and id (let ((n (if (numberp id) id (string-to-number id)))) (and (> n 0) n)))
+        (error "i3: this frame has no X window id, so drgnx cannot move it"))))
+
+(defun drgnx-platform-wm--selector (wm con)
+  "The criteria prefix that picks CON in a command."
+  (if (eq wm 'i3) (format "[id=%d]" (plist-get con :window)) (format "[con_id=%d]" (plist-get con :id))))
+
+(defun drgnx-platform-wm--output-arg (monitor)
+  "MONITOR's output name as the argument of `move container to output', quoted when it needs it."
+  (let ((name (plist-get monitor :name)))
+    (unless (drgnx-platform--filled name) (error "this monitor has no output name, so drgnx cannot move the window to it"))
+    (if (string-match-p "\\`[A-Za-z0-9_.:-]+\\'" name) name
+      (concat "\"" (replace-regexp-in-string "[\"\\]" "\\\\\\&" name) "\""))))
+
+(defun drgnx-platform-wm--json-error (text)
+  "The `error' text of the first failed command in TEXT (a reply array), or nil."
+  (let ((r (drgnx-platform-wm--parse text)))
+    (when (and (consp r) (consp (car r)))
+      (when-let* ((bad (seq-find (lambda (e) (and (plist-member e :success) (not (plist-get e :success)))) r)))
+        (or (plist-get bad :error) "the command failed")))))
+
+(defun drgnx-platform-wm--failure (wm ctx status out what)
+  "The message for a call that failed (STATUS, OUT as `drgnx-platform-call' gives them), or nil.
+WHAT, when given, ends the timeout message (\"the window was not moved\")."
+  (cond ((eq status 'timeout)
+         (format "%s did not answer within %g s%s" (drgnx-platform-wm--label wm) (plist-get ctx :timeout)
+                 (if what (concat "; " what) "")))
+        ((eq status 'error)
+         (or (drgnx-platform-wm--json-error out)
+             (let ((s (string-trim (or out ""))))
+               (if (string-empty-p s) (format "%s failed" (drgnx-platform-wm--tool wm)) s))))
+        (t (drgnx-platform-wm--json-error out))))
+
+(defun drgnx-platform-wm--run (wm ctx until args fail k)
+  "Run the tool of WM with ARGS and call K with STATUS and OUTPUT, inside the operation's deadline UNTIL
+\(a `float-time').  A signal in K is passed to FAIL as (:error MESSAGE)."
+  (drgnx-platform-ctx-call
+   (plist-put (copy-sequence ctx) :timeout (max 0.05 (- until (float-time))))
+   (cons (drgnx-platform-wm--tool wm) args)
+   (lambda (status out)
+     (condition-case err (funcall k status out)
+       (error (funcall fail (list :error (error-message-string err))))))))
+
+(defun drgnx-platform-wm--tree (wm ctx until what fail k)
+  "Read the window tree; K gets (TREE ERROR): the parsed tree or nil, and a message or nil."
+  (drgnx-platform-wm--run
+   wm ctx until '("-t" "get_tree") fail
+   (lambda (status out)
+     (let ((err (drgnx-platform-wm--failure wm ctx status out what)))
+       (funcall k (and (not err) (drgnx-platform-wm--parse out)) err)))))
+
+(defun drgnx-platform-wm--command (wm ctx until what command fail k)
+  "Run COMMAND (one argument); K gets nil or the message of the failure."
+  (drgnx-platform-wm--run
+   wm ctx until (list command) fail
+   (lambda (status out) (funcall k (drgnx-platform-wm--failure wm ctx status out what)))))
+
+(defun drgnx-platform-wm--monitors (wm ctx callback)
+  "The adapter's :monitors for WM."
+  (drgnx-platform-wm--need-tool wm)
+  (let ((until (+ (float-time) (plist-get ctx :timeout))))
+    (drgnx-platform-wm--run
+     wm ctx until '("-t" "get_outputs") callback
+     (lambda (status out)
+       (let ((err (drgnx-platform-wm--failure wm ctx status out nil)))
+         (funcall callback
+                  (cond (err (list :error err))
+                        ((drgnx-platform-wm--sway-monitors out))
+                        (t (list :error (format "%s lists no active output" (drgnx-platform-wm--label wm)))))))))))
+
+(defun drgnx-platform-wm--move-con (wm ctx until con monitor focus callback)
+  "Move CON to MONITOR's output; with FOCUS take focus again, and keep a fullscreen window fullscreen.
+Task 1 found fullscreen kept by the move; `fullscreen enable' is idempotent, so it is re-applied anyway.
+CALLBACK gets `ok' or (:error MESSAGE)."
+  (let* ((sel (drgnx-platform-wm--selector wm con)) (what "the window was not moved")
+         (fail callback))
+    (drgnx-platform-wm--command
+     wm ctx until what (format "%s move container to output %s" sel (drgnx-platform-wm--output-arg monitor)) fail
+     (lambda (err)
+       (let ((more (append (and focus (list (format "%s focus" sel)))
+                           (and (plist-get con :fullscreen) (list (format "%s fullscreen enable" sel))))))
+         (cond (err (funcall callback (list :error err)))
+               ((null more) (funcall callback 'ok))
+               (t (drgnx-platform-wm--command
+                   wm ctx until what (string-join more "; ") fail
+                   (lambda (err) (funcall callback (if err (list :error err) 'ok)))))))))))
+
+(defun drgnx-platform-wm--own-focused-con (wm tree frame)
+  "The focused window con of TREE when it is FRAME's own and FRAME has focus, else nil."
+  (when (eq (frame-focus-state frame) t)
+    (let ((focused (seq-find (lambda (c) (plist-get c :focused)) (drgnx-platform-wm--cons tree))))
+      (and focused
+           (if (eq wm 'i3)
+               (eql (plist-get focused :window) (drgnx-platform-wm--xid frame))
+             (eql (plist-get focused :pid) (emacs-pid)))
+           focused))))
+
+(defun drgnx-platform-wm--move (wm ctx monitor callback)
+  "The adapter's :move for WM: only the focused window of this Emacs, and focus stays with it."
+  (drgnx-platform-wm--need-tool wm)
+  (let ((until (+ (float-time) (plist-get ctx :timeout))) (frame (plist-get ctx :frame))
+        (what "the window was not moved"))
+    (drgnx-platform-wm--output-arg monitor)
+    (drgnx-platform-wm--tree
+     wm ctx until what callback
+     (lambda (tree err)
+       (let ((con (and tree (drgnx-platform-wm--own-focused-con wm tree frame))))
+         (cond (err (funcall callback (list :error err)))
+               ((null tree) (funcall callback (list :error (format "%s gave no window tree" (drgnx-platform-wm--tool wm)))))
+               ((null con) (funcall callback (list :error drgnx-platform-wm--refusal)))
+               (t (drgnx-platform-wm--move-con wm ctx until con monitor t callback))))))))
+
+(defun drgnx-platform-wm--place (wm ctx monitor callback)
+  "The adapter's :place for WM: find the restored window, then move it without taking focus.
+sway: the frame's `title' parameter is set to \"drgnx [placing PID-N]\" so the window can be told from the
+other frames of this process; the previous value is put back however the placement ends.  The tree is read
+at `drgnx-platform-wm--place-polls' seconds, then every second, until the window shows or the deadline passes."
+  (drgnx-platform-wm--need-tool wm)
+  (let* ((frame (plist-get ctx :frame)) (start (float-time)) (until (+ start (plist-get ctx :timeout)))
+         (what "the window was not placed") (old-title (frame-parameter frame 'title))
+         (xid (and (eq wm 'i3) (drgnx-platform-wm--xid frame)))
+         (title (and (eq wm 'sway)
+                     (format "drgnx [placing %d-%d]" (emacs-pid) (cl-incf drgnx-platform-wm--place-counter))))
+         (done nil) (timers nil) (n 0) finish poll)
+    (drgnx-platform-wm--output-arg monitor)
+    (setq finish (lambda (result)
+                   (unless done
+                     (setq done t)
+                     (mapc #'cancel-timer timers)
+                     (when (and title (frame-live-p frame))
+                       (ignore-errors (set-frame-parameter frame 'title old-title)))
+                     (funcall callback result)))
+          poll (lambda ()
+                 (unless done
+                   (drgnx-platform-wm--tree
+                    wm ctx until what finish
+                    (lambda (tree err)
+                      (let ((con (and tree (if xid (drgnx-platform-wm--i3-find tree xid)
+                                             (drgnx-platform-wm--sway-find tree (emacs-pid) title)))))
+                        (cond (done)
+                              (err (funcall finish (list :error err)))
+                              (con (drgnx-platform-wm--move-con wm ctx until con monitor nil finish))
+                              (t (let ((at (+ start (or (nth n drgnx-platform-wm--place-polls)
+                                                        (+ 3.0 (- n (1- (length drgnx-platform-wm--place-polls))))))))
+                                   (cl-incf n)
+                                   (when (< at until)
+                                     (push (run-at-time (max 0 (- at (float-time))) nil poll) timers)))))))))))
+    (push (run-at-time (plist-get ctx :timeout) nil
+                       (lambda () (funcall finish (list :error (format "%s did not show the window within %g s; %s"
+                                                                       (drgnx-platform-wm--label wm)
+                                                                       (plist-get ctx :timeout) what)))))
+          timers)
+    (when title (set-frame-parameter frame 'title title))
+    ;; the first read waits for the first poll time, so the title has reached the window manager
+    (push (run-at-time (car drgnx-platform-wm--place-polls) nil
+                       (lambda () (setq n 1) (funcall poll)))
+          timers)))
+
+(dolist (wm '(sway i3))
+  (let ((wm wm))
+    (drgnx-platform-define-adapter
+     wm
+     :monitors (lambda (ctx callback) (drgnx-platform-wm--monitors wm ctx callback))
+     :move (lambda (ctx monitor callback) (drgnx-platform-wm--move wm ctx monitor callback))
+     :place (lambda (ctx monitor callback) (drgnx-platform-wm--place wm ctx monitor callback)))))
+
 (provide 'drgnx-platform)
 ;;; drgnx-platform.el ends here

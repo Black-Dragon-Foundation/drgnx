@@ -202,6 +202,20 @@ macOS tier to check), `gnome` (explains; the doctor asks Mutter's
 own key), `tty` and `none`. `sway`, `hyprland`, `niri`, `kwin` and `i3` are declared (detection, title, tool,
 version command); their monitor and move functions arrive with their milestone tasks.
 
+**sway and i3** share one implementation over `swaymsg` / `i3-msg` (section "sway and i3" of
+`drgnx-platform.el`). Monitors come from `-t get_outputs` (active outputs only; the output `name` is what the move
+command takes, and the monitor is matched to Emacs' by geometry). Moving is limited to Emacs' own window while
+it has focus: `-t get_tree`, the focused window must be this process (sway: `pid`; i3, whose tree has no pid: the
+`window` equal to the frame's `outer-window-id`) and the frame must have focus (`frame-focus-state`), else
+`(:error "drgnx moves only its own window while it has focus: ...")`; then `[con_id=N] move container to output
+NAME` (i3: `[id=XID]`) and `[…] focus` (the move does not carry focus), plus `fullscreen enable` for a fullscreen
+window. Restoring (`:place`) cannot rely on focus: the frame's `title` parameter is set to `drgnx [placing PID-N]`,
+the tree is read at 0.1, 0.3, 0.7, 1.5 and 3 s (then every second) until a window with this pid and title shows
+(i3: the window with the frame's X id; no title), the window is moved without taking focus, and the title is
+put back whatever happens. All calls of one operation share its deadline (the second call gets what is left), so
+the core's watchdog never fires first. Messages: "sway: swaymsg is not installed, so drgnx cannot move windows",
+"sway did not answer within 2 s; the window was not moved", or sway's own `error` text.
+
 **Another compositor** (river, Wayfire, labwc, Cosmic, ...): call `drgnx-platform-define-adapter` from your
 config. A new name goes before `x11` (so an adapter for an X window manager such as bspwm, awesome or xmonad
 wins over plain X) and before the catch-alls `tty`, `other-wayland` and `none`; its `:detect` is tried after the
