@@ -362,6 +362,25 @@ it and 28.2 ms without (5 runs each, within the runs' noise); the budget is 5 ms
 `test/unit/modules-record-test.el` covers it, including `startup-is-unchanged`: the shipped modules' startup stage
 gives the same statuses and commands with the recorder as without it.
 
+## Timers
+
+### The rule and its lint
+
+> A timer that outlives the current command goes through `drgnx-timer-*` with a key, an owner and a named function;
+> debounce, coalesce, throttle, poll and idle work use the primitives. `run-at-time 0 nil` deferrals out of filters
+> and sentinels may stay raw. A timer function that waits wraps the wait in `with-local-quit`.
+
+`drgnx-lint/timers-go-through-the-layer` (`test/unit/lint-buffers-timers-test.el`) holds the rule in `modules/` and
+`wb/`. It fails for a lambda, closure or `apply-partially` as the function of `run-at-time`, `run-with-timer`,
+`run-with-idle-timer`, `timer-create`, `timer-set-function` or any `drgnx-timer-*` call, and for a raw
+`run-at-time`, `run-with-timer`, `run-with-idle-timer`, `timer-set-time` or `timer-set-idle-time` unless its delay is
+the literal `0` and its repeat is nil or absent (`(run-at-time 0 nil FN …)` passes, lambda or not). Sites that
+predate the layer are counted per file in `drgnx-lint-timers--not-yet`; the lint compares each file's number of
+violations with its count, so a new raw timer fails ("use `drgnx-timer-*`") and so does a migrated one that leaves
+the count too high ("lower the count"). See [check.md](check.md#lints-on-the-source). The follow-path lint
+(`drgnx-lint/no-timers-in-workbench-follow-paths`) counts a `drgnx-timer-start`, `-soon`, `-debounce` or `-poll`
+form without `:idle t` as a timer start in `wb/`.
+
 ## Modal core (`drgnx-modal.el`)
 
 The engine-neutral half of modal editing; evil plugs into it (the `editor/evil` module, below), another engine could.
