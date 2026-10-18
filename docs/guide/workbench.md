@@ -32,6 +32,10 @@ first time it is asked for, also in the first second after a start (its module s
 (`drgnx-wb-show-view`, as a layout does; there are no clickable view tabs yet) swaps the sections in place, at the same width, and leaves focus where it was (a focus inside the
 sidebar moves to the new view's first section); with the sidebar hidden it shows it. Hiding and showing the sidebar brings back the view it had.
 
+**Turning a module off** hides its panes (a panel tab, a right-dock tab) and removes its sections and tabs; nothing
+else in the workbench moves. The size you gave a pane and its place in front are remembered: turn the module on again
+and the pane comes back at that size, and shows at once when its panel or dock is open with it in front.
+
 In the **Explorer**: a click on a folder opens or closes it; a click on a file opens it and keeps the Explorer
 focused (so you can keep browsing); a double click on a file moves to the editor. Keys: up/down (`n`/`p` in the
 Emacs profile, `j`/`k` in Vim), right expands or enters a folder, left collapses or goes to the parent, `RET`

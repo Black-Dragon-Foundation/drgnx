@@ -18,6 +18,9 @@
 (require 'drgnx-area)
 (require 'drgnx-state-intent)
 
+(require 'drgnx-modules-helpers)
+(require 'drgnx-frame-kind)
+
 (declare-function drgnx-layouts-define-pane "drgnx-layouts")
 
 (defvar drgnx-pane-backend 'areas
@@ -41,6 +44,13 @@
   "Every kind in definition order; with HOME (`left', `bottom', `right' or `editor') only that home's."
   (let ((all (mapcar #'car drgnx-pane--kinds)))
     (if home (seq-filter (lambda (k) (eq (plist-get (drgnx-pane-kind k) :home) home)) all) all)))
+
+(defvar drgnx-state--kind-owners nil
+  "Alist KIND → the module whose setup defined it (`drgnx-modules--current'), nil for a kind core defines at load.")
+
+(defun drgnx-state-kind-owner (kind)
+  "The module that defined pane KIND (its setup was running), or nil: core's, or not defined."
+  (alist-get kind drgnx-state--kind-owners))
 
 (defun drgnx-pane--spec (kind)
   (or (drgnx-pane-kind kind) (user-error "No pane kind %s" kind)))
@@ -69,6 +79,11 @@ SPEC's :buffer (a function, a buffer, or a name made if missing), else its :plac
       (when-let* ((name (cond ((stringp b) b) ((bufferp b) (buffer-name b)))))
         (concat "\\`" (regexp-quote name) "\\'")))))
 
+(defun drgnx-pane--matcher-used-by-other-p (matcher kind)
+  "Non-nil if an editor kind other than KIND places its buffer with MATCHER."
+  (seq-some (lambda (k) (and (not (eq (car k) kind)) (equal matcher (drgnx-pane--editor-matcher (cdr k)))))
+            drgnx-pane--kinds))
+
 (defvar drgnx-pane--last (make-hash-table :test 'eq :weakness 'key)
   "Frame → alist KIND → the last buffer the kind showed there.
 Kept out of frame parameters: a buffer object in one would make the saved frame state unreadable.")
@@ -89,10 +104,7 @@ Kept out of frame parameters: a buffer object in one would make the saved frame 
             (plist-put (copy-sequence spec) :tabs (assq-delete-all kind (copy-sequence (plist-get spec :tabs)))))))
   (when-let* ((matcher (and old (drgnx-pane--editor-matcher old)))
               ((not (equal matcher (drgnx-pane--editor-matcher spec))))
-              ;; another editor kind may still use it
-              ((not (seq-some (lambda (k)
-                                (and (not (eq (car k) kind)) (equal matcher (drgnx-pane--editor-matcher (cdr k)))))
-                              drgnx-pane--kinds))))
+              ((not (drgnx-pane--matcher-used-by-other-p matcher kind))))
     (setq drgnx-rules--table (assoc-delete-all matcher drgnx-rules--table)))
   (pcase (plist-get spec :home)
     ('left
@@ -205,6 +217,57 @@ ONTO).  The `areas' backend has no :move and no :stack: moving panes needs the g
     (unless fn (error "No %s operation for pane backend %s" op drgnx-pane-backend))
     (apply fn args)))
 
+;;;; Ownership: a kind belongs to the module whose setup defined it
+
+(defun drgnx-pane-undefine-kind (kind)
+  "Remove pane KIND: from `drgnx-pane--kinds' and the owner table, and from its dock section, area tab or editor
+place rule (an editor rule another kind shares stays).  Where KIND shows, the dock or area closes its window
+\(`drgnx-wb-undefine-section' and `-tab'); nothing is noted as intent.  Non-nil if KIND was defined."
+  (when-let* ((spec (drgnx-pane-kind kind)))
+    (pcase (plist-get spec :home)
+      ('left (drgnx-wb-undefine-section kind))
+      ((or 'bottom 'right) (drgnx-wb-undefine-tab (drgnx-pane--area kind) kind))
+      ('editor
+       (when-let* ((matcher (drgnx-pane--editor-matcher spec))
+                   ((not (drgnx-pane--matcher-used-by-other-p matcher kind))))
+         (drgnx-wb-unplace matcher))))
+    (setq drgnx-pane--kinds (assq-delete-all kind drgnx-pane--kinds)
+          drgnx-state--kind-owners (assq-delete-all kind drgnx-state--kind-owners))
+    t))
+
+(defun drgnx-pane--teardown-kind (kind prev)
+  "The undo of KIND's definition, while it is still the module's: hide KIND, put PREV back or remove KIND.
+PREV is nil (KIND was not defined before) or (SPEC OWNER), the definition this one replaced.  An area's front
+tab is intent and survives: it is read first and noted `:by teardown' after the tab is gone, so the module
+turned on again finds it in front.  The hide is `:by teardown', which keeps a size you chose.  A left kind is
+not hidden: that would close the whole dock; its section just goes."
+  (let ((home (plist-get (drgnx-pane-kind kind) :home)) fronts)
+    (when-let* ((area (alist-get home drgnx-pane--areas)))
+      (dolist (frame (frame-list))
+        (when (drgnx-state-workbench-frame-p frame)
+          (when (eq (drgnx-state-intent frame :front area) kind) (push (cons frame area) fronts))
+          (when (drgnx-pane-window kind frame)
+            (with-selected-frame frame (drgnx-pane-hide kind :by 'teardown))))))
+    (if prev
+        (let ((old (car prev)))
+          (drgnx-pane--call :define kind old (drgnx-pane-kind kind))
+          (setf (alist-get kind drgnx-pane--kinds) old
+                (alist-get kind drgnx-state--kind-owners) (cadr prev)))
+      (drgnx-pane-undefine-kind kind))
+    (pcase-dolist (`(,frame . ,area) fronts)
+      (when (frame-live-p frame) (drgnx-state-note-intent frame :front area kind :by 'teardown)))))
+
+(defun drgnx-pane--show-again (kind)
+  "Show the new KIND again `:by teardown' on each frame where its area shows and has KIND in front: the
+module it belongs to was turned off, and on again, while the area stayed up."
+  (when-let* (((eq drgnx-pane-backend 'areas))
+              (area (drgnx-pane--area kind)))
+    (dolist (frame (frame-list))
+      (when (and (drgnx-state-workbench-frame-p frame) (eq (drgnx-state-intent frame :front area) kind)
+                 (drgnx-wb-area-window area frame))
+        (condition-case err (with-selected-frame frame (drgnx-pane-show kind :by 'teardown))
+          (error (message "drgnx: showing pane %s again failed: %s" kind (error-message-string err))))))))
+
 ;;;; The API
 
 (cl-defun drgnx-pane-define-kind (kind &key title buffer placeholder home size view slot height fill on-show
@@ -219,15 +282,29 @@ VIEW: the sidebar view a `left' kind belongs to.
 SLOT and HEIGHT: as `drgnx-wb-define-section's.
 FILL: a function of the window, as `drgnx-layouts-define-pane's filler.
 ON-SHOW and ON-FOCUS: functions of the window.
-STACK: the kind this one stacks with by default (the grid reads it)."
+STACK: the kind this one stacks with by default (the grid reads it).
+Called from a module's setup, the definition records the module as the kind's owner (`drgnx-state-kind-owner')
+and its undo \"pane kind KIND\": KIND hidden `:by teardown' where it shows (its size, front tab and places
+are kept as intent), then the previous definition put back or `drgnx-pane-undefine-kind' — only while KIND is
+still the one defined here.  Defining a new KIND that is in front in an area that shows shows it again."
   (let ((home (or home 'bottom)))
     (unless (memq home drgnx-pane--homes) (user-error "Bad pane home %s" home))
     (let ((spec (list :title title :buffer buffer :placeholder placeholder :home home :size size :view view
                       :slot slot :height height :fill fill :on-show on-show :on-focus on-focus :stack stack))
-          (old (drgnx-pane-kind kind)))
+          (old (drgnx-pane-kind kind)) (old-owner (drgnx-state-kind-owner kind)))
       (drgnx-pane--call :define kind spec old)         ; first: an error leaves the kinds as they were
       (if old (setf (alist-get kind drgnx-pane--kinds) spec)       ; a new kind goes last, a redefined one stays put
         (setq drgnx-pane--kinds (append drgnx-pane--kinds (list (cons kind spec)))))
+      (setf (alist-get kind drgnx-state--kind-owners) drgnx-modules--current)
+      (when (drgnx-modules--recording-p)
+        (let* ((target (list 'pane-kind kind)) (box (drgnx-module--claim target (and old (list old old-owner)))))
+          (drgnx-modules-push-undo
+           (format "pane kind %s" kind)
+           (lambda ()
+             (drgnx-module--release target box
+                                    (lambda () (eq (drgnx-pane-kind kind) spec))
+                                    (lambda (prev) (drgnx-pane--teardown-kind kind prev)))))))
+      (unless old (drgnx-pane--show-again kind))
       (when fill
         (with-eval-after-load 'drgnx-layouts (drgnx-layouts-define-pane kind fill)))
       kind)))
