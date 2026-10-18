@@ -38,18 +38,23 @@ is undone after BODY."
          (drgnx-persist-state-functions (bound-and-true-p drgnx-persist-state-functions))
          (drgnx-persist-after-restore-functions (bound-and-true-p drgnx-persist-after-restore-functions))
          (ring-bell-function ring-bell-function) (use-dialog-box use-dialog-box)
-         (use-short-answers use-short-answers) (inhibit-startup-screen inhibit-startup-screen))
-     (drgnx--core-commands)
-     (drgnx-modules-load-directory (expand-file-name "modules" drgnx-dir))
-     (drgnx-modules-run 'startup)
-     (drgnx-command-define 'replace-in-files :category "Search" :title "Replace in Files" :command #'ignore :doc "test")
-     (drgnx-command-define 'rename-symbol :category "Search" :title "Rename Symbol" :command #'ignore :doc "test")
-     (when drgnx-keys-test--later-stages
-       ;; A module that needs a package (magit, avy, websocket, …) stays out whatever this machine has installed.
-       ;; (Another test file's packages cannot be loaded here: each file runs in an Emacs of its own.)
-       (cl-letf (((symbol-function 'locate-library) (lambda (&rest _) nil)))
-         (dolist (stage (cdr drgnx-modules-stages)) (drgnx-modules-run stage))))
-     ,@body))
+         (use-short-answers use-short-answers) (inhibit-startup-screen inhibit-startup-screen)
+         ;; core/basics turns the trust guards on: put them back as they were, the trusted set untouched
+         (trust-was (bound-and-true-p drgnx-trust-mode)) (trusted-content trusted-content))
+     (unwind-protect
+         (progn
+           (drgnx--core-commands)
+           (drgnx-modules-load-directory (expand-file-name "modules" drgnx-dir))
+           (drgnx-modules-run 'startup)
+           (drgnx-command-define 'replace-in-files :category "Search" :title "Replace in Files" :command #'ignore :doc "test")
+           (drgnx-command-define 'rename-symbol :category "Search" :title "Rename Symbol" :command #'ignore :doc "test")
+           (when drgnx-keys-test--later-stages
+             ;; A module that needs a package (magit, avy, websocket, …) stays out whatever this machine has installed.
+             ;; (Another test file's packages cannot be loaded here: each file runs in an Emacs of its own.)
+             (cl-letf (((symbol-function 'locate-library) (lambda (&rest _) nil)))
+               (dolist (stage (cdr drgnx-modules-stages)) (drgnx-modules-run stage))))
+           ,@body)
+       (when (fboundp 'drgnx-trust-mode) (drgnx-trust-mode (if trust-was 1 -1))))))
 
 (defun drgnx-keys-test--resolve (layers &rest args)
   (drgnx-keys-test--with-core-commands

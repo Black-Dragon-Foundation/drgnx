@@ -4,13 +4,13 @@
 
 ;;; Commentary:
 ;; Files from a folder the user has not trusted must not make Emacs run checkers or code they did not ask for.
-;; The trusted set is Emacs's own `trusted-content': drgnx's checkout, its config dir, its packages dir, and the
+;; The trusted set is Emacs's own `trusted-content': drgnx's checkout, config and packages dirs, Emacs's Lisp, and the
 ;; folders the user trusted with Trust This Folder (kept in trusted-folders.eld in drgnx's state dir).  Outside it:
 ;; - Flymake runs only backends marked `flymake-always-safe' (eglot's is): an advice on builds whose
 ;;   `flymake--run-backend' has no trust check of its own;
 ;; - a file's `read-symbol-shorthands' is held back (and given back when its folder is trusted);
-;; - always: TRAMP ignores names whose user@host part holds control or shell characters, and compile or grep
-;;   output in a local buffer never names a remote file or directory.
+;; - always: TRAMP ignores names with a control character, or whose user@host part holds a shell character,
+;;   compile or grep output in a local buffer never names a remote file or directory, and ffap pings no host.
 ;; A quiet "restricted" mark in the mode line shows a local file outside the trusted set; clicking it trusts the
 ;; folder.  Nothing here prompts.  docs/guide/security.md.
 
@@ -43,21 +43,26 @@
   (file-name-as-directory (abbreviate-file-name (file-truename (expand-file-name dir)))))
 
 (defun drgnx-trust--builtin ()
-  "drgnx's own trees: the checkout, the config dir, the packages dir."
-  (delete-dups (mapcar #'drgnx-trust--entry (list drgnx-dir (drgnx-user-dir) (drgnx-elpa-dir)))))
+  "drgnx's own trees (the checkout, the config dir, the packages dir) and Emacs's own Lisp."
+  (delete-dups (mapcar #'drgnx-trust--entry (list drgnx-dir (drgnx-user-dir) (drgnx-elpa-dir) lisp-directory))))
+
+(defun drgnx-trust--read ()
+  "trusted-folders.eld: (t . FOLDERS), (t) when there is none, nil when it cannot be read."
+  (let ((file (drgnx-trust-folders-file)))
+    (if (not (file-exists-p file)) (list t)
+      (ignore-errors
+        (let ((data (with-temp-buffer (insert-file-contents file) (read (current-buffer)))))
+          (and (plist-member data :folders) (cons t (seq-filter #'stringp (plist-get data :folders)))))))))
 
 (defun drgnx-trust-folders ()
   "The folders the user trusted, as trusted-folders.eld holds them."
-  (let ((file (drgnx-trust-folders-file)))
-    (ignore-errors
-      (seq-filter #'stringp
-                  (plist-get (and (file-readable-p file)
-                                  (with-temp-buffer (insert-file-contents file) (read (current-buffer))))
-                             :folders)))))
+  (cdr (drgnx-trust--read)))
 
 (defun drgnx-trust--write (folders)
+  "Write FOLDERS; a file that cannot be read is kept aside as .bak first, never overwritten."
   (let* ((file (drgnx-trust-folders-file)) (dir (file-name-directory file)))
     (make-directory dir t)
+    (unless (drgnx-trust--read) (rename-file file (concat file ".bak") t))
     (let ((tmp (make-temp-file (expand-file-name ".trusted-folders-" dir))))
       (with-temp-file tmp
         (insert ";; drgnx: the folders you trusted (Trust This Folder; docs/guide/security.md)\n")
@@ -162,12 +167,13 @@ An error says nothing either way: nil, so that drgnx's check is added."
                (* (? (+ (any alnum "-")) ":") (* (not (any ":|["))) "|")
                (? (+ (any alnum "-")) ":")
                ;; the last USER@HOST#PORT, up to its ":" (or the "[" of an IPv6 host)
-               (or "-"                                   ; an ssh option
+               (or (seq "-" (not (any ":")))              ; a user starting with -: an ssh option (/-: is a method)
+                   (seq (* (not (any ":|[@"))) "@-")     ; a host starting with -
                    (seq (* (not (any ":|[")))
                         (or (any "](){}`;&<>!'\"\\*?," blank)
                             (seq "$" (or eos (not (any "_" alnum))))))))))
-  "Names TRAMP must not handle: a control character anywhere, or a user@host part that starts with - or holds a shell
-character.  $VAR is fine: TRAMP expands it before it checks this.")
+  "Names TRAMP must not handle: a control character anywhere, or a user@host part whose user or host starts with -
+or that holds a shell character.  $VAR is fine: TRAMP expands it before it checks this.")
 
 (defun drgnx-trust--tramp-guard (on)
   "Add (ON non-nil) or remove drgnx's part of `tramp-ignored-file-name-regexp', keeping the user's."
@@ -217,6 +223,12 @@ file or directory name is quoted, so that visiting the message opens nothing rem
   (require 'project)
   (let ((pr (project-current nil))) (if pr (project-root pr) default-directory)))
 
+(defun drgnx-trust--broad-p (entry)
+  "Is ENTRY (as `drgnx-trust--entry' gives it) `/', home or one of its ancestors, or the temp dir?"
+  (let ((dir (file-truename (expand-file-name entry))))
+    (or (string-prefix-p dir (file-name-as-directory (file-truename "~")))
+        (equal dir (file-name-as-directory (file-truename temporary-file-directory))))))
+
 (defun drgnx-trust--user-entry ()
   "The user-trusted folder holding this buffer's file, or nil."
   (when buffer-file-truename
@@ -230,7 +242,7 @@ file or directory name is quoted, so that visiting the message opens nothing rem
       (when buffer-file-name
         (let ((was drgnx-trust--state))
           (drgnx-trust--update)
-          (cond ((and drgnx-trust--held-shorthands (trusted-content-p))
+          (cond ((and drgnx-trust--held-shorthands (eq drgnx-trust--state 'trusted))
                  (setq-local read-symbol-shorthands drgnx-trust--held-shorthands)
                  (setq drgnx-trust--held-shorthands nil)
                  (when (bound-and-true-p font-lock-mode) (font-lock-flush)))
@@ -247,6 +259,8 @@ file or directory name is quoted, so that visiting the message opens nothing rem
 its files.  Kept in drgnx's state (trusted-folders.eld)."
   (interactive)
   (let* ((e (drgnx-trust--entry (or dir (drgnx-trust--folder)))) (folders (drgnx-trust-folders)))
+    (when (drgnx-trust--broad-p e)
+      (user-error "%s holds far more than one project: open a file in a project folder below it and trust that" e))
     (unless (member e folders) (drgnx-trust--write (append folders (list e))))
     (drgnx-trust--add (list e))
     (drgnx-trust--refresh)
@@ -265,6 +279,21 @@ its files.  Kept in drgnx's state (trusted-folders.eld)."
     (message "No longer trusted: %s" e)
     e))
 
+;;;; ffap: never ping a host name taken from text
+
+(defvar ffap-machine-p-known)
+(defvar auto-revert-remote-files)
+
+(defvar drgnx-trust--ffap-set nil "drgnx set `ffap-machine-p-known' to `reject' (from its default, `ping').")
+
+(defun drgnx-trust--ffap-guard (on)
+  "Set (ON non-nil) `ffap-machine-p-known' to `reject' while it is at its default; put the default back after."
+  (cond ((and on (or (not (boundp 'ffap-machine-p-known)) (eq ffap-machine-p-known 'ping)))
+         (setq ffap-machine-p-known 'reject drgnx-trust--ffap-set t))
+        ((and (not on) drgnx-trust--ffap-set)
+         (when (eq ffap-machine-p-known 'reject) (setq ffap-machine-p-known 'ping))
+         (setq drgnx-trust--ffap-set nil))))
+
 ;;;; The mode, and what other parts of drgnx ask
 
 (define-minor-mode drgnx-trust-mode
@@ -274,6 +303,7 @@ its files.  Kept in drgnx's state (trusted-folders.eld)."
       (progn
         (drgnx-trust--add (append (drgnx-trust--builtin) (drgnx-trust-folders)))
         (drgnx-trust--tramp-guard t)
+        (drgnx-trust--ffap-guard t)
         ;; eglot's diagnostics come from a language server, not from running the file: safe on every build
         (function-put 'eglot-flymake-backend 'flymake-always-safe t)
         (if (featurep 'flymake) (drgnx-trust--flymake-guard) (eval-after-load 'flymake #'drgnx-trust--flymake-guard))
@@ -285,6 +315,7 @@ its files.  Kept in drgnx's state (trusted-folders.eld)."
         (add-to-list 'global-mode-string drgnx-trust--mark-segment t)
         (dolist (b (buffer-list)) (with-current-buffer b (drgnx-trust--update))))
     (drgnx-trust--tramp-guard nil)
+    (drgnx-trust--ffap-guard nil)
     (advice-remove 'flymake--run-backend #'drgnx-trust--flymake-run-backend)
     (remove-hook 'before-hack-local-variables-hook #'drgnx-trust--drop-shorthands)
     (advice-remove 'compilation-get-file-structure #'drgnx-trust--compile-file-args)
@@ -299,7 +330,9 @@ its files.  Kept in drgnx's state (trusted-folders.eld)."
 :mode — `drgnx-trust-mode'; :tramp — drgnx's part of `tramp-ignored-file-name-regexp' is there; :flymake —
 `emacs' (this Emacs checks trust itself), `drgnx' (drgnx's check), `on-load' (added when Flymake loads) or nil;
 :eglot-safe — eglot's backend runs in untrusted buffers; :shorthands, :compile — those guards are on;
-:trusted — `trusted-content'."
+:ffap — `ffap-machine-p-known' is `reject'; :enable-remote-dir-locals, :auto-revert-remote-files,
+:remote-file-name-inhibit-auto-save-visited — those settings, as they are (drgnx does not set them; Emacs's
+defaults are nil); :trusted — `trusted-content'."
   (list :mode drgnx-trust-mode
         :tramp (and (stringp (bound-and-true-p tramp-ignored-file-name-regexp))
                     (string-search drgnx-trust-tramp-ignored-regexp tramp-ignored-file-name-regexp) t)
@@ -310,6 +343,10 @@ its files.  Kept in drgnx's state (trusted-folders.eld)."
         :shorthands (and (memq #'drgnx-trust--drop-shorthands (default-value 'before-hack-local-variables-hook)) t)
         :compile (and (advice-member-p #'drgnx-trust--compile-file-args 'compilation-get-file-structure)
                       (advice-member-p #'drgnx-trust--compile-dir-props 'compilation-directory-properties) t)
+        :ffap (eq (bound-and-true-p ffap-machine-p-known) 'reject)
+        :enable-remote-dir-locals enable-remote-dir-locals
+        :auto-revert-remote-files (bound-and-true-p auto-revert-remote-files)
+        :remote-file-name-inhibit-auto-save-visited remote-file-name-inhibit-auto-save-visited
         :trusted trusted-content))
 
 (defun drgnx-trust-link-ok-p (target &optional source)

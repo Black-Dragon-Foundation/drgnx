@@ -9,25 +9,32 @@
 (require 'tramp-sh)
 (require 'flymake)
 (require 'compile)
+(require 'ffap)
+(require 'autorevert)
 
 (defmacro drgnx-trust-test--with (spec &rest body)
   "BODY with the guards on, its own `trusted-content' and state dir, and (car SPEC) bound to a fresh folder
 nobody trusted.  Buffers BODY opens are killed after it."
   (declare (indent 1))
   (let ((dir (car spec)))
-    `(let* ((was drgnx-trust-mode) (buffers (buffer-list))
-            (state (make-temp-file "drgnx-trust-state" t))
-            (,dir (file-name-as-directory (make-temp-file "drgnx-trust-proj" t)))
-            (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment)))
+    ;; The mode is put back as it was only outside the temp state and `trusted-content' bindings, so that the
+    ;; test's folders never reach the global trusted set.
+    `(let ((was drgnx-trust-mode))
        (unwind-protect
-           (let ((trusted-content nil) (tramp-ignored-file-name-regexp nil))
-             (drgnx-trust-mode 1)
-             (unwind-protect (progn ,@body) (drgnx-trust-mode -1)))
-         (dolist (b (buffer-list))
-           (unless (memq b buffers) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b)))
-         (when was (drgnx-trust-mode 1))
-         (delete-directory state t)
-         (delete-directory ,dir t)))))
+           (let* ((buffers (buffer-list))
+                  (state (make-temp-file "drgnx-trust-state" t))
+                  (,dir (file-name-as-directory (make-temp-file "drgnx-trust-proj" t)))
+                  (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment)))
+             (unwind-protect
+                 (let ((trusted-content nil) (tramp-ignored-file-name-regexp nil)
+                       (ffap-machine-p-known 'ping))
+                   (drgnx-trust-mode 1)
+                   (unwind-protect (progn ,@body) (drgnx-trust-mode -1)))
+               (dolist (b (buffer-list))
+                 (unless (memq b buffers) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b)))
+               (delete-directory state t)
+               (delete-directory ,dir t)))
+         (drgnx-trust-mode (if was 1 -1))))))
 
 (defun drgnx-trust-test--file (dir name text)
   (let ((f (expand-file-name name dir)))
@@ -47,19 +54,31 @@ nobody trusted.  Buffers BODY opens are killed after it."
 (ert-deftest drgnx-trust/crafted-tramp-names-stay-local ()
   (drgnx-trust-test--with (_dir)
     (should (= 0 (drgnx-trust-test--no-connections
-                  ;; a user@host part with a control or shell character, a leading -, a newline before the name
+                  ;; a control character anywhere; a user@host part with a shell character, or a user or host starting with -
                   (dolist (n (list "/ssh:a&b@h:/x" "/ssh:a!b@h:/x" "/ssh:a,b@h:/x" "/ssh:a;b@h:/x" "/ssh:a`b@h:/x"
                                    "/ssh:a\001b@h:/x" "/ssh:a\tb@h:/x" "/ssh:-x@h:/x" "/tmp/x\n/ssh:h:/x"
-                                   "/ssh:a@b|sudo:r&t@b:/x"))
+                                   "/ssh:a@b|sudo:r&t@b:/x" "/ssh:a@-h:/x" "/ssh:-h:/x"))
                     (should-not (tramp-tramp-file-p n))
                     (should-not (file-remote-p n)))
                   ;; legitimate names stay remote (file-remote-p answers without connecting)
                   (dolist (n (list "/ssh:host:/path" "/ssh:user@host#2222:/a (1).txt" "/ssh:a@b|sudo:root@b:/x"
-                                   "/podman:name:/" "/ssh:user@[::1]:/x" "/sudo::/etc/hosts" "/ssh:h:/a;b&c!d"))
+                                   "/podman:name:/" "/ssh:user@[::1]:/x" "/sudo::/etc/hosts" "/ssh:h:/a;b&c!d"
+                                   "/-:host:/x" "/-:user@host:/x" "/ssh:a@b|-:root@b:/x" "/ssh:a-b@h-c:/x"))
                     (should (tramp-tramp-file-p n))
                     (should (file-remote-p n)))
                   (let ((process-environment (cons "USER=someone" process-environment)))
                     (should (tramp-tramp-file-p "/ssh:$USER@host:/x"))))))))
+
+(ert-deftest drgnx-trust/a-symlink-to-a-refused-name-stays-local ()
+  ;; `file-truename' follows a link in Lisp: the target is checked as a name of its own
+  (drgnx-trust-test--with (dir)
+    (let ((link (expand-file-name "link" dir)))
+      (make-symbolic-link "/ssh:a&b@h:/x" link)
+      (should (= 0 (drgnx-trust-test--no-connections
+                    (should (string-suffix-p "/ssh:a&b@h:/x" (file-truename link)))
+                    (should-not (file-remote-p (file-truename link)))
+                    (with-current-buffer (find-file-noselect link)
+                      (should-not (file-remote-p default-directory)))))))))
 
 ;;;; Flymake
 
@@ -135,6 +154,34 @@ nobody trusted.  Buffers BODY opens are killed after it."
       (should-not (member e trusted-content))
       (should-error (drgnx-trust-untrust-folder drgnx-dir) :type 'user-error))))
 
+(ert-deftest drgnx-trust/broad-folders-are-never-trusted ()
+  ;; `/', home, an ancestor of home, the temp dir: each would trust far more than a project
+  (drgnx-trust-test--with (dir)
+    (let ((inhibit-message t))
+      (dolist (d (list "/" "~/" (file-name-directory (directory-file-name (expand-file-name "~")))
+                       temporary-file-directory))
+        (should-error (drgnx-trust-folder d) :type 'user-error)
+        (should-not (member (drgnx-trust--entry d) trusted-content)))
+      (should-not (drgnx-trust-folders))
+      ;; a file straight in home: its folder is home, refused the same way
+      (let ((f (expand-file-name "notes.txt" "~")))
+        (with-temp-file f (insert "x\n"))
+        (unwind-protect (with-current-buffer (find-file-noselect f)
+                          (should-error (drgnx-trust-folder) :type 'user-error))
+          (delete-file f)))
+      (should (drgnx-trust-folder dir)))))                       ; a project folder is fine
+
+(ert-deftest drgnx-trust/an-unreadable-folders-file-is-kept-aside ()
+  (drgnx-trust-test--with (dir)
+    (let ((file (drgnx-trust-folders-file)) (inhibit-message t))
+      (make-directory (file-name-directory file) t)
+      (with-temp-file file (insert "(:version 1 :folders (\"/x/\""))     ; cut short
+      (should-not (drgnx-trust-folders))
+      (drgnx-trust-folder dir)
+      (should (equal (drgnx-trust-folders) (list (drgnx-trust--entry dir))))
+      (should (equal (with-temp-buffer (insert-file-contents (concat file ".bak")) (buffer-string))
+                     "(:version 1 :folders (\"/x/\"")))))
+
 (ert-deftest drgnx-trust/the-user-settings-are-kept ()
   (drgnx-trust-test--with (_dir)
     (let ((trusted-content '("/mine/")) (tramp-ignored-file-name-regexp "\\`/nope:"))
@@ -142,6 +189,7 @@ nobody trusted.  Buffers BODY opens are killed after it."
       (should (equal (car trusted-content) "/mine/"))
       (should (member (drgnx-trust--entry drgnx-dir) trusted-content))
       (should (member (drgnx-trust--entry (drgnx-elpa-dir)) trusted-content))
+      (should (member (drgnx-trust--entry lisp-directory) trusted-content))      ; Emacs's own Lisp
       (should (equal tramp-ignored-file-name-regexp (concat "\\`/nope:\\|" drgnx-trust-tramp-ignored-regexp)))
       (drgnx-trust-mode 1)                                       ; twice: nothing added twice
       (should (equal tramp-ignored-file-name-regexp (concat "\\`/nope:\\|" drgnx-trust-tramp-ignored-regexp)))
@@ -244,13 +292,38 @@ connects) goes on, anything else returns its first argument."
       (should (memq (plist-get s :flymake) '(emacs drgnx)))
       (should (plist-get s :eglot-safe))
       (should (plist-get s :shorthands))
-      (should (plist-get s :compile)))
+      (should (plist-get s :compile))
+      (should (plist-get s :ffap)))
     (drgnx-trust-mode -1)
     (let ((s (drgnx-trust-guards-status)))
       (should-not (plist-get s :mode))
       (should-not (plist-get s :tramp))
       (should-not (plist-get s :shorthands))
       (should-not (plist-get s :compile))
+      (should-not (plist-get s :ffap))
       (should-not (eq (plist-get s :flymake) 'drgnx)))))
+
+(ert-deftest drgnx-trust/remote-settings-ffap-set-the-others-pinned ()
+  (drgnx-trust-test--with (_dir)
+    ;; ffap never pings a host name taken from text, while the user left it at its default
+    (should (eq ffap-machine-p-known 'reject))
+    (drgnx-trust-mode -1)
+    (should (eq ffap-machine-p-known 'ping))
+    (let ((ffap-machine-p-known 'accept))                       ; the user's own choice stays
+      (drgnx-trust-mode 1)
+      (should (eq ffap-machine-p-known 'accept))
+      (drgnx-trust-mode -1)
+      (should (eq ffap-machine-p-known 'accept)))
+    (drgnx-trust-mode 1)
+    ;; not set by drgnx, pinned at Emacs's defaults and reported (auto-save-visited-mode, off in drgnx, would save
+    ;; remote files: its inhibit option defaults to nil on 30.2 and 31.1)
+    (should-not enable-remote-dir-locals)
+    (should-not auto-revert-remote-files)
+    (should-not remote-file-name-inhibit-auto-save-visited)
+    (should-not auto-save-visited-mode)
+    (let ((s (drgnx-trust-guards-status)))
+      (should (equal (list (plist-get s :enable-remote-dir-locals) (plist-get s :auto-revert-remote-files)
+                           (plist-get s :remote-file-name-inhibit-auto-save-visited))
+                     '(nil nil nil))))))
 
 ;;; trust-test.el ends here
