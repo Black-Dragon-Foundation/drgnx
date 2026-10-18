@@ -21,6 +21,7 @@
 (require 'drgnx-surfaces)
 (require 'drgnx-keys)
 (require 'drgnx-keys-edit)
+(require 'drgnx-modal)
 
 (defcustom drgnx-shortcuts-chord-wait 1.0
   "Seconds to wait, after the first key recorded, for the second key of a chord."
@@ -47,11 +48,13 @@
 (defun drgnx-shortcuts--mapsym (spec) (cdr (drgnx-commands--keymap-spec spec)))
 
 (defun drgnx-shortcuts--where (spec)
-  "Where a key in keymap SPEC works: \"global\", or the name of the view or mode the keymap belongs to."
-  (pcase (drgnx-shortcuts--mapsym spec)
-    ('global-map "global")
-    ('evil-normal-state-map "normal state")
-    (m (replace-regexp-in-string "-\\(?:mode-\\|keys-\\)?map\\'" "" (string-remove-prefix "drgnx-" (symbol-name m))))))
+  "Where a key in keymap SPEC works: \"global\"; for a modal map, what `drgnx-modal-where' says (\"leader\" for the
+leader map, \"panels\", \"normal state\" …); else the name of the view or mode the keymap belongs to."
+  (let* ((m (drgnx-shortcuts--mapsym spec)) (modal (drgnx-modal-where m)))
+    (cond ((eq m 'global-map) "global")
+          ((equal modal "") "leader")
+          (modal)
+          (t (replace-regexp-in-string "-\\(?:mode-\\|keys-\\)?map\\'" "" (string-remove-prefix "drgnx-" (symbol-name m)))))))
 
 (defun drgnx-shortcuts--source (layer)
   "The source of a key from resolution LAYER: keys.eld, or the profile's name."
