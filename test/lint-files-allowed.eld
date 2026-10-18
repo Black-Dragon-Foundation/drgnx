@@ -4,10 +4,6 @@
 ;; row), or `never' with a :why that starts with its category: "a user's file", "a temporary file",
 ;; "a directory move", "its own lock protocol", "age writes it", "a developer tool" or "Lisp source".
 (
- (:file "core/drgnx-agent-config.el" :fn drgnx-agent-config-save-backup :what write-region :why "an agent's settings backup (text)" :until 25)
- (:file "core/drgnx-agent-config.el" :fn drgnx-agent-config-save-backup :what rename-file :why "an agent's settings backup (text)" :until 25)
- (:file "core/drgnx-agent-config.el" :fn drgnx-agent-config-write-text :what write-region :why "an agent's settings file (text)" :until 25)
- (:file "core/drgnx-agent-config.el" :fn drgnx-agent-config-write-text :what rename-file :why "an agent's settings file (text)" :until 25)
  (:file "core/drgnx-ai.el" :fn drgnx-ai--read :what read-site :why "ai.eld" :until 12)
  (:file "core/drgnx-ai.el" :fn drgnx-ai-confirm-project-route :what with-temp-file :why "ai-project-routes.eld" :until 12)
  (:file "core/drgnx-ai.el" :fn drgnx-ai-set-role :what with-temp-file :why "ai.eld" :until 12)
@@ -48,7 +44,6 @@
  (:file "core/drgnx-modules.el" :fn drgnx-modules-write-report :what with-temp-file :why "modules-report.eld" :until 10)
  (:file "core/drgnx-onboard.el" :fn drgnx-onboard--current-keys :what read-site :why "keys.eld (:layers read by onboarding; a reader of Task 11's file)" :until 11)
  (:file "core/drgnx-onboard.el" :fn drgnx-onboard--ask-test :what write-region :why "a temporary file: the greeting project of the ask test" :until never)
- (:file "core/drgnx-onboard.el" :fn drgnx-onboard--linux-desktop :what write-region :why "the Linux desktop entry (text)" :until 25)
  (:file "core/drgnx-pkg-activate.el" :fn drgnx-pkg--record-want :what with-temp-file :why "packages-wanted.eld" :until 13)
  (:file "core/drgnx-pkg-activate.el" :fn drgnx-pkg--record-want :what read-site :why "packages-wanted.eld" :until 13)
  (:file "core/drgnx-pkg.el" :fn drgnx-pkg--read-file :what read-site :why "packages.eld and drgnx.lock.eld" :until 13)
@@ -63,7 +58,6 @@
  (:file "core/drgnx-pkg.el" :fn drgnx-pkg-snapshot :what rename-file :why "a directory move: generations" :until never)
  (:file "core/drgnx-pkg.el" :fn drgnx-pkg--http-get :what write-region :why "a temporary file: a download body" :until never)
  (:file "core/drgnx-pkg.el" :fn drgnx-pkg--fetch :what rename-file :why "a directory move: the package cache" :until never)
- (:file "core/drgnx-pkg.el" :fn drgnx-pkg-service-unit :what write-region :why "the systemd unit (text)" :until 25)
  (:file "core/drgnx-projects.el" :fn drgnx-projects--board-update :what write-region :why "a user's file: the org board" :until never)
  (:file "core/drgnx-projects.el" :fn drgnx-projects--board-update :what rename-file :why "a user's file: the org board" :until never)
  (:file "core/drgnx-projects.el" :fn drgnx-projects--write-plan :what write-region :why "a user's file: a plan file" :until never)
@@ -78,9 +72,6 @@
  (:file "core/drgnx-surfaces.el" :fn drgnx-surfaces--usage-read :what read-site :why "command-usage.eld" :until 20)
  (:file "core/drgnx-surfaces.el" :fn drgnx-surfaces--usage-flush :what with-temp-file :why "command-usage.eld" :until 20)
  (:file "core/drgnx-surfaces.el" :fn drgnx-surfaces--usage-flush :what rename-file :why "command-usage.eld" :until 20)
- (:file "core/drgnx-surfaces.el" :fn drgnx-surfaces-export-markdown :what with-temp-file :why "the exported command reference (text)" :until 25)
- (:file "core/drgnx-surfaces.el" :fn drgnx-surfaces-export-markdown :what rename-file :why "the exported command reference (text)" :until 25)
- (:file "core/drgnx.el" :fn drgnx-open-user-config :what write-region :why "the user config template (text)" :until 25)
  (:file "wb/drgnx-explorer.el" :fn drgnx-explorer-new-file :what write-region :why "a user's file: the Explorer" :until never)
  (:file "wb/drgnx-explorer.el" :fn drgnx-explorer-rename :what rename-file :why "a user's file: the Explorer" :until never)
  (:file "wb/drgnx-explorer.el" :fn drgnx-explorer-paste :what rename-file :why "a user's file: the Explorer" :until never)

@@ -18,6 +18,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'json)
+(require 'drgnx-file)
 
 (defconst drgnx-agent-config-kinds '(claude codex gemini kimi)
   "The agents with a settings page.")
@@ -100,23 +101,12 @@ CALLBACK gets (:ok t :note STRING) or (:error STRING): at once for a file, later
       (insert-file-contents file))
     (buffer-string)))
 
-(defun drgnx-agent-config--temp-file (file)
-  "A new private temp file next to FILE."
-  (make-temp-file (concat (file-name-directory file) ".drgnx-tmp-")))
-
 (defun drgnx-agent-config-save-backup (file)
-  "Copy FILE to FILE.drgnx-bak (replacing the last backup), atomically, with FILE's modes."
-  (let ((tmp (drgnx-agent-config--temp-file file)))
-    (unwind-protect
-        (progn
-          (with-temp-buffer
-            (set-buffer-multibyte nil)
-            (insert-file-contents-literally file)
-            (let ((coding-system-for-write 'no-conversion))
-              (write-region nil nil tmp nil 'silent)))
-          (set-file-modes tmp (file-modes file))
-          (rename-file tmp (concat file ".drgnx-bak") t))
-      (when (file-exists-p tmp) (delete-file tmp)))))
+  "Copy FILE to FILE.drgnx-bak (replacing the last backup), atomically, with FILE's modes.
+The bytes go through `drgnx-file-write-text' (UTF-8 read and written back, so any byte survives)."
+  (let ((bak (drgnx-file-write-text (concat file ".drgnx-bak") (drgnx-agent-config-read-text file)
+                                    :mode (file-modes file))))
+    (set-file-modes bak (file-modes file))))                ; the layer keeps an old backup's mode
 
 (defun drgnx-agent-config--make-private-dirs (dir)
   "Make DIR and the parents that are missing, each new one with modes 0700."
@@ -149,14 +139,7 @@ FILE.  A symbolic link is written through.  Parent directories that are missing 
       (when verify (funcall verify text))
       (drgnx-agent-config--make-private-dirs (file-name-directory file))
       (when exists (drgnx-agent-config-save-backup file))
-      (let ((tmp (drgnx-agent-config--temp-file file)))
-        (unwind-protect
-            (progn
-              (let ((coding-system-for-write 'utf-8-unix))
-                (write-region text nil tmp nil 'silent))
-              (set-file-modes tmp (if exists (file-modes file) #o600))
-              (rename-file tmp file t))
-          (when (file-exists-p tmp) (delete-file tmp)))))
+      (drgnx-file-write-text file text :mode #o600))       ; an old file keeps its own modes
     file))
 
 (defun drgnx-agent-config--json-fail (file line message)

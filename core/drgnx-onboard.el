@@ -1377,8 +1377,7 @@ result reads: keep running; that platform part; the terminal note (`drgnx-onboar
                       (shell-quote-argument unit) (shell-quote-argument unit-target)
                       (shell-quote-argument desktop) (shell-quote-argument desktop-target))))
     (drgnx-pkg-service-unit (file-name-directory unit))
-    (make-directory (file-name-directory desktop) t)
-    (write-region drgnx-onboard-desktop-entry nil desktop nil 'silent)
+    (drgnx-file-write-text desktop drgnx-onboard-desktop-entry)
     (if (and (plist-get ctx :interactive)
              (y-or-n-p (format "Install the drgnx service and desktop entry into %s and %s%s? "
                                (file-name-directory unit-target) (file-name-directory desktop-target)

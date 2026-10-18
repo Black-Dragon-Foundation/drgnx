@@ -19,6 +19,7 @@
 (require 'subr-x)
 (require 'package)
 (require 'drgnx-paths)
+(require 'drgnx-file)
 (require 'drgnx-face-state)
 (require 'drgnx-modules)
 (require 'drgnx-pkg-activate)
@@ -1114,8 +1115,7 @@ user's step (docs/guide/packages.md)."
                          "")
                        "Restart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n")))
     (when dir
-      (make-directory dir t)
-      (write-region unit nil (expand-file-name "drgnx.service" dir) nil 'silent))
+      (drgnx-file-write-text (expand-file-name "drgnx.service" dir) unit))
     unit))
 
 ;;;; Status (for the doctor)

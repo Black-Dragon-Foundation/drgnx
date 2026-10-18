@@ -15,6 +15,7 @@
 (require 'drgnx-modules-record)
 (require 'drgnx-modules-helpers)
 (require 'drgnx-paths)
+(require 'drgnx-file)
 (require 'easymenu)
 (require 'seq)
 (require 'drgnx-tty-fallback)
@@ -560,12 +561,9 @@ no fallback layer).  Nil on a graphical frame and on a terminal that sends every
 
 (defun drgnx-surfaces-export-markdown (file)
   "Write the cheat sheet to FILE; return FILE.  Never prompts (safe for emacsclient).
-Writes a temp file and renames it over FILE: writing FILE directly would take Emacs' file lock,
-which asks \"changed on disk; really edit?\" when FILE is open in a stale buffer."
-  (let ((tmp (make-temp-file (expand-file-name ".emacs-keys-" (file-name-directory file)))))
-    (with-temp-file tmp (insert (drgnx-surfaces-markdown)))
-    (set-file-modes tmp #o644)
-    (rename-file tmp file t))
+Goes through `drgnx-file-write-text': a temp file renamed over FILE, so no Emacs file lock asks \"changed on disk;
+really edit?\" when FILE is open in a stale buffer.  An old FILE keeps its modes, a new one gets 0644."
+  (drgnx-file-write-text file (drgnx-surfaces-markdown))
   file)
 
 ;;;; Refresh

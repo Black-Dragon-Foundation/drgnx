@@ -1,5 +1,6 @@
 ;;; core-surfaces-test.el --- batch tests: surfaces generated from the registry -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-file)
 (require 'drgnx-surfaces)
 (require 'drgnx-modules)
 (require 'drgnx-modules-helpers)
@@ -21,6 +22,36 @@
      (setf (drgnx-cmd-bound (drgnx-commands-get 'b-cmd)) (list (cons "C-c b" 'drgnx-test-surf-map)))
      (setf (drgnx-cmd-bound (drgnx-commands-get 'a-cmd)) (list (cons "<f19>" nil) (cons "C-c a" nil)))
      ,@body))
+
+(ert-deftest drgnx-surfaces/the-export-is-atomic ()
+  (drgnx-test--with-commands
+   (let* ((dir (file-name-as-directory (make-temp-file "drgnx-export" t)))
+          (file (concat dir "sub/keys.md"))
+          (calls nil) (orig (symbol-function 'drgnx-file-write-text)))
+     (unwind-protect
+         (progn
+           (cl-letf (((symbol-function 'drgnx-file-write-text)
+                      (lambda (f text &rest args) (push f calls) (apply orig f text args))))
+             (should (equal (drgnx-surfaces-export-markdown file) file)))
+           (should (equal calls (list file)))
+           (should (string-search "Alpha" (with-temp-buffer (insert-file-contents file) (buffer-string))))
+           (should (= (file-modes file) #o644))
+           ;; a write that fails halfway leaves the old file whole and no temp file behind
+           (with-temp-file file (insert "OLD\n"))
+           (cl-letf (((symbol-function 'rename-file) (lambda (&rest _) (error "disk full"))))
+             (should-error (drgnx-surfaces-export-markdown file)))
+           (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "OLD\n"))
+           (should (equal (directory-files (file-name-directory file) nil "\\`[^.]\\|\\`\\.[^.]") '("keys.md")))
+           ;; an open stale buffer of FILE does not make the export ask anything
+           (let ((buf (find-file-noselect file)) (inhibit-interaction t))
+             (unwind-protect
+                 (progn (with-current-buffer buf (insert "edit"))
+                        (drgnx-surfaces-export-markdown file))
+               (with-current-buffer buf (set-buffer-modified-p nil))
+               (kill-buffer buf)))
+           (should (string-search "Alpha" (with-temp-buffer (insert-file-contents file) (buffer-string)))))
+       (delete-directory dir t)))))
+
 
 (ert-deftest drgnx-surfaces/key-display ()
   (drgnx-test--with-commands
