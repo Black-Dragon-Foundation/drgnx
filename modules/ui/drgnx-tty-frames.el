@@ -49,6 +49,7 @@
 (declare-function turn-off-xterm-mouse-tracking-on-terminal "xt-mouse")
 (declare-function xterm-mouse-tracking-enable-sequence "xt-mouse")
 (declare-function xterm-mouse-tracking-disable-sequence "xt-mouse")
+(declare-function drgnx-tty-clip-setup "drgnx-tty-clipboard")
 
 (defvar drgnx-tty-frames-query-timeout 0.2
   "Seconds to wait for a terminal's answer to XTVERSION (a late answer is still taken off the input).")
@@ -297,7 +298,9 @@ does not stop the next."
                (not (equal (terminal-name (frame-terminal frame)) "initial_terminal")))
       (unless (terminal-parameter (frame-terminal frame) 'drgnx-tty-identity)
         (drgnx-tty-frames--guard "capabilities" #'drgnx-tty-frames-write-report frame))
-      (drgnx-tty-frames--guard "mouse" #'drgnx-tty-frames-mouse-apply))))
+      (drgnx-tty-frames--guard "mouse" #'drgnx-tty-frames-mouse-apply)
+      (when (fboundp 'drgnx-tty-clip-setup)   ; drgnx-tty-clipboard.el: OSC 52 copy
+        (drgnx-tty-frames--guard "clipboard" #'drgnx-tty-clip-setup frame)))))
 
 (defun drgnx-tty-frames--after-make-frame ()
   "`server-after-make-frame-hook' (the client's frame is selected): set it up; an editor frame shows the

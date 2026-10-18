@@ -179,8 +179,22 @@ setting also overrides Emacs's own default of turning the mouse on in terminals.
 ## Clipboard
 
 Copying in drgnx puts the text on your computer's clipboard through OSC 52 when the terminal takes it (the table's
-"OSC 52 copy"). In other terminals the copy stays inside drgnx. To bring text in from other programs, paste with the
-terminal's own paste key (`C-S-v`, or Cmd+V on macOS). Emacs receives it as one bracketed paste.
+"OSC 52 copy"), over SSH as well: the sequence travels through the connection unchanged. Emacs turns this on by
+itself only when the terminal's version answer is 203 or more. drgnx also turns it on in **tmux** (which then
+needs `set -s set-clipboard on`, see above) and in a **kitty** whose answer was lower. A terminal that does not
+take OSC 52 (GNOME Terminal, Ptyxis) keeps the copy inside drgnx.
+
+- **Long copies:** a copy whose OSC 52 text passes `xterm-max-cut-length` (100000 characters once encoded, about
+  75000 characters of text) is not sent. drgnx says so once per terminal in the echo area ("too long for the
+  terminal's clipboard (N characters); kept in drgnx") and the text stays in drgnx's kill ring. Emacs's own method
+  would stop for two seconds instead.
+- **Paste:** the profile's paste key (`C-v` in the VS Code profile, `C-y` in the Emacs profile) pastes drgnx's
+  last copy, from the kill ring. To bring text in from other programs, paste with the terminal's own paste key
+  (`C-S-v`, or Cmd+V on macOS). Emacs receives it as one bracketed paste: it arrives as text and none of it runs
+  as a key.
+- **Reading the terminal's clipboard** is off. Most terminals refuse an OSC 52 read, kitty asks you every time, and
+  a refused read makes the yank wait two seconds. `M-x customize-variable` `drgnx-tty-clipboard-read` turns it on
+  (terminals already open follow at once); then `C-y` asks the terminal for its clipboard first.
 
 ## What a terminal window lacks
 
