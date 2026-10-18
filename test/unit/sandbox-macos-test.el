@@ -2,7 +2,11 @@
 ;; Pure: the tests build a spec, generate its profile and read it back as data, on any system (sandbox-exec runs only
 ;; on a Mac: the MAC-SB rows of the Mac checklist).  A small evaluator applies SBPL's rule order (the last rule that
 ;; matches decides; `deny default' first) to an operation on a path, a socket or a host, so the tests ask what the
-;; profile allows rather than how it spells it.  Every path is in the test's temporary directory.
+;; profile allows rather than how it spells it.  It models the two things Seatbelt's path rules do not see: a rename
+;; moves everything under a path to another name (`drgnx-sandbox-macos-test--rename-p'), and macOS's file system is
+;; case-insensitive, so a path spelled in another case is the same file, while `subpath' and `literal' compare the
+;; spelling exactly (the worst case; only `regex' filters with character classes catch other spellings).  Every path
+;; is in the test's temporary directory.
 (require 'ert)
 (require 'cl-lib)
 (require 'seq)
@@ -11,9 +15,10 @@
 
 (defmacro drgnx-sandbox-macos-test--with (&rest body)
   "BODY with a fixture tree under ROOT (true names): HOME the user's home with a canary in .ssh, RUN the runtime dir,
-SID a session's socket dir, SOCK its socket, FOLDER a task folder in a repository under HOME with its .git, PHOME a
-private home under the state dir, TOOL a toolchain root under HOME, SECRET a file in it, OBJECTS a dir for a
-read-write bind, SSH the ssh agent's socket, HUB the hub's socket, and TMP the session's TMPDIR."
+SID a session's socket dir, SOCK its socket, FOLDER a task folder in a repository under HOME with its .git and a
+secret ENV (conf/.env), PHOME a private home under the state dir, TOOL a toolchain root under HOME, SECRET a file in
+it, OBJECTS a dir for a read-write bind with a pinned file (commondir), SSH the ssh agent's socket, HUB the hub's
+socket, and TMP the session's TMPDIR."
   (declare (indent 0))
   `(let* ((root (directory-file-name (file-truename (make-temp-file "drgnx-sbm" t))))
           (home (concat root "/home")) (run (concat root "/run")) (sid (concat run "/drgnx/s/7"))
@@ -22,6 +27,7 @@ read-write bind, SSH the ssh agent's socket, HUB the hub's socket, and TMP the s
           (phome (concat root "/state/drgnx/sandbox/1/home-1"))
           (tool (concat home "/.local/share/mise/installs/node/20")) (secret (concat tool "/.npmrc"))
           (objects (concat root "/objects")) (ssh (concat root "/ssh-x/agent.1"))
+          (env (concat folder "/conf/.env")) (commondir (concat objects "/commondir"))
           (temporary-file-directory (concat root "/T/"))
           (process-environment (append (list (concat "HOME=" home) (concat "XDG_RUNTIME_DIR=" run)
                                              (concat "XDG_STATE_HOME=" root "/state") (concat "DRGNX_DATA_DIR=" root "/data")
@@ -32,11 +38,13 @@ read-write bind, SSH the ssh agent's socket, HUB the hub's socket, and TMP the s
           tmp)
      (unwind-protect
          (progn
-           (dolist (d (list folder (concat folder "/.git") phome tool sid objects temporary-file-directory
-                            (concat home "/.ssh") (concat root "/data") (concat root "/ssh-x")))
+           (dolist (d (list folder (concat folder "/.git") (concat folder "/conf") phome tool sid objects
+                            temporary-file-directory (concat home "/.ssh") (concat root "/data") (concat root "/ssh-x")))
              (make-directory d t))
            (write-region "canary" nil (concat home "/.ssh/id_canary") nil 'silent)
            (write-region "token" nil secret nil 'silent)
+           (write-region "key" nil env nil 'silent)
+           (write-region "../.git" nil commondir nil 'silent)
            (setq tmp (drgnx-sandbox-macos-tmpdir "7"))
            ,@body)
        (delete-directory root t))))
@@ -45,10 +53,10 @@ read-write bind, SSH the ssh agent's socket, HUB the hub's socket, and TMP the s
   "The spec of a job session in the fixture (inside `drgnx-sandbox-macos-test--with'), with NET; MORE properties
 come first, so they win over the session's."
   `(drgnx-sandbox-spec ,@more
-                       :backend 'seatbelt :home (cons phome home) :read (list tool) :write (list folder) :run sid
+                       :backend 'seatbelt :home (cons phome phome) :read (list tool) :write (list folder) :run sid
                        :sockets (list sock) :binds (list (list 'ro (concat folder "/.git") (concat folder "/.git"))
-                                                         (list 'rw objects objects))
-                       :hide (list secret) :tmp tmp :net ,net))
+                                                         (list 'rw objects objects) (list 'ro commondir commondir))
+                       :hide (list secret env) :tmp tmp :net ,net))
 
 (defun drgnx-sandbox-macos-test--own-rules (text)
   "The rules of TEXT after the base: the ones made from the spec."
@@ -88,11 +96,29 @@ parenthesis, unterminated string or junk signals."
   (pcase-let ((`(,ph ,pp) (split-string pattern ":")) (`(,th ,tp) (split-string target ":")))
     (and (or (equal ph "*") (equal ph th)) (or (equal pp "*") (equal pp tp)))))
 
+(defun drgnx-sandbox-macos-test--emacs-regexp (sbpl)
+  "The Emacs regexp for the SBPL (POSIX extended) regex SBPL: groups and alternation take a backslash in Emacs, and a
+backslash-escaped character is itself; brackets, anchors and repetition read the same."
+  (let ((i 0) (n (length sbpl)) (out nil))
+    (while (< i n)
+      (let ((c (aref sbpl i)))
+        (cond ((and (eq c ?\\) (< (1+ i) n)) (push (regexp-quote (string (aref sbpl (1+ i)))) out) (cl-incf i))
+              ((memq c '(?\( ?\) ?|)) (push (string ?\\ c) out))
+              ((eq c ?\[) (let ((end (string-search "]" sbpl (1+ i)))) (push (substring sbpl i (1+ end)) out)
+                               (setq i end)))
+              (t (push (string c) out))))
+      (cl-incf i))
+    (apply #'concat (nreverse out))))
+
 (defun drgnx-sandbox-macos-test--filter-match-p (filter target)
-  "Does FILTER match TARGET: a path, (unix . PATH), (ip . \"host:port\") or (global-name . NAME)?"
+  "Does FILTER match TARGET: a path, (unix . PATH), (ip . \"host:port\") or (global-name . NAME)?  `subpath' and
+`literal' compare the spelling exactly; `regex' as a regex, case-sensitively."
   (pcase filter
     (`(subpath ,p) (and (stringp target) (or (equal target p) (string-prefix-p (concat p "/") target))))
     (`(,(or 'literal 'path) ,p) (equal target p))
+    (`(regex ,r) (and (stringp target)
+                      (let ((case-fold-search nil))
+                        (string-match-p (drgnx-sandbox-macos-test--emacs-regexp r) target))))
     ('(remote unix-socket) (eq (car-safe target) 'unix))
     (`(remote unix-socket (path-literal ,p)) (equal target (cons 'unix p)))
     (`(remote ip ,hp) (and (eq (car-safe target) 'ip) (drgnx-sandbox-macos-test--host-match-p hp (cdr target))))
@@ -108,6 +134,14 @@ one decides."
                      (cl-some (lambda (f) (drgnx-sandbox-macos-test--filter-match-p f target)) filters)))
         (setq verdict action)))
     (eq verdict 'allow)))
+
+(defun drgnx-sandbox-macos-test--rename-p (rules from to)
+  "May FROM be renamed to TO under RULES: an unlink of FROM, a create of TO and, where TO exists (on the test's
+disk), an unlink of what it replaces.  A rename moves everything under FROM to TO without any rule seeing those
+paths."
+  (and (drgnx-sandbox-macos-test--allowed-p rules 'file-write-unlink from)
+       (drgnx-sandbox-macos-test--allowed-p rules 'file-write-create to)
+       (or (not (file-exists-p to)) (drgnx-sandbox-macos-test--allowed-p rules 'file-write-unlink to))))
 
 (defun drgnx-sandbox-macos-test--position (rules pred)
   "The index of the first of RULES that PRED holds for, or nil."
@@ -257,9 +291,73 @@ neither readable nor writable.  Nothing else is writable: not `:read', not `:run
       (should (drgnx-sandbox-macos-test--allowed-p rules 'file-read-data (concat folder "/.git/config")))
       (should-not (drgnx-sandbox-macos-test--allowed-p rules 'file-read-data secret))
       (should (drgnx-sandbox-macos-test--allowed-p rules 'file-read-data (concat tool "/lib/x.js"))))
-    ;; macOS has no mounts: a bind can only be at its own path
+    ;; macOS has no mounts: a bind, and the private home, can only be at their own path
     (should-error (drgnx-sandbox-sbpl (drgnx-sandbox-spec :binds (list (list 'rw objects (concat folder "/o")))))
-                  :type 'drgnx-sandbox-refused)))
+                  :type 'drgnx-sandbox-refused)
+    (should-error (drgnx-sandbox-sbpl (drgnx-sandbox-spec :home (cons phome home))) :type 'drgnx-sandbox-refused)))
+
+(ert-deftest drgnx-sandbox-macos/renames-cannot-move-protected-paths ()
+  "Seatbelt's rules match paths, not files: renaming a directory above a pin or a hidden path would carry it to a name
+no deny covers.  So no writable root (the folder, the private home, TMPDIR, an rw bind) and no directory between one
+and a pin or a hidden path can be unlinked or renamed, in any spelling; the pins and hidden paths themselves are
+covered by their own denies.  Other renames and deletions in the folder still work."
+  (drgnx-sandbox-macos-test--with
+    (let ((rules (drgnx-sandbox-macos-test--rules (drgnx-sandbox-sbpl (drgnx-sandbox-macos-test--full 'shared)))))
+      ;; the hidden file is denied by its name only: at a moved name it would be readable, so the move is refused
+      (should-not (drgnx-sandbox-macos-test--allowed-p rules 'file-read-data env))
+      (should (drgnx-sandbox-macos-test--allowed-p rules 'file-read-data (concat folder "/c2/.env")))
+      (dolist (from (list (concat folder "/conf") (concat folder "/CONF") (concat folder "/Conf") env))
+        (ert-info (from) (should-not (drgnx-sandbox-macos-test--rename-p rules from (concat folder "/c2")))))
+      ;; the worktree folder out and back
+      (should-not (drgnx-sandbox-macos-test--rename-p rules folder (concat tmp "/f")))
+      (should-not (drgnx-sandbox-macos-test--rename-p rules (concat tmp "/f") folder))
+      ;; every writable root and every pin, out of its place
+      (dolist (from (list phome tmp objects (concat folder "/.git") commondir (concat folder "/.GIT")))
+        (ert-info (from) (should-not (drgnx-sandbox-macos-test--rename-p rules from (concat tmp "/moved")))))
+      (should-not (drgnx-sandbox-macos-test--rename-p rules objects (concat folder "/o")))
+      (should-not (drgnx-sandbox-macos-test--allowed-p rules 'file-write-unlink folder))
+      ;; ordinary work goes on
+      (should (drgnx-sandbox-macos-test--allowed-p rules 'file-write-unlink (concat folder "/a.el")))
+      (should (drgnx-sandbox-macos-test--rename-p rules (concat folder "/a.el") (concat folder "/b.el")))
+      (should (drgnx-sandbox-macos-test--rename-p rules (concat folder "/src") (concat folder "/lib")))
+      (should (drgnx-sandbox-macos-test--rename-p rules (concat folder "/conf/other") (concat folder "/other")))
+      (should (drgnx-sandbox-macos-test--rename-p rules (concat objects "/ab") (concat objects "/cd")))
+      (should (drgnx-sandbox-macos-test--rename-p rules (concat phome "/.cache") (concat tmp "/c"))))))
+
+(ert-deftest drgnx-sandbox-macos/case-variants-are-denied ()
+  "macOS's file system is case-insensitive: `.GIT/config' is `.git/config'.  Every deny (the pins, `:hide', the
+rename blocks, Homebrew's data) is also a regex of character classes, so another spelling is denied too.  Allows stay
+exact: a path spelled otherwise is not allowed (closed).  No `(?i)', which SBPL is not known to support."
+  (drgnx-sandbox-macos-test--with
+    (let* ((text (drgnx-sandbox-sbpl (drgnx-sandbox-macos-test--full 'shared)))
+           (rules (drgnx-sandbox-macos-test--rules text)))
+      (dolist (p (list (concat folder "/.GIT/config") (concat folder "/.Git/hooks/x") (concat folder "/.gIt")
+                       (concat folder "/CONF/.ENV") (concat objects "/COMMONDIR") (concat objects "/CommonDir")))
+        (ert-info (p) (should-not (drgnx-sandbox-macos-test--allowed-p rules 'file-write-data p))))
+      (dolist (p (list (concat folder "/conf/.ENV") (concat folder "/Conf/.env") (concat tool "/.NPMRC")
+                       "/opt/homebrew/VAR/postgres/x"))
+        (ert-info (p) (should-not (drgnx-sandbox-macos-test--allowed-p rules 'file-read-data p))))
+      ;; a near name is not a variant
+      (dolist (p (list (concat folder "/.gitx/config") (concat folder "/xconf/.env") (concat folder "/.git2")))
+        (ert-info (p) (should (drgnx-sandbox-macos-test--allowed-p rules 'file-write-data p))))
+      (should-not (cl-some (lambda (r) (and (eq (car r) 'allow) (assq 'regex (nth 2 r))))
+                           (drgnx-sandbox-macos-test--own-rules text)))
+      (should-not (drgnx-sandbox-macos-test--allowed-p rules 'file-read-data (concat (upcase folder) "/a.el")))
+      (should-not (string-search "(?i)" text)))))
+
+(ert-deftest drgnx-sandbox-macos/dev-only-the-devices ()
+  "Of /dev, only null, zero, random, urandom, the controlling tty, dtracehelper and the process's own /dev/fd are
+readable: never the user's other terminals (/dev/ttysN) nor disks.  Homebrew's data (/opt/homebrew/var,
+/usr/local/var) is not readable, even when the spec reads /opt/homebrew."
+  (drgnx-sandbox-macos-test--with
+    (dolist (spec (list (drgnx-sandbox-spec) (drgnx-sandbox-spec :read '("/opt/homebrew"))))
+      (let ((rules (drgnx-sandbox-macos-test--rules (drgnx-sandbox-sbpl spec))))
+        (dolist (p '("/dev/null" "/dev/zero" "/dev/random" "/dev/urandom" "/dev/tty" "/dev/dtracehelper" "/dev/fd/3"
+                     "/opt/homebrew/bin/git" "/opt/homebrew/Cellar/node/22/bin/node"))
+          (ert-info (p) (should (drgnx-sandbox-macos-test--allowed-p rules 'file-read-data p))))
+        (dolist (p '("/dev/ttys003" "/dev/ttys000" "/dev/disk0" "/dev/rdisk1s1" "/dev/bpf0" "/dev/console" "/dev/null2"
+                     "/dev/fdx" "/opt/homebrew/var/postgresql@16/base/1" "/opt/homebrew/var" "/usr/local/var/mysql/x"))
+          (ert-info (p) (should-not (drgnx-sandbox-macos-test--allowed-p rules 'file-read-data p))))))))
 
 (ert-deftest drgnx-sandbox-macos/shared-net-phase-1 ()
   "`:net shared' (phase 1): outbound IP to anywhere, and the resolver (its socket and file), nothing inbound.  No
@@ -272,16 +370,24 @@ neither readable nor writable.  Nothing else is writable: not `:read', not `:run
       (dolist (target '("example.com:443" "localhost:3128" "localhost:22"))
         (should (drgnx-sandbox-macos-test--allowed-p rules 'network-outbound (cons 'ip target))))
       (should (drgnx-sandbox-macos-test--allowed-p rules 'file-read-data "/private/var/run/resolv.conf"))
+      (dolist (name drgnx-sandbox-macos-net-services)
+        (should (drgnx-sandbox-macos-test--allowed-p rules 'mach-lookup (cons 'global-name name))))
+      (should (string-search "AF_SYSTEM" text))
       (should-not (drgnx-sandbox-macos-test--allowed-p rules 'network-inbound '(ip . "localhost:8080")))
       (should-not (drgnx-sandbox-macos-test--allowed-p rules 'network-bind '(ip . "localhost:8080"))))))
 
 (ert-deftest drgnx-sandbox-macos/isolated-net-only-two-ports ()
-  "`:net isolated': `(deny network*)', then outbound only to localhost's `:proxy' and `:gateway' ports.  No resolver.
+  "`:net isolated': `(deny network*)', then outbound only to localhost's `:proxy' and `:gateway' ports.  No resolver,
+and none of the network services (trustd and ocspd fetch URLs outside the sandbox) nor the AF_SYSTEM socket.
 Without ports, no IP at all.  A port out of range is refused."
   (drgnx-sandbox-macos-test--with
-    (let* ((rules (drgnx-sandbox-macos-test--rules
-                   (drgnx-sandbox-sbpl (drgnx-sandbox-macos-test--full 'isolated :proxy 4100 :gateway 4101))))
+    (let* ((text (drgnx-sandbox-sbpl (drgnx-sandbox-macos-test--full 'isolated :proxy 4100 :gateway 4101)))
+           (rules (drgnx-sandbox-macos-test--rules text))
            (deny (cl-position '(deny (network*) nil) rules :test #'equal)))
+      (dolist (name drgnx-sandbox-macos-net-services)
+        (ert-info (name) (should-not (drgnx-sandbox-macos-test--allowed-p rules 'mach-lookup (cons 'global-name name)))))
+      (dolist (word '("trustd" "ocspd" "networkd" "AF_SYSTEM" "SystemConfiguration"))
+        (should-not (string-search word text)))
       (should deny)
       (should (equal (cl-loop for (action ops filters) in rules for i from 0
                               when (and (eq action 'allow) (memq 'network-outbound ops)

@@ -16,8 +16,8 @@
 
 ;; The base below is Codex's published Seatbelt base policy, unchanged: openai/codex,
 ;; codex-rs/sandboxing/src/seatbelt_base_policy.sbpl at commit 8c076942cb70fba8e5c4732c23f1faabc4aed484,
-;; https://github.com/openai/codex — Copyright 2025 OpenAI, licensed under the Apache License, Version 2.0
-;; (https://www.apache.org/licenses/LICENSE-2.0).  drgnx adds its own rules after it (`drgnx-sandbox-sbpl').
+;; https://github.com/openai/codex — Copyright 2025 OpenAI, licensed under the Apache License, Version 2.0; its text
+;; is LICENSES/Apache-2.0.txt.  drgnx adds its own rules after it (`drgnx-sandbox-sbpl').
 (defconst drgnx-sandbox-macos-base
   "(version 1)
 
@@ -142,11 +142,20 @@ unchanged (Apache-2.0; the source is cited above).  No AppleEvents, no `lsopen',
 \(com.apple.SecurityServer): jobs on macOS use the gateway profiles.")
 
 (defconst drgnx-sandbox-macos-system-read
-  '("/usr" "/bin" "/sbin" "/System" "/Library" "/opt/homebrew" "/private/etc" "/dev" "/private/var/select"
+  '("/usr" "/bin" "/sbin" "/System" "/Library" "/opt/homebrew" "/private/etc" "/dev/fd" "/private/var/select"
     "/private/var/db/timezone" "/private/var/db/xcode_select_link")
-  "What every profile reads, as true names: the system's roots, /bin and /sbin (real directories on macOS),
-/private/var/select (the link /bin/sh and xcrun follow), the time zones (/etc/localtime leads there) and the
-selected developer dir (the git of the Command Line Tools).")
+  "What every profile reads, as true names and with everything under them: the system's roots, /bin and /sbin (real
+directories on macOS), the process's own file descriptors (/dev/fd), /private/var/select (the link /bin/sh and xcrun
+follow), the time zones (/etc/localtime leads there) and the selected developer dir (the git of the Command Line
+Tools).  Never all of /dev: `drgnx-sandbox-macos-devices'.")
+
+(defconst drgnx-sandbox-macos-devices
+  '("/dev/null" "/dev/zero" "/dev/random" "/dev/urandom" "/dev/tty" "/dev/dtracehelper")
+  "The devices every profile reads, each by its own name: never the user's other terminals (/dev/ttysN, which a
+process of the same user could read keystrokes from) nor disks.  /dev/tty is the process's controlling terminal.")
+
+(defconst drgnx-sandbox-macos-system-hidden '("/opt/homebrew/var" "/usr/local/var")
+  "Under the system's roots but not readable: Homebrew's data (the databases of Postgres, MySQL, Redis).")
 
 (defconst drgnx-sandbox-macos-links '("/tmp" "/var" "/etc")
   "The top-level links into /private: their own metadata only, so a path through one resolves.  What they lead to is
@@ -165,7 +174,9 @@ allowed or not by its true name (/private/tmp, /private/var/…, /private/etc)."
   '("com.apple.bsd.dirhelper" "com.apple.system.opendirectoryd.membership" "com.apple.networkd" "com.apple.ocspd"
     "com.apple.trustd.agent" "com.apple.SystemConfiguration.DNSConfiguration" "com.apple.SystemConfiguration.configd")
   "The mach services a networked CLI needs (TLS trust, the network's configuration, user dirs): Codex's network
-policy (seatbelt_network_policy.sbpl, same commit and licence as the base) without com.apple.SecurityServer.")
+policy (seatbelt_network_policy.sbpl, same commit and licence as the base) without com.apple.SecurityServer.
+`:net shared' only, as Codex adds them only with network: trustd and ocspd fetch certificate URLs outside the
+sandbox, a way past `(deny network*)'.")
 
 (defconst drgnx-sandbox-macos--max-literal 1024
   "The most bytes an SBPL string literal may have: sandbox-exec refuses a longer one (\"Error reading string\").")
@@ -199,6 +210,48 @@ refuse as too long."
                (mapconcat (lambda (p) (format "\n  (%s %s)" filter (drgnx-sandbox-macos--quote p))) paths "")
                ")")))
 
+(defun drgnx-sandbox-macos--case-regex (path whole)
+  "PATH as an SBPL regex that matches it in any case (macOS's file system is case-insensitive): each ASCII letter a
+class of both cases (`[Gg]'), another letter with two cases a group of both (`(é|É)'), each character of a regex's
+syntax escaped by a backslash.  No `(?i)', which SBPL is not known to support.  WHOLE: PATH and everything under it
+\(as `subpath'); else PATH alone (as `literal')."
+  (concat "^"
+          (mapconcat (lambda (c)
+                       (let ((up (upcase c)) (down (downcase c)))
+                         (cond ((and (< c 128) (/= up down)) (string ?\[ up down ?\]))
+                               ((/= up down) (string ?\( down ?| up ?\)))
+                               ((memq c '(?. ?^ ?$ ?* ?+ ?? ?\( ?\) ?\[ ?\] ?{ ?} ?| ?\\)) (string ?\\ c))
+                               (t (string c)))))
+                     path "")
+          (if whole "(/.*)?$" "$")))
+
+(defun drgnx-sandbox-macos--deny (ops filter paths)
+  "One SBPL deny of OPS on PATHS, each as FILTER (`subpath' or `literal') and again as
+`drgnx-sandbox-macos--case-regex', so the deny holds for every spelling of the path.  nil when there are no PATHS.
+Allows stay exact: a path spelled otherwise is not allowed, which fails closed."
+  (and paths
+       (concat "(deny " ops
+               (mapconcat (lambda (p)
+                            (format "\n  (%s %s)\n  (regex %s)" filter (drgnx-sandbox-macos--quote p)
+                                    (drgnx-sandbox-macos--quote
+                                     (drgnx-sandbox-macos--case-regex p (equal filter "subpath")))))
+                          paths "")
+               ")")))
+
+(defun drgnx-sandbox-macos--move-blocks (roots protected)
+  "The directories that must not be unlinked or renamed, since a rename moves a path's contents to a name no rule
+covers: every one of ROOTS (the writable roots), and every directory from such a root down to the parent of each of
+PROTECTED (the read-only pins and the hidden paths) inside it.  The PROTECTED themselves have their own denies."
+  (let ((file-name-handler-alist nil) (dirs (reverse roots)))
+    (dolist (p protected)
+      (dolist (r roots)
+        (when (drgnx-sandbox--under-p p r)
+          (let ((d (directory-file-name (file-name-directory p))))
+            (while (drgnx-sandbox--within-p d r)
+              (push d dirs)
+              (setq d (directory-file-name (file-name-directory d))))))))
+    (delete-dups (nreverse dirs))))
+
 (defun drgnx-sandbox-macos--ancestors (paths)
   "Every directory above PATHS (canonical absolute names), but /, without duplicates, in order."
   (let ((file-name-handler-alist nil) dirs)
@@ -222,21 +275,28 @@ refuse as too long."
 - AF_UNIX sockets may be made (pipes to child processes); connecting to one is decided at the end;
 - `(deny file-read* (subpath \"/Users\"))', before every allow;
 - reads: / itself, the metadata of every directory above an allowed path and of /tmp, /var and /etc (links), the
-  system's roots (`drgnx-sandbox-macos-system-read'), `:read', `:write', `:home' (its OUTSIDE: no mounts here, so the
-  session's HOME must name it), `:run' and `:tmp';
+  system's roots (`drgnx-sandbox-macos-system-read') and devices (`drgnx-sandbox-macos-devices'), `:read', `:write',
+  `:home' (the private home, at its own path: the session's HOME names it), `:run' and `:tmp'; then Homebrew's data
+  denied (`drgnx-sandbox-macos-system-hidden');
 - writes: `:write', `:home', `:tmp';
 - `:binds', in order: each readable, and writable for rw, not writable for ro (the git pins);
 - `:hide': neither readable nor writable, a file or a whole directory;
+- no unlink or rename of a writable root, nor of a directory between one and a pin or a hidden path
+  (`drgnx-sandbox-macos--move-blocks'): a rename would carry what is under it to a name no deny covers;
 - network: `:net shared' allows outbound IP anywhere, the services of `drgnx-sandbox-macos-net-services' and the
   resolver; `:net isolated' denies all network, then allows outbound to localhost's `:proxy' and `:gateway' ports;
 - Unix sockets: all denied, then the spec's `:sockets' allowed one by one (and, shared, the resolver's).
-Every path is a quoted string (`drgnx-sandbox-macos--quote').  Signals `drgnx-sandbox-refused' with
-`drgnx-sandbox-validate''s reason, for a bind whose INSIDE is not its OUTSIDE, a port out of range or a path SBPL
-cannot hold."
+Every deny also holds for every spelling of its path (`drgnx-sandbox-macos--deny').  Every path is a quoted string
+\(`drgnx-sandbox-macos--quote').  Signals `drgnx-sandbox-refused' with `drgnx-sandbox-validate''s reason, for a bind
+or a `:home' whose INSIDE is not its OUTSIDE, a port out of range or a path SBPL cannot hold."
   (when-let* ((why (drgnx-sandbox-validate spec))) (signal 'drgnx-sandbox-refused (list why)))
   (pcase-dolist (`(,_ ,outside ,inside) (plist-get spec :binds))
     (unless (string= outside inside)
       (drgnx-sandbox-macos--refuse ":binds: %s cannot be seen at %s: macOS has no mounts" outside inside)))
+  (when-let* ((home (plist-get spec :home)))
+    (unless (string= (car home) (cdr home))
+      (drgnx-sandbox-macos--refuse ":home: %s cannot be seen at %s: macOS has no mounts (the session's HOME names it)"
+                                   (car home) (cdr home))))
   (let* ((shared (not (eq (plist-get spec :net) 'isolated)))
          (proxy (drgnx-sandbox-macos--port spec :proxy)) (gateway (drgnx-sandbox-macos--port spec :gateway))
          (home (car (plist-get spec :home))) (run (plist-get spec :run)) (tmp (plist-get spec :tmp))
@@ -245,6 +305,9 @@ cannot hold."
                                      (plist-get spec :read) (plist-get spec :write) (and home (list home))
                                      (and run (list run)) (and tmp (list tmp)))))
          (writes (append (plist-get spec :write) (and home (list home)) (and tmp (list tmp))))
+         (moves (drgnx-sandbox-macos--move-blocks
+                 (append writes (cl-loop for (mode path) in binds when (eq mode 'rw) collect path))
+                 (append (cl-loop for (mode path) in binds when (eq mode 'ro) collect path) (plist-get spec :hide))))
          (sockets (append (plist-get spec :sockets) (and shared (list drgnx-sandbox-macos-dns-socket)))))
     (mapconcat
      #'identity
@@ -258,21 +321,27 @@ cannot hold."
                                          (delete-dups
                                           (append drgnx-sandbox-macos-links
                                                   (drgnx-sandbox-macos--ancestors
-                                                   (append reads (mapcar #'cadr binds) (plist-get spec :sockets))))))
+                                                   (append reads drgnx-sandbox-macos-devices (mapcar #'cadr binds)
+                                                           (plist-get spec :sockets))))))
              ,(drgnx-sandbox-macos--rule "allow" "file-read*" "subpath" reads)
+             ,(drgnx-sandbox-macos--rule "allow" "file-read*" "literal" drgnx-sandbox-macos-devices)
+             ,(drgnx-sandbox-macos--deny "file-read*" "subpath" drgnx-sandbox-macos-system-hidden)
              ,(drgnx-sandbox-macos--rule "allow" "file-write*" "subpath" writes)
              ,@(cl-loop for (mode path) in binds
                         collect (drgnx-sandbox-macos--rule "allow" "file-read*" "subpath" (list path))
-                        collect (drgnx-sandbox-macos--rule (if (eq mode 'rw) "allow" "deny") "file-write*" "subpath"
-                                                           (list path)))
-             ,(drgnx-sandbox-macos--rule "deny" "file-read* file-write*" "subpath" (plist-get spec :hide))
+                        collect (if (eq mode 'rw) (drgnx-sandbox-macos--rule "allow" "file-write*" "subpath" (list path))
+                                  (drgnx-sandbox-macos--deny "file-write*" "subpath" (list path))))
+             ,(drgnx-sandbox-macos--deny "file-read* file-write*" "subpath" (plist-get spec :hide))
+             ,(drgnx-sandbox-macos--deny "file-write-unlink" "literal" moves)
              ,@(if shared
-                   (list "(allow network-outbound (remote ip \"*:*\"))")
+                   (list "(allow network-outbound (remote ip \"*:*\"))"
+                         ;; what a networked CLI needs; never past `(deny network*)': trustd and ocspd fetch URLs
+                         "(allow system-socket (require-all (socket-domain AF_SYSTEM) (socket-protocol 2)))"
+                         (drgnx-sandbox-macos--rule "allow" "mach-lookup" "global-name"
+                                                    drgnx-sandbox-macos-net-services))
                  (cons "(deny network*)"
                        (cl-loop for port in (list proxy gateway) when port
                                 collect (format "(allow network-outbound (remote ip \"localhost:%d\"))" port))))
-             "(allow system-socket (require-all (socket-domain AF_SYSTEM) (socket-protocol 2)))"
-             ,(drgnx-sandbox-macos--rule "allow" "mach-lookup" "global-name" drgnx-sandbox-macos-net-services)
              "(deny network-outbound (remote unix-socket))"
              ,@(mapcar (lambda (s) (format "(allow network-outbound (remote unix-socket (path-literal %s)))"
                                            (drgnx-sandbox-macos--quote s)))
