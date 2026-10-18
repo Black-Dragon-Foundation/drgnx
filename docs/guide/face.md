@@ -186,12 +186,14 @@ with window titles) the right end has `– ▢ ✕` (minimise, maximise, close) 
 window when you drag it. With your window manager's own title bar those buttons would be a second set, so they are
 not there; until that setting exists they never are.
 
-The line is Emacs's tab bar with no tabs, since drgnx has no workspaces. It only reads what is already known (the
-branch from the file's version-control text, never by running git; the project from the same cache the breadcrumb
-keeps, filled when you switch editor, so a directory it has not met yet shows `drgnx` for a moment), so it costs
-nothing when you type. If something in it fails it shows the mark alone for ten seconds rather than disappearing. A
-`tab-bar-format` of your own is never replaced, and a tab bar that was already on is yours: then the top line stays
-off. Turning the setting off puts back what it changed (the tab bar's format, its mode and its face). A terminal with fewer than 20 lines shows no line at all (it needs the room).
+The line is Emacs's tab bar with no tabs, since drgnx has no workspaces. It only reads what is already known: the
+branch from the file's version-control text (never by running git), and the project from the same cache the breadcrumb
+keeps, which is filled when you switch editor, so a directory it has not met yet shows `drgnx` for a moment. Nothing
+in it touches the disk or a process while you type. If something in it fails it shows the mark alone for ten seconds
+rather than disappearing. A `tab-bar-format` of your own is never replaced, and a tab bar that was already on is
+yours: then the top line stays off. While the line is on, `tab-bar-auto-width` is `nil` (there are no tabs to size),
+unless you set it yourself. Turning the setting off puts back what it changed (the tab bar's format, auto width, mode
+and face). A terminal with fewer than 20 lines shows no line at all (it needs the room).
 
 | Setting | Default | What it does |
 |---|---|---|
