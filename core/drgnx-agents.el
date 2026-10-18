@@ -272,9 +272,14 @@ goes direct, and says so)."
     (setf (drgnx-agent-session-gateway s) nil)
     (ignore-errors (drgnx-hub-call "gateway/unregister" (list :token token) #'ignore))))
 
+(defvar drgnx-agents-env-functions nil
+  "Called with a session as its agent starts; each returns extra \"NAME=value\" strings for the agent's environment
+(the Live browser's endpoint, docs/guide/live.md).  One that fails is reported and skipped.")
+
 (defun drgnx-agents--env (s)
   "The environment S's agent gets: its profile's, its provider's — the gateway's address and a token when the hub
-can carry it, else the provider's (keys resolved now, never kept) — and DRGNX_TASK when S works on a task."
+can carry it, else the provider's (keys resolved now, never kept) — DRGNX_TASK when S works on a task, and what
+`drgnx-agents-env-functions' add."
   (append (plist-get (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))) :env)
           (when-let* ((kind (plist-get (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))) :ai)))
             (require 'drgnx-ai)
@@ -282,7 +287,11 @@ can carry it, else the provider's (keys resolved now, never kept) — and DRGNX_
                                 (and drgnx-agents-use-gateway (memq kind drgnx-ai-gateway-kinds)
                                      (drgnx-agents--gateway s kind))))
           (and (drgnx-agent-session-task s) (list (concat "DRGNX_TASK=" (drgnx-agent-session-task s))))
-          (and (drgnx-agent-session-job s) (list (concat "DRGNX_JOB=" (drgnx-agent-session-job s))))))
+          (and (drgnx-agent-session-job s) (list (concat "DRGNX_JOB=" (drgnx-agent-session-job s))))
+          (let (extra)
+            (run-hook-wrapped 'drgnx-agents-env-functions
+                              (lambda (f) (setq extra (append extra (with-demoted-errors "drgnx agents: %S" (funcall f s)))) nil))
+            extra)))
 
 (defvar drgnx-agents-coordination t
   "Non-nil: every agent gets drgnx's coordination tools (an MCP server, docs/develop/coordination.md).")

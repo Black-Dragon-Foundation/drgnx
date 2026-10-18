@@ -1,0 +1,532 @@
+;;; drgnx-live.el --- Module tools/live: watch and take over the browser drgnx starts for agents (CDP screencast) -*- lexical-binding: t -*-
+
+;; SPDX-License-Identifier: GPL-3.0-or-later
+
+;;; Commentary:
+;; drgnx starts one headless Chrome (or Chromium) for agents, as a durable job: its own throwaway profile
+;; under the state dir, a debugging port on 127.0.0.1 only (a random one), memory-capped.  Agents drgnx
+;; starts afterwards get its address (PLAYWRIGHT_MCP_CDP_ENDPOINT), so their Playwright MCP drives it
+;; instead of a browser of its own.  The Live view shows that browser's page through Chrome DevTools
+;; Protocol screencast frames (no xwidgets needed), with its tabs and URL on top; frames that arrive
+;; while Emacs is busy are dropped, never queued.  Take Over sends your clicks, scrolling and typing to
+;; the page and tells the agent the user is driving; the same command hands it back.
+;; See docs/guide/live.md.
+
+;;; Code:
+(require 'cl-lib)
+(require 'seq)
+(require 'subr-x)
+(require 'drgnx-modules)
+(require 'drgnx-registry)
+(require 'drgnx-paths)
+
+(declare-function websocket-open "websocket")
+(declare-function websocket-send-text "websocket")
+(declare-function websocket-close "websocket")
+(declare-function websocket-openp "websocket")
+(declare-function websocket-frame-text "websocket")
+(declare-function drgnx-jobs-start "drgnx-jobs")
+(declare-function drgnx-jobs-get "drgnx-jobs")
+(declare-function drgnx-jobs-list "drgnx-jobs")
+(declare-function drgnx-jobs-log "drgnx-jobs")
+(declare-function drgnx-jobs-stop "drgnx-jobs")
+(declare-function drgnx-agents-sessions "drgnx-agents")
+(declare-function drgnx-agents-steer "drgnx-agents")
+(declare-function drgnx-agent-session-name "drgnx-agents")
+(declare-function drgnx-agent-session-status "drgnx-agents")
+(declare-function drgnx-browser-agent-url "drgnx-browser")
+(declare-function evil-emacs-state "evil-states")
+(declare-function evil-change-to-previous-state "evil-core")
+(defvar drgnx-agents-env-functions)
+
+(defvar drgnx-live-chrome-programs
+  '("google-chrome" "google-chrome-stable" "chromium" "chromium-browser" "chrome"
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    "/Applications/Chromium.app/Contents/MacOS/Chromium")
+  "The browsers the Live view can start for agents, first found wins: names on PATH or absolute paths.")
+
+(defvar drgnx-live-start-timeout 10 "Seconds the browser has to open its debugging port.")
+(defvar drgnx-live-frame-interval 0.1 "Seconds between two drawn frames at most (about 10 a second); frames between are dropped.")
+(defconst drgnx-live-buffer-name "*drgnx live*")
+
+(defvar drgnx-live--browser nil
+  "The browser for agents this Emacs started: (:port N :ws URL :job ID :dir DIR), or nil.")
+(defvar drgnx-live--given nil "The agent sessions that were given the browser's endpoint.")
+
+;;;; The browser for agents
+
+(defun drgnx-live--profile-dir ()
+  "This Emacs's throwaway browser profile: <state>/live-profile-<pid>."
+  (expand-file-name (format "live-profile-%d" (emacs-pid)) (drgnx-state-dir)))
+
+(defun drgnx-live--chrome ()
+  "The Chrome or Chromium program to start, or nil."
+  (seq-some (lambda (p) (if (file-name-absolute-p p) (and (file-executable-p p) p) (executable-find p)))
+            drgnx-live-chrome-programs))
+
+(defun drgnx-live--chrome-pid (dir)
+  "The pid of the browser using the profile DIR while it runs (its SingletonLock names it), else nil."
+  (when-let* ((target (file-symlink-p (expand-file-name "SingletonLock" dir)))
+              ((string-match "-\\([0-9]+\\)\\'" target))
+              (pid (string-to-number (match-string 1 target)))
+              ((process-attributes pid)))
+    pid))
+
+(defun drgnx-live-running ()
+  "The browser for agents while it runs: (:port :ws :job :dir), else nil."
+  (when drgnx-live--browser
+    (require 'drgnx-jobs)
+    (let ((status (plist-get (drgnx-jobs-get (plist-get drgnx-live--browser :job)) :status)))
+      ;; a job systemd runs can read as `gone' while it runs: then the browser's own lock says
+      (and (or (eq status 'running) (and (eq status 'gone) (drgnx-live--chrome-pid (plist-get drgnx-live--browser :dir))))
+           drgnx-live--browser))))
+
+(defun drgnx-live--stop-job (id)
+  "Stop the browser's job ID: through the jobs, and its systemd unit too (which the jobs may not see running)."
+  (let ((job (drgnx-jobs-get id)))
+    (drgnx-jobs-stop id)
+    (when-let* ((unit (plist-get job :unit))
+                ((not (memq (plist-get job :status) '(exited stopped)))))
+      (call-process "systemctl" nil nil nil "--user" "stop" unit))))
+
+(defun drgnx-live--clean-stale ()
+  "Profiles of Emacs sessions that are gone: their browser job stops, their directory goes."
+  (dolist (dir (directory-files (drgnx-state-dir) t "\\`live-profile-[0-9]+\\'"))
+    (let ((pid (string-to-number (substring (file-name-nondirectory dir) 13))))
+      (unless (or (= pid (emacs-pid)) (process-attributes pid))
+        (dolist (job (drgnx-jobs-list))
+          (when (and (not (memq (plist-get job :status) '(exited stopped)))
+                     (member (concat "--user-data-dir=" dir) (plist-get job :command)))
+            (drgnx-live--stop-job (plist-get job :id))))
+        (ignore-errors (delete-directory dir t))))))
+
+(defun drgnx-live--read-port (file)
+  "(PORT . PATH) from the browser's DevToolsActivePort FILE once it is complete, else nil."
+  (when (file-readable-p file)
+    (let ((lines (split-string (with-temp-buffer (insert-file-contents file) (buffer-string)) "\n" t)))
+      (and (= 2 (length lines)) (> (string-to-number (car lines)) 0)
+           (cons (string-to-number (car lines)) (cadr lines))))))
+
+(defun drgnx-live--start ()
+  "Start the browser for agents and wait (at most `drgnx-live-start-timeout') for its debugging port."
+  (let ((chrome (or (drgnx-live--chrome)
+                    (user-error "Live: no Chrome or Chromium found (looked for %s); install one to watch agents' browsers"
+                                (string-join (seq-remove #'file-name-absolute-p drgnx-live-chrome-programs) ", "))))
+        (dir (drgnx-live--profile-dir)))
+    (require 'drgnx-jobs)
+    (make-directory (drgnx-state-dir) t)
+    (drgnx-live--cleanup)                                    ; an earlier browser of this Emacs: it has ended
+    (drgnx-live--clean-stale)
+    (when (file-directory-p dir) (delete-directory dir t))
+    (make-directory dir t)
+    (let* ((job (drgnx-jobs-start "live-browser"
+                                  (list chrome "--headless=new" "--remote-debugging-address=127.0.0.1"
+                                        "--remote-debugging-port=0" (concat "--user-data-dir=" dir)
+                                        "--no-first-run" "--no-default-browser-check" "about:blank")
+                                  :cwd dir :memory-max "1G" :no-wait t))
+           (file (expand-file-name "DevToolsActivePort" dir))
+           (deadline (+ (float-time) drgnx-live-start-timeout))
+           port)
+      (while (and (not (setq port (drgnx-live--read-port file))) (< (float-time) deadline)
+                  (not (memq (plist-get (drgnx-jobs-get job) :status) '(exited stopped))))
+        (sleep-for 0.05))
+      (unless port
+        (let ((exited (memq (plist-get (drgnx-jobs-get job) :status) '(exited stopped)))
+              (log (string-trim (or (ignore-errors (drgnx-jobs-log job 600)) ""))))
+          (unless exited (drgnx-live--stop-job job))
+          (ignore-errors (delete-directory dir t))
+          (user-error "Live: %s %s%s" (file-name-nondirectory chrome)
+                      (if exited "exited before it opened its debugging port"
+                        (format "did not open its debugging port in %d s" drgnx-live-start-timeout))
+                      (if (string-empty-p log) "" (concat ": " log)))))
+      (setq drgnx-live--browser (list :port (car port) :ws (format "ws://127.0.0.1:%d%s" (car port) (cdr port))
+                                      :job job :dir dir)))))
+
+(defun drgnx-live-browser ()
+  "The browser for agents, started once per drgnx session: (:port N :ws URL)."
+  (let ((b (or (drgnx-live-running) (drgnx-live--start))))
+    (list :port (plist-get b :port) :ws (plist-get b :ws))))
+
+(defun drgnx-live-start-browser ()
+  "Start the browser for agents; agents started from now on use it (and the Live view shows it)."
+  (interactive)
+  (let ((b (drgnx-live-browser)))
+    (message "Live: the browser for agents listens on 127.0.0.1:%d; agents started now use it" (plist-get b :port))))
+
+(defun drgnx-live--cleanup ()
+  "Stop the browser for agents and delete its profile, once the browser has exited (3 s at most: it writes there as
+it ends, and a stop returns before it has)."
+  (when-let* ((b drgnx-live--browser))
+    (setq drgnx-live--browser nil drgnx-live--given nil)
+    (let* ((dir (or (plist-get b :dir) (drgnx-live--profile-dir))) (pid (drgnx-live--chrome-pid dir)) (deadline (+ (float-time) 3)))
+      (ignore-errors (drgnx-live--stop-job (plist-get b :job)))
+      (while (and pid (process-attributes pid) (< (float-time) deadline)) (sleep-for 0.05))
+      (ignore-errors (delete-directory dir t)))))
+
+(defun drgnx-live-stop-browser ()
+  "Stop the browser for agents; its throwaway profile is deleted."
+  (interactive)
+  (if (not drgnx-live--browser) (message "Live: no browser for agents is running")
+    (drgnx-live--cleanup)
+    (message "Live: the browser for agents is stopped")))
+
+(defun drgnx-live--agent-env (session)
+  "PLAYWRIGHT_MCP_CDP_ENDPOINT for SESSION's agent while the browser for agents runs."
+  (when-let* ((b (drgnx-live-running)))
+    (cl-pushnew session drgnx-live--given)
+    (list (format "PLAYWRIGHT_MCP_CDP_ENDPOINT=http://127.0.0.1:%d" (plist-get b :port)))))
+
+(defun drgnx-live--using ()
+  "The live agent sessions that were given the endpoint."
+  (setq drgnx-live--given (seq-remove (lambda (s) (eq (drgnx-agent-session-status s) 'exited)) drgnx-live--given)))
+
+;;;; The connection (in the Live view's buffer)
+
+(defvar-local drgnx-live--ws nil "The websocket to the browser.")
+(defvar-local drgnx-live--endpoint nil "The browser this view watches: (:port :ws).")
+(defvar-local drgnx-live--next-id 0)
+(defvar-local drgnx-live--callbacks nil "Request id → function of the result.")
+(defvar-local drgnx-live--targets nil "The browser's pages: target plists, in order.")
+(defvar-local drgnx-live--target nil "The watched page's targetId.")
+(defvar-local drgnx-live--session nil "The flat CDP session on the watched page.")
+(defvar-local drgnx-live--status nil "What the view says about the connection (a string), or nil.")
+(defvar-local drgnx-live--closing nil "Non-nil while the view closes its own connection.")
+(defvar-local drgnx-live--pending nil "The newest frame not yet drawn: (DATA . METADATA).")
+(defvar-local drgnx-live--timer nil "The timer that draws the pending frame.")
+(defvar-local drgnx-live--notes-timer nil)
+(defvar-local drgnx-live--last-draw 0)
+(defvar-local drgnx-live--meta nil "The shown frame's metadata (page size in CSS pixels).")
+(defvar-local drgnx-live--image nil "The shown image.")
+(defvar-local drgnx-live--drawn 0 "Frames drawn.")
+(defvar-local drgnx-live--dropped 0 "Frames replaced by a newer one before they were drawn.")
+
+(defun drgnx-live--send (method &optional params session callback)
+  "Send METHOD with PARAMS (on flat SESSION); CALLBACK gets the result.  Nothing when the connection is gone."
+  (when (and drgnx-live--ws (websocket-openp drgnx-live--ws))
+    (let ((id (cl-incf drgnx-live--next-id)))
+      (when callback (push (cons id callback) drgnx-live--callbacks))
+      (websocket-send-text drgnx-live--ws
+                           (json-serialize (append (list :id id :method method :params (or params (make-hash-table)))
+                                                   (and session (list :sessionId session)))))
+      id)))
+
+(defun drgnx-live--in (buf fn &rest args)
+  "Call FN with ARGS in BUF while it lives (websocket callbacks)."
+  (when (buffer-live-p buf) (with-current-buffer buf (apply fn args))))
+
+(defun drgnx-live--open (buf endpoint)
+  "Connect BUF's view to the browser at ENDPOINT (:port :ws).  Says why when it cannot; never waits for it."
+  (require 'websocket)
+  (with-current-buffer buf
+    (drgnx-live--disconnect)
+    (setq drgnx-live--endpoint endpoint drgnx-live--targets nil drgnx-live--target nil drgnx-live--session nil
+          drgnx-live--callbacks nil drgnx-live--pending nil drgnx-live--meta nil drgnx-live--drawn 0 drgnx-live--dropped 0
+          drgnx-live--status (format "Connecting to the browser for agents (127.0.0.1:%d)…" (plist-get endpoint :port)))
+    (drgnx-live--render-notes)
+    (condition-case err
+        (setq drgnx-live--ws
+              (websocket-open (plist-get endpoint :ws)
+                              :on-open (lambda (_ws) (drgnx-live--in buf #'drgnx-live--opened))
+                              :on-message (lambda (_ws frame) (drgnx-live--in buf #'drgnx-live--message (websocket-frame-text frame)))
+                              :on-close (lambda (_ws) (drgnx-live--in buf #'drgnx-live--closed))
+                              :on-error (lambda (_ws _type e) (drgnx-live--in buf #'drgnx-live--say (format "Live: %s" (error-message-string e))))))
+      (error
+       (drgnx-live--say (if (string-match-p "refused" (error-message-string err))
+                            (format "Live: 127.0.0.1:%d refused the connection: the browser for agents is not running there (Live: Start Browser for Agents starts it; g tries again)"
+                                    (plist-get endpoint :port))
+                          (format "Live: cannot reach the browser at 127.0.0.1:%d: %s" (plist-get endpoint :port) (error-message-string err))))))))
+
+(defun drgnx-live--say (text)
+  "Show TEXT as the view's status, and in the echo area."
+  (setq drgnx-live--status text)
+  (drgnx-live--render-notes)
+  (message "%s" text))
+
+(defun drgnx-live--disconnect ()
+  (when drgnx-live--ws
+    (let ((drgnx-live--closing t) (ws drgnx-live--ws))
+      (setq drgnx-live--ws nil)
+      (ignore-errors (websocket-close ws))))
+  (dolist (tm (list drgnx-live--timer drgnx-live--notes-timer)) (when (timerp tm) (cancel-timer tm)))
+  (setq drgnx-live--timer nil drgnx-live--notes-timer nil)
+  (when drgnx-live--image (ignore-errors (image-flush drgnx-live--image t)) (setq drgnx-live--image nil)))
+
+(defun drgnx-live--opened ()
+  (setq drgnx-live--status nil)
+  (drgnx-live--send "Target.setDiscoverTargets" '(:discover t))
+  (drgnx-live--send "Target.getTargets" nil nil
+                    (lambda (r)
+                      (setq drgnx-live--targets (seq-filter #'drgnx-live--page-p (append (plist-get r :targetInfos) nil)))
+                      (if drgnx-live--targets (drgnx-live--watch (plist-get (car drgnx-live--targets) :targetId))
+                        (drgnx-live--say "Live: the browser has no page open yet"))
+                      (drgnx-live--render-notes))))
+
+(defun drgnx-live--closed ()
+  (unless drgnx-live--closing
+    (setq drgnx-live--ws nil)
+    (drgnx-live--say "Live: the browser closed the connection (it exited or was stopped); g connects again")))
+
+(defun drgnx-live--page-p (target) (equal (plist-get target :type) "page"))
+
+(defun drgnx-live--window ()
+  (get-buffer-window (current-buffer) t))
+
+(defun drgnx-live--watch (target-id)
+  "Screencast the page TARGET-ID (instead of the one watched)."
+  (when drgnx-live--session
+    (drgnx-live--send "Page.stopScreencast" nil drgnx-live--session)
+    (drgnx-live--send "Target.detachFromTarget" (list :sessionId drgnx-live--session)))
+  (setq drgnx-live--target target-id drgnx-live--session nil)
+  (let ((buf (current-buffer)))
+    (drgnx-live--send "Target.attachToTarget" (list :targetId target-id :flatten t) nil
+                      (lambda (r)
+                        (drgnx-live--in buf (lambda ()
+                                              (when (equal drgnx-live--target target-id)
+                                                (setq drgnx-live--session (plist-get r :sessionId))
+                                                (drgnx-live--send "Page.startScreencast"
+                                                                  (list :format "jpeg" :quality 60
+                                                                        :maxWidth (let ((w (drgnx-live--window)))
+                                                                                    (if w (window-body-width w t) 1280)))
+                                                                  drgnx-live--session)))))))
+  (force-mode-line-update))
+
+(defun drgnx-live--message (text)
+  "One message from the browser: an answer or an event."
+  (let* ((msg (json-parse-string text :object-type 'plist :null-object nil :false-object nil))
+         (id (plist-get msg :id)))
+    (if id
+        (when-let* ((cb (alist-get id drgnx-live--callbacks)))
+          (setq drgnx-live--callbacks (assq-delete-all id drgnx-live--callbacks))
+          (unless (plist-get msg :error) (funcall cb (plist-get msg :result))))
+      (drgnx-live--event (plist-get msg :method) (plist-get msg :params) (plist-get msg :sessionId)))))
+
+(defun drgnx-live--event (method params session)
+  (pcase method
+    ("Page.screencastFrame"
+     (when (equal session drgnx-live--session)
+       ;; every frame is acknowledged (the browser sends the next one); only the newest waits to be drawn
+       (drgnx-live--send "Page.screencastFrameAck" (list :sessionId (plist-get params :sessionId)) session)
+       (when drgnx-live--pending (cl-incf drgnx-live--dropped))
+       (setq drgnx-live--pending (cons (plist-get params :data) (plist-get params :metadata)))
+       (drgnx-live--schedule-draw)))
+    ("Target.targetCreated"
+     (let ((info (plist-get params :targetInfo)))
+       (when (drgnx-live--page-p info)
+         (setq drgnx-live--targets (append drgnx-live--targets (list info)))
+         (drgnx-live--watch (plist-get info :targetId)))))          ; a new tab is where the agent works
+    ("Target.targetInfoChanged"
+     (let ((info (plist-get params :targetInfo)))
+       (setq drgnx-live--targets (mapcar (lambda (tg) (if (equal (plist-get tg :targetId) (plist-get info :targetId)) info tg))
+                                         drgnx-live--targets))
+       (drgnx-live--schedule-notes)
+       (force-mode-line-update)))
+    ("Target.targetDestroyed"
+     (let ((id (plist-get params :targetId)))
+       (setq drgnx-live--targets (seq-remove (lambda (tg) (equal (plist-get tg :targetId) id)) drgnx-live--targets))
+       (when (equal id drgnx-live--target)
+         (setq drgnx-live--session nil)
+         (if drgnx-live--targets (drgnx-live--watch (plist-get (car drgnx-live--targets) :targetId))
+           (setq drgnx-live--target nil)))
+       (force-mode-line-update)))))
+
+;;;; Drawing
+
+(defun drgnx-live--schedule-draw ()
+  "Draw the pending frame from a timer: off the input path, at most once per `drgnx-live-frame-interval'."
+  (unless drgnx-live--timer
+    (setq drgnx-live--timer
+          (run-at-time (max 0 (- (+ drgnx-live--last-draw drgnx-live-frame-interval) (float-time))) nil
+                       #'drgnx-live--in (current-buffer) #'drgnx-live--draw))))
+
+(defun drgnx-live--draw ()
+  (setq drgnx-live--timer nil)
+  (when-let* ((frame drgnx-live--pending))
+    (setq drgnx-live--pending nil drgnx-live--last-draw (float-time) drgnx-live--meta (cdr frame))
+    (let* ((w (drgnx-live--window))
+           (old drgnx-live--image)
+           (img (create-image (base64-decode-string (car frame)) 'jpeg t
+                              :max-width (if w (window-body-width w t) 1280)))
+           (inhibit-read-only t))
+      (put-text-property (point-min) (1+ (point-min)) 'display img)
+      (setq drgnx-live--image img)
+      (cl-incf drgnx-live--drawn)
+      ;; an old frame's pixels stay in no cache; the first frame ends the wait the notes mention
+      (if old (ignore-errors (image-flush old t)) (drgnx-live--render-notes)))))
+
+(defun drgnx-live--agent-notes ()
+  "Lines about running agents that do not use this browser."
+  (when (featurep 'drgnx-agents)
+    (let ((urls (mapcar (lambda (tg) (string-trim-right (or (plist-get tg :url) "") "/")) drgnx-live--targets))
+          (using (drgnx-live--using)))
+      (delq nil
+            (mapcar (lambda (s)
+                      (unless (eq (drgnx-agent-session-status s) 'exited)
+                        (if (not (memq s using))
+                            (format "%s does not use this browser: it was started before it (or outside this Emacs); start the agent again to watch it here"
+                                    (drgnx-agent-session-name s))
+                          (when-let* ((url (and (fboundp 'drgnx-browser-agent-url) (drgnx-browser-agent-url s)))
+                                      ((not (member (string-trim-right url "/") urls))))
+                            (format "%s opened %s, which no tab here shows: its Playwright MCP may not use PLAYWRIGHT_MCP_CDP_ENDPOINT"
+                                    (drgnx-agent-session-name s) url)))))
+                    (drgnx-agents-sessions))))))
+
+(defun drgnx-live--schedule-notes ()
+  (unless drgnx-live--notes-timer
+    (setq drgnx-live--notes-timer
+          (run-at-time 0.3 nil (lambda (buf) (drgnx-live--in buf (lambda () (setq drgnx-live--notes-timer nil) (drgnx-live--render-notes))))
+                       (current-buffer)))))
+
+(defun drgnx-live--render-notes ()
+  "The text below the page: the connection's state and agents that do not use this browser."
+  (let ((inhibit-read-only t))
+    (save-excursion
+      (when (= (point-min) (point-max)) (insert " \n"))
+      (delete-region (+ 2 (point-min)) (point-max))
+      (goto-char (point-max))
+      (let ((lines (append (and drgnx-live--status (list drgnx-live--status))
+                           (and (not drgnx-live--status) (not drgnx-live--image) (list "Waiting for the page's first frame…"))
+                           (drgnx-live--agent-notes))))
+        (dolist (l lines) (insert "\n" l))))))
+
+;;;; The view
+
+(defun drgnx-live--header ()
+  "The tabs (the watched one in bold), its URL, and DRIVING while you have taken over."
+  (let ((current (seq-find (lambda (tg) (equal (plist-get tg :targetId) drgnx-live--target)) drgnx-live--targets)))
+    (concat " Live  "
+            (mapconcat (lambda (tg)
+                         (let ((title (truncate-string-to-width (let ((x (plist-get tg :title))) (if (and x (not (string-empty-p x))) x (or (plist-get tg :url) "")))
+                                                                24 nil nil "…")))
+                           (if (eq tg current) (propertize title 'face 'bold) title)))
+                       drgnx-live--targets "  │  ")
+            (if current (concat "   " (propertize (or (plist-get current :url) "") 'face 'link)) "")
+            (if (bound-and-true-p drgnx-live-driving-mode)
+                (propertize "   DRIVING — your clicks and keys go to the page" 'face 'warning)
+              ""))))
+
+(defvar drgnx-live-mode-map (make-sparse-keymap) "Keys in the Live view (Live: Take Over / Hand Back).")
+
+(define-derived-mode drgnx-live-mode special-mode "Live"
+  "The page of the browser for agents, through screencast frames (docs/guide/live.md)."
+  (setq-local header-line-format '(:eval (drgnx-live--header)))
+  (setq-local revert-buffer-function (lambda (&rest _) (drgnx-live--open (current-buffer) (drgnx-live-browser))))
+  (setq-local cursor-type nil)
+  (add-hook 'kill-buffer-hook #'drgnx-live--disconnect nil t))
+
+(defun drgnx-live-view ()
+  "Watch the browser for agents (starting it when it is not running)."
+  (interactive)
+  (let ((endpoint (drgnx-live-browser)) (buf (get-buffer-create drgnx-live-buffer-name)))
+    (with-current-buffer buf (unless (derived-mode-p 'drgnx-live-mode) (drgnx-live-mode)))
+    (pop-to-buffer buf)
+    (drgnx-live--open buf endpoint)
+    buf))
+
+;;;; Taking over
+
+(defconst drgnx-live--keys
+  '((13 "Enter" 13 "\r") (return "Enter" 13 "\r") (9 "Tab" 9) (tab "Tab" 9) (127 "Backspace" 8) (backspace "Backspace" 8)
+    (delete "Delete" 46) (escape "Escape" 27) (left "ArrowLeft" 37) (up "ArrowUp" 38) (right "ArrowRight" 39)
+    (down "ArrowDown" 40) (home "Home" 36) (end "End" 35) (prior "PageUp" 33) (next "PageDown" 34))
+  "Emacs event → CDP key, Windows key code and the text it types.")
+
+(defvar drgnx-live-driving-map
+  (let ((m (make-sparse-keymap)))
+    (dotimes (i 95) (define-key m (string (+ 32 i)) #'drgnx-live-key))
+    (define-key m [remap self-insert-command] #'drgnx-live-key)
+    (dolist (k '("RET" "TAB" "DEL" "<return>" "<tab>" "<backspace>" "<delete>" "<escape>" "<left>" "<up>" "<right>"
+                 "<down>" "<home>" "<end>" "<prior>" "<next>"))
+      (define-key m (kbd k) #'drgnx-live-key))
+    (dolist (k '("<down-mouse-1>" "<mouse-1>" "<drag-mouse-1>" "<double-down-mouse-1>" "<double-mouse-1>"
+                 "<down-mouse-2>" "<mouse-2>" "<down-mouse-3>" "<mouse-3>" "<wheel-up>" "<wheel-down>" "<mouse-4>" "<mouse-5>"))
+      (define-key m (kbd k) #'drgnx-live-mouse))
+    m)
+  "While you drive: printable keys, RET, TAB, Backspace, Delete, Escape, arrows, Home/End, PgUp/PgDn and the mouse
+go to the page; other keys (C-…, M-…) stay Emacs's.")
+
+(define-minor-mode drgnx-live-driving-mode
+  "Your clicks, scrolling and typing in the Live view go to the page."
+  :lighter " Driving" :keymap drgnx-live-driving-map
+  (when (bound-and-true-p evil-local-mode)
+    (if drgnx-live-driving-mode (evil-emacs-state) (evil-change-to-previous-state)))
+  (force-mode-line-update))
+
+(defun drgnx-live--page-xy (event)
+  "EVENT's position on the page in CSS pixels, scaled back from the image as shown; nil off the image."
+  (let* ((posn (event-start event)) (xy (posn-object-x-y posn)) (wh (posn-object-width-height posn))
+         (meta drgnx-live--meta))
+    (when (and (posn-image posn) xy wh meta (> (car wh) 0) (> (cdr wh) 0))
+      (cons (round (* (car xy) (/ (float (plist-get meta :deviceWidth)) (car wh))))
+            (round (* (cdr xy) (/ (float (plist-get meta :deviceHeight)) (cdr wh))))))))
+
+(defun drgnx-live-mouse (event)
+  "Send the mouse EVENT to the page, while you drive."
+  (interactive "e")
+  (when-let* ((drgnx-live-driving-mode) (xy (drgnx-live--page-xy event)))
+    (let* ((type (event-basic-type event)) (mods (event-modifiers event))
+           (base (list :x (car xy) :y (cdr xy))))
+      (drgnx-live--send
+       "Input.dispatchMouseEvent"
+       (if (memq type '(wheel-up wheel-down mouse-4 mouse-5))
+           (append (list :type "mouseWheel" :deltaX 0 :deltaY (if (memq type '(wheel-down mouse-5)) 100 -100)) base)
+         (append (list :type (if (memq 'down mods) "mousePressed" "mouseReleased")
+                       :button (pcase type ('mouse-2 "middle") ('mouse-3 "right") (_ "left"))
+                       :clickCount (cond ((memq 'triple mods) 3) ((memq 'double mods) 2) (t 1)))
+                 base))
+       drgnx-live--session))))
+
+(defun drgnx-live-key ()
+  "Send the key just typed to the page, while you drive."
+  (interactive)
+  (when drgnx-live-driving-mode
+    (let* ((e last-command-event) (special (assoc e drgnx-live--keys)))
+      (pcase-let ((`(,key ,code ,text) (cond (special (cdr special))
+                                             ((characterp e) (list (string e) nil (string e))))))
+        (when key
+          (drgnx-live--send "Input.dispatchKeyEvent"
+                            (append (list :type "keyDown" :key key) (and code (list :windowsVirtualKeyCode code))
+                                    (and text (list :text text)))
+                            drgnx-live--session)
+          (drgnx-live--send "Input.dispatchKeyEvent"
+                            (append (list :type "keyUp" :key key) (and code (list :windowsVirtualKeyCode code)))
+                            drgnx-live--session))))))
+
+(defun drgnx-live-take-over ()
+  "Take over the page in the Live view (your input goes to it, the agent is told to wait), or hand it back."
+  (interactive)
+  (let ((buf (or (and (derived-mode-p 'drgnx-live-mode) (current-buffer)) (get-buffer drgnx-live-buffer-name)
+                 (user-error "Live: open the Live view first (Live: Watch Agents' Browser)"))))
+    (with-current-buffer buf
+      (drgnx-live-driving-mode (if drgnx-live-driving-mode -1 1))
+      (dolist (s (drgnx-live--using))
+        (when (eq (drgnx-agent-session-status s) 'busy)
+          (drgnx-agents-steer s (if drgnx-live-driving-mode "the user is driving the browser; wait"
+                                  "the user handed the browser back"))))
+      (message (if drgnx-live-driving-mode "Live: you are driving the page (Take Over / Hand Back gives it back)"
+                 "Live: the page is the agent's again")))))
+
+;;;; Module
+
+(defun drgnx-live--setup ()
+  "Give agents the browser's endpoint, stop the browser when Emacs ends, define the commands."
+  (require 'drgnx-agents)
+  (add-hook 'drgnx-agents-env-functions #'drgnx-live--agent-env)
+  (add-hook 'kill-emacs-hook #'drgnx-live--cleanup)
+  (pcase-dolist (`(,id ,title ,fn ,doc)
+                 '((live-start-browser "Live: Start Browser for Agents" drgnx-live-start-browser
+                                       "A headless browser agents started from now on drive (their Playwright MCP)")
+                   (live-stop-browser "Live: Stop Browser for Agents" drgnx-live-stop-browser
+                                      "Stop the browser for agents and delete its throwaway profile")
+                   (live-view "Live: Watch Agents' Browser" drgnx-live-view "The page agents work on, live")
+                   (live-take-over "Live: Take Over / Hand Back" drgnx-live-take-over
+                                   "Your clicks and keys go to the page (the agent is told), or hand it back")))
+    (drgnx-command-define id :category "Live" :title title :command fn :doc doc :scope 'window
+                          :map (and (eq id 'live-take-over) '(drgnx-live . drgnx-live-mode-map)))))
+
+(drgnx-module-define 'tools/live
+                     :doc "Live: watch and take over the browser drgnx starts for agents (CDP screencast)."
+                     :stage 'idle :packages '(websocket)
+                     :setup #'drgnx-live--setup)
+
+(provide 'drgnx-live)
+;;; drgnx-live.el ends here
