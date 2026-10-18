@@ -169,7 +169,12 @@ Inside BODY, `drgnx-modules--table` holds only the selected modules and the modu
   afterwards (`drgnx-test-modules/no-let-binding-trap`).
 - **`:strict t`** fails the test with the fingerprint diff (the lines `drgnx-modules-fingerprint-diff` names, each with
   the file that defined the leaked function) when the state after the teardown differs from the state before the first
-  setup; features are excepted. New tests use it.
+  setup; features are excepted. New tests use it. The state before is taken after the libraries the setups load are
+  loaded — each module's `:packages` and the features its file `require`s by a quoted name — because a library's
+  top level is the library's and stays loaded; so the result does not depend on which test loaded it first, and
+  nothing a setup does comes before the snapshot. Emacs's own lazy timers (undo's boundary timer…), which the
+  recorder leaves alone too (`drgnx-modules--emacs-timer-p`), are not counted
+  (`drgnx-test-modules/strict-blames-no-library-top-level`).
 - **`:packages hidden`** hides third-party features (those neither Emacs's own nor drgnx's) from `featurep` and
   `locate-library` while the setups run, so a module that needs a package stays out whatever the machine has
   installed. Use it only for tests of a result shape (the key snapshot): a later `require` of a hidden feature loads

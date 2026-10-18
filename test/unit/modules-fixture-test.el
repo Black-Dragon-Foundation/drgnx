@@ -68,6 +68,36 @@
                                                                         'done)))
                              (should-not (memq 'drgnx-fixture-test-clean (default-value 'find-file-hook))))))
 
+(ert-deftest drgnx-test-modules/strict-blames-no-library-top-level ()
+  ;; A library the setup loads first registers at its top level (spec row 26: the library's, it stays loaded) and
+  ;; an edit starts Emacs's undo timer: strict loads the library before its snapshot and leaves Emacs's own timers
+  ;; alone, so the module passes in any order.  What the setup itself does still counts.
+  (ert-with-temp-directory dir
+                           (let ((load-path (cons dir load-path))
+                                 (lib-fns '(drgnx-fixture-test-lib-fn drgnx-fixture-test-lib-fn-2)))
+                             (drgnx-fixture-test--module-file dir "drgnx-fixture-test-lib" "(defun drgnx-fixture-test-lib-fn () nil)
+(defun drgnx-fixture-test-lib-fn-2 () nil)
+(add-hook 'find-file-hook #'drgnx-fixture-test-lib-fn)
+(let ((b (get-buffer-create \"drgnx-fixture-test-undo\")))
+  (with-current-buffer b (buffer-enable-undo) (insert \"x\"))
+  (kill-buffer b))
+(provide 'drgnx-fixture-test-lib)")
+                             (unwind-protect
+                                 (let ((uses (drgnx-fixture-test--module-file dir "fake-uses-lib" "(drgnx-module-define 'fake/uses-lib :doc \"loads a library\"
+  :packages '(drgnx-fixture-test-lib)
+  :setup (lambda () (require 'drgnx-fixture-test-lib)))"))
+                                       (leaks (drgnx-fixture-test--module-file dir "fake-lib-leak" "(drgnx-module-define 'fake/lib-leak :doc \"leaks a library's function\"
+  :packages '(drgnx-fixture-test-lib)
+  :setup (lambda () (require 'drgnx-fixture-test-lib)
+           (push #'drgnx-fixture-test-lib-fn-2 (default-value 'find-file-hook))))")))
+                                   (should (eq 'done (drgnx-test-with-modules (list uses) :strict t 'done)))
+                                   (should (featurep 'drgnx-fixture-test-lib))
+                                   (let ((err (should-error (drgnx-test-with-modules (list leaks) :strict t (ignore)) :type 'ert-test-failed)))
+                                     (should (string-match-p "hook find-file-hook \\+drgnx-fixture-test-lib-fn-2" (format "%S" (cdr err))))
+                                     (should-not (string-match-p "drgnx-fixture-test-lib-fn[^-]" (format "%S" (cdr err))))))
+                               (dolist (f lib-fns) (remove-hook 'find-file-hook f))
+                               (setq features (delq 'drgnx-fixture-test-lib features))))))
+
 (ert-deftest drgnx-test-modules/packages-hidden ()
   ;; A third-party feature that is loaded counts as installed, until the helper hides it.
   (ert-with-temp-directory dir

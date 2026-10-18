@@ -36,6 +36,8 @@ migration batch that converts it and takes it off.  The dynamic check and the ra
 
 (defconst drgnx-teardown--load-registrations
   '(("modules/tools/drgnx-replace.el" advice-add :until 20)
+    ("modules/tools/drgnx-replace.el" with-eval-after-load :until 20)
+    ("modules/tools/drgnx-shortcuts.el" with-eval-after-load :until 20)
     ("modules/tools/drgnx-ai-ui.el" add-to-list :until 19))
   "Registrations at the top level of a module file that are known and wait for their batch: (FILE CALL :until
 BATCH).  One that is gone fails the lint too, so the entry goes with it.")
@@ -98,14 +100,19 @@ BATCH).  One that is gone fails the lint too, so the entry goes with it.")
        ,@body)))
 
 (defun drgnx-teardown--again (name)
-  "Turn module NAME off and on again through the product path; fail when the second setup leaves a
-different state from the first (something stacked, or an idempotence guard that outlived the teardown)."
-  (let ((on (drgnx-modules-fingerprint)))
-    (drgnx-module-teardown name)
-    (drgnx-modules--run-one name (cdr (assq name drgnx-modules--table))
-                            (plist-get (cdr (assq name drgnx-modules--table)) :stage))
-    (when-let* ((lines (drgnx-test-modules--diff-lines on (drgnx-modules-fingerprint))))
-      (ert-fail (cons "on again, the module did not set up what it did the first time:" lines)))))
+  "Turn module NAME off and on again through the product path; fail when the second setup adds something
+other than the first did (something stacked, or a guard that outlived the teardown).  Compared by description
+\(kind, key, function, repeat), not identity: a timer, buffer or closure made again is the same thing."
+  (let* ((on (drgnx-modules-fingerprint))
+         (_ (drgnx-module-teardown name))
+         (off (drgnx-modules-fingerprint))
+         (spec (cdr (assq name drgnx-modules--table))))
+    (drgnx-modules--run-one name spec (plist-get spec :stage))
+    (let ((first (sort (drgnx-test-modules--diff-lines off on) #'string<))
+          (again (sort (drgnx-test-modules--diff-lines off (drgnx-modules-fingerprint)) #'string<)))
+      (unless (equal first again)
+        (ert-fail (list "on again, the module did not set up what it did the first time:"
+                        :first first :again again))))))
 
 (defun drgnx-teardown--leftovers (module &optional again)
   "Set MODULE (a name, or a fake module's file) up alone, strictly, and turn it off (with AGAIN: off and on
@@ -128,16 +135,18 @@ once in between).  Returns (STATUS . FAILURE): the status its setup reached, and
 (ert-deftest drgnx-teardown/every-module-leaves-nothing ()
   (let ((checked (drgnx-teardown--checked (drgnx-teardown--modules) drgnx-teardown--not-yet)) (results nil))
     (drgnx-teardown--with-packages
-     (dolist (m checked)
-       (let ((r (drgnx-teardown--leftovers m)))
-         (push r results)
-         (should (equal (list m (cdr r)) (list m nil))))))
-    (drgnx-teardown--say checked (nreverse results))))
+     (dolist (m checked) (push (drgnx-teardown--leftovers m) results)))
+    (setq results (nreverse results))
+    (drgnx-teardown--say checked results)
+    ;; every module checked, each failure named with its module
+    (should (equal (delq nil (cl-mapcar (lambda (m r) (and (cdr r) (cons m (cdr r)))) checked results)) nil))))
 
 (ert-deftest drgnx-teardown/off-on-off-is-off ()
-  (drgnx-teardown--with-packages
-   (dolist (m (drgnx-teardown--checked (drgnx-teardown--modules) drgnx-teardown--not-yet))
-     (should (equal (list m (cdr (drgnx-teardown--leftovers m t))) (list m nil))))))
+  (let (failures)
+    (drgnx-teardown--with-packages
+     (dolist (m (drgnx-teardown--checked (drgnx-teardown--modules) drgnx-teardown--not-yet))
+       (when-let* ((f (cdr (drgnx-teardown--leftovers m t)))) (push (cons m f) failures))))
+    (should (equal (nreverse failures) nil))))
 
 (ert-deftest drgnx-teardown/the-lists-name-shipped-modules ()
   ;; Every entry is a shipped module with its batch; every file under modules/ defines a module or is listed.
@@ -199,10 +208,24 @@ once in between).  Returns (STATUS . FAILURE): the status its setup reached, and
                                (when (timerp drgnx-teardown-test--timer) (cancel-timer drgnx-teardown-test--timer))
                                (setq drgnx-teardown-test--timer nil)))))
 
+(ert-deftest drgnx-teardown/on-again-passes-what-is-made-again ()
+  ;; A timer the second setup starts again is a new object but the same thing; deferred work through
+  ;; `eval-after-load' and `drgnx-modules-with-owner' (the documented pattern) leaves nothing either.
+  (ert-with-temp-directory dir
+                           (let ((timed (drgnx-teardown-test--fake dir "fake-timed" "(drgnx-module-define 'fake/timed :doc \"timed\"
+  :setup (lambda () (run-with-timer 600 600 #'drgnx-teardown-test--tick)))"))
+                                 (deferred (drgnx-teardown-test--fake dir "fake-deferred" "(drgnx-module-define 'fake/deferred :doc \"deferred\"
+  :setup (lambda () (eval-after-load 'drgnx-teardown-test-never-loaded
+                      (drgnx-modules-with-owner (add-hook 'find-file-hook #'drgnx-teardown-test--leaky)))))")))
+                             (should (equal (drgnx-teardown--leftovers timed t) '(ok)))
+                             (should (equal (drgnx-teardown--leftovers deferred) '(ok)))
+                             (should (equal (drgnx-teardown--leftovers deferred t) '(ok))))))
+
 ;;;; Lints
 
 (defconst drgnx-teardown--registrations
   '(add-hook advice-add add-function add-to-list define-advice run-with-timer run-at-time run-with-idle-timer
+             eval-after-load with-eval-after-load
              drgnx-command-define drgnx-wb-define-section drgnx-wb-define-tab drgnx-wb-define-area drgnx-wb-place
              drgnx-wb-define-place drgnx-signal-subscribe drgnx-surfaces-define-context drgnx-layouts-define-pane
              drgnx-layouts-define-shape drgnx-statusbar-define-segment drgnx-pane-define-kind drgnx-modal-define-engine)
@@ -250,11 +273,12 @@ at load\" for each ALLOWED entry of FILES that is gone."
 (with-eval-after-load 'c (add-to-list 'd 1))
 (drgnx-module-define 'fake/load :setup (lambda () (run-with-timer 1 nil #'a)))
 '(drgnx-command-define 'q)")))
-                             (should (equal (drgnx-teardown--load-registrations f) '(advice-add add-to-list)))
+                             (should (equal (drgnx-teardown--load-registrations f) '(advice-add with-eval-after-load)))
                              (should (equal (mapcar (lambda (s) (replace-regexp-in-string "\\`[^:]*: " "" s))
                                                     (drgnx-teardown--load-violations (list f) `((,(drgnx-teardown--rel f) advice-add :until 1)
                                                                                                 (,(drgnx-teardown--rel f) run-at-time :until 1))))
-                                            '("add-to-list at load (put it in the setup)" "run-at-time no longer at load (remove the entry)"))))))
+                                            '("with-eval-after-load at load (put it in the setup)"
+                                              "run-at-time no longer at load (remove the entry)"))))))
 
 (defvar drgnx-teardown--globals-cache nil)
 
@@ -293,6 +317,8 @@ ALWAYS is non-nil when a :teardown does not make it right."
      (cons nil (format "%s" f)))
     (`(,(or 'define-key 'keymap-set) ,(or 'global-map '(current-global-map)) . ,_)
      (cons nil (format "%s global-map (use drgnx-module-define-key)" (car form))))
+    (`(add-function ,_ ,(and place (or `(default-value ,_) (pred symbolp))) . ,_)
+     (cons nil (format "add-function on %S (push its remove-function)" place)))
     (`(add-hook ,hook ,(pred drgnx-teardown--lambda-p) . ,(or 'nil `(,_) `(,_ nil)))
      (cons t (format "a lambda on the global hook %S (name it)" hook)))))
 
@@ -344,6 +370,7 @@ ALWAYS is non-nil when a :teardown does not make it right."
   (face-spec-set 'f nil) (custom-set-faces) (setopt x 1) (setq-default y 1)
   (define-key global-map [remap a] #'b) (define-key some-map [remap a] #'b)
   (push '(a . b) default-frame-alist) (modify-frame-parameters nil nil)
+  (add-function :before (default-value 'x) #'a) (add-function :before (local 'x) #'a)
   (add-hook 'find-file-hook (lambda () 1))
   (add-hook 'find-file-hook #'a)
   (add-hook 'find-file-hook (lambda () 1) nil t))")))
@@ -358,6 +385,7 @@ ALWAYS is non-nil when a :teardown does not make it right."
                                               "define-key global-map (use drgnx-module-define-key), without a :teardown"
                                               "default-frame-alist (use drgnx-module-alist-put), without a :teardown"
                                               "modify-frame-parameters, without a :teardown"
+                                              "add-function on (default-value 'x) (push its remove-function), without a :teardown"
                                               "a lambda on the global hook 'find-file-hook (name it)")))
                              ;; with a :teardown, only what it cannot make right
                              (should (equal (mapcar (lambda (s) (replace-regexp-in-string "\\`[^:]*: " "" s))
