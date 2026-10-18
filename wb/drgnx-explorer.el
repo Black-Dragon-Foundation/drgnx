@@ -879,22 +879,40 @@ foreground."
                (b (file-attribute-device-number (file-attributes trash 'integer))))
            (and a b (not (equal a b)))))))
 
+(defun drgnx-explorer--trash-sync (path)
+  "Move PATH to the trash the Emacs way (in the foreground); a link goes, never what it points to."
+  (let ((delete-by-moving-to-trash t))
+    (if (and (file-directory-p path) (not (file-symlink-p path)))
+        (delete-directory path t t)
+      (delete-file path t))))
+
 (defun drgnx-explorer--gio-trash (path)
-  "Move PATH to the trash with `gio trash' in the background; non-nil when it was started.  A failure is
-reported with a message, the folder is shown again when it ends."
+  "Move PATH to the trash with `gio trash' in the background; non-nil when it was started.  When it
+ends: success closes the buffers visiting PATH; a failure (gio refuses some mounts, tmpfs among them)
+falls back to the Emacs trash and only says so, with gio's own words, if that fails too.  The folder
+is refreshed if it is shown."
   (when (executable-find "gio")
-    (condition-case nil
-        (let ((dir (drgnx-explorer--parent path)))
-          (make-process :name "drgnx-gio-trash" :command (list "gio" "trash" "--" path)
-                        :connection-type 'pipe :noquery t
-                        :sentinel (lambda (_proc event)
-                                    (unless (string-prefix-p "finished" event)
-                                      (message "Could not move %s to the trash: %s"
-                                               (file-name-nondirectory path) (string-trim event)))
-                                    (when (get-buffer drgnx-explorer-buffer-name)
-                                      (ignore-errors (drgnx-explorer--show-folder dir)))))
-          t)
-      (error nil))))
+    (let ((out (generate-new-buffer " *drgnx-gio-trash*" t)) (dir (drgnx-explorer--parent path)))
+      (condition-case nil
+          (progn
+            (make-process
+             :name "drgnx-gio-trash" :command (list "gio" "trash" "--" path) :buffer out
+             :connection-type 'pipe :noquery t
+             :sentinel (lambda (_proc event)
+                         (let ((why (if (buffer-live-p out) (string-trim (with-current-buffer out (buffer-string))) "")))
+                           (when (buffer-live-p out) (kill-buffer out))
+                           (condition-case nil
+                               (progn
+                                 (unless (string-prefix-p "finished" event)
+                                   (drgnx-explorer--trash-sync path))
+                                 (drgnx-explorer--close-buffers (list path)))
+                             (error (message "Could not move %s to the trash: %s"
+                                             (file-name-nondirectory path)
+                                             (if (string-empty-p why) (string-trim event) why)))))
+                         (when (get-buffer drgnx-explorer-buffer-name)
+                           (ignore-errors (drgnx-explorer--refresh-dir dir)))))
+            t)
+        (error (kill-buffer out) nil)))))
 
 (defun drgnx-explorer-delete (&optional permanently)
   "Move the file(s) here to the trash (with PERMANENTLY — a prefix argument — delete them)."
@@ -905,11 +923,14 @@ reported with a message, the folder is shown again when it ends."
             (y-or-n-p (format "Move %s to the trash? " (drgnx-explorer--describe paths))))
       (let ((delete-by-moving-to-trash (not permanently)))     ; the trash unless asked otherwise — not Emacs' default (nil)
         (dolist (p paths)
-          (unless (and (not permanently) (drgnx-explorer--trash-cross-device-p p) (drgnx-explorer--gio-trash p))
+          ;; gio takes a cross-device file in the background, and only when the user has no `trash-directory' (gio
+          ;; ignores it); its buffers close when it ends.  Every other path is gone at once, and so are its buffers.
+          (unless (and (not permanently) (not trash-directory) (drgnx-explorer--trash-cross-device-p p)
+                       (drgnx-explorer--gio-trash p))
             (if (and (file-directory-p p) (not (file-symlink-p p)))   ; a link goes, never what it points to
                 (delete-directory p t (not permanently))
-              (delete-file p (not permanently))))))
-      (drgnx-explorer--close-buffers paths)
+              (delete-file p (not permanently)))
+            (drgnx-explorer--close-buffers (list p)))))
       (setq drgnx-explorer--selection nil)
       (dolist (d (delete-dups (mapcar #'drgnx-explorer--parent paths))) (drgnx-explorer--show-folder d)))))
 

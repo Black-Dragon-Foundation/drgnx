@@ -341,22 +341,39 @@
 
 ;;;; M3b-15: the trash on another device is gio's, in the background
 
+(defmacro drgnx-explorer-edge--gio (&rest body)
+  "BODY with a cross-device trash handled by a stubbed gio: `started' collects make-process arguments,
+`said' the messages, `synced' the paths the Emacs trash was asked for (it only records)."
+  (declare (indent 0))
+  `(let ((started nil) (said nil) (synced nil))
+     (cl-letf (((symbol-function 'drgnx-explorer--trash-cross-device-p) (lambda (_p) t))
+               ((symbol-function 'executable-find) (lambda (c &rest _) (and (equal c "gio") "/usr/bin/gio")))
+               ((symbol-function 'message) (lambda (fmt &rest a) (push (apply #'format fmt a) said)))
+               ((symbol-function 'drgnx-explorer--trash-sync) (lambda (p) (push p synced)))
+               ((symbol-function 'make-process) (lambda (&rest args) (push args started) 'proc)))
+       ,@body)))
+
+(defun drgnx-explorer-edge--gio-ends (started event &optional output)
+  "End the gio process of STARTED's newest entry with EVENT, after it wrote OUTPUT."
+  (let ((buf (plist-get (car started) :buffer)))
+    (when (and output (buffer-live-p buf)) (with-current-buffer buf (insert output)))
+    (funcall (plist-get (car started) :sentinel) 'proc event)))
+
 (ert-deftest drgnx-explorer-edge/trash-on-another-device-is-an-async-gio-trash ()
   (drgnx-explorer-edge--with root
-    (let ((started nil) (file (expand-file-name "README.md" root)) (said nil))
-      (drgnx-explorer-edge--answering '(t)
-        (cl-letf (((symbol-function 'drgnx-explorer--trash-cross-device-p) (lambda (_p) t))
-                  ((symbol-function 'executable-find) (lambda (c &rest _) (and (equal c "gio") "/usr/bin/gio")))
-                  ((symbol-function 'message) (lambda (fmt &rest a) (push (apply #'format fmt a) said)))
-                  ((symbol-function 'make-process) (lambda (&rest args) (push args started) 'proc)))
-          (with-current-buffer (drgnx-explorer-edge--at "README.md") (drgnx-explorer-delete))))
-      (should (= 1 (length started)))
-      (should (equal (plist-get (car started) :command) (list "gio" "trash" "--" file)))
-      (should (file-exists-p file))                       ; nothing was copied or deleted synchronously
-      ;; a failed gio says so (no prompt, no error from a sentinel)
-      (cl-letf (((symbol-function 'message) (lambda (fmt &rest a) (push (apply #'format fmt a) said))))
-        (funcall (plist-get (car started) :sentinel) 'proc "exited abnormally with code 1\n"))
-      (should (seq-find (lambda (m) (string-match-p "README\\.md" m)) said))))
+    (let ((file (expand-file-name "README.md" root)) (trash-directory nil)
+          (clean (find-file-noselect (expand-file-name "README.md" root))))
+      (drgnx-explorer-edge--gio
+        (drgnx-explorer-edge--answering '(t)
+          (let ((trash-directory nil))
+            (with-current-buffer (drgnx-explorer-edge--at "README.md") (drgnx-explorer-delete))))
+        (should (= 1 (length started)))
+        (should (equal (plist-get (car started) :command) (list "gio" "trash" "--" file)))
+        (should (file-exists-p file))                     ; nothing was copied or deleted synchronously
+        (should (buffer-live-p clean))                    ; and nothing is said to be gone before gio is
+        (drgnx-explorer-edge--gio-ends started "finished\n")
+        (should-not (buffer-live-p clean))                ; closed when gio succeeded
+        (should-not synced))))
   ;; permanently: no gio; same device: the Emacs trash
   (dolist (case '((t . nil) (nil . nil)))
     (drgnx-explorer-edge--with root
@@ -368,6 +385,63 @@
             (with-current-buffer (drgnx-explorer-edge--at "README.md") (drgnx-explorer-delete (car case)))))
         (should-not started)
         (should-not (file-exists-p (expand-file-name "README.md" root)))))))
+
+(ert-deftest drgnx-explorer-edge/a-failed-gio-falls-back-to-the-emacs-trash ()
+  ;; review F2a, b: gio refuses some cross-device cases (tmpfs); the file then goes the Emacs way,
+  ;; and only when that fails too is there a message, with gio's own words
+  (drgnx-explorer-edge--with root
+    (let ((file (expand-file-name "README.md" root)) (dirty (find-file-noselect (expand-file-name "README.md" root))))
+      (with-current-buffer dirty (insert "unsaved"))
+      (unwind-protect
+          (drgnx-explorer-edge--gio
+            (drgnx-explorer-edge--answering '(t)
+              (let ((trash-directory nil))
+                (with-current-buffer (drgnx-explorer-edge--at "README.md") (drgnx-explorer-delete))))
+            (should-not (seq-find (lambda (m) (string-match-p "deleted" m)) said))   ; nothing yet
+            (drgnx-explorer-edge--gio-ends started "exited abnormally with code 1\n"
+                                           "Trashing on system internal mounts is not supported\n")
+            (should (equal synced (list file)))                                    ; the fallback
+            (should-not (seq-find (lambda (m) (string-match-p "Could not" m)) said))
+            (should (seq-find (lambda (m) (string-match-p "README\\.md.*unsaved" m)) said)))  ; success: now said
+        (with-current-buffer dirty (set-buffer-modified-p nil))
+        (kill-buffer dirty))))
+  (drgnx-explorer-edge--with root
+    (let ((file (expand-file-name "README.md" root)) (clean (find-file-noselect (expand-file-name "README.md" root))))
+      (drgnx-explorer-edge--gio
+        (cl-letf (((symbol-function 'drgnx-explorer--trash-sync) (lambda (_p) (error "No trash here"))))
+          (drgnx-explorer-edge--answering '(t)
+            (let ((trash-directory nil))
+              (with-current-buffer (drgnx-explorer-edge--at "README.md") (drgnx-explorer-delete))))
+          (drgnx-explorer-edge--gio-ends started "exited abnormally with code 1\n"
+                                         "Trashing on system internal mounts is not supported\n"))
+        (should (file-exists-p file))
+        (should (buffer-live-p clean))                    ; the file is still there: so is its buffer
+        (should (seq-find (lambda (m) (string-match-p "Could not.*README\\.md.*internal mounts" m)) said))
+        (kill-buffer clean)))))
+
+(ert-deftest drgnx-explorer-edge/a-set-trash-directory-is-not-gios ()
+  ;; review F2c: gio ignores `trash-directory'; when the user set one, Emacs' trash is the only one that honours it
+  (drgnx-explorer-edge--with root
+    (drgnx-explorer-edge--gio
+      (drgnx-explorer-edge--answering '(t)                 ; binds `trash-directory' to a temp dir
+        (with-current-buffer (drgnx-explorer-edge--at "README.md") (drgnx-explorer-delete))
+        (should-not started)
+        (should-not (file-exists-p (expand-file-name "README.md" root)))
+        (should (directory-files trash nil "README" t))))))
+
+(ert-deftest drgnx-explorer-edge/the-gio-sentinel-leaves-a-collapsed-folder-collapsed ()
+  ;; review F2d: the sentinel refreshes the folder if it is shown; it never re-expands one
+  (drgnx-explorer-edge--with root
+    (let ((shown nil) (refreshed nil))
+      (drgnx-explorer-edge--gio
+        (drgnx-explorer-edge--answering '(t)
+          (let ((trash-directory nil))
+            (with-current-buffer (drgnx-explorer-edge--at "README.md") (drgnx-explorer-delete))))
+        (cl-letf (((symbol-function 'drgnx-explorer--show-folder) (lambda (d) (push d shown)))
+                  ((symbol-function 'drgnx-explorer--refresh-dir) (lambda (d) (push d refreshed))))
+          (drgnx-explorer-edge--gio-ends started "finished\n"))
+        (should-not shown)
+        (should (equal refreshed (list (directory-file-name root))))))))
 
 (ert-deftest drgnx-explorer-edge/trash-device-test-compares-device-numbers ()
   (let ((dir (make-temp-file "drgnx-dev" t)))

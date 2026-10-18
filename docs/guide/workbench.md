@@ -76,7 +76,10 @@ can make it act on another file, and Paste checks every item before it moves the
 removes the link, never what it points to. Deleting a file closes the buffers visiting it (a folder: the ones
 inside it); a buffer with unsaved changes stays, and a message says so. When the trash is on another device
 than the file (Emacs would copy it across, and wait), `gio trash` does it in the background if `gio` is
-installed; a failure is reported in the echo area, and the folder is shown again when it ends. New File and Rename stay inside the Explorer's folders (`../x`, `~/x`
+installed and you have not set `trash-directory` (gio ignores it). The buffers close, and a message about an
+unsaved one appears, only when the file is really gone. If gio refuses (tmpfs and other internal mounts), the
+file goes to the trash the Emacs way instead; only if that fails too does the echo area say so, with gio's
+reason. The folder is refreshed when it ends (a folder you collapsed meanwhile stays collapsed). New File and Rename stay inside the Explorer's folders (`../x`, `~/x`
 and absolute paths are refused); the new file's row is shown, its new folders opened. A rename that changes only
 the case works on case-insensitive disks too. Reveal in the file manager uses `xdg-open` on Linux, `open -R`
 on macOS and `explorer.exe /select,` on Windows; it refuses a remote (TRAMP) path. Remote folders are listed
