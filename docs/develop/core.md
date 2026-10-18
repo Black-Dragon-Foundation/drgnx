@@ -420,6 +420,60 @@ Every layer timer's Emacs function is `drgnx-timer--fire` with the entry as its 
 else nil; `(drgnx-timer-pending)` → `(KEY OWNER KIND)` for every live key; `(drgnx-timer-reset)` cancels them all
 (tests and the census). The layer never cancels a timer it did not make.
 
+### The primitives: debounce, soon, poll, idle steps
+
+Four calls cover the idioms a hand-written timer used to. Each takes a KEY, an `:owner` (default as in
+`drgnx-timer-start`) and a named function, returns KEY (nil when the owner is gone already), and fires through
+`drgnx-timer--fire`, so the owner check, the error record and the failure limit are the same.
+
+```elisp
+(drgnx-timer-debounce KEY SECS FN &key args idle owner)
+(drgnx-timer-soon KEY SECS FN &key args idle min-interval owner)
+(drgnx-timer-poll KEY INTERVAL FN &key deadline on-timeout args owner)
+(drgnx-timer-idle-steps KEY SECS STEP &key args budget interruptible owner on-done)
+```
+
+| The old idiom | Use |
+|---|---|
+| cancel the timer and start it again on every event | `drgnx-timer-debounce` |
+| `(unless (timerp X) (setq X (run-at-time …)))` | `drgnx-timer-soon` |
+| a minimum interval between runs | `drgnx-timer-soon … :min-interval` |
+| a lambda that looks "every N s" until something is true | `drgnx-timer-poll … :deadline` |
+| "keep going while idle", a step at a time | `drgnx-timer-idle-steps` |
+| `run-at-time 0 nil` out of a process filter or sentinel | stays raw |
+
+- **Debounce.** FN runs with the last call's ARGS once SECS pass with no further call. While one is pending a call
+  only stores ARGS and, for a wall debounce, the time (`drgnx-timer--now`): it makes no timer, does not look at the
+  owner again and, for `:idle t`, reads no clock (an idle debounce arms one idle timer once; input resets idleness,
+  so calls only store ARGS). A wall timer that fires earlier than SECS after the last call waits the remainder, in a
+  new timer made from a delay. SECS and IDLE are those of the call that armed it. A call on a key that holds another
+  kind of timer replaces it. The pending path costs 4 conses (the `&key` list) and one float per call under
+  byte-compilation, no vector cell: `drgnx-timer-prim/debounce-while-pending-makes-no-timer` and
+  `…/an-idle-debounce-reads-no-clock` assert it.
+- **Soon.** FN runs once, SECS after the first call of a burst, with that call's ARGS; a call while pending does
+  nothing and returns KEY. With `:min-interval` the delay is `max(SECS, LAST + MIN-INTERVAL - now)`, LAST being when
+  the key's previous run began. LAST is in `drgnx-timer--last-run` (key → `(TIME . OWNER)`), kept only for keys that
+  have a MIN-INTERVAL; `drgnx-timer-cancel`, `-cancel-owner`, `-reset` and the killing of an owner buffer remove
+  it. A live view uses it as its draw throttle (one key for the mark, another, plain `drgnx-timer-start`, for the
+  continuation, so the interval never delays the next slice).
+- **Poll.** `:deadline` is required: a positive number of seconds from the call, or the call signals
+  `(wrong-type-argument numberp DEADLINE)` at once. Every INTERVAL FN runs with ARGS; non-nil ends the poll. At the
+  first firing at or past the deadline ON-TIMEOUT runs with ARGS instead (once) and the poll ends. An owner that
+  goes ends it with no ON-TIMEOUT; the failure limit ends it and calls ON-TIMEOUT once.
+- **Idle steps.** For work that must finish soon after the user stops but never while they type. The *pause starter*
+  is a repeating idle timer at SECS; after a firing that leaves work and saw no input, the *chain*, a one-shot idle
+  timer SECS further into the same pause, carries on, so a pause long enough finishes all the steps. A firing calls
+  STEP at least once, and again while it returns non-nil, no input is pending and BUDGET (default
+  `drgnx-timer-step-budget`, 8 ms) is not spent. STEP returning nil cancels both timers, drops the key and runs
+  ON-DONE. Input pending cancels the chain and the starter resumes SECS into the next pause (a stale chain is
+  cancelled when the starter fires, so it never delays it). `:interruptible t` runs each step in `while-no-input`;
+  an aborted step counts as input and runs again in the next pause (leave it off for steps that are unsafe to
+  abort). A step that signals ends its firing with no chain; the failure limit stops the key. Drawing never uses
+  idle steps.
+
+All four read the clock only through `drgnx-timer--now` and schedule by delays, so the clock fixture drives them:
+`test/unit/core-timer-primitives-test.el` (`drgnx-timer-prim/`).
+
 ### The clock seams
 
 The layer reads time and input only through `drgnx-timer--now` (`float-time`), `drgnx-timer--idle-time`
