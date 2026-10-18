@@ -51,7 +51,7 @@
       (sqlite-execute db "insert into job values ('j', 'J', 'p.md', '/r/', 'running', 1.0, null)")
       (sqlite-execute db "insert into meta values ('schema', '3')")
       (sqlite-close db))
-    (should (= (drgnx-work-db-version) 4))
+    (should (= (drgnx-work-db-version) drgnx-work-db-schema-version))
     (should (sqlite-select (drgnx-work-db) "select name from sqlite_master where name = 'card'"))
     (should (equal (caar (sqlite-select (drgnx-work-db) "select status from job where id = 'j'")) "running"))))
 

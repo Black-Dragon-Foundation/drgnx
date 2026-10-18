@@ -7,7 +7,7 @@ Several agents on one project share what they decide, not only what they edit. T
 **stale beliefs**: one agent changes the picture (a decision, a moved file, a feature dropped) and the others keep
 working from the old one. So the shared state is explicit, versioned, and **enforced**.
 
-## The store (`core/drgnx-coord.el`, `work.db` schema 3)
+## The store (`core/drgnx-coord.el`, `work.db` schema 5)
 
 | Table | What |
 |---|---|
@@ -17,6 +17,9 @@ working from the old one. So the shared state is explicit, versioned, and **enfo
 | `decision` | n, kind (`build` `wait` `wont-build` `replaces`), subject, task, paths, reason, author, status (`current` `proposed` `replaced`), replaces, at, ver |
 | `message` | id, job, sender, recipient, text, state (`queued` `delivered` `read` `acted` `held`), reason, at, delivered, read, acted |
 | `card` | id, job, task, kind, title, data (a printed plist: the waiting session, the request, …), state (`open` `settled`), at, settled_at, choice (schema 4) |
+| `event` | id, at, agent, job, task, kind (`drgnx-coord-event-kinds`), summary (one line, at most 200 characters), data (a printed plist) — what happened, oldest first (schema 5) |
+| `agent` | id, kind, name, cwd, worktree, branch, base, plan, task, pid, started, seen — who works, and where (schema 5) |
+| `review_mark` | agent, path, state (`accepted` `pending`), hash, at — the user's review marks on an agent's changes (schema 5) |
 | `meta` | `log-version` (the decision log's version), `seen:AGENT` (the version an agent last read) |
 
 - **Tasks:** statuses `pending ready claimed running needs-input in-review done failed dropped`. A task without
@@ -40,6 +43,22 @@ working from the old one. So the shared state is explicit, versioned, and **enfo
   agent sends another at most `drgnx-coord-pair-rate` (6) a minute. Beyond either a message is `held` with its
   reason (`queue full`, `too many between these two`); the user's own Emacs, which sends with no sender, counts as the sender
   `user` for both that limit and the replies it makes. Escalations to `user` are never held as a full queue.
+
+### Events, the registry and review marks
+
+- **Events:** `drgnx-coord-event-add` (`:agent :job :task :kind :summary :data :at`) and `drgnx-coord-events` (`:since :agent
+  :job :task :kinds :limit`, oldest first, ids after `:since`: a viewer keeps the last id and asks for what is newer). The
+  writers above add their event in the **same transaction** as the change, so the two are there together or not at
+  all: claim (`claim`), release-stale (`release`), set-status and force-status (`status`), decide (`decision`), send
+  (`message`; to `user` with a text starting `[escalation]`, `question`), card-create and card-settle (`card`). A held
+  write (behind the log) or a refused claim writes nothing. `edit`, `test`, `start`, `stop`, `review`, `accept`,
+  `revert`, `answer` and `comment` are written by their own sources through `drgnx-coord-event-add`.
+- **Questions:** `drgnx-coord-open-questions` lists the `question` events that no later `answer` event names
+  (the answer's `data` holds `(:question EVENT-ID)`).
+- **Registry:** `drgnx-coord-agent-register` (keeps what is not given, and when the agent started), `drgnx-coord-agent`,
+  `drgnx-coord-agents`, `drgnx-coord-agent-seen` (stamps an agent alive now and returns the stamp).
+- **Review marks:** `drgnx-coord-review-mark AGENT PATH STATE HASH` and `drgnx-coord-review-marks AGENT` (alist
+  path → `(:state :hash :at)`). Accepting or reverting is a review layer only: nothing in the files changes.
 
 ## The tools (`core/drgnx-mcp.el`, `core/drgnx-coord-mcp.el`)
 

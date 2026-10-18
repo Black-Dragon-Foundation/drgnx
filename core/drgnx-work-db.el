@@ -43,7 +43,16 @@
     ;; M9b.4: what needs the user, with its actions (core/drgnx-job.el)
     (4 "create table if not exists card (id integer primary key, job text, task text, kind text, title text, data text,
         state text, at real, settled_at real, choice text)"
-       "create index if not exists card_job on card(job, state)"))
+       "create index if not exists card_job on card(job, state)")
+    ;; M12f: what happened (the event log), who is working (the agent registry), what the user reviewed (core/drgnx-coord.el)
+    (5 "create table if not exists event (id integer primary key, at real, agent text, job text, task text, kind text,
+        summary text, data text)"
+       "create index if not exists event_at on event(at)"
+       "create index if not exists event_agent on event(agent)"
+       "create table if not exists agent (id text primary key, kind text, name text, cwd text, worktree text, branch text,
+        base text, plan text, task text, pid integer, started real, seen real)"
+       "create table if not exists review_mark (agent text, path text, state text, hash text, at real,
+        primary key (agent, path))"))
   "Migrations: (VERSION SQL…), applied in order to a database below VERSION.")
 
 (defconst drgnx-work-db-schema-version (car (car (last drgnx-work-db--steps))))
