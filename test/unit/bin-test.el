@@ -340,6 +340,16 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
       (should (eql 0 (car (drgnx-bin-test--call drgnx-bin-test--bin env "open"))))
       (should (equal (drgnx-bin-test--slurp log) "earlier start\nfake daemon started\n")))))
 
+(ert-deftest drgnx-bin/an-empty-or-relative-xdg-state-home-counts-as-unset ()
+  ;; The XDG spec: an empty or relative XDG_STATE_HOME is ignored — never a directory under where drgnx was run.
+  (dolist (value '("" "rel"))
+    (drgnx-bin-test--with-open
+      (let ((drgnx-bin-test--cwd (expand-file-name "cwd" dir)))
+        (make-directory drgnx-bin-test--cwd)
+        (should (eql 0 (car (drgnx-bin-test--call drgnx-bin-test--bin (cons (concat "XDG_STATE_HOME=" value) env) "open"))))
+        (should (file-exists-p (expand-file-name ".local/state/drgnx/daemon.log" dir)))
+        (should (equal (directory-files drgnx-bin-test--cwd nil "\\`[^.]") nil))))))
+
 (defun drgnx-bin-test--lock (dir)
   (expand-file-name (format "state/drgnx/open-%s.lock" drgnx-bin-test--server) dir))
 

@@ -21,7 +21,8 @@ modules/<category>/drgnx-<name>.el   one drgnx-module-define per file
 
 `drgnx-dir` is the checkout (code only, never written to). User configuration: `(drgnx-user-dir)` —
 `$DRGNX_CONFIG_DIR` or `~/.config/drgnx/`. State and caches: `(drgnx-state-dir)` and `(drgnx-cache-dir)` under
-the XDG directories. Packages: `(drgnx-data-dir)` — `$DRGNX_DATA_DIR` or `~/.local/share/drgnx/` — holds `elpa/`
+the XDG directories (`$XDG_STATE_HOME`, `$XDG_CACHE_HOME`, `$XDG_DATA_HOME`: only an absolute path counts — empty or
+relative is ignored, as the XDG spec says, here and in `bin/drgnx`'s `xdg_dir`). Packages: `(drgnx-data-dir)` — `$DRGNX_DATA_DIR` or `~/.local/share/drgnx/` — holds `elpa/`
 (the packages every session uses) and `generations/`; `(drgnx-package-cache-dir)` keeps downloaded package files
 ([packages.md](../guide/packages.md)).
 Started with `--init-directory <checkout>/init`, Emacs keeps its own state (`user-emacs-directory`: auto-save list,

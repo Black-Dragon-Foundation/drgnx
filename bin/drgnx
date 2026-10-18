@@ -174,7 +174,7 @@ test_install() { # [NAME…] — install.sh end to end in fresh containers (slow
   done
   rt="${DRGNX_CONTAINER:-$(env_eval '(drgnx-env-container-runtime)')}"   # set: no host Emacs needed (CI)
   [ -n "$rt" ] || { echo "drgnx: no container runtime found (podman, docker, nerdctl); set DRGNX_CONTAINER" >&2; return 1; }
-  logs="${XDG_STATE_HOME:-$HOME/.local/state}/drgnx/install-tests"
+  logs="$(xdg_dir XDG_STATE_HOME "$HOME/.local/state")/drgnx/install-tests"
   # A snapshot of the working tree (edits during a run cannot reach it), committed and bundled so the
   # containers clone and update drgnx the way users do: DRGNX_INSTALL_REPO=/src/drgnx.bundle.
   local snap="$logs/src"
@@ -236,8 +236,14 @@ probe() { # emacsclient for a question to the daemon: it answers within 5 s or i
   client --timeout=5 "$@"
 }
 
+xdg_dir() { # VAR DEFAULT — $VAR when it is an absolute path, else DEFAULT: the XDG spec ignores an empty or relative value (as core/drgnx-paths.el)
+  local v="${!1:-}"
+  if [[ "$v" == /* ]]; then printf '%s' "$v"; else printf '%s' "$2"; fi
+}
+
 open_lock() { # one `drgnx open' at a time decides whether to start the daemon and open a window (a mkdir lock)
-  local stale deadline token since owner nostamp="" lock="${XDG_STATE_HOME:-$HOME/.local/state}/drgnx/open-${DRGNX_SERVER_NAME:-drgnx}.lock"
+  local stale deadline token since owner nostamp="" lock
+  lock="$(xdg_dir XDG_STATE_HOME "$HOME/.local/state")/drgnx/open-${DRGNX_SERVER_NAME:-drgnx}.lock"
   mkdir -p "${lock%/*}" 2>/dev/null || return 0     # nowhere to keep a lock: go on without
   open_wait_init
   stale=$((OPEN_WAIT + 15))                         # a holder is done within the wait; older: its owner is gone
@@ -294,7 +300,7 @@ open_start() { # start drgnx's daemon (the systemd unit when it is enabled), wai
   if [[ "$name" == drgnx ]] && command -v systemctl >/dev/null 2>&1 && systemctl --user is-enabled --quiet drgnx 2>/dev/null; then
     systemctl --user start drgnx || return 1
   else
-    log="${XDG_STATE_HOME:-$HOME/.local/state}/drgnx/daemon.log"
+    log="$(xdg_dir XDG_STATE_HOME "$HOME/.local/state")/drgnx/daemon.log"
     mkdir -p "${log%/*}"
     # in its own session, outliving this shell: setsid, else perl (macOS), as core/drgnx-jobs.el does
     if command -v setsid >/dev/null 2>&1; then

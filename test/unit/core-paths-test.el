@@ -9,6 +9,20 @@
     (should (equal (drgnx-state-dir) "/tmp/xs/drgnx/"))
     (should (equal (drgnx-cache-dir) "/tmp/xc/drgnx/"))))
 
+(ert-deftest drgnx-paths/empty-or-relative-xdg-dirs-count-as-unset ()
+  ;; The XDG spec: a relative path in these variables is invalid and ignored, as is an empty one — else both
+  ;; resolve against the current directory (a daemon's cwd).
+  (let ((default-directory (file-name-as-directory (make-temp-file "drgnx-cwd" t))))
+    (unwind-protect
+        (dolist (value '("" "rel" "~/x"))
+          (let ((process-environment (append (list "HOME=/tmp/drgnx-home" "DRGNX_DATA_DIR" (concat "XDG_STATE_HOME=" value)
+                                                   (concat "XDG_CACHE_HOME=" value) (concat "XDG_DATA_HOME=" value))
+                                             process-environment)))
+            (should (equal (drgnx-state-dir) "/tmp/drgnx-home/.local/state/drgnx/"))
+            (should (equal (drgnx-cache-dir) "/tmp/drgnx-home/.cache/drgnx/"))
+            (should (equal (drgnx-data-dir) "/tmp/drgnx-home/.local/share/drgnx/"))))
+      (delete-directory default-directory t))))
+
 (defun drgnx-paths-test--sigpipe-ignored-p (command)
   "Does COMMAND (a list) run with SIGPIPE ignored?  Its /proc/self/status says (bit 12 of SigIgn)."
   (with-temp-buffer
