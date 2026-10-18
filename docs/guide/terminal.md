@@ -1,26 +1,40 @@
 # drgnx in a terminal
 
-drgnx runs in a text terminal too: `emacsclient -s drgnx -t`, `emacs -nw`, over SSH, inside tmux. How much of it
-works depends on the terminal. A terminal has to send the shortcuts (`C-S-p`, `` C-` ``, `C-.` …), copy to your
-computer's clipboard, show true colour and report the mouse. This page lists what each common terminal can do,
-the shortcuts it keeps for itself, and the line that fixes what is missing.
+drgnx runs three ways, from the full experience down. Start at the first and go down only as far as you must:
+
+1. **A graphical window** (`drgnx`, the app, the desktop entry) is the full experience: every key, images, the
+   commit graph, the browser and Live panes, several font sizes, popups as floating frames.
+2. **A capable terminal** (`drgnx -t`, `emacsclient -s drgnx -t`, `emacs -nw`, also over SSH and inside tmux with a
+   few lines of tmux settings) gives the same workbench, the mouse, true colour and the clipboard. A terminal that
+   speaks a key protocol (WezTerm, Ghostty, foot, kitty, Alacritty, xterm) sends every shortcut, `C-S-p` and `` C-` ``
+   included. See [Keys](#keys) and [Get the full keys](#get-the-full-keys).
+3. **A legacy terminal** (GNOME Terminal, Ptyxis, Terminal.app, the Linux console, tmux without `extended-keys`)
+   cannot send `C-S-p`, `C-.` and the like. It has the same commands, with two more ways to type each shortcut:
+   **Alt+Shift** with the key, or **F6** then the key. **F1** opens the command palette (VS Code keys; `M-x` in every
+   profile), so every command can still be reached. See [Legacy terminals](#legacy-terminals-altshift-and-f6): its table
+   lists every shortcut of the VS Code profile and what to press instead, and a test checks the table against the profile.
+
+How much works in a terminal depends on the terminal: it has to send the shortcuts, copy to your computer's
+clipboard, show true colour and report the mouse. This page lists what each common terminal can do, the shortcuts it
+keeps for itself, and the line that fixes what is missing. [What a terminal window lacks](#what-a-terminal-window-lacks)
+lists what only a graphical window has. `drgnx doctor` run in a terminal tells you which way you are on and what would
+move you up ([Check this terminal](#check-this-terminal)).
 
 **Works best:** WezTerm, Ghostty, foot, kitty and Alacritty (modifyOtherKeys ones first: `C-g` keeps stopping busy Lisp
 there, see [Keys](#keys)). They send `C-S-` chords and the other shortcuts,
 and copy to the clipboard, over SSH as well. Each keeps some `C-S-` chords for itself; [the fixes](#the-fixes) free
-them. In any terminal, **F1** opens the command palette (VS Code keys) and `M-x` works in every
-profile, so every command can still be reached.
+them.
 
 The table is `drgnx-tty-terminals` in `core/drgnx-tty.el`; onboarding and the doctor read the same data.
 
 ## What each terminal can do
 
-Each row is **reported** (drgnx's builders have not run it yet) unless it says **verified**: the exit test ran
-drgnx in that terminal (see the notes under the table). A reported cell comes from official documentation: the
-linked page, or another official page or source named in [The fixes](#the-fixes), such as the kitty keyboard
-protocol's list of terminals, xterm's manual, tmux's manual, or the default shortcuts Ptyxis ships. A cell marked
-**(unconfirmed)** rests on secondary sources or general knowledge only. "Yes" means the terminal does it with its
-default settings.
+Each row is **reported** (drgnx's builders have not run it) or **verified**: a test tier ran drgnx in it (the notes
+under the table say what ran and what did not). A reported cell comes from official documentation: the linked page,
+or another official page or source named in [The fixes](#the-fixes), such as the kitty keyboard protocol's list of
+terminals, xterm's manual, tmux's manual, or the default shortcuts Ptyxis ships. A cell marked **(unconfirmed)** rests
+on secondary sources or general knowledge only. "Yes" means the terminal does it with its default settings. A test
+checks that this column says "verified" exactly for the rows the table's data marks verified.
 
 | Terminal | kkp | modifyOtherKeys | OSC 52 copy | True colour | Mouse | Shortcuts it keeps | Row |
 |---|---|---|---|---|---|---|---|
@@ -32,9 +46,9 @@ default settings.
 | [iTerm2](https://iterm2.com/documentation-preferences-profiles-keys.html) | no (unconfirmed; a setting) | no (unconfirmed) | no (unconfirmed) | yes (unconfirmed) | yes (unconfirmed) | (unconfirmed) Cmd keys (`s-c` `s-v` `s-t` …) | reported |
 | [GNOME Terminal, Ptyxis (VTE)](https://gitlab.gnome.org/GNOME/vte/-/issues/2495) | no (unconfirmed) | no | no | yes (unconfirmed) | yes (unconfirmed) | `C-S-c` `C-S-v` `C-S-t` `C-S-n` `C-S-o` `C-S-f` `C-S-a` `C-S-w` `C-S-q` `C-S-<prior>` `C-S-<next>` `S-<f10>` `C-M-S-t` | reported |
 | [Terminal.app](https://support.apple.com/guide/terminal/change-profiles-keyboard-settings-trmlkbrd/mac) | no (unconfirmed) | no (unconfirmed) | no (unconfirmed) | no (unconfirmed) | yes (unconfirmed) | (unconfirmed) Cmd keys (`s-c` `s-v` `s-t` …) | reported |
-| [xterm](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html) | no (unconfirmed) | yes | no | no (unconfirmed) | yes | (unconfirmed) `S-<prior>` `S-<next>` `S-<insert>` | reported |
+| [xterm](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html) | no (unconfirmed) | yes | no | no (unconfirmed) | yes | (unconfirmed) `S-<prior>` `S-<next>` `S-<insert>` | verified (xterm-like) |
 | [Linux console](https://man7.org/linux/man-pages/man4/console_codes.4.html) | no (unconfirmed) | no (unconfirmed) | no | no (unconfirmed) | no (unconfirmed) | (unconfirmed) `M-<f1>`…`M-<f12>`, `C-M-<f1>`…`C-M-<f12>` (switch consoles) | reported |
-| [tmux](https://man.openbsd.org/tmux) | no | no | no | no | yes (unconfirmed) | `C-b` (its prefix) | reported |
+| [tmux](https://man.openbsd.org/tmux) | no | no | no | no | yes (unconfirmed) | `C-b` (its prefix) | verified |
 
 - **kitty, verified:** `emacsclient -t` in kitty 0.48 (Fedora 44 and 45, so Emacs 30.2 and 31.1; `bin/drgnx test
   --container --tty`) gets kkp, with no Alt+Shift or F6 layer and no hint. `C-S-p`, `C-S-f`, `C-S-e`, `` C-` `` and
@@ -42,6 +56,17 @@ default settings.
   there are 16777216 colours, and `C-g` stops a program Emacs waits for. Still unconfirmed: the mouse reports kitty
   itself sends (the test sends them as bytes, and Emacs handles them) and the shortcuts kitty keeps (the test's keys
   bypass them).
+- **tmux, verified:** the tty tier (`bin/drgnx test --tty`, and in the Fedora 44 and 45 containers) runs drgnx inside
+  a private tmux server, a new one for every test, with the tmux settings of [drgnx inside tmux](#drgnx-inside-tmux)
+  off and on in turn. It checks that drgnx identifies tmux, asks it for modifyOtherKeys (level 1 and 2, and the `csi-u`
+  format), sends a copy as OSC 52 through `set-clipboard on` or through `allow-passthrough on` and keeps it in drgnx
+  when neither is set, sees focus events, gets true colour with an `RGB` feature, and reports missing settings without
+  writing `~/.tmux.conf`. The keys are sent to the pane as the bytes a terminal sends, so tmux's own key parsing is
+  not part of it.
+- **xterm, verified as "xterm-like":** the same tier opens its terminal windows with `TERM=xterm-256color`, the way
+  xterm (and any terminal that gives no name) looks to Emacs. With it drgnx's layout, mouse (as SGR reports), popups,
+  256 colours and 24-bit colour from `COLORTERM` are tested, and C-S- chords through modifyOtherKeys. It is **not**
+  a real xterm window: xterm's own defaults (the OSC 52 refusal, its shortcuts) rest on its manual.
 - **kkp** is the [kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/): every key and
   modifier arrives, `s-` (Super/Cmd) included. Its page lists the terminals that implement it.
 - **modifyOtherKeys** is xterm's older way: `C-S-` chords, `C-.`, `` C-` ``, `C-<return>` and `C-<tab>` arrive,
@@ -229,7 +254,7 @@ Settings (`M-x customize-variable`):
   is not used and `terminal-report.eld` says why (`:fallback-problems`), as it does for an entry that is not
   `(CHORD . KEY)` or names a chord your profile needs no fallback for.
 
-With VS Code keys (the table below is checked against the profile by a test):
+With VS Code keys (the rows are what `drgnx-tty-fallback-table` computes from the profile; a test fails if this table and the profile differ):
 
 | Chord | Command | Alt+Shift | F6 |
 |---|---|---|---|

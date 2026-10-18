@@ -215,7 +215,8 @@ server inherited from its first client (stale when another terminal attached sin
                  (osc52 . "XTerm*disallowedWindowOps: GetChecksum,GetIconTitle,GetSelection,GetWinTitle,SetXprop   (in ~/.Xresources: xterm's default list without SetSelection)")
                  (truecolor . "TERM=xterm-direct   (xterm's direct-colour terminfo; unconfirmed)"))
          :unconfirmed (:kkp :truecolor :takes)
-         :verified nil :source "https://invisible-island.net/xterm/ctlseqs/ctlseqs.html")
+         :verified "an xterm-like terminal (TERM=xterm-256color, modifyOtherKeys) under tmux, not a real xterm window: C-S- chords, the mouse as bytes, 256 colours (test/tty)"
+         :source "https://invisible-island.net/xterm/ctlseqs/ctlseqs.html")
     (:id linux :name "Linux console"
          :kkp nil :mok nil :osc52 nil :truecolor nil :mouse nil
          :takes ,(append (mapcar (lambda (n) (format "M-<f%d>" n)) (number-sequence 1 12))
@@ -237,7 +238,8 @@ server inherited from its first client (stale when another terminal attached sin
                  (truecolor . "set -as terminal-features ',xterm-kitty:RGB'   (in ~/.tmux.conf, with the outer TERM)")
                  (takes . "none: C-b is tmux's prefix; press it twice to send C-b, or `set -g prefix' another key"))
          :unconfirmed (:mouse)
-         :verified nil :source "https://man.openbsd.org/tmux"))
+         :verified "tmux 3, a private server per test: extended-keys, set-clipboard and passthrough copy, focus events, true colour with RGB (test/tty/tmux-test.el)"
+         :source "https://man.openbsd.org/tmux"))
   "What each terminal can do with its default settings, as its documentation reports it (`:verified' nil
 until the builder ran it, then what ran; `:source' the page).  :kkp the kitty keyboard protocol, :mok modifyOtherKeys,
 :osc52 copy to the local clipboard, :truecolor 24-bit colour, :mouse mouse reporting; :takes the chords the

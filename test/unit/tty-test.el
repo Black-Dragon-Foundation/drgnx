@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-tty)
+(require 'drgnx-paths)
 
 (defun drgnx-tty-test--id (env &optional answer)
   (plist-get (drgnx-tty-identify env answer) :id))
@@ -63,6 +64,23 @@
   (should (equal (drgnx-tty-unsendable '("C-p" "C-S-p" "<f1>" "C-.") 'legacy) '("C-S-p" "C-.")))
   (should-not (drgnx-tty-unsendable '("C-S-p" "C-.") 'kkp)))
 
+;; docs/guide/terminal.md's table says "verified" for the rows a tier ran and "reported" for the rest: the data decides
+(ert-deftest drgnx-tty/the-guide-table-says-what-ran ()
+  (let* ((doc (with-temp-buffer (insert-file-contents (expand-file-name "docs/guide/terminal.md" drgnx-dir)) (buffer-string)))
+         (section (substring doc (string-search "## What each terminal can do" doc) (string-search "\n## The fixes" doc)))
+         (seen nil))
+    (dolist (row drgnx-tty-terminals)
+      (let* ((name (plist-get row :name))
+             (line (seq-find (lambda (l) (string-prefix-p (format "| [%s](%s) |" name (plist-get row :source)) l))
+                             (split-string section "\n"))))
+        (ert-info ((format "%s" name))
+          (should line)
+          (push (plist-get row :id) seen)
+          ;; the last cell: "verified" followed by what ran, or "reported"
+          (should (string-match-p (if (plist-get row :verified) "| verified[^|]* |\\'" "| reported |\\'") line)))))
+    (should (= (length seen) (length drgnx-tty-terminals)))
+    (should (= (length drgnx-tty-terminals) (with-temp-buffer (insert section) (how-many "^| \\[" (point-min) (point-max)))))))
+
 (ert-deftest drgnx-tty/the-table-covers-every-terminal ()
   (should (equal (sort (mapcar (lambda (row) (plist-get row :id)) drgnx-tty-terminals) #'string<)
                  (sort (list 'kitty 'wezterm 'foot 'ghostty 'alacritty 'iterm2 'vte 'apple-terminal 'xterm 'linux 'tmux)
@@ -75,12 +93,13 @@
       (should (memq cell '(:kkp :mok :osc52 :truecolor :mouse :takes))))
     (should (stringp (plist-get row :name)))
     (should (string-prefix-p "https://" (plist-get row :source)))
-    ;; "reported" but kitty, which the exit test (test/tty/kitty-test.el) ran: what it ran, and its true colour is
-    ;; no longer unconfirmed
-    (if (eq (plist-get row :id) 'kitty)
-        (progn (should (stringp (plist-get row :verified)))
-               (should (equal (plist-get row :unconfirmed) '(:mok :mouse))))
+    ;; "reported" but the three a tier ran: kitty (the exit test, test/tty/kitty-test.el; its true colour is no
+    ;; longer unconfirmed), tmux and an xterm-like terminal (the tty tier under tmux): what ran
+    (if (memq (plist-get row :id) '(kitty tmux xterm))
+        (should (stringp (plist-get row :verified)))
       (should-not (plist-get row :verified)))
+    (when (eq (plist-get row :id) 'kitty)
+      (should (equal (plist-get row :unconfirmed) '(:mok :mouse))))
     (dolist (key (plist-get row :takes)) (should (key-valid-p key)))
     (dolist (cap '(kkp mok osc52 truecolor mouse))
       (unless (plist-get row (intern (format ":%s" cap)))
