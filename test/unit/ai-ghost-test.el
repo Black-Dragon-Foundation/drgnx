@@ -52,7 +52,7 @@ LLM answering SPEC; `o' found running."
           (progn
             (set-window-buffer (selected-window) buf)
             (let ((this-command 'self-insert-command)) (drgnx-ai-ghost--post-command))
-            (with-temp-buffer (funcall (timer--function drgnx-ai-ghost--timer)))   ; the pause, elsewhere
+            (with-temp-buffer (drgnx-ai-ghost--pause buf))   ; the pause, elsewhere
             (should (drgnx-ai-ghost-test--wait (lambda () (with-current-buffer buf (drgnx-ai-ghost-text)))))
             (should (equal (with-current-buffer buf (drgnx-ai-ghost-text)) "(message name)")))
         (set-window-buffer (selected-window) win-buf)))))
@@ -60,7 +60,7 @@ LLM answering SPEC; `o' found running."
 (ert-deftest drgnx-ai-ghost/the-pause-asks-nothing-for-a-buffer-no-longer-on-screen ()
   (drgnx-ai-ghost-test--with '((:path "/api/generate" :body "{\"response\":\"(message name)\"}"))
     (let ((this-command 'self-insert-command)) (drgnx-ai-ghost--post-command))
-    (funcall (timer--function drgnx-ai-ghost--timer))                  ; this buffer is not the selected window's
+    (drgnx-ai-ghost--pause (current-buffer))                  ; this buffer is not the selected window's
     (should-not drgnx-ai-ghost--request)))
 
 (ert-deftest drgnx-ai-ghost/with-no-provider-it-looks-again-now-and-then ()

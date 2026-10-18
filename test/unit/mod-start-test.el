@@ -43,7 +43,8 @@ window showing `*scratch*'.  `y-or-n-p' and every `read-*' fail: nothing here ma
           (server-after-make-frame-hook nil) (window-setup-hook nil) (drgnx-signal--subscribers nil)
           (drgnx-start--after-file nil)
           (drgnx-signal--timer (timer-create))             ; a timer already armed: nothing is scheduled
-          (drgnx-signal--editor-window nil) (drgnx-start--timer nil)
+          (drgnx-signal--editor-window nil)
+          (drgnx-modules--runs (list (list 'ui/face 'ui/face)))   ; ui/face is on: its timers start
           (old (window-buffer (selected-window))))
      (cl-letf (((symbol-function 'drgnx-face--ascii-frame-p) (lambda (_frame) nil))   ; the batch terminal is not UTF-8
                ((symbol-function 'drgnx-onboard--welcome-due-p) (lambda () nil))      ; no first-run Welcome in the way
@@ -335,20 +336,20 @@ absolute local name expanded against a remote folder) passes; everything else, \
     (should (= 1 (cl-count #'drgnx-start--on-editor-changed (alist-get 'editor-changed drgnx-signal--subscribers))))
     (should (drgnx-commands-get 'start-page))
     (drgnx-start--on-first-frame)                             ; batch: no timer
-    (should-not drgnx-start--timer)
+    (should-not (drgnx-timer-active-p 'start-first-frame))
     (let ((noninteractive nil))                               ; an owned, single timer
       (drgnx-start--on-first-frame)
-      (let ((first drgnx-start--timer))
-        (should (timerp first))
-        (drgnx-start--on-first-frame)
-        (should-not (memq first timer-idle-list))))
+      (drgnx-start--on-first-frame)
+      (should (equal (seq-filter (lambda (e) (eq (car e) 'start-first-frame)) (drgnx-timer-pending))
+                     '((start-first-frame ui/face start))))
+      (should (= 1 (cl-count #'drgnx-timer--fire timer-idle-list :key #'timer--function))))
+    (should (= 1 (drgnx-timer-cancel-owner 'ui/face)))        ; the module's run ends: the timer goes
     (drgnx-start-teardown)
     (should-not (memq #'drgnx-start-maybe-show drgnx-persist-after-restore-functions))
     (should-not (memq #'drgnx-start-maybe-show server-after-make-frame-hook))
     (should-not (memq #'drgnx-start--on-first-frame drgnx-first-gui-frame-hook))
     (should-not (memq #'drgnx-start--on-first-frame window-setup-hook))
-    (should-not (memq #'drgnx-start--on-editor-changed (alist-get 'editor-changed drgnx-signal--subscribers)))
-    (should-not drgnx-start--timer)))
+    (should-not (memq #'drgnx-start--on-editor-changed (alist-get 'editor-changed drgnx-signal--subscribers)))))
 
 (ert-deftest drgnx-start/a-transient-tab ()
   ;; the default of the setting names the page

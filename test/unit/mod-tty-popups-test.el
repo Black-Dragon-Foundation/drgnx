@@ -4,6 +4,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-tty-popups" drgnx-dir) nil t)
 (defvar corfu-mode)
 (defvar corfu-auto)
@@ -137,8 +138,10 @@ up-right, up-left)."
 (defmacro drgnx-tty-popups-test--hooks (&rest body)
   "BODY with the hooks the module adds and removes bound to nil, and the chrome advice taken off afterwards."
   `(let ((pre-redisplay-functions nil) (window-configuration-change-hook nil) (post-command-hook nil)
-         (drgnx-tty-popups--timer nil) (drgnx-tty-popups--ours nil))
+         (drgnx-modules--runs (list (list 'ui/terminal-popups 'ui/terminal-popups)))   ; the module is on
+         (drgnx-tty-popups--ours nil))
      (unwind-protect (progn ,@body)
+       (drgnx-timer-cancel 'tty-popups-show)
        (advice-remove 'drgnx-chrome--set #'drgnx-tty-popups--chrome-set))))
 
 (defun drgnx-tty-popups-test--sync (frames ascii &optional child-frames)
@@ -197,29 +200,28 @@ of them non-UTF-8."
          (drgnx-tty-popups--chrome-set orig 'utf-win 'tab-line-format " a ● × ")
          (should (equal (nreverse got) '((ascii-win tab-line-format " a * x ") (utf-win tab-line-format " a ● × ")))))))))
 
-(ert-deftest drgnx-tty-popups/typing-arms-a-timer-and-the-next-key-cancels-it ()
+(ert-deftest drgnx-tty-popups/typing-arms-a-timer-and-the-next-key-pushes-it-back ()
   (drgnx-tty-popups-test--hooks
-   (let (armed cancelled)
-     (cl-letf (((symbol-function 'run-with-timer) (lambda (&rest args) (push args armed) 'timer))
-               ((symbol-function 'timerp) (lambda (x) (eq x 'timer)))
-               ((symbol-function 'cancel-timer) (lambda (x) (push x cancelled)))
-               ((symbol-function 'drgnx-tty-popups--wanted-p) (lambda () t)))
-       (let ((corfu-auto-delay 0.3))
-         (with-temp-buffer
-           (drgnx-tty-popups--post-command)
-           (should (= (length armed) 1))
-           (should (= (car (car armed)) 0.3))
-           (should (eq (nth 2 (car armed)) #'drgnx-tty-popups--show))
-           (should (eq drgnx-tty-popups--timer 'timer))
-           ;; the next command cancels the pending one, and arms its own
-           (drgnx-tty-popups--post-command)
-           (should (equal cancelled '(timer)))
-           (should (= (length armed) 2))
-           ;; a command that wants nothing only cancels
-           (cl-letf (((symbol-function 'drgnx-tty-popups--wanted-p) (lambda () nil)))
-             (drgnx-tty-popups--post-command))
-           (should (= (length armed) 2))
-           (should-not drgnx-tty-popups--timer)))))))
+   (drgnx-test-with-clock ()
+     (let (shown)
+       (cl-letf (((symbol-function 'drgnx-tty-popups--show) (lambda (&rest args) (push args shown)))
+                 ((symbol-function 'drgnx-tty-popups--wanted-p) (lambda () t)))
+         (let ((corfu-auto-delay 0.3))
+           (with-temp-buffer
+             (drgnx-tty-popups--post-command)
+             (should (equal (car (drgnx-timer-pending)) '(tty-popups-show ui/terminal-popups debounce)))
+             ;; the next command pushes the pause back: one list, 0.3 s after the last key
+             (drgnx-test-advance 0.2)
+             (drgnx-tty-popups--post-command)
+             (drgnx-test-advance 0.2)
+             (should-not shown)
+             (drgnx-test-advance 0.15)
+             (should (equal (mapcar #'car shown) (list (current-buffer))))
+             ;; a command that wants nothing only cancels
+             (drgnx-tty-popups--post-command)
+             (cl-letf (((symbol-function 'drgnx-tty-popups--wanted-p) (lambda () nil)))
+               (drgnx-tty-popups--post-command))
+             (should-not (drgnx-timer-active-p 'tty-popups-show)))))))))
 
 (ert-deftest drgnx-tty-popups/the-timer-shows-the-list-without-prompting-and-notes-it-is-ours ()
   (drgnx-tty-popups-test--hooks

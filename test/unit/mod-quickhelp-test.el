@@ -15,13 +15,15 @@
          (drgnx-quickhelp--active nil) (drgnx-quickhelp-hover nil)
          (drgnx-quickhelp--hover-timer nil) (drgnx-quickhelp--poll nil) (drgnx-quickhelp--rest nil)
          (pre-command-hook nil) (post-command-hook nil)
+         (drgnx-modules--runs (list (list 'ui/face 'ui/face)))   ; ui/face is on: its timers start
          (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
      (save-window-excursion
        (delete-other-windows)
        (unwind-protect (progn ,@body)
          (drgnx-quickhelp-hide)
          (setq drgnx-quickhelp--active nil)
-         (drgnx-quickhelp--apply-hover)))))
+         (drgnx-quickhelp--apply-hover)
+         (mapc #'drgnx-timer-cancel '(quickhelp-timeout quickhelp-unmap quickhelp-look quickhelp-hover))))))
 
 (defmacro drgnx-quickhelp-test--elisp (text &rest body)
   "BODY in a buffer of Emacs Lisp TEXT shown in the selected window."
@@ -324,7 +326,7 @@ idle for a while, a focused frame, and `drgnx-quickhelp--request' recording its 
                ((symbol-function 'current-idle-time) (lambda () (seconds-to-time 5)))
                ((symbol-function 'drgnx-quickhelp--request) (lambda (&rest args) (push args requests))))
        ,@body
-       (when (timerp drgnx-quickhelp--poll) (cancel-timer drgnx-quickhelp--poll)))))
+       (drgnx-timer-cancel 'quickhelp-look))))
 
 (ert-deftest drgnx-quickhelp/hover-waits-for-the-pointer-to-move-after-typing ()
   (drgnx-quickhelp-test--with
@@ -348,11 +350,11 @@ idle for a while, a focused frame, and `drgnx-quickhelp--request' recording its 
         (should (= (length requests) 2))
         ;; no graphical frame has the focus: no look, nothing re-armed
         (cl-letf (((symbol-function 'drgnx-quickhelp--focused-p) (lambda () nil)))
-          (when (timerp drgnx-quickhelp--poll) (cancel-timer drgnx-quickhelp--poll))
+          (drgnx-timer-cancel 'quickhelp-look)
           (setq pointer (cons (selected-frame) (cons 120 100)) drgnx-quickhelp--rest nil)
           (drgnx-quickhelp--hover-look)
           (should (= (length requests) 2))
-          (should-not drgnx-quickhelp--poll))))))
+          (should-not (drgnx-timer-active-p 'quickhelp-look)))))))
 
 (ert-deftest drgnx-quickhelp/a-quick-move-to-the-next-symbol-gets-its-card ()
   (drgnx-quickhelp-test--with
@@ -379,17 +381,17 @@ idle for a while, a focused frame, and `drgnx-quickhelp--request' recording its 
                                               :start (window-start) :edges (window-pixel-edges))
                 drgnx-quickhelp--card-up t)
           (drgnx-quickhelp--watch-card)
-          (should (timerp drgnx-quickhelp--poll))     ; looks come though hover is off
-          (cancel-timer drgnx-quickhelp--poll)
+          (should (drgnx-timer-active-p 'quickhelp-look))     ; looks come though hover is off
+          (drgnx-timer-cancel 'quickhelp-look)
           (drgnx-quickhelp--hover-look)
           (should drgnx-quickhelp--origin)            ; nothing moved: it stays, and the looks go on
-          (should (timerp drgnx-quickhelp--poll))
-          (cancel-timer drgnx-quickhelp--poll)
+          (should (drgnx-timer-active-p 'quickhelp-look))
+          (drgnx-timer-cancel 'quickhelp-look)
           (set-window-start (selected-window) 30)
           (drgnx-quickhelp--hover-look)
           (should-not drgnx-quickhelp--origin)
           (should-not drgnx-quickhelp--card-up)
-          (should-not drgnx-quickhelp--poll))))))     ; no card, no hover: the looks stop
+          (should-not (drgnx-timer-active-p 'quickhelp-look)))))))     ; no card, no hover: the looks stop
 
 (ert-deftest drgnx-quickhelp/again-while-shown-opens-help ()
   (drgnx-quickhelp-test--with
@@ -470,13 +472,28 @@ idle for a while, a focused frame, and `drgnx-quickhelp--request' recording its 
     (let ((drgnx-quickhelp-hover t))
       (call-interactively (drgnx-cmd-command (drgnx-commands-get 'quick-help-toggle-hover)))
       (should-not drgnx-quickhelp-hover)
-      (should-not (timerp drgnx-quickhelp--hover-timer))
+      (should-not (drgnx-timer-active-p 'quickhelp-hover))
       (call-interactively (drgnx-cmd-command (drgnx-commands-get 'quick-help-toggle-hover)))
       (should drgnx-quickhelp-hover)
-      (should (timerp drgnx-quickhelp--hover-timer))
+      (should (drgnx-timer-active-p 'quickhelp-hover))
       (setq drgnx-quickhelp--active nil)
       (drgnx-quickhelp--apply-hover)
-      (should-not (timerp drgnx-quickhelp--hover-timer)))))
+      (should-not (drgnx-timer-active-p 'quickhelp-hover)))))
+
+(ert-deftest drgnx-quickhelp/its-timers-belong-to-the-face-module ()
+  ;; one hover timer however often it is applied; the look and the hover end with the module's run; no run, no timer
+  (drgnx-quickhelp-test--with
+    (setq drgnx-quickhelp--active t drgnx-quickhelp-hover t)
+    (drgnx-quickhelp--apply-hover)
+    (drgnx-quickhelp--apply-hover)
+    (should (equal (seq-filter (lambda (e) (eq (car e) 'quickhelp-hover)) (drgnx-timer-pending))
+                   '((quickhelp-hover ui/face start))))
+    (drgnx-quickhelp--watch-card)
+    (should (drgnx-timer-active-p 'quickhelp-look))
+    (should (= 2 (drgnx-timer-cancel-owner 'ui/face)))
+    (let ((drgnx-modules--runs nil))
+      (drgnx-quickhelp--apply-hover)
+      (should-not (drgnx-timer-active-p 'quickhelp-hover)))))
 
 (ert-deftest drgnx-quickhelp/keys-in-every-profile ()
   (dolist (p '(("vscode" . "(quick-help \"C-k C-i\")")
