@@ -171,7 +171,9 @@ that dies mid-write leaves the old file whole."
     (unwind-protect
         (with-temp-buffer
           (let ((print-length nil) (print-level nil)) (prin1 value (current-buffer)))
-          (let ((coding-system-for-write 'utf-8-unix)) (write-region nil nil tmp nil 'silent))
+          ;; on disk before the rename: atomic against a machine's crash too, not only the hub's (the directory
+          ;; itself is not synced: Emacs cannot)
+          (let ((coding-system-for-write 'utf-8-unix) (write-region-inhibit-fsync nil)) (write-region nil nil tmp nil 'silent))
           (set-file-modes tmp #o600)
           (rename-file tmp file t))
       (when (file-exists-p tmp) (delete-file tmp)))))

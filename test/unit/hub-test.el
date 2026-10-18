@@ -104,6 +104,18 @@ to OR-LOG, OPENROUTER_API_KEY unset."
     (drgnx-hub-test--wait #'ignore 0.3)
     (should (= (length drgnx-hub--subscribers) 1))))
 
+(ert-deftest drgnx-hub/kept-files-are-synced-before-the-rename ()
+  ;; a rename is atomic against a crash of the hub, not of the machine: the new file's data must be on disk before
+  ;; it replaces the old one (Emacs skips fsync by default: `write-region-inhibit-fsync')
+  (drgnx-hub-test--with
+    (let ((synced nil) (write (symbol-function 'write-region)))
+      (cl-letf (((symbol-function 'write-region)
+                 (lambda (start end file &rest args)
+                   (when (string-match-p "registrations\\.eld-" file) (push (not write-region-inhibit-fsync) synced))
+                   (apply write start end file args))))
+        (drgnx-hub--save-registrations))
+      (should (equal synced '(t))))))
+
 (ert-deftest drgnx-hub/a-subscribe-never-answered-stops-blocking-connect ()
   ;; one subscription while the hub has not answered — but not forever: a subscribe left unanswered (a stopped hub)
   ;; past the deadline is given up, and the next connect tries again (the editor is not told the hub went away)

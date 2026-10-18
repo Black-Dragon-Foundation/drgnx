@@ -109,7 +109,8 @@ What was in flight is gone: a turn that was running, the queue, a pending permis
 
 `gateway/register` returns a token of 64 hex digits (32 bytes of `/dev/urandom`). The hub keeps
 `<state>/hub/registrations.eld` (mode 0600): `((SHA256-OF-TOKEN . REGISTRATION)…)` — never a token, never a key —
-written to a temporary file beside it and renamed over it (a hub that dies mid-write leaves the old one whole), and
+written to a temporary file beside it, synced to disk (`write-region-inhibit-fsync` nil; the directory is not
+synced, which Emacs cannot do) and renamed over it (a hub or a machine that dies mid-write leaves the old one whole), and
 reads it back when it starts (a file it cannot read is logged: those agents register again); it also keeps the gateway's port (`<state>/hub/port`) and binds it again, so agents
 keep working across a hub restart (when the port is taken meanwhile, a new one is used and the log says so). A
 session's token is unregistered when its agent exits or is killed. Tokens have no expiry; instead a registration
