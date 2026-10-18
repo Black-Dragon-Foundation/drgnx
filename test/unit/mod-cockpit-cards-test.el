@@ -3,6 +3,7 @@
 (require 'cl-lib)
 (require 'drgnx)
 (require 'drgnx-persist)
+(require 'drgnx-agents)                                ; its session type, before the cockpit is loaded
 (load (expand-file-name "modules/tools/drgnx-job-ui" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-cockpit" drgnx-dir) nil t)
 (require 'drgnx-hub)                                   ; before any stub of its functions
