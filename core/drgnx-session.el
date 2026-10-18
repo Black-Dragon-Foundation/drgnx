@@ -18,6 +18,7 @@
 
 (defvar server-name)
 (defvar server-process)
+(defvar server-socket-dir)
 (declare-function server-running-p "server")
 (declare-function drgnx-explorer-roots "drgnx-explorer")
 (declare-function drgnx-explorer-set-roots "drgnx-explorer")
@@ -155,6 +156,36 @@ one quits drgnx unless it keeps running in the background (`drgnx-keep-running',
           (t (when (frame-live-p frame) (select-frame-set-input-focus frame))   ; the questions show here
              (drgnx-session-quit)))))
 
+;;;; The keys that close a window (M12a-32)
+
+(defun drgnx-session--closes-window-p ()
+  "Non-nil in a graphical, top-level frame: the windows `drgnx-keep-running' is about.  Terminal frames and
+child frames keep Emacs' own behaviour."
+  (and (display-graphic-p) (not (frame-parent))))
+
+(defun drgnx-session-kill-terminal (&optional arg)
+  "`C-x C-c' (the remap of `save-buffers-kill-terminal'): in a graphical window, close it as its close button
+does (`drgnx-session-close-frame': the last one keeps drgnx running or quits it, per `drgnx-keep-running').
+Elsewhere — a terminal frame — as in Emacs; ARG is then passed on."
+  (interactive "P")
+  (if (drgnx-session--closes-window-p)
+      (drgnx-session-close-frame)
+    (save-buffers-kill-terminal arg)))
+
+(defun drgnx-session-delete-frame ()
+  "`C-x 5 0' (the remap of `delete-frame'): in a graphical window, close it as its close button does
+(`drgnx-session-close-frame'); elsewhere as in Emacs.  Programmatic `delete-frame' calls are not remapped."
+  (interactive)
+  (if (drgnx-session--closes-window-p)
+      (drgnx-session-close-frame)
+    (delete-frame)))
+
+;;;; The server socket on macOS (M12a-31)
+
+(defun drgnx-session--darwin-socket-dir ()
+  "Emacs' default `server-socket-dir' when XDG_RUNTIME_DIR is not set: emacs<uid> under $TMPDIR (else /tmp)."
+  (expand-file-name (format "emacs%d" (user-uid)) (or (getenv "TMPDIR") "/tmp")))
+
 ;;;; Setup
 
 (defun drgnx-session-register-commands ()
@@ -168,9 +199,15 @@ one quits drgnx unless it keeps running in the background (`drgnx-keep-running',
                         :doc "When the last window closes: keep running (reopening is instant), or quit"))
 
 (defun drgnx-session-setup ()
-  "Read the remembered choice; the title bar's close button runs `drgnx-session-close-frame'."
+  "Read the remembered choice; the title bar's close button runs `drgnx-session-close-frame', and so do `C-x C-c'
+and `C-x 5 0' (remapped).  On macOS the server socket ignores XDG_RUNTIME_DIR: a shell exports it, Finder does
+not, and `drgnx PATH' (bin/drgnx runs emacsclient without it there) must find the same socket from both."
   (drgnx-session-load)
-  (define-key special-event-map [delete-frame] #'drgnx-session-close-frame))
+  (define-key special-event-map [delete-frame] #'drgnx-session-close-frame)
+  (define-key global-map [remap save-buffers-kill-terminal] #'drgnx-session-kill-terminal)
+  (define-key global-map [remap delete-frame] #'drgnx-session-delete-frame)
+  (when (eq system-type 'darwin)
+    (setq server-socket-dir (drgnx-session--darwin-socket-dir))))
 
 (defun drgnx-session-start-server ()
   "In a drgnx started as a plain graphical Emacs (not a daemon, not drgnx safe, not a harness session),
