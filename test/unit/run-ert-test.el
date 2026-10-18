@@ -176,3 +176,46 @@
                                    (with-temp-buffer (insert-file-contents probe) (buffer-string))))
           (should-not (directory-files parent nil directory-files-no-dot-files-regexp)))
       (delete-directory tmp t))))
+
+(ert-deftest drgnx-run-ert/a-given-run-dir-is-never-deleted-and-a-wrong-one-is-ignored ()
+  ;; TMP-1 review C1: DRGNX_RUN_TMP names the dir bin/drgnx made (and removes).  The runner only uses a real
+  ;; directory of that name; empty (= the current directory), someone's directory and a symlink are ignored
+  ;; and survive; none is ever deleted by the runner.  Everything happens below a fresh temp parent.
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-given" t)))
+         (parent (expand-file-name "parent" tmp)) (suite (expand-file-name "suite" tmp))
+         (victim (file-name-as-directory (expand-file-name "victim" tmp)))
+         (link (expand-file-name "drgnx-run.abcdef" parent))
+         (real (expand-file-name "drgnx-run.ghijkl" parent))
+         (runner (lambda (given cwd)
+                   (let ((process-environment (append (list (concat "TMPDIR=" parent) (concat "DRGNX_RUN_TMP=" given)
+                                                            "DRGNX_TEST_SELECTOR" "DRGNX_TEST_RESULTS")
+                                                      process-environment))
+                         (default-directory cwd))
+                     (call-process (expand-file-name invocation-name invocation-directory) nil nil nil
+                                   "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
+                                   "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch" suite)))))
+    (unwind-protect
+        (progn
+          (make-directory parent) (make-directory suite) (make-directory victim)
+          (write-region "keep" nil (concat victim "file") nil 'silent)
+          (with-temp-file (expand-file-name "ok-test.el" suite) (insert "(require 'ert)\n(ert-deftest given-ok () (should t))\n"))
+          (make-symbolic-link (directory-file-name victim) link)
+          (make-directory real)
+          ;; set but empty, with the victim as the current directory
+          (should (eql 0 (funcall runner "" victim)))
+          (should (file-exists-p (concat victim "file")))
+          ;; someone's existing directory
+          (should (eql 0 (funcall runner (directory-file-name victim) tmp)))
+          (should (file-exists-p (concat victim "file")))
+          ;; a symlink, even with the right name
+          (should (eql 0 (funcall runner link tmp)))
+          (should (file-exists-p (concat victim "file")))
+          (should-not (directory-files victim nil "\\`[^f.]"))      ; nothing was put in it either
+          ;; a real one of the right name: used, kept for bin/drgnx to remove
+          (should (eql 0 (funcall runner real tmp)))
+          (should (file-directory-p real))
+          (should (file-directory-p (expand-file-name "home" real)))
+          ;; the runner's own dirs (the three ignored cases) are gone
+          (should-not (seq-remove (lambda (f) (member f '("drgnx-run.abcdef" "drgnx-run.ghijkl")))
+                                  (directory-files parent nil directory-files-no-dot-files-regexp))))
+      (delete-directory tmp t))))

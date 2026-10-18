@@ -59,30 +59,48 @@ ui() { # the harness controller, in batch Emacs (harness/drgnx-ui.el)
 }
 
 run_in_tmp() { # CMD… — run CMD with a TMPDIR of its own (so temporary-file-directory and libgccjit use it); on every exit
-  # (end, error, INT, TERM) CMD is stopped if still running and the directory removed: /tmp is RAM, a run leaves nothing there
-  RUN_TMP="$(mktemp -d "${TMPDIR:-/tmp}/drgnx-run.XXXXXX")"
-  RUN_PID=""
+  # (end, error, INT, TERM, HUP) CMD and what it started are stopped and the directory removed: /tmp is RAM, a run leaves nothing
+  # there.  The runner (harness/run-ert.el) is told the directory in DRGNX_RUN_TMP and never deletes it: only this trap does.
+  # RUN_TMP_SHARDS=1 (see run_in_tmp_shards): the children make dirs of their own in it instead.
+  RUN_TMP="" RUN_PID=""
   trap run_tmp_cleanup EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
+  trap 'exit 129' HUP
+  RUN_TMP="$(mktemp -d "${TMPDIR:-/tmp}/drgnx-run.XXXXXX")"
+  RUN_TMP="$(cd "$RUN_TMP" && pwd -P)"      # absolute, whatever TMPDIR was
   local rc=0
-  ( export TMPDIR="$RUN_TMP" DRGNX_RUN_TMP="$RUN_TMP"; "$@" ) <&0 &    # not exec'd: this shell stays to clean up
+  set -m                                    # the child leads a process group of its own: signalled as a whole
+  ( export TMPDIR="$RUN_TMP" DRGNX_RUN_TMP="$RUN_TMP"
+    if [[ -n "${RUN_TMP_SHARDS:-}" ]]; then unset DRGNX_RUN_TMP; fi
+    "$@" ) <&0 &                            # not exec'd: this shell stays to clean up
   RUN_PID=$!
+  set +m
   wait "$RUN_PID" || rc=$?
   RUN_PID=""
   return "$rc"
 }
 
+run_in_tmp_shards() { # CMD… — like run_in_tmp, for a CMD that starts several test runs (drgnx check): each makes its own dir in it
+  RUN_TMP_SHARDS=1 run_in_tmp "$@"
+}
+
 run_tmp_cleanup() {
   local i
+  trap '' INT TERM HUP                      # a second signal does not cut the cleanup short
   if [[ -n "${RUN_PID:-}" ]]; then
-    kill "$RUN_PID" 2>/dev/null || true
-    for ((i = 0; i < 50; i++)); do kill -0 "$RUN_PID" 2>/dev/null || break; sleep 0.1; done
-    kill -9 "$RUN_PID" 2>/dev/null || true
+    kill -TERM -- "-$RUN_PID" 2>/dev/null || true
+    for ((i = 0; i < 50; i++)); do kill -0 -- "-$RUN_PID" 2>/dev/null || break; sleep 0.1; done
+    kill -KILL -- "-$RUN_PID" 2>/dev/null || true
     wait "$RUN_PID" 2>/dev/null || true
   fi
   if [[ -n "${RUN_TMP:-}" ]]; then rm -rf -- "$RUN_TMP"; fi
   return 0
+}
+
+check_emacs() { # the CI check (core/drgnx-check.el)
+  "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+        -l drgnx-check -f drgnx-check-cli -- "$@"
 }
 
 test_batch_emacs() { # SIGPIPE ignored, as the hub runs (tests serve one in-process): a test may fail, never end the run
@@ -445,9 +463,7 @@ case "${1:-help}" in
         shift
         "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
               -l drgnx-keys-diff -f drgnx-keys-diff-cli -- "$@" ;;
-  check) shift
-        "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
-              -l drgnx-check -f drgnx-check-cli -- "$@" ;;
+  check) shift; run_in_tmp_shards check_emacs "$@" ;;
   fmt) shift
         "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-fmt -f drgnx-fmt-cli -- "$@" ;;

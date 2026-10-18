@@ -528,20 +528,50 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
 
 (defun drgnx-bin-test--leaky-suite (dir probe &optional hang)
   "Write a one-test suite into DIR.  The test leaks a temp dir and a temp file, records its
-`temporary-file-directory' in PROBE and, with HANG, then waits for a signal."
+`temporary-file-directory' in PROBE and its Emacs pid in PROBE.pid and, with HANG, then waits for a signal."
   (with-temp-file (expand-file-name "leaky-test.el" dir)
     (insert (format "(require 'ert)
 (ert-deftest tmp-probe/leaks ()
   (make-temp-file \"leaked-dir\" t)
   (make-temp-file \"leaked-file\")
+  (write-region (number-to-string (emacs-pid)) nil %S nil 'silent)
   (write-region temporary-file-directory nil %S nil 'silent)
   %s
   (should t))
-" probe (if hang "(sleep-for 120)" "")))))
+" (concat probe ".pid") probe (if hang "(sleep-for 120)" "")))))
 
 (defun drgnx-bin-test--left (parent)
   "What a test run left in PARENT."
   (directory-files parent nil directory-files-no-dot-files-regexp))
+
+(defun drgnx-bin-test--slurp-number (file)
+  (string-to-number (drgnx-bin-test--slurp file)))
+
+(defun drgnx-bin-test--env (dir parent &rest more)
+  (append more   ; first: it wins over the unsets below
+          (list (concat "HOME=" dir) (concat "DRGNX_CONFIG_DIR=" dir "/config") (concat "TMPDIR=" parent)
+                "DRGNX_TEST_SELECTOR=\"tmp-probe/leaks\"" "DRGNX_TEST_RESULTS" "DRGNX_RUN_TMP")))
+
+(defun drgnx-bin-test--spawn (env &rest args)
+  "Start bin/drgnx ARGS with ENV; return the process."
+  (let ((process-environment (append env process-environment)))
+    (make-process :name "drgnx-bin-test-run" :command (cons drgnx-bin-test--bin args)
+                  :buffer nil :noquery t :connection-type 'pipe)))
+
+(defun drgnx-bin-test--wait-for (pred secs)
+  (let ((until (+ (float-time) secs)))
+    (while (and (not (funcall pred)) (< (float-time) until)) (sleep-for 0.1))
+    (funcall pred)))
+
+(defun drgnx-bin-test--wait-exit (proc secs)
+  (let ((until (+ (float-time) secs)))
+    (while (and (process-live-p proc) (< (float-time) until)) (accept-process-output proc 0.1))
+    (not (process-live-p proc))))
+
+(defun drgnx-bin-test--pid-alive-p (pid)
+  (and (> pid 0) (file-exists-p (format "/proc/%d" pid))
+       (not (string-match-p "^State:\\s-*Z" (with-temp-buffer (insert-file-contents (format "/proc/%d/status" pid))
+                                                              (buffer-string))))))
 
 (ert-deftest drgnx-bin/a-test-run-leaves-nothing-in-the-parent-temp-dir ()
   ;; TMP-1: every run has a TMPDIR of its own (so tests, libgccjit and the runner all write there) that
@@ -555,50 +585,119 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
         (progn
           (make-directory parent) (make-directory suite)
           (drgnx-bin-test--leaky-suite suite probe)
-          (let ((r (drgnx-bin-test--call
-                    drgnx-bin-test--bin
-                    (list (concat "HOME=" dir) (concat "DRGNX_EMACS=" emacs) (concat "DRGNX_CONFIG_DIR=" dir "/config")
-                          (concat "TMPDIR=" parent) (concat "DRGNX_TEST_DIR=" suite)
-                          "DRGNX_TEST_SELECTOR=\"tmp-probe/leaks\"" "DRGNX_TEST_RESULTS")
-                    "test")))
+          (let ((r (drgnx-bin-test--call drgnx-bin-test--bin
+                                         (drgnx-bin-test--env dir parent (concat "DRGNX_EMACS=" emacs)
+                                                              (concat "DRGNX_TEST_DIR=" suite))
+                                         "test")))
             (should (eql 0 (car r))))
           ;; the test did run in a temp dir below PARENT, not in PARENT itself …
-          (should (string-prefix-p (file-name-as-directory parent)
-                                   (with-temp-buffer (insert-file-contents probe) (buffer-string))))
+          (should (string-prefix-p (file-name-as-directory parent) (drgnx-bin-test--slurp probe)))
           ;; … and nothing of it is left
           (should-not (drgnx-bin-test--left parent)))
       (delete-directory dir t))))
 
-(ert-deftest drgnx-bin/a-killed-test-run-leaves-nothing-in-the-parent-temp-dir ()
-  ;; TMP-1: a run stopped half way (TERM, as systemd and a Ctrl-C send) removes its TMPDIR too.
+(ert-deftest drgnx-bin/a-relative-tmpdir-is-made-absolute ()
   (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
          (parent (expand-file-name "parent" dir))
          (suite (expand-file-name "suite" dir))
          (probe (expand-file-name "probe" dir))
          (emacs (expand-file-name invocation-name invocation-directory))
-         proc)
+         (drgnx-bin-test--cwd dir))
     (unwind-protect
         (progn
           (make-directory parent) (make-directory suite)
-          (drgnx-bin-test--leaky-suite suite probe 'hang)
-          (setq proc (let ((process-environment
-                            (append (list (concat "HOME=" dir) (concat "DRGNX_EMACS=" emacs)
-                                          (concat "DRGNX_CONFIG_DIR=" dir "/config")
-                                          (concat "TMPDIR=" parent) (concat "DRGNX_TEST_DIR=" suite)
-                                          "DRGNX_TEST_SELECTOR=\"tmp-probe/leaks\"" "DRGNX_TEST_RESULTS")
-                                    process-environment)))
-                       (make-process :name "drgnx-bin-test-run" :command (list drgnx-bin-test--bin "test")
-                                     :buffer nil :noquery t :connection-type 'pipe)))
-          (let ((until (+ (float-time) 60)))   ; the test is under way once it wrote its probe
-            (while (and (not (file-exists-p probe)) (< (float-time) until)) (sleep-for 0.2)))
-          (should (file-exists-p probe))
-          (should (drgnx-bin-test--left parent))              ; the run is using its temp dir
-          (signal-process proc 'TERM)
-          (let ((until (+ (float-time) 30)))
-            (while (and (process-live-p proc) (< (float-time) until)) (accept-process-output proc 0.2)))
-          (should-not (process-live-p proc))
+          (drgnx-bin-test--leaky-suite suite probe)
+          (should (eql 0 (car (drgnx-bin-test--call drgnx-bin-test--bin
+                                                    (drgnx-bin-test--env dir "parent" (concat "DRGNX_EMACS=" emacs)
+                                                                         (concat "DRGNX_TEST_DIR=" suite))
+                                                    "test"))))
+          (should (string-prefix-p (file-name-as-directory (file-truename parent)) (drgnx-bin-test--slurp probe)))
           (should-not (drgnx-bin-test--left parent)))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-bin/a-test-run-stopped-by-a-signal-leaves-nothing-and-no-emacs ()
+  ;; TMP-1: a run stopped half way (INT/TERM/HUP, as systemd, Ctrl-C and a closing terminal send) removes its
+  ;; TMPDIR and its Emacs is gone.
+  (dolist (sig '(TERM INT HUP))
+    (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
+           (parent (expand-file-name "parent" dir))
+           (suite (expand-file-name "suite" dir))
+           (probe (expand-file-name "probe" dir))
+           (emacs (expand-file-name invocation-name invocation-directory))
+           proc)
+      (unwind-protect
+          (progn
+            (make-directory parent) (make-directory suite)
+            (drgnx-bin-test--leaky-suite suite probe 'hang)
+            (setq proc (drgnx-bin-test--spawn (drgnx-bin-test--env dir parent (concat "DRGNX_EMACS=" emacs)
+                                                                   (concat "DRGNX_TEST_DIR=" suite))
+                                              "test"))
+            (should (drgnx-bin-test--wait-for (lambda () (file-exists-p probe)) 60))   ; the test is under way
+            (should (drgnx-bin-test--left parent))                                      ; using its temp dir
+            (let ((pid (drgnx-bin-test--slurp-number (concat probe ".pid"))))
+              (should (drgnx-bin-test--pid-alive-p pid))
+              (signal-process proc sig)
+              (should (drgnx-bin-test--wait-exit proc 30))
+              (should (drgnx-bin-test--wait-for (lambda () (not (drgnx-bin-test--pid-alive-p pid))) 10)))
+            (should-not (drgnx-bin-test--left parent)))
+        (when (process-live-p proc) (kill-process proc))
+        (delete-directory dir t)))))
+
+(defun drgnx-bin-test--fake-emacs (file body)
+  "A fake Emacs script FILE running the shell BODY."
+  (write-region (concat "#!/bin/sh\n" body "\n") nil file nil 'silent)
+  (set-file-modes file #o755)
+  file)
+
+(ert-deftest drgnx-bin/a-gui-tier-stopped-by-a-signal-leaves-no-process-and-no-dir ()
+  ;; TMP-1: the GUI tiers run a function that starts the controller Emacs (not exec'd): the whole process
+  ;; group is stopped.  The fake Emacs starts a child and ignores TERM; a second TERM during the grace period
+  ;; does not cut the cleanup short.
+  (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
+         (parent (expand-file-name "parent" dir))
+         (pids (expand-file-name "pids" dir))
+         (emacs (drgnx-bin-test--fake-emacs
+                 (expand-file-name "fake-emacs" dir)
+                 (format "trap '' TERM\nsleep 300 &\necho \"$$ $!\" > %s.tmp && mv %s.tmp %s\nwait" pids pids pids)))
+         proc)
+    (unwind-protect
+        (progn
+          (make-directory parent)
+          (setq proc (drgnx-bin-test--spawn (drgnx-bin-test--env dir parent (concat "DRGNX_EMACS=" emacs))
+                                            "test" "--scenario"))
+          (should (drgnx-bin-test--wait-for (lambda () (file-exists-p pids)) 30))
+          (let* ((ids (mapcar #'string-to-number (split-string (drgnx-bin-test--slurp pids))))
+                 (alive (lambda () (seq-filter #'drgnx-bin-test--pid-alive-p ids))))
+            (should (= 2 (length (funcall alive))))
+            (signal-process proc 'TERM)
+            (sleep-for 0.5)
+            (signal-process proc 'TERM)
+            (should (drgnx-bin-test--wait-exit proc 30))
+            (should-not (funcall alive))
+            (should-not (drgnx-bin-test--left parent))))
       (when (process-live-p proc) (kill-process proc))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-bin/check-runs-in-a-tmpdir-of-its-own-and-its-shards-make-theirs ()
+  ;; TMP-1: `drgnx check' starts many runs at once: they share the TMPDIR (removed at the end) but not
+  ;; DRGNX_RUN_TMP, or the first to end would delete the others' dir.
+  (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
+         (parent (expand-file-name "parent" dir))
+         (seen (expand-file-name "seen" dir))
+         (emacs (drgnx-bin-test--fake-emacs
+                 (expand-file-name "fake-emacs" dir)
+                 (format "echo \"$TMPDIR|${DRGNX_RUN_TMP-unset}\" > %s" seen))))
+    (unwind-protect
+        (progn
+          (make-directory parent)
+          (should (eql 0 (car (drgnx-bin-test--call
+                               drgnx-bin-test--bin
+                               (drgnx-bin-test--env dir parent (concat "DRGNX_EMACS=" emacs) "DRGNX_RUN_TMP=/nonexistent/x")
+                               "check"))))
+          (let ((s (split-string (string-trim (drgnx-bin-test--slurp seen)) "|")))
+            (should (string-prefix-p (file-name-as-directory parent) (car s)))
+            (should (equal (cadr s) "unset")))
+          (should-not (drgnx-bin-test--left parent)))
       (delete-directory dir t))))
 
 ;;; bin-test.el ends here
