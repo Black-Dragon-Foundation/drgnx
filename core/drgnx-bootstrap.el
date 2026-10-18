@@ -74,9 +74,18 @@ owner can read.  The file is never read."
          (format "--identity: %s can be read by other users: chmod 600 %s, then run this again"
                  (shell-quote-argument file) (shell-quote-argument file)))))
 
+(defun drgnx-bootstrap--bare (url)
+  "URL without its query and fragment (a token can be in them): what is shown, and what .git/config keeps."
+  (if (string-prefix-p "/" url) url (replace-regexp-in-string "[?#].*\\'" "" url)))
+
+(defun drgnx-bootstrap--scrub (text url)
+  "TEXT (a program's message) without URL's query and fragment, wherever they appear in it."
+  (let ((extra (substring url (length (drgnx-bootstrap--bare url)))))
+    (if (string-empty-p extra) text (string-replace extra "" text))))
+
 (defun drgnx-bootstrap--label (url)
   "URL as shown: a path as ~/…, a URL without its query and fragment."
-  (if (string-prefix-p "/" url) (drgnx-portable-path url) (replace-regexp-in-string "[?#].*\\'" "" url)))
+  (if (string-prefix-p "/" url) (drgnx-portable-path url) (drgnx-bootstrap--bare url)))
 
 (defun drgnx-bootstrap--word (file)
   "FILE as one shell word: ~/ unquoted (the shell expands it), the rest quoted."
@@ -85,26 +94,38 @@ owner can read.  The file is never read."
 
 ;;;; Running programs
 
-(defun drgnx-bootstrap--call (program args &optional timeout env)
+(defun drgnx-bootstrap--call (program args &optional timeout env split)
   "Run PROGRAM with ARGS — stdin empty, no terminal — for at most TIMEOUT seconds (default
 `drgnx-bootstrap-call-timeout'); ENV: more \"VAR=VALUE\" strings.  (EXIT . OUTPUT), stdout and stderr trimmed;
-\(timeout . TEXT) when it was stopped; nil when PROGRAM cannot run."
-  (let ((limit (or timeout drgnx-bootstrap-call-timeout)))
-    (with-temp-buffer
-      (let* ((process-environment (append env process-environment))
-             (proc (condition-case nil
-                       (make-process :name "drgnx-bootstrap" :buffer (current-buffer) :command (cons program args)
-                                     :connection-type 'pipe :noquery t :sentinel #'ignore)
-                     (file-error nil)))
-             (deadline (+ (float-time) limit)))
-        (when proc
-          (process-send-eof proc)
-          (while (and (process-live-p proc) (< (float-time) deadline))
-            (accept-process-output proc 0.05))
-          (if (process-live-p proc)
-              (progn (delete-process proc) (cons 'timeout (format "did not finish within %s s" limit)))
-            (while (accept-process-output proc 0.01))
-            (cons (process-exit-status proc) (string-trim (buffer-string)))))))))
+with SPLIT (EXIT STDOUT STDERR) instead; (timeout . TEXT) when it was stopped; nil when PROGRAM cannot run."
+  (let ((limit (or timeout drgnx-bootstrap-call-timeout))
+        (errbuf (and split (generate-new-buffer " *drgnx-bootstrap-err*" t)))
+        errproc)
+    (unwind-protect
+        (with-temp-buffer
+          (let* ((process-environment (append env process-environment))
+                 (_ (when split
+                      (setq errproc (make-pipe-process :name "drgnx-bootstrap-err" :buffer errbuf :noquery t
+                                                       :sentinel #'ignore))))
+                 (proc (condition-case nil
+                           (make-process :name "drgnx-bootstrap" :buffer (current-buffer) :command (cons program args)
+                                         :connection-type 'pipe :noquery t :sentinel #'ignore :stderr errproc)
+                         (file-error nil)))
+                 (deadline (+ (float-time) limit)))
+            (when proc
+              ;; a program may be gone already (a fast git): its stdin no longer matters, and must not be an error
+              (ignore-errors (process-send-eof proc))
+              (while (and (process-live-p proc) (< (float-time) deadline))
+                (accept-process-output proc 0.05))
+              (if (process-live-p proc)
+                  (progn (delete-process proc) (cons 'timeout (format "did not finish within %s s" limit)))
+                (while (accept-process-output proc 0.01))
+                (when errproc (while (accept-process-output errproc 0.01)))
+                (let ((out (string-trim (buffer-string))))
+                  (if split (list (process-exit-status proc) out (with-current-buffer errbuf (string-trim (buffer-string))))
+                    (cons (process-exit-status proc) out)))))))
+      (when errproc (delete-process errproc))
+      (when errbuf (kill-buffer errbuf)))))
 
 (defun drgnx-bootstrap--git (&rest args)
   "git ARGS without the user's hooks, templates, fsmonitor or signing, over https or a local path only, bounded."
@@ -245,7 +266,9 @@ an entry."
          (cl-set-difference (directory-files dir nil directory-files-no-dot-files-regexp) ignore :test #'equal))
         ((or (file-exists-p dir) (file-symlink-p dir)) (list (file-name-nondirectory dir)))))
 
-(defun drgnx-bootstrap--norm-url (u) (string-remove-suffix ".git" (string-remove-suffix "/" u)))
+(defun drgnx-bootstrap--norm-url (u)
+  "U compared as a remote: without query, fragment, a trailing slash or .git (the clone keeps it without query)."
+  (string-remove-suffix ".git" (string-remove-suffix "/" (drgnx-bootstrap--bare u))))
 
 (defun drgnx-bootstrap--same-repo-p (dir url)
   "Non-nil when DIR is the top of a git work tree whose origin is URL."
@@ -262,12 +285,20 @@ stopped clone leaves nothing."
     (setq tmp (make-temp-file (expand-file-name ".drgnx-clone-" parent) t))
     (unwind-protect
         (let* ((into (expand-file-name "config" tmp))
-               (r (drgnx-bootstrap--git "clone" "-q" "--template=" "--" url into)))
-          (if (not (eql (car r) 0))
-              (list 'failed (format "%s; nothing was changed" (drgnx-bootstrap--why r "git clone")))
+               (r (drgnx-bootstrap--git "clone" "-q" "--template=" "--" url into))
+               (bare (drgnx-bootstrap--bare url))
+               ;; .git/config keeps the URL without its query (a token there would travel with every later copy)
+               (saved (if (or (not (eql (car r) 0)) (equal bare url)) r
+                        (drgnx-bootstrap--git "-C" into "config" "remote.origin.url" bare))))
+          (cond
+           ((not (eql (car r) 0))
+            (list 'failed (format "%s; nothing was changed" (drgnx-bootstrap--scrub (drgnx-bootstrap--why r "git clone") url))))
+           ((not (eql (car saved) 0))
+            (list 'failed (format "%s; nothing was changed" (drgnx-bootstrap--why saved "git config remote.origin.url"))))
+           (t
             (when (file-directory-p dir) (delete-directory dir)) ; empty: anything else fails here, and nothing moves
             (rename-file into dir)
-            (list 'changed (format "cloned %s into %s" (drgnx-bootstrap--label url) (drgnx-portable-path dir)))))
+            (list 'changed (format "cloned %s into %s" (drgnx-bootstrap--label url) (drgnx-portable-path dir))))))
       (delete-directory tmp t))))
 
 (defun drgnx-bootstrap--clone (ctx)
@@ -306,9 +337,13 @@ shown, then `chezmoi apply' only after a second yes, never under --yes."
       (let ((have (drgnx-bootstrap--install-tool 'chezmoi :yes yes :ask ask)))
         (if (not (eq have 'ok)) (list 'failed (format "chezmoi is needed for --chezmoi: %s" (cdr have)))
           (let* ((cz (drgnx-onboard--program 'chezmoi))
-                 (call (lambda (&rest args) (drgnx-bootstrap--call cz (cons "--no-tty" args) nil drgnx-bootstrap--git-env)))
+                 ;; stdout and stderr apart: a failure is named by chezmoi's error, never by a line of the files
+                 (call (lambda (&rest args) (drgnx-bootstrap--call cz (cons "--no-tty" args) nil drgnx-bootstrap--git-env t)))
+                 (why (lambda (r what) (drgnx-bootstrap--scrub
+                                        (drgnx-bootstrap--why (if (integerp (car-safe r)) (cons (car r) (nth 2 r)) r) what)
+                                        url)))
                  (source (funcall call "source-path"))
-                 (src (and (eql (car source) 0) (not (string-empty-p (cdr source))) (cdr source)))
+                 (src (and (eql (car source) 0) (not (string-empty-p (nth 1 source))) (nth 1 source)))
                  (state (cond ((not (and src (drgnx-bootstrap--entries src))) 'none)
                               ((drgnx-bootstrap--same-repo-p src url) 'same)
                               (t 'other)))
@@ -321,25 +356,31 @@ shown, then `chezmoi apply' only after a second yes, never under --yes."
                    (not (or yes (drgnx-bootstrap--ask ask (format "Run chezmoi init %s (it clones your dotfiles into chezmoi's source dir; nothing is applied yet)? " label)))))
               (list 'skipped (format "to set it up: chezmoi init %s, then chezmoi diff and chezmoi apply" label)))
              ((and (eq state 'none) (not (eql (car (setq init (funcall call "init" "--" url))) 0)))
-              (list 'failed (format "%s; run chezmoi init %s yourself (it may ask questions)" (drgnx-bootstrap--why init "chezmoi init") label)))
+              (list 'failed (format "%s; run chezmoi init %s yourself (it may ask questions)" (funcall why init "chezmoi init") label)))
              (t
               (let ((diff (funcall call "--no-pager" "--color=false" "diff"))
-                    (done (if init "chezmoi init done; " "")))
+                    (done (if init "chezmoi init done; " ""))
+                    ;; the diff is shown only to someone who is asked about it next: never under --yes or with no
+                    ;; terminal, where the output may be a log (it can hold a decrypted file)
+                    (asking (and ask (not yes))))
                 (cond
-                 ((not (eql (car diff) 0)) (list 'failed (format "%s%s" done (drgnx-bootstrap--why diff "chezmoi diff"))))
-                 ((string-empty-p (cdr diff))
+                 ((not (eql (car diff) 0)) (list 'failed (format "%s%s" done (funcall why diff "chezmoi diff"))))
+                 ((string-empty-p (nth 1 diff))
                   (list (if init 'changed 'ok) (format "%snothing to apply: your dotfiles match chezmoi's" done)))
+                 ((not asking)
+                  (list 'skipped (format "%s%d lines of chezmoi diff: see them with chezmoi diff, then chezmoi apply"
+                                         done (length (split-string (nth 1 diff) "\n")))))
                  (t
-                  (let ((lines (split-string (cdr diff) "\n")))
+                  (let ((lines (split-string (nth 1 diff) "\n")))
                     (drgnx-bootstrap--say "%s" (string-join (seq-take lines drgnx-bootstrap-diff-lines) "\n"))
                     (when (nthcdr drgnx-bootstrap-diff-lines lines)
                       (drgnx-bootstrap--say "… %d more lines (chezmoi diff shows them all)" (- (length lines) drgnx-bootstrap-diff-lines))))
-                  (if (not (and ask (not yes) (drgnx-bootstrap--ask ask "Apply these changes to your files (chezmoi apply)? ")))
+                  (if (not (drgnx-bootstrap--ask ask "Apply these changes to your files (chezmoi apply)? "))
                       (list 'skipped (format "%sto apply the changes above: chezmoi apply" done))
                     (let ((applied (funcall call "apply")))
                       (if (eql (car applied) 0) (list 'changed (format "%sapplied chezmoi's files" done))
                         (list 'failed (format "%s%s; run chezmoi apply yourself (it may ask questions)" done
-                                              (drgnx-bootstrap--why applied "chezmoi apply"))))))))))))))))))
+                                              (funcall why applied "chezmoi apply"))))))))))))))))))
 
 (defun drgnx-bootstrap--config-here ()
   "What the config dir is, when neither --config nor --chezmoi was given."
@@ -494,18 +535,18 @@ and not under --yes; else how to do it."
               (_ (list 'skipped "not added; to add it: drgnx shell install")))))))))
 
 (defun drgnx-bootstrap--doctor (ctx)
-  "The doctor: green (`drgnx-doctor-green-p'), else the rows that are not."
-  (if (plist-get ctx :dry-run) (list 'skipped "would: run drgnx doctor (green: no FAIL, a WARN only for security)")
-    (let ((results (drgnx-doctor-run (drgnx-doctor-facts))))
-      (if (drgnx-doctor-green-p results) (list 'ok "green")
+  "The doctor: `failed' when a check fails (`drgnx-doctor-exit-code'), naming those checks; else `ok', naming the
+checks that warn (a WARN is fine: Emacs 30.2, say, is supported and warns)."
+  (if (plist-get ctx :dry-run) (list 'skipped "would: run drgnx doctor (it fails only on a FAIL)")
+    (let* ((results (drgnx-doctor-run (drgnx-doctor-facts)))
+           (with (lambda (status) (seq-filter (lambda (r) (eq (plist-get r :status) status)) results)))
+           (warns (mapconcat (lambda (r) (symbol-name (plist-get r :name))) (funcall with 'warn) ", ")))
+      (if (= (drgnx-doctor-exit-code results) 0)
+          (list 'ok (if (string-empty-p warns) "no problems" (format "no FAIL; WARN: %s (drgnx doctor says more)" warns)))
         (list 'failed
-              (format "not green: %s (drgnx doctor says how to fix them)"
-                      (mapconcat (lambda (r) (format "%s %s: %s" (plist-get r :name) (plist-get r :status) (plist-get r :detail)))
-                                 (seq-remove (lambda (r) (or (memq (plist-get r :status) '(ok info))
-                                                             (and (eq (plist-get r :status) 'warn)
-                                                                  (memq (plist-get r :name) drgnx-doctor-green-warnings))))
-                                             results)
-                                 "; ")))))))
+              (format "%s (drgnx doctor says how to fix them)"
+                      (mapconcat (lambda (r) (format "%s fail: %s" (plist-get r :name) (plist-get r :detail)))
+                                 (funcall with 'fail) "; ")))))))
 
 (defconst drgnx-bootstrap--functions
   '((preflight . drgnx-bootstrap--preflight) (config . drgnx-bootstrap--config) (keys . drgnx-bootstrap--keys)

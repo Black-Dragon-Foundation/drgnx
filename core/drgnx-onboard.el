@@ -1382,12 +1382,13 @@ last, the shell integration line."
                    (file-error nil)))
            (deadline (+ (float-time) drgnx-onboard-call-timeout)))
       (when proc
-        (process-send-eof proc)
+        (ignore-errors (process-send-eof proc)) ; a fast program is gone already: never an error
         (while (and (process-live-p proc) (< (float-time) deadline))
           (accept-process-output proc 0.05))
         (if (process-live-p proc)
             (progn (delete-process proc)
                    (cons 'timeout (format "did not finish within %s s" drgnx-onboard-call-timeout)))
+          (while (accept-process-output proc 0.01)) ; what it wrote before it went
           (cons (process-exit-status proc) (string-trim (buffer-string))))))))
 
 (defun drgnx-onboard--git-remote (dir)

@@ -334,7 +334,7 @@ print_plan() {
     local line
     printf -v line '%q ' "${BOOTSTRAP_ARGS[@]}"
     if ((YES)); then
-      say "Then: drgnx bootstrap ${line}(--yes confirms only the age/chezmoi install: rc files, commits and chezmoi apply still wait for you)"
+      say "Then: drgnx bootstrap ${line}(--yes confirms the age/chezmoi install, the key import and chezmoi init: rc files, the desktop entry, commits, chezmoi apply and replacing a key still wait for you)"
     else
       say "Then: drgnx bootstrap ${line}(asks before keys, desktop and shell)"
     fi

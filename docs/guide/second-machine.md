@@ -116,7 +116,7 @@ run changes nothing. A failed `preflight`, `config` or `sync` stops the steps af
 | `onboard` | `drgnx onboard --non-interactive`: records what is set up, changes nothing ([onboarding.md](onboarding.md)) | nothing |
 | `desktop` | onboarding's Daemon and Desktop step: the systemd service and desktop entry (Linux) or the drgnx app (macOS); installed already: ok | its own questions |
 | `shell` | the rc line of your shell ([shell.md](shell.md)) | "Add this line to ~/.zshrc?" |
-| `doctor` | `drgnx doctor`, which must be green: no FAIL, and a WARN only for `security` (an Emacs fix not released yet); anything else fails, naming the checks | nothing |
+| `doctor` | `drgnx doctor`: a FAIL fails the step, naming the checks; a WARN does not (Emacs 30.2, say, is supported and warns): the step is ok and names the checks that warn | nothing |
 
 **Questions** are asked on the terminal only. Without one (stdin not a terminal) nothing is asked: what would be
 asked is skipped, with its command. **`--yes`** answers yes for the announced age or chezmoi install, the key import
@@ -130,13 +130,16 @@ to run yourself. Nothing else is installed, and nothing else runs as root.
 
 **chezmoi.** `drgnx bootstrap --chezmoi URL` takes your dotfiles' chezmoi repository instead of a drgnx
 configuration: `chezmoi init URL` (asked; `--yes` confirms it), then `chezmoi diff` is shown, then `chezmoi apply`
-runs only after a second yes, and never under `--yes`. chezmoi runs without a terminal (`--no-tty`): if your
+runs only after a second yes, and never under `--yes`. The diff is shown only when that question follows: under
+`--yes` or without a terminal (where the output may go to a log) the step only says how many lines differ, and
+`chezmoi diff` shows them. A failure is reported with chezmoi's own error line, never a line of your files. chezmoi runs without a terminal (`--no-tty`): if your
 templates ask questions, or a file is encrypted with a passphrase, the step fails and says to run `chezmoi init URL`
 or `chezmoi apply` yourself. A chezmoi source dir that holds another repository is never replaced.
 
 **The URL** is an https URL or an absolute path that exists. `http://`, `ssh://`, `git@host:path`, `file://`,
 `ext::`, a relative path and a URL with a user name or password are refused (exit 2) without showing the value; use
-a git credential helper for a private repository. git runs without your hooks, templates and commit signing, over
+a git credential helper for a private repository. A query or fragment (`?…`, `#…`) goes to git for the clone, but
+is never shown, and `.git/config` keeps the URL without it. git runs without your hooks, templates and commit signing, over
 https or a local path only, never asks for a password, and is stopped after two minutes. A clone goes into a new
 directory beside the config dir and is renamed into place only when it worked, so a failed or stopped clone leaves
 nothing behind. **`--identity FILE`** must be a file only you can read (`chmod 600`); bootstrap passes its path to

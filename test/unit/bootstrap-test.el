@@ -228,20 +228,25 @@ matches fails the test.  LOG: a function called with each question and the outpu
     (cl-letf (((symbol-function 'drgnx-pkg-sync) (lambda (&rest _) '(:ok t :installed (eat magit) :missing nil))))
       (should (eq (drgnx-bootstrap-test--status (car (drgnx-bootstrap-test--run :only '(sync))) 'sync) 'changed)))))
 
-(ert-deftest drgnx-bootstrap/green-allows-only-security ()
-  (should (equal drgnx-doctor-green-warnings '(security)))
-  (should (drgnx-doctor-green-p '((:name security :status warn) (:name git :status ok) (:name ai :status info))))
-  (should-not (drgnx-doctor-green-p '((:name gui :status warn) (:name security :status warn))))
-  (should-not (drgnx-doctor-green-p '((:name git :status fail))))
+(ert-deftest drgnx-bootstrap/the-doctor-fails-only-on-a-fail ()
+  ;; a WARN is fine (Emacs 30.2 is supported, and warns): it is named; only a FAIL fails the step
   (drgnx-bootstrap-test--with (root _url)
     (should (eq (drgnx-bootstrap-test--status (car (drgnx-bootstrap-test--run :only '(doctor))) 'doctor) 'ok))
     (cl-letf (((symbol-function 'drgnx-doctor-run)
                (lambda (&rest _) '((:name security :status warn :detail "fixed in 31.2")
-                                   (:name gui :status warn :detail "not a graphical build")))))
+                                   (:name emacs-version :status warn :detail "Emacs 30.2 works, 31.1 is recommended")
+                                   (:name ai :status info :detail "no provider")))))
+      (let ((row (drgnx-bootstrap-test--row (car (drgnx-bootstrap-test--run :only '(doctor))) 'doctor)))
+        (should (eq (nth 1 row) 'ok))
+        (should (string-match-p "\\_<emacs-version\\_>" (nth 2 row)))
+        (should (string-match-p "\\_<security\\_>" (nth 2 row)))))
+    (cl-letf (((symbol-function 'drgnx-doctor-run)
+               (lambda (&rest _) '((:name gui :status warn :detail "not a graphical build")
+                                   (:name git :status fail :detail "git not found")))))
       (let ((row (drgnx-bootstrap-test--row (car (drgnx-bootstrap-test--run :only '(doctor))) 'doctor)))
         (should (eq (nth 1 row) 'failed))
-        (should (string-match-p "\\_<gui\\_>" (nth 2 row)))
-        (should-not (string-match-p "security" (nth 2 row)))))))
+        (should (string-match-p "\\_<git\\_>.*git not found" (nth 2 row)))
+        (should-not (string-match-p "\\_<gui\\_>" (nth 2 row)))))))
 
 ;;;; Questions: --yes, desktop, shell, chezmoi, age
 
@@ -267,7 +272,8 @@ case \" $* \" in
   *' source-path '*) echo \"$src\" ;;
   *' init '*) mkdir -p \"$src\" && git -C \"$src\" init -q && git -C \"$src\" remote add origin \"$last\" ;;
   *' diff '*) [ -e '%sapplied' ] || echo '+export EDITOR=drgnx' ;;
-  *' apply '*) : > '%sapplied' ;;
+  *' apply '*) if [ -n \"${FAKE_APPLY_FAILS-}\" ]; then echo '+a line of a dotfile'; echo 'chezmoi: .netrc: permission denied' >&2; echo '+another line'; exit 1; fi
+              : > '%sapplied' ;;
 esac" root root root))))
     ;; two yeses: init, then apply after the diff was shown
     (drgnx-bootstrap-test--with (root url)
@@ -297,15 +303,33 @@ esac" root root root))))
         (should (eq (drgnx-bootstrap-test--status r 'config) 'skipped))
         (should (string-match-p "chezmoi apply" (nth 2 (drgnx-bootstrap-test--row r 'config))))
         (should-not (string-match-p " apply" (drgnx-bootstrap-test--log root)))))
-    ;; --yes: init and diff, never apply
+    ;; --yes: init and diff, never apply; the diff is not printed (no question follows it: the output may be a log)
     (drgnx-bootstrap-test--with (root url)
       (fake-chezmoi root)
-      (let ((r (car (drgnx-bootstrap-test--run :chezmoi url :only '(config) :yes t))))
+      (let* ((run (drgnx-bootstrap-test--run :chezmoi url :only '(config) :yes t))
+             (row (drgnx-bootstrap-test--row (car run) 'config)))
         (should (string-match-p " init " (drgnx-bootstrap-test--log root)))
         (should (string-match-p " diff" (drgnx-bootstrap-test--log root)))
         (should-not (string-match-p " apply" (drgnx-bootstrap-test--log root)))
-        (should (eq (drgnx-bootstrap-test--status r 'config) 'skipped))
-        (should (string-match-p "chezmoi apply" (nth 2 (drgnx-bootstrap-test--row r 'config))))))))
+        (should (eq (nth 1 row) 'skipped))
+        (should (string-match-p "chezmoi diff.*chezmoi apply" (nth 2 row)))
+        (should-not (string-match-p "export EDITOR" (cdr run)))
+        (should-not (string-match-p "export EDITOR" (nth 2 row)))
+        ;; again with no terminal (nothing can be asked): not printed either
+        (let ((again (drgnx-bootstrap-test--run :chezmoi url :only '(config))))
+          (should (eq (drgnx-bootstrap-test--status (car again) 'config) 'skipped))
+          (should-not (string-match-p "export EDITOR" (cdr again))))))
+    ;; a failed apply: chezmoi's error, never a line of the files
+    (drgnx-bootstrap-test--with (root url)
+      (fake-chezmoi root)
+      (let* ((process-environment (cons "FAKE_APPLY_FAILS=1" process-environment))
+             (row (drgnx-bootstrap-test--row
+                   (car (drgnx-bootstrap-test--run :chezmoi url :only '(config)
+                                                   :ask (drgnx-bootstrap-test--answers '(("chezmoi init" . t) ("chezmoi apply" . t)))))
+                   'config)))
+        (should (eq (nth 1 row) 'failed))
+        (should (string-match-p "chezmoi: \\.netrc: permission denied" (nth 2 row)))
+        (should-not (string-match-p "a line of a dotfile\\|another line" (nth 2 row)))))))
 
 (defun drgnx-bootstrap-test--age-setup (root)
   "secrets.age in the config dir, an identity file, a fake sudo and dnf (dnf install puts a fake age in bin/);
@@ -431,6 +455,36 @@ age is not on the path.  Returns the identity file."
         (should (eq (drgnx-bootstrap-test--status r 'config) 'changed))
         (should-not (file-exists-p marker))))))
 
+(ert-deftest drgnx-bootstrap/a-query-in-the-url-is-never-shown-or-saved ()
+  ;; git sees the URL as given; what is shown and what .git/config keeps has no query (a token can be in it).  No
+  ;; network: a git wrapper clones the fixture when it sees the https URL, or fails as git does for one not found.
+  (let ((secret (concat "tok" (make-string 12 ?q))))
+    (dolist (fails '(nil t))
+      (drgnx-bootstrap-test--with (root url)
+        (let ((real (executable-find "git"))
+              (https (format "https://example.invalid/ana/config.git?token=%s" secret)))
+          (drgnx-bootstrap-test--write
+           (concat root "bin/git")
+           (format "#!/bin/bash
+args=()
+for a; do case $a in https://example.invalid/*'?'*) %s args+=(%s) ;; *) args+=(\"$a\") ;; esac; done
+exec %s \"${args[@]}\"
+" (if fails "echo \"fatal: repository '$a/' not found\" >&2; exit 128;" "") (shell-quote-argument url) (shell-quote-argument real))
+           #o755)
+          (let* ((r (car (drgnx-bootstrap-test--run :config https :only '(config))))
+                 (row (drgnx-bootstrap-test--row r 'config)))
+            (should-not (string-search secret (nth 2 row)))
+            (if fails
+                (progn (should (eq (nth 1 row) 'failed))
+                       (should (string-match-p "not found" (nth 2 row))))
+              (should (eq (nth 1 row) 'changed))
+              (should (equal (drgnx-bootstrap-test--git (concat root "config") "config" "--get" "remote.origin.url")
+                             "https://example.invalid/ana/config.git"))
+              (should-not (string-search secret (drgnx-bootstrap-test--text (concat root "config/.git/config"))))
+              ;; the next run knows it as the same clone
+              (should (eq (drgnx-bootstrap-test--status (car (drgnx-bootstrap-test--run :config https :only '(config))) 'config)
+                          'ok)))))))))
+
 (ert-deftest drgnx-bootstrap/a-failed-clone-leaves-nothing ()
   (drgnx-bootstrap-test--with (root _url)
     (make-directory (concat root "not-a-repo"))   ; a path that exists, but git cannot clone it
@@ -489,7 +543,21 @@ age is not on the path.  Returns the identity file."
       (should (string-match-p "^shell    skipped    " (cdr r)))
       (should-not (string-match-p "^doctor" (cdr r))))
     (cl-letf (((symbol-function 'drgnx-doctor-run) (lambda (&rest _) '((:name gui :status warn :detail "no GUI")))))
+      (should (equal (car (drgnx-bootstrap-test--cli "--step" "doctor")) 0)))
+    (cl-letf (((symbol-function 'drgnx-doctor-run) (lambda (&rest _) '((:name git :status fail :detail "no git")))))
       (should (equal (car (drgnx-bootstrap-test--cli "--step" "doctor")) 1)))))
+
+(ert-deftest drgnx-bootstrap/a-program-that-exits-at-once ()
+  ;; its stdin is closed after it has gone: never an error (a lost race made a fast git call fail the step)
+  (dotimes (_ 50)
+    (should (equal (drgnx-bootstrap--call "true" nil) '(0 . ""))))
+  (should (equal (drgnx-bootstrap--call "sh" '("-c" "exit 3")) '(3 . "")))
+  ;; the race made certain: the program has exited (and Emacs knows) before its stdin is closed
+  (let ((orig (symbol-function 'make-process)))
+    (cl-letf (((symbol-function 'make-process)
+               (lambda (&rest args) (let ((p (apply orig args))) (sleep-for 0.3) p))))
+      (should (equal (drgnx-bootstrap--call "true" nil) '(0 . "")))
+      (should (equal (drgnx-bootstrap--call "sh" '("-c" "echo out; exit 4")) '(4 . "out"))))))
 
 (ert-deftest drgnx-bootstrap/the-terminal-is-handed-back-and-the-run-goes-on ()
   ;; On a terminal, sudo (and age's passphrase) must run in bin/drgnx: a program Emacs starts has no terminal.
@@ -588,5 +656,21 @@ printf '%%s\\n' %s > \"$d/argv\"; exit 10
           (cl-incf lines)
           (should (string-search (format "\"%s\"" line) bin)))))
     (should (>= lines 4))))
+
+(ert-deftest drgnx-bootstrap/usage-descriptions-line-up ()
+  ;; every description in bin/drgnx's usage starts in the same column (the bootstrap entry moved one once)
+  (with-temp-buffer
+    (insert-file-contents (expand-file-name "bin/drgnx" drgnx-dir))
+    (goto-char (point-min))
+    (re-search-forward "^usage() {$")
+    (let ((end (save-excursion (re-search-forward "^USAGE$")))
+          (bad nil) (seen 0))
+      (while (re-search-forward "^       drgnx [^ \n][^\n]*?[^ \n]  +\\([^ \n]\\)" end t)
+        (cl-incf seen)
+        (goto-char (match-beginning 1))
+        (unless (= (current-column) 31) (push (buffer-substring (line-beginning-position) (line-end-position)) bad))
+        (forward-line 1))
+      (should (>= seen 10))
+      (should (equal bad nil)))))
 
 ;;; bootstrap-test.el ends here

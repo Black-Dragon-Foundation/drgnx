@@ -88,6 +88,10 @@ unsets it); return (EXIT . OUTPUT)."
 (ert-deftest drgnx-install-config/plan-with-yes-says-what-stays-manual ()
   (let ((r (drgnx-install-config-test--plan "--yes" "--chezmoi" "https://example.invalid/d.git")))
     (should (string-search "Then: drgnx bootstrap --chezmoi https://example.invalid/d.git --yes (" (cdr r)))
+    ;; what bootstrap's --yes confirms, and what it never does
+    (should (string-search "the key import and chezmoi init" (cdr r)))
+    (should (string-search "the desktop entry" (cdr r)))
+    (should-not (string-search "confirms only" (cdr r)))
     (should-not (string-search "asks before keys" (cdr r)))))
 
 (ert-deftest drgnx-install-config/config-needs-a-value ()

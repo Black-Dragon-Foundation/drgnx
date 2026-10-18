@@ -544,7 +544,7 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
                                this machine from your configuration: preflight, config (cloned into an
                                empty config dir), keys, sync, onboard, desktop, shell, doctor; asks before
                                keys, desktop and shell (--yes: never the rc line or the desktop entry)
-       drgnx safe             Emacs with drgnx's core only: no modules, no packages
+       drgnx safe              Emacs with drgnx's core only: no modules, no packages
        drgnx bisect [-- CMD…]  find the module that breaks (CMD fails, or you say so)
        drgnx service-unit [DIR]
                                the systemd user unit (printed, or written to DIR; never installed)

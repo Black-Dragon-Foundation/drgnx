@@ -278,4 +278,12 @@ Returns (RESULT QUESTIONS)."
 (ert-deftest drgnx-onboard-portability/the-step-runs-it ()
   (should (eq (plist-get (alist-get 'portability drgnx-onboard--steps) :run) #'drgnx-onboard--portability-step)))
 
+(ert-deftest drgnx-onboard-portability/a-program-that-exits-at-once ()
+  ;; its stdin is closed after it has gone: never an error (a lost race failed the step now and then)
+  (let ((orig (symbol-function 'make-process)))
+    (cl-letf (((symbol-function 'make-process)
+               (lambda (&rest args) (let ((p (apply orig args))) (sleep-for 0.3) p))))
+      (should (equal (drgnx-onboard--call "true") '(0 . "")))
+      (should (equal (drgnx-onboard--call "sh" "-c" "echo out; exit 4") '(4 . "out"))))))
+
 ;;; onboard-portability-test.el ends here
