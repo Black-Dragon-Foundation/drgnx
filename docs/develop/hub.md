@@ -23,6 +23,11 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   agent's children, and a write to a pipe whose reader left would otherwise end the server.
 - **The gateway** (`core/drgnx-gateway.el`) runs inside the hub: never in the editing Emacs, so streaming cannot
   touch the keystroke budget.
+  Besides the 127.0.0.1 port it can listen on **per-session Unix sockets** (`drgnx-gateway-listen-socket PATH`, for
+  agents in a sandbox without the host's loopback; the caller picks PATH, `gateway.sock` in the session's private
+  directory beside `mcp.sock` and `hub.sock`). Same filter, path allowlist and token check as the port; the socket
+  is mode 0600 and a stale file at PATH is replaced. `drgnx-gateway-close-socket PATH` (and `drgnx-gateway-stop`)
+  cuts the connections on it, with their upstream requests, and removes the file.
 - **curl**, one per forwarded request, reads its config on stdin (`-K -`): the URL, the provider's key header and the
   request body never appear in its argv.
   The config has `suppress-connect-headers`: behind an HTTPS proxy curl's `include` would otherwise print the
