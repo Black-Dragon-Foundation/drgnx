@@ -496,6 +496,25 @@ Four calls cover the idioms a hand-written timer used to. Each takes a KEY, an `
 All four read the clock only through `drgnx-timer--now` and schedule by delays, so the clock fixture drives them:
 `test/unit/core-timer-primitives-test.el` (`drgnx-timer-prim/`).
 
+### The ACP watchdog and the hub's timers
+
+The agent connection and the hub are the layer's first core users; their keys are by process or name, never by the
+connection struct.
+
+- **ACP.** `drgnx-acp-start` starts the key `(acp-watchdog . PROCESS)`, repeating every 0.5 s, whose function
+  `drgnx-acp--watchdog` (CONN PROC) reports an agent that died without its sentinel being called. `drgnx-acp--exited`
+  and `drgnx-acp-stop` cancel the key; two connections have two keys. A watchdog that fails stops after
+  `drgnx-timer-failure-limit` failures and is named in `drgnx-timer-errors`, instead of failing every half second. The
+  0.05 s tick that reads the last of a dead agent's stderr is a deferral out of a sentinel and stays raw.
+- **Hub.** `hub-tick` (every 2 s, repeating) keeps its own `with-demoted-errors`: its steps' transient errors (a busy
+  `work.db`) never reach the failure limit. `hub-deliver` is `drgnx-timer-soon` 0.1 s: a burst of session changes
+  delivers once. `(hub-flush . SESSION-ID)` is `drgnx-timer-soon` 0.05 s: one `agent` flush per session per burst.
+  `hub-events` is `drgnx-timer-soon` `drgnx-hub-events-interval`: `events` go at most that often. `hub-exit` is the
+  `shutdown` request's exit 0.1 s later (`drgnx-hub--exit-now` with the exit function that was set when it came); a
+  hub stopped meanwhile cancels it. `drgnx-hub-stop` cancels all of them. The hub's `coord/notify` deferrals
+  (`run-at-time 0`) stay raw. `drgnx-hub-main` sets `drgnx-timer-report-file` to `hub-timers-report.eld`, so a timer
+  the hub stops is written beside, not over, the editor's report.
+
 ### The clock seams
 
 The layer reads time and input only through `drgnx-timer--now` (`float-time`), `drgnx-timer--idle-time`

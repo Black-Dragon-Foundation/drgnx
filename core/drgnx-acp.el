@@ -15,10 +15,11 @@
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-paths)
+(require 'drgnx-timer)
 
 (cl-defstruct (drgnx-acp-conn (:constructor drgnx-acp--make) (:copier nil))
   process stderr-process (next-id 0) (pending (make-hash-table :test #'eql)) input-buffer (stderr "")
-  on-notification on-request on-exit log exited watchdog)
+  on-notification on-request on-exit log exited)
 
 (defconst drgnx-acp--stderr-max 8000 "Characters of the agent's stderr kept.")
 (defconst drgnx-acp--log-max 50 "Protocol problems kept (newest first).")
@@ -109,17 +110,21 @@ ON-NOTIFICATION: (CONN METHOD PARAMS); ON-REQUEST: (CONN METHOD PARAMS ID) → (
                  (error (delete-process stderr) (signal (car err) (cdr err))))))
     (setf (drgnx-acp-conn-process conn) proc (drgnx-acp-conn-stderr-process conn) stderr)
     ;; A sentinel can go uncalled (seen in the unit suite after the Explorer's tests): a watchdog
-    ;; reports a dead agent within half a second anyway.
-    (setf (drgnx-acp-conn-watchdog conn)
-          (run-at-time 0.5 0.5 (lambda () (unless (process-live-p proc) (drgnx-acp--exited conn proc)))))
+    ;; reports a dead agent within half a second anyway.  One per process; a failing one stops after 3.
+    (drgnx-timer-start (cons 'acp-watchdog proc) 0.5 #'drgnx-acp--watchdog :repeat 0.5
+                       :args (list conn proc) :owner :core)
     conn))
+
+(defun drgnx-acp--watchdog (conn proc)
+  "The agent PROC died without its sentinel being called: report it."
+  (unless (process-live-p proc) (drgnx-acp--exited conn proc)))
 
 (defun drgnx-acp--exited (conn proc)
   "The agent PROC ended: pending requests fail now; the exit is reported a moment later, once the
 last of its stderr has arrived (never waiting here: this runs in a sentinel).  Once only."
   (unless (drgnx-acp-conn-exited conn)
     (setf (drgnx-acp-conn-exited conn) t)
-    (when (timerp (drgnx-acp-conn-watchdog conn)) (cancel-timer (drgnx-acp-conn-watchdog conn)))
+    (drgnx-timer-cancel (cons 'acp-watchdog (drgnx-acp-conn-process conn)))
     (let ((pending (drgnx-acp-conn-pending conn)) cbs)
       (maphash (lambda (_id cb) (push cb cbs)) pending)
       (clrhash pending)
@@ -157,7 +162,7 @@ last of its stderr has arrived (never waiting here: this runs in a sentinel).  O
 
 (defun drgnx-acp-stop (conn)
   "End the connection: the agent process and its stderr pipe."
-  (when (timerp (drgnx-acp-conn-watchdog conn)) (cancel-timer (drgnx-acp-conn-watchdog conn)))
+  (drgnx-timer-cancel (cons 'acp-watchdog (drgnx-acp-conn-process conn)))
   (dolist (p (list (drgnx-acp-conn-process conn) (drgnx-acp-conn-stderr-process conn)))
     (when (process-live-p p) (delete-process p)))
   (when (buffer-live-p (drgnx-acp-conn-input-buffer conn)) (kill-buffer (drgnx-acp-conn-input-buffer conn))))
