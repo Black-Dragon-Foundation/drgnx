@@ -104,14 +104,23 @@ summary to RESULTS-FILE.  Return t if every test passed."
 written), for the per-file Emacsen's temp directories.  A Unix socket's path has at most 103 bytes on macOS (104
 with its closing NUL; 107 on Linux), and the hub's tests make one three levels below a file's temp directory
 \(run/drgnx/hub-HASH.sock): macOS's TMPDIR (/var/folders/xx/…/T/, 49 bytes) or any deep one leaves no room for
-that, /tmp/drgnx-t-XXXXXX/drgnx-run.XXXXXX/ (37 bytes) does."
+that, /tmp/drgnx-t-XXXXXX/drgnx-run.XXXXXX/ (37 bytes) does.  Its true name, as bin/drgnx's own directory
+\(macOS's /tmp is a link to /private/tmp: 45 bytes): a test that compares paths sees one spelling."
   (let ((temporary-file-directory (if (file-writable-p "/tmp/") "/tmp/" temporary-file-directory)))
-    (with-file-modes #o700 (make-temp-file "drgnx-t-" t))))
+    (file-truename (with-file-modes #o700 (make-temp-file "drgnx-t-" t)))))
 
 (defun drgnx-run-ert--env-number (var default)
   "The whole number above 0 in the environment variable VAR, else DEFAULT."
   (let ((s (getenv var)))
     (if (and s (string-match-p "\\`[1-9][0-9]*\\'" s)) (string-to-number s) default)))
+
+(defun drgnx-run-ert-time-factor ()
+  "What a `:timing' test multiplies its wall-clock budgets by: DRGNX_TEST_TIME_FACTOR, a number of at least 1 for
+a machine slower than the one the budgets were set on (the macOS CI runner: 2), else 1.  The budgets themselves
+stay as measured; a factor below 1 or not a number is ignored."
+  (let* ((s (getenv "DRGNX_TEST_TIME_FACTOR"))
+         (n (and s (string-match-p "\\`[0-9]+\\(?:\\.[0-9]+\\)?\\'" s) (string-to-number s))))
+    (if (and n (>= n 1)) n 1)))
 
 (defun drgnx-run-ert--end-process (p &optional grace)
   "End P and what it started (its process group, as Emacs starts each process): TERM, GRACE seconds (default 5)

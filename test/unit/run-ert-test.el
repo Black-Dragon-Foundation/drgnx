@@ -441,6 +441,7 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
             (should (eql 0 (drgnx-run-ert-test--run-suite suite (concat "TMPDIR=" parent) run-tmp)))
             (pcase-let ((`(,seen ,modes) (car (read-from-string (with-temp-buffer (insert-file-contents probe) (buffer-string))))))
               (should (string-match-p drgnx-run-ert-test--file-dir-re seen))
+              (should (equal seen (file-name-as-directory (file-truename seen))))   ; macOS: /private/tmp, not /tmp
               (should (eql modes #o700))
               (should-not (file-exists-p seen))
               (should-not (file-exists-p (file-name-directory (directory-file-name seen))))))

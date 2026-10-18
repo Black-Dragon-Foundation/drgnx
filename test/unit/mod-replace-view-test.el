@@ -5,6 +5,7 @@
 (require 'drgnx-wb)
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-replace" drgnx-dir) nil t)
+(require 'drgnx-run-ert "run-ert")                     ; `drgnx-run-ert-time-factor'
 
 (defun drgnx-replace-view-test--bind-keys ()
   "Bind the shipped VS Code profile's keys of the replace commands that live in the view's and the bar's keymaps."
@@ -53,6 +54,14 @@ bar's keymaps), one editor window, no view or bar left over."
 
 (defun drgnx-replace-view-test--count ()
   (with-current-buffer (drgnx-replace-view-test--view) (length drgnx-replace--matches)))
+
+(defun drgnx-replace-view-test--rows ()
+  "The view's matches as (FILE LINE), FILE as given (no directory only when below the view's root), sorted: a wrong
+count says which rows."
+  (with-current-buffer (drgnx-replace-view-test--view)
+    (sort (mapcar (lambda (m) (list (file-relative-name (plist-get m :file) drgnx-replace--root) (plist-get m :line)))
+                  drgnx-replace--matches)
+          (lambda (a b) (string< (format "%S" a) (format "%S" b))))))
 
 (defun drgnx-replace-view-test--files ()
   "The files the view lists, by name, sorted (ripgrep sends files in any order)."
@@ -195,7 +204,8 @@ bar's keymaps), one editor window, no view or bar left over."
       (drgnx-replace-in-files)
       (drgnx-replace-view-test--set 'replace "bar")
       (drgnx-replace-view-test--wait)
-      (should (= (drgnx-replace-view-test--count) 4))
+      ;; (macOS CI once listed 7 here; the rows say which)
+      (should (equal (drgnx-replace-view-test--rows) '(("a.txt" 1) ("a.txt" 2) ("b.txt" 1) ("c.txt" 1))))
       (let ((a (expand-file-name "a.txt" repo)) (b (expand-file-name "b.txt" repo)) (c (expand-file-name "c.txt" repo))
             (row (lambda (file line) (lambda (v) (and (consp v) (equal (plist-get v :file) file) (= (plist-get v :line) line))))))
         ;; untick a match, then a whole file
@@ -398,8 +408,8 @@ bar's keymaps), one editor window, no view or bar left over."
           (when (and (not first) (> (funcall drawn) 0)) (setq first (- (float-time) t0))))
         (should (= (funcall drawn) 10000))
         (should (= (drgnx-replace-view-test--count) 10000))
-        (should (< first 0.1))
-        (should (< worst 0.016))
+        (should (< first (* 0.1 (drgnx-run-ert-time-factor))))
+        (should (< worst (* 0.016 (drgnx-run-ert-time-factor))))
         ;; typing a replacement draws all 10000 rows again (new previews): in slices too
         (setq worst 0)
         (drgnx-replace-view-test--set 'replace "pin")
@@ -409,7 +419,7 @@ bar's keymaps), one editor window, no view or bar left over."
               (accept-process-output nil 0.001)
               (setq worst (max worst (- (float-time) s (- gc-elapsed gc)))))))
         (should (= (funcall drawn) 10000))
-        (should (< worst 0.016))))))
+        (should (< worst (* 0.016 (drgnx-run-ert-time-factor))))))))
 
 
 ;; fix round 1

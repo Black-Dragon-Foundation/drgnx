@@ -48,6 +48,11 @@ the files' Emacsen too.
 With a name selector (a string: a regexp on test names), only the files that define a matching test (`(ert-deftest
 NAME`) get an Emacs, so a narrow run stays quick; any other selector (a tag, `(not …)`) runs every file.
 
+A `:timing` test multiplies its wall-clock budgets by `(drgnx-run-ert-time-factor)`: `$DRGNX_TEST_TIME_FACTOR`, a
+number of at least 1 for a machine slower than the one the budgets were measured on, else 1. The budgets in the tests
+stay as measured. The macOS workflow sets 2: its hosted runner drew the replace view 1.1–1.3× slower than the 16 ms
+budget allows.
+
 `bin/drgnx test --one-process` (or `DRGNX_TEST_ONE_PROCESS=1`) runs every file in one Emacs instead: for hunting a
 leak from one file into another (run the files in question this way; a test that fails only here depends on what an
 earlier file left). `bin/drgnx check`'s `unit-timing` job uses it too (16 tests across all files). The runner unsets
