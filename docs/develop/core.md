@@ -241,15 +241,21 @@ arguments at spaces and commas, so a monitor name with whitespace, `,` or `;` is
 the window was focused, the window that had the focus gets it back (best effort, a call of its own).
 
 **KWin** (Plasma 6, status `verified`) has no tool, so the adapter loads a JavaScript file into KWin through its
-scripting D-Bus API (`org.kde.KWin` `/Scripting` `loadScript`, then `run` on `/Scripting/Script<id>`) and the script
+scripting D-Bus API (`org.kde.KWin` `/Scripting` `loadScript`, then `start`, which runs the loaded scripts not running yet — not `run` on
+`/Scripting/Script<id>`: KWin numbers a script by how many are loaded, so after an unload two calls at once can
+share an id, and `run` would run the other call's script) and the script
 answers with `callDBus` to a `Reply(s)` method Emacs registers for the length of the call. Only Emacs' own
 `dbus.el` is used (no `qdbus`), and only `dbus-call-method-asynchronously` with the call's deadline as `:timeout`,
 so restore may use it. The method lives under Emacs' unique bus name at an object path of its own per call:
 `dbus-register-service` and `dbus-unregister-service` wait for the bus (RequestName, ReleaseName) and a well-known
 name would make two calls share a reply. The script, the object and the temporary file (mode 0600) are removed on
-success, error and deadline alike. `:monitors` lists `workspace.screens`; `:move` (the command) moves the active
-window and only if it is Emacs' (by pid); `:place` (restore) finds Emacs' window by pid and the frame's title (else
-the only normal window of that pid). Without D-Bus support or a session bus, `:can-move` says so with a fix. The
+success, error and deadline alike. `:monitors` lists `workspace.screens`; `:move` (the command) refuses a frame without focus,
+as every adapter does, and moves KWin's active window only if it is Emacs' (by pid) and this very frame (its caption:
+the frame's title, else its name), so never another frame of this Emacs; `:place` (restore) finds Emacs' window by
+pid and the frame's title (else the only normal window of that pid). KWin places a new window when it first shows
+it, which can come after a restore's move: so `:place` checks Emacs' own answer at 0.1, 0.3, 0.7, 1.5 and 3 s and
+moves again while the frame is elsewhere, within the restore deadline ("KWin keeps the window on another screen; it
+was not placed" when it never gets there). Without D-Bus support or a session bus, `:can-move` says so with a fix. The
 monitor a frame is on is Emacs' own answer (`frame-monitor-attributes`, matched to a screen by geometry): Next and
 Previous need it, and so does the monitor a restore saves. `:timeout` goes right after the handler in every
 `dbus-call-method-asynchronously`: dbus.el sends a `:timeout` placed after the method's arguments as one more

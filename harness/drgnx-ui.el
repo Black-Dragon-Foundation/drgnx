@@ -551,10 +551,15 @@ RUN/niri.kdl and RUN/niri-session.sh."
             ;; wlroots without a GPU, a seat or input devices; one output per monitor
             ;; (sway takes SWAYSOCK as the path to listen on, and gives it to its children)
             ;; niri: the same sway, with one output, runs niri (its winit backend: one window, one output)
-            ((or "sway" "niri") (list "WLR_BACKENDS=headless" "WLR_RENDERER=pixman" "WLR_LIBINPUT_NO_DEVICES=1"
-                                      (format "WLR_HEADLESS_OUTPUTS=%d" (or (plist-get sess :monitors) 1))
-                                      (concat "SWAYSOCK=" (drgnx-ui--sway-socket (plist-get sess :name)
-                                                                                 (file-name-directory (plist-get sess :run))))))
+            ((or "sway" "niri") (delq nil (list "WLR_BACKENDS=headless" "WLR_RENDERER=pixman" "WLR_LIBINPUT_NO_DEVICES=1"
+                                                (format "WLR_HEADLESS_OUTPUTS=%d" (or (plist-get sess :monitors) 1))
+                                                (concat "SWAYSOCK=" (drgnx-ui--sway-socket (plist-get sess :name)
+                                                                                           (file-name-directory (plist-get sess :run))))
+                                                ;; niri renders with GL: Mesa's shader cache stays in the run directory
+                                                (and (equal (plist-get sess :compositor) "niri")
+                                                     (concat "XDG_CACHE_HOME=" (drgnx-ui--session-cache sess)))
+                                                (and (equal (plist-get sess :compositor) "niri")
+                                                     (concat "MESA_SHADER_CACHE_DIR=" (expand-file-name "mesa" (drgnx-ui--session-cache sess)))))))
             ;; no WAYLAND_DISPLAY (`env -i'): the X11 Emacs only sees its own X display, with its cookie
             ((or "x11" "i3") (list (concat "DISPLAY=" (plist-get sess :display))
                                    (concat "XAUTHORITY=" (expand-file-name "Xauthority" (plist-get sess :run)))))
@@ -564,8 +569,13 @@ RUN/niri.kdl and RUN/niri-session.sh."
                       (list "XDG_CURRENT_DESKTOP=KDE" "KDE_FULL_SESSION=true" "XDG_SESSION_TYPE=wayland"
                             (concat "XDG_CONFIG_HOME=" (expand-file-name "config" xdg))
                             (concat "XDG_DATA_HOME=" (expand-file-name "data" xdg))
-                            (concat "XDG_CACHE_HOME=" (expand-file-name "cache" xdg))))))
+                            (concat "XDG_CACHE_HOME=" (drgnx-ui--session-cache sess))
+                            (concat "MESA_SHADER_CACHE_DIR=" (expand-file-name "mesa" (drgnx-ui--session-cache sess)))))))
           extra))
+
+(defun drgnx-ui--session-cache (sess)
+  "RUN/xdg/cache: the cache directory of SESS's KWin or niri (and of what renders with GL in it), never ~/.cache."
+  (expand-file-name "xdg/cache" (plist-get sess :run)))
 
 (defun drgnx-ui-env-argv (env)
   (append '("env" "-i") env))
@@ -1194,13 +1204,21 @@ The runtime directory and the X display are the ones the harness made and reserv
     (_ (list (concat "WAYLAND_DISPLAY=" (plist-get sess :name))
              (concat "XDG_RUNTIME_DIR=" (drgnx-ui-runtime-dir))))))
 
+(defun drgnx-ui--client-env (sess)
+  "The whole environment of the emacsclient that opens a frame in SESS: the allowlist (`drgnx-ui-keep-env') and
+SESS's display, nothing else of the caller's.  server.el gives a frame its client's environment and drgnx reads
+the window-manager variables from the frame first, so the caller's SWAYSOCK, NIRI_SOCKET, XDG_CURRENT_DESKTOP or
+session bus would point the frame at the caller's own desktop; without them it falls back to the session's."
+  (append (delq nil (mapcar (lambda (k) (let ((v (getenv k))) (and v (concat k "=" v)))) drgnx-ui-keep-env))
+          (seq-filter (lambda (kv) (string-search "=" kv)) (drgnx-ui--display-env sess))))
+
 (defun drgnx-ui-new-frame (sess &optional timeout)
   "Open a frame in daemon session SESS the way a user does: `emacsclient -c'.
 Returns (:exit :output :client_ms :visible_ms :hooks) — HOOKS are the slowest frame-hook
 functions and hook totals measured in the session."
   (drgnx-ui-call sess "(drgnx-uitest-api-time-frame-hooks)")
   (let* ((before (plist-get (drgnx-ui-call sess "(drgnx-uitest-api-gui-frames)") :visible))
-         (process-environment (append (drgnx-ui--display-env sess) process-environment))
+         (process-environment (drgnx-ui--client-env sess))
          (t0 (float-time))
          (r (drgnx-ui--run-with-timeout (or timeout 30) (drgnx-ui--emacsclient) "-a" "false"
                                         "-s" (plist-get sess :socket) "-c" "-n"))

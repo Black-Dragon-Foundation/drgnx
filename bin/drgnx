@@ -143,9 +143,10 @@ test_container() { # [--ui [--compositor C]] — the batch (or GUI) tier inside 
   image=drgnx-test:f45; file=Containerfile
   if [ "${1:-}" = --ui ]; then
     image=drgnx-test-gui:f45; file=Containerfile.gui; cmd=(bin/drgnx test --ui); prebuilt="${DRGNX_TEST_GUI_IMAGE:-}"
-    if [ "${2:-}" = --compositor ]; then ui_compositor_ok "${3:-}" || return 2; cmd+=(--compositor "$3"); fi
+    local comp="${DRGNX_UI_COMPOSITOR:-}"
+    if [ "${2:-}" = --compositor ]; then ui_compositor_ok "${3:-}" || return 2; cmd+=(--compositor "$3"); comp="$3"; fi
     # KWin and niri are in an image of their own (Containerfile.wm); DRGNX_TEST_WM_IMAGE: a prebuilt one
-    case "${3:-}" in kwin|niri) image=drgnx-test-wm:f45; file=Containerfile.wm; prebuilt="${DRGNX_TEST_WM_IMAGE:-}" ;; esac
+    case "$comp" in kwin|niri) image=drgnx-test-wm:f45; file=Containerfile.wm; prebuilt="${DRGNX_TEST_WM_IMAGE:-}" ;; esac
     # --memory: a GUI run (sessions, compositors, the X11 Emacs) must never push the host into the OOM killer;
     # --memory-swap the same: no swap on top.  DRGNX_TEST_GUI_MEMORY (default 3g) for a bigger run
     local mem="${DRGNX_TEST_GUI_MEMORY:-3g}"
@@ -155,9 +156,15 @@ test_container() { # [--ui [--compositor C]] — the batch (or GUI) tier inside 
   fi
   echo "container runtime: $rt" >&2
   if [ -n "$prebuilt" ]; then
+    # an image reference, never an option: it follows the run's options on the command line
+    [[ $prebuilt =~ ^[A-Za-z0-9][A-Za-z0-9._/:@-]*$ ]] || { echo "drgnx: '$prebuilt' is not an image reference" >&2; return 2; }
     image="$prebuilt"; echo "image: $image (prebuilt)" >&2
   else
-    "$rt" build -q -t "$image" -f "$here/test/container/$file" "$here/test/container" >/dev/null
+    # an image build is capped too: an uncapped one once pushed the host into the OOM killer
+    # (DRGNX_TEST_BUILD_MEMORY, default 3g; podman only, as docker's buildx ignores --memory)
+    local bmem="${DRGNX_TEST_BUILD_MEMORY:-3g}" bargs=()
+    [ "$rt" = podman ] && bargs=(--memory "$bmem" --memory-swap "$bmem")
+    "$rt" build ${bargs[@]+"${bargs[@]}"} -q -t "$image" -f "$here/test/container/$file" "$here/test/container" >/dev/null
   fi
   # a narrowed run stays narrow inside the container: the selector goes in with its value
   if [ -n "${DRGNX_TEST_SELECTOR:-}" ]; then args+=(-e "DRGNX_TEST_SELECTOR=$DRGNX_TEST_SELECTOR"); fi
@@ -413,7 +420,7 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
                                behaviour scenarios in a session of that configuration
        drgnx test --container [--ui [--compositor C]]
                                the same inside a fedora:45 / Emacs 31.1 container (GUI: capped at 3 GB, no swap;
-                               DRGNX_TEST_GUI_MEMORY overrides)
+                               DRGNX_TEST_GUI_MEMORY overrides; image builds 3 GB, DRGNX_TEST_BUILD_MEMORY)
                                (podman, else docker, else nerdctl; DRGNX_CONTAINER overrides)
        drgnx test --install [NAME…]
                                install.sh end to end in fresh distribution containers (slow;

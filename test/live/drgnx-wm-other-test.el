@@ -179,7 +179,7 @@ callback's value.  Waits at most 8 s."
                 (should (string-match-p "niri has no output named \"nope\"" (cadr r))))
               ;; the command says there is only one monitor
               (let ((r (drgnx-wm-other--call sess "#'drgnx-monitors-move drgnx-wmt-main 'next")))
-                (should (eq :error (car-safe r))))))
+                (should (equal r (list :error (drgnx-wm-other--eval sess "drgnx-monitors--only-one")))))))
         (drgnx-ui-stop (plist-get sess :name))))))
 
 ;;; drgnx-wm-other-test.el ends here

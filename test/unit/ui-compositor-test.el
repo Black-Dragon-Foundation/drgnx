@@ -132,7 +132,8 @@ paths no WM serves."
       (dolist (kv (list "XDG_CURRENT_DESKTOP=KDE" "KDE_FULL_SESSION=true" "XDG_SESSION_TYPE=wayland"
                         (concat "XDG_CONFIG_HOME=" (expand-file-name "xdg/config" run))
                         (concat "XDG_DATA_HOME=" (expand-file-name "xdg/data" run))
-                        (concat "XDG_CACHE_HOME=" (expand-file-name "xdg/cache" run))))
+                        (concat "XDG_CACHE_HOME=" (expand-file-name "xdg/cache" run))
+                        (concat "MESA_SHADER_CACHE_DIR=" (expand-file-name "xdg/cache/mesa" run))))
         (should (member kv env)))
       (should-not (seq-find (lambda (kv) (string-match-p "\\`\\(WAYLAND_\\)?DISPLAY=" kv)) env))
       ;; a client reaches KWin's own display, in the session's runtime directory, once it is there
@@ -145,6 +146,37 @@ paths no WM serves."
     (let ((argv (drgnx-ui-compositor-argv (drgnx-ui-prepare-run "drgnx-ui-2" nil "800x600" root t nil "kwin"))))
       (should (equal (cadr (member "--output-count" argv)) "1"))
       (should (string-suffix-p " --fg-daemon" (car (last argv)))))))
+
+(ert-deftest drgnx-ui-compositor/a-new-frame-gets-none-of-the-callers-wm-variables ()
+  ;; server.el gives a frame its client's environment and drgnx reads the WM variables from the frame first: the
+  ;; emacsclient of `ui frame' carries the allowlist and the session's display, nothing else of the caller's
+  (drgnx-ui-compositor-test--with
+    (dolist (c '("kwin" "niri" "sway" "x11"))
+      (let* ((s (drgnx-ui-prepare-run (format "drgnx-ui-%d" (1+ (seq-position '("kwin" "niri" "sway" "x11") c)))
+                                      nil "1280x800" root nil nil c))
+             (xdg (plist-get s :xdg_runtime_dir))
+             (caller '("SWAYSOCK=/user/sway.sock" "I3SOCK=/user/i3.sock" "NIRI_SOCKET=/user/niri.sock"
+                       "HYPRLAND_INSTANCE_SIGNATURE=user" "XDG_CURRENT_DESKTOP=GNOME" "XDG_SESSION_TYPE=x11"
+                       "DBUS_SESSION_BUS_ADDRESS=unix:path=/user/bus" "WAYLAND_DISPLAY=wayland-0" "DISPLAY=:0"
+                       "XAUTHORITY=/user/xauth" "SECRET_TOKEN=x" "HOME=/home/caller"))
+             (process-environment (append caller process-environment))
+             (visible 0) seen)
+        (write-region "" nil (expand-file-name "wayland-1" xdg))
+        (write-region "" nil (expand-file-name "niri.wayland-2.42.sock" xdg))
+        (cl-letf (((symbol-function 'drgnx-ui-call)
+                   (lambda (_s form &rest _) (and (string-search "gui-frames" form) (list :visible (cl-incf visible)))))
+                  ((symbol-function 'drgnx-ui--run-with-timeout)
+                   (lambda (&rest _) (setq seen process-environment) (list 0 ""))))
+          (should (eql 0 (plist-get (drgnx-ui-new-frame s 2) :exit))))
+        (should (member "HOME=/home/caller" seen))
+        (dolist (kv caller)
+          (unless (equal kv "HOME=/home/caller") (should-not (member kv seen))))
+        (should-not (seq-find (lambda (kv) (string-match-p "\\`\\(SWAYSOCK\\|I3SOCK\\|NIRI_SOCKET\\|HYPRLAND_INSTANCE_SIGNATURE\\|XDG_CURRENT_DESKTOP\\|XDG_SESSION_TYPE\\|DBUS_SESSION_BUS_ADDRESS\\|SECRET_TOKEN\\)=" kv))
+                              seen))
+        (if (equal c "x11")
+            (should (member (concat "DISPLAY=" (plist-get s :display)) seen))
+          (should (member (concat "XDG_RUNTIME_DIR=" xdg) seen))
+          (should (member (if (equal c "niri") "WAYLAND_DISPLAY=wayland-2" "WAYLAND_DISPLAY=wayland-1") seen)))))))
 
 (ert-deftest drgnx-ui-compositor/niri-runs-nested-in-sway-with-one-output ()
   (drgnx-ui-compositor-test--with
@@ -162,6 +194,10 @@ paths no WM serves."
       (should-not (seq-find (lambda (l) (string-prefix-p "output HEADLESS-2" l)) lines))
       (should (member (format "exec \"niri -c %s; swaymsg exit\"" (expand-file-name "niri.kdl" run)) lines))
       (should (member "WLR_HEADLESS_OUTPUTS=1" env))
+      ;; niri's GL (and Mesa's shader cache) writes nothing to the real ~/.cache
+      (dolist (kv (list (concat "XDG_CACHE_HOME=" (expand-file-name "xdg/cache" run))
+                        (concat "MESA_SHADER_CACHE_DIR=" (expand-file-name "xdg/cache/mesa" run))))
+        (should (member kv env)))
       (should (member (concat "XDG_RUNTIME_DIR=" xdg) env))
       (should (member (format "spawn-at-startup \"sh\" %S" (expand-file-name "niri-session.sh" run)) kdl))
       ;; no X server in the shared /tmp, nothing shown over the window
@@ -558,7 +594,8 @@ paths no WM serves."
             ;; the GUI image (mutter, sway, X11) has neither: its prebuilt override does not apply
             (should (eql 0 (car (drgnx-ui-compositor-test--bin-call
                                  dir (list (concat "PATH=" path ":/usr/bin:/bin") "DRGNX_CONTAINER=podman"
-                                           "DRGNX_TEST_GUI_IMAGE=an-image" "DRGNX_TEST_GUI_MEMORY" "DRGNX_TEST_WM_IMAGE")
+                                           "DRGNX_TEST_GUI_IMAGE=an-image" "DRGNX_TEST_GUI_MEMORY" "DRGNX_TEST_WM_IMAGE"
+                                           "DRGNX_TEST_BUILD_MEMORY")
                                  "test" "--container" "--ui" "--compositor" c))))
             (let* ((args (split-string (with-temp-buffer (insert-file-contents log) (buffer-string)) "\n" t))
                    (build (cdr (member "build" args)))
@@ -566,6 +603,9 @@ paths no WM serves."
               (should (equal (cadr (member "-t" build)) "drgnx-test-wm:f45"))
               (should (string-suffix-p "test/container/Containerfile.wm" (cadr (member "-f" build))))
               (should (member "drgnx-test-wm:f45" run))
+              ;; the build is capped too (an uncapped image build once took the whole session down)
+              (should (equal (cadr (member "--memory" build)) "3g"))
+              (should (equal (cadr (member "--memory-swap" build)) "3g"))
               (should (equal (cadr (member "--memory" run)) "3g"))
               (should (equal (cadr (member "--memory-swap" run)) "3g"))
               (should (equal (last run 5) (list "bin/drgnx" "test" "--ui" "--compositor" c)))))
@@ -576,7 +616,35 @@ paths no WM serves."
            "test" "--container" "--ui" "--compositor" "kwin")
           (let ((args (split-string (with-temp-buffer (insert-file-contents log) (buffer-string)) "\n" t)))
             (should-not (member "build" args))
-            (should (member "wm-image" args))))
+            (should (member "wm-image" args)))
+          ;; DRGNX_UI_COMPOSITOR alone picks the image too; DRGNX_TEST_BUILD_MEMORY sizes every build
+          (delete-file log)
+          (should (eql 0 (car (drgnx-ui-compositor-test--bin-call
+                               dir (list (concat "PATH=" path ":/usr/bin:/bin") "DRGNX_CONTAINER=podman"
+                                         "DRGNX_UI_COMPOSITOR=niri" "DRGNX_TEST_BUILD_MEMORY=4g" "DRGNX_TEST_WM_IMAGE")
+                               "test" "--container" "--ui"))))
+          (let* ((args (split-string (with-temp-buffer (insert-file-contents log) (buffer-string)) "\n" t))
+                 (build (cdr (member "build" args))))
+            (should (equal (cadr (member "-t" build)) "drgnx-test-wm:f45"))
+            (should (equal (cadr (member "--memory" build)) "4g"))
+            (should (equal (cadr (member "--memory-swap" build)) "4g")))
+          (delete-file log)
+          (drgnx-ui-compositor-test--bin-call
+           dir (list (concat "PATH=" path ":/usr/bin:/bin") "DRGNX_CONTAINER=podman" "DRGNX_TEST_BUILD_MEMORY=4g"
+                     "DRGNX_UI_COMPOSITOR" "DRGNX_TEST_GUI_IMAGE")
+           "test" "--container" "--ui")
+          (let ((build (cdr (member "build" (split-string (with-temp-buffer (insert-file-contents log) (buffer-string)) "\n" t)))))
+            (should (equal (cadr (member "-t" build)) "drgnx-test-gui:f45"))
+            (should (equal (cadr (member "--memory" build)) "4g")))
+          ;; an image override is an image reference, never an option for podman
+          (delete-file log)
+          (dolist (bad '(("DRGNX_TEST_WM_IMAGE=-v/:/host" "--ui" "--compositor" "kwin")
+                         ("DRGNX_TEST_GUI_IMAGE=--privileged" "--ui")
+                         ("DRGNX_TEST_IMAGE=a b")))
+            (should (eql 2 (car (apply #'drgnx-ui-compositor-test--bin-call
+                                       dir (list (concat "PATH=" path ":/usr/bin:/bin") "DRGNX_CONTAINER=podman" (car bad))
+                                       "test" "--container" (cdr bad))))))
+          (should-not (file-exists-p log)))
       (delete-directory dir t))))
 
 (ert-deftest drgnx-ui-compositor/bin-test-ui-exports-the-compositor ()

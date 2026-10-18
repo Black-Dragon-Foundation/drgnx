@@ -1157,7 +1157,7 @@ cursor to the target output when a window is moved with `--id', and this cannot 
 ;;;; KWin (KDE Plasma 6): its scripting API over D-Bus
 ;;
 ;; KWin has no command-line tool that lists or moves windows, so the adapter loads a small JavaScript file
-;; into KWin (`/Scripting loadScript', then `run' on the script object) and the script reports back with
+;; into KWin (`/Scripting loadScript', then `/Scripting start') and the script reports back with
 ;; `callDBus' to a method Emacs registers for the length of the call.  Only Emacs' own `dbus.el' is used (no
 ;; `qdbus', no shell) and every D-Bus call is `dbus-call-method-asynchronously' with the call's deadline as
 ;; its `:timeout': nothing here blocks, so restore may use it.  The `Reply' method is registered under Emacs'
@@ -1205,8 +1205,9 @@ cursor to the target output when a window is moved with `--id', and this cannot 
   "The KWin JavaScript for KIND: `screens', `windows' or `move'.  Pure.
 ARGS (a plist): :service and :path, where the script reports (`callDBus' of Reply, with a JSON string);
 for `move' also :pid, :screen (an output name, may be \"\"), :geometry (X Y W H of the target screen, the
-fallback when no name matches) and either :active t (the active window, which must be the window of :pid) or
-:caption (the window of :pid with that caption, else the only normal window of :pid).
+fallback when no name matches) and either :active t with :caption (the active window, which must be the window
+of :pid with that caption) or :caption alone (the window of :pid with that caption, else the only normal window of
+:pid).
 The reply is an array of screens or of windows (the shape of test/fixtures/wm/kwin/), or {\"ok\":true} or
 {\"error\":MESSAGE}."
   (let ((str #'drgnx-platform-kwin--js-string))
@@ -1235,7 +1236,9 @@ The reply is an array of screens or of windows (the shape of test/fixtures/wm/kw
          (if (plist-get args :active)
              (concat "w = workspace.activeWindow;\n"
                      (format "if (!w || w.pid !== %d) { reply({ error: \"the active window is not this Emacs\" }); return; }\n"
-                             (plist-get args :pid)))
+                             (plist-get args :pid))
+                     "if (w.caption !== " (funcall str (or (plist-get args :caption) ""))
+                     ") { reply({ error: \"the active window is another window of this Emacs\" }); return; }\n")
            (concat (format "var mine = workspace.windowList().filter(function (x) { return x.pid === %d && x.normalWindow; });\n"
                            (plist-get args :pid))
                    "var named = mine.filter(function (x) { return x.caption === "
@@ -1316,9 +1319,13 @@ ends with an error.  Script, reply object and temporary file are gone by the tim
                               (unless done
                                 (if (not (and (integerp id) (>= id 0)))
                                     (funcall finish (list :error "KWin could not load the script"))
+                                  ;; `start' runs every loaded script not running yet.  Not `run' on
+                                  ;; /Scripting/Script<id>: KWin numbers scripts by how many are loaded, so after
+                                  ;; an unload two loaded scripts share an id and one object, and `run' there runs
+                                  ;; another call's script (two calls at once, seen on KWin 6.7.5)
                                   (push (nth 2 (dbus-call-method-asynchronously
-                                                :session "org.kde.KWin" (format "/Scripting/Script%d" id)
-                                                "org.kde.kwin.Script" "run" nil :timeout ms))
+                                                :session "org.kde.KWin" "/Scripting" "org.kde.kwin.Scripting" "start"
+                                                nil :timeout ms))
                                         serials))))
                             :timeout ms file name))
                     serials))
@@ -1359,13 +1366,37 @@ ends with an error.  Script, reply object and temporary file are gone by the tim
                              (t (list :error "KWin's script did not report a move")))))))
 
 (defun drgnx-platform-kwin--move (ctx monitor callback)
-  "Move the active window, which must be Emacs', to MONITOR: the path of a command the user typed."
-  (drgnx-platform-kwin--send ctx monitor (list :active t) callback))
+  "Move CTX's frame to MONITOR: the path of a command the user typed.  As with every adapter the frame must have
+focus; and KWin's active window must be Emacs' (pid) and this very frame (its caption: the title, else the name),
+never another frame of this Emacs, such as the main one."
+  (let ((frame (plist-get ctx :frame)))
+    (if (not (drgnx-platform-wm--hn-own-focused-p ctx))
+        (drgnx-platform-wm--hn-refuse callback drgnx-platform-wm--hn-not-focused)
+      (drgnx-platform-kwin--send
+       ctx monitor (list :active t :caption (or (frame-parameter frame 'title) (frame-parameter frame 'name) ""))
+       callback))))
 
 (defun drgnx-platform-kwin--place (ctx monitor callback)
-  "Move CTX's frame (found by Emacs' pid and the frame's title) to MONITOR: the restore path, any window."
-  (drgnx-platform-kwin--send
-   ctx monitor (list :caption (frame-parameter (plist-get ctx :frame) 'name)) callback))
+  "Move CTX's frame (found by Emacs' pid and the frame's title) to MONITOR: the restore path, any window.
+KWin places a new window where it likes when it first shows it, and that can come after a move made at once (a
+restored window is placed as it is made): so after each move Emacs' own answer (`frame-monitor-attributes') is
+checked at `drgnx-platform-wm--hn-poll-times', and the move made again while the frame is elsewhere, all within
+CTX's one deadline."
+  (let* ((frame (plist-get ctx :frame)) (start (float-time)) (end (+ start (plist-get ctx :timeout)))
+         (want (drgnx-platform--geometry monitor))
+         (there (lambda () (ignore-errors (equal (append (alist-get 'geometry (frame-monitor-attributes frame)) nil) want)))))
+    (cl-labels ((try (times)
+                  (drgnx-platform-kwin--send
+                   (plist-put (copy-sequence ctx) :timeout (max 0.05 (- end (float-time)))) monitor
+                   (list :caption (frame-parameter frame 'name))
+                   (lambda (r) (if (drgnx-platform--error-p r) (funcall callback r) (check times)))))
+                (check (times)
+                  (cond ((funcall there) (funcall callback 'ok))
+                        ((or (null times) (>= (+ start (car times)) end))
+                         (funcall callback (list :error "KWin keeps the window on another screen; it was not placed")))
+                        (t (run-at-time (max 0 (- (+ start (car times)) (float-time))) nil
+                                        (lambda () (if (funcall there) (funcall callback 'ok) (try (cdr times)))))))))
+      (try drgnx-platform-wm--hn-poll-times))))
 
 (drgnx-platform-define-adapter
  'kwin :status 'verified :tool nil

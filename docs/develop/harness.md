@@ -371,8 +371,12 @@ session launcher         systemd         # or detached (process group, no system
 - **Window managers' image:** `--compositor kwin` and `--compositor niri` run in `drgnx-test-wm:f45`, built from
   `test/container/Containerfile.wm` (fedora:45 + `emacs-pgtk kwin niri sway dbus-daemon mesa-dri-drivers procps-ng
   util-linux`, ~2.3 GB; `kwin_wayland` and `sway` lose their `cap_sys_nice` file capability, which the container does
-  not grant), with the same cap and security options. `DRGNX_TEST_WM_IMAGE` uses a prebuilt one
-  (`DRGNX_TEST_GUI_IMAGE` does not apply: that image has neither).
+  not grant), with the same cap and security options. `DRGNX_UI_COMPOSITOR=kwin|niri` without `--compositor` picks it
+  too. `DRGNX_TEST_WM_IMAGE` uses a prebuilt one (`DRGNX_TEST_GUI_IMAGE` does not apply: that image has neither).
+- **Image builds are capped** like the runs: with podman, `podman build --memory 3g --memory-swap 3g`
+  (`DRGNX_TEST_BUILD_MEMORY` sets another size; docker's buildx ignores `--memory`, so it gets none). A prebuilt image
+  override (`DRGNX_TEST_IMAGE`, `DRGNX_TEST_GUI_IMAGE`, `DRGNX_TEST_WM_IMAGE`) must be an image reference (letters, digits,
+  `._/:@-`, not starting with `-`): anything else exits 2 before a container runs.
 
 ## Compositors
 
@@ -387,8 +391,8 @@ process group) with the same caps (`MemoryMax=3G`, `RuntimeMaxSec`) and the same
 | `sway` | `dbus-run-session -- sway -c RUN/sway.conf` with `WLR_BACKENDS=headless`, `WLR_HEADLESS_OUTPUTS=N`, `WLR_RENDERER=pixman`, `WLR_LIBINPUT_NO_DEVICES=1` (no GPU, seat or input devices) | pgtk, tiled (no `--fullscreen`), on `HEADLESS-1` | a runtime directory of its own (`$XDG_RUNTIME_DIR/drgnx-ui/<hash>/<name>-xdg`, mode 0700) for sway's IPC socket (pinned there with `SWAYSOCK=…/sway-ipc.sock`) and its Wayland display; XWayland is off, so no X display in the shared `/tmp` |
 | `x11` | `dbus-run-session -- sh -c SCRIPT`: `Xvfb :N -noreset -auth RUN/Xauthority -displayfd 3 -screen 0 (N·W)xHx24`, one `xrandr --setmonitor XVFB-k` per monitor | the X11 build (`$DRGNX_UI_X11_EMACS`, else `emacs-lucid`) with `--no-x-resources`: it reads no `~/.Xdefaults`, `$XENVIRONMENT` or app-defaults | its own bus and runtime directory (as sway); a display `:N` reserved for it; only clients with its cookie (`RUN/Xauthority`, `XAUTHORITY`) can connect; no `WAYLAND_DISPLAY` |
 | `i3` | the same, then `i3 -c RUN/i3.conf` (no bar, no borders), focused on `XVFB-1` | the X11 build, with `I3SOCK` set as i3 sets it for its children | as x11, and i3's IPC socket in the session's socket directory (`ipc-socket` in the config) |
-| `kwin` | `dbus-run-session -- kwin_wayland --virtual --width W --height H --output-count N --socket wayland-1 --no-lockscreen --no-global-shortcuts --exit-with-session "EMACS ARGS"` (outputs `Virtual-0…`, side by side), with `XDG_CURRENT_DESKTOP=KDE`, `KDE_FULL_SESSION=true`, `XDG_SESSION_TYPE=wayland` | pgtk, placed by KWin; KWin exits when it does | its own bus (KWin's scripting API, which the adapter uses, is on it) and runtime directory (as sway); no XWayland; `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_CACHE_HOME` under `RUN/xdg/`, so KWin never reads or writes `~/.config/kwinrc` or `kwinoutputconfig.json` |
-| `niri` | the sway session with one output, whose config runs `niri -c RUN/niri.kdl` instead of Emacs; niri (its winit backend, a window on sway: niri has no headless backend) spawns `sh RUN/niri-session.sh` | pgtk, without sway's `SWAYSOCK`/`I3SOCK` (Emacs must see niri); after it, `niri msg action quit` ends niri and sway | as sway; `xwayland-satellite { off; }`, so no X display in the shared `/tmp`. **One output only** (`winit`): `--monitors 2` is refused |
+| `kwin` | `dbus-run-session -- kwin_wayland --virtual --width W --height H --output-count N --socket wayland-1 --no-lockscreen --no-global-shortcuts --exit-with-session "EMACS ARGS"` (outputs `Virtual-0…`, side by side), with `XDG_CURRENT_DESKTOP=KDE`, `KDE_FULL_SESSION=true`, `XDG_SESSION_TYPE=wayland` | pgtk, placed by KWin; KWin exits when it does | its own bus (KWin's scripting API, which the adapter uses, is on it) and runtime directory (as sway); no XWayland; `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_CACHE_HOME` (and `MESA_SHADER_CACHE_DIR`) under `RUN/xdg/`, so KWin never reads or writes `~/.config/kwinrc` or `kwinoutputconfig.json` — the session's Emacs gets them too (fontconfig, GTK settings), so a kwin session reads less of `~` than the others |
+| `niri` | the sway session with one output, whose config runs `niri -c RUN/niri.kdl` instead of Emacs; niri (its winit backend, a window on sway: niri has no headless backend) spawns `sh RUN/niri-session.sh` | pgtk, without sway's `SWAYSOCK`/`I3SOCK` (Emacs must see niri); after it, `niri msg action quit` ends niri and sway | as sway; `xwayland-satellite { off; }`, so no X display in the shared `/tmp`; `XDG_CACHE_HOME` and `MESA_SHADER_CACHE_DIR` under `RUN/xdg/cache`, so niri's GL writes no shader cache to `~/.cache`. **One output only** (`winit`): `--monitors 2` is refused |
 
 The configs are generated per session: `sway.conf` (one `output HEADLESS-k resolution WxH position X 0` per monitor,
 `default_border none`, `exec` of the session's Emacs followed by `swaymsg exit` — sway lives as long as Emacs, as mutter
@@ -418,7 +422,11 @@ merely names — the X socket and lock once the session's own Xvfb (`RUN/xvfb.pi
 it to `RUN/xvfb.ready`; an Xvfb that failed to bind owned nothing) and if they are yours; then the reservation, which a
 start that fails after taking it also gives back at once. `ui frame` opens the frame on the session's own display (`WAYLAND_DISPLAY` and `XDG_RUNTIME_DIR` of the
 session's runtime directory — sway's display, KWin's `wayland-1`, or niri's, the one its IPC socket
-`niri.wayland-N.PID.sock` names, never the sway niri runs in — or `DISPLAY=:N` and its `XAUTHORITY`), never the caller's. A `test --ui` session runs in a
+`niri.wayland-N.PID.sock` names, never the sway niri runs in — or `DISPLAY=:N` and its `XAUTHORITY`), never the caller's. Its emacsclient gets nothing else of the
+caller's but the allowlist: server.el gives a frame its client's environment and drgnx reads the window-manager
+variables from the frame first, so a caller's `SWAYSOCK`, `NIRI_SOCKET`, `XDG_CURRENT_DESKTOP` or session bus would
+point the frame at the caller's desktop (a kwin session's frame opened from GNOME would read as GNOME); without them
+the frame falls back to the session's own. A `test --ui` session runs in a
 transient scope (`systemd-run --user --scope`, `MemoryMax=3G`) where there is a systemd user session, stopped when the
 run ends, so nothing it started outlives it.
 
