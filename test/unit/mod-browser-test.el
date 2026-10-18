@@ -205,11 +205,14 @@
         (should (get-buffer-window buf))
         (with-current-buffer buf
           (should (string-search "claude · app" (buffer-string)))
-          (let ((img (get-text-property (or (text-property-any (point-min) (point-max) 'drgnx-browser-image t) (point-min))
-                                        'display)))
-            (should (eq (car-safe img) 'image))
-            (should (eq (plist-get (cdr img) :type) 'png))
-            (should (equal (plist-get (cdr img) :data) (base64-decode-string drgnx-browser-test--png)))))))))
+          (if (not (image-type-available-p 'png))
+              ;; an Emacs without image support (Homebrew's terminal Emacs) says so instead
+              (should (string-search "This Emacs cannot show the image." (buffer-string)))
+            (let ((img (get-text-property (or (text-property-any (point-min) (point-max) 'drgnx-browser-image t) (point-min))
+                                          'display)))
+              (should (eq (car-safe img) 'image))
+              (should (eq (plist-get (cdr img) :type) 'png))
+              (should (equal (plist-get (cdr img) :data) (base64-decode-string drgnx-browser-test--png))))))))))
 
 (ert-deftest drgnx-browser/no-url-says-so ()
   (drgnx-browser-test--with

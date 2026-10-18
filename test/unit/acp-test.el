@@ -4,9 +4,10 @@
 (require 'drgnx-paths)
 
 (defconst drgnx-acp-test--mock (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir))
+(defconst drgnx-acp-test--wrapper (expand-file-name "test/fixtures/mock-acp-stdin.sh" drgnx-dir))
 
 (defun drgnx-acp-test--command ()
-  (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "-l" drgnx-acp-test--mock))
+  (list "sh" drgnx-acp-test--wrapper (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "-l" drgnx-acp-test--mock))
 
 (defun drgnx-acp-test--wait (pred &optional secs)
   "Run the event loop until PRED is non-nil (at most SECS, default 10); PRED's value."
@@ -39,7 +40,6 @@
       (drgnx-acp-stop conn))))
 
 (ert-deftest drgnx-acp/a-request-gets-its-result ()
-  (skip-unless (file-readable-p "/proc/self/fd/0"))
   (drgnx-acp-test--with c nil
     (let ((r (drgnx-acp-test--call c "initialize" '(:protocolVersion 1 :clientCapabilities (:fs (:readTextFile t :writeTextFile t))))))
       (should (eql (plist-get (car r) :protocolVersion) 1))
@@ -49,7 +49,6 @@
       (should (plist-get (cdr r) :message)))))
 
 (ert-deftest drgnx-acp/notifications-reach-the-handler ()
-  (skip-unless (file-readable-p "/proc/self/fd/0"))
   (let ((seen nil))
     (drgnx-acp-test--with c (list :on-notification (lambda (_c method params) (push (cons method params) seen)))
       (drgnx-acp-test--call c "initialize" '(:protocolVersion 1))
@@ -60,7 +59,6 @@
                                     seen)))))))
 
 (ert-deftest drgnx-acp/agent-requests-are-answered-by-the-handler ()
-  (skip-unless (file-readable-p "/proc/self/fd/0"))
   (let ((asked nil) (chunks nil))
     (drgnx-acp-test--with c (list :on-request (lambda (_c method _params _id)
                                                 (push method asked)
@@ -75,7 +73,6 @@
       (should (member "permission: allow" chunks)))))
 
 (ert-deftest drgnx-acp/the-agent-exiting-is-reported-with-its-stderr ()
-  (skip-unless (file-readable-p "/proc/self/fd/0"))
   (let (exit)
     (drgnx-acp-test--with c (list :on-exit (lambda (_c status stderr) (setq exit (list status stderr))))
       (drgnx-acp-test--call c "initialize" '(:protocolVersion 1))
@@ -88,6 +85,58 @@
       ;; nothing left behind: the stderr pipe and the input buffer go with the agent
       (should-not (process-live-p (drgnx-acp-conn-stderr-process c)))
       (should-not (buffer-live-p (drgnx-acp-conn-input-buffer c))))))
+
+(ert-deftest drgnx-acp/the-mock-reads-the-fifo-in-mock-acp-in ()
+  ;; macOS has no /proc/PID/fd/0: given MOCK_ACP_IN, the mock reads its messages from that FIFO (its stdin carries none)
+  (let* ((dir (make-temp-file "drgnx-mock-in" t)) (fifo (expand-file-name "in" dir)) (out "")
+         (_ (should (eql 0 (call-process "mkfifo" nil nil nil fifo))))
+         (process-environment (cons (concat "MOCK_ACP_IN=" fifo) process-environment))
+         (p (make-process :name "mock" :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
+                                                      "-l" drgnx-acp-test--mock)
+                          :connection-type 'pipe :noquery t :filter (lambda (_p s) (setq out (concat out s)))))
+         (w (make-process :name "mock-writer" :command (list "sh" "-c" "exec cat >\"$0\"" fifo) :connection-type 'pipe
+                          :noquery t)))
+    (unwind-protect
+        (progn
+          (process-send-string w "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":1}}\n")
+          (should (drgnx-acp-test--wait (lambda () (string-search "protocolVersion" out))))
+          (process-send-eof w)
+          (should (drgnx-acp-test--wait (lambda () (not (process-live-p p))))))     ; the FIFO's EOF ends the mock
+      (delete-process w) (delete-process p) (delete-directory dir t))))
+
+(ert-deftest drgnx-acp/the-mock-wrapper-carries-stdin-through-a-fifo-it-removes ()
+  (let* ((tmp (make-temp-file "drgnx-mock-tmp" t)) (out "")
+         (process-environment (cons (concat "TMPDIR=" tmp) process-environment))
+         (p (make-process :name "wrapped" :command (list "sh" drgnx-acp-test--wrapper "sh" "-c" "exec cat \"$MOCK_ACP_IN\"")
+                          :connection-type 'pipe :noquery t :filter (lambda (_p s) (setq out (concat out s))))))
+    (unwind-protect
+        (progn
+          (process-send-string p "hello\n")
+          (should (drgnx-acp-test--wait (lambda () (equal out "hello\n"))))
+          (should-not (directory-files tmp nil "\\`[^.]"))           ; both ends open: the FIFO's name is gone
+          (process-send-eof p)
+          (should (drgnx-acp-test--wait (lambda () (not (process-live-p p)))))
+          (should (eql (process-exit-status p) 0)))
+      (delete-process p) (delete-directory tmp t))))
+
+(ert-deftest drgnx-acp/a-mock-gone-before-it-reads-leaves-no-process-and-no-fifo ()
+  ;; A mock that exits (or is stopped) before it opens the FIFO: nothing of the wrapper's waits on for ever,
+  ;; holding the caller's pipes.  MARKER names the wrapper's own processes (`true' ignores it).
+  (let* ((tmp (make-temp-file "drgnx-mock-tmp" t)) (marker (format "drgnx-mock-early-%d" (random 1000000)))
+         (process-environment (cons (concat "TMPDIR=" tmp) process-environment))
+         (survivors (lambda () (seq-filter (lambda (pid) (string-search marker (or (alist-get 'args (process-attributes pid)) "")))
+                                           (list-system-processes))))
+         (p (make-process :name "wrapped" :command (list "sh" drgnx-acp-test--wrapper "true" marker)
+                          :connection-type 'pipe :noquery t)))
+    (unwind-protect
+        (progn
+          (process-send-string p "hi\n")
+          (should (drgnx-acp-test--wait (lambda () (not (process-live-p p)))))
+          (should (drgnx-acp-test--wait (lambda () (and (null (funcall survivors)) (null (directory-files tmp nil "\\`[^.]")))) 5))
+          (should-not (funcall survivors))
+          (should-not (directory-files tmp nil "\\`[^.]")))
+      (dolist (pid (funcall survivors)) (signal-process pid 'kill))
+      (delete-process p) (delete-directory tmp t))))
 
 (ert-deftest drgnx-acp/lines-are-framed-whatever-the-chunks ()
   ;; No process: the framing alone.  A line split across outputs, a malformed line (logged,

@@ -179,7 +179,7 @@
         (should (string-match-p "^\\*\\* TODO write the parser" board))
         (should (string-match-p "^\\*\\* TODO \\*\\*Step 1: test first\\*\\*" board))
         (should (string-match-p "^\\*\\* TODO ship it" board))
-        (should-not (string-match-p "done already\\|old" board))
+        (should-not (string-match-p "^\\*.*\\b\\(done already\\|old\\)\\b" board))   ; headings: paths may say "folders"
         ;; again: nothing changes
         (let ((r2 (drgnx-projects-import (list alpha beta))))
           (should-not (plist-get r2 :added))
@@ -348,7 +348,12 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
       (drgnx-onboard-test--repo (concat ws "alpha") '("TODO.md" . "- [ ] one\n- [ ] two\n"))
       (drgnx-onboard-test--repo (concat ws "beta"))
       (let ((r (drgnx-onboard-run :non-interactive t :options `(:preset ide :roots (,ws) :todos t))))
-        (should-not (seq-find (lambda (s) (eq (cadr s) 'fail)) r))
+        (should-not (seq-find (lambda (s) (and (eq (cadr s) 'fail)
+                                               ;; an Emacs built without native compilation (Homebrew's) fails
+                                               ;; that doctor check, and nothing else
+                                               (not (and (not (native-comp-available-p)) (eq (car s) 'finish)
+                                                         (string-search "1 failed (native-compilation)" (nth 2 s))))))
+                              r))
         (should (equal (mapcar #'car r) (drgnx-onboard-steps))))
       (let ((board (drgnx-onboard-test--board)))
         (should (string-match-p "^\\* alpha" board))
@@ -563,7 +568,8 @@ says logged in when HOME has .logged-in (FAKE_OLD_CLAUDE: an old CLI that has no
   `(let* ((root (file-name-as-directory (make-temp-file "drgnx-claude" t)))
           (bin (concat root "bin/")) (tpl (concat root "tpl/")) (home (concat root "home/")) (calls (concat root "calls"))
           (real-path (getenv "PATH"))
-          (basics (mapcar #'executable-find '("sh" "bash" "env" "cat" "cp" "mkdir" "sleep" "setsid" "date")))
+          ;; the ones this system has (macOS: no setsid; detached jobs use perl there)
+          (basics (delq nil (mapcar #'executable-find '("sh" "bash" "env" "cat" "cp" "mkdir" "sleep" "setsid" "perl" "date"))))
           (log-line (lambda (name) (format "printf '%%s\\n' \"%s $*\" >> %s\n" name calls)))
           (process-environment (append (list (concat "HOME=" home) (concat "DRGNX_CONFIG_DIR=" root "config")
                                              (concat "XDG_STATE_HOME=" root "state") "DRGNX_JOBS_LAUNCHER=detached"
@@ -584,8 +590,9 @@ says logged in when HOME has .logged-in (FAKE_OLD_CLAUDE: an old CLI that has no
                     " *) exec sleep 30;;\nesac\n"))
            (drgnx-onboard-test--script
             (concat tpl "claude-agent-acp")
-            (format "if [ -n \"$FAKE_ACP\" ]; then eval \"$FAKE_ACP\"; fi\nPATH=%s; exec %s --batch -Q -l %s\n"
+            (format "if [ -n \"$FAKE_ACP\" ]; then eval \"$FAKE_ACP\"; fi\nPATH=%s; exec sh %s %s --batch -Q -l %s\n"
                     (shell-quote-argument real-path)     ; the emacs launcher script needs the real one
+                    (shell-quote-argument (expand-file-name "test/fixtures/mock-acp-stdin.sh" drgnx-dir))
                     (shell-quote-argument (expand-file-name invocation-name invocation-directory))
                     (shell-quote-argument (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir))))
            (drgnx-onboard-test--script (concat tpl "node") "exit 0\n")
@@ -855,7 +862,8 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
     (setq drgnx-onboard-test--asked nil)
     (cl-letf (((symbol-function 'completing-read) (drgnx-onboard-test--return 'drgnx-onboard-test--asked))
               ((symbol-function 'drgnx-onboard--packages-to-install) #'ignore)
-              ((symbol-function 'custom-available-themes) (lambda () '(modus-vivendi tango))))
+              ((symbol-function 'custom-available-themes) (lambda () '(modus-vivendi tango)))
+              ((symbol-function 'drgnx-platform) (lambda () 'linux)))  ; a Mac also asks about Option (y-or-n-p)
       (drgnx-onboard--look-step '(:interactive t)))
     (pcase-let ((`(,theme ,keys ,modules) drgnx-onboard-test--asked))
       (should (equal modules (format-prompt "Modules (minimal, ide, full-ai)" "full-ai")))
@@ -926,7 +934,8 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
         (should-not asked))
       ;; Linux: never asked
       (cl-letf (((symbol-function 'completing-read) (lambda (p &rest _) (push p asked) "Meta"))
-                ((symbol-function 'drgnx-onboard--packages-to-install) #'ignore))
+                ((symbol-function 'drgnx-onboard--packages-to-install) #'ignore)
+                ((symbol-function 'drgnx-platform) (lambda () 'linux)))
         (drgnx-onboard--look-step `(:interactive t :options ,opts))
         (should-not asked)))))
 
@@ -1051,7 +1060,8 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
                 ((symbol-function 'drgnx-jobs--detach) (lambda (line) (push line lines)))
                 ((symbol-function 'drgnx-session-quit-confirm) (lambda () t))
                 ((symbol-function 'drgnx-onboard--under-systemd-p) #'ignore)
-                ((symbol-function 'kill-emacs) (lambda (&rest _) (cl-incf quit))))
+                ((symbol-function 'kill-emacs) (lambda (&rest _) (cl-incf quit)))
+                ((symbol-function 'drgnx-platform) (lambda () 'linux)))  ; a Mac's finish names Spotlight
         (let ((r (drgnx-onboard--look-step '(:interactive t :options (:preset full-ai :keys "Emacs" :theme modus-vivendi)))))
           (should (string-match-p "restart drgnx to load the new modules" (cadr r))))
         (should drgnx-onboard--restart-needed)

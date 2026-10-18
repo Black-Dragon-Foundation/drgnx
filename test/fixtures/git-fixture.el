@@ -19,7 +19,7 @@
   "BODY with REPO a fresh repository (branch main, no commit yet) in a temp dir; HOME there too, the user's git
 config never read, the author \"Ada\" unless a commit sets another."
   (declare (indent 0))
-  `(let* ((tmp (file-name-as-directory (make-temp-file "drgnx-git" t)))
+  `(let* ((tmp (file-name-as-directory (file-truename (make-temp-file "drgnx-git" t))))   ; as git names it (macOS /private/var)
           (repo (file-name-as-directory (concat tmp "repo")))
           (process-environment (append (list (concat "HOME=" tmp) "GIT_CONFIG_GLOBAL=/dev/null" "GIT_CONFIG_NOSYSTEM=1"
                                              "GIT_AUTHOR_NAME=Ada" "GIT_AUTHOR_EMAIL=ada@t.invalid"

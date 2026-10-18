@@ -371,7 +371,9 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
   (drgnx-bin-test--with-open
     (write-region "3" nil (expand-file-name "delay" dir))
     (let* ((out "") (done nil)
-           (process-environment (append (cons "DRGNX_OPEN_WAIT=6" env) process-environment))
+           ;; DRGNX_EMACS unset, as `drgnx-bin-test--call' does: a run's own (CI sets it) would pick the real
+           ;; emacsclient beside it over the fake on PATH
+           (process-environment (append (cons "DRGNX_OPEN_WAIT=6" env) (list "DRGNX_EMACS") process-environment))
            (proc (make-process :name "drgnx-open" :command (list drgnx-bin-test--bin "open") :connection-type 'pipe
                                :noquery t :filter (lambda (_p s) (setq out (concat out s)))
                                :sentinel (lambda (_p _e) (setq done t)))))
@@ -569,9 +571,10 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
     (not (process-live-p proc))))
 
 (defun drgnx-bin-test--pid-alive-p (pid)
-  (and (> pid 0) (file-exists-p (format "/proc/%d" pid))
-       (not (string-match-p "^State:\\s-*Z" (with-temp-buffer (insert-file-contents (format "/proc/%d/status" pid))
-                                                              (buffer-string))))))
+  "Whether PID runs (a zombie does not): `process-attributes', which reads /proc on Linux and asks the kernel on
+macOS (no /proc there)."
+  (let ((attrs (and (> pid 0) (process-attributes pid))))
+    (and attrs (not (equal (alist-get 'state attrs) "Z")))))
 
 (ert-deftest drgnx-bin/a-test-run-leaves-nothing-in-the-parent-temp-dir ()
   ;; TMP-1: every run has a TMPDIR of its own (so tests, libgccjit and the runner all write there) that
@@ -590,9 +593,13 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
                                                               (concat "DRGNX_TEST_DIR=" suite))
                                          "test")))
             (should (eql 0 (car r))))
-          ;; the test did run in a temp dir below PARENT, not in PARENT itself …
-          (should (string-prefix-p (file-name-as-directory parent) (drgnx-bin-test--slurp probe)))
-          ;; … and nothing of it is left
+          ;; the test did run in a temp dir of its own (in the runner's short root, so its sockets fit), not in
+          ;; PARENT itself …
+          (let ((seen (drgnx-bin-test--slurp probe)))
+            ;; (in /tmp, or in the run's TMPDIR where /tmp cannot be written)
+            (should (string-match-p "/drgnx-t-[A-Za-z0-9]\\{6\\}/drgnx-run\\.[A-Za-z0-9]\\{6\\}/\\'" seen))
+            ;; … and nothing of it is left, there nor in PARENT
+            (should-not (file-exists-p (file-name-directory (directory-file-name seen)))))
           (should-not (drgnx-bin-test--left parent)))
       (delete-directory dir t))))
 
@@ -699,7 +706,9 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
               (signal-process proc sig)
               (should (drgnx-bin-test--wait-exit proc 30))
               (should (drgnx-bin-test--wait-for (lambda () (not (drgnx-bin-test--pid-alive-p pid))) 10)))
-            (should-not (drgnx-bin-test--left parent)))
+            (should-not (drgnx-bin-test--left parent))
+            ;; nor the runner's short root its test ran in
+            (should-not (file-exists-p (file-name-directory (directory-file-name (drgnx-bin-test--slurp probe))))))
         (when (process-live-p proc) (kill-process proc))
         (delete-directory dir t)))))
 
@@ -741,7 +750,9 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
          (job (expand-file-name "job.pid" dir))
          (emacs (drgnx-bin-test--fake-emacs
                  (expand-file-name "fake-check" dir)
-                 (format "setsid sh -c 'trap \"\" TERM; echo $$ > %s.tmp && mv %s.tmp %s; exec sleep 300' &
+                 ;; a session of its own: setsid(1), else perl's (macOS has no setsid command), as bin/drgnx does
+                 (format "newsession() { if command -v setsid >/dev/null 2>&1; then setsid \"$@\"; else perl -MPOSIX -e 'POSIX::setsid() or die \"setsid: $!\"; exec @ARGV or die \"exec: $!\"' \"$@\"; fi; }
+newsession sh -c 'trap \"\" TERM; echo $$ > %s.tmp && mv %s.tmp %s; exec sleep 300' &
 trap 'kill -TERM $(cat %s); sleep 7; kill -KILL $(cat %s); exit 0' TERM
 while :; do wait; done" job job job job job)))
          proc)

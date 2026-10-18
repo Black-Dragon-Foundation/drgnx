@@ -6,9 +6,16 @@
 (defconst drgnx-run-ert-test--fixtures
   (expand-file-name "../fixtures/" (file-name-directory (or load-file-name buffer-file-name))))
 
+(defconst drgnx-run-ert-test--file-dir-re "/drgnx-t-[A-Za-z0-9]\\{6\\}/drgnx-run\\.[A-Za-z0-9]\\{6\\}/\\'"
+  "A file's temp dir in the runner's short root (`drgnx-run-ert--short-root': in /tmp, else in TMPDIR).")
+
 (defun drgnx-run-ert-test--batch (dir results &rest env)
   "Run the suite in DIR in a fresh batch Emacs (harness on the load path); return its exit code."
-  (let ((process-environment (append (cons (concat "DRGNX_TEST_RESULTS=" results) env) (list "DRGNX_TEST_SELECTOR") process-environment)))
+  (let ((process-environment (append (cons (concat "DRGNX_TEST_RESULTS=" results) env)
+                                     (list "DRGNX_TEST_SELECTOR")           ; not this run's selector
+                                     process-environment))
+        ;; never a buffer's deleted directory, which call-process refuses
+        (default-directory (if (file-directory-p default-directory) default-directory temporary-file-directory)))
     (call-process (expand-file-name invocation-name invocation-directory) nil nil nil
                   "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
                   "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch" dir)))
@@ -127,6 +134,7 @@
   ;; waits Emacs runs no process sentinel (timers still run).  The runner drains the queue after each test.
   (require 'filenotify)
   (let* ((dir (make-temp-file "drgnx-watch" t))
+         (default-directory (file-name-as-directory dir))   ; the process below needs an existing directory
          (w (file-notify-add-watch dir '(change) #'ignore)))
     (unwind-protect
         (progn
@@ -149,7 +157,9 @@
         (progn
           (with-temp-file (concat tmp "one-test.el") (insert "(require 'ert)\n(ert-deftest shard-one () (should t))\n"))
           (with-temp-file (concat tmp "two-test.el") (insert "(require 'ert)\n(ert-deftest shard-two () (should t))\n"))
-          (should (eql 0 (let ((process-environment (append (list (concat "DRGNX_TEST_RESULTS=" results) "DRGNX_TEST_SELECTOR") process-environment)))
+          (should (eql 0 (let ((process-environment (append (list (concat "DRGNX_TEST_RESULTS=" results) "DRGNX_TEST_SELECTOR")
+                                                            process-environment))
+                               (default-directory tmp))
                            (call-process (expand-file-name invocation-name invocation-directory) nil nil nil
                                          "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
                                          "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch"
@@ -168,7 +178,8 @@
           (with-temp-file (concat tmp "sel-test.el")
             (insert "(require 'ert)\n(ert-deftest sel-fast () :tags '(:timing) (should t))\n(ert-deftest sel-plain () (should t))\n"))
           (let ((process-environment (append (list (concat "DRGNX_TEST_RESULTS=" results) "DRGNX_TEST_SELECTOR=(tag :timing)")
-                                             process-environment)))
+                                             process-environment))
+                (default-directory tmp))
             (call-process (expand-file-name invocation-name invocation-directory) nil nil nil
                           "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
                           "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch" (concat tmp "sel-test.el")))
@@ -207,8 +218,12 @@
               (should (eql exit (call-process (expand-file-name invocation-name invocation-directory) nil nil nil
                                               "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
                                               "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch" suite))))
-            (should (string-prefix-p (file-name-as-directory parent)
-                                     (with-temp-buffer (insert-file-contents probe) (buffer-string))))
+            (let ((seen (with-temp-buffer (insert-file-contents probe) (buffer-string))))
+              (if (equal mode "DRGNX_TEST_ONE_PROCESS=1")
+                  (should (string-prefix-p (file-name-as-directory parent) seen))
+                ;; per file: in the runner's short root (…/a-files-temp-dir-is-short-whatever-the-tmpdir), gone with the run as well
+                (should (string-match-p drgnx-run-ert-test--file-dir-re seen))
+                (should-not (file-exists-p (file-name-directory (directory-file-name seen))))))
             (should-not (directory-files parent nil directory-files-no-dot-files-regexp))))
       (delete-directory tmp t))))
 
@@ -401,23 +416,76 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
               (should (seq-every-p (lambda (f) (numberp (plist-get f :seconds))) files)))))
       (delete-directory tmp t))))
 
-(ert-deftest drgnx-run-ert/a-files-temp-dir-is-no-deeper-than-the-runs ()
-  ;; A Unix socket path has ~104 bytes (the hub's tests make one below the temp dir): a file's Emacs gets a directory
-  ;; of its own one level below the run's TMPDIR, as a one-Emacs run's is, never one below the runner's, and it is
-  ;; gone afterwards.  bin/drgnx's DRGNX_RUN_TMP: inside it; standalone (check's shards): beside the runner's.
+(defun drgnx-run-ert-test--long-dir (tmp)
+  "A directory below TMP whose path is at least 100 bytes: as deep as a TMPDIR that leaves no room for a socket."
+  (let ((dir (file-name-as-directory (expand-file-name (make-string (max 1 (- 100 (string-bytes tmp))) ?l) tmp))))
+    (make-directory dir t)
+    dir))
+
+(ert-deftest drgnx-run-ert/the-time-factor-is-a-number-of-at-least-one ()
+  ;; DRGNX_TEST_TIME_FACTOR scales :timing budgets on a slower machine: never below 1 (a budget is never tightened),
+  ;; and anything that is not a plain number is 1
+  (pcase-dolist (`(,value . ,factor) '((nil . 1) ("" . 1) ("2" . 2) ("1.5" . 1.5) ("1" . 1) ("0.5" . 1) ("0" . 1)
+                                       ("-2" . 1) ("2x" . 1) ("x" . 1) (" 2" . 1) ("1e3" . 1)))
+    (let ((process-environment (cons (if value (concat "DRGNX_TEST_TIME_FACTOR=" value) "DRGNX_TEST_TIME_FACTOR")
+                                     process-environment)))
+      (should (equal (cons value (drgnx-run-ert-time-factor)) (cons value factor))))))
+
+(ert-deftest drgnx-run-ert/a-files-temp-dir-is-short-whatever-the-tmpdir ()
+  ;; A Unix socket's path has at most 103 bytes on macOS (107 on Linux), and the hub's tests make one three levels
+  ;; below a file's temp dir: a file's Emacs gets a directory of its own in a short root of the run's, right in
+  ;; /tmp (mode 0700), however deep TMPDIR or bin/drgnx's DRGNX_RUN_TMP is (macOS's /var/folders/…/T/ is 49
+  ;; bytes); both are gone afterwards, and nothing is left beside the given directory.
   (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-iso" t)))
-         (parent (expand-file-name "parent/" tmp)) (given (expand-file-name "drgnx-run.abcdef/" parent))
+         (parent (drgnx-run-ert-test--long-dir tmp)) (given (expand-file-name "drgnx-run.abcdef/" parent))
          (suite (expand-file-name "suite" tmp)) (probe (expand-file-name "probe" tmp)))
     (unwind-protect
         (progn
           (make-directory given t)
-          (drgnx-run-ert-test--suite suite `(("where-test.el" . ,(format "(ert-deftest iso-where/tmp () (write-region temporary-file-directory nil %S))" probe))))
-          (pcase-dolist (`(,run-tmp . ,under) `(("DRGNX_RUN_TMP" . ,parent) (,(concat "DRGNX_RUN_TMP=" given) . ,given)))
+          (drgnx-run-ert-test--suite
+           suite `(("where-test.el" . ,(format "(ert-deftest iso-where/tmp ()
+  (write-region (prin1-to-string (list temporary-file-directory (file-modes (file-name-directory (directory-file-name temporary-file-directory))))) nil %S))"
+                                               probe))))
+          (dolist (run-tmp (list "DRGNX_RUN_TMP" (concat "DRGNX_RUN_TMP=" given)))
             (should (eql 0 (drgnx-run-ert-test--run-suite suite (concat "TMPDIR=" parent) run-tmp)))
-            (let ((seen (with-temp-buffer (insert-file-contents probe) (buffer-string))))
-              (should (string-match-p (concat "\\`" (regexp-quote under) "drgnx-run\\.[A-Za-z0-9]\\{6\\}/\\'") seen))
-              (should-not (file-exists-p seen))))
+            (pcase-let ((`(,seen ,modes) (car (read-from-string (with-temp-buffer (insert-file-contents probe) (buffer-string))))))
+              (should (string-match-p drgnx-run-ert-test--file-dir-re seen))
+              (should (equal seen (file-name-as-directory (file-truename seen))))   ; macOS: /private/tmp, not /tmp
+              (should (eql modes #o700))
+              (should-not (file-exists-p seen))
+              (should-not (file-exists-p (file-name-directory (directory-file-name seen))))))
           (should (equal (directory-files parent nil directory-files-no-dot-files-regexp) '("drgnx-run.abcdef"))))
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-run-ert/a-long-tmpdir-leaves-the-hub-socket-short ()
+  ;; macOS CI: under /var/folders/…/T/ each file's hub socket passed 104 bytes and every hub test failed with
+  ;; "Service name too long".  A TMPDIR of 100+ bytes on Linux: the hub's socket stays within 103 bytes and a hub
+  ;; test (its own file, in an Emacs of its own) passes.  Without a writable /tmp the root is made in TMPDIR, which
+  ;; is then as long as it is: nothing to test.
+  (skip-unless (file-writable-p "/tmp/"))
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-iso" t)))
+         (parent (drgnx-run-ert-test--long-dir tmp))
+         (suite (expand-file-name "suite" tmp)) (probe (expand-file-name "socket" tmp)) (results (expand-file-name "r.json" tmp))
+         (core (file-name-directory (locate-library "drgnx-hub")))
+         (root (file-name-directory (directory-file-name core))))
+    (unwind-protect
+        (progn
+          (drgnx-run-ert-test--suite
+           suite `(("socket-test.el" . ,(format "(require 'drgnx-hub)\n(ert-deftest iso-socket/where () (write-region (drgnx-hub-socket) nil %S))"
+                                                probe))))
+          (should (>= (string-bytes parent) 100))
+          (let ((process-environment (append (list (concat "TMPDIR=" parent) "DRGNX_RUN_TMP" (concat "DRGNX_TEST_RESULTS=" results)
+                                                   "DRGNX_TEST_SELECTOR=\"\\\\`\\\\(iso-socket/where\\\\|drgnx-hub/ping-status-and-register-over-the-socket\\\\)\\\\'\"")
+                                             process-environment)))
+            (should (eql 0 (call-process (expand-file-name invocation-name invocation-directory) nil nil nil
+                                         "--batch" "-Q" "-L" core "-L" (expand-file-name "harness" root) "-L" (expand-file-name "wb" root)
+                                         "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch"
+                                         (expand-file-name "socket-test.el" suite) (expand-file-name "test/unit/hub-test.el" root)))))
+          (let ((socket (with-temp-buffer (insert-file-contents probe) (buffer-string))))
+            (should (<= (string-bytes socket) 103))
+            (should (string-match-p "/drgnx-t-[A-Za-z0-9]\\{6\\}/drgnx-run\\.[A-Za-z0-9]\\{6\\}/" socket)))
+          (let ((r (drgnx-run-ert-test--json results)))
+            (should (equal (list (plist-get r :total) (plist-get r :passed) (plist-get r :failed)) '(2 2 0)))))
       (delete-directory tmp t))))
 
 (ert-deftest drgnx-run-ert/a-narrow-run-starts-an-emacs-only-for-its-files ()

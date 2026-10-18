@@ -176,4 +176,6 @@ run it, with the plan's own encoding and line endings — and leaves alone a pla
   a real profile with `DRGNX_AGENT_PROFILE=NAME` (uses your subscription or key, and the network).
 
 The mock agent (`test/fixtures/mock-acp.el`) is a batch Emacs whose turns are chosen by words in the prompt
-(`slow`, `tool`, `plan`, `subagent`, `permission`, `write PATH`, `crash`, `/compact`).
+(`slow`, `tool`, `plan`, `subagent`, `permission`, `write PATH`, `crash`, `/compact`). Tests start it through
+`test/fixtures/mock-acp-stdin.sh` (`sh mock-acp-stdin.sh emacs --batch -Q -l mock-acp.el`), which copies its stdin into
+a FIFO the mock reads while a turn streams; without the wrapper it reads `/proc/PID/fd/0`, which only Linux has.

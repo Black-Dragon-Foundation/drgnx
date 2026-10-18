@@ -25,6 +25,8 @@
 (declare-function websocket-close "websocket")
 (declare-function websocket-openp "websocket")
 (declare-function websocket-frame-text "websocket")
+;; only in an Emacs with image support (Homebrew's terminal Emacs has none): each call is in `ignore-errors'
+(declare-function image-flush "image.c" (spec &optional frame))
 (declare-function drgnx-jobs-start "drgnx-jobs")
 (declare-function drgnx-jobs-get "drgnx-jobs")
 (declare-function drgnx-jobs-list "drgnx-jobs")

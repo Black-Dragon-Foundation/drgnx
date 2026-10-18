@@ -27,7 +27,7 @@
   "BODY with ROOT a fixture: docs/specs/s.md, docs/plans/p.md (two tasks with steps), a code repo
 code/ with three commits, p's ledger naming the first two, a board TODO from p."
   (declare (indent 1))
-  `(let* ((,root (file-name-as-directory (make-temp-file "drgnx-work" t)))
+  `(let* ((,root (file-name-as-directory (file-truename (make-temp-file "drgnx-work" t))))   ; git's paths: macOS /private/var
           (process-environment (append (list (concat "DRGNX_DATA_DIR=" ,root "data") (concat "DRGNX_CONFIG_DIR=" ,root "config"))
                                        process-environment))
           (drgnx-work-db--handles nil)

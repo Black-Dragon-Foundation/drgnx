@@ -36,6 +36,10 @@ jobs:
       - name: install.sh prints the macOS plan and changes nothing
         run: /bin/bash install.sh --dry-run
       - name: Unit suite
+        env:
+          # the hosted runner draws the replace view 1.1-1.3x slower than the budgets' machine (17.6 and 20.5 ms
+          # against 16): the :timing tests' budgets times 2 (harness/run-ert.el, drgnx-run-ert-time-factor)
+          DRGNX_TEST_TIME_FACTOR: "2"
         run: |
           DRGNX_EMACS="$(brew --prefix)/bin/emacs"
           export DRGNX_EMACS

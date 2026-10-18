@@ -151,22 +151,30 @@ connection is closed (its Emacs connects again).  One snapshot can carry whole f
   :type 'integer :group 'drgnx)
 
 (defcustom drgnx-hub-client-stuck-after 10
-  "Seconds one write to a hub client may wait before the client counts as stopped (a suspended Emacs) and its
-connection is closed."
+  "Seconds a write to a hub client may make no progress before the client counts as stopped (a suspended Emacs)
+and its connection is closed.  A line goes out `drgnx-hub--piece' bytes at a time, each one progress."
   :type 'number :group 'drgnx)
+
+(defconst drgnx-hub--piece 8192
+  "Bytes of a line (unibyte, as `json-serialize' makes it) the hub writes to a client at a time: a piece may end
+inside a UTF-8 sequence, which the client's decoder carries over.  A long line to a client that reads, slowly, is
+progress, never a stopped client.  A write that fills the client's socket waits 20 ms before it tries again, and
+macOS's local sockets hold 8 KB: a snapshot of a few MB takes seconds there.")
 
 (defvar drgnx-hub--writing nil
   "The hub's writes in progress, innermost first: a write that waits runs timers and filters, which may write to
 another client on top of it — the ones beneath cannot go on meanwhile.")
 
 (defun drgnx-hub--client-stuck-p (conn &optional more)
-  "Has CONN stopped reading: its write the innermost one in progress (one beneath it cannot go on, so it is not
-judged) and older than `drgnx-hub-client-stuck-after', or its queue (with MORE bytes) past
-`drgnx-hub-client-max-queued'?"
+  "Has CONN stopped reading, while a write to it is in progress: its queue (with MORE bytes) past
+`drgnx-hub-client-max-queued', wherever its write is (beneath a live client's that goes on for long, it would grow
+without end), or its write the innermost one in progress and without progress for `drgnx-hub-client-stuck-after'
+\(one beneath cannot go on, so its time is not judged)?"
   (let ((since (process-get conn :sending)))
-    (and since (eq conn (car drgnx-hub--writing))
-         (or (> (- (float-time) since) drgnx-hub-client-stuck-after)
-             (> (+ (or (process-get conn :queued-bytes) 0) (or more 0)) drgnx-hub-client-max-queued)))))
+    (and since
+         (or (> (+ (or (process-get conn :queued-bytes) 0) (or more 0)) drgnx-hub-client-max-queued)
+             (and (eq conn (car drgnx-hub--writing))
+                  (> (- (float-time) since) drgnx-hub-client-stuck-after))))))
 
 (defun drgnx-hub--drop (conn)
   (message "drgnx hub: a client stopped reading; its connection is closed")
@@ -189,9 +197,13 @@ Emacs connects again)."
             (process-put conn :queued-bytes 0)
             (dolist (l lines)
               (let ((t0 (float-time)))
-                (let ((drgnx-hub--writing (cons conn drgnx-hub--writing)))
-                  (process-put conn :sending t0)             ; (each line: a write that makes progress is not stuck)
-                  (drgnx-hub--send-line conn l))
+                (let ((drgnx-hub--writing (cons conn drgnx-hub--writing)) (i 0) (n (length l)))
+                  ;; a piece at a time, each one progress: a write that makes progress is not stuck
+                  (while (and (< i n) (process-live-p conn))
+                    (process-put conn :sending (float-time))
+                    (drgnx-hub--send-line conn (if (and (= i 0) (<= n drgnx-hub--piece)) l
+                                                 (substring l i (min n (+ i drgnx-hub--piece)))))
+                    (setq i (+ i drgnx-hub--piece))))
                 ;; a write beneath this one could not go on meanwhile: it gets back the time this one took (only that:
                 ;; a stopped client beneath writes to others still ends)
                 (when-let* ((below (car drgnx-hub--writing)) (since (process-get below :sending)))

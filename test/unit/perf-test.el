@@ -27,6 +27,15 @@
       (should (> (plist-get r :rss_kb) 0))))
   (should-not (memq #'drgnx-perf--pre pre-command-hook)))      ; nothing left installed
 
+(ert-deftest drgnx-perf/rss-without-proc-comes-from-the-process-attributes ()
+  ;; macOS has no /proc/self/status
+  (let ((insert (symbol-function 'insert-file-contents)))
+    (cl-letf (((symbol-function 'insert-file-contents)
+               (lambda (file &rest args)
+                 (if (string-prefix-p "/proc/" file) (signal 'file-missing (list "Opening input file" file))
+                   (apply insert file args)))))
+      (should (> (drgnx-perf-rss-kb) 0)))))
+
 (ert-deftest drgnx-perf/the-hook-audit-names-what-costs-and-restores-the-hooks ()
   (let ((drgnx-perf-test-hook nil) (slow (lambda () (sleep-for 0.02))))
     (defvar drgnx-perf-test-hook)

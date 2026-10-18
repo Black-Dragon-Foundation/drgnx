@@ -49,10 +49,9 @@
       (should (equal (drgnx-work-rec--titles "task:/p.md#1") '("four" "three" "two" "one"))))))
 
 (ert-deftest drgnx-work/an-agent-task-gets-its-commits-at-the-end-of-each-turn ()
-  (skip-unless (file-readable-p "/proc/self/fd/0"))
   (drgnx-work-rec--with repo
     (let* ((drgnx-agents-profiles
-            (list (list "mock" :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "-l"
+            (list (list "mock" :command (list "sh" (expand-file-name "test/fixtures/mock-acp-stdin.sh" drgnx-dir) (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "-l"
                                               (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir)))))
            (drgnx-agents--sessions nil)
            (s (drgnx-agents-start "mock" repo "task:/p.md#2"))

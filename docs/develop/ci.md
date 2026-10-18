@@ -17,6 +17,16 @@ The macOS workflow has no GUI tier: the GUI tests (`--ui`) stay Linux-only (they
 Mac UI is checked by hand with the session checklist. The weekly `install` job is a real install on a fresh runner
 (it installs Emacs with Homebrew); it stays out of the per-push run.
 
+The unit suite runs on both systems, so a test never assumes Linux: no `/proc` (the mock ACP agent is started through
+`test/fixtures/mock-acp-stdin.sh`, which hands it its stdin through a FIFO; a process's command line or memory comes
+from `process-attributes`); temp paths compared with git's go through `file-truename` (macOS's `/var` is
+`/private/var`); sockets live under a short directory (macOS's temp dir is long); a test that expects Linux keys or
+prompts pins `drgnx-platform`; only tools the system has are linked into a fake PATH (macOS has no `setsid`), and only
+POSIX options are used (no `timeout`, `dd iflag=`, GNU grep's `--exclude`); a test puts back the mode tables it
+changes (`major-mode-remap-alist`: Emacs 31 asks to install a missing grammar, which in batch reads stdin); native
+compilation is optional (Homebrew's Emacs has none). On Linux, `TMPDIR` set to a symlinked or long directory shows
+most of these before macOS CI does.
+
 ## Reproduce a job locally
 
 ```

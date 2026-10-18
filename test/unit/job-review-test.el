@@ -89,7 +89,8 @@
           (should (eq (drgnx-agent-session-status s) 'exited)))))))
 
 (ert-deftest drgnx-job/a-failing-hook-merge-shows-git-output ()
-  ;; a merge that fails without a conflict (a hook refuses it): the card says what git said
+  ;; a merge that fails without a conflict (a hook refuses it, twice: it goes once more): a card that says what git
+  ;; said, and claims no conflict (its actions do not send an agent to resolve one)
   (drgnx-job-run-test--with "# One\n\n### Task 1: first\n"
     (let* ((drgnx-job-max-agents 0) (drgnx-job-review nil) (id (drgnx-job-propose plan)) (tid (concat id "#1"))
            (hook (concat repo ".git/hooks/pre-merge-commit")))
@@ -102,11 +103,14 @@
       (write-region "#!/bin/sh\necho 'hook says no' >&2\nexit 1\n" nil hook nil 'silent)
       (set-file-modes hook #o755)
       (drgnx-job--merge id (drgnx-coord-task tid))
-      (should (drgnx-job-run-test--wait (lambda () (seq-find (lambda (c) (equal (plist-get c :kind) "merge-conflict")) (drgnx-coord-cards id "open")))))
-      (let ((card (car (seq-filter (lambda (c) (equal (plist-get c :kind) "merge-conflict")) (drgnx-coord-cards id "open")))))
+      (should (drgnx-job-run-test--wait (lambda () (seq-find (lambda (c) (equal (plist-get c :kind) "merge-failed")) (drgnx-coord-cards id "open")))))
+      (should-not (seq-find (lambda (c) (equal (plist-get c :kind) "merge-conflict")) (drgnx-coord-cards id "open")))
+      (let ((card (car (seq-filter (lambda (c) (equal (plist-get c :kind) "merge-failed")) (drgnx-coord-cards id "open")))))
         (should card)
         (should (string-search "merge failed" (plist-get card :title)))
-        (should (string-search "hook says no" (plist-get card :title))))
+        (should (string-search "hook says no" (plist-get card :title)))
+        (should-not (assoc "retry" (drgnx-job-card-actions card)))
+        (should (assoc "merge" (drgnx-job-card-actions card))))
       (should-not (equal (drgnx-job-run-test--status id 1) "done")))))
 
 (ert-deftest drgnx-job/a-slow-merge-does-not-block-the-hub ()
@@ -131,6 +135,50 @@
       (should (equal (plist-get (car (plist-get (drgnx-job-summary id) :tasks)) :status) "done"))
       (should (= 1 (length (split-string (drgnx-job-run-test--git repo "log" "--merges" "--format=%s" (concat "job/" id)) "\n" t)))))))
 
+(defun drgnx-job-review-test--branches (repo id ns)
+  "Task worktrees with one commit each for tasks NS of job ID in REPO, from the job's branch."
+  (dolist (n ns)
+    (let ((tree (drgnx-job--task-tree id n)))
+      (drgnx-job--git repo "worktree" "add" "-q" "-b" (format "job/%s-%d" id n) tree (concat "job/" id))
+      (write-region "work\n" nil (format "%sw%d.txt" tree n) nil 'silent)
+      (drgnx-job-run-test--git tree "add" "-A")
+      (drgnx-job-run-test--git tree "commit" "-q" "-m" (format "work %d" n)))))
+
+(ert-deftest drgnx-job/two-tasks-passing-together-merge-one-after-the-other ()
+  ;; macOS CI: tasks 1 and 2 passed review at once and two git merges ran in the job's worktree together — "cannot
+  ;; lock ref 'HEAD'", a merge-conflict card, the job stuck.  One merge at a time in a job's worktree; the other waits.
+  (drgnx-job-run-test--with "# Two\n\n### Task 1: one\n\n### Task 2: two\n"
+    (let* ((drgnx-job-max-agents 0) (drgnx-job-review nil) (id (drgnx-job-propose plan))
+           (hook (concat repo ".git/hooks/pre-merge-commit")))
+      (drgnx-job-approve id)
+      (drgnx-job-review-test--branches repo id '(1 2))
+      (write-region "#!/bin/sh\nsleep 1\n" nil hook nil 'silent)          ; the first merge is still running
+      (set-file-modes hook #o755)
+      (drgnx-job--merge id (drgnx-coord-task (concat id "#1")))
+      (drgnx-job--merge id (drgnx-coord-task (concat id "#2")))
+      (should (equal (mapcar (lambda (task) (plist-get task :status)) (plist-get (drgnx-job-summary id) :tasks))
+                     '("merging" "queued")))
+      (should (drgnx-job-run-test--wait (lambda () (and (equal (drgnx-job-run-test--status id 1) "done")
+                                                        (equal (drgnx-job-run-test--status id 2) "done")))
+                                        15))
+      (should-not (drgnx-coord-cards id "open"))
+      (should (= 2 (length (split-string (drgnx-job-run-test--git repo "log" "--merges" "--format=%s" (concat "job/" id)) "\n" t)))))))
+
+(ert-deftest drgnx-job/a-merge-that-fails-once-without-a-conflict-goes-again ()
+  ;; a merge git refused for something else (a lock another git held, a hook) is no conflict: it goes once more,
+  ;; after what merges then; no card when that one works
+  (drgnx-job-run-test--with "# One\n\n### Task 1: first\n"
+    (let* ((drgnx-job-max-agents 0) (drgnx-job-review nil) (id (drgnx-job-propose plan))
+           (hook (concat repo ".git/hooks/pre-merge-commit")) (once (concat repo "once")))
+      (drgnx-job-approve id)
+      (drgnx-job-review-test--branches repo id '(1))
+      (write-region (format "#!/bin/sh\n[ -f %s ] && exit 0\ntouch %s\necho 'busy, try again' >&2\nexit 1\n" once once) nil hook nil 'silent)
+      (set-file-modes hook #o755)
+      (drgnx-job--merge id (drgnx-coord-task (concat id "#1")))
+      (should (drgnx-job-run-test--wait (lambda () (equal (drgnx-job-run-test--status id 1) "done")) 15))
+      (should (file-exists-p once))
+      (should-not (drgnx-coord-cards id "open")))))
+
 (ert-deftest drgnx-job/a-merge-that-never-ends-is-a-card ()
   (drgnx-job-run-test--with "# One\n\n### Task 1: first\n"
     (let* ((drgnx-job-max-agents 0) (drgnx-job-review nil) (id (drgnx-job-propose plan)) (tid (concat id "#1"))
@@ -144,7 +192,7 @@
       (write-region "#!/bin/sh\nsleep 20\n" nil hook nil 'silent)
       (set-file-modes hook #o755)
       (drgnx-job--merge id (drgnx-coord-task tid))
-      (should (drgnx-job-run-test--wait (lambda () (seq-find (lambda (c) (equal (plist-get c :kind) "merge-conflict")) (drgnx-coord-cards id "open"))) 15))
+      (should (drgnx-job-run-test--wait (lambda () (seq-find (lambda (c) (equal (plist-get c :kind) "merge-failed")) (drgnx-coord-cards id "open"))) 15))
       (should (string-search "did not finish" (plist-get (car (drgnx-coord-cards id "open")) :title)))
       (should (equal (drgnx-job-run-test--git (drgnx-job--job-tree id) "status" "--porcelain") "")))))
 

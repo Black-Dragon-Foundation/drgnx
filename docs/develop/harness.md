@@ -32,9 +32,13 @@ own `make check` does: a hook, timer, advice, feature or variable a file leaves 
 so a test cannot pass or fail because of the file that happened to run before it. Within a file, ERT still runs the
 tests in name order in one Emacs. Each file's Emacs gets the runner's `load-path` and environment — the temp HOME
 and XDG directories, the dead session bus, `$DRGNX_TEST_SELECTOR` (applied inside each file), the trampoline
-directory below — and a temp directory (and HOME) of its own, removed when it ends: inside `$DRGNX_RUN_TMP` under
-`bin/drgnx test`, beside the runner's own under `check`, never deeper than a single Emacs's would be (a Unix socket
-path has ~104 bytes). It writes its own summary; the runner merges them into one, in the same shape, plus `"files"`
+directory below — and a temp directory of its own (its `TMPDIR`, HOME, state and `XDG_RUNTIME_DIR`), removed when it
+ends. Those directories are made in a short root of the run's, `/tmp/drgnx-t-XXXXXX/` (mode 0700; the caller's
+`$TMPDIR` only where `/tmp` cannot be written), whatever `$TMPDIR` is, and the root goes when the run ends or is
+stopped: a Unix socket's path has at most 103 bytes on macOS (104 with its closing NUL; 107 on Linux), the hub's tests
+make one three levels below a file's directory (`run/drgnx/hub-HASH.sock`), and macOS's `$TMPDIR`
+(`/var/folders/xx/…/T/`, 49 bytes) with two `drgnx-run.XXXXXX/` levels below it leaves no room. It writes its own
+summary; the runner merges them into one, in the same shape, plus `"files"`
 (`[{"file","exit","seconds"}]`). A file whose Emacs dies (a test calls `kill-emacs`), exits non-zero without a failed
 test, or runs longer than `$DRGNX_TEST_FILE_TIMEOUT` seconds (default 300; it gets TERM, 5 s, then KILL, with what it
 started) is a failure named `file NAME-test.el`, and the other files still run. Files run one after another;
@@ -43,6 +47,12 @@ the files' Emacsen too.
 
 With a name selector (a string: a regexp on test names), only the files that define a matching test (`(ert-deftest
 NAME`) get an Emacs, so a narrow run stays quick; any other selector (a tag, `(not …)`) runs every file.
+
+`$DRGNX_TEST_TIME_FACTOR` is a number of at least 1 for a machine slower than the one the budgets were measured on
+(else 1, `drgnx-run-ert-time-factor`). Only the `:timing` tests that call that function multiply their wall-clock
+budgets by it (today `drgnx-replace/ten-thousand-matches-stream`); the others ignore it. The budgets in the tests stay
+as measured. The macOS workflow sets 2: its hosted runner drew the replace view 1.1–1.3× slower than the 16 ms
+budget allows.
 
 `bin/drgnx test --one-process` (or `DRGNX_TEST_ONE_PROCESS=1`) runs every file in one Emacs instead: for hunting a
 leak from one file into another (run the files in question this way; a test that fails only here depends on what an
