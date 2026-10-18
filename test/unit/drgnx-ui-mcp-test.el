@@ -3,7 +3,7 @@
 (require 'drgnx-ui-mcp)
 
 (defconst drgnx-ui-mcp-test--tools
-  '("ui_start" "ui_frame" "ui_stop" "ui_list" "ui_state" "ui_screenshot" "ui_click" "ui_keys" "ui_type" "ui_wait" "ui_measure" "ui_diff" "ui_record" "ui_perf"))
+  '("ui_start" "ui_frame" "ui_stop" "ui_list" "ui_state" "ui_screenshot" "ui_click" "ui_drag" "ui_keys" "ui_type" "ui_wait" "ui_measure" "ui_diff" "ui_record" "ui_perf"))
 
 (defmacro drgnx-ui-mcp-test--with-state (&rest body)
   (declare (indent 0))
@@ -56,6 +56,40 @@
     (should (equal (plist-get (plist-get reply :error) :code) -32603)))
   (should (equal (drgnx-ui--parse-json (drgnx-ui-mcp--reply-text '(:jsonrpc "2.0" :id 8 :result (:ok t))))
                  '(:jsonrpc "2.0" :id 8 :result (:ok t)))))
+
+(ert-deftest drgnx-ui-mcp/ui-drag-is-declared-like-the-other-input-tools ()
+  (let* ((tool (seq-find (lambda (tl) (equal (plist-get tl :name) "ui_drag")) drgnx-ui-mcp-tools))
+         (schema (plist-get tool :inputSchema)))
+    (should tool)
+    (should (equal (append (plist-get schema :required) nil)
+                   '("session" "from_x" "from_y" "to_x" "to_y")))
+    (dolist (k '(:session :from_x :from_y :to_x :to_y :steps :button))
+      (should (plist-get (plist-get schema :properties) k)))
+    (should (string-search "guard_violations" (plist-get tool :description)))))
+
+(ert-deftest drgnx-ui-mcp/ui-drag-builds-the-measure-action ()
+  (should (equal (drgnx-ui-mcp--drag-action '(:session "s" :from_x 10 :from_y 20 :to_x 110 :to_y 20))
+                 '(:drag (:from (10 . 20) :to (110 . 20)))))
+  (should (equal (drgnx-ui-mcp--drag-action '(:session "s" :from_x 1 :from_y 2 :to_x 3 :to_y 4 :steps 5 :button 3))
+                 '(:drag (:from (1 . 2) :to (3 . 4) :steps 5 :button 3)))))
+
+(ert-deftest drgnx-ui-mcp/ui-drag-refuses-bad-arguments-as-errors ()
+  ;; never a drag from 0,0: a missing or wrong coordinate is an error result
+  (drgnx-ui-mcp-test--with-state
+    (dolist (args '((:session "drgnx-ui-9" :from_x 1 :from_y 2 :to_x 3)
+                    (:session "drgnx-ui-9" :from_x "1" :from_y 2 :to_x 3 :to_y 4)
+                    (:session "drgnx-ui-9" :from_x 1.5 :from_y 2 :to_x 3 :to_y 4)
+                    (:session "drgnx-ui-9" :from_x -1 :from_y 2 :to_x 3 :to_y 4)
+                    (:session "drgnx-ui-9" :from_x 1 :from_y 2 :to_x 3 :to_y 4 :steps 0)
+                    (:session "drgnx-ui-9" :from_x 1 :from_y 2 :to_x 3 :to_y 4 :steps 5000)
+                    (:session "drgnx-ui-9" :from_x 1 :from_y 2 :to_x 3 :to_y 4 :button 4)))
+      (let ((r (drgnx-ui-mcp-test--call "ui_drag" args)))
+        (should (eq (plist-get r :isError) t))
+        (should (string-search "drag" (drgnx-ui-mcp-test--text r)))))
+    ;; a foreign session is refused like for every other tool
+    (let ((r (drgnx-ui-mcp-test--call "ui_drag" '(:session "server" :from_x 1 :from_y 2 :to_x 3 :to_y 4))))
+      (should (eq (plist-get r :isError) t))
+      (should (string-search "refused" (drgnx-ui-mcp-test--text r))))))
 
 (ert-deftest drgnx-ui-mcp/list-is-empty-without-sessions ()
   (drgnx-ui-mcp-test--with-state

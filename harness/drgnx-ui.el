@@ -611,9 +611,41 @@ Old kept test runs go too (`drgnx-ui--remove-old-test-runs'), and the eln cache 
       (`(0 ,out) (drgnx-ui-parse-reply out))
       (`(,_ ,out) (drgnx-ui--fail "%s" (string-trim out))))))
 
+(defconst drgnx-ui-drag-max-steps 200
+  "The most movement events one drag may be asked for.  They go out one per 40 ms tick, so 200
+take about 8 s — what fits the 10 s the measurement waits for input to be delivered and settle.")
+
+(defun drgnx-ui--drag-point (value what)
+  "VALUE as a frame pixel (X . Y) of non-negative integers: a cons, a list or array of two, or an
+object with :x and :y (what JSON gives).  WHAT names it in the error."
+  (let* ((xy (cond ((and (consp value) (integerp (cdr value))) (list (car value) (cdr value)))
+                   ((and (consp value) (keywordp (car value)))
+                    (list (plist-get value :x) (plist-get value :y)))
+                   ((proper-list-p value) value)
+                   ((vectorp value) (append value nil))))
+         (ok (and (proper-list-p xy) (= (length xy) 2) (cl-every (lambda (n) (and (integerp n) (>= n 0))) xy))))
+    (unless ok
+      (drgnx-ui--fail "drag %s must be pixel coordinates (two non-negative integers), got %S" what value))
+    (cons (car xy) (cadr xy))))
+
+(defun drgnx-ui--drag-spec (spec)
+  "Validate the drag SPEC (:from XY :to XY :steps N :button B); return (FX FY TX TY BUTTON STEPS).
+BUTTON defaults to 1, STEPS to nil (the harness's default).  Anything else is a harness error —
+never a drag from 0,0."
+  (let ((from (drgnx-ui--drag-point (plist-get spec :from) ":from"))
+        (to (drgnx-ui--drag-point (plist-get spec :to) ":to"))
+        (button (if (plist-member spec :button) (plist-get spec :button) 1))
+        (steps (plist-get spec :steps)))
+    (unless (memq button '(1 2 3))
+      (drgnx-ui--fail "drag button must be 1, 2 or 3, got %S" button))
+    (unless (or (null steps) (and (integerp steps) (<= 1 steps drgnx-ui-drag-max-steps)))
+      (drgnx-ui--fail "drag steps must be an integer from 1 to %d, got %S" drgnx-ui-drag-max-steps steps))
+    (list (car from) (cdr from) (car to) (cdr to) button steps)))
+
 (defun drgnx-ui-act (sess action)
-  "Queue ACTION in SESS: (:keys K), (:type T), (:buffer B :text T) or (:x X :y Y),
-with optional :button, :count, :hold_ms.  Returns the API's reply."
+  "Queue ACTION in SESS: (:keys K), (:type T), (:buffer B :text T), (:x X :y Y) or
+(:drag (:from (X . Y) :to (X . Y) :steps N :button B)), with optional :button, :count,
+:hold_ms (not for :drag).  Returns the API's reply."
   (let ((opts (mapconcat (lambda (k) (drgnx-ui-el (plist-get action k)))
                          '(:button :count :hold_ms) " ")))
     (cond
@@ -621,6 +653,10 @@ with optional :button, :count, :hold_ms.  Returns the API's reply."
       (drgnx-ui-call sess (format "(drgnx-uitest-api-keys %s)" (drgnx-ui-el (plist-get action :keys)))))
      ((plist-member action :type)
       (drgnx-ui-call sess (format "(drgnx-uitest-api-type %s)" (drgnx-ui-el (plist-get action :type)))))
+     ((plist-member action :drag)
+      (pcase-let ((`(,fx ,fy ,tx ,ty ,button ,steps) (drgnx-ui--drag-spec (plist-get action :drag))))
+        (drgnx-ui-call sess (format "(drgnx-uitest-api-drag %d %d %d %d %d %s)" fx fy tx ty button
+                                    (drgnx-ui-el steps)))))
      ((and (plist-member action :buffer) (plist-member action :text))
       (drgnx-ui-call sess (format "(drgnx-uitest-api-click-target %s %s %s)"
                                   (drgnx-ui-el (plist-get action :buffer))
@@ -628,7 +664,7 @@ with optional :button, :count, :hold_ms.  Returns the API's reply."
      ((and (plist-member action :x) (plist-member action :y))
       (drgnx-ui-call sess (format "(drgnx-uitest-api-click %d %d %s)"
                                   (truncate (plist-get action :x)) (truncate (plist-get action :y)) opts)))
-     (t (drgnx-ui--fail "unknown action %S: use keys, type, buffer+text or x+y" action)))))
+     (t (drgnx-ui--fail "unknown action %S: use keys, type, buffer+text, x+y or drag" action)))))
 
 (defun drgnx-ui-wait (sess &optional quiet-ms timeout-s)
   "Poll SESS until settled (QUIET-MS without change); t, or nil after TIMEOUT-S."

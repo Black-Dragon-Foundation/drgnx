@@ -30,6 +30,15 @@
        :button (:type "integer" :enum [1 2 3]) :count (:type "integer" :enum [1 2])
        :hold_ms (:type "integer" :description "Hold the button this long before releasing")))
 
+(defconst drgnx-ui-mcp--drag
+  '(:from_x (:type "integer" :minimum 0 :description "Frame pixel where the button goes down")
+            :from_y (:type "integer" :minimum 0)
+            :to_x (:type "integer" :minimum 0 :description "Frame pixel where the button is released")
+            :to_y (:type "integer" :minimum 0)
+            :steps (:type "integer" :minimum 1 :maximum 200
+                          :description "Mouse-movement events along the straight line (default 8, at most 200: one per 40 ms tick, and a measurement waits 10 s)")
+            :button (:type "integer" :enum [1 2 3])))
+
 (defconst drgnx-ui-mcp--report
   "Returns a jank report: settle_ms, layout_changes, collateral_moves (windows that changed without being \
 the input's target), oscillations, chrome_changes, echo_changes, scrolls, redisplays, gc_count, gc_ms, \
@@ -60,6 +69,11 @@ guard_violations (window moves from timers).")
          :description (concat "Click at frame pixel x,y, or on visible text in the window showing a buffer. Waits until the UI settles. "
                               drgnx-ui-mcp--report)
          :inputSchema (drgnx-ui-mcp--schema (append drgnx-ui-mcp--session drgnx-ui-mcp--click) '("session")))
+   (list :name "ui_drag"
+         :description (concat "Drag: press at frame pixel from_x,from_y, move to to_x,to_y in steps (mouse-movement events, one per 40 ms tick; at most 200 steps, about 8 s), release. The press may be on any part of a window — text, header line, tab line, mode line, fringe, divider — so a tab or a window divider can be dragged. Waits until the UI settles. "
+                              drgnx-ui-mcp--report)
+         :inputSchema (drgnx-ui-mcp--schema (append drgnx-ui-mcp--session drgnx-ui-mcp--drag)
+                                            '("session" "from_x" "from_y" "to_x" "to_y")))
    (list :name "ui_keys"
          :description (concat "Send keys in Emacs kbd syntax (\"C-x b\", \"M-x\", \"RET\"), one event per 40 ms tick; waits until settled. "
                               drgnx-ui-mcp--report)
@@ -83,7 +97,7 @@ guard_violations (window moves from timers).")
          :inputSchema (drgnx-ui-mcp--schema (append drgnx-ui-mcp--session '(:action (:type "string" :enum ["start" "stop"])))
                                             '("session" "action")))
    (list :name "ui_measure"
-         :description (concat "Run several actions as one measurement. Each action is one of {keys}, {type}, {x,y} or {buffer,text}, with optional button/count/hold_ms. "
+         :description (concat "Run several actions as one measurement. Each action is one of {keys}, {type}, {x,y}, {buffer,text} or {drag: {from: [x,y], to: [x,y], steps?, button?}}, with optional button/count/hold_ms (not for drag). "
                               drgnx-ui-mcp--report)
          :inputSchema (drgnx-ui-mcp--schema (append drgnx-ui-mcp--session
                                                     '(:actions (:type "array" :items (:type "object"))))
@@ -133,6 +147,15 @@ guard_violations (window moves from timers).")
   (cl-loop for k in '(:x :y :buffer :text :button :count :hold_ms)
            when (plist-member args k) append (list k (plist-get args k))))
 
+(defun drgnx-ui-mcp--drag-action (args)
+  "The measure action for ui_drag's ARGS, validated: a missing or wrong coordinate is an error."
+  (let ((action (list :drag (append (list :from (cons (plist-get args :from_x) (plist-get args :from_y))
+                                          :to (cons (plist-get args :to_x) (plist-get args :to_y)))
+                                    (cl-loop for k in '(:steps :button)
+                                             when (plist-member args k) append (list k (plist-get args k)))))))
+    (drgnx-ui--drag-spec (plist-get action :drag))
+    action))
+
 (defconst drgnx-ui-mcp--calls
   `(("ui_start" . ,(lambda (a) (drgnx-ui-mcp--text (drgnx-ui-start (plist-get a :config) (plist-get a :size) nil
                                                                    (eq (plist-get a :daemon) t) (plist-get a :monitors)))))
@@ -149,6 +172,8 @@ guard_violations (window moves from timers).")
     ("ui_screenshot" . drgnx-ui-mcp--screenshot)
     ("ui_click" . ,(lambda (a) (drgnx-ui-mcp--text
                                 (drgnx-ui-measure (drgnx-ui-mcp--own a) (list (drgnx-ui-mcp--click-action a))))))
+    ("ui_drag" . ,(lambda (a) (let ((action (drgnx-ui-mcp--drag-action a)))
+                                (drgnx-ui-mcp--text (drgnx-ui-measure (drgnx-ui-mcp--own a) (list action))))))
     ("ui_keys" . ,(lambda (a) (drgnx-ui-mcp--text
                                (drgnx-ui-measure (drgnx-ui-mcp--own a) (list (list :keys (plist-get a :keys)))))))
     ("ui_type" . ,(lambda (a) (drgnx-ui-mcp--text
