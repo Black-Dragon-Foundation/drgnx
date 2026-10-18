@@ -82,6 +82,18 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
       (should (eq (car r) 'ok))
       (should (string-match-p "Chat (module extra/llm) is on" (cadr r))))))
 
+(ert-deftest drgnx-ai-onboard/role-written-only-after-answer ()
+  ;; A provider that never answers leaves ai.eld's roles as they were, and the three test calls share one
+  ;; budget: the step ends within about 9 s, not 3 × 16.
+  (drgnx-ai-onboard-test--with
+    (let ((before (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld"))) (t0 (float-time)) r)
+      (cl-letf (((symbol-function 'drgnx-ai-request) (lambda (&rest _) nil)))
+        (setq r (drgnx-onboard--ai-found '(:interactive nil))))
+      (should (< (- (float-time) t0) 10.5))
+      (should (= (nth 2 r) 0))
+      (should (string-match-p "did not answer" (cadr r)))
+      (should (equal before (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld")))))))
+
 ;;;; Setting AI up: the room, the models, Ollama, LM Studio, OpenRouter
 
 (defun drgnx-ai-onboard-test--script (file text)

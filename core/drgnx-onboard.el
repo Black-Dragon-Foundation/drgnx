@@ -419,40 +419,47 @@ may come from sources that ask."
                                       (car models))))))
               drgnx-ai-detected)))
 
-(defun drgnx-onboard--ai-test (role step ctx)
+(defvar drgnx-onboard-ai-test-budget 8
+  "Seconds the AI step's probe and its three test calls share, when it looks at what runs here.")
+
+(defun drgnx-onboard--ai-test (role step ctx &optional timeout)
   "One call to STEP (PROVIDER . MODEL) of the kind ROLE makes — fill in the middle, chat or an embedding: t when it
-answered."
-  (let ((interactive (plist-get ctx :interactive)))
+answered within TIMEOUT seconds (default 15)."
+  (let ((interactive (plist-get ctx :interactive)) (timeout (or timeout 15)))
     (if (eq role 'embed)
         (condition-case nil
-            (and (drgnx-ai-embed-sync (vector "hello") :timeout 15 :chain (list step) :interactive interactive) t)
+            (and (drgnx-ai-embed-sync (vector "hello") :timeout timeout :chain (list step) :interactive interactive) t)
           (drgnx-ai-embed-error nil))
       (let ((fim (eq role 'complete)) (result nil))
         (drgnx-ai-request role (if fim 'fim 'chat)
                           (if fim (list :prefix "(defun hello ()\n  " :suffix ")\n" :max-tokens 8)
                             (list :messages (vector (list :role "user" :content "Say OK."))))
                           (lambda (text _info) (setq result (if text 'yes 'no)))
-                          :chain (list step) :timeout 15 :interactive interactive)
-        (drgnx-onboard--wait (lambda () result) 16)
+                          :chain (list step) :timeout timeout :interactive interactive)
+        (drgnx-onboard--wait (lambda () result) (1+ timeout))
         (eq result 'yes)))))
 
 (defun drgnx-onboard--ai-found (ctx)
-  "Find the providers running here, give each role without a working one a provider found, test each role with
-one call: (STATUS MESSAGE ANSWERED), ANSWERED how many of the three roles answered."
+  "Find the providers running here, test each role with one call, and give a role without a working provider the
+one found once its call answered: (STATUS MESSAGE ANSWERED), ANSWERED how many of the three roles answered.  The
+probe and the three calls share `drgnx-onboard-ai-test-budget' seconds."
   (require 'drgnx-ai-probe)
-  (let ((done nil))
-    (drgnx-ai-probe (lambda () (setq done t)))
-    (drgnx-onboard--wait (lambda () done) 3))
-  (let ((key (drgnx-ai-key 'openrouter (plist-get ctx :interactive))) (lines nil) (answered 0) (asked 0))
+  (let* ((deadline (+ (float-time) drgnx-onboard-ai-test-budget))
+         (_ (let ((done nil))
+              (drgnx-ai-probe (lambda () (setq done t)))
+              (drgnx-onboard--wait (lambda () done) 3)))
+         (key (drgnx-ai-key 'openrouter (plist-get ctx :interactive))) (lines nil) (answered 0) (asked 0))
     (dolist (role '(complete edit chat))
       (let* ((cap (if (eq role 'complete) 'fim 'chat))
              (usable (seq-find (lambda (s) (drgnx-ai-usable-p (car s) cap (plist-get ctx :interactive))) (drgnx-ai-role role)))
              (step (or usable (drgnx-onboard--ai-pick role cap (plist-get ctx :interactive)))))
         (if (not step) (push (format "%s: no provider" role) lines)
-          (unless usable (drgnx-ai-set-role role (cons step (drgnx-ai-role role))))
           (cl-incf asked)
-          (let ((yes (drgnx-onboard--ai-test role step ctx)))
-            (when yes (cl-incf answered))
+          (let* ((left (- deadline (float-time)))
+                 (yes (and (>= left 1) (drgnx-onboard--ai-test role step ctx (ceiling left)))))
+            (when yes
+              (cl-incf answered)
+              (unless usable (drgnx-ai-set-role role (cons step (drgnx-ai-role role)))))
             (push (format "%s: %s/%s %s" role (car step) (cdr step) (if yes "answered" "did not answer")) lines)))))
     (unless key
       (push "OpenRouter: run this step again → Change → openrouter (keeps the key in your Keychain or keyring); for the command line: OPENROUTER_API_KEY" lines))
