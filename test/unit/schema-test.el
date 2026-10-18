@@ -15,7 +15,8 @@
 
 ;; Named types are made at load, so each test runs alone.
 (drgnx-schema-deftype 'drgnx-schema-test-tree '(or null (plist (:kids (list-of drgnx-schema-test-tree)))) "A tree")
-(drgnx-schema-deftype 'drgnx-schema-test-d '(plist (:inner string "Inner doc")) "A named plist")
+(drgnx-schema-deftype 'drgnx-schema-test-id '(string :max 4 :match "\\`[a-z]+\\'") "A short id")
+(drgnx-schema-deftype 'drgnx-schema-test-d'(plist (:inner string "Inner doc")) "A named plist")
 (drgnx-schema-deftype 'drgnx-schema-test-u '(list-of any) "Holds any")
 
 (defun drgnx-schema-test--path (schema value)
@@ -119,6 +120,20 @@
   (drgnx-schema-test--ok '(map integer :keys (string :match "\\`[a-z]+\\'")) '(("ab" . 1)))
   (drgnx-schema-test--bad '(map integer :keys (string :match "\\`[a-z]+\\'")) '(("A1" . 1))))
 
+(ert-deftest drgnx-schema/map-takes-the-shape-the-hub-decodes ()
+  ;; `json-parse-string :object-type plist' gives keyword keys; the path and :keys use the name without the colon
+  (let ((keys (json-parse-string "{\"openrouter\":\"k1\",\"anthropic\":\"k2\"}" :object-type 'plist))
+        (s '(map (string :max 8) :max 4 :keys (string :match "\\`[a-z]+\\'"))))
+    (drgnx-schema-test--ok s keys nil '(:openrouter "k1"))
+    (should (equal (drgnx-schema-test--path s '(:openrouter "k1" :anthropic 2)) '("anthropic")))
+    (should (equal (drgnx-schema-test--path s '(:A1 "x")) '("A1")))
+    (drgnx-schema-test--bad s '(:a "x" :a "y") '(:a) '("a" "b") '(:a "x" ("b" . "y")) '(("a" . "x") :b "y")
+                            '(:a "1" :b "2" :c "3" :d "4" :e "5"))
+    (drgnx-schema-test--bad '(map integer :max 1) '(:a 1 :b 2))
+    ;; an unknown key's value is reached by the unknown-keys walk
+    (should (equal (drgnx-schema-unknown-keys '(plist (:keys (map (plist (:id integer))))) '(:keys (:p (:id 1 :x 2))))
+                   '((:keys "p" :x))))))
+
 (ert-deftest drgnx-schema/home-path ()
   (drgnx-schema-test--ok 'home-path "/usr/bin" "~" "~/" "~/x/y" "/")
   (drgnx-schema-test--bad 'home-path "" "rel/x" "./x" "~user/x" "~x" "a\0b" "~/a\0b" 'a nil
@@ -126,8 +141,9 @@
   (drgnx-schema-test--ok 'home-path "/tmp/a:b" "/usr/lib/x:y/z"))
 
 (ert-deftest drgnx-schema/https-url ()
-  (drgnx-schema-test--ok 'https-url "https://example.org" "https://example.org/a/b?c=d" "https://example.org:8443/x")
-  (drgnx-schema-test--bad 'https-url "http://example.org" "https://" "https:///x" "https://:80/x"
+  (drgnx-schema-test--ok 'https-url "https://example.org" "https://example.org/a/b" "https://example.org:8443/x")
+  (drgnx-schema-test--bad 'https-url "https://h/x?token=a" "https://h/x#f" "https://h?x" "https://h#f"
+                          "http://example.org" "https://" "https:///x" "https://:80/x"
                           "https://user@example.org/" "https://u:p@example.org/" "ssh://h/x" "/x" ""
                           "https://example.org/\n" "https://exa mple.org" "https://example.org/\0" 'a nil))
 
@@ -177,6 +193,33 @@
   (should-error (drgnx-schema-check '(integer :mn 1) 1) :type 'error)
   (should (string-match-p "drgnx-schema: unknown form"
                           (error-message-string (condition-case e (drgnx-schema-check 'no-such-form 1) (error e))))))
+
+(ert-deftest drgnx-schema/an-unknown-form-is-an-error-when-defined ()
+  (dolist (bad '((or string (bogus)) (plist (:a intgr)) (list-of nope) (alist string) (alist string integer integer)
+                 (integer :mn 1) (integer :min "1") (string :max -1) (string :match 1) (list-of string :max x)
+                 (map integer :keys bogus) (map) (enum) (or) (pred stringp) (pred "stringp" "d") (pred stringp 1)
+                 (plist (a string)) (plist (:a)) (plist (:a string) (:a integer)) (plist (:a string :required))
+                 (plist (:a string "d" :bogus t)) (plist ("a" string)) "string" 1 nil (symbol) (list-of)))
+    (should (condition-case nil (progn (drgnx-schema-validate bad) nil) (error t))))
+  (dolist (good '(any (or string (list-of integer)) (plist (:a string "doc" :required t) (:b (or null integer)))
+                      (map integer :max 3 :keys (string :max 8)) (alist string (alist string any))
+                      (enum a "b" 1) (pred stringp "a string") (integer :min 1 :max 2) (string :max 2 :match "x")
+                      drgnx-schema-test-tree drgnx-schema-test-id))
+    (should (eq (drgnx-schema-validate good) good)))
+  (should (string-match-p "unknown form"
+                          (error-message-string (condition-case e (drgnx-schema-validate '(or string (bogus))) (error e)))))
+  ;; deftype validates, and a refused definition leaves nothing (or the old one) behind
+  (should-error (drgnx-schema-deftype 'drgnx-schema-test-bad '(or string (bogus)) "x"))
+  (should-error (drgnx-schema-check 'drgnx-schema-test-bad "x"))
+  (should-error (drgnx-schema-deftype 'drgnx-schema-test-id '(plist (:a intgr)) "x"))
+  (drgnx-schema-test--ok 'drgnx-schema-test-id "abcd")
+  ;; a type naming an unbound type, or itself with no container in between, is refused
+  (should-error (drgnx-schema-deftype 'drgnx-schema-test-b '(list-of drgnx-schema-test-unbound) "x"))
+  (should-error (drgnx-schema-deftype 'drgnx-schema-test-c '(or drgnx-schema-test-c string) "x"))
+  (drgnx-schema-deftype 'drgnx-schema-test-e '(or null string) "x")
+  (should-error (drgnx-schema-deftype 'drgnx-schema-test-f '(or drgnx-schema-test-e drgnx-schema-test-f) "x"))
+  (should-not (gethash 'drgnx-schema-test-f drgnx-schema--types))
+  (should (drgnx-schema-deftype 'drgnx-schema-test-g '(plist (:kids (list-of drgnx-schema-test-g))) "x")))
 
 (ert-deftest drgnx-schema/unknown-keys-pass-and-are-listed ()
   (let ((s '(plist (:a integer)

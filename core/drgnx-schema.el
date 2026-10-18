@@ -31,11 +31,93 @@
   "The rows `drgnx-schema-unknown-keys' and `drgnx-schema-describe' collect (bound by them).")
 
 (defun drgnx-schema-deftype (name schema doc)
-  "Name SCHEMA NAME, described by DOC.  Redefining a type replaces it.  Return NAME."
+  "Name SCHEMA NAME, described by DOC.  Redefining a type replaces it.  Return NAME.
+SCHEMA is validated (`drgnx-schema-validate'); a refused definition leaves the table as it was.  NAME may
+appear inside SCHEMA only within a container (`plist', `list-of', …), never as the whole or an `or' alternative."
   (when (or (memq name drgnx-schema--atoms) (memq name drgnx-schema--heads) (not (symbolp name)) (null name))
     (error "drgnx-schema: %S is a built-in form and cannot be redefined" name))
-  (puthash name (cons schema doc) drgnx-schema--types)
+  (unless (stringp doc) (error "drgnx-schema: type %S needs a doc string" name))
+  (let ((old (gethash name drgnx-schema--types)))
+    (puthash name (cons schema doc) drgnx-schema--types)  ; bound first, so SCHEMA may refer to itself
+    (condition-case err
+        (progn (drgnx-schema-validate schema)
+               (when (drgnx-schema--unguarded-p name schema nil)
+                 (error "drgnx-schema: type %S refers to itself with nothing in between" name)))
+      (error (if old (puthash name old drgnx-schema--types) (remhash name drgnx-schema--types))
+             (signal (car err) (cdr err)))))
   name)
+
+(defun drgnx-schema--unguarded-p (name schema seen)
+  "Non-nil when SCHEMA reaches the type NAME without passing through a container (so a check would not end).
+SEEN lists the types already followed."
+  (cond ((and schema (symbolp schema))
+         (cond ((eq schema name) t)
+               ((memq schema seen) nil)
+               (t (let ((def (gethash schema drgnx-schema--types)))
+                    (and def (drgnx-schema--unguarded-p name (car def) (cons schema seen)))))))
+        ((eq (car-safe schema) 'or)
+         (cl-some (lambda (alt) (drgnx-schema--unguarded-p name alt seen)) (cdr schema)))))
+
+(defun drgnx-schema--bad-form (form)
+  "Signal that FORM is a known form used wrongly: a definition's bug."
+  (error "drgnx-schema: bad form %S" form))
+
+(defun drgnx-schema--validate-opts (form opts spec)
+  "Signal unless OPTS, the options of FORM, are a plist of keys in SPEC, an alist of (KEY . TEST), each value passing TEST."
+  (unless (proper-list-p opts) (drgnx-schema--bad-form form))
+  (while opts
+    (let ((test (cdr (assq (car opts) spec))))
+      (unless (and test (cdr opts) (funcall test (cadr opts))) (drgnx-schema--bad-form form)))
+    (setq opts (cddr opts))))
+
+(defun drgnx-schema--validate-key-schema (s)
+  "Validate S, the value of `:keys'; t so it can serve as a test."
+  (drgnx-schema--validate s)
+  t)
+
+(defun drgnx-schema--validate-entry (form entry)
+  "Validate the plist ENTRY `(KEY S [DOC] [:required BOOL])' of FORM."
+  (unless (and (proper-list-p entry) (keywordp (car entry)) (cdr entry)) (drgnx-schema--bad-form form))
+  (drgnx-schema--validate (nth 1 entry))
+  (let ((rest (cddr entry)))
+    (when (stringp (car rest)) (setq rest (cdr rest)))
+    (unless (or (null rest) (and (= (length rest) 2) (eq (car rest) :required) (memq (cadr rest) '(t nil))))
+      (drgnx-schema--bad-form form))))
+
+(defun drgnx-schema--validate (schema)
+  "Signal unless SCHEMA is a well-formed schema whose named types are bound."
+  (cond
+   ((and schema (symbolp schema))
+    (unless (or (memq schema drgnx-schema--atoms) (gethash schema drgnx-schema--types))
+      (drgnx-schema--unknown-form schema)))
+   ((and (consp schema) (proper-list-p schema))
+    (pcase schema
+      (`(,(or 'integer 'number) . ,opts) (drgnx-schema--validate-opts schema opts '((:min . numberp) (:max . numberp))))
+      (`(string . ,opts) (drgnx-schema--validate-opts schema opts '((:max . natnump) (:match . stringp))))
+      (`(enum ,_ . ,_))
+      (`(or ,_ . ,_) (mapc #'drgnx-schema--validate (cdr schema)))
+      (`(list-of ,elem . ,opts)
+       (drgnx-schema--validate elem)
+       (drgnx-schema--validate-opts schema opts '((:max . natnump))))
+      (`(plist . ,entries)
+       (dolist (entry entries) (drgnx-schema--validate-entry schema entry))
+       (let ((keys (mapcar #'car entries)))
+         (unless (= (length keys) (length (delete-dups (copy-sequence keys)))) (drgnx-schema--bad-form schema))))
+      (`(alist ,key-s ,val-s) (drgnx-schema--validate key-s) (drgnx-schema--validate val-s))
+      (`(map ,val-s . ,opts)
+       (drgnx-schema--validate val-s)
+       (drgnx-schema--validate-opts schema opts '((:max . natnump) (:keys . drgnx-schema--validate-key-schema))))
+      (`(pred ,fn ,doc) (unless (and fn (symbolp fn) (stringp doc)) (drgnx-schema--bad-form schema)))
+      (_ (drgnx-schema--unknown-form schema))))
+   (t (drgnx-schema--unknown-form schema))))
+
+(defun drgnx-schema-validate (schema)
+  "Return SCHEMA when it is well formed, else signal `error' (a definition's bug), so a typo fails when the schema
+is defined and not when data first reaches it.  Checks heads, options and their value types, plist entries,
+`pred' arguments and that every named type is bound.  A `pred' function need not be defined yet (it is
+looked up when a check runs).  Definitions (`drgnx-schema-deftype', the config layer's and the hub's) call it."
+  (drgnx-schema--validate schema)
+  schema)
 
 ;;;; Problems
 
@@ -84,7 +166,8 @@
             ((not authority) "not an https URL")
             ((string-match-p "[[:space:]]" value) "a URL with a blank in it")
             ((or (string-empty-p authority) (string-prefix-p ":" authority)) "a URL with no host")
-            ((string-match-p "[@\\]" authority) "a URL with a user name or a password")))))
+            ((string-match-p "[@\\]" authority) "a URL with a user name or a password")
+            ((string-match-p "[?#]" value) "a URL with a query or fragment (credentials ride there)")))))
 
 (defun drgnx-schema--number-problem (value min max integer)
   "Why VALUE is not a number (an integer when INTEGER) within MIN and MAX, or nil; MIN and MAX may be nil."
@@ -186,6 +269,30 @@ MAX bounds the pairs; STRINGS-ONLY requires string keys."
                                       (drgnx-schema--check val-s (cdr pair) kpath)))))))
                problem)))))
 
+(defun drgnx-schema--check-map (schema value rpath)
+  "Check VALUE against `(map VAL-S [:max N] [:keys KEY-S])'.
+VALUE is a keyword plist (how the hub decodes a JSON object) or an alist with string keys.  A key is
+named without its colon, in the path and to KEY-S."
+  (let* ((opts (drgnx-schema--opts schema (cddr schema) '(:max :keys)))
+         (val-s (nth 1 schema)) (key-s (or (plist-get opts :keys) 'string)) (max (plist-get opts :max)))
+    (if (not (keywordp (car-safe value)))
+        (drgnx-schema--check-pairs value key-s val-s max t rpath)
+      (let ((n (proper-list-p value)))
+        (cond ((not n) (drgnx-schema--bad rpath (drgnx-schema--expected "an object" value)))
+              ((cl-oddp n) (drgnx-schema--bad rpath "an object with a key but no value"))
+              ((and max (> (/ n 2) max)) (drgnx-schema--bad rpath (format "more than %d entries" max)))
+              (t (let ((seen nil) (problem nil))
+                   (while (and value (not problem))
+                     (let ((key (pop value)) (val (pop value)))
+                       (if (not (keywordp key))
+                           (setq problem (drgnx-schema--bad rpath "a key that is not a keyword"))
+                         (let ((kpath (cons (substring (symbol-name key) 1) rpath)))
+                           (setq problem (cond ((memq key seen) (drgnx-schema--bad kpath "the key is given twice"))
+                                               (t (push key seen)
+                                                  (or (drgnx-schema--check key-s (car kpath) kpath)
+                                                      (drgnx-schema--check val-s val kpath)))))))))
+                   problem)))))))
+
 (defun drgnx-schema--check-form (schema value rpath)
   "Check VALUE against the list form SCHEMA; return a problem or nil."
   (pcase schema
@@ -215,9 +322,7 @@ MAX bounds the pairs; STRINGS-ONLY requires string keys."
     (`(plist . ,_) (drgnx-schema--check-plist schema value rpath))
     (`(alist ,key-s ,val-s)
      (drgnx-schema--check-pairs value key-s val-s nil nil rpath))
-    (`(map ,val-s . ,opts)
-     (let ((opts (drgnx-schema--opts schema opts '(:max :keys))))
-       (drgnx-schema--check-pairs value (or (plist-get opts :keys) 'string) val-s (plist-get opts :max) t rpath)))
+    (`(map ,_ . ,_) (drgnx-schema--check-map schema value rpath))
     (`(pred ,fn ,doc)
      (if (not (and (symbolp fn) fn (fboundp fn)))
          (drgnx-schema--bad rpath (format "%s is not defined" fn))
@@ -297,9 +402,16 @@ a `:params' schema that holds `any'."
                  (t (drgnx-schema--walk-unknown (nth 1 entry) val (cons key rpath))))))))
     ((or `(alist ,_ ,val-s) `(map ,val-s . ,_))
      (when (proper-list-p value)
-       (dolist (pair value)
-         (when (consp pair)
-           (drgnx-schema--walk-unknown val-s (cdr pair) (cons (car pair) rpath))))))
+       (if (keywordp (car value))              ; a map as the hub decodes it: a keyword plist
+           (when (cl-evenp (length value))
+             (while value
+               (let ((key (pop value)))
+                 (when (keywordp key)
+                   (drgnx-schema--walk-unknown val-s (car value) (cons (substring (symbol-name key) 1) rpath))))
+               (pop value)))
+         (dolist (pair value)
+           (when (consp pair)
+             (drgnx-schema--walk-unknown val-s (cdr pair) (cons (car pair) rpath)))))))
     (`(list-of ,elem . ,_)
      (when (proper-list-p value)
        (let ((i 0))

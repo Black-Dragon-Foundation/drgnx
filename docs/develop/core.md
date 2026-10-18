@@ -44,7 +44,8 @@ or a list. `(drgnx-schema-check SCHEMA VALUE)` returns nil, or `(PATH . TEXT)` f
 plist keys, alist keys and list indices from the top, e.g. `(:profiles "local" :command 0)`. It walks the schema, not
 the data, tests every list with `proper-list-p` first (an improper or circular list is a problem, never an error)
 and never quotes the value in TEXT (it may be a token). A schema that is not one signals
-`(error "drgnx-schema: unknown form …")`: that is the definition's bug, so it is an error, not a problem.
+`(error "drgnx-schema: unknown form …")`: that is the definition's bug, so it is an error, not a problem. A PATH holds alist and map keys taken from the value (fine for ids); a problem's TEXT never does.
+`(drgnx-schema-validate SCHEMA)` finds those bugs when a schema is defined rather than when data reaches it: heads, options and their value types, plist entries, `pred` arguments, bound named types, and a type that refers to itself with nothing in between. `drgnx-schema-deftype` calls it (a refused type leaves the table as it was); the config layer's and the hub's definition forms call it too. A type may name itself only inside a container.
 
 | Form | Accepts |
 |---|---|
@@ -59,9 +60,9 @@ and never quotes the value in TEXT (it may be a token). A schema that is not one
 | `(list-of S [:max N])` | a proper list of S |
 | `(plist (KEY S [DOC] [:required t])…)` | an even proper list of keywords and values; no key twice; required keys present; **unknown keys are allowed** and a value under one is not walked |
 | `(alist KEY-S VAL-S)` | a proper list of conses, no key twice (`equal`) |
-| `(map VAL-S [:max N] [:keys KEY-S])` | an alist with string keys (checked by KEY-S too) and at most N entries: a JSON object whose keys are not fixed |
+| `(map VAL-S [:max N] [:keys KEY-S])` | a JSON object whose keys are not fixed: a keyword plist (how the hub decodes JSON) or an alist with string keys; at most N entries, no key twice. Keys are named without the colon in the path and to KEY-S |
 | `home-path` | absolute, `~` or `~/…`; no NUL; not a remote name (`/ssh:host:…`) |
-| `https-url` | `https://` and a host; no user info, blank or control character |
+| `https-url` | `https://` and a host; no user info, query, fragment, blank or control character (as bootstrap; a use that needs a query makes its own `pred` type) |
 | `(pred FN DOC)` | `(funcall FN VALUE)` non-nil. An unbound FN, or one that signals, **fails** (never passes); DOC is the problem's text |
 | NAME | a type made with `(drgnx-schema-deftype NAME SCHEMA DOC)` (redefinable; the built-in names are not) |
 
