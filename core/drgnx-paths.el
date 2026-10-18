@@ -15,35 +15,42 @@
   "The platform drgnx runs on: `macos', else `linux' (the BSDs and others count as Linux)."
   (if (eq system-type 'darwin) 'macos 'linux))
 
+(defun drgnx-paths--expand (name &optional dir)
+  "`expand-file-name' of NAME in DIR, with `default-directory' \"/\" so that \"~\" is the local home.
+In a remote buffer a \"~\" would otherwise be expanded on the remote host, and Tramp would connect to it
+from timers, hooks and persistence."
+  (let ((default-directory "/"))
+    (expand-file-name name dir)))
+
 (defun drgnx-user-dir ()
   "The user's drgnx configuration: $DRGNX_CONFIG_DIR, else ~/.config/drgnx/."
-  (file-name-as-directory (expand-file-name (or (getenv "DRGNX_CONFIG_DIR") "~/.config/drgnx"))))
+  (file-name-as-directory (drgnx-paths--expand (or (getenv "DRGNX_CONFIG_DIR") "~/.config/drgnx"))))
 
 (defun drgnx-state-dir ()
   "drgnx state: $XDG_STATE_HOME/drgnx/ (default ~/.local/state/drgnx/)."
-  (file-name-as-directory (expand-file-name "drgnx" (or (getenv "XDG_STATE_HOME") "~/.local/state"))))
+  (file-name-as-directory (drgnx-paths--expand "drgnx" (or (getenv "XDG_STATE_HOME") "~/.local/state"))))
 
 (defun drgnx-cache-dir ()
   "drgnx caches: $XDG_CACHE_HOME/drgnx/ (default ~/.cache/drgnx/)."
-  (file-name-as-directory (expand-file-name "drgnx" (or (getenv "XDG_CACHE_HOME") "~/.cache"))))
+  (file-name-as-directory (drgnx-paths--expand "drgnx" (or (getenv "XDG_CACHE_HOME") "~/.cache"))))
 
 (defun drgnx-data-dir ()
   "drgnx data: $DRGNX_DATA_DIR, else $XDG_DATA_HOME/drgnx/ (default ~/.local/share/drgnx/)."
   (file-name-as-directory
-   (expand-file-name (or (getenv "DRGNX_DATA_DIR")
-                         (expand-file-name "drgnx" (or (getenv "XDG_DATA_HOME") "~/.local/share"))))))
+   (drgnx-paths--expand (or (getenv "DRGNX_DATA_DIR")
+                            (drgnx-paths--expand "drgnx" (or (getenv "XDG_DATA_HOME") "~/.local/share"))))))
 
 (defun drgnx-elpa-dir ()
   "The packages every session uses — a fixed real path (generations are copied into it)."
-  (file-name-as-directory (expand-file-name "elpa" (drgnx-data-dir))))
+  (file-name-as-directory (drgnx-paths--expand "elpa" (drgnx-data-dir))))
 
 (defun drgnx-generations-dir ()
   "Snapshots of the packages directory, one per sync or upgrade."
-  (file-name-as-directory (expand-file-name "generations" (drgnx-data-dir))))
+  (file-name-as-directory (drgnx-paths--expand "generations" (drgnx-data-dir))))
 
 (defun drgnx-package-cache-dir ()
   "Every package file drgnx downloaded (for offline syncs): cache/packages/."
-  (file-name-as-directory (expand-file-name "packages" (drgnx-cache-dir))))
+  (file-name-as-directory (drgnx-paths--expand "packages" (drgnx-cache-dir))))
 
 (defun drgnx-command-ignoring-sigpipe (command)
   "COMMAND (a list: program and arguments) run so that SIGPIPE is ignored: through `sh -c \"trap '' PIPE; exec …\"'.

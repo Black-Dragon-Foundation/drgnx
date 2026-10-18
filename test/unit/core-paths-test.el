@@ -9,6 +9,27 @@
     (should (equal (drgnx-state-dir) "/tmp/xs/drgnx/"))
     (should (equal (drgnx-cache-dir) "/tmp/xc/drgnx/"))))
 
+(ert-deftest drgnx-paths/no-helper-ever-asks-tramp ()
+  "REMOTE-PATHS-1: with a remote `default-directory' and no XDG variable set, expanding \"~\" must stay local."
+  (let* ((asked nil)
+         (home "/tmp/drgnx-remote-paths-home")
+         (process-environment (append (list (concat "HOME=" home))
+                                      (seq-remove (lambda (v) (string-match-p "\\`\\(HOME\\|XDG_[A-Z_]+\\|DRGNX_\\(CONFIG\\|DATA\\)_DIR\\)\\(=\\|\\'\\)" v))
+                                                  process-environment)))
+         (file-name-handler-alist
+          (cons (cons "\\`/ssh:" (lambda (op &rest _) (push op asked) (error "Tramp was asked")))
+                file-name-handler-alist))
+         (default-directory "/ssh:nohost.invalid:/tmp/"))
+    (dolist (fn '(drgnx-user-dir drgnx-state-dir drgnx-cache-dir drgnx-data-dir drgnx-elpa-dir
+                                 drgnx-generations-dir drgnx-package-cache-dir))
+      (let ((dir (funcall fn)))
+        (should (stringp dir))
+        (should (file-name-absolute-p dir))
+        (should-not (file-remote-p dir))
+        (should (string-prefix-p home dir))
+        (should (string-suffix-p "/" dir))))
+    (should-not asked)))
+
 (defun drgnx-paths-test--sigpipe-ignored-p (command)
   "Does COMMAND (a list) run with SIGPIPE ignored?  Its /proc/self/status says (bit 12 of SigIgn)."
   (with-temp-buffer
