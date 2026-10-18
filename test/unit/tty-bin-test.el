@@ -253,6 +253,23 @@ terminal, as when a person types the command; else /dev/null and a pipe) → (EX
       (sleep-for 0.5)
       (should (tty-bin-test--calls dir "kitty.log")))))
 
+(ert-deftest drgnx-bin/open-t-over-ssh-or-without-a-display-stays-here-when-opted-in ()
+  ;; the caller's environment decides, not the daemon's (a desktop daemon has a display and no SSH variables): a
+  ;; limited terminal over SSH, or on a console with no display, gets the frame in this terminal; kitty is not started
+  ;; on the remote desktop and the daemon is not asked
+  (tty-bin-test--with
+    (tty-bin-test--touch dir "running")
+    (write-region "(\"kitty\" \"--\")\n" nil (expand-file-name "capable" dir))
+    (dolist (env (append '((("SSH_CONNECTION" . "1.2.3.4 22 5.6.7.8 22") ("VTE_VERSION" . "7600"))
+                           (("SSH_TTY" . "/dev/pts/3") ("TERM" . "linux")))
+                         (and (eq system-type 'gnu/linux) '((("DISPLAY") ("WAYLAND_DISPLAY") ("TERM" . "linux"))))))
+      (delete-file (expand-file-name "client.log" dir))
+      (should (eql 0 (car (call '("-t") env))))
+      (should (member "-t" (car (last (tty-bin-test--calls dir)))))
+      (should-not (seq-find (lambda (c) (member tty-bin-test--capable c)) (tty-bin-test--calls dir)))
+      (sleep-for 0.3)
+      (should-not (file-exists-p (expand-file-name "kitty.log" dir))))))
+
 (ert-deftest drgnx-bin/open-t-stays-here-by-default ()
   (tty-bin-test--with
     (tty-bin-test--touch dir "running")

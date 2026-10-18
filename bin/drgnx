@@ -418,7 +418,9 @@ open_terminal() { # FORM — a terminal frame of the daemon here; in the termina
   local form="$1" server="${DRGNX_SERVER_NAME:-drgnx}" capable
   local ec=("$(emacsclient_bin)" -t -s "$server") eform=()
   [[ -z "$form" ]] || eform=(-e "$form")
-  if open_terminal_limited; then   # off by default: the daemon answers nil unless the user chose a terminal (drgnx-tty-open-in)
+  # off by default: the daemon answers nil unless the user chose a terminal (drgnx-tty-open-in).  Never over SSH or
+  # without a display, as this caller sees it: the daemon's own environment is the desktop's
+  if open_terminal_limited && ! open_wants_terminal; then
     capable="$(probe -e "(progn (require 'drgnx-tty-recommend nil t) (and (fboundp 'drgnx-tty-capable-terminal-argv) (drgnx-tty-capable-terminal-argv)))" 2>/dev/null)" || capable=""
     lisp_strings "$capable"
     if ((${#LISP_STRINGS[@]})); then detach "${LISP_STRINGS[@]}" "${ec[@]}" ${eform[@]+"${eform[@]}"}; return 0; fi

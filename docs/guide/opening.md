@@ -51,7 +51,8 @@ folder and shows it the same way.
 it in, instead of a window: the daemon is started first if it is not running (as above), then the command becomes
 `emacsclient -t -s drgnx` and shows the paths — each folder as the Explorer's folder, each file in an editor — in the new
 frame. Leave the frame as you leave any client (`C-x C-c`, or close the terminal); the daemon and its windows keep
-running. No window is made or raised. With no path, you get the frame as it stands.
+running. No window is made or raised: a folder opens in the terminal frame even while a desktop window is open (so
+does File → Open Folder… typed in a terminal frame). With no path, you get the frame as it stands.
 
 You do not have to type `-t` in two cases: `drgnx` picks the terminal by itself when you are in an **SSH session**
 (`SSH_CONNECTION` or `SSH_TTY` is set, even if a display is forwarded) and, on Linux, when there is **no display**
@@ -76,7 +77,9 @@ TERM=xterm-256color drgnx -t             # this once, with a terminal type the m
 **A terminal that cannot send every key.** GNOME Terminal and the other VTE terminals, Apple's Terminal and the
 Linux console cannot send chords such as `C-S-p`. If you set `drgnx-tty-open-in` (off by default; see
 [terminal.md](terminal.md)), `drgnx -t` in one of those starts the capable terminal you chose, detached, with
-`emacsclient -t -s drgnx …` inside it, and returns. Over SSH, or with no display, it never does.
+`emacsclient -t -s drgnx …` inside it, and returns. Over SSH, or with no display, it never does: `drgnx` decides
+that from the terminal you typed it in (as for picking the terminal above), not from the daemon, which usually runs
+on the desktop.
 
 ## Waiting for you: drgnx as `$EDITOR`
 
