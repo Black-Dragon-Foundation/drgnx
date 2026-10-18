@@ -96,8 +96,9 @@ It is `explorer' unless another view with sections was chosen (a stale choice fa
         (let ((window-resize-pixelwise t))              ; or the width is rounded to whole columns
           (ignore-errors (window-resize w (- px (window-pixel-width w)) t nil t))))
       (dolist (w (drgnx-wb--dock-windows))
-        (window-preserve-size w t t)
-        (set-window-scroll-bars w nil nil nil nil t))       ; a clean sidebar, like VS Code's
+        (set-window-scroll-bars w nil nil nil nil t)        ; a clean sidebar, like VS Code's
+        ;; After the scroll bars: Emacs keeps the width only while it equals the body width it recorded (I11)
+        (window-preserve-size w t t))
       (unless (eq (selected-window) selected) (select-window selected 'norecord))
       (pcase-dolist (`(,name . ,spec) drgnx-wb--sections)
         (when-let* ((fn (plist-get spec :on-show)) (w (drgnx-wb-section-window name)))

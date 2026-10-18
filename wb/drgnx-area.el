@@ -115,8 +115,9 @@
         (ignore-errors (window-resize w (- px (if horizontal (window-pixel-width w) (window-pixel-height w)))
                                       horizontal nil t))))
     (set-window-parameter w 'quit-restore nil)  ; `q' there must not go back to the window of its birth
-    (window-preserve-size w horizontal t)
     (set-window-scroll-bars w nil nil nil nil t)
+    ;; After the scroll bars: Emacs keeps the size only while it equals the body size it recorded (I11)
+    (window-preserve-size w horizontal t)
     w))
 
 (declare-function drgnx-popup--end "drgnx-popup")

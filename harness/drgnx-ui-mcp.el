@@ -33,7 +33,8 @@
 (defconst drgnx-ui-mcp--report
   "Returns a jank report: settle_ms, layout_changes, collateral_moves (windows that changed without being \
 the input's target), oscillations, chrome_changes, echo_changes, scrolls, redisplays, gc_count, gc_ms, \
-guard_violations (window moves from timers).")
+guard_violations (window moves from timers), wm_resizes (changes from a resize the window manager made, cause \
+wm:resize: layout, never collateral or oscillation).")
 
 (defconst drgnx-ui-mcp-tools
   (list

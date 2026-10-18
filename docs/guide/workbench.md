@@ -374,10 +374,15 @@ What "nothing moves on its own" means, each pinned by a test in a GUI session wi
 | I8 | 50 commands that display buffers: no split, no resize, no frame, nothing unrouted | `drgnx-inv/i8-fuzz-of-fifty-commands` (`test/fixtures/fuzz-commands.eld`) |
 | I9 | No window moved from a timer or a window change hook except the caller's own | every report's `guard_violations` = 0 |
 | I10 | Each step settles within 250 ms, without oscillation | `drgnx-inv/i1-i9-i10-explorer-and-buffers-flows` |
+| I11 | Under a tiling window manager, a resize the WM makes goes to the editors: docks and panel keep their pixel size | `drgnx-wm/i11-docks-keep-their-size-when-the-wm-resizes`, `drgnx-wm/popups-under-tiling-leave-no-trace` (`test/live/drgnx-tiling-test.el`, sway tier: `bin/drgnx test --container --ui --compositor sway`) |
 
 Two Emacs behaviours the workbench corrects so that these hold: `balance-windows` on a whole frame (finder calls
 it) balances only the editors, and a package calling `display-buffer-in-side-window` directly still gets the place
 its buffer's rule names.
+
+I11 holds while the docks fit: if the window manager makes the frame narrower than the docks' widths plus the
+smallest editor, Emacs shrinks everything in proportion (by default the left dock is 32 columns, the right dock 50
+and an editor at least 10 — with both docks shown, a frame needs about 92 columns).
 
 ## Tests
 

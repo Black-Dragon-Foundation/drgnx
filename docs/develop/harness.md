@@ -187,7 +187,10 @@ It snapshots the signatures **just before and right after every command** (`pre-
 **every timer** (advice on `timer-event-handler`), and polls once per tick, so each change is attributed to its
 cause: the innermost command or timer running when it happened (`command:NAME`, `timer:FUNCTION` — a timer
 that runs inside another timer's or a command's `sit-for` keeps its own changes), or `other` when neither ran
-(process output — filters and sentinels are called from C and cannot be intercepted — or redisplay). A scroll
+(process output — filters and sentinels are called from C and cannot be intercepted — or redisplay). An `other`
+change seen while the frame's pixel size changed is `wm:resize`: the window manager resized the frame; a resize
+during a command or timer keeps that command's or timer's name. The recorder stays on the frame it began with,
+even if a frame made during the measurement comes first in `frame-list`. A scroll
 counts only when a window's start really changes. A timer that moves point with `goto-char` inside
 `with-selected-window` (no window function called) is still caught and named.
 The report:
@@ -204,6 +207,7 @@ The report:
 | `gc_count`, `gc_ms` | garbage collections during the measurement |
 | `guard_violations`, `guard` | window-moving calls made from timers or window change hooks (see Guard) |
 | `timer_moves` | window changes made by timers (any window) |
+| `wm_resizes` | window changes caused by `wm:resize`: the window manager resized the frame (a tiling WM halving it for a new window, a `resize` command) — counted in `layout_changes`, never collateral or an oscillation (I11) |
 | `causes` | `[{cause, count}]` — every command and timer that changed something |
 | `trace` | `[{t_ms, cause, window, fields, from, to}]` in order (≤ 50): what changed, when, and why |
 | `settled` | false if the session did not settle before the timeout |
