@@ -19,6 +19,11 @@
   "Width of the left dock, in columns, the first time it shows (later: the width it had)."
   :type 'integer :group 'drgnx)
 
+(defface drgnx-wb-close '((t :inherit shadow))
+  "The close button (✕) at the end of a title, tab row or popup header." :group 'drgnx)
+
+(declare-function drgnx-face-glyph "drgnx-face")
+
 (defvar drgnx-wb-dock-map (make-sparse-keymap)
   "Parent keymap of every dock section's mode (keys come from the key profiles).")
 
@@ -32,6 +37,41 @@ follower is not a jank-guard violation (invariant I9).")
   `(let ((drgnx-wb--owned (append ,windows drgnx-wb--owned))) ,@body))
 
 (defvar drgnx-wb--sections nil "Alist NAME → plist (:slot :title :buffer :view), the left dock's sections.")
+
+;;;; The close button
+
+(defun drgnx-wb-close-glyph ()
+  "The close glyph: ✕, its ASCII form on a terminal that is not UTF-8 (`drgnx-face-glyph')."
+  (or (and (fboundp 'drgnx-face-glyph) (drgnx-face-glyph 'close)) "✕"))
+
+(defvar drgnx-wb--close-maps nil
+  "Alist COMMAND → the keymap of a close button that runs it (one per command: there are three).")
+
+(defun drgnx-wb-close-button (command &rest props)
+  "A close button: a space and the close glyph, clickable (`mouse-1' in a header line runs COMMAND, which takes
+the click event), highlighted under the pointer, its help \"Close (Esc, q)\".  PROPS are text properties the click
+handler reads.  Built once when a title or tab row is set, never while drawing."
+  (let ((map (or (alist-get command drgnx-wb--close-maps)
+                 (let ((m (make-sparse-keymap)))
+                   (define-key m [header-line mouse-1] command)
+                   (setf (alist-get command drgnx-wb--close-maps) m)))))
+    (apply #'propertize (concat " " (drgnx-wb-close-glyph))
+           'face 'drgnx-wb-close 'mouse-face 'highlight 'local-map map 'help-echo "Close (Esc, q)" props)))
+
+(defun drgnx-wb-header-with-close (title command &rest props)
+  "TITLE, then the close button for COMMAND (see `drgnx-wb-close-button') at the right edge of the window."
+  (let ((button (apply #'drgnx-wb-close-button command props)))
+    (concat title (propertize " " 'display `(space :align-to (- right ,(string-width button)))) button)))
+
+(defun drgnx-wb--close-dock-click (event)
+  "A click on a dock section's ✕: hide the sidebar."
+  (interactive "e")
+  (ignore event)
+  (drgnx-wb-hide-sidebar))
+
+(defun drgnx-wb-section-header (title)
+  "A dock section's header: TITLE and the ✕ that hides the sidebar."
+  (drgnx-wb-header-with-close title #'drgnx-wb--close-dock-click))
 
 (defun drgnx-wb-display-name (name)
   "NAME as it can be shown on one row: control characters (a newline in a file name) as ^X."
@@ -91,7 +131,8 @@ It is `explorer' unless another view with sections was chosen (a stale choice fa
              (window-parameters . ((drgnx-role . dock) (drgnx-section . ,name) (no-delete-other-windows . t)
                                    (no-other-window . t)
                                    (header-line-format . ,(let ((title (plist-get spec :title)))
-                                                            (if (functionp title) (funcall title) title)))))))))
+                                                            (drgnx-wb-section-header
+                                                             (if (functionp title) (funcall title) title))))))))))
       (when-let* ((px (frame-parameter nil 'drgnx-wb-dock-px)) (w (car (drgnx-wb--dock-windows))))
         (let ((window-resize-pixelwise t))              ; or the width is rounded to whole columns
           (ignore-errors (window-resize w (- px (window-pixel-width w)) t nil t))))

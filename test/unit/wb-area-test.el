@@ -230,3 +230,31 @@
        (should (eq (selected-window) editor))
        (should (eq (drgnx-wb-area-tab 'panel) 'help))        ; the tab is kept
        (should (window-live-p editor))))))
+
+;;;; M12f A7: the ✕
+
+(defun drgnx-area-test--click-event (window string index)
+  "A mouse-1 click on character INDEX of STRING, which WINDOW shows in its header line."
+  (list 'mouse-1 (list window 'header-line '(0 . 0) 0 (cons string index))))
+
+(ert-deftest drgnx-area/tab-row-has-a-close-button ()
+  (drgnx-area-test--with
+   (let* ((w (drgnx-wb-area-show 'panel 'results (drgnx-area-test--results)))
+          (row (window-parameter w 'header-line-format)) (i (1- (length row)))
+          (h (window-pixel-height w)))
+     (should (string-suffix-p (concat " " (drgnx-wb-close-glyph)) row))   ; ends with the ✕
+     (should (equal (get-text-property i 'help-echo row) "Close (Esc, q)"))
+     (should (eq (get-text-property i 'mouse-face row) 'highlight))
+     (should (eq (lookup-key (get-text-property i 'local-map row) [header-line mouse-1]) #'drgnx-area--close-click))
+     ;; a click hides the area, its size kept
+     (funcall (lookup-key (get-text-property i 'local-map row) [header-line mouse-1])
+              (drgnx-area-test--click-event w row i))
+     (should-not (drgnx-wb-area-window 'panel))
+     (should (= h (window-pixel-height (drgnx-wb-area-show 'panel)))))))      ; and it comes back as tall
+
+(ert-deftest drgnx-area/the-close-button-is-built-with-the-row-not-while-drawing ()
+  ;; the row is a plain string in a window parameter: nothing to evaluate or propertize on redisplay
+  (drgnx-area-test--with
+   (let ((row (window-parameter (drgnx-wb-area-show 'panel 'help) 'header-line-format)))
+     (should (stringp row))
+     (should (eq (get-text-property (1- (length row)) 'drgnx-area row) 'panel)))))

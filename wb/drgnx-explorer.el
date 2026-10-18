@@ -689,12 +689,12 @@ excluded names left out.  A root that is your home or / and not a project is ref
         (setq drgnx-explorer--rows (apply #'vconcat (nreverse data)))
         (goto-char (point-min))
         (when-let* ((w (drgnx-wb-section-window 'explorer)))
-          (set-window-parameter w 'header-line-format (format " EXPLORER — %s" query)))))))
+          (set-window-parameter w 'header-line-format (drgnx-wb-section-header (format " EXPLORER — %s" query))))))))
 
 (defun drgnx-explorer--plain-title ()
   "The Explorer's title without a Find query."
   (when-let* ((w (drgnx-wb-section-window 'explorer)))
-    (set-window-parameter w 'header-line-format " EXPLORER")))
+    (set-window-parameter w 'header-line-format (drgnx-wb-section-header " EXPLORER"))))
 
 (defun drgnx-explorer--forget-find ()
   "The Explorer was killed: its Find goes too (else the live updates would wait for it forever)."

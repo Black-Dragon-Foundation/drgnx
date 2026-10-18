@@ -277,7 +277,9 @@
     (drgnx-wb-show-sidebar)
     (drgnx-explorer--find-apply "main")
     (drgnx-explorer-set-roots (list root))
-    (should (equal (window-parameter (drgnx-wb-section-window 'explorer) 'header-line-format) " EXPLORER"))))
+    (let ((title (window-parameter (drgnx-wb-section-window 'explorer) 'header-line-format)))
+      (should (string-prefix-p " EXPLORER " title))             ; the title, then the ✕
+      (should-not (string-search "—" title)))))
 
 ;;;; M3a-1, M3b-16: a held button
 

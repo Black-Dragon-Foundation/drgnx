@@ -19,6 +19,7 @@
 (defvar display-line-numbers-width-start)
 (defvar display-line-numbers-grow-only)
 (declare-function window-divider-mode "frame")
+(declare-function drgnx-close-setup "drgnx-close")
 (declare-function drgnx-statusbar-setup "drgnx-statusbar")
 (declare-function drgnx-quickhelp-setup "drgnx-quickhelp")
 (declare-function drgnx-topline-setup "drgnx-topline")
@@ -342,6 +343,7 @@ F10's `menu-bar-open' has no menu to open on a toolkit frame whose bar is hidden
   (drgnx-command-define 'face-menu :category "View" :title "Open the Menu" :command #'drgnx-face-menu
                         :doc "Open the menu: the menu bar when it is shown, else the same menu as text in the minibuffer (F10)")
   (define-key global-map [remap menu-bar-open] #'drgnx-face-menu)   ; F10 opens the menu as text while the bar is hidden
+  (when (fboundp 'drgnx-close-setup) (drgnx-close-setup))   ; Esc and q close panes (drgnx-close.el)
   (when (fboundp 'drgnx-statusbar-setup) (drgnx-statusbar-setup))   ; the status bar (drgnx-statusbar.el)
   (when (fboundp 'drgnx-quickhelp-setup) (drgnx-quickhelp-setup))   ; quick help (drgnx-quickhelp.el)
   (when (fboundp 'drgnx-topline-setup) (drgnx-topline-setup))   ; the top line (drgnx-topline.el)
@@ -370,6 +372,7 @@ F10's `menu-bar-open' has no menu to open on a toolkit frame whose bar is hidden
                                  (drgnx-face-title-bar . "dark (default), system or drgnx: the window's title bar")
                                  (drgnx-face-gtk-theme . "the GTK theme whose dark variant the title bar uses")
                                  (drgnx-face-glyphs . "the glyphs drgnx draws, each with an ASCII form")
+                                 (drgnx-close-input-modes . "modes whose buffers you type into: Esc and q never close their pane")
                                  (drgnx-statusbar-left . "status bar segments on the left, in order")
                                  (drgnx-statusbar-right . "status bar segments on the right, in order")
                                  (drgnx-statusbar-drop-order . "segments dropped first when the window is narrow")
