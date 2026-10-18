@@ -990,17 +990,53 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
 ;; M12a-74: the restart asks its save questions first, detaches the waiter only after they are answered, then quits.
 (ert-deftest drgnx-onboard/restart-detaches-after-the-questions ()
   (let ((events nil))
-    (cl-letf (((symbol-function 'drgnx-jobs--detach) (lambda (_line) (push 'detach events)))
+    (cl-letf (((symbol-function 'drgnx-onboard--restart-spawn) (lambda (_line) (push 'detach events)))
               ((symbol-function 'kill-emacs) (lambda (&rest _) (push 'kill events))))
-      ;; a "no" (or C-g's nil): nothing detached, nothing killed
+      ;; a "no": nothing detached, nothing killed
       (cl-letf (((symbol-function 'drgnx-session-quit-confirm) (lambda () (push 'confirm events) nil)))
         (drgnx-onboard--restart)
+        (should (equal (reverse events) '(confirm))))
+      ;; C-g in a question: it leaves through the signal, nothing detached, nothing killed
+      (setq events nil)
+      (cl-letf (((symbol-function 'drgnx-session-quit-confirm) (lambda () (push 'confirm events) (signal 'quit nil))))
+        (should (eq 'quit (condition-case nil (progn (drgnx-onboard--restart) 'ran) (quit 'quit))))
         (should (equal (reverse events) '(confirm))))
       ;; a "yes": confirm, then detach, then kill-emacs
       (setq events nil)
       (cl-letf (((symbol-function 'drgnx-session-quit-confirm) (lambda () (push 'confirm events) t)))
         (drgnx-onboard--restart)
         (should (equal (reverse events) '(confirm detach kill)))))))
+
+;; A drgnx running as a systemd service dies with its whole cgroup (KillMode=control-group): a `setsid' waiter
+;; started from it is killed with it and never reopens drgnx.  There the waiter runs as its own transient unit.
+(ert-deftest drgnx-onboard/restart-waiter-outlives-a-systemd-service ()
+  (let ((detached nil) (calls nil) (rc 0))
+    (cl-letf (((symbol-function 'drgnx-jobs--detach) (lambda (line) (push line detached)))
+              ((symbol-function 'executable-find) (lambda (p &rest _) (and (equal p "systemd-run") "/usr/bin/systemd-run")))
+              ((symbol-function 'call-process)
+               (lambda (program _in _out _display &rest args) (push (cons program args) calls) rc)))
+      (let ((line "i=$((i+1)); echo 100%; exec '/x y/bin/drgnx' open"))
+        ;; not under systemd (no INVOCATION_ID): the detached waiter, no systemd-run
+        (let ((process-environment (cons "XDG_RUNTIME_DIR=/run/user/1" (cons "INVOCATION_ID" process-environment))))
+          (drgnx-onboard--restart-spawn line)
+          (should (equal detached (list line)))
+          (should-not calls))
+        ;; under a unit: its own transient unit, killing only the waiter's main process; $ and % escaped for ExecStart
+        (setq detached nil)
+        (let ((process-environment (append '("INVOCATION_ID=abc" "XDG_RUNTIME_DIR=/run/user/1") process-environment)))
+          (drgnx-onboard--restart-spawn line)
+          (should-not detached)
+          (let ((c (car calls)))
+            (should (equal (car c) "systemd-run"))
+            (should (member "--user" c))
+            (should (member "--collect" c))
+            (should (member "KillMode=process" c))
+            (should (string-prefix-p (format "--unit=drgnx-restart-%d" (emacs-pid)) (seq-find (lambda (a) (string-prefix-p "--unit=" a)) c)))
+            (should (equal (last c 3) (list "sh" "-c" "i=$$((i+1)); echo 100%%; exec '/x y/bin/drgnx' open"))))
+          ;; systemd-run failing: falls back to the detached waiter
+          (setq calls nil rc 1)
+          (drgnx-onboard--restart-spawn line)
+          (should (equal detached (list line))))))))
 
 (ert-deftest drgnx-onboard/new-modules-need-a-restart-and-finish-offers-it ()
   ;; Packages installed into a running drgnx load at its next start: Look and Keys says so, and Finish (in the
@@ -1014,6 +1050,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
                 ((symbol-function 'drgnx-doctor-facts) #'ignore)
                 ((symbol-function 'drgnx-jobs--detach) (lambda (line) (push line lines)))
                 ((symbol-function 'drgnx-session-quit-confirm) (lambda () t))
+                ((symbol-function 'drgnx-onboard--under-systemd-p) #'ignore)
                 ((symbol-function 'kill-emacs) (lambda (&rest _) (cl-incf quit))))
         (let ((r (drgnx-onboard--look-step '(:interactive t :options (:preset full-ai :keys "Emacs" :theme modus-vivendi)))))
           (should (string-match-p "restart drgnx to load the new modules" (cadr r))))

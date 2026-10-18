@@ -1327,13 +1327,29 @@ keep running.  Saved (session.eld); returns the sentence for the step's result."
 
 (declare-function drgnx-jobs--detach "drgnx-jobs")
 
+(defun drgnx-onboard--under-systemd-p ()
+  "Non-nil when this Emacs is a process of a systemd unit (INVOCATION_ID) and a user manager can start another."
+  (and (getenv "INVOCATION_ID") (getenv "XDG_RUNTIME_DIR") (executable-find "systemd-run") t))
+
+(defun drgnx-onboard--restart-spawn (line)
+  "Start the restart waiter LINE (a shell line) so that it outlives this Emacs.  Normally detached in its own
+session.  As a systemd service (drgnx.service) this Emacs shares a cgroup with it, and systemd kills what is left
+in the cgroup when the main process ends — the detached waiter too — so there it runs as its own transient unit
+\(`KillMode=process': a daemon `drgnx open' starts stays); the detached way is also the fallback."
+  (require 'drgnx-jobs)
+  (unless (and (drgnx-onboard--under-systemd-p)
+               (eql 0 (call-process "systemd-run" nil nil nil "--user" "--quiet" "--collect"
+                                    (format "--unit=drgnx-restart-%d" (emacs-pid)) "-p" "KillMode=process"
+                                    "sh" "-c" (replace-regexp-in-string "[$%]" "\\&\\&" line))))   ; ExecStart reads $ and %
+    (drgnx-jobs--detach line)))
+
 (defun drgnx-onboard--restart ()
   "Restart drgnx: ask the quit questions first (`drgnx-session-quit-confirm': save, lose changes?), then — only
-on a yes — run `drgnx open' detached once this Emacs has ended (a minute at most: kept running, it opens
-nothing), and quit.  A no or C-g leaves drgnx running and nothing waiting.  The layout comes back with drgnx open."
-  (require 'drgnx-jobs)
+on a yes — start `drgnx open' to run once this Emacs has ended (`drgnx-onboard--restart-spawn'; a minute at
+most: kept running, it opens nothing), and quit.  A no or C-g leaves drgnx running and nothing waiting.  The
+layout comes back with drgnx open."
   (when (drgnx-session-quit-confirm)
-    (drgnx-jobs--detach
+    (drgnx-onboard--restart-spawn
      (format "sleep 1; i=0; while kill -0 %d 2>/dev/null && [ $i -lt 300 ]; do sleep 0.2; i=$((i+1)); done; kill -0 %d 2>/dev/null || exec %s open"
              (emacs-pid) (emacs-pid) (shell-quote-argument (expand-file-name "bin/drgnx" drgnx-dir))))
     (kill-emacs)))
