@@ -230,12 +230,15 @@ saved with `:role main', wherever it stands in the file), every other window is 
 state was restored.  A window that rebuilds itself (a job window) is rebuilt by its function, on the
 graphical display, and, when the display still has room, put back at its saved pixel position and size.
 Each group's shown file is visited now, its other tabs at idle (never a question at start).
-From a terminal window nothing is restored (a graphical window restores itself at start and when a window
-opens after none; a command typed in a terminal never replaces one)."
+From a terminal window, the workbench is restored into the graphical window when one is open (and the terminal
+says so); with none, nothing is restored (a terminal window keeps the default layout for its size)."
   (interactive)
-  (if (drgnx-persist--terminal-frame-p)
-      (drgnx-persist--graphical-only)
-    (drgnx-persist--restore file)))
+  (cond ((not (drgnx-persist--terminal-frame-p)) (drgnx-persist--restore file))
+        ((drgnx-persist--gui-frame)
+         (when (with-selected-frame (drgnx-persist--gui-frame) (drgnx-persist--restore file))
+           (message "Restored into the graphical window")
+           t))
+        (t (drgnx-persist--graphical-only))))
 
 (defun drgnx-persist--restore (file)
   "`drgnx-persist-restore' in the selected frame, which is not a terminal window."

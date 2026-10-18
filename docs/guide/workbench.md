@@ -227,11 +227,13 @@ format is ignored. Save / Restore Workbench Layout are in the palette. Only grap
 batch run never writes your state.
 
 **Terminal windows** (`emacs -nw`, `emacsclient -t`) open with the default layout for their size
-([terminal.md](terminal.md)) and neither save nor restore: a terminal session never overwrites the layout of your
-desktop windows. Save / Restore Workbench Layout, run in a terminal window, do nothing and say "Layouts are saved and
-restored from graphical windows" (a graphical window restores itself at start and whenever a window opens after none, so
-a terminal never replaces one). A job window comes back on the graphical display only, never laid out over a terminal window; with no graphical
-window, it is not restored.
+([terminal.md](terminal.md)) and neither save nor restore their own layout: a terminal session never overwrites the
+layout of your desktop windows. Save Workbench Layout, run in a terminal window, does nothing and says "Layouts are
+saved and restored from graphical windows". Restore Workbench Layout, run in a terminal window while a graphical
+window is open, restores the saved layout into that graphical window (not into the terminal) and says "Restored into
+the graphical window"; with no graphical window open, it does nothing and gives the same message as Save. A job window
+comes back on the graphical display only, never laid out over a terminal window; with no graphical window, it is not
+restored.
 
 ### Several windows
 

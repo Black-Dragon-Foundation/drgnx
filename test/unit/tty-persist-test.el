@@ -51,16 +51,21 @@ window (its terminal is \"/dev/pts/9\").  `messages' collects what `message' say
         (should (equal (tty-persist-test--bytes drgnx-persist-file) bytes))
         (should (equal (file-attribute-modification-time (file-attributes drgnx-persist-file)) mtime))))))
 
-(ert-deftest drgnx-persist/a-terminal-restore-never-touches-a-graphical-frame ()
-  ;; a command typed in a terminal must not replace or focus a desktop window, which restores itself
+(ert-deftest drgnx-persist/a-terminal-restore-goes-into-the-graphical-window ()
+  ;; the user's ruling (2026-10-18): Restore Workbench Layout typed in a terminal window, while a graphical window
+  ;; is open, restores into that window and says so in the terminal; the terminal frame's layout is not touched
   (tty-persist-test--with dir
     (tty-persist-test--write drgnx-persist-file '(:version 2 :frames ((:role main :groups ((:tabs nil))))))
-    (cl-letf (((symbol-function 'drgnx-persist--gui-frame) (lambda () 'gui-frame))
-              ((symbol-function 'select-frame) (lambda (f &optional _) (push f selected) f))
-              ((symbol-function 'drgnx-persist--restore-frame) (lambda (_st) (error "restored"))))
-      (should-not (drgnx-persist-restore))
-      (should-not selected)
-      (should (equal messages (list tty-persist-test--message))))))
+    (let (restored-in)
+      (cl-letf (((symbol-function 'drgnx-persist--gui-frame) (lambda () 'gui-frame))
+                ((symbol-function 'select-frame) (lambda (f &optional _) (push f selected) f))
+                ((symbol-function 'frame-live-p) (lambda (f) (and f t)))
+                ((symbol-function 'set-frame-parameter) #'ignore)
+                ((symbol-function 'drgnx-persist--restore-frame)
+                 (lambda (_st) (setq restored-in (car selected)) t)))
+        (should (drgnx-persist-restore))
+        (should (eq restored-in 'gui-frame))
+        (should (equal messages '("Restored into the graphical window")))))))
 
 (defmacro tty-persist-test--with-home (dir &rest body)
   "Like `tty-persist-test--with', but the selected frame is on the initial terminal (batch Emacs's, a daemon's
