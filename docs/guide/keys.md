@@ -179,6 +179,12 @@ cannot be bound, a prefix it replaces) joins the list and the report then.
 - A mistake never breaks startup: an unreadable file, an unknown command or an invalid key is a problem on the key
   sheet and in the doctor, and everything else still applies.
 - Keyboard Profile… rewrites only `:layers` and keeps the rest of the file.
+- The Keyboard Shortcuts editor writes through `drgnx-keys-edit` (`core/drgnx-keys-edit.el`): `drgnx-keys-edit-bind`,
+  `-unbind`, `-reset`, `-reset-all` and `-undo`. Each changes one entry of `:bind` or `:unbind` and keeps your comments,
+  `:layers` and the other entries as they are. The previous text is kept in `keys.eld.undo` (one step back) and the
+  keys apply at once. A `keys.eld` that does not read is reported and never written; a missing one is created with a
+  header comment. Taking one key away from a command writes the keys it keeps as its own `:bind` entry (one `:map`
+  per entry), or puts it in `:unbind` when none is left.
 
 A graphical Keyboard Shortcuts editor (search, press-to-rebind, writes `keys.eld`) comes in M4.
 
