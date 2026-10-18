@@ -333,7 +333,7 @@
       (window-resize panel 1) (drgnx-state-sync f)
       (window-resize panel 1) (drgnx-state-sync f)
       (should-not drgnx-state-events-test--inside)    ; nothing yet
-      (should (timerp drgnx-state--idle-timer))
+      (should (timerp drgnx-signal--timer))           ; the bus's idle flush delivers them
       (drgnx-state--deliver-idle)
       ;; one call per kind (the panel's `terminal', the editor group's nil), each with the last data
       (should (= 2 (length drgnx-state-events-test--inside)))
@@ -342,7 +342,7 @@
       (dolist (d drgnx-state-events-test--inside)
         (should (equal (plist-get d :new) (drgnx-state-edges (plist-get d :window)))))
       (should (eq a (plist-get (seq-find (lambda (d) (null (plist-get d :kind))) drgnx-state-events-test--inside) :window)))
-      (should-not drgnx-state--idle-timer)
+      (should-not drgnx-state--queue)
       (setq drgnx-state-events-test--inside nil)
       (drgnx-state--deliver-idle)
       (should-not drgnx-state-events-test--inside))))

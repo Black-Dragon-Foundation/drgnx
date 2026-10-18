@@ -45,6 +45,28 @@
       (should (seq-every-p #'cl-plusp (drgnx-chrome-test--heights editor)))      ; tab line, header, mode line
       (should (equal (mapcar #'cl-plusp (drgnx-chrome-test--heights panel)) '(nil t nil))))))  ; tab row only
 
+(ert-deftest drgnx-chrome/role-from-the-table ()
+  "A window's chrome is its role's `:chrome' in the store's role table; a role not in it is an editor window."
+  (drgnx-test-with-state
+    (delete-other-windows)
+    (let ((w (split-window nil nil 'below)))
+      (unwind-protect
+          (progn
+            (set-window-parameter w 'drgnx-role 'drgnx-chrome-test-strip)
+            (should (eq 'editor (drgnx-chrome--role w)))
+            (drgnx-state-define-role 'drgnx-chrome-test-strip :chrome 'dock)
+            (should (eq 'dock (drgnx-chrome--role w)))
+            (drgnx-state-define-role 'drgnx-chrome-test-strip :chrome 'area)
+            (should (eq 'area (drgnx-chrome--role w)))
+            (drgnx-state-define-role 'drgnx-chrome-test-strip)
+            (should-not (drgnx-chrome--role w))                       ; no chrome: left alone
+            (set-window-parameter w 'drgnx-popup '(:borrowed nil))    ; a popup lane, whatever else it is
+            (should (eq 'lane (drgnx-chrome--role w)))
+            (should (eq 'editor (drgnx-chrome--role (selected-window))))
+            (should-not (drgnx-chrome--role (minibuffer-window))))
+        (set-window-parameter w 'drgnx-popup nil)
+        (delete-window w)))))
+
 (ert-deftest drgnx-chrome/a-buffer-adds-to-the-breadcrumb ()
   ;; sticky scroll's scopes after the breadcrumb, from the buffer's own `drgnx-chrome-header-tail'
   (drgnx-chrome-test--with dir

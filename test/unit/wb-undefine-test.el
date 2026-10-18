@@ -10,7 +10,7 @@
   "BODY with fresh registries (copies of the real ones), one editor window and no cleanup stacks."
   `(let ((drgnx-wb--sections nil) (drgnx-wb--areas (copy-tree drgnx-wb--areas))
          (drgnx-rules--table (copy-sequence drgnx-rules--table)) (drgnx-rules--places (copy-sequence drgnx-rules--places))
-         (drgnx-signal--subscribers nil) (drgnx-signal--owners nil) (drgnx-signal--editor-window nil)
+         (drgnx-signal--subscribers nil) (drgnx-signal--owners nil)
          (drgnx-module--claims (make-hash-table :test 'equal)) (drgnx-rules--missing nil)
          (drgnx-modules--stacks nil) (drgnx-modules--current nil))
      (delete-other-windows)

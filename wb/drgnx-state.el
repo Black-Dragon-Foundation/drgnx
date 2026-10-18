@@ -19,7 +19,8 @@
 ;; window, or `side' for a package's own side window.
 ;;
 ;; What changed between two records goes out as typed events (`drgnx-state-subscribe', `drgnx-state-events'):
-;; on the `now' lane inside the observation, before the frame is drawn, or on the `idle' lane, coalesced.
+;; on the `now' lane inside the observation, before the frame is drawn, or on the `idle' lane, coalesced and
+;; delivered by the change bus's one idle flush (`drgnx-signal--flush', which observes the selected frame first).
 ;; See docs/develop/core.md, "The workbench state store".
 
 ;;; Code:
@@ -30,8 +31,10 @@
 (defvar drgnx-wb--areas)                ; drgnx-area.el: the areas' tabs (read, when loaded)
 (defvar drgnx-pane--last)               ; drgnx-panes.el: frame → kind → the last buffer an editor kind showed
 
-(defvar drgnx-signal-errors nil "Recent subscriber errors (newest first).")
-(defvar drgnx-signal-delay 0.05 "Idle seconds before raw events are flushed as edges.")
+;; Shared with the change bus (`drgnx-signal.el', which loads the store): one error list, one idle flush.
+(defvar drgnx-signal-errors nil "Recent subscriber errors of the store and the bus (newest first, at most 20).")
+(defvar drgnx-signal-delay 0.05 "Idle seconds before the bus's flush delivers the idle lane and the buffer edges.")
+(declare-function drgnx-signal--schedule "drgnx-signal")
 
 ;;;; Records
 
@@ -63,9 +66,8 @@ recursively.")
   "Alist EVENT → the functions subscribed to it on the `idle' lane, in subscription order.")
 (defvar drgnx-state--queue nil
   "Idle calls waiting, newest first: (FN EVENT FRAME KIND DATA), one per FN, EVENT, FRAME and KIND (the
-data's `:kind'), holding the last DATA.  Bounded: subscribers × events × frames × kinds.")
-(defvar drgnx-state--idle-timer nil
-  "The one-shot idle timer that runs `drgnx-state--deliver-idle', or nil.")
+data's `:kind'), holding the last DATA.  Bounded: subscribers × events × frames × kinds.  The bus's idle
+flush (`drgnx-signal--flush') makes them.")
 (defvar drgnx-state--selected-frame nil
   "The frame that was selected at the last record stored for it (`selected-changed' names it as
 `:old-frame' when another frame becomes the selected one).")
@@ -458,7 +460,7 @@ it was not subscribed before, and only while it is still on LANE (`drgnx-module-
 
 (defun drgnx-state--queue-call (fn event data)
   "Queue FN's call for EVENT with DATA, replacing the data of a waiting call for the same frame and kind;
-arm the idle timer."
+arm the bus's idle flush (one timer for the store and the bus)."
   (let ((frame (plist-get data :frame)) (kind (plist-get data :kind)) (found nil))
     (dolist (c drgnx-state--queue)
       (when (and (not found) (eq (car c) fn) (eq (nth 1 c) event) (eq (nth 2 c) frame) (eq (nth 3 c) kind))
@@ -466,21 +468,18 @@ arm the idle timer."
     (if found
         (setcar (nthcdr 4 found) data)
       (push (list fn event frame kind data) drgnx-state--queue)))
-  (unless (timerp drgnx-state--idle-timer)
-    (setq drgnx-state--idle-timer (run-with-idle-timer drgnx-signal-delay nil #'drgnx-state--deliver-idle))))
+  (drgnx-signal--schedule))
 
 (defun drgnx-state--deliver-idle ()
-  "Make the waiting idle calls, oldest first (the idle timer's function)."
-  (setq drgnx-state--idle-timer nil)
+  "Make the waiting idle calls, oldest first (the bus's flush calls it, after `drgnx-state-sync')."
   (let ((calls (reverse drgnx-state--queue)))
     (setq drgnx-state--queue nil)
     (dolist (c calls)
       (drgnx-state--call (nth 1 c) (car c) (nth 4 c)))))
 
 (defun drgnx-state--drop-idle ()
-  "Forget the waiting idle calls and cancel their timer."
-  (when (timerp drgnx-state--idle-timer) (cancel-timer drgnx-state--idle-timer))
-  (setq drgnx-state--idle-timer nil drgnx-state--queue nil))
+  "Forget the waiting idle calls (the bus's flush stays armed: it has its own edges)."
+  (setq drgnx-state--queue nil))
 
 (defun drgnx-state--cause ()
   "(CAUSE . BY) for the change being observed: (write . BY) inside a write (`drgnx-state-with-write');

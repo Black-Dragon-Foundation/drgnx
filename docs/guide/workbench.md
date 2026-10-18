@@ -307,13 +307,19 @@ Not yet: file nesting, icons (an icon theme is a module, M4), problems decoratio
 
 ## How it works
 
-- **The change bus** (`wb/drgnx-signal.el`) is the only code that listens to Emacs' window and buffer hooks. A
-  hook only arms an idle flush (and notes which part changed: the buffer set, or the modified flags); the flush rebuilds
-  only that part, compares the state with the previous one and emits **edges**:
-  `editor-changed` (the file in the editor you used last), `editor-point-changed` (its cursor moved), `buffer-set-changed`, `modified-changed`. Followers
+- **The change bus** (`wb/drgnx-signal.el`) is where followers subscribe. Window answers come from the workbench
+  state store (`wb/drgnx-state.el`), which watches the window hooks; the bus listens to the buffer hooks. A hook
+  only arms one idle flush (and notes which part changed: the buffer set, or the modified flags); the flush brings
+  the store up to date, rebuilds only the part that changed, compares the state with the previous one and emits
+  **edges**: `editor-changed` (the file in the editor you used last), `editor-point-changed` (its cursor moved),
+  `frame-changed` (another frame became the selected one), `buffer-set-changed`, `modified-changed`. Followers
   subscribe to these, never to hooks — so a focus change, a background buffer or a burst of events cannot make
   them fire. Internal buffers (names starting with a space) never count. A follower (or a window-setup function)
   that fails is recorded in `drgnx-signal-errors`; the others still run and the next flush stays armed.
+- **The editor you used last** is kept per frame, and is right at once: the moment a command ends (or a timer's
+  change is drawn), not after the next pause. Each frame — a second window of the workbench, a terminal client —
+  has its own, so a file chosen in one frame's dock opens in that frame's editor. Moving between two windows on one
+  file changes the editor but not the file, so the Explorer and the Outline stay as they are.
 - **Roles** (`wb/drgnx-wb.el`): each window is an `editor` or a `dock` window (window parameter `drgnx-role`). The
   dock is side windows with a pixel width kept across hide/show, no scroll bars, and titles in the
   `header-line-format` *window parameter*, where no mode can erase them. Showing the dock never takes focus; files

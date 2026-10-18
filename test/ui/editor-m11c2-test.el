@@ -213,7 +213,7 @@ session has a private one of its own, in which podman finds none of its containe
             (should (member (concat "podman: " name) asked))
             (write-region "hello from the container\n" nil file)
             (find-file file))
-          (setq drgnx-signal--editor-window (selected-window))
+          (drgnx-state-use-editor (selected-window))
           (should (equal (car (drgnx-explorer-roots)) root))                 ; first, before the default folder
           (with-current-buffer drgnx-explorer-buffer-name
             (should (string-search "▸ etc\n" (buffer-string)))
@@ -265,7 +265,7 @@ session has a private one of its own, in which podman finds none of its containe
          (state (make-temp-file "drgnx-m11c2-state" t))
          (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" state "/config") (concat "XDG_STATE_HOME=" state "/state"))
                                       process-environment))
-         (drgnx-wb--sections nil) (drgnx-signal--editor-window nil)
+         (drgnx-wb--sections nil)
          (drgnx-wb--areas (copy-tree drgnx-wb--areas))
          (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
          (display-buffer-alist nil) (display-buffer-overriding-action '(nil))
