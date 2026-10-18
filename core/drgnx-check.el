@@ -110,7 +110,7 @@ results go (default: none).  TTY (default: tmux is installed): with GUI, the ter
       (push (funcall job "ui" 2 'ui (list bin "ui" "test-ui-session") :gui t :env (list "DRGNX_UI_TEST_TIMEOUT=300")) jobs)
       ;; the terminal tier: Emacs sessions in private tmux servers, a file at a time in an Emacs of its own (the runner
       ;; does that, as for a unit shard).  A GUI job for the memory accounting: one session is an Emacs of its own.
-      (when tty (push (funcall job "tty" 2 'tty (list bin "test" "--tty") :gui t) jobs))
+      (when tty (push (funcall job "tty" 2 'tty (list bin "test" "--tty") :gui t :env drgnx-check-unit-env) jobs))
       (cl-loop for files in (drgnx-check-shard (directory-files-recursively (expand-file-name "test/live" root) "-test\\.el\\'")
                                                live-shards durations)
                for i from 1

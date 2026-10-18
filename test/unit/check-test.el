@@ -129,6 +129,9 @@
     (should (plist-get tty :gui))
     (should (eql (plist-get tty :phase) 2))
     (should (eql (plist-get tty :timeout) (alist-get 'tty drgnx-check-timeouts)))
+    ;; no desktop for the Emacs that runs the tier: a dead bus, no display or compositor, as a unit shard
+    (should (member "DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/drgnx-unit-test" (plist-get tty :env)))
+    (dolist (v '("DISPLAY" "WAYLAND_DISPLAY" "SWAYSOCK")) (should (member v (plist-get tty :env))))
     (should-not (seq-find (lambda (e) (string-prefix-p "DRGNX_TEST_ONE_PROCESS" e)) (plist-get tty :env))))
   (should-not (seq-find (lambda (j) (equal (plist-get j :name) "tty")) (drgnx-check-plan :root drgnx-dir :tty nil)))
   (should-not (seq-find (lambda (j) (equal (plist-get j :name) "tty")) (drgnx-check-plan :root drgnx-dir :tty t :gui nil))))

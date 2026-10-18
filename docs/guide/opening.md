@@ -11,6 +11,7 @@ drgnx open                   # drgnx with the windows as you left them
 drgnx open -- -odd-name.txt  # anything after -- is a path, even when it starts with -
 drgnx open --wait notes.md   # returns when you are done with the file: drgnx as $EDITOR
 drgnx -t .                   # this folder, in this terminal (also: drgnx open -t .)
+drgnx --gui .                # this folder, in a window, even over SSH or without a display
 ```
 
 `drgnx` lives in `~/.local/bin`; "command not found" means that is not on your PATH yet — open a new terminal window
@@ -54,10 +55,15 @@ running. No window is made or raised. With no path, you get the frame as it stan
 
 You do not have to type `-t` in two cases: `drgnx` picks the terminal by itself when you are in an **SSH session**
 (`SSH_CONNECTION` or `SSH_TTY` is set, even if a display is forwarded) and, on Linux, when there is **no display**
-(neither `DISPLAY` nor `WAYLAND_DISPLAY`; a text console). Everywhere else `drgnx` opens a window, as above, and
-`-t` is how you ask for the terminal. `drgnx open --wait FILE…` in a terminal waits there, as before.
+(neither `DISPLAY` nor `WAYLAND_DISPLAY`; a text console) — but only when `drgnx` is run at a terminal (its standard
+input and output are one). A script, a launcher or an editor hook gets a window, as without these, and no terminfo
+question. Everywhere else `drgnx` opens a window, as above, and `-t` is how you ask for the terminal.
 
-**Unknown terminal type.** A terminal frame needs the terminal's description (terminfo) on the machine running Emacs.
+`drgnx --gui [PATH…]` (or `drgnx open --gui [PATH…]`) is the opposite: it skips that choice and opens a window, for
+an SSH session with a forwarded display, or a machine where the display is not in the environment. `-t` and `--gui`
+together are an error (exit 2). `drgnx open --wait FILE…` in a terminal waits there, as before.
+
+**Unknown terminal type.** (Checked after the opt-in below: a frame that opens in another terminal does not need this one's description.) A terminal frame needs the terminal's description (terminfo) on the machine running Emacs.
 When `infocmp "$TERM"` fails there (typically `xterm-kitty` or `xterm-ghostty` over SSH), `drgnx -t` stops with exit 1
 and says how to fix it, instead of drawing a broken screen:
 

@@ -131,9 +131,12 @@ test_batch_emacs() { # SIGPIPE ignored, as the hub runs (tests serve one in-proc
 test_batch() { run_in_tmp test_batch_emacs; }
 
 test_tty_emacs() { # the terminal tier (test/tty): each file in an Emacs of its own, SIGPIPE ignored as test_batch_emacs;
-  # its sessions run in private tmux servers (harness/drgnx-tty-session.el), so the environment stays as it is
+  # its sessions run in private tmux servers (harness/drgnx-tty-session.el, which start Emacs with `env -i'); this Emacs
+  # never reaches the user's desktop either: a dead session bus (dbus.el reads the C environment), no display or compositor
   trap '' PIPE
-  exec "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
+  exec env -u DISPLAY -u WAYLAND_DISPLAY -u SWAYSOCK -u I3SOCK -u HYPRLAND_INSTANCE_SIGNATURE -u NIRI_SOCKET \
+       DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/drgnx-unit-test \
+       "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
        -l "$here/harness/run-ert.el" -f drgnx-run-ert-batch "$here/test/tty"
 }
 
@@ -149,7 +152,9 @@ test_container() { # [--ui | --tty [--fedora 44|45]] — the batch (GUI, termina
   local rt mount image file prebuilt="${DRGNX_TEST_IMAGE:-}" args=() cmd=(bin/drgnx test) build=() tier="" fedora=""
   while (($#)); do
     case "$1" in
-      --ui|--tty) tier="${1#--}" ;;
+      --ui|--tty)
+        if [[ -n "$tier" && "$tier" != "${1#--}" ]]; then echo "drgnx: test --container takes --ui or --tty, not both" >&2; return 2; fi
+        tier="${1#--}" ;;
       --fedora) fedora="${2:-?}"; if (($# > 1)); then shift; fi ;;
       *) echo "drgnx: unknown option for test --container: $1 (--ui | --tty [--fedora 44|45])" >&2; return 2 ;;
     esac
@@ -411,19 +416,22 @@ open_terminal() { # FORM — a terminal frame of the daemon here; in the termina
     lisp_strings "$capable"
     if ((${#LISP_STRINGS[@]})); then detach "${LISP_STRINGS[@]}" "${ec[@]}" ${eform[@]+"${eform[@]}"}; return 0; fi
   fi
+  open_terminfo_check || return 1   # this terminal's: not needed when the frame opens in another one (above)
   exec "${ec[@]}" ${eform[@]+"${eform[@]}"}
 }
 
-cmd_open() { # [--check] [--wait] [-t] [PATH…] — open PATHs (none: the windows as you left them) in drgnx, like code .
+cmd_open() { # [--check] [--wait] [-t | --gui] [PATH…] — open PATHs (none: the windows as you left them) in drgnx, like code .
   if [[ "${1:-}" == --check ]]; then open_check; return; fi
-  local wait="" term=""
-  while true; do   # -t: a frame in this terminal; --wait: until C-x #
+  local wait="" term="" gui=""
+  while true; do   # -t: a frame in this terminal; --gui: a window, whatever the terminal; --wait: until C-x #
     case "${1:-}" in
       --wait) wait=1; shift ;;
       -t) term=1; shift ;;
+      --gui) gui=1; shift ;;
       *) break ;;
     esac
   done
+  if [[ -n "$term" && -n "$gui" ]]; then echo "drgnx: -t (a terminal frame) and --gui (a window) exclude each other" >&2; return 2; fi
   [[ "${1:-}" == -- ]] && shift
   local p dir files=() dirs=()
   for p in "$@"; do   # absolute, from here; a folder is the Explorer's, a file (new or not) an editor's
@@ -438,15 +446,15 @@ cmd_open() { # [--check] [--wait] [-t] [PATH…] — open PATHs (none: the windo
   if [[ -n "$wait" ]] && { ((${#dirs[@]})) || ! ((${#files[@]})); }; then
     echo "drgnx: open --wait opens files, not folders: it returns when you are done with them (C-x #)" >&2; return 2
   fi
-  if [[ -z "$term" ]] && open_wants_terminal; then term=1; fi   # ssh, or no display: the terminal by itself
-  if [[ -n "$term" ]]; then open_terminfo_check || return 1; fi
+  # ssh, or no display: the terminal by itself, but only for a person at one (not a script, a launcher, an editor hook)
+  if [[ -z "$term" && -z "$gui" && -t 0 && -t 1 ]] && open_wants_terminal; then term=1; fi
   OPEN_LOCK=""
   trap open_unlock EXIT; trap 'exit 130' INT TERM; trap 'exit 129' HUP    # the lock never outlives this command
   open_lock
   if [[ -n "$term" ]]; then   # a frame of the daemon in this terminal: no window is made, none raised
     probe -e t >/dev/null 2>&1 || open_start || return 1
     open_unlock
-    if [[ -n "$wait" ]]; then client -t -- "${files[@]}"; return; fi
+    if [[ -n "$wait" ]]; then open_terminfo_check || return 1; client -t -- "${files[@]}"; return; fi
     client -n -e "(progn (require 'drgnx-ai) (drgnx-ai-load-keys-soon))" >/dev/null 2>&1 || true   # once per daemon, as below
     local form=""
     for p in ${files[@]+"${files[@]}"}; do form+=" (find-file \"$(elisp_string "$p")\")"; done
@@ -468,8 +476,9 @@ usage() {
   cat <<'USAGE'
 usage: drgnx PATH…             open folders and files in drgnx, like code . (docs/guide/opening.md)
        drgnx open [PATH…]      the same; no PATH: drgnx with your windows (started in the background if needed)
-       drgnx -t [PATH…]        the same in this terminal (also `drgnx open -t'); chosen by itself over SSH
-                               or when there is no display (docs/guide/opening.md)
+       drgnx -t [PATH…]        the same in this terminal (also `drgnx open -t'); chosen by itself, when you
+                               type it in a terminal, over SSH or with no display (docs/guide/opening.md)
+       drgnx --gui [PATH…]     a window, even over SSH or without a display (also `drgnx open --gui')
        drgnx open --wait FILE… open FILEs and return when you are done with them (C-x #): drgnx as $EDITOR
        drgnx open --check      start drgnx's daemon if needed, print its Emacs version, stop it if this started it
        drgnx macos-app         macOS: install drgnx.app into ~/Applications (Finder, Spotlight, Dock, Open With)
@@ -585,7 +594,7 @@ case "${1:-help}" in
         "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-fmt -f drgnx-fmt-cli -- "$@" ;;
   open) shift; cmd_open "$@" ;;
-  -t) cmd_open "$@" ;;
+  -t|--gui) cmd_open "$@" ;;
   macos-app) "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" -l drgnx-macos -f drgnx-macos-cli ;;
   help|-h|--help) usage ;;
   *) if [[ "$1" == . || "$1" == .. || "$1" == */* || -e "$1" ]]; then cmd_open "$@"; exit; fi   # drgnx PATH…

@@ -56,7 +56,8 @@ esac"
 
 (defmacro tty-bin-test--with (&rest body)
   "BODY with DIR (a temp directory, deleted afterwards), PATHDIR (the fakes), and `call' (a function: ARGS and
-optionally :env (an alist like `tty-bin-test--defaults' overriding it) → (EXIT . OUTPUT), stderr included)."
+optionally ENV (an alist like `tty-bin-test--defaults' overriding it) and PTY (non-nil: stdin and stdout are a
+terminal, as when a person types the command; else /dev/null and a pipe) → (EXIT . OUTPUT), stderr included)."
   (declare (indent 0))
   `(let* ((dir (make-temp-file "drgnx-ttybin" t))
           (pathdir (expand-file-name "path" dir)))
@@ -64,7 +65,7 @@ optionally :env (an alist like `tty-bin-test--defaults' overriding it) → (EXIT
      (make-directory (expand-file-name "config" dir))
      (tty-bin-test--fakes dir pathdir)
      (unwind-protect
-         (cl-flet ((call (args &optional env)
+         (cl-flet ((call (args &optional env pty)
                      (let* ((merged (append env (seq-remove (lambda (d) (assoc (car d) env)) tty-bin-test--defaults)))
                             (process-environment
                              (append (mapcar (lambda (e) (if (cdr e) (concat (car e) "=" (cdr e)) (car e))) merged)
@@ -74,7 +75,15 @@ optionally :env (an alist like `tty-bin-test--defaults' overriding it) → (EXIT
                                            (concat "PATH=" pathdir ":/usr/bin:/bin"))
                                      process-environment))
                             (default-directory (file-name-as-directory dir)))
-                       (with-temp-buffer (cons (apply #'call-process tty-bin-test--bin nil t nil args) (buffer-string))))))
+                       (if pty
+                           (let* ((buf (generate-new-buffer " ttybin"))
+                                  (p (make-process :name "ttybin" :buffer buf :command (cons tty-bin-test--bin args)
+                                                   :connection-type 'pty :noquery t :sentinel #'ignore)))
+                             (while (process-live-p p) (accept-process-output p 0.05))
+                             (accept-process-output p 0.1)
+                             (prog1 (cons (process-exit-status p) (with-current-buffer buf (buffer-string)))
+                               (kill-buffer buf)))
+                         (with-temp-buffer (cons (apply #'call-process tty-bin-test--bin nil t nil args) (buffer-string)))))))
            ,@body)
        (delete-directory dir t))))
 
@@ -120,7 +129,7 @@ optionally :env (an alist like `tty-bin-test--defaults' overriding it) → (EXIT
     (tty-bin-test--touch dir "running" "gui")
     (dolist (env '((("SSH_CONNECTION" . "1.2.3.4 22 5.6.7.8 22")) (("SSH_TTY" . "/dev/pts/3"))))
       (delete-file (expand-file-name "client.log" dir))
-      (should (eql 0 (car (call '("open" "dir") env))))      ; DISPLAY is set: ssh wins
+      (should (eql 0 (car (call '("open" "dir") env t))))      ; DISPLAY is set: ssh wins
       (should (member "-t" (car (last (tty-bin-test--calls dir)))))
       (should-not (seq-find (lambda (c) (member "-c" c)) (tty-bin-test--calls dir))))))
 
@@ -128,12 +137,12 @@ optionally :env (an alist like `tty-bin-test--defaults' overriding it) → (EXIT
   (skip-unless (eq system-type 'gnu/linux))
   (tty-bin-test--with
     (tty-bin-test--touch dir "running")
-    (should (eql 0 (car (call '("open" "dir") '(("DISPLAY") ("WAYLAND_DISPLAY"))))))
+    (should (eql 0 (car (call '("open" "dir") '(("DISPLAY") ("WAYLAND_DISPLAY")) t))))
     (should (member "-t" (car (last (tty-bin-test--calls dir)))))
     ;; one display of either kind is enough to stay graphical
     (delete-file (expand-file-name "client.log" dir))
     (tty-bin-test--touch dir "gui")
-    (should (eql 0 (car (call '("open" "dir") '(("DISPLAY") ("WAYLAND_DISPLAY" . "wayland-0"))))))
+    (should (eql 0 (car (call '("open" "dir") '(("DISPLAY") ("WAYLAND_DISPLAY" . "wayland-0")) t))))
     (should-not (seq-find (lambda (c) (member "-t" c)) (tty-bin-test--calls dir)))))
 
 (ert-deftest drgnx-bin/open-with-a-display-stays-graphical ()
@@ -162,6 +171,53 @@ optionally :env (an alist like `tty-bin-test--defaults' overriding it) → (EXIT
     (should-not (seq-find (lambda (c) (member "-t" c)) (tty-bin-test--calls dir)))
     ;; an unset TERM is no terminal type either
     (should (eql 1 (car (call '("-t") '(("TERM"))))))))
+
+(ert-deftest drgnx-bin/gui-takes-a-window-whatever-the-terminal ()
+  (tty-bin-test--with
+    (tty-bin-test--touch dir "running" "gui")
+    (make-directory (expand-file-name "proj" dir))
+    (dolist (args '(("open" "--gui" "proj") ("--gui" "proj")))
+      (delete-file (expand-file-name "client.log" dir))
+      ;; a person at a terminal, over SSH and with no display: still a window
+      (should (eql 0 (car (call args '(("SSH_CONNECTION" . "1.2.3.4 22 5.6.7.8 22") ("DISPLAY")) t))))
+      (should-not (seq-find (lambda (c) (member "-t" c)) (tty-bin-test--calls dir)))
+      (should (seq-find (lambda (c) (member "(drgnx-session-raise)" c)) (tty-bin-test--calls dir))))
+    ;; the two exclude each other
+    (delete-file (expand-file-name "client.log" dir))
+    (dolist (args '(("open" "-t" "--gui" "proj") ("--gui" "-t") ("open" "--gui" "-t")))
+      (let ((r (call args)))
+        (should (eql 2 (car r)))
+        (should (string-search "--gui" (cdr r)))))
+    (should-not (tty-bin-test--calls dir))))
+
+(ert-deftest drgnx-bin/without-a-terminal-the-choice-is-a-window ()
+  ;; a script, a launcher or a hook (stdin and stdout are not a terminal) over SSH or without a display gets a window
+  ;; and no terminfo question; only -t asks for the terminal then
+  (tty-bin-test--with
+    (tty-bin-test--touch dir "running" "gui" "no-terminfo")
+    (dolist (env '((("SSH_CONNECTION" . "1.2.3.4 22 5.6.7.8 22")) (("DISPLAY") ("WAYLAND_DISPLAY"))))
+      (delete-file (expand-file-name "client.log" dir))
+      (should (eql 0 (car (call '("open" "dir") env))))
+      (should-not (seq-find (lambda (c) (member "-t" c)) (tty-bin-test--calls dir)))
+      (should (seq-find (lambda (c) (member "(drgnx-session-raise)" c)) (tty-bin-test--calls dir)))
+      (should-not (file-exists-p (expand-file-name "infocmp.log" dir))))
+    (delete-file (expand-file-name "client.log" dir))
+    (should (eql 1 (car (call '("-t")))))))                    ; asked for: the terminfo check speaks
+
+(ert-deftest drgnx-bin/the-terminfo-check-waits-for-the-capable-terminal-decision ()
+  (tty-bin-test--with
+    (tty-bin-test--touch dir "running" "no-terminfo")
+    (write-region "(\"kitty\" \"--\")\n" nil (expand-file-name "capable" dir))
+    ;; the frame opens in kitty: this terminal's description does not matter
+    (should (eql 0 (car (call '("-t") '(("VTE_VERSION" . "7600") ("TERM" . "xterm-unknown"))))))
+    (let ((deadline (+ (float-time) 10)))
+      (while (and (null (tty-bin-test--calls dir "kitty.log")) (< (float-time) deadline)) (sleep-for 0.05)))
+    (should (tty-bin-test--calls dir "kitty.log"))
+    (should-not (file-exists-p (expand-file-name "infocmp.log" dir)))
+    ;; no capable terminal (the option is off): it matters, and says so
+    (delete-file (expand-file-name "capable" dir))
+    (should (eql 1 (car (call '("-t") '(("VTE_VERSION" . "7600") ("TERM" . "xterm-unknown"))))))
+    (should (file-exists-p (expand-file-name "infocmp.log" dir)))))
 
 (ert-deftest drgnx-bin/paths-with-spaces-and-quotes-reach-the-form ()
   (tty-bin-test--with
@@ -224,11 +280,13 @@ optionally :env (an alist like `tty-bin-test--defaults' overriding it) → (EXIT
   (tty-bin-test--with
     (let ((seen (expand-file-name "seen" dir)))
       (tty-bin-test--script (expand-file-name "emacs" pathdir)
-                            (format "printf '%%s\\n' \"$@\" > %s\ngrep -E '^SigIgn:' /proc/$$/status >> %s" seen seen))
-      (should (eql 0 (car (call '("test" "--tty")))))
+                            (format "printf '%%s\\n' \"$@\" > %s\necho \"ENV ${DISPLAY-unset} ${WAYLAND_DISPLAY-unset} ${SWAYSOCK-unset} $DBUS_SESSION_BUS_ADDRESS\" >> %s\ngrep -E '^SigIgn:' /proc/$$/status >> %s" seen seen seen))
+      (should (eql 0 (car (call '("test" "--tty") '(("WAYLAND_DISPLAY" . "wayland-0") ("SWAYSOCK" . "/run/sway"))))))
       (let ((lines (split-string (tty-bin-test--slurp seen) "\n" t)))
-        (should (equal (seq-take (reverse (seq-take lines (- (length lines) 1))) 3)
+        (should (equal (seq-take (reverse (seq-take lines (- (length lines) 2))) 3)
                        (list (expand-file-name "test/tty" tty-bin-test--root) "drgnx-run-ert-batch" "-f")))
+        ;; no display or compositor, a dead session bus: the tier never reaches the user's desktop
+        (should (member "ENV unset unset unset unix:path=/nonexistent/drgnx-unit-test" lines))
         ;; SIGPIPE is signal 13: bit 12 of the mask, 0x1000
         (let ((mask (string-to-number (car (last (split-string (car (last lines)))) ) 16)))
           (should (/= 0 (logand mask #x1000))))))))
@@ -254,6 +312,8 @@ optionally :env (an alist like `tty-bin-test--defaults' overriding it) → (EXIT
           (should (string-suffix-p (format " drgnx-test-tty:f%s bin/drgnx test --tty" n) (cadr lines)))
           (should (string-search "DRGNX_TEST_SELECTOR=\"x\"" (cadr lines)))))
       ;; a Fedora we have no image for is refused, and --fedora belongs to --tty
+      (should (eql 2 (car (call '("test" "--container" "--ui" "--tty") `(("DRGNX_CONTAINER" . ,(expand-file-name "fake-rt" dir)))))))
+      (should (eql 2 (car (call '("test" "--container" "--tty" "--ui") `(("DRGNX_CONTAINER" . ,(expand-file-name "fake-rt" dir)))))))
       (should (eql 2 (car (call '("test" "--container" "--tty" "--fedora" "43") `(("DRGNX_CONTAINER" . ,(expand-file-name "fake-rt" dir)))))))
       (should (eql 2 (car (call '("test" "--container" "--fedora" "44") `(("DRGNX_CONTAINER" . ,(expand-file-name "fake-rt" dir))))))))))
 

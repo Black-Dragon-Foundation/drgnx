@@ -95,6 +95,22 @@
             (should (equal (drgnx-tty-session-state-root) "/some/root"))))
       (delete-directory tmp t))))
 
+(ert-deftest drgnx-tty-session/a-private-tmp-dir-that-is-a-symlink-is-refused ()
+  ;; /tmp is shared: someone may have made the name first, as a link to a directory of their own
+  (let* ((tmp (make-temp-file "drgnx-ttylink" t))
+         (elsewhere (make-temp-file "drgnx-ttylink-target" t))
+         (temporary-file-directory (file-name-as-directory tmp)))
+    (unwind-protect
+        (progn
+          (set-file-modes elsewhere #o700)
+          (make-symbolic-link elsewhere (expand-file-name "t-link" tmp))
+          (should-error (drgnx-ui-private-tmp-dir "t-link" "it holds nothing") :type 'drgnx-ui-error)
+          ;; a plain file of that name is no directory either
+          (write-region "" nil (expand-file-name "t-file" tmp))
+          (should-error (drgnx-ui-private-tmp-dir "t-file" "it holds nothing") :type 'file-error))
+      (delete-directory tmp t)
+      (delete-directory elsewhere t))))
+
 ;;; tty-session-test.el ends here
 
 (ert-deftest drgnx-tty-session/encodes-named-keys ()
