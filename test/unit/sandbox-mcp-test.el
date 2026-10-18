@@ -6,6 +6,7 @@
 (require 'cl-lib)
 (require 'drgnx-sandbox-mcp)
 (require 'drgnx-sandbox)
+(require 'drgnx-sandbox-vc)
 (require 'drgnx-coord)
 (require 'drgnx-coord-mcp)
 (require 'drgnx-work)
@@ -276,6 +277,18 @@ after."
         (should (string-match-p (regexp-quote repo) (car r))))
       ;; and git ran neither in the other project nor in the task folder
       (should-not (seq-find (lambda (d) (not (equal d repo))) (drgnx-sandbox-mcp-test--git-ran root))))))
+
+(ert-deftest drgnx-sandbox-mcp/search-root-not-a-guarded-folder ()
+  (drgnx-sandbox-mcp-test--with
+    ;; a folder Task 9's guard lists (a snapshot's task folder) is no search root, nor is anything in it
+    (let ((guarded (concat root "/home/guarded")))
+      (make-directory (concat guarded "/sub") t)
+      (drgnx-sandbox-vc-register guarded)
+      (should-error (drgnx-sandbox-mcp-open a guarded))
+      (should-error (drgnx-sandbox-mcp-open a (concat guarded "/sub")))
+      (should-not (drgnx-agent-session-mcp-dir a))
+      ;; the project, unguarded, still opens
+      (should (drgnx-sandbox-mcp-open a repo)))))
 
 (ert-deftest drgnx-sandbox-mcp/job-hello-keeps-the-hubs-row ()
   (drgnx-sandbox-mcp-test--with

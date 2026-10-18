@@ -24,6 +24,7 @@
 (require 'drgnx-hub)
 (require 'drgnx-agents)
 (require 'drgnx-mcp-bridge)
+(require 'drgnx-sandbox-vc)
 
 (declare-function drgnx-coord-mcp-server-spec "drgnx-coord-mcp" (agent &rest props))
 (declare-function drgnx-search-mcp-server-spec "drgnx-search-mcp" (root))
@@ -75,14 +76,17 @@ it would pass 103 bytes.  Returned without a trailing slash."
 
 (defun drgnx-sandbox-mcp--search-root (s search)
   "SEARCH as the root S's search server is pinned to (a true name), or an error: it must be an existing directory
-given by name — the job's project — and never S's folder nor inside it.  The search server runs git in its root,
-and nothing outside the sandbox runs git in a task folder."
+given by name — the job's project — and never S's folder nor inside it, nor a folder the VC guard lists
+\(`drgnx-sandbox-vc-guarded-p').  The search server runs git in its root, and nothing outside the sandbox runs git
+in a task folder."
   (unless (stringp search) (error "The search root is the job's project, given by name: not %S" search))
   (let ((root (directory-file-name (file-truename (expand-file-name search))))
         (cwd (directory-file-name (file-truename (drgnx-agent-session-cwd s)))))
     (unless (file-directory-p root) (error "The search root %s is not a directory" root))
     (when (string-prefix-p (file-name-as-directory cwd) (file-name-as-directory root))
       (error "The search root %s is the session's own folder or inside it: give the job's project" root))
+    (when (drgnx-sandbox-vc-guarded-p root)
+      (error "The search root %s is a guarded job folder (no git of drgnx's runs there): give the job's project" root))
     root))
 
 (defun drgnx-sandbox-mcp-open (s &optional search)

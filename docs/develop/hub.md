@@ -171,7 +171,8 @@ A sandboxed session's agent reaches drgnx's MCP servers through a dir of its own
   path. A socket's path there must fit 103 bytes, or there is no dir.
 - **Sockets.** `(drgnx-sandbox-mcp-open S &optional SEARCH)` listens on `mcp.sock` (coordination) and, when SEARCH
   is given, on `search.sock`. SEARCH is the job's project root, given by name and spelled as its index is: a value
-  that is not a string, or a root that is S's folder or lies inside it, is an error, because the search server runs
+  that is not a string, a root that is S's folder or lies inside it, or a folder the VC guard lists
+  (`drgnx-sandbox-vc-guarded-p`, or inside one), is an error, because the search server runs
   git in its root and nothing outside the sandbox runs git in a task folder. The search server is **pinned** to that
   root (`DRGNX_SEARCH_PINNED=1`): a `path` argument outside it is refused, and one inside it searches the root, so
   no git runs where the agent points and no other project's index is read (`drgnx-search-mcp--pinned-root`). It sets
