@@ -86,10 +86,11 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
   ;; A provider that never answers leaves ai.eld's roles as they were, and the three test calls share one
   ;; budget: the step ends within about the budget, not 3 ×.  Roles that ran out of time read "not tested".
   (drgnx-ai-onboard-test--with
-    (let ((before (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld"))) (t0 (float-time)) r)
+    (let ((before (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld"))) (t0 (float-time)) r
+          (drgnx-onboard-ai-test-budget 2))
       (cl-letf (((symbol-function 'drgnx-ai-request) (lambda (&rest _) nil)))
         (setq r (drgnx-onboard--ai-found '(:interactive nil))))
-      (should (< (- (float-time) t0) 10.5))
+      (should (< (- (float-time) t0) 6))
       (should (= (nth 2 r) 0))
       (should (= (nth 3 r) 3))
       (should (string-match-p "not tested" (cadr r)))
