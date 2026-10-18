@@ -12,8 +12,8 @@
 ;; Nothing automatic does — the segment and the hook only read the process table and what the commands stored;
 ;; ssh asks its questions (host keys, passwords) only from those commands: while the module is on, TRAMP's password,
 ;; yes/no and one-time-password questions are refused unless a command of the user is running
-;; (`drgnx-lang--user-command', kept from `pre-command-hook' and `post-command-hook') or one of these commands
-;; bound `drgnx-remote-may-prompt'.  See docs/guide/remote.md.
+;; (`drgnx-lang--user-command-p': kept from `pre-command-hook' and `post-command-hook', and false in a timer, a process
+;; filter or a sentinel that fires meanwhile) or one of these commands bound `drgnx-remote-may-prompt'.  See docs/guide/remote.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -218,7 +218,8 @@ folder of it, else its home."
 
 (defun drgnx-remote--start-servers (key)
   "Start a language server in the code buffers of the connection KEY that the probe found one for."
-  (setq drgnx-lang--remote-pending nil)
+  (setq drgnx-lang--remote-pending       ; this host's starts are forgotten: its servers were just stopped
+        (seq-remove (lambda (p) (equal (file-remote-p (caar p)) key)) drgnx-lang--remote-pending))
   (dolist (b (drgnx-remote--code-buffers key))
     (drgnx-lang-start-remote-server b)))
 
@@ -256,17 +257,24 @@ servers again and start them in its code buffers.  Buffers, their unsaved change
 (defconst drgnx-remote--mode-line-entry '(:eval (drgnx-remote--mode-line)))
 
 (defconst drgnx-remote--prompt-functions
-  '(tramp-action-password tramp-action-yesno tramp-action-yn tramp-action-otp-password)
+  '(tramp-action-login tramp-action-password tramp-action-yesno tramp-action-yn tramp-action-otp-password
+                       tramp-action-show-and-confirm-message)
   "What TRAMP calls to ask the user something while it logs in.")
 
 (defun drgnx-remote--guard-prompt (ask &rest args)
   "Around advice of `drgnx-remote--prompt-functions': call ASK (with ARGS) while a command of the user is running or
 one of the Remote commands asked for it (`drgnx-remote-may-prompt'); otherwise refuse, so that a login nobody asked
 for (a timer, a sentinel, a language server) fails with an error instead of freezing Emacs on a hidden question."
-  (if (or drgnx-remote-may-prompt drgnx-lang--user-command)
+  (if (and (not inhibit-quit) (or drgnx-remote-may-prompt drgnx-lang--user-command))
       (apply ask args)
     (signal 'remote-file-error
             (list "A remote asked a question outside of a command of yours; use Reconnect or Open Remote…"))))
+
+(defun drgnx-remote--timer-without-command (run timer)
+  "Around advice of `timer-event-handler': a timer is never part of the command that happens to wait while it
+fires, whatever its body does with `inhibit-quit' (`with-local-quit')."
+  (let ((drgnx-lang--user-command nil) (drgnx-remote-may-prompt nil))
+    (funcall run timer)))
 
 (defun drgnx-remote--command-start ()
   "In `pre-command-hook': a command of the user starts."
@@ -290,6 +298,7 @@ for (a timer, a sentinel, a language server) fails with an error instead of free
   (add-hook 'pre-command-hook #'drgnx-remote--command-start)
   (add-hook 'post-command-hook #'drgnx-remote--command-end)
   (add-function :before command-error-function #'drgnx-remote--command-failed)
+  (advice-add 'timer-event-handler :around #'drgnx-remote--timer-without-command)
   (dolist (f drgnx-remote--prompt-functions) (advice-add f :around #'drgnx-remote--guard-prompt)))
 
 (defun drgnx-remote--teardown ()
@@ -298,6 +307,7 @@ for (a timer, a sentinel, a language server) fails with an error instead of free
   (remove-hook 'pre-command-hook #'drgnx-remote--command-start)
   (remove-hook 'post-command-hook #'drgnx-remote--command-end)
   (remove-function command-error-function #'drgnx-remote--command-failed)
+  (advice-remove 'timer-event-handler #'drgnx-remote--timer-without-command)
   (dolist (f drgnx-remote--prompt-functions) (advice-remove f #'drgnx-remote--guard-prompt))
   (setq drgnx-lang--user-command nil))
 

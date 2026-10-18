@@ -50,14 +50,15 @@ every server eglot knows on the host's `PATH` and remember the answer per connec
 
 - starts its server when it was found and the connection is up, but only while a command of yours runs: Open Remote…
   (for the code files already open on that host), Reconnect, or the command that visits the file (`C-x C-f`, a click
-  in the Explorer). A file that a timer, a background process or a restored session opens starts nothing, and eglot's
-  own start after the next keystroke is not used. Later files of the same project join the running server;
+  in the Explorer). A file that a timer, a background process or a restored session opens starts nothing, even when
+  it fires while one of your commands waits, and eglot's own start after the next keystroke is not used. One server
+  per project: later files of the project join the running one;
 - says once per host and language when it was not found: `No language server for python-mode on HOST: install pylsp there`;
 - does nothing when the connection was never opened with Open Remote… (a typed ssh path, say), as before.
 
 The probe is one shell call on the host for all the servers eglot knows. Install a server on the host, then Reconnect
-to look again. A server whose connection drops is not restarted by eglot (eglot would log in again on its own);
-Reconnect starts it.
+to look again. A server whose connection drops is not restarted by eglot (eglot would log in again on its own, so
+`eglot-reconnect` is refused for a remote server unless you run it yourself); Reconnect starts it.
 
 ## What is never automatic
 
@@ -65,9 +66,10 @@ TRAMP stays on for what you start: Open Remote…, Reconnect and ssh paths you t
 remote name: no timer, hook or background check, no file watching, no Git or diff decorations, no Flymake, no link or
 compile-output path, no semantic-search indexing of a remote folder, and the Explorer lists a remote folder only when
 you open or refresh it. Nothing remote asks a question from an automatic path; every ssh question comes from a command
-you ran. As a second guard, while the module is on, TRAMP's password, yes/no and one-time-code questions fail with an
-error unless a command of yours is running (a key you press, `M-x`, a click) or Open Remote… or Reconnect asked for
-it; a login started by a timer or a process sentinel gets an error message, never a hidden question.
+you ran. As a second guard, while the module is on, TRAMP's login, password, yes/no, one-time-code and confirm questions fail
+with an error unless the code asking is part of a command of yours (a key you press, `M-x`, a click) or Open Remote…
+or Reconnect asked for it. A timer, a process filter or a sentinel is never part of your command, even when it fires
+while the command waits: its login gets an error message, never a hidden question.
 
 ## Limits
 

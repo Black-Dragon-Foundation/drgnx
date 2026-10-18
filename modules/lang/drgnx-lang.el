@@ -65,7 +65,8 @@
 (declare-function tramp-dissect-file-name "tramp")
 (declare-function tramp-get-connection-process "tramp")
 (declare-function eglot--guess-contact "eglot")
-(declare-function eglot--connect "eglot")
+(declare-function eglot "eglot")
+(declare-function eglot-current-server "eglot")
 (declare-function eglot--project "eglot")
 (declare-function project-root "project")
 (declare-function eieio-oref "eieio-core")
@@ -83,9 +84,14 @@
 second buffer of the same project must not start another meanwhile.")
 
 (defvar drgnx-lang--user-command nil
-  "Non-nil while a command the user ran is executing: t, then `started' once a server was started in it (one per
-command).  tools/remote keeps it from `pre-command-hook' and `post-command-hook'; nil in a timer, a process filter or
-sentinel and a hook that runs between commands, where nothing may reach a remote.")
+  "Non-nil while a command the user ran is executing.  tools/remote keeps it from `pre-command-hook' and
+`post-command-hook'; nil in a hook that runs between commands.  A timer, a process filter or a sentinel that runs
+while the command waits sees it set, which is why `drgnx-lang--user-command-p' is what to ask.")
+
+(defun drgnx-lang--user-command-p ()
+  "Is the code running right now part of a command the user ran?  Not a timer, a process filter or a sentinel that
+fires while one waits: C binds `inhibit-quit' for filters and sentinels, and the timer machinery for timers."
+  (and drgnx-lang--user-command (not inhibit-quit)))
 
 (defun drgnx-lang--names (contact)
   "The program names CONTACT may run, in the order it tries them; a function (`eglot-alternatives') is asked with
@@ -101,7 +107,7 @@ sentinel and a hook that runs between commands, where nothing may reach a remote
   (when names
     (with-temp-buffer
       (process-file "sh" nil t nil "-c"
-                    (concat "for p in " (mapconcat #'shell-quote-argument names " ")
+                    (concat "for p in " (mapconcat (lambda (n) (shell-quote-argument n t)) names " ")
                             "; do command -v \"$p\" >/dev/null 2>&1 && echo \"$p\"; done"))
       (split-string (buffer-string) "\n" t))))
 
@@ -150,12 +156,14 @@ commands only (Open Remote…, Reconnect, a command that visits the file): it us
                 ((drgnx-lang--remote-live-p file)))
       (require 'eglot)
       (condition-case err
-          (let* ((contact (eglot--guess-contact))
-                 (key (cons (project-root (nth 1 contact)) (nth 3 contact))))
-            (unless (drgnx-lang--remote-pending-p key)
-              (push (cons key (float-time)) drgnx-lang--remote-pending)
-              (apply #'eglot--connect contact)
-              t))
+          ;; a server of the project that has answered already manages this buffer too, once the mode is set up
+          (unless (eglot-current-server)
+            (let* ((contact (eglot--guess-contact))
+                   (key (cons (project-root (nth 1 contact)) (nth 3 contact))))
+              (unless (drgnx-lang--remote-pending-p key)
+                (push (cons key (float-time)) drgnx-lang--remote-pending)
+                (apply #'eglot contact)
+                t)))
         (error (message "No language server started for %s: %s" (file-name-nondirectory file) (error-message-string err))
                nil)))))
 
@@ -165,18 +173,27 @@ server process's sentinel, and TRAMP would log in again there, from nowhere.  (T
 first seconds, or t; a buffer-local `eglot-autoreconnect' does not reach it.)"
   (when (ignore-errors (file-remote-p (project-root (eglot--project server))))
     (with-no-warnings                   ; eglot's private slot: the compiler checks it against whichever eglot it sees
-      (let ((timer (eieio-oref server 'inhibit-autoreconnect)))
-        (when (timerp timer) (cancel-timer timer)))
-      (eieio-oset server 'inhibit-autoreconnect t))))
+      (when (slot-exists-p server 'inhibit-autoreconnect)
+        (let ((timer (eieio-oref server 'inhibit-autoreconnect)))
+          (when (timerp timer) (cancel-timer timer)))
+        (eieio-oset server 'inhibit-autoreconnect t)))))
+
+(defun drgnx-lang--guard-reconnect (reconnect server &rest args)
+  "Around advice of `eglot-reconnect': call RECONNECT for SERVER and ARGS, except for a remote server outside a
+command of the user's (eglot calls it from the server process's sentinel, and TRAMP would log in again there)."
+  (if (or (drgnx-lang--user-command-p)
+          (not (ignore-errors (file-remote-p (project-root (eglot--project server))))))
+      (apply reconnect server args)
+    (message "Not reconnecting the language server of %s by itself: use Reconnect"
+             (ignore-errors (file-remote-p (project-root (eglot--project server)) 'host)))
+    nil))
 
 (defun drgnx-lang--maybe-eglot-remote (file)
   "The code buffer of the remote FILE: a server when the probe found one here and a command of the user is running
-(`drgnx-lang--user-command'; one per command); a one-time hint when the probe found none; nothing otherwise."
+(`drgnx-lang--user-command-p'; one per project); a one-time hint when the probe found none; nothing otherwise."
   (when-let* ((entries (drgnx-lang--remote-entries file)))
     (cond ((seq-some #'cdr entries)
-           (when (eq drgnx-lang--user-command t)
-             (setq drgnx-lang--user-command 'started)
-             (drgnx-lang-start-remote-server)))
+           (when (drgnx-lang--user-command-p) (drgnx-lang-start-remote-server)))
           ((not (member (cons (file-remote-p file) major-mode) drgnx-lang--remote-hinted))
            (push (cons (file-remote-p file) major-mode) drgnx-lang--remote-hinted)
            (message "No language server for %s on %s: install %s there" major-mode (file-remote-p file 'host)
@@ -224,7 +241,8 @@ is set non-empty (headless test sessions).  A remote file only looks at what Ope
                        (drgnx-lang-remap-modes)
                        (add-hook 'prog-mode-hook #'drgnx-lang--maybe-eglot)
                        (with-eval-after-load 'eglot
-                         (add-hook 'eglot-connect-hook #'drgnx-lang--no-remote-autoreconnect))
+                         (add-hook 'eglot-connect-hook #'drgnx-lang--no-remote-autoreconnect)
+                         (advice-add 'eglot-reconnect :around #'drgnx-lang--guard-reconnect))
                        (setq xref-prompt-for-identifier nil
                              eglot-sync-connect nil                 ; a slow server never blocks opening the file
                              eglot-autoshutdown t)                  ; a server goes with its project's last buffer

@@ -182,8 +182,8 @@ choice of two nobody has."
           (let ((drgnx-lang--user-command t))                         ; a command of the user is running
             (drgnx-lang--maybe-eglot)
             (should (= connects 1))
-            (should (eq drgnx-lang--user-command 'started))
-            (drgnx-lang--maybe-eglot)                                 ; one start per command
+            (should (eq drgnx-lang--user-command t))                  ; a start does not use the command up
+            (drgnx-lang--maybe-eglot)                                 ; the same project again: no second server
             (should (= connects 1)))
           (drgnx-remote-test--lose root)                              ; the connection is lost: even a command waits
           (setq drgnx-lang--remote-pending nil)
@@ -452,7 +452,8 @@ choice of two nobody has."
 (ert-deftest drgnx-remote/the-module-puts-everything-back ()
   (let ((global-mode-string nil) (pre pre-command-hook) (post post-command-hook) (err command-error-function)
         (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-        (actions '(tramp-action-password tramp-action-yesno tramp-action-yn tramp-action-otp-password)))
+        (actions '(tramp-action-login tramp-action-password tramp-action-yesno tramp-action-yn tramp-action-otp-password
+                                      tramp-action-show-and-confirm-message)))
     (unwind-protect
         (progn
           (drgnx-remote--setup)
@@ -460,13 +461,108 @@ choice of two nobody has."
           (should (= 1 (length global-mode-string)))
           (should (memq #'drgnx-remote--command-start pre-command-hook))
           (should (memq #'drgnx-remote--command-end post-command-hook))
-          (dolist (a actions) (should (advice-member-p #'drgnx-remote--guard-prompt a))))
+          (dolist (a actions) (should (advice-member-p #'drgnx-remote--guard-prompt a)))
+          (should (advice-member-p #'drgnx-remote--timer-without-command 'timer-event-handler)))
       (drgnx-remote--teardown))
     (should-not global-mode-string)
     (should (equal pre-command-hook pre))
     (should (equal post-command-hook post))
     (should (equal command-error-function err))
+    (should-not (advice-member-p #'drgnx-remote--timer-without-command 'timer-event-handler))
     (dolist (a actions) (should-not (advice-member-p #'drgnx-remote--guard-prompt a)))))
+
+;;;; A timer, a filter or a sentinel is not a command of the user's
+
+(ert-deftest drgnx-remote/a-timer-a-filter-and-a-sentinel-get-no-command ()
+  ;; the flag is set (a command waits, say in sit-for) while they run: C binds inhibit-quit for filters and
+  ;; sentinels, the timer machinery for timers, and a timer body may undo that with with-local-quit
+  (drgnx-remote-test--with
+    (let* ((root (drgnx-remote-test--root dir)) (connects 0) (results nil) (hooks nil)
+           (b (drgnx-remote-test--code-buffer (concat root "app.py")))
+           (try (lambda () (push (condition-case nil (drgnx-remote--guard-prompt (lambda (&rest _) 'asked) 1)
+                                   (remote-file-error 'refused))
+                                 results)
+                  (with-current-buffer b (drgnx-lang--maybe-eglot))))
+           (global-mode-string nil) (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
+      (drgnx-lang-probe-remote root)
+      (cl-letf (((symbol-function 'eglot--connect) (lambda (&rest _) (cl-incf connects))))
+        (unwind-protect
+            (progn
+              (drgnx-remote--setup)
+              (let ((drgnx-lang--user-command t) (drgnx-remote-may-prompt t))   ; a command is waiting
+                (run-at-time 0.05 nil try)
+                (run-at-time 0.05 nil (lambda () (with-local-quit (funcall try))))
+                (let ((p (make-process :name "drgnx-test-filter" :command '("sh" "-c" "echo hi") :noquery t
+                                       :filter (lambda (_p _s) (funcall try)) :sentinel #'ignore)))
+                  (while (process-live-p p) (accept-process-output p 0.1)))
+                (let ((p (make-process :name "drgnx-test-sentinel" :command '("sh" "-c" "true") :noquery t
+                                       :sentinel (lambda (&rest _) (funcall try)))))
+                  (while (process-live-p p) (accept-process-output p 0.1)))
+                (accept-process-output nil 0.4)
+                (should (equal results '(refused refused refused refused)))
+                (should (= connects 0))
+                (setq results nil)
+                (funcall try)                                            ; the command itself
+                (should (equal results '(asked)))
+                (should (= connects 1))))
+          (drgnx-remote--teardown))))))
+
+(ert-deftest drgnx-remote/a-second-file-of-the-project-joins-the-running-server ()
+  (drgnx-remote-test--with
+    (let* ((root (drgnx-remote-test--root dir)) (connects 0) (prog-mode-hook (list #'drgnx-lang--maybe-eglot))
+           (eglot-sync-connect nil) (python-mode-hook nil)
+           (eglot-connect-hook (cons #'drgnx-lang--no-remote-autoreconnect eglot-connect-hook)))
+      (dolist (n '("a.py" "b.py")) (with-temp-file (expand-file-name n (concat dir "src")) (insert "x = 1\n")))
+      (drgnx-lang-probe-remote root)
+      (advice-add 'eglot--connect :before (lambda (&rest _) (cl-incf connects)) '((name . drgnx-remote-test)))
+      (unwind-protect
+          (let ((drgnx-lang--user-command t))
+            (with-current-buffer (find-file-noselect (concat root "a.py"))
+              (with-timeout (15 (error "no server: %S" messages))
+                (while (not (eglot-current-server)) (accept-process-output nil 0.1))))
+            (should (= connects 1))
+            (setq drgnx-lang--remote-pending nil)                       ; even without the memory of the first start
+            (with-current-buffer (find-file-noselect (concat root "b.py"))
+              (should (= connects 1))
+              (should eglot--managed-mode)))
+        (advice-remove 'eglot--connect 'drgnx-remote-test)))))
+
+(ert-deftest drgnx-remote/opening-forgets-only-its-own-hosts-starts ()
+  (drgnx-remote-test--with
+    (let ((root (drgnx-remote-test--root dir)) (other (cons (cons "/ssh:other:/srv/p/" '("x")) 1.0e+INF)))
+      (setq drgnx-lang--remote-pending (list other (cons (cons (concat root "p/") '("y")) 1.0e+INF)))
+      (drgnx-remote--start-servers (file-remote-p root))
+      (should (equal drgnx-lang--remote-pending (list other))))))
+
+;;;; eglot's own reconnect
+
+(ert-deftest drgnx-remote/eglot-does-not-reconnect-a-remote-server-outside-a-command ()
+  (let ((calls nil) (remote nil))
+    (cl-letf (((symbol-function 'eglot--project) (lambda (_) (if remote '(transient . "/ssh:h:/p/") '(transient . "/tmp/"))))
+              ((symbol-function 'project-root) (lambda (p) (cdr p))))
+      (let ((reconnect (lambda (server &rest _) (push server calls) 'reconnected)))
+        (let ((drgnx-lang--user-command nil))
+          (setq remote nil)
+          (should (eq (drgnx-lang--guard-reconnect reconnect 'local) 'reconnected))   ; a local server: as always
+          (setq remote t)
+          (should-not (drgnx-lang--guard-reconnect reconnect 'remote))              ; a remote one: refused, said
+          (should (equal calls '(local))))
+        (let ((drgnx-lang--user-command t))                                        ; M-x eglot-reconnect: allowed
+          (should (eq (drgnx-lang--guard-reconnect reconnect 'remote) 'reconnected)))))))
+
+(ert-deftest drgnx-remote/the-lang-module-wires-the-remote-guards-into-eglot ()
+  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
+        (eglot-connect-hook eglot-connect-hook) (prog-mode-hook prog-mode-hook)
+        (was (advice-member-p #'drgnx-lang--guard-reconnect 'eglot-reconnect)))
+    (unwind-protect
+        (progn
+          (remove-hook 'eglot-connect-hook #'drgnx-lang--no-remote-autoreconnect)
+          (advice-remove 'eglot-reconnect #'drgnx-lang--guard-reconnect)
+          (funcall (plist-get (alist-get 'lang/eglot drgnx-modules--table) :setup))
+          (should (memq #'drgnx-lang--no-remote-autoreconnect eglot-connect-hook))
+          (should (advice-member-p #'drgnx-lang--guard-reconnect 'eglot-reconnect)))
+      (unless was (advice-remove 'eglot-reconnect #'drgnx-lang--guard-reconnect))
+      (remove-hook 'eglot-connect-hook #'drgnx-lang--no-remote-autoreconnect))))
 
 ;;;; The fixture
 
