@@ -149,8 +149,10 @@ the hub's socket (its fallback place when there is no runtime dir).  True names.
 (defun drgnx-sandbox--context ()
   "What validation compares paths with, as true names:
   :never ((PATH . WHAT)…)   no bind may be one of these or hold one;
-  :closed ((DIR . WHAT)…)   …nor be inside one of these, unless strictly inside an :open dir;
-  :open (DIR…)              the private homes' dir in the state dir;
+  :closed ((DIR . WHAT)…)   …nor be inside one of these, unless inside a job's dir of an :open dir;
+  :open (DIR…)              <state>/sandbox/: only what is inside its ID/ dirs (the private homes ID/home-N) is
+                            open, never the dir itself nor what sits directly in it (folders.eld, the VC guard's
+                            registry);
   :sessions (DIR…)          `drgnx-sandbox-sessions-dirs': `:run' alone may be a dir directly in one;
   :path (DIR…)              `exec-path': no read-write bind may be one of these or hold one."
   (let* ((uid (user-uid))
@@ -190,6 +192,13 @@ the hub's socket (its fallback place when there is no runtime dir).  True names.
          (cl-some (lambda (s) (eq t (compare-strings parent nil nil s nil nil (eq system-type 'darwin))))
                   (plist-get ctx :sessions)))))
 
+(defun drgnx-sandbox--in-job-dir-p (ctx path)
+  "Is PATH inside a job's dir of one of CTX's :open dirs: OPEN/ID/…, never OPEN/ID itself nor OPEN/FILE?"
+  (cl-some (lambda (o)
+             (and (drgnx-sandbox--under-p path o)
+                  (string-search "/" (substring path (length (file-name-as-directory o))))))
+           (plist-get ctx :open)))
+
 (defun drgnx-sandbox--refuse (fmt &rest args)
   "End `drgnx-sandbox-validate' with the reason (`format' FMT ARGS)."
   (throw 'drgnx-sandbox--refused (apply #'format fmt args)))
@@ -207,16 +216,16 @@ own true name."
 
 (defun drgnx-sandbox--check-source (ctx key path &optional must-exist writable)
   "Refuse binding PATH (of spec KEY) from outside: never one of CTX's :never paths nor a parent of one; nothing
-inside a :closed dir but inside an :open one — except that `:run' is a session's own dir.  MUST-EXIST: refuse it
-when it is not there.  WRITABLE (a read-write bind): refuse it when it is or holds a dir of `exec-path'."
+inside a :closed dir but inside a job's dir of an :open one (`drgnx-sandbox--in-job-dir-p') — except that `:run' is
+a session's own dir.  MUST-EXIST: refuse it when it is not there.  WRITABLE (a read-write bind): refuse it when it is
+or holds a dir of `exec-path'."
   (drgnx-sandbox--check-path key path)
   (pcase-dolist (`(,dir . ,what) (plist-get ctx :never))
     (when (drgnx-sandbox--within-p dir path)
       (drgnx-sandbox--refuse "%s: %s would expose %s (%s)" key path what dir)))
   (unless (and (eq key :run) (drgnx-sandbox--session-dir-p ctx path))
     (pcase-dolist (`(,dir . ,what) (plist-get ctx :closed))
-      (when (and (drgnx-sandbox--within-p path dir)
-                 (not (cl-some (lambda (o) (drgnx-sandbox--under-p path o)) (plist-get ctx :open))))
+      (when (and (drgnx-sandbox--within-p path dir) (not (drgnx-sandbox--in-job-dir-p ctx path)))
         (drgnx-sandbox--refuse "%s: %s is inside %s (%s)" key path what dir))))
   (when writable
     (dolist (dir (plist-get ctx :path))
@@ -262,7 +271,7 @@ when it is not there.  WRITABLE (a read-write bind): refuse it when it is or hol
   or is not its own true name (a link, or one swapped in since `drgnx-sandbox-spec' resolved it);
 - binding from outside (`:read', `:write', `:binds', `:home', `:run', `:tmp') $HOME, the checkout, the ssh agent's
   or the D-Bus socket, or any parent of them; and anything in or above /run/user, $XDG_RUNTIME_DIR, the hub's socket
-  dirs, drgnx's data, config and state dirs (but the private homes, <state>/sandbox/…), /proc, /sys, /dev, the X11
+  dirs, drgnx's data, config and state dirs (but inside a job's dir, <state>/sandbox/ID/…), /proc, /sys, /dev, the X11
   and ICE socket dirs or the Emacs server's /tmp/emacsUID — but `:run', one session's own dir;
 - a read-write bind (`:write', `:binds' rw, `:home', `:tmp') of a dir of `exec-path' or a parent of one: the hub
   would run what the sandbox put there;

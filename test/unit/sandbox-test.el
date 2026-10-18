@@ -39,6 +39,7 @@ resolver file, and bwrap and sandbox-exec are /usr/bin's."
                             (concat root "/ssh-x") (concat root "/dbus")))
              (make-directory d t))
            (write-region "" nil (concat root "/data/work.db") nil 'silent)
+           (write-region "()" nil (concat root "/state/drgnx/sandbox/folders.eld") nil 'silent)
            (write-region "" nil (concat home "/.config/drgnx/agents.eld") nil 'silent)
            (write-region "token" nil secret nil 'silent)
            (write-region "x" nil (concat run "/bus") nil 'silent)
@@ -115,6 +116,7 @@ session's dir but as `:run'.  An accepted spec's argv binds none of them."
                            "//" "///" (concat "/" home) "//run/user" (concat "//" run)
                            (concat root "/data/work.db") (concat home "/.config/drgnx/agents.eld")
                            (concat root "/state/drgnx/jobs") (concat root "/state/drgnx/sandbox")
+                           (concat root "/state/drgnx/sandbox/folders.eld")
                            "/proc" "/proc/1" "/sys" "/sys/kernel" "/dev" "/dev/shm"
                            (format "/tmp/emacs%d" (user-uid)) ssh (concat root "/ssh-x") (concat root "/dbus/bus")
                            sid (concat sid "/out") (concat run "/drgnx/s/8"))))
@@ -140,6 +142,27 @@ session's dir but as `:run'.  An accepted spec's argv binds none of them."
         (when (drgnx-sandbox-test--within-p src run)
           (should (string-prefix-p (concat run "/drgnx/s/") src))))
       (should-not (cl-find-if (lambda (a) (string-match-p "\\`/run/user" a)) argv)))))
+
+(ert-deftest drgnx-sandbox/state-open-only-inside-a-job-dir ()
+  "In <state>/sandbox/ only what is inside a job's own dir (ID/, the private homes ID/home-N) may be bound: never
+the dir itself nor a file directly in it, such as the VC guard's registry folders.eld, and no `..' way out."
+  (drgnx-sandbox-test--with
+    (let* ((sb (concat root "/state/drgnx/sandbox")) (reg (concat sb "/folders.eld")))
+      (write-region "()" nil reg nil 'silent)
+      (dolist (spec (list (drgnx-sandbox-spec :read (list reg)) (drgnx-sandbox-spec :write (list reg))
+                          (drgnx-sandbox-spec :binds (list (list 'rw reg "/x")))
+                          (drgnx-sandbox-spec :binds (list (list 'ro reg "/x")))
+                          (drgnx-sandbox-spec :read (list sb)) (drgnx-sandbox-spec :write (list sb))
+                          (drgnx-sandbox-spec :home (cons sb home))
+                          (drgnx-sandbox-spec :write (list (concat sb "/1/../folders.eld")))
+                          (drgnx-sandbox-spec :home (cons (concat phome "/../../folders.eld") home))
+                          `(:write (,(concat sb "/1/../folders.eld")))))
+        (ert-info ((format "%S" spec)) (drgnx-sandbox-test--refused spec)))
+      ;; a job's private home and what is in it are fine
+      (make-directory (concat phome "/cache"))
+      (should-not (drgnx-sandbox-validate (drgnx-sandbox-spec :home (cons phome home))))
+      (should-not (drgnx-sandbox-validate (drgnx-sandbox-spec :write (list (concat phome "/cache"))
+                                                              :read (list (concat sb "/1/home-1"))))))))
 
 (ert-deftest drgnx-sandbox/write-of-home-refused ()
   (drgnx-sandbox-test--with

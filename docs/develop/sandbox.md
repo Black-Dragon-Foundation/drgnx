@@ -70,8 +70,10 @@ trailing slash), so a link planted in the task folder cannot widen a bind. `:net
   socket is in it, …). Read-only counts too: a read of `~` is every key in it.
 - **Anything in or above a closed directory:** `/run/user`, `$XDG_RUNTIME_DIR`, the hub's socket directory (all its
   possible places), drgnx's data directory (`work.db`), configuration and state directories, `/proc`, `/sys`, `/dev`,
-  `/tmp/.X11-unix`, `/tmp/.ICE-unix` and the Emacs server's `/tmp/emacsUID`. Inside the state directory only the
-  private homes (`<state>/sandbox/…`, strictly inside) may be bound; never other durable jobs (`<state>/jobs`).
+  `/tmp/.X11-unix`, `/tmp/.ICE-unix` and the Emacs server's `/tmp/emacsUID`. Inside the state directory only what
+  is inside a job's own directory, `<state>/sandbox/ID/…` (the private homes `ID/home-N`), may be bound. Never
+  `<state>/sandbox/` itself nor a file directly in it, such as `folders.eld`, the registry that keeps the user's git
+  tools out of agent-owned folders; never other durable jobs (`<state>/jobs`).
 - **Session directories:** `:run` alone may be one, and only one session's: a directory directly in
   `$XDG_RUNTIME_DIR/drgnx/s/` (or in `s/` beside the hub's socket where there is no runtime dir:
   `drgnx-sandbox-sessions-dirs`). Nothing else may bind from any session's directory, its own included: not
