@@ -151,23 +151,16 @@ LLM answering SPEC; `o' found running."
        (drgnx-ai-dismiss)
        (should (eq (key-binding (kbd "C-g")) 'keyboard-quit))))))
 
-(ert-deftest drgnx-ai-ghost/the-pause-asks-nothing-in-evil-s-normal-state ()
-  ;; evil is not loaded here: its variables are set buffer-locally by hand
+(ert-deftest drgnx-ai-ghost/the-pause-asks-nothing-while-an-inhibit-function-says-so ()
+  ;; a modal engine's function (evil's normal and visual state: test/unit/isolated/modal-ai-isolated.el)
   (drgnx-ai-ghost-test--with '((:path "/api/generate" :body "{\"response\":\"(message name)\"}"))
-    (setq-local evil-local-mode t)
-    (setq-local evil-state 'normal)
-    (drgnx-ai-ghost--trigger)
-    (should-not drgnx-ai-ghost--request)
-    (setq-local evil-state 'visual)
-    (drgnx-ai-ghost--trigger)
-    (should-not drgnx-ai-ghost--request)
-    (setq-local evil-state 'insert)                                    ; typing: it asks
-    (drgnx-ai-ghost--trigger)
-    (should (drgnx-ai-ghost-test--wait (lambda () (drgnx-ai-ghost-text))))
-    (drgnx-ai-ghost--clear)
-    (setq-local evil-state 'emacs)
-    (drgnx-ai-ghost--trigger)
-    (should (drgnx-ai-ghost-test--wait (lambda () (drgnx-ai-ghost-text))))))
+    (let ((typing nil))
+      (add-hook 'drgnx-ai-ghost-inhibit-functions (lambda () (not typing)) nil t)
+      (drgnx-ai-ghost--trigger)
+      (should-not drgnx-ai-ghost--request)
+      (setq typing t)                                                  ; typing: it asks
+      (drgnx-ai-ghost--trigger)
+      (should (drgnx-ai-ghost-test--wait (lambda () (drgnx-ai-ghost-text)))))))
 
 (ert-deftest drgnx-ai-ghost/revert-under-suggestion-tab-indents ()
   ;; a revert, an agent or a process changes the buffer while a suggestion shows: no command ran, so nothing cleared it

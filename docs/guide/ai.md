@@ -95,8 +95,13 @@ inserting it into changed text; Tab then indents as usual.
 | `C-g` | dismiss it | the usual (cancel) |
 
 Escape is not bound while a suggestion shows, so `Esc x` still works as `M-x`; any other key or command also drops
-the suggestion. Under the Vim profile (evil), nothing is asked in normal or visual state, only while you type
-(insert state, or Emacs state).
+the suggestion.
+
+**Under Vim keys** (evil), suggestions come only while you type: in insert state (and Emacs state); moving around in
+normal or visual state never asks. One `Esc` in insert state does both — it drops the suggestion and goes back to normal
+state, leaving the buffer as it was; `Tab` in insert state accepts it and you stay in insert state. A modal engine
+says when not to ask through `drgnx-ai-ghost-inhibit-functions` (an abnormal hook: any function that returns non-nil
+stops the question); with VS Code or Emacs keys it is empty and ghost text asks as it always did.
 
 **Accept Suggestion Line** and **Toggle AI Completion** are in the palette. With no `complete` provider running,
 nothing is asked, and drgnx says so once; it looks for running providers again at most once a minute.
@@ -112,6 +117,8 @@ nothing is asked, and drgnx says so once; it looks for running providers again a
 
 **Edit with AI…** rewrites the selected region, or the defun at point when nothing is selected, as you say. Keys:
 VS Code `C-k C-e` (⌘K ⌘E on a Mac), Emacs `C-c e`, Vim `SPC a e`; never `C-i`, which is Tab in a terminal. It asks the `edit` role.
+Under Vim keys the selection is the visual one, as Vim's operators take it: `V` and `j` select whole lines, and the
+edit covers both lines with the last newline; in visual (`v`) the characters under both ends are in it.
 The answer opens as a diff against the buffer as it is now (a code fence the model adds is dropped), and nothing
 changes until you decide:
 
@@ -245,7 +252,8 @@ the keys they need in their environment too — never in a command line or a fil
 
 - `test/unit/ai-test.el` (providers, roles, keys, agent environments), `test/unit/ai-client-test.el` (requests,
   fallback with every reason, cancel, probes, the doctor's check), `test/unit/ai-ghost-test.el` (ghost text, accept,
-  the Tab arbiter), `test/unit/ai-edit-test.el` (the review, hunk by hunk), `test/unit/ai-ask-test.el` (Ask, Choose,
+  the Tab arbiter), `test/unit/ai-edit-test.el` (the review, hunk by hunk), `test/unit/modal-ai-test.el` (ghost text
+  and Edit with AI's selection under Vim keys, with the real evil in its own Emacs, and unchanged without them), `test/unit/ai-ask-test.el` (Ask, Choose,
   gptel), `test/unit/ai-onboard-test.el` (the onboarding step; setting up Ollama, LM Studio and OpenRouter with fake
   `brew`, `ollama`, `lms`, `sysctl` and `security`; the room on a Mac and the models for it).
 - `test/live/drgnx-ai-test.el` — in a GUI session: typing, the suggestion as ghost text, Tab takes it; an inline

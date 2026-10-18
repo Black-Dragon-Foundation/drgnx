@@ -9,7 +9,8 @@
 ;; it.  While it runs: panels and forms are in emacs state and inputs (shells, commit messages) in insert
 ;; state; every state change goes to `drgnx-modal-set-state' (leader and panel maps, the mode-line indicator);
 ;; the cursor has a shape per state, and in a panel stays what the panel set (none, mostly); in a terminal
-;; Emacs 31.1 follows the shape (`xterm-update-cursor'); the built-in which-key shows the leader's keys.
+;; Emacs 31.1 follows the shape (`xterm-update-cursor'); the built-in which-key shows the leader's keys; AI ghost
+;; text is asked for only in insert state, and the visual selection is what Edit with AI rewrites.
 ;; Toggle Modal Editing turns the engine off and on for this session.  See docs/guide/keys.md ("Vim keys").
 
 ;;; Code:
@@ -426,6 +427,30 @@ something else by now (the user's own `evil-ex-define-cmd')."
   (pcase-dolist (`(,evil . ,ours) drgnx-evil--advice-pairs)
     (if on (advice-add evil :around ours) (advice-remove evil ours))))
 
+;;;; AI ghost text and the selection
+
+(defvar drgnx-ai-ghost-inhibit-functions)
+(declare-function evil-visual-state-p "evil-states")
+(declare-function evil-visual-range "evil-states")
+
+(defun drgnx-evil--ghost-inhibit ()
+  "`drgnx-ai-ghost-inhibit-functions': no suggestion is asked for in a buffer evil drives unless it types (insert
+state, or emacs state where Emacs' keys type).  Called once per pause; reads only the buffer's state."
+  (and (bound-and-true-p evil-local-mode) (not (memq evil-state '(insert emacs)))))
+
+(defun drgnx-evil--selection ()
+  "`drgnx-modal-selection-function': in visual state, the selection as evil's operators take it, (BEG . END):
+whole lines with the last newline in visual line, the characters under both ends in visual; nil otherwise."
+  (when (and (bound-and-true-p evil-local-mode) (evil-visual-state-p))
+    (let ((range (evil-visual-range))) (cons (car range) (cadr range)))))
+
+(defun drgnx-evil--ai (on)
+  "ON: ghost text asks only while typing, and \"the selection\" (Edit with AI) is the visual one.  Nil: as before."
+  (if on
+      (progn (add-hook 'drgnx-ai-ghost-inhibit-functions #'drgnx-evil--ghost-inhibit)
+             (drgnx-evil--save 'drgnx-modal-selection-function #'drgnx-evil--selection))
+    (remove-hook 'drgnx-ai-ghost-inhibit-functions #'drgnx-evil--ghost-inhibit)))
+
 ;;;; State into the core
 
 (defun drgnx-evil--state ()
@@ -541,6 +566,7 @@ far is undone and the error is signalled again."
   (drgnx-evil--unimpaired t)
   (drgnx-evil--ex-routes t)
   (drgnx-evil--advice t)
+  (drgnx-evil--ai t)
   (drgnx-evil--insert-bindings (not (drgnx-modal-mixed-p (drgnx-modal-current-layers))))
   (add-hook 'drgnx-modal-sync-functions #'drgnx-evil--insert-for-layers)
   (eval-after-load 'multiple-cursors-core #'drgnx-evil--mc-hooks-on)
@@ -567,6 +593,7 @@ far is undone and the error is signalled again."
   (drgnx-evil--mc-hooks nil)
   (drgnx-evil--unimpaired nil)
   (drgnx-evil--advice nil)
+  (drgnx-evil--ai nil)                  ; the selection function goes back with the other variables (restore)
   (when (boundp 'evil-ex-commands) (drgnx-evil--ex-routes nil))
   (dolist (cell drgnx-evil--mode-lists) (remove-variable-watcher (car cell) #'drgnx-evil--watch))
   (dolist (hook drgnx-evil--entry-hooks) (remove-hook hook #'drgnx-evil--sync))
