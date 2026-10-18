@@ -111,6 +111,8 @@ VS Code or Emacs keys). It runs [evil](https://github.com/emacs-evil/evil) as th
 - **Your settings win.** The module sets evil's defaults (`evil-undo-system` `undo-redo`, `evil-want-C-u-scroll`,
   `evil-search-module` `evil-search`, no evil in the minibuffer) before your `config.el`, so your `setopt` is last. A
   cursor variable you set (`evil-normal-state-cursor` …) is kept.
+- **AI ghost text** shows in insert state only; one `Esc` drops a suggestion and leaves insert state, `Tab` takes it,
+  and Edit with AI (`SPC a e`) rewrites the visual selection ([ai.md](ai.md)).
 - **Caps Lock as Esc** is the operating system's job (a keyboard setting), not drgnx's.
 
 ### Leader keys
