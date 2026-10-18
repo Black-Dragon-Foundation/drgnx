@@ -150,7 +150,8 @@ Keychain and keyring are never reached."
       (drgnx-ai-test--with-fake-store (nth 0 case) bin log
         (let ((stored nil) (seen nil) (noninteractive nil))
           (puthash 'openrouter "stale" drgnx-ai--keys)
-          (cl-letf (((symbol-function 'auth-source-search)       ; the secret store: answers only to its own source and host
+          (cl-letf (((symbol-function 'drgnx-ai--secrets-usable-p) (lambda () t))   ; a Secret Service, not this machine's
+                    ((symbol-function 'auth-source-search)       ; the secret store: answers only to its own source and host
                      (lambda (&rest spec)
                        (push auth-sources seen)
                        (and (member (nth 1 case) auth-sources) (equal (plist-get spec :host) "openrouter.ai")

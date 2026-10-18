@@ -819,6 +819,11 @@ The commands of modules that need no installed package are in it, the later stag
   ;; The macOS work changes nothing on Linux but the keys of the commands it added — and the views
   ;; that took C-S-e, C-S-f, C-S-h and F2 (see `drgnx-keys/views-took-their-keys').
   (let* ((new '(view-explorer view-search replace-in-files rename-symbol   ; M12a's views took four of the keys
+                              ;; the later stages' modules from M11c-1: replace, layouts, browser, shortcuts
+                              replace-in-file replace-all replace-this replace-next replace-prev replace-bar-close
+                              layout-next browser-go keyboard-shortcuts shortcuts-change shortcuts-add shortcuts-filter
+                              shortcuts-record-filter shortcuts-conflicts shortcuts-no-key shortcuts-changed
+                              shortcuts-undo shortcuts-reset shortcuts-reset-all shortcuts-profile
                               quit preferences edit-line-start edit-line-end edit-buffer-start edit-buffer-end edit-word-left
                               edit-word-right edit-delete-word-back edit-delete-line-back))
          (drgnx-keys-test--later-stages t)
