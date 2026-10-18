@@ -21,6 +21,21 @@
       (should (equal (drgnx-cmd-title c) "Show Board")))
     (should (assq 'kx-board (plist-get (alist-get 'vscode drgnx-keys-profiles) :bind)))))
 
+(ert-deftest drgnx-compat/gryphn-key-joins-every-profile ()
+  ;; M4-7: no profile forgets a command — vscode and emacs bind the key, vim leaves it to the palette
+  (drgnx-ext-test--with dir
+    (gryphn-command-define 'kx-board :title "Show Board" :category "Board" :command #'ignore :key "<f5>")
+    (gryphn-command-define 'kx-mapped :title "Mapped" :category "Board" :command #'ignore :key "x" :map 'kx-board-map)
+    (gryphn-command-define 'kx-keyless :title "Keyless" :category "Board" :command #'ignore)
+    (let ((bind (lambda (p) (plist-get (alist-get p drgnx-keys-profiles) :bind))))
+      (dolist (p '(vscode emacs))
+        (should (equal (assq 'kx-board (funcall bind p)) '(kx-board "<f5>")))
+        (should (equal (assq 'kx-mapped (funcall bind p)) '(kx-mapped "x" :map kx-board-map)))
+        (should-not (assq 'kx-keyless (funcall bind p))))
+      (should (equal (cadr (assq 'kx-board (funcall bind 'vim))) :none))
+      (should (equal (cadr (assq 'kx-mapped (funcall bind 'vim))) :none))
+      (should-not (assq 'kx-keyless (funcall bind 'vim))))))
+
 (ert-deftest drgnx-compat/external-modules-load-and-report ()
   (drgnx-ext-test--with dir
     (write-region "(require 'gryphn-commands)\n(gryphn-command-define 'kx-ext :title \"Ext\" :category \"X\" :command #'ignore)\n(provide 'kx-good)\n"

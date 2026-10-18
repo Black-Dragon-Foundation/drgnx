@@ -67,7 +67,7 @@ is listed as failed (and kept in the file as you wrote it); `external/<name>` in
 row) keeps it from loading. gryphn's files load unchanged: drgnx provides
 `gryphn-command-define` and `gryphn-surfaces-define-context` on its own registry and surfaces
 (`core/drgnx-compat-gryphn.el`), so the board, runs, agents and search commands appear in the palette and menus and
-their keys join the VS Code key profile. drgnx never changes the gryphn checkout.
+their keys join the key profiles (the VS Code and Emacs profiles bind them, the Vim profile leaves them to the palette). drgnx never changes the gryphn checkout.
 
 ## Writing a module
 
