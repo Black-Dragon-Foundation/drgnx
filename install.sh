@@ -119,7 +119,8 @@ version_ge() { # A B → true if A >= B
 }
 
 probe_emacs() {
-  # Is there already an Emacs that is good for drgnx (>= 31.1, native compilation that compiles, graphical)?
+  # Is there already an Emacs that is good for drgnx (>= 31.1, native compilation that compiles, graphical;
+  # an X build counts by (featurep 'x) in batch, which Debian's emacs-gtk 30.1 answers t, or by X11 in its features)?
   # On macOS also /Applications/Emacs.app, which is usually not on PATH (DRGNX_INSTALL_MACOS_APP=none|PATH overrides
   # it: tests). APP_OLD: that app is there but not good enough — what it is ("Emacs 30.2", or "unknown").
   EMACS_FOUND="" EMACS_INFO="" APP_OLD=""
@@ -137,7 +138,8 @@ probe_emacs() {
     info="$("$e" --batch -Q --eval '(princ (format "%s %s %s" emacs-version
              (and (fboundp (quote native-comp-available-p)) (native-comp-available-p)
                   (condition-case nil (progn (native-compile (quote (lambda () 1))) t) (error nil)))
-             (cond ((featurep (quote pgtk)) "pgtk") ((featurep (quote ns)) "ns") ((featurep (quote x)) "x") (t "nil"))))' 2>/dev/null || true)"
+             (cond ((featurep (quote pgtk)) "pgtk") ((featurep (quote ns)) "ns") ((featurep (quote x)) "x")
+                   ((string-match-p "X11" system-configuration-features) "x") (t "nil"))))' 2>/dev/null || true)"
     if [[ -z "$info" ]]; then
       if [[ -n "$app" && "$e" == "$app" ]]; then APP_OLD=unknown; fi
       continue

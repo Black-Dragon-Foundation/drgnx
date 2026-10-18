@@ -56,6 +56,13 @@ if [[ "$ID" == fedora ]] && rpm -q emacs-pgtk >/dev/null 2>&1; then
   grep -q 'keep the installed Emacs' <<<"$out" || { printf '%s\n' "$out"; fail "emacs-nw beside emacs-pgtk made the installer replace Emacs"; }
 fi
 
+step "a run under an X11 session keeps the installed Emacs too"
+# The probe must not depend on the session: whatever the build (pgtk here, gtk+x11 on an X11 install), it is graphical.
+rc=0; out="$(as_tester env XDG_SESSION_TYPE=x11 bash /src/install.sh --yes)" || rc=$?
+((rc == 0)) || { printf '%s\n' "$out"; fail "the X11 re-run exited $rc"; }
+grep -q 'keep the installed Emacs' <<<"$out" || { printf '%s\n' "$out"; fail "the X11 re-run did not keep the installed Emacs"; }
+! grep -q '^As root:' <<<"$out" || fail "the X11 re-run ran a root step"
+
 step "--dry-run changes nothing"
 touch /tmp/before-dry-run
 sleep 1
