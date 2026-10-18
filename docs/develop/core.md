@@ -121,8 +121,10 @@ stack — the code that knows what it changed knows how to change it back):
   since.
 - Whatever runs synchronously inside a setup pushes onto the module whose setup runs — including another owner's
   hook functions it runs (a nested stage's `drgnx-modules-after-stage-functions`) — and a module whose setup is run
-  from another's records onto its own stack. Code a setup defers (`with-eval-after-load`, a timer) runs outside it
-  and records nothing unless it binds its owner again.
+  from another's records onto its own stack. Code a setup defers (`eval-after-load`, a timer) runs outside it
+  and records nothing unless it names its owner (`drgnx-modules-with-owner`, below). That holds also when the
+  deferred code runs *inside* a setup: `eval-after-load` forms that a setup's `require` triggers belong to nobody
+  (see the safety net).
 - `:teardown` in `drgnx-module-define`: a function for what the stack cannot see (a theme, live frames' parameters,
   a mode turned on in live buffers, a sub-module's own state), or `restart`: the module is not turned off while Emacs
   runs, only at the next start. Anything else is an error when the module is defined, so the function must be
@@ -142,6 +144,72 @@ stack — the code that knows what it changed knows how to change it back):
   `inhibit-interaction` bound, so one that would ask fails at once and is reported. Every undo checks before it
   changes anything, so off, on, off is the same as off once, and two undos of the same thing (a `:teardown` that
   calls a sub-module's off function, then the stack) leave it undone once.
+
+### The safety net: what a setup reaches through Emacs's own doors
+
+Code a setup reaches that does not push its own undo — wb modes, the setup functions of `wb/` libraries, packages'
+mode functions — is recorded anyway. For each setup's extent only (`drgnx-modules--with-recorder`, inside
+`drgnx-modules--run-setup`), drgnx advises four functions and removes the advice in `unwind-protect`, also after
+an error, a quit or a throw. Outside a setup nothing is advised and nothing costs anything.
+
+| What the setup does | Recorded when | Undo (each checks first) |
+|---|---|---|
+| `add-hook` on a hook's global value | the function was not on it before | `remove-hook`, if it is still there |
+| `advice-add` | `advice-member-p` was nil before | `advice-remove`, if still there |
+| `add-to-list` on a list's global value | the element was not a member before (same test as `add-to-list`) | remove that one element, if still a member; others' additions stay |
+| a new timer (`timer-list`, `timer-idle-list` compared before and after) | always | `cancel-timer`, if still pending |
+| a global minor mode newly in `global-minor-modes` | it was off before | `(MODE -1)`, if still on; pushed last, so modes go off first and their own off code runs before the hook and timer undos |
+| a feature newly in `features` | always | none: kept for the report, `(drgnx-modules-features-of MODULE)` |
+
+Labels read `hook HOOK FN`, `advice SYMBOL FN`, `list VAR ELEMENT`, `timer FN`, `mode MODE` (`a lambda` for an
+anonymous function). The undos make teardown and rollback complete for these doors. An undo that a drgnx API
+also pushes (the same hook, recorded twice) is harmless: the second finds nothing to do.
+
+What it does **not** record:
+
+- **Buffer-local changes**: `add-hook … nil t`, a buffer-local list value. Buffers own those.
+- **A drgnx helper's own calls**: the paired hook and advice helpers bind `drgnx-module--in-helper` while they call
+  `add-hook` and `advice-add`, and push their own undo, which respects what other modules still claim. A second,
+  unconditional undo from the net would remove a function another module still needs.
+- **The top level of a library the setup loads** (hooks, advice, list entries): it registers for itself and stays
+  (`drgnx-modules--recording-p`). Timers and global modes are found by comparing lists, so one that a library
+  starts at its top level while the setup loads it *is* recorded onto the setup — a library that does that is
+  itself the bug.
+- **`eval-after-load` forms that the setup's `require` triggers.** They run once, when their library loads, after
+  `load-file-name` is back to the setup's. Recorded, turning the module off would undo them and turning it on
+  again would not bring them back (the library is already loaded). So while they run (`do-after-load-evaluation`
+  is advised too) no module is current, and the timers and modes they start are claimed by nobody. A form that
+  names its owner records onto it.
+- **A setup run inside another's** records onto its own module only: what an inner recorder found is claimed,
+  and the outer one skips it.
+- **`add-to-list` that the compiler rewrote.** Its compiler macro turns `(add-to-list 'VAR …)` into a plain
+  `push` when VAR is not special at compile time — a lexical variable, or one whose `defvar` the compiling Emacs
+  has not run, such as one defined in the caller's own file or declared with a bare `(defvar VAR)`
+  (`drgnx-search.el`'s `drgnx-ai-retrievers`). Checked on 30.2 and 31.1. Use `drgnx-modules-push-undo` (or the
+  module helpers) for such a list.
+- `setq`, `setf`, `put`, `add-function`, key bindings, faces, frames: the module's own undo or `:teardown`.
+
+**Deferred work: `drgnx-modules-with-owner`.** `(drgnx-modules-with-owner BODY…)` evaluates to a function: it
+names the module whose setup evaluates the form, and when called later runs BODY as that module's code, with the
+safety net — what BODY changes is recorded onto the module, as in its setup. Use it as the deferred thing itself:
+
+```elisp
+(eval-after-load 'drgnx-ai-ui (drgnx-modules-with-owner (add-to-list 'drgnx-ai-retrievers #'my-retriever t)))
+(run-with-idle-timer 1 nil (drgnx-modules-with-owner (my-mode 1)))
+```
+
+Not `(with-eval-after-load 'x (drgnx-modules-with-owner …))`: there the form is evaluated only when `x` loads, so
+it names no module, and its function is never called. Once the module is turned off, rolled back, or run again
+(each run of a setup gets a fresh token in `drgnx-modules--runs`), the function does nothing and returns nil, so a
+late `eval-after-load` or idle step of a turned-off module never runs and an off-on cycle never runs the old run's
+work twice. Evaluated outside a setup, it just runs BODY. Each call installs the safety net for its extent (about
+20 µs): for one-off work, not for a hook that runs on every command.
+
+**Cost.** The safety net around a setup costs about 20 µs (byte-compiled, 30.2: four `advice-add` and
+`advice-remove`, two snapshots and their comparison). The shipped startup stage (16 modules, batch) took 29.4 ms
+with it and 28.2 ms without (5 runs each, within the runs' noise); the budget is 5 ms across all setups.
+`test/unit/modules-record-test.el` covers it, including `startup-is-unchanged`: the shipped modules' startup stage
+gives the same statuses and commands with the recorder as without it.
 
 ## Build (`drgnx-build.el`)
 
