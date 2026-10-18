@@ -255,6 +255,10 @@ ends, giving every pixel back. However a package ends its popup — `delete-wind
 killing the buffer — the lane notices. A package that calls `display-buffer-in-side-window` directly (which-key does)
 still goes where the rules say.
 
+In a terminal window the lane works the same, and the line you are on stays visible. On Emacs 30.2 completion as you
+type (corfu) also shows there, as `*Completions*`; on 31.1 corfu's popup is a child frame. See
+[terminal.md](terminal.md#popups).
+
 ### The panel and the right dock
 
 The **panel** (Toggle Panel: ``C-` `` · palette · `SPC j`) sits under the editors; the **right dock** (Toggle

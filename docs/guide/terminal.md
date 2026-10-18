@@ -155,6 +155,31 @@ the file has unsaved changes, drgnx first asks whether to save it (answering no 
 `C-x #` does). Moving the tab to another group or window does not end the edit. `emacsclient -t` without a file
 (and `drgnx -t`) opens the whole workbench.
 
+## Popups
+
+A transient menu, which-key's hints, `*Completions*`, help from the minibuffer and the calendar show in the popup
+lane at the bottom of the terminal window ([workbench.md](workbench.md#popups)). Nothing is drawn over your text:
+while a popup is open the editor above it is a little shorter and the line you are on stays on the screen; when it
+ends, every window has its size back. A popup in one window never appears in another: with a graphical window and a
+terminal window on one daemon, a transient in one leaves the other alone.
+
+- **Emacs 31.1 and later** draws the completion popup (corfu, when you have it) as a floating child frame of the
+  terminal window, as in a graphical window. A child frame with a border draws it with box-drawing characters
+  (`┌ ─ ┐ │ └ ┘`) while every terminal on the daemon writes UTF-8, and with `+ - |` as soon as one does not. The border
+  glyphs are one shared table, so the choice follows the terminals that are connected.
+- **Emacs 30.2** has no child frames in a terminal. Corfu's own commands (the completion key) fall back to Emacs's
+  `*Completions*` list there, but its completion as you type shows nothing. drgnx fills the gap: in a terminal window,
+  with corfu on and `corfu-auto` set, the candidates for the word you are typing show in `*Completions*` in the popup
+  lane, refreshed as you type. Nothing is inserted; `C-g` or moving off the word removes the list. A graphical window
+  keeps corfu's own popup.
+- **A terminal that does not write UTF-8** (a window started with `LANG=C`) cannot show `×`, `●`, `›`, `▾`, `▸` or
+  `│`. drgnx draws ASCII marks in their place in that window only (`x`, `*`, `>`, `v`, `>`, `|`), in the tab line,
+  the breadcrumb, the Explorer and the docks' headings, instead of Emacs's `\u00D7` escapes. A UTF-8 terminal is not
+  touched. Set a UTF-8 locale in the terminal's profile to get the real glyphs.
+
+Other child-frame packages (posframe, eldoc-box) keep their own look and get no workbench chrome, as in a graphical
+window. drgnx ships none of them; a child frame they make follows the same border glyphs.
+
 ## What drgnx asks the terminal
 
 When a terminal window opens, drgnx works out which terminal it is from that client's own environment (in a
