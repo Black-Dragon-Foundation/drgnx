@@ -14,11 +14,35 @@ never stops Emacs from starting:
 
 **Preferences: Modules** (palette, Options menu) lists every module with its status — `ok`, `failed: …` (a module
 file that does not load says `(in <library>)` when the error came from a library it loads), `needs <package>`,
-`needs <module>`, `disabled` — its stage, how long it took, and whether it runs at the next start; `RET`
-turns the module on that row off (or back on) from the next start. A column header sorts by it (ms as a number, Stage
+`needs <module>`, `disabled`, `off` (turned off in this session) — its stage, how long it took, and whether it runs at
+the next start (`on`, `off`, or `off at next start` for a module that is still running); `RET` turns the module on
+that row off or back on, now (below). A column header sorts by it (ms as a number, Stage
 in the order of the stages); an external module's row says its path and features. `drgnx doctor` reports failed modules and modules
 waiting for packages, from the last session; when all is well it counts the modules that run and those that are
 off ("12 ok, 3 off"), and every answer says how old the report is ("from the last session, 2 h ago").
+
+## Turning a module off and on now
+
+`RET` (Turn On / Off) on a row in Preferences: Modules takes effect in the running Emacs; no restart.
+
+- **Off** undoes what the module's setup did (its hooks, advice, timers, keys, menus, options, faces), the status
+  becomes `off`, and the choice is written to `modules.eld` so the module stays off at the next start. The About
+  column then adds "code stays loaded until restart": the module's Lisp is still in memory (Emacs cannot unload
+  it), it just does nothing.
+- **Dependents.** When running modules need the one you turn off (`:requires`, directly or through another), drgnx
+  asks once: "Also turn off X, Y?". Yes turns the dependents off first, then the module; no changes nothing. Only
+  the module you chose is written to `modules.eld`; its dependents come back with it by turning each on (they say
+  `off` here until you do) and wait for it at the next start.
+- **On** writes `modules.eld` and, when the module's stage has already passed, runs its setup now. If its packages
+  are not installed or the modules it needs are not running, it waits and says so in the Status column
+  (`needs …`); if its stage has not come yet (`idle`, `first-file`, …) it runs when it does.
+- **`restart` modules.** A module defined with `:teardown 'restart` (and external modules) is not turned off while
+  Emacs runs: the choice is only written, the row says `off at next start`, and it stops then. Turning it on again
+  just takes the choice back.
+- Onboarding's "Turn on Chat" keeps meaning "from the next start" and runs nothing now.
+
+From Lisp: `(drgnx-modules-turn-off MODULE &key dependents)` returns the running dependents (and does nothing) unless
+`:dependents t`; `(drgnx-modules-turn-on MODULE)`; neither ever prompts.
 
 ## Packages
 
