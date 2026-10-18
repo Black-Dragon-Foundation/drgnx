@@ -109,7 +109,8 @@ theme's version-control faces; a folder with changes inside shows `●` (also on
 a new folder itself shows `U`), and so does a root; ignored files are dimmed. One background `git status` per
 repository (never holding your git lock), repositories nested inside the tree included; a repository made after
 the tree was shown (`git init`) is picked up at the next refresh (a save, or Emacs getting the focus back).
-`drgnx-explorer-git` turns it off. What git complains
+The status of at most 16 repositories is kept; one that was pushed out is read again by the next refresh of its
+folder. `drgnx-explorer-git` turns it off. What git complains
 about is kept in the hidden buffer ` *drgnx git errors*` (its last `drgnx-git-errors-max` characters).
 
 ### Buffers panel
@@ -432,7 +433,7 @@ Not yet: file nesting, icons (an icon theme is a module, M4), problems decoratio
   holds plain text, inserted in one go; a vector holds what each line is (path, depth, folder or file — or the
   buffer); faces are painted by jit-lock for the rows on screen only. Expanding a folder inserts its rows after the
   folder's row; collapsing deletes them; nothing else is redrawn. Folder listings are cached while the folder is
-  unchanged (one `directory-files-and-attributes` call per folder). The Buffers panel re-renders only when its rows
+  unchanged (one `directory-files-and-attributes` call per folder), for at most 64 folders (the least recently shown goes first). The Buffers panel re-renders only when its rows
   changed and puts every window's view and selection back on the same buffers.
 
 ## Performance

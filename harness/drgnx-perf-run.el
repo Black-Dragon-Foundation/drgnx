@@ -783,29 +783,52 @@ the hook budget only (the audit adds its own cost to the other numbers)."
           (if (or fails worse errors) 1
             (princ "perf: every budget holds\n") 0)))))))
 
+(defconst drgnx-perf-run--census-form
+  "(vconcat (mapcar (lambda (r) (vector (symbol-name (nth 0 r)) (symbol-name (nth 1 r)) (nth 2 r) (or (nth 3 r) :null)))
+                   (and (require 'drgnx-memo nil t) (drgnx-memo-census))))"
+  "Evaluated in the soak's session: `drgnx-memo-census' as an array of [NAME KIND SIZE CAP].")
+
+(defun drgnx-perf-run--census-lines (census)
+  "CENSUS (the session's reply: rows [NAME KIND SIZE CAP]) as printable lines, and the rows whose SIZE passes their CAP.
+Returns (LINES . OVER): OVER is a list of strings naming each cache past its cap."
+  (let (lines over)
+    (seq-doseq (row census)
+      (let ((name (aref row 0)) (kind (aref row 1)) (size (aref row 2)) (cap (aref row 3)))
+        (push (format "  %s %s %d%s" kind name size (if (numberp cap) (format "/%d" cap) "")) lines)
+        (when (and (numberp cap) (> size cap)) (push (format "%s holds %d, over its cap of %d" name size cap) over))))
+    (cons (nreverse lines) (nreverse over))))
+
 (defun drgnx-perf-soak (&optional minutes)
   "`drgnx test --soak [MINUTES]': the input workloads in a loop for MINUTES (30); memory sampled after
-each round; fails when RSS grows by more than 20% from the first round or passes 400 MB."
+each round; fails when RSS grows by more than 20% from the first round or passes 400 MB, or when a cache of
+`drgnx-memo-census' holds more than its cap.  The census is printed after each round."
   (let* ((minutes (max 1 (or minutes 30))) (deadline (+ (float-time) (* 60 minutes)))
          (drgnx-perf-run--fixture (drgnx-perf-run--make-fixture))
          (process-environment (cons (format "DRGNX_UI_MAX_RUNTIME=%d" (+ (* 60 minutes) 900)) process-environment))
          (s (drgnx-ui-start "drgnx" "1400x800" 60)) (sess (drgnx-ui-own-session (plist-get s :name)))
          (loads (seq-filter (lambda (w) (plist-get (cdr w) :actions)) (drgnx-perf-run--workloads)))
-         samples)
+         samples over)
     (unwind-protect
         (while (< (float-time) deadline)
           (dolist (w loads) (ignore-errors (drgnx-perf-run-workload sess (cdr w))))   ; each cleans up after itself
-          (push (plist-get (drgnx-perf-run--call sess "(progn (garbage-collect) (list :rss_kb (drgnx-perf-rss-kb)))") :rss_kb) samples)
-          (message "soak: round %d, %d MB" (length samples) (/ (car samples) 1024)))
+          (let* ((r (drgnx-perf-run--call sess (format "(progn (garbage-collect) (list :rss_kb (drgnx-perf-rss-kb) :census %s))"
+                                                       drgnx-perf-run--census-form)))
+                 (census (drgnx-perf-run--census-lines (plist-get r :census))))
+            (push (plist-get r :rss_kb) samples)
+            (setq over (append over (cdr census)))
+            (message "soak: round %d, %d MB" (length samples) (/ (car samples) 1024))
+            (dolist (l (car census)) (message "%s" l))))
       (drgnx-ui-stop (plist-get s :name))
       (delete-file drgnx-perf-run--fixture))
     (unless samples (error "The soak finished no round"))
     (let* ((rounds (reverse samples)) (first (car rounds)) (last (car samples))
            (growth (and first (> first 0) (/ (* 100.0 (- last first)) first))))
       (princ (format "soak: %d rounds in %d min; RSS %d → %d MB (%+.1f%%)\n" (length rounds) minutes (/ first 1024) (/ last 1024) growth))
-      (if (or (> growth 20) (> last (* 400 1024)))
-          (progn (princ "FAIL soak: memory grew more than 20% or passed 400 MB\n") 1)
-        (princ "soak: memory holds\n") 0))))
+      (dolist (o (delete-dups over)) (princ (format "FAIL soak: %s\n" o)))
+      (cond ((or (> growth 20) (> last (* 400 1024)))
+             (princ "FAIL soak: memory grew more than 20% or passed 400 MB\n") 1)
+            (over 1)
+            (t (princ "soak: memory holds\n") 0)))))
 
 (provide 'drgnx-perf-run)
 ;;; drgnx-perf-run.el ends here

@@ -3,6 +3,7 @@
 (require 'drgnx)
 (require 'drgnx-timer)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/memo-alloc-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-job-ui" drgnx-dir) nil t)
 (require 'drgnx-hub)                                   ; before any stub of its functions
 
@@ -34,6 +35,19 @@
       (setq answer (list :jobs :null))
       (drgnx-job-ui--recount)
       (should (equal drgnx-job-ui--badge "")))))
+
+(ert-deftest drgnx-job-ui/an-unchanged-badge-allocates-nothing ()
+  (let ((drgnx-job-ui--badge (format " ⚑%d" 2)))
+    (let ((s (drgnx-job-ui--badge-segment)))
+      (should (equal (substring-no-properties s) " ⚑2"))
+      (should (eq 'warning (get-text-property 1 'face s)))
+      (should (eq s (drgnx-job-ui--badge-segment)))
+      (should (= 0 (drgnx-memo-fixture-alloc (lambda () (drgnx-job-ui--badge-segment)) 'drgnx-job-ui--badge-segment))))
+    ;; a new count builds the string again; none is the empty string
+    (setq drgnx-job-ui--badge (format " ⚑%d" 3))
+    (should (equal (substring-no-properties (drgnx-job-ui--badge-segment)) " ⚑3"))
+    (setq drgnx-job-ui--badge "")
+    (should (equal (drgnx-job-ui--badge-segment) ""))))
 
 (ert-deftest drgnx-job-ui/a-new-card-notifies-once ()
   ;; when and what is sent, whatever the platform: the send itself (osascript on macOS, D-Bus elsewhere) is stubbed

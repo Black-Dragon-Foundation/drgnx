@@ -207,7 +207,7 @@ from the connection (its own timeouts bound that); this deadline ends any other 
          (drgnx-lang--remote-wanted (make-hash-table :test #'equal))
          (drgnx-lang--remote-hinted nil) (drgnx-lang--remote-pending nil) (drgnx-lang--user-command nil)
          (drgnx-remote-may-prompt nil)
-         (drgnx-explorer--roots nil) (drgnx-explorer--cache (make-hash-table :test #'equal))
+         (drgnx-explorer--roots nil) (_cleared (drgnx-cache--clear 'explorer-listing))
          (drgnx-explorer--expanded (make-hash-table :test #'equal))
          (global-mode-string global-mode-string))
     (unwind-protect

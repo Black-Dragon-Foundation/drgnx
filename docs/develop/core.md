@@ -891,6 +891,304 @@ the count too high ("lower the count"). See [check.md](check.md#lints-on-the-sou
 (`drgnx-lint/no-timers-in-workbench-follow-paths`) counts a `drgnx-timer-start`, `-soon`, `-debounce` or `-poll`
 form without `:idle t` as a timer start in `wb/`.
 
+## Epochs, memos and caches (`drgnx-memo.el`)
+
+Code that runs on redisplay or per keystroke only reads what is cached. Three tools keep the cache honest and
+cheap. The library needs nothing but Emacs (the recorder is reached through `fboundp`), so batch processes load it.
+
+| Use | When | Cost of a read |
+| --- | --- | --- |
+| **Epoch** | Something several results depend on changes now and then, and a hook or a variable set tells you when. | 0 allocation |
+| **Memo** | One result per window, buffer, frame or (no object) per session, rebuilt only when its inputs changed. | a hit allocates 0 |
+| **Cache** | Many results by key: per buffer, window, frame or process, or by string, kept within a cap. | a string hit stamps with `setcdr`, 0 |
+
+### Epochs
+
+`(drgnx-epoch-define NAME &key per redisplay watch doc)` declares a counter. `per` is nil (one global counter),
+`buffer` (a base plus one count per buffer, weak on the buffer) or `object` (an `equal` table of counts: one fixnum per
+distinct object for as long as the epoch is defined, so key it by ids; it is never weak on the key, because a collected
+key would take its count back to 0 and a memo could see a value again). `(drgnx-epoch NAME
+&optional OBJECT)` is a fixnum: for a per epoch the base plus the object's own count, so either bump moves it;
+without OBJECT, a `buffer` epoch gives its base and an `object` epoch the total of every bump. Counters wrap at the
+fixnum limit. `(drgnx-epoch-bump NAME &optional OBJECT)` returns the new value; with `:redisplay t` it also calls
+`force-mode-line-update` (every window for a global, base or object bump, that buffer's for a buffer's).
+
+`drgnx-epoch` is a macro. A quoted literal NAME that is not defined signals `No epoch NAME` when the form is
+expanded, so a typo fails the build; define the epoch above its first use in the file (`drgnx-epoch-define` with a
+literal name is noted at expansion), or `require` the file that does. A computed NAME is checked at run time.
+
+`:watch VARIABLES` (or `(drgnx-epoch-watch NAME VARIABLES)`) declares the variables whose setting bumps NAME;
+nothing is watched until a module activates the epoch (below). The watcher `drgnx-memo--watcher`
+(`add-variable-watcher`) reacts to `set`, `makunbound` and `defvaralias`, never to a reported `let` or `unlet`.
+Emacs does not report every binding as a `let`, so the watcher also skips a `set` of an atom `eq` to the value
+it replaces (a cons is never skipped: an in-place edit keeps its head). What that means for a per-buffer variable
+such as `tab-width`, `indent-tabs-mode` or `buffer-file-coding-system`:
+
+- already local in the buffer: `let` and `unlet` are reported as such and ignored;
+- not local in the buffer: a `let` binds the *default*, and Emacs 30 reports the binding and the unbinding as a
+  `set` with no buffer. Bound to the value it already has, nothing moves. Bound to a *different* value, each of the two
+  reports is a global `set`: it bumps the base and moves every buffer's epoch, twice per `let`. A consumer's watched
+  list must not include a per-buffer variable that other code often rebinds to other values (Task 16 checks its list
+  against this);
+- a buffer-local set bumps that buffer's own count (the watcher's WHERE); a global set (`setq-default`) bumps the base.
+
+`drgnx-memo--watched` maps each variable that is watched now to its epochs.
+
+**What is watched is a closed list**, each entry tested. A watcher costs about 0.2 µs per set (a `setq` of an unwatched
+variable 0.011 µs; an empty watcher costs 0.066 µs), so it goes on variables that change rarely. **Hot values stay plain
+`eq` memo keys and are never watched**: point, `buffer-chars-modified-tick`, `default-directory`, `mode-line-process`,
+keycast's keys, the window's start and width. The memo compares them for free.
+
+### Memos
+
+```elisp
+(drgnx-memo-define window-badge :on window
+  :keys ((window-point object) (buffer-chars-modified-tick) (drgnx-epoch 'git)))
+(drgnx-memo window-badge (selected-window) (build-the-badge))
+```
+
+`drgnx-memo-define` (a macro, `eval-and-compile`: a declaration at the top level of a file) takes an unquoted NAME and
+`:on` `window`, `buffer`, `frame` or nil (one global slot). The key forms are evaluated where `drgnx-memo` is used;
+they may refer to `object`. The table is weak on the object. `(drgnx-memo NAME OBJECT BUILD)` evaluates each key form
+once. When every value is `eq` to the stored one it returns the stored value and conses nothing; otherwise it runs
+BUILD, writes the values into the object's vector with `aset` (made on the first miss) and returns BUILD's value.
+Keys compare with `eq`: use fixnums, symbols, objects and epochs, not fresh strings, lists or floats (those never
+hit). `(drgnx-memo-forget NAME &optional OBJECT)` drops one object's value, or all.
+
+### Memo clients
+
+What redisplay reads, built once per change (PERF-L L6):
+
+| Memo | On | Rebuilt when | Epoch |
+| --- | --- | --- | --- |
+| `sticky-segment` (`drgnx-sticky.el`) | window | the window's start moves, it shows another buffer, or the epoch `sticky` of its buffer moves | `sticky` (per buffer), bumped by an edit at or above the start of a window showing the buffer |
+| `job-badge` (`drgnx-job-ui.el`) | none | `drgnx-job-ui--badge` is set to another string (the count changed) | none: the badge string is the key |
+| `live-header` (`drgnx-live.el`) | buffer | the epoch `live-tabs` of the view moves | `live-tabs` (per buffer), bumped where the tabs, the watched tab or driving change (`drgnx-live--tabs-changed`) |
+
+Each module activates its memo in its `:setup` (`drgnx-memo-activate`), so turning the module off empties it. The Live
+view bumps by hand rather than by `:watch`: its tests and its use do not wait for the module's setup, and the sites are
+all in one file. The segment and the header are read per redisplay; a hit allocates 0 (tests: `mod-sticky-test.el`,
+`job-ui-test.el`, `mod-live-test.el`).
+
+### Caches
+
+`(drgnx-cache-define NAME &key key cap doc)` (a declaration, at the top level): `key` `object` is a weak `eq` table; a get checks `buffer-live-p`,
+`window-live-p`, `frame-live-p` or `process-live-p` and drops a dead entry. `key` `string` is an `equal` table with an
+LRU; `cap` is required and positive. A get stamps the entry; a put past the cap evicts the oldest stamp (a scan of the
+table, on put only). `drgnx-cache-get`, `-put`, `-remove` and `-size` take the NAME and the key; `drgnx-cache-keys NAME` lists the keys (a pass over the
+table, stamping nothing: not for redisplay). **Every cache has a
+cap or is weak**; the docstring or `:doc` says which event or cap bounds it.
+
+The workbench has two string caches, both activated by `core/workbench`: `git-status` (repository root → its status
+plist, 16 roots; `wb/drgnx-git.el`) and `explorer-listing` (folder → `(MTIME . CHILDREN)`, 64 folders;
+`wb/drgnx-explorer.el`). A root pushed out of `git-status` while its `git status` runs is not killed: the finished
+run puts the root back (`drgnx-git--done` sees no entry and no earlier read of that process). A folder the Explorer shows
+is got on every render and stays recent; a tree with more than 64 expanded folders re-lists the oldest on each
+render (an `mtime` check, then a directory read).
+
+### Declarations, activation and ownership
+
+`drgnx-epoch-define`, `drgnx-memo-define` and `drgnx-cache-define` are **declarations, like `defvar`**: they go at
+the top level of a file (`core/` or `modules/`), run once at load, and are never undone. They have to be
+declarations: `drgnx-epoch` and `drgnx-memo` read them when the code that uses them is expanded or compiled, and a
+definition inside a `:setup` runs once at load from source but once per setup when compiled
+(`eval-and-compile`). They are listed in `drgnx-memo--registry` and `drgnx-memo-census`, and the fingerprint does not
+treat them as owned registrations. An epoch keeps its count across a redefinition.
+
+What a module **owns** is what has a global effect, and it takes it in its `:setup` with one call:
+
+```elisp
+(drgnx-memo-activate 'git 'statusbar-bar 'git-status)   ; epochs, memos and caches declared above
+```
+
+For an epoch it installs the declared variable watchers (the first activation does; an epoch two modules activate
+keeps them until the last is off). For a memo or a cache it records that its contents are emptied. Each step pushes
+its undo (`drgnx-modules-push-undo`), so turning the module off removes its watchers and empties its memos and
+caches, and turning it on again activates afresh. An epoch's count is not reset. The call does nothing recorded
+outside a `:setup`, and an undeclared name signals. The fingerprint reads the live watches
+(`drgnx-memo--watched`), so a test that leaves one is named by `test --leaks`.
+
+`(drgnx-memo-census)` returns `((NAME KIND SIZE CAP) …)` for every memo and cache; `bin/drgnx test --soak` prints it
+after each round and fails when a cache's SIZE passes its CAP. Tests: `test/unit/core-memo-test.el` (prefix
+`drgnx-memo/`; the 0-allocation tests byte-compile the library's functions in place first, because the tests run on
+source and an interpreted call conses).
+
+## Views (`wb/drgnx-view.el`)
+
+A view draws a buffer as keyed rows: one row per KEY, from START (the view's only marker) to the end of the buffer.
+**Never erase, mark:** code that changes the model only marks the view (a hash put or a queue push, plus a timer
+arm: cheap enough for a process filter), and the draw applies the marks in place, from the view's timer, only while
+the view shows. A dirty row is deleted and inserted again at its integer start, a growing row gets only its new
+characters, removed rows are deleted one by one. Row starts are integers relative to START; no row has a marker.
+Undo is off.
+
+### Declaring a type
+
+```elisp
+(drgnx-view-define 'my-list
+  :render #'my-list--row          ; KEY → "text\n", or (BODY . SUFFIX)
+  :grow #'my-list--grow           ; KEY BODY-LENGTH → the new characters, or nil to render again
+  :sync #'my-list--sync           ; VIEW → marks (usually `drgnx-view-sync-rows')
+  :slice 0.004                    ; draw in slices (nil: all at once)
+  :key-test 'eq)                  ; or `equal' (the default)
+```
+
+`drgnx-view-define` returns NAME and stores a `drgnx-view-type` in `drgnx-view--types` (the fingerprint reads its
+names). SLICE is nil or at most `drgnx-view-slice` (0.004 s); DELAY is the throttle (nil: `drgnx-view-delay`, 0.1 s;
+0: the next timer pass); FOLLOW-TAIL keeps a window at the end; PATCHED (VIEW KEYS) runs after a draw with the keys
+it drew or grew, to put the view's own overlays back. A definition made in a module's setup pushes the undo
+`"view type NAME"`. A view looks its type up by name at each draw: once the type is removed (its module turned off)
+the view draws nothing more, and a redefinition (the module on again, a reload) is picked up. No view is tracked.
+
+**RENDER** returns a string ending in a newline, or `(BODY . SUFFIX)` whose concatenation does: growth goes between
+BODY and SUFFIX, and the view remembers BODY's length (`drgnx-view-body-length`). A row may span several lines.
+**GROW** (KEY BODY-LENGTH) returns the characters to add at the end of BODY ("" adds nothing), or nil to render the
+row again; a row rendered as a plain string, or a type without GROW, is rendered again.
+
+### Attaching
+
+`(drgnx-view-attach NAME &key buffer start)` sets the buffer-local `drgnx-view`, `buffer-undo-list` to t, and makes
+START a marker (insertion type nil; default `point-min`). Attach after the major mode: a mode call kills the local
+variable. START to the end of the buffer belongs to the view: text there that is no row is deleted by the first draw
+(the self-check below). When START is `point-min` the buffer becomes read-only; otherwise each drawn row gets
+`read-only t` and `front-sticky (read-only)`, so typing at START, inside a row, between two rows or after the last
+row is refused (`text-read-only`), while text above START (replace's widgets) stays editable. A widget field that
+ends exactly at START cannot grow at its end: end the text above START with a newline. Attaching also puts
+`drgnx-view--buffer-shown` on the buffer's own `window-buffer-change-functions`. Attaching again removes the old
+view's rows first and releases its marker.
+
+### Marks
+
+| Call | Meaning |
+|---|---|
+| `(drgnx-view-reset VIEW KEYS)` | a new row set: every row goes, KEYS are appended (earlier pending changes are dropped) |
+| `(drgnx-view-append VIEW KEYS)` | new rows at the end |
+| `(drgnx-view-insert VIEW KEYS &key after)` | new rows right after AFTER, a drawn or pending key; nil: at the start; any other key: at the end |
+| `(drgnx-view-remove VIEW KEYS)` | rows go (a pending row's followers take its place) |
+| `(drgnx-view-dirty VIEW KEYS)` | rows to render again; KEYS t: every row, patched, never erased |
+| `(drgnx-view-grow VIEW KEY)` | the row only grew at the end of its BODY (a pending `dirty` wins) |
+| `(drgnx-view-touch VIEW)` | the model changed: SYNC runs at the next draw |
+
+A key already shown or pending is left where it is by `append` and `insert`. Structural marks queue as
+`(OP KEYS AFTER)` and are worked out in order at draw time, so a burst of marks costs one pass. Every mark arms the
+view's draw (`drgnx-view--arm`); nothing draws from a mark, so a mark from a process filter, a sentinel or
+`post-command-hook` only marks.
+
+`(drgnx-view-sync-rows VIEW KEYS SIG)` is the SYNC helper: it diffs the ordered KEYS against the drawn and pending
+rows. A row whose `(funcall SIG KEY)` is not `eq` to the signature stored at the last sync is dirty (a vector is
+compared element by element, with `eq`, so a fresh vector of the same values is unchanged). New keys are inserted,
+missing ones removed; a row that moved (outside a longest run kept in order) is removed and inserted, and when more
+than half the rows moved the view is reset instead.
+
+### Drawing
+
+A draw (`drgnx-view--draw`) runs SYNC when touched, the self-check, then two steps:
+
+1. **The fold** applies the structural marks to the row vectors only; the buffer does not change. A row that goes
+   stays as an entry marked `gone`, a new row is an empty entry marked `new`. The vectors are rewritten in place
+   when new rows only go at the end (appends and removals), and grown by doubling only when full; an append to a long
+   view copies nothing. Otherwise (an insert before a row that stays) fresh vectors are made.
+2. **The sweep** works entry by entry in buffer order with one running shift of the starts: `gone` is deleted,
+   `new` rendered and inserted, a dirty row deleted and inserted again at its integer start, a growing row gets an
+   `insert` before SUFFIX. Dirty marks are moved onto the entries first (`patch` wins over `grow`). When every entry
+   is done, the empty entries are dropped and the index follows the rows that moved.
+
+It returns the number of rows drawn, grown or removed, clears the modified flag and calls PATCHED. It binds
+`inhibit-read-only` and `inhibit-interaction`. A RENDER or GROW that signals draws the row `⚠ KEY: MESSAGE` in the
+`error` face (KEY printed to 60 characters); the first error of a view (also from SYNC or PATCHED) is pushed onto
+`drgnx-signal-errors` as `"view NAME: MESSAGE"` (kept to 20), later ones are not recorded again. Errors are never
+raised. Between two slices the vectors always describe the buffer: `key-at`, `row-start` and the self-check stay
+right while work is left.
+
+`(drgnx-view-draw-now VIEW)` draws everything at once, even when the view is hidden (`g` and tests); it returns 0
+for a view object no longer attached to its buffer, or whose type was removed.
+
+**Self-check:** before a draw, when the region (START to the end of the buffer) is not as long as the entries, a
+foreign edit moved them: the view deletes the region, draws every row again before the pending changes, and counts
+a `:full-draws`.
+
+### Drawing live: the timer, the frame budget, visibility
+
+**The timer.** A mark arms `(drgnx-timer-soon (cons 'drgnx-view BUFFER) DELAY #'drgnx-view--draw-buffer :args
+(list BUFFER) :min-interval DELAY :owner BUFFER)`: one draw DELAY after the first mark of a burst, at most one per
+DELAY. A type with DELAY 0 arms `soon` with 0 and no min-interval. A slice that leaves work re-arms a second key,
+`(drgnx-timer-start (cons 'drgnx-view-more BUFFER) 0 …)`, so the throttle never delays the next slice. A mark made
+during a chain arms nothing (`--arm` returns while the continuation is pending): the next slice takes it, so one
+view never draws two slices in one gap; re-arming the continuation also cancels a throttle armed during that draw.
+A chain broken by hiding leaves no timer, and showing the view arms it again. Both keys are owned by the buffer
+(killing it cancels them). Marks made by the view's own SYNC arm nothing (that draw takes them).
+
+**The frame budget: one deadline, no queue, no priority.** A type with SLICE draws one slice per timer firing. The
+slice's deadline is `drgnx-view--deadline` when it is still ahead of `(drgnx-timer-now)` (another view drew in this
+timer pass and left time), else now + SLICE. Every 8 rows (`drgnx-view--check-every`; a clock read boxes a float)
+the slice stops when the deadline has passed or `input-pending-p`. The first check comes after 8 rows, so a slice
+draws at least `min(8, work)` rows, and its rows are a multiple of 8 except the last. Views ripe in one timer pass
+share the deadline while it is unspent: a view that finishes early leaves the next the rest of the slice. A view
+that finds the deadline already spent starts a fresh one, so N sliced views that each use a whole slice cost
+N × SLICE in one gap; the spec's "at most 4 ms per gap for all views" needs a timer-pass identity (the store,
+Task 15). Views are not queued or ranked: each one's timer fires in turn. Each slice draws the **visible rows first** (for each window on a visible frame, the
+entries from the one at `window-start`, `window-body-height` of them), then the rest, each sweep in buffer order.
+`:slices` counts the slices of SLICE types and `:max-slice-rows` the most rows one drew. When a draw leaves no view
+with work (and the view is not stale), the gap is quiet: `drgnx-gc-gap` runs (when `drgnx-gc` is loaded).
+
+**Visibility (before the store).** `(drgnx-view-shown-p VIEW)` is non-nil when a window on a visible frame shows the
+buffer, as `get-buffer-window` with `'visible` answers but without its window list: it walks the frames `next-frame`
+reaches from the selected one and their window trees, allocating nothing. (That is the selected frame's terminal: a
+view shown only on another terminal counts as hidden until a window change there.) The view keeps the last answer
+in its `shown`. A timer draw of a hidden view sets `stale`, adds 1 to `:stale-skips` and returns: **a hidden view
+draws nothing and allocates nothing**. While it is stale its marks arm no timer (they cost a hash put and the frame
+walk). When a window starts showing the buffer, `drgnx-view--buffer-shown` (on the buffer's own
+`window-buffer-change-functions`, which redisplay runs) arms the draw of a stale view; a mark on a stale view that
+shows again does too. Store Task 15 replaces this with the store's visibility.
+
+### Keeping places
+
+A draw keeps the buffer's point and, for each window showing the buffer (all frames), its start and point on their
+row. It records each as an entry and an offset into it after the fold, and puts it back after the sweep: an entry
+that was deleted falls to the next row (the previous one at the end), an offset longer than the row is clamped to
+its last character, a position above START stays where it is. A point at the end of the rows stays at the end of
+the last row, or, for a FOLLOW-TAIL type, at the end of the buffer, so it follows appends. The windows are moved
+inside `drgnx-wb-with-owned-windows`, with `set-window-start W POS t` and `set-window-point`, so the jank guard sees
+the view's own windows move.
+
+Buffers that are not views keep places with the same idea:
+
+```elisp
+(drgnx-view-with-kept-windows (:key-at #'my-key-at :pos-of #'my-row-start)
+  (erase-buffer)
+  (my-insert-everything))
+```
+
+`(drgnx-view-save-places KEY-AT)` returns the buffer's point and each showing window's start and point as `(KEY
+OFFSET LINE)`, KEY being `(funcall KEY-AT POS)` and OFFSET the distance from the start of KEY's row (the first line
+above POS with the same key). `(drgnx-view-restore-places PLACES POS-OF)` puts each back at `(+ (funcall POS-OF KEY)
+OFFSET)`, or at the start of LINE (clamped) when POS-OF returns nil; dead windows are skipped, and the windows move
+inside `drgnx-wb-with-owned-windows`. The macro is save, BODY, restore, and returns BODY's value.
+
+### Reads
+
+`(drgnx-view-key-at &optional POS)` (the current buffer's view; a binary search on the starts that allocates
+nothing), `(drgnx-view-row-start VIEW KEY)`, `(drgnx-view-row-count VIEW)` (rows in the buffer; between slices, rows
+still to delete count), `(drgnx-view-pending-p VIEW)` (marks not drawn, or work left by a slice),
+`(drgnx-view-body-length VIEW KEY)`, `(drgnx-view-shown-p VIEW)`, and `(drgnx-view-stats &optional VIEW)` →
+`(:rows-drawn :rows-grown :appended :removed :slices :max-slice-rows :full-draws :stale-skips)`. `:rows-drawn`
+counts every row rendered (patched, inserted or appended, an error row too); `:rows-grown` the rows that took GROW's
+text; `:appended` the rows added; `:removed` the rows deleted. Without VIEW it sums every live view
+(`:max-slice-rows`: the largest).
+
+### The invariant
+
+`(drgnx-view--check VIEW)` is nil when the starts are the entries' actual extents: entry 0 starts at 0, every
+non-empty entry ends with a newline just before the next start, an empty entry is a row to insert or a deleted one,
+the index points at each row and row to insert (never at a row to delete), and the last start is the end of the
+buffer. Otherwise it names the first fault. Tests: `test/unit/wb-view-test.el` (prefix `drgnx-view/`, including 200
+seeded random marks checked against a plain list and an append that stays in place) and
+`test/unit/wb-view-live-test.el` (prefix `drgnx-view-live/`: the timer, visibility, slices, places, all on the
+virtual clock; slices replace `drgnx-timer-now` with a clock that steps per read, and since batch Emacs runs no
+redisplay the visibility tests call `drgnx-view--buffer-shown` as redisplay would). Helpers in
+`test/fixtures/view-fixture.el` (`drgnx-view-test-with-type`, `drgnx-view-test--text`, `drgnx-view-test--expected`,
+`drgnx-view-test--alloc`).
+
 ## Modal core (`drgnx-modal.el`)
 
 The engine-neutral half of modal editing; evil plugs into it (the `editor/evil` module, below), another engine could.

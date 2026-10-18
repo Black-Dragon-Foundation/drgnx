@@ -17,6 +17,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-timer)
+(require 'drgnx-memo)
 
 (declare-function drgnx-hub-call "drgnx-hub")
 (declare-function drgnx-hub-call-sync "drgnx-hub")
@@ -77,10 +78,15 @@ own (`(drgnx-job-ui-show ID)') restores as the cockpit filtered to that job."
   (cond (drgnx-job-ui--badge-job (drgnx-job-ui-show drgnx-job-ui--badge-job))
         ((fboundp 'drgnx-cockpit-show-jobs) (drgnx-cockpit-show-jobs))))
 
+(drgnx-memo-define job-badge :keys (drgnx-job-ui--badge)
+                   :doc "The mode line's badge string, built again only when the badge text is set to another string.")
+
 (defun drgnx-job-ui--badge-segment ()
-  (if (string-empty-p drgnx-job-ui--badge) ""
-    (propertize drgnx-job-ui--badge 'face 'warning 'mouse-face 'mode-line-highlight 'local-map drgnx-job-ui-badge-map
-                'help-echo "A job needs you: click to see it in the Work cockpit")))
+  "The badge for the mode line: the memo `job-badge' (a redisplay with the badge unchanged allocates nothing)."
+  (drgnx-memo job-badge nil
+              (if (string-empty-p drgnx-job-ui--badge) ""
+                (propertize drgnx-job-ui--badge 'face 'warning 'mouse-face 'mode-line-highlight 'local-map drgnx-job-ui-badge-map
+                            'help-echo "A job needs you: click to see it in the Work cockpit"))))
 
 ;;;; What needs you, counted once: the badge, the Work cockpit's What needs you, the status bar
 
@@ -244,6 +250,7 @@ else a message.  A failed osascript says so once.  Never a prompt."
                      :stage 'startup :requires '(tools/agents)
                      :setup
                      (lambda ()
+                       (drgnx-memo-activate 'job-badge)
                        (drgnx-job-ui-badge-mode 1)
                        ;; counted again now and then once the hub's client is here (the Agents mirror loads it)
                        (drgnx-timer-start 'job-ui-recount-idle 60 #'drgnx-job-ui--idle-recount :repeat t :idle t)

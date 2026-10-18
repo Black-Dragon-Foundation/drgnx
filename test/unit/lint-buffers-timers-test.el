@@ -84,8 +84,11 @@ wall-clock timer (`drgnx-lint-bt--timer-start-p')."
   ;; again — the Explorer's own window, nothing else moves.
   ;; Also: `drgnx-monitors--later' only defers a callback of a monitor query or a move (so it never runs
   ;; inside the caller); it follows nothing and moves no window by itself.
+  ;; Also: a view's draw (`drgnx-view--arm' on a mark, `drgnx-view--draw-buffer' re-arming the rest of a slice)
+  ;; follows no window: it moves only windows that show the view's own buffer, as their owner.
   '(("wb/drgnx-explorer.el" drgnx-explorer--file-event drgnx-explorer--apply-file-events)
-    ("wb/drgnx-monitors.el" drgnx-monitors--later))
+    ("wb/drgnx-monitors.el" drgnx-monitors--later)
+    ("wb/drgnx-view.el" drgnx-view--arm drgnx-view--draw-buffer))
   "Workbench definitions allowed to start a timer: (FILE NAME…).  Idle timers are not listed: they
 run after input, never in the middle of a follow.")
 
@@ -183,7 +186,6 @@ lambda or not)."
 
 (defconst drgnx-lint-timers--not-yet
   '(("modules/tools/drgnx-agents-ui.el" 3)
-    ("modules/tools/drgnx-live.el" 2)
     ("modules/tools/drgnx-replace.el" 3)
     ("modules/ui/drgnx-statusbar.el" 1)
     ("modules/ui/drgnx-topline.el" 1)
