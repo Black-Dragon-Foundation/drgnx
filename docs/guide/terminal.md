@@ -5,7 +5,8 @@ works depends on the terminal. A terminal has to send the shortcuts (`C-S-p`, ``
 computer's clipboard, show true colour and report the mouse. This page lists what each common terminal can do,
 the shortcuts it keeps for itself, and the line that fixes what is missing.
 
-**Works best:** kitty, WezTerm, foot, Ghostty and Alacritty. They send `C-S-` chords and the other shortcuts,
+**Works best:** WezTerm, Ghostty, foot, kitty and Alacritty (modifyOtherKeys ones first: `C-g` keeps stopping busy Lisp
+there, see [Keys](#keys)). They send `C-S-` chords and the other shortcuts,
 and copy to the clipboard, over SSH as well. Each keeps some `C-S-` chords for itself; [the fixes](#the-fixes) free
 them. In any terminal, **F1** opens the command palette (VS Code keys) and `M-x` works in every
 profile, so every command can still be reached.
@@ -145,11 +146,16 @@ command for your system, for the first two. **drgnx never installs anything**: i
 | xterm | `sudo dnf install xterm` | `sudo apt install xterm` | `sudo pacman -S xterm` | none |
 | foot (Wayland) | `sudo dnf install foot` | `sudo apt install foot` | `sudo pacman -S foot` | none |
 | kitty | `sudo dnf install kitty` | `sudo apt install kitty` | `sudo pacman -S kitty` | `brew install --cask kitty` |
+| Alacritty | `sudo dnf install alacritty` | `sudo apt install alacritty` | `sudo pacman -S alacritty` | `brew install --cask alacritty` |
 
 On an image-based Fedora (Silverblue, Kinoite, Bazzite; drgnx sees `/run/ostree-booted`) the Fedora packages are
 `rpm-ostree install xterm`, `rpm-ostree install foot` and `rpm-ostree install kitty` (a restart finishes it); `dnf` is
 never suggested there. WezTerm and foot have Flatpaks on Flathub, but a Flatpak terminal runs its shell inside the
 sandbox, where drgnx is not, so drgnx does not suggest them.
+
+xterm is the last resort for looks: no clipboard copy over SSH and 256 colours (drgnx says so wherever it names xterm),
+but it has modifyOtherKeys, so it ranks first among the packages Fedora and Debian have. kitty, foot and Alacritty use
+the kitty keyboard protocol, so `C-g` cannot stop busy Lisp there.
 
 Other systems, and the RHEL clones (Rocky, Alma: kitty is only in EPEL) and Amazon Linux, get each terminal's download
 page. The commands were checked against the distributions' package indexes on 2026-10-18. A distribution derived from
@@ -158,7 +164,9 @@ the ones it has a package command for over download pages, in the order above.
 
 **Open `drgnx -t` in one of them.** Off by default. Set **`drgnx-tty-open-in`** (`M-x customize-variable`) to `auto`
 (the first installed terminal of the table that fits your display: foot needs Wayland, xterm X11) or to one terminal
-(`wezterm`, `ghostty`, `xterm`, `foot`, `kitty`), and `drgnx -t` starts it with drgnx inside. Over SSH, or with no
+(`wezterm`, `ghostty`, `xterm`, `foot`, `kitty`, `alacritty`), and `drgnx -t` starts it with drgnx inside. On macOS,
+WezTerm, kitty and Alacritty are started through the command inside their application, and Ghostty with
+`open -na Ghostty.app --args -e …` (its own command line cannot open a window on macOS), which returns at once. Over SSH, or with no
 display, it does nothing and `drgnx -t` runs in the terminal you are in.
 
 ## SSH

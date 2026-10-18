@@ -271,25 +271,91 @@ NAMES may be empty.  A fixed set of variables is cleared: display, SSH."
   (should (equal (drgnx-tty-install-command 'kitty (plist-put (drgnx-tty-rec-test--os "ubuntu-26.04") :ostree t))
                  "sudo apt install kitty")))
 
+(defun drgnx-tty-rec-test--make-app (apps app binary)
+  "Make an executable APPS/APP/Contents/MacOS/BINARY; return its path."
+  (let ((exe (expand-file-name (concat app "/Contents/MacOS/" binary) apps)))
+    (make-directory (file-name-directory exe) t)
+    (with-temp-file exe (insert "#!/bin/sh\n"))
+    (set-file-modes exe #o755)
+    exe))
+
 (ert-deftest drgnx-tty-recommend/finds-macos-apps ()
   (let ((apps (make-temp-file "drgnx-rec-apps" t)))
     (unwind-protect
         (drgnx-tty-rec-test--with-path nil
-          (let ((exe (expand-file-name "Ghostty.app/Contents/MacOS/ghostty" apps))
-                (system-type 'darwin)
+          (let ((system-type 'darwin)
                 (drgnx-tty-mac-app-dirs (list apps))
                 (drgnx-tty-open-in 'auto))
-            (make-directory (file-name-directory exe) t)
-            (with-temp-file exe (insert "#!/bin/sh\n"))
-            (set-file-modes exe #o755)
+            ;; Ghostty's CLI cannot start the GUI on macOS: `open -na BUNDLE --args -e'
+            (drgnx-tty-rec-test--make-app apps "Ghostty.app" "ghostty")
             (should (equal (drgnx-tty-installed-capable) '(ghostty)))
-            (should (equal (drgnx-tty-capable-terminal-argv) (list exe "-e")))
+            (should (equal (drgnx-tty-capable-terminal-argv)
+                           (list "/usr/bin/open" "-na" (expand-file-name "Ghostty.app" apps) "--args" "-e")))
+            ;; WezTerm and kitty are run through their bundled CLI, which does start the GUI
+            (let ((exe (drgnx-tty-rec-test--make-app apps "WezTerm.app" "wezterm")))
+              (should (equal (drgnx-tty-installed-capable) '(wezterm ghostty)))
+              (should (equal (drgnx-tty-capable-terminal-argv) (list exe "start" "--"))))
+            (let ((exe (drgnx-tty-rec-test--make-app apps "kitty.app" "kitty"))
+                  (drgnx-tty-open-in 'kitty))
+              (should (equal (drgnx-tty-capable-terminal-argv) (list exe "--"))))
             ;; an app directory that does not exist is not an error
             (let ((drgnx-tty-mac-app-dirs (list (expand-file-name "nope" apps))))
               (should-not (drgnx-tty-installed-capable)))
             ;; app bundles count only on macOS
             (let ((system-type 'gnu/linux))
               (should-not (drgnx-tty-installed-capable)))))
-      (delete-directory apps t))))
+      (delete-directory apps t)))
+  ;; Ghostty found on PATH (Homebrew) on macOS: still through `open', by the app's name
+  (drgnx-tty-rec-test--with-path '("ghostty")
+    (let ((system-type 'darwin) (drgnx-tty-open-in 'ghostty))
+      (should (equal (drgnx-tty-capable-terminal-argv) '("/usr/bin/open" "-na" "Ghostty.app" "--args" "-e"))))
+    ;; on Linux the same ghostty runs directly
+    (let ((process-environment (cons "WAYLAND_DISPLAY=wayland-1" process-environment))
+          (drgnx-tty-open-in 'ghostty))
+      (should (equal (drgnx-tty-rec-test--argv-names (drgnx-tty-capable-terminal-argv)) '("ghostty" "-e"))))))
+
+(ert-deftest drgnx-tty-recommend/xterm-says-what-it-lacks ()
+  ;; derived from xterm's row (no OSC 52, no true colour), like the C-g note
+  (should (equal (drgnx-tty-terminal-caveat 'xterm) "xterm: no clipboard copy over SSH, 256 colours"))
+  (dolist (term '(wezterm ghostty kitty foot alacritty))
+    (should-not (drgnx-tty-terminal-caveat term)))
+  (let ((os (drgnx-tty-rec-test--os "fedora-45")))
+    ;; installed
+    (drgnx-tty-rec-test--with-path '("xterm")
+      (should (string-match-p "xterm is installed.*xterm: no clipboard copy over SSH, 256 colours"
+                              (plist-get (drgnx-tty-recommendation '(:keys legacy) os) :text))))
+    ;; to install (xterm is first on Fedora and Debian)
+    (drgnx-tty-rec-test--with-path nil
+      (let ((rec (drgnx-tty-recommendation '(:keys legacy) os)))
+        (should (eq (car (car (plist-get rec :install))) 'xterm))
+        (should (string-match-p "xterm: no clipboard copy over SSH, 256 colours" (plist-get rec :text)))))
+    ;; no caveat where xterm is not recommended
+    (drgnx-tty-rec-test--with-path nil
+      (should-not (string-match-p "256 colours"
+                                  (plist-get (drgnx-tty-recommendation '(:keys legacy) (drgnx-tty-rec-test--os "arch"))
+                                             :text)))))
+  ;; `auto' picking xterm: the caller can say it
+  (drgnx-tty-rec-test--with-path '("xterm")
+    (let ((process-environment (cons "DISPLAY=:0" process-environment))
+          (drgnx-tty-open-in 'auto))
+      (should (eq (drgnx-tty-capable-terminal) 'xterm)))
+    (let ((drgnx-tty-open-in nil))
+      (should-not (drgnx-tty-capable-terminal)))))
+
+(ert-deftest drgnx-tty-recommend/alacritty-is-recommended-last ()
+  (should (eq (car (car (last drgnx-tty-capable-terminals))) 'alacritty))
+  (should (equal (mapcar #'car drgnx-tty-capable-terminals) drgnx-tty-best-order))
+  (should (equal (drgnx-tty-install-command 'alacritty (drgnx-tty-rec-test--os "fedora-45")) "sudo dnf install alacritty"))
+  (should (equal (drgnx-tty-install-command 'alacritty (drgnx-tty-rec-test--os "fedora-45" t)) "rpm-ostree install alacritty"))
+  (should (equal (drgnx-tty-install-command 'alacritty (drgnx-tty-rec-test--os "debian-13")) "sudo apt install alacritty"))
+  (should (equal (drgnx-tty-install-command 'alacritty (drgnx-tty-rec-test--os "arch")) "sudo pacman -S alacritty"))
+  (should (equal (drgnx-tty-install-command 'alacritty drgnx-tty-rec-test--macos) "brew install --cask alacritty"))
+  (should (string-prefix-p "https://" (drgnx-tty-install-command 'alacritty (drgnx-tty-rec-test--os "unknown"))))
+  (drgnx-tty-rec-test--with-path '("alacritty")
+    (let ((process-environment (cons "DISPLAY=:0" process-environment))
+          (drgnx-tty-open-in 'auto))
+      (should (equal (drgnx-tty-rec-test--argv-names (drgnx-tty-capable-terminal-argv)) '("alacritty" "-e")))
+      (should (string-match-p "Alacritty is installed.*C-g cannot stop busy Lisp"
+                              (plist-get (drgnx-tty-recommendation '(:keys legacy) (drgnx-tty-rec-test--os "arch")) :text))))))
 
 ;;; tty-recommend-test.el ends here

@@ -319,11 +319,16 @@ for a in \"$@\"; do case \"$a\" in set-clipboard) echo on;; extended-keys) echo 
     ;; WezTerm needs no setting (modifyOtherKeys); every one of them keeps some chords for itself
     (should-not (string-match-p "kitty_keyboard" note))
     (should-not (string-match-p "kitty_keyboard" (drgnx-tty-onboard-note 'wezterm)))
-    ;; the list of terminals comes from the table: every row with a key protocol and OSC 52
-    (dolist (row drgnx-tty-terminals)
-      (should (eq (and (string-match-p (regexp-quote (plist-get row :name)) (car (split-string note ":")))
-                       t)
-                  (and (or (plist-get row :kkp) (plist-get row :mok)) (plist-get row :osc52) t))))
+    ;; the list comes from the table and the recommender's order: key protocol and OSC 52, modifyOtherKeys first
+    (let ((names (mapcar (lambda (id) (plist-get (drgnx-tty-terminal id) :name))
+                         (seq-filter (lambda (id)
+                                       (let ((row (drgnx-tty-terminal id)))
+                                         (and (or (plist-get row :kkp) (plist-get row :mok)) (plist-get row :osc52))))
+                                     drgnx-tty-best-order))))
+      (should (equal names '("WezTerm" "Ghostty" "foot" "kitty" "Alacritty")))
+      (should (string-match-p (regexp-quote "works best in WezTerm, Ghostty, foot, kitty, or Alacritty") note)))
+    ;; the kitty keyboard protocol terminals are named with the C-g limit; the others are not
+    (should (string-match-p "In foot, kitty and Alacritty, C-g cannot stop busy Lisp" note))
     (should (string-match-p "keeps some" note))
     (should-not (string-match-p "\n\n" note)))
   (should (string-match-p "keeps 62 shortcuts for itself" (drgnx-tty-onboard-note 'kitty)))

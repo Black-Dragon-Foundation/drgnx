@@ -21,10 +21,10 @@
 (require 'drgnx-paths)
 (require 'drgnx-tty)
 
-(defconst drgnx-tty-capable-terminals
+(defconst drgnx-tty--capable-entries
   '((wezterm :name "WezTerm" :binary "wezterm" :argv ("start" "--") :display any
              :arch "wezterm" :cask "wezterm" :mac-app "WezTerm.app" :url "https://wezterm.org/installation.html")
-    (ghostty :name "Ghostty" :binary "ghostty" :argv ("-e") :display any
+    (ghostty :name "Ghostty" :binary "ghostty" :argv ("-e") :display any :mac-open t
              :arch "ghostty" :cask "ghostty" :mac-app "Ghostty.app" :url "https://ghostty.org/docs/install/binary")
     (xterm :name "xterm" :binary "xterm" :argv ("-e") :display x11
            :dnf "xterm" :apt "xterm" :arch "xterm" :url "https://invisible-island.net/xterm/")
@@ -32,23 +32,32 @@
           :dnf "foot" :apt "foot" :arch "foot" :url "https://codeberg.org/dnkl/foot")
     (kitty :name "kitty" :binary "kitty" :argv ("--") :display any
            :dnf "kitty" :apt "kitty" :arch "kitty" :cask "kitty" :mac-app "kitty.app"
-           :url "https://sw.kovidgoyal.net/kitty/binary/"))
-  "The terminals that can send every key, best first: (ID . PLIST).
+           :url "https://sw.kovidgoyal.net/kitty/binary/")
+    (alacritty :name "Alacritty" :binary "alacritty" :argv ("-e") :display any
+               :dnf "alacritty" :apt "alacritty" :arch "alacritty" :cask "alacritty" :mac-app "Alacritty.app"
+               :url "https://alacritty.org/"))
+  "The terminals that can send every key: (ID . PLIST), in no order
+\(`drgnx-tty-capable-terminals' orders them).
 PLIST: :name; :binary and :argv (what follows it to run a command in the terminal); :display (`any', `x11' or
 `wayland': the display it needs on Linux); :dnf, :apt, :arch the package names, :cask the Homebrew cask and
-:mac-app the application bundle (a key is absent where there is none); :url the download page.
-Ordered by what is best for C-g, from the table in `drgnx-tty-terminals': the terminals with modifyOtherKeys
-(WezTerm, Ghostty, xterm) before the kitty keyboard protocol ones (foot, kitty).  If foot's row ever says
-modifyOtherKeys, it is already ahead of kitty.
+:mac-app the application bundle (a key is absent where there is none); :mac-open non-nil when the terminal's
+command line cannot start its window on macOS, so it is started with `open -na APP --args' (Ghostty says so in its
+own help; WezTerm's and kitty's bundled commands do start the window, and Alacritty's binary is run directly);
+:url the download page.
 
 On image-based Fedora the Fedora packages go through `rpm-ostree install' (the same packages as dnf, so the same
 index check); WezTerm and foot have Flatpaks on Flathub, but a Flatpak terminal runs its shell inside the
 sandbox, where drgnx and emacsclient are not, so they are not suggested; kitty and Ghostty have none.
 
 Package names were checked against the distributions' indexes on 2026-10-18: Arch (extra) has kitty, foot, ghostty,
-wezterm and xterm; Fedora 44 has kitty, foot and xterm; Debian 13 and Ubuntu 26.04 have kitty, foot and xterm;
-Homebrew has the casks kitty, ghostty and wezterm.  The RHEL clones (Rocky, Alma) have kitty only in EPEL, which is
-not on by default, and Amazon Linux has none: both get the download pages.")
+wezterm, xterm and alacritty; Fedora 44 has kitty, foot, xterm and alacritty; Debian 13 and Ubuntu 26.04 have kitty,
+foot, xterm and alacritty; Homebrew has the casks kitty, ghostty, wezterm and alacritty.
+The RHEL clones (Rocky, Alma) have kitty only in EPEL, which is not on by default,
+and Amazon Linux has none: both get the download pages.")
+
+(defconst drgnx-tty-capable-terminals
+  (delq nil (mapcar (lambda (id) (assq id drgnx-tty--capable-entries)) drgnx-tty-best-order))
+  "The entries of `drgnx-tty--capable-entries' in the order of `drgnx-tty-best-order' (best first).")
 
 ;;;; Which system
 
@@ -142,6 +151,20 @@ Never runs it."
   "Non-nil when TERMINAL has modifyOtherKeys (so C-g stops busy Lisp), by its row in `drgnx-tty-terminals'."
   (plist-get (drgnx-tty-terminal terminal) :mok))
 
+(defun drgnx-tty-terminal-caveat (terminal)
+  "What TERMINAL lacks that the others have, from its row in `drgnx-tty-terminals', as one phrase such as
+\"xterm: no clipboard copy over SSH, 256 colours\", or nil when it lacks nothing."
+  (let* ((row (drgnx-tty-terminal terminal))
+         (lacks (delq nil (list (and row (not (plist-get row :osc52)) "no clipboard copy over SSH")
+                                (and row (not (plist-get row :truecolor)) "256 colours")))))
+    (when lacks (format "%s: %s" (drgnx-tty--name terminal) (string-join lacks ", ")))))
+
+(defun drgnx-tty--fallback-hint ()
+  "The sentence that says how to type the keys a legacy terminal cannot send."
+  ;; TODO(Task 5b): derive the keys from `drgnx-tty-chord-prefix' (F6) when 5b's fallback layer lands; the
+  ;; variable does not exist on this branch.
+  "Until then: Alt+Shift or F6 then the key.")
+
 (defun drgnx-tty--install-choices (os)
   "The first two terminals to install on OS, as ((TERMINAL . COMMAND)…): those with a package command first,
 in the order of `drgnx-tty-capable-terminals', then download pages."
@@ -163,19 +186,23 @@ only when there is none, the first two install commands.  Read-only."
            (lines
             (if installed
                 (mapcar (lambda (term)
-                          (format "%s is installed: run drgnx -t from %s.%s" (drgnx-tty--name term) (drgnx-tty--name term)
+                          (format "%s is installed: run drgnx -t from %s.%s%s" (drgnx-tty--name term) (drgnx-tty--name term)
                                   (if (drgnx-tty--keeps-c-g-p term) ""
-                                    " It works, but C-g cannot stop busy Lisp there.")))
+                                    " It works, but C-g cannot stop busy Lisp there.")
+                                  (if-let* ((caveat (drgnx-tty-terminal-caveat term))) (concat " " caveat ".") "")))
                         installed)
-              (list (concat "To get every key, install a terminal that sends them (drgnx never installs one for you): "
+              (cons (concat "To get every key, install a terminal that sends them (drgnx never installs one for you): "
                             (mapconcat (lambda (choice) (format "%s: %s" (drgnx-tty--name (car choice)) (cdr choice)))
                                        install "; ")
-                            ".")))))
+                            ".")
+                    (delq nil (mapcar (lambda (choice)
+                                        (when-let* ((caveat (drgnx-tty-terminal-caveat (car choice)))) (concat caveat ".")))
+                                      install))))))
       (list :installed installed :install install
             :text (string-join (append (list "This terminal cannot send C-S- chords and the like.") lines
                                        (and (seq-some (lambda (choice) (string-prefix-p "rpm-ostree" (cdr choice))) install)
                                             (list "(rpm-ostree layers the package: restart to use it.)"))
-                                       (list "Until then: Alt+Shift or F6 then the key."))
+                                       (list (drgnx-tty--fallback-hint)))
                                " ")))))
 
 ;;;; Opening drgnx -t in a capable terminal
@@ -184,7 +211,7 @@ only when there is none, the first two install commands.  Read-only."
   "Let `drgnx -t' open in a terminal that sends every key.
 Nil: off, `drgnx -t' runs in the terminal you ran it in.  `auto': the first installed terminal of
 `drgnx-tty-capable-terminals' that fits your display.  Or one terminal's name (wezterm, ghostty, xterm, foot,
-kitty).  Never used over SSH or without a display."
+kitty, alacritty).  Never used over SSH or without a display."
   :type '(choice (const :tag "Off" nil) (const :tag "The first installed" auto)
                  (symbol :tag "A terminal"))
   :group 'drgnx)
@@ -200,19 +227,42 @@ kitty).  Never used over SSH or without a display."
         ('x11 (drgnx-tty--env-set-p "DISPLAY"))
         (_ (or (drgnx-tty--env-set-p "WAYLAND_DISPLAY") (drgnx-tty--env-set-p "DISPLAY"))))))
 
-(defun drgnx-tty-capable-terminal-argv ()
-  "The argv prefix that runs a command in a capable terminal, per `drgnx-tty-open-in', or nil: when it is off,
-when no such terminal is installed or fits the display, over SSH, or with no display.  Append the command."
+(defun drgnx-tty--argv (terminal file)
+  "The argv prefix that runs a command in TERMINAL, whose executable is FILE."
+  (let ((entry (alist-get terminal drgnx-tty-capable-terminals)))
+    (if (and (plist-get entry :mac-open) (eq (drgnx-platform) 'macos))
+        ;; the command line cannot start the window: ask macOS to open the application (it does not wait)
+        (append (list (or (executable-find "open") "/usr/bin/open") "-na"
+                      (if (string-match "\\`\\(.*\\.app\\)/Contents/" file) (match-string 1 file) (plist-get entry :mac-app))
+                      "--args")
+                (plist-get entry :argv))
+      (cons file (plist-get entry :argv)))))
+
+(defun drgnx-tty--choice ()
+  "The terminal `drgnx-tty-open-in' picks, as (ID . ARGV), or nil: when it is off, when no such terminal is
+installed or fits the display, over SSH, or with no display."
   (unless (or (null drgnx-tty-open-in)
               (drgnx-tty--env-set-p "SSH_CONNECTION") (drgnx-tty--env-set-p "SSH_TTY"))
     (seq-some (lambda (terminal)
                 (when-let* ((entry (alist-get terminal drgnx-tty-capable-terminals))
                             ((drgnx-tty--display-fits-p (plist-get entry :display)))
                             (file (drgnx-tty--executable terminal)))
-                  (cons file (plist-get entry :argv))))
+                  (cons terminal (drgnx-tty--argv terminal file))))
               (if (eq drgnx-tty-open-in 'auto)
                   (mapcar #'car drgnx-tty-capable-terminals)
                 (list drgnx-tty-open-in)))))
+
+(defun drgnx-tty-capable-terminal ()
+  "The id of the terminal `drgnx-tty-capable-terminal-argv' runs, or nil.  Say its `drgnx-tty-terminal-caveat'
+when it has one (xterm)."
+  (car (drgnx-tty--choice)))
+
+(defun drgnx-tty-capable-terminal-argv ()
+  "The argv prefix that runs a command in a capable terminal, per `drgnx-tty-open-in', or nil: when it is off,
+when no such terminal is installed or fits the display, over SSH, or with no display.  Append the command.
+On macOS, Ghostty is started with `open -na APP --args -e', which returns at once and does not wait for the
+command."
+  (cdr (drgnx-tty--choice)))
 
 (provide 'drgnx-tty-recommend)
 ;;; drgnx-tty-recommend.el ends here
