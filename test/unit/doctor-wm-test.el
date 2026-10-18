@@ -152,6 +152,24 @@ and `exec-path' (`drgnx-doctor-wm-test--tool' adds to it), a dead session bus an
                                      '(:window-manager (:wm ns :title "macOS" :can-move t :frame-positions t)))
                  '(ok "macOS: Move to Monitor and restore work (frame positions)" nil))))
 
+(ert-deftest drgnx-doctor-wm/drgnx-doctor-in-a-mac-terminal-is-macos ()
+  ;; final review I4: `drgnx doctor' in Terminal.app is batch Emacs with no DISPLAY or WAYLAND_DISPLAY: the real
+  ;; facts path (not a made-up plist) must still find macOS
+  (drgnx-doctor-wm-test--with nil
+    (let ((system-type 'darwin))
+      (should (eq (plist-get (drgnx-platform-doctor-facts) :wm) 'ns))
+      (should (eq (drgnx-platform-wm) 'ns))
+      (should (equal (drgnx-doctor-wm-test--row)
+                     '(ok "macOS: Move to Monitor and restore work (frame positions)" nil)))))
+  ;; over SSH into a Mac it is still not the desktop in front of you
+  (drgnx-doctor-wm-test--with '("SSH_CONNECTION=192.0.2.1 50000 192.0.2.2 22")
+    (let ((system-type 'darwin))
+      (should (eq (car (drgnx-doctor-wm-test--row)) 'info))))
+  ;; and Linux without a display stays "no graphical session"
+  (drgnx-doctor-wm-test--with nil
+    (let ((system-type 'gnu/linux))
+      (should (eq (plist-get (drgnx-platform-doctor-facts) :wm) 'none)))))
+
 (ert-deftest drgnx-doctor-wm/another-wayland-compositor-is-info ()
   (drgnx-doctor-wm-test--with '("WAYLAND_DISPLAY=wayland-test" "XDG_CURRENT_DESKTOP=river")
     (should (equal (drgnx-doctor-wm-test--row)

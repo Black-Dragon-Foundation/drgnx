@@ -186,8 +186,10 @@ SPEC keys: :detect (fn ENV WINDOW-SYSTEM -> non-nil), :title, :tool, :version (a
 (defvar drgnx-platform--detect-frame nil "The frame being detected for (the i3 root-window property).")
 
 (defun drgnx-platform--effective-ws (env ws)
-  "WS, or for batch (WS nil) what the environment says: `pgtk' with WAYLAND_DISPLAY, `x' with DISPLAY."
+  "WS, or for batch (WS nil) what the environment says: on macOS `ns' (a Mac's desktop is Cocoa, whatever an
+XQuartz DISPLAY says), else `pgtk' with WAYLAND_DISPLAY, `x' with DISPLAY."
   (cond (ws ws)
+        ((eq system-type 'darwin) 'ns)
         ((funcall env "WAYLAND_DISPLAY") 'pgtk)
         ((funcall env "DISPLAY") 'x)))
 
@@ -220,8 +222,8 @@ SPEC keys: :detect (fn ENV WINDOW-SYSTEM -> non-nil), :title, :tool, :version (a
 
 (defun drgnx-platform-detect (env wsys)
   "The adapter name for ENV (a function VAR -> value) and WSYS (the window system): pure, no process.
-WSYS is `ns', `pgtk', `x', `tty' (a terminal frame) or nil (batch: WAYLAND_DISPLAY stands for
-pgtk, DISPLAY for x, neither gives `none')."
+WSYS is `ns', `pgtk', `x', `tty' (a terminal frame) or nil (batch: macOS stands for ns,
+WAYLAND_DISPLAY for pgtk, DISPLAY for x, none of them gives `none')."
   (or (seq-some (lambda (cell)
                   (when-let* ((fn (plist-get (cdr cell) :detect)))
                     ;; an adapter's detect function that signals matches nothing
@@ -535,7 +537,7 @@ connection has been made yet).  The doctor reports the daemon's session."
 
 (drgnx-platform-define-adapter
  'ns :title "macOS" :status 'verified
- :detect (lambda (_env ws) (eq ws 'ns))
+ :detect (lambda (env ws) (eq (drgnx-platform--effective-ws env ws) 'ns))
  :monitors #'drgnx-platform--emacs-monitors :frame-monitor #'drgnx-platform--emacs-frame-monitor
  :move #'drgnx-platform--move-by-position :can-move #'drgnx-platform--graphic-can-move
  :doctor (lambda (_env) (list :monitors nil :answers nil)))

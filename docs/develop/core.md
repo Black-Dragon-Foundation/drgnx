@@ -172,7 +172,7 @@ function VAR -> value) and tries the adapters in definition order:
 
 | Window system | Order |
 |---|---|
-| `ns` | `ns` |
+| `ns`, and batch Emacs on macOS (`drgnx doctor` in Terminal.app) | `ns` |
 | `pgtk` | `sway` (`SWAYSOCK`), `hyprland` (`HYPRLAND_INSTANCE_SIGNATURE`), `niri` (`NIRI_SOCKET`), `kwin` (`XDG_CURRENT_DESKTOP` lists `KDE`), `gnome` (lists `GNOME`), else `other-wayland` (also pgtk with only `DISPLAY`) |
 | `x` | with `WAYLAND_DISPLAY` (Emacs on XWayland): the compositor's adapter, as for pgtk. Otherwise `i3` (`I3SOCK`, or the root window's `I3_SOCKET_PATH`; only checked for existence), else `x11` |
 | terminal frame | `tty` |
