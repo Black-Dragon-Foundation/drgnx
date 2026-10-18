@@ -501,5 +501,27 @@ config error, as the indexer does."
       (should (consp got))
       (should (string-match-p "ollama: no answer" notice)))))
 
+(ert-deftest drgnx-search/a-recreated-index-file-is-read-afresh ()
+  "Delete the index (the documented way to drop it), index again in the same Emacs: no stale fingerprints."
+  (drgnx-search-query-test--with
+    (drgnx-search-query-test--index db drgnx-search-query-test--texts)
+    (drgnx-search root "database" :embed (drgnx-search-query-test--embedder))   ; the cache holds 64-dim fingerprints
+    (sqlite-close db)
+    (dolist (suffix '("" "-wal" "-shm"))
+      (ignore-errors (delete-file (concat (drgnx-search-store-file root) suffix))))
+    (setq db (drgnx-search-store-open root))
+    (let ((dims 32))
+      (drgnx-search-store-put-file
+       db "src/z.el" "h" (list (list :start 1 :end 2 :text "zebra stripes pattern"
+                                     :vector (drgnx-search-query-test--embed-text "zebra stripes pattern" dims))))
+      (drgnx-search-store-set-meta db (list :provider 'stub :model "stub-1" :dims dims :indexed-at (float-time)))
+      (let ((r (drgnx-search root "zebra stripes pattern"
+                             :embed (lambda (inputs)
+                                      (setq drgnx-ai-embed-last-info '(:provider stub :model "stub-1"))
+                                      (vector (drgnx-search-query-test--embed-text (aref inputs 0) dims))))))
+        (should-not (and drgnx-search-last-notice (string-match-p "inconsistent" drgnx-search-last-notice)))
+        (should (equal (plist-get (car r) :path) "src/z.el"))
+        (should (eq (plist-get (car r) :why) 'both))))))
+
 (provide 'search-query-test)
 ;;; search-query-test.el ends here

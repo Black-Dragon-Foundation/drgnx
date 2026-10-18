@@ -286,7 +286,7 @@
               (should (= (length (plist-get snap :ids)) 6)) ; the six chunks of before, none of the new one
               (should (= (plist-get (plist-get snap :meta) :indexed-at) 1.0))
               (should (= (length (plist-get snap :words)) 12))
-              (should (equal (plist-get snap :stamp) (list 1.0 1 nil))))   ; (indexed-at generation cut)
+              (should (equal (cl-subseq (plist-get snap :stamp) 0 3) (list 1.0 1 nil))))   ; (indexed-at generation cut born)
             ;; the next read sees the replacement
             (should (= (plist-get (drgnx-search-store-meta reader) :indexed-at) 2.0))
             (should (= (length (car (drgnx-search-store-fingerprints reader))) 1)))
@@ -328,7 +328,7 @@
   (drgnx-search-store-test--with
     (drgnx-search-store-put-file db "a.el" "h" (list (drgnx-search-store-test--chunk "one" 1 64)))
     (let* ((snap (drgnx-search-store-snapshot db)) (ids (plist-get snap :ids))
-           (since (cons (nth 2 (plist-get snap :stamp)) (aref ids (1- (length ids))))))
+           (since (list (nth 3 (plist-get snap :stamp)) (nth 2 (plist-get snap :stamp)) (aref ids (1- (length ids))))))
       (drgnx-search-store-put-file db "b.el" "h" (list (drgnx-search-store-test--chunk "two" 2 64)))
       (let ((more (drgnx-search-store-snapshot db since)))      ; only appended: just the new chunk
         (should (plist-get more :append))
@@ -347,6 +347,33 @@
           (sqlite-close other)
           (should (< (- (float-time) t0) 2.0)))   ; busy_timeout is 5 s
       (sqlite-execute db "rollback"))))
+
+(ert-deftest drgnx-search-store/a-new-index-file-has-its-own-identity ()
+  "A snapshot since an earlier file's copy is a full read, whatever the counters say."
+  (drgnx-search-store-test--with
+    (drgnx-search-store-put-file db "a.el" "h" (list (drgnx-search-store-test--chunk "one" 1 64)))
+    (let* ((first (drgnx-search-store-snapshot db)) (born (nth 3 (plist-get first :stamp)))
+           (since (list born (nth 2 (plist-get first :stamp)) (aref (plist-get first :ids) 0))))
+      (should born)
+      (sqlite-close db)
+      (dolist (suffix '("" "-wal" "-shm"))
+        (ignore-errors (delete-file (concat (drgnx-search-store-file "/fake/project") suffix))))
+      (setq db (drgnx-search-store-open "/fake/project"))
+      (drgnx-search-store-put-file db "a.el" "h" (list (drgnx-search-store-test--chunk "one" 1 64)
+                                                       (drgnx-search-store-test--chunk "two" 2 64)))
+      (let ((again (drgnx-search-store-snapshot db since)))
+        (should-not (equal born (nth 3 (plist-get again :stamp))))
+        (should-not (plist-get again :append))
+        (should (= (length (plist-get again :ids)) 2))))))
+
+(ert-deftest drgnx-search-store/an-unreadable-meta-value-does-not-downgrade-the-schema ()
+  (drgnx-search-store-test--with
+    (sqlite-execute db "insert or replace into meta values ('schema', '2')")
+    (sqlite-execute db "insert or replace into meta values ('model', '(')")
+    (sqlite-close db)
+    (should-error (drgnx-search-store-open "/fake/project"))
+    (setq db (sqlite-open (drgnx-search-store-file "/fake/project")))
+    (should (equal (caar (sqlite-select db "select value from meta where key = 'schema'")) "2"))))
 
 (provide 'search-store-test)
 ;;; search-store-test.el ends here

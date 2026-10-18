@@ -87,8 +87,14 @@ word zero-padded — the form `drgnx-search-store-fingerprints' returns, for ran
                     (drgnx-state-dir)))
 
 (defun drgnx-search-store--schema-of (db)
-  "The schema version DB records (0 when it has none yet), read without taking the write lock."
-  (or (ignore-errors (plist-get (drgnx-search-store-meta db) :schema)) 0))
+  "The schema version DB records (0 when it has none yet), read without taking the write lock.  Only the
+schema row is read, and only a missing table means 0: an unreadable value elsewhere in the meta is an error,
+not a reason to write the schema marker again."
+  (condition-case err
+      (if-let* ((row (car (sqlite-select db "select value from meta where key = 'schema'"))))
+          (let ((read-eval nil)) (car (read-from-string (car row))))
+        0)
+    (error (if (string-match-p "no such table" (error-message-string err)) 0 (signal (car err) (cdr err))))))
 
 (defun drgnx-search-store--newer-error (have)
   (user-error "Search index is schema %d, newer than this drgnx (%d): update drgnx"
@@ -109,7 +115,12 @@ An index that is current is only read: the write lock is for creating or complet
             (let ((have (drgnx-search-store--schema-of db)))
               (when (> have drgnx-search-store-schema-version) (drgnx-search-store--newer-error have))
               (dolist (sql drgnx-search-store--schema) (sqlite-execute db sql))
-              (drgnx-search-store--put-meta db (list :schema drgnx-search-store-schema-version)))
+              (drgnx-search-store--put-meta db (list :schema drgnx-search-store-schema-version))
+              ;; a new file gets an identity: a cache of an earlier file at this path (deleted, made again)
+              ;; must not be extended with this one's chunks
+              (when (zerop have)
+                (drgnx-search-store--put-meta
+                 db (list :born (format "%x-%x" (random most-positive-fixnum) (floor (* 1000 (float-time))))))))
             (sqlite-execute db "commit"))
         (error (ignore-errors (sqlite-execute db "rollback"))
                (signal (car err) (cdr err)))))))
@@ -204,22 +215,23 @@ rolled-back write leaves the counter as it was."
 ;;;; Reading
 
 (defun drgnx-search-store-stamp (db)
-  "What changes when the index does: (INDEXED-AT GENERATION CUT).  GENERATION counts the writes of files
+  "What changes when the index does: (INDEXED-AT GENERATION CUT BORN).  BORN names the index file's creation
+\(nil for an index made before it existed).  GENERATION counts the writes of files
 \(`put-file', `delete-file'), CUT the writes that removed chunks — both are bumped inside the write's
 transaction, so ids the database reuses cannot make two states look alike.  Chunks arrive before the
 indexer advances `:indexed-at', so the generation also tells a half-finished run's progress."
   (let ((meta (drgnx-search-store-meta db)))
-    (list (plist-get meta :indexed-at) (plist-get meta :gen) (plist-get meta :cut))))
+    (list (plist-get meta :indexed-at) (plist-get meta :gen) (plist-get meta :cut) (plist-get meta :born))))
 
 (defun drgnx-search-store-snapshot (db &optional since)
   "The index as of one moment, read in one transaction: (:stamp STAMP :meta META :ids IDS :words WORDS
 :append APPEND) — `drgnx-search-store-stamp', `-meta' and `-fingerprints'.  A write between its pages does
-not show.  SINCE is (CUT . LAST-ID) of a copy the caller holds: when no chunk was removed since (the same
-CUT), only the chunks after LAST-ID are read and APPEND is t."
+not show.  SINCE is (BORN CUT LAST-ID) of a copy the caller holds: when it is of this same file (BORN) and no
+chunk was removed since (the same CUT), only the chunks after LAST-ID are read and APPEND is t."
   (with-sqlite-transaction db
     (let* ((stamp (drgnx-search-store-stamp db))
-           (append (and since (equal (car since) (nth 2 stamp))))
-           (fp (drgnx-search-store-fingerprints db (and append (cdr since)))))
+           (append (and since (equal (nth 0 since) (nth 3 stamp)) (equal (nth 1 since) (nth 2 stamp))))
+           (fp (drgnx-search-store-fingerprints db (and append (nth 2 since)))))
       (list :stamp stamp :meta (drgnx-search-store-meta db) :ids (car fp) :words (cdr fp) :append append))))
 
 (defconst drgnx-search-store--page 5000 "Fingerprints read per query (bounds the transient rows).")

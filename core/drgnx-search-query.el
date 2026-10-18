@@ -96,7 +96,7 @@ only the chunks added since, when none was removed (an indexer run adding files)
     (unless (equal (car entry) stamp)
       (let* ((ids (nth 1 entry))
              (snap (drgnx-search-store-snapshot
-                    db (and entry (> (length ids) 0) (cons (nth 2 (car entry)) (aref ids (1- (length ids)))))))
+                    db (and entry (> (length ids) 0) (list (nth 3 (car entry)) (nth 2 (car entry)) (aref ids (1- (length ids)))))))
              (more (plist-get snap :append)))
         (setq entry (list (plist-get snap :stamp)
                           (if more (vconcat ids (plist-get snap :ids)) (plist-get snap :ids))
