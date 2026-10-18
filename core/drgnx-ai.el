@@ -344,12 +344,17 @@ when gptel sends, never a stored string."
 
 (defvar drgnx-ai--gptel-ours nil "The gptel backend drgnx made last.")
 (defvar gptel--openai)
+(defvar gptel-api-key)
 
 (defun drgnx-ai-gptel-maybe-configure (usable-p)
   "Point gptel at the `chat' role's first provider USABLE-P accepts — unless the user chose a backend of their
-own (only gptel's default, none, or the one drgnx made is replaced).  Returns the step, or nil."
+own (only gptel's default, none, or the one drgnx made is replaced; gptel's default with a `gptel-api-key' the
+user set is theirs).  Returns the step, or nil."
   (when (or (not (boundp 'gptel-backend)) (null gptel-backend) (eq gptel-backend drgnx-ai--gptel-ours)
-            (and (boundp 'gptel--openai) (eq gptel-backend gptel--openai)))
+            (and (boundp 'gptel--openai) (eq gptel-backend gptel--openai)
+                 ;; gptel's own default for the key is a function that asks auth-source: nobody's choice
+                 (or (not (boundp 'gptel-api-key)) (null gptel-api-key)
+                     (eq gptel-api-key 'gptel-api-key-from-auth-source))))
     (when-let* ((step (drgnx-ai-gptel-configure usable-p)))
       (setq drgnx-ai--gptel-ours gptel-backend)
       step)))

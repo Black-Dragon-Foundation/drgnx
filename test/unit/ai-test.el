@@ -382,4 +382,27 @@ Keychain and keyring are never reached."
         (should (eq (cadr entry) :none))
         (should (stringp (nth 2 entry)))))))                                            ; with its reason
 
+(defmacro drgnx-ai-test--with-gptel-vars (vars &rest body)
+  "BODY with the gptel variables VARS ((SYMBOL VALUE)…) set by hand and unset or restored after: gptel is not loaded
+here, and a variable let-bound before it loads would turn special for good."
+  (declare (indent 1))
+  `(let ((saved (mapcar (lambda (v) (list (car v) (boundp (car v)) (and (boundp (car v)) (symbol-value (car v))))) ',vars)))
+     (unwind-protect (progn ,@(mapcar (lambda (v) `(set ',(car v) ,(cadr v))) vars) ,@body)
+       (dolist (s saved) (if (nth 1 s) (set (nth 0 s) (nth 2 s)) (makunbound (nth 0 s)))))))
+
+(ert-deftest drgnx-ai/own-gptel-api-key-keeps-default-backend ()
+  ;; gptel's default backend with the user's own `gptel-api-key' is the user's choice: not replaced
+  (drgnx-ai-test--with root
+    (let ((drgnx-ai--gptel-ours nil))
+      (cl-letf (((symbol-function 'gptel-make-ollama) (lambda (name &rest _) (list 'backend name))))
+        (drgnx-ai-test--with-gptel-vars ((gptel--openai 'the-default) (gptel-backend 'the-default) (gptel-model 'gpt-x)
+                                         (gptel-api-key "sk-x"))
+          (should-not (drgnx-ai-gptel-maybe-configure (lambda (id) (eq id 'ollama))))
+          (should (eq gptel-backend 'the-default))
+          (should (eq gptel-model 'gpt-x))
+          ;; gptel's own default key function is nobody's choice: the default backend is still replaced
+          (set 'gptel-api-key #'gptel-api-key-from-auth-source)
+          (should (drgnx-ai-gptel-maybe-configure (lambda (id) (eq id 'ollama))))
+          (should (equal gptel-backend '(backend "Ollama"))))))))
+
 ;;; ai-test.el ends here

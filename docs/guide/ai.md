@@ -145,8 +145,9 @@ reported. It makes one test call. Only if that answers is the choice kept: at th
 ## Chat (gptel)
 
 With module `extra/llm` (gptel installed), gptel's backend comes from the `chat` role: its first provider that can
-be asked. drgnx sets it up again whenever a probe finishes. A backend you set yourself is never replaced, and gptel
-asks for the key only when it sends.
+be asked. drgnx sets it up again whenever a probe finishes. A backend you set yourself is never replaced, and neither is
+gptel's default ChatGPT backend once you have set your own `gptel-api-key`. gptel asks for the key only when it
+sends.
 
 ## Detection, fallback and the doctor
 
