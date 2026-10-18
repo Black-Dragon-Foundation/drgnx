@@ -142,6 +142,9 @@ Run `--perf` on its own: no other test tiers, agents or builds at the same time.
     `gc-cons-percentage` 0.2.
   - **Harness sessions** of the minimal configuration run at the same settings (`drgnx-ui-gc-early` and
     `drgnx-ui-gc-setup` in `harness/init/prelude.el`); a session of an external configuration brings its own.
+- **The Outline** keeps no imenu markers: each refresh turns them into integer positions and releases them, since a
+  marker in the source buffer costs every edit of that buffer until a collection frees it. Its rows are patched by key
+  (an edit that moves definitions redraws none). Wall numbers: perf deferred.
 - **Key resolution** at startup checked every pair of bindings for prefixes and re-parsed keys each time; it now
   caches parsed keys and compares only keys in one keymap with the same first event.
 - **Harness sessions** share one native-code cache per state root, so advice trampolines (the no-prompt guard
