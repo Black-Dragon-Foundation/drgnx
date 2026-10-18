@@ -142,6 +142,19 @@ warnings with their facts: `macos-app` (`~/Applications/drgnx.app` exists; fix `
 PATH, `/opt/homebrew/bin/brew` or `/usr/local/bin/brew`; the doctor may run without Homebrew on PATH) and
 `drgnx-on-path` (fix: `~/.local/bin` in `~/.zprofile`).
 
+## Pane kinds (`wb/drgnx-panes.el`)
+
+Every pane (Explorer, agents, terminal, help, …) is one data definition, a kind, made with
+`(drgnx-pane-define-kind KIND :title :buffer :placeholder :home :size :view :slot :height :fill :on-show :on-focus :stack)`.
+`:home` is `left`, `bottom`, `right` or `editor`. Callers show and find panes by kind and never use the dock, area
+or section API directly: `drgnx-pane-show` (`:buffer`, `:select`), `drgnx-pane-hide`, `drgnx-pane-toggle`,
+`drgnx-pane-focus`, `drgnx-pane-window`, `drgnx-pane-kind`, `drgnx-pane-kinds`. `drgnx-pane-show` never changes
+the selected window unless `:select` is given. `drgnx-pane-backend` (`areas`) says where kinds live; `areas` forwards
+a `left` kind to `drgnx-wb-define-section`, a `bottom` or `right` kind to `drgnx-wb-define-tab` (areas `panel` and
+`right`), an `editor` kind (its `:buffer` a name) to a `drgnx-wb-place` rule, and `:fill` to
+`drgnx-layouts-define-pane`. A backend is an entry in `drgnx-pane--backends` (the functions for `:define`, `:show`,
+`:hide`, `:window`, `:focus`); the tiled grid registers `grid` there. Test: `test/unit/wb-panes-test.el`.
+
 ## Tests
 
 Batch: `test/unit/core-*-test.el`. The batch runner (`harness/run-ert.el`) gives the suite a temp HOME and drgnx
