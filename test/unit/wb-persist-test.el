@@ -242,16 +242,20 @@
 
 (ert-deftest drgnx-persist/a-file-of-only-job-windows-leaves-the-selected-frame-alone ()
   (drgnx-persist-test--with dir
-    (let ((rebuilt 0) (restored 0))
+    (let ((rebuilt 0) (restored 0) (role (frame-parameter nil 'drgnx-frame-role)))
       (with-temp-file drgnx-persist-file
         (prin1 '(:version 2 :frames ((:role custom :restore (drgnx-persist-test--rebuild "j1")))) (current-buffer)))
-      (cl-letf (((symbol-function 'drgnx-persist-test--rebuild) (lambda (&rest _) (cl-incf rebuilt) nil))
-                ((symbol-function 'drgnx-persist--restore-frame) (lambda (_st) (cl-incf restored)))
-                ((symbol-function 'select-frame-set-input-focus) #'ignore))
-        (drgnx-persist-restore))
-      (should (= rebuilt 1))
-      (should (= restored 0))
-      (should-not (frame-parameter nil 'drgnx-frame-role)))))
+      (unwind-protect
+          (progn
+            (set-frame-parameter nil 'drgnx-frame-role 'aux)     ; whatever role earlier tests left: it must stay
+            (cl-letf (((symbol-function 'drgnx-persist-test--rebuild) (lambda (&rest _) (cl-incf rebuilt) nil))
+                      ((symbol-function 'drgnx-persist--restore-frame) (lambda (_st) (cl-incf restored)))
+                      ((symbol-function 'select-frame-set-input-focus) #'ignore))
+              (drgnx-persist-restore))
+            (should (= rebuilt 1))
+            (should (= restored 0))
+            (should (eq (frame-parameter nil 'drgnx-frame-role) 'aux)))
+        (set-frame-parameter nil 'drgnx-frame-role role)))))
 
 (ert-deftest drgnx-persist/the-file-lists-every-window ()
   ;; Format 2: one entry per window (the main one first); format 1 files (one window) still restore.

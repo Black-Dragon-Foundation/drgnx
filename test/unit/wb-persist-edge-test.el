@@ -82,13 +82,17 @@ frame's first, then the others (each in a window of its own, stubbed here to the
   "M3e-5: the state with `:role main' is restored into the selected frame wherever it stands in the file; the
 others follow in order, each in a window of its own.  Without a main one, the first is."
   (drgnx-persist-edge-test--with dir
-    (should (equal (drgnx-persist-edge-test--restored-order
-                    '((:role aux :extra (:which aux-1)) (:role main :extra (:which main)) (:role aux :extra (:which aux-2))))
-                   '(main aux-1 aux-2)))
-    (should (eq (frame-parameter nil 'drgnx-frame-role) 'main))
-    (should (equal (drgnx-persist-edge-test--restored-order
-                    '((:extra (:which first)) (:role aux :extra (:which second))))
-                   '(first second)))))
+    (let ((role (frame-parameter nil (quote drgnx-frame-role))))
+      (unwind-protect
+          (progn
+            (should (equal (drgnx-persist-edge-test--restored-order
+                            (quote ((:role aux :extra (:which aux-1)) (:role main :extra (:which main)) (:role aux :extra (:which aux-2)))))
+                           (quote (main aux-1 aux-2))))
+            (should (eq (frame-parameter nil (quote drgnx-frame-role)) (quote main)))
+            (should (equal (drgnx-persist-edge-test--restored-order
+                            (quote ((:extra (:which first)) (:role aux :extra (:which second)))))
+                           (quote (first second)))))
+        (set-frame-parameter nil (quote drgnx-frame-role) role)))))
 
 (ert-deftest drgnx-persist-edge/failed-restore-is-not-retried ()
   "M12a-12: a frame is marked restored before its restore runs, so a restore that fails does not run again at

@@ -8,8 +8,8 @@
   "Run BODY with `root' bound to a fresh DRGNX_UI_STATE directory.  No systemd unit counts as active:
 the real ones belong to sessions running next to the tests (bin/drgnx check's live shards)."
   (declare (indent 0))
-  `(let* ((root (make-temp-file "drgnx-ui-state" t))
-          (runtime (expand-file-name "xdg-runtime" root))
+  `(let* ((root (make-temp-file "duis" t))              ; short: a check shard's temp dir is already deep, a socket path holds 108 bytes
+          (runtime (expand-file-name "r" root))
           (process-environment (append (list (concat "DRGNX_UI_STATE=" root)
                                              (concat "XDG_RUNTIME_DIR=" runtime))
                                        process-environment)))

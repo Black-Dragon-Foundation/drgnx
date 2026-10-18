@@ -1,5 +1,7 @@
 ;;; core-keys-test.el --- batch tests: key profiles, layers and conflicts -*- lexical-binding: t -*-
 (require 'ert)
+(require 'loadhist)                                    ; feature-file
+(defvar features)                                      ; bound dynamically below
 (require 'drgnx)
 
 (defconst drgnx-keys-test--profiles
@@ -35,9 +37,19 @@ What those modules hook into (find-file, the agents, the panel tabs) is undone a
      (drgnx-command-define 'replace-in-files :category "Search" :title "Replace in Files" :command #'ignore :doc "test")
      (drgnx-command-define 'rename-symbol :category "Search" :title "Rename Symbol" :command #'ignore :doc "test")
      (when drgnx-keys-test--later-stages
-       ;; A module that needs a package (magit, avy, …) stays out whatever this machine has installed.
-       (cl-letf (((symbol-function 'locate-library) (lambda (&rest _) nil)))
-         (dolist (stage (cdr drgnx-modules-stages)) (drgnx-modules-run stage))))
+       ;; A module that needs a package (magit, avy, websocket, …) stays out whatever this machine has installed
+       ;; — or whatever another test file has already loaded (`features' is what `featurep' reads).
+       ;; Emacs' own libraries (project, …) stay: they are there on every machine.
+       (let ((features (seq-difference
+                        features
+                        (let (ps)
+                          (dolist (entry drgnx-modules--table)
+                            (dolist (p (plist-get (cdr entry) :packages))
+                              (when-let* (((featurep p)) (f (feature-file p)))
+                                (unless (file-in-directory-p f lisp-directory) (push p ps)))))
+                          ps))))
+         (cl-letf (((symbol-function 'locate-library) (lambda (&rest _) nil)))
+           (dolist (stage (cdr drgnx-modules-stages)) (drgnx-modules-run stage)))))
      ,@body))
 
 (defun drgnx-keys-test--resolve (layers &rest args)
