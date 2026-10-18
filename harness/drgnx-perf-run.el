@@ -389,9 +389,29 @@ error if it does not hold)."
       (list (format "typing-evil input p95 %s ms is %s ms over typing's %s ms (evil may add at most 1 ms)"
                     (drgnx-perf--round evil) (drgnx-perf--round (- evil plain)) (drgnx-perf--round plain))))))
 
+(defun drgnx-perf-run--relative-note (results)
+  "A line saying the 1 ms rule was not judged, when `typing-evil' was measured without `typing' in RESULTS; else nil."
+  (when (and (numberp (drgnx-perf--get results 'typing-evil '(:input :p95)))
+             (not (numberp (drgnx-perf--get results 'typing '(:input :p95)))))
+    "perf: typing-evil's 1 ms rule not judged: typing was not measured in this run (add it to DRGNX_PERF_ONLY)"))
+
 (defun drgnx-perf-run--only-regexp ()
-  "The regexp $DRGNX_PERF_ONLY (workload names to run), or nil when it is unset or empty."
-  (let ((re (getenv "DRGNX_PERF_ONLY"))) (and re (not (string-empty-p re)) re)))
+  "The regexp $DRGNX_PERF_ONLY (workload names to run), or nil when it is unset or empty.  An invalid one is an error."
+  (let ((re (getenv "DRGNX_PERF_ONLY")))
+    (when (and re (not (string-empty-p re)))
+      (condition-case nil (string-match-p re "")
+        (invalid-regexp (error "perf: DRGNX_PERF_ONLY %S is not a valid regexp (an Emacs regexp: \\| for alternation)" re)))
+      re)))
+
+(defun drgnx-perf-run--budgets-judged (results)
+  "The budgets to judge RESULTS against: all of them, but with $DRGNX_PERF_ONLY set those of workloads that did
+not run, and without $DRGNX_MODAL_ELPA those of the evil workloads.  Any other budget of a missing workload stays,
+so the verdict says \"not measured\" (a renamed or misspelled workload is not lost)."
+  (let ((only (drgnx-perf-run--only-regexp)) (no-evil (not (drgnx-perf-run--modal-elpa))))
+    (seq-remove (lambda (b)
+                  (and (not (assq (car b) results))
+                       (or only (and no-evil (memq (car b) '(typing-evil motions-evil explorer-evil))))))
+                (drgnx-perf-run--budgets))))
 
 (defun drgnx-perf-run--only (workloads)
   "WORKLOADS whose name matches $DRGNX_PERF_ONLY (all of them when it is unset)."
@@ -584,12 +604,12 @@ the hook budget only (the audit adds its own cost to the other numbers)."
        (t
         (let* ((history (expand-file-name "perf-history.jsonl" (drgnx-ui-state-root)))
                (only (drgnx-perf-run--only-regexp))
-               ;; judged: the budgets of the workloads that ran (a filtered run, or no evil workloads, leaves the rest out)
-               (fails (append (drgnx-perf-verdict results (seq-filter (lambda (b) (assq (car b) results)) (drgnx-perf-run--budgets)))
+               (fails (append (drgnx-perf-verdict results (drgnx-perf-run--budgets-judged results))
                               (drgnx-perf-run--relative-fails results)))
                (worse (drgnx-perf-regressions history results)))
           (dolist (f fails) (princ (format "FAIL %s\n" f)))
           (dolist (r worse) (princ (format "FAIL regression: %s\n" r)))
+          (when-let* ((note (drgnx-perf-run--relative-note results))) (princ (concat note "\n")))
           (unless (or errors only) (drgnx-perf-history-append history (drgnx-perf-run--commit) results (seq-max (cons 0 (delq nil loads)))))
           (princ (format "history: %s%s\n" history (cond (errors " (not written: a workload failed)")
                                                          (only " (not written: DRGNX_PERF_ONLY ran some of the workloads)")

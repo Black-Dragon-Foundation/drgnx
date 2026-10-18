@@ -71,7 +71,10 @@ To measure only some workloads (the run is GUI-heavy), name them:
 DRGNX_MODAL_ELPA=… DRGNX_PERF_ONLY='^\(typing\|typing-evil\)$' bin/drgnx test --perf
 ```
 
-Only the budgets of the workloads that ran are judged, and such a run is not written to the history.
+Only the budgets of the workloads that ran are judged, and such a run is not written to the history. Without the
+filter every budget is judged: a budget whose workload did not run is reported as "not measured" (the one exception:
+the three `-evil` rows when `DRGNX_MODAL_ELPA` is unset). Naming `typing-evil` without `typing` skips the 1 ms rule
+and the run says so; a filter that is not a valid regexp, or matches no workload, stops the run with a message.
 
 ## Budgets
 
