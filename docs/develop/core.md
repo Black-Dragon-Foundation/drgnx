@@ -17,6 +17,7 @@ core/drgnx-macos.el  the drgnx app on macOS (drgnx macos-app; ../guide/opening.m
 core/drgnx-tty.el    terminals, batch-safe: which one, what it can do, keys it can send, terminfo, tmux (../guide/terminal.md)
 core/drgnx-tty-recommend.el  a terminal that sends every key: installed ones, the install command per OS, the opt-in opener
 core/drgnx-tty-fallback.el   keys a legacy terminal cannot send: their Alt+Shift and F6 forms, drgnx-tty-sendable-key (the layer: modules/ui/drgnx-tty-fallback-layer.el)
+core/drgnx-file.el   files drgnx keeps: the bounded reader, the atomic writer, the locked update, backups (below)
 modules/<category>/drgnx-<name>.el   one drgnx-module-define per file
 ```
 
@@ -36,6 +37,88 @@ nothing is written into the checkout; a harness session keeps both in its run di
 `(drgnx-user-dir)custom.el` (set and made when missing by early-init, loaded by `drgnx-init` once the packages are activated and guarded, as
 config.el is: an error is said, `drgnx safe` skips it): Customize and `package-install` save there,
 never into the checkout's tracked `init/init.el`.
+
+## Files drgnx keeps: drgnx-file (`drgnx-file.el`)
+
+One reader and one writer for every file drgnx keeps. It requires only `cl-lib` and `subr-x`, so an
+`emacs --batch -Q` hub loads it. Every name is used with no file name handlers and `default-directory` `"/"`:
+nothing here reaches Tramp, and nothing prompts or visits a buffer. Errors: `drgnx-file-refused` (data
+`(FILE REASON)`) and `drgnx-file-busy` (data `(FILE HOLDER)`), both `file-error`s.
+
+**Which call.** Config files go through drgnx-config, which uses this layer. State files change through
+`drgnx-file-update` with `:on-unreadable 'backup`. Reports and other files rewritten whole use `drgnx-file-write`
+with `:fsync nil`. Text files drgnx writes (unit files, desktop entries, exports) use `drgnx-file-write-text`.
+
+**Reading.** `(drgnx-file-read-bounded FILE &key max-bytes)` gives the file's text decoded as UTF-8, or nil when it
+does not exist. It refuses, in this order:
+- a remote name (`/method:host:…`): "a remote file";
+- a symbolic link to nothing;
+- anything that is not a regular file, checked by the mode string before opening, so a FIFO never blocks
+  (`file-attribute-type` is nil for a FIFO as for a file);
+- a file over `drgnx-file-max-bytes` (1 MiB), also one that grew past it while it was read. It is never truncated.
+
+A file swapped for a FIFO between the check and the open would still block: Emacs cannot open without blocking.
+
+`(drgnx-file-read FILE &key max-bytes)` gives `(:status S :data D :text T :problem P :stamp ST)`:
+- S is `absent` (missing, empty, or only whitespace and comments), `ok` or `unreadable`.
+- It reads exactly one form with `read-circle` and `read-symbol-shorthands` nil. These are problems: `#1=`, text
+  after the form, lists or vectors nested deeper than `drgnx-file-max-depth` (64), and any object other than a
+  symbol, a number, a string without text properties, a cons or a vector (records, `#s(hash-table …)`, byte-code,
+  bool-vectors, char-tables).
+- P is `(:text STRING :line N :column N)`, both 1-based. A refusal of the bounded read is a problem at line 1.
+- ST is `(drgnx-file-stamp FILE)`: `(INODE MTIME SIZE)` of the truename from one `file-attributes` call. The inode
+  sees a file renamed over another within one mtime tick. The stamp is taken before the read, so a change in between
+  shows as a change at the next compare.
+
+**Writing.** `(drgnx-file-write FILE DATA &key header mode private (fsync t) pretty text)` returns the path written:
+- It writes to FILE's truename, so a symlink stays a symlink, and makes missing folders. A non-regular file there is
+  refused.
+- The content goes to a temp file `.NAME.tmp-XXXXXX` beside the target (made 0600), which is renamed over it. A
+  reader sees the old file or the new one, never half of one. An error before the rename leaves the old file and
+  deletes the temp file.
+- The mode is the old file's, else MODE, else 0644. With PRIVATE it is 0600 for a new file, and an old file loses its
+  group and other bits.
+- The content is HEADER (comment lines), then TEXT when given, else DATA printed by `prin1` (`pp` with PRETTY) with
+  `print-length`, `print-level`, `print-circle`, `print-integers-as-characters` and `float-output-format` nil, in
+  UTF-8. A user's `print-length` never shortens a file.
+- The temp file is read back by `drgnx-file-read`'s rules and must be `equal` to DATA, else the write is refused
+  ("not printable as data") and the target is untouched. A buffer object, a hash table or a TEXT that is not DATA
+  never reaches the file.
+- FSYNC binds `write-region-inhibit-fsync` to nil. No lock file is made, and no buffer visits the target, so one that
+  visits it is never modified or asked about.
+
+`(drgnx-file-write-text FILE TEXT &key mode private (fsync t))` writes text with the same rules and no read back.
+
+**The locked update.** `(drgnx-file-update FILE FN &key on-unreadable (timeout 1.0) max-bytes header pretty render)`
+takes the lock, reads the file fresh, and writes `(FN DATA)`. FN gets nil for an absent file. When FN returns its
+argument (`eq`), nothing is written. RENDER, when given, is called with the old text, the old data and the new data,
+and returns the text to write (a surgical edit that keeps comments). The lock is released in `unwind-protect`.
+- An unreadable file is refused (`drgnx-file-refused` with the problem) and left untouched.
+- With `:on-unreadable 'backup` (state files only), it is copied aside first and FN gets nil.
+- A write from a timer, filter or sentinel passes `:timeout 0` and skips the write on `drgnx-file-busy`. The site's
+  next run writes.
+
+**The lock** is the directory `.NAME.lock/` beside the truename. `make-directory`, without parents, decides who holds
+it. Its `owner` file holds `(:pid :host :started :time)`. `(drgnx-file-lock-holder FILE)` reads it.
+- An attempt is made every `drgnx-file-lock-retry` (10 ms) up to TIMEOUT. With TIMEOUT 0 there is one attempt.
+  Then `drgnx-file-busy` names the holder. It never prompts.
+- A lock is stale when its `:time` (or, with no owner file, the directory's mtime) is older than
+  `drgnx-file-lock-stale` (10 s). It is also stale when it is on this host and its pid is gone or started at
+  another time (`:started` compared within 1 s), so a reused pid is not taken for the holder. Where Emacs cannot
+  tell a process's start time, only the age counts.
+- A stale lock is renamed to `.NAME.lock.stale-PID-RANDOM` and deleted, then `make-directory` decides again. A lock
+  is released only while its owner file is still the holder's.
+- **Limits.** Two processes stealing one stale lock within milliseconds can both hold it: the second renames the
+  first's fresh lock away. Plain files cannot compare-and-swap; the search index's lock takeover has the same
+  limit. A holder that keeps the lock over 10 s loses it, so FN must stay a quick change of data. A call to
+  `drgnx-file-update` inside FN on the same file waits for itself and ends busy. On a network filesystem the
+  rename and `make-directory` are only as atomic as the server makes them.
+- The clock and the wait go through `drgnx-file--now` and `drgnx-file--sleep`, which tests replace.
+
+**Backups.** `(drgnx-file-backup FILE)` copies the file to `NAME.bak-YYYYmmdd-HHMMSS-mmm` (UTC, so the names sort in
+time order) beside its truename, keeping its times and mode. Then it keeps only the newest
+`drgnx-file-backups-kept` (3). It gives the backup's path, or nil for a missing file, and refuses anything that is
+not a regular file.
 
 ## Staged hooks (`drgnx-hooks.el`)
 
