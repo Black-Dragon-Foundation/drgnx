@@ -530,6 +530,13 @@ side is in [jobs.md](../guide/jobs.md#a-job-in-the-work-cockpit).
 - **Kept in `drgnx-job-ui.el`:** the Plan Job commands (`job-show` is now "Show Job in Work…"), the ⚑ badge mode for
   those without the status bar (a click: `drgnx-job-ui-show` of the newest card's job, else
   `drgnx-cockpit-show-jobs`), and notifications.
+- **One count of what needs you,** in `drgnx-job-ui.el`: `drgnx-job-ui-needs-you-count JOBS` gives `(N . NEWEST-JOB)`
+  (open cards and messages not acted on, of proposed, running and paused jobs), and `drgnx-job-ui-waiting-p JOB` says
+  whether a job counts. `drgnx-job-ui-note-jobs JOBS` keeps the count and the badge; the badge's own `job/status` and
+  the every-job pane's both call it, so a refresh of that pane counts for the badge too and an action asks the hub
+  once. `drgnx-job-ui-needs-you` returns the cached count, or nil when it is not known: the status bar's jobs segment
+  reads it (part A), never the badge string. Both heads show the count: `What needs you: N`,
+  `What needs you — every job: N`.
 
 ### Cost
 

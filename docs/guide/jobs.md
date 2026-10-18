@@ -49,7 +49,8 @@ when the hub runs again; if the hub does not know the job (it was deleted), the 
 
 You do not have to watch it: while something of a job needs you, the mode line shows **⚑N** (the cards and messages
 waiting; a click shows the job with the newest card in the Work cockpit, or every job when only messages wait; it
-disappears when the hub cannot be asked, rather than showing the last count). With the status bar on, its jobs
+disappears when the hub cannot be asked, rather than showing the last count). What needs you's first line shows
+the same number, counted the same way. With the status bar on, its jobs
 count does the same, and each new card is a desktop notification (D-Bus on Linux; `osascript` on macOS; else a message
 in the echo area — `drgnx-job-ui-notify` nil turns them off). Neither ever asks you anything. What needs you is a **card** with its actions — the proposal (Approve, Reject), a permission (Allow, Reject),
 a merge conflict (let the agent resolve it, merge again after you resolved it, drop the task), a review that failed

@@ -20,6 +20,12 @@
 (require 'button)
 (require 'drgnx-registry)
 (require 'drgnx-panes)
+;; the jobs module's count of what needs you (the badge's), beside this file
+(unless (featurep 'drgnx-job-ui)
+  (load (expand-file-name "drgnx-job-ui" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(declare-function drgnx-job-ui-waiting-p "drgnx-job-ui")
+(declare-function drgnx-job-ui-needs-you-count "drgnx-job-ui")
+(declare-function drgnx-job-ui-note-jobs "drgnx-job-ui")
 
 (declare-function drgnx-hub-call "drgnx-hub")
 (declare-function drgnx-hub-connect "drgnx-hub")
@@ -176,7 +182,7 @@ spaces (a dock is narrow: a button is never cut in two)."
           (insert "\n"))))))
 
 (defun drgnx-cockpit-cards--insert-cards (job s)
-  (insert (propertize "What needs you\n\n" 'face 'bold))
+  (insert (propertize (format "What needs you: %d\n\n" (car (drgnx-job-ui-needs-you-count (list s)))) 'face 'bold))
   (unless (or (drgnx-cockpit-cards--v (plist-get s :cards)) (drgnx-cockpit-cards--v (plist-get s :messages)))
     (insert "Nothing needs you.\n"))
   (drgnx-cockpit-cards--insert-items job s))
@@ -196,9 +202,10 @@ spaces (a dock is narrow: a button is never cut in two)."
                                         ((equal (plist-get d :status) "proposed") 'italic)
                                         (t 'default))))))))
 
-(defun drgnx-cockpit-cards--insert-all (jobs)
-  "What needs you of every job of JOBS (summaries), each under its name — a button that filters the cockpit to it."
-  (insert (propertize "What needs you — every job\n\n" 'face 'bold))
+(defun drgnx-cockpit-cards--insert-all (jobs n)
+  "What needs you of every job of JOBS (summaries), each under its name — a button that filters the cockpit to it;
+N things in all."
+  (insert (propertize (format "What needs you — every job: %d\n\n" n) 'face 'bold))
   (unless jobs (insert "Nothing needs you.\n"))
   (dolist (j jobs)
     (let ((id (plist-get j :id)))
@@ -241,18 +248,15 @@ and spend — and its decision log, each only when its part of the job changed."
                             (lambda () (drgnx-cockpit-cards--insert-log job summary))))
 
 (defun drgnx-cockpit-cards--draw-all (jobs)
-  "Draw what needs you of every job of JOBS (as `job/status' lists them) that is proposed, running or paused and has
-a card or a message not acted on; the decision log says it is per job."
-  (let ((open (seq-filter (lambda (j)
-                            (and (member (plist-get j :status) '("proposed" "running" "paused"))
-                                 (or (drgnx-cockpit-cards--v (plist-get j :cards))
-                                     (seq-some (lambda (m) (not (equal (plist-get m :state) "acted")))
-                                               (drgnx-cockpit-cards--v (plist-get j :messages))))))
-                          jobs)))
-    (drgnx-cockpit-cards--put 'cards (cons :all (mapcar (lambda (j) (list (plist-get j :id) (plist-get j :title) (plist-get j :repo)
-                                                                          (drgnx-cockpit-cards--part j 'cards)))
-                                                        open))
-                              (lambda () (drgnx-cockpit-cards--insert-all open)))
+  "Draw what needs you of every job of JOBS (as `job/status' lists them) that waits on the user
+(`drgnx-job-ui-waiting-p'), and tell the badge the count (`drgnx-job-ui-note-jobs': one count, no second question);
+the decision log says it is per job."
+  (drgnx-job-ui-note-jobs jobs)
+  (let ((open (seq-filter #'drgnx-job-ui-waiting-p jobs)) (n (car (drgnx-job-ui-needs-you-count jobs))))
+    (drgnx-cockpit-cards--put 'cards (cons n (mapcar (lambda (j) (list (plist-get j :id) (plist-get j :title) (plist-get j :repo)
+                                                                       (drgnx-cockpit-cards--part j 'cards)))
+                                                     open))
+                              (lambda () (drgnx-cockpit-cards--insert-all open n)))
     (drgnx-cockpit-cards--put 'log :all #'drgnx-cockpit-cards--insert-no-log)))
 
 (defun drgnx-cockpit-cards--no-hub (why)
@@ -349,9 +353,11 @@ the job they show (any job, when they show every job)."
 ;;;; Acting on a card or a message (the user's buttons: they may ask)
 
 (defun drgnx-cockpit-cards--changed ()
-  "An action went through: the parts and the badge count again."
+  "An action went through: the parts and the badge count again — once: every job's pane, when it shows, counts
+for the badge (`drgnx-cockpit-cards--draw-all')."
   (drgnx-cockpit-cards--schedule)
-  (when (fboundp 'drgnx-job-ui--schedule-recount) (drgnx-job-ui--schedule-recount)))
+  (unless (and (null (drgnx-cockpit-cards-job)) (drgnx-cockpit-cards--visible-p))
+    (drgnx-job-ui--schedule-recount)))
 
 (defun drgnx-cockpit-cards--act (job card action &optional repo)
   "The user's ACTION on CARD of JOB, through the hub (an argument asked first where the action needs one); REPO, the

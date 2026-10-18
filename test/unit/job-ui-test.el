@@ -91,7 +91,27 @@
 ;; M9b4-1: once the hub has marked a dismissed message acted, the recount gives 0 (Dismiss itself:
 ;; mod-cockpit-cards-test.el).
 (ert-deftest drgnx-job-ui/an-acted-message-is-not-counted ()
-  (should (= 0 (car (drgnx-job-ui--count '((:id "j1" :status "running" :cards :null :messages ((:id 3 :state "acted")))))))))
+  (should (= 0 (car (drgnx-job-ui-needs-you-count '((:id "j1" :status "running" :cards :null :messages ((:id 3 :state "acted")))))))))
+
+;; one count of what needs you: the badge, the cockpit's What needs you and (after part A) the status bar read it
+(ert-deftest drgnx-job-ui/one-count-of-what-needs-you ()
+  (let ((drgnx-job-ui--badge "") (drgnx-job-ui--badge-job nil) (drgnx-job-ui--needs-you nil)
+        (done (list :id "j2" :status "done" :cards '((:id 9 :kind "review")) :messages :null))
+        (acted (list :id "j3" :status "running" :cards :null :messages '((:id 4 :state "acted")))))
+    (should (equal (drgnx-job-ui-needs-you-count (list drgnx-job-ui-test--summary done acted)) '(3 . "j1")))
+    (should (drgnx-job-ui-waiting-p drgnx-job-ui-test--summary))
+    (should-not (drgnx-job-ui-waiting-p done))
+    (should-not (drgnx-job-ui-waiting-p acted))
+    (should-not (drgnx-job-ui-needs-you))                  ; not known yet
+    (drgnx-job-ui-note-jobs (list drgnx-job-ui-test--summary done acted))
+    (should (= 3 (drgnx-job-ui-needs-you)))
+    (should (equal (substring-no-properties drgnx-job-ui--badge) " ⚑3"))
+    (should (equal drgnx-job-ui--badge-job "j1"))
+    (drgnx-job-ui-note-jobs nil)
+    (should (= 0 (drgnx-job-ui-needs-you)))
+    (should (equal drgnx-job-ui--badge ""))
+    (drgnx-job-ui--badge-clear)                           ; the hub cannot be asked: not known
+    (should-not (drgnx-job-ui-needs-you))))
 
 ;; M9b4-14: the notification goes where the platform has one.
 (ert-deftest drgnx-job-ui/notify-backend-choice ()

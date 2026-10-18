@@ -304,6 +304,25 @@ after — they owned their hooks and timers."
         (should (equal (plist-get drgnx-cockpit-graph-current-filter :job) "j2"))
         (should (string-search "job j2" (drgnx-cockpit--filter-line)))))))
 
+(ert-deftest drgnx-cockpit-cards/the-pane-and-the-badge-count-alike ()
+  ;; every job's pane counts with the badge's function and tells it: no second count, no second question
+  (drgnx-cockpit-cards-test--with
+    (let* ((drgnx-job-ui--badge "") (drgnx-job-ui--badge-job nil) (drgnx-job-ui--needs-you nil)
+           (j2 (list :id "j2" :title "Other" :status "paused" :repo "/q/"
+                     :cards '((:id 9 :kind "budget" :task :null :title "paused" :actions (("stop" "Stop")) :data :null))
+                     :messages :null))
+           (drgnx-cockpit-cards-test--answer (lambda (_m _p) (list (list :jobs (list drgnx-cockpit-cards-test--summary j2)) nil))))
+      (drgnx-cockpit-cards-test--show)
+      (drgnx-cockpit-cards-refresh)
+      (should (= 4 (drgnx-job-ui-needs-you)))              ; j1: two cards and a message; j2: a card
+      (should (equal (substring-no-properties drgnx-job-ui--badge) " ⚑4"))
+      (should (string-search "What needs you — every job: 4" (drgnx-cockpit-cards-test--text 'cards)))
+      ;; one job: its own count in the head line
+      (setq drgnx-cockpit-graph-current-filter '(:job "j1")
+            drgnx-cockpit-cards-test--answer (lambda (_m _p) (list drgnx-cockpit-cards-test--summary nil)))
+      (drgnx-cockpit-cards-refresh)
+      (should (string-search "What needs you: 3" (drgnx-cockpit-cards-test--text 'cards))))))
+
 ;;;; A workbench saved before M12f
 
 (ert-deftest drgnx-cockpit-cards/an-old-job-window-state-opens-the-cockpit ()

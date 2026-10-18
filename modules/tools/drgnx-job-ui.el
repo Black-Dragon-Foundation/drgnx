@@ -81,21 +81,49 @@ own (`(drgnx-job-ui-show ID)') restores as the cockpit filtered to that job."
     (propertize drgnx-job-ui--badge 'face 'warning 'mouse-face 'mode-line-highlight 'local-map drgnx-job-ui-badge-map
                 'help-echo "A job needs you: click to see it in the Work cockpit")))
 
-(defun drgnx-job-ui--count (jobs)
-  "(N . JOB): what needs the user across JOBS (open cards, messages not acted on) — proposed, running and paused
-jobs only — and the job with the newest card."
+;;;; What needs you, counted once: the badge, the Work cockpit's What needs you, the status bar
+
+(defvar drgnx-job-ui--needs-you nil
+  "How many things of jobs need the user, as last counted (`drgnx-job-ui-note-jobs'); nil when not known.")
+
+(defun drgnx-job-ui--open-items (job)
+  "JOB's (a `job/status' summary) open cards and messages to the user not acted on, when the job is proposed,
+running or paused; else nil."
+  (when (member (plist-get job :status) '("proposed" "running" "paused"))
+    (append (drgnx-job-ui--v (plist-get job :cards))
+            (seq-remove (lambda (m) (equal (plist-get m :state) "acted")) (drgnx-job-ui--v (plist-get job :messages))))))
+
+(defun drgnx-job-ui-waiting-p (job)
+  "Whether JOB (a `job/status' summary) waits on the user: proposed, running or paused, with an open card or a
+message to the user not acted on."
+  (and (drgnx-job-ui--open-items job) t))
+
+(defun drgnx-job-ui-needs-you-count (jobs)
+  "(N . JOB): what needs the user across JOBS (summaries): open cards and messages not acted on, of proposed,
+running and paused jobs — and the job with the newest card.  The one count: the badge and the cockpit use it."
   (let ((n 0) (newest nil) (newest-id -1))
     (dolist (j jobs)
+      (setq n (+ n (length (drgnx-job-ui--open-items j))))
       (when (member (plist-get j :status) '("proposed" "running" "paused"))
         (dolist (c (drgnx-job-ui--v (plist-get j :cards)))
-          (setq n (1+ n))
-          (when (> (plist-get c :id) newest-id) (setq newest-id (plist-get c :id) newest (plist-get j :id))))
-        (setq n (+ n (seq-count (lambda (m) (not (equal (plist-get m :state) "acted"))) (drgnx-job-ui--v (plist-get j :messages)))))))
+          (when (> (plist-get c :id) newest-id) (setq newest-id (plist-get c :id) newest (plist-get j :id))))))
     (cons n newest)))
+
+(defun drgnx-job-ui-note-jobs (jobs)
+  "Every job's summary (JOBS, as `job/status' lists them) was read: count what needs the user once — the badge and
+`drgnx-job-ui-needs-you' follow.  The badge's own question and the cockpit's every-job pane call it."
+  (pcase-let ((`(,n . ,job) (drgnx-job-ui-needs-you-count jobs)))
+    (setq drgnx-job-ui--needs-you n drgnx-job-ui--badge (if (> n 0) (format " ⚑%d" n) "") drgnx-job-ui--badge-job job)
+    (force-mode-line-update t)))
+
+(defun drgnx-job-ui-needs-you ()
+  "How many things of jobs need the user, as last counted; nil when not known (no hub, or it went away).  Cached:
+for redisplay code (the status bar's jobs segment)."
+  drgnx-job-ui--needs-you)
 
 (defun drgnx-job-ui--badge-clear ()
   "Say nothing: a count that cannot be read again must not stay on screen as if it were current."
-  (setq drgnx-job-ui--badge "" drgnx-job-ui--badge-job nil)
+  (setq drgnx-job-ui--badge "" drgnx-job-ui--badge-job nil drgnx-job-ui--needs-you nil)
   (force-mode-line-update t))
 
 (defun drgnx-job-ui--recount ()
@@ -105,9 +133,7 @@ jobs only — and the job with the newest card."
              (drgnx-hub-call "job/status" nil
                              (lambda (r e)
                                (if e (drgnx-job-ui--badge-clear)
-                                 (pcase-let ((`(,n . ,job) (drgnx-job-ui--count (drgnx-job-ui--v (plist-get r :jobs)))))
-                                   (setq drgnx-job-ui--badge (if (> n 0) (format " ⚑%d" n) "") drgnx-job-ui--badge-job job)
-                                   (force-mode-line-update t))))))
+                                 (drgnx-job-ui-note-jobs (drgnx-job-ui--v (plist-get r :jobs)))))))
     (error (drgnx-job-ui--badge-clear))))
 
 (defun drgnx-job-ui--schedule-recount ()
