@@ -244,7 +244,8 @@ off), or inside a session, the mode is read as it is and never switched: an off 
            :ai-complete (ignore-errors (require 'drgnx-ai) (cdr (car (drgnx-ai-role 'complete))))
            :claude-adapter (drgnx-doctor--claude-adapter)
            :vram (ignore-errors (require 'drgnx-ai-probe) (drgnx-ai-vram))
-           :trust-guards (drgnx-doctor--trust-guards))
+           :trust-guards (drgnx-doctor--trust-guards)
+           :timers-report (drgnx-doctor--timers-report))
      (and (eq (drgnx-platform) 'macos) (drgnx-doctor--macos-facts)))))
 
 (defun drgnx-doctor--state-path (name)
@@ -820,6 +821,31 @@ Hyprland; on Arch `i3' is a group and `i3-wm' has i3-msg).")
 (drgnx-doctor-define 'window-manager :group "Desktop"
                      :doc "The window manager, its monitors, and whether Move to Monitor and restore work there"
                      :check (lambda (f) (when-let* ((wf (plist-get f :window-manager))) (drgnx-doctor--window-manager wf))))
+
+(defun drgnx-doctor--timers-report ()
+  "The stopped timers the last session and the last hub wrote (timers-report.eld, hub-timers-report.eld in the
+state dir): a list of (:file NAME :stopped PLISTS :time WRITTEN), one per file there."
+  (let ((out nil))
+    (dolist (name '("timers-report.eld" "hub-timers-report.eld"))
+      (when-let* ((report (drgnx-doctor--state-file name)))
+        (push (list :file name :stopped (plist-get report :stopped) :time (drgnx-doctor--state-file-time name)) out)))
+    (nreverse out)))
+
+(drgnx-doctor-define 'timers :group "drgnx" :doc "Timers that stopped after failing 3 times in a row (from the last session)"
+                     :check (lambda (f)
+                              (let ((stopped nil) (time nil))
+                                (dolist (r (plist-get f :timers-report))
+                                  (when (plist-get r :stopped)
+                                    (setq stopped (append stopped (plist-get r :stopped)))
+                                    (when (plist-get r :time) (setq time (max (or time 0) (plist-get r :time))))))
+                                (if (null stopped)
+                                    (list 'ok "no timer stopped" nil)
+                                  (list 'warn
+                                        (concat (mapconcat (lambda (s) (format "%s (%s): %s" (plist-get s :key) (plist-get s :fn)
+                                                                               (plist-get s :error)))
+                                                           stopped "; ")
+                                                (if time (format " (from the last session, %s)" (drgnx-doctor--age time)) ""))
+                                        "report the error; drgnx starts the timer again at the next start")))))
 
 ;;;; Running and reporting
 
