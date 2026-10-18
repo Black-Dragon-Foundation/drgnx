@@ -61,3 +61,11 @@
         (goto-char (or (drgnx-buffers--row-pos buffer) (error "driver: no Buffers row for %s" buffer)))
         (when column-text (search-forward column-text (pos-eol)) (goto-char (match-beginning 0)))
         (or (drgnx-uitest-pos-xy win (point)) (error "driver: Buffers row of %s is not visible" buffer))))))
+
+(defun drgnx-driver-explorer-pressed-p ()
+  "Non-nil while the Explorer counts a mouse button as held."
+  (and (drgnx-explorer--held-p) t))
+
+(defun drgnx-driver-explorer-refresh ()
+  "Read the Explorer's folders again (setup, after the test wrote files)."
+  (drgnx-explorer-refresh))

@@ -207,3 +207,130 @@ release is still a click on the row pressed — the tree does not change under a
          (format "a new folder must appear without moving the selection: shown %s; selection was on %S, now on %S"
                  (drgnx-scn--explorer-has "aaa-new") line0 line)
          r)))))
+
+;;;; The click model (M3a-8): double click, drag, the pressed flag, a partly visible bottom row
+
+(defun drgnx-scn--click-model-only ()
+  "These scenarios state drgnx's own click model (docs/guide/explorer.md); other configurations skip them."
+  (drgnx-scenario-load-driver)
+  (unless (eq (drgnx-scenario-config) 'drgnx) (ert-skip "the click model is drgnx's own")))
+
+(defun drgnx-scn--editor-file ()
+  (buffer-file-name (window-buffer (drgnx-driver-editor-window))))
+
+(ert-deftest drgnx-scenario/explorer-double-click-opens-a-file ()
+  "Double click on a file: it opens in the editor and the editor takes the focus."
+  (drgnx-scn--click-model-only)
+  (drgnx-scn--with-explorer root
+    (let* ((r (drgnx-scn--click "util.py" 2))
+           (file (drgnx-scn--editor-file)))
+      (drgnx-scenario-check
+       (and file (string-suffix-p "src/app/util.py" file)
+            (eq (selected-window) (drgnx-driver-editor-window)))
+       (format "a double click on a file must open it and focus the editor: the editor shows %S, the selected window is the %s"
+               (and file (file-name-nondirectory file))
+               (if (eq (selected-window) (drgnx-driver-editor-window)) "editor" "Explorer or another window"))
+       r))))
+
+(defun drgnx-scn--drag (from to)
+  "Press on the row showing FROM and release on the row showing TO (one drag); return the jank report."
+  (let* ((a (drgnx-uitest-target-xy drgnx-driver-explorer-target from))
+         (b (drgnx-uitest-target-xy drgnx-driver-explorer-target to))
+         (pa (drgnx-uitest-posn (car a) (cdr a)))
+         (pb (drgnx-uitest-posn (car b) (cdr b))))
+    (drgnx-uitest-run (list (list 'down-mouse-1 pa) (list 'drag-mouse-1 pa pb)))))
+
+(ert-deftest drgnx-scenario/explorer-drag-does-nothing ()
+  "Press on one row, release on another: nothing opens, nothing toggles, no file moves."
+  (drgnx-scn--click-model-only)
+  (drgnx-scn--with-explorer root
+    (let* ((before (directory-files-recursively root "" t (lambda (d) (not (string-match-p "/\\.git\\'" d)))))
+           (file0 (drgnx-scn--editor-file))
+           (r (drgnx-scn--drag "tests" "README.md"))
+           (after (directory-files-recursively root "" t (lambda (d) (not (string-match-p "/\\.git\\'" d))))))
+      (drgnx-scenario-check
+       (and (equal (drgnx-scn--editor-file) file0)
+            (not (drgnx-scn--explorer-has "test_main.py"))
+            (equal (sort before #'string<) (sort after #'string<))
+            (not (drgnx-driver-explorer-pressed-p)))
+       (format "a drag must not open, toggle or move anything: the editor shows %S (was %S), tests %s, files %s, button %s"
+               (and (drgnx-scn--editor-file) (file-name-nondirectory (drgnx-scn--editor-file)))
+               (and file0 (file-name-nondirectory file0))
+               (if (drgnx-scn--explorer-has "test_main.py") "expanded" "collapsed")
+               (if (equal (sort before #'string<) (sort after #'string<)) "unchanged" "changed")
+               (if (drgnx-driver-explorer-pressed-p) "still held" "released"))
+       r))))
+
+(ert-deftest drgnx-scenario/explorer-pressed-flag-clears-after-release ()
+  "The Explorer counts the button as held from the press to the release — after a click, a
+double click or a drag it does not."
+  (drgnx-scn--click-model-only)
+  (drgnx-scn--with-explorer root
+    (let* ((xy (drgnx-uitest-target-xy drgnx-driver-explorer-target "tests"))
+           (posn (drgnx-uitest-posn (car xy) (cdr xy)))
+           (r0 (drgnx-uitest-run (list (list 'down-mouse-1 posn))))
+           (held (drgnx-driver-explorer-pressed-p))
+           states)
+      (drgnx-scenario-require held "the Explorer to count the pressed button as held before the release")
+      (drgnx-uitest-run (list (list 'mouse-1 posn)))
+      (push (cons "click" (drgnx-driver-explorer-pressed-p)) states)
+      (drgnx-scn--click "util.py" 2)
+      (push (cons "double click" (drgnx-driver-explorer-pressed-p)) states)
+      (drgnx-scn--drag "util.py" "README.md")
+      (push (cons "drag" (drgnx-driver-explorer-pressed-p)) states)
+      (drgnx-scenario-check
+       (not (seq-some #'cdr states))
+       (format "the pressed flag must clear on release; still set after: %s"
+               (mapconcat #'car (seq-filter #'cdr (reverse states)) ", "))
+       r0))))
+
+(defun drgnx-scn--partial-bottom-row (window)
+  "(POS . VISIBILITY) of the row at the bottom of WINDOW that shows only in part, or nil.
+VISIBILITY is `pos-visible-in-window-p's (X Y RTOP RBOT ROWH VPOS)."
+  (with-current-buffer (window-buffer window)
+    (save-excursion
+      (goto-char (window-start window))
+      (let (found)
+        (while (and (not found) (not (eobp)) (<= (point) (window-end window t)))
+          (let ((v (pos-visible-in-window-p (point) window t)))
+            (when (and (consp v) (nth 3 v) (> (nth 3 v) 0)) (setq found (cons (point) v))))
+          (forward-line 1))
+        found))))
+
+(ert-deftest drgnx-scenario/explorer-click-on-a-partly-visible-bottom-row ()
+  "Click on the bottom row of the Explorer when only part of it shows: the click selects and
+opens that row, and the view does not scroll under the pointer."
+  (drgnx-scn--click-model-only)
+  (drgnx-scn--with-explorer root
+    (dotimes (i 80) (write-region "" nil (expand-file-name (format "zz-%02d.txt" i) root) nil 'silent))
+    (drgnx-driver-explorer-refresh)
+    (drgnx-uitest-run nil)
+    (let* ((w (drgnx-driver-explorer-window))
+           (_ (with-current-buffer (window-buffer w) (set-window-start w (point-min))))
+           (_ (drgnx-uitest-run nil))
+           (start (window-start w))
+           (row (or (drgnx-scn--partial-bottom-row w)
+                    ;; The window's height is a whole number of rows: scroll the text up by half a row.
+                    (progn (set-window-vscroll w (/ (default-line-height) 2) t)
+                           (redisplay t)
+                           (drgnx-scn--partial-bottom-row w)))))
+      (drgnx-scenario-require row "a partly visible bottom row in the Explorer")
+      (let* ((v (cdr row))
+             (origin (drgnx-uitest--text-origin w))
+             (top (posn-x-y (posn-at-point (car row) w)))      ; text-area pixels of the row's top left
+             (x (+ (car origin) (car top) 6))
+             (y (+ (cdr origin) (cdr top) (/ (nth 4 v) 2)))    ; ROWH: the part of the row that shows
+             (name (with-current-buffer (window-buffer w)
+                     (string-trim (buffer-substring-no-properties (car row) (save-excursion (goto-char (car row)) (pos-eol))))))
+             (posn (drgnx-uitest-posn x y))
+             (_ (drgnx-scenario-require
+                 (and (eq (posn-window posn) w) (eql (posn-point posn) (car row)))
+                 (format "the pixel %d,%d (row %S: %S) to land on the bottom row, it landed on %S at %S"
+                         x y name v (posn-window posn) (posn-point posn))))
+             (r (drgnx-uitest-run (drgnx-uitest-click-events posn)))
+             (file (drgnx-scn--editor-file)))
+        (drgnx-scenario-check
+         (and file (string-suffix-p name file) (= (window-start w) start))
+         (format "a click on the partly visible bottom row %S must open it without scrolling: the editor shows %S, view %s"
+                 name (and file (file-name-nondirectory file)) (if (= (window-start w) start) "kept" "scrolled"))
+         r)))))

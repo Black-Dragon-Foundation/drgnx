@@ -22,6 +22,10 @@ The last results of each configuration are kept in `$XDG_STATE_HOME/drgnx/ui/sce
 | `explorer-keys-then-background-event` | a buffer created in the background (an agent or status poll) does not move the selection | **red** | one background buffer event re-arms the follow; at +210 ms it moves the selection back (87 → 55) |
 | `explorer-keys-during-churn` | keys move the selection while buffers come and go every 100 ms, and it stays after | **red** | during the churn the follow's 0.15 s debounce is re-armed every 100 ms and never fires; 70 ms after the churn stops it moves the selection back (87 → 55) |
 | `explorer-cross-project-keeps-root` | opening a file of another project keeps the Explorer's root | **red** | an anonymous timer grows the echo area 20 → 40 px, shrinking every window by 20 px (+234 ms); at +705…743 ms the follow selects the Explorer, replaces its root with the other project and moves back |
+| `explorer-double-click-opens-a-file` | a double click on a file opens it and focuses the editor | drgnx only | the click model is drgnx's own: other configurations skip it |
+| `explorer-drag-does-nothing` | press on one row, release on another: nothing opens, toggles or moves | drgnx only | as above |
+| `explorer-pressed-flag-clears-after-release` | the Explorer counts the button as held only between press and release (click, double click, drag) | drgnx only | as above |
+| `explorer-click-on-a-partly-visible-bottom-row` | a click on a row that shows only in part opens it, without scrolling | drgnx only | as above; the test scrolls the text up by half a row when the window holds a whole number of rows |
 
 ## Buffers panel (open editors)
 
