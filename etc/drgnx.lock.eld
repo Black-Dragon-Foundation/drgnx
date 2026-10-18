@@ -5,9 +5,9 @@
 		       "64b7f5abebbd2762f147b301f2e7f20bb521cb0e5819d717c65d8df86098bfe9"
 		       :size 61440 :requires ((avy "0.5.0")) :summary
 		       "Quickly switch windows.")
-	   (apheleia :version "20260915.1628" :archive "melpa" :kind
-		     tar :file "apheleia-20260915.1628.tar" :sha256
-		     "4f3a23920197753aa9c42ce45f61ea2b9302d4908f7d83a97fa2b9a40f6660a3"
+	   (apheleia :version "20261017.2152" :archive "melpa" :kind
+		     tar :file "apheleia-20261017.2152.tar" :sha256
+		     "fda7b9f3091725dc83314e5e2b798707306fc71b2dfbd2cdd507c4a141b0c4f5"
 		     :size 430080 :requires nil :summary
 		     "Reformat buffer stably")
 	   (avy :version "0.5.0" :archive "gnu" :kind tar :file
@@ -50,7 +50,7 @@
 	   (eat :version "0.9.4" :archive "nongnu" :kind tar :file
 		"eat-0.9.4.tar" :sha256
 		"14971fc562f0820794eb6af78beebc7dc3ba898221e785c2d272a9f0fccfc54a"
-		:size 778240 :requires ((emacs "26.1") (compat "29.1")) :summary
+		:size 778240 :requires ((compat "29.1")) :summary
 		"Emulate A Terminal, in a region, in a buffer and in Eshell")
 	   (eglot-booster :kind git :url
 			  "https://github.com/jdtsmith/eglot-booster"
@@ -64,9 +64,9 @@
 		    "36f061fd9718e29a97ab8f85a94677fb2258e7ed6fcbbf661e087947561edc40"
 		    :size 143360 :requires nil :summary
 		    "High-level SQL database front-end")
-	   (forge :version "20261006.1249" :archive "melpa" :kind tar
-		  :file "forge-20261006.1249.tar" :sha256
-		  "6238ba6c067a0be2656ba7aabb582a8d830d9fa2e4de0b041d501e6a23c99c55"
+	   (forge :version "20261018.1903" :archive "melpa" :kind tar
+		  :file "forge-20261018.1903.tar" :sha256
+		  "051a0428306f92b05bf82f87e8ac27d750757c8e8eff77724541ee2f04163e83"
 		  :size 563200 :requires
 		  ((compat "31.0") (closql "2.4") (cond-let "1.1")
 		   (emacsql "4.4") (ghub "5.3") (llama "1.0")
@@ -160,6 +160,11 @@
 		  "59eab71cedb9424277144bb862b967a7db0f25e248e69d07ac66bf1da3a142aa"
 		  :size 92160 :requires nil :summary
 		  "Visual undo tree")
+	   (websocket :version "1.16" :archive "gnu" :kind tar :file
+		      "websocket-1.16.tar" :sha256
+		      "b11ff735b0ac1d94d0024c63371e192c5e36c6f3619cf78ea08eaa4f963cc32a"
+		      :size 122880 :requires ((cl-lib "0.5")) :summary
+		      "Emacs WebSocket client and server")
 	   (wgrep :version "3.0.0" :archive "nongnu" :kind tar :file
 		  "wgrep-3.0.0.tar" :sha256
 		  "ff73b18324a80176d050344a764f8a176ff2d52fb00e3475f1b5c9dc8d2749a2"
