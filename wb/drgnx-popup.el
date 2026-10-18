@@ -28,12 +28,25 @@
   "A `window-height' function: fit the buffer, at most FRACTION of the frame."
   (lambda (w) (fit-window-to-buffer w (max 1 (floor (* (or fraction 0.33) (frame-height (window-frame w))))) 1)))
 
+(defun drgnx-popup--close-click (event)
+  "A click on the lane's ✕: end the popup."
+  (interactive "e")
+  (when-let* ((w (posn-window (event-start event))) ((window-live-p w)) ((window-parameter w 'drgnx-popup)))
+    (drgnx-popup--end w)))
+
+(defun drgnx-popup--header (buffer)
+  "The lane's one line for BUFFER: its name without the stars and spaces round it, and the ✕ that ends the popup.
+Built when the popup shows, set as a window parameter."
+  (drgnx-wb-header-with-close (concat " " (string-trim (buffer-name buffer) "[ *]+" "[ *]+"))
+                              #'drgnx-popup--close-click "Close (Esc, q)"))
+
 (defun drgnx-popup--show (buffer alist props)
   "The `popup' place: borrow the panel's window — unless you are typing in it — else a temporary
 one; mark it as the lane."
   (let ((lane (drgnx-popup--window)) (panel (drgnx-wb-area-window 'panel)))
     (cond
      (lane (drgnx-wb-set-area-buffer lane buffer)                   ; a popup replaces a popup
+           (set-window-parameter lane 'header-line-format (drgnx-popup--header buffer))
            (set-window-parameter lane 'drgnx-popup
                                  (plist-put (window-parameter lane 'drgnx-popup) :popup buffer)))
      ((and panel (not (eq panel (selected-window))))
@@ -48,7 +61,7 @@ one; mark it as the lane."
       ;; without ending the popup: its buffer tells us.
       (with-current-buffer (window-buffer lane)
         (add-hook 'window-buffer-change-functions #'drgnx-popup--check-window nil t))
-      (set-window-parameter lane 'header-line-format 'none)  ; the lane has no chrome (I3)
+      (set-window-parameter lane 'header-line-format (drgnx-popup--header buffer))  ; a lane always has one header line (I3)
       (drgnx-wb-set-area-buffer lane buffer))
      (t
       (setq lane (let ((drgnx-rules--placing t))
@@ -56,7 +69,8 @@ one; mark it as the lane."
                     buffer `((side . bottom) (slot . 1) (dedicated . drgnx)
                              (window-height . ,(drgnx-popup--height (plist-get props :height)))
                              (window-parameters . ((drgnx-role . popup) (no-delete-other-windows . t)
-                                                   (no-other-window . t)))))))
+                                                   (no-other-window . t)
+                                                   (header-line-format . ,(drgnx-popup--header buffer))))))))
       (set-window-parameter lane 'drgnx-popup (list :borrowed nil :popup buffer))))
     ;; However the package ends it, it comes here: `delete-window' calls our function, and
     ;; `quit-window' / `bury-buffer' delete the window (no earlier buffers to go back to).

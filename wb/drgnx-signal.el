@@ -63,11 +63,11 @@ last lets go.  A subscription made before the first module's, by code that recor
            (eq (buffer-local-value 'major-mode buffer) 'dired-mode))))
 
 (defun drgnx-signal-editor-window-p (window)
-  "Non-nil if WINDOW is an editor window: not the minibuffer, a side window, a dock or a find bar."
+  "Non-nil if WINDOW is an editor window: not the minibuffer, a side window, a dock, a find bar or quick help's strip."
   (and (window-live-p window)
        (not (window-minibuffer-p window))
        (not (window-parameter window 'window-side))
-       (not (memq (window-parameter window 'drgnx-role) '(dock panel bar)))))
+       (not (memq (window-parameter window 'drgnx-role) '(dock panel bar quickhelp)))))
 
 (defun drgnx-signal-editor-window ()
   "The most recently used editor window (falls back to any editor window of the selected frame)."

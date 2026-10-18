@@ -345,6 +345,10 @@ ends, giving every pixel back. However a package ends its popup — `delete-wind
 killing the buffer — the lane notices. A package that calls `display-buffer-in-side-window` directly (which-key does)
 still goes where the rules say.
 
+The lane always has a one-line header: the popup's name (`Calendar`, `which-key`) and a **×** at the right end —
+click it, or press `Esc` or `q` while the lane has focus (**Close Pane**), to end the popup. Because the header is
+there whether the popup borrows the panel or has a window of its own, borrowing never changes the header's height.
+
 In a terminal window the lane works the same, and the line you are on stays visible. On Emacs 30.2 completion as you
 type (corfu) also shows there, as `*Completions*`; on 31.1 corfu's popup is a child frame. See
 [terminal.md](terminal.md#popups).
@@ -361,6 +365,19 @@ the panel hides it (size and tabs kept), and so does `q` in a panel buffer that 
 compilation, …): the panel hides and focus goes back to the editor, as Escape does in VS Code. The echo
 area stays one line (`resize-mini-windows` is off), so a tall message never takes pixels from the panel; while you
 type in the minibuffer it may grow (icomplete-vertical, fido-vertical).
+
+**Closing.** Every help pane, popup and side pane has a **×** in its header: at the right end of the panel's and the
+right dock's tab row and of the popup lane's header, at the start of each left-dock section's title (a long title
+cannot push it out of the dock); `x` where the terminal is not UTF-8,
+and the panel, the right dock and the popup lane close with `Esc` or `q` (**Close Pane**, bound in all three key
+profiles): the panel and the right dock hide (size and tabs kept), a popup ends, and focus goes to the editor you
+used last. The keys only act where you read, not where you type: in a buffer you can edit `q` types a `q`, `Esc` is the Meta
+prefix (`Esc x` is `M-x`) and, in the Vim profile, still leaves insert state, and a terminal tab (`comint`,
+`eshell`, `term`, `vterm`, `eat`; `drgnx-close-input-modes`), a live page you are driving and the minibuffer keep
+both keys. A mode that takes the keyboard for itself joins by adding a predicate to `drgnx-close-input-functions`. In a terminal frame `Esc` stays the Meta prefix, so use
+`q` or the × there. The left dock's sections keep `Esc` as Back to the Editor (the sidebar stays); its ×, or Close
+Pane in the palette, hides the sidebar. In the Vim profile, evil's normal state in a read-only buffer that is not a
+help buffer still takes `Esc` and `q` for itself until drgnx's modal module arrives; the × always works.
 
 ## Compared with treemacs, ibuffer and VS Code
 

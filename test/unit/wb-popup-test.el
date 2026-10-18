@@ -171,3 +171,46 @@
      (set-window-configuration conf)
      (drgnx-popup-check)
      (should (drgnx-popup-test--panel-back-p saved)))))
+
+;;;; M12f A7: the lane's header and its ✕
+
+(ert-deftest drgnx-popup/the-lane-header-has-a-close-button ()
+  ;; a temporary lane
+  (drgnx-popup-test--with
+   (let* ((lane (display-buffer (get-buffer-create "*Calendar*")))
+          (header (window-parameter lane 'header-line-format)) (i (1- (length header))))
+     (should (string-prefix-p " Calendar" header))                 ; the name without the stars
+     (should (string-suffix-p (concat " " (drgnx-wb-close-glyph)) header))
+     (should (equal (get-text-property i 'help-echo header) "Close (Esc, q)"))
+     (funcall (lookup-key (get-text-property i 'local-map header) [header-line mouse-1])
+              (list 'mouse-1 (list lane 'header-line '(0 . 0) 0 (cons header i))))
+     (should-not (drgnx-popup-active-p))
+     (should-not (window-live-p lane))))
+  ;; a borrowed panel: titled by the popup while it lasts, the tab row back after
+  (drgnx-popup-test--with
+   (let* ((saved (drgnx-popup-test--panel-on-results))
+          (lane (display-buffer (get-buffer-create " *which-key*")))
+          (header (window-parameter lane 'header-line-format)))
+     (should (string-prefix-p " which-key" header))                ; no leading space, no stars
+     (should (string-suffix-p (concat " " (drgnx-wb-close-glyph)) header))
+     (drgnx-popup--end lane)
+     (should (drgnx-popup-test--panel-back-p saved)))))
+
+(ert-deftest drgnx-popup/borrowing-keeps-the-header-height ()
+  (drgnx-popup-test--with
+   (let* ((saved (drgnx-popup-test--panel-on-results)) (w (car saved))
+          (before (window-header-line-height w)))
+     (display-buffer (get-buffer-create "*Calendar*"))
+     (should (eq (drgnx-wb-area-window 'panel) w))
+     (should (drgnx-popup-active-p))
+     (should (window-parameter w 'header-line-format))
+     (should (= before (window-header-line-height w))))))
+
+(ert-deftest drgnx-popup/a-second-popup-is-titled-by-itself ()
+  (drgnx-popup-test--with
+   (let ((lane (display-buffer (get-buffer-create "*Calendar*"))))
+     (should (string-prefix-p " Calendar" (window-parameter lane 'header-line-format)))
+     (let ((again (display-buffer (get-buffer-create "*Completions*"))))
+       (should (eq lane again))
+       (should (string-prefix-p " Completions" (window-parameter lane 'header-line-format)))
+       (kill-buffer "*Completions*")))))

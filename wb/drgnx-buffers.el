@@ -240,7 +240,7 @@ While a button is held in the panel, wait for the release: rows never move under
   (setq drgnx-buffers--filter (and text (not (string-empty-p text)) text))
   (drgnx-buffers--refresh)
   (when-let* ((w (drgnx-wb-section-window 'buffers)))
-    (set-window-parameter w 'header-line-format (drgnx-buffers--current-title))))
+    (set-window-parameter w 'header-line-format (drgnx-wb-section-header (drgnx-buffers--current-title)))))
 
 (defun drgnx-buffers--current-title ()
   "The panel's title: the filter while one is on, else the title with its buttons."

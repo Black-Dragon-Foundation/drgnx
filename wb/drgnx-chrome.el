@@ -19,6 +19,7 @@
 (require 'project)
 (require 'tab-line)                     ; the tab faces we inherit
 (require 'drgnx-area)
+(declare-function drgnx-face-glyph "drgnx-face")
 
 (defface drgnx-chrome-tab '((t :inherit tab-line-tab-inactive)) "A tab in an editor's tab line." :group 'drgnx)
 (defface drgnx-chrome-tab-current '((t :inherit tab-line-tab-current)) "The shown tab." :group 'drgnx)
@@ -44,8 +45,8 @@
   "The buffers W has shown, in the order they were opened (live ones)."
   (seq-filter #'buffer-live-p (window-parameter w 'drgnx-tabs)))
 
-(defcustom drgnx-chrome-transient-tabs "\\`\\*scratch\\*\\'"
-  "Buffers that are a tab only while shown (like VS Code's welcome tab)."
+(defcustom drgnx-chrome-transient-tabs "\\`\\*scratch\\*\\'\\|\\*drgnx start\\*"
+  "Buffers that are a tab only while shown (like VS Code's welcome tab): `*scratch*' and the start page."
   :type 'regexp :group 'drgnx)
 
 (defun drgnx-chrome--note-history (w b tabs)
@@ -99,6 +100,11 @@ Called on the bus's edges and by commands — never while drawing, so a buffer s
 (defvar drgnx-chrome--close-map
   (let ((m (make-sparse-keymap))) (define-key m [tab-line mouse-1] #'drgnx-chrome--close-clicked) m))
 
+(defun drgnx-chrome--close-glyph (w)
+  "The close mark of W's tabs: the glyph `close' of the table every close button uses (`drgnx-face-glyphs'), in its
+ASCII form on a terminal that is not UTF-8; × without ui/face."
+  (or (and (fboundp 'drgnx-face-glyph) (drgnx-face-glyph 'close (window-frame w))) "×"))
+
 (defun drgnx-chrome--tab-line (w)
   (let ((shown (window-buffer w)))
     (mapconcat (lambda (b)
@@ -107,7 +113,8 @@ Called on the bus's edges and by commands — never while drawing, so a buffer s
                                                (if (and (buffer-file-name b) (buffer-modified-p b)) " ●" ""))
                                        'face face 'drgnx-buffer b 'local-map drgnx-chrome--tab-map
                                        'mouse-face 'highlight 'help-echo "Show; middle-click closes")
-                           (propertize "× " 'face face 'drgnx-buffer b 'local-map drgnx-chrome--close-map
+                           (propertize (concat (drgnx-chrome--close-glyph w) " ")
+                                       'face face 'drgnx-buffer b 'local-map drgnx-chrome--close-map
                                        'mouse-face 'highlight 'help-echo "Close this tab"))))
                (drgnx-chrome-tabs w) "")))
 
@@ -215,6 +222,10 @@ An error here must never stop the kill."
 (defconst drgnx-chrome--mode-line '(:eval (or mode-line-format (default-value 'mode-line-format)))
   "An editor window's mode line: its buffer's, or the default when the buffer has none.")
 
+(defvar drgnx-chrome-editor-mode-line drgnx-chrome--mode-line
+  "The mode line of an editor window: the buffer's own by default; the status bar (modules/ui/drgnx-statusbar.el)
+sets it to its own construct while it is on.  Re-apply the chrome after changing it.")
+
 (defvar drgnx-chrome-header-tail nil
   "A mode-line construct an editor window's header shows after its breadcrumb — set buffer-locally (sticky scroll's
 scopes: modules/editor/drgnx-sticky.el); re-apply the chrome after changing it.")
@@ -240,7 +251,7 @@ scopes: modules/editor/drgnx-sticky.el); re-apply the chrome after changing it."
                                 ((eq (frame-parameter (window-frame w) 'drgnx-chrome-breadcrumb) 'off) 'none)
                                 (t (let ((tail (buffer-local-value 'drgnx-chrome-header-tail (window-buffer w))))
                                      (if tail (list (drgnx-chrome-breadcrumb w) tail) (drgnx-chrome-breadcrumb w)))))))
-     (drgnx-chrome--set w 'mode-line-format drgnx-chrome--mode-line))
+     (drgnx-chrome--set w 'mode-line-format drgnx-chrome-editor-mode-line))
     ((or 'dock 'area)
      (drgnx-chrome--set w 'tab-line-format 'none)
      (drgnx-chrome--set w 'mode-line-format 'none))

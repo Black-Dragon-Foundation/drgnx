@@ -329,6 +329,14 @@ cuts. So `C-x C-s`, `C-x b` and `C-c C-c` work with a selection when typed at yo
 or `C-x` acts after a short pause; `C-g` in that moment just drops the selection. A keyboard macro that recorded a
 pause and then a cut replays without the pause, so the key after it becomes a prefix. Cmd+C and Cmd+X on a Mac are no prefix and act at once.
 
+**The face's commands** ([face.md](face.md)) are in the palette in every profile; few have keys. **Show Quick
+Help** is `C-k C-i` (VS Code) and `SPC k` (Vim); the Emacs profile keeps Emacs' `C-h .` (local help). **Close
+Pane** and **Close Quick Help** are `Esc` and `q` in all three profiles, only where they close something (a help or
+side pane, a popup, the quick help card; a buffer you type into keeps both keys). `F10` runs **Open the Menu** (a
+remap of Emacs' `menu-bar-open`: the menu as text while the menu bar is hidden). **Preferences: Look and Layout
+Settings…**, **Toggle Menu Bar**, **Toggle Status Bar**, **Toggle Quick Help on Hover**, **Show Start Page** and
+**Change Language Mode** (also a click on the language in the status bar) have no key.
+
 ## On a Mac
 
 Keys are written the Emacs way: `s-` is Cmd ⌘, `M-` Option ⌥, `C-` Ctrl ⌃, `S-` Shift ⇧; `s-k s-s` is ⌘K then ⌘S. The

@@ -16,6 +16,7 @@
 (require 'seq)
 (require 'drgnx-rules)
 (require 'drgnx-modules-helpers)
+(require 'drgnx-wb)
 (require 'tab-line)                     ; the tab faces we inherit
 
 (defface drgnx-wb-tab '((t :inherit tab-line-tab-inactive)) "A tab in an area's tab row." :group 'drgnx)
@@ -149,14 +150,24 @@ Returns non-nil when TAB was defined."
 (defvar drgnx-area--tab-map
   (let ((m (make-sparse-keymap))) (define-key m [header-line mouse-1] #'drgnx-area--tab-click) m))
 
+(defun drgnx-area--close-click (event)
+  "A click on an area's ✕: hide the area (its size and tabs are kept)."
+  (interactive "e")
+  (when-let* ((s (posn-string (event-start event)))
+              (area (get-text-property (cdr s) 'drgnx-area (car s))))
+    (drgnx-wb-area-hide area)))
+
 (defun drgnx-area--tab-row (area)
+  "AREA's tab row, ending in the ✕ that hides it; set as a window parameter, so it is built when the tab changes."
   (let ((shown (drgnx-wb-area-tab area)))
-    (mapconcat (lambda (tab)
-                 (propertize (format " %s " (plist-get (cdr tab) :title))
-                             'face (if (eq (car tab) shown) 'drgnx-wb-tab-current 'drgnx-wb-tab)
-                             'drgnx-tab (cons area (car tab)) 'mouse-face 'highlight
-                             'local-map drgnx-area--tab-map 'help-echo "Show this tab"))
-               (plist-get (alist-get area drgnx-wb--areas) :tabs) " ")))
+    (drgnx-wb-header-with-close
+     (mapconcat (lambda (tab)
+                  (propertize (format " %s " (plist-get (cdr tab) :title))
+                              'face (if (eq (car tab) shown) 'drgnx-wb-tab-current 'drgnx-wb-tab)
+                              'drgnx-tab (cons area (car tab)) 'mouse-face 'highlight
+                              'local-map drgnx-area--tab-map 'help-echo "Show this tab"))
+                (plist-get (alist-get area drgnx-wb--areas) :tabs) " ")
+     #'drgnx-area--close-click "Close (Esc, q)" 'drgnx-area area)))
 
 ;;;; Show, hide
 

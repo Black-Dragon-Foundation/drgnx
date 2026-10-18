@@ -25,12 +25,18 @@
     (setq drgnx-basics--closed (delete f drgnx-basics--closed))
     (find-file f)))
 
+(defvar-local drgnx-untitled-p nil
+  "Non-nil in a buffer made by New Untitled: an editor like a file's (line numbers, the status bar) though it visits
+none.  It survives a change of major mode (Change Language Mode).")
+(put 'drgnx-untitled-p 'permanent-local t)
+
 (defun drgnx-basics-new-untitled ()
   "A new empty buffer Untitled-N; Save asks for its file name."
   (interactive)
   (let ((n 1))
     (while (get-buffer (format "Untitled-%d" n)) (setq n (1+ n)))
     (let ((b (get-buffer-create (format "Untitled-%d" n))))
+      (with-current-buffer b (setq drgnx-untitled-p t))   ; before the mode: its hooks (line numbers) see it
       (switch-to-buffer b)
       (funcall (default-value 'major-mode))
       (setq buffer-offer-save t)          ; Quit and Save All offer it: typed text is never dropped unasked

@@ -19,6 +19,7 @@
 (require 'subr-x)
 (require 'package)
 (require 'drgnx-paths)
+(require 'drgnx-face-state)
 (require 'drgnx-modules)
 (require 'drgnx-pkg-activate)
 
@@ -1108,6 +1109,9 @@ user's step (docs/guide/packages.md)."
                        "[Service]\nType=notify\n"
                        (format "ExecStart=%s --fg-daemon=drgnx %s\n" (drgnx-pkg--systemd-word emacs)
                                (drgnx-pkg--systemd-word (concat "--init-directory=" (expand-file-name "init" drgnx-dir))))
+                       (if-let* ((gtk (drgnx-face-state-gtk-theme)))   ; GTK reads this once, so the title bar is dark from the first frame
+                           (format "Environment=GTK_THEME=%s\n" gtk)
+                         "")
                        "Restart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n")))
     (when dir
       (make-directory dir t)

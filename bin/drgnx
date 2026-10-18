@@ -373,9 +373,20 @@ open_ensure_window() { # drgnx's daemon is running and has a window; under the l
   fi
 }
 
+open_gtk_theme() { # GTK_THEME for a daemon this starts: the title bar's variant from face.eld, else the environment's own
+  [[ -n "${GTK_THEME:-}" ]] && return 0
+  local file="${XDG_STATE_HOME:-$HOME/.local/state}/drgnx/face.eld" variant theme
+  [[ -r "$file" ]] || return 0   # sed, not Emacs: the daemon is not up yet, and GTK reads the variable once at its start
+  variant="$(sed -n -E 's/.*:variant[[:space:]]+(dark|light)[[:space:])].*/\1/p' "$file" | head -n 1)"
+  theme="$(sed -n -E 's/.*:gtk-theme[[:space:]]+"([A-Za-z0-9._+-]+)".*/\1/p' "$file" | head -n 1)"
+  if [[ -n "$variant" && -n "$theme" ]]; then export GTK_THEME="$theme:$variant"; fi
+  return 0
+}
+
 open_start() { # start drgnx's daemon (the systemd unit when it is enabled), wait for its server (OPEN_WAIT seconds)
   local name="${DRGNX_SERVER_NAME:-drgnx}" log deadline notice noticed=""
   open_wait_init
+  open_gtk_theme
   if [[ "$name" == drgnx ]] && command -v systemctl >/dev/null 2>&1 && systemctl --user is-enabled --quiet drgnx 2>/dev/null; then
     systemctl --user start drgnx || return 1
   else

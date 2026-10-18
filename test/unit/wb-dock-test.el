@@ -24,7 +24,7 @@
        (should (window-live-p bottom))
        (should (eq (window-parameter top 'drgnx-role) 'dock))
        (should (eq (window-parameter top 'window-side) 'left))
-       (should (equal (window-parameter top 'header-line-format) "TOP"))
+       (should (string-search "TOP" (window-parameter top 'header-line-format)))
        ;; Buffers above the Explorer: the lower slot is on top.
        (should (< (cadr (window-edges top)) (cadr (window-edges bottom))))
        (should-not (drgnx-signal-editor-window-p top))))))
@@ -64,3 +64,27 @@
      (should (eq (selected-window) editor))
      (drgnx-wb-toggle-sidebar)
      (should-not (drgnx-wb-sidebar-showing-p)))))
+
+;;;; M12f A7: the ✕
+
+(ert-deftest drgnx-wb/a-section-title-closes-the-sidebar ()
+  (drgnx-wb-test--with-sections
+   (drgnx-wb-show-sidebar)
+   (dolist (section '(top bottom))
+     (let* ((w (drgnx-wb-section-window section)) (title (window-parameter w 'header-line-format)))
+       (should (stringp title))
+       ;; the ✕ comes first (a long title cannot clip it), one space in from the frame's edge
+       (should (string-prefix-p (concat " " (drgnx-wb-close-glyph)) title))
+       (should (string-search (upcase (symbol-name section)) title))
+       (should (equal (get-text-property 1 'help-echo title) "Close sidebar"))
+       (should (eq (get-text-property 1 'mouse-face title) 'highlight))))
+   (let* ((w (drgnx-wb-section-window 'bottom)) (title (window-parameter w 'header-line-format)) (i 1))
+     (funcall (lookup-key (get-text-property i 'local-map title) [header-line mouse-1])
+              (list 'mouse-1 (list w 'header-line '(0 . 0) 0 (cons title i))))
+     (should-not (drgnx-wb-sidebar-showing-p))
+     (should (= 1 (length (window-list nil 'nomini)))))))
+
+(ert-deftest drgnx-wb/the-close-glyph-has-an-ascii-form ()
+  (let ((drgnx-face-glyphs '((close "✕" . "x"))))
+    (cl-letf (((symbol-function 'drgnx-face-glyph) (lambda (name &optional _) (cddr (assq name drgnx-face-glyphs)))))
+      (should (equal (drgnx-wb-close-glyph) "x")))))
