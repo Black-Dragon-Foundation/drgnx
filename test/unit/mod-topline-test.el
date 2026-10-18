@@ -2,6 +2,8 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx)
+(require 'drgnx-chrome)                 ; the project cache the line reads
+(require 'drgnx-signal)                 ; the editor-changed edge it subscribes to
 (load (expand-file-name "modules/ui/drgnx-face" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-topline" drgnx-dir) nil t)
 (defvar drgnx-signal--editor-window)

@@ -3,6 +3,7 @@
 (require 'cl-lib)
 (require 'drgnx)
 (require 'drgnx-chrome)
+(require 'drgnx-agents)                 ; at load: the tests' `setf' of a session's slots expands with its accessors
 (load (expand-file-name "modules/ui/drgnx-face" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-statusbar" drgnx-dir) nil t)
 (defvar drgnx-job-ui--badge)
