@@ -54,7 +54,7 @@ trust_level = \"trusted\"
                           "h = \"a\\tb\\u00e9\"\ni = \"\"\"\nline one\nline \\\n   two\"\"\"\nj = '''raw\\n'''\n"
                           "k = [\n  1,\n  # c\n  2,\n]\nl = {}\nm.n.o = 1\n[p]\nq = [[1, 2], [3]]\n"))
                  `(("a" . 1000) ("b" . -3) ("c" . 255) ("d" . 150.0) ("e" . 1.0e+INF)
-                   ("f" . "1979-05-27") ("g" . "1979-05-27 07:32:00Z")
+                   ("f" :date . "1979-05-27") ("g" :date . "1979-05-27 07:32:00Z")
                    ("h" . ,(concat "a\tb" (string #xe9)))
                    ("i" . "line one\nline two") ("j" . "raw\\n")
                    ("k" . [1 2]) ("l") ("m" ("n" ("o" . 1)))
@@ -192,8 +192,62 @@ trust_level = \"trusted\"
   (let* ((old "x = 1\r\n\r\n[a]\r\nk = 1 # c\r\n\r\n[b]\r\nk = 2\r\n")
          (new (drgnx-toml-set-table old '("a") '(("k" . 2)))))
     (should (equal (drgnx-toml-parse old) '(("x" . 1) ("a" ("k" . 1)) ("b" ("k" . 2)))))
-    (should (string-prefix-p "x = 1\r\n\r\n[a]\nk = 2\n" new))
-    (should (equal new "x = 1\r\n\r\n[a]\nk = 2\n\r\n[b]\r\nk = 2\r\n"))))
+    (should (equal new "x = 1\r\n\r\n[a]\r\nk = 2\r\n\r\n[b]\r\nk = 2\r\n"))))
+
+(ert-deftest drgnx-toml/dates-round-trip ()
+  (let* ((old (concat "[a]\nodt = 2024-01-02T03:04:05+05:30\nldt = 2024-01-02T03:04:05\nsp = 2024-01-02 03:04:05Z\n"
+                      "ld = 2024-01-02\nlt = 03:04:05.5\ns = \"2024-01-02\"\narr = [2024-01-02, 2025-02-03]\nt = { d = 2024-01-02 }\n"))
+         (tree (cdr (assoc "a" (drgnx-toml-parse old)))))
+    (should (equal (cdr (assoc "odt" tree)) '(:date . "2024-01-02T03:04:05+05:30")))
+    (should (equal (cdr (assoc "ldt" tree)) '(:date . "2024-01-02T03:04:05")))
+    (should (equal (cdr (assoc "ld" tree)) '(:date . "2024-01-02")))
+    (should (equal (cdr (assoc "lt" tree)) '(:date . "03:04:05.5")))
+    (should (equal (cdr (assoc "s" tree)) "2024-01-02"))
+    ;; written back they are bare again, and a string stays a string
+    (should (equal (drgnx-toml-set-table old '("a") tree)
+                   (concat "[a]\nodt = 2024-01-02T03:04:05+05:30\nldt = 2024-01-02T03:04:05\nsp = 2024-01-02 03:04:05Z\n"
+                           "ld = 2024-01-02\nlt = 03:04:05.5\ns = \"2024-01-02\"\narr = [2024-01-02, 2025-02-03]\n"
+                           "t = { d = 2024-01-02 }\n")))
+    ;; a marker that is not a date is refused, never written as TOML
+    (should-error (drgnx-toml-encode-value '(:date . "1\nx = 2")) :type 'drgnx-toml-error)))
+
+(ert-deftest drgnx-toml/crlf-files-keep-their-line-ends ()
+  (let* ((old "x = 1\r\n\r\n[a]\r\nk = 1\r\n\r\n[b]\r\nk = 2\r\n")
+         (appended (drgnx-toml-set-table old '("c" "d") '(("k" . "v")))))
+    (should (equal (drgnx-toml-set-table old '("a") '(("k" . 5) ("m" . t)))
+                   "x = 1\r\n\r\n[a]\r\nk = 5\r\nm = true\r\n\r\n[b]\r\nk = 2\r\n"))
+    (should (equal appended (concat old "\r\n[c.d]\r\nk = \"v\"\r\n")))
+    ;; append then remove is the identity; so is removing a middle table's blank line pair
+    (should (equal (drgnx-toml-set-table appended '("c" "d") nil) old))
+    (should (equal (drgnx-toml-set-table old '("a") nil) "x = 1\r\n\r\n[b]\r\nk = 2\r\n"))
+    ;; a file with no line end at all uses \n; one without a final line end gets the file's own
+    (should (equal (drgnx-toml-set-table "x = 1" '("a") '(("k" . 1))) "x = 1\n\n[a]\nk = 1\n"))
+    (should (equal (drgnx-toml-set-table "x = 1\r\ny = 2" '("a") '(("k" . 1))) "x = 1\r\ny = 2\r\n\r\n[a]\r\nk = 1\r\n"))
+    ;; array entries too
+    (let* ((aot "[[e]]\r\nn = 1\r\n")
+           (two (drgnx-toml-set-array-entry aot '("e") (lambda (x) (equal (cdr (assoc "n" x)) 2)) '(("n" . 2)))))
+      (should (equal two "[[e]]\r\nn = 1\r\n\r\n[[e]]\r\nn = 2\r\n"))
+      (should (equal (drgnx-toml-set-array-entry two '("e") (lambda (x) (equal (cdr (assoc "n" x)) 2)) nil) aot)))))
+
+(ert-deftest drgnx-toml/a-byte-order-mark-stays ()
+  (let* ((bom (string #xFEFF))
+         (old (concat bom "[a]\nk = 1\n\n[b]\nk = 2\n")))
+    (should (equal (drgnx-toml-parse old) '(("a" ("k" . 1)) ("b" ("k" . 2)))))
+    (should (equal (drgnx-toml-set-table old '("a") '(("k" . 9))) (concat bom "[a]\nk = 9\n\n[b]\nk = 2\n")))
+    (should (equal (drgnx-toml-table-region old '("a")) '(1 . 11)))
+    (should (equal (drgnx-toml-set-table old '("b") nil) (concat bom "[a]\nk = 1\n")))
+    (should (equal (drgnx-toml-set-table (concat bom "x = 1\n") '("a") '(("k" . 1))) (concat bom "x = 1\n\n[a]\nk = 1\n")))
+    (should (equal (drgnx-toml-parse (concat bom "x = 1\n")) '(("x" . 1))))
+    ;; an error on the first line is still line 1
+    (should (equal (car (drgnx-toml-test--err (concat bom "x = \n"))) 1))))
+
+(ert-deftest drgnx-toml/a-parent-with-arrays-below-is-refused ()
+  (let ((err (should-error (drgnx-toml-set-table drgnx-toml-test--codex '("skills") '(("k" . 1)))
+                           :type 'drgnx-toml-error)))
+    (should (equal (cadr err) 15)))
+  (should-error (drgnx-toml-set-table "[a.b]\nx = 1\n[[a.c]]\ny = 1\n" '("a") nil) :type 'drgnx-toml-error)
+  ;; plain sub-tables are fine
+  (should (equal (drgnx-toml-set-table "[a.b]\nx = 1\n" '("a") '(("k" . 1))) "[a]\nk = 1\n")))
 
 (ert-deftest drgnx-toml/encodes-values ()
   (should (equal (drgnx-toml-encode-value "a\"b\\c\nd\x01") "\"a\\\"b\\\\c\\nd\\u0001\""))

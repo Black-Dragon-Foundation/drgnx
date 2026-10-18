@@ -9,7 +9,7 @@
 ;; re-serialised document.  See docs/develop/core.md.
 ;;
 ;; Reader values: tables are alists of ("key" . VALUE) in file order; arrays are vectors (an array of tables is a
-;; vector of alists); strings, integers, floats, t, :false; dates and times stay as their text.
+;; vector of alists); strings, integers, floats, t, :false; a date or time is (:date . "TEXT") with its text as written.
 ;; Not supported (it signals `drgnx-toml-error'): nothing in TOML 1.0, plus the 1.1 additions of newlines and a
 ;; trailing comma in inline tables, which are read too.
 
@@ -173,7 +173,7 @@
        ((string-match-p drgnx-toml--float-re token) (float (string-to-number (string-replace "_" "" token))))
        ((string-match-p "\\`[+-]?inf\\'" token) (if (eq (aref token 0) ?-) -1.0e+INF 1.0e+INF))
        ((string-match-p "\\`[+-]?nan\\'" token) 0.0e+NaN)
-       ((string-match-p drgnx-toml--date-re token) token)
+       ((string-match-p drgnx-toml--date-re token) (cons :date token))
        (t (drgnx-toml--fail (format "not a value: %s" token) start))))))
 
 (defun drgnx-toml--array ()
@@ -229,18 +229,20 @@
 :type is `table' (a [header]), `aot' (a [[header]]) or `kv'; :beg and :end are 1-based buffer positions
 (the start of the statement's line, and just after its line end), :line its line number.  A header has :path;
 a key/value has :keys (the written key parts), :value and :header (the path of the header it sits under)."
-  (let ((case-fold-search nil) (out nil) (header nil))
+  (let ((case-fold-search nil) (out nil) (header nil) start)
     (with-temp-buffer
       (insert string)
       (goto-char (point-min))
+      (when (eq (char-after) #xFEFF) (forward-char))   ; a byte order mark is no part of any statement
+      (setq start (point))
       (while (not (eobp))
-        (let ((bol (line-beginning-position)) (line (line-number-at-pos)))
+        (let ((bol (max (line-beginning-position) start)) (line (line-number-at-pos)))
           (drgnx-toml--ws)
           (cond
            ((eobp))
            ((looking-at "\r?\n") (goto-char (match-end 0)))
            ((eq (char-after) ?#) (forward-line 1))
-           ((or (looking-at "\\[\\[") (eq (char-after) ?\[))
+           ((eq (char-after) ?\[)
             (let* ((aot (looking-at "\\[\\["))
                    (path (progn (forward-char (if aot 2 1))
                                 (drgnx-toml--ws)
@@ -370,6 +372,10 @@ A syntax error signals `drgnx-toml-error' with data (LINE MESSAGE)."
                          ((= value 1.0e+INF) "inf")
                          ((= value -1.0e+INF) "-inf")
                          (t (number-to-string value))))
+   ((and (consp value) (eq (car value) :date))
+    (unless (and (stringp (cdr value)) (string-match-p drgnx-toml--date-re (cdr value)))
+      (drgnx-toml--signal nil (format "not a date or time: %S" (cdr value))))
+    (cdr value))
    ((vectorp value) (concat "[" (mapconcat #'drgnx-toml-encode-value value ", ") "]"))
    ((drgnx-toml--table-p value)
     (concat "{ " (mapconcat (lambda (c) (concat (drgnx-toml--encode-key (car c)) " = " (drgnx-toml-encode-value (cdr c))))
@@ -377,13 +383,23 @@ A syntax error signals `drgnx-toml-error' with data (LINE MESSAGE)."
             " }"))
    (t (drgnx-toml--signal nil (format "cannot encode %S" value)))))
 
-(defun drgnx-toml--encode-block (path alist aot)
-  "The text of a [PATH] (or [[PATH]] when AOT) header followed by ALIST's keys, ending in a newline."
+(defun drgnx-toml--encode-block (path alist aot eol)
+  "The text of a [PATH] (or [[PATH]] when AOT) header followed by ALIST's keys, every line ending in EOL."
   (concat (if aot "[[" "[")
           (mapconcat #'drgnx-toml--encode-key path ".")
-          (if aot "]]\n" "]\n")
-          (mapconcat (lambda (c) (concat (drgnx-toml--encode-key (car c)) " = " (drgnx-toml-encode-value (cdr c)) "\n"))
+          (if aot "]]" "]")
+          eol
+          (mapconcat (lambda (c) (concat (drgnx-toml--encode-key (car c)) " = " (drgnx-toml-encode-value (cdr c)) eol))
                      alist "")))
+
+(defun drgnx-toml--eol-of (string)
+  "The line end STRING uses: CRLF when its first line ends that way, else LF."
+  (let ((i (string-search "\n" string)))
+    (if (and i (> i 0) (eq (aref string (1- i)) ?\r)) "\r\n" "\n")))
+
+(defun drgnx-toml--bom-length (string)
+  "1 when STRING starts with a byte order mark, else 0."
+  (if (and (> (length string) 0) (eq (aref string 0) #xFEFF)) 1 0))
 
 ;;;; Regions and the writer
 
@@ -426,7 +442,9 @@ header that is not strictly below PATH."
 the last key or header below it.  nil when absent.  Signals on forms drgnx does not edit."
   (when (null path) (drgnx-toml--signal nil "an empty table path"))
   (dolist (st stmts)
-    (when (and (eq (plist-get st :type) 'aot) (drgnx-toml--prefix-p (plist-get st :path) path))
+    ;; an array of tables at PATH, above it (which entry?) or below it (it would become an inline array)
+    (when (and (eq (plist-get st :type) 'aot)
+               (or (drgnx-toml--prefix-p (plist-get st :path) path) (drgnx-toml--prefix-p path (plist-get st :path))))
       (drgnx-toml--refuse st)))
   (let* ((first (or (cl-find-if (lambda (st) (and (eq (plist-get st :type) 'table) (equal (plist-get st :path) path)))
                                 stmts)
@@ -470,29 +488,31 @@ lines and comments after the last of them are not part of it, so a comment leadi
   (let ((run (drgnx-toml--table-run (drgnx-toml--scan string) path)))
     (and run (drgnx-toml--run-range run))))
 
-(defun drgnx-toml--blank-line-p (string pos)
-  "Non-nil when the line starting at POS in STRING is empty."
-  (and (< pos (length string)) (eq (aref string pos) ?\n)))
+(defun drgnx-toml--blank-line-end (string pos)
+  "The index after the empty line starting at POS in STRING, or nil when that line is not empty."
+  (and (eq (string-match "\r?\n" string pos) pos) (match-end 0)))
 
 (defun drgnx-toml--splice (string beg end text)
   "STRING with BEG..END replaced by TEXT; nil TEXT removes the range together with one adjoining blank line."
   (if text
       (concat (substring string 0 beg) text (substring string end))
-    (let ((tail-blank (string-match-p "\\`[ \t\r\n]*\\'" (substring string end)))
-          (before-blank (and (>= beg 2) (eq (aref string (1- beg)) ?\n) (eq (aref string (- beg 2)) ?\n))))
+    (let* ((tail-blank (string-match-p "\\`[ \t\r\n]*\\'" (substring string end)))
+           (blank-before (string-match-p "\n\r?\n\\'" (substring string (max 0 (- beg 3)) beg)))
+           (at-start (<= beg (drgnx-toml--bom-length string)))
+           (blank-after (and (not tail-blank) (drgnx-toml--blank-line-end string end))))
       (cond
-       ((and tail-blank before-blank) (setq beg (1- beg)))
-       ((and (not tail-blank) (or before-blank (= beg 0)) (drgnx-toml--blank-line-p string end))
-        (setq end (1+ end))))
+       ((and tail-blank blank-before)
+        (setq beg (- beg (if (string-suffix-p "\r\n" (substring string 0 beg)) 2 1))))
+       ((and blank-after (or blank-before at-start)) (setq end blank-after)))
       (concat (substring string 0 beg) (substring string end)))))
 
-(defun drgnx-toml--append (string text)
-  "STRING with the block TEXT added at the end, after a blank line."
-  (if (string-empty-p string)
-      text
+(defun drgnx-toml--append (string text eol)
+  "STRING with the block TEXT added at the end, after a blank line (EOL is the file's line end)."
+  (if (<= (length string) (drgnx-toml--bom-length string))
+      (concat string text)
     (concat string
-            (unless (string-suffix-p "\n" string) "\n")
-            (unless (string-suffix-p "\n\n" string) "\n")
+            (unless (string-suffix-p "\n" string) eol)
+            (unless (string-match-p "\n\r?\n\\'" string) eol)
             text)))
 
 (defun drgnx-toml-set-table (string path alist)
@@ -502,10 +522,11 @@ it is appended at the end when absent, and removed when ALIST is nil.  When PATH
 keys in a parent table, an inline table, an array of tables) it signals `drgnx-toml-error' with that line."
   (let* ((stmts (drgnx-toml--scan string))
          (run (drgnx-toml--table-run stmts path))
-         (text (and alist (drgnx-toml--encode-block path alist nil))))
+         (eol (drgnx-toml--eol-of string))
+         (text (and alist (drgnx-toml--encode-block path alist nil eol))))
     (cond
      (run (let ((r (drgnx-toml--run-range run))) (drgnx-toml--splice string (car r) (cdr r) text)))
-     (text (drgnx-toml--append string text))
+     (text (drgnx-toml--append string text eol))
      (t string))))
 
 (defun drgnx-toml-set-array-entry (string path pred alist)
@@ -524,10 +545,11 @@ replaced, or removed when ALIST is nil; when none is accepted ALIST is appended 
                      (when (vectorp node) (setq node (aref node 0))))
                    (funcall pred node)))
                runs))
-         (text (and alist (drgnx-toml--encode-block path alist t))))
+         (eol (drgnx-toml--eol-of string))
+         (text (and alist (drgnx-toml--encode-block path alist t eol))))
     (cond
      (run (let ((r (drgnx-toml--run-range run))) (drgnx-toml--splice string (car r) (cdr r) text)))
-     (text (drgnx-toml--append string text))
+     (text (drgnx-toml--append string text eol))
      (t string))))
 
 (provide 'drgnx-toml)
