@@ -474,6 +474,21 @@
       (dolist (d (drgnx-state-events-test--of 'pane-resized (drgnx-state-events-test--take)))
         (should (eq 'other (plist-get d :cause)))))))
 
+(ert-deftest drgnx-state-events/cause-user-for-a-divider-drag ()
+  ;; Emacs 30+: each step of a divider drag is a command of a transient map, `this-command' a closure, `track-mouse' `dragging'.
+  (drgnx-state-events-test--with
+    (let* ((f (selected-frame)) (a (selected-window)))
+      (split-window a nil 'below)
+      (drgnx-state-sync f)
+      (drgnx-state-events-test--listen 'pane-resized)
+      (setq drgnx-state--in-command t)
+      (let ((this-command (lambda (_e) (interactive "e"))) (track-mouse 'dragging))
+        (enlarge-window 2)
+        (drgnx-state-sync f))
+      (let ((log (drgnx-state-events-test--of 'pane-resized (drgnx-state-events-test--take))))
+        (should log)
+        (dolist (d log) (should (equal '(user user) (list (plist-get d :cause) (plist-get d :by)))))))))
+
 (ert-deftest drgnx-state-events/cause-other-for-a-popup ()
   (drgnx-state-events-test--with
     (let* ((f (selected-frame)) (a (selected-window)))

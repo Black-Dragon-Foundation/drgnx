@@ -832,8 +832,8 @@ A frame's first record emits `frame-added`, then everything it shows as new: `wi
 
 **`:cause` and `:by`** say who changed a pane. `write` with `:by` from the write (`user`, `auto`, `layout`,
 `restore`, `teardown`, `other`; `drgnx-state-with-write`). `user` with `:by user`: a command in
-`drgnx-state-user-resize-commands` (a user option; a mouse drag on a divider is that command's own loop, so every
-step observed during it counts). Else `other` with `:by` nil: Emacs fitting a popup, the minibuffer growing, the
+`drgnx-state-user-resize-commands` (a user option), or any step of a mouse drag on a divider (Emacs 30+ runs the steps as commands of a transient
+map, `this-command` is a closure, and `track-mouse` is `dragging`). Else `other` with `:by` nil: Emacs fitting a popup, the minibuffer growing, the
 window manager resizing the frame, a package.
 
 **Two lanes.** `now` (`:lane 'now`) calls FN inside the observation, possibly during redisplay, before the frame
@@ -888,7 +888,16 @@ front tab and the view are what shows until the grid, so every write of them lan
 (`drgnx-wb-hide-sidebar`, a view swap), the panel or the right dock (`drgnx-wb-area-hide`) notes the size `:by auto`;
 `drgnx-wb-show-view` notes `:view`; a pane kind shown in an area notes `:front`; a layout notes its sizes `:by
 layout`. B3 folds the homes and `drgnx-intent-by` into one frame parameter, `drgnx-intent`.
-Test: `test/unit/wb-state-intent-test.el`.
+
+**A size you set by hand is intent.** `drgnx-state-intent--user-resized` is an `idle` subscriber of `pane-resized`,
+subscribed in `core/workbench`'s setup (so teardown unsubscribes it). For an event with `:cause user` (a divider drag,
+`enlarge-window`; `drgnx-state-user-resize-commands`) on a window of role `dock`, `panel` or `right`, and a change along
+the dimension that home has (width for the docks, height for the panel), it notes `:sizes HOME (:px N) :by user` and
+marks `window-preserve-size` on that window — a window parameter, nothing moves — so a later frame resize (the window
+manager) does not take the size back. A write (`:cause write`, the event's `:by` says who), a popup squeezing the panel
+and every other resize are not the user's and note nothing. Until B3 only sizes are protected. B3 carries this into
+the grid's R4. Tests: `test/unit/wb-state-intent-test.el`; `test/ui/state-intent-ui-test.el` (a dragged dock keeps its
+width when the frame resizes).
 
 ## Tests
 

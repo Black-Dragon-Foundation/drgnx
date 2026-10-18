@@ -158,6 +158,96 @@
       (should (= 64 (length by)))
       (should (equal '((:front . st-area-6) . user) (car by))))))
 
+;;;; A size you set by hand (M12c-3-1)
+
+(defvar drgnx-state-intent-test--log nil "Events the recorder got, newest first.")
+
+(defun drgnx-state-intent-test--record (data) (push data drgnx-state-intent-test--log))
+
+(defun drgnx-state-intent-test--side (side role params size)
+  "Show a side window on SIDE with the `drgnx-role' ROLE and window PARAMS, SIZE columns or lines."
+  (display-buffer-in-side-window
+   (get-buffer-create (format " *st-%s*" role))
+   `((side . ,side) (slot . 0) (,(if (eq side 'left) 'window-width 'window-height) . ,size)
+     (window-parameters . ((drgnx-role . ,role) ,@params)))))
+
+(defmacro drgnx-state-intent-test--resizing (&rest body)
+  "BODY with a fresh store, one plain window, the intent subscriber and a recorder on `pane-resized' (both
+`now'), the selected frame's size parameters clear; the side windows deleted after."
+  (declare (indent 0))
+  `(drgnx-state-intent-test--with
+     (setq drgnx-state-intent-test--log nil)
+     (let ((ignore-window-parameters t))
+       (delete-other-windows))
+     (drgnx-state-subscribe 'pane-resized #'drgnx-state-intent--user-resized :lane 'now)
+     (drgnx-state-subscribe 'pane-resized #'drgnx-state-intent-test--record :lane 'now)
+     (unwind-protect (progn ,@body)
+       (let ((ignore-window-parameters t))
+         (dolist (w (window-list nil 'nomini))
+           (when (window-parameter w 'window-side) (delete-window w)))
+         (delete-other-windows)))))
+
+(ert-deftest drgnx-state-intent/a-user-resize-becomes-intent ()
+  (drgnx-state-intent-test--resizing
+    (let* ((f (selected-frame))
+           (dock (drgnx-state-intent-test--side 'left 'dock '((drgnx-section . explorer)) 20))
+           (panel (drgnx-state-intent-test--side 'bottom 'panel nil 6)))
+      (drgnx-state-sync f)
+      (should-not (frame-parameter f 'drgnx-wb-dock-px))
+      ;; a drag on the dock's divider
+      (setq drgnx-state--in-command t)
+      (let ((this-command 'mouse-drag-vertical-line))
+        (window-resize dock 4 t)
+        (drgnx-state-sync f))
+      (should (= (window-pixel-width dock) (frame-parameter f 'drgnx-wb-dock-px)))
+      (should (equal (list :px (window-pixel-width dock) :by 'user) (drgnx-state-intent f :sizes 'left)))
+      (should (= (window-body-width dock t) (window-preserved-size dock t)))   ; the width is kept
+      ;; the panel: `enlarge-window' is a resize of the user's; the height counts
+      (let ((this-command 'enlarge-window))
+        (window-resize panel 2)
+        (drgnx-state-sync f))
+      (should (equal (list :px (window-pixel-height panel) :by 'user) (drgnx-state-intent f :sizes 'bottom)))
+      (should (= (window-body-height panel t) (window-preserved-size panel nil)))
+      ;; nothing was asked for the right dock
+      (should-not (drgnx-state-intent f :sizes 'right)))))
+
+(ert-deftest drgnx-state-intent/a-popup-squeeze-is-not-intent ()
+  (drgnx-state-intent-test--resizing
+    (let* ((f (selected-frame))
+           (panel (drgnx-state-intent-test--side 'bottom 'panel nil 8)))
+      (drgnx-state-note-intent f :sizes 'bottom 99 :by 'user)
+      (drgnx-state-sync f)
+      ;; no command, no write: a window-manager resize, a popup squeezing the panel
+      (window-resize panel -2)
+      (drgnx-state-sync f)
+      (should (cl-some (lambda (d) (eq (plist-get d :window) panel)) drgnx-state-intent-test--log))
+      (dolist (d drgnx-state-intent-test--log) (should (eq 'other (plist-get d :cause))))
+      (should (equal '(:px 99 :by user) (drgnx-state-intent f :sizes 'bottom)))
+      (should-not (window-preserved-size panel nil))
+      ;; nor is a command that is not a resize
+      (setq drgnx-state--in-command t)
+      (let ((this-command 'next-line))
+        (window-resize panel 1)
+        (drgnx-state-sync f))
+      (should (equal '(:px 99 :by user) (drgnx-state-intent f :sizes 'bottom))))))
+
+(ert-deftest drgnx-state-intent/a-write-labels-its-events ()
+  (drgnx-state-intent-test--resizing
+    (let* ((f (selected-frame))
+           (dock (drgnx-state-intent-test--side 'left 'dock '((drgnx-section . explorer)) 20)))
+      (drgnx-state-sync f)
+      (setq drgnx-state--in-command t)
+      ;; a layout's resize inside a user's command is still the layout's: :cause write, :by layout
+      (let ((this-command 'mouse-drag-vertical-line))
+        (drgnx-state-with-write (f 'layout) (window-resize dock 4 t))
+        (drgnx-state-sync f))
+      (should drgnx-state-intent-test--log)
+      (dolist (d drgnx-state-intent-test--log)
+        (should (eq 'write (plist-get d :cause)))
+        (should (eq 'layout (plist-get d :by))))
+      (should-not (frame-parameter f 'drgnx-wb-dock-px))
+      (should-not (window-preserved-size dock t)))))
+
 ;;;; Unknown kinds and views
 
 (ert-deftest drgnx-state-intent/an-unknown-view-is-kept-and-comes-back ()

@@ -127,5 +127,26 @@ the grid: nil."
       (drgnx-state-intent--record frame key subkey (if (eq by 'restore) 'user by))
       t)))
 
+;;;; A size you set by hand
+
+(defconst drgnx-state-intent--role-homes '((dock . left) (panel . bottom) (right . right))
+  "Window role → the home whose size its window holds.")
+
+(defun drgnx-state-intent--user-resized (data)
+  "Note a size you set by hand as intent (the `idle' subscriber of `pane-resized', subscribed by core/workbench).
+DATA is the event's plist.  For a resize with `:cause' `user' of a window that holds a home with a size (the
+dock, the panel, the right dock), along the dimension that home has (width for left and right, height for
+bottom): note `:sizes' HOME (:px N) `:by' `user' and mark the window `window-preserve-size', so the frame being
+resized does not take the size back.  A window parameter; nothing moves.  Writes and everything else
+(`:cause' `write' or `other': a popup squeezing the panel, the window manager) are not the user's."
+  (let ((window (plist-get data :window)) (frame (plist-get data :frame)))
+    (when (and (eq (plist-get data :cause) 'user) (window-live-p window) (frame-live-p frame))
+      (when-let* ((home (alist-get (drgnx-state-window-role window) drgnx-state-intent--role-homes)))
+        (let* ((horizontal (memq home '(left right))) (i (if horizontal 2 3))
+               (px (nth i (plist-get data :new))))
+          (when (and (integerp px) (not (eql px (nth i (plist-get data :old)))))
+            (drgnx-state-note-intent frame :sizes home px :by 'user)
+            (window-preserve-size window (and horizontal t) t)))))))
+
 (provide 'drgnx-state-intent)
 ;;; drgnx-state-intent.el ends here
