@@ -267,6 +267,8 @@ file nesting, icons (an icon theme is a module, M4), problems decorations (with 
 `bin/drgnx test --bench` builds drgnx, makes a 25,000-file project (200 folders × 100 files, one 5,000-file
 folder, a depth-8 file), and times the same operations with drgnx, treemacs and ibuffer in a GUI session — each
 including a full redisplay; one-off operations are the median of 3, key presses the 95th percentile of 300 (50 left the result to the third-slowest press).
+The bench also counts the garbage collections that ran inside each of drgnx's measurements (and the time they took)
+and prints them as `gc:` lines under the table, so a GC that lands in a measured window explains a jump.
 Like for like: folder listings are read from disk in every run, the refreshed folder is open and the new files must
 appear, the Buffers update includes drgnx's change bus, and the Buffers render creates the panel and its window as
 ibuffer does.

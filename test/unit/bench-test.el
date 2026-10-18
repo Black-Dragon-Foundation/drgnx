@@ -28,3 +28,24 @@
                                      '(:explorer-key-p95 8) '((:explorer-key-p95 . :treemacs)))))
   (should (drgnx-bench-verdict '(:drgnx (:explorer-key-p95 1.5) :treemacs (:explorer-key-p95 0.3))
                                '(:explorer-key-p95 8) '((:explorer-key-p95 . :treemacs)))))
+
+;;;; The in-session measuring helpers (test/bench/workbench-bench.el)
+
+(load (expand-file-name "../test/bench/workbench-bench.el" drgnx-ui-harness-dir) nil t)
+
+(ert-deftest drgnx-bench/explorer-gc-reported ()
+  ;; DEFERRED M3a-12: every measurement notes the garbage collections that ran inside it, and the session
+  ;; reports them next to the times, so a GC that lands in a measured window is visible.
+  (let ((drgnx-bench--gc nil) (gc-cons-threshold 100000) (gc-cons-percentage 0.001) (garbage nil))
+    (let ((r (drgnx-bench--put nil :explorer-first
+                               (drgnx-bench--ms nil (lambda () (setq garbage (make-list 400000 (make-string 8 ?x))))))))
+      (should (numberp (plist-get r :explorer-first)))
+      (let ((gc (plist-get drgnx-bench--gc :explorer-first)))
+        (should (> (plist-get gc :gcs) 0))
+        (should (>= (plist-get gc :ms) 0)))
+      (should (string-match-p "explorer-first ran [1-9]" (string-join (drgnx-bench-gc-notes (list :gc drgnx-bench--gc)) "\n"))))
+    ;; a measurement without garbage reports none
+    (let ((gc-cons-threshold (* 512 1024 1024)))
+      (drgnx-bench--put nil :explorer-expand (drgnx-bench--ms nil (lambda () (+ 1 1))))
+      (should (= 0 (plist-get (plist-get drgnx-bench--gc :explorer-expand) :gcs))))
+    (should (equal '("gc: none inside any measurement") (drgnx-bench-gc-notes '(:gc (:a (:gcs 0 :ms 0.0))))))))

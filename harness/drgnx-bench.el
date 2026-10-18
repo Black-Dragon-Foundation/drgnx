@@ -60,6 +60,17 @@
                                  (substring (symbol-name (cdr p)) 1))))
                      pairs "\n")))
 
+(defun drgnx-bench-gc-notes (results)
+  "Lines for the garbage collections that ran inside drgnx's measurements (RESULTS' :gc), or one line
+saying there were none: a GC inside a measured window is what makes a number jump."
+  (let (lines)
+    (cl-loop for (metric gc) on (plist-get results :gc) by #'cddr
+             when (> (or (plist-get gc :gcs) 0) 0)
+             do (push (format "gc: %s ran %d collection(s), %.1f ms in the GC" (substring (symbol-name metric) 1)
+                              (plist-get gc :gcs) (plist-get gc :ms))
+                      lines))
+    (or (nreverse lines) (list "gc: none inside any measurement"))))
+
 (defun drgnx-bench-fixture ()
   "A project of ~25k files: 200 folders × 100 files, big/ with 5000, a depth-8 file."
   (let ((root (make-temp-file "drgnx-bench" t)))
@@ -104,6 +115,7 @@
           (with-temp-file out (insert (drgnx-ui--json results)))
           (princ (concat (drgnx-bench-table results drgnx-bench-pairs) "\n"))
           (dolist (e (append (plist-get results :errors) nil)) (princ (format "note: %s\n" e)))
+          (dolist (l (drgnx-bench-gc-notes results)) (princ (concat l "\n")))
           (princ (format "results: %s\n" out))
           (if fails
               (progn (dolist (f fails) (princ (format "FAIL %s\n" f))) 1)
