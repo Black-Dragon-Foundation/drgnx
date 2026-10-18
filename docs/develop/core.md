@@ -99,6 +99,38 @@ Emacs is idle). Each setup runs under its own error guard and is timed; a file t
 a module too. "Help: Module Report" (`drgnx-modules-show-report`) lists stage, milliseconds and errors. Flags,
 settings, doctor checks, more stages and the modules index come with M4.
 
+### Teardown: the cleanup stack (`drgnx-modules-record.el`)
+
+A module can be turned off while Emacs runs. While its setup runs, `drgnx-modules--current` names it, and each call
+that changes global state pushes its own undo onto the module's cleanup stack (the shape of buttercup's cleanup
+stack — the code that knows what it changed knows how to change it back):
+
+```elisp
+(add-hook 'find-file-hook #'drgnx-blame--maybe)
+(drgnx-modules-push-undo "hook find-file-hook drgnx-blame--maybe"
+                         (lambda () (remove-hook 'find-file-hook #'drgnx-blame--maybe)))
+```
+
+- `(drgnx-modules-push-undo LABEL UNDO)` records only during a setup, and not while a library loads (a library's top
+  level registers for itself and stays: `require` cannot be undone, the code stays loaded until restart). Outside a
+  setup it costs one variable test. LABEL is a short description for reports; UNDO, a function of no arguments,
+  first checks that the state is still what this module set and changes nothing otherwise — it never removes what
+  someone else added since.
+- `:teardown` in `drgnx-module-define`: a function for what the stack cannot see (a theme, live frames' parameters,
+  a mode turned on in live buffers, a sub-module's own state), or `restart`: the module is not turned off while Emacs
+  runs, only at the next start.
+- `(drgnx-module-teardown NAME)` runs the module's `:teardown`, then its stack last in first out inside
+  `unwind-protect`, each undo under its own error guard, and forgets the stack; the status becomes `off`. It returns
+  the problems (nil when clean) — a failed undo is named by its label, a failed `:teardown` by `teardown` — and never
+  raises. A module that is not running does nothing; a `restart` module (and an external one) stays running and
+  returns `("restart")`. After a batch of teardowns the caller runs `drgnx-modules-after-teardown-functions` once.
+- A setup that fails half-way is rolled back: the undos it pushed run, newest first, and the module is `failed`, with
+  the error and any undo problems in the report.
+- Teardown and rollback run in automatic paths: they never prompt. Undos and `:teardown` run with
+  `inhibit-interaction` bound, so one that would ask fails at once and is reported. Every undo checks before it
+  changes anything, so off, on, off is the same as off once, and two undos of the same thing (a `:teardown` that
+  calls a sub-module's off function, then the stack) leave it undone once.
+
 ## Build (`drgnx-build.el`)
 
 `bin/drgnx build` byte-compiles `core/`, `wb/` and `modules/` in place (`.elc` files are not tracked); with native
