@@ -90,4 +90,25 @@
         (drgnx-grammars--installed '(python)))
       (should (memq b switched)))))
 
+
+(ert-deftest drgnx-grammars/every-language-is-pinned-for-abi-14 ()
+  ;; M11a-3: a known-good tag per language, so Emacs 30's tree-sitter (grammar ABI 14) loads what is built
+  (dolist (e drgnx-grammars-sources)
+    (should (equal (list (car e) t) (list (car e) (and (stringp (nth 2 e)) (string-match-p "\\`v[0-9]+\\.[0-9]+\\.[0-9]+\\'" (nth 2 e)) t)))))
+  (dolist (l (mapcar #'car drgnx-grammars-modes))
+    (should (assq l drgnx-grammars-sources))))
+
+(ert-deftest drgnx-grammars/the-pin-holds-for-abi-14-and-the-default-branch-for-abi-15 ()
+  (cl-letf (((symbol-function 'drgnx-grammars--abi) (lambda () 14)))
+    (should (equal (drgnx-grammars-recipe 'python) '(python "https://github.com/tree-sitter/tree-sitter-python" "v0.23.6")))
+    (should (equal (drgnx-grammars-recipe 'tsx) '(tsx "https://github.com/tree-sitter/tree-sitter-typescript" "v0.23.2" "tsx/src")))
+    (should (string-search "v0.23.6" (format "%S" (drgnx-grammars--job-command '(python))))))
+  (cl-letf (((symbol-function 'drgnx-grammars--abi) (lambda () 15)))
+    (should (equal (drgnx-grammars-recipe 'python) '(python "https://github.com/tree-sitter/tree-sitter-python" nil)))
+    (should (equal (drgnx-grammars-recipe 'tsx) '(tsx "https://github.com/tree-sitter/tree-sitter-typescript" nil "tsx/src")))
+    (should-not (string-search "v0.23.6" (format "%S" (drgnx-grammars--job-command '(python))))))
+  (cl-letf (((symbol-function 'drgnx-grammars--abi) (lambda () nil)))   ; unknown: the pin, which loads on both
+    (should (equal (nth 2 (drgnx-grammars-recipe 'python)) "v0.23.6")))
+  (should-not (drgnx-grammars-recipe 'cobol)))
+
 ;;; mod-grammars-test.el ends here

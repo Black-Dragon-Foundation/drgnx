@@ -30,17 +30,30 @@
   "LANGUAGE MODE TS-MODE [FILE-REGEXP]: files in MODE (or matching FILE-REGEXP) want LANGUAGE's grammar for TS-MODE.")
 
 (defconst drgnx-grammars-sources
-  '((bash "https://github.com/tree-sitter/tree-sitter-bash") (c "https://github.com/tree-sitter/tree-sitter-c")
-    (cpp "https://github.com/tree-sitter/tree-sitter-cpp") (css "https://github.com/tree-sitter/tree-sitter-css")
-    (go "https://github.com/tree-sitter/tree-sitter-go") (html "https://github.com/tree-sitter/tree-sitter-html")
-    (java "https://github.com/tree-sitter/tree-sitter-java") (javascript "https://github.com/tree-sitter/tree-sitter-javascript" nil "src")
-    (json "https://github.com/tree-sitter/tree-sitter-json") (lua "https://github.com/tree-sitter-grammars/tree-sitter-lua")
-    (python "https://github.com/tree-sitter/tree-sitter-python") (ruby "https://github.com/tree-sitter/tree-sitter-ruby")
-    (rust "https://github.com/tree-sitter/tree-sitter-rust") (toml "https://github.com/tree-sitter-grammars/tree-sitter-toml")
-    (tsx "https://github.com/tree-sitter/tree-sitter-typescript" nil "tsx/src")
-    (typescript "https://github.com/tree-sitter/tree-sitter-typescript" nil "typescript/src")
-    (yaml "https://github.com/tree-sitter-grammars/tree-sitter-yaml"))
-  "LANGUAGE URL [REVISION SOURCE-DIR]: where a grammar comes from (`treesit-language-source-alist' entries).")
+  '((bash "https://github.com/tree-sitter/tree-sitter-bash" "v0.23.3") (c "https://github.com/tree-sitter/tree-sitter-c" "v0.23.6")
+    (cpp "https://github.com/tree-sitter/tree-sitter-cpp" "v0.23.4") (css "https://github.com/tree-sitter/tree-sitter-css" "v0.23.2")
+    (go "https://github.com/tree-sitter/tree-sitter-go" "v0.23.4") (html "https://github.com/tree-sitter/tree-sitter-html" "v0.23.2")
+    (java "https://github.com/tree-sitter/tree-sitter-java" "v0.23.5") (javascript "https://github.com/tree-sitter/tree-sitter-javascript" "v0.23.1" "src")
+    (json "https://github.com/tree-sitter/tree-sitter-json" "v0.24.8") (lua "https://github.com/tree-sitter-grammars/tree-sitter-lua" "v0.3.0")
+    (python "https://github.com/tree-sitter/tree-sitter-python" "v0.23.6") (ruby "https://github.com/tree-sitter/tree-sitter-ruby" "v0.23.1")
+    (rust "https://github.com/tree-sitter/tree-sitter-rust" "v0.23.3") (toml "https://github.com/tree-sitter-grammars/tree-sitter-toml" "v0.7.0")
+    (tsx "https://github.com/tree-sitter/tree-sitter-typescript" "v0.23.2" "tsx/src")
+    (typescript "https://github.com/tree-sitter/tree-sitter-typescript" "v0.23.2" "typescript/src")
+    (yaml "https://github.com/tree-sitter-grammars/tree-sitter-yaml" "v0.7.2"))
+  "LANGUAGE URL REVISION [SOURCE-DIR]: where a grammar comes from (`treesit-language-source-alist' entries).  REVISION is
+the newest tag whose parser is tree-sitter ABI 14 (what Emacs 30 loads); `drgnx-grammars-recipe' drops it where the
+library is ABI 15.")
+
+(defun drgnx-grammars--abi ()
+  "The tree-sitter ABI version of this Emacs's library, or nil when it cannot say."
+  (and (fboundp 'treesit-library-abi-version) (treesit-library-abi-version)))
+
+(defun drgnx-grammars-recipe (lang)
+  "LANG's `drgnx-grammars-sources' entry, as built here: pinned to its ABI 14 tag, except where the library is ABI 15
+or newer — there the default branch (no revision).  Nil if LANG is unknown."
+  (when-let* ((e (assq lang drgnx-grammars-sources)))
+    (let ((abi (drgnx-grammars--abi)))
+      (if (and abi (>= abi 15)) (append (list (nth 0 e) (nth 1 e) nil) (nthcdr 3 e)) e))))
 
 (defvar drgnx-grammars--hinted nil "Languages whose missing grammar was mentioned this session.")
 
@@ -68,7 +81,7 @@
 its grammar (Emacs 31) keeps its recipe; drgnx's is the fallback.  A grammar counts as installed only when its library
 is in the directory and loads (`treesit-install-language-grammar' reports its own failures as warnings)."
   (let ((dir (drgnx-grammars-dir))
-        (recipes (mapcar (lambda (l) (assq l drgnx-grammars-sources)) langs))
+        (recipes (mapcar #'drgnx-grammars-recipe langs))
         (modes (delq nil (mapcar (lambda (e) (and (memq (car e) langs) (cons (car e) (nth 2 e)))) drgnx-grammars-modes))))
     (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "--eval"
           (prin1-to-string
