@@ -9,6 +9,9 @@
 (require 'drgnx-paths)
 (require 'drgnx-platform)
 (require 'drgnx-monitors)
+(require 'drgnx-persist)
+(unless (fboundp 'drgnx-persist-test--graphical)    ; its helpers: a restore in a batch frame
+  (load (expand-file-name "wb-persist-test.el" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (fboundp 'drgnx-platform-test--deftest)
   (load (expand-file-name "platform-test.el" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 
@@ -17,6 +20,8 @@
 (defvar drgnx-monitors-test--current 0 "Index of the fake monitor the frame is on.")
 (defvar drgnx-monitors-test--moves nil "Names of the monitors the fake adapter was asked to move to, oldest first.")
 (defvar drgnx-monitors-test--calls nil "Counts of the fake adapter's calls: (:monitors N :frame-monitor N).")
+(defvar drgnx-monitors-test--places nil
+  "What the fake adapter was asked to place while restoring, oldest first: (FRAME . MONITOR-NAME).")
 
 (defconst drgnx-monitors-test--two
   '((:name "DP-1" :geometry (0 0 1920 1080)) (:name "DP-2" :geometry (1920 0 2560 1440)))
@@ -33,18 +38,20 @@
 `messages' collects what `message' says, newest first.  OPTS (a plist, evaluated): :monitors, :delay (seconds
 the fake takes to answer), :move-reply (default `ok'), :current (index of the monitor the frame is on),
 :sequence (a list of (DELAY . MONITORS) the fake's successive monitor listings follow), :frame-sequence (the same
-for the monitor the frame is on: (DELAY . INDEX)), :move-delay (seconds a move takes)."
+for the monitor the frame is on: (DELAY . INDEX)), :move-delay (seconds a move takes), :place-reply (what placing a
+restored frame answers, default `ok'; `hang': never answers)."
   (declare (indent 1))
   `(let* ((opts (list ,@opts)) (monitors (or (plist-get opts :monitors) drgnx-monitors-test--two))
           (delay (or (plist-get opts :delay) 0))
           (drgnx-monitors-test--current (or (plist-get opts :current) 0))
-          (drgnx-monitors-test--moves nil) (drgnx-monitors-test--calls nil)
+          (drgnx-monitors-test--moves nil) (drgnx-monitors-test--calls nil) (drgnx-monitors-test--places nil)
           (sequence (plist-get opts :sequence)) (frame-sequence (plist-get opts :frame-sequence))
           (drgnx-monitors--count nil) (drgnx-monitors--pending nil) (drgnx-monitors--timer nil)
           (drgnx-monitors--force nil) (drgnx-monitors--list-gen 0)
           (drgnx-monitors--stamps (make-hash-table :test #'eq :weakness 'key))
           (drgnx-monitors--gens (make-hash-table :test #'eq :weakness 'key))
           (drgnx-monitors--moving (make-hash-table :test #'eq :weakness 'key))
+          (drgnx-monitors--placed (make-hash-table :test #'eq :weakness 'key))
           (messages nil) (inhibit-interaction t))
      (drgnx-platform-test--with-adapter
       'fakemon
@@ -67,7 +74,13 @@ for the monitor the frame is on: (DELAY . INDEX)), :move-delay (seconds a move t
                         (setq drgnx-monitors-test--current
                               (seq-position monitors (plist-get mon :name)
                                             (lambda (m n) (equal (plist-get m :name) n)))))
-                      (drgnx-monitors-test--later (or (plist-get opts :move-delay) 0) (lambda () (funcall cb reply))))))
+                      (drgnx-monitors-test--later (or (plist-get opts :move-delay) 0) (lambda () (funcall cb reply)))))
+            :place (lambda (ctx mon cb)
+                     (setq drgnx-monitors-test--places
+                           (append drgnx-monitors-test--places (list (cons (plist-get ctx :frame) (plist-get mon :name)))))
+                     (let ((reply (if (plist-member opts :place-reply) (plist-get opts :place-reply) 'ok)))
+                       (unless (eq reply 'hang)
+                         (drgnx-monitors-test--later 0 (lambda () (funcall cb reply)))))))
       (lambda ()
         (drgnx-platform-test--with-frame 'pgtk '("FAKEMON=1")
           (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
@@ -424,6 +437,196 @@ for the monitor the frame is on: (DELAY . INDEX)), :move-delay (seconds a move t
                                   (let ((drgnx-monitors--count nil)) (should (drgnx-monitors--context-p nil))))   ; unknown: Emacs' own count
                                 (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) nil)))
                                   (let ((drgnx-monitors--count 2)) (should-not (drgnx-monitors--context-p nil))))))
+
+;;;; Restore: auxiliary windows go back to their monitors
+;; Batch Emacs has one frame and cannot make another, so the other windows are symbols with a table of
+;; parameters, and the few frame functions the code under test uses answer for them.
+
+(defvar drgnx-monitors-test--fakes nil "The fake frames: a list of (SYMBOL . PARAMETERS-ALIST).")
+
+(defun drgnx-monitors-test--fake (name role extra)
+  "A fake frame NAME in `drgnx-monitors-test--fakes', of role ROLE, with the persist extras EXTRA."
+  (let ((f (make-symbol name)))
+    (push (list f (cons 'drgnx-frame-role role) (cons 'drgnx-persist-extra extra)) drgnx-monitors-test--fakes)
+    f))
+
+(defmacro drgnx-monitors-test--with-fake-frames (&rest body)
+  "BODY with the frames of `drgnx-monitors-test--fakes' listed (newest first, like Emacs) before the selected one and answering as frames."
+  (declare (indent 0))
+  `(let ((drgnx-monitors-test--fakes nil)
+         (real (selected-frame)) (fp (symbol-function 'frame-parameter)) (sfp (symbol-function 'set-frame-parameter))
+         (fl (symbol-function 'frame-live-p)) (fpar (symbol-function 'frame-parent)) (ge (symbol-function 'getenv)))
+     (cl-letf (((symbol-function 'frame-list) (lambda () (append (mapcar #'car drgnx-monitors-test--fakes) (list real))))
+               ((symbol-function 'frame-parameter)
+                (lambda (f p) (if-let* ((e (assq f drgnx-monitors-test--fakes))) (cdr (assq p (cdr e))) (funcall fp f p))))
+               ((symbol-function 'set-frame-parameter)
+                (lambda (f p v) (if-let* ((e (assq f drgnx-monitors-test--fakes))) (setf (alist-get p (cdr e)) v) (funcall sfp f p v))))
+               ((symbol-function 'frame-live-p) (lambda (f) (or (assq f drgnx-monitors-test--fakes) (funcall fl f))))
+               ((symbol-function 'frame-parent) (lambda (&optional f) (if (assq f drgnx-monitors-test--fakes) nil (funcall fpar f))))
+               ((symbol-function 'getenv)
+                (lambda (v &optional f) (funcall ge v (if (assq f drgnx-monitors-test--fakes) real f)))))
+       ,@body)))
+
+(defconst drgnx-monitors-test--dell
+  '(:name "DP-2" :make "DELL" :model "U2720Q" :serial "ABC1" :geometry (1920 0 2560 1440))
+  "The saved identity of the second fake monitor.")
+
+(defun drgnx-monitors-test--extra (monitor &optional fullscreen)
+  (list :monitors-monitor monitor :monitors-fullscreen fullscreen))
+
+(drgnx-platform-test--deftest drgnx-monitors/the-state-keeps-monitor-and-fullscreen ()
+                              (drgnx-monitors-test--with-fake ()
+                                (let ((drgnx-persist-state-functions (list #'drgnx-monitors--state)))
+                                  (set-frame-parameter nil 'drgnx-monitor
+                                                       (list :name "DP-2" :make "DELL" :model "U2720Q" :serial "ABC1"
+                                                             :geometry '(1920 0 2560 1440) :workarea '(1920 0 2560 1400)
+                                                             :number 2 :label "2 — DP-2, 2560×1440"))
+                                  (set-frame-parameter nil 'fullscreen 'maximized)
+                                  (unwind-protect
+                                      (let ((extra (drgnx-persist--extra)))
+                                        (should (equal (plist-get extra :monitors-fullscreen) 'maximized))
+                                        (should (equal (plist-get (plist-get extra :monitors-monitor) :name) "DP-2"))
+                                        (should (equal (plist-get (plist-get extra :monitors-monitor) :serial) "ABC1"))
+                                        (should (equal (plist-get (plist-get extra :monitors-monitor) :geometry) '(1920 0 2560 1440)))
+                                        (should (readablep extra))
+                                        ;; the frame parameter itself is never saved: only the identity, no numbering
+                                        (should-not (plist-member (plist-get extra :monitors-monitor) :number))
+                                        (should-not (plist-member extra :drgnx-monitor))
+                                        (set-frame-parameter nil 'drgnx-monitor nil)      ; GNOME, other Wayland, a terminal
+                                        (should-not (plist-member (drgnx-persist--extra) :monitors-monitor)))
+                                    (set-frame-parameter nil 'fullscreen nil)))))
+
+(drgnx-platform-test--deftest drgnx-monitors/the-mode-hooks-persistence-and-unhooks ()
+                              (let ((drgnx-persist-state-functions nil) (drgnx-persist-after-restore-functions nil))
+                                (cl-letf (((symbol-function 'drgnx-monitors--schedule-frames) #'ignore))
+                                  (drgnx-monitors-mode 1)
+                                  (unwind-protect
+                                      (progn (should (memq #'drgnx-monitors--state drgnx-persist-state-functions))
+                                             (should (memq #'drgnx-monitors--place-restored drgnx-persist-after-restore-functions)))
+                                    (drgnx-monitors-mode -1))
+                                  (should-not (memq #'drgnx-monitors--state drgnx-persist-state-functions))
+                                  (should-not (memq #'drgnx-monitors--place-restored drgnx-persist-after-restore-functions)))))
+
+(drgnx-platform-test--deftest drgnx-monitors/restore-places-aux-windows-only ()
+                              (drgnx-monitors-test--with-fake ()
+                                (drgnx-monitors-test--with-fake-frames
+                                  (let* ((extra (drgnx-monitors-test--extra drgnx-monitors-test--dell 'fullboth))
+                                         (main (drgnx-monitors-test--fake "main" 'main extra))
+                                         (aux (drgnx-monitors-test--fake "aux" 'aux extra))
+                                         (editor (drgnx-monitors-test--fake "editor" 'editor extra))
+                                         (job (drgnx-monitors-test--fake "job" nil extra))      ; a custom window: no role
+                                         (plain (drgnx-monitors-test--fake "plain" 'aux nil)))   ; an older state file's window
+                                    (set-frame-parameter job 'drgnx-persist-restore '(ignore))
+                                    (drgnx-monitors--place-restored main)
+                                    (should (drgnx-platform-test--await (lambda () drgnx-monitors-test--places)))
+                                    (drgnx-platform-test--await (lambda () nil) 0.1)
+                                    (should (equal drgnx-monitors-test--places (list (cons aux "DP-2"))))
+                                    (should (eq (frame-parameter aux 'fullscreen) 'fullboth))
+                                    (dolist (f (list main editor job plain))
+                                      (should-not (frame-parameter f 'fullscreen)))
+                                    (should (= 1 (plist-get drgnx-monitors-test--calls :monitors)))   ; read once
+                                    (should-not messages)
+                                    ;; a second call does not place it again
+                                    (drgnx-monitors--place-restored main)
+                                    (drgnx-platform-test--await (lambda () nil) 0.1)
+                                    (should (= 1 (length drgnx-monitors-test--places)))))))
+
+(drgnx-platform-test--deftest drgnx-monitors/the-monitor-is-matched-by-identity-not-by-the-pgtk-name ()
+                              ;; The saved name is stale (pgtk names are no identity), the serial and the geometry say which one.
+                              (drgnx-monitors-test--with-fake (:monitors '((:name "HDMI-A-1" :make "DELL" :model "U2720Q" :serial "ABC1"
+                                                                                  :geometry (0 0 2560 1440))
+                                                                           (:name "DP-2" :make "LG" :model "X" :serial "Z9"
+                                                                                  :geometry (2560 0 1920 1080))))
+                                (drgnx-monitors-test--with-fake-frames
+                                  (let ((aux (drgnx-monitors-test--fake "aux" 'aux (drgnx-monitors-test--extra drgnx-monitors-test--dell))))
+                                    (drgnx-monitors--place-restored (selected-frame))
+                                    (should (drgnx-platform-test--await (lambda () drgnx-monitors-test--places)))
+                                    (should (equal drgnx-monitors-test--places (list (cons aux "HDMI-A-1"))))))))
+
+(drgnx-platform-test--deftest drgnx-monitors/a-missing-monitor-is-skipped-with-one-message ()
+                              (drgnx-monitors-test--with-fake (:monitors '((:name "DP-1" :geometry (0 0 1920 1080))))
+                                (drgnx-monitors-test--with-fake-frames
+                                  (let ((one (drgnx-monitors-test--fake "one" 'aux (drgnx-monitors-test--extra drgnx-monitors-test--dell)))
+                                        (home (drgnx-monitors-test--fake "home" 'aux (drgnx-monitors-test--extra '(:name "DP-1" :geometry (0 0 1920 1080))))))
+                                    (drgnx-monitors--place-restored (selected-frame))
+                                    (drgnx-platform-test--await (lambda () (and messages drgnx-monitors-test--places)) 1)
+                                    (drgnx-platform-test--await (lambda () nil) 0.1)
+                                    (should (equal drgnx-monitors-test--places (list (cons home "DP-1"))))   ; the missing one is not placed
+                                    (should (equal messages
+                                                   '("drgnx: 1 window's monitor is not connected (DELL U2720Q); the window manager placed it")))
+                                    (should-not (frame-parameter one 'fullscreen))))))
+
+(drgnx-platform-test--deftest drgnx-monitors/several-missing-monitors-are-one-message ()
+                              (drgnx-monitors-test--with-fake (:monitors '((:name "DP-1" :geometry (0 0 1920 1080))))
+                                (drgnx-monitors-test--with-fake-frames
+                                  (drgnx-monitors-test--fake "a" 'aux (drgnx-monitors-test--extra drgnx-monitors-test--dell))
+                                  (drgnx-monitors-test--fake "b" 'aux (drgnx-monitors-test--extra drgnx-monitors-test--dell))
+                                  (drgnx-monitors-test--fake "c" 'aux (drgnx-monitors-test--extra '(:name "" :geometry (5000 0 800 600))))
+                                  (drgnx-monitors--place-restored (selected-frame))
+                                  (drgnx-platform-test--await (lambda () messages) 1)
+                                  (drgnx-platform-test--await (lambda () nil) 0.1)
+                                  (should (equal drgnx-monitors-test--places nil))
+                                  (should (equal messages
+                                                 '("drgnx: 3 windows' monitors are not connected (DELL U2720Q, 800×600 at 5000,0); the window manager placed them"))))))
+
+(drgnx-platform-test--deftest drgnx-monitors/an-older-state-file-restores-as-before ()
+                              ;; Format 2 without :extra (or with extras of other modules only): nothing placed, no message,
+                              ;; not even the monitors read.
+                              (drgnx-monitors-test--with-fake ()
+                                (drgnx-monitors-test--with-fake-frames
+                                  (drgnx-monitors-test--fake "old" 'aux nil)
+                                  (drgnx-monitors-test--fake "other" 'aux '(:layout code))
+                                  (drgnx-monitors--place-restored (selected-frame))
+                                  (drgnx-platform-test--await (lambda () nil) 0.2)
+                                  (should-not drgnx-monitors-test--places)
+                                  (should-not (plist-get drgnx-monitors-test--calls :monitors))
+                                  (should-not messages))))
+
+(drgnx-platform-test--deftest drgnx-monitors/a-failing-adapter-says-so-once-and-stops ()
+                              (drgnx-monitors-test--with-fake (:place-reply '(:error "no such output"))
+                                (drgnx-monitors-test--with-fake-frames
+                                  (drgnx-monitors-test--fake "a" 'aux (drgnx-monitors-test--extra drgnx-monitors-test--dell))
+                                  (drgnx-monitors-test--fake "b" 'aux (drgnx-monitors-test--extra drgnx-monitors-test--dell))
+                                  (drgnx-monitors--place-restored (selected-frame))
+                                  (drgnx-platform-test--await (lambda () messages) 1)
+                                  (drgnx-platform-test--await (lambda () nil) 0.1)
+                                  (should (= 1 (length drgnx-monitors-test--places)))        ; the second is not tried
+                                  (should (= 1 (length messages)))
+                                  (should (string-match-p "no such output" (car messages))))))
+
+(drgnx-platform-test--deftest drgnx-monitors/a-hanging-wm-never-delays-the-restore ()
+                              ;; The adapter never answers.  `drgnx-persist--restore-into' returns at once with the files and the
+                              ;; layout in place; the placement gives up at the deadline and says so, once.
+                              (drgnx-monitors-test--with-fake (:place-reply 'hang)
+                                (drgnx-persist-test--with dir
+                                  (drgnx-persist-test--graphical
+                                    (let ((drgnx-platform-restore-timeout 0.3) (drgnx-platform-watchdog-margin 0.1))
+                                      (switch-to-buffer (drgnx-persist-test--file dir "a.txt"))
+                                      (drgnx-chrome-apply nil t)
+                                      (drgnx-persist-save)
+                                      (drgnx-persist-test--reset)
+                                      (set-frame-parameter nil 'drgnx-persist-restored nil)
+                                      (unwind-protect
+                                          (let* ((before-layout nil) (start nil)
+                                                 (drgnx-persist-after-restore-functions
+                                                  (list (lambda (frame)             ; stands for a saved aux window: this one is not main
+                                                          (set-frame-parameter frame 'drgnx-frame-role 'aux)
+                                                          (set-frame-parameter frame 'drgnx-persist-extra
+                                                                               (drgnx-monitors-test--extra drgnx-monitors-test--dell)))
+                                                        #'drgnx-monitors--place-restored
+                                                        (lambda (_) (setq before-layout (drgnx-persist-test--layout))))))
+                                            (setq start (float-time))
+                                            (drgnx-persist--restore-into (selected-frame))
+                                            (should (< (- (float-time) start) 0.2))                ; did not wait
+                                            (should (equal (car (car before-layout)) (list (list (expand-file-name "a.txt" dir)) (expand-file-name "a.txt" dir))))
+                                            (should (equal (buffer-file-name (window-buffer (selected-window))) (expand-file-name "a.txt" dir)))
+                                            (should (= 0 (length messages)))                       ; not given up yet
+                                            (should (drgnx-platform-test--await (lambda () messages) 2))
+                                            (should (< (- (float-time) start) 1.5))                ; gave up at the deadline
+                                            (should (= 1 (length messages)))
+                                            (should (string-match-p "timed out" (car messages))))
+                                        (dolist (p '(drgnx-frame-role drgnx-persist-extra drgnx-persist-restored))
+                                          (set-frame-parameter nil p nil))))))))
 
 (provide 'wb-monitors-test)
 ;;; wb-monitors-test.el ends here

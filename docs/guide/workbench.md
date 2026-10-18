@@ -221,6 +221,16 @@ sizes are clamped to the frame, window parameters in the file are ignored (drgnx
 format is ignored. Save / Restore Workbench Layout are in the palette. Only a graphical session saves — a batch run
 never writes your state.
 
+**Monitors.** Each window also remembers the monitor it was on (its make, model, serial, name and place, and whether it
+was full screen or maximized), and the other windows go back to it after a restart, on the window managers that let
+drgnx move a window (see [Several monitors](#several-windows)). The monitor is found by its serial, else its
+name, else its place, never by the number it had; if it is not connected any more, the window stays where your window
+manager opened it and drgnx says so in one message ("1 window's monitor is not connected (DELL U2720Q); the window
+manager placed it"). The main window, editor-only windows and job windows are never moved. This happens after the
+layout is back, in the background, with a few seconds' limit: a window manager that does not answer costs nothing but
+one message. Where drgnx cannot tell which monitor a window is on (GNOME, other Wayland compositors, a terminal) nothing is
+saved and nothing is moved.
+
 ### Several windows
 
 Every frame (OS window) is its own workbench. The first one is the **main** window; windows opened later are
@@ -231,7 +241,7 @@ also has the open files that are a tab nowhere — and the Buffers panel lists t
 Buffers: Show All Windows (palette · `SPC b a`) lists all. `C-x b` lists the buffers of the window you work in
 first and every other buffer after them: it sorts, it never hides one (the order is set on the `buffer` completion
 category, in `completion-category-overrides`; a `display-sort-function` of your own there stays). A help or results buffer shown from a window opens that
-window's panel; nothing moves in the other window. drgnx never places or sizes a window: your window manager does.
+window's panel; nothing moves in the other window. drgnx never places or sizes a window, except to put a restored window back on its monitor ([the layout survives a restart](#the-layout-survives-a-restart)): your window manager does.
 
 **Several monitors.** Move to Monitor… (palette · the window's right-click menu, shown only when more than one
 monitor is known), Move to Next Monitor and Move to Previous Monitor (palette; they wrap round) move the window you

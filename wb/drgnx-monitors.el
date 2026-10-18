@@ -310,6 +310,115 @@ burst of calls; moves nothing."
     (and (drgnx-monitors--eligible-p frame)
          (> (or drgnx-monitors--count (drgnx-monitors--emacs-count frame) 0) 1))))
 
+;;;; Restore: auxiliary windows go back to their monitors
+;; Saved through `drgnx-persist-state-functions' (the keys `:monitors-monitor' and `:monitors-fullscreen' of the
+;; frame's extras) and put back from `drgnx-persist-after-restore-functions'.  This is an automatic path: the
+;; restore returns at once, the adapter is asked later, every call has the restore deadline, and nothing prompts
+;; or signals.  The frame parameter `drgnx-monitor' itself is neither saved nor restored (it is refreshed from the
+;; window manager after the window is placed); the main window, `editor' windows and custom windows (job windows)
+;; are never moved.
+
+(defvar drgnx-persist-state-functions)
+(defvar drgnx-persist-after-restore-functions)
+
+(defvar drgnx-monitors--placed (make-hash-table :test #'eq :weakness 'key)
+  "Restored frames whose monitor has been dealt with (placed, or found gone, or the attempt failed).")
+
+(defconst drgnx-monitors--identity-keys '(:name :make :model :serial :geometry)
+  "What of a monitor is saved: what `drgnx-platform-match-monitor' matches on, nothing numbered or derived.")
+
+(defun drgnx-monitors--identity (monitor)
+  "MONITOR (a plist) reduced to `drgnx-monitors--identity-keys', as a list that can be read back."
+  (let (out)
+    (dolist (k drgnx-monitors--identity-keys)
+      (when-let* ((v (plist-get monitor k)))
+        (setq out (append out (list k (if (vectorp v) (append v nil) v))))))
+    out))
+
+(defun drgnx-monitors--state ()
+  "The selected frame's monitor and fullscreen state for `drgnx-persist-state-functions'; nil when no monitor is known.
+Reads frame parameters only: no window-manager call while saving."
+  (when-let* ((mon (frame-parameter nil 'drgnx-monitor)) ((consp mon)))
+    (list :monitors-monitor (drgnx-monitors--identity mon)
+          :monitors-fullscreen (frame-parameter nil 'fullscreen))))
+
+(defun drgnx-monitors--to-place ()
+  "The restored auxiliary frames that have a saved monitor and were not dealt with yet, in the order they were made."
+  (seq-filter (lambda (f)
+                (and (drgnx-monitors--eligible-p f)
+                     (eq (frame-parameter f 'drgnx-frame-role) 'aux)
+                     (not (gethash f drgnx-monitors--placed))
+                     (plist-get (frame-parameter f 'drgnx-persist-extra) :monitors-monitor)))
+              (reverse (frame-list))))
+
+(defun drgnx-monitors--saved (frame)
+  (plist-get (frame-parameter frame 'drgnx-persist-extra) :monitors-monitor))
+
+(defun drgnx-monitors--saved-name (saved)
+  "A saved monitor as a person would call it: make and model, else its name, else its size and place."
+  (let ((make (plist-get saved :make)) (model (plist-get saved :model)) (name (plist-get saved :name))
+        (g (drgnx-platform--geometry saved)))
+    (cond ((and (stringp make) (stringp model) (not (string-empty-p make)) (not (string-empty-p model)))
+           (format "%s %s" make model))
+          ((and (stringp name) (not (string-empty-p name))) name)
+          (g (format "%d×%d at %d,%d" (nth 2 g) (nth 3 g) (nth 0 g) (nth 1 g)))
+          (t "unknown monitor"))))
+
+(defun drgnx-monitors--windows (n)
+  (if (= n 1) "1 window" (format "%d windows" n)))
+
+(defun drgnx-monitors--place-next (jobs)
+  "Place the next of JOBS, a list of (FRAME MONITOR), then the rest: one at a time, as the adapters take the
+focus for a moment.  The first failure ends it, said once."
+  (when-let* ((job (car jobs)))
+    (pcase-let ((`(,frame ,monitor) job))
+      (if (not (frame-live-p frame))
+          (drgnx-monitors--place-next (cdr jobs))
+        (let ((fullscreen (plist-get (frame-parameter frame 'drgnx-persist-extra) :monitors-fullscreen)))
+          (condition-case err
+              (drgnx-platform-place-frame
+               frame monitor
+               (lambda (r)
+                 (if (drgnx-monitors--error-p r)
+                     (message "drgnx: could not put %s back on their monitors (%s); the window manager placed them"
+                              (drgnx-monitors--windows (length jobs)) (cadr r))
+                   (when (and fullscreen (frame-live-p frame))
+                     (set-frame-parameter frame 'fullscreen fullscreen))
+                   (drgnx-monitors--schedule-frames (list frame))
+                   (drgnx-monitors--place-next (cdr jobs)))))
+            (error (message "drgnx: monitors: %s" (error-message-string err)))))))))
+
+(defun drgnx-monitors--placing (frames monitors)
+  "FRAMES, restored windows, are matched to MONITORS (the listing, or (:error MESSAGE)) and placed."
+  (if (drgnx-monitors--error-p monitors)
+      (message "drgnx: could not put %s back on their monitors (%s); the window manager placed them"
+               (drgnx-monitors--windows (length frames)) (cadr monitors))
+    (let (jobs gone)
+      (dolist (f frames)
+        (let ((hit (drgnx-platform-match-monitor (drgnx-monitors--saved f) monitors)))
+          (if hit (push (list f hit) jobs) (push f gone))))
+      (when gone
+        (message (if (cdr gone)
+                     "drgnx: %d windows' monitors are not connected (%s); the window manager placed them"
+                   "drgnx: %d window's monitor is not connected (%s); the window manager placed it")
+                 (length gone)
+                 (mapconcat #'identity
+                            (delete-dups (mapcar (lambda (f) (drgnx-monitors--saved-name (drgnx-monitors--saved f)))
+                                                 (nreverse gone)))
+                            ", ")))
+      (drgnx-monitors--place-next (nreverse jobs)))))
+
+(defun drgnx-monitors--place-restored (_frame)
+  "`drgnx-persist-after-restore-functions': put each restored auxiliary window back on the monitor it was on.
+The monitors are read once, later and with the restore deadline; the windows whose monitor is gone are left where
+the window manager opened them.  Returns at once; never prompts or signals."
+  (condition-case err
+      (when-let* ((frames (drgnx-monitors--to-place)))
+        (dolist (f frames) (puthash f t drgnx-monitors--placed))
+        (let ((drgnx-platform-command-timeout drgnx-platform-restore-timeout))
+          (drgnx-platform-monitors (car frames) (lambda (monitors) (drgnx-monitors--placing frames monitors)))))
+    (error (message "drgnx: monitors: %s" (error-message-string err)))))
+
 ;;;; The mode
 
 (define-minor-mode drgnx-monitors-mode
@@ -317,10 +426,15 @@ burst of calls; moves nothing."
   :global t :group 'drgnx
   (if drgnx-monitors-mode
       (progn
+        (require 'drgnx-persist)
+        (add-hook 'drgnx-persist-state-functions #'drgnx-monitors--state)
+        (add-hook 'drgnx-persist-after-restore-functions #'drgnx-monitors--place-restored)
         (add-hook 'display-monitors-changed-functions #'drgnx-monitors--monitors-changed)
         (add-hook 'move-frame-functions #'drgnx-monitors--frame-moved)
         (add-function :after after-focus-change-function #'drgnx-monitors--focus-changed)
         (drgnx-monitors--schedule-frames (list (selected-frame))))
+    (remove-hook 'drgnx-persist-state-functions #'drgnx-monitors--state)
+    (remove-hook 'drgnx-persist-after-restore-functions #'drgnx-monitors--place-restored)
     (remove-hook 'display-monitors-changed-functions #'drgnx-monitors--monitors-changed)
     (remove-hook 'move-frame-functions #'drgnx-monitors--frame-moved)
     (remove-function after-focus-change-function #'drgnx-monitors--focus-changed)
