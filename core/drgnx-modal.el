@@ -253,8 +253,9 @@ start the emulation maps are put in order.  An engine's start function turns the
 buffer in its state: by `drgnx-modal-init-buffer', or by mirroring its own state through `drgnx-modal-set-state'.
 While `drgnx-modal-suspended' holds these same layers no engine is wanted; with other layers the suspension
 ends.  Returns the engine running, or nil.  An engine whose module is not installed is not started.
-At the end `drgnx-modal-sync-functions' are called with LAYERS, and the key report is written again when the
-running engine changed (it said what ran before the after-apply functions started it)."
+At the end `drgnx-modal-sync-functions' are called with LAYERS, and, when the running engine changed, the key report
+is written again (it said what ran before the after-apply functions started it) and which-key's labels follow
+(the leader's go while modal editing is off)."
   (let* ((was drgnx-modal-running)
          (layers (or layers (drgnx-modal-current-layers)))
          (_ (when (and drgnx-modal-suspended (not (equal (car drgnx-modal-suspended) layers)))
@@ -280,7 +281,9 @@ running engine changed (it said what ran before the after-apply functions starte
     (dolist (fn drgnx-modal-sync-functions)
       (condition-case err (funcall fn layers)
         (error (message "drgnx: %S failed: %s" fn (error-message-string err)))))
-    (when (and drgnx-keys-last (not (eq was drgnx-modal-running))) (drgnx-keys--write-report))
+    (when (and drgnx-keys-last (not (eq was drgnx-modal-running)))
+      (drgnx-keys--write-report)
+      (when (fboundp 'drgnx-surfaces-apply-which-key) (drgnx-surfaces-apply-which-key)))
     drgnx-modal-running))
 
 ;;;; Commands

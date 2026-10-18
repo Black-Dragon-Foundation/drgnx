@@ -18,6 +18,7 @@
 
 (defvar which-key-replacement-alist)   ; which-key, when present
 (defvar drgnx-keys-last)               ; drgnx-keys (loaded after this file)
+(defvar drgnx-modal-suspended)         ; drgnx-modal
 
 (defface drgnx-sheet-heading '((t :inherit (bold font-lock-keyword-face)))
   "Category headings in the key sheet (inherits theme faces only)."
@@ -302,7 +303,9 @@ not labelled: which-key's keymap-based labels write into the keymap, which would
         (pcase-dolist (`(,key . ,map) (drgnx-cmd-bound cmd))
           (pcase (cdr (drgnx-commands--keymap-spec map))
             ('global-map (funcall label key (drgnx-cmd-title cmd)))
-            ('drgnx-modal-leader-map (push (cons key cmd) leader) (funcall label key (drgnx-cmd-title cmd))))))
+            ('drgnx-modal-leader-map
+             (unless (bound-and-true-p drgnx-modal-suspended)   ; modal editing is off: the leader keys do nothing
+               (push (cons key cmd) leader) (funcall label key (drgnx-cmd-title cmd)))))))
       (pcase-dolist (`(,prefix . ,title) (drgnx-surfaces--leader-prefix-titles leader))
         (funcall label prefix title)))))
 
@@ -330,12 +333,13 @@ Uses registry keys only (no `where-is'), so the output is the same in every Emac
   (with-help-window "*drgnx keys*"
     (with-current-buffer standard-output
       (insert "drgnx keys — every command, its key and where to click.\n")
-      (let (cat)
-        (dolist (r (drgnx-surfaces-sheet-rows))
+      (let* ((cat nil) (rows (drgnx-surfaces-sheet-rows))
+             (width (apply #'max 24 (mapcar (lambda (r) (string-width (nth 1 r))) rows))))   ; long keys keep the columns
+        (dolist (r rows)
           (unless (equal cat (car r))
             (setq cat (car r))
             (insert "\n" (propertize cat 'face 'drgnx-sheet-heading) "\n"))
-          (insert (format "  %-24s %-36s %s\n" (nth 1 r) (nth 2 r) (nth 3 r)))))
+          (insert (format "  %s %-36s %s\n" (truncate-string-to-width (nth 1 r) width nil ?\s) (nth 2 r) (nth 3 r)))))
       ;; The active key profiles' conflicts and problems (drgnx-keys, docs/guide/keys.md).
       (when (fboundp 'drgnx-keys-conflict-lines)
         (pcase-dolist (`(,title . ,lines) `(("Key conflicts (the later layer won)"

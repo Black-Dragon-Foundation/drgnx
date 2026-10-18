@@ -702,14 +702,19 @@ Code's C-k chords over kill-line) are one line."
 (declare-function drgnx-modal-engine-for "drgnx-modal")
 (declare-function drgnx-modal-default-notes "drgnx-modal")
 
+(defvar drgnx-modal-suspended)
+
 (defun drgnx-keys--report-modal ()
   "The report's `:modal': (:engine ENGINE :running BOOL :pending LAYERS).  ENGINE is the modal engine the stack in
-force needs (nil without one), RUNNING whether it runs, PENDING the layers waiting for `drgnx sync' (read as data
-from `drgnx-keys-last'; nil when none)."
-  (let ((engine (and (fboundp 'drgnx-modal-engine-for)
-                     (ignore-errors (drgnx-modal-engine-for (plist-get drgnx-keys-last :layers))))))
+force needs (nil without one, and nil while the user has turned modal editing off for these layers: the engine is
+not wanted, not missing), RUNNING whether it runs, PENDING the layers a non-interactive choice of Vim keys left
+waiting for `drgnx sync' (`:pending-layers' in keys.eld, read as data; nil when none)."
+  (let* ((layers (plist-get drgnx-keys-last :layers))
+         (engine (and (fboundp 'drgnx-modal-engine-for)
+                      (not (and (bound-and-true-p drgnx-modal-suspended) (equal (car drgnx-modal-suspended) layers)))
+                      (ignore-errors (drgnx-modal-engine-for layers)))))
     (list :engine engine :running (and engine (eq engine drgnx-modal-running) t)
-          :pending (plist-get drgnx-keys-last :pending-layers))))
+          :pending (let ((drgnx-keys-problems nil)) (plist-get (drgnx-keys-read-user) :pending-layers)))))
 
 (defun drgnx-keys--leader-menu-key ()
   "The key the Leader Menu is on in the global map (\"M-SPC\" in the Vim profile), or nil."

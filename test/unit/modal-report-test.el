@@ -70,7 +70,7 @@ no registered modal engine; every binding is undone after."
 
 (ert-deftest drgnx-modal-report/which-key-labels-the-leader ()
   (skip-unless (require 'which-key nil t))
-  (let ((which-key-replacement-alist which-key-replacement-alist))
+  (let ((which-key-replacement-alist nil) (drgnx-surfaces--which-key-entries nil))   ; labels other tests left stay out
     (drgnx-modal-report-test--live
       (drgnx-keys-use drgnx-modal-report-test--vim)
       (should (equal (drgnx-modal-report-test--label "SPC f f") "Open File…"))
@@ -103,11 +103,15 @@ no registered modal engine; every binding is undone after."
     (should-not (plist-get (drgnx-modal-report-test--report) :leader-menu-key))))
 
 (ert-deftest drgnx-modal-report/report-reads-pending-layers-as-data ()
+  ;; Task 11 keeps `:pending-layers' in keys.eld (no apply happens on its non-interactive path).
   (drgnx-modal-report-test--live
+    (make-directory (drgnx-user-dir) t)
+    (with-temp-file (drgnx-keys-file)
+      (prin1 '(:layers ((vscode app editing window)) :pending-layers ((vim app editing window))) (current-buffer)))
     (drgnx-keys-use drgnx-modal-report-test--vscode)
-    (setq drgnx-keys-last (plist-put drgnx-keys-last :pending-layers '((vim app editing window))))
-    (drgnx-keys--write-report)
-    (should (equal (plist-get (plist-get (drgnx-modal-report-test--report) :modal) :pending) '((vim app editing window))))))
+    (should (equal (plist-get (plist-get (drgnx-modal-report-test--report) :modal) :pending) '((vim app editing window))))
+    (should (eq (car (drgnx-doctor-check 'modal (drgnx-modal-report-test--facts :keys-report (drgnx-modal-report-test--report))))
+                'info))))
 
 (ert-deftest drgnx-modal-report/report-follows-the-engine-start ()
   ;; The report is first written before the after-apply functions start the engine: it is written again.
@@ -121,6 +125,43 @@ no registered modal engine; every binding is undone after."
         (should (equal (plist-get (drgnx-modal-report-test--report) :modal) '(:engine nil :running nil :pending nil)))))))
 
 ;;;; The doctor
+
+(ert-deftest drgnx-modal-report/turning-modal-editing-off-is-not-a-missing-engine ()
+  ;; Toggle Modal Editing off: the report says no engine is wanted, so the doctor does not say "restart drgnx", and
+  ;; the leader's which-key labels go with it.
+  (require 'which-key nil t)
+  (drgnx-modal-report-test--live
+    (let ((drgnx-modal-engines nil) (drgnx-modal-suspended nil) (drgnx-surfaces--which-key-entries nil)
+          (which-key-replacement-alist nil)
+          (drgnx-keys-after-apply-functions (list #'drgnx-modal-sync-engine)))
+      (drgnx-modal-define-engine 'evil :module 'editor/evil :start #'ignore :stop #'ignore)
+      (drgnx-keys-use drgnx-modal-report-test--vim)
+      (should (eq drgnx-modal-running 'evil))
+      (when (featurep 'which-key) (should (drgnx-modal-report-test--label "SPC f f")))
+      (setq drgnx-modal-suspended (list drgnx-modal-report-test--vim))
+      (drgnx-modal-sync-engine)
+      (should-not drgnx-modal-running)
+      (should (equal (plist-get (drgnx-modal-report-test--report) :modal) '(:engine nil :running nil :pending nil)))
+      (should (eq (car (drgnx-doctor-check 'modal (drgnx-modal-report-test--facts :keys-report (drgnx-modal-report-test--report))))
+                  'ok))
+      (when (featurep 'which-key) (should-not (drgnx-modal-report-test--label "SPC f f")))
+      ;; and back on
+      (setq drgnx-modal-suspended nil)
+      (drgnx-modal-sync-engine)
+      (should (plist-get (plist-get (drgnx-modal-report-test--report) :modal) :running))
+      (when (featurep 'which-key) (should (drgnx-modal-report-test--label "SPC f f"))))))
+
+(ert-deftest drgnx-modal-report/sheet-columns-stay-aligned-for-long-keys ()
+  (drgnx-modal-report-test--live
+    (drgnx-keys-use drgnx-modal-report-test--vim)
+    (drgnx-surfaces-cheatsheet)
+    (with-current-buffer "*drgnx keys*"
+      (goto-char (point-min))
+      (search-forward "Go to Definition")
+      (let ((col (current-column)) (title "Go to Definition"))
+        (goto-char (point-min))
+        (search-forward "Open File…")
+        (should (= (- col (length title)) (- (current-column) (length "Open File…"))))))))
 
 (ert-deftest drgnx-modal-report/doctor-warns-without-the-engine ()
   (drgnx-modal-report-test--live
