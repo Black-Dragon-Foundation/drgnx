@@ -91,5 +91,24 @@ the alist for `drgnx-pkg-sync'."
       (should (plist-get (drgnx-pkg-upgrade :archives archives :modules-dir (concat root "mods") :smoke #'ignore) :ok))
       (should (equal (drgnx-pkg-test--installed) '("magit-4.7.1"))))))
 
+
+(ert-deftest drgnx-pkg-priorities/the-default-is-not-applied-to-archives-the-user-names ()
+  ;; package.el ranks an unlisted archive 0, below MELPA's 1: a user's own :archives get "newest wins" unless they rank them.
+  (drgnx-pkg-test--with root
+    (let ((mine (drgnx-pkg-test--archive (concat root "mine") '((magit "20261018.1200"))))
+          (melpa (drgnx-pkg-test--archive (concat root "melpa") '((magit "20261017.1200")))))
+      (drgnx-pkg-test--write (concat root "config/packages.eld")
+                             `(:packages (magit) :archives (("melpa" . ,melpa) ("mine" . ,mine))))
+      (should-not (drgnx-pkg-archive-priorities))
+      (should (plist-get (drgnx-pkg-test--sync root) :ok))
+      (should (equal (drgnx-pkg-test--installed) '("magit-20261018.1200"))))))
+
+(ert-deftest drgnx-pkg-priorities/a-malformed-value-is-reported ()
+  (dolist (bad '(t (("melpa" . "high")) ((melpa . 1)) ("melpa")))
+    (drgnx-pkg-test--with root
+      (drgnx-pkg-test--write (concat root "config/packages.eld") `(:packages (magit) :archive-priorities ,bad))
+      (let ((err (should-error (drgnx-pkg-archive-priorities) :type 'drgnx-pkg-error)))
+        (should (string-match-p "archive-priorities" (cadr err)))))))
+
 (provide 'pkg-priorities-test)
 ;;; pkg-priorities-test.el ends here

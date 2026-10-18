@@ -39,11 +39,13 @@ The **manifest** is:
   `:archives` is optional (default: GNU ELPA, NonGNU ELPA, MELPA); a local directory works as an archive;
   `:archives ()` means none (sync then works from the cache only); `:archive-priorities` (package.el's
   `package-archive-priorities`) makes a package come from the highest priority archive that has it, even when
-  another has a newer version. drgnx's default, when you do not set the key, is `(("gnu" . 3) ("nongnu" . 2)
+  another has a newer version. drgnx's default, when you set neither this key nor `:archives`, is `(("gnu" . 3) ("nongnu" . 2)
   ("melpa" . 1))`: releases over MELPA's snapshots (magit stays on its NonGNU release instead of moving to the
   latest commit's build), and MELPA still serves what only it has — a package, or a version a dependency needs.
-  Your own value wins, `:archive-priorities ()` included: with none, the newest version wins, usually MELPA's build of
-  the latest commit;
+  Your own value wins (an alist of `("archive-name" . NUMBER)`; anything else is reported), `:archive-priorities ()`
+  included, and so does your own `:archives` list: package.el ranks an archive that is not listed below every listed one,
+  so the default would put yours under MELPA; rank them yourself to prefer releases. With no priorities the newest
+  version wins, usually MELPA's build of the latest commit;
 - what `use-package … :ensure` asked for in a session, or an external module's files (gryphn) would have
   installed. In drgnx `:ensure` installs nothing: it records the package use-package would have installed
   (`:ensure t` the package itself, `:ensure other` that one, `:ensure nil` none) in
@@ -115,11 +117,15 @@ way a [Git package](#packages-from-git) is installed (cloned into the package ca
 named with the locked version, so the lock stays as it was and the next sync finds it installed — and prints a `WARNING`
 saying so. Nothing is installed through `package-build`: the files are the repository's, so a package whose MELPA recipe
 picks other files than a plain checkout holds (a `:files` recipe) may not build the same; and MELPA's `:url` is
-sometimes a homepage, not a repository. When the commit cannot be had (no such repository, no such commit) or the lock
-has none (entries written by an older drgnx, until the package is upgraded or installed again), the package is reported
+sometimes a homepage, not a repository. The commit must be a full id (40 or 64 hex characters, not a branch, a tag or a prefix) and the checkout must resolve to
+it, since it is the only check the rebuilt files get; the URL must be an `https://` one or a local directory (git runs
+with only those protocols allowed, whatever your git configuration says: no `ext::`, no `ssh://`). The package's
+`NAME.el` is taken at the top of the repository, else from `lisp/`. GNU ELPA's commit is on its own branch and may be
+missing from the `:url` repository. When the commit cannot be had (no such repository, no such commit, any of the above)
+or the lock has none (entries written by an older drgnx, until the package is upgraded or installed again), the package is reported
 `MISSING` with the reason, the installed version is kept and the lock stays as it was — it is never silently
 replaced by the archive's version; `drgnx upgrade` is the way to take that. The shipped lock's pins stay soft instead
-(see below): they fall back to the archive's version. `--offline` does not rebuild.
+(see below): they fall back to the archive's version. `--offline` does not rebuild (it says "sync online to rebuild it from its commit").
 
 `drgnx sync --offline` installs exactly the lock from the cache: on a new machine, copy the cache and the lock and
 sync without network. A manifest package the lock does not have is reported ("sync online once").

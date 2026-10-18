@@ -102,9 +102,17 @@ modules/), packages.eld's :packages and :git, and those use-package :ensure aske
 
 (defun drgnx-pkg-archive-priorities ()
   "packages.eld's :archive-priorities when it has the key (even empty: the user's own choice), else
-`drgnx-pkg-default-archive-priorities'."
+`drgnx-pkg-default-archive-priorities' — unless packages.eld names its own :archives: package.el ranks an archive
+not listed below every listed one, so the default would put theirs under MELPA.  Their ranking is theirs to say.
+A value that is not an alist (ARCHIVE-NAME . NUMBER) is a `drgnx-pkg-error'."
   (let ((p (drgnx-pkg--packages-eld)))
-    (if (plist-member p :archive-priorities) (plist-get p :archive-priorities) drgnx-pkg-default-archive-priorities)))
+    (cond ((plist-member p :archive-priorities)
+           (let ((v (plist-get p :archive-priorities)))
+             (unless (and (listp v) (seq-every-p (lambda (x) (and (consp x) (stringp (car x)) (numberp (cdr x)))) v))
+               (drgnx-pkg--error "packages.eld: :archive-priorities must be an alist of (\"archive-name\" . NUMBER), e.g. ((\"gnu\" . 3) (\"melpa\" . 1))"))
+             v))
+          ((plist-member p :archives) nil)
+          (t drgnx-pkg-default-archive-priorities))))
 
 ;;;; Lock
 
@@ -385,7 +393,7 @@ recorded as :commit and :url: what `drgnx-pkg--restore-prepare' needs once the a
                         :requires (mapcar (lambda (r) (list (car r) (package-version-join (cadr r))))
                                           (seq-remove (lambda (r) (eq (car r) 'emacs)) (package-desc-reqs desc)))
                         :summary (package-desc-summary desc))
-                  (and (alist-get :commit extras) (alist-get :url extras)
+                  (and (drgnx-pkg--full-commit-p (alist-get :commit extras)) (alist-get :url extras)
                        (list :commit (alist-get :commit extras) :url (alist-get :url extras)))))))
 
 (defun drgnx-pkg--file (desc) (concat (package-desc-full-name desc) (package-desc-suffix desc)))
@@ -544,11 +552,21 @@ in the packages directory itself: an .eln's name hashes its source's path."
   "Where NAME comes from when it comes from Git: (:url :rev [:lisp-dir]), or nil."
   (or (alist-get name (plist-get (drgnx-pkg--packages-eld) :git)) (alist-get name drgnx-pkg-git-sources)))
 
+(defvar drgnx-pkg--git-env nil "More environment (\"VAR=VALUE\"…) for `drgnx-pkg--git'.")
+
+(defconst drgnx-pkg--restore-git-env '("GIT_ALLOW_PROTOCOL=https:file")
+  "What a rebuild from an archive's URL runs git with: only https and local directories, whatever the user's git
+config allows (no ext::, no ssh:// with their keys).")
+
 (defun drgnx-pkg--git (dir &rest args)
-  "git ARGS in DIR, never asking for anything (no terminal, no credential helper): (EXIT . OUTPUT)."
+  "git ARGS in DIR, never asking for anything (no terminal, no credential helper, an ssh that never asks):
+(EXIT . OUTPUT)."
   (with-temp-buffer
     (let ((default-directory (file-name-as-directory dir))
-          (process-environment (append '("GIT_TERMINAL_PROMPT=0" "GIT_ASKPASS=true" "SSH_ASKPASS=true") process-environment)))
+          (process-environment (append drgnx-pkg--git-env
+                                       '("GIT_TERMINAL_PROMPT=0" "GIT_ASKPASS=true" "SSH_ASKPASS=true")
+                                       (unless (getenv "GIT_SSH_COMMAND") '("GIT_SSH_COMMAND=ssh -o BatchMode=yes"))
+                                       process-environment)))
       (cons (apply #'call-process "git" nil t nil "-c" "credential.helper=" args) (string-trim (buffer-string))))))
 
 (defun drgnx-pkg--git-cache (name) (expand-file-name (format "git/%s/" name) (drgnx-package-cache-dir)))
@@ -557,12 +575,14 @@ in the packages directory itself: an .eln's name hashes its source's path."
   "NAME's clone in the package cache, up to date with SRC's :url (cloned the first time): its directory."
   (let* ((dir (drgnx-pkg--git-cache name)) (url (plist-get src :url)))
     (if (file-directory-p (expand-file-name ".git" dir))
-        (progn (drgnx-pkg--git dir "remote" "set-url" "origin" url)
+        (progn (pcase (drgnx-pkg--git dir "remote" "set-url" "origin" "--" url)   ; never fetch the old origin instead
+                 (`(0 . ,_))
+                 (`(,_ . ,err) (drgnx-pkg--error "%s: setting its URL to %s failed: %s" name url err)))
                (pcase (drgnx-pkg--git dir "fetch" "--quiet" "--tags" "--force" "origin" "+refs/heads/*:refs/remotes/origin/*")
                  (`(0 . ,_))
                  (`(,_ . ,err) (drgnx-pkg--error "%s: fetching %s failed: %s" name url err))))
       (make-directory (file-name-directory (directory-file-name dir)) t)
-      (pcase (drgnx-pkg--git (file-name-directory (directory-file-name dir)) "clone" "--quiet" "--no-checkout" url
+      (pcase (drgnx-pkg--git (file-name-directory (directory-file-name dir)) "clone" "--quiet" "--no-checkout" "--" url
                              (directory-file-name dir))
         (`(0 . ,_))
         (`(,_ . ,err) (drgnx-pkg--error "%s: cloning %s failed: %s" name url err))))
@@ -654,6 +674,10 @@ deleted.  A package that does not install is a `drgnx-pkg-error'."
 (defvar drgnx-pkg--restore-failed nil
   "While a sync runs: why a restore could not be prepared, ((NAME . REASON)…); it ends the package's MISSING reason.")
 
+(defun drgnx-pkg--full-commit-p (commit)
+  "Is COMMIT a full object id (40 hex characters, 64 in a SHA-256 repository), not a name or a prefix?"
+  (and (stringp commit) (string-match-p "\\`\\(?:[0-9a-f]\\{40\\}\\|[0-9a-f]\\{64\\}\\)\\'" commit)))
+
 (defun drgnx-pkg--restore-prepare (names pins soft-names)
   "Prepare the rebuild from its commit of every locked version of NAMES (and what their PINS require) that no
 archive and no cache has any more — the MELPA snapshots that vanish — and that the lock records a :commit and :url
@@ -667,15 +691,27 @@ the plan reports it missing."
                  (not (equal (drgnx-pkg--installed-version name) (plist-get pin :version)))
                  (not (drgnx-pkg--pinned-desc name pin)))
         (condition-case err
-            (let* ((src (list :url url :rev commit)) (dir (drgnx-pkg--git-cache name)))
+            (let* ((src (list :url url :rev commit)) (dir (drgnx-pkg--git-cache name))
+                   (drgnx-pkg--git-env (append drgnx-pkg--restore-git-env drgnx-pkg--git-env)))
+              ;; the commit is the package's only check (no hash): a full id, and the one the checkout resolves to
+              (unless (drgnx-pkg--full-commit-p commit) (drgnx-pkg--error "the lock's commit %s is not a full commit id" commit))
+              (unless (or (string-prefix-p "https://" url) (and (file-name-absolute-p url) (file-directory-p url)))
+                (drgnx-pkg--error "%s is neither an https URL nor a local directory" url))
               (unless (drgnx-pkg--git-has-p dir commit) (drgnx-pkg--git-fetch name src))
-              (unless (drgnx-pkg--git-has-p dir commit) (drgnx-pkg--error "%s has no commit %s" url commit))
-              (let ((root (drgnx-pkg--git-export name dir commit)))
+              (unless (and (drgnx-pkg--git-has-p dir commit)
+                           (equal (cdr (drgnx-pkg--git dir "rev-parse" "--verify" "--quiet" (concat commit "^{commit}"))) commit))
+                (drgnx-pkg--error "%s has no commit %s" url commit))
+              (let* ((root (drgnx-pkg--git-export name dir commit))
+                     ;; the code at the top, else in lisp/ (as forge, ghub and closql have it; MELPA's default recipe too)
+                     (tree (if (and (not (file-exists-p (expand-file-name (format "%s.el" name) root)))
+                                    (file-exists-p (expand-file-name (format "lisp/%s.el" name) root)))
+                               (expand-file-name "lisp/" root)
+                             root)))
                 (condition-case e
-                    (let ((desc (drgnx-pkg--git-desc name root dir commit)))
+                    (let ((desc (drgnx-pkg--git-desc name tree dir commit)))
                       ;; the locked version, not the header's (MELPA's are dates): the lock then finds it installed
                       (setf (package-desc-version desc) (version-to-list (plist-get pin :version)))
-                      (push (list name desc root commit src root) drgnx-pkg--restored))
+                      (push (list name desc tree commit src root) drgnx-pkg--restored))
                   (error (delete-directory root t) (signal (car e) (cdr e))))))
           (error (push (cons name (error-message-string err)) drgnx-pkg--restore-failed)))))))
 
@@ -740,7 +776,10 @@ than V2 needs\")."
               (unless (equal (drgnx-pkg--installed-version (car e)) (plist-get (cdr e) :version))
                 (if (file-exists-p (expand-file-name (or (plist-get (cdr e) :file) "") (drgnx-package-cache-dir)))
                     (add (drgnx-pkg--entry-desc (car e) (cdr e)))
-                  (miss (car e) (format "%s %s is not in the cache" (car e) (plist-get (cdr e) :version)))))))
+                  (miss (car e) (format "%s %s is not in the cache%s" (car e) (plist-get (cdr e) :version)
+                                        (if (and (plist-get (cdr e) :commit) (plist-get (cdr e) :url))
+                                            " — sync online to rebuild it from its commit"
+                                          "")))))))
         ;; The lock decides installed versions (unless upgrading), and the versions of the manifest's packages it
         ;; has, with what their entries require: those install as locked, never as the archives' newest asks.
         (unless upgrade
