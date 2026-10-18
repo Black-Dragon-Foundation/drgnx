@@ -246,6 +246,27 @@ Keychain and keyring are never reached."
             (drgnx-ai-key 'openrouter t)
             (should (equal (car searched) (list plain own)))))))))
 
+(ert-deftest drgnx-ai/no-secret-source-without-a-session-bus ()
+  ;; Linux without a D-Bus session: `default' would only log "invalid backend spec" and find nothing
+  (drgnx-ai-test--with root
+    (let* ((plain (concat root "authinfo")) (run (concat root "run")) (system-type 'gnu/linux) (noninteractive nil)
+           (auth-sources (list plain)) (searched nil)
+           (process-environment (append (list "DBUS_SESSION_BUS_ADDRESS" (concat "XDG_RUNTIME_DIR=" run)) process-environment)))
+      (make-directory run)
+      (cl-letf (((symbol-function 'auth-source-search) (lambda (&rest _) (push auth-sources searched) nil)))
+        (should-not (drgnx-ai-key 'openrouter t))
+        (should (equal searched (list (list plain))))
+        ;; a session bus (here: its address): the keyring is added again
+        (setq searched nil)
+        (let ((process-environment (cons "DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/drgnx-test-bus" process-environment)))
+          (should-not (drgnx-ai-key 'openrouter t))
+          (should (equal searched (list (list plain 'default)))))
+        ;; macOS has no bus and needs none
+        (setq searched nil)
+        (let ((system-type 'darwin))
+          (should-not (drgnx-ai-key 'openrouter t))
+          (should (equal searched (list (list plain 'macos-keychain-internet)))))))))
+
 (ert-deftest drgnx-ai/background-reads-never-open-the-keychain ()
   (drgnx-ai-test--with root
     (dolist (system '(darwin gnu/linux))

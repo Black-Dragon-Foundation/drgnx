@@ -154,6 +154,8 @@ would hide the key for hours."
           (let* ((auth-sources (cond ((not interactive) (drgnx-ai--quiet-sources auth-sources))
                                      (noninteractive (seq-remove #'drgnx-ai--secret-source-p auth-sources))
                                      ((member (drgnx-ai--secret-source) auth-sources) auth-sources)
+                                     ;; the keyring lives on the session bus: without one `default' only logs an error
+                                     ((not (or (eq system-type 'darwin) (drgnx-ai--dbus-session-p))) auth-sources)
                                      (t (append auth-sources (list (drgnx-ai--secret-source))))))
                  (auth-source-do-cache nil)
                  (found (and auth-sources (car (auth-source-search :host host :max 1 :create nil))))
