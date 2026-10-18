@@ -41,7 +41,7 @@ diff view.
 
 In a commit message buffer (magit's, or VC's), **Git: Generate Commit Message** writes the message for you (module
 `tools/commit-message`). It sends the staged diff to the AI registry's `chat` role ([ai.md](ai.md)); in VC, the
-diff of the files being committed. For `git commit --amend` it is the whole amended commit (the index against the commit before it); for `git commit -a`, the tracked changes that are not staged too. It also sends the last ten subjects, so the style matches the repository. A diff
+diff of the files being committed. For `git commit --amend` it is the whole amended commit (the index against the commit before it, or with `-a` the working tree); for a reword (`--amend --only`), the last commit's own change; for `git commit -a`, the tracked changes that are not staged too. This is read from magit's commit (or the `git commit` that magit is running in this repository); in VC's log-edit buffer, and for flags bundled with others (`-am`), drgnx describes the staged diff. It also sends the last ten subjects, so the style matches the repository. A diff
 over 24 000 characters is cut, and the model is told so. The answer fills an empty message. A message you have
 already typed is never replaced: the suggestion goes to the kill ring (`C-y`).
 

@@ -38,33 +38,43 @@ repository:"
       (and (eql 0 (apply #'call-process "git" nil '(t nil) nil args)) (buffer-string)))))
 
 (defun drgnx-commit-message--kind (root)
-  "How the commit being written is made: `amend' (git commit --amend), `all' (-a) or nil (the index as it is).
-Magit's record of the command it ran, else the git commit process running in ROOT."
+  "How the commit being written is made: `amend' (git commit --amend), `amend-all' (--amend -a), `reword' (--amend
+--only: HEAD's own tree), `all' (-a) or nil (the index as it is).  Magit's record of the command it ran, else the
+git commit process whose buffer says it runs in ROOT (a process without a buffer cannot be told from another
+repository's, so it is not used).  Short flags bundled with others (-am) are not seen: the index is described."
   (let ((cmd (and (fboundp 'magit-repository-local-get)
                   (let ((default-directory root)) (ignore-errors (magit-repository-local-get 'this-commit-command))))))
     (or (pcase cmd
-          ((or 'magit-commit-amend 'magit-commit-reword) 'amend)
+          ('magit-commit-amend 'amend)
+          ('magit-commit-reword 'reword)
           ('magit-commit--all 'all))
         (seq-some (lambda (p)
                     (let ((c (and (process-live-p p) (process-command p))) (buf (process-buffer p)))
                       (when (and (equal (file-name-nondirectory (or (car-safe c) "")) "git") (member "commit" c)
-                                 (or (not (buffer-live-p buf))
-                                     (file-equal-p (buffer-local-value 'default-directory buf) root)))
-                        (cond ((member "--amend" c) 'amend)
-                              ((or (member "--all" c) (member "-a" c)) 'all)))))
+                                 (buffer-live-p buf)
+                                 (file-equal-p (buffer-local-value 'default-directory buf) root))
+                        (let ((all (or (member "--all" c) (member "-a" c))))
+                          (cond ((and (member "--amend" c) (member "--only" c)) 'reword)
+                                ((member "--amend" c) (if all 'amend-all 'amend))
+                                (all 'all))))))
                   (process-list)))))
 
 (defun drgnx-commit-message--diff (root files)
   "The diff to describe: FILES' against HEAD (what VC commits), else what the commit will hold: the index's, with
---amend the index against HEAD's parent (the empty tree for the first commit), with -a the working tree against HEAD.
+--amend the index against HEAD's parent (the empty tree for the first commit), with --amend -a the working tree
+against it, with --amend --only HEAD against its parent, with -a the working tree against HEAD.
 The index of a repository with no commit yet is against the empty tree already."
   (let ((kind (and (null files) (drgnx-commit-message--kind root)))
         (head (drgnx-commit-message--git root "rev-parse" "--verify" "-q" "HEAD")))
     (or (apply #'drgnx-commit-message--git root "diff" "--no-color" "--no-ext-diff"
                (cond (files (append '("HEAD" "--") files))
-                     ((and (eq kind 'amend) head)
-                      (list "--cached" (if (drgnx-commit-message--git root "rev-parse" "--verify" "-q" "HEAD^") "HEAD^"
-                                         (string-trim (or (drgnx-commit-message--git root "hash-object" "-t" "tree" "/dev/null") "")))))
+                     ((and (memq kind '(amend amend-all reword)) head)
+                      (let ((parent (if (drgnx-commit-message--git root "rev-parse" "--verify" "-q" "HEAD^") "HEAD^"
+                                      (string-trim (or (drgnx-commit-message--git root "hash-object" "-t" "tree" "/dev/null") "")))))
+                        (pcase kind
+                          ('amend (list "--cached" parent))
+                          ('amend-all (list parent))
+                          ('reword (list parent "HEAD")))))
                      ((and (eq kind 'all) head) '("HEAD"))
                      (t '("--cached"))))
         "")))
