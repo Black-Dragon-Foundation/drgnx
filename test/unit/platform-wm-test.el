@@ -410,5 +410,16 @@
                                     (should-not (cl-some (lambda (c) (string-match-p "nowhere.*focus\\|focus.*nowhere" c)) (drgnx-platform-wm-test--commands)))
                                     (should (equal "[id=6291785] move container to output nowhere" (car (last (drgnx-platform-wm-test--commands)))))))))
 
+;; Found by the live move test (Next/Previous on sway and i3 said "Cannot tell which monitor this window is on").
+(drgnx-platform-test--deftest drgnx-platform-wm/sway-and-i3-say-which-monitor-the-frame-is-on ()
+                              (cl-letf (((symbol-function 'frame-monitor-attributes)
+                                         (lambda (&optional _) '((name . "Unknown") (geometry 1280 0 1280 800) (workarea 1280 0 1280 800)))))
+                                (dolist (row '((pgtk ("SWAYSOCK=/frame/sway.sock" "WAYLAND_DISPLAY=wayland-1") sway)
+                                               (x ("I3SOCK=/frame/i3.sock" "DISPLAY=:0") i3)))
+                                  (drgnx-platform-test--with-frame (nth 0 row) (nth 1 row)
+                                    (should (eq (nth 2 row) (drgnx-platform-wm frame)))
+                                    (let ((m (drgnx-platform-wm-test--result (lambda (cb) (drgnx-platform-frame-monitor frame cb)))))
+                                      (should (equal (plist-get m :geometry) '(1280 0 1280 800))))))))
+
 (provide 'platform-wm-test)
 ;;; platform-wm-test.el ends here

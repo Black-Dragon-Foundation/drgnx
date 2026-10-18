@@ -845,7 +845,9 @@ at `drgnx-platform-wm--place-polls' seconds, then every second, until the window
     (drgnx-platform-define-adapter
      wm
      :monitors (lambda (ctx callback) (drgnx-platform-wm--monitors wm ctx callback))
-     :move (lambda (ctx monitor callback) (drgnx-platform-wm--move wm ctx monitor callback))
+     ;; Emacs' own answer (its geometry matches an output's): Next and Previous need the current monitor
+     :frame-monitor #'drgnx-platform--emacs-frame-monitor
+     :move(lambda (ctx monitor callback) (drgnx-platform-wm--move wm ctx monitor callback))
      :place (lambda (ctx monitor callback) (drgnx-platform-wm--place wm ctx monitor callback)))))
 
 ;;;; Hyprland and niri (reported: written from their sources and documented replies, not yet run on the real WM)
