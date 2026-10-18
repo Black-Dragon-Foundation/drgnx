@@ -11,7 +11,6 @@
  (:file "core/drgnx-agent-config.el" :fn drgnx-agent-config-save-backup :what rename-file :why "an agent's settings backup (text)" :until 25)
  (:file "core/drgnx-agent-config.el" :fn drgnx-agent-config-write-text :what write-region :why "an agent's settings file (text)" :until 25)
  (:file "core/drgnx-agent-config.el" :fn drgnx-agent-config-write-text :what rename-file :why "an agent's settings file (text)" :until 25)
- (:file "core/drgnx-agents.el" :fn drgnx-agents--read-file :what read-site :why "agents.eld" :until 8)
  (:file "core/drgnx-ai-probe.el" :fn drgnx-ai-probe :what with-temp-file :why "ai-detected.eld" :until 22)
  (:file "core/drgnx-ai-probe.el" :fn drgnx-ai-detected-cached :what read-site :why "ai-detected.eld" :until 22)
  (:file "core/drgnx-ai-probe.el" :fn drgnx-ai-managed :what read-site :why "ai-local.eld" :until 22)
