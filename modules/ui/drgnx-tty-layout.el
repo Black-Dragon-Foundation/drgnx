@@ -114,48 +114,82 @@ lays nothing out.")
                                 ('dock (drgnx-wb-hide-sidebar))
                                 ('panel (drgnx-wb-area-hide 'panel)))))))))
 
-(defvar drgnx-tty-layout-resize-commands
+(defcustom drgnx-tty-layout-resize-commands
   '(mouse-drag-vertical-line mouse-drag-mode-line mouse-drag-header-line enlarge-window shrink-window
                              enlarge-window-horizontally shrink-window-horizontally)
-  "The commands with which you resize a window: a dock whose size differs after one of them is the size you chose.
-Any other change of a dock's size (a popup borrowing the panel, a growing minibuffer, Emacs clamping a dock to a
-small frame) is not a choice.")
-
-(defun drgnx-tty-layout--notice-drags ()
-  "A shown dock whose size is not the size on record, right after a resize command of yours: you resized it.  It
-is yours from now on and its size is the one on record, which a resize of the terminal restores."
-  (let ((set (frame-parameter nil 'drgnx-tty-layout-set)) (owned (frame-parameter nil 'drgnx-tty-layout-owned)))
-    (dolist (key drgnx-tty-layout--docks)
-      (let ((size (drgnx-tty-layout--size-of key)) (given (alist-get key set)))
-        (when (and size given (/= size given))
-          (setf (alist-get key set) size)
-          (cl-pushnew key owned))))
-    (set-frame-parameter nil 'drgnx-tty-layout-set set)
-    (set-frame-parameter nil 'drgnx-tty-layout-owned owned)))
+  "The commands with which you resize a window.  A dock whose size a command of these changed is the size you
+chose, and the layout keeps it.  Any other change of a dock's size (a popup borrowing the panel, a growing
+minibuffer, Emacs squeezing a dock into a small frame) is not a choice.  Add the command of a package that
+resizes windows for you."
+  :type '(repeat symbol) :group 'drgnx)
 
 (defvar drgnx-tty-layout--dragging nil
   "Non-nil between the start of a mouse drag on a divider and the next command that is not part of it.  The
 drag's moves and its end run as an anonymous function Emacs binds for the drag, not as the command that began it.")
 
-(defun drgnx-tty-layout--resize-p ()
+(defvar drgnx-tty-layout--before nil
+  "(FRAME (KEY . SIZE) …): the sizes of FRAME's shown docks before the resize command that is running.")
+
+(defun drgnx-tty-layout--problem (err)
+  (push (format "ui/terminal-layout: %s" (error-message-string err)) drgnx-hooks-problems)
+  nil)
+
+(defun drgnx-tty-layout--resize-step-p ()
   "`this-command' resizes a window: a resize command, or a step of a mouse drag one of them began."
-  (cond ((memq this-command drgnx-tty-layout-resize-commands)
-         (setq drgnx-tty-layout--dragging (string-prefix-p "mouse-drag" (symbol-name this-command)))
-         t)
-        ((and drgnx-tty-layout--dragging (not (symbolp this-command))) t)
-        (t (setq drgnx-tty-layout--dragging nil))))
+  (or (memq this-command drgnx-tty-layout-resize-commands)
+      (and drgnx-tty-layout--dragging (not (symbolp this-command)))))
+
+(defun drgnx-tty-layout--managed-p (frame)
+  "FRAME is a terminal frame the layout looks after."
+  (and (not (display-graphic-p frame)) (frame-parameter frame 'drgnx-tty-layout-size)
+       (not (frame-parameter frame 'drgnx-tty-editor-only))))
+
+(defun drgnx-tty-layout--before-command ()
+  "`pre-command-hook': before a resize command of yours (or a step of a drag), in a terminal frame the layout
+looks after, note the sizes of the shown docks.  Cheap and silent: every other command returns at the first or
+second test."
+  (condition-case err
+      (progn
+        (setq drgnx-tty-layout--before nil)
+        (when (and drgnx-tty-layout--active (drgnx-tty-layout--resize-step-p))
+          (let ((frame (selected-frame)))
+            (when (drgnx-tty-layout--managed-p frame)
+              (setq drgnx-tty-layout--before
+                    (cons frame (delq nil (mapcar (lambda (key) (when-let* ((size (drgnx-tty-layout--size-of key)))
+                                                                  (cons key size)))
+                                                  drgnx-tty-layout--docks))))))))
+    (error (drgnx-tty-layout--problem err))))
+
+(defun drgnx-tty-layout--notice-drags (before)
+  "A shown dock whose size is not what it was BEFORE the resize command that just ran (an alist KEY . SIZE):
+you resized it.  It is yours from now on and its size is the one on record, which a resize of the terminal
+restores."
+  (let ((set (frame-parameter nil 'drgnx-tty-layout-set)) (owned (frame-parameter nil 'drgnx-tty-layout-owned)))
+    (dolist (key drgnx-tty-layout--docks)
+      (let ((size (drgnx-tty-layout--size-of key)) (was (alist-get key before)))
+        (when (and size was (/= size was))
+          (setf (alist-get key set) size)
+          (cl-pushnew key owned))))
+    (set-frame-parameter nil 'drgnx-tty-layout-set set)
+    (set-frame-parameter nil 'drgnx-tty-layout-owned owned)))
 
 (defun drgnx-tty-layout--after-command ()
-  "`post-command-hook': after a resize command of yours (`drgnx-tty-layout-resize-commands', or the steps of a
-drag), in a terminal frame the layout looks after, notice the dock you resized.  Cheap and silent: every other
-command returns at the first or second test."
-  (when (and drgnx-tty-layout--active (drgnx-tty-layout--resize-p))
-    (let ((frame (selected-frame)))
-      (when (and (not (display-graphic-p frame)) (frame-parameter frame 'drgnx-tty-layout-size)
-                 (not (frame-parameter frame 'drgnx-tty-editor-only)))
-        (condition-case err (drgnx-tty-layout--notice-drags)
-          (error (push (format "ui/terminal-layout: %s" (error-message-string err)) drgnx-hooks-problems)))
-        t))))
+  "`post-command-hook': after a resize command of yours (or a step of a drag) that the `pre-command-hook'
+function saw, notice the dock it resized.  A dock that changed size some other way before or between commands is
+not noticed.  Returns t when it looked."
+  (condition-case err
+      (when drgnx-tty-layout--active
+        (let ((step (drgnx-tty-layout--resize-step-p)) (before drgnx-tty-layout--before))
+          (setq drgnx-tty-layout--before nil)
+          (setq drgnx-tty-layout--dragging
+                (if step
+                    (or drgnx-tty-layout--dragging
+                        (and (symbolp this-command) (string-prefix-p "mouse-drag" (symbol-name this-command))))
+                  nil))
+          (when (and step before (eq (car before) (selected-frame)))
+            (drgnx-tty-layout--notice-drags (cdr before))
+            t)))
+    (error (drgnx-tty-layout--problem err))))
 
 (defun drgnx-tty-layout--fit (columns lines)
   "In the selected frame, COLUMNS by LINES with room: give the docks their sizes — except one you sized
@@ -239,6 +273,7 @@ fraction, except one you resized (`drgnx-tty-layout--notice-drags'), which keeps
   (setq drgnx-tty-layout--active t)
   (add-hook 'window-size-change-functions #'drgnx-tty-layout--resized)
   (add-hook 'window-setup-hook #'drgnx-tty-layout--startup)
+  (add-hook 'pre-command-hook #'drgnx-tty-layout--before-command)
   (add-hook 'post-command-hook #'drgnx-tty-layout--after-command)
   (dolist (f '(drgnx-wb-show-sidebar drgnx-wb-hide-sidebar))
     (advice-add f :after #'drgnx-tty-layout--sidebar-toggled))
@@ -246,9 +281,10 @@ fraction, except one you resized (`drgnx-tty-layout--notice-drags'), which keeps
     (advice-add f :after #'drgnx-tty-layout--area-toggled)))
 
 (defun drgnx-tty-layout--uninstall ()
-  (setq drgnx-tty-layout--active nil)
+  (setq drgnx-tty-layout--active nil drgnx-tty-layout--dragging nil drgnx-tty-layout--before nil)
   (remove-hook 'window-size-change-functions #'drgnx-tty-layout--resized)
   (remove-hook 'window-setup-hook #'drgnx-tty-layout--startup)
+  (remove-hook 'pre-command-hook #'drgnx-tty-layout--before-command)
   (remove-hook 'post-command-hook #'drgnx-tty-layout--after-command)
   (dolist (f '(drgnx-wb-show-sidebar drgnx-wb-hide-sidebar))
     (advice-remove f #'drgnx-tty-layout--sidebar-toggled))

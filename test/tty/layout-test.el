@@ -178,15 +178,30 @@
                          (drgnx-tty-session-eval s form))
                        '(t "*scratch*" t)))))))
 
-(ert-deftest drgnx-tty-layout/a-resize-that-is-no-command-is-not-yours ()
-  ;; a popup borrowing the panel makes its size change at an unchanged terminal size
-  (drgnx-tty-session-with (s :size "120x40")
+(defconst drgnx-tty-layout-test--run-hooks
+  '(progn (run-hooks 'pre-command-hook) (run-hooks 'post-command-hook))
+  "A form, in the inner Emacs: the installed pre- and post-command hooks, for a command that changes nothing.")
+
+(ert-deftest drgnx-tty-layout/the-installed-hooks-notice-a-resize-command ()
+  (drgnx-tty-session-with (s :size "160x50")
     (drgnx-tty-layout-test--ready s)
-    (drgnx-tty-session-wait s '(drgnx-wb-area-window 'panel))
-    (drgnx-tty-session-eval s '(progn (window-resize (drgnx-wb-area-window 'panel) -3) t))
-    (drgnx-tty-session-wait s '(= (window-total-height (drgnx-wb-area-window 'panel)) 9))
-    (drgnx-tty-session-quiet s)
-    (should-not (drgnx-tty-session-eval s '(frame-parameter nil 'drgnx-tty-layout-owned)))
-    ;; the terminal changes: the panel follows its fraction (30% of 49 lines)
-    (drgnx-tty-layout-test--resize s "130x50")
-    (drgnx-tty-session-wait s '(= (window-total-height (drgnx-wb-area-window 'panel)) 15))))
+    (drgnx-tty-session-wait s '(and (drgnx-wb--dock-windows) (drgnx-wb-area-window 'panel)))
+    (let ((owned (lambda () (drgnx-tty-session-eval s '(frame-parameter nil 'drgnx-tty-layout-owned)))))
+      ;; a popup borrows the panel and shrinks it: no command of yours
+      (drgnx-tty-session-eval s '(progn (window-resize (drgnx-wb-area-window 'panel) -3) t))
+      (should (= (drgnx-tty-session-eval s '(window-total-height (drgnx-wb-area-window 'panel))) 12))
+      ;; a later resize command that changes only the editor does not make the panel yours
+      (drgnx-tty-session-eval s `(let ((this-command 'enlarge-window)) ,drgnx-tty-layout-test--run-hooks t))
+      (should-not (funcall owned))
+      ;; a resize command that widens the sidebar does make the sidebar yours (and only it)
+      (drgnx-tty-session-eval s `(let ((this-command 'enlarge-window-horizontally))
+                                   (run-hooks 'pre-command-hook)
+                                   (window-resize (car (drgnx-wb--dock-windows)) 6 t)
+                                   (run-hooks 'post-command-hook)
+                                   t))
+      (should (equal (funcall owned) '(dock)))
+      ;; the terminal narrows: the panel follows its fraction (15 lines at 49), the sidebar keeps its width
+      (drgnx-tty-layout-test--resize s "140x50")
+      (drgnx-tty-session-wait s '(= (window-total-height (drgnx-wb-area-window 'panel)) 15))
+      (drgnx-tty-session-quiet s)
+      (should (= (drgnx-tty-session-eval s '(window-total-width (car (drgnx-wb--dock-windows)))) 46)))))
