@@ -16,7 +16,8 @@ In this order: a frame with a parent is `child' (posframes, quick help's card, E
 frames); the frame of the initial terminal (a daemon's, or a GUI Emacs's before its first frame) is
 `initial' — but `tty' in batch Emacs, so batch tests have a workbench frame; a minibuffer-only frame is
 `other'; a graphical frame is `gui'; anything else is `tty'.
-Conses nothing: the observer asks on every command (`frame-parameter' would copy the frame's parameters)."
+It allocates only the terminal's name (`terminal-name' makes a string), so the observer asks it only for a
+frame it has no record of; `frame-parameter' would copy all of the frame's parameters."
   (when (and (framep frame) (frame-live-p frame))
     (cond ((frame-parent frame) 'child)
           ((equal (terminal-name (frame-terminal frame)) "initial_terminal") (if noninteractive 'tty 'initial))

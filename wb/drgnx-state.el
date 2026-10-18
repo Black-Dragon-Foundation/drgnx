@@ -185,24 +185,43 @@ frame's last one) while it is still an editor window there; else the one with th
                  :editor (drgnx-state--mru-editor selected records (and old (drgnx-state--fr-editor old)))
                  :windows records
                  :panes (nreverse panes))))
-      (unless old (drgnx-state--note-frame frame))
-      (puthash frame rec drgnx-state--frames)
-      rec)))
+      (drgnx-state--put frame old rec))))
+
+(defun drgnx-state--put (frame old new)
+  "Store NEW as FRAME's record in place of OLD (nil: FRAME's first); return NEW.
+The one place a record is replaced — by an observation (`drgnx-state--rebuild') or a write
+\(`drgnx-state-use-editor') — so what changed between OLD and NEW is found here.  Records are never
+changed in place."
+  (unless old (drgnx-state--note-frame frame))
+  (puthash frame new drgnx-state--frames)
+  new)
 
 ;;;; The in-place check: compares, builds nothing
 
 (defun drgnx-state--same-windows-p (frame records)
-  "Non-nil if FRAME's windows, in order, are those of RECORDS, each with the same buffer, role and edges.
-Walks them with `next-window', so it conses nothing."
-  (let* ((first (frame-first-window frame)) (w first) (same t))
+  "Non-nil if FRAME's windows, in order, are those of RECORDS, each with the same buffer, role, edges,
+dedication and pane kind.  The kind as far as it can be told without allocating: a dock window's
+`drgnx-section', an editor window's `drgnx-layouts-pane' or editor kind (`drgnx-pane--last').  An area's
+front tab is not compared: it is a frame parameter (`frame-parameter' copies them all), and a tab switch
+changes the area's buffer anyway.  Walks the windows with `next-window': it allocates nothing."
+  (let* ((first (frame-first-window frame)) (w first) (same t)
+         (last (and (boundp 'drgnx-pane--last) (hash-table-p drgnx-pane--last)
+                    (gethash frame drgnx-pane--last))))
     (while (and same w)
-      (let ((r (car records)))
+      (let ((r (car records)) (role nil))
         (if (and r (eq w (drgnx-state--win-window r))
                  (eq (window-buffer w) (drgnx-state--win-buffer r))
-                 (eq (drgnx-state--classify w) (drgnx-state--win-role r))
+                 (eq (setq role (drgnx-state--classify w)) (drgnx-state--win-role r))
                  (let ((e (drgnx-state--win-edges r)))
                    (and (eq (car e) (window-pixel-left w)) (eq (nth 1 e) (window-pixel-top w))
-                        (eq (nth 2 e) (window-pixel-width w)) (eq (nth 3 e) (window-pixel-height w)))))
+                        (eq (nth 2 e) (window-pixel-width w)) (eq (nth 3 e) (window-pixel-height w))))
+                 (eq (window-dedicated-p w) (drgnx-state--win-dedicated r))
+                 (cond ((eq role 'editor)
+                        (eq (drgnx-state--win-kind r)
+                            (or (window-parameter w 'drgnx-layouts-pane) (car (rassq (window-buffer w) last)))))
+                       ((eq (plist-get (cdr (assq role drgnx-state--roles)) :chrome) 'dock)
+                        (eq (drgnx-state--win-kind r) (window-parameter w 'drgnx-section)))
+                       (t t)))
             (setq records (cdr records)
                   w (let ((next (next-window w 'nomini frame))) (unless (eq next first) next)))
           (setq same nil))))
@@ -233,29 +252,35 @@ Those two only on request: `frame-parameter' copies all of a frame's parameters 
 
 (defun drgnx-state--observe (frame &optional parameters)
   "Bring FRAME's record up to date; non-nil (the new record) when it was taken anew.
-An in-place check first, which builds nothing; a new record only when something differs.  PARAMETERS:
+An in-place check first, which allocates nothing; a new record only when something differs.  PARAMETERS:
 also compare the frame parameters the record copies (`drgnx-state--same-p'; `drgnx-state-sync' does).
 A frame that is not a workbench frame (any more) has no record.  Never prompts; an error is recorded,
 not raised.  During an observation it does nothing: a change made meanwhile waits for the next one."
   (unless drgnx-state--observing
     (let ((drgnx-state--observing t) (inhibit-interaction t))
       (condition-case err
-          (if (drgnx-state-workbench-frame-p frame)
-              (let ((old (gethash frame drgnx-state--frames)))
-                (unless (and old (drgnx-state--same-p frame old parameters))
-                  (drgnx-state--rebuild frame old)))
-            (drgnx-state--frame-deleted frame)
-            nil)
+          (let ((old (gethash frame drgnx-state--frames)))
+            ;; A recorded frame was a workbench frame: its terminal, graphic-ness and minibuffer never change,
+            ;; only its life and its parent.  So it is not classified again (`terminal-name' makes a string).
+            (if (and old (frame-live-p frame) (not (frame-parent frame)))
+                (unless (drgnx-state--same-p frame old parameters)
+                  (drgnx-state--rebuild frame old))
+              (if (drgnx-state-workbench-frame-p frame)
+                  (drgnx-state--rebuild frame old)
+                (drgnx-state--frame-deleted frame)
+                nil)))
         (error (drgnx-state--error 'observe 'drgnx-state--observe err) nil)))))
 
 (defun drgnx-state-sync (&optional frame)
-  "Observe FRAME (default: the selected frame) now and return its record; nil for a frame that is not a
-workbench frame.  For code that changes windows and reads the store in the same breath, for code that
+  "Observe FRAME (default: the selected frame) now and return a copy of its record; nil for a frame that is
+not a workbench frame.  For code that changes windows and reads the store in the same breath, for code that
 sets `drgnx-frame-role' or `drgnx-monitor' (setting a frame parameter is no window change, and only this
-observation compares them), and for batch tests (no redisplay runs there)."
+observation compares them), and for batch tests (no redisplay runs there).  The copy is shallow: the lists
+in it are the store's and are read-only."
   (let ((frame (or frame (selected-frame))))
     (drgnx-state--observe frame t)
-    (and (frame-live-p frame) (gethash frame drgnx-state--frames))))
+    (let ((rec (and (frame-live-p frame) (gethash frame drgnx-state--frames))))
+      (and rec (copy-sequence rec)))))
 
 ;;;; Writes
 
@@ -282,18 +307,24 @@ run, `drgnx-state--writing' is (:by BY)."
 
 (cl-defun drgnx-state-use-editor (window &key by)
   "Make WINDOW its frame's MRU editor window without selecting it; return WINDOW.
-It stays the frame's editor until the selection changes (a selected editor window is the editor).
-BY: who asked (`drgnx-state-with-write').  A window that is not an editor window of a workbench frame
-→ nil, and nothing changes."
+The choice holds until the frame's record is next taken anew (`drgnx-state--rebuild') while an editor
+window is selected: any change to the frame's windows — a selection, a buffer, a split, a resize — then
+makes the selected editor window the editor again.  While the dock or another non-editor window is
+selected, it holds as long as WINDOW lives.  BY: who asked (`drgnx-state-with-write').
+Nil, and nothing changes, for a window that is not an editor window of a workbench frame, and for one
+whose frame has no record while an observation runs (a `now' subscriber's call: the frame is recorded
+at the next observation).  During an observation a recorded frame's choice is set."
   (when (and (window-live-p window) (eq (drgnx-state--classify window) 'editor))
-    (let ((frame (window-frame window)))
+    (let ((frame (window-frame window)) (done nil))
       (when (drgnx-state-workbench-frame-p frame)
         (drgnx-state-with-write (frame by)
-          (when-let* ((rec (drgnx-state-sync frame)))
+          (drgnx-state--observe frame t)
+          (when-let* ((rec (gethash frame drgnx-state--frames)))
             (let ((new (copy-sequence rec)))
               (setf (drgnx-state--fr-editor new) window)
-              (puthash frame new drgnx-state--frames))))
-        window))))
+              (drgnx-state--put frame rec new)
+              (setq done t))))
+        (and done window)))))
 
 ;;;; Reads: from the records, nil for a dead window or frame
 

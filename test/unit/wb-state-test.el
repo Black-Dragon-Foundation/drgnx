@@ -5,6 +5,7 @@
 (require 'drgnx-paths)
 (require 'drgnx-modules)
 (require 'drgnx-signal)
+(require 'drgnx-panes)                                 ; `drgnx-pane--last': editor kinds
 (require 'drgnx-run-ert "run-ert")                     ; `drgnx-run-ert-time-factor'
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 
@@ -59,6 +60,11 @@ Returns an alist NAME → window, NAME one of buffers explorer outline g1 g2 pan
     (set-window-buffer g2 (drgnx-state-test--buffer "b.txt"))
     (set-frame-parameter nil 'drgnx-wb-areas '((panel :tab terminal) (right :tab agents)))
     (append docks (list (cons 'g1 g1) (cons 'g2 g2) (cons 'panel panel) (cons 'right right)))))
+
+(defun drgnx-state-test--record (frame)
+  "Observe FRAME (`drgnx-state-sync') and return the store's own record of it (sync returns a copy)."
+  (drgnx-state-sync frame)
+  (gethash frame drgnx-state--frames))
 
 (defun drgnx-state-test--edges (w)
   (list (window-pixel-left w) (window-pixel-top w) (window-pixel-width w) (window-pixel-height w)))
@@ -319,15 +325,84 @@ Returns an alist NAME → window, NAME one of buffers explorer outline g1 g2 pan
   ;; `frame-parameter' copies every parameter of the frame to read one of ours: the per-command check skips
   ;; them; their writers call `drgnx-state-sync', which compares them.
   (drgnx-state-test--with
-    (let* ((f (selected-frame)) (rec (drgnx-state-sync f)))
+    (let* ((f (selected-frame)) (rec (drgnx-state-test--record f)))
       (set-frame-parameter f 'drgnx-frame-role 'main)
       (should-not (drgnx-state--observe f))
       (should (eq rec (gethash f drgnx-state--frames)))
       (should-not (drgnx-state-main-frame))
-      (should-not (eq rec (drgnx-state-sync f)))
+      (should-not (eq rec (drgnx-state-test--record f)))
       (should (eq f (drgnx-state-main-frame)))
       (set-frame-parameter f 'drgnx-monitor '(:name "DP-1"))
       (should (equal '(:name "DP-1") (drgnx-state--fr-monitor (drgnx-state-sync f)))))))
+
+(ert-deftest drgnx-state/the-in-place-check-sees-dedication-and-kinds ()
+  ;; none of these is a window state change for Emacs, and none changes a buffer
+  (drgnx-state-test--with
+    (let* ((ws (drgnx-state-test--workbench)) (f (selected-frame))
+           (g1 (alist-get 'g1 ws)) (g2 (alist-get 'g2 ws)) (dock (alist-get 'outline ws)))
+      (drgnx-state-sync f)
+      (set-window-dedicated-p g1 t)
+      (should (drgnx-state--observe f))
+      (set-window-parameter dock 'drgnx-section 'st-symbols)
+      (should (drgnx-state--observe f))
+      (should (eq dock (drgnx-state-pane-window 'st-symbols f)))
+      (should-not (drgnx-state-pane-window 'outline f))
+      (set-window-parameter g1 'drgnx-layouts-pane 'agent)
+      (should (drgnx-state--observe f))
+      (should (eq g1 (drgnx-state-pane-window 'agent f)))
+      (unwind-protect
+          (progn
+            (puthash f (list (cons 'st-notes (window-buffer g2))) drgnx-pane--last)
+            (should (drgnx-state--observe f))
+            (should (eq g2 (drgnx-state-pane-window 'st-notes f))))
+        (remhash f drgnx-pane--last))
+      (should (drgnx-state--observe f))
+      (should-not (drgnx-state-pane-window 'st-notes f))
+      (should-not (drgnx-state--observe f)))))
+
+(defvar drgnx-state-test--puts nil "(OLD-EDITOR NEW-EDITOR) per record replaced, newest first.")
+
+(defun drgnx-state-test--note-put (_frame old new)
+  (push (list (and old (drgnx-state--fr-editor old)) (drgnx-state--fr-editor new)) drgnx-state-test--puts))
+
+(ert-deftest drgnx-state/records-are-replaced-in-one-place ()
+  (drgnx-state-test--with
+    (setq drgnx-state-test--puts nil)
+    (advice-add 'drgnx-state--put :before #'drgnx-state-test--note-put)
+    (unwind-protect
+        (let* ((a (selected-window)) (b (split-window a nil 'right)) (f (selected-frame))
+               (dock (drgnx-state-test--side (drgnx-state-test--buffer "explorer") 'left 0
+                                             '((drgnx-role . dock) (drgnx-section . explorer)) 12)))
+          (drgnx-state-sync f)                           ; a rebuild
+          (should (equal (list (list nil a)) drgnx-state-test--puts))
+          (select-window dock)
+          (drgnx-state-sync f)
+          (should (equal (list (list a a) (list nil a)) drgnx-state-test--puts))
+          (setq drgnx-state-test--puts nil)
+          (should (eq b (drgnx-state-use-editor b)))      ; the use-editor write goes through it too
+          (should (equal (list (list a b)) drgnx-state-test--puts)))
+      (advice-remove 'drgnx-state--put #'drgnx-state-test--note-put))))
+
+(ert-deftest drgnx-state/use-editor-during-an-observation ()
+  (drgnx-state-test--with
+    (let* ((a (selected-window)) (b (split-window a nil 'right)) (f (selected-frame)))
+      ;; no record yet, and an observation runs: nothing can be set, so nil
+      (let ((drgnx-state--observing t))
+        (should-not (drgnx-state-use-editor b)))
+      (should-not (gethash f drgnx-state--frames))
+      ;; with a record, the choice is set even during an observation (a `now' subscriber's)
+      (drgnx-state-sync f)
+      (let ((drgnx-state--observing t))
+        (should (eq b (drgnx-state-use-editor b))))
+      (should (eq b (drgnx-state-editor-window f))))))
+
+(ert-deftest drgnx-state/sync-returns-a-copy ()
+  (drgnx-state-test--with
+    (let* ((f (selected-frame)) (copy (drgnx-state-sync f)) (rec (gethash f drgnx-state--frames)))
+      (should (equal copy rec))
+      (should-not (eq copy rec))
+      (aset copy 0 'st-changed)
+      (should (eq 'tty (drgnx-state--fr-kind (gethash f drgnx-state--frames)))))))
 
 (ert-deftest drgnx-state/dead-window-and-frame-read-nil ()
   (drgnx-state-test--with
@@ -385,8 +460,10 @@ Returns an alist NAME → window, NAME one of buffers explorer outline g1 g2 pan
 (defconst drgnx-state-test--writers
   '(split-window delete-window delete-other-windows select-window select-frame delete-frame window-resize
                  set-frame-parameter modify-frame-parameters set-window-configuration with-selected-window
-                 with-selected-frame enlarge-window shrink-window balance-windows fit-window-to-buffer)
-  "Functions that move windows or write window and frame state; any `set-window-*' too.")
+                 with-selected-frame enlarge-window shrink-window balance-windows fit-window-to-buffer
+                 make-frame-visible make-frame-invisible iconify-frame raise-frame lower-frame
+                 select-frame-set-input-focus)
+  "Functions that move windows or write window and frame state; any `set-window-*' and `set-frame-*' too.")
 
 (defun drgnx-state-test--symbols (form)
   "Every symbol in FORM."
@@ -403,7 +480,8 @@ Returns an alist NAME → window, NAME one of buffers explorer outline g1 g2 pan
                                           drgnx-state--editor-kind drgnx-state--mru-editor drgnx-state--note-frame
                                           drgnx-state--on-window-state-change drgnx-state--post-command
                                           drgnx-state--pre-command drgnx-state--frame-made drgnx-state--frame-deleted
-                                          drgnx-state-sync drgnx-state-frame-kind drgnx-state-workbench-frame-p))
+                                          drgnx-state-sync drgnx-state-frame-kind drgnx-state-workbench-frame-p
+                                          drgnx-state--put drgnx-state--error))
          (defs (let (acc)
                  (dolist (file '("wb/drgnx-state.el" "core/drgnx-frame-kind.el") acc)
                    (with-temp-buffer
@@ -419,32 +497,34 @@ Returns an alist NAME → window, NAME one of buffers explorer outline g1 g2 pan
         (should def)                                    ; a renamed function must be renamed here too
         (dolist (s (drgnx-state-test--symbols (cdr def)))
           (should-not (and (or (memq s drgnx-state-test--writers)
-                               (string-prefix-p "set-window-" (symbol-name s)))
+                               (string-prefix-p "set-window-" (symbol-name s))
+                               (string-prefix-p "set-frame-" (symbol-name s)))
                            (list fn s))))))))
 
 (ert-deftest drgnx-state/in-place-check-builds-nothing ()
   (drgnx-state-test--with
     (drgnx-state-test--workbench)
     (drgnx-state-test--compile)
-    (let* ((f (selected-frame)) (rec (drgnx-state-sync f))
+    (let* ((f (selected-frame)) (rec (drgnx-state-test--record f))
            (once (byte-compile (lambda (frame) (drgnx-state--observe frame))))
            (nothing (byte-compile (lambda (_frame) nil))))
       (should-not (drgnx-state--observe f))
-      (should (eq rec (drgnx-state-sync f)))
+      (should (eq rec (drgnx-state-test--record f)))
       (should (eq rec (gethash f drgnx-state--frames)))
+      ;; (CONSES FLOATS VECTOR-CELLS SYMBOLS STRING-CHARS INTERVALS STRINGS) beyond what `memory-use-counts' takes itself
       (let* ((c0 (let ((b (memory-use-counts))) (funcall nothing f) (cl-mapcar #'- (memory-use-counts) b)))
              (c1 (let ((b (memory-use-counts))) (funcall once f) (cl-mapcar #'- (memory-use-counts) b)))
-             (conses (- (nth 0 c1) (nth 0 c0))) (vectors (- (nth 2 c1) (nth 2 c0))))
-        (message "in-place check: %d conses, %d vector cells" conses vectors)
-        (should (<= conses 8))
-        (should (<= vectors 0))))))
+             (used (cl-mapcar #'- c1 c0)))
+        (message "in-place check allocates %S" used)
+        (should (<= (car used) 8))
+        (should (equal '(0 0 0 0 0 0) (mapcar (lambda (n) (max n 0)) (cdr used))))))))
 
 (ert-deftest drgnx-state/unchanged-check-is-cheap ()
   :tags '(:timing)
   (drgnx-state-test--with
     (drgnx-state-test--workbench)
     (drgnx-state-test--compile)
-    (let* ((f (selected-frame)) (rec (drgnx-state-sync f)) (n 2000)
+    (let* ((f (selected-frame)) (rec (drgnx-state-test--record f)) (n 2000)
            (loop (byte-compile (lambda (frame n) (dotimes (_ n) (drgnx-state--observe frame)))))
            (runs (sort (cl-loop repeat 21
                                 collect (let ((t0 (float-time)))
@@ -509,7 +589,7 @@ Returns an alist NAME → window, NAME one of buffers explorer outline g1 g2 pan
     (unwind-protect
         (let (tbl rec timer)
           (drgnx-state-mode 1)
-          (setq tbl drgnx-state--frames rec (drgnx-state-sync))
+          (setq tbl drgnx-state--frames rec (drgnx-state-test--record (selected-frame)))
           (setq drgnx-signal--subscribers '((st-event st-fn)) drgnx-signal-errors '("old"))
           (drgnx-test-with-state
             (pcase-dolist (`(,hook . ,fn) drgnx-state-test--mode-hooks)

@@ -715,7 +715,10 @@ popup lane shows no kind (the panel's tab is hidden while a popup borrows it).
 editor while it is still an editor window there; else the editor window with the highest `window-use-time`; else
 nil. `window-use-time` alone is not trusted: a package's `select-window` without NORECORD bumps a window the user
 never chose. `(drgnx-state-use-editor WINDOW :by BY)` makes WINDOW its frame's editor without selecting it (the
-dock's "open in the editor" target); it stays until the selection changes. A window that is not an editor → nil.
+dock's "open in the editor" target). While a non-editor window (the dock) is selected, the choice holds as long as
+WINDOW lives. While an editor window is selected, it holds only until the record is next taken anew: any change to
+the frame's windows (a selection, a buffer, a split, a resize) makes the selected editor window the editor again.
+A window that is not an editor → nil; so is a window whose frame has no record yet while an observation runs.
 
 **Reads**, each nil for a dead window or frame, all from the records: `drgnx-state-editor-window`,
 `drgnx-state-selected-window` (FRAME optional, default the selected frame), `drgnx-state-frames` (oldest first,
@@ -726,9 +729,13 @@ not observed yet is classified live), `drgnx-state-edges`, `drgnx-state-pane-win
 visibility), `drgnx-state-frame-size` (`(:cols :lines :width :height)`).
 
 **When the records are taken.** `drgnx-state--observe FRAME` first compares the record with the live frame in place
-— size, visibility, selected window and, per window in order, identity, buffer, role and edges — building nothing
-(0 conses, about 3 µs on a 7-window frame, byte-compiled). Only on a difference does it take the record anew. While
-it runs, a change made meanwhile waits for the next observation. `drgnx-state-mode` (global; `core/workbench` turns
+— size, visibility, selected window and, per window in order, identity, buffer, role, edges, dedication and pane
+kind (a dock's section, an editor's layouts pane or editor kind; an area's front tab only through its buffer) —
+allocating nothing (about 3.5 µs on a 7-window frame, byte-compiled). A frame it has a record of is not classified
+again (only its parent and its life can change, and `terminal-name` makes a string). Only on a difference does it
+take the record anew. Every record replaced, by an observation or by `drgnx-state-use-editor`, goes through one
+internal function, `drgnx-state--put`; records are never changed in place. While it runs, a change made meanwhile
+waits for the next observation. `drgnx-state-mode` (global; `core/workbench` turns
 it on) runs it from five named functions: the default value of `window-state-change-functions` (any change from
 any source, before the frame is drawn), `post-command-hook` at depth −90 (the selected frame, even when redisplay
 is skipped), `pre-command-hook` (only notes that a command runs), `after-make-frame-functions` and
@@ -736,8 +743,8 @@ is skipped), `pre-command-hook` (only notes that a command runs), `after-make-fr
 records go. Records live in a table weak on the frame. Observation binds `inhibit-interaction`; an error lands in
 `drgnx-signal-errors` and is never raised.
 
-**`drgnx-state-sync`.** `(drgnx-state-sync &optional FRAME)` observes FRAME now and returns its record (nil for a
-frame that is not a workbench frame). Call it when code changes windows and reads the store in the same breath (a
+**`drgnx-state-sync`.** `(drgnx-state-sync &optional FRAME)` observes FRAME now and returns a copy of its record
+(nil for a frame that is not a workbench frame); the lists inside it are the store's and read-only. Call it when code changes windows and reads the store in the same breath (a
 timer that shows a pane and then asks for its window), and after setting `drgnx-frame-role` or `drgnx-monitor`:
 setting a frame parameter is no window change, and only `drgnx-state-sync` compares those two — `frame-parameter`
 copies every parameter of the frame to read one of ours, too much for every command. Batch Emacs has no
