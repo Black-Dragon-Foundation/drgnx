@@ -113,7 +113,7 @@
 
 (defun drgnx-diff--cell (n text width)
   "A split cell: line number N (or blank) and TEXT, exactly WIDTH columns (cut with …)."
-  (let ((s (concat (if n (format "%4d " n) "     ") (string-replace "\t" "    " text))))
+  (let ((s (concat (if n (format "%4d " n) "     ") (string-replace "\r" "" (string-replace "\t" "    " text)))))
     (if (and (<= (length s) width) (= (string-bytes s) (length s)))   ; ASCII: columns are characters
         (concat s (make-string (- width (length s)) ?\s))
       (truncate-string-to-width s width nil ?\s "…"))))
@@ -133,12 +133,14 @@
     (cl-flet ((flush ()
                 (setq dels (nreverse dels) adds (nreverse adds))
                 (while (or dels adds)
-                  (let* ((d (pop dels)) (a (pop adds)) (b (point)))
+                  (let* ((d (pop dels)) (a (pop adds)) (b (point))
+                         (left (drgnx-diff--cell (car d) (or (cdr d) "") w))   ; faces by the cells' lengths: wide characters are not one column
+                         (right (if a (drgnx-diff--cell (car a) (cdr a) w) "")))
                     (setq loc (list i path (if a (car a) new)))
-                    (insert (drgnx-diff--cell (car d) (or (cdr d) "") w) " │ " (if a (drgnx-diff--cell (car a) (cdr a) w) "") "\n")
+                    (insert left " │ " right "\n")
                     (put-text-property b (point) 'drgnx-diff-loc loc)
-                    (when d (put-text-property b (+ b w) 'face 'diff-removed))
-                    (when a (put-text-property (+ b w 3) (1- (point)) 'face 'diff-added))))))
+                    (when d (put-text-property b (+ b (length left)) 'face 'diff-removed))
+                    (when a (put-text-property (+ b (length left) 3) (1- (point)) 'face 'diff-added))))))
       (dolist (l (plist-get hunk :lines))
         (pcase (car l)
           (?- (push (cons old (cdr l)) dels) (cl-incf old))

@@ -298,4 +298,17 @@ new file mode 100644
     (drgnx-diff-test--in "diff --git a/gone.bin b/gone.bin\ndeleted file mode 100644\nBinary files a/gone.bin and /dev/null differ\n" 'unified
       (should (string-match-p "deleted" (cadr (should-error (drgnx-diff-visit) :type 'user-error)))))))
 
+(ert-deftest drgnx-diff/split-faces-wide-chars-crlf ()
+  ;; M11b-2: faces follow the inserted cells, not character counts; a CR never reaches the buffer
+  (drgnx-diff-test--in "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-日本語日本語\r\n+あい\r\n" 'split
+    (should-not (string-search "\r" (buffer-string)))
+    (search-forward "日本語日本語")
+    (let* ((bol (line-beginning-position)) (bar (progn (search-forward "│") (1- (point)))))
+      (should (eq (get-text-property bol 'face) 'diff-removed))
+      (should (eq (get-text-property (- bar 2) 'face) 'diff-removed))   ; the cell's last character
+      (should-not (get-text-property bar 'face))                        ; the separator
+      (should-not (get-text-property (1+ bar) 'face))
+      (should (eq (get-text-property (+ bar 2) 'face) 'diff-added))     ; the other cell's first
+      (should (eq (get-text-property (1- (line-end-position)) 'face) 'diff-added)))))
+
 ;;; mod-diff-test.el ends here
