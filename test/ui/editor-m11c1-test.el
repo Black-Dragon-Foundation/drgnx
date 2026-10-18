@@ -228,7 +228,9 @@
       (with-selected-frame root
         (delete-other-windows)
         (set-window-margins nil 0 0)
-        (dolist (p '(drgnx-tabs drgnx-layouts-pane)) (set-window-parameter nil p nil))
+        ;; the layouts put the editor chrome (tab line, breadcrumbs, mode line) on the window: later tests count lines
+        (dolist (p '(drgnx-tabs drgnx-layouts-pane tab-line-format header-line-format mode-line-format))
+          (set-window-parameter nil p nil))
         (dolist (p '(drgnx-wb-view drgnx-wb-areas drgnx-wb-panel-px drgnx-wb-right-px drgnx-wb-dock-px drgnx-layouts-state
                                    drgnx-layouts-current drgnx-layouts-previous drgnx-layouts-zen-return))
           (set-frame-parameter nil p nil))
