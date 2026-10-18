@@ -75,7 +75,10 @@
 (defconst drgnx-lint-bt--timer-allowed
   ;; Not a follow path: file-notify events are debounced, then only the changed folders are read
   ;; again — the Explorer's own window, nothing else moves.
-  '(("wb/drgnx-explorer.el" drgnx-explorer--file-event drgnx-explorer--apply-file-events))
+  ;; Also: `drgnx-monitors--later' only defers a callback of a monitor query or a move (so it never runs
+  ;; inside the caller); it follows nothing and moves no window by itself.
+  '(("wb/drgnx-explorer.el" drgnx-explorer--file-event drgnx-explorer--apply-file-events)
+    ("wb/drgnx-monitors.el" drgnx-monitors--later))
   "Workbench definitions allowed to start a timer: (FILE NAME…).  Idle timers are not listed: they
 run after input, never in the middle of a follow.")
 

@@ -88,7 +88,7 @@ front of `process-environment'.  Always asynchronous; an error in CALLBACK is sh
         (drgnx-platform--later
          (lambda () (funcall cb 'error (format "%s is not installed" (or program "(no program)")))))
       (let* ((chunks nil) (timer nil) (finished nil) (proc nil) (errproc nil) (exit nil)
-             (errbuf (generate-new-buffer " *drgnx-wm-stderr*"))
+             (errbuf (generate-new-buffer " *drgnx-wm-stderr*" t))
              (finish
               (lambda (status output)
                 (unless finished
