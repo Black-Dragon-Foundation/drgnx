@@ -221,35 +221,35 @@ Segments a, b, c are defined: their text is A, B, C."
 (ert-deftest drgnx-statusbar/default-segments-say-what-they-know ()
   (drgnx-statusbar-test--with
     (drgnx-statusbar--define-defaults)
-    (let ((drgnx-git--repos (make-hash-table :test #'equal)))     ; no repository read: the branch is `vc-mode''s
-      (cl-flet ((text (id) (let ((s (funcall (plist-get (gethash id drgnx-statusbar--segments) :fn)))) (and s (substring-no-properties s)))))
-        (with-temp-buffer
-          (emacs-lisp-mode)
-          (insert "one\ntwo\nthree")
-          (setq buffer-file-coding-system 'utf-8-dos)
-          (setq-local indent-tabs-mode nil)
-          (setq-local tab-width 8)
-          (goto-char (+ (point-min) 5))
-          (should (equal (text 'position) "Ln 2, Col 2"))
-          (should (equal (text 'encoding) "UTF-8"))
-          (should (equal (text 'eol) "CRLF"))
-          (should (equal (text 'language) "Emacs Lisp"))
-          (should (string-match-p "\\`Spaces: [0-9]+\\'" (text 'indent)))
-          (setq buffer-file-coding-system 'utf-8-unix)
-          (should (equal (text 'eol) "LF"))
-          (setq-local indent-tabs-mode t)
-          (should (equal (text 'indent) "Tab Size: 8"))
-          ;; vc-mode is the cached branch
-          (setq-local vc-mode " Git-feature/x")
-          (should (string-match-p "feature/x" (text 'branch)))
-          (setq-local vc-mode nil)
-          (should-not (text 'branch)))
-        ;; no test run yet; misc has nothing to say in a plain buffer
-        (let ((drgnx-statusbar-tests-state nil) (drgnx-statusbar--tick (1+ drgnx-statusbar--tick)))
-          (should-not (text 'tests)))
-        (with-temp-buffer
-          (let ((global-mode-string nil) (mode-line-process nil) (defining-kbd-macro nil))
-            (should-not (text 'misc))))))))
+    (progn (drgnx-cache--clear 'git-status)                       ; no repository read: the branch is `vc-mode''s
+           (cl-flet ((text (id) (let ((s (funcall (plist-get (gethash id drgnx-statusbar--segments) :fn)))) (and s (substring-no-properties s)))))
+             (with-temp-buffer
+               (emacs-lisp-mode)
+               (insert "one\ntwo\nthree")
+               (setq buffer-file-coding-system 'utf-8-dos)
+               (setq-local indent-tabs-mode nil)
+               (setq-local tab-width 8)
+               (goto-char (+ (point-min) 5))
+               (should (equal (text 'position) "Ln 2, Col 2"))
+               (should (equal (text 'encoding) "UTF-8"))
+               (should (equal (text 'eol) "CRLF"))
+               (should (equal (text 'language) "Emacs Lisp"))
+               (should (string-match-p "\\`Spaces: [0-9]+\\'" (text 'indent)))
+               (setq buffer-file-coding-system 'utf-8-unix)
+               (should (equal (text 'eol) "LF"))
+               (setq-local indent-tabs-mode t)
+               (should (equal (text 'indent) "Tab Size: 8"))
+               ;; vc-mode is the cached branch
+               (setq-local vc-mode " Git-feature/x")
+               (should (string-match-p "feature/x" (text 'branch)))
+               (setq-local vc-mode nil)
+               (should-not (text 'branch)))
+             ;; no test run yet; misc has nothing to say in a plain buffer
+             (let ((drgnx-statusbar-tests-state nil) (drgnx-statusbar--tick (1+ drgnx-statusbar--tick)))
+               (should-not (text 'tests)))
+             (with-temp-buffer
+               (let ((global-mode-string nil) (mode-line-process nil) (defining-kbd-macro nil))
+                 (should-not (text 'misc))))))))
 
 (ert-deftest drgnx-statusbar/never-wider-with-wide-glyphs-display-text-and-a-right-only-bar ()
   (drgnx-statusbar-test--with
@@ -458,14 +458,15 @@ Segments a, b, c are defined: their text is A, B, C."
 (defmacro drgnx-statusbar-test--git-cache (root &rest body)
   "BODY with ROOT a repository the git cache knows (a branch plist is put in it per test), isolated from the rest."
   (declare (indent 1))
-  `(let ((drgnx-git--repos (make-hash-table :test #'equal)) (drgnx-git--roots (make-hash-table :test #'equal))
+  `(let ((drgnx-git--roots (make-hash-table :test #'equal))
          (,root "/tmp/drgnx-sb-repo/"))
+     (drgnx-cache--clear 'git-status)
      (puthash "/tmp/drgnx-sb-repo/src/" ,root drgnx-git--roots)
      ,@body))
 
 (defun drgnx-statusbar-test--branch-text (branch &optional vc)
   "The branch segment in a buffer of /tmp/drgnx-sb-repo/src/ when the cache holds BRANCH (and `vc-mode' VC)."
-  (puthash "/tmp/drgnx-sb-repo/" (list :branch branch) drgnx-git--repos)
+  (drgnx-cache-put 'git-status "/tmp/drgnx-sb-repo/" (list :branch branch))
   (with-temp-buffer
     (setq buffer-file-name "/tmp/drgnx-sb-repo/src/a.el")
     (setq-local vc-mode vc)
@@ -809,9 +810,9 @@ Segments a, b, c are defined: their text is A, B, C."
          (drgnx-statusbar--redraw-wanted nil) (drgnx-statusbar--jobs-wanted nil) (drgnx-statusbar--jobs-pending nil)
          (drgnx-statusbar--state-texts (make-hash-table :test #'eq))
          (drgnx-statusbar--git-branches (make-hash-table :test #'equal))
-         (drgnx-git--repos (make-hash-table :test #'equal))
          (drgnx-statusbar--memo (make-hash-table :test #'eq :weakness 'key))
          (drgnx-statusbar-waiting-functions (list #'drgnx-statusbar-agents-waiting)))
+     (drgnx-cache--clear 'git-status)
      (unwind-protect (progn ,@body)
        (when (timerp drgnx-statusbar--refresh-timer) (cancel-timer drgnx-statusbar--refresh-timer)))))
 
@@ -1206,7 +1207,7 @@ own cache), evil's state tag, other entries of `mode-line-misc-info'; each chang
               (should (equal (drgnx-statusbar-test--seg 'agents) "◎ 1 busy"))
               ;; the hub's and git's change hooks go through the same debounce
               (drgnx-statusbar--hub-event "agent-entries" nil)
-              (puthash "/repo/" (list :branch '(:head "a" :ahead 1)) drgnx-git--repos)   ; a new branch state
+              (drgnx-cache-put 'git-status "/repo/" (list :branch '(:head "a" :ahead 1)))   ; a new branch state
               (drgnx-statusbar--git-changed "/repo/")
               (drgnx-statusbar--git-changed "/repo/")
               (sleep-for 0.4)
@@ -1216,7 +1217,7 @@ own cache), evil's state tag, other entries of `mode-line-misc-info'; each chang
               ;; a status run that changed only files, or failed: the same branch, no redraw
               (drgnx-statusbar--git-changed "/repo/")
               (should-not drgnx-statusbar--refresh-timer)
-              (puthash "/repo/" (list :branch '(:head "a" :ahead 2)) drgnx-git--repos)   ; one more commit ahead
+              (drgnx-cache-put 'git-status "/repo/" (list :branch '(:head "a" :ahead 2)))   ; one more commit ahead
               (drgnx-statusbar--git-changed "/repo/")
               (should (timerp drgnx-statusbar--refresh-timer))
               (cancel-timer drgnx-statusbar--refresh-timer) (setq drgnx-statusbar--refresh-timer nil))
@@ -1257,7 +1258,7 @@ own cache), evil's state tag, other entries of `mode-line-misc-info'; each chang
                 (drgnx-statusbar-refresh t)                    ; a segment of your own says its state changed
                 (should (rebuilt-p))
                 ;; git changed: the refresh redraws, and the bars are built again (vc-mode may be another)
-                (puthash "/repo/" (list :branch '(:head "other")) drgnx-git--repos)
+                (drgnx-cache-put 'git-status "/repo/" (list :branch '(:head "other")))
                 (drgnx-statusbar--git-changed "/repo/")
                 (drgnx-statusbar--refresh-now)
                 (should (rebuilt-p)) (should-not (rebuilt-p))

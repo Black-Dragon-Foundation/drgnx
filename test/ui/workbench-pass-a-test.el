@@ -82,7 +82,7 @@ SHOW non-nil: the sidebar is open in the root frame, whose window layout is rest
           (config (with-selected-frame frame (current-window-configuration)))
           (drgnx-wb--sections nil) (drgnx-signal--editor-window nil) (drgnx-explorer--pressed nil)
           (drgnx-explorer--selection nil) (drgnx-explorer--anchor nil) (drgnx-explorer--focused-before nil)
-          (drgnx-explorer--roots nil) (drgnx-explorer--cache (make-hash-table :test #'equal))
+          (drgnx-explorer--roots nil) (_cleared (drgnx-cache--clear 'explorer-listing))
           (drgnx-explorer--expanded (make-hash-table :test #'equal)))
      (unwind-protect
          (with-selected-frame frame

@@ -50,7 +50,7 @@
           (drgnx-wb--sections nil) (drgnx-signal--editor-window nil) (drgnx-explorer--pressed nil)
           (drgnx-explorer--selection nil) (drgnx-explorer--anchor nil) (drgnx-explorer--focused-before nil)
           (drgnx-explorer-compact-folders nil)
-          (drgnx-explorer--cache (make-hash-table :test #'equal))
+          (_cleared (drgnx-cache--clear 'explorer-listing))
           (drgnx-explorer--expanded (make-hash-table :test #'equal))
           (drgnx-explorer--dirty nil)
           (drgnx-remote--roots nil)
@@ -88,6 +88,7 @@
            (with-current-buffer b (set-buffer-modified-p nil))
            (kill-buffer b)))
        (drgnx-tramp-mock-teardown)
+       (drgnx-cache--clear 'explorer-listing)
        (delete-directory base t))))
 
 ;; the stage's name is in the failure: (STAGE SENDS) against (STAGE 0)
@@ -236,7 +237,7 @@ buffer is not affected."
     (setq drgnx-tramp-mock-sends 0)
     (should (equal (drgnx-explorer-children root) '(("(not listed — Refresh)" . nil))))
     (should (= drgnx-tramp-mock-sends 0))
-    (should-not (gethash root drgnx-explorer--cache))               ; the placeholder is not remembered as a listing
+    (should-not (drgnx-cache-get 'explorer-listing root))               ; the placeholder is not remembered as a listing
     ;; the user's command lists it
     (delete-other-windows)
     (drgnx-explorer-setup)
@@ -333,7 +334,7 @@ buffer is not affected."
       (should (member "x.txt" (drgnx-remote-auto--row-names)))
       (should-not (member "(not listed — Refresh)" (drgnx-remote-auto--row-names)))
       ;; Enter or a click on the row lists the folder, too
-      (remhash (file-name-as-directory sub) drgnx-explorer--cache)  ; forgotten again
+      (drgnx-cache-remove 'explorer-listing (file-name-as-directory sub))  ; forgotten again
       (drgnx-explorer--render)
       (should (member "(not listed — Refresh)" (drgnx-remote-auto--row-names)))
       (with-current-buffer drgnx-explorer-buffer-name
@@ -365,15 +366,15 @@ buffer is not affected."
     (delete-other-windows)
     (drgnx-explorer-setup)
     (drgnx-explorer-set-roots (list root ldir))
-    (let ((kept (gethash root drgnx-explorer--cache)))
+    (let ((kept (drgnx-cache-get 'explorer-listing root)))
       (should kept)
-      (should (gethash ldir drgnx-explorer--cache))
+      (should (drgnx-cache-get 'explorer-listing ldir))
       (setq drgnx-tramp-mock-sends 0)
       ;; a checkout on a local folder: more changed folders than the splice limit, so one full pass
       (setq drgnx-explorer--dirty (cl-loop for i below (1+ drgnx-explorer--splice-limit)
                                            collect (expand-file-name (format "d%d" i) ldir)))
       (drgnx-explorer--apply-file-events)
-      (should (eq (gethash root drgnx-explorer--cache) kept))       ; the remote entry stayed, the very same listing
+      (should (eq (drgnx-cache-get 'explorer-listing root) kept))       ; the remote entry stayed, the very same listing
       (should (member "app.py" (drgnx-remote-auto--row-names)))
       (should (= drgnx-tramp-mock-sends 0)))))
 

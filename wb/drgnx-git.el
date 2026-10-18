@@ -14,6 +14,7 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
+(require 'drgnx-memo)
 
 (defface drgnx-git-modified '((t :inherit vc-edited-state)) "A modified file, or a folder with changes." :group 'drgnx)
 (defface drgnx-git-added '((t :inherit vc-locally-added-state)) "An added or untracked file." :group 'drgnx)
@@ -27,8 +28,11 @@
     (ignored nil drgnx-git-ignored 0))
   "Status → (LETTER FACE RANK); folders take the highest-ranked status inside them.")
 
-(defvar drgnx-git--repos (make-hash-table :test #'equal)
-  "Repository root → plist (:files HASH :folders HASH :branch PLIST :proc PROCESS :again BOOL).")
+;; Repository root → plist (:files HASH :folders HASH :branch PLIST :proc PROCESS :again BOOL), at most 16 roots (the
+;; least recently read goes first; PERF-M5).  A root evicted while its status process runs is put back when the
+;; process finishes; the process is not killed.  `drgnx-core/workbench' activates it (empties it on teardown).
+(drgnx-cache-define 'git-status :key 'string :cap 16
+                    :doc "Repository root → its status plist; capped at 16 roots, the least recently read evicted.")
 (defvar drgnx-git--roots (make-hash-table :test #'equal) "Folder → its repository root, or `none'.")
 (defvar drgnx-git-changed-functions nil "Called with a repository root after its status was read.")
 (defcustom drgnx-git-ignored-limit 20000
@@ -40,7 +44,7 @@
   (unless (file-remote-p path)
     (let* ((dir (cond ((directory-name-p path) (expand-file-name path))   ; a folder (trailing /): itself
                       ;; a repository's own folder, named without a trailing / (the Explorer's root rows)
-                      ((let ((d (file-name-as-directory (expand-file-name path)))) (and (gethash d drgnx-git--repos) d)))
+                      ((let ((d (file-name-as-directory (expand-file-name path)))) (and (drgnx-cache-get 'git-status d) d)))
                       (t (file-name-directory (directory-file-name (expand-file-name path))))))
            (hit (gethash dir drgnx-git--roots)))
       (unless hit
@@ -108,7 +112,7 @@ branch lines.  A detached HEAD is (:head nil :detached t); a branch with no upst
 (defun drgnx-git-branch (root)
   "The branch of the repository at ROOT as the last status run read it (see `drgnx-git-parse-branch'), or nil.
 A cache read: it runs no git."
-  (plist-get (gethash root drgnx-git--repos) :branch))
+  (plist-get (drgnx-cache-get 'git-status root) :branch))
 
 (defun drgnx-git--rank (status) (nth 2 (alist-get status drgnx-git--looks)))
 
@@ -132,7 +136,7 @@ it, `added' for one holding untracked files (the folder itself is tracked: it sh
 (defun drgnx-git-status (path)
   "PATH's git status, or nil: its own entry, else (a folder) the strongest inside it, else an
 ignored or untracked folder around it."
-  (when-let* ((root (drgnx-git-root path)) (repo (gethash root drgnx-git--repos)) (files (plist-get repo :files)))
+  (when-let* ((root (drgnx-git-root path)) (repo (drgnx-cache-get 'git-status root)) (files (plist-get repo :files)))
     (let ((rel (string-remove-suffix "/" (file-relative-name (expand-file-name path) root))))
       (or (gethash rel files)
           (gethash rel (plist-get repo :folders))
@@ -163,9 +167,9 @@ A refresh asked for while one runs is done once afterwards."
   ;; Folders found outside any repository are looked at again: one may have been made since (git init).
   (maphash (lambda (dir root) (when (eq root 'none) (remhash dir drgnx-git--roots))) drgnx-git--roots)
   (when-let* ((root (drgnx-git-root path)) ((executable-find "git")))
-    (let ((repo (gethash root drgnx-git--repos)))
+    (let ((repo (drgnx-cache-get 'git-status root)))
       (if (process-live-p (plist-get repo :proc))
-          (puthash root (plist-put repo :again t) drgnx-git--repos)
+          (drgnx-cache-put 'git-status root (plist-put repo :again t))
         (let* ((default-directory root)
                (process-environment (cons "GIT_OPTIONAL_LOCKS=0" process-environment))
                (buf (generate-new-buffer " *drgnx git*" t))
@@ -178,13 +182,13 @@ A refresh asked for while one runs is done once afterwards."
                       :command '("git" "--no-optional-locks" "status" "--porcelain=v2" "--branch" "-z"
                                  "--ignored=matching" "--untracked-files=normal")
                       :sentinel (lambda (p _event) (drgnx-git--done p root)))))
-          (puthash root (plist-put (copy-sequence repo) :proc proc) drgnx-git--repos)))
+          (drgnx-cache-put 'git-status root (plist-put (copy-sequence repo) :proc proc))))
       (when wait
         ;; Until no run is left unread: the one running, and the one queued behind it.  A run is read
         ;; when `drgnx-git--done' clears :proc, not when git exits: on a loaded machine git can be gone
         ;; before the first look, its output still in the pipe and its sentinel not yet run.
         (let (p)
-          (while (setq p (plist-get (gethash root drgnx-git--repos) :proc))
+          (while (setq p (plist-get (drgnx-cache-get 'git-status root) :proc))
             (if (process-live-p p)
                 (accept-process-output p 0.05)
               ;; Read what it left in the pipe (this runs its sentinel), then finish it if that did not.
@@ -206,11 +210,13 @@ WAIT: until done, for tests."
   "PROC (git status for ROOT) ended: keep its result, tell the panels, run a waiting refresh.
 Only ROOT's current run counts: one already finished, or one a newer run replaced (it ended before its
 sentinel ran, and a refresh started another), just gives its buffer back.  Its late sentinel must not
-clear the newer run's :proc, or a wait on that run stops before it is read."
-  (let ((buf (process-buffer proc)) (repo (gethash root drgnx-git--repos)))
+clear the newer run's :proc, or a wait on that run stops before it is read.  A ROOT the cache evicted while PROC
+ran has no entry: PROC is still its run (unless it was read already), and its result puts the root back."
+  (let* ((buf (process-buffer proc)) (repo (drgnx-cache-get 'git-status root)))
     (when (memq (process-status proc) '(exit signal))
-      (if (not (eq proc (plist-get repo :proc)))
+      (if (if repo (not (eq proc (plist-get repo :proc))) (process-get proc 'drgnx-git-read))
           (when (buffer-live-p buf) (kill-buffer buf))
+        (process-put proc 'drgnx-git-read t)
         (setq repo (plist-put repo :result (list (process-status proc) (process-exit-status proc)))) ; how the last run ended
         (when (and (eq (process-status proc) 'exit) (= (process-exit-status proc) 0) (buffer-live-p buf))
           (let* ((output (with-current-buffer buf (buffer-string))) (files (drgnx-git-parse output)))
@@ -218,7 +224,7 @@ clear the newer run's :proc, or a wait on that run stops before it is read."
                                   :branch (drgnx-git-parse-branch output)))))
         (when (buffer-live-p buf) (kill-buffer buf))
         (let ((again (plist-get repo :again)))
-          (puthash root (plist-put (plist-put repo :proc nil) :again nil) drgnx-git--repos)
+          (drgnx-cache-put 'git-status root (plist-put (plist-put repo :proc nil) :again nil))
           (run-hook-with-args 'drgnx-git-changed-functions root)
           (when again (drgnx-git-refresh root)))))))
 

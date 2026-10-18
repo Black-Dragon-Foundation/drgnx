@@ -615,8 +615,16 @@ hit). `(drgnx-memo-forget NAME &optional OBJECT)` drops one object's value, or a
 `(drgnx-cache-define NAME &key key cap doc)` (a declaration, at the top level): `key` `object` is a weak `eq` table; a get checks `buffer-live-p`,
 `window-live-p`, `frame-live-p` or `process-live-p` and drops a dead entry. `key` `string` is an `equal` table with an
 LRU; `cap` is required and positive. A get stamps the entry; a put past the cap evicts the oldest stamp (a scan of the
-table, on put only). `drgnx-cache-get`, `-put`, `-remove` and `-size` take the NAME and the key. **Every cache has a
+table, on put only). `drgnx-cache-get`, `-put`, `-remove` and `-size` take the NAME and the key; `drgnx-cache-keys NAME` lists the keys (a pass over the
+table, stamping nothing: not for redisplay). **Every cache has a
 cap or is weak**; the docstring or `:doc` says which event or cap bounds it.
+
+The workbench has two string caches, both activated by `core/workbench`: `git-status` (repository root → its status
+plist, 16 roots; `wb/drgnx-git.el`) and `explorer-listing` (folder → `(MTIME . CHILDREN)`, 64 folders;
+`wb/drgnx-explorer.el`). A root pushed out of `git-status` while its `git status` runs is not killed: the finished
+run puts the root back (`drgnx-git--done` sees no entry and no earlier read of that process). A folder the Explorer shows
+is got on every render and stays recent; a tree with more than 64 expanded folders re-lists the oldest on each
+render (an `mtime` check, then a directory read).
 
 ### Declarations, activation and ownership
 
