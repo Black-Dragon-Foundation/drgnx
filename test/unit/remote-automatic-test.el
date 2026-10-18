@@ -268,6 +268,27 @@ buffer is not affected."
       (should (> drgnx-tramp-mock-sends 0))
       (should (member "z.txt" (drgnx-remote-auto--row-names))))))
 
+(ert-deftest drgnx-remote/set-roots-from-a-process-filter-lists-no-remote-folder ()
+  ;; `drgnx open DIR' is `emacsclient -e', which runs in the server's process filter (`inhibit-quit' bound): setting
+  ;; the Explorer's folders from there lists no remote folder and sends nothing.  A command that lists a folder whose
+  ;; host cannot be reached shows the listing it had, never an error
+  (drgnx-remote-auto--with
+    (delete-other-windows)
+    (drgnx-explorer-setup)
+    (setq drgnx-tramp-mock-sends 0)
+    (let ((inhibit-quit t)) (drgnx-explorer-set-roots (list root ldir)))
+    (should (= drgnx-tramp-mock-sends 0))
+    (should (member "(not listed — Refresh)" (drgnx-remote-auto--row-names)))
+    (should (member "l.py" (drgnx-remote-auto--row-names)))
+    (drgnx-explorer-set-roots (list root ldir))                       ; the user's command: listed
+    (should (member "app.py" (drgnx-remote-auto--row-names)))
+    (let ((real (symbol-function 'file-attributes)))
+      (cl-letf (((symbol-function 'file-attributes)
+                 (lambda (f &rest args)
+                   (if (file-remote-p f) (signal 'remote-file-error (list "the host is gone")) (apply real f args)))))
+        (drgnx-explorer-set-roots (list root ldir))
+        (should (member "app.py" (drgnx-remote-auto--row-names)))))))
+
 (ert-deftest drgnx-remote/file-commands-and-find-list-the-remote-folder ()
   "New File, Rename, Delete and Paste end in `drgnx-explorer--show-folder'; Find ends by drawing the tree again."
   (drgnx-remote-auto--with

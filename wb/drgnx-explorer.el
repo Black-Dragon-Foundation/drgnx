@@ -86,10 +86,13 @@ cached listing is used without asking the host, and a folder never listed has on
      ((and (file-remote-p dir) (not drgnx-explorer--remote-reads))
       (if hit (cdr hit) (list (cons drgnx-explorer--not-listed nil))))
      (t
-      (let* ((remote-file-name-inhibit-cache (if (file-remote-p dir) t remote-file-name-inhibit-cache)) ; a command lists afresh
-             (mtime (file-attribute-modification-time (file-attributes dir))))
-        (if (and hit (equal (car hit) mtime))
-            (cdr hit)
+      (let* ((remote (file-remote-p dir))
+             (remote-file-name-inhibit-cache (if remote t remote-file-name-inhibit-cache)) ; a command lists afresh
+             ;; a host that cannot be reached (or refuses to log in here) leaves the listing it had
+             (mtime (if remote (ignore-errors (file-attribute-modification-time (file-attributes dir)))
+                      (file-attribute-modification-time (file-attributes dir)))))
+        (if (or (and hit (equal (car hit) mtime)) (and remote (null mtime)))
+            (if hit (cdr hit) (list (cons drgnx-explorer--not-listed nil)))
           (let (entries)
             (dolist (e (ignore-errors (directory-files-and-attributes dir nil nil t)))
               (let ((name (car e)) (type (file-attribute-type (cdr e))))
@@ -538,7 +541,9 @@ A remote file is never revealed: this runs from the change bus, where remote I/O
   "Show ROOTS (directories) in the Explorer (this ends Find)."
   (when drgnx-explorer--find (setq drgnx-explorer--find nil) (drgnx-explorer--plain-title))
   (setq drgnx-explorer--roots (mapcar (lambda (r) (file-name-as-directory (expand-file-name r))) roots))
-  (let ((drgnx-explorer--remote-reads t))                  ; the user's command: a remote root is listed now
+  ;; a command of the user lists a remote root now; `drgnx open' (emacsclient -e, in the server's process filter) and
+  ;; other automatic callers do not
+  (let ((drgnx-explorer--remote-reads (or drgnx-explorer--remote-reads (not inhibit-quit))))
     (if (get-buffer drgnx-explorer-buffer-name) (drgnx-explorer--render) (drgnx-explorer--buffer))))   ; a new one renders itself
 
 (defun drgnx-explorer-roots () drgnx-explorer--roots)

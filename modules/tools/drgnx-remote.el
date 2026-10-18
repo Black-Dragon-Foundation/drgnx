@@ -114,6 +114,7 @@
   "Show the remote folder DIR as the Explorer's first folder, remember its connection and look for the language
 servers on its host.  Opens the connection if it is not up (the user ran the command that got us here)."
   (let* ((drgnx-remote-may-prompt t)
+         (drgnx-explorer--remote-reads t)               ; the folder is listed: that is what the user asked for
          (root (file-name-as-directory (expand-file-name dir))))
     (drgnx-session-open-folder root)
     (drgnx-remote--remember root)

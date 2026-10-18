@@ -68,7 +68,9 @@ TRAMP stays on for what you start: Open Remote…, Reconnect and ssh paths you t
 remote name: no timer, hook or background check, no file watching, no Git or diff decorations, no Flymake, no link or
 compile-output path, no semantic-search indexing of a remote folder, and the Explorer lists a remote folder only when
 you open, expand or refresh it, or create, rename, delete or paste in it (until then it shows the listing it has, or
-`(not listed — Refresh)`). The one intended exception is Find in the Explorer: you are typing in the minibuffer and its
+`(not listed — Refresh)`). Folders set from outside a command (`drgnx open DIR` from a shell, which arrives through
+the Emacs server) do not list a remote folder either, and a folder whose host cannot be reached keeps the listing it
+had. The one intended exception is Find in the Explorer: you are typing in the minibuffer and its
 live filter runs from an idle timer, as part of your command. The change gutter (diff-hl) is off for remote files; the
 Explorer's Git letters, inline blame and the Outline skip them, and sticky scroll works from the buffer's text alone.
 Nothing remote asks a question from an automatic path; every ssh question comes from a command you ran. As a second
