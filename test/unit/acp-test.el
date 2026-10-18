@@ -119,6 +119,25 @@
           (should (eql (process-exit-status p) 0)))
       (delete-process p) (delete-directory tmp t))))
 
+(ert-deftest drgnx-acp/a-mock-gone-before-it-reads-leaves-no-process-and-no-fifo ()
+  ;; A mock that exits (or is stopped) before it opens the FIFO: nothing of the wrapper's waits on for ever,
+  ;; holding the caller's pipes.  MARKER names the wrapper's own processes (`true' ignores it).
+  (let* ((tmp (make-temp-file "drgnx-mock-tmp" t)) (marker (format "drgnx-mock-early-%d" (random 1000000)))
+         (process-environment (cons (concat "TMPDIR=" tmp) process-environment))
+         (survivors (lambda () (seq-filter (lambda (pid) (string-search marker (or (alist-get 'args (process-attributes pid)) "")))
+                                           (list-system-processes))))
+         (p (make-process :name "wrapped" :command (list "sh" drgnx-acp-test--wrapper "true" marker)
+                          :connection-type 'pipe :noquery t)))
+    (unwind-protect
+        (progn
+          (process-send-string p "hi\n")
+          (should (drgnx-acp-test--wait (lambda () (not (process-live-p p)))))
+          (should (drgnx-acp-test--wait (lambda () (and (null (funcall survivors)) (null (directory-files tmp nil "\\`[^.]")))) 5))
+          (should-not (funcall survivors))
+          (should-not (directory-files tmp nil "\\`[^.]")))
+      (dolist (pid (funcall survivors)) (signal-process pid 'kill))
+      (delete-process p) (delete-directory tmp t))))
+
 (ert-deftest drgnx-acp/lines-are-framed-whatever-the-chunks ()
   ;; No process: the framing alone.  A line split across outputs, a malformed line (logged,
   ;; skipped), a 1 MB line, several lines in one output.

@@ -550,11 +550,10 @@
 
 (ert-deftest drgnx-pkg/compile-failures-are-reported ()
   ;; M5-9: a package that does not byte-compile (or natively compile) still installs, and the sync says so.
-  (skip-unless (native-comp-available-p))                ; the native half needs native compilation
   (drgnx-pkg-test--with root
     (let ((arch (drgnx-pkg-test--archive (concat root "arch")
                                          '((fa "1.0") (fbad "1.0" nil "(eval-when-compile (error \"fixture fails to compile\"))"))))
-          (drgnx-pkg-native-compile t))
+          (drgnx-pkg-native-compile (native-comp-available-p)))   ; the native half needs native compilation
       (drgnx-pkg-test--want root 'fa 'fbad)
       (cl-letf (((symbol-function 'native-compile)
                  (lambda (f &rest _) (when (string-match-p "/fa\\.el\\'" f) (error "no libgccjit")))))
@@ -562,7 +561,8 @@
           (should (plist-get r :ok))
           (should (equal (drgnx-pkg-test--installed) '("fa-1.0" "fbad-1.0")))
           (should (seq-find (lambda (w) (string-match-p "fbad\\.el does not byte-compile" w)) (plist-get r :warnings)))
-          (should (seq-find (lambda (w) (string-match-p "fa\\.el .*native.*no libgccjit" w)) (plist-get r :warnings)))
+          (when (native-comp-available-p)
+            (should (seq-find (lambda (w) (string-match-p "fa\\.el .*native.*no libgccjit" w)) (plist-get r :warnings))))
           (should-not (seq-find (lambda (w) (string-match-p "\\_<fa\\.el does not byte-compile" w)) (plist-get r :warnings)))
           (should (string-match-p "^WARNING .*fbad\\.el" (with-output-to-string (drgnx-pkg--report r)))))))))
 
