@@ -28,6 +28,8 @@ the XDG directories (`$XDG_STATE_HOME`, `$XDG_CACHE_HOME`, `$XDG_DATA_HOME`: onl
 relative is ignored, as the XDG spec says, here and in `bin/drgnx`'s `xdg_dir`). Packages: `(drgnx-data-dir)` — `$DRGNX_DATA_DIR` or `~/.local/share/drgnx/` — holds `elpa/`
 (the packages every session uses) and `generations/`; `(drgnx-package-cache-dir)` keeps downloaded package files
 ([packages.md](../guide/packages.md)).
+Every helper expands with `default-directory` bound to `"/"`, so a `~` is always the local home: in a remote
+buffer (a Tramp `*scratch*`, dired over ssh) a timer, hook or save never makes Tramp contact the host.
 Started with `--init-directory <checkout>/init`, Emacs keeps its own state (`user-emacs-directory`: auto-save list,
 histories) in `(drgnx-state-dir)emacs/` and native code in `(drgnx-cache-dir)eln-cache/` (`init/early-init.el`), so
 nothing is written into the checkout; a harness session keeps both in its run directory. `custom-file` is
