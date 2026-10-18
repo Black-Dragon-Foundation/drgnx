@@ -43,6 +43,7 @@ _drgnx() {
       --step) if [[ $cmd == onboard ]]; then words=$_drgnx_steps; elif [[ $cmd == bootstrap ]]; then words=$_drgnx_bootstrap_steps; fi ;;
       --preset) if [[ $cmd == onboard ]]; then words=$_drgnx_presets; fi ;;
       --shell) if [[ $cmd == shell ]]; then words='zsh bash fish'; fi ;;
+      --fedora) if [[ $cmd == test ]]; then words='44 45'; fi ;;
       --config) if [[ $cmd == test ]]; then words='drgnx gryphn'; elif [[ $cmd == ui ]]; then words='minimal drgnx gryphn'; fi ;;
       --keys)
         if [[ $cmd == onboard ]]; then
@@ -59,7 +60,7 @@ _drgnx() {
         case "$cmd $sub" in
           'open '*) words='--check --wait' ;;
           'doctor '*) words='--json --dev' ;;
-          'test '*) words='--one-process --ui --scenario --config --bench --perf --audit --soak --container --install' ;;
+          'test '*) words='--one-process --ui --scenario --config --bench --perf --audit --soak --container --install --bootstrap --fedora' ;;
           'sync '*) words='--offline --seed --prune --dry-run' ;;
           'lock '*) words='--ship' ;;
           'onboard '*) words='--non-interactive --again --preset --keys --theme --roots --todos --step' ;;

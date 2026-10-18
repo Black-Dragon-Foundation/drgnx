@@ -66,6 +66,8 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l soak -d 'The workloads in a loop'
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l container -d 'Inside a container'
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l install -d 'install.sh in fresh distribution containers'
+    complete -c drgnx -n '__fish_seen_subcommand_from test' -l bootstrap -d 'drgnx bootstrap on a fresh Fedora container'
+    complete -c drgnx -n '__fish_seen_subcommand_from test' -l fedora -x -a '44 45' -d 'Fedora release for --bootstrap'
     complete -c drgnx -n '__fish_seen_subcommand_from test; and __fish_seen_argument -l install' -a 'fedora-44 debian-trixie ubuntu-26.04 fedora-45 archlinux' -d 'Distribution image'
     complete -c drgnx -n '__fish_seen_subcommand_from sync' -l offline -d 'From the lock and the cache'
     complete -c drgnx -n '__fish_seen_subcommand_from sync' -l seed -r -d 'Copy another elpa first'

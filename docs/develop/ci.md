@@ -6,6 +6,7 @@ GitHub Actions runs the same commands you run locally; nothing in CI is CI-only.
 |---|---|---|
 | `CI` (`.github/workflows/ci.yml`) | every push to `main`, every pull request, on demand | the unit suite on **Emacs 31.1** (Fedora 45, `bin/drgnx test --container`) and **Emacs 30.2** (Ubuntu 26.04, `bin/drgnx test`); `shellcheck --severity=warning` on `install.sh`, `bin/drgnx` and the pre-commit hook; the leak scan |
 | `GUI tier` (`.github/workflows/gui.yml`) | nightly, on demand | `bin/drgnx test --container --ui`: real Emacs 31.1 (pgtk) sessions under headless mutter |
+| `Bootstrap` (`.github/workflows/bootstrap.yml`) | weekly (Monday), on demand with a Fedora release (45 by default, 44 builds Emacs from source) | `bin/drgnx test --bootstrap --fedora N`: the exit test of a second machine — `install.sh --yes --config … --identity …` in a fresh Fedora container reaches a green doctor with the configuration, the locked packages and the provider keys back, and a second run changes nothing ([harness.md](harness.md)) |
 | `macOS` (`.github/workflows/macos.yml`) | `unit`: every push to `main`, every pull request, on demand; `install`: weekly (Wednesday), on demand | on macOS 27 (`xcode-27`, Apple silicon: GitHub names macOS images after their Xcode now): `unit` installs Emacs and ripgrep with Homebrew, checks that `install.sh` parses under macOS's bash 3.2 (`/bin/bash -n`), prints its plan (`--dry-run`) and runs `bin/drgnx test`; `install` runs `install.sh --yes` for real on the checkout (Homebrew's emacs-plus), then `drgnx doctor`, `drgnx sync` (a first sync from the shipped lock), `drgnx macos-app` and `drgnx open --check`. A newer run cancels an older one of the same event and ref only, so a push to `main` never cancels the weekly install |
 | `Test images` (`.github/workflows/images.yml`) | a push changing `test/container/`, weekly, on demand | builds the two Fedora test images and pushes them to `ghcr.io/black-dragon-foundation/drgnx-test` and `drgnx-test-gui`, tagged with the Containerfile's hash (and `f45`) |
 
@@ -22,6 +23,7 @@ Mac UI is checked by hand with the session checklist. The weekly `install` job i
 ```
 bin/drgnx test --container          # the Emacs 31.1 job (podman, docker or nerdctl)
 bin/drgnx test --container --ui     # the nightly GUI tier
+bin/drgnx test --bootstrap          # the weekly second-machine exit test (fedora:45; --fedora 44 for the source build)
 .githooks/pre-commit --all          # the leak scan over every tracked file
 ```
 
@@ -48,5 +50,5 @@ directly (about 18 s — less than restoring a cache).
   updates weekly.
 - `permissions: contents: read` and `persist-credentials: false`: no workflow can write to the repository. Only
   `Test images` may write packages; the test jobs may read them. None uses a secret beyond the built-in token.
-- Heavy tiers stay out of the per-push run: the GUI tier is nightly and the macOS real install weekly; `drgnx test --install` (source
+- Heavy tiers stay out of the per-push run: the GUI tier is nightly, the macOS real install and the second-machine exit test weekly; `drgnx test --install` (source
   builds in fresh containers) and `--perf` (needs a quiet machine) run locally.

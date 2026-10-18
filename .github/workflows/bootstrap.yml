@@ -1,0 +1,35 @@
+# Weekly and on demand: the exit test of a second machine — one command on a fresh Fedora container must end in a
+# green doctor, with the configuration, the locked packages and the keys back and a second run changing nothing.
+# test/bootstrap/in-container.sh; docs/develop/ci.md
+name: Bootstrap
+
+on:
+  schedule:
+    - cron: "41 4 * * 1"
+  workflow_dispatch:
+    inputs:
+      fedora:
+        description: "Fedora release (44 builds Emacs from source: slow)"
+        type: choice
+        options: ["45", "44"]
+        default: "45"
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap:
+    name: drgnx bootstrap on a fresh Fedora
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: bin/drgnx test --bootstrap
+        env:
+          DRGNX_CONTAINER: podman
+          FEDORA: ${{ inputs.fedora || '45' }}
+        run: bin/drgnx test --bootstrap --fedora "$FEDORA"

@@ -57,6 +57,7 @@ case $cmd in
       '--bench[the workbench vs treemacs and ibuffer]' '--perf[input latency, redisplay, frames, GC]' \
       '--audit[what each hook function costs]' '--soak[the workloads in a loop]' \
       '--container[inside a container]' '--install[install.sh in fresh distribution containers]' \
+      '--bootstrap[drgnx bootstrap on a fresh Fedora container]' '--fedora[Fedora release for --bootstrap]:release:(44 45)' \
       '*:image:(fedora-44 debian-trixie ubuntu-26.04 fedora-45 archlinux)' ;;
   sync)
     _arguments '--offline[from the lock and the cache]' '--seed[copy another elpa first]:directory:_files -/' '--prune[remove packages the manifest no longer needs]' '--dry-run[with --prune: only list them]' ;;
