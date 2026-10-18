@@ -378,3 +378,38 @@
             (should (drgnx-explorer--trash-cross-device-p (expand-file-name "x" dir))))
           (should-not (drgnx-explorer--trash-cross-device-p "/ssh:nohost.invalid:/x")))
       (delete-directory dir t))))
+
+;;;; M3b-17: reveal in the file manager, and watches
+
+(ert-deftest drgnx-explorer-edge/reveal-externally-on-each-system ()
+  (drgnx-explorer-edge--with root
+    (let ((calls nil) (file (expand-file-name "README.md" root)))
+      (cl-letf (((symbol-function 'call-process) (lambda (&rest a) (push a calls) 0)))
+        (with-current-buffer (drgnx-explorer-edge--at "README.md")
+          (let ((system-type 'windows-nt)) (drgnx-explorer-reveal-externally))
+          (should (equal (car calls)
+                         (list "explorer.exe" nil 0 nil (concat "/select," (subst-char-in-string ?/ ?\\ file)))))
+          (let ((system-type 'darwin)) (drgnx-explorer-reveal-externally))
+          (should (equal (car calls) (list "open" nil 0 nil "-R" file)))
+          (let ((system-type 'gnu/linux)) (drgnx-explorer-reveal-externally))
+          (should (equal (car calls) (list "xdg-open" nil 0 nil (directory-file-name root)))))))))
+
+(ert-deftest drgnx-explorer-edge/reveal-externally-refuses-a-remote-path ()
+  (drgnx-explorer-edge--with root
+    (cl-letf (((symbol-function 'call-process) (lambda (&rest _) (error "must not run")))
+              ((symbol-function 'drgnx-explorer--node) (lambda () "/ssh:nohost.invalid:/srv/x.txt")))
+      (should-error (drgnx-explorer-reveal-externally) :type 'user-error))))
+
+(ert-deftest drgnx-explorer-edge/remote-folders-are-never-watched ()
+  ;; a file-notify watch on a TRAMP folder starts a remote process, which blocks: only local folders are watched
+  (drgnx-explorer-edge--with root
+    (let ((watched nil) (remote "/ssh:nohost.invalid:/srv"))
+      (drgnx-explorer--unwatch-all)
+      (cl-letf (((symbol-function 'drgnx-explorer--shown-folders) (lambda () (list remote (directory-file-name root))))
+                ((symbol-function 'file-notify-add-watch) (lambda (d &rest _) (push d watched) 'desc))
+                ((symbol-function 'file-notify-valid-p) (lambda (&rest _) t))
+                ((symbol-function 'file-notify-rm-watch) #'ignore))
+        (drgnx-explorer--sync-watches)
+        (should (equal watched (list (directory-file-name root))))
+        (should (eq 'none (gethash remote drgnx-explorer--watches)))
+        (drgnx-explorer--unwatch-all)))))

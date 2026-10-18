@@ -300,8 +300,9 @@ watched — the inotify limit — is tried again)."
       (unless (eq desc 'none) (ignore-errors (file-notify-rm-watch desc))))
     (maphash (lambda (d _)
                (unless (gethash d drgnx-explorer--watches)
-                 (puthash d (or (ignore-errors
-                                  (file-notify-add-watch d '(change) (lambda (event) (drgnx-explorer--file-event event d))))
+                 (puthash d (or (and (not (file-remote-p d)) ; a TRAMP watch starts a remote process, which blocks
+                                     (ignore-errors
+                                       (file-notify-add-watch d '(change) (lambda (event) (drgnx-explorer--file-event event d)))))
                                 'none)
                           drgnx-explorer--watches)))
              want)))
@@ -888,9 +889,11 @@ reported with a message, the folder is shown again when it ends."
 (defun drgnx-explorer-reveal-externally () "Show the folder here in the system's file manager."
        (interactive)
        (let ((p (or (drgnx-explorer--node) (user-error "Nothing here"))))
-         (if (eq system-type 'darwin)
-             (call-process "open" nil 0 nil "-R" p)
-           (call-process "xdg-open" nil 0 nil (drgnx-explorer--folder-here)))))
+         (when (file-remote-p p) (user-error "Cannot reveal a remote file in the local file manager"))
+         (pcase system-type
+           ('darwin (call-process "open" nil 0 nil "-R" p))
+           ('windows-nt (call-process "explorer.exe" nil 0 nil (concat "/select," (subst-char-in-string ?/ ?\\ p))))
+           (_ (call-process "xdg-open" nil 0 nil (drgnx-explorer--folder-here))))))
 
 ;;;; Mouse (the click model)
 

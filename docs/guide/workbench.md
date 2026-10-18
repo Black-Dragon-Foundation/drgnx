@@ -70,7 +70,9 @@ inside it); a buffer with unsaved changes stays, and a message says so. When the
 than the file (Emacs would copy it across, and wait), `gio trash` does it in the background if `gio` is
 installed; a failure is reported in the echo area, and the folder is shown again when it ends. New File and Rename stay inside the Explorer's folders (`../x`, `~/x`
 and absolute paths are refused); the new file's row is shown, its new folders opened. A rename that changes only
-the case works on case-insensitive disks too. The right-click menu has the same entries.
+the case works on case-insensitive disks too. Reveal in the file manager uses `xdg-open` on Linux, `open -R`
+on macOS and `explorer.exe /select,` on Windows; it refuses a remote (TRAMP) path. Remote folders are listed
+but never watched for changes (a remote watch starts a process that blocks); refresh them by hand. The right-click menu has the same entries.
 
 **Typing** in the Explorer jumps to the next row starting with what you typed (letters a profile does not use).
 **Find** filters the tree live to the files whose names contain the text — also inside collapsed folders — and the
