@@ -194,6 +194,21 @@ the gateway told."
       (should (equal (plist-get (cdr (assq 'budget events)) :job) "j"))
       (should (= (plist-get (drgnx-gw-test--request port :token other) :status) 200)))))
 
+(ert-deftest drgnx-gateway/budget-event-fires-when-spend-crosses-the-budget ()
+  ;; the request that spends the budget pauses the job at once, not when the next request is refused
+  (drgnx-gw-test--with `((:path "/api/v1/messages" :chunks ((0 . ,drgnx-gw-test--sse)))) '()
+    (let ((token (drgnx-gateway-register '(:job "j" :chain ((openrouter . nil)) :budget 0.0001)))
+          (other (drgnx-gateway-register '(:job "k" :chain ((openrouter . nil)) :budget 1.0))))
+      (drgnx-gw-test--request port :token other)
+      (drgnx-gw-test--settle (lambda () (assq 'request events)))
+      (should-not (assq 'budget events))                  ; spent less than its budget
+      (should (= (plist-get (drgnx-gw-test--request port :token token) :status) 200))   ; 0.000141 spent
+      (should (drgnx-gw-test--settle (lambda () (assq 'budget events))))
+      (let ((e (cdr (assq 'budget events))))
+        (should (equal (plist-get e :job) "j"))
+        (should (< (abs (- (plist-get e :spent) (+ (* 12 3e-6) (* 7 15e-6)))) 1e-9))
+        (should (= (plist-get e :budget) 0.0001))))))
+
 (ert-deftest drgnx-gateway/a-client-that-hangs-up-stops-the-upstream ()
   (drgnx-gw-test--with `((:path "/api/v1/messages" :chunks ((0 . ,drgnx-gw-test--sse) (1 . "data: {}\n\n") (1 . "data: {}\n\n")))) '()
     (let ((token (drgnx-gateway-register '(:task "t9" :chain ((openrouter . nil))))))

@@ -110,4 +110,6 @@ Spend: `drgnx-http-usage-scanner` follows the answer — SSE `message_start`/`me
 `usage` (Anthropic or OpenAI names, `cost` when given); Anthropic's cache tokens count as what they cost — written
 1.25×, read 0.1× an input token; without a cost, a provider's `:price (IN . OUT)` (USD per
 million tokens) prices it. One `spend` row per request in `work.db` (schema 2). The budget is checked before
-forwarding: a job whose spend reached its budget gets 429 `budget_exceeded` and a `budget` event.
+forwarding: a job whose spend reached its budget gets 429 `budget_exceeded` and a `budget` event; the request whose
+spend reaches the budget sends that event as soon as its spend is recorded, so the job pauses without waiting for the
+next request.

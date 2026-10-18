@@ -331,7 +331,12 @@ retry-after) is the answer."
          (row (list :job (plist-get reg :job) :task (plist-get reg :task) :agent (plist-get reg :agent)
                     :provider (symbol-name id) :model model :input input :output output :cost cost :status status)))
     (with-demoted-errors "drgnx gateway: spend not recorded: %S" (apply #'drgnx-work-db-add-spend row))
-    (apply #'drgnx-gateway--emit 'request row)))
+    (apply #'drgnx-gateway--emit 'request row)
+    ;; the request that spends the budget ends the job's work now, not at the next refusal
+    (when-let* ((budget (plist-get reg :budget)) (job (plist-get reg :job))
+                (spent (ignore-errors (plist-get (drgnx-work-db-spend :job job) :cost)))
+                ((>= spent budget)))
+      (drgnx-gateway--emit 'budget :job job :spent spent :budget budget))))
 
 (provide 'drgnx-gateway)
 ;;; drgnx-gateway.el ends here
