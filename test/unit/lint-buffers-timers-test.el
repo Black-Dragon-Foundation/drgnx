@@ -194,7 +194,6 @@ lambda or not)."
     ("modules/tools/drgnx-cockpit-feed.el" 2)
     ("modules/tools/drgnx-cockpit.el" 2)
     ("modules/tools/drgnx-job-ui.el" 1)
-    ("modules/tools/drgnx-live.el" 2)
     ("modules/tools/drgnx-replace.el" 3)
     ("modules/tools/drgnx-search.el" 2)
     ("modules/ui/drgnx-quickhelp.el" 5)
