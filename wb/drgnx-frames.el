@@ -65,6 +65,32 @@ tab in no window."
         (append mine (seq-filter (lambda (b) (and (not (gethash b tabbed)) (drgnx-signal-user-buffer-p b)))
                                  (buffer-list)))))))
 
+;;;; C-x b: this window's buffers first
+
+(defun drgnx-frames--order (names)
+  "NAMES (buffer names) with this window's buffers first, then the rest; each part keeps its order.
+Sorts, never filters: every buffer stays a candidate."
+  (let ((mine (make-hash-table :test #'equal)) first rest)
+    (dolist (b (drgnx-frame-buffers))
+      (when (buffer-live-p b) (puthash (buffer-name b) t mine)))
+    (dolist (n names) (push n (if (gethash (if (consp n) (car n) n) mine) first rest)))
+    (nconc (nreverse first) (nreverse rest))))
+
+(defun drgnx-frames--buffer-table ()
+  "The buffer-name completion table, its candidates shown by `drgnx-frames--order'."
+  (lambda (string predicate action)
+    (if (eq action 'metadata)
+        `(metadata (category . buffer)
+                   (display-sort-function . ,#'drgnx-frames--order)
+                   (cycle-sort-function . ,#'drgnx-frames--order))
+      (complete-with-action action #'internal-complete-buffer string predicate))))
+
+(defun drgnx-frames-read-buffer (prompt &optional def require-match predicate)
+  "`read-buffer-function': like `read-buffer', with this window's buffers listed first."
+  (let ((completion-ignore-case (or read-buffer-completion-ignore-case completion-ignore-case)))
+    (completing-read prompt (drgnx-frames--buffer-table) predicate require-match nil 'buffer-name-history
+                     (if (bufferp def) (buffer-name def) (if (consp def) (car def) def)))))
+
 ;;;; New windows
 
 (defun drgnx-frames--new (buffer tabs)
@@ -106,9 +132,11 @@ tab in no window."
   "Several windows: the main one, auxiliary ones (editor-only), each with its buffers."
   :global t :group 'drgnx
   (if drgnx-frames-mode
-      (progn (add-hook 'delete-frame-functions #'drgnx-frames--deleted)
+      (progn (unless read-buffer-function (setq read-buffer-function #'drgnx-frames-read-buffer))   ; a user's own stays
+             (add-hook 'delete-frame-functions #'drgnx-frames--deleted)
              (add-hook 'drgnx-first-gui-frame-hook #'drgnx-frames-mark-main -10)   ; before the restore
              (drgnx-frames-mark-main))                ; a frame that exists already (not a daemon's terminal)
+    (when (eq read-buffer-function #'drgnx-frames-read-buffer) (setq read-buffer-function nil))
     (remove-hook 'delete-frame-functions #'drgnx-frames--deleted)
     (remove-hook 'drgnx-first-gui-frame-hook #'drgnx-frames-mark-main)))
 

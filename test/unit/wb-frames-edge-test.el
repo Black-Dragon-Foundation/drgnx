@@ -57,5 +57,39 @@ frames: `main' (w1, tabs a b), `aux' (w2, tabs c b), `hidden' (w3, tabs d; not a
     (should (equal (drgnx-chrome-tabs w1) (list a)))
     (should (equal (drgnx-chrome-tabs w2) (list c c)))))
 
+(ert-deftest drgnx-frames/switch-buffer-lists-this-windows-buffers-first-and-drops-none ()
+  ;; DEFERRED M3e-2: C-x b is sorted, not filtered: the window's buffers first, every other buffer after,
+  ;; each part in the order Emacs gave.
+  (let ((mine (generate-new-buffer "frames-mine")) (other (generate-new-buffer "frames-other"))
+        (also (generate-new-buffer "frames-also")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-frame-buffers) (lambda (&optional _) (list also mine))))
+          (should (equal (drgnx-frames--order (list "frames-other" "frames-mine" "frames-zzz" "frames-also"))
+                         '("frames-mine" "frames-also" "frames-other" "frames-zzz")))
+          (let* ((table (drgnx-frames--buffer-table))
+                 (meta (completion-metadata "" table nil)))
+            (should (eq (completion-metadata-get meta 'display-sort-function) #'drgnx-frames--order))
+            (should (eq (completion-metadata-get meta 'category) 'buffer))
+            ;; nothing is filtered out
+            (dolist (b (list mine other also)) (should (member (buffer-name b) (all-completions "" table))))
+            (should (equal (all-completions "frames-m" table) '("frames-mine")))))
+      (mapc #'kill-buffer (list mine other also)))))
+
+(ert-deftest drgnx-frames/the-mode-sets-read-buffer-function-unless-the-user-has-one ()
+  (let ((was drgnx-frames-mode))
+    (unwind-protect
+        (progn
+          (let ((read-buffer-function nil))
+            (drgnx-frames-mode 1)
+            (should (eq read-buffer-function #'drgnx-frames-read-buffer))
+            (drgnx-frames-mode -1)
+            (should-not read-buffer-function))
+          (let ((read-buffer-function #'ignore))
+            (drgnx-frames-mode 1)
+            (should (eq read-buffer-function #'ignore))        ; the user's own stays
+            (drgnx-frames-mode -1)
+            (should (eq read-buffer-function #'ignore))))
+      (drgnx-frames-mode (if was 1 -1)))))
+
 (provide 'wb-frames-edge-test)
 ;;; wb-frames-edge-test.el ends here
