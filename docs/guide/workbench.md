@@ -402,3 +402,16 @@ shows the listing it already has and asks the host nothing; a remote folder that
 `(not listed — Refresh)`, and Enter or a click on that row refreshes. A checkout in a local folder forgets only the
 local listings. Git decorations, inline blame, the Outline and the change gutter skip remote files, and sticky scroll
 works from the buffer's text alone; see [remote.md](remote.md).
+
+## Known limits of the restore
+
+A client's window is restored from `server-after-make-frame-hook`. Two rare paths do not reach it, so that first
+window opens without the saved layout (Restore Workbench Layout in the palette brings it back):
+
+- a graphical frame made by `make-frame-on-display` from a terminal client (the hook runs for frames the server
+  makes for a client, not for this one);
+- a client whose window opens while isearch or a minibuffer is active, or whose `server-execute` signals an error
+  (the server skips the hook then).
+
+Both were left as they are on purpose: moving the restore off the hook risks the restore of the ordinary client
+window, which works. They will get another restore entry point if one is seen in use.

@@ -405,7 +405,10 @@ in a window that asked for no file, which would replace one restored file."
   "A client's new window (`server-after-make-frame-hook', which passes no argument: the selected frame):
 if it is graphical and no other graphical window exists — a daemon's first, or one that kept running
 after its last window closed — bring the saved workbench back into it.  It runs after the server showed
-*scratch* (no file asked for) and before it shows a file asked for.  A frame already restored is left alone."
+*scratch* (no file asked for) and before it shows a file asked for.  A frame already restored is left alone.
+Known limits (accepted; reopen when seen): this hook does not run for a graphical frame made by
+`make-frame-on-display' from a terminal client, nor while isearch or a minibuffer is active or when the
+server's `server-execute' signals an error — that window gets no restore."
   (let ((frame (or frame (selected-frame))))
     (when (and drgnx-persist-restore-on-start (frame-live-p frame) (display-graphic-p frame)
                (not (seq-some (lambda (f) (and (not (eq f frame)) (not (frame-parent f)) (display-graphic-p f)))
