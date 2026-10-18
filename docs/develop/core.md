@@ -694,7 +694,19 @@ the selected window unless `:select` is given. `drgnx-pane-backend` (`areas`) sa
 a `left` kind to `drgnx-wb-define-section`, a `bottom` or `right` kind to `drgnx-wb-define-tab` (areas `panel` and
 `right`), an `editor` kind (its `:buffer` a name) to a `drgnx-wb-place` rule, and `:fill` to
 `drgnx-layouts-define-pane`. A backend is an entry in `drgnx-pane--backends` (the functions for `:define`, `:show`,
-`:hide`, `:window`, `:focus`); the tiled grid registers `grid` there. Switching backends and replaying the
+`:hide`, `:window`, `:focus`, `:resize`, `:move`, `:stack`); the tiled grid registers `grid` there.
+
+**The write API.** `show`, `hide`, `focus` and `toggle` take `:by`, and three more operations complete them:
+`(drgnx-pane-resize KIND PX :horizontal :by)`, `(drgnx-pane-move KIND TARGET ZONE :by)` and
+`(drgnx-pane-stack KIND ONTO :by)`. Each runs inside `drgnx-state-with-write` (below): `:by` says who asked —
+`user`, `auto`, `layout`, `restore`, `teardown` or `other`; nil is `user` inside a command and `auto` outside.
+`resize` gives the dock its width (left kinds), the panel its height (bottom) or the right dock its width (right),
+pixelwise as the areas do when they are made, keeps the windows' preserved size at the new one, and notes the size
+as `:sizes` intent; it returns the kind's window, or nil when the kind does not show (the size is used at the next
+show) or is an editor kind (no size of its own). The `areas` backend has no `:move` or `:stack`: called from Lisp
+they signal `user-error` "Moving panes needs the grid" (B7 implements them; their commands are not offered before).
+`hide` notes the size the pane had `:by auto`, whoever asked, and `show` of a bottom or right kind notes it as its
+area's `:front`. Switching backends and replaying the
 defined kinds into the new one is the grid's job (B3), not done here. Test: `test/unit/wb-panes-test.el`.
 
 What the `areas` backend does with the edges:
@@ -796,6 +808,38 @@ store's tables, `drgnx-signal--subscribers`, `--state`, `--posted`, `--timer`, `
 out. A task that adds store or bus state adds its variable there. `(drgnx-test-use-editor WINDOW)` makes WINDOW
 the MRU editor through `drgnx-state-use-editor` (and, until the bus reads the store, sets
 `drgnx-signal--editor-window`). Tests never set bus internals by hand. Test: `test/unit/wb-state-test.el`.
+
+### Intent (`wb/drgnx-state-intent.el`)
+
+The snapshot says what is on screen; **intent** says what was asked, and by whom, per frame: the size a pane comes
+back at, an area's front tab, the sidebar's view. It is readable data only (symbols and numbers). Until the grid
+(B3) it has no storage of its own: the accessors read and write today's frame parameters, so nothing is stored
+twice and the saved workbench (`workbench.eld`) does not change.
+
+| `(drgnx-state-intent FRAME KEY SUBKEY)` | Answer | Home until B3 |
+|---|---|---|
+| `:sizes` `left` | `(:px N :by BY)` | `drgnx-wb-dock-px` |
+| `:sizes` `bottom` (also `panel`) | `(:px N :by BY)` | `drgnx-wb-panel-px` |
+| `:sizes` `right` | `(:px N :by BY)` | `drgnx-wb-right-px` |
+| `:front` AREA | the tab in front | the area's `:tab` in `drgnx-wb-areas` |
+| `:view` | the sidebar's view, also one no module defines now | `drgnx-wb-view` |
+| `:layout`, `:previous`, `:zen-return` | read-only until B10 | `drgnx-layouts-current`, `-previous`, `-zen-return` |
+| `:places`, `:arrangement` | nil until the grid | — |
+
+Without SUBKEY, `:sizes` and `:front` answer an alist of every home or area. FRAME nil is the selected frame.
+
+`(drgnx-state-note-intent FRAME KEY SUBKEY VALUE :by BY)` writes VALUE to the home (a size as N or `(:px N)`) and
+records BY in the frame parameter `drgnx-intent-by`, an alist `((KEY . SUBKEY) . BY)`, newest first, at most 64
+entries (the oldest goes); entries of kinds or areas no module defines now are kept. BY nil is the running write's,
+else `drgnx-state-default-by`. It returns non-nil when it wrote. **A size you chose wins:** a `user` size is replaced
+only by `user` or `restore` — not by `auto` (a hidden panel that a popup squeezed), `layout`, `teardown` or `other`.
+A `restore` replaces anything and counts as `user` afterwards (a size restored after a restart is still yours). The
+front tab and the view are what shows until the grid, so every write of them lands and only records who asked.
+`:layout` and the others answer nil (not written). The writers today: `drgnx-pane-resize`; hiding the dock
+(`drgnx-wb-hide-sidebar`, a view swap), the panel or the right dock (`drgnx-wb-area-hide`) notes the size `:by auto`;
+`drgnx-wb-show-view` notes `:view`; a pane kind shown in an area notes `:front`; a layout notes its sizes `:by
+layout`. B3 folds the homes and `drgnx-intent-by` into one frame parameter, `drgnx-intent`.
+Test: `test/unit/wb-state-intent-test.el`.
 
 ## Tests
 

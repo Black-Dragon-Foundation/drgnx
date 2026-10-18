@@ -278,7 +278,10 @@ The **panel** (Toggle Panel: ``C-` `` · palette · `SPC j`) sits under the edit
 Right Dock: `C-M-b` · palette · `SPC R`) runs the frame's full height, like the left one. Each is one window with a
 **tab row** at the top (click a tab to show it). Showing a buffer there never takes focus (Focus Panel does), and
 switching tabs swaps the buffer *in place*: the window stays, nothing around it moves, and each tab comes back
-scrolled where you left it. Both keep their pixel size across hiding and showing. Killing the buffer a tab shows
+scrolled where you left it. Both keep their pixel size across hiding and showing. **The size you chose stays:**
+a size you set for the left dock, the panel or the right dock is the one it comes back at the next time it shows.
+A popup that squeezes the panel, the window manager shrinking the window or a layout applied later does not
+replace it. Killing the buffer a tab shows
 leaves the tab empty — another buffer never slips into the panel. `C-x 1` keeps the docks and the panel; `C-x 0` in
 the panel hides it (size and tabs kept), and so does `q` in a panel buffer that binds it to quit (Help, Info, a
 compilation, …): the panel hides and focus goes back to the editor, as Escape does in VS Code. The echo
