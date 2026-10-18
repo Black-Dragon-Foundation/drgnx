@@ -260,6 +260,25 @@ said and `drgnx-config-changed-functions` back afterwards. `(drgnx-test-config-p
 replaces a file as an editor would (a new inode, so its stamp changes), and `(drgnx-test-config-text NAME &optional
 ROOT)` reads it.
 
+**The packages' files** (`core/drgnx-pkg.el`, `core/drgnx-pkg-activate.el`; [packages.md](../guide/packages.md)):
+- `packages` (`packages.eld`) is `:reload start`, read again (`drgnx-config-reread`) by `drgnx-pkg-manifest`,
+  `-archives` and `-archive-priorities`, so each sync sees the file as it is. `lock` (`drgnx.lock.eld`) reloads on
+  change. Neither has a last good copy: a mistake in either is a `drgnx-pkg-error` ("FILE has a mistake at line L:
+  TEXT"), a sync stops before it changes anything, and nothing replaces the file. The lock's `:packages` entries are
+  checked by `drgnx-pkg--lock-entry-p`. The schema is wider than the first sketch, so files that worked still do: a
+  Git `:url` and an archive may be a path or an ssh address (strings), a priority any number, and `:rev` and
+  `:lisp-dir` are known keys.
+- The lock is written by `drgnx-config-update 'lock`: `drgnx-pkg-write-lock` replaces `:packages` (and takes out
+  `:from-shipped`), so a comment or a key of the user's in the file stays. A sync checks `drgnx-config-ensure-writable`
+  up front, so a lock a newer drgnx wrote stops it before the install. Rollback keeps a lock it cannot read or write
+  in a `.bak-` copy before it puts the generation's lock back. The lock drgnx ships (`etc/drgnx.lock.eld`) is not a
+  config file: `drgnx lock --ship` writes it with `drgnx-file-write`, and `drgnx-pkg--read-lock-file` checks it
+  against the lock's schema.
+- `generation.eld` is written with `drgnx-file-write` and `generations/current` with `drgnx-file-write-text`.
+  `packages-wanted.eld` (a bare list of names, a state file) is changed with `drgnx-file-update … :on-unreadable
+  'backup :timeout 0` from `drgnx-pkg--record-want`, which runs at startup: it never prompts or waits, skips a file
+  another process holds (the next startup records the want), and turns an error into one message.
+
 **The reference and the doctor.** `docs/reference/config.md` is generated from the definitions: for each, sorted by
 name, its file, folder, format, reload rule, what happens on a mistake, its `:doc` and a table of its keys from
 `drgnx-schema-describe`. A test fails when it is out of date, and prints the command. After a change to a definition

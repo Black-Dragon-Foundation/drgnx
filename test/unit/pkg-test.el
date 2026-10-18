@@ -697,7 +697,7 @@
   ;; killed run is removed by the next sync.
   (drgnx-pkg-test--with root
     (let ((user (drgnx-user-dir)) (cache (drgnx-package-cache-dir)))
-      (cl-letf (((symbol-function 'pp) (lambda (&rest _) (error "Disk full"))))
+      (cl-letf (((symbol-function 'pp-to-string) (lambda (&rest _) (error "Disk full"))))
         (should-error (drgnx-pkg-write-lock '((aa :version "1.0")))))
       (should-not (file-exists-p (drgnx-pkg-lock-file)))
       (should-not (directory-files user nil "tmp"))
