@@ -99,4 +99,35 @@
         (let ((id (plist-get (car (read-from-string (car sessions))) :id)))
           (should (drgnx-hub-agents-test--wait (lambda () (eq (plist-get (drgnx-hub-agents-test--snapshot id) :status) 'idle)))))))))
 
+(ert-deftest drgnx-hub-agents/sessions-resume-in-a-new-hub ()
+  ;; a hub's sessions are its children and end with it: the next hub resumes each (ACP session/load) under the same
+  ;; id, idle, with its history; one whose agent cannot load sessions ends and is not tried again
+  (drgnx-hub-agents-test--with
+    (let* ((state (concat root "mock-state"))
+           (mock (cdr (assoc "mock" drgnx-agents-profiles)))
+           (drgnx-agents-profiles
+            (list (cons "mock" (plist-put (copy-sequence mock) :env (list (concat "MOCK_ACP_STATE=" state))))
+                  (cons "mock-noload" (plist-put (copy-sequence mock) :env (list (concat "MOCK_ACP_STATE=" state) "MOCK_ACP_NO_LOAD=1")))))
+           (file (expand-file-name "hub/sessions.eld" (drgnx-state-dir)))
+           (saved (lambda () (and (file-exists-p file) (with-temp-buffer (insert-file-contents file) (read (current-buffer)))))))
+      (make-directory state t)
+      (let* ((id (drgnx-hub-agents-test--start))
+             (gone (plist-get (drgnx-hub-call-sync "agents/start" (list :profile "mock-noload" :cwd temporary-file-directory)) :id)))
+        (drgnx-hub-call-sync "agents/send" (list :id id :text "remember me"))
+        (should (drgnx-hub-agents-test--wait (lambda () (string-search "You said: remember me" (drgnx-hub-agents-test--text id)))))
+        (should (drgnx-hub-agents-test--wait (lambda () (= (length (funcall saved)) 2))))
+        ;; the hub ends (its sessions with it); another starts
+        (drgnx-hub-disconnect)
+        (drgnx-hub-stop)
+        (dolist (s drgnx-agents--sessions) (drgnx-agents-kill s))
+        (setq drgnx-agents--sessions nil)
+        (drgnx-hub-serve (drgnx-hub-socket))
+        (should (drgnx-hub-agents-test--wait (lambda () (eq (plist-get (drgnx-hub-agents-test--snapshot id) :status) 'idle))))
+        (should (string-search "You said: remember me" (drgnx-hub-agents-test--text id)))
+        (should (drgnx-hub-agents-test--wait (lambda () (eq (plist-get (drgnx-hub-agents-test--snapshot gone) :status) 'exited))))
+        (should (drgnx-hub-agents-test--wait (lambda () (equal (mapcar (lambda (e) (plist-get e :id)) (funcall saved)) (list id)))))
+        ;; and it works on
+        (drgnx-hub-call-sync "agents/send" (list :id id :text "still here"))
+        (should (drgnx-hub-agents-test--wait (lambda () (string-search "You said: still here" (drgnx-hub-agents-test--text id)))))))))
+
 ;;; hub-agents-test.el ends here

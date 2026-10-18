@@ -96,6 +96,8 @@ answer a ping.  A lock whose process is gone is taken over.  Signals when anothe
 
 (defun drgnx-hub--registrations-file () (expand-file-name "hub/registrations.eld" (drgnx-state-dir)))
 
+(defun drgnx-hub--sessions-file () (expand-file-name "hub/sessions.eld" (drgnx-state-dir)))
+
 ;;;; JSON
 
 (defun drgnx-hub--jsonable (v)
@@ -147,19 +149,22 @@ With LIMIT, a line longer than LIMIT closes CONN: nothing after it is read."
 
 ;;;; The hub side
 
-(defun drgnx-hub--save-registrations ()
-  "Keep the registrations (mode 0600): written to a temporary file beside the old one, then renamed over it, so a hub
+(defun drgnx-hub--write-private (file value)
+  "Keep VALUE in FILE (mode 0600): written to a temporary file beside the old one, then renamed over it, so a hub
 that dies mid-write leaves the old file whole."
-  (let* ((file (drgnx-hub--registrations-file))
-         (tmp (progn (make-directory (file-name-directory file) t)
-                     (with-file-modes #o600 (make-temp-file (concat file "-"))))))
+  (let ((tmp (progn (make-directory (file-name-directory file) t)
+                    (with-file-modes #o600 (make-temp-file (concat file "-"))))))
     (unwind-protect
         (with-temp-buffer
-          (let ((print-length nil) (print-level nil)) (prin1 (drgnx-gateway-registrations) (current-buffer)))
+          (let ((print-length nil) (print-level nil)) (prin1 value (current-buffer)))
           (let ((coding-system-for-write 'utf-8-unix)) (write-region nil nil tmp nil 'silent))
           (set-file-modes tmp #o600)
           (rename-file tmp file t))
       (when (file-exists-p tmp) (delete-file tmp)))))
+
+(defun drgnx-hub--save-registrations ()
+  "Keep the registrations (`drgnx-hub--write-private')."
+  (drgnx-hub--write-private (drgnx-hub--registrations-file) (drgnx-gateway-registrations)))
 
 (defun drgnx-hub--load-registrations ()
   "Take back the registrations a previous hub kept; a file that cannot be read is logged (its agents register again)."
@@ -312,8 +317,41 @@ KEY…) :owner PID), keys held in memory; OWNER, the pid of the Emacs whose agen
   "Session id → how many times its changes went out: events carry it, `agents/get' answers it, so an editor that
 fetched a transcript keeps only the events after it.")
 
+(defvar drgnx-hub--saved-sessions nil "What `drgnx-hub--save-sessions' last wrote (or the hub read at start).")
+
+(defun drgnx-hub--resumable ()
+  "The sessions a next hub resumes, oldest first: (:id :profile :cwd :acp-id :task) of each live one the agent made.
+A job's agents are not among them: a job frees the task of an agent the hub took with it, and starts it again."
+  (delq nil (mapcar (lambda (s) (and (drgnx-agent-session-acp-id s) (not (drgnx-agent-session-job s))
+                                     (list :id (drgnx-agent-session-id s) :profile (drgnx-agent-session-profile s)
+                                           :cwd (drgnx-agent-session-cwd s) :acp-id (drgnx-agent-session-acp-id s)
+                                           :task (drgnx-agent-session-task s))))
+                    (reverse (drgnx-hub--live-sessions)))))
+
+(defun drgnx-hub--save-sessions ()
+  "Keep `drgnx-hub--resumable' in hub/sessions.eld when it changed (a session started, ended, or its agent made it)."
+  (let ((now (drgnx-hub--resumable)))
+    (unless (equal now drgnx-hub--saved-sessions)
+      (drgnx-hub--write-private (drgnx-hub--sessions-file) now)
+      (setq drgnx-hub--saved-sessions now))))
+
+(defun drgnx-hub--resume-sessions ()
+  "Resume the sessions the previous hub kept (`drgnx-agents-take-over': ACP session/load), each under its own id; one
+whose agent cannot load it ends (and so leaves the file)."
+  (let* ((file (drgnx-hub--sessions-file))
+         (saved (and (file-readable-p file)
+                     (condition-case err (with-temp-buffer (insert-file-contents file) (read (current-buffer)))
+                       (error (message "drgnx hub: %s cannot be read (%s): no session resumed" file (error-message-string err))
+                              nil)))))
+    (setq drgnx-hub--saved-sessions saved)
+    (dolist (e (and (listp saved) saved))
+      (with-demoted-errors "drgnx hub: a session not resumed: %S"
+        (drgnx-agents-take-over (plist-get e :profile) (plist-get e :cwd) (plist-get e :acp-id) (plist-get e :task)
+                                (plist-get e :id))))))
+
 (defun drgnx-hub--agent-changed (s)
   "Session S changed: tell subscribers soon (one message per burst of changes)."
+  (with-demoted-errors "drgnx hub: sessions not kept: %S" (drgnx-hub--save-sessions))
   (when (drgnx-agents-free-p s) (run-at-time 0.1 nil #'drgnx-hub--deliver))   ; free again: what waited goes now
   (let ((id (drgnx-agent-session-id s)))
     (unless (gethash id drgnx-hub--flush-timers)
@@ -455,7 +493,10 @@ Signals an error when a hub already serves there."
                               :coding 'utf-8-unix
                               :filter (lambda (conn chunk)
                                         (drgnx-hub--lines conn chunk (lambda (j) (drgnx-hub--serve-request conn j))
-                                                          (lambda (line) (drgnx-hub--malformed conn line)) drgnx-hub--max-line)))))
+                                                          (lambda (line) (drgnx-hub--malformed conn line)) drgnx-hub--max-line))))
+  ;; serving now: a resumed agent registers with this hub's gateway directly
+  (drgnx-hub--resume-sessions)
+  drgnx-hub--server)
 
 (defun drgnx-hub-stop ()
   "Stop being the hub (the socket closed and removed, the gateway stopped, its registrations dropped from memory)."
@@ -481,6 +522,7 @@ Signals an error when a hub already serves there."
   (setq drgnx-hub--tick-timer nil)
   (clrhash drgnx-hub--told)
   (clrhash drgnx-hub--sent)
+  (setq drgnx-hub--saved-sessions nil)
   (drgnx-gateway-stop)
   (clrhash drgnx-gateway--registrations))
 

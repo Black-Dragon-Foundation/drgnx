@@ -396,22 +396,24 @@ the commits each turn makes are recorded for it.  JOB: the coordination job it b
                                      (drgnx-agents--next s))))))))
     s))
 
-(defun drgnx-agents-take-over (profile cwd session-id &optional task)
+(defun drgnx-agents-take-over (profile cwd session-id &optional task id)
   "Resume the agent session SESSION-ID (from another client, or one that ended) with PROFILE in CWD:
-its history is replayed into the transcript.  Needs an agent that can load sessions.  TASK as in
-`drgnx-agents-start'."
+its history is replayed into the transcript.  Needs an agent that can load sessions: when it cannot, the session
+ends and says why.  TASK as in `drgnx-agents-start'; ID, the session's own id when it keeps one (a hub resuming its
+sessions)."
   (let ((s (drgnx-agents--new profile cwd task)))
+    (when id (setf (drgnx-agent-session-id s) id))
     (setf (drgnx-agent-session-acp-id s) session-id)
     (drgnx-agents--start-safely
      s (lambda ()
          (drgnx-agents--connect
           s (lambda ()
               (if (memq (plist-get (drgnx-agent-session-capabilities s) :loadSession) '(nil :false))
-                  (drgnx-agents--failed s "this agent cannot resume sessions (no session/load)")
+                  (progn (drgnx-agents--failed s "this agent cannot resume sessions (no session/load)") (drgnx-agents-kill s))
                 (drgnx-acp-request (drgnx-agent-session-conn s) "session/load"
                                    (list :sessionId session-id :cwd (drgnx-agent-session-cwd s) :mcpServers (drgnx-agents--mcp-servers s))
                                    (lambda (r)
-                                     (if (cdr r) (drgnx-agents--failed s (cdr r))
+                                     (if (cdr r) (progn (drgnx-agents--failed s (cdr r)) (drgnx-agents-kill s))
                                        (setf (drgnx-agent-session-status s) 'idle)
                                        (drgnx-agents--changed s)
                                        (drgnx-agents--next s)))))))))

@@ -43,7 +43,7 @@ running turn — it ends within a second, pending permission requests are answer
 rejected, and queued messages wait (Deliver Queued Messages, `C-c C-d`, sends them; Edit Queued Message changes or
 removes one before it is sent). If the agent answers the cancel late, its last words are dropped and nothing new
 is sent until that answer came — never two turns at once. Answer Agent picks an option for a pending permission. Take Over Agent Session resumes a session by its id
-(the agent replays it), when the agent can load sessions. The **context** column shows how full the agent's
+(the agent replays it), when the agent can load sessions (otherwise the new session ends and says why). The **context** column shows how full the agent's
 context is (from the agent's `usage_update`, or usage in its answer). The **Last** column shows how long ago the
 agent last did something (`30s`, `5m`, `2h`, `3d`), as this Emacs saw it. While the list is on screen, it is redrawn every 30
 seconds so the ages stay current, and the cursor stays on its row. When the list is not shown, nothing runs. The Agent layout ([layouts.md](layouts.md)) puts this list on the right and the chat of the agent that
@@ -111,7 +111,10 @@ you close Emacs, and the next Emacs shows it again in the Agents tab — its who
 requests and edits to review — and drives it the same way (send, Stop, answer, review). Emacs mirrors the hub's
 sessions when it is idle whenever a hub is running (and looks again every 30 s); it never starts a hub for that.
 Durable sessions live as long as the hub: if the hub ends (`drgnx hub stop`, a crash), its sessions end too, and the
-Agents tab shows them as exited.
+Agents tab shows them as exited. The next hub (the next durable session, an agent that needs the gateway, or `drgnx
+hub start`) resumes them when their agent can load sessions: each comes back idle with its history,
+though a turn that was running when the hub ended is lost; a job's agents are not resumed (the job starts their
+tasks again).
 
 ## What agents get
 
