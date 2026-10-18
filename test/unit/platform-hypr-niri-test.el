@@ -423,5 +423,18 @@ DIR/NAME with SWAP-FROM replaced by that title (what the window manager would re
                                           (should (equal (frame-parameter frame 'title) "before")))))
                                   (delete-directory empty t))))
 
+(drgnx-platform-test--deftest drgnx-platform-wm/niri-says-which-monitor-from-emacs-own-geometry ()
+                              ;; Next and Previous need the monitor the window is on: Emacs' own answer (niri reports
+                              ;; the output by geometry; pgtk's monitor name is not the output's)
+                              (drgnx-platform-test--with-frame 'pgtk '("NIRI_SOCKET=/n" "WAYLAND_DISPLAY=w")
+                                (cl-letf (((symbol-function 'frame-monitor-attributes)
+                                           (lambda (&optional _) '((name . "Winit") (geometry 1280 0 1280 800) (workarea 1280 0 1280 800)))))
+                                  (let (fm)
+                                    (should (eq 'niri (drgnx-platform-wm frame)))
+                                    (drgnx-platform-frame-monitor frame (lambda (m) (setq fm (or m 'none))))
+                                    (should (drgnx-platform-test--await (lambda () fm)))
+                                    (should (equal (plist-get fm :geometry) '(1280 0 1280 800)))
+                                    (should (equal (plist-get fm :name) ""))))))
+
 (provide 'platform-hypr-niri-test)
 ;;; platform-hypr-niri-test.el ends here

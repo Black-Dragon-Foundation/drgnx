@@ -200,8 +200,9 @@ plain negative integer counts from the right or bottom edge. macOS native fullsc
 macOS tier to check), `gnome` (explains; the doctor asks Mutter's
 `DisplayConfig` for the monitors, within 1 s), `other-wayland` (names the compositor, tells the user to use its
 own key), `tty` and `none`. `sway`, `i3`, `hyprland`, `niri` and `kwin` are declared (detection, title, tool,
-version command) and have monitor and move functions, described below; `hyprland`, `niri` and `kwin` are marked
-`reported`, because they are tested on recorded or documented replies and not yet run on the real compositor.
+version command) and have monitor and move functions, described below; `hyprland` and `niri` are marked
+`reported`, because their moves are tested on recorded or documented replies and not yet run on the real compositor
+with two outputs; `kwin` is `verified` (run headless with two outputs in the window managers' container tier).
 
 **sway and i3** share one implementation over `swaymsg` / `i3-msg` (section "sway and i3" of
 `drgnx-platform.el`). Monitors come from `-t get_outputs` (active outputs only; the output `name` is what the move
@@ -219,9 +220,12 @@ put back whatever happens. All calls of one operation share its deadline (the se
 the core's watchdog never fires first. Messages: "sway: swaymsg is not installed, so drgnx cannot move windows",
 "sway did not answer within 2 s; the window was not moved", or sway's own `error` text.
 
-**Hyprland and niri** (status `reported`: written from the sources and documented replies, not yet run on the real
-compositor). Monitors come from `hyprctl -j monitors` (mode size divided by the scale, so the geometry is the
-logical one Emacs sees) and `niri msg --json outputs`. A command move acts on the focused window only when its pid
+**Hyprland and niri** (status `reported`: written from the sources and documented replies; niri runs in the window
+managers' container tier, nested in a headless sway with its one output, where its output list, a restore's placement,
+a command's move to that output and the refusal of an unknown output are checked — the move between two outputs is
+not). Monitors come from `hyprctl -j monitors` (mode size divided by the scale, so the geometry is the
+logical one Emacs sees) and `niri msg --json outputs`. The monitor a frame is on is Emacs' own answer for niri
+(`frame-monitor-attributes`, matched by geometry). A command move acts on the focused window only when its pid
 is Emacs' and the frame has focus (`frame-focus-state`); otherwise `(:error "drgnx moves only its own window while
 it has focus: ...")`. A restore sets the frame's `title` to `drgnx [placing PID-N]`, looks the window up by Emacs'
 pid and that title at 0.1, 0.3, 0.7, 1.5 and 3 s, moves it without taking focus and puts the title back in every
@@ -236,20 +240,29 @@ cursor to the target output on a restore too; that cannot be turned off). A hypr
 arguments at spaces and commas, so a monitor name with whitespace, `,` or `;` is refused there; if the silent move fails after
 the window was focused, the window that had the focus gets it back (best effort, a call of its own).
 
-**KWin** (Plasma 6, status `reported`) has no tool, so the adapter loads a JavaScript file into KWin through its
-scripting D-Bus API (`org.kde.KWin` `/Scripting` `loadScript`, then `run` on `/Scripting/Script<id>`) and the script
+**KWin** (Plasma 6, status `verified`) has no tool, so the adapter loads a JavaScript file into KWin through its
+scripting D-Bus API (`org.kde.KWin` `/Scripting` `loadScript`, then `start`, which runs the loaded scripts not running yet — not `run` on
+`/Scripting/Script<id>`: KWin numbers a script by how many are loaded, so after an unload two calls at once can
+share an id, and `run` would run the other call's script) and the script
 answers with `callDBus` to a `Reply(s)` method Emacs registers for the length of the call. Only Emacs' own
 `dbus.el` is used (no `qdbus`), and only `dbus-call-method-asynchronously` with the call's deadline as `:timeout`,
 so restore may use it. The method lives under Emacs' unique bus name at an object path of its own per call:
 `dbus-register-service` and `dbus-unregister-service` wait for the bus (RequestName, ReleaseName) and a well-known
 name would make two calls share a reply. The script, the object and the temporary file (mode 0600) are removed on
-success, error and deadline alike. `:monitors` lists `workspace.screens`; `:move` (the command) moves the active
-window and only if it is Emacs' (by pid); `:place` (restore) finds Emacs' window by pid and the frame's title (else
-the only normal window of that pid). Without D-Bus support or a session bus, `:can-move` says so with a fix. It
-has no `:frame-monitor` yet, so the monitor a frame is on is unknown there. A D-Bus error reply (KWin not running) ends
+success, error and deadline alike. `:monitors` lists `workspace.screens`; `:move` (the command) refuses a frame without focus,
+as every adapter does, and moves KWin's active window only if it is Emacs' (by pid) and this very frame (its caption:
+the frame's title, else its name), so never another frame of this Emacs; `:place` (restore) finds Emacs' window by
+pid and the frame's title (else the only normal window of that pid). KWin places a new window when it first shows
+it, which can come after a restore's move: so `:place` checks Emacs' own answer at 0.1, 0.3, 0.7, 1.5 and 3 s and
+moves again while the frame is elsewhere, within the restore deadline ("KWin keeps the window on another screen; it
+was not placed" when it never gets there). Without D-Bus support or a session bus, `:can-move` says so with a fix. The
+monitor a frame is on is Emacs' own answer (`frame-monitor-attributes`, matched to a screen by geometry): Next and
+Previous need it, and so does the monitor a restore saves. `:timeout` goes right after the handler in every
+`dbus-call-method-asynchronously`: dbus.el sends a `:timeout` placed after the method's arguments as one more
+argument, and the call fails ("Wrong type argument: D-Bus, :timeout"). A D-Bus error reply (KWin not running) ends
 the call at once with that error; a silent KWin ends it at the deadline. KWin has no window id Emacs can read, so
-`:place` cannot tell apart two frames of one Emacs with the same title: it may move the wrong one. Not run on a real
-Plasma session.
+`:place` cannot tell apart two frames of one Emacs with the same title: it may move the wrong one. Run against
+`kwin_wayland --virtual` with two outputs (`test/live/drgnx-wm-other-test.el`); not run on a full Plasma session.
 
 **Another compositor** (river, Wayfire, labwc, Cosmic, ...): call `drgnx-platform-define-adapter` from your
 config. A new name goes before `x11` (so an adapter for an X window manager such as bspwm, awesome or xmonad

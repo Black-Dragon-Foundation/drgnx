@@ -54,8 +54,11 @@ temporary directory is private to the test."
                    ((symbol-function 'dbus-call-method-asynchronously)
                     (lambda (bus service path interface method handler &rest args)
                       (should (eq bus :session))
-                      (should (memq :timeout args))
-                      (setq args (cl-loop for (a . _rest) on args until (eq a :timeout) collect a))
+                      ;; dbus.el takes `:timeout' only right after the handler: anywhere else it is marshalled as a
+                      ;; method argument and the call fails ("Wrong type argument: D-Bus, :timeout", seen on KWin)
+                      (should (eq (car args) :timeout))
+                      (should (natnump (cadr args)))
+                      (setq args (cddr args))
                       (setq serial (1+ serial))
                       (setq drgnx-platform-kwin-test--calls
                             (append drgnx-platform-kwin-test--calls (list (list service path method args serial))))
@@ -76,8 +79,12 @@ temporary directory is private to the test."
                                 (drgnx-platform-kwin-test--held-load
                                  (setq drgnx-platform-kwin-test--held-load handler))
                                 (handler (run-at-time 0 nil handler 7))))
-                         ((equal method "run")
-                          (should (equal path "/Scripting/Script7"))
+                         ;; `start' runs every loaded script that is not running yet.  Not `run' on
+                         ;; /Scripting/Script<id>: KWin numbers a script by the count of loaded ones, so after an
+                         ;; unload two loaded scripts can share an id and one path (seen on KWin 6.7.5), and `run'
+                         ;; then runs the other call's script
+                         ((equal method "start")
+                          (should (equal path "/Scripting"))
                           (when-let* ((json (and answer (funcall answer drgnx-platform-kwin-test--script))))
                             ;; the script calls back into Emacs at the registered object
                             (run-at-time 0 nil
@@ -135,7 +142,7 @@ temporary directory is private to the test."
                                   ;; the script that ran is the screens script, sent to Emacs' own bus name at a path of this call
                                   (should (string-match-p "workspace\\.screens" drgnx-platform-kwin-test--script))
                                   (should (string-match-p (regexp-quote "\":1.99\"") drgnx-platform-kwin-test--script))
-                                  (should (equal (drgnx-platform-kwin-test--methods) '("loadScript" "run" "unloadScript"))))))
+                                  (should (equal (drgnx-platform-kwin-test--methods) '("loadScript" "start" "unloadScript"))))))
 
 (drgnx-platform-test--deftest drgnx-platform-kwin/the-public-monitors-are-numbered ()
                               (drgnx-platform-kwin-test--with-kwin
@@ -147,28 +154,52 @@ temporary directory is private to the test."
 
 ;;;; The command moves only Emacs' active window
 
+(defmacro drgnx-platform-kwin-test--focused (focus &rest body)
+  "BODY with the frame's focus state FOCUS and its caption (`name') \"drgnx - aux\"."
+  (declare (indent 1))
+  `(let ((orig (symbol-function 'frame-parameter)))
+     (cl-letf (((symbol-function 'frame-focus-state) (lambda (&rest _) ,focus))
+               ((symbol-function 'frame-parameter)
+                (lambda (f p) (if (eq p 'name) "drgnx - aux" (funcall orig f p)))))
+       ,@body)))
+
+(drgnx-platform-test--deftest drgnx-platform-kwin/the-command-refuses-a-frame-without-focus ()
+                              ;; as every adapter: KWin's active window may be another frame of this Emacs (the main one)
+                              (drgnx-platform-kwin-test--with-kwin (lambda (_s) "{\"ok\":true}")
+                                (drgnx-platform-kwin-test--focused nil
+                                  (let ((r (drgnx-platform-kwin-test--ask
+                                            (lambda (cb) (drgnx-platform-kwin--move (drgnx-platform-ctx nil 2.0)
+                                                                                    '(:name "Virtual-1" :geometry (1280 0 1280 800)) cb)))))
+                                    (should (equal r (list :error drgnx-platform-wm--hn-not-focused)))
+                                    (should-not drgnx-platform-kwin-test--calls)))))
+
 (drgnx-platform-test--deftest drgnx-platform-kwin/the-command-moves-only-emacs-active-window ()
-                              (let ((monitor (list :name "Virtual-1" :geometry '(1280 0 1280 800))))
-                                ;; Emacs' window is the active one: the script names Emacs' pid, the active window and sendClientToScreen
-                                (drgnx-platform-kwin-test--with-kwin (lambda (_s) "{\"ok\":true}")
-                                  (let ((r (drgnx-platform-kwin-test--ask
-                                            (lambda (cb) (drgnx-platform-kwin--move (drgnx-platform-ctx nil 2.0) monitor cb)))))
-                                    (should (eq r 'ok))
-                                    (should (string-match-p (format "\\b%d\\b" (emacs-pid)) drgnx-platform-kwin-test--script))
-                                    (should (string-match-p "activeWindow" drgnx-platform-kwin-test--script))
-                                    (should (string-match-p "sendClientToScreen" drgnx-platform-kwin-test--script))
-                                    (should (string-match-p (regexp-quote "\"Virtual-1\"") drgnx-platform-kwin-test--script))
-                                    ;; it does not look windows up by caption
-                                    (should-not (string-match-p "caption ===" drgnx-platform-kwin-test--script))))
-                                ;; another application is active: KWin's script says so, and the answer is (:error ...)
-                                (drgnx-platform-kwin-test--with-kwin
-                                    (lambda (_s) "{\"error\":\"the active window is not this Emacs\"}")
-                                  (let ((r (drgnx-platform-kwin-test--ask
-                                            (lambda (cb) (drgnx-platform-kwin--move (drgnx-platform-ctx nil 2.0) monitor cb)))))
-                                    (should (equal r '(:error "the active window is not this Emacs")))))))
+                              (drgnx-platform-kwin-test--focused t
+                                (let ((monitor (list :name "Virtual-1" :geometry '(1280 0 1280 800))))
+                                  ;; Emacs' window is the active one: the script names Emacs' pid, the active window and sendClientToScreen
+                                  (drgnx-platform-kwin-test--with-kwin (lambda (_s) "{\"ok\":true}")
+                                    (let ((r (drgnx-platform-kwin-test--ask
+                                              (lambda (cb) (drgnx-platform-kwin--move (drgnx-platform-ctx nil 2.0) monitor cb)))))
+                                      (should (eq r 'ok))
+                                      ;; the active window must be this very frame (its caption), not another of this Emacs
+                                      (should (string-match-p (regexp-quote (format "w.caption !== %s" (drgnx-platform-kwin--js-string "drgnx - aux")))
+                                                              drgnx-platform-kwin-test--script))
+                                      (should (string-match-p (format "\\b%d\\b" (emacs-pid)) drgnx-platform-kwin-test--script))
+                                      (should (string-match-p "activeWindow" drgnx-platform-kwin-test--script))
+                                      (should (string-match-p "sendClientToScreen" drgnx-platform-kwin-test--script))
+                                      (should (string-match-p (regexp-quote "\"Virtual-1\"") drgnx-platform-kwin-test--script))
+                                      ;; it does not look windows up in the window list
+                                      (should-not (string-match-p "windowList" drgnx-platform-kwin-test--script))))
+                                  ;; another application is active: KWin's script says so, and the answer is (:error ...)
+                                  (drgnx-platform-kwin-test--with-kwin
+                                      (lambda (_s) "{\"error\":\"the active window is not this Emacs\"}")
+                                    (let ((r (drgnx-platform-kwin-test--ask
+                                              (lambda (cb) (drgnx-platform-kwin--move (drgnx-platform-ctx nil 2.0) monitor cb)))))
+                                      (should (equal r '(:error "the active window is not this Emacs"))))))))
 
 (drgnx-platform-test--deftest drgnx-platform-kwin/the-public-move-reports-ok-or-an-error ()
-                              (cl-letf (((symbol-function 'drgnx-platform-wm) (lambda (&rest _) 'kwin)))
+                              (cl-letf (((symbol-function 'drgnx-platform-wm) (lambda (&rest _) 'kwin))
+                                        ((symbol-function 'frame-focus-state) (lambda (&rest _) t)))
                                 (let ((monitor (list :name "Virtual-1" :geometry '(1280 0 1280 800))))
                                   (drgnx-platform-kwin-test--with-kwin (lambda (_s) "{\"ok\":true}")
                                     (should (eq 'ok (drgnx-platform-kwin-test--ask
@@ -183,15 +214,44 @@ temporary directory is private to the test."
                               (let ((monitor (list :name "Virtual-1" :geometry '(1280 0 1280 800))))
                                 (drgnx-platform-kwin-test--with-kwin (lambda (_s) "{\"ok\":true}")
                                   (cl-letf (((symbol-function 'frame-parameter)
-                                             (lambda (_f p) (and (eq p 'name) "drgnx - workbench"))))
+                                             (lambda (_f p) (and (eq p 'name) "drgnx - workbench")))
+                                            ;; Emacs sees the frame on the target screen after the move
+                                            ((symbol-function 'frame-monitor-attributes)
+                                             (lambda (&optional _) '((geometry 1280 0 1280 800)))))
                                     (let ((r (drgnx-platform-kwin-test--ask
                                               (lambda (cb) (drgnx-platform-kwin--place (drgnx-platform-ctx nil 5.0) monitor cb)))))
-                                      (should (eq r 'ok))))
+                                      (should (eq r 'ok))
+                                      (should (= 1 (seq-count (lambda (m) (equal m "loadScript")) (drgnx-platform-kwin-test--methods))))))
                                   (should (string-match-p (format "\\b%d\\b" (emacs-pid)) drgnx-platform-kwin-test--script))
                                   (should (string-match-p (regexp-quote "\"drgnx - workbench\"") drgnx-platform-kwin-test--script))
                                   (should (string-match-p "windowList" drgnx-platform-kwin-test--script))
                                   (should (string-match-p "sendClientToScreen" drgnx-platform-kwin-test--script))
                                   (should-not (string-match-p "activeWindow" drgnx-platform-kwin-test--script)))))
+
+(drgnx-platform-test--deftest drgnx-platform-kwin/place-moves-again-while-kwin-shows-the-window-elsewhere ()
+                              ;; KWin places a new window when it first shows it, which can come after a move made at once
+                              ;; (seen on KWin 6.7.5: the restored window ended up back on the first screen): the move is made
+                              ;; again until Emacs sees the frame on the target screen, within the one deadline
+                              (let ((monitor (list :name "Virtual-1" :geometry '(1280 0 1280 800))))
+                                (drgnx-platform-kwin-test--with-kwin (lambda (_s) "{\"ok\":true}")
+                                  (cl-letf (((symbol-function 'frame-monitor-attributes)
+                                             (lambda (&optional _)
+                                               (if (>= (seq-count (lambda (m) (equal m "loadScript")) (drgnx-platform-kwin-test--methods)) 2)
+                                                   '((geometry 1280 0 1280 800))
+                                                 '((geometry 0 0 1280 800))))))
+                                    (should (eq 'ok (drgnx-platform-kwin-test--ask
+                                                     (lambda (cb) (drgnx-platform-kwin--place (drgnx-platform-ctx nil 5.0) monitor cb)))))
+                                    (should (= 2 (seq-count (lambda (m) (equal m "loadScript")) (drgnx-platform-kwin-test--methods)))))))
+                              ;; it never gets there: an error once the deadline has passed, never a success
+                              (let ((monitor (list :name "Virtual-1" :geometry '(1280 0 1280 800))))
+                                (drgnx-platform-kwin-test--with-kwin (lambda (_s) "{\"ok\":true}")
+                                  (cl-letf (((symbol-function 'frame-monitor-attributes) (lambda (&optional _) '((geometry 0 0 1280 800)))))
+                                    (let* ((t0 (float-time))
+                                           (r (drgnx-platform-kwin-test--ask
+                                               (lambda (cb) (drgnx-platform-kwin--place (drgnx-platform-ctx nil 1.0) monitor cb)))))
+                                      (should (eq :error (car-safe r)))
+                                      (should (string-match-p "another screen" (cadr r)))
+                                      (should (< (- (float-time) t0) 1.5)))))))
 
 (drgnx-platform-test--deftest drgnx-platform-kwin/the-move-script-selects-by-pid-then-caption ()
                               ;; The search in the script is plain JavaScript; run the same selection in Lisp over the recorded windows to
@@ -222,7 +282,7 @@ temporary directory is private to the test."
                                   (should (eq :error (car r)))
                                   (should (string-match-p "did not answer" (cadr r))))
                                 ;; the script is unloaded (by the name it was loaded with), the object unregistered, the file deleted
-                                (should (equal (drgnx-platform-kwin-test--methods) '("loadScript" "run" "unloadScript")))
+                                (should (equal (drgnx-platform-kwin-test--methods) '("loadScript" "start" "unloadScript")))
                                 (should (equal (nth 3 (nth 2 drgnx-platform-kwin-test--calls))
                                                (list (nth 1 (nth 3 (nth 0 drgnx-platform-kwin-test--calls))))))
                                 (should-not (drgnx-platform-kwin-test--entries))
@@ -237,7 +297,7 @@ temporary directory is private to the test."
                               (drgnx-platform-kwin-test--with-kwin (lambda (_s) "[]")
                                 (should (null (drgnx-platform-kwin-test--ask
                                                (lambda (cb) (drgnx-platform-kwin--monitors (drgnx-platform-ctx nil 2.0) cb)))))
-                                (should (equal (drgnx-platform-kwin-test--methods) '("loadScript" "run" "unloadScript")))
+                                (should (equal (drgnx-platform-kwin-test--methods) '("loadScript" "start" "unloadScript")))
                                 (should-not (drgnx-platform-kwin-test--entries))
                                 (should-not dbus-event-error-functions)
                                 ;; the reply method answers :ignore (an empty reply), not a value
@@ -339,15 +399,30 @@ temporary directory is private to the test."
                                         ((symbol-function 'dbus-get-unique-name) (lambda (&rest _) ":1.99")))
                                 (should (eq t (drgnx-platform-kwin--can-move (drgnx-platform-ctx nil))))))
 
-(drgnx-platform-test--deftest drgnx-platform-kwin/the-adapter-is-declared-reported ()
+(drgnx-platform-test--deftest drgnx-platform-kwin/the-adapter-is-declared-verified ()
                               (let ((spec (drgnx-platform-adapter 'kwin)))
-                                (should (eq 'reported (plist-get spec :status)))
+                                ;; run headless in the window managers' container tier (test/live/drgnx-wm-other-test.el)
+                                (should (eq 'verified (plist-get spec :status)))
+                                (should (eq (plist-get spec :frame-monitor) #'drgnx-platform--emacs-frame-monitor))
                                 (should-not (plist-get spec :tool))
                                 (should (functionp (plist-get spec :monitors)))
                                 (should (functionp (plist-get spec :move)))
                                 (should (functionp (plist-get spec :place)))
                                 ;; detection survived the merge
                                 (should (drgnx-platform-detect (drgnx-platform-test--env '(("WAYLAND_DISPLAY" . "w") ("XDG_CURRENT_DESKTOP" . "KDE"))) 'pgtk))))
+
+(drgnx-platform-test--deftest drgnx-platform-kwin/it-says-which-monitor-from-emacs-own-geometry ()
+                              ;; Next and Previous need the monitor the window is on: Emacs' own answer, no script
+                              (drgnx-platform-test--with-frame 'pgtk '("XDG_CURRENT_DESKTOP=KDE" "WAYLAND_DISPLAY=w")
+                                (cl-letf (((symbol-function 'frame-monitor-attributes)
+                                           (lambda (&optional _) '((name . "") (geometry 1280 0 1280 800) (workarea 1280 0 1280 800))))
+                                          ((symbol-function 'dbus-call-method-asynchronously)
+                                           (lambda (&rest _) (error "no D-Bus call expected"))))
+                                  (let (fm)
+                                    (should (eq 'kwin (drgnx-platform-wm frame)))
+                                    (drgnx-platform-frame-monitor frame (lambda (m) (setq fm (or m 'none))))
+                                    (should (drgnx-platform-test--await (lambda () fm)))
+                                    (should (equal (plist-get fm :geometry) '(1280 0 1280 800)))))))
 
 (provide 'platform-kwin-test)
 ;;; platform-kwin-test.el ends here

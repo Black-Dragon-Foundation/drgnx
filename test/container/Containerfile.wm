@@ -1,0 +1,10 @@
+# The other window managers' tier in a container: KWin (Plasma 6) and niri, both headless without a GPU.
+# Run with --security-opt seccomp=unconfined --security-opt label=disable (bin/drgnx does), as the GUI image.
+# KWin runs with its virtual backend (`kwin_wayland --virtual --output-count N`).  niri has no headless backend: it
+# runs nested (its winit backend) in a headless sway, with exactly one output.  Hyprland is not packaged in
+# Fedora.  kwin_wayland and sway ship with a cap_sys_nice file capability that the container does not grant, so
+# they would not exec; the capability is dropped.  Docs on (tsflags=): as Containerfile.gui.
+FROM registry.fedoraproject.org/fedora:45
+RUN dnf -y --setopt=tsflags= install emacs-pgtk info diffutils findutils git kwin niri sway dbus-daemon mesa-dri-drivers procps-ng util-linux \
+    && dnf clean all
+RUN setcap -r /usr/bin/kwin_wayland && setcap -r /usr/bin/sway

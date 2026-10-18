@@ -44,10 +44,10 @@ wm:resize: layout, never collateral or oscillation).")
                                                       :size (:type "string" :description "WxH, default 1600x900")
                                                       :daemon (:type "boolean" :description "Run Emacs as a daemon: no frame until ui_frame")
                                                       :monitors (:type "integer" :description "Virtual monitors of that size (default 1)")
-                                                      :compositor (:type "string" :enum ["mutter" "sway" "x11" "i3"]
-                                                                         :description "What Emacs runs under: headless mutter (default, or $DRGNX_UI_COMPOSITOR), headless sway, Xvfb (X11 Emacs), Xvfb with i3"))))
+                                                      :compositor (:type "string" :enum ["mutter" "sway" "x11" "i3" "kwin" "niri"]
+                                                                         :description "What Emacs runs under: headless mutter (default, or $DRGNX_UI_COMPOSITOR), headless sway, Xvfb (X11 Emacs), Xvfb with i3, KWin (virtual outputs), niri (nested in sway; one monitor only)"))))
    (list :name "ui_wm"
-         :description "Read only: the session's own window-manager tree (sway or i3 get_tree), as {wm, tree}; {wm: \"none\"} under mutter and bare X11. Never your desktop's WM."
+         :description "Read only: the session's own window-manager tree (sway or i3 get_tree), as {wm, tree}; {wm: \"kwin\"} or {wm: \"niri\"} (no tree), {wm: \"none\"} under mutter and bare X11. Never your desktop's WM."
          :inputSchema (drgnx-ui-mcp--schema drgnx-ui-mcp--session '("session")))
    (list :name "ui_frame"
          :description "Open a frame in a daemon session the way a user does (emacsclient -c); returns exit status, client_ms, visible_ms and the slowest frame hooks."
