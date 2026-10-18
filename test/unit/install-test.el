@@ -289,15 +289,28 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
       (delete-directory tmp t))))
 
 (ert-deftest drgnx-install/no-bash-4-constructs ()
-  ;; macOS ships bash 3.2: it must run there.
+  ;; macOS ships bash 3.2: it must run there.  Each pattern comes with a line it must match, so a mistyped
+  ;; pattern cannot pass for ever (`;;&' is caught by `;&').
   (let ((code (with-temp-buffer
                 (insert-file-contents (expand-file-name "install.sh" drgnx-install-test--root))
                 (goto-char (point-min))
                 (while (re-search-forward "^[ \t]*#.*$\\|[ \t]#[ \t].*$" nil t) (replace-match ""))
                 (buffer-string))))
-    (dolist (re '("\\bmapfile\\b" "\\breadarray\\b" "declare -A" "local -n" "\\${[a-zA-Z_]*,,}" "\\${[a-zA-Z_]*\\^\\^}"
-                  ";&" "|&" "\\[-[0-9]+\\]"))
-      (should-not (string-match-p re code)))))
+    (dolist (case '(("\\bmapfile\\b" . "mapfile -t lines < file")
+                    ("\\breadarray\\b" . "readarray -t lines < file")
+                    ("declare -A" . "declare -A map")
+                    ("local -n" . "local -n ref=other")
+                    ("\\${[a-zA-Z_]*,,}" . "x=${name,,}")
+                    ("\\${[a-zA-Z_]*\\^\\^}" . "x=${name^^}")
+                    (";&" . "  a) cmd ;& b) other ;;")
+                    (";&" . "  a) cmd ;;& b) other ;;")
+                    ("|&" . "cmd |& tee log")
+                    ("\\[-[0-9]+\\]" . "last=${arr[-1]}")
+                    ("\\[\\[ -v" . "if [[ -v name ]]; then")
+                    ("&>>" . "cmd &>> log")
+                    ("\\${[A-Za-z_]+@[QEPAa]}" . "x=${name@Q}")))
+      (should (string-match-p (car case) (cdr case)))
+      (should-not (string-match-p (car case) code)))))
 
 (ert-deftest drgnx-install/never-touches-the-users-emacs-config ()
   ;; The plan names neither ~/.emacs.d nor ~/.config/emacs; a real run (a kept fake Emacs, --source-dir)
