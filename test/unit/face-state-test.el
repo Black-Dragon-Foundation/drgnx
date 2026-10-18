@@ -53,4 +53,14 @@
     (drgnx-face-state-write '(:variant nil :gtk-theme "Adwaita"))
     (should-not (string-match-p "GTK_THEME" (drgnx-pkg-service-unit)))))
 
+(defvar drgnx-face-state-test--evil nil)
+
+(ert-deftest drgnx-face-state/reading-never-evaluates ()
+  (drgnx-face-state-test--with tmp
+    (make-directory (file-name-directory (drgnx-face-state-file)) t)
+    (with-temp-file (drgnx-face-state-file)
+      (insert "(:variant dark :gtk-theme #.(setq drgnx-face-state-test--evil t))"))
+    (should-not (drgnx-face-state-read))
+    (should-not drgnx-face-state-test--evil)))
+
 ;;; face-state-test.el ends here

@@ -10,6 +10,7 @@
 
 ;;; Code:
 (require 'drgnx-paths)
+(defvar read-eval)
 
 (defun drgnx-face-state-file ()
   "The file the face keeps its state in: face.eld in the state directory.
@@ -23,7 +24,7 @@ state directory's \"~\" would ask that host."
   (let ((file (drgnx-face-state-file)))
     (when (file-readable-p file)
       (let ((state (ignore-errors
-                     (with-temp-buffer (insert-file-contents file) (read (current-buffer))))))
+                     (with-temp-buffer (insert-file-contents file) (let ((read-eval nil)) (read (current-buffer)))))))
         (and (proper-list-p state) (zerop (% (length state) 2)) state)))))
 
 (defun drgnx-face-state-write (plist)

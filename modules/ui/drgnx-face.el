@@ -88,7 +88,7 @@ Toggle for this session with the command Toggle Menu Bar."
 (defcustom drgnx-face-title-bar 'dark
   "The window's title bar (graphical frames): `dark' (the system's own title bar in its dark variant while the theme
 is dark, light while it is light), `system' (leave it as the desktop has it), or `drgnx' (drgnx draws it in the top
-line; never under a tiling window manager, and only where drgnx knows the window manager).
+line; only under a window manager known to be a stacking one, never under a tiling one or one drgnx does not know).
 GTK reads its theme variant once, at launch: on GTK without X11 (Wayland), a change here shows after a restart of
 drgnx (`systemctl --user restart drgnx'); on X11 and on a Mac it applies at once."
   :type '(choice (const :tag "System title bar, dark variant" dark) (const :tag "System title bar, untouched" system)
@@ -168,8 +168,10 @@ Turning them off leaves `window-divider-mode' alone unless this module turned it
 
 ;;;; Title bar
 
-(defconst drgnx-face--tiling-wms '(sway i3 hyprland niri)
-  "Window managers under which drgnx never draws the title bar: they tile windows and have none of their own.")
+(defconst drgnx-face--stacking-wms '(gnome kwin)
+  "The window managers known to be stacking (they draw title bars of their own), the only ones under which drgnx
+draws the title bar.  Tiling ones (sway, i3, Hyprland, niri) have none to replace, and `nil', `none', `tty', `x11',
+`other-wayland' or any name not listed are not known: the title bar stays the system's.")
 
 (defvar drgnx-face--wm-noted nil
   "Non-nil once the message that the window manager is unknown (so no drawn title bar) has been shown.")
@@ -187,15 +189,16 @@ background is, or nil when `drgnx-face-title-bar' is `system' (the desktop's own
       (and (memq mode '(dark light)) mode))))
 
 (defun drgnx-face--drawn-wanted-p (frame)
-  "Non-nil when FRAME's title bar is to be drawn by drgnx: the setting is `drgnx', FRAME is graphical and the window
-manager is known and does not tile.  Not known (`drgnx-platform-wm' is missing) says so once and gives nil."
+  "Non-nil when FRAME's title bar is to be drawn by drgnx: the setting is `drgnx', FRAME is graphical and
+`drgnx-platform-wm' names a stacking window manager (`drgnx-face--stacking-wms').  A tiling, unknown or unrecognised
+one, or no `drgnx-platform-wm' at all, says so once and gives nil: the title bar stays the system's, dark."
   (and (eq drgnx-face-title-bar 'drgnx) (drgnx-face--gui-system frame)
-       (if (fboundp 'drgnx-platform-wm)
-           (not (memq (drgnx-platform-wm frame) drgnx-face--tiling-wms))
-         (unless drgnx-face--wm-noted
-           (setq drgnx-face--wm-noted t)
-           (message "drgnx: the window manager is not known here, so the title bar stays the system's, in its dark variant"))
-         nil)))
+       (or (and (fboundp 'drgnx-platform-wm) (memq (drgnx-platform-wm frame) drgnx-face--stacking-wms) t)
+           (progn
+             (unless drgnx-face--wm-noted
+               (setq drgnx-face--wm-noted t)
+               (message "drgnx: the window manager is not known to have title bars of its own, so the title bar stays the system's, in its dark variant"))
+             nil))))
 
 (defvar drgnx-face--drawn (make-hash-table :test #'eq :weakness 'key)
   "Frame -> t for the frames whose title bar drgnx draws.  Weak on the frame, so a closed frame leaves nothing behind.
@@ -218,6 +221,14 @@ so the top line may ask on every redisplay."
          (when (fboundp 'x-delete-window-property) (x-delete-window-property "_GTK_THEME_VARIANT" frame))
          (set-frame-parameter frame 'drgnx-face-gtk-variant nil))))
 
+(defun drgnx-face--ns-variant (frame variant)
+  "On macOS, give FRAME `ns-appearance' VARIANT and a transparent title bar; nil takes back only what this module set."
+  (cond (variant
+         (modify-frame-parameters frame `((ns-appearance . ,variant) (ns-transparent-titlebar . t)
+                                          (drgnx-face-ns-variant . t))))
+        ((frame-parameter frame 'drgnx-face-ns-variant)
+         (modify-frame-parameters frame '((ns-appearance) (ns-transparent-titlebar) (drgnx-face-ns-variant))))))
+
 (defun drgnx-face--apply-title (frame)
   "FRAME's title bar as `drgnx-face-title-bar' asks, on a graphical frame.
 X11: the window property GTK reads.  macOS: `ns-appearance'.  GTK without X11 (pgtk): nothing now, GTK reads
@@ -227,7 +238,7 @@ the frame undecorated."
     (let ((variant (drgnx-face-title-variant frame)) (drawn (drgnx-face--drawn-wanted-p frame)))
       (pcase system
         ('x (drgnx-face--x-variant frame variant))
-        ('ns (modify-frame-parameters frame `((ns-appearance . ,variant) (ns-transparent-titlebar . ,(and variant t))))))
+        ('ns (drgnx-face--ns-variant frame variant)))
       (when (or drawn (gethash frame drgnx-face--drawn))
         (if drawn (puthash frame t drgnx-face--drawn) (remhash frame drgnx-face--drawn))
         (modify-frame-parameters frame `((undecorated . ,drawn)))))))

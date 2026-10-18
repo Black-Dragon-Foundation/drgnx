@@ -53,15 +53,24 @@ What happens depends on where drgnx runs:
   by itself: write it again with `drgnx service-unit DIR` and reload systemd. The desktop entry runs `emacsclient`
   against the running daemon, so it follows the daemon. Changing the setting or the theme to the other variant shows
   after the next start of the daemon (`systemctl --user restart drgnx`).
+- **The systemd unit:** when the daemon starts through the unit, only a unit written after `face.eld` exists carries
+  `GTK_THEME` (write it again after drgnx has run once with a window). A drop-in override
+  (`systemctl --user edit drgnx`) can replace or remove that line.
+- **Other GTK programs:** the daemon's environment carries `GTK_THEME`, so GTK applications started from drgnx (a
+  terminal, a file manager, a browser) inherit the dark theme.
+- **A theme name that is not plain:** a `drgnx-face-gtk-theme` with anything but letters, digits and `. _ + -` is
+  ignored: no `GTK_THEME` is set from it.
 - **macOS:** the frame gets `ns-appearance` (`dark` or `light`) and a transparent title bar, at once. The system menu
   bar stays the system's.
 - **A terminal** has no title bar; nothing is done.
 
 `drgnx` draws the title bar itself: the frame has no system decoration, and the top line gets minimise, maximise and
 close buttons at its right end and moves the window when you drag its empty part. It is meant for desktops that
-draw a heavy title bar of their own. It is never used under a tiling window manager (sway, i3, Hyprland, niri), which
-has no title bars to replace, and only where drgnx knows the window manager; where it does not, the title bar
-stays the system's, dark, and a message says so once.
+draw a heavy title bar of their own. drgnx draws the title bar only under a window manager it knows to be a
+stacking one with title bars of its own (GNOME's, KDE's). Under a tiling window manager (sway, i3, Hyprland, niri),
+which has no title bars to replace, and wherever drgnx does not know the window manager (a plain X11 session with
+none, another Wayland compositor, a terminal, or no way to tell), the title bar stays the system's, dark, and a
+message says so once.
 
 To undo all of it, `(setopt drgnx-face-title-bar 'system)` in `config.el`: on X11 and macOS the bar goes back at
 once; on Wayland restart the daemon, and write the service unit again if you installed one (it then has no

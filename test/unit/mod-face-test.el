@@ -358,7 +358,7 @@ The frame is the batch one; its parameters are put back afterwards."
        (set-frame-parameter nil 'background-mode ,mode)
        (unwind-protect (progn ,@body)
          (modify-frame-parameters nil `((background-mode . ,old-mode) (ns-appearance) (ns-transparent-titlebar)
-                                        (undecorated) (drgnx-face-gtk-variant)))
+                                        (undecorated) (drgnx-face-gtk-variant) (drgnx-face-ns-variant)))
          (clrhash drgnx-face--drawn)))))
 
 (ert-deftest drgnx-face/title-follows-the-theme ()
@@ -421,6 +421,14 @@ The frame is the batch one; its parameters are put back afterwards."
         (should-not (frame-parameter nil 'ns-appearance))
         (should-not (frame-parameter nil 'ns-transparent-titlebar))))))
 
+(ert-deftest drgnx-face/macos-system-leaves-the-users-own-appearance ()
+  (drgnx-face-test--with
+    (drgnx-face-test--frame 'ns 'dark
+      (set-frame-parameter nil 'ns-appearance 'light)        ; not this module's
+      (let ((drgnx-face-title-bar 'system))
+        (drgnx-face-apply-frame (selected-frame))
+        (should (eq (frame-parameter nil 'ns-appearance) 'light))))))
+
 (ert-deftest drgnx-face/drawn-title-never-under-a-tiling-wm ()
   (drgnx-face-test--with
     (let ((drgnx-face-title-bar 'drgnx))
@@ -433,7 +441,7 @@ The frame is the batch one; its parameters are put back afterwards."
             (should-not (frame-parameter nil 'undecorated)))))
       ;; a stacking one: the frame is undecorated and says so
       (drgnx-face-test--frame 'pgtk 'dark
-        (cl-letf (((symbol-function 'drgnx-platform-wm) (lambda (&optional _f) 'mutter)))
+        (cl-letf (((symbol-function 'drgnx-platform-wm) (lambda (&optional _f) 'gnome)))
           (drgnx-face-apply-frame (selected-frame))
           (should (drgnx-face-drawn-title-p))
           (should (drgnx-face-drawn-title-p (selected-frame)))
@@ -445,9 +453,29 @@ The frame is the batch one; its parameters are put back afterwards."
             (should-not (frame-parameter nil 'undecorated)))))
       ;; a terminal has no title bar to draw
       (drgnx-face-test--frame nil 'dark
-        (cl-letf (((symbol-function 'drgnx-platform-wm) (lambda (&optional _f) 'mutter)))
+        (cl-letf (((symbol-function 'drgnx-platform-wm) (lambda (&optional _f) 'gnome)))
           (drgnx-face-apply-frame (selected-frame))
           (should-not (drgnx-face-drawn-title-p)))))))
+
+(ert-deftest drgnx-face/drawn-title-needs-a-known-stacking-wm ()
+  ;; nil, none, tty, x11, other-wayland and a name nobody listed are all "not known": dark, said once
+  (drgnx-face-test--with
+    (let ((drgnx-face-title-bar 'drgnx))
+      (dolist (wm '(nil none tty x11 other-wayland some-new-wm))
+        (let ((said nil) (drgnx-face--wm-noted nil))
+          (drgnx-face-test--frame 'pgtk 'dark
+            (cl-letf (((symbol-function 'drgnx-platform-wm) (lambda (&optional _f) wm))
+                      ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+              (drgnx-face-apply-frame (selected-frame))
+              (drgnx-face-apply-frame (selected-frame))
+              (should-not (drgnx-face-drawn-title-p))
+              (should-not (frame-parameter nil 'undecorated))
+              (should (= 1 (length said)))))))
+      (dolist (wm '(gnome kwin))
+        (drgnx-face-test--frame 'pgtk 'dark
+          (cl-letf (((symbol-function 'drgnx-platform-wm) (lambda (&optional _f) wm)))
+            (drgnx-face-apply-frame (selected-frame))
+            (should (drgnx-face-drawn-title-p))))))))
 
 (ert-deftest drgnx-face/drawn-title-needs-the-wm-known ()
   (drgnx-face-test--with
