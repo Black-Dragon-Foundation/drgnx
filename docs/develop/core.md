@@ -162,6 +162,43 @@ An item is a plist `(:kind :section mcp|hook|skill :name :from user|project|loca
 
 JSON that is tab-indented is re-written with 2 spaces; arrays are always written one entry per line.
 
+## Claude Code's settings (`drgnx-agent-config-claude.el`)
+
+The `claude` methods of the three generic functions, and `drgnx-agent-config-claude-routes`. Read: the files below;
+write: only the entry that changed, with one backup next to the file. Credential files are never opened; no key is
+looked up.
+
+| What | Where |
+| --- | --- |
+| User MCP servers | `mcpServers` in `(drgnx-agent-config-claude-json-file)`: `$CLAUDE_CONFIG_DIR/.claude.json` when the variable is set, else `~/.claude.json` (not inside `~/.claude`). |
+| Local MCP servers | `projects[ROOT].mcpServers` in the same file (ROOT without the trailing slash). |
+| Project MCP servers | `ROOT/.mcp.json`. |
+| Read only | The enabled plugins' servers (`plugin:PLUGIN:SERVER`), skills and `managed-mcp.json`; hooks of the managed settings (`managed-settings.json`, `managed-settings.d/*.json` in `/etc/claude-code`, `/Library/Application Support/ClaudeCode` on macOS). Plugins come from `plugins/installed_plugins.json` and `enabledPlugins`. |
+| Hooks | `hooks` of `HOME/settings.json` (user), `ROOT/.claude/settings.json` (project), `ROOT/.claude/settings.local.json` (local). |
+| Skills | `HOME/skills`, `ROOT/.claude/skills`; on or off by `skillOverrides` (`"off"`; absent is on; `name-only` and `user-invocable-only` still count as on). |
+| Rules | `HOME/CLAUDE.md`, `ROOT/CLAUDE.md`, `ROOT/.claude/CLAUDE.md` when present. |
+
+How a write goes (`-write 'claude OP ITEM SCOPE ROOT CALLBACK`; for an edit ITEM carries `:replaces`, the item it replaces):
+
+- **User and local MCP servers** run `claude mcp add-json NAME JSON --scope S` / `claude mcp remove NAME --scope S` in ROOT
+  (asynchronous, 20 s each; an edit is a remove, then an add; a backup of `.claude.json` is taken first). A server whose
+  `drgnx-agent-config-secrets` is not empty never goes on a command line: `-merge-entry` re-reads the file, merges the one
+  entry and writes it directly, and the note says to restart running Claude sessions. Claude Code rewrites the file every
+  few seconds: each direct write passes what it read as EXPECT, so a file that changed is read again and the entry merged
+  again, once; a second change is reported ("changed by another program") and nothing is written.
+- **`.mcp.json`, hooks and `skillOverrides`** are edited directly (key order and indent kept). Switching a skill off
+  writes `"off"` into the user's settings (a project skill: the project-local settings, private); switching it on removes
+  an `"off"` from every settings file that has one.
+- A server name is letters, digits, `.`, `-` and `_` and cannot start with `-` (it is a command-line argument).
+- Errors name the file and line, never the entry's data (values are masked with `-secrets` besides).
+
+`(drgnx-agent-config-claude-routes ROOT)` lists one route per Claude Code profile (command `claude-agent-acp`) with its
+billing, derived from the provider and not from the profile's name: no `:ai` is the subscription; the OpenRouter
+provider `openrouter`; a loopback URL `local`; any other provider (a `:key-env`) `per-token`, the vendor being the
+provider's name. `:key-where` names the variable and the keyring host. An `env` entry of a settings file that sets
+`ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, `ANTHROPIC_SMALL_FAST_MODEL` or
+`ANTHROPIC_DEFAULT_*_MODEL` is a note ("overrides every profile's route"), by file and name, never the value.
+
 ## Doctor (`drgnx-doctor.el`)
 
 `bin/drgnx doctor [--json] [--dev]` asks the Emacs drgnx will use (see above) whether this
