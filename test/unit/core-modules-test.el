@@ -103,7 +103,7 @@
    ;; Version 0 was a bare list of disabled modules: migrated.
    (with-temp-file (expand-file-name "modules.eld" (drgnx-user-dir)) (prin1 '(lang/python ui/zen) (current-buffer)))
    (should (equal (plist-get (drgnx-modules-read-state) :disabled) '(lang/python ui/zen)))
-   (should (eql (plist-get (drgnx-modules-read-state) :version) 1))
+   (should (eql (plist-get (drgnx-modules-read-state) :version) 2))
    ;; Unreadable: defaults, a message, no error.
    (with-temp-file (expand-file-name "modules.eld" (drgnx-user-dir)) (insert "(:version 1 :disabled (oops"))
    (setq drgnx-modules--state nil)
@@ -304,3 +304,56 @@
        (should-not (funcall (funcall col "Stage") (funcall row "first-input" "") (funcall row "idle" ""))))
      (should (string-search "/nonexistent/drgnx" (buffer-string)))
      (should-not (string-search "external module" (buffer-string))))))
+
+;;;; modules.eld is format 2
+
+(defun drgnx-modules-test--read-file (file)
+  (with-temp-buffer (insert-file-contents file) (read (current-buffer))))
+
+(ert-deftest drgnx-modules/a-v1-file-reads-and-is-written-as-v2 ()
+  (drgnx-modules-test--with-config
+   (let ((file (expand-file-name "modules.eld" (drgnx-user-dir))))
+     (should (eql drgnx-modules-state-version 2))
+     (with-temp-file file (prin1 '(:version 1 :disabled (ui/zen) :enabled (editor/evil) :flags ((ui/popups +childframe))) (current-buffer)))
+     (let ((st (drgnx-modules-read-state)))       ; format 1 needs no change
+       (should (equal (plist-get st :disabled) '(ui/zen)))
+       (should (equal (plist-get st :enabled) '(editor/evil)))
+       (should (equal (plist-get st :flags) '((ui/popups +childframe)))))
+     (should-not drgnx-modules--state-foreign)
+     (drgnx-modules-write-state (drgnx-modules-read-state))
+     (should (eql (plist-get (drgnx-modules-test--read-file file) :version) 2))
+     (should-not (directory-files (drgnx-user-dir) nil "\\`modules\\.eld\\.bak")))))
+
+(ert-deftest drgnx-modules/a-format-0-bare-list-still-reads ()
+  (drgnx-modules-test--with-config
+   (let ((file (expand-file-name "modules.eld" (drgnx-user-dir))))
+     (with-temp-file file (prin1 '(lang/python) (current-buffer)))
+     (should (equal (plist-get (drgnx-modules-read-state) :disabled) '(lang/python)))
+     (should-not drgnx-modules--state-foreign))))
+
+(ert-deftest drgnx-modules/a-v3-file-is-foreign-and-backed-up-before-a-write ()
+  (drgnx-modules-test--with-config
+   (let ((file (expand-file-name "modules.eld" (drgnx-user-dir))))
+     (with-temp-file file (prin1 '(:version 3 :disabled (ui/zen) :enabled (editor/evil)) (current-buffer)))
+     (let ((st (drgnx-modules-read-state)))       ; defaults, not a guess at a newer format
+       (should-not (plist-get st :disabled))
+       (should-not (plist-member st :enabled)))
+     (should drgnx-modules--state-foreign)
+     (drgnx-module-define 'test/a :doc "a" :setup #'ignore)
+     (drgnx-modules-toggle 'test/a)
+     (let ((bak (car (directory-files (drgnx-user-dir) t "\\`modules\\.eld\\.bak"))))
+       (should bak)
+       (should (eql (plist-get (drgnx-modules-test--read-file bak) :version) 3))
+       (should (equal (plist-get (drgnx-modules-test--read-file bak) :enabled) '(editor/evil))))
+     (should (eql (plist-get (drgnx-modules-test--read-file file) :version) 2)))))
+
+(ert-deftest drgnx-modules/enabled-survives-a-turn-off ()
+  (drgnx-modules-test--with-config
+   (let ((file (expand-file-name "modules.eld" (drgnx-user-dir))))
+     (with-temp-file file (prin1 '(:version 1 :enabled (editor/evil)) (current-buffer)))
+     (drgnx-module-define 'test/a :doc "a" :setup #'ignore)
+     (drgnx-modules-toggle 'test/a)
+     (let ((written (drgnx-modules-test--read-file file)))
+       (should (eql (plist-get written :version) 2))
+       (should (equal (plist-get written :enabled) '(editor/evil)))
+       (should (equal (plist-get written :disabled) '(test/a)))))))
