@@ -9,8 +9,8 @@ a chain of providers and models tried in order, so a feature keeps working when 
 | Id | Provider | Address (default) |
 |---|---|---|
 | `openrouter` | OpenRouter | `https://openrouter.ai/api/v1` (key: `OPENROUTER_API_KEY` or auth-source) |
-| `moonshot` | Moonshot (Kimi), for Claude Code agents only | `https://api.moonshot.ai/anthropic` (key: `MOONSHOT_API_KEY` or auth-source) |
-| `deepseek` | DeepSeek, for Claude Code agents only | `https://api.deepseek.com/anthropic` (key: `DEEPSEEK_API_KEY` or auth-source) |
+| `moonshot` | Moonshot (Kimi) | `https://api.moonshot.ai/anthropic` (key: `MOONSHOT_API_KEY` or auth-source) |
+| `deepseek` | DeepSeek | `https://api.deepseek.com/anthropic` (key: `DEEPSEEK_API_KEY` or auth-source) |
 | `ollama` | Ollama | `http://127.0.0.1:11434` |
 | `lmstudio` | LM Studio | `http://127.0.0.1:1234/v1` |
 | `llamacpp` | llama.cpp server | `http://127.0.0.1:8012` (start it with `--port 8012`: its 8080 is TEI's) |
@@ -233,26 +233,39 @@ environment variable.
 
 Agent profiles can take their provider from the registry; the key is resolved when the agent starts:
 
-- **claude** — Claude Code through `claude-agent-acp` with its own login (subscription or API key). drgnx only
-  launches it; it never reads its login.
+- **claude** — Claude Code through `claude-agent-acp` with its own login (a subscription, kept in Claude Code's own
+  files). drgnx only launches it; it never reads its login. Keys in Emacs's environment are not passed on (below).
 - **claude (OpenRouter)** — Claude Code on OpenRouter: `ANTHROPIC_BASE_URL=https://openrouter.ai/api`,
   `ANTHROPIC_AUTH_TOKEN` = your OpenRouter key, `ANTHROPIC_API_KEY` empty.
 - **claude (Ollama)** — Claude Code on a local Ollama model.
 - **claude (Kimi)** and **claude (DeepSeek)** — Claude Code on Kimi or DeepSeek through the vendor's own
   Anthropic-compatible API (`:ai claude-moonshot`, `claude-deepseek`): `ANTHROPIC_BASE_URL` = the vendor's address,
   `ANTHROPIC_AUTH_TOKEN` = your `MOONSHOT_API_KEY` or `DEEPSEEK_API_KEY` (or auth-source for `api.moonshot.ai` or
-  `api.deepseek.com`), `ANTHROPIC_API_KEY` empty. The vendor bills you per token.
+  `api.deepseek.com`), `ANTHROPIC_API_KEY` empty. The vendor bills you per token for an API key; Kimi's coding
+  membership is a subscription on a different endpoint, which these profiles do not use.
 - **claude (Kimi via OpenRouter)** and **claude (DeepSeek via OpenRouter)** — the same models through OpenRouter
   (`:ai claude-openrouter` with a `:model`), billed by OpenRouter with your OpenRouter key.
 
-A profile's `:model` (any profile with an `:ai`) also sets `ANTHROPIC_MODEL` and `ANTHROPIC_DEFAULT_HAIKU_MODEL`
-(Claude Code's small, background model) to that name. The built-in names are data in
+A profile's `:model` (any profile with an `:ai`) also sets `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`,
+`ANTHROPIC_DEFAULT_OPUS_MODEL` and `CLAUDE_CODE_SUBAGENT_MODEL` to that name, and `ANTHROPIC_DEFAULT_HAIKU_MODEL`
+(Claude Code's small, background model) to the profile's `:small-model`, else to the `:model`. A `claude-moonshot` or
+`claude-deepseek` profile without a `:model` does not start. The built-in names are data in
 `drgnx-agents-builtin-profiles`: copy a profile into `agents.eld` to use another model. Nothing about the route is
 written to `~/.claude/settings.json`: two profiles share Claude Code's configuration directory and differ only in
 these variables, so a model in that file's `env` would override them (the Claude page in Agent Settings notes it).
 
-In `agents.eld`, `:ai claude-openrouter`, `claude-ollama`, `claude-moonshot` or `claude-deepseek` gives any profile that environment. Durable jobs get
-the keys they need in their environment too — never in a command line or a file (under systemd, the value travels in
+Moonshot and DeepSeek carry no `:price`, so the gateway cannot price their answers and counts their spend as zero (a
+job's budget does not stop them). Give the provider a `:price (IN . OUT)` in your `ai.eld` to count it.
+
+**Agents do not inherit your keys.** Whatever Emacs's environment holds, an agent gets only the variables of its own
+route (its provider key or the gateway's token, the model names). The others -- every vendor key and route variable,
+`drgnx-agents-scrubbed-env` -- are unset for it, so a Kimi agent never sees your DeepSeek or OpenRouter key. A login
+lives in the agent's own files, so the plain `claude` profile keeps working. If you relied on one of these variables
+for it (an `ANTHROPIC_API_KEY`, a `CLAUDE_CODE_OAUTH_TOKEN`, the Bedrock or Vertex switches), remove it from
+`drgnx-agents-scrubbed-env` (Customize), or set it in the profile's `:env`.
+
+In `agents.eld`, `:ai claude-openrouter`, `claude-ollama`, `claude-moonshot` or `claude-deepseek` gives any profile
+that environment. Durable jobs get the keys they need in their environment too — never in a command line or a file (under systemd, the value travels in
 `systemd-run`'s own environment).
 
 ## Tests

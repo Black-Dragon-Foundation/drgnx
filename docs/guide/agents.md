@@ -106,6 +106,27 @@ that started it: when an agent's program was installed while a hub ran (onboardi
 With no hub to be had, an agent goes to its provider directly and says so. The Agents list's **Via**
 column shows which.
 
+## Kimi and DeepSeek
+
+Claude Code also runs on Kimi and DeepSeek, with the same agent and the same tools; only the model behind it changes.
+Four built-in profiles (listed in New Agent Session… and on the Claude page of Agent Settings, with how each is
+billed):
+
+| Profile | Goes to | Key | Billed by |
+|---|---|---|---|
+| `claude (Kimi)` | Moonshot's own API | `MOONSHOT_API_KEY` | Moonshot, per token |
+| `claude (DeepSeek)` | DeepSeek's own API | `DEEPSEEK_API_KEY` | DeepSeek, per token |
+| `claude (Kimi via OpenRouter)` | OpenRouter | `OPENROUTER_API_KEY` | OpenRouter |
+| `claude (DeepSeek via OpenRouter)` | OpenRouter | `OPENROUTER_API_KEY` | OpenRouter |
+
+Like the other provider profiles they go through the gateway when a hub is available: the agent holds a token, never
+the key. Without a key the session does not start and the message names the variable and the keyring host to put it
+under. Each session gets its route in its own environment (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, the model
+names); drgnx writes nothing to `~/.claude/settings.json`, so the plain `claude` profile keeps using your login. No
+agent inherits the other vendors' keys from Emacs's environment (`drgnx-agents-scrubbed-env`). The API keys are billed
+per token; Kimi's coding membership is a different endpoint these profiles do not use. Moonshot and DeepSeek have no
+`:price`, so the gateway counts their spend as zero. Details and the model names: [AI](ai.md#agents).
+
 ## Durable sessions
 
 **New Durable Agent Session…** (palette) starts an agent in the **hub** instead of this Emacs: it keeps working when
@@ -159,25 +180,6 @@ Imported plan checklists (Onboarding: Import Projects, with TODOs) remember wher
 TODO is under, wherever it was refiled). Projects: Sync Plans and Board TODOs makes them agree: a TODO marked DONE on the board ticks its
 checkbox (`- [x]`) in the plan; a ticked checkbox marks its TODO DONE. It writes only what changed, only when you
 run it, with the plan's own encoding and line endings — and leaves alone a plan open in Emacs with unsaved edits.
-
-## Kimi and DeepSeek
-
-Claude Code also runs on Kimi and DeepSeek, with the same agent and the same tools; only the model behind it changes.
-Four built-in profiles (listed in New Agent Session… and on the Claude page of Agent Settings, with how each is
-billed):
-
-| Profile | Goes to | Key | Billed by |
-|---|---|---|---|
-| `claude (Kimi)` | Moonshot's own API | `MOONSHOT_API_KEY` | Moonshot, per token |
-| `claude (DeepSeek)` | DeepSeek's own API | `DEEPSEEK_API_KEY` | DeepSeek, per token |
-| `claude (Kimi via OpenRouter)` | OpenRouter | `OPENROUTER_API_KEY` | OpenRouter |
-| `claude (DeepSeek via OpenRouter)` | OpenRouter | `OPENROUTER_API_KEY` | OpenRouter |
-
-Like the other provider profiles they go through the gateway when a hub is available: the agent holds a token, never
-the key. Without a key the session does not start and the message names the variable and the keyring host to put it
-under. Each session gets its route in its own environment (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`,
-`ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`); drgnx writes nothing to `~/.claude/settings.json`, so the plain
-`claude` profile keeps using your login. Details and the model names: [AI](ai.md#agents).
 
 ## Tests
 

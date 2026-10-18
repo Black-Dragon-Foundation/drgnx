@@ -1,6 +1,7 @@
 ;;; ai-embed-test.el --- batch tests: embeddings along the embed role (TEI, Ollama, llama.cpp, OpenAI-compatible) -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx-ai-client)
+(require 'drgnx-ai-probe)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
 
 (defmacro drgnx-ai-embed-test--with (spec chain &rest body)

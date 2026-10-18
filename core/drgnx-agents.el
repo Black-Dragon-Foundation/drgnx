@@ -274,6 +274,7 @@ without a hub they go to the provider directly.")
   "Is this Emacs the hub?  A daemon: it never looks a key up where that may ask."
   (and (fboundp 'drgnx-hub-serving-p) (drgnx-hub-serving-p)))
 
+(declare-function drgnx-ai-check-agent-model "drgnx-ai")
 (defun drgnx-agents--gateway (s kind &optional model)
   "Register S's agent (profile KIND, with the profile's MODEL) with the hub's gateway: (:url :token), or nil when
 no hub can be had (S then goes direct, and says so).  In the hub, keys are only those editors handed over (and the
@@ -324,30 +325,52 @@ environment, quiet auth-source files): with none for any provider of the chain, 
 (the Live browser's endpoint, docs/guide/live.md).  One that fails is reported and skipped, and so is anything
 returned that is not a string.")
 
+(defcustom drgnx-agents-scrubbed-env
+  '("ANTHROPIC_API_KEY" "ANTHROPIC_AUTH_TOKEN" "ANTHROPIC_BASE_URL" "ANTHROPIC_MODEL" "ANTHROPIC_SMALL_FAST_MODEL"
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL" "ANTHROPIC_DEFAULT_SONNET_MODEL" "ANTHROPIC_DEFAULT_OPUS_MODEL"
+    "ANTHROPIC_DEFAULT_FABLE_MODEL" "CLAUDE_CODE_SUBAGENT_MODEL" "CLAUDE_CODE_OAUTH_TOKEN" "CLAUDE_CODE_USE_BEDROCK"
+    "CLAUDE_CODE_USE_VERTEX" "OPENAI_API_KEY" "OPENAI_BASE_URL" "OPENROUTER_API_KEY" "MOONSHOT_API_KEY"
+    "DEEPSEEK_API_KEY" "GEMINI_API_KEY" "GOOGLE_API_KEY")
+  "Keys never inherited by agents: variables of Emacs's environment that an agent does not get.
+An agent gets the variables of its own route (the provider key or the gateway token, the model names) and
+nothing else from this list, so a Kimi agent never sees your DeepSeek or OpenRouter key.  An agent's login (a
+subscription, say) lives in its own files, not in these variables.  To pass one on, remove it from this list (or set
+it in the profile's `:env')."
+  :type '(repeat string) :group 'drgnx)
+
+(defun drgnx-agents--scrub (env)
+  "ENV (\"NAME=value\"…) followed by a bare-name entry (it unsets the variable) for each of
+`drgnx-agents-scrubbed-env' that ENV does not set itself; ENV's own entries come first and so win."
+  (let ((set (mapcar (lambda (e) (car (split-string e "="))) env)))
+    (append env (seq-remove (lambda (name) (member name set)) drgnx-agents-scrubbed-env))))
+
 (defun drgnx-agents--env (s)
   "The environment S's agent gets: its profile's, its provider's — the gateway's address and a token when the hub
 can carry it, else the provider's (keys resolved now, never kept) — DRGNX_TASK when S works on a task, and what
-`drgnx-agents-env-functions' add."
-  (append (plist-get (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))) :env)
-          (when-let* ((profile (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))))
-                      (kind (plist-get profile :ai)))
-            (require 'drgnx-ai)
-            (drgnx-ai-agent-env (list :kind kind :model (plist-get profile :model)) (not (drgnx-agents--in-hub-p))
-                                (and drgnx-agents-use-gateway (memq kind drgnx-ai-gateway-kinds)
-                                     (drgnx-agents--gateway s kind (plist-get profile :model)))))
-          (and (drgnx-agent-session-task s) (list (concat "DRGNX_TASK=" (drgnx-agent-session-task s))))
-          (and (drgnx-agent-session-job s) (list (concat "DRGNX_JOB=" (drgnx-agent-session-job s))))
-          (let (extra)
-            (run-hook-wrapped 'drgnx-agents-env-functions
-                              (lambda (f)
-                                (let ((r (with-demoted-errors "drgnx agents: %S" (funcall f s))))
-                                  (if (not (proper-list-p r))
-                                      (message "drgnx agents: an environment function returned %S, not a list of NAME=value strings; ignored" r)
-                                    (dolist (e r)
-                                      (if (stringp e) (setq extra (append extra (list e)))
-                                        (message "drgnx agents: an environment function returned %S, not a NAME=value string; ignored" e)))))
-                                nil))
-            extra)))
+`drgnx-agents-env-functions' add; from Emacs's own, the variables in `drgnx-agents-scrubbed-env' are not passed on."
+  (drgnx-agents--scrub
+   (append (plist-get (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))) :env)
+           (when-let* ((profile (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))))
+                       (kind (plist-get profile :ai)))
+             (require 'drgnx-ai)
+             (drgnx-ai-check-agent-model kind (plist-get profile :model))   ; before a gateway token is made
+             (drgnx-ai-agent-env (list :kind kind :model (plist-get profile :model) :small-model (plist-get profile :small-model))
+                                 (not (drgnx-agents--in-hub-p))
+                                 (and drgnx-agents-use-gateway (memq kind drgnx-ai-gateway-kinds)
+                                      (drgnx-agents--gateway s kind (plist-get profile :model)))))
+           (and (drgnx-agent-session-task s) (list (concat "DRGNX_TASK=" (drgnx-agent-session-task s))))
+           (and (drgnx-agent-session-job s) (list (concat "DRGNX_JOB=" (drgnx-agent-session-job s))))
+           (let (extra)
+             (run-hook-wrapped 'drgnx-agents-env-functions
+                               (lambda (f)
+                                 (let ((r (with-demoted-errors "drgnx agents: %S" (funcall f s))))
+                                   (if (not (proper-list-p r))
+                                       (message "drgnx agents: an environment function returned %S, not a list of NAME=value strings; ignored" r)
+                                     (dolist (e r)
+                                       (if (stringp e) (setq extra (append extra (list e)))
+                                         (message "drgnx agents: an environment function returned %S, not a NAME=value string; ignored" e)))))
+                                 nil))
+             extra))))
 
 (defvar drgnx-agents-coordination t
   "Non-nil: every agent gets drgnx's coordination tools (an MCP server, docs/develop/coordination.md).")

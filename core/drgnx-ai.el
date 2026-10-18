@@ -31,7 +31,7 @@
                 :caps () :messages t)
     (deepseek   :name "DeepSeek" :kind anthropic :url "https://api.deepseek.com/anthropic" :key-env "DEEPSEEK_API_KEY"
                 :caps () :messages t)
-    (lmstudio  :name "LM Studio" :kind openai :url "http://127.0.0.1:1234/v1" :caps (chat fim embed))
+    (lmstudio   :name "LM Studio" :kind openai :url "http://127.0.0.1:1234/v1" :caps (chat fim embed))
     (llamacpp   :name "llama.cpp server" :kind llamacpp :url "http://127.0.0.1:8012" :caps (chat fim embed))   ; its 8080 is TEI's
     (vllm       :name "vLLM" :kind openai :url "http://127.0.0.1:8000/v1" :caps (chat fim embed))
     (jan        :name "Jan" :kind openai :url "http://127.0.0.1:1337/v1" :caps (chat))
@@ -406,16 +406,28 @@ token (`ANTHROPIC_AUTH_TOKEN'), `ANTHROPIC_API_KEY' empty.  NAME is how the erro
                               (url-host (url-generic-parse-url (plist-get p :url)))))))
     (list (concat "ANTHROPIC_BASE_URL=" (plist-get p :url)) (concat "ANTHROPIC_AUTH_TOKEN=" key) "ANTHROPIC_API_KEY=")))
 
+(defun drgnx-ai-check-agent-model (kind model)
+  "Signal a `user-error' when an agent of KIND needs a MODEL and has none: the vendors' own APIs
+\(`claude-moonshot', `claude-deepseek') do not know Claude Code's default model names."
+  (when (and (memq kind '(claude-moonshot claude-deepseek)) (not (and (stringp model) (not (string-empty-p model)))))
+    (user-error "The %s agent profile needs a :model (the vendor's model name)" kind)))
+
 (defun drgnx-ai-agent-env (profile &optional interactive gateway)
-  "The environment (\"NAME=value\"…) an agent of PROFILE (:kind …, :model …) starts with, resolved now.  GATEWAY
-\(:url :token): the agent talks to the gateway with its token, and never sees a key.  With a :model every route
-also names it, for the main model and the small background one (`ANTHROPIC_MODEL', `ANTHROPIC_DEFAULT_HAIKU_MODEL':
-Claude Code's current variable; `ANTHROPIC_SMALL_FAST_MODEL' is deprecated).  A subscription CLI gets nothing: it
-uses its own login, which drgnx never reads."
+  "The environment (\"NAME=value\"…) an agent of PROFILE (:kind …, :model …, :small-model …) starts with,
+resolved now.  GATEWAY (:url :token): the agent talks to the gateway with its token, and never sees a key.  With a
+:model every route also names it for Claude Code's main, Sonnet, Opus and subagent models, and :small-model (else the
+:model) for the small background one: `ANTHROPIC_MODEL', `ANTHROPIC_DEFAULT_SONNET_MODEL',
+`ANTHROPIC_DEFAULT_OPUS_MODEL', `CLAUDE_CODE_SUBAGENT_MODEL', `ANTHROPIC_DEFAULT_HAIKU_MODEL' (Claude Code's
+current variable; `ANTHROPIC_SMALL_FAST_MODEL' is deprecated).  A subscription CLI gets nothing: it uses its own
+login, which drgnx never reads."
+  (drgnx-ai-check-agent-model (plist-get profile :kind) (plist-get profile :model))
   (let ((env (drgnx-ai--agent-route-env profile interactive gateway))
         (model (plist-get profile :model)))
     (if (and env (stringp model))
-        (append env (list (concat "ANTHROPIC_MODEL=" model) (concat "ANTHROPIC_DEFAULT_HAIKU_MODEL=" model)))
+        (append env (mapcar (lambda (name) (concat name "=" model))
+                            '("ANTHROPIC_MODEL" "ANTHROPIC_DEFAULT_SONNET_MODEL" "ANTHROPIC_DEFAULT_OPUS_MODEL"
+                              "CLAUDE_CODE_SUBAGENT_MODEL"))
+                (list (concat "ANTHROPIC_DEFAULT_HAIKU_MODEL=" (or (plist-get profile :small-model) model))))
       env)))
 
 (defun drgnx-ai--agent-route-env (profile interactive gateway)
