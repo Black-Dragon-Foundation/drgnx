@@ -1,7 +1,9 @@
 # Packages
 
 drgnx installs packages in one place only: `drgnx sync`, a command you run. Emacs never installs anything on
-its own, and neither does the daemon at startup, a timer or a module. Installed packages are pinned in a lock,
+its own, and neither does the daemon at startup, a timer, a module or a hook that happens to run inside one of
+your commands (opening a file, say): `package-install`, `package-refresh-contents` and the like work only while a
+`package-*` command, such as `M-x package-install`, is the command you ran. Installed packages are pinned in a lock,
 every downloaded file is kept in a cache, and each sync leaves a **generation** you can go back to at once.
 
 ```

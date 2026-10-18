@@ -73,9 +73,15 @@ ARGS are the :ensure values, read as use-package does: nil nothing, t NAME, a sy
 (defun drgnx-pkg--in-timer-p ()
   (seq-some (lambda (f) (memq (cadr f) '(timer-event-handler internal-timer-start-idle))) (backtrace-frames)))
 
+(defun drgnx-pkg--installing-command-p (command)
+  "Is COMMAND (a symbol) one that installs: a `package-*' command, or one with the `drgnx-installs' property?
+A hook that runs inside any other command (find-file, …) is not the user asking to install."
+  (and (symbolp command)
+       (or (string-prefix-p "package-" (symbol-name command)) (get command 'drgnx-installs))))
+
 (defun drgnx-pkg--guard (orig &rest args)
-  "Around ORIG (an install or refresh): signal when no command of the user's is running."
-  (if (or (not after-init-time) (null this-command) (drgnx-pkg--in-timer-p))
+  "Around ORIG (an install or refresh): signal unless the user's install command is running."
+  (if (or (not after-init-time) (not (drgnx-pkg--installing-command-p this-command)) (drgnx-pkg--in-timer-p))
       (signal 'drgnx-pkg-error
               (list (format "drgnx installs packages only with `drgnx sync' (refused %s %S from automatic code)"
                             (if (symbolp orig) orig "an install") args)))

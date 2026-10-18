@@ -268,6 +268,24 @@
     (drgnx-pkg-guard-mode -1))
   (should-not (advice-member-p #'drgnx-pkg--guard 'package-install)))
 
+(ert-deftest drgnx-pkg/the-guard-refuses-installs-from-hooks-in-other-commands ()
+  ;; M5-8: a hook running inside some other user command (find-file, …) is not the user asking to install;
+  ;; only a package-* command, or a drgnx command marked with the `drgnx-installs' property, is.
+  (let ((orig (lambda (&rest _) 'installed)) (after-init-time (current-time)))
+    (let ((this-command 'find-file))
+      (should-error (drgnx-pkg--guard orig 'foo) :type 'drgnx-pkg-error))
+    (let ((this-command (lambda () (interactive))))
+      (should-error (drgnx-pkg--guard orig 'foo) :type 'drgnx-pkg-error))
+    (dolist (c '(package-install package-menu-execute package-upgrade-all))
+      (let ((this-command c))
+        (should (eq (drgnx-pkg--guard orig 'foo) 'installed))))
+    (unwind-protect
+        (let ((this-command 'drgnx-pkg-test--installing-command))   ; a drgnx command marked as installing
+          (should-error (drgnx-pkg--guard orig 'foo) :type 'drgnx-pkg-error)
+          (put 'drgnx-pkg-test--installing-command 'drgnx-installs t)
+          (should (eq (drgnx-pkg--guard orig 'foo) 'installed)))
+      (put 'drgnx-pkg-test--installing-command 'drgnx-installs nil))))
+
 (ert-deftest drgnx-pkg/use-package-ensure-only-records ()
   (drgnx-pkg-test--with root
     (should-not (drgnx-pkg-ensure 'drgnx-no-such-package-x '(t) nil))
