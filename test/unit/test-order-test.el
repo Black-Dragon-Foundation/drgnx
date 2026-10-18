@@ -10,7 +10,7 @@
 
 (defconst drgnx-test-order-test--env-unset
   '("DRGNX_TEST_SELECTOR" "DRGNX_TEST_RESULTS" "DRGNX_TEST_LEAKS" "DRGNX_TEST_LEAKS_ALLOWED" "DRGNX_TEST_SHUFFLE"
-    "DRGNX_TEST_ONE_PROCESS" "DRGNX_TEST_ORDER_OUT" "DRGNX_TEST_DIR" "DRGNX_RUN_TMP" "DRGNX_EMACS")
+    "DRGNX_TEST_ONE_PROCESS" "DRGNX_TEST_ORDER_IN" "DRGNX_TEST_ORDER_OUT" "DRGNX_TEST_DIR" "DRGNX_RUN_TMP" "DRGNX_EMACS")
   "The variables of an outer run that must not reach a run the test starts.")
 
 (defconst drgnx-test-order-test--ordered
@@ -123,8 +123,8 @@
     (let* ((r (drgnx-test-order-test--bin tmp suite "test" "--find-polluter" "iso-pol/z-needs-clean"))
            (runs (and (string-match "(\\([0-9]+\\) runs)" (cdr r)) (string-to-number (match-string 1 (cdr r))))))
       (should (eql 0 (car r)))
-      (should (string-match-p "polluter: iso-pol/e-sets-it" (cdr r)))
-      (should-not (string-match-p "polluter: iso-pol/[^e]" (cdr r)))
+      (should (string-match-p "likely polluter (unconfirmed): iso-pol/e-sets-it" (cdr r)))
+      (should-not (string-match-p "polluter[^\n]*: iso-pol/[^e]" (cdr r)))
       (should (and runs (<= runs (+ 2 (ceiling (log 8 2)))))))))
 
 (ert-deftest drgnx-test-order/finds-the-polluter-across-files ()
@@ -137,7 +137,7 @@
     (let ((r (drgnx-test-order-test--bin tmp suite "test" "--find-polluter" "iso-pol/z-needs-clean"
                                          (expand-file-name "a-test.el" suite) (expand-file-name "z-test.el" suite))))
       (should (eql 0 (car r)))
-      (should (string-match-p "polluter: iso-pol/b-sets-it" (cdr r))))
+      (should (string-match-p "likely polluter (unconfirmed): iso-pol/b-sets-it" (cdr r))))
     ;; without FILES only TEST's own file is loaded: nothing before it pollutes it
     (let ((r (drgnx-test-order-test--bin tmp suite "test" "--find-polluter" "iso-pol/z-needs-clean")))
       (should (eql 1 (car r)))
@@ -150,7 +150,7 @@
     (let ((r (drgnx-test-order-test--bin tmp suite "test" "--find-polluter" "iso-alone/b-broken")))
       (should (eql 0 (car r)))
       (should (string-match-p "iso-alone/b-broken fails alone" (cdr r)))
-      (should-not (string-match-p "polluter:" (cdr r)))
+      (should-not (string-match-p "polluter" (cdr r)))
       (should (string-match-p "(1 run)" (cdr r))))
     ;; a name no test has is a usage error, not a pass
     (let ((r (drgnx-test-order-test--bin tmp suite "test" "--find-polluter" "iso-alone/nope")))
@@ -159,23 +159,76 @@
 
 (ert-deftest drgnx-test-order/the-shuffled-order-is-the-bisected-one ()
   ;; with a seed the tests before TEST are those the shuffled run puts before it: the bisect and the run agree.
-  ;; Seed 1 puts the polluter before the victim, seed 3 after it.
+  ;; Seeds are searched for, one that puts the polluter before the victim and one that puts it after, so the test
+  ;; says nothing about which order a particular seed gives.
   (drgnx-test-order-test--with-suite drgnx-test-order-test--polluted
-    (let (outcomes)
-      (dolist (seed '("1" "3"))
-        (let* ((ran (progn (drgnx-test-order-test--runner suite results (concat "DRGNX_TEST_SHUFFLE=" seed) "DRGNX_TEST_ONE_PROCESS=1")
-                           (drgnx-test-order-test--names results)))
-               (polluter-first (< (cl-position "iso-pol/e-sets-it" ran :test #'equal)
-                                  (cl-position "iso-pol/z-needs-clean" ran :test #'equal)))
-               (r (drgnx-test-order-test--bin tmp suite "test" (concat "--shuffle=" seed) "--find-polluter" "iso-pol/z-needs-clean")))
-          (push polluter-first outcomes)
-          (should (string-match-p (format "shuffle seed %s" seed) (cdr r)))
-          (if polluter-first
-              (progn (should (eql 0 (car r)))
-                     (should (string-match-p "polluter: iso-pol/e-sets-it" (cdr r))))
-            (should (eql 1 (car r)))
-            (should (string-match-p "iso-pol/z-needs-clean passes" (cdr r))))))
-      (should (equal '(t nil) (sort outcomes (lambda (a _) a)))))))
+    (let (before after)
+      (cl-loop for i from 1 to 40
+               for seed = (number-to-string i)
+               until (and before after)
+               do (drgnx-test-order-test--runner suite results (concat "DRGNX_TEST_SHUFFLE=" seed) "DRGNX_TEST_ONE_PROCESS=1")
+               (let ((ran (drgnx-test-order-test--names results)))
+                 (if (< (cl-position "iso-pol/e-sets-it" ran :test #'equal) (cl-position "iso-pol/z-needs-clean" ran :test #'equal))
+                     (unless before (setq before seed))
+                   (unless after (setq after seed)))))
+      (should before)
+      (should after)
+      (let ((r (drgnx-test-order-test--bin tmp suite "test" (concat "--shuffle=" before) "--find-polluter" "iso-pol/z-needs-clean")))
+        (should (eql 0 (car r)))
+        (should (string-match-p (format "shuffle seed %s" before) (cdr r)))
+        (should (string-match-p "likely polluter (unconfirmed): iso-pol/e-sets-it" (cdr r))))
+      (let ((r (drgnx-test-order-test--bin tmp suite "test" (concat "--shuffle=" after) "--find-polluter" "iso-pol/z-needs-clean")))
+        (should (eql 1 (car r)))
+        (should (string-match-p (format "shuffle seed %s" after) (cdr r)))
+        (should (string-match-p "iso-pol/z-needs-clean passes" (cdr r)))))))
+
+(ert-deftest drgnx-test-order/the-order-does-not-reseed-random ()
+  ;; shuffling uses a generator of its own: the global `random' goes on as it would have
+  (drgnx-test-order-test--with-suite drgnx-test-order-test--ordered
+    (drgnx-test-order-test--suite
+     suite `(("rand-test.el" . ,(format "(ert-deftest iso-rand/a () (with-temp-file %S (prin1 (list (random 1000000) (random 1000000)) (current-buffer))))" (expand-file-name "rand" tmp)))))
+    (let (seen)
+      (dolist (env '(nil ("DRGNX_TEST_SHUFFLE=7") ("DRGNX_TEST_SHUFFLE=7")))
+        (apply #'drgnx-test-order-test--runner suite results "DRGNX_TEST_SELECTOR=\"iso-rand/\"" env)
+        (push (with-temp-buffer (insert-file-contents (expand-file-name "rand" tmp)) (buffer-string)) seen))
+      ;; an unshuffled run draws fresh numbers each time; a seeded generator would give the same pair every run
+      (should-not (equal (nth 0 seen) (nth 1 seen)))
+      (should-not (equal (nth 1 seen) (nth 2 seen))))))
+
+(ert-deftest drgnx-test-order/tests-do-not-see-the-bisect-variables ()
+  ;; The bisect's Emacsen get DRGNX_TEST_ORDER_IN.  A test of theirs that starts a runner must get a normal one:
+  ;; the outer runner scrubs the variable for its tests (it read it first).  Here the outer is given ORDER_IN naming
+  ;; one test, which starts a nested runner on a two-test suite and writes what it saw.
+  (drgnx-test-order-test--with-suite nil
+    (let ((seen (expand-file-name "seen" tmp)) (order (expand-file-name "order" tmp)))
+      (drgnx-test-order-test--suite
+       suite
+       `(("env-test.el" . ,(format "(ert-deftest iso-env/nested ()
+  (let* ((inner (make-temp-file \"inner\" t)) (json (expand-file-name \"r.json\" inner)))
+    (with-temp-file (expand-file-name \"x-test.el\" inner)
+      (insert \"(require 'ert) (ert-deftest iso-inner/a () (should t)) (ert-deftest iso-inner/b () (should t))\"))
+    (let ((process-environment (cons (concat \"DRGNX_TEST_RESULTS=\" json) process-environment)))
+      (call-process %S nil nil nil \"--batch\" \"-Q\" \"-L\" %S \"-l\" %S \"-f\" \"drgnx-run-ert-batch\" inner))
+    (with-temp-file %S
+      (prin1 (list (getenv \"DRGNX_TEST_ORDER_IN\")
+                   (plist-get (json-parse-string (with-temp-buffer (insert-file-contents json) (buffer-string)) :object-type 'plist) :total))
+             (current-buffer)))))
+(ert-deftest iso-env/other () (should t))"
+                                   (expand-file-name invocation-name invocation-directory)
+                                   (file-name-directory (locate-library "run-ert.el")) (locate-library "run-ert.el") seen))))
+      (with-temp-file order (insert "iso-env/nested\n"))
+      (should (eql 0 (car (drgnx-test-order-test--runner suite results (concat "DRGNX_TEST_ORDER_IN=" order) "DRGNX_TEST_ONE_PROCESS=1"))))
+      (should (= 1 (plist-get (drgnx-test-order-test--json results) :total)))   ; ORDER_IN picked the one test
+      (should (equal nil (car (read (with-temp-buffer (insert-file-contents seen) (buffer-string))))))
+      (should (= 2 (cadr (read (with-temp-buffer (insert-file-contents seen) (buffer-string)))))))))
+
+(ert-deftest drgnx-test-order/a-missing-file-is-usage-not-a-backtrace ()
+  (drgnx-test-order-test--with-suite drgnx-test-order-test--polluted
+    (let ((r (drgnx-test-order-test--bin tmp suite "test" "--find-polluter" "iso-pol/z-needs-clean" (expand-file-name "nope-test.el" suite))))
+      (should (eql 2 (car r)))
+      (should (string-match-p "no such test file or directory: .*nope-test.el" (cdr r)))
+      (should (string-match-p "usage: drgnx test" (cdr r)))
+      (should-not (string-match-p "Debugger\\|Backtrace\\|  apply(" (cdr r))))))
 
 (ert-deftest drgnx-test-order/the-flags-reach-the-runner ()
   ;; bin/drgnx test --shuffle[=SEED] / --find-polluter: what the runner's Emacs is given (a fake Emacs records it)

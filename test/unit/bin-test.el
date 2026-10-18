@@ -566,7 +566,7 @@ with a display: `drgnx open' stays graphical (the unit tier has no DISPLAY, and 
 (defun drgnx-bin-test--env (dir parent &rest more)
   (append more   ; first: it wins over the unsets below
           (list (concat "HOME=" dir) (concat "DRGNX_CONFIG_DIR=" dir "/config") (concat "TMPDIR=" parent)
-                "DRGNX_TEST_SELECTOR=\"tmp-probe/leaks\"" "DRGNX_TEST_RESULTS" "DRGNX_RUN_TMP")))
+                "DRGNX_TEST_SELECTOR=\"tmp-probe/leaks\"" "DRGNX_TEST_RESULTS" "DRGNX_RUN_TMP" "DRGNX_TEST_SHUFFLE")))
 
 (defun drgnx-bin-test--spawn (env &rest args)
   "Start bin/drgnx ARGS with ENV; return the process."

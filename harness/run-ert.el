@@ -184,11 +184,15 @@ the report (`drgnx-run-ert--census-guard'), never an error of the test run."
   (drgnx-run-ert--env "DRGNX_TEST_SHUFFLE"))
 
 (defun drgnx-run-ert--shuffle (items seed)
-  "ITEMS (a list) in an order SEED (a string) fixes: Fisher-Yates over `random', seeded from SEED."
-  (random seed)                         ; a string seeds the generator from its contents
-  (let* ((v (vconcat items)) (i (length v)))
+  "ITEMS (a list) in an order SEED (a string) fixes: Fisher-Yates over a generator of this function's own (FNV-1a of
+SEED, then the Park-Miller one, x -> 48271 x mod 2^31-1), so the order is the same on every OS and Emacs, and the
+global `random' state, which tests and `make-temp-file' use, is not touched."
+  (let* ((h 2166136261) (state nil) (v (vconcat items)) (i (length v)))
+    (dolist (c (append seed nil)) (setq h (logand (* (logxor h c) 16777619) #xFFFFFFFF)))
+    (setq state (1+ (mod h 2147483646)))
     (while (> i 1)
-      (let ((j (random i)) (tmp nil))
+      (setq state (mod (* state 48271) 2147483647))
+      (let ((j (mod state i)) (tmp nil))
         (cl-decf i)
         (setq tmp (aref v i)) (aset v i (aref v j)) (aset v j tmp)))
     (append v nil)))
@@ -205,6 +209,12 @@ order whether it runs alone or with the others."
                (format "%s:%s" seed (file-name-nondirectory file))))
             (sort (hash-table-keys groups) #'string<))))
 
+(defvar drgnx-run-ert--order-in nil
+  "DRGNX_TEST_ORDER_IN as `drgnx-run-ert-batch' read it before it scrubbed the environment for the tests, or nil.")
+
+(defvar drgnx-run-ert--order-out nil
+  "DRGNX_TEST_ORDER_OUT as `drgnx-run-ert-batch' read it before it scrubbed the environment for the tests, or nil.")
+
 (defun drgnx-run-ert--env (var)
   "The value of the environment variable VAR, or nil when it is unset or empty."
   (let ((s (getenv var))) (and s (not (string-empty-p s)) s)))
@@ -218,8 +228,8 @@ names the run would run, in that order, to FILE and runs none."
   (let* ((s (drgnx-run-ert--env "DRGNX_TEST_SELECTOR"))
          (selector (if s (car (read-from-string s)) t))
          (seed (drgnx-run-ert--shuffle-seed))
-         (in (drgnx-run-ert--env "DRGNX_TEST_ORDER_IN"))
-         (out (drgnx-run-ert--env "DRGNX_TEST_ORDER_OUT")))
+         (in drgnx-run-ert--order-in)
+         (out drgnx-run-ert--order-out))
     (cond
      (in `(member ,@(mapcar #'intern (split-string (with-temp-buffer (insert-file-contents in) (buffer-string)) "\n" t))))
      ((not (or seed out)) selector)
@@ -588,11 +598,12 @@ one-Emacs run of FILES runs first (DRGNX_TEST_SHUFFLE shuffles them).  It runs T
 then halves the list: at most ⌈log2 N⌉+2 runs for N tests before TEST.  It assumes one polluter.
 Return (:polluter NAME), (:alone t) when TEST fails alone, or (:clean t) when it passes after all the tests before
 it; each with :runs."
-  (let* ((drgnx-run-ert--file-root (file-name-as-directory (drgnx-run-ert--short-root)))
-         (drgnx-run-ert--polluter-runs 0)
+  (let* ((_ (dolist (f files) (unless (file-exists-p f) (user-error "no such test file or directory: %s" f))))
          (files (or (mapcan #'drgnx-run-ert--files files)
                     (list (or (drgnx-run-ert--defining-file dir test)
-                              (user-error "no test named %s under %s" test dir)))))
+                              (user-error "no test named %s under %s (name the FILE that defines it)" test dir)))))
+         (drgnx-run-ert--file-root (file-name-as-directory (drgnx-run-ert--short-root)))
+         (drgnx-run-ert--polluter-runs 0)
          (seed (drgnx-run-ert--shuffle-seed)))
     (add-hook 'kill-emacs-hook #'drgnx-run-ert--end-files)
     (when seed (drgnx-run-ert--say-seed seed))
@@ -612,7 +623,7 @@ it; each with :runs."
                                                first
                                              (seq-drop candidates (length first))))))
                       (list :polluter (car candidates)))))))
-          (append result (list :runs drgnx-run-ert--polluter-runs :before (length before))))
+          (append result (list :runs drgnx-run-ert--polluter-runs :before (length before) :files files)))
       (drgnx-run-ert--end-files)
       (remove-hook 'kill-emacs-hook #'drgnx-run-ert--end-files))))
 
@@ -639,11 +650,12 @@ passes after all the tests before it, 2 when it cannot run."
                                                (if (= 1 (plist-get r :before)) "" "s")))
                                 n)
                        1)
-                      (t (message "\npolluter: %s\n  %s fails when it runs after %s and passes alone %s\n  check the pair: %s"
-                                  (plist-get r :polluter) test (plist-get r :polluter) n
+                      (t (message "\nlikely polluter (unconfirmed): %s\n  bisected from the tests before %s %s, assuming one polluter; the pair was not re-run\n  check the pair, with %s loaded: %s"
+                                  (plist-get r :polluter) test n
+                                  (mapconcat #'identity (plist-get r :files) " ")
                                   (format "DRGNX_TEST_SELECTOR='(member %s %s)' bin/drgnx test --one-process" (plist-get r :polluter) test))
                          0)))
-                 (user-error (message "drgnx: %s" (cadr err)) 2))))
+                 (error (message "drgnx: %s\nusage: drgnx test [--shuffle=SEED] --find-polluter TEST [FILE…]" (error-message-string err)) 2))))
     (kill-emacs code)))
 
 (defvar project-list-file)
@@ -713,6 +725,9 @@ exit 0 or 1."
          ;; each test file in an Emacs of its own, unless DRGNX_TEST_ONE_PROCESS=1 (`bin/drgnx test --one-process')
          (one-process (equal (getenv "DRGNX_TEST_ONE_PROCESS") "1"))
          (drgnx-run-ert--leaks-quiet (equal (getenv "DRGNX_TEST_LEAKS_QUIET") "1"))
+         ;; …the bisect's variables are the runner's alone, like the one above: no test (or runner it starts) sees them
+         (drgnx-run-ert--order-in (drgnx-run-ert--env "DRGNX_TEST_ORDER_IN"))
+         (drgnx-run-ert--order-out (drgnx-run-ert--env "DRGNX_TEST_ORDER_OUT"))
          ;; native trampolines: drgnx's directory, never the user's ~/.config/emacs/eln-cache (both before HOME changes)
          (eln (drgnx-run-ert--eln-dir))
          (user-eln (file-name-as-directory (expand-file-name "eln-cache/" user-emacs-directory)))
@@ -742,7 +757,7 @@ exit 0 or 1."
                   ;; …every Emacs this run starts compiles its trampolines into the same directory, once
                   (and eln (list (concat "DRGNX_TEST_ELN_DIR=" eln)))
                   ;; …a test that runs the runner gets one Emacs per file unless it says otherwise
-                  (list "DRGNX_TEST_ONE_PROCESS" "DRGNX_TEST_LEAKS_QUIET")
+                  (list "DRGNX_TEST_ONE_PROCESS" "DRGNX_TEST_LEAKS_QUIET" "DRGNX_TEST_ORDER_IN" "DRGNX_TEST_ORDER_OUT")
                   ;; …a test that runs the runner or bin/drgnx again must not reuse (and delete) this directory
                   (list "DRGNX_RUN_TMP")
                   ;; …nor start a durable hub that would outlive it (the hub's own tests unset this)
