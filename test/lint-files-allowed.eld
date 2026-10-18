@@ -111,8 +111,6 @@
  (:file "modules/tools/drgnx-agents-ui.el" :fn drgnx-agents-ui--review-open :what with-temp-file :why "a temporary file: the review copy agents-ui opens" :until never)
  (:file "modules/tools/drgnx-agents-ui.el" :fn drgnx-agents-ui-review-done :what write-region :why "a user's file: agents-ui writes" :until never)
  (:file "modules/tools/drgnx-ai-ui.el" :fn drgnx-ai--edit-review :what write-region :why "a temporary file: a diff copy" :until never)
- (:file "modules/tools/drgnx-layouts.el" :fn drgnx-layouts--user :what read-site :why "layouts.eld" :until 7)
- (:file "modules/tools/drgnx-layouts.el" :fn drgnx-layouts--write-user :what with-temp-file :why "layouts.eld" :until 7)
  (:file "modules/ui/drgnx-tty-frames.el" :fn drgnx-tty-frames--read-report-data :what read-site :why "terminal-report.eld" :until 27)
  (:file "modules/ui/drgnx-tty-frames.el" :fn drgnx-tty-frames--save-report :what with-temp-file :why "terminal-report.eld" :until 27)
  (:file "modules/ui/drgnx-tty-frames.el" :fn drgnx-tty-frames--save-report :what rename-file :why "terminal-report.eld" :until 27))
