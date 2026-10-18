@@ -37,7 +37,8 @@ helper already made the claim, and a second, unconditional undo would break the 
 (defvar drgnx-modules--tearing-down nil "Modules whose teardown is running (dynamically bound).")
 
 (defvar drgnx-modules-after-teardown-functions nil
-  "Called with no arguments once after a batch of teardowns (keys and menus follow the registry).")
+  "Called with no arguments once after a batch of teardowns and after a run-time turn on.
+Keys and menus follow the registry.")
 
 (defsubst drgnx-modules--recording-p ()
   "Non-nil when a module's setup is running and it is the setup's own code, not the top level of

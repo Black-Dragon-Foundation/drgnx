@@ -35,10 +35,15 @@ off ("12 ok, 3 off"), and every answer says how old the report is ("from the las
   `off` here until you do) and wait for it at the next start.
 - **On** writes `modules.eld` and, when the module's stage has already passed, runs its setup now. If its packages
   are not installed or the modules it needs are not running, it waits and says so in the Status column
-  (`needs …`); if its stage has not come yet (`idle`, `first-file`, …) it runs when it does.
+  (`needs …`); if its stage has not come yet (`idle`, `first-file`, …) it runs when it does. Its keys and menu
+  entries come back with it, whatever its stage.
+- A problem while turning a module off (an undo that failed) is shown in the echo area, named by its label, and
+  kept for `drgnx doctor`.
 - **`restart` modules.** A module defined with `:teardown 'restart` (and external modules) is not turned off while
-  Emacs runs: the choice is only written, the row says `off at next start`, and it stops then. Turning it on again
-  just takes the choice back.
+  Emacs runs: the choice is only written, nothing is torn down and nothing is asked, the row says `off at next
+  start`, and it stops then. The same holds for a module that a running `restart` module needs: it cannot stop
+  before its dependent does. Modules that need a module chosen off keep running and say `off at next start` too; they
+  wait for it then. Turning the module on again just takes the choice back.
 - Onboarding's "Turn on Chat" keeps meaning "from the next start" and runs nothing now.
 
 From Lisp: `(drgnx-modules-turn-off MODULE &key dependents)` returns the running dependents (and does nothing) unless

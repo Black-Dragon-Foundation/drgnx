@@ -56,10 +56,10 @@ and answered yes."
    (drgnx-modules-run 'startup)
    (should (eq (drgnx-modules-off-test--status 'test/a) 'disabled))
    (should-not drgnx-modules-off-test--log)
-   (let (staged)
-     (add-hook 'drgnx-modules-after-stage-functions (lambda (s) (push s staged)))
+   (let ((followed 0))
+     (add-hook 'drgnx-modules-after-teardown-functions (lambda () (cl-incf followed)))
      (drgnx-modules-turn-on 'test/a)
-     (should (equal staged '(startup))))   ; keys and menus follow, as after a stage
+     (should (= followed 1)))   ; keys and menus follow the registry, once
    (should (equal drgnx-modules-off-test--log '((test/a +))))
    (should (eq (drgnx-modules-off-test--status 'test/a) 'ok))
    (should-not (drgnx-module-disabled-p 'test/a))
@@ -193,3 +193,89 @@ and answered yes."
    (drgnx-modules-toggle 'test/a)
    (should-not (drgnx-modules-off-test--disabled))
    (should (equal drgnx-modules-off-test--log '((test/a +))))))     ; nothing run twice
+
+(ert-deftest drgnx-modules-off/turn-on-puts-keys-and-menus-back-for-a-startup-module ()
+  ;; The real subscriber of the after-teardown hook (drgnx.el), not a stand-in; only the two functions it calls
+  ;; are counted.  The after-stage subscriber skips `startup', so turn-on must not rely on it.
+  (require 'drgnx)
+  (drgnx-modules-off-test--with
+   (let ((applied 0) (refreshed 0)
+         (drgnx-modules-after-teardown-functions (list #'drgnx--after-teardown)))
+     (cl-letf (((symbol-function 'drgnx-keys-apply) (lambda (&rest _) (cl-incf applied)))
+               ((symbol-function 'drgnx-surfaces-refresh) (lambda (&rest _) (cl-incf refreshed))))
+       (drgnx-modules-off-test--define 'test/s :stage 'startup)
+       (drgnx-modules-run 'startup)
+       (drgnx-modules-turn-off 'test/s)
+       (should (= applied 1))
+       (drgnx-modules-turn-on 'test/s)
+       (should (eq (drgnx-modules-off-test--status 'test/s) 'ok))
+       (should (= applied 2))
+       (should (= refreshed 2))))))
+
+(ert-deftest drgnx-modules-off/a-restart-module-is-only-written ()
+  ;; Its running dependents are neither listed, asked about nor torn down; answering no cannot block it.
+  (drgnx-modules-off-test--with
+   (drgnx-modules-off-test--define 'test/r :teardown 'restart)
+   (drgnx-modules-off-test--define 'test/d :requires '(test/r))
+   (drgnx-modules-run 'startup)
+   (should-not (drgnx-modules-turn-off 'test/r))
+   (should (equal (drgnx-modules-off-test--disabled) '(test/r)))
+   (dolist (m '(test/r test/d)) (should (eq (drgnx-modules-off-test--status m) 'ok)))
+   (should (equal (length drgnx-modules-off-test--log) 2))   ; two setups, no undo
+   ;; Its dependent keeps running and says it waits for it at the next start.
+   (should (equal (aref (cadr (assq 'test/d (drgnx-modules--entries))) 4) "off at next start"))
+   (drgnx-modules-turn-on 'test/r)
+   (should (equal (aref (cadr (assq 'test/d (drgnx-modules--entries))) 4) "on"))
+   (unwind-protect
+       (cl-letf (((symbol-function 'y-or-n-p) (lambda (p) (push p drgnx-modules-off-test--prompts) nil)))
+         (drgnx-modules-off-test--press 'test/r)
+         (should-not drgnx-modules-off-test--prompts)
+         (should (equal (drgnx-modules-off-test--disabled) '(test/r)))
+         (should (eq (drgnx-modules-off-test--status 'test/d) 'ok)))
+     (kill-buffer "*drgnx modules*"))))
+
+(ert-deftest drgnx-modules-off/a-module-with-a-restart-dependent-waits-for-the-next-start ()
+  ;; A restart module cannot be turned off now, so the module it needs cannot be either: written only.
+  (drgnx-modules-off-test--with
+   (drgnx-modules-off-test--define 'test/a)
+   (drgnx-modules-off-test--define 'test/b :requires '(test/a))
+   (drgnx-modules-off-test--define 'test/r :requires '(test/b) :teardown 'restart)
+   (drgnx-modules-run 'startup)
+   (should-not (drgnx-modules-turn-off 'test/a :dependents t))
+   (should (equal (drgnx-modules-off-test--disabled) '(test/a)))
+   (dolist (m '(test/a test/b test/r)) (should (eq (drgnx-modules-off-test--status m) 'ok)))
+   (should (equal (length drgnx-modules-off-test--log) 3))
+   (should (equal (aref (cadr (assq 'test/a (drgnx-modules--entries))) 4) "off at next start"))))
+
+(ert-deftest drgnx-modules-off/a-failing-setup-on-turn-on-is-rolled-back-and-reported ()
+  (drgnx-modules-off-test--with
+   (drgnx-modules-write-state '(:version 1 :disabled (test/f)))
+   (drgnx-module-define 'test/f :doc "f"
+                        :setup (lambda ()
+                                 (drgnx-modules-push-undo "f1" (lambda () (push '(f1 -) drgnx-modules-off-test--log)))
+                                 (error "kaputt")))
+   (drgnx-modules-run 'startup)
+   (drgnx-modules-turn-on 'test/f)
+   (should (eq (drgnx-modules-off-test--status 'test/f) 'failed))
+   (should (string-search "kaputt" (plist-get (alist-get 'test/f drgnx-modules--report) :error)))
+   (should (equal drgnx-modules-off-test--log '((f1 -))))
+   (should-not (drgnx-module-disabled-p 'test/f))))
+
+(ert-deftest drgnx-modules-off/an-undo-error-on-turn-off-is-shown-and-the-rest-goes ()
+  (drgnx-modules-off-test--with
+   (let ((after 0) (messages nil))
+     (add-hook 'drgnx-modules-after-teardown-functions (lambda () (cl-incf after)))
+     (drgnx-module-define 'test/e :doc "e"
+                          :setup (lambda ()
+                                   (drgnx-modules-push-undo "first" (lambda () (push '(first -) drgnx-modules-off-test--log)))
+                                   (drgnx-modules-push-undo "second" (lambda () (error "boom")))))
+     (drgnx-modules-run 'startup)
+     (unwind-protect
+         (cl-letf (((symbol-function 'message) (lambda (f &rest a) (push (apply #'format f a) messages))))
+           (drgnx-modules-off-test--press 'test/e))
+       (kill-buffer "*drgnx modules*"))
+     (should (eq (drgnx-modules-off-test--status 'test/e) 'off))
+     (should (equal drgnx-modules-off-test--log '((first -))))
+     (should (= after 1))
+     (should (seq-some (lambda (m) (and (string-search "second" m) (string-search "boom" m))) messages))
+     (should (plist-get (alist-get 'test/e drgnx-modules--report) :problems)))))
