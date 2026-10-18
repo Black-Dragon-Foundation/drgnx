@@ -179,7 +179,7 @@
         (should (string-match-p "^\\*\\* TODO write the parser" board))
         (should (string-match-p "^\\*\\* TODO \\*\\*Step 1: test first\\*\\*" board))
         (should (string-match-p "^\\*\\* TODO ship it" board))
-        (should-not (string-match-p "done already\\|old" board))
+        (should-not (string-match-p "^\\*.*\\b\\(done already\\|old\\)\\b" board))   ; headings: paths may say "folders"
         ;; again: nothing changes
         (let ((r2 (drgnx-projects-import (list alpha beta))))
           (should-not (plist-get r2 :added))
