@@ -17,6 +17,13 @@ so later starts open as you left them. Help → Welcome brings it back at any ti
 - **Run the steps from the top** (the Welcome's header line says so): the cursor starts on the first step; press
   **Return** to run the step under it, and when it is done the cursor moves to the next one. Each step's status and
   result show on its row.
+- **Walk down the list with Next.** A step that has run ends its row with a **Next: <step>** button (click it, or
+  press `n` anywhere in the Welcome): the cursor moves to the next step that is not done — one that failed or
+  warned counts as not done, and after the last step it goes on from the top. It only moves; **Return** still
+  runs the step, so every step asks its own questions and installs only what you agreed to. There is no "Run
+  all" on purpose: a step asks questions and installs software, and chaining them would hide that. (`drgnx
+  onboard` in a terminal is the scripted path.)
+  When every step is done, `n` says so and no row shows a Next button.
 - **Questions appear on the line at the bottom of the window** (Emacs calls it the *minibuffer*): `y` or `n` for
   yes/no; a choice lists its answers and its default in the question itself — e.g. `Set up AI with (ollama,
   lmstudio, openrouter, skip) (default ollama):` — type one (Tab completes it) and press Return; Return alone takes

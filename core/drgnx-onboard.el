@@ -1421,26 +1421,48 @@ modules on or installed packages here, in the drgnx app (CTX interactive): asked
 ;;;; Welcome (the steps in Emacs)
 
 (defvar drgnx-onboard-mode-map
-  (let ((m (make-sparse-keymap))) (keymap-set m "RET" #'drgnx-onboard-run-step-at-point) m))
+  (let ((m (make-sparse-keymap)))
+    (keymap-set m "RET" #'drgnx-onboard-run-step-at-point)
+    (keymap-set m "n" #'drgnx-onboard-next-step)
+    m))
 
 (defconst drgnx-onboard-welcome-header "Return runs the step under the cursor — start at the top"
   "The Welcome's header line (its column names are the buffer's first line).")
 
 (define-derived-mode drgnx-onboard-mode tabulated-list-mode "Welcome"
-  "The onboarding steps: RET runs the step on the line, then the cursor moves to the next one."
+  "The onboarding steps: RET runs the step on the line, then the cursor moves to the next one; n moves to the
+next step not done (a finished step's row ends with a Next button that does the same)."
   (setq tabulated-list-format [("Step" 22 nil) ("Status" 7 nil) ("" 0 nil)]
         tabulated-list-use-header-line nil)   ; the column names in the buffer: the header line says what to do
   (tabulated-list-init-header)
   (setq header-line-format drgnx-onboard-welcome-header))
 
+(defun drgnx-onboard--next-undone (id state)
+  "The next step after ID that is not done in STATE (`drgnx-onboard-state'): ok and info are done.  After the
+last step it goes on from the first; nil when no step but ID is left."
+  (let* ((ids (drgnx-onboard-steps))
+         (tail (cdr (memq id ids))))
+    (seq-find (lambda (i) (not (memq (plist-get (alist-get i state) :status) '(ok info))))
+              (append tail (seq-take-while (lambda (i) (not (eq i id))) ids)))))
+
+(defun drgnx-onboard--next-button (id state)
+  "A \"Next: STEP\" button to the next step not done after ID, or nil when there is none.  It moves the cursor
+there; it runs nothing (each step keeps its own consent)."
+  (when-let* ((next (drgnx-onboard--next-undone id state)))
+    (button-buttonize (format "Next: %s" (plist-get (alist-get next drgnx-onboard--steps) :title))
+                      #'drgnx-onboard--goto-step next)))
+
 (defun drgnx-onboard--entries ()
   (let ((state (drgnx-onboard-state)))
     (mapcar (lambda (id)
-              (let ((spec (alist-get id drgnx-onboard--steps)) (s (alist-get id state))
-                    (busy (and (eq id (car drgnx-onboard--progress)) (cdr drgnx-onboard--progress))))
+              (let* ((spec (alist-get id drgnx-onboard--steps)) (s (alist-get id state))
+                     (busy (and (eq id (car drgnx-onboard--progress)) (cdr drgnx-onboard--progress)))
+                     (next (and s (not busy) (drgnx-onboard--next-button id state))))
                 (list id (vector (plist-get spec :title)
                                  (cond (busy "…") (s (symbol-name (plist-get s :status))) (t "—"))
-                                 (or busy (plist-get s :message) (plist-get spec :doc))))))
+                                 (if next
+                                     (concat (plist-get s :message) "  " next)
+                                   (or busy (plist-get s :message) (plist-get spec :doc)))))))
             (drgnx-onboard-steps))))
 
 (defun drgnx-onboard-welcome ()
@@ -1501,6 +1523,18 @@ never inside the hook (the window and the restored layout come first)."
   (when-let* ((id (tabulated-list-get-id)))
     (drgnx-onboard-run-step id)
     (when-let* ((next (cadr (memq id (drgnx-onboard-steps))))) (drgnx-onboard--goto-step next))))
+
+(defun drgnx-onboard-next-step ()
+  "Move to the next step not done (after this one, then from the top); runs nothing."
+  (interactive)
+  (let ((state (drgnx-onboard-state)))
+    (if-let* ((id (tabulated-list-get-id))
+              (next (drgnx-onboard--next-undone id state)))
+        (drgnx-onboard--goto-step next)
+      (message (if (seq-every-p (lambda (i) (memq (plist-get (alist-get i state) :status) '(ok info)))
+                                (drgnx-onboard-steps))
+                   "All done: every step is done"
+                 "This is the only step left")))))
 
 (declare-function drgnx-command-define "drgnx-registry")
 
