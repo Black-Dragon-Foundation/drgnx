@@ -60,7 +60,6 @@
  (:file "core/drgnx-projects.el" :fn drgnx-projects--write-plan :what write-region :why "a user's file: a plan file" :until never)
  (:file "core/drgnx-projects.el" :fn drgnx-projects--write-plan :what rename-file :why "a user's file: a plan file" :until never)
  (:file "core/drgnx-sandbox.el" :fn drgnx-sandbox--write-private :what write-region :why "a temporary file: a sandbox profile, mode 600" :until never)
- (:file "core/drgnx-search-chunk.el" :fn drgnx-search-config :what read-site :why ".drgnx/search.eld" :until 15)
  (:file "core/drgnx-search-index.el" :fn drgnx-search-index--lock :what write-region :why "its own lock protocol: the index lock" :until never)
  (:file "core/drgnx-startup-trace.el" :fn drgnx-startup-trace--finish :what with-temp-file :why "a developer tool: the startup trace" :until never)
  (:file "core/drgnx-surfaces.el" :fn drgnx-surfaces--usage-read :what read-site :why "command-usage.eld" :until 20)

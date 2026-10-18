@@ -145,4 +145,15 @@ Whether drgnx keeps running when its last window closes (read at every start).
 | Key | Type | Required | What |
 | --- | --- | --- | --- |
 | `:keep-running` | boolean | no | Keep drgnx running when its last window closes |
+## search.eld
+
+Folder: project. Format: 1. Read: when it changes. On a mistake: refused.
+
+Narrows what a project's semantic search indexes: only these globs, not these, or off.
+
+| Key | Type | Required | What |
+| --- | --- | --- | --- |
+| `:include` | list of string | no |  |
+| `:exclude` | list of string | no |  |
+| `:off` | boolean | no |  |
 

@@ -383,7 +383,7 @@
         (drgnx-search--reindex root)
         (should-not started)
         (let ((said (drgnx-search-ui-test--said (lambda () (drgnx-search-index-project)))))
-          (should (string-match-p "\\.drgnx/search\\.eld cannot be read: :exclude must be a list of strings" (car said))))
+          (should (string-match-p "\\.drgnx/search\\.eld cannot be read: :exclude: expected a list, got string" (car said))))
         (should-not started)
         (should (string-match-p "\\.drgnx/search\\.eld cannot be read" (drgnx-search-status root)))))))
 
