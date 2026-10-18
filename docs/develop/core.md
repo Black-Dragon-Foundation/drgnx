@@ -141,6 +141,17 @@ for those layers, however often the keys are applied again (Toggle Modal Editing
   A modal profile's entries for commands outside its layer's scopes are **extras**: their keys in a `:maps` keymap
   are bound next to the command's own layer's keys, never replacing them. `drgnx-keys-after-apply-functions` (abnormal
   hook, the layers) runs at the end of every `drgnx-keys-apply`; the core adds `drgnx-modal-sync-engine` to it.
+- **Claims per state** (`drgnx-keys-modal-claims`). When `drgnx-keys-modal` loads it registers
+  `(eval-after-load 'evil …)`, which copies evil's state maps named in `:maps` into `drgnx-keys-modal-snapshots`
+  before any binding drgnx defers to evil's load (a map not defined is skipped). `drgnx-keys-resolve :snapshots`
+  (`drgnx-keys-apply` passes that variable) meets every other layer's `global-map` binding with what a snapshot binds
+  on its key (or a prefix of it, or keys under it), and every `global-map` or panel-map binding
+  (`drgnx-keys-modal-panel-maps`) with the leader and panel maps' bindings of the resolution; without snapshots the
+  `:claims` with STATES stand in, each on the engine maps whose states it covers. In a mixed stack there is no
+  insert-state claim (Vim's insert keys are off there). The binding is kept; the conflict carries `:states` and
+  `:elsewhere t`. A binding of a higher rank gets `:also` (the engine maps), which `drgnx-keys-apply` binds through
+  `drgnx-keys--apply-binding` and records in `drgnx-cmd-bound`, so `drgnx-keys--restore` undoes it; leader or panel
+  keys it beats are dropped. In panels the leader and panel maps always win (they are above the panel's own map).
 - **Commands.** `modal-leader` (Leader Menu) reads the leader's `SPC` submap as a transient map from any state.
   `panel-next` / `panel-previous` (Next / Previous Row, bound in the panel map) run the panel's own `<down>` /
   `<up>` binding, else `next-line` / `previous-line`, so a panel keeps its row movement.

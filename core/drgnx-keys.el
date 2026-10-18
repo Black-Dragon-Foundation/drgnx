@@ -171,22 +171,42 @@ as macOS sends it (`S-s-w' is s-W).  The keymap used is the entry's, else the co
   (let ((a (drgnx-keys--parse a)) (b (drgnx-keys--parse b)))
     (and (< (length a) (length b)) (equal a (seq-take b (length a))))))
 
-(cl-defun drgnx-keys-resolve (&key commands profiles layers user platform defaults maps)
+(defun drgnx-keys--claim-parties (claims)
+  "State CLAIMS (`drgnx-keys-modal-claims') as conflict parties (:id ID or :claim DESCRIPTION, :layer, :states): one
+per command or description and layer, with the states of all its claims."
+  (let (out)
+    (dolist (c claims)
+      (let* ((who (if (plist-get c :id) (list :id (plist-get c :id)) (list :claim (plist-get c :claim))))
+             (p (seq-find (lambda (p) (and (equal (seq-take p 2) who) (eq (plist-get p :layer) (plist-get c :layer)))) out)))
+        (if p
+            (setf (plist-get p :states) (drgnx-keys-modal-order (append (plist-get p :states) (plist-get c :states))))
+          (push (append who (list :layer (plist-get c :layer) :states (plist-get c :states))) out))))
+    (nreverse out)))
+
+(cl-defun drgnx-keys-resolve (&key commands profiles layers user platform defaults maps snapshots)
   "Resolve keys for COMMANDS (registry structs) → plist (:bindings :conflicts :problems).
 PROFILES: alist PROFILE → plist.  LAYERS: list of (PROFILE SCOPE…), later wins.  USER: the
 keys.eld plist (:bind :unbind), which wins over every layer.  PLATFORM: `macos' turns VS Code's
 C- into s-.  DEFAULTS: Emacs' own global keymap, for the emacs layer's claims and prefix checks.
 MAPS: a function MAPSYM → the loaded keymap or nil, for prefix checks in mode keymaps.
-A binding is a plist (:id :key :map :layer); a conflict is (:key :map :kind :winner :losers),
+A binding is a plist (:id :key :map :layer [:also MAPS]); a conflict is (:key :map :kind :winner :losers),
 KIND `same-key', `claim' (a key another layer uses natively) or `prefix'.
 A profile with `:modal' (keys/vim.eld) places each key by `drgnx-keys-modal-key-map', and its entries for commands
 outside the layer's scopes still bind their keys that land in one of its modal `:maps' (the leader keys): extras,
 next to the keys of the command's own layer, never replacing them (a keys.eld entry for the command replaces both).
-A keys.eld key that starts with the modal layer's leader goes in its leader map."
+A keys.eld key that starts with the modal layer's leader goes in its leader map.
+Claims per state (`drgnx-keys-modal-claims'): SNAPSHOTS (alist KEYMAP-SYMBOL → keymap, `drgnx-keys-modal-snapshots')
+say what the modal engine binds; without them the modal profile's claims with STATES stand in.  A binding meeting
+one is kept, and the conflict, (:key :map :kind claim :states STATES :winner :losers :elsewhere t), says who wins
+in STATES: the higher layer.  A binding that wins gets :also, the engine's keymaps to bind it in too; the leader or
+panel keys it beats are dropped."
   (let ((cmds (make-hash-table :test #'eq)) (assign (make-hash-table :test #'eq))
         (extras (make-hash-table :test #'eq))
-        (stack (drgnx-keys-modal-of-stack layers profiles))
-        (rank 0) claims defaults-claim problems bindings conflicts)
+        (stack (and (not (drgnx-keys--layers-error layers)) (drgnx-keys-modal-of-stack layers profiles)))
+        (mixed (seq-some (lambda (l) (when-let* ((spec (and (consp l) (alist-get (car l) profiles))))
+                                       (not (plist-get spec :modal))))
+                         (and (proper-list-p layers) layers)))
+        (rank 0) claims modal-layer defaults-claim problems bindings conflicts)
     (dolist (c commands) (puthash (drgnx-cmd-id c) c cmds))
     (cl-flet ((extra (entry spec layer)
                 ;; ENTRY of a modal profile for a command outside its scopes: the keys in its modal maps only.
@@ -226,8 +246,15 @@ A keys.eld key that starts with the modal layer's leader goes in its leader map.
                       (take entry spec profile (format "key profile %s" profile)
                             (and (not (memq 'editing scopes)) (seq-some (lambda (l) (memq 'editing (cdr l))) layers)))
                     (when (plist-get spec :modal) (extra entry spec profile))))
-                (pcase-dolist (`(,scope ,key ,desc) (plist-get spec :claims))
-                  (when (memq scope scopes) (push (list :key key :claim desc :layer profile :rank rank) claims)))
+                ;; Claims with STATES (a modal profile's) are claims per state, the others hold in every state.
+                (pcase-dolist (`(,scope ,key ,desc ,states) (plist-get spec :claims))
+                  (when (and (memq scope scopes) (not (and states (plist-get spec :modal))))
+                    (push (list :key key :claim desc :layer profile :rank rank) claims)))
+                (when (and (plist-get spec :modal) (not modal-layer))
+                  (setq modal-layer
+                        (list :modal (plist-get spec :modal) :profile profile :rank rank
+                              :hand (seq-filter (lambda (cl) (and (memq (car cl) scopes) (nth 3 cl)))
+                                                (plist-get spec :claims)))))
                 (when (and (plist-get spec :claims-defaults) (memq 'editing scopes))
                   (setq defaults-claim (list :layer profile :rank rank))))
             (push (format "key layer %s: no such profile (known: %s)" profile
@@ -344,10 +371,38 @@ A keys.eld key that starts with the modal layer's leader goes in its leader map.
                           :winner (if b-wins (party b) top-party)
                           :losers (if b-wins them (cons (party b) (remq top-party them))))
                     conflicts)
-              (unless b-wins (setq bindings (remq b bindings))))))))
+              (unless b-wins (setq bindings (remq b bindings)))))))
+      ;; Keys the modal layer has in some states (claims per state): the binding stays, the higher layer wins in
+      ;; those states only.  A binding that wins is bound in the engine's keymaps too (:also), and the leader or
+      ;; panel keys it beats are dropped.
+      (when modal-layer
+        (let ((groups nil))
+          (dolist (cl (drgnx-keys-modal-claims bindings (plist-get modal-layer :modal) (plist-get modal-layer :profile)
+                                               (plist-get modal-layer :rank) snapshots (drgnx-keys-modal-panel-maps)
+                                               (plist-get modal-layer :hand) mixed))
+            (push cl (alist-get (plist-get cl :binding) groups nil nil #'eq)))
+          (pcase-dolist (`(,b . ,cls) (nreverse groups))
+            (when (memq b bindings)
+              (let* ((cls (reverse cls))
+                     (top (seq-reduce (lambda (w c) (if (> (plist-get c :rank) (plist-get w :rank)) c w)) cls (car cls)))
+                     (b-wins (> (plist-get b :rank) (plist-get top :rank)))
+                     (states (drgnx-keys-modal-order (apply #'append (mapcar (lambda (c) (plist-get c :states)) cls))))
+                     (them (drgnx-keys--claim-parties cls)))
+                (when b-wins
+                  (nconc b (list :also (delete-dups (delq nil (mapcar (lambda (c) (and (not (plist-get c :drop)) (plist-get c :map)))
+                                                                      cls)))))   ; in place: B is in `bindings'
+                  (let ((drop (apply #'append (mapcar (lambda (c) (plist-get c :drop)) cls))))
+                    (setq bindings (seq-remove (lambda (x) (memq x drop)) bindings))))
+                (push (list :key (plist-get b :key) :map (mapsym b) :kind 'claim :states states
+                            :winner (if b-wins (party b)
+                                      (plist-put (copy-sequence (car (drgnx-keys--claim-parties (list top)))) :states states))
+                            :losers (if b-wins them (list (party b)))
+                            :elsewhere t)
+                      conflicts)))))))
     (list :bindings (mapcar (lambda (b) (append (list :id (plist-get b :id) :key (plist-get b :key)
                                                       :map (plist-get b :map) :layer (plist-get b :layer))
-                                                (and (plist-get b :everywhere) (list :everywhere t))))
+                                                (and (plist-get b :everywhere) (list :everywhere t))
+                                                (and (plist-get b :also) (list :also (plist-get b :also)))))
                             bindings)
           :conflicts (nreverse conflicts)
           :problems (nreverse problems))))
@@ -535,13 +590,17 @@ Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolut
                (layers (or drgnx-keys--session-layers (plist-get user :layers) drgnx-keys-layers))
                (r (drgnx-keys-resolve :commands (drgnx-commands-all) :profiles drgnx-keys-profiles :layers layers
                                       :user user :platform (drgnx-platform) :defaults drgnx-keys--defaults
-                                      :maps (lambda (m) (and (boundp m) (keymapp (symbol-value m)) (symbol-value m))))))
+                                      :maps (lambda (m) (and (boundp m) (keymapp (symbol-value m)) (symbol-value m)))
+                                      :snapshots drgnx-keys-modal-snapshots)))
           (drgnx-keys--set-mac-modifiers layers (plist-get user :mac-option))
           (dolist (c (drgnx-commands-all)) (setf (drgnx-cmd-bound c) nil))
           (dolist (b (plist-get r :bindings))
             (let ((cmd (drgnx-commands-get (plist-get b :id))))
-              (setf (drgnx-cmd-bound cmd) (append (drgnx-cmd-bound cmd) (list (cons (plist-get b :key) (plist-get b :map)))))
-              (drgnx-keys--apply-binding b cmd drgnx-keys--generation)))
+              ;; A key that beats the modal engine's in some states is bound in the engine's keymaps too (:also);
+              ;; `drgnx-keys--restore' puts the engine's own key back on the next apply.
+              (dolist (map (cons (plist-get b :map) (plist-get b :also)))
+                (setf (drgnx-cmd-bound cmd) (append (drgnx-cmd-bound cmd) (list (cons (plist-get b :key) map))))
+                (drgnx-keys--apply-binding (plist-put (copy-sequence b) :map map) cmd drgnx-keys--generation))))
           (drgnx-keys--set-everywhere (plist-get r :bindings))
           (setq drgnx-keys-last (append (list :layers layers
                                               :problems (append (reverse drgnx-keys-problems) (plist-get r :problems)))
@@ -567,11 +626,39 @@ Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolut
             (plist-get p :claim))
           (or (plist-get p :layer) "Emacs")))
 
+(defun drgnx-keys--states-text (states)
+  "STATES (`drgnx-keys-modal-places') as words: \"normal, visual, motion state and panels\", \"panels\"."
+  (let* ((ss (remq 'panels states)) (s (and ss (concat (mapconcat #'symbol-name ss ", ") " state"))))
+    (cond ((and s (memq 'panels states)) (concat s " and panels"))
+          (s)
+          ((memq 'panels states) "panels")
+          (t ""))))
+
+(defun drgnx-keys--state-party (p)
+  "A conflict party P of a state conflict as text: its states after the layer."
+  (if-let* ((states (plist-get p :states)))
+      (format "%s (%s; %s)" (string-remove-suffix (format " (%s)" (or (plist-get p :layer) "Emacs")) (drgnx-keys--party p))
+              (or (plist-get p :layer) "Emacs") (drgnx-keys--states-text states))
+    (drgnx-keys--party p)))
+
 (defun drgnx-keys-conflict-text (c)
-  "Conflict C as one line: KEY WINNER over LOSERS [KIND]."
-  (format "%s %s over %s [%s%s]" (plist-get c :key) (drgnx-keys--party (plist-get c :winner))
-          (mapconcat #'drgnx-keys--party (plist-get c :losers) ", ") (plist-get c :kind)
-          (if (memq (plist-get c :map) '(nil global-map)) "" (format ", in %s" (plist-get c :map)))))
+  "Conflict C as one line: KEY WINNER over LOSERS [KIND].  A conflict in some states (claims per state) names them,
+and where the losing key still works: \"C-o Jump Back (vim; normal, visual, motion state) over Open File (vscode)
+[claim]; Open File in insert state and panels\"."
+  (let ((states (plist-get c :states)))
+    (concat
+     (format "%s %s over %s [%s%s]" (plist-get c :key)
+             (funcall (if states #'drgnx-keys--state-party #'drgnx-keys--party) (plist-get c :winner))
+             (mapconcat (if states #'drgnx-keys--state-party #'drgnx-keys--party) (plist-get c :losers) ", ")
+             (plist-get c :kind)
+             (if (memq (plist-get c :map) '(nil global-map)) "" (format ", in %s" (plist-get c :map))))
+     (when (and states (plist-get (plist-get c :winner) :states))   ; the modal layer won: where the other key works
+       (let* ((loser (car (plist-get c :losers)))
+              (name (string-remove-suffix (format " (%s)" (plist-get loser :layer)) (drgnx-keys--party loser)))
+              (left (seq-remove (lambda (s) (memq s states))
+                                (if (eq (plist-get c :map) 'global-map) drgnx-keys-modal-places '(panels)))))
+         (if left (format "; %s in %s" name (drgnx-keys--states-text left))
+           (format "; %s when modal editing is off" name)))))))
 
 (defun drgnx-keys--group-text (group)
   "Prefix conflicts GROUP (one keymap, the same losers) as one line: COMMON-PREFIX … N keys over LOSERS."

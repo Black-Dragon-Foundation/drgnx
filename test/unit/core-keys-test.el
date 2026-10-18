@@ -106,11 +106,15 @@ is undone after BODY."
     (should (equal (plist-get (car (plist-get (drgnx-keys-test--conflict r "C-o") :losers)) :id) 'open-file))))
 
 (ert-deftest drgnx-keys/vim-editing-then-vscode-app ()
-  (let* ((r (drgnx-keys-test--resolve '((vim editing) (vscode app window))))
+  ;; The mixed preset puts Vim last: Vim's C-o wins in normal, visual and motion state, and VS Code's Open File
+  ;; keeps C-o (insert state, panels) next to its leader key.
+  (let* ((r (drgnx-keys-test--resolve '((vscode app window) (vim editing))))
          (c (drgnx-keys-test--conflict r "C-o")))
     (should (eq (plist-get c :kind) 'claim))
-    (should (equal (plist-get (car (plist-get c :losers)) :claim) "jump back"))
-    (should (equal (drgnx-keys-test--keys r 'open-file) '("C-o")))))
+    (should (equal (plist-get c :states) '(normal visual motion)))
+    (should (equal (plist-get (plist-get c :winner) :claim) "Jump Back"))
+    (should (equal (plist-get (car (plist-get c :losers)) :id) 'open-file))
+    (should (equal (drgnx-keys-test--keys r 'open-file) '("C-o" "SPC f f")))))
 
 (ert-deftest drgnx-keys/vim-commands-are-on-the-leader-map ()
   (let ((r (drgnx-keys-test--resolve '((vim app editing window)))))
@@ -365,7 +369,8 @@ is undone after BODY."
 (ert-deftest drgnx-keys/which-key-labels-follow-switches ()
   (skip-unless (require 'which-key nil t))
   (let ((which-key-replacement-alist which-key-replacement-alist)
-        (after-load-alist after-load-alist) (features features))
+        (after-load-alist after-load-alist) (features features)
+        (drgnx-keys-modal-snapshots drgnx-keys-modal-snapshots))   ; this fake evil's snapshot stays here
     (defvar evil-normal-state-map)
     (let ((evil-normal-state-map (make-sparse-keymap)))
       (drgnx-keys-test--live

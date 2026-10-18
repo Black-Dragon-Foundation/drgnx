@@ -115,9 +115,12 @@ VS Code or Emacs keys). It runs [evil](https://github.com/emacs-evil/evil) as th
 
 The Vim profile's commands are on the leader keys `SPC …` (and `C-w …` for windows). They live in drgnx's own
 `drgnx-modal-leader-map`, not in evil's maps, so they are known to the key sheet, the palette and the conflict report
-before evil is installed, and the engine only has to plug the map into its states. The palette is reachable in every
-state and panel: `SPC SPC` from normal, visual and motion state and panels, `C-S-p` and `F1` (Cmd+Shift+P and `F1` on a
-Mac) everywhere, so insert state is never without a way in. The leader keys of the shipped profile:
+before evil is installed, and the engine only has to plug the map into its states. `C-w` is a leader prefix like `SPC`:
+a `keys.eld` key starting with `C-w ` goes in the leader map, next to evil's own `C-w` window keys (`C-w v`, `C-w s` …,
+which stay evil's); the shipped profile has no `C-w` rows yet, so the table below has none. The palette is reachable
+in every state and panel: `SPC SPC` from normal, visual and motion state and panels, `C-S-p` and `F1` (Cmd+Shift+P and
+`F1` on a Mac) everywhere, so insert state is never without a way in. As in the VS Code profile, that `F1` replaces
+Emacs' `F1` help prefix (`C-h` still works). The leader keys of the shipped profile:
 
 | Key | Command |
 |---|---|
@@ -306,9 +309,33 @@ keys the app and window commands. The one exception is a modal profile (Vim): it
 maps, the `SPC` leader keys above all, are kept next to the other layer's key for a command outside its scopes.
 
 Besides keying drgnx commands, a profile **claims** the keys its own editing model uses: the `emacs` layer claims
-Emacs' default bindings (`C-s` isearch, `C-o` open-line, `C-k` kill-line, …), the `vim` layer claims Vim's
-normal-mode keys (`C-o` jump back, `C-w` window commands, `C-v` visual block, …). When a later layer binds a claimed
-key, it wins — and the clash is reported.
+Emacs' default bindings (`C-s` isearch, `C-o` open-line, `C-k` kill-line, …), the `vim` layer claims Vim's own keys
+(`C-o` jump back, `C-w` window commands, `C-v` visual block, …). When a later layer binds a claimed key, it wins —
+and the clash is reported.
+
+### Vim's claims are per state
+
+Vim's keys exist only in some states: `C-o` is jump back in normal, visual and motion state, but in insert state
+(of a mixed stack) and in panels nothing of Vim's is on it. So a key another layer binds where Vim has one is
+**kept**, and the higher layer wins **in those states only**:
+
+- In "Vim editing + VS Code app keys" (Vim is the later layer) VS Code's `C-o` Open File, `C-w` Close Tab, `C-b`,
+  `C-p`, `C-n`, `C-t` … stay bound: Vim's key wins in normal, visual and motion state, VS Code's works in insert state
+  and in panels. Vim's insert-state keys are off in a mixed stack, so there are no insert-state claims there.
+- The leader and panel maps claim too: VS Code's `C-w` Close Tab meets the leader's `C-w …` keys in normal, visual and
+  motion state and in panels; a panel's own `SPC` (the Explorer's Open, Keep Focus) meets the `SPC` leader in panels,
+  where the leader always wins.
+- Where evil's keys come from: once evil has loaded, drgnx reads them from a copy of evil's own state maps
+  (`evil-normal-state-map`, `evil-visual-state-map`, `evil-motion-state-map`, `evil-insert-state-map`), taken
+  before drgnx binds anything there — every key evil binds counts (`C-^`, `C-6`, …), not only a list. Before
+  that (evil not installed yet) `keys/vim.eld`'s `:claims` stand in: `(editing "C-o" "Jump Back" (normal visual
+  motion insert))`, each with the states evil binds it in. A claim without states holds in every state.
+- A key that **beats** Vim's — a `keys.eld` key, or a layer above Vim — is bound in evil's map too, so it works in
+  those states (`(:bind ((go-quick-open "C-p")))` in the Vim stack: `C-p` is Quick Open in normal and insert
+  state, not evil's paste-pop). The next switch of the key stack puts evil's own key back.
+
+The key sheet says who wins where: `C-o Jump Back (vim; normal, visual, motion state) over Open File… (vscode)
+[claim]; Open File… in insert state and panels`.
 
 ## Conflicts are reported, never hidden
 
@@ -316,7 +343,7 @@ A conflict is one of:
 
 - **same key** — two commands want one key in one keymap (however it is written: `TAB` and `C-i` are one key);
 - **claim** — a layer binds a key another layer uses natively (e.g. VS Code's `C-o` Open File over Emacs'
-  open-line, or over Vim's jump back);
+  open-line; with Vim, per state: see "Vim's claims are per state" above);
 - **prefix** — a key turns a prefix into a command or the other way round: against Emacs' own bindings (VS Code's
   `F1` replaces Emacs' `F1` help prefix — `C-h` still works — and its `C-k` chords replace `kill-line`), against a
   loaded mode keymap, or between two drgnx keys (`C-k` for one command, `C-k C-s` for another).
@@ -343,6 +370,8 @@ cannot be bound, a prefix it replaces) joins the list and the report then.
 - Command ids are the registry ids (the palette shows the commands; `drgnx-commands-all` lists them).
 - `:map` is a keymap symbol or `(FEATURE . KEYMAP)` for a keymap that exists once FEATURE is loaded. In a Vim or
   mixed stack a key that starts with `SPC` (or `C-w`, the leader keys) always goes in the leader map, whatever `:map` says.
+  A global key that evil binds in some state (`C-p`, `C-o` …) beats evil's there: drgnx binds it in evil's map too
+  and puts evil's key back when the stack switches (see "Vim's claims are per state").
 - `:mac` gives a different key on macOS: `(palette "C-c p" :mac "s-p")`; `:mac ()` is no key there, and
   `(quit :none "reason" :mac "s-q")` a key only there.
 - `:everywhere` names keys that must work in every mode: ``(toggle-panel "C-`" :everywhere "C-j")`` binds `C-j`

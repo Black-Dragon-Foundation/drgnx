@@ -72,10 +72,10 @@
 
 (ert-deftest drgnx-keys-modal/leader-keys-stay-in-the-mixed-stack ()
   (let ((r (drgnx-keys-modal-test--resolve '((vscode app window) (vim editing)))))
-    ;; (open-file's C-o is Vim's claim "jump back" until Task 7 makes claims per state.)
     (should (equal (drgnx-keys-modal-test--binds r 'save-file)
                    '(("C-s" . global-map) ("SPC f s" . drgnx-modal-leader-map))))
-    (should (member '("SPC f f" . drgnx-modal-leader-map) (drgnx-keys-modal-test--binds r 'open-file)))
+    (should (equal (drgnx-keys-modal-test--binds r 'open-file)
+                   '(("C-o" . global-map) ("SPC f f" . drgnx-modal-leader-map))))
     (should (equal (sort (mapcar #'car (drgnx-keys-modal-test--binds r 'palette)) #'string<)
                    '("<f1>" "C-S-p" "SPC SPC")))
     (should (member '("C-S-p" . global-map) (drgnx-keys-modal-test--binds r 'palette)))
