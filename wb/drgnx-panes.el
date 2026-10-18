@@ -68,11 +68,13 @@ SPEC's :buffer (a function, a buffer, or a name made if missing), else its :plac
       (when-let* ((name (cond ((stringp b) b) ((bufferp b) (buffer-name b)))))
         (concat "\\`" (regexp-quote name) "\\'")))))
 
+(defvar drgnx-pane--last (make-hash-table :test 'eq :weakness 'key)
+  "Frame → alist KIND → the last buffer the kind showed there.
+Kept out of frame parameters: a buffer object in one would make the saved frame state unreadable.")
+
 (defun drgnx-pane--remember (kind buffer)
   "Remember BUFFER as the last one KIND showed on the selected frame (an editor kind's window is found by it)."
-  (let ((all (copy-alist (frame-parameter nil 'drgnx-pane-last))))
-    (setf (alist-get kind all) buffer)
-    (set-frame-parameter nil 'drgnx-pane-last all)))
+  (setf (alist-get kind (gethash (selected-frame) drgnx-pane--last)) buffer))
 
 ;;;; The `areas' backend: forwards to today's docks
 
@@ -85,7 +87,11 @@ SPEC's :buffer (a function, a buffer, or a name made if missing), else its :plac
       (setf (alist-get area drgnx-wb--areas)
             (plist-put (copy-sequence spec) :tabs (assq-delete-all kind (copy-sequence (plist-get spec :tabs)))))))
   (when-let* ((matcher (and old (drgnx-pane--editor-matcher old)))
-              ((not (equal matcher (drgnx-pane--editor-matcher spec)))))
+              ((not (equal matcher (drgnx-pane--editor-matcher spec))))
+              ;; another editor kind may still use it
+              ((not (seq-some (lambda (k)
+                                (and (not (eq (car k) kind)) (equal matcher (drgnx-pane--editor-matcher (cdr k)))))
+                              drgnx-pane--kinds))))
     (setq drgnx-rules--table (assoc-delete-all matcher drgnx-rules--table)))
   (pcase (plist-get spec :home)
     ('left
@@ -111,7 +117,7 @@ SPEC's :buffer (a function, a buffer, or a name made if missing), else its :plac
          (with-selected-frame (or frame (selected-frame))
            (and (eq (drgnx-wb-area-tab area) kind) (drgnx-wb-area-window area frame)))))
       ('editor
-       (let* ((b (alist-get kind (frame-parameter frame 'drgnx-pane-last)))
+       (let* ((b (alist-get kind (gethash (or frame (selected-frame)) drgnx-pane--last)))
               (b (if (buffer-live-p b) b
                    (let ((s (plist-get spec :buffer))) (if (stringp s) (get-buffer s) s)))))
          (and (buffer-live-p b) (get-buffer-window b (or frame (selected-frame)))))))))
@@ -120,8 +126,10 @@ SPEC's :buffer (a function, a buffer, or a name made if missing), else its :plac
   (let* ((spec (drgnx-pane--spec kind)) (home (plist-get spec :home))
          (selected (selected-window)))
     ;; A view swap deletes the dock windows and would move focus to the new dock: leave the dock first.
-    (when (and (eq home 'left) (not select) (eq (window-parameter selected 'drgnx-role) 'dock))
-      (drgnx-wb-focus-editor))
+    ;; Only when the view changes; otherwise nothing is selected, so the buffer order and use times stay.
+    (when (and (eq home 'left) (not select) (eq (window-parameter selected 'drgnx-role) 'dock)
+               (not (eq (or (plist-get spec :view) 'explorer) (drgnx-wb-sidebar-view))))
+      (select-window (drgnx-wb-editor-window) 'norecord))
     (prog1
         (pcase home
           ('left

@@ -218,6 +218,40 @@
    (drgnx-pane-define-kind 'pane-notes :home 'bottom)
    (should-not (eq 'editor (car (drgnx-wb-rule-for "*pane-notes-2*"))))))
 
+(ert-deftest drgnx-panes/frame-parameters-stay-readable-after-an-editor-show ()
+  (drgnx-panes-test--with
+   (drgnx-pane-define-kind 'pane-notes :home 'editor :buffer "*pane-notes*")
+   (drgnx-pane-show 'pane-notes)
+   (should (drgnx-pane-window 'pane-notes))
+   (let* ((drgnx-params (seq-filter (lambda (p) (string-prefix-p "drgnx" (symbol-name (car p))))
+                                    (frame-parameters)))
+          (text (prin1-to-string drgnx-params)))
+     (should-not (string-match-p "#<" text))
+     (should (equal drgnx-params (read text))))
+   (should-not (string-match-p "pane-notes" (prin1-to-string (frame-parameters))))))
+
+(ert-deftest drgnx-panes/a-shared-place-rule-stays-while-another-editor-kind-uses-it ()
+  (drgnx-panes-test--with
+   (drgnx-pane-define-kind 'pane-one :home 'editor :buffer "*pane-notes*")
+   (drgnx-pane-define-kind 'pane-two :home 'editor :buffer "*pane-notes*")
+   (drgnx-pane-define-kind 'pane-one :home 'editor :buffer "*pane-other*")
+   (should (eq 'editor (car (drgnx-wb-rule-for "*pane-notes*"))))      ; pane-two still has it
+   (should (eq 'editor (car (drgnx-wb-rule-for "*pane-other*"))))
+   (drgnx-pane-define-kind 'pane-two :home 'bottom)
+   (should-not (eq 'editor (car (drgnx-wb-rule-for "*pane-notes*"))))))
+
+(ert-deftest drgnx-panes/showing-in-the-same-view-from-the-dock-selects-nothing ()
+  (drgnx-panes-test--with
+   (drgnx-pane-define-kind 'pane-tree :home 'left :slot 0 :buffer (drgnx-panes-test--buffer " *drgnx pane-tree*"))
+   (drgnx-pane-define-kind 'pane-tabs :home 'left :slot 1 :buffer (drgnx-panes-test--buffer " *drgnx pane-tabs*"))
+   (let ((editor (selected-window)))
+     (select-window (drgnx-pane-show 'pane-tree))
+     (let ((dock (selected-window)) (order (buffer-list)))
+       (drgnx-pane-show 'pane-tabs)
+       (should (eq (selected-window) dock))
+       (should (equal order (buffer-list)))
+       (should-not (eq dock editor))))))
+
 (ert-deftest drgnx-panes/hiding-a-left-kind-of-another-view-does-nothing ()
   (drgnx-panes-test--with
    (drgnx-pane-define-kind 'pane-tree :home 'left :slot 0 :buffer (drgnx-panes-test--buffer " *drgnx pane-tree*"))
