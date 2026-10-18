@@ -311,4 +311,12 @@ new file mode 100644
       (should (eq (get-text-property (+ bar 2) 'face) 'diff-added))     ; the other cell's first
       (should (eq (get-text-property (1- (line-end-position)) 'face) 'diff-added)))))
 
+(ert-deftest drgnx-diff/split-no-newline-keeps-pairing ()
+  ;; M11b-3: a "\ No newline" marker after the removed lines must not end their pairing with the added ones
+  (drgnx-diff-test--in (concat "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,2 +1,2 @@\n-a\n-b\n"
+                               "\\ No newline at end of file\n+c\n+d\n\\ No newline at end of file\n") 'split
+    (should (re-search-forward "1 a +│ +1 c" nil t))
+    (should (re-search-forward "2 b +│ +2 d" nil t))
+    (should (re-search-forward "No newline at end of file" nil t))))
+
 ;;; mod-diff-test.el ends here

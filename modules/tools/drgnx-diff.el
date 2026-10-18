@@ -129,7 +129,7 @@
 
 (defun drgnx-diff--insert-split (i path hunk)
   (let* ((w (max 20 (/ (- (drgnx-diff--columns) 3) 2)))
-         (old (plist-get hunk :old-start)) (new (plist-get hunk :new-start)) (dels nil) (adds nil) (loc nil))
+         (old (plist-get hunk :old-start)) (new (plist-get hunk :new-start)) (dels nil) (adds nil) (marks nil) (loc nil))
     (cl-flet ((flush ()
                 (setq dels (nreverse dels) adds (nreverse adds))
                 (while (or dels adds)
@@ -140,7 +140,10 @@
                     (insert left " │ " right "\n")
                     (put-text-property b (point) 'drgnx-diff-loc loc)
                     (when d (put-text-property b (+ b (length left)) 'face 'diff-removed))
-                    (when a (put-text-property (+ b (length left) 3) (1- (point)) 'face 'diff-added))))))
+                    (when a (put-text-property (+ b (length left) 3) (1- (point)) 'face 'diff-added))))
+                (dolist (m (nreverse marks))               ; "\ No newline" notes come after the pairs they follow
+                  (drgnx-diff--row (concat "\\" m) loc 'shadow))
+                (setq marks nil)))
       (dolist (l (plist-get hunk :lines))
         (pcase (car l)
           (?- (push (cons old (cdr l)) dels) (cl-incf old))
@@ -149,7 +152,7 @@
                (setq loc (list i path new))
                (drgnx-diff--row (concat (drgnx-diff--cell old (cdr l) w) " │ " (drgnx-diff--cell new (cdr l) w)) loc)
                (cl-incf old) (cl-incf new))
-          (?\\ (flush) (drgnx-diff--row (concat "\\" (cdr l)) loc 'shadow))))
+          (?\\ (push (cdr l) marks))))
       (flush))))
 
 (defun drgnx-diff--insert-file (i)
