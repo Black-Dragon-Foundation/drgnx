@@ -63,12 +63,14 @@ and never hands over keys — on the `/tmp` fallback another local user could ha
 | `job/reply` `{message, text}` | `true`: the user's answer to an agent's message |
 
 Errors: `{"id", "error": {"message"}}`. A line that is not JSON is answered with an error too when its `"id"` can be
-read (otherwise it is dropped); a line over 1 MiB closes its connection. A client that stops reading (a suspended
-or busy Emacs) is dropped: once its socket's buffer is full, `process-send-string` waits and runs timers and filters
-meanwhile, so the next event or answer for it would write again one level deeper each time (until
-`excessive-lisp-nesting` lands anywhere in the hub). The hub marks a connection while writing to it
-(`drgnx-hub--answer`), and a write that finds the mark still set closes that connection instead (logged); its Emacs
-connects again (the Agents module's idle timer, the job window's refresh).
+read (otherwise it is dropped); a line over 1 MiB closes its connection. A client that reads slowly is never dropped for it: once its
+socket's buffer is full, `process-send-string` waits and runs timers and filters meanwhile, and what comes for that
+client then is queued and written in order after the write (`drgnx-hub--answer`; never a write one level deeper, which
+would nest until `excessive-lisp-nesting` lands anywhere in the hub). A client that stopped reading (a suspended
+Emacs) is dropped (logged) when its queue passes `drgnx-hub-client-max-queued` (16 MiB) or one write to it waits longer
+than `drgnx-hub-client-stuck-after` (10 s; checked also on the hub's tick, when nothing more comes for it); its Emacs
+connects again (the Agents module's idle timer, the job window's refresh) — meanwhile it shows the hub's sessions as
+ended.
 Snapshots and transcript entries travel as **printed Lisp** (`lisp`,
 `entries`): JSON would lose the difference between a symbol and a string in an entry; both ends are Emacs. Events: from the gateway `request` (job, task, agent, provider, model, status, input, output, cost), `fallback`
 (agent, from, to, why), `budget` (job, spent, budget); from jobs `card` (id, job, task, kind, title), `job` (id: its status, tasks or open cards changed) and `fallback` (job, task,
@@ -130,7 +132,7 @@ module's idle timer looks every 30 s — and its requests until then fail over o
 (a `.gpg` file, the Keychain, a keyring): an agent it starts (`agents/start`, a job's, a resumed one) uses the keys
 editors handed over, its environment or quiet auth-source files (`drgnx-ai-key` without INTERACTIVE), and with none for
 any provider of its chain it does not start: "No key for openrouter in the drgnx hub: an editor hands its keys over
-when it connects (or run `drgnx hub start' where the key is set)".
+when it connects (or run drgnx hub start where the key is set)".
 
 ## Forwarding
 

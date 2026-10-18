@@ -151,6 +151,7 @@ to OR-LOG, OPENROUTER_API_KEY unset."
                                            (while t (accept-process-output nil 1)))"
                                         (drgnx-hub-socket)))))
            (blob (make-string (* 64 1024) ?x))
+           (drgnx-hub-client-max-queued (* 512 1024))              ; (16 MiB by default: 1.3 MiB go out here)
            (ticker nil) (rescue nil) (nested nil))
       (unwind-protect
           (progn
@@ -169,6 +170,75 @@ to OR-LOG, OPENROUTER_API_KEY unset."
         (when (timerp ticker) (cancel-timer ticker))
         (when (timerp rescue) (cancel-timer rescue))
         (ignore-errors (signal-process sub 'SIGCONT))
+        (delete-process sub)))))
+
+(ert-deftest drgnx-hub/a-stopped-subscriber-is-dropped-when-nothing-more-comes ()
+  ;; one write that makes no progress for `drgnx-hub-client-stuck-after' ends its client on the hub's tick
+  (drgnx-hub-test--with
+    (drgnx-hub-serve (drgnx-hub-socket))
+    (let* ((sub (make-process
+                 :name "stuck-sub" :noquery t :buffer nil
+                 :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "--eval"
+                                (format "(let ((c (make-network-process :name \"s\" :family 'local :service %S :filter #'ignore)))
+                                           (process-send-string c \"{\\\"id\\\":0,\\\"method\\\":\\\"subscribe\\\"}\\n\")
+                                           (while t (accept-process-output nil 1)))"
+                                        (drgnx-hub-socket)))))
+           (drgnx-hub-client-stuck-after 0.5) (rescue nil))
+      (unwind-protect
+          (progn
+            (should (drgnx-hub-test--wait (lambda () drgnx-hub--subscribers) 10))
+            (signal-process sub 'SIGSTOP)
+            (setq rescue (run-at-time 8 nil (lambda () (signal-process sub 'SIGCONT))))
+            (run-at-time 0 nil (lambda () (drgnx-hub--broadcast 'test (list :blob (make-string (* 4 1024 1024) ?x)))))
+            (should (drgnx-hub-test--wait (lambda () (not (seq-filter #'process-live-p drgnx-hub--subscribers))) 5))
+            (should (drgnx-hub-call-sync "ping" nil)))
+        (when (timerp rescue) (cancel-timer rescue))
+        (ignore-errors (signal-process sub 'SIGCONT))
+        (delete-process sub)))))
+
+(ert-deftest drgnx-hub/a-slow-subscriber-is-kept-and-gets-everything-in-order ()
+  ;; a live reader that is merely slow (big snapshots, a busy editor) makes writes wait: what comes meanwhile is
+  ;; queued for it, never a reason to drop it
+  (drgnx-hub-test--with
+    (drgnx-hub-serve (drgnx-hub-socket))
+    (let* ((out (concat root "got.txt"))
+           (sub (make-process
+                 :name "slow-sub" :noquery t :buffer nil
+                 :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "--eval"
+                                (format "(let* ((got nil) (tail \"\") (done nil)
+                                                (c (make-network-process :name \"s\" :family 'local :service %S :coding 'binary
+                                                     :filter (lambda (_p s) (push s got) (sleep-for 0.002)
+                                                               (when (string-search \"\\\"done\\\"\" (concat tail s)) (setq done t))
+                                                               (setq tail (substring (concat tail s) (max 0 (- (+ (length tail) (length s)) 32))))))))
+                                           (process-send-string c \"{\\\"id\\\":0,\\\"method\\\":\\\"subscribe\\\"}\\n\")
+                                           (while (not done) (accept-process-output nil 0.1))
+                                           (let ((coding-system-for-write 'binary)) (write-region (apply #'concat (nreverse got)) nil %S))
+                                           (kill-emacs 0))"
+                                        (drgnx-hub-socket) out))))
+           (big (make-string (* 1024 1024) ?b)) (small (make-string 200 ?s)) (n 0) (timers nil)
+           (send (lambda (blob) (run-at-time 0 nil (lambda () (drgnx-hub--broadcast 'test (list :n (cl-incf n) :blob blob)))))))
+      (unwind-protect
+          (progn
+            (should (drgnx-hub-test--wait (lambda () drgnx-hub--subscribers) 10))
+            (let ((conn (car drgnx-hub--subscribers)))
+              (push (run-at-time 0 0.05 (lambda () (funcall send small))) timers)
+              (push (run-at-time 0 0.5 (lambda () (funcall send big))) timers)
+              (drgnx-hub-test--wait #'ignore 2)
+              (mapc #'cancel-timer timers)
+              (drgnx-hub-test--wait #'ignore 0.1)
+              (should (process-live-p conn))
+              (should (memq conn drgnx-hub--subscribers))
+              (drgnx-hub--broadcast 'done nil)
+              (should (drgnx-hub-test--wait (lambda () (not (process-live-p sub))) 30))
+              (let ((ns (with-temp-buffer
+                          (insert-file-contents out)
+                          (cl-loop for line in (split-string (buffer-string) "\n" t)
+                                   for json = (json-parse-string line :object-type 'plist)
+                                   when (equal (plist-get json :event) "test")
+                                   collect (plist-get (plist-get json :data) :n)))))
+                (should (> n 20))
+                (should (equal ns (number-sequence 1 n))))))
+        (mapc #'cancel-timer timers)
         (delete-process sub)))))
 
 (ert-deftest drgnx-hub/a-restarted-hub-takes-the-same-tokens ()

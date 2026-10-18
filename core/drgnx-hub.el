@@ -131,22 +131,61 @@ answer a ping.  A lock whose process is gone is taken over.  Signals when anothe
   "Send OBJECT to CONN — unless CONN is gone: a client may leave before its answer (a coordination server's notify,
 a probe), and writing to it then must be nothing, never an error in a filter (it would end a batch Emacs that
 debugs errors, and without SIGPIPE ignored the write itself would)."
+  (drgnx-hub--send-line conn (concat (json-serialize (drgnx-hub--jsonable object)) "\n")))
+
+(defun drgnx-hub--send-line (conn line)
+  "Write LINE to CONN, as `drgnx-hub--send' does."
   (when (process-live-p conn)
-    (condition-case nil
-        (process-send-string conn (concat (json-serialize (drgnx-hub--jsonable object)) "\n"))
+    (condition-case nil (process-send-string conn line)
       (error (ignore-errors (delete-process conn))))))
 
+(defcustom drgnx-hub-client-max-queued (* 16 1024 1024)
+  "Bytes the hub holds for a client while a write to it waits; past that the client counts as stopped and its
+connection is closed (its Emacs connects again).  One snapshot can carry whole files (edits to review)."
+  :type 'integer :group 'drgnx)
+
+(defcustom drgnx-hub-client-stuck-after 10
+  "Seconds one write to a hub client may wait before the client counts as stopped (a suspended Emacs) and its
+connection is closed."
+  :type 'number :group 'drgnx)
+
+(defun drgnx-hub--client-stuck-p (conn &optional more)
+  "Has CONN stopped reading: its current write older than `drgnx-hub-client-stuck-after', or its queue (with MORE
+bytes) past `drgnx-hub-client-max-queued'?"
+  (let ((since (process-get conn :sending)))
+    (and since (or (> (- (float-time) since) drgnx-hub-client-stuck-after)
+                   (> (+ (or (process-get conn :queued-bytes) 0) (or more 0)) drgnx-hub-client-max-queued)))))
+
+(defun drgnx-hub--drop (conn)
+  (message "drgnx hub: a client stopped reading; its connection is closed")
+  (delete-process conn))
+
 (defun drgnx-hub--answer (conn object)
-  "Send OBJECT to CONN, a client of this hub.  A write to a client that stopped reading waits, and runs timers and
-filters meanwhile: the next event for it would write again one level deeper each time (until `excessive-lisp-nesting'
-lands anywhere in the hub).  So a client the last message to which is still being written is dropped instead (its
-Emacs reconnects).  Hub side only: a client's nested `drgnx-hub-call' is legitimate."
-  (if (process-get conn :sending)
-      (progn (message "drgnx hub: a client stopped reading; its connection is closed")
-             (delete-process conn))
-    (process-put conn :sending t)
-    (unwind-protect (drgnx-hub--send conn object)
-      (process-put conn :sending nil))))
+  "Send OBJECT to CONN, a client of this hub.  A write to a client that does not read fast enough waits, and runs
+timers and filters meanwhile: what comes for it then is queued (written in order once the write is done), never
+written one level deeper.  A client that stopped reading (`drgnx-hub--client-stuck-p') is dropped instead (its Emacs
+connects again).  Hub side only: a client's nested `drgnx-hub-call' is legitimate."
+  (let ((line (concat (json-serialize (drgnx-hub--jsonable object)) "\n")))
+    (cond
+     ((not (process-get conn :sending))
+      (unwind-protect
+          (let ((lines (list line)))
+            (while (and lines (process-live-p conn))
+              (dolist (l lines)
+                (process-put conn :sending (float-time))       ; (each line: a write that makes progress is not stuck)
+                (drgnx-hub--send-line conn l))
+              (setq lines (nreverse (process-get conn :queue)))
+              (process-put conn :queue nil)
+              (process-put conn :queued-bytes 0)))
+        (process-put conn :sending nil)))
+     ((drgnx-hub--client-stuck-p conn (string-bytes line)) (drgnx-hub--drop conn))
+     (t (process-put conn :queue (cons line (process-get conn :queue)))
+        (process-put conn :queued-bytes (+ (or (process-get conn :queued-bytes) 0) (string-bytes line)))))))
+
+(defun drgnx-hub--drop-stuck ()
+  "Drop the clients that stopped reading even when nothing more comes for them (the hub's tick)."
+  (dolist (p (process-list))
+    (when (and (process-get p :sending) (process-live-p p) (drgnx-hub--client-stuck-p p)) (drgnx-hub--drop p))))
 
 (defconst drgnx-hub--max-line (* 1024 1024)
   "The longest request line the hub reads (characters): a longer one closes its connection.")
@@ -445,6 +484,7 @@ for an agent that is not here (or exited) stays queued."
     (drgnx-hub--deliver)
     (drgnx-job-tick)
     (drgnx-hub--prune-registrations)
+    (drgnx-hub--drop-stuck)
     (when (zerop (% (cl-incf drgnx-hub--ticks) 30)) (drgnx-hub--housekeeping))))
 
 (defun drgnx-hub--flush (s)
