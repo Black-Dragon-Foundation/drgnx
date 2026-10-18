@@ -60,6 +60,7 @@ as a box. Change one for your font:
 | `warning` | ⚠ | `!` | `dot` | ● | `*` |
 | `ok` | ✓ | `+` | `circle` | ○ | `o` |
 | `busy` | ◎ | `@` | `waiting` | ◐ | `?` |
+| `sep` | ` · ` | ` \| ` | | | |
 
 For code: `(drgnx-face-glyph 'close)` is the string for the selected frame, `(drgnx-face-glyph 'close FRAME)` for another.
 
@@ -72,12 +73,12 @@ Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch.
 | Left | Shows | Click |
 |---|---|---|
 | `branch` | `⑂ main` (the branch, from the buffer's version control) | the repository status |
-| `problems` | `✓` when flymake finds none, else `⚠ 1` (errors) and `⚠ 2` (warnings) | the problems list |
+| `problems` | `✓` when flymake finds none, `◐` while a checker has not reported yet, else `⚠ 1` (errors) and `⚠ 2` (warnings) | the problems list |
 | `tests` | test results (arrives with the work tracker; nothing yet) | |
 | `jobs` | the job badge when a job needs you | job status |
 | `agents` | `◎ 1 busy`, and `◐ 1 waiting on you` when an agent needs an answer | the Agents tab |
 | `modal` | the modal-editing state, when that module is loaded | |
-| `misc` | other indicators (nothing yet) | |
+| `misc` | what stock Emacs shows beside the file: the buffer's process (`:run`), a keyboard macro being recorded (`● Rec`), `Narrowed`, `Remote: host`, and the entries of `global-mode-string` (the clock, a battery) without the job badge | |
 
 | Right | Shows | Click |
 |---|---|---|
@@ -89,10 +90,15 @@ Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch.
 | `language` | `YAML`, `Python`, `Emacs Lisp` | the mode's help |
 
 The most recently used editor window shows the whole bar; the other editor groups show `drgnx-statusbar-compact`
-(position and language). A buffer whose own `mode-line-format` is nil (a terminal, say) keeps no bar. In a narrow
-window the bar never wraps: segments go in the order of `drgnx-statusbar-drop-order` (line endings first), and the
-branch is cut with an ellipsis, never dropped. The glyphs come from `drgnx-face-glyphs`, so a terminal that is not
-UTF-8 shows ASCII.
+(position and language). The bar is for the buffers you edit: a buffer that visits a file, or is code, text or
+configuration (`drgnx-statusbar-modes`: `prog-mode`, `text-mode`, `conf-mode` and what derives from them). Every other
+buffer (Magit, Dired, help, Info, a shell, compilation, drgnx's own panes) keeps its own mode line, and a buffer whose
+own `mode-line-format` is nil keeps none. In a narrow window the bar never wraps: segments go in the order of
+`drgnx-statusbar-drop-order` (line endings first), and the branch is cut with an ellipsis, never dropped. The glyphs
+come from `drgnx-face-glyphs`, so a terminal that is not UTF-8 shows ASCII (` | ` between segments instead of ` · `).
+
+The bar is redrawn after every command that moved point, changed the text or selected another window, and when the
+agents' counts change; nothing else redraws it, so it costs nothing while you do not type.
 
 | Setting | Default | What it does |
 |---|---|---|
@@ -102,6 +108,8 @@ UTF-8 shows ASCII.
 | `drgnx-statusbar-compact` | `(position language)` | what the other editor groups show |
 | `drgnx-statusbar-place` | `editors` | `editors`; `frame` (one bar across the frame) arrives with the grid |
 | `drgnx-statusbar-indent-vars` | the common indent offsets | the variables `indent` reads, first bound one wins |
+| `drgnx-statusbar-modes` | `(prog-mode text-mode conf-mode)` | the modes (besides file buffers) that get the bar |
+| `drgnx-statusbar-misc-exclude` | the job badge | entries of `global-mode-string` that `misc` leaves out |
 
 Reorder or drop with `setopt`, and add your own in `config.el`:
 
@@ -115,8 +123,10 @@ Reorder or drop with `setopt`, and add your own in `config.el`:
 ```
 
 A segment function runs on every redisplay of its window, so it must only read what is already known (a variable,
-a buffer-local value): never call git, start a process, read a file or ask a language server. One that signals an
-error shows nothing and the message is kept once in `drgnx-statusbar--errors` (no message per redisplay).
+a buffer-local value): never call git, start a process, read a file or ask a language server. Its text is plain text
+with faces: a `%` is a percent sign (not a mode-line construct) and `display` properties are removed, so the bar can
+count its columns. One that signals an error shows nothing, is skipped from then on until you define it again, and the
+message is kept once in `drgnx-statusbar--errors` (no message per redisplay).
 
 ## Faces
 

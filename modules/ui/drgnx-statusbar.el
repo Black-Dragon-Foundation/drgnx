@@ -33,6 +33,9 @@
 (declare-function drgnx-job-ui-status "drgnx-job-ui")
 (declare-function drgnx-agents-ui-view "drgnx-agents-ui")
 (declare-function flymake--mode-line-counter "flymake")
+(declare-function flymake-running-backends "flymake")
+(declare-function flymake-reporting-backends "flymake")
+(declare-function drgnx-job-ui--badge-segment "drgnx-job-ui")
 (declare-function jsonrpc-running-p "jsonrpc")
 (declare-function eglot--current-server-connection-running-p "ext:eglot")
 (defvar vc-mode)
@@ -86,7 +89,8 @@ The branch is cut with an ellipsis instead, and only after these are gone."
   "Segment ID → plist (:fn :click :help).")
 
 (defvar drgnx-statusbar--errors nil
-  "Alist ID → message of the last error a segment function signalled (once per segment, never a message).")
+  "Alist ID → message of the error a segment function (or the bar itself, ID `host') signalled.
+Recorded once, never as a message; a segment that failed is skipped until it is defined again.")
 
 (defvar drgnx-statusbar--window nil
   "The window a bar is being drawn for (bound while it renders); nil: the most recently used editor window.")
@@ -97,6 +101,7 @@ FN takes no arguments and returns a string or nil; it runs with the buffer of `d
 current and may read only cached state.  CLICK is a command symbol or a function, run when the text is clicked.
 HELP is the text shown when the pointer rests on the segment."
   (puthash id (list :fn fn :click click :help help) drgnx-statusbar--segments)
+  (setq drgnx-statusbar--errors (assq-delete-all id drgnx-statusbar--errors))   ; a new definition gets a new chance
   (force-mode-line-update t)
   id)
 
@@ -129,16 +134,20 @@ used editor window."
               (t (message "%s is not available" click)))))))
 
 (defun drgnx-statusbar--note-error (id err)
-  "Record ERR as the error of segment ID (replacing the last one: the record never grows)."
-  (setf (alist-get id drgnx-statusbar--errors) (error-message-string err)))
+  "Record ERR as the error of segment ID, once (the record never grows, and a redisplay never formats a message)."
+  (unless (assq id drgnx-statusbar--errors)
+    (push (cons id (error-message-string err)) drgnx-statusbar--errors)))
 
 (defun drgnx-statusbar--text (id)
   "The text of segment ID with its properties, or nil when it has nothing to say (or failed)."
   (when-let* ((seg (gethash id drgnx-statusbar--segments))
               (fn (plist-get seg :fn))
+              ((not (assq id drgnx-statusbar--errors)))
               (s (condition-case err (funcall fn) (error (drgnx-statusbar--note-error id err) nil)))
               ((stringp s)) ((not (string-empty-p s))))
     (let ((s (copy-sequence s)))
+      ;; the bar counts columns of characters: a `display' property could show something of another width
+      (remove-text-properties 0 (length s) '(display nil) s)
       (add-text-properties 0 (length s)
                            (list 'drgnx-statusbar-segment id 'local-map drgnx-statusbar--map
                                  'mouse-face 'mode-line-highlight
@@ -148,7 +157,8 @@ used editor window."
 
 ;;;; Layout
 
-(defconst drgnx-statusbar--left-sep " · ")
+(defvar drgnx-statusbar--left-sep " · "
+  "The separator between left segments (bound while rendering to the glyph `sep': ASCII on a non-UTF-8 terminal).")
 (defconst drgnx-statusbar--right-sep "  ")
 (defconst drgnx-statusbar--branch-min 14 "Columns the branch is cut to before other segments are dropped for it.")
 
@@ -160,7 +170,7 @@ used editor window."
   "Columns of the bar with these LEFT and RIGHT segments: a pad on each side and at least two between."
   (+ 2 (drgnx-statusbar--run-width left drgnx-statusbar--left-sep)
      (drgnx-statusbar--run-width right drgnx-statusbar--right-sep)
-     (if (and left right) 2 0)))
+     (if right (if left 2 1) 0)))
 
 (defun drgnx-statusbar--cut-branch (left right width min)
   "LEFT with the branch cut so that the bar fits WIDTH, but not below MIN columns; the new LEFT, or nil if it cannot."
@@ -203,6 +213,7 @@ source window's buffer current."
          (buf (and (window-live-p w) (window-buffer w))))
     (with-current-buffer (or buf (current-buffer))
       (let* ((drgnx-statusbar--window w)
+             (drgnx-statusbar--left-sep (drgnx-statusbar--separator))
              (texts (lambda (ids) (delq nil (mapcar (lambda (id) (when-let* ((s (drgnx-statusbar--text id))) (cons id s))) ids))))
              (left (unless compact (funcall texts drgnx-statusbar-left)))
              (right (funcall texts (if compact drgnx-statusbar-compact drgnx-statusbar-right)))
@@ -215,7 +226,9 @@ source window's buffer current."
                             (when right (propertize " " 'display `(space :align-to (- right ,(1+ rw)))))
                             r " ")))
           ;; a last guard: whatever the segments were, the bar is never wider than the window
-          (if (<= (string-width bar) width) bar (truncate-string-to-width bar (max width 0) nil nil t)))))))
+          (cond ((<= (string-width bar) width) bar)
+                ((<= width 0) "")
+                (t (truncate-string-to-width bar width nil nil t))))))))
 
 ;;;; The mode line
 
@@ -226,13 +239,66 @@ source window's buffer current."
                (seq-find #'drgnx-signal-editor-window-p (window-list (window-frame w) 'nomini)))))
     (or (null mru) (eq w mru))))
 
+(defcustom drgnx-statusbar-modes '(prog-mode text-mode conf-mode)
+  "Major modes (and the modes derived from them) whose buffers get the status bar; so does any buffer that visits a file.
+Every other buffer (Magit, Dired, help, Info, shells, compilation, drgnx's own panes) keeps its own mode line."
+  :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
+
+(defun drgnx-statusbar--own-mode-line-p ()
+  "Non-nil when this buffer sets its own, non-nil `mode-line-format'."
+  (and (local-variable-p 'mode-line-format) mode-line-format t))
+
+(defun drgnx-statusbar--wanted-p ()
+  "Non-nil when the current buffer gets the status bar: it visits a file or is code, text or configuration."
+  (and (not (drgnx-statusbar--own-mode-line-p))
+       (or buffer-file-name (and drgnx-statusbar-modes (apply #'derived-mode-p drgnx-statusbar-modes)))))
+
+(defun drgnx-statusbar--escape (s)
+  "S with every `%' doubled (keeping the properties): in a mode line, `%' starts a construct such as `%b'."
+  (if (not (string-search "%" s))
+      s
+    (let ((parts nil) (start 0) pos)
+      (while (setq pos (string-search "%" s start))
+        (push (substring s start (1+ pos)) parts)
+        (push (substring s pos (1+ pos)) parts)
+        (setq start (1+ pos)))
+      (push (substring s start) parts)
+      (apply #'concat (nreverse parts)))))
+
 (defun drgnx-statusbar-mode-line ()
-  "The `:eval' of an editor window's mode line: the full bar in the most recently used editor window, the compact
-one in the others; nothing in a buffer whose own `mode-line-format' is nil."
-  (unless (and (local-variable-p 'mode-line-format) (null mode-line-format))
-    (let* ((w (selected-window))                ; the window being drawn (a mode line is drawn with it selected)
-           (drgnx-statusbar--window w))
-      (drgnx-statusbar-render (window-total-width w) (not (drgnx-statusbar--mru-editor-p w))))))
+  "The `:eval' of an editor window's mode line.
+In a buffer that visits a file or is code, text or configuration (`drgnx-statusbar-modes'): the full bar in the most
+recently used editor window, the compact one in the others.  In a buffer whose own `mode-line-format' is nil: nothing.
+In any other buffer: the stock mode line.  An error shows nothing and is recorded once, never on every redisplay."
+  (condition-case err
+      (cond ((and (local-variable-p 'mode-line-format) (null mode-line-format)) nil)
+            ((drgnx-statusbar--wanted-p)
+             (let* ((w (selected-window))       ; the window being drawn (a mode line is drawn with it selected)
+                    (drgnx-statusbar--window w))
+               (drgnx-statusbar--escape
+                (drgnx-statusbar-render (window-total-width w) (not (drgnx-statusbar--mru-editor-p w))))))
+            (t (or mode-line-format (default-value 'mode-line-format))))
+    (error (drgnx-statusbar--note-error 'host err) nil)))
+
+(defvar drgnx-statusbar--last (make-vector 4 nil) "[BUFFER WINDOW POINT TICK] as of the last command.")
+
+(defun drgnx-statusbar--post-command ()
+  "A mode line made by `:eval' does not know it shows the point: ask for a redraw when what it shows changed."
+  (let ((l drgnx-statusbar--last) (b (current-buffer)) (w (selected-window)))
+    (let ((pt (window-point w)) (tick (buffer-chars-modified-tick)))
+      (unless (and (eq (aref l 0) b) (eq (aref l 1) w) (eql (aref l 2) pt) (eql (aref l 3) tick))
+        (aset l 0 b) (aset l 1 w) (aset l 2 pt) (aset l 3 tick)
+        (force-mode-line-update)))))             ; this buffer's mode line only
+
+(defvar drgnx-statusbar--agents-seen nil "(BUSY . WAITING) as of the last agent change.")
+(defvar drgnx-agents-changed-functions)
+
+(defun drgnx-statusbar--agents-changed (&rest _)
+  "On `drgnx-agents-changed-functions': redraw the bars when the counts the agents segment shows changed."
+  (let ((now (drgnx-statusbar--agent-counts)))
+    (unless (equal now drgnx-statusbar--agents-seen)
+      (setq drgnx-statusbar--agents-seen now)
+      (force-mode-line-update t))))
 
 (defconst drgnx-statusbar--host '(:eval (drgnx-statusbar-mode-line)))
 
@@ -241,7 +307,12 @@ one in the others; nothing in a buffer whose own `mode-line-format' is nil."
   :global t :group 'drgnx-statusbar
   (setq drgnx-chrome-editor-mode-line (if drgnx-statusbar-mode drgnx-statusbar--host drgnx-chrome--mode-line))
   (if drgnx-statusbar-mode
-      (when (fboundp 'drgnx-modal-indicator-off) (drgnx-modal-indicator-off))   ; the bar shows the modal state
+      (progn
+        (add-hook 'post-command-hook #'drgnx-statusbar--post-command)
+        (add-hook 'drgnx-agents-changed-functions #'drgnx-statusbar--agents-changed)
+        (when (fboundp 'drgnx-modal-indicator-off) (drgnx-modal-indicator-off)))   ; the bar shows the modal state
+    (remove-hook 'post-command-hook #'drgnx-statusbar--post-command)
+    (remove-hook 'drgnx-agents-changed-functions #'drgnx-statusbar--agents-changed)
     (when (fboundp 'drgnx-modal-indicator-on) (drgnx-modal-indicator-on)))
   (dolist (f (frame-list)) (drgnx-chrome-apply f))
   (force-mode-line-update t))
@@ -249,7 +320,14 @@ one in the others; nothing in a buffer whose own `mode-line-format' is nil."
 ;;;; The default segments (cached state only)
 
 (defun drgnx-statusbar--glyph (name)
-  (if (fboundp 'drgnx-face-glyph) (or (drgnx-face-glyph name) "") ""))
+  "The glyph NAME for the frame being drawn (ASCII on a terminal that is not UTF-8)."
+  (if (fboundp 'drgnx-face-glyph)
+      (or (drgnx-face-glyph name (window-frame (drgnx-statusbar-source-window))) "")
+    ""))
+
+(defun drgnx-statusbar--separator ()
+  "What goes between the left segments: the glyph `sep' (` · ', or ` | ' in ASCII)."
+  (let ((s (drgnx-statusbar--glyph 'sep))) (if (string-empty-p s) " · " s)))
 
 (defun drgnx-statusbar--seg-branch ()
   "The branch git put in `vc-mode' (\" Git-main\")."
@@ -264,30 +342,68 @@ one in the others; nothing in a buffer whose own `mode-line-format' is nil."
 (defun drgnx-statusbar--seg-problems ()
   (when (and (bound-and-true-p flymake-mode) (fboundp 'flymake--mode-line-counter))
     (let ((e (drgnx-statusbar--flymake-count :error)) (w (drgnx-statusbar--flymake-count :warning)))
-      (if (and (zerop e) (zerop w))
-          (propertize (drgnx-statusbar--glyph 'ok) 'face 'success)
+      (cond
+       ((or (> e 0) (> w 0))
         (let ((glyph (drgnx-statusbar--glyph 'warning)))
           (string-join (delq nil (list (and (> e 0) (propertize (format "%s %d" glyph e) 'face 'error))
                                        (and (> w 0) (propertize (format "%s %d" glyph w) 'face 'warning))))
-                       " "))))))
+                       " ")))
+       ;; a backend that has not reported yet: not "no problems" (as in stock flymake's Wait)
+       ((cl-set-difference (flymake-running-backends) (flymake-reporting-backends))
+        (propertize (drgnx-statusbar--glyph 'waiting) 'face 'shadow))
+       ((flymake-reporting-backends) (propertize (drgnx-statusbar--glyph 'ok) 'face 'success))))))
 
 (defun drgnx-statusbar--seg-jobs ()
   "The job badge (cards waiting for you); the count of running jobs is not cached anywhere yet."
   (when (and (boundp 'drgnx-job-ui--badge) (stringp drgnx-job-ui--badge) (not (string-empty-p drgnx-job-ui--badge)))
     (string-trim (substring-no-properties drgnx-job-ui--badge))))
 
-(defun drgnx-statusbar--seg-agents ()
-  "Agents busy and agents with something waiting on you, counted from the sessions drgnx already holds."
+(defun drgnx-statusbar--agent-counts ()
+  "(BUSY . WAITING): agents working, and agents with something waiting on you, from the sessions drgnx already holds."
   (when (and (boundp 'drgnx-agents--sessions) drgnx-agents--sessions (fboundp 'drgnx-agent-session-status))
     (let ((busy 0) (waiting 0))
       (dolist (s drgnx-agents--sessions)
         (when (eq (drgnx-agent-session-status s) 'busy) (cl-incf busy))
         (when (or (drgnx-agent-session-permissions s) (drgnx-agent-session-reviews s)) (cl-incf waiting)))
+      (cons busy waiting))))
+
+(defun drgnx-statusbar--seg-agents ()
+  (when-let* ((c (drgnx-statusbar--agent-counts)))
+    (let ((busy (car c)) (waiting (cdr c)))
       (string-join (delq nil (list (and (> busy 0) (format "%s %d busy" (drgnx-statusbar--glyph 'busy) busy))
                                    (and (> waiting 0)
                                         (propertize (format "%s %d waiting on you" (drgnx-statusbar--glyph 'waiting) waiting)
                                                     'face 'error))))
                    " "))))
+
+(defcustom drgnx-statusbar-misc-exclude '((:eval (drgnx-job-ui--badge-segment)))
+  "Entries of `global-mode-string' the `misc' segment leaves out because the bar already shows them (the job badge)."
+  :type 'sexp :group 'drgnx-statusbar)
+
+(defun drgnx-statusbar--construct-text (c)
+  "The text of the mode-line construct C: a string as it is, a list of strings joined, anything else formatted.
+Only what the mode line already holds (no lookups)."
+  (cond ((null c) nil)
+        ((stringp c) c)
+        ((and (consp c) (seq-every-p #'stringp c)) (apply #'concat c))
+        (t (format-mode-line c))))
+
+(defun drgnx-statusbar--seg-misc ()
+  "What stock Emacs would show beside the file: the process of the buffer, `global-mode-string' (without the job badge),
+a keyboard macro being recorded, narrowing, and a remote directory."
+  (let* ((global (and (listp global-mode-string)
+                      (seq-remove (lambda (e) (member e drgnx-statusbar-misc-exclude)) global-mode-string)))
+         (parts (delq nil
+                      (list (and defining-kbd-macro
+                                 (propertize (format "%s Rec" (drgnx-statusbar--glyph 'dot)) 'face 'error))
+                            (and (buffer-narrowed-p) "Narrowed")
+                            (and (stringp default-directory)
+                                 (string-match "\\`/[^/:]+:\\(?:[^/:@]*@\\)?\\([^/:]*\\):" default-directory)
+                                 (format "Remote: %s" (match-string 1 default-directory)))
+                            (drgnx-statusbar--construct-text mode-line-process)
+                            (drgnx-statusbar--construct-text global)))))
+    (let ((text (string-join (seq-remove #'string-empty-p (mapcar #'string-trim parts)) " ")))
+      (unless (string-empty-p text) text))))
 
 (defun drgnx-statusbar--seg-modal ()
   (when (fboundp 'drgnx-modal-mode-line)
@@ -302,10 +418,30 @@ one in the others; nothing in a buffer whose own `mode-line-format' is nil."
                              ((and (fboundp 'jsonrpc-running-p) (not (jsonrpc-running-p server))) (drgnx-statusbar--glyph 'close))
                              (t (drgnx-statusbar--glyph 'dot)))))))
 
+(defvar-local drgnx-statusbar--line-cache nil
+  "[TICK POINT-MIN LINE-START LINE]: the line number the position segment last worked out in this buffer.")
+
+(defun drgnx-statusbar--line-at (bol)
+  "The line number of the line starting at BOL.  Moving point costs the lines between the last answer and here; only
+a change of the text (or of the narrowing) counts again from the top."
+  (let* ((c drgnx-statusbar--line-cache) (tick (buffer-chars-modified-tick)) (pmin (point-min))
+         (line (if (and c (eql (aref c 0) tick) (eql (aref c 1) pmin))
+                   (let ((cb (aref c 2)) (cl (aref c 3)))
+                     (cond ((= bol cb) cl)
+                           ((> bol cb) (+ cl (count-lines cb bol)))
+                           (t (- cl (count-lines bol cb)))))
+                 (line-number-at-pos bol))))
+    (setq drgnx-statusbar--line-cache (vector tick pmin bol line))
+    line))
+
 (defun drgnx-statusbar--seg-position ()
   (let* ((w (drgnx-statusbar-source-window))
          (pt (if (eq (window-buffer w) (current-buffer)) (window-point w) (point))))
-    (format "Ln %d, Col %d" (line-number-at-pos pt) (save-excursion (goto-char pt) (1+ (current-column))))))
+    (save-excursion
+      (goto-char pt)
+      (let* ((bol (pos-bol))
+             (col (if (> (- pt bol) 2000) (- pt bol) (current-column))))   ; a minified line: characters, not columns
+        (format "Ln %d, Col %d" (drgnx-statusbar--line-at bol) (1+ col))))))
 
 (defun drgnx-statusbar--seg-indent ()
   (if indent-tabs-mode
@@ -332,8 +468,8 @@ one in the others; nothing in a buffer whose own `mode-line-format' is nil."
   (if (fboundp 'magit-status) (call-interactively 'magit-status) (call-interactively 'vc-dir)))
 
 (defun drgnx-statusbar--define-defaults ()
-  "Define the segments the bar ships with.  Tests and misc have nothing cached to read yet: they render nothing
-until the later tasks give them a source."
+  "Define the segments the bar ships with.  Tests has nothing cached to read yet: it renders nothing until a later
+task gives it a source."
   (drgnx-statusbar-define-segment 'branch :fn #'drgnx-statusbar--seg-branch :click #'drgnx-statusbar--click-branch
                                   :help "Branch; click for the repository status")
   (drgnx-statusbar-define-segment 'problems :fn #'drgnx-statusbar--seg-problems :click 'flymake-show-buffer-diagnostics
@@ -344,7 +480,8 @@ until the later tasks give them a source."
   (drgnx-statusbar-define-segment 'agents :fn #'drgnx-statusbar--seg-agents :click 'drgnx-agents-ui-view
                                   :help "Agents busy or waiting on you; click for the Agents tab")
   (drgnx-statusbar-define-segment 'modal :fn #'drgnx-statusbar--seg-modal :help "Modal editing state")
-  (drgnx-statusbar-define-segment 'misc :fn #'ignore :help "Other indicators")
+  (drgnx-statusbar-define-segment 'misc :fn #'drgnx-statusbar--seg-misc
+                                  :help "Process, recording, narrowing, remote and other indicators")
   (drgnx-statusbar-define-segment 'lsp :fn #'drgnx-statusbar--seg-lsp :click 'eglot-events-buffer
                                   :help "Language server; click for its events")
   (drgnx-statusbar-define-segment 'position :fn #'drgnx-statusbar--seg-position :click 'goto-line
