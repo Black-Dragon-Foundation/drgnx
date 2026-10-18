@@ -24,8 +24,8 @@ after."
                                              (concat "DRGNX_CONFIG_DIR=" root "/config"))
                                        process-environment))
           (drgnx-work-db--handles nil)
-          (a (drgnx-agents--make :id "s-aaaa0001" :name "a" :cwd tree :job "j" :task "1"))
-          (b (drgnx-agents--make :id "s-bbbb0002" :name "b" :cwd tree :job "j" :task "2")))
+          (a (drgnx-agents--make :id "s-aaaa0001" :name "a" :profile "claude" :cwd tree :job "j" :task "1"))
+          (b (drgnx-agents--make :id "s-bbbb0002" :name "b" :profile "claude" :cwd tree :job "j" :task "2")))
      (unwind-protect
          (progn
            (dolist (d '("/home" "/run" "/data" "/state" "/config")) (make-directory (concat root d) t))
