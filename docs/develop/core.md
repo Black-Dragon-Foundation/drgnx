@@ -127,6 +127,45 @@ time order) beside its truename, keeping its times and mode. Then it keeps only 
 `drgnx-file-backups-kept` (3). It gives the backup's path, or nil for a missing file, and refuses anything that is
 not a regular file.
 
+## Schema (`drgnx-schema.el`)
+
+One DSL describes drgnx's data (config files today; the hub's parameters and results next). A schema is data: an atom
+or a list. `(drgnx-schema-check SCHEMA VALUE)` returns nil, or `(PATH . TEXT)` for the first problem. PATH lists the
+plist keys, alist keys and list indices from the top, e.g. `(:profiles "local" :command 0)`. It walks the schema, not
+the data, tests every list with `proper-list-p` first (an improper or circular list is a problem, never an error)
+and never quotes the value in TEXT (it may be a token). A schema that is not one signals
+`(error "drgnx-schema: unknown form …")`: that is the definition's bug, so it is an error, not a problem. A PATH holds alist and map keys taken from the value (fine for ids); a problem's TEXT never does.
+`(drgnx-schema-validate SCHEMA)` finds those bugs when a schema is defined rather than when data reaches it: heads, options and their value types, plist entries, `pred` arguments, bound named types, and a type that refers to itself with nothing in between. `drgnx-schema-deftype` calls it (a refused type leaves the table as it was); the config layer's and the hub's definition forms call it too. A type may name itself only inside a container.
+
+| Form | Accepts |
+|---|---|
+| `any` | anything (hub: results only; see `drgnx-schema-uses-form-p`) |
+| `symbol` / `keyword` | a non-nil, non-keyword symbol / a keyword |
+| `string`, `boolean`, `null` | a string / `t` or `nil` / `nil` |
+| `integer`, `natnum`, `number` | an integer / an integer >= 0 / any number except NaN |
+| `(integer :min N :max N)`, `(number :min N :max N)` | the same within the bounds |
+| `(string :max N :match RE)` | a string at most N long that matches RE (case-sensitive, unanchored: write `\\``…`\\'`) |
+| `(enum V…)` | a member (`member`, so strings work) |
+| `(or S…)` | a value that fits one of the schemas (`(or null S)` reports a problem inside S at its own path) |
+| `(list-of S [:max N])` | a proper list of S |
+| `(plist (KEY S [DOC] [:required t])…)` | an even proper list of keywords and values; no key twice; required keys present; **unknown keys are allowed** and a value under one is not walked |
+| `(alist KEY-S VAL-S)` | a proper list of conses, no key twice (`equal`) |
+| `(map VAL-S [:max N] [:keys KEY-S])` | a JSON object whose keys are not fixed: a keyword plist (how the hub decodes JSON) or an alist with string keys; at most N entries, no key twice. Keys are named without the colon in the path and to KEY-S |
+| `home-path` | absolute, `~` or `~/…`; no NUL; not a remote name (`/ssh:host:…`) |
+| `https-url` | `https://` and a host; no user info, query, fragment, blank or control character (as bootstrap; a use that needs a query makes its own `pred` type) |
+| `(pred FN DOC)` | `(funcall FN VALUE)` non-nil. An unbound FN, or one that signals, **fails** (never passes); DOC is the problem's text |
+| NAME | a type made with `(drgnx-schema-deftype NAME SCHEMA DOC)` (redefinable; the built-in names are not) |
+
+Also: `(drgnx-schema-unknown-keys SCHEMA VALUE)` lists the PATH of every unknown key in every plist the schema reaches
+(what the config layer reports and keeps byte for byte); `(drgnx-schema-describe SCHEMA)` gives rows
+`(PATH TYPE-TEXT DOC REQUIRED)` for the generated reference (`*` in a PATH stands for any alist or map key and any
+list element); `(drgnx-schema-uses-form-p SCHEMA FORM)` says whether a form occurs at any depth, through named types
+(the hub refuses a `:params` schema holding `any`).
+
+**There is one DSL.** Design 2 (the hub protocol: parameter schemas, JSON Schema for MCP) adds the forms it needs to
+this file and derives its JSON Schema output from the same schema data; it does not define another. `number`, `map`,
+`natnum` and `any` are here for it.
+
 ## Staged hooks (`drgnx-hooks.el`)
 
 Work that need not happen at startup hangs on a stage and runs once, when the stage is first reached:
