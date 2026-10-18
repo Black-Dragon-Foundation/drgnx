@@ -230,7 +230,7 @@
 (defun drgnx-agent-config-kimi--check-name (name)
   "Signal unless NAME can be an MCP server name."
   (unless (and (stringp name) (string-match-p "\\`[A-Za-z0-9_][A-Za-z0-9_.-]*\\'" name))
-    (error "A server name is letters, digits, - and _ (it cannot start with -)")))
+    (error "A server name is letters, digits and the characters . - _ (it cannot start with -)")))
 
 ;;;; Reading
 
@@ -283,7 +283,7 @@
                             (drgnx-agent-config-kimi--str (cdr (assoc "command" entry)))
                             (cdr (assoc "timeout" entry))
                             from file (or (nth i lines) (car lines)) (or readonly (and reason t)) reason)))
-      (drgnx-toml-error (push (list file (nth 1 err) (nth 2 err)) (car problems)) nil)
+      (drgnx-toml-error (push (list file (nth 1 err) "not valid TOML") (car problems)) nil)
       (error (push (list file nil "cannot be read") (car problems)) nil))))
 
 (defun drgnx-agent-config-kimi--json-hooks (hooks from file)
@@ -556,6 +556,9 @@ Same retry as `drgnx-agent-config-kimi--modify-json'.  A FILE or result that doe
          (when (and (eq op 'add) (cl-some (lambda (e) (drgnx-agent-config-kimi--hook-match-p e spec)) entries))
            (error "This hook is already in config.toml"))
          (when (and old (not match)) (error "The hook was not found in this file"))
+         (when (and (eq op 'edit) (not (drgnx-agent-config-kimi--hook-match-p match spec))
+                    (cl-some (lambda (e) (drgnx-agent-config-kimi--hook-match-p e spec)) entries))
+           (error "This hook is already in config.toml"))
          (drgnx-toml-set-array-entry
           text '("hooks")
           (if match (lambda (e) (drgnx-agent-config-kimi--hook-match-p e old)) #'ignore)
@@ -585,8 +588,8 @@ Same retry as `drgnx-agent-config-kimi--modify-json'.  A FILE or result that doe
      (let ((data (cdr err)))
        (format "%s does not parse (line %s: %s); nothing was written" (nth 0 data) (or (nth 1 data) "?") (nth 2 data))))
     ('drgnx-toml-error
-     (format "config.toml cannot be edited (line %s: %s); nothing was written"
-             (or (nth 1 err) "?") (or (nth 2 err) "invalid")))
+     (format "config.toml is not valid TOML, or in a form drgnx does not edit (line %s); nothing was written"
+             (or (nth 1 err) "?")))
     ('drgnx-agent-config-changed
      (format "%s was changed by another program while it was being written; nothing was written, try again" (cadr err)))
     (_ (drgnx-agent-config-mask-text (error-message-string err)

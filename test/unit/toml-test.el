@@ -69,6 +69,21 @@ trust_level = \"trusted\"
   (should (equal (car (drgnx-toml-test--err "[t]\n[t]\n")) 2))
   (should (equal (car (drgnx-toml-test--err "x = [1,\n 2\ny = 3\n")) 3)))
 
+(ert-deftest drgnx-toml/errors-never-carry-file-content ()
+  ;; an unquoted value (an API key written without quotes) is not echoed by the error
+  (dolist (text '("apiKey = sk-SECRETTOKEN123\n" "k = [1, sk-SECRETTOKEN123]\n" "t = { k = sk-SECRETTOKEN123 }\n"))
+    (let ((err (drgnx-toml-test--err text)))
+      (should (integerp (car err)))
+      (should-not (string-match-p "SECRETTOKEN" (format "%S" err)))))
+  ;; nor are values handed to the writer
+  (dolist (value (list '(:date . "SECRETTOKEN123") (make-symbol "SECRETTOKEN123")))
+    (let ((err (condition-case e (drgnx-toml-encode-value value) (drgnx-toml-error e))))
+      (should (eq (car err) 'drgnx-toml-error))
+      (should-not (string-match-p "SECRETTOKEN" (format "%S" err)))))
+  (let ((err (condition-case e (drgnx-toml-set-table "" '("a") '((:SECRETTOKEN123 . 1))) (drgnx-toml-error e))))
+    (should (eq (car err) 'drgnx-toml-error))
+    (should-not (string-match-p "SECRETTOKEN" (format "%S" err)))))
+
 (ert-deftest drgnx-toml/set-table-keeps-every-other-byte ()
   (let* ((old drgnx-toml-test--codex)
          (region (drgnx-toml-table-region old '("mcp_servers" "a")))

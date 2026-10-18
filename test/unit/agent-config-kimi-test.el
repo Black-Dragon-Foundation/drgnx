@@ -233,9 +233,10 @@
       (should-not (drgnx-agent-config-kimi-test--keys project "mcpServers"))
       ;; names that are not names, and a project scope without a project
       (dolist (bad '("-x" "a b" "" "x/y"))
-        (should (plist-get (drgnx-agent-config-kimi-test--write
-                            'add (drgnx-agent-config-kimi-test--mcp bad '(:command "x")) 'user root)
-                           :error)))
+        (let ((r (drgnx-agent-config-kimi-test--write
+                  'add (drgnx-agent-config-kimi-test--mcp bad '(:command "x")) 'user root)))
+          (should (plist-get r :error))
+          (should (string-match-p "characters \\. - _" (plist-get r :error)))))
       (should (plist-get (drgnx-agent-config-kimi-test--write
                           'add (drgnx-agent-config-kimi-test--mcp "n" '(:command "x")) 'project nil)
                          :error)))))
@@ -318,7 +319,8 @@
   (drgnx-agent-config-test-env
     (let* ((config (concat (drgnx-agent-config-home 'kimi) "config.toml"))
            (head "# my settings\ndefault_model = \"kimi\"   # keep\n\n[providers.moon]\ntype = \"kimi\"\n\n")
-           (tail "\n# tail comment\n[mcp]\nstartup_timeout_ms = 5000\n"))
+           (tail "\n# tail comment\n[mcp]\nstartup_timeout_ms = 5000\n")
+           before-bad)
       (drgnx-agent-config-kimi-test--put
        config (concat head
                       "[[hooks]]\nevent = \"Stop\"\ncommand = \"echo stop\"\n\n"
@@ -359,6 +361,13 @@
         (should-not (string-match-p "echo pre" (drgnx-agent-config-kimi-test--text config)))
         (should (string-prefix-p head (drgnx-agent-config-kimi-test--text config)))
         (should (string-search tail (drgnx-agent-config-kimi-test--text config)))
+        ;; an edit that makes a hook identical to another is refused like an add
+        (let ((before (drgnx-agent-config-kimi-test--text config))
+              (stop (drgnx-agent-config-kimi-test--item (plist-get (drgnx-agent-config-read 'kimi root) :items) 'hook "Stop")))
+          (should (plist-get (drgnx-agent-config-kimi-test--write
+                              'edit (drgnx-agent-config-kimi-test--hook "SessionStart" nil "echo hi" nil stop) 'user root)
+                             :error))
+          (should (equal (drgnx-agent-config-kimi-test--text config) before)))
         ;; a hook that is not there, one already there, and ones Kimi Code would reject
         (should (plist-get (drgnx-agent-config-kimi-test--write
                             'remove (drgnx-agent-config-kimi-test--hook "Stop" nil "echo gone") 'user root)
@@ -366,11 +375,13 @@
         (should (plist-get (drgnx-agent-config-kimi-test--write
                             'add (drgnx-agent-config-kimi-test--hook "SessionStart" nil "echo hi") 'user root)
                            :error))
+        (setq before-bad (drgnx-agent-config-kimi-test--text config))
         (dolist (bad (list (drgnx-agent-config-kimi-test--hook "NoSuchEvent" nil "x")
                            (drgnx-agent-config-kimi-test--hook "Stop" nil "")
                            (drgnx-agent-config-kimi-test--hook "Stop" nil "x" 0)
                            (drgnx-agent-config-kimi-test--hook "Stop" nil "x" 601)))
           (should (plist-get (drgnx-agent-config-kimi-test--write 'add bad 'user root) :error)))
+        (should (equal (drgnx-agent-config-kimi-test--text config) before-bad))
         ;; only the user scope has hooks
         (should (equal (mapcar #'car (drgnx-agent-config-scopes 'kimi 'hook root)) '(user)))
         (should (plist-get (drgnx-agent-config-kimi-test--write
@@ -423,6 +434,22 @@
         (should (string-match-p "command = \"echo b\"" text))
         (should (string-match-p "matcher = \"Bash\"" text))
         (should-not (string-match-p "timeout" text))))))
+
+(ert-deftest drgnx-agent-config-kimi/toml-errors-never-show-a-secret ()
+  (drgnx-agent-config-test-env
+    (let ((files (list (concat (drgnx-agent-config-home 'kimi) "config.toml") (concat home ".kimi/config.toml"))))
+      (dolist (file files)
+        (drgnx-agent-config-kimi-test--put file "default_model = \"m\"\napiKey = sk-SECRETTOKEN123\n"))
+      (let ((read (drgnx-agent-config-read 'kimi root)))
+        (should (= (length (plist-get read :problems)) 2))
+        (dolist (problem (plist-get read :problems))
+          (should (member (car problem) files))
+          (should (= (cadr problem) 2))
+          (should-not (string-match-p "SECRETTOKEN" (format "%S" problem)))))
+      (let ((r (drgnx-agent-config-kimi-test--write 'add (drgnx-agent-config-kimi-test--hook "Stop" nil "x") 'user root)))
+        (should (plist-get r :error))
+        (should (string-match-p "line 2" (plist-get r :error)))
+        (should-not (string-match-p "SECRETTOKEN" (plist-get r :error)))))))
 
 ;;;; Skills, plugins, rules, routes
 

@@ -174,7 +174,7 @@
        ((string-match-p "\\`[+-]?inf\\'" token) (if (eq (aref token 0) ?-) -1.0e+INF 1.0e+INF))
        ((string-match-p "\\`[+-]?nan\\'" token) 0.0e+NaN)
        ((string-match-p drgnx-toml--date-re token) (cons :date token))
-       (t (drgnx-toml--fail (format "not a value: %s" token) start))))))
+       (t (drgnx-toml--fail "not a valid TOML value" start))))))
 
 (defun drgnx-toml--array ()
   "An array at point, as a vector."
@@ -353,7 +353,7 @@ A syntax error signals `drgnx-toml-error' with data (LINE MESSAGE)."
 
 (defun drgnx-toml--encode-key (k)
   "K (a string) as a bare or quoted key part."
-  (unless (stringp k) (drgnx-toml--signal nil (format "a key must be a string: %S" k)))
+  (unless (stringp k) (drgnx-toml--signal nil "a key must be a string"))
   (if (string-match-p "\\`[A-Za-z0-9_-]+\\'" k) k (drgnx-toml--encode-string k)))
 
 (defun drgnx-toml--table-p (v)
@@ -374,14 +374,14 @@ A syntax error signals `drgnx-toml-error' with data (LINE MESSAGE)."
                          (t (number-to-string value))))
    ((and (consp value) (eq (car value) :date))
     (unless (and (stringp (cdr value)) (string-match-p drgnx-toml--date-re (cdr value)))
-      (drgnx-toml--signal nil (format "not a date or time: %S" (cdr value))))
+      (drgnx-toml--signal nil "not a date or time"))
     (cdr value))
    ((vectorp value) (concat "[" (mapconcat #'drgnx-toml-encode-value value ", ") "]"))
    ((drgnx-toml--table-p value)
     (concat "{ " (mapconcat (lambda (c) (concat (drgnx-toml--encode-key (car c)) " = " (drgnx-toml-encode-value (cdr c))))
                             value ", ")
             " }"))
-   (t (drgnx-toml--signal nil (format "cannot encode %S" value)))))
+   (t (drgnx-toml--signal nil "cannot encode this value"))))
 
 (defun drgnx-toml--encode-block (path alist aot eol)
   "The text of a [PATH] (or [[PATH]] when AOT) header followed by ALIST's keys, every line ending in EOL."
