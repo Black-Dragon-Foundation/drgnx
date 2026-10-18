@@ -219,10 +219,11 @@ N things in all."
           "Each job keeps its own decision log: Show Job in Work… (job-show), or a job's name in What needs you.\n"))
 
 (defun drgnx-cockpit-cards--put (part shown draw)
-  "Draw PART with DRAW (a function inserting at point) unless it shows SHOWN already.  Its windows keep their start
-and point where the text still reaches."
-  (with-current-buffer (drgnx-cockpit-cards--buffer part)
-    (unless (equal shown drgnx-cockpit-cards--shown)
+  "Draw PART with DRAW (a function inserting at point) unless it shows SHOWN already, when its buffer lives (a part
+nobody opened is not made).  Its windows keep their start and point where the text still reaches."
+  (when-let* ((b (get-buffer (if (eq part 'cards) drgnx-cockpit-cards-buffer-name drgnx-cockpit-decisions-buffer-name)))
+              ((not (equal shown (buffer-local-value 'drgnx-cockpit-cards--shown b)))))
+    (with-current-buffer b
       (setq drgnx-cockpit-cards--shown shown)
       (let* ((inhibit-read-only t) (pt (point))
              (windows (get-buffer-window-list (current-buffer) nil t))

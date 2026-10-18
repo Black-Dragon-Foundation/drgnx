@@ -512,7 +512,7 @@ side is in [jobs.md](../guide/jobs.md#a-job-in-the-work-cockpit).
   a list of strings for `:states`. A workbench saved before M12f has no such key, so the filter its job window just
   set stays.
 - **Drawing.** The job window's functions moved here, renamed `drgnx-cockpit-cards--insert-{tasks,card,cards,log}`.
-  `drgnx-cockpit-cards--put` erases and draws a part only when its key changed. For one job, What needs you's key is
+  `drgnx-cockpit-cards--put` erases and draws a part only when its key changed, and only when its buffer lives (a part nobody opened is never made). For one job, What needs you's key is
   `(JOB CARDS-PART TASKS-PART)` and the log's is `(JOB LOG-PART)`. For every job, the key is the open jobs' ids,
   titles, repos and cards parts. Windows keep their start and point, clamped.
 - **The hub.** One `job/status` per refresh: `(:id JOB :decisions t)` for a job, no parameters for every job (the

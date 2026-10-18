@@ -44,7 +44,10 @@ after — they owned their hooks and timers."
                ((symbol-function 'drgnx-job-ui--schedule-recount) #'ignore)   ; the badge's own count: job-ui-test.el
                ((symbol-function 'make-frame) (lambda (&rest _) (ert-fail "a frame was made"))))
        (unwind-protect
-           (save-window-excursion (delete-other-windows) ,@body)
+           (save-window-excursion
+             (delete-other-windows)
+             (drgnx-cockpit-cards-buffer) (drgnx-cockpit-decisions-buffer)   ; both parts live, as when the cockpit shows them
+             ,@body)
          (dolist (b (list (get-buffer drgnx-cockpit-cards-buffer-name) (get-buffer drgnx-cockpit-decisions-buffer-name)))
            (when b (kill-buffer b)))
          (should-not (timerp drgnx-cockpit-cards--timer))
@@ -220,6 +223,23 @@ after — they owned their hooks and timers."
       (should (= 1 (length timers)))                        ; and not another
       (should (= 1 (length said)))
       (should (string-search "not mirrored" (car said))))))
+
+(ert-deftest drgnx-cockpit-cards/a-part-is-drawn-only-where-it-lives ()
+  ;; a refresh draws into the parts that live: it never makes the decision log's buffer when only What needs you shows
+  (drgnx-cockpit-cards-test--with
+    (kill-buffer drgnx-cockpit-decisions-buffer-name)
+    (drgnx-cockpit-cards--draw "j1" drgnx-cockpit-cards-test--summary)
+    (should (string-search "its agent ended 3 times" (with-current-buffer drgnx-cockpit-cards-buffer-name (buffer-string))))
+    (should-not (get-buffer drgnx-cockpit-decisions-buffer-name))
+    (drgnx-cockpit-cards--no-hub "test")
+    (should-not (get-buffer drgnx-cockpit-decisions-buffer-name))
+    (cancel-timer drgnx-cockpit-cards--retry) (setq drgnx-cockpit-cards--retry nil)
+    ;; every job: a blank line between two jobs
+    (drgnx-cockpit-cards--draw-all (list drgnx-cockpit-cards-test--summary
+                                         (list :id "j2" :title "Other" :status "paused" :cards :null
+                                               :messages '((:id 5 :sender "s-b" :text "done?" :state "queued")))))
+    (should (string-search "\n\n[j2]" (with-current-buffer drgnx-cockpit-cards-buffer-name (buffer-string))))
+    (should-not (get-buffer drgnx-cockpit-decisions-buffer-name))))
 
 ;;;; All jobs or one
 
