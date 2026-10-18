@@ -16,7 +16,9 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   Its main loop is `accept-process-output` plus the event drain batch Emacs needs (queued events hold back
   sentinels). SIGTERM or `shutdown` removes its socket. It starts with SIGPIPE ignored (`trap '' PIPE`): the
   editing Emacs that launches it does not ignore it, and a write to a connection an agent closed must be an error,
-  never the hub's end.
+  never the hub's end. The ACP agents it runs and their MCP servers (coordination, search) start the same way —
+  `drgnx-command-ignoring-sigpipe`, `sh -c "trap '' PIPE; exec …"`, off Windows — because libuv resets SIGPIPE in an
+  agent's children, and a write to a pipe whose reader left would otherwise end the server.
 - **The gateway** (`core/drgnx-gateway.el`) runs inside the hub: never in the editing Emacs, so streaming cannot
   touch the keystroke budget.
 - **curl**, one per forwarded request, reads its config on stdin (`-K -`): the URL, the provider's key header and the

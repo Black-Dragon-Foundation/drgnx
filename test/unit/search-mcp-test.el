@@ -196,6 +196,16 @@
               (should-not (string-search "sk-never" (prin1-to-string spec))))))
       (delete-directory conf t))))
 
+(ert-deftest drgnx-search-mcp/server-spec-ignores-sigpipe ()
+  ;; started by an agent, whose children get the default SIGPIPE: the command ignores it itself
+  (let ((spec (drgnx-search-mcp-server-spec "/some/project")))
+    (should (equal (plist-get spec :command) "sh"))
+    (let ((args (append (plist-get spec :args) nil)))
+      (should (equal (car args) "-c"))
+      (should (string-search "trap '' PIPE" (nth 1 args)))
+      (should (member "drgnx-search-mcp-main" args))
+      (should (equal (car (last args)) "/some/project")))))
+
 (ert-deftest drgnx-search-mcp/a-line-is-the-line-shown ()
   "PATH:LINE names the line printed: the chunk's first non-blank one."
   (should (equal (drgnx-search-mcp--line '(:path "a.el" :start 10 :text "\n   \n  (defun foo ()\n  1)"))

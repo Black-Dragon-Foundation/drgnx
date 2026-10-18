@@ -14,6 +14,7 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
+(require 'drgnx-paths)
 
 (cl-defstruct (drgnx-acp-conn (:constructor drgnx-acp--make) (:copier nil))
   process stderr-process (next-id 0) (pending (make-hash-table :test #'eql)) input-buffer (stderr "")
@@ -96,7 +97,9 @@ ON-NOTIFICATION: (CONN METHOD PARAMS); ON-REQUEST: (CONN METHOD PARAMS ID) → (
                                                       (substring all (max 0 (- (length all) drgnx-acp--stderr-max))))))
                                     :sentinel #'ignore))
          (proc (condition-case err
-                   (make-process :name "drgnx-acp" :command command :connection-type 'pipe :noquery t
+                   (make-process :name "drgnx-acp" :connection-type 'pipe :noquery t
+                                 ;; SIGPIPE ignored, as the hub runs; a program that is not there is reported by make-process
+                                 :command (if (executable-find (car command)) (drgnx-command-ignoring-sigpipe command) command)
                                  :coding 'utf-8-unix :stderr stderr
                                  :filter (lambda (_p s) (drgnx-acp--input conn s))
                                  :sentinel (lambda (p _event)

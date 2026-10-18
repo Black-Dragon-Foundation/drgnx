@@ -26,6 +26,18 @@
     (drgnx-acp-request conn method params (lambda (res) (setq r res)))
     (drgnx-acp-test--wait (lambda () r))))
 
+(ert-deftest drgnx-acp/the-agent-runs-with-sigpipe-ignored ()
+  ;; the agent writes to pipes its own children may close: it must not die of the signal (Emacs resets it for children)
+  (skip-unless (file-readable-p "/proc/self/status"))
+  (let ((conn (drgnx-acp-start (list "sh" "-c" "grep SigIgn /proc/self/status >&2"))))
+    (unwind-protect
+        (let ((mask (and (drgnx-acp-test--wait
+                          (lambda () (string-match "SigIgn:[ \t]*\\([0-9a-f]+\\)" (or (drgnx-acp-conn-stderr conn) ""))))
+                         (string-to-number (match-string 1 (drgnx-acp-conn-stderr conn)) 16))))
+          (should mask)
+          (should-not (zerop (logand #x1000 mask))))
+      (drgnx-acp-stop conn))))
+
 (ert-deftest drgnx-acp/a-request-gets-its-result ()
   (skip-unless (file-readable-p "/proc/self/fd/0"))
   (drgnx-acp-test--with c nil

@@ -9,6 +9,23 @@
     (should (equal (drgnx-state-dir) "/tmp/xs/drgnx/"))
     (should (equal (drgnx-cache-dir) "/tmp/xc/drgnx/"))))
 
+(defun drgnx-paths-test--sigpipe-ignored-p (command)
+  "Does COMMAND (a list) run with SIGPIPE ignored?  Its /proc/self/status says (bit 12 of SigIgn)."
+  (with-temp-buffer
+    (apply #'call-process (car command) nil t nil (append (cdr command) '("-c" "grep SigIgn /proc/self/status")))
+    (string-match "SigIgn:[ \t]*\\([0-9a-f]+\\)" (buffer-string))
+    (/= 0 (logand #x1000 (string-to-number (match-string 1 (buffer-string)) 16)))))
+
+(ert-deftest drgnx-paths/a-command-can-run-with-sigpipe-ignored ()
+  (skip-unless (file-readable-p "/proc/self/status"))
+  (should-not (drgnx-paths-test--sigpipe-ignored-p '("sh")))
+  (let ((wrapped (drgnx-command-ignoring-sigpipe '("sh"))))
+    (should (equal (car wrapped) "sh"))
+    (should (drgnx-paths-test--sigpipe-ignored-p wrapped)))
+  ;; no sh on Windows: the command as it was
+  (let ((system-type 'windows-nt))
+    (should (equal (drgnx-command-ignoring-sigpipe '("agent" "--x")) '("agent" "--x")))))
+
 (ert-deftest drgnx-paths/checkout ()
   (should (file-exists-p (expand-file-name "core/drgnx-paths.el" drgnx-dir))))
 

@@ -171,15 +171,18 @@ sent."
 
 (defun drgnx-coord-mcp-server-spec (agent &rest props)
   "The ACP `mcpServers' entry that gives AGENT (its session's name) the coordination tools.  PROPS: :job, :task."
-  (list :name "drgnx"
-        :command (expand-file-name invocation-name invocation-directory)
-        :args (vector "--batch" "-Q" "--eval" "(setq load-prefer-newer t)" "-L" (expand-file-name "core" drgnx-dir)
-                      "-l" "drgnx-coord-mcp" "-f" "drgnx-coord-mcp-main")
-        :env (vconcat (delq nil (append (list (list :name "DRGNX_AGENT" :value agent)
-                                              (and (plist-get props :job) (list :name "DRGNX_JOB" :value (plist-get props :job)))
-                                              (and (plist-get props :task) (list :name "DRGNX_TASK" :value (plist-get props :task))))
-                                        (mapcar (lambda (n) (let ((v (getenv n))) (and v (list :name n :value v))))
-                                                '("DRGNX_DATA_DIR" "XDG_STATE_HOME" "XDG_DATA_HOME" "XDG_RUNTIME_DIR")))))))
+  ;; the agent starts this with the default SIGPIPE (libuv resets it): the command ignores it itself
+  (let ((command (drgnx-command-ignoring-sigpipe
+                  (list (expand-file-name invocation-name invocation-directory)
+                        "--batch" "-Q" "--eval" "(setq load-prefer-newer t)" "-L" (expand-file-name "core" drgnx-dir)
+                        "-l" "drgnx-coord-mcp" "-f" "drgnx-coord-mcp-main"))))
+    (list :name "drgnx"
+          :command (car command) :args (vconcat (cdr command))
+          :env (vconcat (delq nil (append (list (list :name "DRGNX_AGENT" :value agent)
+                                                (and (plist-get props :job) (list :name "DRGNX_JOB" :value (plist-get props :job)))
+                                                (and (plist-get props :task) (list :name "DRGNX_TASK" :value (plist-get props :task))))
+                                          (mapcar (lambda (n) (let ((v (getenv n))) (and v (list :name n :value v))))
+                                                  '("DRGNX_DATA_DIR" "XDG_STATE_HOME" "XDG_DATA_HOME" "XDG_RUNTIME_DIR"))))))))
 
 (provide 'drgnx-coord-mcp)
 ;;; drgnx-coord-mcp.el ends here

@@ -87,14 +87,17 @@ The entry goes to the agent, so its environment carries only the XDG and DRGNX_*
 server reads a hosted provider's key from its own environment or auth-source, like any drgnx batch process.
 Nothing adds it to a session by itself: see docs/guide/search.md."
   (require 'drgnx-search-index)
-  (list :name "drgnx-search"
-        :command (expand-file-name invocation-name invocation-directory)
-        :args (vector "--batch" "-Q" "--eval" "(setq load-prefer-newer t)" "-L" (expand-file-name "core" drgnx-dir)
-                      "-l" "drgnx-search-mcp" "-f" "drgnx-search-mcp-main" "--" (directory-file-name (expand-file-name root)))
-        :env (vconcat (mapcar (lambda (e)
-                                (let ((i (string-search "=" e)))
-                                  (list :name (substring e 0 i) :value (substring e (1+ i)))))
-                              (drgnx-search-index--dir-env)))))
+  ;; the agent starts this with the default SIGPIPE (libuv resets it): the command ignores it itself
+  (let ((command (drgnx-command-ignoring-sigpipe
+                  (list (expand-file-name invocation-name invocation-directory)
+                        "--batch" "-Q" "--eval" "(setq load-prefer-newer t)" "-L" (expand-file-name "core" drgnx-dir)
+                        "-l" "drgnx-search-mcp" "-f" "drgnx-search-mcp-main" "--" (directory-file-name (expand-file-name root))))))
+    (list :name "drgnx-search"
+          :command (car command) :args (vconcat (cdr command))
+          :env (vconcat (mapcar (lambda (e)
+                                  (let ((i (string-search "=" e)))
+                                    (list :name (substring e 0 i) :value (substring e (1+ i)))))
+                                (drgnx-search-index--dir-env))))))
 
 ;;;; drgnx search query
 

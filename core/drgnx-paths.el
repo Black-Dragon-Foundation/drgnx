@@ -45,5 +45,12 @@
   "Every package file drgnx downloaded (for offline syncs): cache/packages/."
   (file-name-as-directory (expand-file-name "packages" (drgnx-cache-dir))))
 
+(defun drgnx-command-ignoring-sigpipe (command)
+  "COMMAND (a list: program and arguments) run so that SIGPIPE is ignored: through `sh -c \"trap '' PIPE; exec …\"'.
+A write to a pipe whose reader left is then an error in the child, not its end.  Emacs resets SIGPIPE for the
+processes it starts, and so does libuv in an agent's children.  Unchanged on Windows (no sh there)."
+  (if (eq system-type 'windows-nt) command
+    (append (list "sh" "-c" "trap '' PIPE; exec \"$0\" \"$@\"") command)))
+
 (provide 'drgnx-paths)
 ;;; drgnx-paths.el ends here
