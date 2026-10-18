@@ -118,8 +118,11 @@ to OR-LOG, OPENROUTER_API_KEY unset."
 
 (ert-deftest drgnx-hub/a-subscribe-never-answered-stops-blocking-connect ()
   ;; one subscription while the hub has not answered — but not forever: a subscribe left unanswered (a stopped hub)
-  ;; past the deadline is given up, and the next connect tries again (the editor is not told the hub went away)
+  ;; past the deadline is given up, and the next connect tries again (the editor is not told the hub went away).
+  ;; It counts accepted connections: it relies on this Emacs holding no keys (the macro's), else each connect's
+  ;; `drgnx-hub--send-keys' would open one more
   (drgnx-hub-test--with
+    (should-not (drgnx-hub--held-keys))
     (drgnx-hub--private-dir (file-name-directory (drgnx-hub-socket)))
     (let* ((accepted 0) (gone 0)
            (drgnx-hub-disconnect-functions (list (lambda () (cl-incf gone))))
