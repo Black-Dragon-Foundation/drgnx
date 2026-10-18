@@ -35,6 +35,8 @@
           (dape-breakpoint-toggle)
           (let ((config (copy-tree (alist-get 'debugpy dape-configs))))
             (setq config (plist-put config 'command "python3")           ; Fedora has no `python'
+                  config (plist-put config 'command-args                  ; the adapter listens on loopback only
+                                    (mapcar (lambda (a) (if (equal a "0.0.0.0") "127.0.0.1" a)) (plist-get config 'command-args)))
                   config (plist-put config :program script)
                   config (plist-put config :cwd dir)                      ; dape-cwd is a symbol dape resolves when asked interactively
                   config (plist-put config :console "internalConsole"))   ; no terminal in a batch Emacs

@@ -18,13 +18,23 @@
 (defun mermaid-live-test--bytes (file)
   (with-temp-buffer (set-buffer-multibyte nil) (insert-file-contents-literally file) (buffer-string)))
 
+(defun mermaid-live-test--renders-p ()
+  "Whether mmdc is installed and can draw a tiny diagram within 90 s (Chromium may be missing or unable to start)."
+  (and (executable-find "mmdc") (executable-find "timeout")
+       (let ((dir (file-name-as-directory (make-temp-file "drgnx-mmdc-probe" t))))
+         (unwind-protect
+             (progn (write-region "graph TD; A-->B\n" nil (concat dir "p.mmd") nil 'silent)
+                    (and (eql 0 (call-process "timeout" nil nil nil "90" "mmdc" "-i" (concat dir "p.mmd") "-o" (concat dir "p.svg")))
+                         (file-exists-p (concat dir "p.svg"))))
+           (delete-directory dir t)))))
+
 (ert-deftest drgnx-mermaid-live/the-module-job-draws-a-two-node-diagram ()
-  (skip-unless (executable-find "mmdc"))
+  (skip-unless (mermaid-live-test--renders-p))
   (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-mermaid" t)))
          (process-environment (append (list (concat "XDG_CACHE_HOME=" tmp "cache")
                                             (concat "XDG_STATE_HOME=" tmp "state") "DRGNX_JOBS_LAUNCHER=detached")
                                       process-environment))
-         (code "graph TD; A-->B\n"))
+         (code "graph TD; A-->B\n") (draw-id nil))
     (add-to-list 'load-path (expand-file-name "core" mermaid-live-test--repo))
     (load (expand-file-name "modules/lang/drgnx-markdown" mermaid-live-test--repo) nil t)
     (clrhash drgnx-markdown--drawing) (clrhash drgnx-markdown--failed)
@@ -33,9 +43,8 @@
                (png (expand-file-name (concat hash ".png") (drgnx-markdown--diagram-dir)))
                (svg (expand-file-name "two-nodes.svg" tmp))
                ;; the module's own job: `drgnx-markdown--draw' starts it; its picture is the cached PNG
-               (_ (cl-letf (((symbol-function 'drgnx-markdown--watch) #'ignore))
+               (_ (cl-letf (((symbol-function 'drgnx-markdown--watch) (lambda (id _hash) (setq draw-id id))))
                     (drgnx-markdown--draw code hash)))
-               (draw-id (car (last (mapcar (lambda (j) (plist-get j :id)) (drgnx-jobs-list)))))
                (job (mermaid-live-test--wait-job draw-id 120)))
           (should (eql (plist-get job :exit) 0))
           (should (file-exists-p png))
