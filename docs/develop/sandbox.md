@@ -915,14 +915,21 @@ folder.
 - **`drgnx-sandbox-vc-mode`** (core, on in the editor and in the hub) does two things:
   - `vc-ignore-dir-regexp` is extended with the registered folders, so VC does not look there. It is refreshed
     before each `find-file`.
-  - One `:around` advice, `drgnx-sandbox-vc--refuse-git`, on `call-process`, `process-file` and `make-process`
-    signals `drgnx-sandbox-guarded` when the program is `git` (by name or any path ending in `/git`) and
+  - An `:around` advice on `call-process`, `process-file`, `make-process` (`drgnx-sandbox-vc--refuse-git`) and
+    `call-process-region` (`drgnx-sandbox-vc--refuse-git-region`: its program is the third argument; blame, the
+    indexer and magit's hunk staging run git through it) signals `drgnx-sandbox-guarded` when the program is `git` (by name or any path ending in `/git`) and
     `default-directory` is guarded. Global options count: `-C DIR` (cumulative, relative to the directory so far),
     `--git-dir` and `--work-tree`, as `=` or a separate argument. Everything else costs one `string=` on the
     program's name, and a stat of the list file when the name is `git`. Measured: 1.2 µs per non-git `call-process`
     for the advice function; the whole call is lost in the noise of the fork (about 0.8 ms).
   - magit, project.el (`project-try-vc` ignores errors), VC and drgnx's own callers go through these primitives.
+    Also covered because they end in these: `process-lines` (`call-process`), `vc-git--call` and `start-file-process`
+    (`process-file`, `start-process` then `make-process`). `shell-command-to-string` runs `sh`, outside the reach.
     The work tracker's `drgnx-work--git` answers nil in a guarded folder instead of failing.
+- **The hub's own trusted steps.** A step the hub runs outside the sandbox with git in a task folder (its own
+  commands, an environment it built) binds `drgnx-sandbox-vc-trusted` to non-nil around that one call; the guard lets
+  it through. It is a Lisp variable of the hub's process: an agent cannot reach it, since it only talks to the hub
+  through the MCP socket and the files the hub validates. Bind it nowhere else, and never around a user-driven call.
 - **What it does not cover.** A `git` started through a shell (`shell-command`, a terminal buffer, `sh -c`) or a
   wrapper program is outside its reach, and so is a `GIT_DIR` set in the environment. A call from natively compiled
   code reaches the advice only through Emacs's trampolines, which need a working native compiler.

@@ -90,7 +90,11 @@ again.  Runs without a hub: no process of the user's, no `~'."
           (should-error (call-process git nil nil nil "--version") :type 'drgnx-sandbox-guarded)
           (should-error (process-file "git" nil nil nil "--version") :type 'drgnx-sandbox-guarded)
           (should-error (make-process :name "svc" :command (list "git" "--version")) :type 'drgnx-sandbox-guarded)
-          (should-error (process-lines "git" "--version") :type 'drgnx-sandbox-guarded)))
+          (should-error (process-lines "git" "--version") :type 'drgnx-sandbox-guarded)
+          (should-error (with-temp-buffer (call-process-region "x" nil "git" nil nil nil "--version"))
+                        :type (quote drgnx-sandbox-guarded))
+          (should-error (with-temp-buffer (insert "x") (call-process-region (point-min) (point-max) git nil nil nil "--version"))
+                        :type (quote drgnx-sandbox-guarded))))
       (let ((err (condition-case e (let ((default-directory folder)) (call-process "git")) (error e))))
         (should (string-match-p "use the job window" (error-message-string err)))))))
 
@@ -101,7 +105,8 @@ again.  Runs without a hub: no process of the user's, no `~'."
       (drgnx-sandbox-vc-register folder)
       (let ((default-directory other))
         (should (eql 0 (call-process "git" nil nil nil "--version")))
-        (should (eql 0 (process-file "git" nil nil nil "--version"))))
+        (should (eql 0 (process-file "git" nil nil nil "--version")))
+        (should (eql 0 (call-process-region "x" nil "git" nil nil nil "--version"))))
       (let ((default-directory folder))        ; not git: not ours to refuse
         (should (eql 0 (call-process "true"))))
       (with-temp-buffer                        ; no folder registered: nothing is refused
@@ -133,6 +138,7 @@ again.  Runs without a hub: no process of the user's, no `~'."
         (should-error (call-process "git" nil nil nil "-c" "a.b=c" "-C" (concat folder "sub") "status")
                       :type 'drgnx-sandbox-guarded)
         (should-error (process-file "git" nil nil nil "--no-pager" "-C" folder "log") :type 'drgnx-sandbox-guarded)
+        (should-error (call-process-region "x" nil "git" nil nil nil "-C" folder "status") :type (quote drgnx-sandbox-guarded))
         (should-error (make-process :name "svc" :command (list "git" "-C" folder "status")) :type 'drgnx-sandbox-guarded)
         (should-error (call-process "git" nil nil nil (concat "--git-dir=" folder ".git") "status")
                       :type 'drgnx-sandbox-guarded)
@@ -220,3 +226,16 @@ again.  Runs without a hub: no process of the user's, no `~'."
                  (* blocks per) (/ (* 1e6 with) (* blocks per)) (/ (* 1e6 without) (* blocks per))
                  (/ (* 1e6 (- with without)) (* blocks per)))
         (should (< (/ (* 1e6 (- with without)) (* blocks per)) 100.0))))))   ; fork noise is tens of us: a gross check
+
+(ert-deftest drgnx-sandbox-vc/trusted-binding-allows-the-hubs-own-step ()
+  (drgnx-sandbox-vc-test--with
+    (let ((folder (concat root "tasks/7-1/")))
+      (make-directory folder t)
+      (drgnx-sandbox-vc-register folder)
+      (let ((default-directory folder))
+        (should-error (call-process "git" nil nil nil "--version") :type 'drgnx-sandbox-guarded)
+        (let ((drgnx-sandbox-vc-trusted t))
+          (should (eql 0 (call-process "git" nil nil nil "--version")))
+          (should (eql 0 (with-temp-buffer (call-process-region "x" nil "git" nil nil nil "--version"))))
+          (should (eql 0 (process-file "git" nil nil nil "--version"))))
+        (should-error (call-process "git" nil nil nil "--version") :type 'drgnx-sandbox-guarded)))))

@@ -7,7 +7,7 @@
 ;; `core.sshCommand', a hook) that git runs the moment anything of the user's runs git there.  The hub keeps the
 ;; folders of live sandboxes in <state>/sandbox/folders.eld (`drgnx-sandbox-vc-register').  While
 ;; `drgnx-sandbox-vc-mode' is on, VC ignores them (`vc-ignore-dir-regexp') and one advice on `call-process',
-;; `process-file' and `make-process' refuses a `git' whose directory is inside one, whoever asked: VC, magit,
+;; `process-file', `call-process-region' and `make-process' refuses a `git' whose directory is inside one, whoever asked: VC, magit,
 ;; project.el, drgnx's own callers.  A `git' started through a shell, or any wrapper program, is outside its reach.
 ;; See docs/develop/sandbox.md ("The VC guard").
 
@@ -125,30 +125,48 @@
         (when (and dir (drgnx-sandbox-vc-guarded-p dir)) (setq found dir))))
     found))
 
+(defvar drgnx-sandbox-vc-trusted nil
+  "Non-nil (let-bound) while the hub runs one of its own trusted git steps in a task folder (a step that is not
+the agent's and runs outside its sandbox, with an environment the hub built): the guard lets it through.  Bound only
+by the hub's step code, around that call alone.  It is a variable of this Emacs process: nothing an agent writes or
+sends can set it.")
+
+(defun drgnx-sandbox-vc--check (program git-args)
+  "Signal `drgnx-sandbox-guarded' when PROGRAM is git and its directory (GIT-ARGS: its arguments) is guarded."
+  (when (and (not drgnx-sandbox-vc-trusted) (drgnx-sandbox-vc--git-p program) (drgnx-sandbox-vc-folders))
+    (when-let* ((dir (drgnx-sandbox-vc--guarded-dir git-args)))
+      (signal 'drgnx-sandbox-guarded (list dir)))))
+
 (defun drgnx-sandbox-vc--refuse-git (orig &rest args)
   "`:around' advice of `call-process', `process-file' and `make-process': signal `drgnx-sandbox-guarded' for a
 `git' whose directory is a registered folder (a `-C DIR' argument counts as DIR).  Anything else is ORIG's."
-  (let* ((proc (keywordp (car args)))                      ; make-process takes keywords; the others a program
-         (cmd (and proc (plist-get args :command)))
-         (program (if proc (car cmd) (car args))))
-    (when (and (drgnx-sandbox-vc--git-p program) (drgnx-sandbox-vc-folders))
-      (when-let* ((dir (drgnx-sandbox-vc--guarded-dir (if proc (cdr cmd) (nthcdr 4 args)))))
-        (signal 'drgnx-sandbox-guarded (list dir))))
-    (apply orig args)))
+  (if (keywordp (car args))                                ; make-process takes keywords; the others a program
+      (let ((cmd (plist-get args :command))) (drgnx-sandbox-vc--check (car cmd) (cdr cmd)))
+    (drgnx-sandbox-vc--check (car args) (nthcdr 4 args)))
+  (apply orig args))
+
+(defun drgnx-sandbox-vc--refuse-git-region (orig &rest args)
+  "`:around' advice of `call-process-region' (START END PROGRAM DELETE BUFFER DISPLAY ARGS…): like
+`drgnx-sandbox-vc--refuse-git'."
+  (drgnx-sandbox-vc--check (nth 2 args) (nthcdr 6 args))
+  (apply orig args))
 
 (defun drgnx-sandbox-vc--refresh ()
   "`find-file-hook': read the folder list before VC looks at the file (the hub may have registered one)."
   (drgnx-sandbox-vc-folders))
 
-(defconst drgnx-sandbox-vc--advised '(call-process process-file make-process))
+(defconst drgnx-sandbox-vc--advised
+  '((call-process . drgnx-sandbox-vc--refuse-git) (process-file . drgnx-sandbox-vc--refuse-git)
+    (make-process . drgnx-sandbox-vc--refuse-git) (call-process-region . drgnx-sandbox-vc--refuse-git-region))
+  "The primitives git is started through: (PRIMITIVE . ADVICE).")
 
 (define-minor-mode drgnx-sandbox-vc-mode
   "Refuse git in the folders of job sandboxes, and keep VC out of them (core; on in the editor and in the hub)."
   :global t :group 'drgnx
-  (dolist (f drgnx-sandbox-vc--advised)
+  (pcase-dolist (`(,f . ,advice) drgnx-sandbox-vc--advised)
     (if drgnx-sandbox-vc-mode
-        (advice-add f :around #'drgnx-sandbox-vc--refuse-git)
-      (advice-remove f #'drgnx-sandbox-vc--refuse-git)))
+        (advice-add f :around advice)
+      (advice-remove f advice)))
   (if drgnx-sandbox-vc-mode
       (add-hook 'find-file-hook #'drgnx-sandbox-vc--refresh -90)
     (remove-hook 'find-file-hook #'drgnx-sandbox-vc--refresh))
