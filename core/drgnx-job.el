@@ -100,6 +100,28 @@ from agents.eld's :routes when nil.")
   (let ((r (alist-get role (drgnx-job--routes))))
     (cond ((null r) (list drgnx-job-default-profile)) ((listp r) r) (t (list r)))))
 
+(defun drgnx-job-safe-p (profile)
+  "May a job run an agent of PROFILE (a name)?  `drgnx-agents-job-safe-p', which `drgnx-agents-start' checks too;
+the job checks first, so that it raises a card (`drgnx-job--refuse-unsafe') rather than start a session that ends."
+  (drgnx-agents-job-safe-p profile))
+
+(defun drgnx-job--refuse-unsafe (id task profile &optional data)
+  "Non-nil when PROFILE is not job-safe (`drgnx-job-safe-p'): then TASK (an id) of job ID gets an `agent' card (with
+DATA) that says why and which profiles may run it, and no agent starts.  Without TASK (a clash's reviewer) the card
+is the job's, of kind `profile', which the user dismisses."
+  (unless (drgnx-job-safe-p profile)
+    (let ((p (cdr (ignore-errors (drgnx-agents-profile profile)))))
+      (drgnx-job--card
+       id task (if task "agent" "profile")
+       (format "%s cannot run a job's agent: %s; use %s (agents.eld's :routes)" profile
+               (cond ((null p) "there is no such profile")
+                     ((and (eq system-type 'darwin) (plist-get p :job-safe) (not (plist-get p :ai)))
+                      "on macOS a job's Claude runs on a gateway profile (the subscription keeps its token in the Keychain)")
+                     (t "this profile's agent can read a repository's own settings"))
+               (mapconcat #'identity (seq-filter #'drgnx-job-safe-p (mapcar #'car drgnx-agents-builtin-profiles)) ", "))
+       nil (append (list :profile profile) data)))
+    t))
+
 (defun drgnx-job--price (profile)
   "PROFILE's price (IN . OUT) per million tokens when its traffic goes through the gateway, else nil."
   (when-let* ((kind (plist-get (cdr (drgnx-agents-profile profile)) :ai)))
@@ -359,9 +381,15 @@ process of its own: the agent starts when it is there."
   (drgnx-job--changed id))
 
 (defun drgnx-job--launch-task (id task &optional profile handover)
-  "The agent of TASK of job ID, in its worktree (made)."
+  "The agent of TASK of job ID, in its worktree (made) — none, and a card, for a profile that is not job-safe
+\(`drgnx-job--refuse-unsafe')."
+  (let ((profile (or profile (car (drgnx-job-route (intern (or (plist-get task :role) "implement")))))))
+    (unless (drgnx-job--refuse-unsafe id (plist-get task :id) profile)
+      (drgnx-job--launch-safe-task id task profile handover))))
+
+(defun drgnx-job--launch-safe-task (id task profile handover)
+  "The agent of TASK of job ID on PROFILE (job-safe), in its worktree (made)."
   (let* ((n (plist-get task :n)) (tree (drgnx-job--task-tree id n))
-         (profile (or profile (car (drgnx-job-route (intern (or (plist-get task :role) "implement"))))))
          (s (drgnx-agents-start profile tree (plist-get task :id) id))
          ;; its edits are against where its worktree starts (the cockpit's diffs), not where the job's branch is later
          (_ (with-demoted-errors "drgnx job: agent not registered: %S"
@@ -541,14 +569,17 @@ commit to the job's branch, a card: there is nothing to review."
     (drgnx-job--start-review-agent id task)))
 
 (defun drgnx-job--start-review-agent (id task &optional profile)
-  "A reviewer agent for TASK of job ID, on PROFILE (default: the first of the review route)."
-  (let* ((s (drgnx-agents-start (or profile (car (drgnx-job-route 'review))) (drgnx-job--task-tree id (plist-get task :n)) (plist-get task :id) id))
-         (sid (drgnx-agent-session-id s)))
-    (puthash sid (plist-get task :id) drgnx-job--reviewers)
-    (puthash sid (format "[drgnx review %s] %s\n\nReview the changes: git diff job/%s...HEAD.  Answer with a last line VERDICT: pass, or VERDICT: fail: what to change."
-                         (plist-get task :id) (plist-get task :title) id)
-             drgnx-job--prompts)
-    (drgnx-job--session-changed s)))
+  "A reviewer agent for TASK of job ID, on PROFILE (default: the first of the review route) — none, and a card, for a
+profile that is not job-safe (`drgnx-job--refuse-unsafe')."
+  (let ((profile (or profile (car (drgnx-job-route 'review)))))
+    (unless (drgnx-job--refuse-unsafe id (plist-get task :id) profile '(:review t))
+      (let* ((s (drgnx-agents-start profile (drgnx-job--task-tree id (plist-get task :n)) (plist-get task :id) id))
+             (sid (drgnx-agent-session-id s)))
+        (puthash sid (plist-get task :id) drgnx-job--reviewers)
+        (puthash sid (format "[drgnx review %s] %s\n\nReview the changes: git diff job/%s...HEAD.  Answer with a last line VERDICT: pass, or VERDICT: fail: what to change."
+                             (plist-get task :id) (plist-get task :title) id)
+                 drgnx-job--prompts)
+        (drgnx-job--session-changed s)))))
 
 (defun drgnx-job--verdict (s)
   "Reviewer S's verdict, from the last non-empty line of its last words: `pass', (fail . REASONS), or nil."
@@ -789,7 +820,7 @@ reaches the network unseen.")
 role.  Everything else — network (fetch), outward commands, paths outside the worktree, tools of MCP servers other
 than drgnx's own — goes to the user.")
 
-(defconst drgnx-job--own-mcp-servers '("drgnx" "drgnx-search")
+(defconst drgnx-job--own-mcp-servers drgnx-agents-own-mcp-servers
   "drgnx's own MCP servers, the ones drgnx gives an agent's session: the coordination tools (drgnx-coord-mcp.el) and
 the search tool (drgnx-search-mcp.el).")
 
@@ -797,6 +828,17 @@ the search tool (drgnx-search-mcp.el).")
   (concat "\\`mcp__\\(" (regexp-opt drgnx-job--own-mcp-servers) "\\)__[a-z]+\\(?:_[a-z]+\\)*\\'")
   "The name of a tool of one of drgnx's own MCP servers (group 1: the server): no `__' after the server's name, so a
 server whose name only starts with drgnx's (`drgnx__x') is not taken for it.")
+
+(defconst drgnx-job--resource-tools '("ReadMcpResourceTool" "ListMcpResourcesTool")
+  "Claude Code's tools that read an MCP server's resources: the server is their input's `server' (none: every server).")
+
+(defun drgnx-job--other-server-resources-p (tool)
+  "Does the ACP TOOL call read the resources of an MCP server other than drgnx's own: one of
+`drgnx-job--resource-tools' by its name in `_meta.claudeCode.toolName' or its title, whose input's `server' is not
+one of `drgnx-job--own-mcp-servers' (or is missing)?"
+  (and (seq-some (lambda (n) (member n drgnx-job--resource-tools))
+                 (list (plist-get tool :title) (plist-get (plist-get (plist-get tool :_meta) :claudeCode) :toolName)))
+       (not (member (plist-get (plist-get tool :rawInput) :server) drgnx-job--own-mcp-servers))))
 
 (defconst drgnx-job--unnamed-tool-titles '("" "Use tool?" "Unknown Tool")
   "Titles claude-agent-acp gives a tool call whose name it cannot show: what the tool is is unknown.")
@@ -861,7 +903,8 @@ is not just part of the path of TREE itself (the worktree, `…/.claude/worktree
 (defun drgnx-job-policy (role tool tree)
   "`allow' or `ask': the policy of ROLE (a string) for the ACP TOOL call (its :kind, :title, :locations, :_meta) of an
 agent working in TREE.  A tool of an MCP server other than drgnx's own asks, whatever its kind: the user's servers can
-reach anything (mail, a database).  So does an `other' call whose tool cannot be named, a kind that is not a string,
+reach anything (mail, a database).  So does reading another server's resources
+\(`drgnx-job--other-server-resources-p'), an `other' call whose tool cannot be named, a kind that is not a string,
 and a change to the agents' own configuration in TREE (`.claude/', `.mcp.json'): a permission mode set there would
 hold for every agent that works in TREE after it."
   (let* ((kind (let ((k (plist-get tool :kind))) (cond ((null k) 'other) ((stringp k) (intern k)))))
@@ -873,6 +916,7 @@ hold for every agent that works in TREE after it."
      ((not (seq-every-p (lambda (p) (drgnx-job--inside-p p tree)) paths)) 'ask)
      ((and (not (memq kind '(read search))) (seq-some (lambda (p) (drgnx-job--agent-config-p p tree)) paths)) 'ask)
      ((eq (drgnx-job--mcp-tool tool) 'user) 'ask)
+     ((drgnx-job--other-server-resources-p tool) 'ask)
      ((and (eq kind 'other)
            (not (seq-some (lambda (n) (and (stringp n) (not (member n drgnx-job--unnamed-tool-titles))))
                           (list (plist-get tool :title) (plist-get (plist-get (plist-get tool :_meta) :claudeCode) :toolName)))))

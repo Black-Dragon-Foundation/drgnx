@@ -34,7 +34,8 @@
 
 (defun drgnx-coord-delivery-test--session (&optional job)
   "A mock session in the hub (of JOB), idle; the session."
-  (let ((s (drgnx-agents-start "mock" temporary-file-directory nil job)))
+  (let ((s (cl-letf (((symbol-function 'drgnx-agents-job-safe-p) #'always))   ; the mock is no Claude: never job-safe
+             (drgnx-agents-start "mock" temporary-file-directory nil job))))
     (drgnx-coord-delivery-test--wait (lambda () (eq (drgnx-agent-session-status s) 'idle)))
     s))
 
