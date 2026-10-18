@@ -64,7 +64,7 @@ AI (`edit`) and Chat (`chat`), one embedding when it set the `embed` role, and A
 project (its own retrievers, then the chat model) — and says which answered.
 
 **Ollama or LM Studio (local).** First it says, in one question, everything it would run and about how much it would
-download; nothing happens until you say yes.
+download (on a re-run, only the models the server does not list yet count); nothing happens until you say yes.
 
 | | macOS | Linux |
 |---|---|---|

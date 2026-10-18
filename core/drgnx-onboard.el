@@ -784,6 +784,14 @@ serve' keeps running as one; `lms server start' starts LM Studio's and ends) —
                                        models))
                     1024.0)))
 
+(defun drgnx-onboard--not-listed (tool models)
+  "The Ollama names in MODELS that TOOL's server does not list yet (what a re-run still has to download)."
+  (let ((listed (plist-get (alist-get (plist-get (alist-get tool drgnx-onboard-install-recipes) :provider) drgnx-ai-detected)
+                           :models)))
+    (seq-remove (lambda (m) (let ((name (drgnx-onboard--served-name tool m)))
+                              (or (member name listed) (member (concat name ":latest") listed))))
+                models)))
+
 (defun drgnx-onboard--put-first (role step)
   "STEP (PROVIDER . MODEL) first in ROLE's chain in ai.eld; the role's other providers stay behind it."
   (drgnx-ai-set-role role (cons step (seq-remove (lambda (s) (eq (car s) (car step))) (drgnx-ai-role role)))))
@@ -861,7 +869,7 @@ interactive): only says what it would run."
          (pulls (delete-dups (mapcar #'cdr models)))
          (commands (string-join (drgnx-onboard--setup-commands tool models) "; ")))
     (if (not (and (plist-get ctx :interactive)
-                  (y-or-n-p (format "Set up %s: %s (about %s GB to download)? " name commands (drgnx-onboard--download-gb pulls)))))
+                  (y-or-n-p (format "Set up %s: %s (about %s GB to download)? " name commands (drgnx-onboard--download-gb (drgnx-onboard--not-listed tool pulls))))))
         (list 'info (format "%s is not set up%s — to set it up: %s" name
                             (if (plist-get ctx :interactive) "" " (nothing is installed or downloaded without asking)") commands))
       (catch 'stop

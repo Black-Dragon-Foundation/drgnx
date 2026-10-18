@@ -309,6 +309,23 @@ with BODY."
                 (should-not (string-search "sk-or-test-123" (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld")))))))
         (delete-process mock)))))
 
+(ert-deftest drgnx-ai-onboard/estimate-skips-models-present ()
+  ;; A re-run's "about N GB to download" counts only the models the provider does not list yet.
+  (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--ollama-answers
+    (let* ((names (delete-dups (mapcar #'cdr (drgnx-onboard--local-models)))) (prompts nil))
+      (should (> (length names) 1))
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (p) (push p prompts) nil)))
+        (setq drgnx-ai-detected nil)
+        (drgnx-onboard--local-setup 'ollama '(:interactive t))
+        (setq drgnx-ai-detected `((ollama :up t :models ,(append (remove (nth 1 names) names) '("other:1b")))))   ; one missing
+        (drgnx-onboard--local-setup 'ollama '(:interactive t))
+        (setq drgnx-ai-detected `((ollama :up t :models ,(mapcar (lambda (n) (concat n ":latest")) names))))
+        (drgnx-onboard--local-setup 'ollama '(:interactive t)))
+      (let ((gb (mapcar (lambda (p) (and (string-match "about \\([0-9.]+\\) GB" p) (string-to-number (match-string 1 p))))
+                        (nreverse prompts))))
+        (should (> (nth 0 gb) (nth 1 gb) 0.0))          ; fewer to download than from nothing, still some
+        (should (= (nth 2 gb) 0.0))))))                    ; all there (also as name:latest): nothing
+
 (ert-deftest drgnx-ai-onboard/last-line-has-no-escapes ()
   ;; A progress bar's last state, without ANSI escapes or the carriage-return redraws before it; only the end of a
   ;; big log is read.
