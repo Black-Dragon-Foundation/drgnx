@@ -208,4 +208,41 @@
     (should (equal (drgnx-commands-label cmd) "Source Control: Review: Refresh"))
     (should (eq (drgnx-cmd-command cmd) 'drgnx-review-refresh))))
 
+(ert-deftest drgnx-review/visit-refuses-a-symlink-out-of-the-repository ()
+  ;; m6: a link inside the repository that leads outside it is outside too
+  (drgnx-review-test--branch
+    (drgnx-review-branch)
+    (drgnx-review--changed s)
+    (let ((outside (make-temp-file "drgnx-outside" t)))
+      (unwind-protect
+          (progn
+            (write-region "secret\n" nil (expand-file-name "secret" outside) nil 'silent)
+            (make-symbolic-link outside (expand-file-name "link" repo))
+            (drgnx-review-test--answer s "FINDING: link/secret:1: minor: via a link\nVERDICT: fail")
+            (with-current-buffer "*drgnx review*"
+              (goto-char (point-min))
+              (search-forward "via a link")
+              (should (string-match-p "outside" (cadr (should-error (drgnx-review-visit) :type 'user-error))))
+              (should-not (find-buffer-visiting (expand-file-name "secret" outside)))))
+        (delete-directory outside t)))))
+
+(ert-deftest drgnx-review/redrawing-keeps-the-place ()
+  ;; m4: the tab is drawn again when the head check answers; the reader stays on their row
+  (drgnx-review-test--branch
+    (drgnx-review-branch)
+    (drgnx-review--changed s)
+    (drgnx-review-test--answer s drgnx-review-test--answer)
+    (with-current-buffer "*drgnx review*"
+      (goto-char (point-min))
+      (forward-line 3)
+      (let ((line (line-number-at-pos)))
+        (drgnx-review--draw)
+        (should (= line (line-number-at-pos)))))))
+
+(ert-deftest drgnx-review/head-check-survives-a-vanished-root ()
+  ;; m5: a root that is gone when the check starts is no error in a hook
+  (let ((run (list :root "/nonexistent-drgnx-root/" :head "abc")))
+    (drgnx-review--check-head run)                      ; no error
+    (should-not (process-live-p (plist-get run :checking)))))
+
 ;;; mod-review-test.el ends here

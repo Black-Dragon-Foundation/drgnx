@@ -67,7 +67,7 @@ VERDICT: fail
 
 Severities are `critical`, `important` and `minor`. The panel's **Review** tab lists the findings worst first,
 under a line such as `feature vs main · 2 findings · fail`. That line says "Reviewing…" while the agent works, says
-when the reviewer gave no verdict, and adds "(HEAD has moved since)" when you committed after the review began.
+when the reviewer gave no verdict, and adds "(HEAD has moved since)" when you committed after the review began (git is asked in the background, so the note appears a moment after the tab is drawn).
 `g` in the tab (Review: Refresh) draws it again. `RET` opens a finding's line (a path that leads outside the repository is refused); `d` (Review: Show Branch Diff) opens the branch's diff at that file, up to the commit that was reviewed (not where HEAD is now). The reviewer is
 an ordinary agent session: its transcript is in the agents view. Review Branch refuses a branch with nothing to
 review, and a repository without a base branch.
@@ -77,14 +77,14 @@ review, and a repository without a base branch.
 The **Pull Requests** tab (right dock) lists this repository's pull requests from forge's local database (module
 `tools/prs`, package `forge`). Each row shows its number, title, author, state (`open`, `draft`, `merged`,
 `closed`) and last update. A pull request whose base is another one's branch sits under it, as a stack (`└ `).
-Merged and closed ones are hidden until **Pull Requests: Show Closed**; when only those exist, the tab says "No open pull requests — N closed".
+Merged and closed ones are hidden until **Pull Requests: Show Closed**; when only those exist, the tab says "No open pull requests — N merged or closed".
 
 - `RET` (Pull Requests: Open) opens forge's view of it: the reviews, comments and commits.
 - `d` (Pull Requests: Show Changes) fetches its head (`refs/pull/N/head` into `refs/pullreqs/N`) and shows it
   against its base in the diff view.
 - **Pull Requests: Fetch** asks the forge for the list (`forge-pull`). It and Show Changes (which runs
   `git fetch` for the one pull request) are the only things here that use the network, and only when you run
-  them. git never prompts for a password in the background: when a fetch fails, the echo area shows git's last line
+  them. git never asks on a terminal in the background (a configured credential helper may still ask): when a fetch fails, the echo area shows git's last line
   (for example that it could not read a username). Fetch needs a forge token in auth-source: see forge's manual. GitHub works;
   Codeberg/Forgejo works as far as forge supports it.
 - In a commit message, `#` completes pull request and issue numbers (forge).

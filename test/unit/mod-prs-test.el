@@ -164,7 +164,7 @@
   (drgnx-prs-test--with (list (drgnx-prs-test--pr 2 "main" "f" 'merged) (drgnx-prs-test--pr 3 "main" "g" 'closed))
     (drgnx-prs-view)
     (let ((text (with-current-buffer "*drgnx pull requests*" (buffer-string))))
-      (should (string-search "No open pull requests — 2 closed" text))
+      (should (string-search "No open pull requests — 2 merged or closed" text))
       (should (string-search "Pull Requests: Show Closed" text))
       (should-not (string-search "No pull requests here yet" text)))
     (with-current-buffer "*drgnx pull requests*" (drgnx-prs-toggle-closed))

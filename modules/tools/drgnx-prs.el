@@ -128,7 +128,7 @@ newest first at each level.  Every PR appears once, a cycle cut where it is foun
       (goto-char (point-max))
       (insert "\n "
               (if (and hidden (> hidden 0))                 ; they are all merged or closed, and hidden
-                  (format "No open pull requests — %d closed (Pull Requests: Show Closed lists them)." hidden)
+                  (format "No open pull requests — %d merged or closed (Pull Requests: Show Closed lists them)." hidden)
                 drgnx-prs--placeholder)
               "\n"))))
 
@@ -189,10 +189,10 @@ newest first at each level.  Every PR appears once, a cycle cut where it is foun
                                               (with-current-buffer err
                                                 (car (last (split-string (string-trim (buffer-string)) "\n" t)))))))
                                 (cond ((equal event "finished\n")
-                                       (when (buffer-live-p err) (kill-buffer err))
+                                       (when (buffer-live-p err) (when-let* ((ep (get-buffer-process err))) (delete-process ep)) (kill-buffer err))
                                        (drgnx-diff-show (list 'range (format "%s/%s" remote (plist-get p :base)) ref) root))
                                       ((string-match-p "exited\\|failed\\|signal" event)
-                                       (when (buffer-live-p err) (kill-buffer err))
+                                       (when (buffer-live-p err) (when-let* ((ep (get-buffer-process err))) (delete-process ep)) (kill-buffer err))
                                        (message "drgnx: fetching pull request #%d failed: %s" n (or why (string-trim event))))))))))
 
 (defun drgnx-prs--commit-setup ()

@@ -146,18 +146,23 @@ that changes whether HEAD has moved.  One check at a time; the summary never run
   (unless (process-live-p (plist-get run :checking))
     (let* ((out (generate-new-buffer " *drgnx-review head*" t)) (default-directory (plist-get run :root)))
       (plist-put run :checking
-                 (make-process
-                  :name "drgnx-review-head" :buffer out :noquery t :connection-type 'pipe
-                  :command '("git" "rev-parse" "HEAD")
-                  :sentinel (lambda (proc _event)
-                              (unless (process-live-p proc)
-                                (let ((now (and (eql 0 (process-exit-status proc)) (with-current-buffer out (string-trim (buffer-string))))))
-                                  (kill-buffer out)
-                                  (when (and now (not (equal now (plist-get run :now))))
-                                    (let ((was (drgnx-review--moved-p run)))
-                                      (plist-put run :now now)
-                                      (unless (eq was (drgnx-review--moved-p run))
-                                        (when (equal (gethash drgnx-review--current drgnx-review--runs) run) (drgnx-review--draw)))))))))))))
+                 (condition-case nil               ; the root may be gone by now
+                     (make-process
+                      :name "drgnx-review-head" :buffer out :noquery t :connection-type 'pipe
+                      :command '("git" "rev-parse" "HEAD")
+                      :sentinel (lambda (proc _event)
+                                  (unless (process-live-p proc)
+                                    (let ((now (and (eql 0 (process-exit-status proc))
+                                                    (with-current-buffer out
+                                                      (let ((s (string-trim (buffer-string)))) ; a sha only: stderr shares the buffer
+                                                        (and (string-match-p "\\`[0-9a-f]\\{40,64\\}\\'" s) s))))))
+                                      (kill-buffer out)
+                                      (when (and now (not (equal now (plist-get run :now))))
+                                        (let ((was (drgnx-review--moved-p run)))
+                                          (plist-put run :now now)
+                                          (unless (eq was (drgnx-review--moved-p run))
+                                            (when (equal (gethash drgnx-review--current drgnx-review--runs) run) (drgnx-review--draw)))))))))
+                   (error (kill-buffer out) nil))))))
 
 (defun drgnx-review--moved-p (run)
   (and (plist-get run :now) (not (equal (plist-get run :now) (plist-get run :head)))))
@@ -181,7 +186,9 @@ that changes whether HEAD has moved.  One check at a time; the summary never run
 
 (defun drgnx-review--draw ()
   (with-current-buffer (drgnx-review--buffer)
-    (let ((inhibit-read-only t) (run (and drgnx-review--current (gethash drgnx-review--current drgnx-review--runs))))
+    (let* ((inhibit-read-only t) (run (and drgnx-review--current (gethash drgnx-review--current drgnx-review--runs)))
+           (line (line-number-at-pos))                       ; the reader keeps their row when the tab is drawn again
+           (windows (mapcar (lambda (w) (cons w (line-number-at-pos (window-point w)))) (get-buffer-window-list nil nil t))))
       (erase-buffer)
       (if (null run) (insert "No review yet — run Review Branch.\n")
         (insert (propertize (drgnx-review--summary run) 'face 'bold) "\n\n")
@@ -190,7 +197,10 @@ that changes whether HEAD has moved.  One check at a time; the summary never run
             (insert (propertize (format "%-10s" (plist-get f :severity)) 'face (intern (concat "drgnx-review-" (plist-get f :severity))))
                     (format "%s:%d" (plist-get f :path) (plist-get f :line)) "  " (plist-get f :text) "\n")
             (put-text-property b (point) 'drgnx-review-finding f))))
-      (goto-char (point-min)))))
+      (goto-char (point-min))
+      (forward-line (1- line))
+      (pcase-dolist (`(,w . ,l) windows)
+        (set-window-point w (save-excursion (goto-char (point-min)) (forward-line (1- l)) (point)))))))
 
 (defun drgnx-review--show ()
   (let ((b (drgnx-review--buffer)))
