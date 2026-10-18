@@ -6,6 +6,9 @@
 (defconst drgnx-run-ert-test--fixtures
   (expand-file-name "../fixtures/" (file-name-directory (or load-file-name buffer-file-name))))
 
+(defconst drgnx-run-ert-test--file-dir-re "/drgnx-t-[A-Za-z0-9]\\{6\\}/drgnx-run\\.[A-Za-z0-9]\\{6\\}/\\'"
+  "A file's temp dir in the runner's short root (`drgnx-run-ert--short-root': in /tmp, else in TMPDIR).")
+
 (defun drgnx-run-ert-test--batch (dir results &rest env)
   "Run the suite in DIR in a fresh batch Emacs (harness on the load path); return its exit code."
   (let ((process-environment (append (cons (concat "DRGNX_TEST_RESULTS=" results) env)
@@ -219,7 +222,7 @@
               (if (equal mode "DRGNX_TEST_ONE_PROCESS=1")
                   (should (string-prefix-p (file-name-as-directory parent) seen))
                 ;; per file: in the runner's short root (…/a-files-temp-dir-is-short-whatever-the-tmpdir), gone with the run as well
-                (should (string-prefix-p "/tmp/drgnx-t-" seen))
+                (should (string-match-p drgnx-run-ert-test--file-dir-re seen))
                 (should-not (file-exists-p (file-name-directory (directory-file-name seen))))))
             (should-not (directory-files parent nil directory-files-no-dot-files-regexp))))
       (delete-directory tmp t))))
@@ -437,7 +440,7 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
           (dolist (run-tmp (list "DRGNX_RUN_TMP" (concat "DRGNX_RUN_TMP=" given)))
             (should (eql 0 (drgnx-run-ert-test--run-suite suite (concat "TMPDIR=" parent) run-tmp)))
             (pcase-let ((`(,seen ,modes) (car (read-from-string (with-temp-buffer (insert-file-contents probe) (buffer-string))))))
-              (should (string-match-p "\\`/tmp/drgnx-t-[A-Za-z0-9]\\{6\\}/drgnx-run\\.[A-Za-z0-9]\\{6\\}/\\'" seen))
+              (should (string-match-p drgnx-run-ert-test--file-dir-re seen))
               (should (eql modes #o700))
               (should-not (file-exists-p seen))
               (should-not (file-exists-p (file-name-directory (directory-file-name seen))))))
@@ -447,7 +450,9 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
 (ert-deftest drgnx-run-ert/a-long-tmpdir-leaves-the-hub-socket-short ()
   ;; macOS CI: under /var/folders/…/T/ each file's hub socket passed 104 bytes and every hub test failed with
   ;; "Service name too long".  A TMPDIR of 100+ bytes on Linux: the hub's socket stays within 103 bytes and a hub
-  ;; test (its own file, in an Emacs of its own) passes.
+  ;; test (its own file, in an Emacs of its own) passes.  Without a writable /tmp the root is made in TMPDIR, which
+  ;; is then as long as it is: nothing to test.
+  (skip-unless (file-writable-p "/tmp/"))
   (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-iso" t)))
          (parent (drgnx-run-ert-test--long-dir tmp))
          (suite (expand-file-name "suite" tmp)) (probe (expand-file-name "socket" tmp)) (results (expand-file-name "r.json" tmp))
@@ -468,7 +473,7 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
                                          (expand-file-name "socket-test.el" suite) (expand-file-name "test/unit/hub-test.el" root)))))
           (let ((socket (with-temp-buffer (insert-file-contents probe) (buffer-string))))
             (should (<= (string-bytes socket) 103))
-            (should (string-prefix-p "/tmp/drgnx-t-" socket)))
+            (should (string-match-p "/drgnx-t-[A-Za-z0-9]\\{6\\}/drgnx-run\\.[A-Za-z0-9]\\{6\\}/" socket)))
           (let ((r (drgnx-run-ert-test--json results)))
             (should (equal (list (plist-get r :total) (plist-get r :passed) (plist-get r :failed)) '(2 2 0)))))
       (delete-directory tmp t))))

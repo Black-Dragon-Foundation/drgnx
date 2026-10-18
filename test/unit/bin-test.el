@@ -593,7 +593,8 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
           ;; the test did run in a temp dir of its own (in the runner's short root, so its sockets fit), not in
           ;; PARENT itself …
           (let ((seen (drgnx-bin-test--slurp probe)))
-            (should (string-match-p "\\`/tmp/drgnx-t-[A-Za-z0-9]\\{6\\}/drgnx-run\\.[A-Za-z0-9]\\{6\\}/\\'" seen))
+            ;; (in /tmp, or in the run's TMPDIR where /tmp cannot be written)
+            (should (string-match-p "/drgnx-t-[A-Za-z0-9]\\{6\\}/drgnx-run\\.[A-Za-z0-9]\\{6\\}/\\'" seen))
             ;; … and nothing of it is left, there nor in PARENT
             (should-not (file-exists-p (file-name-directory (directory-file-name seen)))))
           (should-not (drgnx-bin-test--left parent)))

@@ -37,7 +37,8 @@ ends. Those directories are made in a short root of the run's, `/tmp/drgnx-t-XXX
 `$TMPDIR` only where `/tmp` cannot be written), whatever `$TMPDIR` is, and the root goes when the run ends or is
 stopped: a Unix socket's path has at most 103 bytes on macOS (104 with its closing NUL; 107 on Linux), the hub's tests
 make one three levels below a file's directory (`run/drgnx/hub-HASH.sock`), and macOS's `$TMPDIR`
-(`/var/folders/xx/…/T/`, 49 bytes) with two `drgnx-run.XXXXXX/` levels below it leaves no room. It writes its own summary; the runner merges them into one, in the same shape, plus `"files"`
+(`/var/folders/xx/…/T/`, 49 bytes) with two `drgnx-run.XXXXXX/` levels below it leaves no room. It writes its own
+summary; the runner merges them into one, in the same shape, plus `"files"`
 (`[{"file","exit","seconds"}]`). A file whose Emacs dies (a test calls `kill-emacs`), exits non-zero without a failed
 test, or runs longer than `$DRGNX_TEST_FILE_TIMEOUT` seconds (default 300; it gets TERM, 5 s, then KILL, with what it
 started) is a failure named `file NAME-test.el`, and the other files still run. Files run one after another;
