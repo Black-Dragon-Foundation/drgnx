@@ -505,10 +505,13 @@ with OPTION `characters', `drgnx-keys--option-types-characters'; otherwise put b
 is lifted first (and remembered).  Returns what was lifted, \"COMMAND (PREFIX)\", or nil."
   (let* ((map (symbol-value mapsym)) (prev (drgnx-keys--lookup map key)) (lifted nil))
     (when (numberp prev)
+      ;; a number also when the prefix is unbound (an empty map): then there is nothing to lift
       (let* ((prefix (key-description (seq-take (key-parse key) prev))) (cmd (drgnx-keys--lookup map prefix)))
-        (push (list mapsym prefix cmd :prefix) drgnx-keys--applied)
-        (keymap-unset map prefix t)
-        (setq prev nil lifted (format "%s (%s)" cmd prefix))))
+        (setq prev nil)
+        (when cmd
+          (push (list mapsym prefix cmd :prefix) drgnx-keys--applied)
+          (keymap-unset map prefix t)
+          (setq lifted (format "%s (%s)" cmd prefix)))))
     (push (list mapsym key prev def) drgnx-keys--applied)
     (define-key map (key-parse key) def)
     lifted))

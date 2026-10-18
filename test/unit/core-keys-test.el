@@ -440,6 +440,20 @@ is undone after BODY."
                                 :maps (lambda (m) (symbol-value m)))))
      (should-not (drgnx-keys-test--conflict r "g o")))))
 
+(defvar drgnx-keys-test-empty-map (make-sparse-keymap))
+
+(ert-deftest drgnx-keys/binding-into-an-empty-map-lifts-nothing ()
+  ;; `keymap-lookup' answers 1 for "SPC f f" in an empty map (SPC is unbound, not a command): no prefix is lifted or
+  ;; recorded, so the first apply records what every later one does.  A command on the prefix is still lifted.
+  (let ((drgnx-keys--applied nil))
+    (setq drgnx-keys-test-empty-map (make-sparse-keymap))
+    (should (null (drgnx-keys--bind 'drgnx-keys-test-empty-map "SPC f f" #'ignore)))
+    (should (equal drgnx-keys--applied '((drgnx-keys-test-empty-map "SPC f f" nil ignore))))
+    (setq drgnx-keys--applied nil drgnx-keys-test-empty-map (make-sparse-keymap))
+    (keymap-set drgnx-keys-test-empty-map "SPC" #'forward-char)
+    (should (equal (drgnx-keys--bind 'drgnx-keys-test-empty-map "SPC f f" #'ignore) "forward-char (SPC)"))
+    (should (equal (assoc-default "SPC" (mapcar #'cdr drgnx-keys--applied)) '(forward-char :prefix)))))
+
 (ert-deftest drgnx-keys/buffers-panel-has-a-right-click-menu ()
   ;; The keys tables say "right-click" for these; the menu must exist.
   (drgnx-keys-test--with-core-commands
