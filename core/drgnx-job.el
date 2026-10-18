@@ -89,6 +89,7 @@ from agents.eld's :routes when nil.")
 (declare-function drgnx-ai-agent-gateway-chain "drgnx-ai")
 (declare-function drgnx-ai-provider "drgnx-ai")
 (defvar drgnx-ai-gateway-kinds)
+(defvar drgnx-job-review)
 
 (defun drgnx-job--routes ()
   (or drgnx-job-routes (plist-get (drgnx-agents--read-file) :routes)))
@@ -114,6 +115,21 @@ from agents.eld's :routes when nil.")
           (cl-pushnew profile unpriced :test #'equal))))
     (list :usd usd :tokens (* (length tasks) (+ in out)) :unpriced (nreverse unpriced))))
 
+(defun drgnx-job--unpriced-chain (profiles)
+  "The profiles among PROFILES (names) that go through the gateway with a provider that has no :price in their chain:
+what they spend is not counted, so a budget cannot stop them."
+  (seq-filter (lambda (profile)
+                (when-let* ((kind (plist-get (cdr (drgnx-agents-profile profile)) :ai)))
+                  (require 'drgnx-ai)
+                  (and (memq kind drgnx-ai-gateway-kinds)
+                       (seq-some (lambda (p) (null (plist-get (drgnx-ai-provider (car p)) :price))) (drgnx-ai-agent-gateway-chain kind)))))
+              profiles))
+
+(defun drgnx-job--budget-warning (unpriced)
+  "What a budget over the UNPRICED profiles (`drgnx-job--unpriced-chain') comes to, or nil."
+  (and unpriced (format "a budget is set, but %s has a provider without a price: what it spends is not counted"
+                        (string-join unpriced ", "))))
+
 (defun drgnx-job--new-id ()
   (let* ((base (format-time-string "job-%Y%m%d-%H%M%S")) (id base) (n 1))
     (while (drgnx-coord-job id) (setq n (1+ n) id (format "%s-%d" base n)))
@@ -132,7 +148,10 @@ own repository).  Returns its id; nothing starts (unless `drgnx-job-auto-start')
          (roles (delete-dups (mapcar (lambda (task) (intern (plist-get task :role))) tasks)))
          (proposal (list :plan (expand-file-name file) :sha (plist-get plan :sha) :repo repo :title (plist-get plan :title)
                          :tasks tasks :routes (mapcar (lambda (r) (cons r (car (drgnx-job-route r)))) roles)
-                         :estimate (drgnx-job--estimate tasks) :budget budget)))
+                         :estimate (drgnx-job--estimate tasks) :budget budget
+                         :unpriced-budget (and budget   ; every profile a role may fall back to, the reviewers' too
+                                               (drgnx-job--unpriced-chain
+                                                (delete-dups (apply #'append (mapcar #'drgnx-job-route (if drgnx-job-review (cons 'review roles) roles)))))))))
     (drgnx-coord-job-create :id id :title (plist-get plan :title) :plan (expand-file-name file) :repo repo
                             :tasks (mapcar (lambda (task) (list :n (plist-get task :n) :title (plist-get task :title)
                                                                 :role (plist-get task :role) :deps (plist-get task :deps)))
@@ -145,8 +164,9 @@ own repository).  Returns its id; nothing starts (unless `drgnx-job-auto-start')
     (unwind-protect (when (and drgnx-job-auto-start (fboundp 'drgnx-job-approve)) (drgnx-job-approve id))
       (when (equal (plist-get (drgnx-coord-job id) :status) "proposed")
         (drgnx-job--card id nil "proposal"
-                         (format "%d tasks, about %.2f USD%s: approve to start" (length tasks) (plist-get (plist-get proposal :estimate) :usd)
-                                 (if (plist-get (plist-get proposal :estimate) :unpriced) " (some unpriced)" "")))))
+                         (format "%d tasks, about %.2f USD%s: approve to start%s" (length tasks) (plist-get (plist-get proposal :estimate) :usd)
+                                 (if (plist-get (plist-get proposal :estimate) :unpriced) " (some unpriced)" "")
+                                 (if-let* ((w (drgnx-job--budget-warning (plist-get proposal :unpriced-budget)))) (concat " (" w ")") "")))))
     id))
 
 (defun drgnx-job-get (id)
@@ -836,6 +856,7 @@ permissions — and, with DECISIONS, its decision log (newest first)."
                                  (drgnx-agents-sessions))))
       (list :id id :title (plist-get job :title) :status (plist-get job :status) :repo (plist-get job :repo)
             :plan (plist-get job :plan) :budget (plist-get data :budget)
+            :warnings (delq nil (list (drgnx-job--budget-warning (plist-get data :unpriced-budget))))
             :spent (plist-get (drgnx-work-db-spend :job id) :cost) :estimate (plist-get data :estimate)
             :tasks (mapcar (lambda (task)
                              (list :n (plist-get task :n) :title (plist-get task :title) :role (plist-get task :role)
@@ -881,6 +902,7 @@ permissions — and, with DECISIONS, its decision log (newest first)."
                (if-let* ((u (funcall v (plist-get e :unpriced)))) (format " (unpriced: %s)" (string-join u ", ")) "")))
      (format "  budget %s, spent %.2f USD\n" (if-let* ((b (funcall v (plist-get job :budget)))) (format "%s USD" b) "none")
              (or (funcall v (plist-get job :spent)) 0))
+     (mapconcat (lambda (w) (format "  warning: %s\n" w)) (funcall v (plist-get job :warnings)) "")
      (mapconcat (lambda (a) (format "  agent %s (%s) %s on %s\n" (plist-get a :id) (plist-get a :profile) (plist-get a :status)
                                     (plist-get a :task)))
                 (funcall v (plist-get job :agents)) "")
@@ -895,7 +917,7 @@ permissions — and, with DECISIONS, its decision log (newest first)."
 (declare-function drgnx-hub-call-sync "drgnx-hub")
 (declare-function drgnx-hub--jsonable "drgnx-hub")
 
-(defconst drgnx-job--json-lists '(:tasks :agents :cards :messages :permissions :decisions :deps :jobs :unpriced)
+(defconst drgnx-job--json-lists '(:tasks :agents :cards :messages :permissions :decisions :deps :jobs :unpriced :warnings)
   "Keys of a job's JSON that are lists: with nothing in them they are `[]', not null.")
 
 (defun drgnx-job--json (v)

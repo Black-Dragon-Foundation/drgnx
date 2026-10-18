@@ -78,6 +78,27 @@
         (should (equal (plist-get est :unpriced) '("claude"))))
       (should (equal (mapcar (lambda (task) (plist-get task :status)) (drgnx-coord-tasks id)) '("ready" "ready" "pending" "pending"))))))
 
+(ert-deftest drgnx-job/a-budget-with-an-unpriced-provider-is-warned-about ()
+  ;; the gateway counts only what it can price: a budget set over a provider without :price does not stop it
+  (drgnx-job-test--with
+    (with-temp-file (concat root "config/ai.eld")
+      (prin1 '(:version 1 :providers ((openrouter :name "OR" :kind openai :url "https://openrouter.ai/api/v1"
+                                                  :key-env "OPENROUTER_API_KEY" :caps (chat) :messages t))
+                        :roles ((agent (openrouter))))
+             (current-buffer)))
+    (let* ((drgnx-job-routes '((implement . "claude (OpenRouter)") (test "claude" "claude (OpenRouter)")))
+           (warned (drgnx-job-get (drgnx-job-propose plan :budget 5)))
+           (quiet (drgnx-job-get (drgnx-job-propose plan)))
+           (cards (lambda (id) (mapcar (lambda (c) (plist-get c :title)) (drgnx-coord-cards id)))))
+      (should (equal (plist-get (plist-get warned :proposal) :unpriced-budget) '("claude (OpenRouter)")))
+      (should (seq-some (lambda (title) (string-search "claude (OpenRouter)" title)) (funcall cards (plist-get warned :id))))
+      (should (plist-get (drgnx-job-summary (plist-get warned :id)) :warnings))
+      (should-not (plist-get (plist-get quiet :proposal) :unpriced-budget))         ; no budget: nothing to warn about
+      (should-not (seq-some (lambda (title) (string-search "budget" title)) (funcall cards (plist-get quiet :id)))))
+    (let* ((drgnx-job-routes '((implement . "claude")))
+           (id (drgnx-job-propose plan :budget 5)))                                ; a subscription profile: not counted at all
+      (should-not (plist-get (plist-get (drgnx-job-get id) :proposal) :unpriced-budget)))))
+
 (ert-deftest drgnx-job/won-t-build-lines-become-the-user-s-decisions ()
   (drgnx-job-test--with
     (let* ((id (drgnx-job-propose plan)) (ds (drgnx-coord-decisions-since 0 id)))

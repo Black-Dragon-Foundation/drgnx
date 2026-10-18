@@ -72,7 +72,9 @@ Which profile does which role comes from `:routes` in `agents.eld` (config dir):
 
 A role without a route gets `drgnx-job-default-profile` ("claude"). The estimate counts
 `drgnx-job-task-tokens` (150 000 in, 15 000 out) per task at the price of the profile's provider when its traffic
-goes through the gateway; profiles drgnx cannot price (a subscription) are listed as unpriced.
+goes through the gateway; profiles drgnx cannot price (a subscription) are listed as unpriced. With a `--budget`, the
+proposal also warns about a profile on a route whose provider has no `:price` in `ai.eld`: the gateway cannot count
+what it spends, so the budget would not stop it.
 
 ## While it runs
 
