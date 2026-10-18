@@ -192,7 +192,7 @@ A terminal has the size it has, so drgnx lays the workbench out by it. A new ter
 when it is at least 120 columns wide and the **panel** when it has at least 30 lines; a smaller one starts with the
 editor alone, and the right dock stays hidden as in a graphical window. The docks are fractions of the terminal, so
 they follow it when it changes: the sidebar is a quarter of the columns (at least 20), the right dock 30% (at least
-24), the panel 30% of the lines (at least 6). A dock you resize yourself (drag its divider) keeps the size you gave it when the terminal changes.
+24), the panel 30% of the lines (at least 6). A dock you resize yourself (drag its divider, or a resize command such as `C-x }`) keeps the size you gave it when the terminal changes; a popup or Emacs squeezing a dock into a small window is no choice of yours.
 
 When the terminal grows, a dock its size had kept away comes (an 80x24 window that becomes 120x40 shows the sidebar
 and the panel), unless you opened or closed that dock yourself in the meantime. When it shrinks, a dock you opened

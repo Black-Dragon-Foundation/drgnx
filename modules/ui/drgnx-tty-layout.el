@@ -15,7 +15,8 @@
 ;;   kept from showing is shown when the terminal grows enough — unless you toggled it since.
 ;; - A resize re-applies the sizes (`window-size-change-functions').  It never closes a dock, whatever you or
 ;;   the layout opened.  A dock you resized
-;;   yourself keeps that width (or height): the layout notices it when the terminal's size is unchanged.
+;;   yourself, with the mouse or a resize command (`drgnx-tty-layout-resize-commands'), keeps that width (or
+;;   height); a popup, a minibuffer or Emacs clamping a dock to a small frame is no choice of yours.
 ;; - Below 40 columns or 12 lines nothing is shown or resized, and whatever a too small window makes
 ;;   `split-window' signal never reaches you: the dock is tried again at the next size.
 ;; - Below 30 lines the frame parameter `drgnx-chrome-breadcrumb' is `off'.
@@ -113,9 +114,16 @@ lays nothing out.")
                                 ('dock (drgnx-wb-hide-sidebar))
                                 ('panel (drgnx-wb-area-hide 'panel)))))))))
 
+(defvar drgnx-tty-layout-resize-commands
+  '(mouse-drag-vertical-line mouse-drag-mode-line mouse-drag-header-line enlarge-window shrink-window
+                             enlarge-window-horizontally shrink-window-horizontally)
+  "The commands with which you resize a window: a dock whose size differs after one of them is the size you chose.
+Any other change of a dock's size (a popup borrowing the panel, a growing minibuffer, Emacs clamping a dock to a
+small frame) is not a choice.")
+
 (defun drgnx-tty-layout--notice-drags ()
-  "The selected frame kept its size but a shown dock is not the size on record: you dragged it (or resized it
-by key).  It is yours from now on and its size is the one on record, which a resize of the terminal restores."
+  "A shown dock whose size is not the size on record, right after a resize command of yours: you resized it.  It
+is yours from now on and its size is the one on record, which a resize of the terminal restores."
   (let ((set (frame-parameter nil 'drgnx-tty-layout-set)) (owned (frame-parameter nil 'drgnx-tty-layout-owned)))
     (dolist (key drgnx-tty-layout--docks)
       (let ((size (drgnx-tty-layout--size-of key)) (given (alist-get key set)))
@@ -124,6 +132,30 @@ by key).  It is yours from now on and its size is the one on record, which a res
           (cl-pushnew key owned))))
     (set-frame-parameter nil 'drgnx-tty-layout-set set)
     (set-frame-parameter nil 'drgnx-tty-layout-owned owned)))
+
+(defvar drgnx-tty-layout--dragging nil
+  "Non-nil between the start of a mouse drag on a divider and the next command that is not part of it.  The
+drag's moves and its end run as an anonymous function Emacs binds for the drag, not as the command that began it.")
+
+(defun drgnx-tty-layout--resize-p ()
+  "`this-command' resizes a window: a resize command, or a step of a mouse drag one of them began."
+  (cond ((memq this-command drgnx-tty-layout-resize-commands)
+         (setq drgnx-tty-layout--dragging (string-prefix-p "mouse-drag" (symbol-name this-command)))
+         t)
+        ((and drgnx-tty-layout--dragging (not (symbolp this-command))) t)
+        (t (setq drgnx-tty-layout--dragging nil))))
+
+(defun drgnx-tty-layout--after-command ()
+  "`post-command-hook': after a resize command of yours (`drgnx-tty-layout-resize-commands', or the steps of a
+drag), in a terminal frame the layout looks after, notice the dock you resized.  Cheap and silent: every other
+command returns at the first or second test."
+  (when (and drgnx-tty-layout--active (drgnx-tty-layout--resize-p))
+    (let ((frame (selected-frame)))
+      (when (and (not (display-graphic-p frame)) (frame-parameter frame 'drgnx-tty-layout-size)
+                 (not (frame-parameter frame 'drgnx-tty-editor-only)))
+        (condition-case err (drgnx-tty-layout--notice-drags)
+          (error (push (format "ui/terminal-layout: %s" (error-message-string err)) drgnx-hooks-problems)))
+        t))))
 
 (defun drgnx-tty-layout--fit (columns lines)
   "In the selected frame, COLUMNS by LINES with room: give the docks their sizes — except one you sized
@@ -157,8 +189,8 @@ the docks that show."
 (defun drgnx-tty-layout-apply (frame &optional opening)
   "Lay out terminal FRAME by its size (see the file's commentary); nothing while the module is off.  OPENING:
 FRAME is new, so the sidebar and the panel are wanted, shown as far as the size allows; it counts once per
-frame.  A call that finds the frame's size as it was only notices a dock you resized, which then keeps its
-size; a new size gives every other dock its fraction."
+frame.  A call that finds the frame's size as it was changes nothing; a new size gives every dock its
+fraction, except one you resized (`drgnx-tty-layout--notice-drags'), which keeps your size."
   (when (and drgnx-tty-layout--active (frame-live-p frame) (not (display-graphic-p frame))
              (not (frame-parameter frame 'drgnx-tty-editor-only)))
     (let* ((columns (frame-width frame)) (lines (frame-height frame))
@@ -169,9 +201,8 @@ size; a new size gives every other dock its fraction."
         (set-frame-parameter frame 'drgnx-chrome-breadcrumb breadcrumb))
       (when opening (set-frame-parameter frame 'drgnx-tty-layout-withheld (list 'dock 'panel)))
       (unless same (set-frame-parameter frame 'drgnx-tty-layout-size (cons columns lines)))
-      (when (and (>= columns drgnx-tty-layout--min-columns) (>= lines drgnx-tty-layout--min-lines))
-        (with-selected-frame frame
-          (if same (drgnx-tty-layout--notice-drags) (drgnx-tty-layout--fit columns lines))))
+      (when (and (not same) (>= columns drgnx-tty-layout--min-columns) (>= lines drgnx-tty-layout--min-lines))
+        (with-selected-frame frame (drgnx-tty-layout--fit columns lines)))
       t)))
 
 ;;;; Hooks
@@ -208,6 +239,7 @@ size; a new size gives every other dock its fraction."
   (setq drgnx-tty-layout--active t)
   (add-hook 'window-size-change-functions #'drgnx-tty-layout--resized)
   (add-hook 'window-setup-hook #'drgnx-tty-layout--startup)
+  (add-hook 'post-command-hook #'drgnx-tty-layout--after-command)
   (dolist (f '(drgnx-wb-show-sidebar drgnx-wb-hide-sidebar))
     (advice-add f :after #'drgnx-tty-layout--sidebar-toggled))
   (dolist (f '(drgnx-wb-area-show drgnx-wb-area-hide))
@@ -217,6 +249,7 @@ size; a new size gives every other dock its fraction."
   (setq drgnx-tty-layout--active nil)
   (remove-hook 'window-size-change-functions #'drgnx-tty-layout--resized)
   (remove-hook 'window-setup-hook #'drgnx-tty-layout--startup)
+  (remove-hook 'post-command-hook #'drgnx-tty-layout--after-command)
   (dolist (f '(drgnx-wb-show-sidebar drgnx-wb-hide-sidebar))
     (advice-remove f #'drgnx-tty-layout--sidebar-toggled))
   (dolist (f '(drgnx-wb-area-show drgnx-wb-area-hide))

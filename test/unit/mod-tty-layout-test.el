@@ -6,13 +6,17 @@
 (require 'drgnx)
 (load (expand-file-name "modules/ui/drgnx-tty-layout" drgnx-dir) nil t)
 
+(defun drgnx-tty-layout-test--command (command)
+  "Run the layout's `post-command-hook' function as if COMMAND had just run."
+  (let ((this-command command)) (drgnx-tty-layout--after-command)))
+
 (defmacro drgnx-tty-layout-test--frame (size &rest body)
   "BODY with the selected frame SIZE (COLUMNS . LINES), fresh frame parameters, the module on, and stand-in docks:
 `shown' lists the docks showing (`dock', `panel', `right'), `now' their sizes (a dock shows at its size parameter),
 `calls' the show calls in order.  A dock shows when `room' is non-nil; `room' set to nil makes a show leave a
 half-built dock (3 wide) and signal, as `split-window' does in a small frame."
   (declare (indent 1))
-  `(let ((size ,size) (shown nil) (now nil) (calls nil) (room t) (frame (selected-frame)) (drgnx-tty-layout--active t))
+  `(let ((size ,size) (shown nil) (now nil) (calls nil) (room t) (cap 999) (frame (selected-frame)) (drgnx-tty-layout--dragging nil) (drgnx-tty-layout--active t))
      (dolist (p '(drgnx-tty-layout-size drgnx-tty-layout-withheld drgnx-tty-layout-owned drgnx-tty-layout-set
                                         drgnx-chrome-breadcrumb drgnx-wb-dock-px drgnx-wb-right-px drgnx-wb-panel-px))
        (set-frame-parameter frame p nil))
@@ -38,7 +42,7 @@ half-built dock (3 wide) and signal, as `split-window' does in a small frame."
                   (lambda (area) (close area (if (eq area 'panel) 'drgnx-wb-panel-px 'drgnx-wb-right-px))))
                  ((symbol-function 'drgnx-tty-layout--size-of) (lambda (key) (alist-get key now)))
                  ((symbol-function 'drgnx-tty-layout--resize-dock)
-                  (lambda (key size) (when (alist-get key now) (setf (alist-get key now) size)))))
+                  (lambda (key size) (when (alist-get key now) (setf (alist-get key now) (min size cap))))))
          ,@body))))
 
 (ert-deftest drgnx-tty-layout/docks-are-fractions-of-the-terminal ()
@@ -231,8 +235,10 @@ half-built dock (3 wide) and signal, as `split-window' does in a small frame."
     (drgnx-tty-layout-apply (selected-frame) t)
     (should (equal (list (alist-get 'dock now) (alist-get 'panel now)) '(30 12)))
     ;; the user drags the sidebar's divider: the size changes, the terminal's does not
+    (drgnx-tty-layout-test--command 'mouse-drag-vertical-line)   ; the press
     (setf (alist-get 'dock now) 50)
-    (drgnx-tty-layout-apply (selected-frame))
+    (drgnx-tty-layout-test--command (lambda (_event) nil))         ; the drag's own step: an anonymous function
+    (should (equal (frame-parameter nil 'drgnx-tty-layout-owned) '(dock)))
     ;; the terminal resizes: the panel follows the terminal, the sidebar keeps the dragged width
     (setq size '(100 . 50))
     (setf (alist-get 'dock now) 36)                   ; Emacs itself narrowed it with the frame
@@ -286,3 +292,66 @@ half-built dock (3 wide) and signal, as `split-window' does in a small frame."
                  (drgnx-tty-layout-apply (selected-frame))      ; it changes
                  (should (= (length sets) 2)))
         (advice-remove 'set-frame-parameter 'layout-test)))))
+
+(ert-deftest drgnx-tty-layout/a-resize-that-is-no-command-is-not-yours ()
+  ;; a popup borrowing the panel, a minibuffer growing: the panel's size changes, the terminal's does not
+  (drgnx-tty-layout-test--frame '(120 . 40)
+    (drgnx-tty-layout-apply (selected-frame) t)
+    (setf (alist-get 'panel now) 8)
+    (drgnx-tty-layout-apply (selected-frame))                      ; the window-size-change hook
+    (drgnx-tty-layout-test--command 'self-insert-command)        ; any other command
+    (drgnx-tty-layout-test--command (lambda (_event) nil))       ; an anonymous one, outside a drag
+    (should-not (frame-parameter nil 'drgnx-tty-layout-owned))
+    ;; the terminal resizes: the panel is the layout's again
+    (setq size '(120 . 50))
+    (drgnx-tty-layout-apply (selected-frame))
+    (should (= (alist-get 'panel now) 15))))
+
+(ert-deftest drgnx-tty-layout/every-resize-command-is-yours ()
+  (dolist (command '(mouse-drag-vertical-line mouse-drag-mode-line mouse-drag-header-line enlarge-window
+                                              shrink-window enlarge-window-horizontally shrink-window-horizontally))
+    (should (memq command drgnx-tty-layout-resize-commands))
+    (drgnx-tty-layout-test--frame '(120 . 40)
+      (drgnx-tty-layout-apply (selected-frame) t)
+      (setf (alist-get 'panel now) 9)
+      (drgnx-tty-layout-test--command command)
+      (should (equal (frame-parameter nil 'drgnx-tty-layout-owned) '(panel))))))
+
+(ert-deftest drgnx-tty-layout/a-clamped-restore-is-no-new-drag ()
+  (drgnx-tty-layout-test--frame '(160 . 50)
+    (drgnx-tty-layout-apply (selected-frame) t)
+    (setf (alist-get 'dock now) 46)
+    (drgnx-tty-layout-test--command 'mouse-drag-vertical-line)
+    ;; the terminal shrinks so far that 46 columns do not fit: the dock is clamped to 35
+    (setq size '(90 . 50) cap 35)
+    (setf (alist-get 'dock now) 35)                   ; Emacs narrowed it
+    (drgnx-tty-layout-apply (selected-frame))
+    (should (= (alist-get 'dock now) 35))
+    ;; the hook runs again at that size, and after an ordinary command: still no new size
+    (drgnx-tty-layout-apply (selected-frame))
+    (drgnx-tty-layout-test--command 'self-insert-command)
+    ;; it grows back: 46 again
+    (setq size '(160 . 50) cap 999)
+    (drgnx-tty-layout-apply (selected-frame))
+    (should (= (alist-get 'dock now) 46))))
+
+(ert-deftest drgnx-tty-layout/a-dock-shown-at-a-clamped-size-is-not-resized-by-you ()
+  (drgnx-tty-layout-test--frame '(80 . 24)
+    (drgnx-tty-layout-apply (selected-frame) t)
+    (drgnx-tty-layout--install)
+    (unwind-protect
+        (progn (drgnx-wb-show-sidebar)                  ; the user's toggle
+               (setf (alist-get 'dock now) 12)           ; … which lands narrower than the layout's 20
+               (drgnx-tty-layout-test--command 'toggle-sidebar)
+               (should-not (frame-parameter nil 'drgnx-tty-layout-owned)))
+      (drgnx-tty-layout--uninstall))))
+
+(ert-deftest drgnx-tty-layout/the-command-hook-is-installed-and-cheap ()
+  (drgnx-tty-layout--install)
+  (unwind-protect
+      (progn (should (memq #'drgnx-tty-layout--after-command post-command-hook))
+             ;; not a resize command, or a module that is off: no work (the frame has no layout record at all)
+             (let ((this-command 'enlarge-window) (drgnx-tty-layout--active nil))
+               (should-not (drgnx-tty-layout--after-command))))
+    (drgnx-tty-layout--uninstall))
+  (should-not (memq #'drgnx-tty-layout--after-command post-command-hook)))

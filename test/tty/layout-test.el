@@ -177,3 +177,16 @@
                                  ,form))
                          (drgnx-tty-session-eval s form))
                        '(t "*scratch*" t)))))))
+
+(ert-deftest drgnx-tty-layout/a-resize-that-is-no-command-is-not-yours ()
+  ;; a popup borrowing the panel makes its size change at an unchanged terminal size
+  (drgnx-tty-session-with (s :size "120x40")
+    (drgnx-tty-layout-test--ready s)
+    (drgnx-tty-session-wait s '(drgnx-wb-area-window 'panel))
+    (drgnx-tty-session-eval s '(progn (window-resize (drgnx-wb-area-window 'panel) -3) t))
+    (drgnx-tty-session-wait s '(= (window-total-height (drgnx-wb-area-window 'panel)) 9))
+    (drgnx-tty-session-quiet s)
+    (should-not (drgnx-tty-session-eval s '(frame-parameter nil 'drgnx-tty-layout-owned)))
+    ;; the terminal changes: the panel follows its fraction (30% of 49 lines)
+    (drgnx-tty-layout-test--resize s "130x50")
+    (drgnx-tty-session-wait s '(= (window-total-height (drgnx-wb-area-window 'panel)) 15))))
