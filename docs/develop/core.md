@@ -77,6 +77,14 @@ the **key sheet** ("Keyboard Shortcuts", `*drgnx keys*`), a markdown cheat sheet
 KEY" tips after a command run from a menu or the palette, and the **command palette** (`C-S-p` in every profile): every available
 command as "Category: Title" with its key and description beside it, through the normal completion UI.
 
+**Run hook and usage counter.** `drgnx-surfaces-run` (what the palette and the menus call) runs
+`drgnx-surfaces-run-functions` with the command id after the command ran; an error in a member is swallowed. The
+first member counts the run: in memory only, so a run costs nothing noticeable. The counts are written at idle, at
+most once a minute and at exit, never prompting, to `command-usage.eld` in the state dir
+(`drgnx-shortcuts-usage-file`): `((ID COUNT (DAY . N)…)…)`, with the per-day counts (`time-to-days`) of the last 7
+days. The file stays on your machine; it feeds the suggestions of the Keyboard Shortcuts editor ("you ran X 12
+times this week; give it a key?"). Read it with `drgnx-surfaces-usage-count` and `drgnx-surfaces-usage-week`.
+
 ## Modules (`drgnx-modules.el`)
 
 ```elisp
