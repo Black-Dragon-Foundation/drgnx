@@ -363,6 +363,8 @@ the parts to rebuild, and each part has a named raw-hook function that sets it:
 |---|---|---|
 | `buffer-list-update-hook` (a buffer made, killed, selected or renamed) | `drgnx-signal--set-dirty` | `set` |
 | `first-change-hook`, `after-save-hook`, `after-revert-hook` | `drgnx-signal--modified-dirty` | `modified` |
+| `after-save-hook` (`write-file` under the buffer's own name makes it a file buffer, with no rename) | `drgnx-signal--set-dirty` | `set` |
+| `after-change-major-mode-hook` (`dired-mode` on an existing buffer; internal buffers are skipped) | `drgnx-signal--mode-changed` | `set` |
 | `kill-buffer-hook` | `drgnx-signal--killed` | `set` and `modified` |
 | `post-command-hook` | `drgnx-signal--post-command` | nothing, unless the current buffer's modified flag or name differs from the cached one |
 
@@ -371,7 +373,7 @@ the parts to rebuild, and each part has a named raw-hook function that sets it:
 post-command comparison and a flush that compares only the editor window and its point (a median of about 5 µs with 300
 buffers, byte-compiled, against 479 µs when every flush scanned them). Undo back to the saved state and
 `set-buffer-modified-p` run no hook, which is what the comparison is for; it covers the current buffer, and a buffer
-that becomes current is compared with what the last flush saw of it (one `assq`, no buffer list). With the mode off
+that becomes current is compared with what the last flush saw of it (two `assq`, no buffer list). With the mode off
 nothing says what changed, so a flush called directly (tests, the bench) rebuilds everything. The edges and what they
 mean are unchanged. The hooks are added by the mode, so the mode owns them; a module that needs the bus turns the mode
 on (see "Global modes are owned by the first module that turns them on" in the safety net above).

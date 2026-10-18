@@ -45,6 +45,7 @@ Every emission is pushed onto EVENTS-VAR as (EVENT . DATA)."
   (declare (indent 1))
   `(let ((drgnx-signal--subscribers nil) (drgnx-signal--state nil) (drgnx-signal-errors nil)
          (drgnx-signal--timer nil) (drgnx-signal--dirty nil) (drgnx-signal--seen-buffer nil)
+         (drgnx-signal--seen-modified nil) (drgnx-signal--seen-name nil)
          (was-on drgnx-signal-mode) (,events-var nil)
          (dir (make-temp-file "drgnx-signal-edge" t)))
      (unwind-protect
@@ -142,15 +143,53 @@ Every emission is pushed onto EVENTS-VAR as (EVENT . DATA)."
                    '((buffer-list-update-hook drgnx-signal--set-dirty (set))
                      (first-change-hook drgnx-signal--modified-dirty (modified))
                      (after-save-hook drgnx-signal--modified-dirty (modified))
+                     (after-save-hook drgnx-signal--set-dirty (set))
                      (after-revert-hook drgnx-signal--modified-dirty (modified))
+                     (after-change-major-mode-hook drgnx-signal--mode-changed (set))
                      (kill-buffer-hook drgnx-signal--killed (set modified))))
       (should (memq fn (default-value hook)))
       (setq drgnx-signal--dirty nil)
-      (funcall fn)
-      (should (equal (sort (copy-sequence drgnx-signal--dirty) (function string<)) (sort (copy-sequence parts) (function string<)))))
+      (with-temp-buffer (rename-buffer "visible") (funcall fn))
+      (should (equal (sort (copy-sequence drgnx-signal--dirty) (function string<))
+                     (sort (copy-sequence parts) (function string<)))))
+    (setq drgnx-signal--dirty nil)
+    (with-temp-buffer (rename-buffer " internal") (drgnx-signal--mode-changed))
+    (should-not drgnx-signal--dirty)                  ; a mode call in an internal buffer is no change
     (drgnx-signal-mode -1)
-    (should-not (memq 'drgnx-signal--set-dirty (default-value 'buffer-list-update-hook)))
-    (should-not (memq 'drgnx-signal--killed (default-value 'kill-buffer-hook)))))
+    (pcase-dolist (`(,hook . ,fn) drgnx-signal--hooks)
+      (should-not (memq fn (default-value hook))))
+    (should-not (memq 'drgnx-signal--windows (default-value 'window-buffer-change-functions)))
+    (should-not drgnx-signal--seen-buffer)))
+
+(ert-deftest drgnx-signal-edge/write-file-and-a-mode-change-enter-the-set ()
+  "No rename, no new buffer: only `after-save-hook' / `after-change-major-mode-hook' say the set changed."
+  (drgnx-signal-edge--with-hooks events
+    (let ((w (generate-new-buffer "plain")) (d (generate-new-buffer "listing")))
+      (unwind-protect
+          (progn
+            (drgnx-signal--flush)                    ; both created: take their hook's flush first
+            (setq events nil)
+            (with-current-buffer w
+              (write-file (expand-file-name "plain" dir)) ; same name as the buffer: no rename
+              (should (equal (buffer-name) "plain")))
+            (drgnx-signal--flush)
+            (should (memq w (cdr (assq 'buffer-set-changed events))))
+            (setq events nil)
+            (with-current-buffer d (require 'dired) (dired-mode dir))
+            (drgnx-signal--flush)
+            (should (memq d (cdr (assq 'buffer-set-changed events)))))
+        (mapc #'kill-buffer (list w d))))))
+
+(ert-deftest drgnx-signal-edge/a-flag-changed-in-another-buffer-is-seen-when-it-becomes-current ()
+  "The cross-buffer branch of the post-command check: compared with what the last flush saw of the buffer."
+  (drgnx-signal-edge--with-hooks events
+    (let ((a (drgnx-signal-edge--file dir "a.txt")) (b (drgnx-signal-edge--file dir "b.txt")))
+      (drgnx-signal--flush)
+      (with-current-buffer a (drgnx-signal-edge--keystroke))
+      (setq events nil)
+      (with-current-buffer b (set-buffer-modified-p t))   ; no hook; `a' is the buffer the last command saw
+      (with-current-buffer b (drgnx-signal-edge--keystroke))
+      (should (equal (cdr (assq 'modified-changed events)) (list b))))))
 
 (ert-deftest drgnx-signal-edge/a-keystroke-flush-with-300-buffers-is-cheap ()
   "A keystroke that changed no buffer: the hook and the flush take a median of 50 µs at most with 300 buffers

@@ -190,6 +190,12 @@ that fails is recorded, like a subscriber)."
   (drgnx-signal--mark 'set)
   (drgnx-signal--schedule))
 
+(defun drgnx-signal--mode-changed (&rest _)
+  "`after-change-major-mode-hook': a buffer's major mode (and so maybe its place in the set) changed.
+Internal buffers (a leading space) are skipped: mode calls in temporary buffers are no change."
+  (unless (string-prefix-p " " (buffer-name))
+    (drgnx-signal--set-dirty)))
+
 (defun drgnx-signal--modified-dirty (&rest _)
   "`first-change-hook', `after-save-hook', `after-revert-hook': a modified flag changed."
   (drgnx-signal--mark 'modified)
@@ -227,10 +233,14 @@ compare the current buffer's modified flag and name with the cached ones.  Nothi
     (buffer-list-update-hook . drgnx-signal--set-dirty)
     (first-change-hook . drgnx-signal--modified-dirty)
     (after-save-hook . drgnx-signal--modified-dirty)
+    (after-save-hook . drgnx-signal--set-dirty)                  ; `write-file' under the buffer's own name
+    (after-change-major-mode-hook . drgnx-signal--mode-changed)  ; `dired-mode' on an existing buffer
     (after-revert-hook . drgnx-signal--modified-dirty)
     (kill-buffer-hook . drgnx-signal--killed)
     (post-command-hook . drgnx-signal--post-command))
-  "The raw hooks the bus listens to, each with its named function (the mode adds and removes them).")
+  "The raw hooks the bus listens to, each with its named function (the mode adds and removes them).
+`after-save-hook' has two: the flags, and the set (a saved non-file buffer becomes a file buffer, with no
+rename or new buffer).  `after-change-major-mode-hook' covers a mode change on an existing buffer.")
 
 (define-minor-mode drgnx-signal-mode
   "The workbench change bus: raw window and buffer hooks become deduplicated edges."
@@ -239,8 +249,9 @@ compare the current buffer's modified flag and name with the cached ones.  Nothi
     (if drgnx-signal-mode (add-hook hook fn) (remove-hook hook fn)))
   (if drgnx-signal-mode (add-hook 'window-buffer-change-functions #'drgnx-signal--windows)
     (remove-hook 'window-buffer-change-functions #'drgnx-signal--windows))
+  (setq drgnx-signal--seen-buffer nil)
   (when drgnx-signal-mode
-    (setq drgnx-signal--dirty '(set modified) drgnx-signal--seen-buffer nil)
+    (setq drgnx-signal--dirty '(set modified))
     (drgnx-signal--schedule)))
 
 (provide 'drgnx-signal)
