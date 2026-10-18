@@ -63,6 +63,7 @@ and drgnx's data and state dirs). Without `DRGNX_AGENT` it only reads. Messages 
 | `record_decision {kind, subject, task?, paths?, reason, replaces?, seen_version}` | current inside its own task, else proposed |
 | `claim_task`, `update_task`, `complete_task` `{task, …, seen_version}` | the lease and the status; `update_task` takes `running`, `needs-input`, `in-review` (and `failed` outside a job), nothing else |
 | `task_status {job?}` | the job's tasks |
+| `work_status` | the work tracker's plans, as `drgnx work status --json` gives them (UTF-8 JSON; counts as `[done, all]`) |
 | `escalate {subject, text, seen_version}` | a message to `user`, queued (the job window, M9b.4, shows it; until then nothing does) |
 
 A held write answers `HELD: the decision log moved on — read these changes, then retry with seen_version N.` and

@@ -3,6 +3,7 @@
 (require 'ert)
 (require 'drgnx-coord)
 (require 'drgnx-coord-mcp)
+(require 'drgnx-work)
 
 (defvar drgnx-coord-mcp-test--out nil)
 
@@ -57,7 +58,7 @@
     (let ((tools (mapcar (lambda (x) (plist-get x :name)) (plist-get (plist-get (drgnx-coord-mcp-test--rpc proc "tools/list") :result) :tools))))
       (should (equal (sort (copy-sequence tools) #'string<)
                      '("ack" "claim_task" "complete_task" "escalate" "list_agents" "read_decisions" "read_inbox"
-                       "record_decision" "send_message" "task_status" "update_task"))))
+                       "record_decision" "send_message" "task_status" "update_task" "work_status"))))
     (let ((r (drgnx-coord-mcp-test--tool proc "claim_task" (list :task "j#1" :seen_version (drgnx-coord-version)))))
       (should-not (cdr r))
       (should (string-search "\"ok\":true" (car r))))
@@ -247,5 +248,22 @@
     (should (equal (cdr (assoc "DRGNX_AGENT" env)) "agent one"))
     (should (equal (cdr (assoc "DRGNX_TASK" env)) "j#1"))
     (should (equal (cdr (assoc "DRGNX_DATA_DIR" env)) "/d"))))
+
+(ert-deftest drgnx-coord-mcp/work-status-gives-the-plan-rows-as-utf-8-json ()
+  "`work_status' answers what `drgnx work status --json' does: one object per plan, a non-ASCII title as it went in."
+  (drgnx-coord-mcp-test--with '("DRGNX_AGENT=a" "DRGNX_JOB=j")
+    ;; no plans yet: an empty array
+    (should (equal (car (drgnx-coord-mcp-test--tool proc "work_status" nil)) "[]"))
+    (let ((title "Café → 計画"))
+      (drgnx-work-put-node "plan:a" :kind 'plan :title title :path "/a.md" :line 1 :status "open" :source "/a.md")
+      (drgnx-work-db-close-all)
+      (let* ((r (drgnx-coord-mcp-test--tool proc "work_status" nil))
+             (rows (json-parse-string (car r) :object-type 'plist)))
+        (should-not (cdr r))
+        (should (= (length rows) 1))
+        (should (equal (plist-get (aref rows 0) :title) title))
+        (should (equal (plist-get (aref rows 0) :id) "plan:a"))
+        (should (equal (plist-get (aref rows 0) :merged) :false))
+        (should (equal (plist-get (aref rows 0) :tasks) [0 0]))))))
 
 ;;; coord-mcp-test.el ends here

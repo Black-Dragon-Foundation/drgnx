@@ -102,7 +102,7 @@ this Emacs can show SVG (else there is no graph; the tab shows the same tree).
 
 `drgnx work status` prints one line per plan: merged or on a branch, tasks, steps and TODOs done of all, commits
 linked, title and branch. `--json` gives the same as an array of objects (`id title path spec branch merged
-tasks steps todos commits`, counts as `[done, all]`), always UTF-8 whatever the locale.
+tasks steps todos commits`, counts as `[done, all]`), always UTF-8 whatever the locale. Agents read the same rows through the coordination server's `work_status` tool.
 
 ## Storage
 
