@@ -1,22 +1,25 @@
 ;;; wb-area-test.el --- batch tests: the bottom panel and the right dock (tabbed areas) -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'drgnx-area)
 
 (defmacro drgnx-area-test--with (&rest body)
   "BODY with rules on, one editor window, the panel and right dock hidden, fresh area state."
-  `(let ((drgnx-signal--editor-window nil) (drgnx-wb-unrouted nil)
-         (display-buffer-alist nil) (display-buffer-overriding-action '(nil)))
-     (delete-other-windows)
-     (set-frame-parameter nil 'drgnx-wb-areas nil)
-     (set-frame-parameter nil 'drgnx-wb-panel-px nil)
-     (set-frame-parameter nil 'drgnx-wb-right-px nil)
-     (drgnx-rules-mode 1)
-     (unwind-protect (progn ,@body)
-       (drgnx-rules-mode -1)
-       (drgnx-wb-area-hide 'panel)
-       (drgnx-wb-area-hide 'right)
+  `(drgnx-test-with-state
+     (let ((drgnx-wb-unrouted nil)
+           (display-buffer-alist nil) (display-buffer-overriding-action '(nil)))
        (delete-other-windows)
-       (dolist (b '("*Help*" "*drgnx-results*" "*notes*")) (when (get-buffer b) (kill-buffer b))))))
+       (set-frame-parameter nil 'drgnx-wb-areas nil)
+       (set-frame-parameter nil 'drgnx-wb-panel-px nil)
+       (set-frame-parameter nil 'drgnx-wb-right-px nil)
+       (drgnx-rules-mode 1)
+       (unwind-protect (progn ,@body)
+         (drgnx-rules-mode -1)
+         (drgnx-wb-area-hide 'panel)
+         (drgnx-wb-area-hide 'right)
+         (delete-other-windows)
+         (dolist (b '("*Help*" "*drgnx-results*" "*notes*")) (when (get-buffer b) (kill-buffer b)))))))
 
 (defun drgnx-area-test--results ()
   "A results buffer with 100 lines."

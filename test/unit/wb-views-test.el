@@ -1,23 +1,26 @@
 ;;; wb-views-test.el --- batch tests: the sidebar's views (Explorer | Search) -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'drgnx)
 (require 'drgnx-wb)
 
 (defmacro drgnx-wb-views-test--with-sections (&rest body)
   "BODY with two Explorer-view sections (no :view), one Search-view section and one editor window."
-  `(let ((drgnx-wb--sections nil) (drgnx-signal--editor-window nil))
-     (delete-other-windows)
-     (set-frame-parameter nil 'drgnx-wb-view nil)
-     (drgnx-wb-define-section 'top :slot -1 :title "TOP" :buffer (lambda () (get-buffer-create "*drgnx-views-top*")))
-     (drgnx-wb-define-section 'bottom :slot 0 :title "BOTTOM" :buffer (lambda () (get-buffer-create "*drgnx-views-bottom*")))
-     (drgnx-wb-define-section 'find :slot 0 :view 'search :title "FIND"
-                              :buffer (lambda () (get-buffer-create "*drgnx-views-find*")))
-     (unwind-protect (progn ,@body)
-       (drgnx-wb-hide-sidebar)
+  `(drgnx-test-with-state
+     (let ((drgnx-wb--sections nil))
        (delete-other-windows)
        (set-frame-parameter nil 'drgnx-wb-view nil)
-       (dolist (b '("*drgnx-views-top*" "*drgnx-views-bottom*" "*drgnx-views-find*"))
-         (when (get-buffer b) (kill-buffer b))))))
+       (drgnx-wb-define-section 'top :slot -1 :title "TOP" :buffer (lambda () (get-buffer-create "*drgnx-views-top*")))
+       (drgnx-wb-define-section 'bottom :slot 0 :title "BOTTOM" :buffer (lambda () (get-buffer-create "*drgnx-views-bottom*")))
+       (drgnx-wb-define-section 'find :slot 0 :view 'search :title "FIND"
+                                :buffer (lambda () (get-buffer-create "*drgnx-views-find*")))
+       (unwind-protect (progn ,@body)
+         (drgnx-wb-hide-sidebar)
+         (delete-other-windows)
+         (set-frame-parameter nil 'drgnx-wb-view nil)
+         (dolist (b '("*drgnx-views-top*" "*drgnx-views-bottom*" "*drgnx-views-find*"))
+           (when (get-buffer b) (kill-buffer b)))))))
 
 (ert-deftest drgnx-wb-views/only-the-view-s-sections-show ()
   (drgnx-wb-views-test--with-sections
@@ -103,19 +106,20 @@
 
 (defmacro drgnx-wb-views-test--with-real-names (&rest body)
   "BODY with sections named like the real ones: `buffers' and `explorer' (Explorer view), `search' (Search view)."
-  `(let ((drgnx-wb--sections nil) (drgnx-signal--editor-window nil))
-     (delete-other-windows)
-     (set-frame-parameter nil 'drgnx-wb-view nil)
-     (drgnx-wb-define-section 'buffers :slot -1 :title "BUFFERS" :buffer (lambda () (get-buffer-create "*drgnx-views-buffers*")))
-     (drgnx-wb-define-section 'explorer :slot 0 :title "EXPLORER" :buffer (lambda () (get-buffer-create "*drgnx-views-explorer*")))
-     (drgnx-wb-define-section 'search :slot 0 :view 'search :title "SEARCH"
-                              :buffer (lambda () (get-buffer-create "*drgnx-views-search*")))
-     (unwind-protect (progn ,@body)
-       (drgnx-wb-hide-sidebar)
+  `(drgnx-test-with-state
+     (let ((drgnx-wb--sections nil))
        (delete-other-windows)
        (set-frame-parameter nil 'drgnx-wb-view nil)
-       (dolist (b '("*drgnx-views-buffers*" "*drgnx-views-explorer*" "*drgnx-views-search*"))
-         (when (get-buffer b) (kill-buffer b))))))
+       (drgnx-wb-define-section 'buffers :slot -1 :title "BUFFERS" :buffer (lambda () (get-buffer-create "*drgnx-views-buffers*")))
+       (drgnx-wb-define-section 'explorer :slot 0 :title "EXPLORER" :buffer (lambda () (get-buffer-create "*drgnx-views-explorer*")))
+       (drgnx-wb-define-section 'search :slot 0 :view 'search :title "SEARCH"
+                                :buffer (lambda () (get-buffer-create "*drgnx-views-search*")))
+       (unwind-protect (progn ,@body)
+         (drgnx-wb-hide-sidebar)
+         (delete-other-windows)
+         (set-frame-parameter nil 'drgnx-wb-view nil)
+         (dolist (b '("*drgnx-views-buffers*" "*drgnx-views-explorer*" "*drgnx-views-search*"))
+           (when (get-buffer b) (kill-buffer b)))))))
 
 (ert-deftest drgnx-wb-views/vscode-c-s-e-leaves-focus-in-the-explorer ()
   (drgnx-wb-views-test--with-real-names
