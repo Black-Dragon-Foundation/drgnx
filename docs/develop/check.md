@@ -7,6 +7,7 @@ bin/drgnx check                # everything
 bin/drgnx check --no-perf      # skip the perf tier (the slowest, and it needs a quiet machine)
 bin/drgnx check --no-gui       # build and the unit suite only
 bin/drgnx check --jobs 6 --shards 4
+bin/drgnx check --leaks        # the unit shards with the leak census on (see below)
 ```
 
 It runs in phases:
@@ -61,3 +62,43 @@ Tests that run in parallel must not depend on machine-wide state another test ma
   length.
 - A test of name choice stubs `drgnx-ui-unit-active-p`, because real units belong to the live shards running
   alongside.
+
+## The leak census (`--leaks`)
+
+`bin/drgnx test --leaks` (and `bin/drgnx check --leaks`, for the unit shards and the timing job) turns on a census of
+what the tests leave behind: `DRGNX_TEST_LEAKS=1`, read by the runner (`harness/run-ert.el`), which every per-file Emacs
+and every shard inherits. It combines with `--one-process`. It is **report only**: the exit status is the tests'.
+
+- **Around every test** the runner reads the cheap fingerprint (`drgnx-modules-fingerprint`: timers, processes,
+  buffers, `features`, the hooks drgnx touches, `global-mode-string`, the alists a mode writes into, drgnx's
+  registries; [harness.md](harness.md#the-fingerprint)) before and after; every difference is a leak of that test.
+- **Around every test file** it reads the full fingerprint, which adds every hook variable and every advised function
+  (about 10 ms), and compares the file's start with its end. What a test was already named for is not said twice. An
+  advice or a hook outside the listed ones shows only here, so its line names the file, not the test (`(file)`).
+- A **timer a test left pending is cancelled** after it (and reported), so it cannot fire inside the next test;
+  `ert-kill-all-test-buffers` runs after each file.
+- Each leak's **source** is the file that defined the function, advice or timer function (`symbol-file`), or that
+  provided the feature; inside the checkout it is relative to it.
+
+The runner prints the leaks at the end and puts them in the results JSON as `:leaks`, a vector of
+`(:test :file :what :source)`; the per-file summaries are merged (see [harness.md](harness.md#one-emacs-per-test-file))
+and `check --leaks` merges the shards' (each leak once) and prints the same block after its summary.
+
+```
+Leaks (2)
+  drgnx-browser/opens  browser-test.el  hook window-buffer-change-functions +drgnx-browser--fill  [modules/tools/drgnx-browser.el]
+  (file)  layouts-test.el  advice ignore +drgnx-layouts--probe  [modules/ui/drgnx-layouts.el]
+```
+
+A line reads: the test (`(file)` for the per-file scan), the test file, what changed (`+` appeared, `-` gone; the kind
+first: `hook`, `timer`, `advice`, `feature`, `buffer`, `process`, `registry`, `auto-mode`, …), and in brackets the file
+that defined it. No brackets: it could not be told (a lambda). A hook function that stays on a global hook is the
+cheapest to find: its brackets name the module that forgot to remove it, its test names the test that set it up.
+
+**The allowlist** `test/leaks-allowed.eld` holds what is not a leak: Emacs's own timers and hooks, and deliberate
+fixtures. Each entry is `(:what REGEXP :source REGEXP :why STRING)`: a leak whose line matches `:what` and whose source
+matches `:source` (leave `:source` out for any) is not reported. Always say why. `DRGNX_TEST_LEAKS_ALLOWED` names
+another file (the runner's own tests use it). The first report, per file, is in the teardown ledger; the migrations of
+the modules work it down.
+
+With the census off (the default) the runner loads nothing, advises nothing, and the summary has no `:leaks`.

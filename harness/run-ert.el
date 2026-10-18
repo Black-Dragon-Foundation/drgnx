@@ -22,11 +22,143 @@ their processes end.  The runner calls this after every test."
       (directory-files-recursively (expand-file-name where) "-test\\.el\\'")
     (mapcar #'expand-file-name (if (listp where) where (list where)))))
 
+;;;; The leak census
+
+;; With DRGNX_TEST_LEAKS set (`bin/drgnx test --leaks'), the cheap fingerprint (core/drgnx-modules-fingerprint.el) is
+;; read around every test, the full one around every test file; each difference is a leak, recorded with the test, its
+;; file and the file that defined the function concerned.  Report only: the exit status is the tests'.
+
+(defvar drgnx-run-ert--self)
+
+(defvar drgnx-run-ert--leaks nil "The leaks recorded so far, newest first: plists (:test :file :what :source).")
+
+(defvar drgnx-run-ert--leaks-allowed nil "The entries of the allowlist: plists (:what REGEXP :source REGEXP :why STRING).")
+
+(defvar drgnx-run-ert--census-file nil "The test file the census is in (its tests are running), or nil.")
+
+(defvar drgnx-run-ert--census-start nil "The full fingerprint taken when the census entered `drgnx-run-ert--census-file'.")
+
+(defvar drgnx-run-ert--census-seen nil "The :what lines recorded for the current file's tests: the per-file scan skips them.")
+
+(defvar drgnx-run-ert--leaks-quiet nil
+  "Non-nil in the Emacs of a test file that a run started (DRGNX_TEST_LEAKS_QUIET): the run prints one report.")
+
+(defvar drgnx-run-ert--census-busy nil "Non-nil inside a test the census runs: a test that runs `ert-run-test' itself is not counted.")
+
+(defun drgnx-run-ert--leaks-on-p ()
+  "Whether DRGNX_TEST_LEAKS asks for the census."
+  (let ((s (getenv "DRGNX_TEST_LEAKS"))) (and s (not (string-empty-p s)))))
+
+(defun drgnx-run-ert--leaks-allowed-file ()
+  "The allowlist: DRGNX_TEST_LEAKS_ALLOWED (a file), else test/leaks-allowed.eld of this checkout."
+  (let ((given (getenv "DRGNX_TEST_LEAKS_ALLOWED")))
+    (if (and given (not (string-empty-p given)))
+        (expand-file-name given)
+      (expand-file-name "../test/leaks-allowed.eld" (file-name-directory drgnx-run-ert--self)))))
+
+(defun drgnx-run-ert--read-allowed (file)
+  "The allowlist entries in FILE; a missing file allows nothing, an unreadable one is said and allows nothing."
+  (when (file-readable-p file)
+    (condition-case err
+        (with-temp-buffer (insert-file-contents file) (read (current-buffer)))
+      (error (message "drgnx: leak allowlist %s does not read: %S" file err) nil))))
+
+(defun drgnx-run-ert--leak-allowed-p (what source)
+  "Whether the allowlist has an entry for the leak WHAT (a line) from SOURCE (a file, or nil): its :what matches,
+and so does its :source when it has one."
+  (cl-some (lambda (a)
+             (and (string-match-p (plist-get a :what) what)
+                  (or (null (plist-get a :source)) (string-match-p (plist-get a :source) (or source "")))))
+           drgnx-run-ert--leaks-allowed))
+
+(defun drgnx-run-ert--relative-source (source)
+  "SOURCE, a file, relative to this checkout when it is inside it (so a report reads the same in every worktree)."
+  (let ((root (file-name-directory (directory-file-name (file-name-directory drgnx-run-ert--self)))))
+    (cond ((not (stringp source)) nil)
+          ((string-prefix-p root source) (file-relative-name source root))
+          ((string-prefix-p (file-truename root) source) (file-relative-name source (file-truename root)))
+          (t source))))
+
+(defun drgnx-run-ert--census-note (test file diff)
+  "Record the entries of DIFF (`drgnx-modules-fingerprint-diff') as leaks of TEST (a name; :null for the per-file
+scan) in FILE, but those on the allowlist and, for the per-file scan, those a test of the file was already named for."
+  (dolist (d diff)
+    (let ((what (plist-get d :what)) (source (drgnx-run-ert--relative-source (plist-get d :source))))
+      (unless (or (drgnx-run-ert--leak-allowed-p what source)
+                  (and (eq test :null) (member what drgnx-run-ert--census-seen)))
+        (unless (eq test :null) (push what drgnx-run-ert--census-seen))
+        (push (list :test test :file (or file :null) :what what :source (or source :null)) drgnx-run-ert--leaks)))))
+
+(defun drgnx-run-ert--census-leave-file ()
+  "End the current file: the full fingerprint against the one at its start, then its test buffers go."
+  (when drgnx-run-ert--census-start
+    (drgnx-run-ert--census-note :null drgnx-run-ert--census-file
+                                (drgnx-modules-fingerprint-diff drgnx-run-ert--census-start (drgnx-modules-fingerprint t)))
+    (let ((inhibit-message t)) (ignore-errors (ert-kill-all-test-buffers)))
+    (setq drgnx-run-ert--census-file nil drgnx-run-ert--census-start nil drgnx-run-ert--census-seen nil)))
+
+(defun drgnx-run-ert--census-enter-file (file)
+  "A test of FILE is about to run: when it is not the file the census is in, end that one and start this."
+  (unless (and drgnx-run-ert--census-start (equal file drgnx-run-ert--census-file))
+    (drgnx-run-ert--census-leave-file)
+    (setq drgnx-run-ert--census-file file
+          drgnx-run-ert--census-seen nil
+          drgnx-run-ert--census-start (drgnx-modules-fingerprint t))))
+
+(defun drgnx-run-ert--census-timers (fingerprint)
+  "The timers FINGERPRINT holds."
+  (mapcar #'cdr (plist-get fingerprint :timers)))
+
+(defun drgnx-run-ert-census (run test &rest args)
+  "Around `ert-run-test': the cheap fingerprint before and after TEST; each difference is a leak of TEST.  A timer
+the test left pending is cancelled, so it cannot fire inside the next test."
+  (if drgnx-run-ert--census-busy
+      (apply run test args)
+    (let ((file (ert-test-file-name test)) (drgnx-run-ert--census-busy t) before)
+      (drgnx-run-ert--census-enter-file file)
+      (setq before (drgnx-modules-fingerprint))
+      (prog1 (apply run test args)
+        (let ((after (drgnx-modules-fingerprint)))
+          (drgnx-run-ert--census-note (symbol-name (ert-test-name test)) file (drgnx-modules-fingerprint-diff before after))
+          (let ((old (drgnx-run-ert--census-timers before)))
+            (dolist (tm (drgnx-run-ert--census-timers after))
+              (unless (memq tm old) (cancel-timer tm)))))))))
+
+(defun drgnx-run-ert--census-start ()
+  "Turn the census on: load the fingerprint, read the allowlist, advise `ert-run-test'."
+  (let ((load-path (cons (expand-file-name "../core" (file-name-directory drgnx-run-ert--self)) load-path)))
+    (require 'drgnx-modules-fingerprint))
+  (setq drgnx-run-ert--leaks nil
+        drgnx-run-ert--census-file nil drgnx-run-ert--census-start nil drgnx-run-ert--census-seen nil
+        drgnx-run-ert--leaks-allowed (drgnx-run-ert--read-allowed (drgnx-run-ert--leaks-allowed-file)))
+  (advice-add 'ert-run-test :around #'drgnx-run-ert-census '((name . drgnx-run-ert-census))))
+
+(defun drgnx-run-ert--census-finish ()
+  "End the last file, turn the census off, and return the leaks in the order they appeared (a list of plists)."
+  (drgnx-run-ert--census-leave-file)
+  (advice-remove 'ert-run-test #'drgnx-run-ert-census)
+  (nreverse (prog1 drgnx-run-ert--leaks (setq drgnx-run-ert--leaks nil))))
+
+(defun drgnx-run-ert-leaks-report (leaks)
+  "LEAKS (plists, or the vector of them) as text: \"Leaks (N)\" and a line each (test, file, what, source); \"\" for none."
+  (let ((leaks (append leaks nil)))
+    (if (null leaks)
+        ""
+      (concat (format "Leaks (%d)\n" (length leaks))
+              (mapconcat (lambda (l)
+                           (let ((test (plist-get l :test)) (file (plist-get l :file)) (source (plist-get l :source)))
+                             (format "  %s  %s  %s%s" (if (stringp test) test "(file)")
+                                     (if (stringp file) (file-name-nondirectory file) "?")
+                                     (plist-get l :what) (if (stringp source) (format "  [%s]" source) ""))))
+                         leaks "\n")
+              "\n"))))
+
 (defun drgnx-run-ert (dir &optional results-file)
   "Load every *-test.el under DIR (or the files of the list DIR: a shard), run all tests, write a JSON
 summary to RESULTS-FILE.  Return t if every test passed."
   (advice-add 'ert-run-test :after (lambda (&rest _) (drgnx-run-ert-drain-events)) '((name . drgnx-run-ert-drain)))
-  (let* ((load-failures
+  (let* ((census (and (drgnx-run-ert--leaks-on-p) (progn (drgnx-run-ert--census-start) t)))
+         (load-failures
           (cl-loop for file in (drgnx-run-ert--files dir)
                    ;; a file that does not read or load costs its tests: the run fails and says which file
                    for err = (condition-case err (progn (load file nil t) nil) (error err) (quit err))
@@ -36,6 +168,7 @@ summary to RESULTS-FILE.  Return t if every test passed."
          ;; which tests: all, or DRGNX_TEST_SELECTOR (an ERT selector; bin/drgnx check runs :timing ones alone)
          (stats (ert-run-tests-batch (let ((s (getenv "DRGNX_TEST_SELECTOR")))
                                        (if (and s (not (string-empty-p s))) (car (read-from-string s)) t))))
+         (leaks (and census (drgnx-run-ert--census-finish)))
          (tests nil) (known-red nil) (failures nil))
     (cl-loop
      for test across (ert--stats-tests stats)
@@ -74,17 +207,22 @@ summary to RESULTS-FILE.  Return t if every test passed."
           (t (push (list :name name :condition (format "known red, but it errored: %S" condition))
                    failures)))))))
     (setq failures (append load-failures (nreverse failures)))
+    ;; the per-file Emacsen of a run say nothing: the run that started them prints one report from their summaries
+    (when (and leaks (not drgnx-run-ert--leaks-quiet))
+      (message "\n%s" (drgnx-run-ert-leaks-report leaks)))
     (when results-file
       (let ((coding-system-for-write 'utf-8-unix))
         (write-region
          (decode-coding-string
           (json-serialize
-           (list :total (+ (ert-stats-total stats) (length load-failures))
-                 :passed (ert-stats-completed-expected stats)
-                 :failed (length failures)
-                 :failures (vconcat failures)
-                 :known_red (vconcat (nreverse known-red))
-                 :tests (vconcat (nreverse tests))))
+           (append (list :total (+ (ert-stats-total stats) (length load-failures))
+                         :passed (ert-stats-completed-expected stats)
+                         :failed (length failures)
+                         :failures (vconcat failures)
+                         :known_red (vconcat (nreverse known-red))
+                         :tests (vconcat (nreverse tests)))
+                   ;; only a run with the census on says anything about leaks
+                   (and census (list :leaks (vconcat leaks)))))
           'utf-8)
          nil results-file nil 'silent)))
     (null failures)))
@@ -151,7 +289,7 @@ writes into a directory being removed; a root that cannot be removed is reported
   "Start an Emacs that runs the test FILE alone (`drgnx-run-ert-batch', this Emacs's `load-path' and environment),
 in the temp directory TMP (its DRGNX_RUN_TMP: used, never deleted, by it), its summary to JSON.  Its output goes
 to BUFFER, or to this Emacs's standard error when BUFFER is nil."
-  (let* ((process-environment (append (list (concat "DRGNX_TEST_RESULTS=" json) "DRGNX_TEST_ONE_PROCESS=1"
+  (let* ((process-environment (append (list (concat "DRGNX_TEST_RESULTS=" json) "DRGNX_TEST_ONE_PROCESS=1" "DRGNX_TEST_LEAKS_QUIET=1"
                                             (concat "DRGNX_RUN_TMP=" tmp))
                                       process-environment))
          (p (make-process
@@ -176,7 +314,7 @@ to BUFFER, or to this Emacs's standard error when BUFFER is nil."
   "One summary of the ended files DONE (each :file :exit :seconds :timed-out :summary), in the shape of a
 one-Emacs run plus :files.  A file whose Emacs timed out (after TIMEOUT s), died or exited non-zero without a
 failed test is a failure named after the file."
-  (let ((total 0) (passed 0) failures known-red tests files)
+  (let ((total 0) (passed 0) failures known-red tests files leaks (census nil))
     (dolist (f done)
       (let* ((s (plist-get f :summary)) (exit (plist-get f :exit))
              (why (cond ((plist-get f :timed-out) (format "its Emacs timed out after %d s (DRGNX_TEST_FILE_TIMEOUT)" timeout))
@@ -187,14 +325,17 @@ failed test is a failure named after the file."
           (cl-incf passed (plist-get s :passed))
           (setq failures (append failures (plist-get s :failures) nil)
                 known-red (append known-red (plist-get s :known_red) nil)
-                tests (append tests (plist-get s :tests) nil)))
+                tests (append tests (plist-get s :tests) nil))
+          (when (plist-member s :leaks)
+            (setq census t leaks (append leaks (plist-get s :leaks) nil))))
         (when why
           (cl-incf total)
           (setq failures (append failures (list (list :name (concat "file " (file-name-nondirectory (plist-get f :file)))
                                                       :condition why)))))
         (push (list :file (plist-get f :file) :exit exit :seconds (plist-get f :seconds)) files)))
-    (list :total total :passed passed :failed (length failures) :failures (vconcat failures)
-          :known_red (vconcat known-red) :tests (vconcat tests) :files (vconcat (nreverse files)))))
+    (append (list :total total :passed passed :failed (length failures) :failures (vconcat failures)
+                  :known_red (vconcat known-red) :tests (vconcat tests) :files (vconcat (nreverse files)))
+            (and census (list :leaks (vconcat leaks))))))
 
 (defun drgnx-run-ert--file-selected-p (file selector)
   "Whether the test FILE can hold a test SELECTOR picks: with a string selector (a regexp on test names), only a
@@ -266,6 +407,8 @@ file passed."
       (message "\ndrgnx: %d test files, each in an Emacs of its own: %d tests, %d as expected, %d unexpected (%.0f s)"
                count (plist-get summary :total) (plist-get summary :passed) (plist-get summary :failed) (- (float-time) t0))
       (cl-loop for f across (plist-get summary :failures) do (message "   FAILED  %s" (plist-get f :name)))
+      (when (and (plist-get summary :leaks) (> (length (plist-get summary :leaks)) 0))
+        (message "\n%s" (drgnx-run-ert-leaks-report (plist-get summary :leaks))))
       (when results-file
         (let ((coding-system-for-write 'utf-8-unix))
           (write-region (decode-coding-string (json-serialize summary) 'utf-8) nil results-file nil 'silent)))
@@ -337,6 +480,7 @@ exit 0 or 1."
          (dir (if (and (= (length args) 1) (file-directory-p (car args))) (car args) args))
          ;; each test file in an Emacs of its own, unless DRGNX_TEST_ONE_PROCESS=1 (`bin/drgnx test --one-process')
          (one-process (equal (getenv "DRGNX_TEST_ONE_PROCESS") "1"))
+         (drgnx-run-ert--leaks-quiet (equal (getenv "DRGNX_TEST_LEAKS_QUIET") "1"))
          ;; native trampolines: drgnx's directory, never the user's ~/.config/emacs/eln-cache (both before HOME changes)
          (eln (drgnx-run-ert--eln-dir))
          (user-eln (file-name-as-directory (expand-file-name "eln-cache/" user-emacs-directory)))
@@ -366,7 +510,7 @@ exit 0 or 1."
                   ;; …every Emacs this run starts compiles its trampolines into the same directory, once
                   (and eln (list (concat "DRGNX_TEST_ELN_DIR=" eln)))
                   ;; …a test that runs the runner gets one Emacs per file unless it says otherwise
-                  (list "DRGNX_TEST_ONE_PROCESS")
+                  (list "DRGNX_TEST_ONE_PROCESS" "DRGNX_TEST_LEAKS_QUIET")
                   ;; …a test that runs the runner or bin/drgnx again must not reuse (and delete) this directory
                   (list "DRGNX_RUN_TMP")
                   ;; …nor start a durable hub that would outlive it (the hub's own tests unset this)

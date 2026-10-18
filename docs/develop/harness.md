@@ -134,6 +134,9 @@ checkout it compiles its scanner once first (interpreted, the scan takes ~110 ms
 read: no prompt, no display. The `drgnx-fingerprint/cheap-costs-under-2-ms` and `…/full-costs-under-50-ms` tests
 (tag `:timing`) hold the costs.
 
+The census that reads it around every test, `bin/drgnx test --leaks`, is described in
+[check.md](check.md#the-leak-census---leaks).
+
 ## Sessions
 
 A session is GUI Emacs (pgtk) under `mutter --headless` inside its own `dbus-run-session`, with a virtual

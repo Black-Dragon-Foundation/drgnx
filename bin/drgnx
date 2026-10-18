@@ -245,7 +245,18 @@ test_install() { # [NAME…] — install.sh end to end in fresh containers (slow
 cmd_test() {
   case "${1:-}" in
     "") test_batch ;;
-    --one-process) export DRGNX_TEST_ONE_PROCESS=1; test_batch ;;   # every test file in one Emacs (hunting a leak across files)
+    # batch flags, in any order: --one-process (every test file in one Emacs: hunting a leak across files),
+    # --leaks (the leak census, harness/run-ert.el: report only)
+    --one-process|--leaks)
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --one-process) export DRGNX_TEST_ONE_PROCESS=1 ;;
+          --leaks) export DRGNX_TEST_LEAKS=1 ;;
+          *) echo "usage: drgnx test [--one-process] [--leaks]" >&2; exit 2 ;;
+        esac
+        shift
+      done
+      test_batch ;;
     --install) shift; test_install "$@" ;;
     --tty) test_tty ;;
     --ui) run_in_tmp ui_exec test-ui ;;
@@ -255,7 +266,7 @@ cmd_test() {
     --soak) shift; run_in_tmp ui_exec test-soak "${1:-30}" ;;
     --container) shift; test_container "$@" ;;
     --podman) shift; DRGNX_CONTAINER=podman test_container "$@" ;;
-    *) echo "usage: drgnx test [--one-process | --ui | --tty | --scenario [--config C] | --bench | --perf [--audit] | --soak [MIN] | --container [--ui | --tty [--fedora 44|45]] | --install [NAME…]]" >&2; exit 2 ;;
+    *) echo "usage: drgnx test [--one-process] [--leaks] | drgnx test [--ui | --tty | --scenario [--config C] | --bench | --perf [--audit] | --soak [MIN] | --container [--ui | --tty [--fedora 44|45]] | --install [NAME…]]" >&2; exit 2 ;;
   esac
 }
 
@@ -494,9 +505,10 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx build             byte-compile drgnx (core, wb, modules); native compilation follows on load
        drgnx doctor [--json] [--dev]
                                is this machine ready for drgnx? (--dev: also the tools to develop it)
-       drgnx test [--one-process]
+       drgnx test [--one-process] [--leaks]
                                batch tests, each test file in an Emacs of its own
-                               (--one-process: all in one Emacs, to find a leak across files)
+                               (--one-process: all in one Emacs, to find a leak across files;
+                               --leaks: the leak census, which names each leak's test and source file)
        drgnx test --ui         GUI tests in a headless session (mutter)
        drgnx test --tty        terminal tests: Emacs in private tmux servers (needs tmux; docs/develop/harness.md)
        drgnx test --bench      the workbench vs treemacs and ibuffer, timed in a GUI session
