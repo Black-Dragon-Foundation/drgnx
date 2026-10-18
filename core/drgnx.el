@@ -15,6 +15,7 @@
 (require 'drgnx-surfaces)
 (require 'drgnx-palette)
 (require 'drgnx-keys)
+(require 'drgnx-modal)
 (require 'drgnx-modules)
 (require 'drgnx-pkg-activate)
 (require 'drgnx-onboard)
@@ -52,6 +53,7 @@
   "The commands the core itself provides."
   (drgnx-onboard-register-commands)
   (drgnx-session-register-commands)
+  (drgnx-modal-register-commands)
   (drgnx-command-define 'palette :category "View" :title "Command Palette"
                         :command #'drgnx-palette :menu '("View") :doc "Every command by name, with its key")
   (drgnx-command-define 'keys-sheet :category "Help" :title "Keyboard Shortcuts"

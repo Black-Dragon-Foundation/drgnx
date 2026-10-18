@@ -290,4 +290,7 @@
         (shortcuts-reset "r" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))
         (shortcuts-reset-all "R" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))
         (shortcuts-profile "p" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))
-        (ai-stop :none "in the palette")))
+        (ai-stop :none "in the palette")
+        (modal-leader :none "with Vim keys (M-SPC)")
+        (panel-next :none "<down>")
+        (panel-previous :none "<up>")))

@@ -4,6 +4,16 @@
 (:name "Vim"
  :doc "Vim / Neovim keys (evil), commands on the SPC leader"
  :map (evil . evil-normal-state-map)
+ ;; The modal engine this profile needs, the leader keys, and which map a key goes in by the states it
+ ;; must work in (core/drgnx-modal.el, docs/develop/core.md "Modal core").
+ :modal (:engine evil :leader ("SPC" "C-w")
+         :default-map (evil . evil-normal-state-map)
+         :maps ((drgnx-modal-leader-map normal visual motion panels)
+                (drgnx-modal-panel-map panels)
+                ((evil . evil-normal-state-map) normal)
+                ((evil . evil-visual-state-map) visual)
+                ((evil . evil-motion-state-map) normal visual motion)
+                ((evil . evil-insert-state-map) insert)))
  :bind ((palette "SPC SPC")
         (keys-sheet "SPC ?")
         (keyboard-profile "SPC h k")
@@ -291,7 +301,10 @@
         (shortcuts-reset "r" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))
         (shortcuts-reset-all "R" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))
         (shortcuts-profile "p" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))
-        (ai-stop :none "in the palette"))
+        (ai-stop :none "in the palette")
+        (modal-leader "M-SPC" :map global-map)
+        (panel-next "j")
+        (panel-previous "k"))
  :claims ((editing "C-o" "jump back")
           (editing "C-w" "window commands (prefix)")
           (editing "C-v" "visual block")

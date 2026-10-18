@@ -99,6 +99,37 @@ Emacs is idle). Each setup runs under its own error guard and is timed; a file t
 a module too. "Help: Module Report" (`drgnx-modules-show-report`) lists stage, milliseconds and errors. Flags,
 settings, doctor checks, more stages and the modules index come with M4.
 
+## Modal core (`drgnx-modal.el`)
+
+The engine-neutral half of modal editing; evil plugs into it (a later module), meow could. Nothing in it needs
+evil, and `test/unit/modal-core-test.el` drives it with a fake engine.
+
+- **Maps.** `drgnx-modal-leader-map` holds the leader keys (`SPC …`, `C-w …`), `drgnx-modal-panel-map` the keys
+  that exist only in panels. Both are emulation maps (`drgnx-modal--leader-alist`, `drgnx-modal--panel-alist`),
+  switched per buffer; `drgnx-modal-order-alists` puts them in front of the engine's in
+  `emulation-mode-map-alists` (after `drgnx-keys--everywhere-alist`, before the AI ghost text's), and an engine
+  calls it again after it adds its own keymaps.
+- **State.** An engine calls `(drgnx-modal-set-state STATE)` on every change (`normal insert visual visual-line
+  visual-block replace motion operator emacs`, nil when no engine runs in the buffer). The leader map is on in
+  `normal`, `motion` and the visual states, and in a panel's `emacs` state; the panel map only in a panel's `emacs`
+  state. Panels, forms and input buffers are told apart by `drgnx-modal-panel-modes`, `-form-modes` (fields you
+  type in: no modal keys) and `-input-modes` (shells and message buffers: start in insert or emacs state), with
+  `drgnx-modal-panel-p`, `-form-p` and `-input-p`.
+- **Indicator.** `(drgnx-modal-mode-line)` returns the state name (` NORMAL `, ` V-LINE `, …) in
+  `drgnx-modal-normal`, `-insert`, `-visual` or `-emacs`, which inherit theme faces. It is one self-contained
+  construct, `(:eval (drgnx-modal-mode-line))`, that any mode-line layout can place;
+  `drgnx-modal-indicator-on` / `-off` add and remove it at the front of the default `mode-line-format`.
+- **Selection.** An engine sets `drgnx-modal-selection-function`; `(drgnx-modal-selection)` returns
+  `(BEG . END)` from it, else from the active region, else nil.
+- **Engines.** `(drgnx-modal-define-engine NAME :module M :start F :stop F)` registers one. A key profile asks for
+  an engine with a top-level `:modal (:engine NAME :leader KEYS :default-map … :maps …)` (keys/vim.eld);
+  `drgnx-modal-sync-engine` starts the engine the current layers need (once) and stops any other, and
+  `drgnx-modal-running` names it. `:maps` says, per keymap, the states a key bound there must also work in
+  (the key resolver reads it); `drgnx-modal-where` names a map for the key sheet.
+- **Commands.** `modal-leader` (Leader Menu) reads the leader's `SPC` submap as a transient map from any state.
+  `panel-next` / `panel-previous` (Next / Previous Row, bound in the panel map) run the panel's own `<down>` /
+  `<up>` binding, else `next-line` / `previous-line`, so a panel keeps its row movement.
+
 ## Build (`drgnx-build.el`)
 
 `bin/drgnx build` byte-compiles `core/`, `wb/` and `modules/` in place (`.elc` files are not tracked); with native
