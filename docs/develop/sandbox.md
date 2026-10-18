@@ -1123,3 +1123,64 @@ limit, and streamed tokens are a few KB/s. One more batch Emacs per session.
 Tests: `test/unit/sandbox-relay-test.el` (`drgnx-sandbox-relay/`) runs the entry around fake agents (`sh`, a batch
 Emacs that connects first thing) and a fake upstream on a socket in the test's temporary directory, on free ports of
 the host's loopback: bytes both ways, ready before the agent, many connections, and the end with the agent.
+
+### The proxy
+
+In phase 2 (`:net isolated`) the agent has no network but its own loopback. Its `HTTPS_PROXY` leads, through the
+relay inside, to its job's proxy outside: `core/drgnx-sandbox-proxy.el`, one batch Emacs per job, the hub's child, so
+that a streamed response never blocks the hub. It listens on a Unix socket in the session's directory, or on macOS
+(no network namespace) on a random port of `127.0.0.1`, which Seatbelt alone lets the agent reach.
+
+```elisp
+(drgnx-sandbox-proxy-start JOB HOSTS SOCKET-OR-NIL) ; → the process; :ready once it listens, :port without a socket
+(drgnx-sandbox-proxy-allow PROC "registry.npmjs.org:443") ; this job only; the agent's retry goes through
+(drgnx-sandbox-proxy-send PROC "deny" HOST-PORT)    ; takes an entry away again
+drgnx-sandbox-proxy-denied-functions                ; called with (JOB HOST-PORT) for each refused target
+```
+
+**What it answers.** `CONNECT host:port` only. A target on the job's allowlist gets `200 Connection established`,
+and from then on the bytes are spliced both ways as they are: TLS is not terminated, the agent's ClientHello reaches
+the server, and the server's certificate the agent. Everything else gets `403` and the connection is closed: another
+method (plain `GET http://…` too), a request line that is not `CONNECT TARGET HTTP/1.x`, a head (line and headers)
+over `drgnx-sandbox-proxy-max-head` (8 KiB) or not complete within `drgnx-sandbox-proxy-head-timeout` (10 s), a
+wildcard target (`CONNECT *.example.com:443`), a connection past `drgnx-sandbox-proxy-max-connections` (64 at once),
+and a target not on the list. Only the last is said on stdout, as `denied HOST:PORT`, once per target and proxy; the
+hub turns it into a `network` card. A bad request, another method or a wildcard gets no card: **Allow** could not
+help the first two, and the agent must never be able to ask for a wildcard grant. A listed target that cannot be
+reached gets `502`.
+
+**Matching.** Entries and targets are compared after normalization (`drgnx-sandbox-proxy-normalize`), exactly:
+
+- names in lower case, one trailing dot dropped; labels of letters, digits, `_` and inner `-`; the last label starts
+  with a letter, so that no name is one a resolver reads as an address (`127.1`, `2130706433`, `0x7f.0.0.1`);
+- an entry in Unicode is encoded to its IDNA ASCII form (`xn--…`); a request's target must already be ASCII (a
+  client sends the A-label);
+- addresses: IPv4 as four decimal octets without leading zeros, IPv6 in brackets, written in one fixed form;
+- `*.example.com:443` matches `a.example.com` and `b.a.example.com`, never `example.com`, `evilexample.com` or
+  `a.example.com.attacker`. The proxy looks up each parent of the name as `*.PARENT:PORT`, never a suffix of the
+  string. A wildcard needs two labels or more (`*.com` is refused) and never covers an address;
+- the port is part of the entry: no wildcard ports.
+
+**Addresses.** A listed name is resolved once, by the proxy, and the proxy connects to the very address it checked
+(`:remote`): there is no second resolution for DNS to answer differently. Of the answer it keeps the public
+addresses only. When DNS answers only private, shared, loopback, link-local, multicast or reserved ones (IPv6's
+mapped, NAT64 and 6to4 forms are judged by the IPv4 inside), the target gets `403` and stdout says `refused
+HOST:PORT private`: a name the user allowed on a card cannot lead to the user's own `127.0.0.1` services. An address
+literal that is not public (`127.0.0.1`, `0.0.0.0`, `169.254.169.254`, `[::1]`) and not listed gets the same `403`
+and `refused` line, never a `denied` one, so no card offers a one-click **Allow** of it. Such an address is reached
+only when the allowlist names the address itself (`127.0.0.1:8443`, from configuration), or through a name pinned in
+`drgnx-sandbox-proxy-pinned-addresses` (`(("registry.corp" . "10.0.0.5"))`): a company registry, a test's local
+upstream. Pinning resolves only; the name must still be on the list.
+
+**The control channel.** stdin lines `allow HOST:PORT` and `deny HOST:PORT` change the list; anything else is
+ignored. A batch Emacs cannot wait on stdin and on sockets at once (`read-from-minibuffer` blocks without reading
+process output), so the start command hands the proxy's stdin over as fd 3 (`exec emacs … 3<&0 </dev/null`) and the
+proxy reads it through a `cat <&3` child. When the hub ends, by exit or by a kill, the pipe closes, `cat` ends, and
+the proxy with it. stdout carries `ready` (`ready PORT` without a socket), `denied …` and `refused …`; the hub's
+filter acts only on `ready` and on a `denied` line whose target is already normalized.
+
+**Limits.** No TLS termination means no inspection: an allowed host gets whatever the agent sends it. A name is
+resolved with the blocking `getaddrinfo`, which stalls the job's other connections for that time (one proxy per job,
+so never another job's). A spliced connection has no idle timeout: it stays until either side closes, within the cap
+of 64. On macOS any local process can reach the port, as with the gateway. Unicode entries are not NFC-normalized
+before encoding.
