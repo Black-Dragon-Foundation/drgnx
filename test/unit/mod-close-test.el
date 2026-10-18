@@ -89,21 +89,91 @@ their own (a test never changes the shipped map or `emulation-mode-map-alists').
       (should-not (drgnx-popup-active-p))
       (should (equal edges (mapcar #'window-pixel-edges (window-list nil 'nomini)))))))
 
+(defun drgnx-close-test--press-stale (key)
+  "Run Close Pane for KEY as the keyboard would with the flag set before the buffer changed."
+  (setq drgnx-close--here t)
+  (let ((last-command-event key) (inhibit-read-only t)) (drgnx-close-pane)))
+
+(defun drgnx-close-test--show-writable (&optional escape-binding)
+  "A writable buffer in the panel's Output tab, selected; ESCAPE-BINDING (a function) is its own Esc."
+  (let ((b (get-buffer-create "*notes*")))
+    (when escape-binding (with-current-buffer b (local-set-key [escape] escape-binding)))
+    (drgnx-wb-area-show 'panel 'output b)
+    (select-window (drgnx-wb-area-window 'panel))
+    b))
+
 (ert-deftest drgnx-close/q-in-a-writable-buffer-types-q ()
+  ;; the keys are off in a buffer you can edit: no map at all (Esc is what it was, Vim leaves insert state)
   (drgnx-close-test--with
-    (let ((b (get-buffer-create "*notes*")) (left nil))
-      (with-current-buffer b
-        (local-set-key [escape] (lambda () (interactive) (setq left t))))   ; what leaves Vim's insert state
-      (drgnx-wb-area-show 'panel 'output b)
-      (select-window (drgnx-wb-area-window 'panel))
+    (let* ((left nil) (b (drgnx-close-test--show-writable (lambda () (interactive) (setq left t)))))
       (drgnx-close--update)
-      (should drgnx-close--here)
+      (should-not drgnx-close--here)
       (drgnx-close-test--press ?q)
       (should (equal (with-current-buffer b (buffer-string)) "q"))
       (should (drgnx-wb-area-window 'panel))
       (drgnx-close-test--press 'escape)
       (should left)
+      (should (drgnx-wb-area-window 'panel))))
+  ;; a buffer that became writable after the flag was set: the command checks again
+  (drgnx-close-test--with
+    (let ((b (drgnx-close-test--show-writable)))
+      (with-current-buffer b (setq buffer-read-only t))
+      (drgnx-close--update)
+      (should drgnx-close--here)
+      (with-current-buffer b (setq buffer-read-only nil))
+      (drgnx-close-test--press-stale ?q)
+      (should (equal (with-current-buffer b (buffer-string)) "q"))
       (should (drgnx-wb-area-window 'panel)))))
+
+(ert-deftest drgnx-close/an-unbound-esc-stays-the-meta-prefix ()
+  ;; Esc with no command of its own goes back to the reader as ESC, so ESC x is M-x: no ding
+  (drgnx-close-test--with
+    (let ((b (drgnx-close-test--show-writable)) (unread-command-events nil))
+      (with-current-buffer b (setq buffer-read-only t))
+      (drgnx-close--update)
+      (with-current-buffer b (setq buffer-read-only nil))      ; the flag is stale: the runtime guard
+      (should-not (let ((drgnx-close--here nil)) (key-binding [escape] t)))
+      (let ((dinged nil))
+        (cl-letf (((symbol-function 'ding) (lambda (&rest _) (setq dinged t))))
+          (drgnx-close-test--press-stale 'escape))
+        (should-not dinged))
+      (should (equal unread-command-events (list (cons 'no-record ?\e))))
+      (should (eq (key-binding (vconcat (list ?\e) [?x])) #'execute-extended-command))
+      (should (drgnx-wb-area-window 'panel)))))
+
+(defvar-local drgnx-live-driving-mode nil "Stand-in for the live module's mode (a buffer-local flag).")
+(defvar drgnx-close-test--keys-elsewhere nil)
+
+(ert-deftest drgnx-close/a-mode-that-takes-the-keyboard-joins-the-input-functions ()
+  ;; live driving: the page gets every key
+  (should (memq #'drgnx-close--driving-p drgnx-close-input-functions))
+  (drgnx-close-test--with
+    (drgnx-close-test--results)
+    (let ((w (drgnx-wb-area-window 'panel)))
+      (select-window w)
+      (drgnx-close--update)
+      (should drgnx-close--here)
+      (with-current-buffer (window-buffer w) (setq drgnx-live-driving-mode t))
+      (drgnx-close--update)
+      (should-not drgnx-close--here)
+      (with-current-buffer (window-buffer w) (setq drgnx-live-driving-mode nil))
+      ;; any other mode: add a predicate
+      (let ((drgnx-close-input-functions
+             (list (lambda (b) (buffer-local-value 'drgnx-close-test--keys-elsewhere b)))))
+        (with-current-buffer (window-buffer w) (setq-local drgnx-close-test--keys-elsewhere t))
+        (drgnx-close--update)
+        (should-not drgnx-close--here)
+        ;; and switching on driving after the flag was set: the command checks again
+        (with-current-buffer (window-buffer w) (setq-local drgnx-close-test--keys-elsewhere nil))
+        (drgnx-close--update)
+        (should drgnx-close--here)
+        (with-current-buffer (window-buffer w) (setq-local drgnx-close-test--keys-elsewhere t))
+        (let ((ran nil))                ; the page's own q runs, not Close Pane
+          (with-current-buffer (window-buffer w)
+            (local-set-key "q" (lambda () (interactive) (setq ran t)))
+            (drgnx-close-test--press-stale ?q))
+          (should ran)
+          (should (drgnx-wb-area-window 'panel)))))))
 
 (ert-deftest drgnx-close/not-in-a-terminal-tab ()
   (drgnx-close-test--with

@@ -15,8 +15,8 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'drgnx-rules)
-(require 'drgnx-wb)                     ; the close button
-(require 'tab-line)                    ; the tab faces we inherit
+(require 'drgnx-wb)
+(require 'tab-line)                     ; the tab faces we inherit
 
 (defface drgnx-wb-tab '((t :inherit tab-line-tab-inactive)) "A tab in an area's tab row." :group 'drgnx)
 (defface drgnx-wb-tab-current '((t :inherit tab-line-tab-current)) "The shown tab in an area's tab row." :group 'drgnx)
@@ -102,7 +102,7 @@
                               'drgnx-tab (cons area (car tab)) 'mouse-face 'highlight
                               'local-map drgnx-area--tab-map 'help-echo "Show this tab"))
                 (plist-get (alist-get area drgnx-wb--areas) :tabs) " ")
-     #'drgnx-area--close-click 'drgnx-area area)))
+     #'drgnx-area--close-click "Close (Esc, q)" 'drgnx-area area)))
 
 ;;;; Show, hide
 

@@ -24,7 +24,7 @@
        (should (window-live-p bottom))
        (should (eq (window-parameter top 'drgnx-role) 'dock))
        (should (eq (window-parameter top 'window-side) 'left))
-       (should (string-prefix-p "TOP" (window-parameter top 'header-line-format)))
+       (should (string-search "TOP" (window-parameter top 'header-line-format)))
        ;; Buffers above the Explorer: the lower slot is on top.
        (should (< (cadr (window-edges top)) (cadr (window-edges bottom))))
        (should-not (drgnx-signal-editor-window-p top))))))
@@ -71,13 +71,13 @@
   (drgnx-wb-test--with-sections
    (drgnx-wb-show-sidebar)
    (dolist (section '(top bottom))
-     (let* ((w (drgnx-wb-section-window section)) (title (window-parameter w 'header-line-format))
-            (i (1- (length title))))
+     (let* ((w (drgnx-wb-section-window section)) (title (window-parameter w 'header-line-format)))
        (should (stringp title))
-       (should (string-suffix-p (concat " " (drgnx-wb-close-glyph)) title))
-       (should (equal (get-text-property i 'help-echo title) "Close (Esc, q)"))
-       (should (eq (get-text-property i 'mouse-face title) 'highlight))))
-   (let* ((w (drgnx-wb-section-window 'bottom)) (title (window-parameter w 'header-line-format)) (i (1- (length title))))
+       (should (string-prefix-p (drgnx-wb-close-glyph) title))      ; the ✕ comes first: a long title cannot clip it
+       (should (string-search (upcase (symbol-name section)) title))
+       (should (equal (get-text-property 0 'help-echo title) "Close sidebar"))
+       (should (eq (get-text-property 0 'mouse-face title) 'highlight))))
+   (let* ((w (drgnx-wb-section-window 'bottom)) (title (window-parameter w 'header-line-format)) (i 0))
      (funcall (lookup-key (get-text-property i 'local-map title) [header-line mouse-1])
               (list 'mouse-1 (list w 'header-line '(0 . 0) 0 (cons title i))))
      (should-not (drgnx-wb-sidebar-showing-p))

@@ -47,21 +47,21 @@ follower is not a jank-guard violation (invariant I9).")
 (defvar drgnx-wb--close-maps nil
   "Alist COMMAND → the keymap of a close button that runs it (one per command: there are three).")
 
-(defun drgnx-wb-close-button (command &rest props)
-  "A close button: a space and the close glyph, clickable (`mouse-1' in a header line runs COMMAND, which takes
-the click event), highlighted under the pointer, its help \"Close (Esc, q)\".  PROPS are text properties the click
-handler reads.  Built once when a title or tab row is set, never while drawing."
+(defun drgnx-wb-close-button (command help &rest props)
+  "The close glyph as a button: clickable (`mouse-1' in a header line runs COMMAND, which takes the click event),
+highlighted under the pointer, HELP as its `help-echo'.  PROPS are text properties the click handler reads.
+Built once when a title or tab row is set, never while drawing."
   (let ((map (or (alist-get command drgnx-wb--close-maps)
                  (let ((m (make-sparse-keymap)))
                    (define-key m [header-line mouse-1] command)
                    (setf (alist-get command drgnx-wb--close-maps) m)))))
-    (apply #'propertize (concat " " (drgnx-wb-close-glyph))
-           'face 'drgnx-wb-close 'mouse-face 'highlight 'local-map map 'help-echo "Close (Esc, q)" props)))
+    (apply #'propertize (drgnx-wb-close-glyph)
+           'face 'drgnx-wb-close 'mouse-face 'highlight 'local-map map 'help-echo help props)))
 
-(defun drgnx-wb-header-with-close (title command &rest props)
+(defun drgnx-wb-header-with-close (title command help &rest props)
   "TITLE, then the close button for COMMAND (see `drgnx-wb-close-button') at the right edge of the window."
-  (let ((button (apply #'drgnx-wb-close-button command props)))
-    (concat title (propertize " " 'display `(space :align-to (- right ,(string-width button)))) button)))
+  (let ((button (apply #'drgnx-wb-close-button command help props)))
+    (concat title (propertize " " 'display `(space :align-to (- right ,(1+ (string-width button))))) " " button)))
 
 (defun drgnx-wb--close-dock-click (event)
   "A click on a dock section's ✕: hide the sidebar."
@@ -70,8 +70,10 @@ handler reads.  Built once when a title or tab row is set, never while drawing."
   (drgnx-wb-hide-sidebar))
 
 (defun drgnx-wb-section-header (title)
-  "A dock section's header: TITLE and the ✕ that hides the sidebar."
-  (drgnx-wb-header-with-close title #'drgnx-wb--close-dock-click))
+  "A dock section's header: the ✕ that hides the sidebar, then TITLE.
+The ✕ comes first: a title with buttons (Buffers) fills the dock's width, so one at the end would be clipped."
+  (concat (drgnx-wb-close-button #'drgnx-wb--close-dock-click "Close sidebar")
+          (if (string-prefix-p " " title) "" " ") title))
 
 (defun drgnx-wb-display-name (name)
   "NAME as it can be shown on one row: control characters (a newline in a file name) as ^X."

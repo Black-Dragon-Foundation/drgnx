@@ -278,7 +278,7 @@
     (drgnx-explorer--find-apply "main")
     (drgnx-explorer-set-roots (list root))
     (let ((title (window-parameter (drgnx-wb-section-window 'explorer) 'header-line-format)))
-      (should (string-prefix-p " EXPLORER " title))             ; the title, then the ✕
+      (should (string-prefix-p (concat (drgnx-wb-close-glyph) " EXPLORER") title))             ; the ✕, then the title
       (should-not (string-search "—" title)))))
 
 ;;;; M3a-1, M3b-16: a held button

@@ -38,7 +38,7 @@
   "The lane's one line for BUFFER: its name without the stars and spaces round it, and the ✕ that ends the popup.
 Built when the popup shows, set as a window parameter."
   (drgnx-wb-header-with-close (concat " " (string-trim (buffer-name buffer) "[ *]+" "[ *]+"))
-                              #'drgnx-popup--close-click))
+                              #'drgnx-popup--close-click "Close (Esc, q)"))
 
 (defun drgnx-popup--show (buffer alist props)
   "The `popup' place: borrow the panel's window — unless you are typing in it — else a temporary

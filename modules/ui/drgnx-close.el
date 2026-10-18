@@ -24,6 +24,10 @@
   "Modes (and the modes derived from them) whose buffers you type into: Esc and q are theirs, never close the pane."
   :type '(repeat symbol) :group 'drgnx-face)
 
+(defvar drgnx-close-input-functions '(drgnx-close--driving-p)
+  "Functions called with a buffer (until one returns non-nil): non-nil means its keys go elsewhere, so Esc and q are
+not Close Pane there.  A mode that takes the keyboard for itself adds its predicate.")
+
 (defvar drgnx-close-mode-map (make-sparse-keymap)
   "Esc and q (the key profiles bind them to Close Pane), active while `drgnx-close--here'.")
 
@@ -33,28 +37,39 @@
 (defvar drgnx-close--emulation (list (cons 'drgnx-close--here drgnx-close-mode-map))
   "The `emulation-mode-map-alists' entry: the map is on only where `drgnx-close--here' is.")
 
+(defun drgnx-close--driving-p (buffer)
+  "Non-nil when BUFFER is a live page being driven (`drgnx-live-driving-mode': keys go to the page)."
+  (and (boundp 'drgnx-live-driving-mode) (buffer-local-value 'drgnx-live-driving-mode buffer)))
+
+(defun drgnx-close--input-buffer-p (buffer)
+  "Non-nil when BUFFER is one you type into: a mode of `drgnx-close-input-modes', or `drgnx-close-input-functions' says so."
+  (or (apply #'provided-mode-derived-p (buffer-local-value 'major-mode buffer) drgnx-close-input-modes)
+      (run-hook-with-args-until-success 'drgnx-close-input-functions buffer)))
+
 (defun drgnx-close--update (&rest _)
   "Recompute `drgnx-close--here' for the selected window (on `window-selection-change-functions' and
 `window-buffer-change-functions'; reads two window parameters and a mode)."
   (let ((w (selected-window)))
     (setq drgnx-close--here
           (and (memq (drgnx-chrome--role w) '(lane area))
-               (not (apply #'provided-mode-derived-p (buffer-local-value 'major-mode (window-buffer w))
-                           drgnx-close-input-modes))
+               (buffer-local-value 'buffer-read-only (window-buffer w))
+               (not (drgnx-close--input-buffer-p (window-buffer w)))
                t))))
 
 (defun drgnx-close--underneath ()
-  "Run what the key just typed runs without Close Pane's map."
+  "Run what the key just typed runs without Close Pane's map.  Esc with nothing of its own stays what it is
+elsewhere, the Meta prefix: an ESC goes back to the reader.  Anything else unbound dings."
   (let ((cmd (let ((drgnx-close--here nil)) (key-binding (vector last-command-event) t))))
-    (if (commandp cmd)
-        (progn (setq this-command cmd) (call-interactively cmd))
-      (ding))))
+    (cond ((commandp cmd) (setq this-command cmd) (call-interactively cmd))
+          ((eq last-command-event 'escape) (push (cons 'no-record ?\e) unread-command-events))
+          (t (ding)))))
 
 (defun drgnx-close-pane ()
   "Close the pane you are in: end a popup, hide the panel or the right dock, hide the sidebar; focus goes to the
 editor.  Typed as Esc or q in a buffer you can edit, it is the key's own command instead (q types a q)."
   (interactive)
-  (if (and (memq last-command-event '(escape ?q)) (not buffer-read-only))
+  (if (and (memq last-command-event '(escape ?q))
+           (or (not buffer-read-only) (drgnx-close--input-buffer-p (current-buffer))))
       (drgnx-close--underneath)
     (let ((w (selected-window)))
       (pcase (drgnx-chrome--role w)
