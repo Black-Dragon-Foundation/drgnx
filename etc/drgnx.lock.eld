@@ -155,6 +155,11 @@
 		  "59eab71cedb9424277144bb862b967a7db0f25e248e69d07ac66bf1da3a142aa"
 		  :size 92160 :requires nil :summary
 		  "Visual undo tree")
+	   (websocket :version "1.16" :archive "gnu" :kind tar :file
+		      "websocket-1.16.tar" :sha256
+		      "b11ff735b0ac1d94d0024c63371e192c5e36c6f3619cf78ea08eaa4f963cc32a"
+		      :size 122880 :requires ((cl-lib "0.5")) :summary
+		      "Emacs WebSocket client and server")
 	   (wgrep :version "3.0.0" :archive "nongnu" :kind tar :file
 		  "wgrep-3.0.0.tar" :sha256
 		  "ff73b18324a80176d050344a764f8a176ff2d52fb00e3475f1b5c9dc8d2749a2"

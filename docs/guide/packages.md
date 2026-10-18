@@ -131,6 +131,14 @@ of the lock drops the mark; from then on your lock is the one that counts — it
 locked version nobody has is reported as above (never replaced), a later sync keeps your versions, and `drgnx
 upgrade` moves them on.
 
+**A module you turn on later uses it too.** Your lock holds the packages installed so far, so a package a newly enabled
+module asks for is not in it. `drgnx sync` then takes that package's version from the shipped lock (and what it needs,
+and a Git package's commit) as a soft pin, the same way as the first sync: a version no archive serves any more falls
+back to the archive's current one with a `WARNING`, and the pin you already have in your own lock is never replaced. A
+package that is already installed (by hand, say) is left as it is; `drgnx upgrade`, `--offline` and `--seed` do not
+consult the shipped lock. Whenever a change adds or changes a module's package, the shipped lock is refreshed in the
+same change (`drgnx lock --ship`), and a unit test fails when a package a module names has no entry in it.
+
 The first sync needs the network; offline (`--offline`, with the archives' files in the cache) it installs what the
 cache has and names the packages it could not get — a Git package always needs one online sync for its clone — and
 the next sync online completes it. An interrupted first sync leaves the packages directory as it was (the copied
@@ -229,7 +237,7 @@ module and refusing entries without a hash or commit, an interrupted first sync 
 pin nobody serves falling back (with a warning, its dependents installed) while a user's own lock still reports it,
 `--seed` keeping the seeded versions, a requirement beyond the lock installed and a locked package a built-in
 satisfies left out (each test has its own shipped lock in a temp dir, never the checkout's). HTTP downloads run against a loopback server in the test
-Emacs itself (a 200 is saved byte for byte; a 404 saves nothing). `test/unit/pkg-priorities-test.el`: the default archive priorities (an upgrade keeps a NonGNU release over a newer MELPA snapshot, still takes a newer release, a MELPA-only dependency still resolves, a priority of the user's own wins). `test/unit/pkg-git-test.el`: packages from local Git
+Emacs itself (a 200 is saved byte for byte; a 404 saves nothing). `test/unit/pkg-shipped-lock-test.el`: the shipped lock as soft pins for a module turned on later (its version, its dependencies, the user's lock winning, an unserved pin falling back, a package installed by hand left alone, no effect on upgrade, `--offline` or `--seed`, a Git package at the shipped commit) and the coverage test (every package a module names is in `etc/drgnx.lock.eld`). `test/unit/pkg-priorities-test.el`: the default archive priorities (an upgrade keeps a NonGNU release over a newer MELPA snapshot, still takes a newer release, a MELPA-only dependency still resolves, a priority of the user's own wins). `test/unit/pkg-git-test.el`: packages from local Git
 repositories — the commit and dependencies, the lock holding the commit until upgrade, offline from the cached clone,
 a missing `:rev`, no version header, a module's package with drgnx's Git source, an offline first sync naming the Git
 package it could not get and installing the rest.

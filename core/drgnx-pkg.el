@@ -146,6 +146,12 @@ there is none.  An unreadable lock is a `drgnx-pkg-error' (never silently replac
                                 "drgnx package lock — copied from the one drgnx ships; the first drgnx sync completes it"
                                 (drgnx-pkg--read-lock-file (drgnx-pkg-shipped-lock-file)) '(:from-shipped t))))
 
+(defun drgnx-pkg--shipped-extras (lock)
+  "The shipped lock's entries for packages that LOCK (the user's) lacks and that are not installed: the soft
+pins of a module turned on after the first sync.  An installed package the lock lacks (by hand) is the user's."
+  (seq-remove (lambda (e) (or (assq (car e) lock) (drgnx-pkg--installed-desc (car e))))
+              (drgnx-pkg--read-lock-file (drgnx-pkg-shipped-lock-file))))
+
 (defun drgnx-pkg--lock-from-shipped-p ()
   "Is the user lock still the shipped one, copied by a first sync that has not completed?"
   (plist-get (ignore-errors (drgnx-pkg--read-file (drgnx-pkg-lock-file))) :from-shipped))
@@ -807,23 +813,30 @@ warning), never a missing package."
             (when seed (drgnx-pkg--seed (expand-file-name seed)))
             (package-load-all-descriptors)
             (when package-archives (package-refresh-contents))
-            (let* ((git-names (seq-filter #'drgnx-pkg-git-source manifest))
-                   (git (drgnx-pkg--git-prepare git-names lock offline upgrade missing))
+            (let* ((plain (not (or upgrade offline)))
+                   ;; the shipped lock's entries for packages the user's lock lacks (a module turned on later): soft pins,
+                   ;; like a first sync's; a seeded sync's packages are the user's choice
+                   (extras (and plain (not seed) (drgnx-pkg--shipped-extras lock)))
+                   (git-names (seq-filter #'drgnx-pkg-git-source manifest))
+                   (git (drgnx-pkg--git-prepare git-names (append lock extras) offline upgrade missing))
                    (needs (seq-difference (delete-dups (mapcar #'car (seq-mapcat (lambda (p) (package-desc-reqs (nth 1 p))) git)))
                                           (cons 'emacs git-names))))
-              (let ((names (sort (delete-dups (append (seq-difference manifest git-names) needs)) (lambda (a b) (string< a b))))
-                    (pins (seq-remove (lambda (e) (eq (plist-get (cdr e) :kind) 'git)) lock))
-                    (soft (and (not upgrade) (not offline) (drgnx-pkg--lock-from-shipped-p)))
-                    (git-missing (car missing))
-                    dropped plan)
-                ;; A first sync's shipped pins are soft: one nobody serves (or too old for what needs it) is dropped
+              (let* ((names (sort (delete-dups (append (seq-difference manifest git-names) needs)) (lambda (a b) (string< a b))))
+                     (pins (seq-remove (lambda (e) (eq (plist-get (cdr e) :kind) 'git)) (append lock extras)))
+                     (soft-names (mapcar #'car (if (and plain (drgnx-pkg--lock-from-shipped-p)) pins
+                                                 (seq-remove (lambda (e) (eq (plist-get (cdr e) :kind) 'git)) extras))))
+                     (git-missing (car missing))
+                     dropped plan)
+                ;; The shipped lock's pins are soft (a first sync's, and those of packages the user's lock lacks): one
+                ;; nobody serves (or too old for what needs it) is dropped
                 ;; and package.el resolves the name — from the entry's own archive when it still has the package —
                 ;; then the plan is made again.  Each round drops a pin: at most as many rounds as there are pins.
-                (while (let ((m (list (copy-sequence git-missing))) (failed (list nil)))
-                         (setq plan (drgnx-pkg--plan names pins offline upgrade m failed))
-                         (if (not (and soft (car failed)))
+                (while (let* ((m (list (copy-sequence git-missing))) (failed (list nil))
+                              (_ (setq plan (drgnx-pkg--plan names pins offline upgrade m failed)))
+                              (soft-failed (seq-filter (lambda (f) (memq (car f) soft-names)) (car failed))))
+                         (if (null soft-failed)
                              (progn (setcar missing (car m)) nil)
-                           (pcase-dolist (`(,name . ,why) (car failed))
+                           (pcase-dolist (`(,name . ,why) soft-failed)
                              (let* ((e (alist-get name pins))
                                     (d (seq-find (lambda (d) (equal (package-desc-archive d) (plist-get e :archive)))
                                                  (alist-get name package-archive-contents))))
