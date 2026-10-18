@@ -37,11 +37,37 @@ repository:"
     (let ((default-directory (file-name-as-directory root)))
       (and (eql 0 (apply #'call-process "git" nil '(t nil) nil args)) (buffer-string)))))
 
+(defun drgnx-commit-message--kind (root)
+  "How the commit being written is made: `amend' (git commit --amend), `all' (-a) or nil (the index as it is).
+Magit's record of the command it ran, else the git commit process running in ROOT."
+  (let ((cmd (and (fboundp 'magit-repository-local-get)
+                  (let ((default-directory root)) (ignore-errors (magit-repository-local-get 'this-commit-command))))))
+    (or (pcase cmd
+          ((or 'magit-commit-amend 'magit-commit-reword) 'amend)
+          ('magit-commit--all 'all))
+        (seq-some (lambda (p)
+                    (let ((c (and (process-live-p p) (process-command p))) (buf (process-buffer p)))
+                      (when (and (equal (file-name-nondirectory (or (car-safe c) "")) "git") (member "commit" c)
+                                 (or (not (buffer-live-p buf))
+                                     (file-equal-p (buffer-local-value 'default-directory buf) root)))
+                        (cond ((member "--amend" c) 'amend)
+                              ((or (member "--all" c) (member "-a" c)) 'all)))))
+                  (process-list)))))
+
 (defun drgnx-commit-message--diff (root files)
-  "The diff to describe: the index's (FILES nil), else FILES' against HEAD (what VC commits)."
-  (or (apply #'drgnx-commit-message--git root "diff" "--no-color" "--no-ext-diff"
-             (if files (append '("HEAD" "--") files) '("--cached")))
-      ""))
+  "The diff to describe: FILES' against HEAD (what VC commits), else what the commit will hold: the index's, with
+--amend the index against HEAD's parent (the empty tree for the first commit), with -a the working tree against HEAD.
+The index of a repository with no commit yet is against the empty tree already."
+  (let ((kind (and (null files) (drgnx-commit-message--kind root)))
+        (head (drgnx-commit-message--git root "rev-parse" "--verify" "-q" "HEAD")))
+    (or (apply #'drgnx-commit-message--git root "diff" "--no-color" "--no-ext-diff"
+               (cond (files (append '("HEAD" "--") files))
+                     ((and (eq kind 'amend) head)
+                      (list "--cached" (if (drgnx-commit-message--git root "rev-parse" "--verify" "-q" "HEAD^") "HEAD^"
+                                         (string-trim (or (drgnx-commit-message--git root "hash-object" "-t" "tree" "/dev/null") "")))))
+                     ((and (eq kind 'all) head) '("HEAD"))
+                     (t '("--cached"))))
+        "")))
 
 (defun drgnx-commit-message--subjects (root)
   (split-string (or (drgnx-commit-message--git root "log" "-10" "--format=%s") "") "\n" t))
