@@ -311,7 +311,12 @@ hunk by hunk before anything changes."
   "Apply the hunk at point to the review's copy; the review stays on screen (diff's own apply shows the copy)."
   (interactive)
   (unless drgnx-ai--edit (user-error "Not an AI edit"))
-  (let ((pt (point)))
+  (let ((pt (point)) (copy (plist-get drgnx-ai--edit :copy)))
+    ;; the copy is only text for diff to patch: visited without its mode (and the hooks that start with it)
+    (unless (find-buffer-visiting copy)
+      (let ((auto-mode-alist nil) (interpreter-mode-alist nil) (magic-mode-alist nil) (magic-fallback-mode-alist nil)
+            (enable-local-variables nil))
+        (find-file-noselect copy)))
     (save-window-excursion (diff-apply-hunk))
     (goto-char pt)))
 

@@ -199,6 +199,28 @@
       (should (equal (drgnx-ai-edit-test--tmp-dirs) before))
       (should-not (seq-find (lambda (b) (string-prefix-p "*AI edit" (buffer-name b))) (buffer-list))))))
 
+(ert-deftest drgnx-ai-edit/apply-hunk-runs-no-mode-hook ()
+  ;; the review's copy is only text for diff to patch: visiting it must not start the buffer's major mode
+  (let ((ran 0) (hook (lambda () (setq ran (1+ ran)))))
+    (add-hook 'emacs-lisp-mode-hook hook)
+    (unwind-protect
+        (with-temp-buffer
+          (insert "(defun a ()\n  1)\n")
+          (setq buffer-file-name (expand-file-name "now-x.el" temporary-file-directory))
+          (let* ((review (drgnx-ai--edit-review (current-buffer) (copy-marker (point-min)) (copy-marker (point-max))
+                                                "(defun a ()\n  10)\n")))
+            (unwind-protect
+                (with-current-buffer review
+                  (goto-char (point-min)) (diff-hunk-next)
+                  (let ((inhibit-message t)) (drgnx-ai-edit-apply-hunk))
+                  (let ((cb (find-buffer-visiting (plist-get drgnx-ai--edit :copy))))
+                    (should cb)
+                    (should (eq (buffer-local-value 'major-mode cb) 'fundamental-mode))
+                    (should (string-search "10" (with-current-buffer cb (buffer-string))))))
+              (kill-buffer review)))
+          (should (= ran 0)))
+      (remove-hook 'emacs-lisp-mode-hook hook))))
+
 (ert-deftest drgnx-ai-edit/no-provider-says-why-and-changes-nothing ()
   (drgnx-ai-edit-test--with "never"
     (let ((drgnx-ai-detected nil) (said nil))
