@@ -121,13 +121,33 @@
 
 (ert-deftest drgnx-check/the-unit-shards-start-without-the-users-desktop ()
   ;; dbus.el connects with the C environment: the shard process gets a dead bus and no display or compositor
-  (dolist (n '("unit-1" "unit-timing"))
+  ;; (a live shard too: the sessions its tests start run their own compositor and bus)
+  (dolist (n '("unit-1" "unit-timing" "live-1"))
     (let ((env (plist-get (seq-find (lambda (j) (equal (plist-get j :name) n)) (drgnx-check-plan :root drgnx-dir)) :env)))
       (should (member "DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/drgnx-unit-test" env))
       (dolist (v '("DISPLAY" "WAYLAND_DISPLAY" "SWAYSOCK" "I3SOCK" "HYPRLAND_INSTANCE_SIGNATURE" "NIRI_SOCKET"))
-        (should (member v env)))))
-  (let ((env (plist-get (seq-find (lambda (j) (equal (plist-get j :name) "live-1")) (drgnx-check-plan :root drgnx-dir)) :env)))
-    (should-not (member "WAYLAND_DISPLAY" env))))        ; the GUI tiers run their own session
+        (should (member v env))))))
+
+(ert-deftest drgnx-check/a-live-shard-never-sees-the-real-home-or-provider-keys ()
+  ;; A live shard ran with the environment check was started in: the real HOME, session bus and API keys.  It runs
+  ;; in the unit tier's sandbox (harness/run-ert.el): a temp HOME, a dead bus, the keys unset.
+  (drgnx-check-test--with dir
+    (let ((root (concat dir "root/")) (out (concat dir "env.eld")) (home (concat dir "real-home/")))
+      (make-directory (concat root "test/unit") t)
+      (make-directory (concat root "test/live") t)
+      (make-directory home)
+      (dolist (d '("harness" "core" "wb")) (make-symbolic-link (expand-file-name d drgnx-dir) (concat root d)))
+      (with-temp-file (concat root "test/live/env-test.el")
+        (insert (format "(require 'ert)\n(ert-deftest live-env/record ()\n  (with-temp-file %S (prin1 (mapcar #'getenv '(\"HOME\" \"OPENROUTER_API_KEY\" \"ANTHROPIC_API_KEY\" \"ANTHROPIC_AUTH_TOKEN\" \"OPENAI_API_KEY\" \"DBUS_SESSION_BUS_ADDRESS\")) (current-buffer))))\n" out)))
+      (let* ((process-environment (append (list (concat "HOME=" home) "OPENROUTER_API_KEY=sk-or-x" "ANTHROPIC_API_KEY=sk-ant-x"
+                                                "ANTHROPIC_AUTH_TOKEN=x" "OPENAI_API_KEY=sk-x"
+                                                "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1/bus" "DRGNX_TEST_SELECTOR")
+                                          process-environment))
+             (live (seq-find (lambda (j) (equal (plist-get j :name) "live-1")) (drgnx-check-plan :root root :live-shards 1 :dir dir))))
+        (should (plist-get (drgnx-check-run (list live) :dir dir :jobs 1 :gui-slots 1) :ok))
+        (pcase-let ((`(,h . ,rest) (with-temp-buffer (insert-file-contents out) (read (current-buffer)))))
+          (should-not (string-prefix-p (directory-file-name home) h))
+          (should (equal rest '(nil nil nil nil "unix:path=/nonexistent/drgnx-unit-test"))))))))
 
 (ert-deftest drgnx-check/the-ui-job-gets-a-longer-timeout-under-parallel-load ()
   ;; CHK-4: the session test's own 110 s default is too tight next to the parallel shards

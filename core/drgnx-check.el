@@ -112,11 +112,11 @@ results go (default: none)."
                                                live-shards durations)
                for i from 1
                for name = (format "live-%d" i)
+               ;; in the unit tier's sandbox (temp HOME, dead bus, no provider keys), its files in one Emacs
                do (push (funcall job name 2 'live
                                  (append (list (drgnx-check--emacs) "--batch" "-Q" "--eval" "(setq load-prefer-newer t)")
-                                         paths (list "-l" "drgnx-ui" "-l" run-ert "--eval"
-                                                     (format "(kill-emacs (if (drgnx-run-ert '%S (getenv \"DRGNX_TEST_RESULTS\")) 0 1))" files)))
-                                 :gui t :env (funcall results name))
+                                         paths (list "-l" "drgnx-ui" "-l" run-ert "-f" "drgnx-run-ert-batch") files)
+                                 :gui t :env (append (list "DRGNX_TEST_ONE_PROCESS=1") (funcall results name) drgnx-check-unit-env))
                         jobs))
       ;; the tiers that measure time, each alone: scenarios hold frame budgets (a frame from the daemon in
       ;; < 500 ms failed at 514 ms next to the parallel phase), then the bench, then perf
