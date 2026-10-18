@@ -13,7 +13,8 @@ to OR-LOG, OPENROUTER_API_KEY unset."
           (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" root "config") (concat "DRGNX_DATA_DIR=" root "data")
                                              (concat "XDG_STATE_HOME=" root "state") (concat "HOME=" root "home")
                                              "OPENROUTER_API_KEY" "DRGNX_JOBS_LAUNCHER=detached"
-                                             "DRGNX_NO_HUB_START")                ; these tests start hubs (and stop them)
+                                             "DRGNX_NO_HUB_START"                 ; these tests start hubs (and stop them)
+                                             (format "DRGNX_HUB_PARENT_PID=%d" (emacs-pid)))   ; …ending with this Emacs
                                        process-environment))
           (drgnx-ai--keys (make-hash-table :test #'eq)) (auth-sources nil) (drgnx-work-db--handles nil)
           (drgnx-gateway--keys (make-hash-table :test #'eq)) (drgnx-gateway--registrations (make-hash-table :test #'equal))
@@ -93,6 +94,278 @@ to OR-LOG, OPENROUTER_API_KEY unset."
         (ignore-errors (delete-process p)))
       (should (equal (plist-get (cdr (assoc "request" heard)) :agent) "a1")))))
 
+(ert-deftest drgnx-hub/connect-twice-subscribes-once ()
+  ;; a second call before the hub's answer is a no-op: one subscription, not two
+  (drgnx-hub-test--with
+    (drgnx-hub-serve (drgnx-hub-socket))
+    (drgnx-hub-connect)
+    (drgnx-hub-connect)
+    (should (drgnx-hub-test--wait (lambda () (process-live-p drgnx-hub--events))))
+    (drgnx-hub-test--wait #'ignore 0.3)
+    (should (= (length drgnx-hub--subscribers) 1))))
+
+(ert-deftest drgnx-hub/kept-files-are-synced-before-the-rename ()
+  ;; a rename is atomic against a crash of the hub, not of the machine: the new file's data must be on disk before
+  ;; it replaces the old one (Emacs skips fsync by default: `write-region-inhibit-fsync')
+  (drgnx-hub-test--with
+    (let ((synced nil) (write (symbol-function 'write-region)))
+      (cl-letf (((symbol-function 'write-region)
+                 (lambda (start end file &rest args)
+                   (when (string-match-p "registrations\\.eld-" file) (push (not write-region-inhibit-fsync) synced))
+                   (apply write start end file args))))
+        (drgnx-hub--save-registrations))
+      (should (equal synced '(t))))))
+
+(ert-deftest drgnx-hub/a-subscribe-never-answered-stops-blocking-connect ()
+  ;; one subscription while the hub has not answered — but not forever: a subscribe left unanswered (a stopped hub)
+  ;; past the deadline is given up, and the next connect tries again (the editor is not told the hub went away).
+  ;; It counts accepted connections: it relies on this Emacs holding no keys (the macro's), else each connect's
+  ;; `drgnx-hub--send-keys' would open one more
+  (drgnx-hub-test--with
+    (should-not (drgnx-hub--held-keys))
+    (drgnx-hub--private-dir (file-name-directory (drgnx-hub-socket)))
+    (let* ((accepted 0) (gone 0)
+           (drgnx-hub-disconnect-functions (list (lambda () (cl-incf gone))))
+           (server (make-network-process :name "mute-hub" :family 'local :server t :service (drgnx-hub-socket) :noquery t
+                                         :filter #'ignore :log (lambda (&rest _) (cl-incf accepted)))))
+      (unwind-protect
+          (let ((drgnx-hub-subscribe-deadline 0.3))
+            (drgnx-hub-connect)
+            (should (drgnx-hub-test--wait (lambda () (= accepted 1)) 2))
+            (drgnx-hub-connect)                                   ; before the deadline: still the one
+            (drgnx-hub-test--wait #'ignore 0.1)
+            (should (= accepted 1))
+            (drgnx-hub-test--wait #'ignore 0.4)
+            (drgnx-hub-connect)                                   ; past it: a new one
+            (should (drgnx-hub-test--wait (lambda () (= accepted 2)) 2))
+            (should (= gone 0)))
+        (delete-process server)))))
+
+(ert-deftest drgnx-hub/a-subscriber-that-stops-reading-is-dropped ()
+  ;; a blocked write runs timers and filters meanwhile: each new event would write to the same stuck subscriber one
+  ;; level deeper (until excessive-lisp-nesting lands anywhere in the hub); it is dropped instead, and the hub serves
+  (drgnx-hub-test--with
+    (drgnx-hub-serve (drgnx-hub-socket))
+    (let* ((sub (make-process
+                 :name "stuck-sub" :noquery t :buffer nil
+                 :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "--eval"
+                                (format "(let ((c (make-network-process :name \"s\" :family 'local :service %S :filter #'ignore)))
+                                           (process-send-string c \"{\\\"id\\\":0,\\\"method\\\":\\\"subscribe\\\"}\\n\")
+                                           (while t (accept-process-output nil 1)))"
+                                        (drgnx-hub-socket)))))
+           (blob (make-string (* 64 1024) ?x))
+           (drgnx-hub-client-max-queued (* 512 1024))              ; (16 MiB by default: 1.3 MiB go out here)
+           (ticker nil) (rescue nil) (nested nil))
+      (unwind-protect
+          (progn
+            (should (drgnx-hub-test--wait (lambda () drgnx-hub--subscribers) 10))
+            (signal-process sub 'SIGSTOP)                                   ; it reads nothing more
+            ;; without the drop, the innermost write would wait for it forever: let it go after 4 s (the test then fails)
+            (setq rescue (run-at-time 4 nil (lambda () (signal-process sub 'SIGCONT))))
+            (setq ticker (run-at-time 0 0.05 (lambda () (run-at-time 0 nil (lambda ()
+                                                                             (condition-case err (drgnx-hub--broadcast 'test (list :blob blob))
+                                                                               (excessive-lisp-nesting (setq nested err))))))))
+            (drgnx-hub-test--wait #'ignore 1)
+            (cancel-timer ticker)
+            (should (drgnx-hub-call-sync "ping" nil))
+            (should-not (seq-filter #'process-live-p drgnx-hub--subscribers))
+            (should-not nested))
+        (when (timerp ticker) (cancel-timer ticker))
+        (when (timerp rescue) (cancel-timer rescue))
+        (ignore-errors (signal-process sub 'SIGCONT))
+        (delete-process sub)))))
+
+(ert-deftest drgnx-hub/a-stopped-subscriber-is-dropped-when-nothing-more-comes ()
+  ;; one write that makes no progress for `drgnx-hub-client-stuck-after' ends its client on the hub's tick
+  (drgnx-hub-test--with
+    (drgnx-hub-serve (drgnx-hub-socket))
+    (let* ((sub (make-process
+                 :name "stuck-sub" :noquery t :buffer nil
+                 :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "--eval"
+                                (format "(let ((c (make-network-process :name \"s\" :family 'local :service %S :filter #'ignore)))
+                                           (process-send-string c \"{\\\"id\\\":0,\\\"method\\\":\\\"subscribe\\\"}\\n\")
+                                           (while t (accept-process-output nil 1)))"
+                                        (drgnx-hub-socket)))))
+           (drgnx-hub-client-stuck-after 0.5) (rescue nil))
+      (unwind-protect
+          (progn
+            (should (drgnx-hub-test--wait (lambda () drgnx-hub--subscribers) 10))
+            (signal-process sub 'SIGSTOP)
+            (setq rescue (run-at-time 8 nil (lambda () (signal-process sub 'SIGCONT))))
+            (run-at-time 0 nil (lambda () (drgnx-hub--broadcast 'test (list :blob (make-string (* 4 1024 1024) ?x)))))
+            (should (drgnx-hub-test--wait (lambda () (not (seq-filter #'process-live-p drgnx-hub--subscribers))) 5))
+            (should (drgnx-hub-call-sync "ping" nil)))
+        (when (timerp rescue) (cancel-timer rescue))
+        (ignore-errors (signal-process sub 'SIGCONT))
+        (delete-process sub)))))
+
+(defun drgnx-hub-test--reader (out delay)
+  "A subscriber in a child Emacs that sleeps DELAY s per chunk it reads, and on a `done' event writes all it got to
+OUT and exits."
+  (make-process
+   :name "reader" :noquery t :buffer nil
+   :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "--eval"
+                  (format "(let* ((got nil) (tail \"\") (done nil)
+                                  (c (make-network-process :name \"s\" :family 'local :service %S :coding 'binary
+                                       :filter (lambda (_p s) (push s got) (sleep-for %s)
+                                                 (when (string-search \"\\\"done\\\"\" (concat tail s)) (setq done t))
+                                                 (setq tail (substring (concat tail s) (max 0 (- (+ (length tail) (length s)) 32))))))))
+                             (process-send-string c \"{\\\"id\\\":0,\\\"method\\\":\\\"subscribe\\\"}\\n\")
+                             (while (not done) (accept-process-output nil 0.1))
+                             (let ((coding-system-for-write 'binary)) (write-region (apply #'concat (nreverse got)) nil %S))
+                             (kill-emacs 0))"
+                          (drgnx-hub-socket) delay out))))
+
+(defun drgnx-hub-test--got (out)
+  "The `test' events' numbers in what a reader wrote to OUT, in the order it got them."
+  (with-temp-buffer
+    (insert-file-contents out)
+    (cl-loop for line in (split-string (buffer-string) "\n" t)
+             for json = (json-parse-string line :object-type 'plist)
+             when (equal (plist-get json :event) "test") collect (plist-get (plist-get json :data) :n))))
+
+(ert-deftest drgnx-hub/every-subscriber-gets-events-in-order-beside-a-slow-one ()
+  ;; while a write to a slow subscriber waits, a newer event must not reach another subscriber before an older one
+  ;; (a mirror skips what is older than what it has: it would lose it)
+  (drgnx-hub-test--with
+    (drgnx-hub-serve (drgnx-hub-socket))
+    (let* ((fast-out (concat root "fast.txt")) (slow-out (concat root "slow.txt"))
+           (fast (drgnx-hub-test--reader fast-out 0)) (slow nil)
+           (big (make-string (* 1024 1024) ?b)) (small (make-string 200 ?s)) (n 0) (timers nil)
+           (send (lambda (blob) (run-at-time 0 nil (lambda () (drgnx-hub--broadcast 'test (list :n (cl-incf n) :blob blob)))))))
+      (unwind-protect
+          (progn
+            (should (drgnx-hub-test--wait (lambda () (= (length drgnx-hub--subscribers) 1)) 10))
+            (setq slow (drgnx-hub-test--reader slow-out 0.002))           ; subscribed second: written to first
+            (should (drgnx-hub-test--wait (lambda () (= (length drgnx-hub--subscribers) 2)) 10))
+            (push (run-at-time 0 0.05 (lambda () (funcall send small))) timers)
+            (push (run-at-time 0 0.5 (lambda () (funcall send big))) timers)
+            (drgnx-hub-test--wait #'ignore 2)
+            (mapc #'cancel-timer timers)
+            (drgnx-hub-test--wait #'ignore 0.1)
+            (drgnx-hub--broadcast 'done nil)
+            (should (drgnx-hub-test--wait (lambda () (not (or (process-live-p fast) (process-live-p slow)))) 30))
+            (should (> n 20))
+            (should (equal (drgnx-hub-test--got slow-out) (number-sequence 1 n)))
+            (should (equal (drgnx-hub-test--got fast-out) (number-sequence 1 n))))
+        (mapc #'cancel-timer timers)
+        (delete-process fast)
+        (when slow (delete-process slow))))))
+
+(ert-deftest drgnx-hub/a-client-beneath-a-stopped-one-is-kept ()
+  ;; a write to a stopped client B blocks on top of one to a live client A: A's write cannot go on meanwhile, so only
+  ;; the innermost write (B's) is judged; B goes, A stays and gets all of it
+  (drgnx-hub-test--with
+    (drgnx-hub-serve (drgnx-hub-socket))
+    (let* ((out (concat root "a.txt")) (a-proc (drgnx-hub-test--reader out 0.001)) (b-proc nil) (a nil) (b nil)
+           (drgnx-hub-client-stuck-after 1) (rescue nil))
+      (unwind-protect
+          (progn
+            (should (drgnx-hub-test--wait (lambda () (= (length drgnx-hub--subscribers) 1)) 10))
+            (setq a (car drgnx-hub--subscribers))
+            (setq b-proc (make-process
+                          :name "stuck-sub" :noquery t :buffer nil
+                          :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "--eval"
+                                         (format "(let ((c (make-network-process :name \"s\" :family 'local :service %S :filter #'ignore)))
+                                                    (process-send-string c \"{\\\"id\\\":0,\\\"method\\\":\\\"subscribe\\\"}\\n\")
+                                                    (while t (accept-process-output nil 1)))"
+                                                 (drgnx-hub-socket)))))
+            (should (drgnx-hub-test--wait (lambda () (= (length drgnx-hub--subscribers) 2)) 10))
+            (setq b (car drgnx-hub--subscribers))
+            (signal-process b-proc 'SIGSTOP)
+            (setq rescue (run-at-time 9 nil (lambda () (signal-process b-proc 'SIGCONT))))
+            (run-at-time 0 nil (lambda () (drgnx-hub--answer a (list :event "test" :data (list :n 1 :blob (make-string (* 4 1024 1024) ?a))))))
+            (run-at-time 0.2 nil (lambda () (drgnx-hub--answer b (list :event "test" :data (list :n 1 :blob (make-string (* 4 1024 1024) ?b))))))
+            (should (drgnx-hub-test--wait (lambda () (not (process-live-p b))) 6))
+            (should (process-live-p a))
+            (drgnx-hub--answer a '(:event "done" :data nil))
+            (should (drgnx-hub-test--wait (lambda () (not (process-live-p a-proc))) 20))
+            (should (equal (drgnx-hub-test--got out) '(1))))
+        (when (timerp rescue) (cancel-timer rescue))
+        (when b-proc (ignore-errors (signal-process b-proc 'SIGCONT)) (delete-process b-proc))
+        (delete-process a-proc)))))
+
+(ert-deftest drgnx-hub/a-stopped-subscriber-is-dropped-while-others-get-traffic ()
+  ;; writes to a live subscriber on top of a stopped one's blocked write give the stopped one back only the time they
+  ;; took: it is still dropped within about `drgnx-hub-client-stuck-after', the live one never
+  (drgnx-hub-test--with
+    (drgnx-hub-serve (drgnx-hub-socket))
+    (let* ((out (concat root "live.txt")) (live-proc (drgnx-hub-test--reader out 0)) (stopped-proc nil) (live nil) (stopped nil)
+           (drgnx-hub-client-stuck-after 1) (rescue nil) (ticker nil) (n 0))
+      (unwind-protect
+          (progn
+            (should (drgnx-hub-test--wait (lambda () (= (length drgnx-hub--subscribers) 1)) 10))
+            (setq live (car drgnx-hub--subscribers))
+            (setq stopped-proc (make-process
+                                :name "stuck-sub" :noquery t :buffer nil
+                                :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "--eval"
+                                               (format "(let ((c (make-network-process :name \"s\" :family 'local :service %S :filter #'ignore)))
+                                                          (process-send-string c \"{\\\"id\\\":0,\\\"method\\\":\\\"subscribe\\\"}\\n\")
+                                                          (while t (accept-process-output nil 1)))"
+                                                       (drgnx-hub-socket)))))
+            (should (drgnx-hub-test--wait (lambda () (= (length drgnx-hub--subscribers) 2)) 10))
+            (setq stopped (car drgnx-hub--subscribers))
+            (signal-process stopped-proc 'SIGSTOP)
+            (setq rescue (run-at-time 12 nil (lambda () (signal-process stopped-proc 'SIGCONT))))
+            (run-at-time 0 nil (lambda () (drgnx-hub--answer stopped (list :event "big" :data (list :blob (make-string (* 4 1024 1024) ?b))))))
+            (setq ticker (run-at-time 0.1 0.1 (lambda () (run-at-time 0 nil (lambda () (drgnx-hub--broadcast 'test (list :n (cl-incf n))))))))
+            (should (drgnx-hub-test--wait (lambda () (not (process-live-p stopped))) 4))
+            (cancel-timer ticker)
+            (should (process-live-p live))
+            (drgnx-hub--broadcast 'done nil)
+            (should (drgnx-hub-test--wait (lambda () (not (process-live-p live-proc))) 20))
+            (should (> n 5))
+            (should (equal (drgnx-hub-test--got out) (number-sequence 1 n))))
+        (when (timerp ticker) (cancel-timer ticker))
+        (when (timerp rescue) (cancel-timer rescue))
+        (when stopped-proc (ignore-errors (signal-process stopped-proc 'SIGCONT)) (delete-process stopped-proc))
+        (delete-process live-proc)))))
+
+(ert-deftest drgnx-hub/a-slow-subscriber-is-kept-and-gets-everything-in-order ()
+  ;; a live reader that is merely slow (big snapshots, a busy editor) makes writes wait: what comes meanwhile is
+  ;; queued for it, never a reason to drop it
+  (drgnx-hub-test--with
+    (drgnx-hub-serve (drgnx-hub-socket))
+    (let* ((out (concat root "got.txt"))
+           (sub (make-process
+                 :name "slow-sub" :noquery t :buffer nil
+                 :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "--eval"
+                                (format "(let* ((got nil) (tail \"\") (done nil)
+                                                (c (make-network-process :name \"s\" :family 'local :service %S :coding 'binary
+                                                     :filter (lambda (_p s) (push s got) (sleep-for 0.002)
+                                                               (when (string-search \"\\\"done\\\"\" (concat tail s)) (setq done t))
+                                                               (setq tail (substring (concat tail s) (max 0 (- (+ (length tail) (length s)) 32))))))))
+                                           (process-send-string c \"{\\\"id\\\":0,\\\"method\\\":\\\"subscribe\\\"}\\n\")
+                                           (while (not done) (accept-process-output nil 0.1))
+                                           (let ((coding-system-for-write 'binary)) (write-region (apply #'concat (nreverse got)) nil %S))
+                                           (kill-emacs 0))"
+                                        (drgnx-hub-socket) out))))
+           (big (make-string (* 1024 1024) ?b)) (small (make-string 200 ?s)) (n 0) (timers nil)
+           (send (lambda (blob) (run-at-time 0 nil (lambda () (drgnx-hub--broadcast 'test (list :n (cl-incf n) :blob blob)))))))
+      (unwind-protect
+          (progn
+            (should (drgnx-hub-test--wait (lambda () drgnx-hub--subscribers) 10))
+            (let ((conn (car drgnx-hub--subscribers)))
+              (push (run-at-time 0 0.05 (lambda () (funcall send small))) timers)
+              (push (run-at-time 0 0.5 (lambda () (funcall send big))) timers)
+              (drgnx-hub-test--wait #'ignore 2)
+              (mapc #'cancel-timer timers)
+              (drgnx-hub-test--wait #'ignore 0.1)
+              (should (process-live-p conn))
+              (should (memq conn drgnx-hub--subscribers))
+              (drgnx-hub--broadcast 'done nil)
+              (should (drgnx-hub-test--wait (lambda () (not (process-live-p sub))) 30))
+              (let ((ns (with-temp-buffer
+                          (insert-file-contents out)
+                          (cl-loop for line in (split-string (buffer-string) "\n" t)
+                                   for json = (json-parse-string line :object-type 'plist)
+                                   when (equal (plist-get json :event) "test")
+                                   collect (plist-get (plist-get json :data) :n)))))
+                (should (> n 20))
+                (should (equal ns (number-sequence 1 n))))))
+        (mapc #'cancel-timer timers)
+        (delete-process sub)))))
+
 (ert-deftest drgnx-hub/a-restarted-hub-takes-the-same-tokens ()
   (drgnx-hub-test--with
     (drgnx-hub-serve (drgnx-hub-socket))
@@ -109,6 +382,70 @@ to OR-LOG, OPENROUTER_API_KEY unset."
       (drgnx-hub-serve (drgnx-hub-socket))
       (should (= (hash-table-count drgnx-gateway--registrations) 1))
       (should (gethash (secure-hash 'sha256 token) drgnx-gateway--registrations)))))
+
+(ert-deftest drgnx-hub/registrations-survive-a-torn-write ()
+  ;; a file cut off mid-write (the old in-place write, a full disk) is logged and the hub serves; a save writes a
+  ;; temporary file and renames it over the old one (a new inode), leaves no temporary file, and is 0600
+  (drgnx-hub-test--with
+    (let ((file (expand-file-name "hub/registrations.eld" (drgnx-state-dir))) (logged nil))
+      (make-directory (file-name-directory file) t)
+      (write-region "((\"abc\" :job \"j\" :chain" nil file nil 'silent)
+      (cl-letf (((symbol-function 'message)
+                 (lambda (fmt &rest args) (when fmt (push (apply #'format-message fmt args) logged)) nil)))
+        (drgnx-hub-serve (drgnx-hub-socket)))
+      (should (seq-some (lambda (m) (string-search "registrations.eld" m)) logged))
+      (should (drgnx-hub-call-sync "ping" nil))
+      (drgnx-hub-call-sync "gateway/register" '(:chain [["openrouter" nil]]))
+      (let ((inode (file-attribute-inode-number (file-attributes file))))
+        (drgnx-hub-call-sync "gateway/register" '(:chain [["openrouter" nil]]))
+        (should-not (equal (file-attribute-inode-number (file-attributes file)) inode)))
+      (should (equal (directory-files (file-name-directory file) nil "regist") '("registrations.eld")))
+      (should (equal (file-modes file) #o600))
+      (should (= (length (with-temp-buffer (insert-file-contents file) (read (current-buffer)))) 2)))))
+
+(ert-deftest drgnx-hub/registrations-of-a-dead-owner-are-pruned ()
+  ;; a crashed editor never unregisters its agents' tokens: a registration names its owner's pid, and one whose owner
+  ;; is gone is dropped when a hub starts and on its tick; one without an owner stays until it is unregistered
+  (drgnx-hub-test--with
+    (let* ((gone (let ((p (start-process "gone" nil "true")))
+                   (drgnx-hub-test--wait (lambda () (not (process-live-p p))))
+                   (process-id p)))
+           (reg (lambda (owner) (plist-get (drgnx-hub-call-sync "gateway/register" (list :chain [["openrouter" nil]] :owner owner))
+                                           :token)))
+           (has (lambda (token) (gethash (secure-hash 'sha256 token) drgnx-gateway--registrations)))
+           (file (expand-file-name "hub/registrations.eld" (drgnx-state-dir))))
+      (drgnx-hub-serve (drgnx-hub-socket))
+      (let ((dead (funcall reg gone)) (live (funcall reg (emacs-pid)))
+            (none (plist-get (drgnx-hub-call-sync "gateway/register" '(:chain [["openrouter" nil]])) :token)))
+        (should (eql (plist-get (funcall has live) :owner) (emacs-pid)))
+        (drgnx-hub-disconnect)
+        (drgnx-hub-stop)
+        (drgnx-hub-serve (drgnx-hub-socket))                     ; at start
+        (should-not (funcall has dead))
+        (should (funcall has live))
+        (should (funcall has none))
+        (let ((dead2 (funcall reg gone)))
+          (should (funcall has dead2))
+          (should (drgnx-hub-test--wait (lambda () (not (funcall has dead2))) 5))   ; on a tick (every 2 s)
+          (should (funcall has live))
+          (should-not (string-search (secure-hash 'sha256 dead2) (with-temp-buffer (insert-file-contents file) (buffer-string)))))))))
+
+(ert-deftest drgnx-hub/odd-kept-registrations-never-stop-the-hub ()
+  ;; registrations kept before owners were (none), or with an owner that is not a pid, stay — on a tick too — and
+  ;; the hub starts; a file that is not an alist is logged and the hub starts
+  (drgnx-hub-test--with
+    (let ((file (expand-file-name "hub/registrations.eld" (drgnx-state-dir))))
+      (make-directory (file-name-directory file) t)
+      (with-temp-file file (prin1 '(("h-none" :job "j" :chain ((openrouter))) ("h-junk" :owner "x" :chain ((openrouter)))) (current-buffer)))
+      (drgnx-hub-serve (drgnx-hub-socket))
+      (should (drgnx-hub-call-sync "ping" nil))
+      (drgnx-hub-test--wait #'ignore 2.5)                         ; a tick
+      (should (gethash "h-none" drgnx-gateway--registrations))
+      (should (gethash "h-junk" drgnx-gateway--registrations))
+      (drgnx-hub-disconnect) (drgnx-hub-stop)
+      (with-temp-file file (insert "((\"h\" :chain nil) . 3)"))
+      (drgnx-hub-serve (drgnx-hub-socket))
+      (should (drgnx-hub-call-sync "ping" nil)))))
 
 (ert-deftest drgnx-hub/a-second-hub-exits ()
   (drgnx-hub-test--with
@@ -128,6 +465,40 @@ to OR-LOG, OPENROUTER_API_KEY unset."
     (write-region "" nil (drgnx-hub-socket) nil 'silent)
     (drgnx-hub-serve (drgnx-hub-socket))
     (should (drgnx-hub-call-sync "ping" nil))))
+
+(ert-deftest drgnx-hub/startup-error-exit-code ()
+  ;; 3 says "a hub already serves" (a-second-hub-exits); any other reason a hub cannot start is 1
+  (drgnx-hub-test--with
+    (let ((state (concat root "state-file")))
+      (write-region "" nil state nil 'silent)         ; a state dir that is a plain file: no socket dir under it
+      (let* ((process-environment (append (list "XDG_RUNTIME_DIR" (concat "XDG_STATE_HOME=" state)) process-environment))
+             (out (generate-new-buffer " *hub-err*" t))
+             ;; never waited for without a limit: a hub that starts after all would serve until this Emacs ends
+             (p (make-process :name "hub-err" :buffer out :noquery t
+                              :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
+                                             "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-hub" "-f" "drgnx-hub-main"))))
+        (unless (drgnx-hub-test--wait (lambda () (not (process-live-p p))) 20) (delete-process p))
+        (should (eq (process-status p) 'exit))
+        (should (= (process-exit-status p) 1))
+        (should (string-search "drgnx hub: " (with-current-buffer out (buffer-string))))
+        (kill-buffer out)))))
+
+(ert-deftest drgnx-hub/a-test-hub-exits-with-its-parent ()
+  ;; DRGNX_HUB_PARENT_PID (tests only): a hub whose test Emacs is gone stops instead of outliving the test's dir
+  (drgnx-hub-test--with
+    (let* ((gone (let ((p (start-process "gone" nil "true")))
+                   (drgnx-hub-test--wait (lambda () (not (process-live-p p))))
+                   (process-id p)))
+           (process-environment (cons (format "DRGNX_HUB_PARENT_PID=%d" gone) process-environment))
+           (p (make-process :name "orphan-hub" :noquery t
+                            :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
+                                           "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-hub" "-f" "drgnx-hub-main"))))
+      (unwind-protect
+          (progn
+            (should (drgnx-hub-test--wait (lambda () (not (process-live-p p))) 10))
+            (should (eql (process-exit-status p) 0))
+            (should-not (file-exists-p (drgnx-hub-socket))))
+        (ignore-errors (delete-process p))))))
 
 (ert-deftest drgnx-hub/the-hub-outlives-the-emacs-that-started-it ()
   (drgnx-hub-test--with
@@ -155,6 +526,60 @@ to OR-LOG, OPENROUTER_API_KEY unset."
       ;; and its job ends: the wrapper records the exit (the tree is removed only then — a CI race)
       (should (drgnx-hub-test--wait (lambda () (memq (plist-get (car (drgnx-jobs-list)) :status) '(exited stopped))) 5)))))
 
+(defun drgnx-hub-test--start-elsewhere (&rest env)
+  "Start the hub from another Emacs with ENV (\"NAME=value\"…) added, as an editor or the CLI does; its exit status."
+  (let ((process-environment (append env process-environment)))
+    (call-process (expand-file-name invocation-name invocation-directory) nil nil nil "--batch" "-Q"
+                  "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-hub" "--eval" "(kill-emacs (if (drgnx-hub-ensure) 0 1))")))
+
+(ert-deftest drgnx-hub/no-key-in-unit-environment ()
+  ;; a key in the starting Emacs's environment never becomes the hub's (a systemd unit's --setenv is kept in the
+  ;; unit, `systemctl --user show' shows it): it is handed over the socket once the hub runs
+  (skip-unless (file-readable-p "/proc/self/environ"))
+  (drgnx-hub-test--with
+    (let ((started nil))
+      (cl-letf (((symbol-function 'drgnx-jobs-start)
+                 (lambda (&rest args) (setq started args) (drgnx-hub-serve (drgnx-hub-socket)))))
+        (let ((process-environment (cons "OPENROUTER_API_KEY=sk-fake-env" process-environment)))
+          (drgnx-hub-ensure)))
+      (should started)
+      (should-not (string-search "sk-fake-env" (prin1-to-string started)))
+      (should-not (string-search "API_KEY" (prin1-to-string started))))
+    (drgnx-hub-disconnect)
+    (drgnx-hub-stop)
+    (clrhash drgnx-gateway--keys)
+    ;; a real hub, started by an Emacs that has the key: not in its environment, yet its agents' requests carry it
+    (should (= (drgnx-hub-test--start-elsewhere "OPENROUTER_API_KEY=sk-fake-env") 0))
+    (let* ((pid (plist-get (drgnx-hub-call-sync "status" nil) :pid))
+           (environ (with-temp-buffer (set-buffer-multibyte nil)
+                                      (insert-file-contents-literally (format "/proc/%d/environ" pid)) (buffer-string))))
+      (let ((leaked (and (string-search "sk-fake-env" environ) t))) (should-not leaked))   ; (never the environment printed)
+      (let ((r (drgnx-hub-call-sync "gateway/register" '(:chain [["openrouter" nil]]))))
+        (should (= (drgnx-hub-test--post (plist-get r :url) (plist-get r :token)) 200))
+        (should (string-search "Bearer sk-fake-env" (with-temp-buffer (insert-file-contents or-log) (buffer-string))))))))
+
+(ert-deftest drgnx-hub/an-editor-gives-its-keys-again-to-a-restarted-hub ()
+  ;; a key this Emacs loaded (a .gpg file: in no environment) lives in the hub's memory only: a restarted hub has
+  ;; none until the editor connects again, which hands it over again
+  (drgnx-hub-test--with
+    (puthash 'openrouter "sk-fake-loaded" drgnx-ai--keys)
+    (should (= (drgnx-hub-test--start-elsewhere) 0))
+    (drgnx-hub-connect)
+    (should (drgnx-hub-test--wait (lambda () (process-live-p drgnx-hub--events))))
+    (let ((r (drgnx-hub-call-sync "gateway/register" '(:chain [["openrouter" nil]]))))
+      (should (= (drgnx-hub-test--post (plist-get r :url) (plist-get r :token)) 200))
+      (drgnx-hub-call-sync "shutdown" nil)
+      (should (drgnx-hub-test--wait (lambda () (not (process-live-p drgnx-hub--events))) 5))
+      (should (drgnx-hub-test--wait (lambda () (not (drgnx-hub-running-p))) 5))
+      (should (= (drgnx-hub-test--start-elsewhere) 0))
+      (should (= (drgnx-hub-test--post (plist-get r :url) (plist-get r :token)) 502))   ; the same token: no key yet
+      (drgnx-hub-connect)                                                               ; (the editor's idle timer)
+      (should (drgnx-hub-test--wait (lambda () (process-live-p drgnx-hub--events))))
+      (drgnx-hub-call-sync "ping" nil)
+      (should (= (drgnx-hub-test--post (plist-get r :url) (plist-get r :token)) 200))
+      (should (= (with-temp-buffer (insert-file-contents or-log) (how-many "Bearer sk-fake-loaded" (point-min) (point-max)))
+                 2)))))
+
 (defun drgnx-hub-test--sigpipe-ignored-p ()
   "Does this Emacs ignore SIGPIPE, as every hub does (Linux: SigIgn in /proc/self/status)?"
   (with-temp-buffer
@@ -175,6 +600,27 @@ to OR-LOG, OPENROUTER_API_KEY unset."
         (process-send-string c "{\"id\":7,\"method\":\"status\"}\n{\"method\":\"coord/notify\"}\n")
         (delete-process c)))
     (let ((deadline (+ (float-time) 1))) (while (< (float-time) deadline) (accept-process-output nil 0.05)))
+    (should (drgnx-hub-call-sync "ping" nil))))
+
+(ert-deftest drgnx-hub/long-line-and-malformed-answered ()
+  ;; a line that is not JSON but names its id is answered with an error (the client never waits for nothing); a
+  ;; line over the cap (1 MiB) closes its connection; the hub serves on
+  (drgnx-hub-test--with
+    (drgnx-hub-serve (drgnx-hub-socket))
+    (let* ((got "")
+           (c (make-network-process :name "raw" :family 'local :service (drgnx-hub-socket) :noquery t :coding 'utf-8-unix
+                                    :filter (lambda (_p s) (setq got (concat got s))))))
+      (process-send-string c "{\"id\":7,\"method\":\n")
+      (should (drgnx-hub-test--wait (lambda () (string-search "\n" got)) 1))
+      (let ((answer (json-parse-string got :object-type 'plist)))
+        (should (eql (plist-get answer :id) 7))
+        (should (stringp (plist-get (plist-get answer :error) :message))))
+      ;; 2 MiB without an end of line (the write to a closed connection is an error only where SIGPIPE is ignored,
+      ;; as the runner does)
+      (when (drgnx-hub-test--sigpipe-ignored-p)
+        (ignore-errors (process-send-string c (make-string (* 2 1024 1024) ?x)))
+        (should (drgnx-hub-test--wait (lambda () (not (process-live-p c))) 5)))
+      (delete-process c))
     (should (drgnx-hub-call-sync "ping" nil))))
 
 (ert-deftest drgnx-hub/an-agent-hanging-up-never-kills-the-hub ()
@@ -237,12 +683,95 @@ to OR-LOG, OPENROUTER_API_KEY unset."
       (should-not (file-exists-p socket))
       (should-not (file-exists-p (concat socket ".lock"))))))
 
+(ert-deftest drgnx-hub/a-socket-not-private-to-the-user-is-never-used ()
+  ;; whatever answers on the socket gets this Emacs's keys: a socket whose directory is open to others (or not the
+  ;; user's, or the socket itself not the user's) is never pinged, connected to or given anything
+  (drgnx-hub-test--with
+    (let* ((run (concat root "run")) (process-environment (cons (concat "XDG_RUNTIME_DIR=" run) process-environment))
+           (socket (drgnx-hub-socket)) (dir (file-name-directory socket)) (got "") (uid (user-uid)))
+      (make-directory dir t)
+      (puthash 'openrouter "sk-fake-loaded" drgnx-ai--keys)
+      (let ((listener (make-network-process :name "foreign-hub" :family 'local :server t :service socket :noquery t
+                                            :filter (lambda (c s) (setq got (concat got s))
+                                                      ;; it answers pings as a hub would
+                                                      (when (string-search "ping" s)
+                                                        (process-send-string c "{\"id\":0,\"result\":{\"pid\":1}}\n"))))))
+        (unwind-protect
+            (progn
+              (set-file-modes dir #o777)
+              (should-not (drgnx-hub-running-p))
+              (should (string-match-p "mode 777" (cadr (should-error (drgnx-hub-connect)))))
+              (should-error (drgnx-hub-call "status" nil #'ignore))
+              ;; the directory private, but not this user's (as another user's would be)
+              (set-file-modes dir #o700)
+              (cl-letf (((symbol-function 'user-uid) (lambda () (1+ uid))))
+                (should-not (drgnx-hub-running-p))
+                (should-error (drgnx-hub-connect)))
+              (drgnx-hub-test--wait #'ignore 0.3)
+              (should-not (string-search "sk-fake" got))
+              (should-not (string-search "gateway/keys" got))
+              (should-not (string-search "subscribe" got))
+              ;; and once it is the user's own and private, it is used
+              (should (drgnx-hub-running-p)))
+          (delete-process listener))))))
+
+(ert-deftest drgnx-hub/a-socket-whose-directory-is-missing-is-never-connected-to ()
+  ;; checked, then connected to by path: a directory missing at the check could be another user's by the connect (a
+  ;; swap in /tmp) — so a missing one is a refusal, never a connect by path; the coordination server's notify too
+  (require 'drgnx-coord-mcp)
+  (drgnx-hub-test--with
+    (let* ((run (concat root "run")) (process-environment (cons (concat "XDG_RUNTIME_DIR=" run) process-environment))
+           (connects 0))
+      (make-directory run t)
+      (should-not (file-exists-p (file-name-directory (drgnx-hub-socket))))
+      (should (string-match-p "does not exist" (drgnx-hub--untrusted (drgnx-hub-socket))))
+      (cl-letf* ((real (symbol-function 'make-network-process))
+                 ((symbol-function 'make-network-process)
+                  (lambda (&rest args) (unless (plist-get args :server) (cl-incf connects)) (apply real args))))
+        (should (string-match-p "does not exist" (cadr (should-error (drgnx-hub-connect)))))
+        (should-error (drgnx-hub-call "status" nil #'ignore))
+        (should (= connects 0))
+        ;; a socket in a directory open to others: the notify does not go there either
+        (make-directory (file-name-directory (drgnx-hub-socket)) t)
+        (set-file-modes (file-name-directory (drgnx-hub-socket)) #o777)
+        (let ((listener (make-network-process :name "foreign" :family 'local :server t :service (drgnx-hub-socket) :noquery t)))
+          (unwind-protect
+              (progn (drgnx-coord-mcp--notify-hub)
+                     (should (= connects 0)))
+            (delete-process listener)))))))
+
+(ert-deftest drgnx-hub/the-hub-s-private-dir-is-never-reached-through-a-link ()
+  ;; the socket's directory, given with its slash: never followed through a link (another user's, in /tmp, could
+  ;; point at a directory of the user's that would be chmodded), and made 0700 from the start (not at the umask)
+  (drgnx-hub-test--with
+    (let ((target (concat root "target")) (link (concat root "link")) (fresh (concat root "fresh/sub/")))
+      (make-directory target)
+      (set-file-modes target #o755)
+      (make-symbolic-link target link)
+      (should-error (drgnx-hub--private-dir (file-name-as-directory link)))
+      (should (= (file-modes target) #o755))
+      (with-file-modes #o755
+        (cl-letf (((symbol-function 'set-file-modes) #'ignore))     ; what it was made with
+          (drgnx-hub--private-dir fresh)))
+      (should (= (file-modes (directory-file-name fresh)) #o700)))))
+
+(ert-deftest drgnx-hub/a-directory-vanishing-mid-check-is-no-error ()
+  ;; the check reads the directory once: one that goes between two reads (its mode then nil) is not an error, and
+  ;; whatever the check meets, asking whether a hub runs answers, never signals
+  (drgnx-hub-test--with
+    (drgnx-hub-serve (drgnx-hub-socket))
+    (cl-letf (((symbol-function 'file-modes) (lambda (&rest _) nil)))       ; gone by the second read
+      (should-not (drgnx-hub--untrusted (drgnx-hub-socket))))
+    (cl-letf (((symbol-function 'drgnx-hub--untrusted) (lambda (_) (error "Vanished"))))
+      (should-not (condition-case nil (progn (drgnx-hub-running-p) nil) (error t))))))
+
 (ert-deftest drgnx-hub/without-a-runtime-dir-the-socket-is-short-and-private ()
   (drgnx-hub-test--with
     (let ((process-environment (cons "XDG_RUNTIME_DIR" process-environment)))
       (should (string-prefix-p (drgnx-state-dir) (drgnx-hub-socket)))
       (drgnx-hub-serve (drgnx-hub-socket))
       (should (drgnx-hub-call-sync "ping" nil))
+      (should (equal (file-modes (file-name-directory (drgnx-hub-socket))) #o700))
       (drgnx-hub-disconnect) (drgnx-hub-stop))
     ;; a state dir so deep the socket path would pass the system's limit (103 bytes on macOS, 107 on Linux)
     (let* ((deep (concat root (make-string 120 ?d) "/"))
@@ -268,6 +797,22 @@ to OR-LOG, OPENROUTER_API_KEY unset."
       (let ((moved (funcall at 104)))
         (should (string-prefix-p (file-name-as-directory (expand-file-name (format "drgnx-hub-%d" (user-uid)) temporary-file-directory))
                                  moved))))))
+
+(ert-deftest drgnx-hub/socket-length-counts-the-encoded-name ()
+  ;; macOS's file names are decomposed (utf-8-hfs): "é" is 2 bytes in Emacs but 3 on disk, so a path of 103 bytes in
+  ;; Emacs can pass the limit once encoded
+  (require 'ucs-normalize)
+  (drgnx-hub-test--with
+    ;; a temporary dir too deep to leave room for the name (macOS's /var/folders/…/T/ can be) has nothing to test
+    (skip-unless (> (- 103 24 8 (string-bytes root)) 0))
+    (let* ((file-name-coding-system 'utf-8-hfs)
+           ;; 4 × "é", then r…: the socket ($RUN/drgnx/hub-HASH.sock, 24 bytes past it) is 103 bytes in Emacs, 107 encoded
+           (run (concat root (make-string 4 ?é) (make-string (- 103 24 8 (string-bytes root)) ?r)))
+           (process-environment (cons (concat "XDG_RUNTIME_DIR=" run) process-environment)))
+      (make-directory run t)
+      (should (eql (string-bytes (concat run "/drgnx/hub-12345678.sock")) 103))
+      (should (string-prefix-p (file-name-as-directory (expand-file-name (format "drgnx-hub-%d" (user-uid)) temporary-file-directory))
+                               (drgnx-hub-socket))))))
 
 (ert-deftest drgnx-hub/no-hub-is-started-where-starting-is-off ()
   (drgnx-hub-test--with

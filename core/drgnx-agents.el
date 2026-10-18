@@ -58,6 +58,25 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
   (delete-dups (mapcar #'car (append drgnx-agents-profiles (plist-get (drgnx-agents--read-file) :profiles)
                                      drgnx-agents-builtin-profiles))))
 
+(defun drgnx-agents-default-profile ()
+  "The profile New Agent Session offers on Return: agents.eld's `:default' when it names a profile, else claude."
+  (let ((d (plist-get (drgnx-agents--read-file) :default)))
+    (if (and (stringp d) (member d (drgnx-agents-profile-names))) d "claude")))
+
+(defun drgnx-agents-mcp-names ()
+  "The MCP servers agents get, from agents.eld's `:mcp' (`coordination', `search'): the coordination tools alone
+until it says otherwise."
+  (let ((file (drgnx-agents--read-file)))
+    (if (plist-member file :mcp) (plist-get file :mcp) '(coordination))))
+
+(declare-function drgnx-keys--save-key "drgnx-keys")
+
+(defun drgnx-agents-set-setting (key value)
+  "Save VALUE as KEY (`:default', `:mcp') in agents.eld: only that value changes, comments and the rest stay.  A file
+that cannot be read is a `user-error' and is not changed."
+  (require 'drgnx-keys)
+  (drgnx-keys--save-key key value (expand-file-name "agents.eld" (drgnx-user-dir)) ";; drgnx agents (docs/guide/agents.md)\n"))
+
 (defun drgnx-agents--changed (s) (run-hook-with-args 'drgnx-agents-changed-functions s))
 
 ;;;; Transcript
@@ -80,6 +99,10 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
       (walk (drgnx-agent-session-entries s)))
     found))
 
+(defun drgnx-agents--raw-url (u)
+  "The url in update U's raw tool input (a string), or nil.  Only the url is kept: a Write's input is the whole file."
+  (let ((url (plist-get (plist-get u :rawInput) :url))) (and (stringp url) url)))
+
 (defun drgnx-agents--update (s u)
   (pcase (plist-get u :sessionUpdate)
     ;; chunks of a turn that Stop's deadline already ended are dropped
@@ -94,14 +117,15 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
        (drgnx-agents--add s (list :type 'user :text (or (plist-get (plist-get u :content) :text) "")))))
     ("tool_call"
      (let ((e (list :type 'tool :id (plist-get u :toolCallId) :title (plist-get u :title) :kind (plist-get u :kind)
-                    :status (plist-get u :status) :content (plist-get u :content)))
+                    :status (plist-get u :status) :content (plist-get u :content) :url (drgnx-agents--raw-url u)))
            (parent (plist-get (plist-get u :_meta) :parentToolCallId)))
        (if-let* ((p (and parent (drgnx-agents--find-tool s parent))))
            (plist-put p :children (append (plist-get p :children) (list e)))
          (drgnx-agents--add s e))))
     ("tool_call_update"
      (when-let* ((e (drgnx-agents--find-tool s (plist-get u :toolCallId))))
-       (dolist (k '(:status :title :content)) (when (plist-member u k) (plist-put e k (plist-get u k))))))
+       (dolist (k '(:status :title :content)) (when (plist-member u k) (plist-put e k (plist-get u k))))
+       (when-let* ((url (drgnx-agents--raw-url u))) (plist-put e :url url))))
     ("plan"
      (let ((last (seq-find (lambda (e) (eq (plist-get e :type) 'plan)) (reverse (drgnx-agent-session-entries s)))))
        (if (and last (not (plist-get last :done))) (plist-put last :entries (plist-get u :entries))
@@ -237,20 +261,34 @@ a task whose provider failed to the next profile (drgnx-job.el).  Called in the 
   "Non-nil: agents on OpenRouter, Ollama or Anthropic profiles talk to the hub's gateway (a token, never a key);
 without a hub they go to the provider directly.")
 
+(defun drgnx-agents--in-hub-p ()
+  "Is this Emacs the hub?  A daemon: it never looks a key up where that may ask."
+  (and (fboundp 'drgnx-hub-serving-p) (drgnx-hub-serving-p)))
+
 (defun drgnx-agents--gateway (s kind)
   "Register S's agent (profile KIND) with the hub's gateway: (:url :token), or nil when no hub can be had (S then
-goes direct, and says so)."
+goes direct, and says so).  In the hub, keys are only those editors handed over (and the environment, quiet
+auth-source files): with none for any provider of the chain, a `user-error' says how one comes."
+  (when (drgnx-agents--in-hub-p)
+    (let ((chain (drgnx-ai-agent-gateway-chain kind)))
+      (unless (seq-some (lambda (st) (or (not (plist-get (drgnx-ai-provider (car st)) :key-env)) (drgnx-ai-key (car st))))
+                        chain)
+        (user-error "No key for %s in the drgnx hub: an editor hands its keys over when it connects (or run `drgnx hub start' where the key is set)"
+                    (mapconcat (lambda (st) (symbol-name (car st))) chain ", ")))))
   (condition-case err
       (progn
         (require 'drgnx-hub)
         (unless (drgnx-hub-serving-p) (drgnx-hub-ensure))
         (let* ((chain (drgnx-ai-agent-gateway-chain kind))
-               ;; keys this command can read (also from sources that ask) travel to the hub's memory
-               (keys (cl-loop for (id . _) in chain
-                              for key = (and (plist-get (drgnx-ai-provider id) :key-env) (drgnx-ai-key id t))
-                              when key append (list (intern (concat ":" (symbol-name id))) key)))
+               ;; keys this command can read (also from sources that ask) travel to the hub's memory — never in the
+               ;; hub, which has what editors gave it
+               (keys (unless (drgnx-agents--in-hub-p)
+                       (cl-loop for (id . _) in chain
+                                for key = (and (plist-get (drgnx-ai-provider id) :key-env) (drgnx-ai-key id t))
+                                when key append (list (intern (concat ":" (symbol-name id))) key))))
                (params (list :task (drgnx-agent-session-task s) :job (drgnx-agent-session-job s)
                              :agent (drgnx-agent-session-name s)
+                             :owner (emacs-pid)   ; its agent is this Emacs's child: gone with it, its token goes too
                              :chain (mapcar (lambda (st) (list (symbol-name (car st)) (cdr st))) chain)
                              :keys keys))
                (r (if (drgnx-hub-serving-p) (drgnx-hub-register params)
@@ -272,30 +310,56 @@ goes direct, and says so)."
     (setf (drgnx-agent-session-gateway s) nil)
     (ignore-errors (drgnx-hub-call "gateway/unregister" (list :token token) #'ignore))))
 
+(defvar drgnx-agents-env-functions nil
+  "Called with a session as its agent starts; each returns extra \"NAME=value\" strings for the agent's environment
+(the Live browser's endpoint, docs/guide/live.md).  One that fails is reported and skipped, and so is anything
+returned that is not a string.")
+
 (defun drgnx-agents--env (s)
   "The environment S's agent gets: its profile's, its provider's — the gateway's address and a token when the hub
-can carry it, else the provider's (keys resolved now, never kept) — and DRGNX_TASK when S works on a task."
+can carry it, else the provider's (keys resolved now, never kept) — DRGNX_TASK when S works on a task, and what
+`drgnx-agents-env-functions' add."
   (append (plist-get (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))) :env)
           (when-let* ((kind (plist-get (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))) :ai)))
             (require 'drgnx-ai)
-            (drgnx-ai-agent-env (list :kind kind) t
+            (drgnx-ai-agent-env (list :kind kind) (not (drgnx-agents--in-hub-p))
                                 (and drgnx-agents-use-gateway (memq kind drgnx-ai-gateway-kinds)
                                      (drgnx-agents--gateway s kind))))
           (and (drgnx-agent-session-task s) (list (concat "DRGNX_TASK=" (drgnx-agent-session-task s))))
-          (and (drgnx-agent-session-job s) (list (concat "DRGNX_JOB=" (drgnx-agent-session-job s))))))
+          (and (drgnx-agent-session-job s) (list (concat "DRGNX_JOB=" (drgnx-agent-session-job s))))
+          (let (extra)
+            (run-hook-wrapped 'drgnx-agents-env-functions
+                              (lambda (f)
+                                (let ((r (with-demoted-errors "drgnx agents: %S" (funcall f s))))
+                                  (if (not (proper-list-p r))
+                                      (message "drgnx agents: an environment function returned %S, not a list of NAME=value strings; ignored" r)
+                                    (dolist (e r)
+                                      (if (stringp e) (setq extra (append extra (list e)))
+                                        (message "drgnx agents: an environment function returned %S, not a NAME=value string; ignored" e)))))
+                                nil))
+            extra)))
 
 (defvar drgnx-agents-coordination t
   "Non-nil: every agent gets drgnx's coordination tools (an MCP server, docs/develop/coordination.md).")
 
 (declare-function drgnx-coord-mcp-server-spec "drgnx-coord-mcp")
 
+(declare-function drgnx-search-mcp-server-spec "drgnx-search-mcp")
+
 (defun drgnx-agents--mcp-servers (s)
-  "The `mcpServers' S's agent gets: the coordination tools, as S's name."
-  (if (not drgnx-agents-coordination) []
-    (require 'drgnx-coord-mcp)
-    ;; its identity is its id: a name (\"profile · dir\") repeats across hubs and editors
-    (vector (drgnx-coord-mcp-server-spec (drgnx-agent-session-id s) :job (drgnx-agent-session-job s)
-                                         :task (drgnx-agent-session-task s)))))
+  "The `mcpServers' S's agent gets: the coordination tools, as S's name, and the search tool for S's project when
+agents.eld asks for it (`drgnx-agents-mcp-names')."
+  (let ((names (drgnx-agents-mcp-names)))
+    (vconcat
+     (and drgnx-agents-coordination (memq 'coordination names)
+          (progn (require 'drgnx-coord-mcp)
+                 ;; its identity is its id: a name (\"profile · dir\") repeats across hubs and editors
+                 (list (drgnx-coord-mcp-server-spec (drgnx-agent-session-id s) :job (drgnx-agent-session-job s)
+                                                    :task (drgnx-agent-session-task s)))))
+     (and (memq 'search names)
+          (with-demoted-errors "drgnx agents: the search tool: %S"
+            (require 'drgnx-search-mcp)
+            (list (drgnx-search-mcp-server-spec (drgnx-agent-session-cwd s))))))))
 
 (defun drgnx-agents-get (id) (seq-find (lambda (s) (equal (drgnx-agent-session-id s) id)) drgnx-agents--sessions))
 
@@ -345,22 +409,25 @@ the commits each turn makes are recorded for it.  JOB: the coordination job it b
                                      (drgnx-agents--next s))))))))
     s))
 
-(defun drgnx-agents-take-over (profile cwd session-id &optional task)
+(defun drgnx-agents-take-over (profile cwd session-id &optional task id name)
   "Resume the agent session SESSION-ID (from another client, or one that ended) with PROFILE in CWD:
-its history is replayed into the transcript.  Needs an agent that can load sessions.  TASK as in
-`drgnx-agents-start'."
+its history is replayed into the transcript.  Needs an agent that can load sessions: when it cannot, the session
+ends and says why.  TASK as in `drgnx-agents-start'; ID and NAME, the session's own when it keeps them (a hub
+resuming its sessions: messages and spend follow them)."
   (let ((s (drgnx-agents--new profile cwd task)))
+    (when id (setf (drgnx-agent-session-id s) id))
+    (when (stringp name) (setf (drgnx-agent-session-name s) name))
     (setf (drgnx-agent-session-acp-id s) session-id)
     (drgnx-agents--start-safely
      s (lambda ()
          (drgnx-agents--connect
           s (lambda ()
               (if (memq (plist-get (drgnx-agent-session-capabilities s) :loadSession) '(nil :false))
-                  (drgnx-agents--failed s "this agent cannot resume sessions (no session/load)")
+                  (progn (drgnx-agents--failed s "this agent cannot resume sessions (no session/load)") (drgnx-agents-kill s))
                 (drgnx-acp-request (drgnx-agent-session-conn s) "session/load"
                                    (list :sessionId session-id :cwd (drgnx-agent-session-cwd s) :mcpServers (drgnx-agents--mcp-servers s))
                                    (lambda (r)
-                                     (if (cdr r) (drgnx-agents--failed s (cdr r))
+                                     (if (cdr r) (progn (drgnx-agents--failed s (cdr r)) (drgnx-agents-kill s))
                                        (setf (drgnx-agent-session-status s) 'idle)
                                        (drgnx-agents--changed s)
                                        (drgnx-agents--next s)))))))))

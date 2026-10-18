@@ -37,11 +37,70 @@
             (prin1 '(:id "20261017-000000-1" :name "index" :launcher detached) (current-buffer)))
           (write-region "0" nil (expand-file-name "drgnx/jobs/20261017-000000-1/exit" root) nil 'silent)
           (let ((rows (mapcar #'cadr (drgnx-agents-ui--entries))))
-            (should (equal (aref (car rows) 3) "gateway"))                 ; how its traffic goes
-            (should (equal (aref (car rows) 4) "2 queued (paused)"))
+            (should (equal (aref (car rows) 4) "gateway"))                 ; how its traffic goes
+            (should (equal (aref (car rows) 5) "2 queued (paused)"))
             (should (equal (aref (cadr rows) 0) "job: index"))
             (should (equal (aref (cadr rows) 1) "exited"))))
       (delete-directory root t))))
+
+(ert-deftest drgnx-agents-ui/last-active-column ()
+  ;; Like Zed's agent list: how long ago each agent acted, from what the UI saw change.
+  (let* ((now (drgnx-agents--make :id "n" :name "now" :status 'busy))
+         (mins (drgnx-agents--make :id "m" :name "mins" :status 'idle))
+         (hours (drgnx-agents--make :id "h" :name "hours" :status 'idle))
+         (days (drgnx-agents--make :id "d" :name "days" :status 'idle))
+         (never (drgnx-agents--make :id "x" :name "never" :status 'starting))
+         (drgnx-agents--sessions (list now mins hours days never))
+         (drgnx-agents-ui--last (make-hash-table :test #'eq :weakness 'key))
+         (drgnx-agents-ui--jobs-cache (cons 1.0e+INF nil))     ; no job directory is read
+         (drgnx-agents-ui--timer (timer-create)))                ; a redraw "pending": none is scheduled
+    (drgnx-agents-ui--changed now)                               ; what the UI hears records the time
+    (should (numberp (drgnx-agents-ui-last-active now)))
+    (puthash mins (- (float-time) 330) drgnx-agents-ui--last)
+    (puthash hours (- (float-time) 7300) drgnx-agents-ui--last)
+    (puthash days (- (float-time) (* 3 86400) 50) drgnx-agents-ui--last)
+    (let ((last (mapcar (lambda (e) (aref (cadr e) 2)) (drgnx-agents-ui--entries))))
+      (should (string-match-p "\\`[0-9]s\\'" (nth 0 last)))
+      (should (equal (cdr last) '("5m" "2h" "3d" ""))))
+    (should (equal (mapcar #'drgnx-agents-ui--ago '(0 59 60 3599 3600 86399 86400)) '("0s" "59s" "1m" "59m" "1h" "23h" "1d")))
+    (with-current-buffer (drgnx-agents-ui-list-buffer)
+      (unwind-protect (should (equal (car (aref tabulated-list-format 2)) "Last"))
+        (kill-buffer)))))
+
+(ert-deftest drgnx-agents-ui/last-ticks-only-while-the-list-shows ()
+  ;; A 30 s redraw keeps the ages current while the list is visible; nothing runs while it is not.
+  (let* ((drgnx-agents--sessions (mapcar (lambda (n) (drgnx-agents--make :id n :name n :status 'idle)) '("a" "b" "c")))
+         (drgnx-agents-ui--last (make-hash-table :test #'eq :weakness 'key))
+         (drgnx-agents-ui--jobs-cache (cons 1.0e+INF nil))
+         (drgnx-agents-ui--tick-timer nil)
+         (w (selected-window)) (was (window-buffer w)))
+    (unwind-protect
+        (let ((list (drgnx-agents-ui-list-buffer)))
+          (drgnx-agents-ui--tick-update)
+          (should-not drgnx-agents-ui--tick-timer)                 ; not shown: no timer
+          (set-window-buffer w list)
+          (drgnx-agents-ui--tick-update)
+          (let ((timer drgnx-agents-ui--tick-timer))
+            (should (timerp timer))
+            (should (memq timer timer-list))
+            (should (= 30 (timer--repeat-delay timer)))
+            (drgnx-agents-ui--tick-update)
+            (should (eq timer drgnx-agents-ui--tick-timer))         ; one timer, however often asked
+            ;; a tick redraws the ages and keeps the window's point on its row
+            (puthash (nth 1 drgnx-agents--sessions) (- (float-time) 400) drgnx-agents-ui--last)
+            (set-window-point w (with-current-buffer list (goto-char (point-min)) (forward-line 1) (point)))
+            (drgnx-agents-ui--tick)
+            (with-current-buffer list
+              (should (string-search "6m" (buffer-string)))
+              (should (= 2 (line-number-at-pos (window-point w)))))
+            ;; hidden: the next tick stops the timer
+            (set-window-buffer w was)
+            (drgnx-agents-ui--tick)
+            (should-not drgnx-agents-ui--tick-timer)
+            (should-not (memq timer timer-list))))
+      (when (timerp drgnx-agents-ui--tick-timer) (cancel-timer drgnx-agents-ui--tick-timer))
+      (set-window-buffer w was)
+      (when (get-buffer "*drgnx Agents*") (kill-buffer "*drgnx Agents*")))))
 
 (ert-deftest drgnx-agents-ui/an-agent-edit-is-reviewed-hunk-by-hunk ()
   ;; The agent proposes two changes (first line, a new last line); the user takes the first only.

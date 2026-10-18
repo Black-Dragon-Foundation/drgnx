@@ -18,6 +18,12 @@ Using drgnx.
 - [Editing](guide/editing.md): language support (tree-sitter grammars), and the editor's amenities.
 - [Git and review](guide/git.md): the diff view, inline blame, AI commit messages, Review Branch, Pull Requests.
 - [Work tracker](guide/work.md): specs › plans › tasks › TODOs › commits, branches and worktrees; `drgnx work`.
+- [Search and replace](guide/replace.md): the Search view in the sidebar and the find bar — symbols and text in one interface, tick boxes, one Undo.
+- [Layouts](guide/layouts.md): Agent, Editor, Zen and Browser, and your own; one key cycles them, and switching back restores what you left.
+- [Browser pane](guide/browser.md): a web page beside the editor (WebKit), Test Report for Playwright, and an agent's page with its screenshot.
+- [Live view](guide/live.md): watch the browser your agents drive, live, and take it over.
+- [Keyboard Shortcuts editor](guide/shortcuts.md): every command with its keys; record new ones, see conflicts, filter, undo.
+- [Editor features vs VS Code, Zed and Cursor](guide/editor-matrix.md): what drgnx has, where it is described, its GUI test and perf workload.
 
 ## Reference
 
@@ -29,7 +35,8 @@ How drgnx is built, tested and measured.
 
 - [Architecture overview](develop/architecture.md)
 - [Core](develop/core.md): paths, staged hooks, no-prompt guard, command registry, surfaces, palette, modules.
-- [Harness](develop/harness.md): headless GUI test sessions, test tiers, CLI and MCP tools for agents.
+- [Harness](develop/harness.md): headless GUI test sessions, test tiers (each unit test file in an Emacs of its
+  own), CLI and MCP tools for agents.
 - [Performance](develop/perf.md): the perf lab — input latency, frames, GC, startup, memory, budgets, the soak, tuning.
 - [Scenarios](develop/scenarios.md): behaviour scenarios and the evidence behind the workbench design.
 - [Formatting](develop/formatting.md): `bin/drgnx fmt` — the Emacs Lisp formatter, and where it is enforced.

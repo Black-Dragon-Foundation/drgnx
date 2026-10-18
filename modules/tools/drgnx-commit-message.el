@@ -135,6 +135,8 @@ trimmed."
          (diff (drgnx-commit-message--diff root files))
          (buf (current-buffer)))
     (when (string-blank-p diff) (user-error "Nothing staged"))
+    (require 'drgnx-ai)
+    (let ((default-directory root)) (drgnx-ai-confirm-project-route))   ; a project's remote route: asked here, once
     (require 'drgnx-ai-client)
     (when drgnx-commit-message--request (drgnx-ai-cancel drgnx-commit-message--request))
     (message "drgnx: writing a commit message…")

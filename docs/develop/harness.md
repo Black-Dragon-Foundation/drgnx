@@ -25,6 +25,70 @@ how every drgnx UI change is developed and verified.
 `$DRGNX_TEST_RESULTS` when set; the summary is the source of truth for GUI runs, whose exit status is only
 pass/fail. `$DRGNX_TEST_SELECTOR` (an ERT selector, e.g. `(tag :timing)`) picks the tests a run takes.
 
+### One Emacs per test file
+
+`bin/drgnx test` and each unit shard of `bin/drgnx check` run every test file in a batch Emacs of its own, as Emacs's
+own `make check` does: a hook, timer, advice, feature or variable a file leaves behind never reaches the next file,
+so a test cannot pass or fail because of the file that happened to run before it. Within a file, ERT still runs the
+tests in name order in one Emacs. Each file's Emacs gets the runner's `load-path` and environment — the temp HOME
+and XDG directories, the dead session bus, `$DRGNX_TEST_SELECTOR` (applied inside each file), the trampoline
+directory below — and a temp directory (and HOME) of its own, removed when it ends: inside `$DRGNX_RUN_TMP` under
+`bin/drgnx test`, beside the runner's own under `check`, never deeper than a single Emacs's would be (a Unix socket
+path has ~104 bytes). It writes its own summary; the runner merges them into one, in the same shape, plus `"files"`
+(`[{"file","exit","seconds"}]`). A file whose Emacs dies (a test calls `kill-emacs`), exits non-zero without a failed
+test, or runs longer than `$DRGNX_TEST_FILE_TIMEOUT` seconds (default 300; it gets TERM, 5 s, then KILL, with what it
+started) is a failure named `file NAME-test.el`, and the other files still run. Files run one after another;
+`$DRGNX_TEST_JOBS` runs that many at once (their output is then printed whole as each ends). Interrupting the run ends
+the files' Emacsen too.
+
+With a name selector (a string: a regexp on test names), only the files that define a matching test (`(ert-deftest
+NAME`) get an Emacs, so a narrow run stays quick; any other selector (a tag, `(not …)`) runs every file.
+
+`bin/drgnx test --one-process` (or `DRGNX_TEST_ONE_PROCESS=1`) runs every file in one Emacs instead: for hunting a
+leak from one file into another (run the files in question this way; a test that fails only here depends on what an
+earlier file left). `bin/drgnx check`'s `unit-timing` job uses it too (16 tests across all files). The runner unsets
+the variable for the tests themselves, so a test that runs the runner gets one Emacs per file unless it sets it. The
+GUI and live tiers and the tests that start an Emacs of their own keep their own runners.
+
+### Native trampolines
+
+A test that `cl-letf`s a primitive (`buffer-list`, `message`, …) makes Emacs compile a native trampoline, which it
+writes to the first writable directory of `native-comp-eln-load-path` — by default the user's
+`~/.config/emacs/eln-cache`, fixed when Emacs started, before the runner swaps HOME. The runner puts a directory of
+drgnx's first in that list and drops the user's own eln-cache from it (so a test neither writes nor reads there), and
+exports it as `$DRGNX_TEST_ELN_DIR`: every Emacs of the run (each file's, a test that runs the runner, `check`'s shards)
+uses the same one, so each trampoline is compiled once. `native-comp-enable-subr-trampolines` set to a directory would not do:
+Emacs looks for an existing trampoline only along `native-comp-eln-load-path`. The directory is
+`$XDG_CACHE_HOME/drgnx/test-eln/EMACS-VERSION/` (`~/.cache/…`, read before HOME is swapped), kept between runs: a full
+unit run compiles ~60 trampolines at ~0.2 s each, which would cost every run 12–15 s. It is drgnx's own and holds only
+trampolines (~1 MB); delete it at any time. When it cannot be made, the run's temp directory (`eln/`) is used.
+`$DRGNX_TEST_ELN_DIR` set from outside (an absolute path) chooses another.
+
+`/tmp` is RAM on many machines, so a test run leaves nothing there. `bin/drgnx test` (every tier) and `bin/drgnx check`
+run in a `$TMPDIR` of their own — a fresh `mktemp -d` (`drgnx-run.XXXXXX`, made absolute) below the caller's `$TMPDIR` or
+`/tmp`, so `temporary-file-directory` and the native compiler's libgccjit files land in it too — and remove it on every
+exit: the end, a failure, Ctrl-C, `TERM` or `HUP`. The command runs in a process group of its own that the shell's trap
+stops (TERM; the command then has `$DRGNX_RUN_GRACE` seconds, default 30, to end and stop what it started outside the
+group — check's jobs, the GUI tiers' sessions — then KILL; a second signal does not cut it short) before it deletes the
+directory. That group is a background one: a tier that read from the terminal would be stopped (none does). `bin/drgnx
+test` tells the batch runner the directory in `$DRGNX_RUN_TMP`; the runner uses it as the suite's temp home but never
+deletes it (only a real directory of that name owned by the user is used: empty, a symlink, another name or owner is ignored),
+and makes and deletes a `drgnx-unit…` directory of its own when run standalone, also from `kill-emacs-hook`. `check`
+leaves `$DRGNX_RUN_TMP` unset: each shard makes its own directory in the shared `$TMPDIR`. A harness session's `TMPDIR`
+is `tmp/` in its run dir (so, without `$XDG_RUNTIME_DIR`, the session sockets' fallback directory is inside it too).
+`$DRGNX_TEST_DIR` runs a smaller suite than `test/unit` (the tests of this cleanup use it). Tests still delete what they
+make (`unwind-protect` and `delete-directory … t`); the directory is the net under them.
+
+The batch unit tier never reaches the user's desktop. `bin/drgnx test` and the unit shards of `bin/drgnx check` start
+Emacs with `DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/drgnx-unit-test` (dbus.el connects with the process's own
+environment, which a Lisp `setenv` does not reach, so a test that loads it would otherwise talk to the real session bus)
+and without `DISPLAY`, `WAYLAND_DISPLAY`, `SWAYSOCK`, `I3SOCK`, `HYPRLAND_INSTANCE_SIGNATURE` and `NIRI_SOCKET`; the runner
+binds the same inside Emacs and gives `XDG_RUNTIME_DIR` a private directory (mode 700) in the run's temp directory. A test
+that needs a bus, a display or a runtime directory sets its own with `process-environment`. The GUI tiers run their own
+session and are not changed. `bin/drgnx test --container` passes `$DRGNX_TEST_SELECTOR` into the container. A test file that
+does not read or load (an unbalanced paren) fails the run: the runner prints the file and the error and counts it as a
+failure, so a broken file cannot look green.
+
 A GUI run's ERT suite executes inside the session (`DRGNX_UI_TEST` names the suite directory), writes its
 summary to `DRGNX_UI_RESULTS` and exits. mutter turns any nonzero Emacs exit code into `1`, so the runner
 trusts the summary, not the code. The run is killed (whole process group) after `DRGNX_UI_TEST_TIMEOUT`

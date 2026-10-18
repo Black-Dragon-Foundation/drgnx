@@ -27,14 +27,28 @@
                             (seq-take-while (lambda (x) (not (keywordp x))) (cdr e)))))
             (plist-get (alist-get profile drgnx-keys-profiles) :bind)))
 
+(defvar drgnx-compat-gryphn--own (make-hash-table :test #'eq :weakness 'key)
+  "The registry entries gryphn defined (a file loaded again redefines its own commands, never drgnx's).")
+
+(defvar drgnx-compat-gryphn--renamed nil "gryphn ids already said to be renamed (said once each).")
+
 (cl-defun gryphn-command-define (id &key title category command key map menu context context-first doc native)
   "gryphn's command definition, in drgnx's registry; KEY joins the key profiles: VS Code and Emacs bind it, the
 Vim profile leaves it to the palette.  A profile that has an entry for ID, or binds KEY already, keeps its own
 (shipped keys are never replaced); the Emacs profile also keeps Emacs' own key (gryphn's C-p, C-b).
-NATIVE commands (Emacs keys gryphn only documents) are skipped."
+An ID drgnx has registered stays drgnx's: gryphn's command is gryphn/ID (said once in *Messages*).  Returns the
+id used.  NATIVE commands (Emacs keys gryphn only documents) are skipped."
   (unless native
+    (let ((existing (drgnx-commands-get id)))
+      (when (and existing (not (gethash existing drgnx-compat-gryphn--own)))
+        (let ((new (intern (format "gryphn/%s" id))))
+          (unless (memq id drgnx-compat-gryphn--renamed)
+            (push id drgnx-compat-gryphn--renamed)
+            (message "drgnx: gryphn's command %s is %s here (drgnx has its own %s)" id new id))
+          (setq id new))))
     (drgnx-command-define id :title title :category category :command command :map map :menu menu
                           :context context :context-first context-first :doc doc)
+    (puthash (drgnx-commands-get id) t drgnx-compat-gryphn--own)
     (when key
       (drgnx-keys--ensure-profiles)
       (dolist (profile '(vscode emacs))

@@ -47,8 +47,18 @@
   "Buffers that are a tab only while shown (like VS Code's welcome tab)."
   :type 'regexp :group 'drgnx)
 
+(defun drgnx-chrome--note-history (w b tabs)
+  "Put B first in W's `drgnx-tab-history' (most recently shown first); keep only TABS, live."
+  (let ((new (seq-filter (lambda (x) (and (buffer-live-p x) (memq x tabs)))
+                         (if (drgnx-chrome--tab-buffer-p b)
+                             (cons b (remq b (window-parameter w 'drgnx-tab-history)))
+                           (window-parameter w 'drgnx-tab-history)))))
+    (unless (equal new (window-parameter w 'drgnx-tab-history))
+      (set-window-parameter w 'drgnx-tab-history new))))
+
 (defun drgnx-chrome--note (w)
   "Add W's buffer to its tabs (at the end; never reordered); drop transient tabs not shown.
+Also records it as W's most recently shown tab (`drgnx-tab-history', per window).
 Called on the bus's edges and by commands — never while drawing, so a buffer shown for a moment
 (a preview) does not become a tab."
   (let* ((b (window-buffer w)) (before (drgnx-chrome-tabs w))
@@ -57,7 +67,8 @@ Called on the bus's edges and by commands — never while drawing, so a buffer s
                   (if (and (drgnx-chrome--tab-buffer-p b) (not (memq b tabs))) (append tabs (list b)) tabs))))
     (unless (equal before after)
       (set-window-parameter w 'drgnx-tabs after)
-      (drgnx-signal-post 'tabs-changed))))
+      (drgnx-signal-post 'tabs-changed))
+    (drgnx-chrome--note-history w b after)))
 
 (defun drgnx-chrome--text (s)
   "S shown as is in a tab or header line (% would be a format directive)."
@@ -75,6 +86,7 @@ Called on the bus's edges and by commands — never while drawing, so a buffer s
   (interactive "e")
   (when-let* ((posn (event-start event)) (s (posn-string posn))
               (b (get-text-property (cdr s) 'drgnx-buffer (car s))) (w (posn-window posn)))
+    (drgnx-chrome--record-closed-position w b)
     (drgnx-chrome--close w b)))
 
 (defvar drgnx-chrome--tab-map
@@ -98,18 +110,49 @@ Called on the bus's edges and by commands — never while drawing, so a buffer s
                                        'mouse-face 'highlight 'help-echo "Close this tab"))))
                (drgnx-chrome-tabs w) "")))
 
+(defcustom drgnx-chrome-closed-positions-max 30
+  "How many closed tabs' positions are remembered (`drgnx-chrome-closed-positions')."
+  :type 'integer :group 'drgnx)
+
+(defvar drgnx-chrome-closed-positions nil
+  "Where closed tabs were, most recent first: (FILE GROUP INDEX POINT), one entry per file.
+GROUP is the editor window's index in its frame, INDEX the tab's place in its tab line, POINT where the
+cursor was.  Recorded when a tab is really closed (not when it moves to another group).  Capped at
+`drgnx-chrome-closed-positions-max'.  Reopen Closed Tab uses it to put a tab back.")
+
+(defun drgnx-chrome--group-index (w)
+  "W's index among its frame's editor windows (its editor group)."
+  (let ((frame (window-frame w)))
+    (or (seq-position (seq-filter (lambda (x) (eq (drgnx-chrome--role x) 'editor))
+                                  (window-list-1 (frame-first-window frame) 'nomini frame))
+                      w)
+        0)))
+
+(defun drgnx-chrome--record-closed-position (w b)
+  "Remember where B, a file's tab in W, is (its group, tab index and point); call before really closing it."
+  (when-let* ((file (buffer-file-name b)) (i (seq-position (drgnx-chrome-tabs w) b)))
+    (setq drgnx-chrome-closed-positions
+          (seq-take (cons (list file (drgnx-chrome--group-index w) i
+                                (if (eq (window-buffer w) b) (window-point w) (with-current-buffer b (point))))
+                          (seq-remove (lambda (e) (equal (car e) file)) drgnx-chrome-closed-positions))
+                    drgnx-chrome-closed-positions-max))))
+
 (defun drgnx-chrome--close (w b)
-  "Take B out of W's tabs; if W shows it, show the tab to its right, else its left, else *scratch*."
-  (let* ((tabs (drgnx-chrome-tabs w)) (rest (cdr (memq b tabs))) (before (seq-take-while (lambda (x) (not (eq x b))) tabs)))
+  "Take B out of W's tabs; if W shows it, show the tab used before it, else the tab to its right,
+else its left, else *scratch*.  Moving a tab to another group uses this too, so it records nothing:
+callers that really close a tab call `drgnx-chrome--record-closed-position' first."
+  (let* ((tabs (drgnx-chrome-tabs w)) (rest (cdr (memq b tabs))) (before (seq-take-while (lambda (x) (not (eq x b))) tabs))
+         (used (seq-find (lambda (x) (and (not (eq x b)) (memq x tabs))) (window-parameter w 'drgnx-tab-history))))
     (set-window-parameter w 'drgnx-tabs (remq b tabs))
+    (set-window-parameter w 'drgnx-tab-history (remq b (window-parameter w 'drgnx-tab-history)))
     (drgnx-signal-post 'tabs-changed)
     (when (eq (window-buffer w) b)
-      (set-window-buffer w (or (car rest) (car (last before)) (get-scratch-buffer-create))))
+      (set-window-buffer w (or used (car rest) (car (last before)) (get-scratch-buffer-create))))
     (drgnx-chrome-apply (window-frame w) t)))
 
 (defun drgnx-chrome--killed ()
   "From `kill-buffer-hook': the buffer leaves every editor window's tabs at once, and a window that
-shows it shows its neighbour tab (not whatever Emacs picks: after a restore it has no history).
+shows it shows the tab used before it, else its neighbour (not whatever Emacs picks: after a restore it has no history).
 An error here must never stop the kill."
   (let ((b (current-buffer)))
     (when (drgnx-chrome--tab-buffer-p b)          ; temp buffers: no work
@@ -117,11 +160,13 @@ An error here must never stop the kill."
         (dolist (w (seq-filter (lambda (w) (and (eq (drgnx-chrome--role w) 'editor)
                                                 (or (eq (window-buffer w) b) (memq b (window-parameter w 'drgnx-tabs)))))
                                (window-list-1 nil 'nomini t)))
+          (drgnx-chrome--record-closed-position w b)
           (drgnx-chrome--close w b))))))
 
 (defun drgnx-chrome-close-tab ()
   "Close the shown tab (the buffer stays open; Close in the Buffers panel closes it)."
   (interactive)
+  (drgnx-chrome--record-closed-position (selected-window) (window-buffer))
   (drgnx-chrome--close (selected-window) (window-buffer)))
 
 (defun drgnx-chrome--step (n)

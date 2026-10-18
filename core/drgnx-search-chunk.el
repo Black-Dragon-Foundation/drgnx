@@ -193,7 +193,10 @@ the deadline of `drgnx-search--git-deadline'.  Past it git is killed and `drgnx-
               ;; while we fill its input pipe would wait for us forever.
               (let ((sent 0) (size (length input)))   ; by offsets: no copy of the remainder per piece
                 (while (and (< sent size) (process-live-p proc) (<= (float-time) drgnx-search--git-deadline))
-                  (process-send-string proc (substring input sent (min size (+ sent 4096))))
+                  ;; a git that has ended meanwhile (it needed no more input) is not an error: its status says
+                  (condition-case err
+                      (process-send-string proc (substring input sent (min size (+ sent 4096))))
+                    (error (when (process-live-p proc) (signal (car err) (cdr err)))))
                   (setq sent (min size (+ sent 4096)))
                   (accept-process-output proc 0))
                 (if (< sent size)

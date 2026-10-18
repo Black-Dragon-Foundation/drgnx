@@ -62,7 +62,8 @@ state.
 **Show Work** (module `tools/work`; VS Code `C-k t`, Vim `SPC a w`, Emacs: the palette) opens the right dock's
 **Work** tab: each spec with the plans that came from it (plans that name no spec are roots of their own), and under
 a plan its tasks, their steps, rulings and commits, and the board's TODOs (with the commits recorded for them).
-A plan whose spec was deleted becomes a root.
+A plan whose spec was deleted becomes a root. The bottom panel has a **Work** tab as well, with the same tree, for
+when the right dock holds something else (the Agent layout, [layouts.md](layouts.md)).
 
 ```
 ▾ ◆ The Spec

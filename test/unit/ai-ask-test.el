@@ -4,6 +4,8 @@
 (load (expand-file-name "modules/tools/drgnx-ai-ui" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
 
+(defvar drgnx-ai-ask-test--delay nil "Seconds the mock waits before it answers a chat.")
+
 (defmacro drgnx-ai-ask-test--with (answer &rest body)
   "BODY with ROOT a project (src/a.el mentions frobnicate on line 3), the `chat' and `complete' roles on
 provider `o' served by a mock answering ANSWER, its LOG."
@@ -19,7 +21,8 @@ provider `o' served by a mock answering ANSWER, its LOG."
            (write-region "(require 'x)\n\n(defun frobnicate (widget)\n  (twist widget))\n" nil (concat root "proj/src/a.el") nil 'silent)
            (write-region "(defun unrelated () nil)\n" nil (concat root "proj/src/b.el") nil 'silent)
            (with-temp-file script
-             (prin1 (list (list :path "/api/chat" :body (json-serialize (list :message (list :content ,answer))))
+             (prin1 (list (append (list :path "/api/chat" :body (json-serialize (list :message (list :content ,answer))))
+                                  (and drgnx-ai-ask-test--delay (list :delay drgnx-ai-ask-test--delay)))
                           (list :path "/api/generate" :body "{\"response\":\"ok\"}"))
                     (current-buffer)))
            (with-temp-file (concat root "config/ai.eld")
@@ -57,6 +60,124 @@ provider `o' served by a mock answering ANSWER, its LOG."
     (let ((sent (with-temp-buffer (insert-file-contents log) (buffer-string))))
       (should (string-search "(twist widget)" sent))
       (should-not (string-search "unrelated" sent)))))
+
+(defun drgnx-ai-ask-test--curls ()
+  (seq-filter (lambda (p) (and (equal (process-name p) "drgnx-ai") (process-live-p p))) (process-list)))
+
+(ert-deftest drgnx-ai-ask/stop-cancels-request ()
+  (let ((drgnx-ai-ask-test--delay 1.5))
+    (drgnx-ai-ask-test--with "frobnicate twists the widget (src/a.el:3)."
+      (let ((default-directory (concat root "proj/")) (said nil))
+        (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+          (drgnx-ai-ask "where do we frobnicate widgets?" default-directory)
+          ;; the search runs first, then the model is asked
+          (let ((deadline (+ (float-time) 5)))
+            (while (and (not (drgnx-ai-ask-test--curls)) (< (float-time) deadline)) (accept-process-output nil 0.02)))
+          (should (= 1 (length (drgnx-ai-ask-test--curls))))
+          (should (= 1 (length drgnx-ai--active)))
+          (drgnx-ai-stop)
+          (should-not drgnx-ai--active)
+          (should-not (drgnx-ai-ask-test--curls))                         ; the process is gone
+          (accept-process-output nil 2.0)                                 ; past the mock's answer
+          (should-not (get-buffer "*AI answer*"))                         ; the callback never ran
+          (should (seq-find (lambda (m) (string-match-p "stopped" m)) said)))))))
+
+(ert-deftest drgnx-ai-ask/stop-during-the-search-asks-nothing ()
+  (drgnx-ai-ask-test--with "never"
+    (let ((default-directory (concat root "proj/")) (said nil))
+      (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+        (drgnx-ai-ask "where do we frobnicate widgets?" default-directory)
+        (drgnx-ai-stop)                                                   ; the grep has not answered yet
+        (accept-process-output nil 1.0)
+        (should-not (drgnx-ai-ask-test--curls))
+        (should-not (get-buffer "*AI answer*"))
+        (should-not drgnx-ai--active)))))
+
+(ert-deftest drgnx-ai-ask/a-grep-without-gnu-long-options-still-finds-code ()
+  ;; macOS' BSD grep: no ripgrep, and a grep whose --exclude/--exclude-dir do not work like GNU's (here: refused)
+  (drgnx-ai-ask-test--with "ok"
+    (let* ((real (executable-find "grep")) (bin (concat root "bin/")))
+      (make-directory bin t)
+      (write-region (format "#!/bin/sh\nfor a in \"$@\"; do case \"$a\" in --*) echo \"grep: unrecognized option $a\" >&2; exit 2;; esac; done\nexec %s \"$@\"\n" real)
+                    nil (concat bin "grep") nil 'silent)
+      (set-file-modes (concat bin "grep") #o755)
+      (make-directory (concat root "proj/.git") t)
+      (write-region "FROBNICATE_TOKEN=hidden-env-value\n" nil (concat root "proj/.env") nil 'silent)
+      (let ((orig (symbol-function 'executable-find))
+            (exec-path (cons bin exec-path))
+            (process-environment (cons (concat "PATH=" bin ":" (getenv "PATH")) process-environment)))
+        (cl-letf (((symbol-function 'executable-find) (lambda (name &rest r) (and (not (equal name "rg")) (apply orig name r)))))
+          (drgnx-ai-ask "where do we frobnicate?" (concat root "proj/"))))
+      (should (drgnx-ai-ask-test--answer))
+      (let ((sent (with-temp-buffer (insert-file-contents log) (buffer-string))))
+        (should (string-search "(twist widget)" sent))
+        (should-not (string-search "hidden-env-value" sent))))))
+
+(defun drgnx-ai-ask-test--ask-without-rg (root grep-script)
+  "Ask about ROOT's project with ripgrep hidden and GREP-SCRIPT (shell text) as the `grep' first on PATH."
+  (let ((bin (concat root "bin/")))
+    (make-directory bin t)
+    (write-region (concat "#!/bin/sh\n" grep-script "\n") nil (concat bin "grep") nil 'silent)
+    (set-file-modes (concat bin "grep") #o755)
+    (let ((orig (symbol-function 'executable-find))
+          (exec-path (cons bin exec-path))
+          (process-environment (cons (concat "PATH=" bin ":" (getenv "PATH")) process-environment)))
+      (cl-letf (((symbol-function 'executable-find) (lambda (name &rest r) (and (not (equal name "rg")) (apply orig name r)))))
+        (drgnx-ai-ask "where do we frobnicate?" (concat root "proj/"))))))
+
+(defun drgnx-ai-ask-test--sent (log)
+  (with-temp-buffer (insert-file-contents log) (buffer-string)))
+
+(ert-deftest drgnx-ai-ask/vendored-and-build-trees-are-not-searched ()
+  ;; without ripgrep there is no .gitignore: the usual dependency and build trees are skipped by name
+  (drgnx-ai-ask-test--with "ok"
+    (dolist (d '("node_modules/pkg" "vendor/x" "target/debug" "dist" "build" "__pycache__"))
+      (make-directory (concat root "proj/" d) t)
+      (write-region (format "frobnicate in-%s\n" (replace-regexp-in-string "/" "-" d)) nil
+                    (concat root "proj/" d "/f.txt") nil 'silent))
+    (drgnx-ai-ask-test--ask-without-rg root (format "exec %s \"$@\"" (executable-find "grep")))
+    (should (drgnx-ai-ask-test--answer))
+    (let ((sent (drgnx-ai-ask-test--sent log)))
+      (should (string-search "(twist widget)" sent))
+      (should-not (string-search "in-node_modules" sent))
+      (should-not (string-search "in-vendor" sent))
+      (should-not (string-search "in-target" sent))
+      (should-not (string-search "in-dist" sent))
+      (should-not (string-search "in-build" sent))
+      (should-not (string-search "in-__pycache__" sent)))))
+
+(ert-deftest drgnx-ai-ask/a-search-that-never-ends-is-cut-off-and-ask-answers-without-context ()
+  (drgnx-ai-ask-test--with "ok"
+    (let ((drgnx-ai-search-timeout 0.5) (t0 (float-time)))
+      (drgnx-ai-ask-test--ask-without-rg root "exec sleep 8")
+      (should (drgnx-ai-ask-test--answer 4))
+      (should (< (- (float-time) t0) 4))
+      (should-not (drgnx-ai-ask-test--sent-p log "(twist widget)"))
+      (should-not (seq-find (lambda (p) (equal (process-name p) "drgnx-ai-grep")) (process-list)))
+      (should-not drgnx-ai--active))))
+
+(defun drgnx-ai-ask-test--sent-p (log needle)
+  (string-search needle (drgnx-ai-ask-test--sent log)))
+
+(ert-deftest drgnx-ai-ask/a-huge-line-is-cut-before-it-reaches-the-model ()
+  (drgnx-ai-ask-test--with "ok"
+    (write-region (concat "frobnicate " (make-string 200000 ?q) "\n") nil (concat root "proj/src/big.el") nil 'silent)
+    ;; a grep that reports a 2 MB line, as for a minified file
+    (drgnx-ai-ask-test--ask-without-rg
+     root "printf './src/big.el:1:frobnicate '; head -c 2000000 /dev/zero | tr '\\0' q; printf '\\n'")
+    (should (drgnx-ai-ask-test--answer))
+    (let ((sent (drgnx-ai-ask-test--sent log)))
+      (should (string-search "big.el" sent))                              ; its snippet came
+      (should-not (string-match-p "q\\{600\\}" sent)))))
+
+(ert-deftest drgnx-ai-ask/stop-kills-the-search ()
+  (drgnx-ai-ask-test--with "ok"
+    (drgnx-ai-ask-test--ask-without-rg root "exec sleep 8")
+    (should (seq-find (lambda (p) (and (equal (process-name p) "drgnx-ai-grep") (process-live-p p))) (process-list)))
+    (drgnx-ai-stop)
+    (should-not (seq-find (lambda (p) (and (equal (process-name p) "drgnx-ai-grep") (process-live-p p))) (process-list)))
+    (accept-process-output nil 0.3)
+    (should-not (get-buffer "*AI answer*"))))
 
 (ert-deftest drgnx-ai-ask/hidden-files-never-reach-the-model ()
   ;; .env, .git and other dot files: never searched, with ripgrep or with grep
@@ -158,7 +279,39 @@ provider `o' served by a mock answering ANSWER, its LOG."
     (unwind-protect
         (progn
           (funcall (plist-get (alist-get 'tools/ai drgnx-modules--table) :setup))
-          (dolist (id '(ai-ask ai-choose)) (should (drgnx-commands-get id))))
+          (dolist (id '(ai-ask ai-choose ai-stop)) (should (drgnx-commands-get id))))
       (remove-hook 'prog-mode-hook #'drgnx-ai-ghost--maybe-enable))))
 
 ;;; ai-ask-test.el ends here
+
+(ert-deftest drgnx-ai-ask/the-command-confirms-the-roots-project-route-and-fixes-its-chain ()
+  ;; asked from the command (not the retriever's callback), for ROOT's project, whatever buffer is current
+  (drgnx-ai-ask-test--with "never"
+    (let ((asked nil) (chain nil) (drgnx-ai--active nil) (default-directory (expand-file-name "~")))
+      (cl-letf (((symbol-function 'drgnx-ai-confirm-project-route) (lambda () (push default-directory asked) t))
+                ((symbol-function 'drgnx-ai-ask-request) (lambda (_q _r _cb &rest args) (setq chain (plist-get args :chain)) #'ignore))
+                ((symbol-function 'message) #'ignore))
+        (drgnx-ai-ask "q?" (concat root "proj/"))
+        (should (equal asked (list (concat root "proj/"))))
+        (should (equal chain (let ((default-directory (concat root "proj/"))) (drgnx-ai-role 'chat))))))))
+
+(ert-deftest drgnx-ai-choose/never-copies-a-projects-remote-route-into-the-global-ai-eld ()
+  ;; the user allowed this project's OpenRouter step; choosing a provider there must not make it global
+  (drgnx-ai-ask-test--with "OK"
+    (let ((process-environment (cons (concat "XDG_STATE_HOME=" root "state") process-environment))
+          (default-directory (concat root "proj/")) (noninteractive nil))
+      (make-directory (concat root "proj/.drgnx") t)
+      (with-temp-file (concat root "proj/.drgnx/ai.eld")
+        (prin1 '(:version 1 :roles ((chat (openrouter . "paid/m") (o . "m")))) (current-buffer)))
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
+        (should (drgnx-ai-confirm-project-route)))
+      (should (assq 'openrouter (drgnx-ai-role 'chat)))                       ; in force in the project
+      (let ((answers '("chat" "o" "big")) (said nil))
+        (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) (pop answers)))
+                  ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+          (drgnx-ai-choose)
+          (let ((deadline (+ (float-time) 5)))
+            (while (and (not (seq-find (lambda (m) (string-match-p "answered" m)) said)) (< (float-time) deadline))
+              (accept-process-output nil 0.05)))))
+      (let ((roles (plist-get (with-temp-buffer (insert-file-contents (concat root "config/ai.eld")) (read (current-buffer))) :roles)))
+        (should (equal (alist-get 'chat roles) '((o . "big"))))))))

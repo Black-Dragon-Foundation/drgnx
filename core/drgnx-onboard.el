@@ -225,7 +225,8 @@ the Finish step offers the restart.")
   "`drgnx sync' as a drgnx job (\"Installing the packages\"), in this Emacs: `ok' or (fail REASON LOG)."
   (drgnx-onboard--job "Installing the packages"
                       (list "env" (concat "DRGNX_EMACS=" (expand-file-name invocation-name invocation-directory))
-                            (expand-file-name "bin/drgnx" drgnx-dir) "sync")))
+                            (expand-file-name "bin/drgnx" drgnx-dir) "sync")
+                      :none))
 
 (defun drgnx-onboard--installed-p (name)
   "Is package NAME in drgnx's packages directory (what drgnx sync installs)?  Not the load path: a package
@@ -255,7 +256,11 @@ current choice as the default) — with no option and no question, the current c
          ;; on a Mac with VS Code's keys drgnx sets the modifiers: the left Option is Meta unless it types characters
          (option (and ask (eq (drgnx-platform) 'macos)
                       (assq 'vscode (or layers (plist-get (drgnx-keys-read-user) :layers) drgnx-keys-layers))
-                      (if (y-or-n-p "Do you type @ # { [ with Option? (German, French, … keyboards) ") 'characters 'meta))))
+                      (if (equal (drgnx-onboard--choose "Left Option key (types characters: @ # { [ on German, French, … keyboards)"
+                                                        '("types characters" "Meta")
+                                                        (if (eq (plist-get (drgnx-keys-read-user) :mac-option) 'characters) "types characters" "Meta"))
+                                 "types characters")
+                          'characters 'meta))))
     (when (and preset (not (eq preset cur-preset))) (drgnx-onboard-apply-preset preset))
     (when (and layers (not (equal keys cur-keys)))
       (if (and (not noninteractive) (fboundp 'drgnx-keys-apply)) (drgnx-keys-use layers t) (drgnx-keys--save-layers layers)))
@@ -396,6 +401,7 @@ locked version.  BYTES: the downloads' size from the lock, nil when it does not 
 (declare-function drgnx-ai-vram "drgnx-ai-probe")
 (declare-function drgnx-ai-model-vram "drgnx-ai-probe")
 (declare-function drgnx-ai-role "drgnx-ai")
+(declare-function drgnx-ai-user-role "drgnx-ai")
 (declare-function drgnx-ai-set-role "drgnx-ai")
 (declare-function drgnx-ai-key "drgnx-ai")
 (declare-function drgnx-ai-provider "drgnx-ai")
@@ -419,41 +425,68 @@ may come from sources that ask."
                                       (car models))))))
               drgnx-ai-detected)))
 
-(defun drgnx-onboard--ai-test (role step ctx)
+(defvar drgnx-onboard-ai-test-budget 8
+  "Seconds the AI step's probe and its three test calls share, when it looks at what runs here.")
+
+(defun drgnx-onboard--ai-test (role step ctx &optional timeout)
   "One call to STEP (PROVIDER . MODEL) of the kind ROLE makes — fill in the middle, chat or an embedding: t when it
-answered."
-  (let ((interactive (plist-get ctx :interactive)))
+answered within TIMEOUT seconds (default 15)."
+  (let ((interactive (plist-get ctx :interactive)) (timeout (or timeout 15)))
     (if (eq role 'embed)
         (condition-case nil
-            (and (drgnx-ai-embed-sync (vector "hello") :timeout 15 :chain (list step) :interactive interactive) t)
+            (and (drgnx-ai-embed-sync (vector "hello") :timeout timeout :chain (list step) :interactive interactive) t)
           (drgnx-ai-embed-error nil))
-      (let ((fim (eq role 'complete)) (result nil))
-        (drgnx-ai-request role (if fim 'fim 'chat)
-                          (if fim (list :prefix "(defun hello ()\n  " :suffix ")\n" :max-tokens 8)
-                            (list :messages (vector (list :role "user" :content "Say OK."))))
-                          (lambda (text _info) (setq result (if text 'yes 'no)))
-                          :chain (list step) :timeout 15 :interactive interactive)
-        (drgnx-onboard--wait (lambda () result) 16)
-        (eq result 'yes)))))
+      (let ((cell (drgnx-onboard--ai-test-start role step ctx timeout)))
+        (drgnx-onboard--wait (lambda () (car cell)) (1+ timeout))
+        (eq (car cell) 'yes)))))
+
+(defun drgnx-onboard--ai-test-start (role step ctx timeout)
+  "Start one call to STEP of the kind ROLE (complete, edit or chat) makes, without waiting: a cell whose car becomes
+`yes' (it answered), `no' (the provider refused or failed at once) or `slow' (TIMEOUT seconds went by)."
+  (let ((fim (eq role 'complete)) (cell (list nil)) (t0 (float-time)))
+    (drgnx-ai-request role (if fim 'fim 'chat)
+                      (if fim (list :prefix "(defun hello ()\n  " :suffix ")\n" :max-tokens 8)
+                        (list :messages (vector (list :role "user" :content "Say OK."))))
+                      (lambda (text _info)
+                        (setcar cell (cond (text 'yes) ((>= (- (float-time) t0) (- timeout 0.5)) 'slow) (t 'no))))
+                      :chain (list step) :timeout timeout :interactive (plist-get ctx :interactive))
+    cell))
 
 (defun drgnx-onboard--ai-found (ctx)
-  "Find the providers running here, give each role without a working one a provider found, test each role with
-one call: (STATUS MESSAGE ANSWERED), ANSWERED how many of the three roles answered."
+  "Find the providers running here, test each role with one call, and give a role without a working provider the
+one found once its call answered: (STATUS MESSAGE ANSWERED UNTESTED), ANSWERED how many of the three roles
+answered, UNTESTED how many could not be tried in time.  The three calls start together after the probe and are waited
+for once, within `drgnx-onboard-ai-test-budget' seconds for all; a call that has not answered by then (a model that
+is still loading) reads \"not tested\" and counts as neither asked nor failed."
   (require 'drgnx-ai-probe)
-  (let ((done nil))
-    (drgnx-ai-probe (lambda () (setq done t)))
-    (drgnx-onboard--wait (lambda () done) 3))
-  (let ((key (drgnx-ai-key 'openrouter (plist-get ctx :interactive))) (lines nil) (answered 0) (asked 0))
-    (dolist (role '(complete edit chat))
-      (let* ((cap (if (eq role 'complete) 'fim 'chat))
-             (usable (seq-find (lambda (s) (drgnx-ai-usable-p (car s) cap (plist-get ctx :interactive))) (drgnx-ai-role role)))
-             (step (or usable (drgnx-onboard--ai-pick role cap (plist-get ctx :interactive)))))
-        (if (not step) (push (format "%s: no provider" role) lines)
-          (unless usable (drgnx-ai-set-role role (cons step (drgnx-ai-role role))))
-          (cl-incf asked)
-          (let ((yes (drgnx-onboard--ai-test role step ctx)))
-            (when yes (cl-incf answered))
-            (push (format "%s: %s/%s %s" role (car step) (cdr step) (if yes "answered" "did not answer")) lines)))))
+  (let* ((deadline (+ (float-time) drgnx-onboard-ai-test-budget))
+         (_ (let ((done nil))
+              (drgnx-ai-probe (lambda () (setq done t)))
+              (drgnx-onboard--wait (lambda () done) 3)))
+         (key (drgnx-ai-key 'openrouter (plist-get ctx :interactive))) (lines nil) (answered 0) (asked 0) (untested 0)
+         (plan (mapcar (lambda (role)
+                         (let* ((cap (if (eq role 'complete) 'fim 'chat))
+                                (usable (seq-find (lambda (s) (drgnx-ai-usable-p (car s) cap (plist-get ctx :interactive))) (drgnx-ai-role role)))
+                                (step (or usable (drgnx-onboard--ai-pick role cap (plist-get ctx :interactive)))))
+                           (list role usable step)))
+                       '(complete edit chat)))
+         (left (- deadline (float-time)))
+         ;; every call gets the whole of what is left, not a third: they run side by side
+         (cells (mapcar (lambda (p) (and (nth 2 p) (>= left 1) (drgnx-onboard--ai-test-start (car p) (nth 2 p) ctx (ceiling left)))) plan)))
+    (when (seq-some #'identity cells)
+      (drgnx-onboard--wait (lambda () (seq-every-p (lambda (c) (or (null c) (car c))) cells)) (1+ (ceiling left))))
+    (cl-mapc (lambda (p cell)
+               (pcase-let ((`(,role ,usable ,step) p))
+                 (if (not step) (push (format "%s: no provider" role) lines)
+                   (pcase (car cell)
+                     ('yes (cl-incf asked) (cl-incf answered)
+                           (unless usable (drgnx-ai-set-role role (cons step (drgnx-ai-user-role role)))))
+                     ('no (cl-incf asked))
+                     (_ (cl-incf untested)))
+                   (push (format "%s: %s/%s %s" role (car step) (cdr step)
+                                 (pcase (car cell) ('yes "answered") ('no "did not answer") (_ "not tested (out of time)")))
+                         lines))))
+             plan cells)
     (unless key
       (push "OpenRouter: run this step again → Change → openrouter (keeps the key in your Keychain or keyring); for the command line: OPENROUTER_API_KEY" lines))
     (let* ((vram (drgnx-ai-vram)) (model (cdr (car (drgnx-ai-role 'complete))))
@@ -464,12 +497,12 @@ one call: (STATUS MESSAGE ANSWERED), ANSWERED how many of the three roles answer
                         "GPU: %d MiB free, the completion model needs about %d")
                       free need)
               lines))
-      (list (cond ((zerop asked) 'info) ((and free (> need free)) 'warn) ((< answered asked) 'warn) (t 'ok))
-            (if (zerop asked)
+      (list (cond ((zerop (+ asked untested)) 'info) ((or (> untested 0) (and free (> need free)) (< answered asked)) 'warn) (t 'ok))
+            (if (zerop (+ asked untested))
                 (concat "no provider is running here and no OpenRouter key is set — start Ollama, LM Studio or llama.cpp, "
                         "or set the key; then AI: Choose Provider/Model; " (string-join (nreverse lines) "; "))
               (concat (string-join (nreverse lines) "; ") " — change any: AI: Choose Provider/Model (docs/guide/ai.md)"))
-            answered))))
+            answered untested))))
 
 ;;;; Step 4: setting AI up — Ollama, LM Studio or OpenRouter
 
@@ -568,6 +601,19 @@ Claude Code's parts (`drgnx-onboard--agents-step').")
                                           (and brew (expand-file-name name (file-name-directory brew))))
                                     (mapcar (lambda (d) (expand-file-name name d)) (plist-get check :dirs))))))))
 
+(defun drgnx-onboard--npm-outside-brew-p ()
+  "Is the npm found a Node that is not Homebrew's (not beside brew)?  No npm yet: nil — Homebrew's Node comes first."
+  (when-let* ((npm (executable-find "npm")))
+    (not (equal (file-name-directory npm) (and-let* ((brew (drgnx-onboard--brew))) (file-name-directory brew))))))
+
+(defun drgnx-onboard--platform-job (tool)
+  "TOOL's :job command on this platform (nil when it has none).  The adapter on macOS goes to ~/.local when the npm
+is not Homebrew's: a system Node's global directory is not yours (EACCES)."
+  (let ((job (plist-get (plist-get (alist-get tool drgnx-onboard-install-recipes) (if (eq (drgnx-platform) 'macos) :macos :linux)) :job)))
+    (if (and job (eq tool 'claude-agent-acp) (eq (drgnx-platform) 'macos) (drgnx-onboard--npm-outside-brew-p))
+        (append (seq-take job 3) '("--prefix" "~/.local") (nthcdr 3 job))
+      job)))
+
 (defun drgnx-onboard--up-p (provider)
   "Does PROVIDER's address answer now?  One probe of it (a second at most); `drgnx-ai-detected' has what it found."
   (let ((done nil))
@@ -576,9 +622,10 @@ Claude Code's parts (`drgnx-onboard--agents-step').")
     (plist-get (alist-get provider drgnx-ai-detected) :up)))
 
 (defun drgnx-onboard--until (pred secs)
-  "Wait until PRED, asked four times a second, at most SECS: its last value.  For the step (a command): C-g quits."
-  (let ((deadline (+ (float-time) secs)) (v nil))
-    (while (and (not (setq v (funcall pred))) (< (float-time) deadline))
+  "Wait until PRED, asked four times a second, at most SECS (nil: as long as it takes): its last value.  For the
+step (a command): C-g quits."
+  (let ((deadline (and secs (+ (float-time) secs))) (v nil))
+    (while (and (not (setq v (funcall pred))) (or (null deadline) (< (float-time) deadline)))
       (unless noninteractive (redisplay))
       (accept-process-output nil 0.25))
     v))
@@ -587,8 +634,15 @@ Claude Code's parts (`drgnx-onboard--agents-step').")
   (when-let* ((b (get-buffer "*drgnx Welcome*"))) (with-current-buffer b (tabulated-list-print t))))
 
 (defun drgnx-onboard--last-line (id)
-  "The last line job ID wrote (a progress bar's last state), or nil."
-  (car (last (split-string (drgnx-jobs-log id 2000) "[\r\n]+" t "[ \t]+"))))
+  "The last line job ID wrote (a progress bar's last state, without ANSI escapes), or nil.  Reads only the end of
+the log (4 KB): it is called twice a second."
+  (let* ((file (expand-file-name "log" (drgnx-jobs--dir id)))
+         (size (file-attribute-size (file-attributes file)))
+         (tail (if (not size) ""
+                 (with-temp-buffer
+                   (insert-file-contents file nil (max 0 (- size 4096)) size)
+                   (buffer-string)))))
+    (car (last (split-string (replace-regexp-in-string "\e\\[[0-9;?]*[ -/]*[@-~]" "" tail) "[\r\n]+" t "[ \t]+")))))
 
 (defun drgnx-onboard--say (text &optional step)
   "TEXT, with \" — C-g stops\", as what STEP (default: the running step) is doing now: its Welcome row and the echo
@@ -604,15 +658,19 @@ area.  Never asks anything (the progress timer calls it too)."
   (drgnx-onboard--say (string-trim-right (format "%s… %s" what (or (drgnx-onboard--last-line id) ""))) step))
 
 (defun drgnx-onboard--job (what command &optional secs)
-  "Run COMMAND (a list) as a drgnx job for WHAT and wait for it to end, at most SECS (default an hour); meanwhile the
-Welcome shows its last log line.  `ok', or (fail REASON LOG): REASON ends with the log's last line.  C-g stops the
+  "Run COMMAND (a list) as a drgnx job for WHAT and wait for it to end, at most SECS (default an hour; `:none': as
+long as it takes — a model download or a package sync, which C-g still stops); meanwhile the Welcome shows its last
+log line.  `ok', or (fail REASON LOG): REASON ends with the log's last line.  C-g stops the
 job, then quits."
   (require 'drgnx-jobs)
   (make-directory (drgnx-state-dir) t)
   (let* ((id (drgnx-jobs-start (concat "Onboarding: " what) command :cwd (drgnx-state-dir)))
          (log (expand-file-name "log" (drgnx-jobs--dir id)))
          (t0 (float-time)) (job nil)
+         ;; the CLI (batch) ends on Ctrl-C without unwinding: the exit stops the job
+         (stop (lambda () (drgnx-jobs-stop id)))
          (timer (run-at-time 0.5 0.5 #'drgnx-onboard--show-progress drgnx-onboard--current what id)))
+    (when noninteractive (add-hook 'kill-emacs-hook stop))
     (unwind-protect
         (condition-case nil
             (progn
@@ -620,7 +678,7 @@ job, then quits."
                                       (setq job (drgnx-jobs-get id))
                                       ;; gone: it ended without writing its exit (killed); not while it starts
                                       (or (plist-get job :exit) (and (eq (plist-get job :status) 'gone) (> (- (float-time) t0) 3))))
-                                    (or secs 3600))
+                                    (if (eq secs :none) nil (or secs 3600)))
               (if (eql (plist-get job :exit) 0) 'ok
                 (when (eq (plist-get job :status) 'running) (drgnx-jobs-stop id))
                 (list 'fail (format "%s failed (%s)%s" what
@@ -630,6 +688,7 @@ job, then quits."
                                     (if-let* ((line (drgnx-onboard--last-line id))) (concat ": " line) ""))
                       log)))
           (quit (drgnx-jobs-stop id) (signal 'quit nil)))
+      (remove-hook 'kill-emacs-hook stop)
       (cancel-timer timer))))
 
 (declare-function browse-url "browse-url")
@@ -645,7 +704,7 @@ job on either platform.  Every run starts from the top: nothing is resumed from 
          (name (plist-get r :name))
          (there (lambda () (or (drgnx-onboard--program tool)
                                (and (plist-get r :provider) (drgnx-onboard--up-p (plist-get r :provider))))))
-         (job (plist-get (plist-get r (if (eq (drgnx-platform) 'macos) :macos :linux)) :job)))
+         (job (drgnx-onboard--platform-job tool)))
     (cond
      ((not (plist-get ctx :interactive)) (list 'fail (format "%s is not installed (nothing is installed without asking)" name) nil))
      ((funcall there) 'ok)
@@ -770,9 +829,17 @@ serve' keeps running as one; `lms server start' starts LM Studio's and ends) —
                                        models))
                     1024.0)))
 
+(defun drgnx-onboard--not-listed (tool models)
+  "The Ollama names in MODELS that TOOL's server does not list yet (what a re-run still has to download)."
+  (let ((listed (plist-get (alist-get (plist-get (alist-get tool drgnx-onboard-install-recipes) :provider) drgnx-ai-detected)
+                           :models)))
+    (seq-remove (lambda (m) (let ((name (drgnx-onboard--served-name tool m)))
+                              (or (member name listed) (member (concat name ":latest") listed))))
+                models)))
+
 (defun drgnx-onboard--put-first (role step)
   "STEP (PROVIDER . MODEL) first in ROLE's chain in ai.eld; the role's other providers stay behind it."
-  (drgnx-ai-set-role role (cons step (seq-remove (lambda (s) (eq (car s) (car step))) (drgnx-ai-role role)))))
+  (drgnx-ai-set-role role (cons step (seq-remove (lambda (s) (eq (car s) (car step))) (drgnx-ai-user-role role)))))
 
 (defconst drgnx-onboard--ask-question "Where is the onboarding greeting defined?"
   "What onboarding asks Ask the Codebase about its test project.")
@@ -797,20 +864,22 @@ came for the snippets found."
   "Chat (gptel) is module extra/llm, off in the minimal and ide presets: (ON . TEXT), ON nil also when installing its
 package failed.  Whether gptel is installed: drgnx's packages.  Interactive, when it is off: asked whether to turn it
 on, and gptel installed (drgnx sync, as Look and Keys does) when it is missing.  Either loads at the next start: the
-text says so."
-  (let ((next "from the next start: restart drgnx to load it (the Finish step offers it)"))
+text says so — with the Finish step's restart offer only when this run changed something and drgnx runs with windows
+\(Finish never offers it in batch); a restart is needed (`drgnx-onboard--restart-needed') only then."
+  (let ((next (if noninteractive "; it loads at drgnx's next start"
+                " from the next start: restart drgnx to load it (the Finish step offers it)"))
+        (later "; it loads at drgnx's next start"))
     (cond ((not (drgnx-module-disabled-p 'extra/llm))
            (cond ((featurep 'gptel) (cons t "Chat (module extra/llm) is on"))
                  ((drgnx-onboard--installed-p 'gptel)
-                  (setq drgnx-onboard--restart-needed t)
-                  (cons t (concat "Chat (module extra/llm) is on " next)))
+                  (cons t (concat "Chat (module extra/llm) is on" later)))
                  (t (cons t "Chat (module extra/llm) is on; its package is not installed yet: run drgnx sync (or the Look and Keys step)"))))
           ((and (plist-get ctx :interactive) (y-or-n-p "Turn on Chat (module extra/llm)? "))
            (drgnx-modules-toggle 'extra/llm)
            (setq drgnx-onboard--restart-needed t)
            (let ((done (if (drgnx-onboard--installed-p 'gptel) 'ok (drgnx-onboard--sync-job))))
              (if (eq done 'ok)
-                 (cons t (concat "Chat (module extra/llm) turned on " next))
+                 (cons t (concat "Chat (module extra/llm) turned on" next))
                (pcase-let ((`(,_ ,why ,log) done))
                  (cons nil (format "Chat (module extra/llm) turned on, but its package was not installed: %s — run drgnx sync in a terminal to retry%s"
                                    why (if log (format " (log: %s)" log) "")))))))
@@ -847,7 +916,7 @@ interactive): only says what it would run."
          (pulls (delete-dups (mapcar #'cdr models)))
          (commands (string-join (drgnx-onboard--setup-commands tool models) "; ")))
     (if (not (and (plist-get ctx :interactive)
-                  (y-or-n-p (format "Set up %s: %s (about %s GB to download)? " name commands (drgnx-onboard--download-gb pulls)))))
+                  (y-or-n-p (format "Set up %s: %s (about %s GB to download)? " name commands (drgnx-onboard--download-gb (drgnx-onboard--not-listed tool pulls))))))
         (list 'info (format "%s is not set up%s — to set it up: %s" name
                             (if (plist-get ctx :interactive) "" " (nothing is installed or downloaded without asking)") commands))
       (catch 'stop
@@ -857,7 +926,8 @@ interactive): only says what it would run."
           (dolist (m pulls)
             (must (drgnx-onboard--job (format "Downloading %s" m)
                                       (append (list (drgnx-onboard--program tool)) (cdr (plist-get r :pull))
-                                              (list (drgnx-onboard--pull-name tool m))))))
+                                              (list (drgnx-onboard--pull-name tool m)))
+                                      :none)))
           (drgnx-onboard--up-p provider)                ; what it lists now: the names it serves them by
           (let ((steps (mapcar (lambda (rm) (cons (car rm) (cons provider (drgnx-onboard--served-name tool (cdr rm))))) models))
                 (v (drgnx-ai-vram)))
@@ -886,12 +956,20 @@ feature tested.  The embed role stays: OpenRouter has no embedding model here."
      ((and (not key) (not new))
       (list 'info "no OpenRouter key given — run this step again with one (openrouter.ai/keys)"))
      (t
-      (let ((stored (and new (condition-case err (drgnx-ai-store-key 'openrouter new) (user-error (cadr err))))))
+      (let ((stored (and new (unwind-protect
+                                 ;; a copy goes in (drgnx keeps it in memory); the typed string is zeroed either way
+                                 (condition-case err (drgnx-ai-store-key 'openrouter (copy-sequence new)) (user-error (cadr err)))
+                               (clear-string new))))
+            (env (plist-get (drgnx-ai-provider 'openrouter) :key-env)))
         (if (stringp stored) (list 'fail (concat "OpenRouter: " stored))
           (let ((steps (mapcar (lambda (rm) (cons (car rm) (cons 'openrouter (cdr rm)))) drgnx-onboard-openrouter-models)))
             (pcase-dolist (`(,role . ,step) steps) (drgnx-onboard--put-first role step))
             (drgnx-onboard--ai-verify
-             (format "OpenRouter set up (key %s)" (pcase stored ('keychain "in your Keychain") ('keyring "in your keyring") (_ "found")))
+             (format "OpenRouter set up (key %s%s)"
+                     (pcase stored ('keychain "in your Keychain") ('keyring "in your keyring") (_ "found"))
+                     (if (and stored (getenv env) (not (string-empty-p (getenv env))))
+                         (format "; %s is set in the environment, which wins over the stored key" env)
+                       ""))
              steps ctx
              "semantic search needs a local model or TEI: the next step, Semantic Search, says how"))))))))
 
@@ -926,14 +1004,17 @@ step ran before: keep it or change it.  Without interaction: what was found, and
   (let* ((again (alist-get 'ai (drgnx-onboard-state)))
          (found (drgnx-onboard--ai-found ctx))
          (working (nth 2 found))
+         (untested (nth 3 found))
          (choice (and (plist-get ctx :interactive)
-                      (if (zerop working) (drgnx-onboard--ai-ask)
+                      ;; calls that ran out of time say nothing about the provider: no \"Set up AI with\" for them
+                      (if (zerop working) (and (zerop untested) (drgnx-onboard--ai-ask))
                         (and (or again (< working 3))
                              (equal (drgnx-onboard--choose (format "AI answers for %d of 3 roles (complete, edit, chat): keep it or change it" working)
                                                            '("Keep" "Change") (if (< working 3) "Change" "Keep"))
                                     "Change")
                              (drgnx-onboard--ai-ask))))))
     (cond ((and choice (not (and (eq choice 'skip) (> working 0)))) (drgnx-onboard--ai-setup choice ctx))
+          ((and (zerop working) (> untested 0)) (list (car found) (cadr found)))
           ((zerop working)
            (if (plist-get ctx :interactive) (list (car found) (cadr found))
              (list (car found) (concat (cadr found) "; " (drgnx-onboard--ai-how)))))
@@ -961,7 +1042,7 @@ step ran before: keep it or change it.  Without interaction: what was found, and
 (defvar drgnx-onboard-agent-wait 10 "Seconds the claude profile's agent has to answer the ACP initialize.")
 (defvar drgnx-onboard-login-wait 15 "Seconds `claude auth status' has to answer.")
 
-(defconst drgnx-onboard-login-header "Type /login, finish in the browser, then press Done in the Welcome"
+(defconst drgnx-onboard-login-header "Type /login, finish in the browser, then press Return on the Agents row in the Welcome (Done)"
   "The header line of the terminal Claude Code's login happens in.")
 
 (declare-function drgnx-agents-profile "drgnx-agents")
@@ -983,7 +1064,7 @@ Code extension's own copy does not count), Node (only when the adapter is missin
   "The command that installs TOOL here, as text: Homebrew's, the installer's, npm's, the one to run in a terminal."
   (let* ((r (alist-get tool drgnx-onboard-install-recipes))
          (p (plist-get r (if (eq (drgnx-platform) 'macos) :macos :linux)))
-         (job (plist-get p :job)))
+         (job (drgnx-onboard--platform-job tool)))
     (cond ((plist-get p :install) (string-join (plist-get p :install) " "))
           ((equal (seq-take job 2) '("bash" "-c")) (nth 2 job))
           (job (string-join job " "))
@@ -992,22 +1073,35 @@ Code extension's own copy does not count), Node (only when the adapter is missin
 
 (defun drgnx-onboard--on-path (tool)
   "When TOOL is installed where this Emacs's PATH does not reach (~/.local/bin, beside brew), put its directory on
-the PATH of this Emacs (the agent's `#!/usr/bin/env node' needs it): the directory added, else nil."
+the PATH of this Emacs (the agent's `#!/usr/bin/env node' needs it): the directory added, else nil.  It goes at the
+end: a program you chose earlier on the PATH keeps winning."
   (when-let* ((program (drgnx-onboard--program tool))
               (dir (directory-file-name (file-name-directory program)))
               ((not (executable-find (file-name-nondirectory program)))))
-    (add-to-list 'exec-path dir)
-    (setenv "PATH" (concat dir path-separator (getenv "PATH")))
+    (add-to-list 'exec-path dir t)
+    (setenv "PATH" (concat (getenv "PATH") path-separator dir))
     dir))
+
+(declare-function drgnx-hub-running-p "drgnx-hub")
+
+(defun drgnx-onboard--hub-running-p ()
+  "Does a hub run (one quiet look at its socket, a second at most)?  It keeps the PATH it started with."
+  (require 'drgnx-hub)
+  (drgnx-hub-running-p))
 
 (defun drgnx-onboard--claude-login-state (claude)
   "Is CLAUDE logged in: `yes', `no' or `unknown' (a CLI without `auth status', or one that does not answer)?  Asks
 `claude auth status' and reads only its loggedIn answer — never Claude's credentials."
-  (let* ((out "")
-         (p (make-process :name "drgnx-claude-auth" :command (list claude "auth" "status") :connection-type 'pipe :noquery t
-                          :filter (lambda (_p s) (setq out (concat out s))))))
-    (unless (drgnx-onboard--wait (lambda () (not (process-live-p p))) drgnx-onboard-login-wait)
-      (delete-process p))
+  (let* ((out "") (p nil) (done nil))
+    ;; the process is made inside the unwind-protect: a C-g at any point ends it
+    (unwind-protect
+        (progn
+          (setq p (make-process :name "drgnx-claude-auth" :command (list claude "auth" "status") :connection-type 'pipe :noquery t
+                                :filter (lambda (_p s) (setq out (concat out s)))))
+          (unless (drgnx-onboard--wait (lambda () (not (process-live-p p))) drgnx-onboard-login-wait)
+            (delete-process p))
+          (setq done t))
+      (when (and (not done) p (process-live-p p)) (delete-process p)))
     (cond ((string-match "\"loggedIn\"[ \t]*:[ \t]*\\(true\\|false\\)" out)
            (if (equal (match-string 1 out) "true") 'yes 'no))
           ((and (not (process-live-p p)) (eql (process-exit-status p) 0)) 'yes)
@@ -1064,8 +1158,33 @@ the PATH of this Emacs (the agent's `#!/usr/bin/env node' needs it): the directo
   (pcase-let ((`(,_ ,reason ,log) result))
     (list 'fail (concat reason
                         (unless (string-search "step again" reason) " — run this step again to retry (what is installed stays)")
-                        (when (eq tool 'claude-agent-acp) (format ", or in a terminal: %s" (drgnx-onboard--install-text tool)))
+                        (when (drgnx-onboard--platform-job tool) (format ", or in a terminal: %s" (drgnx-onboard--install-text tool)))
                         (if log (format " (log: %s)" (abbreviate-file-name log)) "")))))
+
+(declare-function drgnx-agents-default-profile "drgnx-agents")
+(declare-function drgnx-agents-profile-names "drgnx-agents")
+(declare-function drgnx-agents-mcp-names "drgnx-agents")
+(declare-function drgnx-agents-set-setting "drgnx-agents")
+
+(defun drgnx-onboard--agents-offers ()
+  "Ask (interactive only) which profile New Agent Session offers on Return and which MCP servers the agents drgnx
+starts get — the coordination tools and the search tool — and save both in agents.eld.  The sentence for the step's
+result."
+  (require 'drgnx-agents)
+  (let* ((now (drgnx-agents-mcp-names))
+         (profile (drgnx-onboard--choose "Default agent profile" (drgnx-agents-profile-names) (drgnx-agents-default-profile)))
+         (mcp (delq nil (list (and (y-or-n-p (format "Give the agents drgnx starts its coordination tools (tasks, messages, the decision log)%s? "
+                                                     (if (memq 'coordination now) " — now on" " — now off")))
+                                   'coordination)
+                              (and (y-or-n-p (format "Give them its search tool too (they can read the indexed code of all your projects)%s? "
+                                                     (if (memq 'search now) " — now on" " — now off")))
+                                   'search)))))
+    (condition-case err
+        (progn (drgnx-agents-set-setting :default profile)
+               (drgnx-agents-set-setting :mcp mcp)
+               (format "default agent profile: %s; tools for agents: %s" profile
+                       (if mcp (mapconcat #'symbol-name mcp ", ") "none")))
+      (user-error (format "not saved (%s)" (cadr err))))))
 
 (defun drgnx-onboard--claude-check (ctx)
   "Claude Code is installed: its login (`claude auth status'), then the claude profile's agent (ACP initialize).  A
@@ -1091,10 +1210,13 @@ then ends `info', waiting for you to run it again (Done).  A login that cannot b
         (if (not ok)
             (list 'fail (format "Claude Code is installed, but %s — run claude-agent-acp in a terminal to see why, then this step again" text))
           (list (if unknown 'info 'ok)
-                (format "Claude Code is installed%s; %s — Agents: New Agent Session… starts it%s"
+                (format "Claude Code is installed%s; %s — Agents: New Agent Session… starts it%s%s"
                         (if unknown ", but drgnx could not tell whether it is logged in (run claude and type /login if it is not)" ", logged in")
                         text
-                        (if added (format " (added %s to this Emacs's PATH: add it to your shell's PATH too)" (string-join added ", ")) "")))))))))
+                        (if added (format " (added %s to this Emacs's PATH: add it to your shell's PATH too%s)" (string-join added ", ")
+                                          (if (drgnx-onboard--hub-running-p) "; the hub keeps its old PATH: drgnx hub stop, then start a durable session again" ""))
+                          "")
+                        (if (and interactive (not unknown)) (concat "; " (drgnx-onboard--agents-offers)) "")))))))))
 
 (defun drgnx-onboard--agents-step (ctx)
   "Claude Code for the agent panel: `claude' (a VS Code extension's bundled copy does not count), Node and the
@@ -1109,7 +1231,10 @@ started and asked ACP initialize.  Without interaction nothing is installed: the
                      (sudo (if (seq-some (lambda (tool) (string-prefix-p "sudo " (drgnx-onboard--install-text tool))) missing)
                                " (the sudo one is for you to run in a terminal: it asks for your password)" "")))
                 (if (not (and (plist-get ctx :interactive)
-                              (y-or-n-p (format "Set up Claude Code: %s%s? " commands sudo))))
+                              (y-or-n-p (format "Set up Claude Code: %s%s%s? " commands sudo
+                                                (if (memq 'claude missing)
+                                                    " (a claude inside a VS Code extension does not count: drgnx needs its own on your PATH)"
+                                                  "")))))
                     (list 'info (format "Claude Code is not set up%s — to set it up: %s%s%s"
                                         (if (plist-get ctx :interactive) "" " (nothing is installed without asking)") commands sudo
                                         (if (memq 'claude missing) "; then log in: run claude and type /login" "")))
@@ -1202,18 +1327,37 @@ keep running.  Saved (session.eld); returns the sentence for the step's result."
 
 (declare-function drgnx-jobs--detach "drgnx-jobs")
 
-(defun drgnx-onboard--restart ()
-  "Restart drgnx: `drgnx open' detached — once this Emacs has ended (a minute at most: kept running, it opens
-nothing) — then quit (`drgnx-session-quit' offers to save first).  The layout comes back with drgnx open."
+(defun drgnx-onboard--under-systemd-p ()
+  "Non-nil when this Emacs is a process of a systemd unit (INVOCATION_ID) and a user manager can start another."
+  (and (getenv "INVOCATION_ID") (getenv "XDG_RUNTIME_DIR") (executable-find "systemd-run") t))
+
+(defun drgnx-onboard--restart-spawn (line)
+  "Start the restart waiter LINE (a shell line) so that it outlives this Emacs.  Normally detached in its own
+session.  As a systemd service (drgnx.service) this Emacs shares a cgroup with it, and systemd kills what is left
+in the cgroup when the main process ends — the detached waiter too — so there it runs as its own transient unit
+\(`KillMode=process': a daemon `drgnx open' starts stays); the detached way is also the fallback."
   (require 'drgnx-jobs)
-  (drgnx-jobs--detach
-   (format "sleep 1; i=0; while kill -0 %d 2>/dev/null && [ $i -lt 300 ]; do sleep 0.2; i=$((i+1)); done; kill -0 %d 2>/dev/null || exec %s open"
-           (emacs-pid) (emacs-pid) (shell-quote-argument (expand-file-name "bin/drgnx" drgnx-dir))))
-  (drgnx-session-quit))
+  (unless (and (drgnx-onboard--under-systemd-p)
+               (eql 0 (call-process "systemd-run" nil nil nil "--user" "--quiet" "--collect"
+                                    (format "--unit=drgnx-restart-%d" (emacs-pid)) "-p" "KillMode=process"
+                                    "sh" "-c" (replace-regexp-in-string "[$%]" "\\&\\&" line))))   ; ExecStart reads $ and %
+    (drgnx-jobs--detach line)))
+
+(defun drgnx-onboard--restart ()
+  "Restart drgnx: ask the quit questions first (`drgnx-session-quit-confirm': save, lose changes?), then — only
+on a yes — start `drgnx open' to run once this Emacs has ended (`drgnx-onboard--restart-spawn'; a minute at
+most: kept running, it opens nothing), and quit.  A no or C-g leaves drgnx running and nothing waiting.  The
+layout comes back with drgnx open."
+  (when (drgnx-session-quit-confirm)
+    (drgnx-onboard--restart-spawn
+     (format "sleep 1; i=0; while kill -0 %d 2>/dev/null && [ $i -lt 300 ]; do sleep 0.2; i=$((i+1)); done; kill -0 %d 2>/dev/null || exec %s open"
+             (emacs-pid) (emacs-pid) (shell-quote-argument (expand-file-name "bin/drgnx" drgnx-dir))))
+    (kill-emacs)))
 
 (defun drgnx-onboard--finish-step (ctx)
-  "The doctor's results; on macOS, how to open drgnx next time.  When a step turned modules on or installed packages
-here, in the drgnx app (CTX interactive): asked whether to restart drgnx now (the result is recorded first)."
+  "The doctor's results; on macOS with the drgnx app installed, how to open drgnx next time.  When a step turned
+modules on or installed packages here, in the drgnx app (CTX interactive): asked whether to restart drgnx now
+\(the result is recorded first)."
   (require 'drgnx-doctor)
   (let* ((results (drgnx-doctor-run (drgnx-doctor-facts)))
          (count (lambda (s) (seq-count (lambda (r) (eq (plist-get r :status) s)) results)))
@@ -1222,7 +1366,9 @@ here, in the drgnx app (CTX interactive): asked whether to restart drgnx now (th
                        (format "doctor: %d ok, %d warnings, %d failed%s — every command and its key: Keyboard Shortcuts (in the palette)%s; docs/guide/onboarding.md"
                                (funcall count 'ok) (funcall count 'warn) (length fails)
                                (if fails (concat " (" (mapconcat (lambda (r) (symbol-name (plist-get r :name))) fails ", ") ")") "")
-                               (if (eq (drgnx-platform) 'macos) (concat "; next time " drgnx-onboard-macos-open-text) "")))))
+                               (if (and (eq (drgnx-platform) 'macos)
+                                        (progn (require 'drgnx-macos) (file-directory-p (expand-file-name "drgnx.app" drgnx-macos-app-dir))))
+                                   (concat "; next time " drgnx-onboard-macos-open-text) "")))))
     (cond ((not (and drgnx-onboard--restart-needed (plist-get ctx :interactive) (not noninteractive))) result)
           ((y-or-n-p "Restart drgnx now? Your windows come back. ")
            (drgnx-onboard--record 'finish (car result) (cadr result))

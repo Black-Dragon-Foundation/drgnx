@@ -17,7 +17,8 @@ file that does not load says `(in <library>)` when the error came from a library
 `needs <module>`, `disabled` — its stage, how long it took, and whether it runs at the next start; `RET`
 turns the module on that row off (or back on) from the next start. A column header sorts by it (ms as a number, Stage
 in the order of the stages); an external module's row says its path and features. `drgnx doctor` reports failed modules and modules
-waiting for packages, from the last session.
+waiting for packages, from the last session; when all is well it counts the modules that run and those that are
+off ("12 ok, 3 off"), and every answer says how old the report is ("from the last session, 2 h ago").
 
 ## Packages
 
@@ -68,6 +69,9 @@ row) keeps it from loading. gryphn's files load unchanged: drgnx provides
 `gryphn-command-define` and `gryphn-surfaces-define-context` on its own registry and surfaces
 (`core/drgnx-compat-gryphn.el`), so the board, runs, agents and search commands appear in the palette and menus and
 their keys join the key profiles (the VS Code and Emacs profiles bind them, the Vim profile leaves them to the palette) — never replacing what a profile ships: a profile that has an entry for the command or binds the key keeps its own, and the Emacs profile keeps Emacs' own keys. drgnx never changes the gryphn checkout.
+A gryphn command whose id drgnx already has (gryphn's `view-explorer`, Toggle Sidebar, next to drgnx's View: Explorer)
+never replaces drgnx's: it is registered as `gryphn/<id>`, its key bound where the profile does not own it, and
+`*Messages*` says so once.
 
 ## Writing a module
 
@@ -111,6 +115,8 @@ key profile ([keys.md](keys.md)); faces inherit theme faces (no colours). See [c
 | `lang/markdown` | startup | Markdown (READMEs as GitHub Flavored Markdown): code blocks in their language, math; Markdown: Open Preview (pandoc, cmark or markdown when installed), Mermaid diagrams through mmdc ([editing.md](editing.md)) |
 | `tools/vc` | startup | Source Control (the project's changes), Diff with File, Blame — on Emacs' VC |
 | `tools/diff` | idle | the diff view: working tree, staged or branch vs base; split or unified, files folded, open the file at the line ([git.md](git.md)) |
+| `tools/replace` | idle | search and replace ([replace.md](replace.md)): the Search view in the sidebar and the find bar above an editor; text through ripgrep (else git grep or grep) in the background, symbols through the language server's rename; stale matches skipped, one Undo for every file |
+| `tools/layouts` | idle | layouts ([layouts.md](layouts.md)): Agent (the Explorer, the editor beside the current agent's chat, the Agents list), Editor, Zen (the text centred), Browser, and your own (Save Layout As…, in layouts.eld); Next Layout cycles them; switching back restores the arrangement you left |
 | `tools/commit-message` | idle | Git: Generate Commit Message — the staged diff through the `chat` role, never a trailer ([git.md](git.md)) |
 | `tools/review` | idle | Review Branch: the `review` route's agent reads this branch's diff; findings in the panel's Review tab ([git.md](git.md)) |
 | `tools/prs` | idle | the Pull Requests tab: stacks, forge's review view, Changes in the diff view, `#` in commit messages (needs forge) ([git.md](git.md)) |
@@ -132,5 +138,8 @@ key profile ([keys.md](keys.md)); faces inherit theme faces (no colours). See [c
 | `extra/windows` | idle | Pick Window: a letter on every window, type it to go there (needs ace-window) |
 | `extra/magit` | idle | Source Control opens magit (needs magit) |
 | `extra/completion` | idle | vertical minibuffer lists, any-order matching, completion popups as you type (needs vertico, orderless, marginalia, corfu) |
+| `tools/browser` | idle | the browser pane ([browser.md](browser.md)): a web page beside the editor (WebKit, else your system browser), Browser: Test Report (Playwright), Browser: Agent's Page |
+| `tools/live` | idle | the Live view ([live.md](live.md)): a headless browser for agents, watched live (CDP screencast) and taken over (needs websocket) |
+| `tools/shortcuts` | idle | Preferences: Keyboard Shortcuts ([shortcuts.md](shortcuts.md)): every command with its keys, source and place; record keys and chords, conflicts, filters, suggestions from use |
 
 The `extra/` modules wait until their packages are installed; Preferences: Modules says which.

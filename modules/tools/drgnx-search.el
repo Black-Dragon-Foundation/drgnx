@@ -72,6 +72,14 @@
   (or (drgnx-search--root)
       (user-error "Semantic search needs a project: open a file of one first")))
 
+(declare-function drgnx-ai-confirm-project-route "drgnx-ai")
+
+(defun drgnx-search--confirm-route (root)
+  "Ask, once, about the remote providers the project at ROOT routes AI roles to (its .drgnx/ai.eld) — here, in the
+command the user ran, never later from a job or timer.  Denied or not asked, the remote steps are simply left out."
+  (require 'drgnx-ai)
+  (let ((default-directory (file-name-as-directory root))) (drgnx-ai-confirm-project-route)))
+
 (defun drgnx-search--xref (root hit)
   "An xref item for HIT (a result plist of `drgnx-search') in the project at ROOT: the chunk's first top-level line,
 at that line (`drgnx-search-hit-line', the rule the MCP tool and the command line use too)."
@@ -122,6 +130,7 @@ and the echo area says why."
         (buffer (current-buffer)) (window (selected-window)))
     (when (string-empty-p query) (user-error "Semantic search needs a question"))
     (require 'drgnx-search-query)
+    (drgnx-search--confirm-route root)
     (message "Searching %s…" (abbreviate-file-name root))
     (drgnx-search-async root query
                         (lambda (hits &optional notice)
@@ -138,6 +147,7 @@ With a prefix argument REBUILD, start from scratch — the way to change the emb
     (if (not (sqlite-available-p))
         (message "%s" drgnx-search--no-sqlite)
       (require 'drgnx-search-index)
+      (drgnx-search--confirm-route root)
       (let ((config (drgnx-search-config root)) (name (abbreviate-file-name (directory-file-name root))))
         (cond ((plist-get config :error) (message "%s" (plist-get config :error)))
               ((plist-get config :off) (message "Search is turned off for this project (.drgnx/search.eld)"))
@@ -154,6 +164,7 @@ With a prefix argument REBUILD, start from scratch — the way to change the emb
 when the index is current, run a test query).  Outside a project it only finds and tests the model."
   (interactive)
   (require 'drgnx-search-setup)
+  (drgnx-search--confirm-route (or (drgnx-search-setup--current-root) default-directory))
   (message "Setting up semantic search…")
   (pcase-let ((`(,status ,text) (drgnx-search-setup (drgnx-search-setup--current-root) :interactive t)))
     (message "%s%s" (if (memq status '(warn fail)) "Semantic search: " "") text)))

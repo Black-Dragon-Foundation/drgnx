@@ -32,6 +32,151 @@
                          (find-file f) (goto-char (/ (point-max) 2)) (forward-line 0) t)"
           drgnx-perf-run--fixture))
 
+(defun drgnx-perf-run--replace-setup-form ()
+  "The replace-typing workload's setup: 100 files of 100 matching lines, and the session functions it uses."
+  (prin1-to-string
+   '(progn
+      (require 'drgnx-replace)
+      (unless (assq 'search drgnx-wb--sections)       ; the module sets up once Emacs is idle: maybe not yet
+        (drgnx-replace--define-section)
+        (drgnx-replace--define-commands))
+      (defvar drgnx-perf--needles nil "The directory of the 10k matches.")
+      (defvar drgnx-perf--replace-started nil "Non-nil once the first key started the search.")
+      (defvar drgnx-perf--replace-typed 0 "Keys typed while the view streamed.")
+      (setq drgnx-perf--needles (make-temp-file "drgnx-perf-needles" t))
+      (let ((text (apply #'concat (make-list 100 "a needle in the haystack, line after line\n"))))
+        (dotimes (i 100)
+          (with-temp-file (expand-file-name (format "f%03d.txt" i) drgnx-perf--needles) (insert text))))
+      (defun drgnx-perf--replace-view () (get-buffer drgnx-replace-buffer-name))
+      (defun drgnx-perf--replace-arm ()
+        "The Search view open on the needles with nothing to find; the first key typed starts the search."
+        (let ((editor (selected-window)))
+          (drgnx-replace--open :text "zzz-perf-nothing"
+                               :origin (with-current-buffer (find-file-noselect (expand-file-name "f000.txt" drgnx-perf--needles))
+                                         (point-min-marker)))
+          (select-window editor))
+        (setq drgnx-perf--replace-started nil drgnx-perf--replace-typed 0)
+        (add-hook 'post-command-hook #'drgnx-perf--replace-key))
+      (defun drgnx-perf--replace-key ()
+        "After a key: the first starts the search (from a timer, as the view's own typing pause does); the next
+ones are counted while the view streams."
+        (if (not drgnx-perf--replace-started)
+            (progn (setq drgnx-perf--replace-started t) (run-with-timer 0 nil #'drgnx-perf--replace-search))
+          (when (with-current-buffer (drgnx-perf--replace-view) (drgnx-replace--busy-p))
+            (setq drgnx-perf--replace-typed (1+ drgnx-perf--replace-typed)))))
+      (defun drgnx-perf--replace-search ()
+        (with-current-buffer (drgnx-perf--replace-view)
+          (drgnx-replace--fill 'find "needle")
+          (drgnx-replace--search-now)))
+      (defun drgnx-perf--replace-check ()
+        "Keys were typed while it streamed, and it listed all 10k matches."
+        (remove-hook 'post-command-hook #'drgnx-perf--replace-key)
+        (let ((d (+ (float-time) 20)))
+          (while (and (with-current-buffer (drgnx-perf--replace-view) (drgnx-replace--busy-p)) (< (float-time) d))
+            (accept-process-output nil 0.05)))
+        (and (>= drgnx-perf--replace-typed 5)
+             (= 10000 (with-current-buffer (drgnx-perf--replace-view) (length drgnx-replace--matches)))
+             t))
+      (defun drgnx-perf--replace-teardown ()
+        (remove-hook 'post-command-hook #'drgnx-perf--replace-key)
+        (when-let* ((v (drgnx-perf--replace-view)))
+          (with-current-buffer v (drgnx-replace-cancel drgnx-replace--handle)))
+        (ignore-errors (drgnx-wb-show-view 'explorer))
+        (when-let* ((v (drgnx-perf--replace-view))) (kill-buffer v))
+        (dolist (b (buffer-list))
+          (when (and (buffer-file-name b) (string-prefix-p drgnx-perf--needles (buffer-file-name b))) (kill-buffer b)))
+        (delete-directory drgnx-perf--needles t))
+      t)))
+
+(defun drgnx-perf-run--live-setup-form ()
+  "The live-view workload's setup: websocket (from the user's packages if need be), the mock browser as the browser
+for agents, the Live view open, and the session functions it uses."
+  (prin1-to-string
+   `(progn
+      (unless (require 'websocket nil t)
+        (let* ((elpa (expand-file-name (or (getenv "DRGNX_USER_ELPA") "~/.config/emacs/elpa")))
+               (dir (car (last (and (file-directory-p elpa) (directory-files elpa t "\\`websocket-[0-9]"))))))
+          (unless dir (error "The Live view needs the websocket package"))
+          (add-to-list 'load-path dir)
+          (require 'websocket)))
+      (load ,(expand-file-name "test/fixtures/mock-cdp" drgnx-ui-repo-dir) nil t)
+      (require 'drgnx-live)
+      (require 'drgnx-jobs)
+      (defvar drgnx-perf--live-jpeg nil "The frames' bytes, base64.")
+      (defvar drgnx-perf--live-timer nil "Sends the frames.")
+      (defvar drgnx-perf--live-message nil "A frame's message, as the browser sends it: an encoded websocket frame.")
+      (setq drgnx-perf--live-message nil)
+      (defvar drgnx-perf--live-width nil "The frames' width.")
+      (setq drgnx-perf--live-width nil)
+      (defvar drgnx-perf--live-sent 0 "How many messages the mock had received when it sent the last frame.")
+      (setq drgnx-perf--live-sent 0)
+      (defvar drgnx-perf--live-drawn 0 "Frames drawn when the typing began.")
+      (defvar drgnx-perf--jobs-get nil "The real `drgnx-jobs-get'.")
+      (defun drgnx-perf--live-make-jpeg (width)
+        "A real JPEG WIDTH pixels wide, as Chrome sends at the view's maxWidth (ImageMagick's built-in logo, a
+1280×800 page scaled); without ImageMagick nil: the frames are then a few bytes no decoder accepts, cheaper to draw."
+        (when-let* ((magick (or (executable-find "magick") (executable-find "convert"))))
+          (with-temp-buffer
+            (set-buffer-multibyte nil)
+            (and (eq 0 (call-process magick nil t nil "logo:" "-resize" (format "%dx%d!" width (round (* width 0.625))) "jpeg:-"))
+                 (base64-encode-string (buffer-string) t)))))
+      (setq drgnx-perf--live-jpeg nil)
+      (setq drgnx-perf--jobs-get (symbol-function 'drgnx-jobs-get))
+      (fset 'drgnx-jobs-get (lambda (id) (if (equal id "job-perf-live") (list :id id :status 'running) (funcall drgnx-perf--jobs-get id))))
+      (let ((port (drgnx-mock-cdp-start)))
+        (setq drgnx-live--browser (list :port port :ws (format "ws://127.0.0.1:%d/devtools/browser/mock" port) :job "job-perf-live")))
+      (defun drgnx-perf--live-view () (get-buffer drgnx-live-buffer-name))
+      (defun drgnx-perf--live-frame ()
+        "A frame, once the last one was acknowledged (as Chrome sends them)."
+        (when (> (length drgnx-mock-cdp--received) drgnx-perf--live-sent)   ; the view answered (its ack)
+          (setq drgnx-perf--live-sent (length drgnx-mock-cdp--received))
+          ;; the message and its websocket frame are made once: the mock runs in this Emacs, and making them is the
+          ;; browser's work, not drgnx's (websocket.el's encoder makes a list of every byte)
+          ;; at the width the view asked for last, as Chrome sends them
+          (let ((width (or (plist-get (plist-get (car (last (drgnx-mock-cdp-received "Page.startScreencast"))) :params) :maxWidth)
+                           1280)))
+            (unless (eql width drgnx-perf--live-width) (setq drgnx-perf--live-message nil drgnx-perf--live-width width)))
+          (unless drgnx-perf--live-message
+            (setq drgnx-perf--live-jpeg (drgnx-perf--live-make-jpeg drgnx-perf--live-width))
+            (setq drgnx-perf--live-message
+                  (websocket-encode-frame
+                   (make-websocket-frame
+                    :opcode 'text :completep t
+                    :payload (encode-coding-string
+                              (json-serialize
+                               (list :method "Page.screencastFrame" :sessionId "S-T1"
+                                     :params (list :data (or drgnx-perf--live-jpeg (base64-encode-string "frame")) :sessionId 1
+                                                   :metadata (list :deviceWidth 1280 :deviceHeight 800 :offsetTop 0 :pageScaleFactor 1
+                                                                   :scrollOffsetX 0 :scrollOffsetY 0 :timestamp (float-time)))))
+                              'raw-text))
+                   nil)))
+          (dolist (ws (drgnx-mock-cdp-clients)) (process-send-string (websocket-conn ws) drgnx-perf--live-message))))
+      (defun drgnx-perf--live-arm ()
+        "The Live view beside the file, frames arriving."
+        (let* ((editor (selected-window)) (file (window-buffer editor)))
+          (unless (drgnx-perf--live-view)
+            (drgnx-live-view)
+            (drgnx-mock-cdp-wait (lambda () (drgnx-mock-cdp-received "Page.startScreencast")) 10))
+          (set-window-buffer editor file)               ; the view may have taken the file's window
+          (unless (get-buffer-window (drgnx-perf--live-view))
+            (set-window-buffer (split-window editor nil 'right) (drgnx-perf--live-view)))
+          (select-window editor))
+        (unless drgnx-perf--live-timer (setq drgnx-perf--live-timer (run-with-timer 0 (/ 1.0 30) #'drgnx-perf--live-frame)))
+        (setq drgnx-perf--live-drawn (buffer-local-value 'drgnx-live--drawn (drgnx-perf--live-view))))
+      (defun drgnx-perf--live-check ()
+        "Frames were drawn while the keys were typed."
+        (and (>= (- (buffer-local-value 'drgnx-live--drawn (drgnx-perf--live-view)) drgnx-perf--live-drawn) 5) t))
+      (defun drgnx-perf--live-teardown ()
+        (when (timerp drgnx-perf--live-timer) (cancel-timer drgnx-perf--live-timer))
+        (setq drgnx-perf--live-timer nil)
+        (when-let* ((v (drgnx-perf--live-view)))
+          (when-let* ((w (get-buffer-window v))) (ignore-errors (delete-window w)))
+          (kill-buffer v))
+        (drgnx-mock-cdp-stop)
+        (setq drgnx-live--browser nil)
+        (fset 'drgnx-jobs-get drgnx-perf--jobs-get))
+      t)))
+
 (defun drgnx-perf-run--workloads ()
   "The workloads: (NAME :setup FORM :each FORM :actions ACTIONS :check FORM :measure FORM :teardown FORM :repeat N).
 Every workload runs three times (medians are kept); :each runs before each repeat, :check after it (an
@@ -149,6 +294,20 @@ error if it does not hold)."
                                   (setq drgnx-ai-ghost-delay (plist-get drgnx-perf--llm :delay)
                                         drgnx-ai-detected (assq-delete-all 'perf-llm drgnx-ai-detected)) "
                           kill-fixture ")"))
+      ;; typing while the Search view lists 10k matches (100 files): the search starts on the first key
+      (replace-typing
+       :setup ,(drgnx-perf-run--replace-setup-form)
+       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (drgnx-perf--replace-arm) t)")
+       :actions ,(make-list 2 (funcall type "(setq y 2) "))
+       :check "(drgnx-perf--replace-check)"
+       :teardown ,(concat "(progn (drgnx-perf--replace-teardown) " kill-fixture ")"))
+      ;; typing while the Live view shows frames from a mock browser (30 a second, each once the last was acked)
+      (live-view
+       :setup ,(drgnx-perf-run--live-setup-form)
+       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (drgnx-perf--live-arm) t)")
+       :actions ,(make-list 6 (funcall type "(let ((x 1)) (message \"%s\" x)) "))
+       :check "(drgnx-perf--live-check)"
+       :teardown ,(concat "(progn (drgnx-perf--live-teardown) " kill-fixture ")"))
       (frames :measure "(list :frame (drgnx-perf-frame-ms 5))")
       (redisplay :each ,(drgnx-perf-run--visit-fixture-form) :measure "(list :redisplay (drgnx-perf-redisplay-ms 30))" :teardown ,kill-fixture)
       (startup :daemon t)

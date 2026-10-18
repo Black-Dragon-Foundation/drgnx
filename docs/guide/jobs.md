@@ -29,26 +29,26 @@ A job's control room — its own window on a graphical display, so it can sit on
   the agents at work, each with **Transcript** and **Message…**;
 - **middle — what needs you:** the cards, each with its actions as buttons (a clash shows both sides and the
   reviewer's recommendation; **Accept the reviewer** is there only when it recommended a side; a clash whose reviewer
-  was lost twice says so), then the messages agents sent you, each with **Reply…**;
+  was lost twice says so), then the messages agents sent you, each with **Reply…** (answers the agent) or **Dismiss** (needs no answer: it is acted on, and stops counting in the badge);
 - **right — the decision log,** newest first: replaced decisions dimmed, disputed ones (in an open clash) marked.
 
 It follows the hub's events and redraws only what changed (at most twice a second). Closing it stops nothing; it
-comes back when Emacs restarts (with the workbench's windows). Without a hub it says so, and fills in when the hub
-runs again.
+comes back when Emacs restarts at the position and size it had (with the workbench's windows). Without a hub it says
+so, and fills in when the hub runs again; if the hub does not know the job (it was deleted), the window closes.
 
 You do not have to watch it: while something of a job needs you, the mode line shows **⚑N** (the cards and messages
 waiting; a click opens the job with the newest; it disappears when the hub cannot be asked, rather than showing the
-last count), and each new card is a desktop notification (D-Bus; else a message
+last count), and each new card is a desktop notification (D-Bus on Linux; `osascript` on macOS; else a message
 in the echo area — `drgnx-job-ui-notify` nil turns them off). Neither ever asks you anything. What needs you is a **card** with its actions — the proposal (Approve, Reject), a permission (Allow, Reject),
 a merge conflict (let the agent resolve it, merge again after you resolved it, drop the task), a review that failed
 (merge as it is, back to an agent, drop), a stuck or failed agent (retry, drop), the budget (resume with more, stop);
-each acts once. Messages agents send you are listed with a Reply.
+each acts once. Messages agents send you are listed with a Reply and a Dismiss.
 
 **Clashes** are found by rules, not guessed: two agents deciding opposite things about one subject (build it / don't),
 an agent deciding about another task, a task changing files a won't-build decision covers (its review waits), an
 agent that keeps acting on an old decision log, two tasks changing the same files (a note, nothing waits). A clash
 card shows both sides and the decisions each relies on; a reviewer agent recommends one, and you **Accept the
-reviewer**, **Pick A**, **Pick B** or **Discuss** (talk it through with the reviewer). Your choice becomes your
+reviewer**, **Pick A**, **Pick B** or **Discuss** (talk it through with the reviewer; its transcript opens). When no recommendation is coming the card says so: the reviewer gave none, or none is coming (Discuss starts one again). Your choice becomes your
 decision, and every agent of the job is told. Your own decisions always win: an agent contradicting one is overruled
 at once, without a card. Every command goes through the hub, starting it when needed
 ([agents.md](agents.md#the-hub-and-the-gateway)).

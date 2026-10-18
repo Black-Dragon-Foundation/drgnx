@@ -13,7 +13,11 @@
   (or (car (car (drgnx-cmd-bound (drgnx-commands-get id))))
       (error "driver: command %s has no key in the active profile" id)))
 
-(defconst drgnx-driver-focus-explorer-keys (drgnx-driver--key 'focus-explorer) "Keys that focus the Explorer.")
+(defconst drgnx-driver-focus-explorer-keys
+  (if (car (drgnx-cmd-bound (drgnx-commands-get 'view-explorer)))
+      (drgnx-driver--key 'view-explorer)     ; VS Code's C-S-e shows the Explorer and focuses it
+    (drgnx-driver--key 'focus-explorer))
+  "Keys that focus the Explorer.")
 (defconst drgnx-driver-explorer-down-key (drgnx-driver--key 'explorer-next) "Moves the Explorer selection down.")
 (defconst drgnx-driver-explorer-target "drgnx-explorer-mode"
   "How `drgnx-uitest-target-xy' finds the Explorer window (buffer name or major mode).")

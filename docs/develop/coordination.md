@@ -92,8 +92,9 @@ socket and from the state and data directories — not drgnx's own access rules.
 - an agent of a job whose `seen` version is behind that job's decisions gets `[decision log vN — job J]` and the
   changes (quoted) once per version, when free. Sessions without a job (plain chats) are never woken.
 
-Hub sessions are the hub's children: when the hub ends, they end (the editor's mirrors turn `exited` and say so);
-resuming them in a new hub (ACP `session/load`) is not built yet.
+Hub sessions are the hub's children: when the hub ends, they end (the editor's mirrors turn `exited` and say so).
+The next hub resumes those without a job ([hub.md](hub.md#sessions-across-a-restart)); a job's agents are not
+resumed — the job frees their tasks and starts them again.
 
 A peer message is text for the agent and nothing else: permission requests are answered only by the user's
 `agents/permission`, and no message changes a setting. **The gate:** a job agent's permission request

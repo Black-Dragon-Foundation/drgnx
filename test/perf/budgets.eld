@@ -16,4 +16,6 @@
  (code-scrolling (:input :p95) 16) (code-scrolling (:input :max) 50)
  (typing-with-ghost (:input :p95) 16) (typing-with-ghost (:input :max) 50)
  (diff-scrolling (:input :p95) 16) (diff-scrolling (:input :max) 50)
+ (replace-typing (:input :p95) 16) (replace-typing (:input :max) 50)
+ (live-view (:input :p95) 16) (live-view (:input :max) 50)
  (redisplay (:redisplay :p95) 16))

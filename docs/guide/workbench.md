@@ -18,10 +18,19 @@ treemacs; see
 | | VS Code keys | Emacs keys | Vim keys |
 |---|---|---|---|
 | Show / hide the sidebar | `C-b` | `<f8>` | `SPC e` |
-| Focus the Explorer | `C-S-e` | `C-x M-e` | `SPC E` |
+| Focus the Explorer | palette | `C-x M-e` | `SPC E` |
+| View: Explorer / View: Search (swap the sidebar's view) | `C-S-e` / `C-S-f` | palette | palette / `SPC /` |
 | Focus the Buffers panel | `C-k e` | `C-x C-b` | `SPC ,` |
 | Back to the editor (in the sidebar) | `Escape` | `q` | `Escape` |
 | Focus the editor (group 1) | `C-1` | `C-x o` | `C-w` |
+
+The sidebar has **views**, like VS Code's activity bar: **View: Explorer** shows the Buffers panel, the Explorer
+and the Outline; **View: Search** shows the Search view. The two commands show their view and move focus to it (the Explorer's
+file tree, the Search view with the cursor in its Find field), like VS Code's `Ctrl+Shift+E` and `Ctrl+Shift+F`.
+Focus Explorer, Focus Outline and the like also switch the sidebar to their view first. The Search view is set up the
+first time it is asked for, also in the first second after a start (its module sets up once Emacs is idle). Swapping the view another way
+(`drgnx-wb-show-view`, as a layout does; there are no clickable view tabs yet) swaps the sections in place, at the same width, and leaves focus where it was (a focus inside the
+sidebar moves to the new view's first section); with the sidebar hidden it shows it. Hiding and showing the sidebar brings back the view it had.
 
 In the **Explorer**: a click on a folder opens or closes it; a click on a file opens it and keeps the Explorer
 focused (so you can keep browsing); a double click on a file moves to the editor. Keys: up/down (`n`/`p` in the
@@ -127,7 +136,10 @@ its own (`split-height-threshold` and `split-width-threshold` nil, `even-window-
 The table is one entry at the **end** of `display-buffer-alist`, so your own entries and
 `display-buffer-overriding-action` still win, and so does a caller that asks for a frame or for no window (`C-x 5 b`,
 `display-buffer-no-window`). `C-x 4 b` shows the buffer in another editor when there is one; a window you locked with
-`C-x w d` is left alone. Add or change a rule with `drgnx-wb-place`:
+`C-x w d` is left alone. If your configuration replaces the variable after drgnx started (`(setq display-buffer-alist …)`
+instead of `add-to-list`), drgnx's entry is gone and buffers go wherever Emacs puts them: every start writes
+`wb-report.eld` (in `~/.local/state/drgnx/`) once init is done, and `drgnx doctor` (`display-rules`) warns when the
+entry is missing. Add or change a rule with `drgnx-wb-place`:
 
 ```elisp
 (drgnx-wb-place 'my-log-mode 'editor)                 ; a major mode (derived modes too)
@@ -162,7 +174,7 @@ mode line (ibuffer, Info) cannot change a window's height — text never jumps (
   Click a tab to show it, `×` or middle-click closes it (the buffer stays open — close it in the Buffers panel).
   Close Tab `C-<f4>` · palette · `SPC b d`; Next / Previous Tab `C-<next>` / `C-<prior>` · Emacs' `C-x <right>` /
   `C-x <left>` · `SPC b n` / `SPC b p`. `*scratch*` is a tab only while it is shown. Killing a buffer takes its tab
-  out of every window at once; a window that showed it shows the tab to its right, else its left.
+  out of every window at once; closing the shown tab (or killing its buffer) shows the tab you used before it, as in VS Code; with no such tab, the one to its right, else its left. Each window keeps its own history.
 - **Breadcrumb**: project › folders › file, `●` while unsaved. A buffer with a header line of its own (the column
   headings of a list, clicked to sort) keeps it.
 - A buffer shown only for a moment — a preview while you choose in the minibuffer — does not become a tab.
@@ -183,19 +195,31 @@ open in the **other group** — the one you used last besides this one — never
 
 When Emacs exits, the workbench of every window is saved to `$XDG_STATE_HOME/drgnx/workbench.eld`
 (`~/.local/state/…`) — with a daemon, when you close its last client (`C-x C-c`), every window of that client — and
-the other windows are opened again at start (your window manager places them; the first one is the main window): the
-left dock, the panel and its tab, the right dock — each with its pixel size — the editor groups with their sizes, tabs and
-shown files, and the Explorer's folders. At the first graphical frame it comes back as it was
-(`drgnx-persist-restore-on-start`) — with a daemon, in the first `emacsclient -c` frame, once the server has shown its `*scratch*` there (the restored files replace it); closing the last graphical
-frame saves too. It also comes back **whenever a window opens after none**: a daemon that keeps running after its
-last window closed ([opening.md](opening.md#keep-running-or-quit)) gives the next `drgnx open` or `emacsclient -c` the saved layout again (a second window opened while one is
-already open is never restored over; a frame is restored once). A file that client asked for is shown in
-front afterwards (the server switches to it after the restore); add a function to `drgnx-persist-after-restore-functions` (called with the restored frame, after
-every restore, never prompting) to do something of your own at that moment. Each group's shown file opens at once and its other tabs open while you are idle; nothing asks
-anything at start (no remote files are touched, only safe local variables, no large-file question). Files that no
-longer exist are skipped, sizes are clamped to the frame, window parameters in the file are ignored (drgnx saves
-none), and a state in another format is ignored. Save / Restore
-Workbench Layout are in the palette. Only a graphical session saves — a batch run never writes your state.
+the other windows are opened again at start (your window manager places them; the one saved as the main window goes
+into the frame you start in, the others follow in order): the left dock (and the sidebar view it shows, Explorer or
+Search), the panel and its tab, the right dock — each with its pixel size — the layout you were in
+([layouts.md](layouts.md#after-a-restart)), the editor groups with their sizes, tabs and shown files, and the
+Explorer's folders. A window that rebuilds itself, such as a job window, comes back where and how big it was (only where a monitor still is; never bigger than its screen); a job
+window whose job no longer exists closes instead of waiting for the hub.
+
+At the first graphical frame it comes back as it was (`drgnx-persist-restore-on-start`) — with a daemon, in the first
+`emacsclient -c` frame, once the server has shown its `*scratch*` there (the restored files replace it); closing the
+last graphical frame saves too (a child frame, such as a popup, does not count as a window). It also comes back
+**whenever a window opens after none**: a daemon that keeps running after its last window closed
+([opening.md](opening.md#keep-running-or-quit)) gives the next `drgnx open` or `emacsclient -c` the saved layout again
+(a second window opened while one is already open is never restored over; a frame is restored once, and one whose
+restore failed is not tried again). A file that client asked for is shown in front afterwards (the server switches to
+it after the restore); add a function to `drgnx-persist-after-restore-functions` (called with the restored frame, after
+every restore, never prompting; the other windows of a saved workbench are not passed to it) to do something of your
+own at that moment. To keep data of your own in the saved state, add a function to `drgnx-persist-state-functions`
+that returns a plist of namespaced keys (`:mymodule-thing`) with readable values only; one that returns anything else
+is left out (said once) without costing the other functions' keys.
+
+Each group's shown file opens at once and its other tabs open while you are idle; nothing asks anything at start (no
+remote files are touched, only safe local variables, no large-file question). Files that no longer exist are skipped,
+sizes are clamped to the frame, window parameters in the file are ignored (drgnx saves none), and a state in another
+format is ignored. Save / Restore Workbench Layout are in the palette. Only a graphical session saves — a batch run
+never writes your state.
 
 ### Several windows
 

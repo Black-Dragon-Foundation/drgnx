@@ -86,7 +86,7 @@
        (drgnx-module-define (intern (format "test/%s" stage)) :doc "s" :stage stage
                             :setup (let ((s stage)) (lambda () (push s ran)))))
      (cl-letf (((symbol-function 'run-with-idle-timer) #'ignore))   ; no timer left to fire later
-       (drgnx-modules-start (make-temp-file "drgnx-empty" t)))
+       (drgnx-modules-start cfg))
      (run-hooks 'drgnx-first-file-hook)
      (should (equal ran '(first-file)))
      (run-hooks 'drgnx-first-gui-frame-hook 'drgnx-first-input-hook)
@@ -250,7 +250,7 @@
                 (lambda (secs repeat fn &rest args) (should-not repeat) (push (list secs fn args) timers)))
                ((symbol-function 'drgnx-modules-load-external) (lambda () (push 'external log)))
                ((symbol-function 'drgnx-modules-write-report) (lambda () (push 'report log))))
-       (drgnx-modules-start (make-temp-file "drgnx-empty" t))
+       (drgnx-modules-start cfg)
        (setq log nil timers (sort timers (lambda (a b) (< (car a) (car b)))))
        (should (= (length timers) 4))
        (should (apply #'< (mapcar #'car timers)))

@@ -31,7 +31,7 @@ follower is not a jank-guard violation (invariant I9).")
   (declare (indent 1))
   `(let ((drgnx-wb--owned (append ,windows drgnx-wb--owned))) ,@body))
 
-(defvar drgnx-wb--sections nil "Alist NAME → plist (:slot :title :buffer), the left dock's sections.")
+(defvar drgnx-wb--sections nil "Alist NAME → plist (:slot :title :buffer :view), the left dock's sections.")
 
 (defun drgnx-wb-display-name (name)
   "NAME as it can be shown on one row: control characters (a newline in a file name) as ^X."
@@ -43,7 +43,9 @@ follower is not a jank-guard violation (invariant I9).")
 
 (defun drgnx-wb-define-section (name &rest spec)
   "Define dock section NAME: SPEC is (:slot N :title STRING-OR-FUNCTION-RETURNING-ONE
-:buffer FUNCTION-RETURNING-A-BUFFER :height FRACTION-OF-THE-DOCK :on-show FUNCTION-OF-THE-WINDOW).
+:buffer FUNCTION-RETURNING-A-BUFFER :height FRACTION-OF-THE-DOCK :on-show FUNCTION-OF-THE-WINDOW
+:on-focus FUNCTION-OF-THE-WINDOW, run when `drgnx-wb-focus-section' focuses it,
+:view SYMBOL, the sidebar view the section belongs to, default `explorer').
 A function title is asked each time the dock shows (a panel's filter stays in its title)."
   (setf (alist-get name drgnx-wb--sections) spec)
   name)
@@ -60,11 +62,25 @@ A function title is asked each time the dock shows (a panel's filter stays in it
 
 (defvar drgnx-rules--placing)           ; drgnx-rules.el: the dock's side windows are meant, not rerouted
 
+(defun drgnx-wb--in-view-p (spec view)
+  "Non-nil when the section SPEC belongs to VIEW (a section without :view is the Explorer's)."
+  (eq (or (plist-get spec :view) 'explorer) view))
+
+(defun drgnx-wb--view-defined-p (view)
+  "Non-nil when at least one section belongs to VIEW."
+  (seq-some (lambda (s) (drgnx-wb--in-view-p (cdr s) view)) drgnx-wb--sections))
+
+(defun drgnx-wb-sidebar-view (&optional frame)
+  "The view the sidebar shows (or shows next) on FRAME.
+It is `explorer' unless another view with sections was chosen (a stale choice falls back)."
+  (let ((view (frame-parameter frame 'drgnx-wb-view)))
+    (if (and view (drgnx-wb--view-defined-p view)) view 'explorer)))
+
 (defun drgnx-wb-show-sidebar ()
-  "Show the left dock (all sections) without selecting it; keep the width it had."
+  "Show the left dock (the current view's sections) without selecting it; keep the width it had."
   (unless (drgnx-wb-sidebar-showing-p)
-    (let ((selected (selected-window)))
-      (pcase-dolist (`(,name . ,spec) (sort (copy-sequence drgnx-wb--sections)
+    (let ((selected (selected-window)) (view (drgnx-wb-sidebar-view)))
+      (pcase-dolist (`(,name . ,spec) (sort (seq-filter (lambda (s) (drgnx-wb--in-view-p (cdr s) view)) drgnx-wb--sections)
                                             (lambda (a b) (< (plist-get (cdr a) :slot) (plist-get (cdr b) :slot)))))
         (let ((drgnx-rules--placing t))
           (display-buffer-in-side-window
@@ -94,6 +110,44 @@ A function title is asked each time the dock shows (a panel's filter stays in it
     (when (memq (selected-window) windows) (drgnx-wb-focus-editor))
     (dolist (w windows) (when (window-live-p w) (delete-window w)))))
 
+(defvar drgnx-wb-view-providers nil
+  "Alist VIEW → function that defines VIEW's sections now.  A module that sets up at idle registers one when its file
+loads, so the view's key works before then (`drgnx-wb-show-view' calls it when VIEW has no sections).")
+
+(defun drgnx-wb-show-view (view)
+  "Show only VIEW's sections in the left dock, swapping them in place at the same width.
+Focus stays where it was (a focus in the dock moves to the new view's first section); a hidden
+sidebar is shown first.  A view with no sections is a `user-error' and changes nothing."
+  (unless (drgnx-wb--view-defined-p view)
+    (when-let* ((provide (alist-get view drgnx-wb-view-providers))) (funcall provide)))
+  (unless (drgnx-wb--view-defined-p view) (user-error "No %s view" view))
+  (let ((in-dock (memq (selected-window) (drgnx-wb--dock-windows))))
+    (unless (and (eq view (drgnx-wb-sidebar-view)) (drgnx-wb-sidebar-showing-p))
+      (when-let* ((windows (drgnx-wb--dock-windows)))
+        (set-frame-parameter nil 'drgnx-wb-dock-px (window-pixel-width (car windows)))
+        (when in-dock (drgnx-wb-focus-editor))
+        (dolist (w windows) (when (window-live-p w) (delete-window w))))
+      (set-frame-parameter nil 'drgnx-wb-view view)
+      (drgnx-wb-show-sidebar)
+      (when-let* ((_ in-dock) (w (car (drgnx-wb--dock-windows))))
+        (select-window w)))))
+
+(defun drgnx-wb-view-explorer ()
+  "Show the Explorer view (the Buffers panel, the Explorer, the Outline) in the sidebar and focus the file tree.
+Like VS Code's Ctrl+Shift+E;
+`drgnx-wb-show-view' (a layout, or a program) swaps the view and keeps the focus where it was."
+  (interactive)
+  (drgnx-wb-show-view 'explorer)
+  (drgnx-wb-focus-section 'explorer))
+
+(defun drgnx-wb-view-search ()
+  "Show the Search view in the sidebar and focus it.
+Like VS Code's Ctrl+Shift+F;
+`drgnx-wb-show-view' (a layout, or a program) swaps the view and keeps the focus where it was."
+  (interactive)
+  (drgnx-wb-show-view 'search)
+  (drgnx-wb-focus-section 'search))
+
 (defun drgnx-wb-toggle-sidebar ()
   "Show or hide the left dock (Buffers and Explorer)."
   (interactive)
@@ -115,9 +169,13 @@ A function title is asked each time the dock shows (a panel's filter stays in it
   (select-window (drgnx-wb-editor-window)))
 
 (defun drgnx-wb-focus-section (name)
-  "Show the dock if needed and focus its section NAME."
-  (drgnx-wb-show-sidebar)
-  (select-window (drgnx-wb-section-window name)))
+  "Show the dock if needed, in the view section NAME belongs to, and focus NAME.
+The section's :on-focus function then gets its window (the Search view puts point in its query field)."
+  (let ((spec (alist-get name drgnx-wb--sections)))
+    (if spec (drgnx-wb-show-view (or (plist-get spec :view) 'explorer)) (drgnx-wb-show-sidebar))
+    (let ((w (drgnx-wb-section-window name)))
+      (select-window w)
+      (when-let* ((fn (plist-get spec :on-focus))) (funcall fn w)))))
 
 (provide 'drgnx-wb)
 ;;; drgnx-wb.el ends here

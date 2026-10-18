@@ -3,13 +3,13 @@
 set -euo pipefail
 here="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 
-emacs_bin() { # the one Emacs every subcommand runs in: $DRGNX_EMACS, else the one install.sh recorded, else PATH's
+emacs_bin() { # the one Emacs every subcommand runs in: $DRGNX_EMACS, else the one install.sh recorded (an absolute path), else PATH's
   if [[ -n "${DRGNX_EMACS:-}" ]]; then printf '%s\n' "$DRGNX_EMACS"; return; fi
   local file="${DRGNX_CONFIG_DIR:-$HOME/.config/drgnx}/emacs" line=""
   if [[ -f "$file" ]]; then   # first line only, as a path: never evaluated
     IFS= read -r line <"$file" || true
     line="${line#"${line%%[![:space:]]*}"}"; line="${line%"${line##*[![:space:]]}"}"
-    if [[ -n "$line" && -f "$line" && -x "$line" ]]; then printf '%s\n' "$line"; return; fi
+    if [[ "$line" == /* && -f "$line" && -x "$line" ]]; then printf '%s\n' "$line"; return; fi
   fi
   echo emacs
 }
@@ -42,7 +42,7 @@ cmd_doctor() { # [--json] [--dev] — checks run inside the Emacs drgnx uses (co
     local env rt launcher
     env="$(env_eval '(drgnx-env-container)')"
     rt="${DRGNX_CONTAINER:-$(env_eval '(drgnx-env-container-runtime)')}"   # set: no host Emacs needed (CI)
-    launcher="$("$(emacs_bin)" --batch -Q -L "$here/harness" -l drgnx-ui --eval '(princ (drgnx-ui-launcher))')"
+    launcher="$("$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -l drgnx-ui --eval '(princ (drgnx-ui-launcher))')"
     printf 'INFO  %-20s %s\n' "environment" "${env:-host}" "container-runtime" "${rt:-none}" \
       "session-launcher" "$launcher$([ "$launcher" = detached ] && echo ' (process group, no systemd unit)')"
   fi
@@ -58,15 +58,80 @@ ui() { # the harness controller, in batch Emacs (harness/drgnx-ui.el)
         -l drgnx-ui -f drgnx-ui-cli -- "$@"
 }
 
-test_batch() { # SIGPIPE ignored, as the hub runs (tests serve one in-process): a test may fail, never end the run
-  ( trap '' PIPE
-    exec "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
-         -l "$here/harness/run-ert.el" \
-         -f drgnx-run-ert-batch "$here/test/unit" )
+ui_exec() { # ui, as the Emacs itself (run_in_tmp signals and waits for that process, not for a subshell around it)
+  exec "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
+        -l drgnx-ui -f drgnx-ui-cli -- "$@"
 }
 
+run_in_tmp() { # CMD… — run CMD with a TMPDIR of its own (so temporary-file-directory and libgccjit use it); on every exit
+  # (end, error, INT, TERM, HUP) CMD and what it started are stopped and the directory removed: /tmp is RAM, a run leaves nothing
+  # there.  The runner (harness/run-ert.el) is told the directory in DRGNX_RUN_TMP and never deletes it: only this trap does.
+  # --shards (see run_in_tmp_shards): the children make dirs of their own in it instead.
+  local shards=""
+  if [[ "${1:-}" == --shards ]]; then shards=1; shift; fi
+  RUN_TMP="" RUN_PID=""
+  trap run_tmp_cleanup EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
+  RUN_TMP="$(mktemp -d "${TMPDIR:-/tmp}/drgnx-run.XXXXXX")"
+  RUN_TMP="$(cd "$RUN_TMP" && pwd -P)"      # absolute, whatever TMPDIR was
+  local rc=0
+  set -m                                    # the child leads a process group of its own: signalled as a whole
+  ( export TMPDIR="$RUN_TMP" DRGNX_RUN_TMP="$RUN_TMP"
+    if [[ -n "$shards" ]]; then unset DRGNX_RUN_TMP; fi
+    "$@" ) <&0 &                            # not exec'd: this shell stays to clean up
+  RUN_PID=$!
+  set +m
+  wait "$RUN_PID" || rc=$?
+  RUN_PID=""
+  return "$rc"
+}
+
+run_in_tmp_shards() { # CMD… — like run_in_tmp, for a CMD that starts several test runs (drgnx check): each makes its own dir in it
+  run_in_tmp --shards "$@"
+}
+
+run_tmp_cleanup() {
+  local i grace="${DRGNX_RUN_GRACE:-30}"
+  trap '' INT TERM HUP                      # a second signal does not cut the cleanup short
+  [[ "$grace" =~ ^[0-9]+$ ]] || grace=30
+  if [[ -n "${RUN_PID:-}" ]]; then
+    # TERM to the group, then the command itself gets $DRGNX_RUN_GRACE s (default 30) to end: it stops what it
+    # started outside the group (check's jobs: up to 15 s; the GUI tiers' sessions: ~8 s each) before we
+    # KILL what is left and delete the directory those still use.
+    kill -TERM -- "-$RUN_PID" 2>/dev/null || true
+    for ((i = 0; i < grace * 10; i++)); do kill -0 "$RUN_PID" 2>/dev/null || break; sleep 0.1; done
+    kill -KILL -- "-$RUN_PID" 2>/dev/null || true
+    wait "$RUN_PID" 2>/dev/null || true
+  fi
+  if [[ -n "${RUN_TMP:-}" ]]; then rm -rf -- "$RUN_TMP"; fi
+  return 0
+}
+
+check_emacs() { # the CI check (core/drgnx-check.el); exec'd, see ui_exec
+  exec "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+        -l drgnx-check -f drgnx-check-cli -- "$@"
+}
+
+test_batch_emacs() { # SIGPIPE ignored, as the hub runs (tests serve one in-process): a test may fail, never end the run
+  trap '' PIPE
+  # The unit tier never reaches the user's desktop: dbus.el connects to the bus in the C environment (a dead
+  # address, so nothing answers), no display or compositor socket, a runtime directory of its own.
+  # (The runner binds the same inside Emacs, for Lisp code and the children it starts.)
+  local run="${TMPDIR:-/tmp}/run"; mkdir -p -m 700 "$run"
+  # DRGNX_TEST_DIR: a smaller suite (the test of the temp-dir cleanup runs one)
+  exec env -u DISPLAY -u WAYLAND_DISPLAY -u SWAYSOCK -u I3SOCK -u HYPRLAND_INSTANCE_SIGNATURE -u NIRI_SOCKET \
+       DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/drgnx-unit-test XDG_RUNTIME_DIR="$run" \
+       "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
+       -l "$here/harness/run-ert.el" \
+       -f drgnx-run-ert-batch "${DRGNX_TEST_DIR:-$here/test/unit}"
+}
+
+test_batch() { run_in_tmp test_batch_emacs; }
+
 env_eval() { # FORM — evaluate with harness/drgnx-env.el loaded, print the result
-  "$(emacs_bin)" --batch -Q -L "$here/harness" -l drgnx-env --eval "(princ (or $1 \"\"))"
+  "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -l drgnx-env --eval "(princ (or $1 \"\"))"
 }
 
 test_container() { # [--ui] — the batch (or GUI) tier inside a fedora:45 / Emacs 31.1 container
@@ -87,6 +152,8 @@ test_container() { # [--ui] — the batch (or GUI) tier inside a fedora:45 / Ema
   else
     "$rt" build -q -t "$image" -f "$here/test/container/$file" "$here/test/container" >/dev/null
   fi
+  # a narrowed run stays narrow inside the container: the selector goes in with its value
+  if [ -n "${DRGNX_TEST_SELECTOR:-}" ]; then args+=(-e "DRGNX_TEST_SELECTOR=$DRGNX_TEST_SELECTOR"); fi
   "$rt" run --rm ${args[@]+"${args[@]}"} -v "$mount" -w /src "$image" "${cmd[@]}"
 }
 
@@ -139,15 +206,16 @@ test_install() { # [NAME…] — install.sh end to end in fresh containers (slow
 cmd_test() {
   case "${1:-}" in
     "") test_batch ;;
+    --one-process) export DRGNX_TEST_ONE_PROCESS=1; test_batch ;;   # every test file in one Emacs (hunting a leak across files)
     --install) shift; test_install "$@" ;;
-    --ui) ui test-ui ;;
-    --scenario) shift; ui test-scenario "$@" ;;
-    --bench) ui test-bench ;;
-    --perf) shift; [ "${1:-}" = --audit ] && export DRGNX_PERF_AUDIT=1; ui test-perf ;;
-    --soak) shift; ui test-soak "${1:-30}" ;;
+    --ui) run_in_tmp ui_exec test-ui ;;
+    --scenario) shift; run_in_tmp ui_exec test-scenario "$@" ;;
+    --bench) run_in_tmp ui_exec test-bench ;;
+    --perf) shift; [ "${1:-}" = --audit ] && export DRGNX_PERF_AUDIT=1; run_in_tmp ui_exec test-perf ;;
+    --soak) shift; run_in_tmp ui_exec test-soak "${1:-30}" ;;
     --container) shift; test_container "$@" ;;
     --podman) shift; DRGNX_CONTAINER=podman test_container "$@" ;;
-    *) echo "usage: drgnx test [--ui | --scenario [--config C] | --bench | --perf [--audit] | --soak [MIN] | --container [--ui] | --install [NAME…]]" >&2; exit 2 ;;
+    *) echo "usage: drgnx test [--one-process | --ui | --scenario [--config C] | --bench | --perf [--audit] | --soak [MIN] | --container [--ui] | --install [NAME…]]" >&2; exit 2 ;;
   esac
 }
 
@@ -157,8 +225,72 @@ client() { # emacsclient to drgnx's server ($DRGNX_SERVER_NAME, default drgnx); 
   "$(emacsclient_bin)" -a false -s "${DRGNX_SERVER_NAME:-drgnx}" "$@"
 }
 
-open_start() { # start drgnx's daemon (the systemd unit when it is enabled), wait ≤ 10 s for its server
-  local name="${DRGNX_SERVER_NAME:-drgnx}" log i
+open_wait_init() { # OPEN_WAIT: seconds to wait for a starting daemon, $DRGNX_OPEN_WAIT, default 30 (a cold start natively compiles)
+  [[ -z "${OPEN_WAIT:-}" ]] || return 0
+  local w="${DRGNX_OPEN_WAIT:-30}"
+  if [[ "$w" =~ ^[0-9]+$ ]] && ((10#$w > 0)); then OPEN_WAIT=$((10#$w))     # 10#: "08" is eight, not a bad octal
+  else echo "drgnx: DRGNX_OPEN_WAIT must be a whole number of seconds above 0, not '$w': using 30" >&2; OPEN_WAIT=30; fi
+}
+
+probe() { # emacsclient for a question to the daemon: it answers within 5 s or it counts as not answering
+  client --timeout=5 "$@"
+}
+
+open_lock() { # one `drgnx open' at a time decides whether to start the daemon and open a window (a mkdir lock)
+  local stale deadline token since owner nostamp="" lock="${XDG_STATE_HOME:-$HOME/.local/state}/drgnx/open-${DRGNX_SERVER_NAME:-drgnx}.lock"
+  mkdir -p "${lock%/*}" 2>/dev/null || return 0     # nowhere to keep a lock: go on without
+  open_wait_init
+  stale=$((OPEN_WAIT + 15))                         # a holder is done within the wait; older: its owner is gone
+  deadline=$((SECONDS + stale + 10))
+  token="$$.$RANDOM$RANDOM"
+  while ((SECONDS < deadline)); do
+    if mkdir "$lock" 2>/dev/null; then
+      printf '%s\n' "$token" >"$lock/owner"; date +%s >"$lock/since"
+      OPEN_LOCK="$lock" OPEN_TOKEN="$token"; return 0
+    fi
+    since="$(cat "$lock/since" 2>/dev/null || true)" owner="$(cat "$lock/owner" 2>/dev/null || true)"
+    if [[ "$since" =~ ^[0-9]+$ ]]; then
+      nostamp=""
+      if (($(date +%s) - since > stale)); then open_steal "$lock" "$owner"; fi
+    else   # made a moment ago, or its owner died before stamping it: stale after 5 s without a stamp
+      [[ -n "$nostamp" ]] || nostamp=$SECONDS
+      if ((SECONDS - nostamp >= 5)); then open_steal "$lock" "$owner"; nostamp=""; fi
+    fi
+    sleep 0.1
+  done
+}
+
+open_steal() { # LOCK OWNER — remove a stale lock, but only the one seen (OWNER's); a fresh lock made meanwhile stays
+  local lock="$1" owner="$2" grab="$1.stale.$$"
+  mv "$lock" "$grab" 2>/dev/null || return 0         # one winner among those who find it stale
+  if [[ "$(cat "$grab/owner" 2>/dev/null || true)" == "$owner" ]]; then rm -rf "$grab" || true
+  elif [[ ! -e "$lock" ]] && mv "$grab" "$lock" 2>/dev/null; then :   # someone's fresh lock: put it back
+  else rm -rf "$grab" || true; fi
+}
+
+open_unlock() { # only the lock this command made: a stolen one is another command's now
+  if [[ -n "${OPEN_LOCK:-}" ]]; then
+    if [[ "$(cat "$OPEN_LOCK/owner" 2>/dev/null || true)" == "${OPEN_TOKEN:-}" ]]; then rm -rf "$OPEN_LOCK" || true; fi
+    OPEN_LOCK=""
+  fi
+}
+
+open_ensure_window() { # drgnx's daemon is running and has a window; under the lock, so two opens make one of each
+  local deadline
+  probe -e t >/dev/null 2>&1 || open_start || return 1
+  if [[ "$(probe -e '(drgnx-session-gui-frame-p)' 2>/dev/null)" != t ]]; then
+    client -n -c >/dev/null || return 1
+    deadline=$((SECONDS + 10))
+    while ((SECONDS < deadline)); do   # -n returns before the window exists: the next open must see it
+      [[ "$(probe -e '(drgnx-session-gui-frame-p)' 2>/dev/null)" == t ]] && break
+      sleep 0.1
+    done
+  fi
+}
+
+open_start() { # start drgnx's daemon (the systemd unit when it is enabled), wait for its server (OPEN_WAIT seconds)
+  local name="${DRGNX_SERVER_NAME:-drgnx}" log deadline notice noticed=""
+  open_wait_init
   if [[ "$name" == drgnx ]] && command -v systemctl >/dev/null 2>&1 && systemctl --user is-enabled --quiet drgnx 2>/dev/null; then
     systemctl --user start drgnx || return 1
   else
@@ -166,17 +298,21 @@ open_start() { # start drgnx's daemon (the systemd unit when it is enabled), wai
     mkdir -p "${log%/*}"
     # in its own session, outliving this shell: setsid, else perl (macOS), as core/drgnx-jobs.el does
     if command -v setsid >/dev/null 2>&1; then
-      setsid -f "$(emacs_bin)" --bg-daemon="$name" --init-directory="$here/init" </dev/null >"$log" 2>&1
+      setsid -f "$(emacs_bin)" --bg-daemon="$name" --init-directory="$here/init" </dev/null >>"$log" 2>&1
     else
       perl -MPOSIX -e 'fork and exit; POSIX::setsid(); exec @ARGV' \
-           "$(emacs_bin)" --bg-daemon="$name" --init-directory="$here/init" </dev/null >"$log" 2>&1
+           "$(emacs_bin)" --bg-daemon="$name" --init-directory="$here/init" </dev/null >>"$log" 2>&1
     fi
   fi
-  for ((i = 0; i < 100; i++)); do
-    client -e t >/dev/null 2>&1 && return 0
+  deadline=$((SECONDS + OPEN_WAIT)) notice=$((SECONDS + OPEN_WAIT / 3))   # wall-clock seconds: a poll takes more than its sleep
+  while ((SECONDS < deadline)); do
+    probe -e t >/dev/null 2>&1 && return 0
+    if [[ -z "$noticed" ]] && ((SECONDS >= notice)); then
+      echo "drgnx: drgnx is still starting (waiting up to $OPEN_WAIT s)…" >&2; noticed=1
+    fi
     sleep 0.1
   done
-  echo "drgnx: drgnx did not start within 10 s (its messages: ${log:-journalctl --user -u drgnx}; try: drgnx doctor)" >&2
+  echo "drgnx: drgnx did not start within $OPEN_WAIT s (its messages: ${log:-journalctl --user -u drgnx}; try: drgnx doctor)" >&2
   return 1
 }
 
@@ -187,7 +323,7 @@ elisp_string() { # $1 as the inside of an Emacs Lisp string literal
 
 open_check() { # CI: start the daemon if needed, print its Emacs version, stop it again if this started it
   local started="" out i
-  if ! client -e t >/dev/null 2>&1; then open_start || return 1; started=1; fi
+  if ! probe -e t >/dev/null 2>&1; then open_start || return 1; started=1; fi
   if ! out="$(client -e '(emacs-version)' 2>&1)"; then
     echo "drgnx: drgnx's server did not answer: $out" >&2
     [[ -n "$started" ]] && client -e '(kill-emacs)' >/dev/null 2>&1
@@ -196,7 +332,7 @@ open_check() { # CI: start the daemon if needed, print its Emacs version, stop i
   out="${out#\"}"; printf '%s\n' "${out%\"}"
   if [[ -n "$started" ]]; then
     client -e '(kill-emacs)' >/dev/null 2>&1 || true
-    for ((i = 0; i < 50; i++)); do client -e t >/dev/null 2>&1 || return 0; sleep 0.1; done
+    for ((i = 0; i < 50; i++)); do probe -e t >/dev/null 2>&1 || return 0; sleep 0.1; done
     echo "drgnx: the daemon this started did not stop" >&2; return 1
   fi
 }
@@ -219,13 +355,16 @@ cmd_open() { # [--check] [--wait] [PATH…] — open PATHs (none: the windows as
   if [[ -n "$wait" ]] && { ((${#dirs[@]})) || ! ((${#files[@]})); }; then
     echo "drgnx: open --wait opens files, not folders: it returns when you are done with them (C-x #)" >&2; return 2
   fi
-  client -e t >/dev/null 2>&1 || open_start || return 1
+  OPEN_LOCK=""
+  trap open_unlock EXIT; trap 'exit 130' INT TERM; trap 'exit 129' HUP    # the lock never outlives this command
+  open_lock
   if [[ -n "$wait" && "$(uname -s)" != Darwin && -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
+    probe -e t >/dev/null 2>&1 || open_start || return 1
+    open_unlock
     client -t -- "${files[@]}"; return   # no display (ssh, a console): in this terminal
   fi
-  if [[ "$(client -e '(drgnx-session-gui-frame-p)' 2>/dev/null)" != t ]]; then
-    client -n -c >/dev/null || return 1
-  fi
+  open_ensure_window || return 1
+  open_unlock
   client -n -e '(drgnx-session-raise)' >/dev/null 2>&1 || true
   client -n -e "(progn (require 'drgnx-ai) (drgnx-ai-load-keys-soon))" >/dev/null 2>&1 || true   # once per daemon, from a timer
   if [[ -n "$wait" ]]; then client -- "${files[@]}" >/dev/null; return; fi   # no -n: until C-x # (drgnx as $EDITOR)
@@ -245,7 +384,9 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx build             byte-compile drgnx (core, wb, modules); native compilation follows on load
        drgnx doctor [--json] [--dev]
                                is this machine ready for drgnx? (--dev: also the tools to develop it)
-       drgnx test              batch tests
+       drgnx test [--one-process]
+                               batch tests, each test file in an Emacs of its own
+                               (--one-process: all in one Emacs, to find a leak across files)
        drgnx test --ui         GUI tests in a headless session (mutter)
        drgnx test --bench      the workbench vs treemacs and ibuffer, timed in a GUI session
        drgnx test --perf [--audit]
@@ -260,9 +401,11 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx test --install [NAME…]
                                install.sh end to end in fresh distribution containers (slow;
                                names: fedora-44 debian-trixie ubuntu-26.04 fedora-45 archlinux)
-       drgnx sync [--offline] [--seed DIR]
+       drgnx sync [--offline] [--seed DIR] [--prune [--dry-run]]
                                install the packages drgnx needs (the only thing that installs);
-                               --offline: from the lock and the cache; --seed: copy another elpa first
+                               --offline: from the lock and the cache; --seed: copy another elpa first;
+                               --prune: remove the packages the manifest no longer needs (listed);
+                               --prune --dry-run: only list them
        drgnx upgrade           newest packages; the previous generation comes back if they break
        drgnx rollback [N]      the packages of generation N (default: the one before)
        drgnx generations | lock
@@ -342,9 +485,7 @@ case "${1:-help}" in
         shift
         "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
               -l drgnx-keys-diff -f drgnx-keys-diff-cli -- "$@" ;;
-  check) shift
-        "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
-              -l drgnx-check -f drgnx-check-cli -- "$@" ;;
+  check) shift; run_in_tmp_shards check_emacs "$@" ;;
   fmt) shift
         "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-fmt -f drgnx-fmt-cli -- "$@" ;;

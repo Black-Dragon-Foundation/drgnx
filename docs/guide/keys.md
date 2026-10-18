@@ -25,15 +25,18 @@ The onboarding flow will ask which one you want (VS Code preselected).
 | Command | VS Code | Emacs | Vim |
 |---|---|---|---|
 | Command Palette | `C-S-p`, `F1` | `C-S-p` | `SPC SPC` |
-| Keyboard Shortcuts (key sheet) | `C-k C-s` | `C-h C-k` | `SPC ?` |
+| Keyboard Shortcuts (key sheet) | `C-k C-r` | `C-h C-k` | `SPC ?` |
 | Keyboard Profile… | `C-k C-p` | — | `SPC h k` |
+| Preferences: Keyboard Shortcuts (the editor) | `C-k C-s` | — | `SPC h s` |
 | Open File… | `C-o` | `C-x C-f` | `SPC f f` |
 | Save | `C-s` | `C-x C-s` | `SPC f s` |
 | Toggle Line Numbers | — | — | `SPC u l` |
 | Module Report | — | — | `SPC h m` |
 | Toggle Sidebar | `C-b` | `<f8>` | `SPC e` |
-| Focus Explorer / Buffers | `C-S-e` / `C-k e` | `C-x M-e` / `C-x C-b` | `SPC E` / `SPC ,` |
-| Toggle Panel / Right Dock | ``C-` `` / `C-M-b` | — / — | `SPC j` / `SPC R` |
+| Focus Explorer / Buffers | palette / `C-k e` | `C-x M-e` / `C-x C-b` | `SPC E` / `SPC ,` |
+| View: Explorer / View: Search | `C-S-e` / `C-S-f` | palette / palette | palette / `SPC /` |
+| Replace in Files | `C-S-h` | `C-c s r` | `SPC s r` |
+| Toggle Panel / Right Dock | ``C-` ``, `C-j` / `C-M-b` | — / — | `SPC j` / `SPC R` |
 | Close Tab / Next / Previous | `C-<f4>` / `C-<next>` / `C-<prior>` | — / Emacs' `C-x <right>` / `C-x <left>` | `SPC b d` / `SPC b n` / `SPC b p` |
 | Split Editor Right / Down | ``C-\`` / ``C-k C-\`` | Emacs' `C-x 3` / `C-x 2` | `SPC w v` / `SPC w s` |
 | Focus Group 1–3 / Move Editor to Next Group | `C-1`–`C-3` / `C-M-<right>` | `C-x o` / — | `SPC 1`–`SPC 3` / `SPC w m` |
@@ -41,11 +44,12 @@ The onboarding flow will ask which one you want (VS Code preselected).
 | Fold / Unfold | `C-{` / `C-}` | — | `SPC z c` / `SPC z o` |
 | Expand / Shrink Selection | `M-S-<right>` / `M-S-<left>` | — | `SPC v` / `SPC V` |
 | Zen Mode | `C-k z` | — | `SPC u z` |
+| Next Layout / Layout… | `C-k C-l` / — | — / — | `SPC l n` / `SPC l l` |
 | Go to Line | Emacs' `M-g g` | `M-g g` | `SPC g l` |
-| Go to Definition / References / Rename Symbol / Hover | `F12` / `S-F12` / `F2` / `C-S-SPC` | Emacs' `M-.` / `M-?` / — / `C-h .` | `SPC c d` / `SPC c r` / `SPC c R` / `SPC c h` |
+| Go to Definition / References / Rename Symbol / Hover | `F12` / `S-F12` / `F2` / `C-S-SPC` | Emacs' `M-.` / `M-?` / palette / `C-h .` | `SPC c d` / `SPC c r` / `SPC c R` / `SPC c h` |
 | Source Control / Blame | `C-S-g` / — | Emacs' `C-x v d` / `C-x v g` | `SPC g s` / `SPC g b` |
 | New Terminal | ``C-S-` `` | — | `SPC t n` |
-| Quick Open / Search in Project / Go to Symbol | `C-p` / `C-S-f` / `C-S-o` | Emacs' `C-x p f` / `C-x p g` / `M-g i` | `SPC f p` / `SPC s p` / `SPC s s` |
+| Quick Open / Search in Project / Go to Symbol | `C-p` / palette / `C-S-o` | Emacs' `C-x p f` / `C-x p g` / `M-g i` | `SPC f p` / `SPC s p` / `SPC s s` |
 | Org Capture / Agenda | `C-c c` / `C-c a` | `C-c c` / `C-c a` | `SPC n c` / `SPC n a` |
 
 The Explorer's and the Buffers panel's own keys (rows, expand, open, close) are in [workbench.md](workbench.md).
@@ -63,9 +67,9 @@ everyday keys of the VS Code profile on a Mac, as in VS Code:
 | Command | Mac |
 |---|---|
 | Command Palette / Quick Open (files) | ⌘⇧P (or F1) / ⌘P |
-| Search in Project / Replace in Project / Find in File | ⌘⇧F / ⌘⇧H / ⌘F |
+| View: Search / Replace in Files / Find in File | ⌘⇧F / ⌘⇧H / ⌘F |
 | Save / Save All / New Untitled / Close Tab / Reopen Closed Tab | ⌘S / ⌥⌘S / ⌘N / ⌘W / ⌘⇧T |
-| Toggle Sidebar / Explorer / Toggle Panel / New Terminal | ⌘B / ⌘⇧E / ⌃\` / ⌃⇧\` |
+| Toggle Sidebar / View: Explorer / Toggle Panel / New Terminal | ⌘B / ⌘⇧E / ⌃\` / ⌃⇧\` |
 | Source Control | ⌃⇧G |
 | Go to Definition / References / Rename Symbol / Quick Fix | F12 / ⇧F12 / F2 / ⌘. |
 | Toggle Comment / Select Line / Delete Line / Undo / Redo | ⌘/ / ⌘L / ⌘⇧K / ⌘Z / ⌘⇧Z |
@@ -121,10 +125,11 @@ Cmd+X and Cmd+Z are Emacs' own Mac keys (copy, paste, cut, undo). The Emacs and 
 **Modifier keys.** With the VS Code profile (also as the app layer under Emacs or Vim editing) drgnx sets, on a Mac:
 Cmd is `s-` (super), the **left Option is Meta** (`M-`: Option+← moves by word, Option+Cmd+→ is next tab), and the
 **right Option types characters** (`@ # { [ €`). Other Mac apps type characters with either Option, which on German,
-French and many other layouts is how you type `@ # { [`: so on a Mac, Look and Keys asks once "Do you type @ # { [
-with Option? (German, French, … keyboards)". **Yes:** the left Option types characters too, for ordinary keys, and
+French and many other layouts is how you type `@ # { [`: so on a Mac, Look and Keys asks "Left Option key (types
+characters: @ # { [ on German, French, … keyboards)", offering your saved answer on Return (Meta before you have
+answered). **Types characters:** the left Option types characters too, for ordinary keys, and
 stays Meta for the arrows and other function keys and the mouse — Option+← / → still move by word
-(`ns-alternate-modifier` is `(:ordinary none :function meta :mouse meta)`); **no:** the left Option is Meta, as above.
+(`ns-alternate-modifier` is `(:ordinary none :function meta :mouse meta)`); **Meta:** the left Option is Meta, as above.
 The answer is saved in `keys.eld` as `:mac-option characters` or `:mac-option meta` (edit it there too); without
 interaction (`drgnx onboard --non-interactive`) nothing changes. Switching to the Emacs or Vim profile puts back what
 was there. (GNU Emacs' `ns-` variables and the Mac port's `mac-` ones are both handled.)
@@ -175,11 +180,34 @@ cannot be bound, a prefix it replaces) joins the list and the report then.
 - `:map` is a keymap symbol or `(FEATURE . KEYMAP)` for a keymap that exists once FEATURE is loaded.
 - `:mac` gives a different key on macOS: `(palette "C-c p" :mac "s-p")`; `:mac ()` is no key there, and
   `(quit :none "reason" :mac "s-q")` a key only there.
+- `:everywhere` names keys that must work in every mode: ``(toggle-panel "C-`" :everywhere "C-j")`` binds `C-j`
+  as usual and also in a keymap that comes before every major and minor mode map, so lisp-interaction or Org mode
+  cannot take it. Use it for one-stroke keys of the global keymap only; the minibuffer keeps its own keys.
+  Switching profiles or applying keys again removes the keymap. On macOS an entry with `:mac` has no `:everywhere`
+  keys there; without `:mac` they become Cmd keys like the others. A binding of the same key in a mode's keymap
+  from `keys.eld` (or a higher layer) wins in that mode, and the key sheet lists the conflict.
+  With the VS Code keys `C-j` toggles the panel everywhere, which also replaces Org's `C-j`, lisp-interaction's
+  `eval-print-last-sexp`, ielm's and term's; to keep a mode's `C-j`, write ``(toggle-panel "C-`" "M-j")`` in
+  `keys.eld`. It applies only when the profile also owns the editing keys: with "Emacs editing + VS Code app keys"
+  or Vim editing, `C-j` stays the editing layer's in modes and Toggle Panel has it only where Emacs' global key was.
 - A mistake never breaks startup: an unreadable file, an unknown command or an invalid key is a problem on the key
   sheet and in the doctor, and everything else still applies.
 - Keyboard Profile… rewrites only `:layers` and keeps the rest of the file.
+- The Keyboard Shortcuts editor writes through `drgnx-keys-edit` (`core/drgnx-keys-edit.el`): `drgnx-keys-edit-bind`,
+  `-add`, `-replace`, `-unbind`, `-reset`, `-reset-all` and `-undo`. Each changes one entry of `:bind` or `:unbind` and
+  keeps your comments, `:layers` and the other entries as they are; an entry keeps its `:mac` keys and `:none` reason
+  (on a Mac, edits go to the `:mac` keys of an entry that has them). A symlinked `keys.eld` stays a symlink, and the
+  file keeps its permissions; it is written as UTF-8. A `keys.eld` that does not read is reported and never written, and
+  so is one whose `:bind` or `:unbind` is not a plain list written out (`:bind ((palette "C-c p"))`, not
+  `:bind '((palette "C-c p"))`): the error says to fix it by hand and nothing is changed. A missing file is created
+  with a header comment. Taking the last
+  key away puts the command in `:unbind`.
+- Undo goes one step back, also after a restart: `keys.eld.undo` holds the text before and after the last change made
+  by the editor. If `keys.eld` has been changed since (by you, another session, or Keyboard Profile…), undo refuses and
+  writes nothing. The keys apply at once after every change. Changes made inside `drgnx-keys-edit-one-step` are one
+  step (the editor's Replace: the key taken from other commands and given to this one).
 
-A graphical Keyboard Shortcuts editor (search, press-to-rebind, writes `keys.eld`) comes in M4.
+The Keyboard Shortcuts editor (Preferences: Keyboard Shortcuts) changes these keys for you: [shortcuts.md](shortcuts.md).
 
 ## For module authors
 
@@ -220,8 +248,8 @@ drgnx's own keys — or the line is explained. The Emacs keys gryphn leaves alon
 
 | gryphn | Why it is not in drgnx, or differs |
 |---|---|
-| `C-k` (kill line) | starts VS Code's chords in drgnx (`C-k C-s` key sheet, `C-k z` zen, `C-k s` save all, …); `C-S-k` deletes the line |
-| `<f1>` key sheet | `<f1>` is the palette, as in VS Code; the key sheet is `C-k C-s` (VS Code's Keyboard Shortcuts) |
+| `C-k` (kill line) | starts VS Code's chords in drgnx (`C-k C-r` key sheet, `C-k z` zen, `C-k s` save all, …); `C-S-k` deletes the line |
+| `<f1>` key sheet | `<f1>` is the palette, as in VS Code; the key sheet is `C-k C-r` (VS Code's Keyboard Shortcuts Reference) |
 | Window 4 … 9 (`M-4` … `M-9`) | drgnx numbers editor groups (`M-1` … `M-3`, `C-1` … `C-3`), not every window; `M-o` picks any window |
 
 | gryphn | Why it is not in drgnx |
