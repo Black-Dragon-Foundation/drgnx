@@ -999,7 +999,7 @@ a file by `insert-file-contents` followed by `read`, in `core/`, `wb/` or `modul
 `(:file F :fn FN :what WHAT :why "…" :until N)`. `:until` is the task of the config-layer plan that ports the
 site, and the port deletes the row (a row that matches nothing fails the second test). A row marked `never` is a
 site that is not drgnx's own file, and its `:why` starts with the reason: `"a user's file"`, `"a temporary file"`,
-`"a directory move"`, `"its own lock protocol"`, `"age writes it"` or `"a developer tool"`. A new site is a new
+`"a directory move"`, `"its own lock protocol"`, `"age writes it"`, `"a developer tool"` or `"Lisp source"` (a module's source read, never run). A new site is a new
 row only when it is one of those.
 
 ## Tests

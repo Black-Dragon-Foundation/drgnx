@@ -2,7 +2,7 @@
 ;; test/unit/lint-files-test.el.  Each row: :file, :fn and :what name the site; :why says what the
 ;; file is; :until is the task of the config-layer plan that ports the site (its port removes the
 ;; row), or `never' with a :why that starts with its category: "a user's file", "a temporary file",
-;; "a directory move", "its own lock protocol", "age writes it" or "a developer tool".
+;; "a directory move", "its own lock protocol", "age writes it", "a developer tool" or "Lisp source".
 (
  (:file "core/drgnx-agent-check.el" :fn drgnx-agent-check--read-all :what read-site :why "agent-check results (report file)" :until 23)
  (:file "core/drgnx-agent-check.el" :fn drgnx-agent-check-remember :what with-temp-file :why "agent-check results (report file)" :until 23)
@@ -54,7 +54,7 @@
  (:file "core/drgnx-modal-choose.el" :fn drgnx-modal--forget-pending :what with-temp-file :why "keys.eld (:pending-layers)" :until 11)
  (:file "core/drgnx-modal-choose.el" :fn drgnx-modal--forget-pending :what rename-file :why "keys.eld (:pending-layers)" :until 11)
  (:file "core/drgnx-modal-choose.el" :fn drgnx-modal--forget-pending :what read-site :why "keys.eld (:pending-layers)" :until 11)
- (:file "core/drgnx-modules-helpers.el" :fn drgnx-module--scan :what read-site :why "a user's file: module source read, never run" :until never)
+ (:file "core/drgnx-modules-helpers.el" :fn drgnx-module--scan :what read-site :why "Lisp source: module source read, never run" :until never)
  (:file "core/drgnx-modules.el" :fn drgnx-modules-read-state :what read-site :why "modules.eld" :until 10)
  (:file "core/drgnx-modules.el" :fn drgnx-modules-write-state :what with-temp-file :why "modules.eld" :until 10)
  (:file "core/drgnx-modules.el" :fn drgnx-modules-write-report :what with-temp-file :why "modules-report.eld" :until 10)
@@ -69,7 +69,7 @@
  (:file "core/drgnx-pkg.el" :fn drgnx-pkg--read-file :what read-site :why "packages.eld and drgnx.lock.eld" :until 13)
  (:file "core/drgnx-pkg.el" :fn drgnx-pkg--write-file :what with-temp-file :why "drgnx.lock.eld and generation.eld" :until 13)
  (:file "core/drgnx-pkg.el" :fn drgnx-pkg--write-file :what rename-file :why "drgnx.lock.eld and generation.eld" :until 13)
- (:file "core/drgnx-pkg.el" :fn drgnx-pkg--module-specs :what read-site :why "a user's file: module source read for its package specs" :until never)
+ (:file "core/drgnx-pkg.el" :fn drgnx-pkg--module-specs :what read-site :why "Lisp source: module source read for its package specs" :until never)
  (:file "core/drgnx-pkg.el" :fn drgnx-pkg--clear-stale-lock :what rename-file :why "its own lock protocol: the sync lock" :until never)
  (:file "core/drgnx-pkg.el" :fn drgnx-pkg--take-sync-lock :what write-region :why "its own lock protocol: the sync lock" :until never)
  (:file "core/drgnx-pkg.el" :fn drgnx-pkg--recover :what rename-file :why "a directory move: generations" :until never)
@@ -113,7 +113,7 @@
  (:file "wb/drgnx-rules.el" :fn drgnx-rules--write-report :what with-temp-file :why "wb-report.eld" :until 23)
  (:file "wb/drgnx-rules.el" :fn drgnx-rules--write-report :what rename-file :why "wb-report.eld" :until 23)
  (:file "modules/lang/drgnx-markdown.el" :fn drgnx-markdown--draw :what write-region :why "a temporary file: a diagram's source for the renderer" :until never)
- (:file "modules/tools/drgnx-agents-ui.el" :fn drgnx-agents-ui--review-open :what with-temp-file :why "a user's file: agents-ui writes" :until never)
+ (:file "modules/tools/drgnx-agents-ui.el" :fn drgnx-agents-ui--review-open :what with-temp-file :why "a temporary file: the review copy agents-ui opens" :until never)
  (:file "modules/tools/drgnx-agents-ui.el" :fn drgnx-agents-ui-review-done :what write-region :why "a user's file: agents-ui writes" :until never)
  (:file "modules/tools/drgnx-ai-ui.el" :fn drgnx-ai--edit-review :what write-region :why "a temporary file: a diff copy" :until never)
  (:file "modules/tools/drgnx-layouts.el" :fn drgnx-layouts--user :what read-site :why "layouts.eld" :until 7)

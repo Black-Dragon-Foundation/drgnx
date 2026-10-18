@@ -107,7 +107,7 @@
       (should (stringp (plist-get e :why)))
       (when (eq until 'never)
         (should (string-match-p
-                 "\\`\\(a user's file\\|a temporary file\\|a directory move\\|its own lock protocol\\|age writes it\\|a developer tool\\)"
+                 "\\`\\(a user's file\\|a temporary file\\|a directory move\\|its own lock protocol\\|age writes it\\|a developer tool\\|Lisp source\\)"
                  (plist-get e :why)))))))
 
 (ert-deftest drgnx-lint/the-file-check-sees-each-pattern ()
