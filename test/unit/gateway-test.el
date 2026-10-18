@@ -231,7 +231,8 @@ the gateway told."
   (drgnx-gw-test--with '((:path "/api/v1/messages" :body "{}")) '()
     (let ((token (drgnx-gateway-register '(:chain ((openrouter . nil))))))
       (dolist (path '(".attacker.example/v1/messages" "@attacker.example/v1/messages" "/v1/../x" "/v2/messages"
-                      "/v1/messages/../../admin" "//attacker.example/v1/messages" "/v1/models/../messages"))
+                      "/v1/messages/../../admin" "//attacker.example/v1/messages" "/v1/models/../messages"
+                      "/v1/messages?a=\001b" "/v1/messages?a=\177"))
         (should (memq (plist-get (drgnx-gw-test--request port :token token :path path) :status) '(400 404))))
       (should (equal (drgnx-gw-test--log or-log) ""))
       (dolist (path '("/v1/messages" "/v1/messages?beta=true" "/v1/messages/count_tokens"))

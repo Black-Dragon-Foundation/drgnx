@@ -153,7 +153,8 @@ the body (up to 32 MB) is waited for; the body's pieces are kept in a list and j
   "The request paths the gateway forwards: Anthropic's Messages API (and its token count and model list).")
 
 (defun drgnx-gateway--path-ok-p (path)
-  (and (string-match-p drgnx-gateway--paths path) (not (string-search ".." path))))
+  (and (string-match-p drgnx-gateway--paths path) (not (string-search ".." path))
+       (not (string-match-p "[\000-\040\177]" path))))
 
 (defun drgnx-gateway--client-sentinel (conn _event)
   ;; the agent hung up: its upstream request goes too
@@ -307,7 +308,7 @@ retry-after) is the answer."
                 (process-put curl :started t)
                 (when (process-live-p conn)
                   (drgnx-gateway--write conn (format "HTTP/1.1 %d OK\r\nContent-Type: %s\r\n%sConnection: close\r\n\r\n"
-                                                     status (or ctype "application/json")
+                                                     status (drgnx-gateway--clean (or ctype "application/json"))
                                                      (if retry-after (format "Retry-After: %s\r\n" (drgnx-gateway--clean retry-after)) "")))
                   (unless (string-empty-p rest) (funcall scan rest) (drgnx-gateway--write conn rest))))
               (setq buf ""))))))

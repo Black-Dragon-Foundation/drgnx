@@ -103,8 +103,8 @@ what it spends, so the budget would not stop it.
 - **The decision log is enforced:** an agent that has not read the latest decisions of its job gets its next edit
   or command refused, with the changes put in front of it at once; reading is never held, so it catches up and goes on.
 - **Budget:** what goes through the gateway is counted (a subscription agent's traffic is not). When the job's spend
-  reaches its budget the gateway refuses the next request; the job **pauses** —
-  its agents stop, no task starts — and a card says what was spent. `drgnx job resume ID --budget MORE` goes on
+  reaches its budget the job **pauses** as soon as the request that reaches it ends (the gateway also refuses
+  any further request) — its agents stop, no task starts — and a card says what was spent. `drgnx job resume ID --budget MORE` goes on
   where it stopped.
 - **A provider at its limit** (429, rate limit, overloaded, quota): the task moves to the next profile on its role's
   route, in a new session in the same worktree, told what the agent before it committed and said last. With no

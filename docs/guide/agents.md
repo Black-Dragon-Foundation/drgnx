@@ -81,7 +81,7 @@ token of their own. The gateway checks the token, adds the real key, forwards ea
 back as it comes (it adds well under 50 ms before the first token). For each answer it counts the tokens the
 provider reports — spend per job, task and agent, kept in the work tracker's database — and when a provider fails
 before answering (no answer, 429, 401/402, 5xx) it tries the next one the agent may use: role `agent`'s chain for
-OpenRouter agents ([AI](ai.md)). A job's budget, when it has one, stops new requests once it is spent.
+OpenRouter agents ([AI](ai.md)); when the last one refuses, its own status, `Retry-After` and message reach the agent. A job's budget, when it has one, stops new requests once it is spent.
 
 **Subscription CLIs never go through it**: the plain `claude` profile (and any profile without `:ai`) uses the CLI's
 own login, which drgnx only launches and never reads.
