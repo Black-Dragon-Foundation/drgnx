@@ -177,6 +177,108 @@ for agents, the Live view open, and the session functions it uses."
         (fset 'drgnx-jobs-get drgnx-perf--jobs-get))
       t)))
 
+(defun drgnx-perf-run--agent-settings-setup-form ()
+  "The agent-settings-open workload's setup: a Claude Code home with a 5 MB .claude.json (300 projects, 50 MCP servers)
+and 200 skills, a project, and a counter of the processes the page starts; the session's HOME and CLAUDE_CONFIG_DIR
+point into it until the teardown."
+  (prin1-to-string
+   `(progn
+      (load ,(expand-file-name "modules/tools/drgnx-agent-settings" drgnx-ui-repo-dir) nil t)
+      (defvar drgnx-perf--agent-dir nil "The fixture's directory, with the variables it replaced.")
+      (defvar drgnx-perf--spawned 0 "Processes started since the counter was reset.")
+      (defun drgnx-perf--spawn (&rest _) (setq drgnx-perf--spawned (1+ drgnx-perf--spawned)))
+      (defun drgnx-perf--agent-fixture ()
+        (let* ((dir (make-temp-file "drgnx-perf-agent" t)) (home (expand-file-name "claude" dir))
+               (project (expand-file-name "project" dir)) (servers (make-hash-table :test #'equal))
+               (projects (make-hash-table :test #'equal)) (junk (make-string 400 ?x)))
+          (make-directory home t) (make-directory project t)
+          (dotimes (i 50)
+            (let ((s (make-hash-table :test #'equal)))
+              (puthash "type" "stdio" s) (puthash "command" (format "drgnx-perf-no-such-server-%d" i) s)
+              (puthash "args" (vector "--stdio") s)
+              (puthash (format "server-%d" i) s servers)))
+          (dotimes (i 300)
+            (let ((p (make-hash-table :test #'equal)))
+              (puthash "allowedTools" (vector) p) (puthash "mcpServers" (make-hash-table :test #'equal) p)
+              (puthash "hasTrustDialogAccepted" t p)
+              (puthash "history" (vconcat (mapcar (lambda (_) (let ((h (make-hash-table :test #'equal))) (puthash "display" junk h) h))
+                                                  (make-list 40 nil)))
+                       p)
+              (puthash (format "/srv/perf/project-%d" i) p projects)))
+          (let ((top (make-hash-table :test #'equal)))
+            (puthash "numStartups" 100 top) (puthash "mcpServers" servers top) (puthash "projects" projects top)
+            (with-temp-file (expand-file-name ".claude.json" home)
+              (set-buffer-multibyte nil) (insert (json-serialize top))))
+          (dotimes (i 200)
+            (let ((f (expand-file-name (format "skills/skill-%d/SKILL.md" i) home)))
+              (make-directory (file-name-directory f) t)
+              (with-temp-file f (insert (format "---\nname: skill-%d\ndescription: Skill number %d\n---\n\nBody.\n" i i)))))
+          dir))
+      (setq drgnx-perf--agent-dir (list (drgnx-perf--agent-fixture) (getenv "HOME") (getenv "CLAUDE_CONFIG_DIR")))
+      (setenv "HOME" (car drgnx-perf--agent-dir))
+      (setenv "CLAUDE_CONFIG_DIR" (expand-file-name "claude" (car drgnx-perf--agent-dir)))
+      (dolist (f '(make-process start-process call-process process-file call-process-region))
+        (advice-add f :before #'drgnx-perf--spawn))
+      t)))
+
+(defconst drgnx-perf-run--agent-settings-measure-form
+  "(let* ((root (expand-file-name \"project\" (car drgnx-perf--agent-dir))) (before (length (process-list))) (t0 (float-time)))
+     (setq drgnx-perf--spawned 0)
+     (pop-to-buffer (drgnx-agent-settings-open 'claude root))
+     (redisplay t)
+     (list :draw_ms (drgnx-perf--round (* 1000 (- (float-time) t0)))
+           :processes (+ drgnx-perf--spawned (max 0 (- (length (process-list)) before)))))"
+  "The agent-settings-open workload's measure: the Claude page opened and drawn; the milliseconds it took and the
+processes it started.")
+
+(defconst drgnx-perf-run--agent-settings-teardown-form
+  "(progn (dolist (f '(make-process start-process call-process process-file call-process-region))
+           (advice-remove f #'drgnx-perf--spawn))
+         (dolist (b (buffer-list)) (when (string-prefix-p \"*agent settings: \" (buffer-name b)) (kill-buffer b)))
+         (when drgnx-perf--agent-dir
+           (setenv \"HOME\" (nth 1 drgnx-perf--agent-dir)) (setenv \"CLAUDE_CONFIG_DIR\" (nth 2 drgnx-perf--agent-dir))
+           (delete-directory (car drgnx-perf--agent-dir) t)
+           (setq drgnx-perf--agent-dir nil))
+         t)"
+  "The agent-settings-open workload's teardown: the page, the fixture and the variables put back.")
+
+(defun drgnx-perf-run--remote-setup-form ()
+  "The remote-typing workload's setup: a mock-method root (test/fixtures/tramp-mock.el: a real TRAMP connection to a
+local sh) listed in the Explorer, remembered as a remote root, its connection opened and then killed."
+  (prin1-to-string
+   `(progn
+      (load ,(expand-file-name "test/fixtures/tramp-mock" drgnx-ui-repo-dir) nil t)
+      (load ,(expand-file-name "modules/lang/drgnx-lang" drgnx-ui-repo-dir) nil t)
+      (load ,(expand-file-name "modules/tools/drgnx-remote" drgnx-ui-repo-dir) nil t)
+      (defvar drgnx-perf--remote nil "(DIR ROOT ROOTS-BEFORE SETUP-DONE) of the remote-typing workload.")
+      (drgnx-tramp-mock-setup)
+      (let* ((dir (make-temp-file "drgnx-perf-remote" t)) (root (file-name-as-directory (drgnx-tramp-mock-name dir)))
+             (before (drgnx-explorer-roots)) (setup (not (memq drgnx-remote--mode-line-entry global-mode-string))))
+        (make-directory (expand-file-name "src" dir))
+        (setq drgnx-perf--remote (list dir root before setup))
+        (when setup (drgnx-remote--setup))
+        (let ((drgnx-remote-may-prompt t) (drgnx-lang--user-command t))
+          (drgnx-explorer-set-roots (cons root (remove root before)))     ; lists it: the connection opens
+          (drgnx-remote--remember root))
+        (let ((proc (tramp-get-connection-process (tramp-dissect-file-name root))))
+          (kill-process proc)
+          (let ((d (+ (float-time) 5))) (while (and (process-live-p proc) (< (float-time) d)) (accept-process-output nil 0.05))))
+        (drgnx-wb-show-sidebar)
+        (setq drgnx-tramp-mock-sends 0))
+      t)))
+
+(defconst drgnx-perf-run--remote-teardown-form
+  "(progn (when drgnx-perf--remote
+           (ignore-errors (drgnx-explorer-set-roots (nth 2 drgnx-perf--remote)))
+           (setq drgnx-remote--roots nil)
+           (when (nth 3 drgnx-perf--remote) (drgnx-remote--teardown))
+           (ignore-errors (tramp-cleanup-all-connections))
+           (drgnx-tramp-mock-teardown)
+           (delete-directory (car drgnx-perf--remote) t)
+           (setq drgnx-perf--remote nil))
+         t)"
+  "The remote-typing workload's teardown: the Explorer's folders put back, the connections closed, the mock removed.")
+
 (defun drgnx-perf-run--workloads ()
   "The workloads: (NAME :setup FORM :each FORM :actions ACTIONS :check FORM :measure FORM :teardown FORM :repeat N).
 Every workload runs three times (medians are kept); :each runs before each repeat, :check after it (an
@@ -308,6 +410,21 @@ error if it does not hold)."
        :actions ,(make-list 6 (funcall type "(let ((x 1)) (message \"%s\" x)) "))
        :check "(drgnx-perf--live-check)"
        :teardown ,(concat "(progn (drgnx-perf--live-teardown) " kill-fixture ")"))
+      ;; opening the Claude Code settings page on a 5 MB .claude.json, 50 MCP servers and 200 skills: drawn, no process
+      (agent-settings-open
+       :setup ,(drgnx-perf-run--agent-settings-setup-form)
+       :each "(progn (dolist (b (buffer-list)) (when (string-prefix-p \"*agent settings: \" (buffer-name b)) (kill-buffer b))) t)"
+       :measure ,drgnx-perf-run--agent-settings-measure-form
+       :teardown ,drgnx-perf-run--agent-settings-teardown-form)
+      ;; typing in a local file while a remote root is listed in the Explorer and its connection is dead
+      (remote-typing
+       :setup ,(drgnx-perf-run--remote-setup-form)
+       :each ,(drgnx-perf-run--visit-fixture-form)
+       :actions ,(make-list 6 (funcall type "(let ((x 1)) (message \"%s\" x)) "))
+       :check ,(concat "(and (zerop drgnx-tramp-mock-sends)"                  ; nothing sent to the remote
+                       " (not (process-live-p (tramp-get-connection-process (tramp-dissect-file-name (nth 1 drgnx-perf--remote)))))"
+                       " t)")
+       :teardown ,(concat "(progn " drgnx-perf-run--remote-teardown-form " " kill-fixture ")"))
       (frames :measure "(list :frame (drgnx-perf-frame-ms 5))")
       (redisplay :each ,(drgnx-perf-run--visit-fixture-form) :measure "(list :redisplay (drgnx-perf-redisplay-ms 30))" :teardown ,kill-fixture)
       (startup :daemon t)
@@ -427,6 +544,7 @@ when a step fails."
                           (delq nil (list (when-let* ((i (plist-get p :input))) (format "input p50 %s p95 %s max %s ms (n=%s)" (plist-get i :p50) (plist-get i :p95) (plist-get i :max) (plist-get i :n)))
                                           (when (plist-get p :gc_count) (format "gc %s/%s ms (pause p95 %s)" (plist-get p :gc_count) (plist-get p :gc_ms)
                                                                                 (or (plist-get (plist-get p :gc_pause) :p95) "-")))
+                                          (when (plist-get p :draw_ms) (format "drawn in %s ms, %s processes started" (plist-get p :draw_ms) (plist-get p :processes)))
                                           (when-let* ((f (plist-get p :frame))) (format "frame p50 %s p95 %s ms" (plist-get f :p50) (plist-get f :p95)))
                                           (when-let* ((d (plist-get p :redisplay))) (format "redisplay p50 %s p95 %s ms" (plist-get d :p50) (plist-get d :p95)))
                                           (when-let* ((sv (plist-get p :server_ms))) (format "daemon server ready p50 %s max %s ms, modules %s ms" (plist-get sv :p50) (plist-get sv :max) (plist-get p :modules_ms)))

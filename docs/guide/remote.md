@@ -88,3 +88,11 @@ while the command waits: its login gets an error message, never a hidden questio
   them again with Open Remote….
 - Language servers are found on the host's `PATH` (what TRAMP sees, see `tramp-remote-path`); a server installed
   elsewhere needs that variable extended.
+
+## Tests
+
+The GUI test `test/ui/editor-m11c2-test.el` (`drgnx test --ui`) starts a podman container, opens it with Open Remote…,
+and shows the Explorer on it and the segment connected; it kills the connection (the segment shows it lost) and
+reconnects (connected, the buffer and its unsaved change kept), with screenshots. Without podman that part is
+skipped. The perf workload `remote-typing` types in a local file while a dead remote root is listed in the Explorer:
+p95 under 16 ms and nothing sent to the remote ([perf.md](../develop/perf.md)).

@@ -125,3 +125,11 @@ a server and says so.
 
 The last result of each item is kept, masked, in `agent-checks.eld` in drgnx's state directory, so the page shows it
 again with its age.
+
+## Tests
+
+The GUI test `test/ui/editor-m11c2-test.el` (`drgnx test --ui`) shows the Claude Code page with every section (an
+environment value masked, a note that a settings file overrides the routes), an MCP Test that passes against a mock
+server and one that times out, and the Codex page, with screenshots. The perf workload `agent-settings-open` opens
+the page on a 5 MB `.claude.json` with 50 servers and 200 skills: it must draw in under 150 ms and start no process
+([perf.md](../develop/perf.md)).
