@@ -41,8 +41,8 @@ follower is not a jank-guard violation (invariant I9).")
 ;;;; The close button
 
 (defun drgnx-wb-close-glyph ()
-  "The close glyph: ✕, its ASCII form on a terminal that is not UTF-8 (`drgnx-face-glyph')."
-  (or (and (fboundp 'drgnx-face-glyph) (drgnx-face-glyph 'close)) "✕"))
+  "The close glyph: ×, its ASCII form on a terminal that is not UTF-8 (`drgnx-face-glyph')."
+  (or (and (fboundp 'drgnx-face-glyph) (drgnx-face-glyph 'close)) "×"))
 
 (defvar drgnx-wb--close-maps nil
   "Alist COMMAND → the keymap of a close button that runs it (one per command: there are three).")
@@ -71,8 +71,9 @@ Built once when a title or tab row is set, never while drawing."
 
 (defun drgnx-wb-section-header (title)
   "A dock section's header: the ✕ that hides the sidebar, then TITLE.
-The ✕ comes first: a title with buttons (Buffers) fills the dock's width, so one at the end would be clipped."
-  (concat (drgnx-wb-close-button #'drgnx-wb--close-dock-click "Close sidebar")
+The ✕ comes first: a title with buttons (Buffers) fills the dock's width, so one at the end would be clipped.  A
+space before it keeps it off the frame's edge."
+  (concat " " (drgnx-wb-close-button #'drgnx-wb--close-dock-click "Close sidebar")
           (if (string-prefix-p " " title) "" " ") title))
 
 (defun drgnx-wb-display-name (name)

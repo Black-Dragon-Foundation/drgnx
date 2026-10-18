@@ -150,6 +150,17 @@
     (should (string-search "rate%%b-50%%.txt" (window-parameter (selected-window) 'header-line-format)))
     (should (string-search "rate%%b-50%%.txt" (window-parameter (selected-window) 'tab-line-format)))))
 
+(ert-deftest drgnx-chrome/a-tab-closes-with-the-themed-close-mark ()
+  "One close mark everywhere: the tab's comes from the glyph table (ASCII on a terminal that is not UTF-8)."
+  (drgnx-chrome-test--with dir
+    (cl-letf (((symbol-function 'drgnx-face-glyph) (lambda (name &optional _frame) (and (eq name 'close) "x"))))
+      (drgnx-chrome-test--open dir "a.txt")
+      (let ((tabs (window-parameter (selected-window) 'tab-line-format)))
+        (should (string-search " a.txt x " tabs))
+        (should-not (string-search "×" tabs))
+        (should (equal (get-text-property (string-search "x " tabs (string-search "a.txt" tabs)) 'help-echo tabs)
+                       "Close this tab"))))))
+
 (ert-deftest drgnx-chrome/tab-faces-are-defined ()
   ;; Minor 2 (re-graded): the faces we inherit exist without loading tab-line by hand.
   (should (facep 'tab-line-tab-current))

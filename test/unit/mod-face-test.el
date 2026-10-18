@@ -261,12 +261,13 @@ setup changes neither the dividers nor the faces of the test process."
               ((symbol-function 'frame-terminal) (lambda (&optional _f) 'term))
               ((symbol-function 'terminal-coding-system) (lambda (&optional _t) 'iso-latin-1)))
       (should (equal (drgnx-face-glyph 'close tty) "x"))
-      (should (equal (drgnx-face-glyph 'close) "✕"))
-      (should (equal (drgnx-face-glyph 'close 'gui) "✕")))
+      ;; × (U+00D7) is in every monospace font: the ✕ of a fallback font looked heavier than the tabs' mark
+      (should (equal (drgnx-face-glyph 'close) "×"))
+      (should (equal (drgnx-face-glyph 'close 'gui) "×")))
     (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _f) nil))
               ((symbol-function 'frame-terminal) (lambda (&optional _f) 'term))
               ((symbol-function 'terminal-coding-system) (lambda (&optional _t) 'utf-8-unix)))
-      (should (equal (drgnx-face-glyph 'close tty) "✕")))))
+      (should (equal (drgnx-face-glyph 'close tty) "×")))))
 
 (ert-deftest drgnx-face/every-glyph-has-both-forms ()
   (dolist (n '(handle close branch warning ok busy waiting paused ahead behind dot circle sep flag))

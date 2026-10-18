@@ -73,11 +73,12 @@
    (dolist (section '(top bottom))
      (let* ((w (drgnx-wb-section-window section)) (title (window-parameter w 'header-line-format)))
        (should (stringp title))
-       (should (string-prefix-p (drgnx-wb-close-glyph) title))      ; the ✕ comes first: a long title cannot clip it
+       ;; the ✕ comes first (a long title cannot clip it), one space in from the frame's edge
+       (should (string-prefix-p (concat " " (drgnx-wb-close-glyph)) title))
        (should (string-search (upcase (symbol-name section)) title))
-       (should (equal (get-text-property 0 'help-echo title) "Close sidebar"))
-       (should (eq (get-text-property 0 'mouse-face title) 'highlight))))
-   (let* ((w (drgnx-wb-section-window 'bottom)) (title (window-parameter w 'header-line-format)) (i 0))
+       (should (equal (get-text-property 1 'help-echo title) "Close sidebar"))
+       (should (eq (get-text-property 1 'mouse-face title) 'highlight))))
+   (let* ((w (drgnx-wb-section-window 'bottom)) (title (window-parameter w 'header-line-format)) (i 1))
      (funcall (lookup-key (get-text-property i 'local-map title) [header-line mouse-1])
               (list 'mouse-1 (list w 'header-line '(0 . 0) 0 (cons title i))))
      (should-not (drgnx-wb-sidebar-showing-p))

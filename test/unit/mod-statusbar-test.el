@@ -568,7 +568,7 @@ Segments a, b, c are defined: their text is A, B, C."
           (setq info nil)
           (should (equal (drgnx-statusbar--seg-lsp) "LSP ●"))              ; a server that did not say its name
           (setq alive nil)
-          (should (equal (drgnx-statusbar--seg-lsp) "LSP ✕")))))))         ; exited
+          (should (equal (drgnx-statusbar--seg-lsp) "LSP ×")))))))         ; exited
 
 (ert-deftest drgnx-statusbar/position-indent-encoding-eol-language ()
   (drgnx-statusbar-test--with
@@ -875,7 +875,7 @@ Segments a, b, c are defined: their text is A, B, C."
                   "make test" "Ran 43 tests, 41 results as expected, 2 unexpected (2026-10-18, 2.3 sec)")))
           (unwind-protect
               (progn (drgnx-statusbar--compilation-finished b "exited abnormally with code 1\n")
-                     (should (equal (drgnx-statusbar-test--seg 'tests) "✕ tests 2 failed"))
+                     (should (equal (drgnx-statusbar-test--seg 'tests) "× tests 2 failed"))
                      (let ((s (funcall (plist-get (gethash 'tests drgnx-statusbar--segments) :fn))))
                        (should (eq (get-text-property 0 'face s) 'error))))
             (kill-buffer b)))
@@ -883,7 +883,7 @@ Segments a, b, c are defined: their text is A, B, C."
         (let ((b (drgnx-statusbar-test--compilation "bin/drgnx test --ui" "ui ERT: 25/27 passed")))
           (unwind-protect
               (progn (drgnx-statusbar--compilation-finished b "finished\n")
-                     (should (equal (drgnx-statusbar-test--seg 'tests) "✕ tests 2 failed"))
+                     (should (equal (drgnx-statusbar-test--seg 'tests) "× tests 2 failed"))
                      (drgnx-statusbar-note-tests 27 0 'timeline)          ; C3's events call this directly
                      (should (equal (drgnx-statusbar-test--seg 'tests) "✓ tests 27/27")))
             (kill-buffer b)))))))

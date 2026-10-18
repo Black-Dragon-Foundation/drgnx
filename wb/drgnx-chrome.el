@@ -18,6 +18,7 @@
 (require 'project)
 (require 'tab-line)                     ; the tab faces we inherit
 (require 'drgnx-area)
+(declare-function drgnx-face-glyph "drgnx-face")
 
 (defface drgnx-chrome-tab '((t :inherit tab-line-tab-inactive)) "A tab in an editor's tab line." :group 'drgnx)
 (defface drgnx-chrome-tab-current '((t :inherit tab-line-tab-current)) "The shown tab." :group 'drgnx)
@@ -98,6 +99,11 @@ Called on the bus's edges and by commands — never while drawing, so a buffer s
 (defvar drgnx-chrome--close-map
   (let ((m (make-sparse-keymap))) (define-key m [tab-line mouse-1] #'drgnx-chrome--close-clicked) m))
 
+(defun drgnx-chrome--close-glyph (w)
+  "The close mark of W's tabs: the glyph `close' of the table every close button uses (`drgnx-face-glyphs'), in its
+ASCII form on a terminal that is not UTF-8; × without ui/face."
+  (or (and (fboundp 'drgnx-face-glyph) (drgnx-face-glyph 'close (window-frame w))) "×"))
+
 (defun drgnx-chrome--tab-line (w)
   (let ((shown (window-buffer w)))
     (mapconcat (lambda (b)
@@ -106,7 +112,8 @@ Called on the bus's edges and by commands — never while drawing, so a buffer s
                                                (if (and (buffer-file-name b) (buffer-modified-p b)) " ●" ""))
                                        'face face 'drgnx-buffer b 'local-map drgnx-chrome--tab-map
                                        'mouse-face 'highlight 'help-echo "Show; middle-click closes")
-                           (propertize "× " 'face face 'drgnx-buffer b 'local-map drgnx-chrome--close-map
+                           (propertize (concat (drgnx-chrome--close-glyph w) " ")
+                                       'face face 'drgnx-buffer b 'local-map drgnx-chrome--close-map
                                        'mouse-face 'highlight 'help-echo "Close this tab"))))
                (drgnx-chrome-tabs w) "")))
 

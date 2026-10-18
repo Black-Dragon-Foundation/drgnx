@@ -136,11 +136,11 @@ buffer of the selected window (a temp buffer in project `proj', no git).  Faces 
 
 (ert-deftest drgnx-topline/window-controls-only-with-a-drawn-title ()
   (drgnx-topline-test--with 'vscode
-    (should-not (string-match-p "[–▢✕]" (drgnx-topline-test--text)))   ; A2 is not there yet: never
+    (should-not (string-match-p "[–▢×]" (drgnx-topline-test--text)))   ; A2 is not there yet: never
     (should-not (assq 'drgnx-topline-close (drgnx-topline--line)))
     (cl-letf (((symbol-function 'drgnx-face-drawn-title-p) (lambda (&optional _frame) t)))
       (let ((text (drgnx-topline-test--text)))
-        (should (string-match-p "– ▢ ✕" text))
+        (should (string-match-p "– ▢ ×" text))
         (should (eq (nth 3 (drgnx-topline-test--item 'drgnx-topline-minimize)) 'iconify-frame))
         (should (eq (nth 3 (drgnx-topline-test--item 'drgnx-topline-maximize)) 'toggle-frame-maximized))
         (should (eq (nth 3 (drgnx-topline-test--item 'drgnx-topline-close)) 'delete-frame))
@@ -478,7 +478,7 @@ buffer of the selected window (a temp buffer in project `proj', no git).  Faces 
       (let* ((items (drgnx-topline--line))
              (text (mapconcat (lambda (i) (substring-no-properties (nth 2 i))) items "")))
         (should (<= (string-width text) 40))
-        (should (string-match-p "– ▢ ✕ *\\'" text))              ; the controls are whole at the right end
+        (should (string-match-p "– ▢ × *\\'" text))              ; the controls are whole at the right end
         (should (string-match-p "…" text))))))
 
 (ert-deftest drgnx-topline/a-clock-that-went-back-does-not-keep-the-line-failing ()

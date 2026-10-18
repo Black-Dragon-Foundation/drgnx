@@ -101,7 +101,7 @@ drgnx (`systemctl --user restart drgnx'); on X11 and on a Mac it applies at once
   :type 'string :set #'drgnx-face--set :group 'drgnx-face)
 
 (defcustom drgnx-face-glyphs
-  '((handle "⠿" . "::") (close "✕" . "x") (branch "⑂" . "Y") (warning "⚠" . "!") (ok "✓" . "+")
+  '((handle "⠿" . "::") (close "×" . "x") (branch "⑂" . "Y") (warning "⚠" . "!") (ok "✓" . "+")
     (busy "◎" . "@") (waiting "◐" . "?") (paused "⏸" . "||") (ahead "↑" . "^") (behind "↓" . "v")
     (dot "●" . "*") (circle "○" . "o") (sep " · " . " | ") (flag "⚑" . "#")
     (diamond "◆" . "<>") (search "⌕" . "/") (minimize "–" . "-") (maximize "▢" . "[]"))

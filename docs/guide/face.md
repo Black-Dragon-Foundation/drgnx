@@ -93,16 +93,17 @@ turns them off in one buffer.
 drgnx draws a few symbols (a drag handle, a close mark, a branch sign, warnings, checks, busy and waiting marks,
 ahead and behind arrows). They all come from one table, `drgnx-face-glyphs`: NAME → (UNICODE . ASCII). In a terminal
 whose encoding is not UTF-8 (a bare Linux console, an old `LANG=C` session), the ASCII form is used so nothing shows
-as a box. Change one for your font:
+as a box. Every close button (the editor's tabs, the panes' and popups' headers, the dock's sections, quick help, the
+drawn title bar) uses the one `close` glyph, `×`, which every monospace font has. Change one for your font:
 
 ```elisp
-(setopt drgnx-face-glyphs (cons '(close "×" . "x") drgnx-face-glyphs))   ; yours first
+(setopt drgnx-face-glyphs (cons '(close "✕" . "x") drgnx-face-glyphs))   ; yours first
 ```
 
 | Name | Unicode | ASCII | Name | Unicode | ASCII |
 |---|---|---|---|---|---|
 | `handle` | ⠿ | `::` | `paused` | ⏸ | `\|\|` |
-| `close` | ✕ | `x` | `ahead` | ↑ | `^` |
+| `close` | × | `x` | `ahead` | ↑ | `^` |
 | `branch` | ⑂ | `Y` | `behind` | ↓ | `v` |
 | `warning` | ⚠ | `!` | `dot` | ● | `*` |
 | `ok` | ✓ | `+` | `circle` | ○ | `o` |
@@ -123,7 +124,7 @@ Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch.
 |---|---|---|
 | `branch` | `⑂ main ↑2 ↓1`: the branch, and how many commits it is ahead of and behind its upstream (a count of 0 is left out) | the repository status |
 | `problems` | `✓` when flymake finds nothing, `◐` while a checker has not reported yet, `● 3` (dimmed) when it finds only notes, else `⚠ 1 2`: the errors, then the warnings, each in its own colour | the problems list |
-| `tests` | `✓ tests 41/41` or `✕ tests 2 failed`: the last test run | its output |
+| `tests` | `✓ tests 41/41` or `× tests 2 failed`: the last test run | its output |
 | `jobs` | `◎ 2 jobs` while jobs run, and `⚑1` when cards of jobs wait on you | job status |
 | `agents` | `◎ 1 busy`, and `◐ 1 waiting on you` (in the error colour) when something waits for your answer | the Agents tab |
 | `modal` | the modal-editing state (`NORMAL`, `INSERT` …), when that module is loaded | |
@@ -131,7 +132,7 @@ Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch.
 
 | Right | Shows | Click |
 |---|---|---|
-| `lsp` | `LSP: pyright ●` (connected; the name the server gave), `LSP ○` (starting), `LSP ✕` (exited) when eglot manages the buffer | the server's events |
+| `lsp` | `LSP: pyright ●` (connected; the name the server gave), `LSP ○` (starting), `LSP ×` (exited) when eglot manages the buffer | the server's events |
 | `position` | `Ln 12, Col 4`, and `(15 selected)` with a selection, in the selected window only | go to a line |
 | `indent` | `Spaces: 2` or `Tab Size: 8` | tabs or spaces |
 | `encoding` | `UTF-8` | change it |
@@ -152,7 +153,7 @@ come from `drgnx-face-glyphs`, so a terminal that is not UTF-8 shows ASCII (` | 
 `drgnx-statusbar-test-command-regexp` (the word `test`: `bin/drgnx test`, `make test`, `cargo test`) is a test run.
 When it finishes, the bar reads its last summary line once — ERT's `Ran 41 tests, 41 results as expected, 0
 unexpected`, or `bin/drgnx test --ui`'s `ui ERT: 27/27 passed` (`drgnx-statusbar-test-count-regexps`) — and shows
-`✓ tests 41/41`, or `✕ tests 2 failed`; a click shows that compilation. Only the last 64 KB of the output are
+`✓ tests 41/41`, or `× tests 2 failed`; a click shows that compilation. Only the last 64 KB of the output are
 searched. Other code reports a run with `(drgnx-statusbar-note-tests PASSED FAILED SOURCE)`.
 
 **Branch.** The branch and its counts come from drgnx's own git cache (the one behind the file marks in the Explorer):
@@ -252,7 +253,7 @@ cannot send is shown the way it can be typed (the same form the palette and the 
 too narrow for the hint, the hint goes first and the place is cut with an ellipsis last: the line never wraps.
 
 When drgnx draws the window's title itself (`drgnx-face-title-bar` set to `drgnx`: [the title bar](#the-title-bar))
-the right end has `– ▢ ✕` (minimise, maximise, close) and the empty part of the line moves the window when you drag
+the right end has `– ▢ ×` (minimise, maximise, close) and the empty part of the line moves the window when you drag
 it. With the system's own title bar (the default) those buttons would be a second set, so they are not there.
 
 The line is Emacs's tab bar with no tabs, since drgnx has no workspaces. It only reads what is already known: the
@@ -297,7 +298,7 @@ In a terminal, `C-g` closes the strip (`Esc` is the Meta prefix there), as does 
 read-only buffer.
 
 It goes away when you type, run any other command, switch window or buffer, press `C-g`, `Esc` or `q` (**Close
-Quick Help**, in every profile), or click its `✕`. `q` closes it without typing only in a buffer you cannot edit
+Quick Help**, in every profile), or click its `×`. `q` closes it without typing only in a buffer you cannot edit
 (help, a listing); in one you type into, `q` is typed like any other letter and the card moves out of the way, so
 `query` keeps its `q`. A card that came from hovering never eats a key: `q` or `Esc` put it away and then do what
 they always do. It also goes when the mouse leaves the symbol and the
