@@ -211,6 +211,18 @@ localhost URL; nil when there is none.  Colour codes and carriage returns are ig
                 ((not (memq (plist-get job :status) '(exited stopped)))))
       (call-process "systemctl" nil nil nil "--user" "stop" unit))))
 
+(defun drgnx-browser--stop-job-later (id)
+  "Ask for job ID to stop without waiting for it (for a timer, which must never block): its systemd unit
+with `systemctl --user stop --no-block' started as a process, a job without a unit by SIGTERM to its group."
+  (let ((job (drgnx-jobs-get id)))
+    (unless (memq (plist-get job :status) '(exited stopped))
+      (if-let* ((unit (plist-get job :unit)))
+          (ignore-errors
+            (make-process :name "drgnx-stop-job" :noquery t :connection-type 'pipe
+                          :command (list "systemctl" "--user" "stop" "--no-block" unit)))
+        (when-let* ((pid (plist-get job :pid)) ((eq (plist-get job :status) 'running)))
+          (ignore-errors (signal-process (- pid) 'SIGTERM)))))))
+
 (defvar drgnx-browser--watchers nil "Alist job id → the timer waiting for that job's address.")
 
 (defun drgnx-browser--watch-job (id)
@@ -222,14 +234,18 @@ Looked at every half second, 60 s at most; never waits."
           (run-with-timer
            0.5 0.5
            (lambda ()
-             (let ((url (ignore-errors (drgnx-browser--log-url (drgnx-jobs-log id 4000))))
-                   (status (plist-get (drgnx-jobs-get id) :status)))
-               (cond (url (cancel-timer timer) (drgnx-browser-open url t))
-                     ;; `gone' can be a job systemd runs, so only the clock or an ended job ends the wait
-                     ((or (> (cl-incf tries) 120) (memq status '(exited stopped)))
-                      (cancel-timer timer)
-                      (when (> tries 120) (drgnx-browser--stop-job id))
-                      (message "drgnx: the Playwright server did not print an address (Show Job Log: playwright)")))))))
+             ;; A timer: an error ends the wait (it would repeat every half second), and nothing here blocks.
+             (condition-case err
+                 (let ((url (ignore-errors (drgnx-browser--log-url (drgnx-jobs-log id 4000))))
+                       (status (plist-get (drgnx-jobs-get id) :status)))
+                   (cond (url (cancel-timer timer) (drgnx-browser-open url t))
+                         ;; `gone' can be a job systemd runs, so only the clock or an ended job ends the wait
+                         ((or (> (cl-incf tries) 120) (memq status '(exited stopped)))
+                          (cancel-timer timer)
+                          (when (> tries 120) (drgnx-browser--stop-job-later id))
+                          (message "drgnx: the Playwright server did not print an address (Show Job Log: playwright)"))))
+               (error (cancel-timer timer)
+                      (message "drgnx: Test Report stopped waiting for the Playwright server: %s" (error-message-string err)))))))
     (setf (alist-get id drgnx-browser--watchers nil nil #'equal) timer)))
 
 (defun drgnx-browser--stop-others (keep root)

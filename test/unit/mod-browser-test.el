@@ -306,23 +306,38 @@
       (delete-directory root t))))
 
 (ert-deftest drgnx-browser/the-watcher-gives-up-and-stops-the-server ()
-  (let (fns cancelled)
+  ;; The timer never blocks: the server's unit is stopped with --no-block through a process, not a synchronous stop.
+  (let (fns cancelled commands)
     (drgnx-browser-test--with-jobs
       (cl-letf (((symbol-function 'drgnx-jobs-log) (lambda (&rest _) ""))
                 ((symbol-function 'run-with-timer) (lambda (_s _r fn &rest _) (push fn fns) (intern (format "timer-%d" (length fns)))))
-                ((symbol-function 'cancel-timer) (lambda (tm) (push tm cancelled))))
+                ((symbol-function 'cancel-timer) (lambda (tm) (push tm cancelled)))
+                ((symbol-function 'make-process) (lambda (&rest args) (push (plist-get args :command) commands) nil)))
         ;; a second Test Report on the same job does not stack a second watcher
         (drgnx-browser--watch-job "old")
         (drgnx-browser--watch-job "old")
         (should (equal cancelled '(timer-1)))
         (let ((fn (car fns)))
           (dotimes (_ 120) (funcall fn))
-          (should-not stopped)
+          (should-not commands)
           (let ((m (drgnx-browser-test--messages fn)))
             (should (string-match-p "did not print an address" (car m))))
-          (should (equal stopped '("old")))
-          (should (equal units '("drgnx-job-old")))
+          (should (equal commands '(("systemctl" "--user" "stop" "--no-block" "drgnx-job-old"))))
+          (should-not stopped)                          ; `drgnx-jobs-stop' waits for systemd: not from a timer
+          (should-not units)
           (should (memq 'timer-2 cancelled)))))))
+
+(ert-deftest drgnx-browser/an-error-in-the-watcher-ends-the-timer ()
+  (let (fn cancelled (drgnx-browser--watchers nil))
+    (drgnx-browser-test--with-jobs
+      (cl-letf (((symbol-function 'drgnx-jobs-log) (lambda (&rest _) ""))
+                ((symbol-function 'drgnx-jobs-get) (lambda (&rest _) (error "the job store is broken")))
+                ((symbol-function 'run-with-timer) (lambda (_s _r f &rest _) (setq fn f) 'timer))
+                ((symbol-function 'cancel-timer) (lambda (tm) (push tm cancelled))))
+        (drgnx-browser--watch-job "j")
+        (let ((m (drgnx-browser-test--messages fn)))     ; no error escapes the timer
+          (should (string-match-p "the job store is broken" (car m))))
+        (should (equal cancelled '(timer)))))))
 
 (ert-deftest drgnx-browser/a-lost-job-is-waited-for-and-an-ended-one-is-not ()
   (let (fn cancelled (status 'gone))

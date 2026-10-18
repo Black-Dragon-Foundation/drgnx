@@ -29,7 +29,7 @@ whichever browser applies.
 The server runs as a durable job named `playwright` (Show Job Log, Stop Job), so it lives on while you work; the page
 opens in the pane as soon as the server prints its address. Running it again while the server runs reuses the
 server; a server for another report or trace of the same project is stopped when the new one starts, and a server
-that prints no address within a minute is stopped. If `npx` is missing, or there is no report or trace, a message says so; nothing prompts or waits.
+that prints no address within a minute is stopped (asked to stop, not waited for; an error while waiting ends the wait with a message). If `npx` is missing, or there is no report or trace, a message says so; nothing prompts or waits.
 
 ## Agent's Page
 
