@@ -34,6 +34,10 @@
     ("melpa" . "https://melpa.org/packages/"))
   "Archives when packages.eld names none (:archives).")
 
+(defconst drgnx-pkg-default-archive-priorities '(("gnu" . 3) ("nongnu" . 2) ("melpa" . 1))
+  "Archive priorities when packages.eld has no :archive-priorities: releases over MELPA's snapshots.  package.el
+still takes a lower priority archive's package when only it satisfies a requirement.")
+
 (defconst drgnx-pkg-generations-kept 5)
 
 (defun drgnx-pkg--error (fmt &rest args) (signal 'drgnx-pkg-error (list (apply #'format fmt args))))
@@ -95,6 +99,12 @@ modules/), packages.eld's :packages and :git, and those use-package :ensure aske
   "The archives: packages.eld's :archives, else `drgnx-pkg-default-archives'."
   (let ((p (drgnx-pkg--packages-eld)))
     (if (plist-member p :archives) (plist-get p :archives) drgnx-pkg-default-archives)))
+
+(defun drgnx-pkg-archive-priorities ()
+  "packages.eld's :archive-priorities when it has the key (even empty: the user's own choice), else
+`drgnx-pkg-default-archive-priorities'."
+  (let ((p (drgnx-pkg--packages-eld)))
+    (if (plist-member p :archive-priorities) (plist-get p :archive-priorities) drgnx-pkg-default-archive-priorities)))
 
 ;;;; Lock
 
@@ -789,7 +799,7 @@ warning), never a missing package."
                 (package-gnupghome-dir (expand-file-name "gnupg" (drgnx-data-dir)))
                 (package-alist nil) (package-archive-contents nil) (package--initialized t)
                 (package-pinned-packages nil)
-                (package-archive-priorities (plist-get (drgnx-pkg--packages-eld) :archive-priorities))
+                (package-archive-priorities (drgnx-pkg-archive-priorities))
                 ;; package-delete refreshes or deletes the quickstart file: never another Emacs's
                 (package-quickstart nil) (package-quickstart-file (expand-file-name "unused-quickstart.el" staging)))
             (when (file-exists-p staging) (delete-directory staging t))
