@@ -245,6 +245,24 @@ said and `drgnx-config-changed-functions` back afterwards. `(drgnx-test-config-p
 replaces a file as an editor would (a new inode, so its stamp changes), and `(drgnx-test-config-text NAME &optional
 ROOT)` reads it.
 
+**The reference and the doctor.** `docs/reference/config.md` is generated from the definitions: for each, sorted by
+name, its file, folder, format, reload rule, what happens on a mistake, its `:doc` and a table of its keys from
+`drgnx-schema-describe`. A test fails when it is out of date, and prints the command. After a change to a definition
+(or a new file), regenerate it and commit it with the change:
+
+```sh
+emacs --batch -Q -L core -L wb -L harness -L modules/tools -l drgnx-config-doc \
+  --eval '(drgnx-config-doc-write "docs/reference/config.md")'
+```
+
+`harness/drgnx-config-doc.el` finds the definitions through `drgnx-config-doc-sources`, one entry per line:
+`(require FEATURE)` for a core feature that defines files at load, `(setup MODULE)` (after a `(require FILE)` for the
+module's file) for files a module defines in its setup, run through `drgnx-modules--run-setup`. A port that adds a
+definition appends its entry and regenerates. Every definition needs a `:doc` (a test checks).
+The doctor's `config-files` check reads each non-project file fresh (`drgnx-config-read`, writing nothing), and the
+core features that define files are listed in `drgnx-doctor-config-features`: a port appends its feature there too.
+Tests: `test/unit/config-doc-test.el` and `test/unit/doctor-test.el`.
+
 ## Staged hooks (`drgnx-hooks.el`)
 
 Work that need not happen at startup hangs on a stage and runs once, when the stage is first reached:
@@ -972,6 +990,15 @@ guards drgnx's startup installs (Flymake's check, added when Flymake loads, is t
 check"). When the mode is already on, when startup ran (its commands are registered) or inside a session, it reads the
 mode as it is: a mode that was turned off is reported off, with a WARN. OK while every guard is on, WARN naming
 each guard that is off (and when the guards cannot be read); facts without `:trust-guards` are judged by version alone.
+
+`config-files` (group drgnx) is the fact `:config-files`, a fresh `drgnx-config-read` of every defined file that is not a
+project's (after requiring `drgnx-doctor-config-features`). FAIL names each mistake as "FILE line L: TEXT" (the file's
+last good copy is in use meanwhile); WARN for a file a newer drgnx wrote; INFO for unknown keys ("a newer drgnx, or a
+typo?") and for a file in an older format; otherwise OK, "N files read". The doctor reads and never writes. See
+[files.md](../guide/files.md). `checkout-clean` (group drgnx) is the fact `:checkout-init`: `git -C CHECKOUT status
+--porcelain -- init/` (`GIT_OPTIONAL_LOCKS=0`, bounded at 5 s). A change there is a WARN, because install.sh's update needs
+`init/` unchanged; the fix is to move it to `config.el` or `custom.el` in the config folder and `git checkout -- init/`.
+Without a `.git` (not a checkout) the check is absent.
 
 Native compilation is checked by actually compiling a function, not only by asking whether it is built in. Any
 FAIL makes the exit status 1. `--dev` adds the tools for developing drgnx (mutter, dbus-run-session, ImageMagick, a

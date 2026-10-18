@@ -31,8 +31,11 @@ Using drgnx.
 - [Editor features vs VS Code, Zed and Cursor](guide/editor-matrix.md): what drgnx has, where it is described, its GUI test and perf workload.
 - [Trusted folders](guide/security.md): Trust This Folder, the "restricted" mark, what files from untrusted folders cannot make Emacs do.
 - [In a terminal](guide/terminal.md): the graphical window, a capable terminal and a legacy one (Alt+Shift and F6); what each terminal can do (kitty, WezTerm, foot, Ghostty, Ptyxis, tmux …) and which rows a test ran, the lines that fix what is missing, SSH, tmux, `EDITOR`, the clipboard, the mouse, colours.
+- [Your files](guide/files.md): when a settings file has a mistake (the last good copy, Open and Reset), backups, locks and `config-good/`, two machines sharing one folder.
 
 ## Reference
+
+- [Config files](reference/config.md): every file drgnx keeps, its folder, format, keys and what they mean (generated from the definitions).
 
 Commands, options and the CLI, generated from the command registry — not written yet.
 
