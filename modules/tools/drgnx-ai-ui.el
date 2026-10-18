@@ -284,7 +284,10 @@ hunk by hunk before anything changes."
     (let ((coding-system-for-write 'utf-8-unix))
       (write-region cur nil copy nil 'silent)
       (write-region (concat (substring cur 0 s) new (substring cur e)) nil proposed nil 'silent))
-    (let ((review (diff-no-select copy proposed "-u" t (get-buffer-create (format "*AI edit: %s*" (buffer-name buf))))))
+    (let* ((out (generate-new-buffer (format "*AI edit: %s*" (buffer-name buf))))   ; its own: a second edit of this buffer
+           (review (condition-case err                                              ; must not take this one's (and its dir)
+                       (diff-no-select copy proposed "-u" t out)
+                     (error (kill-buffer out) (ignore-errors (delete-directory dir t)) (signal (car err) (cdr err))))))
       (delete-file proposed)
       (with-current-buffer review
         (drgnx-ai-edit-review-mode 1)

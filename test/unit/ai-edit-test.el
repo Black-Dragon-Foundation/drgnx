@@ -166,6 +166,39 @@
         (should-not (buffer-live-p review))
         (should (equal (buffer-string) "(defun a ()\n  1)\n"))))))
 
+(defun drgnx-ai-edit-test--tmp-dirs ()
+  "The drgnx-ai-edit directories in the temporary directory now."
+  (directory-files temporary-file-directory t "\\`drgnx-ai-edit" t))
+
+(ert-deftest drgnx-ai-edit/second-edit-own-review-no-leak ()
+  ;; two reviews of one buffer: two buffers, each with its own copy directory that goes with it
+  (with-temp-buffer
+    (insert "(defun a ()\n  1)\n")
+    (let* ((src (current-buffer)) (s (copy-marker (point-min))) (e (copy-marker (point-max)))
+           (r1 (drgnx-ai--edit-review src s e "(defun a ()\n  10)\n"))
+           (r2 (drgnx-ai--edit-review src s e "(defun a ()\n  100)\n"))
+           (d1 (plist-get (buffer-local-value 'drgnx-ai--edit r1) :dir))
+           (d2 (plist-get (buffer-local-value 'drgnx-ai--edit r2) :dir)))
+      (should-not (eq r1 r2))
+      (should-not (equal d1 d2))
+      (should (string-search "+  10)" (with-current-buffer r1 (buffer-string))))
+      (should (string-search "+  100)" (with-current-buffer r2 (buffer-string))))
+      (kill-buffer r1)
+      (should-not (file-directory-p d1))
+      (should (file-directory-p d2))
+      (kill-buffer r2)
+      (should-not (file-directory-p d2))
+      (should-not (drgnx-ai-edit-test--tmp-dirs)))))
+
+(ert-deftest drgnx-ai-edit/a-failing-diff-leaves-no-directory ()
+  (let ((before (drgnx-ai-edit-test--tmp-dirs)))
+    (with-temp-buffer
+      (insert "(defun a ()\n  1)\n")
+      (cl-letf (((symbol-function 'diff-no-select) (lambda (&rest _) (error "no diff here"))))
+        (should-error (drgnx-ai--edit-review (current-buffer) (copy-marker (point-min)) (copy-marker (point-max)) "x\n")))
+      (should (equal (drgnx-ai-edit-test--tmp-dirs) before))
+      (should-not (seq-find (lambda (b) (string-prefix-p "*AI edit" (buffer-name b))) (buffer-list))))))
+
 (ert-deftest drgnx-ai-edit/no-provider-says-why-and-changes-nothing ()
   (drgnx-ai-edit-test--with "never"
     (let ((drgnx-ai-detected nil) (said nil))

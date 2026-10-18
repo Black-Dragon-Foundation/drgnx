@@ -104,6 +104,9 @@ changes until you decide:
 - `C-c C-c` (Done) puts the hunks you applied into the buffer's region;
 - `C-c C-k` (Reject), or closing the diff, drops it all.
 
+Each edit gets its own diff buffer (`*AI edit: NAME*`, then `*AI edit: NAME*<2>`), so a second edit of the same buffer
+never takes over the first one's review.
+
 Edits you make elsewhere in the buffer meanwhile stay — text typed right before or after the region too. If the
 region itself changed while the model answered, no review opens; if it changed since, Done refuses rather than
 overwrite it.
