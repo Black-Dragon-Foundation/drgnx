@@ -26,7 +26,9 @@ the XDG directories. Packages: `(drgnx-data-dir)` — `$DRGNX_DATA_DIR` or `~/.l
 ([packages.md](../guide/packages.md)).
 Started with `--init-directory <checkout>/init`, Emacs keeps its own state (`user-emacs-directory`: auto-save list,
 histories) in `(drgnx-state-dir)emacs/` and native code in `(drgnx-cache-dir)eln-cache/` (`init/early-init.el`), so
-nothing is written into the checkout; a harness session keeps both in its run directory.
+nothing is written into the checkout; a harness session keeps both in its run directory. `custom-file` is
+`(drgnx-user-dir)custom.el` (made when missing, loaded by early-init): Customize and `package-install` save there,
+never into the checkout's tracked `init/init.el`.
 
 ## Staged hooks (`drgnx-hooks.el`)
 
