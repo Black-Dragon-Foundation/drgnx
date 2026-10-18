@@ -27,6 +27,7 @@ The onboarding flow will ask which one you want (VS Code preselected).
 | Command Palette | `C-S-p`, `F1` | `C-S-p` | `SPC SPC` |
 | Keyboard Shortcuts (key sheet) | `C-k C-r` | `C-h C-k` | `SPC ?` |
 | Keyboard Profile… | `C-k C-p` | — | `SPC h k` |
+| Preferences: Keyboard Shortcuts (the editor) | `C-k C-s` | — | `SPC h s` |
 | Open File… | `C-o` | `C-x C-f` | `SPC f f` |
 | Save | `C-s` | `C-x C-s` | `SPC f s` |
 | Toggle Line Numbers | — | — | `SPC u l` |
@@ -187,9 +188,10 @@ cannot be bound, a prefix it replaces) joins the list and the report then.
   key away puts the command in `:unbind`.
 - Undo goes one step back, also after a restart: `keys.eld.undo` holds the text before and after the last change made
   by the editor. If `keys.eld` has been changed since (by you, another session, or Keyboard Profile…), undo refuses and
-  writes nothing. The keys apply at once after every change.
+  writes nothing. The keys apply at once after every change. Changes made inside `drgnx-keys-edit-one-step` are one
+  step (the editor's Replace: the key taken from other commands and given to this one).
 
-A graphical Keyboard Shortcuts editor (search, press-to-rebind, writes `keys.eld`) comes in M4.
+The Keyboard Shortcuts editor (Preferences: Keyboard Shortcuts) changes these keys for you: [shortcuts.md](shortcuts.md).
 
 ## For module authors
 

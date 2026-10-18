@@ -210,6 +210,21 @@ resolved one), :keep-map (the :map to write back)."
 (defun drgnx-keys-edit--read (file)
   (with-temp-buffer (insert-file-contents file) (buffer-string)))
 
+(defvar drgnx-keys-edit--step nil
+  "Inside `drgnx-keys-edit-one-step': t until its first write, then (OLD), keys.eld's text before that write.")
+
+(defmacro drgnx-keys-edit-one-step (&rest body)
+  "Run BODY; the changes it makes to keys.eld are one step for `drgnx-keys-edit-undo'."
+  (declare (indent 0))
+  `(let ((drgnx-keys-edit--step t)) ,@body))
+
+(defun drgnx-keys-edit--undo-old (old)
+  "The text undo goes back to: OLD, or inside `drgnx-keys-edit-one-step' the text before its first write."
+  (pcase drgnx-keys-edit--step
+    ('t (setq drgnx-keys-edit--step (list old)) old)
+    (`(,first) first)
+    (_ old)))
+
 (defun drgnx-keys-edit--modify (fn)
   "Run FN in a buffer holding keys.eld's text (a header if there is none) and write the result.
 A file that does not read, or a result that does not, is a `user-error' and nothing is written.  Keeps the
@@ -229,7 +244,7 @@ nil when nothing changed."
           (error "drgnx keys.eld writer produced a file that %s" why))
         (drgnx-keys-edit--write-file
          (drgnx-keys-edit--undo-file)
-         (let ((print-length nil) (print-level nil)) (prin1-to-string (list :old (if existed old :absent) :new new))))
+         (let ((print-length nil) (print-level nil)) (prin1-to-string (list :old (drgnx-keys-edit--undo-old (if existed old :absent)) :new new))))
         (drgnx-keys-edit--write-file file new)
         (drgnx-keys-edit--applied)
         t))))
