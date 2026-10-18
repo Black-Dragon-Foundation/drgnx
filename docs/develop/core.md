@@ -751,6 +751,12 @@ timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run
   ghost-text pause is an idle debounce `(ai-ghost . BUFFER)` owned by the buffer, and an Ask's search limit
   `(ai-grep . PROCESS)` by the search process (its sentinel cancels it). With no run of the owner nothing starts.
 
+`core/drgnx-platform.el` (window-manager calls) owns its timers as `:core`: each belongs to one call that ends itself
+(its answer, its error) and cancels the timer, so no module's end or process's death may drop one and leave the
+callback uncalled. They are keyed per call: `(platform-call . PROCESS)` (the tool's time limit),
+`(platform-watchdog . N)` (an adapter that never answers), `(wm-place-poll . N)` and `(wm-place-deadline . N)` (sway
+and i3 placement), `(wm-hn-poll . N)` (Hyprland and niri placement), `(kwin-answer . N)` and `(kwin-place . N)`.
+
 ### What the fire wrapper guarantees
 
 Every layer timer's Emacs function is `drgnx-timer--fire` with the entry as its argument. At each firing, in order:

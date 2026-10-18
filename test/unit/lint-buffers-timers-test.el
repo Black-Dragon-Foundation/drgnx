@@ -195,7 +195,6 @@ lambda or not)."
     ("core/drgnx-job.el" 1)
     ("core/drgnx-modules.el" 1)
     ("core/drgnx-onboard.el" 2)
-    ("core/drgnx-platform.el" 9)
     ("core/drgnx-search-chunk.el" 1)
     ("modules/tools/drgnx-agents-ui.el" 3)
     ("modules/tools/drgnx-replace.el" 3)
