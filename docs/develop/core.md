@@ -995,3 +995,51 @@ dirs, and unsets the provider keys (`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `
 `OPENAI_API_KEY`): no test reaches a paid model. In a session: `test/live/drgnx-boot-test.el` boots `config=drgnx` and checks
 the registry, the guard (a `y-or-n-p` from a timer signals), the palette (`C-S-p`), the key sheet (F1) and the
 module report. Scenarios run against drgnx with `bin/drgnx test --scenario`; the workbench ones skip until M3.
+
+## Testing: time, waits and processes
+
+A test never waits in real time for a timer, and a machine under load cannot fail a correctness test. Load the clock
+fixture the way the other fixtures are loaded: `(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)`.
+Its API and examples are in [harness.md](harness.md), "Virtual time"; this is what it guarantees.
+
+**The clock.** `drgnx-test-with-clock` runs its body with `timer-list` and `timer-idle-list` bound to nil, so every
+timer the body starts, whoever starts it, lands in lists of its own. `float-time` and `current-time` without an argument
+return the real time at entry plus the virtual seconds so far (timestamps stay plausible); with an argument they are
+Emacs's own. `drgnx-test-clock-now` is the virtual seconds so far (0.0 at entry).
+
+**What moves time.** Only these:
+
+- `drgnx-test-advance` runs the wall timers due within its argument in due order, repeats included, and
+  `drgnx-test-idle` is one idle pause (`current-idle-time` is the pause so far, `input-pending-p` turns t at
+  `:input-at` and the pause ends there);
+- `sleep-for` and `sit-for` move it by their argument and run the timers that come due; process output is then looked
+  at once with a zero wait. `sit-for` returns nil only when simulated input is pending, and simulated input ends it
+  early;
+- a timed `accept-process-output` moves it by the real time it waited (`drgnx-test-real-time`), then the due timers run.
+
+A polling loop with a `float-time` deadline therefore ends at once under virtual time; a test that polls a real
+process keeps a realistic deadline. More than `drgnx-test-clock-max-runs` (10000) timer runs in one
+`drgnx-test-advance` is an error (a timer that re-arms with no delay).
+
+**The guard.** A wall timer is stamped by Emacs from the real clock. While the fixture is active a `:before` advice on
+`timer--activate` moves such a timer to the virtual due time plus `drgnx-test-clock-horizon` (10^6 s), so C's timer
+check never finds it ripe during a real wait: a real wait fires no virtual timer. A timer is due at virtual *v* + *d*
+when it was made at *v* with delay *d*, also after an advance. A re-armed repeat is already in that era and is left
+alone. Give timers delays, not absolute times computed from `float-time`: such a time reads as a real stamp.
+
+**The end.** A timer still pending when the body ends fails the test
+(`timers still pending at the end of drgnx-test-with-clock`), named by `(KEY OWNER KIND)` for the timer layer's
+timers (`drgnx-timer-pending`), then by function; `:allow-pending t` cancels them quietly. `drgnx-timer-reset` runs
+either way. Nesting is an error.
+
+**The timer layer.** When `drgnx-timer--now` is defined at entry, the layer's three seams (`drgnx-timer--now`,
+`drgnx-timer--idle-time`, `drgnx-timer--input-pending-p`) follow the same clock, pause and input. Require the timer
+layer before the fixture: loading it inside the body is an error (the fixture could not unbind its seams on exit).
+
+**What stays real.** `time-since`, `(time-subtract nil …)` and `format-time-string` with no time read the real clock;
+a test of code that uses them uses real time.
+
+**Native trampolines.** Advising a primitive compiles a native trampoline for it. The fixture advises
+`float-time`, `current-time`, `current-idle-time`, `input-pending-p`, `sleep-for` and `accept-process-output` (and
+`sit-for`); the batch runner sends the trampolines to the run's eln directory (`DRGNX_TEST_ELN_DIR`), never to `~`
+(the test `drgnx-test-clock/trampolines-land-in-the-runs-eln-dir` checks it).

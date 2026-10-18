@@ -741,12 +741,12 @@ for a timer. Load it with `(load (expand-file-name "test/fixtures/clock-fixture"
 - **The macro.** The body runs with `timer-list` and `timer-idle-list` bound to nil, so every timer it starts, whoever
   starts it, lands in lists of its own and the real ones are untouched. `float-time` and `current-time` without an
   argument return virtual time (with an argument they are Emacs's own); `current-idle-time` is nil outside a pause and
-  the pause's length inside one; `input-pending-p` is nil, or t after `:input-at`. Virtual time starts 10^6 s after
-  the real time, so a real wait (`sleep-for`, `accept-process-output`) never finds a virtual timer ripe. Timers made
-  by `run-at-time` are stamped by Emacs from the real clock; a `:before` advice on `timer--activate` moves them onto
-  the virtual clock, so a timer made at virtual *v* with delay *d* is due at *v* + *d*, also after an advance (a delay
-  of 2 ms or more is rounded to the millisecond: Emacs stamps the timer a few microseconds before the advice runs).
-  Nesting is an error.
+  the pause's length inside one; `input-pending-p` is nil, or t from `:input-at` on. Virtual time starts at the real
+  time (`drgnx-test-clock-now` is the virtual seconds since entry). Timers made by `run-at-time` are stamped by Emacs
+  from the real clock; a `:before` advice on `timer--activate` moves them to the virtual due time plus 10^6 s
+  (`drgnx-test-clock-horizon`), so a real wait never finds a virtual timer ripe, and a timer made at virtual *v* with
+  delay *d* is due at *v* + *d*, also after an advance (a delay of 2 ms or more is rounded to the millisecond: Emacs
+  stamps the timer a few microseconds before the advice runs). Nesting is an error.
 - **`drgnx-test-advance SECS`** moves virtual time forward, running each wall timer that comes due, in order, repeats
   included (a timer is run by `timer-event-handler` while still on the list: popping it first makes the handler treat
   it as cancelled).
@@ -761,8 +761,9 @@ for a timer. Load it with `(load (expand-file-name "test/fixtures/clock-fixture"
   `drgnx-timer--input-pending-p`), when defined, follow the same clock, pause and input.
 - **What stays real:** `time-since`, `(time-subtract nil ...)` and `format-time-string` with no time read the real
   clock; a test of code that uses them uses real time. `drgnx-test-real-time` is the real time as a float, for waits
-  and reports. `sleep-for`, `sit-for` and `accept-process-output` do not move virtual time (the test-determinism
-  design adds that).
+  and reports. `sleep-for` and `sit-for` move virtual time by their argument and a timed
+  `accept-process-output` by the real time it waited, each running the timers that come due ([core.md](core.md),
+  "Testing: time, waits and processes").
 - **The contract with the timer layer** ([core.md](core.md), Timers): the layer's three seams follow the virtual
   clock; a delay counts from the virtual start; one `drgnx-test-idle` call is one pause; pending layer timers are named
   and cleared at the end.
