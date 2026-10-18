@@ -16,13 +16,19 @@ Put your choices in `config.el` ([modules.md](modules.md#your-own-code-configel)
 
 | Setting | Default | What it does |
 |---|---|---|
-| `drgnx-face-menu-bar` | `nil` | Show Emacs's menu bar. Hidden, the commands are in the palette and `F10` still opens the menu. **Toggle Menu Bar** (View menu, palette) flips it for this session only. |
+| `drgnx-face-menu-bar` | `nil` | Show Emacs's menu bar. Hidden, the commands are in the palette, and `M-x tmm-menubar` opens the whole menu in the minibuffer (`F10` does not help: on a toolkit window with the bar hidden it has no menu to open, and can freeze the window). **Toggle Menu Bar** (palette, View menu) flips it for this session only. |
 | `drgnx-face-scroll-bars` | `none` | `none`, or `native` for the toolkit's scroll bar on the right. The position is in the status bar. |
-| `drgnx-face-dividers` | `t` | A thin line (1 pixel) between windows, in the theme's colours. In a terminal the border is the terminal's own, drawn in the same colour. |
+| `drgnx-face-dividers` | `t` | A thin line between windows, in the theme's colours. In a terminal the border is the terminal's own, drawn in the same colour. Turning it off turns `window-divider-mode` off only if drgnx turned it on; yours stays. |
+| `drgnx-face-divider-width` | `1` | The line's width in pixels (graphical frames). |
 | `drgnx-face-line-spacing` | `nil` | Extra pixels between lines; `2` or `3` reads calmer. `nil` leaves Emacs's (or your own `line-spacing`) alone. |
 
 The menu bar and the scroll bar are off from the very first moment (no light bar flashes up before the theme
-loads): `init/early-init.el` starts the frame without them, and the settings above put them back.
+loads): `init/early-init.el` starts the frame without them (on a Mac the menu bar is the system's and is left alone),
+and the settings above put them back.
+
+`drgnx-face-menu-bar` and `drgnx-face-scroll-bars` are the one source for new frames and open ones: a
+`(menu-bar-mode 1)` in `config.el` is overridden on every frame made after it, so use `setopt` as above. With the
+module off (Preferences: Modules), nothing of this runs after startup and `(menu-bar-mode 1)` brings the bar back.
 
 ## The buffers
 
@@ -31,8 +37,9 @@ loads): `init/early-init.el` starts the frame without them, and the settings abo
 | `drgnx-face-line-numbers-modes` | `(prog-mode conf-mode yaml-mode yaml-ts-mode)` | Files in these modes (or modes derived from them) show line numbers. Prose, `*scratch*` and buffers without a file do not. |
 | `drgnx-face-inline-problems` | `short` | Problems from the language server or flymake at the end of their line: `nil` (only underlined), `short` (the first problem, shortened) or `t` (all of them). Needs an Emacs whose flymake has `flymake-show-diagnostics-at-end-of-line` (30.1 and later). |
 
-The line-number column is as wide as the file needs when it opens and never gets narrower or wider while you type,
-so the text does not shift sideways. **Toggle Line Numbers** (View menu) still turns them off in one buffer.
+The number column is as wide as the file needs when it opens; it never narrows, and widens only when the file needs
+another digit, so the text does not shift sideways while you type. **Toggle Line Numbers** (palette, View menu) still
+turns them off in one buffer.
 
 ## Glyphs
 

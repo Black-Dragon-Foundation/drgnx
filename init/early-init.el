@@ -16,7 +16,8 @@
       inhibit-startup-screen t
       frame-resize-pixelwise t)
 (push '(tool-bar-lines . 0) default-frame-alist)
-(push '(menu-bar-lines . 0) default-frame-alist)          ; no flash of a light menu bar or GTK scroll bar before the theme loads
+(unless (eq system-type 'darwin)                          ; (on a Mac the system menu bar is shared, never ours to hide)
+  (push '(menu-bar-lines . 0) default-frame-alist))       ; no flash of a light menu bar or GTK scroll bar before the theme loads
 (push '(vertical-scroll-bars . nil) default-frame-alist)  ; (ui/face puts them back when `drgnx-face-menu-bar' / `-scroll-bars' ask)
 ;; Emacs's own state (auto-save list, histories, …) in drgnx's state dir and native code in its cache dir —
 ;; never in the checkout's init/.  A harness session keeps both in its run directory (its prelude).

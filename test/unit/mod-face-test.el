@@ -3,10 +3,23 @@
 (require 'drgnx)
 (load (expand-file-name "modules/ui/drgnx-face" drgnx-dir) nil t)
 
+(defvar drgnx-face-test--mode-calls nil "The arguments `window-divider-mode' was called with (newest first).")
+(defvar drgnx-face-test--spec-calls nil "The (FACE SPEC TYPE) `face-spec-set' was called with (newest first).")
+
 (defmacro drgnx-face-test--with (&rest body)
-  "BODY with the module's hooks, frame defaults and settings kept away from the rest of the test process."
+  "BODY with the module's hooks, frame defaults and settings kept away from the rest of the test process.
+`window-divider-mode' and `face-spec-set' are stubs that record their calls (the divider variables are rebound), so
+setup changes neither the dividers nor the faces of the test process."
   (declare (indent 0))
-  `(let ((default-frame-alist (copy-alist default-frame-alist))
+  `(let ((drgnx-face-test--mode-calls nil) (drgnx-face-test--spec-calls nil)
+         (window-divider-mode nil)
+         (window-divider-default-places window-divider-default-places)
+         (window-divider-default-right-width window-divider-default-right-width)
+         (window-divider-default-bottom-width window-divider-default-bottom-width)
+         (drgnx-face--dividers-owned nil)
+         (drgnx-face-dividers drgnx-face-dividers) (drgnx-face-divider-width drgnx-face-divider-width)
+         (drgnx-face--line-spacing-saved nil) (drgnx-face--flymake-waiting nil)
+         (default-frame-alist (copy-alist default-frame-alist))
          (after-make-frame-functions nil)
          (after-change-major-mode-hook nil)
          (drgnx-face--active nil)
@@ -16,8 +29,12 @@
          (drgnx-face-inline-problems drgnx-face-inline-problems)
          (line-spacing line-spacing)
          (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
-     (unwind-protect (progn ,@body)
-       (setq drgnx-face--active nil))))
+     (cl-letf (((symbol-function 'window-divider-mode)
+                (lambda (&optional arg) (push arg drgnx-face-test--mode-calls) (setq window-divider-mode (and arg (> arg 0)))))
+               ((symbol-function 'face-spec-set)
+                (lambda (face spec &optional type) (push (list face spec type) drgnx-face-test--spec-calls))))
+       (unwind-protect (progn ,@body)
+         (setq drgnx-face--active nil)))))
 
 (defun drgnx-face-test--setup ()
   (funcall (plist-get (alist-get 'ui/face drgnx-modules--table) :setup)))
@@ -47,6 +64,12 @@
       (should (assq 'vertical-scroll-bars seen))
       (should-not (alist-get 'vertical-scroll-bars seen)))
     (should (memq #'drgnx-face-apply-frame after-make-frame-functions))))
+
+(ert-deftest drgnx-face/a-mac-keeps-its-system-menu-bar ()
+  (drgnx-face-test--with
+    (let ((system-type 'darwin))
+      (should-not (assq 'menu-bar-lines (drgnx-face--frame-params)))
+      (should (assq 'vertical-scroll-bars (drgnx-face--frame-params))))))
 
 (ert-deftest drgnx-face/native-scroll-bars-are-on-the-right ()
   (drgnx-face-test--with
@@ -141,6 +164,71 @@
     (setopt drgnx-face-line-spacing nil)
     (should-not (default-value 'line-spacing))))
 
+(ert-deftest drgnx-face/line-spacing-nil-gives-back-the-users-own ()
+  (drgnx-face-test--with
+    (setq-default line-spacing 5)                         ; the user's own, before drgnx
+    (drgnx-face-test--setup)
+    (should (eql (default-value 'line-spacing) 5))        ; nil leaves it alone
+    (setopt drgnx-face-line-spacing 2)
+    (should (eql (default-value 'line-spacing) 2))
+    (setopt drgnx-face-line-spacing 3)                    ; changing it again still remembers the first value
+    (should (eql (default-value 'line-spacing) 3))
+    (setopt drgnx-face-line-spacing nil)
+    (should (eql (default-value 'line-spacing) 5))))
+
+(ert-deftest drgnx-face/dividers-are-thin-and-inherit-the-theme ()
+  (drgnx-face-test--with
+    (drgnx-face-test--setup)
+    (should (eq window-divider-default-places t))
+    (should (eql window-divider-default-right-width 1))
+    (should (eql window-divider-default-bottom-width 1))
+    (should (equal drgnx-face-test--mode-calls '(1)))
+    (should (equal (sort (mapcar (lambda (c) (symbol-name (car c))) drgnx-face-test--spec-calls) #'string<)
+                   '("vertical-border" "window-divider" "window-divider-first-pixel" "window-divider-last-pixel")))
+    (dolist (c drgnx-face-test--spec-calls)
+      (should (equal (cdr c) '(((t :inherit shadow)) face-defface-spec))))
+    (setopt drgnx-face-divider-width 3)                   ; the width is a setting, applied at once
+    (should (eql window-divider-default-right-width 3))
+    (should (eql window-divider-default-bottom-width 3))))
+
+(ert-deftest drgnx-face/dividers-off-only-when-drgnx-turned-them-on ()
+  ;; drgnx turned the mode on: nil turns it off again, and a later t on again
+  (drgnx-face-test--with
+    (drgnx-face-test--setup)
+    (should drgnx-face--dividers-owned)
+    (setq drgnx-face-test--mode-calls nil)
+    (setopt drgnx-face-dividers nil)
+    (should (equal drgnx-face-test--mode-calls '(-1)))
+    (should-not window-divider-mode)
+    (setq drgnx-face-test--mode-calls nil)
+    (setopt drgnx-face-dividers nil)                      ; again: nothing left to turn off
+    (should-not drgnx-face-test--mode-calls))
+  ;; the user had the mode on already: nil leaves it on
+  (drgnx-face-test--with
+    (setq window-divider-mode t)
+    (drgnx-face-test--setup)
+    (should-not drgnx-face--dividers-owned)
+    (setq drgnx-face-test--mode-calls nil)
+    (setopt drgnx-face-dividers nil)
+    (should-not drgnx-face-test--mode-calls)
+    (should window-divider-mode)))
+
+(ert-deftest drgnx-face/dividers-nil-from-the-start-touches-nothing ()
+  (drgnx-face-test--with
+    (setq drgnx-face-dividers nil)
+    (drgnx-face-test--setup)
+    (should-not drgnx-face-test--mode-calls)
+    (should-not drgnx-face-test--spec-calls)))
+
+(ert-deftest drgnx-face/inline-problems-wait-for-flymake-once ()
+  ;; flymake not loaded yet: one after-load hook however often the setting changes
+  (drgnx-face-test--with
+    (let ((hooks 0))
+      (cl-letf (((symbol-function 'drgnx-face--flymake-ready-p) (lambda () nil))
+                ((symbol-function 'eval-after-load) (lambda (&rest _) (cl-incf hooks))))
+        (dotimes (_ 3) (drgnx-face--apply-inline-problems))
+        (should (eql hooks 1))))))
+
 (ert-deftest drgnx-face/glyphs-fall-back-to-ascii ()
   (let ((tty (make-symbol "tty")))
     (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional f) (not (eq f tty))))
@@ -167,27 +255,40 @@
       (should (equal (drgnx-face-glyph 'close) "X")))))
 
 (ert-deftest drgnx-face/no-colour-literals ()
-  ;; faces only inherit theme faces: a defface has no colour attribute, and no file of the module writes a colour
-  (dolist (file (directory-files (expand-file-name "modules/ui" drgnx-dir) t "\\`drgnx-face.*\\.el\\'"))
-    (with-temp-buffer
-      (insert-file-contents file)
-      (goto-char (point-min))
-      (let (form)
-        (condition-case nil
-            (while (setq form (read (current-buffer)))
-              (when (eq (car-safe form) 'defface)
-                (let ((spec (nth 2 form)) (bad nil))
+  ;; faces only inherit theme faces: the specs of the module's `defface' and `face-spec-set' forms (anywhere in the
+  ;; source, inside a function or a loop too) have only :inherit, and no file of the module writes a colour
+  (let ((specs 0))
+    (dolist (file (directory-files (expand-file-name "modules/ui" drgnx-dir) t "\\`drgnx-face.*\\.el\\'"))
+      (with-temp-buffer
+        (insert-file-contents file)
+        (goto-char (point-min))
+        (let (form)
+          (condition-case nil
+              (while (setq form (read (current-buffer)))
+                (dolist (spec (drgnx-face-test--face-specs form))
+                  (cl-incf specs)
                   (dolist (clause spec)
                     (let ((plist (cdr clause)))
                       (while plist
-                        (unless (eq (car plist) :inherit) (setq bad (car plist)))
-                        (setq plist (cddr plist)))))
-                  (should-not bad))))
-          (end-of-file nil)))
-      (goto-char (point-min))
-      (should-not (re-search-forward "\"#[0-9a-fA-F]\\{3,\\}\"" nil t))
-      (goto-char (point-min))
-      (should-not (re-search-forward ":\\(foreground\\|background\\)[ \n]+\"" nil t)))))
+                        (should (eq (car plist) :inherit))
+                        (setq plist (cddr plist)))))))
+            (end-of-file nil)))
+        (goto-char (point-min))
+        (should-not (re-search-forward "\"#[0-9a-fA-F]\\{3,\\}\"" nil t))
+        (goto-char (point-min))
+        (should-not (re-search-forward ":\\(foreground\\|background\\)[ \n]+\"" nil t))))
+    (should (>= specs 1))))   ; the scan found the divider faces' `face-spec-set'
+
+(defun drgnx-face-test--face-specs (form)
+  "The face specs of every `defface' and `face-spec-set' call inside FORM (a quoted spec is unquoted)."
+  (when (consp form)
+    (append
+     (pcase form
+       (`(defface ,_ ,spec . ,_) (list (drgnx-face-test--unquote spec)))
+       (`(face-spec-set ,_ ,spec . ,_) (list (drgnx-face-test--unquote spec))))
+     (when (proper-list-p form) (seq-mapcat #'drgnx-face-test--face-specs form)))))
+
+(defun drgnx-face-test--unquote (x) (if (eq (car-safe x) 'quote) (cadr x) x))
 
 (ert-deftest drgnx-face/menu-bar-toggle-is-in-every-profile ()
   (dolist (p '("vscode" "emacs" "vim"))
@@ -209,6 +310,7 @@
 (ert-deftest drgnx-face/early-init-starts-without-a-menu-bar-or-scroll-bar ()
   (with-temp-buffer
     (insert-file-contents (expand-file-name "init/early-init.el" drgnx-dir))
+    (should (search-forward "(unless (eq system-type 'darwin)" nil t))     ; not on a Mac: its menu bar is the system's
     (should (search-forward "(push '(menu-bar-lines . 0) default-frame-alist)" nil t))
     (should (search-forward "(push '(vertical-scroll-bars . nil) default-frame-alist)" nil t))))
 

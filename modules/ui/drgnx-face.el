@@ -39,13 +39,14 @@
   (when drgnx-face--active
     (pcase symbol
       ((or 'drgnx-face-menu-bar 'drgnx-face-scroll-bars) (drgnx-face--apply-frames))
-      ('drgnx-face-dividers (drgnx-face--apply-dividers))
+      ((or 'drgnx-face-dividers 'drgnx-face-divider-width) (drgnx-face--apply-dividers))
       ('drgnx-face-line-numbers-modes (drgnx-face--apply-line-numbers))
       ('drgnx-face-inline-problems (drgnx-face--apply-inline-problems))
       ('drgnx-face-line-spacing (drgnx-face--apply-line-spacing)))))
 
 (defcustom drgnx-face-menu-bar nil
-  "Non-nil: show Emacs's menu bar (the commands are in the palette; F10 opens the menu as in stock Emacs).
+  "Non-nil: show Emacs's menu bar (hidden, the commands are in the palette,
+or `M-x tmm-menubar' opens the menu in the minibuffer).
 Toggle for this session with the command Toggle Menu Bar."
   :type 'boolean :set #'drgnx-face--set :group 'drgnx-face)
 
@@ -57,6 +58,10 @@ Toggle for this session with the command Toggle Menu Bar."
 (defcustom drgnx-face-dividers t
   "Non-nil: a thin line, in the theme's colour, between windows (graphical frames; terminals draw their own border)."
   :type 'boolean :set #'drgnx-face--set :group 'drgnx-face)
+
+(defcustom drgnx-face-divider-width 1
+  "Width in pixels of the lines between windows (graphical frames), when `drgnx-face-dividers' is on."
+  :type 'natnum :set #'drgnx-face--set :group 'drgnx-face)
 
 (defcustom drgnx-face-line-numbers-modes '(prog-mode conf-mode yaml-mode yaml-ts-mode)
   "Major modes (or the modes derived from them) whose file buffers show line numbers."
@@ -100,8 +105,8 @@ FRAME defaults to the selected one.  nil when NAME is unknown."
 ;;;; Frames
 
 (defun drgnx-face--frame-params ()
-  "The frame parameters the settings ask for."
-  `((menu-bar-lines . ,(if drgnx-face-menu-bar 1 0))
+  "The frame parameters the settings ask for (no menu bar parameter on a Mac: the system menu bar is shared)."
+  `(,@(unless (eq system-type 'darwin) `((menu-bar-lines . ,(if drgnx-face-menu-bar 1 0))))
     (vertical-scroll-bars . ,(if (eq drgnx-face-scroll-bars 'native) 'right nil))))
 
 (defun drgnx-face-apply-frame (&optional frame)
@@ -117,17 +122,24 @@ On `after-make-frame-functions'; a child frame (a popup) is left alone."
     (setq default-frame-alist (cons (cons (car p) (cdr p)) (assq-delete-all (car p) default-frame-alist))))
   (mapc #'drgnx-face-apply-frame (frame-list)))
 
+(defvar drgnx-face--dividers-owned nil
+  "Non-nil when this module turned `window-divider-mode' on (so only then does it turn it off).")
+
 (defun drgnx-face--apply-dividers ()
-  "Thin dividers on or off; their faces inherit the theme's (a theme's own choice still wins)."
+  "Thin dividers on or off; their faces inherit the theme's (a theme's own choice still wins).
+Turning them off leaves `window-divider-mode' alone unless this module turned it on."
   (if drgnx-face-dividers
       (progn
         (setq-default window-divider-default-places t
-                      window-divider-default-right-width 1
-                      window-divider-default-bottom-width 1)
+                      window-divider-default-right-width drgnx-face-divider-width
+                      window-divider-default-bottom-width drgnx-face-divider-width)
         (dolist (f '(window-divider window-divider-first-pixel window-divider-last-pixel vertical-border))
           (face-spec-set f '((t :inherit shadow)) 'face-defface-spec))
+        (unless (bound-and-true-p window-divider-mode) (setq drgnx-face--dividers-owned t))
         (window-divider-mode 1))
-    (window-divider-mode -1)))
+    (when drgnx-face--dividers-owned
+      (setq drgnx-face--dividers-owned nil)
+      (window-divider-mode -1))))
 
 ;;;; Buffers
 
@@ -154,15 +166,36 @@ On `after-change-major-mode-hook'."
              (setq drgnx-face--numbers-p nil)
              (display-line-numbers-mode -1))))))
 
+(defvar drgnx-face--flymake-waiting nil
+  "Non-nil while one after-load hook waits for flymake (so a setting changed often adds only one).")
+
+(defun drgnx-face--flymake-ready-p ()
+  "Non-nil when flymake is loaded and this Emacs has its end-of-line variable (30.1 and later)."
+  (boundp 'flymake-show-diagnostics-at-end-of-line))
+
 (defun drgnx-face--apply-inline-problems ()
-  "`drgnx-face-inline-problems' into flymake's variable, where this Emacs has it (it takes effect when flymake loads)."
-  (with-eval-after-load 'flymake
-    (when (boundp 'flymake-show-diagnostics-at-end-of-line)
-      (funcall (or (get 'flymake-show-diagnostics-at-end-of-line 'custom-set) #'set-default)
-               'flymake-show-diagnostics-at-end-of-line drgnx-face-inline-problems))))
+  "`drgnx-face-inline-problems' into flymake's variable: now when flymake is loaded, else once it loads."
+  (cond ((drgnx-face--flymake-ready-p)
+         (funcall (or (get 'flymake-show-diagnostics-at-end-of-line 'custom-set) #'set-default)
+                  'flymake-show-diagnostics-at-end-of-line drgnx-face-inline-problems))
+        ((not drgnx-face--flymake-waiting)
+         (setq drgnx-face--flymake-waiting t)
+         (with-eval-after-load 'flymake
+           (setq drgnx-face--flymake-waiting nil)
+           (when (drgnx-face--flymake-ready-p) (drgnx-face--apply-inline-problems))))))
+
+(defvar drgnx-face--line-spacing-saved nil
+  "(VALUE) the default `line-spacing' this module replaced, to give back when the setting returns to nil.")
 
 (defun drgnx-face--apply-line-spacing ()
-  (setq-default line-spacing drgnx-face-line-spacing))
+  "The setting into the default `line-spacing'; nil gives back what it replaced (a user's own value stays)."
+  (cond (drgnx-face-line-spacing
+         (unless drgnx-face--line-spacing-saved
+           (setq drgnx-face--line-spacing-saved (list (default-value 'line-spacing))))
+         (setq-default line-spacing drgnx-face-line-spacing))
+        (drgnx-face--line-spacing-saved
+         (setq-default line-spacing (car drgnx-face--line-spacing-saved))
+         (setq drgnx-face--line-spacing-saved nil))))
 
 ;;;; Commands
 
@@ -175,7 +208,7 @@ On `after-change-major-mode-hook'."
 (defun drgnx-face--setup ()
   (drgnx-command-define 'face-toggle-menu-bar :category "View" :title "Toggle Menu Bar" :menu '("View")
                         :command #'drgnx-face-toggle-menu-bar
-                        :doc "Show or hide Emacs's menu bar for this session (F10 opens the menu when it is hidden)")
+                        :doc "Show or hide Emacs's menu bar for this session (hidden, the palette or M-x tmm-menubar reach the menu)")
   (when (fboundp 'drgnx-statusbar-setup) (drgnx-statusbar-setup))   ; the status bar (drgnx-statusbar.el)
   (add-hook 'after-make-frame-functions #'drgnx-face-apply-frame)
   (add-hook 'after-change-major-mode-hook #'drgnx-face-line-numbers-maybe)
@@ -184,7 +217,7 @@ On `after-change-major-mode-hook'."
   (drgnx-face--apply-dividers)
   (drgnx-face--apply-line-numbers)
   (drgnx-face--apply-inline-problems)
-  (when drgnx-face-line-spacing (drgnx-face--apply-line-spacing)))   ; nil leaves a user's own `line-spacing' alone
+  (drgnx-face--apply-line-spacing))
 
 (drgnx-module-define 'ui/face
                      :doc "The frame and the buffers: no menu bar or scroll bar, thin themed dividers, line numbers in code, problems at the end of the line."
