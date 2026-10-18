@@ -485,16 +485,12 @@ left (the chain is armed SECS after the idle time now)."
   "Write the stopped timers of `drgnx-timer-errors', (:stopped (PLIST…)) newest first, to `drgnx-timer-report-file'
 in the state dir.  Never prompts and never raises: a write that fails is skipped."
   (condition-case nil
-      (when (fboundp 'drgnx-state-dir)
+      (when (and (fboundp 'drgnx-state-dir) (require 'drgnx-file nil t))
         (let ((file (expand-file-name drgnx-timer-report-file (drgnx-state-dir)))
-              (stopped nil) (inhibit-interaction t) (coding-system-for-write 'utf-8-unix))
+              (stopped nil) (inhibit-interaction t))
           (dolist (e drgnx-timer-errors)
             (when (plist-get e :stopped) (push (drgnx-timer--printable e) stopped)))
-          (make-directory (file-name-directory file) t)
-          (with-temp-file file
-            (let ((print-length nil) (print-level nil))
-              (prin1 (list :stopped (nreverse stopped)) (current-buffer))
-              (insert "\n")))))
+          (drgnx-file-write file (list :stopped (nreverse stopped)) :fsync nil)))
     (error nil)))
 
 ;;;; A run's end
