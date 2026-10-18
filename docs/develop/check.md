@@ -19,7 +19,8 @@ It runs in phases:
    - the test/ui session;
    - the live tests in shards, each in the unit suite's sandbox (`drgnx-run-ert-batch`: a temp HOME and drgnx dirs,
      a dead session bus, no display, the provider keys unset), its files in one Emacs. The sessions they start run
-     detached (no systemd user manager answers there), and `test/live/jobs-systemd-test.el` skips.
+     detached (no systemd user manager answers there), and `test/live/jobs-systemd-test.el` skips. A live test that
+     needs the user's ELPA reads it from `DRGNX_USER_ELPA` (named before HOME is swapped), never from `~`.
 
    GUI jobs (each starts headless Emacs sessions) run no more at a time than free memory allows: 1 GiB each beyond
    1.5 GiB kept free, at least one, at most four.

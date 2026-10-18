@@ -56,14 +56,18 @@
                                                                          t)))"))
     (should (equal (drgnx-live-mod--q sess "drgnx-wb-unrouted") nil))))
 
+(defun drgnx-live-mod--elpa ()
+  "The user's ELPA (read-only): DRGNX_USER_ELPA, which the runner names before it swaps HOME, else ~/.config/emacs/elpa."
+  (or (getenv "DRGNX_USER_ELPA") (expand-file-name "~/.config/emacs/elpa")))
+
 (ert-deftest drgnx-live/package-modules-with-the-users-elpa ()
   ;; The user's ELPA, read-only, on the load path: the waiting modules run, their keys are bound, and
   ;; vertico's growing minibuffer gives the layout back.
-  (skip-unless (file-directory-p (expand-file-name "~/.config/emacs/elpa")))
+  (skip-unless (file-directory-p (drgnx-live-mod--elpa)))
   (drgnx-live-mod--with sess
-    (drgnx-ui-call sess "(progn (dolist (d (directory-files (expand-file-name \"~/.config/emacs/elpa\") t \"\\\\`[^.]\"))
+    (drgnx-ui-call sess (format "(progn (dolist (d (directory-files %S t \"\\\\`[^.]\"))
                                    (when (file-directory-p d) (add-to-list 'load-path d t)))
-                                 (drgnx-modules-run 'idle) (drgnx-uitest--json (list :ok t)))")
+                                 (drgnx-modules-run 'idle) (drgnx-uitest--json (list :ok t)))" (drgnx-live-mod--elpa)))
     (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "C-`")))
     (should (equal (drgnx-live-mod--q sess "(list (plist-get (alist-get 'extra/jump (drgnx-modules-report)) :status) (key-binding (kbd \"C-;\")) (and (boundp 'vertico-mode) vertico-mode))")
                    '(ok avy-goto-char-timer t)))
