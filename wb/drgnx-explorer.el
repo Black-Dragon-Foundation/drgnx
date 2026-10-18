@@ -788,6 +788,16 @@ inside another one selected goes: the folder carries it."
                 (if (> (length names) 3) ", …" ""))
       (car names))))
 
+(defun drgnx-explorer--close-buffers (paths)
+  "Kill the unmodified buffers visiting PATHS (or files inside them) after a delete; say so for a modified
+one, which stays (its text is the only copy).  Never prompts."
+  (dolist (b (buffer-list))
+    (when-let* ((f (buffer-file-name b))
+                ((seq-some (lambda (p) (or (equal f p) (string-prefix-p (file-name-as-directory p) f))) paths)))
+      (if (buffer-modified-p b)
+          (message "%s was deleted but has unsaved changes: its buffer is kept" (file-name-nondirectory f))
+        (let ((kill-buffer-query-functions nil)) (kill-buffer b))))))
+
 (defun drgnx-explorer-delete (&optional permanently)
   "Move the file(s) here to the trash (with PERMANENTLY — a prefix argument — delete them)."
   (interactive "P")
@@ -800,6 +810,7 @@ inside another one selected goes: the folder carries it."
           (if (and (file-directory-p p) (not (file-symlink-p p)))   ; a link goes, never what it points to
               (delete-directory p t (not permanently))
             (delete-file p (not permanently)))))
+      (drgnx-explorer--close-buffers paths)
       (setq drgnx-explorer--selection nil)
       (dolist (d (delete-dups (mapcar #'drgnx-explorer--parent paths))) (drgnx-explorer--show-folder d)))))
 

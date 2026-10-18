@@ -314,3 +314,26 @@
     (when (get-buffer drgnx-buffers-buffer-name) (kill-buffer drgnx-buffers-buffer-name))))
 
 ;;; wb-explorer-edge-test.el ends here
+
+;;;; M3b-14: deleting a file closes the buffers visiting it
+
+(ert-deftest drgnx-explorer-edge/delete-closes-unmodified-visiting-buffers ()
+  (drgnx-explorer-edge--with root
+    (with-current-buffer (drgnx-explorer-edge--at "docs") (drgnx-explorer-toggle-at (point)))
+    (let* ((clean (find-file-noselect (expand-file-name "docs/guide.md" root)))
+           (dirty (find-file-noselect (expand-file-name "README.md" root)))
+           (other (find-file-noselect (expand-file-name "tests/test_main.py" root)))
+           (said nil))
+      (unwind-protect
+          (progn
+            (with-current-buffer dirty (insert "unsaved"))
+            (drgnx-explorer-edge--select "docs" "README.md")
+            (drgnx-explorer-edge--answering '(t)
+              (cl-letf (((symbol-function 'message) (lambda (fmt &rest a) (push (apply #'format fmt a) said))))
+                (with-current-buffer drgnx-explorer-buffer-name (drgnx-explorer-delete))))
+            (should-not (buffer-live-p clean))             ; inside the deleted folder, unmodified
+            (should (buffer-live-p other))                 ; not deleted
+            (should (buffer-live-p dirty))                 ; modified: kept, and said so
+            (should (seq-find (lambda (m) (string-match-p "README\\.md.*unsaved\\|unsaved.*README\\.md" m)) said)))
+        (with-current-buffer dirty (set-buffer-modified-p nil))
+        (dolist (b (list clean dirty other)) (when (buffer-live-p b) (kill-buffer b)))))))
