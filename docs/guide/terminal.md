@@ -194,7 +194,8 @@ take OSC 52 (GNOME Terminal, Ptyxis) keeps the copy inside drgnx.
   as a key.
 - **Reading the terminal's clipboard** is off. Most terminals refuse an OSC 52 read, kitty asks you every time, and
   a refused read makes the yank wait two seconds. `M-x customize-variable` `drgnx-tty-clipboard-read` turns it on
-  (terminals already open follow at once); then `C-y` asks the terminal for its clipboard first.
+  (terminals already open follow at once); then `C-y` asks the terminal for its clipboard first. With it off,
+  drgnx leaves alone a read you turned on through Emacs's own `xterm-extra-capabilities`.
 
 ## What a terminal window lacks
 

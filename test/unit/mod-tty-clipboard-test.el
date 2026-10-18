@@ -74,6 +74,16 @@
       (drgnx-tty-clip-setup (selected-frame))
       (should-not (terminal-parameter nil 'xterm--get-selection)))))
 
+(ert-deftest drgnx-tty-clip/a-read-the-user-turned-on-survives-setup ()
+  ;; getSelection through Emacs's own `xterm-extra-capabilities': the default nil does not take it away
+  (drgnx-tty-clip-test--terminal 'kitty '((xterm--get-selection . t))
+    (drgnx-tty-clip-setup (selected-frame))
+    (should (eq (terminal-parameter nil 'xterm--get-selection) t))
+    ;; nor does turning the setting off, which only undoes what the setting did
+    (cl-letf (((symbol-function 'drgnx-tty-frames--tty-frames) (lambda () (list (selected-frame)))))
+      (customize-set-variable 'drgnx-tty-clipboard-read nil))
+    (should (eq (terminal-parameter nil 'xterm--get-selection) t))))
+
 (ert-deftest drgnx-tty-clip/read-when-asked ()
   (let ((drgnx-tty-clipboard-read t))
     (drgnx-tty-clip-test--terminal 'kitty nil
@@ -90,8 +100,7 @@
 
 (ert-deftest drgnx-tty-clip/an-overlong-copy-warns-once-without-sit-for ()
   (require 'term/xterm)
-  (let (sent messages (term (selected-frame)))
-    (ignore term)
+  (let (sent messages)
     (drgnx-tty-clip--install)
     (set-terminal-parameter nil 'xterm--set-selection t)
     (set-terminal-parameter nil 'drgnx-tty-clip-warned nil)
@@ -107,6 +116,7 @@
           ;; a copy that fits still goes out
           (gui-backend-set-selection 'CLIPBOARD "hello drgnx")
           (should (equal sent (list (concat "\e]52;c;" (base64-encode-string "hello drgnx") "\a")))))
+      (advice-remove 'gui-backend-set-selection #'drgnx-tty-clip--guard)
       (set-terminal-parameter nil 'xterm--set-selection nil)
       (set-terminal-parameter nil 'drgnx-tty-clip-warned nil))))
 

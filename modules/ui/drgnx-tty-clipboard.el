@@ -58,8 +58,16 @@ The message comes once per terminal."
   (advice-add 'gui-backend-set-selection :around #'drgnx-tty-clip--guard))
 
 (defun drgnx-tty-clip--apply-read (term)
-  "Make TERM's reads of the terminal's clipboard follow `drgnx-tty-clipboard-read'."
-  (set-terminal-parameter term 'xterm--get-selection (and drgnx-tty-clipboard-read t)))
+  "Make TERM's reads of the terminal's clipboard follow `drgnx-tty-clipboard-read': on while it is non-nil,
+and off again only when drgnx turned them on (terminal parameter `drgnx-tty-clip-read'), so a getSelection
+the user turned on through `xterm-extra-capabilities' stays."
+  (cond (drgnx-tty-clipboard-read
+         (unless (terminal-parameter term 'xterm--get-selection)
+           (set-terminal-parameter term 'drgnx-tty-clip-read t)
+           (set-terminal-parameter term 'xterm--get-selection t)))
+        ((terminal-parameter term 'drgnx-tty-clip-read)
+         (set-terminal-parameter term 'drgnx-tty-clip-read nil)
+         (set-terminal-parameter term 'xterm--get-selection nil))))
 
 (defun drgnx-tty-clip-read-apply ()
   "Make the terminals already open follow `drgnx-tty-clipboard-read'."
