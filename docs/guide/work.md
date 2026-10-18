@@ -36,7 +36,8 @@ Agent sessions and jobs can work on a task — any tracker node id, such as `tas
 
 - `drgnx-agents-start PROFILE CWD TASK`: the agent gets `DRGNX_TASK`, and after each turn the commits made in
   CWD's repository during it are recorded for the task (just after the turn, never while Emacs handles the agent's
-  output).
+  output). When the session has exited, whatever it committed after its last turn ended is recorded too — before the
+  next agent start drops it, and on a scan or refresh.
 - `drgnx-jobs-start NAME COMMAND :cwd DIR :task TASK`: the job gets `DRGNX_TASK`; the git HEADs it started and
   ended at are kept with the job, and its commits are recorded once it ended (on the next scan or refresh) —
   commits made after it ended are not its.

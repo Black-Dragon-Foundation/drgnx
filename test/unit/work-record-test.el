@@ -228,4 +228,44 @@
       (drgnx-work-cli-run '("record"))                                    ; twice: one line
       (should (equal (drgnx-work-rec--git repo "notes" "--ref=drgnx" "show" sha) "drgnx task: task:/p.md#15")))))
 
+
+(ert-deftest drgnx-work/an-exited-session-s-last-commits-are-collected-before-it-is-pruned ()
+  ;; M7b-6: commits after the last turn-end (the agent died, or committed outside a turn) are still its task's
+  (drgnx-work-rec--with repo
+    (let ((a (drgnx-work-rec--session "task:/p.md#31" repo)) (b (drgnx-work-rec--session "task:/p.md#32" repo)))
+      (drgnx-work--agent-task a 'start)
+      (drgnx-work--agent-task a 'turn-start)
+      (drgnx-work-rec--commit repo "in the turn")
+      (drgnx-work--agent-task a 'turn-end)
+      (drgnx-work-rec--pump)
+      (drgnx-work-rec--commit repo "after the last turn")
+      (setf (drgnx-agent-session-status a) 'exited)
+      (should (equal (drgnx-work-rec--titles "task:/p.md#31") '("in the turn")))
+      (drgnx-work--agent-task b 'start)                                  ; the next start prunes a's state…
+      (should-not (assq a drgnx-work--tasks))
+      (drgnx-work-rec--pump)                                             ; …after collecting (on a timer)
+      (should (equal (sort (drgnx-work-rec--titles "task:/p.md#31") #'string<) '("after the last turn" "in the turn"))))))
+
+(ert-deftest drgnx-work/a-refresh-collects-the-exited-sessions-and-leaves-live-ones-to-their-turn ()
+  (drgnx-work-rec--with repo
+    (let ((dead (drgnx-work-rec--session "task:/p.md#33" repo)) (live (drgnx-work-rec--session "task:/p.md#34" repo))
+          (board (concat repo "no-board.org")))
+      (drgnx-work--agent-task dead 'start)
+      (drgnx-work--agent-task live 'start)
+      (drgnx-work--agent-task dead 'turn-start)
+      (drgnx-work--agent-task live 'turn-start)
+      (drgnx-work-rec--commit repo "somebody's")
+      (drgnx-work--agent-task dead 'turn-end)                            ; (the two overlapped: nothing is recorded for it)
+      (drgnx-work--agent-task live 'turn-end)
+      (drgnx-work-rec--pump)
+      (should-not (drgnx-work-rec--titles "task:/p.md#33"))
+      (drgnx-work--agent-task dead 'turn-start)
+      (drgnx-work-rec--commit repo "dead's last")
+      (setf (drgnx-agent-session-status dead) 'exited)
+      (drgnx-work-refresh (list repo) board)
+      (should (equal (drgnx-work-rec--titles "task:/p.md#33") '("dead's last")))
+      (should-not (drgnx-work-rec--titles "task:/p.md#34"))              ; live: its own turn-end records
+      (drgnx-work-refresh (list repo) board)                             ; again: nothing twice
+      (should (equal (drgnx-work-rec--titles "task:/p.md#33") '("dead's last"))))))
+
 ;;; work-record-test.el ends here
