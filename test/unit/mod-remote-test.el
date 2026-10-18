@@ -558,10 +558,17 @@ choice of two nobody has."
         (progn
           (remove-hook 'eglot-connect-hook #'drgnx-lang--no-remote-autoreconnect)
           (advice-remove 'eglot-reconnect #'drgnx-lang--guard-reconnect)
+          (advice-remove 'eglot--maybe-activate-editing-mode #'drgnx-lang--guard-eglot-activation)
           (funcall (plist-get (alist-get 'lang/eglot drgnx-modules--table) :setup))
           (should (memq #'drgnx-lang--no-remote-autoreconnect eglot-connect-hook))
-          (should (advice-member-p #'drgnx-lang--guard-reconnect 'eglot-reconnect)))
+          (should (advice-member-p #'drgnx-lang--guard-reconnect 'eglot-reconnect))
+          (should (advice-member-p #'drgnx-lang--guard-eglot-activation 'eglot--maybe-activate-editing-mode))
+          (drgnx-lang--teardown-eglot-guards)                  ; and the teardown takes all three away
+          (should-not (memq #'drgnx-lang--no-remote-autoreconnect eglot-connect-hook))
+          (should-not (advice-member-p #'drgnx-lang--guard-reconnect 'eglot-reconnect))
+          (should-not (advice-member-p #'drgnx-lang--guard-eglot-activation 'eglot--maybe-activate-editing-mode)))
       (unless was (advice-remove 'eglot-reconnect #'drgnx-lang--guard-reconnect))
+      (advice-remove 'eglot--maybe-activate-editing-mode #'drgnx-lang--guard-eglot-activation)
       (remove-hook 'eglot-connect-hook #'drgnx-lang--no-remote-autoreconnect))))
 
 ;;;; The fixture

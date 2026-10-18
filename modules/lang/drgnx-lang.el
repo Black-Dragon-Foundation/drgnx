@@ -188,6 +188,21 @@ command of the user's (eglot calls it from the server process's sentinel, and TR
              (ignore-errors (file-remote-p (project-root (eglot--project server)) 'host)))
     nil))
 
+(defun drgnx-lang--guard-eglot-activation (activate &rest args)
+  "Around advice of `eglot--maybe-activate-editing-mode' (eglot's `after-change-major-mode-hook' function): call
+ACTIVATE with ARGS, except in a remote buffer outside a command of the user's.  Eglot asks the buffer's project, and
+for a remote buffer that is a round trip (about forty TRAMP calls).  Nothing is asked when skipped; in the command
+that visits the file, eglot attaches the buffer to the running server as usual."
+  (when (or (drgnx-lang--user-command-p)
+            (not (file-remote-p default-directory)))
+    (apply activate args)))
+
+(defun drgnx-lang--teardown-eglot-guards ()
+  "Take the eglot hook and advice of the module's setup away (tests; modules switch off at the next start)."
+  (remove-hook 'eglot-connect-hook #'drgnx-lang--no-remote-autoreconnect)
+  (advice-remove 'eglot-reconnect #'drgnx-lang--guard-reconnect)
+  (advice-remove 'eglot--maybe-activate-editing-mode #'drgnx-lang--guard-eglot-activation))
+
 (defun drgnx-lang--maybe-eglot-remote (file)
   "The code buffer of the remote FILE: a server when the probe found one here and a command of the user is running
 (`drgnx-lang--user-command-p'; one per project); a one-time hint when the probe found none; nothing otherwise."
@@ -242,7 +257,9 @@ is set non-empty (headless test sessions).  A remote file only looks at what Ope
                        (add-hook 'prog-mode-hook #'drgnx-lang--maybe-eglot)
                        (with-eval-after-load 'eglot
                          (add-hook 'eglot-connect-hook #'drgnx-lang--no-remote-autoreconnect)
-                         (advice-add 'eglot-reconnect :around #'drgnx-lang--guard-reconnect))
+                         (advice-add 'eglot-reconnect :around #'drgnx-lang--guard-reconnect)
+                         (when (fboundp 'eglot--maybe-activate-editing-mode)
+                           (advice-add 'eglot--maybe-activate-editing-mode :around #'drgnx-lang--guard-eglot-activation)))
                        (setq xref-prompt-for-identifier nil
                              eglot-sync-connect nil                 ; a slow server never blocks opening the file
                              eglot-autoshutdown t)                  ; a server goes with its project's last buffer

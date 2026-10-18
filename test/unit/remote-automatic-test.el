@@ -65,7 +65,9 @@
      (drgnx-remote-auto--write (expand-file-name "l.py" ldir) "def g():\n    return 2\n")
      (drgnx-tramp-mock-setup)
      (setq root (file-name-as-directory (expand-file-name (drgnx-tramp-mock-name rdir))))
+     (advice-add 'eglot--maybe-activate-editing-mode :around #'drgnx-lang--guard-eglot-activation) ; the lang module's setup does it
      (unwind-protect (progn ,@body)
+       (advice-remove 'eglot--maybe-activate-editing-mode #'drgnx-lang--guard-eglot-activation)
        (remove-hook 'prog-mode-hook #'drgnx-lang--maybe-eglot)
        (remove-hook 'prog-mode-hook #'drgnx-sticky--maybe)
        (unless signal-was-on (drgnx-signal-mode -1))
@@ -164,11 +166,10 @@
       (run-hook-with-args 'window-selection-change-functions (selected-frame))
       (when (boundp 'after-focus-change-function) (ignore-errors (funcall after-focus-change-function)))
       (drgnx-remote-auto--none 'window-and-focus-hooks)
-      ;; drgnx's own hooks on a major-mode change (prog-mode-hook: language server, sticky scroll).  Eglot's hook is
-      ;; left out: it asks the project of a remote buffer (40 sends), see the known-gap test below.
-      (with-current-buffer rbuf
-        (let ((after-change-major-mode-hook (remq 'eglot--maybe-activate-editing-mode after-change-major-mode-hook)))
-          (python-mode)))
+      ;; a major-mode change: drgnx's prog-mode hooks (language server, sticky scroll) and eglot's own hook, which
+      ;; the lang module's advice keeps from asking a remote buffer's project (40 sends without it)
+      (should (memq 'eglot--maybe-activate-editing-mode after-change-major-mode-hook))
+      (with-current-buffer rbuf (python-mode))
       (drgnx-remote-auto--none 'major-mode-change)
       ;; 4. a local save and its hooks (blame, VC, the bus)
       (with-current-buffer lbuf (save-buffer) (run-hooks 'after-save-hook))
@@ -195,21 +196,33 @@
         (condition-case nil (timer-event-handler timer) (error nil)))
       (drgnx-remote-auto--none 'idle-time))))
 
-;;;; A known gap, pinned: eglot's own hook (DEFERRED row, not patched here)
+;;;; Eglot's own major-mode hook
 
 (ert-deftest drgnx-remote/eglots-major-mode-hook-stays-away-from-the-remote ()
-  "KNOWN GAP (a DEFERRED row): `eglot--maybe-activate-editing-mode', eglot's own `after-change-major-mode-hook'
-function, asks `project-current' of every buffer whose major mode changes, and for a remote buffer that is a round
-trip (about 40 TRAMP calls).  It runs for the user's visit, which is fine, and for anything else that changes a
-remote buffer's mode.  This test expects the gap closed, so it is expected to fail until it is; when it starts to
-pass, remove the expected-result line and the DEFERRED row."
-  :expected-result :failed
+  "`eglot--maybe-activate-editing-mode', eglot's `after-change-major-mode-hook' function, asks `project-current' of
+a buffer whose major mode changed, and for a remote buffer that is about 40 TRAMP calls.  Outside a command of the
+user's it is skipped for a remote buffer (nothing is asked); inside one, eglot still attaches the buffer; a local
+buffer is not affected."
   (drgnx-remote-auto--with
-    (let ((b (find-file-noselect (concat root "app.py"))))
-      (with-current-buffer b
-        (setq remote-file-name-inhibit-cache t drgnx-tramp-mock-sends 0)
-        (python-mode)
-        (should (equal (list 'eglot-hook drgnx-tramp-mock-sends) (list 'eglot-hook 0)))))))
+    (let* ((b (find-file-noselect (concat root "app.py")))
+           (l (find-file-noselect (expand-file-name "l.py" ldir)))
+           (calls nil)
+           (count (lambda (&rest _) (push (list default-directory) calls))))
+      (advice-remove 'eglot--maybe-activate-editing-mode #'drgnx-lang--guard-eglot-activation)
+      (advice-add 'eglot--maybe-activate-editing-mode :before count)            ; the counter sits below the guard
+      (advice-add 'eglot--maybe-activate-editing-mode :around #'drgnx-lang--guard-eglot-activation)
+      (unwind-protect
+          (progn
+            (setq remote-file-name-inhibit-cache t drgnx-tramp-mock-sends 0)
+            (with-current-buffer b (python-mode))                   ; a timer, a restored session, a revert
+            (should (equal (list 'eglot-hook drgnx-tramp-mock-sends) (list 'eglot-hook 0)))
+            (should-not calls)
+            (with-current-buffer l (python-mode))                   ; a local buffer is attached as before
+            (should (= (length calls) 1))
+            (let ((drgnx-lang--user-command t))                     ; the user's command visits the remote file
+              (with-current-buffer b (python-mode)))
+            (should (= (length calls) 2)))
+        (advice-remove 'eglot--maybe-activate-editing-mode count)))))
 
 ;;;; The Explorer lists a remote folder on a command only
 
@@ -254,6 +267,28 @@ pass, remove the expected-result line and the DEFERRED row."
       (drgnx-explorer-open)                                         ; expand again by Open
       (should (> drgnx-tramp-mock-sends 0))
       (should (member "z.txt" (drgnx-remote-auto--row-names))))))
+
+(ert-deftest drgnx-remote/file-commands-and-find-list-the-remote-folder ()
+  "New File, Rename, Delete and Paste end in `drgnx-explorer--show-folder'; Find ends by drawing the tree again."
+  (drgnx-remote-auto--with
+    (delete-other-windows)
+    (drgnx-explorer-setup)
+    (drgnx-explorer-set-roots (list root))
+    (setq remote-file-name-inhibit-cache t)
+    (drgnx-remote-auto--write (expand-file-name "made.py" rdir) "")
+    (setq drgnx-tramp-mock-sends 0)
+    (drgnx-explorer--show-folder (directory-file-name root))
+    (should (> drgnx-tramp-mock-sends 0))
+    (should (member "made.py" (drgnx-remote-auto--row-names)))
+    (should-not drgnx-explorer--remote-reads)
+    (drgnx-remote-auto--write (expand-file-name "found.py" rdir) "")
+    (drgnx-explorer--find-apply "app")
+    (should-not (member "made.py" (drgnx-remote-auto--row-names)))
+    (setq drgnx-tramp-mock-sends 0)
+    (drgnx-explorer-find-clear)                                     ; leaving Find draws the tree again
+    (should (> drgnx-tramp-mock-sends 0))
+    (should (member "found.py" (drgnx-remote-auto--row-names)))
+    (should-not drgnx-explorer--remote-reads)))
 
 (ert-deftest drgnx-remote/a-folder-never-listed-shows-one-row-and-refresh-lists-it ()
   (drgnx-remote-auto--with

@@ -74,8 +74,9 @@ while the command waits: its login gets an error message, never a hidden questio
 
 ## Limits
 
-- Eglot's own hook, which runs when a buffer's major mode changes, asks the project of a remote buffer and so reaches the
-  host (about forty TRAMP calls). It runs for the file you visit; drgnx does not patch eglot.
+- Eglot's own hook, which runs when a buffer's major mode changes, asks the project of the buffer and so would reach the
+  host (about forty TRAMP calls). For a remote buffer drgnx lets it run only inside a command of yours (the visit of
+  the file); a mode change from a timer or a restored session skips it, and the buffer is attached at your next visit.
 
 - Shell integration in a remote terminal (eat or zsh integration over TRAMP) is not built.
 - Remote folders are not restored at the next start (see the Explorer's rules in [workbench.md](workbench.md)); open

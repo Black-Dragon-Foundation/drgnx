@@ -681,7 +681,7 @@ excluded names left out.  A root that is your home or / and not a project is ref
 
 (defun drgnx-explorer--find-apply (query)
   "Show only the files whose name contains QUERY (any case), with their folders — collapsed or not."
-  (with-current-buffer (drgnx-explorer--buffer)
+  (with-current-buffer (let ((drgnx-explorer--remote-reads t)) (drgnx-explorer--buffer)) ; Find is a command of the user
     (unless drgnx-explorer--find
       (setq drgnx-explorer--find (list :files (drgnx-explorer--all-files)
                                        :expanded (copy-hash-table drgnx-explorer--expanded)
@@ -730,7 +730,8 @@ excluded names left out.  A root that is your home or / and not a project is ref
   (when-let* ((state drgnx-explorer--find))
     (setq drgnx-explorer--find nil drgnx-explorer--expanded (plist-get state :expanded))
     (with-current-buffer (drgnx-explorer--buffer)
-      (drgnx-explorer--render)
+      (let ((drgnx-explorer--remote-reads t))              ; a command of the user
+        (drgnx-explorer--render))
       (drgnx-explorer--restore-views (plist-get state :views)))
     (drgnx-explorer--plain-title)
     (when drgnx-explorer--dirty (drgnx-explorer--apply-file-events))))
@@ -785,9 +786,10 @@ inside another one selected goes: the folder carries it."
 
 (defun drgnx-explorer--show-folder (dir)
   "Expand DIR (if collapsed) and show its current contents (during Find: filter again)."
-  (if drgnx-explorer--find
-      (drgnx-explorer--find-again)
-    (drgnx-explorer--show-folder-1 dir)))
+  (let ((drgnx-explorer--remote-reads t))                  ; New File, Rename, Delete, Paste: commands of the user
+    (if drgnx-explorer--find
+        (drgnx-explorer--find-again)
+      (drgnx-explorer--show-folder-1 dir))))
 
 (defun drgnx-explorer--find-again ()
   "Filter again with fresh files (a file operation or a refresh during Find)."
