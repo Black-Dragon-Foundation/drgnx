@@ -188,35 +188,80 @@ MATCH's text).  A symbol match: the server's edit with NEW in place of the place
       (when-let* ((ep (get-buffer-process err))) (delete-process ep))
       (kill-buffer err))))
 
-(defun drgnx-replace--output (proc chunk parse callback)
-  "PROC's output CHUNK: its complete lines PARSEd, their matches sent to CALLBACK as one batch."
-  (unless (process-get proc 'drgnx-replace-cancelled)
-    (let* ((s (concat (process-get proc 'drgnx-replace-rest) chunk))
-           (i (cl-position ?\n s :from-end t)))
-      (if (null i)
-          (process-put proc 'drgnx-replace-rest s)
-        (process-put proc 'drgnx-replace-rest (substring s (1+ i)))
-        (when-let* ((ms (mapcan parse (split-string (substring s 0 i) "\n" t))))
-          (funcall callback ms))))))
+(defvar drgnx-replace-parse-lines 64
+  "The most output lines a search parses at a time (a filter call, or the continuation at the next timer pass): a
+chunk of thousands of lines never holds Emacs up in one go.")
 
-(defun drgnx-replace--finished (proc parse callback)
-  "PROC ended: its last line PARSEd, then CALLBACK gets (:error REASON) when it failed, and :done."
+(defun drgnx-replace--stream-init (proc parse callback err)
+  "Make PROC a search's stream: each output line goes through PARSE, the matches to CALLBACK; ERR its stderr buffer,
+which owns the parse continuation."
+  (process-put proc 'drgnx-replace-parse parse)
+  (process-put proc 'drgnx-replace-callback callback)
+  (process-put proc 'drgnx-replace-err err))
+
+(defun drgnx-replace--output (proc chunk)
+  "PROC's output CHUNK: its complete lines join PROC's queue (a partial last line waits for its end), then a bounded
+part of the queue is parsed (`drgnx-replace--parse-some')."
+  (unless (process-get proc 'drgnx-replace-cancelled)
+    (let* ((lines (split-string chunk "\n")) (rest (process-get proc 'drgnx-replace-rest)) (tail (last lines)))
+      (when (> (length rest) 0) (setcar lines (concat rest (car lines))))
+      (process-put proc 'drgnx-replace-rest (car tail))  ; "" when CHUNK ends with a newline
+      (when (cdr lines)
+        (drgnx-replace--enqueue proc (delete "" (nbutlast lines 1)))
+        (drgnx-replace--parse-some proc)))))
+
+(defun drgnx-replace--enqueue (proc lines)
+  "Put LINES (a fresh list) at the end of PROC's queue of lines to parse."
+  (when lines
+    (let ((tail (process-get proc 'drgnx-replace-tail)))
+      (if tail (setcdr tail lines) (process-put proc 'drgnx-replace-queue lines))
+      (process-put proc 'drgnx-replace-tail (last lines)))))
+
+(defun drgnx-replace--parse-some (proc)
+  "Parse at most `drgnx-replace-parse-lines' of PROC's queued lines and send their matches as one batch.  Lines
+left: the rest at the next timer pass (`drgnx-timer-soon', owned by the search's stderr buffer).  None left and
+PROC ended: the end of the stream (`drgnx-replace--end').  A cancelled search parses and sends nothing."
+  (unless (process-get proc 'drgnx-replace-cancelled)
+    (let ((q (process-get proc 'drgnx-replace-queue)) (parse (process-get proc 'drgnx-replace-parse))
+          (n drgnx-replace-parse-lines) (parts nil))
+      (while (and q (> n 0))
+        (push (funcall parse (car q)) parts)
+        (setq q (cdr q) n (1- n)))
+      (process-put proc 'drgnx-replace-queue q)
+      (unless q (process-put proc 'drgnx-replace-tail nil))
+      (let ((ms (apply #'nconc (nreverse parts))))
+        (when ms (funcall (process-get proc 'drgnx-replace-callback) ms)))
+      (unless (process-get proc 'drgnx-replace-cancelled)  ; the callback may have started another search
+        (cond (q (drgnx-timer-soon (cons 'replace-parse proc) 0 #'drgnx-replace--parse-some :args (list proc)
+                                   :owner (process-get proc 'drgnx-replace-err)))
+              ((process-get proc 'drgnx-replace-ended) (drgnx-replace--end proc)))))))
+
+(defun drgnx-replace--finished (proc)
+  "PROC ended: its last line joins the queue; the end of the stream comes once the queue is parsed."
   (unless (process-live-p proc)
-    (unless (process-get proc 'drgnx-replace-cancelled)
+    (if (process-get proc 'drgnx-replace-cancelled)
+        (progn (when (eq proc drgnx-replace--search-proc) (setq drgnx-replace--search-proc nil))
+               (drgnx-replace--cleanup proc))
       (let ((rest (process-get proc 'drgnx-replace-rest)))
-        (when (> (length rest) 0)
-          (process-put proc 'drgnx-replace-rest nil)
-          (when-let* ((ms (funcall parse rest))) (funcall callback ms))))
-      (let ((code (process-exit-status proc)))
-        (unless (memq code '(0 1))              ; 1: nothing found
-          (let* ((err (process-get proc 'drgnx-replace-err))
-                 (msg (if (buffer-live-p err) (string-trim (with-current-buffer err (buffer-string))) "")))
-            (funcall callback (list :error (if (string-empty-p msg)
-                                               (format "%s exited with code %s" (car (process-command proc)) code)
-                                             msg)))))
-        (funcall callback :done)))
-    (when (eq proc drgnx-replace--search-proc) (setq drgnx-replace--search-proc nil))
-    (drgnx-replace--cleanup proc)))
+        (process-put proc 'drgnx-replace-rest nil)
+        (when (> (length rest) 0) (drgnx-replace--enqueue proc (list rest))))
+      (process-put proc 'drgnx-replace-ended t)
+      (drgnx-replace--parse-some proc))))
+
+(defun drgnx-replace--end (proc)
+  "PROC's output is all parsed: its callback gets (:error REASON) when it failed, then :done; its stderr goes."
+  (let ((callback (process-get proc 'drgnx-replace-callback)) (code (process-exit-status proc)))
+    (unwind-protect
+        (progn
+          (unless (memq code '(0 1))              ; 1: nothing found
+            (let* ((err (process-get proc 'drgnx-replace-err))
+                   (msg (if (buffer-live-p err) (string-trim (with-current-buffer err (buffer-string))) "")))
+              (funcall callback (list :error (if (string-empty-p msg)
+                                                 (format "%s exited with code %s" (car (process-command proc)) code)
+                                               msg)))))
+          (funcall callback :done))
+      (when (eq proc drgnx-replace--search-proc) (setq drgnx-replace--search-proc nil))
+      (drgnx-replace--cleanup proc))))
 
 (defun drgnx-replace-search (query callback)
   "Search the files for QUERY in the background; a handle for `drgnx-replace-cancel' (nil when nothing runs).
@@ -244,14 +289,14 @@ this one; a stopped search calls CALLBACK no more."
                      (make-process :name (format "drgnx-replace-%s" backend) :buffer nil :stderr err :noquery t
                                    :connection-type 'pipe :coding 'utf-8-unix
                                    :command (drgnx-replace--command backend query)
-                                   :filter (lambda (p chunk) (drgnx-replace--output p chunk parse callback))
-                                   :sentinel (lambda (p _event) (drgnx-replace--finished p parse callback)))
+                                   :filter #'drgnx-replace--output
+                                   :sentinel (lambda (p _event) (drgnx-replace--finished p)))
                    (error (kill-buffer err)
                           (funcall callback (list :error (error-message-string e)))
                           (funcall callback :done)
                           nil))))
       (when proc
-        (process-put proc 'drgnx-replace-err err)
+        (drgnx-replace--stream-init proc parse callback err)
         (ignore-errors (process-send-eof proc))         ; a tool that finished already (a busy machine) is no error
         (setq drgnx-replace--search-proc proc)))))
 
@@ -259,6 +304,8 @@ this one; a stopped search calls CALLBACK no more."
   "Stop the search HANDLE (from `drgnx-replace-search'); its callback gets nothing more."
   (when (processp handle)
     (process-put handle 'drgnx-replace-cancelled t)
+    (process-put handle 'drgnx-replace-queue nil)
+    (process-put handle 'drgnx-replace-tail nil)
     (when (process-live-p handle) (delete-process handle))
     (when (eq handle drgnx-replace--search-proc) (setq drgnx-replace--search-proc nil))
     (drgnx-replace--cleanup handle)))

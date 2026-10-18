@@ -418,7 +418,9 @@ timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run
   `(tty-fallback-hint . FRAME)`, `tools/jobs` the coalesced `job-ui-recount`, `tools/ai` the `ai-probe` one-shot; the
   ghost-text pause is an idle debounce `(ai-ghost . BUFFER)` owned by the buffer, the Search view's typing pause
   and its pause after a listed file changed are debounces `(replace-pause . BUFFER)` and `(replace-refresh . BUFFER)`
-  owned by the view's buffer (its rows are a view: below), and an Ask's search limit
+  owned by the view's buffer (its rows are a view: below); a search's output is parsed `drgnx-replace-parse-lines`
+  (64) lines at a time, the rest by `drgnx-timer-soon` `(replace-parse . PROCESS)` owned by the search's stderr
+  buffer (killed when the search ends or is cancelled); and an Ask's search limit
   `(ai-grep . PROCESS)` by the search process (its sentinel cancels it). With no run of the owner nothing starts.
 
 ### What the fire wrapper guarantees
@@ -757,7 +759,10 @@ A draw (`drgnx-view--draw`) runs SYNC when touched, the self-check, then two ste
 1. **The fold** applies the structural marks to the row vectors only; the buffer does not change. A row that goes
    stays as an entry marked `gone`, a new row is an empty entry marked `new`. The vectors are rewritten in place
    when new rows only go at the end (appends and removals), and grown by doubling only when full; an append to a long
-   view copies nothing. Otherwise (an insert before a row that stays) fresh vectors are made.
+   view copies nothing. Otherwise (an insert before a row that stays) fresh vectors are made. Marks that only add
+   rows at the end (no row goes) fold in `drgnx-view--fold-tail`, which visits only the new rows: the entries already
+   there, rows left to delete between slices included, stay as they are (`drgnx-view/an-append-folds-only-the-new-tail`
+   counts the entries a fold visits).
 2. **The sweep** works entry by entry in buffer order with one running shift of the starts: `gone` is deleted,
    `new` rendered and inserted, a dirty row deleted and inserted again at its integer start, a growing row gets an
    `insert` before SUFFIX. Dirty marks are moved onto the entries first (`patch` wins over `grow`). When every entry
