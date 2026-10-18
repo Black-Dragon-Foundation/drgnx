@@ -20,6 +20,7 @@
 (require 'drgnx-registry)
 (require 'drgnx-trust)
 (require 'drgnx-work)
+(require 'drgnx-view)
 (require 'drgnx-projects)
 (require 'svg)
 (require 'image)                        ; (setf image-property): not preloaded in every build (31.1 -nw)
@@ -108,42 +109,68 @@
       ('commit (concat (if (plist-get node :gone) (propertize "⚠ " 'face 'drgnx-work-ui-stale) "● ") (substring (or (plist-get node :sha) "") 0 (min 7 (length (or (plist-get node :sha) "")))) " " title))
       (_ title))))
 
-(defun drgnx-work-ui--insert (node depth)
-  (let* ((foldable (or (memq (plist-get node :kind) '(spec plan task))
-                       (and (eq (plist-get node :kind) 'todo) (drgnx-work-edges-to (plist-get node :id) 'implements))))
-         (open (and foldable (drgnx-work-ui--open-p node)))
-         (start (point)))
-    (insert (make-string (* 2 depth) ?\s) (cond (open "▾ ") (foldable "▸ ") (t "  ")) (drgnx-work-ui--line node) "\n")
-    (put-text-property start (point) 'drgnx-work-node node)
-    (when open (dolist (k (drgnx-work-ui--kids node)) (drgnx-work-ui--insert k (1+ depth))))))
+(defvar-local drgnx-work-ui--nodes nil
+  "KEY → (NODE DEPTH FOLD) for the rows the last sync listed (`drgnx-work-ui--render'); FOLD is nil (no children),
+`closed' or `open'.  The rows are drawn from it, in the same draw.")
+
+(defun drgnx-work-ui--fold (node)
+  "nil if NODE has no children to show, else `open' or `closed'."
+  (and (or (memq (plist-get node :kind) '(spec plan task))
+           (and (eq (plist-get node :kind) 'todo) (drgnx-work-edges-to (plist-get node :id) 'implements)))
+       (if (drgnx-work-ui--open-p node) 'open 'closed)))
 
 (defun drgnx-work-ui--node () (get-text-property (line-beginning-position) 'drgnx-work-node))
 
-(defun drgnx-work-ui--render ()
-  (let ((inhibit-read-only t) (id (plist-get (drgnx-work-ui--node) :id)) (line (line-number-at-pos)))
-    (erase-buffer)
-    (let ((roots (drgnx-work-ui--roots)))
-      (if roots (dolist (r roots) (drgnx-work-ui--insert r 0))
-        (insert (propertize "Nothing tracked yet — g scans the projects' specs, plans and ledgers.\n" 'face 'drgnx-work-ui-done))))
-    (goto-char (point-min))
-    (let ((m (and id (text-property-search-forward 'drgnx-work-node id (lambda (v n) (equal v (plist-get n :id)))))))
-      (if m (goto-char (prop-match-beginning m)) (goto-char (point-min)) (forward-line (1- line))))))
+(defun drgnx-work-ui--render-row (key)
+  "The text of the row KEY: indentation, fold marker, the node's line.  The node is on the whole row."
+  (if (eq key :empty)
+      (propertize "Nothing tracked yet — g scans the projects' specs, plans and ledgers.\n" 'face 'drgnx-work-ui-done)
+    (pcase-let ((`(,node ,depth ,fold) (or (gethash key drgnx-work-ui--nodes) (error "Work: no node for the row %S" key))))
+      (let ((text (concat (make-string (* 2 depth) ?\s) (pcase fold ('open "▾ ") ('closed "▸ ") (_ "  "))
+                          (drgnx-work-ui--line node) "\n")))
+        (put-text-property 0 (length text) 'drgnx-work-node node text)
+        text))))
+
+(defun drgnx-work-ui--sig (key)
+  "KEY's signature: the hash of its line's text (a database's strings are never `eq'), its depth and its fold."
+  (if (eq key :empty) t
+    (pcase-let ((`(,node ,depth ,fold) (gethash key drgnx-work-ui--nodes)))
+      (vector (sxhash-equal (drgnx-work-ui--line node)) depth fold))))
+
+(defun drgnx-work-ui--render (view)
+  "SYNC of the `work-tree' view: walk the open tree into the ordered row keys (node ids; a node the tree shows twice,
+as a commit under two tasks, has its parent's key after its id from the second time on) and sync VIEW's rows with
+them.  Only the rows whose line, depth or fold changed are drawn again."
+  (let ((table (if drgnx-work-ui--nodes (clrhash drgnx-work-ui--nodes) (setq drgnx-work-ui--nodes (make-hash-table :test #'equal))))
+        (keys nil))
+    (cl-labels ((walk (node depth parent)
+                  (let* ((id (plist-get node :id)) (key (if (gethash id table) (concat id "\0" parent) id))
+                         (fold (drgnx-work-ui--fold node)))
+                    (push key keys)
+                    (puthash key (list node depth fold) table)
+                    (when (eq fold 'open)
+                      (dolist (k (drgnx-work-ui--kids node)) (walk k (1+ depth) key))))))
+      (dolist (r (drgnx-work-ui--roots)) (walk r 0 "")))
+    (drgnx-view-sync-rows view (or (nreverse keys) (list :empty)) #'drgnx-work-ui--sig)))
+
+(drgnx-view-define 'work-tree :render #'drgnx-work-ui--render-row :sync #'drgnx-work-ui--render :delay 0 :key-test 'equal)
 
 (defun drgnx-work-ui-buffer ()
-  "The Work tab's buffer, drawn from the tracker's database."
+  "The Work tab's buffer: a `work-tree' view of the tracker's database.  Drawn at once when new; afterwards the view
+is marked and draws when shown."
   (let ((b (get-buffer-create "*drgnx Work*")))
     (with-current-buffer b
       (unless (derived-mode-p 'drgnx-work-mode) (drgnx-work-mode))
-      (drgnx-work-ui--render))
+      (let ((new (not (drgnx-view-p drgnx-view))))
+        (when new (drgnx-view-attach 'work-tree))
+        (drgnx-view-touch drgnx-view)
+        (when new (drgnx-view-draw-now drgnx-view))))
     b))
 
 (defun drgnx-work-ui--redraw ()
-  (when-let* ((b (get-buffer "*drgnx Work*")))
-    (with-current-buffer b
-      (let ((ws (get-buffer-window-list b nil t)) (pts nil))
-        (dolist (w ws) (push (cons w (window-start w)) pts))
-        (drgnx-work-ui--render)
-        (pcase-dolist (`(,w . ,s) pts) (set-window-start w s t) (set-window-point w (point)))))))
+  "Mark the Work view: the next draw reads the tracker again.  This only marks (it runs from sentinels and hooks)."
+  (when-let* ((b (get-buffer "*drgnx Work*")) (view (buffer-local-value 'drgnx-view b)) ((drgnx-view-p view)))
+    (drgnx-view-touch view)))
 
 (defun drgnx-work-ui-view ()
   "Show the Work tab in the right dock (scanning again in the background)."
@@ -158,7 +185,7 @@
   (interactive)
   (when-let* ((n (drgnx-work-ui--node)) ((memq (plist-get n :kind) '(spec plan task todo))))
     (puthash (plist-get n :id) (if (drgnx-work-ui--open-p n) 'closed 'open) drgnx-work-ui--expanded)
-    (drgnx-work-ui--render)))
+    (drgnx-work-ui--redraw)))
 
 (defun drgnx-work-ui-filter (text)
   "Show only the plans whose title or path contain TEXT (empty: all)."

@@ -841,6 +841,15 @@ counts every row rendered (patched, inserted or appended, an error row too); `:r
 text; `:appended` the rows added; `:removed` the rows deleted. Without VIEW it sums every live view
 (`:max-slice-rows`: the largest).
 
+### Consumers
+
+- **The Work tree** (`work-tree`, `modules/tools/drgnx-work-ui.el`; DELAY 0): row keys are node ids (a node the tree
+  shows twice, as a commit under two tasks, has its parent's key appended from the second time on). SYNC
+  (`drgnx-work-ui--render`) walks the open tree into the ordered keys and calls `drgnx-view-sync-rows`; a row's
+  signature is the vector `[(sxhash-equal LINE) DEPTH FOLD]` (a database's strings are never `eq`, a fixnum is).
+  Folding, the filter and a scan's sentinel only touch the view; point and window start stay on their row.
+  `drgnx-work-ui-buffer` draws a new buffer at once and only marks an existing one.
+
 ### The invariant
 
 `(drgnx-view--check VIEW)` is nil when the starts are the entries' actual extents: entry 0 starts at 0, every
