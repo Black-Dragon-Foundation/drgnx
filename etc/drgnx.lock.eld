@@ -92,6 +92,11 @@
 		    :size 40960 :requires
 		    ((compat "31.0") (cond-let "1.1")) :summary
 		    "Show current command and its binding")
+	   (kkp :version "20260706.858" :archive "melpa" :kind tar
+		:file "kkp-20260706.858.tar" :sha256
+		"1ef566f8cc68cc0bf8cb3ee4aaffa63b258be8621a89229d2d3b2df4b945c8e5"
+		:size 71680 :requires ((compat "29.1.3.4")) :summary
+		"Enable support for the Kitty Keyboard Protocol")
 	   (llama :version "1.0.6" :archive "nongnu" :kind tar :file
 		  "llama-1.0.6.tar" :sha256
 		  "eafea6f32985ebf2c0266cdeff3a7b72eaf674c7a51e1c424fbc0e4166310337"

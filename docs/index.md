@@ -27,6 +27,7 @@ Using drgnx.
 - [Agent settings](guide/agent-settings.md): one page per agent (Claude Code, Codex, Gemini, Kimi Code) — routes and billing, MCP servers, hooks and skills; add, edit, remove, Test.
 - [Editor features vs VS Code, Zed and Cursor](guide/editor-matrix.md): what drgnx has, where it is described, its GUI test and perf workload.
 - [Trusted folders](guide/security.md): Trust This Folder, the "restricted" mark, what files from untrusted folders cannot make Emacs do.
+- [In a terminal](guide/terminal.md): the graphical window, a capable terminal and a legacy one (Alt+Shift and F6); what each terminal can do (kitty, WezTerm, foot, Ghostty, Ptyxis, tmux …) and which rows a test ran, the lines that fix what is missing, SSH, tmux, `EDITOR`, the clipboard, the mouse, colours.
 
 ## Reference
 

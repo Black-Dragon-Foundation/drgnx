@@ -136,6 +136,9 @@
         (edit-word-right "C-<right>" :mac "M-<right>")
         (edit-delete-word-back "C-<backspace>" :mac "M-<backspace>")
         (edit-delete-line-back :none "VS Code has no Linux key for it" :mac "s-<backspace>")
+        (edit-copy "C-c" :map drgnx-editing-region-map)   ; only while text is selected: otherwise C-c stays Emacs' prefix
+        (edit-cut "C-x" :map drgnx-editing-region-map)    ; likewise C-x
+        (edit-paste "C-v")
         (code-quick-fix "C-.")
         (code-problems "C-S-m")
         (code-format :none "in the palette (VS Code's C-S-i is the LLM Menu here, as in gryphn)")
@@ -172,6 +175,8 @@
         (scm-blame :none "in the palette")
         (terminal-new "C-S-`" :mac "C-S-`")
         (explorer-terminal-here :none "the Explorer's right-click menu")
+        (terminal-toggle-mouse :none "the palette")
+        (terminal-check :none "the palette")
         (go-quick-open "C-p")
         (search-project :none "C-S-f is View: Search; the palette")
         (search-semantic "C-k C-f")
@@ -306,5 +311,6 @@
         (shortcuts-undo "u" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))
         (shortcuts-reset "r" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))
         (shortcuts-reset-all "R" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))
+        (shortcuts-tty-fallback "t" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))
         (shortcuts-profile "p" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))
         (ai-stop :none "in the palette")))

@@ -12,6 +12,7 @@ how every drgnx UI change is developed and verified.
 | `bin/drgnx test --scenario [--config C]` | behaviour scenarios in `test/scenario/` inside a session of configuration C (default `drgnx`; `gryphn` is skipped where that config is absent) | the host (needs mutter) |
 | `bin/drgnx test --container` | the batch tier in a `fedora:45` container (Emacs 31.1, drgnx's baseline); `DRGNX_TEST_IMAGE` / `DRGNX_TEST_GUI_IMAGE` use a prebuilt image ([ci.md](ci.md)) | podman, docker or nerdctl |
 | `bin/drgnx test --container --ui` | the GUI tier in a container (mutter renders without a GPU) | podman, docker or nerdctl |
+| `bin/drgnx test --tty` / `--container --tty [--fedora 44 or 45]` | the terminal tier in `test/tty/`: drgnx in Emacs sessions inside private tmux servers — see [Terminal tier](#terminal-tier) | the host (needs tmux); a container |
 | `bin/drgnx test --ui` | GUI ERT suites in `test/ui/` inside a headless session, then live ERT suites in `test/live/` (batch Emacs starting real sessions) | the host (needs mutter) |
 | `bin/drgnx test --bench` | the workbench timed against treemacs and ibuffer in a GUI session on a 25k-file project — see [workbench.md](../guide/workbench.md#performance) | the host (needs mutter); treemacs from `$DRGNX_BENCH_ELPA` |
 | `bin/drgnx test --perf` / `--soak [MIN]` | input latency, frames, GC, startup and memory against budgets; the memory soak — see [perf.md](perf.md) | the host (needs mutter) |
@@ -456,3 +457,95 @@ Helpers (`harness/drgnx-scenario.el`): `drgnx-scenario-check OK EXPLANATION REPO
 git repo, removed afterwards with its file and dired buffers and the Explorer roots in it; fixtures of yours older than a
 day — a run killed at its timeout — are deleted when the next is made), `drgnx-scenario-load-driver`. The results file adds `tests` (every test with its
 result) and `known_red` (name, summary, trace) — see [scenarios.md](scenarios.md) for the scenarios themselves.
+
+## Terminal tier
+
+`test/tty/` tests drgnx in a terminal. They run in batch Emacs under `drgnx-run-ert-batch` (temp HOME and XDG
+dirs) and drive the session through `harness/drgnx-tty-session.el`:
+
+- **Session:** a run directory prepared as for a GUI session (`drgnx-ui-prepare-run`: generated init, its own server
+  socket), named `drgnx-tty-PID-N`. Its Emacs runs in a pane of a **private tmux server**, `tmux -L drgnx-tty-PID-N
+  -f /dev/null`, with `TMUX_TMPDIR` in the run directory, so the socket is under it too. The run directory is under
+  `$DRGNX_UI_STATE` when that is set, else under a short private directory of its own, `tUID` in the temp directory
+  (`drgnx-tty-session-state-root`, not the GUI sessions' `$XDG_STATE_HOME/drgnx/ui`): a Unix socket path holds about 107
+  bytes, and `RUN/tmux-UID/NAME` with a 7-digit PID twice in NAME passed that under a long home or a test run's nested
+  temp directories. Without `:daemon` the pane
+  runs `emacs -nw`. With `:daemon`, window 0 runs `emacs --fg-daemon` and window 1 runs `emacsclient -t`.
+  `drgnx-tty-session-client SESS :env ENV :args ARGS` opens more clients, each in its own window, with extra
+  variables (`TERM=…`) and emacsclient arguments (files, `-e FORM`). `drgnx-tty-session-pty-start` opens a client
+  under Emacs's own pty that never answers a query: a silent terminal. `:keys PROFILE` (`vscode`, `emacs` or `vim`)
+  writes the session's `keys.eld` with that profile. `drgnx-tty-session-tmux SESS ARGS…` runs any tmux command on the
+  session's server.
+- **Isolation:** every program runs under `env -i` with the GUI harness's allowlist. HOME, `XDG_CONFIG_HOME`,
+  `XDG_DATA_HOME`, `XDG_CACHE_HOME` and `XDG_STATE_HOME` are in the run directory, and `TMUX` is unset. Every tmux
+  call names the server (`-L`) and passes `-f /dev/null`, so neither `~/.tmux.conf` nor `/etc/tmux.conf` is read and
+  the user's tmux server is never used (a test checks every call). The server gets `set-clipboard on`, `extended-keys on`, `window-size
+  manual`, `status off`, `mouse off` (the application gets the mouse bytes) and `default-shell /bin/sh`. `:options`
+  adds more tmux commands for one test.
+- **Nested (tmux inside tmux):** `:nested LINES` runs a second private tmux in the pane (`tmux -L inner -f
+  RUN/inner.conf`, its socket under `RUN/inner-tmux`, which `TMUX_TMPDIR` names) with Emacs in it, the way drgnx runs in
+  real life: Emacs gets the inner tmux's own `TMUX` and `TERM`. `inner.conf` is `default-terminal`, `status off`
+  and `default-shell /bin/sh`, then LINES; the inner tmux keeps tmux's own defaults (`set-clipboard external`,
+  `extended-keys off`, `focus-events off`) unless LINES change them, so a test says what it turns on. Keys, the screen
+  and the clipboard go through the outer server, which is the inner tmux's terminal; `drgnx-tty-session-inner-tmux`
+  runs a command on the inner server, and `drgnx-tty-session-stop` kills it first. With `:command`, that command runs in
+  the inner tmux instead of Emacs (to see the bytes tmux passes on). Not with `:daemon`.
+  The inner server is not under the outer server's time budget: it ends when Emacs (its only pane) ends, and
+  `drgnx-tty-session-stop` and the sweep of sessions whose runner died kill it (its command line names the run
+  directory).
+- **Cleanup:** `drgnx-tty-session-stop` asks Emacs to exit, kills the tmux server and anything still running from the
+  run directory, then removes the run and socket directories. `drgnx-tty-session-with` stops the session even when
+  the test fails, and `kill-emacs-hook` stops any session a test left running. A runner killed with SIGKILL runs
+  no hook, so two more things cover it. The server runs as `setsid timeout -s TERM -k 10 BUDGET tmux … -D` and ends
+  after `$DRGNX_TTY_MAX_RUNTIME` seconds (default 1800) with everything in it. Each start also sweeps the sessions
+  whose owner is dead: the PID in `drgnx-tty-PID-N` is no running Emacs. It kills their processes, found by name in
+  any state root, and removes their run and socket directories (the run directory from the process's
+  `DRGNX_UI_RUN`, or the current state root). Processes in another PID namespace are left alone: a container's
+  sessions carry the container's PIDs, which mean nothing to a host sweep.
+- **Input is raw bytes:** `drgnx-tty-session-send` uses `tmux send-keys -H`, one argument per byte. A test proved
+  this delivers every byte unchanged; `paste-buffer -r -d` showed ESC as `^[`. Keys are encoded the way a kitty
+  keyboard protocol, modifyOtherKeys or legacy terminal sends them (`drgnx-tty-session-key`): characters, RET, TAB,
+  ESC, DEL, and the arrows, Home, End, PgUp, PgDn and F1–F12 with modifiers as xterm sends them. Text given as a
+  multibyte string goes as UTF-8. Mouse input uses
+  SGR reports on 1-based cells (`-click`, `-wheel`, `-drag`).
+- **Output:** the screen comes from `capture-pane` (`-screen`, `-find`, `-wait-screen`, `-quiet`). The paste buffer
+  shows what OSC 52 copied (`-clipboard`), and `-pane-flags` reports the pane's mouse and key modes. The inner Emacs's
+  state comes through its socket (`-eval`, `-wait`).
+- **kitty, the exit test** (`test/tty/kitty-test.el`): a real terminal emulator instead of tmux.
+  `drgnx-tty-session-kitty-start :size WxH :env ENV` starts a drgnx daemon under headless mutter (`drgnx-ui-start`;
+  ENV goes into its environment through `drgnx-ui-session-extra-env`, kkp's directory in `EMACSLOADPATH` for
+  example). It then starts kitty on that display (`WAYLAND_DISPLAY` is the session's name) as `kitty --config NONE -o
+  allow_remote_control=socket-only -o enable_audio_bell=no --listen-on unix:RUN/kitty.sock -o initial_window_width=Wc
+  -o initial_window_height=Hc -e emacsclient -t -s SOCKET`. kitty's `TERM` is `xterm-kitty`, HOME and the XDG
+  directories are in the run directory, and the bus is the session's own. Headless mutter has no keyboard: no window
+  gets the focus, so kitty cannot own the clipboard and `wl-paste` fails ("This seat has no keyboard"). So a batch
+  Emacs on the session's bus first opens a mutter remote-desktop session and presses Shift once, which gives the seat
+  a virtual keyboard. That Emacs stays running until the session stops, because mutter drops the keyboard when it
+  leaves. Keys go through kitty's own encoder (`-kitty-key`, `kitten @ send-key ctrl+shift+p`). Bytes such as SGR
+  mouse reports go as they are (`-kitty-text`, `send-text`). The screen is `get-text --extent screen`
+  (`-kitty-screen`; `drgnx-tty-session-screen` and the waits use it for a kitty session), and the clipboard is
+  `wl-paste -n` on the session's display (`-kitty-clipboard`). `drgnx-tty-session-kitty-stop` ends kitty and the
+  keyboard's Emacs (their command lines name the run directory), then the daemon (`drgnx-ui-stop`). Each test skips
+  without kitty, kitten, mutter, `dbus-run-session` or `wl-paste` (`kitty not installed: run bin/drgnx test
+  --container --tty`); `DRGNX_TTY_KITTY` names a kitty off `PATH`. kitty is installed only in the tty image. Never
+  install it on the host. `send-key` has no keyboard layout, so kitty reports no shifted key: Alt+Shift+P arrives as
+  `M-S-p`, not `M-P`. It also bypasses kitty's own shortcuts.
+
+Run it:
+
+```
+bin/drgnx test --tty                          # on the host (needs tmux)
+bin/drgnx test --container --tty              # in a Fedora 45 container, Emacs 31.1
+bin/drgnx test --container --tty --fedora 44  # Fedora 44, Emacs 30.2
+```
+
+`bin/drgnx test --tty` is `drgnx-run-ert-batch` on `test/tty`, every file in an Emacs of its own like the unit tier,
+SIGPIPE ignored, in a temp directory of its own; the environment is the caller's (the sessions start theirs with
+`env -i`). `DRGNX_TEST_SELECTOR` narrows it. In a container the image `drgnx-test-tty:fNN` is built from
+`test/container/Containerfile.tty` with `--build-arg FEDORA=NN`; the image has tmux, plus kitty and mutter for the exit
+test. It runs with the GUI tier's security options (`seccomp=unconfined`, `label=disable`) and `--memory 3g`.
+`DRGNX_USER_ELPA` (a directory holding the pinned kkp, and corfu, unpacked) is mounted read-only as `/elpa`, so the
+kkp tests and the kitty exit test run there too; without it they skip.
+`DRGNX_TEST_TTY_IMAGE` uses a prebuilt image. `bin/drgnx check` runs the tier as the `tty` job (a GUI job for the memory
+accounting, in the parallel phase) when tmux is installed; `--no-gui` leaves it out. The `Terminal tier` workflow runs
+the two container runs nightly ([ci.md](ci.md)).

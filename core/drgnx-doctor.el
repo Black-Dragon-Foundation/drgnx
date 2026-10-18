@@ -8,7 +8,8 @@
 ;; `drgnx-doctor-facts', injected in tests) returning (STATUS DETAIL FIX), STATUS one of
 ;; `ok', `warn', `fail' or `info'.  Any `fail' makes the doctor exit 1.  Modules will add
 ;; their own checks with `drgnx-doctor-define' (M4).  A check may be for one platform (:platform `linux' or
-;; `macos'): on the other it is absent from the results.  See docs/guide/install.md.
+;; `macos'): on the other it is absent from the results; so is a check that returns nil (the Terminal checks
+;; outside a terminal).  See docs/guide/install.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -16,6 +17,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-paths)
+(require 'drgnx-tty-recommend)   ; the terminal table, tmux, the fallback keys and the recommendation (all read-only)
 
 (declare-function package-built-in-p "package")
 
@@ -82,6 +84,31 @@ PLATFORM (`linux' or `macos'): only run on that platform, as `drgnx-platform' sa
   "The facts of the `search' check (see `drgnx-search-doctor-facts'), or (:error MESSAGE)."
   (condition-case err
       (progn (require 'drgnx-search-setup) (drgnx-search-doctor-facts (drgnx-search-setup--roots)))
+    (error (list :error (error-message-string err)))))
+
+;; The terminal the doctor runs in (see `drgnx-tty-facts'): from the environment of this process, never from a
+;; terminal.  Inside tmux, the one process is `tmux show' (1 s).  A failure becomes a fact (:error), never a crash.
+(cl-defun drgnx-doctor-terminal-facts (&optional frame &key caps (fallbacks nil fallbacks-p))
+  "The facts of the Terminal checks: `drgnx-tty-facts' of FRAME's client (this process's own when FRAME is nil)
+with :caps (what the terminal can do) and :os (`drgnx-tty-os'); :fallbacks, rows (CHORD NATIVE-P ALT PREFIX),
+only when known.  CAPS and FALLBACKS are the live frame's (Check This Terminal); without CAPS they are those of
+the newest entry of terminal-report.eld for this kind of terminal (inside tmux, preferably one with the same terminal
+around it), which drgnx wrote when a window of it opened.
+A failure is (:error MESSAGE)."
+  (condition-case err
+      (let* ((facts (drgnx-tty-facts frame))
+             (id (plist-get (plist-get facts :identity) :id))
+             (outer (plist-get (plist-get facts :identity) :outer))
+             (same (and (not caps) (plist-get facts :in-terminal)
+                        (seq-filter (lambda (e) (and (consp e) (eq (plist-get (plist-get (cdr e) :caps) :id) id)))
+                                    (let ((all (plist-get (plist-get facts :report) :terminals))) (and (proper-list-p all) all)))))
+             ;; tmux in kitty is not tmux in Ptyxis: the entry with the same terminal around it first, else the newest
+             (entry (or (and outer (seq-find (lambda (e) (eq (plist-get (plist-get (cdr e) :caps) :outer) outer)) same))
+                        (car same))))
+        (append facts
+                (list :caps (or caps (plist-get (cdr entry) :caps)) :os (and (plist-get facts :in-terminal) (drgnx-tty-os)))
+                (cond (fallbacks-p (list :fallbacks fallbacks))
+                      ((and entry (plist-member (cdr entry) :fallbacks)) (list :fallbacks (plist-get (cdr entry) :fallbacks))))))
     (error (list :error (error-message-string err)))))
 
 (defvar drgnx-macos-app-dir)
@@ -156,6 +183,7 @@ default; it never reads ~/.profile), else ~/.profile.  With SHELL unset or empty
            :work-plans (drgnx-doctor--work-plans)
            :ai-up (drgnx-doctor--ai-up)
            :search (drgnx-doctor--search)
+           :terminal (drgnx-doctor-terminal-facts)
            ;; whether a key is set, from the environment only: the doctor never opens auth-source (it may prompt)
            :ai-keys (let ((k (getenv "OPENROUTER_API_KEY"))) (and k (not (string-empty-p k)) '(openrouter)))
            :ai-complete (ignore-errors (require 'drgnx-ai) (cdr (car (drgnx-ai-role 'complete))))
@@ -216,10 +244,10 @@ default; it never reads ~/.profile), else ~/.profile.  With SHELL unset or empty
                               (if (plist-get f :treesit) (list 'ok "tree-sitter available" nil)
                                 (list 'warn "this Emacs has no tree-sitter support" drgnx-doctor-install-hint))))
 
-(drgnx-doctor-define 'gui :group "Emacs" :doc "A graphical build (pgtk on Wayland, X11 or macOS)"
+(drgnx-doctor-define 'gui :group "Emacs" :doc "A graphical build (pgtk on Wayland, X11 or macOS), or a terminal-only one"
                      :check (lambda (f)
                               (if-let* ((g (plist-get f :gui))) (list 'ok (format "graphical build (%s)" g) nil)
-                                (list 'warn "terminal-only Emacs: drgnx's workbench needs a graphical build" drgnx-doctor-install-hint))))
+                                (list 'ok "terminal-only Emacs: drgnx runs in terminals (no images, one font size; popups in the bottom lane on 30.2)" nil))))
 
 (drgnx-doctor-define 'security :group "Emacs" :doc "Known security issues of this Emacs version"
                      :check (lambda (f)
@@ -404,23 +432,242 @@ MODEL), as a sentence, or nil."
                                   (if (plist-get f key) (list 'ok (format "%s found" bin) nil)
                                     (list 'warn (format "%s not found (%s)" bin why) (format "install %s" bin)))))))
 
+;;;; The Terminal group
+;; Each check reads (plist-get FACTS :terminal) (`drgnx-doctor-terminal-facts') and is absent (nil) outside a
+;; terminal, except `terminal', which says so.  Read-only: no prompt, nothing installed, tmux asked once (1 s).
+
+(defun drgnx-doctor--tty-row (tf)
+  "The row of `drgnx-tty-terminals' for the terminal of the terminal facts TF, nil for an unknown one."
+  (drgnx-tty-terminal (plist-get (plist-get tf :identity) :id)))
+
+(defun drgnx-doctor--tty-fix (row key)
+  "ROW's fix line for the missing capability KEY (:kkp is `kkp'), or nil."
+  (cdr (assq key (plist-get row :fixes))))
+
+(defun drgnx-doctor--tty-define (name doc fn)
+  "Define the Terminal check NAME: FN (called with the terminal facts and all facts) runs only in a terminal."
+  (drgnx-doctor-define name :group "Terminal" :doc doc
+                       :check (lambda (f)
+                                (let ((tf (plist-get f :terminal)))
+                                  (when (plist-get tf :in-terminal) (funcall fn tf f))))))
+
+(defun drgnx-doctor--tty-name (id)
+  "ID's name as the terminal table has it."
+  (or (plist-get (drgnx-tty-terminal id) :name) (and id (symbol-name id))))
+
+(defun drgnx-doctor--terminfo-fix (term)
+  "The ways to get a terminfo entry for TERM onto this machine (the terminal runs somewhere else)."
+  (string-join
+   (delq nil (list (format "from the machine your terminal runs on: infocmp -x | ssh HOST tic -x -   (installs the entry for %s)" term)
+                   (when (member term '("xterm-kitty" "xterm-ghostty"))
+                     "or use kitten ssh HOST in kitty, or Ghostty's ssh-terminfo shell integration (shell-integration-features)")
+                   "or connect with TERM=xterm-256color"))
+   "; "))
+
+(defun drgnx-doctor--key-table (rows)
+  "ROWS, (CHORD NATIVE-P ALT PREFIX) as `drgnx-tty-fallback-report-rows' gives them, as aligned text: the chord,
+whether the terminal sends it itself, the Alt+Shift key that stands for it (— where it is in use or reserved) and
+the F6 form."
+  (let* ((cells (mapcar (pcase-lambda (`(,chord ,native ,alt ,prefix))
+                          (list chord (if native "yes" "no")
+                                (if alt (drgnx-tty-fallback-label alt) "—")
+                                (if prefix (drgnx-tty-fallback-label prefix) "—")))
+                        rows))
+         (all (cons '("chord" "native" "fallback" "prefix") cells))
+         (widths (apply #'cl-mapcar #'max (mapcar (lambda (r) (mapcar #'string-width r)) all))))
+    (mapconcat (lambda (r)
+                 (string-trim-right
+                  (string-join (cl-mapcar (lambda (c w) (concat c (make-string (- w (string-width c)) ?\s))) r widths) "  ")))
+               all "\n")))
+
+(defun drgnx-doctor--tty-keys-mode (tf)
+  "How TF's terminal sends keys: `kkp', `mok' or `legacy' (measured when a window of it has been open, else from
+what its table row or tmux's extended-keys say), nil when that cannot be told."
+  (let ((row (drgnx-doctor--tty-row tf)) (id (plist-get (plist-get tf :identity) :id)))
+    (or (plist-get (plist-get tf :caps) :keys)
+        (cond ((eq id 'tmux)
+               (when (plist-get tf :tmux)
+                 (if (member (plist-get (plist-get tf :tmux) :extended-keys) '("on" "always")) 'mok 'legacy)))
+              ((and row (not (plist-get row :kkp)) (not (plist-get row :mok))) 'legacy)))))
+
+(defun drgnx-doctor--tty-colours (tf)
+  "The number of colours TF's terminal shows (measured, else guessed from TERM), or nil."
+  (or (plist-get (plist-get tf :caps) :colors)
+      (let ((term (or (plist-get tf :term) "")))
+        (cond ((equal term "linux") 16)
+              ((string-match-p "direct\\'" term) 16777216)
+              ((string-match-p "256" term) 256)))))
+
+(defun drgnx-doctor--tty-true-colour-p (tf)
+  (let ((colors (plist-get (plist-get tf :caps) :colors)))
+    (if colors (>= colors 16777216)
+      (or (member (downcase (or (plist-get tf :colorterm) "")) '("truecolor" "24bit"))
+          (plist-get (plist-get tf :tmux) :rgb)
+          (string-suffix-p "-direct" (or (plist-get tf :term) ""))))))
+
+(defun drgnx-doctor--tty-osc52-p (tf)
+  "Whether copy reaches the clipboard from TF's terminal: measured, else tmux's options, else its table row."
+  (let ((caps (plist-get tf :caps)) (tmux (plist-get tf :tmux)))
+    (cond (caps (plist-get caps :osc52))
+          (tmux (or (equal (plist-get tmux :set-clipboard) "on") (member (plist-get tmux :allow-passthrough) '("on" "all"))))
+          (t (plist-get (drgnx-doctor--tty-row tf) :osc52)))))
+
+(drgnx-doctor-define 'terminal :group "Terminal" :doc "Which terminal this is, its TERM and terminfo"
+                     :check (lambda (f)
+                              (let* ((tf (plist-get f :terminal)) (id (plist-get (plist-get tf :identity) :id))
+                                     (row (drgnx-doctor--tty-row tf)) (term (plist-get tf :term))
+                                     (outer (plist-get (plist-get tf :identity) :outer)))
+                                (cond ((plist-get tf :error) (list 'warn (format "could not check: %s" (plist-get tf :error))
+                                                                   "run drgnx doctor again from a terminal"))
+                                      ((not (plist-get tf :in-terminal)) (list 'info "not run from a terminal" nil))
+                                      (t (let* ((name (cond ((eq id 'tmux)
+                                                             (concat "tmux" (when-let* ((v (or (plist-get (plist-get tf :tmux) :version)
+                                                                                               (plist-get (plist-get tf :identity) :version))))
+                                                                              (concat " " v))
+                                                                     (when outer (format " in %s" (drgnx-doctor--tty-name outer)))))
+                                                            (row (plist-get row :name))
+                                                            (t "a terminal drgnx does not know")))
+                                                (detail (format "%s (TERM=%s), terminfo %s" name term
+                                                                (cond ((plist-get tf :terminfo) "found")
+                                                                      ((plist-get tf :ssh) "missing (terminal-ssh has the fixes)")
+                                                                      (t "missing")))))
+                                           (cond ((and (not (plist-get tf :terminfo)) (plist-get tf :ssh)) (list 'info detail nil))
+                                                 ((not (plist-get tf :terminfo)) (list 'warn detail (drgnx-doctor--terminfo-fix term)))
+                                                 ((null row) (list 'info detail "F1 (VS Code keys) and the palette, or M-x, reach every command"))
+                                                 (t (list 'ok detail nil)))))))))
+
+(drgnx-doctor--tty-define
+ 'terminal-colours "Colours: true colour where the terminal has it"
+ (lambda (tf _f)
+   (let* ((n (drgnx-doctor--tty-colours tf)) (row (drgnx-doctor--tty-row tf))
+          (shown (if n (format "%d colours" n) "an unknown number of colours")))
+     (cond ((drgnx-doctor--tty-true-colour-p tf) (list 'ok "true colour (24-bit)" nil))
+           ((eq (plist-get (plist-get tf :identity) :id) 'tmux)
+            (list 'info (format "%s (terminal-tmux says what tmux needs for true colour)" shown) nil))
+           ((null row) (list 'info (format "%s; true colour was not detected" shown) nil))
+           ((plist-get row :truecolor)
+            (list 'warn (format "%s, although %s has true colour" shown (plist-get row :name))
+                  "export COLORTERM=truecolor where the terminal starts your shell (over SSH the variable must be sent as well); drgnx then opens true-colour windows"))
+           (t (list 'warn (format "%s: %s has no true colour" shown (plist-get row :name))
+                    (drgnx-doctor--tty-fix row 'truecolor)))))))
+
+(drgnx-doctor--tty-define
+ 'terminal-mouse "The mouse reaches drgnx"
+ (lambda (tf _f)
+   (let ((row (drgnx-doctor--tty-row tf)) (caps (plist-get tf :caps)))
+     (if (if caps (plist-get caps :mouse) (or (null row) (plist-get row :mouse)))
+         (list 'ok "mouse reports are on: clicks, the wheel and drags work" nil)
+       (list 'warn "this terminal sends no mouse reports" (drgnx-doctor--tty-fix row 'mouse))))))
+
+(drgnx-doctor--tty-define
+ 'terminal-keys "Keys: the kitty keyboard protocol or modifyOtherKeys, else the Alt+Shift and F6 fallbacks"
+ (lambda (tf _f)
+   (let* ((mode (drgnx-doctor--tty-keys-mode tf)) (caps (plist-get tf :caps)) (row (drgnx-doctor--tty-row tf))
+          (id (plist-get (plist-get tf :identity) :id)))
+     (pcase mode
+       ('kkp (list 'ok (concat "the kitty keyboard protocol: every shortcut works"
+                               (when (eq (plist-get caps :c-g) 'waits) " (C-g stops only programs Emacs waits for)"))
+                   nil))
+       ('mok (if-let* ((folded (plist-get caps :folded)))
+                 (list 'info (format "modifyOtherKeys, but tmux sends %d chords as other keys (C-S-<letter> …): Alt+Shift or F6 then the key" (length folded))
+                       "type those chords as Alt+Shift or F6 then the key; or customize drgnx-tty-tmux-mok-level to 2 (then C-g cannot stop busy Lisp)")
+               (list 'ok "modifyOtherKeys: C-S- chords and the like work (Super keys need the kitty keyboard protocol)" nil)))
+       ('legacy
+        (let* ((rows (plist-get tf :fallbacks))
+               (own (when-let* ((x (drgnx-doctor--tty-fix row 'kkp))) (and (not (string-prefix-p "none" x)) x)))
+               (recommendation (plist-get (drgnx-tty-recommendation (list :keys 'legacy) (plist-get tf :os)) :text)))
+          (list 'warn
+                (concat "neither the kitty keyboard protocol nor modifyOtherKeys: this terminal cannot send C-S- chords and the like\n"
+                        (if rows (drgnx-doctor--key-table rows) "open drgnx in this terminal once to list them"))
+                ;; tmux with extended-keys already on: the terminal around it is what cannot send the keys
+                (if (and (eq id 'tmux) (not (member (plist-get (plist-get tf :tmux) :extended-keys) '("on" "always"))))
+                    (drgnx-doctor--tty-fix row 'mok)
+                  (concat recommendation (when own (format " In %s: %s." (plist-get row :name) own)))))))
+       (_ (list 'info (if row
+                          (format "not measured yet; %s %s (open drgnx in this terminal once to check)" (plist-get row :name)
+                                  (cond ((eq id 'tmux) "passes modifyOtherKeys only with extended-keys on")
+                                        ((plist-get row :kkp) "speaks the kitty keyboard protocol")
+                                        ((plist-get row :mok) "speaks modifyOtherKeys")
+                                        (t "sends only the basic keys")))
+                        "this terminal is not known to drgnx: open drgnx in it once to measure its keys")
+                nil))))))
+
+(drgnx-doctor--tty-define
+ 'terminal-clipboard "Copy reaches your clipboard (OSC 52)"
+ (lambda (tf _f)
+   (let ((row (drgnx-doctor--tty-row tf)))
+     (cond ((drgnx-doctor--tty-osc52-p tf) (list 'ok "copy reaches your clipboard (OSC 52)" nil))
+           ((null row) (list 'info "drgnx does not know whether this terminal takes OSC 52: copy stays in drgnx" nil))
+           (t (list 'warn "copy stays in drgnx: nothing carries OSC 52 to your clipboard" (drgnx-doctor--tty-fix row 'osc52)))))))
+
+(defconst drgnx-doctor--tmux-line-names
+  '(("set-clipboard" . "copy") ("allow-passthrough" . "copy") ("extended-keys" . "keys") ("focus-events" . "focus")
+    ("terminal-features" . "true colour"))
+  "The option each line of `drgnx-tty-tmux-conf-lines' sets → what it is for.")
+
+(drgnx-doctor-define 'terminal-tmux :group "Terminal" :doc "tmux passes copy, keys, focus and true colour on"
+                     :check (lambda (f)
+                              (let* ((tf (plist-get f :terminal)) (tmux (plist-get tf :tmux)))
+                                (when (and (plist-get tf :in-terminal)
+                                           (or tmux (eq (plist-get (plist-get tf :identity) :id) 'tmux)))
+                                  (if tmux
+                                      (if-let* ((lines (drgnx-tty-tmux-conf-lines tmux)))
+                                          (list 'warn
+                                                (format "tmux lacks: %s"
+                                                        (string-join (delete-dups
+                                                                      (mapcar (lambda (line)
+                                                                                (cdr (seq-find (lambda (n) (string-search (car n) line))
+                                                                                               drgnx-doctor--tmux-line-names)))
+                                                                              lines))
+                                                                     ", "))
+                                                (format "add to ~/.tmux.conf: %s, then run tmux source ~/.tmux.conf" (string-join lines "; ")))
+                                        (list 'ok (format "tmux %s: copy, keys, focus and true colour are set" (or (plist-get tmux :version) ""))
+                                              nil))
+                                    ;; tmux on the other side of SSH, or one that did not answer
+                                    (list 'info "tmux, but drgnx cannot ask it (the other side of SSH, or no answer within 1 s)"
+                                          (format "check ~/.tmux.conf there for: %s; then run tmux source ~/.tmux.conf"
+                                                  (string-join (drgnx-tty-tmux-conf-lines
+                                                                (list :version "3.3" :outer-term "TERM-OF-YOUR-TERMINAL"))
+                                                               "; "))))))))
+
+(drgnx-doctor--tty-define
+ 'terminal-ssh "Over SSH: this machine has the terminfo entry of the terminal's TERM"
+ (lambda (tf _f)
+   (when (plist-get tf :ssh)
+     (let ((term (plist-get tf :term)))
+       (if (plist-get tf :terminfo)
+           (list 'ok (format "over SSH: terminfo for %s found here; keys, mouse and OSC 52 travel unchanged" term) nil)
+         (list 'warn (format "over SSH: this machine has no terminfo entry for TERM=%s (Emacs falls back to 8 colours or refuses the terminal)" term)
+               (drgnx-doctor--terminfo-fix term)))))))
+
+(drgnx-doctor--tty-define
+ 'terminal-popups "Popups: floating on Emacs 31.1, in the bottom lane on 30.2"
+ (lambda (_tf f)
+   (if (version< (plist-get f :version) "31.1")
+       (list 'info "popups in the bottom lane; 31.1 has floating ones" nil)
+     (list 'ok "popups float over the text (child frames)" nil))))
+
 ;;;; Running and reporting
 
-(defun drgnx-doctor-run (facts &optional dev)
-  "Results (plists :name :group :status :detail :fix) of every check on FACTS; DEV adds dev checks."
+(defun drgnx-doctor-run (facts &optional dev group)
+  "Results (plists :name :group :status :detail :fix) of every check on FACTS; DEV adds dev checks; GROUP (a
+string) keeps only that group's.  A check that returns nil is absent from the results."
   (cl-loop for (name . spec) in drgnx-doctor--checks
            when (and (or dev (not (plist-get spec :dev)))
+                     (or (null group) (equal group (plist-get spec :group)))
                      (memq (plist-get spec :platform) (list nil (drgnx-platform))))
-           collect (pcase-let ((`(,status ,detail ,fix)
-                                (condition-case err (funcall (plist-get spec :check) facts)
-                                  (error (list 'fail (format "the check itself failed: %s" (error-message-string err)) nil)))))
-                     (list :name name :group (plist-get spec :group) :status status :detail detail :fix fix))))
+           nconc (let ((result (condition-case err (funcall (plist-get spec :check) facts)
+                                 (error (list 'fail (format "the check itself failed: %s" (error-message-string err)) nil)))))
+                   (when result
+                     (pcase-let ((`(,status ,detail ,fix) result))
+                       (list (list :name name :group (plist-get spec :group) :status status :detail detail :fix fix)))))))
 
 (defun drgnx-doctor-format (results)
-  "RESULTS as text: one line per check, the fix indented below anything not ok."
+  "RESULTS as text: one line per check, the fix indented below anything not ok.  A detail of several lines (a
+table) continues indented by the same six spaces."
   (mapconcat (lambda (r)
                (concat (format "%-5s %-20s %s" (upcase (if (eq (plist-get r :status) 'ok) "ok" (symbol-name (plist-get r :status))))
-                               (plist-get r :name) (plist-get r :detail))
+                               (plist-get r :name) (string-replace "\n" "\n      " (format "%s" (plist-get r :detail))))
                        (if (and (plist-get r :fix) (not (eq (plist-get r :status) 'ok)))
                            (format "\n      fix: %s" (plist-get r :fix)) "")))
              results "\n"))

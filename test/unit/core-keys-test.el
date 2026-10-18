@@ -760,14 +760,15 @@ keys); every binding is undone after."
     (should (string-search "kill-current-buffer (s-k)" (seq-find (lambda (l) (string-prefix-p "s-k " l))
                                                                  (drgnx-keys-conflict-lines))))
     ;; The ns-win keys VS Code takes over, on purpose (Cmd+Shift+letter included: s-S Save As, s-H Replace
-    ;; in Project, …); the others stay Emacs' (s-c, s-v, s-x, s-z …).
+    ;; in Project, …) and s-v, Paste (M12b: it replaces the selection); the others stay Emacs' (s-z …).  s-c and
+    ;; s-x are bound only while text is selected (the region map), so Emacs' own stay without a selection.
     (should (equal (sort (seq-filter (lambda (key) (seq-find (lambda (b) (and (null (plist-get b :map))
                                                                               (equal (plist-get b :key) key)))
                                                              (plist-get r :bindings)))
                                      (mapcar #'car drgnx-keys-test--ns-defaults))
                          #'string<)
                    (sort (list "<end>" "<home>" "s-'" "s-+" "s-," "s--" "s-0" "s-<left>" "s-<right>" "s-=" "s-a"
-                               "s-f" "s-l" "s-n" "s-o" "s-p" "s-q" "s-s" "s-t" "s-w" "s-S" "s-H" "s-M" "s-F"
+                               "s-f" "s-l" "s-n" "s-o" "s-p" "s-q" "s-s" "s-t" "s-v" "s-w" "s-S" "s-H" "s-M" "s-F"
                                "s-E")
                          #'string<)))
     ;; and s-L, Select All Occurrences — the extra/mc module's command, not in this registry
@@ -862,8 +863,9 @@ The commands of modules that need no installed package are in it, the later stag
                               agent-settings-add agent-settings-edit agent-settings-remove agent-settings-toggle
                               agent-settings-new-skill agent-settings-open-file agent-settings-other
                               agent-settings-openrouter
+                              shortcuts-tty-fallback  ; M12b's terminal fallback in the Shortcuts editor
                               quit preferences edit-line-start edit-line-end edit-buffer-start edit-buffer-end edit-word-left
-                              edit-word-right edit-delete-word-back edit-delete-line-back))
+                              edit-word-right edit-delete-word-back edit-delete-line-back edit-copy edit-cut edit-paste))
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
     (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))

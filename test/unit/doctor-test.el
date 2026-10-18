@@ -26,7 +26,7 @@
 
 (ert-deftest drgnx-doctor/tree-sitter-and-gui ()
   (should (eq (drgnx-doctor-test--status 'tree-sitter (drgnx-doctor-test--facts :treesit nil)) 'warn))
-  (should (eq (drgnx-doctor-test--status 'gui (drgnx-doctor-test--facts :gui nil)) 'warn))
+  (should (eq (drgnx-doctor-test--status 'gui (drgnx-doctor-test--facts :gui nil)) 'ok))   ; a terminal-only build is fine (M12b)
   (should (eq (drgnx-doctor-test--status 'gui (drgnx-doctor-test--facts :gui 'ns)) 'ok)))
 
 (ert-deftest drgnx-doctor/security-notice-until-31.2 ()

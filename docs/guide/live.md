@@ -1,7 +1,8 @@
 # Live view of the agents' browser
 
 Watch the browser your agents drive, live, and take it over when you need to (module `tools/live`, needs the
-`websocket` package). It works in any graphical Emacs; it needs no WebKit. For a page an agent visited, or a
+`websocket` package). It works in any graphical Emacs; it needs no WebKit. It shows the page as an image, so a
+terminal window cannot show it: Watch Agents' Browser says so there and starts no browser. For a page an agent visited, or a
 Playwright report after a run, see [browser.md](browser.md).
 
 | Command | What it does |

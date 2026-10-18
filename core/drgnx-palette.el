@@ -43,9 +43,13 @@ text starting with `#' is a question; empty does nothing; a partial label that c
 runs it; several is an \"Ambiguous\" error naming up to three; none is \"No command\"."
   (interactive)
   (let* ((cands (drgnx-palette-candidates))
+         ;; the keys are the ones this terminal can send, asked from the buffer the command would run in
+         ;; (the annotations are made with the minibuffer current)
+         (origin (current-buffer))
          (annotate (lambda (label)
                      (when-let* ((c (drgnx-commands-get (cdr (assoc label cands)))))
-                       (let ((key (drgnx-surfaces-key c)))
+                       (let ((key (with-current-buffer (if (buffer-live-p origin) origin (current-buffer))
+                                    (drgnx-surfaces-key c))))
                          (concat (if (string-empty-p key) "" (concat "  " key))
                                  (if (drgnx-cmd-doc c) (concat "  — " (drgnx-cmd-doc c)) ""))))))
          (table (lambda (string pred action)
