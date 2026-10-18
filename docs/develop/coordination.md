@@ -47,16 +47,34 @@ working from the old one. So the shared state is explicit, versioned, and **enfo
 ### Events, the registry and review marks
 
 - **Events:** `drgnx-coord-event-add` (`:agent :job :task :kind :summary :data :at`) and `drgnx-coord-events` (`:since :agent
-  :job :task :kinds :limit`, oldest first, ids after `:since`: a viewer keeps the last id and asks for what is newer). The
-  writers above add their event in the **same transaction** as the change, so the two are there together or not at
-  all: claim (`claim`), release-stale (`release`), set-status and force-status (`status`), decide (`decision`), send
-  (`message`; to `user` with a text starting `[escalation]`, `question`), card-create and card-settle (`card`). A held
-  write (behind the log) or a refused claim writes nothing. `edit`, `test`, `start`, `stop`, `review`, `accept`,
-  `revert`, `answer` and `comment` are written by their own sources through `drgnx-coord-event-add`.
-- **Questions:** `drgnx-coord-open-questions` lists the `question` events that no later `answer` event names
-  (the answer's `data` holds `(:question EVENT-ID)`).
-- **Registry:** `drgnx-coord-agent-register` (keeps what is not given, and when the agent started), `drgnx-coord-agent`,
-  `drgnx-coord-agents`, `drgnx-coord-agent-seen` (stamps an agent alive now and returns the stamp).
+  :job :task :kinds :limit`, oldest first, ids after `:since`: a viewer keeps the last id and asks for what is newer;
+  indexed by `at`, `(agent, id)`, `(job, id)` and `(kind, id)`). The writers above add their event in the **same
+  transaction** as the change, so the two are there together or not at all: claim (`claim`, only when the task
+  was `ready`: a holder's renewal writes nothing), release-stale (`release`), set-status and force-status (`status`),
+  decide (`decision`), send (`message`; to `user` with a text starting `[escalation]`, `question`), card-create and
+  card-settle (`card`; an `ask` card is a `question`, see below), card-set (`card`, when its state changes: a reopened
+  card shows) and job-set (`job`, when its status changes). A held write (behind the log) or a refused claim writes
+  nothing. `edit`, `test`, `start`, `stop`, `review`, `accept`, `revert`, `answer` and `comment` are written by their
+  own sources through `drgnx-coord-event-add`.
+- **What `data` may hold:** small, readable data — a plist of strings, numbers, symbols and lists of those; anything
+  else (a buffer, a function, a hash table) is an error. It is printed with `print-length` 100 and `print-level` 6;
+  over 4096 characters only `(:truncated t :size N)` is kept. It is read back with `read-eval` off. An `edit` event
+  carries a path, a hash and line counts — never file contents or environment values.
+- **Questions:** one model for everything that waits on the user. A `question` event is an escalation (a message to
+  `user` starting `[escalation]`; data `(:message ID …)`) or an `ask` card (data `(:card ID)`). An `answer` event closes
+  it: its `data` holds `(:question EVENT-ID)`. Settling an `ask` card writes that answer itself (by `user`);
+  `drgnx-coord-open-questions` lists the questions with no answer.
+- **Retention:** `drgnx-coord-events-prune` (`:before`, default `drgnx-coord-event-retention-days`, 30) forgets older
+  events except `question`, `answer` and `decision`. `drgnx-coord-events-prune-daily` runs it at most once in 24 hours
+  (stamp in `meta` as `event-pruned`) and never signals: meant for a periodic tick.
+- **Busy database:** `work.db` opens with a 5-second busy timeout, so a writer waits for another Emacs's write lock for up
+  to 5 seconds. After that SQLite reports the database locked. Claims, cards, messages, decisions and
+  `drgnx-coord-event-add` then signal (the change did not happen: say so). Telemetry — `drgnx-coord-agent-seen` and
+  `drgnx-coord-event-add-best-effort`, for the edit and test writers — returns nil instead: losing a heartbeat or an
+  edit note must not fail the work it describes. A bad kind or bad `data` still signals.
+- **Registry:** `drgnx-coord-agent-register` (an id is required; what is not given is kept, and when the agent started;
+  `:clear` lists fields to set to NULL), `drgnx-coord-agent`, `drgnx-coord-agents`, `drgnx-coord-agent-seen` (stamps an
+  agent alive now and returns the stamp).
 - **Review marks:** `drgnx-coord-review-mark AGENT PATH STATE HASH` and `drgnx-coord-review-marks AGENT` (alist
   path → `(:state :hash :at)`). Accepting or reverting is a review layer only: nothing in the files changes.
 

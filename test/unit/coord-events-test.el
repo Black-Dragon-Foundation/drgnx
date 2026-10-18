@@ -39,7 +39,7 @@
           (dolist (tb '("event" "agent" "review_mark")) (should (member tb (drgnx-coord-events-test--tables))))
           (should (equal (caar (sqlite-select (drgnx-work-db) "select status from job where id = 'j'")) "running"))
           (should (equal (caar (sqlite-select (drgnx-work-db) "select title from card")) "Q?"))
-          (should (= (length (sqlite-select (drgnx-work-db) "select name from sqlite_master where type = 'index' and tbl_name = 'event' and name not like 'sqlite_%'")) 2))
+          (should (= (length (sqlite-select (drgnx-work-db) "select name from sqlite_master where type = 'index' and tbl_name = 'event' and name not like 'sqlite_%'")) 4))
           ;; idempotent: the version row lost (a migration cut short), every step runs again over its own tables
           (sqlite-execute (drgnx-work-db) "update meta set value = '4' where key = 'schema'")
           (drgnx-work-db-close-all)
@@ -65,7 +65,7 @@
         (should (string-match-p "the thing" (plist-get e :summary))))
       (should (plist-get (drgnx-coord-send :job "j" :sender "a" :recipient "b" :text "hello" :seen (drgnx-coord-version)) :ok))
       (should (= (length (drgnx-coord-events :kinds '("message"))) 1))
-      (let ((id (drgnx-coord-card-create :job "j" :task t1 :kind "ask" :title "Which?")))
+      (let ((id (drgnx-coord-card-create :job "j" :task t1 :kind "review" :title "Which?")))
         (should (= (length (drgnx-coord-events :kinds '("card"))) 1))
         (should (drgnx-coord-card-settle id "yes"))
         (should (= (length (drgnx-coord-events :kinds '("card"))) 2))
@@ -199,5 +199,142 @@
     (should (equal (plist-get (cdr (assoc "x.el" (drgnx-coord-review-marks "a"))) :hash) "h9"))
     (should (equal (plist-get (cdr (assoc "x.el" (drgnx-coord-review-marks "b"))) :hash) "h3"))
     (should-error (drgnx-coord-review-mark "a" "z.el" "approved" "h"))))
+
+(ert-deftest drgnx-coord-events/indexes-serve-the-filters ()
+  (drgnx-coord-events-test--with
+    (should (equal (sort (mapcar #'car (sqlite-select (drgnx-work-db) "select name from sqlite_master where type = 'index' and tbl_name = 'event' and name not like 'sqlite_%'")) #'string<)
+                   '("event_agent" "event_at" "event_job" "event_kind")))
+    (should (equal (mapcar (lambda (r) (nth 2 r)) (sqlite-select (drgnx-work-db) "pragma index_info(event_agent)")) '("agent" "id")))))
+
+(ert-deftest drgnx-coord-events/data-is-small-readable-data ()
+  (drgnx-coord-events-test--with
+    ;; accepted: strings, numbers, symbols, lists of those
+    (let ((id (drgnx-coord-event-add :agent "a" :kind "edit" :summary "x" :data '(:path "x.el" :hash "h" :added 3 :removed 1 :tags (a "b" 2)))))
+      (should (equal (plist-get (car (drgnx-coord-events :since (1- id))) :data) '(:path "x.el" :hash "h" :added 3 :removed 1 :tags (a "b" 2)))))
+    ;; refused: a buffer, a function, an odd plist, a non-plist, nested non-data
+    (with-temp-buffer
+      (should-error (drgnx-coord-event-add :agent "a" :kind "edit" :summary "x" :data (list :buf (current-buffer)))))
+    (should-error (drgnx-coord-event-add :agent "a" :kind "edit" :summary "x" :data (list :f (lambda () 1))))
+    (should-error (drgnx-coord-event-add :agent "a" :kind "edit" :summary "x" :data '(:a)))
+    (should-error (drgnx-coord-event-add :agent "a" :kind "edit" :summary "x" :data "text"))
+    (should-error (drgnx-coord-event-add :agent "a" :kind "edit" :summary "x" :data (list :l (list 1 (make-hash-table)))))
+    (should (= (length (drgnx-coord-events)) 1))))
+
+(ert-deftest drgnx-coord-events/an-oversized-payload-is-bounded ()
+  (drgnx-coord-events-test--with
+    (let* ((id (drgnx-coord-event-add :agent "a" :kind "edit" :summary "x" :data (list :contents (make-string 10000 ?x))))
+           (data (plist-get (car (drgnx-coord-events :since (1- id))) :data)))
+      (should (eq (plist-get data :truncated) t))
+      (should (> (plist-get data :size) 4096))
+      (should-not (plist-member data :contents)))
+    ;; a very long list is cut by print-length before it is measured
+    (let* ((id (drgnx-coord-event-add :agent "a" :kind "edit" :summary "x" :data (list :l (number-sequence 1 5000))))
+           (stored (caar (sqlite-select (drgnx-work-db) "select data from event where id = ?" (list id)))))
+      (should (<= (length stored) 4096)))
+    ;; and the stored text is read with read-eval off, whatever a caller bound
+    (let ((seen :unset) (orig (symbol-function 'read-from-string)))
+      (cl-letf (((symbol-function 'read-from-string) (lambda (&rest args) (setq seen read-eval) (apply orig args))))
+        (let ((read-eval t)) (drgnx-coord-events :kinds '("edit"))))
+      (should (null seen)))))
+
+(ert-deftest drgnx-coord-events/prune-forgets-old-events-but-never-questions-answers-or-decisions ()
+  (drgnx-coord-events-test--with
+    (let ((old (- (float-time) (* 40 86400))) (new (float-time)))
+      (dolist (k '("edit" "status" "question" "answer" "decision"))
+        (drgnx-coord-event-add :agent "a" :kind k :summary k :at old))
+      (drgnx-coord-event-add :agent "a" :kind "edit" :summary "new" :at new)
+      (should (= (drgnx-coord-events-prune) 2))                   ; the default is 30 days
+      (should (equal (mapcar (lambda (e) (plist-get e :summary)) (drgnx-coord-events)) '("question" "answer" "decision" "new")))
+      (should (= (drgnx-coord-events-prune :before (+ new 10)) 1))   ; an explicit cut-off
+      (should (equal (mapcar (lambda (e) (plist-get e :summary)) (drgnx-coord-events)) '("question" "answer" "decision")))
+      (should (= (drgnx-coord-events-prune :before (+ new 10)) 0)))))
+
+(ert-deftest drgnx-coord-events/prune-daily-runs-once-a-day-and-never-signals ()
+  (drgnx-coord-events-test--with
+    (let ((old (- (float-time) (* 40 86400))))
+      (drgnx-coord-event-add :agent "a" :kind "edit" :summary "old1" :at old)
+      (should (eq (drgnx-coord-events-prune-daily) t))
+      (should-not (drgnx-coord-events))
+      (drgnx-coord-event-add :agent "a" :kind "edit" :summary "old2" :at old)
+      (should-not (drgnx-coord-events-prune-daily))               ; the same day: nothing
+      (should (= (length (drgnx-coord-events)) 1))
+      (sqlite-execute (drgnx-work-db) "update meta set value = '1.0' where key = 'event-pruned'")
+      (cl-letf (((symbol-function 'drgnx-coord--tx) (lambda (&rest _) (signal 'sqlite-locked-error '("database is locked")))))
+        (should-not (drgnx-coord-events-prune-daily)))
+      (should (eq (drgnx-coord-events-prune-daily) t))
+      (should-not (drgnx-coord-events)))))
+
+(ert-deftest drgnx-coord-events/telemetry-is-best-effort-when-the-db-is-busy ()
+  (drgnx-coord-events-test--with
+    (drgnx-coord-agent-register :id "s-1")
+    (cl-letf (((symbol-function 'drgnx-coord--tx) (lambda (&rest _) (signal 'sqlite-locked-error '("database is locked")))))
+      (should-not (drgnx-coord-agent-seen "s-1"))
+      (should-not (drgnx-coord-event-add-best-effort :agent "a" :kind "edit" :summary "x"))
+      ;; the strict ones still signal
+      (should-error (drgnx-coord-event-add :agent "a" :kind "edit" :summary "x") :type 'sqlite-locked-error)
+      (should-error (drgnx-coord-claim "j#1" "a" 0) :type 'sqlite-locked-error)
+      (should-error (drgnx-coord-card-create :job "j" :kind "review" :title "T") :type 'sqlite-locked-error)
+      (should-error (drgnx-coord-send :job "j" :sender "a" :recipient "b" :text "x" :seen 0) :type 'sqlite-locked-error))
+    ;; "busy" in a plain sqlite-error counts too; a bad kind is a bug, not busyness
+    (cl-letf (((symbol-function 'drgnx-coord--tx) (lambda (&rest _) (signal 'sqlite-error '("database table is busy")))))
+      (should-not (drgnx-coord-event-add-best-effort :agent "a" :kind "edit" :summary "x")))
+    (should-error (drgnx-coord-event-add-best-effort :agent "a" :kind "bogus" :summary "x"))
+    (should (drgnx-coord-event-add-best-effort :agent "a" :kind "edit" :summary "ok"))
+    (should (floatp (drgnx-coord-agent-seen "s-1")))))
+
+(ert-deftest drgnx-coord-events/an-ask-card-is-a-question-and-settling-it-answers ()
+  (drgnx-coord-events-test--with
+    (let* ((cid (drgnx-coord-card-create :job "j" :task "j#1" :kind "ask" :title "Which one?"))
+           (q (car (drgnx-coord-events :kinds '("question")))))
+      (should (equal (plist-get q :data) (list :card cid)))
+      (should (equal (list (plist-get q :job) (plist-get q :task)) '("j" "j#1")))
+      (should-not (drgnx-coord-events :kinds '("card")))
+      (drgnx-coord-send :job "j" :sender "a" :recipient "user" :text "[escalation] too?" :seen 0)
+      (should (= (length (drgnx-coord-open-questions)) 2))
+      (should (drgnx-coord-card-settle cid "the first"))
+      (let ((a (car (drgnx-coord-events :kinds '("answer")))))
+        (should (equal (plist-get a :data) (list :question (plist-get q :id))))
+        (should (string-match-p "the first" (plist-get a :summary))))
+      (should-not (drgnx-coord-events :kinds '("card")))
+      (should (= (length (drgnx-coord-open-questions)) 1))
+      (should (equal (plist-get (car (drgnx-coord-open-questions)) :agent) "a")))))
+
+(ert-deftest drgnx-coord-events/reopening-a-card-and-a-job-status-leave-events ()
+  (drgnx-coord-events-test--with
+    (let ((cid (drgnx-coord-card-create :job "j" :task "j#1" :kind "review" :title "R")))
+      (drgnx-coord-card-settle cid "ok")
+      (let ((n (length (drgnx-coord-events :kinds '("card")))))
+        (drgnx-coord-card-set cid :title "R2")                       ; a title change is no event
+        (should (= (length (drgnx-coord-events :kinds '("card"))) n))
+        (drgnx-coord-card-set cid :state "open")
+        (should (= (length (drgnx-coord-events :kinds '("card"))) (1+ n)))
+        (should (equal (plist-get (car (last (drgnx-coord-events :kinds '("card")))) :data) (list :card cid :state "open")))))
+    (drgnx-coord-job-set "j" :data '(:x 1))
+    (should-not (drgnx-coord-events :kinds '("job")))
+    (drgnx-coord-job-set "j" :status "running")
+    (let ((e (car (drgnx-coord-events :kinds '("job")))))
+      (should (equal (plist-get e :job) "j"))
+      (should (string-match-p "running" (plist-get e :summary))))))
+
+(ert-deftest drgnx-coord-events/a-renewing-claim-writes-no-event ()
+  (drgnx-coord-events-test--with
+    (should (plist-get (drgnx-coord-claim "j#1" "a" 0) :ok))
+    (should (plist-get (drgnx-coord-claim "j#1" "a" 0) :ok))        ; the holder again: a renewal
+    (should (= (length (drgnx-coord-events :kinds '("claim"))) 1))))
+
+(ert-deftest drgnx-coord-events/registering-needs-an-id-and-can-clear-fields ()
+  (drgnx-coord-events-test--with
+    (should-error (drgnx-coord-agent-register :kind "claude"))
+    (drgnx-coord-agent-register :id "s-1" :task "j#1" :pid 7 :branch "b")
+    (drgnx-coord-agent-register :id "s-1" :clear '(:task :pid))
+    (let ((a (drgnx-coord-agent "s-1")))
+      (should-not (plist-get a :task))
+      (should-not (plist-get a :pid))
+      (should (equal (plist-get a :branch) "b")))
+    ;; clear and set together: the new value wins over nothing, clear wins over old
+    (drgnx-coord-agent-register :id "s-1" :task "j#2" :clear '(:branch))
+    (should (equal (plist-get (drgnx-coord-agent "s-1") :task) "j#2"))
+    (should-not (plist-get (drgnx-coord-agent "s-1") :branch))
+    (should-error (drgnx-coord-agent-register :id "s-1" :clear '(:id)))))
 
 ;;; coord-events-test.el ends here

@@ -58,7 +58,7 @@ is an error: nothing was read at a version that does not exist."
 
 (defconst drgnx-coord-event-kinds
   '("start" "stop" "claim" "release" "status" "decision" "edit" "test" "question" "answer" "review" "message" "card"
-    "accept" "revert" "comment")
+    "accept" "revert" "comment" "job")
   "What an event can be.")
 
 (defconst drgnx-coord--summary-max 200 "The longest event summary, in characters.")
@@ -68,27 +68,84 @@ is an error: nothing was read at a version that does not exist."
   (let ((line (replace-regexp-in-string "[[:cntrl:]]" " " (format "%s" (or text "")))))
     (if (> (length line) drgnx-coord--summary-max) (substring line 0 drgnx-coord--summary-max) line)))
 
+(defconst drgnx-coord--data-max 4096 "The longest printed event data, in characters; more is stored as (:truncated t :size N).")
+
+(defcustom drgnx-coord-event-retention-days 30
+  "Days an event is kept; `drgnx-coord-events-prune' forgets older ones, except questions, answers and decisions."
+  :type 'number :group 'drgnx)
+
+(defun drgnx-coord--datum-p (v)
+  (or (stringp v) (numberp v) (symbolp v) (and (proper-list-p v) (seq-every-p #'drgnx-coord--datum-p v))))
+
+(defun drgnx-coord--data-print (data)
+  "DATA, a plist of strings, numbers, symbols and lists of those, printed small; an error for anything else.  Over
+`drgnx-coord--data-max' characters it is (:truncated t :size N) instead."
+  (unless (and (proper-list-p data) (cl-evenp (length data))
+               (cl-loop for (k v) on data by #'cddr always (and (symbolp k) (drgnx-coord--datum-p v))))
+    (error "Event data must be a plist of strings, numbers, symbols and lists of those: %S" data))
+  (let ((text (let ((print-length 100) (print-level 6) (print-escape-newlines t)) (prin1-to-string data))))
+    (if (> (length text) drgnx-coord--data-max) (format "(:truncated t :size %d)" (length text)) text)))
+
 (cl-defun drgnx-coord--event (db &key agent job task kind summary data at)
   "Insert one event through DB, inside the caller's transaction: its id.
-DATA is printed (read back by `drgnx-coord-events')."
+DATA is checked and printed small (read back by `drgnx-coord-events')."
   (unless (member kind drgnx-coord-event-kinds) (error "Not an event kind: %S" kind))
   (sqlite-execute db "insert into event (at, agent, job, task, kind, summary, data) values (?, ?, ?, ?, ?, ?, ?)"
                   (list (float (or at (float-time))) agent job task kind (drgnx-coord--one-line summary)
-                        (and data (drgnx-coord--print data))))
+                        (and data (drgnx-coord--data-print data))))
   (caar (sqlite-select db "select last_insert_rowid()")))
+
+(defun drgnx-coord--busy-p (err)
+  "Whether ERR is SQLite saying the database is locked or busy (another writer held it past the busy timeout)."
+  (let ((conds (get (car err) 'error-conditions)))
+    (or (memq 'sqlite-locked-error conds)
+        (and (memq 'sqlite-error conds) (string-match-p "\\<\\(locked\\|busy\\)\\>" (error-message-string err))))))
+
+(defun drgnx-coord--best-effort (thunk)
+  "Call THUNK; nil, not an error, when the database stays locked or busy."
+  (condition-case err (funcall thunk)
+    (error (unless (drgnx-coord--busy-p err) (signal (car err) (cdr err))))))
 
 (cl-defun drgnx-coord-event-add (&key agent job task kind summary data at)
   "Record an event of KIND (one of `drgnx-coord-event-kinds') by AGENT (JOB, TASK) at AT (now): its id.
-SUMMARY is cut to one line of at most 200 characters; DATA is a plist kept with it."
+SUMMARY is cut to one line of at most 200 characters.  DATA is small, readable data: a plist of strings, numbers,
+symbols and lists of those (anything else is an error), printed at most 4096 characters (else (:truncated t :size N)).
+A locked database signals (after the busy timeout); see `drgnx-coord-event-add-best-effort'."
   (drgnx-coord--tx
    (lambda (db) (drgnx-coord--event db :agent agent :job job :task task :kind kind :summary summary :data data :at at))))
+
+(cl-defun drgnx-coord-event-add-best-effort (&key agent job task kind summary data at)
+  "As `drgnx-coord-event-add', but nil — not an error — when the database stays locked or busy: for telemetry (edits,
+test runs) that must never fail the work it describes.  A bad KIND or DATA still signals."
+  (drgnx-coord--best-effort
+   (lambda () (drgnx-coord-event-add :agent agent :job job :task task :kind kind :summary summary :data data :at at))))
+
+(cl-defun drgnx-coord-events-prune (&key before)
+  "Forget the events older than BEFORE (a time; default `drgnx-coord-event-retention-days' ago), except questions,
+answers and decisions: how many."
+  (let ((cut (or before (- (float-time) (* 86400 drgnx-coord-event-retention-days)))))
+    (drgnx-coord--tx
+     (lambda (db)
+       (sqlite-execute db "delete from event where at < ? and kind not in ('question', 'answer', 'decision')" (list (float cut)))))))
+
+(defun drgnx-coord-events-prune-daily ()
+  "`drgnx-coord-events-prune' unless it ran in the last 24 hours: t when it ran.  Never signals (a locked database waits
+for the next call): for a periodic tick."
+  (drgnx-coord--best-effort
+   (lambda ()
+     (when (> (- (float-time) (string-to-number (or (drgnx-coord--meta (drgnx-work-db) "event-pruned") "0"))) 86400)
+       (drgnx-coord-events-prune)
+       (sqlite-execute (drgnx-work-db) "insert or replace into meta values ('event-pruned', ?)" (list (number-to-string (float-time))))
+       t))))
+
+(defvar read-eval)                      ; so the let below binds it dynamically in compiled code
 
 (defconst drgnx-coord--event-cols "id, at, agent, job, task, kind, summary, data")
 
 (defun drgnx-coord--event-plist (row)
   (pcase-let ((`(,id ,at ,agent ,job ,task ,kind ,summary ,data) row))
     (list :id id :at at :agent agent :job job :task task :kind kind :summary summary
-          :data (and data (ignore-errors (car (read-from-string data)))))))
+          :data (and data (let ((read-eval nil)) (ignore-errors (car (read-from-string data))))))))
 
 (cl-defun drgnx-coord-events (&key since agent job task kinds limit)
   "The events after id SINCE (all when nil) — of AGENT, JOB, TASK and/or one of KINDS — oldest first, at most LIMIT:
@@ -125,8 +182,13 @@ SUMMARY is cut to one line of at most 200 characters; DATA is a plist kept with 
 
 (defconst drgnx-coord--agent-cols "id, kind, name, cwd, worktree, branch, base, plan, task, pid, started, seen")
 
-(cl-defun drgnx-coord-agent-register (&key id kind name cwd worktree branch base plan task pid)
-  "Note that agent ID works (again): what is given is stored, what is not given is kept, and when it started is kept."
+(cl-defun drgnx-coord-agent-register (&key id kind name cwd worktree branch base plan task pid clear)
+  "Note that agent ID works (again): what is given is stored, what is not given is kept, and when it started is kept.
+CLEAR is a list of fields (:kind :name :cwd :worktree :branch :base :plan :task :pid) to set to NULL — nil, as an
+omitted field, means \"keep\".  A nil ID is an error."
+  (unless id (error "An agent needs an id"))
+  (dolist (f clear)
+    (unless (memq f '(:kind :name :cwd :worktree :branch :base :plan :task :pid)) (error "Cannot clear agent field %S" f)))
   (drgnx-coord--tx
    (lambda (db)
      (let ((now (float-time)))
@@ -138,6 +200,8 @@ SUMMARY is cut to one line of at most 200 characters; DATA is a plist kept with 
                                    task = coalesce(excluded.task, task), pid = coalesce(excluded.pid, pid), seen = excluded.seen"
                                   drgnx-coord--agent-cols)
                        (list id kind name cwd worktree branch base plan task pid now now))
+       (dolist (f clear)
+         (sqlite-execute db (format "update agent set %s = null where id = ?" (substring (symbol-name f) 1)) (list id)))
        id))))
 
 (defun drgnx-coord--agent-plist (row)
@@ -155,9 +219,13 @@ SUMMARY is cut to one line of at most 200 characters; DATA is a plist kept with 
           (sqlite-select (drgnx-work-db) (format "select %s from agent order by started, id" drgnx-coord--agent-cols))))
 
 (defun drgnx-coord-agent-seen (id)
-  "Agent ID is alive now: stamp it (nil, and nothing written, when it was never registered).  The stamp."
-  (let ((now (float-time)))
-    (when (> (sqlite-execute (drgnx-work-db) "update agent set seen = ? where id = ?" (list now id)) 0) now)))
+  "Agent ID is alive now: stamp it (nil, and nothing written, when it was never registered).  The stamp.  Telemetry:
+nil as well, never an error, when the database stays locked or busy."
+  (drgnx-coord--best-effort
+   (lambda ()
+     (let ((now (float-time)))
+       (drgnx-coord--tx
+        (lambda (db) (when (> (sqlite-execute db "update agent set seen = ? where id = ?" (list now id)) 0) now)))))))
 
 (defun drgnx-coord-review-mark (agent path state hash)
   "Mark AGENT's change to PATH, as it stood at HASH, STATE (\"accepted\" or \"pending\").
@@ -204,9 +272,17 @@ a plist kept with it (`drgnx-coord-job')."
                                (and status (list status)))))
 
 (cl-defun drgnx-coord-job-set (id &key status data)
-  "Change job ID's STATUS and/or DATA (a plist)."
-  (when status (sqlite-execute (drgnx-work-db) "update job set status = ? where id = ?" (list status id)))
-  (when data (sqlite-execute (drgnx-work-db) "update job set data = ? where id = ?" (list (prin1-to-string data) id))))
+  "Change job ID's STATUS and/or DATA (a plist).  A change of STATUS leaves a `job' event."
+  (drgnx-coord--tx
+   (lambda (db)
+     (when status
+       (let ((old (caar (sqlite-select db "select status from job where id = ?" (list id)))))
+         (sqlite-execute db "update job set status = ? where id = ?" (list status id))
+         (when (and old (not (equal old status)))
+           (drgnx-coord--event db :job id :kind "job" :summary (format "job %s: %s -> %s" id old status)
+                               :data (list :status status)))))
+     (when data (sqlite-execute db "update job set data = ? where id = ?" (list (prin1-to-string data) id)))
+     nil)))
 
 (defun drgnx-coord-force-status (task status &optional agent)
   "Set TASK's STATUS (and holder AGENT) as the job engine decides — no holder check; done readies its dependents."
@@ -267,8 +343,9 @@ or (:error MESSAGE)."
               (sqlite-execute db "update jtask set status = (case when status = 'ready' then 'claimed' else status end),
                                     agent = ?, lease_until = ? where id = ?"
                               (list agent (drgnx-coord--lease) task))
-              (drgnx-coord--event db :agent agent :job (drgnx-coord--task-job db task) :task task :kind "claim"
-                                  :summary (format "claimed %s" (drgnx-coord--task-label db task)))
+              (when (equal status "ready")          ; a renewal by the holder changes nothing: no event
+                (drgnx-coord--event db :agent agent :job (drgnx-coord--task-job db task) :task task :kind "claim"
+                                    :summary (format "claimed %s" (drgnx-coord--task-label db task))))
               (list :ok t))
              (t (list :error (format "task %s is %s" task status))))))))))
 
@@ -487,8 +564,11 @@ first five, quoted (an agent's subject never reads as a line from drgnx)."
      (sqlite-execute db "insert into card (job, task, kind, title, data, state, at) values (?, ?, ?, ?, ?, 'open', ?)"
                      (list job task kind title (and data (drgnx-coord--print data)) (float-time)))
      (let ((id (caar (sqlite-select db "select last_insert_rowid()"))))
-       (drgnx-coord--event db :job job :task task :kind "card" :summary (format "%s: %s" kind title)
-                           :data (list :card id :state "open"))
+       ;; an ask card is a question to the user: one model for it and for escalations (settling it answers)
+       (if (equal kind "ask")
+           (drgnx-coord--event db :job job :task task :kind "question" :summary (format "%s: %s" kind title) :data (list :card id))
+         (drgnx-coord--event db :job job :task task :kind "card" :summary (format "%s: %s" kind title)
+                             :data (list :card id :state "open")))
        id))))
 
 (defun drgnx-coord-cards (job &optional state)
@@ -510,16 +590,28 @@ first five, quoted (an agent's subject never reads as a line from drgnx)."
                               (list (float-time) choice id))
               0)
        (pcase-let ((`(,job ,task ,kind ,title) (car (sqlite-select db "select job, task, kind, title from card where id = ?" (list id)))))
-         (drgnx-coord--event db :job job :task task :kind "card" :summary (format "%s: %s -> %s" kind title choice)
-                             :data (list :card id :state "settled" :choice choice)))
+         (if-let* ((q (and (equal kind "ask")
+                           (caar (sqlite-select db "select id from event where kind = 'question' and data = ? order by id desc limit 1"
+                                                (list (prin1-to-string (list :card id))))))))
+             (drgnx-coord--event db :agent "user" :job job :task task :kind "answer" :summary (format "%s: %s -> %s" kind title choice)
+                                 :data (list :question q))
+           (drgnx-coord--event db :job job :task task :kind "card" :summary (format "%s: %s -> %s" kind title choice)
+                               :data (list :card id :state "settled" :choice (format "%s" choice)))))
        t))))
 
 (cl-defun drgnx-coord-card-set (id &key title data state)
-  "Change card ID's TITLE, DATA (a plist) and/or STATE."
-  (let ((db (drgnx-work-db)))
-    (when title (sqlite-execute db "update card set title = ? where id = ?" (list title id)))
-    (when data (sqlite-execute db "update card set data = ? where id = ?" (list (drgnx-coord--print data) id)))
-    (when state (sqlite-execute db "update card set state = ? where id = ?" (list state id)))))
+  "Change card ID's TITLE, DATA (a plist) and/or STATE.  A change of STATE (a reopened card) leaves a `card' event."
+  (drgnx-coord--tx
+   (lambda (db)
+     (when title (sqlite-execute db "update card set title = ? where id = ?" (list title id)))
+     (when data (sqlite-execute db "update card set data = ? where id = ?" (list (drgnx-coord--print data) id)))
+     (when state
+       (pcase-let ((`(,old ,job ,task ,kind ,ctitle) (car (sqlite-select db "select state, job, task, kind, title from card where id = ?" (list id)))))
+         (when (and old (not (equal old state)))
+           (sqlite-execute db "update card set state = ? where id = ?" (list state id))
+           (drgnx-coord--event db :job job :task task :kind "card" :summary (format "%s: %s -> %s" kind ctitle state)
+                               :data (list :card id :state state)))))
+     nil)))
 
 (provide 'drgnx-coord)
 ;;; drgnx-coord.el ends here

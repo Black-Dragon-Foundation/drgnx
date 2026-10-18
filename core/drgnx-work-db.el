@@ -48,7 +48,9 @@
     (5 "create table if not exists event (id integer primary key, at real, agent text, job text, task text, kind text,
         summary text, data text)"
        "create index if not exists event_at on event(at)"
-       "create index if not exists event_agent on event(agent)"
+       "create index if not exists event_agent on event(agent, id)"
+       "create index if not exists event_job on event(job, id)"
+       "create index if not exists event_kind on event(kind, id)"
        "create table if not exists agent (id text primary key, kind text, name text, cwd text, worktree text, branch text,
         base text, plan text, task text, pid integer, started real, seen real)"
        "create table if not exists review_mark (agent text, path text, state text, hash text, at real,
