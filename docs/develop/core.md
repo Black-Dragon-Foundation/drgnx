@@ -28,7 +28,8 @@ relative is ignored, as the XDG spec says, here and in `bin/drgnx`'s `xdg_dir`).
 Started with `--init-directory <checkout>/init`, Emacs keeps its own state (`user-emacs-directory`: auto-save list,
 histories) in `(drgnx-state-dir)emacs/` and native code in `(drgnx-cache-dir)eln-cache/` (`init/early-init.el`), so
 nothing is written into the checkout; a harness session keeps both in its run directory. `custom-file` is
-`(drgnx-user-dir)custom.el` (made when missing, loaded by early-init): Customize and `package-install` save there,
+`(drgnx-user-dir)custom.el` (set and made when missing by early-init, loaded by `drgnx-init` right after the packages are activated, as
+config.el is: an error is said, `drgnx safe` skips it): Customize and `package-install` save there,
 never into the checkout's tracked `init/init.el`.
 
 ## Staged hooks (`drgnx-hooks.el`)

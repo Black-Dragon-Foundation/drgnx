@@ -52,8 +52,9 @@ template the first time. An error in it is said in `*Messages*` (what came befor
 drgnx starts anyway; `drgnx safe` skips it. Code you want reported as a module, with its own row in
 Preferences: Modules, is an external module (below).
 
-What Customize saves (and `M-x package-install`'s list of packages) goes to `custom.el` beside it, which loads early
-in every start, before config.el.
+What Customize saves (and `M-x package-install`'s list of packages) goes to `custom.el` beside it, which loads in every
+start once your packages are active (so a package's mode saved on there turns on) and before config.el; an error in
+it is said in `*Messages*`, and `drgnx safe` skips it.
 
 ## External modules (gryphn)
 

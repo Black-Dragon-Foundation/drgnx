@@ -55,7 +55,8 @@ a file where Emacs keeps its own state — with temp XDG dirs and ENV; what it s
                   nil (concat init "init.el") nil 'silent)
     (with-temp-buffer
       (let ((process-environment (append env (mapcar (lambda (v) (format "%s=%s%s" (car v) tmp (cdr v)))
-                                                     '(("HOME" . "home") ("XDG_STATE_HOME" . "state") ("XDG_CACHE_HOME" . "cache")))
+                                                     '(("HOME" . "home") ("XDG_STATE_HOME" . "state") ("XDG_CACHE_HOME" . "cache")
+                                                       ("DRGNX_CONFIG_DIR" . "config")))   ; early-init makes custom.el there
                                          process-environment)))
         ;; batch loads no init file; --user "" makes it load this init directory's
         (call-process (expand-file-name invocation-name invocation-directory) nil '(t nil) nil
@@ -73,25 +74,36 @@ a file where Emacs keeps its own state — with temp XDG dirs and ENV; what it s
           (should (equal (directory-files (concat tmp "init") nil "\\`[^.]") '("early-init.el" "init.el"))))
       (delete-directory tmp t))))
 
-(defun drgnx-paths-test--start-custom (tmp)
-  "Start a batch Emacs on TMP/init as `drgnx-paths-test--start' does, with TMP/config as the drgnx config dir, whose
-init.el saves `fill-column' with Customize (as Save in Customize, and `package-install', do); what it says:
-\(CUSTOM-FILE FILL-COLUMN-AT-START)."
-  (let ((init (expand-file-name "init/" tmp)))
-    (make-directory init t)
+(defconst drgnx-paths-test--drgnx-init
+  "(add-to-list 'load-path %S) (add-to-list 'load-path %S) (require 'drgnx) (require 'cl-lib)
+(cl-letf (((symbol-function 'drgnx-modules-start) #'ignore) ((symbol-function 'drgnx-keys-apply) #'ignore)
+          ((symbol-function 'drgnx-surfaces-refresh) #'ignore) ((symbol-function 'drgnx-session-setup) #'ignore))
+  (drgnx-init))\n"
+  "init.el text that runs `drgnx-init' (packages activated, custom.el and config.el loaded; modules, keys, surfaces
+and the session left out); format it with the core and wb directories.")
+
+(defun drgnx-paths-test--start-custom (tmp init)
+  "Start a batch Emacs on TMP/init as `drgnx-paths-test--start' does, with TMP/config and TMP/data as the drgnx config
+and data dirs, whose init.el is INIT (text); what it prints, read."
+  (let ((dir (expand-file-name "init/" tmp)))
+    (make-directory dir t)
     (make-directory (expand-file-name "home" tmp) t)
-    (write-region (format "(load %S nil t)\n" (expand-file-name "init/early-init.el" drgnx-dir)) nil (concat init "early-init.el") nil 'silent)
-    (write-region "(princ (format \"%S\" (list custom-file fill-column)))\n(customize-save-variable 'fill-column 72)\n"
-                  nil (concat init "init.el") nil 'silent)
+    (write-region (format "(load %S nil t)\n" (expand-file-name "init/early-init.el" drgnx-dir)) nil (concat dir "early-init.el") nil 'silent)
+    (write-region init nil (concat dir "init.el") nil 'silent)
     (with-temp-buffer
-      (let ((process-environment (append (list "DRGNX_UI_RUN")
+      (let ((process-environment (append (list "DRGNX_UI_RUN" "DRGNX_SAFE")
                                          (mapcar (lambda (v) (format "%s=%s%s" (car v) tmp (cdr v)))
                                                  '(("HOME" . "home") ("XDG_STATE_HOME" . "state") ("XDG_CACHE_HOME" . "cache")
-                                                   ("DRGNX_CONFIG_DIR" . "config")))
+                                                   ("DRGNX_CONFIG_DIR" . "config") ("DRGNX_DATA_DIR" . "data")))
                                          process-environment)))
         (call-process (expand-file-name invocation-name invocation-directory) nil '(t nil) nil
-                      "--batch" "--user" "" (concat "--init-directory=" init)))
+                      "--batch" "--user" "" (concat "--init-directory=" dir)))
       (car (read-from-string (buffer-string))))))
+
+(defun drgnx-paths-test--after-init (form)
+  "init.el text: `drgnx-init', then print FORM's value (text)."
+  (concat (format drgnx-paths-test--drgnx-init (expand-file-name "core" drgnx-dir) (expand-file-name "wb" drgnx-dir))
+          (format "(princ (format \"%%S\" %s))\n" form)))
 
 (ert-deftest drgnx-paths/customize-saves-into-the-config-dir-never-the-checkout ()
   ;; Customize and `package-install' write `custom-set-variables' into `custom-file', else into the init file —
@@ -102,12 +114,43 @@ init.el saves `fill-column' with Customize (as Save in Customize, and `package-i
          (init (concat tmp "init/init.el")))
     (unwind-protect
         (progn
-          (pcase-let ((`(,file ,_) (drgnx-paths-test--start-custom tmp)))
-            (should (equal file custom)))
+          (should (equal (drgnx-paths-test--start-custom
+                          tmp "(princ (format \"%S\" custom-file))\n(customize-save-variable 'fill-column 72)\n")
+                         custom))
           (should (string-search "(fill-column 72)" (with-temp-buffer (insert-file-contents custom) (buffer-string))))
           (should-not (string-search "custom-set-variables" (with-temp-buffer (insert-file-contents init) (buffer-string))))
           ;; the next start loads it
-          (should (equal (cadr (drgnx-paths-test--start-custom tmp)) 72)))
+          (should (equal (drgnx-paths-test--start-custom tmp (drgnx-paths-test--after-init "fill-column")) 72)))
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-paths/a-package-mode-saved-with-customize-turns-on ()
+  ;; custom.el loads in `drgnx-init' once the packages are active: a package's minor mode saved on through Customize
+  ;; runs (loaded before them, its `require' fails quietly and the mode only looks on); an error in it is said, never
+  ;; fatal, and `drgnx safe' skips it.
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-init" t)))
+         (pkg (concat tmp "data/elpa/drgnx-test-foo-1.0/")))
+    (unwind-protect
+        (progn
+          (make-directory pkg t)
+          (make-directory (concat tmp "config") t)
+          (write-region "(define-package \"drgnx-test-foo\" \"1.0\" \"A test package\" nil)\n" nil (concat pkg "drgnx-test-foo-pkg.el") nil 'silent)
+          (write-region ";;;###autoload\n(define-minor-mode drgnx-test-foo-mode \"Test.\" :global t (setq drgnx-test-foo-ran drgnx-test-foo-mode))\n(defvar drgnx-test-foo-ran nil)\n(provide 'drgnx-test-foo)\n"
+                        nil (concat pkg "drgnx-test-foo.el") nil 'silent)
+          (write-region "(add-to-list 'load-path (directory-file-name (file-name-directory load-file-name)))\n(autoload 'drgnx-test-foo-mode \"drgnx-test-foo\" nil t)\n"
+                        nil (concat pkg "drgnx-test-foo-autoloads.el") nil 'silent)
+          (write-region "(custom-set-variables '(drgnx-test-foo-mode t nil (drgnx-test-foo)))\n" nil (concat tmp "config/custom.el") nil 'silent)
+          (should (equal (drgnx-paths-test--start-custom
+                          tmp (drgnx-paths-test--after-init "(list (bound-and-true-p drgnx-test-foo-mode) (bound-and-true-p drgnx-test-foo-ran))"))
+                         '(t t)))
+          ;; an error in it: said, and the start goes on
+          (write-region "(error \"Broken custom\")\n" nil (concat tmp "config/custom.el") nil 'silent)
+          (should (equal (drgnx-paths-test--start-custom tmp (drgnx-paths-test--after-init "(featurep 'drgnx)")) t))
+          ;; drgnx safe: not loaded
+          (write-region "(setq drgnx-test-custom-loaded t)\n" nil (concat tmp "config/custom.el") nil 'silent)
+          (should (equal (drgnx-paths-test--start-custom tmp (drgnx-paths-test--after-init "(boundp 'drgnx-test-custom-loaded)")) t))
+          (should (equal (drgnx-paths-test--start-custom     ; (the helper unsets DRGNX_SAFE: set in init.el)
+                          tmp (concat "(setenv \"DRGNX_SAFE\" \"1\")\n" (drgnx-paths-test--after-init "(boundp 'drgnx-test-custom-loaded)")))
+                         nil)))
       (delete-directory tmp t))))
 
 (ert-deftest drgnx-paths/a-harness-session-keeps-its-state-in-its-run-directory ()
