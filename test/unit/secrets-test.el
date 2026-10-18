@@ -540,5 +540,26 @@ STORED-CALLS a list of the ids `drgnx-ai-store-key' was called with (newest firs
   (should (equal (drgnx-commands-label (drgnx-commands-get 'portability-export-keys)) "Portability: Export Keys"))
   (should (equal (drgnx-commands-label (drgnx-commands-get 'portability-import-keys)) "Portability: Import Keys")))
 
+(ert-deftest drgnx-secrets/an-age-that-exits-at-once ()
+  ;; age gone before its stdin is closed (it reads the file, not stdin): its output or its error, never "not running"
+  (drgnx-secrets-test--with (bin _log _store _calls)
+    (let ((text (drgnx-secrets-test--bundle (list :provider 'openrouter :host "openrouter.ai" :key (drgnx-secrets-test--key ?x))))
+          (id (expand-file-name "identity.txt" bin))
+          (age (expand-file-name "age" bin))
+          (orig (symbol-function 'make-process)))
+      (drgnx-secrets-test--write-bundle text)
+      (with-temp-file id (insert "test identity\n"))
+      (set-file-modes id #o600)
+      (cl-letf (((symbol-function 'make-process)
+                 (lambda (&rest args) (let ((p (apply orig args))) (sleep-for 0.3) p))))
+        ;; a fast success: the plaintext comes through
+        (with-temp-file age (insert "#!/bin/bash\nPATH=/usr/bin:/bin\nfor a; do f=$a; done\ntr 'A-Za-z' 'N-ZA-Mn-za-m' < \"$f\"\n"))
+        (set-file-modes age #o755)
+        (should (equal (drgnx-secrets-decrypt :identity id) text))
+        ;; a fast failure: age's reason, as a user-error
+        (with-temp-file age (insert "#!/bin/bash\necho 'age: error: no identity matched any of the recipients' >&2\nexit 1\n"))
+        (let ((err (should-error (drgnx-secrets-decrypt :identity id) :type 'user-error)))
+          (should (string-match-p "no identity matched" (error-message-string err))))))))
+
 (provide 'secrets-test)
 ;;; secrets-test.el ends here

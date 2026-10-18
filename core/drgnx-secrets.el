@@ -195,7 +195,7 @@ which a program Emacs starts never has (see `drgnx-secrets-export'): it fails, a
                                                  (progn (drgnx-secrets--wipe s) (delete-process p))
                                                (push s chunks)))
                                    :sentinel #'ignore))
-          (process-send-eof proc)
+          (ignore-errors (process-send-eof proc)) ; age may be gone already (it reads the file): never an error
           (let ((deadline (+ (float-time) 600)))
             (while (and (process-live-p proc) (< (float-time) deadline))
               (accept-process-output proc 0.1)))
