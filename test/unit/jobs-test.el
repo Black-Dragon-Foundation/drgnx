@@ -37,12 +37,50 @@
                  (buffer-string)))
           (id (car (last (split-string out "\n" t)))))
      (should (eq (drgnx-jobs-test--status id) 'running))
-     ;; its own session, not this Emacs's (macOS's attributes have no session)
-     (let ((sess (alist-get 'sess (process-attributes (plist-get (drgnx-jobs-get id) :pid)))))
-       (when sess (should-not (eql sess (alist-get 'sess (process-attributes (emacs-pid)))))))
      (should (drgnx-jobs-test--wait (lambda () (eq (drgnx-jobs-test--status id) 'exited))))
      (should (eql (plist-get (drgnx-jobs-get id) :exit) 0))
      (should (string-match-p "done" (drgnx-jobs-log id))))))
+
+(defun drgnx-jobs-test--survives-its-starter ()
+  "A job's launcher detaches it from the Emacs that started it, which is still running.
+Emacs's own children already lead a session, so `its session differs' proves nothing.  What a detaching launcher
+changes is the parent: the job is not the starter's child (a plain `call-process' would leave it that), and
+killing the starter's whole process group does not take the job along."
+  (drgnx-jobs-test--with
+   (let* ((idfile (expand-file-name "starter-id" root))
+          (starter (make-process
+                    :name "drgnx-jobs-starter" :noquery t :connection-type 'pipe :buffer nil
+                    :command (list (expand-file-name invocation-name invocation-directory)
+                                   "--batch" "-Q" "-L" (file-name-directory (locate-library "drgnx-jobs")) "-l" "drgnx-jobs"
+                                   "--eval" (format "(setq drgnx-jobs--setsid %S)" drgnx-jobs--setsid)
+                                   "--eval" (format (concat "(progn (write-region (drgnx-jobs-start \"test\" "
+                                                            "'(\"sh\" \"-c\" \"sleep 4; echo done\")) nil %S) (sleep-for 60))")
+                                                    idfile))))
+          (spid (process-id starter)) id)
+     (unwind-protect
+         (progn
+           (should (drgnx-jobs-test--wait (lambda () (file-exists-p idfile))))
+           (setq id (drgnx-jobs--text idfile))
+           (should (drgnx-jobs-test--wait (lambda () (eq (drgnx-jobs-test--status id) 'running))))
+           (should (process-live-p starter))
+           (let ((pid (plist-get (drgnx-jobs-get id) :pid)))
+             (should-not (eql (alist-get 'ppid (process-attributes pid)) spid))   ; not the starter's child
+             (ignore-errors (signal-process (- spid) 'SIGKILL))                   ; the starter's whole group
+             (signal-process spid 'SIGKILL)
+             (should (drgnx-jobs-test--wait (lambda () (not (process-live-p starter))) 5))
+             (sleep-for 0.3)
+             (should (eq (drgnx-jobs-test--status id) 'running))
+             (should (process-attributes pid)))
+           (should (drgnx-jobs-test--wait (lambda () (eq (drgnx-jobs-test--status id) 'exited))))
+           (should (string-match-p "done" (drgnx-jobs-log id))))
+       (when (process-live-p starter) (delete-process starter))))))
+
+(ert-deftest drgnx-jobs/a-job-survives-its-starter-and-is-not-its-child ()
+  (drgnx-jobs-test--survives-its-starter))
+
+(ert-deftest drgnx-jobs/a-job-survives-its-starter-without-setsid ()
+  (skip-unless (executable-find "perl"))
+  (let ((drgnx-jobs--setsid nil)) (drgnx-jobs-test--survives-its-starter)))
 
 (ert-deftest drgnx-jobs/a-job-outlives-the-emacs-that-started-it ()
   (drgnx-jobs-test--outlives))
