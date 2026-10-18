@@ -309,6 +309,21 @@ with BODY."
                 (should-not (string-search "sk-or-test-123" (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld")))))))
         (delete-process mock)))))
 
+(ert-deftest drgnx-ai-onboard/cli-exit-stops-the-job ()
+  ;; `drgnx onboard' in batch: while a job is waited on, ending Emacs (Ctrl-C) stops the job; the entry is gone
+  ;; once the wait is over.
+  (drgnx-ai-onboard-test--with-mac nil
+    (should noninteractive)
+    (let ((before kill-emacs-hook) (during nil) (r nil))
+      (run-at-time 1 nil (lambda ()
+                           (setq during kill-emacs-hook)
+                           (dolist (f (seq-difference kill-emacs-hook before)) (funcall f))))   ; what exiting runs
+      (setq r (drgnx-onboard--job "Sleeping" (list "sleep" "30") 15))
+      (should (> (length during) (length before)))
+      (should (equal kill-emacs-hook before))
+      (should (eq (car r) 'fail))
+      (should-not (seq-find (lambda (j) (eq (plist-get j :status) 'running)) (drgnx-jobs-list))))))
+
 (defvar drgnx-ai-onboard-test--job-what nil "The job `drgnx-onboard--job' is waiting on (the test's view).")
 
 (ert-deftest drgnx-ai-onboard/pull-has-no-hour-limit ()

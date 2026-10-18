@@ -84,7 +84,7 @@ goes first in its role in `~/.config/drgnx/ai.eld`; what the role had stays behi
 Every command runs as a drgnx job with its own log. While the step works, its row in the Welcome says what it is
 doing — "Starting Ollama…", the download's last log line (without colour codes or progress redraws), "Testing every feature…" — always with "— C-g stops", and
 Ctrl+G (`C-g`) stops it. A model download, like the package sync, has no time limit (other commands give up after an
-hour): `C-g` is how you stop a slow one. A download that fails says which model, why (the log's last line), where the log is, and to run the
+hour): `C-g` is how you stop a slow one, and in `drgnx onboard` Ctrl-C stops the job it waits on. A download that fails says which model, why (the log's last line), where the log is, and to run the
 step again — a new run starts from the top, skips what is installed and running, and `ollama pull` / `lms get` skip
 what is already downloaded.
 

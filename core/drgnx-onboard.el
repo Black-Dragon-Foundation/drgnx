@@ -629,7 +629,10 @@ job, then quits."
   (let* ((id (drgnx-jobs-start (concat "Onboarding: " what) command :cwd (drgnx-state-dir)))
          (log (expand-file-name "log" (drgnx-jobs--dir id)))
          (t0 (float-time)) (job nil)
+         ;; the CLI (batch) ends on Ctrl-C without unwinding: the exit stops the job
+         (stop (lambda () (drgnx-jobs-stop id)))
          (timer (run-at-time 0.5 0.5 #'drgnx-onboard--show-progress drgnx-onboard--current what id)))
+    (when noninteractive (add-hook 'kill-emacs-hook stop))
     (unwind-protect
         (condition-case nil
             (progn
@@ -647,6 +650,7 @@ job, then quits."
                                     (if-let* ((line (drgnx-onboard--last-line id))) (concat ": " line) ""))
                       log)))
           (quit (drgnx-jobs-stop id) (signal 'quit nil)))
+      (remove-hook 'kill-emacs-hook stop)
       (cancel-timer timer))))
 
 (declare-function browse-url "browse-url")
