@@ -105,7 +105,7 @@ sync"; with `--non-interactive` an off module is reported as "Chat needs module 
 (Preferences: Modules)" and the step warns.
 
 **OpenRouter (cloud key).** In the drgnx app it asks for your key (`read-passwd`: never shown, never written to a file
-or log, and wiped from memory once stored) and keeps it in the macOS Keychain or your Linux keyring
+or log; the string you type is cleared once it is stored, but drgnx keeps one copy of the key in memory for the session) and keeps it in the macOS Keychain or your Linux keyring
 ([ai.md](ai.md#keys)); when `OPENROUTER_API_KEY` is set in the environment, that key wins over the stored one, and the
 result says so; then Inline Completion gets
 `qwen/qwen-2.5-coder-32b-instruct` and Edit and Chat `openrouter/auto`. OpenRouter has no embeddings here: semantic
