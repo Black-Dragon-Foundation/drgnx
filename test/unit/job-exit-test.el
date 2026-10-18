@@ -1,13 +1,15 @@
 ;;; job-exit-test.el --- batch tests: M9b's exit criteria end to end with mock agents -*- lexical-binding: t -*-
 ;; The criteria each part's own tests cover in depth are named where they are: a clash settled and heard
 ;; (job-clash-review-test.el), message states and peer messages (coord-*-test.el), the gateway (gateway-test.el),
-;; permission cards (job-policy-test.el), budget and fallback (job-budget-test.el), the window (job-ui-test.el and
-;; test/ui/job-window-test.el).  Here: a whole job, the credential files, closing the window.
+;; permission cards (job-policy-test.el), budget and fallback (job-budget-test.el), the job in the Work cockpit
+;; (mod-cockpit-cards-test.el and test/ui/job-window-test.el).  Here: a whole job, the credential files, closing the
+;; job's parts.
 (require 'ert)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/job-fixture" drgnx-dir) nil t)   ; a repo, the hub, mock agents
 (require 'drgnx)
 (load (expand-file-name "modules/tools/drgnx-job-ui" drgnx-dir) nil t)
+(load (expand-file-name "modules/tools/drgnx-cockpit" drgnx-dir) nil t)
 
 (defconst drgnx-job-exit-test--four
   ;; each task in its own file: parallel tasks merge without conflict
@@ -113,9 +115,10 @@ whoever reads one — a process of any kind — takes the word away.  The holder
       (drgnx-coord-force-status (concat id "#1") "running" (drgnx-agent-session-id s))
       (drgnx-job-run-test--wait (lambda () (eq (drgnx-agent-session-status s) 'idle)))
       (drgnx-agents-send s "slow")
-      (drgnx-job-ui-show id)                                                 ; batch: laid out in this frame
-      (should (drgnx-job-run-test--wait (lambda () (string-search "Task 1: one" (with-current-buffer (drgnx-job-ui--buffer id 'tasks) (buffer-string))))))
-      (dolist (p '(tasks cards log)) (kill-buffer (drgnx-job-ui--buffer id p)))   ; the window closes
+      (should-not (drgnx-job-ui-show id))                                    ; the cockpit filtered to it: no frame
+      (should (drgnx-job-run-test--wait (lambda () (string-search "Task 1: one" (with-current-buffer (drgnx-cockpit-cards-buffer) (buffer-string))))))
+      (dolist (b (list (drgnx-cockpit-cards-buffer) (drgnx-cockpit-decisions-buffer))) (kill-buffer b))   ; its parts close
+      (setq drgnx-cockpit-graph-current-filter nil)
       (should (eq (drgnx-agent-session-status s) 'busy))
       (should (memq s (drgnx-agents-sessions)))
       (should (equal (plist-get (drgnx-coord-job id) :status) "running"))

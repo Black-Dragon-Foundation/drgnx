@@ -199,8 +199,9 @@ the other windows are opened again at start (your window manager places them; th
 into the frame you start in, the others follow in order): the left dock (and the sidebar view it shows, Explorer or
 Search), the panel and its tab, the right dock — each with its pixel size — the layout you were in
 ([layouts.md](layouts.md#after-a-restart)), the editor groups with their sizes, tabs and shown files, and the
-Explorer's folders. A window that rebuilds itself, such as a job window, comes back where and how big it was (only where a monitor still is; never bigger than its screen); a job
-window whose job no longer exists closes instead of waiting for the hub.
+Explorer's folders. A window that rebuilds itself comes back where and how big it was (only where a monitor still is; never bigger than its screen).
+A job window saved before M12f comes back as the Work cockpit filtered to that job, in the window you start in: no
+frame of its own ([jobs.md](jobs.md#a-job-in-the-work-cockpit)).
 
 At the first graphical frame it comes back as it was (`drgnx-persist-restore-on-start`) — with a daemon, in the first
 `emacsclient -c` frame, once the server has shown its `*scratch*` there (the restored files replace it); closing the

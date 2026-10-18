@@ -63,7 +63,7 @@ you always get the outline.
 | `TAB`, `S-TAB` (Vim also `n`, `p`) | Select Next / Previous Node (`cockpit-next`, `cockpit-previous`) | selects the next node and says what it is. In the drawing that is the next box in column order: it gets a focus stroke and scrolls into view. In the outline it is the next node's line. |
 | `RET` | Open Node (`cockpit-open`) | opens the node on this line, or the selected one (with nothing selected in the drawing, you pick one by name) |
 | `o` | Open in Plan (`cockpit-open-in-plan`) | the plan at this task's heading (an agent: its task's) |
-| `f` | Filter Graph… (`cockpit-filter`) | a milestone (completion offers the specs' and plans' titles; any text in a title or path works), an agent, states; empty: all |
+| `f` | Filter Graph… (`cockpit-filter`) | a milestone (completion offers the specs' and plans' titles; any text in a title or path works), an agent, states; empty: all. A job filter (Show Job in Work…) stays |
 | `g` | Draw Graph Again (`cockpit-refresh`) | reads the store again and draws now |
 | `A` | Answer Question… (`cockpit-answer`) | answers the question about the node on this line or selected; also in What happened and the timeline (see below) |
 
@@ -77,7 +77,7 @@ What a node opens:
 | Spec, plan, TODO | its file at its line |
 | Task | the edits of the agent working on it ([below](#an-agents-edits)). A task nobody works on opens its plan at its heading. A read-only one opens there too, and the echo area names **Start Job from Plan…** (`job-start`), which starts a job. The graph never creates a job or edits a plan file by itself. |
 | Agent | its edits ([below](#an-agents-edits)) |
-| Job, review | the job's window |
+| Job, review | the cockpit filtered to the job: What needs you and its decisions ([below](#what-needs-you-and-the-decisions)) |
 
 The filter keeps the nodes it matches and their ancestors (a task keeps its plan and spec). The first line says
 what it keeps.
@@ -239,6 +239,23 @@ refused for up to 30 seconds.
 Both are plain text, so terminals get the same lines and chips. A terminal that does not write UTF-8 gets ASCII
 marks: `?` for `◐`, `+` for `✓`, `!` for `⚠`, `<` for `‹`, `>` for `▸`, `...` for `…`.
 
+## What needs you and the decisions
+
+A job's cards, the messages agents sent you and its decision log are panes of the cockpit too (until M12f they were
+a job window of their own; [jobs.md](jobs.md#a-job-in-the-work-cockpit) has the details):
+
+- **What needs you** (pane `needs-you`, buffer `*Needs You*`; **Show What Needs You**, `cockpit-needs-you`): every
+  job's cards with their actions and the messages to you, each job under its name;
+- **Decisions** (pane `decisions`, buffer `*Decisions*`; **Show Decisions**, `cockpit-decisions`): a job's decision
+  log.
+
+Both live in the right dock, stacked with What happened. **Show Job in Work…** (`job-show`), opening a job or review
+node, a click on a job's name in What needs you, or the badge filter the cockpit to one job: the graph keeps that
+job's nodes and their ancestors (its first line says `job ID`), What needs you adds the job's tasks, agents and
+spend, and Decisions shows its log. **Show What Needs You** (and the status bar's jobs count) shows every job again.
+The filter is kept with the saved workbench. In the Vim profile both buffers start in Emacs state; `RET` or a
+click pushes a button, `g` asks the hub again.
+
 ## When it redraws
 
 The graph never asks anything, and it never blocks typing. It redraws when one of these happens:
@@ -269,6 +286,10 @@ When the store did not change, an update ends after one query. Otherwise they on
 happened's last line, and new chips go into their rows. Only the rows that changed are written again, and only when
 a window's width changes is every row fitted again. `drgnx-cockpit-waiting-count` returns a cached number, counted
 again only when the store changed.
+
+What needs you and Decisions ask the hub (never waiting for it) after a job, card, agent or lease event that
+concerns the job they show, at most once per 0.5 s and only while one shows. A part is drawn again only when what it
+shows changed, and its windows keep their place.
 
 ## Customizing
 

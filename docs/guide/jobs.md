@@ -18,27 +18,38 @@ drgnx job resume job-20261017-101500 --budget 10      # go on (after a stop, or 
 `--budget` wants a number of USD (`5`, `.5`), nothing else. `propose --auto` starts at once, with no proposal card;
 `--repo DIR` names the repository when the plan is not inside it. `resume` of a proposal you rejected says the job
 was never approved: propose the plan again. In Emacs: **Start Job from Plan…** (the
-proposal, in the job's window, with Approve and Reject), **Show Job Window…**, **Approve Plan Job…**, **Show Plan
+proposal, in the Work cockpit, with Approve and Reject), **Show Job in Work…**, **Approve Plan Job…**, **Show Plan
 Jobs**, **Stop Plan Job…** — in the palette (no keys by default; module `tools/jobs`).
 
-## The job window
+## A job in the Work cockpit
 
-A job's control room — its own window on a graphical display, so it can sit on a second monitor while you edit:
+**Show Job in Work…** (`job-show`) filters the [Work cockpit](cockpit.md) to a job: the Work graph shows that job's
+tasks, agents and reviews (with their plan and spec), and two panes of the right dock, stacked with What happened,
+show the rest. No window of its own opens. Until M12f a job had a frame of its own, the job window; a workbench saved
+with one comes back as the cockpit filtered to that job, in the window you start in.
 
-- **left — tasks and agents:** each task's status, profile and what it waits on; the budget, spent against the limit;
-  the agents at work, each with **Transcript** and **Message…**;
-- **middle — what needs you:** the cards, each with its actions as buttons (a clash shows both sides and the
-  reviewer's recommendation; **Accept the reviewer** is there only when it recommended a side; a clash whose reviewer
-  was lost twice says so), then the messages agents sent you, each with **Reply…** (answers the agent) or **Dismiss** (needs no answer: it is acted on, and stops counting in the badge);
-- **right — the decision log,** newest first: replaced decisions dimmed, disputed ones (in an open clash) marked.
+- **What needs you** (pane `needs-you`; **Show What Needs You**, `cockpit-needs-you`): the cards, each with its
+  actions as buttons (a clash shows both sides and the reviewer's recommendation; **Accept the reviewer** is there
+  only when it recommended a side; a clash whose reviewer was lost twice says so), then the messages agents sent
+  you, each with **Reply…** (answers the agent) or **Dismiss** (needs no answer: it is acted on, and stops counting
+  in the badge). Below them, the job's tasks (each one's status, profile and what it waits on), the budget, spent
+  against the limit, and the agents at work, each with **Transcript** and **Message…**.
+- **Decisions** (pane `decisions`; **Show Decisions**, `cockpit-decisions`): the job's decision log, newest first:
+  replaced decisions dimmed, disputed ones (in an open clash) marked.
 
-It follows the hub's events and redraws only what changed (at most twice a second). Closing it stops nothing; it
-comes back when Emacs restarts at the position and size it had (with the workbench's windows). Without a hub it says
-so, and fills in when the hub runs again; if the hub does not know the job (it was deleted), the window closes.
+Without a job filter, What needs you lists every proposed, running or paused job that waits on you, each under its
+name; a click on the name filters the cockpit to that job. **Show What Needs You** (also a click on the status bar's
+jobs count) drops the job filter; **Filter Graph…** keeps it. The graph's first line says which job it shows, and
+the filter is saved with the workbench.
+
+The panes follow the hub's events and redraw only what changed, at most twice a second, and only while one shows (a
+hidden one catches up when it shows). Hiding them stops nothing. Without a hub What needs you says so, and fills in
+when the hub runs again; if the hub does not know the job (it was deleted), the cockpit shows every job again.
 
 You do not have to watch it: while something of a job needs you, the mode line shows **⚑N** (the cards and messages
-waiting; a click opens the job with the newest; it disappears when the hub cannot be asked, rather than showing the
-last count), and each new card is a desktop notification (D-Bus on Linux; `osascript` on macOS; else a message
+waiting; a click shows the job with the newest card in the Work cockpit, or every job when only messages wait; it
+disappears when the hub cannot be asked, rather than showing the last count). With the status bar on, its jobs
+count does the same, and each new card is a desktop notification (D-Bus on Linux; `osascript` on macOS; else a message
 in the echo area — `drgnx-job-ui-notify` nil turns them off). Neither ever asks you anything. What needs you is a **card** with its actions — the proposal (Approve, Reject), a permission (Allow, Reject),
 a merge conflict (let the agent resolve it, merge again after you resolved it, drop the task), a review that failed
 (merge as it is, back to an agent, drop), a stuck or failed agent (retry, drop), the budget (resume with more, stop);
