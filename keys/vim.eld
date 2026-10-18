@@ -1,9 +1,11 @@
-;; Vim key profile — command id → keys (docs/guide/keys.md).  Commands are on the leader key (SPC) in
-;; evil's normal state, bound once evil loads (the evil module, M4).  :claims are Vim's own
-;; normal-mode keys, so a layer that rebinds one of them is reported.
+;; Vim key profile — command id → keys (docs/guide/keys.md).  Commands are on the leader key (SPC), in
+;; drgnx's own leader map (:map), which the modal engine plugs into its normal, visual and motion states: the
+;; keys exist, and show on every surface, before evil is installed.  Keys outside the leader (C-w h, g d, panel
+;; j/k) go in the map of their command or entry, else evil's normal state.  :claims are Vim's own normal-mode
+;; keys, so a layer that rebinds one of them is reported.
 (:name "Vim"
  :doc "Vim / Neovim keys (evil), commands on the SPC leader"
- :map (evil . evil-normal-state-map)
+ :map drgnx-modal-leader-map
  ;; The modal engine this profile needs, the leader keys, and which map a key goes in by the states it
  ;; must work in (core/drgnx-modal.el, docs/develop/core.md "Modal core").
  :modal (:engine evil :leader ("SPC" "C-w")
@@ -14,7 +16,7 @@
                 ((evil . evil-visual-state-map) visual)
                 ((evil . evil-motion-state-map) normal visual motion)
                 ((evil . evil-insert-state-map) insert)))
- :bind ((palette "SPC SPC")
+ :bind ((palette "SPC SPC" "C-S-p" "<f1>" :map global-map :mac ("SPC SPC" "s-P" "<f1>"))
         (keys-sheet "SPC ?")
         (keyboard-profile "SPC h k")
         (quit :none "File → Quit drgnx; the palette")
