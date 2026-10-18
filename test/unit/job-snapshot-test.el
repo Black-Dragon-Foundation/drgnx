@@ -428,6 +428,21 @@ its alternates', `cat-file --batch-all-objects --batch')."
       (should-not (string-match-p "remote\\." (drgnx-job-snapshot-test--git store "config" "--file" "config" "--list")))
       (should (equal (drgnx-job-snapshot-test--git store "config" "--file" "config" "gc.auto") "0")))))
 
+(ert-deftest drgnx-job-snapshot/failure-path-completes-when-rm-cannot-start ()
+  ;; the base is missing, so the store fails and its part is removed — but `rm' cannot start: DONE still comes
+  (drgnx-job-snapshot-test--with
+    (let ((drgnx-job-snapshot-copy-on-write nil) (run (symbol-function 'drgnx-job-snapshot--run)) (got nil) (rms 0))
+      ;; the first `rm' (a leftover part, in the turn itself) starts; those of the failure paths, in sentinels, do not
+      (cl-letf (((symbol-function 'drgnx-job-snapshot--run)
+                 (lambda (dir argv job done)
+                   (if (and (equal (car argv) "rm") (> (cl-incf rms) 1))
+                       (error "Cannot start rm")
+                     (funcall run dir argv job done)))))
+        (drgnx-job-snapshot-make repo folder "job/nope" (lambda (r) (setq got r)))
+        (should (drgnx-job-snapshot-test--wait-for (lambda () got)))
+        (should (plist-get got :error))
+        (should (= 0 (hash-table-count drgnx-job-snapshot--busy)))))))
+
 (ert-deftest drgnx-job-snapshot/run-keeps-stderr-and-leaks-nothing ()
   (let ((got nil) (big 200000))
     (drgnx-job-snapshot--run temporary-file-directory

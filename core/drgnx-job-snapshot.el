@@ -204,7 +204,7 @@ start, this signals, and leaves no process or buffer behind."
                              (unless (process-live-p p)
                                (when timer (cancel-timer timer))
                                ;; what is still in the stderr pipe: read without waiting, so no message is cut short
-                               (while (and (process-live-p errp) (accept-process-output errp 0 nil t)))
+                               (while (and (process-live-p errp) (accept-process-output errp 0 nil 1)))   ; 1: no timers run here
                                (let ((stdout (with-current-buffer out (buffer-string)))
                                      (stderr (string-trim (with-current-buffer err (buffer-string)))))
                                  (delete-process errp)
@@ -240,9 +240,12 @@ An error OK signals goes to FAIL too: a sentinel would swallow it, and the steps
           (t (funcall fail (let ((e (cddr r))) (if (string-empty-p e) (format "exit %s" (car r)) e)))))))
 
 (defun drgnx-job-snapshot--rm (dir job then)
-  "Remove DIR (`rm -rf', in a process), then call THEN."
-  (drgnx-job-snapshot--run (file-name-directory (directory-file-name dir)) (list "rm" "-rf" "--" (directory-file-name dir)) job
-                           (lambda (_) (funcall then))))
+  "Remove DIR (`rm -rf', in a process), then call THEN — also when `rm' cannot start (DIR then stays): a failure path
+always completes."
+  (condition-case nil
+      (drgnx-job-snapshot--run (file-name-directory (directory-file-name dir)) (list "rm" "-rf" "--" (directory-file-name dir)) job
+                               (lambda (_) (funcall then)))
+    (error (funcall then))))
 
 (defun drgnx-job-snapshot--with-store (store fn)
   "Call FN with a function that ends its turn, once no other step uses STORE: one at a time, in order."
