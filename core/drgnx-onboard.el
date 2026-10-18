@@ -1301,15 +1301,15 @@ Interactive: asked (`drgnx-shell-install'), never written without a yes; otherwi
   (let ((name (drgnx-shell-name)))
     (if (null name)
         "shell integration: none for your shell (zsh, bash and fish have one: drgnx shell install --shell NAME)"
-      (let* ((rc (drgnx-shell--tilde (drgnx-shell-rc-file name)))
-             (line (drgnx-shell-line name)))
+      (let ((rc (drgnx-shell--tilde (drgnx-shell-rc-file name))))
         (cond ((drgnx-shell-line-present-p name) (format "shell integration: already in %s" rc))
               ((plist-get ctx :interactive)
                (pcase (drgnx-shell-install name :ask #'y-or-n-p)
                  ('added (format "shell integration: added to %s (open a new terminal)" rc))
                  ('present (format "shell integration: already in %s" rc))
+                 ('failed (format "shell integration: not added, %s cannot be written; to add it by hand: %s" rc (drgnx-shell-line name)))
                  (_ (format "shell integration: not added; to add it: drgnx shell install"))))
-              (t (format "shell integration: add this to %s (or: drgnx shell install): %s" rc line)))))))
+              (t (format "shell integration: add this to %s (or: drgnx shell install): %s" rc (drgnx-shell-line name))))))))
 
 (defun drgnx-onboard--daemon-step (ctx)
   "Keep running or quit (asked once), then macOS: the drgnx app; Linux: the systemd unit and desktop entry;

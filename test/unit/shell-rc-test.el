@@ -166,6 +166,65 @@
       (rename-file (concat home "ws") (concat home "ws-gone"))
       (should (equal (funcall run) '(0 ""))))))
 
+;; Failures and odd rc files
+
+(ert-deftest drgnx-shell-rc/a-read-only-rc-fails-softly ()
+  (drgnx-shell-rc-test--with home
+    (let ((rc (drgnx-shell-rc-file 'zsh)) code)
+      (drgnx-shell-rc-test--write rc "export A=1\n")
+      (set-file-modes rc #o444)
+      (skip-unless (not (file-writable-p rc)))   ; root writes anyway
+      (should (eq (drgnx-shell-install 'zsh :ask (drgnx-shell-rc-test--yes)) 'failed))
+      (should (equal (drgnx-shell-rc-test--read rc) "export A=1\n"))
+      ;; the command line: the line, "by hand", exit 1 (no backtrace)
+      (let ((process-environment (cons "DRGNX_STDIN_TTY=1" process-environment)))
+        (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
+          (let ((out (with-output-to-string (setq code (drgnx-shell-cli-run '("install"))))))
+            (should (eql code 1))
+            (should (string-search "by hand" out))
+            (should (string-search (drgnx-shell-line 'zsh) out)))))
+      ;; onboarding: a sentence, not a failed step
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
+        (let ((msg (drgnx-onboard--shell-part '(:interactive t))))
+          (should (string-search "not added" msg))
+          (should (string-search "by hand" msg))))
+      (should (equal (drgnx-shell-rc-test--read rc) "export A=1\n")))))
+
+(ert-deftest drgnx-shell-rc/an-rc-without-a-trailing-newline-gets-its-own-line ()
+  (drgnx-shell-rc-test--with home
+    (let ((rc (drgnx-shell-rc-file 'bash)))
+      (drgnx-shell-rc-test--write rc "export A=1")
+      (should (eq (drgnx-shell-install 'bash :ask (drgnx-shell-rc-test--yes)) 'added))
+      (should (equal (drgnx-shell-rc-test--read rc)
+                     (concat "export A=1\n# added by drgnx (docs/guide/shell.md)\n" (drgnx-shell-line 'bash) "\n"))))))
+
+(ert-deftest drgnx-shell-rc/a-dangling-symlink-rc-is-created-through-the-link ()
+  (drgnx-shell-rc-test--with home
+    (let ((rc (drgnx-shell-rc-file 'zsh)) (target (concat home "dotfiles/zshrc")))
+      (make-symbolic-link "dotfiles/zshrc" rc)
+      (should-not (file-exists-p target))
+      (should (eq (drgnx-shell-install 'zsh :ask (drgnx-shell-rc-test--yes)) 'added))
+      (should (file-symlink-p rc))
+      (should (string-search (drgnx-shell-line 'zsh) (drgnx-shell-rc-test--read target)))
+      (should (drgnx-shell-line-present-p 'zsh)))))
+
+(ert-deftest drgnx-shell-rc/a-path-with-dollar-and-quotes-sources-for-real ()
+  (skip-unless (executable-find "bash"))
+  (drgnx-shell-rc-test--with home
+    (let* ((checkout (concat home "ws $x 'q\"b`c;d&/drgnx/"))
+           (drgnx-dir checkout)
+           (rc (drgnx-shell-rc-file 'bash))
+           (mark (concat home "mark")))
+      (make-directory (concat checkout "etc/shell") t)
+      (drgnx-shell-rc-test--write (concat checkout "etc/shell/drgnx.bash")
+                                  (format "printf sourced > %s\n" (shell-quote-argument mark)))
+      (should (eq (drgnx-shell-install 'bash :ask (drgnx-shell-rc-test--yes)) 'added))
+      (with-temp-buffer
+        (should (eql 0 (call-process "bash" nil t nil "--norc" "--noprofile" "-c"
+                                     (concat "source " (shell-quote-argument rc)))))
+        (should (equal (buffer-string) "")))
+      (should (equal (drgnx-shell-rc-test--read mark) "sourced")))))
+
 ;;;; The command line
 
 (ert-deftest drgnx-shell-rc/cli-yes-prints-never-writes ()

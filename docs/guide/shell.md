@@ -36,6 +36,8 @@ drgnx never edits an rc file without your yes:
   and changes nothing.
 - When the rc file is a symlink (a dotfiles repository), the question names both, "~/.zshrc → ~/dotfiles/zshrc", and the
   line goes into the target; the link stays a link.
+- When the file cannot be written (a read-only rc, say one linked into a managed store), nothing changes: the
+  command prints the line, says to add it by hand, and exits with status 1; onboarding says "not added" and goes on.
 - The shell comes from `$SHELL` (zsh, bash or fish), or `--shell NAME`. Any other shell: exit status 1, and nothing
   to add. A usage mistake is exit status 2.
 - **Onboarding** asks the same question in step 7 (Daemon and Desktop), and with `--non-interactive` only says the

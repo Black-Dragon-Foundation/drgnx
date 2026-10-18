@@ -68,8 +68,8 @@ leaves the shell silent and the rc file's status 0."
 
 (cl-defun drgnx-shell-install (name &key ask)
   "Put the integration line for shell NAME into its rc file, if the user says yes.
-Returns `present' (an uncommented line names the file already: nothing happens), `added', `declined' or
-`printed'.  ASK is a function of one question string (`y-or-n-p' in a terminal); with none, the line is printed
+Returns `present' (an uncommented line names the file already: nothing happens), `added', `declined', `failed'
+(the file cannot be written: a read-only rc, say one linked into a managed store; nothing is changed) or `printed'.  ASK is a function of one question string (`y-or-n-p' in a terminal); with none, the line is printed
 on stdout and nothing is written.  A symlinked rc file is named with its target in the question, and the
 target is what gains the line."
   (let* ((rc (drgnx-shell-rc-file name))
@@ -80,9 +80,12 @@ target is what gains the line."
     (cond ((drgnx-shell-line-present-p name) 'present)
           ((null ask) (princ (format "add this to %s: %s\n" (drgnx-shell--tilde rc) line)) 'printed)
           ((funcall ask (format "Add this line to %s? %s" shown line))
-           (make-directory (file-name-directory target) t)
-           (write-region (format "\n# added by drgnx (docs/guide/shell.md)\n%s\n" line) nil target t 'silent)
-           'added)
+           (condition-case nil
+               (progn
+                 (make-directory (file-name-directory target) t)
+                 (write-region (format "\n# added by drgnx (docs/guide/shell.md)\n%s\n" line) nil target t 'silent)
+                 'added)
+             (file-error 'failed)))
           (t 'declined))))
 
 ;;;; Command line
@@ -104,7 +107,7 @@ line it would add."
      ((not (member cmd '("install" "line"))) (princ drgnx-shell-usage) 2)
      (bad (princ (format "drgnx shell: %s\n%s" bad drgnx-shell-usage)) 2)
      (t
-      (let ((name (drgnx-shell-name (or shell (getenv "SHELL")))))
+      (let ((name (drgnx-shell-name (or shell (getenv "SHELL")))) (code 0))
         (if (null name)
             (progn (princ (format "drgnx shell: no integration for %s (zsh, bash and fish have one; --shell NAME)\n"
                                   (let ((s (or shell (getenv "SHELL")))) (if (member s '(nil "")) "an unknown shell ($SHELL is empty)" s))))
@@ -115,8 +118,11 @@ line it would add."
               ('present (princ (format "drgnx shell: the line is in %s already\n" (drgnx-shell--tilde (drgnx-shell-rc-file name)))))
               ('added (princ (format "drgnx shell: added to %s; open a new terminal (or: source it)\n"
                                      (drgnx-shell--tilde (drgnx-shell-rc-file name)))))
-              ('declined (princ "drgnx shell: nothing changed\n"))))
-          0))))))
+              ('declined (princ "drgnx shell: nothing changed\n"))
+              ('failed (princ (format "drgnx shell: %s cannot be written; add it by hand: %s\n"
+                                      (drgnx-shell--tilde (drgnx-shell-rc-file name)) (drgnx-shell-line name)))
+                       (setq code 1))))
+          code))))))
 
 (defun drgnx-shell-cli ()
   "bin/drgnx shell: the arguments after --."
