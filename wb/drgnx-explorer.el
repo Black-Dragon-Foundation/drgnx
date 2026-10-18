@@ -31,6 +31,11 @@
   "Names the Explorer never shows (a regexp)."
   :type 'regexp)
 
+(defcustom drgnx-explorer-compact-folders t
+  "Show an open folder whose only entry is a folder on one row (`src/app').
+Only chains in listings already read are joined: a closed folder is never read for it."
+  :type 'boolean :group 'drgnx)
+
 (defface drgnx-explorer-root '((t :inherit bold)) "The root rows." :group 'drgnx)
 (defface drgnx-explorer-directory '((t :inherit default)) "Folder names." :group 'drgnx)
 (defface drgnx-explorer-file '((t :inherit default)) "File names." :group 'drgnx)
@@ -176,24 +181,45 @@ name's face, the hover highlight, the git status."
 (defvar drgnx-explorer--expanded-function #'drgnx-explorer--expanded-p
   "Which folders are open: the user's, or (during Find) every folder shown.")
 
-(defun drgnx-explorer--insert-subtree (dir depth)
+(defun drgnx-explorer--compact-p ()
+  "Non-nil when single-folder chains are joined into one row (not while Find shows its own tree)."
+  (and drgnx-explorer-compact-folders (eq drgnx-explorer--children-function #'drgnx-explorer-children)))
+
+(defun drgnx-explorer--only-folder (kids)
+  "The name of the one folder KIDS (a listing) consists of, or nil."
+  (and kids (null (cdr kids)) (cdar kids) (caar kids)))
+
+(defun drgnx-explorer--insert-subtree (dir depth &optional only)
   "Insert, at point, the rows of DIR's children at DEPTH, recursing into expanded folders; return
-their data vectors in order (for `drgnx-explorer--rows').
+their data vectors in order (for `drgnx-explorer--rows').  ONLY: just the child of that name.
+An open folder whose only entry is a folder shares its row with it (`src/app'): the listing is the
+one already read to show the open folder, and the chain ends at the first closed folder, which is
+never read.  The row's path is the last folder's.
 Hot path (thousands of rows per expand): garbage is what makes a GUI session pause, so a row
 allocates only its small data vector; the text is shared strings (prefix, name, newline) and
 faces come later, from jit-lock, for the rows on screen."
   (drgnx-explorer--bulk
-   (let (parts data)
-     (cl-labels ((walk (dir depth)
+   (let ((compact (drgnx-explorer--compact-p)) parts data)
+     (cl-labels ((walk (dir depth only)
                    (let ((parent (directory-file-name dir)))
                      (pcase-dolist (`(,name . ,dirp) (funcall drgnx-explorer--children-function dir))
-                       (let ((open (and dirp (funcall drgnx-explorer--expanded-function (drgnx-explorer--join parent name)))))
-                         (push (drgnx-explorer--prefix depth (if dirp (if open 'open 'closed) 'file)) parts)
-                         (push (drgnx-wb-display-name name) parts)
-                         (push "\n" parts)
-                         (push (vector name depth dirp parent) data)
-                         (when open (walk (drgnx-explorer--join parent name) (1+ depth))))))))
-       (walk dir depth))
+                       (when (or (null only) (equal name only))
+                         (let* ((path (and dirp (drgnx-explorer--join parent name)))   ; files allocate no path
+                                (open (and dirp (funcall drgnx-explorer--expanded-function path)))
+                                (kids nil))
+                           (when (and open compact)           ; join the chain of open folders with one folder in them
+                             (setq kids (funcall drgnx-explorer--children-function path))
+                             (let (next)
+                               (while (and open (setq next (drgnx-explorer--only-folder kids)))
+                                 (setq name (concat name "/" next) path (drgnx-explorer--join path next)
+                                       open (funcall drgnx-explorer--expanded-function path)
+                                       kids (and open (funcall drgnx-explorer--children-function path))))))
+                           (push (drgnx-explorer--prefix depth (if dirp (if open 'open 'closed) 'file)) parts)
+                           (push (drgnx-wb-display-name name) parts)
+                           (push "\n" parts)
+                           (push (vector name depth dirp parent) data)
+                           (when open (walk path (1+ depth) nil))))))))
+       (walk dir depth only))
      ;; One insertion: inserting each part separately runs the change hooks (jit-lock) per part.
      (insert (apply #'concat (nreverse parts)))
      (nreverse data))))
@@ -283,7 +309,11 @@ faces come later, from jit-lock, for the rows on screen."
   (let (out)
     (seq-doseq (v drgnx-explorer--rows)
       (when (and (aref v 2) (or (= (aref v 1) 0) (drgnx-explorer--expanded-p (drgnx-explorer--path v))))
-        (push (drgnx-explorer--path v) out)))
+        (push (drgnx-explorer--path v) out))
+      (when (and (aref v 3) (string-search "/" (aref v 0)))   ; a joined row: its middle folders are open too
+        (let ((dir (aref v 3)))
+          (dolist (seg (butlast (split-string (aref v 0) "/")))
+            (push (setq dir (drgnx-explorer--join dir seg)) out)))))
     out))
 
 (defun drgnx-explorer--sync-watches ()
@@ -341,30 +371,67 @@ watched — the inotify limit — is tried again)."
             (dolist (d dirs) (drgnx-explorer--refresh-dir d)))
           (drgnx-explorer--git-refresh))))))
 
+(defun drgnx-explorer--entry-index (dir)
+  "The index of the row that shows DIR: its own row, or the joined row (`src/app') it is a part of."
+  (let ((dir (directory-file-name dir)))
+    (or (let ((parent (directory-file-name (file-name-directory dir))) (name (file-name-nondirectory dir)))
+          (cl-position-if (lambda (v) (if (aref v 3)
+                                          (and (equal (aref v 0) name) (equal (aref v 3) parent))
+                                        (equal (aref v 0) dir)))
+                          drgnx-explorer--rows))
+        (cl-position-if (lambda (v)
+                          (and (aref v 3) (string-search "/" (aref v 0))
+                               (string-prefix-p (file-name-as-directory (aref v 3)) dir)
+                               (let ((full (drgnx-explorer--path v)))
+                                 (or (equal full dir) (string-prefix-p (concat dir "/") full)))))
+                        drgnx-explorer--rows))))
+
+(defun drgnx-explorer--reinsert-entry (i)
+  "Show the entry of row I (and the rows below it) again from its folder's listing: a joined row may
+split, a plain one may join.  The folder's own row and everything else stay."
+  (let* ((inhibit-read-only t) (views (drgnx-explorer--save-views))
+         (v (aref drgnx-explorer--rows i)) (rows drgnx-explorer--rows)
+         (j (drgnx-explorer--subtree-last i)) (bol (drgnx-explorer--line-pos i))
+         (head (car (split-string (aref v 0) "/"))) (inhibit-quit t))
+    (delete-region bol (save-excursion (goto-char bol) (forward-line (- j i)) (point)))
+    (let ((new (save-excursion (goto-char bol) (drgnx-explorer--insert-subtree (aref v 3) (aref v 1) head))))
+      (setq drgnx-explorer--rows (vconcat (seq-subseq rows 0 i) new (seq-subseq rows j))))
+    (drgnx-explorer--restore-views views)
+    (drgnx-explorer--sync-watches)))
+
 (defun drgnx-explorer--refresh-dir (dir)
-  "Re-list DIR (shown and expanded) and replace its rows in place, keeping views and selection."
-  (when-let* ((pos (drgnx-explorer--row-pos dir))
-              (v (drgnx-explorer--row-data pos))
-              ((or (= (aref v 1) 0) (drgnx-explorer--expanded-p dir))))
-    (cl-incf drgnx-explorer--relists)
-    (remhash (file-name-as-directory dir) drgnx-explorer--cache)
-    (let* ((inhibit-read-only t) (views (drgnx-explorer--save-views))
-           (i (drgnx-explorer--index pos)) (j (drgnx-explorer--subtree-last i)) (rows drgnx-explorer--rows)
-           (next (save-excursion (goto-char pos) (forward-line 1) (point))))
-      (delete-region next (save-excursion (goto-char next) (forward-line (- j i 1)) (point)))
-      (let ((new (save-excursion (goto-char next) (drgnx-explorer--insert-subtree dir (1+ (aref v 1))))))
-        (setq drgnx-explorer--rows (vconcat (seq-subseq rows 0 (1+ i)) new (seq-subseq rows j))))
-      (drgnx-explorer--restore-views views)
-      (drgnx-explorer--sync-watches))))
+  "Re-list DIR (shown and expanded) and replace its rows in place, keeping views and selection.
+A folder in the middle of a joined row, or one that now joins its only folder (or no longer does),
+shows its whole entry again."
+  (when-let* ((dir (directory-file-name dir))
+              (i (drgnx-explorer--entry-index dir))
+              (v (aref drgnx-explorer--rows i)))
+    (cond
+     ((not (equal (drgnx-explorer--path v) dir))                     ; in the middle of a joined row
+      (cl-incf drgnx-explorer--relists)
+      (remhash (file-name-as-directory dir) drgnx-explorer--cache)
+      (drgnx-explorer--reinsert-entry i))
+     ((or (= (aref v 1) 0) (drgnx-explorer--expanded-p dir))
+      (cl-incf drgnx-explorer--relists)
+      (remhash (file-name-as-directory dir) drgnx-explorer--cache)
+      (if (and (> (aref v 1) 0) (drgnx-explorer--compact-p)
+               (drgnx-explorer--only-folder (drgnx-explorer-children dir)))
+          (drgnx-explorer--reinsert-entry i)                         ; it joins its folder now
+        (let* ((pos (drgnx-explorer--line-pos i))
+               (inhibit-read-only t) (views (drgnx-explorer--save-views))
+               (j (drgnx-explorer--subtree-last i)) (rows drgnx-explorer--rows)
+               (next (save-excursion (goto-char pos) (forward-line 1) (point))))
+          (delete-region next (save-excursion (goto-char next) (forward-line (- j i 1)) (point)))
+          (let ((new (save-excursion (goto-char next) (drgnx-explorer--insert-subtree dir (1+ (aref v 1))))))
+            (setq drgnx-explorer--rows (vconcat (seq-subseq rows 0 (1+ i)) new (seq-subseq rows j))))
+          (drgnx-explorer--restore-views views)
+          (drgnx-explorer--sync-watches)))))))
 
 (defun drgnx-explorer--row-pos (path)
-  "Start of PATH's row, or nil."
-  (let* ((parent (directory-file-name (file-name-directory path))) (name (file-name-nondirectory path))
-         (i (cl-position-if (lambda (v) (if (aref v 3)
-                                            (and (equal (aref v 0) name) (equal (aref v 3) parent))
-                                          (equal (aref v 0) path)))
-                            drgnx-explorer--rows)))
-    (and i (drgnx-explorer--line-pos i))))
+  "Start of PATH's row, or nil (a folder in the middle of a joined row has none)."
+  (let ((i (drgnx-explorer--entry-index path)))
+    (and i (equal (drgnx-explorer--path (aref drgnx-explorer--rows i)) (directory-file-name path))
+         (drgnx-explorer--line-pos i))))
 
 (defun drgnx-explorer--subtree-last (i)
   "Index just after the rows below row I that are deeper than it."
@@ -394,9 +461,11 @@ watched — the inotify limit — is tried again)."
                 (setq drgnx-explorer--rows (vconcat (seq-subseq rows 0 (1+ i)) (seq-subseq rows j)))
                 (drgnx-explorer--set-chevron bol depth nil))
             (puthash path t drgnx-explorer--expanded)
-            (let ((new (save-excursion (goto-char next) (drgnx-explorer--insert-subtree path (1+ depth)))))
-              (setq drgnx-explorer--rows (vconcat (seq-subseq rows 0 (1+ i)) new (seq-subseq rows (1+ i)))))
-            (drgnx-explorer--set-chevron bol depth t))
+            (if (and (drgnx-explorer--compact-p) (drgnx-explorer--only-folder (drgnx-explorer-children path)))
+                (drgnx-explorer--reinsert-entry i)           ; its only folder joins this row
+              (let ((new (save-excursion (goto-char next) (drgnx-explorer--insert-subtree path (1+ depth)))))
+                (setq drgnx-explorer--rows (vconcat (seq-subseq rows 0 (1+ i)) new (seq-subseq rows (1+ i)))))
+              (drgnx-explorer--set-chevron bol depth t)))
           (drgnx-explorer--sync-watches))
         t))))
 
@@ -556,7 +625,8 @@ A remote file is never revealed: this runs from the change bus, where remote I/O
     (dotimes (k n)
       (let ((i (mod (+ from k) n)))
         (when (and (not found)
-                   (string-prefix-p prefix (file-name-nondirectory (drgnx-explorer--path (aref rows i))) t))
+                   (or (string-prefix-p prefix (file-name-nondirectory (drgnx-explorer--path (aref rows i))) t)
+                       (and (aref (aref rows i) 3) (string-prefix-p prefix (aref (aref rows i) 0) t))))   ; a joined row, as shown
           (setq found i))))
     (when found
       (goto-char (drgnx-explorer--line-pos found))

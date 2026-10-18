@@ -15,7 +15,8 @@
   (declare (indent 1))
   `(let* ((,root (file-name-as-directory (make-temp-file "drgnx-explorer" t)))
           (drgnx-wb--sections nil) (drgnx-signal--editor-window nil) (drgnx-explorer--pressed nil)
-          (drgnx-explorer--selection nil) (drgnx-explorer--anchor nil) (drgnx-explorer--focused-before nil))
+          (drgnx-explorer--selection nil) (drgnx-explorer--anchor nil) (drgnx-explorer--focused-before nil)
+          (drgnx-explorer-compact-folders nil))     ; one row per folder; the joined rows have their own tests
      (unwind-protect
          (progn
            (drgnx-explorer-test--tree ,root '("README.md" "docs/guide.md" "src/app/main.py" "src/app/util.py"

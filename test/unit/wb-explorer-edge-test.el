@@ -18,7 +18,8 @@
   `(let* ((,root (file-name-as-directory (make-temp-file "drgnx-explorer" t)))
           (drgnx-wb--sections nil) (drgnx-signal--editor-window nil) (drgnx-explorer--pressed nil)
           (drgnx-explorer--selection nil) (drgnx-explorer--anchor nil) (drgnx-explorer--focused-before nil)
-          (drgnx-explorer--clipboard nil))
+          (drgnx-explorer--clipboard nil)
+          (drgnx-explorer-compact-folders nil))     ; one row per folder; the joined rows have their own tests
      (unwind-protect
          (progn
            (drgnx-explorer-edge--tree ,root '("README.md" "docs/guide.md" "docs/sub/" "src/app/main.py" "tests/test_main.py"))
@@ -413,3 +414,90 @@
         (should (equal watched (list (directory-file-name root))))
         (should (eq 'none (gethash remote drgnx-explorer--watches)))
         (drgnx-explorer--unwatch-all)))))
+
+;;;; M3b-1: compact folders, only for chains already listed
+
+(defun drgnx-explorer-edge--names ()
+  "The Explorer's rows as (DEPTH SHOWN-NAME) lists."
+  (with-current-buffer drgnx-explorer-buffer-name
+    (mapcar (lambda (v) (list (aref v 1) (aref v 0))) (cdr (append drgnx-explorer--rows nil)))))
+
+(defmacro drgnx-explorer-edge--with-compact (root &rest body)
+  "Like `drgnx-explorer-edge--with', with folders joined (the option is on)."
+  (declare (indent 1))
+  `(drgnx-explorer-edge--with ,root
+     (setq drgnx-explorer-compact-folders t)
+     (drgnx-explorer-refresh)
+     ,@body))
+
+(defmacro drgnx-explorer-edge--counting (var &rest body)
+  "BODY with VAR collecting the folders `drgnx-explorer-children' really read from disk."
+  (declare (indent 1))
+  `(let ((,var nil)
+         (orig (symbol-function 'directory-files-and-attributes)))
+     (cl-letf (((symbol-function 'directory-files-and-attributes)
+                (lambda (dir &rest a) (push (directory-file-name dir) ,var) (apply orig dir a))))
+       ,@body)))
+
+(ert-deftest drgnx-explorer-edge/compact-folders-follow-listings-already-read ()
+  (drgnx-explorer-edge--with-compact root
+    (drgnx-explorer-edge--tree root '("pkg/a/b/c.txt" "pkg/a/b/d.txt"))
+    (drgnx-explorer-refresh)
+    (let ((pkg (expand-file-name "pkg" root)))
+      ;; closed: nothing is read for it, the row is plain
+      (should (member '(1 "pkg") (drgnx-explorer-edge--names)))
+      (drgnx-explorer-edge--counting read
+        ;; opening pkg reads pkg only: its one subfolder a joins the row, a is not read (it is closed)
+        (with-current-buffer (drgnx-explorer-edge--at "pkg") (drgnx-explorer-toggle-at (point)))
+        (should (equal read (list pkg)))
+        (should (member '(1 "pkg/a") (drgnx-explorer-edge--names)))
+        (should-not (member '(1 "pkg") (drgnx-explorer-edge--names)))
+        (should (equal (with-current-buffer (drgnx-explorer-edge--at "a") (drgnx-explorer-node-at (point)))
+                       (expand-file-name "pkg/a" root))))
+      ;; opening a (the row's folder) reads a, and b — its only subfolder — joins the row
+      (with-current-buffer (drgnx-explorer-edge--at "a") (drgnx-explorer-toggle-at (point)))
+      (should (member '(1 "pkg/a/b") (drgnx-explorer-edge--names)))
+      ;; opening b: two files below the row
+      (with-current-buffer (drgnx-explorer-edge--at "b") (drgnx-explorer-toggle-at (point)))
+      (should (equal (seq-filter (lambda (r) (> (car r) 0)) (drgnx-explorer-edge--names))
+                     '((1 "docs") (1 "pkg/a/b") (2 "c.txt") (2 "d.txt") (1 "src") (1 "tests") (1 "README.md"))))
+      ;; closing b leaves the chain
+      (with-current-buffer (drgnx-explorer-edge--at "b") (drgnx-explorer-toggle-at (point)))
+      (should (member '(1 "pkg/a/b") (drgnx-explorer-edge--names)))
+      (should-not (member '(2 "c.txt") (drgnx-explorer-edge--names))))))
+
+(ert-deftest drgnx-explorer-edge/a-folder-with-a-sibling-or-a-file-is-not-compact ()
+  (drgnx-explorer-edge--with-compact root
+    (with-current-buffer (drgnx-explorer-edge--at "docs") (drgnx-explorer-toggle-at (point)))   ; guide.md and sub/
+    (should (member '(1 "docs") (drgnx-explorer-edge--names)))
+    (should (member '(2 "sub") (drgnx-explorer-edge--names)))
+    (with-current-buffer (drgnx-explorer-edge--at "src") (drgnx-explorer-toggle-at (point)))    ; app/ alone
+    (should (member '(1 "src/app") (drgnx-explorer-edge--names)))
+    ;; … until it gets a sibling (a file event, here by hand): src and app are two rows again
+    (write-region "" nil (expand-file-name "src/extra.txt" root) nil 'silent)
+    (with-current-buffer drgnx-explorer-buffer-name (drgnx-explorer--refresh-dir (expand-file-name "src" root)))
+    (should (member '(1 "src") (drgnx-explorer-edge--names)))
+    (should (member '(2 "app") (drgnx-explorer-edge--names)))
+    ;; and merges again when the sibling goes
+    (delete-file (expand-file-name "src/extra.txt" root))
+    (with-current-buffer drgnx-explorer-buffer-name (drgnx-explorer--refresh-dir (expand-file-name "src" root)))
+    (should (member '(1 "src/app") (drgnx-explorer-edge--names)))))
+
+(ert-deftest drgnx-explorer-edge/reveal-and-watches-see-through-a-compact-row ()
+  (drgnx-explorer-edge--with-compact root
+    (drgnx-explorer-edge--tree root '("pkg/a/b/c.txt"))
+    (drgnx-explorer-refresh)
+    (let ((file (expand-file-name "pkg/a/b/c.txt" root)))
+      (should (drgnx-explorer-reveal file))
+      (should (member '(1 "pkg/a/b") (drgnx-explorer-edge--names)))
+      (should (member '(2 "c.txt") (drgnx-explorer-edge--names)))
+      (with-current-buffer drgnx-explorer-buffer-name
+        (should (equal (drgnx-explorer-node-at (drgnx-explorer--row-pos file)) file))
+        ;; every folder of the chain is watched: a new file in pkg/a breaks the chain
+        (let ((shown (drgnx-explorer--shown-folders)))
+          (dolist (d '("pkg" "pkg/a" "pkg/a/b")) (should (member (expand-file-name d root) shown)))))
+      (write-region "" nil (expand-file-name "pkg/a/x.txt" root) nil 'silent)
+      (with-current-buffer drgnx-explorer-buffer-name (drgnx-explorer--refresh-dir (expand-file-name "pkg/a" root)))
+      (should (member '(1 "pkg/a") (drgnx-explorer-edge--names)))
+      (should (member '(2 "b") (drgnx-explorer-edge--names)))
+      (should (member '(3 "c.txt") (drgnx-explorer-edge--names))))))

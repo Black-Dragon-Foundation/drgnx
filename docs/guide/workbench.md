@@ -30,6 +30,13 @@ opens (and focuses), `SPC` opens and stays (`g o` in Vim), `TAB` toggles a folde
 Folders come first, names sort naturally (`file2` before `file10`) and case-insensitively; `.git` and other
 clutter is hidden (`drgnx-explorer-exclude`). Dragging does nothing — the Explorer never moves files by drag.
 
+**Compact folders:** an open folder whose only entry is a folder shares its row (`src/app`), as in VS Code; the row
+is the last folder (opening, renaming, deleting act on it) and the chain ends at the first closed folder. Only
+listings the Explorer has read anyway are used — a closed folder is never read to see whether it could join, so the
+joining happens when you open it (the row then grows, `src` → `src/app`) and again whenever a folder in the chain
+changes (a second entry splits the row). The folders in the middle of a row are watched too. Turn it off with
+`drgnx-explorer-compact-folders`. Typing a prefix matches the row as shown.
+
 When you switch files, the Explorer shows the new one — but never while you are using the Explorer (it is
 selected, or a mouse button is down), never for a file outside its folder (opening another project's file does
 not replace the tree), never for a remote (TRAMP) file, and without scrolling when the row is already visible. Showing the sidebar reveals the
@@ -234,8 +241,7 @@ type in the minibuffer it may grow (icomplete-vertical, fido-vertical).
 | Bulk save/close | — | marked ops | Save All, Close Saved/All | Save All, Close Saved/Others/All |
 | Speed | 50–636 ms | 74–78 ms | — | 0.5–89 ms |
 
-Not yet: compact folders (`src/app` on one row — a cheap way to know a folder's only child is needed first),
-file nesting, icons (an icon theme is a module, M4), problems decorations (with diagnostics, M5).
+Not yet: file nesting, icons (an icon theme is a module, M4), problems decorations (with diagnostics, M5).
 
 ## How it works
 
