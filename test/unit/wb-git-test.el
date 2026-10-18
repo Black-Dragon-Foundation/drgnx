@@ -113,3 +113,57 @@ build/ ignored (with build/out.o)."
       (should-not (gethash "b.o" h))))
   (let ((h (drgnx-git-parse "? a\0! b.o\0")))
     (should (eq (gethash "b.o" h) 'ignored))))
+
+(defun drgnx-git-test--entries (hash)
+  "HASH as a sorted alist, to compare two parses."
+  (let (l) (maphash (lambda (k v) (push (cons k v) l)) hash) (sort l (lambda (a b) (string< (car a) (car b))))))
+
+(ert-deftest drgnx-git/parses-the-branch-line ()
+  (let* ((body (concat "1 .M N... 100644 100644 100644 aaa bbb src/main.py\0" "? notes.txt\0" "! build/\0"))
+         (head (concat "# branch.oid 1234567890abcdef\0# branch.head main\0# branch.upstream origin/main\0"
+                       "# branch.ab +2 -1\0")))
+    (let ((b (drgnx-git-parse-branch (concat head body))))
+      (should (equal (plist-get b :head) "main"))
+      (should (= (plist-get b :ahead) 2))
+      (should (= (plist-get b :behind) 1))
+      (should-not (plist-get b :detached)))
+    ;; the files are what they were without the branch lines
+    (should (equal (drgnx-git-test--entries (drgnx-git-parse (concat head body)))
+                   (drgnx-git-test--entries (drgnx-git-parse body))))
+    ;; no upstream: no counts; a name with a slash and spaces survives
+    (let ((b (drgnx-git-parse-branch "# branch.oid abc\0# branch.head feature/a b\0? x\0")))
+      (should (equal (plist-get b :head) "feature/a b"))
+      (should-not (plist-get b :ahead)))
+    ;; a detached HEAD
+    (let ((b (drgnx-git-parse-branch "# branch.oid abc\0# branch.head (detached)\0? x\0")))
+      (should (plist-get b :detached))
+      (should-not (plist-get b :head)))
+    ;; an output without branch lines (and an empty one)
+    (should-not (drgnx-git-parse-branch body))
+    (should-not (drgnx-git-parse-branch ""))))
+
+(ert-deftest drgnx-git/the-status-run-reads-the-branch-from-the-cache ()
+  (skip-unless (executable-find "git"))
+  (drgnx-git-test--repo root
+    (should-not (drgnx-git-branch root))             ; nothing read yet
+    (drgnx-git-refresh root t)
+    (let ((b (drgnx-git-branch root)))
+      (should (stringp (plist-get b :head)))
+      (should-not (plist-get b :ahead)))              ; no upstream
+    (should (eq (drgnx-git-status (expand-file-name "src/b.txt" root)) 'modified))   ; the files are unchanged
+    ;; a detached HEAD
+    (let ((default-directory root))
+      (call-process "git" nil nil nil "checkout" "-q" "--detach")
+      (drgnx-git-refresh root t)
+      (should (plist-get (drgnx-git-branch root) :detached)))))
+
+(ert-deftest drgnx-git/cached-root-reads-only-the-cache ()
+  (let ((drgnx-git--roots (make-hash-table :test #'equal)) (fail (lambda (&rest a) (ert-fail (format "looked: %S" a)))))
+    (cl-letf (((symbol-function 'locate-dominating-file) fail))
+      (should-not (drgnx-git-cached-root "/tmp/repo/src/a.el"))        ; not looked up yet: nothing, and no disk
+      (puthash "/tmp/repo/src/" "/tmp/repo/" drgnx-git--roots)
+      (should (equal (drgnx-git-cached-root "/tmp/repo/src/a.el") "/tmp/repo/"))
+      (should (equal (drgnx-git-cached-root "/tmp/repo/src/") "/tmp/repo/"))
+      (puthash "/tmp/other/" 'none drgnx-git--roots)
+      (should-not (drgnx-git-cached-root "/tmp/other/a.el"))
+      (should-not (drgnx-git-cached-root "/ssh:host:/tmp/repo/src/a.el")))))

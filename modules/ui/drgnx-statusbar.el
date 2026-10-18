@@ -45,6 +45,10 @@
 (declare-function flymake-reporting-backends "flymake")
 (declare-function drgnx-job-ui--badge-segment "drgnx-job-ui")
 (declare-function jsonrpc-running-p "jsonrpc")
+(declare-function drgnx-git-branch "drgnx-git")
+(declare-function drgnx-git-cached-root "drgnx-git")
+(declare-function drgnx-git-refresh "drgnx-git")
+(declare-function eglot--server-info "ext:eglot")
 (declare-function eglot--current-server-connection-running-p "ext:eglot")
 (defvar vc-mode)
 (defvar flymake-mode)
@@ -328,7 +332,7 @@ Weak on the window, so a deleted window's entry goes with it; emptied when the m
   (defconst drgnx-statusbar--memo-forms
     '((current-buffer) (window-point w) (buffer-chars-modified-tick) drgnx-statusbar--tick width compact
       (point-min) (point-max) major-mode vc-mode buffer-file-coding-system indent-tabs-mode tab-width
-      defining-kbd-macro mode-line-process default-directory
+      defining-kbd-macro mode-line-process default-directory (and mark-active (mark t))
       (bound-and-true-p flymake-mode) (bound-and-true-p flymake--mode-line-counter-cache) (drgnx-statusbar--flymake-backends)
       (bound-and-true-p eglot--managed-mode) (bound-and-true-p eglot--cached-server) (drgnx-statusbar--eglot-live-p)
       (drgnx-statusbar--indent-width)
@@ -395,17 +399,18 @@ In any other buffer: the stock mode line.  An error shows nothing and is recorde
                (or mode-line-format (default-value 'mode-line-format))))
     (error (drgnx-statusbar--note-error 'host err) nil)))
 
-(defvar drgnx-statusbar--last (make-vector 4 nil) "[BUFFER WINDOW POINT TICK] as of the last command.")
+(defvar drgnx-statusbar--last (make-vector 5 nil) "[BUFFER WINDOW POINT TICK MARK-ACTIVE] as of the last command.")
 
 (defun drgnx-statusbar--post-command ()
   "A mode line made by `:eval' does not know it shows the point: ask for a redraw when what it shows changed."
   (let ((l drgnx-statusbar--last) (b (current-buffer)) (w (selected-window)))
     (let ((pt (window-point w)) (tick (buffer-chars-modified-tick)))
-      (unless (and (eq (aref l 0) b) (eq (aref l 1) w) (eql (aref l 2) pt) (eql (aref l 3) tick))
+      (unless (and (eq (aref l 0) b) (eq (aref l 1) w) (eql (aref l 2) pt) (eql (aref l 3) tick)
+                   (eq (aref l 4) mark-active))
         ;; the most recently used editor window is only known after the bus's idle flush: redraw both bars then
         ;; (`editor-changed' covers another buffer; this covers the same buffer in two windows)
         (unless (eq (aref l 1) w) (drgnx-signal-post 'statusbar-window-changed))
-        (aset l 0 b) (aset l 1 w) (aset l 2 pt) (aset l 3 tick)
+        (aset l 0 b) (aset l 1 w) (aset l 2 pt) (aset l 3 tick) (aset l 4 mark-active)
         (force-mode-line-update)))))             ; this buffer's mode line only
 
 (defun drgnx-statusbar--editor-changed (&rest _)
@@ -578,6 +583,28 @@ does the first event after the hub connects (the count is not known yet: the hub
   (setq drgnx-statusbar--redraw-wanted t)
   (drgnx-statusbar-refresh))
 
+(defvar drgnx-statusbar-git-ask-seconds 5
+  "Seconds before the status bar asks drgnx's git cache again about the same folder.")
+(defvar drgnx-statusbar--git-asked nil "(FOLDER . TIME) of the last time the bar asked the git cache to read.")
+
+(defun drgnx-statusbar--ask-git (&rest _)
+  "On `editor-changed' (the signal bus, when Emacs is idle; never redisplay): have drgnx's git cache read the
+repository of the editor's file, at most every `drgnx-statusbar-git-ask-seconds' for one folder.  The answer comes back
+through `drgnx-git-changed-functions' and redraws the bars.  A remote file asks nothing."
+  (when-let* (((fboundp 'drgnx-git-refresh))
+              (w (and (fboundp 'drgnx-wb-editor-window) (drgnx-wb-editor-window)))
+              (file (buffer-local-value 'buffer-file-name (window-buffer w)))
+              ((not (file-remote-p file))))
+    (let ((dir (file-name-directory file)) (now (drgnx-statusbar--now)) (asked drgnx-statusbar--git-asked))
+      (unless (and asked (equal (car asked) dir) (< (- now (cdr asked)) drgnx-statusbar-git-ask-seconds))
+        (setq drgnx-statusbar--git-asked (cons dir now))
+        (drgnx-git-refresh file)))))
+
+(defun drgnx-statusbar--flymake-reported (&rest _)
+  "After a flymake backend reported (advice on `flymake--handle-report': flymake has no hook for it): redraw the bars,
+debounced, so the problems count follows reports that arrive while you do nothing.  Idempotent; removed with the mode."
+  (drgnx-statusbar-refresh t))
+
 (defconst drgnx-statusbar--host '(:eval (drgnx-statusbar-mode-line)))
 
 (defconst drgnx-statusbar--hooks
@@ -598,6 +625,8 @@ does the first event after the hub connects (the count is not known yet: the hub
         (dolist (h drgnx-statusbar--hooks) (add-hook (car h) (cdr h)))
         (dolist (e '(editor-changed statusbar-window-changed))
           (drgnx-signal-subscribe e #'drgnx-statusbar--editor-changed))
+        (drgnx-signal-subscribe 'editor-changed #'drgnx-statusbar--ask-git)
+        (advice-add 'flymake--handle-report :after #'drgnx-statusbar--flymake-reported)   ; flymake has no hook for this
         (when (fboundp 'drgnx-modal-indicator-off) (drgnx-modal-indicator-off))   ; the bar shows the modal state
         (setq drgnx-statusbar--agents-state (drgnx-statusbar--agent-counts))
         (when (drgnx-statusbar--hub-connected-p)            ; connected: count the jobs
@@ -606,6 +635,8 @@ does the first event after the hub connects (the count is not known yet: the hub
     (dolist (h drgnx-statusbar--hooks) (remove-hook (car h) (cdr h)))
     (dolist (e '(editor-changed statusbar-window-changed))
       (drgnx-signal-unsubscribe e #'drgnx-statusbar--editor-changed))
+    (drgnx-signal-unsubscribe 'editor-changed #'drgnx-statusbar--ask-git)
+    (advice-remove 'flymake--handle-report #'drgnx-statusbar--flymake-reported)
     (when (timerp drgnx-statusbar--refresh-timer) (cancel-timer drgnx-statusbar--refresh-timer))
     (setq drgnx-statusbar--refresh-timer nil)
     (clrhash drgnx-statusbar--memo)
@@ -626,10 +657,24 @@ the glyph table has no NAME."
   "What goes between the left segments: the glyph `sep' (` · ', or ` | ' in ASCII)."
   (let ((s (drgnx-statusbar--glyph 'sep))) (if (string-empty-p s) " · " s)))
 
+(defun drgnx-statusbar--git-branch ()
+  "The branch of this buffer's repository from drgnx's git cache, or nil: not a local repository, or not read yet.
+Reads the cache only (a remote buffer has no entry)."
+  (when-let* ((file (or buffer-file-name default-directory))
+              (root (drgnx-git-cached-root file)))
+    (drgnx-git-branch root)))
+
 (defun drgnx-statusbar--seg-branch ()
-  "The branch git put in `vc-mode' (\" Git-main\")."
-  (when (and (stringp vc-mode) (string-match "\\`[ ]*[[:alpha:]]+[-:@!?]\\(.+\\)" (substring-no-properties vc-mode)))
-    (concat (drgnx-statusbar--glyph 'branch) " " (match-string 1 (substring-no-properties vc-mode)))))
+  "`⑂ main ↑2 ↓1' from drgnx's git cache (ahead and behind its upstream, when it has one and they are not 0).
+Without a cache entry (a remote file, a repository not read yet) the branch git put in `vc-mode' (\" Git-main\"), or
+nothing."
+  (if-let* ((b (drgnx-statusbar--git-branch)))
+      (let ((ahead (plist-get b :ahead)) (behind (plist-get b :behind)))
+        (concat (drgnx-statusbar--glyph 'branch) " " (or (plist-get b :head) "(detached)")
+                (and ahead (> ahead 0) (format " %s%d" (drgnx-statusbar--glyph 'ahead) ahead))
+                (and behind (> behind 0) (format " %s%d" (drgnx-statusbar--glyph 'behind) behind))))
+    (when (and (stringp vc-mode) (string-match "\\`[ ]*[[:alpha:]]+[-:@!?]\\(.+\\)" (substring-no-properties vc-mode)))
+      (concat (drgnx-statusbar--glyph 'branch) " " (match-string 1 (substring-no-properties vc-mode))))))
 
 (defun drgnx-statusbar--flymake-count (type)
   "How many problems of TYPE flymake counts in this buffer (flymake caches the count until diagnostics change)."
@@ -641,10 +686,10 @@ the glyph table has no NAME."
     (let ((e (drgnx-statusbar--flymake-count :error)) (w (drgnx-statusbar--flymake-count :warning)))
       (cond
        ((or (> e 0) (> w 0))
-        (let ((glyph (drgnx-statusbar--glyph 'warning)))
-          (string-join (delq nil (list (and (> e 0) (propertize (format "%s %d" glyph e) 'face 'error))
-                                       (and (> w 0) (propertize (format "%s %d" glyph w) 'face 'warning))))
-                       " ")))
+        ;; `⚠ E W': the errors in the error face, the warnings in the warning face, a zero dimmed
+        (concat (drgnx-statusbar--glyph 'warning) " "
+                (propertize (number-to-string e) 'face (if (> e 0) 'error 'shadow)) " "
+                (propertize (number-to-string w) 'face (if (> w 0) 'warning 'shadow))))
        ;; a backend that has not reported yet: not "no problems" (as in stock flymake's Wait)
        ((cl-set-difference (flymake-running-backends) (flymake-reporting-backends))
         (propertize (drgnx-statusbar--glyph 'waiting) 'face 'shadow))
@@ -780,13 +825,21 @@ a keyboard macro being recorded, narrowing, and a remote directory."
     (let ((m (drgnx-modal-mode-line)))
       (cond ((stringp m) m) (m (format-mode-line m))))))
 
+(defun drgnx-statusbar--lsp-name (server)
+  "The name SERVER told eglot when it started (\"pyright\"), or nil: eglot's own cache, nothing is asked."
+  (when (and server (fboundp 'eglot--server-info))
+    (let ((name (plist-get (ignore-errors (eglot--server-info server)) :name)))
+      (and (stringp name) (not (string-empty-p name)) name))))
+
 (defun drgnx-statusbar--seg-lsp ()
   "Eglot's own cache: its server for this buffer (nothing is looked up)."
   (when (bound-and-true-p eglot--managed-mode)
     (let ((server (bound-and-true-p eglot--cached-server)))
-      (format "LSP %s" (cond ((null server) (drgnx-statusbar--glyph 'circle))
-                             ((and (fboundp 'jsonrpc-running-p) (not (jsonrpc-running-p server))) (drgnx-statusbar--glyph 'close))
-                             (t (drgnx-statusbar--glyph 'dot)))))))
+      (format "LSP%s %s"
+              (if-let* ((name (drgnx-statusbar--lsp-name server))) (concat ": " name) "")
+              (cond ((null server) (drgnx-statusbar--glyph 'circle))
+                    ((and (fboundp 'jsonrpc-running-p) (not (jsonrpc-running-p server))) (drgnx-statusbar--glyph 'close))
+                    (t (drgnx-statusbar--glyph 'dot)))))))
 
 (defvar-local drgnx-statusbar--line-cache nil
   "[TICK POINT-MIN LINE-START LINE]: the line number the position segment last worked out in this buffer.")
@@ -811,7 +864,8 @@ a change of the text (or of the narrowing) counts again from the top."
       (goto-char pt)
       (let* ((bol (pos-bol))
              (col (if (> (- pt bol) 2000) (- pt bol) (current-column))))   ; a minified line: characters, not columns
-        (format "Ln %d, Col %d" (drgnx-statusbar--line-at bol) (1+ col))))))
+        (format "Ln %d, Col %d%s" (drgnx-statusbar--line-at bol) (1+ col)
+                (if (use-region-p) (format " (%d selected)" (abs (- (mark t) pt))) ""))))))
 
 (defun drgnx-statusbar--indent-width ()
   "The indentation width the `indent' segment shows: `tab-width' with tabs, else the first of
@@ -852,6 +906,28 @@ a change of the text (or of the narrowing) counts again from the top."
   (let ((name (replace-regexp-in-string "\\(-ts\\)?-mode\\'" "" (symbol-name major-mode))))
     (if (<= (length name) 4) (upcase name) (capitalize (replace-regexp-in-string "-" " " name)))))
 
+(defun drgnx-statusbar--major-modes ()
+  "The major modes to choose from: those files and interpreters are mapped to, those remapped, and what derives
+from another (`define-derived-mode')."
+  (let ((modes (list 'fundamental-mode 'text-mode 'prog-mode)))
+    (dolist (alist (list auto-mode-alist interpreter-mode-alist magic-mode-alist major-mode-remap-alist))
+      (dolist (e alist)
+        (let ((m (cdr e)))
+          (when (consp m) (setq m (car m)))            ; (REGEXP FUNCTION FLAG) in `auto-mode-alist'
+          (when (and (symbolp m) m (commandp m)) (push m modes)))))
+    (mapatoms (lambda (s) (when (and (get s 'derived-mode-parent) (commandp s)) (push s modes))))
+    (sort (delete-dups modes) #'string<)))
+
+(defun drgnx-statusbar-change-mode (mode)
+  "Switch this buffer to the major mode MODE (asked with completion), honouring `major-mode-remap-alist'.
+Click the language in the status bar for it.  A command: it asks; the bar itself never does."
+  (interactive
+   (list (intern (completing-read (format-prompt "Major mode" (symbol-name major-mode))
+                                  (mapcar #'symbol-name (drgnx-statusbar--major-modes)) nil t nil nil
+                                  (symbol-name major-mode)))))
+  (funcall (or (and (fboundp 'major-mode-remap) (major-mode-remap mode)) mode))
+  (force-mode-line-update))
+
 (defun drgnx-statusbar--click-branch ()
   (interactive)
   (if (fboundp 'magit-status) (call-interactively 'magit-status) (call-interactively 'vc-dir)))
@@ -881,8 +957,8 @@ a change of the text (or of the narrowing) counts again from the top."
                                   :help "File encoding; click to change it")
   (drgnx-statusbar-define-segment 'eol :fn #'drgnx-statusbar--seg-eol :click 'set-buffer-file-coding-system
                                   :help "Line endings; click to change them")
-  (drgnx-statusbar-define-segment 'language :fn #'drgnx-statusbar--seg-language :click 'describe-mode
-                                  :help "Language (major mode); click for its help"))
+  (drgnx-statusbar-define-segment 'language :fn #'drgnx-statusbar--seg-language :click 'drgnx-statusbar-change-mode
+                                  :help "Language (major mode); click to change it"))
 
 ;;;; Setup (called by the module ui/face)
 
@@ -891,6 +967,9 @@ a change of the text (or of the narrowing) counts again from the top."
   (drgnx-command-define 'statusbar-toggle :category "View" :title "Toggle Status Bar" :menu '("View")
                         :command #'drgnx-statusbar-mode
                         :doc "Show the status bar (branch, problems, position, language …) or the plain mode line")
+  (drgnx-command-define 'statusbar-change-mode :category "Edit" :title "Change Language Mode"
+                        :command #'drgnx-statusbar-change-mode
+                        :doc "Switch this buffer's major mode (the language in the status bar), chosen with completion")
   (drgnx-statusbar--define-defaults)
   (drgnx-statusbar-mode 1))
 

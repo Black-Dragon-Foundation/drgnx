@@ -292,6 +292,7 @@
         (face-toggle-menu-bar :none "the palette; F10 opens the menu as text while the bar is hidden")
         (face-menu :none "F10 (remap of menu-bar-open)")
         (statusbar-toggle :none "the palette")
+        (statusbar-change-mode :none "click the language in the status bar; the palette")
         (quick-help "C-k C-i")
         (quick-help-toggle-hover :none "the palette")
         (quick-help-close "<escape>" "q" :map drgnx-quickhelp-showing-map)

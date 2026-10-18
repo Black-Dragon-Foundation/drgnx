@@ -6,10 +6,13 @@
 (require 'drgnx-agents)                 ; at load: the tests' `setf' of a session's slots expands with its accessors
 (load (expand-file-name "modules/ui/drgnx-face" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-statusbar" drgnx-dir) nil t)
+(require 'drgnx-git)
 (defvar drgnx-job-ui--badge)
 (defvar compilation-arguments)
 (defvar flymake-mode)
 (defvar eglot--cached-server)
+(defvar eglot--managed-mode)
+(defvar yaml-indent-offset)
 (defvar drgnx-statusbar-test--offset nil "An indentation variable of a test.")
 
 (defmacro drgnx-statusbar-test--with (&rest body)
@@ -207,34 +210,35 @@ Segments a, b, c are defined: their text is A, B, C."
 (ert-deftest drgnx-statusbar/default-segments-say-what-they-know ()
   (drgnx-statusbar-test--with
     (drgnx-statusbar--define-defaults)
-    (cl-flet ((text (id) (let ((s (funcall (plist-get (gethash id drgnx-statusbar--segments) :fn)))) (and s (substring-no-properties s)))))
-      (with-temp-buffer
-        (emacs-lisp-mode)
-        (insert "one\ntwo\nthree")
-        (setq buffer-file-coding-system 'utf-8-dos)
-        (setq-local indent-tabs-mode nil)
-        (setq-local tab-width 8)
-        (goto-char (+ (point-min) 5))
-        (should (equal (text 'position) "Ln 2, Col 2"))
-        (should (equal (text 'encoding) "UTF-8"))
-        (should (equal (text 'eol) "CRLF"))
-        (should (equal (text 'language) "Emacs Lisp"))
-        (should (string-match-p "\\`Spaces: [0-9]+\\'" (text 'indent)))
-        (setq buffer-file-coding-system 'utf-8-unix)
-        (should (equal (text 'eol) "LF"))
-        (setq-local indent-tabs-mode t)
-        (should (equal (text 'indent) "Tab Size: 8"))
-        ;; vc-mode is the cached branch
-        (setq-local vc-mode " Git-feature/x")
-        (should (string-match-p "feature/x" (text 'branch)))
-        (setq-local vc-mode nil)
-        (should-not (text 'branch)))
-      ;; no test run yet; misc has nothing to say in a plain buffer
-      (let ((drgnx-statusbar-tests-state nil) (drgnx-statusbar--tick (1+ drgnx-statusbar--tick)))
-        (should-not (text 'tests)))
-      (with-temp-buffer
-        (let ((global-mode-string nil) (mode-line-process nil) (defining-kbd-macro nil))
-          (should-not (text 'misc)))))))
+    (let ((drgnx-git--repos (make-hash-table :test #'equal)))     ; no repository read: the branch is `vc-mode''s
+      (cl-flet ((text (id) (let ((s (funcall (plist-get (gethash id drgnx-statusbar--segments) :fn)))) (and s (substring-no-properties s)))))
+        (with-temp-buffer
+          (emacs-lisp-mode)
+          (insert "one\ntwo\nthree")
+          (setq buffer-file-coding-system 'utf-8-dos)
+          (setq-local indent-tabs-mode nil)
+          (setq-local tab-width 8)
+          (goto-char (+ (point-min) 5))
+          (should (equal (text 'position) "Ln 2, Col 2"))
+          (should (equal (text 'encoding) "UTF-8"))
+          (should (equal (text 'eol) "CRLF"))
+          (should (equal (text 'language) "Emacs Lisp"))
+          (should (string-match-p "\\`Spaces: [0-9]+\\'" (text 'indent)))
+          (setq buffer-file-coding-system 'utf-8-unix)
+          (should (equal (text 'eol) "LF"))
+          (setq-local indent-tabs-mode t)
+          (should (equal (text 'indent) "Tab Size: 8"))
+          ;; vc-mode is the cached branch
+          (setq-local vc-mode " Git-feature/x")
+          (should (string-match-p "feature/x" (text 'branch)))
+          (setq-local vc-mode nil)
+          (should-not (text 'branch)))
+        ;; no test run yet; misc has nothing to say in a plain buffer
+        (let ((drgnx-statusbar-tests-state nil) (drgnx-statusbar--tick (1+ drgnx-statusbar--tick)))
+          (should-not (text 'tests)))
+        (with-temp-buffer
+          (let ((global-mode-string nil) (mode-line-process nil) (defining-kbd-macro nil))
+            (should-not (text 'misc))))))))
 
 (ert-deftest drgnx-statusbar/never-wider-with-wide-glyphs-display-text-and-a-right-only-bar ()
   (drgnx-statusbar-test--with
@@ -293,7 +297,7 @@ Segments a, b, c are defined: their text is A, B, C."
           (should (string-match-p "A · B" (drgnx-statusbar-mode-line))))))))
 
 (ert-deftest drgnx-statusbar/the-bar-asks-for-a-redraw-when-point-moves-or-the-text-changes ()
-  (let ((calls 0) (posted nil) (drgnx-statusbar--last (make-vector 4 nil)))
+  (let ((calls 0) (posted nil) (drgnx-statusbar--last (make-vector 5 nil)))
     (cl-letf (((symbol-function 'force-mode-line-update) (lambda (&optional all) (should-not all) (cl-incf calls)))
               ((symbol-function 'drgnx-signal-post) (lambda (e) (push e posted))))
       (with-temp-buffer
@@ -380,12 +384,221 @@ Segments a, b, c are defined: their text is A, B, C."
             (setq reporting '(b1))
             (should (equal (substring-no-properties (funcall text)) "✓"))
             (setq counts '(1 . 2))
-            (should (equal (substring-no-properties (funcall text)) "⚠ 1 ⚠ 2"))
+            (should (equal (substring-no-properties (funcall text)) "⚠ 1 2"))
             ;; problems already known are shown even while another backend still runs
             (setq running '(b1 b2))
-            (should (equal (substring-no-properties (funcall text)) "⚠ 1 ⚠ 2"))
+            (should (equal (substring-no-properties (funcall text)) "⚠ 1 2"))
             (setq-local flymake-mode nil)
             (should-not (funcall text))))))))
+
+;;;; A4: the editor's side (branch and sync, problems, language server, position, language)
+
+(defmacro drgnx-statusbar-test--git-cache (root &rest body)
+  "BODY with ROOT a repository the git cache knows (a branch plist is put in it per test), isolated from the rest."
+  (declare (indent 1))
+  `(let ((drgnx-git--repos (make-hash-table :test #'equal)) (drgnx-git--roots (make-hash-table :test #'equal))
+         (,root "/tmp/drgnx-sb-repo/"))
+     (puthash "/tmp/drgnx-sb-repo/src/" ,root drgnx-git--roots)
+     ,@body))
+
+(defun drgnx-statusbar-test--branch-text (branch &optional vc)
+  "The branch segment in a buffer of /tmp/drgnx-sb-repo/src/ when the cache holds BRANCH (and `vc-mode' VC)."
+  (puthash "/tmp/drgnx-sb-repo/" (list :branch branch) drgnx-git--repos)
+  (with-temp-buffer
+    (setq buffer-file-name "/tmp/drgnx-sb-repo/src/a.el")
+    (setq-local vc-mode vc)
+    (let ((s (drgnx-statusbar--seg-branch))) (and s (substring-no-properties s)))))
+
+(ert-deftest drgnx-statusbar/branch-segment-reads-the-cache ()
+  (drgnx-statusbar-test--with
+    (drgnx-statusbar-test--git-cache root
+      (let ((fail (lambda (&rest a) (ert-fail (format "the branch segment reached outside the cache: %S" a)))))
+        (cl-letf (((symbol-function 'make-process) fail) ((symbol-function 'call-process) fail)
+                  ((symbol-function 'process-file) fail) ((symbol-function 'locate-dominating-file) fail)
+                  ((symbol-function 'drgnx-git-refresh) fail))
+          (should (equal (drgnx-statusbar-test--branch-text '(:head "main" :ahead 2 :behind 1)) "⑂ main ↑2 ↓1"))
+          (should (equal (drgnx-statusbar-test--branch-text '(:head "main" :ahead 0 :behind 3)) "⑂ main ↓3"))
+          (should (equal (drgnx-statusbar-test--branch-text '(:head "main" :ahead 4 :behind 0)) "⑂ main ↑4"))
+          (should (equal (drgnx-statusbar-test--branch-text '(:head "main" :ahead 0 :behind 0)) "⑂ main"))
+          (should (equal (drgnx-statusbar-test--branch-text '(:head "dev")) "⑂ dev"))     ; no upstream
+          (should (equal (drgnx-statusbar-test--branch-text '(:head nil :detached t)) "⑂ (detached)"))
+          ;; the cache wins over `vc-mode'
+          (should (equal (drgnx-statusbar-test--branch-text '(:head "main") " Git-other") "⑂ main"))
+          ;; no branch read yet: what `vc-mode' says, else nothing
+          (should (equal (drgnx-statusbar-test--branch-text nil " Git-other") "⑂ other"))
+          (should-not (drgnx-statusbar-test--branch-text nil nil))
+          ;; a remote buffer: `vc-mode', never git
+          (with-temp-buffer
+            (setq buffer-file-name "/ssh:host:/tmp/drgnx-sb-repo/src/a.el" default-directory "/ssh:host:/tmp/drgnx-sb-repo/src/")
+            (setq-local vc-mode " Git-remote")
+            (should (equal (substring-no-properties (drgnx-statusbar--seg-branch)) "⑂ remote"))
+            (setq-local vc-mode nil)
+            (should-not (drgnx-statusbar--seg-branch))))))))
+
+(ert-deftest drgnx-statusbar/problems-counts-by-severity ()
+  (drgnx-statusbar-test--with
+    (let ((counts '(1 . 1)))
+      (cl-letf (((symbol-function 'flymake-running-backends) (lambda () '(b)))
+                ((symbol-function 'flymake-reporting-backends) (lambda () '(b)))
+                ((symbol-function 'flymake--mode-line-counter)
+                 (lambda (type)
+                   (let ((n (if (eq type :error) (car counts) (cdr counts))))
+                     (and (> n 0) `("" (:propertize ,(number-to-string n) face x)))))))
+        (with-temp-buffer
+          (setq-local flymake-mode t)
+          (let ((s (drgnx-statusbar--seg-problems)))
+            (should (equal (substring-no-properties s) "⚠ 1 1"))
+            (should (eq (get-text-property 2 'face s) 'error))
+            (should (eq (get-text-property 4 'face s) 'warning)))
+          (setq counts '(0 . 3))
+          (let ((s (drgnx-statusbar--seg-problems)))
+            (should (equal (substring-no-properties s) "⚠ 0 3"))
+            (should (eq (get-text-property 2 'face s) 'shadow))
+            (should (eq (get-text-property 4 'face s) 'warning))))))))
+
+(ert-deftest drgnx-statusbar/problems-counts-what-flymake-reports ()
+  "A real flymake with a backend that reports one error and one warning."
+  (require 'flymake)
+  (drgnx-statusbar-test--with
+    (with-temp-buffer
+      (insert "one\ntwo\n")
+      (let ((flymake-diagnostic-functions
+             (list (lambda (report-fn &rest _)
+                     (funcall report-fn (list (flymake-make-diagnostic (current-buffer) 1 3 :error "e")
+                                              (flymake-make-diagnostic (current-buffer) 5 7 :warning "w")))))))
+        (flymake-mode 1)
+        (unwind-protect
+            (progn (flymake-start)
+                   (should (equal (substring-no-properties (drgnx-statusbar--seg-problems)) "⚠ 1 1")))
+          (flymake-mode -1))))))
+
+(ert-deftest drgnx-statusbar/a-flymake-report-redraws-the-bars ()
+  (require 'flymake)
+  (let ((calls nil))
+    (cl-letf (((symbol-function 'drgnx-statusbar-refresh) (lambda (&optional changed) (push changed calls))))
+      (advice-add 'flymake--handle-report :after #'drgnx-statusbar--flymake-reported)
+      (advice-add 'flymake--handle-report :after #'drgnx-statusbar--flymake-reported)       ; again: still one
+      (unwind-protect
+          (with-temp-buffer
+            (should (= 1 (length (seq-filter (lambda (f) (eq f #'drgnx-statusbar--flymake-reported))
+                                             (let (l) (advice-mapc (lambda (f _) (push f l)) 'flymake--handle-report) l)))))
+            (let* (report
+                   (flymake-diagnostic-functions (list (lambda (report-fn &rest _) (setq report report-fn)))))
+              (flymake-mode 1)
+              (unwind-protect
+                  (progn (flymake-start)
+                         (should-not calls)
+                         (funcall report nil)              ; an asynchronous backend answers later
+                         (should (equal calls '(t))))
+                (flymake-mode -1))))
+        (advice-remove 'flymake--handle-report #'drgnx-statusbar--flymake-reported)))))
+
+(ert-deftest drgnx-statusbar/lsp-says-the-server-state ()
+  (drgnx-statusbar-test--with
+    (let ((alive t) (info '(:name "pyright")))
+      (cl-letf (((symbol-function 'jsonrpc-running-p) (lambda (_s) alive))
+                ((symbol-function 'eglot--server-info) (lambda (_s) info)))
+        (with-temp-buffer
+          (should-not (drgnx-statusbar--seg-lsp))                          ; eglot does not manage the buffer
+          (setq-local eglot--managed-mode t)
+          (setq-local eglot--cached-server nil)
+          (should (equal (drgnx-statusbar--seg-lsp) "LSP ○"))              ; starting
+          (setq-local eglot--cached-server 'server)
+          (should (equal (drgnx-statusbar--seg-lsp) "LSP: pyright ●"))     ; connected
+          (setq info nil)
+          (should (equal (drgnx-statusbar--seg-lsp) "LSP ●"))              ; a server that did not say its name
+          (setq alive nil)
+          (should (equal (drgnx-statusbar--seg-lsp) "LSP ✕")))))))         ; exited
+
+(ert-deftest drgnx-statusbar/position-indent-encoding-eol-language ()
+  (drgnx-statusbar-test--with
+    (let ((file (make-temp-file "drgnx-sb" nil ".yml")) (drgnx-statusbar-indent-vars '(yaml-indent-offset)))
+      (unwind-protect
+          (progn
+            (let ((coding-system-for-write 'utf-8-dos)) (write-region "a: 1\nb:\n  - c\n" nil file nil 'silent))
+            (let ((buf (find-file-noselect file)) (transient-mark-mode t))
+              (unwind-protect
+                  (with-current-buffer buf
+                    (setq-local major-mode 'yaml-ts-mode)               ; the segment reads the name, not the grammar
+                    (setq-local yaml-indent-offset 2)
+                    (setq-local indent-tabs-mode nil)
+                    (goto-char (point-min)) (forward-line 2) (forward-char 4)
+                    (should (equal (substring-no-properties (drgnx-statusbar--seg-position)) "Ln 3, Col 5"))
+                    (should (equal (drgnx-statusbar--seg-indent) "Spaces: 2"))
+                    (should (equal (drgnx-statusbar--seg-encoding) "UTF-8"))
+                    (should (equal (drgnx-statusbar--seg-eol) "CRLF"))
+                    (should (equal (drgnx-statusbar--seg-language) "YAML"))
+                    ;; with a selection
+                    (push-mark (point) t t)
+                    (backward-char 3)
+                    (should (equal (drgnx-statusbar--seg-position) "Ln 3, Col 2 (3 selected)"))
+                    (deactivate-mark)
+                    (should (equal (drgnx-statusbar--seg-position) "Ln 3, Col 2"))
+                    (setq-local indent-tabs-mode t)
+                    (should (string-match-p "\\`Tab Size: [0-9]+\\'" (drgnx-statusbar--seg-indent))))
+                (kill-buffer buf))))
+        (delete-file file)))))
+
+(ert-deftest drgnx-statusbar/a-selection-is-in-the-memo-key ()
+  (drgnx-statusbar-test--with
+    (drgnx-statusbar-test--state
+      (let ((calls 0) (transient-mark-mode t))
+        (drgnx-statusbar-define-segment 'a :fn (lambda () (cl-incf calls) "A"))
+        (cl-letf (((symbol-function 'force-mode-line-update) #'ignore))
+          (drgnx-statusbar-test--in-buffer #'emacs-lisp-mode
+            (insert "one two three")
+            (goto-char 5)
+            (drgnx-statusbar-mode-line)
+            (cl-flet ((rebuilt-p () (let ((c calls)) (drgnx-statusbar-mode-line) (/= calls c))))
+              (should-not (rebuilt-p))
+              (push-mark 1 t t)                      ; a region: the mark moved and became active
+              (should (rebuilt-p)) (should-not (rebuilt-p))
+              (deactivate-mark)                      ; it went away with point where it was
+              (should (rebuilt-p)) (should-not (rebuilt-p)))))))))
+
+(ert-deftest drgnx-statusbar/language-click-may-ask-but-render-never-does ()
+  (drgnx-statusbar-test--with
+    (drgnx-statusbar--define-defaults)
+    (let ((asked nil))
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (&rest _) (setq asked t) "text-mode"))
+                ((symbol-function 'read-string) (lambda (&rest _) (setq asked t) "")))
+        (with-temp-buffer
+          (emacs-lisp-mode)
+          (setq buffer-file-name "/tmp/drgnx-sb-x.el")
+          (let ((drgnx-statusbar-left '(branch problems position)) (drgnx-statusbar-right '(lsp indent encoding eol language)))
+            (dotimes (_ 5) (drgnx-statusbar-render 120) (drgnx-statusbar-render 120 t)))
+          (should-not asked)
+          ;; the language is a click on a command, and the command asks
+          (should (eq (plist-get (gethash 'language drgnx-statusbar--segments) :click) 'drgnx-statusbar-change-mode))
+          (should (commandp 'drgnx-statusbar-change-mode))
+          (let ((buffer-file-name nil)) (call-interactively 'drgnx-statusbar-change-mode))
+          (should asked)
+          (should (eq major-mode 'text-mode)))))))
+
+(ert-deftest drgnx-statusbar/the-bar-asks-git-to-read-the-editors-repository-at-most-every-few-seconds ()
+  (let ((asked nil) (now 100.0) (drgnx-statusbar--git-asked nil) (file "/tmp/drgnx-sb-a/x.el")
+        (buf (generate-new-buffer " *sb-git*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf (setq buffer-file-name file))
+          (cl-letf (((symbol-function 'drgnx-wb-editor-window) (lambda () (selected-window)))
+                    ((symbol-function 'window-buffer) (lambda (&optional _w) buf))
+                    ((symbol-function 'drgnx-git-refresh) (lambda (path &optional _wait) (push path asked)))
+                    ((symbol-function 'drgnx-statusbar--now) (lambda () now)))
+            (drgnx-statusbar--ask-git)
+            (should (equal asked (list file)))
+            (setq now 102.0) (drgnx-statusbar--ask-git)                    ; too soon
+            (should (= 1 (length asked)))
+            (setq now 106.0) (drgnx-statusbar--ask-git)                    ; later
+            (should (= 2 (length asked)))
+            (with-current-buffer buf (setq buffer-file-name "/tmp/drgnx-sb-b/y.el"))   ; another folder at once
+            (drgnx-statusbar--ask-git)
+            (should (= 3 (length asked)))
+            (with-current-buffer buf (setq buffer-file-name "/ssh:host:/tmp/z.el"))    ; remote: nothing
+            (setq now 200.0) (drgnx-statusbar--ask-git)
+            (should (= 3 (length asked)))))
+      (kill-buffer buf))))
 
 (ert-deftest drgnx-statusbar/misc-shows-process-narrowing-recording-and-remote ()
   (drgnx-statusbar-test--with
@@ -865,6 +1078,9 @@ Segments a, b, c are defined: their text is A, B, C."
               (drgnx-statusbar-mode 1)                       ; idempotent
               (dolist (h hooks)
                 (should (= 1 (seq-count (lambda (f) (eq f (cdr h))) (default-value (car h))))))
+              (should (= 1 (seq-count (lambda (f) (eq f #'drgnx-statusbar--ask-git))
+                                      (alist-get 'editor-changed drgnx-signal--subscribers))))
+              (should (advice-member-p #'drgnx-statusbar--flymake-reported 'flymake--handle-report))
               (drgnx-statusbar-refresh)
               (should (timerp drgnx-statusbar--refresh-timer))
               (puthash (selected-window) [x] drgnx-statusbar--memo)
@@ -872,6 +1088,8 @@ Segments a, b, c are defined: their text is A, B, C."
                 (drgnx-statusbar-mode -1)
                 (should-not (memq timer timer-list)))
               (dolist (h hooks) (should-not (memq (cdr h) (default-value (car h)))))
+              (should-not (memq #'drgnx-statusbar--ask-git (alist-get 'editor-changed drgnx-signal--subscribers)))
+              (should-not (advice-member-p #'drgnx-statusbar--flymake-reported 'flymake--handle-report))
               (should-not drgnx-statusbar--refresh-timer)
               (should (= 0 (hash-table-count drgnx-statusbar--memo))))
           (drgnx-statusbar-mode (if was 1 -1)))))))

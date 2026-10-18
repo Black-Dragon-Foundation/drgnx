@@ -120,8 +120,8 @@ Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch.
 
 | Left | Shows | Click |
 |---|---|---|
-| `branch` | `⑂ main` (the branch, from the buffer's version control) | the repository status |
-| `problems` | `✓` when flymake finds none, `◐` while a checker has not reported yet, else `⚠ 1` (errors) and `⚠ 2` (warnings) | the problems list |
+| `branch` | `⑂ main ↑2 ↓1`: the branch, and how many commits it is ahead of and behind its upstream (a count of 0 is left out) | the repository status |
+| `problems` | `✓` when flymake finds none, `◐` while a checker has not reported yet, else `⚠ 1 2`: the errors, then the warnings, each in its own colour | the problems list |
 | `tests` | `✓ tests 41/41` or `✕ tests 2 failed`: the last test run | its output |
 | `jobs` | `◎ 2 jobs` while jobs run, and `⚑1` when cards of jobs wait on you | job status |
 | `agents` | `◎ 1 busy`, and `◐ 1 waiting on you` (in the error colour) when something waits for your answer | the Agents tab |
@@ -130,12 +130,12 @@ Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch.
 
 | Right | Shows | Click |
 |---|---|---|
-| `lsp` | `LSP ●` (connected), `○` (starting), `✕` (exited) when eglot manages the buffer | the server's events |
-| `position` | `Ln 12, Col 4` | go to a line |
+| `lsp` | `LSP: pyright ●` (connected; the name the server gave), `LSP ○` (starting), `LSP ✕` (exited) when eglot manages the buffer | the server's events |
+| `position` | `Ln 12, Col 4`, and `(15 selected)` with a selection | go to a line |
 | `indent` | `Spaces: 2` or `Tab Size: 8` | tabs or spaces |
 | `encoding` | `UTF-8` | change it |
 | `eol` | `LF`, `CRLF` or `CR` | change it |
-| `language` | `YAML`, `Python`, `Emacs Lisp` | the mode's help |
+| `language` | `YAML`, `Python`, `Emacs Lisp` | **Change Language Mode**: pick another major mode for the buffer |
 
 The most recently used editor window shows the whole bar; the other editor groups show `drgnx-statusbar-compact`
 (position and language). The bar is for the buffers you edit: a buffer that visits a file, or is code, text or
@@ -152,8 +152,18 @@ unexpected`, or `bin/drgnx test --ui`'s `ui ERT: 27/27 passed` (`drgnx-statusbar
 `✓ tests 41/41`, or `✕ tests 2 failed`; a click shows that compilation. Only the last 64 KB of the output are
 searched. Other code reports a run with `(drgnx-statusbar-note-tests PASSED FAILED SOURCE)`.
 
-**Branch.** The branch is the one Emacs's version control put in `vc-mode`: a checkout made outside Emacs shows at
-the next VC refresh of the buffer (saving it, or `M-x vc-refresh-state`).
+**Branch.** The branch and its counts come from drgnx's own git cache (the one behind the file marks in the Explorer):
+one `git status` per repository, in the background, which never touches a remote, so the counts are against the
+upstream as your last fetch left it. When you switch to a file, the bar asks the cache to read that file's repository
+again, at most every 5 seconds (`drgnx-statusbar-git-ask-seconds`); the Explorer's own refreshes update it too. Until
+the cache has read the repository, and for a file on a remote machine (never asked), the bar shows the branch Emacs's
+version control put in `vc-mode`, or nothing. A detached HEAD reads `⑂ (detached)`; a branch with no upstream has no
+counts.
+
+**Problems.** The counts are flymake's own. A checker that reports while you do nothing (a language server, a slow
+linter) redraws the bars a moment later: flymake has no hook for it, so the bar adds one small named advice,
+`drgnx-statusbar--flymake-reported`, on `flymake--handle-report`, which only asks for a redraw; it comes off when
+`drgnx-statusbar-mode` is turned off.
 
 **Jobs.** `◎ 2 jobs` counts the jobs the hub says are running (asked when the mode starts or the first hub event
 arrives, then when a job or a card changes — one question at a time, never on redisplay; nothing while there is no
@@ -170,7 +180,7 @@ trade the full and the compact bar a moment later, when the most recently used e
 agents, the hub or git report a change (`drgnx-statusbar-refresh`: at most one redraw every 0.2 seconds, however many
 changes come in, and only when a count changed; git always redraws). Each window keeps the bar it last drew, with
 what it was drawn from (the buffer, point, the text's change count, the width, full or compact, the counts above and
-the buffer's version-control, encoding, indentation width, mode, narrowing, checker and language-server state): a
+the buffer's version-control, selection, encoding, indentation width, mode, narrowing, checker and language-server state): a
 redisplay that changes none of these reuses it, so a window you do not type in costs almost nothing however often
 Emacs redraws the screen. Shown up to one keystroke late, because nothing announces them: a failed segment's retry
 after 10 seconds, a change inside the buffer's process indicator (`mode-line-process`) that keeps the same construct,
