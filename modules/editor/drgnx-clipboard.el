@@ -12,8 +12,10 @@
 ;;   command or none (a timer, Lisp), reaches the clipboard as in plain Emacs.  `drgnx-clipboard-force' makes a
 ;;   kill reach it whatever the command.  This is also what a terminal's OSC 52 copy goes through.
 ;; - A clipboard owner that does not answer: reading the clipboard waits for the owner, and Emacs by default waits
-;;   for ever.  `drgnx-clipboard-read-timeout' sets the wait (when the user did not), and a read that fails gives
-;;   nil, so a yank pastes from the kill ring (one message per session).
+;;   for ever.  `drgnx-clipboard-read-timeout' sets the wait (when the user did not), so the wait ends after that
+;;   long.  Emacs's own paste function (`gui-selection-value') turns the timeout error into its own message
+;;   ("gui-get-selection: (error ...)") and returns nil: the yank pastes from the kill ring, and Emacs reports it, not
+;;   drgnx.  drgnx's guard catches the error of a paste function that does not demote it (one message per session).
 ;; - Selecting text: a manager that syncs the selection (PRIMARY) with the clipboard, or records it, makes every selection in Emacs
 ;;   a history entry.  drgnx finds Klipper, CopyQ and GPaste doing that and, with
 ;;   `drgnx-clipboard-publish-selection' `auto', turns `select-active-regions' off.
@@ -92,7 +94,9 @@ Later kills of the same command follow it: a command such as `kill-whole-line' k
   (setq drgnx-clipboard--in-command nil drgnx-clipboard--decision nil))
 
 (defun drgnx-clipboard--command-error (&rest _)
-  "`command-error-function' (before): a command that signals skips `post-command-hook', so it ends here."
+  "`command-error-function' (before): a command that signals skips `post-command-hook', so it ends here.
+Added to the global value: where the variable is buffer-local (the minibuffer sets it) a command that errors there
+does not end the command here; the next `pre-command-hook' does."
   (drgnx-clipboard--end-command))
 
 (defun drgnx-clipboard--local-command-p ()
@@ -117,8 +121,11 @@ reaches it once.  With no command running (a timer, a filter, Lisp) it reaches i
 (defvar drgnx-clipboard--warned nil "Non-nil once the slow-owner message was shown this session.")
 
 (defun drgnx-clipboard--paste (orig)
-  "Around `interprogram-paste-function': ORIG's answer; nil, with one message, when it fails
-(an owner that did not answer in time), so the paste comes from the kill ring."
+  "Around `interprogram-paste-function': ORIG's answer; nil, with one message, when ORIG signals an error
+(an owner that did not answer in time), so the paste comes from the kill ring.
+Emacs's own `gui-selection-value' never signals: it demotes the error to a message of its own
+(\"gui-get-selection: ...\"), so with it this guard stays silent and Emacs does the reporting.  It is for a paste
+function that does not demote."
   (when orig
     (condition-case nil
         (funcall orig)

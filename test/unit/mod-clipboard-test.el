@@ -27,11 +27,13 @@ uninstalled afterwards."
           (interprogram-cut-function (lambda (text) (push text drgnx-clip-test--pushed)))
           (interprogram-paste-function ,paste-function)
           (kill-ring nil) (kill-ring-yank-pointer nil) (kill-do-not-save-duplicates nil)
-          (command-error-function command-error-function) (pre-command-hook nil) (post-command-hook nil) (after-make-frame-functions nil)
+          (command-error-function command-error-function)
+          (pre-command-hook nil) (post-command-hook nil) (after-make-frame-functions nil)
           (select-active-regions t) (x-selection-timeout 0) (pgtk-selection-timeout 0)
           (drgnx-clipboard-kills 'region) (drgnx-clipboard-force nil)
           (drgnx-clipboard-publish-selection 'auto) (drgnx-clipboard-read-timeout 1.5)
-          (drgnx-clipboard--installed nil)          (drgnx-clipboard--decision nil) (drgnx-clipboard--in-command nil) (drgnx-clipboard--warned nil) (drgnx-clipboard--timeout-set nil)
+          (drgnx-clipboard--installed nil) (drgnx-clipboard--decision nil) (drgnx-clipboard--in-command nil)
+          (drgnx-clipboard--warned nil) (drgnx-clipboard--timeout-set nil)
           (drgnx-clipboard--state nil) (drgnx-clipboard--saved-regions nil) (drgnx-clipboard--graphical-seen nil)
           (drgnx-clipboard--generation 0))
      (make-directory drgnx-clip-test--bin t)
@@ -226,6 +228,22 @@ uninstalled afterwards."
       (should (equal (seq-filter (lambda (m) (string-prefix-p "drgnx:" m)) messages)
                      '("drgnx: the clipboard owner didn't answer in 1.5 s; pasted from Emacs's own copies"))))))
 
+(ert-deftest drgnx-clip/emacs-own-paste-path-reports-the-timeout-itself ()
+  ;; the default paste function (`gui-selection-value') demotes the error of `gui-get-selection' to a message, so
+  ;; drgnx's guard never sees it: Emacs says it, the paste comes from the kill ring, drgnx says nothing
+  (let ((messages nil))
+    (drgnx-clip-test--env #'gui-selection-value
+      (drgnx-clipboard-install)
+      (kill-new "from emacs")
+      (cl-letf (((symbol-function 'gui-get-selection)
+                 (lambda (&rest _) (error "Timed out waiting for reply from selection owner")))
+                ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) messages))))
+        (with-temp-buffer
+          (yank)
+          (should (equal (buffer-string) "from emacs"))))
+      (should (seq-some (lambda (m) (string-match-p "\\`gui-get-selection: .*Timed out" m)) messages))
+      (should-not (seq-some (lambda (m) (string-prefix-p "drgnx:" m)) messages)))))
+
 (ert-deftest drgnx-clip/the-timeout-is-set-only-at-the-standard-value ()
   (drgnx-clip-test--env nil
     (setq x-selection-timeout 0 pgtk-selection-timeout 3000)   ; the user chose pgtk's
@@ -396,6 +414,7 @@ uninstalled afterwards."
   (drgnx-clip-test--env nil
     (drgnx-clipboard-install)
     (should (advice-function-member-p #'drgnx-clipboard--command-error (default-value 'command-error-function)))
+    ;; where the variable is buffer-local (the minibuffer) the layer is not seen: said in the docs
     (drgnx-clipboard--new-command)
     (drgnx-clipboard--command-error '(error "x") "" nil)
     (let ((this-command 'kill-line))

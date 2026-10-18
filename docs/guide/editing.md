@@ -109,9 +109,11 @@ history) keep every change of the clipboard, and Emacs by default changes it a l
   `drgnx-clipboard-kills` to `all` gives Emacs's own behaviour back; code can bind `drgnx-clipboard-force` to push a
   kill whatever the command. A command's first kill decides for the whole command, and it pushes once.
 - **A clipboard owner that does not answer cannot freeze Emacs for ever.** Emacs waits for ever for the program that
-  owns the clipboard; a stuck one froze the whole session. drgnx waits `drgnx-clipboard-read-timeout` seconds (1.5)
-  and a paste that gets no answer comes from the kill ring, with one message per session ("the clipboard owner
-  didn't answer in 1.5 s"). It sets the timeout variable only while it is at Emacs's standard 0, so a value you
+  owns the clipboard; a stuck one froze the whole session. drgnx makes the wait end after
+  `drgnx-clipboard-read-timeout` seconds (1.5). Emacs then reports it itself in the echo area (`gui-get-selection:
+  (error "Timed out waiting for reply from selection owner")`) and the paste comes from the kill ring; drgnx adds
+  no message of its own on that path (its once-per-session message only appears for a paste function that does not
+  catch the error, which Emacs's own does). It sets the timeout variable only while it is at Emacs's standard 0, so a value you
   chose stays. What is guaranteed depends on the window system; the wait is still a wait (Emacs does not take
   input for up to 1.5 s per paste):
 
@@ -127,10 +129,9 @@ history) keep every change of the clipboard, and Emacs by default changes it a l
   or `check_selection` on, and GPaste with *synchronize clipboards* or *primary to history* on (asked from
   `gsettings` in the background, one second at most; either one alone is enough, because *primary to history* puts
   every selection into the history and *synchronize clipboards* copies it to the clipboard, which GPaste records),
-  on X11 and Wayland windows. With
-  `drgnx-clipboard-publish-selection` at `auto` (the default) it then turns `select-active-regions` off; `t` makes
-  selections publish (a setting such as `only` that already publishes stays), `nil` never does. The doctor shows what was found and what drgnx changed
-  (`drgnx-clipboard-doctor-facts`).
+  on X11 and Wayland windows. With `drgnx-clipboard-publish-selection` at `auto` (the default) it then turns
+  `select-active-regions` off; `t` makes selections publish (a setting such as `only` that already publishes stays),
+  `nil` never does. The doctor shows what was found and what drgnx changed (`drgnx-clipboard-doctor-facts`).
 
 Module `editor/clipboard`. Tests: `test/unit/mod-clipboard-test.el`.
 
