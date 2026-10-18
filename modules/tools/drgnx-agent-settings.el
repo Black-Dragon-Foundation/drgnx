@@ -28,6 +28,7 @@
 (require 'drgnx-agent-check)
 
 (declare-function drgnx-wb-place "drgnx-rules")
+(declare-function drgnx-coord-mcp-outside-spec "drgnx-coord-mcp")
 (declare-function drgnx-agents-profile "drgnx-agents")
 (declare-function drgnx-agent-session-p "drgnx-agents")
 (declare-function drgnx-agent-session-profile "drgnx-agents")
@@ -255,6 +256,26 @@
                    (propertize "No project: the user's settings only" 'face 'drgnx-agent-settings-dim))
             "\n")))
 
+(defconst drgnx-agent-settings--report-name "drgnx"
+  "The name of the MCP server that makes an agent report to drgnx (`drgnx-coord-mcp-outside-spec').")
+
+(defun drgnx-agent-settings--reporting-item ()
+  "The MCP server called `drgnx-agent-settings--report-name' on this page (in any scope), or nil."
+  (seq-find (lambda (i) (and (eq (plist-get i :section) 'mcp)
+                             (equal (plist-get i :name) drgnx-agent-settings--report-name)))
+            (plist-get drgnx-agent-settings--data :items)))
+
+(defun drgnx-agent-settings--insert-report ()
+  "\"Reports to drgnx: yes/no\" with the button that adds or removes the coordination server."
+  (let ((on (drgnx-agent-settings--reporting-item)))
+    (insert (propertize "Reports to drgnx: " 'face 'drgnx-agent-settings-dim)
+            (if on (propertize "yes" 'face 'drgnx-agent-settings-ok) "no")
+            "  ")
+    (drgnx-agent-settings--button (if on "[Remove drgnx]" "[Add drgnx]") #'drgnx-agent-settings-report
+                                  (if on "Take the coordination server out of this agent's settings"
+                                    "Add the coordination server: the agent then shows in the Work cockpit"))
+    (insert "\n")))
+
 (defun drgnx-agent-settings--insert-problems ()
   "Files that do not parse, with the line."
   (when-let* ((problems (plist-get drgnx-agent-settings--data :problems)))
@@ -430,6 +451,7 @@ route with the gateway turned off and restrictions set says that its agents do n
         (drgnx-agent-settings--results (ignore-errors (drgnx-agent-check-results))))
     (erase-buffer)
     (drgnx-agent-settings--insert-agents)
+    (drgnx-agent-settings--insert-report)
     (drgnx-agent-settings--insert-problems)
     (drgnx-agent-settings--insert-routes)
     (pcase-dolist (`(,section . ,title) drgnx-agent-settings--sections)
@@ -921,6 +943,29 @@ The answer may hold a secret (a token in a command line or URL): it is kept out 
   (let ((item (drgnx-agent-settings--fresh (drgnx-agent-settings--item-at-point "turn on or off"))))
     (drgnx-agent-settings--write 'toggle item (and (eq (plist-get item :section) 'mcp) (plist-get item :from)))))
 
+(defun drgnx-agent-settings-report ()
+  "Add the `drgnx' MCP server to this agent's user settings, or take it out when it is there: an agent with it shows
+in the Work cockpit.  Asks first, names the file, and writes no token or key (the server needs none)."
+  (interactive)
+  (drgnx-agent-settings--page)
+  (let ((kind drgnx-agent-settings--kind)
+        (on (drgnx-agent-settings--reporting-item)))
+    (if on
+        (progn
+          (drgnx-agent-settings--refuse-read-only on)
+          (when (yes-or-no-p (format "Stop %s reporting to drgnx (remove drgnx from %s)? "
+                                     (drgnx-agent-config-title kind)
+                                     (abbreviate-file-name (or (plist-get on :file) "its file"))))
+            (drgnx-agent-settings--write 'remove (drgnx-agent-settings--fresh on) (plist-get on :from))))
+      (require 'drgnx-coord-mcp)
+      (let ((file (nth 2 (assq 'user (drgnx-agent-config-scopes kind 'mcp drgnx-agent-settings--root)))))
+        (when (yes-or-no-p (format "Let %s report to drgnx (add the drgnx MCP server to %s)? "
+                                   (drgnx-agent-config-title kind) (abbreviate-file-name (or file "its user settings"))))
+          (drgnx-agent-settings--write
+           'add (list :kind kind :section 'mcp :name drgnx-agent-settings--report-name :from 'user :enabled t
+                      :spec (drgnx-coord-mcp-outside-spec kind))
+           'user))))))
+
 (defun drgnx-agent-settings--ask-slugs (prompt current)
   "Provider slugs asked with PROMPT (comma separated; empty for none), CURRENT shown: a list of strings."
   (let ((slugs (split-string (read-string prompt (and current (string-join current ", "))) "[ ,]+" t)))
@@ -985,6 +1030,8 @@ for every OpenRouter route, saved in agents.eld; it applies through drgnx's gate
                    (agent-settings-toggle "Turn On or Off" drgnx-agent-settings-toggle "This MCP server or skill")
                    (agent-settings-openrouter "OpenRouter Restrictions…" drgnx-agent-settings-openrouter
                                               "Which providers OpenRouter may use for the agents, and whether they may keep data")
+                   (agent-settings-report "Report to drgnx" drgnx-agent-settings-report
+                                          "Add the drgnx coordination server to this agent (or take it out): it then shows in the Work cockpit")
                    (agent-settings-new-skill "New Skill…" drgnx-agent-settings-new-skill "A SKILL.md with its name and description")
                    (agent-settings-open-file "Open Its File" drgnx-agent-settings-open-file "The file this line comes from")
                    (agent-settings-other "Other Agent…" drgnx-agent-settings-other "Another agent's settings, same project")))

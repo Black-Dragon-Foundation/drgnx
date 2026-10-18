@@ -85,9 +85,29 @@ The same keys in every key profile (VS Code, Emacs, Vim):
 | `o` | Open Its File | the file this line comes from, at its line |
 | `r` | OpenRouter Restrictions… | which providers OpenRouter may use, and whether they may keep data |
 | `TAB` | Other Agent… | another agent's page, for the same project |
+| (button) | Report to drgnx | add the `drgnx` MCP server to the agent's user settings, or take it out (see below) |
 
 Every row has buttons for the same commands, and every section has **[Add…]** (Skills: **[New Skill…]**; MCP
 Servers: **[Test All]** too).
+
+## Report to drgnx
+
+Under the rules and project, the page says **Reports to drgnx: yes** or **no**, with a button, **[Add drgnx]** or
+**[Remove drgnx]** (also Agents: Report to drgnx in the palette, run on the page; the `r` key is OpenRouter
+Restrictions, so this command has no key). An agent that runs outside drgnx, in a terminal or another editor, shows
+in the Work cockpit ([cockpit.md](cockpit.md)) only when it has drgnx's coordination server. The button adds an MCP
+server called `drgnx` to the agent's **user** settings: `bin/drgnx coord mcp --kind KIND`, the same server drgnx's own
+agents are given. It asks first and names the file. Nothing is written without it, and opening the page never writes.
+
+- Claude Code: through its `claude mcp add-json drgnx … --scope user` (and `claude mcp remove` to take it out).
+- Codex: a `[mcp_servers.drgnx]` table in `config.toml`; the rest of the file stays as it is.
+- Gemini and Kimi Code: their own settings or MCP file, as Add… does.
+
+The server carries no token, key or environment value, so nothing secret is written to any file. For another scope
+(a project's `.mcp.json`, say) use Add… with the name `drgnx` and the same command. Pressing the button again with the
+server there removes it (from the scope it is in), after a confirmation. Restart a running agent to pick the change up.
+In the cockpit, an agent that said hello shows as `outside`; a worktree with changes and no agent reporting shows as
+`silent` ("not reporting — add drgnx on its settings page").
 
 ## Adding and editing
 

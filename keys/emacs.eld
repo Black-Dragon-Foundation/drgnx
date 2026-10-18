@@ -300,6 +300,7 @@
         (agent-settings-open-file "o" :map (drgnx-agent-settings . drgnx-agent-settings-mode-map))
         (agent-settings-other "TAB" :map (drgnx-agent-settings . drgnx-agent-settings-mode-map))
         (agent-settings-openrouter "r" :map (drgnx-agent-settings . drgnx-agent-settings-mode-map))
+        (agent-settings-report :none "r is OpenRouter Restrictions on this page; the Reports to drgnx button and the palette")
         (keyboard-shortcuts :none "the palette and the Options menu; C-h C-k is the key sheet")
         (shortcuts-change "RET" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))
         (shortcuts-add "a" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))
