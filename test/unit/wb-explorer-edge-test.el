@@ -337,3 +337,44 @@
             (should (seq-find (lambda (m) (string-match-p "README\\.md.*unsaved\\|unsaved.*README\\.md" m)) said)))
         (with-current-buffer dirty (set-buffer-modified-p nil))
         (dolist (b (list clean dirty other)) (when (buffer-live-p b) (kill-buffer b)))))))
+
+;;;; M3b-15: the trash on another device is gio's, in the background
+
+(ert-deftest drgnx-explorer-edge/trash-on-another-device-is-an-async-gio-trash ()
+  (drgnx-explorer-edge--with root
+    (let ((started nil) (file (expand-file-name "README.md" root)) (said nil))
+      (drgnx-explorer-edge--answering '(t)
+        (cl-letf (((symbol-function 'drgnx-explorer--trash-cross-device-p) (lambda (_p) t))
+                  ((symbol-function 'executable-find) (lambda (c &rest _) (and (equal c "gio") "/usr/bin/gio")))
+                  ((symbol-function 'message) (lambda (fmt &rest a) (push (apply #'format fmt a) said)))
+                  ((symbol-function 'make-process) (lambda (&rest args) (push args started) 'proc)))
+          (with-current-buffer (drgnx-explorer-edge--at "README.md") (drgnx-explorer-delete))))
+      (should (= 1 (length started)))
+      (should (equal (plist-get (car started) :command) (list "gio" "trash" "--" file)))
+      (should (file-exists-p file))                       ; nothing was copied or deleted synchronously
+      ;; a failed gio says so (no prompt, no error from a sentinel)
+      (cl-letf (((symbol-function 'message) (lambda (fmt &rest a) (push (apply #'format fmt a) said))))
+        (funcall (plist-get (car started) :sentinel) 'proc "exited abnormally with code 1\n"))
+      (should (seq-find (lambda (m) (string-match-p "README\\.md" m)) said))))
+  ;; permanently: no gio; same device: the Emacs trash
+  (dolist (case '((t . nil) (nil . nil)))
+    (drgnx-explorer-edge--with root
+      (let ((started nil))
+        (drgnx-explorer-edge--answering '(t)
+          (cl-letf (((symbol-function 'drgnx-explorer--trash-cross-device-p) (lambda (_p) (car case)))
+                    ((symbol-function 'executable-find) (lambda (&rest _) "/usr/bin/gio"))
+                    ((symbol-function 'make-process) (lambda (&rest args) (push args started) 'proc)))
+            (with-current-buffer (drgnx-explorer-edge--at "README.md") (drgnx-explorer-delete (car case)))))
+        (should-not started)
+        (should-not (file-exists-p (expand-file-name "README.md" root)))))))
+
+(ert-deftest drgnx-explorer-edge/trash-device-test-compares-device-numbers ()
+  (let ((dir (make-temp-file "drgnx-dev" t)))
+    (unwind-protect
+        (let ((trash-directory (expand-file-name "trash" dir)))      ; not created yet: its parent's device counts
+          (should-not (drgnx-explorer--trash-cross-device-p (expand-file-name "x" dir)))
+          (cl-letf (((symbol-function 'file-attribute-device-number)
+                     (let ((n 0)) (lambda (_a) (cl-incf n)))))       ; every call another device
+            (should (drgnx-explorer--trash-cross-device-p (expand-file-name "x" dir))))
+          (should-not (drgnx-explorer--trash-cross-device-p "/ssh:nohost.invalid:/x")))
+      (delete-directory dir t))))

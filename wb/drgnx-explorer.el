@@ -798,6 +798,33 @@ one, which stays (its text is the only copy).  Never prompts."
           (message "%s was deleted but has unsaved changes: its buffer is kept" (file-name-nondirectory f))
         (let ((kill-buffer-query-functions nil)) (kill-buffer b))))))
 
+(defun drgnx-explorer--trash-cross-device-p (path)
+  "Non-nil when the trash is on another device than the local PATH: Emacs would copy it across, in the
+foreground."
+  (and (not (file-remote-p path))
+       (let ((trash (expand-file-name (or trash-directory "~/.local/share/Trash/files"))))
+         (while (not (file-exists-p trash)) (setq trash (file-name-directory (directory-file-name trash))))
+         (let ((a (file-attribute-device-number (file-attributes path 'integer)))
+               (b (file-attribute-device-number (file-attributes trash 'integer))))
+           (and a b (not (equal a b)))))))
+
+(defun drgnx-explorer--gio-trash (path)
+  "Move PATH to the trash with `gio trash' in the background; non-nil when it was started.  A failure is
+reported with a message, the folder is shown again when it ends."
+  (when (executable-find "gio")
+    (condition-case nil
+        (let ((dir (drgnx-explorer--parent path)))
+          (make-process :name "drgnx-gio-trash" :command (list "gio" "trash" "--" path)
+                        :connection-type 'pipe :noquery t
+                        :sentinel (lambda (_proc event)
+                                    (unless (string-prefix-p "finished" event)
+                                      (message "Could not move %s to the trash: %s"
+                                               (file-name-nondirectory path) (string-trim event)))
+                                    (when (get-buffer drgnx-explorer-buffer-name)
+                                      (ignore-errors (drgnx-explorer--show-folder dir)))))
+          t)
+      (error nil))))
+
 (defun drgnx-explorer-delete (&optional permanently)
   "Move the file(s) here to the trash (with PERMANENTLY — a prefix argument — delete them)."
   (interactive "P")
@@ -807,9 +834,10 @@ one, which stays (its text is the only copy).  Never prompts."
             (y-or-n-p (format "Move %s to the trash? " (drgnx-explorer--describe paths))))
       (let ((delete-by-moving-to-trash (not permanently)))     ; the trash unless asked otherwise — not Emacs' default (nil)
         (dolist (p paths)
-          (if (and (file-directory-p p) (not (file-symlink-p p)))   ; a link goes, never what it points to
-              (delete-directory p t (not permanently))
-            (delete-file p (not permanently)))))
+          (unless (and (not permanently) (drgnx-explorer--trash-cross-device-p p) (drgnx-explorer--gio-trash p))
+            (if (and (file-directory-p p) (not (file-symlink-p p)))   ; a link goes, never what it points to
+                (delete-directory p t (not permanently))
+              (delete-file p (not permanently))))))
       (drgnx-explorer--close-buffers paths)
       (setq drgnx-explorer--selection nil)
       (dolist (d (delete-dups (mapcar #'drgnx-explorer--parent paths))) (drgnx-explorer--show-folder d)))))
