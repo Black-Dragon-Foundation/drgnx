@@ -275,6 +275,7 @@ goes direct, and says so)."
                               when key append (list (intern (concat ":" (symbol-name id))) key)))
                (params (list :task (drgnx-agent-session-task s) :job (drgnx-agent-session-job s)
                              :agent (drgnx-agent-session-name s)
+                             :owner (emacs-pid)   ; its agent is this Emacs's child: gone with it, its token goes too
                              :chain (mapcar (lambda (st) (list (symbol-name (car st)) (cdr st))) chain)
                              :keys keys))
                (r (if (drgnx-hub-serving-p) (drgnx-hub-register params)

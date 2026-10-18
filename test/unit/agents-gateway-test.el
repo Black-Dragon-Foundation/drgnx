@@ -37,7 +37,9 @@
       ;; registered with role `agent''s chain (OpenRouter) and the session's name
       (let ((reg (cdar (drgnx-gateway-registrations))))
         (should (equal (plist-get reg :chain) '((openrouter))))
-        (should (equal (plist-get reg :agent) "t"))))))
+        (should (equal (plist-get reg :agent) "t"))
+        ;; …and its owner: this Emacs (its agents are its children; a crashed one's tokens are pruned)
+        (should (eql (plist-get reg :owner) (emacs-pid)))))))
 
 (ert-deftest drgnx-agents/an-ollama-or-anthropic-agent-has-its-own-chain ()
   (drgnx-agents-gw-test--with

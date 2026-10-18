@@ -98,7 +98,7 @@ it again). The first agent that needs it starts it; `drgnx hub start|stop|status
 reach it over its private socket from the Emacs or `drgnx hub start` that starts or uses it (never through its
 environment), from auth-source files that never ask, or from the command you ran (a key in `~/.authinfo.gpg` is read
 then) — and stay in its memory (a restarted hub gets them again when Emacs reconnects to it); tokens are kept only as hashes, so a restarted hub still
-takes them; an agent's token is revoked when it exits. The hub keeps the environment, `PATH` included, of the Emacs
+takes them; an agent's token is revoked when it exits, or once the Emacs that started it is gone (a crash). The hub keeps the environment, `PATH` included, of the Emacs
 that started it: when an agent's program was installed while a hub ran (onboarding's Agents step, say), run
 `drgnx hub stop` (its durable sessions end), so the hub the next durable session starts finds the program.
 With no hub to be had, an agent goes to its provider directly and says so. The Agents list's **Via**

@@ -170,6 +170,20 @@ that dies mid-write leaves the old file whole."
         (error (message "drgnx hub: %s cannot be read (%s): agents registered before must register again"
                         file (error-message-string err)))))))
 
+(defun drgnx-hub--prune-registrations ()
+  "Drop the registrations whose owner (the pid of the Emacs that registered them: its agents are its children) is
+gone — a crashed editor never unregisters its agents' tokens; then keep the rest.  One without an owner stays until it
+is unregistered.  How many went."
+  (let ((alive (make-hash-table)) (dead nil))
+    (maphash (lambda (hash reg)
+               (when-let* ((owner (plist-get reg :owner)))
+                 (unless (eq (or (gethash owner alive) (puthash owner (if (drgnx-hub--alive-p owner) 'yes 'no) alive)) 'yes)
+                   (push hash dead))))
+             drgnx-gateway--registrations)
+    (dolist (hash dead) (remhash hash drgnx-gateway--registrations))
+    (when dead (drgnx-hub--save-registrations))
+    (length dead)))
+
 (defun drgnx-hub--chain (chain)
   "A chain from JSON ([[provider, model-or-null]…]) as ((PROVIDER . MODEL)…)."
   (mapcar (lambda (step) (cons (intern (car step)) (cadr step))) chain))
@@ -253,10 +267,12 @@ that dies mid-write leaves the old file whole."
 
 (defun drgnx-hub-register (params)
   "Register an agent with the gateway: PARAMS (:job :task :agent :chain ((PROVIDER MODEL)…) :budget :keys (:PROVIDER
-KEY…)), keys held in memory.  (:token :url)."
+KEY…) :owner PID), keys held in memory; OWNER, the pid of the Emacs whose agent it is, ends it when it is gone
+\(`drgnx-hub--prune-registrations').  (:token :url)."
   (drgnx-hub--set-keys (plist-get params :keys))
   (let ((token (drgnx-gateway-register (list :job (plist-get params :job) :task (plist-get params :task)
                                              :agent (plist-get params :agent)
+                                             :owner (let ((o (plist-get params :owner))) (and (natnump o) o))
                                              :chain (drgnx-hub--chain (append (plist-get params :chain) nil))
                                              :budget (or (plist-get params :budget) (drgnx-job-budget (plist-get params :job)))))))
     (drgnx-hub--save-registrations)
@@ -358,6 +374,7 @@ for an agent that is not here (or exited) stays queued."
   (with-demoted-errors "drgnx hub: %S"
     (drgnx-hub--deliver)
     (drgnx-job-tick)
+    (drgnx-hub--prune-registrations)
     (when (zerop (% (cl-incf drgnx-hub--ticks) 30)) (drgnx-hub--housekeeping))))
 
 (defun drgnx-hub--flush (s)
@@ -423,6 +440,7 @@ Signals an error when a hub already serves there."
     (make-directory (file-name-directory file) t)
     (write-region (number-to-string (drgnx-gateway-port)) nil file nil 'silent))
   (drgnx-hub--load-registrations)
+  (drgnx-hub--prune-registrations)
   (add-hook 'drgnx-gateway-event-functions #'drgnx-hub--broadcast)
   (add-hook 'drgnx-agents-changed-functions #'drgnx-hub--agent-changed)
   (add-hook 'drgnx-agents-prompt-functions #'drgnx-hub--prompted)

@@ -41,7 +41,7 @@ Its directory is mode 0700 and must be the user's own. One JSON object per line:
 | `ping` | `{pid}` |
 | `status` | `{pid, socket, gateway_port, registrations, started}` |
 | `subscribe` | `true`; then events `{"event", "data"}` on this connection |
-| `gateway/register` `{job, task, agent, chain: [[provider, model-or-null]…], budget, keys: {provider: key}}` | `{token, url}` |
+| `gateway/register` `{job, task, agent, chain: [[provider, model-or-null]…], budget, keys: {provider: key}, owner}` | `{token, url}` |
 | `gateway/unregister` `{token}` | `true` |
 | `gateway/keys` `{keys: {provider: key}}` | `true`: the keys go to the gateway's memory |
 | `spend` `{job?, task?, agent?}` | `{input, output, cost, requests}` |
@@ -98,7 +98,12 @@ inherits: a hub whose parent is gone exits (checked each second), so an interrup
 written to a temporary file beside it and renamed over it (a hub that dies mid-write leaves the old one whole), and
 reads it back when it starts (a file it cannot read is logged: those agents register again); it also keeps the gateway's port (`<state>/hub/port`) and binds it again, so agents
 keep working across a hub restart (when the port is taken meanwhile, a new one is used and the log says so). A
-session's token is unregistered when its agent exits or is killed. Keys sent in `keys` live in the hub's
+session's token is unregistered when its agent exits or is killed. Tokens have no expiry; instead a registration
+names its `owner`, the pid of the Emacs that registered it (`drgnx-agents--gateway` sends its own: the agent is its
+child, and a hub's own sessions are the hub's), and the hub drops those whose owner is gone (`drgnx-hub--alive-p`: a
+zombie counts as gone) when it starts and on each tick (2 s) — a crashed editor never unregisters its agents' tokens.
+A registration without an owner stays until it is unregistered. A pid the system has given to a new process since
+keeps its registrations until that one ends too. Keys sent in `keys` live in the hub's
 memory only (`drgnx-gateway-set-key`), never in a file. `drgnx-hub-ensure` (a command, the CLI's `drgnx hub start`)
 hands the hub the keys its Emacs already holds, asking no one (`drgnx-hub--held-keys`: a provider's environment
 variable, else a key loaded this session), with `gateway/keys` after the hub answers, and `drgnx-hub-connect` does so again with each new subscription: a

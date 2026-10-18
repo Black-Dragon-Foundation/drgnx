@@ -141,6 +141,33 @@ to OR-LOG, OPENROUTER_API_KEY unset."
       (should (equal (file-modes file) #o600))
       (should (= (length (with-temp-buffer (insert-file-contents file) (read (current-buffer)))) 2)))))
 
+(ert-deftest drgnx-hub/registrations-of-a-dead-owner-are-pruned ()
+  ;; a crashed editor never unregisters its agents' tokens: a registration names its owner's pid, and one whose owner
+  ;; is gone is dropped when a hub starts and on its tick; one without an owner stays until it is unregistered
+  (drgnx-hub-test--with
+    (let* ((gone (let ((p (start-process "gone" nil "true")))
+                   (drgnx-hub-test--wait (lambda () (not (process-live-p p))))
+                   (process-id p)))
+           (reg (lambda (owner) (plist-get (drgnx-hub-call-sync "gateway/register" (list :chain [["openrouter" nil]] :owner owner))
+                                           :token)))
+           (has (lambda (token) (gethash (secure-hash 'sha256 token) drgnx-gateway--registrations)))
+           (file (expand-file-name "hub/registrations.eld" (drgnx-state-dir))))
+      (drgnx-hub-serve (drgnx-hub-socket))
+      (let ((dead (funcall reg gone)) (live (funcall reg (emacs-pid)))
+            (none (plist-get (drgnx-hub-call-sync "gateway/register" '(:chain [["openrouter" nil]])) :token)))
+        (should (eql (plist-get (funcall has live) :owner) (emacs-pid)))
+        (drgnx-hub-disconnect)
+        (drgnx-hub-stop)
+        (drgnx-hub-serve (drgnx-hub-socket))                     ; at start
+        (should-not (funcall has dead))
+        (should (funcall has live))
+        (should (funcall has none))
+        (let ((dead2 (funcall reg gone)))
+          (should (funcall has dead2))
+          (should (drgnx-hub-test--wait (lambda () (not (funcall has dead2))) 5))   ; on a tick (every 2 s)
+          (should (funcall has live))
+          (should-not (string-search (secure-hash 'sha256 dead2) (with-temp-buffer (insert-file-contents file) (buffer-string)))))))))
+
 (ert-deftest drgnx-hub/a-second-hub-exits ()
   (drgnx-hub-test--with
     (drgnx-hub-serve (drgnx-hub-socket))
