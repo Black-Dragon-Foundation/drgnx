@@ -45,13 +45,13 @@
       (should (equal (funcall entry 'emacs 'go-quick-open) '(go-quick-open :none "C-x p f (stock)")))
       (should (equal (funcall entry 'vim 'go-quick-open) '(go-quick-open "SPC f p")))
       (gryphn-command-define 'go-quick-open :title "Quick Open" :category "Go" :command #'ignore :key "C-p")
-      (gryphn-command-define 'view-explorer :title "Toggle Sidebar" :category "View" :command #'ignore :key "C-b")
+      (gryphn-command-define 'kx-sidebar :title "Toggle Sidebar" :category "View" :command #'ignore :key "C-b")
       (should (equal (funcall entry 'emacs 'go-quick-open) '(go-quick-open :none "C-x p f (stock)")))
       (should (equal (funcall entry 'vim 'go-quick-open) '(go-quick-open "SPC f p")))
       (should (equal (funcall entry 'vscode 'go-quick-open) '(go-quick-open "C-p")))           ; shipped, the same
-      (should-not (funcall entry 'emacs 'view-explorer))                                          ; C-b is backward-char
-      (should-not (funcall entry 'vscode 'view-explorer))                                      ; vscode's toggle-sidebar has C-b
-      (should (equal (funcall entry 'vim 'view-explorer) '(view-explorer :none "the palette")))
+      (should-not (funcall entry 'emacs 'kx-sidebar))                                             ; C-b is backward-char
+      (should-not (funcall entry 'vscode 'kx-sidebar))                                         ; vscode's toggle-sidebar has C-b
+      (should (equal (funcall entry 'vim 'kx-sidebar) '(kx-sidebar :none "the palette")))
       ;; a key another entry of the profile already binds is not taken either
       (let ((taken (cadr (seq-find (lambda (e) (stringp (cadr e))) (plist-get (alist-get 'emacs drgnx-keys-profiles) :bind)))))
         (gryphn-command-define 'kx-clash :title "Clash" :category "X" :command #'ignore :key taken)
