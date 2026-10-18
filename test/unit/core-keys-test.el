@@ -28,22 +28,17 @@ that took VS Code's C-S-h and F2 (the rest of the replace module is not modelled
 The modules are set up by `drgnx-test-with-modules' and torn down after BODY, what they hooked into with them."
   `(let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
          (drgnx-commands-problems nil)
-         ;; core/basics is not converted yet: put its plain `setq's and the trust guards back by hand
-         (ring-bell-function ring-bell-function) (use-dialog-box use-dialog-box)
-         (use-short-answers use-short-answers) (inhibit-startup-screen inhibit-startup-screen)
-         (trust-was (bound-and-true-p drgnx-trust-mode)) (trusted-content trusted-content))
-     (unwind-protect
-         (progn
-           (drgnx--core-commands)
-           (drgnx-command-define 'replace-in-files :category "Search" :title "Replace in Files" :command #'ignore :doc "test")
-           (drgnx-command-define 'rename-symbol :category "Search" :title "Rename Symbol" :command #'ignore :doc "test")
-           ;; A module that needs a package (magit, avy, websocket, …) stays out whatever this machine has installed.
-           (drgnx-test-with-modules nil
-             :stages (if drgnx-keys-test--later-stages drgnx-modules-stages '(startup))
-             :packages (if drgnx-keys-test--later-stages 'hidden nil)
-             :strict drgnx-keys-test--strict
-             ,@body))
-       (when (fboundp 'drgnx-trust-mode) (drgnx-trust-mode (if trust-was 1 -1))))))
+         ;; the trust guards add drgnx's folders to `trusted-content' and turning them off leaves them there
+         (trusted-content trusted-content))
+     (drgnx--core-commands)
+     (drgnx-command-define 'replace-in-files :category "Search" :title "Replace in Files" :command #'ignore :doc "test")
+     (drgnx-command-define 'rename-symbol :category "Search" :title "Rename Symbol" :command #'ignore :doc "test")
+     ;; A module that needs a package (magit, avy, websocket, …) stays out whatever this machine has installed.
+     (drgnx-test-with-modules nil
+       :stages (if drgnx-keys-test--later-stages drgnx-modules-stages '(startup))
+       :packages (if drgnx-keys-test--later-stages 'hidden nil)
+       :strict drgnx-keys-test--strict
+       ,@body)))
 
 (defun drgnx-keys-test--resolve (layers &rest args)
   (drgnx-keys-test--with-core-commands

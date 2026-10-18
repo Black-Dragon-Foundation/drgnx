@@ -219,8 +219,9 @@ snapshot, so no leak is hidden.  A library that cannot be found or does not load
 (`drgnx-test-modules--ui-snapshot') back.  The problems, (NAME . STRINGS)."
   (let (problems)
     (dolist (name (reverse (drgnx-test-modules--ran)))
-      (let ((p (drgnx-module-teardown name)))
-        (when (and p (not (equal p '("restart")))) (push (cons name p) problems))))
+      ;; a `restart' module stays on in a session, but its record is exact: a test unwinds it all the same
+      (let ((p (if (drgnx-modules--restart-p name) (drgnx-modules--unwind name) (drgnx-module-teardown name))))
+        (when p (push (cons name p) problems))))
     (unwind-protect (run-hooks 'drgnx-modules-after-teardown-functions)
       (drgnx-test-modules--ui-restore ui))
     (nreverse problems)))

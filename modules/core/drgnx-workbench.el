@@ -51,6 +51,9 @@
 (drgnx-module-define 'core/workbench
                      :doc "The workbench: the change bus, the left dock (Buffers, Explorer) and editor windows."
                      :stage 'startup
+                     ;; Everything it sets is recorded (a test turns it off cleanly), but live windows, frames and
+                     ;; buffers are laid out by it: Preferences stops it at the next start.
+                     :teardown 'restart
                      :setup
                      (lambda ()
                        (require 'drgnx-wb)
