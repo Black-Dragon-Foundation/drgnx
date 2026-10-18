@@ -70,7 +70,11 @@ A file swapped for a FIFO between the check and the open would still block: Emac
   sees a file renamed over another within one mtime tick. The stamp is taken before the read, so a change in between
   shows as a change at the next compare.
 
-**Writing.** `(drgnx-file-write FILE DATA &key header mode private (fsync t) pretty text)` returns the path written:
+**Writing.** `(drgnx-file-write FILE DATA &key header mode private (fsync t) pretty text max-bytes)` returns the path
+written:
+- Content over MAX-BYTES (default `drgnx-file-max-bytes`, the read limit) is refused ("over N bytes") before any
+  temp file is made, so drgnx never writes a file its own reader would refuse. A file that grows passes a larger
+  limit, to its reads too.
 - It writes to FILE's truename, so a symlink stays a symlink, and makes missing folders. A non-regular file there is
   refused.
 - The content goes to a temp file `.NAME.tmp-XXXXXX` beside the target (made 0600), which is renamed over it. A
@@ -87,12 +91,15 @@ A file swapped for a FIFO between the check and the open would still block: Emac
 - FSYNC binds `write-region-inhibit-fsync` to nil. No lock file is made, and no buffer visits the target, so one that
   visits it is never modified or asked about.
 
-`(drgnx-file-write-text FILE TEXT &key mode private (fsync t))` writes text with the same rules and no read back.
+`(drgnx-file-write-text FILE TEXT &key mode private (fsync t))` writes text with the same rules, no read back and no
+size limit: reports, units and exports are not read back through the bounded reader.
 
 **The locked update.** `(drgnx-file-update FILE FN &key on-unreadable (timeout 1.0) max-bytes header pretty render)`
-takes the lock, reads the file fresh, and writes `(FN DATA)`. FN gets nil for an absent file. When FN returns its
-argument (`eq`), nothing is written. RENDER, when given, is called with the old text, the old data and the new data,
-and returns the text to write (a surgical edit that keeps comments). The lock is released in `unwind-protect`.
+takes the lock, reads the file fresh, and writes `(FN DATA)`. FN gets a deep copy of the data, so a `plist-put` in
+place is a change like any other, and nil for an absent file. When FN's result is `equal` to the data, nothing is
+written. MAX-BYTES limits both the read and the write. RENDER, when given, is called with the old text, the data as
+read (untouched by FN) and the new data, and returns the text to write (a surgical edit that keeps comments). The
+lock is released in `unwind-protect`.
 - An unreadable file is refused (`drgnx-file-refused` with the problem) and left untouched.
 - With `:on-unreadable 'backup` (state files only), it is copied aside first and FN gets nil.
 - A write from a timer, filter or sentinel passes `:timeout 0` and skips the write on `drgnx-file-busy`. The site's

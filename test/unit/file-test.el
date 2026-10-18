@@ -414,6 +414,33 @@
       (should-not (file-exists-p (expand-file-name "none.eld" dir)))
       (should-not (drgnx-file-test--leftovers dir)))))
 
+(ert-deftest drgnx-file/an-update-that-mutates-its-argument-is-written ()
+  (drgnx-file-test--with-dir dir
+    (let ((f (expand-file-name "mu.eld" dir)) (seen nil))
+      (drgnx-file-test--put f "(:a 1 :b 2)\n")
+      (should (equal (drgnx-file-update f (lambda (d) (plist-put d :a 2))) '(:a 2 :b 2)))
+      (should (equal (plist-get (drgnx-file-read f) :data) '(:a 2 :b 2)))
+      ;; RENDER gets the data as read, untouched by FN
+      (drgnx-file-update f (lambda (d) (plist-put d :a 3))
+                         :render (lambda (old data new) (setq seen (list data new)) (string-replace ":a 2" ":a 3" old)))
+      (should (equal seen '((:a 2 :b 2) (:a 3 :b 2))))
+      (should (equal (drgnx-file-test--bytes f) "(:a 3 :b 2)\n")))))
+
+(ert-deftest drgnx-file/a-write-over-max-bytes-is-refused ()
+  (drgnx-file-test--with-dir dir
+    (let ((f (expand-file-name "big.eld" dir)) (u (expand-file-name "up.eld" dir)))
+      (drgnx-file-test--put f "(:a 1)\n")
+      (let ((err (should-error (drgnx-file-write f '(:a "0123456789") :max-bytes 10) :type 'drgnx-file-refused)))
+        (should (equal (nth 2 err) "over 10 bytes")))
+      (let ((drgnx-file-max-bytes 12))                                 ; the default cap is the read cap
+        (should-error (drgnx-file-write f '(:a "0123456789")) :type 'drgnx-file-refused)
+        (should (drgnx-file-write-text (expand-file-name "report.txt" dir) "0123456789012345")))  ; text: no cap
+      (should (equal (drgnx-file-test--bytes f) "(:a 1)\n"))
+      (should-error (drgnx-file-update u (lambda (_) '(:a "0123456789")) :max-bytes 10) :type 'drgnx-file-refused)
+      (should-not (file-exists-p u))
+      (should (equal (drgnx-file-update u (lambda (_) '(:a "0123456789")) :max-bytes 64) '(:a "0123456789")))
+      (should-not (drgnx-file-test--leftovers dir)))))
+
 (ert-deftest drgnx-file/the-lock-is-released-on-error ()
   (drgnx-file-test--with-dir dir
     (let ((f (expand-file-name "l.eld" dir)))

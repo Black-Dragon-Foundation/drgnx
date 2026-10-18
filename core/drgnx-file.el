@@ -241,19 +241,24 @@ TARGET."
             target)
         (unless renamed (ignore-errors (delete-file tmp)))))))
 
-(cl-defun drgnx-file-write (file data &key header mode private (fsync t) pretty text)
+(cl-defun drgnx-file-write (file data &key header mode private (fsync t) pretty text max-bytes)
   "Write DATA to FILE atomically; the path written (FILE's truename: a symlink stays a symlink).
 The content is HEADER (comment lines, or nil), then TEXT when given, else DATA printed with `pp' (PRETTY) or
 `prin1', whatever the user's print settings.  It is read back by the rules of `drgnx-file-read' and must be `equal' to
 DATA, else `drgnx-file-refused' \"not printable as data\" and FILE is untouched.  Missing folders are made.  The mode:
-the old file's, else MODE, else 0644 (PRIVATE: 0600).  FSYNC (default t) syncs the temp file before the rename.  No
-buffer visits FILE, nothing prompts and no lock file is made."
+the old file's, else MODE, else 0644 (PRIVATE: 0600 for a new file; an old one loses its group and other bits).
+Content over MAX-BYTES (default `drgnx-file-max-bytes', the read limit) is refused \"over N bytes\" before any temp
+file is made: drgnx never writes a file its reader would refuse.  FSYNC (default t) syncs the temp file before the
+rename.  No buffer visits FILE, nothing prompts and no lock file is made."
   (let* ((content (condition-case nil
                       (concat (and header (if (string-suffix-p "\n" header) header (concat header "\n")))
                               (or text (drgnx-file--print data pretty)))
                     (error (signal 'drgnx-file-refused (list file "not printable as data")))))
          (bytes (encode-coding-string content 'utf-8-unix))
-         (target (drgnx-file--target file)))
+         (cap (or max-bytes drgnx-file-max-bytes))
+         (target (if (> (length bytes) cap)
+                     (signal 'drgnx-file-refused (list file (format "over %d bytes" cap)))
+                   (drgnx-file--target file))))
     (drgnx-file--replace
      target bytes mode private fsync
      (lambda (tmp)
@@ -370,9 +375,10 @@ attempt), a stale lock taken; then `drgnx-file-busy' (data (TARGET HOLDER)).  Ne
 (cl-defun drgnx-file-update (file fn &key on-unreadable (timeout 1.0) max-bytes header pretty render)
   "Change FILE under its lock: the data now in it.
 Takes the lock (TIMEOUT seconds, default 1; 0 from timers, filters and sentinels: one attempt, then
-`drgnx-file-busy'), reads FILE fresh, and calls FN with its data (nil when it is absent).  When FN returns its
-argument (`eq'), nothing is written; else the new data is written by `drgnx-file-write': as the text RENDER returns
-when given — (funcall RENDER OLD-TEXT DATA NEW) — else printed whole with HEADER and PRETTY.  An unreadable FILE
+`drgnx-file-busy'), reads FILE fresh, and calls FN with a deep copy of its data (nil when it is absent), so FN may
+change it in place.  When FN's result is `equal' to the data, nothing is written; else it is written by
+`drgnx-file-write' under MAX-BYTES (the read limit too): as the text RENDER returns when given — (funcall RENDER
+OLD-TEXT DATA NEW), DATA as read — else printed whole with HEADER and PRETTY.  An unreadable FILE
 signals `drgnx-file-refused' and is left untouched; with ON-UNREADABLE `backup' (state files only) it is copied aside
 by `drgnx-file-backup' and FN gets nil.  The lock is released whatever happens."
   (let* ((target (drgnx-file--target file))
@@ -385,9 +391,9 @@ by `drgnx-file-backup' and FN gets nil.  The lock is released whatever happens."
               (signal 'drgnx-file-refused (list target (plist-get (plist-get r :problem) :text))))
             (drgnx-file-backup target)
             (setq old nil))
-          (let ((new (funcall fn data)))
-            (unless (eq new data)
-              (drgnx-file-write target new :header (and (not render) header) :pretty pretty
+          (let ((new (funcall fn (copy-tree data t))))
+            (unless (equal new data)
+              (drgnx-file-write target new :header (and (not render) header) :pretty pretty :max-bytes max-bytes
                                 :text (and render (funcall render old data new))))
             new))
       (drgnx-file--unlock held))))
