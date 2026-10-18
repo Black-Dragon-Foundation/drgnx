@@ -89,9 +89,11 @@ child process.  The quit question calls this before it collects the running prog
   (drgnx-terminal-eat--refresh (current-buffer))
   t)
 
-(defun drgnx-terminal-eat-start (dir)
+(defun drgnx-terminal-eat-start (dir &optional command)
   "A new eat terminal in DIR running the user's shell, shown by `pop-to-buffer' (the rules put it in the
-panel); returns its buffer.  Its environment starts with `drgnx-terminal-environment'."
+panel); returns its buffer.  Its environment starts with `drgnx-terminal-environment'.  COMMAND (a program and
+its arguments) runs instead of the shell, e.g. `drgnx secrets export' (Portability: Export Keys); its buffer
+stays when it ends."
   (require 'eat)
   (let* ((default-directory (file-name-as-directory (expand-file-name dir)))
          (process-environment (append (drgnx-terminal-environment) process-environment))
@@ -99,9 +101,12 @@ panel); returns its buffer.  Its environment starts with `drgnx-terminal-environ
          (ok nil))
     (unwind-protect
         (progn
-          (with-current-buffer buffer (eat-mode) (setq drgnx-terminal-eat--shell t))
-          (eat-exec buffer "eat" (drgnx-terminal-shell) nil nil)
-          (when (eq eat-query-before-killing-running-terminal 'auto)
+          (with-current-buffer buffer
+            (eat-mode)
+            (setq drgnx-terminal-eat--shell (not command))
+            (when command (setq-local eat-kill-buffer-on-exit nil)))   ; what the command printed stays readable
+          (eat-exec buffer "eat" (if command (car command) (drgnx-terminal-shell)) nil (cdr command))
+          (when (and (not command) (eq eat-query-before-killing-running-terminal 'auto))
             (set-process-query-on-exit-flag (get-buffer-process buffer) nil))   ; idle until a command or a child says not
           (setq ok t))
       (unless ok (kill-buffer buffer)))

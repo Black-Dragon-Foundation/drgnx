@@ -12,7 +12,7 @@ case ${BASH_SOURCE[0]-} in
   */*) _drgnx_dir=$PWD/${BASH_SOURCE[0]%/*} ;;
   *) _drgnx_dir=$PWD ;;
 esac
-_drgnx_commands='open doctor build test ui macos-app sync upgrade rollback generations lock bisect service-unit onboard check fmt work hub job search keys safe help'
+_drgnx_commands='open doctor build test ui macos-app sync upgrade rollback generations lock bisect service-unit onboard check fmt work hub job search keys safe help secrets'
 _drgnx_steps='environment look-and-keys projects ai search agents daemon portability finish'
 _drgnx_presets='minimal ide full-ai'
 _drgnx_uis='start frame stop ls reap state shot click keys type measure mcp test-ui test-ui-session'
@@ -75,6 +75,8 @@ _drgnx() {
           'keys diff') words='--against' ;;
           'ui start') words='--config --size --daemon' ;;
           'ui click') words='--buffer --text --button --count --hold-ms' ;;
+          'secrets export') words='--recipient' ;;
+          'secrets import' | 'secrets ls') words='--identity' ;;
         esac
       elif [[ $n -eq 2 ]]; then   # the word after the command
         case $cmd in
@@ -84,6 +86,7 @@ _drgnx() {
           search) words='index query mcp' ;;
           keys) words='diff' ;;
           ui) words=$_drgnx_uis ;;
+          secrets) words='export import ls' ;;
         esac
       elif [[ $cmd == test ]]; then   # test --install NAME…
         for ((i = 2; i < n; i++)); do

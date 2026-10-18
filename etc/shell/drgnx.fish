@@ -44,6 +44,7 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n __fish_use_subcommand -a keys -d 'Compare key profiles'
     complete -c drgnx -n __fish_use_subcommand -a safe -d "Emacs with drgnx's core only"
     complete -c drgnx -n __fish_use_subcommand -a help -d 'Show drgnx usage'
+    complete -c drgnx -n __fish_use_subcommand -a secrets -d 'Provider keys to a second machine'
 
     # Commands that take no file: no file names after them.
     complete -c drgnx -n '__fish_seen_subcommand_from doctor build upgrade rollback generations lock macos-app check test hub' -f
@@ -120,6 +121,13 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n '__fish_seen_subcommand_from ui; and __fish_seen_subcommand_from click' -l button -x -d 'Button'
     complete -c drgnx -n '__fish_seen_subcommand_from ui; and __fish_seen_subcommand_from click' -l count -x -d 'Count'
     complete -c drgnx -n '__fish_seen_subcommand_from ui; and __fish_seen_subcommand_from click' -l hold-ms -x -d 'Hold in ms'
+
+    # secrets
+    complete -c drgnx -n '__fish_seen_subcommand_from secrets; and not __fish_seen_subcommand_from export import ls' -f -a export -d 'Keys into secrets.age'
+    complete -c drgnx -n '__fish_seen_subcommand_from secrets; and not __fish_seen_subcommand_from export import ls' -f -a import -d 'The keys of secrets.age into the keyring'
+    complete -c drgnx -n '__fish_seen_subcommand_from secrets; and not __fish_seen_subcommand_from export import ls' -f -a ls -d 'The hosts in secrets.age'
+    complete -c drgnx -n '__fish_seen_subcommand_from secrets; and __fish_seen_subcommand_from export' -l recipient -x -d 'age recipient'
+    complete -c drgnx -n '__fish_seen_subcommand_from secrets; and __fish_seen_subcommand_from import ls' -l identity -r -d 'age identity file'
 
     # Inside eat only.  The prompt-end mark is bash and zsh only: fish cannot add it without redefining fish_prompt.
     if string match -q '*eat*' -- "$INSIDE_EMACS"; and set -q EAT_SHELL_INTEGRATION_DIR

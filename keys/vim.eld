@@ -294,6 +294,8 @@
         (shortcuts-reset "r" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))
         (shortcuts-reset-all "R" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))
         (shortcuts-profile "p" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))
+        (portability-export-keys :none "in the palette and Onboarding: Portability")
+        (portability-import-keys :none "in the palette and Onboarding: Portability")
         (ai-stop :none "in the palette"))
  :claims ((editing "C-o" "jump back")
           (editing "C-w" "window commands (prefix)")

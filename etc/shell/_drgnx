@@ -29,6 +29,7 @@ commands=(
   'keys:compare key profiles'
   'safe:Emacs with drgnx'"'"'s core only'
   'help:usage'
+  'secrets:provider keys to a second machine'
 )
 
 if (( CURRENT == 2 )); then
@@ -142,6 +143,17 @@ case $cmd in
     fi ;;
   service-unit)
     _arguments '*:directory:_files -/' ;;
+  secrets)
+    if (( CURRENT == 2 )); then
+      _values 'secrets command' 'export[keys into secrets.age]' 'import[the keys of secrets.age into the keyring]' \
+        'ls[the hosts in secrets.age]'
+    else
+      shift words; (( CURRENT-- ))
+      case $sub in
+        export) _arguments '*--recipient[age recipient]:recipient:' ;;
+        import|ls) _arguments '--identity[age identity file]:file:_files' ;;
+      esac
+    fi ;;
   *)
     _files ;;
 esac

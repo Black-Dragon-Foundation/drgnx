@@ -374,6 +374,33 @@ cmd_open() { # [--check] [--wait] [PATH…] — open PATHs (none: the windows as
   done
 }
 
+secrets_emacs() { # the Emacs side of drgnx secrets (core/drgnx-secrets.el)
+  "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+        -l drgnx-secrets -f drgnx-secrets-cli -- "$@"
+}
+
+cmd_secrets() { # export|import|ls — provider keys through age (docs/guide/second-machine.md).  age asks for a passphrase
+  # on this terminal, which a program Emacs starts never has (Emacs gives each child a session of its own): so after
+  # Emacs's checks (exit 10) age runs here, in a pipe with Emacs, and the plaintext crosses only that pipe.
+  local rc=0 file
+  unset DRGNX_SECRETS_PIPE
+  DRGNX_STDIN_TTY=""; if [ -t 0 ]; then DRGNX_STDIN_TTY=1; fi   # the keyring is opened only from a terminal
+  export DRGNX_STDIN_TTY
+  secrets_emacs "$@" || rc=$?
+  [ "$rc" -eq 10 ] || return "$rc"
+  rc=0
+  file="${DRGNX_CONFIG_DIR:-$HOME/.config/drgnx}/secrets.age"
+  if [ "${1:-}" = export ]; then
+    mkdir -p -- "${file%/*}"
+    DRGNX_SECRETS_PIPE=bundle secrets_emacs export | age -e -p -o "$file.new" || rc=$?
+    if [ "$rc" -eq 0 ]; then mv -f -- "$file.new" "$file"; echo "drgnx secrets: wrote $file"
+    else rm -f -- "$file.new"; echo "drgnx secrets: nothing written ($file is unchanged)" >&2; fi
+  else
+    age -d "$file" | DRGNX_SECRETS_PIPE=stdin secrets_emacs "$1" || rc=$?
+  fi
+  return "$rc"
+}
+
 usage() {
   cat <<'USAGE'
 usage: drgnx PATH…             open folders and files in drgnx, like code . (docs/guide/opening.md)
@@ -436,6 +463,9 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx search query ROOT QUESTION… [-k N]
                                the best chunks as PATH:LINE: first line (the notice, if any, on stderr)
        drgnx search mcp [ROOT] serve the `search' tool to an agent over stdio (MCP; ROOT default: here)
+       drgnx secrets export [--recipient R]… | import [--identity FILE] | ls [--identity FILE]
+                               your provider keys to a second machine: secrets.age (age), then into its
+                               keyring (a passphrase, or age keys; docs/guide/second-machine.md)
        drgnx safe              Emacs with drgnx's core only: no modules, no packages
        drgnx bisect [-- CMD…]  find the module that breaks (CMD fails, or you say so)
        drgnx service-unit [DIR]
@@ -491,6 +521,7 @@ case "${1:-help}" in
               -l drgnx-fmt -f drgnx-fmt-cli -- "$@" ;;
   open) shift; cmd_open "$@" ;;
   macos-app) "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" -l drgnx-macos -f drgnx-macos-cli ;;
+  secrets) shift; cmd_secrets "$@" ;;
   help|-h|--help) usage ;;
   *) if [[ "$1" == . || "$1" == .. || "$1" == */* || -e "$1" ]]; then cmd_open "$@"; exit; fi   # drgnx PATH…
      echo "drgnx: unknown command '$1' (try: drgnx help)" >&2; exit 2 ;;
