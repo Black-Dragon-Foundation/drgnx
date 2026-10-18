@@ -56,8 +56,8 @@ Anthropic's Messages API, so the gateway can carry agents to it (OpenRouter, Oll
 With nothing set up, onboarding's AI step sets up Ollama, LM Studio or OpenRouter for you and fills these roles with
 models sized to the machine ([onboarding.md](onboarding.md#setting-ai-up)): `drgnx-ai-default-models` gives Inline
 Completion `qwen2.5-coder:1.5b` and Edit and Chat `qwen2.5-coder:7b` when both fit in the room models get (the GPU's
-free memory; on a Mac two thirds of the RAM, which Apple silicon shares with the GPU — `drgnx-ai-vram`), else `:3b`,
-else the 1.5B too; LM Studio serves the same GGUF models as `qwen2.5-coder-…-instruct` (`drgnx-ai-lmstudio-models`).
+free memory; on an Apple silicon Mac two thirds of the RAM, which it shares with the GPU, while an Intel Mac counts
+as having none — `drgnx-ai-vram`), else `:3b`, else the 1.5B too; LM Studio serves the same GGUF models as `qwen2.5-coder-…-instruct` (`drgnx-ai-lmstudio-models`).
 
 The `embed` role works like the others: its chain is tried in order and the next provider answers when one is down, has
 no key, or sends something that is not a vector per text. TEI needs no model (`(tei)`); for Ollama, llama.cpp and the

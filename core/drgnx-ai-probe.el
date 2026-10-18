@@ -103,13 +103,17 @@ may come from a source that asks)."
     (list :total (string-to-number (match-string 1 text)) :used (string-to-number (match-string 2 text)))))
 
 (defun drgnx-ai-vram ()
-  "The memory models get (MiB): on macOS (:total M :used 0 :unified t), M two thirds of the RAM (`sysctl -n
-hw.memsize'; Apple silicon shares it with the GPU); else the first GPU's when nvidia-smi is there; else nil."
+  "The memory models get (MiB): on an Apple silicon Mac (`sysctl -n hw.optional.arm64' is 1) (:total M :used 0
+:unified t), M two thirds of the RAM (`sysctl -n hw.memsize'; the GPU shares it); on an Intel Mac nil (its RAM is
+not GPU memory); else the first GPU's when nvidia-smi is there; else nil."
   (if (eq (drgnx-platform) 'macos)
-      (with-temp-buffer
-        (when (eql 0 (ignore-errors (call-process "sysctl" nil t nil "-n" "hw.memsize")))
-          (let ((bytes (string-to-number (string-trim (buffer-string)))))
-            (when (> bytes 0) (list :total (/ (* 2 (/ bytes 1048576)) 3) :used 0 :unified t)))))
+      (when (with-temp-buffer
+              (and (eql 0 (ignore-errors (call-process "sysctl" nil t nil "-n" "hw.optional.arm64")))
+                   (equal (string-trim (buffer-string)) "1")))
+        (with-temp-buffer
+          (when (eql 0 (ignore-errors (call-process "sysctl" nil t nil "-n" "hw.memsize")))
+            (let ((bytes (string-to-number (string-trim (buffer-string)))))
+              (when (> bytes 0) (list :total (/ (* 2 (/ bytes 1048576)) 3) :used 0 :unified t))))))
     (when (executable-find "nvidia-smi")
       (with-temp-buffer
         (when (eql 0 (call-process "nvidia-smi" nil t nil "--query-gpu=memory.total,memory.used" "--format=csv,noheader,nounits"))

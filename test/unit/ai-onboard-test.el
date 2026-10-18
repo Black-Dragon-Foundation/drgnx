@@ -173,7 +173,8 @@ with BODY."
             (concat (funcall log-line "open") "[ -n \"$FAKE_NO_LMS\" ] && exit 0\nmkdir -p \"$HOME/.lmstudio/bin\" && cp " tpl "lms \"$HOME/.lmstudio/bin/lms\"\n"))
            (drgnx-ai-onboard-test--script
             (concat bin "sysctl")
-            "[ \"$2\" = hw.memsize ] && { echo ${FAKE_MEMSIZE:-17179869184}; exit 0; }\nexit 1\n")
+            (concat "[ \"$2\" = hw.memsize ] && { echo ${FAKE_MEMSIZE:-17179869184}; exit 0; }\n"
+                    "[ \"$2\" = hw.optional.arm64 ] && { echo ${FAKE_ARM64:-1}; exit 0; }\nexit 1\n"))
            (drgnx-ai-onboard-test--script
             (concat bin "security")
             (concat (funcall log-line "security") "cat > " root "security.stdin\n"))
@@ -203,12 +204,30 @@ with BODY."
     (unwind-protect
         (progn
           (drgnx-ai-onboard-test--script (concat bin "sysctl")
-                                         "[ \"$2\" = hw.memsize ] && { echo $FAKE_MEMSIZE; exit 0; }\nexit 1\n")
+                                         (concat "[ \"$2\" = hw.memsize ] && { echo $FAKE_MEMSIZE; exit 0; }\n"
+                                                 "[ \"$2\" = hw.optional.arm64 ] && [ -n \"$FAKE_ARM64\" ] && { echo $FAKE_ARM64; exit 0; }\nexit 1\n"))
           (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'macos)))
-            (let ((process-environment (cons "FAKE_MEMSIZE=17179869184" process-environment)))
+            (let ((process-environment (append '("FAKE_MEMSIZE=17179869184" "FAKE_ARM64=1") process-environment)))
               (should (equal (drgnx-ai-vram) '(:total 10922 :used 0 :unified t))))
-            (let ((process-environment (cons "FAKE_MEMSIZE=8589934592" process-environment)))
+            (let ((process-environment (append '("FAKE_MEMSIZE=8589934592" "FAKE_ARM64=1") process-environment)))
               (should (equal (drgnx-ai-vram) '(:total 5461 :used 0 :unified t))))))
+      (delete-directory bin t))))
+
+(ert-deftest drgnx-ai/intel-mac-is-not-unified ()
+  ;; an Intel Mac's RAM is not GPU memory: a 7B model would run on the CPU.  No room is claimed (the smallest models)
+  (let* ((bin (file-name-as-directory (make-temp-file "drgnx-ai-sysctl" t)))
+         (exec-path (cons bin exec-path))
+         (process-environment (cons (concat "PATH=" bin ":" (getenv "PATH")) process-environment)))
+    (unwind-protect
+        (progn
+          (drgnx-ai-onboard-test--script (concat bin "sysctl")
+                                         (concat "[ \"$2\" = hw.memsize ] && { echo $FAKE_MEMSIZE; exit 0; }\n"
+                                                 "[ \"$2\" = hw.optional.arm64 ] && [ -n \"$FAKE_ARM64\" ] && { echo $FAKE_ARM64; exit 0; }\nexit 1\n"))
+          (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'macos)))
+            (dolist (arm64 '("FAKE_ARM64=0" "FAKE_ARM64="))        ; arm64 0, or no such key (older Intel Macs)
+              (let ((process-environment (append (list "FAKE_MEMSIZE=34359738368" arm64) process-environment)))
+                (should-not (plist-get (drgnx-ai-vram) :unified))
+                (should-not (drgnx-ai-vram))))))
       (delete-directory bin t))))
 
 (ert-deftest drgnx-ai/default-models-fit-the-room ()
