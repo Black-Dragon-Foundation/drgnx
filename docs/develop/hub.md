@@ -72,15 +72,18 @@ agent, job).
 = its id) filled from these events; an action on a mirror goes to the hub (`drgnx-agents--remote`, never waiting).
 A new Emacs fetches each transcript once (`agents/get`, which answers the session's change number `seq`) and keeps
 the events that arrive meanwhile, then applies only those numbered after it — events and answers come on different
-connections, so their order is not given. A record that cannot be read (a session snapshot, a transcript entry), or that
-is not a list (a number, a string), is skipped with a message; it never stops the records after it.
+connections, so their order is not given; a snapshot (`agent`) or entries numbered at or before what a mirror has are
+skipped, so an older snapshot never overwrites a newer one. A record that cannot be read (a session snapshot, a
+transcript entry), or that is not a list (a number, a string), is skipped with a message; it never stops the records
+after it.
 
 One hub per socket: a second finds the first answering `ping`, or holding the lock — `SOCKET.lock/`, a directory
 made atomically with the hub's pid — and exits with status 3 (a hub too busy to answer a ping keeps its socket); a hub that cannot start for any other
 reason exits with status 1. A
 lock whose process is gone (or a zombie) is taken over. A hub removes its socket and lock when it stops, and only if
 the lock is still its own. Client side: `drgnx-hub-ensure` (start if needed; commands and the CLI only — it waits),
-`drgnx-hub-call` (asynchronous), `drgnx-hub-call-sync`, `drgnx-hub-connect` + `drgnx-hub-event-functions`. The unit
+`drgnx-hub-call` (asynchronous), `drgnx-hub-call-sync`, `drgnx-hub-connect` (one subscription, even when called
+again before the hub answers) + `drgnx-hub-event-functions`. The unit
 runner sets `DRGNX_NO_HUB_START=1`: a test never starts a hub that would outlive the suite unless it unsets it (the
 hub's own tests do, and stop what they start). It also sets `DRGNX_HUB_PARENT_PID` to its own pid, which a hub
 inherits: a hub whose parent is gone exits (checked each second), so an interrupted run leaves none behind.

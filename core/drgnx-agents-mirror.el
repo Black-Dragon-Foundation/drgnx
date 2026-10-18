@@ -82,9 +82,8 @@ type.  One damaged record from the hub is skipped (and said so), never allowed t
        ;; a transcript on its way: the event waits for it
        ((drgnx-agents-mirror--fetching-p id)
         (puthash id (cons (cons event data) (gethash id drgnx-agents-mirror--fetching)) drgnx-agents-mirror--fetching))
-       ;; older than what the mirror has
-       ((and (gethash id drgnx-agents-mirror--seq) (<= seq (gethash id drgnx-agents-mirror--seq))
-             (equal event "agent-entries")))
+       ;; older than what the mirror has (a snapshot or entries that waited for the transcript, numbered before it)
+       ((and (gethash id drgnx-agents-mirror--seq) (<= seq (gethash id drgnx-agents-mirror--seq))))
        ((equal event "agent")
         (when-let* ((snap (drgnx-agents-mirror--read (plist-get data :lisp))))
           (pcase-let ((`(,m . ,new) (drgnx-agents-mirror--apply-snapshot (car snap))))

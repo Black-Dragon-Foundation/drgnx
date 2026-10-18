@@ -94,6 +94,16 @@ to OR-LOG, OPENROUTER_API_KEY unset."
         (ignore-errors (delete-process p)))
       (should (equal (plist-get (cdr (assoc "request" heard)) :agent) "a1")))))
 
+(ert-deftest drgnx-hub/connect-twice-subscribes-once ()
+  ;; a second call before the hub's answer is a no-op: one subscription, not two
+  (drgnx-hub-test--with
+    (drgnx-hub-serve (drgnx-hub-socket))
+    (drgnx-hub-connect)
+    (drgnx-hub-connect)
+    (should (drgnx-hub-test--wait (lambda () (process-live-p drgnx-hub--events))))
+    (drgnx-hub-test--wait #'ignore 0.3)
+    (should (= (length drgnx-hub--subscribers) 1))))
+
 (ert-deftest drgnx-hub/a-restarted-hub-takes-the-same-tokens ()
   (drgnx-hub-test--with
     (drgnx-hub-serve (drgnx-hub-socket))

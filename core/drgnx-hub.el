@@ -35,6 +35,7 @@ string (\"request\", \"fallback\", \"budget\"), DATA a plist.")
 
 (defvar drgnx-hub--client nil "This Emacs's connection to the hub, for requests.")
 (defvar drgnx-hub--events nil "This Emacs's subscribed connection to the hub.")
+(defvar drgnx-hub--subscribing nil "This Emacs's connection whose `subscribe' the hub has not answered yet.")
 (defvar drgnx-hub--pending (make-hash-table) "Request id → callback.")
 (defvar drgnx-hub--next-id 0)
 
@@ -511,8 +512,8 @@ error, or when it does not answer."
           (t result))))
 
 (defun drgnx-hub-disconnect ()
-  (dolist (c (list drgnx-hub--client drgnx-hub--events)) (when (process-live-p c) (delete-process c)))
-  (setq drgnx-hub--client nil drgnx-hub--events nil)
+  (dolist (c (list drgnx-hub--client drgnx-hub--events drgnx-hub--subscribing)) (when (process-live-p c) (delete-process c)))
+  (setq drgnx-hub--client nil drgnx-hub--events nil drgnx-hub--subscribing nil)
   (clrhash drgnx-hub--pending))
 
 (defun drgnx-hub-running-p ()
@@ -537,19 +538,24 @@ an error saying why not."
         (or (drgnx-hub-running-p) (error "The drgnx hub did not start (see `drgnx hub status' and its job log)")))))
 
 (defun drgnx-hub-connect ()
-  "Subscribe to the hub's events (`drgnx-hub-event-functions').  Asynchronous; safe to call again."
-  (unless (process-live-p drgnx-hub--events)
+  "Subscribe to the hub's events (`drgnx-hub-event-functions').  Asynchronous; safe to call again, also before the
+hub has answered (one subscription)."
+  (unless (or (process-live-p drgnx-hub--events) (process-live-p drgnx-hub--subscribing))
     (let ((c (drgnx-hub--connect-socket
               (lambda (conn chunk)
                 (drgnx-hub--lines conn chunk
                                   (lambda (json)
                                     (cond ((plist-get json :event)
                                            (run-hook-with-args 'drgnx-hub-event-functions (plist-get json :event) (plist-get json :data)))
-                                          ((plist-get json :id) (setq drgnx-hub--events conn)))))))))
+                                          ((plist-get json :id)
+                                           (setq drgnx-hub--events conn)
+                                           (when (eq drgnx-hub--subscribing conn) (setq drgnx-hub--subscribing nil))))))))))
+      (setq drgnx-hub--subscribing c)
       ;; the hub went away (shutdown, a crash, a restart): whoever mirrors it is told
       (set-process-sentinel c (lambda (p _e)
                                 (unless (process-live-p p)
                                   (when (eq drgnx-hub--events p) (setq drgnx-hub--events nil))
+                                  (when (eq drgnx-hub--subscribing p) (setq drgnx-hub--subscribing nil))
                                   (run-hooks 'drgnx-hub-disconnect-functions))))
       (drgnx-hub--send c (list :id 0 :method "subscribe" :params (make-hash-table))))))
 
