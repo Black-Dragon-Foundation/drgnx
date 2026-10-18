@@ -30,7 +30,8 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
 
 `drgnx-hub-socket`: `$XDG_RUNTIME_DIR/drgnx/hub-HASH.sock` (HASH: the first 8 hex digits of the SHA-1 of the data
 dir), else `<state>/hub/hub-HASH.sock`; a path over 103 bytes (macOS's limit, the closing NUL included in 104; Linux
-allows 107) — a deep state dir — moves to `drgnx-hub-UID/` in the temporary directory.
+allows 107) — a deep state dir — moves to `drgnx-hub-UID/` in the temporary directory. The bytes are counted as the
+system sees the name, encoded (`file-name-coding-system`: macOS decomposes "é" into 3 bytes).
 Its directory is mode 0700 and must be the user's own. One JSON object per line:
 
 | Request (`{"id", "method", "params"}`) | Result |

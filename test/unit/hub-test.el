@@ -340,6 +340,20 @@ to OR-LOG, OPENROUTER_API_KEY unset."
         (should (string-prefix-p (file-name-as-directory (expand-file-name (format "drgnx-hub-%d" (user-uid)) temporary-file-directory))
                                  moved))))))
 
+(ert-deftest drgnx-hub/socket-length-counts-the-encoded-name ()
+  ;; macOS's file names are decomposed (utf-8-hfs): "é" is 2 bytes in Emacs but 3 on disk, so a path of 103 bytes in
+  ;; Emacs can pass the limit once encoded
+  (require 'ucs-normalize)
+  (drgnx-hub-test--with
+    (let* ((file-name-coding-system 'utf-8-hfs)
+           ;; 4 × "é", then r…: the socket ($RUN/drgnx/hub-HASH.sock, 24 bytes past it) is 103 bytes in Emacs, 107 encoded
+           (run (concat root (make-string 4 ?é) (make-string (- 103 24 8 (string-bytes root)) ?r)))
+           (process-environment (cons (concat "XDG_RUNTIME_DIR=" run) process-environment)))
+      (make-directory run t)
+      (should (eql (string-bytes (concat run "/drgnx/hub-12345678.sock")) 103))
+      (should (string-prefix-p (file-name-as-directory (expand-file-name (format "drgnx-hub-%d" (user-uid)) temporary-file-directory))
+                               (drgnx-hub-socket))))))
+
 (ert-deftest drgnx-hub/no-hub-is-started-where-starting-is-off ()
   (drgnx-hub-test--with
     (let ((process-environment (cons "DRGNX_NO_HUB_START=1" process-environment)) (started nil))

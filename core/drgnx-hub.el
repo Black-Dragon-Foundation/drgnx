@@ -55,8 +55,8 @@ the state dir."
                    (expand-file-name name (expand-file-name "drgnx" run))
                  (expand-file-name name (expand-file-name "hub" (drgnx-state-dir))))))
     ;; a Unix socket's path ends with a NUL inside 104 bytes on macOS (108 on Linux): at most 103; a deep state
-    ;; dir gets a short private one instead
-    (if (<= (string-bytes path) 103) path
+    ;; dir gets a short private one instead.  Counted as the system sees it: encoded (macOS decomposes "é" to 3 bytes)
+    (if (<= (length (encode-coding-string path (or file-name-coding-system default-file-name-coding-system))) 103) path
       (expand-file-name name (expand-file-name (format "drgnx-hub-%d" (user-uid)) temporary-file-directory)))))
 
 (defun drgnx-hub--private-dir (dir)
