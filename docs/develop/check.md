@@ -71,7 +71,7 @@ Some rules are kept by unit tests that read the source (`test/unit/lint-buffers-
 ` *…*` buffer is made with `inhibit-buffer-hooks`; the workbench starts no wall-clock timer on a follow path; and
 timers go through the layer.
 
-**Timers go through the layer** (`drgnx-lint/timers-go-through-the-layer`). For every `.el` under `modules/` and
+**Timers go through the layer** (`drgnx-lint/timers-go-through-the-layer`). For every `.el` under `core/` (except the layer, `core/drgnx-timer.el`), `modules/` and
 `wb/`, `(drgnx-lint-timers--violations FILE)` lists `(LINE . FORM)` for each lambda, closure or `apply-partially` as
 the function of a timer start, and each raw `run-at-time`, `run-with-timer`, `run-with-idle-timer`, `timer-set-time`
 or `timer-set-idle-time` unless its delay is the literal `0` and its repeat nil or absent. The number of violations

@@ -880,8 +880,8 @@ checks the seams against the fixture; `test/unit/core-timer-test.el` covers the 
 > debounce, coalesce, throttle, poll and idle work use the primitives. `run-at-time 0 nil` deferrals out of filters
 > and sentinels may stay raw. A timer function that waits wraps the wait in `with-local-quit`.
 
-`drgnx-lint/timers-go-through-the-layer` (`test/unit/lint-buffers-timers-test.el`) holds the rule in `modules/` and
-`wb/`. It fails for a lambda, closure or `apply-partially` as the function of `run-at-time`, `run-with-timer`,
+`drgnx-lint/timers-go-through-the-layer` (`test/unit/lint-buffers-timers-test.el`) holds the rule in `core/` (except the layer
+itself), `modules/` and `wb/`. It fails for a lambda, closure or `apply-partially` as the function of `run-at-time`, `run-with-timer`,
 `run-with-idle-timer`, `timer-create`, `timer-set-function` or any `drgnx-timer-*` call, and for a raw
 `run-at-time`, `run-with-timer`, `run-with-idle-timer`, `timer-set-time` or `timer-set-idle-time` unless its delay is
 the literal `0` and its repeat is nil or absent (`(run-at-time 0 nil FN …)` passes, lambda or not). Sites that
