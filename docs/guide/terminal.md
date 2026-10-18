@@ -81,6 +81,36 @@ helps.
   `M-x gpm-mouse-mode` (in an Emacs built with gpm).
 - **tmux:** see [below](#tmux).
 
+## Keys
+
+`C-S-p`, `` C-` ``, `C-.` and the other chords of your profile reach drgnx only through a key protocol: a plain
+terminal sends `C-S-p` as `C-p`, and `C-.` not at all. The `ui/terminal-keys` module turns on whichever protocol
+the terminal has, in each terminal window:
+
+- **The kitty keyboard protocol (kkp)**: kitty, foot, Ghostty, Alacritty, and WezTerm or iTerm2 with the setting
+  in [The fixes](#the-fixes). drgnx uses the `kkp` package from MELPA, pinned in drgnx's lock (`drgnx sync`
+  installs it). When a terminal window opens, kkp asks the terminal once whether it speaks the protocol
+  (`CSI ? u`) and waits 0.2 s at most. A terminal that says no, or does not answer, keeps its plain keys. Under
+  kkp every key arrives, `s-` keys included.
+- **modifyOtherKeys**: xterm (Emacs turns it on there by itself) and tmux with `extended-keys on`. drgnx reads
+  tmux's `extended-keys` and asks tmux for modifyOtherKeys when it is `on` or `always`. When it is `off`, drgnx
+  does not ask, and the window counts as plain. Every chord arrives except `s-` and `H-` keys.
+- **Neither** (GNOME Terminal, Ptyxis, Terminal.app, the Linux console): open the palette with **F1** (VS Code
+  keys) or `M-x`; every command is there. `terminal-report.eld` lists the keys of your profile this terminal
+  cannot send.
+
+Each terminal window keeps its own keys: a kitty window and a Ptyxis window on the same drgnx each get what their
+terminal can send.
+
+**`C-g` still interrupts.** Under kkp a terminal sends `C-g` as an escape sequence. While Emacs waits for a program
+(a `git` that hangs, say), it reacts only to the plain `C-g` byte. drgnx turns on kkp's
+`kkp-restore-legacy-keys-around-subprocesses`: while Emacs waits, the terminal sends plain keys, so `C-g` stops
+the program.
+
+Without the `kkp` package the module waits, and the doctor's module check names it (`ui/terminal-keys (kkp)`).
+modifyOtherKeys then works only for the few chords Emacs decodes itself (`C-<tab>`, `C-.`, `C-,` …), not for
+`C-S-` chords.
+
 ## SSH
 
 Run drgnx on the remote machine and attach from your terminal: `ssh box -t emacsclient -s drgnx -t`. Keys, mouse and
@@ -126,7 +156,8 @@ found — how keys arrive (kitty keyboard protocol, modifyOtherKeys, or neither)
 keys of your profile this terminal cannot send are written to `terminal-report.eld` in drgnx's state directory
 (`~/.local/state/drgnx/`), one entry per terminal device, for the doctor and the key sheet. The file is written
 whole and then renamed into place, so two Emacs processes never leave half of it, and nothing ever asks about it.
-Like Emacs's own terminal setup, the question drops keys typed ahead while a new terminal window opens.
+Like Emacs's own terminal setup, the question drops keys typed ahead while a new terminal window opens. kkp asks
+its own question, once per terminal, waiting 0.2 s at most (see [Keys](#keys)); its answer is added to the report.
 
 ## Mouse
 

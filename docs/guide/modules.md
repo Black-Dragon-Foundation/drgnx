@@ -142,5 +142,6 @@ key profile ([keys.md](keys.md)); faces inherit theme faces (no colours). See [c
 | `tools/live` | idle | the Live view ([live.md](live.md)): a headless browser for agents, watched live (CDP screencast) and taken over (needs websocket) |
 | `tools/shortcuts` | idle | Preferences: Keyboard Shortcuts ([shortcuts.md](shortcuts.md)): every command with its keys, source and place; record keys and chords, conflicts, filters, suggestions from use |
 | `ui/terminal` | startup | terminal windows (`emacsclient -t`, `emacs -nw`): what each terminal can do, asked once per terminal and written to terminal-report.eld with the keys it cannot send; the mouse in terminal windows (Toggle Mouse in Terminal Windows); `emacsclient -t FILE` (git's `EDITOR`) shows the editor only and returns when you close the tab or press `C-x #` ([terminal.md](terminal.md)) |
+| `ui/terminal-keys` | startup | `C-S-` chords, `` C-` ``, `C-.` … in terminal windows: the kitty keyboard protocol where the terminal speaks it, else modifyOtherKeys (xterm; tmux with `extended-keys`); `C-g` still stops a hanging `git` (needs kkp; [terminal.md](terminal.md#keys)) |
 
 The `extra/` modules wait until their packages are installed; Preferences: Modules says which.

@@ -62,6 +62,13 @@ evil's normal state. On **macOS** the VS Code profile uses Cmd (`s-`) as VS Code
 In a terminal window drgnx has the mouse, so the terminal's own selection is **Shift+drag** in most terminals
 (Option+drag in iTerm2; other terminals may use their own modifier); see [terminal.md](terminal.md#mouse).
 
+The same keys work in a terminal window when the terminal can send them: `C-S-p`, `` C-` ``, `C-.` and the other
+chords need the kitty keyboard protocol (kitty, foot, Ghostty, Alacritty; WezTerm with a setting) or
+modifyOtherKeys (xterm; tmux with `extended-keys on`). drgnx turns on whichever the terminal has; no profile has a
+second, terminal-only set of keys. In a terminal that has neither, such as GNOME Terminal or Ptyxis, `C-S-p`
+arrives as `C-p`: open the palette with **F1** instead (VS Code keys; `M-x` in every profile). drgnx writes down
+which of your keys that terminal cannot send. See [terminal.md](terminal.md#keys).
+
 ## On a Mac
 
 Keys are written the Emacs way: `s-` is Cmd ⌘, `M-` Option ⌥, `C-` Ctrl ⌃, `S-` Shift ⇧; `s-k s-s` is ⌘K then ⌘S. The
