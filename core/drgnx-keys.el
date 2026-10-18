@@ -769,19 +769,35 @@ comments and layout stay."
     (set-file-modes tmp #o644)
     (rename-file tmp file t)))
 
-(defun drgnx-keys-choose-profile (name)
-  "Switch the key profile to the preset NAME and save it in keys.eld."
+(declare-function drgnx-modal-prepare "drgnx-modal-choose")
+(declare-function drgnx-modal-wait-text "drgnx-modal-choose")
+
+(defun drgnx-keys-choose-profile (name &optional interactive)
+  "Switch the key profile to the preset NAME and save it in keys.eld.
+A stack that needs a modal engine (Vim: evil) switches only once the engine is loaded (`drgnx-modal-prepare'):
+when it is not installed, INTERACTIVE (the command) asks once to install it; called from code it waits for drgnx
+sync and the next start.  Until then the current stack stays and the message says why."
   (interactive (list (completing-read "Keyboard profile: " drgnx-keys-presets nil t nil nil
                                       ;; RET at once: the current profile (else the default), never none
                                       (or (car (rassoc (plist-get drgnx-keys-last :layers) drgnx-keys-presets))
-                                          (car (rassoc drgnx-keys-layers drgnx-keys-presets))))))
+                                          (car (rassoc drgnx-keys-layers drgnx-keys-presets))))
+                     t))
   (unless (assoc name drgnx-keys-presets)
     (user-error "No keyboard profile %S (profiles: %s)" name (mapconcat #'car drgnx-keys-presets ", ")))
-  (drgnx-keys-use (cdr (assoc name drgnx-keys-presets)) t)
-  (message "Keys: %s%s" name
-           (if-let* ((n (length (drgnx-keys-conflict-lines))) ((> n 0)))
-               (format " — %d conflict%s, see Keyboard Shortcuts" n (if (= n 1) "" "s"))
-             "")))
+  (require 'drgnx-modal-choose)
+  (let* ((layers (cdr (assoc name drgnx-keys-presets)))
+         (ready (drgnx-modal-prepare layers interactive)))
+    (if (not (memq ready '(ready started installed)))
+        (message "Keys: still %s — %s%s" (or (car (rassoc (plist-get drgnx-keys-last :layers) drgnx-keys-presets)) "yours")
+                 (drgnx-modal-wait-text name ready)
+                 (if (eq ready 'pending) " (its engine is not installed); then they switch at the next start" ""))
+      ;; The engine runs once the keys are applied, before keys.eld names the stack.
+      (drgnx-keys-use layers)
+      (drgnx-keys--save-layers layers)
+      (message "Keys: %s%s" name
+               (if-let* ((n (length (drgnx-keys-conflict-lines))) ((> n 0)))
+                   (format " — %d conflict%s, see Keyboard Shortcuts" n (if (= n 1) "" "s"))
+                 "")))))
 
 (provide 'drgnx-keys)
 ;;; drgnx-keys.el ends here

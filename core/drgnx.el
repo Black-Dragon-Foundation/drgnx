@@ -19,6 +19,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-pkg-activate)
 (require 'drgnx-onboard)
+(require 'drgnx-modal-choose)
 (autoload 'drgnx-ai--on-first-window "drgnx-ai-probe")
 (require 'drgnx-gc)
 (require 'drgnx-session)
@@ -99,6 +100,7 @@ The steady GC threshold is set at the end, also when a step fails (early-init de
               (error (message "drgnx: modules did not start: %s" (error-message-string err))))
             (drgnx--load-user-config)))
         (drgnx-keys-apply)
+        (drgnx-modal-apply-pending)                    ; a Vim stack chosen before its engine was installed
         (drgnx-surfaces-refresh))
     (drgnx-gc-setup)))
 
