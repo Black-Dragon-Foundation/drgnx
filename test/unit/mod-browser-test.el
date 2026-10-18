@@ -23,7 +23,7 @@
   `(let* ((drgnx-wb--sections nil) (drgnx-signal--editor-window nil)
           (drgnx-browser--told nil) (drgnx-browser--buffer nil) (drgnx-browser-test--urls nil)
           (display-buffer-alist nil) (display-buffer-overriding-action '(nil))
-          (size (cons (window-total-width (frame-root-window)) (window-total-height (frame-root-window)))))
+          (size (cons (frame-width) (frame-height))))
      (set-frame-size nil 200 60)
      (delete-other-windows)
      (switch-to-buffer (get-buffer-create "*drgnx-browser-test-code*"))
@@ -349,3 +349,10 @@
 
 (provide 'mod-browser-test)
 ;;; mod-browser-test.el ends here
+
+(ert-deftest drgnx-browser/the-fixture-keeps-the-frame-size ()
+  ;; The fixture gives the frame back its size: a frame one line shorter after each test left later docks no room.
+  (let ((size (cons (frame-width) (frame-height))))
+    (drgnx-browser-test--with (ignore))
+    (read-event nil nil 0.01)                           ; a terminal frame takes its new size at the next wait
+    (should (equal (cons (frame-width) (frame-height)) size))))

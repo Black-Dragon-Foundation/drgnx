@@ -24,7 +24,7 @@ window, and the persist hooks as the layouts module wires them.  Prompts signal 
           (drgnx-wb--sections nil) (drgnx-signal--editor-window nil)
           (drgnx-wb--areas (copy-tree drgnx-wb--areas))
           (display-buffer-alist nil) (display-buffer-overriding-action '(nil))
-          (size (cons (window-total-width (frame-root-window)) (window-total-height (frame-root-window)))))
+          (size (cons (frame-width) (frame-height))))
      (set-frame-size nil 200 60)
      (delete-other-windows)
      (dolist (p drgnx-layouts-persist-test--params) (set-frame-parameter nil p nil))
@@ -155,3 +155,10 @@ window, and the persist hooks as the layouts module wires them.  Prompts signal 
 
 (provide 'mod-layouts-persist-test)
 ;;; mod-layouts-persist-test.el ends here
+
+(ert-deftest drgnx-layouts/the-persist-fixture-keeps-the-frame-size ()
+  ;; The fixture gives the frame back its size: a frame one line shorter after each test left later docks no room.
+  (let ((size (cons (frame-width) (frame-height))))
+    (drgnx-layouts-persist-test--with (ignore))
+    (read-event nil nil 0.01)                           ; a terminal frame takes its new size at the next wait
+    (should (equal (cons (frame-width) (frame-height)) size))))

@@ -23,7 +23,7 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
           (drgnx-agents-ui--last (make-hash-table :test #'eq :weakness 'key))
           (drgnx-agents-ui--jobs-cache (cons 1.0e+INF nil))     ; no job directory is read
           (display-buffer-alist nil) (display-buffer-overriding-action '(nil))
-          (size (cons (window-total-width (frame-root-window)) (window-total-height (frame-root-window)))))
+          (size (cons (frame-width) (frame-height))))
      (set-frame-size nil 200 60)
      (delete-other-windows)
      (dolist (p '(drgnx-wb-view drgnx-wb-areas drgnx-wb-panel-px drgnx-wb-right-px drgnx-wb-dock-px
@@ -291,3 +291,10 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
     (should (= 2 (length (drgnx-groups-list))))))       ; until Task 6's shape: the groups as they are
 
 ;;; mod-layouts-test.el ends here
+
+(ert-deftest drgnx-layouts/the-fixture-keeps-the-frame-size ()
+  ;; The fixture gives the frame back its size: a frame one line shorter after each test left later docks no room.
+  (let ((size (cons (frame-width) (frame-height))))
+    (drgnx-layouts-test--with (ignore))
+    (read-event nil nil 0.01)                           ; a terminal frame takes its new size at the next wait
+    (should (equal (cons (frame-width) (frame-height)) size))))
