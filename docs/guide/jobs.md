@@ -112,7 +112,8 @@ what it spends, so the budget would not stop it.
   its task for a new agent — `drgnx-job-start-tries` (3) times, then it is a card with the agent's last error. A turn
   that ends without `complete_task` gets one reminder; the next such turn is a card ("stalled"). These counts are in
   the job's record: a hub restart does not reset them. A finished task whose agent's turn never ends waits for its
-  review `drgnx-job-review-turn-limit` seconds (600), then it is a card too.
+  review `drgnx-job-review-turn-limit` seconds (600), then it is a card too — **Review now** reviews it as if the turn had
+  ended, Retry starts an agent over; a permission card or a pause in between starts the wait again.
 - **The hub restarts:** the job is in `work.db`; tasks whose agents are gone are free again and start anew in their
   worktrees (a task waiting on a permission its agent asked goes back too: the request went with the agent); cards
   for your decision (a conflict, a failed review) stay yours; nothing merges twice.

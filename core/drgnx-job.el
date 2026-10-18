@@ -406,7 +406,8 @@ job's record; after `drgnx-job-review-turn-limit' seconds a card."
           ((> (- (float-time) since) drgnx-job-review-turn-limit)
            (drgnx-job--set-count id :in-review-since (plist-get task :id) nil)
            (drgnx-job--card id (plist-get task :id) "stalled"
-                            (format "its agent's turn has not ended %d minutes after it finished the task" (round (/ drgnx-job-review-turn-limit 60))))))))
+                            (format "its agent's turn has not ended %d minutes after it finished the task" (round (/ drgnx-job-review-turn-limit 60)))
+                            nil (list :review t))))))
 
 (defun drgnx-job--nudge (id task s)
   "S's turn ended with TASK of job ID open: once a reminder, then a card."
@@ -571,6 +572,7 @@ goes to the user.  The merge itself is a git process of its own (a hook may be s
       (drgnx-coord-job-set id :data (plist-put (plist-get job :data) :budget budget))
       (drgnx-gateway-set-budget id budget))
     (drgnx-coord-job-set id :status "running")
+    (dolist (task (drgnx-coord-tasks id)) (drgnx-job--set-count id :in-review-since (plist-get task :id) nil))   ; the pause was no wait
     (dolist (s (drgnx-agents-sessions))
       (when (and (equal (drgnx-agent-session-job s) id) (eq (drgnx-agent-session-status s) 'idle) (drgnx-agent-session-paused s))
         (setf (drgnx-agent-session-paused s) nil)
@@ -736,6 +738,7 @@ S: the session whose request waits (it goes back to work once answered, or, gone
                                                            (equal (plist-get (drgnx-coord-task task) :status) "in-review"))
                                                        "in-review" "ready"))))
     (unless (member kind drgnx-job--advisory-kinds)
+      (drgnx-job--set-count job :in-review-since task nil)          ; back in review later, the wait for the turn starts again
       (drgnx-coord-force-status task "needs-input" (plist-get (drgnx-coord-task task) :agent))))
   (let* ((data (append (and s (list :sid (drgnx-agent-session-id s))) data))
          (old (seq-find (lambda (c) (and (equal (plist-get c :task) task) (equal (plist-get c :kind) kind)
@@ -767,7 +770,8 @@ S: the session whose request waits (it goes back to work once answered, or, gone
     ("merge-conflict" '(("retry" "Let the agent resolve it") ("merge" "Merge again (I resolved it)") ("drop" "Drop the task")
                         ("open" "Open the job's worktree")))
     ("review" '(("accept" "Merge as it is") ("retry" "Back to an agent") ("drop" "Drop the task")))
-    ((or "fallback" "agent" "stalled") '(("retry" "Retry") ("drop" "Drop the task")))
+    ((or "fallback" "agent" "stalled") (append (and (plist-get (plist-get card :data) :review) '(("review" "Review now")))   ; a finished task
+                                               '(("retry" "Retry") ("drop" "Drop the task"))))
     ("budget" '(("resume" "Resume with a budget…") ("stop" "Stop the job")))
     ("clash" (append (and (plist-get (plist-get (plist-get card :data) :recommendation) :side) '(("accept" "Accept the reviewer")))   ; a side to accept
                      '(("pick-a" "Pick A") ("pick-b" "Pick B") ("discuss" "Discuss with the reviewer…"))))
@@ -825,6 +829,9 @@ S: the session whose request waits (it goes back to work once answered, or, gone
                                                      (format "Merging your branch into job/%s conflicted (%s). Merge job/%s into your branch, resolve the conflicts, commit, then call complete_task."
                                                              job (plist-get card :title) job))))
             ((or "merge" "accept") (drgnx-job--merge job (drgnx-coord-task task)))
+            ("review" (when-let* ((s (drgnx-job--session (plist-get (drgnx-coord-task task) :agent))))   ; as if its turn had ended
+                        (unless (eq (drgnx-agent-session-status s) 'exited) (drgnx-agents-kill s)))
+             (drgnx-coord-force-status task "in-review" (plist-get (drgnx-coord-task task) :agent)))
             ("drop" (when-let* ((s (drgnx-job--session (plist-get (drgnx-coord-task task) :agent)))) (drgnx-agents-kill s))
              (drgnx-coord-force-status task "dropped" nil))
             ("resume" (drgnx-job-resume job :budget (and arg (if (numberp arg) arg (string-to-number (format "%s" arg))))))

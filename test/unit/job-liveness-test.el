@@ -94,6 +94,47 @@
         (should (seq-find (lambda (c) (equal (plist-get c :kind) "stalled")) (drgnx-coord-cards id "open")))
         (should (equal (drgnx-job-run-test--status id 1) "needs-input"))))))
 
+(ert-deftest drgnx-job/a-card-restarts-the-wait-for-a-turn-in-review ()
+  ;; a permission card (or a pause) in the middle of the wait: the clock starts again when the task is back in review
+  (drgnx-job-run-test--with drgnx-job-liveness-test--one
+    (let* ((drgnx-job-max-agents 0) (id (drgnx-job-propose plan)) (tid (concat id "#1")) (drgnx-job-review-turn-limit 0.3))
+      (drgnx-job-approve id)
+      (let ((s (drgnx-agents-start "mock" repo tid id)))
+        (drgnx-job-run-test--wait (lambda () (eq (drgnx-agent-session-status s) 'idle)))
+        (drgnx-agents-send s "slow")
+        (should (drgnx-job-run-test--wait (lambda () (eq (drgnx-agent-session-status s) 'busy))))
+        (drgnx-coord-force-status tid "in-review" (drgnx-agent-session-id s))
+        (drgnx-job-step id)
+        (should (> (drgnx-job--count id :in-review-since tid) 0))
+        (drgnx-job--card id tid "permission" "a permission" s (list :request 1))       ; the task waits for the user
+        (should (zerop (drgnx-job--count id :in-review-since tid)))
+        (sleep-for 0.4)
+        (drgnx-coord-force-status tid "in-review" (drgnx-agent-session-id s))          ; answered
+        (drgnx-job-step id)
+        (should-not (seq-find (lambda (c) (equal (plist-get c :kind) "stalled")) (drgnx-coord-cards id "open")))))))
+
+(ert-deftest drgnx-job/review-now-on-a-stalled-review-starts-the-review ()
+  (drgnx-job-run-test--with drgnx-job-liveness-test--one
+    (let* ((drgnx-job-max-agents 0) (id (drgnx-job-propose plan)) (tid (concat id "#1")) (drgnx-job-review-turn-limit 0.3) (reviews 0))
+      (cl-letf (((symbol-function 'drgnx-job--start-review) (lambda (&rest _) (setq reviews (1+ reviews)))))
+        (drgnx-job-approve id)
+        (let ((s (drgnx-agents-start "mock" repo tid id)))
+          (drgnx-job-run-test--wait (lambda () (eq (drgnx-agent-session-status s) 'idle)))
+          (drgnx-agents-send s "slow")
+          (should (drgnx-job-run-test--wait (lambda () (eq (drgnx-agent-session-status s) 'busy))))
+          (drgnx-coord-force-status tid "in-review" (drgnx-agent-session-id s))
+          (drgnx-job-step id)
+          (sleep-for 0.4)
+          (drgnx-job-step id)
+          (let ((card (seq-find (lambda (c) (equal (plist-get c :kind) "stalled")) (drgnx-coord-cards id "open"))))
+            (should card)
+            (should (assoc "review" (drgnx-job-card-actions card)))
+            (should (= reviews 0))
+            (drgnx-job-card-act (plist-get card :id) "review")
+            (should (drgnx-job-run-test--wait (lambda () (> reviews 0)) 10))
+            (should (eq (drgnx-agent-session-status s) 'exited))
+            (should (equal (drgnx-job-run-test--status id 1) "in-review"))))))))
+
 (ert-deftest drgnx-job/counts-survive-a-hub-restart ()
   ;; how often a task's agent ended and was nudged is in the job's record, not in the hub's memory
   (drgnx-job-run-test--with drgnx-job-liveness-test--one
