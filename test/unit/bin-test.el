@@ -855,3 +855,24 @@ echo \"agent ${DRGNX_AGENT-unset} job ${DRGNX_JOB-unset} task ${DRGNX_TASK-unset
           (should (eql 2 (car r)))
           (should (string-match-p "usage: drgnx coord mcp --kind KIND" (cdr r))))
         (should-not (file-exists-p log))))))
+
+(ert-deftest drgnx-bin/test-leaks-sets-the-variable ()
+  ;; `bin/drgnx test --leaks' turns the leak census on: the runner reads DRGNX_TEST_LEAKS (shards and per-file
+  ;; Emacsen inherit it).  It combines with --one-process, in either order.
+  (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
+         (parent (expand-file-name "parent" dir))
+         (seen (expand-file-name "seen" dir))
+         (emacs (drgnx-bin-test--fake-emacs (expand-file-name "fake-emacs" dir)
+                                            (format "echo \"${DRGNX_TEST_LEAKS-unset} ${DRGNX_TEST_ONE_PROCESS-unset}\" >> %s" seen)))
+         (drgnx-bin-test--cwd dir))
+    (unwind-protect
+        (progn
+          (make-directory parent)
+          (dolist (args '(("test") ("test" "--leaks") ("test" "--leaks" "--one-process") ("test" "--one-process" "--leaks")))
+            (should (eql 0 (car (apply #'drgnx-bin-test--call drgnx-bin-test--bin
+                                       (drgnx-bin-test--env dir parent (concat "DRGNX_EMACS=" emacs)
+                                                            "DRGNX_TEST_LEAKS" "DRGNX_TEST_ONE_PROCESS")
+                                       args)))))
+          (should (equal (split-string (drgnx-bin-test--slurp seen) "\n" t)
+                         '("unset unset" "1 unset" "1 1" "1 1"))))
+      (delete-directory dir t))))

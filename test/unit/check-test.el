@@ -221,3 +221,33 @@
           (should (= 2 (length (plist-get json :files)))))
         (should-not (member "DRGNX_TEST_ONE_PROCESS=1" (plist-get unit :env)))
         (should (member "DRGNX_TEST_ONE_PROCESS=1" (plist-get timing :env)))))))
+
+(ert-deftest drgnx-check/leaks-are-merged-across-shards ()
+  ;; `check --leaks': the unit jobs run with the census on; the shards' :leaks are one report, each leak once.
+  (drgnx-check-test--with dir
+    (let ((jobs (drgnx-check-plan :root drgnx-dir :unit-shards 2 :gui nil :dir dir :leaks t))
+          (off (drgnx-check-plan :root drgnx-dir :unit-shards 2 :gui nil :dir dir)))
+      (dolist (j jobs)
+        (when (string-prefix-p "unit" (plist-get j :name))
+          (should (member "DRGNX_TEST_LEAKS=1" (plist-get j :env)))))
+      (dolist (j off) (should-not (member "DRGNX_TEST_LEAKS=1" (plist-get j :env)))))
+    (let ((a '(:test "a/one" :file "/x/a-test.el" :what "hook kill-buffer-hook +a-fn" :source "core/a.el"))
+          (b '(:test :null :file "/x/b-test.el" :what "advice ignore +b-fn" :source :null))
+          (c '(:test "c/three" :file "/x/c-test.el" :what "timer +c-fn once" :source "core/c.el")))
+      (dolist (shard `(("unit-1" ,a ,b) ("unit-2" ,c ,a) ("unit-timing" ,b) ("ui")))
+        (with-temp-file (concat dir (car shard) ".json")
+          (insert (json-serialize (list :total 1 :passed 1 :failed 0 :failures [] :known_red [] :tests []
+                                        :leaks (vconcat (cdr shard)))))))
+      ;; a shard that failed to write its summary, or an older one without :leaks, adds nothing
+      (with-temp-file (concat dir "unit-3.json") (insert (json-serialize (list :total 0 :tests []))))
+      (with-temp-file (concat dir "unit-4.json") (insert "not json"))
+      (let ((merged (drgnx-check-leaks dir)))
+        (should (= 3 (length merged)))
+        (should (equal (mapcar (lambda (l) (plist-get l :what)) merged)
+                       '("hook kill-buffer-hook +a-fn" "advice ignore +b-fn" "timer +c-fn once"))))
+      (let ((text (drgnx-check-leaks-report (drgnx-check-leaks dir))))
+        (should (string-match-p "\\`Leaks (3)" text))
+        (should (string-match-p "a/one +a-test\\.el +hook kill-buffer-hook \\+a-fn +\\[core/a\\.el\\]" text))
+        (should (string-match-p "advice ignore \\+b-fn" text)))
+      (should (equal (drgnx-check-leaks-report nil) "")))
+    (should (equal (drgnx-check--parse-args '("--leaks" "--no-perf")) '(:jobs 8 :shards 4 :perf nil :gui t :leaks t)))))
