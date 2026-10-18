@@ -578,4 +578,15 @@ printf '%%s\\n' %s > \"$d/argv\"; exit 10
           (should (equal (cons bad (car r)) (cons bad 1)))
           (should (equal (drgnx-bootstrap-test--log root) "")))))))
 
+(ert-deftest drgnx-bootstrap/bin-drgnx-knows-every-root-line-of-the-recipes ()
+  ;; bin/drgnx runs only the sudo lines it lists: each age/chezmoi recipe's sudo line must be there
+  (let ((bin (with-temp-buffer (insert-file-contents (expand-file-name "bin/drgnx" drgnx-dir)) (buffer-string)))
+        (lines 0))
+    (dolist (tool '(age chezmoi))
+      (pcase-dolist (`(,_pm . ,line) (plist-get (plist-get (alist-get tool drgnx-onboard-install-recipes) :linux) :by-program))
+        (when (string-prefix-p "sudo " line)
+          (cl-incf lines)
+          (should (string-search (format "\"%s\"" line) bin)))))
+    (should (>= lines 4))))
+
 ;;; bootstrap-test.el ends here
