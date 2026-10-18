@@ -921,7 +921,9 @@ for every OpenRouter route, saved in agents.eld; it applies through drgnx's gate
          (ignore (drgnx-agent-settings--ask-slugs "Never these providers (slugs; empty: none): " (plist-get old :ignore)))
          (dc (intern (completing-read "Providers that keep your data: "
                                       '("allow" "deny") nil t nil nil (symbol-name (or (plist-get old :data-collection) 'allow)))))
-         (zdr (y-or-n-p "Only zero-data-retention endpoints? "))
+         (zdr (y-or-n-p (if (plist-get old :zdr)
+                            "Only zero-data-retention endpoints (now on; n turns it off)? "
+                          "Only zero-data-retention endpoints (now off)? ")))
          (new (append (and only (list :only only)) (and ignore (list :ignore ignore))
                       (and (eq dc 'deny) (list :data-collection 'deny))
                       (and zdr (list :zdr t)))))

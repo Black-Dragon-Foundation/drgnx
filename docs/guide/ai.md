@@ -289,7 +289,19 @@ OpenRouter chooses, among the providers that serve a model, one for each request
 
 Each key is optional. A value that is not a slug list, `deny`/`allow` or `t` is ignored. The gateway puts them into the
 request's top-level `provider` object (`only`, `ignore`, `data_collection`, `zdr`), which OpenRouter's Anthropic-compatible
-`/api/v1/messages` accepts (its `ProviderPreferences`); requests to every other provider are unchanged. They reach only
+`/api/v1/messages` accepts (its `ProviderPreferences`). They apply to Messages requests (`/v1/messages`, also with a query
+such as `?beta=true`) sent to the provider with the id `openrouter` only: other providers' requests are unchanged, and so
+are the token count (`/v1/messages/count_tokens`) and the model list, which route to no provider. A custom provider that
+points at openrouter.ai under another id is not covered.
+
+If the agent's own request already has a `provider` object, the two are merged and the stricter value wins: `only` is
+the intersection of the two lists (when both set one; none in common is a 400 `invalid_request_error` from the gateway,
+nothing is sent), `ignore` the union, `data_collection` `deny` if either says so, `zdr` on if either says so. The agent's
+other keys (`order`, `sort`, `require_parameters`, `allow_fallbacks`, …) pass through. If restrictions are set and the
+body cannot be read as a JSON object (or its `provider` is not one), the gateway answers 400 `invalid_request_error`
+and sends nothing: a request that might not honour them never goes out. Without restrictions the body goes as it was.
+
+They reach only
 the agents that go through the gateway, so a route without it (no hub, or `drgnx-agents-use-gateway` off) is bound by
 your OpenRouter account settings alone ([openrouter.ai/settings/privacy](https://openrouter.ai/settings/privacy)). A model
 that no allowed provider serves fails with OpenRouter's own error, which the agent shows.

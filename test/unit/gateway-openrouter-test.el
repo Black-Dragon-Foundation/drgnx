@@ -53,16 +53,26 @@
        (drgnx-work-db-close-all)
        (delete-directory root t))))
 
-(defun drgnx-gateway-openrouter-test--request (port token)
-  "POST a Messages request to the gateway at PORT with TOKEN; the status once it closed."
-  (let* ((got "") (closed nil) (body "{\"model\":\"claude-x\"}")
+(defvar drgnx-gateway-openrouter-test--answer nil "What the gateway answered the last request with.")
+
+(defun drgnx-gateway-openrouter-test--request (port token &optional body path)
+  "POST BODY (a Messages request) to PATH of the gateway at PORT with TOKEN; the status once it closed (what it
+answered is in `drgnx-gateway-openrouter-test--answer')."
+  (let* ((got "") (closed nil) (body (or body "{\"model\":\"claude-x\"}")) (path (or path "/v1/messages"))
          (c (open-network-stream "gw-or-test" nil "127.0.0.1" port :coding 'binary)))
     (set-process-sentinel c (lambda (_p _e) (setq closed t)))
     (set-process-filter c (lambda (_p s) (setq got (concat got s))))
-    (process-send-string c (format "POST /v1/messages HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nAuthorization: Bearer %s\r\nContent-Length: %d\r\n\r\n%s"
-                                   token (length body) body))
+    (process-send-string c (format "POST %s HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nAuthorization: Bearer %s\r\nContent-Length: %d\r\n\r\n%s"
+                                   path token (length body) body))
     (let ((deadline (+ (float-time) 8))) (while (and (not closed) (< (float-time) deadline)) (accept-process-output nil 0.01)))
+    (setq drgnx-gateway-openrouter-test--answer got)
     (and (string-match "\\`HTTP/1\\.[01] \\([0-9]+\\)" got) (string-to-number (match-string 1 got)))))
+
+(defun drgnx-gateway-openrouter-test--provider (body &optional restrictions)
+  "The \"provider\" object (a plist) in the body the gateway builds from the JSON text BODY with RESTRICTIONS."
+  (plist-get (json-parse-string (drgnx-gateway--body (list :body body) nil (drgnx-gateway-restrictions restrictions))
+                                :object-type 'plist)
+             :provider))
 
 (defun drgnx-gateway-openrouter-test--log (file)
   (if (file-exists-p file) (with-temp-buffer (insert-file-contents file) (buffer-string)) ""))
@@ -91,6 +101,85 @@
                                (drgnx-gateway--body (list :body "{\"model\":\"x\"}") nil '(:zdr t)) :object-type 'plist)
                               :model)
                    "x"))))
+
+(ert-deftest drgnx-gateway-openrouter/a-client-provider-object-is-merged-the-stricter-wins ()
+  (let* ((mine '(:only ("anthropic" "google-vertex") :ignore ("azure") :data-collection deny :zdr t))
+         (body (lambda (provider) (format "{\"model\":\"x\",\"provider\":%s}" provider))))
+    ;; only: the intersection (drgnx's order); one side alone is kept
+    (should (equal (plist-get (drgnx-gateway-openrouter-test--provider
+                               (funcall body "{\"only\":[\"google-vertex\",\"openai\"]}") mine)
+                              :only)
+                   ["google-vertex"]))
+    (should (equal (plist-get (drgnx-gateway-openrouter-test--provider (funcall body "{\"order\":[\"openai\"]}") mine) :only)
+                   ["anthropic" "google-vertex"]))
+    (should (equal (plist-get (drgnx-gateway-openrouter-test--provider (funcall body "{\"only\":[\"openai\"]}") '(:zdr t)) :only)
+                   ["openai"]))
+    ;; ignore: the union
+    (should (equal (plist-get (drgnx-gateway-openrouter-test--provider (funcall body "{\"ignore\":[\"openai\",\"azure\"]}") mine)
+                              :ignore)
+                   ["openai" "azure"]))
+    ;; data_collection: deny wins, from either side
+    (should (equal (plist-get (drgnx-gateway-openrouter-test--provider (funcall body "{\"data_collection\":\"allow\"}") mine)
+                              :data_collection)
+                   "deny"))
+    (should (equal (plist-get (drgnx-gateway-openrouter-test--provider (funcall body "{\"data_collection\":\"deny\"}") '(:zdr t))
+                              :data_collection)
+                   "deny"))
+    ;; zdr: either asks for it
+    (should (eq (plist-get (drgnx-gateway-openrouter-test--provider (funcall body "{\"zdr\":false}") mine) :zdr) t))
+    (should (eq (plist-get (drgnx-gateway-openrouter-test--provider (funcall body "{\"zdr\":true}") '(:only ("a"))) :zdr) t))
+    (should (eq (plist-get (drgnx-gateway-openrouter-test--provider (funcall body "{\"zdr\":false}") '(:only ("a"))) :zdr) :false))
+    ;; every other key passes through
+    (let ((p (drgnx-gateway-openrouter-test--provider
+              (funcall body "{\"order\":[\"openai\"],\"sort\":\"price\",\"require_parameters\":true,\"allow_fallbacks\":false}") mine)))
+      (should (equal (plist-get p :order) ["openai"]))
+      (should (equal (plist-get p :sort) "price"))
+      (should (eq (plist-get p :require_parameters) t))
+      (should (eq (plist-get p :allow_fallbacks) :false)))
+    ;; without restrictions the client's object is not touched
+    (should (equal (drgnx-gateway--body (list :body (funcall body "{\"only\":[\"x\"]}")) nil nil)
+                   (funcall body "{\"only\":[\"x\"]}")))))
+
+(ert-deftest drgnx-gateway-openrouter/no-provider-in-common-is-a-400-and-nothing-is-sent ()
+  (drgnx-gateway-openrouter-test--with
+    (let ((token (drgnx-gateway-register
+                  (list :chain '((openrouter . "m1")) :openrouter (drgnx-gateway-restrictions '(:only ("anthropic")))))))
+      (should (= (drgnx-gateway-openrouter-test--request
+                  port token "{\"model\":\"x\",\"provider\":{\"only\":[\"openai\"]}}")
+                 400))
+      (should (string-search "invalid_request_error" drgnx-gateway-openrouter-test--answer))
+      (should (string-search "no provider in common" drgnx-gateway-openrouter-test--answer))
+      (should (equal (drgnx-gateway-openrouter-test--log or-log) "")))))
+
+(ert-deftest drgnx-gateway-openrouter/a-body-that-cannot-be-read-is-refused-with-restrictions ()
+  (drgnx-gateway-openrouter-test--with
+    (let ((token (drgnx-gateway-register
+                  (list :chain '((openrouter . "m1")) :openrouter (drgnx-gateway-restrictions drgnx-gateway-openrouter-test--restrictions))))
+          (plain (drgnx-gateway-register (list :chain '((openrouter . "m1"))))))
+      (dolist (bad '("this is not json" "[1,2]" "{\"model\":\"x\",\"provider\":\"anthropic\"}"))
+        (should (= (drgnx-gateway-openrouter-test--request port token bad) 400))
+        (should (string-search "invalid_request_error" drgnx-gateway-openrouter-test--answer)))
+      (should (equal (drgnx-gateway-openrouter-test--log or-log) ""))
+      ;; an empty object is a body: the restrictions are added to it
+      (should (= (drgnx-gateway-openrouter-test--request port token "{}") 200))
+      (should (string-search "\"zdr\":true" (drgnx-gateway-openrouter-test--log or-log)))
+      ;; no restrictions, nothing to fail closed on: the bytes go as they were
+      (should (= (drgnx-gateway-openrouter-test--request port plain "this is not json") 200))
+      (should (string-search "this is not json" (drgnx-gateway-openrouter-test--log or-log))))))
+
+(ert-deftest drgnx-gateway-openrouter/only-the-messages-endpoint-gets-the-provider-object ()
+  (drgnx-gateway-openrouter-test--with
+    (let ((token (drgnx-gateway-register
+                  (list :chain '((openrouter . "m1"))
+                        :openrouter (drgnx-gateway-restrictions drgnx-gateway-openrouter-test--restrictions)))))
+      (drgnx-gateway-openrouter-test--request port token "{\"model\":\"x\",\"messages\":[]}" "/v1/messages/count_tokens")
+      (let ((sent (drgnx-gateway-openrouter-test--log or-log)))
+        (should (string-search "POST /api/v1/messages/count_tokens" sent))
+        (should-not (string-search "provider" sent))
+        (should-not (string-search "zdr" sent)))
+      ;; the Messages path with a query (Claude Code sends ?beta=true) does
+      (drgnx-gateway-openrouter-test--request port token nil "/v1/messages?beta=true")
+      (should (string-search "\"zdr\":true" (drgnx-gateway-openrouter-test--log or-log))))))
 
 (ert-deftest drgnx-gateway-openrouter/restrictions-travel-from-agents-eld-to-the-registration ()
   ;; drgnx-agents--gateway: agents.eld's :openrouter reaches the registration of an OpenRouter agent, through the hub's
@@ -213,6 +302,28 @@
           (unwind-protect
               (progn (should-error (drgnx-agent-settings-openrouter) :type 'user-error)
                      (should (equal (drgnx-agents-openrouter-restrictions) drgnx-gateway-openrouter-test--restrictions)))
+            (kill-buffer (current-buffer))))))))
+
+(ert-deftest drgnx-gateway-openrouter/the-zdr-question-says-what-n-does ()
+  (drgnx-agent-config-test-env
+    (let ((process-environment (cons (concat "DRGNX_CONFIG_DIR=" home "cfg") process-environment))
+          (drgnx-agents-profiles nil) (answers nil) (asked nil))
+      (cl-letf (((symbol-function 'read-string) (lambda (&rest _) (pop answers)))
+                ((symbol-function 'completing-read) (lambda (&rest _) (pop answers)))
+                ((symbol-function 'y-or-n-p) (lambda (prompt) (push prompt asked) (pop answers))))
+        (with-current-buffer (drgnx-agent-settings-open 'claude root)
+          (unwind-protect
+              (progn
+                ;; on: the question says that n turns it off, and n does
+                (drgnx-agents-set-setting :openrouter '(:zdr t))
+                (setq answers (list "" "" "allow" nil))
+                (drgnx-agent-settings-openrouter)
+                (should (string-search "now on; n turns it off" (car asked)))
+                (should-not (drgnx-agents-openrouter-restrictions))
+                ;; off: the question says it is off
+                (setq answers (list "" "" "allow" nil))
+                (drgnx-agent-settings-openrouter)
+                (should (string-search "now off" (car asked))))
             (kill-buffer (current-buffer))))))))
 
 (ert-deftest drgnx-gateway-openrouter/the-command-is-registered-with-keys ()
