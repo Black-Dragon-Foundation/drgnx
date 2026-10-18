@@ -32,6 +32,10 @@ first time it is asked for, also in the first second after a start (its module s
 (`drgnx-wb-show-view`, as a layout does; there are no clickable view tabs yet) swaps the sections in place, at the same width, and leaves focus where it was (a focus inside the
 sidebar moves to the new view's first section); with the sidebar hidden it shows it. Hiding and showing the sidebar brings back the view it had.
 
+**Turning a module off** hides its panes (a panel tab, a right-dock tab) and removes its sections and tabs; nothing
+else in the workbench moves. The size you gave a pane and its place in front are remembered: turn the module on again
+and the pane comes back at that size, and shows at once when its panel or dock is open with it in front.
+
 In the **Explorer**: a click on a folder opens or closes it; a click on a file opens it and keeps the Explorer
 focused (so you can keep browsing); a double click on a file moves to the editor. Keys: up/down (`n`/`p` in the
 Emacs profile, `j`/`k` in Vim), right expands or enters a folder, left collapses or goes to the parent, `RET`
@@ -368,7 +372,10 @@ The **panel** (Toggle Panel: ``C-` `` · palette · `SPC j`) sits under the edit
 Right Dock: `C-M-b` · palette · `SPC R`) runs the frame's full height, like the left one. Each is one window with a
 **tab row** at the top (click a tab to show it). Showing a buffer there never takes focus (Focus Panel does), and
 switching tabs swaps the buffer *in place*: the window stays, nothing around it moves, and each tab comes back
-scrolled where you left it. Both keep their pixel size across hiding and showing. Killing the buffer a tab shows
+scrolled where you left it. Both keep their pixel size across hiding and showing. **The size you chose stays:**
+a size you set for the left dock, the panel or the right dock is the one it comes back at the next time it shows.
+A popup that squeezes the panel, the window manager shrinking the window or a layout applied later does not
+replace it. A dock you drag to a new width (or a panel to a new height) keeps that size when the frame is resized. Killing the buffer a tab shows
 leaves the tab empty — another buffer never slips into the panel. `C-x 1` keeps the docks and the panel; `C-x 0` in
 the panel hides it (size and tabs kept), and so does `q` in a panel buffer that binds it to quit (Help, Info, a
 compilation, …): the panel hides and focus goes back to the editor, as Escape does in VS Code. The echo
@@ -408,12 +415,19 @@ Not yet: file nesting, icons (an icon theme is a module, M4), problems decoratio
 
 ## How it works
 
-- **The change bus** (`wb/drgnx-signal.el`) is the only code that listens to Emacs' window and buffer hooks. A
-  hook only arms an idle flush; the flush compares the state with the previous one and emits **edges**:
-  `editor-changed` (the file in the editor you used last), `editor-point-changed` (its cursor moved), `buffer-set-changed`, `modified-changed`. Followers
+- **The change bus** (`wb/drgnx-signal.el`) is where followers subscribe. Window answers come from the workbench
+  state store (`wb/drgnx-state.el`), which watches the window hooks; the bus listens to the buffer hooks. A hook
+  only arms one idle flush (and notes which part changed: the buffer set, or the modified flags); the flush brings
+  the store up to date, rebuilds only the part that changed, compares the state with the previous one and emits
+  **edges**: `editor-changed` (the file in the editor you used last), `editor-point-changed` (its cursor moved),
+  `frame-changed` (another frame became the selected one), `buffer-set-changed`, `modified-changed`. Followers
   subscribe to these, never to hooks — so a focus change, a background buffer or a burst of events cannot make
   them fire. Internal buffers (names starting with a space) never count. A follower (or a window-setup function)
   that fails is recorded in `drgnx-signal-errors`; the others still run and the next flush stays armed.
+- **The editor you used last** is kept per frame, and is right at once: the moment a command ends (or a timer's
+  change is drawn), not after the next pause. Each frame — a second window of the workbench, a terminal client —
+  has its own, so a file chosen in one frame's dock opens in that frame's editor. Moving between two windows on one
+  file changes the editor but not the file, so the Explorer and the Outline stay as they are.
 - **Roles** (`wb/drgnx-wb.el`): each window is an `editor` or a `dock` window (window parameter `drgnx-role`). The
   dock is side windows with a pixel width kept across hide/show, no scroll bars, and titles in the
   `header-line-format` *window parameter*, where no mode can erase them. Showing the dock never takes focus; files

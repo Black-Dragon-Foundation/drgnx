@@ -25,6 +25,7 @@
 (require 'drgnx-registry)
 (require 'drgnx-modal)
 (require 'drgnx-timer)
+(require 'drgnx-state)
 (declare-function drgnx-face-glyph "drgnx-face")
 (declare-function eldoc--format-doc-buffer "eldoc")
 
@@ -650,6 +651,7 @@ on and a graphical frame focused, `drgnx-quickhelp--hover-step'.  Looks go on wh
   ;; first in front of the modal engine's maps (evil's normal state takes Esc and q), then Close Pane's
   (add-to-list 'drgnx-modal-front-alists 'drgnx-quickhelp--emulation)
   (drgnx-modal-order-alists)
+  (drgnx-state-define-role 'quickhelp)    ; the terminal strip's window: no editor, no chrome
   (setq drgnx-quickhelp--active t)
   (drgnx-quickhelp--apply-hover))
 

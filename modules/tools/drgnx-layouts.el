@@ -147,9 +147,10 @@ groups, KIND `agent' or `browser'."
           :right (drgnx-layouts--area-snapshot 'right))))
 
 (defun drgnx-layouts--close-bars ()
-  "Close this frame's find bars: an arrangement must not keep their windows."
+  "Close this frame's find bars (windows of role `bar', which tools/replace defines): an arrangement must not
+keep their windows."
   (dolist (w (window-list nil 'nomini))
-    (when (and (window-live-p w) (eq (window-parameter w 'drgnx-role) 'bar))
+    (when (and (window-live-p w) (eq (drgnx-state-window-role w) 'bar))
       (when (fboundp 'drgnx-replace--bar-clear) (with-current-buffer (window-buffer w) (drgnx-replace--bar-clear)))
       (ignore-errors (delete-window w)))))
 
@@ -160,16 +161,17 @@ groups, KIND `agent' or `browser'."
   (drgnx-wb-area-hide 'right))
 
 (defun drgnx-layouts--show-left (spec)
-  "Show the left dock as SPEC says (:shown :view :px)."
-  (when (integerp (plist-get spec :px)) (set-frame-parameter nil 'drgnx-wb-dock-px (plist-get spec :px)))
+  "Show the left dock as SPEC says (:shown :view :px).  The width is noted `:by layout': a width you chose stays."
+  (when (integerp (plist-get spec :px)) (drgnx-state-note-intent nil :sizes 'left (plist-get spec :px) :by 'layout))
   (when (plist-get spec :shown)
     (let ((view (plist-get spec :view)))
       (if (and view (drgnx-wb--view-defined-p view)) (drgnx-wb-show-view view) (drgnx-wb-show-sidebar)))))
 
 (defun drgnx-layouts--show-area (area spec)
-  "Show AREA as SPEC says (:shown :tab :px); a tab no module defines is not shown."
+  "Show AREA as SPEC says (:shown :tab :px); a tab no module defines is not shown.
+The size is noted `:by layout': a size you chose stays."
   (when (integerp (plist-get spec :px))
-    (set-frame-parameter nil (intern (format "drgnx-wb-%s-px" area)) (plist-get spec :px)))
+    (drgnx-state-note-intent nil :sizes area (plist-get spec :px) :by 'layout))
   (let ((tab (plist-get spec :tab)))
     (when (and (plist-get spec :shown) tab (assq tab (plist-get (alist-get area drgnx-wb--areas) :tabs)))
       (drgnx-wb-area-show area tab))))
@@ -415,7 +417,7 @@ NAME nil (leaving Zen when no layout was picked before) puts it back as it was."
     (set-frame-parameter nil 'drgnx-layouts-current name)
     (drgnx-layouts--zen-margins from name)
     (unless (drgnx-signal-editor-window-p (selected-window)) (select-window (drgnx-wb-editor-window)))
-    (setq drgnx-signal--editor-window (selected-window))
+    (drgnx-state-use-editor (selected-window) :by 'layout)
     (when (fboundp 'drgnx-chrome-apply) (drgnx-chrome-apply nil t))
     name))
 

@@ -1,5 +1,7 @@
 ;;; wb-git-test.el --- batch tests: git decorations -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'drgnx-git)
 (require 'drgnx-explorer)
 (require 'drgnx-buffers)
@@ -64,46 +66,48 @@ build/ ignored (with build/out.o)."
 (ert-deftest drgnx-git/the-explorer-shows-letters ()
   (skip-unless (executable-find "git"))
   (drgnx-git-test--repo root
-    (let ((drgnx-wb--sections nil) (drgnx-signal--editor-window nil))
-      (unwind-protect
-          (progn
-            (delete-other-windows)
-            (drgnx-explorer-setup)
-            (drgnx-explorer-set-roots (list root))
-            (drgnx-git-refresh root t)
-            (with-current-buffer drgnx-explorer-buffer-name
-              (drgnx-explorer--fontify (point-min) (point-max))
-              (cl-flet ((deco (name) (goto-char (point-min)) (search-forward name)
-                          (mapconcat (lambda (o) (or (overlay-get o 'after-string) ""))
-                                     (overlays-in (pos-bol) (1+ (pos-eol))) "")))
-                (should (string-search "U" (deco "c.txt")))
-                (should (string-search "●" (deco "src")))     ; a folder with changes inside
-                (should (string= "" (deco "a.txt"))))))
-        (drgnx-wb-hide-sidebar)
-        (drgnx-explorer-set-roots nil)                ; its watches go: no events from the folder's removal
-        (kill-buffer drgnx-explorer-buffer-name)))))
+    (drgnx-test-with-state
+      (let ((drgnx-wb--sections nil))
+        (unwind-protect
+            (progn
+              (delete-other-windows)
+              (drgnx-explorer-setup)
+              (drgnx-explorer-set-roots (list root))
+              (drgnx-git-refresh root t)
+              (with-current-buffer drgnx-explorer-buffer-name
+                (drgnx-explorer--fontify (point-min) (point-max))
+                (cl-flet ((deco (name) (goto-char (point-min)) (search-forward name)
+                            (mapconcat (lambda (o) (or (overlay-get o 'after-string) ""))
+                                       (overlays-in (pos-bol) (1+ (pos-eol))) "")))
+                  (should (string-search "U" (deco "c.txt")))
+                  (should (string-search "●" (deco "src")))     ; a folder with changes inside
+                  (should (string= "" (deco "a.txt"))))))
+          (drgnx-wb-hide-sidebar)
+          (drgnx-explorer-set-roots nil)                ; its watches go: no events from the folder's removal
+          (kill-buffer drgnx-explorer-buffer-name))))))
 
 (ert-deftest drgnx-git/the-buffers-panel-shows-letters ()
   (skip-unless (executable-find "git"))
   (drgnx-git-test--repo root
-    (let ((drgnx-signal--subscribers nil) (drgnx-signal--state nil) (drgnx-wb--sections nil)
-          (drgnx-buffers--order nil) (drgnx-buffers--signature nil) (drgnx-signal--editor-window nil)
-          (b (find-file-noselect (expand-file-name "src/b.txt" root))))
-      (unwind-protect
-          (progn
-            (delete-other-windows)
-            (drgnx-buffers-setup)
-            (drgnx-git-refresh root t)
-            (drgnx-signal--flush)
-            (drgnx-wb-show-sidebar)
-            (with-current-buffer drgnx-buffers-buffer-name
-              (drgnx-buffers--fontify (point-min) (point-max))
-              (goto-char (drgnx-buffers--row-pos b))
-              (should (string-search "M" (mapconcat (lambda (o) (or (overlay-get o 'after-string) ""))
-                                                    (overlays-in (pos-bol) (1+ (pos-eol))) "")))))
-        (drgnx-wb-hide-sidebar)
-        (kill-buffer b)
-        (when (get-buffer drgnx-buffers-buffer-name) (kill-buffer drgnx-buffers-buffer-name))))))
+    (drgnx-test-with-state
+      (let ((drgnx-wb--sections nil)
+            (drgnx-buffers--order nil) (drgnx-buffers--signature nil)
+            (b (find-file-noselect (expand-file-name "src/b.txt" root))))
+        (unwind-protect
+            (progn
+              (delete-other-windows)
+              (drgnx-buffers-setup)
+              (drgnx-git-refresh root t)
+              (drgnx-signal--flush)
+              (drgnx-wb-show-sidebar)
+              (with-current-buffer drgnx-buffers-buffer-name
+                (drgnx-buffers--fontify (point-min) (point-max))
+                (goto-char (drgnx-buffers--row-pos b))
+                (should (string-search "M" (mapconcat (lambda (o) (or (overlay-get o 'after-string) ""))
+                                                      (overlays-in (pos-bol) (1+ (pos-eol))) "")))))
+          (drgnx-wb-hide-sidebar)
+          (kill-buffer b)
+          (when (get-buffer drgnx-buffers-buffer-name) (kill-buffer drgnx-buffers-buffer-name)))))))
 
 (ert-deftest drgnx-git/huge-ignored-lists-are-skipped ()
   ;; Ignored files only dim rows; past the limit they are not parsed (a build tree inside tracked folders).

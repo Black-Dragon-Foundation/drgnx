@@ -47,7 +47,7 @@
           (process-environment (cons "DRGNX_NO_LANGUAGE_SERVERS" process-environment))
           (eglot-server-programs nil)
           (create-lockfiles nil)
-          (drgnx-wb--sections nil) (drgnx-signal--editor-window nil) (drgnx-explorer--pressed nil)
+          (drgnx-wb--sections nil) (drgnx-explorer--pressed nil)
           (drgnx-explorer--selection nil) (drgnx-explorer--anchor nil) (drgnx-explorer--focused-before nil)
           (drgnx-explorer-compact-folders nil)
           (_cleared (drgnx-cache--clear 'explorer-listing))

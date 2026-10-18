@@ -1,6 +1,8 @@
 ;;; session-test.el --- batch tests: closing the last window, quitting, the keep-running choice -*- lexical-binding: t -*-
 ;; Frames, `kill-emacs', `delete-frame' and `save-some-buffers' are stubs; session.eld lives in a temp config dir.
 (require 'ert)
+(require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'cl-lib)
 (require 'drgnx)
 (require 'drgnx-session)
@@ -262,38 +264,39 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
 (ert-deftest drgnx-session/opening-a-folder-makes-it-the-project ()
   ;; The real Explorer in a one-editor layout.  After `drgnx DIR' quick open and project search (which follow the
   ;; selected window's buffer) work in DIR's project — also when a file of another project was in front.
-  (let* ((root (file-name-as-directory (make-temp-file "drgnx-session-folder" t)))
-         (a (drgnx-session-test--repo root "projA" "a.py"))
-         (b (drgnx-session-test--repo root "My Project" "café.py"))
-         (project-list-file (expand-file-name "projects" root))
-         (drgnx-wb--sections nil) (drgnx-signal--editor-window nil) (drgnx-explorer--roots nil)
-         (raised 0) buf)
-    (unwind-protect
-        (cl-letf (((symbol-function 'drgnx-session-raise) (lambda () (cl-incf raised))))
-          (delete-other-windows)
-          (drgnx-explorer-setup)
-          (setq buf (find-file-noselect (expand-file-name "a.py" a)))
-          (switch-to-buffer buf)                    ; project A's file in front, as after a restore
-          (drgnx-session-open-folder (directory-file-name b))
-          (should (= raised 1))
-          (with-current-buffer (window-buffer (selected-window))
-            (should (equal (buffer-name) drgnx-explorer-buffer-name))   ; the Explorer is selected
-            (let ((p (project-current nil)))
-              (should p)
-              (should (equal (expand-file-name (project-root p)) b))
-              (should (member (expand-file-name "café.py" b) (project-files p)))))
-          (should (drgnx-wb-sidebar-showing-p))
-          ;; the other folder: first now, the first one stays
-          (drgnx-session-open-folder a)
-          (should (equal (drgnx-explorer-roots) (list a b)))
-          (with-current-buffer (window-buffer (selected-window))
-            (should (equal (expand-file-name (project-root (project-current nil))) a))))
-      (when (buffer-live-p buf) (kill-buffer buf))
-      (drgnx-wb-hide-sidebar)
-      (delete-other-windows)
-      (drgnx-explorer-set-roots nil)
-      (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
-      (delete-directory root t))))
+  (drgnx-test-with-state
+    (let* ((root (file-name-as-directory (make-temp-file "drgnx-session-folder" t)))
+           (a (drgnx-session-test--repo root "projA" "a.py"))
+           (b (drgnx-session-test--repo root "My Project" "café.py"))
+           (project-list-file (expand-file-name "projects" root))
+           (drgnx-wb--sections nil) (drgnx-explorer--roots nil)
+           (raised 0) buf)
+      (unwind-protect
+          (cl-letf (((symbol-function 'drgnx-session-raise) (lambda () (cl-incf raised))))
+            (delete-other-windows)
+            (drgnx-explorer-setup)
+            (setq buf (find-file-noselect (expand-file-name "a.py" a)))
+            (switch-to-buffer buf)                    ; project A's file in front, as after a restore
+            (drgnx-session-open-folder (directory-file-name b))
+            (should (= raised 1))
+            (with-current-buffer (window-buffer (selected-window))
+              (should (equal (buffer-name) drgnx-explorer-buffer-name))   ; the Explorer is selected
+              (let ((p (project-current nil)))
+                (should p)
+                (should (equal (expand-file-name (project-root p)) b))
+                (should (member (expand-file-name "café.py" b) (project-files p)))))
+            (should (drgnx-wb-sidebar-showing-p))
+            ;; the other folder: first now, the first one stays
+            (drgnx-session-open-folder a)
+            (should (equal (drgnx-explorer-roots) (list a b)))
+            (with-current-buffer (window-buffer (selected-window))
+              (should (equal (expand-file-name (project-root (project-current nil))) a))))
+        (when (buffer-live-p buf) (kill-buffer buf))
+        (drgnx-wb-hide-sidebar)
+        (delete-other-windows)
+        (drgnx-explorer-set-roots nil)
+        (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
+        (delete-directory root t)))))
 
 (ert-deftest drgnx-session/an-unsaved-untitled-buffer-is-offered-and-never-lost ()
   ;; Nothing of drgnx-session stubbed: the real `save-some-buffers' offers New Untitled's buffer (its question,

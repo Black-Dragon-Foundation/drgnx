@@ -608,6 +608,17 @@ AGENTS.md asks of every global hook and advice ("named, with an owner", no lambd
   `-alist-put`, `-face-spec`) makes its change inside `drgnx-modules--quietly`. A raw call is a fallback; use the
   helper.
 
+#### Subscribe, don't hook
+
+A module does not add its own function to `window-buffer-change-functions`, `window-size-change-functions`,
+`window-state-change-functions` or `window-configuration-change-hook` (globally or buffer-locally), and does not call
+`get-buffer-window` with a second argument to find out whether a buffer shows. The workbench state store watches the
+windows once and tells subscribers what changed; a module subscribes to the events it needs. The lint
+`drgnx-lint/modules-subscribe-instead-of-window-hooks` (`test/unit/lint-state-test.el`) reads every file under
+`modules/` and fails on such a site that `test/lint-state-allowed.eld` does not name. Each entry there is
+`(:file F :what W :why STRING :until TASK)`: the sites that exist today, each with the task that moves it. The task
+that moves a site deletes its line, because `drgnx-lint/no-stale-allowlist-entries` fails on an entry that matches
+nothing. A new site is not added to the list; it subscribes instead.
 ### A run's end
 
 A module's setup run has a token (`drgnx-modules--runs`). It ends when the module is turned off, when its setup is
@@ -1321,6 +1332,52 @@ the indicator.
   maps onto `emulation-mode-map-alists`.
 
 Tests load the real evil from `DRGNX_MODAL_ELPA` and run in their own Emacs ([harness.md](harness.md)).
+## The change bus (`wb/drgnx-signal.el`)
+
+The bus is the subscription API for workbench edges (`drgnx-signal-subscribe`); window answers come from the
+workbench state store ("The workbench state store", below). `drgnx-signal-editor-window` is the store's `drgnx-state-editor-window`: the
+selected frame's MRU editor, per frame and right at once (when the store has none — the frame not observed yet, or
+its editor deleted since — it observes the frame first). `drgnx-signal-editor-window-p` is true when
+`drgnx-state-window-role` is `editor`: the role table decides, so a module's own strip defines its role
+(tools/replace defines `bar`, the find bar, and quick help `quickhelp`, its terminal strip, in their setups). `drgnx-wb-show-in-editor` and the layouts choose the
+editor with `drgnx-state-use-editor`.
+
+`drgnx-signal-mode` listens to the raw buffer hooks, and on the store's `now` lane to `windows-changed`,
+`editor-changed` and `selected-changed` (`drgnx-signal--store-events`); it emits deduplicated edges after an idle
+delay (`drgnx-signal-delay`). There is one idle flush, `drgnx-signal--flush`, for the bus and the store: the store's
+idle lane arms it too. It observes the selected frame (`drgnx-state-sync`), makes the store's waiting idle calls
+(`drgnx-state--deliver-idle`), then compares the buffer state:
+
+- `editor-changed` gets the *buffer* of the selected frame's MRU editor, only when it is not the one it sent last
+  (`drgnx-signal--editor`): `C-x o` between two windows on one buffer is the store's `editor-changed`, not the bus's,
+  so Explorer, Outline and Buffers react as before.
+- `frame-changed` (data: the frame) follows the store's `selected-changed` when another frame became the selected
+  one; only the store's hooks see a frame switch.
+- `drgnx-signal-window-functions` (obsolete: subscribe to `windows-changed` on the `now` lane) run from the store's
+  observation, before the frame is drawn, as they did from `window-buffer-change-functions`.
+
+The bus no longer adds to `window-selection-change-functions` or `window-buffer-change-functions`. The flush reads
+the buffer list only for what a hook said changed. `drgnx-signal--dirty` holds the parts to rebuild, and each part
+has a named raw-hook function that sets it:
+
+| Hook | Function | Sets |
+|---|---|---|
+| `buffer-list-update-hook` (a buffer made, killed, selected or renamed) | `drgnx-signal--set-dirty` | `set` |
+| `first-change-hook`, `after-save-hook`, `after-revert-hook` | `drgnx-signal--modified-dirty` | `modified` |
+| `after-save-hook` (`write-file` under the buffer's own name makes it a file buffer, with no rename) | `drgnx-signal--set-dirty` | `set` |
+| `after-change-major-mode-hook` (`dired-mode` on an existing buffer; internal buffers are skipped) | `drgnx-signal--mode-changed` | `set` |
+| `kill-buffer-hook` | `drgnx-signal--killed` | `set` and `modified` |
+| `post-command-hook` | `drgnx-signal--post-command` | nothing, unless the current buffer's modified flag or name differs from the cached one |
+
+`set` rebuilds `:set` and `:names` (and `:modified` with them, since the buffers changed); `modified` rebuilds
+`:modified`. A part that is not dirty keeps its cached value, so a keystroke that changed no buffer costs the
+post-command comparison and a flush that compares only the editor window and its point (a median of about 5 µs with 300
+buffers, byte-compiled, against 479 µs when every flush scanned them). Undo back to the saved state and
+`set-buffer-modified-p` run no hook, which is what the comparison is for; it covers the current buffer, and a buffer
+that becomes current is compared with what the last flush saw of it (two `assq`, no buffer list). With the mode off
+nothing says what changed, so a flush called directly (tests, the bench) rebuilds everything. The edges and what they
+mean are unchanged. The hooks are added by the mode, so the mode owns them; a module that needs the bus turns the mode
+on (see "Global modes are owned by the first module that turns them on" in the safety net above).
 
 ## Build (`drgnx-build.el`)
 
@@ -1810,7 +1867,34 @@ the selected window unless `:select` is given. `drgnx-pane-backend` (`areas`) sa
 a `left` kind to `drgnx-wb-define-section`, a `bottom` or `right` kind to `drgnx-wb-define-tab` (areas `panel` and
 `right`), an `editor` kind (its `:buffer` a name) to a `drgnx-wb-place` rule, and `:fill` to
 `drgnx-layouts-define-pane`. A backend is an entry in `drgnx-pane--backends` (the functions for `:define`, `:show`,
-`:hide`, `:window`, `:focus`); the tiled grid registers `grid` there. Switching backends and replaying the
+`:hide`, `:window`, `:focus`, `:resize`, `:move`, `:stack`); the tiled grid registers `grid` there.
+
+**Ownership.** `drgnx-pane-define-kind` records the module whose setup runs as the kind's owner
+(`(drgnx-state-kind-owner KIND)`; nil for a kind defined at load, which is core's and stays until restart) and, in a
+setup, pushes the undo "pane kind KIND". The undo runs only while KIND is still the definition this module made (two
+modules defining one kind may be torn down in either order, `drgnx-module--claim`). It hides KIND on every frame
+where it shows, `drgnx-pane-hide :by 'teardown` (the hide notes the size `:by auto`, so a size you chose is kept; a
+`left` kind is not hidden, because that would close the whole dock, and its section just goes), then puts the previous
+definition back or calls `(drgnx-pane-undefine-kind KIND)`, which removes KIND from `drgnx-pane--kinds` and from
+its dock section, area tab or editor place rule (`drgnx-wb-undefine-section`, `-tab`, `drgnx-wb-unplace`). An
+area's front tab is intent: the undo reads it first and notes it again `:by teardown` after the tab is gone, so it
+names a kind nobody defines for a while (a panel shown meanwhile has that tab's blank placeholder). The module turned
+on again defines the kind; a new kind that is in front in an area that shows is shown again `:by teardown`, and a
+hidden area shows it at the size you chose at its next show. The leak census reads `drgnx-state--now`,
+`drgnx-state--idle`, `drgnx-state--roles` and `drgnx-pane--kinds` (`drgnx-modules-fingerprint-registries`), so a
+subscription, role or kind a module leaves behind is named in the per-test diff. Test: `test/unit/wb-state-own-test.el`.
+
+**The write API.** `show`, `hide`, `focus` and `toggle` take `:by`, and three more operations complete them:
+`(drgnx-pane-resize KIND PX :horizontal :by)`, `(drgnx-pane-move KIND TARGET ZONE :by)` and
+`(drgnx-pane-stack KIND ONTO :by)`. Each runs inside `drgnx-state-with-write` (below): `:by` says who asked —
+`user`, `auto`, `layout`, `restore`, `teardown` or `other`; nil is `user` inside a command and `auto` outside.
+`resize` gives the dock its width (left kinds), the panel its height (bottom) or the right dock its width (right),
+pixelwise as the areas do when they are made, keeps the windows' preserved size at the new one, and notes the size
+as `:sizes` intent; it returns the kind's window, or nil when the kind does not show (the size is used at the next
+show) or is an editor kind (no size of its own). The `areas` backend has no `:move` or `:stack`: called from Lisp
+they signal `user-error` "Moving panes needs the grid" (B7 implements them; their commands are not offered before).
+`hide` notes the size the pane had `:by auto`, whoever asked, and `show` of a bottom or right kind notes it as its
+area's `:front`. Switching backends and replaying the
 defined kinds into the new one is the grid's job (B3), not done here. Test: `test/unit/wb-panes-test.el`.
 
 What the `areas` backend does with the edges:
@@ -1843,6 +1927,179 @@ site, and the port deletes the row (a row that matches nothing fails the second 
 site that is not drgnx's own file, and its `:why` starts with the reason: `"a user's file"`, `"a temporary file"`,
 `"a directory move"`, `"its own lock protocol"`, `"age writes it"`, `"a developer tool"` or `"Lisp source"` (a module's source read, never run). A new site is a new
 row only when it is one of those.
+## The workbench state store (`wb/drgnx-state.el`, `core/drgnx-frame-kind.el`)
+
+One observed answer for "which windows, panes and frames are there". The store keeps one record per workbench
+frame, a cache of Emacs's window tree. It has one writer, the observer, which only looks: it never splits, deletes,
+resizes or selects a window, and never sets a window or frame parameter. Readers ask the store instead of walking
+windows or keeping their own copy (an MRU window, a visibility flag, a frame kind, "the edges I saw last").
+
+**What a frame is.** `(drgnx-state-frame-kind FRAME)` is the one classifier: `child` (it has a parent: posframes,
+quick help's card, Emacs 31's terminal child frames), `initial` (the initial terminal's frame: a daemon's, or a GUI
+Emacs's before its first frame; in batch Emacs that frame is `tty`, so batch tests have a workbench frame),
+`other` (a minibuffer-only frame), `gui`, else `tty`; nil for a dead frame. `drgnx-state-workbench-frame-p` is
+non-nil for `gui` and `tty`; only those frames get a record.
+
+**A frame's record** holds its kind, its `drgnx-frame-role` (copied), whether it is visible (`t`, `icon`, nil), its
+size (text columns and lines, pixel width and height), its `drgnx-monitor` (copied), its selected window, its MRU
+editor window, its windows and the pane kinds that show. **A window's record** holds the window, its role, the pane
+kind it shows (or nil), its buffer, its pixel edges (left, top, width, height) and whether it is dedicated. Windows
+are in `window-list` order from the frame's first window. The records are internal; use the reads below.
+
+**Roles come from one table.** `(drgnx-state-define-role ROLE :chrome C)` defines a non-editor role, the value of
+the `drgnx-role` window parameter; `C` is what the chrome draws for it: `dock`, `area`, `lane` or nil
+(`drgnx-state-role-chrome`). Built in (core, defined at load): `dock` (dock), `panel` and `right` (area), `popup`
+(lane). A module defines its own roles in its setup: the definition records its undo ("state role ROLE"), which
+puts the previous definition back or removes the role, only while the role is still the one defined there; two
+modules may be torn down in either order (`drgnx-module--claim`). `drgnx-state-undefine-role` removes one. A
+window's role, in this order: a `drgnx-popup` parameter (a popup lane, also the panel a popup borrowed) → `popup`;
+a `drgnx-role` in the table → that role; a side window → `side` (a package's own); else `editor`; the minibuffer has
+none. A `drgnx-role` nobody defined counts as an editor window — define the role.
+
+**Pane kinds.** A dock window shows its `drgnx-section`; an area window (a role with chrome `area`, named like the
+area) shows its front tab (the frame's `drgnx-wb-areas`, as `drgnx-wb-area-tab`); an editor window shows its
+`drgnx-layouts-pane`, or the editor-home kind whose last buffer on that frame it shows (`drgnx-pane--last`). A
+popup lane shows no kind (the panel's tab is hidden while a popup borrows it).
+
+**The MRU editor, per frame:** the frame's selected window if it is an editor window; else the frame's previous
+editor while it is still an editor window there; else the editor window with the highest `window-use-time`; else
+nil. `window-use-time` alone is not trusted: a package's `select-window` without NORECORD bumps a window the user
+never chose. `(drgnx-state-use-editor WINDOW :by BY)` makes WINDOW its frame's editor without selecting it (the
+dock's "open in the editor" target). While a non-editor window (the dock) is selected, the choice holds as long as
+WINDOW lives. While an editor window is selected, it holds only until the record is next taken anew: any change to
+the frame's windows (a selection, a buffer, a split, a resize) makes the selected editor window the editor again.
+A window that is not an editor → nil; so is a window whose frame has no record yet while an observation runs.
+
+**Reads**, each nil for a dead window or frame, all from the records: `drgnx-state-editor-window`,
+`drgnx-state-selected-window` (FRAME optional, default the selected frame), `drgnx-state-frames` (oldest first,
+optionally of one kind), `drgnx-state-main-frame` (the oldest recorded frame whose role is `main`;
+`drgnx-frames-mark-main` stays the writer), `drgnx-state-windows FRAME ROLE`, `drgnx-state-window-role` (a window
+not observed yet is classified live), `drgnx-state-edges`, `drgnx-state-pane-window KIND FRAME`,
+`drgnx-state-pane-shown-p KIND FRAME` (shown on a visible frame), `drgnx-state-shown-kinds` (whatever the frame's
+visibility), `drgnx-state-frame-size` (`(:cols :lines :width :height)`).
+
+**When the records are taken.** `drgnx-state--observe FRAME` first compares the record with the live frame in place
+— size, visibility, selected window and, per window in order, identity, buffer, role, edges, dedication and pane
+kind (a dock's section, an editor's layouts pane or editor kind; an area's front tab only through its buffer) —
+allocating nothing (about 3.5 µs on a 7-window frame, byte-compiled). A frame it has a record of is not classified
+again (only its parent and its life can change, and `terminal-name` makes a string). Only on a difference does it
+take the record anew. A frame that has just become the selected frame, with its windows unchanged, keeps its record
+and emits `selected-changed` (Events, below). Only the mode's hooks see a frame switch: a sync or a write may run
+inside `with-selected-frame` (a restore per frame), and the frame it selects for a moment is not the user's. Every record replaced, by an observation or by
+`drgnx-state-use-editor`, goes through one internal function, `drgnx-state--put`; records are never changed in
+place. While it runs, a change made meanwhile
+waits for the next observation. `drgnx-state-mode` (global; `core/workbench` turns
+it on) runs it from five named functions: the default value of `window-state-change-functions` (any change from
+any source, before the frame is drawn), `post-command-hook` at depth −90 (the selected frame, even when redisplay
+is skipped), `pre-command-hook` (only notes that a command runs), `after-make-frame-functions` and
+`delete-frame-functions` (the record goes). On, it observes every live workbench frame, oldest first; off, the
+records go. Records live in a table weak on the frame. Observation binds `inhibit-interaction`; an error lands in
+`drgnx-signal-errors` and is never raised.
+
+**`drgnx-state-sync`.** `(drgnx-state-sync &optional FRAME)` observes FRAME now and returns a copy of its record
+(nil for a frame that is not a workbench frame); the lists inside it are the store's and read-only. Call it when code changes windows and reads the store in the same breath (a
+timer that shows a pane and then asks for its window), and after setting `drgnx-frame-role` or `drgnx-monitor`:
+setting a frame parameter is no window change, and only `drgnx-state-sync` compares those two — `frame-parameter`
+copies every parameter of the frame to read one of ours, too much for every command. Batch Emacs has no
+redisplay: batch tests call `drgnx-state-sync`. Writes run inside `(drgnx-state-with-write (FRAME BY) BODY…)`:
+`drgnx-state--writing` is `(:by BY)` while BODY runs, and FRAME is observed at the end. BY defaults to
+`drgnx-state-default-by`: `user` inside a command, `auto` outside.
+
+**Events.** `(drgnx-state-subscribe EVENT FN :lane LANE)` calls FN with a plist when EVENT happens;
+`drgnx-state-unsubscribe` stops it. FN is a named function: a lambda is refused, so it can be removed and named in
+reports. Each (EVENT FN) pair is subscribed once; subscribing it on the other lane moves it. Called from a module's
+setup, the subscription records its undo, "state subscription EVENT FN". The undo removes FN only if it was not
+subscribed before, and only while it is still on that lane; two modules may be torn down in either order
+(`drgnx-module--claim`). The events are diffed where a record is replaced (`drgnx-state--put`, after the new record
+is stored), so an observation and `drgnx-state-use-editor` both emit them. An event nobody subscribes to is not
+computed. In one observation they go out in this order; `frame-removed` comes on its own:
+
+| Event | When | Data |
+|---|---|---|
+| `frame-added` | a `gui` or `tty` frame is first recorded | `:frame :kind` |
+| `frame-kind` | its kind, `drgnx-frame-role` or `drgnx-monitor` changed (seen at `drgnx-state-sync`) | `:frame :old :new`, each `(:kind :role :monitor)` |
+| `frame-resized` | its text columns or lines, or its pixel size, changed | `:frame :old :new`, each `(:cols :lines :width :height)` |
+| `windows-changed` | a window came or went, or shows another buffer or role | `:frame :windows` |
+| `groups-changed` | editor windows came or went | `:frame :added :removed` |
+| `pane-hidden` | a pane kind stopped showing in a window: its window went, an area's front tab changed, a dock shows another section | `:frame :kind :window :cause :by` |
+| `pane-shown` | a pane kind started showing in a window (a kind moved to a new window is hidden, then shown) | `:frame :kind :window :cause :by` |
+| `pane-resized` | the edges of a pane's window or an editor window changed | `:frame :window :kind :old :new :cause :by` (edges `(LEFT TOP WIDTH HEIGHT)`) |
+| `selected-changed` | the frame's selected window changed, or the frame became the selected frame | `:frame :window :old-window :old-frame` |
+| `editor-changed` | the frame's MRU editor window, or its buffer, changed (`C-x o` between two windows of one buffer too) | `:frame :window :buffer :old-window :old-buffer` |
+| `frame-removed` | the frame's record went (`delete-frame-functions`, or it is no workbench frame any more); the frame is still live | `:frame` |
+
+A frame's first record emits `frame-added`, then everything it shows as new: `windows-changed`, `groups-changed`,
+`pane-shown`, `selected-changed`, `editor-changed`.
+
+**`:cause` and `:by`** say who changed a pane. `write` with `:by` from the write (`user`, `auto`, `layout`,
+`restore`, `teardown`, `other`; `drgnx-state-with-write`). `user` with `:by user`: a command in
+`drgnx-state-user-resize-commands` (a user option), or any step of a mouse drag on a divider (Emacs 30+ runs the steps as commands of a transient
+map, `this-command` is a closure, and `track-mouse` is `dragging`). Else `other` with `:by` nil: Emacs fitting a popup, the minibuffer growing, the
+window manager resizing the frame, a package.
+
+**Two lanes.** `now` (`:lane 'now`) calls FN inside the observation, possibly during redisplay, before the frame
+is drawn: for cheap reactions only. It may update a mode line, set a window parameter (chrome), start or cancel a
+timer, or choose the editor (`drgnx-state-use-editor`, which emits its own `editor-changed`). It never moves a
+window, scans buffers or calls a process. A change it makes waits for the next observation, and the jank guard
+counts a window it moves. `idle` (the default) queues the call: one per FN, event, frame and kind (the data's
+`:kind`), with the last data. The bus's idle flush (`drgnx-signal--flush`, `drgnx-signal-delay`, 0.05 s) makes
+them, oldest first, after observing the selected frame; the store has no timer of its own. The handler reads the
+records then. Every call binds `inhibit-interaction`, so a subscriber that prompts gets an error.
+An error is recorded in `drgnx-signal-errors` as `"EVENT FN: message"` (newest first, at most 20), never raised.
+Subscribers of one event run in subscription order.
+
+**The fixture** (`test/fixtures/state-fixture.el`): `(drgnx-test-with-state BODY…)` runs BODY with a fresh store
+and bus and the store's hooks off. It saves every bound variable listed in `drgnx-state-test--variables` (the
+store's tables, its subscribers and idle queue, `drgnx-signal--subscribers`, `--state`, `--posted`, `--timer`,
+`--editor`, `--switched`, `drgnx-signal-errors`) and restores them with `set` afterwards, never `let`; timers are
+cancelled on the way in and out. A batch test delivers the idle lane by calling `drgnx-signal--flush` (or only
+`drgnx-state--deliver-idle`). A task that adds store or bus state adds its variable there. `(drgnx-test-use-editor
+WINDOW)` makes WINDOW the MRU editor through `drgnx-state-use-editor`. Tests never set bus internals by hand. Tests: `test/unit/wb-state-test.el`, `test/unit/wb-state-events-test.el`
+(one per event, the lanes, `:cause`); the terminal tier's `test/tty/state-test.el` (a split made by a timer is seen
+with no command run; two clients: per-frame editors, a resized terminal); the GUI tier's `test/ui/state-ui-test.el`
+(with `now` subscribers on, splits, `C-x o`, a popup and a frame resize leave no jank-guard entry from the store; a
+minibuffer-only frame is no workbench frame).
+
+### Intent (`wb/drgnx-state-intent.el`)
+
+The snapshot says what is on screen; **intent** says what was asked, and by whom, per frame: the size a pane comes
+back at, an area's front tab, the sidebar's view. It is readable data only (symbols and numbers). Until the grid
+(B3) it has no storage of its own: the accessors read and write today's frame parameters, so nothing is stored
+twice and the saved workbench (`workbench.eld`) does not change.
+
+| `(drgnx-state-intent FRAME KEY SUBKEY)` | Answer | Home until B3 |
+|---|---|---|
+| `:sizes` `left` | `(:px N :by BY)` | `drgnx-wb-dock-px` |
+| `:sizes` `bottom` (also `panel`) | `(:px N :by BY)` | `drgnx-wb-panel-px` |
+| `:sizes` `right` | `(:px N :by BY)` | `drgnx-wb-right-px` |
+| `:front` AREA | the tab in front | the area's `:tab` in `drgnx-wb-areas` |
+| `:view` | the sidebar's view, also one no module defines now | `drgnx-wb-view` |
+| `:layout`, `:previous`, `:zen-return` | read-only until B10 | `drgnx-layouts-current`, `-previous`, `-zen-return` |
+| `:places`, `:arrangement` | nil until the grid | — |
+
+Without SUBKEY, `:sizes` and `:front` answer an alist of every home or area. FRAME nil is the selected frame.
+
+`(drgnx-state-note-intent FRAME KEY SUBKEY VALUE :by BY)` writes VALUE to the home (a size as N or `(:px N)`) and
+records BY in the frame parameter `drgnx-intent-by`, an alist `((KEY . SUBKEY) . BY)`, newest first, at most 64
+entries (the oldest goes); entries of kinds or areas no module defines now are kept. BY nil is the running write's,
+else `drgnx-state-default-by`. It returns non-nil when it wrote. **A size you chose wins:** a `user` size is replaced
+only by `user` or `restore` — not by `auto` (a hidden panel that a popup squeezed), `layout`, `teardown` or `other`.
+A `restore` replaces anything and counts as `user` afterwards (a size restored after a restart is still yours). The
+front tab and the view are what shows until the grid, so every write of them lands and only records who asked.
+`:layout` and the others answer nil (not written). The writers today: `drgnx-pane-resize`; hiding the dock
+(`drgnx-wb-hide-sidebar`, a view swap), the panel or the right dock (`drgnx-wb-area-hide`) notes the size `:by auto`;
+`drgnx-wb-show-view` notes `:view`; a pane kind shown in an area notes `:front`; a layout notes its sizes `:by
+layout`. B3 folds the homes and `drgnx-intent-by` into one frame parameter, `drgnx-intent`.
+
+**A size you set by hand is intent.** `drgnx-state-intent--user-resized` is an `idle` subscriber of `pane-resized`,
+subscribed in `core/workbench`'s setup (so teardown unsubscribes it). For an event with `:cause user` (a divider drag,
+`enlarge-window`; `drgnx-state-user-resize-commands`) on a window of role `dock`, `panel` or `right`, and a change along
+the dimension that home has (width for the docks, height for the panel), it notes `:sizes HOME (:px N) :by user` and
+marks `window-preserve-size` on that window — a window parameter, nothing moves — so a later frame resize (the window
+manager) does not take the size back. A write (`:cause write`, the event's `:by` says who), a popup squeezing the panel
+and every other resize are not the user's and note nothing. Until B3 only sizes are protected. B3 carries this into
+the grid's R4. Tests: `test/unit/wb-state-intent-test.el`; `test/ui/state-intent-ui-test.el` (a dragged dock keeps its
+width when the frame resizes).
 
 ## Tests
 

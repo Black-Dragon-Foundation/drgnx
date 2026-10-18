@@ -1,5 +1,7 @@
 ;;; mod-replace-view-test.el --- batch tests: the Search view in the sidebar and the find bar -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'drgnx)
 (require 'eglot)
 (require 'drgnx-wb)
@@ -21,22 +23,24 @@
   "BODY with only the Search section and the replace commands defined (their VS Code keys in the view's and the
 bar's keymaps), one editor window, no view or bar left over."
   (declare (indent 0))
-  `(let ((drgnx-wb--sections nil) (drgnx-signal--editor-window nil)
-         (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
-     (delete-other-windows)
-     (set-frame-parameter nil 'drgnx-wb-view nil)
-     (drgnx-replace--define-section)
-     (drgnx-replace--define-commands)
-     (drgnx-replace-view-test--bind-keys)
-     (unwind-protect (progn ,@body)
-       (drgnx-replace-bar-close)
-       (drgnx-wb-hide-sidebar)
+  `(drgnx-test-with-state
+     (let ((drgnx-wb--sections nil)
+           (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
        (delete-other-windows)
        (set-frame-parameter nil 'drgnx-wb-view nil)
-       (setcdr drgnx-replace-keys-map nil)
-       (setcdr drgnx-replace-bar-keys-map nil)
-       (dolist (b (list drgnx-replace-buffer-name drgnx-replace-bar-buffer-name))
-         (when (get-buffer b) (kill-buffer b))))))
+       (drgnx-replace--define-section)
+       (drgnx-replace--define-commands)
+       (drgnx-state-define-role 'bar)                  ; the module's setup does (`drgnx-replace/setup-defines-the-bar-role')
+       (drgnx-replace-view-test--bind-keys)
+       (unwind-protect (progn ,@body)
+         (drgnx-replace-bar-close)
+         (drgnx-wb-hide-sidebar)
+         (delete-other-windows)
+         (set-frame-parameter nil 'drgnx-wb-view nil)
+         (setcdr drgnx-replace-keys-map nil)
+         (setcdr drgnx-replace-bar-keys-map nil)
+         (dolist (b (list drgnx-replace-buffer-name drgnx-replace-bar-buffer-name))
+           (when (get-buffer b) (kill-buffer b)))))))
 
 (defun drgnx-replace-view-test--view () (get-buffer drgnx-replace-buffer-name))
 
@@ -102,6 +106,25 @@ count says which rows."
 
 (defun drgnx-replace-view-test--read (file)
   (with-temp-buffer (insert-file-contents file) (buffer-string)))
+
+(ert-deftest drgnx-replace/setup-defines-the-bar-role ()
+  "The find bar's role is the module's: its setup defines `bar' in the store's role table, its teardown removes it."
+  (drgnx-test-with-state
+    (let* ((cfg (make-temp-file "drgnx-cfg" t))
+           (process-environment (cons (concat "DRGNX_CONFIG_DIR=" cfg) process-environment))
+           (drgnx-modules--report nil) (drgnx-modules--state nil) (drgnx-modules--stacks nil) (drgnx-modules--runs nil)
+           (drgnx-module--claims (make-hash-table :test 'equal))
+           (drgnx-wb--sections nil)
+           (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
+      (unwind-protect
+          (progn
+            (drgnx-state-undefine-role 'bar)
+            (should-not (drgnx-modules--run-setup 'tools/replace (plist-get (alist-get 'tools/replace drgnx-modules--table) :setup)))
+            (drgnx-modules--record 'tools/replace 'idle 0 'ok)
+            (should (assq 'bar drgnx-state--roles))
+            (should-not (drgnx-module-teardown 'tools/replace))
+            (should-not (assq 'bar drgnx-state--roles)))
+        (delete-directory cfg t)))))
 
 (ert-deftest drgnx-replace/view-fields-drive-a-search ()
   (drgnx-replace-view-test--with

@@ -1,5 +1,7 @@
 ;;; mod-search-test.el --- batch tests: Semantic Search commands, index on save -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'cl-lib)
 (require 'drgnx)
 (require 'drgnx-area)
@@ -47,42 +49,44 @@ pending at the end is cancelled."
 (ert-deftest drgnx-search-ui/results-go-to-the-results-tab ()
   (skip-unless (executable-find "git"))
   (drgnx-search-ui-test--project
-    (let ((display-buffer-alist nil) (drgnx-signal--editor-window nil)
-          (hits (list (list :path "a.txt" :start 2 :end 2 :text "beta\n  more" :score 0.03 :why 'both))))
-      (delete-other-windows)
-      (drgnx-rules-mode 1)
-      (unwind-protect
-          (cl-letf (((symbol-function 'drgnx-search-async) (drgnx-search-ui-test--stub-search hits)))
-            (drgnx-search-semantic "second line")
-            (let ((buf (window-buffer (drgnx-wb-area-window 'panel))))
-              (should (string-match-p "xref" (buffer-name buf)))
-              (should (eq (drgnx-wb-area-tab 'panel) 'results))
-              (with-current-buffer buf
-                (should (string-match-p "beta" (buffer-string)))
-                (should-not (string-match-p "more" (buffer-string))))))   ; the first line only
-        (drgnx-rules-mode -1)
-        (drgnx-wb-area-hide 'panel)))))
+    (drgnx-test-with-state
+      (let ((display-buffer-alist nil)
+            (hits (list (list :path "a.txt" :start 2 :end 2 :text "beta\n  more" :score 0.03 :why 'both))))
+        (delete-other-windows)
+        (drgnx-rules-mode 1)
+        (unwind-protect
+            (cl-letf (((symbol-function 'drgnx-search-async) (drgnx-search-ui-test--stub-search hits)))
+              (drgnx-search-semantic "second line")
+              (let ((buf (window-buffer (drgnx-wb-area-window 'panel))))
+                (should (string-match-p "xref" (buffer-name buf)))
+                (should (eq (drgnx-wb-area-tab 'panel) 'results))
+                (with-current-buffer buf
+                  (should (string-match-p "beta" (buffer-string)))
+                  (should-not (string-match-p "more" (buffer-string))))))   ; the first line only
+          (drgnx-rules-mode -1)
+          (drgnx-wb-area-hide 'panel))))))
 
 (ert-deftest drgnx-search-ui/keyword-only-says-why ()
   (skip-unless (executable-find "git"))
   (drgnx-search-ui-test--project
-    (let ((display-buffer-alist nil) (drgnx-signal--editor-window nil) (said nil)
-          (hits (list (list :path "a.txt" :start 1 :end 1 :text "alpha" :score 0.03 :why 'keyword))))
-      (cl-letf (((symbol-function 'drgnx-search-async)
-                 (drgnx-search-ui-test--stub-search hits "no embedding provider answered (down) — keyword results only"))
-                ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
-        ;; hits and a notice: both
-        (drgnx-search-semantic "alpha")
-        (should (cl-some (lambda (s) (string-match-p "keyword results only" s)) said))
-        ;; nothing found: the notice (or a plain line), no error, nothing shown
-        (setq said nil)
-        (let ((shown nil))
-          (cl-letf (((symbol-function 'drgnx-search-async)
-                     (drgnx-search-ui-test--stub-search nil "no index for this project — Search: Index Project"))
-                    ((symbol-function 'xref-show-xrefs) (lambda (&rest _) (setq shown t))))
-            (drgnx-search-semantic "alpha")
-            (should (cl-some (lambda (s) (string-match-p "no index for this project" s)) said))
-            (should-not shown)))))))
+    (drgnx-test-with-state
+      (let ((display-buffer-alist nil) (said nil)
+            (hits (list (list :path "a.txt" :start 1 :end 1 :text "alpha" :score 0.03 :why 'keyword))))
+        (cl-letf (((symbol-function 'drgnx-search-async)
+                   (drgnx-search-ui-test--stub-search hits "no embedding provider answered (down) — keyword results only"))
+                  ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+          ;; hits and a notice: both
+          (drgnx-search-semantic "alpha")
+          (should (cl-some (lambda (s) (string-match-p "keyword results only" s)) said))
+          ;; nothing found: the notice (or a plain line), no error, nothing shown
+          (setq said nil)
+          (let ((shown nil))
+            (cl-letf (((symbol-function 'drgnx-search-async)
+                       (drgnx-search-ui-test--stub-search nil "no index for this project — Search: Index Project"))
+                      ((symbol-function 'xref-show-xrefs) (lambda (&rest _) (setq shown t))))
+              (drgnx-search-semantic "alpha")
+              (should (cl-some (lambda (s) (string-match-p "no index for this project" s)) said))
+              (should-not shown))))))))
 
 (ert-deftest drgnx-search-ui/outside-a-project-is-a-message-not-an-index ()
   (let ((dir (make-temp-file "drgnx-noproj" t)))

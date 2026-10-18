@@ -1,26 +1,29 @@
 ;;; wb-chrome-test.el --- batch tests: chrome by role, tabs, breadcrumbs (I3) -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'drgnx-chrome)
 
 (defmacro drgnx-chrome-test--with (dir &rest body)
   "BODY with chrome on, one editor window, a temp DIR for files."
   (declare (indent 1))
-  `(let ((,dir (file-name-as-directory (make-temp-file "drgnx-chrome" t)))
-         (drgnx-signal--editor-window nil) (display-buffer-alist nil))
-     (delete-other-windows)
-     (set-window-parameter (selected-window) 'drgnx-tabs nil)
-     (set-window-prev-buffers (selected-window) nil)
-     (drgnx-rules-mode 1)
-     (drgnx-chrome-mode 1)
-     (unwind-protect (progn ,@body)
-       (drgnx-chrome-mode -1)
-       (drgnx-rules-mode -1)
-       (drgnx-wb-area-hide 'panel)
+  `(drgnx-test-with-state
+     (let ((,dir (file-name-as-directory (make-temp-file "drgnx-chrome" t)))
+           (display-buffer-alist nil))
        (delete-other-windows)
-       (dolist (b (buffer-list))
-         (when (and (buffer-file-name b) (string-prefix-p ,dir (buffer-file-name b)))
-           (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b)))
-       (delete-directory ,dir t))))
+       (set-window-parameter (selected-window) 'drgnx-tabs nil)
+       (set-window-prev-buffers (selected-window) nil)
+       (drgnx-rules-mode 1)
+       (drgnx-chrome-mode 1)
+       (unwind-protect (progn ,@body)
+         (drgnx-chrome-mode -1)
+         (drgnx-rules-mode -1)
+         (drgnx-wb-area-hide 'panel)
+         (delete-other-windows)
+         (dolist (b (buffer-list))
+           (when (and (buffer-file-name b) (string-prefix-p ,dir (buffer-file-name b)))
+             (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b)))
+         (delete-directory ,dir t)))))
 
 (defun drgnx-chrome-test--open (dir name)
   "Visit DIR/NAME in the selected window (as C-x C-f does); return the buffer."
@@ -41,6 +44,28 @@
       (drgnx-chrome-apply nil t)
       (should (seq-every-p #'cl-plusp (drgnx-chrome-test--heights editor)))      ; tab line, header, mode line
       (should (equal (mapcar #'cl-plusp (drgnx-chrome-test--heights panel)) '(nil t nil))))))  ; tab row only
+
+(ert-deftest drgnx-chrome/role-from-the-table ()
+  "A window's chrome is its role's `:chrome' in the store's role table; a role not in it is an editor window."
+  (drgnx-test-with-state
+    (delete-other-windows)
+    (let ((w (split-window nil nil 'below)))
+      (unwind-protect
+          (progn
+            (set-window-parameter w 'drgnx-role 'drgnx-chrome-test-strip)
+            (should (eq 'editor (drgnx-chrome--role w)))
+            (drgnx-state-define-role 'drgnx-chrome-test-strip :chrome 'dock)
+            (should (eq 'dock (drgnx-chrome--role w)))
+            (drgnx-state-define-role 'drgnx-chrome-test-strip :chrome 'area)
+            (should (eq 'area (drgnx-chrome--role w)))
+            (drgnx-state-define-role 'drgnx-chrome-test-strip)
+            (should-not (drgnx-chrome--role w))                       ; no chrome: left alone
+            (set-window-parameter w 'drgnx-popup '(:borrowed nil))    ; a popup lane, whatever else it is
+            (should (eq 'lane (drgnx-chrome--role w)))
+            (should (eq 'editor (drgnx-chrome--role (selected-window))))
+            (should-not (drgnx-chrome--role (minibuffer-window))))
+        (set-window-parameter w 'drgnx-popup nil)
+        (delete-window w)))))
 
 (ert-deftest drgnx-chrome/a-buffer-adds-to-the-breadcrumb ()
   ;; sticky scroll's scopes after the breadcrumb, from the buffer's own `drgnx-chrome-header-tail'

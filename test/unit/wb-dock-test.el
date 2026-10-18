@@ -1,17 +1,20 @@
 ;;; wb-dock-test.el --- batch tests: window roles and the left dock -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'drgnx-wb)
 
 (defmacro drgnx-wb-test--with-sections (&rest body)
   "BODY with two dummy dock sections and a single editor window; the layout is reset after."
-  `(let ((drgnx-wb--sections nil) (drgnx-signal--editor-window nil))
-     (delete-other-windows)
-     (drgnx-wb-define-section 'top :slot -1 :title "TOP" :buffer (lambda () (get-buffer-create "*drgnx-test-top*")))
-     (drgnx-wb-define-section 'bottom :slot 0 :title "BOTTOM" :buffer (lambda () (get-buffer-create "*drgnx-test-bottom*")))
-     (unwind-protect (progn ,@body)
-       (drgnx-wb-hide-sidebar)
+  `(drgnx-test-with-state
+     (let ((drgnx-wb--sections nil))
        (delete-other-windows)
-       (dolist (b '("*drgnx-test-top*" "*drgnx-test-bottom*")) (when (get-buffer b) (kill-buffer b))))))
+       (drgnx-wb-define-section 'top :slot -1 :title "TOP" :buffer (lambda () (get-buffer-create "*drgnx-test-top*")))
+       (drgnx-wb-define-section 'bottom :slot 0 :title "BOTTOM" :buffer (lambda () (get-buffer-create "*drgnx-test-bottom*")))
+       (unwind-protect (progn ,@body)
+         (drgnx-wb-hide-sidebar)
+         (delete-other-windows)
+         (dolist (b '("*drgnx-test-top*" "*drgnx-test-bottom*")) (when (get-buffer b) (kill-buffer b)))))))
 
 (ert-deftest drgnx-wb/sidebar-shows-sections-without-focus ()
   (drgnx-wb-test--with-sections

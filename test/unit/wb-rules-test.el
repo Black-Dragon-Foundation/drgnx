@@ -1,24 +1,27 @@
 ;;; wb-rules-test.el --- batch tests: where buffers go (the rules table) -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'drgnx-rules)
 
 (defvar drgnx-rules-test--dirs nil "Temp dirs `drgnx-rules-test--file' made; `drgnx-rules-test--with' removes them.")
 
 (defmacro drgnx-rules-test--with (&rest body)
   "BODY with the rules mode on, a two-section dock shown, one editor window and an empty unrouted log."
-  `(let ((drgnx-wb--sections nil) (drgnx-signal--editor-window nil) (drgnx-wb-unrouted nil)
-         (display-buffer-alist nil) (display-buffer-overriding-action '(nil)))
-     (delete-other-windows)
-     (drgnx-wb-define-section 'top :slot -1 :title "TOP" :buffer (lambda () (get-buffer-create "*drgnx-test-top*")))
-     (drgnx-wb-define-section 'bottom :slot 0 :title "BOTTOM" :buffer (lambda () (get-buffer-create "*drgnx-test-bottom*")))
-     (drgnx-rules-mode 1)
-     (unwind-protect (progn (drgnx-wb-show-sidebar) ,@body)
-       (while drgnx-rules-test--dirs (ignore-errors (delete-directory (pop drgnx-rules-test--dirs) t)))
-       (drgnx-rules-mode -1)
-       (drgnx-wb-hide-sidebar)
+  `(drgnx-test-with-state
+     (let ((drgnx-wb--sections nil) (drgnx-wb-unrouted nil)
+           (display-buffer-alist nil) (display-buffer-overriding-action '(nil)))
        (delete-other-windows)
-       (dolist (b '("*drgnx-test-top*" "*drgnx-test-bottom*" "zz-unrouted" " *x*" "*t1*" "*t2*" "*t3*"))
-         (when (get-buffer b) (kill-buffer b))))))
+       (drgnx-wb-define-section 'top :slot -1 :title "TOP" :buffer (lambda () (get-buffer-create "*drgnx-test-top*")))
+       (drgnx-wb-define-section 'bottom :slot 0 :title "BOTTOM" :buffer (lambda () (get-buffer-create "*drgnx-test-bottom*")))
+       (drgnx-rules-mode 1)
+       (unwind-protect (progn (drgnx-wb-show-sidebar) ,@body)
+         (while drgnx-rules-test--dirs (ignore-errors (delete-directory (pop drgnx-rules-test--dirs) t)))
+         (drgnx-rules-mode -1)
+         (drgnx-wb-hide-sidebar)
+         (delete-other-windows)
+         (dolist (b '("*drgnx-test-top*" "*drgnx-test-bottom*" "zz-unrouted" " *x*" "*t1*" "*t2*" "*t3*"))
+           (when (get-buffer b) (kill-buffer b)))))))
 
 (defun drgnx-rules-test--file (name)
   (let* ((dir (make-temp-file "drgnx-rules" t))
@@ -33,7 +36,7 @@
   (drgnx-rules-test--with
    ;; From a dock: the editor used last.  From an editor: that editor (the bus may not have seen it yet).
    (let* ((e1 (selected-window)) (e2 (split-window e1 nil 'right)) (b (drgnx-rules-test--file "a.txt")))
-     (setq drgnx-signal--editor-window e2)
+     (drgnx-test-use-editor e2)
      (select-window (drgnx-wb-section-window 'top))
      (let ((n (length (window-list nil 'nomini))))
        (should (eq (display-buffer b) e2))
@@ -47,7 +50,7 @@
   (drgnx-rules-test--with
    (let* ((e1 (selected-window)) (e2 (split-window e1 nil 'right)) (b (drgnx-rules-test--file "b.txt")))
      (set-window-buffer e1 b)
-     (setq drgnx-signal--editor-window e2)
+     (drgnx-test-use-editor e2)
      (should (eq (display-buffer b) e1))
      (kill-buffer b))))
 
@@ -55,7 +58,7 @@
   (drgnx-rules-test--with
    (let ((editor (car (drgnx-rules-test--editors))) (b (drgnx-rules-test--file "c.txt"))
          (dock (drgnx-wb-section-window 'bottom)))
-     (setq drgnx-signal--editor-window editor)
+     (drgnx-test-use-editor editor)
      (select-window dock)
      (pop-to-buffer b)
      (should (eq (window-buffer editor) b))
@@ -65,7 +68,7 @@
 (ert-deftest drgnx-rules/unmatched-is-logged ()
   (drgnx-rules-test--with
    (let ((editor (car (drgnx-rules-test--editors))))
-     (setq drgnx-signal--editor-window editor)
+     (drgnx-test-use-editor editor)
      (should (eq (display-buffer (get-buffer-create "zz-unrouted")) editor))
      (should (equal (plist-get (car drgnx-wb-unrouted) :buffer) "zz-unrouted"))
      (display-buffer (get-buffer-create " *x*"))
@@ -128,7 +131,7 @@
 (ert-deftest drgnx-rules/files-and-lists-go-to-the-editor-unlogged ()
   (drgnx-rules-test--with
    (let ((editor (car (drgnx-rules-test--editors))) (f (drgnx-rules-test--file "notes.md")))
-     (setq drgnx-signal--editor-window editor)
+     (drgnx-test-use-editor editor)
      (should (eq (display-buffer f) editor))
      (dolist (name (quote ("*Ibuffer*" "*Buffer List*" "*Customize Group: Editing*" "*Abbrevs*" "*scratch*")))
        (let* ((old (get-buffer name)) (b (get-buffer-create name)))   ; fundamental-mode when first displayed
