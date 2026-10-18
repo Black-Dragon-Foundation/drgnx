@@ -718,6 +718,21 @@ a `left` kind to `drgnx-wb-define-section`, a `bottom` or `right` kind to `drgnx
 `drgnx-layouts-define-pane`. A backend is an entry in `drgnx-pane--backends` (the functions for `:define`, `:show`,
 `:hide`, `:window`, `:focus`, `:resize`, `:move`, `:stack`); the tiled grid registers `grid` there.
 
+**Ownership.** `drgnx-pane-define-kind` records the module whose setup runs as the kind's owner
+(`(drgnx-state-kind-owner KIND)`; nil for a kind defined at load, which is core's and stays until restart) and, in a
+setup, pushes the undo "pane kind KIND". The undo runs only while KIND is still the definition this module made (two
+modules defining one kind may be torn down in either order, `drgnx-module--claim`). It hides KIND on every frame
+where it shows, `drgnx-pane-hide :by 'teardown` (the hide notes the size `:by auto`, so a size you chose is kept; a
+`left` kind is not hidden, because that would close the whole dock, and its section just goes), then puts the previous
+definition back or calls `(drgnx-pane-undefine-kind KIND)`, which removes KIND from `drgnx-pane--kinds` and from
+its dock section, area tab or editor place rule (`drgnx-wb-undefine-section`, `-tab`, `drgnx-wb-unplace`). An
+area's front tab is intent: the undo reads it first and notes it again `:by teardown` after the tab is gone, so it
+names a kind nobody defines for a while (a panel shown meanwhile has that tab's blank placeholder). The module turned
+on again defines the kind; a new kind that is in front in an area that shows is shown again `:by teardown`, and a
+hidden area shows it at the size you chose at its next show. The leak census reads `drgnx-state--now`,
+`drgnx-state--idle`, `drgnx-state--roles` and `drgnx-pane--kinds` (`drgnx-modules-fingerprint-registries`), so a
+subscription, role or kind a module leaves behind is named in the per-test diff. Test: `test/unit/wb-state-own-test.el`.
+
 **The write API.** `show`, `hide`, `focus` and `toggle` take `:by`, and three more operations complete them:
 `(drgnx-pane-resize KIND PX :horizontal :by)`, `(drgnx-pane-move KIND TARGET ZONE :by)` and
 `(drgnx-pane-stack KIND ONTO :by)`. Each runs inside `drgnx-state-with-write` (below): `:by` says who asked —
