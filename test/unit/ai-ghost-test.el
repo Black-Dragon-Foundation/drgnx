@@ -1,5 +1,6 @@
 ;;; ai-ghost-test.el --- batch tests: ghost-text completion and the Tab arbiter -*- lexical-binding: t -*-
 (require 'ert)
+(require 'auth-source)
 (require 'drgnx)
 (load (expand-file-name "modules/tools/drgnx-ai-ui" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
