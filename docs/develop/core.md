@@ -217,7 +217,8 @@ the version only for a change of shape or meaning, and add a `:migrate` step fro
 `(drgnx-config-update NAME FN &key root (timeout 1.0))` return the new applied value. Each is a
 `drgnx-file-update`: the lock, a fresh read, FN on the data (migrated when the file is older; nil when it is absent,
 not the default), the write.
-- They refuse a file with a mistake and a newer one with `drgnx-config-refused` (a `user-error`), and leave it as it
+- They refuse a file with a mistake and a newer one with `drgnx-config-refused` (a `user-error`, and a `file-error` so its text prints without quotes; a handler for
+  `file-error` catches it too), and leave it as it
   was: "FILE has a mistake at line L: TEXT — fix it (Preferences: Open Config File…) or reset it; it was not
   changed", or "FILE was written by a newer drgnx (format V; this one writes W): update drgnx here; …". A project
   file is read-only (an `error`).

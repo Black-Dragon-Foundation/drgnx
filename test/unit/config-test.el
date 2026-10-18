@@ -507,6 +507,18 @@
     (should (equal (drgnx-test-config-text 'drgnx-config-test) "(:a 2)\n"))
     (should-not (drgnx-config-test--backups))))
 
+(ert-deftest drgnx-config/reset-refuses-a-newer-file ()
+  (drgnx-test-with-config
+    (drgnx-config-test--define)
+    (let ((text ";; from a newer drgnx\n(:version 2 :a 7)\n"))
+      (drgnx-test-config-put 'drgnx-config-test text)
+      (should-error (drgnx-config--reset 'drgnx-config-test) :type 'drgnx-config-refused)
+      (should (equal (drgnx-test-config-text 'drgnx-config-test) text))
+      (should-not (drgnx-config-test--backups)))))
+
+(ert-deftest drgnx-config/a-refusal-prints-without-quotes ()
+  (should (equal (error-message-string '(drgnx-config-refused "X has a mistake")) "X has a mistake")))
+
 (ert-deftest drgnx-config/open-goes-to-the-problem-line ()
   (drgnx-test-with-config
     (drgnx-config-test--define)

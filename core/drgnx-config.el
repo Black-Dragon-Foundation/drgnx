@@ -27,7 +27,8 @@
 (declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
 (declare-function drgnx-notice-clear "drgnx-notice" (source &optional id))
 
-(define-error 'drgnx-config-refused "" 'user-error)
+;; A `file-error' too, as `drgnx-file-refused' is: Emacs prints a file error's text as it is, not in quotes.
+(define-error 'drgnx-config-refused "" '(user-error file-error))
 
 (defvar drgnx-config--defs (make-hash-table :test 'eq)
   "NAME → the definition plist made by `drgnx-config-define'.  Bounded by the definitions in the code.")
@@ -122,8 +123,8 @@ drops what was applied from it."
 ;;;; Where files are
 
 (defun drgnx-config--path (def root)
-  "DEF's file, absolute; ROOT is the project's folder of a project file."
-  (let ((default-directory "/") (file (plist-get def :file)))
+  "DEF's file, absolute; ROOT is the project's folder of a project file.  No file name handler runs."
+  (let ((default-directory "/") (file-name-handler-alist nil) (file (plist-get def :file)))
     (pcase (plist-get def :dir)
       ('config (expand-file-name file (drgnx-user-dir)))
       ('state (expand-file-name file (drgnx-state-dir)))
@@ -134,7 +135,8 @@ drops what was applied from it."
 (defun drgnx-config--key (def root)
   "DEF's key in `drgnx-config--state': its name, or (NAME . ROOT) for a project file."
   (if (eq (plist-get def :dir) 'project)
-      (cons (plist-get def :name) (let ((default-directory "/")) (file-name-as-directory (expand-file-name root))))
+      (cons (plist-get def :name) (let ((default-directory "/") (file-name-handler-alist nil))
+                                    (file-name-as-directory (expand-file-name root))))
     (plist-get def :name)))
 
 (defun drgnx-config-file (name &optional root)
