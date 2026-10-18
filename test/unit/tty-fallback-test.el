@@ -72,6 +72,9 @@ binding are taken off afterwards."
                    ((symbol-function 'frame-terminal) (lambda (&optional _) tty-fallback-test--term))
                    ((symbol-function 'terminal-name) (lambda (&optional term) (symbol-name term)))
                    ((symbol-function 'terminal-live-p) (lambda (_term) t))
+                   ;; the editor tabs' close glyph (drgnx-face-glyph) asks the terminal for its coding system; a
+                   ;; fake terminal has none, and the failure left core/workbench unset-up (a table of 27 chords, not 37)
+                   ((symbol-function 'terminal-coding-system) (lambda (&optional _) 'utf-8-unix))
                    ((symbol-function 'display-graphic-p) (lambda (&optional _) tty-fallback-test--graphic))
                    ((symbol-function 'terminal-parameter)
                     (lambda (term p) (gethash (cons (or term tty-fallback-test--term) p) table)))
