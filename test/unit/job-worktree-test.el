@@ -87,8 +87,15 @@ source is PATH or one of its parents, or nil when none is."
     ;; `git pack-refs' (in `git gc') removes the ref directory: prepare, before each start, makes it again
     (drgnx-job-worktree-test--git repo "pack-refs" "--all")
     (should-not (file-exists-p (concat git "/refs/heads/job")))
-    (drgnx-job-worktree-prepare repo "7" 1)
+    ;; a job stopped after git but before config.worktree was made: prepare makes it too (and keeps one that is there)
+    (delete-file (concat git "/worktrees/7-1/config.worktree"))
+    (drgnx-job-worktree-prepare repo "7-1" "7" 1)
     (should (file-directory-p (concat git "/refs/heads/job/7-1")))
+    (should (eql 0 (file-attribute-size (file-attributes (concat git "/worktrees/7-1/config.worktree")))))
+    (write-region "[core]\n" nil (concat git "/worktrees/7-1/config.worktree") nil 'silent)
+    (drgnx-job-worktree-prepare repo "7-1" "7" 1)
+    (should (eql 7 (file-attribute-size (file-attributes (concat git "/worktrees/7-1/config.worktree")))))
+    (should-error (drgnx-job-worktree-prepare repo ".." "7" 1))
     (should (equal (drgnx-job-worktree-test--git folder "rev-parse" "HEAD") (drgnx-job-worktree-test--git repo "rev-parse" "job/7")))
     ;; a folder that is there already is refused, and nothing is changed
     (should (equal (car (drgnx-job-worktree-test--add repo folder "7" 1 "job/7")) :error))
@@ -183,42 +190,164 @@ source is PATH or one of its parents, or nil when none is."
 
 ;;;; The check after each turn
 
+(defun drgnx-job-worktree-test--check (repo id n base &optional secs)
+  "Run the check and wait for it: (RESULT TIP) as DONE got them, or `:timeout' when DONE never came within SECS (30)."
+  (let ((got :timeout) (deadline (+ (float-time) (or secs 30))))
+    (drgnx-job-worktree-check repo id n base (lambda (r &optional tip) (setq got (list r tip))))
+    (while (and (eq got :timeout) (< (float-time) deadline)) (accept-process-output nil 0.05))
+    got))
+
 (ert-deftest drgnx-job-worktree/check-catches-a-rewound-branch ()
   (drgnx-job-worktree-test--with
     (should (equal (drgnx-job-worktree-test--add repo folder "7" 1 "job/7") '(:name "7-1")))
-    (should (drgnx-job-worktree-check repo "7" 1 "job/7"))               ; at the base
+    (should (equal (drgnx-job-worktree-test--check repo "7" 1 "job/7")              ; at the base
+                   (list t (drgnx-job-worktree-test--git repo "rev-parse" "job/7"))))
     (write-region "three\n" nil (concat folder "/README") nil 'silent)
     (drgnx-job-worktree-test--git folder "commit" "-q" "-am" "three")
-    (should (drgnx-job-worktree-check repo "7" 1 "job/7"))               ; a commit on it
     (let ((ref (concat git "/refs/heads/job/7-1/work"))
           (tip (drgnx-job-worktree-test--git repo "rev-parse" "job/7-1/work")))
-      (should (equal (drgnx-job-worktree-tip repo "7" 1) tip))
+      (should (equal (drgnx-job-worktree-test--check repo "7" 1 "job/7") (list t tip)))  ; a commit on it
       ;; rewound below the base
       (drgnx-job-worktree-test--git folder "reset" "-q" "--hard" "main~1")
-      (should-not (drgnx-job-worktree-check repo "7" 1 "job/7"))
+      (should (equal (drgnx-job-worktree-test--check repo "7" 1 "job/7") '(nil nil)))
       ;; a branch of its own history
       (drgnx-job-worktree-test--git folder "checkout" "-q" "--orphan" "x")
       (drgnx-job-worktree-test--git folder "commit" "-q" "-m" "alone")
       (drgnx-job-worktree-test--git folder "update-ref" "refs/heads/job/7-1/work" "HEAD")
-      (should-not (drgnx-job-worktree-check repo "7" 1 "job/7"))
+      (should (equal (drgnx-job-worktree-test--check repo "7" 1 "job/7") '(nil nil)))
       ;; the ref file is the agent's: a symbolic ref, a link or junk is no commit
       (write-region "ref: refs/heads/main\n" nil ref nil 'silent)
-      (should-not (drgnx-job-worktree-tip repo "7" 1))
-      (should-not (drgnx-job-worktree-check repo "7" 1 "job/7"))
+      (should (equal (drgnx-job-worktree-test--check repo "7" 1 "job/7") '(nil nil)))
       (delete-file ref)
       (make-symbolic-link (concat git "/refs/heads/main") ref)
-      (should-not (drgnx-job-worktree-check repo "7" 1 "job/7"))
+      (should (equal (drgnx-job-worktree-test--check repo "7" 1 "job/7") '(nil nil)))
       (delete-file ref)
       (write-region (concat (make-string 40 ?z) "\n") nil ref nil 'silent)
-      (should-not (drgnx-job-worktree-check repo "7" 1 "job/7"))
+      (should-not (car (drgnx-job-worktree-test--check repo "7" 1 "job/7")))
       ;; back at the commit: descends again; packed (the user's gc) it is still found
       (write-region (concat tip "\n") nil ref nil 'silent)
-      (should (drgnx-job-worktree-check repo "7" 1 "job/7"))
+      (should (equal (drgnx-job-worktree-test--check repo "7" 1 "job/7") (list t tip)))
       (drgnx-job-worktree-test--git repo "pack-refs" "--all")
       (should-not (file-exists-p ref))
-      (should (equal (drgnx-job-worktree-tip repo "7" 1) tip))
-      (should (drgnx-job-worktree-check repo "7" 1 "job/7")))
+      (should (equal (drgnx-job-worktree-test--check repo "7" 1 "job/7") (list t tip))))
     ;; no branch at all
-    (should-not (drgnx-job-worktree-check repo "7" 2 "job/7"))))
+    (should (equal (drgnx-job-worktree-test--check repo "7" 2 "job/7") '(nil nil)))))
+
+(ert-deftest drgnx-job-worktree/check-never-blocks ()
+  "The objects are the agent's: a FIFO planted as the tip's loose object blocks git in open(), never the hub."
+  (drgnx-job-worktree-test--with
+    (should (equal (drgnx-job-worktree-test--add repo folder "7" 1 "job/7") '(:name "7-1")))
+    (let* ((sha (concat "12" (make-string 38 ?a)))
+           (dir (concat git "/objects/12")))
+      (make-directory dir t)
+      (should (eql 0 (call-process "mkfifo" nil nil nil (concat dir "/" (substring sha 2)))))
+      (write-region (concat sha "\n") nil (concat git "/refs/heads/job/7-1/work") nil 'silent)
+      (let* ((drgnx-job-worktree-timeout 1)
+             (start (float-time))
+             (got :none))
+        (drgnx-job-worktree-check repo "7" 1 "job/7" (lambda (r &optional _tip) (setq got r)))
+        (should (< (- (float-time) start) 0.5))                       ; the call returns at once
+        (let ((deadline (+ start 10)))
+          (while (and (eq got :none) (< (float-time) deadline)) (accept-process-output nil 0.05)))
+        (should (eq (car-safe got) :error))                          ; a timeout is a failure, never a pass
+        (should (< (- (float-time) start) 5))))))
+
+;;;; The scrub: the per-worktree state the user's git would trust
+
+(defun drgnx-job-worktree-test--try (dir &rest args)
+  "Git ARGS in DIR as the user would run it: its exit status, whatever it is."
+  (let ((default-directory (file-name-as-directory dir)))
+    (apply #'call-process "git" nil nil nil args)))
+
+(defun drgnx-job-worktree-test--wait-gone (git &optional secs)
+  "Non-nil once no scrub trash (`.drgnx-scrub-*') is left in GIT, waiting up to SECS (15)."
+  (let ((deadline (+ (float-time) (or secs 15))) left)
+    (while (and (setq left (directory-files git nil "\\`\\.drgnx-scrub-")) (< (float-time) deadline))
+      (accept-process-output nil 0.05))
+    (null left)))
+
+(ert-deftest drgnx-job-worktree/scrub-removes-planted-state ()
+  (drgnx-job-worktree-test--with
+    (should (equal (drgnx-job-worktree-test--add repo folder "7" 1 "job/7") '(:name "7-1")))
+    ;; an ordinary turn leaves nothing to scrub (a commit writes COMMIT_EDITMSG; git made refs/ empty)
+    (write-region "three\n" nil (concat folder "/README") nil 'silent)
+    (drgnx-job-worktree-test--git folder "commit" "-q" "-am" "three")
+    (should-not (drgnx-job-worktree-scrub repo "7-1" "7" 1))
+    (let* ((wt (concat git "/worktrees/7-1/"))
+           (config (concat git "/config"))
+           (config-bytes (with-temp-buffer (insert-file-contents-literally config) (buffer-string)))
+           (main (drgnx-job-worktree-test--git repo "rev-parse" "main"))
+           (canary-exec (concat root "canary-exec"))
+           (canary-log (concat root "canary-log"))
+           (empty (drgnx-job-worktree-test--git repo "hash-object" "-t" "tree" "-w" "/dev/null"))
+           (orphan (drgnx-job-worktree-test--git repo "commit-tree" empty "-m" "the agent's")))
+      ;; what the agent plants, where the binds let it write
+      (make-directory (concat wt "rebase-merge"))
+      (write-region (format "exec touch %s\n" canary-exec) nil (concat wt "rebase-merge/git-rebase-todo") nil 'silent)
+      (write-region "refs/heads/main\n" nil (concat wt "rebase-merge/head-name") nil 'silent)
+      (write-region (concat orphan "\n") nil (concat wt "rebase-merge/orig-head") nil 'silent)
+      (write-region (concat main "\n") nil (concat wt "rebase-merge/onto") nil 'silent)
+      (write-region "" nil (concat wt "rebase-merge/interactive") nil 'silent)
+      (make-directory (concat wt "sequencer"))
+      (write-region (format "pick %s x\n" orphan) nil (concat wt "sequencer/todo") nil 'silent)
+      (write-region (concat orphan "\n") nil (concat wt "MERGE_HEAD") nil 'silent)
+      (delete-file (concat wt "COMMIT_EDITMSG"))
+      (make-symbolic-link config (concat wt "COMMIT_EDITMSG"))
+      (delete-file (concat wt "logs/HEAD"))
+      (make-symbolic-link canary-log (concat wt "logs/HEAD"))
+      (write-region "ref: refs/heads/main\n" nil (concat git "/refs/heads/job/7-1/x") nil 'silent)
+      (write-region "ref: refs/heads/main\n" nil (concat wt "HEAD") nil 'silent)
+      (let ((link-target (file-symlink-p (concat wt "COMMIT_EDITMSG"))))
+        (should (equal link-target config)))                         ; the plants are in place
+      (should (equal (sort (drgnx-job-worktree-scrub repo "7-1" "7" 1) #'string<)
+                     (sort (list "refs/heads/job/7-1/x" "worktrees/7-1/COMMIT_EDITMSG" "worktrees/7-1/HEAD"
+                                 "worktrees/7-1/MERGE_HEAD" "worktrees/7-1/logs/HEAD" "worktrees/7-1/rebase-merge"
+                                 "worktrees/7-1/sequencer")
+                           #'string<)))
+      ;; each is gone or fixed; the pins and the branch are untouched
+      (dolist (p '("rebase-merge" "sequencer" "MERGE_HEAD" "COMMIT_EDITMSG" "logs/HEAD"))
+        (should-not (file-attributes (concat wt p))))
+      (should-not (file-attributes (concat git "/refs/heads/job/7-1/x")))
+      (should (equal (with-temp-buffer (insert-file-contents (concat wt "HEAD")) (buffer-string))
+                     "ref: refs/heads/job/7-1/work\n"))
+      (dolist (p '("commondir" "gitdir" "config.worktree" "index" "ORIG_HEAD"))
+        (should (file-regular-p (concat wt p))))
+      (should (file-regular-p (concat git "/refs/heads/job/7-1/work")))
+      ;; nothing of it is left anywhere in the repository's .git: the scrub's trash is removed too
+      (should (drgnx-job-worktree-test--wait-gone git))
+      ;; a second scrub finds nothing
+      (should-not (drgnx-job-worktree-scrub repo "7-1" "7" 1))
+      ;; then the user's own git, outside the sandbox
+      (should-not (eql 0 (drgnx-job-worktree-test--try folder "rebase" "--continue")))
+      (should-not (eql 0 (drgnx-job-worktree-test--try folder "rebase" "--abort")))
+      (should (eql 0 (drgnx-job-worktree-test--try folder "commit" "-q" "--amend" "--no-edit")))
+      (should (eql 0 (drgnx-job-worktree-test--try repo "status" "--porcelain")))
+      (should-not (file-exists-p canary-exec))
+      (should-not (file-exists-p canary-log))
+      (should (equal (drgnx-job-worktree-test--git repo "rev-parse" "main") main))
+      (should (equal (with-temp-buffer (insert-file-contents-literally config) (buffer-string)) config-bytes))
+      (should (equal (drgnx-job-worktree-test--git folder "symbolic-ref" "HEAD") "refs/heads/job/7-1/work")))))
+
+(ert-deftest drgnx-job-worktree/scrub-follows-no-link ()
+  "A link in place of a directory or a file is removed itself: what it points at is never touched."
+  (drgnx-job-worktree-test--with
+    (should (equal (drgnx-job-worktree-test--add repo folder "7" 1 "job/7") '(:name "7-1")))
+    (let* ((wt (concat git "/worktrees/7-1/"))
+           (victim (concat root "victim/")))
+      (make-directory victim)
+      (write-region "mine\n" nil (concat victim "file") nil 'silent)
+      (make-symbolic-link (directory-file-name victim) (concat wt "rebase-apply"))
+      (make-symbolic-link (concat victim "file") (concat git "/logs/refs/heads/job/7-1/y"))
+      (delete-file (concat wt "HEAD"))
+      (make-symbolic-link (concat victim "file") (concat wt "HEAD"))
+      ;; an object of the agent's own: a FIFO for the hub to read is removed unread
+      (call-process "mkfifo" nil nil nil (concat wt "ORIG_HEAD.fifo"))
+      (should (equal (sort (drgnx-job-worktree-scrub repo "7-1" "7" 1) #'string<)
+                     '("logs/refs/heads/job/7-1/y" "worktrees/7-1/HEAD" "worktrees/7-1/ORIG_HEAD.fifo"
+                       "worktrees/7-1/rebase-apply")))
+      (should (equal (directory-files victim nil directory-files-no-dot-files-regexp) '("file")))
+      (should (equal (with-temp-buffer (insert-file-contents (concat victim "file")) (buffer-string)) "mine\n"))
+      (should (equal (with-temp-buffer (insert-file-contents (concat wt "HEAD")) (buffer-string))
+                     "ref: refs/heads/job/7-1/work\n")))))
 
 ;;; job-worktree-test.el ends here

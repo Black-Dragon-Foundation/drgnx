@@ -431,7 +431,8 @@ Measured on drgnx's own repository on btrfs (base `main`, 7572 objects reachable
 
 Snapshot mode is the default. Worktree mode is opt-in: a profile's `:git worktree`, `drgnx job propose --git
 worktree`, or the plan's `**Git:** worktree` line. One job uses one mode for all its tasks. `core/drgnx-job-worktree.el`
-builds it. It makes the worktree and returns the binds as data; the sandbox applies them.
+builds it: it makes the worktree, returns the binds as data, checks the branch and scrubs the worktree's git state.
+The sandbox applies the binds.
 
 Each task gets a classic linked worktree that shares the repository's `.git`:
 
@@ -442,7 +443,8 @@ git worktree add -q -b job/ID-N/work <repo>/.claude/worktrees/ID-N refs/heads/jo
 Why someone picks it:
 - The task's branch is in the main repository the moment the agent commits. There is no bundle step.
 - `git worktree list` shows every task.
-- The user's own tools work in the folder: magit, `git log`, a shell prompt.
+- The user's own tools work in the folder (magit, `git log`, a shell prompt) **once the task's agent has stopped** and
+  the hub has scrubbed its git state (below). While it runs, VC stays out of the folder, as in snapshot mode.
 - There is no copy, even on ext4.
 
 Git's security guidance is the rule here too: a `.git` an agent can write is untrusted, and git run in it runs that
@@ -475,28 +477,31 @@ git directory; NAME is the worktree's directory in it (git names it after the fo
 - The main checkout is not mounted. Its untracked and uncommitted files (a `.env`) are not inside.
 - The paths are true names. ID, N and NAME are checked first: an id like `../x` would widen the ref directory, so it is
   an error.
-- `(drgnx-job-worktree-binds … t)` is the reviewer's: the same binds, every one read-only. The reviewer runs in the
-  task's worktree.
+- `(drgnx-job-worktree-binds … t)` gives the same binds, every one read-only, for a reviewer's worktree.
 
 The tests in `test/unit/job-worktree-test.el` assert this data: the order, which paths end up writable, and the
-reviewer's. The escape tests prove under the real bwrap that each pinned path gives EROFS or EBUSY.
+read-only variant. The escape tests prove under the real bwrap that each pinned path gives EROFS or EBUSY.
+
+What fails inside, because the shared state is read-only:
+- `git stash` ("Cannot save the current status"): `refs/stash` is shared.
+- `git rerere`: its `rr-cache/` is read-only.
+- With git 2.56, a commit prints `error: Unable to create '…/packed-refs.lock': Read-only file system` and still
+  succeeds.
 
 ### Making the worktree
 
 `(drgnx-job-worktree-add REPO FOLDER ID N BASE DONE)` runs `git worktree add` as a process of its own: the hub never
 waits. Git runs in the main repository, with `core.hooksPath=/dev/null` and `core.fsmonitor=false`, as snapshot mode
-does. Then, before any agent:
-- it reads the worktree's NAME from `FOLDER/.git`, and keeps it only when that worktree's `gitdir` leads back;
-- it makes `GIT/worktrees/NAME/config.worktree`, empty, so that it can be pinned. A file git copied there from the
-  user's own `config.worktree` is kept;
-- it makes the two ref directories (`drgnx-job-worktree-prepare`).
+does. Then, before any agent, it reads the worktree's NAME from `FOLDER/.git`, and keeps it only when that worktree's
+`gitdir` leads back. It then calls `drgnx-job-worktree-prepare`. DONE gets `(:name NAME)` or `(:error MSG)`. A bad id
+or base, a folder that is there already, and a reftable repository are refused before git runs.
 
-DONE gets `(:name NAME)` or `(:error MSG)`. A bad id or base, a folder that is there already, and a reftable
-repository are refused before git runs.
-
-Call `(drgnx-job-worktree-prepare REPO ID N)` before each start of the task's agent. `git pack-refs`, which `git gc`
-runs, packs the branch and removes its now empty `refs/heads/job/` directories, and bubblewrap cannot bind a
-directory that is not there.
+Call `(drgnx-job-worktree-prepare REPO NAME ID N)` before each start of the task's agent. It makes what the binds
+need, where it is missing:
+- the two ref directories. `git pack-refs`, which `git gc` runs, packs the branch and removes its now empty
+  `refs/heads/job/` directories, and bubblewrap cannot bind a directory that is not there;
+- an empty `GIT/worktrees/NAME/config.worktree`, so that it can be pinned. A job stopped between `git worktree add` and
+  this step never made it. A file that is there (git copies the user's own) is kept.
 
 ### A reftable repository is refused
 
@@ -508,20 +513,58 @@ task's own branch and the rest. `(drgnx-job-worktree-refusal REPO)` returns the 
 
 `drgnx-job-worktree-add` asks it before git runs.
 
+### The worktree's git state: scrubbed
+
+`worktrees/NAME/` must be writable: git replaces `HEAD`, `index` and `logs/HEAD` there by rename. **Per-worktree state
+is the agent's, and the user's git trusts it.** The agent can leave in it:
+- an operation in progress (`rebase-merge/`, `rebase-apply/`, `sequencer/`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, …).
+  `git rebase --continue` runs its todo's `exec` lines as the user. `--continue` or `--abort` moves the branch its
+  `head-name` names (`main`) to a commit of the agent's;
+- links in place of files git writes by opening them (`COMMIT_EDITMSG`, `MERGE_MSG`, `FETCH_HEAD`, `logs/HEAD`, and
+  the branch's reflog in `logs/refs/heads/job/ID-N/`). An amend in the folder writes the agent's commit message
+  through the link: to `~/.bashrc`, or to the main `.git/config` with a `core.fsmonitor` of its own;
+- a `HEAD` naming another branch, so that a commit in the folder moves it.
+
+Read-only binds cannot prevent this. `(drgnx-job-worktree-scrub REPO NAME ID N)` removes it, and returns the names
+(relative to `GIT`) it removed or rewrote, or nil:
+- In `worktrees/NAME/` it keeps only `HEAD`, `index`, `ORIG_HEAD`, `COMMIT_EDITMSG`, `logs/HEAD` and the three pins,
+  each a regular file, and `refs/` as the empty directory `git worktree add` makes. `COMMIT_EDITMSG` is written by
+  every commit; only a link there is dangerous.
+- `HEAD` must be `ref: refs/heads/job/ID-N/work` or an object name. Otherwise it is rewritten to the first.
+- In `refs/heads/job/ID-N/` and `logs/refs/heads/job/ID-N/` it keeps only `work`, a regular file.
+
+It runs no git and follows no link:
+- It takes types from lstat. What goes is renamed (a link itself) into `GIT/.drgnx-scrub-*`, a directory the agent
+  cannot write. `rm -rf`, which never follows a link, then removes it in a process of its own.
+- It never descends into a directory the agent can write. `logs/` is moved out whole, and `logs/HEAD` comes back
+  only if it is a regular file.
+- It reads `HEAD` only after moving it out, so a FIFO in its place never blocks the hub.
+
+Call it at each turn end, before a review, and once more after the agent's sandbox has exited. Only then can the
+agent not plant again. While the sandbox lives, the folder belongs with the VC guard, as in snapshot mode. The user's
+tools are safe in the folder only after the agent has stopped and the hub has scrubbed. A shell `git` in the folder
+while the agent runs is outside drgnx's reach, as in snapshot mode. `objects/` is not scrubbed: git writes there by
+temporary file and rename, and its gap is below.
+
 ### After each turn
 
-`(drgnx-job-worktree-check REPO ID N BASE)` is t when `job/ID-N/work` still descends from BASE. It runs `git
-merge-base --is-ancestor` in the main repository, whose config the agent cannot write. The loose ref file is the
-agent's. So `(drgnx-job-worktree-tip REPO ID N)` reads it as a value: a regular file, not a link, holding 40 or 64
-hex digits. A symbolic ref, a link or junk is nil. Without a loose file, it reads the line of `packed-refs`, which only
-the user's git writes. Merge that commit, not the branch's name.
+`(drgnx-job-worktree-check REPO ID N BASE DONE)` asks whether `job/ID-N/work` still descends from BASE. It runs two
+gits in the main repository, whose config the agent cannot write, each as a process of its own with the deadline
+`drgnx-job-worktree-timeout`:
+1. `for-each-ref` reads the branch. Its `%(symref)` must be empty and its object name 40 or 64 hex digits. A link in
+   the ref directory (lstat) counts as no branch.
+2. `merge-base --is-ancestor`.
 
-The check catches a rewound or replaced branch. It is not a guard against a hostile agent: the objects it reads are
-writable.
+DONE gets `t` and the commit checked (merge that commit, never the branch's name), `nil` (rewound, replaced, a
+symbolic ref or a link, junk, no branch), or `(:error MSG)`. A timeout is a failure, never a pass. The ref file and
+the objects are the agent's: a FIFO planted as one blocks git, never the hub. The check catches a rewound or replaced
+branch. It is not a guard against a hostile agent: the objects it reads are writable.
 
 ### What it protects
 
-- The main `.git/config`, `hooks/` and `info/` are read-only. Nothing the agent writes runs later outside the sandbox.
+- The main `.git/config`, `hooks/` and `info/` are read-only inside the sandbox. Through the worktree's own state
+  (links, an operation in progress) the user's git outside could still write or run them. The scrub removes that
+  state; see above for when.
 - Every ref but its own branch.
 - The hub's socket, `~`, the user's sockets, `work.db` and the environment, as in snapshot mode.
 - The main checkout's untracked and uncommitted files: they are not mounted.
@@ -535,14 +578,13 @@ writable.
 - **Reading the whole repository.** The agent sees all history, all branches, unreachable objects (a file staged then
   unstaged, a dropped stash) and the main `config`, including remote URLs. A token in a remote URL is visible to the
   model.
-- **Per-worktree state** (its index, HEAD, reflog, and a rebase, cherry-pick or `am` in progress) is the agent's. Git
-  reads it only in that worktree, through the pinned pointers. **Neither continue nor abort an operation an agent left
-  in progress in a task folder.** A rebase's todo list is the agent's, and its `exec` lines would run as you.
-  `--abort` resets the branch its state names, which the agent may have set to `main`. Remove the worktree instead.
-- **A nested `.git`** the agent creates in a subdirectory of the folder is a repository with the agent's config. The
-  hub checks for one after each turn, as in snapshot mode.
+- **The worktree's git state while the agent lives.** A scrub at turn end can be followed by a new plant. Only the
+  scrub after the sandbox has exited leaves the state clean.
+- **A nested `.git`** the agent creates in a subdirectory of the folder is a repository with the agent's config. A
+  gitlink in the agent's index at that path makes a plain `git status` at the folder's root run the nested
+  repository's `core.fsmonitor`. The hub checks for one after each turn, as in snapshot mode.
 - `git gc` of the user's while an agent runs can remove the branch's ref directory under it. The agent's next commit
-  then fails to update its branch. The next start makes the directory again.
+  then fails to update its branch. `drgnx-job-worktree-prepare` makes the directory again at the next start.
 - Objects of an `objects/info/alternates` outside `.git` are not mounted. Git inside cannot read them.
 
 ### Risks, row by row
@@ -551,13 +593,14 @@ Snapshot mode against worktree mode (spec §4b):
 
 | Risk | Snapshot (default) | Worktree (opt-in) |
 |---|---|---|
-| Agent-written config or hooks run outside the sandbox | no: git never runs in the copy outside the sandbox | no: main config and hooks read-only, pointers pinned |
-| Other branches, `job/ID`, `main` moved | no | no: only its own `job/ID-N/` ref directory is writable |
+| Agent-written config or hooks run outside the sandbox | no: git never runs in the copy outside the sandbox | no once scrubbed: main config and hooks read-only, pointers pinned, the worktree's state scrubbed |
+| Agent-planted git state (a rebase todo, links in the git dir) used by the user's git | n/a: no git runs in the copy outside | scrubbed at each turn end and after exit; VC kept out while the agent runs |
+| Other branches, `job/ID`, `main` moved | no | no: only its own `job/ID-N/` ref directory is writable, and the scrub removes a `head-name` or `HEAD` naming another |
 | Repository objects deleted or corrupted | no: its own copy | **yes**: data loss for anything unpushed |
 | User's uncommitted or untracked files (`.env`) seen | no | no |
 | Remote URLs and their tokens seen | no: not in the store | yes: the main config is readable |
-| The reviewer influenced by the implementer's git config | no: a fresh snapshot | no: the shared config is read-only |
-| User's own tools (magit, `git` in a shell) in the folder | unsafe: the folder's `.git` is the agent's; drgnx keeps VC out | safe at the folder's root; never continue or abort an operation the agent left |
+| The reviewer influenced by the implementer's git config | no: a fresh snapshot | no: a fresh worktree of the tip, read-only; the shared config is read-only |
+| User's own tools (magit, `git` in a shell) in the folder | unsafe: the folder's `.git` is the agent's; drgnx keeps VC out | safe once the task's agent has stopped and the hub has scrubbed its git state; while it runs, drgnx keeps VC out |
 | Nested `.git` in a subdirectory | hub check and a card | hub check and a card |
 | Branch visible in the main repository | after the bundle fetch | at once |
 | `git worktree list` shows the task | no | yes |

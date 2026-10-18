@@ -9,15 +9,18 @@
 ;; `refs/heads/job/ID-N/' and its reflog, and the worktree's own directory `worktrees/NAME/'.  The pointers that tell
 ;; git where the repository is — `FOLDER/.git', and `commondir', `gitdir' and `config.worktree' in `worktrees/NAME/'
 ;; — are pinned read-only on top, so the agent cannot send git to a directory of its own.  `objects/' stays writable:
-;; an agent can delete or overwrite the repository's objects.  A reftable repository keeps every ref in one directory
-;; and cannot be split this way: it is refused.  This file builds data and runs git only in the main repository.  See
-;; docs/develop/sandbox.md ("Git: worktree mode").
+;; an agent can delete or overwrite the repository's objects.  `worktrees/NAME/' stays writable too, and the user's
+;; git trusts what is in it (an operation in progress, links, HEAD): `drgnx-job-worktree-scrub' removes that state.  A
+;; reftable repository keeps every ref in one directory and cannot be split this way: it is refused.  This file builds
+;; data and runs git only in the main repository.  See docs/develop/sandbox.md ("Git: worktree mode").
 
 ;;; Code:
 (require 'subr-x)
+(require 'drgnx-job-snapshot)
 
 (defcustom drgnx-job-worktree-timeout 300
-  "Seconds a task's `git worktree add' may take; then it is ended and the task gets the failure."
+  "Seconds one git of a task's worktree (its `worktree add', a step of its check) may take; then it is ended, and
+that is a failure."
   :type 'number :group 'drgnx)
 
 (defconst drgnx-job-worktree--reftable
@@ -60,20 +63,6 @@ not ending in `.lock') and N a task number (a positive integer): they become a r
        (ignore-errors (with-temp-buffer (insert-file-contents file nil 0 4096)
                                         (string-trim (buffer-substring (point-min) (line-end-position)))))))
 
-(defun drgnx-job-worktree--common-dir (repo)
-  "REPO's common git directory, its true name without a trailing slash, or nil.  A `.git' file (REPO a linked
-worktree or a submodule) is followed to its git directory and that one's `commondir'.  Read from the files: no
-process."
-  (let ((file-name-handler-alist nil) (dotgit (expand-file-name ".git" repo)))
-    (cond ((file-directory-p dotgit) (directory-file-name (file-truename dotgit)))
-          ((file-regular-p dotgit)
-           (let* ((line (drgnx-job-worktree--line dotgit))
-                  (gitdir (and line (string-match "\\`gitdir: *\\(.+\\)" line)
-                               (expand-file-name (match-string 1 line) repo)))
-                  (common (and gitdir (drgnx-job-worktree--line (expand-file-name "commondir" gitdir)))))
-             (and gitdir (file-directory-p gitdir)
-                  (directory-file-name (file-truename (if common (expand-file-name common gitdir) gitdir)))))))))
-
 (defun drgnx-job-worktree--true (path)
   "PATH's true name, without a trailing slash."
   (let ((file-name-handler-alist nil)) (directory-file-name (file-truename (expand-file-name path)))))
@@ -83,7 +72,7 @@ process."
 FOLDER's `.git' file, and kept only when that worktree's `gitdir' leads back to it.  The hub reads it right after
 `drgnx-job-worktree-add', before any agent: under the sandbox both files are pinned read-only."
   (let* ((file-name-handler-alist nil)
-         (common (drgnx-job-worktree--common-dir repo))
+         (common (drgnx-job-snapshot-common-dir repo))
          (dotgit (expand-file-name ".git" folder))
          (line (drgnx-job-worktree--line dotgit))
          (admin (and common line (string-match "\\`gitdir: *\\(.+\\)" line)
@@ -119,7 +108,7 @@ FOLDER's `.git' file, and kept only when that worktree's `gitdir' leads back to 
 `reftable/' directory, which cannot be split into the task's own branch and the rest.  From `git rev-parse
 --show-ref-format', or `extensions.refStorage' in the repository's config where git cannot say.  Synchronous: one
 short git, in the main repository."
-  (when-let* ((common (drgnx-job-worktree--common-dir repo)))
+  (when-let* ((common (drgnx-job-snapshot-common-dir repo)))
     (when (equal (or (drgnx-job-worktree--show-ref-format repo) (drgnx-job-worktree--ref-storage common))
                  "reftable")
       drgnx-job-worktree--reftable)))
@@ -152,28 +141,36 @@ short git, in the main repository."
     (ignore-errors (process-send-eof p))
     p))
 
-(defun drgnx-job-worktree-prepare (repo id n)
-  "Make the task's two ref directories in REPO's `.git' where they are missing, so that they can be bound:
-`refs/heads/job/ID-N/' (`git pack-refs', which `git gc' runs, removes it with the loose ref) and
-`logs/refs/heads/job/ID-N/' (missing where reflogs are off).  Call it before each start of the task's agent.
-Signals an error when one cannot be made (a ref job/ID-N in the way)."
+(defun drgnx-job-worktree--check-name (name)
+  "Signal an error unless NAME can be a worktree's directory name: one component, not `.' or `..'."
+  (unless (and (stringp name) (not (member name '("" "." ".."))) (not (string-match-p "[/\0\n]" name)))
+    (error "Not a worktree name: %S" name)))
+
+(defun drgnx-job-worktree-prepare (repo name id n)
+  "Make what the binds of task N of job ID (its worktree NAME) need in REPO's `.git', where it is missing:
+- `refs/heads/job/ID-N/' (`git pack-refs', which `git gc' runs, removes it with the loose ref);
+- `logs/refs/heads/job/ID-N/' (missing where reflogs are off);
+- an empty `worktrees/NAME/config.worktree' (a job stopped after `git worktree add' never made it; one that is there
+  is kept).
+Call it before each start of the task's agent.  Signals an error when one cannot be made (a ref job/ID-N in the
+way)."
   (drgnx-job-worktree--check-task id n)
-  (let ((git (or (drgnx-job-worktree--common-dir repo) (error "%s is not a git repository" repo))))
+  (drgnx-job-worktree--check-name name)
+  (let ((git (or (drgnx-job-snapshot-common-dir repo) (error "%s is not a git repository" repo)))
+        (file-name-handler-alist nil))
     (dolist (dir '("refs/heads/job/" "logs/refs/heads/job/"))
-      (make-directory (format "%s/%s%s-%d" git dir id n) t))))
+      (make-directory (format "%s/%s%s-%d" git dir id n) t))
+    (let ((cw (format "%s/worktrees/%s/config.worktree" git name)))
+      (unless (file-attributes cw)            ; O_EXCL: a link is never followed
+        (let ((coding-system-for-write 'utf-8-unix)) (write-region "" nil cw nil 'silent nil 'excl))))))
 
 (defun drgnx-job-worktree--made (repo folder id n)
-  "After `git worktree add': FOLDER's worktree NAME, its empty `config.worktree' made (a file git copied there from
-the user's own is kept) and the task's ref directories there (`drgnx-job-worktree-prepare'), so each can be bound.
+  "After `git worktree add': FOLDER's worktree NAME, and what its binds need made (`drgnx-job-worktree-prepare').
 \(:name NAME) or (:error MSG)."
-  (let* ((common (drgnx-job-worktree--common-dir repo))
-         (name (drgnx-job-worktree-name repo folder)))
+  (let ((name (drgnx-job-worktree-name repo folder)))
     (if (not name)
         (list :error (format "%s is not a worktree of %s" folder repo))
-      (let ((cw (format "%s/worktrees/%s/config.worktree" common name)))
-        (unless (file-exists-p cw)
-          (let ((coding-system-for-write 'utf-8-unix)) (write-region "" nil cw nil 'silent nil 'excl))))
-      (drgnx-job-worktree-prepare repo id n)
+      (drgnx-job-worktree-prepare repo name id n)
       (list :name name))))
 
 (defun drgnx-job-worktree-add (repo folder id n base done &optional job)
@@ -187,7 +184,7 @@ JOB: stopping it ends git, and DONE is not called.  Git runs in REPO with no hoo
          (why (cond ((not (drgnx-job-worktree--base-ok-p base)) (format "not a branch name: %S" base))
                     ((condition-case e (progn (drgnx-job-worktree--check-task id n) nil)
                        (error (error-message-string e))))
-                    ((not (drgnx-job-worktree--common-dir repo)) (format "%s is not a git repository" repo))
+                    ((not (drgnx-job-snapshot-common-dir repo)) (format "%s is not a git repository" repo))
                     ((drgnx-job-worktree-refusal repo))
                     ((file-exists-p folder) (format "%s exists already" folder)))))
     (if why
@@ -228,9 +225,8 @@ GIT is REPO's common git directory.  Each bind is (MODE OUTSIDE INSIDE), both th
 reviewer): every one read-only.  Signals an error on an id, number or name that is not one, or when REPO is no
 repository.  Data only: nothing is made or checked on disk."
   (drgnx-job-worktree--check-task id n)
-  (unless (and (stringp name) (not (member name '("" "." ".."))) (not (string-match-p "[/\0\n]" name)))
-    (error "Not a worktree name: %S" name))
-  (let* ((git (or (drgnx-job-worktree--common-dir repo) (error "%s is not a git repository" repo)))
+  (drgnx-job-worktree--check-name name)
+  (let* ((git (or (drgnx-job-snapshot-common-dir repo) (error "%s is not a git repository" repo)))
          (folder (drgnx-job-worktree--true folder))
          (wt (concat git "/worktrees/" name))
          (task (format "%s-%d" id n))
@@ -249,35 +245,130 @@ repository.  Data only: nothing is made or checked on disk."
 
 ;;;; After each turn
 
-(defun drgnx-job-worktree-tip (repo id n)
-  "The commit task N of job ID's branch is at, 40 or 64 hex digits, or nil.  The loose ref file is the agent's: it
-counts only as a regular file, not a link, holding an object name (a symbolic ref is nil).  Without one, the line of
-`packed-refs', which only the user's git writes."
-  (drgnx-job-worktree--check-task id n)
-  (when-let* ((git (drgnx-job-worktree--common-dir repo)))
-    (let* ((ref (concat "refs/heads/" (drgnx-job-worktree-branch id n)))
-           (loose (expand-file-name ref git))
-           (sha (if (file-attributes loose)
-                    (drgnx-job-worktree--line loose)
-                  (ignore-errors
-                    (with-temp-buffer
-                      (insert-file-contents (expand-file-name "packed-refs" git))
-                      (and (re-search-forward (concat "^\\([0-9a-f]+\\) " (regexp-quote ref) "$") nil t)
-                           (match-string 1)))))))
-      (and sha (string-match-p "\\`\\(?:[0-9a-f]\\{40\\}\\|[0-9a-f]\\{64\\}\\)\\'" sha) sha))))
+(defconst drgnx-job-worktree--kept
+  '("HEAD" "index" "ORIG_HEAD" "COMMIT_EDITMSG" "commondir" "gitdir" "config.worktree")
+  "What the scrub keeps in a task's `worktrees/NAME/', each only as a regular file: its HEAD (checked), index and
+ORIG_HEAD, the three pins, and COMMIT_EDITMSG, which each commit writes (a link there is what is dangerous).  Besides
+these, `logs/HEAD' (a regular file) and `refs/' (an empty directory, as `git worktree add' makes it).")
 
-(defun drgnx-job-worktree-check (repo id n base)
-  "Non-nil (t) when task N of job ID's branch still descends from BASE (a branch): `git merge-base --is-ancestor' on
-its commit (`drgnx-job-worktree-tip'), run in the main repository REPO, whose config the agent cannot write.
-Synchronous: one short git.  A guard against a rewound or replaced branch, not against a hostile agent: the objects
-it reads are writable in worktree mode."
-  (when-let* (((drgnx-job-worktree--base-ok-p base))
-              (tip (drgnx-job-worktree-tip repo id n)))
-    (let ((default-directory (file-name-as-directory repo))
-          (process-environment (append drgnx-job-worktree--env process-environment)))
-      (eql 0 (ignore-errors (apply #'call-process "git" nil nil nil
-                                   (append drgnx-job-worktree--overrides
-                                           (list "merge-base" "--is-ancestor" (concat "refs/heads/" base) tip))))))))
+(defun drgnx-job-worktree--kind (file)
+  "FILE's type, from lstat (a link is never followed): ?- a regular file, ?d a directory, ?l a link, another
+character for a FIFO, socket or device; nil when there is nothing."
+  (let ((a (file-attributes file))) (and a (aref (file-attribute-modes a) 0))))
+
+(defun drgnx-job-worktree-scrub (repo name id n)
+  "Remove the git state task N of job ID left in its worktree NAME of REPO that the user's git would trust; the
+relative names (to REPO's `.git') it removed or rewrote, or nil.  `worktrees/NAME/' is writable to the agent, so it
+can leave an operation in progress there (a rebase whose todo `exec's as the user, a `head-name' of `main'), links in
+place of files git writes by opening them (`COMMIT_EDITMSG' → the main config), or a HEAD naming another branch.
+- In `worktrees/NAME/': only `drgnx-job-worktree--kept' stays, `logs/HEAD' and an empty `refs/'.  HEAD must be
+  `ref: refs/heads/job/ID-N/work' or an object name; otherwise it is rewritten to the first.
+- In `refs/heads/job/ID-N/' and `logs/refs/heads/job/ID-N/': only `work', a regular file.
+It runs no git and follows no link: types come from lstat, and what goes is renamed — a link itself — into a
+directory the agent cannot write (`.drgnx-scrub-*' in REPO's `.git'), which `rm -rf' (it never follows a link) then
+removes in a process of its own.  HEAD is read only once moved there: a FIFO in its place never blocks the hub.
+Called while the agent's sandbox lives, the agent can plant again after it; called after the sandbox has exited, it
+leaves the state clean."
+  (drgnx-job-worktree--check-task id n)
+  (drgnx-job-worktree--check-name name)
+  (let* ((file-name-handler-alist nil)
+         (git (or (drgnx-job-snapshot-common-dir repo) (error "%s is not a git repository" repo)))
+         (wt (format "worktrees/%s/" name))
+         (head (concat "ref: refs/heads/" (drgnx-job-worktree-branch id n)))
+         (trash nil) (count 0) (out nil)
+         (kind (lambda (rel) (drgnx-job-worktree--kind (concat git "/" rel))))
+         (entries (lambda (rel) (ignore-errors (directory-files (concat git "/" rel) nil
+                                                                directory-files-no-dot-files-regexp t))))
+         ;; REL renamed into the trash (never followed); its place there
+         (move (lambda (rel)
+                 (unless trash (setq trash (make-temp-file (concat git "/.drgnx-scrub-") t)))
+                 (let ((to (format "%s/%d" trash (setq count (1+ count)))))
+                   (rename-file (concat git "/" rel) to)
+                   to)))
+         (drop (lambda (rel) (funcall move rel) (push rel out))))
+    (when (eq (funcall kind wt) ?d)
+      (dolist (e (funcall entries wt))
+        (let ((rel (concat wt e)))
+          (cond ((equal e "HEAD"))
+                ((member e drgnx-job-worktree--kept) (unless (eq (funcall kind rel) ?-) (funcall drop rel)))
+                ((and (equal e "refs") (eq (funcall kind rel) ?d) (null (funcall entries rel))))
+                ((and (equal e "logs") (eq (funcall kind rel) ?d))
+                 ;; never descend where the agent writes: the whole of logs/ goes, logs/HEAD comes back if regular
+                 (let ((moved (funcall move rel)))
+                   (make-directory (concat git "/" rel))
+                   (if (not (eq (drgnx-job-worktree--kind moved) ?d))
+                       (push rel out)
+                     (dolist (l (directory-files moved nil directory-files-no-dot-files-regexp t))
+                       (if (and (equal l "HEAD") (eq (drgnx-job-worktree--kind (concat moved "/HEAD")) ?-))
+                           (rename-file (concat moved "/HEAD") (concat git "/" rel "/HEAD"))
+                         (push (concat rel "/" l) out))))))
+                (t (funcall drop rel)))))
+      ;; HEAD: moved out first, read there, written anew (O_EXCL: never through a link)
+      (let* ((rel (concat wt "HEAD"))
+             (moved (and (funcall kind rel) (funcall move rel)))
+             (text (and moved (eq (drgnx-job-worktree--kind moved) ?-)
+                        (with-temp-buffer (insert-file-contents moved nil 0 256)
+                                          (string-trim (buffer-substring (point-min) (line-end-position))))))
+             (ok (and text (or (equal text head)
+                               (string-match-p "\\`\\(?:[0-9a-f]\\{40\\}\\|[0-9a-f]\\{64\\}\\)\\'" text)))))
+        (unless ok (push rel out))
+        (let ((coding-system-for-write 'utf-8-unix))
+          (write-region (concat (if ok text head) "\n") nil (concat git "/" rel) nil 'silent nil 'excl))))
+    (dolist (dir (list (format "refs/heads/job/%s-%d/" id n) (format "logs/refs/heads/job/%s-%d/" id n)))
+      (when (eq (funcall kind dir) ?d)
+        (dolist (e (funcall entries dir))
+          (unless (and (equal e "work") (eq (funcall kind (concat dir e)) ?-))
+            (funcall drop (concat dir e))))))
+    (when trash
+      (condition-case nil (drgnx-job-worktree--run git (list "rm" "-rf" "--" trash) nil #'ignore)
+        (error nil)))                   ; left: a directory the agent cannot write, removed next time by hand
+    (nreverse out)))
+
+(defun drgnx-job-worktree-check (repo id n base done &optional job)
+  "Does task N of job ID's branch still descend from BASE (a branch)?  Asynchronous: DONE is called with two
+arguments, RESULT and TIP:
+  t, TIP     it does; TIP is the commit checked (40 or 64 hex digits): merge TIP, never the branch's name;
+  nil, nil   it does not: rewound, replaced, a symbolic ref or a link, not an object name, or no branch;
+  (:error MSG), nil   git failed or took longer than `drgnx-job-worktree-timeout': a failure, never a pass.
+Two gits in the main repository REPO, whose config the agent cannot write, each with the deadline: `for-each-ref'
+reads the branch (its `%(symref)' must be empty), then `merge-base --is-ancestor'.  The ref file and the objects are
+the agent's: a FIFO planted among them blocks git, never the hub.  A guard against a rewound or replaced branch, not
+against a hostile agent: in worktree mode the objects it reads are writable.  JOB: stopping it ends the gits, and DONE
+is not called."
+  (let* ((later (lambda (r) (run-at-time 0 nil done r nil)))
+         (ref (and (drgnx-job-worktree--base-ok-p base)
+                   (ignore-errors (concat "refs/heads/" (drgnx-job-worktree-branch id n)))))
+         (git (and ref (drgnx-job-snapshot-common-dir repo)))
+         (git-argv (lambda (&rest args) (append '("git") drgnx-job-worktree--overrides args)))
+         (fail (lambda (r what)
+                 (list :error (if (eq (car r) :timeout)
+                                  (format "%s did not finish in %s s" what drgnx-job-worktree-timeout)
+                                (format "%s: %s" what (if (string-empty-p (cdr r)) (format "exit %s" (car r)) (cdr r))))))))
+    (cond
+     ((not ref) (funcall later (list :error (format "not a branch name or task: %S %S %S" base id n))))
+     ((not git) (funcall later (list :error (format "%s is not a git repository" repo))))
+     ;; lstat only: a link in the agent's ref directory is no branch (git would follow it)
+     ((eq (drgnx-job-worktree--kind (concat git "/" ref)) ?l) (funcall later nil))
+     (t
+      (condition-case e
+          (drgnx-job-worktree--run
+           repo (funcall git-argv "for-each-ref" "--format=%(objectname) %(symref)" ref) job
+           (lambda (r)
+             (cond
+              ((not (eql 0 (car r))) (funcall done (funcall fail r "git for-each-ref") nil))
+              ((not (string-match-p "\\`\\(?:[0-9a-f]\\{40\\}\\|[0-9a-f]\\{64\\}\\)\\'" (cdr r))) (funcall done nil nil))
+              (t
+               (let ((tip (cdr r)))
+                 (condition-case e
+                     (drgnx-job-worktree--run
+                      repo (funcall git-argv "merge-base" "--is-ancestor" (concat "refs/heads/" base) tip) job
+                      (lambda (m)
+                        (pcase (car m)
+                          (0 (funcall done t tip))
+                          (1 (funcall done nil nil))
+                          (_ (funcall done (funcall fail m "git merge-base") nil)))))
+                   (error (funcall done (list :error (error-message-string e)) nil))))))))
+        (error (funcall later (list :error (error-message-string e)))))))))
 
 (provide 'drgnx-job-worktree)
 ;;; drgnx-job-worktree.el ends here
