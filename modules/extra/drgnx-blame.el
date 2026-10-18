@@ -193,9 +193,15 @@ has not answered).  The empty line after the last newline has none."
           ((not (fboundp 'drgnx-diff-show)) (user-error "The diff view (module tools/diff) is off"))
           (t (drgnx-diff-show (list 'commit (plist-get info :sha)))))))
 
+(defun drgnx-blame--teardown ()
+  "Inline blame off in every buffer that has it (the last one cancels the timer)."
+  (dolist (b (buffer-list))
+    (with-current-buffer b (when drgnx-blame-mode (drgnx-blame-mode -1)))))
+
 (drgnx-module-define 'extra/blame
                      :doc "Inline blame: the current line's author, age and commit subject at its end."
                      :stage 'idle
+                     :teardown #'drgnx-blame--teardown
                      :setup
                      (lambda ()
                        (add-hook 'find-file-hook #'drgnx-blame--maybe)
