@@ -79,6 +79,11 @@ read other than it is.")
   "Days an event is kept; `drgnx-coord-events-prune' forgets older ones, except questions, answers and decisions."
   :type 'number :group 'drgnx)
 
+(defcustom drgnx-coord-event-max-rows 100000
+  "The most events the log keeps between its daily prunes: `drgnx-coord-events-prune-daily' (each hub housekeeping,
+every minute) forgets the oldest past it, questions, answers and decisions apart."
+  :type 'natnum :group 'drgnx)
+
 (defun drgnx-coord--datum-p (v)
   (or (stringp v) (numberp v) (symbolp v) (and (proper-list-p v) (seq-every-p #'drgnx-coord--datum-p v))))
 
@@ -134,14 +139,24 @@ test runs) that must never fail the work it describes.  A bad KIND or DATA still
      (lambda (db)
        (sqlite-execute db "delete from event where at < ? and kind not in ('question', 'answer', 'decision')" (list (float cut)))))))
 
+(defun drgnx-coord--events-cap (db)
+  "Forget the oldest events past `drgnx-coord-event-max-rows', questions, answers and decisions apart."
+  (let ((n (caar (sqlite-select db "select count(*) from event"))))
+    (when (> n drgnx-coord-event-max-rows)
+      (sqlite-execute db "delete from event where id in (select id from event where kind not in ('question', 'answer', 'decision')
+                                                        order by id limit ?)"
+                      (list (- n drgnx-coord-event-max-rows))))))
+
 (defun drgnx-coord-events-prune-daily ()
-  "`drgnx-coord-events-prune' unless it ran in the last 24 hours: t when it ran.  Never signals — a locked database
-waits for the next call, any other error is a message — for a periodic tick (the hub's)."
+  "`drgnx-coord-events-prune' unless it ran in the last 24 hours: t when it ran.  On every call the log is held to
+`drgnx-coord-event-max-rows' too, the oldest going first.  Never signals — a locked database waits for the next call,
+any other error is a message — for a periodic tick (the hub's)."
   (condition-case err
-      (when (> (- (float-time) (string-to-number (or (drgnx-coord--meta (drgnx-work-db) "event-pruned") "0"))) 86400)
-        (drgnx-coord-events-prune)
-        (sqlite-execute (drgnx-work-db) "insert or replace into meta values ('event-pruned', ?)" (list (number-to-string (float-time))))
-        t)
+      (prog1 (when (> (- (float-time) (string-to-number (or (drgnx-coord--meta (drgnx-work-db) "event-pruned") "0"))) 86400)
+               (drgnx-coord-events-prune)
+               (sqlite-execute (drgnx-work-db) "insert or replace into meta values ('event-pruned', ?)" (list (number-to-string (float-time))))
+               t)
+        (drgnx-coord--tx #'drgnx-coord--events-cap))
     (error (unless (drgnx-coord--busy-p err) (message "drgnx coord: pruning events: %s" (error-message-string err)))
            nil)))
 

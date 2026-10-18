@@ -37,8 +37,11 @@ handler runs on it. It comes back untouched, or is left out.
   lines. The parse is cached by modification time. Plan files are never written.
 - **The board** is one more source, never the master. Its TODOs with `:PLAN_FILE:` come from the tracker's scan of
   the board file (`drgnx-projects-board-file`). The model reads only the store.
-- **Agents.** A hub session with a job is `job`; any other session is `native`. A registered agent that is not a
-  session (an `ext:` id, or one with a kind) is `outside`. A worktree found by `drgnx-cockpit-silent-worktrees` is
+- **Agents.** A hub session with a job is `job`; any other session is `native`. A registered agent of kind `job` (the
+  hub registers each job's task agent) is `job` too, shown only while its job is (a done job's agents are left out
+  with it). Any other registered agent that is not a session (an `ext:` id, or one with a kind) is `outside`.
+  - An agent's life — "stopped" or not, an edit source's `:stopped` — is its last `start` or `stop` that is not a
+    turn's: the hub's turn events lead their data with `:turn t` and are left out. A worktree found by `drgnx-cockpit-silent-worktrees` is
   `silent` ("not reporting").
   - An outside agent's task is a free label of its own (`:label`). It is never joined to a job or plan task. Its
     plan joins only when it names a scanned plan file exactly.
@@ -61,7 +64,7 @@ matches a node whose title or path contains it, or one of its ancestors' (case i
   events and the cards, questions and answers about the job tasks it holds. Each line is `(:at :kind :text :target)`.
   For example, "edited 2 files: a.el, b.el" or "tests 12/12 ✓ (make test)".
 - `(drgnx-cockpit-timeline &key since)` gives chips `(:id :at :agent :kind :label :target)` after an event id, such as
-  `T6 ✓`, `T7 review: fail` or `s-1 asks you`.
+  `T6 ✓`, `T7 review: fail` or `s-1 asks you`. A turn's `start` and `stop` (`:turn t`) are not chips.
 - A `:target` is `(:node ID :event ID)`. The node is the event's task node, else its agent's, else its job's.
 - Glyphs come from `drgnx-face-glyph` when the face is loaded.
 - The limits are `drgnx-cockpit-happened-limit` (50) and `drgnx-cockpit-timeline-limit` (300).

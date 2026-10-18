@@ -318,6 +318,7 @@ a pid.  How many went."
             (item (or (seq-find (lambda (p) (equal (format "%s" (plist-get p :id)) (format "%s" (plist-get params :request))))
                                 (drgnx-agent-session-permissions s))
                       (error "No such permission request"))))
+       (drgnx-hub-note-permission-answer s (plist-get item :id) (drgnx-hub--value (plist-get params :option)) "user")
        (drgnx-agents-answer-permission s item (plist-get params :option))
        (drgnx-job--answered s)
        t))
@@ -467,19 +468,19 @@ is logged: it never stops the hub from starting."
 
 ;;;; Events: what the agents here do, in the store's event log, and to subscribers in batches
 
-(defconst drgnx-hub-events-interval 0.25 "Seconds between two `events' broadcasts, at the most often.")
-(defconst drgnx-hub--events-batch 500 "The most events one `events' broadcast carries; more go in the next one.")
+(defvar drgnx-hub-events-interval 0.25 "Seconds between two `events' broadcasts, at the most often.")
+(defconst drgnx-hub--events-batch 200 "The most events one `events' broadcast carries; more go in the next one.")
 (defvar drgnx-hub--events-sent 0 "The id of the last event subscribers were sent.")
 (defvar drgnx-hub--events-timer nil "The `events' broadcast that is due (`drgnx-hub--events-soon').")
 (defvar drgnx-hub--event-state (make-hash-table :test #'equal)
-  "Session id → what its last events were derived from (`drgnx-hub--session-events'): (:busy BOOL :from N
-:permissions ((REQUEST-ID . QUESTION-EVENT-ID)…) :tools (TOOL-CALL-ID…)).  A session's entry goes when it exits, and
-all of them when the hub stops.")
+  "Session id → what its last events were derived from (`drgnx-hub--session-events'): (:busy BOOL :turn EVENT-ID
+:from N :tools (TOOL-CALL-ID…) :permissions ((REQUEST-ID . QUESTION-EVENT-ID)…) :answers ((REQUEST-ID BY . OPTION)…)).
+A session's entry goes when it exits, and all of them when the hub stops.")
 
-(defun drgnx-hub--event-add (s kind summary &optional data)
-  "Add an event of KIND by session S (its job and task) — best effort: a busy store drops it — and broadcast soon.
-Its id, or nil."
-  (prog1 (drgnx-coord-event-add-best-effort :agent (drgnx-agent-session-id s) :job (drgnx-agent-session-job s)
+(defun drgnx-hub--event-add (s kind summary &optional data agent)
+  "Add an event of KIND by session S (or AGENT), of S's job and task — best effort: a busy store drops it — and
+broadcast soon.  Its id, or nil."
+  (prog1 (drgnx-coord-event-add-best-effort :agent (or agent (drgnx-agent-session-id s)) :job (drgnx-agent-session-job s)
                                             :task (drgnx-agent-session-task s) :kind kind :summary summary :data data)
     (drgnx-hub--events-soon)))
 
@@ -487,56 +488,98 @@ Its id, or nil."
   "PATHS as an `edit' event's data: at most 100 of them, then :more N for the rest."
   (append (list :paths (seq-take paths 100)) (and (nthcdr 100 paths) (list :more (- (length paths) 100)))))
 
-(defun drgnx-hub--tool-edits (s from seen)
+(defun drgnx-hub--tool-open-p (e)
+  "Whether tool entry E, or one of its children, may still change (not completed or failed)."
+  (or (not (member (plist-get e :status) '("completed" "failed")))
+      (seq-some #'drgnx-hub--tool-open-p (plist-get e :children))))
+
+(defun drgnx-hub--tool-edits (s from seen turn)
   "Session S's edit tool calls (kind edit, delete or move; children too) completed in its entries from index FROM,
-whose ids are not in SEEN: each becomes an `edit' event with the paths of its diffs.  The ids now seen."
-  (cl-labels ((walk (entries)
-                (dolist (e entries)
+whose ids are not in SEEN: each becomes an `edit' event with the paths of its diffs — less the paths this turn (since
+event TURN) recorded already, from a write request (an agent that writes through drgnx reports the tool call too), and
+none when they all were.  (SEEN . FROM): the ids now seen, and the index of the first entry that may still change, from
+which the next call looks."
+  (let ((recorded :unread) (i from) (next nil))
+    (cl-labels ((covered ()
+                  (when (eq recorded :unread)
+                    (setq recorded (cl-loop for e in (drgnx-coord-events :since turn :agent (drgnx-agent-session-id s) :kinds '("edit"))
+                                            append (plist-get (plist-get e :data) :paths))))
+                  recorded)
+                (walk (e)
                   (when (eq (plist-get e :type) 'tool)
                     (let ((id (plist-get e :id)))
                       (when (and (member (plist-get e :kind) '("edit" "delete" "move")) (equal (plist-get e :status) "completed")
                                  id (not (member id seen)))
                         (push id seen)
-                        (let ((paths (delete-dups (delq nil (mapcar (lambda (c) (and (equal (plist-get c :type) "diff")
-                                                                                     (stringp (plist-get c :path)) (plist-get c :path)))
-                                                                    (append (plist-get e :content) nil))))))
-                          (drgnx-hub--event-add s "edit" (format "%s" (or (plist-get e :title) "an edit"))
-                                                (and paths (append (list :root (drgnx-agent-session-cwd s)) (drgnx-hub--edit-paths paths))))))
-                      (walk (plist-get e :children)))))))
-    (walk (nthcdr from (drgnx-agent-session-entries s))))
-  seen)
+                        (let* ((all (delete-dups (delq nil (mapcar (lambda (c) (and (equal (plist-get c :type) "diff")
+                                                                                    (stringp (plist-get c :path)) (plist-get c :path)))
+                                                                   (append (plist-get e :content) nil)))))
+                               (paths (and all (seq-remove (lambda (p) (member p (covered))) all))))
+                          (when (or paths (null all))
+                            (drgnx-hub--event-add s "edit" (format "%s" (or (plist-get e :title) "an edit"))
+                                                  (and paths (append (list :root (drgnx-agent-session-cwd s))
+                                                                     (drgnx-hub--edit-paths paths)))))))
+                      (mapc #'walk (plist-get e :children))))))
+      (dolist (e (nthcdr from (drgnx-agent-session-entries s)))
+        (walk e)
+        (when (and (null next) (eq (plist-get e :type) 'tool) (drgnx-hub--tool-open-p e)) (setq next i))
+        (setq i (1+ i))))
+    (cons seen (or next i))))
+
+(defun drgnx-hub-note-permission-answer (s request option by)
+  "Session S's permission REQUEST is about to be answered with OPTION (nil: cancelled) by BY (\"user\"): its
+`answer' event says so.  For whoever answers it in the hub (the `agents/permission' request, a job's card)."
+  (let ((st (gethash (drgnx-agent-session-id s) drgnx-hub--event-state)))
+    (when st
+      (puthash (drgnx-agent-session-id s) (plist-put st :answers (cons (cons request (cons by option)) (plist-get st :answers)))
+               drgnx-hub--event-state))))
 
 (defun drgnx-hub--session-events (s)
-  "What changed in session S as events, from what it was the last time (`drgnx-hub--event-state'): a turn's start
-\(`start', with the HEAD of its folder as :head) and end (`stop'); an edit tool call it completed (`edit', with the
-paths of its diffs); a permission it asks (`question', :permission ID) and the answer to it (`answer', :question
-EVENT-ID).  An exited session's open permissions are answered (they never will be)."
+  "What changed in session S as events, from what it was the last time (`drgnx-hub--event-state'):
+- its life: seen first, `start' (data :head, the commit its folder is at); exited, `stop';
+- a turn's start and end: `start' and `stop' with data (:turn t …), never read as its life;
+- an edit tool call it completed: `edit', with the paths of its diffs a write request did not record already;
+- a permission it asks: `question' (:permission ID); gone, an `answer' (:question EVENT-ID :permission ID :by BY
+  :option OPTION) — by the user (`drgnx-hub-note-permission-answer'), else by drgnx: cancelled (Stop), or dropped
+  when the agent ended."
   (let* ((id (drgnx-agent-session-id s)) (old (gethash id drgnx-hub--event-state))
          (exited (eq (drgnx-agent-session-status s) 'exited))
-         (busy (eq (drgnx-agent-session-status s) 'busy))
-         (from (if (and busy (not (plist-get old :busy))) (length (drgnx-agent-session-entries s)) (or (plist-get old :from) 0)))
-         (asked (plist-get old :permissions)) (now nil) (tools (plist-get old :tools)))
-    (when (and busy (not (plist-get old :busy)))
-      (setq tools nil)
-      (drgnx-hub--event-add s "start" "turn started"
+         (busy (and (not exited) (eq (drgnx-agent-session-status s) 'busy)))
+         (was (plist-get old :busy)) (turn (plist-get old :turn))
+         (from (if (and busy (not was)) (length (drgnx-agent-session-entries s)) (or (plist-get old :from) 0)))
+         (asked (plist-get old :permissions)) (answers (plist-get old :answers)) (now nil) (tools (plist-get old :tools)))
+    (unless (or old exited)
+      (drgnx-hub--event-add s "start" "session started"
                             (when-let* ((head (drgnx-job-git-head (drgnx-agent-session-cwd s)))) (list :head head))))
-    (when (or busy (plist-get old :busy)) (setq tools (drgnx-hub--tool-edits s from tools)))
-    (unless exited
-      (dolist (p (drgnx-agent-session-permissions s))
-        (let ((pid (plist-get p :id)))
-          (push (or (assoc pid asked)
-                    (cons pid (drgnx-hub--event-add s "question" (format "permission: %s" (or (plist-get p :title) "a tool call"))
-                                                    (list :permission pid))))
-                now))))
-    (dolist (a asked)
-      (when (and (cdr a) (not (assoc (car a) now)))
-        (drgnx-hub--event-add s "answer" (if exited "permission dropped: the agent ended" "permission answered")
-                              (list :question (cdr a) :permission (car a)))))
-    (when (and (plist-get old :busy) (not busy))
-      (drgnx-hub--event-add s "stop" (let ((last (car (last (drgnx-agent-session-entries s)))))
-                                       (if (eq (plist-get last :type) 'stop) (format "turn ended (%s)" (plist-get last :stop)) "turn ended"))))
+    (when (or old (not exited))
+      (when (and busy (not was))
+        (setq tools nil turn (drgnx-hub--event-add s "start" "turn started" (list :turn t))))
+      (when (or busy was)
+        (pcase-let ((`(,seen . ,next) (drgnx-hub--tool-edits s from tools turn))) (setq tools seen from next)))
+      (unless exited
+        (dolist (p (drgnx-agent-session-permissions s))
+          (let ((pid (plist-get p :id)))
+            (push (or (assoc pid asked)
+                      (cons pid (drgnx-hub--event-add s "question" (format "permission: %s" (or (plist-get p :title) "a tool call"))
+                                                      (list :permission pid))))
+                  now))))
+      (dolist (a asked)
+        (when (and (cdr a) (not (assoc (car a) now)))
+          (let* ((how (cdr (assoc (car a) answers))) (by (or (car how) "drgnx")) (option (cdr how)))
+            (drgnx-hub--event-add s "answer" (cond (how (format "permission answered: %s" (or option "cancelled")))
+                                                   (exited "permission dropped: the agent ended")
+                                                   (t "permission cancelled"))
+                                  (append (list :question (cdr a) :permission (car a) :by by) (and option (list :option option)))
+                                  (and how by)))))
+      (when (and was (not busy))
+        (drgnx-hub--event-add s "stop" (let ((last (car (last (drgnx-agent-session-entries s)))))
+                                         (if (eq (plist-get last :type) 'stop) (format "turn ended (%s)" (plist-get last :stop)) "turn ended"))
+                              (list :turn t)))
+      (when exited (drgnx-hub--event-add s "stop" "session ended")))
     (if exited (remhash id drgnx-hub--event-state)
-      (puthash id (list :busy busy :from from :permissions (nreverse now) :tools tools) drgnx-hub--event-state))))
+      (puthash id (list :busy busy :turn turn :from from :tools tools :permissions (nreverse now)
+                        :answers (seq-filter (lambda (a) (assoc (car a) now)) answers))
+               drgnx-hub--event-state))))
 
 (defun drgnx-hub--review-edit (s item)
   "The user accepted session S's write request ITEM (a review): an `edit' event of its path."
@@ -549,26 +592,27 @@ EVENT-ID).  An exited session's open permissions are answered (they never will b
     (setq drgnx-hub--events-timer (run-at-time drgnx-hub-events-interval nil #'drgnx-hub--events-send))))
 
 (defun drgnx-hub--events-check ()
-  "Events another process added (a coordination server, the CLI) go out too (the hub's tick)."
+  "Events another process added (a coordination server, the CLI) or this one without a broadcast (a job's review,
+merge and writes) go out too: the hub's tick, every 2 s."
   (when (> (or (caar (sqlite-select (drgnx-work-db) "select max(id) from event")) 0) drgnx-hub--events-sent)
     (drgnx-hub--events-soon)))
 
-(defun drgnx-hub--event-json (e)
-  "Event E for JSON: (:id :at :agent :job :task :kind :summary :data), its data as Lisp text (read it with `read-eval'
-off) so nothing in it is lost."
-  (list :id (plist-get e :id) :at (plist-get e :at) :agent (plist-get e :agent) :job (plist-get e :job)
-        :task (plist-get e :task) :kind (plist-get e :kind) :summary (plist-get e :summary)
-        :data (let ((d (plist-get e :data))) (and d (drgnx-hub--lisp d)))))
+(defun drgnx-hub--event-rows (since limit)
+  "The events after id SINCE, oldest first, at most LIMIT, for JSON: (:id :at :agent :job :task :kind :summary :data),
+DATA the Lisp text the store holds (read it with `read-eval' off) — never read and printed again here."
+  (mapcar (pcase-lambda (`(,id ,at ,agent ,job ,task ,kind ,summary ,data))
+            (list :id id :at at :agent agent :job job :task task :kind kind :summary summary :data data))
+          (sqlite-select (drgnx-work-db) (format "select %s from event where id > ? order by id limit ?" drgnx-coord--event-cols)
+                         (list since limit))))
 
 (defun drgnx-hub--events-send ()
   "Broadcast `events' (:since ID :last ID :events […]): the events added since the last broadcast."
   (setq drgnx-hub--events-timer nil)
   (with-demoted-errors "drgnx hub: events not sent: %S"
-    (let ((since drgnx-hub--events-sent) (new (drgnx-coord-events :since drgnx-hub--events-sent :limit drgnx-hub--events-batch)))
+    (let ((since drgnx-hub--events-sent) (new (drgnx-hub--event-rows drgnx-hub--events-sent drgnx-hub--events-batch)))
       (when new
         (setq drgnx-hub--events-sent (plist-get (car (last new)) :id))
-        (drgnx-hub--broadcast 'events (list :since since :last drgnx-hub--events-sent
-                                            :events (vconcat (mapcar #'drgnx-hub--event-json new))))
+        (drgnx-hub--broadcast 'events (list :since since :last drgnx-hub--events-sent :events (vconcat new)))
         (when (= (length new) drgnx-hub--events-batch) (drgnx-hub--events-soon))))))
 
 (defun drgnx-hub--events-since (params)
@@ -576,9 +620,8 @@ off) so nothing in it is lost."
 1000) — (:since ID :last ID :events […]), as `events' sends them."
   (let* ((since (let ((v (drgnx-hub--value (plist-get params :since)))) (if (natnump v) v 0)))
          (limit (let ((v (drgnx-hub--value (plist-get params :limit)))) (if (and (natnump v) (> v 0)) (min v 1000) 200)))
-         (rows (drgnx-coord-events :since since :limit limit)))
-    (list :since since :last (if rows (plist-get (car (last rows)) :id) since)
-          :events (vconcat (mapcar #'drgnx-hub--event-json rows)))))
+         (rows (drgnx-hub--event-rows since limit)))
+    (list :since since :last (if rows (plist-get (car (last rows)) :id) since) :events (vconcat rows))))
 
 (declare-function drgnx-statusbar-note-tests "drgnx-statusbar")
 (defvar read-eval)                      ; so a let binds it dynamically in compiled code

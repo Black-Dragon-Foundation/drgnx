@@ -7,7 +7,8 @@
 ;;   plan        a plan with three entries
 ;;   subagent    a Task tool call with two child tool calls (_meta.parentToolCallId)
 ;;   permission  asks session/request_permission, then says which option it got
-;;   write PATH  reads PATH (fs/read_text_file), proposes an edit (fs/write_text_file), says the answer
+;;   write PATH  reads PATH (fs/read_text_file), proposes an edit (fs/write_text_file) inside an edit tool call
+;;               with the diff (as claude-agent-acp's Write), says the answer
 ;;   crash       exits 3, "mock crashed" on stderr
 ;;   commit      commits in its directory: "agent work for $DRGNX_TASK"
 ;;   /compact    the context shrinks
@@ -194,8 +195,13 @@ decision log, complete the task; say what happened."
                    (lambda (res)
                      (let* ((lines (split-string (or (plist-get (car res) :content) "") "\n"))
                             (new (concat "CHANGED " (car lines) "\n" (string-join (cdr lines) "\n") "ADDED LINE\n")))
+                       ;; as claude-agent-acp's Write does: an edit tool call with the diff, around the write request
+                       (mock--update sid (list :sessionUpdate "tool_call" :toolCallId "w1" :title (concat "Write " path) :kind "edit"
+                                               :status "pending" :content (vector (list :type "diff" :path path :newText new))))
                        (mock--ask "fs/write_text_file" (list :sessionId sid :path path :content new)
                                   (lambda (res2)
+                                    (mock--update sid (list :sessionUpdate "tool_call_update" :toolCallId "w1"
+                                                            :status (if (cdr res2) "failed" "completed")))
                                     (mock--steps sid (list (cons 0 (lambda () (mock--say sid (if (cdr res2) "write refused" "write done")))))))))))))
      (t
       (mock--steps

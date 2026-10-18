@@ -112,25 +112,38 @@ inherits: a hub whose parent is gone exits (checked each second), so an interrup
 
 The hub turns what happens into events in the store's event log ([coordination.md](coordination.md), `event`):
 
-- **Native sessions** (`drgnx-hub--session-events`, on each change of a session): a turn's start (`start`, data
-  `:head` — the commit its folder is at, read from the repository's files by `drgnx-job-git-head`, never a git
-  process) and its end (`stop`); an edit tool call it completed (`edit`: kind edit, delete or move, with the paths of
-  its diffs, at most 100 then `:more N`), once per call, before the turn's `stop`; a permission it asks (`question`,
-  `:permission ID`) and its answer (`answer`, `:question EVENT-ID`) — a session that exits answers its open ones. A
-  write request the user accepts (`agents/do` `review`) is an `edit` of its path; a rejected one is none.
+- **Native sessions** (`drgnx-hub--session-events`, on each change of a session):
+  - **its life:** `start` when the hub first sees it (data `:head`, the commit its folder is at, read from the
+    repository's files by `drgnx-job-git-head`, never a git process), `stop` when it exits;
+  - **its turns:** `start` and `stop` with data `(:turn t …)` — `:turn` first, so readers tell them from a life's
+    with a prefix test; the cockpit's life, `:stopped` and timeline leave them out;
+  - **edits:** an edit tool call it completed (`edit`: kind edit, delete or move, with the paths of its diffs, at most
+    100 then `:more N`), once per call, before the turn's `stop`. A write request is the edit when there is one — the
+    user accepts it (`agents/do` `review`; a rejected one is none) or a job's policy writes it — and the tool call an
+    adapter reports for the same write (claude-agent-acp's Write and Edit do) leaves out the paths this turn recorded
+    already: one `edit` per write. The scan starts at the first tool call that may still change, so a streamed turn
+    is not walked again on each chunk;
+  - **permissions:** a permission it asks (`question`, `:permission ID`) and its answer (`answer`, `:question EVENT-ID
+    :permission ID :by BY :option OPTION`): by `user` (the `agents/permission` request, a job's card:
+    `drgnx-hub-note-permission-answer`; the event's agent is then `user`), else by `drgnx` with no option — cancelled
+    (Stop) or dropped when the agent ended.
 - **Jobs** (`core/drgnx-job.el`): a reviewer's verdict (`review`, `:verdict pass` or `fail`, the reasons in the
   summary; no data without a verdict); a merge into the job's branch (`status`, `:status "merged" :into job/ID`); a
-  write a job agent's policy allows (`edit`). A task's agent is registered (`drgnx-coord-agent-register`) with its
-  worktree, branch and `base`, the commit the worktree is at when it starts: the cockpit diffs its edits against it.
-- **Retention:** the hub's housekeeping (every 30 ticks) calls `drgnx-coord-events-prune-daily`.
+  write a job agent's policy allows (`edit`). A task's agent is registered (`drgnx-coord-agent-register`, kind `job`)
+  with its worktree, branch and `base`, the commit the worktree is at when it starts: the cockpit diffs its edits
+  against it (an agent that retries a task after a failed review starts from the earlier attempt's commits, so its
+  diff is the retry's own), and shows it as its job's agent only while the job is shown.
+- **Retention:** the hub's housekeeping (every 30 ticks, a minute) calls `drgnx-coord-events-prune-daily`: by age once
+  a day, and on every call the row cap (`drgnx-coord-event-max-rows`).
 
 Subscribers get them as `events` (`:since ID :last ID :events [{id, at, agent, job, task, kind, summary, data}…]`,
-`data` as printed Lisp — read it with `read-eval` off), at most one every `drgnx-hub-events-interval` (0.25 s) and
-500 a time: the hub's own adds and `coord/notify` schedule a broadcast, and its tick (2 s) catches what other
-processes wrote. A new hub starts after the last event there is; a client catching up asks `events/since`. In an
-editor, the `test` events with counts reach the status bar (`drgnx-statusbar-note-tests`, when it is loaded) through
-`drgnx-hub--note-tests`, which `drgnx-hub-connect` adds to `drgnx-hub-event-functions` and `drgnx-hub-disconnect`
-removes.
+`data` as printed Lisp, the text the store holds, never read and printed again — read it with `read-eval` off), at
+most one every `drgnx-hub-events-interval` (0.25 s) and 200 a time. The hub's session events and `coord/notify`
+schedule a broadcast at once; its tick (2 s) catches what other processes wrote and the job events above, which go out
+within those 2 s. Event ids are never reused (`autoincrement`), so a pruned log never sends an id twice. A new hub
+starts after the last event there is; a client catching up asks `events/since`. In an editor, the `test` events with
+counts reach the status bar (`drgnx-statusbar-note-tests`, when it is loaded) through `drgnx-hub--note-tests`, which
+`drgnx-hub-connect` adds to `drgnx-hub-event-functions` and `drgnx-hub-disconnect` removes.
 
 ## Sessions across a restart
 

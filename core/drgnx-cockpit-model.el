@@ -146,12 +146,15 @@ order, DEPS hash task → (DEP…), CARDS ((ID JOB TASK TITLE AT)…).  A done j
                                     (if drgnx-cockpit-include-closed-jobs "" " and j.status is not 'done'")
                                     " order by c.id")))))
 
+(defconst drgnx-cockpit--life-sql "kind in ('start', 'stop') and coalesce(data, '') not like '(:turn t%'"
+  "The events of an agent's life: its start and stop — not a turn's (the hub's turn events lead with :turn t).")
+
 (defun drgnx-cockpit--life ()
-  "Hash agent → \"start\" or \"stop\", whichever of its events came last."
+  "Hash agent → \"start\" or \"stop\", whichever of its life's events (`drgnx-cockpit--life-sql') came last."
   (let ((h (make-hash-table :test #'equal)))
     (pcase-dolist (`(,agent ,kind)
-                   (sqlite-select (drgnx-work-db) "select agent, kind from event where id in
-                                     (select max(id) from event where kind in ('start', 'stop') and agent is not null group by agent)"))
+                   (sqlite-select (drgnx-work-db) (concat "select agent, kind from event where id in
+                                     (select max(id) from event where " drgnx-cockpit--life-sql " and agent is not null group by agent)")))
       (puthash agent kind h))
     h))
 
@@ -262,17 +265,23 @@ never joined to a job's or a plan's.  QUESTIONS: the open questions, each with t
                    :permissions (and (plist-get s :permissions) t))))
         (dolist (r rows)
           (let* ((id (plist-get r :id))
-                 (outside (and (not (gethash id agents)) (or (string-prefix-p "ext:" id) (plist-get r :kind)))))
-            (if outside
+                 ;; a job's task agent, which the hub registers: its job's, shown only while its job is
+                 (job-agent (equal (plist-get r :kind) "job"))
+                 (jid (let ((tk (plist-get r :task))) (and job-agent (stringp tk) (string-match "\\`\\(.+\\)#[0-9]+\\'" tk) (match-string 1 tk))))
+                 (outside (and (not job-agent) (not (gethash id agents)) (or (string-prefix-p "ext:" id) (plist-get r :kind)))))
+            (unless (and job-agent (not (gethash id agents)) (not (and jid (gethash (concat "job:" jid) nodes))))
+              (cond
+               (job-agent (agent id :name (plist-get r :name) :reporting 'job :job jid :task (task-node (plist-get r :task))))
+               (outside
                 (let ((stopped (equal (gethash id life) "stop")))
                   (agent id :name (plist-get r :name) :reporting 'outside :kind (plist-get r :kind)
                          :state (if stopped "stopped" "reporting") :label (plist-get r :task)
                          :plan (when-let* ((p (plist-get r :plan)) (cwd (or (plist-get r :cwd) "/"))
                                            ((not (or (drgnx-cockpit--remote-p p) (drgnx-cockpit--remote-p cwd))))
                                            (pid (concat "plan:" (expand-file-name p cwd))))
-                                 (and (gethash pid nodes) pid))))
-              (agent id :name (plist-get r :name) :reporting 'native :task (task-node (plist-get r :task))))
-            (agent id :cwd (plist-get r :cwd) :worktree (plist-get r :worktree) :branch (plist-get r :branch) :base (plist-get r :base))))
+                                 (and (gethash pid nodes) pid)))))
+               (t (agent id :name (plist-get r :name) :reporting 'native :task (task-node (plist-get r :task)))))
+              (agent id :cwd (plist-get r :cwd) :worktree (plist-get r :worktree) :branch (plist-get r :branch) :base (plist-get r :base)))))
         (dolist (a silent)
           (unless (plist-get a :error) (apply #'agent (plist-get a :id) (append (list :reporting 'silent) a)))))
       (dolist (id (reverse agent-order))
@@ -467,11 +476,13 @@ claims, statuses) and the cards, questions and answers about the job tasks it ho
 
 (cl-defun drgnx-cockpit-timeline (&key since)
   "Every agent's events after id SINCE (all when nil) as chips, oldest first — the newest `drgnx-cockpit-timeline-limit'.
+A turn's start and stop (the hub's, data :turn t) are left out: an agent's life is its session's.
 \((:id :at :agent :kind :label :target (:node ID :event ID))…)."
   (let ((target (drgnx-cockpit--targeter)))
     (mapcar (lambda (e) (list :id (plist-get e :id) :at (plist-get e :at) :agent (plist-get e :agent) :kind (plist-get e :kind)
                               :label (drgnx-cockpit--label e) :target (funcall target e)))
-            (nreverse (drgnx-cockpit--events "select %s from event where id > ? order by id desc limit ?"
+            (nreverse (drgnx-cockpit--events (concat "select %s from event where id > ? and not (kind in ('start', 'stop') and coalesce(data, '') like '(:turn t%%')"
+                                                     " order by id desc limit ?")
                                              (list (or since 0) drgnx-cockpit-timeline-limit))))))
 
 ;;;; Where an agent's edits are
@@ -519,7 +530,7 @@ a native session not among them is :stopped.
                                                            order by status in ('claimed', 'running', 'needs-input', 'in-review') desc, n desc
                                                            limit 1"
                                           (list id))))))
-         (life (and (stringp id) (caar (sqlite-select (drgnx-work-db) "select kind from event where agent = ? and kind in ('start', 'stop') order by id desc limit 1" (list id)))))
+         (life (and (stringp id) (caar (sqlite-select (drgnx-work-db) (concat "select kind from event where agent = ? and " drgnx-cockpit--life-sql " order by id desc limit 1") (list id)))))
          (others (lambda (dir) (seq-some (lambda (r) (and (not (equal (plist-get r :id) id))
                                                           (member dir (mapcar #'drgnx-cockpit--dir (delq nil (list (plist-get r :cwd) (plist-get r :worktree)))))))
                                          (drgnx-coord-agents)))))
@@ -538,7 +549,7 @@ a native session not among them is :stopped.
                       (drgnx-cockpit--dir (plist-get session :cwd)))))
         (list :dir dir :base (or (plist-get row :base) (concat "job/" job)) :merge-base (not (plist-get row :base)) :paths nil
               :own-worktree t :stopped (if sessions (or (null session) exited) (equal life "stop")))))
-     ((and row (not session) (or (string-prefix-p "ext:" id) (plist-get row :kind)))
+     ((and row (not session) (or (string-prefix-p "ext:" id) (and (plist-get row :kind) (not (equal (plist-get row :kind) "job")))))
       (let ((dir (drgnx-cockpit--dir (or (plist-get row :worktree) (plist-get row :cwd)))))
         (list :dir dir :base (plist-get row :base) :merge-base nil
               :paths (and dir (drgnx-cockpit--reported-paths id dir))

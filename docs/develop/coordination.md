@@ -71,7 +71,10 @@ working from the old one. So the shared state is explicit, versioned, and **enfo
 - **Retention:** `drgnx-coord-events-prune` (`:before`, seconds since the epoch; default
   `drgnx-coord-event-retention-days`, 30, ago) forgets older events except `question`, `answer` and `decision`.
   `drgnx-coord-events-prune-daily` runs it at most once in 24 hours (stamp in `meta` as `event-pruned`) and never
-  signals (a locked database waits for the next call, any other error is a message): meant for a periodic tick.
+  signals (a locked database waits for the next call, any other error is a message): meant for a periodic tick. On
+  every call it also holds the log to `drgnx-coord-event-max-rows` (100,000), the oldest going first (questions,
+  answers and decisions apart), so a busy day is bounded before the next prune. Event ids are `autoincrement`: an id is
+  never given twice, even after the newest rows were pruned.
 - **Busy database:** `work.db` opens with a 5-second busy timeout, so a writer waits for another Emacs's write lock for up
   to 5 seconds. After that SQLite reports the database locked. Claims, cards, messages, decisions and
   `drgnx-coord-event-add` then signal (the change did not happen: say so). Telemetry — `drgnx-coord-agent-seen` and

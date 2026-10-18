@@ -19,6 +19,10 @@
 (defun drgnx-hub-events-test--of (agent kind)
   (seq-filter (lambda (e) (equal (plist-get e :kind) kind)) (drgnx-coord-events :agent agent)))
 
+(defun drgnx-hub-events-test--turns (agent kind)
+  "AGENT's turn events of KIND (`start' or `stop' with :turn t)."
+  (seq-filter (lambda (e) (eq (plist-get (plist-get e :data) :turn) t)) (drgnx-hub-events-test--of agent kind)))
+
 (defun drgnx-hub-events-test--session (cwd)
   "A mock session the hub holds, in CWD, idle."
   (let ((s (drgnx-agents-start "mock" cwd)))
@@ -33,25 +37,38 @@
       ;; the write waits for the user's review; the user accepts it (from their Emacs, through the hub)
       (should (drgnx-job-run-test--wait (lambda () (drgnx-agent-session-reviews s))))
       (drgnx-hub-call-sync "agents/do" (list :id id :op "review" :item (plist-get (car (drgnx-agent-session-reviews s)) :id)))
-      (should (drgnx-job-run-test--wait (lambda () (member "stop" (drgnx-hub-events-test--kinds id)))))
-      (should (equal (drgnx-hub-events-test--kinds id) '("start" "edit" "stop")))
-      (should (equal (plist-get (plist-get (car (drgnx-hub-events-test--of id "start")) :data) :head) head))
+      (should (drgnx-job-run-test--wait (lambda () (drgnx-hub-events-test--turns id "stop"))))
+      ;; the session's life (start, with the HEAD of its folder), then the turn: one edit, though the agent also reported
+      ;; the write as an edit tool call
+      (should (equal (drgnx-hub-events-test--kinds id) '("start" "start" "edit" "stop")))
+      (let ((life (car (drgnx-hub-events-test--of id "start"))) (turn (cadr (drgnx-hub-events-test--of id "start"))))
+        (should (equal (plist-get (plist-get life :data) :head) head))
+        (should-not (plist-get (plist-get life :data) :turn))
+        (should (eq (plist-get (plist-get turn :data) :turn) t)))
+      (should (eq (plist-get (plist-get (car (drgnx-hub-events-test--of id "stop")) :data) :turn) t))
+      (should (seq-find (lambda (e) (equal (plist-get e :kind) "edit")) (drgnx-agent-session-entries s)))   ; the mock did report it
       (let ((edit (plist-get (car (drgnx-hub-events-test--of id "edit")) :data)))
         (should (equal (plist-get edit :paths) (list file))))
       ;; a rejected write is no edit
       (drgnx-agents-send s (concat "write " file))
       (should (drgnx-job-run-test--wait (lambda () (drgnx-agent-session-reviews s))))
       (drgnx-hub-call-sync "agents/do" (list :id id :op "review" :item (plist-get (car (drgnx-agent-session-reviews s)) :id) :reject t))
-      (should (drgnx-job-run-test--wait (lambda () (= 2 (length (drgnx-hub-events-test--of id "stop"))))))
-      (should (= 1 (length (drgnx-hub-events-test--of id "edit")))))))
+      (should (drgnx-job-run-test--wait (lambda () (= 2 (length (drgnx-hub-events-test--turns id "stop"))))))
+      (should (= 1 (length (drgnx-hub-events-test--of id "edit"))))
+      ;; the session ends: the stop of its life
+      (drgnx-agents-kill s)
+      (should (drgnx-job-run-test--wait (lambda () (seq-find (lambda (e) (not (plist-get (plist-get e :data) :turn)))
+                                                             (drgnx-hub-events-test--of id "stop"))))))))
 
 (ert-deftest drgnx-hub-events/a-tool-call-that-wrote-files-is-an-edit ()
-  ;; an agent that writes files itself reports a completed edit tool call with diffs: one event per call
+  ;; an agent that writes files itself reports a completed edit tool call with diffs: one event per call, without the
+  ;; paths a write request of the same turn recorded already
   (drgnx-job-run-test--with "# P\n\n### Task 1: one\n"
     (let* ((s (drgnx-agents--make :id "s-t" :name "t" :cwd repo :status 'idle)))
       (drgnx-hub--session-events s)
       (setf (drgnx-agent-session-status s) 'busy)
       (drgnx-hub--session-events s)
+      (drgnx-hub--review-edit s (list :path (concat repo "d.el")))      ; a write request the user accepted
       (setf (drgnx-agent-session-entries s)
             (list (list :type 'user :text "go")
                   (list :type 'tool :id "e1" :kind "edit" :status "in_progress" :title "Edit a.el"
@@ -59,18 +76,23 @@
                   (list :type 'tool :id "r1" :kind "read" :status "completed" :title "Read b.el")
                   (list :type 'tool :id "task" :kind "think" :status "completed"
                         :children (list (list :type 'tool :id "e2" :kind "edit" :status "completed" :title "Write c.el"
-                                              :content (vector (list :type "diff" :path (concat repo "c.el") :newText "y")))))))
+                                              :content (vector (list :type "diff" :path (concat repo "c.el") :newText "y")
+                                                               (list :type "diff" :path (concat repo "d.el") :newText "z")))))
+                  (list :type 'tool :id "e3" :kind "edit" :status "completed" :title "Write d.el"
+                        :content (list (list :type "diff" :path (concat repo "d.el") :newText "z")))))
       (drgnx-hub--session-events s)
       (should (equal (mapcar (lambda (e) (plist-get (plist-get e :data) :paths)) (drgnx-hub-events-test--of "s-t" "edit"))
-                     (list (list (concat repo "c.el")))))
+                     (list (list (concat repo "d.el")) (list (concat repo "c.el")))))   ; d.el once; e3 covered whole
       (plist-put (nth 1 (drgnx-agent-session-entries s)) :status "completed")
       (drgnx-hub--session-events s)
       (drgnx-hub--session-events s)                     ; once per tool call
       (should (equal (mapcar (lambda (e) (plist-get (plist-get e :data) :paths)) (drgnx-hub-events-test--of "s-t" "edit"))
-                     (list (list (concat repo "c.el")) (list (concat repo "a.el")))))
+                     (list (list (concat repo "d.el")) (list (concat repo "c.el")) (list (concat repo "a.el")))))
+      ;; the scan starts at the first tool call not yet complete: nothing before it is walked again
+      (should (= (plist-get (gethash "s-t" drgnx-hub--event-state) :from) 5))
       (setf (drgnx-agent-session-status s) 'idle)
       (drgnx-hub--session-events s)
-      (should (equal (drgnx-hub-events-test--kinds "s-t") '("start" "edit" "edit" "stop"))))))
+      (should (equal (drgnx-hub-events-test--kinds "s-t") '("start" "start" "edit" "edit" "edit" "stop"))))))
 
 (ert-deftest drgnx-hub-events/a-permission-is-a-question-until-answered ()
   (drgnx-hub-events-test--with "# P\n\n### Task 1: one\n"
@@ -83,8 +105,28 @@
         (should (string-search "rm -rf build" (plist-get q :summary)))
         (drgnx-hub-call-sync "agents/permission" (list :id id :request (plist-get p :id) :option "allow"))
         (should (drgnx-job-run-test--wait (lambda () (null (drgnx-coord-open-questions id)))))
-        (should (equal (plist-get (plist-get (car (drgnx-hub-events-test--of id "answer")) :data) :question) (plist-get q :id)))))))
-
+        ;; who answered, and how: the user, allow
+        (let ((a (car (drgnx-coord-events :kinds '("answer")))))
+          (should (equal (plist-get a :agent) "user"))
+          (should (equal (plist-get (plist-get a :data) :question) (plist-get q :id)))
+          (should (equal (plist-get (plist-get a :data) :by) "user"))
+          (should (equal (plist-get (plist-get a :data) :option) "allow"))))
+      ;; Stop cancels a pending one; an agent that ends drops it: answered by drgnx, no option
+      (drgnx-job-run-test--wait (lambda () (eq (drgnx-agent-session-status s) (quote idle))))
+      (drgnx-agents-send s "permission")
+      (should (drgnx-job-run-test--wait (lambda () (drgnx-agent-session-permissions s))))
+      (drgnx-agents-stop s)
+      (should (drgnx-job-run-test--wait (lambda () (null (drgnx-coord-open-questions id)))))
+      (let ((a (car (last (drgnx-coord-events :kinds '("answer"))))))
+        (should (equal (plist-get (plist-get a :data) :by) "drgnx"))
+        (should-not (plist-get (plist-get a :data) :option))
+        (should (string-search "cancelled" (plist-get a :summary))))
+      (drgnx-job-run-test--wait (lambda () (eq (drgnx-agent-session-status s) (quote idle))))
+      (drgnx-agents-send s "permission")
+      (should (drgnx-job-run-test--wait (lambda () (drgnx-agent-session-permissions s))))
+      (drgnx-agents-kill s)
+      (should (drgnx-job-run-test--wait (lambda () (null (drgnx-coord-open-questions id)))))
+      (should (string-search "dropped" (plist-get (car (last (drgnx-coord-events :kinds '("answer")))) :summary))))))
 (ert-deftest drgnx-hub-events/review-verdicts-are-events ()
   (drgnx-hub-events-test--with "# One\n\n### Task 1: first\n"
     (let ((id (drgnx-job-propose plan)))
@@ -116,7 +158,8 @@
 
 (ert-deftest drgnx-hub-events/broadcast-is-batched ()
   (drgnx-hub-events-test--with "# P\n\n### Task 1: one\n"
-    (let ((before (or (caar (sqlite-select (drgnx-work-db) "select max(id) from event")) 0)))
+    (let ((before (or (caar (sqlite-select (drgnx-work-db) "select max(id) from event")) 0))
+          (drgnx-hub-events-interval 1.0))               ; wide: a loaded machine's 50 adds still fit in one window
       ;; 50 adds in 0.1 s, each followed by the notify a coordination server sends
       (dotimes (i 50)
         (drgnx-coord-event-add :agent "ext:t:1" :kind "test" :summary (format "run %d" i) :data (list :passed i :failed 0))
@@ -126,7 +169,7 @@
       ;; one broadcast due, not one per add
       (should (<= (seq-count (lambda (tm) (eq (timer--function tm) #'drgnx-hub--events-send)) timer-list) 1))
       (should (drgnx-job-run-test--wait (lambda () (assoc "events" heard)) 3))
-      (drgnx-job-run-test--wait (lambda () nil) 0.6)       ; a second batch would be here now
+      (drgnx-job-run-test--wait (lambda () nil) 1.2)       ; a second batch would be here now
       (let ((batches (seq-filter (lambda (h) (equal (car h) "events")) heard)))
         (should (= (length batches) 1))
         (let ((d (cdar batches)))
@@ -176,5 +219,53 @@
       (cl-letf (((symbol-function 'drgnx-coord-events-prune-daily) (lambda () (cl-incf pruned) nil)))
         (drgnx-hub--housekeeping))
       (should (= pruned 1)))))
+
+(ert-deftest drgnx-hub-events/two-broadcasts-are-an-interval-apart ()
+  (drgnx-hub-events-test--with "# P\n\n### Task 1: one\n"
+    (let ((drgnx-hub-events-interval 0.3) (at nil))
+      (push (lambda (e _d) (when (equal e "events") (push (float-time) at))) drgnx-hub-event-functions)
+      (drgnx-coord-event-add :agent "a" :kind "decision" :summary "one")
+      (drgnx-hub-call "coord/notify" nil #'ignore)
+      (should (drgnx-job-run-test--wait (lambda () at) 3))
+      (drgnx-coord-event-add :agent "a" :kind "decision" :summary "two")   ; at once after the first went out
+      (drgnx-hub-call "coord/notify" nil #'ignore)
+      (should (drgnx-job-run-test--wait (lambda () (cdr at)) 3))
+      (should (>= (- (car at) (cadr at)) 0.25)))))
+
+(ert-deftest drgnx-hub-events/stopping-the-hub-drops-its-event-state-and-timer ()
+  (drgnx-job-run-test--with "# P\n\n### Task 1: one\n"
+    (let ((s (drgnx-agents--make :id "s-x" :name "x" :cwd repo :status 'busy)))
+      (drgnx-hub--session-events s)
+      (should (gethash "s-x" drgnx-hub--event-state))
+      (should (timerp drgnx-hub--events-timer))
+      (drgnx-hub-stop)
+      (should (zerop (hash-table-count drgnx-hub--event-state)))
+      (should-not drgnx-hub--events-timer)
+      (should-not (seq-find (lambda (tm) (eq (timer--function tm) #'drgnx-hub--events-send)) timer-list)))))
+
+(ert-deftest drgnx-hub-events/a-job-agent-s-allowed-write-is-an-edit ()
+  (drgnx-job-run-test--with "# P\n\n### Task 1: one\n"
+    (let* ((tree (file-name-as-directory (concat repo "tree")))
+           (s (drgnx-agents--make :id "s-j" :name "j" :cwd tree :status 'busy :job "jz" :task "jz#1"))
+           (path (concat tree "out.txt")))
+      (make-directory tree t)
+      (should (equal (drgnx-job--request s "fs/write_text_file" (list :path path :content "hi\n") 7) '(:result nil)))
+      (let ((e (car (drgnx-coord-events :agent "s-j" :kinds '("edit")))))
+        (should e)
+        (should (equal (plist-get e :task) "jz#1"))
+        (should (equal (plist-get (plist-get e :data) :paths) (list path)))))))
+
+(ert-deftest drgnx-hub-events/events-since-caps-its-limit-and-reads-a-bad-since-as-0 ()
+  (drgnx-hub-events-test--with "# P\n\n### Task 1: one\n"
+    (let ((db (drgnx-work-db)))
+      (sqlite-transaction db)
+      (dotimes (i 1005) (sqlite-execute db "insert into event (at, agent, kind, summary) values (?, 'a', 'decision', ?)"
+                                        (list (float-time) (format "d%d" i))))
+      (sqlite-commit db))
+    (should (= (length (plist-get (drgnx-hub-call-sync "events/since" (list :since 0 :limit 5000)) :events)) 1000))
+    (should (= (length (plist-get (drgnx-hub-call-sync "events/since" (list :since 0)) :events)) 200))
+    (let ((r (drgnx-hub-call-sync "events/since" (list :since "abc" :limit -3))))
+      (should (eql (plist-get r :since) 0))
+      (should (= (length (plist-get r :events)) 200)))))
 
 ;;; hub-events-test.el ends here

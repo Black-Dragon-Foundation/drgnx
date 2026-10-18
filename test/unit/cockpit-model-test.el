@@ -524,4 +524,44 @@
           (should (= (hash-table-count drgnx-cockpit--plan-cache) 1)))
       (delete-directory dir t))))
 
+(ert-deftest drgnx-cockpit-model/job-agents-registered-by-the-hub-are-job-agents ()
+  (drgnx-cockpit-fixture-with
+    ;; the hub registers each task agent (kind job): an open job's shows as its job's agent, a done job's not at all
+    (drgnx-coord-agent-register :id "s-1" :kind "job" :name "claude · jx#2" :cwd tree :worktree tree :branch "job/jx-2" :base sha
+                                :task "jx#2")
+    (drgnx-coord-job-create :id "jold" :title "old" :plan plan :repo repo :tasks '((:n 6 :title "task 6" :role "implement")))
+    (drgnx-coord-agent-register :id "s-old" :kind "job" :name "claude · jold#6" :cwd repo :task "jold#6")
+    (drgnx-coord-event-add :agent "s-old" :kind "stop" :summary "session ended")
+    (drgnx-coord-job-set "jold" :status "done")
+    (let ((m (drgnx-cockpit-model :sessions nil)))
+      (should-not (drgnx-cockpit-model-test--agent m "s-old"))
+      (should-not (drgnx-cockpit-model-test--node m "agent:s-old"))
+      (let ((a (drgnx-cockpit-model-test--agent m "s-1")))
+        (should (eq (plist-get a :reporting) 'job))
+        (should (equal (plist-get a :job) "jx"))))
+    (let ((src (drgnx-cockpit-edit-source "s-1")))
+      (should (equal (plist-get src :base) sha))
+      (should-not (plist-get src :merge-base)))
+    ;; with closed jobs asked for, its agent comes back as a job agent
+    (let* ((drgnx-cockpit-include-closed-jobs t) (m (drgnx-cockpit-model :sessions nil)))
+      (should (eq (plist-get (drgnx-cockpit-model-test--agent m "s-old") :reporting) 'job)))))
+
+(ert-deftest drgnx-cockpit-model/turns-are-not-an-agent-s-life ()
+  (drgnx-cockpit-fixture-with
+    ;; s-2's session started (the fixture); a turn of it ended: it is not stopped, and the timeline shows no turns
+    (drgnx-coord-agent-register :id "s-2" :name "chat" :cwd repo)   ; a native agent the registry knows
+    (drgnx-coord-event-add :agent "s-2" :kind "start" :summary "turn started" :data '(:turn t))
+    (drgnx-coord-event-add :agent "s-2" :kind "stop" :summary "turn ended (end_turn)" :data '(:turn t))
+    (let ((m (drgnx-cockpit-model :sessions nil)))
+      (should (equal (plist-get (drgnx-cockpit-model-test--agent m "s-2") :state) "not running")))
+    (should-not (plist-get (drgnx-cockpit-edit-source "s-2") :stopped))
+    (should (equal (mapcar (lambda (c) (plist-get c :label)) (seq-filter (lambda (c) (equal (plist-get c :agent) "s-2")) (drgnx-cockpit-timeline)))
+                   '("started")))
+    ;; the session's own stop is its life
+    (drgnx-coord-event-add :agent "s-2" :kind "stop" :summary "session ended")
+    (should (equal (plist-get (drgnx-cockpit-model-test--agent (drgnx-cockpit-model :sessions nil) "s-2") :state) "stopped"))
+    (should (plist-get (drgnx-cockpit-edit-source "s-2") :stopped))
+    (should (equal (mapcar (lambda (c) (plist-get c :label)) (seq-filter (lambda (c) (equal (plist-get c :agent) "s-2")) (drgnx-cockpit-timeline)))
+                   '("started" "stopped")))))
+
 ;;; cockpit-model-test.el ends here

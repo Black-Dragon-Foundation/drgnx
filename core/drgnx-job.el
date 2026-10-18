@@ -88,6 +88,7 @@ from agents.eld's :routes when nil.")
 
 (declare-function drgnx-ai-agent-gateway-chain "drgnx-ai")
 (declare-function drgnx-ai-provider "drgnx-ai")
+(declare-function drgnx-hub-note-permission-answer "drgnx-hub")
 (defvar drgnx-ai-gateway-kinds)
 (defvar drgnx-job-review)
 
@@ -364,7 +365,7 @@ process of its own: the agent starts when it is there."
          (s (drgnx-agents-start profile tree (plist-get task :id) id))
          ;; its edits are against where its worktree starts (the cockpit's diffs), not where the job's branch is later
          (_ (with-demoted-errors "drgnx job: agent not registered: %S"
-              (drgnx-coord-agent-register :id (drgnx-agent-session-id s) :name (drgnx-agent-session-name s) :cwd tree :worktree tree
+              (drgnx-coord-agent-register :id (drgnx-agent-session-id s) :kind "job" :name (drgnx-agent-session-name s) :cwd tree :worktree tree
                                           :branch (format "job/%s-%d" id n) :base (drgnx-job-git-head tree) :task (plist-get task :id))))
          (body (plist-get (seq-find (lambda (x) (= (plist-get x :n) n)) (plist-get (plist-get (drgnx-coord-job id) :data) :tasks)) :body)))
     (drgnx-coord-force-status (plist-get task :id) "claimed" (drgnx-agent-session-id s))
@@ -863,9 +864,12 @@ S: the session whose request waits (it goes back to work once answered, or, gone
   (let* ((data (plist-get card :data)) (s (or (drgnx-agents-get (plist-get data :sid)) (user-error "The agent is gone")))
          (req (plist-get data :request)))
     (if-let* ((p (seq-find (lambda (p) (equal (plist-get p :id) req)) (drgnx-agent-session-permissions s))))
-        (drgnx-agents-answer-permission
-         s p (plist-get (seq-find (lambda (o) (equal (plist-get o :kind) (if allow "allow_once" "reject_once"))) (append (plist-get p :options) nil))
-                        :optionId))
+        (let ((option (plist-get (seq-find (lambda (o) (equal (plist-get o :kind) (if allow "allow_once" "reject_once")))
+                                           (append (plist-get p :options) nil))
+                                 :optionId)))
+          ;; the user's answer, through the card: the hub's `answer' event says so
+          (when (fboundp 'drgnx-hub-note-permission-answer) (drgnx-hub-note-permission-answer s req option "user"))
+          (drgnx-agents-answer-permission s p option))
       (if-let* ((r (seq-find (lambda (r) (equal (plist-get r :id) req)) (drgnx-agent-session-reviews s))))
           (drgnx-agents-finish-review s r t)
         (user-error "The request was answered already")))
