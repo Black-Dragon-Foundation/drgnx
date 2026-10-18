@@ -135,6 +135,38 @@ The features come back after (unless BODY loaded them again)."
              ,@body)
          (dolist (f (reverse hidden)) (unless (memq f features) (setq features (nconc features (list f)))))))))
 
+;;;; What the product's after-teardown leaves behind
+
+(defconst drgnx-test-modules--ui-variables
+  '(drgnx-keys--applied drgnx-keys-last drgnx-keys--generation drgnx-keys--saved-modifiers drgnx-keys-problems
+                        drgnx-surfaces--which-key-entries which-key-replacement-alist)
+  "Variables `drgnx-keys-apply' and `drgnx-surfaces-refresh' (the after-teardown function) write.")
+
+(defun drgnx-test-modules--ui-snapshot ()
+  "The key and surface state that `drgnx-modules-after-teardown-functions' change."
+  (list :variables (delq nil (mapcar (lambda (v) (and (boundp v) (cons v (symbol-value v))))
+                                     drgnx-test-modules--ui-variables))
+        :menu-items (and (boundp 'drgnx-surfaces--menu-items) (hash-table-count drgnx-surfaces--menu-items))
+        :menu-hook (default-value 'menu-bar-update-hook)
+        :context-functions (default-value 'context-menu-functions)
+        :context-mode (bound-and-true-p context-menu-mode)))
+
+(defun drgnx-test-modules--ui-restore (snap)
+  "Put SNAP back.  The bindings are undone with `drgnx-keys--restore' (only those still ours) when none was
+applied before; when some were, the after-teardown function's re-application stays, as it would in a session."
+  (let ((variables (plist-get snap :variables)))
+    (when (and (fboundp 'drgnx-keys--restore) (null (alist-get 'drgnx-keys--applied variables)))
+      (drgnx-keys--restore))
+    ;; the menus the registry built: with an empty registry all of them are stale, so the build retracts them
+    (when (and (eql (plist-get snap :menu-items) 0) (fboundp 'drgnx-surfaces-build-menus))
+      (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
+        (drgnx-surfaces-build-menus)))
+    (pcase-dolist (`(,var . ,value) variables) (set var value))
+    (set-default 'menu-bar-update-hook (plist-get snap :menu-hook))
+    (set-default 'context-menu-functions (plist-get snap :context-functions))
+    (when (and (bound-and-true-p context-menu-mode) (not (plist-get snap :context-mode)))
+      (context-menu-mode -1))))
+
 ;;;; Running
 
 (defun drgnx-test-modules--diff-lines (before after)
@@ -144,24 +176,20 @@ The features come back after (unless BODY loaded them again)."
           (seq-remove (lambda (d) (string-prefix-p "feature " (plist-get d :what)))
                       (drgnx-modules-fingerprint-diff before after))))
 
-(defun drgnx-test-modules--setup (selected)
-  "Run the setups of SELECTED in stage order; the names whose setup ran, in that order."
-  (let (ran)
-    (dolist (stage drgnx-modules-stages)
-      (let ((stage-ran nil))
-        (dolist (m (drgnx-modules--in-order stage))
-          (when (and (memq (car m) selected) (drgnx-modules--run-one (car m) (cdr m) stage))
-            (push (car m) ran) (setq stage-ran t)))
-        (when stage-ran (run-hook-with-args 'drgnx-modules-after-stage-functions stage))))
-    (nreverse ran)))
+(defun drgnx-test-modules--ran ()
+  "The modules that are on, in the order their setups ran: by stage, each stage as `drgnx-modules-run' orders it."
+  (seq-filter #'drgnx-modules--ok-p
+              (mapcar #'car (apply #'append (mapcar #'drgnx-modules--in-order drgnx-modules-stages)))))
 
-(defun drgnx-test-modules--teardown (ran)
-  "Tear RAN down, the last first, then run the after-teardown functions.  The problems, (NAME . STRINGS)."
+(defun drgnx-test-modules--teardown (ui)
+  "Tear the modules that are on down, the last first, then run the after-teardown functions and put UI
+(`drgnx-test-modules--ui-snapshot') back.  The problems, (NAME . STRINGS)."
   (let (problems)
-    (dolist (name (reverse ran))
+    (dolist (name (reverse (drgnx-test-modules--ran)))
       (let ((p (drgnx-module-teardown name)))
         (when (and p (not (equal p '("restart")))) (push (cons name p) problems))))
-    (run-hooks 'drgnx-modules-after-teardown-functions)
+    (unwind-protect (run-hooks 'drgnx-modules-after-teardown-functions)
+      (drgnx-test-modules--ui-restore ui))
     (nreverse problems)))
 
 (defun drgnx-test-modules--closure (names)
@@ -178,7 +206,10 @@ The features come back after (unless BODY loaded them again)."
   "Run the function BODY with MODULES set up (see `drgnx-test-with-modules'); OPTS is its plist."
   (let* ((stages (plist-get opts :stages))
          (cfg (make-temp-file "drgnx-mods" t))
-         (process-environment (cons (concat "DRGNX_CONFIG_DIR=" cfg) process-environment))
+         (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" cfg)
+                                            (concat "XDG_STATE_HOME=" cfg "/state")
+                                            (concat "DRGNX_DATA_DIR=" cfg "/data"))
+                                      process-environment))
          (drgnx-modules--table nil) (drgnx-modules--report nil) (drgnx-modules--state nil)
          (drgnx-modules--stacks nil) (drgnx-modules--runs nil) (drgnx-modules--features nil)
          (drgnx-module--claims (make-hash-table :test 'equal))
@@ -196,11 +227,17 @@ The features come back after (unless BODY loaded them again)."
                                          (mapcar #'car (seq-filter (lambda (m) (memq (plist-get (cdr m) :stage) stages))
                                                                    drgnx-modules--table))))))
                  (before (drgnx-modules-fingerprint))
-                 (ran nil) (problems nil) (value nil))
+                 (ui (drgnx-test-modules--ui-snapshot))
+                 (done nil) (problems nil) (value nil))
+            ;; the product's own runner, over the selected modules only
+            (setq drgnx-modules--table (seq-filter (lambda (m) (memq (car m) selected)) drgnx-modules--table))
             (unwind-protect
-                (progn (setq ran (drgnx-test-modules--setup selected))
-                       (setq value (funcall body)))
-              (setq problems (drgnx-test-modules--teardown ran)))
+                (progn (dolist (stage drgnx-modules-stages) (drgnx-modules-run stage))
+                       (setq value (funcall body) done t))
+              (setq problems (drgnx-test-modules--teardown ui))
+              ;; the test fails with the body's own error: do not lose what the teardown found
+              (when (and problems (not done))
+                (message "drgnx-test-with-modules: the teardown also reported %S" problems)))
             (when problems
               (ert-fail (list "modules did not tear down cleanly" problems)))
             (when (plist-get opts :strict)

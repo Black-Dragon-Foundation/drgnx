@@ -153,9 +153,10 @@ and state are fresh, and `DRGNX_CONFIG_DIR` is a temporary directory, so the use
 
 - **Teardown is part of the test.** After BODY (also when BODY signals) the modules are turned off last first through
   `drgnx-module-teardown`, then `drgnx-modules-after-teardown-functions` run: every use of the helper tests the
-  module's teardown too. The product's after-teardown function re-applies the keys and menus from the registry,
-  so a test that builds its own registry and must not touch the process's global map binds
-  `drgnx-modules-after-teardown-functions` to nil around the helper (the key tests do). A teardown problem (an undo that failed, named by its label) fails the test; a module that
+  module's teardown too. The product's after-teardown function re-applies the keys and menus from the registry; the
+  helper puts what it changed back (the applied keys, the menu items, the which-key labels, `menu-bar-update-hook`,
+  `context-menu-functions` and `context-menu-mode`) before the `:strict` comparison, provided none of the keys or menus
+  were applied before the helper ran (in a live session they were: then the re-application stays). A teardown problem (an undo that failed, named by its label) fails the test; a module that
   is `:teardown 'restart` is left running.
 - **Registries come back.** Whatever happened to a variable of `drgnx-modules-fingerprint-registries` (a table, an
   alist, a keymap) is put back from a copy taken before: tables and keymaps in place, the rest with `set`. It is a

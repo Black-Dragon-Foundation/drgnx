@@ -4,6 +4,7 @@
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
+(defvar drgnx-keys--applied)
 (defvar drgnx-layouts-pane-fillers)
 (defvar drgnx-layouts-shapes)
 (defvar drgnx-persist-state-functions)
@@ -162,11 +163,45 @@
                              (should-error (drgnx-test-with-modules (list file) (error "boom")))
                              (should (equal '(body) drgnx-fixture-test-log)))))
 
+(ert-deftest drgnx-test-modules/the-keys-and-surfaces-of-the-after-teardown-are-put-back ()
+  ;; `drgnx--after-teardown' applies the keys of the registry and installs the context menu; with a populated
+  ;; registry the helper puts the process's global state back, so :strict is clean there.
+  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
+    (drgnx--core-commands)
+    ;; loads the libraries the setups require, without the keys and menus of the after-teardown function
+    (let ((drgnx-modules-after-teardown-functions nil))
+      (drgnx-test-with-modules '(tools/browser) (ignore)))
+    (let ((map (copy-keymap global-map))
+          (context context-menu-mode)
+          (menu-hook (default-value 'menu-bar-update-hook))
+          (context-fns (default-value 'context-menu-functions))
+          (applied drgnx-keys--applied))
+      (drgnx-test-with-modules '(tools/browser) :strict t (ignore))
+      (should (> (hash-table-count drgnx-commands--table) 4))
+      (should (equal map global-map))
+      (should (eq context context-menu-mode))
+      (should (equal menu-hook (default-value 'menu-bar-update-hook)))
+      (should (equal context-fns (default-value 'context-menu-functions)))
+      (should (equal applied drgnx-keys--applied)))))
+
+(ert-deftest drgnx-test-modules/a-teardown-problem-is-kept-when-the-body-signals ()
+  (ert-with-temp-directory dir
+                           (let ((file (drgnx-fixture-test--module-file
+                                        dir "fake-both"
+                                        "(drgnx-module-define 'fake/both :doc \"x\" :setup #'ignore
+  :teardown (lambda () (error \"cannot undo either\")))"))
+                                 (said nil))
+                             (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+                               (should-error (drgnx-test-with-modules (list file) (error "boom"))))
+                             (should (seq-some (lambda (m) (string-match-p "cannot undo either" m)) said)))))
+
 (ert-deftest drgnx-test-modules/config-and-tables-are-fresh ()
   (let ((real (getenv "DRGNX_CONFIG_DIR")))
     (drgnx-test-with-modules nil
       (should-not (equal real (getenv "DRGNX_CONFIG_DIR")))
       (should (file-directory-p (drgnx-user-dir)))
+      (should (string-prefix-p (drgnx-user-dir) (drgnx-state-dir)))
+      (should (string-prefix-p (drgnx-user-dir) (file-name-as-directory (getenv "DRGNX_DATA_DIR"))))
       (should-not drgnx-modules--table)
       (should-not drgnx-modules--report))
     (should (equal real (getenv "DRGNX_CONFIG_DIR")))))

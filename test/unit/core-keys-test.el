@@ -13,6 +13,9 @@
 (defvar drgnx-keys-test--later-stages nil
   "Non-nil: `drgnx-keys-test--with-core-commands' also sets up the idle, first-frame, first-file and first-input modules.")
 
+(defvar drgnx-keys-test--strict nil
+  "Non-nil: `drgnx-keys-test--with-core-commands' fails when the modules leave state behind after their teardown.")
+
 (defvar drgnx-layouts-pane-fillers)
 (defvar drgnx-layouts-shapes)
 (defvar drgnx-persist-state-functions)
@@ -25,9 +28,6 @@ that took VS Code's C-S-h and F2 (the rest of the replace module is not modelled
 The modules are set up by `drgnx-test-with-modules' and torn down after BODY, what they hooked into with them."
   `(let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
          (drgnx-commands-problems nil)
-         ;; the product re-applies the keys after a teardown (`drgnx--after-teardown'); here that would bind this
-         ;; fresh registry's keys in the process's global map
-         (drgnx-modules-after-teardown-functions nil)
          ;; core/basics is not converted yet: put its plain `setq's and the trust guards back by hand
          (ring-bell-function ring-bell-function) (use-dialog-box use-dialog-box)
          (use-short-answers use-short-answers) (inhibit-startup-screen inhibit-startup-screen)
@@ -41,6 +41,7 @@ The modules are set up by `drgnx-test-with-modules' and torn down after BODY, wh
            (drgnx-test-with-modules nil
              :stages (if drgnx-keys-test--later-stages drgnx-modules-stages '(startup))
              :packages (if drgnx-keys-test--later-stages 'hidden nil)
+             :strict drgnx-keys-test--strict
              ,@body))
        (when (fboundp 'drgnx-trust-mode) (drgnx-trust-mode (if trust-was 1 -1))))))
 
@@ -830,7 +831,8 @@ The commands of modules that need no installed package are in it, the later stag
         (shapes (copy-tree (bound-and-true-p drgnx-layouts-shapes)))
         (state-fns (copy-sequence drgnx-persist-state-functions))
         (after-fns (copy-sequence drgnx-persist-after-restore-functions))
-        (drgnx-keys-test--later-stages t))
+        (drgnx-keys-test--later-stages t)
+        (drgnx-keys-test--strict t))
     (drgnx-keys-test--with-core-commands (ignore))
     (should (equal (bound-and-true-p drgnx-layouts-pane-fillers) fillers))
     (should (equal (bound-and-true-p drgnx-layouts-shapes) shapes))
