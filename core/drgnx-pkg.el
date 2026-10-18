@@ -374,14 +374,19 @@ lock.  Files come back at the same path, so their native code stays valid.  Retu
                        :kind (or (plist-get entry :kind) 'tar) :archive (plist-get entry :archive)))
 
 (defun drgnx-pkg--desc-entry (desc file sha &optional size)
-  "The lock entry of DESC, installed from FILE with hash SHA, SIZE bytes (what onboarding says it downloads)."
-  (cons (package-desc-name desc)
-        (list :version (package-version-join (package-desc-version desc))
-              :archive (package-desc-archive desc) :kind (package-desc-kind desc)
-              :file file :sha256 sha :size size
-              :requires (mapcar (lambda (r) (list (car r) (package-version-join (cadr r))))
-                                (seq-remove (lambda (r) (eq (car r) 'emacs)) (package-desc-reqs desc)))
-              :summary (package-desc-summary desc))))
+  "The lock entry of DESC, installed from FILE with hash SHA, SIZE bytes (what onboarding says it downloads).
+An archive that carries the commit DESC was built from and its repository (MELPA's archive-contents do) has them
+recorded as :commit and :url: what `drgnx-pkg--restore-prepare' needs once the archive no longer serves that version."
+  (let ((extras (package-desc-extras desc)))
+    (cons (package-desc-name desc)
+          (append (list :version (package-version-join (package-desc-version desc))
+                        :archive (package-desc-archive desc) :kind (package-desc-kind desc)
+                        :file file :sha256 sha :size size
+                        :requires (mapcar (lambda (r) (list (car r) (package-version-join (cadr r))))
+                                          (seq-remove (lambda (r) (eq (car r) 'emacs)) (package-desc-reqs desc)))
+                        :summary (package-desc-summary desc))
+                  (and (alist-get :commit extras) (alist-get :url extras)
+                       (list :commit (alist-get :commit extras) :url (alist-get :url extras)))))))
 
 (defun drgnx-pkg--file (desc) (concat (package-desc-full-name desc) (package-desc-suffix desc)))
 (defun drgnx-pkg--cached (desc) (expand-file-name (drgnx-pkg--file desc) (drgnx-package-cache-dir)))
@@ -621,20 +626,75 @@ in the packages directory itself: an .eln's name hashes its source's path."
         (error (unless (assq name (car missing)) (push (cons name (error-message-string err)) (car missing))))))
     (nreverse out)))
 
-(defun drgnx-pkg--git-install (prep)
-  "Install the prepared Git package PREP (from `drgnx-pkg--git-prepare'): its lock entry."
-  (pcase-let ((`(,name ,desc ,tree ,commit ,src ,root) prep))
+(defun drgnx-pkg--git-unpack (prep)
+  "Install the prepared Git package PREP (from `drgnx-pkg--git-prepare') into the packages directory; its export is
+deleted.  A package that does not install is a `drgnx-pkg-error'."
+  (pcase-let ((`(,name ,desc ,tree ,commit ,_src ,root) prep))
     (unwind-protect
         (condition-case err (let ((default-directory tree)) (drgnx-pkg--unpack desc (expand-file-name (format "%s.el" name) tree)))
-          (error (drgnx-pkg--error "%s at %s does not install (%s) — nothing was changed" name (substring commit 0 12)
+          (error (drgnx-pkg--error "%s at %s does not install (%s) — nothing was changed" name (substring commit 0 (min 12 (length commit)))
                                    (error-message-string err))))
-      (delete-directory root t))
+      (delete-directory root t))))
+
+(defun drgnx-pkg--git-install (prep)
+  "Install the prepared Git package PREP (from `drgnx-pkg--git-prepare'): its lock entry."
+  (pcase-let ((`(,name ,desc ,_tree ,commit ,src ,_root) prep))
+    (drgnx-pkg--git-unpack prep)
     (drgnx-pkg--drop-other-versions desc)
     (cons name (list :kind 'git :url (plist-get src :url) :rev (plist-get src :rev) :commit commit
                      :version (package-version-join (package-desc-version desc))
                      :requires (mapcar (lambda (r) (list (car r) (package-version-join (cadr r))))
                                        (seq-remove (lambda (r) (eq (car r) 'emacs)) (package-desc-reqs desc)))
                      :summary (package-desc-summary desc)))))
+
+(defvar drgnx-pkg--restored nil
+  "While a sync runs: the locked versions it rebuilds from their commits, ((NAME DESC TREE COMMIT SRC ROOT)…) —
+`drgnx-pkg--restore-prepare'.  `drgnx-pkg--pinned-desc' answers with their descs.")
+
+(defvar drgnx-pkg--restore-failed nil
+  "While a sync runs: why a restore could not be prepared, ((NAME . REASON)…); it ends the package's MISSING reason.")
+
+(defun drgnx-pkg--restore-prepare (names pins soft-names)
+  "Prepare the rebuild from its commit of every locked version of NAMES (and what their PINS require) that no
+archive and no cache has any more — the MELPA snapshots that vanish — and that the lock records a :commit and :url
+for: the repository is cloned (into the package cache, as a Git source's is) and the commit exported.  The result is
+in `drgnx-pkg--restored'; what cannot be rebuilt is in `drgnx-pkg--restore-failed'.  The pins of SOFT-NAMES (the
+shipped lock's) are not restored: they fall back to the archive's version.  A pin without a commit is left as it is:
+the plan reports it missing."
+  (dolist (name (drgnx-pkg--lock-closure names pins))
+    (let* ((pin (alist-get name pins)) (commit (plist-get pin :commit)) (url (plist-get pin :url)))
+      (when (and commit url (not (eq (plist-get pin :kind) 'git)) (not (memq name soft-names))
+                 (not (equal (drgnx-pkg--installed-version name) (plist-get pin :version)))
+                 (not (drgnx-pkg--pinned-desc name pin)))
+        (condition-case err
+            (let* ((src (list :url url :rev commit)) (dir (drgnx-pkg--git-cache name)))
+              (unless (drgnx-pkg--git-has-p dir commit) (drgnx-pkg--git-fetch name src))
+              (unless (drgnx-pkg--git-has-p dir commit) (drgnx-pkg--error "%s has no commit %s" url commit))
+              (let ((root (drgnx-pkg--git-export name dir commit)))
+                (condition-case e
+                    (let ((desc (drgnx-pkg--git-desc name root dir commit)))
+                      ;; the locked version, not the header's (MELPA's are dates): the lock then finds it installed
+                      (setf (package-desc-version desc) (version-to-list (plist-get pin :version)))
+                      (push (list name desc root commit src root) drgnx-pkg--restored))
+                  (error (delete-directory root t) (signal (car e) (cdr e))))))
+          (error (push (cons name (error-message-string err)) drgnx-pkg--restore-failed)))))))
+
+(defun drgnx-pkg--restore-install (prep pin)
+  "Install the version PIN locks from the prepared rebuild PREP: PIN, the lock entry as it was (the archive's
+version of it, found again on the next sync).  Says so as a warning: the files are the repository's, not the archive's."
+  (drgnx-pkg--git-unpack prep)
+  (drgnx-pkg--warn "%s: %s is no longer served; rebuilt from its commit %s" (car prep) (plist-get pin :version)
+                   (substring (nth 3 prep) 0 (min 12 (length (nth 3 prep)))))
+  (cons (car prep) pin))
+
+(defun drgnx-pkg--gone-why (name pin)
+  "Why the locked version PIN of NAME cannot be had, for the MISSING line."
+  (format "the lock pins %s; no archive or cache has it%s (drgnx upgrade takes the archives' version)"
+          (plist-get pin :version)
+          (cond ((alist-get name drgnx-pkg--restore-failed)
+                 (format ", and rebuilding it from its commit failed: %s" (alist-get name drgnx-pkg--restore-failed)))
+                ((not (and (plist-get pin :commit) (plist-get pin :url))) "; the lock records no commit to rebuild it from")
+                (t ""))))
 
 (defun drgnx-pkg--required-version (name descs)
   "The highest version of NAME that DESCS or the installed packages require, or nil."
@@ -646,11 +706,13 @@ in the packages directory itself: an .eln's name hashes its source's path."
     v))
 
 (defun drgnx-pkg--pinned-desc (name pin)
-  "A desc for the locked version PIN of NAME: the cache's file, or the archive's when it has that version."
+  "A desc for the locked version PIN of NAME: the archive's when it has that version, the cache's file, or the
+rebuild from its commit (`drgnx-pkg--restore-prepare')."
   (let ((v (version-to-list (plist-get pin :version))))
     (or (seq-find (lambda (d) (equal (package-desc-version d) v)) (alist-get name package-archive-contents))
         (and (plist-get pin :file) (file-exists-p (expand-file-name (plist-get pin :file) (drgnx-package-cache-dir)))
-             (drgnx-pkg--entry-desc name pin)))))
+             (drgnx-pkg--entry-desc name pin))
+        (nth 1 (assq name drgnx-pkg--restored)))))
 
 (defun drgnx-pkg--plan (manifest lock offline upgrade missing &optional pin-failed)
   "The packages to install, dependencies first: descs.  What cannot be had goes on MISSING (a cons
@@ -688,8 +750,7 @@ than V2 needs\")."
                     (memq (car e) locked))
               (if-let* ((d (drgnx-pkg--pinned-desc (car e) (cdr e)))) (add d)
                 (pin-fail (car e) (format "shipped %s no longer served" (plist-get (cdr e) :version)))
-                (miss (car e) (format "the lock pins %s; no archive or cache has it (drgnx upgrade takes the archives' version)"
-                                      (plist-get (cdr e) :version)))))))
+                (miss (car e) (drgnx-pkg--gone-why (car e) (cdr e)))))))
         ;; Each other package on its own: one that cannot be resolved does not stop the others.
         (pcase-dolist (`(,name . ,min) others)
           (let ((want (if min (list name min) (list name))))
@@ -727,8 +788,7 @@ than V2 needs\")."
                                         ((equal (plist-get pin :version) (package-version-join (package-desc-version desc))) desc)
                                         ((drgnx-pkg--pinned-desc name pin))
                                         (t (pin-fail name (format "shipped %s no longer served" (plist-get pin :version)))
-                                           (miss name (format "the lock pins %s; no archive or cache has it (drgnx upgrade takes the archives' version)"
-                                                              (plist-get pin :version)))
+                                           (miss name (drgnx-pkg--gone-why name pin))
                                            nil))))
                               plan)))))
       ;; Nothing whose dependency cannot be had; every package after the packages it requires.
@@ -790,10 +850,13 @@ A failed download or install, a hash mismatch, a busy or unreadable lock is a `d
 changes nothing; packages that cannot be had are reported (the rest is installed, the lock kept).  With no
 lock yet (a new user) and no SEED, the shipped lock (`drgnx-pkg-shipped-lock-file') is copied to the user's
 first; until a sync writes the lock, a shipped pin nobody serves falls back to the archives' version (a
-warning), never a missing package."
+warning), never a missing package.  So do the shipped lock's entries for packages the user's lock lacks (a module
+turned on later).  A version of the user's lock that no archive serves any more is rebuilt from the :commit and :url
+the lock records (`drgnx-pkg--restore-prepare'), else reported missing."
   (let* ((manifest (drgnx-pkg-manifest modules-dir))
          (staging (drgnx-pkg--staging))
-         (missing (list nil)) (drgnx-pkg--warnings nil) lock installed new-entries generation pruned)
+         (missing (list nil)) (drgnx-pkg--warnings nil) (drgnx-pkg--restored nil) (drgnx-pkg--restore-failed nil)
+         lock installed new-entries generation pruned)
     (drgnx-pkg--with-sync-lock
       (unless (or upgrade seed) (drgnx-pkg--start-from-shipped-lock))   ; seeded versions are the user's choice
       (setq lock (drgnx-pkg-read-lock))                 ; unreadable → error before anything changes
@@ -831,6 +894,7 @@ warning), never a missing package."
                 ;; nobody serves (or too old for what needs it) is dropped
                 ;; and package.el resolves the name — from the entry's own archive when it still has the package —
                 ;; then the plan is made again.  Each round drops a pin: at most as many rounds as there are pins.
+                (when plain (drgnx-pkg--restore-prepare names pins soft-names))
                 (while (let* ((m (list (copy-sequence git-missing))) (failed (list nil))
                               (_ (setq plan (drgnx-pkg--plan names pins offline upgrade m failed)))
                               (soft-failed (seq-filter (lambda (f) (memq (car f) soft-names)) (car failed))))
@@ -848,7 +912,9 @@ warning), never a missing package."
                            t)))
                 (dolist (desc plan)
                   (drgnx-pkg--progress "installing %s" (package-desc-full-name desc))
-                  (let ((entry (drgnx-pkg--install desc (alist-get (package-desc-name desc) pins))))
+                  (let ((entry (if-let* ((prep (assq (package-desc-name desc) drgnx-pkg--restored)) ((eq desc (nth 1 prep))))
+                                   (drgnx-pkg--restore-install prep (alist-get (package-desc-name desc) pins))
+                                 (drgnx-pkg--install desc (alist-get (package-desc-name desc) pins)))))
                     (drgnx-pkg--drop-other-versions desc)
                     (push entry new-entries) (push (package-desc-name desc) installed)))
                 (pcase-dolist (`(,name ,why) (reverse dropped))
@@ -869,7 +935,9 @@ warning), never a missing package."
               (let ((p (expand-file-name f staging)))
                 (cond ((file-directory-p p) (delete-directory p t)) ((file-exists-p p) (delete-file p)))))
             (drgnx-pkg--swap-in staging))
-        (when (file-exists-p staging) (delete-directory staging t)))
+        (when (file-exists-p staging) (delete-directory staging t))
+        (dolist (p drgnx-pkg--restored)                 ; the rebuilds not installed (a failed sync, a dependency missing)
+          (ignore-errors (delete-directory (nth 5 p) t))))
       (let ((package-user-dir (drgnx-elpa-dir)) (package-alist nil) (package-directory-list nil))
         (package-load-all-descriptors)
         (drgnx-pkg--native-compile (delq nil (mapcar (lambda (n) (when-let* ((d (drgnx-pkg--installed-desc n))) (package-desc-dir d)))

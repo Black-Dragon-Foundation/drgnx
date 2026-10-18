@@ -107,6 +107,20 @@ package, which installs from its source. Packages install after the packages the
 require. Each archive entry also records its download's size (`:size`), which onboarding uses to say how much it
 would download.
 
+**A locked version the archive no longer serves.** MELPA keeps only its newest build of a package, so a snapshot you
+locked vanishes within days. When an archive's contents carry the commit a version was built from and its repository
+(MELPA's do, and some of GNU ELPA's), the lock records them as `:commit` and `:url` next to the usual entry. If a later
+sync finds that version gone from every archive and from the cache, it rebuilds the package from that commit — the same
+way a [Git package](#packages-from-git) is installed (cloned into the package cache, never asking for a password),
+named with the locked version, so the lock stays as it was and the next sync finds it installed — and prints a `WARNING`
+saying so. Nothing is installed through `package-build`: the files are the repository's, so a package whose MELPA recipe
+picks other files than a plain checkout holds (a `:files` recipe) may not build the same; and MELPA's `:url` is
+sometimes a homepage, not a repository. When the commit cannot be had (no such repository, no such commit) or the lock
+has none (entries written by an older drgnx, until the package is upgraded or installed again), the package is reported
+`MISSING` with the reason, the installed version is kept and the lock stays as it was — it is never silently
+replaced by the archive's version; `drgnx upgrade` is the way to take that. The shipped lock's pins stay soft instead
+(see below): they fall back to the archive's version. `--offline` does not rebuild.
+
 `drgnx sync --offline` installs exactly the lock from the cache: on a new machine, copy the cache and the lock and
 sync without network. A manifest package the lock does not have is reported ("sync online once").
 
@@ -237,7 +251,7 @@ module and refusing entries without a hash or commit, an interrupted first sync 
 pin nobody serves falling back (with a warning, its dependents installed) while a user's own lock still reports it,
 `--seed` keeping the seeded versions, a requirement beyond the lock installed and a locked package a built-in
 satisfies left out (each test has its own shipped lock in a temp dir, never the checkout's). HTTP downloads run against a loopback server in the test
-Emacs itself (a 200 is saved byte for byte; a 404 saves nothing). `test/unit/pkg-shipped-lock-test.el`: the shipped lock as soft pins for a module turned on later (its version, its dependencies, the user's lock winning, an unserved pin falling back, a package installed by hand left alone, no effect on upgrade, `--offline` or `--seed`, a Git package at the shipped commit) and the coverage test (every package a module names is in `etc/drgnx.lock.eld`). `test/unit/pkg-priorities-test.el`: the default archive priorities (an upgrade keeps a NonGNU release over a newer MELPA snapshot, still takes a newer release, a MELPA-only dependency still resolves, a priority of the user's own wins). `test/unit/pkg-git-test.el`: packages from local Git
+Emacs itself (a 200 is saved byte for byte; a 404 saves nothing). `test/unit/pkg-melpa-pin-test.el`: the lock recording an archive's commit and URL, and a version gone from the archive rebuilt from its commit in a local Git repository (also from an empty directory, and before a package that needs it), reported missing and kept when the lock has no commit, the commit cannot be had or the URL is no repository, left alone while the archive serves it, soft for the shipped lock, not attempted offline. `test/unit/pkg-shipped-lock-test.el`: the shipped lock as soft pins for a module turned on later (its version, its dependencies, the user's lock winning, an unserved pin falling back, a package installed by hand left alone, no effect on upgrade, `--offline` or `--seed`, a Git package at the shipped commit) and the coverage test (every package a module names is in `etc/drgnx.lock.eld`). `test/unit/pkg-priorities-test.el`: the default archive priorities (an upgrade keeps a NonGNU release over a newer MELPA snapshot, still takes a newer release, a MELPA-only dependency still resolves, a priority of the user's own wins). `test/unit/pkg-git-test.el`: packages from local Git
 repositories — the commit and dependencies, the lock holding the commit until upgrade, offline from the cached clone,
 a missing `:rev`, no version header, a module's package with drgnx's Git source, an offline first sync naming the Git
 package it could not get and installing the rest.
