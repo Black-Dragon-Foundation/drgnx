@@ -644,12 +644,22 @@ two at once fail on its HEAD (\"cannot lock ref\").")
 (defconst drgnx-job--provider-limit "\\(?:^\\|[^0-9]\\)429\\(?:[^0-9]\\|$\\)\\|rate.?limit\\|overloaded\\|quota\\|too many requests"
   "What a provider at its limit says (case ignored).")
 
+(defun drgnx-job--error-data-text (data)
+  "The text of a JSON-RPC error's DATA, where an agent may put the provider's own error: DATA itself when it is a
+string; of an object, its message, details and reason."
+  (cond ((stringp data) data)
+        ((and (consp data) (keywordp (car data)))
+         (mapconcat (lambda (k) (let ((v (plist-get data k))) (if v (format "%s" v) ""))) '(:message :details :reason) "\n"))
+        (t "")))
+
 (defun drgnx-job--provider-limit-p (s err)
-  "Does ERR (a turn's error) of S — or S's stderr, when the agent died of it — say its provider is at its limit?"
+  "Does ERR (a turn's error) of S — its message or data, or S's stderr, when the agent died of it — say its provider
+is at its limit?"
   (or (eql (plist-get err :code) 429)
       (let ((case-fold-search t))
         (string-match-p drgnx-job--provider-limit
                         (concat (format "%s" (plist-get err :message)) "\n"
+                                (drgnx-job--error-data-text (plist-get err :data)) "\n"
                                 (and (eq (drgnx-agent-session-status s) 'exited) (or (drgnx-agent-session-stderr s) "")))))))
 
 (defun drgnx-job--agent-error (s err)
@@ -736,23 +746,100 @@ reaches the network unseen.")
   '((review :allow (read search think))
     (t :allow (read edit delete move search think execute other)))
   "Per role: the tool kinds allowed without asking (paths inside the worktree, no outward command).  `t': any other
-role.  Everything else — network (fetch), outward commands, paths outside the worktree — goes to the user.")
+role.  Everything else — network (fetch), outward commands, paths outside the worktree, tools of MCP servers other
+than drgnx's own — goes to the user.")
+
+(defconst drgnx-job--own-mcp-servers '("drgnx" "drgnx-search")
+  "drgnx's own MCP servers, the ones drgnx gives an agent's session: the coordination tools (drgnx-coord-mcp.el) and
+the search tool (drgnx-search-mcp.el).")
+
+(defconst drgnx-job--own-mcp-tool
+  (concat "\\`mcp__\\(" (regexp-opt drgnx-job--own-mcp-servers) "\\)__[a-z]+\\(?:_[a-z]+\\)*\\'")
+  "The name of a tool of one of drgnx's own MCP servers (group 1: the server): no `__' after the server's name, so a
+server whose name only starts with drgnx's (`drgnx__x') is not taken for it.")
+
+(defconst drgnx-job--unnamed-tool-titles '("" "Use tool?" "Unknown Tool")
+  "Titles claude-agent-acp gives a tool call whose name it cannot show: what the tool is is unknown.")
+
+(defun drgnx-job--mcp-tool (tool)
+  "Whose MCP tool the ACP TOOL call is: nil when it is none (no name `mcp__…' in `_meta.claudeCode.toolName' or the
+title, no `_meta.claudeCode.mcpServer'); `drgnx' when it is a tool of one of drgnx's own servers — every name it has
+is one of the same server, and the server, when named, is that one as drgnx gave it to the session (source `dynamic';
+a server of the user's configuration says `user', `project', `local', `plugin'…; the adapter drgnx installs names
+none, only the tool); `user' otherwise, for the user's servers and anything that cannot be told apart from one."
+  (let* ((cc (plist-get (plist-get tool :_meta) :claudeCode))
+         (server (plist-get cc :mcpServer))
+         (names (seq-filter #'stringp (list (plist-get cc :toolName) (plist-get tool :title))))
+         (case-fold-search nil)
+         (owners (mapcar (lambda (n) (and (string-match drgnx-job--own-mcp-tool n) (match-string 1 n))) names)))
+    (cond ((and (null server) (not (seq-some (lambda (n) (string-prefix-p "mcp__" n)) names))) nil)
+          ((and (car owners) (seq-every-p (lambda (o) (equal o (car owners))) owners)
+                (or (null server) (and (equal (plist-get server :name) (car owners)) (equal (plist-get server :source) "dynamic"))))
+           'drgnx)
+          (t 'user))))
+
+(defun drgnx-job--agent-config-p (path tree)
+  "Does PATH, inside TREE, configure the agents that work in TREE — a `.claude' directory or anything in it, at any
+depth (settings: a permission mode, allow rules, hooks; skills), or a `.mcp.json' anywhere in TREE?  Once `//', `..'
+and symlinks are resolved; case ignored, for a file system that ignores it.  A PATH that cannot be placed inside TREE
+counts as one (fail closed)."
+  (let* ((true (file-truename (replace-regexp-in-string "\\`//+" "/" (expand-file-name path tree))))
+         (rel (file-relative-name true (file-truename tree)))
+         (case-fold-search t))
+    (or (file-name-absolute-p rel) (string-match-p "\\`\\.\\.\\(?:/\\|\\'\\)" rel)
+        (string-match-p "\\(?:\\`\\|/\\)\\.claude\\(?:/\\|\\'\\)\\|\\(?:\\`\\|/\\)\\.mcp\\.json\\'" rel))))
+
+(defun drgnx-job--names-agent-config-p (line tree)
+  "Does command LINE name the agents' configuration: a `.mcp.json', or a `.claude' (`.claude/', `.claude.json'…) that
+is not just part of the path of TREE itself (the worktree, `…/.claude/worktrees/NAME', with no `..' and no other
+`.claude' after it)?  Case ignored.  Best effort, like `drgnx-job--outward-commands': a shell can build a name unseen."
+  (let ((case-fold-search t) (start 0) (found nil)
+        (own (delete-dups (list (directory-file-name (expand-file-name tree)) (directory-file-name (file-truename tree))))))
+    (if (string-match-p "\\.mcp\\.json" line) t
+      (while (and (not found) (string-match "\\.claude\\(?:[^[:alnum:]_-]\\|\\'\\)" line start))
+        (let ((b (match-beginning 0)))
+          (setq start (1+ b))
+          (unless (seq-some
+                   (lambda (o)                      ; B is in an occurrence of TREE's path that ends there
+                     (let ((p (string-search o line (max 0 (- b (length o))))))
+                       (and p (<= p b) (< b (+ p (length o)))
+                            ;; the path goes on (group 1) to where the word ends
+                            (eq (string-match (concat (regexp-quote o) "\\(/[^[:space:];&|()<>`'\"]*\\)?"
+                                                      "\\(?:[[:space:];&|()<>`'\"]\\|\\'\\)")
+                                              line p)
+                                p)
+                            (let ((rest (or (match-string 1 line) "")))
+                              (not (or (string-search ".." rest) (string-match-p "\\.claude" rest)))))))
+                   own)
+            (setq found t))))
+      found)))
 
 (defun drgnx-job--inside-p (path tree)
   "Is PATH inside TREE, once `..' and symlinks are resolved?"
   (and (stringp path) (file-in-directory-p (file-truename (expand-file-name path tree)) (file-truename tree))))
 
 (defun drgnx-job-policy (role tool tree)
-  "`allow' or `ask': the policy of ROLE (a string) for the ACP TOOL call (its :kind, :title, :locations) of an agent
-working in TREE."
-  (let* ((kind (intern (or (plist-get tool :kind) "other")))
+  "`allow' or `ask': the policy of ROLE (a string) for the ACP TOOL call (its :kind, :title, :locations, :_meta) of an
+agent working in TREE.  A tool of an MCP server other than drgnx's own asks, whatever its kind: the user's servers can
+reach anything (mail, a database).  So does an `other' call whose tool cannot be named, a kind that is not a string,
+and a change to the agents' own configuration in TREE (`.claude/', `.mcp.json'): a permission mode set there would
+hold for every agent that works in TREE after it."
+  (let* ((kind (let ((k (plist-get tool :kind))) (cond ((null k) 'other) ((stringp k) (intern k)))))
          (allowed (plist-get (cdr (or (assq (intern (or role "implement")) drgnx-job-policies) (assq t drgnx-job-policies))) :allow))
          (paths (delq nil (mapcar (lambda (l) (plist-get l :path)) (append (plist-get tool :locations) nil))))
          (case-fold-search nil))
     (cond
+     ((null kind) 'ask)
      ((not (seq-every-p (lambda (p) (drgnx-job--inside-p p tree)) paths)) 'ask)
+     ((and (not (memq kind '(read search))) (seq-some (lambda (p) (drgnx-job--agent-config-p p tree)) paths)) 'ask)
+     ((eq (drgnx-job--mcp-tool tool) 'user) 'ask)
+     ((and (eq kind 'other)
+           (not (seq-some (lambda (n) (and (stringp n) (not (member n drgnx-job--unnamed-tool-titles))))
+                          (list (plist-get tool :title) (plist-get (plist-get (plist-get tool :_meta) :claudeCode) :toolName)))))
+      'ask)
      ((and (eq kind 'execute)
-           (string-match-p drgnx-job--outward-commands (concat (or (plist-get tool :title) "") "\n" (drgnx-job--command tool))))
+           (let ((line (concat (or (plist-get tool :title) "") "\n" (drgnx-job--command tool))))
+             (or (string-match-p drgnx-job--outward-commands line) (drgnx-job--names-agent-config-p line tree))))
       'ask)
      ((memq kind allowed) 'allow)
      ;; a reviewer reads the diff
@@ -977,7 +1064,7 @@ its worktree done at once; anything else waits for the user as a card (nil: the 
          ;; an absolute path only: the check and the write must mean the same file
          (let ((path (plist-get params :path)) (content (plist-get params :content)))
            (if (and (stringp content) (drgnx-agents--path-ok-p path) (drgnx-job--inside-p path tree)
-                    (not (equal (drgnx-job--role s) "review")))
+                    (not (drgnx-job--agent-config-p path tree)) (not (equal (drgnx-job--role s) "review")))
                (progn (make-directory (file-name-directory path) t)
                       (let ((coding-system-for-write 'utf-8-unix)) (write-region content nil path nil 'silent))
                       (list :result nil))
