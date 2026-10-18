@@ -384,6 +384,17 @@ Check This Terminal (`ui/terminal`) runs the same group with the selected termin
 client's environment. A detail of several lines (the key table) is printed indented. See
 [terminal.md](../guide/terminal.md#check-this-terminal).
 
+`claude-adapter` (group Tools): the fact is `drgnx-agents-claude-adapter` (`drgnx-agents.el`), the adapter that the
+claude profiles would run, with the name, version and npm prefix read from the `package.json` it links into. The
+adapter is never run. The judgement is `drgnx-agents-adapter-problem`, the same one the onboarding Agents step and
+the agent start use. The maintained package at `drgnx-agents-claude-min-version` (0.93.0) or newer is OK. The
+deprecated `@zed-industries/claude-agent-acp`, an older version, or a program of no known package is WARN. The fix
+is an npm command in the adapter's own global prefix, or `drgnx-agents-adapter-advice` when there is none (pnpm,
+volta, a project's `node_modules`). None is INFO. A `package.json` is read only when it is a regular file of at most
+64 KiB (`drgnx-agents--package-json-max`; a FIFO would block the read); otherwise it is no known package. A
+pre-release version is compared without its `-…`/`+…` suffix. Tests: `test/unit/doctor-test.el` and
+`test/unit/agents-adapter-test.el`.
+
 ## Tests
 
 Batch: `test/unit/core-*-test.el`. The batch runner (`harness/run-ert.el`) gives the suite a temp HOME and drgnx
