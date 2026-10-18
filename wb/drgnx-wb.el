@@ -110,10 +110,16 @@ It is `explorer' unless another view with sections was chosen (a stale choice fa
     (when (memq (selected-window) windows) (drgnx-wb-focus-editor))
     (dolist (w windows) (when (window-live-p w) (delete-window w)))))
 
+(defvar drgnx-wb-view-providers nil
+  "Alist VIEW → function that defines VIEW's sections now.  A module that sets up at idle registers one when its file
+loads, so the view's key works before then (`drgnx-wb-show-view' calls it when VIEW has no sections).")
+
 (defun drgnx-wb-show-view (view)
   "Show only VIEW's sections in the left dock, swapping them in place at the same width.
 Focus stays where it was (a focus in the dock moves to the new view's first section); a hidden
 sidebar is shown first.  A view with no sections is a `user-error' and changes nothing."
+  (unless (drgnx-wb--view-defined-p view)
+    (when-let* ((provide (alist-get view drgnx-wb-view-providers))) (funcall provide)))
   (unless (drgnx-wb--view-defined-p view) (user-error "No %s view" view))
   (let ((in-dock (memq (selected-window) (drgnx-wb--dock-windows))))
     (unless (and (eq view (drgnx-wb-sidebar-view)) (drgnx-wb-sidebar-showing-p))

@@ -173,3 +173,15 @@
      (should-not seen)                                  ; showing is not focusing
      (call-interactively #'drgnx-wb-view-search)
      (should (equal seen (list (drgnx-wb-section-window 'search)))))))
+
+(ert-deftest drgnx-wb-views/a-view-not-set-up-yet-is-set-up-when-asked-for ()
+  ;; A module that sets up at idle can provide its view at once: the first View: Search before then sets it up.
+  (drgnx-wb-views-test--with-real-names
+   (setq drgnx-wb--sections (assq-delete-all 'search drgnx-wb--sections))
+   (let ((drgnx-wb-view-providers
+          (list (cons 'search (lambda () (drgnx-wb-define-section 'search :slot 0 :view 'search :title "SEARCH"
+                                                                  :buffer (lambda () (get-buffer-create "*drgnx-views-search*"))))))))
+     (call-interactively #'drgnx-wb-view-search)
+     (should (eq (drgnx-wb-sidebar-view) 'search))
+     (should (eq (selected-window) (drgnx-wb-section-window 'search)))
+     (should-error (drgnx-wb-show-view 'ghost) :type 'user-error))))

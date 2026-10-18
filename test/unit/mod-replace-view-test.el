@@ -170,6 +170,21 @@ bar's keymaps), one editor window, no view or bar left over."
       (with-current-buffer (drgnx-replace-view-test--view)
         (should (eq (widget-field-at (window-point w)) (drgnx-replace--widget 'find)))))))
 
+(ert-deftest drgnx-replace/view-search-before-the-module-set-up ()
+  ;; C-S-f in the first second (the module sets up at idle): the view is set up then, not "No search view".
+  (drgnx-replace-view-test--with
+    (setq drgnx-wb--sections nil)
+    (cl-letf (((symbol-function 'drgnx-module-disabled-p) (lambda (_) nil)))
+      (call-interactively #'drgnx-wb-view-search))
+    (should (eq (selected-window) (drgnx-wb-section-window 'search)))
+    (with-current-buffer (drgnx-replace-view-test--view)
+      (should (eq (widget-field-at (point)) (drgnx-replace--widget 'find)))))
+  ;; the module turned off: no view
+  (drgnx-replace-view-test--with
+    (setq drgnx-wb--sections nil)
+    (cl-letf (((symbol-function 'drgnx-module-disabled-p) (lambda (m) (eq m 'tools/replace))))
+      (should-error (call-interactively #'drgnx-wb-view-search) :type 'user-error))))
+
 (ert-deftest drgnx-replace/ticks-choose-what-is-written ()
   (drgnx-replace-view-test--with
     (drgnx-git-test-with-repo

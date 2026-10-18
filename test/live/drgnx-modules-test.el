@@ -46,9 +46,7 @@
     ;; Emacs 31 caches "no project here" (the chrome asked when the file opened): forget it after git init.
     (drgnx-live-mod--q sess "(progn (call-process \"git\" nil nil nil \"-C\" (file-name-directory (buffer-file-name (window-buffer (drgnx-wb-editor-window)))) \"init\" \"-q\") (when (fboundp 'project--clear-cache) (project--clear-cache)) (select-window (drgnx-wb-editor-window)) t)")
     ;; C-S-f is View: Search (VS Code's Ctrl+Shift+F): the Search view, the cursor in its Find field; RET searches.
-    ;; The view's module sets up once Emacs has been idle a second, which keys sent back to back never leave it.
-    (let ((d (+ (float-time) 10)))
-      (while (and (not (drgnx-live-mod--q sess "(drgnx-modules--ok-p 'tools/replace)")) (< (float-time) d)) (sleep-for 0.2)))
+    ;; Its module sets up at idle, which keys sent back to back never leave Emacs: the view is set up when asked for.
     (drgnx-ui-measure sess (list (list :keys "C-S-f") (list :type "list") (list :keys "RET")))
     (should (eq (drgnx-live-mod--q sess "(drgnx-wb-sidebar-view)") 'search))
     (should (drgnx-live-mod--q sess "(let ((d (+ (float-time) 10)) (v (get-buffer drgnx-replace-buffer-name)))

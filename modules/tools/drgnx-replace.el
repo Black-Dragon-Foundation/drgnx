@@ -689,6 +689,14 @@ next match, or replace it in the Replace field.")
                            :on-show (lambda (_w) (drgnx-replace--on-show))
                            :on-focus #'drgnx-replace--focus-find))
 
+(defun drgnx-replace--provide-view ()
+  "View: Search before the module set up (it does at idle): set it up now, unless the module is off."
+  (unless (drgnx-module-disabled-p 'tools/replace)
+    (drgnx-replace--define-section)
+    (drgnx-replace--define-commands)))
+
+(setf (alist-get 'search drgnx-wb-view-providers) #'drgnx-replace--provide-view)
+
 (defun drgnx-replace--focus-find (window)
   "The Search view focused in WINDOW by its key (VS Code's Ctrl+Shift+F): point in the find field."
   (with-current-buffer (window-buffer window)
