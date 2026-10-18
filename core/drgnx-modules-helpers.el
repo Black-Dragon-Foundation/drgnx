@@ -10,6 +10,8 @@
 ;; make the change.  See docs/develop/core.md, "Modules".
 
 ;;; Code:
+(require 'cl-lib)
+(require 'seq)
 (require 'drgnx-modules-record)
 
 (defun drgnx-module--set-option (var value)
@@ -173,10 +175,7 @@ be torn down in either order."
 
 ;;; Hooks and advice: named functions, paired with their removal
 
-(defvar drgnx-module--in-helper nil
-  "Non-nil (dynamically bound) while a paired helper itself calls `add-hook' or `advice-add'.
-The safety net that records raw `add-hook' and `advice-add' calls during a setup skips them: the
-helper already made the claim, and a second, unconditional undo would break the either-order rule.")
+(defvar drgnx-module--in-helper)   ; defined in drgnx-modules-record, which the recording net reads
 
 (defvar drgnx-module--releasers (make-hash-table :test 'equal)
   "(MODULE . TARGET) → the release functions of that module's live claims, newest first.
@@ -230,46 +229,101 @@ When it made none, run REMOVE unless another claim stands."
   (dolist (h (if (listp hook) hook (list hook)))
     (drgnx-module--paired-remove module (list 'hook h fn) (lambda () (remove-hook h fn)))))
 
-(defun drgnx-module--advice-add (symbol how fn name)
-  "Advise SYMBOL with FN (named NAME); see `drgnx-module--paired-add'."
+(defun drgnx-module--advice-add (symbol how fn)
+  "Advise SYMBOL with FN, named by it (the name is module-qualified); see `drgnx-module--paired-add'."
   (drgnx-module--paired-add
    (list 'advice symbol fn) (format "advice %s %s" symbol fn)
    (lambda () (and (advice-member-p fn symbol) t))
-   (lambda () (advice-add symbol how fn `((name . ,name))))
+   (lambda () (advice-add symbol how fn `((name . ,fn))))
    (lambda () (advice-remove symbol fn))))
 
 (defun drgnx-module--advice-remove (symbol fn module)
   "Remove FN from SYMBOL's advice for MODULE now."
   (drgnx-module--paired-remove module (list 'advice symbol fn) (lambda () (advice-remove symbol fn))))
 
-(defvar drgnx-module--file-modules (make-hash-table :test 'equal) "File → the module its `drgnx-module-define' names.")
+(defvar drgnx-module--file-scans (make-hash-table :test 'equal)
+  "File → (MTIME MODULE . NAMES): what a scan of the file found; renewed when the file's mtime changes.")
+
+(defun drgnx-module--parse (body)
+  "Split BODY into leading `:module' and `:depth' pairs and the rest: (OPTIONS . REST).
+OPTIONS is a plist; a `:module' value loses its quote."
+  (let (opts)
+    (while (memq (car-safe body) '(:module :depth))
+      (setq opts (plist-put opts (car body) (cadr body)) body (cddr body)))
+    (when (eq (car-safe (plist-get opts :module)) 'quote)
+      (setq opts (plist-put opts :module (cadr (plist-get opts :module)))))
+    (cons opts body)))
+
+(defun drgnx-module--scan-forms (form module acc)
+  "Collect into ACC (a cons holding a list, newest first) the function name of each hook or advice macro
+call in FORM that is MODULE's; return ACC."
+  (when (consp form)
+    (let* ((kind (car form))
+           (name (and (memq kind '(drgnx-module-hook drgnx-module-advice))
+                      (nth (if (eq kind 'drgnx-module-hook) 2 3) form))))
+      (when (and name (symbolp name))
+        (let* ((opts (car (drgnx-module--parse (nthcdr (if (eq kind 'drgnx-module-hook) 4 5) form))))
+               (m (or (plist-get opts :module) module)))
+          (when (eq m module) (push (drgnx-module--function-name m name) (car acc))))))
+    (while (consp form)
+      (drgnx-module--scan-forms (car form) module acc)
+      (setq form (cdr form))))
+  acc)
+
+(defun drgnx-module--scan (file)
+  "What FILE's forms say: (MTIME MODULE . FUNCTIONS) where MODULE is its `drgnx-module-define' (nil
+when none) and FUNCTIONS the names its hook and advice macros define for that module.  Read, never
+run; cached by mtime."
+  (let ((mtime (file-attribute-modification-time (file-attributes file)))
+        (hit (gethash file drgnx-module--file-scans)))
+    (if (and hit (equal (car hit) mtime))
+        hit
+      (let ((forms nil) (module nil))
+        (with-temp-buffer
+          (insert-file-contents file)
+          (goto-char (point-min))
+          (condition-case nil
+              (while t (push (read (current-buffer)) forms))
+            (error nil)))                 ; end of file, or a form the reader cannot take: stop there
+        (setq forms (nreverse forms))
+        (dolist (f forms)
+          (when (and (not module) (eq (car-safe f) 'drgnx-module-define))
+            (let ((n (cadr f)))
+              (setq module (if (eq (car-safe n) 'quote) (cadr n) n)))))
+        (let ((acc (list nil)))
+          (when module (drgnx-module--scan-forms forms module acc))
+          (puthash file (cl-list* mtime module (car acc)) drgnx-module--file-scans))))))
+
+(defun drgnx-module--file ()
+  "The file being loaded or compiled, or nil."
+  (or (macroexp-file-name) (bound-and-true-p byte-compile-current-file) load-file-name buffer-file-name))
 
 (defun drgnx-module--file-module ()
-  "The module the file being loaded or compiled defines, read from its `drgnx-module-define'."
-  (let ((file (or (macroexp-file-name) byte-compile-current-file load-file-name buffer-file-name)))
-    (or (and file (gethash file drgnx-module--file-modules))
-        (let ((found (and file (file-readable-p file)
-                          (with-temp-buffer
-                            (insert-file-contents file)
-                            (and (re-search-forward "(drgnx-module-define[ \t\n]+'\\([^ \t\n()]+\\)" nil t)
-                                 (intern (match-string 1)))))))
-          (unless found
-            (error "Cannot tell the module of %s: give `:module NAME' (the file has no drgnx-module-define)" file))
-          (puthash file found drgnx-module--file-modules)))))
-
-(defun drgnx-module--options (body)
-  "Split BODY into leading `:module' and `:depth' pairs and the rest: (MODULE DEPTH . REST).
-MODULE is a symbol (an optional quote is dropped); it defaults to the file's module."
-  (let (module depth)
-    (while (memq (car-safe body) '(:module :depth))
-      (if (eq (car body) :module) (setq module (cadr body)) (setq depth (cadr body)))
-      (setq body (cddr body)))
-    (when (eq (car-safe module) 'quote) (setq module (cadr module)))
-    `(,(or module (drgnx-module--file-module)) ,depth . ,body)))
+  "The module the file being loaded or compiled defines (`drgnx-module-define'), else an error."
+  (let* ((file (drgnx-module--file))
+         (module (and file (file-readable-p file) (cadr (drgnx-module--scan file)))))
+    (or module
+        (error "Cannot tell the module of %s: give `:module NAME' (the file has no drgnx-module-define)" file))))
 
 (defun drgnx-module--function-name (module name)
   "The symbol `drgnx-MODULE--NAME', the named function a helper defines."
+  (unless (and name (symbolp name))
+    (error "A hook or advice NAME is a plain symbol, not %S" name))
   (intern (format "drgnx-%s--%s" module name)))
+
+(defun drgnx-module--unique-function (module name)
+  "The function `drgnx-MODULE--NAME'; an error when this module's file uses NAME for two helpers."
+  (let* ((fn (drgnx-module--function-name module name))
+         (file (drgnx-module--file))
+         (scan (and file (file-readable-p file) (drgnx-module--scan file))))
+    (when (and scan (eq (cadr scan) module) (> (seq-count (lambda (f) (eq f fn)) (cddr scan)) 1))
+      (error "%s is defined by more than one hook or advice helper in %s: give each a NAME of its own" fn file))
+    fn))
+
+(defun drgnx-module--resolve (body)
+  "Parse BODY's leading options: (MODULE OPTIONS . REST), MODULE defaulting to the file's."
+  (let ((parsed (drgnx-module--parse body)))
+    (cl-list* (or (plist-get (car parsed) :module) (drgnx-module--file-module)) (car parsed) (cdr parsed))))
 
 (defmacro drgnx-module-hook (hook name arglist &rest body)
   "Define `drgnx-<module>--NAME' as (lambda ARGLIST BODY...) and add it to HOOK; the undo removes it.
@@ -277,36 +331,41 @@ HOOK is evaluated: a hook symbol, or a list of them.  The module is the one the 
 `drgnx-module-define' names, or `:module NAME' (a symbol) first in BODY; `:depth N' there is
 passed to `add-hook'.  Running it again changes nothing.  The undo removes the function only when
 no other claim on it stands (two modules adding the same function tear down in either order), and
-keeps it when it was on the hook before.  `drgnx-module-unhook' removes it early."
+keeps it when it was on the hook before.  NAME is used once per module file (an error otherwise).
+`drgnx-module-unhook' removes it early."
   (declare (indent 3) (debug (form symbolp sexp body)))
-  (pcase-let* ((`(,module ,depth . ,rest) (drgnx-module--options body))
-               (fn (drgnx-module--function-name module name)))
+  (pcase-let* ((`(,module ,opts . ,rest) (drgnx-module--resolve body))
+               (fn (drgnx-module--unique-function module name)))
     `(progn (defun ,fn ,arglist ,@rest)
-            (drgnx-module--hook-add ,hook ',fn ,depth))))
+            (drgnx-module--hook-add ,hook ',fn ,(plist-get opts :depth)))))
 
 (defmacro drgnx-module-unhook (hook name &rest options)
   "Remove the function `drgnx-module-hook' defined as NAME from HOOK (each, when a list) now.
 OPTIONS: `:module NAME' as for `drgnx-module-hook'.  The module's own claim is dropped, so its
 teardown has nothing left to do; another module's claim keeps the function on the hook."
   (declare (indent 2) (debug (form symbolp &rest sexp)))
-  (pcase-let ((`(,module) (drgnx-module--options options)))
+  (pcase-let ((`(,module ,_opts . ,rest) (drgnx-module--resolve options)))
+    (when rest (error "drgnx-module-unhook: only :module may follow NAME, not %S" rest))
     `(drgnx-module--hook-remove ,hook ',(drgnx-module--function-name module name) ',module)))
 
 (defmacro drgnx-module-advice (symbol how name arglist &rest body)
   "Define `drgnx-<module>--NAME' as (lambda ARGLIST BODY...) and advise SYMBOL with it, HOW.
-SYMBOL and HOW are evaluated.  The advice is named NAME (`advice-add' property).  Module, claims and
+SYMBOL and HOW are evaluated.  The advice is named by the function (`advice-add' name property), so
+equal NAMEs of two modules do not replace each other.  `:depth' is refused.  Module, claims and
 undo as for `drgnx-module-hook'; `drgnx-module-unadvise' removes it early."
   (declare (indent 4) (debug (form form symbolp sexp body)))
-  (pcase-let* ((`(,module ,_depth . ,rest) (drgnx-module--options body))
-               (fn (drgnx-module--function-name module name)))
+  (pcase-let* ((`(,module ,opts . ,rest) (drgnx-module--resolve body))
+               (fn (drgnx-module--unique-function module name)))
+    (when (plist-member opts :depth) (error "drgnx-module-advice takes no :depth (use `advice-add' props yourself)"))
     `(progn (defun ,fn ,arglist ,@rest)
-            (drgnx-module--advice-add ,symbol ,how ',fn ',name))))
+            (drgnx-module--advice-add ,symbol ,how ',fn))))
 
 (defmacro drgnx-module-unadvise (symbol name &rest options)
   "Remove the advice `drgnx-module-advice' defined as NAME from SYMBOL now.
 OPTIONS: `:module NAME'.  See `drgnx-module-unhook'."
   (declare (indent 2) (debug (form symbolp &rest sexp)))
-  (pcase-let ((`(,module) (drgnx-module--options options)))
+  (pcase-let ((`(,module ,_opts . ,rest) (drgnx-module--resolve options)))
+    (when rest (error "drgnx-module-unadvise: only :module may follow NAME, not %S" rest))
     `(drgnx-module--advice-remove ,symbol ',(drgnx-module--function-name module name) ',module)))
 
 (provide 'drgnx-modules-helpers)

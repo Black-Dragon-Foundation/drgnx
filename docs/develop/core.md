@@ -194,10 +194,12 @@ AGENTS.md asks of every global hook and advice ("named, with an owner", no lambd
 (drgnx-module-unhook 'find-file-hook maybe)           ; early, e.g. when a mode turns off
 ```
 
-- The function is `drgnx-<module>--<NAME>`, the module being the one the file's `drgnx-module-define` names (read from
-  the file at macro-expansion time) or `:module NAME` (a symbol) first in the body. `:depth N` there goes to
-  `add-hook`. HOOK is evaluated: a symbol or a list of symbols. The advice is also named `NAME` (the `advice-add`
-  property); SYMBOL and HOW are evaluated.
+- The function is `drgnx-<module>--<NAME>`, the module being the one the file's `drgnx-module-define` names (the
+  file's forms are read at macro-expansion time, so comments and strings never count; cached by the file's mtime) or
+  `:module NAME` (a symbol) first in the body. NAME is a plain symbol and is used once per module file: the same
+  NAME for two helpers is an error at expansion. `:depth N` goes to `add-hook` (`drgnx-module-advice` refuses it).
+  HOOK is evaluated: a symbol or a list of symbols; SYMBOL and HOW of an advice are evaluated. The advice is named
+  by its function (`advice-add` name property), so equal NAMEs in two modules never replace each other.
 - Running a helper again changes nothing. The undo takes the function off only when no claim on it is left: the
   helpers use the claims of the section above (target: the hook and the function, or the advised symbol and the
   function), so two modules adding the same named function tear down in either order, and a function that was on
@@ -206,7 +208,8 @@ AGENTS.md asks of every global hook and advice ("named, with an owner", no lambd
   place. Outside a setup the helper adds and records nothing; a name is a symbol, never a lambda.
 - The safety net of the cleanup stack records raw `add-hook` and `advice-add` calls a setup makes. It skips the
   helpers' own calls: `drgnx-module--in-helper` is bound to non-nil while a helper calls them, and the net's
-  `:around` advice records nothing then. A raw call is a fallback; use the helper.
+  `:around` advice records nothing then (the variable is defined in `drgnx-modules-record.el`, where the net
+  reads it). A raw call is a fallback; use the helper.
 
 ## Build (`drgnx-build.el`)
 

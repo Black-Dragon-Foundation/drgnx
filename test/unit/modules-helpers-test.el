@@ -489,20 +489,69 @@
        (dolist (w (get-variable-watchers 'drgnx-modules-helpers-test--hook))
          (remove-variable-watcher 'drgnx-modules-helpers-test--hook w))))))
 
+;; A module file for the lookup tests: CONTENT written to a temp file, then BODY with it as the file being loaded.
+(defmacro drgnx-modules-helpers-test--in-file (content &rest body)
+  (declare (indent 1))
+  `(let ((file (make-temp-file "drgnx-hook-test" nil ".el" ,content)))
+     (unwind-protect (let ((load-file-name file)) ,@body)
+       (delete-file file))))
+
+(defun drgnx-modules-helpers-test--expanded-name (&optional form)
+  "The function name the hook macro defines for FORM, expanded in the file being loaded."
+  (cadr (cadr (macroexpand (or form '(drgnx-module-hook 'h greet () nil))))))
+
 (ert-deftest drgnx-module-hook/the-module-comes-from-the-files-module-define ()
-  (let ((file (make-temp-file "drgnx-hook-test" nil ".el" "(drgnx-module-define 'editor/zed\n :doc \"x\")\n")))
-    (unwind-protect
-        (let ((load-file-name file))
-          (should (equal (cadr (macroexpand '(drgnx-module-hook 'h greet () nil)))
-                         '(defun drgnx-editor/zed--greet () nil))))
-      (delete-file file))))
+  (drgnx-modules-helpers-test--in-file "(drgnx-module-define 'editor/zed\n :doc \"x\")\n"
+    (should (equal (cadr (macroexpand '(drgnx-module-hook 'h greet () nil)))
+                   '(defun drgnx-editor/zed--greet () nil)))))
+
+(ert-deftest drgnx-module-hook/the-module-ignores-comments-and-strings ()
+  (drgnx-modules-helpers-test--in-file
+      ";; (drgnx-module-define 'wrong/commented\n(defvar x \"(drgnx-module-define 'wrong/string\")\n(drgnx-module-define (quote editor/zed) :doc \"x\")\n"
+    (should (equal (cadr (macroexpand '(drgnx-module-hook 'h greet () nil)))
+                   '(defun drgnx-editor/zed--greet () nil)))))
 
 (ert-deftest drgnx-module-hook/no-module-is-an-error ()
-  (let ((file (make-temp-file "drgnx-hook-test" nil ".el" ";; no module here\n")))
-    (unwind-protect
-        (let ((load-file-name file))
-          (should-error (macroexpand '(drgnx-module-hook 'h greet () nil))))
-      (delete-file file))))
+  (drgnx-modules-helpers-test--in-file ";; no module here\n(message \"(drgnx-module-define 'x)\")\n"
+    (let ((err (should-error (macroexpand '(drgnx-module-hook 'h greet () nil)) :type 'error)))
+      (should (string-match-p "Cannot tell the module" (error-message-string err))))))
+
+(ert-deftest drgnx-module-hook/a-renamed-module-is-seen-after-the-file-changes ()
+  (drgnx-modules-helpers-test--in-file "(drgnx-module-define 'editor/one)\n"
+    (should (eq (drgnx-modules-helpers-test--expanded-name) 'drgnx-editor/one--greet))
+    (with-temp-file load-file-name (insert "(drgnx-module-define 'editor/two)\n"))
+    (set-file-times load-file-name (time-add (current-time) 5))
+    (should (eq (drgnx-modules-helpers-test--expanded-name) 'drgnx-editor/two--greet))))
+
+(ert-deftest drgnx-module-hook/the-same-name-twice-in-a-module-is-an-error ()
+  (drgnx-modules-helpers-test--in-file
+      "(drgnx-module-define 'editor/zed)\n(defun setup () (drgnx-module-hook 'a greet () 1) (drgnx-module-advice 'f :around greet (o) 2))\n"
+    (should (string-match-p "more than one"
+                            (error-message-string
+                             (should-error (macroexpand '(drgnx-module-hook 'a greet () 1)) :type 'error))))
+    (should (string-match-p "more than one"
+                            (error-message-string
+                             (should-error (macroexpand '(drgnx-module-advice 'f :around greet (o) 2)) :type 'error))))))
+
+(ert-deftest drgnx-module-hook/different-names-in-a-module-are-fine ()
+  (drgnx-modules-helpers-test--in-file
+      "(drgnx-module-define 'editor/zed)\n(defun setup () (drgnx-module-hook 'a one () 1) (drgnx-module-hook 'a two () 2))\n"
+    (should (eq (drgnx-modules-helpers-test--expanded-name '(drgnx-module-hook 'a one () 1))
+                'drgnx-editor/zed--one))))
+
+(ert-deftest drgnx-module-hook/a-quoted-name-is-an-error ()
+  (should-error (macroexpand '(drgnx-module-hook 'h 'greet () :module test/h nil)) :type 'error))
+
+(ert-deftest drgnx-module-hook/unhook-at-runtime-after-the-setup ()
+  (drgnx-modules-helpers-test--clean
+   (drgnx-modules-helpers-test--in-setup
+    (drgnx-module-hook 'drgnx-modules-helpers-test--hook greet () :module test/h nil)
+    (let ((drgnx-modules--current nil))             ; the setup is over
+      (drgnx-module-unhook 'drgnx-modules-helpers-test--hook greet :module test/h))
+    (should-not drgnx-modules-helpers-test--hook)
+    (should (zerop (hash-table-count drgnx-module--claims)))
+    (drgnx-modules-helpers-test--undo)
+    (should-not drgnx-modules-helpers-test--hook))))
 
 (ert-deftest drgnx-module-advice/is-named-and-removed ()
   (drgnx-modules-helpers-test--clean
@@ -511,11 +560,30 @@
       :module test/h (list 'wrapped r))
     (should (equal (drgnx-modules-helpers-test--target 1) '(wrapped (target 1))))
     (should (advice-member-p 'drgnx-test/h--wrap 'drgnx-modules-helpers-test--target))
-    (should (advice-member-p 'wrap 'drgnx-modules-helpers-test--target))
     (drgnx-modules-helpers-test--undo)
     (should-not (advice-member-p 'drgnx-test/h--wrap 'drgnx-modules-helpers-test--target))
     (should (equal (drgnx-modules-helpers-test--target 1) '(target 1)))
     (should (zerop (hash-table-count drgnx-module--claims))))))
+
+(ert-deftest drgnx-module-advice/two-modules-one-name-keep-both ()
+  ;; The advice name is the generated function name, so equal NAMEs of two modules do not replace each other.
+  (drgnx-modules-helpers-test--clean
+   (drgnx-modules-helpers-test--two-modules
+    (drgnx-modules-helpers-test--as 'a
+      (drgnx-module-advice 'drgnx-modules-helpers-test--target :filter-return refresh (r)
+        :module test/a (list 'a r)))
+    (drgnx-modules-helpers-test--as 'b
+      (drgnx-module-advice 'drgnx-modules-helpers-test--target :filter-return refresh (r)
+        :module test/b (list 'b r)))
+    (should (advice-member-p 'drgnx-test/a--refresh 'drgnx-modules-helpers-test--target))
+    (should (advice-member-p 'drgnx-test/b--refresh 'drgnx-modules-helpers-test--target))
+    (drgnx-modules-helpers-test--down 'a)
+    (should-not (advice-member-p 'drgnx-test/a--refresh 'drgnx-modules-helpers-test--target))
+    (should (advice-member-p 'drgnx-test/b--refresh 'drgnx-modules-helpers-test--target)))))
+
+(ert-deftest drgnx-module-advice/depth-is-refused ()
+  (should-error (macroexpand '(drgnx-module-advice 'f :around wrap (o) :depth 50 :module test/h nil))
+                :type 'error))
 
 (ert-deftest drgnx-module-advice/unadvise-removes-early-and-twice-is-once ()
   (drgnx-modules-helpers-test--clean
