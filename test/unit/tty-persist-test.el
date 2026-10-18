@@ -51,23 +51,35 @@ window (its terminal is \"/dev/pts/9\").  `messages' collects what `message' say
         (should (equal (tty-persist-test--bytes drgnx-persist-file) bytes))
         (should (equal (file-attribute-modification-time (file-attributes drgnx-persist-file)) mtime))))))
 
-(ert-deftest drgnx-persist/a-terminal-restore-goes-to-the-first-graphical-frame ()
+(ert-deftest drgnx-persist/a-terminal-restore-never-touches-a-graphical-frame ()
+  ;; a command typed in a terminal must not replace or focus a desktop window, which restores itself
   (tty-persist-test--with dir
-    (let (restored-in)
-      (tty-persist-test--write drgnx-persist-file '(:version 2 :frames ((:role main :groups ((:tabs nil))))))
-      (cl-letf (((symbol-function 'drgnx-persist--gui-frame) (lambda () 'gui-frame))
-                ((symbol-function 'select-frame) (lambda (f &optional _) (push f selected) f))
-                ((symbol-function 'frame-live-p) (lambda (f) (and f t)))
-                ((symbol-function 'drgnx-persist--restore-frame) (lambda (_st) (setq restored-in (car selected))))
-                ((symbol-function 'drgnx-wb-area-hide) #'ignore))
-        (should (drgnx-persist-restore))
-        (should (eq restored-in 'gui-frame))
-        (should-not messages)))))
+    (tty-persist-test--write drgnx-persist-file '(:version 2 :frames ((:role main :groups ((:tabs nil))))))
+    (cl-letf (((symbol-function 'drgnx-persist--gui-frame) (lambda () 'gui-frame))
+              ((symbol-function 'select-frame) (lambda (f &optional _) (push f selected) f))
+              ((symbol-function 'drgnx-persist--restore-frame) (lambda (_st) (error "restored"))))
+      (should-not (drgnx-persist-restore))
+      (should-not selected)
+      (should (equal messages (list tty-persist-test--message))))))
+
+(defmacro tty-persist-test--with-home (dir &rest body)
+  "Like `tty-persist-test--with', but the selected frame is on the initial terminal (batch Emacs's, a daemon's
+first), so no terminal guard applies."
+  (declare (indent 1))
+  `(let* ((,dir (file-name-as-directory (make-temp-file "drgnx-tty-persist" t)))
+          (drgnx-persist-file (expand-file-name "state.eld" ,dir))
+          (drgnx-persist--pending nil) messages selected)
+     (unwind-protect
+         (cl-letf (((symbol-function 'message)
+                    (lambda (fmt &rest args) (push (apply #'format fmt args) messages) nil))
+                   ((symbol-function 'select-frame-set-input-focus) #'ignore))
+           ,@body)
+       (delete-directory ,dir t))))
 
 (ert-deftest drgnx-persist/a-job-window-restores-onto-the-graphical-display ()
   ;; M9b4-16: the function that rebuilds the window runs with the graphical frame selected, so the window is made
-  ;; on that display, never laid out over the terminal's frame.
-  (tty-persist-test--with dir
+  ;; on that display, never laid out over a text frame.
+  (tty-persist-test--with-home dir
     (let (rebuilt-in)
       (tty-persist-test--write drgnx-persist-file '(:version 2 :frames ((:role custom :restore (tty-persist-test--rebuild "j1")))))
       (cl-letf (((symbol-function 'tty-persist-test--rebuild) (lambda (&rest _) (setq rebuilt-in (car selected)) nil))
@@ -78,29 +90,21 @@ window (its terminal is \"/dev/pts/9\").  `messages' collects what `message' say
         (should (eq rebuilt-in 'gui-frame))
         (should-not messages)))))
 
-(ert-deftest drgnx-persist/a-job-window-restores-onto-the-graphical-display-from-the-daemons-own-frame ()
-  ;; the daemon's first frame is on the initial terminal: no terminal window, but no display either
-  (let ((dir (file-name-as-directory (make-temp-file "drgnx-tty-persist" t))) rebuilt-in selected)
-    (unwind-protect
-        (let ((drgnx-persist-file (expand-file-name "state.eld" dir)))
-          (tty-persist-test--write drgnx-persist-file '(:version 2 :frames ((:role custom :restore (tty-persist-test--rebuild "j1")))))
-          (cl-letf (((symbol-function 'tty-persist-test--rebuild) (lambda (&rest _) (setq rebuilt-in (car selected)) nil))
-                    ((symbol-function 'drgnx-persist--gui-frame) (lambda () 'gui-frame))
-                    ((symbol-function 'select-frame) (lambda (f &optional _) (push f selected) f))
-                    ((symbol-function 'frame-live-p) (lambda (f) (and f t)))
-                    ((symbol-function 'select-frame-set-input-focus) #'ignore))
-            (should (drgnx-persist-restore))
-            (should (eq rebuilt-in 'gui-frame))))
-      (delete-directory dir t))))
-
 (ert-deftest drgnx-persist/a-job-window-without-a-graphical-display-is-skipped ()
-  (tty-persist-test--with dir
+  ;; no graphical frame: the window is not laid out over the frame there is, and the message says why
+  (tty-persist-test--with-home dir
     (let ((rebuilt 0))
       (tty-persist-test--write drgnx-persist-file '(:version 2 :frames ((:role custom :restore (tty-persist-test--rebuild "j1")))))
       (cl-letf (((symbol-function 'tty-persist-test--rebuild) (lambda (&rest _) (cl-incf rebuilt) nil)))
-        (should-not (drgnx-persist-restore))
+        (should (drgnx-persist-restore))
         (should (= rebuilt 0))
-        (should (equal messages (list tty-persist-test--message)))))))
+        (should (equal messages '("drgnx: a window was not restored: no graphical display")))))))
+
+(ert-deftest drgnx-persist/the-graphical-frame-is-never-a-child-frame ()
+  (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+            ((symbol-function 'frame-list) (lambda () (list (selected-frame) 'top)))
+            ((symbol-function 'frame-parent) (lambda (&optional f) (and (not (eq f 'top)) 'parent))))
+    (should (eq (drgnx-persist--gui-frame) 'top))))
 
 (ert-deftest drgnx-persist/the-last-graphical-window-closing-still-saves-from-a-terminal-selection ()
   ;; a client closing its last graphical windows saves them all, though a terminal window is the selected frame

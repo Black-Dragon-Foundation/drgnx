@@ -229,8 +229,8 @@ batch run never writes your state.
 **Terminal windows** (`emacs -nw`, `emacsclient -t`) open with the default layout for their size
 ([terminal.md](terminal.md)) and neither save nor restore: a terminal session never overwrites the layout of your
 desktop windows. Save / Restore Workbench Layout, run in a terminal window, do nothing and say "Layouts are saved and
-restored from graphical windows"; Restore, when a graphical window is open too (a daemon with both), restores into that
-window instead. A job window comes back on the graphical display only, never laid out over a terminal window; with no graphical
+restored from graphical windows" (a graphical window restores itself at start and whenever a window opens after none, so
+a terminal never replaces one). A job window comes back on the graphical display only, never laid out over a terminal window; with no graphical
 window, it is not restored.
 
 ### Several windows

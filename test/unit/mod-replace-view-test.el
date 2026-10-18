@@ -583,6 +583,42 @@ bar's keymaps), one editor window, no view or bar left over."
         (should-not (get-buffer-window (drgnx-replace-view-test--bar)))
         (should-not (string-search drgnx-replace-bar-buffer-name (drgnx-replace-view-test--read drgnx-persist-file)))))))
 
+(ert-deftest drgnx-replace/a-save-that-writes-nothing-leaves-the-find-bar-open ()
+  ;; Save Workbench Layout in a terminal window does nothing, so it must not close the bar either
+  (require 'drgnx-persist)
+  (drgnx-replace-view-test--with
+    (drgnx-git-test-with-repo
+      (drgnx-git-test-write repo "f.txt" "foo\n")
+      (let ((drgnx-persist-file (expand-file-name "state.eld" tmp)))
+        (drgnx-replace-view-test--visit repo "f.txt" 1)
+        (drgnx-replace-in-file)
+        (should (get-buffer-window (drgnx-replace-view-test--bar)))
+        (cl-letf (((symbol-function 'terminal-name) (lambda (&optional _) "/dev/pts/9"))
+                  ((symbol-function 'message) #'ignore))
+          (drgnx-persist-save))
+        (should (get-buffer-window (drgnx-replace-view-test--bar)))
+        (should-not (file-exists-p drgnx-persist-file))))))
+
+(ert-deftest drgnx-replace/a-client-closing-saves-the-graphical-windows-and-closes-the-bar-from-a-terminal-selection ()
+  ;; the save when a client's last graphical windows close passes them explicitly: a terminal window being the
+  ;; selected frame does not stop it, nor the bar closing before it
+  (require 'drgnx-persist)
+  (drgnx-replace-view-test--with
+    (drgnx-git-test-with-repo
+      (drgnx-git-test-write repo "f.txt" "foo\n")
+      (let ((drgnx-persist-file (expand-file-name "state.eld" tmp)) (drgnx-persist--saved-at-exit nil))
+        (drgnx-replace-view-test--visit repo "f.txt" 1)
+        (drgnx-replace-in-file)
+        (should (get-buffer-window (drgnx-replace-view-test--bar)))
+        (set-frame-parameter nil 'client 'proc)
+        (unwind-protect
+            (cl-letf (((symbol-function 'terminal-name) (lambda (&optional _) "/dev/pts/9"))
+                      ((symbol-function 'display-graphic-p) (lambda (&optional f) (and f t))))   ; the selected frame is text, the saved ones not
+              (drgnx-persist--before-client-delete 'proc))
+          (set-frame-parameter nil 'client nil))
+        (should-not (get-buffer-window (drgnx-replace-view-test--bar)))
+        (should (file-exists-p drgnx-persist-file))))))
+
 (ert-deftest drgnx-replace/an-error-closing-the-bar-never-stops-the-save ()
   ;; The find bar's `drgnx-persist-save' advice runs on every exit: it must not make the save fail.
   (require 'drgnx-persist)
