@@ -92,13 +92,36 @@ several runs, range shown):
 | terminal-typing (`cat` echoing) | 1.3–1.8 ms | 3.5–4.9 ms | 4.0–12.5 ms | none |
 | terminal-output (`seq 1 2000` in a loop, in the panel) | 1.8–2.7 ms | 4.1–6.0 ms | 23–68 ms | 9–10 collections, ~46 ms each, ~460 ms in all |
 
-Budgets (`test/perf/budgets.eld`): terminal-typing p95 5 ms, max 13 ms; terminal-output p95 6 ms. Typing into a terminal
-costs about what typing into a file does. While a terminal floods output, eat allocates fast enough (about 600 MB of
-garbage over the 120 keys, with the 64 MB GC threshold) for a collection every ~0.35 s, and one lasting ~46 ms
-(a 225 MB heap) lands on a keystroke often enough that the max sits around the 50 ms ceiling (46–52 ms on a quieter
-machine, up to 68 ms under load). terminal-output's max budget is therefore **provisional** at the ceiling (50 ms):
-it will fail some runs until eat's output garbage or the collection pause is reduced — a perf finding, not a budget to
-raise. A smaller scrollback (`eat-term-scrollback-size`) does not change it.
+Budgets (`test/perf/budgets.eld`): terminal-typing p95 5 ms, max 13 ms; terminal-output p95 6 ms, max 50 ms. Typing into
+a terminal costs about what typing into a file does.
+
+**Where the output garbage comes from.** Eat's terminal emulation allocates about 520 bytes for every text segment it
+writes (15 conses, 3 intervals, 10 vector cells and a string in `eat--t-write`; the line feed itself is 56 bytes), whatever
+its length: 110 bytes per output byte for `seq` lines, 7 for 80-column lines. A flood saturates Emacs (about 0.2 MB/s of
+`seq`), so 20 to 30 MB of garbage a second and a collection every ~2 s. drgnx's own hooks do not appear in the memory
+profile, `eat-minimum-latency`/`eat-maximum-latency` change nothing about the amount (larger values only make batches of
+250 to 600 ms), and neither does the scrollback. Cutting the garbage means rewriting eat's writer (a fast path saved about
+a quarter: not worth shadowing eat's internals).
+
+**Where the pause lands.** A collection (45 to 55 ms: the live heap, not the garbage, sets it) is run by whichever code
+allocates when the threshold is crossed. That is often the keystroke's own handling (the command, its redisplay, the
+harness recorder) or the eat batch that runs before the latency timer; the pause then counts. So while a terminal prints,
+`tools/terminal-eat` takes the collection itself, after an eat output batch, when no key was handled in the last 20 ms and
+85% of `gc-cons-threshold` has been allocated (`drgnx-terminal-eat-gc-quiet`, nil turns it off). The threshold is
+unchanged (a higher one only trades the pause for a longer one: 95 ms at 256 MB, and 410 MB of memory), and the natural
+collection stays as the backstop. The pause is not shortened, only kept out of a keystroke's handling; a key that arrives
+during it still waits.
+
+Measured on a machine at load 2.7 to 6.2, ten runs of terminal-output each (the workload's median of three repeats):
+
+| | max, sorted | over 50 ms |
+|---|---|---|
+| without the early collection | 8.7 16.8 23.9 24.1 25.3 39.5 41.9 53.3 54.6 54.9 | 3 of 10 |
+| with it | 5.3 5.6 5.9 5.9 22.3 24.0 30.7 36.3 40.7 49.4 | 0 of 10 |
+
+What remains is an eat output batch of 20 to 60 ms (under load) that a key waits for; slicing the batches (one chunk per
+timer) made the p95 worse, because each slice redraws the terminal. terminal-output's max budget is the ceiling (50 ms),
+the worst measured rounded up (49.4 at load 6.2; 41 at most below load 4.1, where `--perf` judges).
 
 ## Tuning (and why)
 

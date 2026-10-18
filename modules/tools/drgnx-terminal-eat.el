@@ -108,6 +108,47 @@ panel); returns its buffer.  Its environment starts with `drgnx-terminal-environ
     (pop-to-buffer buffer)
     buffer))
 
+;;;; Garbage collections off the typing path
+;; Eat's terminal emulation allocates about 500 bytes per line of output (14 conses, 3 intervals, 10 vector cells and a
+;; string for each text segment it writes: measured in the perf lab), so a terminal flooding output hands Emacs 20 to 30 MB
+;; of garbage a second and a collection every ~2 s.  The collection is triggered by whichever code allocates when the
+;; threshold is crossed, and the keystroke's own handling is as likely a candidate as eat's batch: a ~50 ms pause that lands
+;; inside a keystroke.  Eat's latency settings and its scrollback do not change the amount (the garbage is per line written),
+;; and eat's writer is not ours to rewrite.  So the pause is taken at a moment of our choosing: after one of eat's output
+;; batches, when Emacs has been idle for a moment (no key was handled in the last `drgnx-terminal-eat-gc-quiet' seconds) and
+;; most of the threshold has been consed.  The natural collection stays as the backstop and the threshold is unchanged.
+;; This does not shorten the pause; it keeps it from being part of a keystroke's own handling.
+
+(defcustom drgnx-terminal-eat-gc-quiet 0.02
+  "Seconds Emacs must have been idle for drgnx to collect garbage after a terminal's output (nil: never).
+While a terminal prints, drgnx collects early, between eat's output batches and not while a key is being handled, once
+85% of `gc-cons-threshold' has been allocated, so the pause is not part of a keystroke."
+  :type '(choice (const :tag "Never" nil) number) :group 'drgnx)
+
+(defconst drgnx-terminal-eat--gc-share 0.85 "The share of `gc-cons-threshold' consed before the early collection.")
+
+(defvar drgnx-terminal-eat--gc-base nil "`drgnx-terminal-eat--consed' after the last collection.")
+
+(defun drgnx-terminal-eat--consed ()
+  "Bytes allocated so far, roughly (the consing counters; garbage collection does not lower them)."
+  (pcase-let ((`(,conses ,floats ,vector-cells ,symbols ,string-chars ,intervals ,strings) (memory-use-counts)))
+    (+ (* conses 16) (* floats 8) (* vector-cells 8) (* symbols 48) string-chars (* intervals 56) (* strings 32))))
+
+(defun drgnx-terminal-eat--gc-note ()
+  "`post-gc-hook': note the allocation level the collection left behind."
+  (setq drgnx-terminal-eat--gc-base (drgnx-terminal-eat--consed)))
+
+(defun drgnx-terminal-eat--collect-in-gap (&rest _)
+  "After advice of `eat--process-output-queue': collect now when Emacs is idle and the threshold is nearly reached.
+Idle means a key was last handled more than `drgnx-terminal-eat-gc-quiet' ago, so this batch is not in a keystroke's
+span (`current-idle-time' is nil while a command runs)."
+  (when-let* ((quiet drgnx-terminal-eat-gc-quiet)
+              (idle (current-idle-time))
+              ((>= (float-time idle) quiet))
+              (base drgnx-terminal-eat--gc-base)
+              ((>= (- (drgnx-terminal-eat--consed) base) (* drgnx-terminal-eat--gc-share gc-cons-threshold))))
+    (garbage-collect)))
+
 ;;;; Which keys reach drgnx, which the shell
 
 (defcustom drgnx-terminal-skip-shell-keys '("C-p" "C-b" "C-k" "C-f")
@@ -266,6 +307,9 @@ put into `minor-mode-map-alist' (the alist keeps the old map).  Runs when eat lo
                                      eat-kill-buffer-on-exit t)
                        (add-hook 'kill-buffer-query-functions #'drgnx-terminal-eat--refresh-before-kill -90)
                        (advice-add 'eat--pre-prompt :after #'drgnx-terminal-eat--note-integration)
+                       (drgnx-terminal-eat--gc-note)
+                       (add-hook 'post-gc-hook #'drgnx-terminal-eat--gc-note)
+                       (advice-add 'eat--process-output-queue :after #'drgnx-terminal-eat--collect-in-gap)
                        ;; which keys reach drgnx and which the shell: now if eat is loaded, else when it loads
                        (with-eval-after-load 'eat (drgnx-terminal-apply-keys))
                        (advice-add 'drgnx-keys-apply :after #'drgnx-terminal-apply-keys)

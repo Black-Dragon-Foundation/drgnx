@@ -188,6 +188,11 @@ The eat terminal runs COMMAND with SWITCHES directly: no shell, so no shell conf
           (unless dir (error "The terminal workloads need the eat package"))
           (add-to-list 'load-path dir)
           (require 'eat)))
+      ;; the session started without eat's package, so the module was skipped (missing-packages): run it now, as it runs
+      ;; for a user who has eat installed (its key split, its GC timing)
+      (let ((spec (cdr (assq 'tools/terminal-eat drgnx-modules--table))))
+        (when (and spec (not (eq (plist-get (cdr (assq 'tools/terminal-eat (drgnx-modules-report))) :status) 'ok)))
+          (drgnx-modules--run-one 'tools/terminal-eat spec 'startup)))
       (defvar drgnx-perf--term nil "The terminal's buffer.")
       (defvar drgnx-perf--term-tick 0 "The terminal buffer's modification tick when the keys began.")
       (defun drgnx-perf--term-open ()

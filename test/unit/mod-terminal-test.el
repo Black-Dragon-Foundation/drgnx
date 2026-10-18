@@ -356,5 +356,44 @@
       (should (process-query-on-exit-flag proc))
       (should-not (process-query-on-exit-flag idle-proc)))))
 
+;;;; GC pauses off the typing path (M12e: a terminal flooding output allocates ~500 bytes per output line)
+
+(defun drgnx-terminal-test--collects-p (idle consed-share)
+  "Whether the gap hook collects when Emacs has been idle IDLE seconds (nil: it is not idle) and CONSED-SHARE of
+`gc-cons-threshold' has been consed since the last collection."
+  (let* ((gc-cons-threshold 1000000)
+         (drgnx-terminal-eat--gc-base (- (drgnx-terminal-eat--consed) (* consed-share gc-cons-threshold)))
+         (collected nil))
+    (cl-letf (((symbol-function 'current-idle-time) (lambda () (and idle (seconds-to-time idle))))
+              ((symbol-function 'garbage-collect) (lambda () (setq collected t) nil)))
+      (drgnx-terminal-eat--collect-in-gap))
+    collected))
+
+(ert-deftest drgnx-terminal/gc-gap-collects-when-quiet-and-nearly-due ()
+  (drgnx-terminal-test--fresh nil
+    (let ((drgnx-terminal-eat-gc-quiet 0.02))
+      (should (drgnx-terminal-test--collects-p 0.05 0.9))        ; quiet long enough, 90% of the threshold consed
+      (should-not (drgnx-terminal-test--collects-p 0.005 0.9))   ; a key was handled a moment ago: the next batch may be in its span
+      (should-not (drgnx-terminal-test--collects-p nil 0.9))     ; not idle at all (a command is running)
+      (should-not (drgnx-terminal-test--collects-p 0.05 0.3)))   ; plenty of room left: nothing to do yet
+    (let ((drgnx-terminal-eat-gc-quiet nil))
+      (should-not (drgnx-terminal-test--collects-p 0.05 0.9)))))  ; switched off
+
+(ert-deftest drgnx-terminal/gc-gap-counts-from-the-last-collection ()
+  (drgnx-terminal-test--fresh nil
+    (let ((drgnx-terminal-eat--gc-base nil))
+      (drgnx-terminal-eat--gc-note)
+      (should (< (- (drgnx-terminal-eat--consed) drgnx-terminal-eat--gc-base) 100000)))
+    (let ((drgnx-terminal-eat--gc-base 0))
+      (make-list 1000 nil)
+      (drgnx-terminal-eat--gc-note)
+      (should (> drgnx-terminal-eat--gc-base 0)))))
+
+(ert-deftest drgnx-terminal/gc-gap-is-wired-to-eats-output-batches ()
+  (unless (drgnx-terminal-test--eat-dir) (ert-skip drgnx-terminal-test--skip))
+  (drgnx-terminal-test--fresh t
+    (should (advice-member-p #'drgnx-terminal-eat--collect-in-gap 'eat--process-output-queue))
+    (should (memq #'drgnx-terminal-eat--gc-note post-gc-hook))))
+
 (provide 'mod-terminal-test)
 ;;; mod-terminal-test.el ends here

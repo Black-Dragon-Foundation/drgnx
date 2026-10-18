@@ -19,10 +19,11 @@
  (replace-typing (:input :p95) 16) (replace-typing (:input :max) 50)
  (live-view (:input :p95) 16) (live-view (:input :max) 50)
  ;; eat (2026-10-18, load 3-5, medians of three runs of the workload's own three repeats): terminal-typing p95 4.2-4.8 ms,
- ;; max 6.4-12.5; terminal-output p95 4.4-6.0, max 23-68 (a GC of ~46 ms lands in the typing: 9-10 collections per run).
- ;; The p95 rows are the measured p95 rounded up; terminal-typing's max is the worst measured, rounded up.
- ;; terminal-output's max is PROVISIONAL: the ceiling (50 ms), which the measurements straddle: a perf finding (eat's
- ;; output garbage), not a budget; see docs/develop/perf.md.
+ ;; max 6.4-12.5; terminal-output p95 4.2-5.2, max (with drgnx's early collection, `drgnx-terminal-eat-gc-quiet') 5-49 over
+ ;; ten runs at load 2.7-6.2 (41 at the most below load 4.1; without it 8-55, three of ten over 50: a 55 ms collection
+ ;; lands in a keystroke).  What is left is an eat output batch (20-60 ms under load) that a key waits for.
+ ;; The p95 rows are the measured p95 rounded up; terminal-typing's max is the worst measured, rounded up; terminal-output's
+ ;; max is the worst measured, rounded up (the ceiling).  See docs/develop/perf.md.
  (terminal-typing (:input :p95) 5) (terminal-typing (:input :max) 13)
  (terminal-output (:input :p95) 6) (terminal-output (:input :max) 50)
  (redisplay (:redisplay :p95) 16))
