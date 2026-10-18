@@ -92,8 +92,10 @@ key as PREFIX C-<letter>.  Nil when EVENT has no such form."
                     (if shift base (event-convert-list (list 'control base))))
                    ((eq base ?\s) (if shift ?\s 0))   ; Ctrl+Space, as a terminal sends it: C-@
                    ((integerp base) (if shift (alist-get base drgnx-tty-fallback--us-shift) base))
-                   ((memq base '(return backspace)) (if shift (progn (setq meta t) (if (eq base 'return) 13 127))
-                                                      (if (eq base 'return) 13 127)))
+                   ;; Alt stands for Shift here, so a chord with a real Alt as well (C-M-<return>) has no form
+                   ((memq base '(return backspace)) (cond (meta nil)
+                                                          (shift (setq meta t) (if (eq base 'return) 13 127))
+                                                          (t (if (eq base 'return) 13 127))))
                    ((eq base 'tab) (if shift 'backtab 9))
                    (shift (event-convert-list (list 'shift base)))
                    (t base))))
@@ -127,7 +129,8 @@ TAKEN the ALTs already given to other chords."
 
 (defun drgnx-tty-fallback-chords (keys &optional caps folded)
   "The chords (key strings of one event) of KEYS (key strings) that a terminal with CAPS (default `legacy') and
-FOLDED cannot send, each once, in order."
+FOLDED cannot send and the prefix can type, each once, in order.  (The prefix adds Ctrl: S-<return> and
+C-M-<return> have no form.)"
   (let (out seen)
     (dolist (key keys (nreverse out))
       (let* ((events (append (ignore-errors (key-parse key)) nil))
@@ -136,7 +139,8 @@ FOLDED cannot send, each once, in order."
              (names (if (= (length words) (length events)) words
                       (mapcar (lambda (ev) (key-description (vector ev))) events))))
         (cl-mapc (lambda (ev name)
-                   (when (and (not (memq ev seen)) (drgnx-tty-unsendable (list (vector ev)) (or caps 'legacy) folded))
+                   (when (and (not (memq ev seen)) (drgnx-tty-unsendable (list (vector ev)) (or caps 'legacy) folded)
+                              (drgnx-tty-fallback--prefix-of ev "<f6>"))   ; the prefix adds Ctrl: no Ctrl, no form (S-<return>)
                      (push ev seen)
                      (push name out)))
                  events names)))))

@@ -122,12 +122,12 @@ quits only that (\"[Quit]\"), as it would for a person, who presses it again."
     (funcall quit)
     ;; C-S-f: Search in Project
     (drgnx-tty-session-key c "C-S-f" caps)
-    (drgnx-tty-keys-test--ran s 'drgnx-search-project "C-S-f")
-    (drgnx-tty-session-wait-screen c "Search in project")
+    (drgnx-tty-keys-test--ran s 'drgnx-wb-view-search "C-S-f")
+    (drgnx-tty-session-wait-screen c "SEARCH")
     (funcall quit)
     ;; C-S-e: the Explorer is selected
     (drgnx-tty-session-key c "C-S-e" caps)
-    (drgnx-tty-keys-test--ran s 'drgnx-explorer-focus "C-S-e")
+    (drgnx-tty-keys-test--ran s 'drgnx-wb-view-explorer "C-S-e")
     (drgnx-tty-session-wait s `(with-current-buffer (window-buffer (frame-selected-window ,frame))
                                  (derived-mode-p 'drgnx-explorer-mode)))
     ;; C-`: the panel, its tab row with the Terminal tab

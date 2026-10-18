@@ -70,8 +70,8 @@
       (should (drgnx-tty-fallback-test--decodes-p s c "\eF"))
       (drgnx-tty-session-eval s drgnx-tty-keys-test--record)
       (drgnx-tty-session-send c "\eF")
-      (drgnx-tty-keys-test--ran s 'drgnx-search-project "C-S-f")
-      (drgnx-tty-session-wait-screen c "Search in project")
+      (drgnx-tty-keys-test--ran s 'drgnx-wb-view-search "C-S-f")
+      (drgnx-tty-session-wait-screen c "SEARCH")
       (drgnx-tty-keys-test--quit s c 'legacy)
       ;; the one hint, once: a second VTE client gets none (the session's first client, a tmux, may have had its
       ;; own: the count is compared, not assumed)
@@ -92,7 +92,7 @@
            (frame (drgnx-tty-keys-test--frame c)))
       (drgnx-tty-session-eval s drgnx-tty-keys-test--record)
       (drgnx-tty-session-send c "\eE")
-      (drgnx-tty-keys-test--ran s 'drgnx-explorer-focus "C-S-e")
+      (drgnx-tty-keys-test--ran s 'drgnx-wb-view-explorer "C-S-e")
       (drgnx-tty-session-wait s `(with-current-buffer (window-buffer (frame-selected-window ,frame))
                                    (derived-mode-p 'drgnx-explorer-mode))))))
 
@@ -176,17 +176,17 @@
       (should (funcall show "kx-a"))
       (drgnx-tty-session-send c "\eF")
       (should (equal (drgnx-tty-session-wait s 'kx-mode-ran) "kx-a"))
-      (should-not (drgnx-tty-session-eval s '(assq 'drgnx-search-project kx-seen)))
+      (should-not (drgnx-tty-session-eval s '(assq 'drgnx-wb-view-search kx-seen)))
       ;; buffer B: Search
       (should (funcall show "*scratch*"))
       (drgnx-tty-session-send c "\eF")
-      (drgnx-tty-keys-test--ran s 'drgnx-search-project "C-S-f")
+      (drgnx-tty-keys-test--ran s 'drgnx-wb-view-search "C-S-f")
       (drgnx-tty-keys-test--quit s c 'legacy)
       ;; back in A, F6 f: Search, the mode's key untouched
       (drgnx-tty-session-eval s '(setq kx-seen nil kx-mode-ran nil))
       (should (funcall show "kx-a"))
       (drgnx-tty-session-send c (concat (drgnx-tty-session-encode "<f6>" 'legacy) "f"))
-      (drgnx-tty-keys-test--ran s 'drgnx-search-project "C-S-f")
+      (drgnx-tty-keys-test--ran s 'drgnx-wb-view-search "C-S-f")
       (should-not (drgnx-tty-session-eval s 'kx-mode-ran))
       (drgnx-tty-keys-test--quit s c 'legacy))))
 
@@ -206,7 +206,7 @@
       (should (drgnx-tty-fallback-test--decodes-p s c "\eF"))
       (drgnx-tty-session-eval s drgnx-tty-keys-test--record)
       (drgnx-tty-session-send c "\eF")
-      (drgnx-tty-keys-test--ran s 'drgnx-search-project "C-S-f")
+      (drgnx-tty-keys-test--ran s 'drgnx-wb-view-search "C-S-f")
       (drgnx-tty-keys-test--quit s c 'mok)
       (drgnx-tty-session-key c "C-." 'mok)
       (drgnx-tty-keys-test--ran s 'drgnx-lang-quick-fix "C-."))))
@@ -225,9 +225,9 @@
       (should (drgnx-tty-fallback-test--decodes-p s l "\eF"))
       ;; ESC F there is M-F, Emacs's: no Search; its C-S-f bytes are Search
       (drgnx-tty-session-eval s drgnx-tty-keys-test--record)
-      (drgnx-tty-fallback-test--not-run s 'drgnx-search-project "\eF" m)
+      (drgnx-tty-fallback-test--not-run s 'drgnx-wb-view-search "\eF" m)
       (drgnx-tty-session-key m "C-S-f" 'mok)
-      (drgnx-tty-keys-test--ran s 'drgnx-search-project "C-S-f")
+      (drgnx-tty-keys-test--ran s 'drgnx-wb-view-search "C-S-f")
       (drgnx-tty-keys-test--quit s m 'mok))))
 
 (ert-deftest drgnx-tty-fallback/two-clients-legacy-and-kkp-at-once ()
@@ -242,14 +242,14 @@
         (drgnx-tty-session-eval s drgnx-tty-keys-test--record)
         ;; L's Alt+Shift+F: Search
         (drgnx-tty-session-send l "\eF")
-        (drgnx-tty-keys-test--ran s 'drgnx-search-project "C-S-f")
-        (drgnx-tty-session-wait-screen l "Search in project")
+        (drgnx-tty-keys-test--ran s 'drgnx-wb-view-search "C-S-f")
+        (drgnx-tty-session-wait-screen l "SEARCH")
         (drgnx-tty-keys-test--quit s l 'legacy)
         ;; K's ESC F: not Search; K's kkp C-S-f: Search
         (drgnx-tty-session-wait-screen k "\\*scratch\\*")
-        (drgnx-tty-fallback-test--not-run s 'drgnx-search-project "\eF" k)
+        (drgnx-tty-fallback-test--not-run s 'drgnx-wb-view-search "\eF" k)
         (drgnx-tty-session-key k "C-S-f" 'kkp)
-        (drgnx-tty-keys-test--ran s 'drgnx-search-project "C-S-f")
+        (drgnx-tty-keys-test--ran s 'drgnx-wb-view-search "C-S-f")
         (drgnx-tty-keys-test--quit s k 'kkp)))))
 
 (ert-deftest drgnx-tty-fallback/a-graphical-frame-is-untouched ()

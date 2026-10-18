@@ -231,7 +231,7 @@ With VS Code keys (the table below is checked against the profile by a test):
 | `C-2` | Focus Second Editor Group | — | `F6 2` |
 | `C-3` | Focus Third Editor Group | `Alt+Shift+3` | `F6 3` |
 | `C-'` | Menu for This Mode | `Alt+Shift+'` | `F6 '` |
-| `C-S-e` | Focus Explorer | `Alt+Shift+E` | `F6 e` |
+| `C-S-e` | View: Explorer | `Alt+Shift+E` | `F6 e` |
 | `C-SPC` | Mark | — | `F6 Ctrl+Space` |
 | `C-M-S-c` | Copy Relative Path | — | `F6 Alt+C` |
 | `C-S-b` | Focus Buffers | `Alt+Shift+B` | `F6 b` |
@@ -247,16 +247,20 @@ With VS Code keys (the table below is checked against the profile by a test):
 | `C-S-SPC` | Show Hover | — | `F6 Space` |
 | `C-.` | Quick Fix | — | `F6 .` |
 | `C-S-m` | Problems | `Alt+Shift+M` | `F6 m` |
-| `C-S-f` | Search in Project | `Alt+Shift+F` | `F6 f` |
+| `C-S-f` | View: Search | `Alt+Shift+F` | `F6 f` |
 | `C-S-o` | Go to Symbol | — | `F6 o` |
 | `C-<tab>` | Recent Buffers | — | `F6 Tab` |
-| `C-S-h` | Replace in Project | `Alt+Shift+H` | `F6 h` |
+| `C-S-h` | Replace in Files | `Alt+Shift+H` | `F6 h` |
 | `` C-S-` `` | New Terminal | — | `F6 ~` |
 | `C-S-g` | Source Control | `Alt+Shift+G` | `F6 g` |
 | `C-=` | Zoom In | `Alt+Shift+=` | `F6 =` |
 | `C-+` | Zoom In | — | `F6 +` |
 | `C--` | Zoom Out | — | `F6 -` |
 | `C-0` | Reset Zoom | — | `F6 0` |
+| `C-!` | Replace This Match (the Replace bar) | — | `F6 !` |
+
+The Replace bar's `S-<return>` (Previous Match) and `C-M-<return>` (Replace All) have no F6 form, since F6 adds Ctrl and
+Alt already stands for Shift on Enter: in a legacy terminal use their other keys, `S-<f4>` and `C-<return>` (F6 Enter).
 
 ## SSH
 

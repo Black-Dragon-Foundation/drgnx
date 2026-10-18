@@ -23,6 +23,7 @@
                      (drgnx--core-commands)
                      (drgnx-modules-load-directory (expand-file-name "modules" drgnx-dir))
                      (drgnx-modules-run 'startup)
+                     (drgnx-modules-run 'idle)   ; tools/replace (C-S-h) and the other idle modules define commands too
                      (plist-get (drgnx-keys-resolve :commands (drgnx-commands-all) :profiles tty-fallback-test--profiles
                                                     :layers (cdr (assoc preset drgnx-keys-presets))
                                                     :defaults tty-fallback-test--defaults :platform platform)
@@ -181,7 +182,8 @@ binding are taken off afterwards."
       ;; every chord the profile binds that a legacy terminal cannot send is in the table…
       (dolist (key (drgnx-tty-unsendable keys 'legacy))
         (dolist (ev (append (key-parse key) nil))
-          (unless (drgnx-tty-key-sendable-p (vector ev) 'legacy)
+          ;; (S-<return> and C-M-<return>, the Replace bar's, have no F6 form: their commands have other keys)
+          (unless (or (drgnx-tty-key-sendable-p (vector ev) 'legacy) (not (drgnx-tty-fallback--prefix-of ev "<f6>")))
             (should (seq-find (lambda (r) (equal (key-parse (car r)) (vector ev))) table)))))
       ;; …with a prefix form a legacy terminal can type
       (pcase-dolist (`(,chord . ,row) table)
