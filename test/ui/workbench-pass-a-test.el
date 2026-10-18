@@ -174,13 +174,21 @@ SHOW non-nil: the sidebar is open in the root frame, whose window layout is rest
           (abbreviated-home-dir nil) (trash-directory nil))
      (unwind-protect (progn ,@body) (delete-directory ,home t))))
 
-(defun drgnx-pass-a-ui-test--fake-gio (dir seconds)
-  "A `gio' in DIR that waits SECONDS, says it cannot find a trash directory (as it does on tmpfs) and fails."
+(defun drgnx-pass-a-ui-test--fake-gio (dir &optional gated)
+  "A `gio' in DIR that says it cannot find a trash directory (as it does on tmpfs) and fails.
+GATED: it first waits until the file `go' exists in DIR (the test makes it), so \"gio is still running\" is a fact
+of the test's own making, not a race with a delay."
   (let ((script (expand-file-name "gio" dir)))
     (with-temp-file script
-      (insert (format "#!/bin/sh\nsleep %s\necho \"gio: Unable to find or create trash directory for $3\" >&2\nexit 1\n" seconds)))
+      (insert (format "#!/bin/sh\n%secho \"gio: Unable to find or create trash directory for $3\" >&2\nexit 1\n"
+                      (if gated (format "while [ ! -e '%s' ]; do sleep 0.1; done\n" (expand-file-name "go" dir)) ""))))
     (set-file-modes script #o755)
     (concat (file-name-as-directory dir) "gio")))
+
+(defun drgnx-pass-a-ui-test--kill-visiting (file)
+  "Kill the buffer visiting FILE, if there is one (the file may be gone by now)."
+  (when-let* ((b (find-buffer-visiting file)))
+    (let ((kill-buffer-query-functions nil)) (kill-buffer b))))
 
 (defun drgnx-pass-a-ui-test--delete (path)
   "Delete PATH from the Explorer as the Delete command does (the prompt answered yes)."
@@ -194,10 +202,10 @@ SHOW non-nil: the sidebar is open in the root frame, whose window layout is rest
 
 (ert-deftest drgnx-ui-pass-a/a-failing-gio-falls-back-and-the-buffer-stays-until-then ()
   (drgnx-pass-a-ui-test--with-temp-home home
-    (let* ((bin (make-temp-file "drgnx-pass-a-bin" t)) (shm (drgnx-pass-a-ui-test--shm-dir)))
+    (let* ((shm (drgnx-pass-a-ui-test--shm-dir)) (bin (make-temp-file "drgnx-pass-a-bin" t)))
       (unwind-protect
           (drgnx-pass-a-ui-test--with-explorer root (lambda () shm) nil
-            (drgnx-pass-a-ui-test--fake-gio bin 1.5)
+            (drgnx-pass-a-ui-test--fake-gio bin t)
             (let* ((exec-path (cons bin exec-path))
                    (process-environment (cons (concat "PATH=" bin ":" (getenv "PATH")) process-environment))
                    (file (expand-file-name "notes.txt" root)) (buf nil))
@@ -207,7 +215,7 @@ SHOW non-nil: the sidebar is open in the root frame, whose window layout is rest
               (drgnx-explorer-refresh)
               (setq buf (find-file-noselect file))
               (drgnx-pass-a-ui-test--delete file)
-              ;; gio is still running (it sleeps): nothing has happened to the file or its buffer
+              ;; gio is still running (it waits for the `go' file): nothing has happened to the file or its buffer
               (unless (drgnx-pass-a-ui-test--gio-running-p)
                 (ert-fail (format "no gio: file %s buffer %s procs %S home-trash %S trash-directory %S cross %S"
                                   (file-exists-p file) (buffer-live-p buf) (mapcar #'process-name (process-list))
@@ -215,20 +223,22 @@ SHOW non-nil: the sidebar is open in the root frame, whose window layout is rest
                                   trash-directory (drgnx-explorer--trash-cross-device-p file))))
               (should (file-exists-p file))
               (should (buffer-live-p buf))
+              (write-region "" nil (expand-file-name "go" bin) nil 'silent)   ; let gio fail now
               ;; gio fails: the Emacs trash takes the file across the filesystems, and only then the buffer goes
               (should (drgnx-pass-a-ui-test--wait (lambda () (not (buffer-live-p buf)))))
               (should-not (file-exists-p file))
               (should (directory-files (expand-file-name ".local/share/Trash/files" home) nil "notes\\.txt"))
               (should-not (member "notes.txt" (mapcar #'cadr (drgnx-pass-a-ui-test--rows))))))
+        (drgnx-pass-a-ui-test--kill-visiting (expand-file-name "notes.txt" shm))
         (delete-directory bin t)))))
 
 (ert-deftest drgnx-ui-pass-a/when-gio-and-the-fallback-both-fail-the-buffer-and-file-stay ()
   (drgnx-pass-a-ui-test--with-temp-home home
-    (let* ((bin (make-temp-file "drgnx-pass-a-bin" t)) (shm (drgnx-pass-a-ui-test--shm-dir)))
+    (let* ((shm (drgnx-pass-a-ui-test--shm-dir)) (bin (make-temp-file "drgnx-pass-a-bin" t)))
       (ignore home)
       (unwind-protect
           (drgnx-pass-a-ui-test--with-explorer root (lambda () shm) nil
-            (drgnx-pass-a-ui-test--fake-gio bin 0)
+            (drgnx-pass-a-ui-test--fake-gio bin)
             (let* ((exec-path (cons bin exec-path))
                    (process-environment (cons (concat "PATH=" bin ":" (getenv "PATH")) process-environment))
                    (file (expand-file-name "unsaved.txt" root)) (buf nil) (said nil))
@@ -244,6 +254,7 @@ SHOW non-nil: the sidebar is open in the root frame, whose window layout is rest
               (should (file-exists-p file))
               (should (buffer-live-p buf))
               (should (seq-some (lambda (s) (string-search "Unable to find or create trash directory" s)) said))))
+        (drgnx-pass-a-ui-test--kill-visiting (expand-file-name "unsaved.txt" shm))
         (delete-directory bin t)))))
 
 (ert-deftest drgnx-ui-pass-a/the-real-gio-on-tmpfs-ends-with-the-file-in-the-trash-and-its-buffer-closed ()
@@ -253,7 +264,8 @@ SHOW non-nil: the sidebar is open in the root frame, whose window layout is rest
   (drgnx-pass-a-ui-test--with-temp-home home
     (let* ((shm (drgnx-pass-a-ui-test--shm-dir))
            (mount-trash (expand-file-name (format ".Trash-%d" (user-uid)) drgnx-pass-a-ui-test--shm))
-           (had-mount-trash (file-exists-p mount-trash)))
+           (had-mount-trash (file-exists-p mount-trash))
+           (before (and had-mount-trash (directory-files-recursively mount-trash "real"))))
       (unwind-protect
           (drgnx-pass-a-ui-test--with-explorer root (lambda () shm) nil
             (let* ((file (expand-file-name "real.txt" root)) (buf nil))
@@ -266,6 +278,11 @@ SHOW non-nil: the sidebar is open in the root frame, whose window layout is rest
               (let ((in-home (directory-files (expand-file-name ".local/share/Trash/files" home) nil "real\\.txt")))
                 (message "pass-a real gio on tmpfs: the file went to %s" (if in-home "the Emacs trash (gio refused)" "gio's per-mount trash"))
                 (should (or in-home (and (file-directory-p mount-trash) (directory-files-recursively mount-trash "real\\.txt")))))))
-        (unless had-mount-trash (ignore-errors (delete-directory mount-trash t)))))))
+        (drgnx-pass-a-ui-test--kill-visiting (expand-file-name "real.txt" shm))
+        (if (not had-mount-trash)
+            (ignore-errors (delete-directory mount-trash t))
+          ;; a trash that was there already: only what this test put in it goes
+          (dolist (f (ignore-errors (directory-files-recursively mount-trash "real")))
+            (unless (member f before) (ignore-errors (delete-file f)))))))))
 
 ;;; workbench-pass-a-test.el ends here
