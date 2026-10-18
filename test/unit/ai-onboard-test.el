@@ -415,6 +415,32 @@ with BODY."
       (should (eq (car r) 'fail))
       (should-not (seq-find (lambda (j) (eq (plist-get j :status) 'running)) (drgnx-jobs-list))))))
 
+(ert-deftest drgnx-ai-onboard/a-real-ctrl-c-stops-the-job ()
+  ;; The same with a real SIGINT: a batch Emacs waiting on a job ends on it without unwinding, and its
+  ;; `kill-emacs-hook' entry stops the job.  (`env --default-signal=INT': a background job ignores SIGINT.)
+  (skip-unless (eql 0 (call-process "env" nil nil nil "--default-signal=INT" "true")))
+  (let* ((root (file-name-as-directory (make-temp-file "drgnx-sigint" t)))
+         (process-environment (append (list (concat "HOME=" root "home") (concat "DRGNX_CONFIG_DIR=" root "config")
+                                            (concat "XDG_STATE_HOME=" root "state") (concat "DRGNX_DATA_DIR=" root "data")
+                                            "DRGNX_JOBS_LAUNCHER=detached")
+                                      process-environment))
+         (child nil))
+    (unwind-protect
+        (progn
+          (make-directory (concat root "home") t)
+          (setq child (make-process :name "drgnx-sigint" :connection-type 'pipe :noquery t :buffer nil
+                                    :command (list "env" "--default-signal=INT" (expand-file-name invocation-name invocation-directory)
+                                                   "--batch" "-Q" "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-onboard"
+                                                   "--eval" "(drgnx-onboard--job \"Sleeping\" (list \"sleep\" \"60\"))")))
+          (should (drgnx-onboard--wait (lambda () (seq-find (lambda (j) (eq (plist-get j :status) 'running)) (drgnx-jobs-list))) 20))
+          (sleep-for 1)                 ; the child has put its hook in
+          (signal-process child 'SIGINT)
+          (should (drgnx-onboard--wait (lambda () (not (process-live-p child))) 10))
+          (should (drgnx-onboard--wait (lambda () (not (seq-find (lambda (j) (eq (plist-get j :status) 'running)) (drgnx-jobs-list)))) 10)))
+      (when (and child (process-live-p child)) (kill-process child))
+      (dolist (j (drgnx-jobs-list)) (ignore-errors (drgnx-jobs-stop (plist-get j :id))))
+      (delete-directory root t))))
+
 (defvar drgnx-ai-onboard-test--job-what nil "The job `drgnx-onboard--job' is waiting on (the test's view).")
 
 (ert-deftest drgnx-ai-onboard/pull-has-no-hour-limit ()
