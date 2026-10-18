@@ -8,6 +8,8 @@ drgnx test --perf           every workload; fails when a budget breaks; WORSE li
 drgnx test --perf --audit   the workloads with every hook function timed: judged on the hook budget only
 drgnx test --soak [MIN]     the input workloads in a loop for MIN minutes (30); fails when memory grows
 DRGNX_STARTUP_TRACE=FILE    emacs --init-directory …/init: where startup time goes, written to FILE
+DRGNX_PERF_WORKLOADS='A B'  only those workloads (space-separated names from the table below; unset: all; a typo is an error).
+                            A partial run is judged against its own budgets and writes no history line
 DRGNX_PERF_MAX_LOAD=N       the load average above which --perf does not judge (default: CPUs / 4, at least 3)
 DRGNX_PERF_WAIT=S           how long --perf waits for a quiet machine before giving up (180 s)
 ```
@@ -30,6 +32,7 @@ DRGNX_PERF_WAIT=S           how long --perf waits for a quiet machine before giv
 | agent-settings-open | the Claude Code settings page opened and drawn (`redisplay`) against a fixture home: a 5 MB `.claude.json` (300 projects with history), 50 MCP servers and 200 skills; three runs | milliseconds until drawn (budget 150) and the processes started (budget 0: opening the page starts nothing) |
 | remote-typing | the typing workload's 186 characters in a local file while the Explorer lists a mock-method root (test/fixtures/tramp-mock.el: a real TRAMP connection to a local `sh`) and its connection is dead, the segment showing it lost (checked: nothing was sent to the remote, the connection stayed dead) | input latency |
 | typing-with-index | the typing workload's 186 characters with the search module on and the drgnx repo's semantic index loaded: the repo indexed into the session's own state dir by a stub embedder (384 numbers per chunk; no provider, no network), read into memory by one query before the keys (checked: the query cache still holds it); the index file is deleted after | input latency |
+| window-switch | `C-x o` ×50 across three editor groups showing one file, with the left dock, the panel and the right dock shown (checked: the selected window changed 50 times) | input latency |
 | frames | 5 new frames until drawn | frame time |
 | redisplay | 30 forced redisplays of the fixture | redisplay time |
 | startup | a drgnx daemon (isolated: its own HOME and drgnx dirs, the harness's environment allowlist) until its server answers (a daemon that never answers fails), 4 starts, the first dropped | server-ready time, modules' time |

@@ -79,4 +79,48 @@ after another (the last repeats).  Binds `history' (the history file) and `start
     (should (eql (plist-get (json-parse-string (with-temp-buffer (insert-file-contents history) (buffer-string)) :object-type 'plist) :load)
                  2.0))))
 
+;; The state store's perf baseline (workbench-state Task 1): C-x o across 3 editor groups with the three areas shown.
+(ert-deftest drgnx-perf-run/window-switch-is-a-workload ()
+  (let* ((spec (cdr (assq 'window-switch (drgnx-perf-run--workloads))))
+         (actions (plist-get spec :actions)))
+    (should spec)
+    (should (plist-get spec :setup))
+    (should (plist-get spec :check))
+    (should (plist-get spec :repeat))
+    (should (= (length actions) 50))
+    (should (seq-every-p (lambda (a) (equal a '(:keys "C-x o"))) actions))
+    ;; setup: 3 groups, the dock, the panel and the right dock
+    (should (string-match-p "drgnx-groups-focus-3" (plist-get spec :setup)))
+    (dolist (f '("drgnx-wb-show-sidebar" "'panel" "'right"))
+      (should (string-match-p (regexp-quote f) (plist-get spec :setup))))
+    ;; the check: the selected window changed 50 times
+    (should (string-match-p "50" (plist-get spec :check)))
+    (dolist (f '("drgnx-wb-sidebar-showing-p" "'panel" "'right"))      ; and the layout it measures is there
+      (should (string-match-p (regexp-quote f) (plist-get spec :check))))))
+
+(ert-deftest drgnx-perf-run/workloads-can-be-filtered ()
+  (let ((all '((typing) (window-switch) (frames))))
+    (let ((process-environment (cons "DRGNX_PERF_WORKLOADS" process-environment)))   ; unset
+      (should (equal (drgnx-perf-run--select all) all)))
+    (let ((process-environment (cons "DRGNX_PERF_WORKLOADS=" process-environment)))   ; empty is unset
+      (should (equal (drgnx-perf-run--select all) all)))
+    (let ((process-environment (cons "DRGNX_PERF_WORKLOADS=window-switch typing" process-environment)))
+      (should (equal (drgnx-perf-run--select all) '((typing) (window-switch)))))   ; the runner's order, not the filter's
+    (let ((process-environment (cons "DRGNX_PERF_WORKLOADS=window-switch nope" process-environment)))
+      (should-error (drgnx-perf-run--select all)))))      ; a typo must not run nothing and pass
+
+(ert-deftest drgnx-perf-run/a-filtered-run-is-judged-on-its-workloads-and-not-kept ()
+  (drgnx-perf-run-test--with-fake-run '(1.0)
+    (let ((process-environment (cons "DRGNX_PERF_WORKLOADS=frames" process-environment)))
+      (cl-letf (((symbol-function 'drgnx-perf-run--workloads) (lambda () '((frames :measure "m") (typing :measure "m"))))
+                ((symbol-function 'drgnx-perf-run--budgets)
+                 (lambda () '((frames (:frame :p95) 500) (typing (:input :p95) 16)))))
+        (should (eql (drgnx-perf-run) 0))        ; typing's budget is not "not measured"
+        (should-not (file-exists-p history))))))  ; a partial run is no history line
+
+(ert-deftest drgnx-perf-run/an-unfiltered-run-keeps-its-history ()
+  (drgnx-perf-run-test--with-fake-run '(1.0)
+    (should (eql (drgnx-perf-run) 0))
+    (should (file-exists-p history))))
+
 ;;; perf-run-test.el ends here
