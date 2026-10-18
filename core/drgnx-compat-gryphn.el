@@ -11,21 +11,39 @@
 
 ;;; Code:
 (require 'cl-lib)
+(require 'seq)
 (require 'drgnx-registry)
 (require 'drgnx-surfaces)
 (require 'drgnx-keys)
 
+(defun drgnx-compat-gryphn--key= (a b)
+  (or (equal a b) (equal (ignore-errors (key-parse a)) (ignore-errors (key-parse b)))))
+
+(defun drgnx-compat-gryphn--takes-p (profile id key)
+  "Whether PROFILE's :bind already has an entry for ID or binds KEY (a shipped entry is never replaced)."
+  (seq-some (lambda (e)
+              (or (eq (car e) id)
+                  (seq-some (lambda (k) (and (stringp k) (drgnx-compat-gryphn--key= k key)))
+                            (seq-take-while (lambda (x) (not (keywordp x))) (cdr e)))))
+            (plist-get (alist-get profile drgnx-keys-profiles) :bind)))
+
 (cl-defun gryphn-command-define (id &key title category command key map menu context context-first doc native)
-  "gryphn's command definition, in drgnx's registry; KEY joins every key profile: the VS Code and Emacs
-profiles bind it, the Vim profile leaves it to the palette (no profile may forget a command).
+  "gryphn's command definition, in drgnx's registry; KEY joins the key profiles: VS Code and Emacs bind it, the
+Vim profile leaves it to the palette.  A profile that has an entry for ID, or binds KEY already, keeps its own
+(shipped keys are never replaced); the Emacs profile also keeps Emacs' own key (gryphn's C-p, C-b).
 NATIVE commands (Emacs keys gryphn only documents) are skipped."
   (unless native
     (drgnx-command-define id :title title :category category :command command :map map :menu menu
                           :context context :context-first context-first :doc doc)
     (when key
+      (drgnx-keys--ensure-profiles)
       (dolist (profile '(vscode emacs))
-        (drgnx-keys-define profile (list (if map (list id key :map map) (list id key)))))
-      (drgnx-keys-define 'vim (list (list id :none "the palette")))))
+        (unless (or (drgnx-compat-gryphn--takes-p profile id key)
+                    (and (eq profile 'emacs) (not map)
+                         (commandp (ignore-errors (lookup-key drgnx-keys--defaults (key-parse key))))))
+          (drgnx-keys-define profile (list (if map (list id key :map map) (list id key))))))
+      (unless (assq id (plist-get (alist-get 'vim drgnx-keys-profiles) :bind))
+        (drgnx-keys-define 'vim (list (list id :none "the palette"))))))
   id)
 
 (defun gryphn-surfaces-define-context (context predicate)

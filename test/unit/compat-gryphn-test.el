@@ -15,7 +15,7 @@
 
 (ert-deftest drgnx-compat/gryphn-commands-land-in-the-registry ()
   (drgnx-ext-test--with dir
-    (gryphn-command-define 'kx-board :title "Show Board" :category "Board" :command #'ignore :key "<f5>" :doc "d")
+    (gryphn-command-define 'kx-board :title "Show Board" :category "Board" :command #'ignore :key "<f19>" :doc "d")
     (let ((c (drgnx-commands-get 'kx-board)))
       (should c)
       (should (equal (drgnx-cmd-title c) "Show Board")))
@@ -24,17 +24,41 @@
 (ert-deftest drgnx-compat/gryphn-key-joins-every-profile ()
   ;; M4-7: no profile forgets a command — vscode and emacs bind the key, vim leaves it to the palette
   (drgnx-ext-test--with dir
-    (gryphn-command-define 'kx-board :title "Show Board" :category "Board" :command #'ignore :key "<f5>")
-    (gryphn-command-define 'kx-mapped :title "Mapped" :category "Board" :command #'ignore :key "x" :map 'kx-board-map)
+    (gryphn-command-define 'kx-board :title "Show Board" :category "Board" :command #'ignore :key "<f19>")
+    (gryphn-command-define 'kx-mapped :title "Mapped" :category "Board" :command #'ignore :key "<f20>" :map 'kx-board-map)
     (gryphn-command-define 'kx-keyless :title "Keyless" :category "Board" :command #'ignore)
     (let ((bind (lambda (p) (plist-get (alist-get p drgnx-keys-profiles) :bind))))
       (dolist (p '(vscode emacs))
-        (should (equal (assq 'kx-board (funcall bind p)) '(kx-board "<f5>")))
-        (should (equal (assq 'kx-mapped (funcall bind p)) '(kx-mapped "x" :map kx-board-map)))
+        (should (equal (assq 'kx-board (funcall bind p)) '(kx-board "<f19>")))
+        (should (equal (assq 'kx-mapped (funcall bind p)) '(kx-mapped "<f20>" :map kx-board-map)))
         (should-not (assq 'kx-keyless (funcall bind p))))
       (should (equal (cadr (assq 'kx-board (funcall bind 'vim))) :none))
       (should (equal (cadr (assq 'kx-mapped (funcall bind 'vim))) :none))
       (should-not (assq 'kx-keyless (funcall bind 'vim))))))
+
+(ert-deftest drgnx-compat/a-gryphn-key-never-replaces-a-shipped-entry ()
+  ;; I1: gryphn's ids are drgnx's; the shipped Emacs and Vim entries stay, and Emacs' own keys are not taken
+  (drgnx-ext-test--with dir
+    (setq drgnx-keys-profiles (drgnx-keys-load-profiles (expand-file-name "keys" drgnx-dir)))
+    (let* ((entry (lambda (p id) (assq id (plist-get (alist-get p drgnx-keys-profiles) :bind))))
+           (before (mapcar (lambda (p) (copy-tree (plist-get (alist-get p drgnx-keys-profiles) :bind))) '(vscode emacs vim))))
+      (should (equal (funcall entry 'emacs 'go-quick-open) '(go-quick-open :none "C-x p f (stock)")))
+      (should (equal (funcall entry 'vim 'go-quick-open) '(go-quick-open "SPC f p")))
+      (gryphn-command-define 'go-quick-open :title "Quick Open" :category "Go" :command #'ignore :key "C-p")
+      (gryphn-command-define 'view-explorer :title "Toggle Sidebar" :category "View" :command #'ignore :key "C-b")
+      (should (equal (funcall entry 'emacs 'go-quick-open) '(go-quick-open :none "C-x p f (stock)")))
+      (should (equal (funcall entry 'vim 'go-quick-open) '(go-quick-open "SPC f p")))
+      (should (equal (funcall entry 'vscode 'go-quick-open) '(go-quick-open "C-p")))           ; shipped, the same
+      (should-not (funcall entry 'emacs 'view-explorer))                                          ; C-b is backward-char
+      (should-not (funcall entry 'vscode 'view-explorer))                                      ; vscode's toggle-sidebar has C-b
+      (should (equal (funcall entry 'vim 'view-explorer) '(view-explorer :none "the palette")))
+      ;; a key another entry of the profile already binds is not taken either
+      (let ((taken (cadr (seq-find (lambda (e) (stringp (cadr e))) (plist-get (alist-get 'emacs drgnx-keys-profiles) :bind)))))
+        (gryphn-command-define 'kx-clash :title "Clash" :category "X" :command #'ignore :key taken)
+        (should-not (funcall entry 'emacs 'kx-clash)))
+      ;; and the shipped entries are all still there, unchanged
+      (cl-mapc (lambda (p old) (dolist (e old) (should (equal e (funcall entry p (car e))))))
+               '(vscode emacs vim) before))))
 
 (ert-deftest drgnx-compat/external-modules-load-and-report ()
   (drgnx-ext-test--with dir
