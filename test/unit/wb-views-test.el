@@ -1,5 +1,6 @@
 ;;; wb-views-test.el --- batch tests: the sidebar's views (Explorer | Search) -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx)
 (require 'drgnx-wb)
 
 (defmacro drgnx-wb-views-test--with-sections (&rest body)
@@ -92,3 +93,59 @@
    (drgnx-wb-show-sidebar)
    (should (window-live-p (drgnx-wb-section-window 'top)))
    (should-not (drgnx-wb-section-window 'find))))
+
+;;;; The keys that open a view also focus it (VS Code's Ctrl+Shift+E / Ctrl+Shift+F)
+
+(defun drgnx-wb-views-test--vscode-key-runs (key)
+  "The command ID the VS Code profile binds to KEY."
+  (let ((bind (plist-get (cdr (assq 'vscode (drgnx-keys-load-profiles (expand-file-name "keys" drgnx-dir)))) :bind)))
+    (car (seq-find (lambda (b) (member key (seq-filter #'stringp (cdr b)))) bind))))
+
+(defmacro drgnx-wb-views-test--with-real-names (&rest body)
+  "BODY with sections named like the real ones: `buffers' and `explorer' (Explorer view), `search' (Search view)."
+  `(let ((drgnx-wb--sections nil) (drgnx-signal--editor-window nil))
+     (delete-other-windows)
+     (set-frame-parameter nil 'drgnx-wb-view nil)
+     (drgnx-wb-define-section 'buffers :slot -1 :title "BUFFERS" :buffer (lambda () (get-buffer-create "*drgnx-views-buffers*")))
+     (drgnx-wb-define-section 'explorer :slot 0 :title "EXPLORER" :buffer (lambda () (get-buffer-create "*drgnx-views-explorer*")))
+     (drgnx-wb-define-section 'search :slot 0 :view 'search :title "SEARCH"
+                              :buffer (lambda () (get-buffer-create "*drgnx-views-search*")))
+     (unwind-protect (progn ,@body)
+       (drgnx-wb-hide-sidebar)
+       (delete-other-windows)
+       (set-frame-parameter nil 'drgnx-wb-view nil)
+       (dolist (b '("*drgnx-views-buffers*" "*drgnx-views-explorer*" "*drgnx-views-search*"))
+         (when (get-buffer b) (kill-buffer b))))))
+
+(ert-deftest drgnx-wb-views/vscode-c-s-e-leaves-focus-in-the-explorer ()
+  (drgnx-wb-views-test--with-real-names
+   (let ((id (drgnx-wb-views-test--vscode-key-runs "C-S-e")))
+     (should (eq id 'view-explorer))
+     ;; From the editor with the sidebar hidden.
+     (call-interactively #'drgnx-wb-view-explorer)
+     (should (eq (selected-window) (drgnx-wb-section-window 'explorer)))
+     ;; From the editor while the Search view is shown.
+     (select-window (drgnx-wb-editor-window))
+     (drgnx-wb-show-view 'search)
+     (call-interactively #'drgnx-wb-view-explorer)
+     (should (eq (drgnx-wb-sidebar-view) 'explorer))
+     (should (eq (selected-window) (drgnx-wb-section-window 'explorer)))
+     ;; From inside the Search view: the Explorer's tree, not the first section.
+     (select-window (drgnx-wb-section-window 'explorer))
+     (drgnx-wb-show-view 'search)
+     (call-interactively #'drgnx-wb-view-explorer)
+     (should (eq (selected-window) (drgnx-wb-section-window 'explorer))))))
+
+(ert-deftest drgnx-wb-views/vscode-c-s-f-leaves-focus-in-the-search-view ()
+  (drgnx-wb-views-test--with-real-names
+   (should (eq (drgnx-wb-views-test--vscode-key-runs "C-S-f") 'view-search))
+   (call-interactively #'drgnx-wb-view-search)
+   (should (eq (drgnx-wb-sidebar-view) 'search))
+   (should (eq (selected-window) (drgnx-wb-section-window 'search)))))
+
+(ert-deftest drgnx-wb-views/choosing-a-view-without-the-key-keeps-focus ()
+  ;; Clicking a sidebar tab is `drgnx-wb-show-view': focus stays (Task 1's design).
+  (drgnx-wb-views-test--with-real-names
+   (let ((editor (selected-window)))
+     (drgnx-wb-show-view 'search)
+     (should (eq (selected-window) editor)))))

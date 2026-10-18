@@ -25,9 +25,10 @@ treemacs; see
 | Focus the editor (group 1) | `C-1` | `C-x o` | `C-w` |
 
 The sidebar has **views**, like VS Code's activity bar: **View: Explorer** shows the Buffers panel, the Explorer
-and the Outline; **View: Search** shows the Search view. Choosing a view swaps the sidebar's sections in place, at
-the same width, and leaves focus where it was (a focus inside the sidebar moves to the new view's first section);
-with the sidebar hidden it shows it. Hiding and showing the sidebar brings back the view it had.
+and the Outline; **View: Search** shows the Search view. The two commands show their view and move focus to it (the Explorer's
+file tree, the Search view), like VS Code's `Ctrl+Shift+E` and `Ctrl+Shift+F`. Swapping the view another way (a
+sidebar tab) swaps the sections in place, at the same width, and leaves focus where it was (a focus inside the
+sidebar moves to the new view's first section); with the sidebar hidden it shows it. Hiding and showing the sidebar brings back the view it had.
 
 In the **Explorer**: a click on a folder opens or closes it; a click on a file opens it and keeps the Explorer
 focused (so you can keep browsing); a double click on a file moves to the editor. Keys: up/down (`n`/`p` in the
