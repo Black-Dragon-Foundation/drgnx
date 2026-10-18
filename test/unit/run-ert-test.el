@@ -38,6 +38,27 @@
             (should (string-prefix-p "load " (plist-get (aref (plist-get r :failures) 0) :name)))))
       (delete-directory tmp t))))
 
+(ert-deftest drgnx-run-ert/a-test-file-that-does-not-read-fails-the-run-and-is-named ()
+  ;; An unbalanced paren makes a whole file unreadable: its tests would be missing from the count and the run
+  ;; could look green.  The run fails and prints the file and the error.
+  (let* ((tmp (make-temp-file "drgnx-ert" t)) (results (expand-file-name "results.json" tmp)))
+    (unwind-protect
+        (progn
+          (write-region "(require 'ert)\n(ert-deftest bad/unbalanced () (should t)\n" nil (expand-file-name "unbalanced-test.el" tmp) nil 'silent)
+          (write-region "(require 'ert)\n(ert-deftest fine/ok () (should t))\n" nil (expand-file-name "fine-test.el" tmp) nil 'silent)
+          (let* ((process-environment (cons (concat "DRGNX_TEST_RESULTS=" results) process-environment))
+                 (code nil)
+                 (out (with-temp-buffer
+                        (setq code (call-process (expand-file-name invocation-name invocation-directory) nil t nil
+                                                 "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
+                                                 "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch" tmp))
+                        (buffer-string))))
+            (should (= code 1))
+            (should (string-match-p "unbalanced-test\\.el" out))                  ; the file is named …
+            (should (string-match-p "end-of-file\\|Premature\\|EOF" out))          ; … with the error
+            (should (= (plist-get (drgnx-run-ert-test--json results) :failed) 1))))
+      (delete-directory tmp t))))
+
 (ert-deftest drgnx-run-ert/relative-suite-dir ()
   (let* ((tmp (make-temp-file "drgnx-ert" t)) (results (expand-file-name "results.json" tmp))
          (default-directory drgnx-run-ert-test--fixtures))

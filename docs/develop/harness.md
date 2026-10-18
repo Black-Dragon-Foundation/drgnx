@@ -46,7 +46,9 @@ environment, which a Lisp `setenv` does not reach, so a test that loads it would
 and without `DISPLAY`, `WAYLAND_DISPLAY`, `SWAYSOCK`, `I3SOCK`, `HYPRLAND_INSTANCE_SIGNATURE` and `NIRI_SOCKET`; the runner
 binds the same inside Emacs and gives `XDG_RUNTIME_DIR` a private directory (mode 700) in the run's temp directory. A test
 that needs a bus, a display or a runtime directory sets its own with `process-environment`. The GUI tiers run their own
-session and are not changed. `bin/drgnx test --container` passes `$DRGNX_TEST_SELECTOR` into the container.
+session and are not changed. `bin/drgnx test --container` passes `$DRGNX_TEST_SELECTOR` into the container. A test file that
+does not read or load (an unbalanced paren) fails the run: the runner prints the file and the error and counts it as a
+failure, so a broken file cannot look green.
 
 A GUI run's ERT suite executes inside the session (`DRGNX_UI_TEST` names the suite directory), writes its
 summary to `DRGNX_UI_RESULTS` and exits. mutter turns any nonzero Emacs exit code into `1`, so the runner

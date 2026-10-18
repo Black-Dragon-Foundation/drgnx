@@ -28,9 +28,11 @@ summary to RESULTS-FILE.  Return t if every test passed."
   (advice-add 'ert-run-test :after (lambda (&rest _) (drgnx-run-ert-drain-events)) '((name . drgnx-run-ert-drain)))
   (let* ((load-failures
           (cl-loop for file in (drgnx-run-ert--files dir)
-                   for err = (condition-case err (progn (load file nil t) nil) (error err))
-                   when err collect (list :name (concat "load " (file-name-nondirectory file))
-                                          :condition (format "%S" err))))
+                   ;; a file that does not read or load costs its tests: the run fails and says which file
+                   for err = (condition-case err (progn (load file nil t) nil) (error err) (quit err))
+                   when err collect (progn (message "drgnx: test file %s did not load: %S" file err)
+                                           (list :name (concat "load " (file-name-nondirectory file))
+                                                 :condition (format "%S" err)))))
          ;; which tests: all, or DRGNX_TEST_SELECTOR (an ERT selector; bin/drgnx check runs :timing ones alone)
          (stats (ert-run-tests-batch (let ((s (getenv "DRGNX_TEST_SELECTOR")))
                                        (if (and s (not (string-empty-p s))) (car (read-from-string s)) t))))
