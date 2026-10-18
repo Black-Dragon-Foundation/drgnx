@@ -31,13 +31,20 @@
 (defmacro drgnx-monitors-test--with-fake (opts &rest body)
   "BODY with the selected frame (`frame') on a fake window manager and a graphical `display-graphic-p'.
 `messages' collects what `message' says, newest first.  OPTS (a plist, evaluated): :monitors, :delay (seconds
-the fake takes to answer), :move-reply (default `ok'), :current (index of the monitor the frame is on)."
+the fake takes to answer), :move-reply (default `ok'), :current (index of the monitor the frame is on),
+:sequence (a list of (DELAY . MONITORS) the fake's successive monitor listings follow), :frame-sequence (the same
+for the monitor the frame is on: (DELAY . INDEX)), :move-delay (seconds a move takes)."
   (declare (indent 1))
   `(let* ((opts (list ,@opts)) (monitors (or (plist-get opts :monitors) drgnx-monitors-test--two))
           (delay (or (plist-get opts :delay) 0))
           (drgnx-monitors-test--current (or (plist-get opts :current) 0))
           (drgnx-monitors-test--moves nil) (drgnx-monitors-test--calls nil)
+          (sequence (plist-get opts :sequence)) (frame-sequence (plist-get opts :frame-sequence))
           (drgnx-monitors--count nil) (drgnx-monitors--pending nil) (drgnx-monitors--timer nil)
+          (drgnx-monitors--force nil) (drgnx-monitors--list-gen 0)
+          (drgnx-monitors--stamps (make-hash-table :test #'eq :weakness 'key))
+          (drgnx-monitors--gens (make-hash-table :test #'eq :weakness 'key))
+          (drgnx-monitors--moving (make-hash-table :test #'eq :weakness 'key))
           (messages nil) (inhibit-interaction t))
      (drgnx-platform-test--with-adapter
       'fakemon
@@ -45,11 +52,13 @@ the fake takes to answer), :move-reply (default `ok'), :current (index of the mo
             :can-move (lambda (_ctx) t)
             :monitors (lambda (_ctx cb)
                         (drgnx-monitors-test--count :monitors)
-                        (drgnx-monitors-test--later delay (lambda () (funcall cb (copy-tree monitors)))))
+                        (let ((step (if sequence (pop sequence) (cons delay monitors))))
+                          (drgnx-monitors-test--later (car step) (lambda () (funcall cb (copy-tree (cdr step)))))))
             :frame-monitor (lambda (_ctx cb)
                              (drgnx-monitors-test--count :frame-monitor)
-                             (drgnx-monitors-test--later
-                              delay (lambda () (funcall cb (copy-tree (nth drgnx-monitors-test--current monitors))))))
+                             (let ((step (if frame-sequence (pop frame-sequence) (cons delay drgnx-monitors-test--current))))
+                               (drgnx-monitors-test--later
+                                (car step) (lambda () (funcall cb (copy-tree (nth (cdr step) monitors)))))))
             :move (lambda (_ctx mon cb)
                     (setq drgnx-monitors-test--moves
                           (append drgnx-monitors-test--moves (list (plist-get mon :name))))
@@ -58,7 +67,7 @@ the fake takes to answer), :move-reply (default `ok'), :current (index of the mo
                         (setq drgnx-monitors-test--current
                               (seq-position monitors (plist-get mon :name)
                                             (lambda (m n) (equal (plist-get m :name) n)))))
-                      (drgnx-monitors-test--later 0 (lambda () (funcall cb reply))))))
+                      (drgnx-monitors-test--later (or (plist-get opts :move-delay) 0) (lambda () (funcall cb reply))))))
       (lambda ()
         (drgnx-platform-test--with-frame 'pgtk '("FAKEMON=1")
           (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
@@ -66,7 +75,7 @@ the fake takes to answer), :move-reply (default `ok'), :current (index of the mo
                      (lambda (fmt &rest args) (when fmt (push (apply #'format fmt args) messages)) nil)))
             (unwind-protect (progn ,@body)
               (when (timerp drgnx-monitors--timer) (cancel-timer drgnx-monitors--timer))
-              (modify-frame-parameters frame '((drgnx-monitor) (drgnx-monitors-refreshed))))))))))
+              (modify-frame-parameters frame '((drgnx-monitor))))))))))
 
 (defun drgnx-monitors-test--move (frame target)
   "Move FRAME to TARGET and wait for the answer."
@@ -218,13 +227,15 @@ the fake takes to answer), :move-reply (default `ok'), :current (index of the mo
                                 (should (= drgnx-monitors--count 2))
                                 (should (= 1 (plist-get drgnx-monitors-test--calls :frame-monitor)))
                                 (should (= 1 (plist-get drgnx-monitors-test--calls :monitors)))
-                                ;; more focus changes within 10 s: no further call
+                                ;; more focus changes within 10 s: no further call now, but a trailing refresh is armed
                                 (dotimes (_ 10) (drgnx-monitors--focus-changed))
                                 (drgnx-monitors--run-pending)
                                 (accept-process-output nil 0.4)
                                 (should (= 1 (plist-get drgnx-monitors-test--calls :frame-monitor)))
+                                (should (timerp drgnx-monitors--timer))
+                                (should (memq frame drgnx-monitors--pending))
                                 ;; 11 s later: one more
-                                (set-frame-parameter frame 'drgnx-monitors-refreshed (- (float-time) 11))
+                                (puthash frame (- (float-time) 11) drgnx-monitors--stamps)
                                 (drgnx-monitors--focus-changed)
                                 (drgnx-monitors--run-pending)
                                 (should (drgnx-platform-test--await (lambda () (= 2 (plist-get drgnx-monitors-test--calls :frame-monitor)))))))
@@ -247,6 +258,7 @@ the fake takes to answer), :move-reply (default `ok'), :current (index of the mo
                                       (accept-process-output nil 0.1)
                                       (setq drgnx-monitors-test--calls nil drgnx-monitors--count nil)
                                       (run-hook-with-args 'display-monitors-changed-functions nil)
+                                      (drgnx-monitors--run-pending)
                                       (should (drgnx-platform-test--await (lambda () drgnx-monitors--count)))
                                       (should (plist-get drgnx-monitors-test--calls :monitors))
                                       (should (plist-get drgnx-monitors-test--calls :frame-monitor))
@@ -265,6 +277,119 @@ the fake takes to answer), :move-reply (default `ok'), :current (index of the mo
                                     (should-not (memq #'drgnx-monitors--frame-moved move-frame-functions))
                                     (should-not (advice-function-member-p #'drgnx-monitors--focus-changed after-focus-change-function)))
                                 (drgnx-monitors-mode -1)))
+
+;;;; Races, storms and the rest of the review round
+
+(drgnx-platform-test--deftest drgnx-monitors/an-older-count-reply-arriving-last-does-not-overwrite-the-newer
+  ()
+  (drgnx-monitors-test--with-fake (:sequence (list (cons 0.3 (append drgnx-monitors-test--two '((:name "DP-3" :geometry (4480 0 1920 1080)))))
+                                                   (cons 0 drgnx-monitors-test--two)))
+    (drgnx-monitors--fetch-count frame)      ; the first answer (3 monitors) comes last
+    (drgnx-monitors--fetch-count frame)      ; the second (2 monitors) comes first
+    (should (drgnx-platform-test--await (lambda () drgnx-monitors--count)))
+    (should (= drgnx-monitors--count 2))
+    (accept-process-output nil 0.5)
+    (should (= drgnx-monitors--count 2))))
+
+(drgnx-platform-test--deftest drgnx-monitors/an-older-monitor-reply-arriving-last-does-not-overwrite-the-newer ()
+                              (drgnx-monitors-test--with-fake (:frame-sequence '((0.3 . 0) (0 . 1)))
+                                (drgnx-monitors--fetch-monitor frame)    ; DP-1, but it comes last
+                                (drgnx-monitors--fetch-monitor frame)    ; DP-2, first
+                                (should (drgnx-platform-test--await (lambda () (frame-parameter frame 'drgnx-monitor))))
+                                (accept-process-output nil 0.5)
+                                (should (equal (plist-get (frame-parameter frame 'drgnx-monitor) :name) "DP-2"))))
+
+(drgnx-platform-test--deftest drgnx-monitors/a-hot-plug-storm-is-one-refresh-that-ignores-the-interval ()
+                              (drgnx-monitors-test--with-fake ()
+                                (puthash frame (float-time) drgnx-monitors--stamps)         ; refreshed just now
+                                (dotimes (_ 10) (drgnx-monitors--monitors-changed nil))
+                                (should (= 1 (length (seq-filter (lambda (tm) (eq (timer--function tm) #'drgnx-monitors--run-pending))
+                                                                 timer-idle-list))))
+                                (should-not drgnx-monitors-test--calls)                      ; nothing ran in the hook itself
+                                (drgnx-monitors--run-pending)
+                                (should (drgnx-platform-test--await (lambda () drgnx-monitors--count)))
+                                (accept-process-output nil 0.2)
+                                (should (= 1 (plist-get drgnx-monitors-test--calls :monitors)))
+                                (should (= 1 (plist-get drgnx-monitors-test--calls :frame-monitor)))
+                                (should-not drgnx-monitors-test--moves)))
+
+(drgnx-platform-test--deftest drgnx-monitors/the-monitor-list-is-fetched-once-for-all-frames ()
+                              (drgnx-monitors-test--with-fake ()
+                                (let ((other (make-symbol "other-frame")))
+                                  (cl-letf (((symbol-function 'frame-list) (lambda () (list frame other)))
+                                            ((symbol-function 'frame-live-p) (lambda (f) (memq f (list frame other))))
+                                            ((symbol-function 'frame-parent) (lambda (&optional _) nil)))
+                                    (drgnx-monitors--monitors-changed nil)
+                                    (should (= 2 (length drgnx-monitors--pending)))
+                                    (cl-letf (((symbol-function 'drgnx-platform-frame-monitor) (lambda (_f cb) (funcall cb nil)))
+                                              ((symbol-function 'set-frame-parameter) #'ignore))
+                                      (drgnx-monitors--run-pending))
+                                    (accept-process-output nil 0.1)
+                                    (should (= 1 (plist-get drgnx-monitors-test--calls :monitors)))))))
+
+(drgnx-platform-test--deftest drgnx-monitors/the-hot-plug-hook-survives-a-signalling-adapter ()
+                              (drgnx-platform-test--with-adapter
+                               'sigmon (list :can-move (lambda (_ctx) t) :monitors (lambda (&rest _) (error "monitors bug"))
+                                             :frame-monitor (lambda (&rest _) (error "frame bug")))
+                               (lambda ()
+                                 (drgnx-platform-test--with-frame 'pgtk '("SIGMON=1")
+                                   (let ((drgnx-monitors--pending nil) (drgnx-monitors--timer nil) (drgnx-monitors--force nil)
+                                         (drgnx-monitors--count nil) (drgnx-monitors--list-gen 0) (inhibit-interaction t)
+                                         (drgnx-monitors--stamps (make-hash-table :test #'eq :weakness 'key))
+                                         (drgnx-monitors--gens (make-hash-table :test #'eq :weakness 'key)))
+                                     (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+                                               ((symbol-function 'message) (lambda (&rest _) nil))
+                                               ((symbol-function 'display-monitor-attributes-list) (lambda (&optional _) (list 'a 'b 'c))))
+                                       (unwind-protect
+                                           (progn (run-hook-with-args 'display-monitors-changed-functions nil)
+                                                  (drgnx-monitors--monitors-changed nil)
+                                                  (drgnx-monitors--run-pending)
+                                                  (should (drgnx-platform-test--await (lambda () drgnx-monitors--count)))
+                                                  (should (= drgnx-monitors--count 3)))   ; Emacs' own count
+                                         (when (timerp drgnx-monitors--timer) (cancel-timer drgnx-monitors--timer)))))))))
+
+(drgnx-platform-test--deftest drgnx-monitors/focus-schedules-the-frames-that-have-focus ()
+                              (drgnx-monitors-test--with-fake ()
+                                (let ((a (make-symbol "a")) (b (make-symbol "b")))
+                                  (cl-letf (((symbol-function 'frame-list) (lambda () (list a b)))
+                                            ((symbol-function 'frame-live-p) (lambda (f) (memq f (list a b))))
+                                            ((symbol-function 'frame-parent) (lambda (&optional _) nil))
+                                            ((symbol-function 'frame-focus-state) (lambda (f) (eq f b))))
+                                    (drgnx-monitors--focus-changed)
+                                    (should (equal drgnx-monitors--pending (list b)))))))
+
+(drgnx-platform-test--deftest drgnx-monitors/a-second-move-while-one-is-pending-is-ignored ()
+                              (drgnx-monitors-test--with-fake (:move-delay 0.3)
+                                (let (first second)
+                                  (drgnx-monitors-move frame 2 (lambda (r) (setq first (list r))))
+                                  (should (drgnx-platform-test--await (lambda () drgnx-monitors-test--moves)))   ; the first move is under way
+                                  (drgnx-monitors-move frame 1 (lambda (r) (setq second (list r))))
+                                  (should (drgnx-platform-test--await (lambda () second)))
+                                  (should (eq (car (car second)) :error))
+                                  (should (string-match-p "already under way" (cadr (car second))))
+                                  (should (drgnx-platform-test--await (lambda () first)))
+                                  (should (equal first '(ok)))
+                                  (should (equal drgnx-monitors-test--moves '("DP-2")))
+                                  (should (eq 'ok (drgnx-monitors-test--move frame 1))))))              ; free again
+
+(drgnx-platform-test--deftest drgnx-monitors/the-picker-waits-a-bounded-time-for-an-adapter-that-never-answers ()
+                              (drgnx-monitors-test--with-fake ()
+                                (let ((drgnx-platform-command-timeout 0.05) (drgnx-platform-watchdog-margin 0))
+                                  (cl-letf (((symbol-function 'drgnx-platform-monitors) (lambda (&rest _) nil))
+                                            ((symbol-function 'completing-read) (lambda (&rest _) (ert-fail "a picker opened"))))
+                                    (let ((start (float-time)))
+                                      (drgnx-monitors-move-to)
+                                      (should (< (- (float-time) start) 2)))
+                                    (should (equal (car messages) "The window manager did not answer"))))))
+
+(drgnx-platform-test--deftest drgnx-monitors/can-move-is-asked-once-per-command ()
+                              (drgnx-monitors-test--with-fake ()
+                                (let ((asked 0) (real (symbol-function 'drgnx-platform-can-move)))
+                                  (cl-letf (((symbol-function 'drgnx-platform-can-move) (lambda (f) (cl-incf asked) (funcall real f))))
+                                    (drgnx-monitors-move-next)
+                                    (should (drgnx-platform-test--await (lambda () (drgnx-monitors-test--has-message "^Moved to" messages))))
+                                    ;; the core's own move asks again: once here, once there
+                                    (should (= asked 2))))))
 
 ;;;; Offering the commands
 
