@@ -84,6 +84,31 @@ no registered modal engine; every binding is undone after."
       (should-not (drgnx-modal-report-test--label "SPC f f"))
       (should-not (drgnx-modal-report-test--label "SPC f")))))
 
+(defvar which-key-show-transient-maps)
+(declare-function which-key--get-bindings "which-key")
+(declare-function which-key--update "which-key")
+
+(ert-deftest drgnx-modal-report/leader-menu-popup-is-labelled ()
+  ;; M-SPC (Leader Menu) from any state: the popup is the one SPC shows, so its labels are the leader's (+File, Open
+  ;; File…), not the raw command symbols and "+prefix" of a transient map without a prefix.
+  (skip-unless (require 'which-key nil t))
+  (let ((which-key-replacement-alist nil) (drgnx-surfaces--which-key-entries nil))
+    (drgnx-modal-report-test--live
+      (drgnx-keys-use drgnx-modal-report-test--vim)
+      (with-temp-buffer
+        (let ((overriding-terminal-local-map nil) (pre-command-hook nil) (unread-command-events nil)
+              (which-key-show-transient-maps t))
+          (drgnx-modal-leader-menu)
+          ;; the menu goes on as if SPC had been typed (in this-command-keys, where which-key reads the prefix)
+          (should (equal unread-command-events '((t . 32))))
+          (should (eq (key-binding " ") (keymap-lookup drgnx-modal-leader-map "SPC")))
+          (let* ((rows (which-key--get-bindings (kbd "SPC")))
+                 (descs (mapcar (lambda (r) (substring-no-properties (nth 2 r))) rows)))
+            (should (member "+File" descs))
+            (should-not (member "+prefix" descs)))
+          (let ((rows (which-key--get-bindings (kbd "SPC f"))))
+            (should (member "Open File…" (mapcar (lambda (r) (substring-no-properties (nth 2 r))) rows)))))))))
+
 ;;;; Shortcuts
 
 (ert-deftest drgnx-modal-report/shortcuts-where-names-states ()

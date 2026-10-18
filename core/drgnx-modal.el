@@ -294,11 +294,16 @@ is written again (it said what ran before the after-apply functions started it) 
 ;;;; Commands
 
 (defun drgnx-modal-leader-menu ()
-  "Read the leader keys (`SPC …' in normal state) wherever you are, then run the command they name."
+  "Read the leader keys (`SPC …' in normal state) wherever you are, then run the command they name.
+It goes on as if SPC had been typed (a transient map holding the leader's SPC, and SPC read again the way which-key
+replays a prefix), so which-key's popup is the one SPC shows, with the leader's labels."
   (interactive)
   (let ((map (keymap-lookup drgnx-modal-leader-map "SPC")))
     (if (keymapp map)
-        (set-transient-map map)
+        (let ((transient (make-sparse-keymap)))
+          (keymap-set transient "SPC" map)
+          (set-transient-map transient)
+          (push '(t . 32) unread-command-events))
       (message "The leader menu has no keys: choose Vim keys (Keyboard Profile…)"))))
 
 (defun drgnx-modal--panel-move (key fallback)

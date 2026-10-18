@@ -163,7 +163,9 @@ for those layers, however often the keys are applied again (Toggle Modal Editing
   `drgnx-keys--apply-binding` and records in `drgnx-cmd-bound`, so `drgnx-keys--restore` undoes it — unless the
   engine map's key now differs from the snapshot and is not empty (`drgnx-keys--theirs`: the user's own binding, kept
   and reported as a conflict); leader or panel keys it beats are dropped and each named among the losers. In panels the leader and panel maps always win (they are above the panel's own map).
-- **Commands.** `modal-leader` (Leader Menu) reads the leader's `SPC` submap as a transient map from any state.
+- **Commands.** `modal-leader` (Leader Menu) reads the leader's keys from any state: a transient map holding the
+  leader's `SPC`, and `SPC` read again as if typed (`(t . 32)` in `unread-command-events`, as which-key replays a
+  prefix), so which-key shows the `SPC` popup with the leader's labels (`+File`, the command titles).
   `panel-next` / `panel-previous` (Next / Previous Row, bound in the panel map) run the panel's own `<down>` /
   `<up>` binding, else `next-line` / `previous-line`, so a panel keeps its row movement.
 
