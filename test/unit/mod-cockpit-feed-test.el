@@ -240,8 +240,11 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
     (let ((pending nil))
       ;; a hub that has not answered yet
       (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (method params cb) (push (list method params cb) pending) 1)))
-        (let ((q (drgnx-cockpit-feed-test--question (lambda (q) (equal (plist-get q :agent) "s-1")))))
-          (should (eq (drgnx-cockpit-answer q "this way") 'job))
+        (let ((q (drgnx-cockpit-feed-test--question (lambda (q) (equal (plist-get q :agent) "s-1")))) (said nil))
+          (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (when fmt (push (apply #'format fmt args) said)))))
+            (should (eq (drgnx-cockpit-answer q "this way") 'job)))
+          ;; through the hub: sent, not yet queued
+          (should (equal said '("Answer sent to the hub for claude · jx#2: it never interrupts")))
           (should (drgnx-cockpit-feed-test--open-p (plist-get q :id)))   ; open until the hub answers
           (should-error (drgnx-cockpit-answer q "that way") :type 'user-error)
           (should (= 1 (length pending)))
@@ -255,7 +258,13 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
             (drgnx-cockpit-answer q2 "spaces")
             (funcall (nth 2 (car pending)) nil "no such session")
             (should-not drgnx-cockpit-feed--in-flight)
-            (should (drgnx-cockpit-feed-test--open-p (plist-get q2 :id)))))))))
+            (should (drgnx-cockpit-feed-test--open-p (plist-get q2 :id)))
+            ;; an answer on its way for longer than the timeout (a hub that went away) no longer blocks: it is dropped
+            (setq drgnx-cockpit-feed--in-flight (list (cons (plist-get q2 :id) (- (float-time) 60))))
+            (should (eq (drgnx-cockpit-answer q2 "spaces") 'session))
+            (should (= 1 (length drgnx-cockpit-feed--in-flight)))
+            (should (> (cdar drgnx-cockpit-feed--in-flight) (- (float-time) 5)))
+            (should-error (drgnx-cockpit-answer q2 "tabs") :type 'user-error)))))))
 
 (ert-deftest drgnx-cockpit-feed/the-status-bar-hears-of-a-new-count ()
   (drgnx-cockpit-feed-test--with
@@ -279,7 +288,14 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
         ;; a store write that changes no count tells nothing
         (drgnx-coord-event-add :agent "s-1" :kind "edit" :data '(:paths ("x.el")))
         (drgnx-cockpit-feed--check)
-        (should (= refreshes 3))))))
+        (should (= refreshes 3))
+        ;; a refresh that fails leaves the count untold: the next check tries again
+        (drgnx-coord-send :sender "s-1" :recipient "user" :text "[escalation] and then?" :question t :job "jx")
+        (cl-letf (((symbol-function 'drgnx-statusbar-refresh) (lambda (&rest _) (error "bar broken"))))
+          (drgnx-cockpit-feed--check))
+        (should (= refreshes 3))
+        (drgnx-cockpit-feed--check)
+        (should (= refreshes 4))))))
 
 (ert-deftest drgnx-cockpit-feed/timeline-chips-in-time-order ()
   (drgnx-cockpit-feed-test--with
@@ -319,6 +335,7 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
         (let ((row (drgnx-cockpit-feed-test--line "claude · jx#2")) (width (window-body-width (get-buffer-window b))))
           (should (< (string-width row) width))
           (should (string-suffix-p "3/4 ⚠" row))
+          (should (eq (get-text-property (string-search "3/4 ⚠" row) 'face row) 'drgnx-cockpit-blocked))
           (should (string-match-p "‹ [0-9]+" row))
           (should-not (string-search "decision #1" row))
           (goto-char (point-min)) (search-forward "claude · jx#2") (search-forward "‹")
@@ -377,6 +394,28 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
           (let ((s1 (drgnx-cockpit-feed-test--line "claude · jx#2")))
             (should (string-match (format "‹ [0-9]+ %s %s s-1 asks you" mark mark) s1))
             (should (eq (get-text-property (match-beginning 0) 'face s1) 'drgnx-cockpit-waiting))))))))
+
+(ert-deftest drgnx-cockpit-feed/an-old-open-question-stays-in-the-timeline ()
+  (drgnx-cockpit-feed-test--with
+    (let ((mark (alist-get 'waiting (drgnx-cockpit-graph--glyph-table))))
+      ;; 310 newer events of another agent, and a test that only failed: s-1's question is outside the timeline's
+      ;; 300 events
+      (dotimes (i 310) (drgnx-coord-event-add :agent "s-2" :kind "edit" :data (list :paths (list (format "f%d.el" i)))))
+      (drgnx-coord-event-add :agent "s-2" :kind "test" :data '(:failed 2))
+      (let ((b (drgnx-cockpit-timeline-buffer)))
+        (set-window-buffer (selected-window) b)
+        (with-current-buffer b
+          (let ((s1 (drgnx-cockpit-feed-test--line "claude · jx#2")) (chat (drgnx-cockpit-feed-test--line "chat")))
+            (should (string-search (concat mark " s-1 asks you") s1))
+            (should (eq (get-text-property (string-search "s-1 asks you" s1) 'face s1) 'drgnx-cockpit-waiting))
+            ;; a test with failures only is a failure too
+            (should (string-suffix-p "2 failed" chat))
+            (should (eq (get-text-property (string-search "2 failed" chat) 'face chat) 'drgnx-cockpit-blocked))))
+        ;; answered: it goes from the row
+        (drgnx-cockpit-answer (drgnx-cockpit-feed-test--question (lambda (q) (equal (plist-get q :agent) "s-1"))) "this way")
+        (drgnx-cockpit-feed-test--tick)
+        (with-current-buffer b
+          (should-not (string-search "s-1 asks you" (drgnx-cockpit-feed-test--line "claude · jx#2"))))))))
 
 (ert-deftest drgnx-cockpit-feed/a-question-shows-in-all-three-places ()
   (drgnx-cockpit-feed-test--with

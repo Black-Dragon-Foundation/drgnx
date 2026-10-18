@@ -112,7 +112,8 @@ you            answered
 
 - The chips run left to right by time. A row shows as many of its newest chips as fit in its window.
 - A chip that waits on you is drawn first, right after the name (or `‹ N`), however old it is: newer chips make
-  room for it. An open ask card shows in the `jobs` row the same way.
+  room for it, and so does an open question older than the events the timeline reads. An open ask card shows in
+  the `jobs` row the same way.
 - `‹ N` says how many chips are not drawn; `‹ N ◐` means one of them waits on you (a row too narrow for all its
   questions). Click it to list them with their times.
 - A chip opens what it is about, as a line of What happened does. The agent's name opens its What happened.
@@ -143,7 +144,8 @@ happened, or you pick one. It asks for the text. An answer never interrupts anyo
 
 Then an `answer` event closes the question everywhere. When the store holds the message back (the agent's queue is
 full, or too many messages between you two), the echo area says "held, not sent" and the question stays open. While
-an answer is on its way to the hub, a second answer to the same question is refused.
+an answer is on its way to the hub (the echo area says "sent to the hub"), a second answer to the same question is
+refused for up to 30 seconds.
 
 Both are plain text, so terminals get the same lines and chips. A terminal that does not write UTF-8 gets ASCII
 marks: `?` for `◐`, `+` for `✓`, `!` for `⚠`, `<` for `‹`, `>` for `▸`, `...` for `…`.

@@ -73,8 +73,16 @@
 (defvar drgnx-cockpit-feed--waiting nil "(KEY . COUNT): `drgnx-cockpit-waiting-count' for the store at KEY.")
 (defvar drgnx-cockpit-feed--told nil "The waiting count the status bar was last told of (`drgnx-cockpit-feed-tell-statusbar').")
 (defvar drgnx-cockpit-feed--in-flight nil
-  "The questions (event ids, or (card . ID)) whose answer is on its way to the hub: a second answer is refused until it
-answers.  Each leaves when the hub answers (or the call fails), so it holds at most the answers sent meanwhile.")
+  "The questions whose answer is on its way to the hub: ((QUESTION . SENT-AT)…), QUESTION an event id or (card . ID).
+A second answer is refused until the hub answers, the call fails, or `drgnx-cockpit-feed-in-flight-timeout' passes
+\(a hub that went away never answers); entries that old are dropped whenever one is added.")
+
+(defvar drgnx-cockpit-feed-in-flight-timeout 30
+  "Seconds after which an answer still on its way to the hub no longer blocks a second one.")
+
+(defvar drgnx-cockpit-feed--questions-now nil
+  "While an update runs: a box (READ . QUESTIONS), so that its buffers and the waiting count read the open questions
+once (`drgnx-cockpit-feed--open-questions'); nil outside an update.")
 
 (defvar-local drgnx-cockpit-feed--key nil
   "The feed's key (`drgnx-cockpit-feed--key-now') at this buffer's last successful update.")
@@ -91,6 +99,9 @@ its line marks.  Row I is the buffer's line I + 2 (the first line is the head)."
 (defvar-local drgnx-cockpit-feed--fit nil
   "What this buffer was fitted to (`drgnx-cockpit-feed--fit-now'): the timeline's width, What happened's line count.")
 (defvar-local drgnx-cockpit-feed--head nil "The timeline: its first line as drawn.")
+(defvar-local drgnx-cockpit-feed--old nil
+  "The timeline: the open questions whose events are older than every chip it holds, as chips, newest first (pinned
+in their agents' rows).")
 (defvar-local drgnx-cockpit-feed--cards nil
   "The timeline: the open ask cards no open question names, as chips of the `jobs' row (pinned, waiting).")
 
@@ -205,7 +216,8 @@ meanwhile, only while one shows (a hidden one updates when it shows).  Cheap: ca
   (setq drgnx-cockpit-feed--timer nil)
   (drgnx-cockpit--call
    (lambda ()
-     (let ((key (drgnx-cockpit-feed--key-now)) (open nil) (open-known nil))
+     (let ((key (drgnx-cockpit-feed--key-now)) (open nil) (open-known nil)
+           (drgnx-cockpit-feed--questions-now (cons nil nil)))
        (dolist (b drgnx-cockpit-feed--buffers)
          (with-current-buffer b
            (cond ((not (get-buffer-window b 'visible)) (setq drgnx-cockpit-feed--stale t))
@@ -238,9 +250,16 @@ as many lines as its tallest window shows below its head and above its last line
       (if ws (max 3 (min drgnx-cockpit-happened-limit (- (apply #'max (mapcar #'window-body-height ws)) 4)))
         drgnx-cockpit-happened-limit))))
 
+(defun drgnx-cockpit-feed--open-questions ()
+  "The open questions (`drgnx-coord-open-questions'), read once per update (`drgnx-cockpit-feed--questions-now')."
+  (let ((box drgnx-cockpit-feed--questions-now))
+    (cond ((null box) (drgnx-coord-open-questions))
+          ((car box) (cdr box))
+          (t (setcdr box (drgnx-coord-open-questions)) (setcar box t) (cdr box)))))
+
 (defun drgnx-cockpit-feed--open-ids ()
   "The open questions' event ids."
-  (delq nil (mapcar (lambda (q) (plist-get q :id)) (drgnx-coord-open-questions))))
+  (delq nil (mapcar (lambda (q) (plist-get q :id)) (drgnx-cockpit-feed--open-questions))))
 
 ;;;; The modes
 
@@ -379,7 +398,7 @@ as many lines as its tallest window shows below its head and above its last line
 (defun drgnx-cockpit-feed--happened-head (agent)
   "What happened's first line for AGENT: its name, then its oldest open question, marked, in `drgnx-cockpit-waiting'
 — there however far its line has scrolled out (A answers it)."
-  (let ((q (car (drgnx-coord-open-questions agent))))
+  (let ((q (seq-find (lambda (q) (equal (plist-get q :agent) agent)) (drgnx-cockpit-feed--open-questions))))
     (concat (propertize (drgnx-cockpit-feed--glyphs (format "What happened: %s" (drgnx-cockpit-feed--name agent))) 'face 'drgnx-cockpit-kind)
             (if (null q) ""
               (concat (drgnx-cockpit-feed--glyphs " · ")
@@ -521,11 +540,11 @@ window of another height: drawn anew."
   (if (consp mark) (seq-find (lambda (c) (eql (plist-get c :card) (cdr mark))) drgnx-cockpit-feed--cards) (memql mark open)))
 
 (defun drgnx-cockpit-feed--failed-p (chip)
-  "Whether CHIP tells of a failure, by its event's kind: tests with failures (the warning glyph only
-`drgnx-cockpit--tests' writes from their counts), a failing review verdict, a failed status."
+  "Whether CHIP tells of a failure, by its event's kind: tests with failures (the warning glyph or `N failed', which
+only `drgnx-cockpit--tests' writes from their counts), a failing review verdict, a failed status."
   (let ((label (or (plist-get chip :label) "")))
     (pcase (plist-get chip :kind)
-      ("test" (and (string-search (drgnx-cockpit--glyph 'warning "⚠") label) t))
+      ("test" (or (and (string-search (drgnx-cockpit--glyph 'warning "⚠") label) t) (string-match-p " failed\\'" label)))
       ("review" (string-match-p "review: \\(fail\\|critical\\|reject\\|changes\\)" label))
       ("status" (string-match-p " failed\\'" label)))))
 
@@ -546,8 +565,11 @@ window of another height: drawn anew."
                                                    (format-time-string "%F %T" (plist-get chip :at)) (plist-get chip :label)))))
 
 (defun drgnx-cockpit-feed--row-chips (key chips)
-  "Row KEY's CHIPS (newest first), with the open ask cards for the `jobs' row (KEY \"\")."
-  (if (equal key "") (append (reverse drgnx-cockpit-feed--cards) chips) chips))
+  "Row KEY's CHIPS (newest first), with the open ask cards for the `jobs' row (KEY \"\") first and its open
+questions older than the chips it holds last (`drgnx-cockpit-feed--old')."
+  (append (and (equal key "") (reverse drgnx-cockpit-feed--cards))
+          chips
+          (seq-filter (lambda (c) (equal (drgnx-cockpit-feed--row-key c) key)) drgnx-cockpit-feed--old)))
 
 (defun drgnx-cockpit-feed--row-text (row width open)
   "ROW (KEY NAME CHIPS SHOWN) as one line narrower than WIDTH columns: its name, `‹ N' (the N chips not drawn, one
@@ -627,11 +649,29 @@ oldest first: `T3 asks you: TITLE', each a button to its task."
                         :target (funcall target (list :job job :task task)))))
               cards))))
 
-(defun drgnx-cockpit-feed--ensure-jobs-row ()
-  "With open ask cards, the `jobs' row exists (they are drawn there): non-nil when it was made now."
-  (when (and drgnx-cockpit-feed--cards (not (assoc "" drgnx-cockpit-feed--rows)))
-    (setq drgnx-cockpit-feed--rows (append drgnx-cockpit-feed--rows (list (list "" (drgnx-cockpit-feed--row-name "") nil nil))))
-    t))
+(defun drgnx-cockpit-feed--old-chips (open)
+  "The open questions (OPEN: their ids) whose events none of the timeline's rows holds — older than the events it
+read — as chips, newest first: one `id in (…)' query, none when every open question is held."
+  (let ((held (make-hash-table)))
+    (dolist (row drgnx-cockpit-feed--rows) (dolist (c (nth 2 row)) (puthash (plist-get c :id) t held)))
+    (when-let* ((missing (seq-remove (lambda (id) (gethash id held)) open)))
+      (let ((target (drgnx-cockpit--targeter)))
+        (mapcar (lambda (e) (list :id (plist-get e :id) :at (plist-get e :at) :agent (plist-get e :agent) :kind (plist-get e :kind)
+                                  :label (drgnx-cockpit--label e) :target (funcall target e)))
+                (drgnx-cockpit--events (format "select %%s from event where id in (%s) order by id desc"
+                                               (mapconcat (lambda (_) "?") missing ", "))
+                                       missing))))))
+
+(defun drgnx-cockpit-feed--ensure-rows ()
+  "Rows for the pinned chips that have none yet: the `jobs' row for open ask cards, an agent's row for its old open
+questions (`drgnx-cockpit-feed--old').  Their keys."
+  (let ((made nil))
+    (dolist (k (delete-dups (append (and drgnx-cockpit-feed--cards (list ""))
+                                    (mapcar #'drgnx-cockpit-feed--row-key drgnx-cockpit-feed--old))))
+      (unless (assoc k drgnx-cockpit-feed--rows)
+        (setq drgnx-cockpit-feed--rows (append drgnx-cockpit-feed--rows (list (list k (drgnx-cockpit-feed--row-name k) nil nil))))
+        (push k made)))
+    made))
 
 (defun drgnx-cockpit-feed--timeline-build ()
   "Draw the timeline anew from the store: a head line, then one line per agent."
@@ -641,7 +681,8 @@ oldest first: `T3 asks you: TITLE', each a button to its task."
           drgnx-cockpit-feed--cards (drgnx-cockpit-feed--card-chips)
           drgnx-cockpit-feed--fit (drgnx-cockpit-feed--fit-now))
     (drgnx-cockpit-feed--add-chips (drgnx-cockpit-timeline))
-    (drgnx-cockpit-feed--ensure-jobs-row)
+    (setq drgnx-cockpit-feed--old (drgnx-cockpit-feed--old-chips open))
+    (drgnx-cockpit-feed--ensure-rows)
     (erase-buffer)
     (setq drgnx-cockpit-feed--head (drgnx-cockpit-feed--head-text (drgnx-cockpit-waiting-count)))
     (insert drgnx-cockpit-feed--head "\n")
@@ -670,7 +711,11 @@ events a second) leaves the older of them out of the rows until the timeline is 
            (touched (progn (setq drgnx-cockpit-feed--cards cards)
                            (drgnx-cockpit-feed--add-chips (drgnx-cockpit-timeline :since drgnx-cockpit-feed--last))))
            (inhibit-read-only t))
-      (drgnx-cockpit-feed--ensure-jobs-row)
+      (let ((old-chips (drgnx-cockpit-feed--old-chips open)))
+        (unless (equal (mapcar #'drgnx-cockpit-feed--mark old-chips) (mapcar #'drgnx-cockpit-feed--mark drgnx-cockpit-feed--old))
+          (setq touched (append (mapcar #'drgnx-cockpit-feed--row-key (append old-chips drgnx-cockpit-feed--old)) touched)
+                drgnx-cockpit-feed--old old-chips)))
+      (setq touched (append (drgnx-cockpit-feed--ensure-rows) touched))
       (when cards-changed (push "" touched))
       (unless (eql width drgnx-cockpit-feed--fit)
         (setq drgnx-cockpit-feed--fit width touched (mapcar #'car drgnx-cockpit-feed--rows)))
@@ -729,15 +774,15 @@ store and `drgnx-cockpit-include-closed-jobs' did not change since the last call
 \(`drgnx-statusbar-waiting-functions')."
   (let ((key (cons drgnx-cockpit-include-closed-jobs (drgnx-cockpit--db-key))))
     (if (equal key (car drgnx-cockpit-feed--waiting)) (cdr drgnx-cockpit-feed--waiting)
-      (let* ((qs (drgnx-coord-open-questions))
-             (n (+ (length qs) (length (drgnx-cockpit-feed--open-cards qs)))))
+      (let* ((qs (drgnx-cockpit-feed--open-questions))
+             (n (+ (length qs) (length (drgnx-cockpit-feed--open-cards)))))
         (setq drgnx-cockpit-feed--waiting (cons key n))
         n))))
 
-(defun drgnx-cockpit-feed--open-cards (&optional questions)
-  "The open ask cards (of open jobs, unless `drgnx-cockpit-include-closed-jobs') that no open question names —
-QUESTIONS, else `drgnx-coord-open-questions' — as the model counts them: ((ID JOB TASK TITLE AT)…), oldest first."
-  (let ((asked (delq nil (mapcar (lambda (q) (plist-get (plist-get q :data) :card)) (or questions (drgnx-coord-open-questions))))))
+(defun drgnx-cockpit-feed--open-cards ()
+  "The open ask cards (of open jobs, unless `drgnx-cockpit-include-closed-jobs') that no open question
+(`drgnx-cockpit-feed--open-questions') names — as the model counts them: ((ID JOB TASK TITLE AT)…), oldest first."
+  (let ((asked (delq nil (mapcar (lambda (q) (plist-get (plist-get q :data) :card)) (drgnx-cockpit-feed--open-questions)))))
     (seq-remove (lambda (c) (memql (car c) asked))
                 (sqlite-select (drgnx-work-db) (concat "select c.id, c.job, c.task, c.title, c.at from card c join job j on j.id = c.job"
                                                        " where c.state = 'open' and c.kind = 'ask'"
@@ -747,11 +792,12 @@ QUESTIONS, else `drgnx-coord-open-questions' — as the model counts them: ((ID 
 (defun drgnx-cockpit-feed-tell-statusbar ()
   "Tell the status bar when `drgnx-cockpit-waiting-count' changed since it was last told (`drgnx-statusbar-refresh',
 when it is loaded): so its count moves when another process asks, with no hub event.  One query when the store did
-not change.  Called by the graph's and the feed's checks (timers)."
+not change.  Called by the graph's and the feed's checks (timers).  The count counts as told only once the refresh
+returned: a failed one is tried again at the next check."
   (let ((n (drgnx-cockpit-waiting-count)))
-    (unless (eql n drgnx-cockpit-feed--told)
-      (setq drgnx-cockpit-feed--told n)
-      (when (fboundp 'drgnx-statusbar-refresh) (drgnx-statusbar-refresh)))))
+    (when (and (not (eql n drgnx-cockpit-feed--told)) (fboundp 'drgnx-statusbar-refresh))
+      (drgnx-statusbar-refresh)
+      (setq drgnx-cockpit-feed--told n))))
 
 (defun drgnx-cockpit-feed--questions ()
   "Everything waiting on you that can be answered: the model's open questions (each with the :node it is about),
@@ -793,12 +839,16 @@ happened when its agent has none (a reply then)."
 (defun drgnx-cockpit-feed--hub (method params done &optional flight)
   "Ask the hub METHOD with PARAMS; DONE runs when it answered without an error, an error is said.  No hub: an error.
 FLIGHT, when given, is the question on its way: a second answer to it is refused (`drgnx-cockpit-feed--in-flight')
-until the hub answers or the call fails."
+until the hub answers, the call fails or `drgnx-cockpit-feed-in-flight-timeout' passes."
   (unless (fboundp 'drgnx-hub-call) (require 'drgnx-hub))
   (when flight
-    (when (member flight drgnx-cockpit-feed--in-flight) (user-error "The answer to that question is on its way already"))
-    (push flight drgnx-cockpit-feed--in-flight))
-  (let ((land (lambda () (when flight (setq drgnx-cockpit-feed--in-flight (delete flight drgnx-cockpit-feed--in-flight))))))
+    (let ((cut (- (float-time) drgnx-cockpit-feed-in-flight-timeout)))
+      ;; older entries are free: a hub that went away never answers them
+      (setq drgnx-cockpit-feed--in-flight (seq-filter (lambda (e) (> (cdr e) cut)) drgnx-cockpit-feed--in-flight)))
+    (when (assoc flight drgnx-cockpit-feed--in-flight) (user-error "The answer to that question is on its way already"))
+    (push (cons flight (float-time)) drgnx-cockpit-feed--in-flight))
+  (let ((land (lambda () (when flight (setq drgnx-cockpit-feed--in-flight
+                                            (seq-remove (lambda (e) (equal (car e) flight)) drgnx-cockpit-feed--in-flight))))))
     (condition-case err
         (drgnx-hub-call method params (lambda (_r err)
                                         (funcall land)
@@ -888,7 +938,12 @@ else one you pick; then the text is asked for.  In what happened, an agent with 
                (t (drgnx-cockpit-feed--queue agent text answered flight)))))
         ;; nil: the store held it back, and said so
         (when (and route (not (eq route 'transcript)))
-          (message "Answer queued for %s: it never interrupts"
+          ;; through the hub, it is not queued yet: the hub's answer (or error) comes later
+          (message (if (or (eq route 'job)
+                           (and (eq route 'session)
+                                (let ((s (drgnx-cockpit-feed--session agent))) (and s (drgnx-agent-session-remote s)))))
+                       "Answer sent to the hub for %s: it never interrupts"
+                     "Answer queued for %s: it never interrupts")
                    (if agent (drgnx-cockpit-feed--name agent) (format "job %s" (or job (plist-get question :job))))))
         route))))
 

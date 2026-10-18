@@ -170,11 +170,13 @@ fixture is a temp project with:
   - **The timeline** reads `drgnx-cockpit-timeline :since` its last chip. It rewrites only the lines of the rows
     those reach, the rows that marked a question answered since, and its head. A new agent is a new line at the end.
     It reads at most `drgnx-cockpit-timeline-limit` events past its last chip per update; more in between (over 600
-    a second) are left out of the rows until it is drawn anew.
+    a second) are left out of the rows until it is drawn anew. An open question whose event is older than every
+    chip it holds is read back (one `id in (…)` query, only when one is missing) and pinned in its agent's row.
     A row's waiting chips — its open questions, and in the `jobs` row the open ask cards no open question names
     (`drgnx-cockpit-feed--open-cards`, one query) — are pinned: drawn first, after the name or `‹ N`, whatever their
     age, and newer chips go to make room. `‹ N ◐` means a hidden chip waits. A chip shows a failure (in
-    `drgnx-cockpit-blocked`) by its event's kind: tests with failures, a failing review verdict, a failed status.
+    `drgnx-cockpit-blocked`) by its event's kind: tests with failures (`3/4 ⚠`, `2 failed`), a failing review
+    verdict, a failed status. One update reads the open questions once, for every buffer and the waiting count.
     A row shows its newest chips that fit its window (its widest, else 80 columns, less one). Chip widths are
     measured then, never on redisplay. A width change refits every row. Windows on a rewritten line keep their
     column.
@@ -183,7 +185,7 @@ fixture is a temp project with:
   Its key also holds `drgnx-cockpit-include-closed-jobs`. It is meant for the status bar's
   `drgnx-statusbar-waiting-functions`.
 - **`(drgnx-cockpit-feed-tell-statusbar)`**: calls `drgnx-statusbar-refresh` (when it is loaded) when the waiting count
-  changed since the bar was last told. The graph's check and the feed's check call it every
+  changed since the bar was last told (it counts as told once the refresh returned). The graph's check and the feed's check call it every
   `drgnx-cockpit-check-interval` while their buffers live, so the bar moves when another process asks, without a hub
   event.
 - **`(drgnx-cockpit-answer QUESTION TEXT)`**: QUESTION is one of `drgnx-cockpit-feed--questions` (the model's
@@ -201,8 +203,10 @@ fixture is a temp project with:
     When the hub answers asynchronously, this happens in its callback, so a refused reply leaves the question open.
   - A permission opens the transcript, and nothing is written.
   - Nothing here calls `agents/stop`, `agents/kill` or a cancel.
-  - The questions whose answer is on its way to the hub (`drgnx-cockpit-feed--in-flight`) refuse a second answer
-    until the hub answers or the call fails.
+  - The questions whose answer is on its way to the hub (`drgnx-cockpit-feed--in-flight`, `(QUESTION . SENT-AT)`)
+    refuse a second answer until the hub answers, the call fails, or `drgnx-cockpit-feed-in-flight-timeout` (30 s)
+    passes: older entries are dropped whenever one is added, so a hub that went away blocks nothing for long. The
+    echo area says "sent to the hub" for these routes, "queued" for the others.
 
 ### Cost
 
