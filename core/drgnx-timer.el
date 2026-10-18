@@ -42,8 +42,10 @@
 
 (defvar drgnx-timer--last-run (make-hash-table :test #'equal)
   "KEY → (TIME . OWNER): when KEY's last `drgnx-timer-soon' run with a :min-interval began.
-Kept only for such keys, and removed by `drgnx-timer-cancel', `drgnx-timer-cancel-owner', `drgnx-timer-reset' and the
-killing of an owner buffer, so an entry is there only while its owner and its key are.")
+Kept only for such keys, and removed by `drgnx-timer-cancel', `drgnx-timer-cancel-owner' (a module's run end calls
+it; a process owner's sentinel must), `drgnx-timer-reset', and the killing of the buffer that owns the key or is
+its OBJECT, `(SYMBOL . BUFFER)'.  A key whose OBJECT is another process, frame or window, under a `:core' or module
+owner, keeps its entry until one of those.")
 
 (defvar-local drgnx-timer--buffer-keys nil
   "Keys whose timers this buffer may own; `drgnx-timer--buffer-killed' cancels those it still owns.")
@@ -110,7 +112,8 @@ module symbol: its current run token, `:gone' when it has no run.  A buffer or a
     (dolist (key drgnx-timer--buffer-keys)
       (let ((entry (gethash key drgnx-timer--table)))
         (when (and entry (eq (drgnx-timer--entry-owner entry) buffer)) (drgnx-timer--drop entry)))
-      (when (eq (cdr (gethash key drgnx-timer--last-run)) buffer) (remhash key drgnx-timer--last-run)))
+      (when (or (eq (cdr (gethash key drgnx-timer--last-run)) buffer) (eq (cdr-safe key) buffer))
+        (remhash key drgnx-timer--last-run)))
     (setq drgnx-timer--buffer-keys nil)))
 (put 'drgnx-timer--buffer-killed 'permanent-local-hook t)
 
@@ -225,7 +228,7 @@ client has only the initial one)."
   "Call ENTRY's FN with its ARGS, in `save-match-data', a buffer owner current; catch every error.
 RECORD non-nil and a module owner: FN runs as the module's code (`drgnx-modules--record-call').  A success resets
 the failure count and returns FN's value; an error goes to `drgnx-timer--failed' (the entry's failure count is then
-above 0).  The debugger opens only with `debug-on-error' and a frame to show it in (`drgnx-timer--debugger-p'):
+above 0) and the value is nil.  The debugger opens only with `debug-on-error' and a frame to show it in (`drgnx-timer--debugger-p'):
 never in batch or in a daemon with no client."
   (let ((fn (drgnx-timer--entry-fn entry)) (args (drgnx-timer--entry-args entry))
         (owner (drgnx-timer--entry-owner entry))
@@ -238,7 +241,7 @@ never in batch or in a daemon with no client."
                      (drgnx-modules--record-call owner (lambda () (apply fn args))))
                     (t (apply fn args))))
           (setf (drgnx-timer--entry-failures entry) 0))
-      (error (drgnx-timer--failed entry err)))))
+      (error (drgnx-timer--failed entry err) nil))))
 
 (defun drgnx-timer--rerun-p (entry)
   "Non-nil if ENTRY would run again: a repeating timer, a poll or idle steps."
@@ -281,14 +284,15 @@ At its `drgnx-timer-failure-limit'-th failure in a row an ENTRY that would run a
   (when (bufferp (car cell)) (drgnx-timer--watch-buffer (car cell) (drgnx-timer--entry-key entry))))
 
 (defun drgnx-timer--call-final (entry fn)
-  "Call FN (an ON-TIMEOUT or ON-DONE function, or nil) once with ENTRY's args, as ENTRY's owner.
+  "Call FN (an ON-TIMEOUT or ON-DONE function, or nil) once with ENTRY's args, in ENTRY's
+owner's buffer if it is one; not recorded as the module's code (the primitives' firings never install the net).
 An error is recorded like any other (`drgnx-timer--failed'); it stops nothing."
   (when fn
     (drgnx-timer--call (drgnx-timer--make :key (drgnx-timer--entry-key entry) :kind 'start :fn fn
                                           :args (drgnx-timer--entry-args entry)
                                           :owner (drgnx-timer--entry-owner entry)
                                           :token (drgnx-timer--entry-token entry))
-                       t)))
+                       nil)))
 
 ;;;; Debounce
 
@@ -322,11 +326,12 @@ See docs/develop/core.md, \"Timers\"."
 (defun drgnx-timer--fire-debounce (entry)
   "ENTRY's timer is due: a wall debounce called since waits the remainder (a new timer, from a delay); else FN runs."
   (let* ((last (drgnx-timer--entry-last entry))
-         (left (and last (- (drgnx-timer--entry-secs entry) (- (drgnx-timer--now) last)))))
+         (left (and last (min (drgnx-timer--entry-secs entry)       ; a clock that stepped back never stretches the wait
+                              (- (drgnx-timer--entry-secs entry) (- (drgnx-timer--now) last))))))
     (if (and left (> left drgnx-timer--slack))
         (setf (drgnx-timer--entry-timer entry) (run-at-time left nil #'drgnx-timer--fire entry))
       (remhash (drgnx-timer--entry-key entry) drgnx-timer--table)
-      (drgnx-timer--call entry t))))
+      (drgnx-timer--call entry nil))))
 
 ;;;; Soon
 
@@ -351,13 +356,15 @@ idleness.  A call on a key that holds another kind of timer replaces it.  OWNER,
                       (run-with-idle-timer delay nil #'drgnx-timer--fire new)
                     (run-at-time delay nil #'drgnx-timer--fire new)))
             (drgnx-timer--install new cell)
+            (when (and min-interval (consp key) (bufferp (cdr key)) (buffer-live-p (cdr key)))
+              (drgnx-timer--watch-buffer (cdr key) key))   ; the buffer's death prunes the key's last-run entry
             key))))))
 
 (defun drgnx-timer--soon-delay (key secs min-interval owner)
   "SECS, or longer so that KEY runs MIN-INTERVAL after its last run, if OWNER ran it."
   (let ((last (gethash key drgnx-timer--last-run)))
     (if (and last (eq (cdr last) owner))
-        (max secs (- (+ (car last) min-interval) (drgnx-timer--now)))
+        (max secs (min min-interval (- (+ (car last) min-interval) (drgnx-timer--now))))   ; a clock step back: <= MIN
       secs)))
 
 (defun drgnx-timer--fire-soon (entry)
@@ -369,7 +376,7 @@ idleness.  A call on a key that holds another kind of timer replaces it.  OWNER,
         (if last
             (setf (car last) (drgnx-timer--now) (cdr last) (drgnx-timer--entry-owner entry))
           (puthash key (cons (drgnx-timer--now) (drgnx-timer--entry-owner entry)) drgnx-timer--last-run))))
-    (drgnx-timer--call entry t)))
+    (drgnx-timer--call entry nil)))
 
 ;;;; Poll
 

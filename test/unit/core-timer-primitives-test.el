@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-paths)
+(require 'drgnx-modules)
 (require 'drgnx-timer)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
@@ -42,6 +43,12 @@
 
 (defun drgnx-timer-prim-test--boom (&rest _) (error "Boom"))
 
+(defvar tp-hook-a nil) (defvar tp-hook-b nil) (defvar tp-hook-c nil) (defvar tp-hook-d nil) (defvar tp-hook-e nil)
+(defun drgnx-timer-prim-test--add-hook (&rest args) (add-hook (car args) #'ignore) nil)
+(defun drgnx-timer-prim-test--add-hook-t (&rest args) (add-hook (car args) #'ignore) t)
+(defun drgnx-timer-prim-test--finish (&rest _) nil)
+(defun drgnx-timer-prim-test--finish-wait (&rest _) nil)
+
 (defun drgnx-timer-prim-test--done (&rest args)
   (push (cons 'done args) drgnx-timer-prim-test--calls))
 
@@ -64,7 +71,8 @@ less what reading the counters itself costs."
   ;; the runner loads a file's source when it is newer than its .elc, and interpreted code conses for its own
   ;; bookkeeping: measure the library and the fixture's clock seam compiled
   (dolist (fn '(drgnx-timer-debounce drgnx-test--seam-now drgnx-test--float-time))
-    (unless (compiled-function-p (symbol-function fn)) (byte-compile fn)))
+    (unless (compiled-function-p (symbol-function fn))
+      (let ((byte-compile-warnings '(not docstrings))) (byte-compile fn))))
   (let ((f (byte-compile thunk)) (best nil))
     (funcall f)
     (memory-use-counts)
@@ -194,6 +202,34 @@ less what reading the counters itself costs."
    (should-error (drgnx-timer-poll 'tp-a 1 #'ignore :deadline 5 :on-timeout (lambda ())) :type 'wrong-type-argument)
    (should-error (drgnx-timer-idle-steps 'tp-a 1 #'ignore :on-done (lambda ())) :type 'wrong-type-argument)
    (should-not (drgnx-timer-pending))))
+
+;;;; Firings are not recorded as the module's code
+
+(ert-deftest drgnx-timer-prim/a-module-primitive-firing-is-not-recorded ()
+  (drgnx-timer-prim-test--with
+   (let ((drgnx-modules--table (list (list 'test/m :doc "a module for the primitive tests")))
+         (drgnx-modules--report nil) (drgnx-modules--stacks nil) (drgnx-modules--runs nil)
+         (drgnx-modules--features nil) (drgnx-modules--left nil))
+     (unwind-protect
+         (progn
+           (should-not (drgnx-modules--run-setup 'test/m #'ignore))
+           (drgnx-modules--record 'test/m 'startup 0 'ok)
+           (let ((stack (alist-get 'test/m drgnx-modules--stacks)))
+             (drgnx-timer-debounce 'tp-a 0.1 #'drgnx-timer-prim-test--add-hook :args '(tp-hook-a) :owner 'test/m)
+             (drgnx-timer-soon 'tp-b 0.1 #'drgnx-timer-prim-test--add-hook :args '(tp-hook-b) :owner 'test/m)
+             (drgnx-timer-poll 'tp-c 0.1 #'drgnx-timer-prim-test--add-hook-t :deadline 5 :args '(tp-hook-c)
+                               :owner 'test/m)
+             (drgnx-timer-poll 'tp-d 0.5 #'drgnx-timer-prim-test--finish-wait :deadline 1 :args '(tp-hook-d)
+                               :on-timeout #'drgnx-timer-prim-test--add-hook :owner 'test/m)
+             (drgnx-timer-idle-steps 'tp-e 0.2 #'drgnx-timer-prim-test--finish :args '(tp-hook-e)
+                                     :on-done #'drgnx-timer-prim-test--add-hook :owner 'test/m)
+             (drgnx-test-advance 2)
+             (drgnx-test-idle 1)
+             (dolist (hook '(tp-hook-a tp-hook-b tp-hook-c tp-hook-d tp-hook-e))
+               (should (memq #'ignore (symbol-value hook))))
+             (should (equal stack (alist-get 'test/m drgnx-modules--stacks)))   ; no net: nothing recorded
+             (should-not drgnx-modules--left)))
+       (dolist (hook '(tp-hook-a tp-hook-b tp-hook-c tp-hook-d tp-hook-e)) (set hook nil))))))
 
 ;;;; Soon
 

@@ -759,7 +759,7 @@ for a timer. Load it with `(load (expand-file-name "test/fixtures/clock-fixture"
   timer arms at `(time-add (current-idle-time) D)` runs again while due within the pause. Wall timers due in the
   pause run too. From `:input-at` the pause ends and `input-pending-p` is t until the call returns. More than 1,000
   firings in one pause is an error (a busy loop).
-- **The end.** A timer still pending when the body ends fails the test, naming the layer's timers as `(KEY OWNER)`
+- **The end.** A timer still pending when the body ends fails the test, naming the layer's timers as `(KEY OWNER KIND)`
   (`drgnx-timer-pending`, when the timer layer is loaded) and then the raw functions; `:allow-pending t` allows it.
   Then `drgnx-timer-reset` runs, when bound. The timer layer's seams (`drgnx-timer--now`, `drgnx-timer--idle-time`,
   `drgnx-timer--input-pending-p`), when defined, follow the same clock, pause and input.

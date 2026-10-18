@@ -406,7 +406,8 @@ timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run
   the module's current run; a module with no run refuses the start (nil, nothing started). A buffer owns its timers
   until it is killed: its first timer adds `drgnx-timer--buffer-killed` to the buffer's own `kill-buffer-hook`
   (permanent-local, as is its key list `drgnx-timer--buffer-keys`; no global hook). A process owns them while it
-  lives. `:core` lives as long as Emacs (the hub tick, the GC).
+  lives; its sentinel (or the job runner) must call `(drgnx-timer-cancel-owner PROCESS)` when it dies, which also
+  forgets the last runs of its `:min-interval` keys. `:core` lives as long as Emacs (the hub tick, the GC).
 
 ### What the fire wrapper guarantees
 
@@ -419,8 +420,9 @@ Every layer timer's Emacs function is `drgnx-timer--fire` with the entry as its 
 3. A one-shot leaves the table before FN runs, so FN may start its key again.
 4. FN runs in `save-match-data`, with a buffer owner current. A one-shot `drgnx-timer-start` owned by a module runs
    as the module's code (`drgnx-modules--record-call`, as `drgnx-modules-with-owner` work does): what it changes is
-   undone when the module is turned off. A repeating timer does not install the safety net, so it must not register
-   hooks, advice or global modes.
+   undone when the module is turned off. A repeating timer and every firing of the primitives (debounce, soon,
+   poll, idle steps, their ON-TIMEOUT and ON-DONE) do not install the safety net, so they must not register hooks,
+   advice or global modes.
 5. Every error is caught: pushed on `drgnx-timer-errors` (newest first, at most 50 plists
    `(:key :owner :fn :error :failures :stopped :time)`) and shown once as `drgnx: timer KEY failed: MESSAGE`. A
    success resets the count. A timer that would run again (repeating, a poll, idle steps) stops at its
@@ -466,9 +468,12 @@ Four calls cover the idioms a hand-written timer used to. Each takes a KEY, an `
   `…/an-idle-debounce-reads-no-clock` assert it.
 - **Soon.** FN runs once, SECS after the first call of a burst, with that call's ARGS; a call while pending does
   nothing and returns KEY. With `:min-interval` the delay is `max(SECS, LAST + MIN-INTERVAL - now)`, LAST being when
-  the key's previous run began. LAST is in `drgnx-timer--last-run` (key → `(TIME . OWNER)`), kept only for keys that
-  have a MIN-INTERVAL; `drgnx-timer-cancel`, `-cancel-owner`, `-reset` and the killing of an owner buffer remove
-  it. A live view uses it as its draw throttle (one key for the mark, another, plain `drgnx-timer-start`, for the
+  the key's previous run began; a clock that stepped back never makes the wait longer than MIN-INTERVAL. LAST is
+  in `drgnx-timer--last-run` (key → `(TIME . OWNER)`), kept only for keys that have a MIN-INTERVAL;
+  `drgnx-timer-cancel`, `-cancel-owner` (a module's run end and a process owner's sentinel call it), `-reset` and
+  the killing of the buffer that owns the key or is its OBJECT remove it. A key `(SYMBOL . FRAME)` or
+  `(SYMBOL . WINDOW)` under a `:core` owner keeps its entry until one of those. `:idle t` with `:min-interval` mixes
+  a wall-clock LAST with an idle delay: use it only if that is what you want. A live view uses it as its draw throttle (one key for the mark, another, plain `drgnx-timer-start`, for the
   continuation, so the interval never delays the next slice).
 - **Poll.** `:deadline` is required: a positive number of seconds from the call, or the call signals
   `(wrong-type-argument numberp DEADLINE)` at once. Every INTERVAL FN runs with ARGS; non-nil ends the poll. At the
@@ -482,8 +487,8 @@ Four calls cover the idioms a hand-written timer used to. Each takes a KEY, an `
   ON-DONE. Input pending cancels the chain and the starter resumes SECS into the next pause (a stale chain is
   cancelled when the starter fires, so it never delays it). `:interruptible t` runs each step in `while-no-input`;
   an aborted step counts as input and runs again in the next pause (leave it off for steps that are unsafe to
-  abort). A step that signals ends its firing with no chain; the failure limit stops the key. Drawing never uses
-  idle steps.
+  abort). A step that signals ends its firing with no chain; the failure limit stops the key with no ON-DONE
+  (`drgnx-timer-errors` and the doctor's `timers` check show it). Drawing never uses idle steps.
 
 All four read the clock only through `drgnx-timer--now` and schedule by delays, so the clock fixture drives them:
 `test/unit/core-timer-primitives-test.el` (`drgnx-timer-prim/`).
@@ -494,8 +499,9 @@ The layer reads time and input only through `drgnx-timer--now` (`float-time`), `
 (`current-idle-time`) and `drgnx-timer--input-pending-p` (`input-pending-p`): plain functions, never `defsubst`, so
 the clock fixture ([harness.md](harness.md#virtual-time)) overrides them and the layer follows virtual time. It
 schedules by delays only (SECS is seconds from now, handed to `run-at-time` or `run-with-idle-timer` as is), never by
-an absolute time computed from a clock read, which the fixture would shift twice; its one clock read,
-`drgnx-timer--now`, only stamps `:time` on an error record.
+an absolute time computed from a clock read, which the fixture would shift twice. It reads `drgnx-timer--now` only
+for differences (the debounce remainder, the throttle, the poll deadline, the step budget) and to stamp `:time` on an
+error record.
 `(drgnx-timer-now)` is the public clock for code outside the layer (notices, drawing). `drgnx-timer/the-clock-fixture-drives-the-seams`
 checks the seams against the fixture; `test/unit/core-timer-test.el` covers the rest, all on the virtual clock.
 

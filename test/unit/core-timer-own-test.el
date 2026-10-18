@@ -11,6 +11,7 @@
 (defvar drgnx-timer-own-test--buffer nil "A buffer a setup passes as an owner.")
 
 (defun drgnx-timer-own-test--note () nil)
+(defun drgnx-timer-own-test--more (&rest _) t)
 (defun drgnx-timer-own-test--teardown ()
   (setq drgnx-timer-own-test--seen (hash-table-count drgnx-timer--table)))
 
@@ -87,6 +88,28 @@
             (should-not (drgnx-timer-active-p 'own-buf))
             (should (= 0 (drgnx-timer-own-test--timers))))
         (when (buffer-live-p drgnx-timer-own-test--buffer) (kill-buffer drgnx-timer-own-test--buffer))))))
+
+
+(ert-deftest drgnx-timer-own/a-module-off-leaves-no-primitive ()
+  (drgnx-timer-own-test--with
+      (list :setup (lambda ()
+                     (drgnx-timer-debounce 'own-d 60 #'drgnx-timer-own-test--note)
+                     (drgnx-timer-soon 'own-s 0.1 #'drgnx-timer-own-test--note :min-interval 5)
+                     (drgnx-timer-poll 'own-p 60 #'drgnx-timer-own-test--note :deadline 600)
+                     (drgnx-timer-idle-steps 'own-i 0.2 #'drgnx-timer-own-test--more)))
+    (cl-letf (((symbol-function 'drgnx-timer--now)
+               (let ((tick 0.0)) (lambda () (setq tick (+ tick 0.005))))))   ; 5 ms a read: the budget is spent
+      (drgnx-timer-own-test--on)
+      (drgnx-test-advance 0.1)                       ; the soon has run: its last run is kept
+      (drgnx-test-idle 0.3)                          ; the first firing of the steps arms the chain
+      (should (gethash 'own-s drgnx-timer--last-run))
+      (should (drgnx-timer--entry-chain (gethash 'own-i drgnx-timer--table)))
+      (should (= 3 (hash-table-count drgnx-timer--table)))   ; debounce, poll, steps (the soon is spent)
+      (should (= 4 (drgnx-timer-own-test--timers)))          ; debounce, poll, starter, chain
+      (should-not (drgnx-module-teardown 'test/a))
+      (should (= 0 (hash-table-count drgnx-timer--table)))
+      (should (= 0 (hash-table-count drgnx-timer--last-run)))
+      (should (= 0 (drgnx-timer-own-test--timers))))))
 
 (provide 'core-timer-own-test)
 ;;; core-timer-own-test.el ends here
