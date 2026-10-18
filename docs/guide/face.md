@@ -128,7 +128,7 @@ Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch.
 | `jobs` | `◎ 2 jobs` while jobs run, and `⚑1` when cards of jobs wait on you | What Needs You, every job's |
 | `agents` | `◎ 1 busy`, and `◐ 1 waiting on you` (in the error colour) when something waits for your answer | the Agents tab |
 | `modal` | the modal-editing state (`NORMAL`, `INSERT` …), when that module is loaded | |
-| `misc` | what stock Emacs shows beside the file: evil's state tag (`<N>`, Vim profile, until drgnx's modal module shows it in `modal`), the last key and command of **Show Keys As I Type** (keycast), a keyboard macro being recorded (`● Rec`), `Narrowed`, `Remote: host`, the buffer's process (`:run`), the function point is in (`which-function-mode`), and what other packages add to `mode-line-misc-info` and `global-mode-string` (the clock, a battery, other modules' marks) without the job badge | |
+| `misc` | what stock Emacs shows beside the file: evil's state tag (`<N>`, when evil runs without drgnx's `editor/evil` module; with it, `modal` shows the state), the last key and command of **Show Keys As I Type** (keycast), a keyboard macro being recorded (`● Rec`), `Narrowed`, `Remote: host`, the buffer's process (`:run`), the function point is in (`which-function-mode`), and what other packages add to `mode-line-misc-info` and `global-mode-string` (the clock, a battery, other modules' marks) without the job badge | |
 
 | Right | Shows | Click |
 |---|---|---|

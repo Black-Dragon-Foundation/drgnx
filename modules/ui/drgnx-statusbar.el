@@ -899,9 +899,10 @@ in this buffer, or shown in the header line instead (`which-func-display').  A t
        (let ((name (gethash w which-func-table))) (and (stringp name) name))))
 
 (defun drgnx-statusbar--evil-tag ()
-  "evil's state tag (\" <N> \") while evil is on in this buffer and drgnx's modal module does not show the state."
+  "evil's state tag (\" <N> \") while evil is on in this buffer and drgnx's modal core shows no state here (evil
+set up without editor/evil: `drgnx-modal-mode-line' is \"\")."
   (and (bound-and-true-p evil-local-mode) (bound-and-true-p evil-mode-line-format)
-       (not (fboundp 'drgnx-modal-mode-line))
+       (not (and (fboundp 'drgnx-modal-mode-line) (not (equal (drgnx-modal-mode-line) ""))))
        (let ((tag (bound-and-true-p evil-mode-line-tag))) (and (stringp tag) tag))))
 
 (defun drgnx-statusbar--keycast ()
