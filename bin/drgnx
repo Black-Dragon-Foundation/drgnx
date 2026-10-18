@@ -240,6 +240,7 @@ test_bootstrap() { # [--fedora 44|45] — the exit test of a second machine: one
   image="registry.fedoraproject.org/fedora:$fedora"
   mount="$snap:/src"; [ "$rt" = podman ] && mount="$mount:Z"
   test_snapshot "$snap"
+  chmod -R a+rX "$snap"   # container 2 reads it as another user (a file written by an atomic rename, like the lock, is mode 600)
   # the configuration being carried over: the fixture with the current lock, a git repository, cloned --bare beside the
   # snapshot (a git host's copy: the second machine clones it, container 1 adds the encrypted keys to it)
   mkdir -p "$fixture"

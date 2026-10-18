@@ -62,27 +62,29 @@ cat /tmp/run1.out
 
 # ---- 2: the outcome ------------------------------------------------------------------------------------------------
 step "2. the outcome"
-[[ -z "$(git -C "$CONFIG" status --porcelain)" ]] || { git -C "$CONFIG" status --short; fail "the config dir differs from the repository"; }
+# the repository's own lock is the shipped one, which the first sync completes (drops :from-shipped): the one file that may differ
+[[ -z "$(git -C "$CONFIG" status --porcelain | grep -v ' drgnx.lock.eld$' || true)" ]] || { git -C "$CONFIG" status --short; fail "the config dir differs from the repository"; }
 for f in /src/test/fixtures/bootstrap/config/*; do
   cmp -s "$f" "$CONFIG/${f##*/}" || fail "${f##*/} is not the fixture's"
 done
 [[ -f "$CONFIG/secrets.age" && -f "$CONFIG/drgnx.lock.eld" ]] || fail "secrets.age or the lock is not in the config dir"
-cmp -s /src/etc/drgnx.lock.eld "$CONFIG/drgnx.lock.eld" || fail "the lock is not the one of this tree"
+! grep -q ':from-shipped' "$CONFIG/drgnx.lock.eld" || fail "the first sync did not complete the lock"
 echo "config dir: the fixture, clean"
 
 emacs --batch -Q --eval '(let ((l (with-temp-buffer (insert-file-contents "/src/etc/drgnx.lock.eld") (read (current-buffer)))))
   (dolist (p (plist-get l :packages)) (princ (format "%s %s\n" (car p) (plist-get (cdr p) :version)))))' >/tmp/lock.list </dev/null
+# the fixture's modules (a minimal preset) need some of the lock's packages, not all of them: what is installed is
+# exactly a locked NAME-VERSION, never another version of it
+awk '{print $1 "-" $2}' /tmp/lock.list >/tmp/lock.dirs
 n=0
-while read -r name version; do
-  [[ -d "$ELPA/$name-$version" ]] || fail "locked package $name-$version is not in elpa/"
-  for d in "$ELPA/$name"-[0-9]*; do
-    [[ -e "$d" ]] || continue
-    [[ "${d##*/}" == "$name-$version" || ! "${d##*/}" =~ ^"$name"-[0-9][0-9.]*$ ]] || fail "another version of $name: ${d##*/}"
-  done
+for d in "$ELPA"/*/; do
+  base=$(basename "$d")
+  [[ "$base" =~ -[0-9] ]] || continue
+  grep -qxF -- "$base" /tmp/lock.dirs || fail "elpa/$base is not what the lock pins"
   n=$((n + 1))
-done </tmp/lock.list
-((n > 20)) || fail "the lock lists only $n packages: not read"
-echo "elpa/: $n locked packages, one version each"
+done
+((n >= 10)) || fail "only $n packages in elpa/: sync installed too few"
+echo "elpa/: $n packages, each the version the lock pins"
 
 [[ "$(lookup_key)" == "$KEY" ]] || fail "the keyring does not hold the fixture key"
 echo "keyring: holds the key of openrouter.ai"
@@ -142,7 +144,7 @@ chmod +x "$HOME/fakebin/sudo"
 rm -f "$HOME/fake-sudo.log"
 PATH="$HOME/fakebin:$PATH" pty_run /tmp/pty.typescript \
   "drgnx bootstrap --config /srv/config-pass.git --step preflight --step config --step keys" \
-  "(y or n)" y "(y or n)" y "password for" "$SUDO_PASSWORD" "passphrase" "$PASSPHRASE"
+  "(y or n)" y "(y or n)" y "password for" "$SUDO_PASSWORD" "Enter passphrase" "$PASSPHRASE"
 cat /tmp/pty.typescript
 [[ "$PTY_RC" == 0 ]] || fail "the terminal run exited $PTY_RC"
 grep -aq 'sudo dnf install -y age' "$HOME/fake-sudo.log" || fail "the stand-in sudo did not run the age install"

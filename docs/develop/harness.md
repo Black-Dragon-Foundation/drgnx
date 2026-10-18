@@ -377,8 +377,8 @@ cloned `--bare` beside the snapshot. Two containers follow, each with a memory c
    `tester`, in a D-Bus session whose login keyring is unlocked with a password on stdin
    (`gnome-keyring-daemon --unlock --components=secrets`, which works headless), it runs
    `install.sh --yes --config … --identity …` and checks:
-   - exit 0; `~/.config/drgnx` is the fixture (`git status --porcelain` empty); every `NAME-VERSION` of the lock is
-     in the data dir's `elpa/` and no other version of any;
+   - exit 0; `~/.config/drgnx` is the fixture (`git status --porcelain` shows at most `drgnx.lock.eld`, which the first sync completes); every package in the data dir's
+     `elpa/` is a `NAME-VERSION` the lock pins (the minimal preset installs some of them, not all);
    - `secret-tool lookup host openrouter.ai service drgnx` prints the key, and the key is nowhere else under `$HOME`,
      `/tmp` or `/src` (the keyring's own store aside); age was installed by bootstrap, after the announced line;
      the output's doctor step is `ok`; no rc file mentions drgnx (`--yes` never writes one);
