@@ -14,6 +14,7 @@
 
 ;;; Code:
 (require 'cl-lib)
+(require 'ert)
 (require 'subr-x)
 (require 'drgnx-ui)
 
@@ -336,6 +337,46 @@ also when BODY fails."
   `(let ((,(car spec) (drgnx-tty-session-start ,@(cdr spec))))
      (unwind-protect (progn ,@body)
        (drgnx-tty-session-stop ,(car spec)))))
+
+;;;; Packages from the user's package directory (read-only)
+
+(defun drgnx-tty-session-user-package-dirs (names &optional elpa lock)
+  "The directories of packages NAMES (symbols) in ELPA (default: $DRGNX_USER_ELPA, else ~/.config/emacs/elpa),
+read-only, for a test that loads a package (corfu) into the inner Emacs.  For each, the version pinned in LOCK
+\(default: etc/drgnx.lock.eld) when that directory exists, else the newest.  Nil when ELPA or any package is missing.
+`drgnx-tty-session-packages-hint' says how to supply them."
+  (let* ((elpa (expand-file-name (or elpa (getenv "DRGNX_USER_ELPA") "~/.config/emacs/elpa")))
+         (lock (or lock (expand-file-name "etc/drgnx.lock.eld" drgnx-ui-repo-dir)))
+         (pins (ignore-errors
+                 (with-temp-buffer (insert-file-contents lock)
+                                   (plist-get (read (current-buffer)) :packages))))
+         dirs)
+    (when (file-directory-p elpa)
+      (catch 'missing
+        (dolist (name names)
+          (let* ((prefix (format "%s-" name))
+                 (found (seq-filter (lambda (d) (and (string-match-p "\\`[0-9][0-9.]*\\'" (substring d (length prefix)))
+                                                     (file-directory-p (expand-file-name d elpa))))
+                                    (directory-files elpa nil (concat "\\`" (regexp-quote prefix)))))
+                 (pinned (plist-get (cdr (assq name pins)) :version))
+                 (pick (or (and pinned (car (member (concat prefix pinned) found)))
+                           (car (last (sort found (lambda (a b) (version< (substring a (length prefix))
+                                                                          (substring b (length prefix))))))))))
+            (unless pick (throw 'missing (setq dirs nil)))
+            (push (expand-file-name pick elpa) dirs)))
+        (nreverse dirs)))))
+
+(defun drgnx-tty-session-packages-hint (names)
+  "The message of a test skipped for want of packages NAMES."
+  (format "%s not found: put the packages in a directory and set DRGNX_USER_ELPA to it (default ~/.config/emacs/elpa; bin/drgnx sync installs them under ~/.local/share/drgnx/elpa)"
+          (mapconcat #'symbol-name names ", ")))
+
+(defun drgnx-tty-session-require-packages (names)
+  "`drgnx-tty-session-user-package-dirs' for NAMES, or skip the running test, printing how to supply them."
+  (or (drgnx-tty-session-user-package-dirs names)
+      (let ((hint (drgnx-tty-session-packages-hint names)))
+        (message "SKIPPED: %s" hint)
+        (ert-skip hint))))
 
 ;;;; The inner Emacs's state
 

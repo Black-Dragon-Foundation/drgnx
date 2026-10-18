@@ -171,11 +171,13 @@ terminal window on one daemon, a transient in one leaves the other alone.
   `*Completions*` list there, but its completion as you type shows nothing. drgnx fills the gap: in a terminal window,
   with corfu on and `corfu-auto` set, the candidates for the word you are typing show in `*Completions*` in the popup
   lane, refreshed as you type. Nothing is inserted; `C-g` or moving off the word removes the list. A graphical window
-  keeps corfu's own popup.
+  keeps corfu's own popup. The setting `drgnx-tty-popups-auto-completions` (`M-x customize-variable`) set to `nil`
+  turns this off in terminal windows without touching `corfu-auto` in graphical ones.
 - **A terminal that does not write UTF-8** (a window started with `LANG=C`) cannot show `×`, `●`, `›`, `▾`, `▸` or
   `│`. drgnx draws ASCII marks in their place in that window only (`x`, `*`, `>`, `v`, `>`, `|`), in the tab line,
   the breadcrumb, the Explorer and the docks' headings, instead of Emacs's `\u00D7` escapes. A UTF-8 terminal is not
-  touched. Set a UTF-8 locale in the terminal's profile to get the real glyphs.
+  touched. Set a UTF-8 locale in the terminal's profile to get the real glyphs. (Text that a header makes only when
+  it is drawn stays as Emacs shows it.)
 
 Other child-frame packages (posframe, eldoc-box) keep their own look and get no workbench chrome, as in a graphical
 window. drgnx ships none of them; a child frame they make follows the same border glyphs.

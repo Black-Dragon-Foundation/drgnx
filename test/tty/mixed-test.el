@@ -108,16 +108,12 @@ window is driven by calls, the terminal window by real keys."
       (should (equal (drgnx-tty-mixed-test--state gui) before)))))
 
 (defun drgnx-tty-mixed-test--corfu-dirs ()
-  (let ((elpa (getenv "DRGNX_USER_ELPA")))
-    (when (and elpa (file-directory-p elpa))
-      (let ((corfu (car (last (directory-files elpa t "\\`corfu-[0-9]"))))
-            (compat (car (last (directory-files elpa t "\\`compat-[0-9]")))))
-        (and corfu compat (list corfu compat))))))
+  "The corfu and compat directories, or the test is skipped saying how to supply them."
+  (drgnx-tty-session-require-packages '(corfu compat)))
 
 (ert-deftest drgnx-tty-mixed/corfu-s-popup-belongs-to-its-frame ()
   ;; 31.1: the child frame's parent is the frame typed in — the terminal's, then the graphical one's
   (let ((dirs (drgnx-tty-mixed-test--corfu-dirs)))
-    (skip-unless dirs)
     (drgnx-tty-mixed-test--with (gui tty)
       (skip-unless (drgnx-tty-session-eval gui '(featurep 'tty-child-frames)))
       (let ((a (expand-file-name "a.el" (plist-get tty :run))) (b (expand-file-name "b.el" (plist-get tty :run))))
@@ -155,7 +151,6 @@ window is driven by calls, the terminal window by real keys."
   ;; 30.2: the candidates typed in the terminal window show in that window's popup lane; the graphical window
   ;; (corfu's own popup there) is not touched
   (let ((dirs (drgnx-tty-mixed-test--corfu-dirs)))
-    (skip-unless dirs)
     (drgnx-tty-mixed-test--with (gui tty)
       (skip-when (drgnx-tty-session-eval gui '(featurep 'tty-child-frames)))
       (let ((a (expand-file-name "a.el" (plist-get tty :run))))

@@ -30,12 +30,9 @@ keeps the glyph)."
   (drgnx-tty-session-eval sess '(and (featurep 'tty-child-frames) t)))
 
 (defun drgnx-tty-popups-test--corfu-dirs ()
-  "The corfu and compat directories of the user's package directory, read-only (`DRGNX_USER_ELPA'), or nil."
-  (let ((elpa (getenv "DRGNX_USER_ELPA")))
-    (when (and elpa (file-directory-p elpa))
-      (let ((corfu (car (last (directory-files elpa t "\\`corfu-[0-9]")))) ; the newest: dates and versions sort
-            (compat (car (last (directory-files elpa t "\\`compat-[0-9]")))))
-        (and corfu compat (list corfu compat))))))
+  "The corfu and compat directories (the version etc/drgnx.lock.eld pins, when there), read-only; the test is
+skipped, saying how to supply them, when they are not there."
+  (drgnx-tty-session-require-packages '(corfu compat)))
 
 (defun drgnx-tty-popups-test--round (sess open shown close)
   "OPEN a popup (a function), wait until SHOWN (a form) holds in the inner Emacs, then CLOSE it.  Opened, the
@@ -151,7 +148,6 @@ Lisp file in the editor."
   ;; 31.1: corfu's popup is a child frame of the selected frame, hidden by C-g.  30.2: no child frames, so the
   ;; candidates show in *Completions* in the popup lane, nothing is inserted, and C-g removes them.
   (let ((dirs (drgnx-tty-popups-test--corfu-dirs)))
-    (skip-unless dirs)
     (drgnx-tty-popups-test--with (s :size "100x30")
       (should (drgnx-tty-popups-test--corfu s dirs))
       (let ((child-frames (drgnx-tty-popups-test--child-frames-p s)))
@@ -173,7 +169,6 @@ Lisp file in the editor."
 (ert-deftest drgnx-tty-popups/completion-as-you-type-follows-what-is-typed ()
   ;; the list in the lane is refreshed as the word grows, and goes when the word ends (30.2 only)
   (let ((dirs (drgnx-tty-popups-test--corfu-dirs)))
-    (skip-unless dirs)
     (drgnx-tty-popups-test--with (s :size "100x30")
       (skip-when (drgnx-tty-popups-test--child-frames-p s))
       (should (drgnx-tty-popups-test--corfu s dirs))
@@ -188,6 +183,18 @@ Lisp file in the editor."
                               10)
       (drgnx-tty-session-send s " ")
       (drgnx-tty-session-wait s '(null (get-buffer-window "*Completions*")) 10))))
+
+(ert-deftest drgnx-tty-popups/completion-as-you-type-can-be-turned-off ()
+  ;; 30.2: `drgnx-tty-popups-auto-completions' nil leaves a terminal window without the list (corfu-auto stays on)
+  (let ((dirs (drgnx-tty-popups-test--corfu-dirs)))
+    (drgnx-tty-popups-test--with (s :size "100x30")
+      (skip-when (drgnx-tty-popups-test--child-frames-p s))
+      (should (drgnx-tty-popups-test--corfu s dirs))
+      (drgnx-tty-session-eval s '(progn (setq drgnx-tty-popups-auto-completions nil) t))
+      (drgnx-tty-session-send s "(with-")
+      (sleep-for 1)
+      (should-not (drgnx-tty-session-eval s '(and (get-buffer-window "*Completions*") t)))
+      (should (drgnx-tty-session-eval s '(with-current-buffer "x.el" corfu-auto))))))
 
 ;;;; The cursor line stays visible
 
@@ -259,6 +266,7 @@ Lisp file in the editor."
   (drgnx-tty-session-with (s :size "100x30" :env '("LANG=C" "LC_ALL=C"))
     (drgnx-tty-popups-test--ready s "x")
     (should (drgnx-tty-session-eval s '(drgnx-tty-popups-ascii-p)))
+    (should (drgnx-tty-session-eval s '(and (memq 'drgnx-tty-popups--pre-redisplay pre-redisplay-functions) t)))
     (let ((dir (expand-file-name "project" (plist-get s :run))))
       (make-directory (expand-file-name "src" dir) t)
       (with-temp-file (expand-file-name "a.txt" dir) (insert "alpha\n"))
@@ -291,13 +299,22 @@ Lisp file in the editor."
         (should-not (string-match-p "\\\\u[0-9A-F]\\{4\\}" screen))
         (should-not (string-match-p "[^[:ascii:]]" screen)))
       (should (drgnx-tty-session-find s "\\*scratch\\* ×"))
-      (should-not (string-match-p "\\\\u[0-9A-F]\\{4\\}" (drgnx-tty-session-screen s))))))
+      (should-not (string-match-p "\\\\u[0-9A-F]\\{4\\}" (drgnx-tty-session-screen s)))
+      ;; the ASCII hooks are there while that client is, and go with it
+      (should (drgnx-tty-session-eval s '(and (memq 'drgnx-tty-popups--pre-redisplay pre-redisplay-functions) t)))
+      (drgnx-tty-session-eval s '(progn (delete-frame (seq-find (lambda (f) (frame-parameter f 'drgnx-tty-ascii)) (frame-list))) t))
+      (drgnx-tty-session-wait s '(not (memq 'drgnx-tty-popups--pre-redisplay pre-redisplay-functions)) 10)
+      (should-not (drgnx-tty-session-eval s '(advice-member-p #'drgnx-tty-popups--chrome-set 'drgnx-chrome--set))))))
 
 (ert-deftest drgnx-tty-popups/a-utf-8-terminal-keeps-its-glyphs ()
   (drgnx-tty-popups-test--with (s :size "100x30")
     (should-not (drgnx-tty-session-eval s '(drgnx-tty-popups-ascii-p)))
     (should-not (drgnx-tty-session-eval s '(frame-parameter nil 'drgnx-tty-ascii)))
     (should-not (drgnx-tty-session-eval s '(window-display-table (selected-window))))
+    ;; …and pays nothing for the ASCII machinery
+    (should-not (drgnx-tty-session-eval s '(or (memq 'drgnx-tty-popups--pre-redisplay pre-redisplay-functions)
+                                               (memq 'drgnx-tty-popups--windows-changed window-configuration-change-hook)
+                                               (advice-member-p #'drgnx-tty-popups--chrome-set 'drgnx-chrome--set))))
     (should (drgnx-tty-session-find s "\\*scratch\\* ×"))))
 
 ;;; popups-test.el ends here

@@ -9,6 +9,7 @@
 (defvar corfu-auto)
 (defvar corfu-auto-prefix)
 (defvar corfu-auto-commands)
+(defvar corfu-auto-delay)
 
 (defmacro drgnx-tty-popups-test--terminal (coding &rest body)
   "BODY with the selected frame a terminal frame whose terminal writes CODING."
@@ -129,7 +130,160 @@ up-right, up-left)."
         (let ((buffer-read-only t)) (should-not (drgnx-tty-popups--wanted-p)))
         ;; a list of our own showing is refreshed, one somebody else started is left alone
         (let ((completion-in-region-mode t) (drgnx-tty-popups--ours nil)) (should-not (drgnx-tty-popups--wanted-p)))
-        (let ((completion-in-region-mode t) (drgnx-tty-popups--ours t)) (should (drgnx-tty-popups--wanted-p)))))))
+        (let ((completion-in-region-mode t) (drgnx-tty-popups--ours (cons (current-buffer) 'f))) (should (drgnx-tty-popups--wanted-p)))
+        ;; the user can turn the shim off without touching corfu-auto
+        (let ((drgnx-tty-popups-auto-completions nil)) (should-not (drgnx-tty-popups--wanted-p)))))))
+
+(defmacro drgnx-tty-popups-test--hooks (&rest body)
+  "BODY with the hooks the module adds and removes bound to nil, and the chrome advice taken off afterwards."
+  `(let ((pre-redisplay-functions nil) (window-configuration-change-hook nil) (post-command-hook nil)
+         (drgnx-tty-popups--timer nil) (drgnx-tty-popups--ours nil))
+     (unwind-protect (progn ,@body)
+       (advice-remove 'drgnx-chrome--set #'drgnx-tty-popups--chrome-set))))
+
+(defun drgnx-tty-popups-test--sync (frames ascii &optional child-frames)
+  "The hooks (pre-redisplay wcch post-command chrome-advice) present after a sync with FRAMES terminal frames, ASCII
+of them non-UTF-8."
+  (cl-letf (((symbol-function 'drgnx-tty-popups--tty-frames) (lambda () frames))
+            ((symbol-function 'drgnx-tty-popups--ascii-frame-p) (lambda (f) (memq f ascii)))
+            ((symbol-function 'drgnx-tty-popups--child-frames-p) (lambda () child-frames)))
+    (drgnx-tty-popups--sync)
+    (list (and (memq 'drgnx-tty-popups--pre-redisplay pre-redisplay-functions) t)
+          (and (memq 'drgnx-tty-popups--windows-changed window-configuration-change-hook) t)
+          (and (memq 'drgnx-tty-popups--post-command post-command-hook) t)
+          (and (advice-member-p #'drgnx-tty-popups--chrome-set 'drgnx-chrome--set) t))))
+
+(ert-deftest drgnx-tty-popups/a-session-without-ascii-terminals-pays-nothing ()
+  ;; the hooks that cost something on every redisplay or command are there only while a terminal needs them
+  (drgnx-tty-popups-test--hooks
+   ;; graphical only, or no terminal frame: nothing
+   (should (equal (drgnx-tty-popups-test--sync nil nil) '(nil nil nil nil)))
+   ;; a UTF-8 terminal on 30.2: only the completion shim
+   (should (equal (drgnx-tty-popups-test--sync '(a) nil) '(nil nil t nil)))
+   ;; …on 31.1: nothing (corfu has its child frame)
+   (should (equal (drgnx-tty-popups-test--sync '(a) nil t) '(nil nil nil nil)))
+   ;; a non-UTF-8 terminal: the ASCII hooks too, and they go with it
+   (should (equal (drgnx-tty-popups-test--sync '(a b) '(b)) '(t t t t)))
+   (should (equal (drgnx-tty-popups-test--sync '(a) nil) '(nil nil t nil)))
+   (should (equal (drgnx-tty-popups-test--sync nil nil) '(nil nil nil nil)))
+   ;; the option turns the shim off
+   (let ((drgnx-tty-popups-auto-completions nil))
+     (should (equal (drgnx-tty-popups-test--sync '(a) nil) '(nil nil nil nil))))))
+
+(ert-deftest drgnx-tty-popups/chrome-values-in-lists-are-written-in-ascii ()
+  ;; sticky scroll's header is a list (breadcrumb and a tail); strings in it are rewritten, :eval forms are not
+  (let* ((crumb (propertize "a › b" 'face 'bold))
+         (value (list crumb '(:propertize "×" face italic) '(:eval (concat "›" "x")) 'sym "plain")))
+    (let ((out (drgnx-tty-popups--ascii-value value)))
+      (should (equal (car out) "a > b"))
+      (should (eq (get-text-property 0 'face (car out)) 'bold))
+      (should (equal (nth 1 out) '(:propertize "x" face italic)))
+      (should (equal (nth 2 out) '(:eval (concat "›" "x"))))   ; computed at draw time: left as it is
+      (should (eq (nth 3 out) 'sym))))
+  ;; nothing to rewrite: the very same object, so a comparison with it still holds
+  (let ((same (list "ascii" '(:eval foo) 'x)))
+    (should (eq (drgnx-tty-popups--ascii-value same) same)))
+  (should (eq (drgnx-tty-popups--ascii-value 'none) 'none)))
+
+(ert-deftest drgnx-tty-popups/chrome-sets-the-rewritten-value-so-a-redundant-set-is-skipped ()
+  ;; drgnx-chrome--set compares the window's parameter with what it wants; on an ASCII frame the parameter holds the
+  ;; rewritten string, so it is given the rewritten one too
+  (drgnx-tty-popups-test--hooks
+   (let (got)
+     (cl-letf (((symbol-function 'window-frame) (lambda (w) (if (eq w 'ascii-win) 'af 'uf)))
+               ((symbol-function 'drgnx-tty-popups--ascii-frame-p) (lambda (f) (eq f 'af))))
+       (let ((orig (lambda (w param value) (push (list w param value) got))))
+         (drgnx-tty-popups--chrome-set orig 'ascii-win 'tab-line-format " a ● × ")
+         (drgnx-tty-popups--chrome-set orig 'utf-win 'tab-line-format " a ● × ")
+         (should (equal (nreverse got) '((ascii-win tab-line-format " a * x ") (utf-win tab-line-format " a ● × ")))))))))
+
+(ert-deftest drgnx-tty-popups/typing-arms-a-timer-and-the-next-key-cancels-it ()
+  (drgnx-tty-popups-test--hooks
+   (let (armed cancelled)
+     (cl-letf (((symbol-function 'run-with-timer) (lambda (&rest args) (push args armed) 'timer))
+               ((symbol-function 'timerp) (lambda (x) (eq x 'timer)))
+               ((symbol-function 'cancel-timer) (lambda (x) (push x cancelled)))
+               ((symbol-function 'drgnx-tty-popups--wanted-p) (lambda () t)))
+       (let ((corfu-auto-delay 0.3))
+         (with-temp-buffer
+           (drgnx-tty-popups--post-command)
+           (should (= (length armed) 1))
+           (should (= (car (car armed)) 0.3))
+           (should (eq (nth 2 (car armed)) #'drgnx-tty-popups--show))
+           (should (eq drgnx-tty-popups--timer 'timer))
+           ;; the next command cancels the pending one, and arms its own
+           (drgnx-tty-popups--post-command)
+           (should (equal cancelled '(timer)))
+           (should (= (length armed) 2))
+           ;; a command that wants nothing only cancels
+           (cl-letf (((symbol-function 'drgnx-tty-popups--wanted-p) (lambda () nil)))
+             (drgnx-tty-popups--post-command))
+           (should (= (length armed) 2))
+           (should-not drgnx-tty-popups--timer)))))))
+
+(ert-deftest drgnx-tty-popups/the-timer-shows-the-list-without-prompting-and-notes-it-is-ours ()
+  (drgnx-tty-popups-test--hooks
+   (let (interactive-allowed)
+     (cl-letf (((symbol-function 'drgnx-tty-popups--lane-p) (lambda () t))
+               ((symbol-function 'completion-help-at-point)
+                (lambda () (setq interactive-allowed inhibit-interaction) (setq completion-in-region-mode t)))
+               ((symbol-function 'completion-in-region-mode) (lambda (arg) (setq completion-in-region-mode (> arg 0)))))
+       (with-temp-buffer
+         (let ((completion-in-region-mode nil))
+           (switch-to-buffer (current-buffer))
+           (let ((tick (drgnx-tty-popups--tick)))
+             ;; typing went on meanwhile: nothing
+             (drgnx-tty-popups--show (current-buffer) (list 'stale))
+             (should-not completion-in-region-mode)
+             (drgnx-tty-popups--show (current-buffer) tick)
+             (should completion-in-region-mode)
+             (should (equal drgnx-tty-popups--ours (cons (current-buffer) (selected-frame))))
+             ;; a timer never prompts
+             (should (eq interactive-allowed t)))))))))
+
+(ert-deftest drgnx-tty-popups/an-interrupted-lookup-leaves-no-list-mode-behind ()
+  ;; typing went on in the middle of a slow completion-at-point function: the mode it had turned on is turned off,
+  ;; or later refreshes would be refused
+  (drgnx-tty-popups-test--hooks
+   (cl-letf (((symbol-function 'drgnx-tty-popups--lane-p) (lambda () t))
+             ((symbol-function 'completion-help-at-point)
+              (lambda () (setq completion-in-region-mode t) (throw throw-on-input t)))
+             ((symbol-function 'completion-in-region-mode) (lambda (arg) (setq completion-in-region-mode (> arg 0)))))
+     (with-temp-buffer
+       (let ((completion-in-region-mode nil))
+         (switch-to-buffer (current-buffer))
+         (drgnx-tty-popups--show (current-buffer) (drgnx-tty-popups--tick))
+         (should-not completion-in-region-mode)
+         (should-not drgnx-tty-popups--ours))))))
+
+(ert-deftest drgnx-tty-popups/a-list-somebody-else-started-is-not-taken-over ()
+  (drgnx-tty-popups-test--hooks
+   (let (called)
+     (cl-letf (((symbol-function 'drgnx-tty-popups--lane-p) (lambda () t))
+               ((symbol-function 'completion-help-at-point) (lambda () (setq called t))))
+       (with-temp-buffer
+         (switch-to-buffer (current-buffer))
+         (let ((completion-in-region-mode t))        ; TAB started it
+           (drgnx-tty-popups--show (current-buffer) (drgnx-tty-popups--tick))
+           (should-not called)))))))
+
+(ert-deftest drgnx-tty-popups/our-list-goes-when-the-selected-buffer-or-frame-changes ()
+  (drgnx-tty-popups-test--hooks
+   (cl-letf (((symbol-function 'completion-in-region-mode) (lambda (arg) (setq completion-in-region-mode (> arg 0))))
+             ((symbol-function 'drgnx-tty-popups--wanted-p) (lambda () nil)))
+     (let ((completion-in-region-mode t))
+       (with-temp-buffer
+         (let ((here (current-buffer)))
+           ;; still where it started: stays
+           (setq drgnx-tty-popups--ours (cons here (selected-frame)))
+           (drgnx-tty-popups--post-command)
+           (should completion-in-region-mode)
+           ;; the selected buffer is another one: closed
+           (setq drgnx-tty-popups--ours (cons (get-buffer-create " *other*") (selected-frame)))
+           (drgnx-tty-popups--post-command)
+           (should-not completion-in-region-mode)
+           (should-not drgnx-tty-popups--ours)
+           (kill-buffer " *other*")))))))
 
 (ert-deftest drgnx-tty-popups/setup-is-for-terminal-frames-only ()
   (let (called)

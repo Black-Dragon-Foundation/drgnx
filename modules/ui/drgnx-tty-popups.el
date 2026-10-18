@@ -22,6 +22,7 @@
 ;; See docs/guide/terminal.md.
 
 ;;; Code:
+(require 'cl-lib)
 (require 'seq)
 (require 'drgnx-hooks)
 (require 'drgnx-modules)
@@ -31,7 +32,13 @@
 (defvar corfu-auto-prefix)
 (defvar corfu-auto-commands)
 (defvar standard-display-table)
+(defvar drgnx-tty-popups--timer)
 (declare-function drgnx-tty-frames--tty-frames "drgnx-tty-frames")
+
+(defcustom drgnx-tty-popups-auto-completions t
+  "Non-nil: on Emacs 30.2 in a terminal window, completion as you type (corfu with `corfu-auto') shows its
+candidates in `*Completions*' in the popup lane.  Nil: not there (corfu-auto stays as it is in graphical frames)."
+  :type 'boolean :group 'drgnx)
 
 ;;;; Borders: the box slots of the standard display table
 
@@ -121,14 +128,33 @@ gives its first), text properties kept; STRING itself when it has none of them."
           (setq out (subst-char-in-string char (aref mark 0) out))))
       out)))
 
+(defun drgnx-tty-popups--ascii-value (value)
+  "VALUE, a tab line, header line or mode line format, with its strings written with ASCII marks: a string, or the
+strings of a list (a `:propertize' form's first element too); an `:eval' form is left, since it makes its string
+only when drawn.  VALUE itself when nothing changes."
+  (cond ((stringp value) (drgnx-tty-popups--ascii-string value))
+        ((not (and (consp value) (proper-list-p value))) value)
+        ((eq (car value) :eval) value)
+        ((eq (car value) :propertize)
+         (let ((elt (drgnx-tty-popups--ascii-value (cadr value))))
+           (if (eq elt (cadr value)) value (cons :propertize (cons elt (cddr value))))))
+        (t (let ((new (mapcar #'drgnx-tty-popups--ascii-value value)))
+             (if (cl-every #'eq new value) value new)))))
+
 (defun drgnx-tty-popups--ascii-chrome-window (window)
-  "The strings in the tab line, header line and mode line parameters of WINDOW — a display table does not reach
-those — written with ASCII marks."
+  "The tab line, header line and mode line parameters of WINDOW — a display table does not reach those — written
+with ASCII marks."
   (dolist (param '(tab-line-format header-line-format mode-line-format))
-    (let ((value (window-parameter window param)))
-      (when (stringp value)
-        (let ((ascii (drgnx-tty-popups--ascii-string value)))
-          (unless (eq ascii value) (set-window-parameter window param ascii)))))))
+    (let* ((value (window-parameter window param))
+           (ascii (drgnx-tty-popups--ascii-value value)))
+      (unless (eq ascii value) (set-window-parameter window param ascii)))))
+
+(defun drgnx-tty-popups--chrome-set (orig window param value)
+  "Around `drgnx-chrome--set' (it sets a window parameter only when it differs from what it wants): on a frame of
+an ASCII terminal the parameter holds the rewritten value, so it is given the rewritten one, and a redundant set,
+which redraws the window, is skipped as it is elsewhere."
+  (funcall orig window param
+           (if (drgnx-tty-popups--ascii-frame-p (window-frame window)) (drgnx-tty-popups--ascii-value value) value)))
 
 (defun drgnx-tty-popups--ascii-frame-p (frame)
   (and (frame-live-p frame) (frame-parameter frame 'drgnx-tty-ascii)))
@@ -145,6 +171,29 @@ those — written with ASCII marks."
   (when (drgnx-tty-popups--ascii-frame-p (window-frame window))
     (drgnx-tty-popups--ascii-chrome-window window)))
 
+;;;; Hooks only while a terminal needs them
+
+(defun drgnx-tty-popups--hook (on hook function)
+  (if on (add-hook hook function) (remove-hook hook function)))
+
+(defun drgnx-tty-popups--sync ()
+  "Have the hooks that run on every redisplay or command only while some terminal frame needs them: the ASCII
+ones while a terminal does not write UTF-8, the completion shim's while a terminal window exists on an Emacs
+without tty child frames.  A session with graphical windows only, or UTF-8 terminals on 31.1, pays nothing."
+  (let* ((frames (drgnx-tty-popups--tty-frames))
+         (ascii (and (seq-some #'drgnx-tty-popups--ascii-frame-p frames) t))
+         (shim (and frames drgnx-tty-popups-auto-completions (not (drgnx-tty-popups--child-frames-p)))))
+    (drgnx-tty-popups--hook ascii 'pre-redisplay-functions #'drgnx-tty-popups--pre-redisplay)
+    (drgnx-tty-popups--hook ascii 'window-configuration-change-hook #'drgnx-tty-popups--windows-changed)
+    (if ascii
+        (advice-add 'drgnx-chrome--set :around #'drgnx-tty-popups--chrome-set)
+      (advice-remove 'drgnx-chrome--set #'drgnx-tty-popups--chrome-set))
+    (drgnx-tty-popups--hook shim 'post-command-hook #'drgnx-tty-popups--post-command)
+    (unless shim
+      (when (timerp drgnx-tty-popups--timer) (cancel-timer drgnx-tty-popups--timer))
+      (setq drgnx-tty-popups--timer nil)
+      (drgnx-tty-popups--close))))
+
 ;;;; Each terminal frame
 
 (defun drgnx-tty-popups-setup (&optional frame)
@@ -159,19 +208,32 @@ those — written with ASCII marks."
             (when (drgnx-tty-popups-ascii-p frame)
               (set-frame-parameter frame 'drgnx-tty-ascii t)
               (drgnx-tty-popups--ascii-windows frame)
-              (dolist (w (window-list frame 'nomini)) (drgnx-tty-popups--ascii-chrome-window w))))
+              (dolist (w (window-list frame 'nomini)) (drgnx-tty-popups--ascii-chrome-window w)))
+            (drgnx-tty-popups--sync))
         (error (push (format "ui/terminal-popups: %s" (error-message-string err)) drgnx-hooks-problems))))))
 
-(defun drgnx-tty-popups--frame-deleted (_frame)
-  "`delete-frame-functions': the terminals left decide the borders again."
-  (when (drgnx-tty-popups--child-frames-p)
-    (run-at-time 0 nil (lambda () (ignore-errors (drgnx-tty-popups--update-borders))))))
+(defun drgnx-tty-popups--frame-deleted (frame)
+  "`delete-frame-functions': once it is gone, the terminals left decide the borders and the hooks again."
+  (unless (frame-parent frame)
+    (run-at-time 0 nil (lambda ()
+                         (let ((inhibit-interaction t))
+                           (condition-case nil
+                               (progn (when (drgnx-tty-popups--child-frames-p) (drgnx-tty-popups--update-borders))
+                                      (drgnx-tty-popups--sync))
+                             (error nil)))))))
 
 ;;;; Completion as you type on Emacs 30.2: the popup lane
 
 (defvar drgnx-tty-popups--timer nil "The timer that shows the candidates once typing pauses.")
 (defvar drgnx-tty-popups--ours nil
-  "Non-nil while the completion list showing is one this module started (and refreshes as you type).")
+  "While the completion list showing is one this module started (and refreshes as you type): (BUFFER . FRAME) it
+was started in.  Nil otherwise.")
+
+(defun drgnx-tty-popups--close ()
+  "End the completion list this module started, if there is one."
+  (when drgnx-tty-popups--ours
+    (setq drgnx-tty-popups--ours nil)
+    (when completion-in-region-mode (completion-in-region-mode -1))))
 
 (defun drgnx-tty-popups--lane-p ()
   "Non-nil when completion as you type goes to the popup lane: the selected frame is a terminal frame of an
@@ -194,7 +256,8 @@ Emacs without tty child frames (30.2).  A graphical frame keeps corfu's popup."
 `corfu-mode' and `corfu-auto' on in this buffer — the user's choice of completion as you type —, after a typing
 command, with `corfu-auto-prefix' characters before point; not in a macro, a read-only buffer or the minibuffer.
 A completion list somebody else started (TAB) is left alone; one of ours is refreshed."
-  (and (bound-and-true-p corfu-mode) (bound-and-true-p corfu-auto)
+  (and drgnx-tty-popups-auto-completions
+       (bound-and-true-p corfu-mode) (bound-and-true-p corfu-auto)
        (drgnx-tty-popups--lane-p)
        (not defining-kbd-macro) (not buffer-read-only) (not (minibufferp))
        (or drgnx-tty-popups--ours (not completion-in-region-mode))
@@ -205,27 +268,37 @@ A completion list somebody else started (TAB) is left alone; one of ours is refr
   (list (selected-window) (current-buffer) (buffer-chars-modified-tick) (point)))
 
 (defun drgnx-tty-popups--show (buffer tick)
-  "The timer: show the candidates around point in the lane, unless typing went on (TICK changed)."
+  "The timer: show the candidates around point in the lane, unless typing went on (TICK changed) or a list somebody
+else started is showing.  Never prompts."
   (setq drgnx-tty-popups--timer nil)
   (when (and (buffer-live-p buffer) (eq buffer (window-buffer (selected-window)))
              (drgnx-tty-popups--lane-p) (not (input-pending-p)))
     (with-current-buffer buffer
-      (when (equal tick (drgnx-tty-popups--tick))
+      (when (and (equal tick (drgnx-tty-popups--tick))
+                 (or drgnx-tty-popups--ours (not completion-in-region-mode)))
         (condition-case err
-            (let ((inhibit-message t) (message-log-max nil))
-              (when (and drgnx-tty-popups--ours completion-in-region-mode) (completion-in-region-mode -1))
-              (setq drgnx-tty-popups--ours nil)
-              (when (eq (while-no-input (completion-help-at-point) 'done) 'done)
-                (setq drgnx-tty-popups--ours completion-in-region-mode)))
-          (error (push (format "ui/terminal-popups: %s" (error-message-string err)) drgnx-hooks-problems)))))))
+            (let ((inhibit-message t) (message-log-max nil) (inhibit-interaction t))
+              (drgnx-tty-popups--close)
+              (if (eq (while-no-input (completion-help-at-point) 'done) 'done)
+                  (when completion-in-region-mode
+                    (setq drgnx-tty-popups--ours (cons buffer (selected-frame))))
+                ;; typing went on in the middle of a slow completion function: the mode it turned on goes too
+                (when completion-in-region-mode (completion-in-region-mode -1))))
+          (error
+           (when completion-in-region-mode (completion-in-region-mode -1))
+           (push (format "ui/terminal-popups: %s" (error-message-string err)) drgnx-hooks-problems)))))))
 
 (defun drgnx-tty-popups--post-command ()
-  "`post-command-hook': after typing, show the candidates once typing pauses (`corfu-auto-delay')."
+  "`post-command-hook': after typing, show the candidates once typing pauses (`corfu-auto-delay'); our list goes
+when the selected buffer or frame is not the one it was started in."
   (when (timerp drgnx-tty-popups--timer)
     (cancel-timer drgnx-tty-popups--timer)
     (setq drgnx-tty-popups--timer nil))
-  (when (and drgnx-tty-popups--ours (not completion-in-region-mode))
-    (setq drgnx-tty-popups--ours nil))          ; C-g, or leaving the word, ended it
+  (cond ((and drgnx-tty-popups--ours (not completion-in-region-mode))
+         (setq drgnx-tty-popups--ours nil))     ; C-g, or leaving the word, ended it
+        ((and drgnx-tty-popups--ours
+              (not (equal drgnx-tty-popups--ours (cons (current-buffer) (selected-frame)))))
+         (drgnx-tty-popups--close)))
   (when (condition-case nil (drgnx-tty-popups--wanted-p) (error nil))
     (setq drgnx-tty-popups--timer
           (run-with-timer (if (boundp 'corfu-auto-delay) corfu-auto-delay 0.2) nil
@@ -235,11 +308,8 @@ A completion list somebody else started (TAB) is left alone; one of ours is refr
                      :doc "Popups in terminal windows: corfu's child frame with box-drawing borders on 31.1, completion as you type in the popup lane on 30.2, ASCII marks on a terminal that does not write UTF-8."
                      :stage 'startup
                      :setup (lambda ()
-                              (add-hook 'post-command-hook #'drgnx-tty-popups--post-command)
-                              (add-hook 'window-configuration-change-hook #'drgnx-tty-popups--windows-changed)
                               (add-hook 'delete-frame-functions #'drgnx-tty-popups--frame-deleted)
-                              (add-hook 'pre-redisplay-functions #'drgnx-tty-popups--pre-redisplay)
-                              ;; terminal frames made before this module ran
+                              ;; terminal frames made before this module ran (each one's setup syncs the hooks)
                               (dolist (f (drgnx-tty-popups--tty-frames)) (drgnx-tty-popups-setup f))))
 
 (provide 'drgnx-tty-popups)

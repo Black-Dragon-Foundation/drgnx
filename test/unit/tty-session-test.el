@@ -99,3 +99,25 @@
                          '(:layers ((vim app editing window)))))
           (should-error (drgnx-tty-session--write-keys dir 'nano)))
       (delete-directory dir t))))
+
+(ert-deftest drgnx-tty-session/package-dirs-prefer-the-pinned-version ()
+  (let* ((elpa (make-temp-file "drgnx-elpa" t))
+         (lock (make-temp-file "drgnx-lock")))
+    (unwind-protect
+        (progn
+          (dolist (d '("corfu-2.9" "corfu-2.16" "corfu-20261014.1751" "compat-31.1.0.0" "corfu-terminal-0.7" "corfu-2.16.signed"))
+            (make-directory (expand-file-name d elpa)))
+          (with-temp-file lock (insert "(:version 1 :packages ((corfu :version \"2.16\") (compat :version \"30.0.0.0\")))"))
+          ;; the pinned one; compat's pin is not installed, so its newest; corfu-terminal is another package
+          (should (equal (drgnx-tty-session-user-package-dirs '(corfu compat) elpa lock)
+                         (list (expand-file-name "corfu-2.16" elpa) (expand-file-name "compat-31.1.0.0" elpa))))
+          ;; no pin: the newest
+          (with-temp-file lock (insert "(:version 1 :packages nil)"))
+          (should (equal (car (drgnx-tty-session-user-package-dirs '(corfu) elpa lock))
+                         (expand-file-name "corfu-20261014.1751" elpa)))
+          ;; a package that is not there, or no directory: nil
+          (should-not (drgnx-tty-session-user-package-dirs '(corfu vertico) elpa lock))
+          (should-not (drgnx-tty-session-user-package-dirs '(corfu) (expand-file-name "none" elpa) lock))
+          (should (string-match-p "DRGNX_USER_ELPA" (drgnx-tty-session-packages-hint '(corfu compat)))))
+      (delete-directory elpa t)
+      (delete-file lock))))
