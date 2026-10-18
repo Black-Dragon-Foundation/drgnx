@@ -18,4 +18,6 @@
  (diff-scrolling (:input :p95) 16) (diff-scrolling (:input :max) 50)
  (replace-typing (:input :p95) 16) (replace-typing (:input :max) 50)
  (live-view (:input :p95) 16) (live-view (:input :max) 50)
+ (agent-settings-open (:draw_ms) 150) (agent-settings-open (:processes) 0)
+ (remote-typing (:input :p95) 16) (remote-typing (:input :max) 50)
  (redisplay (:redisplay :p95) 16))

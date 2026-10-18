@@ -89,7 +89,8 @@
   (drgnx-agents-gw-test--with
     (drgnx-hub-serve (drgnx-hub-socket))
     (let* ((s (drgnx-agents-gw-test--session "claude")) (env (drgnx-agents--env s)))
-      (should-not (seq-find (lambda (e) (string-prefix-p "ANTHROPIC_" e)) env))
+      ;; no route variable is set (the bare names only unset what Emacs's own environment has: no inherited key)
+      (should-not (seq-find (lambda (e) (and (string-prefix-p "ANTHROPIC_" e) (string-search "=" e))) env))
       (should-not (drgnx-agent-session-via s))
       (should (= (plist-get (drgnx-hub-call-sync "status" nil) :registrations) 0)))))
 
@@ -110,7 +111,10 @@
         (said nil))
     (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
       (let ((env (drgnx-agents--env (drgnx-agents--make :name "a" :profile "claude"))))
-        (should (equal env '("A=1" "B=2")))
+        ;; …and the rest is the bare names of `drgnx-agents-scrubbed-env' (variables the agent does not inherit)
+        (should (equal (seq-filter (lambda (e) (string-search "=" e)) env) '("A=1" "B=2")))
+        (should (equal (seq-remove (lambda (e) (string-search "=" e)) env)
+                       (seq-difference drgnx-agents-scrubbed-env (cdr (assq 'claude drgnx-agents-own-env)))))
         (should (seq-find (lambda (m) (string-match-p "Boom" m)) said))
         (should (seq-find (lambda (m) (string-match-p "BARE=string" m)) said))
         (should (seq-find (lambda (m) (string-match-p "42" m)) said))))))

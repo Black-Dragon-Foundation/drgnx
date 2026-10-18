@@ -6,12 +6,14 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (declare-function global-diff-hl-mode "diff-hl")
+(defvar diff-hl-disable-on-remote)
 
 (drgnx-module-define 'extra/hunks
                      :doc "Changed lines in the gutter; show, revert or stage a change (diff-hl)."
                      :stage 'idle :packages '(diff-hl)
                      :setup (lambda ()
                               (require 'diff-hl)
+                              (setq diff-hl-disable-on-remote t)   ; VC on a remote file is a round trip, on every save and refresh
                               (global-diff-hl-mode 1)
                               (pcase-dolist (`(,id ,title ,fn ,doc)
                                              '((git-hunk-show "Show Change" diff-hl-show-hunk "The change at point, against the last commit")

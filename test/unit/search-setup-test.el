@@ -5,6 +5,7 @@
 (require 'drgnx-search-setup)
 (require 'drgnx-search-index)
 (require 'drgnx-search-query)
+(require 'drgnx-ai-probe)
 
 (defconst drgnx-search-setup-test--dims 4)
 

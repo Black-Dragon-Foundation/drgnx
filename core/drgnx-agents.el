@@ -18,6 +18,7 @@
 (require 'subr-x)
 (require 'drgnx-paths)
 (require 'drgnx-acp)
+(require 'drgnx-agent-config)          ; `drgnx-agent-config-vendor-env'
 
 (cl-defstruct (drgnx-agent-session (:constructor drgnx-agents--make) (:copier nil))
   name profile cwd conn acp-id (status 'starting) entries queue (mode 'queue) capabilities usage commands
@@ -40,7 +41,16 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
   '(("claude" :command ("claude-agent-acp") :mode queue :doc "Claude through the unmodified agent (subscription or API key)")
     ("claude (OpenRouter)" :command ("claude-agent-acp") :mode queue :ai claude-openrouter
      :doc "Claude Code on OpenRouter (your OpenRouter key, from the environment or auth-source)")
-    ("claude (Ollama)" :command ("claude-agent-acp") :mode queue :ai claude-ollama :doc "Claude Code on a local Ollama model"))
+    ("claude (Ollama)" :command ("claude-agent-acp") :mode queue :ai claude-ollama :doc "Claude Code on a local Ollama model")
+    ("claude (Kimi)" :command ("claude-agent-acp") :mode queue :ai claude-moonshot :model "kimi-k3"
+     :doc "Claude Code on Kimi through Moonshot's own API (MOONSHOT_API_KEY or auth-source for api.moonshot.ai; billed per token by Moonshot)")
+    ("claude (DeepSeek)" :command ("claude-agent-acp") :mode queue :ai claude-deepseek :model "deepseek-v4-pro"
+     :doc "Claude Code on DeepSeek through its own API (DEEPSEEK_API_KEY or auth-source for api.deepseek.com; billed per token by DeepSeek)")
+    ("claude (Kimi via OpenRouter)" :command ("claude-agent-acp") :mode queue :ai claude-openrouter :model "moonshotai/kimi-k3"
+     :doc "Claude Code on Kimi through OpenRouter (OPENROUTER_API_KEY or auth-source for openrouter.ai; billed by OpenRouter)")
+    ("claude (DeepSeek via OpenRouter)" :command ("claude-agent-acp") :mode queue :ai claude-openrouter
+     :model "deepseek/deepseek-v4-pro"
+     :doc "Claude Code on DeepSeek through OpenRouter (OPENROUTER_API_KEY or auth-source for openrouter.ai; billed by OpenRouter)"))
   "Profiles drgnx offers without setup; :ai names the provider environment the agent gets when it starts
 (`drgnx-ai-agent-env').")
 
@@ -50,9 +60,20 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
       (assoc name drgnx-agents-builtin-profiles)
       (user-error "No agent profile %s" name)))
 
-(defun drgnx-agents--read-file ()
+(defun drgnx-agents--read-file (&optional strict)
+  "agents.eld's plist, or nil.  A file that does not read is nil too — or, with STRICT, a `user-error' saying why (a
+file of comments only is nil either way)."
   (let ((f (expand-file-name "agents.eld" (drgnx-user-dir))))
-    (and (file-readable-p f) (ignore-errors (with-temp-buffer (insert-file-contents f) (read (current-buffer)))))))
+    (if (not strict)
+        (and (file-readable-p f) (ignore-errors (with-temp-buffer (insert-file-contents f) (read (current-buffer)))))
+      (when (file-exists-p f)
+        (condition-case err
+            (with-temp-buffer
+              (insert-file-contents f)
+              (goto-char (point-min))
+              (with-syntax-table emacs-lisp-mode-syntax-table (forward-comment (buffer-size)))
+              (unless (eobp) (read (current-buffer))))
+          (error (user-error "%s cannot be read (%s)" (abbreviate-file-name f) (error-message-string err))))))))
 
 (defun drgnx-agents-profile-names ()
   (delete-dups (mapcar #'car (append drgnx-agents-profiles (plist-get (drgnx-agents--read-file) :profiles)
@@ -72,10 +93,30 @@ until it says otherwise."
 (declare-function drgnx-keys--save-key "drgnx-keys")
 
 (defun drgnx-agents-set-setting (key value)
-  "Save VALUE as KEY (`:default', `:mcp') in agents.eld: only that value changes, comments and the rest stay.  A file
-that cannot be read is a `user-error' and is not changed."
+  "Save VALUE as KEY (`:default', `:mcp', `:openrouter') in agents.eld: only that value changes, comments and the
+rest stay.  A file that cannot be read is a `user-error' and is not changed."
   (require 'drgnx-keys)
   (drgnx-keys--save-key key value (expand-file-name "agents.eld" (drgnx-user-dir)) ";; drgnx agents (docs/guide/agents.md)\n"))
+
+(declare-function drgnx-gateway-restrictions "drgnx-gateway")
+
+(defun drgnx-agents-openrouter-restrictions ()
+  "Which providers OpenRouter may use for the agents' requests, from agents.eld's `:openrouter': (:only SLUGS
+:ignore SLUGS :data-collection deny|allow :zdr t), each only when set, or nil.  A file that does not read, or a value
+that is not a restriction, is a `user-error' naming it: a typo never turns a restriction off.  One setting for every
+OpenRouter route; it applies through the gateway only."
+  (require 'drgnx-gateway)
+  (let ((file (drgnx-agents--read-file t)))
+    (unless (proper-list-p file) (user-error "agents.eld is not a list of keys and values")) ; (never shown: :env values)
+    (drgnx-gateway-restrictions (plist-get file :openrouter) t)))
+
+(defun drgnx-agents--openrouter-json (restrictions)
+  "RESTRICTIONS as a hub call carries them (vectors for lists, a string for the symbol)."
+  (append (and (plist-get restrictions :only) (list :only (vconcat (plist-get restrictions :only))))
+          (and (plist-get restrictions :ignore) (list :ignore (vconcat (plist-get restrictions :ignore))))
+          (and (plist-get restrictions :data-collection)
+               (list :data-collection (symbol-name (plist-get restrictions :data-collection))))
+          (and (plist-get restrictions :zdr) (list :zdr t))))
 
 (defun drgnx-agents--changed (s) (run-hook-with-args 'drgnx-agents-changed-functions s))
 
@@ -248,6 +289,7 @@ a task whose provider failed to the next profile (drgnx-job.el).  Called in the 
   (drgnx-agents--changed s))
 
 (declare-function drgnx-ai-agent-env "drgnx-ai")
+(declare-function drgnx-ai-check-agent-model "drgnx-ai")
 (declare-function drgnx-ai-agent-gateway-chain "drgnx-ai")
 (declare-function drgnx-ai-provider "drgnx-ai")
 (declare-function drgnx-ai-key "drgnx-ai")
@@ -265,42 +307,67 @@ without a hub they go to the provider directly.")
   "Is this Emacs the hub?  A daemon: it never looks a key up where that may ask."
   (and (fboundp 'drgnx-hub-serving-p) (drgnx-hub-serving-p)))
 
-(defun drgnx-agents--gateway (s kind)
-  "Register S's agent (profile KIND) with the hub's gateway: (:url :token), or nil when no hub can be had (S then
-goes direct, and says so).  In the hub, keys are only those editors handed over (and the environment, quiet
-auth-source files): with none for any provider of the chain, a `user-error' says how one comes."
-  (when (drgnx-agents--in-hub-p)
-    (let ((chain (drgnx-ai-agent-gateway-chain kind)))
+(defun drgnx-agents--gateway (s kind &optional model)
+  "Register S's agent (profile KIND, with the profile's MODEL) with the hub's gateway: (:url :token), or nil when
+no hub can be had (S then goes direct, and says so).  In the hub, keys are only those editors handed over (and the
+environment, quiet auth-source files): with none for any provider of the chain, a `user-error' says how one comes.
+An OpenRouter chain with restrictions (`drgnx-agents-openrouter-restrictions') fails closed: restrictions that do
+not read, no hub, or a hub that did not keep them all is a `user-error' — never a direct start without them."
+  (let* ((chain (drgnx-ai-agent-gateway-chain kind model))
+         ;; read before anything can fall back: a file that does not read refuses the start here
+         (restrictions (and (assq 'openrouter chain) (drgnx-agents-openrouter-restrictions))))
+    (when (drgnx-agents--in-hub-p)
       (unless (seq-some (lambda (st) (or (not (plist-get (drgnx-ai-provider (car st)) :key-env)) (drgnx-ai-key (car st))))
                         chain)
         (user-error "No key for %s in the drgnx hub: an editor hands its keys over when it connects (or run `drgnx hub start' where the key is set)"
-                    (mapconcat (lambda (st) (symbol-name (car st))) chain ", ")))))
-  (condition-case err
-      (progn
-        (require 'drgnx-hub)
-        (unless (drgnx-hub-serving-p) (drgnx-hub-ensure))
-        (let* ((chain (drgnx-ai-agent-gateway-chain kind))
-               ;; keys this command can read (also from sources that ask) travel to the hub's memory — never in the
-               ;; hub, which has what editors gave it
-               (keys (unless (drgnx-agents--in-hub-p)
-                       (cl-loop for (id . _) in chain
-                                for key = (and (plist-get (drgnx-ai-provider id) :key-env) (drgnx-ai-key id t))
-                                when key append (list (intern (concat ":" (symbol-name id))) key))))
-               (params (list :task (drgnx-agent-session-task s) :job (drgnx-agent-session-job s)
-                             :agent (drgnx-agent-session-name s)
-                             :owner (emacs-pid)   ; its agent is this Emacs's child: gone with it, its token goes too
-                             :chain (mapcar (lambda (st) (list (symbol-name (car st)) (cdr st))) chain)
-                             :keys keys))
-               (r (if (drgnx-hub-serving-p) (drgnx-hub-register params)
-                    (drgnx-hub-call-sync "gateway/register"
-                                         (plist-put (plist-put (copy-sequence params) :chain (vconcat (mapcar #'vconcat (plist-get params :chain))))
-                                                    :keys (or keys (make-hash-table)))))))
-          (setf (drgnx-agent-session-via s) 'gateway (drgnx-agent-session-gateway s) (plist-get r :token))
-          r))
-    (error (setf (drgnx-agent-session-via s) 'direct)
-           (message "drgnx: no agent hub (%s); %s goes to its provider directly" (error-message-string err)
-                    (drgnx-agent-session-name s))
-           nil)))
+                    (mapconcat (lambda (st) (symbol-name (car st))) chain ", "))))
+    (let ((r (condition-case err
+                 (progn
+                   (require 'drgnx-hub)
+                   (unless (drgnx-hub-serving-p) (drgnx-hub-ensure))
+                   (let* (;; keys this command can read (also from sources that ask) travel to the hub's memory — never
+                          ;; in the hub, which has what editors gave it
+                          (keys (unless (drgnx-agents--in-hub-p)
+                                  (cl-loop for (id . _) in chain
+                                           for key = (and (plist-get (drgnx-ai-provider id) :key-env) (drgnx-ai-key id t))
+                                           when key append (list (intern (concat ":" (symbol-name id))) key))))
+                          (params (list :task (drgnx-agent-session-task s) :job (drgnx-agent-session-job s)
+                                        :agent (drgnx-agent-session-name s)
+                                        :owner (emacs-pid) ; its agent is this Emacs's child: gone with it, its token goes too
+                                        :chain (mapcar (lambda (st) (list (symbol-name (car st)) (cdr st))) chain)
+                                        :keys keys))
+                          (params (if restrictions
+                                      (append params (list :openrouter (drgnx-agents--openrouter-json restrictions)))
+                                    params))
+                          (r (if (drgnx-hub-serving-p) (drgnx-hub-register params)
+                               (drgnx-hub-call-sync "gateway/register"
+                                                    (plist-put (plist-put (copy-sequence params) :chain (vconcat (mapcar #'vconcat (plist-get params :chain))))
+                                                               :keys (or keys (make-hash-table)))))))
+                     (setf (drgnx-agent-session-via s) 'gateway (drgnx-agent-session-gateway s) (plist-get r :token))
+                     r))
+               (error
+                (when restrictions
+                  (user-error "OpenRouter restrictions are set in agents.eld and apply through drgnx's hub only, which is not available (%s): %s is not started directly without them; start the hub, or remove :openrouter from agents.eld to go direct"
+                              (error-message-string err) (drgnx-agent-session-name s)))
+                (setf (drgnx-agent-session-via s) 'direct)
+                (message "drgnx: no agent hub (%s); %s goes to its provider directly" (error-message-string err)
+                         (drgnx-agent-session-name s))
+                nil))))
+      ;; a hub started before restrictions existed registers without them, and says nothing about them
+      (when (and restrictions
+                 (not (equal (ignore-errors (drgnx-gateway-restrictions (plist-get r :openrouter) t)) restrictions)))
+        (drgnx-agents--release-gateway s)
+        (user-error "The drgnx hub did not keep the OpenRouter restrictions (it predates them): %s is not started; restart the hub (`drgnx hub stop', then start an agent)"
+                    (drgnx-agent-session-name s)))
+      r)))
+
+(defun drgnx-agents--refuse-direct-restrictions (s kind &optional model)
+  "With the gateway turned off, S's agent (profile KIND, MODEL) would reach OpenRouter directly: a `user-error' when
+its chain has an OpenRouter step and restrictions are set (or do not read) — they are never dropped silently."
+  (when (and (memq kind drgnx-ai-gateway-kinds) (assq 'openrouter (drgnx-ai-agent-gateway-chain kind model))
+             (drgnx-agents-openrouter-restrictions))
+    (user-error "OpenRouter restrictions are set in agents.eld and apply through drgnx's gateway only, which is turned off (drgnx-agents-use-gateway): %s is not started without them; turn the gateway on, or remove :openrouter from agents.eld"
+                (drgnx-agent-session-name s))))
 
 (declare-function drgnx-hub-call "drgnx-hub")
 
@@ -315,29 +382,73 @@ auth-source files): with none for any provider of the chain, a `user-error' says
 (the Live browser's endpoint, docs/guide/live.md).  One that fails is reported and skipped, and so is anything
 returned that is not a string.")
 
+(defcustom drgnx-agents-scrubbed-env (copy-sequence drgnx-agent-config-vendor-env)
+  "Keys never inherited by agents: variables of Emacs's environment that an agent does not get.
+MCP Test and Hook Test on the Agent Settings page unset the same list (drgnx-agent-check.el).
+An agent gets the variables of its own route (the provider key or the gateway token, the model names) and
+nothing else from this list, so a Kimi agent never sees your DeepSeek or OpenRouter key.  A profile without a
+route (`:ai') is the user's own login and also keeps its own vendor's names (`drgnx-agents-own-env').  To pass
+another one on, remove it from this list (or set it in the profile's `:env')."
+  :type '(repeat string) :group 'drgnx)
+
+(defcustom drgnx-agents-own-env
+  '((claude "ANTHROPIC_API_KEY" "ANTHROPIC_AUTH_TOKEN" "ANTHROPIC_BASE_URL" "ANTHROPIC_MODEL"
+            "ANTHROPIC_SMALL_FAST_MODEL" "ANTHROPIC_DEFAULT_HAIKU_MODEL" "ANTHROPIC_DEFAULT_SONNET_MODEL"
+            "ANTHROPIC_DEFAULT_OPUS_MODEL" "ANTHROPIC_DEFAULT_FABLE_MODEL" "CLAUDE_CODE_SUBAGENT_MODEL"
+            "CLAUDE_CODE_OAUTH_TOKEN" "CLAUDE_CODE_USE_BEDROCK" "CLAUDE_CODE_USE_VERTEX")
+    (codex "OPENAI_API_KEY" "OPENAI_BASE_URL")
+    (gemini "GEMINI_API_KEY" "GOOGLE_API_KEY"))
+  "Each agent's own credentials and switches: (AGENT NAME…).  A profile without an `:ai' route runs on the user's
+own login, so the names of its agent (by its command: claude, codex, gemini) are exempt from
+`drgnx-agents-scrubbed-env' for it, and only for it.  `AWS_*' and `GOOGLE_APPLICATION_CREDENTIALS' are not scrubbed
+at all."
+  :type '(alist :key-type symbol :value-type (repeat string)) :group 'drgnx)
+
+(defun drgnx-agents--command-agent (command)
+  "Which agent in `drgnx-agents-own-env' the profile COMMAND (a list) starts, or nil: the first of claude, codex
+and gemini that a program or argument's file name contains."
+  (let ((words (mapcar #'file-name-nondirectory (seq-filter #'stringp command))))
+    (seq-find (lambda (agent) (seq-some (lambda (w) (string-search (symbol-name agent) w)) words))
+              (mapcar #'car drgnx-agents-own-env))))
+
+(defun drgnx-agents--scrub (env &optional profile)
+  "ENV (\"NAME=value\"…) followed by a bare-name entry (it unsets the variable) for each of
+`drgnx-agents-scrubbed-env' that ENV does not set itself; ENV's own entries come first and so win.  PROFILE (a
+profile's options) without an `:ai' route keeps its agent's own names (`drgnx-agents-own-env')."
+  (let* ((set (mapcar (lambda (e) (car (split-string e "="))) env))
+         (own (and profile (not (plist-get profile :ai))
+                   (cdr (assq (drgnx-agents--command-agent (plist-get profile :command)) drgnx-agents-own-env)))))
+    (append env (seq-remove (lambda (name) (or (member name set) (member name own))) drgnx-agents-scrubbed-env))))
+
 (defun drgnx-agents--env (s)
   "The environment S's agent gets: its profile's, its provider's — the gateway's address and a token when the hub
 can carry it, else the provider's (keys resolved now, never kept) — DRGNX_TASK when S works on a task, and what
-`drgnx-agents-env-functions' add."
-  (append (plist-get (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))) :env)
-          (when-let* ((kind (plist-get (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))) :ai)))
-            (require 'drgnx-ai)
-            (drgnx-ai-agent-env (list :kind kind) (not (drgnx-agents--in-hub-p))
-                                (and drgnx-agents-use-gateway (memq kind drgnx-ai-gateway-kinds)
-                                     (drgnx-agents--gateway s kind))))
-          (and (drgnx-agent-session-task s) (list (concat "DRGNX_TASK=" (drgnx-agent-session-task s))))
-          (and (drgnx-agent-session-job s) (list (concat "DRGNX_JOB=" (drgnx-agent-session-job s))))
-          (let (extra)
-            (run-hook-wrapped 'drgnx-agents-env-functions
-                              (lambda (f)
-                                (let ((r (with-demoted-errors "drgnx agents: %S" (funcall f s))))
-                                  (if (not (proper-list-p r))
-                                      (message "drgnx agents: an environment function returned %S, not a list of NAME=value strings; ignored" r)
-                                    (dolist (e r)
-                                      (if (stringp e) (setq extra (append extra (list e)))
-                                        (message "drgnx agents: an environment function returned %S, not a NAME=value string; ignored" e)))))
-                                nil))
-            extra)))
+`drgnx-agents-env-functions' add; from Emacs's own, the variables in `drgnx-agents-scrubbed-env' are not passed on."
+  (drgnx-agents--scrub
+   (append (plist-get (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))) :env)
+           (when-let* ((profile (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))))
+                       (kind (plist-get profile :ai)))
+             (require 'drgnx-ai)
+             (drgnx-ai-check-agent-model kind (plist-get profile :model))   ; before a gateway token is made
+             (unless drgnx-agents-use-gateway (drgnx-agents--refuse-direct-restrictions s kind (plist-get profile :model)))
+             (drgnx-ai-agent-env (list :kind kind :model (plist-get profile :model) :small-model (plist-get profile :small-model))
+                                 (not (drgnx-agents--in-hub-p))
+                                 (and drgnx-agents-use-gateway (memq kind drgnx-ai-gateway-kinds)
+                                      (drgnx-agents--gateway s kind (plist-get profile :model)))))
+           (and (drgnx-agent-session-task s) (list (concat "DRGNX_TASK=" (drgnx-agent-session-task s))))
+           (and (drgnx-agent-session-job s) (list (concat "DRGNX_JOB=" (drgnx-agent-session-job s))))
+           (let (extra)
+             (run-hook-wrapped 'drgnx-agents-env-functions
+                               (lambda (f)
+                                 (let ((r (with-demoted-errors "drgnx agents: %S" (funcall f s))))
+                                   (if (not (proper-list-p r))
+                                       (message "drgnx agents: an environment function returned %S, not a list of NAME=value strings; ignored" r)
+                                     (dolist (e r)
+                                       (if (stringp e) (setq extra (append extra (list e)))
+                                         (message "drgnx agents: an environment function returned %S, not a NAME=value string; ignored" e)))))
+                                 nil))
+             extra))
+   (cdr (drgnx-agents-profile (drgnx-agent-session-profile s)))))
 
 (defvar drgnx-agents-coordination t
   "Non-nil: every agent gets drgnx's coordination tools (an MCP server, docs/develop/coordination.md).")

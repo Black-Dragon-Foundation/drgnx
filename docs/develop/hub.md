@@ -47,7 +47,7 @@ coordination server's `coord/notify` checks the same. One JSON object per line:
 | `ping` | `{pid}` |
 | `status` | `{pid, socket, gateway_port, registrations, started}` |
 | `subscribe` | `true`; then events `{"event", "data"}` on this connection |
-| `gateway/register` `{job, task, agent, chain: [[provider, model-or-null]…], budget, keys: {provider: key}, owner}` | `{token, url}` |
+| `gateway/register` `{job, task, agent, chain: [[provider, model-or-null]…], budget, keys: {provider: key}, owner, openrouter}` | `{token, url, openrouter}` (the restrictions kept; absent when none; restrictions that do not read are an error) |
 | `gateway/unregister` `{token}` | `true` |
 | `gateway/keys` `{keys: {provider: key}}` | `true`: the keys go to the gateway's memory |
 | `spend` `{job?, task?, agent?}` | `{input, output, cost, requests}` |

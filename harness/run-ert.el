@@ -373,8 +373,15 @@ exit 0 or 1."
                   (list "DRGNX_NO_HUB_START=1")
                   ;; …and a hub one starts anyway ends with this Emacs (an interrupted run leaves none)
                   (list (format "DRGNX_HUB_PARENT_PID=%d" (emacs-pid)))
-                  ;; …nor the user's provider keys: no test may reach a paid model (bare names unset them)
-                  (list "OPENROUTER_API_KEY" "ANTHROPIC_API_KEY" "ANTHROPIC_AUTH_TOKEN" "OPENAI_API_KEY")
+                  ;; …nor the user's provider keys: no test may reach a paid model (bare names unset them) — and
+                  ;; not the agents' home directories, which would point a test at the user's real settings
+                  (list "OPENROUTER_API_KEY" "ANTHROPIC_API_KEY" "ANTHROPIC_AUTH_TOKEN" "OPENAI_API_KEY"
+                        "MOONSHOT_API_KEY" "DEEPSEEK_API_KEY" "GEMINI_API_KEY" "GOOGLE_API_KEY" "OPENAI_BASE_URL"
+                        "ANTHROPIC_BASE_URL" "ANTHROPIC_MODEL" "ANTHROPIC_SMALL_FAST_MODEL"
+                        "ANTHROPIC_DEFAULT_HAIKU_MODEL" "ANTHROPIC_DEFAULT_SONNET_MODEL" "ANTHROPIC_DEFAULT_OPUS_MODEL"
+                        "ANTHROPIC_DEFAULT_FABLE_MODEL" "CLAUDE_CODE_SUBAGENT_MODEL" "CLAUDE_CODE_OAUTH_TOKEN"
+                        "CLAUDE_CODE_USE_BEDROCK" "CLAUDE_CODE_USE_VERTEX"
+                        "CLAUDE_CONFIG_DIR" "CODEX_HOME" "KIMI_CODE_HOME")
                   ;; …nor the user's desktop: no display, no compositor socket, no session bus, a private
                   ;; runtime directory (bin/drgnx and `drgnx check' do the same for the process itself: dbus.el
                   ;; connects with the C environment, which this binding does not reach)
