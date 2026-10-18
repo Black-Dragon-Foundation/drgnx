@@ -446,12 +446,18 @@ capabilities say `:c-g waits', as for kitty's keyboard protocol); prompts and co
   :set (lambda (sym val) (set-default sym val) (drgnx-tty-frames-tmux-level-apply)))
 
 (defun drgnx-tty-frames-tmux-level-apply ()
-  "Make the tmux terminals already open follow `drgnx-tty-tmux-mok-level': asked tmux again, then the keys step."
-  (dolist (f (drgnx-tty-frames--tty-frames))
-    (let ((term (frame-terminal f)))
-      (when (eq (plist-get (drgnx-tty-frames--identity f) :id) 'tmux)
-        (set-terminal-parameter term 'drgnx-tty-tmux nil)
-        (drgnx-tty-frames--tmux-setup f)))))
+  "Make the tmux terminals already open follow `drgnx-tty-tmux-mok-level': each terminal (not each window) is
+asked tmux again, then its keys step runs.  Terminals drgnx has not set up are left alone and no terminal is
+asked anything (this runs from Customize), as `drgnx-tty-frames-mouse-apply'."
+  (let (seen)
+    (dolist (f (drgnx-tty-frames--tty-frames))
+      (let ((term (frame-terminal f)))
+        (unless (memq term seen)
+          (push term seen)
+          (when (and (terminal-parameter term 'drgnx-tty-set-up)
+                     (eq (plist-get (cdr (terminal-parameter term 'drgnx-tty-identity)) :id) 'tmux))
+            (set-terminal-parameter term 'drgnx-tty-tmux nil)
+            (drgnx-tty-frames--tmux-setup f)))))))
 
 (defvar drgnx-tty-frames--csi-u-map nil "The keymap `drgnx-tty-frames--csi-u-map' returns, made once.")
 

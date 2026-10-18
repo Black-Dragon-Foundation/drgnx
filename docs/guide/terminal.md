@@ -208,10 +208,10 @@ set -as terminal-features ',xterm-kitty:RGB'  # true colour; the TERM of the ter
   others: `C-S-<letter>` (and `C-M-S-<letter>`) arrive as `C-<letter>`, `C-S-SPC` and `` C-` `` as `C-SPC`, `` C-S-` ``
   as `C-^` (tmux 3.7c). drgnx lists those in `terminal-report.eld` as keys this terminal cannot send (the key sheet
   and the fallback keys cover them once those arrive with the key-fallback layer), and the capabilities carry them as
-  `:folded`. `M-x customize-variable`
-  `drgnx-tty-tmux-mok-level` set to `2` asks for level 2 (it applies to the tmux windows already open too): C-S-letter chords work natively in tmux, but `C-g` can no
-  longer stop a runaway Lisp loop (it reaches Emacs as an escape sequence; prompts and commands still take it, and
-  the capabilities say `:c-g waits`, as for the kitty keyboard protocol). `extended-keys-format csi-u` (tmux 3.5 and
+  `:folded`. `M-x customize-variable` `drgnx-tty-tmux-mok-level` set to `2` asks for level 2 (it applies to the
+  tmux windows already open too): C-S-letter chords work natively in tmux, but `C-g` can no longer stop a runaway
+  Lisp loop (it reaches Emacs as an escape sequence; prompts and commands still take it, and the capabilities say
+  `:c-g waits`, as for the kitty keyboard protocol). `extended-keys-format csi-u` (tmux 3.5 and
   later) works too, drgnx decodes it, but it gains nothing, so the lines above do not suggest it.
 - **Focus:** with `focus-events on` the window's focus changes reach drgnx, which refreshes what depends on focus (the
   Explorer's git state).
@@ -315,8 +315,9 @@ the editor only and is left alone.
 Copying in drgnx puts the text on your computer's clipboard through OSC 52 when the terminal takes it (the table's
 "OSC 52 copy"), over SSH as well: the sequence travels through the connection unchanged. Emacs turns this on by
 itself only when the terminal's version answer is 203 or more. drgnx also turns it on in **tmux** (which then
-needs `set-clipboard on` or `allow-passthrough on`, see [drgnx inside tmux](#drgnx-inside-tmux)) and in a **kitty** whose answer was lower. A terminal that does not
-take OSC 52 (GNOME Terminal, Ptyxis) keeps the copy inside drgnx.
+needs `set-clipboard on` or `allow-passthrough on`, see [drgnx inside tmux](#drgnx-inside-tmux)) and in a
+**kitty** whose answer was lower. A terminal that does not take OSC 52 (GNOME Terminal, Ptyxis) keeps the copy
+inside drgnx.
 
 - **Long copies:** a copy whose OSC 52 text passes `xterm-max-cut-length` (100000 characters once encoded, about
   75000 characters of text) is not sent. drgnx says so once per terminal in the echo area ("too long for the

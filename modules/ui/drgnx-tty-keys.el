@@ -73,19 +73,21 @@ afterwards, as its docstring says."
       (if (condition-case err (drgnx-tty-keys--kkp-wanted-p terminal)
             (error (drgnx-tty-keys--problem "%s" (error-message-string err)) nil))
           (apply enable args)
-        (when (frames-on-display-list terminal)
-          (set-terminal-parameter terminal 'drgnx-tty-kkp-declined t))))))
+        ;; for good only when the user's setting is the reason; transient facts (a late XTVERSION naming the
+        ;; terminal) are checked again at the next focus-in
+        (unless drgnx-tty-use-kkp
+          (when (frames-on-display-list terminal)
+            (set-terminal-parameter terminal 'drgnx-tty-kkp-declined t)))))))
 
 (defun drgnx-tty-keys--swallow-replies ()
   "The selected frame's terminal ignores kkp's replies (CSI ? FLAGS u): after a setup drgnx popped, a late
-confirmation would else type M-[ ? 5 u.  kkp reads its own replies with `read-event', which the decode map does not
-touch.  Once per terminal."
+confirmation would else type M-[ ? 5 u.  The entries go into the terminal's `input-decode-map' itself: kkp's reply
+handler unregisters itself with an explicit nil on \"ESC [ ?\" before it calls the setup, which hides anything on
+the map's parent.  kkp reads its own replies with `read-event', which the decode map does not touch.  Once per
+terminal."
   (unless (terminal-parameter nil 'drgnx-tty-kkp-swallow)
-    (let ((map (make-sparse-keymap)))
-      (dotimes (n 32)
-        (define-key map (format "\e[?%du" n) (lambda (_prompt) [])))
-      (set-keymap-parent input-decode-map
-                         (make-composed-keymap (delq nil (list (keymap-parent input-decode-map) map)))))
+    (dotimes (n 32)
+      (define-key input-decode-map (format "\e[?%du" n) (lambda (_prompt) [])))
     (set-terminal-parameter nil 'drgnx-tty-kkp-swallow t)))
 
 (defun drgnx-tty-keys--kkp-setup-guard (setup &rest args)

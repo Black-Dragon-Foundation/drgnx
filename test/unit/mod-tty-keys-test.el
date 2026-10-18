@@ -380,16 +380,31 @@ a fake `tmux' printing TMUX-OUT on PATH (the display line, then NAME VALUE optio
       (should asked))))
 
 (ert-deftest drgnx-tty-keys/a-late-kkp-reply-after-the-pop-is-swallowed ()
-  ;; the confirmation (CSI ? N u) of a setup drgnx popped may still arrive: it must not type M-[ ? 5 u
-  (drgnx-tty-keys-test--terminal nil '("TERM=xterm-kitty") ""
-    (let ((drgnx-hooks-problems nil))
-      (drgnx-tty-keys--kkp-setup-guard (lambda (&rest _) (error "boom")))
-      (dolist (n '(0 5 31))
-        (let ((def (lookup-key input-decode-map (format "\e[?%du" n))))
-          (should (functionp def))
-          (should (equal (funcall def nil) []))))
-      ;; other replies are left alone
-      (should (numberp (lookup-key input-decode-map "\e[?32u"))))))
+  ;; the confirmation (CSI ? N u) of a setup drgnx popped may still arrive: it must not type M-[ ? 5 u.  kkp's
+  ;; reply handler unregisters itself with an explicit nil on "ESC [ ?" before it calls the setup: the swallowing
+  ;; entries have to live in the map itself, not in a parent the nil hides
+  (let ((input-decode-map (copy-keymap input-decode-map)))
+    (drgnx-tty-keys-test--terminal nil '("TERM=xterm-kitty") ""
+      (let ((drgnx-hooks-problems nil))
+        (define-key input-decode-map "\e[?" #'ignore)     ; kkp's handler
+        (define-key input-decode-map "\e[?" nil)          ; …unregistered before the setup, as kkp does
+        (drgnx-tty-keys--kkp-setup-guard (lambda (&rest _) (error "boom")))
+        (dolist (n '(0 5 31))
+          (let ((def (lookup-key input-decode-map (format "\e[?%du" n))))
+            (should (functionp def))
+            (should (equal (funcall def nil) []))))
+        ;; other replies are left alone
+        (should (numberp (lookup-key input-decode-map "\e[?32u")))))))
+
+(ert-deftest drgnx-tty-keys/only-use-kkp-nil-declines-for-good ()
+  ;; a terminal declined on transient facts (tmux here; an unknown terminal whose late XTVERSION names Alacritty)
+  ;; is checked again at the next focus-in
+  (let (asked)
+    (drgnx-tty-keys-test--terminal nil '("TERM=tmux-256color") ""
+      (let ((drgnx-tty-use-kkp t))
+        (drgnx-tty-keys--enable-guard (lambda (&rest _) (setq asked t))))
+      (should-not asked)
+      (should-not (terminal-parameter nil 'drgnx-tty-kkp-declined)))))
 
 (provide 'mod-tty-keys-test)
 ;;; mod-tty-keys-test.el ends here

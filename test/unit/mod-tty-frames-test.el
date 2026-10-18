@@ -577,7 +577,8 @@ types `infocmp' was asked about."
               ((symbol-function 'drgnx-tty-frames-refresh-report) (lambda (_f) (setq refreshed (1+ refreshed))))
               ((symbol-function 'drgnx-tty-frames--tty-frames) (lambda () (list (selected-frame)))))
       (drgnx-tty-frames-test--terminal '((tty-mode-set-strings . ("\e[>4;1m" "\e[?2004h"))
-                                         (tty-mode-reset-strings . ("\e[>4m")))
+                                         (tty-mode-reset-strings . ("\e[>4m"))
+                                         (drgnx-tty-set-up . t) (drgnx-tty-identity nil :id tmux))
           drgnx-tty-frames-test--tmux-env
         (drgnx-tty-frames-test--with-tmux '(:extended-keys "on")
           (let ((drgnx-tty-frames-tmux-ttl 0))
@@ -590,4 +591,29 @@ types `infocmp' was asked about."
             (should (equal (terminal-parameter nil 'tty-mode-set-strings) '("\e[>4;1m" "\e[?2004h")))
             (should (eq (plist-get (drgnx-tty-frame-caps) :c-g) 'always))
             (should (= refreshed 2))))))
+    (set-default 'drgnx-tty-tmux-mok-level 1)))
+
+(ert-deftest drgnx-tty-frames/the-tmux-level-setting-asks-each-terminal-once-and-asks-no-terminal ()
+  ;; two windows of one terminal: one tmux call; a terminal drgnx has not set up yet is not touched (no XTVERSION,
+  ;; no waiting, from a Customize call); the tmux windows only
+  (let (sent (drgnx-tty-tmux-mok-level 1))
+    (cl-letf (((symbol-function 'send-string-to-terminal) (lambda (s &optional _) (push s sent)))
+              ((symbol-function 'drgnx-tty-frames-refresh-report) #'ignore)
+              ((symbol-function 'drgnx-tty-frames--ask) (lambda (&rest _) (ert-fail "a terminal was asked")))
+              ((symbol-function 'drgnx-tty-frames--tty-frames) (lambda () (list (selected-frame) (selected-frame)))))
+      (drgnx-tty-frames-test--terminal '((tty-mode-set-strings . ("\e[>4;1m")) (drgnx-tty-set-up . t)
+                                         (drgnx-tty-identity nil :id tmux))
+          drgnx-tty-frames-test--tmux-env
+        (drgnx-tty-frames-test--with-tmux '(:extended-keys "on")
+          (customize-set-variable 'drgnx-tty-tmux-mok-level 2)
+          (should (equal sent '("\e[>4;2m")))
+          (should (= calls 1))))
+      (setq sent nil)
+      ;; not set up yet: untouched
+      (drgnx-tty-frames-test--terminal '((tty-mode-set-strings . ("\e[>4;1m"))) drgnx-tty-frames-test--tmux-env
+        (drgnx-tty-frames-test--with-tmux '(:extended-keys "on")
+          (customize-set-variable 'drgnx-tty-tmux-mok-level 1)
+          (customize-set-variable 'drgnx-tty-tmux-mok-level 2)
+          (should-not sent)
+          (should (= calls 0)))))
     (set-default 'drgnx-tty-tmux-mok-level 1)))
