@@ -112,6 +112,13 @@
     (should (= (car r) 3))
     (should (string-search "--yes" (cdr r)))))
 
+(ert-deftest drgnx-install/the-plan-names-the-shell-profile-for-homebrews-line ()
+  (pcase-dolist (`(,shell ,file) '(("/bin/zsh" ".zprofile") ("/bin/bash" ".profile")))
+    (let ((out (cdr (drgnx-install-test--run (append (list "DRGNX_INSTALL_BREW=none" (concat "SHELL=" shell))
+                                                     drgnx-install-test--macos)
+                                             "--dry-run"))))
+      (should (string-match-p (concat "then add its shellenv line to [^ ]*/" (regexp-quote file) " (asked)") out)))))
+
 (ert-deftest drgnx-install/macos-with-homebrew-does-not-offer-it ()
   (let ((out (cdr (drgnx-install-test--run (cons "DRGNX_INSTALL_BREW=/opt/homebrew/bin/brew" drgnx-install-test--macos)
                                            "--dry-run"))))
@@ -310,7 +317,12 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
                     ("\\[-[0-9]+\\]" . "last=${arr[-1]}")
                     ("\\[\\[ -v" . "if [[ -v name ]]; then")
                     ("&>>" . "cmd &>> log")
-                    ("\\${[A-Za-z_]+@[QEPAa]}" . "x=${name@Q}")))
+                    ("\\${[A-Za-z_]+@[QEPAa]}" . "x=${name@Q}")
+                    ("\\${[A-Za-z_]+[,^]}" . "x=${name^}")
+                    ("\\bread\\b[^\n]* -[a-zA-Z]*t " . "read -t 0.1 line")
+                    ("\\bwait -n\\b" . "wait -n")
+                    ("declare -g" . "declare -g name=1")
+                    ("\\bcoproc\\b" . "coproc cat")))
       (should (string-match-p (car case) (cdr case)))
       (should-not (string-match-p (car case) code)))))
 
