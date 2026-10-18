@@ -95,4 +95,22 @@
   (when (get-buffer "*drgnx pull requests*") (kill-buffer "*drgnx pull requests*"))
   (with-temp-buffer (insert "x") (should-error (drgnx-prs-toggle-closed) :type 'user-error) (should (equal (buffer-string) "x"))))
 
+(ert-deftest drgnx-prs/fetch-sets-no-prompt-env ()
+  ;; M11b-7: git never asks for a password in the background; its complaint reaches the user
+  (drgnx-prs-test--with (list (drgnx-prs-test--pr 5 "feature-a" "b"))
+    (let ((env nil) (err nil) (sentinel nil) (messages nil))
+      (cl-letf (((symbol-function 'make-process)
+                 (lambda (&rest args)
+                   (setq env process-environment err (plist-get args :stderr) sentinel (plist-get args :sentinel))
+                   'fake))
+                ((symbol-function 'message) (lambda (fmt &rest a) (push (apply #'format fmt a) messages))))
+        (drgnx-prs-view)
+        (with-current-buffer "*drgnx pull requests*" (goto-char (point-min)) (search-forward "PR 5") (drgnx-prs-changes))
+        (should (member "GIT_TERMINAL_PROMPT=0" env))
+        (should (bufferp err))
+        (with-current-buffer err (insert "fatal: could not read Username for 'https://example.org'\n"))
+        (funcall sentinel 'fake "exited abnormally with code 128\n")
+        (should (seq-some (lambda (m) (string-search "could not read Username" m)) messages))
+        (should-not (buffer-live-p err))))))
+
 ;;; mod-prs-test.el ends here

@@ -164,15 +164,22 @@ newest first at each level.  Every PR appears once, a cycle cut where it is foun
   "Pull Requests: Show Changes — the pull request at point in the diff view (git fetches its head first)."
   (interactive)
   (let* ((p (drgnx-prs--at-point)) (root drgnx-prs--root) (remote (drgnx-prs--remote root))
-         (n (plist-get p :number)) (ref (format "refs/pullreqs/%d" n)) (default-directory root))
+         (n (plist-get p :number)) (ref (format "refs/pullreqs/%d" n)) (default-directory root)
+         (err (generate-new-buffer " *drgnx-prs fetch err*" t))
+         (process-environment (cons "GIT_TERMINAL_PROMPT=0" process-environment)))   ; never a hidden password prompt
     (message "drgnx: fetching pull request #%d…" n)
-    (make-process :name "drgnx-prs-fetch" :buffer nil :noquery t :connection-type 'pipe
+    (make-process :name "drgnx-prs-fetch" :buffer nil :stderr err :noquery t :connection-type 'pipe
                   :command (list "git" "fetch" remote (format "+refs/pull/%d/head:%s" n ref))
                   :sentinel (lambda (_proc event)
-                              (if (equal event "finished\n")
-                                  (drgnx-diff-show (list 'range (format "%s/%s" remote (plist-get p :base)) ref) root)
-                                (when (string-match-p "exited\\|failed\\|signal" event)
-                                  (message "drgnx: fetching pull request #%d failed: %s" n (string-trim event))))))))
+                              (let ((why (and (buffer-live-p err)
+                                              (with-current-buffer err
+                                                (car (last (split-string (string-trim (buffer-string)) "\n" t)))))))
+                                (cond ((equal event "finished\n")
+                                       (when (buffer-live-p err) (kill-buffer err))
+                                       (drgnx-diff-show (list 'range (format "%s/%s" remote (plist-get p :base)) ref) root))
+                                      ((string-match-p "exited\\|failed\\|signal" event)
+                                       (when (buffer-live-p err) (kill-buffer err))
+                                       (message "drgnx: fetching pull request #%d failed: %s" n (or why (string-trim event))))))))))
 
 (defun drgnx-prs--commit-setup ()
   "`git-commit-setup-hook': # completes PR and issue numbers (forge)."

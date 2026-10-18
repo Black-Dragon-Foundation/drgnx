@@ -82,8 +82,10 @@ Merged and closed ones are hidden until **Pull Requests: Show Closed**.
 - `RET` (Pull Requests: Open) opens forge's view of it: the reviews, comments and commits.
 - `d` (Pull Requests: Show Changes) fetches its head (`refs/pull/N/head` into `refs/pullreqs/N`) and shows it
   against its base in the diff view.
-- **Pull Requests: Fetch** asks the forge for the list (`forge-pull`). It is the only thing here that uses the
-  network, and only when you run it. It needs a forge token in auth-source: see forge's manual. GitHub works;
+- **Pull Requests: Fetch** asks the forge for the list (`forge-pull`). It and Show Changes (which runs
+  `git fetch` for the one pull request) are the only things here that use the network, and only when you run
+  them. git never prompts for a password in the background: when a fetch fails, the echo area shows git's last line
+  (for example that it could not read a username). Fetch needs a forge token in auth-source: see forge's manual. GitHub works;
   Codeberg/Forgejo works as far as forge supports it.
 - In a commit message, `#` completes pull request and issue numbers (forge).
 
