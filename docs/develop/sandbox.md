@@ -1184,3 +1184,14 @@ resolved with the blocking `getaddrinfo`, which stalls the job's other connectio
 so never another job's). A spliced connection has no idle timeout: it stays until either side closes, within the cap
 of 64. On macOS any local process can reach the port, as with the gateway. Unicode entries are not NFC-normalized
 before encoding.
+
+### The gateway socket
+
+A gateway profile's agent reaches the hub's gateway (`core/drgnx-gateway.el`) through `gateway.sock`, a per-session Unix
+socket in the session's directory beside `mcp.sock` and `hub.sock` (inside the sandbox, `/run/drgnx/gateway.sock`); the
+relay turns `127.0.0.1:3129` into it. `(drgnx-gateway-listen-socket PATH)` makes it, mode 0600 (a stale file at PATH is
+replaced), and `(drgnx-gateway-close-socket PATH)` cuts its connections, with their upstream requests, and removes the
+file; `drgnx-gateway-stop` closes them all. It shares the port's code: the same filter, path allowlist and token check.
+The caller chooses PATH, and on macOS PATH must fit 104 bytes (`make-network-process` errors when it is too long). The
+socket is not wired to a session yet. Tests: `test/unit/gateway-test.el` (`drgnx-gateway-socket/`). The gateway itself is
+described in [the hub](hub.md).
