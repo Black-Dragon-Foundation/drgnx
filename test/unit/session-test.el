@@ -91,6 +91,20 @@ frames that count as windows, :unsaved the file buffers still changed after the 
     (should (= asked 0))
     (should killed)))
 
+;; M12a-33: a changed *scratch* is not a buffer whose changes would be lost.
+(ert-deftest drgnx-session/scratch-is-not-offered ()
+  (let ((scratch (get-buffer-create "*scratch*"))
+        (untitled (generate-new-buffer "Untitled-session-test")))
+    (unwind-protect
+        (progn
+          (with-current-buffer scratch (insert "typed in scratch"))
+          (with-current-buffer untitled (setq buffer-offer-save t) (insert "typed"))
+          (should (buffer-modified-p scratch))
+          (should (memq untitled (drgnx-session--unsaved-buffers)))
+          (should-not (memq scratch (drgnx-session--unsaved-buffers))))
+      (with-current-buffer scratch (set-buffer-modified-p nil))
+      (kill-buffer untitled))))
+
 (ert-deftest drgnx-session/the-choice-is-remembered ()
   (drgnx-session-test--with (:keep-running t)
     (drgnx-session-set-keep-running nil)

@@ -104,8 +104,9 @@ the palette) — drgnx does one of two things, your choice:
 - **Quit when the last window closes:** closing the last window quits drgnx.
 
 Quitting — Quit drgnx, or closing the last window in quit mode — first offers to save each file with changes, and
-each New Untitled buffer (tab) you typed in (it asks for a file name). Press Ctrl+G (`C-g`, Emacs' cancel), or keep one unsaved and then answer no to "quit and lose the changes?", and drgnx stays running with
-everything open: nothing is lost. A drgnx that is not a daemon has nothing to keep running, so closing its last
+each New Untitled buffer (tab) you typed in (it asks for a file name); the `*scratch*` buffer is not offered. Press
+Ctrl+G (`C-g`, Emacs' cancel), or keep one unsaved and then answer no to "quit and lose the changes?", and drgnx
+stays running with everything open: nothing is lost. A drgnx that is not a daemon has nothing to keep running, so closing its last
 window always quits (asking the same way).
 
 Onboarding's Daemon and Desktop step asks it once ([onboarding.md](onboarding.md#the-steps)).
