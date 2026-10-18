@@ -19,6 +19,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'drgnx-guard)
+(require 'drgnx-timer)
 
 (defgroup drgnx-platform nil "Window-manager adapters." :group 'drgnx)
 
@@ -64,6 +65,27 @@ whoever started it."
   "Run FN from a 0-second timer: callbacks are never called before the function that takes them returns."
   (run-at-time 0 nil fn))
 
+(defvar drgnx-platform--serial 0
+  "The last number `drgnx-platform--serial' gave out.")
+
+(defun drgnx-platform--next-serial ()
+  "A number no earlier call of this function returned: the object of a per-call timer key, `(SYMBOL . N)'."
+  (cl-incf drgnx-platform--serial))
+
+(defun drgnx-platform--step (fn &rest args)
+  "Call FN with ARGS: the named function of a layer timer whose call keeps its state in a closure.
+The timers of this file are all `:owner :core': each ends the call it belongs to (its answer, its error) and
+is cancelled by the call's own finish, so no module's end and no process's death may drop one."
+  (apply fn args))
+
+(defun drgnx-platform--call-cut (finish)
+  "The time limit of `drgnx-platform-call': FINISH the call with `timeout'."
+  (funcall finish 'timeout ""))
+
+(defun drgnx-platform--watchdog-cut (cb)
+  "The watchdog of `drgnx-platform--operation': the adapter never answered; CB (once) gets the error."
+  (funcall cb (list :error "timed out")))
+
 (defun drgnx-platform--once (callback)
   "A function that calls CALLBACK (nil: nothing) at most once and turns an error in it into a message."
   (let ((done nil))
@@ -87,13 +109,13 @@ front of `process-environment'.  Always asynchronous; an error in CALLBACK is sh
     (if (not (and program (executable-find program)))
         (drgnx-platform--later
          (lambda () (funcall cb 'error (format "%s is not installed" (or program "(no program)")))))
-      (let* ((chunks nil) (timer nil) (finished nil) (proc nil) (errproc nil) (exit nil)
+      (let* ((chunks nil) (finished nil) (proc nil) (errproc nil) (exit nil)
              (errbuf (generate-new-buffer " *drgnx-wm-stderr*" t))
              (finish
               (lambda (status output)
                 (unless finished
                   (setq finished t)
-                  (when timer (cancel-timer timer))
+                  (drgnx-timer-cancel (cons 'platform-call proc))
                   (when (process-live-p proc)
                     (set-process-filter proc #'ignore)
                     (set-process-sentinel proc #'ignore)
@@ -123,8 +145,10 @@ front of `process-environment'.  Always asynchronous; an error in CALLBACK is sh
                 (set-process-coding-system p 'utf-8 'utf-8)
                 (set-process-sentinel p (lambda (_p _e) (funcall maybe-finish)))
                 (set-process-query-on-exit-flag p nil))
-              (setq timer (run-at-time (or timeout drgnx-platform-command-timeout) nil
-                                       (lambda () (funcall finish 'timeout "")))))
+              ;; keyed by the process, owned by the core: the cut must also come when the process died but its
+              ;; standard error is still held open (a child that kept the pipe), which `finish' waits for
+              (drgnx-timer-start (cons 'platform-call proc) (or timeout drgnx-platform-command-timeout)
+                                 #'drgnx-platform--call-cut :args (list finish) :owner :core))
           (error
            (setq finished t)
            (when (buffer-live-p errbuf) (kill-buffer errbuf))
@@ -280,14 +304,14 @@ No process, no window-manager call.  Without FRAME in batch Emacs: from the proc
   "Run STARTER with an adapter callback; CALLBACK gets what TRANSFORM makes of the adapter's answer, or
 (:error MESSAGE) when the adapter or TRANSFORM signals, or (:error \"timed out\") when the adapter has not
 answered `drgnx-platform-watchdog-margin' seconds after TIMEOUT.  CALLBACK runs exactly once, later."
-  (let* ((cb (drgnx-platform--once callback)) (timer nil)
+  (let* ((cb (drgnx-platform--once callback)) (key (cons 'platform-watchdog (drgnx-platform--next-serial)))
          (reply (lambda (r)
-                  (when timer (cancel-timer timer))
+                  (drgnx-timer-cancel key)
                   (funcall cb (condition-case err
                                   (if (drgnx-platform--error-p r) r (funcall transform r))
                                 (error (list :error (error-message-string err))))))))
-    (setq timer (run-at-time (+ timeout drgnx-platform-watchdog-margin) nil
-                             (lambda () (funcall cb (list :error "timed out")))))
+    (drgnx-timer-start key (+ timeout drgnx-platform-watchdog-margin) #'drgnx-platform--watchdog-cut
+                       :args (list cb) :owner :core)
     (condition-case err (funcall starter reply)
       (error (let ((msg (error-message-string err)))
                (drgnx-platform--later (lambda () (funcall reply (list :error msg)))))))
@@ -797,6 +821,11 @@ the error says the window WAS moved and what was not restored."
                ((null con) (funcall callback (list :error drgnx-platform-wm--refusal)))
                (t (drgnx-platform-wm--move-con wm ctx until con monitor t callback))))))))
 
+(defun drgnx-platform-wm--place-expired (finish wm timeout what)
+  "The deadline of `drgnx-platform-wm--place': FINISH the placement with the error that the window did not show."
+  (funcall finish (list :error (format "%s did not show the window within %g s; %s"
+                                       (drgnx-platform-wm--label wm) timeout what))))
+
 (defun drgnx-platform-wm--place (wm ctx monitor callback)
   "The adapter's :place for WM: find the restored window, then move it without taking focus.
 sway: the frame's `title' parameter is set to \"drgnx [placing PID-N]\" so the window can be told from the
@@ -808,12 +837,15 @@ at `drgnx-platform-wm--place-polls' seconds, then every second, until the window
          (xid (and (eq wm 'i3) (drgnx-platform-wm--xid frame)))
          (title (and (eq wm 'sway)
                      (format "drgnx [placing %d-%d]" (emacs-pid) (cl-incf drgnx-platform-wm--place-counter))))
-         (done nil) (timers nil) (n 0) finish poll)
+         (serial (drgnx-platform--next-serial))
+         (poll-key (cons 'wm-place-poll serial)) (deadline-key (cons 'wm-place-deadline serial))
+         (done nil) (n 1) finish poll)           ; N: the index of the next poll time (the first poll is the one at index 0)
     (drgnx-platform-wm--output-arg monitor)
     (setq finish (lambda (result)
                    (unless done
                      (setq done t)
-                     (mapc #'cancel-timer timers)
+                     (drgnx-timer-cancel poll-key)
+                     (drgnx-timer-cancel deadline-key)
                      (when (and title (frame-live-p frame))
                        (ignore-errors (set-frame-parameter frame 'title old-title)))
                      (funcall callback result)))
@@ -831,17 +863,14 @@ at `drgnx-platform-wm--place-polls' seconds, then every second, until the window
                                                         (+ 3.0 (- n (1- (length drgnx-platform-wm--place-polls))))))))
                                    (cl-incf n)
                                    (when (< at until)
-                                     (push (run-at-time (max 0 (- at (float-time))) nil poll) timers)))))))))))
-    (push (run-at-time (plist-get ctx :timeout) nil
-                       (lambda () (funcall finish (list :error (format "%s did not show the window within %g s; %s"
-                                                                       (drgnx-platform-wm--label wm)
-                                                                       (plist-get ctx :timeout) what)))))
-          timers)
+                                     (drgnx-timer-start poll-key (max 0 (- at (float-time))) #'drgnx-platform--step
+                                                        :args (list poll) :owner :core)))))))))))
+    (drgnx-timer-start deadline-key (plist-get ctx :timeout) #'drgnx-platform-wm--place-expired
+                       :args (list finish wm (plist-get ctx :timeout) what) :owner :core)
     (when title (set-frame-parameter frame 'title title))
     ;; the first read waits for the first poll time, so the title has reached the window manager
-    (push (run-at-time (car drgnx-platform-wm--place-polls) nil
-                       (lambda () (setq n 1) (funcall poll)))
-          timers)))
+    (drgnx-timer-start poll-key (car drgnx-platform-wm--place-polls) #'drgnx-platform--step
+                       :args (list poll) :owner :core)))
 
 (dolist (wm '(sway i3))
   (let ((wm wm))
@@ -921,7 +950,7 @@ still not found answers \"did not show the window\".  A missing tool is reported
          (move-call (drgnx-platform-wm--hn-caller name ctx t end))
          (previous (frame-parameter frame 'title)) (done nil)
          (title (format "drgnx [placing %d-%d]" (emacs-pid) (cl-incf drgnx-platform-wm--hn-placing-counter)))
-         (start (float-time))
+         (start (float-time)) (key (cons 'wm-hn-poll (drgnx-platform--next-serial)))
          (finish (lambda (r)
                    (unless done
                      (setq done t)
@@ -935,8 +964,8 @@ still not found answers \"did not show the window\".  A missing tool is reported
                           (if-let* ((w (funcall find out (emacs-pid) title)))
                               (funcall move move-call w (lambda () (funcall finish 'ok)) finish)
                             (if (cdr times)
-                                (run-at-time (max 0 (- (cadr times) (- (float-time) start))) nil
-                                             (lambda () (poll (cdr times))))
+                                (drgnx-timer-start key (max 0 (- (cadr times) (- (float-time) start)))
+                                                   #'drgnx-platform--step :args (list #'poll (cdr times)) :owner :core)
                               (funcall finish (list :error (format "%s did not show the window within %g s; it was not placed"
                                                                    (drgnx-platform--spec name :title)
                                                                    (plist-get ctx :timeout)))))))
@@ -945,7 +974,8 @@ still not found answers \"did not show the window\".  A missing tool is reported
       (if (not (executable-find (car list-argv)))
           (funcall call list-argv #'ignore callback)
         (set-frame-parameter frame 'title title)
-        (run-at-time (car drgnx-platform-wm--hn-poll-times) nil (lambda () (poll drgnx-platform-wm--hn-poll-times)))))))
+        (drgnx-timer-start key (car drgnx-platform-wm--hn-poll-times) #'drgnx-platform--step
+                           :args (list #'poll drgnx-platform-wm--hn-poll-times) :owner :core)))))
 
 ;;;;; Hyprland
 
@@ -1283,6 +1313,10 @@ call ends, so the table holds only the calls in flight.")
     (when-let* ((fn (gethash (nth 3 event) drgnx-platform-kwin--error-handlers)))
       (funcall fn err))))
 
+(defun drgnx-platform-kwin--expired (finish timeout)
+  "The time limit of `drgnx-platform-kwin--run': KWin has not answered; FINISH the call with the error."
+  (funcall finish (list :error (format "KWin did not answer within %s s" timeout))))
+
 (defun drgnx-platform-kwin--run (kind args timeout callback)
   "Run the script KIND (with ARGS plus the reply address) in KWin; call CALLBACK once, later, with the parsed
 reply or (:error MESSAGE).  TIMEOUT seconds bound every step: when KWin has not answered by then the call
@@ -1293,12 +1327,12 @@ ends with an error.  Script, reply object and temporary file are gone by the tim
       (let* ((n (cl-incf drgnx-platform-kwin--counter))
              (name (format "drgnx-%d-%d" (emacs-pid) n))
              (ms (max 1 (round (* 1000 timeout))))
-             (object nil) (file nil) (timer nil) (sent nil) (done nil) (serials nil) (on-error nil) (track nil)
+             (object nil) (file nil) (key (cons 'kwin-answer n)) (sent nil) (done nil) (serials nil) (on-error nil) (track nil)
              (finish
               (lambda (result)
                 (unless done
                   (setq done t)
-                  (when timer (cancel-timer timer))
+                  (drgnx-timer-cancel key)
                   (dolist (s serials) (remhash s drgnx-platform-kwin--error-handlers))
                   (when (= 0 (hash-table-count drgnx-platform-kwin--error-handlers))
                     (remove-hook 'dbus-event-error-functions #'drgnx-platform-kwin--dbus-error))
@@ -1328,9 +1362,7 @@ ends with an error.  Script, reply object and temporary file are gone by the tim
                             :session service path "org.drgnx.Wm" "Reply"
                             (lambda (json) (funcall finish (drgnx-platform-kwin--parse json)) :ignore)
                             t))
-              (setq timer (run-at-time timeout nil
-                                       (lambda ()
-                                         (funcall finish (list :error (format "KWin did not answer within %s s" timeout))))))
+              (drgnx-timer-start key timeout #'drgnx-platform-kwin--expired :args (list finish timeout) :owner :core)
               (setq file (let ((coding-system-for-write 'utf-8-unix))
                            (make-temp-file "drgnx-kwin-" nil ".js" script)))
               (setq sent t)
@@ -1410,20 +1442,22 @@ CTX's one deadline."
          (want (drgnx-platform--geometry monitor))
          (old-title (frame-parameter frame 'title))
          (title (format "drgnx [placing %d-%d]" (emacs-pid) (cl-incf drgnx-platform-wm--hn-placing-counter)))
-         (done nil)
+         (done nil) (key (cons 'kwin-place (drgnx-platform--next-serial)))
          (finish (lambda (r)
                    (unless done
                      (setq done t)
                      (when (frame-live-p frame) (set-frame-parameter frame 'title old-title))
                      (funcall callback r))))
+         (resume (lambda (fn)
+                   (cond (done)
+                         ((not (frame-live-p frame)) (funcall finish (list :error "the window was closed")))
+                         (t (funcall fn)))))
          (there (lambda () (ignore-errors (equal (append (alist-get 'geometry (frame-monitor-attributes frame)) nil) want)))))
     (cl-labels ((later (times fn)
                   ;; FN at the next poll time, or nil when there is none left before the deadline
                   (when (and times (< (+ start (car times)) end))
-                    (run-at-time (max 0 (- (+ start (car times)) (float-time))) nil
-                                 (lambda () (cond (done)
-                                                  ((not (frame-live-p frame)) (funcall finish (list :error "the window was closed")))
-                                                  (t (funcall fn)))))))
+                    (drgnx-timer-start key (max 0 (- (+ start (car times)) (float-time))) #'drgnx-platform--step
+                                       :args (list resume fn) :owner :core)))
                 (try (times)
                   (drgnx-platform-kwin--send
                    (plist-put (copy-sequence ctx) :timeout (max 0.05 (- end (float-time)))) monitor
