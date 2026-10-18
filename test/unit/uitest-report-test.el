@@ -67,6 +67,21 @@
     (should (equal (plist-get (aref (plist-get r :trace) 0) :cause) "other"))
     (should (= (plist-get r :timer_moves) 0))))
 
+;; DEFERRED M3e-6: the windows focused when the measurement ends are not aimed at: a timer that moves
+;; focus to another window is a collateral move.
+(ert-deftest drgnx-uitest/timer-change-in-focused-window-is-collateral ()
+  (save-window-excursion
+    (delete-other-windows)
+    (let* ((w1 (selected-window)) (w2 (split-window w1 nil 'right)))
+      (drgnx-uitest-measure-begin)
+      (unwind-protect
+          (progn
+            (select-window w2 'norecord)        ; what a timer does, with no command of ours
+            (let ((r (drgnx-uitest-measure-end)))
+              (should (member (drgnx-uitest-window-id w2) (append (plist-get r :collateral) nil)))
+              (should (>= (plist-get r :collateral_moves) 1))))
+        (drgnx-uitest-measure-end)))))
+
 (ert-deftest drgnx-uitest/scroll-without-a-new-start-is-not-a-change ()
   ;; window-scroll-functions also run when redisplay re-uses the same start; that must not
   ;; count as a change (it kept busy configurations from ever settling).

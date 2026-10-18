@@ -385,8 +385,8 @@ aimed at (their changes are not collateral), LAST-INPUT the time of the last eve
   (remove-hook 'post-command-hook #'drgnx-uitest-record--after-command)
   (setq drgnx-uitest-record--command nil)
   (advice-remove 'timer-event-handler #'drgnx-uitest-record--after-timer)
-  (drgnx-uitest--note-target (frame-selected-window (drgnx-uitest-root-frame)))
-  (drgnx-uitest--note-target (selected-window))      ; the window with focus (a second frame's too)
+  ;; No target is added here: a window a timer focused after the input is collateral.  Targets are
+  ;; the start's windows, the windows of mouse events and those focus moved to after a command.
   (let ((new (- (length drgnx-jank-guard-log) drgnx-uitest-record--guard0)))
     (append (drgnx-uitest-jank-report (reverse drgnx-uitest-record--log) drgnx-uitest-record--t0
                                       drgnx-uitest-record--initial drgnx-uitest--targets

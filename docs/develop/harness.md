@@ -127,7 +127,7 @@ The report:
 |---|---|
 | `settle_ms` | time from the last delivered input to the last visible change (0 if nothing changed after it) |
 | `layout_changes` | window edge changes, windows created or deleted |
-| `collateral_moves` / `collateral` | windows that changed although the input was not aimed at them (targets = the window clicked, the selected window before and after, and any window a command moved focus to — in any frame) — invariant I1 wants 0 |
+| `collateral_moves` / `collateral` | windows that changed although the input was not aimed at them (targets = the window clicked, the selected window when the measurement starts, and any window a command moved focus to — in any frame; a window only a timer focused is collateral) — invariant I1 wants 0 |
 | `oscillations` | snap-backs: a change that returns one of a window's fields (point, start, buffer, edges, header/mode-line height) to an earlier value within the measurement, even if other fields changed meanwhile |
 | `chrome_changes` | header-line or mode-line height changes (I3) |
 | `echo_changes` | minibuffer/echo-area height changes (I4) |
