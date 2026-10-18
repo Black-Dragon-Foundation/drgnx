@@ -473,9 +473,12 @@ else signal with the last screen."
 ;;;; The screen
 
 (defun drgnx-tty-session-screen (sess &optional escapes)
-  "The text of SESS's pane (`capture-pane -p'; with ESCAPES, its attributes as escape sequences)."
-  (string-remove-suffix "\n" (apply #'drgnx-tty-session--tmux-ok sess "capture-pane" "-p"
-                                    (append (and escapes '("-e")) (list "-t" (plist-get sess :target))))))
+  "The text of SESS's pane (`capture-pane -p'; with ESCAPES, its attributes as escape sequences).  A kitty session's
+is kitty's screen (`drgnx-tty-session-kitty-screen'; ESCAPES is not for it)."
+  (if (plist-get sess :kitty)
+      (drgnx-tty-session-kitty-screen sess)
+    (string-remove-suffix "\n" (apply #'drgnx-tty-session--tmux-ok sess "capture-pane" "-p"
+                                      (append (and escapes '("-e")) (list "-t" (plist-get sess :target)))))))
 
 (defun drgnx-tty-session--find-in (screen regexp)
   "(COL . ROW), 1-based cells, of REGEXP's first match in SCREEN's lines, or nil."
@@ -663,6 +666,165 @@ control); DOUBLE: twice."
 (defun drgnx-tty-session-drag (sess from to)
   "Drag button 1 from cell FROM to cell TO (conses (COL . ROW))."
   (drgnx-tty-session-send sess (drgnx-tty-session--drag-bytes from to)))
+
+;;;; kitty: the exit test's terminal
+
+(defconst drgnx-tty-session-kitty-skip-message "kitty not installed: run bin/drgnx test --container --tty"
+  "Why a kitty test skipped: kitty is installed only in the tty tier's image (test/container/Containerfile.tty).")
+
+(defun drgnx-tty-session--kitty-bin ()
+  "kitty: the one $DRGNX_TTY_KITTY names when set, else the one on PATH; nil without either."
+  (let ((env (getenv "DRGNX_TTY_KITTY")))
+    (if (and env (not (string-empty-p env)))
+        (and (file-executable-p env) env)
+      (executable-find "kitty"))))
+
+(defun drgnx-tty-session--kitten-bin ()
+  "kitten (kitty's remote control): beside kitty, else on PATH."
+  (when-let* ((kitty (drgnx-tty-session--kitty-bin)))
+    (let ((beside (expand-file-name "kitten" (file-name-directory kitty))))
+      (if (file-executable-p beside) beside (executable-find "kitten")))))
+
+(defun drgnx-tty-session-kitty-missing ()
+  "The programs a kitty session needs that are not here: kitty, kitten, mutter, dbus-run-session, wl-paste."
+  (append (unless (drgnx-tty-session--kitty-bin) '("kitty"))
+          (unless (drgnx-tty-session--kitten-bin) '("kitten"))
+          (seq-remove #'executable-find '("mutter" "dbus-run-session" "wl-paste"))))
+
+(defun drgnx-tty-session-kitty-require ()
+  "Skip the running test with `drgnx-tty-session-kitty-skip-message' unless a kitty session can start here."
+  (when-let* ((missing (drgnx-tty-session-kitty-missing)))
+    (message "SKIPPED (no %s): %s" (string-join missing ", ") drgnx-tty-session-kitty-skip-message)
+    (ert-skip drgnx-tty-session-kitty-skip-message)))
+
+(defconst drgnx-tty-session--keyboard-form
+  '(progn
+     (require 'dbus)
+     (let* ((dest "org.gnome.Mutter.RemoteDesktop")
+            (path (dbus-call-method :session dest "/org/gnome/Mutter/RemoteDesktop" dest "CreateSession"))
+            (iface (concat dest ".Session")))
+       (dbus-call-method :session dest path iface "Start")
+       ;; the virtual keyboard comes with the first key: Shift (keysym 0xffe1) down and up, before any window
+       (dbus-call-method :session dest path iface "NotifyKeyboardKeysym" :uint32 #xffe1 t)
+       (dbus-call-method :session dest path iface "NotifyKeyboardKeysym" :uint32 #xffe1 nil)
+       (write-region path nil (car command-line-args-left) nil 'silent)
+       ;; mutter ends the remote-desktop session, and its keyboard, when this client leaves the bus
+       (while t (sleep-for 60))))
+  "Run by a batch Emacs on the session's bus: give headless mutter a keyboard.  Without one its seat has none,
+so no window ever has the keyboard focus: kitty cannot own the clipboard (an OSC 52 copy goes nowhere) and
+wl-paste cannot read it (\"This seat has no keyboard\").  The argument after the form is the file it writes once
+the keyboard is there.")
+
+(defun drgnx-tty-session--detach (sess log argv)
+  "Start ARGV (with SESS's kitty environment) in its own session, bounded by $DRGNX_TTY_MAX_RUNTIME (default
+1800 s) as the tmux servers are; its output to RUN/LOG."
+  (apply #'call-process "setsid" nil (list :file (expand-file-name log (plist-get sess :run))) nil "-f"
+         (append (list "timeout" "-s" "TERM" "-k" "10" (or (getenv "DRGNX_TTY_MAX_RUNTIME") "1800")
+                       "env" "-i")
+                 (plist-get sess :kitty-env) argv)))
+
+(defun drgnx-tty-session--log (sess log)
+  (let ((file (expand-file-name log (plist-get sess :run))))
+    (if (file-exists-p file) (with-temp-buffer (insert-file-contents file) (buffer-string)) "")))
+
+(defun drgnx-tty-session--kitty-wait (sess what pred log)
+  "Wait up to 30 s for PRED (a function of no arguments); else signal that WHAT did not happen, with RUN/LOG."
+  (let ((deadline (+ (float-time) 30)))
+    (while (not (funcall pred))
+      (when (> (float-time) deadline)
+        (drgnx-ui--fail "%s: %s within 30s:\n%s" (plist-get sess :name) what (drgnx-tty-session--log sess log)))
+      (sleep-for 0.1))))
+
+(cl-defun drgnx-tty-session-kitty-start (&key size env)
+  "Start a kitty session: a drgnx daemon under headless mutter (`drgnx-ui-start', with ENV, extra \"K=V\"
+strings, in its environment) and kitty on that display running `emacsclient -t' on the daemon's socket.  SIZE
+\"120x40\" (default) is kitty's window in cells.  Returns the session plist (the `drgnx-ui' keys, :kitty its
+remote-control socket, :kitty-env the environment of kitty, kitten and wl-paste) once the terminal frame exists.
+kitty runs as `kitty --config NONE -o allow_remote_control=socket-only -o enable_audio_bell=no --listen-on
+unix:RUN/kitty.sock -o initial_window_width=Wc -o initial_window_height=Hc -e emacsclient -t -s SOCKET', with
+WAYLAND_DISPLAY the session's name, TERM=xterm-kitty, HOME and the XDG directories in the run directory and the
+session's own bus: never the user's display or bus.  Before it, a batch Emacs gives mutter a keyboard
+\(`drgnx-tty-session--keyboard-form').  `drgnx-tty-session-kitty-stop' ends it all."
+  (let* ((gui (let ((drgnx-ui-session-extra-env env)) (drgnx-ui-start "drgnx" "1920x1200" 60 t)))
+         (sess (append (list :kitty (expand-file-name "kitty.sock" (plist-get gui :run)) :term "xterm-kitty") gui)))
+    (condition-case err
+        (pcase-let* ((`(,w ,h) (split-string (or size "120x40") "x"))
+                     (run (plist-get sess :run))
+                     ;; the daemon's own (dbus-run-session's), not the emacsclient that asks
+                     (bus (drgnx-tty-session-eval sess '(getenv-internal "DBUS_SESSION_BUS_ADDRESS" initial-environment)))
+                     (ready (expand-file-name "keyboard" run)))
+          (when (> (length (plist-get sess :kitty)) 100)
+            (drgnx-ui--fail "%s: kitty's socket path is too long for a Unix socket: %s"
+                            (plist-get sess :name) (plist-get sess :kitty)))
+          (unless (stringp bus) (drgnx-ui--fail "%s: the session's Emacs has no session bus" (plist-get sess :name)))
+          (dolist (d '("home" "xdg/config" "xdg/data" "xdg/cache")) (make-directory (expand-file-name d run) t))
+          (plist-put sess :kitty-env (drgnx-tty-session--env
+                                      sess (list (concat "WAYLAND_DISPLAY=" (plist-get sess :name))
+                                                 (concat "DBUS_SESSION_BUS_ADDRESS=" bus))))
+          (drgnx-tty-session--detach sess "keyboard.log"
+                                     (list (drgnx-ui-emacs-bin) "--batch" "-Q" "--eval"
+                                           (prin1-to-string drgnx-tty-session--keyboard-form) ready))
+          (drgnx-tty-session--kitty-wait sess "mutter got no keyboard" (lambda () (file-exists-p ready)) "keyboard.log")
+          (drgnx-tty-session--detach
+           sess "kitty.log"
+           (list (drgnx-tty-session--kitty-bin) "--config" "NONE" "-o" "allow_remote_control=socket-only"
+                 "-o" "enable_audio_bell=no" "--listen-on" (concat "unix:" (plist-get sess :kitty))
+                 "-o" (concat "initial_window_width=" w "c") "-o" (concat "initial_window_height=" h "c")
+                 "-e" (drgnx-ui--emacsclient) "-t" "-s" (plist-get sess :socket)))
+          (drgnx-tty-session--kitty-wait sess "kitty made no terminal frame"
+                                         (lambda () (and (file-exists-p (plist-get sess :kitty))
+                                                         (> (drgnx-tty-session--client-frames sess) 0)))
+                                         "kitty.log")
+          sess)
+      (error (drgnx-tty-session-kitty-stop sess)
+             (signal (car err) (cdr err))))))
+
+(defun drgnx-tty-session-kitty-stop (sess)
+  "Stop kitty session SESS: kitty and the keyboard's Emacs (their command lines name the run directory's
+kitty.sock and keyboard), then the daemon and its compositor (`drgnx-ui-stop')."
+  (drgnx-tty-session--kill-pattern (format "%s/(kitty\\.sock|keyboard)( |$)" (regexp-quote (plist-get sess :run))))
+  (drgnx-ui-stop (plist-get sess :name)))
+
+(defun drgnx-tty-session--kitten (sess &rest args)
+  "Run `kitten @ --to unix:RUN/kitty.sock ARGS' for kitty session SESS; its output, or signal with kitten's."
+  (let ((r (apply #'drgnx-ui--run-with-timeout 10
+                  (append (list "env" "-i") (plist-get sess :kitty-env)
+                          (list (drgnx-tty-session--kitten-bin) "@" "--to" (concat "unix:" (plist-get sess :kitty)))
+                          args))))
+    (unless (eq (car r) 0)
+      (drgnx-ui--fail "%s: kitten @ %s: %s" (plist-get sess :name) (string-join args " ") (string-trim (cadr r))))
+    (cadr r)))
+
+(defun drgnx-tty-session-kitty-key (sess key)
+  "Press KEY in kitty session SESS through kitty's own key encoder (`kitten @ send-key'): KEY in kitty's syntax,
+such as \"ctrl+shift+p\", \"shift+right\" or \"f6\"; one key, pressed and released."
+  (drgnx-tty-session--kitten sess "send-key" key)
+  nil)
+
+(defun drgnx-tty-session--kitty-escape (text)
+  "TEXT as `send-text' reads it (Python escapes): printable ASCII as it is, everything else \\xHH or \\uHHHH."
+  (mapconcat (lambda (c)
+               (cond ((and (<= 32 c 126) (/= c ?\\)) (string c))
+                     ((< c 256) (format "\\x%02x" c))
+                     ((< c #x10000) (format "\\u%04x" c))
+                     (t (format "\\U%08x" c))))
+             text ""))
+
+(defun drgnx-tty-session-kitty-text (sess text)
+  "Send TEXT to the program in kitty session SESS as it is (`kitten @ send-text', no bracketed paste): raw
+bytes such as an SGR mouse report (`drgnx-tty-session--click-bytes')."
+  (drgnx-tty-session--kitten sess "send-text" "--bracketed-paste=disable"(drgnx-tty-session--kitty-escape text))
+  nil)
+
+(defun drgnx-tty-session-kitty-screen (sess)
+  "The text of kitty session SESS's screen (`kitten @ get-text --extent screen')."
+  (string-remove-suffix "\n" (drgnx-tty-session--kitten sess "get-text" "--extent" "screen")))
+
+(defun drgnx-tty-session-kitty-clipboard (sess)
+  "The text on the clipboard of kitty session SESS's display (`wl-paste -n'), or nil when it holds none."
+  (let ((r (apply #'drgnx-ui--run-with-timeout 5
+                  (append (list "env" "-i") (plist-get sess :kitty-env) (list "wl-paste" "-n")))))
+    (and (eq (car r) 0) (cadr r))))
 
 (provide 'drgnx-tty-session)
 ;;; drgnx-tty-session.el ends here

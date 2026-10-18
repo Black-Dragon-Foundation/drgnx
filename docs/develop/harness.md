@@ -501,6 +501,25 @@ dirs) and drive the session through `harness/drgnx-tty-session.el`:
 - **Output:** the screen comes from `capture-pane` (`-screen`, `-find`, `-wait-screen`, `-quiet`). The paste buffer
   shows what OSC 52 copied (`-clipboard`), and `-pane-flags` reports the pane's mouse and key modes. The inner Emacs's
   state comes through its socket (`-eval`, `-wait`).
+- **kitty, the exit test** (`test/tty/kitty-test.el`): a real terminal emulator instead of tmux.
+  `drgnx-tty-session-kitty-start :size WxH :env ENV` starts a drgnx daemon under headless mutter (`drgnx-ui-start`;
+  ENV goes into its environment through `drgnx-ui-session-extra-env`, kkp's directory in `EMACSLOADPATH` for
+  example). It then starts kitty on that display (`WAYLAND_DISPLAY` is the session's name) as `kitty --config NONE -o
+  allow_remote_control=socket-only -o enable_audio_bell=no --listen-on unix:RUN/kitty.sock -o initial_window_width=Wc
+  -o initial_window_height=Hc -e emacsclient -t -s SOCKET`. kitty's `TERM` is `xterm-kitty`, HOME and the XDG
+  directories are in the run directory, and the bus is the session's own. Headless mutter has no keyboard: no window
+  gets the focus, so kitty cannot own the clipboard and `wl-paste` fails ("This seat has no keyboard"). So a batch
+  Emacs on the session's bus first opens a mutter remote-desktop session and presses Shift once, which gives the seat
+  a virtual keyboard. That Emacs stays running until the session stops, because mutter drops the keyboard when it
+  leaves. Keys go through kitty's own encoder (`-kitty-key`, `kitten @ send-key ctrl+shift+p`). Bytes such as SGR
+  mouse reports go as they are (`-kitty-text`, `send-text`). The screen is `get-text --extent screen`
+  (`-kitty-screen`; `drgnx-tty-session-screen` and the waits use it for a kitty session), and the clipboard is
+  `wl-paste -n` on the session's display (`-kitty-clipboard`). `drgnx-tty-session-kitty-stop` ends kitty and the
+  keyboard's Emacs (their command lines name the run directory), then the daemon (`drgnx-ui-stop`). Each test skips
+  without kitty, kitten, mutter, `dbus-run-session` or `wl-paste` (`kitty not installed: run bin/drgnx test
+  --container --tty`); `DRGNX_TTY_KITTY` names a kitty off `PATH`. kitty is installed only in the tty image. Never
+  install it on the host. `send-key` has no keyboard layout, so kitty reports no shifted key: Alt+Shift+P arrives as
+  `M-S-p`, not `M-P`. It also bypasses kitty's own shortcuts.
 
 Run it:
 
@@ -515,6 +534,8 @@ SIGPIPE ignored, in a temp directory of its own; the environment is the caller's
 `env -i`). `DRGNX_TEST_SELECTOR` narrows it. In a container the image `drgnx-test-tty:fNN` is built from
 `test/container/Containerfile.tty` with `--build-arg FEDORA=NN`; the image has tmux, plus kitty and mutter for the exit
 test. It runs with the GUI tier's security options (`seccomp=unconfined`, `label=disable`) and `--memory 3g`.
+`DRGNX_USER_ELPA` (a directory holding the pinned kkp, and corfu, unpacked) is mounted read-only as `/elpa`, so the
+kkp tests and the kitty exit test run there too; without it they skip.
 `DRGNX_TEST_TTY_IMAGE` uses a prebuilt image. `bin/drgnx check` runs the tier as the `tty` job (a GUI job for the memory
 accounting, in the parallel phase) when tmux is installed; `--no-gui` leaves it out. The `Terminal tier` workflow runs
 the two container runs nightly ([ci.md](ci.md)).

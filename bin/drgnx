@@ -177,6 +177,10 @@ test_container() { # [--ui | --tty [--fedora 44|45]] — the batch (GUI, termina
     build=(--build-arg "FEDORA=$fedora")
     args=(--security-opt seccomp=unconfined --security-opt label=disable --memory 3g)   # the GUI tier's options; tmux and Emacs sessions
     mount="$here:/src:ro"
+    # packages the key and popup tests load (kkp, corfu), read-only; without them those tests skip
+    if [ -n "${DRGNX_USER_ELPA:-}" ] && [ -d "$DRGNX_USER_ELPA" ]; then
+      args+=(-v "$(cd "$DRGNX_USER_ELPA" && pwd):/elpa:ro" -e DRGNX_USER_ELPA=/elpa)
+    fi
   fi
   echo "container runtime: $rt" >&2
   if [ -n "$prebuilt" ]; then

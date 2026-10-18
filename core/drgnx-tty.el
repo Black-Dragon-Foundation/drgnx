@@ -144,8 +144,9 @@ server inherited from its first client (stale when another terminal attached sin
                  "C-S-<f10>" "C-S-<f11>")
          :fixes ((mok . "none: kitty speaks its own keyboard protocol (kkp), which drgnx uses instead")
                  (takes . "clear_all_shortcuts yes   (in kitty.conf, before your own map lines; `map kitty_mod+t' with no action frees one chord)"))
-         :unconfirmed (:mok :truecolor :mouse)
-         :verified nil :source "https://sw.kovidgoyal.net/kitty/conf/")
+         :unconfirmed (:mok :mouse)
+         :verified "kitty 0.48.2: kkp, OSC 52 copy, true colour (test/tty/kitty-test.el)"
+         :source "https://sw.kovidgoyal.net/kitty/conf/")
     (:id wezterm :name "WezTerm"
          :kkp nil :mok t :osc52 t :truecolor t :mouse t
          :takes ("C-S-c" "C-S-v" "C-S-n" "C-S-t" "C-S-w" "C-S-1" "C-S-2" "C-S-3" "C-S-4" "C-S-5" "C-S-6" "C-S-7"
@@ -238,7 +239,7 @@ server inherited from its first client (stale when another terminal attached sin
          :unconfirmed (:mouse)
          :verified nil :source "https://man.openbsd.org/tmux"))
   "What each terminal can do with its default settings, as its documentation reports it (`:verified' nil
-until the builder ran it; `:source' the page).  :kkp the kitty keyboard protocol, :mok modifyOtherKeys,
+until the builder ran it, then what ran; `:source' the page).  :kkp the kitty keyboard protocol, :mok modifyOtherKeys,
 :osc52 copy to the local clipboard, :truecolor 24-bit colour, :mouse mouse reporting; :takes the chords the
 terminal keeps for itself (Emacs notation); :fixes, per missing capability, the line that fixes it, or
 \"none: \" and why.  :unconfirmed names the cells no official page drgnx read backs (secondary sources or

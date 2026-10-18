@@ -317,6 +317,23 @@ terminal, as when a person types the command; else /dev/null and a pipe) → (EX
       (should (eql 2 (car (call '("test" "--container" "--tty" "--fedora" "43") `(("DRGNX_CONTAINER" . ,(expand-file-name "fake-rt" dir)))))))
       (should (eql 2 (car (call '("test" "--container" "--fedora" "44") `(("DRGNX_CONTAINER" . ,(expand-file-name "fake-rt" dir))))))))))
 
+(ert-deftest drgnx-bin/container-tty-takes-the-user-elpa-read-only ()
+  ;; DRGNX_USER_ELPA (kkp for the key tests and the kitty exit test) goes into the container read-only; without it
+  ;; nothing is mounted and those tests skip
+  (tty-bin-test--with
+    (let ((log (expand-file-name "rt.log" dir))
+          (elpa (expand-file-name "elpa" dir))
+          (rt `("DRGNX_CONTAINER" . ,(expand-file-name "fake-rt" dir))))
+      (make-directory elpa)
+      (tty-bin-test--script (expand-file-name "fake-rt" dir) (format "echo \"$*\" >> %s" log))
+      (should (eql 0 (car (call '("test" "--container" "--tty") `(,rt ("DRGNX_TEST_TTY_IMAGE") ("DRGNX_USER_ELPA" . ,elpa))))))
+      (let ((run (cadr (split-string (tty-bin-test--slurp log) "\n" t))))
+        (should (string-search (format "-v %s:/elpa:ro" elpa) run))
+        (should (string-search "-e DRGNX_USER_ELPA=/elpa" run)))
+      (delete-file log)
+      (should (eql 0 (car (call '("test" "--container" "--tty") `(,rt ("DRGNX_TEST_TTY_IMAGE") ("DRGNX_USER_ELPA"))))))
+      (should-not (string-search "/elpa" (tty-bin-test--slurp log))))))
+
 (ert-deftest drgnx-bin/the-tty-workflow-runs-both-fedoras-like-the-gui-one ()
   (let ((yml (tty-bin-test--slurp (expand-file-name ".github/workflows/tty.yml" tty-bin-test--root)))
         (gui (tty-bin-test--slurp (expand-file-name ".github/workflows/gui.yml" tty-bin-test--root))))

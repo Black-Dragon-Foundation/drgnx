@@ -75,7 +75,12 @@
       (should (memq cell '(:kkp :mok :osc52 :truecolor :mouse :takes))))
     (should (stringp (plist-get row :name)))
     (should (string-prefix-p "https://" (plist-get row :source)))
-    (should-not (plist-get row :verified))     ; first version: every row "reported"
+    ;; "reported" but kitty, which the exit test (test/tty/kitty-test.el) ran: what it ran, and its true colour is
+    ;; no longer unconfirmed
+    (if (eq (plist-get row :id) 'kitty)
+        (progn (should (stringp (plist-get row :verified)))
+               (should (equal (plist-get row :unconfirmed) '(:mok :mouse))))
+      (should-not (plist-get row :verified)))
     (dolist (key (plist-get row :takes)) (should (key-valid-p key)))
     (dolist (cap '(kkp mok osc52 truecolor mouse))
       (unless (plist-get row (intern (format ":%s" cap)))

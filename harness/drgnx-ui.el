@@ -202,8 +202,14 @@ MONITORS: how many virtual monitors of SIZE (default 1)."
         (drgnx-ui--save sess)
         sess))))
 
+(defvar drgnx-ui-session-extra-env nil
+  "\"K=V\" strings added to the environment of the sessions started while this is bound, after the session's own
+variables (a later entry wins): a test puts a package's directory on the daemon's load path with EMACSLOADPATH
+\(`drgnx-tty-session-kitty-start').  Nil for every session the CLI and the MCP server start.")
+
 (defun drgnx-ui-session-env (sess &optional extra)
-  "Environment (\"K=V\" strings) for SESS: the allowlist, the session's variables, EXTRA."
+  "Environment (\"K=V\" strings) for SESS: the allowlist, the session's variables, `drgnx-ui-session-extra-env',
+EXTRA."
   (append (delq nil (mapcar (lambda (k) (let ((v (getenv k))) (and v (concat k "=" v))))
                             drgnx-ui-keep-env))
           (list (concat "DRGNX_UI_NAME=" (plist-get sess :name))
@@ -224,6 +230,7 @@ MONITORS: how many virtual monitors of SIZE (default 1)."
                 (concat "XDG_STATE_HOME=" (expand-file-name "state" (plist-get sess :run)))
                 ;; …and its packages: never the user's ~/.local/share/drgnx (M5 review I9)
                 (concat "DRGNX_DATA_DIR=" (expand-file-name "drgnx-data" (plist-get sess :run))))
+          drgnx-ui-session-extra-env
           extra))
 
 (defun drgnx-ui-env-argv (env)

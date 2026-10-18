@@ -15,7 +15,8 @@ The table is `drgnx-tty-terminals` in `core/drgnx-tty.el`; onboarding and the do
 
 ## What each terminal can do
 
-Each row is **reported**: drgnx's builders have not run it yet. Each cell comes from official documentation: the
+Each row is **reported** (drgnx's builders have not run it yet) unless it says **verified**: the exit test ran
+drgnx in that terminal (see the notes under the table). A reported cell comes from official documentation: the
 linked page, or another official page or source named in [The fixes](#the-fixes), such as the kitty keyboard
 protocol's list of terminals, xterm's manual, tmux's manual, or the default shortcuts Ptyxis ships. A cell marked
 **(unconfirmed)** rests on secondary sources or general knowledge only. "Yes" means the terminal does it with its
@@ -23,7 +24,7 @@ default settings.
 
 | Terminal | kkp | modifyOtherKeys | OSC 52 copy | True colour | Mouse | Shortcuts it keeps | Row |
 |---|---|---|---|---|---|---|---|
-| [kitty](https://sw.kovidgoyal.net/kitty/conf/) | yes | no (unconfirmed) | yes | yes (unconfirmed) | yes (unconfirmed) | 62, all `C-S-`: `C-S-c` `C-S-v` `C-S-t` `C-S-p` `C-S-<return>` `C-S-<left>`/`<right>`/`<up>`/`<down>` … | reported |
+| [kitty](https://sw.kovidgoyal.net/kitty/conf/) | yes | no (unconfirmed) | yes | yes | yes (unconfirmed) | 62, all `C-S-`: `C-S-c` `C-S-v` `C-S-t` `C-S-p` `C-S-<return>` `C-S-<left>`/`<right>`/`<up>`/`<down>` … | verified |
 | [WezTerm](https://wezterm.org/config/key-encoding.html) | no (opt-in) | yes | yes | yes (unconfirmed) | yes (unconfirmed) | 55: `C-S-c` `C-S-v` `C-S-t` `C-S-n` `C-S-w` `C-S-p` `C-S-f` `C-S-<arrows>` …, and `s-` keys | reported |
 | [foot](https://codeberg.org/dnkl/foot/src/branch/master/doc/foot.ini.5.scd) | yes | no (unconfirmed) | yes | yes | yes | `C-S-c` `C-S-v` `C-S-r` `C-S-n` `C-S-o` `C-S-z` `C-S-x` `C-S-u` | reported |
 | [Ghostty](https://ghostty.org/docs/config/reference) | yes | yes (unconfirmed) | yes | yes (unconfirmed) | yes | (unconfirmed) `C-S-c` `C-S-v` `C-S-t` `C-S-n` `C-S-w`, and more (`ghostty +list-keybinds --default`) | reported |
@@ -35,6 +36,12 @@ default settings.
 | [Linux console](https://man7.org/linux/man-pages/man4/console_codes.4.html) | no (unconfirmed) | no (unconfirmed) | no | no (unconfirmed) | no (unconfirmed) | (unconfirmed) `M-<f1>`…`M-<f12>`, `C-M-<f1>`…`C-M-<f12>` (switch consoles) | reported |
 | [tmux](https://man.openbsd.org/tmux) | no | no | no | no | yes (unconfirmed) | `C-b` (its prefix) | reported |
 
+- **kitty, verified:** `emacsclient -t` in kitty 0.48 (Fedora 44 and 45, so Emacs 30.2 and 31.1; `bin/drgnx test
+  --container --tty`) gets kkp, with no Alt+Shift or F6 layer and no hint. `C-S-p`, `C-S-f`, `C-S-e`, `` C-` `` and
+  `C-.` reach their commands through kitty's own key encoder. A copy (`S-<right>`, `C-c`) reaches the clipboard,
+  there are 16777216 colours, and `C-g` stops a program Emacs waits for. Still unconfirmed: the mouse reports kitty
+  itself sends (the test sends them as bytes, and Emacs handles them) and the shortcuts kitty keeps (the test's keys
+  bypass them).
 - **kkp** is the [kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/): every key and
   modifier arrives, `s-` (Super/Cmd) included. Its page lists the terminals that implement it.
 - **modifyOtherKeys** is xterm's older way: `C-S-` chords, `C-.`, `` C-` ``, `C-<return>` and `C-<tab>` arrive,
