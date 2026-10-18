@@ -9,7 +9,7 @@
   "BODY on the virtual clock, the idle GC's key cancelled after it."
   (declare (indent 0))
   `(drgnx-test-with-clock ()
-     (unwind-protect (progn ,@body) (drgnx-timer-cancel 'gc-idle))))
+     (unwind-protect (progn ,@body) (drgnx-gc-mode -1) (drgnx-timer-cancel 'gc-idle))))
 
 (ert-deftest drgnx-gc/startup-collects-rarely-then-a-steady-threshold-and-idle-collection ()
   (let ((gc-cons-threshold most-positive-fixnum) (gc-cons-percentage 0.6))
@@ -28,8 +28,9 @@
       (drgnx-gc-setup)                                    ; the key is replaced: once only
       (should (= 1 (length timer-idle-list)))
       (should (equal (drgnx-timer-pending) '((gc-idle :core start))))
-      (let ((gcs 0))                                      ; and it collects, once per pause
+      (let ((gcs 0) (gc-cons-threshold 1000000))          ; and it collects, once per pause (after real allocation)
         (cl-letf (((symbol-function 'garbage-collect) (lambda () (cl-incf gcs) nil)))
+          (let ((junk (make-string 300000 ?x))) (ignore junk))
           (drgnx-test-idle (+ drgnx-gc-idle-seconds 1)))
         (should (= gcs 1))))))
 
@@ -54,6 +55,7 @@
       (unwind-protect
           (progn (should-error (drgnx-init))
                  (should (= gc-cons-threshold drgnx-gc-cons-threshold)))
+        (drgnx-gc-mode -1)
         (drgnx-timer-cancel 'gc-idle)))))
 
 (ert-deftest drgnx-gc/the-users-own-threshold-is-kept ()
@@ -74,6 +76,7 @@
         (progn (drgnx-gc-setup)
                (should (= gc-cons-threshold (* 1024 1024 1024)))
                (should-not (drgnx-timer-active-p 'gc-idle)))
+      (drgnx-gc-mode -1)
       (drgnx-timer-cancel 'gc-idle)
       (makunbound 'gcmh-mode))))
 
