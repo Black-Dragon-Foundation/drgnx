@@ -173,7 +173,7 @@
    (should-not (drgnx-timer-active-p 'tm-later))
    (should-not (drgnx-timer-active-p 'tm-idle))
    (should-not timer-idle-list)
-   (drgnx-timer-reset)))   ; tm-setup: today's net cancelled its Emacs timer; the run-end hook (Task 4) drops the key
+   (drgnx-timer-reset)))   ; a no-op since the run-end hook: tm-setup's key went with the run (drgnx-timer-own tests)
 
 (ert-deftest drgnx-timer/a-module-with-no-run-refuses-the-start ()
   (drgnx-timer-test--with

@@ -490,5 +490,9 @@ in the state dir.  Never prompts and never raises: a write that fails is skipped
               (insert "\n")))))
     (error nil)))
 
+;;;; A run's end
+
+(add-hook 'drgnx-modules-run-end-functions #'drgnx-timer-cancel-owner)   ; a module off: its timers go with its run
+
 (provide 'drgnx-timer)
 ;;; drgnx-timer.el ends here
