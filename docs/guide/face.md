@@ -122,7 +122,7 @@ Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch.
 | Left | Shows | Click |
 |---|---|---|
 | `branch` | `⑂ main ↑2 ↓1`: the branch, and how many commits it is ahead of and behind its upstream (a count of 0 is left out) | the repository status |
-| `problems` | `✓` when flymake finds none, `◐` while a checker has not reported yet, else `⚠ 1 2`: the errors, then the warnings, each in its own colour | the problems list |
+| `problems` | `✓` when flymake finds nothing, `◐` while a checker has not reported yet, `● 3` (dimmed) when it finds only notes, else `⚠ 1 2`: the errors, then the warnings, each in its own colour | the problems list |
 | `tests` | `✓ tests 41/41` or `✕ tests 2 failed`: the last test run | its output |
 | `jobs` | `◎ 2 jobs` while jobs run, and `⚑1` when cards of jobs wait on you | job status |
 | `agents` | `◎ 1 busy`, and `◐ 1 waiting on you` (in the error colour) when something waits for your answer | the Agents tab |
@@ -136,7 +136,7 @@ Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch.
 | `indent` | `Spaces: 2` or `Tab Size: 8` | tabs or spaces |
 | `encoding` | `UTF-8` | change it |
 | `eol` | `LF`, `CRLF` or `CR` | change it |
-| `language` | `YAML`, `Python`, `Emacs Lisp` | **Change Language Mode**: pick another major mode for the buffer |
+| `language` | the language as VS Code names it: `Rust`, `Go`, `YAML`, `Python`, `Emacs Lisp`, `Shell Script`, `Plain Text` (`drgnx-statusbar-language-names`, else the mode's own name) | **Change Language Mode**: pick another major mode for the buffer |
 
 The most recently used editor window shows the whole bar; the other editor groups show `drgnx-statusbar-compact`
 (position and language). The bar is for the buffers you edit: a buffer that visits a file, an editor made with
@@ -204,6 +204,7 @@ and a segment of your own that has not called `(drgnx-statusbar-refresh t)`.
 | `drgnx-statusbar-place` | `editors` | `editors`; `frame` (one bar across the frame) arrives with the grid |
 | `drgnx-statusbar-indent-vars` | the common indent offsets | the variables `indent` reads, first bound one wins |
 | `drgnx-statusbar-modes` | `(prog-mode text-mode conf-mode)` | the modes (besides file buffers and Untitled editors) that get the bar |
+| `drgnx-statusbar-language-names` | names for the modes whose own name is not the language's | mode → the name the `language` segment shows; worked out once per mode |
 | `drgnx-statusbar-quiet-modes` | `(drgnx-start-mode)` | the modes that get the quiet bar |
 | `drgnx-statusbar-quiet` | `(branch agents jobs tests misc)` | the quiet bar's segments, on the left |
 | `drgnx-statusbar-misc-exclude` | the job badge | entries of `global-mode-string` that `misc` leaves out |

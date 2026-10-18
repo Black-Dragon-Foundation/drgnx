@@ -767,6 +767,10 @@ nothing."
        ;; a backend that has not reported yet: not "no problems" (as in stock flymake's Wait)
        ((cl-set-difference (flymake-running-backends) (flymake-reporting-backends))
         (propertize (drgnx-statusbar--glyph 'waiting) 'face 'shadow))
+       ;; only notes (shown in the fringe and at the ends of lines): their count, dimmed, never "all clear"
+       ((> (drgnx-statusbar--flymake-count :note) 0)
+        (propertize (format "%s %d" (drgnx-statusbar--glyph 'dot) (drgnx-statusbar--flymake-count :note))
+                    'face 'shadow))
        ((flymake-reporting-backends) (propertize (drgnx-statusbar--glyph 'ok) 'face 'success))))))
 
 (defvar drgnx-statusbar--state-texts (make-hash-table :test #'eq)
@@ -975,8 +979,10 @@ a change of the text (or of the narrowing) counts again from the top."
     line))
 
 (defun drgnx-statusbar--selected-p (w)
-  "Non-nil when W is its frame's selected window (a part of the memo's key: only that window shows a selection)."
-  (and (window-live-p w) (eq w (frame-selected-window (window-frame w)))))
+  "Non-nil when W is the window you are in (a part of the memo's key: only that window shows a selection).
+While a mode line is drawn, its window is the selected one (the frame's too): `mode-line-window-selected-p' knows the
+real one."
+  (and (window-live-p w) (eq w (selected-window)) (mode-line-window-selected-p)))
 
 (defun drgnx-statusbar--seg-position ()
   (let* ((w (drgnx-statusbar-source-window))
@@ -1025,9 +1031,46 @@ a change of the text (or of the narrowing) counts again from the top."
   (pcase (and buffer-file-coding-system (coding-system-eol-type buffer-file-coding-system))
     (1 "CRLF") (2 "CR") (_ "LF")))
 
+(defvar drgnx-statusbar--language-names (make-hash-table :test #'eq)
+  "Major mode → the language name the `language' segment shows, worked out the first time the mode is drawn.
+One entry per major mode used in the session; emptied when `drgnx-statusbar-language-names' changes.")
+
+(defcustom drgnx-statusbar-language-names
+  '((emacs-lisp-mode . "Emacs Lisp") (lisp-interaction-mode . "Emacs Lisp") (lisp-data-mode . "Lisp")
+    (sh-mode . "Shell Script") (bash-ts-mode . "Shell Script") (c-mode . "C") (c-ts-mode . "C")
+    (c++-mode . "C++") (c++-ts-mode . "C++") (csharp-mode . "C#") (csharp-ts-mode . "C#")
+    (js-mode . "JavaScript") (js-ts-mode . "JavaScript") (js-json-mode . "JSON") (tsx-ts-mode . "TypeScript JSX")
+    (html-mode . "HTML") (mhtml-mode . "HTML") (html-ts-mode . "HTML") (nxml-mode . "XML")
+    (text-mode . "Plain Text") (fundamental-mode . "Plain Text") (makefile-mode . "Makefile")
+    (makefile-gmake-mode . "Makefile") (conf-toml-mode . "TOML") (sql-mode . "SQL")
+    (markdown-mode . "Markdown") (markdown-ts-mode . "Markdown") (gfm-mode . "Markdown")
+    (yaml-mode . "YAML") (yaml-ts-mode . "YAML") (json-mode . "JSON") (json-ts-mode . "JSON") (toml-ts-mode . "TOML")
+    (css-mode . "CSS") (css-ts-mode . "CSS"))
+  "Major mode → the language name the status bar shows for it (as VS Code names it).
+A mode not listed shows its own name (`mode-name') when that is a plain name of the mode (Rust, Go, Python, YAML),
+else a name made from the mode's symbol."
+  :type '(alist :key-type symbol :value-type string)
+  :set (lambda (symbol value)
+         (clrhash drgnx-statusbar--language-names)
+         (drgnx-statusbar--set symbol value))
+  :group 'drgnx-statusbar)
+
+(defun drgnx-statusbar--language-name (mode)
+  "The language name of MODE (see `drgnx-statusbar-language-names'), worked out from the current buffer's
+`mode-name' when it is in MODE."
+  (or (alist-get mode drgnx-statusbar-language-names)
+      (let ((own (and (eq major-mode mode) (stringp mode-name) (substring-no-properties mode-name)))
+            (base (replace-regexp-in-string "\\(-ts\\)?-mode\\'" "" (symbol-name mode))))
+        (if (and own (not (string-match-p "[][/]" own))
+                 ;; the mode's own name for itself ("Rust" for rust-ts-mode), not the name of something else
+                 (string-prefix-p (replace-regexp-in-string " " "-" (downcase own)) (symbol-name mode)))
+            own
+          (capitalize (replace-regexp-in-string "-" " " base))))))
+
 (defun drgnx-statusbar--seg-language ()
-  (let ((name (replace-regexp-in-string "\\(-ts\\)?-mode\\'" "" (symbol-name major-mode))))
-    (if (<= (length name) 4) (upcase name) (capitalize (replace-regexp-in-string "-" " " name)))))
+  "The language of the buffer, as VS Code names it: worked out once per major mode, a table read after that."
+  (or (gethash major-mode drgnx-statusbar--language-names)
+      (puthash major-mode (drgnx-statusbar--language-name major-mode) drgnx-statusbar--language-names)))
 
 (defun drgnx-statusbar--major-modes ()
   "The major modes to choose from: those files and interpreters are mapped to, those remapped, and what derives

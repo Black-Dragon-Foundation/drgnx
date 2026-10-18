@@ -435,6 +435,19 @@ Segments a, b, c are defined: their text is A, B, C."
             ;; problems already known are shown even while another backend still runs
             (setq running '(b1 b2))
             (should (equal (substring-no-properties (funcall text)) "⚠ 1 2"))
+            ;; only notes (checkdoc's, in the fringe and at the ends of lines): their count, dimmed, never ✓
+            (setq running '(b1) counts '(0 . 0))
+            (let ((notes 3))
+              (cl-letf (((symbol-function 'flymake--mode-line-counter)
+                         (lambda (type)
+                           (let ((n (pcase type (:error (car counts)) (:warning (cdr counts)) (:note notes))))
+                             (and (> n 0) `("" (:propertize ,(number-to-string n) face x)))))))
+                (should (equal (substring-no-properties (funcall text)) "● 3"))
+                (should (eq (get-text-property 0 'face (funcall text)) 'shadow))
+                (setq notes 0)
+                (should (equal (substring-no-properties (funcall text)) "✓"))
+                (setq notes 2 counts '(1 . 0))                 ; errors or warnings: the ⚠ counts as before
+                (should (equal (substring-no-properties (funcall text)) "⚠ 1 0"))))
             (setq-local flymake-mode nil)
             (should-not (funcall text))))))))
 
@@ -586,6 +599,40 @@ Segments a, b, c are defined: their text is A, B, C."
                 (kill-buffer buf))))
         (delete-file file)))))
 
+(ert-deftest drgnx-statusbar/language-names-are-the-ones-vs-code-uses-worked-out-once-per-mode ()
+  (let ((drgnx-statusbar--language-names (make-hash-table :test #'eq)) (warning-minimum-level :emergency))
+    (dolist (c '((rust-ts-mode . "Rust") (go-ts-mode . "Go") (java-ts-mode . "Java") (lua-ts-mode . "Lua")
+                 (ruby-mode . "Ruby") (python-mode . "Python") (typescript-ts-mode . "TypeScript")
+                 (tsx-ts-mode . "TypeScript JSX") (js-mode . "JavaScript") (emacs-lisp-mode . "Emacs Lisp")
+                 (sh-mode . "Shell Script") (c-mode . "C") (text-mode . "Plain Text") (fundamental-mode . "Plain Text")
+                 (json-ts-mode . "JSON") (css-mode . "CSS") (conf-unix-mode . "Conf Unix")))
+      (when (fboundp (car c))
+        (with-temp-buffer
+          (funcall (car c))
+          (should (equal (cons (car c) (drgnx-statusbar--seg-language)) c)))))
+    ;; a mode whose own name says something else (or nothing yet): the name made from the mode's symbol
+    (with-temp-buffer
+      (setq-local major-mode 'zig-ts-mode)
+      (should (equal (drgnx-statusbar--seg-language) "Zig"))
+      (setq-local major-mode 'nix-mode)
+      (should (equal (drgnx-statusbar--seg-language) "Nix")))
+    ;; your own name for a mode wins, and a change of the setting is seen at once
+    (let ((drgnx-statusbar-language-names drgnx-statusbar-language-names))
+      (setopt drgnx-statusbar-language-names (cons '(rust-ts-mode . "Rust!") drgnx-statusbar-language-names))
+      (with-temp-buffer
+        (setq-local major-mode 'rust-ts-mode)
+        (should (equal (drgnx-statusbar--seg-language) "Rust!"))))
+    (clrhash drgnx-statusbar--language-names)
+    ;; worked out once per mode: a redraw runs no regexp
+    (with-temp-buffer
+      (python-mode)
+      (drgnx-statusbar--seg-language)
+      (let ((calls 0))
+        (cl-letf (((symbol-function 'replace-regexp-in-string) (lambda (&rest _) (setq calls (1+ calls)) ""))
+                  ((symbol-function 'string-match) (lambda (&rest _) (setq calls (1+ calls)) nil)))
+          (dotimes (_ 10) (should (equal (drgnx-statusbar--seg-language) "Python"))))
+        (should (= calls 0))))))
+
 (ert-deftest drgnx-statusbar/only-the-selected-window-shows-the-selection ()
   (drgnx-statusbar-test--with
     (let ((transient-mark-mode t) (other (split-window-right)))
@@ -602,7 +649,15 @@ Segments a, b, c are defined: their text is A, B, C."
             (let ((drgnx-statusbar--window other))             ; the bar of the other window
               (should-not (string-match-p "selected" (drgnx-statusbar--seg-position))))
             (let ((drgnx-statusbar--window (selected-window)))
-              (should (string-match-p "(4 selected)" (drgnx-statusbar--seg-position)))))
+              (should (string-match-p "(4 selected)" (drgnx-statusbar--seg-position))))
+            ;; as redisplay draws the other window's mode line: that window is selected while it is drawn (the
+            ;; frame's selected window too); only `old-selected-window' is the one you are in
+            (let ((real (selected-window)))
+              (with-selected-window other
+                (should (eq (old-selected-window) real))
+                (let ((drgnx-statusbar--window other))
+                  (should-not (drgnx-statusbar--selected-p other))
+                  (should-not (string-match-p "selected" (drgnx-statusbar--seg-position)))))))
         (delete-window other)))))
 
 (ert-deftest drgnx-statusbar/a-selection-is-in-the-memo-key ()

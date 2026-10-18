@@ -55,6 +55,45 @@
           (set-buffer-modified-p nil)
           (kill-buffer buf))))))
 
+(ert-deftest drgnx-ui-statusbar/only-the-window-you-are-in-shows-the-selection ()
+  "One buffer in two windows, a region in the selected one: redisplay draws `(N selected)' in that window's bar only
+\(while a mode line is drawn its window is the selected one; the bar asks `mode-line-window-selected-p')."
+  (let ((buf (get-buffer-create "*drgnx-statusbar-selection*"))
+        (drgnx-statusbar--segments (make-hash-table :test #'eq))
+        (drgnx-statusbar--errors nil)
+        (drgnx-statusbar--memo (make-hash-table :test #'eq :weakness 'key))
+        (drgnx-statusbar-left nil) (drgnx-statusbar-right '(probe)) (drgnx-statusbar-compact '(probe))
+        (transient-mark-mode t)
+        (seen nil))
+    (with-current-buffer buf
+      (emacs-lisp-mode)
+      (erase-buffer)
+      (insert "one two three four\n"))
+    (with-selected-frame (drgnx-uitest-root-frame)
+      (delete-other-windows)
+      (switch-to-buffer buf)
+      (let* ((w (selected-window)) (other (split-window-right)))
+        (unwind-protect
+            (progn
+              (drgnx-statusbar--define-defaults)
+              ;; evaluated by redisplay for each window's bar: what that bar's position segment says
+              (drgnx-statusbar-define-segment
+               'probe :fn (lambda () (push (cons (drgnx-statusbar-source-window) (drgnx-statusbar--seg-position)) seen) "."))
+              (dolist (x (list w other)) (set-window-parameter x 'mode-line-format drgnx-statusbar--host))
+              (set-window-point other 3)
+              (goto-char 9)
+              (push-mark 1 t t)
+              (setq seen nil)
+              (force-mode-line-update t)
+              (redisplay t)
+              (should (string-match-p "(8 selected)" (or (cdr (assq w seen)) "")))
+              (should (assq other seen))
+              (should-not (string-match-p "selected" (cdr (assq other seen)))))
+          (deactivate-mark)
+          (dolist (x (list w other)) (when (window-live-p x) (set-window-parameter x 'mode-line-format nil)))
+          (when (window-live-p other) (delete-window other))
+          (kill-buffer buf))))))
+
 (defun drgnx-statusbar-ui-test--switch-windows (same-buffer)
   "Two editor windows (SAME-BUFFER: both on one buffer); `C-x o' there and back: each time, the window that is now
 the most recently used editor window is drawn with the full bar and the other with the compact one, as REDISPLAY
