@@ -703,6 +703,21 @@ OUT and exits."
                      (should (= connects 0)))
             (delete-process listener)))))))
 
+(ert-deftest drgnx-hub/the-hub-s-private-dir-is-never-reached-through-a-link ()
+  ;; the socket's directory, given with its slash: never followed through a link (another user's, in /tmp, could
+  ;; point at a directory of the user's that would be chmodded), and made 0700 from the start (not at the umask)
+  (drgnx-hub-test--with
+    (let ((target (concat root "target")) (link (concat root "link")) (fresh (concat root "fresh/sub/")))
+      (make-directory target)
+      (set-file-modes target #o755)
+      (make-symbolic-link target link)
+      (should-error (drgnx-hub--private-dir (file-name-as-directory link)))
+      (should (= (file-modes target) #o755))
+      (with-file-modes #o755
+        (cl-letf (((symbol-function 'set-file-modes) #'ignore))     ; what it was made with
+          (drgnx-hub--private-dir fresh)))
+      (should (= (file-modes (directory-file-name fresh)) #o700)))))
+
 (ert-deftest drgnx-hub/without-a-runtime-dir-the-socket-is-short-and-private ()
   (drgnx-hub-test--with
     (let ((process-environment (cons "XDG_RUNTIME_DIR" process-environment)))

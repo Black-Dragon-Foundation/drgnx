@@ -64,11 +64,14 @@ the state dir."
       (expand-file-name name (expand-file-name (format "drgnx-hub-%d" (user-uid)) temporary-file-directory)))))
 
 (defun drgnx-hub--private-dir (dir)
-  "Make DIR (mode 0700) and make sure it is this user's own (a shared /tmp: never another's directory)."
-  (make-directory dir t)
-  (unless (eql (file-attribute-user-id (file-attributes dir)) (user-uid))
-    (error "%s belongs to another user" dir))
-  (set-file-modes dir #o700))
+  "Make DIR (mode 0700 from the start) and make sure it is this user's own directory (a shared /tmp: never another's,
+nor a link — one would be followed to wherever it points, and that chmodded)."
+  (let ((dir (directory-file-name dir)))
+    (unless (file-attributes dir) (with-file-modes #o700 (make-directory dir t)))
+    (let ((a (file-attributes dir)))
+      (unless (eq (file-attribute-type a) t) (error "%s is not a directory" dir))
+      (unless (eql (file-attribute-user-id a) (user-uid)) (error "%s belongs to another user" dir)))
+    (set-file-modes dir #o700 'nofollow)))
 
 (defun drgnx-hub--untrusted (socket)
   "Why this Emacs must not use SOCKET (it would hand its keys to whatever answers there), or nil: its directory must
