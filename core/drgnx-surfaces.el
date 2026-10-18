@@ -13,6 +13,7 @@
 (require 'cl-lib)
 (require 'drgnx-registry)
 (require 'drgnx-modules-record)
+(require 'drgnx-modules-helpers)
 (require 'drgnx-paths)
 (require 'easymenu)
 (require 'seq)
@@ -189,14 +190,16 @@ Sets `drgnx-surfaces--usage-bad' when something was left out."
   '(("File" . file) ("Edit" . edit) ("Options" . options) ("Buffers" . buffer) ("Tools" . tools) ("Help" . help-menu))
   "Menu-bar names Emacs already defines, with their menu-bar keys.")
 
-(defvar drgnx-surfaces--menu-items nil
-  "What `drgnx-surfaces-build-menus' put in the menu bar, newest first: `drgnx-surfaces--menu-rec's.")
+(defvar drgnx-surfaces--menu-items (make-hash-table :test #'eq)
+  "What `drgnx-surfaces-build-menus' put in the menu bar: command id → `drgnx-surfaces--menu-rec'.")
+
+(defvar drgnx-surfaces--menu-seq 0 "Counts the records made, to undo them newest first.")
 
 (cl-defstruct (drgnx-surfaces--menu-rec (:constructor drgnx-surfaces--menu-rec-make) (:copier nil))
   "One menu-bar item the registry added, with what undoing it takes."
-  id cmd
+  id cmd seq
   root names title   ; where easy-menu put it: the menu keymap, the submenu path under it, the item name
-  raw old            ; a same-named item it replaced: its cons cell and that cell's old binding
+  target box         ; its claim on the item (`drgnx-module--claim'): two commands may share a title
   ours)              ; the binding it added (the cell's cdr), to see whether someone else changed it since
 
 (defvar drgnx-surfaces--menu-created nil
@@ -219,38 +222,47 @@ Always the GLOBAL menu bar: easy-menu's nil map means the buffer's local one."
       (setq m (easy-menu-lookup-name m (pop names))))
     (and (keymapp m) m)))
 
+(defun drgnx-surfaces--menu-cell (root names title)
+  "The cons cell of the item TITLE in the submenu NAMES of ROOT, or nil."
+  (when-let* ((leaf (drgnx-surfaces--menu-submenu root names)))
+    (assq (easy-menu-intern title) (cdr leaf))))
+
 (defun drgnx-surfaces--menu-add (cmd item)
-  "Add ITEM, CMD's menu entry, to the menu bar.  The first time, remember what was there before."
+  "Add ITEM, CMD's menu entry, to the menu bar.  The first time, claim the item and remember
+what was there before; later times replace the item where it stands."
   (pcase-let* ((`(,root . ,names) (drgnx-surfaces--menu-root cmd))
-               (rec (seq-find (lambda (r) (eq (drgnx-surfaces--menu-rec-id r) (drgnx-cmd-id cmd)))
-                              drgnx-surfaces--menu-items)))
+               (title (drgnx-cmd-title cmd))
+               (rec (gethash (drgnx-cmd-id cmd) drgnx-surfaces--menu-items)))
     (unless rec
       (let* ((live (cl-loop for n from (length names) downto 0
                             when (drgnx-surfaces--menu-submenu root (seq-take names n)) return n))
-             (sym (easy-menu-intern (drgnx-cmd-title cmd)))
-             (raw (and (= live (length names))
-                       (assq sym (cdr (drgnx-surfaces--menu-submenu root names))))))
-        (setq rec (drgnx-surfaces--menu-rec-make :id (drgnx-cmd-id cmd) :cmd cmd :root root :names names
-                                                 :title (drgnx-cmd-title cmd) :raw raw :old (cdr raw)))
-        (push rec drgnx-surfaces--menu-items)
+             (raw (and (= live (length names)) (drgnx-surfaces--menu-cell root names title)))
+             (target (cons 'menu (append (drgnx-cmd-menu cmd) (list title)))))
+        (setq rec (drgnx-surfaces--menu-rec-make
+                   :id (drgnx-cmd-id cmd) :cmd cmd :seq (cl-incf drgnx-surfaces--menu-seq)
+                   :root root :names names :title title :target target
+                   :box (drgnx-module--claim target (cons raw (cdr raw)))))
+        (puthash (drgnx-cmd-id cmd) rec drgnx-surfaces--menu-items)
         (cl-loop for n from (1+ live) to (length names)
                  do (push (cons root (seq-take names n)) drgnx-surfaces--menu-created))))
     (easy-menu-add-item root names item)
-    (setf (drgnx-surfaces--menu-rec-ours rec)
-          (cdr (assq (easy-menu-intern (drgnx-cmd-title cmd))
-                     (cdr (drgnx-surfaces--menu-submenu root names)))))))
+    (setf (drgnx-surfaces--menu-rec-ours rec) (cdr (drgnx-surfaces--menu-cell root names title)))))
 
 (defun drgnx-surfaces--menu-undo (rec)
   "Put the menu bar back as it was before REC's item: the replaced item, or the item gone and
-the submenus the registry made, once empty.  What someone else changed since stays."
-  (let* ((root (drgnx-surfaces--menu-rec-root rec)) (names (drgnx-surfaces--menu-rec-names rec))
-         (title (drgnx-surfaces--menu-rec-title rec)) (raw (drgnx-surfaces--menu-rec-raw rec))
-         (leaf (drgnx-surfaces--menu-submenu root names))
-         (cell (and leaf (assq (easy-menu-intern title) (cdr leaf)))))
-    (when (and cell (eq (cdr cell) (drgnx-surfaces--menu-rec-ours rec)))
-      (if raw
-          (setcdr raw (drgnx-surfaces--menu-rec-old rec))
-        (easy-menu-remove-item root names title)))
+the submenus the registry made, once empty.  What someone else changed since stays, and so
+does an item another command with the same title shows (the claim hands over what it found)."
+  (let ((root (drgnx-surfaces--menu-rec-root rec)) (names (drgnx-surfaces--menu-rec-names rec))
+        (title (drgnx-surfaces--menu-rec-title rec)))
+    (drgnx-module--release
+     (drgnx-surfaces--menu-rec-target rec) (drgnx-surfaces--menu-rec-box rec)
+     (lambda ()
+       (let ((cell (drgnx-surfaces--menu-cell root names title)))
+         (and cell (eq (cdr cell) (drgnx-surfaces--menu-rec-ours rec)))))
+     (lambda (prev)
+       (if (car prev)
+           (setcdr (car prev) (cdr prev))
+         (easy-menu-remove-item root names title))))
     (setq drgnx-surfaces--menu-created
           (seq-remove (lambda (made)
                         (let ((sub (drgnx-surfaces--menu-submenu (car made) (cdr made))))
@@ -260,17 +272,20 @@ the submenus the registry made, once empty.  What someone else changed since sta
                       drgnx-surfaces--menu-created))))
 
 (defun drgnx-surfaces--menu-retract ()
-  "Take every item `drgnx-surfaces-build-menus' added out of the menu bar again, newest first."
-  (while drgnx-surfaces--menu-items
-    (drgnx-surfaces--menu-undo (pop drgnx-surfaces--menu-items))))
+  "Take the items of commands that are no longer registered (undefined, or defined again) out
+of the menu bar, newest first.  The other items stay where they are."
+  (let (stale)
+    (maphash (lambda (id rec)
+               (unless (eq (drgnx-commands-get id) (drgnx-surfaces--menu-rec-cmd rec)) (push rec stale)))
+             drgnx-surfaces--menu-items)
+    (dolist (rec (sort stale (lambda (a b) (> (drgnx-surfaces--menu-rec-seq a) (drgnx-surfaces--menu-rec-seq b)))))
+      (remhash (drgnx-surfaces--menu-rec-id rec) drgnx-surfaces--menu-items)
+      (drgnx-surfaces--menu-undo rec))))
 
 (defun drgnx-surfaces-build-menus ()
   "Put every registry entry with a :menu path into the menu bar (idempotent).  A command no
 longer registered (a module torn down) leaves the menu bar as it was before it came."
-  (when (seq-some (lambda (r) (not (eq (drgnx-commands-get (drgnx-surfaces--menu-rec-id r))
-                                       (drgnx-surfaces--menu-rec-cmd r))))
-                  drgnx-surfaces--menu-items)
-    (drgnx-surfaces--menu-retract))
+  (drgnx-surfaces--menu-retract)
   (dolist (cmd (drgnx-commands-all))
     (when (and (drgnx-cmd-menu cmd) (drgnx-surfaces--showable-p cmd))
       (drgnx-surfaces--menu-add cmd (vector (drgnx-cmd-title cmd) (drgnx-surfaces--item-command cmd)
@@ -283,18 +298,25 @@ longer registered (a module torn down) leaves the menu bar as it was before it c
 
 (defun drgnx-surfaces-define-context (context predicate)
   "Define right-click CONTEXT as PREDICATE, a function of the click event.
-Defined by a module's setup, it is undone with the module: the context it replaced comes back,
-or it goes (`drgnx-surfaces-undefine-context'), unless someone defined it again since."
-  (let* ((old (assq context drgnx-surfaces-contexts)) (old-predicate (cdr old)))
+Defined by a module's setup, it is undone with the module (a claim, `drgnx-module--claim'): the
+context it replaced comes back, or it goes (`drgnx-surfaces-undefine-context'), unless someone
+defined it again since.  Two modules defining one context may be torn down in either order."
+  (let* ((rec (drgnx-modules--recording-p))
+         (old (and rec (assq context drgnx-surfaces-contexts) (list (alist-get context drgnx-surfaces-contexts)))))   ; (PREDICATE) or nil
     (setf (alist-get context drgnx-surfaces-contexts) predicate)
-    (when (drgnx-modules--recording-p)
-      (drgnx-modules-push-undo
-       (format "context %s" context)
-       (lambda ()
-         (when (eq (alist-get context drgnx-surfaces-contexts) predicate)
-           (if old
-               (setf (alist-get context drgnx-surfaces-contexts) old-predicate)
-             (drgnx-surfaces-undefine-context context))))))
+    (when rec
+      (let* ((target (list 'context context))
+             (box (drgnx-module--claim target old)))
+        (drgnx-modules-push-undo
+         (format "context %s" context)
+         (lambda ()
+           (drgnx-module--release
+            target box
+            (lambda () (eq (alist-get context drgnx-surfaces-contexts) predicate))
+            (lambda (prev)
+              (if prev
+                  (setf (alist-get context drgnx-surfaces-contexts) (car prev))
+                (drgnx-surfaces-undefine-context context))))))))
     predicate))
 
 (defun drgnx-surfaces-undefine-context (context)

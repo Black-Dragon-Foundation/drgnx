@@ -100,15 +100,16 @@ times this week; give it a key?"). Read it with `drgnx-surfaces-usage-count` and
 
 **Removing what a command added.** The palette, the key sheet, the cheat sheet and the right-click menu are computed
 from the registry on each use, so an undefined command is gone from them at once. The menu bar and which-key are
-written, so they are undone explicitly. `drgnx-surfaces-build-menus` remembers what it added: for each item the
-binding it replaced (if any) and the submenus it had to create. When a registered command is no longer the one it
-added (undefined, or defined again), it takes all of its items out in reverse order and adds the current ones
-again, so the menu bar ends exactly as it was before the command came: a replaced item is put back in its place, a
-submenu made for the item is removed once empty, and an item someone else replaced or removed since is left alone.
-`drgnx-surfaces-apply-which-key` already removes its previous labels on every refresh. Right-click contexts:
-`(drgnx-surfaces-undefine-context CONTEXT)` removes one; `drgnx-surfaces-define-context` called from a setup
-pushes an undo that puts back the predicate it replaced (or removes the context), unless the context was defined
-again since.
+written, so they are undone explicitly. `drgnx-surfaces-build-menus` remembers what it added, per command id: the item
+(a claim on its menu path and title, `drgnx-module--claim`, so two commands sharing a title in one submenu go in either
+order), the binding it replaced and the submenus it had to create. A command that is no longer the registered one
+(undefined, or defined again) has its item taken out, newest first: a replaced item is put back in its place, a submenu
+made for the item goes once empty, and an item someone else replaced or removed since is left alone. Every other
+item is replaced where it stands (`easy-menu-add-item` keeps the position, and refreshes `:keys`), so nothing untouched
+moves behind an item someone else added meanwhile. `drgnx-surfaces-apply-which-key` already removes its previous labels
+on every refresh. Right-click contexts: `(drgnx-surfaces-undefine-context CONTEXT)` removes one;
+`drgnx-surfaces-define-context` called from a setup claims the context (the same claims as the option and key helpers),
+so two modules defining one context, and a user's own definition on top, undo in any order.
 
 ## Modules (`drgnx-modules.el`)
 
@@ -162,7 +163,11 @@ stack — the code that knows what it changed knows how to change it back):
   After an error the module is `failed`, with the error and any undo problems in the report; a quit or a throw goes
   on after the rollback.
 - Running a module that is already on tears it down first (its `:teardown`, then its stack), so no undo is left
-  behind; a `restart` module is set up again on top, as before, and keeps its earlier undos.
+  behind; a `restart` module is set up again on top, as before, and keeps its earlier undos. That teardown does not
+  run `drgnx-modules-after-teardown-functions`: the setup registers its commands again at once, and `drgnx-modules-run`
+  runs `drgnx-modules-after-stage-functions` (keys and menus apply) once after the whole stage, so a hook per re-run
+  would only add a second full keys resolve while the registry is half rebuilt. Whoever tears down on purpose
+  (Preferences, the batch teardown) runs the after-teardown hook once.
 - Teardown and rollback run in automatic paths: they never prompt. Undos and `:teardown` run with
   `inhibit-interaction` bound, so one that would ask fails at once and is reported. Every undo checks before it
   changes anything, so off, on, off is the same as off once, and two undos of the same thing (a `:teardown` that
