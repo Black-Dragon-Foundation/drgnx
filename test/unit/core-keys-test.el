@@ -490,9 +490,57 @@ that took VS Code's C-S-h and F2 (the rest of the replace module is not modelled
        (drgnx-keys-choose-profile "VS Code"))
      (should (string-search (format "%d conflict" (length (drgnx-keys-conflict-lines))) said)))))
 
+;;;; Keys that work in every mode (M3c-1)
+
+(ert-deftest drgnx-keys/everywhere-key-beats-mode-maps ()
+  ;; `:everywhere KEYS' on an entry also puts the keys in an override keymap on `emulation-mode-map-alists':
+  ;; C-j is lisp-interaction mode's (eval-print-last-sexp) otherwise.  Re-applying without the flag removes it.
+  (drgnx-keys-test--live
+   (let ((panel (drgnx-cmd-command (drgnx-commands-get 'toggle-panel))))
+     (with-temp-buffer
+       (lisp-interaction-mode)
+       (drgnx-keys-test--write-user '(:layers ((emacs app editing window)) :bind ((toggle-panel "C-c j" :everywhere "C-j"))))
+       (drgnx-keys-apply)
+       (should (null (plist-get drgnx-keys-last :problems)))
+       (should (eq (key-binding (kbd "C-j")) panel))
+       (should (eq (key-binding (kbd "C-c j")) panel))
+       (should (eq (keymap-lookup global-map "C-j") panel))
+       (should (memq 'drgnx-keys--everywhere-alist emulation-mode-map-alists))
+       ;; not in the minibuffer, where C-j means something else: the layer steps aside, the local map answers
+       (cl-letf (((symbol-function 'minibufferp) (lambda (&rest _) t)))
+         (should (eq (key-binding (kbd "C-j")) 'eval-print-last-sexp)))
+       (should (eq (plist-get (car (seq-filter (lambda (b) (equal (plist-get b :key) "C-j")) (plist-get drgnx-keys-last :bindings)))
+                              :everywhere)
+                   t))
+       ;; Applying again with the flag keeps one layer, not two.
+       (drgnx-keys-apply)
+       (should (= 1 (length (seq-filter (lambda (m) (eq m 'drgnx-keys--everywhere-alist)) emulation-mode-map-alists))))
+       ;; Without the flag the mode's key is back, and the override layer is gone.
+       (drgnx-keys-test--write-user '(:layers ((emacs app editing window)) :bind ((toggle-panel "C-c j"))))
+       (drgnx-keys-apply)
+       (should (eq (key-binding (kbd "C-j")) 'eval-print-last-sexp))
+       (should-not (memq 'drgnx-keys--everywhere-alist emulation-mode-map-alists))
+       (should (equal (cdr drgnx-keys--everywhere-map) nil))))))
+
+(ert-deftest drgnx-keys/everywhere-is-a-valid-entry-option ()
+  (should-not (drgnx-keys--entry-error '(toggle-panel "C-`" :everywhere "C-j")))
+  (should-not (drgnx-keys--entry-error '(toggle-panel "C-`" :everywhere ("C-j" "C-M-j") :mac "s-j")))
+  (should (drgnx-keys--entry-error '(toggle-panel "C-`" :everywhere 5)))
+  (should (drgnx-keys--entry-error '(toggle-panel "C-`" :everywhere))))
+
+(ert-deftest drgnx-keys/everywhere-keys-follow-mac-like-the-others ()
+  ;; On macOS they become Cmd keys; an entry's own :mac replaces them with the others.
+  (let ((profiles '((p :mac-cmd t :bind ((toggle-panel "C-`" :everywhere "C-j") (palette "C-p" :everywhere "C-i" :mac "s-p"))))))
+    (should (equal (drgnx-keys--entry '(toggle-panel "C-`" :everywhere "C-j") (cdar profiles) 'macos)
+                   '(:keys ("s-`" "s-j") :everywhere ("s-j") :map nil :profile-map nil)))
+    (should (equal (drgnx-keys--entry '(palette "C-p" :everywhere "C-i" :mac "s-p") (cdar profiles) 'macos)
+                   '(:keys ("s-p") :map nil :profile-map nil)))
+    (should (equal (plist-get (drgnx-keys--entry '(toggle-panel "C-`" :everywhere "C-j") (cdar profiles) 'linux) :everywhere)
+                   '("C-j")))))
+
 ;;;; macOS (M12a)
 
-(defun drgnx-keys-test--on (r key &optional global)
+(defun drgnx-keys-test--on(r key &optional global)
   "The ids resolution R binds to KEY, in any keymap (with GLOBAL, in the global keymap)."
   (mapcar (lambda (b) (plist-get b :id))
           (seq-filter (lambda (b) (and (equal (drgnx-keys--parse (plist-get b :key)) (drgnx-keys--parse key))

@@ -59,8 +59,11 @@ cannot be read (never an error or a prompt)."
              (while (stringp (car rest)) (pop rest))
              (cond ((eq rest (cdr entry)) "no keys (write (ID :none \"reason\") for none)")
                    ((or (cl-oddp (length rest))
-                        (not (seq-every-p (lambda (k) (memq k '(:map :mac))) (cl-loop for k in rest by #'cddr collect k))))
-                    (format "%S is not a key (keys are strings; only :map and :mac may follow them)" (car rest)))
+                        (not (seq-every-p (lambda (k) (memq k '(:map :mac :everywhere))) (cl-loop for k in rest by #'cddr collect k))))
+                    (format "%S is not a key (keys are strings; only :map, :mac and :everywhere may follow them)" (car rest)))
+                   ((and (plist-member rest :everywhere)
+                         (not (seq-every-p #'stringp (ensure-list (plist-get rest :everywhere)))))
+                    (format ":everywhere %S is not a key or a list of keys" (plist-get rest :everywhere)))
                    ((and (plist-member rest :map) (not (drgnx-keys--map-spec-p (plist-get rest :map))))
                     (format ":map %S is not a keymap symbol or (FEATURE . KEYMAP)" (plist-get rest :map)))
                    ((and (plist-member rest :mac)
@@ -115,10 +118,11 @@ in (A-C-H-M-S-s): C-M-b is M-s-b, C-M-S-c is M-s-C."
              (split-string key " ") " "))
 
 (defun drgnx-keys--entry (entry spec platform)
-  "ENTRY (ID KEY… [:map M] [:mac K…]) or (ID :none [REASON] [:mac K…]) of SPEC → plist (:keys :map
-:profile-map).  On macOS, :mac's keys replace the others (`:mac ()': none there); without it a :mac-cmd
-profile's C- becomes s-.  Every macOS key has Cmd+Shift+letter as macOS sends it (`S-s-w' is s-W).
-The keymap used is the entry's, else the command's, else the profile's."
+  "ENTRY (ID KEY… [:map M] [:mac K…] [:everywhere K…]) or (ID :none [REASON] [:mac K…]) of SPEC → plist
+(:keys [:everywhere] :map :profile-map).  :everywhere's keys are also in :keys; they also go in the override
+keymap (`drgnx-keys--set-everywhere').  On macOS, :mac's keys replace the others, :everywhere's too
+(`:mac ()': none there); without it a :mac-cmd profile's C- becomes s-.  Every macOS key has Cmd+Shift+letter
+as macOS sends it (`S-s-w' is s-W).  The keymap used is the entry's, else the command's, else the profile's."
   (let ((rest (cdr entry)) keys)
     (cl-flet ((mac (opts) (mapcar (lambda (k) (drgnx-keys--mac-cmd k t)) (ensure-list (plist-get opts :mac)))))
       (if (eq (car rest) :none)
@@ -126,11 +130,15 @@ The keymap used is the entry's, else the command's, else the profile's."
             (list :keys (and (eq platform 'macos) (mac opts)) :profile-map (plist-get spec :map)))
         (while (stringp (car rest)) (push (pop rest) keys))
         (setq keys (nreverse keys))
-        (when (eq platform 'macos)
-          (setq keys (cond ((plist-member rest :mac) (mac rest))
-                           ((plist-get spec :mac-cmd) (mapcar #'drgnx-keys--mac-cmd keys))
-                           (t (mapcar (lambda (k) (drgnx-keys--mac-cmd k t)) keys)))))
-        (list :keys keys :map (plist-get rest :map) :profile-map (plist-get spec :map))))))
+        (let ((everywhere (ensure-list (plist-get rest :everywhere))))
+          (when (eq platform 'macos)
+            (if (plist-member rest :mac)
+                (setq keys (mac rest) everywhere nil)
+              (let ((f (if (plist-get spec :mac-cmd) #'drgnx-keys--mac-cmd (lambda (k) (drgnx-keys--mac-cmd k t)))))
+                (setq keys (mapcar f keys) everywhere (mapcar f everywhere)))))
+          (append (list :keys (append keys everywhere))
+                  (and everywhere (list :everywhere everywhere))
+                  (list :map (plist-get rest :map) :profile-map (plist-get spec :map))))))))
 
 (defun drgnx-keys--lookup (map key)
   "KEY in MAP, ignoring command remapping (which depends on the current buffer)."
@@ -204,8 +212,10 @@ KIND `same-key', `claim' (a key another layer uses natively) or `prefix'."
       (when-let* ((a (gethash (drgnx-cmd-id c) assign)))
         (dolist (k (plist-get a :keys))
           (if (key-valid-p k)
-              (push (list :id (drgnx-cmd-id c) :key k :map (or (plist-get a :map) (drgnx-cmd-map c) (plist-get a :profile-map))
-                          :layer (plist-get a :layer) :rank (plist-get a :rank))
+              (push (append (list :id (drgnx-cmd-id c) :key k
+                                  :map (or (plist-get a :map) (drgnx-cmd-map c) (plist-get a :profile-map))
+                                  :layer (plist-get a :layer) :rank (plist-get a :rank))
+                            (and (member k (plist-get a :everywhere)) (list :everywhere t)))
                     bindings)
             (push (format "%s: \"%s\" is not a valid key" (drgnx-cmd-id c) k) problems)))))
     (setq bindings (nreverse bindings))
@@ -274,8 +284,9 @@ KIND `same-key', `claim' (a key another layer uses natively) or `prefix'."
                           :losers (if b-wins them (cons (party b) (remq top-party them))))
                     conflicts)
               (unless b-wins (setq bindings (remq b bindings))))))))
-    (list :bindings (mapcar (lambda (b) (list :id (plist-get b :id) :key (plist-get b :key)
-                                              :map (plist-get b :map) :layer (plist-get b :layer)))
+    (list :bindings (mapcar (lambda (b) (append (list :id (plist-get b :id) :key (plist-get b :key)
+                                                      :map (plist-get b :map) :layer (plist-get b :layer))
+                                                (and (plist-get b :everywhere) (list :everywhere t))))
                             bindings)
           :conflicts (nreverse conflicts)
           :problems (nreverse problems))))
@@ -386,7 +397,34 @@ is lifted first (and remembered).  Returns what was lifted, \"COMMAND (PREFIX)\"
       (let* ((map (symbol-value mapsym)) (now (drgnx-keys--lookup map key)))
         (when (if (eq ours :prefix) (or (null now) (equal now '(keymap))) (equal now ours))
           (drgnx-keys--set map key prev)))))
+  (drgnx-keys--set-everywhere nil)
   (setq drgnx-keys--applied nil))
+
+(defvar drgnx-keys--everywhere-map (make-sparse-keymap)
+  "The keys of `:everywhere' entries; above every major and minor mode map, so a profile's key works in any mode.")
+(defvar drgnx-keys--everywhere-on nil "Non-nil while `drgnx-keys--everywhere-map' has keys (its switch in the alist).")
+(defvar drgnx-keys--everywhere-alist (list (cons 'drgnx-keys--everywhere-on drgnx-keys--everywhere-map))
+  "The entry `emulation-mode-map-alists' holds (as this symbol) while there are `:everywhere' keys.")
+
+(defun drgnx-keys--everywhere-filter (command)
+  "COMMAND, except in the minibuffer: there C-j and its like are the minibuffer's."
+  (and (not (minibufferp)) command))
+
+(defun drgnx-keys--set-everywhere (bindings)
+  "Make the keys of BINDINGS that are `:everywhere' work in every mode: they go in a keymap on
+`emulation-mode-map-alists', ahead of the major and minor mode maps.  No such BINDINGS: the keymap is
+emptied and leaves the list, so a profile switch leaves nothing behind."
+  (setcdr drgnx-keys--everywhere-map nil)
+  (setq drgnx-keys--everywhere-on nil)
+  (dolist (b bindings)
+    (when-let* (((plist-get b :everywhere))
+                (cmd (drgnx-commands-get (plist-get b :id))))
+      (define-key drgnx-keys--everywhere-map (key-parse (plist-get b :key))
+                  `(menu-item "" ,(drgnx-cmd-command cmd) :filter drgnx-keys--everywhere-filter))
+      (setq drgnx-keys--everywhere-on t)))
+  (if drgnx-keys--everywhere-on
+      (add-to-list 'emulation-mode-map-alists 'drgnx-keys--everywhere-alist)
+    (setq emulation-mode-map-alists (delq 'drgnx-keys--everywhere-alist emulation-mode-map-alists))))
 
 (defun drgnx-keys--apply-binding (b cmd generation)
   "Bind resolution binding B (command CMD) now, or when its keymap's feature loads.  A late binding
@@ -437,6 +475,7 @@ Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolut
             (let ((cmd (drgnx-commands-get (plist-get b :id))))
               (setf (drgnx-cmd-bound cmd) (append (drgnx-cmd-bound cmd) (list (cons (plist-get b :key) (plist-get b :map)))))
               (drgnx-keys--apply-binding b cmd drgnx-keys--generation)))
+          (drgnx-keys--set-everywhere (plist-get r :bindings))
           (setq drgnx-keys-last (append (list :layers layers
                                               :problems (append (reverse drgnx-keys-problems) (plist-get r :problems)))
                                         r))))

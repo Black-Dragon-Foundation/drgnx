@@ -180,6 +180,10 @@ cannot be bound, a prefix it replaces) joins the list and the report then.
 - `:map` is a keymap symbol or `(FEATURE . KEYMAP)` for a keymap that exists once FEATURE is loaded.
 - `:mac` gives a different key on macOS: `(palette "C-c p" :mac "s-p")`; `:mac ()` is no key there, and
   `(quit :none "reason" :mac "s-q")` a key only there.
+- `:everywhere` names keys that must work in every mode: ``(toggle-panel "C-`" :everywhere "C-j")`` binds `C-j`
+  as usual and also in a keymap that comes before every major and minor mode map, so lisp-interaction or Org mode
+  cannot take it. Use it for one-stroke keys only; the minibuffer keeps its own keys. Switching profiles or
+  applying keys again removes the keymap. On macOS the keys follow the entry's `:mac` (or become Cmd keys).
 - A mistake never breaks startup: an unreadable file, an unknown command or an invalid key is a problem on the key
   sheet and in the doctor, and everything else still applies.
 - Keyboard Profile… rewrites only `:layers` and keeps the rest of the file.
