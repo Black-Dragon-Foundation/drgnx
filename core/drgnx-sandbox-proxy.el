@@ -12,8 +12,8 @@
 ;; ways as they are: TLS stays end to end.  Everything else gets `403': other methods, a bad request line, a head
 ;; larger than `drgnx-sandbox-proxy-max-head' or later than `drgnx-sandbox-proxy-head-timeout', a wildcard target, a
 ;; connection past `drgnx-sandbox-proxy-max-connections', a target not listed.  An address literal that is not public
-;; and not listed says `refused HOST:PORT private' instead of `denied', so that no card offers it.  A target not listed is said once on stdout,
-;; `denied HOST:PORT', so that the hub can ask the user with a card.
+;; and not listed says `refused HOST:PORT private' instead of `denied', so that no card offers it.  Any other target
+;; not listed is said once on stdout, `denied HOST:PORT', so that the hub can ask the user with a card.
 ;;
 ;; Names are matched exactly after normalization (`drgnx-sandbox-proxy-normalize'); `*.example.com:443' matches
 ;; subdomains only.  A name is resolved once and the proxy connects to the address it checked, never resolving again:
