@@ -127,6 +127,42 @@ minutes the task is free again (the job window, M9b.4, will show it; messages an
 too). **Jobs** put several agents to work through a plan you approve, each task in its own worktree, reviewed and
 merged into the job's branch: [jobs.md](jobs.md). Developer details: [coordination.md](../develop/coordination.md).
 
+## Agents outside drgnx
+
+Agents you run outside drgnx can report to it too: Claude Code in a terminal or in Zed, Codex, gry workers and their
+subagents. Give the agent drgnx's coordination server as one more MCP server (stdio), with `KIND` set to the kind of
+agent (`claude`, `codex`, `zed`, …: a short lower-case name):
+
+- command: `<checkout>/bin/drgnx`
+- arguments: `coord mcp --kind KIND`
+
+For Claude Code, that is `claude mcp add drgnx -- <checkout>/bin/drgnx coord mcp --kind claude`. For Codex, it is a
+`[mcp_servers.drgnx]` table in `~/.codex/config.toml` with `command` and `args` set as above. Each agent's settings
+page can add it for you.
+
+The agent then gets four tools to report with:
+- **hello**: who it is and where it works;
+- **report_edit**: the files it changed (paths only);
+- **report_test**: the tests it ran and how they went;
+- **ask_user**: a question that waits for you, never a prompt.
+
+It also gets the messages and the decision log, like drgnx's own agents. The Work cockpit shows each reporting agent
+with its name, folder and branch, the files it changed (with their diff since it said hello), its test runs and its
+questions. You answer a question there, and your answer reaches the agent as a message.
+
+What an outside agent cannot do:
+- **pass for another agent.** Its identity comes from its own process (`ext:KIND:PID`), never from what it says.
+  A name it gives is only a label.
+- **touch drgnx's jobs.** It cannot claim, update or finish a job's tasks, or record decisions; it is told to report
+  its work instead.
+- **report a file outside the folder it was started in** (that folder's git worktree), a path with `..`, a symlink
+  that leads out, or a remote file.
+- **flood you.** It may make 20 reports a minute (`drgnx-coord-report-rate`). Past that, its reports are held, and
+  nothing is written. One card an hour tells you which agent is reporting too fast.
+
+An agent that does not report — no drgnx server in its config, or it never says hello — still shows in the cockpit
+when it works in a git worktree, with the worktree's changes and its ledger, marked **not reporting**.
+
 ## Plans and the board
 
 Imported plan checklists (Onboarding: Import Projects, with TODOs) remember where they came from (`:PLAN_FILE:`,

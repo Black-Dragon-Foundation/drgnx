@@ -11,7 +11,7 @@ Using drgnx.
 - [Keys](guide/keys.md): VS Code, Emacs and Vim key profiles, the Mac keys (⌘P, ⌘⇧P, …), layers, keys.eld, conflicts.
 - [Modules](guide/modules.md): stages, packages, flags, modules.eld, Preferences: Modules, writing a module.
 - [Packages](guide/packages.md): `drgnx sync`, the lock, the cache, generations, rollback, upgrade, safe mode, bisect.
-- [Agents](guide/agents.md): agents over ACP, input that queues and never cancels, the Agents tab, edit review, durable jobs, plans ↔ board.
+- [Agents](guide/agents.md): agents over ACP, input that queues and never cancels, the Agents tab, edit review, durable jobs, agents outside drgnx that report to it, plans ↔ board.
 - [AI](guide/ai.md): one provider registry (OpenRouter and local runners), roles with fallback, keys read from the environment or auth-source, stored only in your Keychain or keyring when you ask, agent profiles.
 - [Jobs](guide/jobs.md): agents through a plan — proposal, approval, worktrees, a policy, review and merge, budget, fallback; `drgnx job`.
 - [Semantic Search](guide/search.md): find code by meaning — `#` in the palette, the index, what is never indexed, `.drgnx/search.eld`, privacy.
@@ -42,6 +42,6 @@ How drgnx is built, tested and measured.
 - [bin/drgnx check](develop/check.md): build and every test tier in one parallel run; shards, GUI slots, phases.
 - [CI](develop/ci.md): the GitHub Actions workflows — Emacs 31.1 and 30.2 suites, shellcheck, leak scan, nightly GUI tier.
 - [The hub and the gateway](develop/hub.md): the durable process behind agents, its socket protocol, the traffic gateway.
-- [Agent coordination](develop/coordination.md): jobs, tasks and leases, the decision log, messages, the MCP tools, delivery.
+- [Agent coordination](develop/coordination.md): jobs, tasks and leases, the decision log, messages, the MCP tools (and the identity and limits of agents outside drgnx), delivery.
 
 Docs are updated in the same commit as the code they describe.

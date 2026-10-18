@@ -87,7 +87,8 @@ string or a value (sent as JSON); its errors are `isError` results. `drgnx-mcp-s
 Every agent session gets the coordination server in ACP's `mcpServers` (`drgnx-agents--mcp-servers`, from
 `drgnx-coord-mcp-server-spec`): one batch Emacs per agent, its identity in its environment (`DRGNX_AGENT` = the
 session's **id**, `s-…` — a name like "claude · drgnx" repeats across hubs and editors — `DRGNX_JOB`, `DRGNX_TASK`,
-and drgnx's data and state dirs). Without `DRGNX_AGENT` it only reads. Messages are addressed to a session's id
+and drgnx's data and state dirs). Without `DRGNX_AGENT` it only reads. An agent outside drgnx sets
+`DRGNX_AGENT_KIND` instead and gets an identity of its own (below). Messages are addressed to a session's id
 (or its name).
 
 | Tool | Does |
@@ -106,12 +107,70 @@ and drgnx's data and state dirs). Without `DRGNX_AGENT` it only reads. Messages 
 A held write answers `HELD: the decision log moved on — read these changes, then retry with seen_version N.` and
 the changes as JSON. After a write the server tells the hub (`coord/notify`, never waiting) so delivery is prompt.
 
+### Reports, and agents outside drgnx
+
+Every agent — drgnx's own and agents outside it (Claude Code in a terminal or Zed, Codex, gry workers, subagents) —
+reports what it does with four more tools. Their events feed the Work cockpit:
+
+| Tool | Does |
+|---|---|
+| `hello {name?, cwd?, branch?, plan?, task?}` | registers the agent (`drgnx-coord-agent-register`): kind, name, cwd, worktree (`git rev-parse --show-toplevel` of the cwd), branch (given, else the cwd's), plan, task, pid. `base` is `git rev-parse HEAD` of the cwd at its first hello, kept by later ones (taken again only when the agent shows up in another worktree). A first hello writes a `start` event. Answers `{agent, version, cwd, worktree, base}`: the identity and the decision log's version |
+| `report_edit {paths, summary?}` | an `edit` event, data `(:root ROOT :paths (RELATIVE…) [:more N])`. Paths are separated by newlines or commas, relative to the cwd or absolute. Each must lie inside the agent's worktree (else its cwd), or the whole report is refused and nothing is written |
+| `report_test {command, passed?, failed?, summary?}` | a `test` event, data `(:command :passed :failed)`. The counts must be whole numbers, 0 or more. With no summary, the summary is `N passed, M failed: COMMAND` |
+| `ask_user {question, options?, task?}` | a message to `user` starting `[escalation]`, which `drgnx-coord-send` turns into a `question` event, so `drgnx-coord-open-questions` lists it. Options go one per line, at most 20. The question is cut to 2,000 characters, with control characters other than newline and tab removed. For one of drgnx's agents, a task it holds (`task`, else `DRGNX_TASK`) goes to `needs-input`. The answer comes back as a message (`read_inbox`) |
+
+**Identity.** `DRGNX_AGENT` as before. When it is empty and `DRGNX_AGENT_KIND` is set (a short lower-case name:
+`claude`, `codex`, `zed`…), the server speaks for an agent outside drgnx, as `ext:KIND:PID`. PID is the agent's
+process: the server's parent (`(alist-get 'ppid (process-attributes (emacs-pid)))`), read once at first use. Where
+the platform does not say (no `ppid`, or `1`), PID is the server's own pid instead, and `hello` says so in a `note`.
+That identity lives only as long as this server process. **No tool takes an identity:** an `agent`, `from`,
+`sender`, `as` or `identity` argument is refused, by every tool. `hello`'s `name` is a label the user sees, never
+who the agent is.
+
+**What an outside agent may write:** only its own events and messages. `claim_task`, `update_task`,
+`complete_task` and `record_decision` answer `jobs are drgnx's: report your work with report_edit`. A `task` that
+names a job's task (`JOB#N`) is refused in `hello` and `ask_user`. Its events and messages carry no job and no task,
+even when `DRGNX_JOB` or `DRGNX_TASK` is set in its environment.
+
+**Paths.** The root comes from the server's process, never from an argument: the git worktree of the folder the
+agent started the server in, else that folder (`drgnx-coord-mcp--home`). `hello`'s `cwd` must lie inside it; a later
+hello without a `cwd` keeps the registered one. A reported path is refused when it:
+- is blank or has a control character;
+- has a `..` component;
+- is a remote (TRAMP) name such as `/ssh:host:…` or `/sudo::…`, or any absolute name whose first component holds
+  a `:` (refused before any file handler runs, so nothing connects);
+- has a `file-truename` (symlinks resolved, with `file-name-handler-alist` off) outside the root.
+
+The two sides are compared as truenames, ignoring case on macOS and Windows. An event keeps at most 100 paths in
+about 3,000 bytes; the rest are counted as `:more`.
+
+**Limits.**
+- `drgnx-coord-report-rate` (20): the reports (`hello`, `report_edit`, `report_test`, `ask_user`) one agent may make
+  in a minute, counted in the server's memory against `drgnx-coord-mcp--now`, which tests stub. Over the limit a
+  report is **held**: nothing is written, not even the `seen` stamp. The answer starts `HELD: more than 20 reports a
+  minute`.
+- The first held report tells the user, with a `rate` card (`Dismiss`; data `(:agent :rate)`), at most once an hour
+  per agent. The server remembers this, and so does the store (`rate-told:AGENT` in `meta`), for a server started
+  again. Best effort: a busy store tells nobody, and the answer still says HELD.
+- Summaries are one line of at most 200 characters (the event writer). Names, branches and plans are cut the same
+  way (a name at 80).
+- Edit and test events are telemetry (`drgnx-coord-event-add-best-effort`): a busy store answers
+  `{"ok": false, "busy": …}` and the agent goes on.
+
+**Never prompts, never blocks:** git runs with `GIT_TERMINAL_PROMPT=0`, no stdin and no terminal. No tool asks
+anything.
+
+**The command** M11c-2's agent settings pages write is `(drgnx-coord-mcp-outside-spec KIND)` → `(:type stdio
+:command "<checkout>/bin/drgnx" :args ("coord" "mcp" "--kind" KIND))`.
+
 ## What this does not protect against
 
 The same Unix user is no security boundary. Anything running as the user — an agent, a command an agent ran, a
 process it started — can connect to the hub's socket and call `agents/permission` (the answer a permission request
 waits for), open `work.db` and write to it directly, or start a coordination server with `DRGNX_AGENT=user` (or any
-other agent's id) and write as that identity. The checks above — freshness, who may change a task, who may answer
+other agent's id) and write as that identity. An outside agent's `ext:KIND:PID` identity likewise stops
+a confused or runaway agent naming another, not one that starts its own server with a forged environment. The
+checks above — freshness, who may change a task, who may answer
 what, the message limits — stop mistakes and runaway loops among cooperating agents; they do not stop an agent that
 means to go around them. The real boundary is the sandbox an agent runs in — one that keeps it away from the hub's
 socket and from the state and data directories — not drgnx's own access rules.
@@ -220,7 +279,9 @@ replaced and the review going on (B) — and the log's delivery tells every agen
 
 ## Tests
 
-`test/unit/coord-test.el` (the store; the claim race), `coord-mcp-test.el` (the server over stdio),
+`test/unit/coord-test.el` (the store; the claim race), `coord-mcp-test.el` (the server over stdio; outside
+agents' identity from the parent, hello and its base, paths inside only, tests, questions, no job tasks, no forging
+or flooding — `drgnx-coord-mcp/outside-agents-cannot-forge-or-flood`),
 `hub-agents-test.el` (sessions in the hub; a mock agent calling a tool through its `mcpServers`),
 `agents-mirror-test.el` (mirrors, reattaching), `coord-delivery-test.el` (idle, busy, exited, peer messages,
 decisions, leases); the job tests are listed in [jobs.md](../guide/jobs.md#tests). The mock agent's `coord TOOL JSON` prompt
