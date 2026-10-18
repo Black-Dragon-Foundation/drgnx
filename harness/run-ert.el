@@ -89,11 +89,22 @@ scan) in FILE, but those on the allowlist and, for the per-file scan, those a te
         (unless (eq test :null) (push what drgnx-run-ert--census-seen))
         (push (list :test test :file (or file :null) :what what :source (or source :null)) drgnx-run-ert--leaks)))))
 
+(defun drgnx-run-ert--census-guard (test file thunk)
+  "Call THUNK; an error in it is recorded as a census line of TEST in FILE and nil returned: the census reports,
+it never ends a run."
+  (condition-case err (funcall thunk)
+    (error (push (list :test test :file (or file :null) :what (format "census error: %S" err) :source :null)
+                 drgnx-run-ert--leaks)
+           nil)))
+
 (defun drgnx-run-ert--census-leave-file ()
   "End the current file: the full fingerprint against the one at its start, then its test buffers go."
   (when drgnx-run-ert--census-start
-    (drgnx-run-ert--census-note :null drgnx-run-ert--census-file
-                                (drgnx-modules-fingerprint-diff drgnx-run-ert--census-start (drgnx-modules-fingerprint t)))
+    (drgnx-run-ert--census-guard
+     :null drgnx-run-ert--census-file
+     (lambda ()
+       (drgnx-run-ert--census-note :null drgnx-run-ert--census-file
+                                   (drgnx-modules-fingerprint-diff drgnx-run-ert--census-start (drgnx-modules-fingerprint t)))))
     (let ((inhibit-message t)) (ignore-errors (ert-kill-all-test-buffers)))
     (setq drgnx-run-ert--census-file nil drgnx-run-ert--census-start nil drgnx-run-ert--census-seen nil)))
 
@@ -103,7 +114,7 @@ scan) in FILE, but those on the allowlist and, for the per-file scan, those a te
     (drgnx-run-ert--census-leave-file)
     (setq drgnx-run-ert--census-file file
           drgnx-run-ert--census-seen nil
-          drgnx-run-ert--census-start (drgnx-modules-fingerprint t))))
+          drgnx-run-ert--census-start (drgnx-run-ert--census-guard :null file (lambda () (drgnx-modules-fingerprint t))))))
 
 (defun drgnx-run-ert--census-timers (fingerprint)
   "The timers FINGERPRINT holds."
@@ -111,18 +122,24 @@ scan) in FILE, but those on the allowlist and, for the per-file scan, those a te
 
 (defun drgnx-run-ert-census (run test &rest args)
   "Around `ert-run-test': the cheap fingerprint before and after TEST; each difference is a leak of TEST.  A timer
-the test left pending is cancelled, so it cannot fire inside the next test."
+the test left pending is cancelled, so it cannot fire inside the next test.  An error in the census is a line of
+the report (`drgnx-run-ert--census-guard'), never an error of the test run."
   (if drgnx-run-ert--census-busy
       (apply run test args)
-    (let ((file (ert-test-file-name test)) (drgnx-run-ert--census-busy t) before)
-      (drgnx-run-ert--census-enter-file file)
-      (setq before (drgnx-modules-fingerprint))
+    (let* ((file (ert-test-file-name test)) (name (symbol-name (ert-test-name test)))
+           (drgnx-run-ert--census-busy t) before)
+      (drgnx-run-ert--census-guard name file (lambda () (drgnx-run-ert--census-enter-file file)))
+      (setq before (drgnx-run-ert--census-guard name file #'drgnx-modules-fingerprint))
       (prog1 (apply run test args)
-        (let ((after (drgnx-modules-fingerprint)))
-          (drgnx-run-ert--census-note (symbol-name (ert-test-name test)) file (drgnx-modules-fingerprint-diff before after))
-          (let ((old (drgnx-run-ert--census-timers before)))
-            (dolist (tm (drgnx-run-ert--census-timers after))
-              (unless (memq tm old) (cancel-timer tm)))))))))
+        (drgnx-run-ert--census-guard
+         name file
+         (lambda ()
+           (let ((after (drgnx-modules-fingerprint)))
+             (when before
+               (drgnx-run-ert--census-note name file (drgnx-modules-fingerprint-diff before after))
+               (let ((old (drgnx-run-ert--census-timers before)))
+                 (dolist (tm (drgnx-run-ert--census-timers after))
+                   (unless (memq tm old) (cancel-timer tm))))))))))))
 
 (defun drgnx-run-ert--census-start ()
   "Turn the census on: load the fingerprint, read the allowlist, advise `ert-run-test'."

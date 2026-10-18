@@ -539,7 +539,7 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx onboard [--non-interactive] [--again] [--preset minimal|ide|full-ai] [--keys NAME] [--theme THEME]
                      [--roots DIR…] [--todos] [--step ID]
                                set drgnx up: environment, keys, projects onto the board, daemon unit (docs/guide/onboarding.md)
-       drgnx check [--no-perf] [--no-gui] [--jobs N] [--shards N]
+       drgnx check [--no-perf] [--no-gui] [--leaks] [--jobs N] [--shards N]
                                build, then every test tier at once where it is safe (unit and live tests
                                sharded; GUI jobs as memory allows; bench, then perf, alone); one summary
        drgnx fmt [--check] [FILE…]

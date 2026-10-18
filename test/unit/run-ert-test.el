@@ -647,3 +647,23 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
           (should (eql 0 (car (drgnx-run-ert-test--census suite results))))
           (should (equal (funcall read-probe) '(t t))))
       (delete-directory tmp t))))
+
+(ert-deftest drgnx-run-ert/an-error-in-the-census-is-a-line-never-an-escape ()
+  ;; A fingerprint that cannot be read (here `global-mode-string' is not a list while the test ends) is recorded as a
+  ;; census line; it never ends the run, and the tests keep their own verdicts.
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-leak" t)))
+         (suite (expand-file-name "suite" tmp)) (results (expand-file-name "r.json" tmp)))
+    (unwind-protect
+        (progn
+          (drgnx-run-ert-test--suite
+           suite '(("broken-test.el" . "(ert-deftest iso-broken/a-breaks-it () (setq global-mode-string 5))
+(ert-deftest iso-broken/b-mends-it () (setq global-mode-string nil))
+(ert-deftest iso-broken/c-passes () (should t))")))
+          (let* ((r (drgnx-run-ert-test--census suite results (concat "DRGNX_TEST_LEAKS_ALLOWED=" (drgnx-run-ert-test--allow-file tmp))))
+                 (json (drgnx-run-ert-test--json results))
+                 (line (drgnx-run-ert-test--leak (plist-get json :leaks) "census error")))
+            (should (eql 0 (car r)))
+            (should (equal (list (plist-get json :total) (plist-get json :passed) (plist-get json :failed)) '(3 3 0)))
+            (should line)
+            (should (string-match-p "listp" (plist-get line :what)))))
+      (delete-directory tmp t))))

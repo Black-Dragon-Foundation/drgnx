@@ -98,7 +98,6 @@ cheapest to find: its brackets name the module that forgot to remove it, its tes
 **The allowlist** `test/leaks-allowed.eld` holds what is not a leak: Emacs's own timers and hooks, and deliberate
 fixtures. Each entry is `(:what REGEXP :source REGEXP :why STRING)`: a leak whose line matches `:what` and whose source
 matches `:source` (leave `:source` out for any) is not reported. Always say why. `DRGNX_TEST_LEAKS_ALLOWED` names
-another file (the runner's own tests use it). The first report, per file, is in the teardown ledger; the migrations of
-the modules work it down.
+another file (the runner's own tests use it). An error while the census reads a fingerprint is a line of the report (`census error: …`), never an error of the run.
 
 With the census off (the default) the runner loads nothing, advises nothing, and the summary has no `:leaks`.
