@@ -49,6 +49,34 @@
   ;; columns are cells: a wide character before the match takes two
   (should (equal (drgnx-tty-session--find-in "漢x" "x") '(3 . 1))))
 
+(ert-deftest drgnx-tty-session/a-process-of-another-pid-namespace-is-not-ours ()
+  ;; a container's tmux server is named after the container's PIDs; a host sweep must not take it for a dead runner's
+  (cl-letf (((symbol-function 'file-symlink-p)
+             (lambda (f) (pcase f ("/proc/self/ns/pid" "pid:[1]") ("/proc/42/ns/pid" "pid:[1]")
+                                ("/proc/43/ns/pid" "pid:[9]") (_ nil)))))
+    (should (drgnx-tty-session--same-pid-namespace-p 42))
+    (should-not (drgnx-tty-session--same-pid-namespace-p 43)))
+  ;; where /proc has no namespaces (macOS, an old kernel) every process is ours, as before
+  (cl-letf (((symbol-function 'file-symlink-p) (lambda (_) nil)))
+    (should (drgnx-tty-session--same-pid-namespace-p 43))))
+
+(ert-deftest drgnx-tty-session/the-sweep-leaves-another-pid-namespace-alone ()
+  (let (removed)
+    (cl-letf (((symbol-function 'drgnx-ui--run)
+               (lambda (&rest _) (cons 0 "43 tmux -L drgnx-tty-2-1 -f /dev/null -D\n")))
+              ((symbol-function 'drgnx-tty-session--owner-alive-p) (lambda (_) nil))
+              ((symbol-function 'drgnx-tty-session--run-of) (lambda (_) "/run/x"))
+              ((symbol-function 'drgnx-tty-session--remove-stale) (lambda (name run) (push (cons name run) removed))))
+      ;; its own namespace: a dead runner's session, removed
+      (cl-letf (((symbol-function 'drgnx-tty-session--same-pid-namespace-p) (lambda (_) t)))
+        (drgnx-tty-session--sweep "/nonexistent-root"))
+      (should (equal removed '(("drgnx-tty-2-1" . "/run/x"))))
+      ;; another one (a container's): not ours to kill
+      (setq removed nil)
+      (cl-letf (((symbol-function 'drgnx-tty-session--same-pid-namespace-p) (lambda (_) nil)))
+        (drgnx-tty-session--sweep "/nonexistent-root"))
+      (should-not removed))))
+
 ;;; tty-session-test.el ends here
 
 (ert-deftest drgnx-tty-session/encodes-named-keys ()

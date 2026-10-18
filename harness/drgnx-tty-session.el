@@ -139,6 +139,14 @@ directories in the run directory, TERM, a UTF-8 locale unless one is set; then E
       (when (file-directory-p sock) (delete-directory sock t))
       (ignore-errors (delete-directory (file-name-directory (directory-file-name sock)))))))
 
+(defun drgnx-tty-session--same-pid-namespace-p (pid)
+  "Non-nil when process PID is in this Emacs's PID namespace (or /proc cannot tell).  A container's tmux server
+is named after the container's PIDs (1, 2, …), which mean nothing here: a sweep must not take it for the leftover
+of a dead runner and kill it."
+  (let ((mine (file-symlink-p "/proc/self/ns/pid"))
+        (theirs (file-symlink-p (format "/proc/%d/ns/pid" pid))))
+    (or (null mine) (null theirs) (equal mine theirs))))
+
 (defun drgnx-tty-session--sweep (root)
   "Remove the sessions whose owning Emacs is dead (a runner SIGKILLed mid-test runs no exit hook): the
 processes of any state root, found by name, and the run directories in ROOT."
@@ -146,7 +154,8 @@ processes of any state root, found by name, and the run directories in ROOT."
     (dolist (line (split-string (cdr (drgnx-ui--run "pgrep" "-u" (number-to-string (user-uid)) "-af" "--"
                                                     "drgnx-tty-[0-9]+-[0-9]+")) "\n" t))
       (let ((pid (string-to-number line)))
-        (when (string-match (concat "\\(" drgnx-tty-session-name-regexp "\\)\\([/ ]\\|\\'\\)") line)
+        (when (and (drgnx-tty-session--same-pid-namespace-p pid)
+                   (string-match (concat "\\(" drgnx-tty-session-name-regexp "\\)\\([/ ]\\|\\'\\)") line))
           (let ((name (match-string 1 line)))
             (unless (or (drgnx-tty-session--owner-alive-p (string-to-number (match-string 2 line)))
                         (assoc name stale))

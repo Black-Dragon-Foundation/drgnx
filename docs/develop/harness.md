@@ -474,7 +474,8 @@ dirs) and drive the session through `harness/drgnx-tty-session.el`:
   after `$DRGNX_TTY_MAX_RUNTIME` seconds (default 1800) with everything in it. Each start also sweeps the sessions
   whose owner is dead: the PID in `drgnx-tty-PID-N` is no running Emacs. It kills their processes, found by name in
   any state root, and removes their run and socket directories (the run directory from the process's
-  `DRGNX_UI_RUN`, or the current state root).
+  `DRGNX_UI_RUN`, or the current state root). Processes in another PID namespace are left alone: a container's
+  sessions carry the container's PIDs, which mean nothing to a host sweep.
 - **Input is raw bytes:** `drgnx-tty-session-send` uses `tmux send-keys -H`, one argument per byte. A test proved
   this delivers every byte unchanged; `paste-buffer -r -d` showed ESC as `^[`. Keys are encoded the way a kitty
   keyboard protocol, modifyOtherKeys or legacy terminal sends them (`drgnx-tty-session-key`): characters, RET, TAB,
