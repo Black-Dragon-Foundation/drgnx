@@ -99,8 +99,12 @@ PLATFORM (`linux' or `macos'): only run on that platform, as `drgnx-platform' sa
 
 (defun drgnx-doctor--shell-profile ()
   "The login profile the user's shell reads and install.sh writes the PATH line to: ~/.zprofile for zsh (macOS's
-default; it never reads ~/.profile), else ~/.profile."
-  (if (string-suffix-p "/zsh" (or (getenv "SHELL") "")) "~/.zprofile" "~/.profile"))
+default; it never reads ~/.profile), else ~/.profile.  With SHELL unset or empty (a daemon the app started):
+~/.zprofile when it exists, then ~/.profile."
+  (let ((shell (or (getenv "SHELL") "")))
+    (cond ((string-suffix-p "/zsh" shell) "~/.zprofile")
+          ((and (string-empty-p shell) (file-exists-p (expand-file-name "~/.zprofile"))) "~/.zprofile")
+          (t "~/.profile"))))
 
 (defun drgnx-doctor--drgnx-on-path ()
   "Does Terminal find the drgnx command?  It is on this Emacs's PATH; or — a daemon the app started lacks

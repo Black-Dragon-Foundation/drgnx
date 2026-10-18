@@ -387,3 +387,22 @@
             (should-not (drgnx-doctor--drgnx-on-path)))                      ; the read fails
           (should (drgnx-doctor--drgnx-on-path)))                            ; readable again: counted
       (delete-directory home t))))
+
+(ert-deftest drgnx-doctor/with-no-shell-the-profile-that-exists-is-read ()
+  ;; M12a-3 (review): SHELL unset (a daemon the app started): ~/.zprofile when it exists, then ~/.profile, so a Mac
+  ;; zsh user gets no false warning.
+  (let* ((home (file-name-as-directory (make-temp-file "drgnx-doctor-home" t)))
+         (process-environment (append (list (concat "HOME=" home) "SHELL") process-environment)))   ; SHELL unset
+    (unwind-protect
+        (progn
+          (should-not (getenv "SHELL"))
+          (should (equal (drgnx-doctor--shell-profile) "~/.profile"))        ; neither exists
+          (write-region "" nil (concat home ".profile"))
+          (should (equal (drgnx-doctor--shell-profile) "~/.profile"))
+          (write-region "" nil (concat home ".zprofile"))
+          (should (equal (drgnx-doctor--shell-profile) "~/.zprofile"))       ; both: zsh's wins
+          (delete-file (concat home ".profile"))
+          (should (equal (drgnx-doctor--shell-profile) "~/.zprofile"))
+          (let ((process-environment (cons "SHELL=/bin/bash" process-environment)))   ; a set SHELL still decides
+            (should (equal (drgnx-doctor--shell-profile) "~/.profile"))))
+      (delete-directory home t))))
