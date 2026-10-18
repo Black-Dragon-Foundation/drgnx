@@ -18,6 +18,7 @@
 (defvar drgnx-agents-changed-functions)
 (defvar drgnx-wb--areas)
 (defvar drgnx-layouts-pane-fillers)
+(defvar drgnx-layouts-shapes)
 (defvar drgnx-persist-state-functions)
 (defvar drgnx-persist-after-restore-functions)
 
@@ -34,6 +35,7 @@ is undone after BODY."
          (drgnx-agents-changed-functions (bound-and-true-p drgnx-agents-changed-functions))
          (drgnx-wb--areas (copy-tree (bound-and-true-p drgnx-wb--areas)))
          (drgnx-layouts-pane-fillers (copy-tree (bound-and-true-p drgnx-layouts-pane-fillers)))
+         (drgnx-layouts-shapes (copy-tree (bound-and-true-p drgnx-layouts-shapes)))
          (drgnx-persist-state-functions (bound-and-true-p drgnx-persist-state-functions))
          (drgnx-persist-after-restore-functions (bound-and-true-p drgnx-persist-after-restore-functions))
          (ring-bell-function ring-bell-function) (use-dialog-box use-dialog-box)
@@ -839,11 +841,13 @@ The commands of modules that need no installed package are in it, the later stag
   ;; open a third editor group, the persist hooks changed every later restore.
   (require 'drgnx-persist)
   (let ((fillers (copy-tree (bound-and-true-p drgnx-layouts-pane-fillers)))
+        (shapes (copy-tree (bound-and-true-p drgnx-layouts-shapes)))
         (state-fns (copy-sequence drgnx-persist-state-functions))
         (after-fns (copy-sequence drgnx-persist-after-restore-functions))
         (drgnx-keys-test--later-stages t))
     (drgnx-keys-test--with-core-commands (ignore))
     (should (equal (bound-and-true-p drgnx-layouts-pane-fillers) fillers))
+    (should (equal (bound-and-true-p drgnx-layouts-shapes) shapes))
     (should (equal drgnx-persist-state-functions state-fns))
     (should (equal drgnx-persist-after-restore-functions after-fns))))
 
