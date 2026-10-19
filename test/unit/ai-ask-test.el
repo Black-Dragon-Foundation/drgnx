@@ -12,7 +12,7 @@
 provider `o' served by a mock answering ANSWER, its LOG."
   (declare (indent 1))
   `(let* ((root (file-name-as-directory (make-temp-file "drgnx-ai-ask" t)))
-          (port (+ 20000 (random 20000))) (script (concat root "llm.eld")) (log (concat root "llm.log"))
+          (port nil) (script (concat root "llm.eld")) (log (concat root "llm.log"))
           (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" root "config")) process-environment))
           (drgnx-ai-detected '((o :up t :models ("small" "big"))))
           (mock nil))
@@ -26,11 +26,12 @@ provider `o' served by a mock answering ANSWER, its LOG."
                                   (and drgnx-ai-ask-test--delay (list :delay drgnx-ai-ask-test--delay)))
                           (list :path "/api/generate" :body "{\"response\":\"ok\"}"))
                     (current-buffer)))
+           (setq mock (drgnx-ai-test-mock-llm nil script log)
+                 port (process-get mock :port))
            (with-temp-file (concat root "config/ai.eld")
              (prin1 `(:version 1 :providers ((o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" port) :caps (chat fim)))
                                :roles ((chat (o . "m"))))
                     (current-buffer)))
-           (setq mock (drgnx-ai-test-mock-llm port script log))
            ,@body)
        (when mock (delete-process mock))
        (when (get-buffer "*AI answer*") (kill-buffer "*AI answer*"))
@@ -229,7 +230,7 @@ provider `o' served by a mock answering ANSWER, its LOG."
 
 (ert-deftest drgnx-ai-choose/a-choice-that-does-not-answer-is-not-kept ()
   (drgnx-ai-ask-test--with "OK"
-    (let ((dead (+ 40000 (random 9000))))
+    (let ((dead (drgnx-test-free-port)))
       (with-temp-file (concat root "config/ai.eld")
         (prin1 `(:version 1 :providers ((gone :name "Gone" :kind ollama :url ,(format "http://127.0.0.1:%d" dead) :caps (chat fim)))
                           :roles ((chat (o . "m"))))

@@ -34,7 +34,7 @@ is a mock LLM (found running) answering `drgnx-modal-ai-test--answer'."
   (declare (indent 0))
   `(drgnx-modal-test-with-evil
      (let* ((dir (file-name-as-directory (make-temp-file "drgnx-modal-ai" t)))
-            (port (+ 20000 (random 20000))) (script (concat dir "llm.eld"))
+            (port nil) (script (concat dir "llm.eld"))
             (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" dir "config")
                                                (concat "DRGNX_DATA_DIR=" dir "data")
                                                (concat "XDG_STATE_HOME=" dir "state")
@@ -55,13 +55,14 @@ is a mock LLM (found running) answering `drgnx-modal-ai-test--answer'."
        (write-region "(:version 1 :enabled (editor/evil))\n" nil (concat dir "config/modules.eld") nil 'silent)
        (with-temp-file script
          (prin1 `((:path "/api/generate" :body ,(json-encode (list :response drgnx-modal-ai-test--answer)))) (current-buffer)))
-       (with-temp-file (concat dir "config/ai.eld")
-         (prin1 `(:version 1 :providers ((o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" port) :caps (chat fim)))
-                           :roles ((complete (o . "coder"))))
-                (current-buffer)))
        (unwind-protect
            (progn
-             (setq mock (drgnx-ai-test-mock-llm port script))
+             (setq mock (drgnx-ai-test-mock-llm nil script)
+                   port (process-get mock :port))
+             (with-temp-file (concat dir "config/ai.eld")
+               (prin1 `(:version 1 :providers ((o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" port) :caps (chat fim)))
+                                 :roles ((complete (o . "coder"))))
+                      (current-buffer)))
              (drgnx--core-commands)
              (drgnx-modules-load-directory (expand-file-name "modules" drgnx-dir))
              (drgnx-modules-run 'startup)

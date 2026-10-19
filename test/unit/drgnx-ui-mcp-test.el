@@ -110,3 +110,69 @@
                                                   '(:name "ui_state" :arguments (:session "drgnx-ui-✓")))))
               (should (string-search "drgnx-ui-✓" (drgnx-ui-mcp-test--text r)))))
         (drgnx-ui-mcp-client-stop client)))))
+
+;;;; Another client's session needs adopt (HARNESS-SESS-1)
+
+(defun drgnx-ui-mcp-test--session (name client)
+  "A fake live session NAME owned by CLIENT (a token or nil): its socket exists.  Return the process holding it."
+  (let* ((drgnx-ui-owner-client client)
+         (s (drgnx-ui-prepare-run name nil "1600x900")))
+    (make-network-process :name name :family 'local :server t :service (plist-get s :socket) :noquery t)))
+
+(defun drgnx-ui-mcp-test--adopted (name)
+  (plist-get (drgnx-ui--read-json (expand-file-name "session.json" (expand-file-name name (drgnx-ui-state-root))))
+             :adopted))
+
+(ert-deftest drgnx-ui-mcp/another-clients-session-is-refused-unless-adopted ()
+  (drgnx-ui-mcp-test--with-state
+    (let ((server (drgnx-ui-mcp-test--session "drgnx-ui-1-00000a" "aaaaaaaaaaaaaaaa"))
+          (drgnx-ui-mcp--token "bbbbbbbbbbbbbbbb"))
+      (unwind-protect
+          (cl-letf (((symbol-function 'drgnx-ui-state) (lambda (&rest _) '(:ok t))))
+            (let ((r (drgnx-ui-mcp-test--call "ui_state" '(:session "drgnx-ui-1-00000a"))))
+              (should (eq (plist-get r :isError) t))
+              (should (string-match-p "drgnx-ui-1-00000a belongs to another client ([a-z]+, .*, pid [0-9]+); pass adopt: true to drive it"
+                                      (drgnx-ui-mcp-test--text r))))
+            (let ((r (drgnx-ui-mcp-test--call "ui_state" '(:session "drgnx-ui-1-00000a" :adopt t))))
+              (should-not (plist-get r :isError)))
+            ;; its own client's token needs nothing
+            (let ((drgnx-ui-mcp--token "aaaaaaaaaaaaaaaa"))
+              (should-not (plist-get (drgnx-ui-mcp-test--call "ui_state" '(:session "drgnx-ui-1-00000a")) :isError))))
+        (delete-process server)))))
+
+(ert-deftest drgnx-ui-mcp/adopting-is-recorded ()
+  (drgnx-ui-mcp-test--with-state
+    (let ((server (drgnx-ui-mcp-test--session "drgnx-ui-1-00000a" "aaaaaaaaaaaaaaaa"))
+          (drgnx-ui-mcp--token "bbbbbbbbbbbbbbbb"))
+      (unwind-protect
+          (progn
+            (should-not (drgnx-ui-mcp-test--adopted "drgnx-ui-1-00000a"))
+            (drgnx-ui-own-session "drgnx-ui-1-00000a" :client drgnx-ui-mcp--token :adopt t)
+            (drgnx-ui-own-session "drgnx-ui-1-00000a" :client drgnx-ui-mcp--token :adopt t)   ; once only
+            (let ((adopted (append (drgnx-ui-mcp-test--adopted "drgnx-ui-1-00000a") nil)))
+              (should (= (length adopted) 1))
+              (should (equal (plist-get (car adopted) :client) "bbbbbbbbbbbbbbbb"))
+              (should (stringp (plist-get (car adopted) :at)))))
+        (delete-process server)))))
+
+(ert-deftest drgnx-ui-mcp/ui-list-marks-yours ()
+  (drgnx-ui-mcp-test--with-state
+    (let ((a (drgnx-ui-mcp-test--session "drgnx-ui-1-00000a" "aaaaaaaaaaaaaaaa"))
+          (b (drgnx-ui-mcp-test--session "drgnx-ui-2-00000a" "bbbbbbbbbbbbbbbb"))
+          (drgnx-ui-mcp--token "aaaaaaaaaaaaaaaa"))
+      (unwind-protect
+          (let ((rows (drgnx-ui--parse-json
+                       (drgnx-ui-mcp-test--text (drgnx-ui-mcp-test--call "ui_list" nil)))))
+            (should (= (length rows) 2))
+            (let ((mine (seq-find (lambda (r) (equal (plist-get r :name) "drgnx-ui-1-00000a")) rows))
+                  (theirs (seq-find (lambda (r) (equal (plist-get r :name) "drgnx-ui-2-00000a")) rows)))
+              (should (eq (plist-get mine :yours) t))
+              (should (eq (plist-get theirs :yours) :false))
+              (should (equal (plist-get (plist-get theirs :owner) :client) "bbbbbbbbbbbbbbbb"))))
+        (mapc #'delete-process (list a b))))))
+
+(ert-deftest drgnx-ui-mcp/ui-start-records-this-clients-token ()
+  (let (seen (drgnx-ui-mcp--token "cccccccccccccccc"))
+    (cl-letf (((symbol-function 'drgnx-ui-start) (lambda (&rest _) (setq seen drgnx-ui-owner-client) '(:name "x"))))
+      (drgnx-ui-mcp-test--call "ui_start" nil))
+    (should (equal seen "cccccccccccccccc"))))

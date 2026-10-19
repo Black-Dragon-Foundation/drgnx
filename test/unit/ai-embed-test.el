@@ -9,7 +9,7 @@
 `l' (llama.cpp) and `dead' (nothing listens) pointing at it, and the embed role set to CHAIN in ai.eld."
   (declare (indent 2))
   `(let* ((root (file-name-as-directory (make-temp-file "drgnx-ai-embed" t)))
-          (port (+ 20000 (random 20000))) (dead (+ 40000 (random 9000)))
+          (port nil) (dead nil)
           (log (concat root "llm.log")) (script (concat root "llm.eld"))
           (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" root "config") (concat "XDG_STATE_HOME=" root "state")
                                              "A_KEY=sk-test-123")
@@ -20,6 +20,9 @@
          (progn
            (make-directory (concat root "config") t)
            (with-temp-file script (prin1 ,spec (current-buffer)))
+           (setq mock (drgnx-ai-test-mock-llm nil script log)
+                 port (process-get mock :port)
+                 dead (drgnx-test-free-port))
            (with-temp-file (concat root "config/ai.eld")
              (prin1 `(:version 1
                                :providers ((tei :name "TEI" :kind tei :url ,(format "http://127.0.0.1:%d" port) :caps (embed))
@@ -29,7 +32,6 @@
                                            (dead :name "Dead" :kind openai :url ,(format "http://127.0.0.1:%d/v1" dead) :caps (embed)))
                                :roles ((embed ,@,chain)))
                     (current-buffer)))
-           (setq mock (drgnx-ai-test-mock-llm port script log))
            ,@body)
        (when mock (delete-process mock))
        (delete-directory root t))))

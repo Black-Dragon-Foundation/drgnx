@@ -26,3 +26,13 @@
   (drgnx-uitest-api-frame-hook-times)
   (should-not (advice-member-p #'drgnx-uitest--time-run-hooks 'run-hooks))
   (should-not (advice-member-p 'drgnx-uitest-frame-time 'make-frame)))
+
+(ert-deftest drgnx-uitest/api-as-refuses-another-id ()
+  (let ((drgnx-uitest-session-id "drgnx-ui-1-aaaaaa") (ran nil))
+    (should (equal (json-parse-string (drgnx-uitest-api-as "drgnx-ui-2-bbbbbb" (setq ran t) "{}") :object-type 'plist)
+                   '(:refused "this session is drgnx-ui-1-aaaaaa, not drgnx-ui-2-bbbbbb")))
+    (should-not ran)))
+
+(ert-deftest drgnx-uitest/api-as-runs-for-its-own-id ()
+  (let ((drgnx-uitest-session-id "drgnx-ui-1-aaaaaa"))
+    (should (equal (drgnx-uitest-api-as "drgnx-ui-1-aaaaaa" (concat "a" "b")) "ab"))))

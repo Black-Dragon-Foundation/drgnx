@@ -20,6 +20,17 @@
 (defconst drgnx-ui-repo-dir (file-name-directory (directory-file-name drgnx-ui-harness-dir)))
 (defconst drgnx-ui-name-regexp "\\`drgnx-ui-[0-9]+-[0-9a-f]\\{6\\}\\'"
   "A session id: drgnx-ui-N-HEX (`drgnx-ui-next-name').  Never reused, so an id names one session only.")
+(defconst drgnx-ui-legacy-name-regexp "\\`drgnx-ui-[0-9]+\\'"
+  "The id shape before ids carried a hex part (drgnx-ui-N): refused everywhere but by reap.")
+(defconst drgnx-ui-legacy-message "harness upgraded: ids are drgnx-ui-N-xxxxxx; start a new session (drgnx ui start)"
+  "What a legacy id, or a session started before every form named its session, is refused with.")
+(defconst drgnx-ui-tombstone-days 7
+  "Days a stopped session's tombstone (ROOT/ended/ID.eld) is kept; a pruned id is only unknown, never reused.")
+(defvar drgnx-ui-owner-kind 'cli
+  "Who starts the sessions of this process, for session.json's :owner: cli, mcp (`drgnx-ui-mcp-main'), test
+\(`drgnx-ui-run-ert-session', and DRGNX_TEST_ISOLATED=1) or check (DRGNX_CHECK=1 wins over test).")
+(defvar drgnx-ui-owner-client nil
+  "The MCP client's token (`drgnx-ui-mcp--token') while it starts a session: session.json's :owner :client.")
 (defconst drgnx-ui-keep-env
   '("HOME" "USER" "LOGNAME" "LANG" "LC_ALL" "PATH" "GRYPHN_EMACS_DIR" "DRGNX_STARTUP_TRACE"
     "DRGNX_UITEST_SETTLE_SCALE" "DRGNX_MODAL_ELPA")
@@ -104,8 +115,12 @@ EXIT is the symbol `timeout' when the process had to be killed."
         (t (prin1-to-string (format "%s" value)))))
 
 (defun drgnx-ui-parse-reply (out)
-  "Parse emacsclient OUT: the API's JSON text printed as an elisp string literal."
-  (drgnx-ui--parse-json (car (read-from-string (string-trim out)))))
+  "Parse emacsclient OUT: the API's JSON text printed as an elisp string literal.  A {\"refused\": WHY} reply is a
+`drgnx-ui-refused' (`drgnx-uitest-api-as': the session is not the one addressed)."
+  (let ((reply (drgnx-ui--parse-json (car (read-from-string (string-trim out))))))
+    (if (and (consp reply) (stringp (plist-get reply :refused)))
+        (drgnx-ui--refuse "%s" (plist-get reply :refused))
+      reply)))
 
 ;;;; Preparing a session
 
@@ -466,8 +481,17 @@ without its \"drgnx-ui-\" (the socket inside it has the whole NAME)."
   "Create DIR and missing parents, each mode 0700 (server-start refuses anything else)."
   (unless (file-directory-p dir)
     (drgnx-ui--make-private-dir (directory-file-name (file-name-directory (directory-file-name dir))))
-    (make-directory dir)
+    ;; another Emacs may make a shared parent between the check and here (sessions start from several processes)
+    (condition-case nil (make-directory dir) (file-already-exists nil))
     (set-file-modes dir #o700)))
+
+(defun drgnx-ui--owner ()
+  "session.json's :owner for a session this process starts: its kind, checkout, pid and, for an MCP client, its token."
+  (append (list :kind (cond ((equal (getenv "DRGNX_CHECK") "1") "check")
+                            ((equal (getenv "DRGNX_TEST_ISOLATED") "1") "test")
+                            (t (symbol-name drgnx-ui-owner-kind)))
+                :worktree (directory-file-name drgnx-ui-repo-dir) :pid (emacs-pid))
+          (and (stringp drgnx-ui-owner-client) (list :client drgnx-ui-owner-client))))
 
 (defun drgnx-ui--save (sess)
   (drgnx-ui--write (expand-file-name "session.json" (plist-get sess :run)) (drgnx-ui--json sess)))
@@ -507,7 +531,8 @@ RUN/niri.kdl and RUN/niri-session.sh."
         (dolist (n drgnx-ui-copy)
           (let ((src (expand-file-name n cfg)))
             (when (file-regular-p src) (copy-file src (expand-file-name n init) nil t)))))
-      (let ((sess (list :name name :run run :socket (expand-file-name name sock) :size size
+      (let ((sess (list :name name :id name :owner (drgnx-ui--owner)
+                        :run run :socket (expand-file-name name sock) :size size
                         :config (if (member config '(nil "")) "minimal" config)
                         :config_dir (or cfg "") :created (float-time) :compositor compositor)))
         (when daemon (setq sess (plist-put sess :daemon t)))
@@ -654,27 +679,69 @@ a later entry wins, so one of those would move a session out of its run director
 
 (defvar drgnx-ui--name-counter 0 "Makes each id this process draws differ, even within one clock tick.")
 
-(defun drgnx-ui--highest-n (dir)
-  "The highest N of a drgnx-ui-N or drgnx-ui-N-HEX entry in DIR, or 0."
+(defun drgnx-ui--highest-n (dir &optional suffix)
+  "The highest N of a drgnx-ui-N, drgnx-ui-N-HEX or drgnx-ui-test-N-HEX entry in DIR (SUFFIX, a regexp, ending it), or 0."
   (let ((n 0))
-    (dolist (f (and (file-directory-p dir) (directory-files dir nil "\\`drgnx-ui-[0-9]+\\(?:-[0-9a-f]\\{6\\}\\)?\\'")) n)
-      (setq n (max n (string-to-number (substring f (length "drgnx-ui-"))))))))
+    (dolist (f (and (file-directory-p dir)
+                    (directory-files dir nil (concat "\\`drgnx-ui-\\(?:test-\\)?[0-9]+\\(?:-[0-9a-f]\\{6\\}\\)?" suffix "\\'")))
+               n)
+      (string-match "\\`drgnx-ui-\\(?:test-\\)?\\([0-9]+\\)" f)
+      (setq n (max n (string-to-number (match-string 1 f)))))))
 
-(defun drgnx-ui-next-name (root)
-  "A new session id drgnx-ui-N-HEX for ROOT: N one above the highest in ROOT and the runtime directory, HEX six
-hex digits from this pid, the time and a counter.  Ids are never reused (HARNESS-SESS-2: agents in other worktrees
-addressed each other's sessions when a stopped session's drgnx-ui-N came back).  One taken as a run directory, a
-Wayland display or a unit is skipped; the run directory claims it (`drgnx-ui-prepare-run' fails when it exists)."
-  (let ((n (1+ (max (drgnx-ui--highest-n root) (drgnx-ui--highest-n (drgnx-ui-runtime-dir)))))
+(defun drgnx-ui--counter-value (root)
+  "The number in ROOT/counter, or 0."
+  (let ((file (expand-file-name "counter" root)))
+    (if (file-readable-p file)
+        (with-temp-buffer (insert-file-contents file) (string-to-number (buffer-string)))
+      0)))
+
+(defun drgnx-ui-next-name (root &optional kind)
+  "A new session id drgnx-ui-N-HEX (drgnx-ui-test-N-HEX for KIND \"test\") for ROOT.  N, for people, is one above the
+highest of ROOT/counter, the names in ROOT and in the runtime directory, and the tombstones in ROOT/ended; it is
+written back to ROOT/counter.  HEX is six hex digits from this pid, the time and a counter.  Ids are never reused
+\(HARNESS-SESS-2: agents in other worktrees addressed each other's sessions when a stopped session's drgnx-ui-N came
+back); uniqueness is the hex and the claim: one taken as a run directory, a Wayland display or a unit is skipped,
+and the run directory claims it (`drgnx-ui-prepare-run' fails when it exists)."
+  (let ((n (1+ (max (drgnx-ui--counter-value root) (drgnx-ui--highest-n root)
+                    (drgnx-ui--highest-n (drgnx-ui-runtime-dir))
+                    (drgnx-ui--highest-n (expand-file-name "ended" root) "\\.eld"))))
+        (prefix (if (equal kind "test") "drgnx-ui-test" "drgnx-ui"))
         name)
-    (while (progn (setq name (format "drgnx-ui-%d-%s" n
+    (while (progn (setq name (format "%s-%d-%s" prefix n
                                      (substring (md5 (format "%d %.9f %d" (emacs-pid) (float-time)
                                                              (cl-incf drgnx-ui--name-counter)))
                                                 0 6)))
                   (or (file-exists-p (expand-file-name name root))
                       (file-exists-p (expand-file-name name (drgnx-ui-runtime-dir)))
                       (drgnx-ui-unit-active-p name))))
+    (make-directory root t)
+    ;; written whole and renamed in: several Emacs draw names at once, and a lock file would stop the second one
+    (let ((tmp (expand-file-name (format "counter.%d" (emacs-pid)) root)) (create-lockfiles nil))
+      (write-region (number-to-string n) nil tmp nil 'silent)
+      (rename-file tmp (expand-file-name "counter" root) t))
     name))
+
+;;;; Tombstones: when a session ended, so its id is refused with a reason
+
+(defun drgnx-ui--tombstone-file (root id)
+  (expand-file-name (concat id ".eld") (expand-file-name "ended" root)))
+
+(defun drgnx-ui--tombstone (root id reason)
+  "Record that session ID of state ROOT ended, REASON being `stopped' or `reaped'."
+  (let ((file (drgnx-ui--tombstone-file root id)))
+    (make-directory (file-name-directory file) t)
+    (with-temp-file file
+      (prin1 (list :ended (format-time-string "%FT%T%z") :reason reason :by (emacs-pid)
+                   :worktree (directory-file-name drgnx-ui-repo-dir))
+             (current-buffer)))))
+
+(defun drgnx-ui--prune-tombstones (root)
+  "Delete ROOT's tombstones older than `drgnx-ui-tombstone-days'."
+  (let ((dir (expand-file-name "ended" root))
+        (cutoff (- (float-time) (* 86400 drgnx-ui-tombstone-days))))
+    (dolist (f (and (file-directory-p dir) (directory-files dir t "\\.eld\\'")))
+      (when (< (float-time (file-attribute-modification-time (file-attributes f))) cutoff)
+        (ignore-errors (delete-file f))))))
 
 (defun drgnx-ui-claim-run (config size root &optional daemon monitors compositor)
   "Prepare a session's run in ROOT under the first free name.  Several processes may start sessions at
@@ -830,6 +897,7 @@ many virtual monitors (default 1).  COMPOSITOR: mutter, sway, x11, i3, kwin or n
   (let* ((root (drgnx-ui-state-root))
          (_ (make-directory root t))
          (_ (drgnx-ui--prune-eln-cache root))
+         (_ (drgnx-ui--prune-tombstones root))
          (sess (drgnx-ui--claim-and-launch config size root daemon monitors compositor))
          (name (plist-get sess :name))
          (run (plist-get sess :run)))
@@ -869,9 +937,13 @@ refusing a session the harness cannot own"
       (drgnx-ui--save sess)
       sess)))
 
-(defun drgnx-ui--check-name (name)
-  (unless (and (stringp name) (string-match-p drgnx-ui-name-regexp name))
-    (drgnx-ui--refuse "%S is not a drgnx harness session (drgnx-ui-N-HEX)" name)))
+(defun drgnx-ui--check-name (name &optional legacy-ok)
+  "Refuse NAME unless it is a session id (drgnx-ui-N-HEX); a legacy drgnx-ui-N is refused with
+`drgnx-ui-legacy-message', or let through with LEGACY-OK."
+  (cond ((and (stringp name) (string-match-p drgnx-ui-name-regexp name)))
+        ((and (stringp name) (string-match-p drgnx-ui-legacy-name-regexp name))
+         (or legacy-ok (drgnx-ui--refuse "%s" drgnx-ui-legacy-message)))
+        (t (drgnx-ui--refuse "%S is not a drgnx harness session (drgnx-ui-N-HEX)" name))))
 
 (defun drgnx-ui--stop-group (pgid run)
   "TERM process group PGID if it is RUN's session, KILL it if it is still there after 2 s."
@@ -933,11 +1005,15 @@ up to WAIT seconds (default 5) for its socket to go.  Never blocks longer; error
     (let ((deadline (+ (float-time) (or wait 5))))
       (while (and (file-exists-p socket) (< (float-time) deadline)) (sleep-for 0.05)))))
 
-(defun drgnx-ui-stop (name)
+(defun drgnx-ui-stop (name &optional legacy-ok)
   "Stop session NAME — Emacs asked to exit first, then the session's processes — and remove its run
-and socket directories."
-  (drgnx-ui--check-name name)
+and socket directories.  A tombstone (`drgnx-ui--tombstone') says when and why it ended: `stopped', or `reaped'
+with LEGACY-OK, which reap passes to also take a legacy drgnx-ui-N."
+  (drgnx-ui--check-name name legacy-ok)
   (drgnx-ui--own-remove name)
+  (drgnx-ui--prune-tombstones (drgnx-ui-state-root))
+  (when (file-directory-p (expand-file-name name (drgnx-ui-state-root)))
+    (drgnx-ui--tombstone (drgnx-ui-state-root) name (if legacy-ok 'reaped 'stopped)))
   (let* ((run (expand-file-name name (drgnx-ui-state-root)))
          (sock (drgnx-ui-socket-dir name))
          (file (expand-file-name "session.json" run))
@@ -960,8 +1036,17 @@ and socket directories."
     (ignore-errors (delete-directory (file-name-directory sock))))   ; the per-root dir, once empty
   (list :stopped name))
 
-(defun drgnx-ui-ls ()
-  "Sessions of this state root, as a vector of plists."
+(defun drgnx-ui--yours-p (owner client)
+  "Whether a session with OWNER (session.json's :owner) is the caller's: the MCP client with token CLIENT, or, with
+no CLIENT (the CLI), a cli-started session of this checkout."
+  (if (stringp client)
+      (equal (plist-get owner :client) client)
+    (and (equal (plist-get owner :kind) "cli")
+         (equal (plist-get owner :worktree) (directory-file-name drgnx-ui-repo-dir)))))
+
+(defun drgnx-ui-ls (&optional client)
+  "Sessions of this state root, as a vector of plists, each with its :owner and whether it is :yours (an MCP
+client passes its token as CLIENT)."
   (let ((root (drgnx-ui-state-root)))
     (vconcat
      (cl-loop for name in (and (file-directory-p root) (directory-files root nil drgnx-ui-name-regexp))
@@ -970,7 +1055,9 @@ and socket directories."
               collect (let ((s (drgnx-ui--read-json file)))
                         (list :name name :active (if (drgnx-ui-alive-p s) t :false)
                               :launcher (or (plist-get s :launcher) "systemd")
-                              :config (plist-get s :config) :size (plist-get s :size)))))))
+                              :config (plist-get s :config) :size (plist-get s :size)
+                              :owner (or (plist-get s :owner) :null)
+                              :yours (if (drgnx-ui--yours-p (plist-get s :owner) client) t :false)))))))
 
 (defun drgnx-ui--unit-cmdline (name)
   (cdr (drgnx-ui--run "systemctl" "--user" "show" "-p" "ExecStart" "--value" name)))
@@ -978,10 +1065,12 @@ and socket directories."
 (defun drgnx-ui-reap-targets (root units cmdline-fn)
   "Sessions of state ROOT: its run dirs, plus live UNITS whose command line points into it.
 Units of other state roots (another checkout, a test run) are left alone."
-  (let ((names (and (file-directory-p root) (directory-files root nil drgnx-ui-name-regexp))))
+  (let ((names (and (file-directory-p root)
+                    (append (directory-files root nil drgnx-ui-name-regexp)
+                            (directory-files root nil drgnx-ui-legacy-name-regexp)))))
     (dolist (line (split-string units "\n" t))
       (let ((name (string-remove-suffix ".service" (car (split-string line)))))
-        (when (and (string-match-p drgnx-ui-name-regexp name)
+        (when (and (or (string-match-p drgnx-ui-name-regexp name) (string-match-p drgnx-ui-legacy-name-regexp name))
                    (string-search (format "DRGNX_UI_RUN=%s/%s" root name)
                                   (or (funcall cmdline-fn name) "")))
           (push name names))))
@@ -991,10 +1080,10 @@ Units of other state roots (another checkout, a test run) are left alone."
   "Days a failed test run's directory (drgnx-ui-test-*, kept for debugging) is kept.")
 
 (defun drgnx-ui--remove-old-test-runs (root)
-  "Delete ROOT's test run directories (drgnx-ui-test-PID-N) last changed more than
-`drgnx-ui-test-run-max-days' ago.  A test run lasts minutes, so none of them is live."
+  "Delete ROOT's test run directories (drgnx-ui-test-N-HEX, or the older drgnx-ui-test-PID-N) last changed more
+than `drgnx-ui-test-run-max-days' ago.  A test run lasts minutes, so none of them is live."
   (let ((cutoff (- (float-time) (* 86400 drgnx-ui-test-run-max-days))))
-    (dolist (name (and (file-directory-p root) (directory-files root nil "\\`drgnx-ui-test-[0-9]+-[0-9]+\\'")))
+    (dolist (name (and (file-directory-p root) (directory-files root nil "\\`drgnx-ui-test-[0-9]+-[0-9a-f]+\\'")))
       (let* ((dir (expand-file-name name root))
              (attrs (file-attributes dir)))
         (when (and (eq (file-attribute-type attrs) t)
@@ -1032,24 +1121,58 @@ Old kept test runs go too (`drgnx-ui--remove-old-test-runs'), and the eln cache 
   (let* ((units (cdr (drgnx-ui--run "systemctl" "--user" "list-units" "drgnx-ui-*" "--all"
                                     "--plain" "--no-legend")))
          (names (drgnx-ui-reap-targets (drgnx-ui-state-root) units #'drgnx-ui--unit-cmdline)))
-    (mapc #'drgnx-ui-stop names)
+    (dolist (name names) (drgnx-ui-stop name t))
     (vconcat names)))
 
-(defun drgnx-ui-own-session (name)
-  "Session NAME if this harness started it and its socket exists; else signal `drgnx-ui-refused'."
+(defun drgnx-ui--check-client (sess client adopt)
+  "Refuse SESS to the MCP client with token CLIENT when another client started it, unless ADOPT; adopting is
+recorded in session.json (:adopted).  A CLIENT-less caller (the CLI) and a session no client started pass."
+  (let ((theirs (plist-get (plist-get sess :owner) :client)))
+    (when (and (stringp client) (stringp theirs) (not (equal client theirs)))
+      (unless adopt
+        (let ((owner (plist-get sess :owner)))
+          (drgnx-ui--refuse "%s belongs to another client (%s, %s, pid %s); pass adopt: true to drive it"
+                            (plist-get sess :name) (plist-get owner :kind) (plist-get owner :worktree)
+                            (plist-get owner :pid))))
+      (unless (seq-some (lambda (a) (equal (plist-get a :client) client)) (plist-get sess :adopted))
+        (setq sess (plist-put sess :adopted (vconcat (plist-get sess :adopted)
+                                                     (list (list :client client :at (format-time-string "%FT%T%z"))))))
+        (drgnx-ui--save sess))))
+  sess)
+
+(defun drgnx-ui--check-tombstone (name)
+  "Refuse NAME when a tombstone says the session ended: an id is never reused."
+  (let ((tomb (drgnx-ui--read-eld (drgnx-ui--tombstone-file (drgnx-ui-state-root) name))))
+    (when tomb
+      (drgnx-ui--refuse "%s ended at %s (%s); ids are never reused: start a new session"
+                        name (plist-get tomb :ended) (plist-get tomb :reason)))))
+
+(defun drgnx-ui-check-owner (name &rest args)
+  "For a command that ends session NAME (ui_stop): its tombstone, then its client, as `drgnx-ui-own-session' checks
+them, without needing a live socket.  ARGS: :client and :adopt."
   (drgnx-ui--check-name name)
+  (drgnx-ui--check-tombstone name)
+  (let ((file (expand-file-name "session.json" (expand-file-name name (drgnx-ui-state-root)))))
+    (when (file-exists-p file)
+      (drgnx-ui--check-client (drgnx-ui--read-json file) (plist-get args :client) (plist-get args :adopt)))))
+
+(cl-defun drgnx-ui-own-session (name &key client adopt)
+  "Session NAME if this harness started it and its socket exists; else signal `drgnx-ui-refused'.
+In this order: NAME is a session id (a legacy drgnx-ui-N is refused with `drgnx-ui-legacy-message'); no tombstone
+says it ended; session.json is its own (:id, :name, :run, compositor); it was not started by another MCP client
+\(CLIENT is the caller's token; ADOPT drives it anyway and records that); its socket exists."
+  (drgnx-ui--check-name name)
+  (drgnx-ui--check-tombstone name)
   (let* ((run (expand-file-name name (drgnx-ui-state-root)))
          (file (expand-file-name "session.json" run)))
     (unless (file-exists-p file)
       (drgnx-ui--refuse "no harness session %s (see ui_list)" name))
     (let ((sess (drgnx-ui--read-json file))
           (sock (expand-file-name name (drgnx-ui-socket-dir name))))
-      (unless (and (equal (plist-get sess :socket) sock)
-                   (string-prefix-p "s" (or (file-attribute-modes (file-attributes sock)) "")))
-        (drgnx-ui--refuse "%s has no live socket (stopped or crashed? see ui_list)" name))
-      ;; the session's Emacs can write its session.json: a name or run directory other than the ones the harness
+      ;; the session's Emacs can write its session.json: an id, name or run directory other than the ones the harness
       ;; computed would point the WM, display and frame calls at another session
-      (unless (and (equal (plist-get sess :name) name) (equal (plist-get sess :run) run))
+      (unless (and (equal (plist-get sess :id) name) (equal (plist-get sess :name) name)
+                   (equal (plist-get sess :run) run))
         (drgnx-ui--refuse "%s: its session.json names another session (%S, %S)"
                           name (plist-get sess :name) (plist-get sess :run)))
       ;; …or another compositor: every one but mutter has a private runtime directory, so a session.json that says
@@ -1057,21 +1180,31 @@ Old kept test runs go too (`drgnx-ui--remove-old-test-runs'), and the eln cache 
       (when (and (member (plist-get sess :compositor) '(nil "mutter"))
                  (file-directory-p (drgnx-ui-session-runtime-dir name)))
         (drgnx-ui--refuse "%s: its session.json says mutter, but it has a private runtime directory" name))
+      (setq sess (drgnx-ui--check-client sess client adopt))
+      (unless (and (equal (plist-get sess :socket) sock)
+                   (string-prefix-p "s" (or (file-attribute-modes (file-attributes sock)) "")))
+        (drgnx-ui--refuse "%s has no live socket (stopped or crashed? see ui_list)" name))
       sess)))
 
 ;;;; Driving a session
 
 (defun drgnx-ui-call (sess form &optional timeout)
-  "Evaluate FORM (a string) in SESS through its socket; parse the JSON reply."
+  "Evaluate FORM (a string) in SESS through its socket; parse the JSON reply.  The form goes as
+\(drgnx-uitest-api-as ID FORM): the session answers only if its own id is ID, so no socket path reaches another
+session (HARNESS-SESS-1).  A session that does not know `drgnx-uitest-api-as' was started before that."
   (let* ((timeout (or timeout 20))
          (r (drgnx-ui--run-with-timeout timeout (drgnx-ui--emacsclient) "-a" "false"
-                                        "-s" (plist-get sess :socket) "-e" form)))
+                                        "-s" (plist-get sess :socket) "-e"
+                                        (format "(drgnx-uitest-api-as %s %s)" (drgnx-ui-el (plist-get sess :name)) form))))
     (pcase r
       (`(timeout ,_)
        (drgnx-ui--fail "%s: no answer in %ss (stuck on a prompt? take a ui_screenshot)"
                        (plist-get sess :name) timeout))
       (`(0 ,out) (drgnx-ui-parse-reply out))
-      (`(,_ ,out) (drgnx-ui--fail "%s" (string-trim out))))))
+      (`(,_ ,out)
+       (if (string-match-p "void.*drgnx-uitest-api-as" out)
+           (drgnx-ui--refuse "%s" drgnx-ui-legacy-message)
+         (drgnx-ui--fail "%s" (string-trim out)))))))
 
 (defconst drgnx-ui-drag-max-steps 200
   "The most movement events one drag may be asked for.  They go out one per 40 ms tick, so 200
@@ -1375,10 +1508,10 @@ leaves behind can be stopped as one, and it ends 60 s after TIMEOUT at the lates
 (defun drgnx-ui-run-ert-session (tests-dir &optional timeout config extra-env)
   "Run the ERT suite in TESTS-DIR inside a foreground session of CONFIG (default minimal),
 with EXTRA-ENV (\"K=V\" strings).  Return (RC RESULTS RUN)."
-  (let* ((name (format "drgnx-ui-test-%d-%d" (emacs-pid) (random 100000)))
+  (let* ((name (drgnx-ui-next-name (drgnx-ui-state-root) "test"))
          (_ (drgnx-ui--remove-old-test-runs (drgnx-ui-state-root)))   ; failed runs kept long enough
          (_ (drgnx-ui--prune-eln-cache (drgnx-ui-state-root)))
-         (sess (drgnx-ui-prepare-run name config "1600x900"))
+         (sess (let ((drgnx-ui-owner-kind 'test)) (drgnx-ui-prepare-run name config "1600x900")))
          (run (plist-get sess :run))
          (results (expand-file-name "results.json" run))
          (pgid-file (expand-file-name "pgid" run))
@@ -1514,7 +1647,10 @@ CONFIG (default drgnx) and print each scenario: green, red (known) with its trac
       (pcase-let ((`(,rc ,results ,run)
                    (drgnx-ui-run-ert-session
                     dir (string-to-number (or (getenv "DRGNX_SCENARIO_TIMEOUT") "300")) config
-                    (list (concat "DRGNX_SCENARIO_CONFIG=" (drgnx-ui--config-name config))))))
+                    (append (list (concat "DRGNX_SCENARIO_CONFIG=" (drgnx-ui--config-name config)))
+                            ;; a narrowed run stays narrow in the session too (M12f-A3-1)
+                            (let ((s (getenv "DRGNX_TEST_SELECTOR")))
+                              (and s (not (string-empty-p s)) (list (concat "DRGNX_TEST_SELECTOR=" s))))))))
         (if (not results)
             (progn (princ (format "scenarios (%s): no results (exit %s); log kept in %s\n" config rc run)) 1)
           (let ((reds (append (plist-get results :known_red) nil))

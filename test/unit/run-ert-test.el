@@ -516,6 +516,25 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
           (should (equal (funcall files "(tag :timing)") '("one-test.el" "two-test.el"))))
       (delete-directory tmp t))))
 
+(ert-deftest drgnx-run-ert/a-session-run-loads-only-the-selected-files ()
+  ;; M12f-A3-1: `drgnx-run-ert' (one Emacs: a session, --one-process) took no part in the prefilter, so a narrowed
+  ;; `test --ui' loaded and ran the whole tier.  A file no selected test is named in is never loaded.
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-one" t))) (results (expand-file-name "r.json" tmp)))
+    (unwind-protect
+        (progn
+          (with-temp-file (concat tmp "keep-test.el") (insert "(require 'ert)\n(ert-deftest keep/ok () (should t))\n"))
+          (with-temp-file (concat tmp "skip-test.el") (insert "(error \"an unselected file was loaded\")\n(ert-deftest skip/never () (should t))\n"))
+          (should (eql 0 (let ((process-environment (append (list "DRGNX_TEST_SELECTOR=\"^keep/\"") process-environment))
+                               (default-directory tmp))
+                           (call-process (expand-file-name invocation-name invocation-directory) nil nil nil
+                                         "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
+                                         "-l" (locate-library "run-ert.el")
+                                         "--eval" (format "(kill-emacs (if (drgnx-run-ert %S %S) 0 1))" tmp results)))))
+          (let ((r (drgnx-run-ert-test--json results)))
+            (should (equal (mapcar (lambda (te) (plist-get te :name)) (plist-get r :tests)) '("keep/ok")))
+            (should (eql (plist-get r :failed) 0))))
+      (delete-directory tmp t))))
+
 ;;;; The leak census
 
 (defconst drgnx-run-ert-test--leaky

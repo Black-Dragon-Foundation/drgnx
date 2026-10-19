@@ -20,7 +20,7 @@
   (should-not drgnx-ai-ghost-inhibit-functions)
   (should-not drgnx-modal-selection-function)
   (let* ((root (file-name-as-directory (make-temp-file "drgnx-modal-ai" t)))
-         (port (+ 20000 (random 20000))) (script (concat root "llm.eld"))
+         (port nil) (script (concat root "llm.eld"))
          (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" root "config")) process-environment))
          (drgnx-ai-detected '((o :up t))) (drgnx-ai-ghost--said-unavailable nil)
          (mock nil))
@@ -28,11 +28,12 @@
         (progn
           (make-directory (concat root "config") t)
           (with-temp-file script (prin1 '((:path "/api/generate" :body "{\"response\":\"(message name)\"}")) (current-buffer)))
+          (setq mock (drgnx-ai-test-mock-llm nil script)
+                port (process-get mock :port))
           (with-temp-file (concat root "config/ai.eld")
             (prin1 `(:version 1 :providers ((o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" port) :caps (chat fim)))
                               :roles ((complete (o . "coder"))))
                    (current-buffer)))
-          (setq mock (drgnx-ai-test-mock-llm port script))
           (with-temp-buffer
             (emacs-lisp-mode)
             (drgnx-ai-ghost-mode 1)

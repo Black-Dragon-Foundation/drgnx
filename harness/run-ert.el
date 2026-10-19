@@ -252,8 +252,14 @@ names the run would run, in that order, to FILE and runs none."
 summary to RESULTS-FILE.  Return t if every test passed."
   (advice-add 'ert-run-test :after (lambda (&rest _) (drgnx-run-ert-drain-events)) '((name . drgnx-run-ert-drain)))
   (let* ((census (and (drgnx-run-ert--leaks-on-p) (progn (drgnx-run-ert--census-start) t)))
+         ;; the RAW selector, for the file filter: `drgnx-run-ert--selector' needs the files loaded, and with a
+         ;; shuffle it is a `(member …)', not a string (which would load every file)
+         (selector (let ((s (getenv "DRGNX_TEST_SELECTOR"))) (and s (not (string-empty-p s)) (car (read-from-string s)))))
          (load-failures
-          (cl-loop for file in (drgnx-run-ert--files dir)
+          ;; only the files that can hold a selected test: a narrowed run of one Emacs (a session, --one-process)
+          ;; loads nothing else (M12f-A3-1, as `drgnx-run-ert-files' does)
+          (cl-loop for file in (cl-remove-if-not (lambda (f) (drgnx-run-ert--file-selected-p f selector))
+                                                 (drgnx-run-ert--files dir))
                    ;; a file that does not read or load costs its tests: the run fails and says which file
                    for err = (condition-case err (progn (load file nil t) nil) (error err) (quit err))
                    when err collect (progn (message "drgnx: test file %s did not load: %S" file err)

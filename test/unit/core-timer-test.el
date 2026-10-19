@@ -32,7 +32,7 @@
 (defun drgnx-timer-test--seams ()
   "Notes the layer's seams next to the fixture's clock."
   (push (list (float-time (drgnx-timer--idle-time)) (drgnx-timer--input-pending-p)
-              (- (drgnx-timer--now) (drgnx-test-clock-now)))
+              (- (drgnx-timer--now) (float-time)))
         drgnx-timer-test--calls))
 
 (defmacro drgnx-timer-test--with (&rest body)
@@ -288,7 +288,7 @@
      (should (equal (plist-get e :error) "Boom"))
      (should (= 3 (plist-get e :failures)))
      (should (plist-get e :stopped))
-     (should (< (abs (- (plist-get e :time) (drgnx-test-clock-now) -7)) 1e-3)))   ; virtual time of the third run
+     (should (< (abs (- (plist-get e :time) (float-time) -7)) 1e-3)))   ; virtual time of the third run
    (should (equal (mapcar (lambda (e) (list (plist-get e :failures) (plist-get e :stopped))) drgnx-timer-errors)
                   '((3 t) (2 nil) (1 nil))))))
 
@@ -409,12 +409,12 @@
   (drgnx-timer-test--with
    (dolist (seam '(drgnx-timer--now drgnx-timer--idle-time drgnx-timer--input-pending-p))
      (should (advice--p (symbol-function seam))))
-   (should (< (abs (- (drgnx-timer--now) (drgnx-test-clock-now))) 1e-6))
-   (should (< (abs (- (drgnx-timer-now) (drgnx-test-clock-now))) 1e-6))
+   (should (< (abs (- (drgnx-timer--now) (float-time))) 1e-6))   ; both absolute virtual time; clock-now counts from entry
+   (should (< (abs (- (drgnx-timer-now) (float-time))) 1e-6))
    (should-not (drgnx-timer--idle-time))
    (should-not (drgnx-timer--input-pending-p))
    (drgnx-test-advance 2)
-   (should (< (abs (- (drgnx-timer-now) (drgnx-test-clock-now))) 1e-6))
+   (should (< (abs (- (drgnx-timer-now) (float-time))) 1e-6))
    (drgnx-timer-start 'tm-k 0.5 #'drgnx-timer-test--seams :idle t)
    (drgnx-test-idle 1)
    (should (equal (length drgnx-timer-test--calls) 1))

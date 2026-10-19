@@ -311,10 +311,10 @@ less what reading the counters itself costs."
 (ert-deftest drgnx-timer-prim/a-clock-stepped-back-does-not-stretch-a-debounce ()
   (drgnx-timer-prim-test--with
    (drgnx-timer-debounce 'tp-k 0.5 #'drgnx-timer-prim-test--note :args '(a))
-   (cl-letf (((symbol-function 'drgnx-timer--now) (lambda () (- (drgnx-test-clock-now) 100))))
+   (cl-letf (((symbol-function 'drgnx-timer--now) (lambda () (- (float-time) 100))))
      (drgnx-test-advance 0.5)                 ; due; the stepped-back clock says 100 s are left, SECS caps the hop
      (should-not drgnx-timer-prim-test--calls)
-     (should (<= (float-time (time-subtract (timer--time (car timer-list)) drgnx-test--now)) 0.501)))
+     (should (<= (float-time (time-subtract (drgnx-test--due (car timer-list)) drgnx-test--now)) 0.501)))
    (drgnx-test-advance 0.5)                   ; the clock is right again: it runs
    (should (equal (drgnx-timer-prim-test--log) '((1000 a))))))
 
@@ -322,7 +322,7 @@ less what reading the counters itself costs."
   (drgnx-timer-prim-test--with
    (drgnx-timer-soon 'tp-k 0.1 #'drgnx-timer-prim-test--note :min-interval 0.4 :args '(a))
    (drgnx-test-advance 0.1)                   ; the last run is stamped 0.1
-   (cl-letf (((symbol-function 'drgnx-timer--now) (lambda () (- (drgnx-test-clock-now) 100))))
+   (cl-letf (((symbol-function 'drgnx-timer--now) (lambda () (- (float-time) 100))))
      (drgnx-timer-soon 'tp-k 0.1 #'drgnx-timer-prim-test--note :min-interval 0.4 :args '(b))   ; last is "in the future"
      (drgnx-test-advance 0.4))
    (should (equal (drgnx-timer-prim-test--log) '((100 a) (500 b))))))
