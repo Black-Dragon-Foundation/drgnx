@@ -49,6 +49,23 @@
                                (should (equal (list mod (plist-get (alist-get mod (drgnx-modules-report)) :status)) (list mod 'ok)))
                                (dolist (c cmds) (should (drgnx-commands-get c)))))))
 
+(ert-deftest drgnx-hunks/quiet-in-a-large-file-buffer ()
+  ;; the flag editor/large-files sets (by hand here): diff-hl's global mode skips the buffer; skips without diff-hl
+  (require 'drgnx-large-file)
+  (let ((load-path (append load-path (and (file-directory-p drgnx-extras-test--elpa)
+                                          (seq-filter #'file-directory-p (directory-files drgnx-extras-test--elpa t "\\`[^.]"))))))
+    (skip-unless (locate-library "diff-hl"))
+    (drgnx-test-with-modules '(extra/hunks) :strict t
+                             (let ((on 0))
+                               (with-temp-buffer
+                                 (cl-letf (((symbol-function 'turn-on-diff-hl-mode) (lambda () (setq on (1+ on)))))
+                                   (setq-local drgnx-large-file 'lean)
+                                   (diff-hl--global-turn-on)
+                                   (should (= on 0))
+                                   (setq-local drgnx-large-file nil)   ; the same buffer, not large: on
+                                   (diff-hl--global-turn-on)
+                                   (should (= on 1))))))))
+
 (ert-deftest drgnx-modules/later-stages-re-apply-the-keys ()
   ;; A module that runs at idle registers commands after the keys were applied.
   (let* ((drgnx-modules--table nil) (drgnx-modules--report nil) (seen nil)

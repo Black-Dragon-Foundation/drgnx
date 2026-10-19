@@ -138,6 +138,19 @@
         (drgnx-guides--maybe))
       (should on))))
 
+(ert-deftest drgnx-guides/quiet-in-a-large-file-buffer ()
+  ;; the flag editor/large-files sets (by hand here): no guides, even on a graphical frame
+  (require 'drgnx-large-file)
+  (load (expand-file-name "modules/extra/drgnx-guides" drgnx-dir) nil t)
+  (let ((on nil))
+    (with-temp-buffer
+      (emacs-lisp-mode)
+      (setq-local drgnx-large-file 'lean)
+      (cl-letf (((symbol-function 'indent-bars-mode) (lambda (&rest _) (setq on t)))
+                ((symbol-function 'display-graphic-p) (lambda (&rest _) t)))
+        (drgnx-guides--maybe))
+      (should-not on))))
+
 (ert-deftest drgnx-smooth/terminal-frames-get-nothing-and-ultra-scroll-wins ()
   (load (expand-file-name "modules/ui/drgnx-smooth" drgnx-dir) nil t)
   (let ((used nil))

@@ -99,4 +99,18 @@
       (drgnx-lang-test--kill-eglot-buffers before)
       (delete-directory dir t))))
 
+(ert-deftest drgnx-lang/quiet-in-a-large-file-buffer ()
+  ;; the flag editor/large-files sets (by hand here): no language server, and none is looked for
+  (require 'drgnx-large-file)
+  (with-temp-buffer
+    (setq buffer-file-name (expand-file-name "big.py" temporary-file-directory))
+    (setq-local drgnx-large-file 'lean)
+    (let ((process-environment (cons "DRGNX_NO_LANGUAGE_SERVERS" process-environment)) ; unset: servers may start
+          (looked 0))
+      (cl-letf (((symbol-function 'drgnx-lang-server-available-p) (lambda (&rest _) (setq looked (1+ looked)) t))
+                ((symbol-function 'eglot-ensure) (lambda () (ert-fail "eglot-ensure in a large file"))))
+        (drgnx-lang--maybe-eglot))
+      (should (= looked 0)))
+    (setq buffer-file-name nil)))
+
 ;;; lang-servers-test.el ends here

@@ -16,6 +16,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-timer)
+(require 'drgnx-large-file)
 
 (declare-function drgnx-diff-show "drgnx-diff")
 
@@ -198,8 +199,9 @@ has not answered).  The empty line after the last newline has none."
     (drgnx-blame--hide)))
 
 (defun drgnx-blame--maybe ()
-  "`find-file-hook': inline blame in a local file git tracks."
-  (when (and buffer-file-name (not (file-remote-p buffer-file-name)) (eq (vc-backend buffer-file-name) 'Git))
+  "`find-file-hook': inline blame in a local file git tracks (not a large file: git blames it all)."
+  (when (and buffer-file-name (not (drgnx-large-file-p)) (not (file-remote-p buffer-file-name))
+             (eq (vc-backend buffer-file-name) 'Git))
     (drgnx-blame-mode 1)))
 
 (defun drgnx-blame-show-commit ()
