@@ -129,7 +129,7 @@ in their agents' rows).")
          (append props (unless (plist-member props 'face) (list 'face nil)))))
 
 (defun drgnx-cockpit-feed--replace-line (n text)
-  "Make line N of the current buffer TEXT, faces and all.  Only what differs is replaced (`replace-buffer-contents'),
+  "Make line N of the current buffer TEXT, faces and all.  Only what differs is replaced (`replace-region-contents'),
 so point and every window's point and start stay where they were in the text that stays: no window is touched."
   (save-excursion
     (goto-char (point-min))
@@ -142,7 +142,9 @@ so point and every window's point and start stay where they were in the text tha
             (with-current-buffer buf
               (save-restriction
                 (narrow-to-region beg end)
-                (replace-buffer-contents src)
+                (static-if (>= emacs-major-version 31) ; 30's `replace-region-contents' takes a function, not a buffer
+                    (replace-region-contents (point-min) (point-max) src)
+                  (replace-buffer-contents src))
                 ;; the same characters may come with other properties (a question calmed)
                 (set-text-properties (point-min) (point-max) nil)
                 (pcase-dolist (`(,s ,e ,props) (object-intervals text))

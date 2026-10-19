@@ -3,6 +3,7 @@
 ;; The hub test compiles the hub's four files into a temp folder and loads them in a child `emacs --batch -Q',
 ;; waited for under a 30 s bound.
 (require 'ert)
+(require 'bytecomp)                                  ; `byte-compile-warnings' is let-bound below
 (require 'cl-lib)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/config-fixture" drgnx-dir) nil t)
@@ -622,9 +623,10 @@
             (should (eql (process-exit-status proc) 0))
             (let ((new (car (read-from-string (with-current-buffer buf (buffer-string))))))
               (dolist (f '(drgnx-paths drgnx-file drgnx-schema drgnx-config)) (should (memq f new)))
-              ;; cl-loaddefs is cl-lib's own autoloads, loaded by (require 'cl-lib)
-              (should-not (cl-set-difference new '(cl-lib cl-loaddefs subr-x drgnx-paths drgnx-file drgnx-schema
-                                                          drgnx-config))))))
+              ;; cl-loaddefs is cl-lib's own autoloads, loaded by (require 'cl-lib); from Emacs 31 subr-x requires
+              ;; mule-util
+              (should-not (cl-set-difference new '(cl-lib cl-loaddefs subr-x mule-util drgnx-paths drgnx-file
+                                                          drgnx-schema drgnx-config))))))
       (kill-buffer buf)
       (delete-directory dir t))))
 

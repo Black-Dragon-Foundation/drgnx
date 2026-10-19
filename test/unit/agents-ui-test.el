@@ -1,5 +1,6 @@
 ;;; agents-ui-test.el --- batch tests: transcripts, the Agents list, edit review -*- lexical-binding: t -*-
 (require 'ert)
+(require 'bytecomp)                                  ; `byte-compile-warnings' is let-bound below
 (require 'drgnx)
 (require 'drgnx-timer)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)

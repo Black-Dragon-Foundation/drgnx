@@ -276,6 +276,21 @@
     (message "cheap fingerprint: %.3f ms (median)" ms)
     (should (< ms 2))))
 
+(ert-deftest drgnx-fingerprint/the-full-scan-runs-compiled ()
+  ;; Interpreted the scan costs ~10× more.  In an Emacs that has not loaded bytecomp (Emacs 31's ERT no longer loads
+  ;; it), compiling the scan is its first load: a `byte-compile-warnings' bound before it would be lexical, and the
+  ;; load fails.  A fresh Emacs, so what this one loaded hides nothing.
+  (with-temp-buffer
+    (call-process (expand-file-name invocation-name invocation-directory) nil t nil
+                  "--batch" "-Q" "-L" (expand-file-name "core" drgnx-dir)
+                  "--eval" (prin1-to-string
+                            '(progn (require 'drgnx-modules-fingerprint)
+                                    (drgnx-modules-fingerprint t)
+                                    (princ (format "\nbytecomp=%s compiled=%s" (featurep 'bytecomp)
+                                                   (compiled-function-p
+                                                    (symbol-function 'drgnx-modules-fingerprint--scan)))))))
+    (should (string-search "bytecomp=t compiled=t" (buffer-string)))))
+
 (ert-deftest drgnx-fingerprint/full-costs-under-50-ms ()
   :tags '(:timing)
   (let ((ms (drgnx-fp-test--median-ms (lambda () (drgnx-modules-fingerprint t)) 11)))

@@ -1,5 +1,6 @@
 ;;; agents-test.el --- batch tests: agent sessions against the mock ACP agent -*- lexical-binding: t -*-
 (require 'ert)
+(require 'bytecomp)                                  ; `byte-compile-warnings' is let-bound below
 (require 'drgnx-agents)
 (require 'drgnx-paths)
 (require 'drgnx-timer)
