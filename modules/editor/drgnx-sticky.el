@@ -17,6 +17,7 @@
 (require 'drgnx-memo)
 
 (defvar drgnx-chrome-header-tail)
+(declare-function drgnx-chrome-apply "drgnx-chrome")
 (declare-function treesit-parser-list "treesit.c")
 (declare-function treesit-node-at "treesit")
 (declare-function treesit-node-parent "treesit.c")
@@ -36,7 +37,7 @@
 
 (defvar drgnx-sticky-scan-chars 300000 "How far back (characters) the indentation fallback looks for a scope.")
 
-(defface drgnx-sticky '((t :inherit header-line)) "Sticky scroll's scopes in the header line." :group 'drgnx)
+(defface drgnx-sticky '((t :inherit drgnx-wb-bar)) "Sticky scroll's scopes in the header line." :group 'drgnx)
 
 (defun drgnx-sticky--line-indent ()
   "The current line's indentation, or nil when it is blank."

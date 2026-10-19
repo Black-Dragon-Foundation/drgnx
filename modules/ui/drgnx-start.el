@@ -90,8 +90,22 @@ On a terminal a chord it cannot send is shown the way it can (`drgnx-tty-sendabl
           key)))))
 
 (defun drgnx-start--glyph ()
-  "The search glyph for the selected frame (`drgnx-face-glyph'), an ASCII slash when it is not known."
-  (or (and (fboundp 'drgnx-face-glyph) (drgnx-face-glyph 'search)) "/"))
+  "The bullet glyph for the selected frame (`drgnx-face-glyph'), an ASCII `>' when it is not known."
+  (or (and (fboundp 'drgnx-face-glyph) (drgnx-face-glyph 'bullet)) ">"))
+
+(defconst drgnx-start--width 76
+  "Columns of the widest line of the page: the block is centred as this wide (a wider window shows it centred).")
+
+(defconst drgnx-start--centre
+  `(space :align-to (- (0.5 . text) ,(/ drgnx-start--width 2.0)))
+  "A line's prefix: spaces up to the column that centres the block, whatever the window's width (a window narrower
+than the block starts it at the left edge).")
+
+(defun drgnx-start--top-padding ()
+  "Blank lines above the name: the page sits in the upper third of the editor window that shows it."
+  (let* ((w (drgnx-start--window (selected-frame)))
+         (rows (if (window-live-p w) (window-body-height w) 24)))
+    (max 1 (/ (- rows 17) 3))))
 
 (defun drgnx-start--press (button)
   "Run what BUTTON stands for: a registry command (as if from the palette), or dismiss the page."
@@ -105,7 +119,6 @@ On a terminal a chord it cannot send is shown the way it can (`drgnx-tty-sendabl
 
 (defun drgnx-start--insert-button (id label help)
   "Insert the button LABEL for ID (a registry command ID or `dismiss'), resting on HELP, on a line of its own."
-  (insert "  ")
   (insert-text-button label :type 'drgnx-start-button 'drgnx-start-id id 'help-echo help)
   (insert "\n"))
 
@@ -114,18 +127,20 @@ On a terminal a chord it cannot send is shown the way it can (`drgnx-tty-sendabl
 The keys are read from the registry now, so a changed profile shows when the page shows again."
   (let ((inhibit-read-only t) (search (drgnx-start--glyph)))
     (erase-buffer)
-    (insert "\n  " (propertize "drgnx" 'face 'drgnx-start-title) "\n\n")
-    (insert "  " (propertize "A workbench for Emacs: your files, your agents and your work, side by side." 'face 'drgnx-start-quiet) "\n")
-    (insert "  " (propertize "Everything it does is a command, and the keys below find all of them." 'face 'drgnx-start-quiet) "\n\n")
+    (insert (make-string (drgnx-start--top-padding) ?\n) (propertize "drgnx" 'face 'drgnx-start-title) "\n\n")
+    (insert (propertize "A workbench for Emacs: your files, your agents and your work, side by side." 'face 'drgnx-start-quiet) "\n")
+    (insert (propertize "Everything it does is a command, and the keys below find all of them." 'face 'drgnx-start-quiet) "\n\n")
     (pcase-dolist (`(,id ,what) drgnx-start--keys)
       (when-let* ((key (drgnx-start--key id)))
-        (insert "  " (propertize search 'face 'drgnx-start-quiet) " "
+        (insert (propertize search 'face 'drgnx-start-quiet) " "
                 (propertize (format "%-10s" key) 'face 'drgnx-start-key)
                 (propertize what 'face 'drgnx-start-quiet) "\n")))
     (insert "\n")
     (pcase-dolist (`(,id ,label ,help) drgnx-start--buttons)
       (when (or (eq id 'dismiss) (drgnx-commands-get id))
         (drgnx-start--insert-button id label help)))
+    (add-text-properties (point-min) (point-max)
+                         (list 'line-prefix drgnx-start--centre 'wrap-prefix drgnx-start--centre))
     (goto-char (point-min))
     (when-let* ((b (next-button (point)))) (goto-char (button-start b)))
     (set-buffer-modified-p nil)))

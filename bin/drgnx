@@ -5,12 +5,15 @@ here="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 
 emacs_bin() { # the one Emacs every subcommand runs in: $DRGNX_EMACS, else the one install.sh recorded (an absolute path), else PATH's
   if [[ -n "${DRGNX_EMACS:-}" ]]; then printf '%s\n' "$DRGNX_EMACS"; return; fi
-  local file="${DRGNX_CONFIG_DIR:-$HOME/.config/drgnx}/emacs" line=""
-  if [[ -f "$file" ]]; then   # first line only, as a path: never evaluated
+  local file line
+  # the record is machine-local, so it lives in the data dir; the config dir's is where older installs wrote it
+  for file in "${DRGNX_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/drgnx}/emacs" "${DRGNX_CONFIG_DIR:-$HOME/.config/drgnx}/emacs"; do
+    [[ -f "$file" ]] || continue   # first line only, as a path: never evaluated
+    line=""
     IFS= read -r line <"$file" || true
     line="${line#"${line%%[![:space:]]*}"}"; line="${line%"${line##*[![:space:]]}"}"
     if [[ "$line" == /* && -f "$line" && -x "$line" ]]; then printf '%s\n' "$line"; return; fi
-  fi
+  done
   echo emacs
 }
 
@@ -120,7 +123,7 @@ test_batch_emacs() { # [FUNCTION ARGS…] — SIGPIPE ignored, as the hub runs (
   # The unit tier never reaches the user's desktop: dbus.el connects to the bus in the C environment (a dead
   # address, so nothing answers), no display or compositor socket, a runtime directory of its own.
   # (The runner binds the same inside Emacs, for Lisp code and the children it starts.)
-  local run="${TMPDIR:-/tmp}/run"; mkdir -p -m 700 "$run"
+  local run="${TMPDIR:-/tmp}/run"; mkdir -p "$run" && chmod 700 "$run"
   # DRGNX_TEST_DIR: a smaller suite (the test of the temp-dir cleanup runs one)
   exec env -u DISPLAY -u WAYLAND_DISPLAY -u SWAYSOCK -u I3SOCK -u HYPRLAND_INSTANCE_SIGNATURE -u NIRI_SOCKET \
        DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/drgnx-unit-test XDG_RUNTIME_DIR="$run" \
@@ -229,6 +232,47 @@ INSTALL_IMAGES=( # name=image; source builds first (slow), then distribution pac
   archlinux=docker.io/library/archlinux:latest
 )
 
+test_snapshot() { # DIR — a snapshot of the working tree (edits during a run cannot reach it), committed and bundled so the
+  # containers clone and update drgnx the way users do: DRGNX_INSTALL_REPO=/src/drgnx.bundle
+  local snap="$1"
+  rm -rf "$snap" && mkdir -p "$snap"
+  (cd "$here" && git ls-files -z -co --exclude-standard | tar --null -T - -cf -) | tar -C "$snap" -xf -
+  git -C "$snap" init -q -b main
+  git -C "$snap" add -A
+  git -C "$snap" -c user.name=drgnx-test -c user.email=test@drgnx.invalid commit -q -m snapshot
+  git -C "$snap" bundle create -q "$snap/drgnx.bundle" main
+}
+
+test_time_limit() { # SECONDS — sets limit (the caller's array): timeout (GNU coreutils), gtimeout (Homebrew's coreutils on macOS), else none
+  # -k 30: a container client that ignores the TERM is killed 30 s later (test_run then removes its container)
+  if command -v timeout >/dev/null 2>&1; then limit=(timeout -k 30 "$1")
+  elif command -v gtimeout >/dev/null 2>&1; then limit=(gtimeout -k 30 "$1")
+  else echo "drgnx: neither timeout nor gtimeout found (macOS: brew install coreutils): running without a time limit" >&2; fi
+}
+
+test_names=() test_rt=""
+test_remove_containers() { # [NAME…] — remove these containers (default: every one this run started), running or not
+  local name
+  (($#)) || set -- ${test_names[@]+"${test_names[@]}"}
+  for name in "$@"; do
+    if [ "$test_rt" = podman ]; then "$test_rt" rm -f -t 0 "$name" >/dev/null 2>&1 || true
+    else "$test_rt" rm -f "$name" >/dev/null 2>&1 || true; fi
+  done
+}
+
+test_run() { # NAME RUN-ARG… — "$rt" run --rm --name NAME RUN-ARG… within the caller's limit, then the container removed.
+  # The container's bash (PID 1) ignores the TERM a time-out or Ctrl-C makes podman forward, so it is removed by name:
+  # after the run, and on any exit of this script.  The run waits in the background: bash runs a trap only after a
+  # foreground child ends, and timeout leaves the terminal's process group, so Ctrl-C would otherwise wait for the hour.
+  local name="$1" rc=0; shift
+  test_rt="$rt"; test_names+=("$name")
+  trap test_remove_containers EXIT; trap 'exit 130' INT; trap 'exit 143' TERM
+  ${limit[@]+"${limit[@]}"} "$rt" run --rm --name "$name" "$@" &
+  wait "$!" || rc=$?
+  test_remove_containers "$name"
+  return "$rc"
+}
+
 test_install() { # [NAME…] — install.sh end to end in fresh containers (slow: source builds take ~10 min each)
   local rt names=("$@") entry name image log logs failed=() known=()
   for entry in "${INSTALL_IMAGES[@]}"; do known+=("${entry%%=*}"); done
@@ -239,25 +283,16 @@ test_install() { # [NAME…] — install.sh end to end in fresh containers (slow
   rt="${DRGNX_CONTAINER:-$(env_eval '(drgnx-env-container-runtime)')}"   # set: no host Emacs needed (CI)
   [ -n "$rt" ] || { echo "drgnx: no container runtime found (podman, docker, nerdctl); set DRGNX_CONTAINER" >&2; return 1; }
   logs="$(xdg_dir XDG_STATE_HOME "$HOME/.local/state")/drgnx/install-tests"
-  # A snapshot of the working tree (edits during a run cannot reach it), committed and bundled so the
-  # containers clone and update drgnx the way users do: DRGNX_INSTALL_REPO=/src/drgnx.bundle.
   local snap="$logs/src"
-  rm -rf "$snap" && mkdir -p "$snap"
-  (cd "$here" && git ls-files -z -co --exclude-standard | tar --null -T - -cf -) | tar -C "$snap" -xf -
-  git -C "$snap" init -q -b main
-  git -C "$snap" add -A
-  git -C "$snap" -c user.name=drgnx-test -c user.email=test@drgnx.invalid commit -q -m snapshot
-  git -C "$snap" bundle create -q "$snap/drgnx.bundle" main
+  test_snapshot "$snap"
   local limit=()   # an hour per image: timeout (GNU coreutils), gtimeout (Homebrew's coreutils on macOS), else none
-  if command -v timeout >/dev/null 2>&1; then limit=(timeout 3600)
-  elif command -v gtimeout >/dev/null 2>&1; then limit=(gtimeout 3600)
-  else echo "drgnx: neither timeout nor gtimeout found (macOS: brew install coreutils): running without a time limit" >&2; fi
+  test_time_limit 3600
   for name in "${names[@]}"; do
     for entry in "${INSTALL_IMAGES[@]}"; do [[ "${entry%%=*}" == "$name" ]] && image="${entry#*=}"; done
     log="$logs/$name.log"
     printf '%-14s %s … ' "$name" "$image" >&2
     # --memory: a test must never push the host into the OOM killer (install.sh sizes make -j from the limit)
-    if ${limit[@]+"${limit[@]}"} "$rt" run --rm --memory 6g -v "$snap:/src:ro$([ "$rt" = podman ] && echo ,Z)" "$image" \
+    if test_run "drgnx-install-$$-$name" --memory 6g -v "$snap:/src:ro$([ "$rt" = podman ] && echo ,Z)" "$image" \
          bash /src/test/install/in-container.sh >"$log" 2>&1; then
       echo "ok" >&2
     else
@@ -272,6 +307,59 @@ ui_compositor_ok() { # C — is C a compositor a GUI session can run under (harn
     mutter|sway|x11|i3|kwin|niri) return 0 ;;
     *) echo "drgnx: --compositor takes mutter, sway, x11, i3, kwin or niri, not '$1'" >&2; return 1 ;;
   esac
+}
+
+test_bootstrap() { # [--fedora 44|45] — the exit test of a second machine: one command on a fresh Fedora reaches a green doctor
+  # Container 1 makes the encrypted key bundle (age) and commits it into a bare copy of the fixture configuration;
+  # container 2, a fresh Fedora with only what a desktop has, runs install.sh --yes --config … --identity … and checks
+  # the outcome (test/bootstrap/in-container.sh; docs/develop/harness.md).  Fedora 44 builds Emacs from source (slow).
+  local rt fedora=45 logs snap fixture log image rcc=0 mount tmproot home
+  while (($#)); do
+    case "$1" in
+      --fedora) fedora="${2:-}"; shift; shift || true ;;
+      *) echo "usage: drgnx test --bootstrap [--fedora 44|45]" >&2; return 2 ;;
+    esac
+  done
+  [[ "$fedora" == 44 || "$fedora" == 45 ]] || { echo "drgnx: --fedora is 44 or 45, not '$fedora'" >&2; return 2; }
+  rt="${DRGNX_CONTAINER:-$(env_eval '(drgnx-env-container-runtime)')}"   # set: no host Emacs needed (CI)
+  [ -n "$rt" ] || { echo "drgnx: no container runtime found (podman, docker, nerdctl); set DRGNX_CONTAINER" >&2; return 1; }
+  # a test never touches the user's home: the snapshot, the configuration, the keys' scratch and the logs live in a fresh
+  # temporary directory (kept when the run fails, so the log can be read; the run says where)
+  tmproot="$(cd -P "${TMPDIR:-/tmp}" 2>/dev/null && pwd -P)" || { echo "drgnx: TMPDIR '${TMPDIR:-/tmp}' is not a directory" >&2; return 1; }
+  home="$(cd -P "${HOME:-/nonexistent}" 2>/dev/null && pwd -P)" || home=
+  if [ -n "$home" ] && [[ "$tmproot/" == "$home"/* ]]; then
+    echo "drgnx: test --bootstrap refuses to run under \$HOME ($tmproot): set TMPDIR to a directory outside your home" >&2; return 1
+  fi
+  logs="$(mktemp -d "$tmproot/drgnx-bootstrap.XXXXXX")" || return 1
+  snap="$logs/src" fixture="$logs/config" log="$logs/f$fedora.log"
+  image="registry.fedoraproject.org/fedora:$fedora"
+  mount="$snap:/src"; [ "$rt" = podman ] && mount="$mount:Z"
+  test_snapshot "$snap"
+  chmod -R a+rX "$snap"   # container 2 reads it as another user (a file written by an atomic rename, like the lock, is mode 600)
+  # the configuration being carried over: the fixture with the current lock, a git repository, cloned --bare beside the
+  # snapshot (a git host's copy: the second machine clones it, container 1 adds the encrypted keys to it)
+  mkdir -p "$fixture"
+  cp -R "$here/test/fixtures/bootstrap/config/." "$fixture/"
+  cp "$here/etc/drgnx.lock.eld" "$fixture/drgnx.lock.eld"
+  git -C "$fixture" init -q -b main
+  git -C "$fixture" add -A
+  git -C "$fixture" -c user.name=drgnx-test -c user.email=test@drgnx.invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -q -m config
+  git clone -q --bare "$fixture" "$snap/config.git"
+  local limit=()
+  test_time_limit 3600
+  # --memory: a test must never push the host into the OOM killer (install.sh sizes make -j from the limit); no swap beyond it
+  printf 'bootstrap  fedora %s: the keys (container 1) … ' "$fedora" >&2
+  if ! test_run "drgnx-bootstrap-$$-keys" --memory 3g --memory-swap 3g -v "$mount" "$image" \
+         bash /src/test/bootstrap/make-secrets.sh >"$log" 2>&1; then
+    echo "FAILED (log: $log)" >&2; tail -n 25 "$log" >&2; return 1
+  fi
+  echo "ok" >&2
+  printf 'bootstrap  fedora %s: a second machine (container 2) … ' "$fedora" >&2
+  mount="${mount%:Z}:ro"; [ "$rt" = podman ] && mount="$mount,Z"
+  test_run "drgnx-bootstrap-$$-machine" --memory 6g --memory-swap 6g -v "$mount" "$image" \
+    bash /src/test/bootstrap/in-container.sh >>"$log" 2>&1 || rcc=$?
+  if ((rcc == 0)); then echo "ok" >&2; rm -rf "$logs"
+  else echo "FAILED (exit $rcc; log: $log)" >&2; tail -n 25 "$log" >&2; return 1; fi
 }
 
 cmd_test() {
@@ -307,13 +395,14 @@ cmd_test() {
     --tty) test_tty ;;
     --ui) if [ "${2:-}" = --compositor ]; then ui_compositor_ok "${3:-}" || exit 2; export DRGNX_UI_COMPOSITOR="$3"; fi
           run_in_tmp ui_exec test-ui ;;
+    --bootstrap) shift; test_bootstrap "$@" ;;
     --scenario) shift; run_in_tmp ui_exec test-scenario "$@" ;;
     --bench) run_in_tmp ui_exec test-bench ;;
     --perf) shift; [ "${1:-}" = --audit ] && export DRGNX_PERF_AUDIT=1; run_in_tmp ui_exec test-perf ;;
     --soak) shift; run_in_tmp ui_exec test-soak "${1:-30}" ;;
     --container) shift; test_container "$@" ;;
     --podman) shift; DRGNX_CONTAINER=podman test_container "$@" ;;
-    *) echo "usage: drgnx test [--one-process] [--leaks] [--shuffle[=SEED]] | drgnx test [--shuffle=SEED] --find-polluter TEST [FILE…] | drgnx test [--ui [--compositor C] | --tty | --scenario [--config C] | --bench | --perf [--audit] | --soak [MIN] | --container [--ui [--compositor C] | --tty [--fedora 44|45]] | --install [NAME…]]" >&2; exit 2 ;;
+    *) echo "usage: drgnx test [--one-process] [--leaks] [--shuffle[=SEED]] | drgnx test [--shuffle=SEED] --find-polluter TEST [FILE…] | drgnx test [--ui [--compositor C] | --tty | --scenario [--config C] | --bench | --perf [--audit] | --soak [MIN] | --container [--ui [--compositor C] | --tty [--fedora 44|45]] | --install [NAME…] | --bootstrap [--fedora 44|45]]" >&2; exit 2 ;;
   esac
 }
 
@@ -355,8 +444,10 @@ open_lock() { # one `drgnx open' at a time decides whether to start the daemon a
   deadline=$((SECONDS + stale + 10))
   token="$$.$RANDOM$RANDOM"
   while ((SECONDS < deadline)); do
-    if mkdir "$lock" 2>/dev/null; then
-      printf '%s\n' "$token" >"$lock/owner"; date +%s >"$lock/since"
+    # the owner file is the lock: made with O_EXCL (noclobber), as uutils' mkdir (Ubuntu 26.04's) lets two
+    # commands that race both "make" the directory
+    if mkdir "$lock" 2>/dev/null && (set -C; printf '%s\n' "$token" >"$lock/owner") 2>/dev/null; then
+      date +%s >"$lock/since"
       OPEN_LOCK="$lock" OPEN_TOKEN="$token"; return 0
     fi
     since="$(cat "$lock/since" 2>/dev/null || true)" owner="$(cat "$lock/owner" 2>/dev/null || true)"
@@ -511,7 +602,40 @@ open_terminal() { # FORM — a terminal frame of the daemon here; in the termina
   exec "${ec[@]}" ${eform[@]+"${eform[@]}"}
 }
 
+open_here() { # [--wait] [-t | --gui] [--] [PATH…] — in drgnx's own terminal: open in the drgnx hosting it, in its selected frame
+  local wait="" p dir files=() dirs=()
+  while true; do   # -t / --gui name a frame kind: here it is the hosting drgnx's frame either way
+    case "${1:-}" in
+      --wait) wait=1; shift ;;
+      -t|--gui) shift ;;
+      *) break ;;
+    esac
+  done
+  [[ "${1:-}" == -- ]] && shift
+  for p in "$@"; do   # as cmd_open: absolute, from here; a folder is the Explorer's, a file an editor's
+    if [[ -d "$p" ]]; then
+      dirs+=("$(CDPATH='' cd -- "$p" && pwd)")
+    else
+      dir="$(dirname -- "$p")"
+      if [[ -d "$dir" ]]; then dir="$(CDPATH='' cd -- "$dir" && pwd)"; elif [[ "$dir" != /* ]]; then dir="$PWD/$dir"; fi
+      files+=("${dir%/}/$(basename -- "$p")")
+    fi
+  done
+  if [[ -n "$wait" ]]; then
+    if ((${#dirs[@]})) || ! ((${#files[@]})); then
+      echo "drgnx: open --wait opens files, not folders: it returns when you are done with them (C-x #)" >&2; return 2
+    fi
+    client -- "${files[@]}" >/dev/null; return   # until C-x #
+  fi
+  if ((${#files[@]})); then client -n -- "${files[@]}" >/dev/null || return 1; fi
+  for p in ${dirs[@]+"${dirs[@]}"}; do
+    client -n -e "(drgnx-session-open-folder \"$(elisp_string "$p")\")" >/dev/null || return 1
+  done
+}
+
 cmd_open() { # [--check] [--wait] [-t | --gui] [PATH…] — open PATHs (none: the windows as you left them) in drgnx, like code .
+  # In drgnx's terminal (eat; DRGNX_SERVER_NAME is its Emacs's socket): that drgnx, never a new window or frame
+  if [[ "${INSIDE_EMACS:-}" == *eat* && -n "${DRGNX_SERVER_NAME:-}" && "${1:-}" != --check ]]; then open_here "$@"; return; fi
   if [[ "${1:-}" == --check ]]; then open_check; return; fi
   local wait="" term="" gui=""
   while true; do   # -t: a frame in this terminal; --gui: a window, whatever the terminal; --wait: until C-x #
@@ -563,6 +687,434 @@ cmd_open() { # [--check] [--wait] [-t | --gui] [PATH…] — open PATHs (none: t
   done
 }
 
+# ---- drgnx update: the install updates itself from GitHub main (docs/guide/install.md#staying-up-to-date) ----
+# Plain bash on purpose: it must work when the Emacs side is what an update broke.  Test hooks: DRGNX_UPDATE_SYNC_CMD and
+# DRGNX_UPDATE_BUILD_CMD (run with bash -c in the checkout instead of `drgnx sync' / `drgnx build'), DRGNX_UPDATE_PLATFORM
+# (Linux | Darwin, instead of uname -s).
+UPD_UNIT=drgnx-update
+UPD_LABEL=org.blackdragonfoundation.drgnx-update
+
+update_state_dir() { printf '%s/drgnx/update' "$(xdg_dir XDG_STATE_HOME "$HOME/.local/state")"; }
+update_platform() { printf '%s' "${DRGNX_UPDATE_PLATFORM:-$(uname -s)}"; }
+update_say() { if [[ "${UPD_QUIET:-0}" != 1 ]]; then printf '%s\n' "$*"; fi; }
+update_err() { printf 'drgnx update: %s\n' "$*" >&2; }
+ugit() { git -C "$here" "$@"; }
+
+update_write_atomic() { # FILE TEXT — a temp file in the same directory, then rename: a reader never sees half a line
+  local t; t="$(mktemp "$1.XXXXXX")"
+  printf '%s\n' "$2" >"$t"
+  mv -f "$t" "$1"
+}
+
+update_record_run() { # TEXT — the line `drgnx update --auto status' shows as the last run
+  local mode=manual
+  if [[ "${UPD_QUIET:-0}" == 1 ]]; then mode=auto; fi
+  mkdir -p "$(update_state_dir)"
+  update_write_atomic "$(update_state_dir)/last-run" "$(date '+%Y-%m-%d %H:%M:%S%z') $mode: $1"
+}
+
+update_lock() { # one update at a time (the timer and a person): a mkdir lock holding the owner's pid
+  local lock owner=""
+  lock="$(update_state_dir)/lock"
+  mkdir -p "$(update_state_dir)"
+  if ! mkdir "$lock" 2>/dev/null; then
+    owner="$(cat "$lock/pid" 2>/dev/null || true)"
+    if [[ -n "$owner" ]] && kill -0 "$owner" 2>/dev/null; then update_err "another update is running (pid $owner)"; return 1; fi
+    rm -rf "${lock:?}"; mkdir "$lock" 2>/dev/null || { update_err "cannot take the update lock ($lock)"; return 1; }
+  fi
+  printf '%s\n' "$$" >"$lock/pid"
+  UPD_LOCK="$lock"
+  trap update_on_exit EXIT
+  trap 'UPD_SIGNALED=1; exit 130' INT       # Ctrl-C, the timer's timeout, logout: leave through the EXIT handler, which rolls back
+  trap 'UPD_SIGNALED=1; exit 143' TERM
+  trap 'UPD_SIGNALED=1; exit 129' HUP
+  : >"$(update_state_dir)/last.log"         # this run's sync/build output only
+}
+
+update_on_exit() { # whatever ends the script: an update that did not finish is rolled back, then the lock is released
+  local rc=$?
+  trap - EXIT INT TERM HUP
+  if [[ -n "${UPD_ROLLBACK_TO:-}" ]]; then
+    update_err "interrupted before the update finished"
+    update_rollback "$UPD_ROLLBACK_TO" || true
+    update_err "$UPD_BACK_NOTE"
+  fi
+  if [[ -n "${UPD_SIGNALED:-}" ]]; then update_record_run "interrupted${UPD_BACK_NOTE:+: $UPD_BACK_NOTE}"; fi
+  if [[ -n "${UPD_LOCK:-}" ]]; then rm -rf "${UPD_LOCK:?}"; fi
+  exit "$rc"
+}
+
+update_is_checkout() { # is $here the top of a git checkout?
+  local top
+  top="$(ugit rev-parse --show-toplevel 2>/dev/null)" || return 1
+  [[ "$(cd "$top" && pwd -P)" == "$(cd "$here" && pwd -P)" ]]
+}
+
+update_check_checkout() { # refuse (return 1, message on stderr, UPD_WHY set) unless an update may touch the checkout
+  local branch
+  if ! update_is_checkout; then
+    UPD_WHY="not a git checkout"
+    update_err "$here is not a git checkout, so it cannot update itself. Reinstall with install.sh (docs/guide/install.md). Nothing changed."
+    return 1
+  fi
+  branch="$(ugit symbolic-ref --short -q HEAD 2>/dev/null || true)"
+  if [[ "$branch" != main ]]; then
+    UPD_WHY="not on main"
+    update_err "the checkout is on '${branch:-a detached HEAD}', not main. Fix: git -C $here switch main. Nothing changed."
+    return 1
+  fi
+  if [[ -n "$(ugit status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
+    UPD_WHY="local changes"
+    update_err "the checkout has local changes (git -C $here status). Commit, stash or discard them first. Nothing changed."
+    return 1
+  fi
+}
+
+update_fetch() { # origin's main, bounded in time and never asking anything (no terminal, no credential helper, no ssh prompt)
+  local t=() e=(GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=true SSH_ASKPASS=true)
+  if command -v timeout >/dev/null 2>&1; then t=(timeout 120); elif command -v gtimeout >/dev/null 2>&1; then t=(gtimeout 120); fi
+  # ssh: never ask, give up connecting; but the user's own GIT_SSH_COMMAND or core.sshCommand wins
+  if [[ -z "${GIT_SSH_COMMAND:-}" && -z "$(ugit config --get core.sshCommand 2>/dev/null || true)" ]]; then
+    e+=("GIT_SSH_COMMAND=ssh -o BatchMode=yes -o ConnectTimeout=30")
+  fi
+  env "${e[@]}" ${t[@]+"${t[@]}"} git -C "$here" -c credential.helper= -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 \
+    fetch --quiet origin main </dev/null
+}
+
+update_step() { # NAME HOOK [ARG…] — `drgnx NAME ARG…' (or the test hook HOOK, given ARG…) in the checkout; its output is
+  # always kept in last.log (quiet: only there)
+  local name="$1" hook="$2" log; shift 2
+  log="$(update_state_dir)/last.log"
+  update_say "drgnx update: ${name}…"   # braces: macOS's bash would read the first byte of … as part of the name
+  if [[ "${UPD_QUIET:-0}" == 1 ]]; then
+    if [[ -n "$hook" ]]; then (cd "$here" && bash -c "$hook" _ "$@") >>"$log" 2>&1; else (cd "$here" && "$here/bin/drgnx" "$name" "$@") >>"$log" 2>&1; fi
+  elif [[ -n "$hook" ]]; then (cd "$here" && bash -c "$hook" _ "$@") 2>&1 | tee -a "$log"
+  else (cd "$here" && "$here/bin/drgnx" "$name" "$@") 2>&1 | tee -a "$log"
+  fi
+}
+
+update_apply() { # sync + build for the checkout as it is now; 0 when both worked, else 1 with UPD_WHY naming the step
+  update_step sync "${DRGNX_UPDATE_SYNC_CMD:-}" || { UPD_WHY="sync failed"; return 1; }
+  update_step build "${DRGNX_UPDATE_BUILD_CMD:-}" || { UPD_WHY="build failed"; return 1; }
+}
+
+update_rollback() { # OLD — put the checkout, its packages and its build back at OLD; UPD_BACK_NOTE says how far that got
+  local old="$1" log; log="$(update_state_dir)/last.log"
+  UPD_ROLLBACK_TO=""
+  if ! ugit reset --hard --quiet "$old" >>"$log" 2>&1; then
+    UPD_BACK_NOTE="git reset failed: the checkout is still on the new commit; fix: git -C $here reset --hard ${old:0:7}, then drgnx sync and drgnx build"
+    return 1
+  fi
+  UPD_BACK_NOTE="moved the checkout back to ${old:0:7}"
+  # the old lock's packages: from the cache first (its versions are there), else from the archives
+  if update_step sync "${DRGNX_UPDATE_SYNC_CMD:-}" --offline >/dev/null 2>&1 || update_step sync "${DRGNX_UPDATE_SYNC_CMD:-}" >/dev/null 2>&1; then
+    UPD_BACK_NOTE+=" and re-synced its packages"
+  else
+    UPD_BACK_NOTE+="; its packages could not be re-synced, so they may be newer than this commit (run drgnx sync, or drgnx rollback)"
+  fi
+  if update_step build "${DRGNX_UPDATE_BUILD_CMD:-}" >/dev/null 2>&1; then UPD_BACK_NOTE+=" and rebuilt it"
+  else UPD_BACK_NOTE+="; its build failed (run drgnx build)"; fi
+  UPD_BACK_NOTE+=". Log: $log"
+}
+
+update_fail() { # MESSAGE — the one line a failure gets (quiet or not), and the run record
+  update_err "$1"
+  update_record_run "failed: $1"
+}
+
+update_restart_note() { update_say "Restart drgnx to use it (a running drgnx keeps the old version until then)."; }
+
+update_summary() { # OLD NEW — what changed, one line per commit, capped
+  local old="$1" new="$2" n cap=15 s=s
+  n="$(ugit rev-list --count "$old..$new" 2>/dev/null || echo 0)"
+  if [[ "$n" == 1 ]]; then s=""; fi
+  if [[ "${UPD_QUIET:-0}" == 1 ]]; then
+    printf 'drgnx updated %s..%s (%s commit%s); restart drgnx to use it\n' "${old:0:7}" "${new:0:7}" "$n" "$s"
+    return
+  fi
+  printf 'drgnx updated %s..%s (%s commit%s):\n' "${old:0:7}" "${new:0:7}" "$n" "$s"
+  ugit log --oneline --no-decorate -n "$cap" "$old..$new" | sed 's/^/  /'
+  if ((n > cap)); then printf '  … and %s more\n' "$((n - cap))"; fi
+}
+
+update_run() { # the update itself (UPD_QUIET: the timer's way)
+  local state old new held
+  state="$(update_state_dir)"
+  update_check_checkout || { update_record_run "refused: $UPD_WHY"; return 1; }
+  old="$(ugit rev-parse HEAD)"
+  if ! update_fetch; then update_fail "could not fetch origin main (network? check: git -C $here remote -v)"; return 1; fi
+  new="$(ugit rev-parse 'FETCH_HEAD^{commit}')"
+  if [[ "$new" == "$old" ]] || ugit merge-base --is-ancestor "$new" "$old" 2>/dev/null; then
+    update_say "drgnx is already up to date (${old:0:7})."
+    update_record_run "already current (${old:0:7})"
+    return 0
+  fi
+  held="$(cat "$state/held" 2>/dev/null || true)"
+  if [[ "${UPD_QUIET:-0}" == 1 && "$held" == "$new" ]]; then   # --back or a failed update set this commit aside: the timer waits for a newer one
+    update_record_run "skipped ${new:0:7} (set aside by update --back or a failed update; drgnx update takes it)"
+    return 0
+  fi
+  if ! ugit merge-base --is-ancestor "$old" "$new"; then
+    update_err "this checkout has diverged from origin main (local commits not on main). Nothing changed. Fix: git -C $here rebase origin/main, or discard them with git -C $here reset --hard origin/main."
+    update_record_run "refused: diverged"
+    return 1
+  fi
+  if ! ugit merge --ff-only --quiet "$new" </dev/null; then update_fail "could not fast-forward to ${new:0:7}; nothing else changed"; return 1; fi
+  UPD_ROLLBACK_TO="$old"    # from here until sync and build are done, any way out of the script puts the old commit back
+  if ! update_apply; then
+    update_rollback "$old" || true
+    update_write_atomic "$state/held" "$new"
+    update_fail "$UPD_WHY for ${new:0:7}; $UPD_BACK_NOTE"
+    return 1
+  fi
+  UPD_ROLLBACK_TO=""
+  update_write_atomic "$state/previous" "$old"
+  rm -f "${state:?}/held"
+  update_summary "$old" "$new"
+  update_restart_note
+  update_record_run "updated ${old:0:7}..${new:0:7}"
+}
+
+update_back() { # return to the commit before the last update, then sync + build
+  local state old prev
+  state="$(update_state_dir)"
+  update_check_checkout || { update_record_run "refused: $UPD_WHY"; return 1; }
+  prev="$(cat "$state/previous" 2>/dev/null || true)"
+  if [[ -z "$prev" ]] || ! ugit cat-file -e "$prev^{commit}" 2>/dev/null; then
+    update_err "there is no earlier update to go back to. Nothing changed."
+    return 1
+  fi
+  old="$(ugit rev-parse HEAD)"
+  if [[ "$prev" == "$old" ]]; then update_err "already at ${prev:0:7}, the commit before the last update. Nothing changed."; return 1; fi
+  if ! ugit merge-base --is-ancestor "$prev" "$old" 2>/dev/null && ! ugit merge-base --is-ancestor "$old" "$prev" 2>/dev/null; then
+    update_err "the commit before the last update (${prev:0:7}) is unrelated to this checkout's history (you changed it since). Nothing changed."
+    return 1
+  fi
+  if ! ugit reset --hard --quiet "$prev"; then update_err "git reset to ${prev:0:7} failed. Nothing else changed."; return 1; fi
+  update_write_atomic "$state/held" "$old"        # the timer does not redo what you undid
+  update_write_atomic "$state/previous" "$old"    # a second --back goes forward again
+  if ! update_apply; then
+    update_fail "$UPD_WHY after going back to ${prev:0:7}: the checkout stays there, but its packages or build are not in step (run drgnx sync, then drgnx build). Log: $state/last.log"
+    return 1
+  fi
+  update_say "drgnx went back ${old:0:7} -> ${prev:0:7}. The timer skips ${old:0:7}; drgnx update takes it again."
+  update_restart_note
+  update_record_run "went back ${old:0:7} -> ${prev:0:7}"
+}
+
+systemd_word() { # $1 as one quoted word of a systemd unit's ExecStart/Environment line
+  local s="$1"
+  s="${s//\\/\\\\}"; s="${s//\"/\\\"}"; s="${s//%/%%}"; s="${s//\$/\$\$}"
+  printf '"%s"' "$s"
+}
+
+xml_escape() { local s="$1"; s="${s//&/&amp;}"; s="${s//</&lt;}"; s="${s//>/&gt;}"; printf '%s' "$s"; }
+
+update_systemd_dir() { printf '%s/systemd/user' "$(xdg_dir XDG_CONFIG_HOME "$HOME/.config")"; }
+update_plist() { printf '%s/Library/LaunchAgents/%s.plist' "$HOME" "$UPD_LABEL"; }
+
+update_service_text() { # the oneshot service the timer starts
+  printf '[Unit]\nDescription=Update drgnx to the newest main\nDocumentation=https://github.com/Black-Dragon-Foundation/drgnx\n\n'
+  printf '[Service]\nType=oneshot\nNice=10\nTimeoutStartSec=1h\nTimeoutStopSec=30min\n'
+  printf 'Environment=%s\n' "$(systemd_word "PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin")"
+  local v   # what makes the timer's run find the same Emacs, config and state as yours
+  for v in DRGNX_EMACS DRGNX_CONFIG_DIR XDG_STATE_HOME; do
+    if [[ "${!v:-}" == /* ]]; then printf 'Environment=%s\n' "$(systemd_word "$v=${!v}")"; fi
+  done
+  printf 'ExecStart=%s update --quiet\n' "$(systemd_word "$here/bin/drgnx")"
+}
+
+update_timer_text() {
+  printf '[Unit]\nDescription=Update drgnx daily\n\n[Timer]\nOnCalendar=daily\nRandomizedDelaySec=1h\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n'
+}
+
+update_plist_env() { # DRGNX_EMACS, DRGNX_CONFIG_DIR, XDG_STATE_HOME as plist keys, when set
+  local v
+  for v in DRGNX_EMACS DRGNX_CONFIG_DIR XDG_STATE_HOME; do
+    if [[ "${!v:-}" == /* ]]; then printf '<key>%s</key><string>%s</string>' "$v" "$(xml_escape "${!v}")"; fi
+  done
+}
+
+update_plist_text() { # HOUR MINUTE — launchd has no randomized delay: the install picks a time of day
+  local log; log="$(xml_escape "$(update_state_dir)/launchd.log")"
+  cat <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$UPD_LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$(xml_escape "$here/bin/drgnx")</string>
+    <string>update</string>
+    <string>--quiet</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>$(xml_escape "$HOME")/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>$(update_plist_env)</dict>
+  <key>StartCalendarInterval</key>
+  <dict><key>Hour</key><integer>$1</integer><key>Minute</key><integer>$2</integer></dict>
+  <key>ProcessType</key><string>Background</string>
+  <key>ExitTimeOut</key><integer>1800</integer>
+  <key>LowPriorityIO</key><true/>
+  <key>StandardOutPath</key><string>$log</string>
+  <key>StandardErrorPath</key><string>$log</string>
+</dict>
+</plist>
+PLIST
+}
+
+update_auto_darwin() { # on | off | status
+  local plist uid
+  plist="$(update_plist)"
+  uid="$(id -u)"
+  case "$1" in
+    on)
+      update_is_checkout || { update_err "$here is not a git checkout, so it cannot update itself; no timer set."; return 1; }
+      command -v launchctl >/dev/null 2>&1 || { update_err "launchctl not found; no timer set."; return 1; }
+      mkdir -p "${plist%/*}"
+      update_plist_text "$((10 + RANDOM % 8))" "$((RANDOM % 60))" >"$plist.tmp" && mv -f "$plist.tmp" "$plist"
+      launchctl bootout "gui/$uid" "$plist" >/dev/null 2>&1 || true
+      launchctl bootstrap "gui/$uid" "$plist" || { update_err "launchctl could not load $plist"; return 1; }
+      echo "drgnx update: automatic updates on (a launchd agent, daily; $plist)." ;;
+    off)
+      if [[ -f "$plist" ]]; then launchctl bootout "gui/$uid" "$plist" >/dev/null 2>&1 || true; rm -f "$plist"; fi
+      echo "drgnx update: automatic updates off." ;;
+    status)
+      if [[ -f "$plist" ]]; then echo "automatic updates: on (launchd agent $UPD_LABEL, daily)"; else echo "automatic updates: off"; fi ;;
+  esac
+}
+
+update_auto_systemd() { # on | off | status
+  local dir next=""
+  dir="$(update_systemd_dir)"
+  case "$1" in
+    on)
+      update_is_checkout || { update_err "$here is not a git checkout, so it cannot update itself; no timer set."; return 1; }
+      command -v systemctl >/dev/null 2>&1 || { update_err "systemctl not found: automatic updates need a systemd user session. Run drgnx update by hand, or from your own cron."; return 1; }
+      mkdir -p "$dir"
+      update_service_text >"$dir/$UPD_UNIT.service.tmp" && mv -f "$dir/$UPD_UNIT.service.tmp" "$dir/$UPD_UNIT.service"
+      update_timer_text >"$dir/$UPD_UNIT.timer.tmp" && mv -f "$dir/$UPD_UNIT.timer.tmp" "$dir/$UPD_UNIT.timer"
+      systemctl --user daemon-reload || true
+      systemctl --user enable --now "$UPD_UNIT.timer" || { update_err "systemctl could not enable $UPD_UNIT.timer (units are in $dir)"; return 1; }
+      echo "drgnx update: automatic updates on (systemd user timer $UPD_UNIT.timer, daily; units in $dir)." ;;
+    off)
+      if [[ -f "$dir/$UPD_UNIT.timer" ]] && command -v systemctl >/dev/null 2>&1; then systemctl --user disable --now "$UPD_UNIT.timer" >/dev/null 2>&1 || true; fi
+      rm -f "$dir/$UPD_UNIT.timer"
+      rm -f "$dir/$UPD_UNIT.service"
+      if command -v systemctl >/dev/null 2>&1; then systemctl --user daemon-reload >/dev/null 2>&1 || true; fi
+      echo "drgnx update: automatic updates off." ;;
+    status)
+      if [[ ! -f "$dir/$UPD_UNIT.timer" ]]; then echo "automatic updates: off"
+      elif command -v systemctl >/dev/null 2>&1 && ! systemctl --user is-enabled "$UPD_UNIT.timer" >/dev/null 2>&1; then
+        echo "automatic updates: off (units exist in $dir but the timer is not enabled: drgnx update --auto on)"
+      else
+        echo "automatic updates: on (systemd user timer $UPD_UNIT.timer, daily)"
+        next="$(systemctl --user show "$UPD_UNIT.timer" -p NextElapseUSecRealtime --value 2>/dev/null || true)"
+        if [[ -n "$next" ]]; then echo "next run: $next"; fi
+      fi ;;
+  esac
+}
+
+update_auto() { # on | off | status
+  local rc=0
+  mkdir -p "$(update_state_dir)"
+  if [[ "$(update_platform)" == Darwin ]]; then update_auto_darwin "$1" || rc=$?; else update_auto_systemd "$1" || rc=$?; fi
+  if [[ "$1" == status && "$rc" == 0 ]]; then
+    if [[ -f "$(update_state_dir)/last-run" ]]; then echo "last run: $(cat "$(update_state_dir)/last-run")"; else echo "last run: never"; fi
+  fi
+  return "$rc"
+}
+
+secrets_emacs() { # the Emacs side of drgnx secrets (core/drgnx-secrets.el)
+  "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+        -l drgnx-secrets -f drgnx-secrets-cli -- "$@"
+}
+
+cmd_secrets() { # export|import|ls — provider keys through age (docs/guide/second-machine.md).  age asks for a passphrase
+  # on this terminal, which a program Emacs starts never has (Emacs gives each child a session of its own): so after
+  # Emacs's checks (exit 10) age runs here, in a pipe with Emacs, and the plaintext crosses only that pipe.
+  local rc=0 file
+  unset DRGNX_SECRETS_PIPE
+  DRGNX_STDIN_TTY=""; if [ -t 0 ]; then DRGNX_STDIN_TTY=1; fi   # the keyring is opened only from a terminal
+  export DRGNX_STDIN_TTY
+  secrets_emacs "$@" || rc=$?
+  [ "$rc" -eq 10 ] || return "$rc"
+  rc=0
+  file="${DRGNX_CONFIG_DIR:-$HOME/.config/drgnx}/secrets.age"
+  if [ "${1:-}" = export ]; then
+    mkdir -p -- "${file%/*}"
+    trap 'rm -f -- "$file.new"' EXIT   # an interrupt during age's prompt leaves no secrets.age.new
+    DRGNX_SECRETS_PIPE=bundle secrets_emacs export | age -e -p -o "$file.new" || rc=$?
+    if [ "$rc" -eq 0 ]; then mv -f -- "$file.new" "$file"; echo "drgnx secrets: wrote $file"
+    else rm -f -- "$file.new"; echo "drgnx secrets: nothing written ($file is unchanged)" >&2; fi
+  else
+    age -d "$file" | DRGNX_SECRETS_PIPE=stdin secrets_emacs "$@" || rc=$?   # import --replace
+  fi
+  return "$rc"
+}
+
+cmd_update() { # [--quiet] [--back] [--auto on|off|status]
+  local back=0 auto=""
+  UPD_QUIET=0
+  while (($#)); do
+    case "$1" in
+      --quiet|-q) UPD_QUIET=1 ;;
+      --back) back=1 ;;
+      --auto) shift; auto="${1:-}"
+              case "$auto" in on|off|status) ;; *) echo "usage: drgnx update --auto on|off|status" >&2; return 2 ;; esac ;;
+      *) echo "usage: drgnx update [--quiet] | --back | --auto on|off|status" >&2; return 2 ;;
+    esac
+    shift
+  done
+  if [[ -n "$auto" ]]; then update_auto "$auto"; return; fi
+  command -v git >/dev/null 2>&1 || { update_err "git not found"; return 1; }
+  update_lock || return 1
+  if ((back)); then update_back; else update_run; fi
+}
+
+bootstrap_dir=""
+cmd_bootstrap() { # [--config URL | --chezmoi URL] [--identity FILE] [--step NAME]… [--dry-run] [--yes] [--replace]
+  # This machine set up from your configuration (core/drgnx-bootstrap.el; docs/guide/second-machine.md).  What needs
+  # this terminal — sudo for the announced age/chezmoi install, age's passphrase — Emacs cannot run (its children
+  # have no terminal): it stops with exit 10 and the command in DIR/argv; this runs it if it is one of the few below,
+  # writes DIR/rc (and DIR/out), and runs bootstrap again, which goes on from that step.
+  local rc=0 n=0 w out joined
+  local -a words
+  DRGNX_STDIN_TTY=""; if [ -t 0 ]; then DRGNX_STDIN_TTY=1; fi   # questions (and the keyring) only from a terminal
+  export DRGNX_STDIN_TTY
+  bootstrap_dir="$(mktemp -d "${TMPDIR:-/tmp}/drgnx-bootstrap.XXXXXX")"
+  trap 'rm -rf -- "$bootstrap_dir"' EXIT
+  while :; do
+    rc=0
+    DRGNX_BOOTSTRAP_HANDBACK="$bootstrap_dir" "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' \
+      -L "$here/core" -L "$here/wb" -l drgnx-bootstrap -f drgnx-bootstrap-cli -- "$@" || rc=$?
+    [ "$rc" -eq 10 ] || return "$rc"
+    n=$((n + 1))
+    if [ "$n" -gt 8 ] || [ ! -f "$bootstrap_dir/argv" ]; then
+      echo "drgnx bootstrap: stopped (no command to run, or too many)" >&2; return 1
+    fi
+    words=()
+    while IFS= read -r w; do
+      case "$w" in ""|*[[:space:]]*) echo "drgnx bootstrap: refused a command it does not know (nothing was run)" >&2; return 1 ;; esac
+      words+=("$w")
+    done <"$bootstrap_dir/argv"
+    rm -f -- "$bootstrap_dir/argv" "$bootstrap_dir/out"
+    joined="${words[*]-}"
+    rc=0
+    case "$joined" in   # the recipes' root lines (drgnx-onboard-install-recipes) and the passphrase import, nothing else
+      "sudo dnf install -y age"|"sudo dnf install -y chezmoi"|"sudo apt-get install -y age"|\
+      "sudo pacman -S --noconfirm age"|"sudo pacman -S --noconfirm chezmoi")
+        "${words[@]}" || rc=$? ;;
+      "secrets import"|"secrets import --replace")
+        out="$(cmd_secrets "${words[@]:1}")" || rc=$?   # its lines are hosts and what happened to them, never a key
+        [ -z "$out" ] || printf '%s\n' "$out"
+        printf '%s\n' "$out" >"$bootstrap_dir/out" ;;
+      *) echo "drgnx bootstrap: refused a command it does not know (nothing was run)" >&2; return 1 ;;
+    esac
+    printf '%s\n' "$rc" >"$bootstrap_dir/rc"
+  done
+}
+
 usage() {
   cat <<'USAGE'
 usage: drgnx PATH…             open folders and files in drgnx, like code . (docs/guide/opening.md)
@@ -574,6 +1126,11 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx open --check      start drgnx's daemon if needed, print its Emacs version, stop it if this started it
        drgnx macos-app         macOS: install drgnx.app into ~/Applications (Finder, Spotlight, Dock, Open With)
        drgnx build             byte-compile drgnx (core, wb, modules); native compilation follows on load
+       drgnx update [--quiet]  update this install to GitHub main: fast-forward, then sync and build; the previous
+                               commit is kept and comes back if sync or build fails (docs/guide/install.md)
+       drgnx update --back     return to the commit before the last update (re-sync, rebuild)
+       drgnx update --auto on|off|status
+                               a daily timer (systemd user timer; launchd agent on macOS) running update --quiet
        drgnx doctor [--json] [--dev]
                                is this machine ready for drgnx? (--dev: also the tools to develop it)
        drgnx test [--one-process] [--leaks] [--shuffle[=SEED]]
@@ -602,6 +1159,10 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx test --install [NAME…]
                                install.sh end to end in fresh distribution containers (slow;
                                names: fedora-44 debian-trixie ubuntu-26.04 fedora-45 archlinux)
+       drgnx test --bootstrap [--fedora 44|45]
+                               the exit test of a second machine: install.sh --yes --config … --identity …
+                               in a fresh Fedora container (default 45) must end in a green doctor,
+                               with the keys in the keyring and a second run changing nothing (slow, network)
        drgnx sync [--offline] [--seed DIR] [--prune [--dry-run]]
                                install the packages drgnx needs (the only thing that installs);
                                --offline: from the lock and the cache; --seed: copy another elpa first;
@@ -640,10 +1201,20 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx coord mcp --kind KIND
                                serve the coordination tools to an agent outside drgnx (claude, codex, zed…)
                                over stdio (MCP), started in its project folder (docs/guide/agents.md)
+       drgnx secrets export [--recipient R]… | import [--identity FILE] [--replace] | ls [--identity FILE]
+                               your provider keys to a second machine: secrets.age (age), then into its
+                               keyring (a passphrase, or age keys; docs/guide/second-machine.md)
+       drgnx bootstrap [--config URL | --chezmoi URL] [--identity FILE] [--step NAME]… [--dry-run] [--yes] [--replace]
+                               this machine from your configuration: preflight, config (cloned into an
+                               empty config dir), keys, sync, onboard, desktop, shell, doctor; asks before
+                               keys, desktop and shell (--yes: never the rc line or the desktop entry)
        drgnx safe              Emacs with drgnx's core only: no modules, no packages
        drgnx bisect [-- CMD…]  find the module that breaks (CMD fails, or you say so)
        drgnx service-unit [DIR]
                                the systemd user unit (printed, or written to DIR; never installed)
+       drgnx shell install [--shell zsh|bash|fish] [--yes]
+                               add one line to your shell's rc file, after you say yes (--yes: print it,
+                               write nothing); drgnx shell line prints the line (docs/guide/shell.md)
        drgnx ui COMMAND        headless GUI Emacs sessions: start, stop, ls, reap, state, shot,
                                click, keys, type, measure (drgnx ui --help; docs/develop/harness.md)
 USAGE
@@ -699,13 +1270,20 @@ case "${1:-help}" in
         shift
         "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
               -l drgnx-keys-diff -f drgnx-keys-diff-cli -- "$@" ;;
+  shell) shift
+        DRGNX_STDIN_TTY=$([ -t 0 ] && echo 1 || echo 0) \
+        "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+              -l drgnx-shell -f drgnx-shell-cli -- "$@" ;;
   check) shift; run_in_tmp_shards check_emacs "$@" ;;
   fmt) shift
         "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-fmt -f drgnx-fmt-cli -- "$@" ;;
+  update) shift; cmd_update "$@" ;;
   open) shift; cmd_open "$@" ;;
   -t|--gui) cmd_open "$@" ;;
   macos-app) "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" -l drgnx-macos -f drgnx-macos-cli ;;
+  secrets) shift; cmd_secrets "$@" ;;
+  bootstrap) shift; cmd_bootstrap "$@" ;;
   help|-h|--help) usage ;;
   *) if [[ "$1" == . || "$1" == .. || "$1" == */* || -e "$1" ]]; then cmd_open "$@"; exit; fi   # drgnx PATH…
      echo "drgnx: unknown command '$1' (try: drgnx help)" >&2; exit 2 ;;

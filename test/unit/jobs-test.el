@@ -367,7 +367,12 @@ killing the starter's whole process group does not take the job along."
        (should (equal (plist-get job :boot) (drgnx-jobs--boot-id)))
        (should (plist-get job :start)))
      (let ((once (drgnx-jobs-test--bytes file)))
-       (drgnx-jobs--stamp dir)                                     ; a second stamp changes nothing and repeats no key
+       ;; a second stamp changes nothing and repeats no key, though Emacs's reading of the start jitters by a tick
+       (let ((real (symbol-function 'process-attributes)))
+         (cl-letf (((symbol-function 'process-attributes)
+                    (lambda (pid)
+                      (let ((a (funcall real pid))) (setf (alist-get 'start a) (time-add (alist-get 'start a) 0.01)) a))))
+           (drgnx-jobs--stamp dir)))
        (should (equal (drgnx-jobs-test--bytes file) once))
        (should (= 1 (cl-count :boot (drgnx-jobs--read file))))))))
 

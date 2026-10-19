@@ -204,13 +204,18 @@ whose value is not what its name says is skipped.  About 12 ms compiled."
     (setq drgnx-modules-fingerprint--own (cons own-hooks own-fvars))
     (list :all-hooks (nconc hooks fvars) :advice advice)))
 
-(defun drgnx-modules-fingerprint--full-items ()
-  "The `mapatoms' scan, compiled first when it is not: interpreted it costs ~110 ms (27,000 symbols, each a trip
-through the evaluator), compiled ~12 ms, and compiling it takes ~8 ms once.  A built drgnx (.elc) skips that."
+(defun drgnx-modules-fingerprint--compile-scan ()
+  "Compile the `mapatoms' scan when it is not: interpreted it costs ~110 ms (27,000 symbols, each a trip through the
+evaluator), compiled ~12 ms, and compiling it takes ~8 ms once.  A built drgnx (.elc) skips that.  It may load
+bytecomp, so a FULL fingerprint calls it before it reads anything (the load is not a change it reports)."
   (unless (compiled-function-p (symbol-function 'drgnx-modules-fingerprint--scan))
     (ignore-errors
+      (require 'bytecomp)               ; first: bound before bytecomp is loaded, `byte-compile-warnings' is lexical
       (let ((byte-compile-warnings nil) (inhibit-message t))
-        (byte-compile 'drgnx-modules-fingerprint--scan))))
+        (byte-compile 'drgnx-modules-fingerprint--scan)))))
+
+(defun drgnx-modules-fingerprint--full-items ()
+  "The `mapatoms' scan (`drgnx-modules-fingerprint--compile-scan' compiled it) and the hand-listed hooks it misses."
   (let* ((scan (drgnx-modules-fingerprint--scan)) (extra nil))
     ;; a listed name the scan's suffix test would not pick (a hand-listed odd one) is still read
     (dolist (h (drgnx-modules-fingerprint--hook-names))
@@ -224,6 +229,7 @@ through the evaluator), compiled ~12 ms, and compiling it takes ~8 ms once.  A b
 Cheap: meant to run around every test.  With FULL, a `mapatoms' scan of every hook variable and every advised
 function (about 12 ms): once per test file.  The diff of two full ones reads `:all-hooks', not `:hooks' and
 `:function-variables' (which it contains), so a leak is one line.  Compare two with `drgnx-modules-fingerprint-diff'."
+  (when full (drgnx-modules-fingerprint--compile-scan))
   (let (hooks fvars regs)
     (dolist (h (drgnx-modules-fingerprint--hook-names))
       (setq hooks (nconc (drgnx-modules-fingerprint--hook-items h) hooks)))

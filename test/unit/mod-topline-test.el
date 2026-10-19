@@ -69,6 +69,15 @@ buffer of the selected window (a temp buffer in project `proj', no git).  Faces 
   "The line's item named KEY."
   (assq key (drgnx-topline--line)))
 
+(ert-deftest drgnx-topline/faces-follow-the-theme-chrome-and-keep-the-text-colour ()
+  ;; The strong text fell back to the tab bar's dim foreground: it takes the text colour, on the tab line's band.
+  (dolist (f '(drgnx-topline drgnx-topline-strong))
+    (let ((inh (face-attribute f :inherit nil nil)))
+      (should (memq 'tab-line inh))
+      (should-not (memq 'header-line inh))
+      (should-not (memq 'tab-bar inh))))
+  (should (memq 'bold (face-attribute 'drgnx-topline-strong :inherit nil nil))))
+
 (ert-deftest drgnx-topline/shows-project-branch-and-the-three-keys ()
   (drgnx-topline-test--with 'vscode
     (setq-local vc-mode " Git-main")
@@ -172,6 +181,17 @@ buffer of the selected window (a temp buffer in project `proj', no git).  Faces 
     ;; a window always has it
     (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
               ((symbol-function 'frame-height) (lambda (&optional _) 5)))
+      (should (= 1 (drgnx-topline--lines (selected-frame)))))))
+
+(ert-deftest drgnx-topline/a-terminal-of-the-minimum-keeps-the-line ()
+  ;; `frame-height' is one less while the line shows: a terminal of exactly the minimum must not lose it and win it back
+  ;; on every size change (the frame resized itself between 19 and 20 lines, for ever)
+  (drgnx-topline-test--with 'vscode
+    (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) nil))
+              ((symbol-function 'frame-height) (lambda (&optional _) 19))
+              ((symbol-function 'frame-parameter)
+               (let ((real (symbol-function 'frame-parameter)))
+                 (lambda (frame param) (if (eq param 'tab-bar-lines) 1 (funcall real frame param))))))
       (should (= 1 (drgnx-topline--lines (selected-frame)))))))
 
 (ert-deftest drgnx-topline/a-new-width-gives-items-that-are-not-equal ()
@@ -359,7 +379,7 @@ buffer of the selected window (a temp buffer in project `proj', no git).  Faces 
     (let ((tab-bar-mode nil) (spec (get 'tab-bar 'face-defface-spec)))
       (drgnx-topline--apply)
       (should-not (equal (get 'tab-bar 'face-defface-spec) spec))
-      (should (equal (get 'tab-bar 'face-defface-spec) '((t :inherit header-line :box nil))))
+      (should (equal (get 'tab-bar 'face-defface-spec) '((t :inherit tab-line :height 1.0 :box nil))))
       (drgnx-topline--off)
       (should (equal (get 'tab-bar 'face-defface-spec) spec)))))
 
@@ -483,7 +503,8 @@ buffer of the selected window (a temp buffer in project `proj', no git).  Faces 
              (text (mapconcat (lambda (i) (substring-no-properties (nth 2 i))) items "")))
         (should (<= (string-width text) 40))
         (should (string-match-p "– ▢ × *\\'" text))              ; the controls are whole at the right end
-        (should (string-match-p "…" text))))))
+        ;; cut with Emacs's ellipsis: "…" where the terminal shows it, "..." in a C locale (CI's)
+        (should (string-search (truncate-string-ellipsis) text))))))
 
 (ert-deftest drgnx-topline/a-clock-that-went-back-does-not-keep-the-line-failing ()
   (drgnx-topline-test--with 'vscode

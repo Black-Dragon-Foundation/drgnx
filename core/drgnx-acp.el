@@ -88,7 +88,10 @@
   "Start the agent COMMAND (a list) in CWD with ENV (\"NAME=value\" strings added to the environment).
 ON-NOTIFICATION: (CONN METHOD PARAMS); ON-REQUEST: (CONN METHOD PARAMS ID) → (:result R), (:error E) or
 `:deferred' (answer later with `drgnx-acp-respond'); ON-EXIT: (CONN STATUS STDERR-TAIL).  Returns the connection."
-  (let* ((conn (drgnx-acp--make :on-notification on-notification :on-request on-request :on-exit on-exit))
+  (let* ((command (if (string-prefix-p "~/" (car command))   ; agents.eld writes paths under home "~/…" (it travels)
+                      (cons (expand-file-name (car command)) (cdr command))
+                    command))
+         (conn (drgnx-acp--make :on-notification on-notification :on-request on-request :on-exit on-exit))
          (default-directory (file-name-as-directory (expand-file-name (or cwd default-directory))))
          (process-environment (append env process-environment))
          (stderr (make-pipe-process :name "drgnx-acp-stderr" :noquery t :coding 'utf-8

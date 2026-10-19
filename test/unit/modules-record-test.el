@@ -246,7 +246,7 @@ test hook, list and modes as they were after."
                           (list (format "timer fake-elpa--tick (%s)" (symbol-file 'fake-elpa--tick 'defun)))))
            (should (string-suffix-p "fake-elpa.el)" (car (drgnx-modules-record-test--left 'test/a)))))
        (when (boundp 'fake-elpa--timer) (when (timerp fake-elpa--timer) (cancel-timer fake-elpa--timer)))
-       (mapc #'unintern '("fake-elpa--timer" "fake-elpa--tick" "fake-elpa-start"))
+       (dolist (s '("fake-elpa--timer" "fake-elpa--tick" "fake-elpa-start")) (unintern s obarray)) ; 31: OBARRAY needed
        (setq load-history (cl-remove file load-history :key #'car :test #'equal))
        (delete-directory dir t)))))
 
@@ -513,7 +513,9 @@ Returns (STATUSES COMMANDS STACKS), STACKS the number of modules with a cleanup 
            (should (drgnx-modules-record-test--timer-p jit-lock-context-timer))
            (let ((left (drgnx-modules-record-test--left 'test/a)))   ; and said so
              (should (cl-some (lambda (l) (string-prefix-p "timer undo-auto--boundary-timer (" l)) left))
-             (should (member "timer a lambda" left))))
+             ;; jit-lock's context timer: a lambda up to Emacs 30, a named function from 31
+             (should (or (member "timer a lambda" left)
+                         (cl-some (lambda (l) (string-prefix-p "timer jit-lock-context--update (" l)) left)))))
        (kill-buffer buf)))))
 
 (ert-deftest drgnx-modules-record/a-helpers-mode-stays-while-another-module-claims-it ()

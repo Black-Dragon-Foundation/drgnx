@@ -898,7 +898,8 @@ Returns BODY's value."
   "Mark VIEW so that its rows become KEYS (a list, in order).  A row whose signature (SIG KEY) is not `eq' to the
 one stored at the last sync is dirty (a vector signature is compared element by element, with `eq').  Keys not
 shown are inserted, rows not in KEYS removed.  A row that moved is removed and inserted; when more than half the
-rows moved, the view is reset instead.  The drawn rows and the pending changes are both taken into account."
+rows moved, or KEYS share no key with the rows (a new row set), the view is reset instead, so window start and point
+go to its first row.  The drawn rows and the pending changes are both taken into account."
   (let* ((plan (drgnx-view--plan-pending view))
          (n (drgnx-view--n view)) (vkeys (drgnx-view--keys view))
          (same (and (null plan) (not (drgnx-view--cut view))
@@ -929,7 +930,7 @@ rows moved, the view is reset instead.  The drawn rows and the pending changes a
            (moved (- (length common) (bool-vector-count-population keep))))
       (setq i 0)
       (dolist (key common) (when (aref keep i) (puthash key t kept)) (setq i (1+ i)))
-      (if (> (* 2 moved) (length current))
+      (if (or (null common) (> (* 2 moved) (length current)))   ; a new row set: places go to its first row
           (progn (drgnx-view-reset view keys)
                  (dolist (key keys) (drgnx-view--sync-sig view key sig)))
         (let (gone prev run)

@@ -175,6 +175,11 @@ A job whose poll ended is not in the layer's table, so none is stamped twice."
   "Stamp the job in DIR if it can be (see `drgnx-jobs--stamp'); the job's directory may be gone by now."
   (ignore-errors (drgnx-jobs--stamp dir timeout)))
 
+(defun drgnx-jobs--same-start-p (a b)
+  "Whether start times A and B (from `process-attributes') are one process's: within 0.5 s of each other.
+Emacs works a start out from the boot time, and its reading jitters by a clock tick."
+  (and a b (< (abs (float-time (time-subtract a b))) 0.5)))
+
 (defun drgnx-jobs--stamp (dir &optional timeout)
   "Add the boot and the start time of the job in DIR's process to its job.eld, once its pid file is there.
 Runs from timers and `kill-emacs-hook': it never prompts, and it gives up on a job.eld another drgnx holds the
@@ -189,7 +194,9 @@ not made, and one that cannot be read is left alone; the error is a `message', n
            (lambda (job)
              (when job
                (plist-put job :boot (drgnx-jobs--boot-id))
-               (plist-put job :start (alist-get 'start attrs))
+               ;; a start already stamped stays: Emacs's reading of it jitters by a clock tick
+               (unless (drgnx-jobs--same-start-p (plist-get job :start) (alist-get 'start attrs))
+                 (plist-put job :start (alist-get 'start attrs)))
                job))
            :timeout (or timeout 0))
         (drgnx-file-busy nil)
@@ -205,9 +212,8 @@ not made, and one that cannot be read is left alone; the error is a `message', n
              (attrs (and (> pid 0) (process-attributes pid)))
              (alive (and attrs
                          (or (null (plist-get job :boot)) (equal (plist-get job :boot) (drgnx-jobs--boot-id)))
-                         ;; the same start, give or take the clock tick Emacs's reading of it jitters by
                          (or (null (plist-get job :start))
-                             (< (abs (float-time (time-subtract (plist-get job :start) (alist-get 'start attrs)))) 0.5)))))
+                             (drgnx-jobs--same-start-p (plist-get job :start) (alist-get 'start attrs))))))
         (append job
                 (list :exit (and exit (string-to-number exit)) :pid (and (> pid 0) pid)
                       :status (cond (exit (if (equal exit "143") 'stopped 'exited))

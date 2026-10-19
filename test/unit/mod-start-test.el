@@ -109,6 +109,20 @@ window showing `*scratch*'.  `y-or-n-p' and every `read-*' fail: nothing here ma
       (drgnx-start-test--press "All Keys")
       (should (equal (reverse drgnx-start-test--ran) '(folder graph keys))))))
 
+(ert-deftest drgnx-start/centred-with-plain-bullets ()
+  (drgnx-start-test--with 'vscode
+    (drgnx-start-maybe-show)
+    (let ((text (drgnx-start-test--text)))
+      (should-not (string-match-p "⌕" text))
+      (should (string-match-p (format "^%s C-p " (regexp-quote (drgnx-face-glyph 'bullet))) text))   ; a plain bullet
+      (should (member (drgnx-face-glyph 'bullet nil) '("•" ">")))
+      (should-not (string-match-p "^  " text)))
+    (with-current-buffer "*drgnx start*"
+      ;; every line, wrapped rows too, starts at the column that centres the block, whatever the window's width
+      (should (equal (get-text-property (point-min) 'line-prefix) drgnx-start--centre))
+      (should (equal (get-text-property (1- (point-max)) 'wrap-prefix) drgnx-start--centre))
+      (should (equal (car drgnx-start--centre) 'space)))))
+
 (ert-deftest drgnx-start/not-over-a-file ()
   (drgnx-start-test--with 'vscode
     (with-temp-buffer

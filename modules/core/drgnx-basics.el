@@ -4,6 +4,7 @@
 
 ;;; Code:
 (require 'seq)
+(require 'drgnx-modules)
 (require 'drgnx-paths)
 (require 'drgnx-session)
 (require 'drgnx-trust)

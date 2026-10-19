@@ -14,7 +14,8 @@
   "BODY with ROOT a temp dir holding config, state, data and org dirs."
   (declare (indent 1))
   `(let* ((,root (file-name-as-directory (make-temp-file "drgnx-onboard" t)))
-          (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" ,root "config")
+          (process-environment (append (list "SHELL=/bin/sh"   ; step 7's shell-integration question is not asked here (shell-rc-test.el covers it)
+                                             (concat "DRGNX_CONFIG_DIR=" ,root "config")
                                              (concat "XDG_STATE_HOME=" ,root "state")
                                              (concat "DRGNX_DATA_DIR=" ,root "data"))
                                        process-environment))
@@ -242,8 +243,8 @@
     (let ((r (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'linux)))
                (car (drgnx-onboard-run :only '(daemon) :non-interactive t)))))
       (should (eq (cadr r) 'info))
-      (should (file-exists-p (expand-file-name "systemd/drgnx.service" (drgnx-user-dir))))
-      (should (file-exists-p (expand-file-name "applications/drgnx.desktop" (drgnx-user-dir))))
+      (should (file-exists-p (expand-file-name "systemd/drgnx.service" (drgnx-data-dir))))
+      (should (file-exists-p (expand-file-name "applications/drgnx.desktop" (drgnx-data-dir))))
       (should (string-match-p "systemctl --user" (nth 2 r))))))
 
 (defun drgnx-onboard-test--step-7 (platform keep install)
@@ -315,8 +316,8 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
         (should (= 2 (length prompts)))
         (should-not installed)
         (should-not (member "systemctl" programs))                       ; said no: nothing installed
-        (should (file-exists-p (expand-file-name "systemd/drgnx.service" (drgnx-user-dir))))
-        (should (file-exists-p (expand-file-name "applications/drgnx.desktop" (drgnx-user-dir))))
+        (should (file-exists-p (expand-file-name "systemd/drgnx.service" (drgnx-data-dir))))
+        (should (file-exists-p (expand-file-name "applications/drgnx.desktop" (drgnx-data-dir))))
         (should (string-match-p "systemctl --user" (nth 2 r)))
         (should (string-search "drgnx keeps running in the background" (nth 2 r)))
         (should (drgnx-onboard-test--keep-running-is t))))))
@@ -353,7 +354,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
 
 (ert-deftest drgnx-onboard/the-whole-flow-twice ()
   ;; The M6 exit, in batch: a fresh config onboarded non-interactively with fixture repos; the board
-  ;; has the projects and their TODOs; the doctor has no failure; the second run changes nothing.
+  ;; is not touched (it only reports); the doctor has no failure; the second run changes nothing.
   (drgnx-onboard-test--with root
     (let ((ws (concat root "ws/")))
       (drgnx-onboard-test--repo (concat ws "alpha") '("TODO.md" . "- [ ] one\n- [ ] two\n"))
@@ -366,12 +367,68 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
                                                          (string-search "1 failed (native-compilation)" (nth 2 s))))))
                               r))
         (should (equal (mapcar #'car r) (drgnx-onboard-steps))))
-      (let ((board (drgnx-onboard-test--board)))
-        (should (string-match-p "^\\* alpha" board))
-        (should (string-match-p "^\\* beta" board))
-        (should (string-match-p "^\\*\\* TODO two" board))
+      ;; non-interactive writes none of the user's files: the board is not created, drgnx's own config has the projects
+      (should-not (file-exists-p (drgnx-projects-board-file)))
+      (should (equal (mapcar (lambda (p) (plist-get p :name)) (plist-get (drgnx-projects-read) :projects)) '("alpha" "beta")))
+      (let ((config (drgnx-onboard-test--read (drgnx-projects-file))))
         (drgnx-onboard-run :non-interactive t :options `(:preset ide :roots (,ws) :todos t))
-        (should (equal (drgnx-onboard-test--board) board))))))
+        (should-not (file-exists-p (drgnx-projects-board-file)))
+        (should (equal (drgnx-onboard-test--read (drgnx-projects-file)) config))))))
+
+;;;; The board is the user's file: only written after a yes
+
+(defun drgnx-onboard-test--step-message (r) (nth 1 r))
+
+(ert-deftest drgnx-onboard/projects-non-interactive-never-writes-the-board ()
+  (drgnx-onboard-test--with root
+    (let* ((ws (concat root "ws/")) (board (drgnx-projects-board-file))
+           (existing "#+TITLE: mine\n* my own heading\n"))
+      (drgnx-onboard-test--repo (concat ws "alpha") '("TODO.md" . "- [ ] one\n"))
+      (drgnx-onboard-test--repo (concat ws "beta"))
+      (make-directory (file-name-directory board) t)
+      (write-region existing nil board nil 'silent)
+      (let ((mtime (file-attribute-modification-time (file-attributes board)))
+            (r (drgnx-onboard--projects-step `(:interactive nil :options (:roots (,ws) :todos t)))))
+        (should (equal (drgnx-onboard-test--board) existing))              ; byte for byte
+        (should (equal (file-attribute-modification-time (file-attributes board)) mtime))
+        (should (eq (car r) 'info))
+        (should (string-match-p "would add 2 projects (alpha, beta) and 1 TODOs to " (cadr r)))
+        (should (string-match-p "board.org" (cadr r)))
+        (should-not (file-exists-p (expand-file-name "projects-imported.eld" (drgnx-state-dir))))   ; the TODOs are still to be imported
+        (should (equal (mapcar (lambda (p) (plist-get p :name)) (plist-get (drgnx-projects-read) :projects)) '("alpha" "beta"))))))
+  ;; and no board file at all stays none
+  (drgnx-onboard-test--with root
+    (let ((ws (concat root "ws/")))
+      (drgnx-onboard-test--repo (concat ws "alpha"))
+      (drgnx-onboard-run :non-interactive t :options `(:roots (,ws)) :only '(projects))
+      (should-not (file-exists-p (drgnx-projects-board-file))))))
+
+(ert-deftest drgnx-onboard/projects-interactive-asks-before-writing-the-board ()
+  (drgnx-onboard-test--with root
+    (let* ((ws (concat root "ws/")) (board (drgnx-projects-board-file)) (asked nil) (answer nil)
+           (existing "* mine\n"))
+      (drgnx-onboard-test--repo (concat ws "alpha") '("TODO.md" . "- [ ] one\n"))
+      (make-directory (file-name-directory board) t)
+      (write-region existing nil board nil 'silent)
+      (cl-letf (((symbol-function 'completing-read-multiple)
+                 (lambda (prompt _choices &rest _) (if (string-match-p "TODOs" prompt) (list (concat ws "alpha")) nil)))
+                ((symbol-function 'y-or-n-p) (lambda (p) (push p asked) answer)))
+        (setq answer nil)                                                   ; no: nothing written
+        (let ((r (drgnx-onboard--projects-step `(:interactive t :options (:roots (,ws))))))
+          (should (= (length asked) 1))
+          (should (string-match-p "Add 1 projects (alpha) and 1 TODOs to .*board.org\\? " (car asked)))
+          (should (equal (drgnx-onboard-test--board) existing))
+          (should (string-match-p "you said no" (cadr r))))
+        (setq answer t)                                                     ; yes: written
+        (let ((r (drgnx-onboard--projects-step `(:interactive t :options (:roots (,ws))))))
+          (should (= (length asked) 2))
+          (should (eq (car r) 'ok))
+          (should (string-match-p "^\\* alpha" (drgnx-onboard-test--board)))
+          (should (string-match-p "^\\*\\* TODO one" (drgnx-onboard-test--board)))
+          (should (string-prefix-p existing (drgnx-onboard-test--board))))
+        (setq asked nil)                                                    ; everything there: nothing to ask
+        (drgnx-onboard--projects-step `(:interactive t :options (:roots (,ws))))
+        (should-not asked)))))
 
 (ert-deftest drgnx-onboard/the-cli ()
   (let (got)
@@ -483,10 +540,16 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
   ;; I8
   (drgnx-onboard-test--with root
     (drgnx-onboard-test--repo (concat root "ws/alpha") '("TODO.md" . "- [ ] a thing\n"))
-    (drgnx-onboard-run :only '(projects) :non-interactive t :options `(:roots (,(concat root "ws/"))))
-    (should-not (string-match-p "TODO a thing" (drgnx-onboard-test--board)))
-    (drgnx-onboard-run :only '(projects) :non-interactive t :options `(:roots (,(concat root "ws/")) :todos t))
-    (should (string-match-p "TODO a thing" (drgnx-onboard-test--board)))))
+    (let ((ws (concat root "ws/")) (asked nil))
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (p) (push p asked) t))
+                ((symbol-function 'completing-read-multiple) (lambda (&rest _) nil)))   ; empty: all
+        ;; the board is written after a yes only; TODOs only when asked for them
+        (drgnx-onboard--projects-step `(:interactive t :options (:roots (,ws) :todos nil)))
+        (should (string-match-p "^\\* alpha" (drgnx-onboard-test--board)))
+        (should-not (string-match-p "TODO a thing" (drgnx-onboard-test--board)))
+        (drgnx-onboard--projects-step `(:interactive t :options (:roots (,ws) :todos t)))
+        (should (string-match-p "TODO a thing" (drgnx-onboard-test--board)))
+        (should (= (length asked) 2))))))
 
 (ert-deftest drgnx-projects/a-todo-removed-from-the-board-stays-removed ()
   ;; I9: archived or deleted, it is not imported again.
@@ -520,14 +583,14 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
         (should-not (string-match-p "^\\*\\* TODO COMMENT" board))
         (should (string-match-p "urgent" board))))))
 
-(ert-deftest drgnx-onboard/the-linux-desktop-files-are-written-in-the-config-folder-only ()
+(ert-deftest drgnx-onboard/the-linux-desktop-files-are-written-in-the-data-folder-only ()
   (drgnx-onboard-test--with root
     (let ((calls nil) (orig (symbol-function 'drgnx-file-write-text)))
       (cl-letf (((symbol-function 'drgnx-file-write-text)
                  (lambda (f text &rest args) (push f calls) (apply orig f text args))))
         (let ((result (drgnx-onboard--linux-desktop nil))
-              (unit (expand-file-name "systemd/drgnx.service" (drgnx-user-dir)))
-              (desktop (expand-file-name "applications/drgnx.desktop" (drgnx-user-dir))))
+              (unit (expand-file-name "systemd/drgnx.service" (drgnx-data-dir)))
+              (desktop (expand-file-name "applications/drgnx.desktop" (drgnx-data-dir))))
           (should (eq (car result) 'info))
           (should (equal (sort (copy-sequence calls) #'string<) (sort (list unit desktop) #'string<)))
           (should (equal (with-temp-buffer (insert-file-contents desktop) (buffer-string)) drgnx-onboard-desktop-entry))
@@ -562,7 +625,8 @@ Returns (RESULT PROMPTS)."
         (should (= (length prompts) 1))
         (should-not (file-exists-p (drgnx-projects-board-file))))
       ;; a path with a comma is one choice
-      (pcase-let ((`(,r ,_) (drgnx-onboard-test--pick root (list odd ""))))
+      (pcase-let ((`(,r ,_) (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
+                              (drgnx-onboard-test--pick root (list odd "")))))
         (should (eq (cadr r) 'ok))
         (should (string-match-p "\\`1 projects on the board" (nth 2 r)))
         (should (string-search (concat ":PROJECT_ROOT: " odd) (drgnx-onboard-test--board)))))))

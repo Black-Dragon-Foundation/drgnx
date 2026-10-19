@@ -387,6 +387,28 @@ never draws two slices in one gap (review T4-I1)."
       (should (= (point) (drgnx-view-row-start v 6)))
       (should (= (window-point w2) (drgnx-view-row-start v 8))))))      ; the last row: the previous one
 
+(ert-deftest drgnx-view-live/rows-all-replaced-go-to-the-top ()
+  ;; UI audit #3: a sync whose keys share none with the rows (a new source) drew the new rows before the old ones
+  ;; went, so window start and point fell to the previous live row: the last new one.  A new row set starts at the top.
+  (dolist (how '(sync reset))
+    (drgnx-view-live-test--with (v :render #'drgnx-view-live-test--render :key-test 'eq)
+      (drgnx-view-live-test--rows v 10)
+      (dotimes (k 10) (puthash (+ 100 k) (format "new %d" k) drgnx-view-live-test--model))
+      (let ((w (selected-window)) (keys (number-sequence 100 109)))
+        (set-window-start w (drgnx-view-row-start v 0))
+        (set-window-point w (point-max))
+        (goto-char (point-max))
+        (if (eq how 'sync)
+            (drgnx-view-sync-rows v keys #'drgnx-view-live-test--render)
+          (drgnx-view-reset v keys))
+        (drgnx-test-advance 0.1)
+        (drgnx-view-live-test--ok v)
+        (should (equal keys (let (l) (dotimes (i (drgnx-view-row-count v)) (push (aref (drgnx-view--keys v) i) l))
+                                 (nreverse l))))
+        (should (= (window-start w) (point-min)))
+        (should (= (window-point w) (point-min)))
+        (should (= (point) (point-min)))))))
+
 (ert-deftest drgnx-view-live/follow-tail ()
   (drgnx-view-live-test--with (v :render #'drgnx-view-live-test--render :key-test 'eq :follow-tail t)
     (drgnx-view-live-test--rows v 10)

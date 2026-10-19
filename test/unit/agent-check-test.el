@@ -457,15 +457,16 @@ with the HTTP mock stopped afterwards."
     (should (equal (nth 1 mine) (alist-get 'ppid attrs)))
     (should (equal (nth 2 mine) (alist-get 'pgrp attrs)))
     (should (equal (nth 3 mine) (alist-get 'sess attrs)))
-    ;; a process called "a) S 1 2 3 (b" (sleep run through a symlink with that name) does not confuse the reader
+    ;; a process called "a) S 1 2 3 (b" (a shell script of that name, waiting on its input) does not confuse the
+    ;; reader.  Not `sleep' through a symlink: a multi-call coreutils (Ubuntu 26.04's) refuses another name.
     (let* ((dir (make-temp-file "drgnx-comm" t))
-           (link (expand-file-name "a) S 1 2 3 (b" dir))
-           (sleep (executable-find "sleep"))
+           (script (expand-file-name "a) S 1 2 3 (b" dir))
            (proc nil))
       (unwind-protect
           (progn
-            (make-symbolic-link sleep link)
-            (setq proc (make-process :name "x" :command (list link "30") :noquery t))
+            (write-region "#!/bin/sh\nread x\n" nil script nil 'silent)
+            (set-file-modes script #o700)
+            (setq proc (make-process :name "x" :command (list script) :noquery t))
             (sleep-for 0.2)
             (let ((raw (with-temp-buffer (insert-file-contents (format "/proc/%d/stat" (process-id proc))) (buffer-string)))
                   (row (assq (process-id proc) (drgnx-agent-check--proc-rows))))

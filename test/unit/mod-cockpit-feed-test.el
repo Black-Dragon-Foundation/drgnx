@@ -34,6 +34,8 @@ buffers are killed after: they owned their hooks and their timers."
               (config (current-window-configuration)))
          (ignore m1 m2)
          (cl-letf (((symbol-function 'drgnx-cockpit-sessions) (lambda () sessions))
+                   ;; a UTF-8 terminal whatever the locale (CI's C locale is not): the ASCII tests say so themselves
+                   ((symbol-function 'drgnx-cockpit-graph--ascii-p) #'ignore)
                    ((symbol-function 'drgnx-agents-sessions) (lambda () mirrors))
                    ((symbol-function 'drgnx-hub-call)
                     (lambda (method params cb) (push (list method params) drgnx-cockpit-feed-test--hub) (funcall cb t nil) 1))

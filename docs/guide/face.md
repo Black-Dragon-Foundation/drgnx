@@ -21,6 +21,8 @@ Put your choices in `config.el` ([modules.md](modules.md#your-own-code-configel)
 | `drgnx-face-scroll-bars` | `none` | `none`, or `native` for the toolkit's scroll bar on the right. The position is in the status bar. |
 | `drgnx-face-dividers` | `t` | A thin line between windows, in the theme's colours. In a terminal the border is the terminal's own, drawn in the same colour. Turning it off turns `window-divider-mode` off only if drgnx turned it on; yours stays. |
 | `drgnx-face-divider-width` | `1` | The line's width in pixels (graphical frames). |
+| `drgnx-face-line-wrap` | `word` | What a line longer than its window does: `word` wraps it at a space onto the next row (never in the middle of a word, and in narrow windows too, where Emacs would cut the line below 50 columns), `truncate` keeps one row and lets the rest run off the edge, `nil` leaves Emacs's own setting. **Toggle Word Wrap** (palette, View menu) flips one buffer. Buffers that set their own (the Explorer, tables, the work graph) keep it. |
+| `drgnx-face-frame-title` | `t` | The window's title is `FILE — PROJECT — drgnx` (the file's name, else the buffer's; no project: `FILE — drgnx`; the start page: `drgnx`), in the taskbar, the window list and the title bar when the system draws it. A `frame-title-format` of your own is left alone. |
 | `drgnx-face-line-spacing` | `nil` | Extra pixels between lines; `2` or `3` reads calmer. `nil` leaves Emacs's (or your own `line-spacing`) alone. |
 
 The menu bar and the scroll bar are off from the very first moment (no light bar flashes up before the theme
@@ -95,7 +97,7 @@ turns them off in one buffer.
 ## Glyphs
 
 drgnx draws a few symbols (a drag handle, a close mark, a branch sign, warnings, checks, busy and waiting marks,
-ahead and behind arrows). They all come from one table, `drgnx-face-glyphs`: NAME → (UNICODE . ASCII). In a terminal
+ahead and behind arrows, the bullet). They all come from one table, `drgnx-face-glyphs`: NAME → (UNICODE . ASCII). In a terminal
 whose encoding is not UTF-8 (a bare Linux console, an old `LANG=C` session), the ASCII form is used so nothing shows
 as a box. Every close button (the editor's tabs, the panes' and popups' headers, the dock's sections, quick help, the
 drawn title bar) uses the one `close` glyph, `×`, which every monospace font has. Change one for your font:
@@ -115,6 +117,7 @@ drawn title bar) uses the one `close` glyph, `×`, which every monospace font ha
 | `sep` | ` · ` | ` \| ` | `flag` | ⚑ | `#` |
 | `diamond` | ◆ | `<>` | `search` | ⌕ | `/` |
 | `minimize` | – | `-` | `maximize` | ▢ | `[]` |
+| `bullet` | • | `>` | | | |
 
 For code: `(drgnx-face-glyph 'close)` is the string for the selected frame, `(drgnx-face-glyph 'close FRAME)` for another.
 
@@ -127,6 +130,7 @@ Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch.
 | Left | Shows | Click |
 |---|---|---|
 | `branch` | `⑂ main ↑2 ↓1`: the branch, and how many commits it is ahead of and behind its upstream (a count of 0 is left out) | the repository status |
+| `trust` | `Restricted Mode` while the file's folder is not trusted: its Flymake checkers and symbol shorthands are off (hover for what that means) | **Trust This Folder** |
 | `problems` | `✓` when flymake finds nothing, `◐` while a checker has not reported yet, `● 3` (dimmed) when it finds only notes, else `⚠ 1 2`: the errors, then the warnings, each in its own colour | the problems list |
 | `tests` | `✓ tests 41/41` or `× tests 2 failed`: the last test run | its output |
 | `jobs` | `◎ 2 jobs` while jobs run, and `⚑1` when cards of jobs wait on you | What Needs You, every job's |
@@ -138,7 +142,7 @@ Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch.
 |---|---|---|
 | `lsp` | `LSP: pyright ●` (connected; the name the server gave), `LSP ○` (starting), `LSP ×` (exited) when eglot manages the buffer | the server's events |
 | `position` | `Ln 12, Col 4`, and `(15 selected)` with a selection, in the selected window only | go to a line |
-| `indent` | `Spaces: 2` or `Tab Size: 8` | tabs or spaces |
+| `indent` | `Spaces: 2` or `Tab Size: 8`: what the file's own first lines use (tabs, or spaces and how many), else the mode's setting | switch what new lines use |
 | `encoding` | `UTF-8` | change it |
 | `eol` | `LF`, `CRLF` or `CR` | change it |
 | `language` | the language as VS Code names it: `Rust`, `Go`, `YAML`, `Python`, `Emacs Lisp`, `Shell Script`, `Plain Text` (`drgnx-statusbar-language-names`, else the mode's own name) | **Change Language Mode**: pick another major mode for the buffer |
@@ -147,10 +151,11 @@ The most recently used editor window shows the whole bar; the other editor group
 (position and language). The bar is for the buffers you edit: a buffer that visits a file, an editor made with
 **New Untitled** (in whatever language you give it), or a buffer that is code, text or configuration
 (`drgnx-statusbar-modes`: `prog-mode`, `text-mode`, `conf-mode` and what derives from them). The start page gets a
-quiet bar: only the left side (`drgnx-statusbar-quiet`: branch, agents, jobs, tests and `misc`), no line and column,
+quiet bar: only the left side (`drgnx-statusbar-quiet`: `folder` — the Explorer's folder, or `No folder open` — branch, agents, jobs, tests and `misc`), no line and column,
 for the modes in `drgnx-statusbar-quiet-modes`. Every other buffer (Magit, Dired, help, Info, a shell, compilation,
 drgnx's own panes) keeps its own mode line, and a buffer whose own `mode-line-format` is nil keeps none. In a narrow window the bar never wraps: segments go in the order of
-`drgnx-statusbar-drop-order` (line endings first), and the branch is cut with an ellipsis, never dropped. The glyphs
+`drgnx-statusbar-drop-order` (line endings first), and the branch is cut with an ellipsis, never dropped (in a column or
+two, where a terminal's three-dot ellipsis would not fit, it is cut without one). The glyphs
 come from `drgnx-face-glyphs`, so a terminal that is not UTF-8 shows ASCII (` | ` between segments instead of ` · `).
 
 **Tests.** A compilation (`M-x compile`, `project-compile`) whose command matches
@@ -206,17 +211,17 @@ and a segment of your own that has not called `(drgnx-statusbar-refresh t)`.
 
 | Setting | Default | What it does |
 |---|---|---|
-| `drgnx-statusbar-left` | `(branch problems tests jobs agents modal misc)` | segments on the left, in order |
+| `drgnx-statusbar-left` | `(branch trust problems tests jobs agents modal misc)` | segments on the left, in order |
 | `drgnx-statusbar-right` | `(lsp position indent encoding eol language)` | segments on the right, in order |
-| `drgnx-statusbar-drop-order` | `(eol indent encoding lsp language misc tests jobs)` | dropped first to last when the window is narrow |
+| `drgnx-statusbar-drop-order` | `(eol indent encoding lsp language misc tests jobs trust)` | dropped first to last when the window is narrow |
 | `drgnx-statusbar-compact` | `(position language)` | what the other editor groups show |
 | `drgnx-statusbar-place` | `editors` | `editors`; `frame` (one bar across the frame) arrives with the grid |
 | `drgnx-statusbar-indent-vars` | the common indent offsets | the variables `indent` reads, first bound one wins |
 | `drgnx-statusbar-modes` | `(prog-mode text-mode conf-mode)` | the modes (besides file buffers and Untitled editors) that get the bar |
 | `drgnx-statusbar-language-names` | names for the modes whose own name is not the language's | mode → the name the `language` segment shows; worked out once per mode |
 | `drgnx-statusbar-quiet-modes` | `(drgnx-start-mode)` | the modes that get the quiet bar |
-| `drgnx-statusbar-quiet` | `(branch agents jobs tests misc)` | the quiet bar's segments, on the left |
-| `drgnx-statusbar-misc-exclude` | the job badge | entries of `global-mode-string` that `misc` leaves out |
+| `drgnx-statusbar-quiet` | `(folder branch agents jobs tests misc)` | the quiet bar's segments, on the left |
+| `drgnx-statusbar-misc-exclude` | the job badge and the Restricted Mode mark | entries of `global-mode-string` that `misc` leaves out |
 | `drgnx-statusbar-misc-info-skip` | `global-mode-string`, which-function's and eglot's entries | entries of `mode-line-misc-info` that `misc` does not format (shown another way) |
 | `drgnx-statusbar-test-command-regexp` | `\_<test\_>` | a compilation whose command matches is a test run |
 | `drgnx-statusbar-test-count-regexps` | ERT's and `bin/drgnx test --ui`'s summary lines | where the counts come from |
@@ -297,6 +302,13 @@ Help tab; pressed while a card from hovering shows, it shows the card for point 
 mouse). A button used on a hovered symbol moves point there first and leaves the mark where point was (`C-u C-SPC`
 goes back).
 
+The card always stands out from the editor: it takes the theme's tooltip look when that differs from the editor's
+background, and otherwise (kusanagi's tooltip is the editor's own) a tint of the text colour — lighter than the page
+on a dark theme, darker on a light one — with a 1px border halfway between the text colour and the card's. It is never
+narrower than its row of buttons, so none is cut off (in a window narrower than that row the card stays on the screen
+and overlaps the window beside). A symbol with no documentation brings no card: the key says "No documentation here."
+in the echo area (in a terminal the strip closes again), and a hover shows nothing.
+
 The card never covers the line you are editing. In a window it sits just below the symbol's line, inside the window
 (above the line when there is no room below), and it never covers any row of that line (a long line wrapped over
 several rows counts whole) or of the line point is on — hovering a symbol just above point puts the card under
@@ -342,8 +354,9 @@ An empty editor tells you nothing, so drgnx fills it. **`*drgnx start*`** says w
 three keys that open everything (the files, the commands, all keys — the same ones the top line shows, from the
 active profile: `C-p`, `C-S-p` and `C-k C-r` in VS Code's) and has four buttons: **Open a Folder…**, **Open the Work
 Graph**, **All Keys** and **Don't show this again**. `Tab` and `Shift-Tab` move between the buttons, `Return` presses
-one. A button whose command is not there (its module is off) is left out. Its bottom line is the status bar's quiet
-form (the branch, agents, jobs and tests, nothing about a cursor position), never Emacs's raw mode line.
+one. A button whose command is not there (its module is off) is left out. The block is centred in the window, whatever its width (a window narrower than the block shows it from the left
+edge), with plain bullets before the keys. Its bottom line is the status bar's quiet form (the folder, the branch,
+agents, jobs and tests, nothing about a cursor position), never Emacs's raw mode line.
 
 It shows itself only where nothing is lost: in the editor window you used last, and only when that window shows
 `*scratch*` that you have not typed in — never over a file or your own text, never while the first-run Welcome is

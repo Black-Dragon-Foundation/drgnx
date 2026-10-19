@@ -18,6 +18,8 @@ core/drgnx-tty.el    terminals, batch-safe: which one, what it can do, keys it c
 core/drgnx-tty-recommend.el  a terminal that sends every key: installed ones, the install command per OS, the opt-in opener
 core/drgnx-tty-fallback.el   keys a legacy terminal cannot send: their Alt+Shift and F6 forms, drgnx-tty-sendable-key (the layer: modules/ui/drgnx-tty-fallback-layer.el)
 core/drgnx-file.el   files drgnx keeps: the bounded reader, the atomic writer, the locked update, backups (below)
+core/drgnx-shell-env.el  PATH, MANPATH, INFOPATH from the login shell, once per start, asynchronously; never a key;
+                     the hub follows (env/set); Shell: Reload Environment (../guide/shell.md)
 modules/<category>/drgnx-<name>.el   one drgnx-module-define per file
 ```
 
@@ -26,8 +28,11 @@ modules/<category>/drgnx-<name>.el   one drgnx-module-define per file
 `drgnx-dir` is the checkout (code only, never written to). User configuration: `(drgnx-user-dir)` —
 `$DRGNX_CONFIG_DIR` or `~/.config/drgnx/`. State and caches: `(drgnx-state-dir)` and `(drgnx-cache-dir)` under
 the XDG directories (`$XDG_STATE_HOME`, `$XDG_CACHE_HOME`, `$XDG_DATA_HOME`: only an absolute path counts — empty or
-relative is ignored, as the XDG spec says, here and in `bin/drgnx`'s `xdg_dir`). Packages: `(drgnx-data-dir)` — `$DRGNX_DATA_DIR` or `~/.local/share/drgnx/` — holds `elpa/`
-(the packages every session uses) and `generations/`; `(drgnx-package-cache-dir)` keeps downloaded package files
+relative is ignored, as the XDG spec says, here and in `bin/drgnx`'s `xdg_dir`). Packages: `(drgnx-data-dir)` —
+`$DRGNX_DATA_DIR`, else `$XDG_DATA_HOME/drgnx/`, else `~/.local/share/drgnx/`; an empty `$DRGNX_DATA_DIR` or
+`$DRGNX_CONFIG_DIR` counts as unset, as in `bin/drgnx` and `install.sh` — holds `elpa/`
+(the packages every session uses), `generations/` and this machine's files that must not travel (`emacs`,
+`systemd/`, `applications/`: [second-machine.md](../guide/second-machine.md)); `(drgnx-package-cache-dir)` keeps downloaded package files
 ([packages.md](../guide/packages.md)).
 Every helper expands with `default-directory` bound to `"/"`, so a `~` is always the local home: in a remote
 buffer (a Tramp `*scratch*`, dired over ssh) a timer, hook or save never makes Tramp contact the host.
@@ -70,7 +75,8 @@ next run, so a report with a mistake is not kept aside.
 **job.eld.** A durable job's `jobs/ID/job.eld` is a plist of plain data in one form: `drgnx-jobs-start` writes it with
 `drgnx-file-write` (text properties on the name and command are dropped first), `drgnx-jobs--read` reads it with
 `drgnx-file-read` (nil for a missing or unreadable file), and the stamp (`drgnx-jobs--stamp`: `:boot` and `:start`) is
-`drgnx-file-update` with `:timeout 0` from the poll, `1.0` from `kill-emacs-hook`, `inhibit-interaction` bound. A busy lock
+`drgnx-file-update` with `:timeout 0` from the poll, `1.0` from `kill-emacs-hook`, `inhibit-interaction` bound; a `:start`
+already stamped within 0.5 s of the process's is kept (Emacs's reading of it jitters by a clock tick). A busy lock
 skips the stamp; an unreadable job.eld is left alone and the error becomes one `message`; the stamp never creates a
 missing job.eld or its directory. Files written by older versions (one `prin1` form) read unchanged.
 
@@ -801,7 +807,9 @@ A timer that outlives the current command goes through one door:
 ```
 
 FN (with ARGS) runs after SECS, or after SECS of idleness with `:idle t`. `:repeat` is a number of seconds for a wall
-timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run-with-idle-timer`. Then
+timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run-with-idle-timer`; a wall timer's
+`:repeat t` signals `wrong-type-argument` on every Emacs (Emacs 31's `run-at-time` refuses it, Emacs 30 ran the timer
+once). Then
 `(drgnx-timer-cancel KEY)`, `(drgnx-timer-active-p KEY)` and `(drgnx-timer-cancel-owner OWNER)` (→ how many).
 
 - **The key.** A second start of a KEY cancels its pending timer first, whatever started it: a setup run twice keeps
@@ -1186,7 +1194,10 @@ view's draw (`drgnx-view--arm`); nothing draws from a mark, so a mark from a pro
 rows. A row whose `(funcall SIG KEY)` is not `eq` to the signature stored at the last sync is dirty (a vector is
 compared element by element, with `eq`, so a fresh vector of the same values is unchanged). New keys are inserted,
 missing ones removed; a row that moved (outside a longest run kept in order) is removed and inserted, and when more
-than half the rows moved the view is reset instead.
+than half the rows moved, or KEYS share no key with the rows (a new row set: another file's Outline), the view is
+reset instead. A reset appends the new rows after the ones that go, so window start and point (Keeping places) fall
+to the first new row: a new row set starts at the top. (Inserted at the start instead, they fell back to the last
+new row: UI audit #3.)
 
 ### Drawing
 
@@ -1591,11 +1602,23 @@ compilation available, Emacs then compiles them natively in the background as th
 times faster and makes far less garbage. `install.sh` runs it; drgnx sets `load-prefer-newer`, so a stale `.elc`
 never shadows newer source. The build must stay warning-free (`test/unit/build-test.el`).
 
+Each file compiles in a fresh batch Emacs (`-Q`, `core/` and `wb/` on `load-path`), as the native compiler compiles
+it when a session loads the `.elc`: in one shared Emacs, a library an earlier file's compile loaded (`project`, `cl-macs`,
+another drgnx file) hid a missing `declare-function` or `require`, and the native compiler's warning then opened
+`*Warnings*` in the user's frame. `drgnx-build-jobs` files compile at once: one per 150 MiB of `MemAvailable` beyond
+1 GiB kept free, at most the processor count (`DRGNX_BUILD_JOBS` sets it); a file that takes more than
+`drgnx-build-file-timeout` (120 s) is an error. A file's result is read when its process's sentinel has run (Emacs
+runs it only after reading what the process left in its pipe), never when `process-status` first says `exit`: under
+load that came before the output, and a finished compile looked like one that ended without a result. The whole build takes about as long as the single-Emacs one did (3 s
+on 16 cores). Warnings are printed, and the build test fails on any; `bin/drgnx build` exits 1 only on errors, so a
+warning a newer Emacs adds never stops an install or an update.
+
 ## The Emacs `bin/drgnx` runs in
 
 The shell function `emacs_bin` picks the one Emacs every subcommand uses: `$DRGNX_EMACS`, else the first line of
-`$DRGNX_CONFIG_DIR/emacs` (default `~/.config/drgnx/emacs`, written by `install.sh`'s `remember_emacs`) when it
-names an executable file, else `emacs`. The file is read as a path, never evaluated. A new subcommand calls
+the data dir's `emacs` (`$DRGNX_DATA_DIR/emacs`, default `~/.local/share/drgnx/emacs`, written by `install.sh`'s
+`remember_emacs`) when it names an executable file, then the same of `$DRGNX_CONFIG_DIR/emacs` (where older
+installs wrote it), else `emacs`. The files are read as paths, never evaluated. A new subcommand calls
 `"$(emacs_bin)"`, never a bare `emacs`. All of them run with `load-prefer-newer`, so a stale `.elc` after a pull
 never prints before the output. `emacsclient_bin` is that Emacs's `emacsclient` (beside it, or in an Emacs.app's
 `Contents/MacOS/bin/`; else PATH's) — what `drgnx open` and `drgnx PATH` talk to the daemon with

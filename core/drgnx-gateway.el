@@ -85,6 +85,8 @@ its token (shown once: only its hash is kept)."
                               :filter #'drgnx-gateway--filter :sentinel #'drgnx-gateway--client-sentinel))
   (drgnx-gateway-port))
 
+(defvar drgnx-gateway--sockets)         ; Per-session sockets, below
+
 (defun drgnx-gateway-stop ()
   (when drgnx-gateway--server (delete-process drgnx-gateway--server) (setq drgnx-gateway--server nil))
   (dolist (p (process-list))

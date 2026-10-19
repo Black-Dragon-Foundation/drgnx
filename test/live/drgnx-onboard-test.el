@@ -1,6 +1,6 @@
 ;;; drgnx-onboard-test.el --- live: onboarding in a fresh GUI session (config=drgnx) -*- lexical-binding: t -*-
 ;; The M6 exit: a fresh session with fixture repos completes onboarding non-interactively with no
-;; failed step and no failing doctor check; the board has the projects and their TODOs; the Welcome
+;; failed step and no failing doctor check; the board file is not created; the Welcome
 ;; list opens in the editor; running it again changes nothing.
 (require 'ert)
 (require 'drgnx-ui)
@@ -29,10 +29,9 @@
             (let ((r (drgnx-live-ob--q sess run)))
               (should (equal (seq-filter (lambda (x) (eq (cadr x) 'fail)) r) nil))
               (should (memq 'projects (mapcar #'car r))))
-            (let ((board (with-temp-buffer (insert-file-contents (concat root "org/board.org")) (buffer-string))))
-              (should (string-match-p "^\\* alpha" board))
-              (should (string-match-p "^\\* beta" board))
-              (should (string-match-p "^\\*\\* TODO second thing" board))
+            ;; non-interactive never writes the user's board
+            (progn
+              (should-not (file-exists-p (concat root "org/board.org")))
               ;; Welcome: in the editor, never an unrouted window
               (drgnx-live-ob--q sess "(progn (drgnx-onboard-welcome) t)")
               (drgnx-ui-measure sess nil)
@@ -40,7 +39,7 @@
                              '("*drgnx Welcome*" t 0)))
               ;; again: nothing changes
               (drgnx-live-ob--q sess run)
-              (should (equal (with-temp-buffer (insert-file-contents (concat root "org/board.org")) (buffer-string)) board))))
+              (should-not (file-exists-p (concat root "org/board.org")))))
         (drgnx-ui-stop (plist-get s :name))
         (delete-directory root t)))))
 

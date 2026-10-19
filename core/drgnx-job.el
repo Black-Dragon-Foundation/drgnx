@@ -597,6 +597,8 @@ about it is open: drgnx-job-clash.el).")
     (with-demoted-errors "drgnx job: %S" (drgnx-job--gate-tick id))
     (with-demoted-errors "drgnx job: %S" (run-hook-with-args 'drgnx-job-tick-functions id))))
 
+(defvar drgnx-job--reviewing)           ; defined with the review below
+
 (defun drgnx-job--session-changed (s)
   "A job session changed (`drgnx-agents-changed-functions'): a free one gets its task prompt; an ended one moves its
 job on."

@@ -89,6 +89,7 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
       (should-not (seq-find (lambda (kv) (string-prefix-p "DRGNX_FAKE_API_KEY=" kv)) env))
       (should (member "DRGNX_UI_NAME=drgnx-ui-5-00000a" env))
       (should (member "DRGNX_NO_LANGUAGE_SERVERS=1" env))      ; no pyright per fixture project (a test opts in)
+      (should (member "DRGNX_NO_SHELL_ENV=1" env))             ; never the login shell's PATH
       (should (member (concat "EMACS_SOCKET_NAME=" (plist-get s :socket)) env))
       (should (equal (drgnx-ui-env-argv '("A=1")) '("env" "-i" "A=1"))))))
 

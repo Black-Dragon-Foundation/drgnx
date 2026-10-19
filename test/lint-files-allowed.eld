@@ -4,6 +4,7 @@
 ;; row), or `never' with a :why that starts with its category: "a user's file", "a temporary file",
 ;; "a directory move", "its own lock protocol", "age writes it", "a developer tool" or "Lisp source".
 (
+ (:file "core/drgnx-bootstrap.el" :fn drgnx-bootstrap--git-clone :what rename-file :why "a directory move: a fresh clone renamed into the empty config dir" :until never)
  (:file "core/drgnx-fmt.el" :fn drgnx-fmt--learn :what read-site :why "a user's file: Lisp source read to learn indentation" :until never)
  (:file "core/drgnx-fmt.el" :fn drgnx-fmt-file :what write-region :why "a user's file: bin/drgnx fmt rewrites source" :until never)
  (:file "core/drgnx-gateway.el" :fn drgnx-gateway--write-body :what write-region :why "a temporary file: a request body for curl" :until never)
@@ -30,6 +31,8 @@
  (:file "core/drgnx-projects.el" :fn drgnx-projects--write-plan :what rename-file :why "a user's file: a plan file" :until never)
  (:file "core/drgnx-sandbox.el" :fn drgnx-sandbox--write-private :what write-region :why "a temporary file: a sandbox profile, mode 600" :until never)
  (:file "core/drgnx-search-index.el" :fn drgnx-search-index--lock :what write-region :why "its own lock protocol: the index lock" :until never)
+ (:file "core/drgnx-secrets.el" :fn drgnx-secrets-export :what rename-file :why "age writes it: secrets.age, encrypted by age into secrets.age.new, then renamed" :until never)
+ (:file "core/drgnx-shell.el" :fn drgnx-shell-install :what write-region :why "a user's file: the shell's rc file gains one line, only on a yes" :until never)
  (:file "core/drgnx-startup-trace.el" :fn drgnx-startup-trace--finish :what with-temp-file :why "a developer tool: the startup trace" :until never)
  (:file "wb/drgnx-explorer.el" :fn drgnx-explorer-new-file :what write-region :why "a user's file: the Explorer" :until never)
  (:file "wb/drgnx-explorer.el" :fn drgnx-explorer-rename :what rename-file :why "a user's file: the Explorer" :until never)

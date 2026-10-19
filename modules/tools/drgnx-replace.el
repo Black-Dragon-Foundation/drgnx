@@ -33,6 +33,7 @@
 (declare-function eglot-move-to-utf-16-linepos "eglot")
 (declare-function eglot--signal-textDocument/didChange "eglot")
 (declare-function jsonrpc-request "jsonrpc")
+(declare-function project-root "project")
 (defvar eglot-move-to-linepos-function)
 (defvar apheleia-format-after-save-in-progress) ; bound around our saves: no format on save (extra/format)
 

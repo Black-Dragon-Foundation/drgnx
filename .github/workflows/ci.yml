@@ -47,15 +47,19 @@ jobs:
     timeout-minutes: 30
     container: docker.io/library/ubuntu:26.04
     steps:
-      - name: Emacs, git and curl (the AI client)
+      - name: Emacs, git, curl (the AI client) and zsh (the shell-file and completion tests; bash is there)
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update -qq
-          apt-get install -y -qq --no-install-recommends emacs-nox git ca-certificates curl
+          apt-get install -y -qq --no-install-recommends emacs-nox git ca-certificates curl zsh
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # the job runs as root on a workspace the runner's user owns: git refuses it ("dubious ownership") once
+      # checkout's temporary setting is gone; system-wide, because the tests run git with a HOME of their own
+      - name: The checkout is a safe directory for git
+        run: git config --system --add safe.directory "$GITHUB_WORKSPACE"
       - run: emacs --version | head -1
       - name: Unit suite
         run: bin/drgnx test

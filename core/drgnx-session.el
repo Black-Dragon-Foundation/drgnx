@@ -21,6 +21,7 @@
 (defvar server-name)
 (defvar server-process)
 (defvar server-socket-dir)
+(defvar server-client-instructions)
 (declare-function server-running-p "server")
 (declare-function drgnx-explorer-roots "drgnx-explorer")
 (declare-function drgnx-explorer-set-roots "drgnx-explorer")
@@ -206,6 +207,7 @@ Elsewhere — a terminal frame — as in Emacs; ARG is then passed on."
 and `C-x 5 0' (remapped).  On macOS the server socket ignores XDG_RUNTIME_DIR: a shell exports it, Finder does
 not, and `drgnx PATH' (bin/drgnx runs emacsclient without it there) must find the same socket from both."
   (drgnx-session-load)
+  (setq server-client-instructions nil)         ; every `emacsclient -c' frame said "When done with a buffer, type C-x 5 0"
   (define-key special-event-map [delete-frame] #'drgnx-session-close-frame)
   (define-key global-map [remap save-buffers-kill-terminal] #'drgnx-session-kill-terminal)
   (define-key global-map [remap delete-frame] #'drgnx-session-delete-frame)

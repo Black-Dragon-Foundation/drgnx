@@ -138,14 +138,18 @@ mistake is copied aside (NAME.bak-…) and FN gets nil; a newer drgnx's file is 
   (let ((m (make-sparse-keymap))) (define-key m [mode-line mouse-1] #'drgnx-trust-folder-at-click) m)
   "Keys on the \"restricted\" mark.")
 
+(defconst drgnx-trust--mark-help
+  "Restricted Mode: this folder is not trusted, so Flymake checkers and symbol shorthands from its files are off.
+Click, or run Trust This Folder, to trust it."
+  "What Restricted Mode is and how to leave it: the mark's help text.")
+
 (defconst drgnx-trust--mark-text
-  (propertize " restricted" 'face 'drgnx-trust-restricted 'mouse-face 'mode-line-highlight 'local-map drgnx-trust-mark-map
-              'help-echo "This folder is not trusted: Flymake checkers and symbol shorthands are off here.
-mouse-1: Trust This Folder")
+  (propertize " Restricted Mode" 'face 'drgnx-trust-restricted 'mouse-face 'mode-line-highlight 'local-map drgnx-trust-mark-map
+              'help-echo drgnx-trust--mark-help)
   "The mark.")
 
 (defun drgnx-trust--mark ()
-  "The mode-line mark: \"restricted\" for a local file outside the trusted set, else nothing."
+  "The mode-line mark: \"Restricted Mode\" for a local file outside the trusted set, else nothing."
   (if (eq drgnx-trust--state 'restricted) drgnx-trust--mark-text ""))
 
 (defconst drgnx-trust--mark-segment '(:eval (drgnx-trust--mark)))

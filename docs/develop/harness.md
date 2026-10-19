@@ -17,6 +17,7 @@ how every drgnx UI change is developed and verified.
 | `bin/drgnx test --bench` | the workbench timed against treemacs and ibuffer in a GUI session on a 25k-file project — see [workbench.md](../guide/workbench.md#performance) | the host (needs mutter); treemacs from `$DRGNX_BENCH_ELPA` |
 | `bin/drgnx test --perf` / `--soak [MIN]` | input latency, frames, GC, startup and memory against budgets; the memory soak — see [perf.md](perf.md) | the host (needs mutter) |
 | `bin/drgnx test --install [NAME…]` | `install.sh` end to end in fresh distribution containers: source builds on Fedora 44, Debian 13, Ubuntu 26.04, packages on Fedora 45 and Arch; then the doctor, a second run (no-op), on Fedora packages emacs-nw installed beside emacs-pgtk (`emacs` must stay the pgtk build) and `--dry-run` (no changes) — see [install.md](../guide/install.md) | podman, docker or nerdctl; slow, network |
+| `bin/drgnx test --bootstrap [--fedora 44\|45]` | the exit test of a second machine ([second-machine.md](../guide/second-machine.md)): one command on a fresh Fedora container — see below | podman, docker or nerdctl; slow, network, 6 GB |
 
 `bin/drgnx check` runs the build and all of these host tiers in one go, in parallel where that is safe — see
 [check.md](check.md).
@@ -224,7 +225,11 @@ Unix socket paths are limited to ~108 bytes; the hash keeps two state roots (say
 - Everything the session writes lands in its run directory (`user-emacs-directory`), or in the state root's
   shared eln cache (`ROOT/eln-cache`: native code and trampolines compiled once for every session; starting a
   session and `reap` delete `.eln` files unused — neither read nor written — for 30 days, and directories left
-  empty, so the cache of an Emacs no longer run goes too). An external
+  empty, so the cache of an Emacs no longer run goes too). In a built tree (`bin/drgnx build`) a session loads the
+  `.elc` files and Emacs native-compiles the ones its cache lacks in the background; a warning from that compile (a
+  function used without a `declare-function`) would open `*Warnings*` in a new window of the root frame, under the
+  running test's feet — `bin/drgnx build` compiles each file in an Emacs of its own, as the native compiler does, so
+  the build test fails on such a warning first ([core.md](core.md#build-drgnx-buildel)). An external
   configuration is only read: code directories (`lisp/`, `extras/`, `site-lisp/`, `tree-sitter/`, `snippets/`,
   `themes/`) are linked, `custom.el` is copied, packages load from its `elpa/`; history, recentf, places and
   other state files are not brought in.
@@ -238,6 +243,8 @@ Unix socket paths are limited to ~108 bytes; the hash keeps two state roots (say
   for every compositor, so nothing (fontconfig, Mesa's shader cache) is written to `~/.cache`; they are rebuilt every start.
 - No language servers: `DRGNX_NO_LANGUAGE_SERVERS=1`, so a scenario's fixture projects do not each start one (a run
   once had 12 pyrights); a test that needs a server sets it to "" in its session.
+- Not the login shell's environment: `DRGNX_NO_SHELL_ENV=1`, so a session keeps the `PATH` it was given
+  ([shell.md](../guide/shell.md#your-path-in-drgnx)); a test that wants it sets it to "" in its session.
 - Deterministic look: no startup screen, no blinking cursor, no bell, no dialog boxes.
 - Safety: treemacs drag-to-move is off.
 - Its own server, started (with the harness agent) by the generated `init.el` *before* the configuration's
@@ -607,6 +614,52 @@ podman run --rm --memory 3g --memory-swap 3g -v "$PWD:/src:ro,Z" -w /src drgnx-t
 The runner gives the tests a temporary home, so nothing reaches `~`. `bin/drgnx test --ui` and CI do not build this
 image; there the two tests skip.
 
+## The second-machine exit test
+
+`bin/drgnx test --bootstrap [--fedora 44|45]` (default 45) proves what [second-machine.md](../guide/second-machine.md)
+promises: on a machine with nothing of drgnx's, **one command** brings back the configuration, the locked packages and
+the provider keys, and ends in a green doctor. It makes a snapshot of the working tree, as `--install` does, and a
+fixture configuration (`test/fixtures/bootstrap/config/` with this tree's `etc/drgnx.lock.eld`) as a git repository,
+cloned `--bare` beside the snapshot. Two containers follow, each with a memory cap (no swap beyond it):
+
+1. **The keys** (`fedora:N` + `age`, 3 GB, `test/bootstrap/make-secrets.sh`): an age identity, a key bundle of one
+   `openrouter` key (built at run time) encrypted to it as `secrets.age` and committed into the bare repository, and a
+   second repository whose `secrets.age` is locked with a passphrase (typed on a terminal made by `script`).
+2. **The second machine** (a fresh `fedora:N`, 6 GB, `test/bootstrap/in-container.sh`): as root it adds only what a
+   desktop has (`sudo`, a user `tester` with NOPASSWD, `dbus-daemon`, `gnome-keyring`, `libsecret`, `script`) and
+   checks that `tester`'s sudo works (if it does not, the container runtime is at fault: the run stops there and
+   prints the evidence: the error, `/etc/shadow`, the capabilities and SELinux state); as
+   `tester`, in a D-Bus session whose login keyring is unlocked with a password on stdin
+   (`gnome-keyring-daemon --unlock --components=secrets`, which works headless), it runs
+   `install.sh --yes --config … --identity …` and checks:
+   - exit 0; `~/.config/drgnx` is the fixture (`git status --porcelain` shows at most `drgnx.lock.eld`, which the first sync completes); every package in the data dir's
+     `elpa/` is a `NAME-VERSION` the lock pins (the minimal preset installs some of them, not all), and every package
+     the configuration needs (its modules' packages and what they require, read by `drgnx-pkg`) is there;
+   - `secret-tool lookup host openrouter.ai service drgnx` prints the key, and the key is nowhere else under `$HOME`,
+     `/tmp` or `/src` (the keyring's own store aside); age was installed by bootstrap, after the announced line;
+     the output's doctor step is `ok`; no rc file mentions drgnx (`--yes` never writes one);
+   - a second `drgnx bootstrap … --yes` exits 0 with no `changed` row;
+   - without a session bus the keys step is `skipped` ("no keyring");
+   - **the real terminal:** age is removed, the config dir and the key are deleted, and `drgnx bootstrap --config
+     …config-pass.git --step preflight --step config --step keys` runs on a pseudo-terminal (`script`) with a
+     stand-in `sudo` that asks for a password on `/dev/tty`. The test types `y` twice (the key import, the age
+     install), the sudo password and the age passphrase when each prompt appears (`test/bootstrap/pty-run.sh`), and
+     checks that the hand-back to `bin/drgnx` ran both, the key is back, and neither password reached the screen.
+     The driver answers the prompts in order, each only when it shows up after the previous reply was typed (a
+     question that mentions a passphrase is not age's prompt), and never hangs: a prompt (or the end) that does not
+     come within `PTY_STEP_TIMEOUT` seconds (300) stops the command, and the test fails naming what it waited for,
+     with the screen printed above.
+
+Fedora 44 builds Emacs from source and takes much longer. A test never touches your home: the snapshot, the fixture
+repositories and the log live in a fresh `mktemp -d` directory under `$TMPDIR` (`/tmp`), and the run refuses to start
+if that is under `$HOME`. Each container is named (`drgnx-bootstrap-PID-keys`, `-machine`) and runs within an hour
+(`timeout -k 30`); it is removed by name after its run and on any exit of the test, Ctrl-C or a time-out included
+(the container's bash ignores the TERM podman forwards), so none is left running. `--install` does the same
+(`drgnx-install-PID-NAME`). The directory is removed after a green run; after a failure it is kept and the run prints the
+log's path (`fNN.log`) and its last lines. A doctor row other than OK, or a WARN other than `security`, is a gap
+to fix in the code that owns it; the green list is never widened for this test. The weekly `Bootstrap` workflow runs it
+([ci.md](ci.md)).
+
 ## MCP server
 
 `bin/drgnx ui mcp` serves the harness as MCP tools over stdio (`harness/drgnx-ui-mcp.el`, batch Emacs — no
@@ -715,7 +768,7 @@ dirs) and drive the session through `harness/drgnx-tty-session.el`:
   `drgnx-tty-session-client SESS :env ENV :args ARGS` opens more clients, each in its own window, with extra
   variables (`TERM=…`) and emacsclient arguments (files, `-e FORM`). `drgnx-tty-session-pty-start` opens a client
   under Emacs's own pty that never answers a query: a silent terminal. `:keys PROFILE` (`vscode`, `emacs` or `vim`)
-  writes the session's `keys.eld` with that profile. `drgnx-tty-session-tmux SESS ARGS…` runs any tmux command on the
+  writes the session's `keys.eld` with that profile. A session with Emacs also gets `face.eld` with the start page dismissed ("Don't show this again"), so an empty editor keeps showing `*scratch*`, which the tests look at. `drgnx-tty-session-tmux SESS ARGS…` runs any tmux command on the
   session's server.
 - **Isolation:** every program runs under `env -i` with the GUI harness's allowlist. HOME, `XDG_CONFIG_HOME`,
   `XDG_DATA_HOME`, `XDG_CACHE_HOME` and `XDG_STATE_HOME` are in the run directory, and `TMUX` is unset. Every tmux

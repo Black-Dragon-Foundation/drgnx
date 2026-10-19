@@ -89,7 +89,11 @@ context is (from the agent's `usage_update`, or usage in its answer). The **Last
 agent last did something (`30s`, `5m`, `2h`, `3d`), as this Emacs saw it. The list updates in place: when an agent changes, or every 30
 seconds for the ages, only the lines that differ are rewritten, and each window (and the cursor) stays on its
 session even when lines move. While the list is not shown nothing is printed; it is brought up to date when you show
-it again; the 30 second timer itself runs only while the list shows. The Agent layout ([layouts.md](layouts.md)) puts this list on the right and the chat of the agent that
+it again; the 30 second timer itself runs only while the list shows. The dock's tab strip uses the header line, so the
+column titles (Name, Status, Last, …) are the list's first line, in the theme's header face. With no sessions the list
+says how to start one (*New Agent Session…*, with its key when your key profile has one, or from the palette) and, when
+the default profile is claude and its adapter is missing or too old, what Claude needs. The Agent layout
+([layouts.md](layouts.md)) puts this list on the right and the chat of the agent that
 acted last beside your file.
 
 Nothing an agent asks is ever a question in the minibuffer: the agent waits, the Agents tab says "1 to answer",
@@ -178,8 +182,11 @@ reach it over its private socket from the Emacs or `drgnx hub start` that starts
 environment), from auth-source files that never ask, or from the command you ran (a key in `~/.authinfo.gpg` is read
 then) — and stay in its memory (a restarted hub gets them again when Emacs reconnects to it); tokens are kept only as hashes, so a restarted hub still
 takes them; an agent's token is revoked when it exits, or once the Emacs that started it is gone (a crash). The hub keeps the environment, `PATH` included, of the Emacs
-that started it: when an agent's program was installed while a hub ran (onboarding's Agents step, say), run
-`drgnx hub stop` (its durable sessions end), so the hub the next durable session starts finds the program.
+that started it, except that drgnx sends it your login shell's `PATH` when that changed ([shell.md](shell.md#your-path-in-drgnx):
+at each start, and **Shell: Reload Environment**). So when an agent's program was installed while a hub ran, into a
+directory on your shell's `PATH`, run Shell: Reload Environment: the agents the hub starts from then on find it. When
+it went somewhere your shell's `PATH` does not reach (onboarding's Agents step adds such a directory to the running
+Emacs only), run `drgnx hub stop` (its durable sessions end), so the hub the next durable session starts finds the program.
 With no hub to be had, an agent goes to its provider directly and says so. The Agents list's **Via**
 column shows which.
 

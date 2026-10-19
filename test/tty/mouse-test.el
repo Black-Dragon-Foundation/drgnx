@@ -115,11 +115,14 @@ a.txt in the editor, wait until both are on the screen.  Returns the project dir
 ;;;; Tabs, breadcrumb, status bar
 
 (defun drgnx-tty-mouse-test--two-tabs (sess)
-  "a.txt then b.txt in the editor, so both are tabs; wait for both on the tab line."
+  "a.txt then b.txt in the editor, so both are tabs; wait for both on the tab line.
+a.txt is a tab only once the bus's idle flush noted it (a buffer replaced before that is a preview): wait for its
+tab before b.txt replaces it.  Tabs are apart by a gap of spaces (wb/drgnx-chrome.el)."
+  (drgnx-tty-session-wait-screen sess "a\\.txt ×")
   (drgnx-tty-session-eval sess '(let ((dir (file-name-directory (buffer-file-name (get-buffer "a.txt")))))
                                   (drgnx-wb-show-in-editor (find-file-noselect (expand-file-name "b.txt" dir)) t)
                                   t))
-  (drgnx-tty-session-wait-screen sess "a\\.txt ×  b\\.txt ×"))
+  (drgnx-tty-session-wait-screen sess "a\\.txt × +b\\.txt ×"))
 
 (ert-deftest drgnx-tty-mouse/tab-line-click-selects-a-tab ()
   (drgnx-tty-session-with (s :size "120x40")
@@ -191,8 +194,10 @@ a.txt in the editor, wait until both are on the screen.  Returns the project dir
                                       (define-key global-map [menu-bar file drgnx-test-item]
                                                   '(menu-item "Mouse Test Item" drgnx-tty-mouse-test--item))
                                       t))
+    ;; drgnx hides the menu bar by default (`drgnx-face-menu-bar'): this person has brought it back
+    (drgnx-tty-session-eval s '(progn (customize-set-variable 'drgnx-face-menu-bar t) t))
     ;; the menu bar is the first row of the frame; the click opens a tty menu (modal) with the new item on top
-    (should (= (cdr (drgnx-tty-session-find s "File")) 1))
+    (should (= (cdr (drgnx-tty-session-wait-screen s "File +Edit")) 1))
     (should-not (drgnx-tty-session-find s "Mouse Test Item"))
     (drgnx-tty-mouse-test--click-on s "File")
     (drgnx-tty-session-wait-screen s "Mouse Test Item")
