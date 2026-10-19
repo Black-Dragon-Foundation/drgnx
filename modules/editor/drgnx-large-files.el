@@ -311,6 +311,7 @@ Chunk buffers stay."
                               (drgnx-module-advice #'find-file-noselect :around open
                                                    (orig filename &optional nowarn rawfile wildcards)
                                 (drgnx-large-files--visit orig filename nowarn rawfile wildcards))
+                              ;; Emacs 30 and 31.1 share the first three arguments (31 adds EVALEXPRS after COMMANDS)
                               (drgnx-module-advice #'server-execute :around server (orig proc files nowait &rest rest)
                                 ;; `drgnx open --wait': drgnx as $EDITOR needs the whole file
                                 (let ((drgnx-large-file-open (if (and files (not nowait)) 'whole 'auto)))

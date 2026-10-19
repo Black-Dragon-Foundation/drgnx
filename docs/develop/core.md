@@ -2202,6 +2202,17 @@ without a question: a lean buffer at or below it turns lean off and runs `normal
 variables), a normal one above it turns lean; raw and chunk buffers stay. `global-so-long-mode` is on. The
 teardown turns lean off in lean and raw buffers but does not re-run their major modes, and says so.
 
+**Chunks** are a second module, `editor/large-files-chunks` (`modules/editor/drgnx-large-files-chunks.el`,
+`:packages '(vlf)`), so that `editor/large-files` needs no package and CI tests it without vlf. Its setup sets
+`drgnx-large-files-chunk-open-function` to `drgnx-large-files-chunks-open` (`drgnx-module-set`). vlf 1.7.2's `vlf`
+selects the buffer it builds, so the function builds the buffer the same way and selects nothing:
+`generate-new-buffer`, `set-visited-file-name` (it runs the major mode on the still empty buffer; the flag is set
+first, so the producers stay quiet), `set-buffer-modified-p` nil, `vlf-mode`. `vlf-batch-size` is `:chunk-size`,
+and vlf's batch-size tuning is off in the buffer, so a chunk always holds that much. vlf runs no `find-file-hook`,
+so the lean sweep never sees a chunk buffer: undo stays on, and auto-save is turned off. `vlf-setup` is never
+loaded (its advice asks a question of its own). `drgnx-large-files-chunks-position` gives `(N . TOTAL)`, counted
+the way vlf's mode line counts. The module's teardown leaves chunk buffers as they are.
+
 ## The workbench state store (`wb/drgnx-state.el`, `core/drgnx-frame-kind.el`)
 
 One observed answer for "which windows, panes and frames are there". The store keeps one record per workbench
