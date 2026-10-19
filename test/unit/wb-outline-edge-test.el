@@ -3,29 +3,30 @@
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'drgnx-outline)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-outline-edge-test--with (src &rest body)
   "BODY with SRC an elisp buffer in the editor and the Outline shown in the dock."
   (declare (indent 1))
   `(drgnx-test-with-state
-     (let ((drgnx-wb--sections nil)
-           (,src (generate-new-buffer "outline-edge-src.el")))
-       (delete-other-windows)
-       (with-current-buffer ,src
-         (insert "(defun alpha () 1)\n")
-         (emacs-lisp-mode))
-       (switch-to-buffer ,src)
-       (drgnx-test-use-editor (selected-window))
-       (drgnx-outline-setup)
-       (drgnx-wb-show-sidebar)
-       (unwind-protect (progn (drgnx-outline-refresh) ,@body)
-         (when (timerp drgnx-outline--timer) (cancel-timer drgnx-outline--timer))
-         (setq drgnx-outline--timer nil)
-         (drgnx-outline--watch nil)
-         (drgnx-wb-hide-sidebar)
+     (drgnx-test-with-clock (:allow-pending t)
+       (let ((drgnx-wb--sections nil)
+             (,src (generate-new-buffer "outline-edge-src.el")))
          (delete-other-windows)
-         (kill-buffer ,src)
-         (when (get-buffer drgnx-outline-buffer-name) (kill-buffer drgnx-outline-buffer-name))))))
+         (with-current-buffer ,src
+           (insert "(defun alpha () 1)\n")
+           (emacs-lisp-mode))
+         (switch-to-buffer ,src)
+         (drgnx-test-use-editor (selected-window))
+         (drgnx-outline-setup)
+         (drgnx-wb-show-sidebar)
+         (unwind-protect (progn (drgnx-outline-refresh) ,@body)
+           (drgnx-timer-cancel 'outline-refresh)
+           (drgnx-outline--watch nil)
+           (drgnx-wb-hide-sidebar)
+           (delete-other-windows)
+           (kill-buffer ,src)
+           (when (get-buffer drgnx-outline-buffer-name) (kill-buffer drgnx-outline-buffer-name)))))))
 
 (defun drgnx-outline-edge-test--watched-p (buffer)
   (memq #'drgnx-outline--changed (buffer-local-value 'after-change-functions buffer)))
@@ -58,6 +59,7 @@
         (unwind-protect
             (progn
               (drgnx-outline-refresh)
+              (with-current-buffer drgnx-outline-buffer-name (drgnx-view-draw-now drgnx-view))
               (should (= n 0))
               (should (equal (append drgnx-outline--rows nil) nil))
               (should (string-match-p "off for remote files"

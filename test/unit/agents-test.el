@@ -30,7 +30,7 @@
        (delete-directory state t))))
 
 (defun drgnx-agents-test--texts (s type)
-  (mapcar (lambda (e) (plist-get e :text)) (seq-filter (lambda (e) (eq (plist-get e :type) type)) (drgnx-agent-session-entries s))))
+  (mapcar #'drgnx-agents-entry-text (seq-filter (lambda (e) (eq (plist-get e :type) type)) (drgnx-agent-session-entries s))))
 
 (defun drgnx-agents-test--idle (s) (drgnx-agents-test--wait (lambda () (eq (drgnx-agent-session-status s) 'idle))))
 
@@ -323,5 +323,47 @@
       (drgnx-agents-send s "hello")
       (should-not sent)
       (should (equal (drgnx-agent-session-queue s) '("hello"))))))
+
+;;;; Streamed text: chunks are kept, joined once when read
+
+(ert-deftest drgnx-agents/chunks-are-joined-once-when-read ()
+  (let* ((s (drgnx-agents--make :name "chunks" :status 'busy)))
+    (dolist (c '("Hel" "lo, " "wor" "ld")) (drgnx-agents--append-text s 'agent c))
+    (let ((e (car (drgnx-agent-session-entries s))))
+      (should (= 1 (length (drgnx-agent-session-entries s))))
+      (should (= 12 (drgnx-agents-entry-length e)))
+      (should (equal "world" (drgnx-agents-entry-tail e 7)))         ; only the newest chunks
+      (should (equal "lo, world" (drgnx-agents-entry-tail e 3)))
+      (should (equal "" (drgnx-agents-entry-tail e 12)))
+      (should (equal "Hello, world" (drgnx-agents-entry-text e)))
+      (should (eq (drgnx-agents-entry-text e) (drgnx-agents-entry-text e)))   ; joined once, kept until the next chunk
+      (drgnx-agents--append-text s 'agent "!")
+      (should (equal "d!" (drgnx-agents-entry-tail e 11)))
+      (should (equal "Hello, world!" (drgnx-agents-entry-text e)))
+      ;; the turn's end: the text is whole in :text, for everything that reads the plist
+      (drgnx-agents--append-text s 'agent " Bye.")
+      (drgnx-agents-join-text s)
+      (should (equal "Hello, world! Bye." (plist-get e :text)))
+      (should-not (plist-get e :chunks)))))
+
+(defun drgnx-agents-test--append-alloc (size)
+  "What appending a 100-character chunk to a running SIZE-character answer allocates (byte-compiled; least of 3)."
+  (dolist (f '(drgnx-agents--append-text drgnx-agents-entry-length))
+    (unless (compiled-function-p (symbol-function f)) (let ((byte-compile-warnings nil)) (byte-compile f))))
+  (let* ((s (drgnx-agents--make :name "alloc" :status 'busy)) (chunk (make-string 100 ?b)) best
+         (run (byte-compile (lambda () (drgnx-agents--append-text s 'agent chunk)))))
+    (drgnx-agents--append-text s 'agent (make-string size ?a))
+    (dotimes (i 5)
+      (let* ((a (memory-use-counts)) (_ (funcall run)) (z (memory-use-counts)) (d (apply #'+ (cl-mapcar #'- z a))))
+        (when (>= i 2) (setq best (if best (min best d) d)))))
+    (should (= (+ size 500) (drgnx-agents-entry-length (car (drgnx-agent-session-entries s)))))
+    best))
+
+(ert-deftest drgnx-agents/a-chunk-costs-the-chunk-not-the-answer ()
+  ;; AGENTS.md: stream parsing never concatenates the whole pending input per chunk
+  (let ((small (drgnx-agents-test--append-alloc 4096)) (big (drgnx-agents-test--append-alloc 409600)))
+    (message "chunk append allocation: 4 kB answer %d, 400 kB answer %d" small big)
+    (should (= small big))
+    (should (< big 100))))
 
 ;;; agents-test.el ends here

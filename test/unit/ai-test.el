@@ -6,6 +6,7 @@
 (require 'drgnx-jobs)
 (require 'auth-source)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-ai-test--with (root &rest body)
   "BODY with ROOT a temp dir: the config dir ROOT/config, a project ROOT/proj, no provider keys in the environment."
@@ -454,6 +455,17 @@ LOG/security.calls."
                (buffer-string))))
     (should (equal out "(nil t t)"))))
 
+(ert-deftest drgnx-ai/the-first-window-looks-at-the-local-runner-from-an-idle-timer ()
+  (let ((looked 0))
+    (drgnx-test-with-clock ()
+      (cl-letf (((symbol-function 'drgnx-ai-ensure-local) (lambda () (cl-incf looked))))
+        (drgnx-ai--on-first-window)
+        (should (drgnx-timer-active-p 'ai-first-window))
+        (should (= looked 0))                                          ; never inside the hook
+        (drgnx-test-idle 1)
+        (should (= looked 1))
+        (should-not (drgnx-timer-active-p 'ai-first-window))))))
+
 (ert-deftest drgnx-ai/an-answer-stamps-no-rate-limit ()
   ;; the first-window look finding the server up must not hold back the restart a refused request asks for a
   ;; moment later; only a look that finds it down counts toward the once-a-minute limit
@@ -539,19 +551,20 @@ LOG/security.calls."
 
 (ert-deftest drgnx-ai/drgnx-open-loads-the-keys-once-from-a-timer-never-in-batch ()
   (drgnx-ai-test--with root
-    (let ((timers nil) (loaded 0) (drgnx-ai--keys-loading nil))
-      (cl-letf (((symbol-function 'run-at-time) (lambda (_secs _repeat fn &rest args) (push (cons fn args) timers)))
-                ((symbol-function 'drgnx-ai-load-keys) (lambda () (cl-incf loaded) nil)))
-        (let ((noninteractive t)) (drgnx-ai-load-keys-soon))      ; batch: never
-        (should-not timers)
-        (let ((noninteractive nil))
-          (drgnx-ai-load-keys-soon)
-          (should (= loaded 0))                                     ; nothing inside the emacsclient call
-          (should (= 1 (length timers)))
-          (apply (caar timers) (cdar timers))
-          (should (= loaded 1))
-          (drgnx-ai-load-keys-soon)                                 ; once per daemon
-          (should (= 1 (length timers))))))
+    (let ((loaded 0) (drgnx-ai--keys-loading nil))
+      (drgnx-test-with-clock ()
+        (cl-letf (((symbol-function 'drgnx-ai-load-keys) (lambda () (cl-incf loaded) nil)))
+          (let ((noninteractive t)) (drgnx-ai-load-keys-soon))      ; batch: never
+          (should-not (drgnx-timer-active-p 'ai-load-keys))
+          (let ((noninteractive nil))
+            (drgnx-ai-load-keys-soon)
+            (should (= loaded 0))                                     ; nothing inside the emacsclient call
+            (should (drgnx-timer-active-p 'ai-load-keys))             ; a keyed layer timer, Emacs-lifetime
+            (drgnx-test-advance 0.5)
+            (should (= loaded 1))
+            (should-not (drgnx-timer-active-p 'ai-load-keys))
+            (drgnx-ai-load-keys-soon)                                 ; once per daemon
+            (should-not (drgnx-timer-active-p 'ai-load-keys))))))
     ;; bin/drgnx open asks the daemon for it, after the window
     (let ((bin (with-temp-buffer (insert-file-contents (expand-file-name "bin/drgnx" drgnx-dir)) (buffer-string))))
       (should (string-match-p "client -n -e '(drgnx-session-raise)'.*\n.*drgnx-ai-load-keys-soon" bin)))))

@@ -29,6 +29,7 @@
 (require 'drgnx-paths)
 (require 'drgnx-file)
 (require 'drgnx-jobs)
+(require 'drgnx-timer)
 
 (defvar drgnx-agent-check-timeout 20
   "Seconds an MCP Test may take before the server and the check's Emacs are ended.")
@@ -126,8 +127,19 @@ nil when it could not be started.  A `systemctl' still running 3 seconds later i
                                      :command (list "systemctl" "--user" "kill" "--signal=KILL" (concat unit ".scope"))
                                      :sentinel #'ignore))))
            (when kill
-             (run-at-time 3 nil (lambda () (when (process-live-p kill) (ignore-errors (delete-process kill))))))
+             (drgnx-timer-start (cons 'agent-check-kill kill) 3 #'drgnx-agent-check--delete-process
+                                :args (list kill) :owner kill))
            kill))))
+
+(defun drgnx-agent-check--delete-process (proc)
+  "The timer function of a process that must not outlive its time: delete PROC if it still runs."
+  (when (process-live-p proc) (ignore-errors (delete-process proc))))
+
+(defun drgnx-agent-check--kill-tree-later (proc)
+  "The timer function that ends the process tree of PROC if it still runs, from a directory that exists (a timer
+runs in any buffer, and the current buffer's directory may be gone)."
+  (let ((default-directory (drgnx-agent-check--safe-directory)))
+    (when (process-live-p proc) (ignore-errors (drgnx-agent-check--kill-tree (process-id proc))))))
 
 (defun drgnx-agent-check--kill-unit (unit proc)
   "End everything in the systemd scope UNIT without waiting for it.  The process tree of PROC is ended instead
@@ -141,9 +153,7 @@ is deleted by `drgnx-agent-check--kill-scope')."
       (set-process-sentinel kill (lambda (p _e)
                                    (unless (or (process-live-p p) (eql 0 (process-exit-status p)))
                                      (funcall tree)))))
-    (run-at-time 3 nil (lambda ()
-                         (let ((default-directory (drgnx-agent-check--safe-directory)))
-                           (funcall tree))))))
+    (drgnx-timer-start (cons 'agent-check-tree proc) 3 #'drgnx-agent-check--kill-tree-later :args (list proc) :owner proc)))
 
 ;;;; Masking, results, the last results
 
@@ -797,53 +807,66 @@ the SPEC of other agents as it is."
 systemd scope UNIT, else the process tree).  The vendor keys of Emacs's environment stay out, as for an agent
 \(`drgnx-agent-check--scrub'): a project's server or hook never gets them.  DONE is called once with the process, the
 output, the errors, `timed-out' (non-nil when LIMIT ended it) and the time.  The process."
-  (let* ((start (float-time)) (out "") (err "") (timed-out nil) (finished nil)
+  (let* ((start (float-time)) (out "") (err "")
          (default-directory (file-name-as-directory (expand-file-name (or dir default-directory))))
          (process-environment (append env (drgnx-agent-check--scrub env) process-environment))
          (err-proc (make-pipe-process
                     :name "drgnx-check-stderr" :noquery t :coding 'utf-8-unix
                     :filter (lambda (_p s) (when (< (length err) drgnx-agent-check--capture-limit)
                                              (setq err (concat err s))))))
-         timer proc)
+         proc)
+    ;; whether the check is over and whether LIMIT ended it are on the process, for the timers' named functions
     (let ((finish (lambda ()
-                    (unless finished
-                      (setq finished t)
-                      (when timer (cancel-timer timer))
+                    (unless (process-get proc :check-finished)
+                      (process-put proc :check-finished t)
+                      (drgnx-timer-cancel-owner proc)       ; the limit, the backstop, the tree and kill timers
                       (ignore-errors (delete-process err-proc))
                       ;; whatever the scope still holds (a server's daemon) goes; a scope that is gone is no error
                       (when unit (drgnx-agent-check--kill-scope unit))
-                      (funcall done proc out err timed-out (- (float-time) start))))))
+                      (funcall done proc out err (process-get proc :check-timed-out) (- (float-time) start))))))
       (setq proc (make-process
                   :name "drgnx-check" :command argv :connection-type 'pipe :noquery t :coding 'utf-8-unix
                   :stderr err-proc
                   :filter (lambda (_p s) (when (< (length out) drgnx-agent-check--capture-limit)
                                            (setq out (concat out s))))
                   :sentinel (lambda (p _e)
-                              (unless (process-live-p p) (run-at-time 0.1 nil finish)))))
-      (setq timer (run-at-time limit nil
-                               (lambda ()
-                                 (unless finished
-                                   (setq timed-out t)
-                                   ;; a timer runs in any buffer: its directory may not exist, which would stop a process starting
-                                   (let ((default-directory (drgnx-agent-check--safe-directory)))
-                                     (ignore-errors
-                                       (if unit
-                                           (drgnx-agent-check--kill-unit unit proc)
-                                         (drgnx-agent-check--kill-tree (process-id proc))))
-                                     ;; the backstop of the backstop: 3 seconds later the check is over, whatever happened
-                                     (run-at-time 3 nil
-                                                  (lambda ()
-                                                    (unless finished
-                                                      (let ((default-directory (drgnx-agent-check--safe-directory)))
-                                                        (ignore-errors (drgnx-agent-check--kill-tree (process-id proc)))
-                                                        (ignore-errors (delete-process proc)))
-                                                      (funcall finish)))))
-                                   ;; the sentinel finishes; this is for a process that is already gone
-                                   (unless (process-live-p proc) (funcall finish))))))
+                              (unless (process-live-p p)
+                                ;; the owner is dead already: the timer lives as long as Emacs (0.1 s)
+                                (drgnx-timer-start (cons 'agent-check-finish p) 0.1 #'drgnx-agent-check--call
+                                                   :args (list finish) :owner :core)))))
+      (drgnx-timer-start (cons 'agent-check-limit proc) limit #'drgnx-agent-check--limit
+                         :args (list proc finish unit) :owner proc)
       (when input
         (ignore-errors (process-send-string proc input))
         (ignore-errors (process-send-eof proc)))
       proc)))
+
+(defun drgnx-agent-check--call (fn)
+  "The timer function that calls FN (a check's `finish' closure)."
+  (funcall fn))
+
+(defun drgnx-agent-check--limit (proc finish unit)
+  "LIMIT of the check running PROC is up (the timer's function): end it, in the systemd scope UNIT else the process
+tree, and finish it with FINISH 3 seconds later whatever happened."
+  (unless (process-get proc :check-finished)
+    (process-put proc :check-timed-out t)
+    ;; a timer runs in any buffer: its directory may not exist, which would stop a process starting
+    (let ((default-directory (drgnx-agent-check--safe-directory)))
+      (ignore-errors
+        (if unit
+            (drgnx-agent-check--kill-unit unit proc)
+          (drgnx-agent-check--kill-tree (process-id proc))))
+      ;; the backstop of the backstop: 3 seconds later the check is over, whatever happened
+      (drgnx-timer-start (cons 'agent-check-backstop proc) 3 #'drgnx-agent-check--backstop
+                         :args (list proc finish) :owner proc))))
+
+(defun drgnx-agent-check--backstop (proc finish)
+  "The check running PROC is still not over 3 seconds after its limit: end the process and finish it with FINISH."
+  (unless (process-get proc :check-finished)
+    (let ((default-directory (drgnx-agent-check--safe-directory)))
+      (ignore-errors (drgnx-agent-check--kill-tree (process-id proc)))
+      (ignore-errors (delete-process proc)))
+    (funcall finish)))
 
 (defun drgnx-agent-check--mcp-result (out err timed-out time limit kind name secrets &optional unset)
   "The result of an MCP Test from what the child Emacs printed (OUT), said (ERR) and did (TIMED-OUT, TIME in

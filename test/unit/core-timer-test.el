@@ -423,5 +423,18 @@
     (should (= 0 (hash-table-count drgnx-timer--table)))
     (should-not drgnx-timer-test--calls)))
 
+(ert-deftest drgnx-timer/reset-clears-the-table-whatever-an-entry-holds ()
+  ;; An entry whose "timer" is not one (a test's stub) never makes `drgnx-timer-reset' signal or stop early.
+  (cl-letf (((symbol-function 'run-with-idle-timer) (lambda (&rest _) (list 'not-a-timer))))
+    (drgnx-timer-start 'tm-bad 5 #'drgnx-timer-test--note :idle t)
+    (drgnx-timer-start 'tm-bad2 5 #'drgnx-timer-test--note :idle t))
+  (drgnx-timer-start 'tm-good 5 #'drgnx-timer-test--note)
+  (let ((good (gethash 'tm-good drgnx-timer--table)))
+    (unwind-protect
+        (progn (drgnx-timer-reset)
+               (should-not (drgnx-timer-pending))
+               (should-not (memq (drgnx-timer--entry-timer good) timer-list)))
+      (clrhash drgnx-timer--table))))
+
 (provide 'core-timer-test)
 ;;; core-timer-test.el ends here

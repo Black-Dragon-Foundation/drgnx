@@ -7,6 +7,8 @@
 (require 'drgnx-macos)
 (require 'drgnx-doctor)
 (require 'drgnx-config-doc)
+(require 'drgnx-timer)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-onboard-test--with (root &rest body)
   "BODY with ROOT a temp dir holding config, state, data and org dirs."
@@ -323,29 +325,31 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
   ;; The first graphical frame schedules the Welcome (a timer: never inside the hook); it opens when onboarding
   ;; never ran here, and marks it so it never opens by itself again.
   (drgnx-onboard-test--with root
-    (let ((timers nil) (opened 0) (noninteractive nil)
+    (let ((opened 0) (noninteractive nil)
           (process-environment (cons "DRGNX_UI_RUN" process-environment)))
-      (cl-letf (((symbol-function 'run-with-idle-timer) (lambda (_secs _repeat fn &rest _) (push fn timers)))
-                ((symbol-function 'drgnx-onboard-welcome) (lambda () (cl-incf opened))))
-        (drgnx-onboard--on-first-window)
-        (should (equal timers '(drgnx-onboard-maybe-welcome)))
-        (should (= opened 0))                                            ; nothing inside the hook
-        (funcall (car timers))
-        (should (= opened 1))
-        (should (file-exists-p (drgnx-onboard-state-file)))
-        (should-not (drgnx-onboard-state))                               ; no step is marked done
-        (setq timers nil)
-        (drgnx-onboard--on-first-window)
-        (should-not timers)
-        (drgnx-onboard-maybe-welcome)
-        (should (= opened 1))
-        ;; never in batch, never in a harness session
-        (delete-file (drgnx-onboard-state-file))
-        (let ((noninteractive t)) (drgnx-onboard--on-first-window) (drgnx-onboard-maybe-welcome))
-        (let ((process-environment (cons "DRGNX_UI_RUN=/tmp/x" process-environment)))
-          (drgnx-onboard--on-first-window) (drgnx-onboard-maybe-welcome))
-        (should-not timers)
-        (should (= opened 1))))))
+      (drgnx-test-with-clock ()
+        (cl-letf (((symbol-function 'drgnx-onboard-welcome) (lambda () (cl-incf opened))))
+          (drgnx-onboard--on-first-window)
+          (should (drgnx-timer-active-p 'onboard-welcome))                ; one idle one-shot in the timer layer
+          (should (= opened 0))                                            ; nothing inside the hook
+          (drgnx-onboard--on-first-window)                                 ; a second frame replaces it, never stacks
+          (should (= 1 (length (seq-filter (lambda (e) (eq (car e) 'onboard-welcome)) (drgnx-timer-pending)))))
+          (drgnx-test-idle 1)
+          (should (= opened 1))
+          (should-not (drgnx-timer-active-p 'onboard-welcome))
+          (should (file-exists-p (drgnx-onboard-state-file)))
+          (should-not (drgnx-onboard-state))                               ; no step is marked done
+          (drgnx-onboard--on-first-window)
+          (should-not (drgnx-timer-active-p 'onboard-welcome))
+          (drgnx-onboard-maybe-welcome)
+          (should (= opened 1))
+          ;; never in batch, never in a harness session
+          (delete-file (drgnx-onboard-state-file))
+          (let ((noninteractive t)) (drgnx-onboard--on-first-window) (drgnx-onboard-maybe-welcome))
+          (let ((process-environment (cons "DRGNX_UI_RUN=/tmp/x" process-environment)))
+            (drgnx-onboard--on-first-window) (drgnx-onboard-maybe-welcome))
+          (should-not (drgnx-timer-active-p 'onboard-welcome))
+          (should (= opened 1)))))))
 
 (ert-deftest drgnx-onboard/the-whole-flow-twice ()
   ;; The M6 exit, in batch: a fresh config onboarded non-interactively with fixture repos; the board

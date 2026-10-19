@@ -417,18 +417,20 @@ buffer is not affected."
   "Does a buffer visit NAME?  (Looks at the buffers' names only: `find-buffer-visiting' would send.)"
   (cl-some (lambda (b) (equal (buffer-file-name b) name)) (buffer-list)))
 
-(defun drgnx-remote-auto--work-line (node)
-  "A buffer whose current line is the Work row for NODE."
+(defun drgnx-remote-auto--work-line ()
+  "A buffer whose current line is a Work row (its node comes from `drgnx-work-ui--node', stubbed by the macro)."
   (with-current-buffer (generate-new-buffer " *drgnx-remote-work*")
-    (insert (propertize "row\n" 'drgnx-work-node node))
+    (insert "row\n")
     (goto-char (point-min))
     (current-buffer)))
 
 (defmacro drgnx-remote-auto--on-work-row (node &rest body)
   "BODY in a buffer whose current line is the Work row for NODE; the mock's sends start at 0."
   (declare (indent 1))
-  `(let ((rb (drgnx-remote-auto--work-line ,node)))
-     (unwind-protect (with-current-buffer rb (setq drgnx-tramp-mock-sends 0) ,@body)
+  `(let ((rb (drgnx-remote-auto--work-line)) (row-node ,node))
+     (unwind-protect
+         (cl-letf (((symbol-function 'drgnx-work-ui--node) (lambda () row-node)))   ; the tree's row-key lookup
+           (with-current-buffer rb (setq drgnx-tramp-mock-sends 0) ,@body))
        (kill-buffer rb))))
 
 (ert-deftest drgnx-remote/links-in-tool-output-never-open-a-remote ()

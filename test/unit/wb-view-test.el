@@ -229,6 +229,50 @@ fresh render and the order is the one a plain list gets from the same marks."
   (let ((small (drgnx-view-test--append-one-alloc 1000)) (big (drgnx-view-test--append-one-alloc 4000)))
     (should (< (abs (- big small)) 64))))
 
+(defun drgnx-view-test--fold-steps (v)
+  "How many entries folding V's pending marks visits (`drgnx-view--ghost-p' is asked once per entry walked)."
+  (let ((n 0) (orig (symbol-function 'drgnx-view--ghost-p)))
+    (cl-letf (((symbol-function 'drgnx-view--ghost-p) (lambda (view i) (setq n (1+ n)) (funcall orig view i))))
+      (drgnx-view--fold v))
+    n))
+
+(ert-deftest drgnx-view/an-append-folds-only-the-new-tail ()
+  "Appends (also after a pending key) fold without walking the 4,000 rows; an insert before a drawn row still does."
+  (drgnx-view-test--with (v :render #'drgnx-view-test--render :key-test 'eq)
+    (drgnx-view-append v (number-sequence 1 4000))
+    (drgnx-view-draw-now v)
+    (drgnx-view-append v '(5001 5002))
+    (drgnx-view-insert v '(5003) :after 5001)
+    (should (= 0 (drgnx-view-test--fold-steps v)))
+    (drgnx-view-draw-now v)
+    (should (equal '(4000 5001 5003 5002) (last (drgnx-view-test--keys v) 4)))
+    (drgnx-view-test--ok v)
+    (drgnx-view-insert v '(6000) :after 10)
+    (should (> (drgnx-view-test--fold-steps v) 4000))
+    (drgnx-view-draw-now v)
+    (should (equal '(10 6000 11) (take 3 (nthcdr 9 (drgnx-view-test--keys v)))))
+    (drgnx-view-test--ok v)))
+
+(ert-deftest drgnx-view/an-append-between-slices-keeps-the-rows-left-to-delete ()
+  "A slice stopped with rows left to delete (and rows deleted, not compacted yet); an append then folds only its
+tail, and the next draw finishes both."
+  (drgnx-view-test--with (v :render #'drgnx-view-test--render :slice 0.004 :key-test 'eq)
+    (drgnx-view-append v (number-sequence 1 100))
+    (drgnx-view-draw-now v)
+    (drgnx-view-remove v (number-sequence 1 50))
+    (let ((now 0.0) (drgnx-view--deadline nil))
+      (cl-letf (((symbol-function 'drgnx-timer-now) (lambda () (setq now (+ now 1.0)))))   ; every check is late
+        (drgnx-view--draw v 0.004)))
+    (should (drgnx-view--cut v))
+    (should (= 8 (drgnx-view-test--stat v :removed)))
+    (drgnx-view-append v '(200 201))
+    (should (= 0 (drgnx-view-test--fold-steps v)))
+    (should-not (drgnx-view--check v))
+    (drgnx-view-draw-now v)
+    (should (equal (append (number-sequence 51 100) '(200 201)) (drgnx-view-test--keys v)))
+    (should (= 50 (drgnx-view-test--stat v :removed)))
+    (drgnx-view-test--ok v)))
+
 ;;;; Sync
 
 (ert-deftest drgnx-view/sync-rows-marks-appends-removals-and-dirty ()

@@ -121,4 +121,20 @@
                  2))
       (should (file-exists-p (format "%s.claude/worktrees/%s-1/.mock-crashed" repo id))))))
 
+(ert-deftest drgnx-job/a-git-process-has-its-deadline-in-the-timer-layer ()
+  ;; The deadline is a one-shot keyed by the process and owned by it; the sentinel ends it with the process.
+  (let* ((dir (make-temp-file "drgnx-git-timer" t)) (done nil)
+         (p (drgnx-job--git-async dir '("--version") (lambda (r) (setq done r))))
+         (key (cons 'job-git-timeout p)))
+    (unwind-protect
+        (progn
+          (should (drgnx-timer-active-p key))
+          (should (eq (cadr (assoc key (drgnx-timer-pending))) p))
+          (let ((deadline (+ (float-time) 10)))
+            (while (and (not done) (< (float-time) deadline)) (accept-process-output nil 0.05)))
+          (should (eql 0 (car done)))
+          (should-not (drgnx-timer-active-p key)))
+      (drgnx-timer-cancel key)
+      (delete-directory dir t))))
+
 ;;; job-run-test.el ends here

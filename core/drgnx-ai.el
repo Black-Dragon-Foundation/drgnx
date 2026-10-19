@@ -20,6 +20,7 @@
 (require 'drgnx-paths)
 (require 'drgnx-file)
 (require 'drgnx-config)
+(require 'drgnx-timer)
 
 (defconst drgnx-ai-presets
   '((openrouter :name "OpenRouter" :kind openai :url "https://openrouter.ai/api/v1" :key-env "OPENROUTER_API_KEY"
@@ -305,8 +306,13 @@ agents.  Returns the ids that have a key."
 later — after the window it opened shows, never inside its emacsclient call.  Never in batch."
   (unless (or noninteractive drgnx-ai--keys-loading)
     (setq drgnx-ai--keys-loading t)
-    (run-at-time 0.5 nil (lambda () (with-demoted-errors "drgnx: AI keys not loaded: %S" (drgnx-ai-load-keys)))))
+    ;; the daemon's own, once, with no module or process to own it
+    (drgnx-timer-start 'ai-load-keys 0.5 #'drgnx-ai--load-keys-timer :owner :core))
   nil)
+
+(defun drgnx-ai--load-keys-timer ()
+  "The timer function of `drgnx-ai-load-keys-soon'."
+  (with-demoted-errors "drgnx: AI keys not loaded: %S" (drgnx-ai-load-keys)))
 
 (defun drgnx-ai--stored-key (host)
   "What the secret store alone holds for HOST (a string), or nil; auth-source's cache is forgotten and not used."

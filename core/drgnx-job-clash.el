@@ -197,7 +197,7 @@ advisory.  The diffs are looked at once per branch head."
     (when since-user
       (when-let* ((pos (seq-position (reverse entries) 'user (lambda (e type) (eq (plist-get e :type) type)))))
         (setq entries (last entries pos))))
-    (mapconcat (lambda (e) (or (plist-get e :text) "")) (seq-filter (lambda (e) (eq (plist-get e :type) 'agent)) entries) "")))
+    (mapconcat (lambda (e) (or (drgnx-agents-entry-text e) "")) (seq-filter (lambda (e) (eq (plist-get e :type) 'agent)) entries) "")))
 
 (defun drgnx-job-clash--prompt (card &optional asks)
   "Clash CARD as its reviewer reads it (ASKS: what the user wants to discuss)."

@@ -17,6 +17,7 @@
 (require 'url-parse)
 (require 'drgnx-http)
 (require 'drgnx-ai)
+(require 'drgnx-timer)
 (require 'drgnx-work-db)
 
 (defvar drgnx-gateway-event-functions nil
@@ -112,7 +113,11 @@ it, through its sentinel, the request upstream), never an error in a filter."
   (when (process-live-p conn)
     (process-put conn :done t)
     (ignore-errors (process-send-eof conn))
-    (run-at-time 0.05 nil (lambda () (when (process-live-p conn) (delete-process conn))))))
+    (drgnx-timer-start (cons 'gateway-close conn) 0.05 #'drgnx-gateway--hang-up :args (list conn) :owner conn)))
+
+(defun drgnx-gateway--hang-up (conn)
+  "The timer function of `drgnx-gateway--close': what was sent has gone, delete CONN."
+  (when (process-live-p conn) (delete-process conn)))
 
 (defun drgnx-gateway--filter (conn bytes)
   "Take BYTES of CONN's request.  Once its head is whole a token that is no registration is refused at once, before

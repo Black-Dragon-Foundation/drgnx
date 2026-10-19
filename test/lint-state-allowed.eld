@@ -11,10 +11,6 @@
  :why "the view restarts the screencast at its window's width (buffer-local)" :until "Task 13")
 (:file "modules/tools/drgnx-live.el" :what "get-buffer-window"
  :why "asks whether the view is shown in any frame" :until "Task 13")
-(:file "modules/tools/drgnx-agents-ui.el" :what "window-buffer-change-functions"
- :why "starts and stops the 30 s tick while the Agents list shows" :until "Task 22")
-(:file "modules/tools/drgnx-agents-ui.el" :what "get-buffer-window"
- :why "asks whether the Agents list is visible in any frame" :until "Task 22")
 (:file "modules/tools/drgnx-diff.el" :what "window-size-change-functions"
  :why "a diff view re-renders at its window's width (buffer-local)" :until "B12")
 (:file "modules/tools/drgnx-layouts.el" :what "window-size-change-functions"
