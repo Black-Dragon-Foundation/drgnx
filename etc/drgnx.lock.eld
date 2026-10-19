@@ -178,6 +178,12 @@
 		    "5c3492edb1e0020da711d9a4213a3878e90e7af8e2e6375757901f4b399872ff"
 		    :size 266240 :requires ((compat "31")) :summary
 		    "VERTical Interactive COmpletion")
+	   (vlf :version "1.7.2" :archive "gnu" :kind tar :file
+		"vlf-1.7.2.tar" :sha256
+		"7be29cef561199a58c12b522d62336d3d50ab3016a9228702b8b67bd55eb57d9"
+		:size 153600 :requires nil :summary "View Large Files"
+		:commit "efffeb5f54191d41a503d1d51343bb327fe2f871"
+		:url "https://github.com/m00natic/vlfi")
 	   (vundo :version "2.4.0" :archive "gnu" :kind tar :file
 		  "vundo-2.4.0.tar" :sha256
 		  "59eab71cedb9424277144bb862b967a7db0f25e248e69d07ac66bf1da3a142aa"
