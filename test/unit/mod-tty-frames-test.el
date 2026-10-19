@@ -3,6 +3,7 @@
 ;; (test/tty/frames-test.el) runs the real thing.
 (require 'ert)
 (require 'drgnx)
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-tty-frames" drgnx-dir) nil t)
 
 (defvar drgnx-tty-frames-test--term 'kx-a "The terminal `frame-terminal' answers in these tests.")
@@ -221,9 +222,11 @@ strings; the real frame is not touched), an empty cache and no terminal to ask: 
       (should (equal saved '((drgnx-tty-mouse nil)))))))
 
 (ert-deftest drgnx-tty-frames/the-mouse-is-never-turned-on-without-a-terminal-frame ()
-  ;; batch Emacs has no terminal frame: a graphical session never gets xterm-mouse-mode from this module
+  ;; a daemon with no client has only the initial terminal's frame (the classifier calls batch Emacs's frame
+  ;; `tty', so the test says `initial' itself): a graphical session never gets xterm-mouse-mode from this module
   (let ((xterm-mouse-mode nil) (drgnx-tty-mouse t))
-    (drgnx-tty-frames-mouse-apply)
+    (cl-letf (((symbol-function 'drgnx-state-frame-kind) (lambda (_f) 'initial)))
+      (drgnx-tty-frames-mouse-apply))
     (should-not xterm-mouse-mode)))
 
 ;;;; Colours
@@ -672,3 +675,29 @@ types `infocmp' was asked about."
           (should-not sent)
           (should (= calls 0)))))
     (set-default 'drgnx-tty-tmux-mok-level 1)))
+
+(ert-deftest drgnx-tty-frames/a-visited-frame-is-an-editor-in-the-store ()
+  ;; The role is a frame parameter, no window change: `drgnx-tty-frames--visit' tells the store itself.
+  (drgnx-test-with-state
+    (let ((frame (selected-frame)) (proc (make-pipe-process :name "drgnx-visit-test")))
+      (unwind-protect
+          (progn
+            (set-frame-parameter frame 'drgnx-frame-role 'main)
+            (set-frame-parameter frame 'client proc)
+            (set-frame-parameter frame 'drgnx-tty-shown nil)
+            (drgnx-state-sync frame)
+            (should (eq frame (drgnx-state-main-frame)))
+            (cl-letf (((symbol-function 'drgnx-frames-mark-main) #'ignore))
+              (drgnx-tty-frames--visit))
+            (should-not (drgnx-state-main-frame)))
+        (set-frame-parameter frame 'drgnx-frame-role nil)
+        (set-frame-parameter frame 'client nil)
+        (set-frame-parameter frame 'drgnx-tty-editor-only nil)
+        (delete-process proc)))))
+
+(ert-deftest drgnx-tty-frames/terminal-frames-are-the-classifiers-tty-frames ()
+  (let ((frame (selected-frame)))
+    (should (equal (drgnx-tty-frames--tty-frames) (seq-filter (lambda (f) (eq (drgnx-state-frame-kind f) 'tty)) (frame-list))))
+    (should (memq frame (drgnx-tty-frames--tty-frames)))
+    (cl-letf (((symbol-function 'drgnx-state-frame-kind) (lambda (_f) 'child)))
+      (should-not (drgnx-tty-frames--tty-frames)))))

@@ -15,6 +15,7 @@
 ;;; Code:
 (defvar drgnx-modules--table)
 (defvar drgnx-modules--report)
+(defvar drgnx-dir)
 (declare-function drgnx-modules--record "drgnx-modules")
 
 (defvar drgnx-modules--current nil
@@ -37,7 +38,8 @@ helper already made the claim, and a second, unconditional undo would break the 
 (defvar drgnx-modules--tearing-down nil "Modules whose teardown is running (dynamically bound).")
 
 (defvar drgnx-modules-after-teardown-functions nil
-  "Called with no arguments once after a batch of teardowns (keys and menus follow the registry).")
+  "Called with no arguments once after a batch of teardowns and after a run-time turn on.
+Keys and menus follow the registry.")
 
 (defsubst drgnx-modules--recording-p ()
   "Non-nil when a module's setup is running and it is the setup's own code, not the top level of
@@ -68,6 +70,16 @@ inside this one, or to nobody (another library's `eval-after-load' forms) — so
   "Alist MODULE → a token made fresh by each run of its setup and dropped when it is torn down or rolled back.
 Deferred work (`drgnx-modules-with-owner') runs only while the run that scheduled it is on.")
 
+(defvar drgnx-modules--left nil
+  "Alist MODULE → strings (newest first): the timers its setup started that the safety net did not cancel
+\(a function outside `drgnx-dir', or a lambda), \"timer FN (FILE)\" or \"timer a lambda\".  Cleared when its run
+starts; the report carries it as `:left'.")
+
+(defvar drgnx-modules-run-end-functions nil
+  "Functions called with MODULE when a run of its setup ends: turned off, rolled back, or run again.
+Each runs under `condition-case' with `inhibit-interaction' t, after the run's token is dropped
+\(`drgnx-modules--end-run').  `drgnx-timer-cancel-owner' is on it.")
+
 (defvar drgnx-modules--features nil
   "Alist MODULE → the features its setups loaded first, newest first (for the report; never unloaded).")
 
@@ -81,24 +93,6 @@ Deferred work (`drgnx-modules-with-owner') runs only while the run that schedule
   "`format' ARGS, cut to 100 characters: a list element can be a keymap or a long alist entry."
   (let ((s (let ((print-length 4) (print-level 2)) (apply #'format args))))
     (if (> (length s) 100) (concat (substring s 0 99) "…") s)))
-
-(defconst drgnx-modules--emacs-timer-variables '(jit-lock-context-timer jit-lock--antiblink-grace-timer)
-  "Variables in which Emacs's own libraries keep a timer whose function is a lambda (see
-`drgnx-modules--emacs-timer-p').")
-
-(defun drgnx-modules--emacs-timer-p (timer)
-  "Non-nil if TIMER is one of Emacs's own: its function is defined under `lisp-directory' (or preloaded), or a
-library keeps it in one of `drgnx-modules--emacs-timer-variables'.  Emacs's libraries start such singleton timers
-lazily from code a setup calls (an edit starts undo's boundary timer) and keep them in a variable: cancelled, they
-would stay dead for the session.  The net leaves them alone."
-  (let ((fn (timer--function timer)))
-    (or (and (symbolp fn)
-             (let ((file (symbol-file fn 'defun)))
-               (and file (or (not (file-name-absolute-p file)) (string-prefix-p lisp-directory file)))))
-        (let ((vars drgnx-modules--emacs-timer-variables))
-          (while (and vars (not (and (boundp (car vars)) (eq (symbol-value (car vars)) timer))))
-            (setq vars (cdr vars)))
-          vars))))
 
 (defun drgnx-modules--hook-has (hook function)
   "Non-nil if FUNCTION is on HOOK's global value (`add-hook''s test)."
@@ -171,6 +165,24 @@ Not the minor mode lists (Emacs 31's `define-minor-mode' adds to them so): modes
     (when box
       (dolist (part new) (setcar box (append part (car box))) (setq box (cdr box))))))
 
+(defun drgnx-modules--eval-after-load (orig file form)
+  "Around `eval-after-load' while a setup runs: the function it adds to `after-load-alist' is recorded.
+Emacs adds it even when FILE is already loaded and keeps it after FILE loads.  Left there, a module turned off
+keeps an entry, and turned on again its new function is dropped as `equal' to the old one: the deferred work
+never runs."
+  (if (not (drgnx-modules--net-records-p))
+      (funcall orig file form)
+    (let* ((key (if (stringp file) (load-history-regexp file) file))
+           (old (copy-sequence (cdr (assoc key after-load-alist)))))   ; a copy: the entry grows in place
+      (prog1 (funcall orig file form)
+        (dolist (fn (cdr (assoc key after-load-alist)))
+          (unless (memq fn old)
+            (drgnx-modules-push-undo
+             (drgnx-modules--label "after-load %s" key)
+             (lambda ()
+               (when-let* ((elt (assoc key after-load-alist)) ((memq fn (cdr elt))))
+                 (setcdr elt (delq fn (cdr elt))))))))))))
+
 (defun drgnx-modules--after-load (orig &rest args)
   "Around `do-after-load-evaluation' while a setup runs: `eval-after-load' forms belong to nobody.
 They run once, when their library loads; were they recorded on the module whose setup loaded it, turning that
@@ -182,19 +194,35 @@ except deferred work that names its owner (`drgnx-modules-with-owner')."
 
 (defconst drgnx-modules--net
   '((add-hook . drgnx-modules--add-hook) (add-to-list . drgnx-modules--add-to-list)
-    (do-after-load-evaluation . drgnx-modules--after-load) (advice-add . drgnx-modules--advice-add))
+    (do-after-load-evaluation . drgnx-modules--after-load) (eval-after-load . drgnx-modules--eval-after-load)
+    (advice-add . drgnx-modules--advice-add))
   "The safety net: advice on Emacs's own doors, there only while a setup runs.  `advice-add' last, so
 installing the others is not recorded.")
 
+(defun drgnx-modules--undoable-timer-p (fn)
+  "Non-nil if timer function FN is a symbol defined under `drgnx-dir': a timer drgnx made, which the net cancels."
+  (and fn (symbolp fn) (boundp 'drgnx-dir) (stringp drgnx-dir)
+       (let ((file (symbol-file fn 'defun)))
+         (and file (file-name-absolute-p file) (string-prefix-p (file-name-as-directory (expand-file-name drgnx-dir)) file)))))
+
 (defun drgnx-modules--record-new (module before)
   "Push MODULE's undos for the timers and global modes that appeared since BEFORE and that nobody claimed;
-note its new features.  Modes are pushed last: they go off first, and their own off code goes first."
+note its new features.  Modes are pushed last: they go off first, and their own off code goes first.
+A layer timer (`drgnx-timer--fire') is skipped: its run token owns it.  A timer whose function drgnx defines is
+cancelled; any other (Emacs, ELPA, a module outside `drgnx-dir', a lambda) may be a library's singleton, which
+cancelled would stay dead for the session: it is left, and listed in `drgnx-modules--left'."
   (pcase-let ((`(,timers ,modes ,feats) (drgnx-modules--new before)))
     (dolist (timer timers)
-      (unless (drgnx-modules--emacs-timer-p timer)
-        (drgnx-modules-push-undo (drgnx-modules--label "timer %s" (drgnx-modules--name (timer--function timer)))
-                                 (lambda () (when (or (memq timer timer-list) (memq timer timer-idle-list))
-                                              (cancel-timer timer))))))
+      (let ((fn (timer--function timer)))
+        (cond ((eq fn 'drgnx-timer--fire))
+              ((drgnx-modules--undoable-timer-p fn)
+               (drgnx-modules-push-undo (drgnx-modules--label "timer %s" (symbol-name fn))
+                                        (lambda () (when (or (memq timer timer-list) (memq timer timer-idle-list))
+                                                     (cancel-timer timer)))))
+              (t (push (if (and fn (symbolp fn))
+                           (format "timer %s (%s)" fn (or (symbol-file fn 'defun) "no file"))
+                         "timer a lambda")
+                       (alist-get module drgnx-modules--left))))))
     (dolist (mode (reverse modes))               ; newest first in the list: the newest goes off first
       (drgnx-modules-push-undo (format "mode %s" mode)
                                (lambda () (when (memq mode global-minor-modes) (funcall mode -1)))))
@@ -204,8 +232,9 @@ note its new features.  Modes are pushed last: they go off first, and their own 
 
 (defun drgnx-modules--record-call (module fn)
   "Call FN as MODULE's code, with the safety net; return its value.
-While FN runs, `add-hook' (global), `advice-add' and `add-to-list' calls from MODULE's own code that change
-something push their undo onto MODULE's stack; after it (also after an error, a quit or a throw), so do the timers
+While FN runs, `add-hook' (global), `advice-add', `add-to-list' and `eval-after-load' calls from MODULE's own code
+that change something push their undo onto MODULE's stack; after it (also after an error, a quit or a throw), so
+do the timers
 and global minor modes that appeared.  The advice is installed by the outermost call only and removed when it
 ends: outside a setup it costs nothing."
   (let ((outer drgnx-modules--net-seen) (before (drgnx-modules--snapshot)))
@@ -283,6 +312,19 @@ undo that failed, naming its label."
   (let ((spec (assq module drgnx-modules--table)))
     (or (not spec) (eq (plist-get (cdr spec) :teardown) 'restart))))
 
+(defun drgnx-modules--end-run (module)
+  "End MODULE's run: drop its token (its deferred work stops), then call `drgnx-modules-run-end-functions' with
+MODULE, each under `condition-case' with `inhibit-interaction' t.  Returns the problems, \"run end: FN: MESSAGE\"."
+  (setq drgnx-modules--runs (assq-delete-all module drgnx-modules--runs))
+  (let ((problems nil) (inhibit-interaction t) (drgnx-modules--current nil))
+    (run-hook-wrapped 'drgnx-modules-run-end-functions
+                      (lambda (fn)
+                        (condition-case e (funcall fn module)
+                          (error (push (format "run end: %s: %s" (drgnx-modules--name fn) (error-message-string e))
+                                       problems)))
+                        nil))
+    (nreverse problems)))
+
 (defun drgnx-modules--run-setup (module setup)
   "Run SETUP as MODULE's: the undos it pushes go onto MODULE's stack.
 A module that is on (and not `restart') is torn down first, so no undo is left behind.  When the
@@ -293,18 +335,20 @@ or a throw then goes on.  Returns nil when all went well, else (ERROR-MESSAGE-or
                         (drgnx-module-teardown module)))
          (before (alist-get module drgnx-modules--stacks))
          (done nil))
+    (when (assq module drgnx-modules--runs)       ; a `restart' module run again, or a run that did not end
+      (setq problems (append problems (drgnx-modules--end-run module))))
+    (setq drgnx-modules--left (assq-delete-all module drgnx-modules--left))
     (setf (alist-get module drgnx-modules--runs) (list module))   ; this run's token
     (unwind-protect
         (let ((err (condition-case e
                        (progn (drgnx-modules--with-recorder module (funcall setup)) nil)
                      (error (error-message-string e)))))
           (when err
-            (setq drgnx-modules--runs (assq-delete-all module drgnx-modules--runs))
-            (setq problems (append problems (drgnx-modules--unwind module before))))
+            (setq problems (append problems (drgnx-modules--end-run module) (drgnx-modules--unwind module before))))
           (setq done t)
           (and (or err problems) (cons err problems)))
       (unless done
-        (setq drgnx-modules--runs (assq-delete-all module drgnx-modules--runs))
+        (drgnx-modules--end-run module)
         (drgnx-modules--unwind module before)))))
 
 (defun drgnx-module-teardown (name)
@@ -320,8 +364,8 @@ module) is left running and returns (\"restart\").  Callers run
     (cond
      ((or (not (eq (plist-get report :status) 'ok)) (memq name drgnx-modules--tearing-down)) nil)
      ((drgnx-modules--restart-p name) (list "restart"))
-     (t (setq drgnx-modules--runs (assq-delete-all name drgnx-modules--runs))   ; its deferred work stops
-        (let ((problems nil) (fn (plist-get (cdr spec) :teardown))
+     (t (let ((problems (drgnx-modules--end-run name))   ; its deferred work and timers stop, before :teardown
+              (fn (plist-get (cdr spec) :teardown))
               (drgnx-modules--tearing-down (cons name drgnx-modules--tearing-down)))
           (unwind-protect
               (when (functionp fn)

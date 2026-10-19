@@ -1,5 +1,7 @@
 ;;; wb-buffers-edge-test.el --- batch tests: the Buffers panel, edge cases -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'drgnx-buffers)
 (require 'drgnx-explorer)
 (require 'drgnx-frames)
@@ -7,24 +9,24 @@
 (defmacro drgnx-buffers-edge--with (dir &rest body)
   "BODY with a fresh bus, an empty Buffers panel shown in the dock, and a temp DIR for files."
   (declare (indent 1))
-  `(let* ((,dir (make-temp-file "drgnx-buffers-edge" t))
-          (drgnx-signal--subscribers nil) (drgnx-signal--state nil) (drgnx-signal--editor-window nil)
-          (drgnx-wb--sections nil) (drgnx-buffers--order nil) (drgnx-buffers--signature nil)
-          (drgnx-buffers--filter nil) (drgnx-buffers-all-windows nil))
-     (unwind-protect
-         (progn
-           (delete-other-windows)
-           (drgnx-buffers-setup)
-           (drgnx-signal--flush)
-           (drgnx-wb-show-sidebar)
-           ,@body)
-       (drgnx-wb-hide-sidebar)
-       (delete-other-windows)
-       (dolist (b (buffer-list))
-         (when (and (buffer-file-name b) (string-prefix-p ,dir (buffer-file-name b)))
-           (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b)))
-       (when (get-buffer drgnx-buffers-buffer-name) (kill-buffer drgnx-buffers-buffer-name))
-       (delete-directory ,dir t))))
+  `(drgnx-test-with-state
+     (let* ((,dir (make-temp-file "drgnx-buffers-edge" t))
+            (drgnx-wb--sections nil) (drgnx-buffers--order nil) (drgnx-buffers--signature nil)
+            (drgnx-buffers--filter nil) (drgnx-buffers-all-windows nil))
+       (unwind-protect
+           (progn
+             (delete-other-windows)
+             (drgnx-buffers-setup)
+             (drgnx-signal--flush)
+             (drgnx-wb-show-sidebar)
+             ,@body)
+         (drgnx-wb-hide-sidebar)
+         (delete-other-windows)
+         (dolist (b (buffer-list))
+           (when (and (buffer-file-name b) (string-prefix-p ,dir (buffer-file-name b)))
+             (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b)))
+         (when (get-buffer drgnx-buffers-buffer-name) (kill-buffer drgnx-buffers-buffer-name))
+         (delete-directory ,dir t)))))
 
 (defun drgnx-buffers-edge--open (dir name)
   (let ((f (expand-file-name name dir)))
@@ -50,25 +52,26 @@
     (should (string-search "save all" (drgnx-buffers-edge--header 'buffers)))))   ; the buttons are back
 
 (ert-deftest drgnx-buffers/the-explorer-find-title-survives-hide-and-show ()
-  (let ((dir (file-name-as-directory (make-temp-file "drgnx-find-edge" t)))
-        (drgnx-wb--sections nil) (drgnx-signal--editor-window nil) (drgnx-explorer-git nil))
-    (unwind-protect
-        (progn
-          (write-region "x\n" nil (expand-file-name "needle.txt" dir) nil 'silent)
-          (delete-other-windows)
-          (drgnx-explorer-setup)
-          (drgnx-explorer-set-roots (list dir))
-          (drgnx-wb-show-sidebar)
-          (drgnx-explorer--find-apply "needle")
-          (should (string-search "needle" (drgnx-buffers-edge--header 'explorer)))
-          (drgnx-wb-hide-sidebar)
-          (drgnx-wb-show-sidebar)
-          (should (string-search "needle" (drgnx-buffers-edge--header 'explorer))))
-      (ignore-errors (drgnx-explorer-find-clear))
-      (drgnx-wb-hide-sidebar)
-      (drgnx-explorer-set-roots nil)
-      (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
-      (delete-directory dir t))))
+  (drgnx-test-with-state
+    (let ((dir (file-name-as-directory (make-temp-file "drgnx-find-edge" t)))
+          (drgnx-wb--sections nil) (drgnx-explorer-git nil))
+      (unwind-protect
+          (progn
+            (write-region "x\n" nil (expand-file-name "needle.txt" dir) nil 'silent)
+            (delete-other-windows)
+            (drgnx-explorer-setup)
+            (drgnx-explorer-set-roots (list dir))
+            (drgnx-wb-show-sidebar)
+            (drgnx-explorer--find-apply "needle")
+            (should (string-search "needle" (drgnx-buffers-edge--header 'explorer)))
+            (drgnx-wb-hide-sidebar)
+            (drgnx-wb-show-sidebar)
+            (should (string-search "needle" (drgnx-buffers-edge--header 'explorer))))
+        (ignore-errors (drgnx-explorer-find-clear))
+        (drgnx-wb-hide-sidebar)
+        (drgnx-explorer-set-roots nil)
+        (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
+        (delete-directory dir t)))))
 
 (defun drgnx-buffers-edge--alive (bufs) (seq-filter #'buffer-live-p bufs))
 

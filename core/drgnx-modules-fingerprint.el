@@ -48,7 +48,9 @@ symbol with one line; the FULL scan finds the rest.")
 (defvar drgnx-modules-fingerprint-registries
   '(drgnx-commands--table drgnx-wb--sections drgnx-wb--areas drgnx-rules--table drgnx-rules--places
                           (drgnx-signal--subscribers . :functions) drgnx-surfaces-contexts drgnx-layouts-shapes
-                          drgnx-layouts-pane-fillers drgnx-notice--sources)
+                          drgnx-layouts-pane-fillers drgnx-config--defs drgnx-memo--watched
+                          drgnx-view--types (drgnx-state--now . :functions) (drgnx-state--idle . :functions)
+                          drgnx-state--roles drgnx-pane--kinds drgnx-notice--sources)
   "drgnx's registries whose keys the fingerprint reads: a variable that holds a hash table, an alist or a
 list of conses (the key is the car).  `(VAR . :functions)' is an alist KEY → list of functions: each
 function is read too.  Unbound variables are skipped.  Branches that add a registry add one line.")
@@ -195,13 +197,18 @@ whose value is not what its name says is skipped.  About 12 ms compiled."
     (setq drgnx-modules-fingerprint--own (cons own-hooks own-fvars))
     (list :all-hooks (nconc hooks fvars) :advice advice)))
 
-(defun drgnx-modules-fingerprint--full-items ()
-  "The `mapatoms' scan, compiled first when it is not: interpreted it costs ~110 ms (27,000 symbols, each a trip
-through the evaluator), compiled ~12 ms, and compiling it takes ~8 ms once.  A built drgnx (.elc) skips that."
+(defun drgnx-modules-fingerprint--compile-scan ()
+  "Compile the `mapatoms' scan when it is not: interpreted it costs ~110 ms (27,000 symbols, each a trip through the
+evaluator), compiled ~12 ms, and compiling it takes ~8 ms once.  A built drgnx (.elc) skips that.  It may load
+bytecomp, so a FULL fingerprint calls it before it reads anything (the load is not a change it reports)."
   (unless (compiled-function-p (symbol-function 'drgnx-modules-fingerprint--scan))
     (ignore-errors
+      (require 'bytecomp)               ; first: bound before bytecomp is loaded, `byte-compile-warnings' is lexical
       (let ((byte-compile-warnings nil) (inhibit-message t))
-        (byte-compile 'drgnx-modules-fingerprint--scan))))
+        (byte-compile 'drgnx-modules-fingerprint--scan)))))
+
+(defun drgnx-modules-fingerprint--full-items ()
+  "The `mapatoms' scan (`drgnx-modules-fingerprint--compile-scan' compiled it) and the hand-listed hooks it misses."
   (let* ((scan (drgnx-modules-fingerprint--scan)) (extra nil))
     ;; a listed name the scan's suffix test would not pick (a hand-listed odd one) is still read
     (dolist (h (drgnx-modules-fingerprint--hook-names))
@@ -215,6 +222,7 @@ through the evaluator), compiled ~12 ms, and compiling it takes ~8 ms once.  A b
 Cheap: meant to run around every test.  With FULL, a `mapatoms' scan of every hook variable and every advised
 function (about 12 ms): once per test file.  The diff of two full ones reads `:all-hooks', not `:hooks' and
 `:function-variables' (which it contains), so a leak is one line.  Compare two with `drgnx-modules-fingerprint-diff'."
+  (when full (drgnx-modules-fingerprint--compile-scan))
   (let (hooks fvars regs)
     (dolist (h (drgnx-modules-fingerprint--hook-names))
       (setq hooks (nconc (drgnx-modules-fingerprint--hook-items h) hooks)))
@@ -254,11 +262,14 @@ function (about 12 ms): once per test file.  The diff of two full ones reads `:a
           (file-relative-name f drgnx-dir)
         f))))
 
+(declare-function drgnx-timer-describe "drgnx-timer")
+
 (defun drgnx-modules-fingerprint--source (item)
   "The file that defined the function, advice, timer function or feature of ITEM, or nil."
   (let* ((kind (car (car item))) (obj (cdr item))
          (fn (pcase kind
-               ('timer (and (timerp obj) (timer--function obj)))
+               ('timer (and (timerp obj) (let ((d (and (fboundp 'drgnx-timer-describe) (drgnx-timer-describe obj))))
+                                           (if d (plist-get d :fn) (timer--function obj)))))
                ((or 'hook 'advice 'function-variable 'registry) obj)
                (_ nil))))
     (drgnx-modules-fingerprint--normalize-file
@@ -276,9 +287,13 @@ function (about 12 ms): once per test file.  The diff of two full ones reads `:a
   (let* ((key (car item)) (kind (car key)) (obj (cdr item)))
     (pcase kind
       ('timer
-       (let ((fn (and (timerp obj) (timer--function obj))) (rep (and (timerp obj) (timer--repeat-delay obj))))
-         (format "timer%s %s%s %s" (if (cdr key) " idle" "") sign
-                 (drgnx-modules-fingerprint--clip fn) (if rep (format "repeat %s" rep) "once"))))
+       (let ((layer (and (timerp obj) (fboundp 'drgnx-timer-describe) (drgnx-timer-describe obj)))
+             (fn (and (timerp obj) (timer--function obj))) (rep (and (timerp obj) (timer--repeat-delay obj))))
+         (if layer                      ; every layer timer's function is `drgnx-timer--fire': name its key and owner
+             (format "timer %s%S (%s) %s%s%s" sign (plist-get layer :key) (plist-get layer :owner)
+                     (plist-get layer :fn) (if (cdr key) " idle" "") (if rep (format " repeat %s" rep) ""))
+           (format "timer%s %s%s %s" (if (cdr key) " idle" "") sign
+                   (drgnx-modules-fingerprint--clip fn) (if rep (format "repeat %s" rep) "once")))))
       ('buffer (format "buffer %s%s" sign (cadr key)))
       ('process (format "process %s%s" sign (cadr key)))
       (_                                ; KIND NAME +REST, e.g. "hook find-file-hook +my-fn"

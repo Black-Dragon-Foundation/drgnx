@@ -21,6 +21,8 @@
                                                 (concat "HOME=" home)
                                                 ;; never this machine's drgnx config (a DRGNX_CONFIG_DIR in the caller's environment)
                                                 (concat "DRGNX_CONFIG_DIR=" home "/.config/drgnx")
+                                                ;; …nor its data dir (the Emacs record goes there)
+                                                (concat "DRGNX_DATA_DIR=" home "/.local/share/drgnx")
                                                 ;; never this machine's /run/ostree-booted
                                                 (concat "DRGNX_INSTALL_OSTREE_BOOTED=" home "/no-ostree"))
                                       process-environment))
@@ -340,6 +342,7 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
           (let ((before (mapcar (lambda (f) (with-temp-buffer (insert-file-contents-literally f) (buffer-string))) files))
                 (env (append (list (concat "HOME=" home) "SHELL=/bin/zsh"
                                    (concat "DRGNX_CONFIG_DIR=" home "/.config/drgnx")
+                                   (concat "DRGNX_DATA_DIR=" home "/.local/share/drgnx")
                                    (concat "DRGNX_INSTALL_EMACS=" (drgnx-install-test--fake-emacs tmp "31.1 t ns")))
                              drgnx-install-test--macos)))
             (let ((plan (drgnx-install-test--run env "--dry-run")))
@@ -357,8 +360,9 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
               (should-not (string-search "from Applications" (cdr run))))
             (should (equal before (mapcar (lambda (f) (with-temp-buffer (insert-file-contents-literally f) (buffer-string)))
                                           files)))
-            ;; the real run remembers the Emacs it kept, in drgnx's own config directory
-            (should (equal (with-temp-buffer (insert-file-contents (expand-file-name ".config/drgnx/emacs" home))
+            ;; the real run remembers the Emacs it kept, in drgnx's data dir (machine-local), not the config dir
+            (should-not (file-exists-p (expand-file-name ".config/drgnx/emacs" home)))
+            (should (equal (with-temp-buffer (insert-file-contents (expand-file-name ".local/share/drgnx/emacs" home))
                                              (buffer-string))
                            (concat (expand-file-name "emacs" tmp) "\n")))
             (should-not (file-exists-p (expand-file-name ".zprofile" home)))

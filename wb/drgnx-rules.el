@@ -16,6 +16,7 @@
 (require 'seq)
 (require 'drgnx-wb)
 (require 'drgnx-paths)
+(require 'drgnx-file)
 (require 'drgnx-modules-helpers)
 
 (defvar drgnx-rules--table nil
@@ -252,13 +253,11 @@ left and right docks run the frame's full height, the panel sits under the edito
 
 (defun drgnx-rules--write-report ()
   "Write `drgnx-rules-report' to wb-report.eld in the state dir (after init, on `emacs-startup-hook': a user
-`setq' of `display-buffer-alist' in the configuration has run by then).  Never prompts; an error is ignored."
-  (ignore-errors
-    (let* ((file (expand-file-name "wb-report.eld" (drgnx-state-dir)))
-           (tmp (progn (make-directory (file-name-directory file) t)
-                       (make-temp-file (expand-file-name ".wb-report-" (file-name-directory file))))))
-      (with-temp-file tmp (prin1 (drgnx-rules-report) (current-buffer)))
-      (rename-file tmp file t))))
+`setq' of `display-buffer-alist' in the configuration has run by then).  Never prompts; an error becomes one message."
+  (condition-case err
+      (let ((inhibit-interaction t))
+        (drgnx-file-write (expand-file-name "wb-report.eld" (drgnx-state-dir)) (drgnx-rules-report) :fsync nil))
+    (error (message "drgnx: cannot write the display-rules report: %s" (error-message-string err)))))
 
 (defun drgnx-wb-show-unrouted ()
   "List the buffers no rule matched (each one is a rule to add)."

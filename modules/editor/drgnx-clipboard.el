@@ -27,6 +27,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'drgnx-modules)
+(require 'drgnx-timer)
 
 (defvar x-selection-timeout)
 (defvar pgtk-selection-timeout)
@@ -202,22 +203,30 @@ function that does not demote."
        (drgnx-clipboard--file-has (drgnx-clipboard--config-file "copyq/copyq.conf")
                                   "^\\(?:copy_selection\\|check_selection\\)=true\\s-*$")))
 
+(defvar drgnx-clipboard--generation)
+
+(defun drgnx-clipboard--gpaste-timeout (finish)
+  "The ask for GPaste's settings took a second: FINISH (a function of one argument) with nil."
+  (funcall finish nil))
+
 (defun drgnx-clipboard--gpaste-ask (done)
   "Ask `gsettings' (asynchronously, 1 s at most) whether GPaste records selections; call DONE once with t or nil.
 Either setting is enough: `primary-to-history' puts every selection (PRIMARY) into the history directly, and
 `synchronize-clipboards' copies it to the clipboard, which GPaste records.  Without gsettings, DONE gets nil at once."
   (let ((program (executable-find "gsettings"))
         (keys '("synchronize-clipboards" "primary-to-history"))
-        (answers nil) (procs nil) (finished nil) (timer nil))
+        (answers nil) (procs nil) (finished nil)
+        (key (cons 'clipboard-gpaste drgnx-clipboard--generation)))   ; one ask per check
     (cl-flet ((finish (ok)
                 (unless finished
                   (setq finished t)
-                  (when (timerp timer) (cancel-timer timer))
+                  (drgnx-timer-cancel key)
                   (dolist (p procs) (when (process-live-p p) (delete-process p)))
                   (funcall done ok))))
       (if (not program)
           (finish nil)
-        (setq timer (run-at-time 1 nil (lambda () (finish nil))))
+        (drgnx-timer-start key 1 #'drgnx-clipboard--gpaste-timeout :args (list #'finish)
+                           :owner :core)                      ; it frees the processes, so no module's end may drop it
         (dolist (key keys)
           (let ((key key) (out ""))
             (push (condition-case nil

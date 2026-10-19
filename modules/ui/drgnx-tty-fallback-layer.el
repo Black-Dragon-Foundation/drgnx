@@ -20,6 +20,8 @@
 (require 'drgnx-hooks)
 (require 'drgnx-tty)
 (require 'drgnx-tty-fallback)
+(require 'drgnx-timer)
+(require 'drgnx-frame-kind)
 (declare-function drgnx-tty-frames-refresh-report "drgnx-tty-frames")
 (declare-function drgnx-tty-frames--tty-frames "drgnx-tty-frames")
 (declare-function drgnx-tty-frames--update-report "drgnx-tty-frames")
@@ -55,15 +57,16 @@ someone else changed since stays), and the prefix key passes there again."
   "Non-nil when FRAME (with CAPS) gets the layer: the setting is on, it is a terminal frame, and its keys are
 legacy or modifyOtherKeys with folded chords (tmux at level 1).  Never kkp, plain modifyOtherKeys, or a graphical
 frame."
-  (and drgnx-tty-fallback caps (frame-live-p frame) (not (display-graphic-p frame))
-       (not (equal (terminal-name (frame-terminal frame)) "initial_terminal"))   ; a daemon's, or batch Emacs's
+  (and drgnx-tty-fallback caps (eq (drgnx-state-frame-kind frame) 'tty)
        (or (eq (plist-get caps :keys) 'legacy)
            (and (eq (plist-get caps :keys) 'mok) (plist-get caps :folded)))))
 
 (defun drgnx-tty-fallback-install (frame &optional caps)
   "Give FRAME's terminal the fallback layer when it needs it (`drgnx-tty-fallback--wanted-p'), from CAPS (default
 its terminal parameter `drgnx-tty-caps'); take it off otherwise (kkp turned on later).  Rebuilt from the active
-profile each time.  Returns non-nil when the layer is on.  Never prompts: the hint is a message."
+profile each time.  Returns non-nil when the layer is on.  Never prompts: the hint is a message.
+A child frame (31.1) stands for the top-level frame of its terminal."
+  (while (and (frame-live-p frame) (frame-parent frame)) (setq frame (frame-parent frame)))
   (let* ((term (frame-terminal frame))
          (caps (or caps (terminal-parameter term 'drgnx-tty-caps))))
     (drgnx-tty-fallback-remove term)
@@ -198,7 +201,8 @@ terminal-report.eld (:hinted); `drgnx-tty-fallback-hint' nil says nothing.  Show
 appears (the server's own message would cover it, and kkp's answer may still turn the layer off), as a message:
 never a prompt (`drgnx-tty-fallback--show-hint')."
   (when (and drgnx-tty-fallback-hint (fboundp 'drgnx-tty-frames--update-report))
-    (run-with-timer 0.5 nil #'drgnx-tty-fallback--show-hint frame (or (plist-get caps :id) 'unknown))))
+    (drgnx-timer-start (cons 'tty-fallback-hint frame) 0.5 #'drgnx-tty-fallback--show-hint
+                       :args (list frame (or (plist-get caps :id) 'unknown)) :owner 'ui/terminal)))
 
 ;;;; Rebuilding
 

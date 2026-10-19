@@ -9,6 +9,8 @@
 (require 'drgnx-git)
 (load (expand-file-name "modules/core/drgnx-basics" drgnx-dir) nil t)   ; New Untitled
 (load (expand-file-name "modules/ui/drgnx-start" drgnx-dir) nil t)      ; the start page's mode
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-job-ui" drgnx-dir) nil t)  ; C8's one count of what needs you
 (defvar drgnx-job-ui--badge)
 (defvar drgnx-job-ui--needs-you)
@@ -17,6 +19,8 @@
 (defvar eglot--cached-server)
 (defvar eglot--managed-mode)
 (defvar yaml-indent-offset)
+(defvar drgnx-explorer--roots)
+(defvar drgnx-trust--state)
 (defvar drgnx-statusbar-test--offset nil "An indentation variable of a test.")
 (require 'which-func)                   ; its own table and variables, as in a session that turned it on
 ;; keycast and evil are never loaded here: their variables are declared special, so the tests bind them dynamically
@@ -28,20 +32,23 @@
 
 (defmacro drgnx-statusbar-test--with (&rest body)
   "BODY with the status bar's segments, lists and error record kept away from the rest of the test process.
-Segments a, b, c are defined: their text is A, B, C."
+Segments a, b, c are defined: their text is A, B, C.  The store is the test's own, with the selected window as the
+frame's editor window (the full bar is the editor window's: the bar asks the store)."
   (declare (indent 0))
-  `(let ((drgnx-statusbar--segments (make-hash-table :test #'eq))
-         (drgnx-statusbar--errors nil)
-         (drgnx-statusbar-left '(a b)) (drgnx-statusbar-right '(c))
-         (drgnx-statusbar-drop-order drgnx-statusbar-drop-order)
-         (drgnx-statusbar-compact '(c))
-         (drgnx-statusbar--window nil))
-     ;; the batch terminal is not UTF-8: the tests that look at glyphs say which they mean
-     (cl-letf (((symbol-function 'drgnx-face--ascii-frame-p) (lambda (_frame) nil)))
-       (drgnx-statusbar-define-segment 'a :fn (lambda () "A"))
-       (drgnx-statusbar-define-segment 'b :fn (lambda () "B"))
-       (drgnx-statusbar-define-segment 'c :fn (lambda () "C"))
-       ,@body)))
+  `(drgnx-test-with-state
+     (drgnx-test-use-editor (selected-window))
+     (let ((drgnx-statusbar--segments (make-hash-table :test #'eq))
+           (drgnx-statusbar--errors nil)
+           (drgnx-statusbar-left '(a b)) (drgnx-statusbar-right '(c))
+           (drgnx-statusbar-drop-order drgnx-statusbar-drop-order)
+           (drgnx-statusbar-compact '(c))
+           (drgnx-statusbar--window nil))
+       ;; the batch terminal is not UTF-8: the tests that look at glyphs say which they mean
+       (cl-letf (((symbol-function 'drgnx-face--ascii-frame-p) (lambda (_frame) nil)))
+         (drgnx-statusbar-define-segment 'a :fn (lambda () "A"))
+         (drgnx-statusbar-define-segment 'b :fn (lambda () "B"))
+         (drgnx-statusbar-define-segment 'c :fn (lambda () "C"))
+         ,@body))))
 
 (defmacro drgnx-statusbar-test--in-buffer (mode &rest body)
   "BODY in a temp buffer in MODE, shown in the selected window (the bar reads the window's buffer)."
@@ -106,6 +113,11 @@ Segments a, b, c are defined: their text is A, B, C."
             ;; what is shown shrinks: never a segment back that a narrower window lost
             (when previous (should (seq-every-p (lambda (id) (memq id previous)) shown)))
             (setq previous shown)))))
+    ;; a terminal that cannot show "…" cuts with "...", wider than 1 or 2 columns (CI's C locale): still never wider
+    (let ((truncate-string-ellipsis "...") (drgnx-statusbar-left '(branch a)) (drgnx-statusbar-right '(c)))
+      (drgnx-statusbar-define-segment 'branch :fn (lambda () "a-very-long-branch-name"))
+      (dolist (width '(5 4 3 2 1))
+        (should (<= (string-width (drgnx-statusbar-render width)) width))))
     ;; segments go in `drgnx-statusbar-drop-order'
     (let ((drgnx-statusbar-left '(branch problems tests jobs agents modal misc))
           (drgnx-statusbar-right '(lsp position indent encoding eol language))
@@ -127,7 +139,7 @@ Segments a, b, c are defined: their text is A, B, C."
       (drgnx-statusbar-define-segment 'branch :fn (lambda () "⑂ feature/extremely-long-branch-name"))
       (let* ((s (drgnx-statusbar-render 20)) (plain (substring-no-properties s)))
         (should (<= (string-width s) 20))
-        (should (string-match-p "…" plain))
+        (should (string-search (truncate-string-ellipsis) plain))   ; Emacs's: "..." in a C locale (CI's)
         (should (string-match-p "⑂ feat" plain))))))
 
 (ert-deftest drgnx-statusbar/a-failing-segment-is-skipped-and-recorded-once ()
@@ -168,36 +180,37 @@ Segments a, b, c are defined: their text is A, B, C."
           (should-not ran))))))
 
 (ert-deftest drgnx-statusbar/full-in-the-mru-editor-compact-elsewhere ()
-  (drgnx-statusbar-test--with
-    (let ((w1 (selected-window)) w2 (buf (generate-new-buffer " *sb-test*")))
-      (with-current-buffer buf (emacs-lisp-mode))
-      (unwind-protect
-          (progn
-            (delete-other-windows)
-            (setq w1 (selected-window) w2 (split-window-right))
-            (set-window-buffer w1 buf)
-            (set-window-buffer w2 buf)
-            (let ((drgnx-signal--editor-window w2))
+  (drgnx-test-with-state
+    (drgnx-statusbar-test--with
+      (let ((w1 (selected-window)) w2 (buf (generate-new-buffer " *sb-test*")))
+        (with-current-buffer buf (emacs-lisp-mode))
+        (unwind-protect
+            (progn
+              (delete-other-windows)
+              (setq w1 (selected-window) w2 (split-window-right))
+              (set-window-buffer w1 buf)
+              (set-window-buffer w2 buf)
+              (drgnx-test-use-editor w2)
               (let ((full (with-current-buffer buf (with-selected-window w2 (drgnx-statusbar-mode-line))))
                     (other (with-current-buffer buf (with-selected-window w1 (drgnx-statusbar-mode-line)))))
                 (should (string-match-p "A · B" full))
                 (should (string-match-p "C" full))
                 (should-not (string-match-p "A" other))
-                (should (string-match-p "C" other))))
-            ;; the host construct is the status bar's while the mode is on
-            (let ((drgnx-chrome-editor-mode-line drgnx-chrome-editor-mode-line))
-              (cl-letf (((symbol-function 'drgnx-chrome-apply) #'ignore))
-                (drgnx-statusbar-mode 1)
-                (should (equal drgnx-chrome-editor-mode-line '(:eval (drgnx-statusbar-mode-line))))
-                (drgnx-statusbar-mode -1)
-                (should (eq drgnx-chrome-editor-mode-line drgnx-chrome--mode-line)))))
-        (delete-other-windows)
-        (kill-buffer buf)
-        (drgnx-statusbar-mode -1)))
-    ;; a buffer whose own mode-line-format is nil keeps none
-    (with-temp-buffer
-      (setq-local mode-line-format nil)
-      (should-not (drgnx-statusbar-mode-line)))))
+                (should (string-match-p "C" other)))
+              ;; the host construct is the status bar's while the mode is on
+              (let ((drgnx-chrome-editor-mode-line drgnx-chrome-editor-mode-line))
+                (cl-letf (((symbol-function 'drgnx-chrome-apply) #'ignore))
+                  (drgnx-statusbar-mode 1)
+                  (should (equal drgnx-chrome-editor-mode-line '(:eval (drgnx-statusbar-mode-line))))
+                  (drgnx-statusbar-mode -1)
+                  (should (eq drgnx-chrome-editor-mode-line drgnx-chrome--mode-line)))))
+          (delete-other-windows)
+          (kill-buffer buf)
+          (drgnx-statusbar-mode -1)))
+      ;; a buffer whose own mode-line-format is nil keeps none
+      (with-temp-buffer
+        (setq-local mode-line-format nil)
+        (should-not (drgnx-statusbar-mode-line))))))
 
 (ert-deftest drgnx-statusbar/segments-read-no-files-and-start-no-process ()
   (drgnx-statusbar-test--with
@@ -221,35 +234,35 @@ Segments a, b, c are defined: their text is A, B, C."
 (ert-deftest drgnx-statusbar/default-segments-say-what-they-know ()
   (drgnx-statusbar-test--with
     (drgnx-statusbar--define-defaults)
-    (let ((drgnx-git--repos (make-hash-table :test #'equal)))     ; no repository read: the branch is `vc-mode''s
-      (cl-flet ((text (id) (let ((s (funcall (plist-get (gethash id drgnx-statusbar--segments) :fn)))) (and s (substring-no-properties s)))))
-        (with-temp-buffer
-          (emacs-lisp-mode)
-          (insert "one\ntwo\nthree")
-          (setq buffer-file-coding-system 'utf-8-dos)
-          (setq-local indent-tabs-mode nil)
-          (setq-local tab-width 8)
-          (goto-char (+ (point-min) 5))
-          (should (equal (text 'position) "Ln 2, Col 2"))
-          (should (equal (text 'encoding) "UTF-8"))
-          (should (equal (text 'eol) "CRLF"))
-          (should (equal (text 'language) "Emacs Lisp"))
-          (should (string-match-p "\\`Spaces: [0-9]+\\'" (text 'indent)))
-          (setq buffer-file-coding-system 'utf-8-unix)
-          (should (equal (text 'eol) "LF"))
-          (setq-local indent-tabs-mode t)
-          (should (equal (text 'indent) "Tab Size: 8"))
-          ;; vc-mode is the cached branch
-          (setq-local vc-mode " Git-feature/x")
-          (should (string-match-p "feature/x" (text 'branch)))
-          (setq-local vc-mode nil)
-          (should-not (text 'branch)))
-        ;; no test run yet; misc has nothing to say in a plain buffer
-        (let ((drgnx-statusbar-tests-state nil) (drgnx-statusbar--tick (1+ drgnx-statusbar--tick)))
-          (should-not (text 'tests)))
-        (with-temp-buffer
-          (let ((global-mode-string nil) (mode-line-process nil) (defining-kbd-macro nil))
-            (should-not (text 'misc))))))))
+    (progn (drgnx-cache--clear 'git-status)                       ; no repository read: the branch is `vc-mode''s
+           (cl-flet ((text (id) (let ((s (funcall (plist-get (gethash id drgnx-statusbar--segments) :fn)))) (and s (substring-no-properties s)))))
+             (with-temp-buffer
+               (emacs-lisp-mode)
+               (insert "one\ntwo\nthree")
+               (setq buffer-file-coding-system 'utf-8-dos)
+               (setq-local indent-tabs-mode nil)
+               (setq-local tab-width 8)
+               (goto-char (+ (point-min) 5))
+               (should (equal (text 'position) "Ln 2, Col 2"))
+               (should (equal (text 'encoding) "UTF-8"))
+               (should (equal (text 'eol) "CRLF"))
+               (should (equal (text 'language) "Emacs Lisp"))
+               (should (string-match-p "\\`Spaces: [0-9]+\\'" (text 'indent)))
+               (setq buffer-file-coding-system 'utf-8-unix)
+               (should (equal (text 'eol) "LF"))
+               (setq-local indent-tabs-mode t)
+               (should (equal (text 'indent) "Tab Size: 8"))
+               ;; vc-mode is the cached branch
+               (setq-local vc-mode " Git-feature/x")
+               (should (string-match-p "feature/x" (text 'branch)))
+               (setq-local vc-mode nil)
+               (should-not (text 'branch)))
+             ;; no test run yet; misc has nothing to say in a plain buffer
+             (let ((drgnx-statusbar-tests-state nil) (drgnx-statusbar--tick (1+ drgnx-statusbar--tick)))
+               (should-not (text 'tests)))
+             (with-temp-buffer
+               (let ((global-mode-string nil) (mode-line-process nil) (defining-kbd-macro nil))
+                 (should-not (text 'misc))))))))
 
 (ert-deftest drgnx-statusbar/never-wider-with-wide-glyphs-display-text-and-a-right-only-bar ()
   (drgnx-statusbar-test--with
@@ -346,9 +359,8 @@ Segments a, b, c are defined: their text is A, B, C."
             (should-not (string-match-p "Ln " (drgnx-statusbar-mode-line)))))))))
 
 (ert-deftest drgnx-statusbar/the-bar-asks-for-a-redraw-when-point-moves-or-the-text-changes ()
-  (let ((calls 0) (posted nil) (drgnx-statusbar--last (make-vector 5 nil)))
-    (cl-letf (((symbol-function 'force-mode-line-update) (lambda (&optional all) (should-not all) (cl-incf calls)))
-              ((symbol-function 'drgnx-signal-post) (lambda (e) (push e posted))))
+  (let ((calls 0) (drgnx-statusbar--last (make-vector 4 nil)))
+    (cl-letf (((symbol-function 'force-mode-line-update) (lambda (&optional all) (should-not all) (cl-incf calls))))
       (with-temp-buffer
         (insert "one\ntwo\nthree\n")
         (goto-char (point-min))
@@ -366,34 +378,123 @@ Segments a, b, c are defined: their text is A, B, C."
         (insert "x")                                   ; the text changed
         (drgnx-statusbar--post-command)
         (should (= calls 3))
-        (setq posted nil)
-        (let ((other (split-window-right)))            ; another window selected
-          (unwind-protect
-              (with-selected-window other
-                (drgnx-statusbar--post-command)
-                (should (= calls 4))
-                ;; the bus is asked to say when the most recently used editor window is settled
-                (should (equal posted '(statusbar-window-changed))))
-            (delete-window other)))))
-    ;; the hook and the bus subscriptions are there while the mode is on, and gone when it is off
+        (insert "y")
+        (drgnx-statusbar--post-command)                ; the text changed again
+        (should (= calls 4))
+        (set-mark (point)) (activate-mark)             ; the mark became active
+        (setq calls 0)
+        (drgnx-statusbar--post-command)
+        (should (= calls 1))
+        (deactivate-mark)))
+    ;; the hook and the subscriptions are there while the mode is on, and gone when it is off
     (cl-letf (((symbol-function 'drgnx-chrome-apply) #'ignore) ((symbol-function 'force-mode-line-update) #'ignore))
       (let ((drgnx-signal--subscribers nil))
         (unwind-protect
             (progn (drgnx-statusbar-mode 1)
                    (should (memq #'drgnx-statusbar--post-command post-command-hook))
-                   (should (memq #'drgnx-statusbar--editor-changed (alist-get 'editor-changed drgnx-signal--subscribers)))
-                   (should (memq #'drgnx-statusbar--editor-changed
-                                 (alist-get 'statusbar-window-changed drgnx-signal--subscribers)))
+                   (should (eq 'now (drgnx-state--lane-of 'editor-changed #'drgnx-statusbar--editor-changed)))
+                   (should (memq #'drgnx-statusbar--ask-git (alist-get 'editor-changed drgnx-signal--subscribers)))
                    (drgnx-statusbar-mode -1)
                    (should-not (memq #'drgnx-statusbar--post-command post-command-hook))
-                   (should-not (alist-get 'editor-changed drgnx-signal--subscribers))
-                   (should-not (alist-get 'statusbar-window-changed drgnx-signal--subscribers)))
+                   (should-not (drgnx-state--lane-of 'editor-changed #'drgnx-statusbar--editor-changed))
+                   (should-not (alist-get 'editor-changed drgnx-signal--subscribers)))
           (drgnx-statusbar-mode -1))))
-    ;; the bus edge redraws every bar
+    ;; the store's edge redraws every bar
     (let (all)
       (cl-letf (((symbol-function 'force-mode-line-update) (lambda (&optional a) (setq all a))))
         (drgnx-statusbar--editor-changed (current-buffer))
         (should all)))))
+
+(ert-deftest drgnx-statusbar/the-full-bar-follows-the-editor-at-once ()
+  ;; Two windows, one buffer: the store's `editor-changed' (the `now' lane) asks for every bar at once, and the
+  ;; next draw puts the full bar in the new editor window.  The bus's idle flush is never run here.
+  (drgnx-test-with-state
+    (drgnx-statusbar-test--with
+      (let ((w1 (selected-window)) w2 (buf (generate-new-buffer " *sb-follow*")) (asked nil)
+            (drgnx-chrome-editor-mode-line drgnx-chrome-editor-mode-line))
+        (with-current-buffer buf (emacs-lisp-mode))
+        (cl-flet ((bar (w) (with-selected-window w (drgnx-statusbar-mode-line))))
+          (unwind-protect
+              (cl-letf (((symbol-function 'drgnx-chrome-apply) #'ignore)
+                        ((symbol-function 'force-mode-line-update) (lambda (&optional all) (push all asked))))
+                (delete-other-windows)
+                (setq w1 (selected-window) w2 (split-window-right))
+                (set-window-buffer w1 buf)
+                (set-window-buffer w2 buf)
+                (drgnx-statusbar-mode 1)
+                (drgnx-test-use-editor w1)
+                (should (string-match-p "A · B" (bar w1)))
+                (should-not (string-match-p "B" (bar w2)))
+                (setq asked nil)
+                (drgnx-test-use-editor w2)              ; the same buffer: only the window changed
+                (should (memq t asked))                 ; asked for every bar, inside the observation
+                (should (string-match-p "A · B" (bar w2)))
+                (should-not (string-match-p "B" (bar w1)))
+                (should (string-match-p "C" (bar w1))))
+            (drgnx-statusbar-mode -1)
+            (delete-other-windows)
+            (kill-buffer buf)))))))
+
+(ert-deftest drgnx-statusbar/no-window-changed-post-is-left ()
+  (let ((src (with-temp-buffer
+               (insert-file-contents (expand-file-name "modules/ui/drgnx-statusbar.el" drgnx-dir))
+               (buffer-string)))
+        (posted nil) (drgnx-statusbar--last (make-vector 4 nil)) (drgnx-signal--subscribers nil))
+    (should-not (string-match-p "statusbar-window-changed" src))
+    (should-not (string-match-p "drgnx-signal-post" src))
+    (cl-letf (((symbol-function 'drgnx-signal-post) (lambda (e) (push e posted)))
+              ((symbol-function 'force-mode-line-update) #'ignore)
+              ((symbol-function 'drgnx-chrome-apply) #'ignore))
+      (let ((other (split-window-right)))
+        (unwind-protect
+            (progn (drgnx-statusbar--post-command)
+                   (with-selected-window other (drgnx-statusbar--post-command)))
+          (delete-window other)))
+      (unwind-protect
+          (progn (drgnx-statusbar-mode 1)
+                 (should-not (alist-get 'statusbar-window-changed drgnx-signal--subscribers)))
+        (drgnx-statusbar-mode -1)))
+    (should-not posted)))
+
+(ert-deftest drgnx-statusbar/now-subscriber-is-cheap ()
+  :tags '(:timing)
+  (drgnx-test-with-state
+    (let* ((w (selected-window)) (n 5000)
+           (loop (byte-compile (lambda (n w)
+                                 (dotimes (_ n)
+                                   (drgnx-statusbar--editor-changed nil)
+                                   (drgnx-statusbar--mru-editor-p w)))))
+           (runs (sort (cl-loop repeat 21
+                                collect (let ((t0 (float-time)))
+                                          (funcall loop n w)
+                                          (/ (* 1e6 (- (float-time) t0)) n)))
+                       #'<))
+           (median (nth 10 runs)))
+      (message "drgnx-statusbar: the `now' subscriber and the MRU check: %.2f µs (median of 21 × %d)" median n)
+      (should (<= median (* 5 (drgnx-run-ert-time-factor)))))))
+
+(ert-deftest drgnx-statusbar/with-the-store-off-every-editor-window-has-the-compact-bar ()
+  ;; The bar keeps no editor window of its own: with no record in the store (the store off, or a frame it has not
+  ;; observed) no window is the editor, so every editor window gets the compact bar.
+  (drgnx-test-with-state
+    (drgnx-statusbar-test--with
+      (let ((w1 (selected-window)) w2 (buf (generate-new-buffer " *sb-off*")))
+        (with-current-buffer buf (emacs-lisp-mode))
+        (unwind-protect
+            (progn
+              (delete-other-windows)
+              (setq w1 (selected-window) w2 (split-window-right))
+              (set-window-buffer w1 buf)
+              (set-window-buffer w2 buf)
+              (clrhash drgnx-state--frames)             ; the store has no record of the frame
+              (should-not (drgnx-state-editor-window))
+              (dolist (w (list w1 w2))
+                (should-not (drgnx-statusbar--mru-editor-p w))
+                (let ((bar (with-current-buffer buf (with-selected-window w (drgnx-statusbar-mode-line)))))
+                  (should (string-match-p "C" bar))
+                  (should-not (string-match-p "A\\|B" bar)))))
+          (delete-other-windows)
+          (kill-buffer buf))))))
 
 (ert-deftest drgnx-statusbar/the-line-number-follows-point-and-edits ()
   (with-temp-buffer
@@ -458,14 +559,15 @@ Segments a, b, c are defined: their text is A, B, C."
 (defmacro drgnx-statusbar-test--git-cache (root &rest body)
   "BODY with ROOT a repository the git cache knows (a branch plist is put in it per test), isolated from the rest."
   (declare (indent 1))
-  `(let ((drgnx-git--repos (make-hash-table :test #'equal)) (drgnx-git--roots (make-hash-table :test #'equal))
+  `(let ((drgnx-git--roots (make-hash-table :test #'equal))
          (,root "/tmp/drgnx-sb-repo/"))
+     (drgnx-cache--clear 'git-status)
      (puthash "/tmp/drgnx-sb-repo/src/" ,root drgnx-git--roots)
      ,@body))
 
 (defun drgnx-statusbar-test--branch-text (branch &optional vc)
   "The branch segment in a buffer of /tmp/drgnx-sb-repo/src/ when the cache holds BRANCH (and `vc-mode' VC)."
-  (puthash "/tmp/drgnx-sb-repo/" (list :branch branch) drgnx-git--repos)
+  (drgnx-cache-put 'git-status "/tmp/drgnx-sb-repo/" (list :branch branch))
   (with-temp-buffer
     (setq buffer-file-name "/tmp/drgnx-sb-repo/src/a.el")
     (setq-local vc-mode vc)
@@ -524,7 +626,9 @@ Segments a, b, c are defined: their text is A, B, C."
   (drgnx-statusbar-test--with
     (with-temp-buffer
       (insert "one\ntwo\n")
-      (let ((flymake-diagnostic-functions
+      ;; Emacs 31's flymake runs a backend only in trusted content: this one is the test's own
+      (let ((trusted-content :all)
+            (flymake-diagnostic-functions
              (list (lambda (report-fn &rest _)
                      (funcall report-fn (list (flymake-make-diagnostic (current-buffer) 1 3 :error "e")
                                               (flymake-make-diagnostic (current-buffer) 5 7 :warning "w")))))))
@@ -545,6 +649,7 @@ Segments a, b, c are defined: their text is A, B, C."
             (should (= 1 (length (seq-filter (lambda (f) (eq f #'drgnx-statusbar--flymake-reported))
                                              (let (l) (advice-mapc (lambda (f _) (push f l)) 'flymake--handle-report) l)))))
             (let* (report
+                   (trusted-content :all)      ; Emacs 31: a backend runs only in trusted content
                    (flymake-diagnostic-functions (list (lambda (report-fn &rest _) (setq report report-fn)))))
               (flymake-mode 1)
               (unwind-protect
@@ -596,10 +701,70 @@ Segments a, b, c are defined: their text is A, B, C."
                     (should (equal (drgnx-statusbar--seg-position) "Ln 3, Col 2 (3 selected)"))
                     (deactivate-mark)
                     (should (equal (drgnx-statusbar--seg-position) "Ln 3, Col 2"))
-                    (setq-local indent-tabs-mode t)
-                    (should (string-match-p "\\`Tab Size: [0-9]+\\'" (drgnx-statusbar--seg-indent))))
+                    (setq-local indent-tabs-mode t)             ; the file's own lines say spaces: the bar says so too
+                    (should (equal (drgnx-statusbar--seg-indent) "Spaces: 2")))
                 (kill-buffer buf))))
         (delete-file file)))))
+
+(ert-deftest drgnx-statusbar/indent-reports-what-the-buffer-uses ()
+  ;; Emacs Lisp has `indent-tabs-mode' t and `tab-width' 8; a file indented with two spaces is "Spaces: 2"
+  (with-temp-buffer
+    (setq-local indent-tabs-mode t tab-width 8)
+    (insert "(defun f ()\n  (g)\n  (h\n   1))\n")
+    (should (equal (drgnx-statusbar--seg-indent) "Spaces: 2"))
+    (erase-buffer)
+    (insert "int f() {\n\treturn 1;\n\t\treturn 2;\n}\n")
+    (setq-local indent-tabs-mode nil)
+    (should (equal (drgnx-statusbar--seg-indent) "Tab Size: 8"))
+    ;; nothing indented: the mode's own settings
+    (setq-local drgnx-statusbar-indent-vars nil)
+    (erase-buffer)
+    (insert "a\nb\n")
+    (should (equal (drgnx-statusbar--seg-indent) "Spaces: 8"))
+    (setq-local indent-tabs-mode t)
+    (should (equal (drgnx-statusbar--seg-indent) "Tab Size: 8"))
+    ;; one space is alignment, not indentation
+    (erase-buffer)
+    (insert "/*\n * x\n */\nint a;\n    b;\n")
+    (setq-local indent-tabs-mode t)
+    (should (equal (drgnx-statusbar--seg-indent) "Spaces: 4"))))
+
+(ert-deftest drgnx-statusbar/indent-is-scanned-once-per-change ()
+  (with-temp-buffer
+    (insert "a\n  b\n")
+    (drgnx-statusbar--seg-indent)
+    (let ((cache drgnx-statusbar--indent-cache))
+      (drgnx-statusbar--seg-indent)
+      (should (eq cache drgnx-statusbar--indent-cache))           ; no new scan
+      (insert "   c\n")
+      (drgnx-statusbar--seg-indent)
+      (should-not (eq cache drgnx-statusbar--indent-cache)))))
+
+(ert-deftest drgnx-statusbar/restricted-mode-is-a-labelled-segment-with-a-click ()
+  (drgnx-statusbar-test--with
+    (drgnx-statusbar--define-defaults)
+    (should (memq 'trust (eval (car (get 'drgnx-statusbar-left 'standard-value)) t)))
+    (with-temp-buffer
+      (should-not (drgnx-statusbar--seg-trust))
+      (setq drgnx-trust--state 'trusted)
+      (should-not (drgnx-statusbar--seg-trust))
+      (setq drgnx-trust--state 'restricted)
+      (should (equal (drgnx-statusbar--seg-trust) "Restricted Mode"))
+      (let ((s (drgnx-statusbar--text 'trust)))
+        (should (string-match-p "not trusted" (get-text-property 0 'help-echo s)))
+        (should (string-match-p "Trust This Folder\\|trust it" (get-text-property 0 'help-echo s)))
+        (should (equal (plist-get (gethash 'trust drgnx-statusbar--segments) :click) 'drgnx-trust-folder))))
+    ;; the plain mark in `global-mode-string' is the segment's: `misc' leaves it out
+    (should (member '(:eval (drgnx-trust--mark)) drgnx-statusbar-misc-exclude))))
+
+(ert-deftest drgnx-statusbar/the-quiet-bar-names-the-folder ()
+  (let ((drgnx-explorer--roots nil))
+    (should (equal (drgnx-statusbar--seg-folder) "No folder open"))
+    (setq drgnx-explorer--roots '("/x/proj/"))
+    (should (equal (drgnx-statusbar--seg-folder) "proj"))
+    (setq drgnx-explorer--roots '("/x/proj/" "/y/other/"))
+    (should (equal (drgnx-statusbar--seg-folder) "proj +1")))
+  (should (eq (car drgnx-statusbar-quiet) 'folder)))
 
 (ert-deftest drgnx-statusbar/language-names-are-the-ones-vs-code-uses-worked-out-once-per-mode ()
   (let ((drgnx-statusbar--language-names (make-hash-table :test #'eq)) (warning-minimum-level :emergency))
@@ -608,9 +773,9 @@ Segments a, b, c are defined: their text is A, B, C."
                  (tsx-ts-mode . "TypeScript JSX") (js-mode . "JavaScript") (emacs-lisp-mode . "Emacs Lisp")
                  (sh-mode . "Shell Script") (c-mode . "C") (text-mode . "Plain Text") (fundamental-mode . "Plain Text")
                  (json-ts-mode . "JSON") (css-mode . "CSS") (conf-unix-mode . "Conf Unix")))
-      (when (fboundp (car c))
-        (with-temp-buffer
-          (funcall (car c))
+      (with-temp-buffer
+        ;; a tree-sitter mode refuses to start without its grammar (30.2's java-ts-mode on CI): nothing to name
+        (when (and (fboundp (car c)) (ignore-errors (funcall (car c)) t))
           (should (equal (cons (car c) (drgnx-statusbar--seg-language)) c)))))
     ;; a mode whose own name says something else (or nothing yet): the name made from the mode's symbol
     (with-temp-buffer
@@ -805,15 +970,15 @@ Segments a, b, c are defined: their text is A, B, C."
   "BODY with the drgnx side's state (ticks, tests, jobs, agents, the refresh timer, the memo) kept to this test."
   (declare (indent 0))
   `(let ((drgnx-statusbar--tick 0) (drgnx-statusbar-tests-state nil) (drgnx-statusbar--jobs-state nil)
-         (drgnx-statusbar--agents-state nil) (drgnx-statusbar--refresh-timer nil)
+         (drgnx-statusbar--agents-state nil)
          (drgnx-statusbar--redraw-wanted nil) (drgnx-statusbar--jobs-wanted nil) (drgnx-statusbar--jobs-pending nil)
          (drgnx-statusbar--state-texts (make-hash-table :test #'eq))
          (drgnx-statusbar--git-branches (make-hash-table :test #'equal))
-         (drgnx-git--repos (make-hash-table :test #'equal))
          (drgnx-statusbar--memo (make-hash-table :test #'eq :weakness 'key))
          (drgnx-statusbar-waiting-functions (list #'drgnx-statusbar-agents-waiting)))
+     (drgnx-cache--clear 'git-status)
      (unwind-protect (progn ,@body)
-       (when (timerp drgnx-statusbar--refresh-timer) (cancel-timer drgnx-statusbar--refresh-timer)))))
+       (drgnx-timer-cancel 'statusbar-refresh))))
 
 (defun drgnx-statusbar-test--seg (id)
   "The plain text segment ID says now (nil when it says nothing)."
@@ -1006,7 +1171,7 @@ Segments a, b, c are defined: their text is A, B, C."
           (funcall callback '(:jobs [(:status "running")]) nil)
           (should-not drgnx-statusbar--jobs-pending)
           (should (equal (drgnx-statusbar-test--seg 'jobs) "◎ 1 job"))
-          (should (timerp drgnx-statusbar--refresh-timer))
+          (should (drgnx-timer-active-p 'statusbar-refresh))
           (drgnx-statusbar--refresh-now)
           (should (= asked 2))
           ;; an answer of the wrong shape (in the hub client's filter) signals nothing: the count is not known
@@ -1192,102 +1357,107 @@ own cache), evil's state tag, other entries of `mode-line-misc-info'; each chang
             (drgnx-agents--sessions (list (drgnx-agents--make :name "a" :status 'busy))))
         (advice-add 'drgnx-statusbar--refresh-now :around #'drgnx-statusbar-test--mark-refresh)
         (unwind-protect
-            (cl-letf (((symbol-function 'force-mode-line-update)
-                       (lambda (&optional all) (when drgnx-statusbar-test--refreshing (should all) (cl-incf calls)))))
-              ;; 20 agent changes in 0.1 s: one refresh, one redraw of every bar
-              (dotimes (_ 20)
-                (drgnx-statusbar--agents-changed (car drgnx-agents--sessions))
-                (sleep-for 0.005))
-              (should (= calls 0))
-              (should (= drgnx-statusbar-test--refreshes 0))
-              (sleep-for 0.4)
-              (should (= drgnx-statusbar-test--refreshes 1))
-              (should (= calls 1))
-              (should (equal (drgnx-statusbar-test--seg 'agents) "◎ 1 busy"))
-              ;; the hub's and git's change hooks go through the same debounce
-              (drgnx-statusbar--hub-event "agent-entries" nil)
-              (puthash "/repo/" (list :branch '(:head "a" :ahead 1)) drgnx-git--repos)   ; a new branch state
-              (drgnx-statusbar--git-changed "/repo/")
-              (drgnx-statusbar--git-changed "/repo/")
-              (sleep-for 0.4)
-              (should (= drgnx-statusbar-test--refreshes 2))
-              (should (= calls 2))                             ; git: one redraw, the agents' counts did not change
-              (should-not drgnx-statusbar--refresh-timer)
-              ;; a status run that changed only files, or failed: the same branch, no redraw
-              (drgnx-statusbar--git-changed "/repo/")
-              (should-not drgnx-statusbar--refresh-timer)
-              (puthash "/repo/" (list :branch '(:head "a" :ahead 2)) drgnx-git--repos)   ; one more commit ahead
-              (drgnx-statusbar--git-changed "/repo/")
-              (should (timerp drgnx-statusbar--refresh-timer))
-              (cancel-timer drgnx-statusbar--refresh-timer) (setq drgnx-statusbar--refresh-timer nil))
+            (drgnx-test-with-clock ()                         ; the debounce is a layer timer: virtual time
+              (cl-letf (((symbol-function 'force-mode-line-update)
+                         (lambda (&optional all) (when drgnx-statusbar-test--refreshing (should all) (cl-incf calls)))))
+                ;; 20 agent changes in 0.1 s: one refresh, one redraw of every bar
+                (dotimes (_ 20)
+                  (drgnx-statusbar--agents-changed (car drgnx-agents--sessions))
+                  (drgnx-test-advance 0.005))
+                (should (= calls 0))
+                (should (= drgnx-statusbar-test--refreshes 0))
+                (drgnx-test-advance 0.4)
+                (should (= drgnx-statusbar-test--refreshes 1))
+                (should (= calls 1))
+                (should (equal (drgnx-statusbar-test--seg 'agents) "◎ 1 busy"))
+                ;; the hub's and git's change hooks go through the same debounce
+                (drgnx-statusbar--hub-event "agent-entries" nil)
+                (drgnx-cache-put 'git-status "/repo/" (list :branch '(:head "a" :ahead 1)))   ; a new branch state
+                (drgnx-statusbar--git-changed "/repo/")
+                (drgnx-statusbar--git-changed "/repo/")
+                (drgnx-test-advance 0.4)
+                (should (= drgnx-statusbar-test--refreshes 2))
+                (should (= calls 2))                             ; git: one redraw, the agents' counts did not change
+                (should-not (drgnx-timer-active-p 'statusbar-refresh))
+                ;; a status run that changed only files, or failed: the same branch, no redraw
+                (drgnx-statusbar--git-changed "/repo/")
+                (should-not (drgnx-timer-active-p 'statusbar-refresh))
+                (drgnx-cache-put 'git-status "/repo/" (list :branch '(:head "a" :ahead 2)))   ; one more commit ahead
+                (drgnx-statusbar--git-changed "/repo/")
+                (should (drgnx-timer-active-p 'statusbar-refresh))
+                (drgnx-timer-cancel 'statusbar-refresh)))
           (advice-remove 'drgnx-statusbar--refresh-now #'drgnx-statusbar-test--mark-refresh))))))
 
 (ert-deftest drgnx-statusbar/a-redisplay-that-changes-nothing-reuses-the-bar ()
-  (drgnx-statusbar-test--with
-    (drgnx-statusbar-test--state
-      (let ((calls 0) (global-mode-string nil))
-        (drgnx-statusbar-define-segment 'a :fn (lambda () (cl-incf calls) "A"))
-        (cl-letf (((symbol-function 'force-mode-line-update) #'ignore))
-          (drgnx-statusbar-test--in-buffer #'emacs-lisp-mode
-            (insert "one\ntwo\nthree\n")
-            (let ((first (drgnx-statusbar-mode-line)))
-              (dotimes (_ 50) (should (eq (drgnx-statusbar-mode-line) first)))
-              (should (= calls 1))
-              (cl-flet ((rebuilt-p () (let ((c calls)) (drgnx-statusbar-mode-line) (/= calls c))))
-                (goto-char (point-min))                         ; point moved
-                (should (rebuilt-p)) (should-not (rebuilt-p))
-                (insert "x")                                    ; the text changed (and point)
-                (should (rebuilt-p)) (should-not (rebuilt-p))
-                (delete-char 1)                                 ; the text changed, point did not
-                (should (rebuilt-p)) (should-not (rebuilt-p))
-                (drgnx-statusbar-note-tests 1 0)                ; a hook-driven segment's state
-                (should (rebuilt-p)) (should-not (rebuilt-p))
-                (setq-local vc-mode " Git-other")               ; a buffer-local the segments read
-                (should (rebuilt-p)) (should-not (rebuilt-p))
-                (narrow-to-region 1 4)
-                (should (rebuilt-p)) (should-not (rebuilt-p))
-                (widen)
-                (should (rebuilt-p))
-                (setq global-mode-string '("MARK"))             ; another module's mark
-                (should (rebuilt-p)) (should-not (rebuilt-p))
-                (drgnx-statusbar-define-segment 'b :fn (lambda () "B2"))   ; a segment redefined
-                (should (rebuilt-p))
-                (should (string-match-p "B2" (drgnx-statusbar-mode-line)))
-                (should-not (rebuilt-p))
-                (drgnx-statusbar-refresh t)                    ; a segment of your own says its state changed
-                (should (rebuilt-p))
-                ;; git changed: the refresh redraws, and the bars are built again (vc-mode may be another)
-                (puthash "/repo/" (list :branch '(:head "other")) drgnx-git--repos)
-                (drgnx-statusbar--git-changed "/repo/")
-                (drgnx-statusbar--refresh-now)
-                (should (rebuilt-p)) (should-not (rebuilt-p))
-                ;; the indentation width, flymake's backends and eglot's server state are in the key
-                (let ((drgnx-statusbar-indent-vars '(drgnx-statusbar-test--offset)))
-                  (setq-local indent-tabs-mode nil)
-                  (setq-local drgnx-statusbar-test--offset 2)
+  (drgnx-test-with-state
+    (drgnx-statusbar-test--with
+      (drgnx-statusbar-test--state
+        (let ((calls 0) (global-mode-string nil))
+          (drgnx-statusbar-define-segment 'a :fn (lambda () (cl-incf calls) "A"))
+          (cl-letf (((symbol-function 'force-mode-line-update) #'ignore))
+            (drgnx-statusbar-test--in-buffer #'emacs-lisp-mode
+              (insert "one\ntwo\nthree\n")
+              (let ((first (drgnx-statusbar-mode-line)))
+                (dotimes (_ 50) (should (eq (drgnx-statusbar-mode-line) first)))
+                (should (= calls 1))
+                (cl-flet ((rebuilt-p () (let ((c calls)) (drgnx-statusbar-mode-line) (/= calls c))))
+                  (goto-char (point-min))                         ; point moved
                   (should (rebuilt-p)) (should-not (rebuilt-p))
-                  (setq-local drgnx-statusbar-test--offset 4)
-                  (should (rebuilt-p)) (should-not (rebuilt-p)))
-                (let ((running '(b1)) (reporting nil) (alive t))
-                  (cl-letf (((symbol-function 'flymake-running-backends) (lambda () running))
-                            ((symbol-function 'flymake-reporting-backends) (lambda () reporting))
-                            ((symbol-function 'jsonrpc-running-p) (lambda (_s) alive)))
-                    (setq-local flymake-mode t)
+                  (insert "x")                                    ; the text changed (and point)
+                  (should (rebuilt-p)) (should-not (rebuilt-p))
+                  (delete-char 1)                                 ; the text changed, point did not
+                  (should (rebuilt-p)) (should-not (rebuilt-p))
+                  (drgnx-statusbar-note-tests 1 0)                ; a hook-driven segment's state
+                  (should (rebuilt-p)) (should-not (rebuilt-p))
+                  (setq-local vc-mode " Git-other")               ; a buffer-local the segments read
+                  (should (rebuilt-p)) (should-not (rebuilt-p))
+                  (narrow-to-region 1 4)
+                  (should (rebuilt-p)) (should-not (rebuilt-p))
+                  (widen)
+                  (should (rebuilt-p))
+                  (setq global-mode-string '("MARK"))             ; another module's mark
+                  (should (rebuilt-p)) (should-not (rebuilt-p))
+                  (drgnx-statusbar-define-segment 'b :fn (lambda () "B2"))   ; a segment redefined
+                  (should (rebuilt-p))
+                  (should (string-match-p "B2" (drgnx-statusbar-mode-line)))
+                  (should-not (rebuilt-p))
+                  (drgnx-statusbar-refresh t)                    ; a segment of your own says its state changed
+                  (should (rebuilt-p))
+                  ;; git changed: the refresh redraws, and the bars are built again (vc-mode may be another)
+                  (drgnx-cache-put 'git-status "/repo/" (list :branch '(:head "other")))
+                  (drgnx-statusbar--git-changed "/repo/")
+                  (drgnx-statusbar--refresh-now)
+                  (should (rebuilt-p)) (should-not (rebuilt-p))
+                  ;; the indentation width, flymake's backends and eglot's server state are in the key
+                  (let ((drgnx-statusbar-indent-vars '(drgnx-statusbar-test--offset)))
+                    (setq-local indent-tabs-mode nil)
+                    (setq-local drgnx-statusbar-test--offset 2)
                     (should (rebuilt-p)) (should-not (rebuilt-p))
-                    (setq reporting '(b1))                     ; the backend reported
-                    (should (rebuilt-p)) (should-not (rebuilt-p))
-                    (setq-local eglot--cached-server 'server)
-                    (should (rebuilt-p)) (should-not (rebuilt-p))
-                    (setq alive nil)                           ; the server exited
-                    (should (rebuilt-p)) (should-not (rebuilt-p))
-                    (setq-local flymake-mode nil)
-                    (setq-local eglot--cached-server nil)))
-                ;; the compact bar in another window is its own entry
-                (let ((other (split-window-right)))
-                  (unwind-protect
-                      (progn (set-window-buffer other (current-buffer))
-                             (with-selected-window other (should (rebuilt-p)) (should-not (rebuilt-p))))
-                    (delete-window other)))))))))))
+                    (setq-local drgnx-statusbar-test--offset 4)
+                    (should (rebuilt-p)) (should-not (rebuilt-p)))
+                  (let ((running '(b1)) (reporting nil) (alive t))
+                    (cl-letf (((symbol-function 'flymake-running-backends) (lambda () running))
+                              ((symbol-function 'flymake-reporting-backends) (lambda () reporting))
+                              ((symbol-function 'jsonrpc-running-p) (lambda (_s) alive)))
+                      (setq-local flymake-mode t)
+                      (should (rebuilt-p)) (should-not (rebuilt-p))
+                      (setq reporting '(b1))                     ; the backend reported
+                      (should (rebuilt-p)) (should-not (rebuilt-p))
+                      (setq-local eglot--cached-server 'server)
+                      (should (rebuilt-p)) (should-not (rebuilt-p))
+                      (setq alive nil)                           ; the server exited
+                      (should (rebuilt-p)) (should-not (rebuilt-p))
+                      (setq-local flymake-mode nil)
+                      (setq-local eglot--cached-server nil)))
+                  ;; the compact bar in another window is its own entry (the store keeps this window the MRU editor, so
+                  ;; the other one is compact: the counted segment is put in the compact bar too)
+                  (let ((other (split-window-right)) (drgnx-statusbar-compact '(a c)))
+                    (unwind-protect
+                        (progn (set-window-buffer other (current-buffer))
+                               (with-selected-window other
+                                 (should (rebuilt-p)) (should-not (rebuilt-p))
+                                 (should-not (string-match-p "B2" (drgnx-statusbar-mode-line)))))   ; compact, not full
+                      (delete-window other))))))))))))
 
 (ert-deftest drgnx-statusbar/hooks-and-timers-are-owned-by-the-mode ()
   (let ((drgnx-chrome-editor-mode-line drgnx-chrome-editor-mode-line)
@@ -1311,15 +1481,14 @@ own cache), evil's state tag, other entries of `mode-line-misc-info'; each chang
                                       (alist-get 'editor-changed drgnx-signal--subscribers))))
               (should (advice-member-p #'drgnx-statusbar--flymake-reported 'flymake--handle-report))
               (drgnx-statusbar-refresh)
-              (should (timerp drgnx-statusbar--refresh-timer))
+              (should (drgnx-timer-active-p 'statusbar-refresh))
               (puthash (selected-window) [x] drgnx-statusbar--memo)
-              (let ((timer drgnx-statusbar--refresh-timer))
-                (drgnx-statusbar-mode -1)
-                (should-not (memq timer timer-list)))
+              (drgnx-statusbar-mode -1)
+              (should-not (drgnx-timer-active-p 'statusbar-refresh))
               (dolist (h hooks) (should-not (memq (cdr h) (default-value (car h)))))
               (should-not (memq #'drgnx-statusbar--ask-git (alist-get 'editor-changed drgnx-signal--subscribers)))
               (should-not (advice-member-p #'drgnx-statusbar--flymake-reported 'flymake--handle-report))
-              (should-not drgnx-statusbar--refresh-timer)
+              (should-not (drgnx-timer-active-p 'statusbar-refresh))
               (should (= 0 (hash-table-count drgnx-statusbar--memo))))
           (drgnx-statusbar-mode (if was 1 -1)))))))
 

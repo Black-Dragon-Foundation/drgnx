@@ -455,7 +455,7 @@ started, stays."
          (proj (make-temp-file "drgnx-search-proj" t))
          (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" conf) "ROLE_A_KEY=sk-a" "ROLE_B_KEY=sk-b")
                                       process-environment))
-         (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq)) (drgnx-ai--read-cache (make-hash-table :test #'equal)))
+         (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq)))
     (unwind-protect
         (progn
           (with-temp-file (expand-file-name "ai.eld" conf)
@@ -492,7 +492,7 @@ started, stays."
                                             "XDG_CACHE_HOME=/tmp/xk" "XDG_DATA_HOME=/tmp/xd" "DRGNX_DATA_DIR=/tmp/dd"
                                             "SEARCH_TEST_KEY=sk-secret-1" "DRGNX_TASK=nope")
                                       process-environment))
-         (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq)) (drgnx-ai--read-cache (make-hash-table :test #'equal))
+         (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq))
          started)
     (unwind-protect
         (progn

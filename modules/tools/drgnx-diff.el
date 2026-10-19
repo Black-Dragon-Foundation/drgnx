@@ -378,9 +378,16 @@ the repository of ROOT (default: this one); point lands on FILE when given.  The
     (unless base (user-error "No base branch: set origin/HEAD or create main"))
     (drgnx-diff-show (list 'range base "HEAD") root)))
 
+(defun drgnx-diff--teardown ()
+  "Turned off: the diff views are closed (a view still loading stops its git)."
+  (dolist (b (buffer-list))
+    (when (provided-mode-derived-p (buffer-local-value 'major-mode b) 'drgnx-diff-mode)
+      (when (process-live-p (buffer-local-value 'drgnx-diff--proc b)) (delete-process (buffer-local-value 'drgnx-diff--proc b)))
+      (let ((kill-buffer-query-functions nil)) (kill-buffer b)))))
+
 (drgnx-module-define 'tools/diff
                      :doc "The diff view: split or unified, files folded, open the file at the line; fast on big diffs."
-                     :stage 'idle
+                     :stage 'idle :teardown #'drgnx-diff--teardown
                      :setup
                      (lambda ()
                        (pcase-dolist (`(,id ,title ,fn ,doc)

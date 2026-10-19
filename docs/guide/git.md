@@ -33,7 +33,9 @@ In a file git tracks, the end of the line you are on says who last changed it, h
 subject: `Ada, 3 days ago · Fix the parser` (module `extra/blame`). A line you changed and have not committed says
 `You · Uncommitted changes`. Unsaved edits line up: git reads the buffer, not the file. It appears after a short
 pause (0.6 s, `drgnx-blame-delay`) and goes when you move off the line or select text. git is asked about that one
-line, in the background. Remote files are never asked about, and neither is a file git refuses (untracked).
+line, in the background. It is cut with an ellipsis to the columns the window has left after the line's end (at most
+80), never wraps, shows nothing when under 20 columns are left, and fits itself again when you resize the window.
+Remote files are never asked about, and neither is a file git refuses (untracked).
 **Toggle Inline Blame** turns it off or on for the buffer. **Blame: Show Commit of Line** opens that commit in the
 diff view.
 

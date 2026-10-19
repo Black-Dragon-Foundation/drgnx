@@ -7,15 +7,17 @@
 ;; its first line shows in the header, after the breadcrumb — up to three enclosing scopes, outermost first, one
 ;; line (`a › b › c').  The header line is always there (the breadcrumb), so nothing shifts as you scroll.  Scopes
 ;; come from tree-sitter when the buffer has a parser (functions, classes, …), else from indentation.  Each window
-;; start is worked out once (cached).  drgnx's own; no package.  See docs/guide/editing.md.
+;; start is worked out once (a memo, rebuilt when the start moves or the text above it changes).  drgnx's own; no package.  See docs/guide/editing.md.
 
 ;;; Code:
 (require 'cl-lib)
 (require 'subr-x)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
+(require 'drgnx-memo)
 
 (defvar drgnx-chrome-header-tail)
+(declare-function drgnx-chrome-apply "drgnx-chrome")
 (declare-function treesit-parser-list "treesit.c")
 (declare-function treesit-node-at "treesit")
 (declare-function treesit-node-parent "treesit.c")
@@ -35,7 +37,7 @@
 
 (defvar drgnx-sticky-scan-chars 300000 "How far back (characters) the indentation fallback looks for a scope.")
 
-(defface drgnx-sticky '((t :inherit header-line)) "Sticky scroll's scopes in the header line." :group 'drgnx)
+(defface drgnx-sticky '((t :inherit drgnx-wb-bar)) "Sticky scroll's scopes in the header line." :group 'drgnx)
 
 (defun drgnx-sticky--line-indent ()
   "The current line's indentation, or nil when it is blank."
@@ -93,28 +95,29 @@ level (not a walk over every line), at most `drgnx-sticky-scan-chars' back."
       (when (fboundp 'font-lock-ensure) (ignore-errors (font-lock-ensure start end)))
       (string-trim (buffer-substring (progn (back-to-indentation) (point)) end)))))
 
-(defvar-local drgnx-sticky--epoch 0 "Raised by an edit at or above a window's start (scopes may have changed).")
+(drgnx-epoch-define 'sticky :per 'buffer
+                    :doc "Raised by an edit at or above a window's start in the buffer (its scopes may have changed).")
+
+(drgnx-memo-define sticky-segment :on window
+                   :keys ((window-start object) (window-buffer object) (drgnx-epoch 'sticky (window-buffer object)))
+                   :doc "A window's sticky part of the header, until its start moves, it shows another buffer or the text above changes.")
 
 (defun drgnx-sticky--after-change (beg _end _len)
   "`after-change-functions': an edit above the top of a window showing this buffer changes its scopes."
   (when (seq-some (lambda (w) (<= beg (window-start w))) (get-buffer-window-list nil nil t))
-    (setq drgnx-sticky--epoch (1+ drgnx-sticky--epoch))))
+    (drgnx-epoch-bump 'sticky (current-buffer))))
 
 (defun drgnx-sticky--segment (w)
-  "Window W's sticky part of the header: \" › SCOPE › …\" for its start, or \"\" (cached until the start moves or the
-text above it changes)."
-  (with-current-buffer (window-buffer w)
-    (let ((start (window-start w)) (cache (window-parameter w 'drgnx-sticky)))
-      (if (and cache (eql (nth 0 cache) start) (eql (nth 1 cache) drgnx-sticky--epoch) (eq (nth 2 cache) (current-buffer)))
-          (nth 3 cache)
-        (let* ((scopes (seq-take (drgnx-sticky-scopes start) drgnx-sticky-max))
-               (s (if scopes
+  "Window W's sticky part of the header: \" › SCOPE › …\" for its start, or \"\" (the memo `sticky-segment': built
+again only when the start moves or the text above it changes)."
+  (drgnx-memo sticky-segment w
+              (with-current-buffer (window-buffer w)
+                (let* ((scopes (seq-take (drgnx-sticky-scopes (window-start w)) drgnx-sticky-max)))
+                  (if scopes
                       (let ((text (string-replace "%" "%%" (mapconcat #'drgnx-sticky--text scopes " › "))))  ; the mode line's %
                         (add-face-text-property 0 (length text) 'drgnx-sticky t text)          ; the buffer's colours stay
                         (concat " › " text))
-                    "")))
-          (set-window-parameter w 'drgnx-sticky (list start drgnx-sticky--epoch (current-buffer) s))
-          s)))))
+                    "")))))
 
 (defconst drgnx-sticky--tail '(:eval (drgnx-sticky--segment (selected-window)))
   "The header's tail in a buffer with sticky scroll (evaluated in the window being drawn).")
@@ -133,10 +136,17 @@ text above it changes)."
   "`prog-mode-hook': sticky scroll in file buffers."
   (when buffer-file-name (drgnx-sticky-mode 1)))
 
+(defun drgnx-sticky--teardown ()
+  "Sticky scroll off in every live buffer that has it (the hook and the command go with the setup)."
+  (dolist (b (buffer-list))
+    (with-current-buffer b (when drgnx-sticky-mode (drgnx-sticky-mode -1)))))
+
 (drgnx-module-define 'editor/sticky
                      :doc "Sticky scroll: the function (class, block) you are in, when its start has scrolled off, after the breadcrumb."
                      :stage 'startup
+                     :teardown #'drgnx-sticky--teardown
                      :setup (lambda ()
+                              (drgnx-memo-activate 'sticky-segment)
                               (add-hook 'prog-mode-hook #'drgnx-sticky--maybe)
                               (drgnx-command-define 'toggle-sticky-scroll :category "View" :title "Toggle Sticky Scroll"
                                                     :command #'drgnx-sticky-mode :doc "The enclosing scopes in the header, off or on")))

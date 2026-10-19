@@ -42,7 +42,7 @@ The **manifest** is:
   another has a newer version. drgnx's default, when you set neither this key nor `:archives`, is `(("gnu" . 3) ("nongnu" . 2)
   ("melpa" . 1))`: releases over MELPA's snapshots (magit stays on its NonGNU release instead of moving to the
   latest commit's build), and MELPA still serves what only it has — a package, or a version a dependency needs.
-  Your own value wins (an alist of `("archive-name" . NUMBER)`; anything else is reported), `:archive-priorities ()`
+  Your own value wins (an alist of `("archive-name" . NUMBER)`; anything else is a mistake in the file), `:archive-priorities ()`
   included, and so does your own `:archives` list: package.el ranks an archive that is not listed below every listed one,
   so the default would put yours under MELPA; rank them yourself to prefer releases. With no priorities the newest
   version wins, usually MELPA's build of the latest commit;
@@ -51,7 +51,14 @@ The **manifest** is:
   (`:ensure t` the package itself, `:ensure other` that one, `:ensure nil` none) in
   `~/.local/state/drgnx/packages-wanted.eld` and says so in `*Messages*`; the next `drgnx sync` installs it. The want stays
   in that file (so the package stays in the manifest, and `drgnx sync --prune` keeps it); delete the name from the file
-  when you no longer want it.
+  when you no longer want it. The file is changed under a lock, so two Emacsen starting together both add their
+  wants; one that another process holds at that moment is skipped, and the next start records it. A file that does not
+  read is copied aside (`packages-wanted.eld.bak-…`) before the want is written.
+
+**A mistake in `packages.eld`** (it does not read, or a value is the wrong kind: `:packages` names that are not
+symbols, an `:archives` entry that is not `("name" . "URL-or-directory")`, a priority that is not a number) stops
+`drgnx sync` before anything changes, with `…/packages.eld has a mistake at line L: …`. drgnx never rewrites this file,
+and never guesses at it: fix the line and sync again. (Preferences: Open Config File… opens it at the mistake.)
 
 `drgnx sync` resolves each package of the manifest with its dependencies (package.el — one that no archive has
 is reported and does not stop the others), downloads what is missing into `~/.cache/drgnx/packages/` (an HTTP
@@ -97,7 +104,12 @@ another installed version — and refuses a file whose hash differs from the loc
 cache; the file is dropped from the cache): nothing changes then. A locked version that no archive and no cache has
 any more, or one older than another package needs, is reported (with what needs it), the packages that do not
 depend on it are installed, the command exits non-zero and the lock stays as it was — `drgnx upgrade` moves the
-lock to the archives' versions. An unreadable lock is an error, never silently replaced.
+lock to the archives' versions. A lock with a mistake (it does not read, or its `:packages` are not entries
+`(NAME :version "…" …)`) stops every sync with `…/drgnx.lock.eld has a mistake at line L: …` and is never replaced
+or rewritten; neither is one written by a newer drgnx (the sync says so before it installs anything). A sync changes
+only the lock's `:packages` (and drops the `:from-shipped` mark of a lock copied from the shipped one): a comment or a
+key of your own in the file stays. `drgnx rollback` puts the generation's lock back; one it cannot read is kept
+beside it as `drgnx.lock.eld.bak-…` first.
 
 The packages of the manifest that the lock has install at their locked versions, together with what their lock
 entries require — not with what the archives' newest versions would need — so a lock installs as the set it was

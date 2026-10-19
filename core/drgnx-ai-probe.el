@@ -16,12 +16,30 @@
 (require 'url-parse)
 (require 'drgnx-ai)
 (require 'drgnx-ai-client)
+(require 'drgnx-file)
+(require 'drgnx-timer)
 
 (defvar drgnx-ai-detected nil "Alist provider → (:up BOOL :models (NAME…) :note TEXT) from the last probe.")
 
 (defvar drgnx-ai-probe-done-hook nil "Run when a probe has its answers (what uses providers looks again).")
 
 (defun drgnx-ai-detected-file () (expand-file-name "ai-detected.eld" (drgnx-state-dir)))
+
+(defun drgnx-ai--save-detected (found)
+  "Put FOUND ((PROVIDER . RESULT)…) into the saved alist, under its lock: what another Emacs found stays.
+Runs in a process callback: never prompts, one lock attempt (a busy lock skips; the next probe writes), an
+unreadable file is copied aside, and an error is one message."
+  (condition-case err
+      (let ((inhibit-interaction t))
+        (make-directory (file-name-directory (drgnx-ai-detected-file)) t)
+        (drgnx-file-update (drgnx-ai-detected-file)
+                           (lambda (saved)
+                             (let ((alist (and (proper-list-p saved) (seq-filter #'consp saved))))
+                               (dolist (e found) (setf (alist-get (car e) alist) (cdr e)))
+                               alist))
+                           :on-unreadable 'backup :timeout 0))
+    (drgnx-file-busy nil)
+    (error (message "drgnx: the AI probe's results were not saved: %s" (error-message-string err)))))
 
 (defun drgnx-ai--local-p (p)
   (member (url-host (url-generic-parse-url (plist-get p :url))) '("localhost" "127.0.0.1" "::1")))
@@ -51,9 +69,7 @@ Returns at once."
          (finish (lambda ()
                    ;; only the providers asked: the others (or one added while this probe ran) stay as known
                    (dolist (e found) (setf (alist-get (car e) drgnx-ai-detected) (cdr e)))
-                   (ignore-errors
-                     (make-directory (file-name-directory (drgnx-ai-detected-file)) t)
-                     (with-temp-file (drgnx-ai-detected-file) (prin1 drgnx-ai-detected (current-buffer))))
+                   (drgnx-ai--save-detected found)
                    (run-hooks 'drgnx-ai-probe-done-hook)
                    (when callback (funcall callback)))))
     (if (null ps) (funcall finish)
@@ -77,7 +93,8 @@ may come from a source that asks)."
 
 (defun drgnx-ai-detected-cached ()
   "The last probe's results as saved (the doctor runs in another Emacs)."
-  (ignore-errors (with-temp-buffer (insert-file-contents (drgnx-ai-detected-file)) (read (current-buffer)))))
+  (let ((data (plist-get (drgnx-file-read (drgnx-ai-detected-file)) :data)))
+    (and (proper-list-p data) data)))
 
 (defun drgnx-ai-probe-fim (id model callback)
   "Does MODEL of provider ID fill in the middle?  CALLBACK gets t or nil (asynchronously)."
@@ -137,13 +154,17 @@ not GPU memory); else the first GPU's when nvidia-smi is there; else nil."
 
 (defun drgnx-ai-managed ()
   "The local runner onboarding set up and drgnx keeps running: (PROVIDER :start COMMAND :name NAME), or nil."
-  (plist-get (ignore-errors (with-temp-buffer (insert-file-contents (drgnx-ai-local-file)) (read (current-buffer)))) :managed))
+  (let ((data (plist-get (drgnx-file-read (drgnx-ai-local-file)) :data)))
+    (and (plistp data) (plist-get data :managed))))
 
 (defun drgnx-ai-set-managed (provider command name)
-  "Remember PROVIDER (NAME, for messages) as the local runner drgnx starts again with COMMAND (a list) when it is down."
+  "Remember PROVIDER (NAME, for messages) as the local runner drgnx starts again with COMMAND (a list) when it is down.
+The file is changed under its lock, keeping its other keys; one with a mistake is copied aside first."
   (make-directory (file-name-directory (drgnx-ai-local-file)) t)
-  (with-temp-file (drgnx-ai-local-file)
-    (let ((print-length nil)) (prin1 (list :managed (list provider :start command :name name)) (current-buffer)))))
+  (drgnx-file-update (drgnx-ai-local-file)
+                     (lambda (data)
+                       (plist-put (and (plistp data) data) :managed (list provider :start command :name name)))
+                     :on-unreadable 'backup))
 
 (defvar drgnx-ai--ensure-looking nil
   "When (`float-time') a look of `drgnx-ai-ensure-local' began and has no answer yet: another one waits for it.")
@@ -193,7 +214,7 @@ timer: never waits for the job (`:no-wait'), never asks."
 (defun drgnx-ai--on-first-window ()
   "`drgnx-first-gui-frame-hook': the local runner looked at a moment after the first window shows, from an idle
 timer — never inside the hook, never at daemon start (a daemon has no window until one is opened)."
-  (run-with-idle-timer 1 nil #'drgnx-ai-ensure-local))
+  (drgnx-timer-start 'ai-first-window 1 #'drgnx-ai-ensure-local :idle t :owner :core))
 
 (provide 'drgnx-ai-probe)
 ;;; drgnx-ai-probe.el ends here

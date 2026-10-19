@@ -50,6 +50,50 @@
     (let ((json (json-parse-string (drgnx-doctor-json results) :object-type 'plist)))
       (should (equal (plist-get (aref json 0) :status) "fail")))))
 
+(ert-deftest drgnx-doctor/job-sandbox-ok ()
+  "In the Agents group: the back end, its version, and whether agents run under the memory cap."
+  (should (equal (plist-get (alist-get 'job-sandbox drgnx-doctor--checks) :group) "Agents"))
+  (let ((r (drgnx-doctor-check 'job-sandbox (drgnx-doctor-test--facts
+                                             :sandbox '(:ok t :backend bwrap :version "0.12.0" :scope t :memory-max "4G")))))
+    (should (eq (car r) 'ok))
+    (should (string-prefix-p "bwrap 0.12.0 ok" (nth 1 r)))
+    (should (string-search "memory cap 4G" (nth 1 r))))
+  (let ((r (drgnx-doctor-check 'job-sandbox (drgnx-doctor-test--facts
+                                             :sandbox '(:ok t :backend bwrap :version "0.12.0" :scope nil :memory-max "4G")))))
+    (should (eq (car r) 'ok))
+    (should (string-search "no memory cap" (nth 1 r))))
+  ;; `drgnx doctor' runs with -Q: it sees the default, not the user's setting, and says so
+  (let ((r (drgnx-doctor-check 'job-sandbox (drgnx-doctor-test--facts
+                                             :sandbox '(:ok t :backend bwrap :version "0.12.0" :scope t :memory-max "4G"
+                                                            :memory-max-default t)))))
+    (should (string-search "memory cap 4G per agent by default (drgnx-sandbox-memory-max)" (nth 1 r))))
+  (require 'drgnx-sandbox)
+  (should (plist-get (cl-letf (((symbol-function 'drgnx-sandbox-check) (lambda () '(:ok t :backend bwrap))))
+                       (let ((user-init-file nil)) (drgnx-doctor--sandbox)))
+                     :memory-max-default))
+  (should (equal (nth 1 (drgnx-doctor-check 'job-sandbox (drgnx-doctor-test--facts :sandbox '(:ok t :backend seatbelt))))
+                 "sandbox-exec ok"))
+  ;; the fact is the sandbox's own check
+  (require 'drgnx-sandbox)
+  (cl-letf (((symbol-function 'drgnx-doctor--search) #'ignore)
+            ((symbol-function 'drgnx-sandbox-check) (lambda () '(:ok t :backend bwrap :version "9.9"))))
+    (should (equal (plist-get (plist-get (drgnx-doctor-facts) :sandbox) :version) "9.9"))))
+
+(ert-deftest drgnx-doctor/job-sandbox-problem ()
+  "A sandbox that cannot run is a warning with its reason and fix: jobs do not start, the rest of drgnx works."
+  (let ((r (drgnx-doctor-check 'job-sandbox (drgnx-doctor-test--facts
+                                             :sandbox '(:ok nil :backend bwrap :reason "bubblewrap (bwrap) is not installed"
+                                                            :fix "sudo dnf install bubblewrap")))))
+    (should (eq (car r) 'warn))
+    (should (string-search "bubblewrap (bwrap) is not installed" (nth 1 r)))
+    (should (string-search "jobs" (nth 1 r)))
+    (should (equal (nth 2 r) "sudo dnf install bubblewrap")))
+  (should (eq (car (drgnx-doctor-check 'job-sandbox (drgnx-doctor-test--facts :sandbox '(:error "boom")))) 'warn))
+  (require 'drgnx-sandbox)
+  (cl-letf (((symbol-function 'drgnx-doctor--search) #'ignore)
+            ((symbol-function 'drgnx-sandbox-check) (lambda () (error "Boom"))))
+    (should (equal (plist-get (drgnx-doctor-facts) :sandbox) '(:error "Boom")))))
+
 (ert-deftest drgnx-doctor/facts-from-this-emacs ()
   (let ((f (cl-letf (((symbol-function 'drgnx-doctor--search) #'ignore)) (drgnx-doctor-facts))))
     (should (equal (plist-get f :version) emacs-version))
@@ -305,9 +349,32 @@
   (let ((process-environment (append (list "XDG_STATE_HOME=rel" "HOME=/tmp/drgnx-home") process-environment)))
     (should (equal (drgnx-doctor--state-path "x.eld") "/tmp/drgnx-home/.local/state/drgnx/x.eld"))
     (let (read)
-      (cl-letf (((symbol-function 'file-readable-p) (lambda (f) (push f read) nil)))
+      (cl-letf (((symbol-function 'drgnx-file-read) (lambda (f &rest _) (push f read) (list :status 'absent))))
         (drgnx-doctor--keys-report))
       (should (equal read '("/tmp/drgnx-home/.local/state/drgnx/keys-report.eld"))))))
+
+(ert-deftest drgnx-doctor/the-state-files-are-read-through-the-file-layer ()
+  ;; data is data; a file with a mistake, a missing one and a huge one give nil, and no reader changes the bytes
+  (let* ((state (make-temp-file "drgnx-state" t))
+         (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment))
+         (dir (expand-file-name "drgnx" state)))
+    (unwind-protect
+        (progn
+          (make-directory dir)
+          (should-not (drgnx-doctor--state-file "wb-report.eld"))
+          (should-not (drgnx-doctor--keys-report))
+          (dolist (text '("(:time \"x\"" "(:time \"x\") (:more)" "#1=(:a . #1#)"))
+            (dolist (name '("wb-report.eld" "keys-report.eld"))
+              (write-region text nil (expand-file-name name dir) nil 'silent))
+            (should-not (drgnx-doctor--state-file "wb-report.eld"))
+            (should-not (drgnx-doctor--keys-report))
+            (should (equal (with-temp-buffer (insert-file-contents (expand-file-name "wb-report.eld" dir)) (buffer-string))
+                           text)))
+          (write-region ";; note\n(:time \"x\" :display-buffer-entry t)\n" nil (expand-file-name "wb-report.eld" dir) nil 'silent)
+          (should (equal (drgnx-doctor--state-file "wb-report.eld") '(:time "x" :display-buffer-entry t)))
+          (write-region (make-string (1+ drgnx-file-max-bytes) ?\s) nil (expand-file-name "keys-report.eld" dir) nil 'silent)
+          (should-not (drgnx-doctor--keys-report)))
+      (delete-directory state t))))
 
 ;;;; search
 
@@ -452,3 +519,159 @@
       (should (string-search "drgnx onboard --step agents" (nth 2 r))))
     (should (eq (car (funcall check '(:error "boom"))) 'warn))
     (should (= 0 (drgnx-doctor-exit-code (drgnx-doctor-run (drgnx-doctor-test--facts :version "31.2" :claude-adapter old) nil))))))
+
+;;;; Config files and the checkout (config layer, Task 5)
+
+(load (expand-file-name "test/fixtures/config-fixture" drgnx-dir) nil t)
+
+(defun drgnx-doctor-test--define-config (name file &rest args)
+  "Define the plist config file NAME in FILE (schema :a integer, :b string); ARGS come first."
+  (apply #'drgnx-config-define name
+         (append args (list :file file :schema '(plist (:a integer "A number") (:b string "A string"))
+                            :default '(:a 1) :doc "A test file."))))
+
+(defun drgnx-doctor-test--config-check ()
+  "The `config-files' check on the facts a fresh read gives."
+  (drgnx-doctor-check 'config-files (list :config-files (drgnx-doctor--config-files))))
+
+(ert-deftest drgnx-doctor/config-files-ok ()
+  (drgnx-test-with-config
+    (drgnx-doctor-test--define-config 'doctor-test-a "a.eld")
+    (drgnx-doctor-test--define-config 'doctor-test-b "b.eld")
+    (drgnx-test-config-put 'doctor-test-a "(:a 2 :b \"x\")\n")
+    (let ((r (drgnx-doctor-test--config-check)))
+      (should (eq (car r) 'ok))
+      (should (equal (nth 1 r) "2 files read")))
+    ;; no definitions at all is fine too; a project file is not read (it needs a folder)
+    (drgnx-config-undefine 'doctor-test-a)
+    (drgnx-config-undefine 'doctor-test-b)
+    (drgnx-doctor-test--define-config 'doctor-test-p "p.eld" :dir 'project)
+    (should (equal (nth 1 (drgnx-doctor-test--config-check)) "0 files read"))
+    (should (eq (car (drgnx-doctor-check 'config-files nil)) 'ok))))
+
+(ert-deftest drgnx-doctor/config-files-fail-names-file-and-line ()
+  (drgnx-test-with-config
+    (drgnx-doctor-test--define-config 'doctor-test-a "a.eld")
+    (drgnx-test-config-put 'doctor-test-a ";; mine\n\n(:a \"not a number\")\n")
+    (let ((r (drgnx-doctor-test--config-check)))
+      (should (eq (car r) 'fail))
+      (should (string-match-p "\\`a\\.eld line 3: " (nth 1 r)))
+      (should (string-search ":a" (nth 1 r)))
+      (should (equal (nth 2 r) (concat "Preferences: Open Config File… or edit it; "
+                                       "its last good copy is in use until then"))))
+    ;; the doctor only reads: the file keeps its bytes
+    (should (equal (drgnx-test-config-text 'doctor-test-a) ";; mine\n\n(:a \"not a number\")\n"))))
+
+(ert-deftest drgnx-doctor/config-files-newer-warns ()
+  (drgnx-test-with-config
+    (drgnx-doctor-test--define-config 'doctor-test-a "a.eld")
+    (drgnx-test-config-put 'doctor-test-a "(:version 99 :a 2)\n")
+    (let ((r (drgnx-doctor-test--config-check)))
+      (should (eq (car r) 'warn))
+      (should (string-search "a.eld" (nth 1 r)))
+      (should (string-search "written by a newer drgnx" (nth 1 r)))
+      (should (string-search "update drgnx here" (concat (nth 1 r) (nth 2 r)))))))
+
+(ert-deftest drgnx-doctor/config-files-unknown-keys-are-info ()
+  (drgnx-test-with-config
+    (drgnx-doctor-test--define-config 'doctor-test-a "a.eld")
+    (drgnx-test-config-put 'doctor-test-a "(:a 2 :zzz 1)\n")
+    (let ((r (drgnx-doctor-test--config-check)))
+      (should (eq (car r) 'info))
+      (should (string-search "a.eld: :zzz — a newer drgnx, or a typo?" (nth 1 r))))
+    ;; a mistake outranks it, and both are said
+    (drgnx-doctor-test--define-config 'doctor-test-b "b.eld")
+    (drgnx-test-config-put 'doctor-test-b "(:a \"x\")\n")
+    (let ((r (drgnx-doctor-test--config-check)))
+      (should (eq (car r) 'fail))
+      (should (string-search "b.eld line 1" (nth 1 r)))
+      (should (string-search ":zzz" (nth 1 r))))))
+
+(ert-deftest drgnx-doctor/config-files-migrated-is-info ()
+  (drgnx-test-with-config
+    (drgnx-doctor-test--define-config 'doctor-test-a "a.eld" :version 2 :migrate (list (cons 1 #'identity)))
+    (drgnx-test-config-put 'doctor-test-a "(:a 2)\n")
+    (let ((r (drgnx-doctor-test--config-check)))
+      (should (eq (car r) 'info))
+      (should (string-search "a.eld" (nth 1 r)))
+      (should (string-search "older" (nth 1 r))))))
+
+(ert-deftest drgnx-doctor/config-files-fact-failure-is-a-warning ()
+  (let ((r (drgnx-doctor-check 'config-files '(:config-files (:error "boom")))))
+    (should (eq (car r) 'warn))
+    (should (string-search "boom" (nth 1 r)))))
+
+(defun drgnx-doctor-test--git (dir &rest args)
+  "Run git ARGS in DIR (a throwaway repo, no user config), failing the test when it does."
+  (let ((process-environment (append '("GIT_CONFIG_GLOBAL=/dev/null" "GIT_CONFIG_SYSTEM=/dev/null"
+                                       "GIT_AUTHOR_NAME=t" "GIT_AUTHOR_EMAIL=t@example.org"
+                                       "GIT_COMMITTER_NAME=t" "GIT_COMMITTER_EMAIL=t@example.org")
+                                     process-environment)))
+    (should (eql 0 (apply #'call-process "git" nil nil nil "-C" dir args)))))
+
+(ert-deftest drgnx-doctor/checkout-clean-warns-on-a-changed-init ()
+  (let ((dir (file-name-as-directory (make-temp-file "drgnx-doctor-checkout" t))))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name "init" dir))
+          (write-region "(a)\n" nil (expand-file-name "init/init.el" dir) nil 'silent)
+          (write-region "x\n" nil (expand-file-name "other.txt" dir) nil 'silent)
+          (drgnx-doctor-test--git dir "init" "-q")
+          (drgnx-doctor-test--git dir "add" ".")
+          (drgnx-doctor-test--git dir "commit" "-q" "-m" "first")
+          (let ((facts (list :checkout-init (drgnx-doctor--checkout-init dir))))
+            (should (eq (car (drgnx-doctor-check 'checkout-clean facts)) 'ok)))
+          ;; a change outside init/ does not count; one inside does, and is named
+          (write-region "y\n" nil (expand-file-name "other.txt" dir) nil 'silent)
+          (should (eq (car (drgnx-doctor-check 'checkout-clean (list :checkout-init (drgnx-doctor--checkout-init dir)))) 'ok))
+          (write-region "(b)\n" nil (expand-file-name "init/init.el" dir) nil 'silent)
+          (let ((r (drgnx-doctor-check 'checkout-clean (list :checkout-init (drgnx-doctor--checkout-init dir)))))
+            (should (eq (car r) 'warn))
+            (should (string-search "init/init.el" (nth 1 r)))
+            (should (string-search "config.el or custom.el" (nth 2 r)))
+            (should (string-search (format "git -C %s checkout -- init/" (directory-file-name dir)) (nth 2 r)))))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-doctor/checkout-clean-absent-without-git ()
+  (let ((dir (file-name-as-directory (make-temp-file "drgnx-doctor-nogit" t))))
+    (unwind-protect
+        (progn
+          (should-not (drgnx-doctor--checkout-init dir))
+          (should-not (drgnx-doctor-check 'checkout-clean (list :checkout-init (drgnx-doctor--checkout-init dir))))
+          (should-not (drgnx-doctor-check 'checkout-clean nil)))
+      (delete-directory dir t))))
+(ert-deftest drgnx-doctor/timers-ok-without-a-report ()
+  (let ((r (drgnx-doctor-check 'timers (drgnx-doctor-test--facts))))
+    (should (eq (car r) 'ok))
+    (should (equal (nth 1 r) "no timer stopped")))
+  (should (eq 'ok (car (drgnx-doctor-check 'timers (drgnx-doctor-test--facts
+                                                    :timers-report '((:file "timers-report.eld" :stopped nil :time 1.0))))))))
+
+(ert-deftest drgnx-doctor/timers-lists-stopped-timers ()
+  ;; the fact reads the session's and the hub's reports from the state dir; the check names each stopped timer
+  (let* ((state (make-temp-file "drgnx-state" t))
+         (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment))
+         (write (lambda (name report)
+                  (let ((file (expand-file-name (concat "drgnx/" name) state)))
+                    (with-temp-file file (prin1 report (current-buffer)))
+                    (set-file-times file (time-subtract nil 7200))))))
+    (unwind-protect
+        (progn
+          (should-not (drgnx-doctor--timers-report))
+          (make-directory (expand-file-name "drgnx" state))
+          (funcall write "timers-report.eld"
+                   '(:stopped ((:key hub-tick :owner :core :fn drgnx-hub--tick :error "Boom" :failures 3 :stopped t
+                                     :time 1.0))))
+          (funcall write "hub-timers-report.eld"
+                   '(:stopped ((:key (acp-watch . "#<process x>") :owner :core :fn drgnx-acp--watch :error "dead"
+                                     :failures 3 :stopped t :time 2.0))))
+          (let* ((facts (drgnx-doctor--timers-report))
+                 (r (drgnx-doctor-check 'timers (drgnx-doctor-test--facts :timers-report facts))))
+            (should (= 2 (length facts)))
+            (should (eq (car r) 'warn))
+            (should (string-search "hub-tick (drgnx-hub--tick): Boom" (nth 1 r)))
+            (should (string-search "acp-watch" (nth 1 r)))
+            (should (string-search "(drgnx-acp--watch): dead" (nth 1 r)))
+            (should (string-search "from the last session, 2 h ago" (nth 1 r)))
+            (should (equal (nth 2 r) "report the error; drgnx starts the timer again at the next start"))))
+      (delete-directory state t))))

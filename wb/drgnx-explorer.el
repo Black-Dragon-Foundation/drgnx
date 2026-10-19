@@ -22,6 +22,7 @@
 (require 'project)
 (require 'filenotify)
 (require 'drgnx-wb)
+(require 'drgnx-memo)
 (require 'drgnx-git)
 
 (defgroup drgnx-explorer nil "The drgnx Explorer." :group 'drgnx)
@@ -46,7 +47,10 @@ Only chains in listings already read are joined: a closed folder is never read f
 
 (defvar drgnx-explorer--roots nil "The Explorer's root directories (never changed by the follower).")
 (defvar drgnx-explorer--expanded (make-hash-table :test #'equal) "Expanded folders (paths without trailing /).")
-(defvar drgnx-explorer--cache (make-hash-table :test #'equal) "Folder → (MTIME . CHILDREN).")
+;; Folder → (MTIME . CHILDREN), at most 64 folders (PERF-L L1).  An expanded folder is got on every render, so the shown
+;; ones stay recent and the least recently shown goes first.  `drgnx-core/workbench' activates it.
+(drgnx-cache-define 'explorer-listing :key 'string :cap 64
+                    :doc "Folder → (MTIME . CHILDREN); capped at 64 folders, the least recently listed evicted.")
 (defvar drgnx-explorer--pressed nil
   "Non-nil while a mouse button pressed in the Explorer is held: `num-input-keys' at the press (or t).
 Ask `drgnx-explorer--held-p', which knows when a release never came.")
@@ -72,16 +76,15 @@ listed.  Otherwise a remote folder shows its cached listing, or one row saying i
 
 (defun drgnx-explorer--local-cache-clear ()
   "Forget the listings of local folders: a remote one costs a round trip, and only a command re-reads it."
-  (let (local)
-    (maphash (lambda (dir _) (unless (file-remote-p dir) (push dir local))) drgnx-explorer--cache)
-    (dolist (dir local) (remhash dir drgnx-explorer--cache))))
+  (dolist (dir (drgnx-cache-keys 'explorer-listing))
+    (unless (file-remote-p dir) (drgnx-cache-remove 'explorer-listing dir))))
 
 (defun drgnx-explorer-children (dir)
   "DIR's entries as sorted (NAME . DIRP), without excluded names; cached while DIR is unchanged.
 A remote DIR is read only while `drgnx-explorer--remote-reads' is non-nil (a command of the user): the
 cached listing is used without asking the host, and a folder never listed has one row, \"(not listed — Refresh)\"."
   (let* ((dir (file-name-as-directory dir))
-         (hit (gethash dir drgnx-explorer--cache)))
+         (hit (drgnx-cache-get 'explorer-listing dir)))
     (cond
      ((and (file-remote-p dir) (not drgnx-explorer--remote-reads))
       (if hit (cdr hit) (list (cons drgnx-explorer--not-listed nil))))
@@ -101,7 +104,7 @@ cached listing is used without asking the host, and a folder never listed has on
                                        (and (stringp type) (file-directory-p (expand-file-name name dir)))))
                         entries))))
             (setq entries (sort entries #'drgnx-explorer--before))
-            (puthash dir (cons mtime entries) drgnx-explorer--cache)
+            (drgnx-cache-put 'explorer-listing dir (cons mtime entries))
             entries)))))))
 
 (defun drgnx-explorer--expanded-p (path) (gethash path drgnx-explorer--expanded))
@@ -441,11 +444,11 @@ shows its whole entry again."
     (cond
      ((not (equal (drgnx-explorer--path v) dir))                     ; in the middle of a joined row
       (cl-incf drgnx-explorer--relists)
-      (remhash (file-name-as-directory dir) drgnx-explorer--cache)
+      (drgnx-cache-remove 'explorer-listing (file-name-as-directory dir))
       (drgnx-explorer--reinsert-entry i))
      ((or (= (aref v 1) 0) (drgnx-explorer--expanded-p dir))
       (cl-incf drgnx-explorer--relists)
-      (remhash (file-name-as-directory dir) drgnx-explorer--cache)
+      (drgnx-cache-remove 'explorer-listing (file-name-as-directory dir))
       (if (and (> (aref v 1) 0) (drgnx-explorer--compact-p)
                (drgnx-explorer--only-folder (drgnx-explorer-children dir)))
           (drgnx-explorer--reinsert-entry i)                         ; it joins its folder now

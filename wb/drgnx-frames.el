@@ -14,12 +14,13 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'drgnx-groups)
+(require 'drgnx-frame-kind)
+(require 'drgnx-state)
 
 (defun drgnx-frames--workbench-p (f)
-  "F is a frame the workbench works in: live, visible, not a child frame, not the daemon's initial frame
-(a client's terminal frame, or `emacs -nw''s, is one)."
-  (and (frame-live-p f) (frame-visible-p f) (not (frame-parent f))
-       (not (and (daemonp) (equal (terminal-name (frame-terminal f)) "initial_terminal")))))
+  "F is a frame the workbench works in: a visible graphical or terminal frame (`drgnx-state-workbench-frame-p';
+not a child frame, not the daemon's initial frame, but a client's terminal frame, or `emacs -nw''s, is one)."
+  (and (drgnx-state-workbench-frame-p f) (frame-visible-p f)))
 
 (defun drgnx-frames--candidate-p (f)
   "F can be the main window: a workbench frame not kept for one file (an EDITOR frame, role `editor')."
@@ -33,7 +34,8 @@
 client frame; never a child frame, never an EDITOR frame) — the main window unless one exists."
   (unless (drgnx-frames--main)
     (when-let* ((f (or frame (seq-find #'drgnx-frames--candidate-p (reverse (frame-list))))))
-      (set-frame-parameter f 'drgnx-frame-role 'main))))
+      (set-frame-parameter f 'drgnx-frame-role 'main)
+      (drgnx-state-sync f))))
 
 (defun drgnx-frame-role (&optional frame)
   "FRAME's role: `main' or `aux'."
@@ -45,14 +47,15 @@ client frame; never a child frame, never an EDITOR frame) — the main window un
   "The main window closes: the next workbench window (not an EDITOR frame) becomes main."
   (when (eq (frame-parameter frame 'drgnx-frame-role) 'main)
     (when-let* ((next (seq-find (lambda (f) (and (not (eq f frame)) (drgnx-frames--candidate-p f))) (reverse (frame-list)))))
-      (set-frame-parameter next 'drgnx-frame-role 'main)))
+      (set-frame-parameter next 'drgnx-frame-role 'main)
+      (drgnx-state-sync next)))
   (drgnx-signal-post 'tabs-changed))
 
 (defun drgnx-frames--made (frame)
   "`after-make-frame-functions': a new terminal frame (a client's) is the main window when none is — not a child
 frame, not one on the daemon's initial terminal.  A graphical frame waits for `drgnx-first-gui-frame-hook' (it
 may not be mapped yet)."
-  (when (and (not (display-graphic-p frame)) (drgnx-frames--candidate-p frame))
+  (when (and (eq (drgnx-state-frame-kind frame) 'tty) (drgnx-frames--candidate-p frame))
     (drgnx-frames-mark-main frame)))
 
 (defun drgnx-frames--first-gui ()
@@ -60,11 +63,12 @@ may not be mapped yet)."
 was a terminal, whose frame took the role (`drgnx-frames--made'); that frame is auxiliary then.  The graphical
 frame need not be mapped yet: not a child frame, not an EDITOR frame is enough."
   (let ((main (drgnx-frames--main))
-        (gui (seq-find (lambda (f) (and (frame-live-p f) (display-graphic-p f) (not (frame-parent f))
+        (gui (seq-find (lambda (f) (and (eq (drgnx-state-frame-kind f) 'gui)
                                         (not (eq (frame-parameter f 'drgnx-frame-role) 'editor))))
                        (reverse (frame-list)))))
-    (when (and main gui (not (display-graphic-p main)))
-      (set-frame-parameter main 'drgnx-frame-role nil))
+    (when (and main gui (not (eq (drgnx-state-frame-kind main) 'gui)))
+      (set-frame-parameter main 'drgnx-frame-role nil)
+      (drgnx-state-sync main))
     (drgnx-frames-mark-main gui)))
 
 (defun drgnx-frames-count ()

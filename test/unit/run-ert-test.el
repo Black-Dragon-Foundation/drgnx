@@ -12,7 +12,7 @@
 (defun drgnx-run-ert-test--batch (dir results &rest env)
   "Run the suite in DIR in a fresh batch Emacs (harness on the load path); return its exit code."
   (let ((process-environment (append (cons (concat "DRGNX_TEST_RESULTS=" results) env)
-                                     (list "DRGNX_TEST_SELECTOR")           ; not this run's selector
+                                     (list "DRGNX_TEST_SELECTOR" "DRGNX_TEST_LEAKS" "DRGNX_TEST_LEAKS_ALLOWED" "DRGNX_TEST_SHUFFLE") ; not this run's selector, census or order
                                      process-environment))
         ;; never a buffer's deleted directory, which call-process refuses
         (default-directory (if (file-directory-p default-directory) default-directory temporary-file-directory)))
@@ -279,7 +279,8 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
 
 (defun drgnx-run-ert-test--run-suite (suite &rest env)
   "Run SUITE with the batch runner in a fresh Emacs with ENV; return its exit code."
-  (let ((process-environment (append env (list "DRGNX_TEST_SELECTOR" "DRGNX_TEST_RESULTS") process-environment)))
+  (let ((process-environment (append env (list "DRGNX_TEST_SELECTOR" "DRGNX_TEST_RESULTS" "DRGNX_TEST_LEAKS" "DRGNX_TEST_LEAKS_ALLOWED" "DRGNX_TEST_SHUFFLE")
+                                     process-environment)))
     (call-process (expand-file-name invocation-name invocation-directory) nil nil nil
                   "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
                   "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch" suite)))
@@ -505,4 +506,185 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
           (should (equal (funcall files "\"^iso-two/\"") '("two-test.el")))
           (should (equal (funcall files "\"iso-\\\\(one\\\\|nothing\\\\)\"") '("one-test.el")))
           (should (equal (funcall files "(tag :timing)") '("one-test.el" "two-test.el"))))
+      (delete-directory tmp t))))
+
+;;;; The leak census
+
+(defconst drgnx-run-ert-test--leaky
+  '(("leaky-test.el" . "(defconst iso-leak--dir (file-name-directory (or load-file-name buffer-file-name)))
+(defun iso-leak--hook-fn () nil)
+(defun iso-leak--timer-fn () nil)
+(defun iso-leak--advice (&rest _) nil)
+(ert-deftest iso-leak/hook () (add-hook 'kill-buffer-hook #'iso-leak--hook-fn))
+(ert-deftest iso-leak/timer () (run-with-timer 3600 3600 #'iso-leak--timer-fn))
+(ert-deftest iso-leak/advice () (advice-add 'ignore :before #'iso-leak--advice))
+(ert-deftest iso-leak/feature () (load (expand-file-name \"iso-leak-fake.el\" iso-leak--dir) nil t))")
+    ("iso-leak-fake.el" . "(provide 'iso-leak-fake)"))
+  "A suite file whose four tests each leave something: a hook, a repeating timer, an advice, a feature.")
+
+(defun drgnx-run-ert-test--census (suite results &rest env)
+  "Run SUITE with the census on; return (EXIT . OUTPUT).  The summary goes to RESULTS."
+  (let ((process-environment (append (list (concat "DRGNX_TEST_RESULTS=" results) "DRGNX_TEST_LEAKS=1"
+                                           "DRGNX_TEST_SELECTOR" "DRGNX_TEST_SHUFFLE")
+                                     env process-environment))
+        (default-directory temporary-file-directory))
+    (with-temp-buffer
+      (cons (call-process (expand-file-name invocation-name invocation-directory) nil t nil
+                          "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
+                          "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch" suite)
+            (buffer-string)))))
+
+(defun drgnx-run-ert-test--leak (leaks what)
+  "The entry of LEAKS (a vector) whose :what matches the regexp WHAT, or nil."
+  (seq-find (lambda (l) (string-match-p what (plist-get l :what))) leaks))
+
+(defun drgnx-run-ert-test--allow-file (dir &optional text)
+  "A leaks-allowed file in DIR holding TEXT (default: nothing allowed)."
+  (let ((f (expand-file-name "allowed.eld" dir))) (with-temp-file f (insert (or text "()"))) f))
+
+(ert-deftest drgnx-run-ert/leaks-name-the-test-and-the-source ()
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-leak" t)))
+         (suite (expand-file-name "suite" tmp)) (results (expand-file-name "r.json" tmp)))
+    (unwind-protect
+        (progn
+          (drgnx-run-ert-test--suite suite drgnx-run-ert-test--leaky)
+          (let* ((r (drgnx-run-ert-test--census suite results (concat "DRGNX_TEST_LEAKS_ALLOWED="
+                                                                      (drgnx-run-ert-test--allow-file tmp))))
+                 (leaks (plist-get (drgnx-run-ert-test--json results) :leaks))
+                 (src (expand-file-name "leaky-test.el" suite))
+                 (hook (drgnx-run-ert-test--leak leaks "kill-buffer-hook \\+iso-leak--hook-fn"))
+                 (timer (drgnx-run-ert-test--leak leaks "\\`timer .*iso-leak--timer-fn"))
+                 (advice (drgnx-run-ert-test--leak leaks "iso-leak--advice"))
+                 (feature (drgnx-run-ert-test--leak leaks "\\`feature \\+iso-leak-fake")))
+            (should (eql 0 (car r)))                   ; report-only: the exit status is the tests'
+            (should (string-match-p "^Leaks (" (cdr r)))
+            ;; the per-test scan names the test, the file, and the file that defined the function
+            (should (equal (plist-get hook :test) "iso-leak/hook"))
+            (should (equal (plist-get hook :file) src))
+            (should (equal (plist-get hook :source) src))
+            (should (equal (plist-get timer :test) "iso-leak/timer"))
+            (should (equal (plist-get timer :source) src))
+            (should (equal (plist-get feature :test) "iso-leak/feature"))
+            (should (equal (plist-get feature :source) (expand-file-name "iso-leak-fake.el" suite)))
+            ;; an advice shows only in the per-file scan: the file and the source, not the test
+            (should (equal (plist-get advice :test) :null))
+            (should (equal (plist-get advice :file) src))
+            (should (equal (plist-get advice :source) src))
+            ;; each once: the per-file scan does not repeat what the per-test scan said
+            (should (= 4 (seq-count (lambda (l) (string-match-p "iso-leak" (plist-get l :what))) leaks)))))
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-run-ert/no-leaks-no-report ()
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-leak" t)))
+         (suite (expand-file-name "suite" tmp)) (results (expand-file-name "r.json" tmp)))
+    (unwind-protect
+        (progn
+          (drgnx-run-ert-test--suite suite '(("clean-test.el" . "(ert-deftest iso-clean/ok () (should (= 2 (+ 1 1))))")))
+          (let ((r (drgnx-run-ert-test--census suite results)))
+            (should (eql 0 (car r)))
+            (should-not (string-match-p "Leaks" (cdr r)))
+            (should (equal (plist-get (drgnx-run-ert-test--json results) :leaks) []))))
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-run-ert/allowed-leaks-are-left-out ()
+  ;; (:what REGEXP :source REGEXP :why STRING): a leak matching both is not reported; :source may be left out.
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-leak" t)))
+         (suite (expand-file-name "suite" tmp)) (results (expand-file-name "r.json" tmp)))
+    (unwind-protect
+        (progn
+          (drgnx-run-ert-test--suite suite drgnx-run-ert-test--leaky)
+          (drgnx-run-ert-test--census
+           suite results
+           (concat "DRGNX_TEST_LEAKS_ALLOWED="
+                   (drgnx-run-ert-test--allow-file
+                    tmp "((:what \"kill-buffer-hook\" :source \"leaky-test\\\\.el\\\\'\" :why \"fixture\")
+ (:what \"iso-leak--timer-fn\" :why \"fixture\")
+ (:what \"iso-leak--advice\" :source \"nothing-like-this\" :why \"does not match the source\"))")))
+          (let ((leaks (plist-get (drgnx-run-ert-test--json results) :leaks)))
+            (should-not (drgnx-run-ert-test--leak leaks "iso-leak--hook-fn"))
+            (should-not (drgnx-run-ert-test--leak leaks "iso-leak--timer-fn"))
+            (should (drgnx-run-ert-test--leak leaks "iso-leak--advice"))      ; the source differs: still reported
+            (should (drgnx-run-ert-test--leak leaks "iso-leak-fake"))))
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-run-ert/a-pending-timer-is-cancelled-after-its-test ()
+  ;; The timer test A starts must not fire inside test B: with the census on it is cancelled (and reported) at A's
+  ;; end; without, it fires during B's wait.
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-leak" t)))
+         (suite (expand-file-name "suite" tmp)) (results (expand-file-name "r.json" tmp)))
+    (unwind-protect
+        (progn
+          (drgnx-run-ert-test--suite
+           suite '(("timer-test.el" . "(defvar iso-timer--fired nil)
+(defun iso-timer--fire () (setq iso-timer--fired t))
+(ert-deftest iso-timer/a-starts () (run-with-timer 0.05 nil #'iso-timer--fire))
+(ert-deftest iso-timer/b-waits () (sleep-for 0.4) (should-not iso-timer--fired))")))
+          (let ((r (drgnx-run-ert-test--census suite results (concat "DRGNX_TEST_LEAKS_ALLOWED=" (drgnx-run-ert-test--allow-file tmp)))))
+            (should (eql 0 (car r)))
+            (should (equal (plist-get (drgnx-run-ert-test--leak (plist-get (drgnx-run-ert-test--json results) :leaks)
+                                                                "iso-timer--fire")
+                                      :test)
+                           "iso-timer/a-starts")))
+          ;; the control: without the census the timer fires inside B
+          (should (eql 1 (drgnx-run-ert-test--batch suite results))))
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-run-ert/layer-timers-are-reset-after-a-test ()
+  ;; A layer timer test A leaves pending is cancelled by its key (and reported by its key): the layer forgets it,
+  ;; so test B sees no key whose timer a plain `cancel-timer' killed behind the layer's back.
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-leak" t)))
+         (suite (expand-file-name "suite" tmp)) (results (expand-file-name "r.json" tmp)))
+    (unwind-protect
+        (progn
+          (drgnx-run-ert-test--suite
+           suite `(("layer-test.el" . ,(format "(add-to-list 'load-path %S)
+(require 'drgnx-timer)
+(defun iso-layer--fire () nil)
+(ert-deftest iso-layer/a-starts () (drgnx-timer-start 'iso-layer 600 #'iso-layer--fire :owner :core))
+(ert-deftest iso-layer/b-sees-none () (should-not (drgnx-timer-active-p 'iso-layer)))"
+                                               (file-name-directory (locate-library "drgnx-timer"))))))
+          (let ((r (drgnx-run-ert-test--census suite results (concat "DRGNX_TEST_LEAKS_ALLOWED=" (drgnx-run-ert-test--allow-file tmp)))))
+            (should (eql 0 (car r)))
+            (should (equal (plist-get (drgnx-run-ert-test--leak (plist-get (drgnx-run-ert-test--json results) :leaks) "iso-layer")
+                                      :test)
+                           "iso-layer/a-starts"))))
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-run-ert/census-off-costs-nothing ()
+  ;; Off (the default): no advice, no fingerprint library, no :leaks in the summary.
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-leak" t)))
+         (suite (expand-file-name "suite" tmp)) (results (expand-file-name "r.json" tmp)) (probe (expand-file-name "probe" tmp))
+         (read-probe (lambda () (car (read-from-string (with-temp-buffer (insert-file-contents probe) (buffer-string)))))))
+    (unwind-protect
+        (progn
+          (drgnx-run-ert-test--suite
+           suite `(("probe-test.el" . ,(format "(ert-deftest iso-probe/state ()
+  (with-temp-file %S (prin1 (list (and (advice-member-p 'drgnx-run-ert-census 'ert-run-test) t)
+                                  (featurep 'drgnx-modules-fingerprint)) (current-buffer))))" probe))))
+          (should (eql 0 (drgnx-run-ert-test--batch suite results)))
+          (should (equal (funcall read-probe) '(nil nil)))
+          (should-not (plist-member (drgnx-run-ert-test--json results) :leaks))
+          ;; on, the same test sees both
+          (should (eql 0 (car (drgnx-run-ert-test--census suite results))))
+          (should (equal (funcall read-probe) '(t t))))
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-run-ert/an-error-in-the-census-is-a-line-never-an-escape ()
+  ;; A fingerprint that cannot be read (here `global-mode-string' is not a list while the test ends) is recorded as a
+  ;; census line; it never ends the run, and the tests keep their own verdicts.
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-leak" t)))
+         (suite (expand-file-name "suite" tmp)) (results (expand-file-name "r.json" tmp)))
+    (unwind-protect
+        (progn
+          (drgnx-run-ert-test--suite
+           suite '(("broken-test.el" . "(ert-deftest iso-broken/a-breaks-it () (setq global-mode-string 5))
+(ert-deftest iso-broken/b-mends-it () (setq global-mode-string nil))
+(ert-deftest iso-broken/c-passes () (should t))")))
+          (let* ((r (drgnx-run-ert-test--census suite results (concat "DRGNX_TEST_LEAKS_ALLOWED=" (drgnx-run-ert-test--allow-file tmp))))
+                 (json (drgnx-run-ert-test--json results))
+                 (line (drgnx-run-ert-test--leak (plist-get json :leaks) "census error")))
+            (should (eql 0 (car r)))
+            (should (equal (list (plist-get json :total) (plist-get json :passed) (plist-get json :failed)) '(3 3 0)))
+            (should line)
+            (should (string-match-p "listp" (plist-get line :what)))))
       (delete-directory tmp t))))

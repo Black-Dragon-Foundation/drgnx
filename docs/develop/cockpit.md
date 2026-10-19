@@ -162,37 +162,47 @@ fixture is a temp project with:
 - **Panes:** kinds `happened` (home `right`; a placeholder until an agent is picked) and `timeline` (home
   `bottom`). Their modes, `drgnx-cockpit-happened-mode` and `drgnx-cockpit-timeline-mode`, and the graph's share
   `drgnx-cockpit-map`, where `cockpit-answer` (`A`) is bound.
-- **Updates:** the feed's buffers own their hooks: `drgnx-hub-event-functions` and
-  `drgnx-agents-changed-functions` (named), a repeating check every `drgnx-cockpit-check-interval` and one one-shot
-  timer. The last buffer killed removes them and releases What
-  happened's end marker. `drgnx-cockpit-feed-schedule` works like the graph's: one update per
-  `drgnx-cockpit-redraw-delay`, only while a feed buffer shows, a hidden one marked stale and caught up by its
-  `:on-show`. An update first compares its key with the buffer's: `drgnx-cockpit--db-key` (`(data_version
+- **Updates:** each feed buffer is a view (types `cockpit-happened` and `cockpit-timeline`, `equal` keys, DELAY
+  `drgnx-cockpit-redraw-delay`; [core.md](core.md#views-wbdrgnx-viewel)). The buffers own their hooks:
+  `drgnx-hub-event-functions` and `drgnx-agents-changed-functions` (named); the last one killed removes them.
+  `drgnx-cockpit-feed-schedule` only touches every feed buffer's view: one draw per DELAY, only while it shows (a
+  hidden one's first draw counts a stale skip, then its marks arm nothing until it shows). Its SYNC,
+  `drgnx-cockpit-feed--update`, first compares its key with the buffer's: `drgnx-cockpit--db-key` (`(data_version
   total_changes())`, one query, shared with the graph's key and the waiting count) and the ids of the sessions in this
-  Emacs (their transcript links). The key is stored only after a successful update, so a failed one is tried again;
-  one buffer's error leaves the other's update.
-  - **Point stays on the head line** of both, which every change is below. So an update never moves a window's
-    point or start: typing elsewhere sees no window move (the jank report's collateral stays 0).
-  - **What happened** appends the lines of events newer than its last one, before a marker that ends them. It
-    rewrites only the lines of questions answered since (the mark goes), and its last lines when the transcript
-    appears or goes. It holds as many lines as its tallest window shows (less its head and last lines; at most
-    `drgnx-cockpit-happened-limit`), so the newest is in view without scrolling. Past that, its oldest lines go.
-    A window of another height that would show other lines, or more new events than the limit, draws it anew.
-    Its head line carries the agent's oldest open question (`drgnx-coord-open-questions AGENT`), patched like a
-    row.
-  - **The timeline** reads `drgnx-cockpit-timeline :since` its last chip. It rewrites only the lines of the rows
-    those reach, the rows that marked a question answered since, and its head. A new agent is a new line at the end.
+  Emacs (their transcript links), and the window's fit. The key is stored only after a successful update, so a failed
+  one is tried again; one buffer's error leaves the other's update. A new buffer, and `g`, read the store anew and draw
+  at once (`drgnx-cockpit-feed--draw-now`).
+  - **The rows** (`drgnx-cockpit-feed--cells`, KEY → `(SIG GENERATION . TEXT)`, `drgnx-cockpit-row-cell`): a row's
+    text is made again only when what it shows may have changed, and drawn only when that text changed (faces
+    included). Windows keep their start and point on their row, at the same offset; point stays on the head line,
+    above every change.
+  - **What happened**'s rows are `:head`, one `(:event ID N)` per line, `:empty` ("Nothing yet."), then `:footer` (the
+    transcript and reply lines, made again only when what they say changes). It holds as many lines as its tallest
+    window shows (less its head and last lines; at most `drgnx-cockpit-happened-limit`), so the newest is in view
+    without scrolling: a new event is one row added (the oldest goes past that), a question answered since one row
+    drawn again (the mark goes). Its head line carries the agent's oldest open question
+    (`drgnx-coord-open-questions AGENT`).
+  - **The timeline**'s rows are `:head`, one `(:row KEY)` per agent (`drgnx-cockpit-feed--row-key`) and `:empty`. It
+    reads `drgnx-cockpit-timeline :since` its last chip (`drgnx-cockpit-feed--timeline-read`), and makes again only
+    the rows those reach, the rows that marked a question answered since, the `jobs` row when the open ask cards
+    changed, and its head; every row when the window's width changed. A new agent is a new row at the end.
     It reads at most `drgnx-cockpit-timeline-limit` events past its last chip per update; more in between (over 600
-    a second) are left out of the rows until it is drawn anew. An open question whose event is older than every
+    a second) are left out of the rows until it is read anew (`g`). An open question whose event is older than every
     chip it holds is read back (one `id in (…)` query, only when one is missing) and pinned in its agent's row.
     A row's waiting chips — its open questions, and in the `jobs` row the open ask cards no open question names
     (`drgnx-cockpit-feed--open-cards`, one query) — are pinned: drawn first, after the name or `‹ N`, whatever their
     age, and newer chips go to make room. `‹ N ◐` means a hidden chip waits. A chip shows a failure (in
     `drgnx-cockpit-blocked`) by its event's kind: tests with failures (`3/4 ⚠`, `2 failed`), a failing review
-    verdict, a failed status. One update reads the open questions once, for every buffer and the waiting count.
-    A row shows its newest chips that fit its window (its widest, else 80 columns, less one). Chip widths are
-    measured then, never on redisplay. A width change refits every row. Windows on a rewritten line keep their
-    column.
+    verdict, a failed status. One update reads the open questions once. A row shows its newest chips that fit its
+    window (its widest, else 80 columns, less one). Chip widths are measured then, never on redisplay. `‹ N` lists a
+    row's older chips in `*timeline: NAME*`, drawn once (a document, not a live view).
+  - **While a pane shows.** tools/cockpit's setup subscribes the feed to the workbench state store: `pane-shown` and
+    `pane-hidden` (kinds `happened`, `timeline`) and `windows-changed` (one agent's What happened replacing another's
+    in the pane is no pane event) on the `now` lane call `drgnx-cockpit-feed--follow-shown`: a feed buffer a window the
+    store recorded on a visible frame shows (`drgnx-cockpit-shown-p`) gets its check `(cockpit-feed-check . BUFFER)`
+    (owned by the buffer, every `drgnx-cockpit-check-interval`: when the store changed since its update, another
+    process wrote it, and its view is touched), and a buffer that starts showing catches up; any other loses its
+    check. `pane-resized` (lane `idle`) touches the resized pane's view: it fits its window again.
 - **`(drgnx-cockpit-waiting-count)`**: the open questions (escalations, `ask_user`) that the jobs count
   (`drgnx-job-ui-needs-you`) does not already hold: not an ask card (a question whose data names `:card`) and not a
   job's message to you (data with `:message` and a `:job`). tools/cockpit's setup puts it on the status bar's
@@ -202,9 +212,9 @@ fixture is a temp project with:
   as `(STORE-KEY QUESTIONS . TOTAL)`: one query when nothing changed. Its key also holds
   `drgnx-cockpit-include-closed-jobs`.
 - **`(drgnx-cockpit-feed-tell-statusbar)`**: calls `drgnx-statusbar-refresh` (when it is loaded) when the waiting count
-  changed since the bar was last told (it counts as told once the refresh returned). The graph's check and the feed's check call it every
-  `drgnx-cockpit-check-interval` while their buffers live, so the bar moves when another process asks, without a hub
-  event.
+  changed since the bar was last told (it counts as told once the refresh returned). `cockpit-waiting`
+  (`drgnx-cockpit--waiting`, tools/cockpit's setup's timer) calls it every `drgnx-cockpit-check-interval` while the
+  module runs, whatever shows, so the bar moves when another process asks, without a hub event.
 - **`(drgnx-cockpit-answer QUESTION TEXT)`**: QUESTION is one of `drgnx-cockpit-feed--questions` (the model's
   `:questions`, then each session's permissions as `(:kind "permission" :agent :permission :summary :node)`).
   - An ask card: `drgnx-coord-card-settle`, which writes the `answer` event.
@@ -229,7 +239,8 @@ fixture is a temp project with:
 ### Cost
 
 Batch, drgnx's steady GC settings, on the fixture plus 2,000 events, What happened and the timeline both shown, p50
-of 100 runs:
+of 100 runs, measured before the feed became views (store Task 25; perf runs are deferred until the timer, config
+and render layers are built, so these are to be measured again):
 
 | | Time |
 |---|---|
@@ -250,9 +261,12 @@ stubbed. It covers:
 - the timeline's rows and chips in time order, a new chip changing only its row, rows that fit with the older
   chips one click away; waiting chips (questions, open ask cards) pinned past 80 newer chips, `‹ N ◐`;
 - a question in the graph, `drgnx-cockpit-waiting-count` and the timeline, then calm once answered; the
-  status bar told by the feed's and the graph's checks when the count changes;
+  status bar told by tools/cockpit's look (`cockpit-waiting`) when the count changes;
 - `A` from a chip and from the graph;
-- the ASCII form, hidden panes catching up, the buffers owning their hooks and markers;
+- the ASCII form, the buffers owning their hooks;
+- with a fresh state store (`drgnx-cockpit-fixture-show-pane`): a hidden pane keeps no timer and draws nothing (a
+  stale skip), showing it starts its check again and draws what came meanwhile (one agent's What happened
+  replacing another's in the pane too), and a new event draws one row in each pane;
 - the commands and keys in every profile.
 
 ## The Work graph (module `tools/cockpit`)
@@ -263,8 +277,11 @@ outline. `modules/tools/drgnx-cockpit.el` holds the pane, the redraws and the co
 
 ### Redraws
 
-`drgnx-cockpit-schedule` keeps one owned one-shot timer, and only while the graph is visible. A tick that finds
-the graph hidden only marks it stale; `:on-show` catches up. `drgnx-cockpit-graph-redraw` works in four steps:
+The graph's buffer is a view ([core.md](core.md#views-wbdrgnx-viewel), type `work-graph`, `equal` keys, DELAY
+`drgnx-cockpit-redraw-delay`). `drgnx-cockpit-schedule` only touches it: the view draws at most once per DELAY, only
+while the buffer shows (hidden, its first draw counts a stale skip and its marks arm nothing until it shows), and its
+SYNC, `drgnx-cockpit--sync`, runs `drgnx-cockpit--update` in four steps. `drgnx-cockpit-graph-redraw` (commands, `g`)
+runs the same steps and draws at once (`drgnx-view-draw-now`).
 
 1. **The key** (about 20 µs, one query):
    - `PRAGMA data_version` (moves when another connection commits) and `total_changes()` (this Emacs's writes);
@@ -277,19 +294,36 @@ the graph hidden only marks it stale; `:on-show` catches up. `drgnx-cockpit-grap
    The same key: return.
 2. **The model**, built only when the store part, the filter or the generation changed.
 3. **The layout**, cached by `(model metrics generation)`.
-4. **The signature**: the model, the mode and the metrics. It decides whether anything is drawn.
+4. **The signature**: the model, the mode and the metrics. It decides whether anything is marked.
 
-How the views change:
-- The outline is patched line by line.
+The rows (`drgnx-cockpit--cells`, KEY → `(SIG GENERATION . TEXT)`, made by `drgnx-cockpit-row-cell` in
+`core/drgnx-cockpit-model.el`): a row's view signature is its GENERATION, new only when its text changed (faces
+included), and `drgnx-view-sync-rows` draws only those rows.
+- The outline: one row per line, keyed `(:node ID N)` (the Nth line of node ID: its label, its needs and blocks),
+  `(:line TEXT N)` for a line of no node (the summary, `AGENTS`), `(:filter)`. A store change redraws the lines that
+  changed; a window stays on its row.
 - The drawing redraws in place while its frame (head lines, bands, every box's place) is the same: only the bands
-  whose SVG changed get it, through `image-property`, with `image-flush` on the old pixels first.
-- Otherwise the buffer is rebuilt, and the old band images are flushed except one equal to a new one (the image
-  cache serves it).
-- TAB re-renders only the bands the old and the new focus stroke reach.
+  whose SVG changed get it, through `image-property`, with `image-flush` on the old pixels first; no row is marked.
+- Otherwise its rows are the head lines `(:head N)` and the bands `(:band N)` (a column of image slices with the hot
+  spots' keymap), every band a new row, and the old band images are flushed except one equal to a new one (the image
+  cache serves it). The mode switching between the outline and the drawing replaces every row.
+- TAB re-renders only the bands the old and the new focus stroke reach; point goes to the band's row
+  (`drgnx-view-row-start`).
 
 Owners:
-- The buffer owns its hooks (hub events, agent changes, tracker scans, `enable-theme-functions`; all named) and
-  the repeating `drgnx-cockpit--check` timer. Its `kill-buffer-hook` removes them and flushes its images.
+- The buffer owns its hooks (hub events, agent changes, tracker scans, `enable-theme-functions`; all named), its
+  view's timers and the check. Its `kill-buffer-hook` removes the hooks and flushes its images.
+- **While it shows.** tools/cockpit's setup subscribes `drgnx-cockpit--pane-shown` and `--pane-hidden` to the
+  workbench state store's `pane-shown` and `pane-hidden` (lane `now`), `--windows-changed` to `windows-changed` (lane
+  `idle`: the graph shown, or no longer, in a window that is not its pane, `C-x b`, is no pane event) and
+  `--pane-resized` to `pane-resized` (lane `idle`). For the kind `work-graph`, and on every window change, they call
+  `drgnx-cockpit--follow`: while a window the store recorded on a visible frame shows the buffer
+  (`drgnx-cockpit-shown-p`), the repeating `(cockpit-check . BUFFER)` (owned by the buffer, every
+  `drgnx-cockpit-check-interval`) looks for another process's writes and silent worktrees, and when it starts the view
+  is touched to catch up; otherwise the check is cancelled. A resize touches the view (the drawing may now fit). Hidden,
+  the graph keeps no timer.
+- `cockpit-waiting` (owned by tools/cockpit's run, every `drgnx-cockpit-check-interval`) tells the status bar of a new
+  waiting count (`drgnx-cockpit-feed-tell-statusbar`), whatever shows.
 - `drgnx-cockpit-graph--encoded` (the SVG form of a text) is emptied at 4,096 texts.
 
 ### Cost
@@ -318,8 +352,11 @@ why a change touches as few bands as it can.
 - that every colour in the drawing comes from a face;
 - the outline in terminals and small windows;
 - clicks and `RET`, keyboard selection in column order;
-- one redraw per burst of events, none when nothing changed and no model built then, none while hidden (a pending
-  timer included);
+- one redraw per burst of events, none when nothing changed and no model built then; a store change draws only the
+  rows that changed;
+- with a fresh state store (`drgnx-test-with-state`, the pane shown with `drgnx-cockpit-fixture-show-pane`): a
+  hidden pane keeps no timer and draws nothing (a stale skip, no model built), and showing it starts the check
+  again and draws what changed meanwhile;
 - options and fonts reaching the drawing, old band images flushed (and kept when drawn the same);
 - writes of another connection caught by the check;
 - an agent that streams builds no model (a status change does, and so does showing done jobs);
@@ -363,19 +400,30 @@ user's side is in [cockpit.md](../guide/cockpit.md#an-agents-edits).
 - **No other mode.** A local `change-major-mode-hook` (`drgnx-cockpit-edits--keep-mode`) signals a `user-error`, so `M-x
   diff-mode` (or any mode) cannot turn the pane into a patch buffer.
 - **No undo** (`buffer-disable-undo`), no dir-local variables.
-- **Nothing global.** `drgnx-cockpit-edits--teardown` (for the coming module teardown) only kills the panes; each one's
-  `kill-buffer-hook` ends its timers and watches.
+- **Nothing global.** `drgnx-cockpit-edits--teardown` (tools/cockpit's teardown calls it) only kills the panes and
+  the placeholder; each one's `kill-buffer-hook` ends its timers and watches. Its state subscriptions are the setup's.
 - **The header line** is text cached at each patch: the agent, counts, base, "stopped" (positive evidence only) and
   the keys (`a accept · r revert · c comment · n/p files`).
 
 ### Live updates
 
+**Only while it shows.** tools/cockpit's setup subscribes the panes to the workbench state store: `pane-shown` and
+`pane-hidden` for the kind `agent-edits`, and `windows-changed` (one agent's edits replacing another's in the same
+window is no pane event, nor are edits shown with `C-x b`). The pane events are on the `now` lane, `windows-changed`
+on the `idle` lane (never inside redisplay). Each calls `drgnx-cockpit-edits--follow`, which goes over the live panes
+(`drgnx-cockpit-edits--buffers`: each pane adds itself in its mode and leaves in its `kill-buffer-hook`, so no buffer
+list is scanned): one that a window the store recorded on a visible frame
+shows (`drgnx-cockpit-shown-p`) gets its check `(cockpit-edits-check . BUFFER)` and, when that was not running, a
+listing at once (which watches the folders again when its round ends); any other loses its check, tick, turn and
+flush timers and its file watches. Hidden, a pane keeps no timer and no watch, and a round that ends while it is
+hidden watches nothing (M12f-C6-1).
+
 The pane never polls a file. Three things name the files that changed:
 
 1. **File watches** (`file-notify-add-watch`, `change`) on the agent's folder and its changed files' folders, at most
-   `drgnx-cockpit-edits-watch-max`, only local ones. They are updated after each round. A watch event costs a prefix
-   test and a hash lookup: it marks the file dirty and schedules a tick. Paths in `.git` and outside the folder are
-   ignored.
+   `drgnx-cockpit-edits-watch-max`, only local ones, only while the pane shows. They are updated after each round. A
+   watch event costs a prefix test and a hash lookup: it marks the file dirty and schedules a tick. Paths in `.git`
+   and outside the folder are ignored.
 2. **Reported edits.** `drgnx-cockpit-edits--check` runs every `drgnx-cockpit-edits-check-interval` seconds while the
    pane shows. It compares `data_version` and `total_changes`, one query. When they moved, it reads the agent's `edit`
    events after the last id it saw. Their paths, cut to the folder with no remote name expanded, mark files dirty. Review
@@ -391,24 +439,27 @@ A file the pane does not list makes it list again (`drgnx-cockpit-changed-files`
 
 **Ticks and rounds.**
 - One owned one-shot timer runs the tick, `drgnx-cockpit-edits-delay` after the first change. A tick on a hidden pane
-  only marks it stale; `window-buffer-change-functions` and `drgnx-cockpit-edits-show` catch up.
+  does nothing (what changed stays noted); showing it lists again.
 - A tick while a round runs is put off. Otherwise it starts a round: the listing when due, then the dirty files' diffs
   (`drgnx-cockpit-file-diff`), at most 3 git processes at a time.
 - The round's diffs are shown together when the last one is back. A long round, the first load of many files, shows
   what came back every `drgnx-cockpit-edits-delay`.
 - So 50 writes a second give at most one patch per 0.3 s.
 
-**Patching** (`drgnx-cockpit-edits--patch`):
-- Before the change, each window's point and start are kept as (file, line in its section, column). The buffer's
-  own point is kept the same way.
+**Patching** (`drgnx-cockpit-edits--patch`), inside `drgnx-view-with-kept-windows` ([core.md](core.md#keeping-places)):
+- A section's rows are numbered by the text property `drgnx-cockpit-edits-hunk` (`drgnx-cockpit-edits--mark-hunks`):
+  0 for its header line and diff head, then 1, 2… from each `@@` line. The buffer's point and each window's point and
+  start are kept as their row `(FILE . HUNK)` (`drgnx-cockpit-edits--row-at`, two text properties) and the offset from
+  the row's start, and put back there after the change (`drgnx-cockpit-edits--row-pos`), inside
+  `drgnx-wb-with-owned-windows`. A row that is gone falls back to the same line of the buffer.
 - Only the sections whose diff changed are replaced. The diff's SHA-1 decides: an unchanged diff draws nothing.
-- After the change, the windows' point and start are put back on the same file and line, inside
-  `drgnx-wb-with-owned-windows`. A window that is already right is not touched.
 - A file gone from the list loses its section, and a new one gets a section at the end.
-- From no files to some, or to an error, the buffer is drawn anew.
+- From files to a note (no changes, an error) every section goes and the note (text property
+  `drgnx-cockpit-edits-note`) comes; from a note to files the note goes and the sections come. Nothing erases the
+  buffer.
 
-**Owners.** The buffer owns its tick, flush and check timers and its watches. Its `kill-buffer-hook` cancels them
-and removes the watches. A git callback for a killed buffer does nothing. The caches are buffer-local and pruned with
+**Owners.** The buffer owns its tick, turn, flush and check timers and its watches. Its `kill-buffer-hook` cancels
+them and removes the watches. A git callback for a killed buffer does nothing. The caches are buffer-local and pruned with
 the files: `drgnx-cockpit-edits--info` holds counts, hash and note per file, never diff text, because the buffer
 holds that.
 
@@ -477,7 +528,10 @@ nothing reads, and no process sentinel runs while it waits. It covers:
 - the files with their counts, the header faces under diff-mode's, `n`/`p`, a reported file listed at the next look,
   watched folders, and a remote folder (an error line, no git, no watch);
 - 50 writes in a second: at most 4 patches, the last write shown, point and window start on the same file, line and
-  column, no window moved;
+  column, no window moved; two windows each kept on their hunk while a section above grows;
+- with a fresh state store (the panes' subscriptions, the pane shown by `drgnx-state-sync`): a hidden pane keeps no
+  timer and no file watch (M12f-C6-1), and showing it again starts its check, lists an edit reported meanwhile and
+  watches again;
 - accept, and a change shown as `changed since accepted` (the mark keeps its hash);
 - accept never merging or committing;
 - revert: queued while the agent runs, queued for a session set to interrupt, queued for a stopped agent in the main
@@ -526,21 +580,30 @@ side is in [jobs.md](../guide/jobs.md#a-job-in-the-work-cockpit).
   a list of strings for `:states`. A workbench saved before M12f has no such key, so the filter its job window just
   set stays.
 - **Drawing.** The job window's functions moved here, renamed `drgnx-cockpit-cards--insert-{tasks,card,cards,log}`.
-  `drgnx-cockpit-cards--put` erases and draws a part only when its key changed, and only when its buffer lives (a part nobody opened is never made). For one job, What needs you's key is
-  `(JOB CARDS-PART TASKS-PART)` and the log's is `(JOB LOG-PART)`. For every job, the key is the open jobs' ids,
-  titles, repos and cards parts. Windows keep their start and point, clamped.
+  Each part's buffer is a view (type `cockpit-cards`, DELAY 0: the refresh is the throttle). `drgnx-cockpit-cards--put`
+  makes its rows, only when its buffer lives (a part nobody opened is never made): each row `(KEY SIG DRAW)` keeps its
+  text while SIG, what it shows of the hub's answer, is the same (`drgnx-cockpit-row-cell`), so only the rows whose part
+  changed are drawn, while the part shows. For one job, What needs you's rows are `:cards` (`(JOB CARDS-PART)`) and
+  `:tasks` (`(JOB TASKS-PART)`), the log's `:log` (`(JOB LOG-PART)`). For every job, `:head` (the count) and one
+  `(:job ID)` row per open job (its id, title, repo and cards part), each ending in a blank line; the log `:no-log`.
+  No hub: `:no-hub`. Windows keep their start and point on their row.
 - **The hub.** One `job/status` per refresh: `(:id JOB :decisions t)` for a job, no parameters for every job (the
   log then says it is per job). An answer for a filter that changed meanwhile is dropped. `No job …` drops the job
   filter. Any other error draws "No drgnx hub" and looks again 10 s later.
 - **Refreshes.** Hub events `job`, `card` and `lease-released` of the shown job (any job's when none is shown), and
-  `agent` and `fallback`, schedule one refresh per 0.5 s, only while a part shows. A hidden part only sets
-  `drgnx-cockpit-cards--stale`, and the kinds' `:on-show` catches up.
+  `agent` and `fallback`, schedule one refresh per 0.5 s (`cockpit-cards-refresh`, `:core`), only while a part shows:
+  a window the workbench state store recorded on a visible frame shows its buffer (`drgnx-cockpit-cards--shown-p`).
+  `--focus` and Show Decisions, which show a part in the same command, refresh whatever the store saw yet. The setup
+  subscribes `drgnx-cockpit-cards--pane-shown` and `--pane-hidden` to `pane-shown` and `pane-hidden` (lane `now`):
+  a part that shows refreshes at once; with neither showing, the refresh and the look-again `cockpit-cards-retry` are
+  cancelled, so the parts keep no timer.
 - **Ownership.** The hooks (`drgnx-hub-event-functions`, `drgnx-hub-disconnect-functions`) and both timers belong to
   the parts' buffers: the last one killed removes them. The setup adds three global hook functions (the filter, the
-  saved state, the restore); `drgnx-cockpit-cards--teardown` takes them out, kills both parts and cancels both timers
-  (idempotent). `drgnx-cockpit--teardown` runs it and the edits' teardown: the module's off path, which module
-  teardown calls (drgnx's modules have no runtime off yet). The visibility check and the stale flag are what
-  C5 and C7 use, for the workbench state store to replace.
+  saved state, the restore); `drgnx-cockpit-cards--teardown` takes them out, kills both parts, cancels both timers
+  and a reviewer's transcript still to open (`(cockpit-cards-transcript . ID)`) (idempotent). `drgnx-cockpit--teardown`,
+  tools/cockpit's `:teardown`, runs it, the feed's and the edits' teardowns and kills the Work graph's buffer; its
+  setup's stack undoes the pane kinds, commands, state subscriptions and `cockpit-waiting`. Turned off, the module
+  leaves no timer, subscription, hook or buffer.
 - **Kept in `drgnx-job-ui.el`:** the Plan Job commands (`job-show` is now "Show Job in Work…"), the ⚑ badge mode for
   those without the status bar (a click: `drgnx-job-ui-show` of the newest card's job, else
   `drgnx-cockpit-show-jobs`), and notifications.
@@ -569,8 +632,11 @@ no collateral moves and no layout changes.
 
 `test/unit/mod-cockpit-cards-test.el` covers:
 - the job window's cases (cards, clash texts, buttons, Discuss, Dismiss, acted messages, the log's faces), with
-  redraws only on change;
-- one refresh for 50 events, and none while hidden;
+  redraws only on change (one row: a task's state redraws the tasks row, not the cards);
+- one refresh for 50 events, and none while hidden; with a fresh state store, a hidden part keeps no timer, and one
+  that shows again asks the hub and draws what changed;
+- tools/cockpit set up in a module run, its buffers shown: turned off, no timer, state subscription, hook or buffer
+  is left (TL-MB-1);
 - no hub, and a deleted job;
 - one pane for every job or one, and the graph filtered by job;
 - an old job window's state restoring with no frame, the filter set and the frame not moved;

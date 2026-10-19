@@ -19,8 +19,11 @@
   (let ((load-path (cons (file-name-directory drgnx-live-test--websocket) load-path)))
     (require 'websocket))
   (load (expand-file-name "test/fixtures/mock-cdp" drgnx-dir) nil t))
+(load (expand-file-name "test/fixtures/memo-alloc-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-browser" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-live" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-live-test--with (&rest body)
   "BODY with a temp state dir, the mock browser serving on PORT as the running live browser (job \"job-live\"),
@@ -35,7 +38,7 @@ no agents, and everything closed afterwards."
      (cl-letf (((symbol-function 'display-images-p) (lambda (&optional _) t))
                ((symbol-function 'drgnx-jobs-get)
                 (lambda (id) (and (equal id "job-live") (list :id id :status 'running)))))
-       (unwind-protect (progn ,@body)
+       (unwind-protect (drgnx-test-with-state ,@body)
          (when (get-buffer "*drgnx live*") (kill-buffer "*drgnx live*"))
          (drgnx-mock-cdp-stop)
          (delete-directory root t)))))
@@ -54,6 +57,7 @@ no agents, and everything closed afterwards."
 (defun drgnx-live-test--open ()
   "Open the Live view on the mock and wait until it screencasts."
   (drgnx-live-view)
+  (drgnx-state-sync)                    ; the store's hooks are off in a test: the window the view is in is recorded now
   (should (drgnx-mock-cdp-wait (lambda () (drgnx-mock-cdp-received "Page.startScreencast")))))
 
 (defun drgnx-live-test--event (type x y w h)
@@ -91,6 +95,53 @@ no agents, and everything closed afterwards."
                                                       (drgnx-mock-cdp-received "Page.startScreencast")))))
     (with-current-buffer "*drgnx live*"
       (should (string-search "https://new.example/" (substring-no-properties (drgnx-live--header)))))))
+
+(ert-deftest drgnx-live/an-unchanged-header-allocates-nothing ()
+  (with-temp-buffer
+    (setq-local drgnx-live--targets (list (list :targetId "T1" :type "page" :title "Example" :url "https://example.org/"))
+                drgnx-live--target "T1")
+    (let ((h (drgnx-live--header)))
+      (should (string-search "https://example.org/" h))
+      (should (eq h (drgnx-live--header)))
+      (should (= 0 (drgnx-memo-fixture-alloc (lambda () (drgnx-live--header)) 'drgnx-live--header))))))
+
+(ert-deftest drgnx-live/a-new-tab-rebuilds-the-header ()
+  (with-temp-buffer
+    (setq-local drgnx-live--targets (list (list :targetId "T1" :type "page" :title "Example" :url "https://example.org/"))
+                drgnx-live--target "T1")
+    (let ((h (drgnx-live--header)))
+      (drgnx-live--event "Target.targetCreated" '(:targetInfo (:targetId "T2" :type "page" :title "Docs" :url "https://docs.example/")) nil)
+      (let ((h2 (drgnx-live--header)))
+        (should-not (eq h h2))
+        (should (string-search "Docs" h2)))
+      ;; a title change, the watched tab going away, and taking over each show at once
+      (drgnx-live--event "Target.targetInfoChanged" '(:targetInfo (:targetId "T2" :type "page" :title "Manual" :url "https://docs.example/")) nil)
+      (should (string-search "Manual" (drgnx-live--header)))
+      (drgnx-live--event "Target.targetDestroyed" '(:targetId "T2") nil)
+      (should-not (string-search "Manual" (drgnx-live--header)))
+      (should-not (string-search "DRIVING" (drgnx-live--header)))
+      (drgnx-live-driving-mode 1)
+      (should (string-search "DRIVING" (drgnx-live--header)))
+      (drgnx-live-driving-mode -1)
+      (should-not (string-search "DRIVING" (drgnx-live--header))))))
+
+(ert-deftest drgnx-live/its-timers-are-the-layers ()
+  (let ((buf (generate-new-buffer " live-timers")))
+    (unwind-protect
+        (with-current-buffer buf
+          (let ((draw (cons 'live-draw buf)) (notes (cons 'live-notes buf)))
+            (drgnx-live--schedule-draw)
+            (drgnx-live--schedule-notes)
+            (should (drgnx-timer-active-p draw))
+            (should (drgnx-timer-active-p notes))
+            (should (eq (cadr (assoc draw (drgnx-timer-pending))) buf))
+            (drgnx-live--disconnect)                          ; the connection closing
+            (should-not (drgnx-timer-active-p draw))
+            (should-not (drgnx-timer-active-p notes))
+            (drgnx-live--schedule-notes)
+            (kill-buffer buf)                                 ; the buffer's death
+            (should-not (drgnx-timer-active-p notes))))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
 
 (ert-deftest drgnx-live/busy-drops-frames ()
   (skip-unless drgnx-live-test--websocket)
@@ -180,11 +231,7 @@ no agents, and everything closed afterwards."
               ((symbol-function 'drgnx-jobs-get) (lambda (id) (and (equal id "job-1") (list :id id :status status))))
               ((symbol-function 'drgnx-jobs-stop) (lambda (id) (push id stopped) (setq status 'stopped) (delete-process chrome))))
       (unwind-protect
-          (let ((drgnx-agents-env-functions nil)
-                (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
-            (drgnx-live--setup)
-            (should (memq #'drgnx-live--agent-env drgnx-agents-env-functions))
-            (dolist (c '(live-start-browser live-stop-browser live-view live-take-over)) (should (drgnx-commands-get c)))
+          (let ((drgnx-agents-env-functions (list #'drgnx-live--agent-env)))   ; as the module's setup adds it
             ;; no browser yet: nothing extra
             (should-not (seq-find (lambda (e) (string-prefix-p "PLAYWRIGHT_MCP_CDP_ENDPOINT=" e)) (drgnx-agents--env s)))
             ;; Live: Start Browser for Agents starts Chrome once, headless, on 127.0.0.1, a throwaway profile, capped
@@ -216,8 +263,30 @@ no agents, and everything closed afterwards."
             (should (equal stopped '("job-1")))
             (should-not (file-exists-p dir))
             (should-not (seq-find (lambda (e) (string-prefix-p "PLAYWRIGHT_MCP_CDP_ENDPOINT=" e)) (drgnx-agents--env s))))
-        (remove-hook 'kill-emacs-hook #'drgnx-live--cleanup)
         (delete-process chrome)
+        (delete-directory root t)))))
+
+(ert-deftest drgnx-live/the-module-turns-off-and-stops-the-browser ()
+  ;; set up: agents get the endpoint, Emacs's end stops the browser, the commands; turned off: the browser stops
+  (skip-unless drgnx-live-test--websocket)
+  (let* ((root (make-temp-file "drgnx-live" t))
+         (process-environment (cons (concat "XDG_STATE_HOME=" root) process-environment))
+         (dir (expand-file-name "profile" root)) (stopped nil)
+         (drgnx-live--browser nil) (drgnx-live--given nil))
+    (make-directory dir)
+    (cl-letf (((symbol-function 'drgnx-jobs-stop) (lambda (id) (push id stopped)))
+              ((symbol-function 'drgnx-jobs-get) (lambda (id) (list :id id :status 'stopped))))
+      (unwind-protect
+          (drgnx-test-with-modules '(tools/live) :strict t
+                                   (should (memq #'drgnx-live--agent-env drgnx-agents-env-functions))
+                                   (should (memq #'drgnx-live--cleanup kill-emacs-hook))
+                                   (dolist (c '(live-start-browser live-stop-browser live-view live-take-over)) (should (drgnx-commands-get c)))
+                                   (setq drgnx-live--browser (list :port 9555 :job "job-live" :dir dir))
+                                   (drgnx-module-teardown 'tools/live)
+                                   (should-not drgnx-live--browser)
+                                   (should (equal stopped '("job-live")))
+                                   (should-not (file-exists-p dir))
+                                   (should-not (memq #'drgnx-live--agent-env drgnx-agents-env-functions)))
         (delete-directory root t)))))
 
 (ert-deftest drgnx-live/failures-say-why ()
@@ -387,16 +456,18 @@ are pushed to STEERED as (NAME TEXT)."
   ;; a view nobody sees costs nothing: the screencast stops, and starts again when the view is shown
   (skip-unless drgnx-live-test--websocket)
   (drgnx-live-test--with
+    (drgnx-live--subscribe)
     (drgnx-live-test--open)
     (drgnx-mock-cdp-frame 1)
     (should (drgnx-mock-cdp-wait (lambda () (drgnx-live-test--shown))))
     (let ((win (get-buffer-window "*drgnx live*")))
       (set-window-buffer win (get-buffer-create "*scratch*"))
+      (drgnx-state-sync)
       (drgnx-mock-cdp-frame 2)
       (should (drgnx-mock-cdp-wait (lambda () (drgnx-mock-cdp-received "Page.stopScreencast"))))
       (should (equal (drgnx-live-test--shown) "frame-1"))
       (set-window-buffer win "*drgnx live*")
-      (with-current-buffer "*drgnx live*" (run-hook-with-args 'window-buffer-change-functions win))
+      (drgnx-state-sync) (drgnx-state--deliver-idle)    ; the store reports the view shown again
       (should (drgnx-mock-cdp-wait (lambda () (= 2 (length (drgnx-mock-cdp-received "Page.startScreencast")))))))))
 
 
@@ -449,19 +520,20 @@ are pushed to STEERED as (NAME TEXT)."
   ;; scales the page, not Emacs on every frame it draws); the same size asks for nothing.
   (skip-unless drgnx-live-test--websocket)
   (drgnx-live-test--with
+    (drgnx-live--subscribe)
     (drgnx-live-test--open)
     (drgnx-mock-cdp-frame 1)
     (should (drgnx-mock-cdp-wait (lambda () (drgnx-live-test--shown))))
     (let* ((win (get-buffer-window "*drgnx live*")) (before (window-body-width win t))
            (widths (lambda () (mapcar (lambda (m) (plist-get (plist-get m :params) :maxWidth))
                                       (drgnx-mock-cdp-received "Page.startScreencast")))))
-      (with-current-buffer "*drgnx live*" (run-hook-with-args 'window-size-change-functions win))
+      (drgnx-state-sync) (drgnx-state--deliver-idle)
       (accept-process-output nil 0.1)
       (should (equal (funcall widths) (list before)))
       (unwind-protect
           (progn
             (split-window win nil 'right)
-            (with-current-buffer "*drgnx live*" (run-hook-with-args 'window-size-change-functions win))
+            (drgnx-state-sync) (drgnx-state--deliver-idle)
             (should (drgnx-mock-cdp-wait (lambda () (= 2 (length (funcall widths))))))
             (should (equal (funcall widths) (list before (window-body-width win t))))
             (should (< (window-body-width win t) before)))
@@ -471,13 +543,14 @@ are pushed to STEERED as (NAME TEXT)."
   ;; Shown in another window (a split made for it), not hidden first: the screencast follows that window's width too.
   (skip-unless drgnx-live-test--websocket)
   (drgnx-live-test--with
+    (drgnx-live--subscribe)
     (drgnx-live-test--open)
     (let* ((win (get-buffer-window "*drgnx live*")) (before (window-body-width win t)))
       (unwind-protect
           (let ((right (split-window win nil 'right)))
             (set-window-buffer win (get-buffer-create "*scratch*"))
             (set-window-buffer right "*drgnx live*")
-            (with-current-buffer "*drgnx live*" (run-hook-with-args 'window-buffer-change-functions right))
+            (drgnx-state-sync) (drgnx-state--deliver-idle)
             (should (drgnx-mock-cdp-wait (lambda () (= 2 (length (drgnx-mock-cdp-received "Page.startScreencast"))))))
             (should (= (window-body-width right t)
                        (plist-get (plist-get (car (last (drgnx-mock-cdp-received "Page.startScreencast"))) :params) :maxWidth)))
@@ -510,3 +583,130 @@ are pushed to STEERED as (NAME TEXT)."
                            '(live-start-browser live-stop-browser live-view live-take-over))
                    '("Live: Start Browser for Agents" "Live: Stop Browser for Agents" "Live: Watch Agents' Browser"
                      "Live: Take Over / Hand Back")))))
+
+;;;; The view follows its window through the state store (M11c-1-19)
+
+(defvar drgnx-live-test--sent nil "CDP method names the view sent, newest first.")
+
+(defmacro drgnx-live-test--in-window (spec &rest body)
+  "BODY with a Live view buffer (bound to (car SPEC)) shown in the selected window, which is bound to (cadr SPEC);
+the CDP calls it makes are collected in `drgnx-live-test--sent' (METHOD names, newest first)."
+  (declare (indent 1))
+  `(drgnx-test-with-state
+     (let* ((,(car spec) (generate-new-buffer " *live-state*")) (,(cadr spec) (selected-window))
+            (before (window-buffer ,(cadr spec))) (drgnx-live-test--sent nil))
+       (cl-letf (((symbol-function 'drgnx-live--send)
+                  (lambda (method &rest _) (push method drgnx-live-test--sent))))
+         (unwind-protect
+             (progn
+               (delete-other-windows)
+               (with-current-buffer ,(car spec) (drgnx-live-mode))
+               ,@body)
+           (delete-other-windows)
+           (set-window-buffer ,(cadr spec) before)
+           (kill-buffer ,(car spec)))))))
+
+
+(ert-deftest drgnx-live/resumes-when-shown-again-through-the-store ()
+  (drgnx-live-test--in-window (buf win)
+    (with-current-buffer buf (setq drgnx-live--session "S" drgnx-live--paused t))
+    (drgnx-state-subscribe 'windows-changed #'drgnx-live--shown-again)
+    (drgnx-state-sync)
+    ;; another buffer in the window: the view stays paused
+    (set-window-buffer win (get-buffer-create " *live-state-other*"))
+    (drgnx-state-sync) (drgnx-state--deliver-idle)
+    (should-not drgnx-live-test--sent)
+    (should (buffer-local-value 'drgnx-live--paused buf))
+    ;; the view in the window again: the screencast starts, and the window is recorded
+    (set-window-buffer win buf)
+    (drgnx-state-sync) (drgnx-state--deliver-idle)
+    (should (equal drgnx-live-test--sent '("Page.startScreencast")))
+    (should-not (buffer-local-value 'drgnx-live--paused buf))
+    (should (eq win (buffer-local-value 'drgnx-live--seen-window buf)))
+    (kill-buffer " *live-state-other*")))
+
+(ert-deftest drgnx-live/follows-its-window-width-through-the-store ()
+  (drgnx-live-test--in-window (buf win)
+    (set-window-buffer win buf)
+    (with-current-buffer buf (setq drgnx-live--session "S" drgnx-live--max-width (window-body-width win t)))
+    (drgnx-state-subscribe 'pane-resized #'drgnx-live--resized)
+    (drgnx-state-sync)
+    (split-window-right)                ; the view's window is narrower now
+    (should-not (= (window-body-width win t) (buffer-local-value 'drgnx-live--max-width buf)))
+    (drgnx-state-sync) (drgnx-state--deliver-idle)
+    (should (equal drgnx-live-test--sent '("Page.startScreencast" "Page.stopScreencast")))
+    (should (= (window-body-width win t) (buffer-local-value 'drgnx-live--max-width buf)))
+    ;; the same width again: nothing is sent
+    (setq drgnx-live-test--sent nil)
+    (drgnx-state--emit 'pane-resized (list :frame (selected-frame) :window win))
+    (drgnx-state--deliver-idle)
+    (should-not drgnx-live-test--sent)))
+
+(ert-deftest drgnx-live/an-event-for-another-window-is-ignored ()
+  (drgnx-live-test--in-window (buf win)
+    (with-current-buffer buf (setq drgnx-live--session "S" drgnx-live--paused t))
+    (let ((other (get-buffer-create " *live-state-plain*")))
+      (set-window-buffer win other)
+      (drgnx-live--shown-again (list :frame (selected-frame) :windows (list win)))
+      (drgnx-live--resized (list :frame (selected-frame) :window win))
+      (drgnx-live--shown-again nil)
+      (should-not drgnx-live-test--sent)
+      (should (buffer-local-value 'drgnx-live--paused buf))
+      (kill-buffer other))))
+
+(ert-deftest drgnx-live/an-event-for-its-neighbour-reaches-it ()
+  ;; A divider moved between two editor windows: the store hands an idle subscriber the last window's event only
+  (drgnx-live-test--in-window (buf win)
+    (set-window-buffer win buf)
+    (with-current-buffer buf (setq drgnx-live--session "S" drgnx-live--max-width 1))
+    (let ((right (split-window-right)))
+      (set-window-buffer right (get-buffer-create " *live-state-plain*"))
+      (drgnx-state-sync)
+      (drgnx-live--resized (list :frame (selected-frame) :window right))
+      (should (equal drgnx-live-test--sent '("Page.startScreencast" "Page.stopScreencast")))
+      (should (= (window-body-width win t) (buffer-local-value 'drgnx-live--max-width buf)))
+      (kill-buffer " *live-state-plain*"))))
+
+(ert-deftest drgnx-live/its-window-comes-from-the-store ()
+  (drgnx-live-test--in-window (buf win)
+    (set-window-buffer win buf)
+    (drgnx-state-sync)
+    (cl-letf (((symbol-function 'get-buffer-window) (lambda (&rest _) (error "asked the display"))))
+      (with-current-buffer buf
+        ;; nothing recorded: the store's windows say
+        (should (eq win (drgnx-live--window)))
+        ;; the event's window while it shows the view
+        (setq drgnx-live--seen-window win)
+        (should (eq win (drgnx-live--window)))
+        ;; a window that no longer shows it is not trusted
+        (let ((other (split-window-right)))
+          (set-window-buffer other (get-buffer-create " *live-state-plain*"))
+          (setq drgnx-live--seen-window other)
+          (drgnx-state-sync)
+          (should (eq win (drgnx-live--window)))
+          (should-not (eq win other)))
+        ;; no window shows it
+        (set-window-buffer win (get-buffer " *live-state-plain*"))
+        (drgnx-state-sync)
+        (should-not (drgnx-live--window))))
+    (kill-buffer " *live-state-plain*")))
+
+(ert-deftest drgnx-live/its-subscriptions-are-the-modules ()
+  (drgnx-test-with-state
+    (let ((drgnx-modules--table nil) (drgnx-modules--report nil) (drgnx-modules--state nil)
+          (drgnx-modules--stacks nil) (drgnx-modules--runs nil)
+          (drgnx-module--claims (make-hash-table :test 'equal)))
+      (setf (alist-get 'live-test drgnx-modules--table) (list :doc "test" :stage 'startup :setup #'drgnx-live--subscribe))
+      (should-not (drgnx-modules--run-setup 'live-test #'drgnx-live--subscribe))
+      (drgnx-modules--record 'live-test 'startup 0 'ok)
+      (should (eq 'idle (drgnx-state--lane-of 'windows-changed #'drgnx-live--shown-again)))
+      (should (eq 'idle (drgnx-state--lane-of 'pane-resized #'drgnx-live--resized)))
+      (drgnx-module-teardown 'live-test)
+      (should-not (drgnx-state--lane-of 'windows-changed #'drgnx-live--shown-again))
+      (should-not (drgnx-state--lane-of 'pane-resized #'drgnx-live--resized)))))
+
+(ert-deftest drgnx-live/no-window-hook-is-added ()
+  (with-temp-buffer
+    (drgnx-live-mode)
+    (should-not (memq #'drgnx-live--shown-again window-buffer-change-functions))
+    (should-not (memq #'drgnx-live--resized window-size-change-functions))))

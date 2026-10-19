@@ -1,7 +1,9 @@
 ;;; mod-grammars-test.el --- batch tests: tree-sitter grammars on request — a hint, never a prompt; installs as a job -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/lang/drgnx-grammars" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-grammars-test--with (&rest body)
   "BODY with no grammar available, prompts that fail, and the hints forgotten; buffers made in it killed after.
@@ -64,6 +66,16 @@ start `python-ts-mode', which on Emacs 31 asks to install a missing grammar (in 
         (drgnx-grammars--installed '(python)))
       (should (eq switched b)))))
 
+(ert-deftest drgnx-grammars/turned-off-the-remaps-and-file-modes-are-back ()
+  ;; python's grammar "is there": the setup remaps python-mode and (for yaml) adds a file mode; the teardown takes both away
+  (let ((remaps (copy-alist major-mode-remap-alist)) (modes (copy-alist auto-mode-alist)))
+    (cl-letf (((symbol-function 'treesit-language-available-p) (lambda (lang &rest _) (memq lang '(python yaml)))))
+      (drgnx-test-with-modules '(lang/grammars) :strict t
+                               (should (eq (alist-get 'python-mode major-mode-remap-alist) 'python-ts-mode))
+                               (should (eq (cdr (assoc "\\.ya?ml\\'" auto-mode-alist)) 'yaml-ts-mode))))
+    (should (equal major-mode-remap-alist remaps))
+    (should (equal auto-mode-alist modes))))
+
 (ert-deftest drgnx-grammars/a-build-that-fails-is-a-failure ()
   ;; treesit-install-language-grammar turns its errors into warnings: the job checks the grammar loads
   (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-gram" t))) (bin (concat tmp "bin/"))
@@ -117,5 +129,36 @@ start `python-ts-mode', which on Emacs 31 asks to install a missing grammar (in 
       (should (equal (drgnx-grammars-recipe 'tsx) '(tsx "https://github.com/tree-sitter/tree-sitter-typescript" nil "tsx/src")))
       (should-not (string-search "v0.23.6" (format "%S" (drgnx-grammars--job-command '(python)))))))
   (should-not (drgnx-grammars-recipe 'cobol)))
+
+(ert-deftest drgnx-grammars/the-watch-waits-for-the-job-and-ends-with-it ()
+  (drgnx-grammars-test--with
+    (drgnx-test-with-clock ()
+      (let ((job (list :status 'running)) (installed nil) (said nil))
+        (cl-letf (((symbol-function 'drgnx-jobs-get) (lambda (_id) job))
+                  ((symbol-function 'drgnx-grammars--installed) (lambda (langs) (push langs installed)))
+                  ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+          (drgnx-grammars--watch "J1" '(python))
+          (drgnx-grammars--watch "J1" '(python))                    ; the same job again: still one watch
+          (should (= 1 (seq-count (lambda (e) (equal (car e) '(grammars-watch . "J1"))) (drgnx-timer-pending))))
+          (drgnx-test-advance 10)
+          (should-not installed)                                    ; running: looked at, nothing done
+          (setq job (list :status 'exited :exit 0))
+          (drgnx-test-advance 2)
+          (should (equal installed '((python))))
+          (should (string-match-p "Language support installed: python" (car said)))
+          (should-not (drgnx-timer-active-p '(grammars-watch . "J1")))
+          (drgnx-test-advance 10)
+          (should (equal installed '((python)))))))))
+
+(ert-deftest drgnx-grammars/a-job-that-never-ends-is-given-up-after-an-hour ()
+  (drgnx-grammars-test--with
+    (drgnx-test-with-clock ()
+      (cl-letf (((symbol-function 'drgnx-jobs-get) (lambda (_id) (list :status 'running)))
+                ((symbol-function 'drgnx-grammars--installed) (lambda (_) (error "installed"))))
+        (drgnx-grammars--watch "J2" '(python))
+        (drgnx-test-advance 3598)
+        (should (drgnx-timer-active-p '(grammars-watch . "J2")))
+        (drgnx-test-advance 4)
+        (should-not (drgnx-timer-active-p '(grammars-watch . "J2")))))))
 
 ;;; mod-grammars-test.el ends here

@@ -207,7 +207,7 @@ from the connection (its own timeouts bound that); this deadline ends any other 
          (drgnx-lang--remote-wanted (make-hash-table :test #'equal))
          (drgnx-lang--remote-hinted nil) (drgnx-lang--remote-pending nil) (drgnx-lang--user-command nil)
          (drgnx-remote-may-prompt nil)
-         (drgnx-explorer--roots nil) (drgnx-explorer--cache (make-hash-table :test #'equal))
+         (drgnx-explorer--roots nil) (_cleared (drgnx-cache--clear 'explorer-listing))
          (drgnx-explorer--expanded (make-hash-table :test #'equal))
          (global-mode-string global-mode-string))
     (unwind-protect
@@ -225,7 +225,7 @@ from the connection (its own timeouts bound that); this deadline ends any other 
             (should (member (concat "podman: " name) asked))
             (write-region "hello from the container\n" nil file)
             (find-file file))
-          (setq drgnx-signal--editor-window (selected-window))
+          (drgnx-state-use-editor (selected-window))
           (should (equal (car (drgnx-explorer-roots)) root))                 ; first, before the default folder
           (with-current-buffer drgnx-explorer-buffer-name
             (should (string-search "▸ etc\n" (buffer-string)))
@@ -278,7 +278,7 @@ from the connection (its own timeouts bound that); this deadline ends any other 
          (state (make-temp-file "drgnx-m11c2-state" t))
          (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" state "/config") (concat "XDG_STATE_HOME=" state "/state"))
                                       process-environment))
-         (drgnx-wb--sections nil) (drgnx-signal--editor-window nil)
+         (drgnx-wb--sections nil)
          (drgnx-wb--areas (copy-tree drgnx-wb--areas))
          (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
          (display-buffer-alist nil) (display-buffer-overriding-action '(nil))

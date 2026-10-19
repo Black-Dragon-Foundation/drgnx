@@ -14,11 +14,40 @@ never stops Emacs from starting:
 
 **Preferences: Modules** (palette, Options menu) lists every module with its status — `ok`, `failed: …` (a module
 file that does not load says `(in <library>)` when the error came from a library it loads), `needs <package>`,
-`needs <module>`, `disabled` — its stage, how long it took, and whether it runs at the next start; `RET`
-turns the module on that row off (or back on) from the next start. A column header sorts by it (ms as a number, Stage
+`needs <module>`, `disabled`, `off` (turned off in this session) — its stage, how long it took, and whether it runs at
+the next start (`on`, `off`, or `off at next start` for a module that is still running); `RET` turns the module on
+that row off or back on, now (below). A column header sorts by it (ms as a number, Stage
 in the order of the stages); an external module's row says its path and features. `drgnx doctor` reports failed modules and modules
 waiting for packages, from the last session; when all is well it counts the modules that run and those that are
 off ("12 ok, 3 off"), and every answer says how old the report is ("from the last session, 2 h ago").
+
+## Turning a module off and on now
+
+`RET` (Turn On / Off) on a row in Preferences: Modules takes effect in the running Emacs; no restart.
+
+- **Off** undoes what the module's setup did (its hooks, advice, timers, keys, menus, options, faces), the status
+  becomes `off`, and the choice is written to `modules.eld` so the module stays off at the next start. The About
+  column then adds "code stays loaded until restart": the module's Lisp is still in memory (Emacs cannot unload
+  it), it just does nothing.
+- **Dependents.** When running modules need the one you turn off (`:requires`, directly or through another), drgnx
+  asks once: "Also turn off X, Y?". Yes turns the dependents off first, then the module; no changes nothing. Only
+  the module you chose is written to `modules.eld`; its dependents come back with it by turning each on (they say
+  `off` here until you do) and wait for it at the next start.
+- **On** writes `modules.eld` and, when the module's stage has already passed, runs its setup now. If its packages
+  are not installed or the modules it needs are not running, it waits and says so in the Status column
+  (`needs …`); if its stage has not come yet (`idle`, `first-file`, …) it runs when it does. Its keys and menu
+  entries come back with it, whatever its stage.
+- A problem while turning a module off (an undo that failed) is shown in the echo area, named by its label, and
+  kept for `drgnx doctor`.
+- **`restart` modules.** A module defined with `:teardown 'restart` (and external modules) is not turned off while
+  Emacs runs: the choice is only written, nothing is torn down and nothing is asked, the row says `off at next
+  start`, and it stops then. The same holds for a module that a running `restart` module needs: it cannot stop
+  before its dependent does. Modules that need a module chosen off keep running and say `off at next start` too; they
+  wait for it then. Turning the module on again just takes the choice back.
+- Onboarding's "Turn on Chat" keeps meaning "from the next start" and runs nothing now.
+
+From Lisp: `(drgnx-modules-turn-off MODULE &key dependents)` returns the running dependents (and does nothing) unless
+`:dependents t`; `(drgnx-modules-turn-on MODULE)`; neither ever prompts.
 
 ## Packages
 
@@ -41,10 +70,18 @@ Your choices live in `~/.config/drgnx/modules.eld` (`$DRGNX_CONFIG_DIR`):
 
 `:enabled` is absent until a module that is off until chosen is turned on, and is kept as it is when drgnx writes
 the file (a bootstrap or onboarding that writes modules.eld keeps it too). `:theme` is the colour theme Color Theme
-picked (ui/look writes it). modules.eld is format 2; an older drgnx keeps a backup and runs its defaults. An older format is migrated when it is read; a field that is not what drgnx
-expects (a typo) is dropped with a message in `*Messages*`; an unreadable file, or one from a newer drgnx, is
-reported and ignored (modules use their defaults) — never an error at start — and before drgnx next writes the
-file it keeps yours as `modules.eld.bak-<time>`.
+picked (ui/look writes it). modules.eld is format 2. An older format (the first, a bare list of disabled modules, or
+format 1) is read as it is and written as format 2 the next time drgnx changes the file, after a backup
+(`modules.eld.bak-<time>`). A file from a newer drgnx is used when it fits what this drgnx knows, but is never changed.
+A file with a mistake (it does not read, or a field is not what drgnx expects, say `:disabled` that is not a list of
+modules) is not used: the last copy that read well applies, or the defaults, and one notice says where the mistake is
+(Preferences: Open Config File… opens it there) — never an error at start. While it has a mistake drgnx does not
+write it: turning a module on or off, onboarding and Color Theme say why and change nothing, so what you typed is
+never lost. Your comments and keys of your own stay as they are when drgnx changes the file; two Emacs changing it
+at once both keep their change.
+
+The Next start column of Preferences: Modules shows what the file says now, so a change made in another Emacs shows
+at once; a module you turn off or on here takes effect at the next start. The file is listed in the generated [config reference](../reference/config.md).
 
 ## Modules that are off until chosen
 
@@ -57,7 +94,8 @@ default is turned off through `:disabled` as before. `drgnx bisect` leaves an of
 enabled. The shipped lock still lists its packages, so a fresh install that chooses the module before its first sync
 gets verified versions; once a sync has rewritten your own lock from what is installed, the module's packages are not
 in it until they are installed. From Lisp:
-`(drgnx-module-default-off-p MODULE)`, `(drgnx-module-disabled-p MODULE)` and `(drgnx-modules-set-enabled MODULE ON)`.
+`(drgnx-module-default-off-p MODULE)`, `(drgnx-module-disabled-p MODULE)`, `(drgnx-modules-set-enabled MODULE ON)` and,
+for any other change to the file, `(drgnx-modules-update-state FN)` (FN gets the file as it is and returns the new plist).
 
 ## Your own code: config.el
 
@@ -134,18 +172,21 @@ it to take a path only while that module runs.
 
 Every command goes through the registry (`drgnx-command-define`) and gets a key — or `:none` with a reason — in each
 key profile ([keys.md](keys.md)); faces inherit theme faces (no colours). See [core.md](../develop/core.md) for the registry.
+Every module must turn off cleanly: its setup changes global state only through doors that record it, and a
+`:teardown` undoes the rest — the rule and the test that checks it are in
+[core.md](../develop/core.md#writing-a-module-that-can-be-turned-off).
 
 ## Shipped modules
 
 | Module | Stage | What it gives you |
 |---|---|---|
-| `core/basics` | startup | quiet defaults (no bell, no dialogs, y/n, background compiler warnings only in the log), Open File, Save, Save As, New Untitled, Reopen Closed Tab, New Window, Close Window, Cancel / Close Popup (Escape), line numbers, trusted folders and their guards (Trust This Folder, the "restricted" mark; [security.md](security.md)) |
-| `core/workbench` | startup | the workbench: docks, panel, popups, chrome, groups, several windows, moving a window to another monitor, the layout across restarts (each window back on its monitor) ([workbench.md](workbench.md)) |
+| `core/basics` | startup | quiet defaults (no bell, no dialogs, y/n, background compiler warnings only in the log), Open File, Save, Save As, New Untitled, Reopen Closed Tab, New Window, Close Window, Cancel / Close Popup (Escape), line numbers, trusted folders and their guards (Trust This Folder, the "restricted" mark; [security.md](security.md)). Turned off, it stops at the next start (`restart`) |
+| `core/workbench` | startup | the workbench: docks, panel, popups, chrome, groups, several windows, moving a window to another monitor, the layout across restarts (each window back on its monitor) ([workbench.md](workbench.md)). Turned off, it stops at the next start (`restart`) |
 | `editor/editing` | startup | Fold / Unfold, Change Case (camelCase, snake_case, kebab-case, cycle — a single word says it has nothing to cycle), Expand / Shrink Selection (tree-sitter nodes when the buffer has a parser), Go to Line, Move Line Up / Down (the line or the selected lines), Select Line (again for the next), Select All, Duplicate Line, Delete Line, New Line Below / Above, Redo, Toggle Comment, Back / Forward, VS Code's cursor moves and deletes (Line Start — the first non-blank, then the start — / End, File Start / End, Word Left / Right, Delete Word Left, Delete to Line Start; Cmd+←, Option+←, Cmd+⌫ on a Mac, [keys.md](keys.md#on-a-mac)) |
-| `ui/look` | startup | Color Theme (remembered in modules.eld; a saved theme that does not load is said in `*Messages*`, and Color Theme picks another), Zen Mode (only the text; again to give the sidebar and panel back), Zoom In / Out / Reset (every window; then `+`, `-` or `0`) |
+| `ui/look` | startup | Color Theme (remembered in modules.eld; a saved theme that does not load is said in `*Messages*`, and Color Theme picks another), Zen Mode (only the text; again to give the sidebar and panel back), Zoom In / Out / Reset (every window; then `+`, `-` or `0`); turned off, it gives zen mode back and the theme enabled before it |
 | `ui/face` | startup | the frame and the buffers: no light menu bar or scroll bar, thin themed dividers, line numbers in code that never shift sideways, problems at the end of their line, ASCII glyphs on non-UTF-8 terminals; the status bar (segments you reorder, drop or add to), the top line (project, branch, the three keys that open everything), a dark title bar that follows the theme, quick help beside the symbol, a × and Esc/q on every help pane, popup and side pane, the start page in an empty editor; Toggle Menu Bar, Open the Menu (F10 as text while the bar is hidden), Look and Layout Settings ([face.md](face.md)) |
-| `lang/eglot` | startup | a language server (eglot) for code files whose server is installed — never a question; it stops when the project's last buffer closes; tree-sitter modes where the grammar is installed; Go to Definition, Find References, Rename Symbol, Show Hover (in the panel), Quick Fix, Problems (in the panel), Format Document (re-indents without a server) |
-| `lang/grammars` | startup | tree-sitter grammars on request: a file whose grammar is missing says so once (never asks); Install Language Support builds them in the background, then open files switch to their tree-sitter modes ([editing.md](editing.md)) |
+| `lang/eglot` | startup | a language server (eglot) for code files whose server is installed — never a question; it stops when the project's last buffer closes; tree-sitter modes where the grammar is installed; Go to Definition, Find References, Rename Symbol, Show Hover (in the panel), Quick Fix, Problems (in the panel), Format Document (re-indents without a server); turned off, it stops the running language servers (without waiting, and including any you started by hand), puts the tree-sitter remaps and its eglot / xref options back (an option you set in config.el stays), and leaves files already open in their tree-sitter mode |
+| `lang/grammars` | startup | tree-sitter grammars on request: a file whose grammar is missing says so once (never asks); Install Language Support builds them in the background, then open files switch to their tree-sitter modes (also when the module is turned on while files are open); turned off, the remaps and file modes go (a buffer already in a tree-sitter mode keeps it) ([editing.md](editing.md)) |
 | `extra/booster` | idle | language servers through `emacs-lsp-booster` when it is installed (eglot-booster, from Git); else nothing changes ([editing.md](editing.md)) |
 | `extra/format` | idle | format on save with the language's formatter when installed (apheleia; in the background, never blocking the save); Toggle Format on Save ([editing.md](editing.md)) |
 | `extra/debug` | idle | a debugger (dape, the Debug Adapter Protocol): Start Debugging (or continue), Toggle Breakpoint, Step Over / Into / Out, Stop — VS Code's F5, F9, F10, F11 (while a session runs), S-F11, S-F5 in that profile ([editing.md](editing.md)) |
@@ -154,15 +195,16 @@ key profile ([keys.md](keys.md)); faces inherit theme faces (no colours). See [c
 | `editor/sticky` | startup | sticky scroll: the function, class or block you are in, when its start has scrolled off, after the breadcrumb (tree-sitter or indentation; drgnx's own); Toggle Sticky Scroll ([editing.md](editing.md)) |
 | `editor/clipboard` | startup | clipboard managers: line and word kills stay in the kill ring, everything else reaches the system clipboard, a clipboard owner that does not answer is given up on after 1.5 s (X11 and Wayland), selecting text stops filling the history when Klipper, CopyQ or GPaste syncs it ([editing.md](editing.md#the-system-clipboard)) |
 | `editor/evil` | startup | Vim editing (evil), off until you choose a Vim key stack: normal / insert / visual states in editors, panels and forms in Emacs state, shells and commit messages in insert state, the state in the mode line and the cursor shape per state; evil-collection's keys for Magit, Dired and other third-party modes (flag `no-collection` leaves them out); multiple cursors in Emacs state; Toggle Modal Editing (`SPC u m`) turns it off and on for the session ([keys.md](keys.md#vim-keys)) |
-| `lang/markdown` | startup | Markdown (READMEs as GitHub Flavored Markdown): code blocks in their language, math; Markdown: Open Preview (pandoc, cmark or markdown when installed), Mermaid diagrams through mmdc ([editing.md](editing.md)) |
+| `lang/markdown` | startup | Markdown (READMEs as GitHub Flavored Markdown): code blocks in their language, math; Markdown: Open Preview (pandoc, cmark or markdown when installed), Mermaid diagrams through mmdc ([editing.md](editing.md)); turned off, its file modes and markdown-mode options go (an option you set in config.el stays) |
 | `tools/vc` | startup | Source Control (the project's changes), Diff with File, Blame — on Emacs' VC |
-| `tools/diff` | idle | the diff view: working tree, staged or branch vs base; split or unified, files folded, open the file at the line ([git.md](git.md)) |
-| `tools/replace` | idle | search and replace ([replace.md](replace.md)): the Search view in the sidebar and the find bar above an editor; text through ripgrep (else git grep or grep) in the background, symbols through the language server's rename; stale matches skipped, one Undo for every file |
+| `tools/diff` | idle | the diff view: working tree, staged or branch vs base; split or unified, files folded, open the file at the line; turning it off closes the views ([git.md](git.md)) |
+| `tools/replace` | startup | search and replace ([replace.md](replace.md)): the Search view in the sidebar and the find bar above an editor; text through ripgrep (else git grep or grep) in the background, symbols through the language server's rename; stale matches skipped, one Undo for every file |
 | `tools/layouts` | idle | layouts ([layouts.md](layouts.md)): Agent (the Explorer, the editor beside the current agent's chat, the Agents list), Editor, Zen (the text centred), Browser, and your own (Save Layout As…, in layouts.eld); Next Layout cycles them; switching back restores the arrangement you left |
-| `tools/commit-message` | idle | Git: Generate Commit Message — the staged diff through the `chat` role, never a trailer ([git.md](git.md)) |
-| `tools/review` | idle | Review Branch: the `review` route's agent reads this branch's diff; findings in the panel's Review tab ([git.md](git.md)) |
-| `tools/prs` | idle | the Pull Requests tab: stacks, forge's review view, Changes in the diff view, `#` in commit messages (needs forge) ([git.md](git.md)) |
-| `tools/terminal` | startup | New Terminal (eshell, in the panel's Terminal tab), Open Terminal Here (Explorer) |
+| `tools/commit-message` | idle | Git: Generate Commit Message — the staged diff through the `chat` role, never a trailer; turning it off cancels a message being written ([git.md](git.md)) |
+| `tools/review` | idle | Review Branch: the `review` route's agent reads this branch's diff; findings in the panel's Review tab; turning it off kills the reviewers still working and closes the tab ([git.md](git.md)) |
+| `tools/prs` | idle | the Pull Requests tab: stacks, forge's review view, Changes in the diff view, `#` in commit messages (needs forge); turning it off closes the tab ([git.md](git.md)) |
+| `tools/terminal` | startup | New Terminal (your shell in a real terminal, in the panel's Terminal tab: eat when `tools/terminal-eat` has run; eshell for a remote folder, on Windows, and until eat is synced — said once), New Eshell (eshell anywhere), Open Terminal Here (Explorer); the terminal's `EDITOR`, `VISUAL`, `GIT_EDITOR` and `DRGNX_SERVER_NAME` name this Emacs's server, so `git commit` and `drgnx` reach the Emacs hosting the terminal |
+| `tools/terminal-eat` | startup | the terminal behind New Terminal: [eat](https://codeberg.org/akib/emacs-eat) running `$SHELL` (needs eat: `drgnx sync`); an exited terminal closes its buffer; the active key profile decides which keys reach drgnx and which the shell (`C-p` is Quick Open only in the VS Code profile; the key sheet's "In the terminal"), `Ctrl+Shift+C/V` copy and paste ([keys](keys.md#in-the-terminal)); quitting drgnx asks once about programs still running in terminals; while a terminal prints a lot, drgnx takes the garbage-collection pause between eat's output batches, when no key was handled in the last moment (through the GC owner's `drgnx-gc-gap`: `drgnx-gc-gap-quiet`, 0.02 s; nil turns it off), instead of letting it land inside a keystroke; `drgnx doctor` names a missing terminfo or an eat that would ask when `stty` is missing; turning it off gives eat its own keys and options back |
 | `tools/search` | startup | Quick Open (project files), Search in Project (results in the panel), Go to Symbol (file, project), Find in File, Replace in Project, Recent Buffers (consult when installed); Semantic Search, Index Project, Index Status, Set Up Semantic Search, and a re-index 30 s after a file of an indexed project is saved ([search.md](search.md)) |
 | `tools/agents` | startup | Show Agents (the right dock's Agents tab: sessions and durable jobs), New Agent Session, Send to Agent (queued while it works), Stop Agent, Take Over Agent Session, Answer Agent, edit review hunk by hunk, Show Job Log, Stop Job ([agents.md](agents.md)) |
 | `tools/jobs` | startup | Show Job in Work (the Work cockpit filtered to a job: what needs you, its tasks, its decisions), Start Job from Plan, Approve Plan Job, Show Plan Jobs, Stop Plan Job; the ⚑ badge and notifications ([jobs.md](jobs.md)) |

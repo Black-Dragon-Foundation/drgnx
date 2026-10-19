@@ -17,6 +17,7 @@ how every drgnx UI change is developed and verified.
 | `bin/drgnx test --bench` | the workbench timed against treemacs and ibuffer in a GUI session on a 25k-file project — see [workbench.md](../guide/workbench.md#performance) | the host (needs mutter); treemacs from `$DRGNX_BENCH_ELPA` |
 | `bin/drgnx test --perf` / `--soak [MIN]` | input latency, frames, GC, startup and memory against budgets; the memory soak — see [perf.md](perf.md) | the host (needs mutter) |
 | `bin/drgnx test --install [NAME…]` | `install.sh` end to end in fresh distribution containers: source builds on Fedora 44, Debian 13, Ubuntu 26.04, packages on Fedora 45 and Arch; then the doctor, a second run (no-op), on Fedora packages emacs-nw installed beside emacs-pgtk (`emacs` must stay the pgtk build) and `--dry-run` (no changes) — see [install.md](../guide/install.md) | podman, docker or nerdctl; slow, network |
+| `bin/drgnx test --bootstrap [--fedora 44\|45]` | the exit test of a second machine ([second-machine.md](../guide/second-machine.md)): one command on a fresh Fedora container — see below | podman, docker or nerdctl; slow, network, 6 GB |
 
 `bin/drgnx check` runs the build and all of these host tiers in one go, in parallel where that is safe — see
 [check.md](check.md).
@@ -60,6 +61,9 @@ leak from one file into another (run the files in question this way; a test that
 earlier file left). `bin/drgnx check`'s `unit-timing` job uses it too (16 tests across all files). The runner unsets
 the variable for the tests themselves, so a test that runs the runner gets one Emacs per file unless it sets it. The
 GUI and live tiers and the tests that start an Emacs of their own keep their own runners.
+
+`bin/drgnx test --shuffle[=SEED]` shuffles each file's tests from a seed, and `--find-polluter TEST [FILE…]` bisects the
+tests before TEST down to the one that makes it fail ([check.md](check.md#the-order-of-the-tests---shuffle---find-polluter)).
 
 ### Native trampolines
 
@@ -135,6 +139,65 @@ checkout it compiles its scanner once first (interpreted, the scan takes ~110 ms
 read: no prompt, no display. The `drgnx-fingerprint/cheap-costs-under-2-ms` and `…/full-costs-under-50-ms` tests
 (tag `:timing`) hold the costs.
 
+The census that reads it around every test, `bin/drgnx test --leaks`, is described in
+[check.md](check.md#the-leak-census---leaks).
+
+### Tests that set modules up
+
+A test that needs a module's commands, hooks or registrations uses `drgnx-test-with-modules`
+(`test/fixtures/modules-fixture.el`; a test file loads it with
+`(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)`), not a hand-made macro that
+let-binds the registries the module touches:
+
+```elisp
+(drgnx-test-with-modules '(tools/browser) :strict t
+  (should (assq 'browser drgnx-layouts-pane-fillers)))
+```
+
+The first argument is a list of module names (evaluated): their files are loaded, and so are the modules they
+`:requires`. An element that is a string is a file to load instead, for a fake module a test writes to a temporary
+directory. `:stages '(startup idle)` sets up every shipped module of those stages as well. The module table, report
+and state are fresh, and `DRGNX_CONFIG_DIR` is a temporary directory, so the user's `modules.eld` is never read.
+Inside BODY, `drgnx-modules--table` holds only the selected modules and the modules they require, not every module file that was loaded.
+
+- **Teardown is part of the test.** After BODY (also when BODY signals) the modules are turned off last first through
+  `drgnx-module-teardown`, then `drgnx-modules-after-teardown-functions` run: every use of the helper tests the
+  module's teardown too. The product's after-teardown function re-applies the keys and menus from the registry; the
+  helper puts what it changed back (the applied keys, the menu items, the which-key labels, `menu-bar-update-hook`,
+  `context-menu-functions`, `context-menu-mode`, and the everywhere alist's place in `emulation-mode-map-alists`,
+  which the modal core keeps there even while it holds no key) before the `:strict` comparison, provided none of the keys or menus
+  were applied before the helper ran (in a live session they were: then the re-application stays). A teardown problem (an undo that failed, named by its label) fails the test. A module that
+  is `:teardown 'restart`, which stays on in a session, is unwound all the same (its cleanup stack, newest first):
+  its record must be exact.
+- **Registries come back.** Whatever happened to a variable of `drgnx-modules-fingerprint-registries` (a table, an
+  alist, a keymap) is put back from a copy taken before the setups, after the module files and the libraries their
+  setups load are loaded (a library's own top-level registrations, such as the panel areas, are the library's and
+  stay; `drgnx-test-modules/a-librarys-registrations-stay-for-the-next-module`): tables and keymaps in place, the rest with `set`. It is a
+  safety net for what no door recorded, not a way to avoid writing the teardown. Never `let`-bind such a variable in
+  a test that sets modules up: binding the variable of a library that is first loaded inside the `let` leaves it void
+  afterwards (`drgnx-test-modules/no-let-binding-trap`).
+- **`:strict t`** fails the test with the fingerprint diff (the lines `drgnx-modules-fingerprint-diff` names, each with
+  the file that defined the leaked function) when the state after the teardown differs from the state before the first
+  setup; features are excepted. New tests use it. The state before is taken after the libraries the setups load are
+  loaded — each module's `:packages` and the features its file `require`s by a quoted name — because a library's
+  top level is the library's and stays loaded; so the result does not depend on which test loaded it first, and
+  nothing a setup does comes before the snapshot. The timers the recorder leaves alone too — those whose function
+  drgnx does not define (`drgnx-modules--undoable-timer-p`), such as Emacs's own lazy ones (undo's boundary timer…)
+  and an ELPA library's — are not counted (`drgnx-test-modules/strict-skips-emacss-own-timers`,
+  `drgnx-test-modules/strict-blames-no-library-top-level`).
+- **`:packages hidden`** hides third-party features (those neither Emacs's own nor drgnx's) from `featurep` and
+  `locate-library` while the setups run, so a module that needs a package stays out whatever the machine has
+  installed. Use it only for tests of a result shape (the key snapshot): a later `require` of a hidden feature loads
+  it again and runs its top level again. With one Emacs per test file this is rarely needed.
+- **Own process for what cannot be undone** (evil loaded into a process, a global mode with no off path): a file in
+  its own Emacs, run from a test that checks the child's result. The helper for it, `drgnx-test-run-isolated`, arrives
+  with the isolated tests of the modal editing work.
+
+Prefer the `ert-x` helpers over hand-written equivalents in new and touched tests: `ert-with-temp-directory` (and
+`ert-with-temp-file`) for files, `ert-with-message-capture` for what a function says, `ert-simulate-command` to run a
+command as the command loop would, `ert-run-idle-timers` to run idle timers now. On Emacs 30.2 `(require 'ert-x)`;
+on 31 some of the macros are in `ert`, and the `require` is harmless.
+
 ## Sessions
 
 A session is GUI Emacs (pgtk) under `mutter --headless` inside its own `dbus-run-session`, with a virtual
@@ -160,7 +223,11 @@ Unix socket paths are limited to ~108 bytes; the hash keeps two state roots (say
 - Everything the session writes lands in its run directory (`user-emacs-directory`), or in the state root's
   shared eln cache (`ROOT/eln-cache`: native code and trampolines compiled once for every session; starting a
   session and `reap` delete `.eln` files unused — neither read nor written — for 30 days, and directories left
-  empty, so the cache of an Emacs no longer run goes too). An external
+  empty, so the cache of an Emacs no longer run goes too). In a built tree (`bin/drgnx build`) a session loads the
+  `.elc` files and Emacs native-compiles the ones its cache lacks in the background; a warning from that compile (a
+  function used without a `declare-function`) would open `*Warnings*` in a new window of the root frame, under the
+  running test's feet — `bin/drgnx build` compiles each file in an Emacs of its own, as the native compiler does, so
+  the build test fails on such a warning first ([core.md](core.md#build-drgnx-buildel)). An external
   configuration is only read: code directories (`lisp/`, `extras/`, `site-lisp/`, `tree-sitter/`, `snippets/`,
   `themes/`) are linked, `custom.el` is copied, packages load from its `elpa/`; history, recentf, places and
   other state files are not brought in.
@@ -174,6 +241,8 @@ Unix socket paths are limited to ~108 bytes; the hash keeps two state roots (say
   for every compositor, so nothing (fontconfig, Mesa's shader cache) is written to `~/.cache`; they are rebuilt every start.
 - No language servers: `DRGNX_NO_LANGUAGE_SERVERS=1`, so a scenario's fixture projects do not each start one (a run
   once had 12 pyrights); a test that needs a server sets it to "" in its session.
+- Not the login shell's environment: `DRGNX_NO_SHELL_ENV=1`, so a session keeps the `PATH` it was given
+  ([shell.md](../guide/shell.md#your-path-in-drgnx)); a test that wants it sets it to "" in its session.
 - Deterministic look: no startup screen, no blinking cursor, no bell, no dialog boxes.
 - Safety: treemacs drag-to-move is off.
 - Its own server, started (with the harness agent) by the generated `init.el` *before* the configuration's
@@ -189,6 +258,8 @@ Unix socket paths are limited to ~108 bytes; the hash keeps two state roots (say
 **Configurations:** `minimal` (stock Emacs, menu/tool/scroll bars off — `harness/init/minimal.el`), `gryphn`
 (the gryphn layer's config directory, `$DRGNX_GRYPHN_CONFIG` or `~/.config/emacs`), or any directory with an
 `init.el`. Emacs is launched with `--init-directory` and without `-Q` (which would skip the init file).
+A `minimal` session runs at drgnx's GC settings (`drgnx-gc-setup`, so timings do not include Emacs' 800 kB
+default collecting every few keystrokes); a session of any other configuration brings its own.
 The Emacs binary is `$DRGNX_EMACS`, else `emacs-pgtk`, else `emacs`.
 
 ## Driving a session
@@ -541,6 +612,52 @@ podman run --rm --memory 3g --memory-swap 3g -v "$PWD:/src:ro,Z" -w /src drgnx-t
 The runner gives the tests a temporary home, so nothing reaches `~`. `bin/drgnx test --ui` and CI do not build this
 image; there the two tests skip.
 
+## The second-machine exit test
+
+`bin/drgnx test --bootstrap [--fedora 44|45]` (default 45) proves what [second-machine.md](../guide/second-machine.md)
+promises: on a machine with nothing of drgnx's, **one command** brings back the configuration, the locked packages and
+the provider keys, and ends in a green doctor. It makes a snapshot of the working tree, as `--install` does, and a
+fixture configuration (`test/fixtures/bootstrap/config/` with this tree's `etc/drgnx.lock.eld`) as a git repository,
+cloned `--bare` beside the snapshot. Two containers follow, each with a memory cap (no swap beyond it):
+
+1. **The keys** (`fedora:N` + `age`, 3 GB, `test/bootstrap/make-secrets.sh`): an age identity, a key bundle of one
+   `openrouter` key (built at run time) encrypted to it as `secrets.age` and committed into the bare repository, and a
+   second repository whose `secrets.age` is locked with a passphrase (typed on a terminal made by `script`).
+2. **The second machine** (a fresh `fedora:N`, 6 GB, `test/bootstrap/in-container.sh`): as root it adds only what a
+   desktop has (`sudo`, a user `tester` with NOPASSWD, `dbus-daemon`, `gnome-keyring`, `libsecret`, `script`) and
+   checks that `tester`'s sudo works (if it does not, the container runtime is at fault: the run stops there and
+   prints the evidence: the error, `/etc/shadow`, the capabilities and SELinux state); as
+   `tester`, in a D-Bus session whose login keyring is unlocked with a password on stdin
+   (`gnome-keyring-daemon --unlock --components=secrets`, which works headless), it runs
+   `install.sh --yes --config … --identity …` and checks:
+   - exit 0; `~/.config/drgnx` is the fixture (`git status --porcelain` shows at most `drgnx.lock.eld`, which the first sync completes); every package in the data dir's
+     `elpa/` is a `NAME-VERSION` the lock pins (the minimal preset installs some of them, not all), and every package
+     the configuration needs (its modules' packages and what they require, read by `drgnx-pkg`) is there;
+   - `secret-tool lookup host openrouter.ai service drgnx` prints the key, and the key is nowhere else under `$HOME`,
+     `/tmp` or `/src` (the keyring's own store aside); age was installed by bootstrap, after the announced line;
+     the output's doctor step is `ok`; no rc file mentions drgnx (`--yes` never writes one);
+   - a second `drgnx bootstrap … --yes` exits 0 with no `changed` row;
+   - without a session bus the keys step is `skipped` ("no keyring");
+   - **the real terminal:** age is removed, the config dir and the key are deleted, and `drgnx bootstrap --config
+     …config-pass.git --step preflight --step config --step keys` runs on a pseudo-terminal (`script`) with a
+     stand-in `sudo` that asks for a password on `/dev/tty`. The test types `y` twice (the key import, the age
+     install), the sudo password and the age passphrase when each prompt appears (`test/bootstrap/pty-run.sh`), and
+     checks that the hand-back to `bin/drgnx` ran both, the key is back, and neither password reached the screen.
+     The driver answers the prompts in order, each only when it shows up after the previous reply was typed (a
+     question that mentions a passphrase is not age's prompt), and never hangs: a prompt (or the end) that does not
+     come within `PTY_STEP_TIMEOUT` seconds (300) stops the command, and the test fails naming what it waited for,
+     with the screen printed above.
+
+Fedora 44 builds Emacs from source and takes much longer. A test never touches your home: the snapshot, the fixture
+repositories and the log live in a fresh `mktemp -d` directory under `$TMPDIR` (`/tmp`), and the run refuses to start
+if that is under `$HOME`. Each container is named (`drgnx-bootstrap-PID-keys`, `-machine`) and runs within an hour
+(`timeout -k 30`); it is removed by name after its run and on any exit of the test, Ctrl-C or a time-out included
+(the container's bash ignores the TERM podman forwards), so none is left running. `--install` does the same
+(`drgnx-install-PID-NAME`). The directory is removed after a green run; after a failure it is kept and the run prints the
+log's path (`fNN.log`) and its last lines. A doctor row other than OK, or a WARN other than `security`, is a gap
+to fix in the code that owns it; the green list is never widened for this test. The weekly `Bootstrap` workflow runs it
+([ci.md](ci.md)).
+
 ## MCP server
 
 `bin/drgnx ui mcp` serves the harness as MCP tools over stdio (`harness/drgnx-ui-mcp.el`, batch Emacs — no
@@ -649,7 +766,7 @@ dirs) and drive the session through `harness/drgnx-tty-session.el`:
   `drgnx-tty-session-client SESS :env ENV :args ARGS` opens more clients, each in its own window, with extra
   variables (`TERM=…`) and emacsclient arguments (files, `-e FORM`). `drgnx-tty-session-pty-start` opens a client
   under Emacs's own pty that never answers a query: a silent terminal. `:keys PROFILE` (`vscode`, `emacs` or `vim`)
-  writes the session's `keys.eld` with that profile. `drgnx-tty-session-tmux SESS ARGS…` runs any tmux command on the
+  writes the session's `keys.eld` with that profile. A session with Emacs also gets `face.eld` with the start page dismissed ("Don't show this again"), so an empty editor keeps showing `*scratch*`, which the tests look at. `drgnx-tty-session-tmux SESS ARGS…` runs any tmux command on the
   session's server.
 - **Isolation:** every program runs under `env -i` with the GUI harness's allowlist. HOME, `XDG_CONFIG_HOME`,
   `XDG_DATA_HOME`, `XDG_CACHE_HOME` and `XDG_STATE_HOME` are in the run directory, and `TMUX` is unset. Every tmux
@@ -724,6 +841,56 @@ kkp tests and the kitty exit test run there too; without it they skip.
 `DRGNX_TEST_TTY_IMAGE` uses a prebuilt image. `bin/drgnx check` runs the tier as the `tty` job (a GUI job for the memory
 accounting, in the parallel phase) when tmux is installed; `--no-gui` leaves it out. The `Terminal tier` workflow runs
 the two container runs nightly ([ci.md](ci.md)).
+
+## Virtual time
+
+`test/fixtures/clock-fixture.el` runs Emacs's own timer lists on a clock the test moves, so no test waits in real time
+for a timer. Load it with `(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)`.
+
+```elisp
+(drgnx-test-with-clock ()                 ; or (drgnx-test-with-clock (:allow-pending t) ...)
+  (run-at-time 1 1 #'tick)
+  (drgnx-test-advance 3)                  ; tick ran at 1, 2 and 3
+  (run-with-idle-timer 0.2 nil #'step)
+  (drgnx-test-idle 2.5 :input-at 1.0))    ; one pause; you type 1 s into it
+```
+
+- **The macro.** The body runs with `timer-list` and `timer-idle-list` bound to nil, so every timer it starts, whoever
+  starts it, lands in lists of its own and the real ones are untouched. `float-time` and `current-time` without an
+  argument return virtual time (with an argument they are Emacs's own); `current-idle-time` is nil outside a pause and
+  the pause's length inside one; `input-pending-p` is nil, or t after `:input-at`. Virtual time starts 10^6 s after
+  the real time, so a real wait (`sleep-for`, `accept-process-output`) never finds a virtual timer ripe. Timers made
+  by `run-at-time` are stamped by Emacs from the real clock; a `:before` advice on `timer--activate` moves them onto
+  the virtual clock, so a timer made at virtual *v* with delay *d* is due at *v* + *d*, also after an advance (a delay
+  of 2 ms or more is rounded to the millisecond: Emacs stamps the timer a few microseconds before the advice runs).
+  Before the lists are swapped, the macro advises and unadvises each primitive it advises once, on scratch lists: Emacs 31
+  compiles a native advice trampoline on the first `advice-add` of a primitive, and logging that compile arms
+  `undo-auto--boundary-timer`. That timer, and any like it armed during the body, is cancelled by the macro (it is
+  Emacs's, not the code under test's), so it never counts as pending.
+  Nesting is an error. The times a test passes (`SECS` of advance and idle, `:input-at`) are snapped the same way: a
+  number within a microsecond of a whole millisecond is that exact millisecond, so `run-at-time 0.3` then
+  `drgnx-test-advance 0.3` always fires (0.3 is not exact in binary). `(float-time nil)` is the real time, `(float-time)`
+  virtual. A real-stamped timer with a delay over 500,000 s is not moved; idle timers are never moved (nothing runs
+  them in a batch real wait; the `--ui` tier has a real command loop).
+- **`drgnx-test-advance SECS`** moves virtual time forward, running each wall timer that comes due, in order, repeats
+  included (a timer is run by `timer-event-handler` while still on the list: popping it first makes the handler treat
+  it as cancelled).
+- **`drgnx-test-idle SECS`** is one pause: every idle timer is a candidate again, as when Emacs goes idle; each runs
+  once, in time order, the pause clock moving to its time (a repeating idle timer runs once per pause). A one-shot a
+  timer arms at `(time-add (current-idle-time) D)` runs again while due within the pause. Wall timers due in the
+  pause run too. From `:input-at` the pause ends and `input-pending-p` is t until the call returns. More than 1,000
+  firings in one pause is an error (a busy loop).
+- **The end.** A timer still pending when the body ends fails the test, naming the layer's timers as `(KEY OWNER KIND)`
+  (`drgnx-timer-pending`, when the timer layer is loaded) and then the raw functions; `:allow-pending t` allows it.
+  Then `drgnx-timer-reset` runs, when bound. The timer layer's seams (`drgnx-timer--now`, `drgnx-timer--idle-time`,
+  `drgnx-timer--input-pending-p`), when defined, follow the same clock, pause and input.
+- **What stays real:** `time-since`, `(time-subtract nil ...)` and `format-time-string` with no time read the real
+  clock; a test of code that uses them uses real time. `drgnx-test-real-time` is the real time as a float, for waits
+  and reports. `sleep-for`, `sit-for` and `accept-process-output` do not move virtual time (the test-determinism
+  design adds that).
+- **The contract with the timer layer** ([core.md](core.md), Timers): the layer's three seams follow the virtual
+  clock; a delay counts from the virtual start; one `drgnx-test-idle` call is one pause; pending layer timers are named
+  and cleared at the end.
 
 ## Modal tests
 

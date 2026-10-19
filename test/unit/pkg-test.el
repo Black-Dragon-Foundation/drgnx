@@ -2,6 +2,7 @@
 ;; Everything runs offline against package archives that are local directories, in temp dirs:
 ;; never the network, the user's ELPA, ~/.local/share/drgnx or ~/.config/drgnx.
 (require 'ert)
+(require 'drgnx-file)
 (require 'drgnx-paths)
 (require 'drgnx-pkg)
 
@@ -33,7 +34,6 @@
                                              (concat "XDG_CACHE_HOME=" ,root "cache")
                                              (concat "XDG_STATE_HOME=" ,root "state"))
                                        process-environment))
-          (drgnx-modules--state nil)
           (drgnx-pkg-shipped-lock (concat ,root "shipped.lock.eld"))   ; never the checkout's etc/
           (drgnx-pkg-native-compile nil)
           (package-check-signature nil)
@@ -392,11 +392,14 @@
               ((symbol-function 'drgnx-guard-mode) #'ignore) ((symbol-function 'drgnx-hooks-install) #'ignore)
               ((symbol-function 'drgnx--core-commands) #'ignore) ((symbol-function 'drgnx-keys-apply) #'ignore)
               ((symbol-function 'drgnx-surfaces-refresh) #'ignore))
-      (drgnx-init)
-      (should-not calls)
-      (setenv "DRGNX_SAFE" nil)
-      (drgnx-init)
-      (should (equal (sort calls (lambda (a b) (string< a b))) '(modules packages))))))
+      (unwind-protect
+          (progn
+            (drgnx-init)
+            (should-not calls)
+            (setenv "DRGNX_SAFE" nil)
+            (drgnx-init)
+            (should (equal (sort calls (lambda (a b) (string< a b))) '(modules packages))))
+        (drgnx-timer-cancel 'gc-idle)))))
 
 ;;;; Review fixes (M5 final review)
 
@@ -698,7 +701,7 @@
   ;; killed run is removed by the next sync.
   (drgnx-pkg-test--with root
     (let ((user (drgnx-user-dir)) (cache (drgnx-package-cache-dir)))
-      (cl-letf (((symbol-function 'pp) (lambda (&rest _) (error "Disk full"))))
+      (cl-letf (((symbol-function 'pp-to-string) (lambda (&rest _) (error "Disk full"))))
         (should-error (drgnx-pkg-write-lock '((aa :version "1.0")))))
       (should-not (file-exists-p (drgnx-pkg-lock-file)))
       (should-not (directory-files user nil "tmp"))
@@ -829,7 +832,7 @@ Returns the server process; its port is (process-contact SERVER :service)."
         (should (string-match-p "full-ai" (cadr err))))
       (should-not (file-exists-p (drgnx-pkg-shipped-lock-file)))
       (drgnx-pkg-test--write (concat root "config/modules.eld") '(:version 1))
-      (setq drgnx-modules--state nil)
+      (drgnx-config-reread 'modules)
       (drgnx-pkg-sync :modules-dir (concat root "mods") :archives `(("fx" . ,arch)))
       (drgnx-pkg-ship-lock (concat root "mods"))
       (let ((shipped (plist-get (drgnx-pkg--read-file (drgnx-pkg-shipped-lock-file)) :packages)))
@@ -1088,5 +1091,17 @@ fy with a newer fa 2.0.  Returns (FX FY FA-1.0-ENTRY)."
     (cl-letf (((symbol-function 'drgnx-pkg-sync) (lambda (&rest a) (push a calls) '(:ok t))))
       (with-output-to-string (should (eql (drgnx-pkg-cli-run '("sync" "--prune")) 0)))
       (should (equal (car calls) '(:prune t))))))
+
+(ert-deftest drgnx-pkg/the-service-unit-goes-through-the-file-layer ()
+  (drgnx-pkg-test--with root
+    (let* ((dir (concat root "units/more")) (file (concat dir "/drgnx.service"))
+           (calls nil) (orig (symbol-function 'drgnx-file-write-text)))
+      (cl-letf (((symbol-function 'drgnx-file-write-text)
+                 (lambda (f text &rest args) (push f calls) (apply orig f text args))))
+        (let ((unit (drgnx-pkg-service-unit dir)))
+          (should (equal calls (list file)))
+          (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) unit))))
+      (should (equal (directory-files dir nil "\\`[^.]\\|\\`\\.[^.]") '("drgnx.service"))))))
+
 
 ;;; pkg-test.el ends here

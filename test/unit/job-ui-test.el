@@ -1,8 +1,12 @@
 ;;; job-ui-test.el --- batch tests: the badge, notifications and the Plan Job commands (a job's parts in the cockpit: mod-cockpit-cards-test.el) -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx)
+(require 'drgnx-timer)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/memo-alloc-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-job-ui" drgnx-dir) nil t)
 (require 'drgnx-hub)                                   ; before any stub of its functions
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-job-ui-test--summary
   ;; as `job/status' gives it back through JSON: nil as :null, false as :false
@@ -33,6 +37,19 @@
       (drgnx-job-ui--recount)
       (should (equal drgnx-job-ui--badge "")))))
 
+(ert-deftest drgnx-job-ui/an-unchanged-badge-allocates-nothing ()
+  (let ((drgnx-job-ui--badge (format " ⚑%d" 2)))
+    (let ((s (drgnx-job-ui--badge-segment)))
+      (should (equal (substring-no-properties s) " ⚑2"))
+      (should (eq 'warning (get-text-property 1 'face s)))
+      (should (eq s (drgnx-job-ui--badge-segment)))
+      (should (= 0 (drgnx-memo-fixture-alloc (lambda () (drgnx-job-ui--badge-segment)) 'drgnx-job-ui--badge-segment))))
+    ;; a new count builds the string again; none is the empty string
+    (setq drgnx-job-ui--badge (format " ⚑%d" 3))
+    (should (equal (substring-no-properties (drgnx-job-ui--badge-segment)) " ⚑3"))
+    (setq drgnx-job-ui--badge "")
+    (should (equal (drgnx-job-ui--badge-segment) ""))))
+
 (ert-deftest drgnx-job-ui/a-new-card-notifies-once ()
   ;; when and what is sent, whatever the platform: the send itself (osascript on macOS, D-Bus elsewhere) is stubbed
   (let ((sent nil) (drgnx-job-ui-notify t) (drgnx-job-ui--notified (make-hash-table :test #'equal)))
@@ -52,18 +69,33 @@
         (should (= 1 (length sent)))))))
 
 (ert-deftest drgnx-job-ui/the-commands-are-registered ()
-  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
-    (funcall (plist-get (alist-get 'tools/jobs drgnx-modules--table) :setup))
-    (dolist (id '(job-show job-start job-approve job-status job-stop))
-      (should (drgnx-commands-get id))
-      (dolist (profile '("vscode" "emacs" "vim"))
-        (should (with-temp-buffer (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir))
-                                  (search-forward (format "(%s " id) nil t)))))
-    ;; M12f: a job shows in the Work cockpit; the window of its own is gone (closing a frame forgets nothing here)
-    (should (equal (drgnx-cmd-title (drgnx-commands-get 'job-show)) "Show Job in Work…"))
-    (should-not (memq 'drgnx-job-ui--frame-deleted delete-frame-functions))
-    (should-not (fboundp 'drgnx-job-ui--frame))
-    (should-not (fboundp 'drgnx-job-ui--layout))))
+  (drgnx-test-with-modules '(tools/jobs) :strict t
+                           (dolist (id '(job-show job-start job-approve job-status job-stop))
+                             (should (drgnx-commands-get id))
+                             (dolist (profile '("vscode" "emacs" "vim"))
+                               (should (with-temp-buffer (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir))
+                                                         (search-forward (format "(%s " id) nil t)))))
+                           ;; M12f: a job shows in the Work cockpit; the window of its own is gone (closing a frame forgets nothing here)
+                           (should (equal (drgnx-cmd-title (drgnx-commands-get 'job-show)) "Show Job in Work…"))
+                           (should-not (memq 'drgnx-job-ui--frame-deleted delete-frame-functions))
+                           (should-not (fboundp 'drgnx-job-ui--frame))
+                           (should-not (fboundp 'drgnx-job-ui--layout))))
+
+(ert-deftest drgnx-job-ui/turned-off-it-hears-the-hub-no-more ()
+  ;; the badge hears the hub through its mode and counts again through layer keys; turned off, both end, and the
+  ;; last count goes (the status bar's jobs segment reads it)
+  (cl-letf (((symbol-function 'drgnx-hub-call) #'ignore))
+    (drgnx-test-with-modules '(tools/jobs) :strict t
+                             (should (memq #'drgnx-job-ui--event drgnx-hub-event-functions))
+                             (drgnx-job-ui--schedule-recount)
+                             (should (drgnx-timer-active-p 'job-ui-recount))
+                             (drgnx-job-ui-note-jobs (list drgnx-job-ui-test--summary))
+                             (should (eql (drgnx-job-ui-needs-you) 3))
+                             (drgnx-module-teardown 'tools/jobs)
+                             (should-not (memq #'drgnx-job-ui--event drgnx-hub-event-functions))
+                             (should-not (drgnx-timer-active-p 'job-ui-recount))
+                             (should-not (drgnx-timer-active-p 'job-ui-recount-idle))
+                             (should-not (drgnx-job-ui-needs-you)))))
 
 ;; From the old UI list ("stale status values after gry failures"): a status that cannot be read says nothing
 ;; instead of keeping the last count.
@@ -174,5 +206,53 @@
       (drgnx-job-ui-badge-mode -1)
       (should-not (memq #'drgnx-job-ui--badge-clear drgnx-hub-disconnect-functions))
       (should-not (memq #'drgnx-job-ui--event drgnx-hub-event-functions)))))
+
+(defun drgnx-job-ui-test--fires ()
+  "How many idle timers on the list are the timer layer's."
+  (let ((n 0)) (dolist (tm timer-idle-list n) (when (eq (timer--function tm) #'drgnx-timer--fire) (setq n (1+ n))))))
+
+(ert-deftest drgnx-job-ui/the-recount-timer-has-an-owner ()
+  ;; B1: the 60 s repeat belongs to the module's setup, so a second setup (or a reload) cannot stack another.
+  (let* ((state (make-temp-file "drgnx-job-ui-state" t))
+         (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment))
+         (drgnx-modules--table (list (assq 'tools/jobs drgnx-modules--table)))
+         (drgnx-modules--report nil) (drgnx-modules--stacks nil) (drgnx-modules--runs nil) (drgnx-modules--features nil)
+         (setup (plist-get (cdar drgnx-modules--table) :setup)))
+    (unwind-protect
+        (drgnx-test-with-clock (:allow-pending t)
+          (dotimes (_ 3)
+            (should-not (drgnx-modules--run-setup 'tools/jobs setup))
+            (drgnx-modules--record 'tools/jobs 'startup 0 'ok)
+            (should (drgnx-timer-active-p 'job-ui-recount-idle))
+            (should (= 1 (drgnx-job-ui-test--fires)))
+            (should-not (drgnx-module-teardown 'tools/jobs))
+            (should-not (drgnx-timer-active-p 'job-ui-recount-idle))
+            (should (= 0 (drgnx-job-ui-test--fires)))
+            (should (= 0 (drgnx-timer-cancel-owner 'tools/jobs))))
+          ;; the 60 s idle repeat is unchanged: once per pause
+          (should-not (drgnx-modules--run-setup 'tools/jobs setup))
+          (let ((idle (seq-find (lambda (tm) (eq (timer--function tm) #'drgnx-timer--fire)) timer-idle-list)))
+            (should idle)
+            (should (= 60 (float-time (timer--time idle))))
+            (should (timer--repeat-delay idle)))
+          (drgnx-modules--record 'tools/jobs 'startup 0 'ok)   ; else the teardown finds it not running: the badge would stay
+          (drgnx-module-teardown 'tools/jobs)
+          (mapc #'cancel-timer (append timer-list timer-idle-list)))
+      (delete-directory state t))))
+
+(ert-deftest drgnx-job-ui/events-recount-once-and-the-module-owns-the-recount ()
+  ;; a burst of job events is one recount a second later; once the module is off, a pending recount never runs
+  (let ((drgnx-modules--runs (list (list 'tools/jobs 'tools/jobs))) (n 0))
+    (drgnx-test-with-clock ()
+      (cl-letf (((symbol-function 'drgnx-job-ui--recount) (lambda () (cl-incf n))))
+        (dotimes (_ 5) (drgnx-job-ui--schedule-recount))
+        (should (equal (mapcar #'car (drgnx-timer-pending)) '(job-ui-recount)))
+        (should (eq (cadar (drgnx-timer-pending)) 'tools/jobs))
+        (drgnx-test-advance 1.1)
+        (should (= n 1))
+        (drgnx-job-ui--schedule-recount)
+        (should (= 1 (drgnx-timer-cancel-owner 'tools/jobs)))   ; the module is turned off
+        (drgnx-test-advance 2)
+        (should (= n 1))))))
 
 ;;; job-ui-test.el ends here

@@ -9,9 +9,10 @@
 ;; kinds of home `right', stacked with `happened'.  The filter is the graph's (`drgnx-cockpit-graph-current-filter')
 ;; with a `:job': the graph then shows that job's nodes and their ancestors.  The parts talk to the hub only
 ;; asynchronously, as the job window did: hub events schedule a refresh (at most one per 0.5 s), only while a part
-;; shows (hidden, it refreshes when one shows), and a part is drawn again only when what it shows changed.  The
-;; filter is kept with the saved workbench (`:cockpit-filter'); a workbench saved with a job window restores it as
-;; the cockpit filtered to that job.  See docs/guide/jobs.md.
+;; shows (the workbench state store says so; a part that shows again refreshes, and with none showing they keep no
+;; timer).  Each part is a view (type `cockpit-cards'): a row per part of what it shows, drawn again only when that
+;; changed.  The filter is kept with the saved workbench (`:cockpit-filter'); a workbench saved with a job window
+;; restores it as the cockpit filtered to that job.  See docs/guide/jobs.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -20,7 +21,11 @@
 (require 'button)
 (require 'drgnx-registry)
 (require 'drgnx-panes)
+(require 'drgnx-timer)
+(require 'drgnx-state)
+(require 'drgnx-view)
 (require 'drgnx-coord)                                ; Message…: the user's text, left in the store
+(require 'drgnx-cockpit-model)                        ; `drgnx-cockpit-shown-p', `drgnx-cockpit-row-cell'
 ;; the jobs module's count of what needs you (the badge's), beside this file
 (unless (featurep 'drgnx-job-ui)
   (load (expand-file-name "drgnx-job-ui" (file-name-directory (or load-file-name buffer-file-name))) nil t))
@@ -50,10 +55,10 @@
 (defconst drgnx-cockpit-cards-buffer-name "*Needs You*")
 (defconst drgnx-cockpit-decisions-buffer-name "*Decisions*")
 
-(defvar drgnx-cockpit-cards--timer nil "The refresh on its way: one at a time.")
-(defvar drgnx-cockpit-cards--retry nil "The look, 10 s on, for a hub that was not there.")
-(defvar drgnx-cockpit-cards--stale nil "Something changed while no part showed: they refresh when one shows.")
-(defvar-local drgnx-cockpit-cards--shown :none "What this part shows, as last drawn: the same again draws nothing.")
+(defvar-local drgnx-cockpit-cards--cells nil
+  "The rows this part's view shows: hash KEY → (SIG GENERATION . TEXT) (`drgnx-cockpit-row-cell'), SIG what the row
+shows of the hub's answer.  What needs you: :cards and :tasks (one job), or :head and (:job ID) per job, or :no-hub;
+the decision log: :log, or :no-log.")
 
 (defun drgnx-cockpit-cards--v (x) (unless (memq x '(:null :false)) x))
 
@@ -86,6 +91,7 @@ spaces (a dock is narrow: a button is never cut in two)."
   (setq-local word-wrap t)
   (setq-local revert-buffer-function (lambda (&rest _) (drgnx-cockpit-cards-refresh)))
   (add-hook 'kill-buffer-hook #'drgnx-cockpit-cards--unwatch nil t)
+  (drgnx-view-attach 'cockpit-cards)
   (drgnx-cockpit-cards--watch))
 
 (defun drgnx-cockpit-cards--buffer (part)
@@ -94,7 +100,6 @@ spaces (a dock is narrow: a button is never cut in two)."
     (or (get-buffer name)
         (with-current-buffer (get-buffer-create name)
           (if (eq part 'cards) (drgnx-cockpit-cards-mode) (drgnx-cockpit-decisions-mode))
-          (setq drgnx-cockpit-cards--stale t)
           (current-buffer)))))
 
 (defun drgnx-cockpit-cards-buffer () "What needs you's buffer." (drgnx-cockpit-cards--buffer 'cards))
@@ -214,75 +219,87 @@ spaces (a dock is narrow: a button is never cut in two)."
                                         ((equal (plist-get d :status) "proposed") 'italic)
                                         (t 'default))))))))
 
-(defun drgnx-cockpit-cards--insert-all (jobs n)
-  "What needs you of every job of JOBS (summaries), each under its name — a button that filters the cockpit to it;
-N things in all."
+(defun drgnx-cockpit-cards--insert-all-head (n none)
+  "The head of what needs you of every job: N things in all; NONE: nothing needs you."
   (insert (propertize (format "What needs you — every job: %d\n\n" n) 'face 'bold))
-  (unless jobs (insert "Nothing needs you.\n"))
-  (dolist (j jobs)
-    (let ((id (plist-get j :id)))
-      (unless (looking-back "\n\n" 2) (insert "\n"))  ; a blank line between jobs
-      (drgnx-cockpit-cards--button id (lambda () (drgnx-cockpit-show-job id)) 'help-echo "This job alone, in the Work cockpit")
-      (insert (propertize (format "%s  [%s]\n" (or (drgnx-cockpit-cards--v (plist-get j :title)) "") (plist-get j :status)) 'face 'bold))
-      (drgnx-cockpit-cards--insert-items id j))))
+  (when none (insert "Nothing needs you.\n")))
+
+(defun drgnx-cockpit-cards--insert-job (id j)
+  "What needs you of job ID (its summary J), under its name — a button that filters the cockpit to it — and a blank
+line after."
+  (drgnx-cockpit-cards--button id (lambda () (drgnx-cockpit-show-job id)) 'help-echo "This job alone, in the Work cockpit")
+  (insert (propertize (format "%s  [%s]\n" (or (drgnx-cockpit-cards--v (plist-get j :title)) "") (plist-get j :status)) 'face 'bold))
+  (drgnx-cockpit-cards--insert-items id j)
+  (unless (looking-back "\n\n" 2) (insert "\n")))   ; a blank line between jobs
 
 (defun drgnx-cockpit-cards--insert-no-log ()
   (insert (propertize "Decisions\n\n" 'face 'bold)
           "Each job keeps its own decision log: Show Job in Work… (job-show), or a job's name in What needs you.\n"))
 
-(defun drgnx-cockpit-cards--put (part shown draw)
-  "Draw PART with DRAW (a function inserting at point) unless it shows SHOWN already, when its buffer lives (a part
-nobody opened is not made).  Its windows keep their start and point where the text still reaches."
+(defun drgnx-cockpit-cards--text (draw)
+  "What DRAW (a function inserting at point) inserts, as a row's text ending in a newline."
+  (with-temp-buffer
+    (funcall draw)
+    (unless (bolp) (insert "\n"))
+    (buffer-string)))
+
+(defun drgnx-cockpit-cards--put (part rows)
+  "Make ROWS PART's rows, when its buffer lives (a part nobody opened is not made): ROWS is ((KEY SIG DRAW)…), SIG what
+the row shows and DRAW a function inserting it.  A row whose SIG is the one drawn is not drawn again
+\(`drgnx-cockpit-row-cell'); the view draws the others while the part shows, its windows keeping their place."
   (when-let* ((b (get-buffer (if (eq part 'cards) drgnx-cockpit-cards-buffer-name drgnx-cockpit-decisions-buffer-name)))
-              ((not (equal shown (buffer-local-value 'drgnx-cockpit-cards--shown b)))))
+              (view (buffer-local-value 'drgnx-view b)) ((drgnx-view-p view)))
     (with-current-buffer b
-      (setq drgnx-cockpit-cards--shown shown)
-      (let* ((inhibit-read-only t) (pt (point))
-             (windows (get-buffer-window-list (current-buffer) nil t))
-             (keep (mapcar (lambda (w) (list w (window-start w) (window-point w))) windows)))
-        (erase-buffer)
-        (funcall draw)
-        (goto-char (min pt (point-max)))
-        (drgnx-wb-with-owned-windows windows
-          (pcase-dolist (`(,w ,s ,p) keep)
-            (set-window-start w (min s (point-max)) t)
-            (set-window-point w (min p (point-max)))))
-        (set-buffer-modified-p nil)))))
+      (let ((old drgnx-cockpit-cards--cells) (cells (make-hash-table :test #'equal)) (keys nil))
+        (pcase-dolist (`(,key ,sig ,draw) rows)
+          (puthash key (drgnx-cockpit-row-cell old key sig (lambda () (drgnx-cockpit-cards--text draw))) cells)
+          (push key keys))
+        (setq drgnx-cockpit-cards--cells cells)
+        (drgnx-view-sync-rows view (nreverse keys) (lambda (key) (cadr (gethash key cells))))))))
+
+(defun drgnx-cockpit-cards--render-row (key)
+  "The RENDER of both parts' views: KEY's row (`drgnx-cockpit-cards--cells')."
+  (cddr (gethash key drgnx-cockpit-cards--cells)))
+
+(drgnx-view-define 'cockpit-cards :render #'drgnx-cockpit-cards--render-row :delay 0 :key-test 'equal)
 
 (defun drgnx-cockpit-cards--draw (job summary)
   "Draw JOB's SUMMARY (as `job/status' gives it): what needs you — its cards and messages, then its tasks, agents
-and spend — and its decision log, each only when its part of the job changed."
-  (drgnx-cockpit-cards--put 'cards (list job (drgnx-cockpit-cards--part summary 'cards) (drgnx-cockpit-cards--part summary 'tasks))
-                            (lambda ()
-                              (drgnx-cockpit-cards--insert-cards job summary)
-                              (insert "\n")
-                              (drgnx-cockpit-cards--insert-tasks job summary)))
-  (drgnx-cockpit-cards--put 'log (list job (drgnx-cockpit-cards--part summary 'log))
-                            (lambda () (drgnx-cockpit-cards--insert-log job summary))))
+and spend — and its decision log; a row only when its part of the job changed."
+  (drgnx-cockpit-cards--put 'cards
+                            (list (list :cards (list job (drgnx-cockpit-cards--part summary 'cards))
+                                        (lambda () (drgnx-cockpit-cards--insert-cards job summary) (insert "\n")))
+                                  (list :tasks (list job (drgnx-cockpit-cards--part summary 'tasks))
+                                        (lambda () (drgnx-cockpit-cards--insert-tasks job summary)))))
+  (drgnx-cockpit-cards--put 'log (list (list :log (list job (drgnx-cockpit-cards--part summary 'log))
+                                             (lambda () (drgnx-cockpit-cards--insert-log job summary))))))
 
 (defun drgnx-cockpit-cards--draw-all (jobs)
   "Draw what needs you of every job of JOBS (as `job/status' lists them) that waits on the user
-(`drgnx-job-ui-waiting-p'), and tell the badge the count (`drgnx-job-ui-note-jobs': one count, no second question);
-the decision log says it is per job."
+\(`drgnx-job-ui-waiting-p'), and tell the badge the count (`drgnx-job-ui-note-jobs': one count, no second question);
+the decision log says it is per job.  A row per job, drawn again only when what it shows of it changed."
   (drgnx-job-ui-note-jobs jobs)
   (let ((open (seq-filter #'drgnx-job-ui-waiting-p jobs)) (n (car (drgnx-job-ui-needs-you-count jobs))))
-    (drgnx-cockpit-cards--put 'cards (cons n (mapcar (lambda (j) (list (plist-get j :id) (plist-get j :title) (plist-get j :repo)
-                                                                       (drgnx-cockpit-cards--part j 'cards)))
-                                                     open))
-                              (lambda () (drgnx-cockpit-cards--insert-all open n)))
-    (drgnx-cockpit-cards--put 'log :all #'drgnx-cockpit-cards--insert-no-log)))
+    (drgnx-cockpit-cards--put 'cards
+                              (cons (list :head (list n (null open)) (lambda () (drgnx-cockpit-cards--insert-all-head n (null open))))
+                                    (mapcar (lambda (j)
+                                              (let ((id (plist-get j :id)))
+                                                (list (list :job id)
+                                                      (list id (plist-get j :title) (plist-get j :repo) (drgnx-cockpit-cards--part j 'cards))
+                                                      (lambda () (drgnx-cockpit-cards--insert-job id j)))))
+                                            open)))
+    (drgnx-cockpit-cards--put 'log (list (list :no-log :all #'drgnx-cockpit-cards--insert-no-log)))))
 
 (defun drgnx-cockpit-cards--no-hub (why)
   "The hub did not answer (WHY): what needs you says so, and the parts look again 10 s on."
-  (drgnx-cockpit-cards--put 'cards (list :no-hub why)
-                            (lambda () (insert "No drgnx hub — what jobs need of you appears when it runs (drgnx hub start).\n"
-                                               (format "(%s)\n" why))))
-  (unless (timerp drgnx-cockpit-cards--retry)
-    (setq drgnx-cockpit-cards--retry (run-at-time 10 nil #'drgnx-cockpit-cards--look-again))))
+  (drgnx-cockpit-cards--put 'cards
+                            (list (list :no-hub (list :no-hub why)
+                                        (lambda () (insert "No drgnx hub — what jobs need of you appears when it runs (drgnx hub start).\n"
+                                                           (format "(%s)\n" why))))))
+  (drgnx-timer-soon 'cockpit-cards-retry 10 #'drgnx-cockpit-cards--look-again :owner :core))
 
 (defun drgnx-cockpit-cards--look-again ()
   "The retry of `drgnx-cockpit-cards--no-hub' (a timer)."
-  (setq drgnx-cockpit-cards--retry nil)
   (drgnx-cockpit-cards--schedule 0))
 
 ;;;; Talking to the hub (never waiting)
@@ -327,31 +344,36 @@ draw what changed."
   (unless (delq (current-buffer) (drgnx-cockpit-cards--buffers))
     (remove-hook 'drgnx-hub-event-functions #'drgnx-cockpit-cards--hub-event)
     (remove-hook 'drgnx-hub-disconnect-functions #'drgnx-cockpit-cards--hub-gone)
-    (dolist (tm (list drgnx-cockpit-cards--timer drgnx-cockpit-cards--retry)) (when (timerp tm) (cancel-timer tm)))
-    (setq drgnx-cockpit-cards--timer nil drgnx-cockpit-cards--retry nil)))
+    (drgnx-timer-cancel 'cockpit-cards-refresh)
+    (drgnx-timer-cancel 'cockpit-cards-retry)))
 
-(defun drgnx-cockpit-cards--visible-p ()
-  "Whether a part shows in a window of a visible frame."
-  (seq-some (lambda (b) (get-buffer-window b 'visible)) (drgnx-cockpit-cards--buffers)))
+(defun drgnx-cockpit-cards--shown-p ()
+  "Whether a part shows: a window of a visible frame shows its buffer, as the workbench state store recorded it
+\(`drgnx-cockpit-shown-p')."
+  (seq-some #'drgnx-cockpit-shown-p (drgnx-cockpit-cards--buffers)))
 
-(defun drgnx-cockpit-cards--schedule (&optional delay)
+(defun drgnx-cockpit-cards--schedule (&optional delay shown)
   "Refresh the parts within DELAY seconds (0.5): one refresh however many calls come meanwhile, only while a part
-shows (hidden, they refresh when one shows).  Cheap: called from every event."
-  (when (drgnx-cockpit-cards--buffers)
-    (cond ((not (drgnx-cockpit-cards--visible-p)) (setq drgnx-cockpit-cards--stale t))
-          ((not (timerp drgnx-cockpit-cards--timer))
-           (setq drgnx-cockpit-cards--timer (run-at-time (or delay 0.5) nil #'drgnx-cockpit-cards--tick))))))
+shows (a part that shows again refreshes: `drgnx-cockpit-cards--pane-shown').  SHOWN: the caller has just shown a
+part, in this command, before the store saw it.  Cheap: called from every event."
+  (when (or shown (drgnx-cockpit-cards--shown-p))
+    (drgnx-timer-soon 'cockpit-cards-refresh (or delay 0.5) #'drgnx-cockpit-cards-refresh :owner :core)))
 
-(defun drgnx-cockpit-cards--tick ()
-  "The scheduled refresh (a timer).  Parts hidden since it was scheduled only note they are stale."
-  (setq drgnx-cockpit-cards--timer nil)
-  (if (drgnx-cockpit-cards--visible-p)
-      (progn (setq drgnx-cockpit-cards--stale nil) (drgnx-cockpit-cards-refresh))
-    (setq drgnx-cockpit-cards--stale t)))
+(defun drgnx-cockpit-cards--pane-shown (data)
+  "`pane-shown', on the store's `now' lane: a part shows — it refreshes soon (what changed while none showed)."
+  (when (memq (plist-get data :kind) '(needs-you decisions)) (drgnx-cockpit-cards--schedule 0)))
 
-(defun drgnx-cockpit-cards--on-show (_window)
-  "A part shows: catch up with what changed while none showed (soon, never while showing it)."
-  (when drgnx-cockpit-cards--stale (drgnx-cockpit-cards--schedule 0)))
+(defun drgnx-cockpit-cards--pane-hidden (data)
+  "`pane-hidden', on the store's `now' lane: a part went — with none showing, the refresh and the retry are
+cancelled: the parts keep no timer."
+  (when (and (memq (plist-get data :kind) '(needs-you decisions)) (not (drgnx-cockpit-cards--shown-p)))
+    (drgnx-timer-cancel 'cockpit-cards-refresh)
+    (drgnx-timer-cancel 'cockpit-cards-retry)))
+
+(defun drgnx-cockpit-cards--subscribe ()
+  "Hear of the parts' panes from the workbench state store (tools/cockpit's setup; recorded there)."
+  (drgnx-state-subscribe 'pane-shown #'drgnx-cockpit-cards--pane-shown :lane 'now)
+  (drgnx-state-subscribe 'pane-hidden #'drgnx-cockpit-cards--pane-hidden :lane 'now))
 
 (defun drgnx-cockpit-cards--hub-event (event data)
   "`drgnx-hub-event-functions': a job, a card, an agent or a lease changed — the parts refresh soon when it concerns
@@ -369,7 +391,7 @@ the job they show (any job, when they show every job)."
   "An action went through: the parts and the badge count again — once: every job's pane, when it shows, counts
 for the badge (`drgnx-cockpit-cards--draw-all')."
   (drgnx-cockpit-cards--schedule)
-  (unless (and (null (drgnx-cockpit-cards-job)) (drgnx-cockpit-cards--visible-p))
+  (unless (and (null (drgnx-cockpit-cards-job)) (drgnx-cockpit-cards--shown-p))
     (drgnx-job-ui--schedule-recount)))
 
 (defun drgnx-cockpit-cards--act (job card action &optional repo)
@@ -405,7 +427,8 @@ job's repository, for Open."
 (defun drgnx-cockpit-cards--open-transcript (id retry)
   "Show agent ID's transcript; one that is not mirrored here yet (a reviewer just started) is tried again once (RETRY)."
   (condition-case err (drgnx-cockpit-cards--transcript id)
-    (user-error (if retry (run-at-time 1 nil #'drgnx-cockpit-cards--open-transcript id nil)
+    (user-error (if retry (drgnx-timer-start (cons 'cockpit-cards-transcript id) 1 #'drgnx-cockpit-cards--open-transcript
+                                             :args (list id nil) :owner :core)
                   (message "drgnx: %s" (error-message-string err))))))
 
 (defun drgnx-cockpit-cards--reply (message)
@@ -467,7 +490,7 @@ follow."
   "Show what needs you and focus it (its pane, else any window); the hub's events wanted."
   (condition-case nil (progn (drgnx-cockpit-cards--hub) (drgnx-hub-connect)) (error nil))
   (if (drgnx-pane-kind 'needs-you) (drgnx-pane-focus 'needs-you) (pop-to-buffer (drgnx-cockpit-cards-buffer)))
-  (drgnx-cockpit-cards--schedule 0))
+  (drgnx-cockpit-cards--schedule 0 t))
 
 (defun drgnx-cockpit-show-job (id)
   "Show the Work cockpit filtered to job ID: the Work layout when there is one, else the Work graph, and what needs
@@ -492,7 +515,7 @@ saved before M12f) only the filter is set — the restored panes, sizes and focu
   "Show the decision log of the job the Work cockpit is filtered to, and focus it."
   (interactive)
   (if (drgnx-pane-kind 'decisions) (drgnx-pane-focus 'decisions) (pop-to-buffer (drgnx-cockpit-decisions-buffer)))
-  (drgnx-cockpit-cards--schedule 0))
+  (drgnx-cockpit-cards--schedule 0 t))
 
 ;;;; The saved workbench
 
@@ -523,12 +546,13 @@ without one (before M12f) leaves the filter as it is: a job window of that workb
 ;;;; The module's part
 
 (defun drgnx-cockpit-cards--setup ()
-  "tools/cockpit's setup, the cards' part: the `needs-you' and `decisions' pane kinds, their commands, the job
-filter of the graph, the filter in the saved workbench."
+  "tools/cockpit's setup, the cards' part: the `needs-you' and `decisions' pane kinds, their commands, their
+subscriptions to the workbench state store, the job filter of the graph, the filter in the saved workbench."
   (drgnx-pane-define-kind 'needs-you :title " NEEDS YOU" :home 'right :stack 'happened
-                          :buffer #'drgnx-cockpit-cards-buffer :on-show #'drgnx-cockpit-cards--on-show)
+                          :buffer #'drgnx-cockpit-cards-buffer)
   (drgnx-pane-define-kind 'decisions :title " DECISIONS" :home 'right :stack 'happened
-                          :buffer #'drgnx-cockpit-decisions-buffer :on-show #'drgnx-cockpit-cards--on-show)
+                          :buffer #'drgnx-cockpit-decisions-buffer)
+  (drgnx-cockpit-cards--subscribe)
   (drgnx-command-define 'cockpit-needs-you :category "Work" :title "Show What Needs You" :command #'drgnx-cockpit-show-jobs
                         :doc "Every job's cards and messages to you, with their actions")
   (drgnx-command-define 'cockpit-decisions :category "Work" :title "Show Decisions" :command #'drgnx-cockpit-decisions-show
@@ -540,15 +564,18 @@ filter of the graph, the filter in the saved workbench."
 (defun drgnx-cockpit-cards--teardown ()
   "Undo the cards' part of the module: take out the three global hook functions `drgnx-cockpit-cards--setup' added,
 kill both parts (the last one's `kill-buffer-hook' takes out the hub hooks and cancels the timers; done here too, in
-case no part lives) and forget nothing else — the filter is the graph's.  Idempotent."
+case no part lives), cancel a reviewer's transcript still to be opened (`cockpit-cards-transcript') and forget
+nothing else — the filter is the graph's.  Idempotent."
   (remove-hook 'drgnx-cockpit-filter-functions #'drgnx-cockpit-cards--job-node-p)
   (remove-hook 'drgnx-persist-state-functions #'drgnx-cockpit-cards--persist-state)
   (remove-hook 'drgnx-persist-after-restore-functions #'drgnx-cockpit-cards--adopt)
   (mapc #'kill-buffer (drgnx-cockpit-cards--buffers))
   (remove-hook 'drgnx-hub-event-functions #'drgnx-cockpit-cards--hub-event)
   (remove-hook 'drgnx-hub-disconnect-functions #'drgnx-cockpit-cards--hub-gone)
-  (dolist (tm (list drgnx-cockpit-cards--timer drgnx-cockpit-cards--retry)) (when (timerp tm) (cancel-timer tm)))
-  (setq drgnx-cockpit-cards--timer nil drgnx-cockpit-cards--retry nil drgnx-cockpit-cards--stale nil))
+  (drgnx-timer-cancel 'cockpit-cards-refresh)
+  (drgnx-timer-cancel 'cockpit-cards-retry)
+  (dolist (p (drgnx-timer-pending))
+    (when (eq (car-safe (car p)) 'cockpit-cards-transcript) (drgnx-timer-cancel (car p)))))
 
 (provide 'drgnx-cockpit-cards)
 ;;; drgnx-cockpit-cards.el ends here

@@ -57,6 +57,25 @@ never hides a warning.  Returns its result."
         (car (read-from-string out (+ at (length "\ndrgnx-build-result: "))))
       (error "No build result from the fresh Emacs: %s" out))))
 
+(ert-deftest drgnx-build/each-file-compiles-in-an-emacs-of-its-own ()
+  ;; 1a requires `project' (compiling it loads project); 1b uses `project-root' without declaring it.  In one Emacs
+  ;; 1b compiled clean; the native compiler, which compiles each file alone, warned and opened *Warnings* in the
+  ;; user's frame.  The build must say what the native compiler says.
+  (let* ((root (make-temp-file "drgnx-build" t)) (core (expand-file-name "core" root)))
+    (unwind-protect
+        (progn
+          (make-directory core)
+          (with-temp-file (expand-file-name "drgnx-test-1a.el" core)
+            (insert ";;; -*- lexical-binding: t -*-\n(require 'project)\n(provide 'drgnx-test-1a)\n"))
+          (with-temp-file (expand-file-name "drgnx-test-1b.el" core)
+            (insert ";;; -*- lexical-binding: t -*-\n(defun drgnx-test-b (p) (project-root p))\n(provide 'drgnx-test-1b)\n"))
+          (let ((r (drgnx-build-test--build root)))
+            (should (= (plist-get r :compiled) 2))
+            ;; any quotes: without a UTF-8 locale (CI's containers) Emacs quotes `like this'
+            (should (seq-find (lambda (w) (string-match-p "drgnx-test-1b\\.el: the function .project-root. " w))
+                              (plist-get r :warnings)))))
+      (delete-directory root t))))
+
 (ert-deftest drgnx-build/the-build-test-never-sees-what-the-suite-loaded ()
   ;; M4-15: a function an earlier test defined (a package it loaded) must not hide a warning.
   (let* ((root (make-temp-file "drgnx-build" t)) (core (expand-file-name "core" root)))

@@ -251,9 +251,24 @@ process's own working directory, never an argument), else that folder.  Found on
     (or (string-match-p "\\`\\(/\\|[A-Za-z]:/?\\)\\'" root)
         (and home (drgnx-coord-mcp--under-p home root)))))
 
+(defun drgnx-coord-mcp--job-row (me)
+  "The row the hub registered for ME when ME is one of drgnx's job agents (DRGNX_JOB set, the row's kind `job'),
+else nil.  Its cwd, worktree, branch and base are the hub's to set: a job agent's own server may run sandboxed, in a
+dir that is not its task folder, and runs no git there."
+  (when (drgnx-coord-mcp--own "DRGNX_JOB")
+    (let ((row (ignore-errors (drgnx-coord-agent me))))
+      (and (equal (plist-get row :kind) "job") (plist-get row :cwd) row))))
+
 (defun drgnx-coord-mcp--where (me)
-  "(CWD . ROOT) for ME's reports: CWD resolves relative paths, ROOT holds them — the cwd and worktree its hello
-registered when they lie in `drgnx-coord-mcp--home', else that folder."
+  "(CWD . ROOT) for ME's reports: CWD resolves relative paths, ROOT holds them — a job agent's from the hub's row
+\(`drgnx-coord-mcp--job-row'), else the cwd and worktree its hello registered when they lie in
+`drgnx-coord-mcp--home', else that folder."
+  (if-let* ((row (drgnx-coord-mcp--job-row me)))
+      (cons (plist-get row :cwd) (or (plist-get row :worktree) (plist-get row :cwd)))
+    (drgnx-coord-mcp--where-registered me)))
+
+(defun drgnx-coord-mcp--where-registered (me)
+  "`drgnx-coord-mcp--where' for any agent but a job's."
   (let* ((home (drgnx-coord-mcp--home))
          (row (ignore-errors (drgnx-coord-agent me)))
          (cwd (plist-get row :cwd)) (root (or (plist-get row :worktree) cwd)))
@@ -267,7 +282,16 @@ registered when they lie in `drgnx-coord-mcp--home', else that folder."
     task))
 
 (defun drgnx-coord-mcp--hello (me args)
-  "Register ME (`hello'): see `drgnx-coord-mcp-tools'."
+  "Register ME (`hello'): see `drgnx-coord-mcp-tools'.  A job agent's row is the hub's (`drgnx-coord-mcp--job-row'):
+its hello changes nothing of it, runs no git, and answers the hub's values."
+  (if-let* ((row (drgnx-coord-mcp--job-row me)))
+      (progn (drgnx-coord-agent-seen me)
+             (list :agent me :version (drgnx-coord-version) :cwd (plist-get row :cwd) :worktree (plist-get row :worktree)
+                   :base (plist-get row :base)))
+    (drgnx-coord-mcp--hello-register me args)))
+
+(defun drgnx-coord-mcp--hello-register (me args)
+  "`drgnx-coord-mcp--hello' for any agent but a job's."
   (let* ((home (drgnx-coord-mcp--home))
          ;; not given: the one an earlier hello registered (when still valid), else where the server started
          (cwd (if-let* ((given (plist-get args :cwd))) (drgnx-coord-mcp--local given default-directory)

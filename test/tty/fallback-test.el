@@ -170,11 +170,14 @@
     (let* ((c (drgnx-tty-fallback-test--legacy s))
            (frame (drgnx-tty-keys-test--frame c))
            ;; a buffer is shown by a command (F7 here), as a person switches buffers: the buffer a key is looked up
-           ;; in is the current one, which the command loop takes from the selected window before each command
+           ;; in is the current one, which the command loop takes from the selected window before each command.
+           ;; It waits for the new buffer's mode line: kx-a has a plain one (frame name, buffer name), an ordinary
+           ;; buffer's is the status bar, which names no buffer, so it is told by its line and column
            (show (lambda (buffer)
                    (drgnx-tty-session-eval s `(setq kx-next ,buffer))
                    (drgnx-tty-session-key c "<f7>" 'legacy)
-                   (drgnx-tty-session-wait-screen c (concat "- +F[0-9]+ +" (regexp-quote buffer) " "))   ; the mode line
+                   (drgnx-tty-session-wait-screen
+                    c (if (equal buffer "kx-a") "- +F[0-9]+ +kx-a " "Ln [0-9]+, Col [0-9]+ .*Emacs Lisp"))
                    (drgnx-tty-session-wait s `(equal (buffer-name (window-buffer (frame-selected-window ,frame))) ,buffer)))))
       (should (drgnx-tty-session-eval
                s '(progn (defvar kx-mode-ran nil)

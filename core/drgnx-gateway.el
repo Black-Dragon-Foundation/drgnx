@@ -17,6 +17,7 @@
 (require 'url-parse)
 (require 'drgnx-http)
 (require 'drgnx-ai)
+(require 'drgnx-timer)
 (require 'drgnx-work-db)
 
 (defvar drgnx-gateway-event-functions nil
@@ -84,10 +85,42 @@ its token (shown once: only its hash is kept)."
                               :filter #'drgnx-gateway--filter :sentinel #'drgnx-gateway--client-sentinel))
   (drgnx-gateway-port))
 
+(defvar drgnx-gateway--sockets)         ; Per-session sockets, below
+
 (defun drgnx-gateway-stop ()
   (when drgnx-gateway--server (delete-process drgnx-gateway--server) (setq drgnx-gateway--server nil))
   (dolist (p (process-list))
-    (when (string-prefix-p "drgnx-gw-" (process-name p)) (delete-process p))))
+    (when (string-prefix-p "drgnx-gw-" (process-name p)) (delete-process p)))
+  (mapc #'drgnx-gateway-close-socket (hash-table-keys drgnx-gateway--sockets)))
+
+;;;; Per-session sockets
+
+(defvar drgnx-gateway--sockets (make-hash-table :test #'equal)
+  "Socket path → the listening process.  Its accepted connections carry the path as `:gateway-socket'.")
+
+(defun drgnx-gateway-listen-socket (path)
+  "Also listen on the Unix socket PATH (mode 0600; its directory is the session's private one): the way an agent
+without the host's loopback reaches the gateway.  The same filter, path allowlist and token check as the TCP
+listener.  A stale file at PATH is replaced.  Return PATH."
+  (drgnx-gateway-close-socket path)
+  (when (and (file-exists-p path) (not (file-directory-p path))) (delete-file path))
+  (let ((server (with-file-modes #o600
+                  (make-network-process :name (concat "drgnx-gw-sock " path) :server t :family 'local :service path
+                                        :coding 'binary :noquery t
+                                        :filter #'drgnx-gateway--filter :sentinel #'drgnx-gateway--client-sentinel))))
+    (process-put server :gateway-socket path)
+    (puthash path server drgnx-gateway--sockets)
+    path))
+
+(defun drgnx-gateway-close-socket (path)
+  "Stop listening on PATH, cut its connections (and so their upstream requests), remove the file."
+  (when-let* ((server (gethash path drgnx-gateway--sockets)))
+    (remhash path drgnx-gateway--sockets)
+    (dolist (p (process-list))
+      (when (equal (process-get p :gateway-socket) path) (delete-process p)))
+    (ignore-errors (delete-process server)))
+  (when (and (file-exists-p path) (not (file-directory-p path)) (not (file-symlink-p path)))
+    (ignore-errors (delete-file path))))
 
 (defun drgnx-gateway--emit (event &rest data) (run-hook-with-args 'drgnx-gateway-event-functions event data))
 
@@ -112,7 +145,11 @@ it, through its sentinel, the request upstream), never an error in a filter."
   (when (process-live-p conn)
     (process-put conn :done t)
     (ignore-errors (process-send-eof conn))
-    (run-at-time 0.05 nil (lambda () (when (process-live-p conn) (delete-process conn))))))
+    (drgnx-timer-start (cons 'gateway-close conn) 0.05 #'drgnx-gateway--hang-up :args (list conn) :owner conn)))
+
+(defun drgnx-gateway--hang-up (conn)
+  "The timer function of `drgnx-gateway--close': what was sent has gone, delete CONN."
+  (when (process-live-p conn) (delete-process conn)))
 
 (defun drgnx-gateway--filter (conn bytes)
   "Take BYTES of CONN's request.  Once its head is whole a token that is no registration is refused at once, before

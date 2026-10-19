@@ -9,12 +9,12 @@
           (dir (make-temp-file "drgnx-ext" t))
           (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" cfg) (concat "XDG_STATE_HOME=" st))
                                        process-environment))
-          (drgnx-modules--table nil) (drgnx-modules--report nil) (drgnx-modules--state nil)
+          (drgnx-modules--table nil) (drgnx-modules--report nil)
           (load-path load-path))
      (unwind-protect
          (progn
            (write-region ,feature-source nil (expand-file-name "kx-feat.el" dir) nil 'silent)
-           (drgnx-modules-write-state `(:version 1 :external ((:name kx :path ,dir :features (kx-feat)))))
+           (drgnx-modules-update-state (lambda (_) `(:external ((:name kx :path ,dir :features (kx-feat))))))
            ,@body)
        (when (featurep 'kx-feat) (unload-feature 'kx-feat t))
        (delete-directory cfg t) (delete-directory st t) (delete-directory dir t))))

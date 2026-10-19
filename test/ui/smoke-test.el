@@ -13,3 +13,11 @@
   (should (null auth-sources))
   (should (equal server-name (getenv "DRGNX_UI_NAME")))
   (should-error (url-retrieve-synchronously "https://example.org")))
+
+(ert-deftest drgnx-uitest/a-session-runs-at-drgnx-gc-settings ()
+  ;; HARNESS-GC-1: the minimal configuration loaded neither init/early-init.el's GC lines nor `drgnx-gc-setup'.
+  (should (featurep 'drgnx-gc))
+  (should (= gc-cons-threshold drgnx-gc-cons-threshold))
+  (should (<= gc-cons-percentage 0.1))
+  (should drgnx-gc-mode)
+  (should (drgnx-timer-active-p 'gc-idle)))
