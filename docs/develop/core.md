@@ -30,7 +30,8 @@ modules/<category>/drgnx-<name>.el   one drgnx-module-define per file
 [files.md](../guide/files.md#where-drgnx-keeps-its-files)). `bin/drgnx-paths.sh`'s `drgnx_dir KIND` is the same rule in
 bash: `bin/drgnx` sources it, and `install.sh` carries a byte-identical copy between its `# >>> drgnx-paths.sh` and
 `# <<< drgnx-paths.sh` lines (curl pipes it, so it cannot source a file); `drgnx-paths/matrix-elisp-and-bash-agree`
-and `drgnx-bin/install-carries-drgnx-paths` keep the three equal. Only a value that begins with `/` counts
+and `drgnx-bin/install-carries-drgnx-paths` keep the three equal (the matrix runs bash a second time with
+`BASH_COMPAT=32`, macOS's bash 3.2 rules). Only a value that begins with `/` counts
 (`drgnx-paths-env-dir`): unset, empty, relative and `~/…` mean the default. Nothing is memoized (env/set changes the
 variables). Compatibility: with `$DRGNX_CONFIG_DIR` unset, no `$XDG_CONFIG_HOME/drgnx` and an existing
 `~/.config/drgnx`, the config dir stays `~/.config/drgnx/`; `(drgnx-paths-config-moved-p)` then returns where it
@@ -1729,7 +1730,9 @@ typo?") and for a file in an older format; otherwise OK, "N files read". The doc
 `init/` unchanged; the fix is to move it to `config.el` or `custom.el` in the config folder and `git checkout -- init/`.
 Without a `.git` (not a checkout) the check is absent. `config-dir` (group drgnx) is the fact `:config-dir`, `(:dir
 (drgnx-user-dir) :moved (drgnx-paths-config-moved-p))`: WARN while the old `~/.config/drgnx` is used in place of
-`$XDG_CONFIG_HOME/drgnx`, with the fix "move ~/.config/drgnx to …"; otherwise OK, naming the folder. Hints name the
+`$XDG_CONFIG_HOME/drgnx`, with the fix "move ~/.config/drgnx to …"; also WARN, one line per variable, while a path
+variable is set to a value that does not count (`:ignored`, `(drgnx-paths-ignored)`: "ignored: not an absolute path:
+VAR=VALUE; drgnx uses DIR"); otherwise OK, naming the folder. Hints name the
 config folder in use, `(abbreviate-file-name (drgnx-user-dir))`, never a literal `~/.config/drgnx`.
 
 Native compilation is checked by actually compiling a function, not only by asking whether it is built in. Any

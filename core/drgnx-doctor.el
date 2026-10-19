@@ -272,8 +272,9 @@ not a project's, from a fresh `drgnx-config-read' (it applies nothing and writes
             (t (list 'ok (format "%d file%s read" (length rows) (if (= (length rows) 1) "" "s")) nil))))))
 
 (defun drgnx-doctor--config-dir ()
-  "The fact of the `config-dir' check: (:dir THE-CONFIG-DIR :moved WHERE-IT-BELONGS-OR-NIL)."
-  (list :dir (drgnx-user-dir) :moved (drgnx-paths-config-moved-p)))
+  "The fact of the `config-dir' check: (:dir THE-CONFIG-DIR :moved WHERE-IT-BELONGS-OR-NIL :ignored IGNORED),
+IGNORED being `drgnx-paths-ignored'."
+  (list :dir (drgnx-user-dir) :moved (drgnx-paths-config-moved-p) :ignored (drgnx-paths-ignored)))
 
 (defun drgnx-doctor--checkout-init (dir)
   "The fact of the `checkout-clean' check: (:dir DIR :changed LINES), LINES being `git status --porcelain -- init/'
@@ -455,13 +456,23 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
 
 (drgnx-doctor-define 'config-dir :group "drgnx" :doc "The config folder is where XDG_CONFIG_HOME says (docs/guide/files.md)"
                      :check (lambda (f)
-                              (let ((c (plist-get f :config-dir)))
+                              (let* ((c (plist-get f :config-dir))
+                                     (ignored (mapcar (lambda (i)
+                                                        (format "ignored: not an absolute path: %s=%s; drgnx uses %s"
+                                                                (nth 0 i) (nth 1 i)
+                                                                (abbreviate-file-name (directory-file-name (nth 2 i)))))
+                                                      (plist-get c :ignored))))
                                 (cond ((null c) nil)
                                       ((plist-get c :moved)
-                                       (list 'warn (format "%s is used: $XDG_CONFIG_HOME/drgnx does not exist"
-                                                           (abbreviate-file-name (plist-get c :dir)))
+                                       (list 'warn (string-join
+                                                    (cons (format "%s is used: $XDG_CONFIG_HOME/drgnx does not exist"
+                                                                  (abbreviate-file-name (plist-get c :dir)))
+                                                          ignored)
+                                                    "\n")
                                              (format "move ~/.config/drgnx to %s ($XDG_CONFIG_HOME/drgnx)"
                                                      (abbreviate-file-name (directory-file-name (plist-get c :moved))))))
+                                      (ignored (list 'warn (string-join ignored "\n")
+                                                     "set it to an absolute path (one that begins with /), or unset it"))
                                       (t (list 'ok (abbreviate-file-name (plist-get c :dir)) nil))))))
 
 (drgnx-doctor-define 'config-files :group "drgnx" :doc "drgnx's config files read, with no mistakes"

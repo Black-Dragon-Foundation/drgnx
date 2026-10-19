@@ -34,7 +34,8 @@ Older installs wrote the `emacs` record and onboarding's `systemd/` and `applica
 are moved to the data dir: copied, compared, and only then deleted from the config dir. When the data dir has an
 identical copy already, the config dir's is deleted; when it has a different one, neither is touched and the
 doctor keeps saying so. `drgnx bootstrap --step config` does the move, or do it yourself; this moves each item only
-when the data dir has none, so it never replaces the data dir's (newer) copy:
+when the data dir has none, so it never replaces the data dir's (newer) copy. Run it in bash (zsh, macOS's default
+shell, cannot read `drgnx-paths.sh`: type `bash` first), with `drgnx` on your `PATH`:
 
 ```sh
 . "$(dirname "$(readlink -f "$(command -v drgnx)")")/drgnx-paths.sh"   # drgnx_dir: the folders drgnx uses

@@ -62,6 +62,17 @@ never makes Tramp connect.  Nothing is memoized; bin/drgnx-paths.sh's drgnx_dir 
             (and (eq kind 'config) (drgnx-paths-config-moved-p) "~/.config/drgnx")
             (expand-file-name "drgnx" (or (drgnx-paths-env-dir xdg) base))))))))
 
+(defun drgnx-paths-ignored ()
+  "The path variables of `drgnx-paths-dir' set to a value that does not count (neither empty nor absolute):
+a list of (VAR VALUE DIR), DIR being the folder drgnx uses instead.  The doctor's `config-dir' check names them."
+  (let (out)
+    (pcase-dolist (`(,kind . ,vars) drgnx-paths--kinds)
+      (dolist (var (delq nil (list (car vars) (cadr vars))))
+        (let ((v (getenv var)))
+          (when (and v (not (equal v "")) (not (drgnx-paths-env-dir var)))
+            (push (list var v (drgnx-paths-dir kind)) out)))))
+    (nreverse out)))
+
 (defun drgnx-user-dir ()
   "The user's drgnx configuration: (drgnx-paths-dir \\='config)."
   (drgnx-paths-dir 'config))

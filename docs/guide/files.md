@@ -14,7 +14,8 @@ when they change. [The reference](../reference/config.md) lists each file, its k
 
 - **Only an absolute value counts.** A variable that is unset, empty, relative (`config`) or starts with `~` means the
   default, as the XDG spec says (a relative one would otherwise mean wherever drgnx happened to start). `bin/drgnx`,
-  `install.sh` and drgnx itself follow the same rule, so they always agree on the folder.
+  `install.sh` and drgnx itself follow the same rule, so they always agree on the folder. `drgnx doctor` warns in its
+  `config-dir` check when one of these variables is set to a value that does not count, and names the folder used instead.
 - **An old `~/.config/drgnx` still works.** When `XDG_CONFIG_HOME` is set, `DRGNX_CONFIG_DIR` is not, there is no
   `$XDG_CONFIG_HOME/drgnx` yet and `~/.config/drgnx` exists, drgnx keeps using `~/.config/drgnx`. `drgnx doctor` warns in
   its `config-dir` check and says where to move it; once moved, drgnx uses the new folder.

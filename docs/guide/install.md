@@ -68,7 +68,7 @@ runs nothing.
 | `--dry-run` | print the plan and exit |
 | `--yes`, `-y` | do not ask (for scripts and containers) |
 | `--prefix DIR` | where a source-built Emacs and the `drgnx` command go (default `~/.local`) |
-| `--dir DIR` | where drgnx is checked out (default `~/.local/share/drgnx/drgnx`) |
+| `--dir DIR` | where drgnx is checked out (default `~/.local/share/drgnx/drgnx`; it does not follow `DRGNX_DATA_DIR` or `XDG_DATA_HOME`) |
 | `--source-dir DIR` | use an existing drgnx checkout instead of cloning |
 | `--method M` | `auto` (default), `package`, `source`, `keep` (do not touch Emacs), or `formula` (macOS only: Homebrew's `emacs-plus@31`, built from source — also on Apple silicon, beside an older `/Applications/Emacs.app`); `package` and `source` only where the platform has that recipe (Fedora and Arch packages; Fedora and Debian-family source builds) — elsewhere it stops before the plan (exit 2) |
 | `--branch B` | drgnx branch to clone (default `main`) |

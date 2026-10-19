@@ -52,11 +52,13 @@
   "`process-environment' with HOME, the \"K=V\" strings SET and every other path variable unset."
   (append (list (concat "HOME=" home)) (delq nil set) drgnx-paths-test--vars process-environment))
 
-(defun drgnx-paths-test--bash ()
-  "What bin/drgnx-paths.sh's drgnx_dir says for config, state, cache and data, in this environment."
+(defun drgnx-paths-test--bash (&optional compat)
+  "What bin/drgnx-paths.sh's drgnx_dir says for config, state, cache and data, in this environment.
+With COMPAT, bash runs with BASH_COMPAT=COMPAT (\"32\": macOS's bash 3.2 rules on Linux CI)."
   (with-temp-buffer
-    (call-process "bash" nil t nil "-c" ". \"$0\"; for k in config state cache data; do drgnx_dir \"$k\"; echo; done"
-                  (expand-file-name "bin/drgnx-paths.sh" drgnx-dir))
+    (let ((process-environment (if compat (cons (concat "BASH_COMPAT=" compat) process-environment) process-environment)))
+      (call-process "bash" nil t nil "-c" ". \"$0\"; for k in config state cache data; do drgnx_dir \"$k\"; echo; done"
+                    (expand-file-name "bin/drgnx-paths.sh" drgnx-dir)))
     (split-string (buffer-string) "\n" t)))
 
 (defmacro drgnx-paths-test--with-tmp (&rest body)
@@ -70,15 +72,17 @@
 (ert-deftest drgnx-paths/matrix-elisp-and-bash-agree ()
   ;; Each variable alone, each value: core/drgnx-paths.el and bin/drgnx-paths.sh pick the same four directories — with
   ;; no old ~/.config/drgnx, then with one (the compatibility rule), and with an $XDG_CONFIG_HOME/drgnx that exists.
+  ;; bash also runs under BASH_COMPAT=32: before 4.3 a quoted ${x//p/r} keeps the backslashes of its replacement.
   (drgnx-paths-test--with-tmp
     (make-directory (concat tmp "made/drgnx") t)
     (dolist (old '(nil t))
       (when old (make-directory (concat home "/.config/drgnx") t))
       (dolist (var drgnx-paths-test--vars)
-        (dolist (value (list nil "" "rel" "~/x" "/abs" "/with space" "/trailing/" (concat tmp "made")))
+        (dolist (value (list nil "" "rel" "~/x" "/abs" "/with space" "/trailing/" "/a//b" (concat tmp "made")))
           (let* ((process-environment (drgnx-paths-test--env home (and value (concat var "=" value))))
                  (elisp (mapcar (lambda (kind) (directory-file-name (drgnx-paths-dir kind))) '(config state cache data))))
-            (should (equal (list old var value (drgnx-paths-test--bash)) (list old var value elisp)))))))))
+            (should (equal (list old var value (drgnx-paths-test--bash)) (list old var value elisp)))
+            (should (equal (list old var value 32 (drgnx-paths-test--bash "32")) (list old var value 32 elisp)))))))))
 
 (ert-deftest drgnx-paths/xdg-config-home-is-honoured ()
   (drgnx-paths-test--with-tmp
@@ -107,6 +111,26 @@
       (make-directory (concat tmp "xdg/drgnx") t)
       (should (equal (drgnx-user-dir) (concat tmp "xdg/drgnx/")))
       (should-not (drgnx-paths-config-moved-p))
+      (should (eq (car (drgnx-doctor-check 'config-dir (list :config-dir (drgnx-doctor--config-dir)))) 'ok)))))
+
+(ert-deftest drgnx-paths/the-doctor-names-a-value-that-does-not-count ()
+  ;; I3: DRGNX_CONFIG_DIR=~/x or a relative XDG value falls back to the default without a word — the doctor names it
+  (require 'drgnx-doctor)
+  (drgnx-paths-test--with-tmp
+    (let ((process-environment (drgnx-paths-test--env home "DRGNX_CONFIG_DIR=~/x" "XDG_STATE_HOME=rel" "XDG_CACHE_HOME="))
+          (abbreviated-home-dir nil))
+      (should (equal (drgnx-paths-ignored)
+                     (list (list "DRGNX_CONFIG_DIR" "~/x" (concat home "/.config/drgnx/"))
+                           (list "XDG_STATE_HOME" "rel" (concat home "/.local/state/drgnx/")))))
+      (let ((r (drgnx-doctor-check 'config-dir (list :config-dir (drgnx-doctor--config-dir)))))
+        (should (eq (car r) 'warn))
+        (should (string-search "ignored: not an absolute path: DRGNX_CONFIG_DIR=~/x; drgnx uses ~/.config/drgnx" (nth 1 r)))
+        (should (string-search "XDG_STATE_HOME=rel" (nth 1 r)))
+        ;; an empty value is the same as unset: not named
+        (should-not (string-search "XDG_CACHE_HOME" (nth 1 r)))
+        (should (nth 2 r))))
+    (let ((process-environment (drgnx-paths-test--env home (concat "DRGNX_CONFIG_DIR=" tmp "own"))))
+      (should-not (drgnx-paths-ignored))
       (should (eq (car (drgnx-doctor-check 'config-dir (list :config-dir (drgnx-doctor--config-dir)))) 'ok)))))
 
 (ert-deftest drgnx-paths/a-remote-default-directory-never-calls-tramp ()

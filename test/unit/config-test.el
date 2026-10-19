@@ -248,7 +248,8 @@
     ;; interpreted code conses for its own bookkeeping, and the runner loads a file's source when it is newer than its
     ;; .elc: measure the get and everything it calls compiled
     (dolist (fn '(drgnx-config-get drgnx-config--current drgnx-config--def drgnx-config--path drgnx-config--key
-                                   drgnx-config--same-stamp-p drgnx-config--lookup drgnx-user-dir drgnx-paths--expand))
+                                   drgnx-config--same-stamp-p drgnx-config--lookup drgnx-user-dir drgnx-paths--expand
+                                   drgnx-paths-dir drgnx-paths-env-dir drgnx-paths-config-moved-p))
       (unless (byte-code-function-p (symbol-function fn)) (byte-compile fn)))
     (let* ((file (drgnx-config-test--file))
            (measure (byte-compile (lambda (fn) (let ((before (car (memory-use-counts))))

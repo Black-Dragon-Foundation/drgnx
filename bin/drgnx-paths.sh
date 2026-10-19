@@ -8,7 +8,7 @@ xdg_dir() { # VAR DEFAULT — $VAR when it is an absolute path, else DEFAULT: th
 }
 
 drgnx_dir() { # KIND — config, state, cache or data: the directory, without a trailing slash (docs/guide/files.md)
-  local own="" var base dir
+  local own="" var base dir s=/
   case "$1" in
     config) own=DRGNX_CONFIG_DIR var=XDG_CONFIG_HOME base="$HOME/.config" ;;
     state) var=XDG_STATE_HOME base="$HOME/.local/state" ;;
@@ -22,7 +22,8 @@ drgnx_dir() { # KIND — config, state, cache or data: the directory, without a 
     # an old ~/.config/drgnx is still used while $XDG_CONFIG_HOME/drgnx does not exist (the doctor says move it)
     if [[ "$1" == config && ! -d "$dir" && -d "$base/drgnx" ]]; then dir="$base/drgnx"; fi
   fi
-  while [[ "$dir" == *//* ]]; do dir="${dir//\/\//\/}"; done
+  # $s, not \/: before bash 4.3 (macOS's 3.2) a quoted ${x//p/r} keeps the backslash of an escaped replacement
+  while [[ "$dir" == *//* ]]; do dir="${dir//$s$s/$s}"; done
   while [[ "$dir" == */ && "$dir" != / ]]; do dir="${dir%/}"; done
   printf '%s' "$dir"
 }
