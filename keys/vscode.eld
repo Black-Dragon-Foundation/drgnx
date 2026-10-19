@@ -266,7 +266,7 @@
         (view-search "C-S-f")
         (replace-in-files "C-S-h")
         (rename-symbol "<f2>")
-        (replace-in-file "C-h")
+        (replace-in-file "C-h" :mac "M-s-f")   ; Cmd+H is macOS Hide; VS Code's Mac key is Option+Cmd+F
         (replace-all "C-M-<return>" "C-<return>" :map (drgnx-replace . drgnx-replace-keys-map))
         (replace-this "C-!" :map (drgnx-replace . drgnx-replace-keys-map))
         (replace-undo :none "the view's Undo button; the palette")

@@ -67,7 +67,7 @@ view, scope This file.
 |---|---|---|---|
 | Replace in Files | `C-S-h` | `C-c s r` | `SPC s r` |
 | Rename Symbol | `<f2>` | palette | `SPC c R` |
-| Replace in File (the find bar) | `C-h` | palette (`M-%` stays query-replace) | palette |
+| Replace in File (the find bar) | `C-h` (Option+Cmd+F on a Mac) | palette (`M-%` stays query-replace) | palette |
 | Replace All | `C-M-<return>`, `C-<return>` | `C-c C-c`, `C-<return>` | `C-c C-c`, `C-<return>` |
 | Replace This Match (on a row) | `C-!` | `C-c C-r` | `C-c C-r` |
 | Undo Replace | the Undo button | `C-c C-u` | `C-c C-u` |
