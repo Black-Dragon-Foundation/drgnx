@@ -216,6 +216,8 @@ test_container() { # [--ui [--compositor C] | --tty [--fedora 44|45]] — the ba
   fi
   # a narrowed run stays narrow inside the container: the selector goes in with its value
   if [ -n "${DRGNX_TEST_SELECTOR:-}" ]; then args+=(-e "DRGNX_TEST_SELECTOR=$DRGNX_TEST_SELECTOR"); fi
+  # …and so does the number of files run at once (CI: the runner's cores)
+  if [ -n "${DRGNX_TEST_JOBS:-}" ]; then args+=(-e "DRGNX_TEST_JOBS=$DRGNX_TEST_JOBS"); fi
   # evil for the modal tests (DRGNX_MODAL_ELPA), read-only; ,z: a shared label, other containers may read it too
   if [ -n "${DRGNX_MODAL_ELPA:-}" ] && [ -d "$DRGNX_MODAL_ELPA" ]; then
     local elpa; elpa="$(cd "$DRGNX_MODAL_ELPA" && pwd -P):/modal-elpa:ro"

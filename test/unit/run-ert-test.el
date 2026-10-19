@@ -201,6 +201,12 @@
   (dolist (v '("OPENROUTER_API_KEY" "ANTHROPIC_API_KEY" "ANTHROPIC_AUTH_TOKEN" "OPENAI_API_KEY"))
     (should-not (getenv v))))
 
+(ert-deftest drgnx-run-ert/unit-tests-never-see-the-runs-jobs ()
+  ;; CI runs the files DRGNX_TEST_JOBS at a time; a test that runs the runner again (a suite of its own) runs its
+  ;; files one after another all the same, as in a serial run, rather than that many at once inside each file
+  (skip-unless (getenv "DRGNX_TEST_ISOLATED"))
+  (should-not (getenv "DRGNX_TEST_JOBS")))
+
 (ert-deftest drgnx-run-ert/unit-tests-start-no-hub-unless-they-say-so ()
   ;; an agent on an :ai profile in any test would start a durable hub that outlives the suite
   (skip-unless (getenv "DRGNX_TEST_ISOLATED"))

@@ -25,6 +25,9 @@
   (funcall pred))
 
 (ert-deftest drgnx-view-ui/replace-retype-has-no-jank ()
+  ;; wall-clock: the wait below runs one timer pass per poll, so the 10,100 rows' slice chain gets one slice per 50 ms
+  ;; (about 600 slices on a slow runner: over the 30 s).  Until one `drgnx-test-wait' (test determinism, Tasks 3/9).
+  :tags '(:timing)
   (let* ((root (drgnx-uitest-root-frame))
          (drgnx-wb--sections nil)
          (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)

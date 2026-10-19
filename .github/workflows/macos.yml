@@ -35,16 +35,23 @@ jobs:
         run: /bin/bash -n install.sh
       - name: install.sh prints the macOS plan and changes nothing
         run: /bin/bash install.sh --dry-run
-      - name: Unit suite
+      - name: Emacs (Homebrew's) for the suite
+        run: |
+          echo "DRGNX_EMACS=$(brew --prefix)/bin/emacs" >> "$GITHUB_ENV"
+          "$(brew --prefix)/bin/emacs" --version | head -1
+      # the files a core each at once, then the :timing tests alone (docs/develop/ci.md, "Parallel files")
+      - name: Unit suite, the files in parallel (all but the :timing tests)
+        env:
+          DRGNX_TEST_SELECTOR: "(not (tag :timing))"
+        run: DRGNX_TEST_JOBS="$(sysctl -n hw.ncpu)" bin/drgnx test
+      - name: The :timing tests, a file at a time
+        if: ${{ !cancelled() }}
         env:
           # the hosted runner draws the replace view 1.1-1.3x slower than the budgets' machine (17.6 and 20.5 ms
           # against 16): the :timing tests' budgets times 2 (harness/run-ert.el, drgnx-run-ert-time-factor)
           DRGNX_TEST_TIME_FACTOR: "2"
-        run: |
-          DRGNX_EMACS="$(brew --prefix)/bin/emacs"
-          export DRGNX_EMACS
-          "$DRGNX_EMACS" --version | head -1
-          bin/drgnx test
+          DRGNX_TEST_SELECTOR: "(tag :timing)"
+        run: bin/drgnx test
 
   install:
     name: Real install (macOS 27)
