@@ -777,9 +777,10 @@ timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run
 
 The Work cockpit's panes start their checks on the workbench state store's `pane-shown` and cancel them on
 `pane-hidden` (lane `now`), so a hidden pane keeps no timer: the Work graph's `(cockpit-check . BUFFER)`, owned by its
-buffer, every `drgnx-cockpit-check-interval`; an agent's edits pane's `(cockpit-edits-check . BUFFER)` (with its
-one-shots `-tick`, `-turn` and `-flush`, and its file watches, all dropped when it is hidden; it also hears
-`windows-changed`, since its buffers swap in one window); a feed buffer's `(cockpit-feed-check . BUFFER)` (also on
+buffer, every `drgnx-cockpit-check-interval` (it also hears `windows-changed`, lane `idle`, since it can show in any
+window); an agent's edits pane's `(cockpit-edits-check . BUFFER)` (with its one-shots `-tick`, `-turn` and `-flush`,
+and its file watches, all dropped when it is hidden; it also hears `windows-changed`, lane `idle`, since its buffers
+swap in one window); a feed buffer's `(cockpit-feed-check . BUFFER)` (also on
 `windows-changed`). What needs you and the decision log share `cockpit-cards-refresh` and `cockpit-cards-retry`
 (`:core`), cancelled when neither shows. Their draws are their views' timers. `tools/cockpit` owns `cockpit-waiting`
 (its setup's: the status bar's count of what waits on you, every `drgnx-cockpit-check-interval`); its `:teardown`

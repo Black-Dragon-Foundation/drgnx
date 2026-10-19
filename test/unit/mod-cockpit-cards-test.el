@@ -567,7 +567,7 @@ their hooks and timers."
                 (drgnx-cockpit-decisions-buffer)
                 (set-window-buffer (selected-window) tl)
                 (set-window-buffer (split-window nil nil 'right) e)
-                (drgnx-state-sync)
+                (drgnx-state-sync) (drgnx-state--deliver-idle) ; the edits pane hears `windows-changed' on `idle'
                 (should (drgnx-timer-active-p (cons 'cockpit-feed-check tl)))
                 (should (drgnx-timer-active-p (cons 'cockpit-edits-check e))))
               (should-not (drgnx-module-teardown 'tools/cockpit))

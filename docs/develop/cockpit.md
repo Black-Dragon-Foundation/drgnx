@@ -313,12 +313,14 @@ included), and `drgnx-view-sync-rows` draws only those rows.
 Owners:
 - The buffer owns its hooks (hub events, agent changes, tracker scans, `enable-theme-functions`; all named), its
   view's timers and the check. Its `kill-buffer-hook` removes the hooks and flushes its images.
-- **While the pane shows.** tools/cockpit's setup subscribes `drgnx-cockpit--pane-shown` and `--pane-hidden` to the
-  workbench state store's `pane-shown` and `pane-hidden` (lane `now`), and `--pane-resized` to `pane-resized` (lane
-  `idle`). For the kind `work-graph` they call `drgnx-cockpit--follow`: while a window the store recorded on a visible
-  frame shows the buffer (`drgnx-cockpit-shown-p`), the repeating `(cockpit-check . BUFFER)` (owned by the buffer,
-  every `drgnx-cockpit-check-interval`) looks for another process's writes and silent worktrees, and the view is
-  touched to catch up; otherwise the check is cancelled. A resize touches the view (the drawing may now fit). Hidden,
+- **While it shows.** tools/cockpit's setup subscribes `drgnx-cockpit--pane-shown` and `--pane-hidden` to the
+  workbench state store's `pane-shown` and `pane-hidden` (lane `now`), `--windows-changed` to `windows-changed` (lane
+  `idle`: the graph shown, or no longer, in a window that is not its pane, `C-x b`, is no pane event) and
+  `--pane-resized` to `pane-resized` (lane `idle`). For the kind `work-graph`, and on every window change, they call
+  `drgnx-cockpit--follow`: while a window the store recorded on a visible frame shows the buffer
+  (`drgnx-cockpit-shown-p`), the repeating `(cockpit-check . BUFFER)` (owned by the buffer, every
+  `drgnx-cockpit-check-interval`) looks for another process's writes and silent worktrees, and when it starts the view
+  is touched to catch up; otherwise the check is cancelled. A resize touches the view (the drawing may now fit). Hidden,
   the graph keeps no timer.
 - `cockpit-waiting` (owned by tools/cockpit's run, every `drgnx-cockpit-check-interval`) tells the status bar of a new
   waiting count (`drgnx-cockpit-feed-tell-statusbar`), whatever shows.
@@ -407,8 +409,10 @@ user's side is in [cockpit.md](../guide/cockpit.md#an-agents-edits).
 
 **Only while it shows.** tools/cockpit's setup subscribes the panes to the workbench state store: `pane-shown` and
 `pane-hidden` for the kind `agent-edits`, and `windows-changed` (one agent's edits replacing another's in the same
-window is no pane event, nor are edits shown with `C-x b`), all on the `now` lane. Each calls
-`drgnx-cockpit-edits--follow`, which goes over the live panes: one that a window the store recorded on a visible frame
+window is no pane event, nor are edits shown with `C-x b`). The pane events are on the `now` lane, `windows-changed`
+on the `idle` lane (never inside redisplay). Each calls `drgnx-cockpit-edits--follow`, which goes over the live panes
+(`drgnx-cockpit-edits--buffers`: each pane adds itself in its mode and leaves in its `kill-buffer-hook`, so no buffer
+list is scanned): one that a window the store recorded on a visible frame
 shows (`drgnx-cockpit-shown-p`) gets its check `(cockpit-edits-check . BUFFER)` and, when that was not running, a
 listing at once (which watches the folders again when its round ends); any other loses its check, tick, turn and
 flush timers and its file watches. Hidden, a pane keeps no timer and no watch, and a round that ends while it is

@@ -90,6 +90,9 @@ reported); a file already listed is diffed again at once.")
 
 (defvar drgnx-cockpit-edits--draws 0 "How many times an edits pane was patched (tests and the perf lab read it).")
 (defvar drgnx-cockpit-edits--last nil "The edits buffer shown last: what pane `agent-edits' shows when none is named.")
+(defvar drgnx-cockpit-edits--buffers nil
+  "The live edits panes: each one adds itself in its mode and goes in its `kill-buffer-hook'.
+`drgnx-cockpit-edits--follow' walks these, never every buffer.")
 (defvar drgnx-cockpit-edits--last-error nil "The last error said: the same one is said once.")
 
 (defvar-local drgnx-cockpit-edits--agent nil
@@ -620,9 +623,9 @@ round when changes came meanwhile."
   "Each agent's edits pane follows its agent while a window of a visible frame shows it (`drgnx-cockpit-shown-p'):
 shown, its check runs (`(cockpit-edits-check . BUFFER)', every `drgnx-cockpit-edits-check-interval') and, when it was
 not running, the changes are listed again at once, which watches their folders again.  Hidden, the check, the
-ticks and the file watches go: it keeps no timer and no watch."
-  (dolist (b (buffer-list))
-    (when (eq (buffer-local-value 'major-mode b) 'drgnx-cockpit-edits-mode)
+ticks and the file watches go: it keeps no timer and no watch.  It walks `drgnx-cockpit-edits--buffers' only."
+  (dolist (b drgnx-cockpit-edits--buffers)
+    (when (buffer-live-p b)
       (with-current-buffer b
         (let ((check (cons 'cockpit-edits-check b)))
           (cond ((drgnx-cockpit-shown-p b)
@@ -643,18 +646,21 @@ ticks and the file watches go: it keeps no timer and no watch."
   (when (eq (plist-get data :kind) 'agent-edits) (drgnx-cockpit-edits--follow)))
 
 (defun drgnx-cockpit-edits--windows-changed (_data)
-  "`windows-changed', on the store's `now' lane: a window shows another buffer — one agent's edits in place of
-another's in the same window, which is no pane event, or edits shown with `C-x b' — `drgnx-cockpit-edits--follow'."
-  (drgnx-cockpit-edits--follow))
+  "`windows-changed', on the store's `idle' lane (never inside redisplay): a window shows another buffer — one agent's
+edits in place of another's in the same window, which is no pane event, or edits shown with `C-x b' —
+`drgnx-cockpit-edits--follow'."
+  (when drgnx-cockpit-edits--buffers (drgnx-cockpit-edits--follow)))
 
 (defun drgnx-cockpit-edits--subscribe ()
   "Hear of the edits panes from the workbench state store (tools/cockpit's setup; recorded there)."
   (drgnx-state-subscribe 'pane-shown #'drgnx-cockpit-edits--pane-shown :lane 'now)
   (drgnx-state-subscribe 'pane-hidden #'drgnx-cockpit-edits--pane-hidden :lane 'now)
-  (drgnx-state-subscribe 'windows-changed #'drgnx-cockpit-edits--windows-changed :lane 'now))
+  (drgnx-state-subscribe 'windows-changed #'drgnx-cockpit-edits--windows-changed))
 
 (defun drgnx-cockpit-edits--unwatch ()
-  "The pane is killed (its `kill-buffer-hook'): its file watches go (the buffer owns its timers)."
+  "The pane is killed (its `kill-buffer-hook'): it leaves `drgnx-cockpit-edits--buffers' and its file watches go (the
+buffer owns its timers)."
+  (setq drgnx-cockpit-edits--buffers (delq (current-buffer) drgnx-cockpit-edits--buffers))
   (drgnx-cockpit-edits--drop-watches)
   ;; its private folder goes too (only while empty: nothing put there by hand is deleted)
   (when (and (stringp drgnx-cockpit-edits--neutral) (file-directory-p drgnx-cockpit-edits--neutral))
@@ -708,7 +714,8 @@ the agent's files."
   (setq-local font-lock-defaults '(drgnx-cockpit-edits--font-lock-keywords t))
   (setq-local revert-buffer-function #'drgnx-cockpit-edits--revert)
   (add-hook 'change-major-mode-hook #'drgnx-cockpit-edits--keep-mode nil t)
-  (add-hook 'kill-buffer-hook #'drgnx-cockpit-edits--unwatch nil t))
+  (add-hook 'kill-buffer-hook #'drgnx-cockpit-edits--unwatch nil t)
+  (cl-pushnew (current-buffer) drgnx-cockpit-edits--buffers))
 
 (dolist (v '(drgnx-cockpit-edits--agent drgnx-cockpit-edits--id drgnx-cockpit-edits--source drgnx-cockpit-edits--neutral))
   (put v 'permanent-local t))

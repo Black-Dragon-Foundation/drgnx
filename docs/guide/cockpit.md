@@ -301,9 +301,9 @@ The graph never asks anything, and it never blocks typing. It redraws when one o
 - the work tracker finishes a scan;
 - a theme is enabled (the drawing's colours come from faces);
 - a check every `drgnx-cockpit-check-interval` (3 s) finds that another process wrote the store, for example an
-  outside agent's MCP server or another Emacs. The check is one query, and it runs only while the graph's pane shows:
-  it starts when the pane shows and stops when it is hidden;
-- its pane shows again, or its window changes size (the drawing may now fit, or no longer).
+  outside agent's MCP server or another Emacs. The check is one query, and it runs only while the graph shows, in its
+  pane or any other window: it starts when a window shows it and stops when none does;
+- it shows again, or its window changes size (the drawing may now fit, or no longer).
 
 However many events come, at most one redraw runs per `drgnx-cockpit-redraw-delay` (0.5 s). A redraw first
 compares a cheap key, which costs about 20 µs. The key covers the store's version and change count, what the graph
@@ -350,6 +350,7 @@ The options:
 - `drgnx-cockpit-graph-states`: each state's face and mark.
 - `drgnx-cockpit-open-functions`: what opening a node of each kind does.
 - `drgnx-cockpit-redraw-delay` (0.5 s), `drgnx-cockpit-check-interval` (3 s), `drgnx-cockpit-silent-interval` (45 s).
+  The redraw delay is read once, when the cockpit's code loads: a change after that takes effect at the next start.
 - An agent's edits: `drgnx-cockpit-edits-delay` (0.3 s), `drgnx-cockpit-edits-check-interval` (2 s),
   `drgnx-cockpit-edits-watch-max` (32).
 - `drgnx-cockpit-happened-limit` (50): the most lines in What happened. `drgnx-cockpit-timeline-limit` (300): chips the

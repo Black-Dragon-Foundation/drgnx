@@ -330,6 +330,23 @@ with `drgnx-cockpit-fixture-show-pane'."
       (drgnx-cockpit-graph-test--tick)
       (with-current-buffer g (drgnx-cockpit-graph-test--goto (format "task:%s#4" plan)) (should (looking-at ".*running"))))))
 
+(ert-deftest drgnx-cockpit-graph/its-check-follows-every-window-not-only-its-pane ()
+  ;; the graph in its pane and in an editor window (C-x b); the pane closed: it still shows, so its check stays; the
+  ;; editor window switched away (no pane event, only the store's `windows-changed'): shown nowhere, no check
+  (drgnx-cockpit-graph-test--with-store
+    (let* ((editor (selected-window)) (w (drgnx-cockpit-fixture-show-pane 'work-graph g 'left)))
+      (set-window-buffer editor g)
+      (drgnx-state-sync) (drgnx-state--deliver-idle)
+      (drgnx-cockpit-fixture-hide-pane w)
+      (should (drgnx-timer-active-p (cons 'cockpit-check g)))
+      (set-window-buffer editor (get-buffer-create "*scratch*"))
+      (drgnx-state-sync) (drgnx-state--deliver-idle)
+      (should-not (drgnx-timer-active-p (cons 'cockpit-check g)))
+      ;; shown again only in a window, never as its pane: its check runs
+      (set-window-buffer editor g)
+      (drgnx-state-sync) (drgnx-state--deliver-idle)
+      (should (drgnx-timer-active-p (cons 'cockpit-check g))))))
+
 (ert-deftest drgnx-cockpit-graph/a-hidden-pane-draws-nothing ()
   ;; hidden: the draw on its way finds it hidden (a stale skip), draws no row and builds no model
   (drgnx-cockpit-graph-test--with-store
@@ -372,6 +389,7 @@ with `drgnx-cockpit-fixture-show-pane'."
         ;; the graph hears of its pane from the workbench state store; the status bar's count is looked at
         (should (memq #'drgnx-cockpit--pane-shown (alist-get 'pane-shown drgnx-state--now)))
         (should (memq #'drgnx-cockpit--pane-hidden (alist-get 'pane-hidden drgnx-state--now)))
+        (should (memq #'drgnx-cockpit--windows-changed (alist-get 'windows-changed drgnx-state--idle)))
         (should (memq #'drgnx-cockpit--pane-resized (alist-get 'pane-resized drgnx-state--idle)))
         (should (drgnx-timer-active-p 'cockpit-waiting))))
     (should (equal (plist-get (alist-get 'tools/cockpit drgnx-modules--table) :requires) '(tools/work tools/jobs)))

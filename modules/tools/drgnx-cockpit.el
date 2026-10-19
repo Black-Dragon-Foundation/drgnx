@@ -10,9 +10,9 @@
 ;; again only when it changed.  It follows the live store: hub events, agent sessions, work-tracker scans and theme
 ;; changes touch the view (`drgnx-cockpit-schedule'), whose SYNC first compares a cheap key (the store's data version
 ;; and change count, counters, the filter, the options, the font) and builds the model only when it changed.  The view
-;; draws at most once per `drgnx-cockpit-redraw-delay', only while the graph shows.  While the pane shows (the
-;; workbench state store's `pane-shown' and `pane-hidden'), a check every few seconds catches what other processes
-;; wrote; hidden, the graph keeps no timer.  It never prompts and never touches a remote file.  Click, or TAB and
+;; draws at most once per `drgnx-cockpit-redraw-delay', only while the graph shows.  While a window shows it (the
+;; workbench state store's `pane-shown', `pane-hidden' and `windows-changed'), a check every few seconds catches what
+;; other processes wrote; hidden, the graph keeps no timer.  It never prompts and never touches a remote file.  Click, or TAB and
 ;; RET, opens a node's tab; f filters by milestone, agent and state.  See docs/guide/cockpit.md.
 
 ;;; Code:
@@ -226,16 +226,16 @@ only what changed is drawn.  Cheap: called from every event (a flag and a timer)
 ;;;; While the pane shows (the workbench state store's events)
 
 (defun drgnx-cockpit--follow ()
-  "While the Work graph shows (`drgnx-cockpit-shown-p'), its check runs (the timer `(cockpit-check . BUFFER)', its
-buffer's) and it catches up with what changed while it was hidden; hidden, the check is cancelled."
+  "While the Work graph shows (`drgnx-cockpit-shown-p': in its pane or any window), its check runs (the timer
+`(cockpit-check . BUFFER)', its buffer's) and, when the check was not running, it catches up with what changed while it
+was hidden; hidden, the check is cancelled."
   (when-let* ((b (get-buffer drgnx-cockpit-graph-buffer-name)))
     (let ((key (cons 'cockpit-check b)))
-      (if (not (drgnx-cockpit-shown-p b))
-          (drgnx-timer-cancel key)
-        (unless (drgnx-timer-active-p key)
-          (drgnx-timer-start key drgnx-cockpit-check-interval #'drgnx-cockpit--check
-                             :repeat drgnx-cockpit-check-interval :args (list b) :owner b))
-        (drgnx-cockpit-schedule)))))
+      (cond ((not (drgnx-cockpit-shown-p b)) (drgnx-timer-cancel key))
+            ((not (drgnx-timer-active-p key))
+             (drgnx-timer-start key drgnx-cockpit-check-interval #'drgnx-cockpit--check
+                                :repeat drgnx-cockpit-check-interval :args (list b) :owner b)
+             (drgnx-cockpit-schedule))))))
 
 (defun drgnx-cockpit--pane-shown (data)
   "`pane-shown', on the store's `now' lane: the Work graph shows — `drgnx-cockpit--follow'."
@@ -244,6 +244,11 @@ buffer's) and it catches up with what changed while it was hidden; hidden, the c
 (defun drgnx-cockpit--pane-hidden (data)
   "`pane-hidden', on the store's `now' lane: the Work graph's pane went — `drgnx-cockpit--follow'."
   (when (eq (plist-get data :kind) 'work-graph) (drgnx-cockpit--follow)))
+
+(defun drgnx-cockpit--windows-changed (_data)
+  "`windows-changed', on the store's `idle' lane (never inside redisplay): the graph shown or no longer shown in a
+window that is not its pane (`C-x b'), which is no pane event — `drgnx-cockpit--follow'."
+  (drgnx-cockpit--follow))
 
 (defun drgnx-cockpit--pane-resized (data)
   "`pane-resized', on the store's `idle' lane: the graph's window changed size — the drawing may now fit, or no
@@ -254,6 +259,7 @@ longer."
   "Hear of the Work graph's pane from the workbench state store (tools/cockpit's setup; recorded there)."
   (drgnx-state-subscribe 'pane-shown #'drgnx-cockpit--pane-shown :lane 'now)
   (drgnx-state-subscribe 'pane-hidden #'drgnx-cockpit--pane-hidden :lane 'now)
+  (drgnx-state-subscribe 'windows-changed #'drgnx-cockpit--windows-changed)
   (drgnx-state-subscribe 'pane-resized #'drgnx-cockpit--pane-resized))
 
 ;;;; What other processes wrote; worktrees nobody reports from

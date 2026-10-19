@@ -34,7 +34,8 @@
 the fixture's (SESSIONS); NOTIFIED counts the hub told of a message.  File watches are recorded in WATCHES (descriptor → (DIR CALLBACK)), never real ones: in
 batch Emacs a real watch's events wait in an input queue nobody reads, and while one waits no process sentinel runs.
 The pane is killed after, and must leave no timer or watch behind.  A fresh workbench state store has the panes'
-subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E calls `drgnx-state-sync' after."
+subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E calls `drgnx-state-sync' after, and
+`drgnx-state--deliver-idle' when no pane event says it (`windows-changed' is on the `idle' lane)."
   (declare (indent 1))
   `(drgnx-cockpit-fixture-with
      (drgnx-test-with-state
@@ -53,7 +54,7 @@ subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E c
                  (save-window-excursion
                    (delete-other-windows)
                    (set-window-buffer (selected-window) e)
-                   (drgnx-state-sync)                ; the store sees it shown: it follows its agent
+                   (drgnx-state-sync) (drgnx-state--deliver-idle) ; the store sees it shown: it follows its agent
                    (set-buffer e)
                    (drgnx-cockpit-edits-test--settle e)
                    ,@body)
@@ -250,7 +251,7 @@ subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E c
 (defun drgnx-cockpit-edits-test--hide (e)
   "Show *scratch* where the pane E was, and let the store see it."
   (dolist (w (get-buffer-window-list e nil t)) (set-window-buffer w (get-buffer-create "*scratch*")))
-  (drgnx-state-sync))
+  (drgnx-state-sync) (drgnx-state--deliver-idle))
 
 (ert-deftest drgnx-cockpit-edits/a-hidden-pane-keeps-no-timer ()
   ;; shown, the pane looks at the store every few seconds; hidden (another buffer in its window), it keeps no timer
@@ -270,10 +271,21 @@ subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E c
     (should (zerop (hash-table-count watches)))
     (should (zerop (hash-table-count drgnx-cockpit-edits--watches)))
     (set-window-buffer (selected-window) e)
-    (drgnx-state-sync)
+    (drgnx-state-sync) (drgnx-state--deliver-idle)
     (drgnx-cockpit-edits-test--settle e)
     (should (gethash wt-a drgnx-cockpit-edits--watches))
     (should (= (hash-table-count watches) (hash-table-count drgnx-cockpit-edits--watches)))))
+
+(ert-deftest drgnx-cockpit-edits/following-walks-only-the-panes ()
+  ;; ST-T24-1: a window change looks at the edits panes the module keeps, never at every buffer
+  (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
+    (should (memq e drgnx-cockpit-edits--buffers))
+    (dolist (w (get-buffer-window-list e nil t)) (set-window-buffer w (get-buffer-create "*scratch*")))
+    (drgnx-state-sync)
+    (cl-letf (((symbol-function 'buffer-list) (lambda (&rest _) (ert-fail "Every buffer was looked at"))))
+      (drgnx-state--deliver-idle))
+    (should-not (seq-filter #'drgnx-timer-active-p (drgnx-cockpit-edits-test--keys e)))
+    (should (zerop (hash-table-count watches)))))
 
 (ert-deftest drgnx-cockpit-edits/showing-starts-it-again ()
   ;; hidden while the agent writes a new file and reports it (no watch, no check sees it): shown again as its pane,
@@ -290,7 +302,10 @@ subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E c
     (should (member "docs/while-hidden.md" drgnx-cockpit-edits--files))
     (drgnx-cockpit-edits-test--goto "docs/while-hidden.md" "+hidden")
     (should (gethash (concat wt-a "docs/") drgnx-cockpit-edits--watches))
-    (set-window-parameter (selected-window) 'drgnx-layouts-pane nil)))
+    ;; its pane hidden (the store's `pane-hidden', on the `now' lane): no timer and no watch at once
+    (drgnx-cockpit-fixture-hide-pane (selected-window))
+    (should-not (seq-filter #'drgnx-timer-active-p (drgnx-cockpit-edits-test--keys e)))
+    (should (zerop (hash-table-count watches)))))
 
 (ert-deftest drgnx-cockpit-edits/a-patch-keeps-each-window-on-its-hunk ()
   ;; two windows on the pane, one in README's hunk, one in new.txt's; README's grows above new.txt's section: each
@@ -382,10 +397,11 @@ subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E c
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil) (kinds nil))
     (cl-letf (((symbol-function 'drgnx-pane-define-kind) (lambda (kind &rest props) (push (cons kind props) kinds))))
       (drgnx-cockpit-fixture-after-setup
-        ;; the panes hear from the workbench state store when they show, are hidden, or swap buffers in one window
+        ;; the panes hear from the workbench state store when they show, are hidden (at once), or swap buffers in one
+        ;; window (once Emacs is idle: never inside redisplay)
         (should (memq #'drgnx-cockpit-edits--pane-shown (alist-get 'pane-shown drgnx-state--now)))
         (should (memq #'drgnx-cockpit-edits--pane-hidden (alist-get 'pane-hidden drgnx-state--now)))
-        (should (memq #'drgnx-cockpit-edits--windows-changed (alist-get 'windows-changed drgnx-state--now)))))
+        (should (memq #'drgnx-cockpit-edits--windows-changed (alist-get 'windows-changed drgnx-state--idle)))))
     (should (eq (plist-get (alist-get 'agent-edits kinds) :home) 'editor))
     (pcase-dolist (`(,id ,fn) '((cockpit-accept-file drgnx-cockpit-edits-accept-file)
                                 (cockpit-revert-file drgnx-cockpit-edits-revert-file)
