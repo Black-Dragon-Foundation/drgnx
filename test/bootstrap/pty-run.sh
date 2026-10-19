@@ -1,3 +1,4 @@
+# shellcheck shell=bash disable=SC2034   # sourced; PTY_RC and PTY_STUCK are for the caller
 # Sourced by make-secrets.sh and in-container.sh (bash): run a program that asks on its terminal (sudo's password, age's
 # passphrase, a y-or-n question) on a real pseudo-terminal, and type the answers when the prompts appear.
 #
@@ -6,7 +7,7 @@
 # COMMAND (a shell string) runs under util-linux `script`, so it has a controlling terminal like a user's shell has.
 # LOG receives everything the terminal showed (a typed secret must never be in it: a prompt that does not switch the
 # echo off would show it).  The pairs are prompts in the order they come: REPLY and a newline are typed when MARKER
-# shows up after the prompt answered before it (text printed earlier, a question that mentions a passphrase, never
+# shows up after the previous reply was typed (text printed earlier, a question that mentions a passphrase, never
 # counts).  Each wait is bounded: no next prompt (or, after the last, no end) within PTY_STEP_TIMEOUT seconds (300)
 # stops the command and its terminal.  Sets PTY_RC to COMMAND's exit status, and PTY_STUCK to what it was waiting for
 # when it was stopped (PTY_RC is then 124), or to the prompt it never saw when the command ended first (empty: all
@@ -42,8 +43,8 @@ pty_run() {
       fi
       sleep 0.3
     done
-    pos=$((at + ${#pairs[i]}))
     sleep 0.4   # the program is reading (and has switched the echo off) by now
+    pos=$(wc -c <"$log")   # the next prompt counts only from here: not a re-asked question or a retry printed meanwhile
     printf '%s\n' "${pairs[i + 1]}" >&"$fd"
   done
   for ((i = 0; i < 50; i++)); do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done

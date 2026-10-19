@@ -869,16 +869,23 @@ while :; do wait; done" job job job job job)))
          (drgnx-bin-test--cwd dir))
     (make-directory home)
     (unwind-protect
-        (let ((r (drgnx-bin-test--call
-                  drgnx-bin-test--bin
-                  (list (concat "HOME=" home) (concat "TMPDIR=" tmp) (concat "XDG_STATE_HOME=" home "/state")
-                        (concat "DRGNX_CONFIG_DIR=" dir "/config") (concat "DRGNX_CONTAINER=" rt))
-                  "test" "--bootstrap" "--fedora" "44"))
-              (calls (split-string (drgnx-bin-test--slurp log) "\n" t))
-              (snap (expand-file-name "seen1" dir))
-              (repo (expand-file-name "seen1/config.git" dir)))
+        (let* ((r (drgnx-bin-test--call
+                   drgnx-bin-test--bin
+                   (list (concat "HOME=" home) (concat "TMPDIR=" tmp) (concat "XDG_STATE_HOME=" home "/state")
+                         (concat "DRGNX_CONFIG_DIR=" dir "/config") (concat "DRGNX_CONTAINER=" rt))
+                   "test" "--bootstrap" "--fedora" "44"))
+               (all (split-string (drgnx-bin-test--slurp log) "\n" t))
+               (calls (seq-filter (lambda (c) (string-prefix-p "run " c)) all))
+               (snap (expand-file-name "seen1" dir))
+               (repo (expand-file-name "seen1/config.git" dir)))
           (should (eql 0 (car r)))
           (should (= 2 (length calls)))
+          ;; each container is named, and removed after its run (a time-out leaves none running)
+          (should (string-match-p "--name drgnx-bootstrap-[0-9]+-keys " (nth 0 calls)))
+          (should (string-match-p "--name drgnx-bootstrap-[0-9]+-machine " (nth 1 calls)))
+          (dolist (c calls)
+            (string-match "--name \\([^ ]+\\)" c)
+            (should (member (format "rm -f %s" (match-string 1 c)) (cdr (member c all)))))   ; podman's has -t 0
           (should (string-match-p "--memory 3g --memory-swap 3g .*fedora:44 bash /src/test/bootstrap/make-secrets\\.sh\\'" (nth 0 calls)))
           (should (string-match-p "--memory 6g --memory-swap 6g .*:ro.* .*fedora:44 bash /src/test/bootstrap/in-container\\.sh\\'" (nth 1 calls)))
           (should-not (string-match-p ":ro" (nth 0 calls)))   ; container 1 writes secrets.age into the repository
@@ -899,6 +906,42 @@ while :; do wait; done" job job job job job)))
                                   (shell-quote-argument repo)
                                   (shell-quote-argument (expand-file-name "etc/drgnx.lock.eld" drgnx-bin-test--root))))
                          "same\n")))
+      (delete-directory dir t)
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-bin/test-bootstrap-removes-its-container-when-stopped ()
+  ;; TERM (a CI cancel; Ctrl-C is the same path) while a container runs: bin/drgnx exits at once and removes the
+  ;; container by name — the container's bash (PID 1) ignores the TERM podman forwards, so nothing else would stop it.
+  (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
+         (tmp (make-temp-file "drgnx-bin-tmpdir" t))
+         (home (expand-file-name "home" dir))
+         (log (expand-file-name "rt.log" dir))
+         (rt (drgnx-bin-test--fake-emacs
+              (expand-file-name "fake-rt" dir)
+              (format "echo \"$*\" >> %s\ncase $1 in run) exec sleep 20 ;; esac" log)))
+         (default-directory (file-name-as-directory dir))
+         (process-environment (append (list (concat "HOME=" home) (concat "TMPDIR=" tmp) "DRGNX_EMACS"
+                                            (concat "DRGNX_CONFIG_DIR=" dir "/config") (concat "DRGNX_CONTAINER=" rt))
+                                      process-environment))
+         (proc nil))
+    (make-directory home)
+    (unwind-protect
+        (progn
+          (setq proc (make-process :name "drgnx-bin-stop" :buffer nil :noquery t :connection-type 'pipe
+                                   :command (list drgnx-bin-test--bin "test" "--bootstrap")))
+          (let ((deadline (+ (float-time) 60)))
+            (while (and (< (float-time) deadline)
+                        (not (string-match-p "^run " (or (ignore-errors (drgnx-bin-test--slurp log)) ""))))
+              (accept-process-output nil 0.1)))
+          (should (string-match-p "^run .*--name drgnx-bootstrap-[0-9]+-keys " (drgnx-bin-test--slurp log)))
+          (signal-process proc 'term)
+          (let ((deadline (+ (float-time) 10)))
+            (while (and (process-live-p proc) (< (float-time) deadline)) (accept-process-output nil 0.1)))
+          (should-not (process-live-p proc))                 ; at once, not when the container's run ends
+          (let ((name (progn (string-match "--name \\([^ ]+\\)" (drgnx-bin-test--slurp log))
+                             (match-string 1 (drgnx-bin-test--slurp log)))))
+            (should (string-match-p (concat "^rm -f " (regexp-quote name) "$") (drgnx-bin-test--slurp log)))))
+      (when (process-live-p proc) (delete-process proc))
       (delete-directory dir t)
       (delete-directory tmp t))))
 

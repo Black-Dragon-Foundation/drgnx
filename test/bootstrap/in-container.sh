@@ -83,8 +83,17 @@ for d in "$ELPA"/*/; do
   grep -qxF -- "$base" /tmp/lock.dirs || fail "elpa/$base is not what the lock pins"
   n=$((n + 1))
 done
-((n >= 10)) || fail "only $n packages in elpa/: sync installed too few"
-echo "elpa/: $n packages, each the version the lock pins"
+# and everything the configuration needs is there: its modules' packages and what they require, as the lock pins them
+# (drgnx's own reading of the config, with this Emacs: a package a built-in satisfies is not needed)
+emacs --batch -Q -L "$HOME/.local/share/drgnx/drgnx/core" --eval '(progn (require (quote drgnx-pkg))
+  (let ((lock (drgnx-pkg-read-lock)))
+    (dolist (n (drgnx-pkg--lock-closure (drgnx-pkg-manifest) lock))
+      (princ (format "%s-%s\n" n (plist-get (alist-get n lock) :version))))))' >/tmp/needed.dirs </dev/null
+[[ -s /tmp/needed.dirs ]] || fail "the configuration needs no package: not read"
+while read -r want; do
+  [[ -d "$ELPA/$want" ]] || fail "the configuration needs $want: not in elpa/"
+done </tmp/needed.dirs
+echo "elpa/: $n packages, each the version the lock pins; the $(wc -l </tmp/needed.dirs) the configuration needs are all there"
 
 [[ "$(lookup_key)" == "$KEY" ]] || fail "the keyring does not hold the fixture key"
 echo "keyring: holds the key of openrouter.ai"
