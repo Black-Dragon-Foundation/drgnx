@@ -2193,7 +2193,9 @@ to revisit the file normally, a timer's open included.
 
 **Lean** is `drgnx-large-file-mode`. While a lean open runs, `drgnx-large-file--opening` makes the predicate true,
 `treesit-max-buffer-size` is below the size (a `*-ts-mode` starts no parser, and its warning is suppressed) and a
-`:before-while` advice makes `eglot-ensure` a no-op. The sweep, in `find-file-hook` at depth -90, turns the mode on
+`:before-while` advice makes `eglot-ensure` a no-op. A revert runs the major mode again (`after-find-file` calls
+`normal-mode`): an around-advice on `normal-mode` binds the same size limit in a lean or raw buffer, so a buffer
+that stays large across a revert gets no parser either. The sweep, in `find-file-hook` at depth -90, turns the mode on
 for a large file, or for a buffer whose text is above `:ask-above` (a compressed file that expands). The mode turns
 off every mode of `so-long-minor-modes` that is on (the module adds indent-bars, blame, sticky and diff-hl's margin
 mode to that one list), then undo and auto-save. A raw visit (`find-file-noselect` with RAWFILE) runs no

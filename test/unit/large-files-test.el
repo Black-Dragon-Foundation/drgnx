@@ -484,6 +484,11 @@ Return the errors it sent the client."
       (with-current-buffer (find-file-noselect f)
         (should (eq major-mode 'python-ts-mode))
         (should (eq drgnx-large-file 'lean))
+        (should-not (treesit-parser-list))
+        ;; still large after a revert: the major mode runs again, without a parser
+        (drgnx-large-files-test--file "big.py" 65536)
+        (drgnx-large-files-test--never-asks (drgnx-large-files-test--revert))
+        (should (eq major-mode 'python-ts-mode))
         (should-not (treesit-parser-list)))
       (should-not (get-buffer "*Warnings*")))))
 
@@ -567,6 +572,28 @@ Return the errors it sent the client."
   (push (verify-visited-file-modtime) drgnx-large-files-test--current)
   (revert-buffer-insert-file-contents--default-function file-name auto-save-p))
 
+(defvar drgnx-large-files-test--gates nil "(TREESIT-MAX-BUFFER-SIZE . BUFFER-SIZE) each time the major mode ran.")
+
+(defun drgnx-large-files-test--note-gate ()
+  "A mode hook: note tree-sitter's size limit against the buffer's size (a parser starts only within it)."
+  (push (cons treesit-max-buffer-size (buffer-size)) drgnx-large-files-test--gates))
+
+(ert-deftest drgnx-large-files/staying-large-on-revert-starts-no-parser ()
+  (skip-unless (boundp 'treesit-max-buffer-size))
+  (drgnx-large-files-test--door
+    (let ((f (drgnx-large-files-test--file "big.el" 32768))
+          (emacs-lisp-mode-hook (list #'drgnx-large-files-test--note-gate))
+          (drgnx-large-files-test--gates nil))
+      (with-current-buffer (let ((drgnx-large-file-open 'whole)) (find-file-noselect f))
+        (should (eq drgnx-large-file 'lean))
+        (drgnx-large-files-test--file "big.el" 65536)
+        (setq drgnx-large-files-test--gates nil)
+        (drgnx-large-files-test--never-asks (drgnx-large-files-test--revert))
+        (should (eq drgnx-large-file 'lean))
+        (should drgnx-large-files-test--gates)       ; the revert ran the major mode again
+        (dolist (g drgnx-large-files-test--gates)
+          (should (< (car g) (cdr g))))))))
+
 (ert-deftest drgnx-large-files/raw-stays-raw-on-revert ()
   (drgnx-large-files-test--door
     (let ((f (drgnx-large-files-test--file "big.log" 131072)))
@@ -633,6 +660,7 @@ Return the errors it sent the client."
         (should (advice-member-p 'drgnx-editor/large-files--open 'find-file-noselect))
         (should (advice-member-p 'drgnx-editor/large-files--server 'server-execute))
         (should (advice-member-p 'drgnx-editor/large-files--not-large 'eglot-ensure))
+        (should (advice-member-p 'drgnx-editor/large-files--no-parser 'normal-mode))
         (should global-so-long-mode))
       (should-not (drgnx-config-defined-p 'large-files))
       (should-not (drgnx-config-defined-p 'large-files-project))
@@ -641,6 +669,7 @@ Return the errors it sent the client."
       (should-not (advice-member-p 'drgnx-editor/large-files--open 'find-file-noselect))
       (should-not (advice-member-p 'drgnx-editor/large-files--server 'server-execute))
       (should-not (advice-member-p 'drgnx-editor/large-files--not-large 'eglot-ensure))
+      (should-not (advice-member-p 'drgnx-editor/large-files--no-parser 'normal-mode))
       (should-not (memq 'drgnx-editor/large-files--sweep (default-value 'find-file-hook)))
       (should-not (memq 'drgnx-editor/large-files--revert (default-value 'after-revert-hook)))
       (should-not (memq 'drgnx-editor/large-files--before-revert (default-value 'before-revert-hook)))

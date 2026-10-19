@@ -180,21 +180,25 @@ DEFAULT, the mode listed first.  In the minibuffer, in a GUI too."
       (?r 'raw)
       (_ (user-error "Aborted")))))
 
+(defun drgnx-large-files--without-parser (size fn)
+  "Call FN with tree-sitter's size limit below SIZE bytes: a `*-ts-mode' it runs starts no parser, and does not
+warn about it."
+  (require 'treesit nil t)
+  (require 'warnings)
+  (let ((treesit-max-buffer-size (max 0 (1- size)))
+        (warning-suppress-types (cons '(treesit) warning-suppress-types))
+        (warning-suppress-log-types (cons '(treesit) warning-suppress-log-types)))
+    (funcall fn)))
+
 (defun drgnx-large-files--open-as (mode orig file nowarn size thresholds)
   "Visit FILE of SIZE bytes in MODE (`lean', `raw' or `chunks') through ORIG, the original `find-file-noselect'
 \(NOWARN passed on); return the buffer.  THRESHOLDS: FILE's, for the chunks."
   (pcase mode
     ('lean
-     (require 'treesit nil t)
-     (require 'warnings)
      (let ((buf (let ((large-file-warning-threshold nil)
                       ;; the major mode and its hooks run before the flag is set: they see "large" all the same
-                      (drgnx-large-file--opening 'lean)
-                      ;; a *-ts-mode starts no parser, and does not warn about it
-                      (treesit-max-buffer-size (max 0 (1- size)))
-                      (warning-suppress-types (cons '(treesit) warning-suppress-types))
-                      (warning-suppress-log-types (cons '(treesit) warning-suppress-log-types)))
-                  (funcall orig file nowarn nil nil))))
+                      (drgnx-large-file--opening 'lean))
+                  (drgnx-large-files--without-parser size (lambda () (funcall orig file nowarn nil nil))))))
        (with-current-buffer buf
          (unless (eq drgnx-large-file 'lean) (drgnx-large-file-mode 1)))
        buf))
@@ -327,6 +331,11 @@ Chunk buffers stay."
                               ;; lean: the gate, the sweep, the revert
                               (drgnx-module-advice #'eglot-ensure :before-while not-large ()
                                 (not (drgnx-large-file-p)))
+                              ;; a revert runs the major mode again (`after-find-file'): still no parser
+                              (drgnx-module-advice #'normal-mode :around no-parser (orig &rest args)
+                                (if (memq drgnx-large-file '(lean raw))
+                                    (drgnx-large-files--without-parser (buffer-size) (lambda () (apply orig args)))
+                                  (apply orig args)))
                               (drgnx-module-hook 'find-file-hook sweep () :depth -90
                                                  (when (drgnx-large-files--sweep-p) (drgnx-large-file-mode 1)))
                               (drgnx-module-hook 'before-revert-hook before-revert ()
