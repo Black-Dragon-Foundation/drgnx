@@ -292,6 +292,13 @@ Help tab; pressed while a card from hovering shows, it shows the card for point 
 mouse). A button used on a hovered symbol moves point there first and leaves the mark where point was (`C-u C-SPC`
 goes back).
 
+The card always stands out from the editor: it takes the theme's tooltip look when that differs from the editor's
+background, and otherwise (kusanagi's tooltip is the editor's own) a tint of the text colour — lighter than the page
+on a dark theme, darker on a light one — with a 1px border halfway between the text colour and the card's. It is never
+narrower than its row of buttons, so none is cut off (in a window narrower than that row the card stays on the screen
+and overlaps the window beside). A symbol with no documentation brings no card: the key says "No documentation here."
+in the echo area (in a terminal the strip closes again), and a hover shows nothing.
+
 The card never covers the line you are editing. In a window it sits just below the symbol's line, inside the window
 (above the line when there is no room below), and it never covers any row of that line (a long line wrapped over
 several rows counts whole) or of the line point is on — hovering a symbol just above point puts the card under
