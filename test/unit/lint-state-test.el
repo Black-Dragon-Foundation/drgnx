@@ -143,9 +143,7 @@ and strings are not code and never count.  Each name is listed once."
   "The one library that may hold the terminal-name test.")
 
 (defconst drgnx-lint-state--classifier-allowed
-  '(("core/drgnx-session.el" 2 "Task 16")
-    ("wb/drgnx-frames.el" 1 "Task 16")
-    ("wb/drgnx-persist.el" 1 "Task 15")
+  '(("wb/drgnx-persist.el" 1 "ST-T15-1, DEFERRED pass")
     ("core/drgnx-timer.el" 1 "the debugger test: a core library no store task owns")
     ("core/drgnx-modal-choose.el" 1 "the daemon's own terminal cannot ask: a core library no store task owns"))
   "Rows (FILE COUNT WHO): FILE, relative to the checkout root, still holds COUNT of the string.")
