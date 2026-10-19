@@ -430,8 +430,8 @@ symbol's whole line or the line point is on."
           (set-frame-position frame (car xy) (cdr xy))
           (unless (frame-visible-p frame) (make-frame-visible frame))
           (setq drgnx-quickhelp--card-up t
-                ;; what it was placed against: a look puts it away when the window scrolls or moves
-                drgnx-quickhelp--origin (plist-put (plist-put o :start (window-start win)) :edges (window-pixel-edges win)))
+                ;; what it was placed against: a look puts it away when the window scrolls; the store's events, when it moves
+                drgnx-quickhelp--origin (plist-put (plist-put o :start (window-start win)) :edges (drgnx-state-edges win)))
           (drgnx-quickhelp--watch-card)
           t)))))
 
@@ -463,7 +463,7 @@ WIN is too small.  Point stays visible."
             ((and (null docs) (not (plist-get o :key))) (drgnx-quickhelp-hide))   ; a hover over nothing
             ;; no strip, or no room for a card beside the line: the first line in the echo area for the key, nothing
             ;; for a hover
-            ((or (not (display-graphic-p (window-frame (plist-get o :window)))) (not (drgnx-quickhelp--show-card docs)))
+            ((or (not (eq (drgnx-state-frame-kind (window-frame (plist-get o :window))) 'gui)) (not (drgnx-quickhelp--show-card docs)))
              (drgnx-quickhelp-hide)
              (when (and docs (plist-get o :key)) (message "%s" (car (drgnx-quickhelp--doc-lines docs 200 1)))))))))
 
@@ -475,7 +475,7 @@ WIN is too small.  Point stays visible."
   (add-hook 'post-command-hook #'drgnx-quickhelp--post-command)
   (setq drgnx-quickhelp--showing t)
   ;; a terminal: the strip opens now, from the command (never from a timer: the layout only changes when you act)
-  (when (and key (not (display-graphic-p (window-frame win))))
+  (when (and key (not (eq (drgnx-state-frame-kind (window-frame win)) 'gui)))
     (setq drgnx-quickhelp--strip (drgnx-quickhelp--open-strip win)))
   (drgnx-quickhelp-collect pos win #'drgnx-quickhelp--show))
 
@@ -553,7 +553,7 @@ card moves out of the way while you type — unless the modal engine's state doe
 (defun drgnx-quickhelp--mouse-symbol ()
   "(WINDOW . START) of the symbol under the mouse in a graphical frame's text, or nil."
   (pcase-let ((`(,frame ,x . ,y) (mouse-pixel-position)))
-    (when (and (frame-live-p frame) x y (display-graphic-p frame) (not (frame-parent frame)))
+    (when (and x y (eq (drgnx-state-frame-kind frame) 'gui))
       (let* ((posn (posn-at-x-y x y frame)) (w (posn-window posn)) (p (posn-point posn)))
         (when (and (windowp w) p (null (posn-area posn)) (not (window-minibuffer-p w)))
           (with-current-buffer (window-buffer w)
@@ -567,14 +567,38 @@ card moves out of the way while you type — unless the modal engine's state doe
 
 (defun drgnx-quickhelp--focused-p ()
   "Non-nil when a graphical frame (not a child frame) has the focus (or Emacs cannot tell)."
-  (seq-some (lambda (f) (and (display-graphic-p f) (not (frame-parent f)) (frame-focus-state f))) (frame-list)))
+  (seq-some (lambda (f) (and (eq (drgnx-state-frame-kind f) 'gui) (frame-focus-state f))) (frame-list)))
 
 (defun drgnx-quickhelp--card-moved-p (o)
-  "Non-nil when the window the card O was placed against has scrolled, moved or changed size since."
+  "Non-nil when the window the card O was placed against has scrolled since (or is gone).
+A move or a resize is the store's to tell (`drgnx-quickhelp--put-away'): scrolling is not window state."
   (let ((w (plist-get o :window)))
     (and (plist-get o :start)
-         (or (not (window-live-p w)) (/= (window-start w) (plist-get o :start))
-             (not (equal (window-pixel-edges w) (plist-get o :edges)))))))
+         (or (not (window-live-p w)) (/= (window-start w) (plist-get o :start))))))
+
+(defun drgnx-quickhelp--put-away-now (o)
+  "Put the card away, unless it is not the card O any more (from the timer `drgnx-quickhelp--put-away' armed)."
+  (when (and drgnx-quickhelp--card-up (eq drgnx-quickhelp--origin o))
+    (drgnx-quickhelp--teardown)))
+
+(defun drgnx-quickhelp--put-away (data)
+  "A `now' subscriber of the store's `pane-resized', `windows-changed' and `selected-changed': when DATA says
+the card's window moved, was resized, or the frame's windows or selection changed, arm the put-away timer at 0 s.
+Only that: the card's frame is never touched during redisplay.  A strip is a window of the layout and stays."
+  (let* ((o drgnx-quickhelp--origin) (win (plist-get o :window)))
+    (when (and o drgnx-quickhelp--card-up
+               (or (not (window-live-p win)) (eq (plist-get data :frame) (window-frame win)))
+               (cond ((plist-member data :new)         ; pane-resized: any, if the card's window has other edges
+                      (not (equal (drgnx-state-edges win) (plist-get o :edges))))
+                     ((plist-member data :windows) t)  ; windows-changed
+                     (t (not (memq (plist-get data :window) (list (plist-get o :selected) (drgnx-quickhelp--card-window)))))))
+      (drgnx-timer-soon 'quickhelp-away 0 #'drgnx-quickhelp--put-away-now
+                        :args (list o) :owner drgnx-quickhelp--owner))))
+
+(defun drgnx-quickhelp--watch-windows ()
+  "Hear from the store when the card's window moves (a module setup's own subscriptions: undone with it)."
+  (dolist (event '(pane-resized windows-changed selected-changed))
+    (drgnx-state-subscribe event #'drgnx-quickhelp--put-away :lane 'now)))
 
 (defun drgnx-quickhelp--hover-step (o)
   "Hover's part of a look, O the card's state: once the pointer has moved since the last command, a symbol rested
@@ -595,7 +619,7 @@ The look's own hides are teardowns: the pointer is moving, so the next symbol ge
             (o (drgnx-quickhelp--teardown))))))
 
 (defun drgnx-quickhelp--hover-look ()
-  "One look, while Emacs is idle: a card whose window scrolled, moved or resized goes (hover on or off); with hover
+  "One look, while Emacs is idle: a card whose window scrolled goes (hover on or off); with hover
 on and a graphical frame focused, `drgnx-quickhelp--hover-step'.  Looks go on while a card is up or hover looks."
   (let* ((idle (current-idle-time))
          (quiet (and idle (>= (float-time idle) (* 0.75 drgnx-quickhelp--poll-interval))))
@@ -652,6 +676,7 @@ on and a graphical frame focused, `drgnx-quickhelp--hover-step'.  Looks go on wh
   (add-to-list 'drgnx-modal-front-alists 'drgnx-quickhelp--emulation)
   (drgnx-modal-order-alists)
   (drgnx-state-define-role 'quickhelp)    ; the terminal strip's window: no editor, no chrome
+  (drgnx-quickhelp--watch-windows)
   (setq drgnx-quickhelp--active t)
   (drgnx-quickhelp--apply-hover))
 
