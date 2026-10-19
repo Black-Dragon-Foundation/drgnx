@@ -1462,6 +1462,7 @@ terminal note (`drgnx-onboard--terminal-note'); the desktop (`drgnx-onboard--des
 (declare-function drgnx-secrets--wipe-entries "drgnx-secrets")
 (declare-function drgnx-secrets-export-keys "drgnx-secrets")
 (defvar drgnx-portable-machine-local)
+(defvar drgnx-portable-leftovers)
 (defvar drgnx-portable-install-url)
 
 (defvar drgnx-onboard-call-timeout 30
@@ -1538,28 +1539,48 @@ so only in drgnx's window (never batch: `drgnx onboard' says the command instead
            (let ((entries (drgnx-secrets--entries))) (drgnx-secrets--wipe-entries entries) t)
          (error nil))))
 
+(defun drgnx-onboard--gitignore (dir)
+  "DIR's .gitignore gets the config layer's leftovers (`drgnx-portable-leftovers'): written when DIR has none; one
+there is never changed.  Returns nil, or a sentence naming the lines that one lacks."
+  (let ((file (expand-file-name ".gitignore" dir)))
+    (if (not (or (file-exists-p file) (file-symlink-p file)))
+        (progn (drgnx-file-write-text
+                file (concat "# drgnx's own backups, locks and temp files: they never travel\n"
+                             (mapconcat (lambda (l) (concat l "\n")) drgnx-portable-leftovers "")))
+               nil)
+      (let* ((have (split-string (or (ignore-errors (drgnx-file-read-bounded file)) "") "[ \t]*\n" t))
+             (lacks (seq-remove (lambda (l) (member l have)) drgnx-portable-leftovers)))
+        (and lacks (format "so drgnx's backups, locks and temp files never travel, add to .gitignore: %s"
+                           (string-join lacks " ")))))))
+
 (defun drgnx-onboard--make-repo (dir)
-  "git init DIR, add everything but the machine-local items, one commit.  Returns (STATUS SENTENCE).
+  "git init DIR, add everything but the machine-local items and the config layer's leftovers, one commit.  Returns
+\(STATUS SENTENCE).  A DIR without a .gitignore gets one naming the leftovers (`drgnx-onboard--gitignore').
 The user's git hooks, templates and commit signing are left out (a hook or a pinentry would run inside this
 step), and every git call is bounded (`drgnx-onboard--call')."
   (let* ((shown (drgnx-portable-path dir))
          (git (lambda (&rest args)
                 (apply #'drgnx-onboard--call "git" "-c" "core.hooksPath=/dev/null" "-c" "commit.gpgsign=false" "-C" dir args)))
          (init (funcall git "init" "-q" "--template="))
+         (ignore-note (and (eql (car init) 0) (drgnx-onboard--gitignore dir)))
          (add (and (eql (car init) 0)
                    (apply git "add" "-A" "--" "."
-                          (mapcar (lambda (i) (concat ":(exclude)" (directory-file-name i))) drgnx-portable-machine-local))))
+                          (append (mapcar (lambda (i) (concat ":(exclude)" (directory-file-name i))) drgnx-portable-machine-local)
+                                  (mapcan (lambda (l) (list (concat ":(exclude,glob)**/" l) (concat ":(exclude,glob)**/" l "/**")))
+                                          drgnx-portable-leftovers)))))
          (commit (and (eql (car add) 0)
                       (funcall git "commit" "-q" "--no-verify" "--no-gpg-sign" "-m" "drgnx configuration")))
          (why (lambda (what r) (if (eq (car r) 'timeout) (format "%s %s" what (cdr r))
-                                 (format "%s failed: %s" what (or (cdr r) "git could not run"))))))
-    (cond ((not (eql (car init) 0)) (list 'warn (format "%s in %s" (funcall why "git init" init) shown)))
-          ((not (eql (car add) 0)) (list 'warn (format "made %s a git repository, but %s" shown (funcall why "git add" add))))
-          ((eq (car commit) 'timeout) (list 'warn (format "made %s a git repository, but %s" shown (funcall why "git commit" commit))))
-          ((not (eql (car commit) 0))
-           (list 'info (format "made %s a git repository; the commit needs your git identity: git config --global user.name \"Your Name\"; git config --global user.email you@example.org; then: git -C %s commit -m \"drgnx configuration\""
-                               shown shown)))
-          (t (list 'ok (format "made %s a git repository with one commit; add a remote of your choice and push it (drgnx never pushes)" shown))))))
+                                 (format "%s failed: %s" what (or (cdr r) "git could not run")))))
+         (result
+          (cond ((not (eql (car init) 0)) (list 'warn (format "%s in %s" (funcall why "git init" init) shown)))
+                ((not (eql (car add) 0)) (list 'warn (format "made %s a git repository, but %s" shown (funcall why "git add" add))))
+                ((eq (car commit) 'timeout) (list 'warn (format "made %s a git repository, but %s" shown (funcall why "git commit" commit))))
+                ((not (eql (car commit) 0))
+                 (list 'info (format "made %s a git repository; the commit needs your git identity: git config --global user.name \"Your Name\"; git config --global user.email you@example.org; then: git -C %s commit -m \"drgnx configuration\""
+                                     shown shown)))
+                (t (list 'ok (format "made %s a git repository with one commit; add a remote of your choice and push it (drgnx never pushes)" shown))))))
+    (if ignore-note (list (car result) (concat (cadr result) "; " ignore-note)) result)))
 
 (defun drgnx-onboard--portability-step (ctx)
   "Step 8 (docs/guide/second-machine.md): where the config comes from (`drgnx-onboard--config-source') and the next

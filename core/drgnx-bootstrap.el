@@ -273,22 +273,45 @@ an entry."
          (eql (car origin) 0) (equal (drgnx-bootstrap--norm-url (cdr origin)) (drgnx-bootstrap--norm-url url)))))
 
 (defun drgnx-bootstrap--git-clone (url dir)
-  "Clone URL into DIR (missing or empty): into a new directory beside it, then renamed into place, so a failed or
-stopped clone leaves nothing."
-  (let* ((parent (file-name-directory dir)) tmp)
+  "Clone URL into DIR (missing, empty, or holding only the config layer's leftovers): into a new directory beside
+it, then renamed into place, so a failed or stopped clone leaves nothing.  The leftovers (backups, locks) go
+beside the cloned files; a name the clone has too stops it, and nothing moves.  When a rename fails, the leftovers
+moved so far go back into DIR; one that cannot keeps the clone, which the error names."
+  (let* ((parent (file-name-directory dir)) tmp keep)
     (make-directory parent t)
     (setq tmp (make-temp-file (expand-file-name ".drgnx-clone-" parent) t))
     (unwind-protect
         (let* ((into (expand-file-name "config" tmp))
-               (r (drgnx-bootstrap--git "clone" "-q" "--template=" "--" url into)))
+               (r (drgnx-bootstrap--git "clone" "-q" "--template=" "--" url into))
+               (left (seq-filter #'drgnx-portable-leftover-p (drgnx-bootstrap--entries dir)))
+               (both (seq-filter (lambda (f) (let ((g (expand-file-name f into))) (or (file-exists-p g) (file-symlink-p g))))
+                                 left)))
           (cond
            ((not (eql (car r) 0))
             (list 'failed (format "%s; nothing was changed" (drgnx-bootstrap--why r "git clone"))))
+           (both
+            (list 'failed (format "%s holds %s, and so does the clone: move it aside and run this again; nothing was changed"
+                                  (drgnx-portable-path dir) (string-join both ", "))))
            (t
-            (when (file-directory-p dir) (delete-directory dir)) ; empty: anything else fails here, and nothing moves
-            (rename-file into dir)
+            (let (moved)
+              (condition-case err
+                  (progn (dolist (f left)
+                           (rename-file (expand-file-name f dir) (expand-file-name f into))
+                           (push f moved))
+                         (when (file-directory-p dir) (delete-directory dir)) ; empty: anything else fails here
+                         (rename-file into dir))
+                (error
+                 (ignore-errors (make-directory dir t)) ; the delete may have succeeded
+                 (if-let* ((lost (seq-remove (lambda (f) (ignore-errors (rename-file (expand-file-name f into)
+                                                                                     (expand-file-name f dir))
+                                                                        t))
+                                             moved)))
+                     (progn (setq keep t)
+                            (error "%s; %s could not go back: kept in %s" (error-message-string err)
+                                   (string-join (nreverse lost) ", ") (drgnx-portable-path into)))
+                   (signal (car err) (cdr err))))))
             (list 'changed (format "cloned %s into %s" (drgnx-bootstrap--label url) (drgnx-portable-path dir))))))
-      (delete-directory tmp t))))
+      (unless keep (delete-directory tmp t)))))
 
 (defun drgnx-bootstrap--clone (ctx)
   "--config URL: clone it into a missing or empty config dir; the same clone there is ok; anything else stops."
@@ -297,7 +320,8 @@ stopped clone leaves nothing."
          (dir (directory-file-name (drgnx-user-dir)))
          (shown (drgnx-portable-path dir))
          (problem (drgnx-bootstrap--url-problem url))
-         (entries (drgnx-bootstrap--entries dir (and dry (mapcar #'directory-file-name drgnx-portable-machine-local)))))
+         (entries (seq-remove #'drgnx-portable-leftover-p
+                              (drgnx-bootstrap--entries dir (and dry (mapcar #'directory-file-name drgnx-portable-machine-local))))))
     (cond
      (problem (list 'failed (format "--config: %s; nothing was changed" problem)))
      ((null entries)
@@ -378,7 +402,7 @@ shown, then `chezmoi apply' only after a second yes, never under --yes."
                                 (if remote (format " (origin %s)" (drgnx-onboard--remote-label remote)) " without a remote")))
       (`(chezmoi . ,source) (format "chezmoi manages %s (source %s)" shown (drgnx-portable-path source)))
       (`(inside . ,top) (format "%s is inside the git repository %s" shown (drgnx-portable-path top)))
-      (_ (if (drgnx-bootstrap--entries (drgnx-user-dir)) (format "%s is not a repository (onboarding's Portability step makes one)" shown)
+      (_ (if (seq-remove #'drgnx-portable-leftover-p (drgnx-bootstrap--entries (drgnx-user-dir))) (format "%s is not a repository (onboarding's Portability step makes one)" shown)
            "no configuration yet: drgnx starts with its defaults (--config URL clones yours)")))))
 
 (defun drgnx-bootstrap--config (ctx)
@@ -624,6 +648,12 @@ again here (bootstrap can be called directly): WHY never shows a URL."
 
 (defun drgnx-bootstrap--file (dir name) (expand-file-name name dir))
 
+(defun drgnx-bootstrap--handback-text (dir name)
+  "The text of the hand-back file DIR/NAME (`drgnx-file-read-bounded': never a FIFO, a device or over 1 MiB), nil
+when it is missing.  A file the reader refuses is the error of a hand-back that did not finish."
+  (condition-case nil (drgnx-file-read-bounded (drgnx-bootstrap--file dir name))
+    (drgnx-file-refused (error "drgnx bootstrap: the command handed to bin/drgnx did not finish"))))
+
 (defun drgnx-bootstrap--read-handback (dir)
   "The run handed back in DIR going on: (:from :answers :done :failed), with the result bin/drgnx wrote; nil when
 there is none.  The files are removed.  A hand-back bin/drgnx did not finish is an `error'."
@@ -631,12 +661,9 @@ there is none.  The files are removed.  A hand-back bin/drgnx did not finish is 
     (when (file-exists-p state-file)
       (unwind-protect
           (let* ((state (let ((r (drgnx-file-read state-file))) (and (eq (plist-get r :status) 'ok) (plist-get r :data))))
-                 (rc (and (file-exists-p (drgnx-bootstrap--file dir "rc"))
-                          (with-temp-buffer (insert-file-contents (drgnx-bootstrap--file dir "rc"))
-                                            (string-to-number (string-trim (buffer-string))))))
-                 (out (if (file-exists-p (drgnx-bootstrap--file dir "out"))
-                          (with-temp-buffer (insert-file-contents (drgnx-bootstrap--file dir "out") nil 0 65536) (buffer-string))
-                        "")))
+                 (rc (let ((text (drgnx-bootstrap--handback-text dir "rc"))) (and text (string-to-number (string-trim text)))))
+                 (out (let ((text (or (drgnx-bootstrap--handback-text dir "out") "")))
+                        (substring text 0 (min (length text) 65536)))))
             (unless (and (plist-get state :from) (memq (plist-get state :from) drgnx-bootstrap-steps) (plist-get state :argv) rc)
               (error "drgnx bootstrap: the command handed to bin/drgnx did not finish"))
             (list :from (plist-get state :from) :answers (plist-get state :answers) :failed (plist-get state :failed)

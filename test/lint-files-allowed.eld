@@ -25,6 +25,7 @@
  (:file "core/drgnx-pkg.el" :fn drgnx-pkg-snapshot :what rename-file :why "a directory move: generations" :until never)
  (:file "core/drgnx-pkg.el" :fn drgnx-pkg--http-get :what write-region :why "a temporary file: a download body" :until never)
  (:file "core/drgnx-pkg.el" :fn drgnx-pkg--fetch :what rename-file :why "a directory move: the package cache" :until never)
+ (:file "core/drgnx-portable.el" :fn drgnx-portable--copy-into-place :what rename-file :why "a directory move: a machine-local item copied to TO.drgnx-new, verified, then renamed to TO" :until never)
  (:file "core/drgnx-projects.el" :fn drgnx-projects--board-update :what write-region :why "a user's file: the org board" :until never)
  (:file "core/drgnx-projects.el" :fn drgnx-projects--board-update :what rename-file :why "a user's file: the org board" :until never)
  (:file "core/drgnx-projects.el" :fn drgnx-projects--write-plan :what write-region :why "a user's file: a plan file" :until never)

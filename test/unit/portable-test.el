@@ -302,4 +302,43 @@
     (let ((process-environment (append '("DRGNX_DATA_DIR=" "XDG_DATA_HOME=") process-environment)))
       (should (equal (drgnx-data-dir) (expand-file-name "~/.local/share/drgnx/"))))))
 
+(ert-deftest drgnx-portable/a-crash-mid-move-leaves-no-partial-target ()
+  ;; M12e-T9-5: the copy goes to TO.drgnx-new and is renamed to TO only once it is verified
+  (drgnx-portable-test--with root
+    (let ((config (drgnx-user-dir)) (data (drgnx-data-dir)))
+      (drgnx-portable-test--write (expand-file-name "systemd/a.service" config) "[Unit]\nA\n")
+      (drgnx-portable-test--write (expand-file-name "systemd/b.service" config) "[Unit]\nB\n")
+      ;; the copy fails half way: one file copied, then an error
+      (let ((orig (symbol-function 'copy-file)) (n 0))
+        (cl-letf (((symbol-function 'copy-file)
+                   (lambda (&rest args) (if (= (cl-incf n) 2) (error "Disk full") (apply orig args)))))
+          (should-error (drgnx-portable-move-machine-local))))
+      (should-not (file-exists-p (expand-file-name "systemd" data)))          ; no partial target
+      (should-not (file-exists-p (expand-file-name "systemd.drgnx-new" data)))
+      (should (equal (drgnx-portable-test--text (expand-file-name "systemd/b.service" config)) "[Unit]\nB\n"))
+      ;; a crash (no unwinding) leaves TO.drgnx-new: drgnx's own, removed by the next run
+      (drgnx-portable-test--write (expand-file-name "systemd.drgnx-new/a.service" data) "[Unit]\nA\n")
+      (drgnx-portable-test--write (expand-file-name "emacs.drgnx-new" data) "/usr/bin/em")
+      (drgnx-portable-test--write (expand-file-name "emacs" config) "/usr/bin/emacs\n")
+      (should (equal (drgnx-portable-move-machine-local) '(("emacs" . moved) ("systemd/" . moved))))
+      (should-not (file-exists-p (expand-file-name "systemd.drgnx-new" data)))
+      (should-not (file-exists-p (expand-file-name "emacs.drgnx-new" data)))
+      (should (equal (drgnx-portable-test--text (expand-file-name "systemd/b.service" data)) "[Unit]\nB\n"))
+      (should (equal (drgnx-portable-test--text (expand-file-name "emacs" data)) "/usr/bin/emacs\n"))
+      (should-not (file-exists-p (expand-file-name "systemd" config)))
+      (should-not (file-exists-p (expand-file-name "emacs" config))))))
+
+(ert-deftest drgnx-portable/leftovers-are-the-layers-own-files ()
+  ;; backups, lock directories, temp files and the keys undo file: never moved, never machine-local
+  (dolist (name '("keys.eld.bak-20261019-120000-000" ".keys.eld.lock" ".keys.eld.lock.stale-4242-a1b2c3"
+                  ".keys.eld.tmp-a1b2c3" "keys.eld.undo"))
+    (should (drgnx-portable-leftover-p name)))
+  (dolist (name '("keys.eld" "config.el" "secrets.age" ".gitignore" "lock" "undo"))
+    (should-not (drgnx-portable-leftover-p name)))
+  (drgnx-portable-test--with root
+    (drgnx-portable-test--write (expand-file-name "keys.eld.bak-20261019-120000-000" (drgnx-user-dir)) "(:profile vscode)\n")
+    (should-not (drgnx-portable-move-machine-local))
+    (should-not (plist-get (drgnx-portable-config-problems) :machine-local))
+    (should (file-exists-p (expand-file-name "keys.eld.bak-20261019-120000-000" (drgnx-user-dir))))))
+
 ;;; portable-test.el ends here

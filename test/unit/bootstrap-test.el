@@ -670,4 +670,84 @@ printf '%%s\\n' %s > \"$d/argv\"; exit 10
       (should (>= seen 10))
       (should (equal bad nil)))))
 
+;;;; The config layer's leftovers and the hand-back's files (config-layer Task 24)
+
+(ert-deftest drgnx-bootstrap/leftovers-count-as-empty ()
+  ;; a config dir holding only drgnx's own backups, locks and temp files is empty: the clone goes in, and the
+  ;; backups stay beside the cloned files
+  (drgnx-bootstrap-test--with (root url)
+    (let ((config (concat root "config")))
+      (drgnx-bootstrap-test--write (concat config "/keys.eld.bak-20261019-120000-000") "(:profile emacs)\n")
+      (drgnx-bootstrap-test--write (concat config "/.keys.eld.lock/owner") "(:pid 1)\n")
+      (should (string-match-p "no configuration yet" (drgnx-bootstrap--config-here)))
+      (let ((r (car (drgnx-bootstrap-test--run :config url :only '(config)))))
+        (should (eq (drgnx-bootstrap-test--status r 'config) 'changed))
+        (should (equal (drgnx-bootstrap-test--text (concat config "/keys.eld")) "(:profile vscode)\n"))
+        (should (equal (drgnx-bootstrap-test--text (concat config "/keys.eld.bak-20261019-120000-000")) "(:profile emacs)\n"))
+        (should (equal (directory-files root nil "drgnx-clone") nil))))))
+
+(ert-deftest drgnx-bootstrap/a-failed-rename-puts-the-leftovers-back ()
+  ;; the clone's final rename fails, or a leftover's move into the clone does: every leftover is back in the config
+  ;; dir with its bytes, and the clone is gone.  When a put-back fails too, the clone is kept and the error names it.
+  (drgnx-bootstrap-test--with (root url)
+    (let* ((config (concat root "config"))
+           (bak (concat config "/keys.eld.bak-20261019-120000-000"))
+           (owner (concat config "/.keys.eld.lock/owner"))
+           (rename (symbol-function 'rename-file)))
+      (drgnx-bootstrap-test--write bak "(:profile emacs)\n")
+      (drgnx-bootstrap-test--write owner "(:pid 1)\n")
+      (dolist (fails (list (lambda (_from to) (equal to config))
+                           (lambda (from _to) (equal from bak)))) ; the second leftover: the lock moved already
+        (cl-letf (((symbol-function 'rename-file)
+                   (lambda (from to &rest r) (if (funcall fails from to) (error "Rename refused") (apply rename from to r)))))
+          (should (string-match-p "Rename refused" (error-message-string (should-error (drgnx-bootstrap--git-clone url config))))))
+        (should (equal (drgnx-bootstrap-test--text bak) "(:profile emacs)\n"))
+        (should (equal (drgnx-bootstrap-test--text owner) "(:pid 1)\n"))
+        (should-not (file-exists-p (concat config "/keys.eld")))
+        (should (equal (directory-files root nil "drgnx-clone") nil)))
+      ;; the final rename and the lock's put-back fail: the clone, holding the lock, is kept and named
+      (cl-letf (((symbol-function 'rename-file)
+                 (lambda (from to &rest r)
+                   (if (or (equal to config) (equal to (concat config "/.keys.eld.lock"))) (error "Rename refused")
+                     (apply rename from to r)))))
+        (let* ((msg (error-message-string (should-error (drgnx-bootstrap--git-clone url config))))
+               (kept (car (directory-files root t "drgnx-clone"))))
+          (should kept)
+          (should (string-search (drgnx-portable-path (concat kept "/config")) msg))
+          (should (equal (drgnx-bootstrap-test--text (concat kept "/config/.keys.eld.lock/owner")) "(:pid 1)\n"))
+          (should (equal (drgnx-bootstrap-test--text bak) "(:profile emacs)\n")))))))
+
+(ert-deftest drgnx-bootstrap/the-handback-files-are-written-atomically ()
+  ;; a failure before the rename keeps the files there and leaves no temp file
+  (drgnx-bootstrap-test--with (root _url)
+    (let ((dir (concat root "handback/")))
+      (make-directory dir)
+      (drgnx-bootstrap-test--write (concat dir "argv") "old\n")
+      (drgnx-bootstrap-test--write (concat dir "state.eld") "(:old t)\n")
+      (cl-letf (((symbol-function 'rename-file) (lambda (&rest _) (error "Disk full"))))
+        (should-error (drgnx-bootstrap--write-handback dir 'keys '(:argv ("secrets" "import")) nil)))
+      (should (equal (drgnx-bootstrap-test--text (concat dir "argv")) "old\n"))
+      (should (equal (drgnx-bootstrap-test--text (concat dir "state.eld")) "(:old t)\n"))
+      (should (equal (directory-files dir nil "tmp") nil))
+      ;; and when it works, both are there whole
+      (drgnx-bootstrap--write-handback dir 'keys '(:argv ("secrets" "import")) nil)
+      (should (equal (drgnx-bootstrap-test--text (concat dir "argv")) "secrets\nimport\n"))
+      (should (equal (plist-get (plist-get (drgnx-file-read (concat dir "state.eld")) :data) :argv) '("secrets" "import"))))))
+
+(ert-deftest drgnx-bootstrap/a-fifo-in-the-handback-is-refused-without-blocking ()
+  ;; the hand-back's files are read through the bounded reader: a FIFO is the error a missing result gives
+  (skip-unless (executable-find "mkfifo"))
+  (drgnx-bootstrap-test--with (root _url)
+    (let* ((dir (concat root "handback/")) (rc (concat dir "rc")) (writer nil))
+      (make-directory dir)
+      (drgnx-file-write (concat dir "state.eld") '(:from keys :argv ("secrets" "import") :answers nil :done nil :failed nil))
+      (should (= 0 (call-process "mkfifo" nil nil nil rc)))
+      ;; a writer, so the old unbounded read did not hang: it read "0" and went on
+      (setq writer (start-process "drgnx-bootstrap-test-fifo" nil "sh" "-c" (format "printf '0\\n' > '%s'" rc)))
+      (unwind-protect
+          (let ((err (should-error (drgnx-bootstrap--read-handback dir))))
+            (should (string-match-p "did not finish" (error-message-string err)))
+            (should-not (file-exists-p (concat dir "state.eld"))))
+        (when (process-live-p writer) (delete-process writer))))))
+
 ;;; bootstrap-test.el ends here
