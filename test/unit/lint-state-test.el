@@ -133,4 +133,64 @@ and strings are not code and never count.  Each name is listed once."
     (should (equal (drgnx-lint-state--stale (list bogus gone)) (list bogus gone)))
     (should (equal (drgnx-lint-state--stale (drgnx-lint-state--allowed)) nil))))
 
+;;;; One frame classifier
+;; `drgnx-state-frame-kind' (core/drgnx-frame-kind.el) is the only place that decides what a frame is.  No other
+;; library compares a terminal's name with "initial_terminal".  The rows below are sites not moved yet; each
+;; names the task that moves it and the most strings it may still hold.  The count can only fall: a task
+;; that migrates its sites lowers or removes its row, a task that has not merged yet still passes.
+
+(defconst drgnx-lint-state--classifier-home "core/drgnx-frame-kind.el"
+  "The one library that may hold the terminal-name test.")
+
+(defconst drgnx-lint-state--classifier-allowed
+  '(("core/drgnx-session.el" 2 "Task 16")
+    ("wb/drgnx-frames.el" 1 "Task 16")
+    ("wb/drgnx-persist.el" 1 "Task 15")
+    ("core/drgnx-timer.el" 1 "the debugger test: a core library no store task owns")
+    ("core/drgnx-modal-choose.el" 1 "the daemon's own terminal cannot ask: a core library no store task owns"))
+  "Rows (FILE MOST WHO): FILE, relative to the checkout root, may still hold MOST of the string.")
+
+(defun drgnx-lint-state--count-string (form string)
+  "How many times the string STRING is an atom of FORM."
+  (cond ((stringp form) (if (equal form string) 1 0))
+        ((consp form) (let ((n 0) (x form))
+                        (while (consp x) (setq n (+ n (drgnx-lint-state--count-string (car x) string)) x (cdr x)))
+                        (+ n (if x (drgnx-lint-state--count-string x string) 0))))
+        (t 0)))
+
+(defun drgnx-lint-state--classifier-strings (&optional root)
+  "Alist (FILE . COUNT) of the libraries in core/, wb/ and modules/ under ROOT that hold the string
+\"initial_terminal\" as code, FILE relative to ROOT."
+  (let ((root (or root drgnx-dir)) out)
+    (dolist (dir '("core" "wb" "modules"))
+      (dolist (f (directory-files-recursively (expand-file-name dir root) "\\.el\\'"))
+        (let ((n (apply #'+ (mapcar (lambda (form) (drgnx-lint-state--count-string form "initial_terminal"))
+                                    (drgnx-lint-state--forms f)))))
+          (when (> n 0) (push (cons (file-relative-name f root) n) out)))))
+    (nreverse out)))
+
+(defun drgnx-lint-state--classifier-excess (found allowed)
+  "Strings of FOUND (alist FILE . COUNT) beyond the home library and the ALLOWED rows: \"FILE: COUNT\" each."
+  (let (bad)
+    (dolist (c found)
+      (let ((most (if (equal (car c) drgnx-lint-state--classifier-home) most-positive-fixnum
+                    (or (nth 1 (assoc (car c) allowed)) 0))))
+        (when (> (cdr c) most) (push (format "%s: %d" (car c) (cdr c)) bad))))
+    (nreverse bad)))
+
+(ert-deftest drgnx-lint/one-frame-classifier ()
+  (should (equal (drgnx-lint-state--classifier-excess (drgnx-lint-state--classifier-strings)
+                                                      drgnx-lint-state--classifier-allowed)
+                 nil)))
+
+(ert-deftest drgnx-lint/the-classifier-lint-sees-a-second-classifier ()
+  (let ((found '(("core/drgnx-frame-kind.el" . 1) ("modules/ui/drgnx-x.el" . 1) ("core/drgnx-session.el" . 3))))
+    (should (equal (drgnx-lint-state--classifier-excess found drgnx-lint-state--classifier-allowed)
+                   '("modules/ui/drgnx-x.el: 1" "core/drgnx-session.el: 3")))
+    (should (equal (drgnx-lint-state--classifier-excess '(("core/drgnx-session.el" . 1)) drgnx-lint-state--classifier-allowed)
+                   nil))
+    (drgnx-lint-state--with-source "(defun a (f) (equal (terminal-name f) \"initial_terminal\")) ; \"initial_terminal\"\n(defun b () \"the initial_terminal\")"
+      (should (equal (drgnx-lint-state--count-string (car (drgnx-lint-state--forms file)) "initial_terminal") 1))
+      (should (equal (drgnx-lint-state--count-string (cadr (drgnx-lint-state--forms file)) "initial_terminal") 0)))))
+
 ;;; lint-state-test.el ends here

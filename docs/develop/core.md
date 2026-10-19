@@ -1939,6 +1939,10 @@ quick help's card, Emacs 31's terminal child frames), `initial` (the initial ter
 Emacs's before its first frame; in batch Emacs that frame is `tty`, so batch tests have a workbench frame),
 `other` (a minibuffer-only frame), `gui`, else `tty`; nil for a dead frame. `drgnx-state-workbench-frame-p` is
 non-nil for `gui` and `tty`; only those frames get a record.
+No other library compares a terminal's name with `"initial_terminal"` or asks `frame-parent` to tell a child
+frame: the terminal modules (layout, frames, popups, fallback layer), the face and the start page ask the
+classifier (`(eq (drgnx-state-frame-kind frame) 'tty)`, `'child`). `drgnx-lint/one-frame-classifier` fails on a
+second place; its list of libraries not yet moved can only shrink.
 
 **A frame's record** holds its kind, its `drgnx-frame-role` (copied), whether it is visible (`t`, `icon`, nil), its
 size (text columns and lines, pixel width and height), its `drgnx-monitor` (copied), its selected window, its MRU

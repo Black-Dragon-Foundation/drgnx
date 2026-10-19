@@ -23,6 +23,7 @@
 (require 'drgnx-registry)
 (require 'drgnx-face-state)
 (require 'drgnx-timer)
+(require 'drgnx-frame-kind)
 (declare-function drgnx-face-glyph "drgnx-face")
 (declare-function drgnx-surfaces-key "drgnx-surfaces")
 (declare-function drgnx-surfaces-run "drgnx-surfaces")
@@ -192,7 +193,7 @@ Reads only face.eld (and, while the first-run Welcome may be due, onboarding's s
 Always returns nil, so it can be a hook function."
   (let ((frame (or frame (selected-frame))))
     (condition-case err
-        (when-let* (((frame-live-p frame)) ((not (frame-parent frame)))
+        (when-let* (((frame-live-p frame)) ((not (eq (drgnx-state-frame-kind frame) 'child)))
                     (window (drgnx-start--window frame))
                     ((window-live-p window)) ((not (window-dedicated-p window)))
                     ((drgnx-start--empty-p window))

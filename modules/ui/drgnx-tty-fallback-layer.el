@@ -21,6 +21,7 @@
 (require 'drgnx-tty)
 (require 'drgnx-tty-fallback)
 (require 'drgnx-timer)
+(require 'drgnx-frame-kind)
 (declare-function drgnx-tty-frames-refresh-report "drgnx-tty-frames")
 (declare-function drgnx-tty-frames--tty-frames "drgnx-tty-frames")
 (declare-function drgnx-tty-frames--update-report "drgnx-tty-frames")
@@ -56,8 +57,7 @@ someone else changed since stays), and the prefix key passes there again."
   "Non-nil when FRAME (with CAPS) gets the layer: the setting is on, it is a terminal frame, and its keys are
 legacy or modifyOtherKeys with folded chords (tmux at level 1).  Never kkp, plain modifyOtherKeys, or a graphical
 frame."
-  (and drgnx-tty-fallback caps (frame-live-p frame) (not (display-graphic-p frame))
-       (not (equal (terminal-name (frame-terminal frame)) "initial_terminal"))   ; a daemon's, or batch Emacs's
+  (and drgnx-tty-fallback caps (eq (drgnx-state-frame-kind frame) 'tty)
        (or (eq (plist-get caps :keys) 'legacy)
            (and (eq (plist-get caps :keys) 'mok) (plist-get caps :folded)))))
 

@@ -15,6 +15,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-face-state)
+(require 'drgnx-frame-kind)
 (defvar flymake-show-diagnostics-at-end-of-line)
 (defvar display-line-numbers-width-start)
 (defvar display-line-numbers-grow-only)
@@ -137,7 +138,7 @@ FRAME defaults to the selected one.  nil when NAME is unknown."
   "Give FRAME (default: the selected one) the menu bar, scroll bars and title bar the settings ask for.
 On `after-make-frame-functions'; a child frame (a popup) is left alone."
   (let ((frame (or frame (selected-frame))))
-    (when (and (frame-live-p frame) (not (frame-parent frame)))
+    (when (and (frame-live-p frame) (not (eq (drgnx-state-frame-kind frame) 'child)))
       (modify-frame-parameters frame (drgnx-face--frame-params))
       (drgnx-face--apply-title frame)
       (drgnx-face--sync-state))))   ; the first graphical frame of a daemon is where the variant first becomes known
@@ -247,7 +248,7 @@ the frame undecorated."
 (defun drgnx-face--sync-state ()
   "Keep `:variant' and `:gtk-theme' in face.eld as the launchers need them (bin/drgnx, the systemd unit), written only
 when they changed.  The variant is that of a graphical frame; with none, or a background not known, nothing is written."
-  (when-let* ((frame (seq-find (lambda (f) (and (not (frame-parent f)) (drgnx-face--gui-system f))) (frame-list))))
+  (when-let* ((frame (seq-find (lambda (f) (and (not (eq (drgnx-state-frame-kind f) 'child)) (drgnx-face--gui-system f))) (frame-list))))
     (let ((variant (drgnx-face-title-variant frame)) (state (drgnx-face-state-read)))
       (when (or variant (eq drgnx-face-title-bar 'system))
         (unless (and (eq (plist-get state :variant) variant) (equal (plist-get state :gtk-theme) drgnx-face-gtk-theme))
@@ -259,7 +260,7 @@ when they changed.  The variant is that of a graphical frame; with none, or a ba
 
 (defun drgnx-face--apply-title-all ()
   "The title bar on every open frame, and the state the launchers read."
-  (dolist (f (frame-list)) (unless (frame-parent f) (drgnx-face--apply-title f)))
+  (dolist (f (frame-list)) (unless (eq (drgnx-state-frame-kind f) 'child) (drgnx-face--apply-title f)))
   (drgnx-face--sync-state)
   (force-mode-line-update t))   ; the top line shows its window controls only on a drawn title bar
 
