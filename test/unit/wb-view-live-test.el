@@ -2,8 +2,8 @@
 ;;
 ;; Every test runs on the virtual clock (test/fixtures/clock-fixture.el): marks arm the view's timers through the
 ;; timer layer, and `drgnx-test-advance' runs them.  Slices read `drgnx-timer-now', which a test replaces with a clock
-;; that moves a fixed step per read.  Batch Emacs runs no redisplay, so no `window-buffer-change-functions' either:
-;; the visibility tests call the view's hook function the way redisplay would.
+;; that moves a fixed step per read.  Batch Emacs runs no redisplay: the visibility tests turn the workbench state
+;; store on (`drgnx-view-test-store-on') and call `drgnx-state-sync' where redisplay or a command's end would observe.
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-paths)
@@ -11,6 +11,7 @@
 (require 'drgnx-signal)
 (require 'drgnx-timer)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/view-fixture" drgnx-dir) nil t)
 
 ;;;; Helpers
@@ -47,6 +48,15 @@ of type `drgnx-view-live-t' (`drgnx-view-define' with ARGS and the recording PAT
                    (drgnx-test-with-clock (:allow-pending t) ,@body))))
            (set-window-configuration config)
            (kill-buffer buffer))))))
+
+(defmacro drgnx-view-live-test--with-store (spec &rest body)
+  "`drgnx-view-live-test--with' with a fresh workbench state store on, the view's visibility following it as
+core/workbench's setup has it (`drgnx-view-test-store-on'): the store has seen the buffer shown."
+  (declare (indent 1))
+  `(drgnx-test-with-state
+     (drgnx-view-live-test--with ,spec
+       (drgnx-view-test-store-on)
+       ,@body)))
 
 (defmacro drgnx-view-live-test--ticking (step &rest body)
   "BODY with `drgnx-timer-now' returning 1000 + STEP × the reads so far (`drgnx-view-live-test--reads')."
@@ -164,41 +174,141 @@ of type `drgnx-view-live-t' (`drgnx-view-define' with ARGS and the recording PAT
         (kill-buffer other)))))
 
 (ert-deftest drgnx-view-live/showing-a-stale-view-draws-it ()
-  (drgnx-view-live-test--with (v :render #'drgnx-view-live-test--render)
+  ;; the store sees the buffer shown again (`drgnx-state-sync' is what a command's end or redisplay runs)
+  (drgnx-view-live-test--with-store (v :render #'drgnx-view-live-test--render)
     (let ((buffer (current-buffer)) (other (generate-new-buffer " *drgnx-view-live-other*")))
       (unwind-protect
           (progn
             (set-window-buffer (selected-window) other)
+            (drgnx-state-sync)
             (drgnx-view-append v '(a b))
             (drgnx-test-advance 0.1)
             (should (drgnx-view--stale v))
-            (should (memq #'drgnx-view--buffer-shown window-buffer-change-functions))
             (set-window-buffer (selected-window) buffer)
-            (drgnx-view--buffer-shown (selected-window))      ; what redisplay runs
+            (drgnx-state-sync)
             (should-not (drgnx-view--stale v))
             (drgnx-test-advance 0.1)
             (should (equal "a: \nb: \n" (drgnx-view-test--text v))))
         (kill-buffer other)))))
 
 (ert-deftest drgnx-view-live/shown-draws-once ()
-  (drgnx-view-live-test--with (v :render #'drgnx-view-live-test--render)
+  (drgnx-view-live-test--with-store (v :render #'drgnx-view-live-test--render)
     (let ((buffer (current-buffer)) (other (generate-new-buffer " *drgnx-view-live-other*")))
       (unwind-protect
           (progn
             (set-window-buffer (selected-window) other)
+            (drgnx-state-sync)
             (drgnx-view-append v '(a b))
             (drgnx-test-advance 0.1)
             (let ((w2 (split-window)))
               (set-window-buffer (selected-window) buffer)
               (set-window-buffer w2 buffer)
-              (drgnx-view--buffer-shown (selected-window))
-              (drgnx-view--buffer-shown w2))
+              (drgnx-state-sync)
+              (drgnx-state-sync))
             (drgnx-test-advance 0.1)
             (should (= 1 (length drgnx-view-live-test--slices)))
             (should (= 2 (drgnx-view-live-test--stat v :rows-drawn)))
             (drgnx-test-advance 1)
             (should (= 1 (length drgnx-view-live-test--slices))))
         (kill-buffer other)))))
+
+;;;; Visibility from the workbench state store
+
+(ert-deftest drgnx-view-live/shown-comes-from-the-store ()
+  ;; One source at a time: while the store is on, the view's answer is the store's, whatever the windows show
+  ;; between two observations; with the store off, the live windows'.
+  (drgnx-view-live-test--with-store (v :render #'drgnx-view-live-test--render)
+    (let ((buffer (current-buffer)) (other (generate-new-buffer " *drgnx-view-live-other*")))
+      (unwind-protect
+          (progn
+            (should (drgnx-view-shown-p v))
+            (set-window-buffer (selected-window) other)
+            (should (drgnx-view-shown-p v))                   ; the store has not seen it yet
+            (drgnx-state-sync)
+            (should-not (drgnx-view-shown-p v))
+            (set-window-buffer (selected-window) buffer)
+            (should-not (drgnx-view-shown-p v))
+            (drgnx-state-sync)
+            (should (drgnx-view-shown-p v))
+            (set-window-buffer (selected-window) other)
+            (drgnx-state-mode -1)                             ; no store: the live windows answer
+            (should-not (drgnx-view-shown-p v))
+            (set-window-buffer (selected-window) buffer)
+            (should (drgnx-view-shown-p v)))
+        (kill-buffer other)))))
+
+(ert-deftest drgnx-view-live/a-stale-view-draws-when-the-store-says-it-shows ()
+  (drgnx-view-live-test--with-store (v :render #'drgnx-view-live-test--render)
+    (let ((buffer (current-buffer)) (other (generate-new-buffer " *drgnx-view-live-other*")))
+      (unwind-protect
+          (progn
+            (set-window-buffer (selected-window) other)
+            (drgnx-state-sync)
+            (drgnx-view-append v '(a b))
+            (drgnx-test-advance 0.1)
+            (should (drgnx-view--stale v))
+            (should (= 0 (drgnx-view-test--alloc (lambda () (drgnx-view--draw-buffer buffer)))))
+            (set-window-buffer (selected-window) buffer)
+            (drgnx-test-advance 1)                            ; shown, but the store has not seen it: no draw
+            (should (equal "" (drgnx-view-test--text v)))
+            (drgnx-state-sync)
+            (should (drgnx-timer-active-p (cons 'drgnx-view buffer)))
+            (drgnx-test-advance 0.1)
+            (should (equal "a: \nb: \n" (drgnx-view-test--text v)))
+            (should-not (drgnx-view--stale v)))
+        (kill-buffer other)))))
+
+(defvar drgnx-view-live-test--inside nil "Rows drawn, as a `now' subscriber after the view's saw them.")
+(defun drgnx-view-live-test--note-rows (_data)
+  (push (plist-get (drgnx-view-stats) :rows-drawn) drgnx-view-live-test--inside))
+
+(ert-deftest drgnx-view-live/the-subscriber-never-draws ()
+  ;; The view's subscriber runs inside the observation (the `now' lane, maybe during redisplay): it marks and arms.
+  (drgnx-view-live-test--with-store (v :render #'drgnx-view-live-test--render)
+    (let ((buffer (current-buffer)) (other (generate-new-buffer " *drgnx-view-live-other*"))
+          (drgnx-view-live-test--inside nil))
+      (unwind-protect
+          (progn
+            (set-window-buffer (selected-window) other)
+            (drgnx-state-sync)
+            (drgnx-view-append v '(a b))
+            (drgnx-test-advance 0.1)
+            (should (drgnx-view--stale v))
+            (drgnx-state-subscribe 'windows-changed #'drgnx-view-live-test--note-rows :lane 'now)
+            (let ((before (plist-get (drgnx-view-stats) :rows-drawn)))
+              (set-window-buffer (selected-window) buffer)
+              (drgnx-state-sync)
+              (should (equal (list before) drgnx-view-live-test--inside))
+              (should (= 0 (drgnx-view-live-test--stat v :rows-drawn)))
+              (should (equal "" (drgnx-view-test--text v)))))
+        (drgnx-state-unsubscribe 'windows-changed #'drgnx-view-live-test--note-rows)
+        (kill-buffer other)))))
+
+(ert-deftest drgnx-view-live/no-buffer-local-window-hook-is-left ()
+  ;; The store is the one source: a view adds nothing to a window-change hook.
+  (drgnx-view-live-test--with (v :render #'drgnx-view-live-test--render)
+    (ignore v)
+    (should-not (fboundp 'drgnx-view--buffer-shown))
+    (dolist (hook '(window-buffer-change-functions window-state-change-functions window-configuration-change-hook))
+      (should-not (local-variable-p hook)))))
+
+(ert-deftest drgnx-view-live/a-frame-shown-again-wakes-its-stale-view ()
+  ;; DEFERRED RP4-c: no window changes when a frame is iconified and shown again (or a terminal shows another of
+  ;; its frames); the store's `frame-visibility' tells the view.  `frame-visible-p' answers `icon' meanwhile.
+  (drgnx-view-live-test--with-store (v :render #'drgnx-view-live-test--render)
+    (let ((buffer (current-buffer)))
+      (cl-letf (((symbol-function 'frame-visible-p) (lambda (_frame) 'icon)))
+        (drgnx-state-sync)
+        (should-not (drgnx-view-shown-p v))
+        (drgnx-view-append v '(a b))
+        (drgnx-test-advance 0.1)
+        (should (drgnx-view--stale v))
+        (should (equal "" (drgnx-view-test--text v))))
+      (drgnx-state-sync)                                    ; the frame is visible again
+      (should (drgnx-view-shown-p v))
+      (should (drgnx-timer-active-p (cons 'drgnx-view buffer)))
+      (drgnx-test-advance 0.1)
+      (should (equal "a: \nb: \n" (drgnx-view-test--text v))))))
 
 ;;;; Slices
 

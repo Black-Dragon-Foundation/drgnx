@@ -633,7 +633,9 @@ file order, as a search sends them."
 
 (ert-deftest drgnx-replace/a-hidden-view-catches-up-when-shown ()
   (drgnx-replace-view-test--fed
+    (drgnx-view-test-store-on)                          ; views follow the store, as in the workbench
     (drgnx-wb-hide-sidebar)
+    (drgnx-state-sync)                                  ; what a command's end runs
     (should-not (get-buffer-window view))
     (drgnx-replace-view-test--feed view (drgnx-replace-view-test--matches dir 0 5 4))
     (drgnx-test-advance 0.01)
@@ -641,9 +643,9 @@ file order, as a search sends them."
     (should (= 0 (drgnx-replace-view-test--stat v :rows-drawn)))
     (should (= 0 (drgnx-view-row-count v)))
     (should (drgnx-view-pending-p v))
-    ;; shown again (redisplay runs the buffer's `window-buffer-change-functions'; batch Emacs has none)
+    ;; shown again: the store sees it (a command's end or redisplay observes; batch Emacs has neither)
     (drgnx-wb-show-view 'search)
-    (drgnx-view--buffer-shown (get-buffer-window view))
+    (drgnx-state-sync)
     (drgnx-test-advance 0)
     (should (= 25 (drgnx-view-row-count v)))
     (should-not (drgnx-view-pending-p v))

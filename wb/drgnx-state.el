@@ -366,8 +366,8 @@ at the next observation).  During an observation a recorded frame's choice is se
 ;;;; Events: what changed between two records, to whom
 
 (defconst drgnx-state-events
-  '(frame-added frame-kind frame-resized windows-changed groups-changed pane-hidden pane-shown pane-resized
-                selected-changed editor-changed frame-removed)
+  '(frame-added frame-kind frame-resized frame-visibility windows-changed groups-changed pane-hidden pane-shown
+                pane-resized selected-changed editor-changed frame-removed)
   "The store's events, in the order one observation emits them; `frame-removed' comes on its own.")
 
 (defcustom drgnx-state-user-resize-commands
@@ -545,6 +545,11 @@ subscribes to is not computed."
                (not (equal (drgnx-state--fr-size old) (drgnx-state--fr-size new))))
       (drgnx-state--emit 'frame-resized (list :frame frame :old (drgnx-state--size-plist old)
                                               :new (drgnx-state--size-plist new))))
+    ;; iconified, made invisible or shown again: no window changes, so nothing else says so
+    (when (and old (drgnx-state--wants 'frame-visibility)
+               (not (eq (drgnx-state--fr-visible old) (drgnx-state--fr-visible new))))
+      (drgnx-state--emit 'frame-visibility (list :frame frame :old (drgnx-state--fr-visible old)
+                                                 :new (drgnx-state--fr-visible new))))
     (when (and (drgnx-state--wants 'windows-changed) (not (drgnx-state--same-shown-p ow nw)))
       (drgnx-state--emit 'windows-changed (list :frame frame :windows (mapcar #'drgnx-state--win-window nw))))
     (when (drgnx-state--wants 'groups-changed)

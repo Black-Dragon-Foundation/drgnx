@@ -11,6 +11,7 @@
 (declare-function drgnx-state-mode "drgnx-state")
 (declare-function drgnx-state-subscribe "drgnx-state")
 (declare-function drgnx-state-intent--user-resized "drgnx-state-intent")
+(declare-function drgnx-view--windows-changed "drgnx-view")
 (declare-function drgnx-wb-toggle-sidebar "drgnx-wb")
 (declare-function drgnx-wb-view-explorer "drgnx-wb")
 (declare-function drgnx-wb-view-search "drgnx-wb")
@@ -75,6 +76,10 @@
                      :setup
                      (lambda ()
                        (require 'drgnx-wb)
+                       ;; Views draw only while the store sees them shown; subscribed before it first observes.
+                       (require 'drgnx-view)
+                       (dolist (event '(windows-changed frame-visibility frame-removed))
+                         (drgnx-state-subscribe event #'drgnx-view--windows-changed :lane 'now))
                        (drgnx-state-mode 1)    ; the state store first: the bus follows its window events
                        (drgnx-signal-mode 1)
                        ;; A size you set by hand is intent; the docks keep it when the frame resizes.

@@ -7,7 +7,8 @@
 ;; (`drgnx-view-define') says how a row is rendered (RENDER), how it grows at its end (GROW) and how the view pulls
 ;; changes from its model (SYNC).  Code that changes the model only MARKS the view: a mark is a hash put or a queue
 ;; push plus a timer arm, cheap enough for a process filter.  The draw runs from that timer, only while a window on
-;; a visible frame shows the buffer, in slices (at most `drgnx-view-slice' each, stopped by input; views ripe in
+;; a visible frame shows the buffer (as the workbench state store records it),
+;; in slices (at most `drgnx-view-slice' each, stopped by input; views ripe in
 ;; one timer pass share a deadline while it is unspent), visible rows first.  A draw first folds the structural marks into the row vectors (no buffer change), then works
 ;; row by row: a dirty row is deleted and inserted again at its integer start, a growing row gets only its new
 ;; characters, a new row is inserted, a removed row deleted.  Nothing is applied by erasing a region, undo is off,
@@ -20,6 +21,7 @@
 (require 'drgnx-modules-record)
 (require 'drgnx-timer)
 (require 'drgnx-wb)
+(require 'drgnx-state)                  ; whether a view shows: the workbench state store
 
 (defvar drgnx-signal-errors)            ; drgnx-signal, when loaded
 (declare-function drgnx-gc-gap "drgnx-gc" ())
@@ -41,6 +43,9 @@ one that finds it spent starts its own slice."
 
 (defvar-local drgnx-view nil
   "The view drawn in this buffer (`drgnx-view-attach'), or nil.")
+
+(defvar drgnx-view--live (make-hash-table :test 'eq :weakness 'key)
+  "The attached views (keys; weak, so a view whose buffer died goes): those the store's events update.")
 
 (defconst drgnx-view--all (make-symbol "all")
   "The key `drgnx-view-dirty' stores in the dirty table for KEYS t: every row.")
@@ -126,7 +131,7 @@ delete (`work' `gone', not in the index) or a deleted one (empty, not in the ind
   pending                               ; structural changes (OP KEYS AFTER), newest first
   bodies                                ; KEY → its BODY's length, for rows rendered as (BODY . SUFFIX)
   stale                                 ; non-nil: a draw found the view hidden; showing it draws it
-  shown                                 ; the last answer of `drgnx-view-shown-p'
+  shown                                 ; whether it shows: the store's answer, or the last live one
   stats                                 ; the counters of `drgnx-view--stat-names'
   (n 0) touched
   error                                 ; the error message already recorded for this view
@@ -156,7 +161,9 @@ old view's rows first.  Returns the view."
                                         :stats (make-vector (length drgnx-view--stat-names) 0)))
           (setq buffer-undo-list t)
           (when (= start (point-min)) (setq buffer-read-only t))
-          (add-hook 'window-buffer-change-functions #'drgnx-view--buffer-shown nil t)
+          (puthash drgnx-view t drgnx-view--live)
+          (when drgnx-state-mode
+            (setf (drgnx-view--shown drgnx-view) (and (memq (current-buffer) (drgnx-view--store-shown)) t)))
           drgnx-view)))))
 
 (defun drgnx-view--remove-rows (view)
@@ -170,7 +177,29 @@ old view's rows first.  Returns the view."
       (delete-region s (point-max)))       ; the starts are wrong (a foreign edit): no row can be found
     (set-marker (drgnx-view--start view) nil)))
 
-;;;; Visibility (before the store: live windows on visible frames)
+;;;; Visibility: the workbench state store's records while `drgnx-state-mode' is on, else live windows
+
+(defun drgnx-view--store-shown ()
+  "The buffers a window the workbench state store recorded shows on a visible frame (any terminal's)."
+  (let ((out nil))
+    (dolist (f (drgnx-state-frames))
+      (when (eq (frame-visible-p f) t)
+        (dolist (w (drgnx-state-windows f)) (push (window-buffer w) out))))
+    out))
+
+(defun drgnx-view--windows-changed (&optional _data)
+  "A subscriber of the store's `windows-changed', `frame-visibility' and `frame-removed' (lane `now', core/workbench's
+setup): set each attached view's `shown' from the store's records (`drgnx-view--store-shown'), and arm the draw of a
+stale view that shows now.  It only marks and arms; it never draws (it may run during redisplay)."
+  (let ((shown (drgnx-view--store-shown)))
+    (maphash (lambda (view _)
+               (let ((buffer (drgnx-view--buffer view)))
+                 (if (not (and (buffer-live-p buffer) (eq view (buffer-local-value 'drgnx-view buffer))))
+                     (remhash view drgnx-view--live)
+                   (setf (drgnx-view--shown view) (and (memq buffer shown) t))
+                   (when (and (drgnx-view--shown view) (drgnx-view--stale view))
+                     (drgnx-view--arm view)))))
+             drgnx-view--live)))
 
 (defun drgnx-view--tree-shows-p (window buffer)
   "Non-nil if WINDOW, its siblings after it or their children show BUFFER.  Allocates nothing."
@@ -186,25 +215,21 @@ old view's rows first.  Returns the view."
   (and (eq (frame-visible-p frame) t) (drgnx-view--tree-shows-p (frame-root-window frame) buffer)))
 
 (defun drgnx-view-shown-p (view)
-  "Non-nil if a window on a visible frame shows VIEW's buffer, as `get-buffer-window' with `visible' answers, without
-its window list: it walks the frames `next-frame' reaches from the selected one (that terminal's) and their window
-trees, and allocates nothing.  The answer is kept in the view's `shown'."
-  (let* ((buffer (drgnx-view--buffer view)) (start (selected-frame))
-         (found (drgnx-view--frame-shows-p start buffer)))
-    (unless found
-      (let* ((first (next-frame start t)) (frame first))
-        (while (and (not found) (not (eq frame start))
-                    (progn (setq found (drgnx-view--frame-shows-p frame buffer))
-                           (setq frame (next-frame frame t))
-                           (not (eq frame first)))))))
-    (setf (drgnx-view--shown view) found)))
-
-(defun drgnx-view--buffer-shown (window)
-  "On the view buffer's own `window-buffer-change-functions': WINDOW now shows it.  A stale view (a draw found it
-hidden) arms its draw."
-  (let ((view (and (window-live-p window) (buffer-local-value 'drgnx-view (window-buffer window)))))
-    (when (and (drgnx-view-p view) (drgnx-view--stale view) (drgnx-view-shown-p view))
-      (drgnx-view--arm view))))
+  "Non-nil if a window on a visible frame shows VIEW's buffer.  One source at a time: while `drgnx-state-mode' is on,
+the view's `shown', which the store's events keep (`drgnx-view--windows-changed'; every terminal's frames); else the
+live windows, as `get-buffer-window' with `visible' answers, without its window list: the frames `next-frame' reaches
+from the selected one (that terminal's) and their window trees.  Allocates nothing."
+  (if drgnx-state-mode
+      (drgnx-view--shown view)
+    (let* ((buffer (drgnx-view--buffer view)) (start (selected-frame))
+           (found (drgnx-view--frame-shows-p start buffer)))
+      (unless found
+        (let* ((first (next-frame start t)) (frame first))
+          (while (and (not found) (not (eq frame start))
+                      (progn (setq found (drgnx-view--frame-shows-p frame buffer))
+                             (setq frame (next-frame frame t))
+                             (not (eq frame first)))))))
+      (setf (drgnx-view--shown view) found))))
 
 ;;;; Marks: a hash put or a queue push, then `drgnx-view--arm'
 
