@@ -297,7 +297,9 @@ The card never covers the line you are editing. In a window it sits just below t
 several rows counts whole) or of the line point is on — hovering a symbol just above point puts the card under
 point's line, or above the symbol's. It never leaves the window either: when not even one line of docs fits beside
 the line, a hover shows nothing and the key puts the first line in the echo area. It moves out of the way as soon as
-you type, and goes when the window scrolls or changes size under it. In a terminal, which has no pop-up frames in
+you type, and goes when the window scrolls, moves or changes size under it, or when windows come or go, or the
+selection moves, with no command run (a timer's split, a window-manager resize): it hears these from the workbench
+state store at once and only looks at the mouse and the scrolling while it is idle. In a terminal, which has no pop-up frames in
 Emacs 30, it is a strip of a few lines at the bottom of the editor (`…` while the docs are on their way): the editor
 gives up those rows while it shows and gets them back, at the same size, when it goes. Point always stays visible.
 In a terminal, `C-g` closes the strip (`Esc` is the Meta prefix there), as does typing anything; `q` closes it in a
