@@ -18,6 +18,7 @@
 (require 'subr-x)
 (require 'drgnx-paths)
 (require 'drgnx-config)
+(require 'drgnx-file)                   ; `drgnx-file-truename': an agent's names, with no file name handler
 (require 'drgnx-acp)
 (require 'drgnx-timer)
 (require 'drgnx-agent-config)          ; `drgnx-agent-config-vendor-env'
@@ -398,17 +399,18 @@ a task whose provider failed to the next profile (drgnx-job.el).  Called in the 
      (drgnx-agents--changed s)
      :deferred)
     ("fs/read_text_file"
-     ;; local files only (no TRAMP: `file-remote-p' names the host without connecting); an open buffer as it is,
-     ;; else a regular file up to `drgnx-agents-read-max', read with no file name handlers
-     (let* ((path (plist-get params :path)) (local (and (drgnx-agents--path-ok-p path) (not (file-remote-p path))))
+     ;; local files only, the agent's name used with no file name handler (`drgnx-file-truename': a link to a remote
+     ;; name is remote too, and nothing reaches Tramp, jka-compr or EasyPG); an open buffer as it is, else a regular
+     ;; file up to `drgnx-agents-read-max'
+     (let* ((file-name-handler-alist nil)
+            (path (plist-get params :path)) (local (and (drgnx-agents--path-ok-p path) (drgnx-file-truename path)))
             (buf (and local (find-buffer-visiting path))) (problem (and local (not buf) (drgnx-agents--read-problem path))))
        (cond ((not (drgnx-agents--path-ok-p path)) (list :error '(:code -32602 :message "an absolute path is needed")))
              ((not local) (list :error (list :code -32602 :message (format "%s is remote: only local files are served" path))))
              (problem (list :error (list :code -32002 :message problem)))
              ((or buf (file-readable-p path))
               (list :result (list :content (drgnx-agents--lines (if buf (with-current-buffer buf (buffer-substring-no-properties (point-min) (point-max)))
-                                                                  (let ((file-name-handler-alist nil))
-                                                                    (with-temp-buffer (insert-file-contents path nil 0 drgnx-agents-read-max) (buffer-string))))
+                                                                  (with-temp-buffer (insert-file-contents path nil 0 drgnx-agents-read-max) (buffer-string)))
                                                                 (plist-get params :line) (plist-get params :limit)))))
              (t (list :error (list :code -32002 :message (format "%s is not readable" path)))))))
     ((and "fs/write_text_file" (guard (not (and (drgnx-agents--path-ok-p (plist-get params :path)) (stringp (plist-get params :content))))))

@@ -900,10 +900,11 @@ claimed, running or waiting for input.  Any other agent (an outside one's stop e
            t))))
 
 (defun drgnx-cockpit-edits--inside-p (dir name)
-  "Whether NAME (a folder, local) is DIR or inside it, by true names (links resolved); a remote NAME is not (it is
-never expanded)."
-  (and (stringp name) (stringp dir) (not (drgnx-cockpit--remote-p name)) (not (drgnx-cockpit--remote-p dir))
-       (string-prefix-p (file-name-as-directory (file-truename dir)) (file-name-as-directory (file-truename name)))))
+  "Whether NAME (a folder, local) is DIR or inside it, by true names (links resolved, with no file name handler: an
+agent names its folder); a remote NAME, or one a link leads to, is not (it is never expanded)."
+  (and (stringp name) (stringp dir)
+       (let ((d (drgnx-cockpit--true-dir dir)) (n (drgnx-cockpit--true-dir name)))   ; nil for a remote one
+         (and d n (string-prefix-p d n)))))
 
 (defun drgnx-cockpit-edits--alone-p (src)
   "Whether no other agent works in SRC's folder: no other live session (here or the hub's) and no other registered

@@ -476,4 +476,26 @@
                     :type 'drgnx-file-refused)
       (should (equal (drgnx-file-test--bytes f) ";; my comment\n(:a 2 :zz unknown)\n")))))
 
+;;;; Names an agent gave
+
+(require 'drgnx-paths)                                ; `drgnx-dir'
+(load (expand-file-name "test/fixtures/handler-trap" drgnx-dir) nil t)
+
+(ert-deftest drgnx-file/an-agents-path-is-resolved-with-no-file-name-handler ()
+  ;; `file-truename' with handlers on looks one up again at each link: a link in the worktree climbing `../' to the
+  ;; root and on to `ssh:host:' loaded Tramp (an ssh connection; `sudo::' a sudo prompt)
+  (drgnx-file-test--with-dir dir
+    (let* ((tree (concat dir "wt/")) (paths (progn (make-directory tree) (drgnx-test-hostile-paths tree)))
+           (true-tree (file-truename tree)) (true-dir (file-truename dir)))
+      (drgnx-test-with-handler-trap
+        (dolist (p (plist-get paths :outside)) (should-not (drgnx-file-inside-p p tree)))
+        (dolist (name '("abs-ssh/y" "abs-sudo/y" "up-ssh/y" "up-sudo/y"))
+          (should-not (drgnx-file-truename name tree))           ; it leads to a remote name
+          (should-not (drgnx-file-inside-p name tree)))
+        (should (equal (drgnx-file-truename "gz/y" tree) (concat true-dir "x.gz/y")))
+        (dolist (p (plist-get paths :inside)) (should (drgnx-file-inside-p p tree)))
+        (should (equal (drgnx-file-truename "n.gpg" tree) (concat true-tree "n.gpg")))
+        (should (drgnx-file-inside-p "a.zip/y" tree))
+        (should-not drgnx-test-handler-calls)))))
+
 ;;; file-test.el ends here

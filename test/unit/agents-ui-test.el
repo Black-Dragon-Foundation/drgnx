@@ -741,4 +741,26 @@ the only window and current.  The hub mirror does nothing."
             ((symbol-function 'drgnx-agents-claude-adapter) (lambda () nil)))
     (should-not (drgnx-agents-ui--claude-needs))))
 
+(load (expand-file-name "test/fixtures/handler-trap" drgnx-dir) nil t)
+
+(ert-deftest drgnx-agents-ui/a-write-through-a-planted-link-runs-no-file-name-handler ()
+  ;; a local session's write path is checked as written (`file-remote-p'): a link in it to a remote name passed, and
+  ;; the review's own checks (`file-in-directory-p', `find-buffer-visiting') then reached Tramp
+  (let* ((root (file-name-as-directory (make-temp-file "drgnx-ui-links" t))) (wt (concat root "wt/")))
+    (unwind-protect
+        (let ((paths (progn (make-directory wt) (drgnx-test-hostile-paths wt))))
+          (drgnx-test-with-handler-trap
+            (let* ((s (drgnx-agents--make :name "fake" :cwd wt)) (item (list :id 5 :path (concat wt "gz/y") :content "x\n")))
+              (dolist (name '("abs-ssh/y" "abs-sudo/y" "up-ssh/y" "up-sudo/y"))
+                (should-not (drgnx-agents-ui--path-ok-p s (concat wt name))))
+              (should (drgnx-agents-ui--path-ok-p s (concat wt "gz/y")))     ; local, outside: shown as such
+              (should (drgnx-agents-ui--path-ok-p s (car (plist-get paths :inside))))
+              (setf (drgnx-agent-session-reviews s) (list item))
+              (cl-letf (((symbol-function 'drgnx-acp-respond) #'ignore))
+                (with-current-buffer (drgnx-agents-ui-review s item)
+                  (should (string-search "OUTSIDE" (format "%s" header-line-format)))
+                  (drgnx-agents-ui-review-reject))))
+            (should-not drgnx-test-handler-calls)))
+      (delete-directory root t))))
+
 ;;; agents-ui-test.el ends here

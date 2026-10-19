@@ -572,4 +572,24 @@
     (should (equal (mapcar (lambda (c) (plist-get c :label)) (seq-filter (lambda (c) (equal (plist-get c :agent) "s-2")) (drgnx-cockpit-timeline)))
                    '("started" "stopped")))))
 
+(load (expand-file-name "test/fixtures/handler-trap" drgnx-dir) nil t)
+
+(ert-deftest drgnx-cockpit-model/an-agents-links-are-checked-with-no-file-name-handler ()
+  ;; the names git lists are the agent's, and so are the links among them: one climbing `../' to `ssh:host:' made the
+  ;; cockpit (the user's Emacs) load Tramp
+  (let* ((root (file-name-as-directory (make-temp-file "drgnx-cockpit-links" t))) (wt (concat root "wt/")))
+    (unwind-protect
+        (progn
+          (make-directory wt)
+          (drgnx-test-hostile-paths wt)
+          (drgnx-test-with-handler-trap
+            (dolist (name '("abs-ssh" "abs-sudo" "up-ssh" "up-sudo" "gz" "gpg"))
+              (should-not (drgnx-cockpit--file-ok wt name)))     ; a link out of the folder
+            (dolist (name '("abs-ssh" "abs-sudo" "up-ssh" "up-sudo"))
+              (should-not (drgnx-cockpit--true-dir (concat wt name "/"))))
+            (should (eq (drgnx-cockpit--file-ok wt "n.gz") 'missing))
+            (should (eq (drgnx-cockpit--file-ok wt "a.zip/y") 'missing))
+            (should-not drgnx-test-handler-calls)))
+      (delete-directory root t))))
+
 ;;; cockpit-model-test.el ends here

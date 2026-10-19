@@ -159,6 +159,34 @@ time order) beside its truename, keeping its times and mode. Then it keeps only 
 `drgnx-file-backups-kept` (3). It gives the backup's path, or nil for a missing file, and refuses anything that is
 not a regular file.
 
+### Names an agent gave
+
+**Rule: a path an agent or a model supplies is resolved with file name handlers off.** That covers an ACP tool
+call's `:locations`, the `fs/read_text_file` and `fs/write_text_file` paths, a review finding, the names git lists
+in an agent's worktree, and the folders an agent registers. With handlers on, `file-truename` looks a handler up
+again at every link it follows, so checking the literal string with `file-remote-p` is not enough. An agent can
+plant a link in its worktree that climbs `../` to the root and goes on to `ssh:host:`. Resolving `TREE/link/y`
+then loads Tramp and connects (`sudo::` starts sudo), in the hub or in the user's Emacs. A link straight to
+`/ssh:host:/` is quoted by Emacs 30, but nothing else is. Names ending in `.gz`, `.gpg` or an archive suffix
+(`a.zip/y`) reach jka-compr, EasyPG (gpg, pinentry) and tramp-archive the same way.
+
+- `(drgnx-file-truename FILE &optional DIR)` gives FILE expanded against DIR, with `.`, `..` and every link
+  resolved and no handler running. It gives nil when the result is a remote name.
+- `(drgnx-file-inside-p FILE DIR)` says whether FILE is DIR or inside it by those true names. A name that is, or
+  leads to, a remote one is not inside.
+- Code that does more with such a path binds `file-name-handler-alist` to nil around it:
+  - the job policy (`drgnx-job--inside-p`, `drgnx-job--agent-config-p`), the job write
+    (`drgnx-job--write-inside` and the `make-directory` before it);
+  - the agents' `fs/read_text_file` (`core/drgnx-agents.el`);
+  - Review Branch's finding visit (`drgnx-review-visit`);
+  - the Work cockpit's file checks (`drgnx-cockpit--file-ok`, `drgnx-cockpit--true-dir`,
+    `drgnx-cockpit-edits--inside-p`).
+- A local agent session's edit review (`drgnx-agents-ui--path-ok-p`) refuses a path that resolves to a remote name.
+  For a session whose folder is remote, handlers stay on: its paths are remote by design.
+- Tests use `test/fixtures/handler-trap.el`. It plants the links in a temp worktree and replaces the handlers with
+  one that records every call. `drgnx-job/planted-links-never-load-tramp-jka-compr-or-epa` checks the policy end to
+  end in a fresh `emacs -Q`.
+
 ## Schema (`drgnx-schema.el`)
 
 One DSL describes drgnx's data (config files today; the hub's parameters and results next). A schema is data: an atom

@@ -607,4 +607,20 @@ NOTIFIED counts the hub told; (INBOX) is s-1's messages; (SLURP FILE) a file's t
       (should-not drgnx-cockpit-edits--quiet-gap)
       (should (<= drgnx-cockpit-edits--quiet-next (+ (float-time) 2))))))
 
+(load (expand-file-name "test/fixtures/handler-trap" drgnx-dir) nil t)
+
+(ert-deftest drgnx-cockpit-edits/an-agents-folder-through-a-link-runs-no-file-name-handler ()
+  ;; another agent's folder is the agent's to name: a link to a remote one is never inside, and never reaches Tramp
+  (let* ((root (file-name-as-directory (make-temp-file "drgnx-edits-links" t))) (wt (concat root "wt/")))
+    (unwind-protect
+        (progn
+          (make-directory wt)
+          (drgnx-test-hostile-paths wt)
+          (drgnx-test-with-handler-trap
+            (dolist (name '("abs-ssh" "abs-sudo" "up-ssh" "up-sudo" "gz" "gpg"))
+              (should-not (drgnx-cockpit-edits--inside-p wt (concat wt name))))
+            (should (drgnx-cockpit-edits--inside-p wt (concat wt "n.gz")))
+            (should-not drgnx-test-handler-calls)))
+      (delete-directory root t))))
+
 ;;; mod-cockpit-edits-test.el ends here

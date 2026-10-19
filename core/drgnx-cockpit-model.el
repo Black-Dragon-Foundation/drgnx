@@ -16,6 +16,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-timer)
+(require 'drgnx-file)                   ; `drgnx-file-truename': an agent's names, with no file name handler
 (require 'drgnx-work-db)
 (require 'drgnx-coord)
 
@@ -688,11 +689,12 @@ lines (`create mode', `delete mode'), whose names git C-quotes even under -z (`d
 (defun drgnx-cockpit--file-ok (dir file &optional truedir memo)
   "Whether FILE (relative to DIR) may be shown: t for a regular file whose true name lies inside DIR, `missing' when
 nothing is there (a deleted file), nil for anything else — a remote name, outside DIR, a device, FIFO, socket or
-folder, a link out of DIR or a dangling one.  Decided from names and attributes only (lstat, readlink): nothing is
-opened, and no remote name is expanded.  TRUEDIR: DIR's true name, when the caller has it; MEMO: a hash table of the
+folder, a link out of DIR or a dangling one.  Decided from names and attributes only (lstat, readlink), with no file
+name handler: nothing is opened, and no remote name is expanded, also one a link leads to.  TRUEDIR: DIR's true name, when the caller has it; MEMO: a hash table of the
 true names of the folders seen, when the caller checks many files."
   (when (and (stringp dir) (stringp file) (not (drgnx-cockpit--remote-p dir)) (not (drgnx-cockpit--remote-p file)))
-    (let* ((dir (file-name-as-directory (expand-file-name dir))) (abs (expand-file-name file dir)))
+    (let* ((file-name-handler-alist nil)            ; the names and links are the agent's (`drgnx-file-truename')
+           (dir (file-name-as-directory (expand-file-name dir))) (abs (expand-file-name file dir)))
       (when (string-prefix-p dir abs)
         (let ((attrs (file-attributes abs)) (truedir (or truedir (file-name-as-directory (file-truename dir)))))
           (cond ((null attrs) 'missing)
@@ -819,7 +821,10 @@ folder (`drgnx-cockpit--file-ok': a device, FIFO, socket, a link out of it), wit
 
 (defconst drgnx-cockpit--git-jobs 3 "The most git processes `drgnx-cockpit-silent-worktrees' runs at a time.")
 
-(defun drgnx-cockpit--true-dir (d) (and d (not (drgnx-cockpit--remote-p d)) (file-name-as-directory (file-truename d))))
+(defun drgnx-cockpit--true-dir (d)
+  "D's true name as a directory name, with no file name handler (an agent names its folders); nil for a remote one."
+  (when-let* ((true (and d (not (drgnx-cockpit--remote-p d)) (drgnx-file-truename d))))
+    (let ((file-name-handler-alist nil)) (file-name-as-directory true))))
 
 (defun drgnx-cockpit--taken (sessions)
   "The folders an agent works in: registered agents' cwd and worktree, SESSIONS' cwd, every job's worktrees."
