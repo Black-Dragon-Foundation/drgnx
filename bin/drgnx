@@ -119,7 +119,7 @@ test_batch_emacs() { # SIGPIPE ignored, as the hub runs (tests serve one in-proc
   # The unit tier never reaches the user's desktop: dbus.el connects to the bus in the C environment (a dead
   # address, so nothing answers), no display or compositor socket, a runtime directory of its own.
   # (The runner binds the same inside Emacs, for Lisp code and the children it starts.)
-  local run="${TMPDIR:-/tmp}/run"; mkdir -p -m 700 "$run"
+  local run="${TMPDIR:-/tmp}/run"; mkdir -p "$run" && chmod 700 "$run"
   # DRGNX_TEST_DIR: a smaller suite (the test of the temp-dir cleanup runs one)
   exec env -u DISPLAY -u WAYLAND_DISPLAY -u SWAYSOCK -u I3SOCK -u HYPRLAND_INSTANCE_SIGNATURE -u NIRI_SOCKET \
        DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/drgnx-unit-test XDG_RUNTIME_DIR="$run" \
