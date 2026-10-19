@@ -108,6 +108,11 @@ Segments a, b, c are defined: their text is A, B, C."
             ;; what is shown shrinks: never a segment back that a narrower window lost
             (when previous (should (seq-every-p (lambda (id) (memq id previous)) shown)))
             (setq previous shown)))))
+    ;; a terminal that cannot show "…" cuts with "...", wider than 1 or 2 columns (CI's C locale): still never wider
+    (let ((truncate-string-ellipsis "...") (drgnx-statusbar-left '(branch a)) (drgnx-statusbar-right '(c)))
+      (drgnx-statusbar-define-segment 'branch :fn (lambda () "a-very-long-branch-name"))
+      (dolist (width '(5 4 3 2 1))
+        (should (<= (string-width (drgnx-statusbar-render width)) width))))
     ;; segments go in `drgnx-statusbar-drop-order'
     (let ((drgnx-statusbar-left '(branch problems tests jobs agents modal misc))
           (drgnx-statusbar-right '(lsp position indent encoding eol language))
@@ -129,7 +134,7 @@ Segments a, b, c are defined: their text is A, B, C."
       (drgnx-statusbar-define-segment 'branch :fn (lambda () "⑂ feature/extremely-long-branch-name"))
       (let* ((s (drgnx-statusbar-render 20)) (plain (substring-no-properties s)))
         (should (<= (string-width s) 20))
-        (should (string-match-p "…" plain))
+        (should (string-search (truncate-string-ellipsis) plain))   ; Emacs's: "..." in a C locale (CI's)
         (should (string-match-p "⑂ feat" plain))))))
 
 (ert-deftest drgnx-statusbar/a-failing-segment-is-skipped-and-recorded-once ()
@@ -527,7 +532,9 @@ Segments a, b, c are defined: their text is A, B, C."
   (drgnx-statusbar-test--with
     (with-temp-buffer
       (insert "one\ntwo\n")
-      (let ((flymake-diagnostic-functions
+      ;; Emacs 31's flymake runs a backend only in trusted content: this one is the test's own
+      (let ((trusted-content :all)
+            (flymake-diagnostic-functions
              (list (lambda (report-fn &rest _)
                      (funcall report-fn (list (flymake-make-diagnostic (current-buffer) 1 3 :error "e")
                                               (flymake-make-diagnostic (current-buffer) 5 7 :warning "w")))))))
@@ -548,6 +555,7 @@ Segments a, b, c are defined: their text is A, B, C."
             (should (= 1 (length (seq-filter (lambda (f) (eq f #'drgnx-statusbar--flymake-reported))
                                              (let (l) (advice-mapc (lambda (f _) (push f l)) 'flymake--handle-report) l)))))
             (let* (report
+                   (trusted-content :all)      ; Emacs 31: a backend runs only in trusted content
                    (flymake-diagnostic-functions (list (lambda (report-fn &rest _) (setq report report-fn)))))
               (flymake-mode 1)
               (unwind-protect
@@ -671,9 +679,9 @@ Segments a, b, c are defined: their text is A, B, C."
                  (tsx-ts-mode . "TypeScript JSX") (js-mode . "JavaScript") (emacs-lisp-mode . "Emacs Lisp")
                  (sh-mode . "Shell Script") (c-mode . "C") (text-mode . "Plain Text") (fundamental-mode . "Plain Text")
                  (json-ts-mode . "JSON") (css-mode . "CSS") (conf-unix-mode . "Conf Unix")))
-      (when (fboundp (car c))
-        (with-temp-buffer
-          (funcall (car c))
+      (with-temp-buffer
+        ;; a tree-sitter mode refuses to start without its grammar (30.2's java-ts-mode on CI): nothing to name
+        (when (and (fboundp (car c)) (ignore-errors (funcall (car c)) t))
           (should (equal (cons (car c) (drgnx-statusbar--seg-language)) c)))))
     ;; a mode whose own name says something else (or nothing yet): the name made from the mode's symbol
     (with-temp-buffer

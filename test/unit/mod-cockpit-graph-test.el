@@ -23,7 +23,9 @@ the fixture's."
            (drgnx-cockpit--silent nil) (drgnx-cockpit--silent-n 0) (drgnx-cockpit--silent-at (float-time))
            (drgnx-cockpit--silent-running nil)
            (config (current-window-configuration)))
-       (cl-letf (((symbol-function 'drgnx-cockpit-sessions) (lambda () sessions)))
+       (cl-letf (((symbol-function 'drgnx-cockpit-sessions) (lambda () sessions))
+                 ;; a UTF-8 terminal whatever the locale (CI's C locale is not): the ASCII tests say so themselves
+                 ((symbol-function 'drgnx-cockpit-graph--ascii-p) #'ignore))
          (let ((g (drgnx-cockpit-graph-buffer)))
            (unwind-protect
                (save-window-excursion
@@ -93,34 +95,36 @@ the fixture's."
 
 (ert-deftest drgnx-cockpit-graph/waiting-nodes-have-the-dot ()
   (drgnx-cockpit-fixture-with
-    (let* ((m (drgnx-cockpit-model :sessions sessions))
-           (lines (drgnx-cockpit-graph-outline m))
-           (mark (alist-get 'waiting (drgnx-cockpit-graph--glyph-table)))
-           (t3 (drgnx-cockpit-graph-test--line lines (format "task:%s#3" plan)))
-           (t4 (drgnx-cockpit-graph-test--line lines (format "task:%s#4" plan))))
-      ;; the fixture's reopened ask card makes T3 wait; T4 does not
-      (should (plist-get (seq-find (lambda (n) (equal (plist-get n :id) (format "task:%s#3" plan))) (plist-get m :nodes)) :waiting))
-      (let ((i (string-search (concat mark " ") t3)))
-        (should i)
-        (should (eq (get-text-property i 'face t3) 'drgnx-cockpit-waiting))
-        (should (string-search "T3 task 3  waits on you · pending" t3)))          ; first: a cut line keeps it
-      (should-not (string-search (concat mark " ") t4))
-      ;; the first line says how many wait on you, in the waiting face
-      (should (string-match-p "2 waiting on you" (car lines)))
-      (should (eq (get-text-property 0 'face (car lines)) 'drgnx-cockpit-waiting))
-      ;; a terminal that is not UTF-8: the mark's ASCII form
-      (cl-letf (((symbol-function 'drgnx-cockpit-graph--ascii-p) #'always))
-        (should (string-search "? T3" (drgnx-cockpit-graph-test--line (drgnx-cockpit-graph-outline m) (format "task:%s#3" plan)))))
-      ;; the drawing: the mark and a dot in the waiting face's colour, on each waiting node
-      (let ((old (face-attribute 'drgnx-cockpit-waiting :foreground)))
-        (unwind-protect
-            (progn
-              (set-face-attribute 'drgnx-cockpit-waiting nil :foreground "#ee1111")
-              (let ((svg (drgnx-cockpit-graph-svg (drgnx-cockpit-graph-layout m '(8 . 16)))))
-                (should (= 2 (cl-loop with start = 0 while (string-match "<circle[^>]*fill=\"#ee1111\"" svg start)
-                                      count t do (setq start (match-end 0)))))
-                (should (string-match-p "fill=\"#ee1111\"[^>]*>&#9680;<" svg))))   ; ◐, as svg.el writes it
-          (set-face-attribute 'drgnx-cockpit-waiting nil :foreground old))))))
+    ;; a UTF-8 terminal whatever the locale (CI's C locale is not): the ASCII form is asked for below
+    (cl-letf (((symbol-function 'drgnx-cockpit-graph--ascii-p) #'ignore))
+      (let* ((m (drgnx-cockpit-model :sessions sessions))
+             (lines (drgnx-cockpit-graph-outline m))
+             (mark (alist-get 'waiting (drgnx-cockpit-graph--glyph-table)))
+             (t3 (drgnx-cockpit-graph-test--line lines (format "task:%s#3" plan)))
+             (t4 (drgnx-cockpit-graph-test--line lines (format "task:%s#4" plan))))
+        ;; the fixture's reopened ask card makes T3 wait; T4 does not
+        (should (plist-get (seq-find (lambda (n) (equal (plist-get n :id) (format "task:%s#3" plan))) (plist-get m :nodes)) :waiting))
+        (let ((i (string-search (concat mark " ") t3)))
+          (should i)
+          (should (eq (get-text-property i 'face t3) 'drgnx-cockpit-waiting))
+          (should (string-search "T3 task 3  waits on you · pending" t3)))          ; first: a cut line keeps it
+        (should-not (string-search (concat mark " ") t4))
+        ;; the first line says how many wait on you, in the waiting face
+        (should (string-match-p "2 waiting on you" (car lines)))
+        (should (eq (get-text-property 0 'face (car lines)) 'drgnx-cockpit-waiting))
+        ;; a terminal that is not UTF-8: the mark's ASCII form
+        (cl-letf (((symbol-function 'drgnx-cockpit-graph--ascii-p) #'always))
+          (should (string-search "? T3" (drgnx-cockpit-graph-test--line (drgnx-cockpit-graph-outline m) (format "task:%s#3" plan)))))
+        ;; the drawing: the mark and a dot in the waiting face's colour, on each waiting node
+        (let ((old (face-attribute 'drgnx-cockpit-waiting :foreground)))
+          (unwind-protect
+              (progn
+                (set-face-attribute 'drgnx-cockpit-waiting nil :foreground "#ee1111")
+                (let ((svg (drgnx-cockpit-graph-svg (drgnx-cockpit-graph-layout m '(8 . 16)))))
+                  (should (= 2 (cl-loop with start = 0 while (string-match "<circle[^>]*fill=\"#ee1111\"" svg start)
+                                        count t do (setq start (match-end 0)))))
+                  (should (string-match-p "fill=\"#ee1111\"[^>]*>&#9680;<" svg))))   ; ◐, as svg.el writes it
+            (set-face-attribute 'drgnx-cockpit-waiting nil :foreground old)))))))
 
 (ert-deftest drgnx-cockpit-graph/svg-has-no-colour-literal-not-from-a-face ()
   (drgnx-cockpit-fixture-with

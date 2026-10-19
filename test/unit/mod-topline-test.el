@@ -500,7 +500,8 @@ buffer of the selected window (a temp buffer in project `proj', no git).  Faces 
              (text (mapconcat (lambda (i) (substring-no-properties (nth 2 i))) items "")))
         (should (<= (string-width text) 40))
         (should (string-match-p "– ▢ × *\\'" text))              ; the controls are whole at the right end
-        (should (string-match-p "…" text))))))
+        ;; cut with Emacs's ellipsis: "…" where the terminal shows it, "..." in a C locale (CI's)
+        (should (string-search (truncate-string-ellipsis) text))))))
 
 (ert-deftest drgnx-topline/a-clock-that-went-back-does-not-keep-the-line-failing ()
   (drgnx-topline-test--with 'vscode

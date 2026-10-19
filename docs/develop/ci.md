@@ -29,6 +29,14 @@ changes (`major-mode-remap-alist`: Emacs 31 asks to install a missing grammar, w
 compilation is optional (Homebrew's Emacs has none). On Linux, `TMPDIR` set to a symlinked or long directory shows
 most of these before macOS CI does.
 
+Nor does a test assume a desktop's environment. The Ubuntu job runs as root, in the C locale, with uutils' coreutils
+and no tree-sitter grammars: a test that looks at glyphs pins the ASCII predicate it means (`drgnx-face--ascii-frame-p`,
+`drgnx-cockpit-graph--ascii-p`) or reads Emacs's own `truncate-string-ellipsis` (`...` in the C locale); a test of a
+read-only file skips as root; a tree-sitter mode without its grammar is not checked; a lock never rests on `mkdir`
+alone (uutils' lets two racing commands both make the directory); and a test's flymake backend runs with
+`trusted-content` bound to `:all` (Emacs 31 runs backends only in trusted buffers). `LANG=C bin/drgnx test` shows the
+locale's share locally.
+
 ## Reproduce a job locally
 
 ```

@@ -154,7 +154,8 @@ The most recently used editor window shows the whole bar; the other editor group
 quiet bar: only the left side (`drgnx-statusbar-quiet`: `folder` — the Explorer's folder, or `No folder open` — branch, agents, jobs, tests and `misc`), no line and column,
 for the modes in `drgnx-statusbar-quiet-modes`. Every other buffer (Magit, Dired, help, Info, a shell, compilation,
 drgnx's own panes) keeps its own mode line, and a buffer whose own `mode-line-format` is nil keeps none. In a narrow window the bar never wraps: segments go in the order of
-`drgnx-statusbar-drop-order` (line endings first), and the branch is cut with an ellipsis, never dropped. The glyphs
+`drgnx-statusbar-drop-order` (line endings first), and the branch is cut with an ellipsis, never dropped (in a column or
+two, where a terminal's three-dot ellipsis would not fit, it is cut without one). The glyphs
 come from `drgnx-face-glyphs`, so a terminal that is not UTF-8 shows ASCII (` | ` between segments instead of ` · `).
 
 **Tests.** A compilation (`M-x compile`, `project-compile`) whose command matches
