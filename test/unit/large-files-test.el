@@ -25,6 +25,8 @@
 (load (expand-file-name "test/fixtures/config-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/editor/drgnx-large-files" drgnx-dir) nil t)
+;; a Python mode's first run registers an `eval-after-load' of grep (Emacs 31): here, not in a strict body
+(let ((python-indent-guess-indent-offset nil)) (with-temp-buffer (python-mode)))
 
 (defvar drgnx-large-files-chunk-open-function)
 (defvar drgnx-large-file-mode)
