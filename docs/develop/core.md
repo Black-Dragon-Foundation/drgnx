@@ -2221,6 +2221,21 @@ so the lean sweep never sees a chunk buffer: undo stays on, and auto-save is tur
 loaded (its advice asks a question of its own). `drgnx-large-files-chunks-position` gives `(N . TOTAL)`, counted
 the way vlf's mode line counts. The module's teardown leaves chunk buffers as they are.
 
+**Switching, the header and the segment.** `drgnx-large-files--switch` refuses a modified buffer (`user-error`),
+remembers the new mode, kills the buffer, visits the file again under `(drgnx-large-file-open 'auto)` (the remembered
+mode wins) and shows the new buffer in the windows that showed the old one. Large File: Open in Chunks, Open Whole
+(lean) and Open Raw call it; each command's `:when` offers it only in a large file's buffer in another mode (chunks
+only when they can be built). `drgnx-large-files--header-refresh` builds the header text once, when the mode turns on
+or a chunk buffer is built, into the buffer-local `drgnx-large-files--header` (`risky-local-variable`, so its button
+properties show) with the size text cached beside it. The header line shows that variable: as
+`drgnx-chrome-header-tail` after the breadcrumb when the workbench's chrome is on, else as the buffer's
+`header-line-format`. A button's `local-map` runs `drgnx-large-files--header-click` on `[header-line mouse-1]`.
+A major-mode change resets both, and `after-change-major-mode-hook` builds them again. The status-bar segment
+`large-file` reads only the flag, the cached size and the chunk position. It is defined by
+`(eval-after-load 'drgnx-statusbar (drgnx-modules-with-owner …))` and put before `position` with
+`drgnx-module-set`. `drgnx-statusbar-define-segment` records no undo yet (teardown Task 23), so the module's teardown
+removes the segment from `drgnx-statusbar--segments` by hand, and the header from chunk buffers.
+
 ## The workbench state store (`wb/drgnx-state.el`, `core/drgnx-frame-kind.el`)
 
 One observed answer for "which windows, panes and frames are there". The store keeps one record per workbench

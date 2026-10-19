@@ -19,10 +19,15 @@
 ;; - Lean is `drgnx-large-file-mode': the gate (no parser, no eglot while the major mode runs) and the sweep (the
 ;;   modes of `so-long-minor-modes' off, no undo, no auto-save).  A revert across `:ask-above' turns it on or off
 ;;   without a question.  so-long runs everywhere.
-;; See docs/guide/modules.md, docs/develop/core.md ("Large files") and docs/reference/config.md.
+;; - A large file's buffer says its size and mode in the header line, with a button for each other mode, and in the
+;;   status bar's `large-file' segment.  Large File: Open in Chunks, Open Whole (lean) and Open Raw switch it (never
+;;   with unsaved changes) and remember the mode.
+;; See docs/guide/large-files.md, docs/guide/modules.md, docs/develop/core.md ("Large files") and
+;; docs/reference/config.md.
 
 ;;; Code:
 (require 'drgnx-modules)
+(require 'drgnx-registry)
 (require 'drgnx-config)
 (require 'drgnx-memo)
 (require 'drgnx-guard)
@@ -208,7 +213,10 @@ warn about it."
          (setq drgnx-large-file 'raw)
          (drgnx-large-file-mode 1))      ; a raw visit runs no `find-file-hook': the sweep runs here
        buf))
-    ('chunks (funcall drgnx-large-files-chunk-open-function file size thresholds))))
+    ('chunks
+     (let ((buf (funcall drgnx-large-files-chunk-open-function file size thresholds)))
+       (with-current-buffer buf (drgnx-large-files--header-refresh))
+       buf))))
 
 (defun drgnx-large-files--visit (orig filename nowarn rawfile wildcards)
   "The door: `find-file-noselect' (ORIG) of FILENAME, NOWARN, RAWFILE, WILDCARDS.
@@ -238,11 +246,155 @@ asks once, everything else never asks.  Anything else goes to ORIG unchanged."
          (drgnx-large-files--open-as answer orig file nowarn size th)))
       (_ (drgnx-large-files--open-as mode orig file nowarn size th)))))
 
-;;;; Lean
+;;;; Switching and the header line
+
+(defun drgnx-large-files--offers-p (mode)
+  "Non-nil when the current buffer holds a large file that can switch to MODE (`chunks', `lean' or `raw'): it is in
+another mode, and chunks can be built when MODE is `chunks'."
+  (and drgnx-large-file buffer-file-name (not (eq drgnx-large-file mode))
+       (or (not (eq mode 'chunks)) (drgnx-large-files--chunks-ok))))
+
+(defun drgnx-large-files--offer-chunks-p () "The command Open in Chunks applies here." (drgnx-large-files--offers-p 'chunks))
+(defun drgnx-large-files--offer-whole-p () "The command Open Whole applies here." (drgnx-large-files--offers-p 'lean))
+(defun drgnx-large-files--offer-raw-p () "The command Open Raw applies here." (drgnx-large-files--offers-p 'raw))
+
+(defun drgnx-large-files--switch (mode)
+  "Reopen the current buffer's large file in MODE (`chunks', `lean' or `raw'), remembered for the file, and show it
+in the windows that showed the buffer.  A modified buffer is refused: switching reopens the file."
+  (let ((file buffer-file-name) (buf (current-buffer)))
+    (unless (and file drgnx-large-file) (user-error "This buffer does not hold a large file"))
+    (when (buffer-modified-p)
+      (user-error "Save or revert %s first: switching reopens the file" (file-name-nondirectory file)))
+    (let ((windows (get-buffer-window-list buf nil t)))
+      (drgnx-large-files-remember file mode)
+      (kill-buffer buf)
+      (when (buffer-live-p buf) (user-error "%s was not closed" (buffer-name buf)))
+      ;; the remembered mode wins: no question
+      (let ((new (let ((drgnx-large-file-open 'auto)) (find-file-noselect file))))
+        (dolist (w windows) (when (window-live-p w) (set-window-buffer w new)))
+        (set-buffer new)
+        new))))
+
+(defun drgnx-large-files-open-chunks ()
+  "Reopen this large file in chunks: one chunk of the file at a time (refused while the buffer is modified)."
+  (interactive)
+  (drgnx-large-files--switch 'chunks))
+
+(defun drgnx-large-files-open-whole ()
+  "Reopen this large file whole, lean: without the expensive modes, undo or auto-save (refused while modified)."
+  (interactive)
+  (drgnx-large-files--switch 'lean))
+
+(defun drgnx-large-files-open-raw ()
+  "Reopen this large file raw: whole and literally, without decoding (refused while the buffer is modified)."
+  (interactive)
+  (drgnx-large-files--switch 'raw))
+
+(defconst drgnx-large-files--modes '((chunks "in chunks" "Open in Chunks") (lean "lean" "Open Whole") (raw "raw" "Open Raw"))
+  "Each mode: (MODE NAME BUTTON), as the header line says it and labels its button.")
+
+(defvar drgnx-large-files--button-map
+  (let ((m (make-sparse-keymap)))
+    (define-key m [header-line mouse-1] #'drgnx-large-files--header-click)
+    m)
+  "The keymap of a header button's text.")
+
+(defvar-local drgnx-large-files--header nil
+  "The header line's text in a large file's buffer: its size, its mode and a button for each other mode.")
+(put 'drgnx-large-files--header 'risky-local-variable t)   ; the header shows its text properties (the buttons)
+
+(defvar-local drgnx-large-files--shown-size nil
+  "The size of the large file in this buffer as the header and the status bar show it (\"412 MB\").")
+
+(defvar drgnx-chrome-mode)
+(defvar drgnx-chrome-header-tail)
+(declare-function drgnx-chrome-apply "drgnx-chrome")
+
+(defun drgnx-large-files--header-click (event)
+  "Switch to the mode of the header button under the mouse EVENT, in the window it was clicked in."
+  (interactive "e")
+  (let* ((posn (event-start event))
+         (str (posn-string posn))
+         (mode (and str (get-text-property (cdr str) 'drgnx-large-files-switch (car str))))
+         (w (posn-window posn)))
+    (when mode
+      (when (window-live-p w) (select-window w))
+      (drgnx-large-files--switch mode))))
+
+(defun drgnx-large-files--button (mode label)
+  "A header button \"[LABEL]\" that switches to MODE."
+  (propertize (concat "[" label "]") 'face 'button 'mouse-face 'mode-line-highlight
+              'help-echo (format "mouse-1: %s" label) 'local-map drgnx-large-files--button-map
+              'drgnx-large-files-switch mode))
+
+(defun drgnx-large-files--chrome-apply ()
+  "Draw the workbench's headers again when the chrome is on and the buffer is shown."
+  (when (and (bound-and-true-p drgnx-chrome-mode) (fboundp 'drgnx-chrome-apply) (get-buffer-window))
+    (drgnx-chrome-apply)))
+
+(defun drgnx-large-files--header-clear ()
+  "Take the large-file header out of the current buffer."
+  (when (eq header-line-format 'drgnx-large-files--header) (kill-local-variable 'header-line-format))
+  (when (and (boundp 'drgnx-chrome-header-tail) (eq drgnx-chrome-header-tail 'drgnx-large-files--header))
+    (kill-local-variable 'drgnx-chrome-header-tail))
+  (when drgnx-large-files--header
+    (kill-local-variable 'drgnx-large-files--header)
+    (kill-local-variable 'drgnx-large-files--shown-size)
+    (drgnx-large-files--chrome-apply)))
 
 (defun drgnx-large-files--header-refresh ()
-  "Refresh the current buffer's header line, which offers the other modes.  Nothing yet: it has none."
-  nil)
+  "Show the current buffer's large file in its header line: \"412 MB, in chunks: [Open Whole] [Open Raw]\", a
+button for each other mode.  After the breadcrumb with the workbench's chrome, else as the buffer's header line.
+Outside a large file's buffer it takes the header out."
+  (if (not (and drgnx-large-file buffer-file-name))
+      (drgnx-large-files--header-clear)
+    (setq drgnx-large-files--shown-size
+          (drgnx-large-files--size-text (or (drgnx-large-files--size buffer-file-name) (buffer-size))))
+    (setq drgnx-large-files--header
+          (concat " " drgnx-large-files--shown-size ", " (nth 1 (assq drgnx-large-file drgnx-large-files--modes)) ":"
+                  (mapconcat (lambda (m)
+                               (if (drgnx-large-files--offers-p (car m))
+                                   (concat " " (drgnx-large-files--button (car m) (nth 2 m)))
+                                 ""))
+                             drgnx-large-files--modes "")))
+    (if (bound-and-true-p drgnx-chrome-mode)
+        (progn (when (eq header-line-format 'drgnx-large-files--header) (kill-local-variable 'header-line-format))
+               (setq-local drgnx-chrome-header-tail 'drgnx-large-files--header))
+      (setq-local header-line-format 'drgnx-large-files--header))
+    (drgnx-large-files--chrome-apply)))
+
+;;;; The status bar segment
+
+(defvar drgnx-statusbar-right)
+(defvar drgnx-statusbar--segments)
+(declare-function drgnx-statusbar-define-segment "drgnx-statusbar")
+(declare-function drgnx-statusbar-source-window "drgnx-statusbar")
+(declare-function drgnx-face--ascii-frame-p "drgnx-face")
+(declare-function drgnx-large-files-chunks-position "drgnx-large-files-chunks")
+
+(defun drgnx-large-files--segment ()
+  "The status bar's `large-file': \"412 MB · chunk 3/412\", \"412 MB · lean\" or \"412 MB · raw\" (`-' for `·' on
+an ASCII terminal); nothing outside a large file's buffer.  Reads the flag, the cached size and the chunk position."
+  (when-let* ((mode drgnx-large-file) (size drgnx-large-files--shown-size))
+    (concat size
+            (if (and (fboundp 'drgnx-face--ascii-frame-p)
+                     (drgnx-face--ascii-frame-p (window-frame (drgnx-statusbar-source-window))))
+                " - " " · ")
+            (if (eq mode 'chunks)
+                (let ((p (and (fboundp 'drgnx-large-files-chunks-position) (drgnx-large-files-chunks-position))))
+                  (if p (format "chunk %d/%d" (car p) (cdr p)) "chunks"))
+              (symbol-name mode)))))
+
+(defun drgnx-large-files--segment-define ()
+  "Define the segment `large-file' and put it before `position' in `drgnx-statusbar-right' (at the end without it)."
+  (drgnx-statusbar-define-segment 'large-file :fn #'drgnx-large-files--segment
+                                  :help "This large file's size and how it is open (chunks, lean or raw)")
+  (unless (memq 'large-file drgnx-statusbar-right)
+    (let ((tail (memq 'position drgnx-statusbar-right)))
+      (drgnx-module-set 'drgnx-statusbar-right
+                        (append (butlast drgnx-statusbar-right (length tail)) '(large-file) tail)))))
+
+;;;; Lean
 
 (define-minor-mode drgnx-large-file-mode
   "Lean: this buffer holds a large file whole, without the expensive modes (those of `so-long-minor-modes'),
@@ -259,7 +411,8 @@ it and gives undo and auto-save back, but turns no mode back on (a revert does, 
         (drgnx-large-files--header-refresh))
     (setq drgnx-large-file nil)
     (buffer-enable-undo)
-    (auto-save-mode (if auto-save-default 1 -1))))
+    (auto-save-mode (if auto-save-default 1 -1))
+    (drgnx-large-files--header-clear)))
 
 (defun drgnx-large-files--sweep-p ()
   "Non-nil when the buffer `find-file-hook' runs in should be lean: it holds a large file, or its text is above
@@ -294,12 +447,17 @@ A revert, auto-revert's from a timer too, never asks: it replaces the text with 
 
 (defun drgnx-large-files--teardown ()
   "Turn lean off in every lean or raw buffer, without running major modes again on huge buffers (it says so).
-Chunk buffers stay."
+Chunk buffers stay, without the header.  The status bar's segment goes (its place in the bar is the setup's
+recorded `drgnx-module-set')."
   (let ((any nil))
     (dolist (b (buffer-list))
-      (when (memq (buffer-local-value 'drgnx-large-file b) '(lean raw))
-        (with-current-buffer b (drgnx-large-file-mode -1))
-        (setq any t)))
+      (pcase (buffer-local-value 'drgnx-large-file b)
+        ((or 'lean 'raw) (with-current-buffer b (drgnx-large-file-mode -1)) (setq any t))
+        ('chunks (with-current-buffer b (drgnx-large-files--header-clear)))))
+    ;; `drgnx-statusbar-define-segment' records no undo yet (teardown Task 23): removed by hand
+    (when (boundp 'drgnx-statusbar--segments)
+      (remhash 'large-file drgnx-statusbar--segments)
+      (force-mode-line-update t))
     (when any (message "Large files off: lean buffers keep their mode until you revert them"))))
 
 (defconst drgnx-large-files--sweep-modes '(indent-bars-mode drgnx-blame-mode drgnx-sticky-mode diff-hl-margin-mode)
@@ -341,8 +499,9 @@ Chunk buffers stay."
                               ;; a major mode changed by hand resets the minor modes: the sweep again (after the
                               ;; global modes' turn-on, at the default depth); the flag is permanent
                               (drgnx-module-hook 'after-change-major-mode-hook major-mode () :depth 90
-                                                 (when (and (memq drgnx-large-file '(lean raw)) (not drgnx-large-file-mode))
-                                                   (drgnx-large-file-mode 1)))
+                                                 (pcase drgnx-large-file
+                                                   ((or 'lean 'raw) (unless drgnx-large-file-mode (drgnx-large-file-mode 1)))
+                                                   ('chunks (drgnx-large-files--header-refresh))))   ; the header was reset
                               (drgnx-module-hook 'before-revert-hook before-revert ()
                                 (drgnx-large-files--before-revert))
                               (drgnx-module-hook 'after-revert-hook revert ()
@@ -352,7 +511,22 @@ Chunk buffers stay."
                               (let ((modes so-long-minor-modes))
                                 (dolist (m drgnx-large-files--sweep-modes)
                                   (unless (memq m modes) (setq modes (append modes (list m)))))
-                                (drgnx-module-set 'so-long-minor-modes modes))))
+                                (drgnx-module-set 'so-long-minor-modes modes))
+                              ;; switching: each command is also a button of the header line
+                              (pcase-dolist (`(,id ,title ,fn ,when ,doc)
+                                             '((large-file-open-chunks "Large File: Open in Chunks" drgnx-large-files-open-chunks
+                                                                       drgnx-large-files--offer-chunks-p
+                                                                       "Reopen this large file in chunks, one part at a time")
+                                               (large-file-open-whole "Large File: Open Whole (lean)" drgnx-large-files-open-whole
+                                                                      drgnx-large-files--offer-whole-p
+                                                                      "Reopen this large file whole, without the expensive modes")
+                                               (large-file-open-raw "Large File: Open Raw" drgnx-large-files-open-raw
+                                                                    drgnx-large-files--offer-raw-p
+                                                                    "Reopen this large file whole and literally, without decoding")))
+                                (drgnx-command-define id :category "File" :title title :command fn :when when :doc doc))
+                              ;; the status bar's segment, once the bar is loaded (now, when it is)
+                              (eval-after-load 'drgnx-statusbar
+                                (drgnx-modules-with-owner (drgnx-large-files--segment-define)))))
 
 (provide 'drgnx-large-files)
 ;;; drgnx-large-files.el ends here
