@@ -12,7 +12,7 @@ case ${BASH_SOURCE[0]-} in
   */*) _drgnx_dir=$PWD/${BASH_SOURCE[0]%/*} ;;
   *) _drgnx_dir=$PWD ;;
 esac
-_drgnx_commands='open doctor build test ui macos-app sync upgrade rollback generations lock bisect service-unit onboard check fmt work hub job search keys safe help shell secrets bootstrap'
+_drgnx_commands='open doctor build test ui macos-app sync upgrade rollback generations lock bisect service-unit onboard check fmt work hub job search keys safe help shell secrets bootstrap update coord'
 _drgnx_steps='environment look-and-keys projects ai search agents daemon portability finish'
 _drgnx_bootstrap_steps='preflight config keys sync onboard desktop shell doctor'
 _drgnx_presets='minimal ide full-ai'
@@ -28,7 +28,7 @@ _drgnx() {
 
   if [[ $n -le 1 ]]; then   # the command, or a file or folder to open
     if [[ $cur == -* ]]; then
-      words='-h --help'
+      words='-h --help -t --gui'
     else
       words=$_drgnx_commands
       for f in "$cur"*; do
@@ -44,6 +44,8 @@ _drgnx() {
       --preset) if [[ $cmd == onboard ]]; then words=$_drgnx_presets; fi ;;
       --shell) if [[ $cmd == shell ]]; then words='zsh bash fish'; fi ;;
       --fedora) if [[ $cmd == test ]]; then words='44 45'; fi ;;
+      --compositor) if [[ $cmd == test ]]; then words='mutter sway x11 i3 kwin niri'; fi ;;
+      --auto) if [[ $cmd == update ]]; then words='on off status'; fi ;;
       --config) if [[ $cmd == test ]]; then words='drgnx gryphn'; elif [[ $cmd == ui ]]; then words='minimal drgnx gryphn'; fi ;;
       --keys)
         if [[ $cmd == onboard ]]; then
@@ -58,9 +60,9 @@ _drgnx() {
     if [[ -z $words ]]; then
       if [[ $cur == -* ]]; then
         case "$cmd $sub" in
-          'open '*) words='--check --wait' ;;
+          'open '*) words='--check --wait -t --gui' ;;
           'doctor '*) words='--json --dev' ;;
-          'test '*) words='--one-process --ui --scenario --config --bench --perf --audit --soak --container --install --bootstrap --fedora' ;;
+          'test '*) words='--one-process --ui --compositor --tty --scenario --config --bench --perf --audit --soak --container --install --bootstrap --fedora' ;;
           'sync '*) words='--offline --seed --prune --dry-run' ;;
           'lock '*) words='--ship' ;;
           'onboard '*) words='--non-interactive --again --preset --keys --theme --roots --todos --step' ;;
@@ -84,6 +86,8 @@ _drgnx() {
           'secrets import') words='--identity --replace' ;;
           'secrets ls') words='--identity' ;;
           'bootstrap '*) words='--config --chezmoi --identity --step --dry-run --yes --replace' ;;
+          'update '*) words='--quiet --back --auto' ;;
+          'coord mcp') words='--kind' ;;
         esac
       elif [[ $n -eq 2 ]]; then   # the word after the command
         case $cmd in
@@ -95,6 +99,7 @@ _drgnx() {
           ui) words=$_drgnx_uis ;;
           shell) words='install line' ;;
           secrets) words='export import ls' ;;
+          coord) words='mcp' ;;
         esac
       elif [[ $cmd == test ]]; then   # test --install NAME…
         for ((i = 2; i < n; i++)); do

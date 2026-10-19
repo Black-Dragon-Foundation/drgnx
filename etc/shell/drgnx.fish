@@ -47,6 +47,10 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n __fish_use_subcommand -a shell -d 'Add the drgnx line to your shell rc file'
     complete -c drgnx -n __fish_use_subcommand -a secrets -d 'Provider keys to a second machine'
     complete -c drgnx -n __fish_use_subcommand -a bootstrap -d 'Set this machine up from your configuration'
+    complete -c drgnx -n __fish_use_subcommand -a update -d 'Update this install to GitHub main'
+    complete -c drgnx -n __fish_use_subcommand -a coord -d 'Serve the coordination tools to an agent outside drgnx'
+    complete -c drgnx -n __fish_use_subcommand -s t -d 'Open in this terminal'
+    complete -c drgnx -n __fish_use_subcommand -l gui -d 'Open in a window'
 
     # Commands that take no file: no file names after them.
     complete -c drgnx -n '__fish_seen_subcommand_from doctor build upgrade rollback generations lock macos-app check test hub' -f
@@ -54,6 +58,8 @@ if not set -q _drgnx_sourced
     # open, doctor, test, sync, lock, onboard, check, fmt
     complete -c drgnx -n '__fish_seen_subcommand_from open' -l check -d 'Start the daemon if needed, print its Emacs version'
     complete -c drgnx -n '__fish_seen_subcommand_from open' -l wait -d 'Return when you are done with the files'
+    complete -c drgnx -n '__fish_seen_subcommand_from open' -s t -d 'In this terminal'
+    complete -c drgnx -n '__fish_seen_subcommand_from open' -l gui -d 'A window, even over SSH or without a display'
     complete -c drgnx -n '__fish_seen_subcommand_from doctor' -l json -d 'Machine-readable'
     complete -c drgnx -n '__fish_seen_subcommand_from doctor' -l dev -d 'Also the tools to develop drgnx'
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l one-process -d 'Every test file in one Emacs'
@@ -68,6 +74,8 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l install -d 'install.sh in fresh distribution containers'
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l bootstrap -d 'drgnx bootstrap on a fresh Fedora container'
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l fedora -x -a '44 45' -d 'Fedora release for --bootstrap'
+    complete -c drgnx -n '__fish_seen_subcommand_from test' -l tty -d 'Terminal tests: Emacs in private tmux servers'
+    complete -c drgnx -n '__fish_seen_subcommand_from test' -l compositor -x -a 'mutter sway x11 i3 kwin niri' -d 'Compositor of the GUI session'
     complete -c drgnx -n '__fish_seen_subcommand_from test; and __fish_seen_argument -l install' -a 'fedora-44 debian-trixie ubuntu-26.04 fedora-45 archlinux' -d 'Distribution image'
     complete -c drgnx -n '__fish_seen_subcommand_from sync' -l offline -d 'From the lock and the cache'
     complete -c drgnx -n '__fish_seen_subcommand_from sync' -l seed -r -d 'Copy another elpa first'
@@ -138,6 +146,15 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n '__fish_seen_subcommand_from secrets; and __fish_seen_subcommand_from export' -l recipient -x -d 'age recipient'
     complete -c drgnx -n '__fish_seen_subcommand_from secrets; and __fish_seen_subcommand_from import ls' -l identity -r -d 'age identity file'
     complete -c drgnx -n '__fish_seen_subcommand_from secrets; and __fish_seen_subcommand_from import' -l replace -d 'Overwrite a different key in the keyring'
+
+    # update, coord
+    complete -c drgnx -n '__fish_seen_subcommand_from update' -f
+    complete -c drgnx -n '__fish_seen_subcommand_from update' -l quiet -d 'One line, for the timer'
+    complete -c drgnx -n '__fish_seen_subcommand_from update' -l back -d 'Return to the commit before the last update'
+    complete -c drgnx -n '__fish_seen_subcommand_from update' -l auto -x -a 'on off status' -d 'A daily timer'
+    complete -c drgnx -n '__fish_seen_subcommand_from coord' -f
+    complete -c drgnx -n '__fish_seen_subcommand_from coord; and not __fish_seen_subcommand_from mcp' -a mcp -d 'Serve the coordination tools over stdio'
+    complete -c drgnx -n '__fish_seen_subcommand_from coord; and __fish_seen_subcommand_from mcp' -l kind -x -d 'The agent: claude, codex, zed…'
 
     # bootstrap
     complete -c drgnx -n '__fish_seen_subcommand_from bootstrap' -l config -r -d 'Your configuration repository (https or a path)'

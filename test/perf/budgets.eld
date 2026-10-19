@@ -40,7 +40,7 @@
  ;; eat (2026-10-18, with the tools/terminal-eat module running, medians of the workload's three repeats, load 3-6; the
  ;; machine was never quiet): terminal-typing p95 1.9-6.4 ms over 16 runs (two above 5, at load 3.9 and 5.8), max 2.5-10.6;
  ;; terminal-output p95 4.2-8.0 (above 5.2 only at load 5.5 and above), max 5-49 with drgnx's early collection
- ;; (`drgnx-terminal-eat-gc-quiet') over ten runs at load 2.7-6.2, 5-44 over five more at load 3.3-6.6.
+ ;; (`drgnx-terminal-eat-gc-quiet', now `drgnx-gc-gap') over ten runs at load 2.7-6.2, 5-44 over five more at load 3.3-6.6.
  ;; terminal-typing's p95 and max rows are the worst measured, rounded up (p95 6.4 -> 7; max 12.5 in the first measurements -> 13);
  ;; terminal-output's p95 is the worst measured below load 5.5 (5.2), rounded up (the 7.9-8.0 came at load 5.5 and above).
  ;; terminal-output's max is PROVISIONAL: 50 ms is the ceiling, not a measurement (n=10 per arm, a busy machine).  The

@@ -521,14 +521,14 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
         (should-not (string-match-p "^\\*\\* TODO COMMENT" board))
         (should (string-match-p "urgent" board))))))
 
-(ert-deftest drgnx-onboard/the-linux-desktop-files-are-written-in-the-config-folder-only ()
+(ert-deftest drgnx-onboard/the-linux-desktop-files-are-written-in-the-data-folder-only ()
   (drgnx-onboard-test--with root
     (let ((calls nil) (orig (symbol-function 'drgnx-file-write-text)))
       (cl-letf (((symbol-function 'drgnx-file-write-text)
                  (lambda (f text &rest args) (push f calls) (apply orig f text args))))
         (let ((result (drgnx-onboard--linux-desktop nil))
-              (unit (expand-file-name "systemd/drgnx.service" (drgnx-user-dir)))
-              (desktop (expand-file-name "applications/drgnx.desktop" (drgnx-user-dir))))
+              (unit (expand-file-name "systemd/drgnx.service" (drgnx-data-dir)))
+              (desktop (expand-file-name "applications/drgnx.desktop" (drgnx-data-dir))))
           (should (eq (car result) 'info))
           (should (equal (sort (copy-sequence calls) #'string<) (sort (list unit desktop) #'string<)))
           (should (equal (with-temp-buffer (insert-file-contents desktop) (buffer-string)) drgnx-onboard-desktop-entry))

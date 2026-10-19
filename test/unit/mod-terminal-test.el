@@ -52,7 +52,6 @@
                  (drgnx-modules-run 'startup))))
            ,@body)
        (advice-remove 'eat--process-output-queue #'drgnx-terminal-eat--collect-in-gap)
-       (remove-hook 'post-gc-hook #'drgnx-terminal-eat--gc-note)
        (drgnx-rules-mode -1)
        (drgnx-wb-area-hide 'panel)
        (dolist (b (buffer-list))
@@ -359,12 +358,14 @@
       (should-not (process-query-on-exit-flag idle-proc)))))
 
 ;;;; GC pauses off the typing path (M12e perf: a terminal flooding output allocates ~500 bytes per output line)
+;; The rule itself (quiet, no input, 85% consed) is the GC owner's `drgnx-gc-gap' (core-gc-owner-test.el); here: eat's
+;; output batches reach it, and its rule holds from that path.
 
 (defun drgnx-terminal-test--collects-p (idle consed-share &optional pending)
   "Whether the gap hook collects when Emacs has been idle IDLE seconds (nil: it is not idle), CONSED-SHARE of
 `gc-cons-threshold' has been consed since the last collection, and input is waiting when PENDING."
   (let* ((gc-cons-threshold 1000000)
-         (drgnx-terminal-eat--gc-base (- (drgnx-terminal-eat--consed) (* consed-share gc-cons-threshold)))
+         (drgnx-gc--base (- (drgnx-gc--consed) (* consed-share gc-cons-threshold)))
          (collected nil))
     (cl-letf (((symbol-function 'current-idle-time) (lambda () (and idle (seconds-to-time idle))))
               ((symbol-function 'input-pending-p) (lambda (&rest _) pending))
@@ -374,35 +375,25 @@
 
 (ert-deftest drgnx-terminal/gc-gap-collects-when-quiet-and-nearly-due ()
   (drgnx-terminal-test--fresh nil
-    (let ((drgnx-terminal-eat-gc-quiet 0.02))
+    (let ((drgnx-gc-gap-quiet 0.02))
       (should (drgnx-terminal-test--collects-p 0.05 0.9))        ; quiet long enough, 90% of the threshold consed
       (should-not (drgnx-terminal-test--collects-p 0.05 0.9 t))  ; a key is waiting to be read
       (should-not (drgnx-terminal-test--collects-p 0.005 0.9))   ; a key was handled a moment ago: the next batch may be in its span
       (should-not (drgnx-terminal-test--collects-p nil 0.9))     ; not idle at all (a command is running)
       (should-not (drgnx-terminal-test--collects-p 0.05 0.3)))   ; plenty of room left: nothing to do yet
-    (let ((drgnx-terminal-eat-gc-quiet nil))
+    (let ((drgnx-gc-gap-quiet nil))
       (should-not (drgnx-terminal-test--collects-p 0.05 0.9)))   ; switched off
-    (let ((drgnx-terminal-eat-gc-quiet "0.02"))
+    (let ((drgnx-gc-gap-quiet "0.02"))
       (should-not (drgnx-terminal-test--collects-p 0.05 0.9)))))  ; a mistyped value never signals in eat's output path
 
-(ert-deftest drgnx-terminal/gc-gap-counts-from-the-last-collection ()
-  (drgnx-terminal-test--fresh nil
-    (let ((drgnx-terminal-eat--gc-base nil))
-      (drgnx-terminal-eat--gc-note)
-      (should (< (abs (- (drgnx-terminal-eat--consed) drgnx-terminal-eat--gc-base)) 10000)))
-    (let ((drgnx-terminal-eat--gc-base 0) (before (drgnx-terminal-eat--consed)))
-      (make-list 1000 nil)                ; 16000 bytes of conses
-      (drgnx-terminal-eat--gc-note)
-      (should (>= (- drgnx-terminal-eat--gc-base before) 16000)))))
-
 (ert-deftest drgnx-terminal/gc-gap-collects-once-per-threshold ()
-  ;; after a collection (the post-gc-hook noted it) the next batch finds nothing consed: no second collection
+  ;; after a collection (the GC owner's post-gc-hook notes it) the next batch finds nothing consed: no second collection
   (drgnx-terminal-test--fresh nil
-    (let* ((gc-cons-threshold 1000000) (drgnx-terminal-eat-gc-quiet 0.02) (collections 0)
-           (drgnx-terminal-eat--gc-base (- (drgnx-terminal-eat--consed) (* 0.9 gc-cons-threshold))))
+    (let* ((gc-cons-threshold 1000000) (drgnx-gc-gap-quiet 0.02) (collections 0)
+           (drgnx-gc--base (- (drgnx-gc--consed) (* 0.9 gc-cons-threshold))))
       (cl-letf (((symbol-function 'current-idle-time) (lambda () (seconds-to-time 0.05)))
                 ((symbol-function 'input-pending-p) (lambda (&rest _) nil))
-                ((symbol-function 'garbage-collect) (lambda () (cl-incf collections) (drgnx-terminal-eat--gc-note))))
+                ((symbol-function 'garbage-collect) (lambda () (cl-incf collections) (drgnx-gc--note))))
         (drgnx-terminal-eat--collect-in-gap)
         (drgnx-terminal-eat--collect-in-gap)
         (should (= collections 1))))))
@@ -411,7 +402,7 @@
   (unless (drgnx-terminal-test--eat-dir) (ert-skip drgnx-terminal-test--skip))
   (drgnx-terminal-test--fresh t
     (should (advice-member-p #'drgnx-terminal-eat--collect-in-gap 'eat--process-output-queue))
-    (should (memq #'drgnx-terminal-eat--gc-note post-gc-hook))))
+    (should-not (memq 'drgnx-terminal-eat--gc-note post-gc-hook))))   ; the GC owner keeps the one note
 
 (provide 'mod-terminal-test)
 ;;; mod-terminal-test.el ends here

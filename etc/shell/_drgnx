@@ -32,11 +32,13 @@ commands=(
   'shell:add the drgnx line to your shell rc file'
   'secrets:provider keys to a second machine'
   'bootstrap:set this machine up from your configuration'
+  'update:update this install to GitHub main'
+  'coord:the coordination tools for an agent outside drgnx'
 )
 
 if (( CURRENT == 2 )); then
   if [[ $PREFIX == -* ]]; then
-    _wanted options expl option compadd -- -h --help
+    _wanted options expl option compadd -- -h --help -t --gui
   else
     _alternative 'commands:command:_describe -t commands command commands' 'files:file or folder:_files'
   fi
@@ -48,11 +50,13 @@ shift words; (( CURRENT-- ))
 case $cmd in
   open)
     _arguments '--check[start the daemon if needed, print its Emacs version]' \
-      '--wait[return when you are done with the files]' '*:file or folder:_files' ;;
+      '--wait[return when you are done with the files]' '-t[in this terminal]' '--gui[a window, even over SSH or without a display]' \
+      '*:file or folder:_files' ;;
   doctor)
     _arguments '--json[machine-readable]' '--dev[also the tools to develop drgnx]' ;;
   test)
     _arguments '--one-process[every test file in one Emacs]' '--ui[GUI tests in a headless session]' '--scenario[behaviour scenarios]' \
+      '--compositor[compositor of the GUI session]:compositor:(mutter sway x11 i3 kwin niri)' '--tty[terminal tests in private tmux servers]' \
       '--config[configuration of the session]:configuration:(drgnx gryphn)' \
       '--bench[the workbench vs treemacs and ibuffer]' '--perf[input latency, redisplay, frames, GC]' \
       '--audit[what each hook function costs]' '--soak[the workloads in a loop]' \
@@ -167,6 +171,16 @@ case $cmd in
         import) _arguments '--identity[age identity file]:file:_files' '--replace[overwrite a different key in the keyring]' ;;
         ls) _arguments '--identity[age identity file]:file:_files' ;;
       esac
+    fi ;;
+  update)
+    _arguments '--quiet[one line, for the timer]' '--back[return to the commit before the last update]' \
+      '--auto[a daily timer]:state:(on off status)' ;;
+  coord)
+    if (( CURRENT == 2 )); then
+      _values 'coord command' 'mcp[serve the coordination tools over stdio]'
+    else
+      shift words; (( CURRENT-- ))
+      _arguments '--kind[the agent: claude, codex, zed…]:kind:'
     fi ;;
   bootstrap)
     _arguments '(--chezmoi)--config[your configuration repository (https or a path)]:url or directory:_files -/' \

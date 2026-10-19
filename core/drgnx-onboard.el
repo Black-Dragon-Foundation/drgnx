@@ -1401,14 +1401,13 @@ Interactive: asked (`drgnx-shell-install'), never written without a yes; otherwi
 
 (defun drgnx-onboard--daemon-step (ctx)
   "Keep running or quit (asked once), then macOS: the drgnx app; Linux: the systemd unit and desktop entry.  The
-result reads: keep running; that platform part; the terminal note (`drgnx-onboard--terminal-note'); the desktop
-\(`drgnx-onboard--desktop-note'); last, the shell integration line (`drgnx-onboard--shell-part')."
+result reads: keep running; that platform part; the shell integration line (`drgnx-onboard--shell-part'); the
+terminal note (`drgnx-onboard--terminal-note'); the desktop (`drgnx-onboard--desktop-note')."
   (let ((keep (drgnx-onboard--keep-running ctx)))
     (pcase-let ((`(,status ,message) (if (eq (drgnx-platform) 'macos) (drgnx-onboard--macos-app ctx)
                                        (drgnx-onboard--linux-desktop ctx))))
-      (list status (concat keep "; " message ". " (drgnx-onboard--terminal-note)
-                           "; desktop: " (drgnx-onboard--desktop-note)
-                           "; " (drgnx-onboard--shell-part ctx))))))
+      (list status (concat keep "; " message "; " (drgnx-onboard--shell-part ctx) ". " (drgnx-onboard--terminal-note)
+                           "; desktop: " (drgnx-onboard--desktop-note))))))
 
 (defun drgnx-onboard--linux-desktop (ctx)
   (require 'drgnx-pkg)
