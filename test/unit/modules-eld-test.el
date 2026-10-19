@@ -220,7 +220,7 @@ Fails the test unless every child exits 0."
       (should (equal (funcall next 'test/b) "off (chosen by the key profile)"))
       ;; another Emacs (or the user) wrote the file; this one has not looked again
       (drgnx-test-config-put 'modules "(:version 2 :disabled (test/a) :enabled (test/b))\n")
-      (should (equal (funcall next 'test/a) "off at next start"))
+      (should (equal (funcall next 'test/a) "off"))           ; never ran: "off at next start" is for a running one
       (should (equal (funcall next 'test/b) "on")))))
 
 ;;; modules-eld-test.el ends here

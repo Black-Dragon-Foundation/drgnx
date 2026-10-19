@@ -104,7 +104,7 @@
       ;; a default-on module still toggles :disabled
       (drgnx-modules-toggle 'test/on)
       (should (memq 'test/on (plist-get (drgnx-modules-read-state) :disabled)))
-      (should (equal (next-start 'test/on) "off at next start")))))
+      (should (equal (next-start 'test/on) "off")))))           ; never ran: "off at next start" is for a running one
 
 (ert-deftest drgnx-modules-default-off/set-enabled-returns-the-state ()
   (drgnx-modules-default-off-test--with root
