@@ -74,6 +74,12 @@ DRGNX_BUILD_JOBS, a positive number, sets it."
                                       (file-relative-name file root) (process-exit-status proc)
                                       (string-trim out)))))))
 
+(defun drgnx-build--sentinel (proc _event)
+  "Mark PROC's compile done once it ended.  Emacs runs a sentinel only after it read the output the process left
+in its pipe; `process-status' says `exit' as soon as the process is reaped, while that output may still be unread
+\(under load the build then took a finished compile for one that ended without a result)."
+  (unless (process-live-p proc) (process-put proc 'drgnx-build-done t)))
+
 (defun drgnx-build (root)
   "Byte-compile drgnx's Lisp under ROOT; return (:compiled N :warnings LIST :errors LIST).
 Each file compiles in a fresh batch Emacs, as the native compiler compiles it when a session loads the .elc: a
@@ -90,14 +96,14 @@ function another file's compile happened to load cannot hide a missing `declare-
             (let* ((file (pop queue))
                    (proc (make-process
                           :name "drgnx-build" :buffer (generate-new-buffer " *drgnx-build*" t) :noquery t
-                          :connection-type 'pipe :sentinel #'ignore
+                          :connection-type 'pipe :sentinel #'drgnx-build--sentinel
                           :command (list emacs "--batch" "-Q" "-l" self
                                          "--eval" (prin1-to-string `(drgnx-build--child ,file ,root))))))
               (push (list proc file (+ (float-time) drgnx-build-file-timeout)) running)))
           (accept-process-output nil 0.05)
           (dolist (job running)
             (pcase-let ((`(,proc ,file ,deadline) job))
-              (cond ((memq (process-status proc) '(exit signal))
+              (cond ((process-get proc 'drgnx-build-done)
                      (push (cons file (drgnx-build--result proc file root)) results)
                      (kill-buffer (process-buffer proc))
                      (setq running (delq job running)))

@@ -1441,7 +1441,9 @@ it when a session loads the `.elc`: in one shared Emacs, a library an earlier fi
 another drgnx file) hid a missing `declare-function` or `require`, and the native compiler's warning then opened
 `*Warnings*` in the user's frame. `drgnx-build-jobs` files compile at once: one per 150 MiB of `MemAvailable` beyond
 1 GiB kept free, at most the processor count (`DRGNX_BUILD_JOBS` sets it); a file that takes more than
-`drgnx-build-file-timeout` (120 s) is an error. The whole build takes about as long as the single-Emacs one did (3 s
+`drgnx-build-file-timeout` (120 s) is an error. A file's result is read when its process's sentinel has run (Emacs
+runs it only after reading what the process left in its pipe), never when `process-status` first says `exit`: under
+load that came before the output, and a finished compile looked like one that ended without a result. The whole build takes about as long as the single-Emacs one did (3 s
 on 16 cores). Warnings are printed, and the build test fails on any; `bin/drgnx build` exits 1 only on errors, so a
 warning a newer Emacs adds never stops an install or an update.
 
