@@ -34,6 +34,7 @@
 (require 'drgnx-timer)
 (require 'drgnx-cockpit-model)
 (require 'drgnx-panes)
+(eval-when-compile (require 'drgnx-agents))     ; its session struct's places (`setf' of a mode)
 
 (declare-function drgnx-cockpit-sessions "drgnx-cockpit")
 (declare-function drgnx-cockpit--open-task "drgnx-cockpit")
@@ -872,9 +873,9 @@ matches the diff's, which is what the merge gate compares."
     (cond
      ((and live (not (drgnx-agent-session-remote s)))
       (if (not (eq mode 'interrupt)) (drgnx-agents-send s text)
-        (setf (cl-struct-slot-value 'drgnx-agent-session 'mode s) 'queue)
+        (setf (drgnx-agent-session-mode s) 'queue)
         (unwind-protect (drgnx-agents-send s text)
-          (setf (cl-struct-slot-value 'drgnx-agent-session 'mode s) mode)))
+          (setf (drgnx-agent-session-mode s) mode)))
       'session)
      ((and live (not (eq mode 'interrupt))) (drgnx-agents-send s text) 'session)
      (t

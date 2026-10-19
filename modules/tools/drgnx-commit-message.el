@@ -17,6 +17,7 @@
 
 (declare-function drgnx-ai-request "drgnx-ai-client")
 (declare-function drgnx-ai-cancel "drgnx-ai-client")
+(declare-function drgnx-ai-confirm-project-route "drgnx-ai")
 (declare-function log-edit-files "log-edit")
 (defvar git-commit-mode)
 

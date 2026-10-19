@@ -18,6 +18,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 
+(declare-function eieio-oref "eieio-core")
 (declare-function drgnx-diff-show "drgnx-diff")
 (declare-function drgnx-wb-define-tab "drgnx-area")
 (declare-function drgnx-wb-area-show "drgnx-area")

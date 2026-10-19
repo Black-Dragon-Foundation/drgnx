@@ -193,6 +193,7 @@ default; it never reads ~/.profile), else ~/.profile.  With SHELL unset or empty
 
 (declare-function drgnx-trust-mode "drgnx-trust")
 (declare-function drgnx-trust-guards-status "drgnx-trust")
+(declare-function drgnx-commands-get "drgnx-registry")
 (defvar drgnx-trust-mode)
 
 (defun drgnx-doctor--trust-guards ()

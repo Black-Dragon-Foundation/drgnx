@@ -1433,6 +1433,15 @@ compilation available, Emacs then compiles them natively in the background as th
 times faster and makes far less garbage. `install.sh` runs it; drgnx sets `load-prefer-newer`, so a stale `.elc`
 never shadows newer source. The build must stay warning-free (`test/unit/build-test.el`).
 
+Each file compiles in a fresh batch Emacs (`-Q`, `core/` and `wb/` on `load-path`), as the native compiler compiles
+it when a session loads the `.elc`: in one shared Emacs, a library an earlier file's compile loaded (`project`, `cl-macs`,
+another drgnx file) hid a missing `declare-function` or `require`, and the native compiler's warning then opened
+`*Warnings*` in the user's frame. `drgnx-build-jobs` files compile at once: one per 150 MiB of `MemAvailable` beyond
+1 GiB kept free, at most the processor count (`DRGNX_BUILD_JOBS` sets it); a file that takes more than
+`drgnx-build-file-timeout` (120 s) is an error. The whole build takes about as long as the single-Emacs one did (3 s
+on 16 cores). Warnings are printed, and the build test fails on any; `bin/drgnx build` exits 1 only on errors, so a
+warning a newer Emacs adds never stops an install or an update.
+
 ## The Emacs `bin/drgnx` runs in
 
 The shell function `emacs_bin` picks the one Emacs every subcommand uses: `$DRGNX_EMACS`, else the first line of

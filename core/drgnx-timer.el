@@ -17,6 +17,7 @@
 (require 'drgnx-modules-record)
 
 (declare-function drgnx-state-dir "drgnx-paths")
+(declare-function drgnx-file-write "drgnx-file")
 
 ;;;; Seams: the layer reads time and input only through these (the clock fixture overrides them)
 

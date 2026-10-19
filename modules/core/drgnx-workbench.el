@@ -3,6 +3,15 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Code:
+(require 'drgnx-modules)
+(require 'drgnx-registry)
+(require 'drgnx-surfaces)
+(require 'drgnx-memo)
+(declare-function drgnx-signal-mode "drgnx-signal")
+(declare-function drgnx-wb-toggle-sidebar "drgnx-wb")
+(declare-function drgnx-wb-view-explorer "drgnx-wb")
+(declare-function drgnx-wb-view-search "drgnx-wb")
+(declare-function drgnx-wb-focus-editor "drgnx-wb")
 (declare-function drgnx-explorer-setup "drgnx-explorer")
 (declare-function drgnx-rules-mode "drgnx-rules")
 (declare-function drgnx-chrome-mode "drgnx-chrome")
