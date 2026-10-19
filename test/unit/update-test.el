@@ -272,9 +272,10 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
     (let* ((units (expand-file-name "config/systemd/user" dir))
            (timer (expand-file-name "drgnx-update.timer" units))
            (service (expand-file-name "drgnx-update.service" units))
-           (ctl (expand-file-name "systemctl.log" dir)))
-      (should (string-match-p "off" (cdr (drgnx-update-test--run dir nil bin "update" "--auto" "status"))))
-      (should (eq 0 (car (drgnx-update-test--run dir '("DRGNX_UPDATE_PLATFORM=Linux") bin "update" "--auto" "on"))))
+           (ctl (expand-file-name "systemctl.log" dir))
+           (env '("DRGNX_UPDATE_PLATFORM=Linux")))   ; every call: a macOS host would ask launchd
+      (should (string-match-p "off" (cdr (drgnx-update-test--run dir env bin "update" "--auto" "status"))))
+      (should (eq 0 (car (drgnx-update-test--run dir env bin "update" "--auto" "on"))))
       (let ((timer-text (drgnx-update-test--slurp timer))
             (service-text (drgnx-update-test--slurp service)))
         (should (string-match-p "^OnCalendar=daily$" timer-text))
@@ -291,15 +292,15 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
         (should (string-match-p (format "^Environment=\"XDG_STATE_HOME=%s/state\"$" (regexp-quote dir)) service-text))
         (should (string-match-p (format "^ExecStart=\"%s\" update --quiet$" (regexp-quote bin)) service-text)))
       (should (string-match-p "--user enable --now drgnx-update.timer" (drgnx-update-test--slurp ctl)))
-      (drgnx-update-test--run dir nil bin "update")    ; a run to report
-      (let ((status (cdr (drgnx-update-test--run dir nil bin "update" "--auto" "status"))))
+      (drgnx-update-test--run dir env bin "update")    ; a run to report
+      (let ((status (cdr (drgnx-update-test--run dir env bin "update" "--auto" "status"))))
         (should (string-match-p "automatic updates: on" status))
         (should (string-match-p "last run: .*already current" status)))
-      (should (eq 0 (car (drgnx-update-test--run dir nil bin "update" "--auto" "off"))))
+      (should (eq 0 (car (drgnx-update-test--run dir env bin "update" "--auto" "off"))))
       (should-not (file-exists-p timer))
       (should-not (file-exists-p service))
       (should (string-match-p "--user disable --now drgnx-update.timer" (drgnx-update-test--slurp ctl)))
-      (should (string-match-p "automatic updates: off" (cdr (drgnx-update-test--run dir nil bin "update" "--auto" "status"))))
+      (should (string-match-p "automatic updates: off" (cdr (drgnx-update-test--run dir env bin "update" "--auto" "status"))))
       ;; nothing leaked outside the temp config directory
       (should-not (file-exists-p (expand-file-name ".config" dir))))))
 

@@ -7,12 +7,12 @@
 
 (defun drgnx-install-config-test--function (name env script)
   "Run install.sh's function NAME's definition, then SCRIPT, in bash with ENV (\"K=V\" strings, a bare name
-unsets it); return (EXIT . OUTPUT)."
+unsets it); return (EXIT . OUTPUT).  The definition is `eval'ed: macOS's bash 3.2 sources nothing from `<(…)'."
   (let ((process-environment (append env process-environment))
         (default-directory drgnx-install-config-test--root))
     (with-temp-buffer
       (cons (call-process "bash" nil t nil "-c"
-                          (format "source <(sed -n '/^%s()/,/^}/p' install.sh); warn() { echo \"warn: $*\"; }; %s"
+                          (format "eval \"$(sed -n '/^%s()/,/^}/p' install.sh)\"; warn() { echo \"warn: $*\"; }; %s"
                                   name script))
             (buffer-string)))))
 
