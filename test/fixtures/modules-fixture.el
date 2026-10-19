@@ -213,11 +213,18 @@ library's; the recorder lists them in `drgnx-modules--left'.  Layer timers stay:
 
 ;;;; Running
 
+(defconst drgnx-test-modules--emacs-buffers
+  "\\`buffer [+-] \\*\\(?:code-conversion-work\\|code-converting-work\\|tab-line-hscroll\\|jka-compr-wr-temp\\|string-pixel-width\\)\\*\\'"
+  "The hidden work buffers Emacs makes for itself, the first time some code needs one, and keeps (as in
+test/leaks-allowed.eld): not a module's.")
+
 (defun drgnx-test-modules--diff-lines (before after)
-  "Readable lines for what differs between the fingerprints BEFORE and AFTER, features excepted."
+  "Readable lines for what differs between the fingerprints BEFORE and AFTER, features and Emacs's own work
+buffers excepted."
   (mapcar (lambda (d) (if (plist-get d :source) (format "%s (%s)" (plist-get d :what) (plist-get d :source))
                         (plist-get d :what)))
-          (seq-remove (lambda (d) (string-prefix-p "feature " (plist-get d :what)))
+          (seq-remove (lambda (d) (or (string-prefix-p "feature " (plist-get d :what))
+                                      (string-match-p drgnx-test-modules--emacs-buffers (plist-get d :what))))
                       (drgnx-modules-fingerprint-diff before after))))
 
 (defun drgnx-test-modules--ran ()

@@ -235,6 +235,7 @@
             (should idle)
             (should (= 60 (float-time (timer--time idle))))
             (should (timer--repeat-delay idle)))
+          (drgnx-modules--record 'tools/jobs 'startup 0 'ok)   ; else the teardown finds it not running: the badge would stay
           (drgnx-module-teardown 'tools/jobs)
           (mapc #'cancel-timer (append timer-list timer-idle-list)))
       (delete-directory state t))))

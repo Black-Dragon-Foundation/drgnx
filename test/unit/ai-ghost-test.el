@@ -303,8 +303,10 @@ LLM answering SPEC; `o' found running."
                                  (drgnx-module-teardown 'tools/ai)
                                  (with-current-buffer b
                                    (should-not drgnx-ai-ghost-mode)
-                                   (should-not (drgnx-ai-ghost-text)))
-                                 (should-not (memq 'drgnx-ai-ghost--emulation emulation-mode-map-alists)))
+                                   (should-not (drgnx-ai-ghost-text))
+                                   ;; the suggestion's keys are off: the alist keeps its place in
+                                   ;; `emulation-mode-map-alists', which the modal core holds for it, bound or not
+                                   (should-not drgnx-ai-ghost--showing)))
       (kill-buffer b))))
 
 ;;; ai-ghost-test.el ends here

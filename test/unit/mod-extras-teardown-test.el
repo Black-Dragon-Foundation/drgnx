@@ -50,7 +50,7 @@
                                     (keycast-mode-line-mode 1)
                                     (should (buffer-local-value 'drgnx-blame-mode buf)))
            (should-not (buffer-local-value 'drgnx-blame-mode buf))
-           (should-not drgnx-blame--timer)
+           (should-not (drgnx-timer-active-p 'blame-tick))
            (should-not (buffer-local-value 'indent-bars-mode buf))
            (should-not keycast-mode-line-mode))
        (kill-buffer buf)))))

@@ -51,7 +51,7 @@ and answered yes."
 
 (ert-deftest drgnx-modules-off/turn-on-runs-a-passed-stage-now ()
   (drgnx-modules-off-test--with
-   (drgnx-modules-write-state '(:version 1 :disabled (test/a)))
+   (drgnx-modules-update-state (lambda (_) '(:disabled (test/a))))
    (drgnx-modules-off-test--define 'test/a)
    (drgnx-modules-run 'startup)
    (should (eq (drgnx-modules-off-test--status 'test/a) 'disabled))
@@ -71,7 +71,7 @@ and answered yes."
 
 (ert-deftest drgnx-modules-off/turn-on-waits-for-a-later-stage ()
   (drgnx-modules-off-test--with
-   (drgnx-modules-write-state '(:version 1 :disabled (test/late test/needs)))
+   (drgnx-modules-update-state (lambda (_) '(:disabled (test/late test/needs))))
    (drgnx-modules-off-test--define 'test/late :stage 'idle)
    (drgnx-modules-off-test--define 'test/needs :packages '(drgnx-no-such-package-xyz))
    (drgnx-modules-run 'startup)
@@ -249,7 +249,7 @@ and answered yes."
 
 (ert-deftest drgnx-modules-off/a-failing-setup-on-turn-on-is-rolled-back-and-reported ()
   (drgnx-modules-off-test--with
-   (drgnx-modules-write-state '(:version 1 :disabled (test/f)))
+   (drgnx-modules-update-state (lambda (_) '(:disabled (test/f))))
    (drgnx-module-define 'test/f :doc "f"
                         :setup (lambda ()
                                  (drgnx-modules-push-undo "f1" (lambda () (push '(f1 -) drgnx-modules-off-test--log)))

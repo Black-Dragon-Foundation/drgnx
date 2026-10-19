@@ -42,7 +42,8 @@
 
 (defvar drgnx-ai-ghost-showing-map (make-sparse-keymap) "Keys active only while a suggestion shows.")
 (defvar drgnx-ai-ghost--emulation (list (cons 'drgnx-ai-ghost--showing drgnx-ai-ghost-showing-map))
-  "On `emulation-mode-map-alists' while the module is on (its setup adds it).")
+  "On `emulation-mode-map-alists' while the module is on (its setup adds it); the modal core also keeps a place
+for it there, bound or not (`drgnx-modal-order-alists'), where it is inert while no suggestion shows.")
 
 (defvar drgnx-ai-ghost-mode-map (make-sparse-keymap) "Keys of buffers with ghost text (Tab: `drgnx-ai-tab').")
 
