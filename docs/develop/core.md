@@ -416,7 +416,13 @@ timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run
   `ui/face` owns quick help's `quickhelp-timeout`, `-unmap`, `-look` and `-hover` and the start page's
   `start-first-frame`, `ui/terminal-popups` the debounced `tty-popups-show`, `ui/terminal` the per-frame
   `(tty-fallback-hint . FRAME)`, `tools/jobs` the coalesced `job-ui-recount`, `tools/ai` the `ai-probe` one-shot; the
-  ghost-text pause is an idle debounce `(ai-ghost . BUFFER)` owned by the buffer, and an Ask's search limit
+  ghost-text pause is an idle debounce `(ai-ghost . BUFFER)` owned by the buffer, the Search view's typing pause
+  and its pause after a listed file changed are debounces `(replace-pause . BUFFER)` and `(replace-refresh . BUFFER)`
+  owned by the view's buffer (its rows are a view: below); a search's output is parsed `drgnx-replace-parse-lines`
+  (64) lines at a time, the rest by `drgnx-timer-soon` `(replace-parse . PROCESS)` owned by the search's stderr
+  buffer (killed when the search ends; `drgnx-replace-cancel` also cancels the key, since that buffer runs no
+  kill hook). A line that does not parse is left out, and the first such error reaches the callback as `(:error
+  REASON)`; a partial line's pieces are joined once, at its newline. And an Ask's search limit
   `(ai-grep . PROCESS)` by the search process (its sentinel cancels it). With no run of the owner nothing starts.
 
 ### What the fire wrapper guarantees
@@ -755,7 +761,10 @@ A draw (`drgnx-view--draw`) runs SYNC when touched, the self-check, then two ste
 1. **The fold** applies the structural marks to the row vectors only; the buffer does not change. A row that goes
    stays as an entry marked `gone`, a new row is an empty entry marked `new`. The vectors are rewritten in place
    when new rows only go at the end (appends and removals), and grown by doubling only when full; an append to a long
-   view copies nothing. Otherwise (an insert before a row that stays) fresh vectors are made.
+   view copies nothing. Otherwise (an insert before a row that stays) fresh vectors are made. Marks that only add
+   rows at the end (no row goes) fold in `drgnx-view--fold-tail`, which visits only the new rows: the entries already
+   there, rows left to delete between slices included, stay as they are (`drgnx-view/an-append-folds-only-the-new-tail`
+   counts the entries a fold visits).
 2. **The sweep** works entry by entry in buffer order with one running shift of the starts: `gone` is deleted,
    `new` rendered and inserted, a dirty row deleted and inserted again at its integer start, a growing row gets an
    `insert` before SUFFIX. Dirty marks are moved onto the entries first (`patch` wins over `grow`). When every entry
@@ -843,6 +852,15 @@ still to delete count), `(drgnx-view-pending-p VIEW)` (marks not drawn, or work 
 counts every row rendered (patched, inserted or appended, an error row too); `:rows-grown` the rows that took GROW's
 text; `:appended` the rows added; `:removed` the rows deleted. Without VIEW it sums every live view
 (`:max-slice-rows`: the largest).
+
+### Clients
+
+The Search view (`modules/tools/drgnx-replace.el`, type `replace-results`, defined with its sidebar section): DELAY 0,
+SLICE `drgnx-view-slice`, `eq` keys. A match's key is its plist; a file's header is `(drgnx-replace-file . FILE)`,
+made once per search. Arrivals append (a new file after its header) or insert after the file's last row; a new
+replacement text marks every match row dirty (headers stay); a file searched again removes its old rows and inserts
+the new ones after its header, marked dirty for its box; a new search resets the view. PATCHED updates the status
+line. Tests: `drgnx-replace/` in `test/unit/mod-replace-view-test.el`, `drgnx-view-ui/` in `test/ui/view-ui-test.el`.
 
 ### The invariant
 

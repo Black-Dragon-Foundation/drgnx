@@ -479,9 +479,16 @@ A GROW that signals or returns a non-string draws the error row."
   "Apply VIEW's pending structural changes to its vectors; the buffer does not change.  A row that goes stays as an
 entry marked `gone' (a slice deletes it), a new row is an empty entry marked `new' (a slice inserts it), and empty
 entries of rows deleted earlier are dropped.  The vectors are rewritten in place when new rows only go at the end
-\(appends, removals), grown by doubling only when full; otherwise fresh ones are made."
+\(appends, removals), grown by doubling only when full; otherwise fresh ones are made.  A plan that only appends
+\(no row goes) visits only its new rows (`drgnx-view--fold-tail')."
   (let ((plan (drgnx-view--plan-pending view)))
-    (when plan
+    (cond
+     ((null plan))
+     ((and (not (drgnx-view--plan-all-gone plan)) (zerop (hash-table-count (drgnx-view--plan-gone plan)))
+           (drgnx-view--only-at-end-p plan))
+      (setf (drgnx-view--pending view) nil)
+      (drgnx-view--fold-tail view plan))
+     (t
       (drgnx-view--forget-gone view plan)
       (setf (drgnx-view--pending view) nil)
       (let* ((okeys (drgnx-view--keys view)) (ostarts (drgnx-view--starts view)) (owork (drgnx-view--work view))
@@ -509,7 +516,30 @@ entries of rows deleted earlier are dropped.  The vectors are rewritten in place
         (aset nstarts o here)
         (when (eq nkeys okeys) (drgnx-view--clear-entries nkeys nwork o n))
         (setf (drgnx-view--n view) o (drgnx-view--keys view) nkeys (drgnx-view--starts view) nstarts
-              (drgnx-view--work view) nwork (drgnx-view--empty view) empty)))))
+              (drgnx-view--work view) nwork (drgnx-view--empty view) empty))))))
+
+(defun drgnx-view--fold-tail (view plan)
+  "Fold PLAN, which only adds rows at the end (no row goes, none comes before a drawn one): its new rows become empty
+entries marked `new' after VIEW's entries, which stay as they are (rows still to delete, and empty ones of rows
+deleted, are left to the sweep and `drgnx-view--compact').  Only the new tail is visited; the vectors grow by
+doubling, copied, only when full."
+  (let* ((n (drgnx-view--n view)) (keys (drgnx-view--keys view)) (starts (drgnx-view--starts view))
+         (work (drgnx-view--work view)) (index (drgnx-view--index view))
+         (need (+ n (hash-table-count (drgnx-view--plan-new plan)) 1)) (cap (length keys)))
+    (when (< cap need)
+      (while (< cap need) (setq cap (* 2 cap)))
+      (let ((nkeys (make-vector cap nil)) (nstarts (make-vector (1+ cap) 0)) (nwork (make-vector cap nil)))
+        (dotimes (i n) (aset nkeys i (aref keys i)) (aset nstarts i (aref starts i)) (aset nwork i (aref work i)))
+        (aset nstarts n (aref starts n))
+        (setq keys nkeys starts nstarts work nwork)
+        (setf (drgnx-view--keys view) keys (drgnx-view--starts view) starts (drgnx-view--work view) work)))
+    (let ((o n) (end (aref starts n)))
+      (drgnx-view--walk-group plan (drgnx-view--plan-end plan)
+                              (lambda (key _ _)
+                                (aset keys o key) (aset starts o end) (aset work o 'new) (puthash key o index)
+                                (setq o (1+ o))))
+      (aset starts o end)
+      (setf (drgnx-view--n view) o (drgnx-view--empty view) (+ (drgnx-view--empty view) (- o n))))))
 
 (defun drgnx-view--clear-entries (keys work from to)
   "Clear KEYS and WORK from FROM to TO (exclusive), so dropped entries hold no key."
