@@ -24,9 +24,10 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-chrome)
+(require 'drgnx-state)
+(require 'drgnx-timer)
 (declare-function drgnx-face-glyph "drgnx-face")
 (declare-function drgnx-wb-editor-window "drgnx-wb")
-(declare-function drgnx-signal-post "drgnx-signal")
 (declare-function drgnx-signal-subscribe "drgnx-signal")
 (declare-function drgnx-signal-unsubscribe "drgnx-signal")
 (declare-function drgnx-signal-editor-window-p "drgnx-signal")
@@ -153,7 +154,7 @@ HELP is the text shown when the pointer rests on the segment."
   "The window whose buffer the segment functions read: the window the bar is drawn for, else the most recently
 used editor window."
   (or (and (window-live-p drgnx-statusbar--window) drgnx-statusbar--window)
-      (and (fboundp 'drgnx-wb-editor-window) (drgnx-wb-editor-window))
+      (drgnx-state-editor-window)
       (selected-window)))
 
 (defvar drgnx-statusbar--map
@@ -295,11 +296,8 @@ COMPACT: only the segments of `drgnx-statusbar-compact' (on the right); `quiet':
 ;;;; The mode line
 
 (defun drgnx-statusbar--mru-editor-p (w)
-  "Non-nil when W is its frame's most recently used editor window."
-  (let ((mru (if (eq (window-frame w) (selected-frame))
-                 (drgnx-wb-editor-window)
-               (seq-find #'drgnx-signal-editor-window-p (window-list (window-frame w) 'nomini)))))
-    (or (null mru) (eq w mru))))
+  "Non-nil when W is its frame's most recently used editor window, as the workbench state store has it."
+  (eq w (drgnx-state-editor-window (window-frame w))))
 
 (defcustom drgnx-statusbar-modes '(prog-mode text-mode conf-mode)
   "Major modes (and the modes derived from them) whose buffers get the status bar.
@@ -456,26 +454,22 @@ other buffer: the stock mode line.  An error shows nothing and is recorded once,
                (or mode-line-format (default-value 'mode-line-format))))
     (error (drgnx-statusbar--note-error 'host err) nil)))
 
-(defvar drgnx-statusbar--last (make-vector 5 nil) "[BUFFER WINDOW POINT TICK MARK-ACTIVE] as of the last command.")
+(defvar drgnx-statusbar--last (make-vector 4 nil) "[BUFFER POINT TICK MARK-ACTIVE] as of the last command.")
 
 (defun drgnx-statusbar--post-command ()
   "A mode line made by `:eval' does not know it shows the point: ask for a redraw when what it shows changed.
 While Show Keys As I Type (keycast) is on, every command changes the bar: every bar is redrawn (the editor's too
 when you type in a side pane)."
   (when (bound-and-true-p keycast-mode-line-mode) (force-mode-line-update t))
-  (let ((l drgnx-statusbar--last) (b (current-buffer)) (w (selected-window)))
-    (let ((pt (window-point w)) (tick (buffer-chars-modified-tick)))
-      (unless (and (eq (aref l 0) b) (eq (aref l 1) w) (eql (aref l 2) pt) (eql (aref l 3) tick)
-                   (eq (aref l 4) mark-active))
-        ;; the most recently used editor window is only known after the bus's idle flush: redraw both bars then
-        ;; (`editor-changed' covers another buffer; this covers the same buffer in two windows)
-        (unless (eq (aref l 1) w) (drgnx-signal-post 'statusbar-window-changed))
-        (aset l 0 b) (aset l 1 w) (aset l 2 pt) (aset l 3 tick) (aset l 4 mark-active)
+  (let ((l drgnx-statusbar--last) (b (current-buffer)))
+    (let ((pt (window-point)) (tick (buffer-chars-modified-tick)))
+      (unless (and (eq (aref l 0) b) (eql (aref l 1) pt) (eql (aref l 2) tick) (eq (aref l 3) mark-active))
+        (aset l 0 b) (aset l 1 pt) (aset l 2 tick) (aset l 3 mark-active)
         (force-mode-line-update)))))             ; this buffer's mode line only
 
 (defun drgnx-statusbar--editor-changed (&rest _)
-  "On the bus's `editor-changed' and `statusbar-window-changed': the most recently used editor window is another
-one now, so the full bar and the compact one trade places in every window."
+  "On the store's `editor-changed' (the `now' lane, before the frame is drawn): the most recently used editor
+window is another one now, so the full bar and the compact one trade places in every window."
   (force-mode-line-update t))
 
 ;;;; drgnx's side: state worked out when a hook says it changed, never on redisplay
@@ -497,7 +491,6 @@ recorded in `drgnx-statusbar--errors' as `waiting').")
 (defvar drgnx-statusbar-refresh-delay 0.2
   "Seconds `drgnx-statusbar-refresh' waits, so that a burst of changes is one refresh and one redraw.")
 
-(defvar drgnx-statusbar--refresh-timer nil "The pending refresh, or nil.")
 (defvar drgnx-statusbar--redraw-wanted nil "Non-nil: the next refresh redraws the bars even when no count changed.")
 (defvar drgnx-statusbar--jobs-wanted nil "Non-nil: the next refresh asks the hub how many jobs run.")
 (defvar drgnx-statusbar--jobs-pending nil "Non-nil while a `job/status' question is on its way to the hub.")
@@ -510,15 +503,12 @@ came in between.  Never blocks; safe in a hook, a timer or a process filter."
   (when changed
     (drgnx-statusbar--bump)
     (setq drgnx-statusbar--redraw-wanted t))
-  (unless (timerp drgnx-statusbar--refresh-timer)
-    (setq drgnx-statusbar--refresh-timer
-          (run-at-time drgnx-statusbar-refresh-delay nil #'drgnx-statusbar--refresh-now))))
+  (drgnx-timer-soon 'statusbar-refresh drgnx-statusbar-refresh-delay #'drgnx-statusbar--refresh-now :owner :core))
 
 (defun drgnx-statusbar--refresh-now ()
   "The refresh itself: count again, bump the tick and redraw every bar when a count changed (or a redraw was asked).
 Called directly, it takes the place of the pending one."
-  (when (timerp drgnx-statusbar--refresh-timer) (cancel-timer drgnx-statusbar--refresh-timer))
-  (setq drgnx-statusbar--refresh-timer nil)
+  (drgnx-timer-cancel 'statusbar-refresh)
   (let ((redraw drgnx-statusbar--redraw-wanted)
         (agents (drgnx-statusbar--agent-counts)))
     (setq drgnx-statusbar--redraw-wanted nil)
@@ -696,8 +686,7 @@ debounced, so the problems count follows reports that arrive while you do nothin
   (if drgnx-statusbar-mode
       (progn
         (dolist (h drgnx-statusbar--hooks) (add-hook (car h) (cdr h)))
-        (dolist (e '(editor-changed statusbar-window-changed))
-          (drgnx-signal-subscribe e #'drgnx-statusbar--editor-changed))
+        (drgnx-state-subscribe 'editor-changed #'drgnx-statusbar--editor-changed :lane 'now)
         (drgnx-signal-subscribe 'editor-changed #'drgnx-statusbar--ask-git)
         (advice-add 'flymake--handle-report :after #'drgnx-statusbar--flymake-reported)   ; flymake has no hook for this
         (when (fboundp 'drgnx-modal-indicator-off) (drgnx-modal-indicator-off))   ; the bar shows the modal state
@@ -706,12 +695,10 @@ debounced, so the problems count follows reports that arrive while you do nothin
           (setq drgnx-statusbar--jobs-wanted t)
           (drgnx-statusbar-refresh)))
     (dolist (h drgnx-statusbar--hooks) (remove-hook (car h) (cdr h)))
-    (dolist (e '(editor-changed statusbar-window-changed))
-      (drgnx-signal-unsubscribe e #'drgnx-statusbar--editor-changed))
+    (drgnx-state-unsubscribe 'editor-changed #'drgnx-statusbar--editor-changed)
     (drgnx-signal-unsubscribe 'editor-changed #'drgnx-statusbar--ask-git)
     (advice-remove 'flymake--handle-report #'drgnx-statusbar--flymake-reported)
-    (when (timerp drgnx-statusbar--refresh-timer) (cancel-timer drgnx-statusbar--refresh-timer))
-    (setq drgnx-statusbar--refresh-timer nil)
+    (drgnx-timer-cancel 'statusbar-refresh)
     (clrhash drgnx-statusbar--memo)
     (clrhash drgnx-statusbar--git-branches)
     (when (fboundp 'drgnx-modal-indicator-on) (drgnx-modal-indicator-on)))

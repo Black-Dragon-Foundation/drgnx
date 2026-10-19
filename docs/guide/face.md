@@ -191,8 +191,10 @@ command redraws the bars), `which-function-mode` (the name its idle timer cached
 asked for it in the header line) and evil (its state tag). eglot's entry in `mode-line-misc-info` is left out: the
 `lsp` segment shows the server (`drgnx-statusbar-misc-info-skip`).
 
-The bar is redrawn after every command that moved point, changed the text or selected another window (both windows
-trade the full and the compact bar a moment later, when the most recently used editor window is settled), and when
+The bar is redrawn after every command that moved point or changed the text. When another window becomes the most
+recently used editor window (`C-x o` between two windows of one buffer too), the full and the compact bar trade places in every
+window on the first redraw, in every frame: the bar asks the workbench state store, which a frame's own editor
+window answers for, and keeps no rule of its own. It is also redrawn when
 agents, the hub or git report a change (`drgnx-statusbar-refresh`: at most one redraw every 0.2 seconds, however many
 changes come in, and only when a count changed; git redraws when a repository's branch or its ahead and behind counts changed). Each window keeps the bar it last drew, with
 what it was drawn from (the buffer, point, the text's change count, the width, full or compact, the counts above and
