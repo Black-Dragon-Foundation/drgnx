@@ -465,6 +465,29 @@ frame's editor window (the full bar is the editor window's: the bar asks the sto
       (message "drgnx-statusbar: the `now' subscriber and the MRU check: %.2f µs (median of 21 × %d)" median n)
       (should (<= median (* 5 (drgnx-run-ert-time-factor)))))))
 
+(ert-deftest drgnx-statusbar/with-the-store-off-every-editor-window-has-the-compact-bar ()
+  ;; The bar keeps no editor window of its own: with no record in the store (the store off, or a frame it has not
+  ;; observed) no window is the editor, so every editor window gets the compact bar.
+  (drgnx-test-with-state
+    (drgnx-statusbar-test--with
+      (let ((w1 (selected-window)) w2 (buf (generate-new-buffer " *sb-off*")))
+        (with-current-buffer buf (emacs-lisp-mode))
+        (unwind-protect
+            (progn
+              (delete-other-windows)
+              (setq w1 (selected-window) w2 (split-window-right))
+              (set-window-buffer w1 buf)
+              (set-window-buffer w2 buf)
+              (clrhash drgnx-state--frames)             ; the store has no record of the frame
+              (should-not (drgnx-state-editor-window))
+              (dolist (w (list w1 w2))
+                (should-not (drgnx-statusbar--mru-editor-p w))
+                (let ((bar (with-current-buffer buf (with-selected-window w (drgnx-statusbar-mode-line)))))
+                  (should (string-match-p "C" bar))
+                  (should-not (string-match-p "A\\|B" bar)))))
+          (delete-other-windows)
+          (kill-buffer buf))))))
+
 (ert-deftest drgnx-statusbar/the-line-number-follows-point-and-edits ()
   (with-temp-buffer
     (dotimes (i 300) (insert (format "line %d\n" (1+ i))))

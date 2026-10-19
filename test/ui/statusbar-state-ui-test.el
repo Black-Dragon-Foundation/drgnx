@@ -59,6 +59,15 @@ moved the bar), and the status bar mode on; the session's modes and variables co
               (should (eq (gethash w1 drawn) 'compact))
               (should (string-match-p "F" (format-mode-line drgnx-statusbar--host nil w2)))
               (should-not (string-match-p "F" (format-mode-line drgnx-statusbar--host nil w1)))
+              ;; and back: the return trip moves both bars again on its first redraw
+              (clrhash drawn)
+              (should (eq (plist-get (drgnx-uitest-run (drgnx-uitest-key-events "C-x o")) :settled) t))
+              (should (eq (selected-window) w1))
+              (should (eq (drgnx-state-editor-window) w1))
+              (should (eq (gethash w1 drawn) 'full))
+              (should (eq (gethash w2 drawn) 'compact))
+              (should (string-match-p "F" (format-mode-line drgnx-statusbar--host nil w1)))
+              (should-not (string-match-p "F" (format-mode-line drgnx-statusbar--host nil w2)))
               ;; what is on the screen after that one redisplay
               (should (> (file-attribute-size (file-attributes (plist-get (drgnx-uitest-capture dir) :root))) 0)))
           (dolist (w (list w1 w2)) (when (window-live-p w) (set-window-parameter w 'mode-line-format nil)))
@@ -70,10 +79,11 @@ moved the bar), and the status bar mode on; the session's modes and variables co
 (ert-deftest drgnx-statusbar-ui/each-frame-has-its-own-full-bar ()
   ;; Two frames, two windows each: the full bar is in each frame's own editor window, not only in the selected
   ;; frame's.  The second frame's editor window is its second window.
-  (let ((buf (get-buffer-create "*drgnx-statusbar-frames*"))
-        (aux (make-frame '((name . "drgnx statusbar aux") (width . 80) (height . 20)))))
+  (let* ((buf (get-buffer-create "*drgnx-statusbar-frames*"))
+         (root (drgnx-uitest-root-frame))         ; before the second frame exists: it may become the "first" one
+         (aux (make-frame '((name . "drgnx statusbar aux") (width . 80) (height . 20)))))
     (with-current-buffer buf (emacs-lisp-mode) (insert "(a)\n(b)\n"))
-    (with-selected-frame (drgnx-uitest-root-frame)
+    (with-selected-frame root
       (delete-other-windows)
       (switch-to-buffer buf)
       (let* ((r1 (selected-window)) (r2 (split-window-right)) a1 a2)
@@ -88,6 +98,7 @@ moved the bar), and the status bar mode on; the session's modes and variables co
               (cl-letf (((symbol-function 'drgnx-chrome-apply) #'ignore))
                 (drgnx-state-mode 1)
                 (drgnx-statusbar-mode 1))
+              (drgnx-state-sync)
               (with-selected-frame aux (select-window a2))
               (drgnx-state-sync aux)
               (dolist (w (list r1 r2 a1 a2)) (set-window-parameter w 'mode-line-format drgnx-statusbar--host))
