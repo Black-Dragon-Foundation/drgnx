@@ -54,8 +54,7 @@
          (never (drgnx-agents--make :id "x" :name "never" :status 'starting))
          (drgnx-agents--sessions (list now mins hours days never))
          (drgnx-agents-ui--last (make-hash-table :test #'eq :weakness 'key))
-         (drgnx-agents-ui--jobs-cache (cons 1.0e+INF nil))     ; no job directory is read
-         (drgnx-agents-ui--timer (timer-create)))                ; a redraw "pending": none is scheduled
+         (drgnx-agents-ui--jobs-cache (cons 1.0e+INF nil)))    ; no job directory is read
     (drgnx-agents-ui--changed now)                               ; what the UI hears records the time
     (should (numberp (drgnx-agents-ui-last-active now)))
     (puthash mins (- (float-time) 330) drgnx-agents-ui--last)
@@ -255,19 +254,286 @@ answers recorded in ANSWERS)."
             (should-not (drgnx-modules--run-setup 'tools/agents setup))
             (drgnx-modules--record 'tools/agents 'startup 0 'ok)
             (should (drgnx-timer-active-p 'agents-ui-mirror))
-            (should (= 1 (drgnx-agents-ui-test--fires)))
+            (should (drgnx-timer-active-p 'agents-ui-mirror-first))     ; the first look, 3 s into the first pause
+            (should (= 2 (drgnx-agents-ui-test--fires)))
             (should-not (drgnx-module-teardown 'tools/agents))
             (should-not (drgnx-timer-active-p 'agents-ui-mirror))
             (should (= 0 (drgnx-agents-ui-test--fires)))
             (should (= 0 (drgnx-timer-cancel-owner 'tools/agents))))
           ;; the 30 s idle repeat is unchanged: once per pause
           (should-not (drgnx-modules--run-setup 'tools/agents setup))
-          (let ((idle (seq-find (lambda (tm) (eq (timer--function tm) #'drgnx-timer--fire)) timer-idle-list)))
+          (let ((idle (seq-find (lambda (tm) (and (eq (timer--function tm) #'drgnx-timer--fire) (timer--repeat-delay tm)))
+                                timer-idle-list)))
             (should idle)
             (should (= 30 (float-time (timer--time idle))))
             (should (timer--repeat-delay idle)))
           (drgnx-module-teardown 'tools/agents)
           (mapc #'cancel-timer (append timer-list timer-idle-list)))
       (delete-directory state t))))
+
+;;;; The transcript on a view (PERF-H1): what streams in is appended to its row, never drawn whole
+
+(load (expand-file-name "test/fixtures/view-fixture" drgnx-dir) nil t)
+
+(defvar drgnx-agents-ui-test--n 0 "Makes each test's session name (and so its transcript buffer) new.")
+
+(defmacro drgnx-agents-ui-test--with-transcript (spec &rest body)
+  "SPEC: (S BUFFER VIEW &rest SESSION-ARGS).  BODY on the virtual clock with tools/agents set up (torn down after),
+S a session made with SESSION-ARGS (no agent runs), BUFFER its transcript, drawn and shown in the only window and
+current, VIEW its view."
+  (declare (indent 1))
+  (let ((s (nth 0 spec)) (buffer (nth 1 spec)) (view (nth 2 spec)))
+    `(let* ((state (make-temp-file "drgnx-agents-ui-state" t))
+            (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment))
+            (drgnx-modules--table (list (assq 'tools/agents drgnx-modules--table)))
+            (drgnx-modules--report nil) (drgnx-modules--stacks nil) (drgnx-modules--runs nil) (drgnx-modules--features nil)
+            (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
+            (drgnx-agents-ui--last (make-hash-table :test #'eq :weakness 'key))
+            (drgnx-view--deadline nil)
+            (config (current-window-configuration))
+            (,s (drgnx-agents--make :name (format "view-test %d" (cl-incf drgnx-agents-ui-test--n)) ,@(nthcdr 3 spec)))
+            (,buffer nil) (,view nil))
+       (unwind-protect
+           (drgnx-test-with-clock (:allow-pending t)
+             (should-not (drgnx-modules--run-setup 'tools/agents (plist-get (cdar drgnx-modules--table) :setup)))
+             (drgnx-modules--record 'tools/agents 'startup 0 'ok)
+             (delete-other-windows)
+             (setq ,buffer (drgnx-agents-ui-transcript-buffer ,s))
+             (set-window-buffer (selected-window) ,buffer)
+             (should (drgnx-view-type-p 'agent-transcript))
+             (setq ,view (buffer-local-value 'drgnx-view ,buffer))
+             (should (drgnx-view-p ,view))
+             (with-current-buffer ,buffer ,@body))
+         (drgnx-module-teardown 'tools/agents)
+         (set-window-configuration config)
+         (when (buffer-live-p ,buffer) (kill-buffer ,buffer))
+         (delete-directory state t)))))
+
+(defun drgnx-agents-ui-test--chunk (s text)
+  "What the agent's process filter does with an `agent_message_chunk' of TEXT for S."
+  (drgnx-agents--update s (list :sessionUpdate "agent_message_chunk" :content (list :type "text" :text text))))
+
+(defun drgnx-agents-ui-test--draw ()
+  "Let the view's timer draw (its throttle is 0.1 s)."
+  (drgnx-test-advance 0.2))
+
+(defun drgnx-agents-ui-test--fresh (s)
+  "Session S's transcript rendered fresh, without properties."
+  (with-temp-buffer (drgnx-agents-ui-render s) (buffer-substring-no-properties (point-min) (point-max))))
+
+(defun drgnx-agents-ui-test--text (buffer)
+  (with-current-buffer buffer (save-restriction (widen) (buffer-substring-no-properties (point-min) (point-max)))))
+
+(defun drgnx-agents-ui-test--stat (view name) (plist-get (drgnx-view-stats view) name))
+
+(defun drgnx-agents-ui-test--compile ()
+  "Byte-compile the view library's and this module's functions in place: an interpreted call conses."
+  (drgnx-view-test--compile-library)
+  (mapatoms (lambda (s)
+              (when (and (fboundp s) (string-prefix-p "drgnx-agents-ui-" (symbol-name s))
+                         (not (string-prefix-p "drgnx-agents-ui-test" (symbol-name s)))
+                         (functionp (symbol-function s)) (not (compiled-function-p (symbol-function s))))
+                (let ((byte-compile-warnings nil)) (byte-compile s))))))
+
+(ert-deftest drgnx-agents-ui/thousand-chunks-insert-only-their-text ()
+  (drgnx-agents-ui-test--with-transcript (s b v :status 'busy
+                                            :entries (list (list :type 'user :text "go") (list :type 'agent :text "Start. ")))
+    (let ((drawn (drgnx-agents-ui-test--stat v :rows-drawn)) (grown (drgnx-agents-ui-test--stat v :rows-grown))
+          (before (drgnx-agents-ui-test--text b)))
+      (drgnx-agents-ui-test--chunk s (make-string 100 ?a))
+      (should (equal before (drgnx-agents-ui-test--text b)))           ; the filter's hook only marks
+      (drgnx-agents-ui-test--draw)
+      (dotimes (i 999)
+        (drgnx-agents-ui-test--chunk s (make-string 100 (+ ?a (% (1+ i) 26))))
+        (drgnx-agents-ui-test--draw))
+      (should (= drawn (drgnx-agents-ui-test--stat v :rows-drawn)))    ; no row rendered again
+      (should (= 1000 (- (drgnx-agents-ui-test--stat v :rows-grown) grown)))
+      (should (equal (drgnx-agents-ui-test--fresh s) (drgnx-agents-ui-test--text b)))
+      (should-not (drgnx-view--check v))
+      (should (eq t buffer-undo-list)))))
+
+(defun drgnx-agents-ui-test--grow-alloc (size)
+  "What one draw that grows a SIZE-character `agent' entry by 100 characters allocates (byte-compiled; the least of
+three runs after two warm ones)."
+  (let (best)
+    (drgnx-agents-ui-test--with-transcript (s b v :status 'busy
+                                              :entries (list (list :type 'agent :text (concat "é" (make-string size ?a)))))
+      (drgnx-agents-ui-test--compile)
+      (let ((e (car (drgnx-agent-session-entries s))))
+        (dotimes (i 5)
+          (drgnx-agents--append-text s 'agent (make-string 100 ?b))
+          (drgnx-view-touch v)
+          (let* ((a (memory-use-counts)) (_ (drgnx-view-draw-now v)) (z (memory-use-counts))
+                 (d (apply #'+ (cl-mapcar #'- z a))))
+            (when (>= i 2) (setq best (if best (min best d) d)))))
+        (should (equal (drgnx-agents-ui-test--fresh s) (drgnx-agents-ui-test--text b)))))
+    best))
+
+(ert-deftest drgnx-agents-ui/grow-allocation-is-independent-of-size ()
+  (let ((small (drgnx-agents-ui-test--grow-alloc 4096)) (big (drgnx-agents-ui-test--grow-alloc 409600)))
+    (message "grow draw allocation: 4 kB entry %d, 400 kB entry %d" small big)
+    (should (<= big (ceiling (* 1.25 small))))))
+
+(ert-deftest drgnx-agents-ui/a-hidden-transcript-costs-nothing ()
+  (drgnx-agents-ui-test--with-transcript (s b v :status 'busy :entries (list (list :type 'agent :text "a")))
+    (let ((other (get-buffer-create " *drgnx-agents-ui-other*"))
+          (drawn (drgnx-agents-ui-test--stat v :rows-drawn)) (grown (drgnx-agents-ui-test--stat v :rows-grown)))
+      (unwind-protect
+          (progn
+            (set-window-buffer (selected-window) other)
+            (dotimes (_ 100)                                           ; 50 a second
+              (drgnx-agents-ui-test--chunk s (make-string 100 ?y))
+              (drgnx-test-advance 0.02))
+            (should (= drawn (drgnx-agents-ui-test--stat v :rows-drawn)))
+            (should (= grown (drgnx-agents-ui-test--stat v :rows-grown)))
+            (should (> (drgnx-agents-ui-test--stat v :stale-skips) 0))
+            (drgnx-agents-ui-test--compile)
+            (should (= 0 (drgnx-view-test--alloc (lambda () (drgnx-view--draw-buffer b)))))
+            ;; shown again: one catch-up draw
+            (set-window-buffer (selected-window) b)
+            (drgnx-view--buffer-shown (selected-window))                 ; what redisplay runs
+            (let ((slices (drgnx-agents-ui-test--stat v :slices)))
+              (drgnx-agents-ui-test--draw)
+              (should (= (1+ slices) (drgnx-agents-ui-test--stat v :slices)))
+              (should (= 1 (- (drgnx-agents-ui-test--stat v :rows-grown) grown)))
+              (should (= drawn (drgnx-agents-ui-test--stat v :rows-drawn)))
+              (should (equal (drgnx-agents-ui-test--fresh s) (drgnx-agents-ui-test--text b)))))
+        (kill-buffer other)))))
+
+(ert-deftest drgnx-agents-ui/a-tool-status-change-redraws-one-row ()
+  (drgnx-agents-ui-test--with-transcript (s b v :status 'busy
+                                            :entries (list (list :type 'user :text "go")
+                                                           (list :type 'tool :id "t1" :title "Task" :status "pending")
+                                                           (list :type 'agent :text "hm")))
+    (let ((drawn (drgnx-agents-ui-test--stat v :rows-drawn)))
+      ;; the entry changes in place (the list of entries is the same): its row, and only it, is drawn again
+      (drgnx-agents--update s '(:sessionUpdate "tool_call_update" :toolCallId "t1" :status "completed"))
+      (drgnx-agents-ui-test--draw)
+      (should (= 1 (- (drgnx-agents-ui-test--stat v :rows-drawn) drawn)))
+      (should (string-search "⚙ Task [completed]" (drgnx-agents-ui-test--text b)))
+      ;; a subagent's call, then its status: the parent's row each time
+      (drgnx-agents--update s '(:sessionUpdate "tool_call" :toolCallId "c1" :title "Grep" :status "pending"
+                                               :_meta (:parentToolCallId "t1")))
+      (drgnx-agents-ui-test--draw)
+      (should (= 2 (- (drgnx-agents-ui-test--stat v :rows-drawn) drawn)))
+      (drgnx-agents--update s '(:sessionUpdate "tool_call_update" :toolCallId "c1" :status "completed"))
+      (drgnx-agents-ui-test--draw)
+      (should (= 3 (- (drgnx-agents-ui-test--stat v :rows-drawn) drawn)))
+      (should (string-search "  ⚙ Grep [completed]" (drgnx-agents-ui-test--text b)))
+      (should (equal (drgnx-agents-ui-test--fresh s) (drgnx-agents-ui-test--text b))))))
+
+(ert-deftest drgnx-agents-ui/a-permission-adds-and-removes-a-footer-row ()
+  (drgnx-agents-ui-test--with-transcript (s b v :status 'busy :entries (list (list :type 'agent :text "a")))
+    (let ((rows (drgnx-view-row-count v)) (drawn (drgnx-agents-ui-test--stat v :rows-drawn))
+          (removed (drgnx-agents-ui-test--stat v :removed))
+          (p (list :id 7 :title "Run make" :options '((:optionId "a" :name "Allow")))))
+      (setf (drgnx-agent-session-permissions s) (list p))
+      (drgnx-agents--changed s)
+      (drgnx-agents-ui-test--draw)
+      (should (= (1+ rows) (drgnx-view-row-count v)))
+      (should (= 1 (- (drgnx-agents-ui-test--stat v :rows-drawn) drawn)))
+      (should (string-search "? Run make  [Allow]" (drgnx-agents-ui-test--text b)))
+      (should (equal (drgnx-agents-ui-test--fresh s) (drgnx-agents-ui-test--text b)))
+      (setf (drgnx-agent-session-permissions s) nil)                   ; answered
+      (drgnx-agents--changed s)
+      (drgnx-agents-ui-test--draw)
+      (should (= rows (drgnx-view-row-count v)))
+      (should (= 1 (- (drgnx-agents-ui-test--stat v :rows-drawn) drawn)))
+      (should (= 1 (- (drgnx-agents-ui-test--stat v :removed) removed)))
+      (should (equal (drgnx-agents-ui-test--fresh s) (drgnx-agents-ui-test--text b))))))
+
+(ert-deftest drgnx-agents-ui/answering-the-second-permission-removes-its-row ()
+  ;; `delq' of an item that is not first keeps the list's head: only its length tells
+  (drgnx-agents-ui-test--with-transcript (s b v :status 'busy :entries (list (list :type 'agent :text "a")))
+    (let ((p1 (list :id 7 :title "Run make" :options '((:optionId "a" :name "Allow"))))
+          (p2 (list :id 8 :title "Run tests" :options '((:optionId "a" :name "Allow"))))
+          (r1 (list :id 9 :path "/tmp/a.txt" :content "x\n")) (r2 (list :id 10 :path "/tmp/b.txt" :content "y\n")))
+      (setf (drgnx-agent-session-permissions s) (list p1 p2) (drgnx-agent-session-reviews s) (list r1 r2))
+      (drgnx-agents--changed s)
+      (drgnx-agents-ui-test--draw)
+      (should (string-search "? Run tests" (drgnx-agents-ui-test--text b)))
+      (let ((removed (drgnx-agents-ui-test--stat v :removed)))
+        (cl-letf (((symbol-function 'drgnx-acp-respond) #'ignore))
+          (drgnx-agents-answer-permission s p2 "a")
+          (drgnx-agents-ui-test--draw)
+          (should (= 1 (- (drgnx-agents-ui-test--stat v :removed) removed)))
+          (should-not (string-search "Run tests" (drgnx-agents-ui-test--text b)))
+          (drgnx-agents-finish-review s r2 t)
+          (drgnx-agents-ui-test--draw))
+        (should (= 2 (- (drgnx-agents-ui-test--stat v :removed) removed)))
+        (should-not (string-search "b.txt" (drgnx-agents-ui-test--text b)))
+        (should (equal (drgnx-agents-ui-test--fresh s) (drgnx-agents-ui-test--text b)))))))
+
+(ert-deftest drgnx-agents-ui/an-edited-queued-message-is-redrawn ()
+  ;; `drgnx-agents-requeue' replaces the text in place: the queue is the same list
+  (drgnx-agents-ui-test--with-transcript (s b v :status 'busy :queue (list "one" "two")
+                                            :entries (list (list :type 'agent :text "a")))
+    (should (string-search "  two [×]" (drgnx-agents-ui-test--text b)))
+    (drgnx-agents-requeue s 1 "TWO, edited")
+    (drgnx-agents-ui-test--draw)
+    (should (string-search "  TWO, edited [×]" (drgnx-agents-ui-test--text b)))
+    (should (equal (drgnx-agents-ui-test--fresh s) (drgnx-agents-ui-test--text b)))))
+
+(ert-deftest drgnx-agents-ui/a-steer-removed-from-the-entries-removes-its-row ()
+  (drgnx-agents-ui-test--with-transcript (s b v :status 'busy
+                                            :entries (list (list :type 'user :text "go") (list :type 'agent :text "a")))
+    (let ((steer (list :type 'user :text "also this" :steer t)))
+      (drgnx-agents--add s steer)
+      (drgnx-agents--changed s)
+      (drgnx-agents-ui-test--draw)
+      (should (string-search "↪ also this" (drgnx-agents-ui-test--text b)))
+      (let ((removed (drgnx-agents-ui-test--stat v :removed)) (head (drgnx-agent-session-entries s)))
+        ;; as a refused steer does (drgnx-agents.el): `delq' keeps the list's head, only its length changes
+        (setf (drgnx-agent-session-entries s) (delq steer (drgnx-agent-session-entries s)))
+        (should (eq head (drgnx-agent-session-entries s)))
+        (drgnx-agents--changed s)
+        (drgnx-agents-ui-test--draw)
+        (should (= 1 (- (drgnx-agents-ui-test--stat v :removed) removed)))
+        (should-not (string-search "also this" (drgnx-agents-ui-test--text b)))
+        (should (equal (drgnx-agents-ui-test--fresh s) (drgnx-agents-ui-test--text b)))))))
+
+(ert-deftest drgnx-agents-ui/the-tail-is-followed ()
+  (drgnx-agents-ui-test--with-transcript (s b v :status 'busy :entries (list (list :type 'agent :text "a")))
+    (goto-char (point-max))
+    (set-window-point (selected-window) (point-max))
+    (dotimes (_ 5) (drgnx-agents-ui-test--chunk s "more text\n") (drgnx-agents-ui-test--draw))
+    (drgnx-agents--update s '(:sessionUpdate "tool_call" :toolCallId "t9" :title "Read" :status "pending"))
+    (drgnx-agents-ui-test--chunk s "after the tool")
+    (drgnx-agents-ui-test--draw)
+    (should (string-search "after the tool" (drgnx-agents-ui-test--text b)))
+    (should (= (point) (point-max)))
+    (should (= (window-point (selected-window)) (point-max)))))
+
+(ert-deftest drgnx-agents-ui/a-reader-scrolled-up-stays-put ()
+  (drgnx-agents-ui-test--with-transcript (s b v :status 'busy
+                                            :entries (list (list :type 'user :text "go")
+                                                           (list :type 'agent :text "line\nline\nline\n" :done t)
+                                                           (list :type 'agent :text "b")))
+    (let* ((e (nth 1 (drgnx-agent-session-entries s))) (start (drgnx-view-row-start v e)))
+      (set-window-start (selected-window) start)
+      (goto-char (+ start 3))
+      (set-window-point (selected-window) (+ start 3))
+      (dotimes (_ 10) (drgnx-agents-ui-test--chunk s (make-string 100 ?z)) (drgnx-agents-ui-test--draw))
+      ;; and a row above it: the agent's commands come
+      (drgnx-agents--update s '(:sessionUpdate "available_commands_update" :availableCommands ((:name "compact"))))
+      (drgnx-agents-ui-test--draw)
+      (should (> (drgnx-view-row-start v e) start))
+      (should (= (window-start (selected-window)) (drgnx-view-row-start v e)))
+      (should (= (window-point (selected-window)) (+ (drgnx-view-row-start v e) 3)))
+      (should (equal (drgnx-agents-ui-test--fresh s) (drgnx-agents-ui-test--text b))))))
+
+(ert-deftest drgnx-agents-ui/g-redraws-now ()
+  (drgnx-agents-ui-test--with-transcript (s b v :status 'busy :entries (list (list :type 'agent :text "a")))
+    (let ((other (get-buffer-create " *drgnx-agents-ui-other*")))
+      (unwind-protect
+          (progn
+            (set-window-buffer (selected-window) other)                  ; hidden: `g' draws anyway
+            (plist-put (car (drgnx-agent-session-entries s)) :text "a and more")   ; no hook ran
+            (setf (drgnx-agent-session-status s) 'idle)
+            (revert-buffer)
+            (should (equal "a and more\n\n" (drgnx-agents-ui-test--text b)))
+            (should (equal (drgnx-agents-ui-test--fresh s) (drgnx-agents-ui-test--text b)))
+            (should-not (drgnx-view-pending-p v)))
+        (kill-buffer other)))))
 
 ;;; agents-ui-test.el ends here

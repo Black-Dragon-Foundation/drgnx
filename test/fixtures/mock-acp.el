@@ -4,6 +4,7 @@
 ;; in MOCK_ACP_IN (made by mock-acp-stdin.sh, which copies stdin into it: any POSIX system), else of
 ;; /proc/PID/fd/0 (Linux).  What a turn does depends on words in the prompt:
 ;;   slow        ten chunks, 0.3 s apart (a turn to send into, to stop)
+;;   stream N    (the whole prompt) N chunks of 100 characters, 50 a second
 ;;   tool        a tool call, pending then completed
 ;;   plan        a plan with three entries
 ;;   subagent    a Task tool call with two child tool calls (_meta.parentToolCallId)
@@ -177,6 +178,10 @@ decision log, complete the task; say what happened."
      ((string-match-p "\\`commit" text)               ; a commit in its directory, naming the task it was given
       (call-process "sh" nil nil nil "-c" "echo x >> agent.txt && git add agent.txt && git commit -q -m \"agent work for $DRGNX_TASK\"")
       (mock--steps sid (list (cons 0 (lambda () (mock--say sid "committed"))))))
+     ((string-match "\\`stream \\([0-9]+\\)" text)    ; N chunks of 100 characters, 50 a second
+      (mock--steps sid (cl-loop for i from 1 to (string-to-number (match-string 1 text))
+                                collect (cons 0.02 (let ((i i))
+                                                     (lambda () (mock--say sid (format "%-99s\n" (format "chunk %d" i)))))))))
      ((string-match-p "slow" text)
       (mock--steps sid (cl-loop for i from 1 to 10 collect (cons 0.3 (let ((i i)) (lambda () (mock--say sid (format "part %d " i))))))))
      ((string-match-p "\\`/compact" text)

@@ -410,9 +410,11 @@ timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run
   lives; its sentinel (or the job runner) must call `(drgnx-timer-cancel-owner PROCESS)` when it dies, which also
   forgets the last runs of its `:min-interval` keys. `:core` lives as long as Emacs (the hub tick, the idle GC under
   the key `gc-idle`, the job stamp poll `(jobs-stamp . ID)`, the usage write `surfaces-usage`).
-  Module repeats are keyed this way: `tools/agents` owns `agents-ui-mirror` (idle, every 30 s) and `tools/jobs` owns
+  Module repeats are keyed this way: `tools/agents` owns `agents-ui-mirror` (idle, every 30 s; its first look is the
+  one-shot `agents-ui-mirror-first`, 3 s into the first pause) and `tools/jobs` owns
   `job-ui-recount-idle` (idle, every 60 s), so a second setup replaces the timer instead of stacking another, and
   turning the module off ends it. Timers started later (from a command or a hook) name their module with `:owner`:
+  `tools/agents` owns the Agents list's print `agents-ui-redraw` (`drgnx-timer-soon` 0.1 s, from a session's change),
   `ui/face` owns quick help's `quickhelp-timeout`, `-unmap`, `-look` and `-hover` and the start page's
   `start-first-frame`, `ui/terminal-popups` the debounced `tty-popups-show`, `ui/terminal` the per-frame
   `(tty-fallback-hint . FRAME)`, `tools/jobs` the coalesced `job-ui-recount`, `tools/ai` the `ai-probe` one-shot; the
@@ -713,6 +715,7 @@ names). SLICE is nil or at most `drgnx-view-slice` (0.004 s); DELAY is the throt
 it drew or grew, to put the view's own overlays back. A definition made in a module's setup pushes the undo
 `"view type NAME"`. A view looks its type up by name at each draw: once the type is removed (its module turned off)
 the view draws nothing more, and a redefinition (the module on again, a reload) is picked up. No view is tracked.
+`(drgnx-view-type-p NAME)` is non-nil while NAME is defined (a mode that attaches a module's view checks it first).
 
 **RENDER** returns a string ending in a newline, or `(BODY . SUFFIX)` whose concatenation does: growth goes between
 BODY and SUFFIX, and the view remembers BODY's length (`drgnx-view-body-length`). A row may span several lines.
@@ -841,6 +844,29 @@ OFFSET LINE)`, KEY being `(funcall KEY-AT POS)` and OFFSET the distance from the
 above POS with the same key). `(drgnx-view-restore-places PLACES POS-OF)` puts each back at `(+ (funcall POS-OF KEY)
 OFFSET)`, or at the start of LINE (clamped) when POS-OF returns nil; dead windows are skipped, and the windows move
 inside `drgnx-wb-with-owned-windows`. The macro is save, BODY, restore, and returns BODY's value.
+
+### A client: the agent transcript
+
+`tools/agents` defines `agent-transcript` in its setup (`modules/tools/drgnx-agents-ui.el`; `:follow-tail t`,
+`:key-test 'eq`, the default DELAY and SLICE). Its rows are `:commands`, each entry plist that shows something, each
+permission and review plist, `:status` and `:queue`. An `agent` entry renders as `(TEXT . "\n\n")` and a `thought` as
+`("… " TEXT . "\n")`, so a streamed chunk is a GROW of the text after BODY-LENGTH. The agent's process filter only
+touches the view (`drgnx-agents-ui--changed`). SYNC has a fast path: when the session's lists are `eq` to those of
+the last sync, the entries, permissions and reviews lists are as long (a `delq` keeps the head when the first item
+stays), each queued message is the same (a requeue replaces one in place) and no tool or plan entry still running
+changed (they change in place: compared by signature), it only compares each running text's length with its drawn
+body and marks a grow; otherwise `drgnx-view-sync-rows` diffs the rows. An answer's or a thought's signature is its
+type alone, so the turn's end (`:done`) draws nothing again. A grow draw allocates the same on a 4 kB and a 400 kB
+answer (`drgnx-agents-ui/grow-allocation-is-independent-of-size`). The footer rows follow the entries, so a new
+entry while a turn runs is an insert, not an append.
+
+The model keeps streamed text as chunks (`core/drgnx-agents.el`): a running `agent` or `thought` entry has `:chunks`
+(newest first) and `:length`, so appending a chunk costs a cons whatever the answer's size
+(`drgnx-agents/a-chunk-costs-the-chunk-not-the-answer`). `(drgnx-agents-entry-text E)` joins them into `:text` once and
+keeps it until the next chunk; `(drgnx-agents-entry-length E)` reads the length without joining; `(drgnx-agents-entry-tail
+E FROM)` builds the text after FROM from the newest chunks only (the transcript's GROW). Code that reads an answer's
+whole text goes through `drgnx-agents-entry-text`. The turn's end, `agents/get` and the hub's `agent-entries` flush
+join every entry first (`drgnx-agents-join-text`), so a done entry and the wire carry a whole `:text`.
 
 ### Reads
 
