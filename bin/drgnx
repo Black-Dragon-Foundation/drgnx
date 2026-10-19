@@ -243,9 +243,33 @@ test_snapshot() { # DIR — a snapshot of the working tree (edits during a run c
 }
 
 test_time_limit() { # SECONDS — sets limit (the caller's array): timeout (GNU coreutils), gtimeout (Homebrew's coreutils on macOS), else none
-  if command -v timeout >/dev/null 2>&1; then limit=(timeout "$1")
-  elif command -v gtimeout >/dev/null 2>&1; then limit=(gtimeout "$1")
+  # -k 30: a container client that ignores the TERM is killed 30 s later (test_run then removes its container)
+  if command -v timeout >/dev/null 2>&1; then limit=(timeout -k 30 "$1")
+  elif command -v gtimeout >/dev/null 2>&1; then limit=(gtimeout -k 30 "$1")
   else echo "drgnx: neither timeout nor gtimeout found (macOS: brew install coreutils): running without a time limit" >&2; fi
+}
+
+test_names=() test_rt=""
+test_remove_containers() { # [NAME…] — remove these containers (default: every one this run started), running or not
+  local name
+  (($#)) || set -- ${test_names[@]+"${test_names[@]}"}
+  for name in "$@"; do
+    if [ "$test_rt" = podman ]; then "$test_rt" rm -f -t 0 "$name" >/dev/null 2>&1 || true
+    else "$test_rt" rm -f "$name" >/dev/null 2>&1 || true; fi
+  done
+}
+
+test_run() { # NAME RUN-ARG… — "$rt" run --rm --name NAME RUN-ARG… within the caller's limit, then the container removed.
+  # The container's bash (PID 1) ignores the TERM a time-out or Ctrl-C makes podman forward, so it is removed by name:
+  # after the run, and on any exit of this script.  The run waits in the background: bash runs a trap only after a
+  # foreground child ends, and timeout leaves the terminal's process group, so Ctrl-C would otherwise wait for the hour.
+  local name="$1" rc=0; shift
+  test_rt="$rt"; test_names+=("$name")
+  trap test_remove_containers EXIT; trap 'exit 130' INT; trap 'exit 143' TERM
+  ${limit[@]+"${limit[@]}"} "$rt" run --rm --name "$name" "$@" &
+  wait "$!" || rc=$?
+  test_remove_containers "$name"
+  return "$rc"
 }
 
 test_install() { # [NAME…] — install.sh end to end in fresh containers (slow: source builds take ~10 min each)
@@ -267,7 +291,7 @@ test_install() { # [NAME…] — install.sh end to end in fresh containers (slow
     log="$logs/$name.log"
     printf '%-14s %s … ' "$name" "$image" >&2
     # --memory: a test must never push the host into the OOM killer (install.sh sizes make -j from the limit)
-    if ${limit[@]+"${limit[@]}"} "$rt" run --rm --memory 6g -v "$snap:/src:ro$([ "$rt" = podman ] && echo ,Z)" "$image" \
+    if test_run "drgnx-install-$$-$name" --memory 6g -v "$snap:/src:ro$([ "$rt" = podman ] && echo ,Z)" "$image" \
          bash /src/test/install/in-container.sh >"$log" 2>&1; then
       echo "ok" >&2
     else
@@ -324,14 +348,14 @@ test_bootstrap() { # [--fedora 44|45] — the exit test of a second machine: one
   test_time_limit 3600
   # --memory: a test must never push the host into the OOM killer (install.sh sizes make -j from the limit); no swap beyond it
   printf 'bootstrap  fedora %s: the keys (container 1) … ' "$fedora" >&2
-  if ! ${limit[@]+"${limit[@]}"} "$rt" run --rm --memory 3g --memory-swap 3g -v "$mount" "$image" \
+  if ! test_run "drgnx-bootstrap-$$-keys" --memory 3g --memory-swap 3g -v "$mount" "$image" \
          bash /src/test/bootstrap/make-secrets.sh >"$log" 2>&1; then
     echo "FAILED (log: $log)" >&2; tail -n 25 "$log" >&2; return 1
   fi
   echo "ok" >&2
   printf 'bootstrap  fedora %s: a second machine (container 2) … ' "$fedora" >&2
   mount="${mount%:Z}:ro"; [ "$rt" = podman ] && mount="$mount,Z"
-  ${limit[@]+"${limit[@]}"} "$rt" run --rm --memory 6g --memory-swap 6g -v "$mount" "$image" \
+  test_run "drgnx-bootstrap-$$-machine" --memory 6g --memory-swap 6g -v "$mount" "$image" \
     bash /src/test/bootstrap/in-container.sh >>"$log" 2>&1 || rcc=$?
   if ((rcc == 0)); then echo "ok" >&2; rm -rf "$logs"
   else echo "FAILED (exit $rcc; log: $log)" >&2; tail -n 25 "$log" >&2; return 1; fi

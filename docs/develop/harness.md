@@ -563,7 +563,8 @@ cloned `--bare` beside the snapshot. Two containers follow, each with a memory c
    (`gnome-keyring-daemon --unlock --components=secrets`, which works headless), it runs
    `install.sh --yes --config … --identity …` and checks:
    - exit 0; `~/.config/drgnx` is the fixture (`git status --porcelain` shows at most `drgnx.lock.eld`, which the first sync completes); every package in the data dir's
-     `elpa/` is a `NAME-VERSION` the lock pins (the minimal preset installs some of them, not all);
+     `elpa/` is a `NAME-VERSION` the lock pins (the minimal preset installs some of them, not all), and every package
+     the configuration needs (its modules' packages and what they require, read by `drgnx-pkg`) is there;
    - `secret-tool lookup host openrouter.ai service drgnx` prints the key, and the key is nowhere else under `$HOME`,
      `/tmp` or `/src` (the keyring's own store aside); age was installed by bootstrap, after the announced line;
      the output's doctor step is `ok`; no rc file mentions drgnx (`--yes` never writes one);
@@ -574,14 +575,17 @@ cloned `--bare` beside the snapshot. Two containers follow, each with a memory c
      stand-in `sudo` that asks for a password on `/dev/tty`. The test types `y` twice (the key import, the age
      install), the sudo password and the age passphrase when each prompt appears (`test/bootstrap/pty-run.sh`), and
      checks that the hand-back to `bin/drgnx` ran both, the key is back, and neither password reached the screen.
-     The driver answers the prompts in order, each only when it shows up after the one answered before it (a
+     The driver answers the prompts in order, each only when it shows up after the previous reply was typed (a
      question that mentions a passphrase is not age's prompt), and never hangs: a prompt (or the end) that does not
      come within `PTY_STEP_TIMEOUT` seconds (300) stops the command, and the test fails naming what it waited for,
      with the screen printed above.
 
 Fedora 44 builds Emacs from source and takes much longer. A test never touches your home: the snapshot, the fixture
 repositories and the log live in a fresh `mktemp -d` directory under `$TMPDIR` (`/tmp`), and the run refuses to start
-if that is under `$HOME`. The directory is removed after a green run; after a failure it is kept and the run prints the
+if that is under `$HOME`. Each container is named (`drgnx-bootstrap-PID-keys`, `-machine`) and runs within an hour
+(`timeout -k 30`); it is removed by name after its run and on any exit of the test, Ctrl-C or a time-out included
+(the container's bash ignores the TERM podman forwards), so none is left running. `--install` does the same
+(`drgnx-install-PID-NAME`). The directory is removed after a green run; after a failure it is kept and the run prints the
 log's path (`fNN.log`) and its last lines. A doctor row other than OK, or a WARN other than `security`, is a gap
 to fix in the code that owns it; the green list is never widened for this test. The weekly `Bootstrap` workflow runs it
 ([ci.md](ci.md)).
