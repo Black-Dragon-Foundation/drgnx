@@ -588,8 +588,8 @@ Only that: the card's frame is never touched during redisplay.  A strip is a win
   (let* ((o drgnx-quickhelp--origin) (win (plist-get o :window)))
     (when (and o drgnx-quickhelp--card-up
                (or (not (window-live-p win)) (eq (plist-get data :frame) (window-frame win)))
-               (cond ((plist-member data :new)         ; pane-resized: the card's own window, to other edges
-                      (and (eq (plist-get data :window) win) (not (equal (plist-get data :new) (plist-get o :edges)))))
+               (cond ((plist-member data :new)         ; pane-resized: any, if the card's window has other edges
+                      (not (equal (drgnx-state-edges win) (plist-get o :edges))))
                      ((plist-member data :windows) t)  ; windows-changed
                      (t (not (memq (plist-get data :window) (list (plist-get o :selected) (drgnx-quickhelp--card-window)))))))
       (drgnx-timer-soon 'quickhelp-away 0 #'drgnx-quickhelp--put-away-now
@@ -619,7 +619,7 @@ The look's own hides are teardowns: the pointer is moving, so the next symbol ge
             (o (drgnx-quickhelp--teardown))))))
 
 (defun drgnx-quickhelp--hover-look ()
-  "One look, while Emacs is idle: a card whose window scrolled, moved or resized goes (hover on or off); with hover
+  "One look, while Emacs is idle: a card whose window scrolled goes (hover on or off); with hover
 on and a graphical frame focused, `drgnx-quickhelp--hover-step'.  Looks go on while a card is up or hover looks."
   (let* ((idle (current-idle-time))
          (quiet (and idle (>= (float-time idle) (* 0.75 drgnx-quickhelp--poll-interval))))

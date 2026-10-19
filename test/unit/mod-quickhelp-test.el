@@ -445,6 +445,41 @@ idle for a while, a focused frame, and `drgnx-quickhelp--request' recording its 
         (drgnx-state-sync)
         (should (drgnx-quickhelp-test--wait (lambda () (null drgnx-quickhelp--origin)) 2))))))
 
+(ert-deftest drgnx-quickhelp/a-resize-of-a-kindless-window-puts-the-card-away ()
+  ;; the store tells pane-resized for panes and editors only: a card over a role window (no pane kind) goes when
+  ;; a neighbour editor's event shows the card's own window has other edges
+  (drgnx-quickhelp-test--with
+    (drgnx-state-define-role 'quickhelp)
+    (drgnx-quickhelp-test--elisp "(car x)\n"
+      (let* ((editor (selected-window)) (side (split-window editor nil 'right)))
+        (set-window-parameter side 'drgnx-role 'quickhelp)
+        (drgnx-state-sync)
+        (drgnx-quickhelp--watch-windows)
+        (drgnx-quickhelp-test--card-over side)
+        (window-resize side -4 t)
+        (drgnx-state-sync)
+        (should (drgnx-timer-active-p 'quickhelp-away))
+        (should (drgnx-quickhelp-test--wait (lambda () (null drgnx-quickhelp--origin)) 2))))))
+
+(ert-deftest drgnx-quickhelp/its-store-subscriptions-end-with-the-module ()
+  (drgnx-quickhelp-test--with
+    (let ((drgnx-modules--table (list (list 'ui/face :doc "test")))
+          (drgnx-modules--report nil) (drgnx-modules--stacks nil) (drgnx-modules--runs nil)
+          (drgnx-modules--features nil))
+      (drgnx-quickhelp-test--elisp "(car x)\n"
+        (let ((w (selected-window)))
+          (should-not (drgnx-modules--run-setup 'ui/face #'drgnx-quickhelp--watch-windows))
+          (drgnx-modules--record 'ui/face 'startup 0 'ok)
+          (dolist (e '(pane-resized windows-changed selected-changed))
+            (should (drgnx-state--lane-of e #'drgnx-quickhelp--put-away)))
+          (drgnx-quickhelp-test--card-over w)
+          (drgnx-quickhelp--put-away (list :frame (selected-frame) :windows (list w)))
+          (should (drgnx-timer-active-p 'quickhelp-away))
+          (should-not (drgnx-module-teardown 'ui/face))
+          (dolist (e '(pane-resized windows-changed selected-changed))
+            (should-not (drgnx-state--lane-of e #'drgnx-quickhelp--put-away)))
+          (should-not (drgnx-timer-active-p 'quickhelp-away)))))))
+
 (ert-deftest drgnx-quickhelp/scrolling-is-still-polled ()
   (drgnx-quickhelp-test--with
     (drgnx-quickhelp-test--elisp (mapconcat (lambda (i) (format "(car x%d)" i)) (number-sequence 1 60) "\n")
