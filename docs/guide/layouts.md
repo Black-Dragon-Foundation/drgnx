@@ -49,7 +49,7 @@ takes away the agent chat that Agent added.
 show, their tabs and sizes, and how the editor area is split. You are then in it, and Next Layout and Layout… offer
 it after the built-in ones. The built-in names (agent, editor, zen, browser) are taken.
 
-Your layouts are kept in `~/.config/drgnx/layouts.eld` (`$DRGNX_CONFIG_DIR` when set), so they are there in the
+Your layouts are kept in `~/.config/drgnx/layouts.eld` (in your config folder: [where drgnx keeps its files](files.md#where-drgnx-keeps-its-files)), so they are there in the
 next Emacs too. The first time you use one in a new Emacs, its windows show the buffers of the same names if they
 are open.
 

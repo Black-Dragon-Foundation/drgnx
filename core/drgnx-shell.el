@@ -32,7 +32,7 @@ ${XDG_CONFIG_HOME:-~/.config}/fish/config.fish."
      (_ (error "drgnx: no rc file for shell %s" name)))
    (pcase name
      ('zsh (let ((z (getenv "ZDOTDIR"))) (if (and z (not (string-empty-p z))) z "~")))
-     ('fish (let ((x (getenv "XDG_CONFIG_HOME"))) (if (and x (not (string-empty-p x))) x "~/.config")))
+     ('fish (or (drgnx-paths-env-dir "XDG_CONFIG_HOME") "~/.config"))   ; only an absolute value counts
      (_ "~"))))
 
 (defun drgnx-shell--word (file)

@@ -508,7 +508,7 @@ With Vim keys the sheet shows leader keys plain (`SPC f f`) and a key that works
 
 ## keys.eld
 
-`~/.config/drgnx/keys.eld` (or `$DRGNX_CONFIG_DIR/keys.eld`) is one plist:
+`~/.config/drgnx/keys.eld` (in your config folder: [where drgnx keeps its files](files.md#where-drgnx-keeps-its-files)) is one plist:
 
 ```elisp
 (:layers ((emacs editing) (vscode app window))     ; the stack; omit for the default (VS Code)

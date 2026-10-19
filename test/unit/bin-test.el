@@ -177,6 +177,7 @@ logging to PATHLOG), CONFIG (a DRGNX_CONFIG_DIR) and ENV (the environment lists 
           (make-directory (expand-file-name "bin" dir))
           (copy-file drgnx-bin-test--bin (expand-file-name "bin/drgnx" dir))
           (set-file-modes (expand-file-name "bin/drgnx" dir) #o755)
+          (copy-file (expand-file-name "bin/drgnx-paths.sh" drgnx-bin-test--root) (expand-file-name "bin/" dir))
           (make-directory core)
           (dolist (f (directory-files (expand-file-name "core" drgnx-bin-test--root) t "\\.el\\'"))
             (copy-file f (expand-file-name (file-name-nondirectory f) core)))
@@ -460,6 +461,39 @@ with a display: `drgnx open' stays graphical (the unit tier has no DISPLAY, and 
         (should (eql 0 (car (drgnx-bin-test--call drgnx-bin-test--bin (cons (concat "XDG_STATE_HOME=" value) env) "open"))))
         (should (file-exists-p (expand-file-name ".local/state/drgnx/daemon.log" dir)))
         (should (equal (directory-files drgnx-bin-test--cwd nil "\\`[^.]") nil))))))
+
+(defconst drgnx-bin-test--paths-start
+  "# >>> drgnx-paths.sh (kept byte-identical by drgnx-bin/install-carries-drgnx-paths)\n")
+(defconst drgnx-bin-test--paths-end "# <<< drgnx-paths.sh\n")
+
+(defun drgnx-bin-test--bytes (file)
+  "FILE (under the checkout) as raw bytes."
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert-file-contents-literally (expand-file-name file drgnx-bin-test--root))
+    (buffer-string)))
+
+(ert-deftest drgnx-bin/install-carries-drgnx-paths ()
+  ;; curl pipes install.sh, so it cannot source bin/drgnx-paths.sh: it carries a copy, byte for byte
+  (let* ((install (drgnx-bin-test--bytes "install.sh"))
+         (b (string-search drgnx-bin-test--paths-start install))
+         (e (and b (string-search drgnx-bin-test--paths-end install b))))
+    (should b)
+    (should e)
+    (should (equal (substring install (+ b (length drgnx-bin-test--paths-start)) e)
+                   (drgnx-bin-test--bytes "bin/drgnx-paths.sh")))))
+
+(ert-deftest drgnx-bin/every-dir-goes-through-drgnx-dir ()
+  ;; One rule in bash: bin/drgnx and install.sh (outside its copy of drgnx-paths.sh) name no drgnx dir of their own
+  (dolist (file '("bin/drgnx" "install.sh"))
+    (let* ((text (drgnx-bin-test--bytes file))
+           (b (string-search drgnx-bin-test--paths-start text))
+           (text (if b (concat (substring text 0 b) (substring text (string-search drgnx-bin-test--paths-end text b)))
+                   text)))
+      (dolist (re '("\\${XDG_\\(CONFIG\\|DATA\\|STATE\\|CACHE\\)_HOME" "\\${DRGNX_\\(CONFIG\\|DATA\\)_DIR:-"
+                    "xdg_dir XDG_\\(DATA\\|STATE\\|CACHE\\)_HOME" "\\$HOME/\\.config/drgnx" "\\$HOME/\\.local/state"
+                    "\\$HOME/\\.cache"))
+        (should-not (and (string-match re text) (list file (match-string 0 text))))))))
 
 (defun drgnx-bin-test--lock (dir)
   (expand-file-name (format "state/drgnx/open-%s.lock" drgnx-bin-test--server) dir))

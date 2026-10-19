@@ -25,17 +25,24 @@ modules/<category>/drgnx-<name>.el   one drgnx-module-define per file
 
 ## Paths (`drgnx-paths.el`)
 
-`drgnx-dir` is the checkout (code only, never written to). User configuration: `(drgnx-user-dir)` —
-`$DRGNX_CONFIG_DIR` or `~/.config/drgnx/`. State and caches: `(drgnx-state-dir)` and `(drgnx-cache-dir)` under
-the XDG directories (`$XDG_STATE_HOME`, `$XDG_CACHE_HOME`, `$XDG_DATA_HOME`: only an absolute path counts — empty or
-relative is ignored, as the XDG spec says, here and in `bin/drgnx`'s `xdg_dir`). Packages: `(drgnx-data-dir)` —
-`$DRGNX_DATA_DIR`, else `$XDG_DATA_HOME/drgnx/`, else `~/.local/share/drgnx/`; an empty `$DRGNX_DATA_DIR` or
-`$DRGNX_CONFIG_DIR` counts as unset, as in `bin/drgnx` and `install.sh` — holds `elpa/`
+`drgnx-dir` is the checkout (code only, never written to). Every other folder comes from one rule,
+`(drgnx-paths-dir KIND)` for KIND `config`, `state`, `cache` or `data` (a directory name ending in `/`; the table is in
+[files.md](../guide/files.md#where-drgnx-keeps-its-files)). `bin/drgnx-paths.sh`'s `drgnx_dir KIND` is the same rule in
+bash: `bin/drgnx` sources it, and `install.sh` carries a byte-identical copy between its `# >>> drgnx-paths.sh` and
+`# <<< drgnx-paths.sh` lines (curl pipes it, so it cannot source a file); `drgnx-paths/matrix-elisp-and-bash-agree`
+and `drgnx-bin/install-carries-drgnx-paths` keep the three equal (the matrix runs bash a second time with
+`BASH_COMPAT=32`, macOS's bash 3.2 rules). Only a value that begins with `/` counts
+(`drgnx-paths-env-dir`): unset, empty, relative and `~/…` mean the default. Nothing is memoized (env/set changes the
+variables). Compatibility: with `$DRGNX_CONFIG_DIR` unset, no `$XDG_CONFIG_HOME/drgnx` and an existing
+`~/.config/drgnx`, the config dir stays `~/.config/drgnx/`; `(drgnx-paths-config-moved-p)` then returns where it
+belongs, and the doctor's `config-dir` check warns. `(drgnx-user-dir)`, `(drgnx-state-dir)`, `(drgnx-cache-dir)` and
+`(drgnx-data-dir)` are one-line wrappers. The data dir holds `elpa/`
 (the packages every session uses), `generations/` and this machine's files that must not travel (`emacs`,
 `systemd/`, `applications/`: [second-machine.md](../guide/second-machine.md)); `(drgnx-package-cache-dir)` keeps downloaded package files
 ([packages.md](../guide/packages.md)).
 Every helper expands with `default-directory` bound to `"/"`, so a `~` is always the local home: in a remote
-buffer (a Tramp `*scratch*`, dired over ssh) a timer, hook or save never makes Tramp contact the host.
+buffer (a Tramp `*scratch*`, dired over ssh) a timer, hook or save never makes Tramp contact the host;
+`drgnx-paths-dir` also binds `file-name-handler-alist` to nil, so even a variable that looks remote is a local name, as in bash.
 Started with `--init-directory <checkout>/init`, Emacs keeps its own state (`user-emacs-directory`: auto-save list,
 histories) in `(drgnx-state-dir)emacs/` and native code in `(drgnx-cache-dir)eln-cache/` (`init/early-init.el`), so
 nothing is written into the checkout; a harness session keeps both in its run directory. `custom-file` is
@@ -1875,7 +1882,12 @@ typo?") and for a file in an older format; otherwise OK, "N files read". The doc
 [files.md](../guide/files.md). `checkout-clean` (group drgnx) is the fact `:checkout-init`: `git -C CHECKOUT status
 --porcelain -- init/` (`GIT_OPTIONAL_LOCKS=0`, bounded at 5 s). A change there is a WARN, because install.sh's update needs
 `init/` unchanged; the fix is to move it to `config.el` or `custom.el` in the config folder and `git checkout -- init/`.
-Without a `.git` (not a checkout) the check is absent.
+Without a `.git` (not a checkout) the check is absent. `config-dir` (group drgnx) is the fact `:config-dir`, `(:dir
+(drgnx-user-dir) :moved (drgnx-paths-config-moved-p))`: WARN while the old `~/.config/drgnx` is used in place of
+`$XDG_CONFIG_HOME/drgnx`, with the fix "move ~/.config/drgnx to …"; also WARN, one line per variable, while a path
+variable is set to a value that does not count (`:ignored`, `(drgnx-paths-ignored)`: "ignored: not an absolute path:
+VAR=VALUE; drgnx uses DIR"); otherwise OK, naming the folder. Hints name the
+config folder in use, `(abbreviate-file-name (drgnx-user-dir))`, never a literal `~/.config/drgnx`.
 
 Native compilation is checked by actually compiling a function, not only by asking whether it is built in. Any
 FAIL makes the exit status 1. `--dev` adds the tools for developing drgnx (mutter, dbus-run-session, ImageMagick, a

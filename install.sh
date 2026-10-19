@@ -33,6 +33,38 @@ note() { printf '  %s\n' "$*"; }
 warn() { printf 'drgnx install: %s\n' "$*" >&2; }
 die()  { local code=$1; shift; printf 'drgnx install: %s\n' "$*" >&2; exit "$code"; }
 
+# >>> drgnx-paths.sh (kept byte-identical by drgnx-bin/install-carries-drgnx-paths)
+# drgnx-paths.sh — where drgnx keeps each kind of file, for bash: the rule of core/drgnx-paths.el's drgnx-paths-dir.
+# bin/drgnx sources it; install.sh carries a byte-identical copy (curl pipes it, so it cannot source a sibling file).
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+xdg_dir() { # VAR DEFAULT — $VAR when it is an absolute path, else DEFAULT: the XDG spec ignores an empty or relative value
+  local v="${!1:-}"
+  if [[ "$v" == /* ]]; then printf '%s' "$v"; else printf '%s' "$2"; fi
+}
+
+drgnx_dir() { # KIND — config, state, cache or data: the directory, without a trailing slash (docs/guide/files.md)
+  local own="" var base dir s=/
+  case "$1" in
+    config) own=DRGNX_CONFIG_DIR var=XDG_CONFIG_HOME base="$HOME/.config" ;;
+    state) var=XDG_STATE_HOME base="$HOME/.local/state" ;;
+    cache) var=XDG_CACHE_HOME base="$HOME/.cache" ;;
+    data) own=DRGNX_DATA_DIR var=XDG_DATA_HOME base="$HOME/.local/share" ;;
+    *) printf 'drgnx_dir: no kind %s\n' "$1" >&2; return 2 ;;
+  esac
+  if [[ -n "$own" && "${!own:-}" == /* ]]; then dir="${!own}"
+  else
+    dir="$(xdg_dir "$var" "$base")/drgnx"
+    # an old ~/.config/drgnx is still used while $XDG_CONFIG_HOME/drgnx does not exist (the doctor says move it)
+    if [[ "$1" == config && ! -d "$dir" && -d "$base/drgnx" ]]; then dir="$base/drgnx"; fi
+  fi
+  # $s, not \/: before bash 4.3 (macOS's 3.2) a quoted ${x//p/r} keeps the backslash of an escaped replacement
+  while [[ "$dir" == *//* ]]; do dir="${dir//$s$s/$s}"; done
+  while [[ "$dir" == */ && "$dir" != / ]]; do dir="${dir%/}"; done
+  printf '%s' "$dir"
+}
+# <<< drgnx-paths.sh
+
 usage() {
   cat <<'EOF'
 usage: install.sh [options]
@@ -231,7 +263,7 @@ choose_method() {
   if [[ ( "$CHOSEN" == package && ${#PKG[@]} -eq 0 ) || ( "$CHOSEN" == source && ${#DEPS[@]} -eq 0 ) ]]; then
     die 2 "no --method $CHOSEN recipe for ${PRETTY:-this system} — use --method auto, or install GNU Emacs $EMACS_VERSION yourself (see $DOCS_URL), then run: bash install.sh --method keep"
   fi
-  BUILD_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/drgnx/build"
+  BUILD_DIR="$(drgnx_dir cache)/build"
   CONFIGURE=(./configure "--prefix=$PREFIX" --with-native-compilation=aot --with-tree-sitter "$GUI_FLAG")
   JOBS="$(build_jobs)"
 }
@@ -564,7 +596,8 @@ link_drgnx() {
 
 remember_emacs() { # drgnx commands run in the Emacs just installed, even when it is not `emacs' on PATH (macOS)
   # in drgnx's data dir: the path is this machine's, and the config dir travels to others
-  local dir="${DRGNX_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/drgnx}" e
+  local dir e
+  dir="$(drgnx_dir data)"
   e="$(command -v "$EMACS_BIN" 2>/dev/null || true)"
   e="${e:-$EMACS_BIN}"
   [[ "$e" == /* ]] || warn "the Emacs ($e) is not an absolute path, which drgnx ignores: it will use the emacs on your PATH (or set DRGNX_EMACS)"

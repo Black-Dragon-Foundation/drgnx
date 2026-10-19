@@ -109,13 +109,17 @@ EXIT is the symbol `timeout' when the process had to be killed."
 
 ;;;; Preparing a session
 
+(declare-function drgnx-state-dir "drgnx-paths")
+
 (defun drgnx-ui-state-root ()
-  "Directory holding session run directories ($DRGNX_UI_STATE or XDG state)."
+  "Directory holding session run directories ($DRGNX_UI_STATE, else ui/ in `drgnx-state-dir')."
   (let ((base (getenv "DRGNX_UI_STATE")))
     (directory-file-name
-     (expand-file-name (if (and base (not (string-empty-p base)))
-                           base
-                         (expand-file-name "drgnx/ui" (or (getenv "XDG_STATE_HOME") "~/.local/state")))))))
+     (if (and base (not (string-empty-p base)))
+         (expand-file-name base)
+       ;; by file: `bin/drgnx ui-launcher' loads this with the harness alone on `load-path'
+       (require 'drgnx-paths (expand-file-name "core/drgnx-paths" drgnx-ui-repo-dir))
+       (expand-file-name "ui" (drgnx-state-dir))))))
 
 (defun drgnx-ui-emacs-bin ()
   (or (getenv "DRGNX_EMACS") (executable-find "emacs-pgtk") "emacs"))

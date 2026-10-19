@@ -67,6 +67,7 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
            (make-directory (expand-file-name "seed/bin" dir))
            (copy-file (expand-file-name "bin/drgnx" drgnx-update-test--root) (expand-file-name "seed/bin/drgnx" dir))
            (set-file-modes (expand-file-name "seed/bin/drgnx" dir) #o755)
+           (copy-file (expand-file-name "bin/drgnx-paths.sh" drgnx-update-test--root) (expand-file-name "seed/bin/" dir))
            (drgnx-update-test--push dir "README" "one\n" "first")
            (drgnx-update-test--git dir "." "clone" "-q" (expand-file-name "origin.git" dir) "install")
            ,@body)
@@ -141,6 +142,7 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
       (make-directory (expand-file-name "bin" plain) t)
       (copy-file bin (expand-file-name "bin/drgnx" plain))
       (set-file-modes (expand-file-name "bin/drgnx" plain) #o755)
+      (copy-file (expand-file-name "bin/drgnx-paths.sh" drgnx-update-test--root) (expand-file-name "bin/" plain))
       (let ((r (drgnx-update-test--run dir nil (expand-file-name "bin/drgnx" plain) "update")))
         (should (eq (car r) 1))
         (should (string-match-p "not a git checkout" (cdr r)))))))
@@ -290,6 +292,8 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
         (should (string-match-p (format "^Environment=\"PATH=%s/.local/bin:" (regexp-quote dir)) service-text))
         (should-not (string-match-p "%" service-text))
         (should (string-match-p (format "^Environment=\"XDG_STATE_HOME=%s/state\"$" (regexp-quote dir)) service-text))
+        ;; …and the config dir: XDG_CONFIG_HOME counts for it
+        (should (string-match-p (format "^Environment=\"XDG_CONFIG_HOME=%s/config\"$" (regexp-quote dir)) service-text))
         (should (string-match-p (format "^ExecStart=\"%s\" update --quiet$" (regexp-quote bin)) service-text)))
       (should (string-match-p "--user enable --now drgnx-update.timer" (drgnx-update-test--slurp ctl)))
       (drgnx-update-test--run dir env bin "update")    ; a run to report
