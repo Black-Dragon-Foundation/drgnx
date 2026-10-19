@@ -197,12 +197,13 @@ Each accept, revert and comment is also an event (`accept`, `revert`, `comment`)
   `drgnx-cockpit-edits-check-interval` (2 s).
 - Only the files that changed are diffed again, at most once per `drgnx-cockpit-edits-delay` (0.3 s), however often
   the agent writes. Only their sections of the buffer are replaced.
-- Your point and the window's scroll stay on the same file and line. No window moves.
+- Your point and the window's scroll stay on the same file, hunk and place in the hunk. No window moves.
 - A file the pane does not list yet makes it list the changes again, at most every 2 s. While the pane shows, it
   also lists them on its own, so a first write in a folder nobody watches yet shows without `g`. That happens every
   `drgnx-cockpit-edits-check-interval`, and the gap doubles, up to 10 s, while these listings find nothing new. Any
   change heard of brings it back.
-- A hidden pane only notes what changed. It catches up when it shows.
+- A hidden pane keeps no timer and no file watch. When it shows again, in its pane or any window, it lists the
+  changes again and watches their folders again.
 - Remote (TRAMP) folders are never touched: such an agent's pane says so, with no git and no watch.
 
 ## What happened, the timeline, questions

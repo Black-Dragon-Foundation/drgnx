@@ -367,17 +367,13 @@ with `drgnx-cockpit-fixture-show-pane'."
 
 (ert-deftest drgnx-cockpit-graph/commands-and-keys-in-every-profile ()
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
-    (drgnx-test-with-state
-      (unwind-protect
-          (progn
-            (cl-letf (((symbol-function 'drgnx-pane-define-kind) #'ignore))
-              (funcall (plist-get (alist-get 'tools/cockpit drgnx-modules--table) :setup)))
-            ;; the graph hears of its pane from the workbench state store; the status bar's count is looked at
-            (should (memq #'drgnx-cockpit--pane-shown (alist-get 'pane-shown drgnx-state--now)))
-            (should (memq #'drgnx-cockpit--pane-hidden (alist-get 'pane-hidden drgnx-state--now)))
-            (should (memq #'drgnx-cockpit--pane-resized (alist-get 'pane-resized drgnx-state--idle)))
-            (should (drgnx-timer-active-p 'cockpit-waiting)))
-        (drgnx-timer-cancel 'cockpit-waiting)))
+    (cl-letf (((symbol-function 'drgnx-pane-define-kind) #'ignore))
+      (drgnx-cockpit-fixture-after-setup
+        ;; the graph hears of its pane from the workbench state store; the status bar's count is looked at
+        (should (memq #'drgnx-cockpit--pane-shown (alist-get 'pane-shown drgnx-state--now)))
+        (should (memq #'drgnx-cockpit--pane-hidden (alist-get 'pane-hidden drgnx-state--now)))
+        (should (memq #'drgnx-cockpit--pane-resized (alist-get 'pane-resized drgnx-state--idle)))
+        (should (drgnx-timer-active-p 'cockpit-waiting))))
     (should (equal (plist-get (alist-get 'tools/cockpit drgnx-modules--table) :requires) '(tools/work tools/jobs)))
     (pcase-dolist (`(,id ,fn) '((cockpit-filter drgnx-cockpit-graph-filter) (cockpit-open drgnx-cockpit-graph-open)
                                 (cockpit-open-in-plan drgnx-cockpit-graph-open-in-plan) (cockpit-refresh drgnx-cockpit-graph-refresh)

@@ -384,19 +384,28 @@ user's side is in [cockpit.md](../guide/cockpit.md#an-agents-edits).
 - **No other mode.** A local `change-major-mode-hook` (`drgnx-cockpit-edits--keep-mode`) signals a `user-error`, so `M-x
   diff-mode` (or any mode) cannot turn the pane into a patch buffer.
 - **No undo** (`buffer-disable-undo`), no dir-local variables.
-- **Nothing global.** `drgnx-cockpit-edits--teardown` (for the coming module teardown) only kills the panes; each one's
-  `kill-buffer-hook` ends its timers and watches.
+- **Nothing global.** `drgnx-cockpit-edits--teardown` (tools/cockpit's teardown calls it) only kills the panes and
+  the placeholder; each one's `kill-buffer-hook` ends its timers and watches. Its state subscriptions are the setup's.
 - **The header line** is text cached at each patch: the agent, counts, base, "stopped" (positive evidence only) and
   the keys (`a accept · r revert · c comment · n/p files`).
 
 ### Live updates
 
+**Only while it shows.** tools/cockpit's setup subscribes the panes to the workbench state store: `pane-shown` and
+`pane-hidden` for the kind `agent-edits`, and `windows-changed` (one agent's edits replacing another's in the same
+window is no pane event, nor are edits shown with `C-x b`), all on the `now` lane. Each calls
+`drgnx-cockpit-edits--follow`, which goes over the live panes: one that a window the store recorded on a visible frame
+shows (`drgnx-cockpit-shown-p`) gets its check `(cockpit-edits-check . BUFFER)` and, when that was not running, a
+listing at once (which watches the folders again when its round ends); any other loses its check, tick, turn and
+flush timers and its file watches. Hidden, a pane keeps no timer and no watch, and a round that ends while it is
+hidden watches nothing (M12f-C6-1).
+
 The pane never polls a file. Three things name the files that changed:
 
 1. **File watches** (`file-notify-add-watch`, `change`) on the agent's folder and its changed files' folders, at most
-   `drgnx-cockpit-edits-watch-max`, only local ones. They are updated after each round. A watch event costs a prefix
-   test and a hash lookup: it marks the file dirty and schedules a tick. Paths in `.git` and outside the folder are
-   ignored.
+   `drgnx-cockpit-edits-watch-max`, only local ones, only while the pane shows. They are updated after each round. A
+   watch event costs a prefix test and a hash lookup: it marks the file dirty and schedules a tick. Paths in `.git`
+   and outside the folder are ignored.
 2. **Reported edits.** `drgnx-cockpit-edits--check` runs every `drgnx-cockpit-edits-check-interval` seconds while the
    pane shows. It compares `data_version` and `total_changes`, one query. When they moved, it reads the agent's `edit`
    events after the last id it saw. Their paths, cut to the folder with no remote name expanded, mark files dirty. Review
@@ -412,24 +421,27 @@ A file the pane does not list makes it list again (`drgnx-cockpit-changed-files`
 
 **Ticks and rounds.**
 - One owned one-shot timer runs the tick, `drgnx-cockpit-edits-delay` after the first change. A tick on a hidden pane
-  only marks it stale; `window-buffer-change-functions` and `drgnx-cockpit-edits-show` catch up.
+  does nothing (what changed stays noted); showing it lists again.
 - A tick while a round runs is put off. Otherwise it starts a round: the listing when due, then the dirty files' diffs
   (`drgnx-cockpit-file-diff`), at most 3 git processes at a time.
 - The round's diffs are shown together when the last one is back. A long round, the first load of many files, shows
   what came back every `drgnx-cockpit-edits-delay`.
 - So 50 writes a second give at most one patch per 0.3 s.
 
-**Patching** (`drgnx-cockpit-edits--patch`):
-- Before the change, each window's point and start are kept as (file, line in its section, column). The buffer's
-  own point is kept the same way.
+**Patching** (`drgnx-cockpit-edits--patch`), inside `drgnx-view-with-kept-windows` ([core.md](core.md#keeping-places)):
+- A section's rows are numbered by the text property `drgnx-cockpit-edits-hunk` (`drgnx-cockpit-edits--mark-hunks`):
+  0 for its header line and diff head, then 1, 2… from each `@@` line. The buffer's point and each window's point and
+  start are kept as their row `(FILE . HUNK)` (`drgnx-cockpit-edits--row-at`, two text properties) and the offset from
+  the row's start, and put back there after the change (`drgnx-cockpit-edits--row-pos`), inside
+  `drgnx-wb-with-owned-windows`. A row that is gone falls back to the same line of the buffer.
 - Only the sections whose diff changed are replaced. The diff's SHA-1 decides: an unchanged diff draws nothing.
-- After the change, the windows' point and start are put back on the same file and line, inside
-  `drgnx-wb-with-owned-windows`. A window that is already right is not touched.
 - A file gone from the list loses its section, and a new one gets a section at the end.
-- From no files to some, or to an error, the buffer is drawn anew.
+- From files to a note (no changes, an error) every section goes and the note (text property
+  `drgnx-cockpit-edits-note`) comes; from a note to files the note goes and the sections come. Nothing erases the
+  buffer.
 
-**Owners.** The buffer owns its tick, flush and check timers and its watches. Its `kill-buffer-hook` cancels them
-and removes the watches. A git callback for a killed buffer does nothing. The caches are buffer-local and pruned with
+**Owners.** The buffer owns its tick, turn, flush and check timers and its watches. Its `kill-buffer-hook` cancels
+them and removes the watches. A git callback for a killed buffer does nothing. The caches are buffer-local and pruned with
 the files: `drgnx-cockpit-edits--info` holds counts, hash and note per file, never diff text, because the buffer
 holds that.
 
@@ -498,7 +510,10 @@ nothing reads, and no process sentinel runs while it waits. It covers:
 - the files with their counts, the header faces under diff-mode's, `n`/`p`, a reported file listed at the next look,
   watched folders, and a remote folder (an error line, no git, no watch);
 - 50 writes in a second: at most 4 patches, the last write shown, point and window start on the same file, line and
-  column, no window moved;
+  column, no window moved; two windows each kept on their hunk while a section above grows;
+- with a fresh state store (the panes' subscriptions, the pane shown by `drgnx-state-sync`): a hidden pane keeps no
+  timer and no file watch (M12f-C6-1), and showing it again starts its check, lists an edit reported meanwhile and
+  watches again;
 - accept, and a change shown as `changed since accepted` (the mark keeps its hash);
 - accept never merging or committing;
 - revert: queued while the agent runs, queued for a session set to interrupt, queued for a stopped agent in the main
