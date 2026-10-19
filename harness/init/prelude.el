@@ -15,6 +15,8 @@
 
 (defvar drgnx-ui-run (file-name-as-directory (getenv "DRGNX_UI_RUN")))
 (defvar drgnx-ui-harness (file-name-as-directory (getenv "DRGNX_UI_HARNESS")))
+(defvar drgnx-uitest-session-id (getenv "DRGNX_UI_NAME")
+  "This session's id: `drgnx-uitest-api-as' answers only forms that name it.")
 (defvar drgnx-ui-config
   (let ((c (getenv "DRGNX_UI_CONFIG")))
     (and c (not (string-empty-p c)) (file-name-as-directory c))))

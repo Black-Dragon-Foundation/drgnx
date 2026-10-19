@@ -21,7 +21,15 @@
         :required (vconcat required)))
 
 (defconst drgnx-ui-mcp--session
-  '(:session (:type "string" :description "Session name from ui_start / ui_list, e.g. drgnx-ui-1-3f9a0c; ids are never reused")))
+  '(:session (:type "string" :description "Session id from ui_start / ui_list, e.g. drgnx-ui-7-3fa9c1; ids are never reused, and a stopped one is refused with when it ended")
+             :adopt (:type "boolean" :description "Drive a session another client started (see ui_list: yours); recorded in the session")))
+
+(defvar drgnx-ui-mcp--token nil
+  "This server's client token: 16 random hex digits made when it starts (`drgnx-ui-mcp-main').  ui_start records
+it in the session (:owner :client); a tool addressing a session another client started needs adopt: true.")
+
+(defun drgnx-ui-mcp--new-token ()
+  (substring (md5 (format "%s %s %.9f" (random t) (emacs-pid) (float-time))) 0 16))
 
 (defconst drgnx-ui-mcp--click
   '(:x (:type "integer") :y (:type "integer")
@@ -122,7 +130,7 @@ wm:resize: layout, never collateral or oscillation).")
   (list :content (vector (list :type "text" :text message)) :isError t))
 
 (defun drgnx-ui-mcp--own (args)
-  (drgnx-ui-own-session (plist-get args :session)))
+  (drgnx-ui-own-session (plist-get args :session) :client drgnx-ui-mcp--token :adopt (eq (plist-get args :adopt) t)))
 
 (defun drgnx-ui-mcp--screenshot (args)
   (let* ((r (drgnx-ui-screenshot (drgnx-ui-mcp--own args) (plist-get args :path)))
@@ -163,13 +171,17 @@ wm:resize: layout, never collateral or oscillation).")
     action))
 
 (defconst drgnx-ui-mcp--calls
-  `(("ui_start" . ,(lambda (a) (drgnx-ui-mcp--text (drgnx-ui-start (plist-get a :config) (plist-get a :size) nil
-                                                                   (eq (plist-get a :daemon) t) (plist-get a :monitors)
-                                                                   (plist-get a :compositor)))))
+  `(("ui_start" . ,(lambda (a) (drgnx-ui-mcp--text (let ((drgnx-ui-owner-client drgnx-ui-mcp--token))
+                                                     (drgnx-ui-start (plist-get a :config) (plist-get a :size) nil
+                                                                     (eq (plist-get a :daemon) t) (plist-get a :monitors)
+                                                                     (plist-get a :compositor))))))
     ("ui_wm" . ,(lambda (a) (drgnx-ui-mcp--text (drgnx-ui-wm (drgnx-ui-mcp--own a)))))
     ("ui_frame" . ,(lambda (a) (drgnx-ui-mcp--text (drgnx-ui-new-frame (drgnx-ui-mcp--own a)))))
-    ("ui_stop" . ,(lambda (a) (drgnx-ui-mcp--text (drgnx-ui-stop (plist-get a :session)))))
-    ("ui_list" . ,(lambda (_) (drgnx-ui-mcp--text (drgnx-ui-ls))))
+    ("ui_stop" . ,(lambda (a) (drgnx-ui-mcp--text
+                               (progn (drgnx-ui-check-owner (plist-get a :session) :client drgnx-ui-mcp--token
+                                                            :adopt (eq (plist-get a :adopt) t))
+                                      (drgnx-ui-stop (plist-get a :session))))))
+    ("ui_list" . ,(lambda (_) (drgnx-ui-mcp--text (drgnx-ui-ls drgnx-ui-mcp--token))))
     ("ui_state" . ,(lambda (a) (drgnx-ui-mcp--text (drgnx-ui-mcp--remember a (drgnx-ui-state (drgnx-ui-mcp--own a))))))
     ("ui_diff" . drgnx-ui-mcp--diff)
     ("ui_record" . ,(lambda (a) (drgnx-ui-mcp--text
@@ -246,6 +258,8 @@ so the loop goes on and the client hears why."
 (defun drgnx-ui-mcp-main ()
   "Serve MCP over stdin/stdout until EOF, then exit."
   (drgnx-ui-batch-setup)
+  (setq drgnx-ui-owner-kind 'mcp
+        drgnx-ui-mcp--token (drgnx-ui-mcp--new-token))
   (condition-case nil
       (while t
         (let ((line (read-from-minibuffer "")))

@@ -208,7 +208,7 @@ reaps (GitHub's job containers), an ended job's processes stay as zombies and si
   "Start JOB, its output to DIR/NAME.log."
   (let* ((log (expand-file-name (concat (plist-get job :name) ".log") dir))
          ;; a test process ended early stops the harness sessions it started (harness/drgnx-ui.el)
-         (process-environment (append (plist-get job :env) (list "DRGNX_UI_STOP_ON_EXIT=1") process-environment)))
+         (process-environment (append (plist-get job :env) (list "DRGNX_UI_STOP_ON_EXIT=1" "DRGNX_CHECK=1") process-environment)))
     (plist-put job :log log)
     (plist-put job :start (float-time))
     (plist-put job :process

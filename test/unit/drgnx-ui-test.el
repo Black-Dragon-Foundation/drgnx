@@ -604,3 +604,194 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
                       "-l" "drgnx-ui" "-f" "drgnx-ui-cli" "--" "stop" "drgnx-ui-✓")
         (should (string-search "not a drgnx harness session" (buffer-string)))
         (should (string-search "drgnx-ui-✓" (buffer-string)))))))
+
+;;;; Session safety: ids, tombstones, owner, the run-id check (HARNESS-SESS-1/2)
+
+(defconst drgnx-ui-test--claim-script
+  "(progn (fset 'drgnx-ui-unit-active-p #'ignore)
+         (let ((names nil))
+           (dolist (r (list (getenv \"CLAIM_A\") (getenv \"CLAIM_B\")))
+             (dotimes (_ 250)
+               (push (plist-get (drgnx-ui-prepare-run (drgnx-ui-next-name r) nil nil r) :name) names)))
+           (with-temp-file (getenv \"CLAIM_OUT\") (prin1 names (current-buffer)))))"
+  "What the second Emacs of the claim test runs: 250 claims in each of the two roots.")
+
+(ert-deftest drgnx-ui/a-thousand-claims-across-two-roots-never-collide ()
+  ;; ids stay unique while two Emacs claim in the same two roots at once: uniqueness is the hex and the claim
+  ;; (prepare-run makes the run directory and signals when it exists), not the shared counter
+  (drgnx-ui-test--with-state
+    (let* ((a (expand-file-name "a" root)) (b (expand-file-name "b" root))
+           (out (expand-file-name "claimed.eld" root))
+           (names nil)
+           (proc (let ((process-environment (append (list (concat "CLAIM_A=" a) (concat "CLAIM_B=" b)
+                                                          (concat "CLAIM_OUT=" out))
+                                                    process-environment)))
+                   (start-process "claims" (generate-new-buffer " *claims*")
+                                  (expand-file-name invocation-name invocation-directory)
+                                  "--batch" "-Q" "-L" drgnx-ui-harness-dir
+                                  "-L" (expand-file-name "core" drgnx-ui-repo-dir)
+                                  "-l" "drgnx-ui" "--eval" drgnx-ui-test--claim-script))))
+      (set-process-query-on-exit-flag proc nil)
+      (dolist (r (list a b))
+        (dotimes (_ 250)
+          (push (plist-get (drgnx-ui-prepare-run (drgnx-ui-next-name r) nil nil r) :name) names)))
+      (let ((deadline (+ (float-time) 120)))
+        (while (and (process-live-p proc) (< (float-time) deadline)) (accept-process-output proc 0.1)))
+      (unless (eq 0 (process-exit-status proc))
+        (ert-fail (list "the second Emacs failed" (process-exit-status proc) (with-current-buffer (process-buffer proc) (buffer-string)))))
+      (kill-buffer (process-buffer proc))
+      (setq names (append names (with-temp-buffer (insert-file-contents out) (read (current-buffer)))))
+      (should (= (length names) 1000))
+      (should (= (length (delete-dups (copy-sequence names))) 1000))
+      (dolist (r (list a b))
+        (should (= 500 (length (directory-files r nil drgnx-ui-name-regexp))))))))
+
+(ert-deftest drgnx-ui/n-counts-past-tombstones-and-the-counter ()
+  (drgnx-ui-test--with-state
+    (make-directory (expand-file-name "ended" root))
+    (write-region "" nil (expand-file-name "ended/drgnx-ui-9-aaaaaa.eld" root))
+    (should (string-prefix-p "drgnx-ui-10-" (drgnx-ui-next-name root)))
+    (should (equal (string-trim (drgnx-ui-test--slurp (expand-file-name "counter" root))) "10"))
+    ;; the counter alone, with nothing else left in the root
+    (delete-directory (expand-file-name "ended" root) t)
+    (should (string-prefix-p "drgnx-ui-11-" (drgnx-ui-next-name root)))
+    (write-region "40" nil (expand-file-name "counter" root))
+    (should (string-prefix-p "drgnx-ui-41-" (drgnx-ui-next-name root)))
+    (should (equal (string-trim (drgnx-ui-test--slurp (expand-file-name "counter" root))) "41"))))
+
+(ert-deftest drgnx-ui/test-sessions-use-the-generator ()
+  (drgnx-ui-test--with-state
+    (should (string-match-p "\\`drgnx-ui-test-1-[0-9a-f]\\{6\\}\\'" (drgnx-ui-next-name root "test")))
+    ;; …and the session `drgnx-ui-run-ert-session' makes is named so, not drgnx-ui-test-PID-RANDOM
+    (let (seen)
+      (cl-letf (((symbol-function 'drgnx-ui--run-with-timeout)
+                 (lambda (_timeout &rest args) (push args seen) (list 0 "")))
+                ((symbol-function 'drgnx-ui--run) (lambda (&rest _) (cons 0 "")))
+                ((symbol-function 'drgnx-ui-launcher) (lambda () "detached")))
+        (drgnx-ui-run-ert-session root 5))
+      (should (string-match-p "/drgnx-ui-test-2-[0-9a-f]\\{6\\}\\(/\\| \\|\\'\\)" (format "%S" seen)))
+      (should-not (string-match-p "drgnx-ui-test-[0-9]+-[0-9]\\{5\\}\\b" (format "%S" seen))))))
+
+(ert-deftest drgnx-ui/stop-writes-a-tombstone ()
+  (drgnx-ui-test--with-state
+    (drgnx-ui-prepare-run "drgnx-ui-4-00000a" nil "1600x900")
+    (drgnx-ui-stop "drgnx-ui-4-00000a")
+    (let ((tomb (car (read-from-string (drgnx-ui-test--slurp (expand-file-name "ended/drgnx-ui-4-00000a.eld" root))))))
+      (should (equal (plist-get tomb :reason) 'stopped))
+      (should (eq (plist-get tomb :by) (emacs-pid)))
+      (should (string-match-p "\\`[0-9]\\{4\\}-[0-9][0-9]-[0-9][0-9]T[0-9:]+[+-][0-9]\\{4\\}\\'" (plist-get tomb :ended)))
+      (should (stringp (plist-get tomb :worktree))))
+    (should-not (file-exists-p (expand-file-name "drgnx-ui-4-00000a" root)))))
+
+(ert-deftest drgnx-ui/tombstones-older-than-7-days-are-pruned ()
+  (drgnx-ui-test--with-state
+    (let ((old (expand-file-name "ended/drgnx-ui-1-aaaaaa.eld" root))
+          (new (expand-file-name "ended/drgnx-ui-2-bbbbbb.eld" root)))
+      (make-directory (file-name-directory old))
+      (dolist (f (list old new)) (write-region "()" nil f))
+      (set-file-times old (time-subtract nil (* 86400 (1+ drgnx-ui-tombstone-days))))
+      (drgnx-ui--prune-tombstones root)
+      (should-not (file-exists-p old))
+      (should (file-exists-p new))
+      ;; a pruned id is only unknown: still refused, and N does not go back below the counter
+      (should-error (drgnx-ui-own-session "drgnx-ui-1-aaaaaa") :type 'drgnx-ui-refused))))
+
+(ert-deftest drgnx-ui/a-stopped-id-is-refused-with-its-tombstone ()
+  (drgnx-ui-test--with-state
+    (drgnx-ui-prepare-run "drgnx-ui-7-3fa9c1" nil "1600x900")
+    (drgnx-ui-stop "drgnx-ui-7-3fa9c1")
+    (let ((err (should-error (drgnx-ui-own-session "drgnx-ui-7-3fa9c1") :type 'drgnx-ui-refused)))
+      (should (string-match-p
+               "\\`drgnx-ui-7-3fa9c1 ended at [0-9T:+-]+ (stopped); ids are never reused: start a new session\\'"
+               (cadr err))))))
+
+(ert-deftest drgnx-ui/a-legacy-id-is-refused-but-reaped ()
+  (drgnx-ui-test--with-state
+    (make-directory (expand-file-name "drgnx-ui-5" root))
+    (let ((err (should-error (drgnx-ui-own-session "drgnx-ui-5") :type 'drgnx-ui-refused)))
+      (should (equal (cadr err) "harness upgraded: ids are drgnx-ui-N-xxxxxx; start a new session (drgnx ui start)")))
+    ;; anything else keeps the old message
+    (should (string-search "is not a drgnx harness session"
+                           (cadr (should-error (drgnx-ui-own-session "drgnx-ui-5x") :type 'drgnx-ui-refused))))
+    ;; stop refuses a legacy name too; reap finds it, removes it and leaves a `reaped' tombstone
+    (should-error (drgnx-ui-stop "drgnx-ui-5") :type 'drgnx-ui-refused)
+    (should (equal (drgnx-ui-reap-targets root "" #'ignore) '("drgnx-ui-5")))
+    (cl-letf (((symbol-function 'drgnx-ui--run) (lambda (&rest _) (cons 0 ""))))
+      (should (member "drgnx-ui-5" (append (drgnx-ui-reap) nil))))
+    (should-not (file-exists-p (expand-file-name "drgnx-ui-5" root)))
+    (should (eq 'reaped (plist-get (car (read-from-string
+                                         (drgnx-ui-test--slurp (expand-file-name "ended/drgnx-ui-5.eld" root))))
+                                   :reason)))))
+
+(ert-deftest drgnx-ui/a-session-json-with-another-id-is-refused ()
+  (drgnx-ui-test--with-state
+    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-3-00000a" nil "1600x900"))
+           (server (make-network-process :name "drgnx-ui-test-sock" :family 'local :server t
+                                         :service (plist-get s :socket) :noquery t)))
+      (unwind-protect
+          (progn
+            (should (equal (plist-get (drgnx-ui-own-session "drgnx-ui-3-00000a") :id) "drgnx-ui-3-00000a"))
+            (let ((file (expand-file-name "session.json" (plist-get s :run))))
+              (write-region (replace-regexp-in-string "\"id\":\"drgnx-ui-3-00000a\"" "\"id\":\"drgnx-ui-3-ffffff\""
+                                                      (drgnx-ui-test--slurp file))
+                            nil file nil 'silent))
+            (should (string-search "names another session"
+                                   (cadr (should-error (drgnx-ui-own-session "drgnx-ui-3-00000a")
+                                                       :type 'drgnx-ui-refused)))))
+        (delete-process server)))))
+
+(ert-deftest drgnx-ui/every-call-carries-its-id ()
+  (let (forms)
+    (cl-letf (((symbol-function 'drgnx-ui--run-with-timeout)
+               (lambda (_timeout &rest args) (push (cadr (member "-e" args)) forms) (list 0 "\"{}\""))))
+      (drgnx-ui-call '(:name "drgnx-ui-1-abcdef" :socket "/x") "(drgnx-uitest-api-state)"))
+    (should (string-prefix-p "(drgnx-uitest-api-as \"drgnx-ui-1-abcdef\" (drgnx-uitest-api-state)" (car forms)))))
+
+(ert-deftest drgnx-ui/a-refusing-session-and-an-old-session-are-refusals ()
+  ;; the session answers {"refused": …} for another id; a session started before the upgrade has no
+  ;; `drgnx-uitest-api-as' at all
+  (should (string-search "this session is a, not b"
+                         (cadr (should-error (drgnx-ui-parse-reply (prin1-to-string "{\"refused\":\"this session is a, not b\"}"))
+                                             :type 'drgnx-ui-refused))))
+  (cl-letf (((symbol-function 'drgnx-ui--run-with-timeout)
+             (lambda (&rest _) (list 1 "*ERROR*: Symbol’s function definition is void: drgnx-uitest-api-as\n"))))
+    (should (string-search "harness upgraded"
+                           (cadr (should-error (drgnx-ui-call '(:name "drgnx-ui-1-abcdef" :socket "/x") "(f)")
+                                               :type 'drgnx-ui-refused))))))
+
+(ert-deftest drgnx-ui/session-json-records-the-owner ()
+  (drgnx-ui-test--with-state
+    (let ((process-environment (append '("DRGNX_CHECK" "DRGNX_TEST_ISOLATED") process-environment))   ; unset
+          (read-owner (lambda (name)
+                        (let ((s (drgnx-ui-prepare-run name nil "1600x900")))
+                          (plist-get (drgnx-ui--read-json (expand-file-name "session.json" (plist-get s :run)))
+                                     :owner)))))
+      (let ((json (drgnx-ui--read-json (expand-file-name "session.json"
+                                                         (plist-get (drgnx-ui-prepare-run "drgnx-ui-1-00000a" nil "1600x900")
+                                                                    :run)))))
+        (should (equal (plist-get json :id) "drgnx-ui-1-00000a"))
+        (let ((owner (plist-get json :owner)))
+          (should (equal (plist-get owner :kind) "cli"))
+          (should (eq (plist-get owner :pid) (emacs-pid)))
+          (should (equal (plist-get owner :worktree) (directory-file-name drgnx-ui-repo-dir)))
+          (should-not (stringp (plist-get owner :client)))))
+      (let ((drgnx-ui-owner-kind 'mcp) (drgnx-ui-owner-client "0123456789abcdef"))
+        (let ((owner (funcall read-owner "drgnx-ui-2-00000a")))
+          (should (equal (plist-get owner :kind) "mcp"))
+          (should (equal (plist-get owner :client) "0123456789abcdef"))))
+      (let ((drgnx-ui-owner-kind 'mcp) (process-environment (cons "DRGNX_TEST_ISOLATED=1" process-environment)))
+        (should (equal (plist-get (funcall read-owner "drgnx-ui-3-00000a") :kind) "test")))
+      ;; the check wins over the test
+      (let ((process-environment (append '("DRGNX_CHECK=1" "DRGNX_TEST_ISOLATED=1") process-environment)))
+        (should (equal (plist-get (funcall read-owner "drgnx-ui-4-00000a") :kind) "check"))))))
+
+(ert-deftest drgnx-ui/scenarios-pass-the-selector ()
+  (drgnx-ui-test--with-state
+    (let (env)
+      (cl-letf (((symbol-function 'drgnx-ui-run-ert-session)
+                 (lambda (_dir &optional _timeout _config extra-env) (setq env extra-env) (list 1 nil root))))
+        (let ((process-environment (cons "DRGNX_TEST_SELECTOR=\"^drgnx-scn/\"" process-environment))
+              (standard-output #'ignore))
+          (drgnx-ui-run-scenarios "minimal" root)))
+      (should (member "DRGNX_TEST_SELECTOR=\"^drgnx-scn/\"" env))
+      (should (member "DRGNX_SCENARIO_CONFIG=minimal" env)))))
