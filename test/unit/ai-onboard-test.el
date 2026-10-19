@@ -4,6 +4,7 @@
 (require 'drgnx-ai-probe)
 (require 'drgnx-jobs)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-ai-onboard-test--with (&rest body)
   "BODY with only provider `o' (Ollama, a mock serving two models and answering chat and fill-in-the-middle)
@@ -86,17 +87,19 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
 (ert-deftest drgnx-ai-onboard/role-written-only-after-answer ()
   ;; A provider that never answers leaves ai.eld's roles as they were, and the three test calls share one
   ;; budget: the step ends within about the budget, not 3 ×.  Roles that ran out of time read "not tested".
+  ;; The budget on the clock fixture: virtual time, which a loaded machine does not move.
   (drgnx-ai-onboard-test--with
-    (let ((before (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld"))) (t0 (float-time)) r
-          (drgnx-onboard-ai-test-budget 2))
-      (cl-letf (((symbol-function 'drgnx-ai-request) (lambda (&rest _) nil)))
-        (setq r (drgnx-onboard--ai-found '(:interactive nil))))
-      (should (< (- (float-time) t0) 6))
-      (should (= (nth 2 r) 0))
-      (should (= (nth 3 r) 3))
-      (should (string-match-p "not tested" (cadr r)))
-      (should-not (string-match-p "did not answer" (cadr r)))
-      (should (equal before (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld")))))))
+    (drgnx-test-with-clock ()
+      (let ((before (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld"))) (t0 (drgnx-test-clock-now)) r
+            (drgnx-onboard-ai-test-budget 2))
+        (cl-letf (((symbol-function 'drgnx-ai-request) (lambda (&rest _) nil)))
+          (setq r (drgnx-onboard--ai-found '(:interactive nil))))
+        (should (< (- (drgnx-test-clock-now) t0) 6))
+        (should (= (nth 2 r) 0))
+        (should (= (nth 3 r) 3))
+        (should (string-match-p "not tested" (cadr r)))
+        (should-not (string-match-p "did not answer" (cadr r)))
+        (should (equal before (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld"))))))))
 
 ;; A project's ai.eld routes roles for that project only: the roles onboarding writes into the user's ai.eld start
 ;; from the user's own chain, never from the project's.
@@ -130,35 +133,40 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
 
 (ert-deftest drgnx-ai-onboard/the-role-tests-run-side-by-side ()
   ;; A provider that takes 2.5 s per call answers all three roles within the budget: one wait, not three in a row.
+  ;; FLAKY-2: on the clock fixture the provider's 2.5 s are virtual, and the budget is measured on virtual time (the
+  ;; step's waits move it by the real time they wait), so a loaded machine cannot fail it.
   (drgnx-ai-onboard-test--with
-    (let ((timers (list nil)) (t0 (float-time)) r (drgnx-onboard-ai-test-budget 8))
-      (unwind-protect
-          (cl-letf (((symbol-function 'drgnx-ai-request) (drgnx-ai-onboard-test--slow-request 2.5 timers)))
-            (setq r (drgnx-onboard--ai-found '(:interactive nil)))
-            (should (< (- (float-time) t0) 5.5))            ; three in a row: 7.5 s
-            (should (= (nth 2 r) 3))
-            (should (= (nth 3 r) 0))
-            (should (eq (car r) 'ok)))
-        (mapc #'cancel-timer (car timers))))))
+    (drgnx-test-with-clock ()
+      (let ((timers (list nil)) (t0 (drgnx-test-clock-now)) r (drgnx-onboard-ai-test-budget 8))
+        (unwind-protect
+            (cl-letf (((symbol-function 'drgnx-ai-request) (drgnx-ai-onboard-test--slow-request 2.5 timers)))
+              (setq r (drgnx-onboard--ai-found '(:interactive nil)))
+              (should (< (- (drgnx-test-clock-now) t0) 5.5))  ; three in a row: 7.5 s
+              (should (= (nth 2 r) 3))
+              (should (= (nth 3 r) 0))
+              (should (eq (car r) 'ok)))
+          (mapc #'cancel-timer (car timers)))))))
 
 (ert-deftest drgnx-ai-onboard/a-slow-provider-is-not-tested-and-never-sets-ai-up ()
   ;; Calls still waiting when the budget is up read "not tested", are not counted as asked, and the interactive step
   ;; does not offer "Set up AI with" for them.
+  ;; On the clock fixture: the 2 s budget and the provider's 30 s are virtual.
   (drgnx-ai-onboard-test--with
-    (let ((timers (list nil)) (drgnx-onboard-ai-test-budget 2) r (before (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld"))))
-      (unwind-protect
-          (cl-letf (((symbol-function 'drgnx-ai-request) (drgnx-ai-onboard-test--slow-request 30 timers))
-                    ((symbol-function 'completing-read) (lambda (&rest _) (error "asked")))
-                    ((symbol-function 'y-or-n-p) (lambda (&rest _) (error "asked"))))
-            (setq r (drgnx-onboard--ai-found '(:interactive t)))
-            (should (equal (list (nth 2 r) (nth 3 r)) '(0 3)))
-            (should (eq (car r) 'warn))
-            (should (string-match-p "complete: o/qwen2.5-coder:1.5b not tested" (cadr r)))
-            (let ((step (drgnx-onboard--ai-step '(:interactive t))))
-              (should (eq (car step) 'warn))
-              (should (string-match-p "not tested" (cadr step))))
-            (should (equal before (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld")))))
-        (mapc #'cancel-timer (car timers))))))
+    (drgnx-test-with-clock ()
+      (let ((timers (list nil)) (drgnx-onboard-ai-test-budget 2) r (before (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld"))))
+        (unwind-protect
+            (cl-letf (((symbol-function 'drgnx-ai-request) (drgnx-ai-onboard-test--slow-request 30 timers))
+                      ((symbol-function 'completing-read) (lambda (&rest _) (error "asked")))
+                      ((symbol-function 'y-or-n-p) (lambda (&rest _) (error "asked"))))
+              (setq r (drgnx-onboard--ai-found '(:interactive t)))
+              (should (equal (list (nth 2 r) (nth 3 r)) '(0 3)))
+              (should (eq (car r) 'warn))
+              (should (string-match-p "complete: o/qwen2.5-coder:1.5b not tested" (cadr r)))
+              (let ((step (drgnx-onboard--ai-step '(:interactive t))))
+                (should (eq (car step) 'warn))
+                (should (string-match-p "not tested" (cadr step))))
+              (should (equal before (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld")))))
+          (mapc #'cancel-timer (car timers)))))))
 
 (ert-deftest drgnx-ai-onboard/a-provider-that-refuses-at-once-did-not-answer ()
   (drgnx-ai-onboard-test--with

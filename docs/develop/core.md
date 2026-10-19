@@ -2568,3 +2568,56 @@ config is written with it. The readiness check is that report, so another progra
 the mock. A number instead of `nil` asks for that port and errors when it is taken. A "dead provider" that must refuse
 connections uses `(drgnx-test-free-port)`: a port a listener of this Emacs just bound and released. The mock CDP and
 MCP servers listen on `:service t` and return their port the same way.
+
+### Measuring in a unit test (`test/fixtures/measure-fixture.el`)
+
+A test that guards a cost asserts what load does not move. Load the fixture as the others are loaded:
+`(load (expand-file-name "test/fixtures/measure-fixture" drgnx-dir) nil t)`.
+
+- **Allocation first.** `(drgnx-test-alloc BODY…)` is what BODY allocates: one unmeasured run, then the least of three
+  measured runs of the `memory-use-counts` delta summed over its seven kinds (conses, floats, vector cells, symbols,
+  string characters, intervals, strings), less the 7 conses the reading itself makes, so an empty BODY gives 0. The
+  same code on the same Emacs gives the same number however loaded the machine is. A bound is
+  `ceil(1.25 × max(measured on 30.2, measured on 31.1))`, both numbers in the commit message; "stays linear" or "does
+  not scan the whole file" is a ratio between two sizes (A-45: the sticky segment at line 9000 allocates at most
+  1.25 × the one at line 1000; a walk over the lines between allocates 45231 against 5231).
+- **Compile what you measure.** Tests load code from source when it is newer than its `.elc`, and interpreted code
+  conses for its own bookkeeping. `(drgnx-test-compile PREFIX…)` byte-compiles in place every interpreted function
+  whose name starts with one of the prefix strings, so the number is what users run and does not depend on which
+  test compiled what before. BODY itself runs as written: its own `let`s count when the test file is loaded from source.
+- **CPU when allocation cannot say it.** `(drgnx-test-cpu-ms (&key (n 50)) BODY…)` is the median `current-cpu-time` of
+  N runs, in ms (with N even, the mean of the middle two). CPU time moves less with load than wall clock, but it
+  moves: keep 3× headroom over the host's median.
+- **Wall clock only with `:timing`.** A test that must time itself on the wall clock is tagged `:timing`; `check`
+  runs those alone. A budget on a wait (an onboarding step's seconds) runs on the clock fixture instead and reads
+  `drgnx-test-clock-now`: the step's timed waits move virtual time by the real time they wait, and a provider's delay is
+  a virtual timer, so a loaded machine cannot fail it (FLAKY-2, `drgnx-ai-onboard/the-role-tests-run-side-by-side`).
+
+### Scripted processes (`test/fixtures/scripted-process.el`)
+
+A race between a child's output, its exit and Emacs's reads (class C) shows up only under load, so a test forces the
+ordering instead of hoping for it. `(drgnx-test-scripted-process NAME &key buffer filter sentinel)` starts a `sh` child
+that does only what the test tells it, through a FIFO in a fresh directory under `temporary-file-directory` (never
+`~`; the child removes it when it exits). Its stdin is the process's own, so `process-send-string` and
+`process-send-eof` reach it as they would a real child.
+
+- `(drgnx-test-proc-emit P TEXT)`: the child writes TEXT to its stdout, after everything it was told before. The call
+  returns at once.
+- `(drgnx-test-proc-exit P CODE &key before-read)`: the child exits with CODE. With `:before-read t` the call returns
+  only once Emacs has recorded the exit, and it has read none of P's output and run no filter, sentinel or timer (it
+  blocks in `call-process`). Output and exit are then all pending when Emacs next reads, and `process-live-p` is
+  already nil while the sentinel has not run (M3b-19).
+- Telling an exited child anything more is an error.
+
+What Emacs guarantees, and what the tests (`drgnx-test-proc/`, each ordering 100 times out of 100) force:
+
+- **Output, then exit, before Emacs reads:** the filter gets all the output, and the sentinel runs after it.
+- **No filter call after the sentinel:** before it runs a sentinel, Emacs reads the output left and closes the pipe.
+  The sentinel can still run *inside* a filter call: a filter that waits (a nested `accept-process-output`, `sit-for`,
+  a synchronous request) lets the last output and the sentinel run before the call goes on. Code after a wait in a
+  filter must expect the process to be finished.
+- **`process-send-eof` after the exit** signals `Process NAME not running: finished` (A-44), before the sentinel and
+  after it: a runner that sends EOF to a child that may already have exited handles that error.
+
+Concurrency tests use explicit barriers (A-23) — a scripted step, a done flag, a marker the child writes — and never
+sleeps: a sleep only makes the race rarer.

@@ -3,6 +3,7 @@
 (require 'drgnx-ai-client)
 (require 'drgnx-ai-probe)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-ai-embed-test--with (spec chain &rest body)
   "BODY with a mock LLM server answering SPEC on PORT (its request LOG), providers `tei', `a' (openai), `o' (ollama),
@@ -38,13 +39,11 @@
 
 (defun drgnx-ai-embed-test--norm (v) (sqrt (cl-loop for x across v sum (* x x))))
 
-(defun drgnx-ai-embed-test--request (inputs)
-  "Ask the embed role for INPUTS and wait: (VECTORS . INFO)."
+(cl-defun drgnx-ai-embed-test--request (inputs &key (timeout 5))
+  "Ask the embed role for INPUTS (TIMEOUT per provider) and wait for the answer: (VECTORS . INFO)."
   (let (result)
-    (drgnx-ai-request 'embed 'embed (list :inputs inputs) (lambda (v info) (setq result (cons v info))) :timeout 5)
-    (let ((deadline (+ (float-time) 15)))
-      (while (and (not result) (< (float-time) deadline)) (accept-process-output nil 0.02)))
-    result))
+    (drgnx-ai-request 'embed 'embed (list :inputs inputs) (lambda (v info) (setq result (cons v info))) :timeout timeout)
+    (drgnx-test-wait (lambda () result) :what "the embed answer")))
 
 (defun drgnx-ai-embed-test--check (r)
   "R, a request result for two inputs answered with [3 4 0] and [0 0 2]: normalised."
@@ -165,11 +164,7 @@
 (ert-deftest drgnx-ai-embed/timeout-nil-means-no-limit ()
   (drgnx-ai-embed-test--with '((:path "/embed" :body "[[3,4,0],[0,0,2]]")) '((tei))
     (drgnx-ai-embed-test--check (cons (drgnx-ai-embed-sync ["one" "two"] :timeout nil) nil))
-    (let (result)
-      (drgnx-ai-request 'embed 'embed (list :inputs ["one" "two"]) (lambda (v info) (setq result (cons v info))) :timeout nil)
-      (let ((deadline (+ (float-time) 15)))
-        (while (and (not result) (< (float-time) deadline)) (accept-process-output nil 0.02)))
-      (drgnx-ai-embed-test--check result))))
+    (drgnx-ai-embed-test--check (drgnx-ai-embed-test--request ["one" "two"] :timeout nil))))
 
 (ert-deftest drgnx-ai-embed/an-empty-async-request-is-never-sent ()
   (drgnx-ai-embed-test--with nil '((tei))
