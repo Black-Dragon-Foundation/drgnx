@@ -26,13 +26,14 @@
 (require 'seq)
 (require 'drgnx-hooks)
 (require 'drgnx-modules)
+(require 'drgnx-timer)
+(require 'drgnx-frame-kind)
 (defvar corfu-mode)
 (defvar corfu-auto)
 (defvar corfu-auto-delay)
 (defvar corfu-auto-prefix)
 (defvar corfu-auto-commands)
 (defvar standard-display-table)
-(defvar drgnx-tty-popups--timer)
 (declare-function drgnx-tty-frames--tty-frames "drgnx-tty-frames")
 
 (defcustom drgnx-tty-popups-auto-completions t
@@ -81,9 +82,7 @@ Only these slots: the window dividers and everything else keep what they have.  
   "The live terminal frames of terminals Emacs set up."
   (if (fboundp 'drgnx-tty-frames--tty-frames)
       (drgnx-tty-frames--tty-frames)
-    (seq-filter (lambda (f) (and (frame-live-p f) (not (display-graphic-p f))
-                                 (not (equal (terminal-name (frame-terminal f)) "initial_terminal"))))
-                (frame-list))))
+    (seq-filter (lambda (f) (eq (drgnx-state-frame-kind f) 'tty)) (frame-list))))
 
 (defun drgnx-tty-popups--update-borders ()
   "Follow the terminals now connected: the table is shared, so one terminal that does not write UTF-8 makes the
@@ -190,8 +189,7 @@ without tty child frames.  A session with graphical windows only, or UTF-8 termi
       (advice-remove 'drgnx-chrome--set #'drgnx-tty-popups--chrome-set))
     (drgnx-tty-popups--hook shim 'post-command-hook #'drgnx-tty-popups--post-command)
     (unless shim
-      (when (timerp drgnx-tty-popups--timer) (cancel-timer drgnx-tty-popups--timer))
-      (setq drgnx-tty-popups--timer nil)
+      (drgnx-timer-cancel 'tty-popups-show)
       (drgnx-tty-popups--close))))
 
 ;;;; Each terminal frame
@@ -214,8 +212,8 @@ without tty child frames.  A session with graphical windows only, or UTF-8 termi
 
 (defun drgnx-tty-popups--frame-deleted (frame)
   "`delete-frame-functions': once it is gone, the terminals left decide the borders and the hooks again.
-A killed terminal's frames are dead when this runs (`frame-parent' signals on them): they count as top-level."
-  (unless (and (frame-live-p frame) (frame-parent frame))
+A killed terminal's frames are dead when this runs (the classifier says nil for them): they count as top-level."
+  (unless (eq (drgnx-state-frame-kind frame) 'child)
     (run-at-time 0 nil (lambda ()
                          (let ((inhibit-interaction t))
                            (condition-case nil
@@ -225,7 +223,6 @@ A killed terminal's frames are dead when this runs (`frame-parent' signals on th
 
 ;;;; Completion as you type on Emacs 30.2: the popup lane
 
-(defvar drgnx-tty-popups--timer nil "The timer that shows the candidates once typing pauses.")
 (defvar drgnx-tty-popups--ours nil
   "While the completion list showing is one this module started (and refreshes as you type): (BUFFER . FRAME) it
 was started in.  Nil otherwise.")
@@ -271,7 +268,6 @@ A completion list somebody else started (TAB) is left alone; one of ours is refr
 (defun drgnx-tty-popups--show (buffer tick)
   "The timer: show the candidates around point in the lane, unless typing went on (TICK changed) or a list somebody
 else started is showing.  Never prompts."
-  (setq drgnx-tty-popups--timer nil)
   (when (and (buffer-live-p buffer) (eq buffer (window-buffer (selected-window)))
              (drgnx-tty-popups--lane-p) (not (input-pending-p)))
     (with-current-buffer buffer
@@ -292,18 +288,16 @@ else started is showing.  Never prompts."
 (defun drgnx-tty-popups--post-command ()
   "`post-command-hook': after typing, show the candidates once typing pauses (`corfu-auto-delay'); our list goes
 when the selected buffer or frame is not the one it was started in."
-  (when (timerp drgnx-tty-popups--timer)
-    (cancel-timer drgnx-tty-popups--timer)
-    (setq drgnx-tty-popups--timer nil))
   (cond ((and drgnx-tty-popups--ours (not completion-in-region-mode))
          (setq drgnx-tty-popups--ours nil))     ; C-g, or leaving the word, ended it
         ((and drgnx-tty-popups--ours
               (not (equal drgnx-tty-popups--ours (cons (current-buffer) (selected-frame)))))
          (drgnx-tty-popups--close)))
-  (when (condition-case nil (drgnx-tty-popups--wanted-p) (error nil))
-    (setq drgnx-tty-popups--timer
-          (run-with-timer (if (boundp 'corfu-auto-delay) corfu-auto-delay 0.2) nil
-                          #'drgnx-tty-popups--show (current-buffer) (drgnx-tty-popups--tick)))))
+  (if (condition-case nil (drgnx-tty-popups--wanted-p) (error nil))
+      (drgnx-timer-debounce 'tty-popups-show (if (boundp 'corfu-auto-delay) corfu-auto-delay 0.2)
+                            #'drgnx-tty-popups--show :args (list (current-buffer) (drgnx-tty-popups--tick))
+                            :owner 'ui/terminal-popups)
+    (drgnx-timer-cancel 'tty-popups-show)))
 
 (drgnx-module-define 'ui/terminal-popups
                      :doc "Popups in terminal windows: corfu's child frame with box-drawing borders on 31.1, completion as you type in the popup lane on 30.2, ASCII marks on a terminal that does not write UTF-8."

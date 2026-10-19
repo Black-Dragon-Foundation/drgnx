@@ -21,6 +21,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-paths)
+(require 'drgnx-file)
 
 ;;;; Which terminal
 
@@ -459,12 +460,10 @@ to the default format, so it gains nothing."
 
 (defun drgnx-tty--read-report ()
   "terminal-report.eld from the state dir (written for each terminal frame), nil when missing, unreadable or
-not a plist.  Emacs's reader evaluates nothing (it has no read-time evaluation), so a planted file is only data."
-  (let ((file (expand-file-name "terminal-report.eld" (drgnx-state-dir))))
-    (when-let* ((data (ignore-errors
-                        (with-temp-buffer
-                          (insert-file-contents file)
-                          (read (current-buffer)))))
+not a plist.  `drgnx-file-read' reads one plain data form (nothing is evaluated), so a planted file is only data."
+  (let ((r (drgnx-file-read (expand-file-name "terminal-report.eld" (drgnx-state-dir)))))
+    (when-let* (((eq (plist-get r :status) 'ok))
+                (data (plist-get r :data))
                 ((and (consp data) (plistp data))))
       data)))
 

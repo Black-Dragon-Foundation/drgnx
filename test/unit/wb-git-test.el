@@ -1,5 +1,7 @@
 ;;; wb-git-test.el --- batch tests: git decorations -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'drgnx-git)
 (require 'drgnx-explorer)
 (require 'drgnx-buffers)
@@ -64,46 +66,48 @@ build/ ignored (with build/out.o)."
 (ert-deftest drgnx-git/the-explorer-shows-letters ()
   (skip-unless (executable-find "git"))
   (drgnx-git-test--repo root
-    (let ((drgnx-wb--sections nil) (drgnx-signal--editor-window nil))
-      (unwind-protect
-          (progn
-            (delete-other-windows)
-            (drgnx-explorer-setup)
-            (drgnx-explorer-set-roots (list root))
-            (drgnx-git-refresh root t)
-            (with-current-buffer drgnx-explorer-buffer-name
-              (drgnx-explorer--fontify (point-min) (point-max))
-              (cl-flet ((deco (name) (goto-char (point-min)) (search-forward name)
-                          (mapconcat (lambda (o) (or (overlay-get o 'after-string) ""))
-                                     (overlays-in (pos-bol) (1+ (pos-eol))) "")))
-                (should (string-search "U" (deco "c.txt")))
-                (should (string-search "●" (deco "src")))     ; a folder with changes inside
-                (should (string= "" (deco "a.txt"))))))
-        (drgnx-wb-hide-sidebar)
-        (drgnx-explorer-set-roots nil)                ; its watches go: no events from the folder's removal
-        (kill-buffer drgnx-explorer-buffer-name)))))
+    (drgnx-test-with-state
+      (let ((drgnx-wb--sections nil))
+        (unwind-protect
+            (progn
+              (delete-other-windows)
+              (drgnx-explorer-setup)
+              (drgnx-explorer-set-roots (list root))
+              (drgnx-git-refresh root t)
+              (with-current-buffer drgnx-explorer-buffer-name
+                (drgnx-explorer--fontify (point-min) (point-max))
+                (cl-flet ((deco (name) (goto-char (point-min)) (search-forward name)
+                            (mapconcat (lambda (o) (or (overlay-get o 'after-string) ""))
+                                       (overlays-in (pos-bol) (1+ (pos-eol))) "")))
+                  (should (string-search "U" (deco "c.txt")))
+                  (should (string-search "●" (deco "src")))     ; a folder with changes inside
+                  (should (string= "" (deco "a.txt"))))))
+          (drgnx-wb-hide-sidebar)
+          (drgnx-explorer-set-roots nil)                ; its watches go: no events from the folder's removal
+          (kill-buffer drgnx-explorer-buffer-name))))))
 
 (ert-deftest drgnx-git/the-buffers-panel-shows-letters ()
   (skip-unless (executable-find "git"))
   (drgnx-git-test--repo root
-    (let ((drgnx-signal--subscribers nil) (drgnx-signal--state nil) (drgnx-wb--sections nil)
-          (drgnx-buffers--order nil) (drgnx-buffers--signature nil) (drgnx-signal--editor-window nil)
-          (b (find-file-noselect (expand-file-name "src/b.txt" root))))
-      (unwind-protect
-          (progn
-            (delete-other-windows)
-            (drgnx-buffers-setup)
-            (drgnx-git-refresh root t)
-            (drgnx-signal--flush)
-            (drgnx-wb-show-sidebar)
-            (with-current-buffer drgnx-buffers-buffer-name
-              (drgnx-buffers--fontify (point-min) (point-max))
-              (goto-char (drgnx-buffers--row-pos b))
-              (should (string-search "M" (mapconcat (lambda (o) (or (overlay-get o 'after-string) ""))
-                                                    (overlays-in (pos-bol) (1+ (pos-eol))) "")))))
-        (drgnx-wb-hide-sidebar)
-        (kill-buffer b)
-        (when (get-buffer drgnx-buffers-buffer-name) (kill-buffer drgnx-buffers-buffer-name))))))
+    (drgnx-test-with-state
+      (let ((drgnx-wb--sections nil)
+            (drgnx-buffers--order nil) (drgnx-buffers--signature nil)
+            (b (find-file-noselect (expand-file-name "src/b.txt" root))))
+        (unwind-protect
+            (progn
+              (delete-other-windows)
+              (drgnx-buffers-setup)
+              (drgnx-git-refresh root t)
+              (drgnx-signal--flush)
+              (drgnx-wb-show-sidebar)
+              (with-current-buffer drgnx-buffers-buffer-name
+                (drgnx-buffers--fontify (point-min) (point-max))
+                (goto-char (drgnx-buffers--row-pos b))
+                (should (string-search "M" (mapconcat (lambda (o) (or (overlay-get o 'after-string) ""))
+                                                      (overlays-in (pos-bol) (1+ (pos-eol))) "")))))
+          (drgnx-wb-hide-sidebar)
+          (kill-buffer b)
+          (when (get-buffer drgnx-buffers-buffer-name) (kill-buffer drgnx-buffers-buffer-name)))))))
 
 (ert-deftest drgnx-git/huge-ignored-lists-are-skipped ()
   ;; Ignored files only dim rows; past the limit they are not parsed (a build tree inside tracked folders).
@@ -176,3 +180,60 @@ build/ ignored (with build/out.o)."
       (puthash "/tmp/other/" 'none drgnx-git--roots)
       (should-not (drgnx-git-cached-root "/tmp/other/a.el"))
       (should-not (drgnx-git-cached-root "/ssh:host:/tmp/repo/src/a.el")))))
+
+;;;; The status cache is capped (PERF-M5)
+
+(defmacro drgnx-git-test--many-repos (roots n &rest body)
+  "BODY with ROOTS the N repositories (each with an untracked u.txt) of a temp folder, and empty git caches."
+  (declare (indent 2))
+  `(let* ((parent (file-name-as-directory (make-temp-file "drgnx-git-many" t)))
+          (drgnx-git--roots (make-hash-table :test #'equal))
+          (,roots (cl-loop for i below ,n
+                           collect (let ((d (file-name-as-directory (expand-file-name (format "r%02d" i) parent))))
+                                     (make-directory d t)
+                                     (let ((default-directory d)) (call-process "git" nil nil nil "init" "-q"))
+                                     (write-region "u\n" nil (expand-file-name "u.txt" d) nil 'silent)
+                                     d))))
+     (drgnx-cache--clear 'git-status)
+     (unwind-protect (progn ,@body)
+       (drgnx-cache--clear 'git-status)
+       (delete-directory parent t))))
+
+(ert-deftest drgnx-git/status-of-at-most-16-roots-is-kept ()
+  (skip-unless (executable-find "git"))
+  (drgnx-git-test--many-repos roots 20
+    (dolist (r roots) (drgnx-git-refresh r t))
+    (should (= (drgnx-cache-size 'git-status) 16))
+    (should (equal (seq-find (lambda (row) (eq (car row) 'git-status)) (drgnx-memo-census)) '(git-status cache 16 16)))
+    (should-not (drgnx-git-status (expand-file-name "u.txt" (car roots))))           ; the four oldest went
+    (should-not (drgnx-git-status (expand-file-name "u.txt" (nth 3 roots))))
+    (should (eq (drgnx-git-status (expand-file-name "u.txt" (nth 4 roots))) 'untracked))
+    (should (eq (drgnx-git-status (expand-file-name "u.txt" (car (last roots)))) 'untracked))))
+
+(ert-deftest drgnx-git/an-evicted-root-is-read-again-on-demand ()
+  (skip-unless (executable-find "git"))
+  (drgnx-git-test--many-repos roots 18
+    (dolist (r roots) (drgnx-git-refresh r t))
+    (let ((first (expand-file-name "u.txt" (car roots))))
+      (should-not (drgnx-git-status first))                                          ; evicted
+      (drgnx-git-refresh (car roots) t)                                              ; asked for again
+      (should (eq (drgnx-git-status first) 'untracked))
+      (should (= (drgnx-cache-size 'git-status) 16)))))
+
+(ert-deftest drgnx-git/an-evicted-root-comes-back-when-its-run-finishes ()
+  ;; A root pushed out while its git runs is not killed: its result puts the root back.
+  (skip-unless (executable-find "git"))
+  (drgnx-git-test--many-repos roots 1
+    (let ((root (car roots)) proc)
+      (drgnx-git-refresh root)                                                       ; in the background
+      (setq proc (plist-get (drgnx-cache-get 'git-status root) :proc))
+      (should proc)
+      (dotimes (i 16) (drgnx-cache-put 'git-status (format "/tmp/drgnx-fill-%d/" i) (list :branch nil)))
+      (should-not (drgnx-cache-get 'git-status root))                                ; evicted while running
+      (let ((n 0))
+        (while (and (not (plist-get (drgnx-cache-get 'git-status root) :files)) (< (cl-incf n) 200))
+          (accept-process-output nil 0.05)))
+      (should-not (eq (process-status proc) 'signal))                                ; never killed
+      (should (= (process-exit-status proc) 0))
+      (should (eq (drgnx-git-status (expand-file-name "u.txt" root)) 'untracked))
+      (should (= (drgnx-cache-size 'git-status) 16)))))

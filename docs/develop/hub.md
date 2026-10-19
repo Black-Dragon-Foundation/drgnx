@@ -115,6 +115,8 @@ inherits: a hub whose parent is gone exits (checked each second), so an interrup
 
 ## Events
 
+The hub's own timers are layer timers keyed `hub-tick`, `hub-deliver`, `(hub-flush . ID)`, `hub-events` and `hub-exit` ([core.md](core.md#the-acp-watchdog-and-the-hubs-timers)): a burst of session changes delivers once, and `events` go at most every `drgnx-hub-events-interval`.
+
 The hub turns what happens into events in the store's event log ([coordination.md](coordination.md), `event`):
 
 - **Native sessions** (`drgnx-hub--session-events`, on each change of a session):
@@ -156,7 +158,9 @@ On each change to a session the hub keeps `<state>/hub/sessions.eld` (mode 0600,
 only when it differs): `(:id :name :profile :cwd :acp-id :task)` of each live session the agent made, oldest first —
 not a job's (a job frees the task of an agent the hub took with it and starts it again). A hub that starts, once it
 serves, resumes each with `drgnx-agents-take-over` (ACP `session/load`) under its own id and name (messages and
-spend follow them); a file that is not a list of sessions is logged and resumes none: the agent replays the
+spend follow them); a file that cannot be read, or is not a list of sessions, is copied aside
+(`sessions.eld.bak-…`, `drgnx-file-backup`), logged in one line and resumes none (the next save replaces it, the
+backup keeps the bytes): the agent replays the
 history into the transcript and the session is idle; an editor that reconnects fetches it again (`agents/get`). A
 session whose agent cannot load sessions (no `loadSession`, or an error) ends and says why, and so leaves the file.
 What was in flight is gone: a turn that was running, the queue, a pending permission or edit.
@@ -165,9 +169,14 @@ What was in flight is gone: a turn that was running, the queue, a pending permis
 
 `gateway/register` returns a token of 64 hex digits (32 bytes of `/dev/urandom`). The hub keeps
 `<state>/hub/registrations.eld` (mode 0600): `((SHA256-OF-TOKEN . REGISTRATION)…)` — never a token, never a key —
-written to a temporary file beside it, synced to disk (`write-region-inhibit-fsync` nil; the directory is not
-synced, which Emacs cannot do) and renamed over it (a hub or a machine that dies mid-write leaves the old one whole), and
-reads it back when it starts (a file it cannot read is logged: those agents register again); it also keeps the gateway's port (`<state>/hub/port`) and binds it again, so agents
+written by `drgnx-hub--write-private` = `drgnx-file-write` with `:private t` (a temporary file beside it, synced to
+disk — the directory is not synced, which Emacs cannot do — and renamed over it, so a hub or a machine that dies
+mid-write leaves the old one whole; an old file loses its group and other bits; content over 1 MiB or not plain data is
+refused and the file untouched), and
+reads it back with `drgnx-file-read` when it starts (a file it cannot read is copied aside as
+`registrations.eld.bak-…` and logged in one line: those agents register again). Both files and the port file are
+read and written by the hub only; the hub's pid file (`drgnx-hub--take-lock`) is its own lock protocol and stays
+outside the layer. It also keeps the gateway's port (`<state>/hub/port`, written with `drgnx-file-write-text`) and binds it again, so agents
 keep working across a hub restart (when the port is taken meanwhile, a new one is used and the log says so). A
 session's token is unregistered when its agent exits or is killed. Tokens have no expiry; instead a registration
 names its `owner`, the pid of the Emacs that registered it (`drgnx-agents--gateway` sends its own: the agent is its

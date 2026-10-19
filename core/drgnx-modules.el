@@ -18,14 +18,16 @@
 (require 'seq)
 (require 'tabulated-list)
 (require 'drgnx-paths)
+(require 'drgnx-file)
+(require 'drgnx-config)
 (require 'drgnx-hooks)
 (require 'drgnx-pkg-activate)
 (require 'drgnx-modules-record)
+(require 'drgnx-timer)
 (require 'drgnx-modules-helpers)
 
 (defvar drgnx-modules--table nil "Alist NAME → plist (:doc :stage … :file), in definition order.")
-(defvar drgnx-modules--report nil "Alist NAME → plist (:stage :ms :status :error :missing).")
-(defvar drgnx-modules--state nil "The user's modules.eld, read once.")
+(defvar drgnx-modules--report nil "Alist NAME → plist (:stage :ms :status :error :missing :problems :left).")
 (defconst drgnx-modules-stages '(startup idle first-frame first-file first-input))
 (defconst drgnx-modules-state-version 2
   "Format of modules.eld.  2: it holds `:enabled' (format 1 had no such field).  An older drgnx reads
@@ -53,78 +55,60 @@ turned it off) or `off' (it stays off, with its packages, until chosen: modules.
 
 ;;;; modules.eld
 
-(defun drgnx-modules--state-file () (expand-file-name "modules.eld" (drgnx-user-dir)))
+(defun drgnx-modules--from-v0 (data)
+  "Format 0 of modules.eld, a bare list of the disabled modules → format 1's plist."
+  (list :disabled data))
 
-(defvar drgnx-modules--state-foreign nil
-  "Non-nil when modules.eld could not be read as ours (unreadable, another format, newer): it is
-backed up before drgnx writes it.")
+(drgnx-config-define 'modules
+                     :file "modules.eld" :shape 'plist :version drgnx-modules-state-version
+                     :migrate '((0 . drgnx-modules--from-v0) (1 . identity))
+                     :schema '(plist (:disabled (list-of symbol) "Modules you turned off")
+                                     (:enabled (list-of symbol) "Modules that are off until chosen, chosen on")
+                                     (:flags (alist symbol (list-of symbol)) "Module flags")
+                                     (:external (list-of any) "External modules (each is checked when it loads)")
+                                     (:theme symbol "The colour theme onboarding chose"))
+                     :default '(:disabled nil) :reload 'start :last-good t
+                     :header ";; drgnx modules: what you turned off or on, module flags, external modules (docs/guide/modules.md).\n"
+                     :doc "Which modules run, their flags, external modules.")
 
 (defun drgnx-modules--external-ok-p (e)
   (and (consp e) (keywordp (car e)) (symbolp (plist-get e :name))
        (stringp (plist-get e :path)) (listp (plist-get e :features))))
 
-(defun drgnx-modules--valid (state)
-  "STATE with every malformed field dropped (a message each) — a typo never stops startup.  A
-malformed external entry is kept (written back unchanged) and listed as failed."
-  (let ((out (list :version drgnx-modules-state-version))
-        (d (plist-get state :disabled)) (f (plist-get state :flags)) (x (plist-get state :external))
-        (e (plist-get state :enabled)) (theme (plist-get state :theme)))
-    (if (and (listp d) (seq-every-p #'symbolp d)) (setq out (plist-put out :disabled d))
-      (message "drgnx: modules.eld :disabled must be a list of modules; ignored"))
-    (when (plist-member state :enabled)               ; absent stays absent
-      (if (and (listp e) (seq-every-p #'symbolp e)) (setq out (plist-put out :enabled e))
-        (message "drgnx: modules.eld :enabled must be a list of modules; ignored")))
-    (if (and (listp f) (seq-every-p (lambda (e) (and (consp e) (symbolp (car e)) (listp (cdr e)))) f))
-        (setq out (plist-put out :flags f))
-      (message "drgnx: modules.eld :flags must be ((MODULE FLAG …) …); ignored"))
-    (when (listp x)
-      (dolist (e x)
-        (unless (drgnx-modules--external-ok-p e)
-          (message "drgnx: modules.eld :external entry %S needs :name, :path and :features; not loaded" e)))
-      (setq out (plist-put out :external x)))
-    (when (and theme (symbolp theme)) (setq out (plist-put out :theme theme)))
-    out))
-
-(defun drgnx-modules--migrate (data)
-  "DATA from any format → the current one, or nil if it is not a modules.eld (or a newer one).
-Format 1 is format 2 without `:enabled'; it needs no change."
-  (cond ((and (listp data) (keywordp (car data)) (memql (plist-get data :version) '(1 2)))
-         (drgnx-modules--valid data))
-        ((and (listp data) (seq-every-p #'symbolp data))         ; version 0: the disabled modules
-         (list :version drgnx-modules-state-version :disabled data))))
-
 (defun drgnx-modules-read-state ()
-  "The user's modules.eld (migrated), or defaults; never an error at start."
-  (or drgnx-modules--state
-      (setq drgnx-modules--state
-            (let* ((file (drgnx-modules--state-file))
-                   (data (and (file-readable-p file)
-                              (condition-case err (with-temp-buffer (insert-file-contents file) (read (current-buffer)))
-                                (error (message "drgnx: modules.eld is unreadable (%s); modules use their defaults"
-                                                (error-message-string err))
-                                       :unreadable)))))
-              (setq drgnx-modules--state-foreign nil)
-              (or (and data (not (eq data :unreadable))
-                       (or (drgnx-modules--migrate data)
-                           (progn (message "drgnx: %s is not a modules file of this drgnx; modules use their defaults" file)
-                                  nil)))
-                  (progn (when data (setq drgnx-modules--state-foreign t))
-                         (list :version drgnx-modules-state-version)))))))
+  "The user's modules.eld as this Emacs applied it at its start (or after its own write): a plist, the default when
+the file is absent or has a mistake; never an error at start.  Do not change it: it is shared."
+  (drgnx-config-get 'modules))
 
-(defun drgnx-modules-write-state (state)
-  "Write STATE as the user's modules.eld."
-  (let ((file (drgnx-modules--state-file)))
-    (make-directory (file-name-directory file) t)
-    (when (and drgnx-modules--state-foreign (file-exists-p file))   ; never lose what we could not read
-      (let ((bak (format "%s.bak-%s" file (format-time-string "%Y%m%d-%H%M%S"))))
-        (copy-file file bak t)
-        (message "drgnx: kept your previous modules.eld as %s" bak))
-      (setq drgnx-modules--state-foreign nil))
-    (with-temp-file file
-      (insert ";; drgnx modules: what you turned off or on, module flags, external modules (docs/guide/modules.md).\n")
-      (let ((print-length nil) (print-level nil)) (pp (plist-put state :version drgnx-modules-state-version) (current-buffer))))
-    (setq drgnx-modules--state nil)
-    state))
+(defun drgnx-modules-update-state (fn)
+  "Change modules.eld: (FN STATE) under the file's lock, on a fresh read (STATE is nil when the file is absent), so a
+change another Emacs just made is kept.  FN returns the new plist and may not move the keys the file has; only the keys
+it changed are written (comments and other keys stay).  Signals `drgnx-config-refused' for a file with a mistake or one
+a newer drgnx wrote, and leaves it as it was.  Returns the new state."
+  (drgnx-config-update 'modules fn))
+
+(defun drgnx-modules--put-list (state key items)
+  "A copy of the plist STATE with KEY's list ITEMS; an empty list does not add a key the file has not."
+  (if (or items (plist-member state key)) (plist-put (copy-sequence state) key items) state))
+
+(defun drgnx-modules--disabled-in (state module &optional default)
+  "Whether MODULE does not run by the plist STATE (a modules.eld): in :disabled, or its default (DEFAULT when
+given, else the one it was defined with) is `off' and it is not in :enabled.  :disabled wins."
+  (or (memq module (plist-get state :disabled))
+      (and (eq (or default (if (drgnx-module-default-off-p module) 'off 'on)) 'off)
+           (not (memq module (plist-get state :enabled))))))
+
+(defun drgnx-modules--choose (state module on)
+  "The plist STATE with MODULE chosen ON or off: a module that is off until chosen is in :enabled when on; one that
+is on by default is in :disabled when off."
+  (let* ((off-default (drgnx-module-default-off-p module))
+         (enabled (plist-get state :enabled))
+         (disabled (remq module (plist-get state :disabled))))
+    (setq enabled (if (and off-default on)
+                      (if (memq module enabled) enabled (append enabled (list module)))
+                    (remq module enabled)))
+    (unless (or off-default on) (setq disabled (append disabled (list module))))
+    (drgnx-modules--put-list (drgnx-modules--put-list state :enabled enabled) :disabled disabled)))
 
 (defun drgnx-module-flag-p (module flag)
   "Non-nil if the user turned FLAG on for MODULE."
@@ -137,31 +121,21 @@ Format 1 is format 2 without `:enabled'; it needs no change."
 (defun drgnx-module-disabled-p (module &optional default)
   "Non-nil if MODULE does not run: in modules.eld :disabled, or its default (DEFAULT when given, else
 the one it was defined with) is `off' and it is not in :enabled.  :disabled wins."
-  (let ((state (drgnx-modules-read-state)))
-    (or (memq module (plist-get state :disabled))
-        (and (eq (or default (if (drgnx-module-default-off-p module) 'off 'on)) 'off)
-             (not (memq module (plist-get state :enabled)))))))
+  (drgnx-modules--disabled-in (drgnx-modules-read-state) module default))
 
 (defun drgnx-modules-set-enabled (module on)
   "Choose MODULE on or off in modules.eld.  A module that is off until chosen: ON adds it to :enabled and
 takes it out of :disabled; off takes it out of :enabled.  One that is on by default: ON takes it out of
 :disabled, off puts it there.  MODULE must be defined (its default is read from the table).  Returns
-the new state."
-  (let* ((state (copy-sequence (drgnx-modules-read-state)))
-         (enabled (remq module (plist-get state :enabled)))
-         (disabled (remq module (plist-get state :disabled))))
-    (cond ((drgnx-module-default-off-p module)       ; on by default: only :disabled matters
-           (when on (setq enabled (append enabled (list module)))))
-          ((not on) (setq disabled (append disabled (list module)))))
-    (when (or enabled (plist-member state :enabled)) (setq state (plist-put state :enabled enabled)))
-    (drgnx-modules-write-state (plist-put state :disabled disabled))
-    (drgnx-modules-read-state)))
+the new state; `drgnx-config-refused' for a file with a mistake or a newer one."
+  (drgnx-modules-update-state (lambda (state) (drgnx-modules--choose state module on))))
 
 ;;;; Running
 
 (defun drgnx-modules--record (name stage ms status &optional err missing problems)
   (setf (alist-get name drgnx-modules--report)
-        (list :stage stage :ms ms :status status :error err :missing missing :problems problems)))
+        (list :stage stage :ms ms :status status :error err :missing missing :problems problems
+              :left (alist-get name drgnx-modules--left))))
 
 (defun drgnx-modules--ok-p (name) (eq (plist-get (alist-get name drgnx-modules--report) :status) 'ok))
 
@@ -233,16 +207,14 @@ load is reported as module <category>/<file name>, naming the library it loaded 
 (defun drgnx-modules-write-report ()
   "Save the report for `drgnx doctor' (it runs in another process)."
   (ignore-errors
-    (let ((file (expand-file-name "modules-report.eld" (drgnx-state-dir))))
-      (make-directory (file-name-directory file) t)
-      (with-temp-file file
-        (let ((print-length nil) (print-level nil))
-          (prin1 (mapcar (lambda (m) (cons (car m) (list :status (plist-get (cdr m) :status)
-                                                         :error (plist-get (cdr m) :error)
-                                                         :missing (plist-get (cdr m) :missing)
-                                                         :problems (plist-get (cdr m) :problems))))
-                         drgnx-modules--report)
-                 (current-buffer)))))))
+    (drgnx-file-write (expand-file-name "modules-report.eld" (drgnx-state-dir))
+                      (mapcar (lambda (m) (cons (car m) (list :status (plist-get (cdr m) :status)
+                                                              :error (plist-get (cdr m) :error)
+                                                              :missing (plist-get (cdr m) :missing)
+                                                              :problems (plist-get (cdr m) :problems)
+                                                              :left (plist-get (cdr m) :left))))
+                              drgnx-modules--report)
+                      :fsync nil)))
 
 (defvar use-package-ensure-function)
 (declare-function package-desc-name "package")
@@ -300,6 +272,10 @@ never stops Emacs — nothing is installed (the module waits for the package, as
                                     (cond (wanted 'missing-packages) (err 'failed) (t 'ok)) err wanted)))))))
    (plist-get (drgnx-modules-read-state) :external)))
 
+(defun drgnx-modules--idle-step (step)
+  "One step of the idle stage (`drgnx-modules-start'): call STEP."
+  (funcall step))
+
 (defun drgnx-modules-start (dir)
   "Load the modules in DIR, run the startup stage now and the others when their moment comes."
   (drgnx-modules-load-directory dir)
@@ -313,7 +289,11 @@ never stops Emacs — nothing is installed (the module waits for the package, as
                         (list (lambda ()
                                 (when ran (run-hook-with-args 'drgnx-modules-after-stage-functions 'idle))
                                 (drgnx-modules-write-report))))))
-    (seq-do-indexed (lambda (step i) (run-with-idle-timer (+ 1 (* 0.05 i)) nil step)) steps))
+    ;; Emacs-lifetime startup work with no module to own it: `:core'.
+    (seq-do-indexed (lambda (step i)
+                      (drgnx-timer-start (cons 'modules-idle-step i) (+ 1 (* 0.05 i)) #'drgnx-modules--idle-step
+                                         :idle t :args (list step) :owner :core))
+                    steps))
   (pcase-dolist (`(,hook . ,stage) '((drgnx-first-gui-frame-hook . first-frame) (drgnx-first-file-hook . first-file)
                                      (drgnx-first-input-hook . first-input)))
     (add-hook hook (lambda () (drgnx-modules-run stage))))
@@ -348,26 +328,33 @@ never stops Emacs — nothing is installed (the module waits for the package, as
           (feature (format "%s from %s" feature (plist-get ext :path)))
           (t (format "%s: %s" (plist-get ext :path) (mapconcat #'symbol-name (plist-get ext :features) " "))))))
 
+(defun drgnx-modules--next-state ()
+  "The modules.eld the next start will read: the file as it is now, else (it is absent or has a mistake) what this
+Emacs applied."
+  (let ((r (drgnx-config-read 'modules)))
+    (if (memq (plist-get r :status) '(ok migrated newer absent)) (plist-get r :data) (drgnx-modules-read-state))))
+
 (defun drgnx-modules--entries ()
-  (mapcar (lambda (m)
-            (let* ((name (car m)) (r (alist-get name drgnx-modules--report)) (st (plist-get r :status)))
-              (list name (vector (symbol-name name)
-                                 (pcase st ('missing-packages (format "needs %s" (mapconcat #'symbol-name (plist-get r :missing) " ")))
-                                        ('missing-requires (format "needs %s" (mapconcat #'symbol-name (plist-get r :missing) " ")))
-                                        ('failed (format "failed: %s" (plist-get r :error)))
-                                        ('nil "not run yet") (_ (symbol-name st)))
-                                 (symbol-name (or (plist-get (cdr m) :stage) (plist-get r :stage) 'load))
-                                 (format "%s" (or (plist-get r :ms) ""))
-                                 (cond ((not (drgnx-module-disabled-p name)) "on")
-                                       ((and (drgnx-module-default-off-p name)
-                                             (not (memq name (plist-get (drgnx-modules-read-state) :disabled))))
-                                        "off (chosen by the key profile)")
-                                       (t "off at next start"))
-                                 (or (plist-get (cdr m) :doc)
-                                     (if (string-prefix-p "external/" (symbol-name name)) (drgnx-modules--external-about name) ""))))))
-          ;; The table, and what only the report knows: external modules, files that failed to load.
-          (append drgnx-modules--table
-                  (seq-remove (lambda (r) (assq (car r) drgnx-modules--table)) (reverse drgnx-modules--report)))))
+  (let ((next (drgnx-modules--next-state)))
+    (mapcar (lambda (m)
+              (let* ((name (car m)) (r (alist-get name drgnx-modules--report)) (st (plist-get r :status)))
+                (list name (vector (symbol-name name)
+                                   (pcase st ('missing-packages (format "needs %s" (mapconcat #'symbol-name (plist-get r :missing) " ")))
+                                          ('missing-requires (format "needs %s" (mapconcat #'symbol-name (plist-get r :missing) " ")))
+                                          ('failed (format "failed: %s" (plist-get r :error)))
+                                          ('nil "not run yet") (_ (symbol-name st)))
+                                   (symbol-name (or (plist-get (cdr m) :stage) (plist-get r :stage) 'load))
+                                   (format "%s" (or (plist-get r :ms) ""))
+                                   (cond ((not (drgnx-modules--disabled-in next name)) "on")
+                                         ((and (drgnx-module-default-off-p name)
+                                               (not (memq name (plist-get next :disabled))))
+                                          "off (chosen by the key profile)")
+                                         (t "off at next start"))
+                                   (or (plist-get (cdr m) :doc)
+                                       (if (string-prefix-p "external/" (symbol-name name)) (drgnx-modules--external-about name) ""))))))
+            ;; The table, and what only the report knows: external modules, files that failed to load.
+            (append drgnx-modules--table
+                    (seq-remove (lambda (r) (assq (car r) drgnx-modules--table)) (reverse drgnx-modules--report))))))
 
 (defun drgnx-modules-list ()
   "Show every module, its status and whether it runs at the next start (\\[drgnx-modules-list-toggle] turns it on or off)."
@@ -382,10 +369,8 @@ never stops Emacs — nothing is installed (the module waits for the package, as
 
 (defun drgnx-modules-toggle (module)
   "Turn MODULE off at the next start, or back on (a module that is off until chosen: in or out of :enabled)."
-  (if (drgnx-module-default-off-p module)
-      (drgnx-modules-set-enabled module (and (drgnx-module-disabled-p module) t))
-    (let* ((state (copy-sequence (drgnx-modules-read-state))) (off (plist-get state :disabled)))
-      (drgnx-modules-write-state (plist-put state :disabled (if (memq module off) (remq module off) (append off (list module)))))))
+  (drgnx-modules-update-state            ; the direction comes from the file as it is now, not from this Emacs's copy
+   (lambda (state) (drgnx-modules--choose state module (and (drgnx-modules--disabled-in state module) t))))
   (when-let* ((b (get-buffer "*drgnx modules*"))) (with-current-buffer b (tabulated-list-print t))))
 
 (defun drgnx-modules-list-toggle ()

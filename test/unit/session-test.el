@@ -1,6 +1,8 @@
 ;;; session-test.el --- batch tests: closing the last window, quitting, the keep-running choice -*- lexical-binding: t -*-
 ;; Frames, `kill-emacs', `delete-frame' and `save-some-buffers' are stubs; session.eld lives in a temp config dir.
 (require 'ert)
+(require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'cl-lib)
 (require 'drgnx)
 (require 'drgnx-session)
@@ -160,8 +162,9 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
   (drgnx-session-test--with (:keep-running t)
     (drgnx-session-set-keep-running nil)
     (should-not drgnx-keep-running)
-    (should (equal (with-temp-buffer (insert-file-contents (expand-file-name "session.eld" dir)) (read (current-buffer)))
-                   '(:keep-running nil)))
+    (let ((data (with-temp-buffer (insert-file-contents (expand-file-name "session.eld" dir)) (read (current-buffer)))))
+      (should (plist-member data :keep-running))
+      (should-not (plist-get data :keep-running)))
     (setq drgnx-keep-running t)
     (drgnx-session-load)                      ; what the next start does
     (should-not drgnx-keep-running)
@@ -171,9 +174,11 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
     (should (eq drgnx-keep-running t))
     ;; no file, or a broken one: the default stays
     (delete-file (expand-file-name "session.eld" dir))
+    (drgnx-config-reread 'session)            ; the config layer reads session.eld once per start
     (drgnx-session-load)
     (should (eq drgnx-keep-running t))
     (write-region "(:keep-running" nil (expand-file-name "session.eld" dir))
+    (drgnx-config-reread 'session)
     (drgnx-session-load)
     (should (eq drgnx-keep-running t))))
 
@@ -238,15 +243,18 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
           (should (eq focused-in (selected-frame)))
           (should (equal roots (list dir)))
           (setq term "initial_terminal")
-          (drgnx-session-open-folder dir)
+          (let ((noninteractive nil))   ; batch Emacs's initial terminal is a `tty' workbench; a daemon's is `initial'
+            (drgnx-session-open-folder dir))
           (should (= raised 1)))
       (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
       (delete-directory dir t))))
 
 (ert-deftest drgnx-session/no-window-in-batch ()
-  ;; A daemon's (or batch Emacs's) own terminal frame is not a window.
-  (should-not (drgnx-session-gui-frame-p))
-  (should-not (drgnx-session--windows)))
+  ;; A daemon's own terminal frame is not a window (batch Emacs counts as a terminal workbench, so the test says it
+  ;; is not batch: the classifier then calls the frame `initial').
+  (let ((noninteractive nil))
+    (should-not (drgnx-session-gui-frame-p))
+    (should-not (drgnx-session--windows))))
 
 (defun drgnx-session-test--repo (root name file)
   "A git repo NAME under ROOT holding FILE; its directory."
@@ -259,38 +267,40 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
 (ert-deftest drgnx-session/opening-a-folder-makes-it-the-project ()
   ;; The real Explorer in a one-editor layout.  After `drgnx DIR' quick open and project search (which follow the
   ;; selected window's buffer) work in DIR's project — also when a file of another project was in front.
-  (let* ((root (file-name-as-directory (make-temp-file "drgnx-session-folder" t)))
-         (a (drgnx-session-test--repo root "projA" "a.py"))
-         (b (drgnx-session-test--repo root "My Project" "café.py"))
-         (project-list-file (expand-file-name "projects" root))
-         (drgnx-wb--sections nil) (drgnx-signal--editor-window nil) (drgnx-explorer--roots nil)
-         (raised 0) buf)
-    (unwind-protect
-        (cl-letf (((symbol-function 'drgnx-session-raise) (lambda () (cl-incf raised))))
-          (delete-other-windows)
-          (drgnx-explorer-setup)
-          (setq buf (find-file-noselect (expand-file-name "a.py" a)))
-          (switch-to-buffer buf)                    ; project A's file in front, as after a restore
-          (drgnx-session-open-folder (directory-file-name b))
-          (should (= raised 1))
-          (with-current-buffer (window-buffer (selected-window))
-            (should (equal (buffer-name) drgnx-explorer-buffer-name))   ; the Explorer is selected
-            (let ((p (project-current nil)))
-              (should p)
-              (should (equal (expand-file-name (project-root p)) b))
-              (should (member (expand-file-name "café.py" b) (project-files p)))))
-          (should (drgnx-wb-sidebar-showing-p))
-          ;; the other folder: first now, the first one stays
-          (drgnx-session-open-folder a)
-          (should (equal (drgnx-explorer-roots) (list a b)))
-          (with-current-buffer (window-buffer (selected-window))
-            (should (equal (expand-file-name (project-root (project-current nil))) a))))
-      (when (buffer-live-p buf) (kill-buffer buf))
-      (drgnx-wb-hide-sidebar)
-      (delete-other-windows)
-      (drgnx-explorer-set-roots nil)
-      (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
-      (delete-directory root t))))
+  (drgnx-test-with-state
+    (let* ((root (file-name-as-directory (make-temp-file "drgnx-session-folder" t)))
+           (a (drgnx-session-test--repo root "projA" "a.py"))
+           (b (drgnx-session-test--repo root "My Project" "café.py"))
+           (project-list-file (expand-file-name "projects" root))
+           (drgnx-wb--sections nil) (drgnx-explorer--roots nil)
+           (raised 0) buf)
+      (unwind-protect
+          (cl-letf (((symbol-function 'drgnx-session-raise) (lambda () (cl-incf raised))))
+            (delete-other-windows)
+            (drgnx-explorer-setup)
+            (setq buf (find-file-noselect (expand-file-name "a.py" a)))
+            (switch-to-buffer buf)                    ; project A's file in front, as after a restore
+            (let ((noninteractive nil))         ; as a daemon's initial frame: bin/drgnx's graphical path raises
+              (drgnx-session-open-folder (directory-file-name b)))
+            (should (= raised 1))
+            (with-current-buffer (window-buffer (selected-window))
+              (should (equal (buffer-name) drgnx-explorer-buffer-name))   ; the Explorer is selected
+              (let ((p (project-current nil)))
+                (should p)
+                (should (equal (expand-file-name (project-root p)) b))
+                (should (member (expand-file-name "café.py" b) (project-files p)))))
+            (should (drgnx-wb-sidebar-showing-p))
+            ;; the other folder: first now, the first one stays
+            (drgnx-session-open-folder a)
+            (should (equal (drgnx-explorer-roots) (list a b)))
+            (with-current-buffer (window-buffer (selected-window))
+              (should (equal (expand-file-name (project-root (project-current nil))) a))))
+        (when (buffer-live-p buf) (kill-buffer buf))
+        (drgnx-wb-hide-sidebar)
+        (delete-other-windows)
+        (drgnx-explorer-set-roots nil)
+        (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
+        (delete-directory root t)))))
 
 (ert-deftest drgnx-session/an-unsaved-untitled-buffer-is-offered-and-never-lost ()
   ;; Nothing of drgnx-session stubbed: the real `save-some-buffers' offers New Untitled's buffer (its question,
@@ -352,5 +362,15 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
         (cl-letf (((symbol-function 'drgnx-terminal-eat-refresh-query-flags) (lambda () (error "eat is gone"))))
           (should (memq p (drgnx-session--running-programs))))
       (delete-process p))))
+
+
+(ert-deftest drgnx-session/windows-ask-the-classifier ()
+  ;; the frames that count as windows are the visible workbench frames (gui or tty), whatever else the frame list holds
+  (let ((kinds '((kx-gui . gui) (kx-tty . tty) (kx-initial . initial) (kx-child . child) (kx-other . other)
+                 (kx-hidden . tty))))
+    (cl-letf (((symbol-function 'frame-list) (lambda () '(kx-hidden kx-other kx-child kx-initial kx-tty kx-gui)))
+              ((symbol-function 'drgnx-state-frame-kind) (lambda (f) (cdr (assq f kinds))))
+              ((symbol-function 'frame-visible-p) (lambda (f) (not (eq f 'kx-hidden)))))
+      (should (equal (drgnx-session--windows) '(kx-tty kx-gui))))))
 
 ;;; session-test.el ends here

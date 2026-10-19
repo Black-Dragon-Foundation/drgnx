@@ -1,5 +1,7 @@
 ;;; mod-layouts-test.el --- batch tests: layouts (Agent, Editor, Zen, Browser and your own) -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'drgnx)
 (require 'drgnx-wb)
 (require 'drgnx-area)
@@ -15,46 +17,51 @@
   "BODY in a 200×60 frame with one editor window on *drgnx-layouts-code*, an Explorer section, the right dock's
 Agents tab, no agent session, no layout state and a temp config dir (layouts.eld goes there)."
   (declare (indent 0))
-  `(let* ((dir (make-temp-file "drgnx-layouts" t))
-          (process-environment (cons (concat "DRGNX_CONFIG_DIR=" dir) process-environment))
-          (drgnx-wb--sections nil) (drgnx-signal--editor-window nil)
-          (drgnx-wb--areas (copy-tree drgnx-wb--areas))
-          (drgnx-agents--sessions nil)
-          (drgnx-agents-ui--last (make-hash-table :test #'eq :weakness 'key))
-          (drgnx-agents-ui--jobs-cache (cons 1.0e+INF nil))     ; no job directory is read
-          (display-buffer-alist nil) (display-buffer-overriding-action '(nil))
-          (size (cons (frame-width) (frame-height))))
-     (set-frame-size nil 200 60)
-     (delete-other-windows)
-     (dolist (p '(drgnx-wb-view drgnx-wb-areas drgnx-wb-panel-px drgnx-wb-right-px drgnx-wb-dock-px
-                                drgnx-layouts-state drgnx-layouts-current drgnx-layouts-previous drgnx-layouts-zen-return))
-       (set-frame-parameter nil p nil))
-     (drgnx-wb-define-section 'files :slot 0 :title "EXPLORER"
-                              :buffer (lambda () (get-buffer-create "*drgnx-layouts-explorer*")))
-     (drgnx-wb-define-tab 'right 'agents :title "Agents" :placeholder #'drgnx-agents-ui-list-buffer)
-     (drgnx-rules-mode 1)
-     (switch-to-buffer (get-buffer-create "*drgnx-layouts-code*"))
-     (set-window-parameter nil 'drgnx-tabs nil)
-     (unwind-protect (progn ,@body)
-       (remove-hook 'window-size-change-functions #'drgnx-layouts--zen-resize)
-       (drgnx-rules-mode -1)
-       (drgnx-wb-hide-sidebar)
-       (drgnx-wb-area-hide 'panel)
-       (drgnx-wb-area-hide 'right)
+  `(drgnx-test-with-state
+     (let* ((dir (make-temp-file "drgnx-layouts" t))
+            (process-environment (cons (concat "DRGNX_CONFIG_DIR=" dir) process-environment))
+            (drgnx-config--defs (copy-hash-table drgnx-config--defs))      ; layouts.eld's definition is this test's own
+            (drgnx-config--state (copy-hash-table drgnx-config--state))
+            (drgnx-config--notified (copy-hash-table drgnx-config--notified))
+            (drgnx-wb--sections nil)
+            (drgnx-wb--areas (copy-tree drgnx-wb--areas))
+            (drgnx-agents--sessions nil)
+            (drgnx-agents-ui--last (make-hash-table :test #'eq :weakness 'key))
+            (drgnx-agents-ui--jobs-cache (cons 1.0e+INF nil))     ; no job directory is read
+            (display-buffer-alist nil) (display-buffer-overriding-action '(nil))
+            (size (cons (frame-width) (frame-height))))
+       (drgnx-layouts--define-config)
+       (set-frame-size nil 200 60)
        (delete-other-windows)
-       (set-window-margins nil 0 0)
-       (set-window-parameter nil 'drgnx-tabs nil)
-       (set-window-parameter nil 'drgnx-layouts-pane nil)
        (dolist (p '(drgnx-wb-view drgnx-wb-areas drgnx-wb-panel-px drgnx-wb-right-px drgnx-wb-dock-px
                                   drgnx-layouts-state drgnx-layouts-current drgnx-layouts-previous drgnx-layouts-zen-return))
          (set-frame-parameter nil p nil))
-       (set-frame-size nil (car size) (cdr size))
-       (switch-to-buffer "*scratch*")
-       (dolist (b drgnx-layouts-test--buffers)
-         (when-let* ((buf (get-buffer b)))
-           (when (get-buffer-process buf) (delete-process (get-buffer-process buf)))
-           (kill-buffer buf)))
-       (delete-directory dir t))))
+       (drgnx-wb-define-section 'files :slot 0 :title "EXPLORER"
+                                :buffer (lambda () (get-buffer-create "*drgnx-layouts-explorer*")))
+       (drgnx-wb-define-tab 'right 'agents :title "Agents" :placeholder #'drgnx-agents-ui-list-buffer)
+       (drgnx-rules-mode 1)
+       (switch-to-buffer (get-buffer-create "*drgnx-layouts-code*"))
+       (set-window-parameter nil 'drgnx-tabs nil)
+       (unwind-protect (progn ,@body)
+         (remove-hook 'window-size-change-functions #'drgnx-layouts--zen-resize)
+         (drgnx-rules-mode -1)
+         (drgnx-wb-hide-sidebar)
+         (drgnx-wb-area-hide 'panel)
+         (drgnx-wb-area-hide 'right)
+         (delete-other-windows)
+         (set-window-margins nil 0 0)
+         (set-window-parameter nil 'drgnx-tabs nil)
+         (set-window-parameter nil 'drgnx-layouts-pane nil)
+         (dolist (p '(drgnx-wb-view drgnx-wb-areas drgnx-wb-panel-px drgnx-wb-right-px drgnx-wb-dock-px
+                                    drgnx-layouts-state drgnx-layouts-current drgnx-layouts-previous drgnx-layouts-zen-return))
+           (set-frame-parameter nil p nil))
+         (set-frame-size nil (car size) (cdr size))
+         (switch-to-buffer "*scratch*")
+         (dolist (b drgnx-layouts-test--buffers)
+           (when-let* ((buf (get-buffer b)))
+             (when (get-buffer-process buf) (delete-process (get-buffer-process buf)))
+             (kill-buffer buf)))
+         (delete-directory dir t)))))
 
 (defun drgnx-layouts-test--code () (get-buffer "*drgnx-layouts-code*"))
 
@@ -137,6 +144,18 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
       (should-not (drgnx-wb-sidebar-showing-p))
       (should-not (drgnx-wb-area-window 'panel))
       (should (= 1 (length (drgnx-groups-list)))))))
+
+(ert-deftest drgnx-layouts/bars-from-the-table ()
+  "A find bar is a window of role `bar' in the store's role table (tools/replace defines it)."
+  (drgnx-layouts-test--with
+    (let ((w (split-window nil -4 'above)))
+      (set-window-parameter w 'drgnx-role 'bar)
+      (drgnx-state-undefine-role 'bar)
+      (drgnx-layouts--close-bars)
+      (should (window-live-p w))                       ; `bar' not defined: an editor window, kept
+      (drgnx-state-define-role 'bar)
+      (drgnx-layouts--close-bars)
+      (should-not (window-live-p w)))))
 
 (ert-deftest drgnx-layouts/switching-loses-nothing ()
   (drgnx-layouts-test--with

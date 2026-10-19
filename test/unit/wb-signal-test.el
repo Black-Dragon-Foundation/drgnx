@@ -1,6 +1,8 @@
 ;;; wb-signal-test.el --- batch tests: the change bus -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-paths)
 (require 'drgnx-signal)
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-signal-test--with (events-var &rest body)
   "BODY with a fresh bus; every emission is pushed onto EVENTS-VAR as (EVENT . DATA)."
@@ -106,3 +108,159 @@
       (drgnx-signal--flush)
       (should (= 1 (length moved)))                 ; it stayed
       (set-buffer-modified-p nil))))
+
+;;; The bus on the store (Task 10): window answers and `editor-changed' come from the state store.
+
+(defvar drgnx-signal-test--store nil "What a store subscriber of these tests got, newest first.")
+(defun drgnx-signal-test--on-store (data) (push data drgnx-signal-test--store))
+
+(defvar drgnx-signal-test--frames nil "The frames a `drgnx-signal-window-functions' function got, newest first.")
+(defun drgnx-signal-test--window-fn (frame) (push frame drgnx-signal-test--frames))
+
+(defmacro drgnx-signal-test--with-store (&rest body)
+  "BODY with a fresh store and bus (`drgnx-test-with-state'), one window on *scratch*, an empty log."
+  (declare (indent 0))
+  `(drgnx-test-with-state
+     (setq drgnx-signal-test--store nil drgnx-signal-test--frames nil)
+     (delete-other-windows)
+     (switch-to-buffer "*scratch*")
+     (unwind-protect (progn ,@body)
+       (delete-other-windows)
+       (switch-to-buffer "*scratch*"))))
+
+(ert-deftest drgnx-signal/legacy-editor-changed-is-buffer-only ()
+  "The store's `editor-changed' says which window; the bus's gets the buffer of the selected frame's MRU editor,
+and only when it differs from the last one it got."
+  (drgnx-signal-test--with-store
+    (let ((legacy nil) (b (get-buffer-create "drgnx-signal-test-b")))
+      (unwind-protect
+          (progn
+            (drgnx-state-subscribe 'editor-changed #'drgnx-signal-test--on-store)
+            (drgnx-signal-subscribe 'editor-changed (lambda (buffer) (push buffer legacy)))
+            (drgnx-signal--flush)
+            (setq legacy nil drgnx-signal-test--store nil)
+            (let* ((w1 (selected-window)) (w2 (split-window w1 nil 'right)))
+              (select-window w2)                        ; the same buffer in another window
+              (drgnx-signal--flush)
+              (should (eq w2 (plist-get (car drgnx-signal-test--store) :window)))
+              (should-not legacy)
+              (switch-to-buffer b)
+              (drgnx-signal--flush)
+              (should (equal (list b) legacy))
+              (select-window w1)
+              (drgnx-signal--flush)
+              (should (equal (list (get-buffer "*scratch*") b) legacy))))
+        (kill-buffer b)))))
+
+(ert-deftest drgnx-signal/editor-window-is-the-stores ()
+  (drgnx-signal-test--with-store
+    (let* ((w1 (selected-window)) (w2 (split-window w1 nil 'right)))
+      (should (eq w1 (drgnx-signal-editor-window)))      ; the frame not recorded yet: observed now
+      (should (eq w1 (drgnx-state-editor-window)))
+      (should (eq w2 (drgnx-state-use-editor w2)))       ; chosen without selecting it
+      (should (eq w1 (selected-window)))
+      (should (eq w2 (drgnx-signal-editor-window)))
+      (delete-window w2)                                 ; gone before the next observation: observed now
+      (should (eq w1 (drgnx-signal-editor-window)))
+      (should (eq w1 (drgnx-state-editor-window))))))
+
+(ert-deftest drgnx-signal/editor-window-p-reads-the-role-table ()
+  (drgnx-signal-test--with-store
+    (let ((w (split-window nil nil 'below)))
+      (drgnx-state-undefine-role 'bar)
+      (set-window-parameter w 'drgnx-role 'bar)
+      (should (drgnx-signal-editor-window-p w))          ; no module defined `bar': an editor window
+      (drgnx-state-define-role 'bar)
+      (should-not (drgnx-signal-editor-window-p w))
+      (set-window-parameter w 'drgnx-role 'drgnx-signal-test-strip)
+      (should (drgnx-signal-editor-window-p w))
+      (drgnx-state-define-role 'drgnx-signal-test-strip)
+      (should-not (drgnx-signal-editor-window-p w))
+      (set-window-parameter w 'drgnx-role nil)
+      (should (drgnx-signal-editor-window-p (selected-window)))
+      (should-not (drgnx-signal-editor-window-p (minibuffer-window))))))
+
+(ert-deftest drgnx-signal/frame-changed-from-selected-changed ()
+  (drgnx-signal-test--with-store
+    (let ((was-on drgnx-signal-mode) (seen nil))
+      (unwind-protect
+          (progn
+            (drgnx-signal-mode 1)
+            (drgnx-signal-subscribe 'frame-changed (lambda (frame) (push frame seen)))
+            (drgnx-signal--flush)
+            (setq seen nil)
+            ;; another window of the same frame: no frame change
+            (select-window (split-window nil nil 'right))
+            (drgnx-state--emit 'selected-changed (list :frame (selected-frame) :window (selected-window)
+                                                       :old-window (next-window) :old-frame (selected-frame)))
+            (drgnx-signal--flush)
+            (should-not seen)
+            ;; the store saw another frame become the selected one
+            (drgnx-state--emit 'selected-changed (list :frame (selected-frame) :window (selected-window)
+                                                       :old-window nil :old-frame 'drgnx-signal-test-other))
+            (should (timerp drgnx-signal--timer))      ; the bus's `now' subscriber arms the flush…
+            (should-not seen)
+            (drgnx-signal--flush)                      ; …which says it
+            (should (equal (list (selected-frame)) seen)))
+        (unless was-on (drgnx-signal-mode -1))))))
+
+(ert-deftest drgnx-signal/window-functions-run-from-the-observation ()
+  (drgnx-signal-test--with-store
+    (let ((was-on drgnx-signal-mode))
+      (unwind-protect
+          (with-suppressed-warnings ((obsolete drgnx-signal-window-functions))
+            (should (get 'drgnx-signal-window-functions 'byte-obsolete-variable))
+            (drgnx-signal-mode 1)
+            (add-hook 'drgnx-signal-window-functions #'drgnx-signal-test--window-fn)
+            (should-not (memq 'drgnx-signal--windows (default-value 'window-buffer-change-functions)))
+            (should-not (memq 'drgnx-signal--schedule (default-value 'window-selection-change-functions)))
+            (drgnx-state-sync)
+            (setq drgnx-signal-test--frames nil)
+            (let ((w (split-window nil nil 'right)))
+              (drgnx-state-sync)                       ; the observation, before any flush or redisplay
+              (should (equal (list (selected-frame)) drgnx-signal-test--frames))
+              (setq drgnx-signal-test--frames nil)
+              (select-window w)                        ; a selection changes no window
+              (drgnx-state-sync)
+              (should-not drgnx-signal-test--frames)))
+        (remove-hook 'drgnx-signal-window-functions #'drgnx-signal-test--window-fn)
+        (unless was-on (drgnx-signal-mode -1))))))
+
+(ert-deftest drgnx-signal/flush-syncs-first ()
+  (drgnx-signal-test--with-store
+    (drgnx-state-subscribe 'windows-changed #'drgnx-signal-test--on-store)   ; the idle lane
+    (drgnx-signal--flush)
+    (setq drgnx-signal-test--store nil)
+    (let ((w (split-window nil nil 'right)))           ; batch Emacs: no redisplay observes it
+      (drgnx-signal--flush)
+      (should (memq w (drgnx-state-windows (selected-frame))))
+      (should (memq w (plist-get (car drgnx-signal-test--store) :windows))))))
+
+(ert-deftest drgnx-signal/one-idle-flush ()
+  (drgnx-signal-test--with-store
+    (should-not (boundp 'drgnx-state--idle-timer))
+    (drgnx-state-sync)
+    (drgnx-state-subscribe 'windows-changed #'drgnx-signal-test--on-store)
+    (split-window nil nil 'right)
+    (drgnx-state-sync)                                 ; an idle call waits…
+    (should-not drgnx-signal-test--store)
+    (should (timerp drgnx-signal--timer))              ; …for the bus's one flush
+    (should (eq #'drgnx-signal--flush (timer--function drgnx-signal--timer)))
+    (drgnx-signal--flush)
+    (should drgnx-signal-test--store)
+    (should-not drgnx-signal--timer)))
+
+(ert-deftest drgnx-signal/the-editor-window-variable-is-gone ()
+  (let ((name (concat "drgnx-signal--" "editor-window")) (hits nil))
+    (should-not (boundp (intern name)))
+    (should-not (fboundp 'drgnx-signal--frame))
+    (dolist (dir '("core" "wb" "modules" "harness" "test" "docs"))
+      (dolist (file (directory-files-recursively (expand-file-name dir drgnx-dir) "\\.\\(el\\|eld\\|md\\)\\'"))
+        (with-temp-buffer
+          (insert-file-contents file)
+          (when (search-forward name nil t) (push file hits)))))
+    (should-not hits))
+  (drgnx-signal-test--with-store
+    (drgnx-signal--flush)
+    (should-not (plist-member drgnx-signal--state :editor))
+    (should-not (plist-member drgnx-signal--state :frame))))

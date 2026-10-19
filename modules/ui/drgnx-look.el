@@ -19,10 +19,12 @@
 (defun drgnx-look--saved-theme () (plist-get (drgnx-modules-read-state) :theme))
 
 (defun drgnx-look-load-theme (theme)
-  "Make THEME the only theme and remember it."
+  "Make THEME the only theme and remember it.  A modules.eld with a mistake refuses (`drgnx-config-refused') before the
+theme changes."
+  (drgnx-config-ensure-writable 'modules)
   (mapc #'disable-theme custom-enabled-themes)
   (load-theme theme t)
-  (drgnx-modules-write-state (plist-put (copy-sequence (drgnx-modules-read-state)) :theme theme)))
+  (drgnx-modules-update-state (lambda (state) (plist-put (copy-sequence state) :theme theme))))
 
 (defun drgnx-look-choose-theme (theme)
   "Pick the colour theme (remembered for the next start)."

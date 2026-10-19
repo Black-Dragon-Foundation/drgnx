@@ -181,6 +181,13 @@ answered is in `drgnx-gateway-openrouter-test--answer')."
       (drgnx-gateway-openrouter-test--request port token nil "/v1/messages?beta=true")
       (should (string-search "\"zdr\":true" (drgnx-gateway-openrouter-test--log or-log))))))
 
+(defun drgnx-gateway-openrouter-test--put-agents-eld (text)
+  "Make agents.eld hold TEXT, as an editor would: a new file renamed over it (the layer saw the old one change)."
+  (let ((file (expand-file-name "agents.eld" (drgnx-user-dir))))
+    (make-directory (file-name-directory file) t)
+    (write-region text nil (concat file ".new") nil 'silent)
+    (rename-file (concat file ".new") file t)))
+
 (ert-deftest drgnx-gateway-openrouter/restrictions-travel-from-agents-eld-to-the-registration ()
   ;; drgnx-agents--gateway: agents.eld's :openrouter reaches the registration of an OpenRouter agent, through the hub's
   ;; register call, which keeps it as lists (the JSON call turns them into vectors)
@@ -254,12 +261,12 @@ answered is in `drgnx-gateway-openrouter-test--answer')."
           (should (seq-find (lambda (e) (string-search "turned off" (or (plist-get e :text) "")))
                             (drgnx-agent-session-entries s))))
         ;; a value that does not read refuses too
-        (drgnx-agents-set-setting :openrouter '(:zdr yes))
+        (drgnx-gateway-openrouter-test--put-agents-eld "(:openrouter (:zdr yes))\n")
         (should-error (drgnx-agents--env (drgnx-gateway-openrouter-test--session)) :type 'user-error)
         ;; no OpenRouter step: not held up
         (should (drgnx-agents--env (drgnx-gateway-openrouter-test--session "claude (Ollama)")))
         ;; no restrictions: direct, as before
-        (drgnx-agents-set-setting :openrouter nil)
+        (drgnx-gateway-openrouter-test--put-agents-eld "(:openrouter nil)\n")
         (should (seq-find (lambda (e) (string-prefix-p "ANTHROPIC_BASE_URL=" e))
                           (drgnx-agents--env (drgnx-gateway-openrouter-test--session))))
         (should-not hub-asked)))))
@@ -384,9 +391,11 @@ answered is in `drgnx-gateway-openrouter-test--answer')."
           (should (string-search "; the usual one" (with-temp-buffer (insert-file-contents file) (buffer-string))))
           ;; what is not a restriction is refused when read, never read as none: slugs that could break the JSON or
           ;; the line, odd values
-          (drgnx-agents-set-setting :openrouter '(:only ("ok" "bad\"slug" 5) :ignore "x" :data-collection maybe :zdr maybe))
+          (drgnx-gateway-openrouter-test--put-agents-eld
+           "(:openrouter (:only (\"ok\" \"bad\\\"slug\" 5) :ignore \"x\" :data-collection maybe :zdr maybe))\n")
           (should-error (drgnx-agents-openrouter-restrictions) :type 'user-error)
-          (drgnx-agents-set-setting :openrouter nil)
+          (should-error (drgnx-agents-set-setting :openrouter nil) :type 'user-error) ; a file with a mistake is not written
+          (drgnx-gateway-openrouter-test--put-agents-eld "(:openrouter nil)\n")
           (should-not (drgnx-agents-openrouter-restrictions)))
       (delete-directory root t))))
 

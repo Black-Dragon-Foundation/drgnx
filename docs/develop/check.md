@@ -64,3 +64,22 @@ Tests that run in parallel must not depend on machine-wide state another test ma
   length.
 - A test of name choice stubs `drgnx-ui-unit-active-p`, because real units belong to the live shards running
   alongside.
+
+## Lints on the source
+
+Some rules are kept by unit tests that read the source (`test/unit/lint-buffers-timers-test.el`): an internal
+` *…*` buffer is made with `inhibit-buffer-hooks`; the workbench starts no wall-clock timer on a follow path; and
+timers go through the layer.
+
+**Timers go through the layer** (`drgnx-lint/timers-go-through-the-layer`). For every `.el` under `core/` (except the layer, `core/drgnx-timer.el`), `modules/` and
+`wb/`, `(drgnx-lint-timers--violations FILE)` lists `(LINE . FORM)` for each lambda, closure or `apply-partially` as
+the function of a timer start, and each raw `run-at-time`, `run-with-timer`, `run-with-idle-timer`, `timer-set-time`
+or `timer-set-idle-time` unless its delay is the literal `0` and its repeat nil or absent. The number of violations
+must equal the file's entry in `drgnx-lint-timers--not-yet` (`(FILE COUNT)`, 0 when absent):
+
+- more: "above: a new raw timer, use `drgnx-timer-*`";
+- fewer: "below: lower the count in `drgnx-lint-timers--not-yet`".
+
+The counts can only fall: a batch that migrates a site lowers its file's count in the same commit, and the list ends
+empty. A branch merged later that adds raw timers adds its files' counts in its merge commit. The rule itself is in
+[core.md](core.md#timers).

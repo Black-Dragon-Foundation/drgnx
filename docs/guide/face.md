@@ -54,6 +54,10 @@ What happens depends on where drgnx runs:
   by itself: write it again with `drgnx service-unit DIR` and reload systemd. The desktop entry runs `emacsclient`
   against the running daemon, so it follows the daemon. Changing the setting or the theme to the other variant shows
   after the next start of the daemon (`systemctl --user restart drgnx`).
+- **The file:** `face.eld` is a config file ([reference](../reference/config.md#faceeld)) that drgnx keeps for you; you
+  need not edit it. It is one line, and a key drgnx does not know stays when drgnx writes. If it ever cannot be read
+  (cut off, or not a list of keys), drgnx copies it to `face.eld.bak-<time>` beside it and starts a new one; a file
+  from an earlier drgnx works as it is.
 - **The systemd unit:** when the daemon starts through the unit, only a unit written after `face.eld` exists carries
   `GTK_THEME` (write it again after drgnx has run once with a window). A drop-in override
   (`systemctl --user edit drgnx`) can replace or remove that line.
@@ -293,7 +297,9 @@ The card never covers the line you are editing. In a window it sits just below t
 several rows counts whole) or of the line point is on — hovering a symbol just above point puts the card under
 point's line, or above the symbol's. It never leaves the window either: when not even one line of docs fits beside
 the line, a hover shows nothing and the key puts the first line in the echo area. It moves out of the way as soon as
-you type, and goes when the window scrolls or changes size under it. In a terminal, which has no pop-up frames in
+you type, and goes when the window scrolls, moves or changes size under it, or when windows come or go, or the
+selection moves, with no command run (a timer's split, a window-manager resize): it hears these from the workbench
+state store at once and only looks at the mouse and the scrolling while it is idle. In a terminal, which has no pop-up frames in
 Emacs 30, it is a strip of a few lines at the bottom of the editor (`…` while the docs are on their way): the editor
 gives up those rows while it shows and gets them back, at the same size, when it goes. Point always stays visible.
 In a terminal, `C-g` closes the strip (`Esc` is the Meta prefix there), as does typing anything; `q` closes it in a

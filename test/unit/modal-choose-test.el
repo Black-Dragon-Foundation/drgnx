@@ -83,6 +83,15 @@ registered and the keys applied, no engine registered.  Skipped where evil can b
     (should (equal (plist-get (drgnx-modal-choose-test--read "keys.eld") :pending-layers) drgnx-modal-choose-test--vim))
     (should (equal (plist-get drgnx-keys-last :layers) drgnx-modal-choose-test--vscode))))
 
+(ert-deftest drgnx-modal-choose/pending-stops-at-a-modules-mistake-before-any-change ()
+  ;; nobody to ask, engine not installed: the modules.eld pre-flight runs before keys.eld is written
+  (drgnx-modal-choose-test--with
+    (drgnx-modal-choose-test--write "modules.eld" "(:disabled 5)\n")
+    (let ((keys (drgnx-modal-choose-test--text "keys.eld")) (modules (drgnx-modal-choose-test--text "modules.eld")))
+      (should-error (drgnx-modal-prepare drgnx-modal-choose-test--vim nil) :type 'drgnx-config-refused)
+      (should (equal (drgnx-modal-choose-test--text "keys.eld") keys))
+      (should (equal (drgnx-modal-choose-test--text "modules.eld") modules)))))
+
 (ert-deftest drgnx-modal-choose/declined-keeps-the-stack ()
   (drgnx-modal-choose-test--with
     (let ((keys (drgnx-modal-choose-test--text "keys.eld")) (asked nil) (noninteractive nil))

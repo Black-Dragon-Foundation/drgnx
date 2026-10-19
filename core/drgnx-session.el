@@ -14,6 +14,8 @@
 ;;; Code:
 (require 'seq)
 (require 'drgnx-paths)
+(require 'drgnx-frame-kind)
+(require 'drgnx-config)
 (require 'drgnx-registry)
 
 (defvar server-name)
@@ -36,23 +38,26 @@ Preferences: Keep drgnx Running in the Background, which remembers it (session.e
 
 ;;;; The choice, remembered
 
-(defun drgnx-session-file () (expand-file-name "session.eld" (drgnx-user-dir)))
+(drgnx-config-define 'session
+                     :file "session.eld" :shape 'plist :version 1 :reload 'start :last-good t
+                     :schema '(plist (:keep-running boolean "Keep drgnx running when its last window closes"))
+                     :default nil
+                     :doc "Whether drgnx keeps running when its last window closes (read at every start).")
+
+(defun drgnx-session-file () (drgnx-config-file 'session))
 
 (defun drgnx-session-load ()
-  "Set `drgnx-keep-running' from session.eld when it holds the choice; anything else leaves it alone."
-  (let ((data (and (file-readable-p (drgnx-session-file))
-                   (ignore-errors (with-temp-buffer (insert-file-contents (drgnx-session-file)) (read (current-buffer)))))))
+  "Set `drgnx-keep-running' from session.eld when it holds the choice; anything else leaves it alone.
+A file with a mistake gives its last good copy, else nothing (`drgnx-config-get')."
+  (let ((data (drgnx-config-get 'session)))
     (when (and (proper-list-p data) (plist-member data :keep-running))
       (setq drgnx-keep-running (and (plist-get data :keep-running) t)))))
 
 (defun drgnx-session-set-keep-running (keep)
-  "Keep drgnx running when its last window closes (KEEP non-nil) or quit then; saved in session.eld."
+  "Keep drgnx running when its last window closes (KEEP non-nil) or quit then; saved in session.eld.
+Only that key changes in the file; a file with a mistake is refused (`drgnx-config-refused'), never replaced."
   (setq drgnx-keep-running (and keep t))
-  (let ((dir (file-name-directory (drgnx-session-file))))
-    (make-directory dir t)
-    (let ((tmp (make-temp-file (expand-file-name ".session-" dir))))
-      (with-temp-file tmp (prin1 (list :keep-running drgnx-keep-running) (current-buffer)) (insert "\n"))
-      (rename-file tmp (drgnx-session-file) t)))
+  (drgnx-config-set 'session :keep-running drgnx-keep-running)
   drgnx-keep-running)
 
 (defun drgnx-session-toggle-keep-running ()
@@ -66,10 +71,8 @@ Preferences: Keep drgnx Running in the Background, which remembers it (session.e
 ;;;; Windows
 
 (defun drgnx-session--windows ()
-  "The frames that count as windows: live, top-level, shown or minimised — not a daemon's own terminal frame."
-  (seq-filter (lambda (f) (and (frame-live-p f) (not (frame-parent f)) (frame-visible-p f)
-                               (not (equal (terminal-name (frame-terminal f)) "initial_terminal"))))
-              (frame-list)))
+  "The frames that count as windows: the workbench frames (`drgnx-state-workbench-frame-p'), shown or minimised."
+  (seq-filter (lambda (f) (and (drgnx-state-workbench-frame-p f) (frame-visible-p f))) (frame-list)))
 
 (defun drgnx-session--gui-frame ()
   "The graphical window to show things in: the selected frame if it is one, else the first."
@@ -95,7 +98,7 @@ In a terminal frame (`drgnx -t DIR', or the command typed there) DIR opens in th
 is not raised.  As File → Open Folder… it asks for DIR; bin/drgnx's call never asks."
   (interactive (list (read-directory-name "Open folder: " nil nil t)))
   (let ((dir (file-name-as-directory (expand-file-name dir))))
-    (when (or (display-graphic-p) (equal (terminal-name (frame-terminal)) "initial_terminal"))
+    (when (memq (drgnx-state-frame-kind (selected-frame)) '(gui initial))
       (drgnx-session-raise))
     (if (not (fboundp 'drgnx-explorer-set-roots))
         (dired dir)

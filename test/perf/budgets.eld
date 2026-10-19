@@ -12,6 +12,7 @@
  (tabs (:input :p95) 16) (tabs (:input :max) 50)
  (explorer (:input :p95) 16) (explorer (:input :max) 50)
  (agent-typing (:input :p95) 16) (agent-typing (:input :max) 50)
+ (agent-stream (:input :p95) 16) (agent-stream (:input :max) 50)
  ;; cockpit-cards: PROVISIONAL — the job-window rows renamed (M12f, the job window is the cockpit's), measured on a
  ;; busy machine; part C's close (C12) confirms them
  (cockpit-cards (:input :p95) 16) (cockpit-cards (:input :max) 50)
@@ -19,9 +20,12 @@
  (typing-with-ghost (:input :p95) 16) (typing-with-ghost (:input :max) 50)
  (diff-scrolling (:input :p95) 16) (diff-scrolling (:input :max) 50)
  (replace-typing (:input :p95) 16) (replace-typing (:input :max) 50)
+ ;; replace-retype (render pipeline Task 6): a view slice is 4 ms of rows plus the 8-row grain; 6 ms leaves the rest
+ (replace-retype (:input :p95) 16) (replace-retype (:input :max) 50) (replace-retype (:slice_ms :max) 6)
  (live-view (:input :p95) 16) (live-view (:input :max) 50)
  (agent-settings-open (:draw_ms) 150) (agent-settings-open (:processes) 0)
  (remote-typing (:input :p95) 16) (remote-typing (:input :max) 50)
+ (window-switch (:input :p95) 16) (window-switch (:input :max) 50)
  (redisplay (:redisplay :p95) 16)
  ;; typing-with-index (M10-1): PROVISIONAL.  p95 22 = worst of 3 runs (12.2, 17.2, 21.1), rounded up, measured at load 7-8
  ;; (busy machine; the p95 rose with the load).  The ruled target is typing's 16 ms: a quiet-machine run pins it.

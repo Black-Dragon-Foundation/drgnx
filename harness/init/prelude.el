@@ -65,6 +65,20 @@ Without an external configuration, init.el is the harness's minimal one."
   (cond (drgnx-ui-config (load (expand-file-name file drgnx-ui-config) t t t))
         ((equal file "init.el") (load (expand-file-name "init/minimal.el" drgnx-ui-harness) nil t))))
 
+(defun drgnx-ui-gc-early ()
+  "HARNESS-GC-1: without an external configuration, the GC lines of init/early-init.el (a configuration
+brings its own: drgnx's loads that file)."
+  (unless drgnx-ui-config
+    (setq gc-cons-threshold (* 512 1024 1024) gc-cons-percentage 0.6)))
+
+(defun drgnx-ui-gc-setup ()
+  "HARNESS-GC-1: without an external configuration, drgnx's GC settings and owner (`drgnx-gc-setup'), as
+`drgnx-init' sets them in a drgnx session.  The core directory is on `load-path' for this load only."
+  (unless drgnx-ui-config
+    (let ((load-path (cons (expand-file-name "../core" drgnx-ui-harness) load-path)))
+      (require 'drgnx-gc))
+    (drgnx-gc-setup)))
+
 ;;;; After init: harness agent, guard, server, ready file, test mode
 (defvar drgnx-ui--ready-timer nil)
 (defvar drgnx-guard--timer-fn)          ; drgnx's no-prompt guard, when loaded

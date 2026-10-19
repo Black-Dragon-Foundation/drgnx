@@ -16,6 +16,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-jobs)
+(require 'drgnx-timer)
 
 (defvar treesit-extra-load-path)
 (declare-function treesit-language-available-p "treesit.c")
@@ -121,16 +122,18 @@ buffers of those languages switch to their tree-sitter modes when it is done."
     id))
 
 (defun drgnx-grammars--watch (id langs)
-  "When job ID ends: LANGS's buffers switch (looked at every 2 s; never waits)."
-  (let ((timer nil))
-    (setq timer (run-with-timer 2 2 (lambda ()
-                                      (let ((job (drgnx-jobs-get id)))
-                                        (unless (eq (plist-get job :status) 'running)
-                                          (cancel-timer timer)
-                                          (drgnx-grammars--installed langs)
-                                          (message (if (eql (plist-get job :exit) 0) "Language support installed: %s"
-                                                     "Language support: some did not install (%s) — Show Job Log: grammars")
-                                                   (mapconcat #'symbol-name langs ", ")))))))))
+  "When job ID ends: LANGS's buffers switch (looked at every 2 s for an hour; never waits)."
+  (drgnx-timer-poll (cons 'grammars-watch id) 2 #'drgnx-grammars--watch-tick :deadline 3600 :args (list id langs)))
+
+(defun drgnx-grammars--watch-tick (id langs)
+  "The poll of `drgnx-grammars--watch': non-nil, once job ID is over and LANGS's buffers have switched."
+  (let ((job (drgnx-jobs-get id)))
+    (unless (eq (plist-get job :status) 'running)
+      (drgnx-grammars--installed langs)
+      (message (if (eql (plist-get job :exit) 0) "Language support installed: %s"
+                 "Language support: some did not install (%s) — Show Job Log: grammars")
+               (mapconcat #'symbol-name langs ", "))
+      t)))
 
 (defun drgnx-grammars--installed (langs)
   "LANGS's grammars may be there now: their files use the tree-sitter modes, open buffers switch."

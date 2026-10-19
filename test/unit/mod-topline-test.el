@@ -7,7 +7,7 @@
 (require 'drgnx-git)                    ; the git cache the branch comes from
 (load (expand-file-name "modules/ui/drgnx-face" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-topline" drgnx-dir) nil t)
-(defvar drgnx-signal--editor-window)
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (defvar drgnx-chrome--root)
 
 (defvar drgnx-topline-test--ran nil "The stub commands that ran (newest first).")
@@ -31,33 +31,33 @@
 the line's state and the tab bar's settings kept away from the rest of the test process, and the line showing the
 buffer of the selected window (a temp buffer in project `proj', no git).  Faces and the project lookup are stubs."
   (declare (indent 1))
-  `(let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-         (drgnx-topline-test--ran nil)
-         (drgnx-topline--error nil) (drgnx-topline--error-at nil)
-         (drgnx-topline--memo (make-hash-table :test #'eq :weakness 'key)) (drgnx-topline--timer nil) (drgnx-topline--saved nil) (drgnx-topline--format nil) (drgnx-topline--active nil)
-         (drgnx-topline drgnx-topline) (drgnx-topline-min-lines drgnx-topline-min-lines)
-         (drgnx-signal--editor-window nil)
-         (default-frame-alist (copy-alist default-frame-alist))
-         (tab-bar-format (default-value 'tab-bar-format)) (tab-bar-show (default-value 'tab-bar-show))
-         (tab-bar-auto-width (default-value 'tab-bar-auto-width))
-         ;; what `--on' and `--fit' set on the frame, put back
-         (lines (frame-parameter nil 'tab-bar-lines)) (decided (frame-parameter nil 'drgnx-topline-lines))
-         (old (window-buffer (selected-window))))
-     (cl-letf (((symbol-function 'drgnx-face--ascii-frame-p) (lambda (_frame) nil))   ; the batch terminal is not UTF-8
-               ;; whatever redisplay would reach for besides the buffer-local cache: a lookup is an error here
-               ((symbol-function 'project-current) (lambda (&rest _) (error "a project lookup"))))
-       (drgnx-command-define 'go-quick-open :title "Quick Open" :category "Go" :command #'drgnx-topline-test-files)
-       (drgnx-command-define 'palette :title "Command Palette" :category "View" :command #'drgnx-topline-test-palette)
-       (drgnx-command-define 'keys-sheet :title "Keys" :category "Help" :command #'drgnx-topline-test-keys)
-       (drgnx-topline-test--bind ,profile)
-       (with-temp-buffer
-         (setq-local drgnx-chrome--root (cons default-directory "/x/proj/"))   ; the breadcrumb's cache, filled
-         (set-window-buffer (selected-window) (current-buffer))
-         (unwind-protect (progn ,@body)
-           (drgnx-topline--off)
-           (set-frame-parameter nil 'tab-bar-lines lines)
-           (set-frame-parameter nil 'drgnx-topline-lines decided)
-           (set-window-buffer (selected-window) old))))))
+  `(drgnx-test-with-state
+     (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
+           (drgnx-topline-test--ran nil)
+           (drgnx-topline--error nil) (drgnx-topline--error-at nil)
+           (drgnx-topline--memo (make-hash-table :test #'eq :weakness 'key)) (drgnx-topline--timer nil) (drgnx-topline--saved nil) (drgnx-topline--format nil) (drgnx-topline--active nil)
+           (drgnx-topline drgnx-topline) (drgnx-topline-min-lines drgnx-topline-min-lines)
+           (default-frame-alist (copy-alist default-frame-alist))
+           (tab-bar-format (default-value 'tab-bar-format)) (tab-bar-show (default-value 'tab-bar-show))
+           (tab-bar-auto-width (default-value 'tab-bar-auto-width))
+           ;; what `--on' and `--fit' set on the frame, put back
+           (lines (frame-parameter nil 'tab-bar-lines)) (decided (frame-parameter nil 'drgnx-topline-lines))
+           (old (window-buffer (selected-window))))
+       (cl-letf (((symbol-function 'drgnx-face--ascii-frame-p) (lambda (_frame) nil))   ; the batch terminal is not UTF-8
+                 ;; whatever redisplay would reach for besides the buffer-local cache: a lookup is an error here
+                 ((symbol-function 'project-current) (lambda (&rest _) (error "a project lookup"))))
+         (drgnx-command-define 'go-quick-open :title "Quick Open" :category "Go" :command #'drgnx-topline-test-files)
+         (drgnx-command-define 'palette :title "Command Palette" :category "View" :command #'drgnx-topline-test-palette)
+         (drgnx-command-define 'keys-sheet :title "Keys" :category "Help" :command #'drgnx-topline-test-keys)
+         (drgnx-topline-test--bind ,profile)
+         (with-temp-buffer
+           (setq-local drgnx-chrome--root (cons default-directory "/x/proj/"))   ; the breadcrumb's cache, filled
+           (set-window-buffer (selected-window) (current-buffer))
+           (unwind-protect (progn ,@body)
+             (drgnx-topline--off)
+             (set-frame-parameter nil 'tab-bar-lines lines)
+             (set-frame-parameter nil 'drgnx-topline-lines decided)
+             (set-window-buffer (selected-window) old)))))))
 
 (defun drgnx-topline-test--text ()
   "What the line shows now, as plain text."
@@ -393,32 +393,33 @@ buffer of the selected window (a temp buffer in project `proj', no git).  Faces 
 (ert-deftest drgnx-topline/the-branch-comes-from-the-git-cache-the-status-bar-reads ()
   "An untracked file has no branch in `vc-mode'; the status bar shows it from drgnx's git cache, so does the line."
   (drgnx-topline-test--with 'vscode
-    (let ((drgnx-git--repos (make-hash-table :test #'equal)) (drgnx-git--roots (make-hash-table :test #'equal))
+    (let ((drgnx-git--roots (make-hash-table :test #'equal))
           (root "/tmp/drgnx-tl-repo/"))
+      (drgnx-cache--clear 'git-status)
       (setq-local buffer-file-name "/tmp/drgnx-tl-repo/src/new.el")
       (setq-local vc-mode nil)
       (should (string-match-p "◆ proj +⌕" (drgnx-topline-test--text)))   ; the cache has not read it yet
       ;; the cache finds the repository, then a status run reads its branch: the line is made again each time
       (puthash "/tmp/drgnx-tl-repo/src/" root drgnx-git--roots)
       (should (string-match-p "◆ proj +⌕" (drgnx-topline-test--text)))
-      (puthash root (list :branch (list :head "main")) drgnx-git--repos)
+      (drgnx-cache-put 'git-status root (list :branch (list :head "main")))
       (should (string-match-p "◆ proj · main" (drgnx-topline-test--text)))
-      (puthash root (list :branch (list :head "feature")) drgnx-git--repos)
+      (drgnx-cache-put 'git-status root (list :branch (list :head "feature")))
       (should (string-match-p "◆ proj · feature" (drgnx-topline-test--text)))
       ;; `vc-mode' is only the fallback (the same as the status bar's)
       (setq-local vc-mode " Git-other")
       (should (string-match-p "· feature" (drgnx-topline-test--text)))
-      (puthash root (list :branch (list :head nil :detached t)) drgnx-git--repos)
+      (drgnx-cache-put 'git-status root (list :branch (list :head nil :detached t)))
       (should (string-match-p "· (detached)" (drgnx-topline-test--text)))
       ;; no cache entry: vc-mode's branch
-      (remhash root drgnx-git--repos)
+      (drgnx-cache-remove 'git-status root)
       (should (string-match-p "· other" (drgnx-topline-test--text))))))
 
 (ert-deftest drgnx-topline/a-memo-hit-allocates-nothing ()
   ;; the tab bar asks for the items about 40 times per keystroke in some flows
   (drgnx-topline-test--with 'vscode
     (setq-local vc-mode " Git-main")
-    (setq drgnx-signal--editor-window (selected-window))     ; as in a session: else the window is searched for
+    (drgnx-test-use-editor (selected-window))                ; as in a session: else the window is searched for
     ;; interpreted code conses for its own bookkeeping, and the runner loads a file's source when it is newer than its
     ;; .elc: measure the line and everything it calls on a hit compiled
     (dolist (fn '(drgnx-topline--line drgnx-topline--same-p drgnx-topline--failing-p drgnx-topline--drawn-title-p

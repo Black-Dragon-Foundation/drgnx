@@ -6,7 +6,7 @@
   "BODY with chrome on and one editor window showing a file buffer."
   (declare (indent 0))
   `(let ((dir (file-name-as-directory (make-temp-file "drgnx-tty-chrome" t)))
-         (drgnx-signal--editor-window nil) (display-buffer-alist nil))
+         (display-buffer-alist nil))
      (delete-other-windows)
      (set-window-parameter (selected-window) 'drgnx-tabs nil)
      (set-window-prev-buffers (selected-window) nil)

@@ -2,26 +2,30 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx)
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-face" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-quickhelp" drgnx-dir) nil t)
 
 (defmacro drgnx-quickhelp-test--with (&rest body)
   "BODY with the quick help's state, hooks and commands kept away from the rest of the test process; one window."
   (declare (indent 0))
-  `(let ((drgnx-quickhelp--request 0) (drgnx-quickhelp--timer nil) (drgnx-quickhelp--origin nil)
-         (drgnx-quickhelp--strip nil) (drgnx-quickhelp--showing nil) (emulation-mode-map-alists emulation-mode-map-alists)
-         (drgnx-modal-front-alists drgnx-modal-front-alists)
-         (drgnx-quickhelp--card-up nil) (drgnx-quickhelp--unmap-timer nil)
-         (drgnx-quickhelp--active nil) (drgnx-quickhelp-hover nil)
-         (drgnx-quickhelp--hover-timer nil) (drgnx-quickhelp--poll nil) (drgnx-quickhelp--rest nil)
-         (pre-command-hook nil) (post-command-hook nil)
-         (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
-     (save-window-excursion
-       (delete-other-windows)
-       (unwind-protect (progn ,@body)
-         (drgnx-quickhelp-hide)
-         (setq drgnx-quickhelp--active nil)
-         (drgnx-quickhelp--apply-hover)))))
+  `(drgnx-test-with-state
+     (let ((drgnx-quickhelp--request 0) (drgnx-quickhelp--origin nil)
+           (drgnx-quickhelp--strip nil) (drgnx-quickhelp--showing nil) (emulation-mode-map-alists emulation-mode-map-alists)
+           (drgnx-modal-front-alists drgnx-modal-front-alists)
+           (drgnx-quickhelp--card-up nil)
+           (drgnx-quickhelp--active nil) (drgnx-quickhelp-hover nil)
+           (drgnx-quickhelp--rest nil)
+           (pre-command-hook nil) (post-command-hook nil)
+           (drgnx-modules--runs (list (list 'ui/face 'ui/face)))   ; ui/face is on: its timers start
+           (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
+       (save-window-excursion
+         (delete-other-windows)
+         (unwind-protect (progn ,@body)
+           (drgnx-quickhelp-hide)
+           (setq drgnx-quickhelp--active nil)
+           (drgnx-quickhelp--apply-hover)
+           (mapc #'drgnx-timer-cancel '(quickhelp-timeout quickhelp-unmap quickhelp-look quickhelp-hover quickhelp-away)))))))
 
 (defmacro drgnx-quickhelp-test--elisp (text &rest body)
   "BODY in a buffer of Emacs Lisp TEXT shown in the selected window."
@@ -324,7 +328,7 @@ idle for a while, a focused frame, and `drgnx-quickhelp--request' recording its 
                ((symbol-function 'current-idle-time) (lambda () (seconds-to-time 5)))
                ((symbol-function 'drgnx-quickhelp--request) (lambda (&rest args) (push args requests))))
        ,@body
-       (when (timerp drgnx-quickhelp--poll) (cancel-timer drgnx-quickhelp--poll)))))
+       (drgnx-timer-cancel 'quickhelp-look))))
 
 (ert-deftest drgnx-quickhelp/hover-waits-for-the-pointer-to-move-after-typing ()
   (drgnx-quickhelp-test--with
@@ -348,11 +352,11 @@ idle for a while, a focused frame, and `drgnx-quickhelp--request' recording its 
         (should (= (length requests) 2))
         ;; no graphical frame has the focus: no look, nothing re-armed
         (cl-letf (((symbol-function 'drgnx-quickhelp--focused-p) (lambda () nil)))
-          (when (timerp drgnx-quickhelp--poll) (cancel-timer drgnx-quickhelp--poll))
+          (drgnx-timer-cancel 'quickhelp-look)
           (setq pointer (cons (selected-frame) (cons 120 100)) drgnx-quickhelp--rest nil)
           (drgnx-quickhelp--hover-look)
           (should (= (length requests) 2))
-          (should-not drgnx-quickhelp--poll))))))
+          (should-not (drgnx-timer-active-p 'quickhelp-look)))))))
 
 (ert-deftest drgnx-quickhelp/a-quick-move-to-the-next-symbol-gets-its-card ()
   (drgnx-quickhelp-test--with
@@ -379,17 +383,144 @@ idle for a while, a focused frame, and `drgnx-quickhelp--request' recording its 
                                               :start (window-start) :edges (window-pixel-edges))
                 drgnx-quickhelp--card-up t)
           (drgnx-quickhelp--watch-card)
-          (should (timerp drgnx-quickhelp--poll))     ; looks come though hover is off
-          (cancel-timer drgnx-quickhelp--poll)
+          (should (drgnx-timer-active-p 'quickhelp-look))     ; looks come though hover is off
+          (drgnx-timer-cancel 'quickhelp-look)
           (drgnx-quickhelp--hover-look)
           (should drgnx-quickhelp--origin)            ; nothing moved: it stays, and the looks go on
-          (should (timerp drgnx-quickhelp--poll))
-          (cancel-timer drgnx-quickhelp--poll)
+          (should (drgnx-timer-active-p 'quickhelp-look))
+          (drgnx-timer-cancel 'quickhelp-look)
           (set-window-start (selected-window) 30)
           (drgnx-quickhelp--hover-look)
           (should-not drgnx-quickhelp--origin)
           (should-not drgnx-quickhelp--card-up)
-          (should-not drgnx-quickhelp--poll))))))     ; no card, no hover: the looks stop
+          (should-not (drgnx-timer-active-p 'quickhelp-look)))))))     ; no card, no hover: the looks stop
+
+;;;; The store tells quick help its window moved
+
+(defun drgnx-quickhelp-test--card-over (window)
+  "Stand in for a card placed against WINDOW (cards are graphical only), its edges from the store."
+  (setq drgnx-quickhelp--origin (list :window window :buffer (window-buffer window) :pos 2 :key t
+                                      :selected (selected-window) :start (window-start window)
+                                      :edges (drgnx-state-edges window))
+        drgnx-quickhelp--card-up t))
+
+(ert-deftest drgnx-quickhelp/a-resize-puts-the-card-away ()
+  (drgnx-quickhelp-test--with
+    (drgnx-quickhelp-test--elisp "(car x)\n"
+      (let* ((w1 (selected-window)) (w2 (split-window w1 nil 'right)) (w3 (split-window w2 nil 'below)))
+        (drgnx-state-sync)
+        (drgnx-quickhelp--watch-windows)
+        (drgnx-quickhelp-test--card-over w1)
+        ;; w2 and w3 trade rows, w1 is untouched: the card stays, and nothing is armed
+        (window-resize w2 -2)
+        (drgnx-state-sync)
+        (should drgnx-quickhelp--origin)
+        (should-not (drgnx-timer-active-p 'quickhelp-away))
+        ;; its own window changes size: the subscriber only arms the timer at 0 s, the card is still there
+        (window-resize w1 -3 t)
+        (drgnx-state-sync)
+        (should (drgnx-timer-active-p 'quickhelp-away))
+        (should drgnx-quickhelp--card-up)
+        (should drgnx-quickhelp--origin)
+        (should (drgnx-quickhelp-test--wait (lambda () (null drgnx-quickhelp--origin)) 2))
+        (should-not drgnx-quickhelp--card-up)
+        (ignore w3)))))
+
+(ert-deftest drgnx-quickhelp/a-window-change-puts-the-card-away ()
+  (drgnx-quickhelp-test--with
+    (drgnx-quickhelp-test--elisp "(car x)\n"
+      (let* ((w1 (selected-window)) (w2 (split-window w1 nil 'right)))
+        (drgnx-state-sync)
+        (drgnx-quickhelp--watch-windows)
+        (drgnx-quickhelp-test--card-over w1)
+        ;; a window made beside the card's, w1 not resized: windows-changed
+        (split-window w2 nil 'below)
+        (drgnx-state-sync)
+        (should (drgnx-timer-active-p 'quickhelp-away))
+        (should (drgnx-quickhelp-test--wait (lambda () (null drgnx-quickhelp--origin)) 2))
+        ;; the selection moving to another window of the frame, with no command run
+        (drgnx-timer-cancel 'quickhelp-away)
+        (drgnx-quickhelp-test--card-over w1)
+        (select-window w2)
+        (drgnx-state-sync)
+        (should (drgnx-quickhelp-test--wait (lambda () (null drgnx-quickhelp--origin)) 2))))))
+
+(ert-deftest drgnx-quickhelp/a-resize-of-a-kindless-window-puts-the-card-away ()
+  ;; the store tells pane-resized for panes and editors only: a card over a role window (no pane kind) goes when
+  ;; a neighbour editor's event shows the card's own window has other edges
+  (drgnx-quickhelp-test--with
+    (drgnx-state-define-role 'quickhelp)
+    (drgnx-quickhelp-test--elisp "(car x)\n"
+      (let* ((editor (selected-window)) (side (split-window editor nil 'right)))
+        (set-window-parameter side 'drgnx-role 'quickhelp)
+        (drgnx-state-sync)
+        (drgnx-quickhelp--watch-windows)
+        (drgnx-quickhelp-test--card-over side)
+        (window-resize side -4 t)
+        (drgnx-state-sync)
+        (should (drgnx-timer-active-p 'quickhelp-away))
+        (should (drgnx-quickhelp-test--wait (lambda () (null drgnx-quickhelp--origin)) 2))))))
+
+(ert-deftest drgnx-quickhelp/its-store-subscriptions-end-with-the-module ()
+  (drgnx-quickhelp-test--with
+    (let ((drgnx-modules--table (list (list 'ui/face :doc "test")))
+          (drgnx-modules--report nil) (drgnx-modules--stacks nil) (drgnx-modules--runs nil)
+          (drgnx-modules--features nil))
+      (drgnx-quickhelp-test--elisp "(car x)\n"
+        (let ((w (selected-window)))
+          (should-not (drgnx-modules--run-setup 'ui/face #'drgnx-quickhelp--watch-windows))
+          (drgnx-modules--record 'ui/face 'startup 0 'ok)
+          (dolist (e '(pane-resized windows-changed selected-changed))
+            (should (drgnx-state--lane-of e #'drgnx-quickhelp--put-away)))
+          (drgnx-quickhelp-test--card-over w)
+          (drgnx-quickhelp--put-away (list :frame (selected-frame) :windows (list w)))
+          (should (drgnx-timer-active-p 'quickhelp-away))
+          (should-not (drgnx-module-teardown 'ui/face))
+          (dolist (e '(pane-resized windows-changed selected-changed))
+            (should-not (drgnx-state--lane-of e #'drgnx-quickhelp--put-away)))
+          (should-not (drgnx-timer-active-p 'quickhelp-away)))))))
+
+(ert-deftest drgnx-quickhelp/scrolling-is-still-polled ()
+  (drgnx-quickhelp-test--with
+    (drgnx-quickhelp-test--elisp (mapconcat (lambda (i) (format "(car x%d)" i)) (number-sequence 1 60) "\n")
+      (cl-letf (((symbol-function 'current-idle-time) (lambda () (seconds-to-time 5))))
+        (let ((drgnx-quickhelp-hover nil) (w (selected-window)))
+          (drgnx-state-sync)
+          (drgnx-quickhelp-test--card-over w)
+          ;; edges are the store's business: a look that finds other edges in the origin does not mind
+          (setq drgnx-quickhelp--origin (plist-put drgnx-quickhelp--origin :edges '(1 2 3 4)))
+          (should-not (drgnx-quickhelp--card-moved-p drgnx-quickhelp--origin))
+          (drgnx-quickhelp--watch-card)
+          (drgnx-timer-cancel 'quickhelp-look)
+          (drgnx-quickhelp--hover-look)
+          (should drgnx-quickhelp--origin)
+          (drgnx-timer-cancel 'quickhelp-look)
+          ;; scrolling is not window state: the look still sees it
+          (set-window-start w 30)
+          (drgnx-quickhelp--hover-look)
+          (should-not drgnx-quickhelp--origin)
+          (should-not drgnx-quickhelp--card-up))))))
+
+(ert-deftest drgnx-quickhelp/the-strip-is-not-an-editor ()
+  (drgnx-quickhelp-test--with
+    (drgnx-state-define-role 'quickhelp)        ; what the module's setup does
+    (drgnx-quickhelp-test--elisp (mapconcat (lambda (i) (format "(car x%d)" i)) (number-sequence 1 60) "\n")
+      (let ((editor (selected-window)))
+        (drgnx-state-sync)
+        (drgnx-quickhelp--watch-windows)
+        (goto-char (point-min))
+        (forward-char 1)
+        (drgnx-quickhelp-test--show '(("(LIST)" :thing car)))
+        (let ((strip drgnx-quickhelp--strip))
+          (should (window-live-p strip))
+          (drgnx-state-sync)
+          (should (eq (drgnx-state-window-role strip) 'quickhelp))
+          (should (equal (drgnx-state-windows (selected-frame) 'editor) (list editor)))
+          (should (eq (drgnx-state-editor-window) editor))
+          ;; opening it was a window change, and it did not put itself away
+          (should-not (drgnx-timer-active-p 'quickhelp-away))
+          (should (window-live-p strip))
+          (should (drgnx-quickhelp-shown-p)))))))
 
 (ert-deftest drgnx-quickhelp/again-while-shown-opens-help ()
   (drgnx-quickhelp-test--with
@@ -470,13 +601,28 @@ idle for a while, a focused frame, and `drgnx-quickhelp--request' recording its 
     (let ((drgnx-quickhelp-hover t))
       (call-interactively (drgnx-cmd-command (drgnx-commands-get 'quick-help-toggle-hover)))
       (should-not drgnx-quickhelp-hover)
-      (should-not (timerp drgnx-quickhelp--hover-timer))
+      (should-not (drgnx-timer-active-p 'quickhelp-hover))
       (call-interactively (drgnx-cmd-command (drgnx-commands-get 'quick-help-toggle-hover)))
       (should drgnx-quickhelp-hover)
-      (should (timerp drgnx-quickhelp--hover-timer))
+      (should (drgnx-timer-active-p 'quickhelp-hover))
       (setq drgnx-quickhelp--active nil)
       (drgnx-quickhelp--apply-hover)
-      (should-not (timerp drgnx-quickhelp--hover-timer)))))
+      (should-not (drgnx-timer-active-p 'quickhelp-hover)))))
+
+(ert-deftest drgnx-quickhelp/its-timers-belong-to-the-face-module ()
+  ;; one hover timer however often it is applied; the look and the hover end with the module's run; no run, no timer
+  (drgnx-quickhelp-test--with
+    (setq drgnx-quickhelp--active t drgnx-quickhelp-hover t)
+    (drgnx-quickhelp--apply-hover)
+    (drgnx-quickhelp--apply-hover)
+    (should (equal (seq-filter (lambda (e) (eq (car e) 'quickhelp-hover)) (drgnx-timer-pending))
+                   '((quickhelp-hover ui/face start))))
+    (drgnx-quickhelp--watch-card)
+    (should (drgnx-timer-active-p 'quickhelp-look))
+    (should (= 2 (drgnx-timer-cancel-owner 'ui/face)))
+    (let ((drgnx-modules--runs nil))
+      (drgnx-quickhelp--apply-hover)
+      (should-not (drgnx-timer-active-p 'quickhelp-hover)))))
 
 (ert-deftest drgnx-quickhelp/keys-in-every-profile ()
   (dolist (p '(("vscode" . "(quick-help \"C-k C-i\")")

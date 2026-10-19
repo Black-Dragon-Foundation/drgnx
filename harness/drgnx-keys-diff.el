@@ -96,10 +96,11 @@ lists as :native (KIND `native': documented, never rebound).  Nothing is evaluat
     (drgnx--core-commands)
     (drgnx-modules-load-directory (expand-file-name "modules" drgnx-dir))
     (dolist (stage drgnx-modules-stages) (ignore-errors (drgnx-modules-run stage)))
-    (drgnx-modules-write-state
-     `(:version 1 :external ((:name gryphn :path ,gryphn-dir
-                                    :features (gryphn-org gryphn-run gryphn-board gryphn-board-ui gryphn-org-ui gryphn-agents
-                                                          gryphn-search gryphn-llm gryphn-acp gryphn-ide)))))
+    (drgnx-modules-update-state
+     (lambda (_)
+       `(:external ((:name gryphn :path ,gryphn-dir
+                           :features (gryphn-org gryphn-run gryphn-board gryphn-board-ui gryphn-org-ui gryphn-agents
+                                                 gryphn-search gryphn-llm gryphn-acp gryphn-ide))))))
     (drgnx-modules-load-external)
     (delete-directory cfg t)
     (let ((r (drgnx-keys-resolve :commands (drgnx-commands-all) :profiles drgnx-keys-profiles

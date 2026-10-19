@@ -1,7 +1,9 @@
 ;;; search-chunk-test.el --- batch tests: the files of a project and their chunks (semantic search) -*- lexical-binding: t -*-
 (require 'ert)
 (require 'cl-lib)
+(require 'drgnx-paths)
 (require 'drgnx-search-chunk)
+(load (expand-file-name "test/fixtures/config-fixture" drgnx-dir) nil t)
 
 (defun drgnx-search-chunk-test--lines (from to &optional blank)
   "Lines \"line FROM\" .. \"line TO\" joined by newlines, each BLANK line number replaced by an empty line."
@@ -560,5 +562,78 @@ them): checked on the environment each call gets — a machine without the Germa
             (make-symbolic-link (concat root "/sub") (expand-file-name "below" outside))
             (should (equal (drgnx-search-toplevel (concat outside "/below")) root)))
         (delete-directory outside t)))))
+
+;;;; search.eld through the config layer
+
+(defmacro drgnx-search-chunk-test--project (&rest body)
+  "BODY with ROOT a fresh folder (no git needed: only the configuration is read) under `drgnx-test-with-config'."
+  (declare (indent 0))
+  `(drgnx-test-with-config
+     (let ((root (file-name-as-directory (make-temp-file "drgnx-search-cfg" t))))
+       (unwind-protect (progn ,@body) (delete-directory root t)))))
+
+(ert-deftest drgnx-search-config/search-project-is-a-project-file ()
+  (let ((def (drgnx-config-definition 'search-project)))
+    (should def)
+    (should (eq (plist-get def :dir) 'project))
+    (should (equal (plist-get def :file) "search.eld"))
+    (should (= (plist-get def :max-bytes) 65536))
+    (should (equal (plist-get def :schema)
+                   '(plist (:include (list-of string)) (:exclude (list-of string)) (:off boolean))))))
+
+(ert-deftest drgnx-search-config/a-65-kib-file-is-refused-not-truncated ()
+  "The first 64 KiB of this file are a valid configuration; the file is over the limit, so it is an error."
+  (drgnx-search-chunk-test--project
+    (drgnx-search-chunk-test--write root ".drgnx/search.eld"
+                                    (concat "(:off t)" (make-string (- (* 65 1024) 8) ?\s)))
+    (let ((config (drgnx-search-config root)))
+      (should (string-match-p "\\`\\.drgnx/search\\.eld cannot be read: ." (plist-get config :error)))
+      (should-not (plist-get config :off)))
+    ;; exactly 64 KiB still reads
+    (drgnx-search-chunk-test--write root ".drgnx/search.eld" (concat "(:off t)" (make-string (- 65536 8) ?\s)))
+    (should (equal (drgnx-search-config root) '(:include nil :exclude nil :off t)))))
+
+(ert-deftest drgnx-search-config/a-fifo-is-refused ()
+  "A FIFO is refused by the layer before it is opened, so the read never blocks."
+  (skip-unless (executable-find "mkfifo"))
+  (drgnx-search-chunk-test--project
+    (make-directory (expand-file-name ".drgnx" root))
+    (should (zerop (call-process "mkfifo" nil nil nil (expand-file-name ".drgnx/search.eld" root))))
+    (should (string-match-p "not a regular file" (plist-get (drgnx-search-config root) :error)))
+    (should (string-match-p "not a regular file" (plist-get (drgnx-config-problem 'search-project root) :text)))))
+
+(ert-deftest drgnx-search-config/an-existing-file-keeps-working ()
+  "Comments, a key this drgnx does not know and a `:version' do not make a file that older code read a problem."
+  (drgnx-search-chunk-test--project
+    (drgnx-search-chunk-test--write root ".drgnx/search.eld"
+                                    ";; my search settings\n(:include (\"src/\" \"*.md\") ; only these\n :exclude (\"vendor/\")\n :future \"x\")\n")
+    (should (equal (drgnx-search-config root) '(:include ("src/" "*.md") :exclude ("vendor/") :off nil)))
+    (should (equal (drgnx-config-get 'search-project :include root) '("src/" "*.md")))
+    (drgnx-search-chunk-test--write root ".drgnx/search.eld" "(:version 1 :off t)")
+    (should (equal (drgnx-search-config root) '(:include nil :exclude nil :off t)))
+    ;; absent: the defaults
+    (delete-file (expand-file-name ".drgnx/search.eld" root))
+    (should (equal (drgnx-search-config root) '(:include nil :exclude nil :off nil)))))
+
+(ert-deftest drgnx-search-config/a-read-eval-form-is-never-evaluated ()
+  "The project file comes from a repository the user may not trust: even with `read-eval' t it is only read."
+  (drgnx-search-chunk-test--project
+    (setq drgnx-search-chunk-test--pwned nil)
+    (drgnx-search-chunk-test--write root ".drgnx/search.eld"
+                                    "(:include #.(setq drgnx-search-chunk-test--pwned t))")
+    (let ((read-eval t))
+      (should (plist-get (drgnx-search-config root) :error)))
+    (should-not drgnx-search-chunk-test--pwned)))
+
+(ert-deftest drgnx-search-config/an-unreadable-dir-is-still-an-error ()
+  "The `.drgnx' accessibility check stays: the layer is not asked about a file it cannot see."
+  (skip-unless (not (zerop (user-uid))))
+  (drgnx-search-chunk-test--project
+    (drgnx-search-chunk-test--write root ".drgnx/search.eld" "(:off t)")
+    (let ((dir (expand-file-name ".drgnx" root)))
+      (set-file-modes dir 0)
+      (unwind-protect
+          (should (string-match-p "not an accessible directory" (plist-get (drgnx-search-config root) :error)))
+        (set-file-modes dir #o755)))))
 
 ;;; search-chunk-test.el ends here

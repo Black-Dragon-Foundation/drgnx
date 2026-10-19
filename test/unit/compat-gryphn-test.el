@@ -8,7 +8,7 @@
   (declare (indent 1))
   `(let* ((,dir (make-temp-file "drgnx-ext" t)) (cfg (make-temp-file "drgnx-cfg" t))
           (process-environment (cons (concat "DRGNX_CONFIG_DIR=" cfg) process-environment))
-          (drgnx-modules--table nil) (drgnx-modules--report nil) (drgnx-modules--state nil)
+          (drgnx-modules--table nil) (drgnx-modules--report nil)
           (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
           (drgnx-keys-profiles (copy-tree drgnx-keys-profiles)) (load-path load-path))
      (unwind-protect (progn ,@body) (delete-directory ,dir t) (delete-directory cfg t))))
@@ -93,9 +93,10 @@
     (write-region "(require 'gryphn-commands)\n(gryphn-command-define 'kx-ext :title \"Ext\" :category \"X\" :command #'ignore)\n(provide 'kx-good)\n"
                   nil (expand-file-name "kx-good.el" dir) nil 'silent)
     (write-region "(error \"broken on purpose\")\n" nil (expand-file-name "kx-bad.el" dir) nil 'silent)
-    (drgnx-modules-write-state
-     `(:version 1 :external ((:name kx :path ,dir :features (kx-good kx-bad))
-                             (:name gone :path "/nonexistent/drgnx-ext" :features (whatever)))))
+    (drgnx-modules-update-state
+     (lambda (_)
+       `(:external ((:name kx :path ,dir :features (kx-good kx-bad))
+                    (:name gone :path "/nonexistent/drgnx-ext" :features (whatever))))))
     (drgnx-modules-load-external)
     (should (drgnx-commands-get 'kx-ext))
     (should (eq (plist-get (alist-get 'external/kx/kx-good (drgnx-modules-report)) :status) 'ok))
@@ -107,7 +108,7 @@
   (let ((path (getenv "DRGNX_GRYPHN_DIR")))
     (skip-unless (and path (file-directory-p path)))
     (drgnx-ext-test--with dir
-      (drgnx-modules-write-state `(:version 1 :external ((:name gryphn :path ,path :features (gryphn-org gryphn-run gryphn-agents gryphn-search)))))
+      (drgnx-modules-update-state (lambda (_) `(:external ((:name gryphn :path ,path :features (gryphn-org gryphn-run gryphn-agents gryphn-search))))))
       (drgnx-modules-load-external)
       (dolist (f '(gryphn-org gryphn-run gryphn-agents gryphn-search))
         (let ((r (alist-get (intern (format "external/gryphn/%s" f)) (drgnx-modules-report))))

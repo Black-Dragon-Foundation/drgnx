@@ -1,5 +1,6 @@
 ;;; core-hooks-test.el --- batch tests: staged hooks -*- lexical-binding: t -*-
 (require 'ert)
+(require 'cl-lib)
 (require 'drgnx-hooks)
 
 (ert-deftest drgnx-hooks/run-once-isolates-errors ()
@@ -24,3 +25,23 @@
           (should (= n 1)))
       (drgnx-hooks-uninstall)
       (delete-file f1) (delete-file f2))))
+
+(ert-deftest drgnx-hooks/first-gui-frame-asks-the-classifier ()
+  ;; the first graphical frame is what `drgnx-state-frame-kind' calls `gui', for the frame given or, from
+  ;; `window-setup-hook' (no frame), the selected one
+  (let ((drgnx-first-gui-frame-hook nil) (drgnx-hooks--done nil) (n 0) (kind 'tty) (asked nil))
+    (add-hook 'drgnx-first-gui-frame-hook (lambda () (setq n (1+ n))))
+    (cl-letf (((symbol-function 'drgnx-state-frame-kind) (lambda (f) (push f asked) kind))
+              ((symbol-function 'display-graphic-p) (lambda (&optional _) (error "not the classifier"))))
+      (drgnx-hooks--gui-frame 'kx-frame)
+      (should (equal asked '(kx-frame)))
+      (should (= n 0))
+      (setq kind 'child)
+      (drgnx-hooks--gui-frame 'kx-frame)
+      (should (= n 0))
+      (setq kind 'gui)
+      (drgnx-hooks--gui-frame)                  ; window-setup-hook
+      (should (eq (car asked) (selected-frame)))
+      (should (= n 1))
+      (drgnx-hooks--gui-frame 'kx-frame)        ; once
+      (should (= n 1)))))

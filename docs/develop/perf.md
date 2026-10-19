@@ -8,6 +8,8 @@ drgnx test --perf           every workload; fails when a budget breaks; WORSE li
 drgnx test --perf --audit   the workloads with every hook function timed: judged on the hook budget only
 drgnx test --soak [MIN]     the input workloads in a loop for MIN minutes (30); fails when memory grows
 DRGNX_STARTUP_TRACE=FILE    emacs --init-directory …/init: where startup time goes, written to FILE
+DRGNX_PERF_WORKLOADS='A B'  only those workloads (space-separated names from the table below; unset: all; a typo is an error).
+                            A partial run is judged against its own budgets and writes no history line
 DRGNX_PERF_MAX_LOAD=N       the load average above which --perf does not judge (default: CPUs / 4, at least 3)
 DRGNX_PERF_WAIT=S           how long --perf waits for a quiet machine before giving up (180 s)
 DRGNX_PERF_ONLY=REGEXP      run only the workloads whose name matches (an Emacs regexp: `\|` for alternation): judged
@@ -24,11 +26,13 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 | tabs | 20 next-tab switches among 20 open files | input latency |
 | explorer | focus the Explorer, 10 rows down (each one moves), back | input latency |
 | agent-typing | typing while an agent (the mock) streams a reply into the Agents tab (checked: still streaming at the end) | input latency |
+| agent-stream | the typing workload's six strings while the editor's other window shows a transcript whose running answer starts 400 kB long (not done) and the mock streams 100-character chunks onto it, 50 a second (`stream 500`; checked: still streaming at the end): a chunk costs the chunk, and only the new text is drawn | input latency |
 | cockpit-cards | typing while the Work cockpit is filtered to a job (Show Job in Work: the graph, and What needs you with four cards, three tasks and their agents; twenty decisions) and three mock agents stream, the panes following their changes (checked: still streaming at the end); until M12f `job-window`, the job's own frame | input latency |
 | code-scrolling | `<next>`×30 then `<prior>`×30 through the 12k-line fixture with sticky scroll and indent guides (when installed) on — smooth scrolling is on but pixel scrolling is a wheel's, not `<next>`'s | input latency |
 | diff-scrolling | `<next>`×30 then `<prior>`×30 through a 10k-line diff in the split layout | input latency |
 | typing-with-ghost | the typing workload with ghost text on: a mock model answers every pause at once, the pause shortened to 10 ms so each key asks and the next cancels (checked: it asked) | input latency |
 | replace-typing | 22 characters into the fixture while the Search view lists 10k matches in 100 files: the first key starts the search (checked: at least 5 keys typed while it streamed, all 10k listed) | input latency |
+| replace-retype | the same 10k matches listed and drawn, then the string `pi` typed 5 times into the Replace field: after the pause each match row is patched with its new preview, in slices, the visible rows first (checked: no full draw, the rows equal a fresh render of the view's keys) | input latency, and `:slice_ms`: the wall time of each view draw (`drgnx-view--draw-buffer`, timed by a harness-side advice; budget: max 6 ms) |
 | live-view | the typing workload's 186 characters while the Live view, beside the file, shows a mock browser's JPEG frames as wide as the view asked for (as Chrome sends them), 30 a second, each sent once the last was acknowledged (the mock runs in the same Emacs, so its message and websocket frame are made once; without ImageMagick the frames are a few bytes no decoder takes, so drawing costs less) (checked: frames were drawn) | input latency |
 | agent-settings-open | the Claude Code settings page opened and drawn (`redisplay`) against a fixture home: a 5 MB `.claude.json` (300 projects with history), 50 MCP servers and 200 skills; three runs | milliseconds until drawn (budget 150) and the processes started (budget 0: opening the page starts nothing) |
 | remote-typing | the typing workload's 186 characters in a local file while the Explorer lists a mock-method root (test/fixtures/tramp-mock.el: a real TRAMP connection to a local `sh`) and its connection is dead, the segment showing it lost (checked: nothing was sent to the remote, the connection stayed dead) | input latency |
@@ -36,6 +40,7 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 | typing-evil | the typing workload with Vim keys: `i`, the same six strings, `<escape>` (checked: typed, back in normal state) | input latency |
 | motions-evil | a 5000-line copy of the fixture, normal state, from the middle: `j`×20, `w`×20, `}`×10, `C-d`×5, `C-u`×5 (checked: point moved) | input latency |
 | explorer-evil | the explorer workload with Vim keys: `SPC E`, `j`×10, `<escape>` | input latency |
+| window-switch | `C-x o` ×50 across three editor groups showing one file, with the left dock, the panel and the right dock shown (checked: the selected window changed 50 times) | input latency |
 | frames | 5 new frames until drawn | frame time |
 | redisplay | 30 forced redisplays of the fixture | redisplay time |
 | startup | a drgnx daemon (isolated: its own HOME and drgnx dirs, the harness's environment allowlist) until its server answers (a daemon that never answers fails), 4 starts, the first dropped | server-ready time, modules' time |
@@ -121,10 +126,30 @@ Run `--perf` on its own: no other test tiers, agents or builds at the same time.
 
 ## Tuning (and why)
 
-- **GC.** Emacs' default threshold (800 kB) collected 28 times in 186 keystrokes. drgnx raises it to 512 MB while
-  starting (early-init; set back after startup even if drgnx fails to start), then uses 64 MB (`drgnx-gc-cons-threshold`) and collects after 8 s idle
-  (`drgnx-gc-idle-seconds`), where nobody waits. The price is memory: +70 MB, within budget. A threshold your own
-  init set (no longer early-init's) is kept, and with `gcmh-mode` on drgnx sets neither (gcmh does both).
+- **GC.** One owner, `core/drgnx-gc.el`. Emacs' default threshold (800 kB) collected 28 times in 186 keystrokes.
+  drgnx raises it to 512 MB while starting (early-init; set back after startup even if drgnx fails to start), then
+  uses 64 MB (`drgnx-gc-cons-threshold`). A threshold your own init set (no longer early-init's) is kept.
+  - **The idle collection** is the timer layer's key `gc-idle` (`drgnx-gc-idle-seconds`, 8 s; started again by a
+    second setup, never doubled), owner `:core`, so it is covered by the timer lint like every other timer. It
+    collects only when more than a quarter of the threshold was allocated since the last collection
+    (`drgnx-gc--consed` minus `drgnx-gc--base`, which `drgnx-gc--note` on `post-gc-hook` sets): an idle Emacs that
+    allocated nothing stays still. `drgnx-gc-mode` (on after `drgnx-gc-setup`) owns that hook function, so it is
+    one function, removed when the mode turns off.
+  - **A gap collection for producers:** `(drgnx-gc-gap)` collects, and returns t, when `drgnx-gc-gap-quiet` (0.02 s,
+    nil: never) has passed without input, no input is pending and at least `drgnx-gc-gap-share` (85%) of the
+    threshold was allocated since the last collection. A producer that finished a burst of work calls it instead
+    of waiting for the threshold to be hit in the middle of the next keystroke.
+  - **gcmh:** `drgnx-gc-mode` watches `gcmh-mode`. Turned on, gcmh does the threshold and the idle collection and
+    `gc-idle` is cancelled; turned off, drgnx's threshold, `gc-cons-percentage` 0.1 and `gc-idle` are back
+    (gcmh's own mode function sets its low threshold after the watcher ran, so `gcmh-mode-off-hook` restores
+    them too). A `let` of `gcmh-mode` changes nothing.
+  - **Batch Emacs** (the hub and workers): `drgnx-gc-batch-setup` sets 32 MB (`drgnx-gc-batch-threshold`) and
+    `gc-cons-percentage` 0.2.
+  - **Harness sessions** of the minimal configuration run at the same settings (`drgnx-ui-gc-early` and
+    `drgnx-ui-gc-setup` in `harness/init/prelude.el`); a session of an external configuration brings its own.
+- **The Outline** keeps no imenu markers: each refresh turns them into integer positions and releases them, since a
+  marker in the source buffer costs every edit of that buffer until a collection frees it. Its rows are patched by key
+  (an edit that moves definitions redraws none). Wall numbers: perf deferred.
 - **Key resolution** at startup checked every pair of bindings for prefixes and re-parsed keys each time; it now
   caches parsed keys and compares only keys in one keymap with the same first event.
 - **Harness sessions** share one native-code cache per state root, so advice trampolines (the no-prompt guard

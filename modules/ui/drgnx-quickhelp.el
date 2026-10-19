@@ -24,6 +24,8 @@
 (require 'thingatpt)
 (require 'drgnx-registry)
 (require 'drgnx-modal)
+(require 'drgnx-timer)
+(require 'drgnx-state)
 (declare-function drgnx-face-glyph "drgnx-face")
 (declare-function eldoc--format-doc-buffer "eldoc")
 
@@ -86,8 +88,9 @@ and never leaves the window (nil: the caller shortens the card, or shows none). 
 ;;;; Collecting docs: eldoc's functions, asynchronously
 
 (defvar drgnx-quickhelp--request 0 "The id of the newest request: answers to an older one are dropped.")
-(defvar drgnx-quickhelp--timer nil "The newest request's one-second timeout.")
 (defconst drgnx-quickhelp--timeout 1.0 "Seconds a request waits for slow backends before it shows what came.")
+(defconst drgnx-quickhelp--owner 'ui/face
+  "The module whose run owns quick help's timers (the key `quickhelp-timeout' is the newest request's timeout).")
 
 (defconst drgnx-quickhelp--fuller
   '((elisp-eldoc-var-docstring . elisp-eldoc-var-docstring-with-value)
@@ -97,8 +100,11 @@ and never leaves the window (nil: the caller shortens the card, or shows none). 
 (defun drgnx-quickhelp--cancel ()
   "Drop the pending request: its answers and its timeout come to nothing."
   (cl-incf drgnx-quickhelp--request)
-  (when (timerp drgnx-quickhelp--timer) (cancel-timer drgnx-quickhelp--timer))
-  (setq drgnx-quickhelp--timer nil))
+  (drgnx-timer-cancel 'quickhelp-timeout))
+
+(defun drgnx-quickhelp--timed-out (finish)
+  "The request's timeout (the timer's function): call FINISH, which shows what came."
+  (funcall finish))
 
 (defun drgnx-quickhelp-collect (pos window callback)
   "Ask `eldoc-documentation-functions' about POS in WINDOW's buffer (point there, in `save-excursion').
@@ -110,8 +116,7 @@ is first; a newer request drops this one (CALLBACK is then never called).  Retur
                   (unless done
                     (setq done t)
                     (when (= id drgnx-quickhelp--request)
-                      (when (timerp drgnx-quickhelp--timer) (cancel-timer drgnx-quickhelp--timer))
-                      (setq drgnx-quickhelp--timer nil)
+                      (drgnx-timer-cancel 'quickhelp-timeout)
                       (funcall callback (mapcar #'cdr (sort answers (lambda (a b) (< (car a) (car b)))))))))
                 (answer-fn (i)
                   (let ((answered nil))
@@ -140,7 +145,8 @@ is first; a newer request drops this one (CALLBACK is then never called).  Retur
                  nil))))))
       (if (zerop (cl-decf pending))
           (finish)
-        (setq drgnx-quickhelp--timer (run-at-time drgnx-quickhelp--timeout nil #'finish))))))
+        (drgnx-timer-start 'quickhelp-timeout drgnx-quickhelp--timeout #'drgnx-quickhelp--timed-out
+                           :args (list #'finish) :owner drgnx-quickhelp--owner)))))
 
 ;;;; The card's text
 
@@ -234,7 +240,6 @@ Close Quick Help).")
   "What the card is about, from its request until it is put away: (:window :buffer :pos :selected :key :docs).")
 
 (defvar drgnx-quickhelp--card-up nil "Non-nil while the card's frame is placed beside a symbol (not parked).")
-(defvar drgnx-quickhelp--unmap-timer nil "The idle timer that unmaps the parked card.")
 
 (defun drgnx-quickhelp-shown-p ()
   "Non-nil while a quick help card (or strip) shows."
@@ -245,8 +250,6 @@ Close Quick Help).")
 
 (defun drgnx-quickhelp--unmap ()
   "Unmap the parked card (from an idle timer: a pgtk child frame's unmap waits ~100 ms for the compositor)."
-  (when (timerp drgnx-quickhelp--unmap-timer) (cancel-timer drgnx-quickhelp--unmap-timer))
-  (setq drgnx-quickhelp--unmap-timer nil)
   (when (and (not drgnx-quickhelp--card-up) (frame-live-p drgnx-quickhelp--frame) (frame-visible-p drgnx-quickhelp--frame))
     (make-frame-invisible drgnx-quickhelp--frame)))
 
@@ -256,8 +259,7 @@ Close Quick Help).")
   (setq drgnx-quickhelp--card-up nil)
   (when (and (frame-live-p drgnx-quickhelp--frame) (frame-visible-p drgnx-quickhelp--frame))
     (set-frame-position drgnx-quickhelp--frame -10000 -10000)
-    (unless (timerp drgnx-quickhelp--unmap-timer)
-      (setq drgnx-quickhelp--unmap-timer (run-with-idle-timer 1 nil #'drgnx-quickhelp--unmap)))))
+    (drgnx-timer-soon 'quickhelp-unmap 1 #'drgnx-quickhelp--unmap :idle t :owner drgnx-quickhelp--owner)))
 
 (defun drgnx-quickhelp--card-window ()
   (cond ((window-live-p drgnx-quickhelp--strip) drgnx-quickhelp--strip)
@@ -428,8 +430,8 @@ symbol's whole line or the line point is on."
           (set-frame-position frame (car xy) (cdr xy))
           (unless (frame-visible-p frame) (make-frame-visible frame))
           (setq drgnx-quickhelp--card-up t
-                ;; what it was placed against: a look puts it away when the window scrolls or moves
-                drgnx-quickhelp--origin (plist-put (plist-put o :start (window-start win)) :edges (window-pixel-edges win)))
+                ;; what it was placed against: a look puts it away when the window scrolls; the store's events, when it moves
+                drgnx-quickhelp--origin (plist-put (plist-put o :start (window-start win)) :edges (drgnx-state-edges win)))
           (drgnx-quickhelp--watch-card)
           t)))))
 
@@ -461,7 +463,7 @@ WIN is too small.  Point stays visible."
             ((and (null docs) (not (plist-get o :key))) (drgnx-quickhelp-hide))   ; a hover over nothing
             ;; no strip, or no room for a card beside the line: the first line in the echo area for the key, nothing
             ;; for a hover
-            ((or (not (display-graphic-p (window-frame (plist-get o :window)))) (not (drgnx-quickhelp--show-card docs)))
+            ((or (not (eq (drgnx-state-frame-kind (window-frame (plist-get o :window))) 'gui)) (not (drgnx-quickhelp--show-card docs)))
              (drgnx-quickhelp-hide)
              (when (and docs (plist-get o :key)) (message "%s" (car (drgnx-quickhelp--doc-lines docs 200 1)))))))))
 
@@ -473,7 +475,7 @@ WIN is too small.  Point stays visible."
   (add-hook 'post-command-hook #'drgnx-quickhelp--post-command)
   (setq drgnx-quickhelp--showing t)
   ;; a terminal: the strip opens now, from the command (never from a timer: the layout only changes when you act)
-  (when (and key (not (display-graphic-p (window-frame win))))
+  (when (and key (not (eq (drgnx-state-frame-kind (window-frame win)) 'gui)))
     (setq drgnx-quickhelp--strip (drgnx-quickhelp--open-strip win)))
   (drgnx-quickhelp-collect pos win #'drgnx-quickhelp--show))
 
@@ -546,14 +548,12 @@ card moves out of the way while you type — unless the modal engine's state doe
 
 ;;;; Hover (graphical frames): an idle timer reads where the mouse rests
 
-(defvar drgnx-quickhelp--hover-timer nil "The idle timer that starts watching the mouse.")
-(defvar drgnx-quickhelp--poll nil "The timer of the next look at the mouse while Emacs is idle.")
 (defconst drgnx-quickhelp--poll-interval 0.2 "Seconds between looks at the mouse while idle.")
 
 (defun drgnx-quickhelp--mouse-symbol ()
   "(WINDOW . START) of the symbol under the mouse in a graphical frame's text, or nil."
   (pcase-let ((`(,frame ,x . ,y) (mouse-pixel-position)))
-    (when (and (frame-live-p frame) x y (display-graphic-p frame) (not (frame-parent frame)))
+    (when (and x y (eq (drgnx-state-frame-kind frame) 'gui))
       (let* ((posn (posn-at-x-y x y frame)) (w (posn-window posn)) (p (posn-point posn)))
         (when (and (windowp w) p (null (posn-area posn)) (not (window-minibuffer-p w)))
           (with-current-buffer (window-buffer w)
@@ -567,14 +567,38 @@ card moves out of the way while you type — unless the modal engine's state doe
 
 (defun drgnx-quickhelp--focused-p ()
   "Non-nil when a graphical frame (not a child frame) has the focus (or Emacs cannot tell)."
-  (seq-some (lambda (f) (and (display-graphic-p f) (not (frame-parent f)) (frame-focus-state f))) (frame-list)))
+  (seq-some (lambda (f) (and (eq (drgnx-state-frame-kind f) 'gui) (frame-focus-state f))) (frame-list)))
 
 (defun drgnx-quickhelp--card-moved-p (o)
-  "Non-nil when the window the card O was placed against has scrolled, moved or changed size since."
+  "Non-nil when the window the card O was placed against has scrolled since (or is gone).
+A move or a resize is the store's to tell (`drgnx-quickhelp--put-away'): scrolling is not window state."
   (let ((w (plist-get o :window)))
     (and (plist-get o :start)
-         (or (not (window-live-p w)) (/= (window-start w) (plist-get o :start))
-             (not (equal (window-pixel-edges w) (plist-get o :edges)))))))
+         (or (not (window-live-p w)) (/= (window-start w) (plist-get o :start))))))
+
+(defun drgnx-quickhelp--put-away-now (o)
+  "Put the card away, unless it is not the card O any more (from the timer `drgnx-quickhelp--put-away' armed)."
+  (when (and drgnx-quickhelp--card-up (eq drgnx-quickhelp--origin o))
+    (drgnx-quickhelp--teardown)))
+
+(defun drgnx-quickhelp--put-away (data)
+  "A `now' subscriber of the store's `pane-resized', `windows-changed' and `selected-changed': when DATA says
+the card's window moved, was resized, or the frame's windows or selection changed, arm the put-away timer at 0 s.
+Only that: the card's frame is never touched during redisplay.  A strip is a window of the layout and stays."
+  (let* ((o drgnx-quickhelp--origin) (win (plist-get o :window)))
+    (when (and o drgnx-quickhelp--card-up
+               (or (not (window-live-p win)) (eq (plist-get data :frame) (window-frame win)))
+               (cond ((plist-member data :new)         ; pane-resized: any, if the card's window has other edges
+                      (not (equal (drgnx-state-edges win) (plist-get o :edges))))
+                     ((plist-member data :windows) t)  ; windows-changed
+                     (t (not (memq (plist-get data :window) (list (plist-get o :selected) (drgnx-quickhelp--card-window)))))))
+      (drgnx-timer-soon 'quickhelp-away 0 #'drgnx-quickhelp--put-away-now
+                        :args (list o) :owner drgnx-quickhelp--owner))))
+
+(defun drgnx-quickhelp--watch-windows ()
+  "Hear from the store when the card's window moves (a module setup's own subscriptions: undone with it)."
+  (dolist (event '(pane-resized windows-changed selected-changed))
+    (drgnx-state-subscribe event #'drgnx-quickhelp--put-away :lane 'now)))
 
 (defun drgnx-quickhelp--hover-step (o)
   "Hover's part of a look, O the card's state: once the pointer has moved since the last command, a symbol rested
@@ -595,9 +619,8 @@ The look's own hides are teardowns: the pointer is moving, so the next symbol ge
             (o (drgnx-quickhelp--teardown))))))
 
 (defun drgnx-quickhelp--hover-look ()
-  "One look, while Emacs is idle: a card whose window scrolled, moved or resized goes (hover on or off); with hover
+  "One look, while Emacs is idle: a card whose window scrolled goes (hover on or off); with hover
 on and a graphical frame focused, `drgnx-quickhelp--hover-step'.  Looks go on while a card is up or hover looks."
-  (setq drgnx-quickhelp--poll nil)
   (let* ((idle (current-idle-time))
          (quiet (and idle (>= (float-time idle) (* 0.75 drgnx-quickhelp--poll-interval))))
          (o drgnx-quickhelp--origin)
@@ -607,28 +630,29 @@ on and a graphical frame focused, `drgnx-quickhelp--hover-step'.  Looks go on wh
       (setq o nil))
     (when hovering (drgnx-quickhelp--hover-step o))
     (when (or hovering drgnx-quickhelp--card-up)
-      (setq drgnx-quickhelp--poll (run-with-timer drgnx-quickhelp--poll-interval nil #'drgnx-quickhelp--hover-look)))))
+      (drgnx-timer-soon 'quickhelp-look drgnx-quickhelp--poll-interval #'drgnx-quickhelp--hover-look
+                        :owner drgnx-quickhelp--owner))))
 
 (defun drgnx-quickhelp--watch-card ()
   "A card is up: make sure a look comes (with hover off the idle timer is not running)."
-  (unless (timerp drgnx-quickhelp--poll)
-    (setq drgnx-quickhelp--poll (run-with-timer drgnx-quickhelp--poll-interval nil #'drgnx-quickhelp--hover-look))))
+  (drgnx-timer-soon 'quickhelp-look drgnx-quickhelp--poll-interval #'drgnx-quickhelp--hover-look
+                    :owner drgnx-quickhelp--owner))
 
 (defun drgnx-quickhelp--hover-start ()
   "Emacs went idle: start looking at the mouse (once per idle spell)."
-  (unless (timerp drgnx-quickhelp--poll) (drgnx-quickhelp--hover-look)))
+  (unless (drgnx-timer-active-p 'quickhelp-look) (drgnx-quickhelp--hover-look)))
 
 (defun drgnx-quickhelp--apply-hover ()
   "The hover timer on when the setting asks and quick help is set up, else off."
-  (when (timerp drgnx-quickhelp--hover-timer) (cancel-timer drgnx-quickhelp--hover-timer))
-  (when (timerp drgnx-quickhelp--poll) (cancel-timer drgnx-quickhelp--poll))
-  (setq drgnx-quickhelp--hover-timer nil drgnx-quickhelp--poll nil drgnx-quickhelp--rest nil)
+  (drgnx-timer-cancel 'quickhelp-hover)
+  (drgnx-timer-cancel 'quickhelp-look)
+  (setq drgnx-quickhelp--rest nil)
   (remove-hook 'pre-command-hook #'drgnx-quickhelp--note-pointer)
   (when (and drgnx-quickhelp--active drgnx-quickhelp--card-up) (drgnx-quickhelp--watch-card))   ; a card up: looks go on
   (when (and drgnx-quickhelp--active drgnx-quickhelp-hover)
     (add-hook 'pre-command-hook #'drgnx-quickhelp--note-pointer)
-    (setq drgnx-quickhelp--hover-timer
-          (run-with-idle-timer drgnx-quickhelp--poll-interval t #'drgnx-quickhelp--hover-start))))
+    (drgnx-timer-start 'quickhelp-hover drgnx-quickhelp--poll-interval #'drgnx-quickhelp--hover-start
+                       :idle t :repeat t :owner drgnx-quickhelp--owner)))
 
 (defun drgnx-quickhelp-toggle-hover ()
   "Quick help on hover on or off, for this session (`drgnx-quickhelp-hover' keeps the default)."
@@ -651,6 +675,8 @@ on and a graphical frame focused, `drgnx-quickhelp--hover-step'.  Looks go on wh
   ;; first in front of the modal engine's maps (evil's normal state takes Esc and q), then Close Pane's
   (add-to-list 'drgnx-modal-front-alists 'drgnx-quickhelp--emulation)
   (drgnx-modal-order-alists)
+  (drgnx-state-define-role 'quickhelp)    ; the terminal strip's window: no editor, no chrome
+  (drgnx-quickhelp--watch-windows)
   (setq drgnx-quickhelp--active t)
   (drgnx-quickhelp--apply-hover))
 

@@ -96,7 +96,7 @@
   (should (equal (drgnx-ai-agent-gateway-chain 'claude-openrouter "vendor/m3") '((openrouter . "vendor/m3"))))
   ;; without a model, OpenRouter keeps the `agent' role as before
   (let ((drgnx-ai-default-roles '((agent (openrouter . "role-model")))) (auth-sources nil))
-    (cl-letf (((symbol-function 'drgnx-ai--config) (lambda (&rest _) nil)))
+    (cl-letf (((symbol-function 'drgnx-config-get) (lambda (&rest _) nil)))    ; no ai.eld
       (should (equal (drgnx-ai-agent-gateway-chain 'claude-openrouter) '((openrouter . "role-model"))))))
   (drgnx-agents-profiles-test--with
     (dolist (name '("claude (Kimi via OpenRouter)" "claude (DeepSeek via OpenRouter)"))
