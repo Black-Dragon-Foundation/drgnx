@@ -4,7 +4,6 @@
 (require 'drgnx-agents)
 (require 'drgnx-paths)
 (require 'drgnx-timer)
-(require 'bytecomp)                                  ; `byte-compile-warnings' is let-bound below
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-agents-test--mock (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir))
