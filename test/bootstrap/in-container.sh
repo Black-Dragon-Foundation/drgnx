@@ -24,6 +24,15 @@ if [[ "${1:-}" != --as-tester ]]; then
   useradd -m tester
   echo 'tester ALL=(ALL) NOPASSWD: ALL' >/etc/sudoers.d/tester
   chmod 440 /etc/sudoers.d/tester
+  # install.sh needs tester's sudo.  The nightly run on GitHub's runner failed there ("PAM account management error:
+  # Authentication service cannot retrieve authentication info") where a local podman passes: the evidence, then stop
+  if ! out="$(sudo -u tester sudo -n true 2>&1)"; then
+    printf '%s\n' "$out"
+    { ls -l /etc/shadow /usr/bin/sudo; grep -c '^tester:' /etc/shadow; grep -E '^(Cap(Eff|Bnd)|NoNewPrivs):' /proc/self/status
+      cat /proc/self/attr/current; echo; ls /sys/fs/selinux; grep -E '^(passwd|shadow):' /etc/nsswitch.conf
+      sudo -u tester grep -E '^(Cap(Eff|Bnd)|NoNewPrivs):' /proc/self/status; } 2>&1 || true
+    fail "sudo does not work for a user in this container: the container runtime, not drgnx (the evidence is above)"
+  fi
   home="$(getent passwd tester | cut -d: -f6)"
   # /src is read-only and belongs to someone else here: the identity needs mode 600 for tester, and git refuses a
   # repository another user owns, so tester gets copies of both (what a user would have after copying them over)

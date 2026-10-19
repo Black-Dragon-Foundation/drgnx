@@ -306,6 +306,7 @@
 
 (ert-deftest drgnx-terminal/with-drgnx-shell-files-the-prompt-clears-and-a-command-sets-the-flag ()
   ;; the real thing: zsh and bash with only the drgnx line in their rc, in eat (its integration comes on by itself)
+  (unless (drgnx-terminal-test--eat-dir) (ert-skip drgnx-terminal-test--skip))
   (dolist (shell '("zsh" "bash"))
     (when (executable-find shell)
       (let* ((home (make-temp-file "drgnx-term" t))

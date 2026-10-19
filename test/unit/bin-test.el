@@ -988,11 +988,12 @@ echo \"agent ${DRGNX_AGENT-unset} job ${DRGNX_JOB-unset} task ${DRGNX_TASK-unset
       (should (= 2 (apply #'call-process drgnx-bin-test--bin nil t nil "test" "--bootstrap" args)))
       (should (string-match-p "usage: drgnx test --bootstrap\\|--fedora is 44 or 45" (buffer-string))))))
 
-;; the fake runtime copies what each container would mount (the run removes its temporary directory when it succeeds)
+;; the fake runtime copies what each container would mount (the run removes its temporary directory when it succeeds);
+;; $((…)) because macOS's wc pads the count with blanks
 (defun drgnx-bin-test--bootstrap-rt (dir)
   (drgnx-bin-test--fake-emacs
    (expand-file-name "fake-rt" dir)
-   (format "echo \"$*\" >> %1$s/rt.log\nn=$(wc -l < %1$s/rt.log)\nfor a in \"$@\"; do case $a in *:/src*) cp -R \"${a%%%%:/src*}\" %1$s/seen$n ;; esac; done" dir)))
+   (format "echo \"$*\" >> %1$s/rt.log\nn=$(($(wc -l < %1$s/rt.log)))\nfor a in \"$@\"; do case $a in *:/src*) cp -R \"${a%%%%:/src*}\" %1$s/seen$n ;; esac; done" dir)))
 
 (ert-deftest drgnx-bin/test-bootstrap-runs-two-containers-with-memory-caps ()
   ;; With a recording runtime: a snapshot of the tree, the fixture configuration (with this tree's lock) as a bare

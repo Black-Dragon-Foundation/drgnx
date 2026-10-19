@@ -60,8 +60,11 @@ builds or runs yet) instead of building when set — locally too:
 DRGNX_TEST_IMAGE=ghcr.io/black-dragon-foundation/drgnx-test:f45 bin/drgnx test --container
 ```
 
-The weekly rebuild picks up Fedora's updates under the same tags. The Ubuntu job installs its three packages
-directly (about 18 s — less than restoring a cache).
+The weekly rebuild picks up Fedora's updates under the same tags. The Ubuntu job installs its packages directly
+(about 18 s — less than restoring a cache), zsh among them: the shell-file and completion tests need zsh and bash
+(fish is optional; its parts skip). It runs as root on a workspace the runner's user owns, so it marks the checkout
+as a git `safe.directory` system-wide (the tests run git with a temporary `HOME`); without that, every git command
+on the checkout fails with "dubious ownership" (`drgnx test --bootstrap`'s snapshot did).
 
 ## Rules for workflows
 

@@ -256,7 +256,9 @@ matches fails the test.  LOG: a function called with each question and the outpu
       (should (eq (drgnx-bootstrap-test--status r 'shell) 'skipped))
       (should (string-match-p "drgnx shell install" (nth 2 (drgnx-bootstrap-test--row r 'shell))))
       (should (eq (drgnx-bootstrap-test--status r 'desktop) 'skipped))
-      (should (string-match-p "drgnx onboard --step daemon" (nth 2 (drgnx-bootstrap-test--row r 'desktop))))
+      ;; how to do it later: macOS has the app, Linux the service and desktop entry
+      (should (string-match-p (if (eq (drgnx-platform) 'macos) "drgnx macos-app" "drgnx onboard --step daemon")
+                              (nth 2 (drgnx-bootstrap-test--row r 'desktop))))
       (should-not (file-exists-p (concat root "home/.bashrc")))
       (should-not (file-exists-p (concat root "home/.config/systemd")))
       ;; onboarding ran once, non-interactive; never the daemon step on its own

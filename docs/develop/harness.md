@@ -562,7 +562,9 @@ cloned `--bare` beside the snapshot. Two containers follow, each with a memory c
    `openrouter` key (built at run time) encrypted to it as `secrets.age` and committed into the bare repository, and a
    second repository whose `secrets.age` is locked with a passphrase (typed on a terminal made by `script`).
 2. **The second machine** (a fresh `fedora:N`, 6 GB, `test/bootstrap/in-container.sh`): as root it adds only what a
-   desktop has (`sudo`, a user `tester` with NOPASSWD, `dbus-daemon`, `gnome-keyring`, `libsecret`, `script`); as
+   desktop has (`sudo`, a user `tester` with NOPASSWD, `dbus-daemon`, `gnome-keyring`, `libsecret`, `script`) and
+   checks that `tester`'s sudo works (if it does not, the container runtime is at fault: the run stops there and
+   prints the evidence: the error, `/etc/shadow`, the capabilities and SELinux state); as
    `tester`, in a D-Bus session whose login keyring is unlocked with a password on stdin
    (`gnome-keyring-daemon --unlock --components=secrets`, which works headless), it runs
    `install.sh --yes --config … --identity …` and checks:
