@@ -4,6 +4,7 @@
 (require 'drgnx-area)
 (require 'drgnx-persist)
 (require 'server)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defvar drgnx-terminal--notice-shown)
 (defvar eat-eshell-fallback-if-stty-not-available)
@@ -28,38 +29,27 @@
     f))
 
 (defmacro drgnx-terminal-test--fresh (eat &rest body)
-  "Run BODY with only the terminal modules defined and run (eat on `load-path' when EAT), the panel's rules on."
+  "Run BODY with the terminal modules set up and torn down after (`drgnx-test-with-modules'): eat on `load-path'
+when EAT, else hidden as a package that is not installed (even when an earlier test loaded it into this Emacs); the
+panel's rules on."
   (declare (indent 1))
-  `(let* ((cfg (make-temp-file "drgnx-cfg" t))
-          (process-environment (cons (concat "DRGNX_CONFIG_DIR=" cfg) process-environment))
-          (load-path (if ,eat (append load-path (list (drgnx-terminal-test--eat-dir)))
+  `(let* ((load-path (if ,eat (append load-path (list (drgnx-terminal-test--eat-dir)))
                        (seq-remove (lambda (d) (string-prefix-p drgnx-terminal-test--elpa d)) load-path)))
-          (drgnx-modules--table nil) (drgnx-modules--report nil) (drgnx-modules--state nil)
-          (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
           (display-buffer-alist nil) (drgnx-signal--editor-window nil) (drgnx-wb-unrouted nil)
           (drgnx-terminal--notice-shown nil))
      (unwind-protect
          (progn
-           (dolist (m '("tools/drgnx-terminal" "tools/drgnx-terminal-eat"))
-             (load (expand-file-name (concat "modules/" m) drgnx-dir) nil t))
            (delete-other-windows)
            (drgnx-rules-mode 1)
-           (if ,eat (drgnx-modules-run 'startup)
-             ;; eat is not there, even when an earlier test loaded it into this Emacs
-             (let ((orig (symbol-function 'featurep)))
-               (cl-letf (((symbol-function 'locate-library) (lambda (&rest _) nil))
-                         ((symbol-function 'featurep) (lambda (f &rest r) (and (not (eq f 'eat)) (apply orig f r)))))
-                 (drgnx-modules-run 'startup))))
-           ,@body)
-       (advice-remove 'eat--process-output-queue #'drgnx-terminal-eat--collect-in-gap)
+           (drgnx-test-with-modules '(tools/terminal-eat) :packages (unless ,eat 'hidden)
+                                    ,@body))
        (drgnx-rules-mode -1)
        (drgnx-wb-area-hide 'panel)
        (dolist (b (buffer-list))
          (when (string-match-p "\\`\\*\\(eat\\|eshell\\)\\*" (buffer-name b))
            (let ((kill-buffer-query-functions nil) (p (get-buffer-process b)))
              (when p (set-process-query-on-exit-flag p nil))
-             (kill-buffer b))))
-       (delete-directory cfg t))))
+             (kill-buffer b)))))))
 
 (defun drgnx-terminal-test--wait-for-file (file)
   "FILE's text once the shell has written it (waits up to 5 s), else nil."
@@ -404,6 +394,22 @@
   (drgnx-terminal-test--fresh t
     (should (advice-member-p #'drgnx-terminal-eat--collect-in-gap 'eat--process-output-queue))
     (should-not (memq 'drgnx-terminal-eat--gc-note post-gc-hook))))   ; the GC owner keeps the one note
+
+(ert-deftest drgnx-terminal/turning-eat-off-takes-its-advice-and-hooks ()
+  ;; the four advice and the two hooks of tools/terminal-eat's setup are named and recorded: turned off, none is left
+  (unless (drgnx-terminal-test--eat-dir) (ert-skip drgnx-terminal-test--skip))
+  (let ((advice '((eat--pre-prompt . drgnx-terminal-eat--note-integration)
+                  (eat--process-output-queue . drgnx-terminal-eat--collect-in-gap)
+                  (drgnx-keys-apply . drgnx-terminal-apply-keys)
+                  (drgnx-surfaces-cheatsheet . drgnx-terminal--sheet-sections)))
+        (load-path (append load-path (list (drgnx-terminal-test--eat-dir)))))
+    (drgnx-test-with-modules '(tools/terminal-eat) :strict t
+                             (should (eq (plist-get (alist-get 'tools/terminal-eat (drgnx-modules-report)) :status) 'ok))
+                             (pcase-dolist (`(,f . ,a) advice) (should (advice-member-p a f)))
+                             (should (memq 'drgnx-terminal-eat--refresh-before-kill (default-value 'kill-buffer-query-functions))))
+    (pcase-dolist (`(,f . ,a) advice) (should-not (advice-member-p a f)))
+    (should-not (memq 'drgnx-terminal-eat--refresh-before-kill (default-value 'kill-buffer-query-functions)))
+    (should-not (memq 'drgnx-terminal-cheatsheet-section (bound-and-true-p drgnx-surfaces-cheatsheet-sections)))))
 
 (provide 'mod-terminal-test)
 ;;; mod-terminal-test.el ends here

@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'drgnx)
 (require 'seq)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defvar eat-semi-char-non-bound-keys)
 (defvar eat-semi-char-mode-map)
@@ -31,7 +32,6 @@
             (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" dir) (concat "XDG_STATE_HOME=" dir "/state"))
                                          process-environment))
             (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil) (drgnx-commands-problems nil)
-            (drgnx-modules--table nil) (drgnx-modules--report nil) (drgnx-modules--state nil)
             (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-profiles nil)
             (drgnx-keys-problems nil) (drgnx-keys-last nil)
             (ring-bell-function ring-bell-function) (use-dialog-box use-dialog-box)
@@ -44,12 +44,11 @@
        (unwind-protect
            (progn
              (drgnx--core-commands)
-             (drgnx-modules-load-directory (expand-file-name "modules" drgnx-dir))
-             (drgnx-modules-run 'startup)
-             (drgnx-keys-use ,layers)
-             ,@body)
+             ;; every startup module, set up and torn down after (what they hooked into goes with them)
+             (drgnx-test-with-modules nil :stages '(startup)
+                                      (drgnx-keys-use ,layers)
+                                      ,@body))
          (drgnx-keys--restore)
-         (advice-remove 'drgnx-keys-apply #'drgnx-terminal-apply-keys)
          (delete-directory dir t)))))
 
 (defmacro drgnx-terminal-keys-test--eat-buffer (&rest body)
