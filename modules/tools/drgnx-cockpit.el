@@ -29,6 +29,7 @@
 (unless (featurep 'drgnx-cockpit-edits)                 ; each agent's edits, beside it too
   (load (expand-file-name "drgnx-cockpit-edits" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 
+(declare-function image-flush "image.c" (spec &optional frame))   ; an Emacs built without a window system has none
 (declare-function drgnx-cockpit-graph-layout "drgnx-cockpit-graph")
 (declare-function drgnx-cockpit-graph-outline "drgnx-cockpit-graph")
 (declare-function drgnx-cockpit-graph-summary "drgnx-cockpit-graph")

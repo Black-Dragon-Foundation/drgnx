@@ -71,7 +71,8 @@ never hides a warning.  Returns its result."
             (insert ";;; -*- lexical-binding: t -*-\n(defun drgnx-test-b (p) (project-root p))\n(provide 'drgnx-test-1b)\n"))
           (let ((r (drgnx-build-test--build root)))
             (should (= (plist-get r :compiled) 2))
-            (should (seq-find (lambda (w) (string-search "drgnx-test-1b.el: the function ‘project-root’" w))
+            ;; any quotes: without a UTF-8 locale (CI's containers) Emacs quotes `like this'
+            (should (seq-find (lambda (w) (string-match-p "drgnx-test-1b\\.el: the function .project-root. " w))
                               (plist-get r :warnings)))))
       (delete-directory root t))))
 
