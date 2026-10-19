@@ -204,7 +204,8 @@ is set: the terminal's Emacs's socket) none of that runs: the files and folders 
 neither `-c` nor `-t`, so they open in its selected frame. The daemon starts detached (`setsid`, else `perl` on macOS) as
 `emacs --bg-daemon=drgnx --init-directory=<checkout>/init`. The close button's `delete-frame` event and Close Window
 run `drgnx-session-close-frame`, as do `C-x C-c` and `C-x 5 0` (`drgnx-session-kill-terminal`,
-`drgnx-session-delete-frame`: remaps of the stock commands); Quit drgnx runs `drgnx-session-quit`. On macOS drgnx
+`drgnx-session-delete-frame`: remaps of the stock commands); Quit drgnx runs `drgnx-session-quit`. An `emacsclient -c` frame does not print Emacs's "When done with a buffer, type C-x 5 0"
+(`server-client-instructions` is nil). On macOS drgnx
 ignores `XDG_RUNTIME_DIR`: a shell exports it and an app started from Finder does not, which would put the server
 socket in two places. The daemon puts it in Emacs' non-XDG directory, `emacs<uid>` under `$TMPDIR`, and `bin/drgnx`
 runs `emacsclient` with `env -u XDG_RUNTIME_DIR`, so Terminal and Finder reach the same drgnx. Code: `core/drgnx-session.el`; tests:
