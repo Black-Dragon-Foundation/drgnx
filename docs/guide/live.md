@@ -44,7 +44,9 @@ window), about ten a second. Frames are drawn from a timer, never while you type
 last one was drawn replaces it, so a busy Emacs drops frames and never queues them. Every frame is acknowledged
 from a quick look at its message; only the frame that is drawn is parsed and decoded. When the view's window
 changes width, the screencast starts again at the new width, so Chrome scales the page, not Emacs on every frame.
-While no window shows the view, the screencast stops; it starts again when the view is shown.
+While no window shows the view, the screencast stops; it starts again when the view is shown. The view learns of
+both from the workbench state store (the `windows-changed` and `pane-resized` events, once Emacs is idle), whatever
+changed the window: a key, a divider drag, a timer's split or the window manager. It finds its window there as well.
 
 The header line lists the browser's tabs (the watched one in bold) and the watched page's address. When the agent
 opens a new tab, the view follows it; when the watched tab closes, it shows another one. (The tabs open when the

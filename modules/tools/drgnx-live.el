@@ -22,6 +22,7 @@
 (require 'drgnx-modal)
 (require 'drgnx-timer)
 (require 'drgnx-memo)
+(require 'drgnx-state)
 
 (declare-function websocket-open "websocket")
 (declare-function websocket-send-text "websocket")
@@ -298,8 +299,19 @@ it ends, and a stop returns before it has)."
 
 (defun drgnx-live--page-p (target) (equal (plist-get target :type) "page"))
 
+(defvar-local drgnx-live--seen-window nil
+  "The window of the last state-store event about this view (`drgnx-live--shown-again', `drgnx-live--resized').")
+
 (defun drgnx-live--window ()
-  (get-buffer-window (current-buffer) t))
+  "The window showing the view: the one the store last reported while it still shows the view, else the first
+window the store records as showing it (any frame), else nil."
+  (let ((buf (current-buffer)) (found nil))
+    (if (and (window-live-p drgnx-live--seen-window) (eq (window-buffer drgnx-live--seen-window) buf))
+        drgnx-live--seen-window
+      (dolist (f (drgnx-state-frames))
+        (dolist (w (drgnx-state-windows f))
+          (when (and (not found) (eq (window-buffer w) buf)) (setq found w))))
+      found)))
 
 (defun drgnx-live--watch (target-id)
   "Screencast the page TARGET-ID (instead of the one watched)."
@@ -324,19 +336,45 @@ it ends, and a stop returns before it has)."
   (drgnx-live--send "Page.startScreencast" (list :format "jpeg" :quality 60 :maxWidth drgnx-live--max-width)
                     drgnx-live--session))
 
-(defun drgnx-live--resized (_window)
-  "The view's window changed size (`window-size-change-functions'): the screencast starts again as wide as it is
-now, so the browser scales the page once instead of Emacs scaling every frame it draws."
+(defun drgnx-live--follow-width ()
+  "The screencast starts again as wide as the view's window is now, so the browser scales the page once instead
+of Emacs scaling every frame it draws."
   (when-let* ((w (drgnx-live--window)))
     (when (and drgnx-live--session (not drgnx-live--paused) drgnx-live--max-width
                (/= (window-body-width w t) drgnx-live--max-width))
       (drgnx-live--send "Page.stopScreencast" nil drgnx-live--session)
       (drgnx-live--start-screencast))))
 
-(defun drgnx-live--shown-again (_window)
-  "The view is in a window again (`window-buffer-change-functions'): its screencast resumes, or follows the width
-of the window it is in now."
-  (if (and drgnx-live--paused drgnx-live--session) (drgnx-live--start-screencast) (drgnx-live--resized nil)))
+(defun drgnx-live--view-windows (data)
+  "One window for each Live view that DATA (a state-store event) concerns: the window the event names when it
+shows a view, and the frame's other windows showing a view.  The frame's windows too, because the store hands an
+idle subscriber one event for each frame and kind, the last one: a divider moved between two editor windows
+reports one of them."
+  (let ((out nil) (seen nil)
+        (named (or (plist-get data :windows) (list (plist-get data :window))))
+        (frame (plist-get data :frame)))
+    (dolist (w (if (frame-live-p frame) (append named (drgnx-state-windows frame)) named))
+      (when (window-live-p w)
+        (let ((buf (window-buffer w)))
+          (when (and (not (memq buf seen)) (eq 'drgnx-live-mode (buffer-local-value 'major-mode buf)))
+            (push buf seen)
+            (push w out)))))
+    (nreverse out)))
+
+(defun drgnx-live--resized (data)
+  "A window of the view changed size (`pane-resized'): the screencast follows its width."
+  (dolist (w (drgnx-live--view-windows data))
+    (with-current-buffer (window-buffer w)
+      (setq drgnx-live--seen-window w)
+      (drgnx-live--follow-width))))
+
+(defun drgnx-live--shown-again (data)
+  "The view is in a window again (`windows-changed'): its screencast resumes, or follows the width of the window
+it is in now."
+  (dolist (w (drgnx-live--view-windows data))
+    (with-current-buffer (window-buffer w)
+      (setq drgnx-live--seen-window w)
+      (if (and drgnx-live--paused drgnx-live--session) (drgnx-live--start-screencast) (drgnx-live--follow-width)))))
 
 (defun drgnx-live--message (text)
   "One message from the browser: an answer or an event."
@@ -436,7 +474,7 @@ only the newest waits to be drawn."
         (unless drgnx-live--paused
           (setq drgnx-live--paused t)
           (drgnx-live--send "Page.stopScreencast" nil drgnx-live--session))
-      (drgnx-live--resized nil)                         ; the window changed size meanwhile: frames as wide as it
+      (drgnx-live--follow-width)                        ; the window changed size meanwhile: frames as wide as it
       (drgnx-live--draw-frame frame))))
 
 (defun drgnx-live--draw-frame (frame)
@@ -510,8 +548,6 @@ built again only when `live-tabs' was bumped (the tabs, the watched tab or drivi
   (setq-local header-line-format '(:eval (drgnx-live--header)))
   (setq-local revert-buffer-function (lambda (&rest _) (drgnx-live--open (current-buffer) (drgnx-live-browser))))
   (setq-local cursor-type nil)
-  (add-hook 'window-buffer-change-functions #'drgnx-live--shown-again nil t)
-  (add-hook 'window-size-change-functions #'drgnx-live--resized nil t)
   (add-hook 'kill-buffer-hook #'drgnx-live--killed nil t))
 
 (defun drgnx-live--killed ()
@@ -645,9 +681,15 @@ the page; evil's own keys are out of the way in its emacs state."
     (drgnx-command-define id :category "Live" :title title :command fn :doc doc :scope 'window
                           :map (and (eq id 'live-take-over) '(drgnx-live . drgnx-live-mode-map)))))
 
+(defun drgnx-live--subscribe ()
+  "The view follows its window through the state store: shown again, resized (idle lane, owned by the module)."
+  (drgnx-state-subscribe 'windows-changed #'drgnx-live--shown-again)
+  (drgnx-state-subscribe 'pane-resized #'drgnx-live--resized))
+
 (defun drgnx-live--setup ()
   "Give agents the browser's endpoint, stop the browser when Emacs ends, define the commands."
   (require 'drgnx-agents)
+  (drgnx-live--subscribe)
   (drgnx-memo-activate 'live-header)
   (add-hook 'drgnx-agents-env-functions #'drgnx-live--agent-env)
   (add-hook 'kill-emacs-hook #'drgnx-live--cleanup)
