@@ -99,8 +99,7 @@ commands. That is what lets drgnx tell an idle shell from a running program:
   integration the shell says so at every prompt; a command running (`make`, `sleep`, `vim`) makes drgnx ask once.
 - **Without the integration** (you did not add the line, or your prompt theme dropped eat's marks, below) drgnx treats
   a terminal as running only when its shell has a child process. A `sleep 100` is asked about when you close that
-  terminal; on quit it is asked about too once the session side of this lands (until then quit does not ask about a
-  shell without the integration; closing the terminal does). An idle shell is not asked about. Two limits: a shell
+  terminal and when you quit. An idle shell is not asked about. Two limits: a shell
   builtin that waits (`read`, a long `while` loop in the shell itself) has no child process and is not seen; and a
   shell that keeps a helper process running all the time (zsh with powerlevel10k's `gitstatusd`, a coprocess) always
   has a child, so without the integration it counts as running. That is one more reason to add the line.
