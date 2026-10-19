@@ -37,7 +37,7 @@
 
 (defvar drgnx-sticky-scan-chars 300000 "How far back (characters) the indentation fallback looks for a scope.")
 
-(defface drgnx-sticky '((t :inherit header-line)) "Sticky scroll's scopes in the header line." :group 'drgnx)
+(defface drgnx-sticky '((t :inherit drgnx-wb-bar)) "Sticky scroll's scopes in the header line." :group 'drgnx)
 
 (defun drgnx-sticky--line-indent ()
   "The current line's indentation, or nil when it is blank."

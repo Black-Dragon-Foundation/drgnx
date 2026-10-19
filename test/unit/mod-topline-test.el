@@ -67,6 +67,15 @@ buffer of the selected window (a temp buffer in project `proj', no git).  Faces 
   "The line's item named KEY."
   (assq key (drgnx-topline--line)))
 
+(ert-deftest drgnx-topline/faces-follow-the-theme-chrome-and-keep-the-text-colour ()
+  ;; The strong text fell back to the tab bar's dim foreground: it takes the text colour, on the tab line's band.
+  (dolist (f '(drgnx-topline drgnx-topline-strong))
+    (let ((inh (face-attribute f :inherit nil nil)))
+      (should (memq 'tab-line inh))
+      (should-not (memq 'header-line inh))
+      (should-not (memq 'tab-bar inh))))
+  (should (memq 'bold (face-attribute 'drgnx-topline-strong :inherit nil nil))))
+
 (ert-deftest drgnx-topline/shows-project-branch-and-the-three-keys ()
   (drgnx-topline-test--with 'vscode
     (setq-local vc-mode " Git-main")
@@ -367,7 +376,7 @@ buffer of the selected window (a temp buffer in project `proj', no git).  Faces 
     (let ((tab-bar-mode nil) (spec (get 'tab-bar 'face-defface-spec)))
       (drgnx-topline--apply)
       (should-not (equal (get 'tab-bar 'face-defface-spec) spec))
-      (should (equal (get 'tab-bar 'face-defface-spec) '((t :inherit header-line :box nil))))
+      (should (equal (get 'tab-bar 'face-defface-spec) '((t :inherit tab-line :height 1.0 :box nil))))
       (drgnx-topline--off)
       (should (equal (get 'tab-bar 'face-defface-spec) spec)))))
 

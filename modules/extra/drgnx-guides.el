@@ -5,13 +5,14 @@
 ;;; Commentary:
 ;; Thin vertical guides at each indentation level of code (and YAML), on graphical frames — drawn by indent-bars
 ;; with stipples, not characters, so they cost little and never get in the way of the cursor.  Their colour comes
-;; from the theme (the `highlight' face, blended).  See docs/guide/editing.md.
+;; from the theme (the `shadow' face's colour, blended into the background).  See docs/guide/editing.md.
 
 ;;; Code:
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (declare-function indent-bars-mode "indent-bars")
 (defvar indent-bars-mode)
+(defvar indent-bars-color)
 (defvar indent-bars-treesit-support)
 
 (defvar drgnx-guides-modes '(prog-mode-hook yaml-mode-hook yaml-ts-mode-hook) "Where the guides go.")
@@ -30,6 +31,7 @@
                      :stage 'first-frame :packages '(indent-bars)
                      :setup (lambda ()
                               (require 'indent-bars)
+                              (drgnx-module-set 'indent-bars-color '(shadow :blend 0.35))   ; shadow's colour, not highlight's background
                               (setq indent-bars-treesit-support (and (fboundp 'treesit-available-p) (treesit-available-p)))
                               (dolist (h drgnx-guides-modes) (add-hook h #'drgnx-guides--maybe))
                               (drgnx-command-define 'toggle-indent-guides :category "View" :title "Toggle Indent Guides"

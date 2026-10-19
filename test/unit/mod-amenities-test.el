@@ -129,6 +129,11 @@
     (should (string-search "(debug-start \"<f5>\")" vs))
     (should (string-search "(debug-step-in \"<f11>\" :map drgnx-debug-session-map)" vs))))
 
+(ert-deftest drgnx-guides/colour-comes-from-shadow-not-highlight ()
+  (with-temp-buffer
+    (insert-file-contents (expand-file-name "modules/extra/drgnx-guides.el" drgnx-dir))
+    (should (search-forward "(drgnx-module-set 'indent-bars-color '(shadow" nil t))))
+
 (ert-deftest drgnx-guides/only-on-graphical-frames ()
   (load (expand-file-name "modules/extra/drgnx-guides" drgnx-dir) nil t)
   (let ((on nil))

@@ -195,6 +195,10 @@ is not a frame line); with fewer, the frame parameter `drgnx-chrome-breadcrumb` 
 and the row is gone, sticky scroll's scopes with it. It comes back with room, and a buffer's own header line (column
 headings) stays.
 
+Hovering a file tab (or its ×) lights that one only. Tabs are dimmed, the shown tab of the active editor group is bold
+in the theme's link colour with an overline, and every row of chrome (tab line, breadcrumb, dock titles, panel tabs,
+the top line) is the theme's tab-line background; customize `drgnx-chrome-tab*` and `drgnx-wb-bar` to change them.
+
 - **Tabs**: the buffers an editor window has shown, in the order they were opened; switching never reorders them.
   Click a tab to show it, `×` or middle-click closes it (the buffer stays open — close it in the Buffers panel).
   Close Tab `C-<f4>` · palette · `SPC b d`; Next / Previous Tab `C-<next>` / `C-<prior>` · Emacs' `C-x <right>` /
