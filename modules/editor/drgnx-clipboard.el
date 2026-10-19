@@ -356,6 +356,8 @@ manager started after the first window is found.  The check is cheap and never w
                      :doc "Clipboard managers: only copy and cut reach the clipboard, a stuck owner never freezes a paste, selecting does not fill the history."
                      :stage 'startup
                      :setup #'drgnx-clipboard-install
+                     ;; the wrappers are `add-function's on three variables, which nothing records: put back here
+                     :teardown #'drgnx-clipboard-uninstall
                      :doctor #'drgnx-clipboard--problems)
 
 (provide 'drgnx-clipboard)

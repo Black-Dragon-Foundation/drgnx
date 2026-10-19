@@ -474,6 +474,22 @@ stopped.  Evil's packages are not on `load-path' here."
       (should (eq (drgnx-evil-test--run) 'ok))
       (should (eq (keymap-lookup evil-motion-state-map "C-u") #'evil-scroll-up)))))
 
+(ert-deftest drgnx-evil/turning-the-module-off-stops-evil-and-gives-the-settings-back ()
+  ;; the module's teardown stops the engine as the core stops one and takes it out of the registry; evil's options
+  ;; get the values they had before the setup (evil itself stays loaded: it cannot be unloaded)
+  (drgnx-modal-test-with-evil
+    (drgnx-evil-test--config '((vim app editing window)) t
+      (require 'evil)
+      (setq evil-search-module 'isearch)
+      (should (eq (drgnx-evil-test--run) 'ok))
+      (should (eq drgnx-modal-running 'evil))
+      (should (eq evil-search-module 'evil-search))
+      (should-not (drgnx-module-teardown 'editor/evil))
+      (should-not drgnx-modal-running)
+      (should-not (assq 'evil drgnx-modal-engines))
+      (should-not (bound-and-true-p evil-mode))
+      (should (eq evil-search-module 'isearch)))))
+
 (ert-deftest drgnx-evil/toggle-turns-the-engine-off-and-on ()
   (drgnx-evil-test--running
     (drgnx-evil-test--buffer b #'prog-mode

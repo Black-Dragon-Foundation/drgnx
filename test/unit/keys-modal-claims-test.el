@@ -6,6 +6,7 @@
 (require 'drgnx)
 (require 'drgnx-keys-modal)
 (load (expand-file-name "test/fixtures/modal-elpa" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defvar evil-normal-state-map)
 
@@ -139,8 +140,8 @@ registered as test commands of scope `window'.")
       (should-not (plist-get r :bindings)))))
 
 (ert-deftest drgnx-keys-claims/evil-tests-in-their-own-emacs ()
-  (should (null (drgnx-modal-test-isolated-result "test/unit/isolated/keys-modal-claims-isolated.el"
-                                                  "^drgnx-keys-claims/"))))
+  (should (null (drgnx-test-run-isolated "test/unit/isolated/keys-modal-claims-isolated.el"
+                                         "^drgnx-keys-claims/"))))
 
 (provide 'keys-modal-claims-test)
 ;;; keys-modal-claims-test.el ends here

@@ -4,25 +4,26 @@
 (require 'ert)
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/modal-elpa" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (ert-deftest drgnx-evil/own-process ()
-  (should (null (drgnx-modal-test-isolated-result "test/unit/isolated/mod-evil-isolated.el" "^drgnx-evil/"))))
+  (should (null (drgnx-test-run-isolated "test/unit/isolated/mod-evil-isolated.el" "^drgnx-evil/"))))
 
 (ert-deftest drgnx-evil-more/own-process ()
-  (should (null (drgnx-modal-test-isolated-result "test/unit/isolated/mod-evil-more-isolated.el"
-                                                  "^drgnx-evil-more/"))))
+  (should (null (drgnx-test-run-isolated "test/unit/isolated/mod-evil-more-isolated.el"
+                                         "^drgnx-evil-more/"))))
 
 (ert-deftest drgnx-evil-flag/own-process ()
-  (should (null (drgnx-modal-test-isolated-result "test/unit/isolated/mod-evil-flag-isolated.el"
-                                                  "^drgnx-evil-flag/"))))
+  (should (null (drgnx-test-run-isolated "test/unit/isolated/mod-evil-flag-isolated.el"
+                                         "^drgnx-evil-flag/"))))
 
 (ert-deftest drgnx-evil-lazy/own-process ()
-  (should (null (drgnx-modal-test-isolated-result "test/unit/isolated/mod-evil-lazy-isolated.el"
-                                                  "^drgnx-evil-lazy/"))))
+  (should (null (drgnx-test-run-isolated "test/unit/isolated/mod-evil-lazy-isolated.el"
+                                         "^drgnx-evil-lazy/"))))
 
 (ert-deftest drgnx-modal-fixture/own-process ()
-  (should (null (drgnx-modal-test-isolated-result "test/unit/isolated/modal-fixture-isolated.el"
-                                                  "^drgnx-modal-fixture/"))))
+  (should (null (drgnx-test-run-isolated "test/unit/isolated/modal-fixture-isolated.el"
+                                         "^drgnx-modal-fixture/"))))
 
 (provide 'modal-isolated-test)
 ;;; modal-isolated-test.el ends here

@@ -200,6 +200,21 @@
     (should-not (lookup-key map "b"))
     (should (equal '((a 1)) drgnx-fixture-test-alist))))
 
+(ert-deftest drgnx-test-modules/registry-keys-keep-their-identity ()
+  ;; a list registry the test left unchanged underneath (an entry pushed on top) comes back as the object it was,
+  ;; its list keys too: the fingerprint compares such keys by identity, so a copy would show in the leak census as
+  ;; every entry removed and added again
+  (let* ((key (list 'kx 'rule))
+         (drgnx-fixture-test-alist (list (cons key (list 1))))
+         (drgnx-modules-fingerprint-registries '(drgnx-fixture-test-alist))
+         (before (drgnx-modules-fingerprint--registry-items 'drgnx-fixture-test-alist)))
+    (drgnx-test-with-modules nil
+      (push (cons (list 'kx 'new) t) drgnx-fixture-test-alist))
+    (should (eq (caar drgnx-fixture-test-alist) key))
+    (should (equal drgnx-fixture-test-alist (list (cons (list 'kx 'rule) (list 1)))))
+    (should-not (drgnx-modules-fingerprint--diff-items
+                 before (drgnx-modules-fingerprint--registry-items 'drgnx-fixture-test-alist)))))
+
 (ert-deftest drgnx-test-modules/tears-down-last-first-and-requires-come-along ()
   (ert-with-temp-directory dir
                            (let ((file (drgnx-fixture-test--module-file
@@ -274,5 +289,22 @@
       (should-not drgnx-modules--table)
       (should-not drgnx-modules--report))
     (should (equal real (getenv "DRGNX_CONFIG_DIR")))))
+
+(ert-deftest drgnx-test-modules/run-isolated-reports-the-childs-result ()
+  ;; a file run in its own Emacs: nil when its tests pass, the child's output when one fails, a skip when it skipped
+  ;; them all; the child inherits this run's environment (here a variable the file checks)
+  (ert-with-temp-directory dir
+                           (let ((file (expand-file-name "kx-isolated.el" dir))
+                                 (process-environment (cons "DRGNX_KX_ISOLATED=inherited" process-environment)))
+                             (with-temp-file file
+                               (insert ";;; kx-isolated.el --- a file for the own-process runner -*- lexical-binding: t -*-\n"
+                                       "(require 'ert)\n"
+                                       "(ert-deftest kx-iso/passes () (should (equal (getenv \"DRGNX_KX_ISOLATED\") \"inherited\")))\n"
+                                       "(ert-deftest kx-iso/fails () (should (equal 1 2)))\n"
+                                       "(ert-deftest kx-iso/skips () (ert-skip \"no package\"))\n"))
+                             (should (null (drgnx-test-run-isolated file "^kx-iso/passes")))
+                             (should (string-match-p "kx-iso/fails" (drgnx-test-run-isolated file "^kx-iso/fails")))
+                             (should (eq (car (should-error (drgnx-test-run-isolated file "^kx-iso/skips") :type 'ert-test-skipped))
+                                         'ert-test-skipped)))))
 
 ;;; modules-fixture-test.el ends here

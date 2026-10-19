@@ -99,7 +99,8 @@ Returns the names of the modules ENTRIES stand for."
           ((and (keymapp copy) (keymapp object))
            (setcdr object (cdr copy))
            (set var object))
-          (t (set var copy)))))
+          ;; unchanged: the object itself, so a fingerprint that keys entries by identity sees nothing new
+          (t (set var (if (equal object copy) object copy))))))
 
 ;;;; Hiding third-party features
 
@@ -317,6 +318,44 @@ are fresh; the registries of `drgnx-modules-fingerprint-registries' are put back
       (let ((key (pop body)) (val (pop body)))
         (push key opts) (push (if (eq val 'hidden) ''hidden val) opts)))
     `(drgnx-test-modules--run ,modules (list ,@(nreverse opts)) (lambda () ,@body))))
+
+;;;; Own-process tests: what cannot be undone in a process (evil, once loaded, stays)
+
+(defun drgnx-test-modules--run-file (file selector)
+  "Run the tests of FILE (relative to the checkout) chosen by SELECTOR in a fresh batch Emacs through the runner.
+The child inherits this run's environment: its temp HOME and directories, DRGNX_TEST_LEAKS (it takes the census
+too) and DRGNX_TEST_ELN_DIR (it compiles its trampolines into this run's directory).  Memory-capped by systemd-run
+when it works.  Returns (EXIT-CODE . OUTPUT)."
+  (let* ((emacs (expand-file-name invocation-name invocation-directory))
+         (dir (file-name-as-directory (expand-file-name drgnx-dir)))
+         (args (list "--batch" "-Q" "--eval" "(setq load-prefer-newer t)"
+                     "-L" (concat dir "harness") "-L" (concat dir "core") "-L" (concat dir "wb")
+                     "-l" (concat dir "harness/run-ert.el") "-f" "drgnx-run-ert-batch"
+                     (expand-file-name file dir)))
+         (process-environment (append (list (concat "DRGNX_TEST_SELECTOR=" (prin1-to-string selector)) "DRGNX_TEST_RESULTS")
+                                      process-environment))
+         (cap (and (executable-find "systemd-run")
+                   (zerop (call-process "systemd-run" nil nil nil "--user" "--scope" "-q" "true"))
+                   '("systemd-run" "--user" "--scope" "-q" "-p" "MemoryMax=1G" "-p" "MemorySwapMax=0" "--"))))
+    (with-temp-buffer
+      (let ((code (apply #'call-process (if cap (car cap) emacs) nil t nil
+                         (append (cdr cap) (and cap (list emacs)) args))))
+        (cons code (buffer-string))))))
+
+(defun drgnx-test-run-isolated (file selector)
+  "Run FILE's tests (SELECTOR) in their own Emacs (`drgnx-test-modules--run-file'); nil when they passed, else the
+child's output (its head and tail).  When the child skipped every test it ran (a package it needs is missing), the
+calling test is skipped too, so the count says so.  For what a test cannot set up and tear down in this process:
+`drgnx-test-with-modules' is for everything else."
+  (pcase-let ((`(,code . ,out) (drgnx-test-modules--run-file file selector)))
+    (cond ((not (eql code 0)) (format "exit %S\n%s" code (if (> (length out) 8000)
+                                                             (concat (substring out 0 3000) "\n[…]\n" (substring out -5000))
+                                                           out)))
+          ((string-match-p "Ran 0 tests" out) (format "no test ran\n%s" out))
+          ((and (string-match "Ran \\([0-9]+\\) tests?, 0 results as expected, 0 unexpected, \\([0-9]+\\) skipped" out)
+                (equal (match-string 1 out) (match-string 2 out)))
+           (ert-skip (format "all %s tests of %s skipped in their own Emacs (a package missing?)" (match-string 1 out) file)))
+          (t nil))))
 
 (provide 'modules-fixture)
 ;;; modules-fixture.el ends here

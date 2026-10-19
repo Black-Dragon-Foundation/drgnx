@@ -299,9 +299,41 @@ when the selected buffer or frame is not the one it was started in."
                             :owner 'ui/terminal-popups)
     (drgnx-timer-cancel 'tty-popups-show)))
 
+;;;; Turning the module off
+
+(defun drgnx-tty-popups--unset-borders ()
+  "Empty the box slots of `standard-display-table' that still hold drgnx's glyphs (Emacs's own borders again); a
+slot someone else set since stays."
+  (when (and (drgnx-tty-popups--slots-p) standard-display-table)
+    (seq-do-indexed (lambda (slot i)
+                      (when (memql (display-table-slot standard-display-table slot)
+                                   (list (make-glyph-code (aref drgnx-tty-popups--box-unicode i))
+                                         (make-glyph-code (aref drgnx-tty-popups--box-ascii i))))
+                        (set-display-table-slot standard-display-table slot nil)))
+                    drgnx-tty-popups-box-slots)))
+
+(defun drgnx-tty-popups--teardown ()
+  "The module's teardown: what each terminal frame's setup did, which nothing records — the hooks and the advice
+`drgnx-tty-popups--sync' keeps while a terminal needs them, the completion list it started, the ASCII display table
+of its windows (a window's own table stays) and the box slots.  The chrome strings come back as the chrome draws."
+  (drgnx-tty-popups--hook nil 'pre-redisplay-functions #'drgnx-tty-popups--pre-redisplay)
+  (drgnx-tty-popups--hook nil 'window-configuration-change-hook #'drgnx-tty-popups--windows-changed)
+  (drgnx-tty-popups--hook nil 'post-command-hook #'drgnx-tty-popups--post-command)
+  (advice-remove 'drgnx-chrome--set #'drgnx-tty-popups--chrome-set)
+  (drgnx-timer-cancel 'tty-popups-show)
+  (drgnx-tty-popups--close)
+  (dolist (frame (frame-list))
+    (when (frame-parameter frame 'drgnx-tty-ascii)
+      (set-frame-parameter frame 'drgnx-tty-ascii nil)
+      (dolist (w (window-list frame t))
+        (when (and drgnx-tty-popups--ascii-table (eq (window-display-table w) drgnx-tty-popups--ascii-table))
+          (set-window-display-table w nil)))))
+  (drgnx-tty-popups--unset-borders))
+
 (drgnx-module-define 'ui/terminal-popups
                      :doc "Popups in terminal windows: corfu's child frame with box-drawing borders on 31.1, completion as you type in the popup lane on 30.2, ASCII marks on a terminal that does not write UTF-8."
                      :stage 'startup
+                     :teardown #'drgnx-tty-popups--teardown
                      :setup (lambda ()
                               (add-hook 'delete-frame-functions #'drgnx-tty-popups--frame-deleted)
                               ;; terminal frames made before this module ran (each one's setup syncs the hooks)

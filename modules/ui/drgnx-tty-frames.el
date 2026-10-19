@@ -20,8 +20,9 @@
 ;;   setup, never for a graphical frame; Toggle Mouse in Terminal Windows.  The terminal's own selection is then
 ;;   Shift+drag.  Each terminal keeps its own enable and disable strings (Emacs 30.2 puts them on the selected one).
 ;; - `drgnx-tty-frames-write-report': terminal-report.eld in the state dir — each terminal's capabilities and
-;;   the active profile's keys it cannot send — for the doctor and the key sheet; written whole, then renamed
-;;   into place.  `drgnx-tty-frames-refresh-report' writes it again (ui/terminal-keys, once kkp is on).
+;;   the active profile's keys it cannot send — for the doctor and the key sheet; read and written through the
+;;   file layer (core/drgnx-file.el: written whole, then renamed into place).  `drgnx-tty-frames-refresh-report'
+;;   writes it again (ui/terminal-keys, once kkp is on).
 ;; - The fallback layer (drgnx-tty-fallback-layer.el) follows each report: a terminal that cannot send C-S- chords
 ;;   gets Alt+Shift with the key and F6 then the key for them; one that can loses it.
 ;; - EDITOR frames: `emacsclient -t FILE' (git's editor) shows the editor only and is never the main window;
@@ -33,6 +34,7 @@
 
 ;;; Code:
 (require 'seq)
+(require 'drgnx-file)
 (require 'drgnx-hooks)
 (require 'drgnx-modules)
 (require 'drgnx-paths)
@@ -63,6 +65,8 @@
 (declare-function drgnx-tty-clip-setup "drgnx-tty-clipboard")
 (declare-function drgnx-tty-layout-apply "drgnx-tty-layout")
 (declare-function drgnx-tty-popups-setup "drgnx-tty-popups")
+(declare-function drgnx-tty-clip-off "drgnx-tty-clipboard")
+(declare-function drgnx-tty-fallback-off "drgnx-tty-fallback-layer")
 
 (defvar drgnx-tty-frames-query-timeout 0.2
   "Seconds to wait for a terminal's answer to XTVERSION (a late answer is still taken off the input).")
@@ -212,9 +216,12 @@ decodes a few: C-tab, C-. …; its decodings come first).  A terminal that never
   (set-terminal-parameter nil 'drgnx-tty-mok-decoded t))
 
 (defun drgnx-tty-frames--ask-mok (frame)
+  "Ask FRAME's terminal for modifyOtherKeys unless it was asked already (by Emacs); the terminal parameter
+`drgnx-tty-asked-mok' says drgnx asked, so turning the module off withdraws it (`drgnx-tty-frames--release')."
   (unless (drgnx-tty-frames-mok-asked-p (frame-terminal frame))
     (require 'term/xterm)
-    (with-selected-frame frame (xterm--init-modify-other-keys))))
+    (with-selected-frame frame (xterm--init-modify-other-keys))
+    (set-terminal-parameter (frame-terminal frame) 'drgnx-tty-asked-mok t)))
 
 (defun drgnx-tty-frames--withdraw-mok (term)
   (when (drgnx-tty-frames-mok-asked-p term)
@@ -252,28 +259,15 @@ decodes a few: C-tab, C-. …; its decodings come first).  A terminal that never
 (defun drgnx-tty-frames--report-file () (expand-file-name "terminal-report.eld" (drgnx-state-dir)))
 
 (defun drgnx-tty-frames--read-report-data ()
-  "terminal-report.eld as a plist, nil when missing or broken (a broken report heals on the next write)."
-  (let ((data (ignore-errors (with-temp-buffer (insert-file-contents (drgnx-tty-frames--report-file))
-                                               (read (current-buffer))))))
-    (and (consp data) (plistp data) data)))
+  "terminal-report.eld as a plist, nil when missing or broken (a broken report heals on the next write): read by
+the file layer, as the doctor reads it (`drgnx-tty--read-report')."
+  (drgnx-tty--read-report))
 
 (defun drgnx-tty-frames--save-report (data)
-  "Write DATA (a plist) as terminal-report.eld."
-  (let ((file (drgnx-tty-frames--report-file)))
-    (make-directory (file-name-directory file) t)
-    ;; written whole under a new name, then renamed: no lock on the report (whose owner would be asked about,
-    ;; a prompt in a daemon hook), and a reader sees the old report or the new one, never half of one
-    (let* ((create-lockfiles nil)
-           (tmp (make-temp-file (expand-file-name ".terminal-report-" (file-name-directory file)))))
-      (condition-case err
-          (progn
-            (with-temp-file tmp
-              (let ((print-length nil) (print-level nil))
-                (prin1 data (current-buffer))
-                (insert "\n")))
-            (rename-file tmp file t))
-        (error (ignore-errors (delete-file tmp))
-               (signal (car err) (cdr err)))))))
+  "Write DATA (a plist) as terminal-report.eld, through the file layer: written whole beside it, then renamed (a
+reader sees the old report or the new one, never half of one), no lock file (whose owner would be asked about, a
+prompt in a daemon hook), no fsync (a report is made again)."
+  (drgnx-file-write (drgnx-tty-frames--report-file) data :fsync nil))
 
 (defun drgnx-tty-frames--update-report (fn)
   "Call FN with terminal-report.eld's data (a fresh plist); write what it returns, when that is non-nil."
@@ -335,6 +329,10 @@ setting).  Nil: the terminal keeps the mouse.  Toggle Mouse in Terminal Windows 
   "The live terminal frames of terminals Emacs set up (not the daemon's initial terminal)."
   (seq-filter (lambda (f) (eq (drgnx-state-frame-kind f) 'tty)) (frame-list)))
 
+(defvar drgnx-tty-frames--mouse-turned-on nil
+  "Non-nil while `xterm-mouse-mode' is on because `drgnx-tty-frames-mouse-apply' turned it on (Emacs 30.2 leaves
+it off; 31 turns it on by itself): turning the module off turns it off then, and only then.")
+
 (defun drgnx-tty-frames-mouse-apply ()
   "Make the terminals follow `drgnx-tty-mouse': mouse reports on in the terminals that can send them while it
 is t, off in all of them when it is nil (Emacs 31 turns the mode on by itself).  A session without a terminal
@@ -346,8 +344,12 @@ frame is left alone: a graphical frame never gets `xterm-mouse-mode'.  Never ask
                                    frames))))
       (require 'xt-mouse)
       (if wanted
-          (unless xterm-mouse-mode (xterm-mouse-mode 1))
-        (when xterm-mouse-mode (xterm-mouse-mode -1)))
+          (unless xterm-mouse-mode
+            (xterm-mouse-mode 1)
+            (setq drgnx-tty-frames--mouse-turned-on t))
+        (when xterm-mouse-mode
+          (xterm-mouse-mode -1)
+          (setq drgnx-tty-frames--mouse-turned-on nil)))
       ;; Emacs 30.2's turn-on and turn-off keep the enable and disable strings on the SELECTED terminal: each
       ;; terminal is handled from a frame of its own
       (dolist (f frames)
@@ -483,20 +485,25 @@ that second once, not once per window or setup step."
           (set-terminal-parameter term 'drgnx-tty-tmux (cons (float-time) options)))
         options))))
 
+(defconst drgnx-tty-frames--focus-on "\e[?1004h" "The request for focus reports (xterm.el's).")
+(defconst drgnx-tty-frames--focus-off "\e[?1004l" "Its reset.")
+
 (defun drgnx-tty-frames--tmux-focus (frame)
   "Under tmux with `focus-events on', make sure FRAME's terminal asks for focus reports (CSI ? 1004 h): tmux then
 passes focus changes on, Emacs's `after-focus-change-function' runs and the Explorer refreshes its git state.
 xterm.el asks by itself for every TERM it knows; this covers the one it missed.  Reports stop when Emacs suspends
-or exits.  Nothing when tmux keeps the focus events (`off') or this is no tmux."
+or exits.  Nothing when tmux keeps the focus events (`off') or this is no tmux.  The terminal parameter
+`drgnx-tty-asked-focus' says drgnx asked, so turning the module off stops them (`drgnx-tty-frames--release')."
   (let ((term (frame-terminal frame))
-        (on "\e[?1004h") (off "\e[?1004l"))
+        (on drgnx-tty-frames--focus-on) (off drgnx-tty-frames--focus-off))
     (when (and (terminal-live-p term)
                (equal (plist-get (drgnx-tty-frames--tmux-options frame) :focus-events) "on")
                (not (member on (terminal-parameter term 'tty-mode-set-strings))))
       (send-string-to-terminal on term)
       (set-terminal-parameter term 'tty-mode-set-strings (cons on (terminal-parameter term 'tty-mode-set-strings)))
       (set-terminal-parameter term 'tty-mode-reset-strings
-                              (cons off (terminal-parameter term 'tty-mode-reset-strings))))))
+                              (cons off (terminal-parameter term 'tty-mode-reset-strings)))
+      (set-terminal-parameter term 'drgnx-tty-asked-focus t))))
 
 ;; modifyOtherKeys has two levels.  Level 1, which Emacs asks for, sends only the chords a plain terminal cannot
 ;; tell apart; tmux then folds C-S-<letter> (C-S-p, C-M-S-k), C-S-SPC, C-` and C-S-` into C-<letter>, C-SPC, C-@ and
@@ -710,9 +717,64 @@ asked."
 `letter', `word' and `label' are in the text on the screen; `attribute' is in the faces themselves.  :attribute-faces
 are the faces of a group that rely on an attribute because their state has no text.")
 
+;;;; Turning the module off
+
+(defun drgnx-tty-frames--undecode (map)
+  "Take MAP out of the parent of the selected terminal's `input-decode-map', where `drgnx-tty-frames--decode-mok'
+or the csi-u step composed it in; the maps around it stay."
+  (let ((parent (keymap-parent input-decode-map)))
+    (when (and (keymapp parent) (memq map (cdr parent)))
+      (let ((rest (remq map (cdr parent))))
+        (set-keymap-parent input-decode-map
+                           (cond ((null rest) nil)
+                                 ((and (null (cdr rest)) (keymapp (car rest))) (car rest))
+                                 (t (make-composed-keymap rest))))))))
+
+(defun drgnx-tty-frames--release (term)
+  "Give TERM back what drgnx changed on it: its decodings of modifyOtherKeys and csi-u, tmux's modifyOtherKeys
+level 2 back to 1, and the requests drgnx made itself (`drgnx-tty-asked-mok', `drgnx-tty-asked-focus'):
+modifyOtherKeys and focus reports are reset and their resume strings dropped; then it counts as not set up, so the
+module turned on again sets it up anew.  What Emacs asked the terminal for stays as Emacs asked it."
+  (when-let* ((frame (seq-find (lambda (f) (eq (frame-terminal f) term)) (frame-list))))
+    (with-selected-frame frame
+      (when drgnx-tty-frames--csi-u-map (drgnx-tty-frames--undecode drgnx-tty-frames--csi-u-map))
+      (when drgnx-tty-frames--mok-map (drgnx-tty-frames--undecode drgnx-tty-frames--mok-map))))
+  (let ((asked-mok (terminal-parameter term 'drgnx-tty-asked-mok)))
+    (when (eql (terminal-parameter term 'drgnx-tty-mok-level) 2)
+      (unless asked-mok (send-string-to-terminal "\e[>4;1m" term))   ; drgnx's reset below ends both levels
+      (set-terminal-parameter term 'tty-mode-set-strings (remove "\e[>4;2m" (terminal-parameter term 'tty-mode-set-strings))))
+    (when asked-mok (drgnx-tty-frames--withdraw-mok term)))
+  (when (terminal-parameter term 'drgnx-tty-asked-focus)
+    (send-string-to-terminal drgnx-tty-frames--focus-off term)
+    (set-terminal-parameter term 'tty-mode-set-strings
+                            (remove drgnx-tty-frames--focus-on (terminal-parameter term 'tty-mode-set-strings)))
+    (set-terminal-parameter term 'tty-mode-reset-strings
+                            (remove drgnx-tty-frames--focus-off (terminal-parameter term 'tty-mode-reset-strings))))
+  (dolist (param '(drgnx-tty-set-up drgnx-tty-mok-decoded drgnx-tty-csi-u drgnx-tty-mok-level drgnx-tty-tmux
+                                    drgnx-tty-asked-mok drgnx-tty-asked-focus))
+    (when (terminal-parameter term param) (set-terminal-parameter term param nil))))
+
+(defun drgnx-tty-frames--teardown ()
+  "ui/terminal's teardown: what its frame hooks did to the terminals since the setup, which nothing recorded — OSC
+52 copy and the copy guard (drgnx-tty-clipboard.el), the fallback layer and its prefix key, each terminal's
+decodings and the requests drgnx sent it (`drgnx-tty-frames--release'), and `xterm-mouse-mode' with each
+terminal's mouse tracking when drgnx turned the mode on (`drgnx-tty-frames--mouse-turned-on').  Its hooks, advice,
+commands and timers are recorded and go after this.  Never prompts or signals: a terminal that fails is skipped."
+  (when (fboundp 'drgnx-tty-clip-off) (drgnx-tty-clip-off))
+  (when (fboundp 'drgnx-tty-fallback-off) (drgnx-tty-fallback-off))
+  (dolist (term (terminal-list))
+    (when (and (terminal-live-p term) (terminal-parameter term 'drgnx-tty-set-up))
+      (drgnx-tty-frames--guard "turning off" #'drgnx-tty-frames--release term)))
+  (when drgnx-tty-frames--mouse-turned-on
+    (let ((drgnx-tty-mouse nil))       ; as the mouse turned off: the mode, then each terminal's tracking
+      (drgnx-tty-frames--guard "turning off the mouse" #'drgnx-tty-frames-mouse-apply))
+    (when (bound-and-true-p xterm-mouse-mode) (xterm-mouse-mode -1))   ; no terminal frame left to do it
+    (setq drgnx-tty-frames--mouse-turned-on nil)))
+
 (drgnx-module-define 'ui/terminal
                      :doc "Terminal windows: what each terminal can do, asked once; the mouse; editor-only EDITOR frames."
                      :stage 'startup
+                     :teardown #'drgnx-tty-frames--teardown
                      :setup (lambda ()
                               (drgnx-command-define 'terminal-toggle-mouse :category "Terminal"
                                                     :title "Toggle Mouse in Terminal Windows" :scope 'window
@@ -727,9 +789,11 @@ are the faces of a group that rely on an attribute because their state has no te
                               (add-hook 'server-after-make-frame-hook #'drgnx-tty-frames--after-make-frame)
                               (advice-add 'drgnx-chrome-close-tab :around #'drgnx-tty-frames--close-tab)
                               (advice-add 'drgnx-chrome--close-clicked :around #'drgnx-tty-frames--close-clicked)
-                              ;; a daemon loads server.el after init: there is nothing to advise yet
-                              (with-eval-after-load 'server
-                                (advice-add 'server-create-tty-frame :around #'drgnx-tty-frames--create-tty-frame))
+                              ;; a daemon loads server.el after init: there is nothing to advise yet (the
+                              ;; advice is the module's, whenever server.el loads)
+                              (eval-after-load 'server
+                                (drgnx-modules-with-owner
+                                  (advice-add 'server-create-tty-frame :around #'drgnx-tty-frames--create-tty-frame)))
                               ;; the fallback layer is rebuilt after every key apply (drgnx-tty-fallback-layer.el)
                               (when (fboundp 'drgnx-tty-fallback-setup) (drgnx-tty-fallback-setup))
                               ;; a terminal Emacs set up before this module ran (`emacs -nw' sets its own up after init)

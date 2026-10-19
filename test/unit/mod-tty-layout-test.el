@@ -6,6 +6,7 @@
 (require 'drgnx)
 (require 'drgnx-chrome)                 ; `drgnx-chrome-mode' is special when a test binds it
 (load (expand-file-name "modules/ui/drgnx-tty-layout" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-tty-layout-test--running (command &rest body)
   "Run BODY (what the command does to the windows) between the layout's `pre-command-hook' and
@@ -420,3 +421,21 @@ half-built dock (3 wide) and signal, as `split-window' does in a small frame."
       (should-not (frame-parameter nil 'drgnx-tty-layout-owned))
       (drgnx-tty-layout-test--running 'my-resize (setf (alist-get 'dock now) 34))
       (should (equal (frame-parameter nil 'drgnx-tty-layout-owned) '(dock))))))
+
+(ert-deftest drgnx-tty-layout/turning-it-off-forgets-the-frames ()
+  ;; what the layout kept on a terminal frame was set from its hooks, after the setup: the module's teardown clears
+  ;; it (turned on again, the module lays the frame out as new) and gives the breadcrumb back
+  (let ((frame (selected-frame)))
+    (unwind-protect
+        (progn
+          (drgnx-test-with-modules '(ui/terminal-layout) :strict t
+                                   (should drgnx-tty-layout--active)
+                                   (set-frame-parameter frame 'drgnx-tty-layout-size '(80 . 24))
+                                   (set-frame-parameter frame 'drgnx-tty-layout-owned '(dock))
+                                   (set-frame-parameter frame 'drgnx-tty-layout-set '((dock . 20)))
+                                   (set-frame-parameter frame 'drgnx-chrome-breadcrumb 'off))
+          (should-not drgnx-tty-layout--active)
+          (dolist (p '(drgnx-tty-layout-size drgnx-tty-layout-owned drgnx-tty-layout-set drgnx-chrome-breadcrumb))
+            (should-not (frame-parameter frame p))))
+      (dolist (p '(drgnx-tty-layout-size drgnx-tty-layout-owned drgnx-tty-layout-set drgnx-chrome-breadcrumb))
+        (set-frame-parameter frame p nil)))))

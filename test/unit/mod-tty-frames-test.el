@@ -5,6 +5,9 @@
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-tty-frames" drgnx-dir) nil t)
+(load (expand-file-name "modules/ui/drgnx-tty-clipboard" drgnx-dir) nil t)
+(load (expand-file-name "modules/ui/drgnx-tty-fallback-layer" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defvar drgnx-tty-frames-test--term 'kx-a "The terminal `frame-terminal' answers in these tests.")
 
@@ -178,6 +181,30 @@ strings; the real frame is not touched), an empty cache and no terminal to ask: 
          (should (eq (plist-get (plist-get entry :caps) :keys) 'kkp))
          (should-not (plist-get entry :unsendable)))))))
 
+(ert-deftest drgnx-terminal-report-eld/the-report-is-written-atomically ()
+  ;; through the file layer: a rename that fails keeps the old report as it was and leaves no temp file
+  (drgnx-tty-frames-test--state
+   (let ((file (drgnx-tty-frames--report-file)))
+     (make-directory (file-name-directory file) t)
+     (write-region "(:terminals nil :hinted (kitty))\n" nil file nil 'silent)
+     (cl-letf (((symbol-function 'rename-file) (lambda (&rest _) (signal 'file-error '("Renaming" "no")))))
+       (should-error (drgnx-tty-frames--save-report '(:terminals nil :hinted (foot)))))
+     (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "(:terminals nil :hinted (kitty))\n"))
+     (should (equal (directory-files (file-name-directory file) nil "terminal-report") '("terminal-report.eld")))
+     (drgnx-tty-frames--save-report '(:terminals nil :hinted (foot)))
+     (should (equal (drgnx-tty-frames--read-report-data) '(:terminals nil :hinted (foot)))))))
+
+(ert-deftest drgnx-terminal-report-eld/a-report-with-a-mistake-reads-as-none ()
+  ;; the file layer reads one plain data form: text after it, or a form that is not a plist, is no report (the
+  ;; next write replaces it)
+  (drgnx-tty-frames-test--state
+   (let ((file (drgnx-tty-frames--report-file)))
+     (make-directory (file-name-directory file) t)
+     (dolist (text '("(:terminals nil :hinted (kitty)) (:more t)\n" "(:terminals . 5)\n" "#1=(:a #1#)\n"))
+       (write-region text nil file nil 'silent)
+       (should-not (drgnx-tty-frames--read-report-data))
+       (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) text))))))
+
 (ert-deftest drgnx-tty-frames/the-report-is-written-past-a-lock-and-a-corrupt-file ()
   ;; another Emacs's lock on the report, or a broken report, never makes a daemon hook ask or fail
   (drgnx-tty-frames-test--state
@@ -204,11 +231,94 @@ strings; the real frame is not touched), an empty cache and no terminal to ask: 
                              (buffer-string))))))
 
 (ert-deftest drgnx-tty-frames/toggle-mouse-is-a-registered-command ()
-  (funcall (plist-get (alist-get 'ui/terminal drgnx-modules--table) :setup))
-  (let ((c (drgnx-commands-get 'terminal-toggle-mouse)))
-    (should c)
-    (should (equal (list (drgnx-cmd-category c) (drgnx-cmd-title c) (drgnx-cmd-command c))
-                   '("Terminal" "Toggle Mouse in Terminal Windows" drgnx-tty-frames-toggle-mouse)))))
+  (drgnx-test-with-modules '(ui/terminal) :strict t
+                           (let ((c (drgnx-commands-get 'terminal-toggle-mouse)))
+                             (should c)
+                             (should (equal (list (drgnx-cmd-category c) (drgnx-cmd-title c) (drgnx-cmd-command c))
+                                            '("Terminal" "Toggle Mouse in Terminal Windows" drgnx-tty-frames-toggle-mouse))))))
+
+(ert-deftest drgnx-tty-frames/turning-it-off-gives-the-terminals-back ()
+  ;; a terminal's frame hooks run after the setup, so nothing recorded what they did: the module's teardown takes
+  ;; back copy and its guard, the fallback layer's prefix key, the decodings and tmux's level 2, and the terminal is
+  ;; no longer set up (turned on again, the module sets it up anew)
+  (let ((parent (keymap-parent input-decode-map)) (sent nil)
+        (prefix (key-parse drgnx-tty-chord-prefix))
+        (prefix-before (lookup-key key-translation-map (key-parse drgnx-tty-chord-prefix))))
+    (unwind-protect
+        (progn
+          (drgnx-tty-frames-test--terminal '((tty-mode-set-strings . ("\e[>4;1m" "\e[>4;2m")) (drgnx-tty-mok-level . 2)) nil
+            (cl-letf (((symbol-function 'terminal-list) (lambda () '(kx-a)))
+                      ((symbol-function 'send-string-to-terminal) (lambda (s &rest _) (push s sent))))
+              (drgnx-test-with-modules '(ui/terminal) :strict t
+                                       ;; what a terminal frame's setup did
+                                       (set-terminal-parameter nil 'drgnx-tty-set-up t)
+                                       (drgnx-tty-frames--decode-mok)
+                                       (drgnx-tty-clip--install)
+                                       (set-terminal-parameter nil 'drgnx-tty-clip-set t)
+                                       (set-terminal-parameter nil 'xterm--set-selection t)
+                                       (drgnx-tty-fallback--bind-prefix)
+                                       (set-terminal-parameter nil 'drgnx-tty-fallback t)
+                                       (should (advice-member-p #'drgnx-tty-clip--guard 'gui-backend-set-selection))
+                                       (should (eq (lookup-key key-translation-map prefix) #'drgnx-tty-fallback--prefix)))
+              (should-not (terminal-parameter nil 'drgnx-tty-set-up))
+              (should-not (terminal-parameter nil 'drgnx-tty-mok-decoded))
+              (should-not (terminal-parameter nil 'xterm--set-selection))
+              (should-not (terminal-parameter nil 'drgnx-tty-fallback))
+              (should (equal (terminal-parameter nil 'tty-mode-set-strings) '("\e[>4;1m")))
+              (should (equal sent '("\e[>4;1m")))))
+          (should (eq (keymap-parent input-decode-map) parent))
+          (should-not (advice-member-p #'drgnx-tty-clip--guard 'gui-backend-set-selection))
+          (should (equal (lookup-key key-translation-map prefix) prefix-before)))
+      (set-keymap-parent input-decode-map parent)
+      (advice-remove 'gui-backend-set-selection #'drgnx-tty-clip--guard)
+      (drgnx-tty-fallback--unbind-prefix))))
+
+(ert-deftest drgnx-tty-frames/turning-it-off-withdraws-only-its-own-requests ()
+  ;; drgnx asks for modifyOtherKeys and focus reports only where Emacs has not: turned off, it sends the reset of
+  ;; what it asked (the terminal would go on sending CSI 27 keys nothing decodes any more) and leaves what Emacs
+  ;; asked.  kx-a: modifyOtherKeys is Emacs's, the focus reports drgnx's; kx-b the other way round.
+  (let ((sent nil))
+    (drgnx-tty-frames-test--terminal '((tty-mode-set-strings . ("\e[>4;1m")) (tty-mode-reset-strings . ("\e[>4m"))) nil
+      (puthash '(kx-b . tty-mode-set-strings) '("\e[?1004h") table)
+      (puthash '(kx-b . tty-mode-reset-strings) '("\e[?1004l") table)
+      (cl-letf (((symbol-function 'terminal-list) (lambda () '(kx-a kx-b)))
+                ((symbol-function 'send-string-to-terminal)
+                 (lambda (s &optional term) (push (cons (or term drgnx-tty-frames-test--term) s) sent))))
+        (drgnx-test-with-modules '(ui/terminal) :strict t
+                                 ;; faked here: the setup loads the module file again, which defines it anew
+                                 (cl-letf (((symbol-function 'drgnx-tty-frames--tmux-options)
+                                            (lambda (&rest _) '(:focus-events "on"))))
+                                   (dolist (term '(kx-a kx-b))
+                                     (setq drgnx-tty-frames-test--term term)
+                                     (set-terminal-parameter nil 'drgnx-tty-set-up t)
+                                     (drgnx-tty-frames--ask-mok (selected-frame))
+                                     (drgnx-tty-frames--tmux-focus (selected-frame))))
+                                 (should (equal (reverse sent) '((kx-a . "\e[?1004h") (kx-b . "\e[>4;1m"))))
+                                 (setq sent nil drgnx-tty-frames-test--term 'kx-a))
+        (should (equal (reverse sent) '((kx-a . "\e[?1004l") (kx-b . "\e[>4m"))))
+        (should (equal (terminal-parameter 'kx-a 'tty-mode-set-strings) '("\e[>4;1m")))
+        (should (equal (terminal-parameter 'kx-a 'tty-mode-reset-strings) '("\e[>4m")))
+        (should (equal (terminal-parameter 'kx-b 'tty-mode-set-strings) '("\e[?1004h")))
+        (should (equal (terminal-parameter 'kx-b 'tty-mode-reset-strings) '("\e[?1004l")))))))
+
+(ert-deftest drgnx-tty-frames/turning-it-off-turns-off-only-the-mouse-it-turned-on ()
+  ;; Emacs 30.2 leaves `xterm-mouse-mode' off, so the module turns it on, and turned off it turns it off again (the
+  ;; terminals' tracking too); Emacs 31 turns it on by itself, and then it stays on
+  (require 'xt-mouse)
+  (dolist (emacs-on '(nil t))
+    (let ((xterm-mouse-mode emacs-on) (drgnx-tty-mouse t) (calls nil))
+      (drgnx-tty-frames-test--terminal nil nil
+        (cl-letf (((symbol-function 'xterm-mouse-mode)
+                   (lambda (arg) (push arg calls) (setq xterm-mouse-mode (> arg 0))))
+                  ((symbol-function 'turn-on-xterm-mouse-tracking-on-terminal) (lambda (_term) (push 'on calls)))
+                  ((symbol-function 'turn-off-xterm-mouse-tracking-on-terminal) (lambda (_term) (push 'off calls)))
+                  ((symbol-function 'drgnx-state-frame-kind) (lambda (_f) 'tty)))
+          (drgnx-test-with-modules '(ui/terminal) :strict t
+                                   (drgnx-tty-frames-mouse-apply)
+                                   (should xterm-mouse-mode)
+                                   (setq calls nil))
+          (should (eq xterm-mouse-mode emacs-on))
+          (should (equal (reverse calls) (if emacs-on nil '(-1 off)))))))))
 
 (ert-deftest drgnx-tty-frames/toggle-mouse-saves-only-when-run-interactively ()
   (let (saved set (drgnx-tty-mouse t))
@@ -368,9 +478,11 @@ types `infocmp' was asked about."
       (delete-process proc))))
 
 (ert-deftest drgnx-tty-frames/true-colour-is-asked-for-once-server-is-loaded ()
-  (funcall (plist-get (alist-get 'ui/terminal drgnx-modules--table) :setup))
+  ;; the advice is the module's: turned off, it goes
   (require 'server)
-  (should (advice-member-p #'drgnx-tty-frames--create-tty-frame 'server-create-tty-frame)))
+  (drgnx-test-with-modules '(ui/terminal) :strict t
+                           (should (advice-member-p #'drgnx-tty-frames--create-tty-frame 'server-create-tty-frame)))
+  (should-not (advice-member-p #'drgnx-tty-frames--create-tty-frame 'server-create-tty-frame)))
 
 (ert-deftest drgnx-tty-frames/a-daemon-loading-server-after-init-gets-the-advice ()
   ;; a daemon loads server.el after init: the module's setup runs before there is a function to advise

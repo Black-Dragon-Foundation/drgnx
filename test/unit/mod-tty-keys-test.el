@@ -6,6 +6,7 @@
 (require 'drgnx-tty-session)
 (load (expand-file-name "modules/ui/drgnx-tty-frames" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-tty-keys" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defun drgnx-tty-keys-test--pinned ()
   "The kkp entry of the shipped lock (etc/drgnx.lock.eld): (VERSION . SHA256)."
@@ -174,6 +175,32 @@ a fake `tmux' printing TMUX-OUT on PATH (the display line, then NAME VALUE optio
            ;; kkp asks only where it is wanted, and a setup it cannot finish is undone
            (should (advice-member-p #'drgnx-tty-keys--enable-guard 'kkp-enable-in-terminal))
            (should (advice-member-p #'drgnx-tty-keys--kkp-setup-guard 'kkp--terminal-setup))))
+      (drgnx-tty-keys-test--unload-kkp)
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-tty-keys/turning-it-off-turns-kkp-off-and-gives-its-options-back ()
+  ;; kkp's options are kkp's: the module gives them back; kkp's mode goes off now (each terminal gets its plain keys
+  ;; back), and a terminal declined once may be asked again when the module is turned on
+  (let* ((dir (make-temp-file "drgnx-fake-kkp" t))
+         (load-path (cons dir load-path)))
+    (drgnx-tty-keys-test--unload-kkp)
+    (unwind-protect
+        (progn
+          (write-region drgnx-tty-keys-test--fake-kkp nil (expand-file-name "kkp.el" dir) nil 'silent)
+          (drgnx-tty-keys-test--terminal '((drgnx-tty-kkp-declined . t)) '("TERM=xterm-kitty") ""
+            (cl-letf (((symbol-function 'terminal-list) (lambda () '(kx-a))))
+              (drgnx-test-with-modules '(ui/terminal-keys) :strict t
+                                       (should (eq (drgnx-tty-keys-test--status 'ui/terminal-keys) 'ok))
+                                       (should (symbol-value 'global-kkp-mode))
+                                       (should (eql (symbol-value 'kkp-terminal-query-timeout) drgnx-tty-frames-query-timeout))
+                                       (set-terminal-parameter nil 'drgnx-tty-kkp t))
+              (should-not (symbol-value 'global-kkp-mode))
+              (should (eql (symbol-value 'kkp-terminal-query-timeout) 2))
+              (should-not (symbol-value 'kkp-restore-legacy-keys-around-subprocesses))
+              (should-not (advice-member-p #'drgnx-tty-keys--enable-guard 'kkp-enable-in-terminal))
+              (should-not (memq #'drgnx-tty-keys--kkp-on (symbol-value 'kkp-terminal-setup-complete-hook)))
+              (should-not (terminal-parameter nil 'drgnx-tty-kkp))
+              (should-not (terminal-parameter nil 'drgnx-tty-kkp-declined)))))
       (drgnx-tty-keys-test--unload-kkp)
       (delete-directory dir t))))
 

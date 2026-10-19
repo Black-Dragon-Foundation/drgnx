@@ -404,6 +404,8 @@ found — how keys arrive (kitty keyboard protocol, modifyOtherKeys, or neither)
 keys of your profile this terminal cannot send are written to `terminal-report.eld` in drgnx's state directory
 (`~/.local/state/drgnx/`), one entry per terminal device, for the doctor and the key sheet. The file is written
 whole and then renamed into place, so two Emacs processes never leave half of it, and nothing ever asks about it.
+If `terminal-report.eld` has a mistake (edited by hand, say), it is read as no report and the next terminal window
+writes it anew.
 Like Emacs's own terminal setup, the question drops keys typed ahead while a new terminal window opens. In a terminal
 without modifyOtherKeys, kkp asks its own question, once per terminal, waiting 0.2 s at most (see [Keys](#keys));
 its answer is added to the report.

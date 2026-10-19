@@ -6,6 +6,7 @@
 (require 'drgnx)
 (load (expand-file-name "modules/editor/drgnx-editing" drgnx-dir) nil t)
 (load (expand-file-name "modules/editor/drgnx-clipboard" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defvar x-selection-timeout)
 (defvar pgtk-selection-timeout)
@@ -471,6 +472,17 @@ uninstalled afterwards."
       (cl-letf (((symbol-function 'drgnx-module-disabled-p) (lambda (_m) nil)))
         (drgnx-modules--run-one 'editor/clipboard spec 'startup))
       (should (advice-function-member-p #'drgnx-clipboard--cut interprogram-cut-function)))))
+
+(ert-deftest drgnx-clipboard/turning-it-off-takes-the-wrappers-off ()
+  ;; the wrappers are `add-function's on three variables, which no recorder sees: the module's teardown takes them
+  ;; off, so the module turned on again puts them back (its guard is cleared too)
+  (drgnx-test-with-modules '(editor/clipboard) :strict t
+                           (should drgnx-clipboard--installed)
+                           (should (advice-function-member-p #'drgnx-clipboard--cut (default-value 'interprogram-cut-function))))
+  (should-not drgnx-clipboard--installed)
+  (should-not (advice-function-member-p #'drgnx-clipboard--cut (default-value 'interprogram-cut-function)))
+  (should-not (advice-function-member-p #'drgnx-clipboard--paste (default-value 'interprogram-paste-function)))
+  (should-not (advice-function-member-p #'drgnx-clipboard--command-error (default-value 'command-error-function))))
 
 (provide 'mod-clipboard-test)
 ;;; mod-clipboard-test.el ends here

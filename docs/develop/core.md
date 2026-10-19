@@ -71,8 +71,10 @@ off. Untrust This Folder takes effect in the session (`drgnx-trust--added`) even
 
 The report files in the state folder go this way: `wb-report.eld` (`drgnx-rules--write-report`, a startup hook: an
 error becomes one `message`), `agent-checks.eld` (`drgnx-agent-check-remember`, `:private t`) and `check/durations.eld`
-(`drgnx-check--save-durations`) are written with `drgnx-file-write ... :fsync nil`, so a failed write keeps the old
-report. They are read with `drgnx-file-read`: `drgnx-tty--read-report`, `drgnx-agent-check-results`,
+(`drgnx-check--save-durations`) and `terminal-report.eld` (`drgnx-tty-frames--save-report`, from a terminal frame's
+hooks: an error goes to `drgnx-hooks-problems`) are written with `drgnx-file-write ... :fsync nil`, so a failed write
+keeps the old report. They are read with `drgnx-file-read`: `drgnx-tty--read-report` (which ui/terminal's
+`drgnx-tty-frames--read-report-data` calls too), `drgnx-agent-check-results`,
 `drgnx-check-durations` and the doctor's `drgnx-doctor--state-file` / `drgnx-doctor--keys-report` give the data of an
 `ok` file, else nil (missing, over 1 MiB, a mistake, text after the form, not plain data). A report is rebuilt by its
 next run, so a report with a mistake is not kept aside.
@@ -1449,7 +1451,10 @@ Nothing in it needs evil, and `test/unit/modal-core-test.el` drives it with a fa
   naming an engine.
 - **Selection.** An engine sets `drgnx-modal-selection-function`; `(drgnx-modal-selection)` returns
   `(BEG . END)` from it, else from the active region, else nil.
-- **Engines.** `(drgnx-modal-define-engine NAME :module M :start F :stop F)` registers one. A key profile asks for
+- **Engines.** `(drgnx-modal-define-engine NAME :module M :start F :stop F)` registers one; called from a module's
+  setup it records its undo, `(drgnx-modal-undefine-engine NAME SPEC)`, which stops the engine first when it runs (as
+  a sync stops one: its stop, then every buffer's state cleared) and removes the definition while it is still SPEC.
+  `drgnx-modal-engines` is one of the fingerprint's registries. A key profile asks for
   an engine with a top-level `:modal (:engine NAME :leader KEYS :default-map … :maps …)` (keys/vim.eld);
   `drgnx-modal-sync-engine` starts the engine the current layers need (once) and stops any other (a stop clears every buffer's state and
   removes the indicator, so `SPC` types a space again; an engine's start turns the indicator on), and
@@ -1512,15 +1517,19 @@ another stack stops the engine but evil stays loaded until the restart (module t
 
 Module `editor/evil` (`:default 'off`, startup stage; packages `evil`, `evil-collection`). `drgnx-evil-setup` sets
 `evil-want-keybinding` nil and `evil-want-C-u-scroll` t before `(require 'evil)`, then `drgnx-evil--settings` applies the
-module defaults with `setopt` (`evil-undo-system` `undo-redo`, `evil-search-module` `evil-search`, `evil-want-minibuffer`
-nil, `evil-mode-line-format` nil; the user's `setopt` in config.el runs later), registers the engine with
+module defaults with `drgnx-module-set`, through each option's setter as `setopt` does (`evil-undo-system` `undo-redo`,
+`evil-search-module` `evil-search`, `evil-want-minibuffer` nil, `evil-mode-line-format` nil; the user's `setopt` in
+config.el runs later and stays when the module is turned off), registers the engine with
 `drgnx-modal-define-engine` and the command Toggle Modal Editing, and calls `drgnx-modal-sync-engine`. `drgnx-evil-start`
 and `-stop` own what the engine adds (hooks, advice, variable watchers, saved variables): the stop takes it all out
 again, except the `eval-after-load` entries (`multiple-cursors-core`, `term/xterm`, the initial state of a mode whose
 library loads later), which stay and do nothing while the engine is off (each checks `drgnx-evil--active`), and
 evil-collection's registrations, which only bind keys in evil's own maps (inactive without evil). A failing start
 undoes what it did. When an engine's stop signals, `drgnx-modal-sync-engine` still clears every buffer's state and
-the indicator.
+the indicator. Turned off, the module's `:teardown` (`drgnx-evil--teardown`) stops the engine through
+`drgnx-modal-undefine-engine` — the engine may have started after the setup, when a Vim stack was chosen, so the stop
+undoes what its start did — and the module's record gives the options their old values back; evil stays loaded (it
+cannot be unloaded), so its tests run in their own Emacs (`drgnx-test-run-isolated`, [harness.md](harness.md)).
 
 - **States.** The core's `drgnx-modal-panel-modes` and `-form-modes` start in emacs state and `-input-modes` in insert
   state (`drgnx-evil--initial-states`, set again when the mode's library loads and when a list grows); every state

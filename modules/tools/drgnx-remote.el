@@ -293,13 +293,14 @@ folder of it, else its home."
   (dolist (b (drgnx-remote--code-buffers key))
     (drgnx-lang-start-remote-server b)))
 
-(defun drgnx-remote--servers (key)
-  "The eglot servers running on the connection KEY."
+(defun drgnx-remote--servers (&optional key)
+  "The eglot servers running on the connection KEY; with KEY nil, on any remote connection."
   (when (and (featurep 'eglot) (boundp 'eglot--servers-by-project))
     (let (servers)
       (maphash (lambda (_project list)
                  (dolist (s list)
-                   (when (equal (ignore-errors (file-remote-p (project-root (eglot--project s)))) key) (push s servers))))
+                   (let ((on (ignore-errors (file-remote-p (project-root (eglot--project s))))))
+                     (when (if key (equal on key) on) (push s servers)))))
                eglot--servers-by-project)
       (delete-dups servers))))
 
@@ -394,7 +395,12 @@ keep remote auto-save files in a private folder."
   (drgnx-remote--private-auto-saves))
 
 (defun drgnx-remote--teardown ()
-  "Undo `drgnx-remote--setup' except the commands (modules are switched off at the next start; tests use this)."
+  "The module's teardown: undo `drgnx-remote--setup' (its commands are recorded and go after this) — the function
+on `command-error-function', which nothing records, among the rest — and stop the language servers running on a
+remote host: without the guards nothing would keep their reconnects and questions out of automatic paths.  Their
+buffers stay.  No prompt, and short timeouts, so a host that does not answer cannot hold Emacs up."
+  (dolist (server (drgnx-remote--servers))
+    (with-demoted-errors "Remote: language server: %S" (eglot-shutdown server nil 0.5 t)))
   (setq global-mode-string (delete drgnx-remote--mode-line-entry global-mode-string))
   (remove-hook 'pre-command-hook #'drgnx-remote--command-start)
   (remove-hook 'post-command-hook #'drgnx-remote--command-end)
@@ -409,7 +415,8 @@ keep remote auto-save files in a private folder."
 (drgnx-module-define 'tools/remote
                      :doc "Open Remote… (ssh hosts, podman containers), a status-line segment, Reconnect, language servers on the remote side"
                      :stage 'idle
-                     :setup #'drgnx-remote--setup)
+                     :setup #'drgnx-remote--setup
+                     :teardown #'drgnx-remote--teardown)
 
 (provide 'drgnx-remote)
 ;;; drgnx-remote.el ends here

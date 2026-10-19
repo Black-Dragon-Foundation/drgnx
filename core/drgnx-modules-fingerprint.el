@@ -37,12 +37,19 @@
                      drgnx-signal-window-functions drgnx-rules-mode-hook drgnx-persist-state-functions
                      drgnx-persist-after-restore-functions drgnx-modules-after-stage-functions drgnx-job-tick-functions
                      drgnx-job-clash-answer-functions drgnx-job-card-action-functions drgnx-job-before-review-functions
-                     drgnx-ai-refused-functions drgnx-ai-probe-done-hook)
+                     drgnx-ai-refused-functions drgnx-ai-probe-done-hook
+                     tty-setup-hook server-visit-hook pre-redisplay-functions kkp-terminal-setup-complete-hook
+                     kkp-terminal-teardown-complete-hook
+                     after-change-major-mode-hook evil-local-mode-hook evil-normal-state-entry-hook
+                     evil-insert-state-entry-hook evil-visual-state-entry-hook evil-replace-state-entry-hook
+                     evil-operator-state-entry-hook evil-motion-state-entry-hook evil-emacs-state-entry-hook
+                     multiple-cursors-mode-enabled-hook multiple-cursors-mode-disabled-hook)
   "The hooks whose default value the cheap fingerprint reads: those drgnx adds to.
 `unload-feature-special-hooks' is read as well.  A branch that adds to a hook not listed here adds the
 symbol with one line; the FULL scan finds the rest.")
 
-(defvar drgnx-modules-fingerprint-function-variables '(after-focus-change-function)
+(defvar drgnx-modules-fingerprint-function-variables
+  '(after-focus-change-function interprogram-cut-function interprogram-paste-function command-error-function)
   "Function-valued variables drgnx wraps with `add-function' (read by their advice, or their value).")
 
 (defvar drgnx-modules-fingerprint-registries
@@ -50,7 +57,7 @@ symbol with one line; the FULL scan finds the rest.")
                           (drgnx-signal--subscribers . :functions) drgnx-surfaces-contexts drgnx-layouts-shapes
                           drgnx-layouts-pane-fillers drgnx-config--defs drgnx-memo--watched
                           drgnx-view--types (drgnx-state--now . :functions) (drgnx-state--idle . :functions)
-                          drgnx-state--roles drgnx-pane--kinds)
+                          drgnx-state--roles drgnx-pane--kinds drgnx-modal-engines)
   "drgnx's registries whose keys the fingerprint reads: a variable that holds a hash table, an alist or a
 list of conses (the key is the car).  `(VAR . :functions)' is an alist KEY → list of functions: each
 function is read too.  Unbound variables are skipped.  Branches that add a registry add one line.")

@@ -8,6 +8,7 @@
 (require 'drgnx)
 (require 'drgnx-modal-choose nil t)
 (load (expand-file-name "test/fixtures/modal-elpa" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defvar drgnx-onboard--restart-needed)
 (declare-function drgnx-modal-apply-pending "drgnx-modal-choose")
@@ -182,20 +183,20 @@ registered and the keys applied, no engine registered.  Skipped where evil can b
 (defconst drgnx-modal-choose-test--isolated "test/unit/isolated/modal-choose-isolated.el")
 
 (ert-deftest drgnx-modal-choose/a-vim-stack-without-evil-stays-usable ()
-  (should (null (drgnx-modal-test-isolated-result
+  (should (null (drgnx-test-run-isolated
                  drgnx-modal-choose-test--isolated "^drgnx-modal-choose/a-vim-stack-without-evil-stays-usable\\'"))))
 
 (ert-deftest drgnx-modal-choose/interactive-asks-once-and-switches-after-the-engine-loads ()
-  (should (null (drgnx-modal-test-isolated-result
+  (should (null (drgnx-test-run-isolated
                  drgnx-modal-choose-test--isolated
                  "^drgnx-modal-choose/interactive-asks-once-and-switches-after-the-engine-loads\\'"))))
 
 (ert-deftest drgnx-modal-choose/installed-engine-switches-without-asking ()
-  (should (null (drgnx-modal-test-isolated-result
+  (should (null (drgnx-test-run-isolated
                  drgnx-modal-choose-test--isolated "^drgnx-modal-choose/installed-engine-switches-without-asking\\'"))))
 
 (ert-deftest drgnx-modal-choose/pending-applies-at-the-next-start ()
-  (should (null (drgnx-modal-test-isolated-result
+  (should (null (drgnx-test-run-isolated
                  drgnx-modal-choose-test--isolated "^drgnx-modal-choose/pending-applies-at-the-next-start\\'"))))
 
 (provide 'modal-choose-test)

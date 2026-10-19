@@ -225,9 +225,33 @@ Self-contained: place `(:eval (drgnx-modal-mode-line))' anywhere in a mode-line 
 
 (cl-defun drgnx-modal-define-engine (name &key module start stop)
   "Register modal engine NAME.  MODULE names the drgnx module that provides it; START and STOP are
-functions of no arguments that turn the engine on and off.  Returns NAME."
-  (setf (alist-get name drgnx-modal-engines) (list :module module :start start :stop stop))
+functions of no arguments that turn the engine on and off.  Returns NAME.
+Called from a module's setup, the definition records its undo, `drgnx-modal-undefine-engine' while the
+definition is still this one: the engine stops first if it runs."
+  (let ((spec (list :module module :start start :stop stop)))
+    (setf (alist-get name drgnx-modal-engines) spec)
+    (drgnx-modules-push-undo (format "modal engine %s" name) (lambda () (drgnx-modal-undefine-engine name spec))))
   name)
+
+(defun drgnx-modal--stop-running ()
+  "Stop the engine that runs (its stop function, under an error guard), then clear every buffer's state and the
+indicator, whether or not the stop worked: no buffer keeps the modal keys of an engine that is not running."
+  (when drgnx-modal-running
+    (let ((stop (plist-get (alist-get drgnx-modal-running drgnx-modal-engines) :stop)))
+      (condition-case err
+          (when stop (funcall stop))
+        (error (message "drgnx: stopping %s failed: %s" drgnx-modal-running (error-message-string err))))
+      (drgnx-modal--reset-buffers)
+      (setq drgnx-modal-running nil))))
+
+(defun drgnx-modal-undefine-engine (name &optional spec)
+  "Remove modal engine NAME, when SPEC is nil or still its definition; it is stopped first if it runs (as
+`drgnx-modal-sync-engine' stops one).  Returns non-nil when it was removed.  Never prompts."
+  (let ((cell (assq name drgnx-modal-engines)))
+    (when (and cell (or (null spec) (eq (cdr cell) spec)))
+      (when (eq drgnx-modal-running name) (drgnx-modal--stop-running))
+      (setq drgnx-modal-engines (assq-delete-all name drgnx-modal-engines))
+      t)))
 
 (defun drgnx-modal-engine-for (layers &optional profiles)
   "The `:engine' of the first of LAYERS whose profile (in PROFILES, default the loaded ones) has `:modal'."
@@ -282,14 +306,7 @@ is written again (it said what ran before the after-apply functions started it) 
          (want (and (not drgnx-modal-suspended) (drgnx-modal-engine-for layers)))
          (want (and want (assq want drgnx-modal-engines) want)))
     (unless (eq want drgnx-modal-running)
-      (when drgnx-modal-running
-        (let ((stop (plist-get (alist-get drgnx-modal-running drgnx-modal-engines) :stop)))
-          (condition-case err
-              (when stop (funcall stop))
-            (error (message "drgnx: stopping %s failed: %s" drgnx-modal-running (error-message-string err))))
-          ;; whether or not the stop worked: no buffer keeps the modal keys of an engine that is not running
-          (drgnx-modal--reset-buffers)
-          (setq drgnx-modal-running nil)))
+      (drgnx-modal--stop-running)
       (when want
         (condition-case err
             (progn (when-let* ((start (plist-get (alist-get want drgnx-modal-engines) :start)))
