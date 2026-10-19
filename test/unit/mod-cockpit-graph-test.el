@@ -26,7 +26,7 @@ the fixture's."
            (config (current-window-configuration)))
        (cl-letf (((symbol-function 'drgnx-cockpit-sessions) (lambda () sessions))
                  ;; a UTF-8 terminal whatever the locale (CI's C locale is not): the ASCII tests say so themselves
-                 ((symbol-function 'drgnx-cockpit-graph--ascii-p) #'ignore))
+                 ((symbol-function 'drgnx-ui-ascii-frame-p) #'ignore))
          (let ((g (drgnx-cockpit-graph-buffer)))
            (unwind-protect
                (save-window-excursion
@@ -115,7 +115,7 @@ with `drgnx-cockpit-fixture-show-pane'."
 (ert-deftest drgnx-cockpit-graph/waiting-nodes-have-the-dot ()
   (drgnx-cockpit-fixture-with
     ;; a UTF-8 terminal whatever the locale (CI's C locale is not): the ASCII form is asked for below
-    (cl-letf (((symbol-function 'drgnx-cockpit-graph--ascii-p) #'ignore))
+    (cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) #'ignore))
       (let* ((m (drgnx-cockpit-model :sessions sessions))
              (lines (drgnx-cockpit-graph-outline m))
              (mark (alist-get 'waiting (drgnx-cockpit-graph--glyph-table)))
@@ -132,7 +132,7 @@ with `drgnx-cockpit-fixture-show-pane'."
         (should (string-match-p "2 waiting on you" (car lines)))
         (should (eq (get-text-property 0 'face (car lines)) 'drgnx-cockpit-waiting))
         ;; a terminal that is not UTF-8: the mark's ASCII form
-        (cl-letf (((symbol-function 'drgnx-cockpit-graph--ascii-p) #'always))
+        (cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) #'always))
           (should (string-search "? T3" (drgnx-cockpit-graph-test--line (drgnx-cockpit-graph-outline m) (format "task:%s#3" plan)))))
         ;; the drawing: the mark and a dot in the waiting face's colour, on each waiting node
         (let ((old (face-attribute 'drgnx-cockpit-waiting :foreground)))

@@ -13,17 +13,21 @@
 ;;; Code:
 (require 'subr-x)
 
-(defcustom drgnx-face-glyphs
+(defconst drgnx-ui--default-glyphs
   '((handle "⠿" . "::") (close "×" . "x") (branch "⑂" . "Y") (warning "⚠" . "!") (ok "✓" . "+")
     (busy "◎" . "@") (waiting "◐" . "?") (paused "⏸" . "||") (ahead "↑" . "^") (behind "↓" . "v")
     (dot "●" . "*") (circle "○" . "o") (sep " · " . " | ") (flag "⚑" . "#")
     (diamond "◆" . "<>") (search "⌕" . "/") (bullet "•" . ">") (minimize "–" . "-") (maximize "▢" . "[]")
     (fail "✕" . "X") (stopped "■" . "#") (dismiss "×" . "x") (unqueue "−" . "-")
     (info "ℹ" . "i") (warn "⚠" . "!"))
+  "The standard glyph table: the default of `drgnx-face-glyphs', and where a name the option lacks is found.")
+
+(defcustom drgnx-face-glyphs drgnx-ui--default-glyphs
   "The glyphs drgnx draws: NAME → (UNICODE . ASCII).  The ASCII form is used on a terminal frame that is not UTF-8.
 One glyph per meaning: `close' (a close button), `fail' (something failed), `dismiss' (dismiss a notice) and
 `unqueue' (take a queued message back) look alike by default and are separate so each can be restyled alone.
-Change one to suit your font; `drgnx-face-glyph' reads this."
+Change one to suit your font; `drgnx-face-glyph' reads this.  A name missing here (a value saved before drgnx
+added it) is drawn from the standard table."
   :type '(alist :key-type symbol :value-type (cons (string :tag "Unicode") (string :tag "ASCII")))
   :group 'drgnx)
 
@@ -36,8 +40,9 @@ Change one to suit your font; `drgnx-face-glyph' reads this."
 
 (defun drgnx-face-glyph (name &optional frame)
   "The glyph NAME (see `drgnx-face-glyphs') as a string: its ASCII form on a terminal frame that is not UTF-8.
-FRAME defaults to the selected one.  nil when NAME is unknown."
-  (when-let* ((g (alist-get name drgnx-face-glyphs)))
+FRAME defaults to the selected one.  A NAME the option lacks comes from `drgnx-ui--default-glyphs'; nil when
+neither has it."
+  (when-let* ((g (or (alist-get name drgnx-face-glyphs) (alist-get name drgnx-ui--default-glyphs))))
     (if (drgnx-ui-ascii-frame-p frame) (cdr g) (car g))))
 
 ;;;; Status

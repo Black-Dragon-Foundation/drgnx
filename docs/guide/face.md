@@ -106,6 +106,9 @@ drawn title bar) uses the one `close` glyph, `×`, which every monospace font ha
 (setopt drgnx-face-glyphs (cons '(close "✕" . "x") drgnx-face-glyphs))   ; yours first
 ```
 
+The table is in Customize's group `drgnx` (not `drgnx-face`), because it is part of the core. A table you saved
+before drgnx added a glyph still works: a glyph missing from it is drawn as the standard one.
+
 | Name | Unicode | ASCII | Name | Unicode | ASCII |
 |---|---|---|---|---|---|
 | `handle` | ⠿ | `::` | `paused` | ⏸ | `\|\|` |

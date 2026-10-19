@@ -170,38 +170,40 @@
         (should (drgnx-cockpit-model-test--edge-p m "pr:1" p 'implements))))))
 
 (ert-deftest drgnx-cockpit-model/happened-is-one-line-per-event ()
-  (drgnx-cockpit-fixture-with
-    (drgnx-coord-event-add :agent "s-1" :job "jx" :task "jx#2" :kind "test" :summary "fail"
-                           :data '(:command "make test" :passed 10 :failed 2))
-    (let* ((lines (drgnx-cockpit-happened "s-1")) (texts (mapcar (lambda (l) (plist-get l :text)) lines)))
-      (should (equal (mapcar (lambda (l) (plist-get l :kind)) lines)
-                     '("claim" "status" "decision" "edit" "test" "question" "test")))
-      (dolist (l lines)
-        (should (stringp (plist-get l :text)))
-        (should-not (string-match-p "\n" (plist-get l :text)))
-        (should (<= (length (plist-get l :text)) 200))
-        (should (numberp (plist-get l :at))))
-      (should (string-match-p "the parser" (nth 2 texts)))
-      (should (string-match-p "2 files" (nth 3 texts)))
-      (should (string-match-p "a\\.el" (nth 3 texts)))
-      (should (string-match-p "12/12 ✓" (nth 4 texts)))
-      (should (string-match-p "which way" (nth 5 texts)))
-      (should-not (string-match-p "\\[escalation\\]" (nth 5 texts)))
-      (should (string-match-p "10/12" (nth 6 texts)))
-      ;; a job task's events lead to its node
-      (should (equal (plist-get (plist-get (nth 1 lines) :target) :node) (format "task:%s#2" plan)))
-      ;; newest last, at most LIMIT
-      (should (equal (mapcar (lambda (l) (plist-get l :kind)) (drgnx-cockpit-happened "s-1" 2)) '("question" "test"))))
-    ;; the timeline: every agent's events as chips, oldest first, after SINCE
-    (let* ((chips (drgnx-cockpit-timeline)) (last-id (plist-get (car (last chips)) :id)))
-      (should (> (length chips) 10))
-      (should (equal (sort (mapcar (lambda (c) (plist-get c :at)) chips) #'<) (mapcar (lambda (c) (plist-get c :at)) chips)))
-      (dolist (c chips) (should (stringp (plist-get c :label))) (should (<= (length (plist-get c :label)) 40)))
-      (should (seq-find (lambda (c) (equal (plist-get c :label) "T2 running")) chips))
-      (should (seq-find (lambda (c) (and (equal (plist-get c :kind) "question") (string-match-p "asks you" (plist-get c :label)))) chips))
-      (should-not (drgnx-cockpit-timeline :since last-id))
-      (drgnx-coord-force-status "jx#2" "done" "s-1")
-      (should (equal (mapcar (lambda (c) (plist-get c :label)) (drgnx-cockpit-timeline :since last-id)) '("T2 ✓"))))))
+  ;; the batch terminal is not UTF-8 in a C locale (CI): the glyphs below are the Unicode ones
+  (cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) (lambda (&optional _f) nil)))
+    (drgnx-cockpit-fixture-with
+      (drgnx-coord-event-add :agent "s-1" :job "jx" :task "jx#2" :kind "test" :summary "fail"
+                             :data '(:command "make test" :passed 10 :failed 2))
+      (let* ((lines (drgnx-cockpit-happened "s-1")) (texts (mapcar (lambda (l) (plist-get l :text)) lines)))
+        (should (equal (mapcar (lambda (l) (plist-get l :kind)) lines)
+                       '("claim" "status" "decision" "edit" "test" "question" "test")))
+        (dolist (l lines)
+          (should (stringp (plist-get l :text)))
+          (should-not (string-match-p "\n" (plist-get l :text)))
+          (should (<= (length (plist-get l :text)) 200))
+          (should (numberp (plist-get l :at))))
+        (should (string-match-p "the parser" (nth 2 texts)))
+        (should (string-match-p "2 files" (nth 3 texts)))
+        (should (string-match-p "a\\.el" (nth 3 texts)))
+        (should (string-match-p "12/12 ✓" (nth 4 texts)))
+        (should (string-match-p "which way" (nth 5 texts)))
+        (should-not (string-match-p "\\[escalation\\]" (nth 5 texts)))
+        (should (string-match-p "10/12" (nth 6 texts)))
+        ;; a job task's events lead to its node
+        (should (equal (plist-get (plist-get (nth 1 lines) :target) :node) (format "task:%s#2" plan)))
+        ;; newest last, at most LIMIT
+        (should (equal (mapcar (lambda (l) (plist-get l :kind)) (drgnx-cockpit-happened "s-1" 2)) '("question" "test"))))
+      ;; the timeline: every agent's events as chips, oldest first, after SINCE
+      (let* ((chips (drgnx-cockpit-timeline)) (last-id (plist-get (car (last chips)) :id)))
+        (should (> (length chips) 10))
+        (should (equal (sort (mapcar (lambda (c) (plist-get c :at)) chips) #'<) (mapcar (lambda (c) (plist-get c :at)) chips)))
+        (dolist (c chips) (should (stringp (plist-get c :label))) (should (<= (length (plist-get c :label)) 40)))
+        (should (seq-find (lambda (c) (equal (plist-get c :label) "T2 running")) chips))
+        (should (seq-find (lambda (c) (and (equal (plist-get c :kind) "question") (string-match-p "asks you" (plist-get c :label)))) chips))
+        (should-not (drgnx-cockpit-timeline :since last-id))
+        (drgnx-coord-force-status "jx#2" "done" "s-1")
+        (should (equal (mapcar (lambda (c) (plist-get c :label)) (drgnx-cockpit-timeline :since last-id)) '("T2 ✓")))))))
 
 (ert-deftest drgnx-cockpit-model/edit-sources-per-kind-of-agent ()
   (drgnx-cockpit-fixture-with

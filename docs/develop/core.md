@@ -2139,7 +2139,8 @@ What the `areas` backend does with the edges:
 What every surface that draws a mark shares. It is in core and requires nothing beyond `subr-x`, so the status bar,
 the lists and the notices work without the `ui/face` module.
 
-- `drgnx-face-glyphs` (group `drgnx`; the name is kept so a saved value still applies) and
+- `drgnx-face-glyphs` (group `drgnx`; the name is kept so a saved value still applies, and a name a saved value
+  lacks comes from the standard table, `drgnx-ui--default-glyphs`) and
   `(drgnx-face-glyph NAME &optional FRAME)`. One glyph per meaning (`close`, `fail`, `stopped`, `dismiss`,
   `unqueue`, `info`, `warn`, `waiting`, …), each `(UNICODE . ASCII)`. Never hard-code a character or a fallback:
   call `drgnx-face-glyph`.

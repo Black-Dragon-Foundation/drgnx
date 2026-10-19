@@ -88,10 +88,9 @@ the glyph `waiting'."
   "The graph's glyphs, NAME → (UNICODE . ASCII): those `drgnx-face-glyph' has come from it; the tree's are these.")
 
 (defun drgnx-cockpit-graph--ascii-p (&optional frame)
-  "Non-nil when FRAME (the selected one) is a terminal frame whose terminal does not write UTF-8."
-  (and (not (display-graphic-p frame))
-       (let ((coding (terminal-coding-system (frame-terminal frame))))
-         (not (and coding (string-prefix-p "utf-8" (symbol-name (coding-system-base coding))))))))
+  "Non-nil when FRAME (the selected one) is a terminal frame whose terminal does not write UTF-8: the UI kit's one
+test, `drgnx-ui-ascii-frame-p', which `drgnx-face-glyph' uses too (a test pins that one)."
+  (drgnx-ui-ascii-frame-p frame))
 
 (defun drgnx-cockpit-graph--glyph-table (&optional unicode)
   "NAME → glyph for the selected frame (UNICODE non-nil: the drawing's, always Unicode)."
