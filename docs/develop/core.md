@@ -2193,13 +2193,21 @@ to revisit the file normally, a timer's open included.
 
 **Lean** is `drgnx-large-file-mode`. While a lean open runs, `drgnx-large-file--opening` makes the predicate true,
 `treesit-max-buffer-size` is below the size (a `*-ts-mode` starts no parser, and its warning is suppressed) and a
-`:before-while` advice makes `eglot-ensure` a no-op. The sweep, in `find-file-hook` at depth -90, turns the mode on
+`:before-while` advice makes `eglot-ensure` a no-op. A revert runs the major mode again (`after-find-file` calls
+`normal-mode`): an around-advice on `normal-mode` binds the same size limit in a lean or raw buffer, so a buffer
+that stays large across a revert gets no parser either. The sweep, in `find-file-hook` at depth -90, turns the mode on
 for a large file, or for a buffer whose text is above `:ask-above` (a compressed file that expands). The mode turns
 off every mode of `so-long-minor-modes` that is on (the module adds indent-bars, blame, sticky and diff-hl's margin
 mode to that one list), then undo and auto-save. A raw visit (`find-file-noselect` with RAWFILE) runs no
-`find-file-hook`, so the door runs the sweep itself. An `after-revert-hook` follows the size across `:ask-above`
+`find-file-hook`, so the door runs the sweep itself. A major mode changed by hand (`M-x text-mode`) resets the
+minor modes but keeps the flag: `after-change-major-mode-hook`, at depth 90 (after the global modes' turn-on), turns
+the mode on again in a lean or raw buffer. An `after-revert-hook` follows the size across `:ask-above`
 without a question: a lean buffer at or below it turns lean off and runs `normal-mode` again (only safe local
-variables), a normal one above it turns lean; raw and chunk buffers stay. `global-so-long-mode` is on. The
+variables), a normal one above it turns lean; raw and chunk buffers stay. Before the revert reads a lean or raw
+buffer's file, a `before-revert-hook` makes the buffer's record of the file's time current
+(`set-visited-file-modtime`): Emacs 31.1 truncates a buffer whose file shrank to a prefix of its text (a file read
+without decoding, as raw is) with a change that asks `ask-user-about-supersession-threat` while that record is
+stale, and an auto-revert from a timer must not ask. `global-so-long-mode` is on. The
 teardown turns lean off in lean and raw buffers but does not re-run their major modes, and says so.
 
 **Chunks** are a second module, `editor/large-files-chunks` (`modules/editor/drgnx-large-files-chunks.el`,
@@ -2212,6 +2220,21 @@ and vlf's batch-size tuning is off in the buffer, so a chunk always holds that m
 so the lean sweep never sees a chunk buffer: undo stays on, and auto-save is turned off. `vlf-setup` is never
 loaded (its advice asks a question of its own). `drgnx-large-files-chunks-position` gives `(N . TOTAL)`, counted
 the way vlf's mode line counts. The module's teardown leaves chunk buffers as they are.
+
+**Switching, the header and the segment.** `drgnx-large-files--switch` refuses a modified buffer (`user-error`),
+remembers the new mode, kills the buffer, visits the file again under `(drgnx-large-file-open 'auto)` (the remembered
+mode wins) and shows the new buffer in the windows that showed the old one. Large File: Open in Chunks, Open Whole
+(lean) and Open Raw call it; each command's `:when` offers it only in a large file's buffer in another mode (chunks
+only when they can be built). `drgnx-large-files--header-refresh` builds the header text once, when the mode turns on
+or a chunk buffer is built, into the buffer-local `drgnx-large-files--header` (`risky-local-variable`, so its button
+properties show) with the size text cached beside it. The header line shows that variable: as
+`drgnx-chrome-header-tail` after the breadcrumb when the workbench's chrome is on, else as the buffer's
+`header-line-format`. A button's `local-map` runs `drgnx-large-files--header-click` on `[header-line mouse-1]`.
+A major-mode change resets both, and `after-change-major-mode-hook` builds them again. The status-bar segment
+`large-file` reads only the flag, the cached size and the chunk position. It is defined by
+`(eval-after-load 'drgnx-statusbar (drgnx-modules-with-owner …))` and put before `position` with
+`drgnx-module-set`. `drgnx-statusbar-define-segment` records no undo yet (teardown Task 23), so the module's teardown
+removes the segment from `drgnx-statusbar--segments` by hand, and the header from chunk buffers.
 
 ## The workbench state store (`wb/drgnx-state.el`, `core/drgnx-frame-kind.el`)
 

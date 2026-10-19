@@ -375,4 +375,7 @@
         (large-file-next-chunk "M-<next>")
         (large-file-previous-chunk "M-<prior>")
         (large-file-go-to-line "M-g g")
-        (large-file-search :none "vlf's own C-c C-v s; in the palette")))
+        (large-file-search :none "vlf's own C-c C-v s; in the palette")
+        (large-file-open-chunks :none "the header line's button; in the palette")
+        (large-file-open-whole :none "the header line's button; in the palette")
+        (large-file-open-raw :none "the header line's button; in the palette")))

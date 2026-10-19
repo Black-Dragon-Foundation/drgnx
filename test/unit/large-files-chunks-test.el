@@ -11,6 +11,9 @@
 (require 'so-long)
 (load (expand-file-name "test/fixtures/config-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+;; the status bar is loaded first: editor/large-files defines its segment in its setup when the bar is there
+(load (expand-file-name "modules/ui/drgnx-face" drgnx-dir) nil t)
+(load (expand-file-name "modules/ui/drgnx-statusbar" drgnx-dir) nil t)
 
 (defconst drgnx-large-files-chunks-test--vlf
   (let ((elpa (expand-file-name (or (getenv "DRGNX_USER_ELPA") "~/.config/emacs/elpa"))))
@@ -24,6 +27,7 @@
 (defvar drgnx-large-files-chunk-open-function)
 (defvar drgnx-large-file-mode)
 (defvar vlf-mode)
+(defvar drgnx-large-files--header)
 (defvar drgnx-large-files-chunks-test--dir nil "The running test's folder of generated files.")
 (defvar drgnx-large-files-chunks-test--asked nil "The questions asked in the running test.")
 
@@ -80,6 +84,10 @@ large-files.eld and `drgnx-large-files-chunks-test--dir' a fresh folder whose bu
 (defun drgnx-large-files-chunks-test--run (id)
   "Run command ID as the registry has it, as a key would."
   (call-interactively (drgnx-cmd-command (drgnx-commands-get id))))
+
+(defun drgnx-large-files-chunks-test--segment ()
+  "The status bar's `large-file' segment as the bar defines it, in the current buffer."
+  (funcall (plist-get (gethash 'large-file drgnx-statusbar--segments) :fn)))
 
 (ert-deftest drgnx-large-files-chunks/an-automatic-open-gives-chunks-not-displayed ()
   (drgnx-large-files-chunks-test--with
@@ -138,6 +146,32 @@ large-files.eld and `drgnx-large-files-chunks-test--dir' a fresh folder whose bu
       (should (equal (plist-get (plist-get (drgnx-agents--on-request s "fs/read_text_file" (list :path f) 1) :result)
                                 :content)
                      disk)))))
+
+(ert-deftest drgnx-large-files-chunks/the-header-in-a-chunk-buffer ()
+  (drgnx-large-files-chunks-test--with
+    (let* ((f (drgnx-large-files-chunks-test--file "big.log" 131072))
+           (size (drgnx-large-files--size-text 131072))
+           (buf (drgnx-large-files-chunks-test--open f)))
+      (with-current-buffer buf
+        (should (eq header-line-format 'drgnx-large-files--header))
+        (should (equal (substring-no-properties drgnx-large-files--header)
+                       (format " %s, in chunks: [Open Whole] [Open Raw]" size)))
+        (cl-letf (((symbol-function 'drgnx-face--ascii-frame-p) (lambda (_frame) nil)))
+          (should (equal (drgnx-large-files-chunks-test--segment) (concat size " · chunk 1/4")))
+          (drgnx-large-files-chunks-test--run 'large-file-next-chunk)
+          (should (equal (drgnx-large-files-chunks-test--segment) (concat size " · chunk 2/4")))))
+      ;; Open Whole from the chunk buffer: lean, in the window the chunks were in
+      (let ((old (window-buffer (selected-window))))
+        (set-window-buffer (selected-window) buf)
+        (unwind-protect
+            (progn
+              (with-current-buffer buf (drgnx-large-files-chunks-test--run 'large-file-open-whole))
+              (should-not (buffer-live-p buf))
+              (with-current-buffer (window-buffer (selected-window))
+                (should (equal buffer-file-name (expand-file-name f)))
+                (should (eq drgnx-large-file 'lean))
+                (should (string-search ", lean: [Open in Chunks] [Open Raw]" drgnx-large-files--header))))
+          (when (buffer-live-p old) (set-window-buffer (selected-window) old)))))))
 
 (ert-deftest drgnx-large-files-chunks/off-on-off-leaves-nothing ()
   (skip-unless drgnx-large-files-chunks-test--vlf)
