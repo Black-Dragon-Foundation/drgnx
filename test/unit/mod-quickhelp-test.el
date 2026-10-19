@@ -644,6 +644,7 @@ idle for a while, a focused frame, and `drgnx-quickhelp--request' recording its 
       (setq-local eldoc-documentation-functions (list (lambda (_cb) nil)))   ; answers: nothing
       (let (said carded)
         (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))   ; a window: a card would show
+                  ((symbol-function 'drgnx-state-frame-kind) (lambda (_f) 'gui))   ; (the one frame classifier)
                   ((symbol-function 'drgnx-quickhelp--show-card) (lambda (_docs) (setq carded t)))
                   ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
           ;; the key: the line in the echo area, no card
