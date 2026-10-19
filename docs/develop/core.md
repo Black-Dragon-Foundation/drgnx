@@ -414,7 +414,7 @@ timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run
   one-shot `agents-ui-mirror-first`, 3 s into the first pause) and `tools/jobs` owns
   `job-ui-recount-idle` (idle, every 60 s), so a second setup replaces the timer instead of stacking another, and
   turning the module off ends it. Timers started later (from a command or a hook) name their module with `:owner`:
-  `tools/agents` owns the Agents list's print `agents-ui-redraw` (`drgnx-timer-soon` 0.1 s, from a session's change),
+  `tools/agents` owns the Agents list's 30 s tick `agents-ui-tick` (it only marks the list's view; see Views),
   `ui/face` owns quick help's `quickhelp-timeout`, `-unmap`, `-look` and `-hover` and the start page's
   `start-first-frame`, `ui/terminal-popups` the debounced `tty-popups-show`, `ui/terminal` the per-frame
   `(tty-fallback-hint . FRAME)`, `tools/jobs` the coalesced `job-ui-recount`, `tools/ai` the `ai-probe` one-shot; the
@@ -867,6 +867,17 @@ keeps it until the next chunk; `(drgnx-agents-entry-length E)` reads the length 
 E FROM)` builds the text after FROM from the newest chunks only (the transcript's GROW). Code that reads an answer's
 whole text goes through `drgnx-agents-entry-text`. The turn's end, `agents/get` and the hub's `agent-entries` flush
 join every entry first (`drgnx-agents-join-text`), so a done entry and the wire carry a whole `:text`.
+
+A view can have no rows. The Agents list is `agents-list` (`:render #'ignore`, `:sync #'drgnx-agents-ui--list-print`,
+the default DELAY): the buffer is a `tabulated-list-mode` buffer whose text belongs to tabulated-list, and the view
+gives it the throttle, the visibility check and the stale mark. A session's change (`drgnx-agents-ui--changed`) and
+the 30 s tick (`agents-ui-tick`) only touch the view; SYNC runs `drgnx-agents-ui--update-lines` inside
+`drgnx-view-with-kept-windows` (key = `tabulated-list-id`): a line whose id and columns are unchanged is not touched,
+a changed one is replaced, gone and new ids are deleted and inserted, so a window stays on its session when lines move.
+(`tabulated-list-print` with UPDATE cannot do this: it needs a sort key and keeps a line of the same id even when its
+columns changed.) The view's START is the only marker; SYNC moves it to the end of the buffer after each update,
+because the self-check would otherwise take the list's text for foreign text and delete it. A hidden list draws and
+allocates nothing, and `drgnx-agents-ui-list-buffer` (the placeholder, `agents-view`) touches and draws it now.
 
 ### Reads
 

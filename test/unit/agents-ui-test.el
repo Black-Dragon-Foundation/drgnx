@@ -68,41 +68,6 @@
       (unwind-protect (should (equal (car (aref tabulated-list-format 2)) "Last"))
         (kill-buffer)))))
 
-(ert-deftest drgnx-agents-ui/last-ticks-only-while-the-list-shows ()
-  ;; A 30 s redraw keeps the ages current while the list is visible; nothing runs while it is not.
-  (let* ((drgnx-agents--sessions (mapcar (lambda (n) (drgnx-agents--make :id n :name n :status 'idle)) '("a" "b" "c")))
-         (drgnx-agents-ui--last (make-hash-table :test #'eq :weakness 'key))
-         (drgnx-agents-ui--jobs-cache (cons 1.0e+INF nil))
-         (drgnx-agents-ui--tick-timer nil)
-         (w (selected-window)) (was (window-buffer w)))
-    (unwind-protect
-        (let ((list (drgnx-agents-ui-list-buffer)))
-          (drgnx-agents-ui--tick-update)
-          (should-not drgnx-agents-ui--tick-timer)                 ; not shown: no timer
-          (set-window-buffer w list)
-          (drgnx-agents-ui--tick-update)
-          (let ((timer drgnx-agents-ui--tick-timer))
-            (should (timerp timer))
-            (should (memq timer timer-list))
-            (should (= 30 (timer--repeat-delay timer)))
-            (drgnx-agents-ui--tick-update)
-            (should (eq timer drgnx-agents-ui--tick-timer))         ; one timer, however often asked
-            ;; a tick redraws the ages and keeps the window's point on its row
-            (puthash (nth 1 drgnx-agents--sessions) (- (float-time) 400) drgnx-agents-ui--last)
-            (set-window-point w (with-current-buffer list (goto-char (point-min)) (forward-line 1) (point)))
-            (drgnx-agents-ui--tick)
-            (with-current-buffer list
-              (should (string-search "6m" (buffer-string)))
-              (should (= 2 (line-number-at-pos (window-point w)))))
-            ;; hidden: the next tick stops the timer
-            (set-window-buffer w was)
-            (drgnx-agents-ui--tick)
-            (should-not drgnx-agents-ui--tick-timer)
-            (should-not (memq timer timer-list))))
-      (when (timerp drgnx-agents-ui--tick-timer) (cancel-timer drgnx-agents-ui--tick-timer))
-      (set-window-buffer w was)
-      (when (get-buffer "*drgnx Agents*") (kill-buffer "*drgnx Agents*")))))
-
 (ert-deftest drgnx-agents-ui/an-agent-edit-is-reviewed-hunk-by-hunk ()
   ;; The agent proposes two changes (first line, a new last line); the user takes the first only.
   (let* ((dir (make-temp-file "drgnx-review" t))
@@ -255,9 +220,11 @@ answers recorded in ANSWERS)."
             (drgnx-modules--record 'tools/agents 'startup 0 'ok)
             (should (drgnx-timer-active-p 'agents-ui-mirror))
             (should (drgnx-timer-active-p 'agents-ui-mirror-first))     ; the first look, 3 s into the first pause
+            (should (drgnx-timer-active-p 'agents-ui-tick))             ; the list's 30 s tick is the layer's, too
             (should (= 2 (drgnx-agents-ui-test--fires)))
             (should-not (drgnx-module-teardown 'tools/agents))
             (should-not (drgnx-timer-active-p 'agents-ui-mirror))
+            (should-not (drgnx-timer-active-p 'agents-ui-tick))
             (should (= 0 (drgnx-agents-ui-test--fires)))
             (should (= 0 (drgnx-timer-cancel-owner 'tools/agents))))
           ;; the 30 s idle repeat is unchanged: once per pause
@@ -535,5 +502,156 @@ three runs after two warm ones)."
             (should (equal (drgnx-agents-ui-test--fresh s) (drgnx-agents-ui-test--text b)))
             (should-not (drgnx-view-pending-p v)))
         (kill-buffer other)))))
+
+;;;; The Agents list on a view: updated in place from its SYNC, drawn only while shown
+
+(defmacro drgnx-agents-ui-test--with-list (spec &rest body)
+  "SPEC: (SESSIONS BUFFER).  BODY on the virtual clock with tools/agents set up (torn down after), the sessions
+\(`drgnx-agents--sessions') made from SESSIONS (a list of (NAME . ARGS)), BUFFER the Agents list, drawn and shown in
+the only window and current.  The hub mirror does nothing."
+  (declare (indent 1))
+  (let ((names (nth 0 spec)) (buffer (nth 1 spec)))
+    `(let* ((state (make-temp-file "drgnx-agents-ui-state" t))
+            (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment))
+            (drgnx-modules--table (list (assq 'tools/agents drgnx-modules--table)))
+            (drgnx-modules--report nil) (drgnx-modules--stacks nil) (drgnx-modules--runs nil) (drgnx-modules--features nil)
+            (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
+            (drgnx-agents-ui--last (make-hash-table :test #'eq :weakness 'key))
+            (drgnx-agents-ui--jobs-cache (cons 1.0e+INF nil))
+            (drgnx-agents--sessions (mapcar (lambda (e) (apply #'drgnx-agents--make :name (car e) (cdr e))) ,names))
+            (drgnx-view--deadline nil)
+            (config (current-window-configuration))
+            (,buffer nil))
+       (unwind-protect
+           (cl-letf (((symbol-function 'drgnx-agents-ui--maybe-mirror) #'ignore))
+             (drgnx-test-with-clock (:allow-pending t)
+               (should-not (drgnx-modules--run-setup 'tools/agents (plist-get (cdar drgnx-modules--table) :setup)))
+               (drgnx-modules--record 'tools/agents 'startup 0 'ok)
+               (delete-other-windows)
+               (setq ,buffer (drgnx-agents-ui-list-buffer))
+               (set-window-buffer (selected-window) ,buffer)
+               (should (drgnx-view-p (buffer-local-value 'drgnx-view ,buffer)))
+               (with-current-buffer ,buffer ,@body)))
+         (drgnx-module-teardown 'tools/agents)
+         (set-window-configuration config)
+         (when (buffer-live-p ,buffer) (kill-buffer ,buffer))
+         (delete-directory state t)))))
+
+(defun drgnx-agents-ui-test--line-of (session)
+  "The start of SESSION's line in the current Agents list."
+  (save-excursion (goto-char (point-min))
+                  (let (found)
+                    (while (and (not found) (not (eobp)))
+                      (if (eq (get-text-property (point) 'tabulated-list-id) session) (setq found (point)) (forward-line 1)))
+                    found)))
+
+(defun drgnx-agents-ui-test--set-status (s status)
+  "What the agent's process filter does when S changes status."
+  (setf (drgnx-agent-session-status s) status)
+  (run-hook-with-args 'drgnx-agents-changed-functions s))
+
+(ert-deftest drgnx-agents-ui/the-list-updates-in-place ()
+  (drgnx-agents-ui-test--with-list ('(("a" :status idle) ("b" :status idle) ("c" :status idle)) b)
+    (let* ((v drgnx-view) (sa (nth 0 drgnx-agents--sessions)) (sb (nth 1 drgnx-agents--sessions))
+           (sc (nth 2 drgnx-agents--sessions))
+           (entry (lambda (s) (get-text-property (drgnx-agents-ui-test--line-of s) 'tabulated-list-entry)))
+           (a (funcall entry sa)) (bb (funcall entry sb)) (c (funcall entry sc)))
+      (should (string-match-p "\\`a +idle" (buffer-string)))
+      (should (= 3 (length (split-string (string-trim-right (buffer-string)) "\n"))))
+      (drgnx-agents-ui-test--set-status sb 'busy)
+      (should (drgnx-view-pending-p v))
+      (should (string-match-p "b +idle" (buffer-string)))             ; marked: nothing drawn yet
+      (drgnx-test-advance 0.2)
+      (should (string-match-p "b +busy" (buffer-string)))
+      (should (string-match-p "a +idle" (buffer-string)))
+      ;; the lines of the other sessions are the same objects, not drawn again
+      (should (eq a (funcall entry sa)))
+      (should (eq c (funcall entry sc)))
+      (should-not (eq bb (funcall entry sb)))
+      (should (= 3 (length (split-string (string-trim-right (buffer-string)) "\n"))))
+      (should-not (drgnx-view--check v)))))
+
+(ert-deftest drgnx-agents-ui/the-list-keeps-each-window-on-its-session ()
+  (drgnx-agents-ui-test--with-list ('(("a" :status idle) ("b" :status idle) ("c" :status idle)) b)
+    (let* ((w1 (split-window)) (w2 (split-window)) (sa (nth 0 drgnx-agents--sessions))
+           (sb (nth 1 drgnx-agents--sessions)) (sc (nth 2 drgnx-agents--sessions)))
+      (set-window-buffer w1 b)
+      (set-window-buffer w2 b)
+      (set-window-point w1 (+ 3 (drgnx-agents-ui-test--line-of sb)))
+      (set-window-point w2 (drgnx-agents-ui-test--line-of sc))
+      (goto-char (drgnx-agents-ui-test--line-of sa))     ; the selected window's point
+      ;; a new session joins at the head: every line moves down; and one ages
+      (let ((new (drgnx-agents--make :name "new" :status 'idle)))
+        (push new drgnx-agents--sessions)
+        (puthash sb (- (float-time) 400) drgnx-agents-ui--last)
+        (run-hook-with-args 'drgnx-agents-changed-functions new))
+      (drgnx-test-advance 0.2)
+      (should (string-match-p "\\`new" (buffer-string)))
+      (should (string-match-p "6m" (buffer-string)))
+      (should (= (window-point w1) (+ 3 (drgnx-agents-ui-test--line-of sb))))
+      (should (= (window-point w2) (drgnx-agents-ui-test--line-of sc)))
+      (should (= (point) (drgnx-agents-ui-test--line-of sa))))))
+
+(ert-deftest drgnx-agents-ui/the-list-follows-removals-and-reorders ()
+  (drgnx-agents-ui-test--with-list ('(("a" :status idle) ("b" :status idle) ("c" :status idle) ("d" :status idle)) b)
+    (let* ((v drgnx-view) (all drgnx-agents--sessions) (sa (nth 0 all)) (sb (nth 1 all)) (sc (nth 2 all))
+           (sd (nth 3 all)) (c-line (get-text-property (drgnx-agents-ui-test--line-of sc) 'tabulated-list-entry))
+           (names (lambda () (mapcar (lambda (l) (car (split-string l))) (split-string (string-trim-right (buffer-string)) "\n")))))
+      (should (equal '("a" "b" "c" "d") (funcall names)))
+      ;; b goes: the other lines are not touched
+      (setq drgnx-agents--sessions (list sa sc sd))
+      (run-hook-with-args 'drgnx-agents-changed-functions sb)
+      (drgnx-test-advance 0.2)
+      (should (equal '("a" "c" "d") (funcall names)))
+      (should (eq c-line (get-text-property (drgnx-agents-ui-test--line-of sc) 'tabulated-list-entry)))
+      (should-not (buffer-modified-p))
+      ;; d moves to the front (the lines between are printed again, in the new order)
+      (setq drgnx-agents--sessions (list sd sa sc))
+      (run-hook-with-args 'drgnx-agents-changed-functions sd)
+      (drgnx-test-advance 0.2)
+      (should (equal '("d" "a" "c") (funcall names)))
+      (should-not (buffer-modified-p))
+      (should-not (drgnx-view--check v))
+      ;; and everything goes
+      (setq drgnx-agents--sessions nil)
+      (run-hook-with-args 'drgnx-agents-changed-functions sa)
+      (drgnx-test-advance 0.2)
+      (should (equal "" (buffer-string))))))
+
+(ert-deftest drgnx-agents-ui/a-hidden-list-prints-nothing ()
+  (drgnx-agents-ui-test--with-list ('(("a" :status idle) ("b" :status idle)) b)
+    (let* ((v drgnx-view) (sb (nth 1 drgnx-agents--sessions)) (other (get-buffer-create " *drgnx-agents-ui-other*"))
+           (text (buffer-string)) (tick (buffer-modified-tick)))
+      (unwind-protect
+          (progn
+            (set-window-buffer (selected-window) other)
+            (drgnx-agents-ui-test--set-status sb 'busy)
+            (drgnx-test-advance 0.2)
+            (should (equal text (buffer-string)))
+            (should (= tick (buffer-modified-tick)))
+            (should (drgnx-view--stale v))
+            (drgnx-test-advance 30)                           ; the 30 s tick prints nothing either
+            (should (= tick (buffer-modified-tick)))
+            (should (= 0 (drgnx-view-test--alloc (lambda () (drgnx-view--draw-buffer b)))))
+            ;; shown again: the list is drawn
+            (set-window-buffer (selected-window) b)
+            (drgnx-view--buffer-shown (selected-window))      ; what redisplay runs
+            (drgnx-test-advance 0.2)
+            (should (string-match-p "b +busy" (buffer-string))))
+        (kill-buffer other)))))
+
+(ert-deftest drgnx-agents-ui/last-ages-on-a-30-second-tick ()
+  ;; The tick is the layer's (key `agents-ui-tick', the module's); it marks the list's view, which prints only
+  ;; while shown, each window on its row.
+  (drgnx-agents-ui-test--with-list ('(("a" :status idle) ("b" :status idle)) b)
+    (let ((sb (nth 1 drgnx-agents--sessions)))
+      (should (drgnx-timer-active-p 'agents-ui-tick))
+      (puthash sb (- (float-time) 20) drgnx-agents-ui--last)
+      (set-window-point (selected-window) (drgnx-agents-ui-test--line-of sb))
+      (drgnx-test-advance 20)                                 ; 40 s old now, but nothing marked the list yet
+      (should (string-match-p "\\`a +idle" (buffer-string)))
+      (drgnx-test-advance 15)                                 ; the tick at 30 s
+      (should (string-match-p "b +idle +[345][0-9]s" (buffer-string)))
+      (should (= (window-point) (drgnx-agents-ui-test--line-of sb))))))
 
 ;;; agents-ui-test.el ends here
