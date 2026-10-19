@@ -21,6 +21,7 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
+(require 'mule-util)                    ; `truncate-string-ellipsis'
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-chrome)
@@ -237,8 +238,14 @@ Within `drgnx-statusbar-retry-seconds' of the last record nothing is formatted: 
               ((> excess 0))
               (target (max min 1 (- (string-width (cdr b)) excess)))
               ((< target (string-width (cdr b)))))
-    (mapcar (lambda (s) (if (eq (car s) 'branch) (cons 'branch (truncate-string-to-width (cdr b) target nil nil t)) s))
+    (mapcar (lambda (s) (if (eq (car s) 'branch) (cons 'branch (drgnx-statusbar--cut (cdr b) target)) s))
             left)))
+
+(defun drgnx-statusbar--cut (s width)
+  "S cut to WIDTH columns, ending in Emacs's ellipsis when that fits in WIDTH.
+`truncate-string-to-width' gives back all of S, and the ellipsis, when the ellipsis is wider than WIDTH: \"...\" is,
+in 1 or 2 columns, on a terminal that cannot show \"…\"."
+  (truncate-string-to-width s width nil nil (>= width (string-width (truncate-string-ellipsis)))))
 
 (defun drgnx-statusbar--fit (left right width)
   "LEFT and RIGHT (alists ID → text) reduced until the bar fits WIDTH: (LEFT . RIGHT).
@@ -290,7 +297,7 @@ COMPACT: only the segments of `drgnx-statusbar-compact' (on the right); `quiet':
           ;; a last guard: whatever the segments were, the bar is never wider than the window
           (cond ((<= (string-width bar) width) bar)
                 ((<= width 0) "")
-                (t (truncate-string-to-width bar width nil nil t))))))))
+                (t (drgnx-statusbar--cut bar width))))))))
 
 ;;;; The mode line
 

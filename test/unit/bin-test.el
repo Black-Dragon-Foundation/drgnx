@@ -368,8 +368,12 @@ with a display: `drgnx open' stays graphical (the unit tier has no DISPLAY, and 
 
 (ert-deftest drgnx-bin/two-opens-at-once-make-one-window ()
   ;; The daemon takes 1 s to answer and a window 0.5 s to appear: without the lock both opens start a
-  ;; daemon and both make a window.
+  ;; daemon and both make a window.  A mkdir that never refuses an existing directory: uutils' (Ubuntu 26.04's) lets
+  ;; two racing commands both make the lock's directory, so the lock must not rest on mkdir alone.
   (drgnx-bin-test--with-open
+    (let ((mkdir (expand-file-name "mkdir" pathdir)))
+      (write-region (format "#!/bin/sh\nexec %s -p \"$@\"\n" (shell-quote-argument (executable-find "mkdir"))) nil mkdir)
+      (set-file-modes mkdir #o755))
     (write-region "1" nil (expand-file-name "delay" dir))
     (drgnx-bin-test--touch dir "slow-c")
     (drgnx-bin-test--open-twice dir env)
