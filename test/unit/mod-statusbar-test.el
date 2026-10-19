@@ -9,6 +9,7 @@
 (require 'drgnx-git)
 (load (expand-file-name "modules/core/drgnx-basics" drgnx-dir) nil t)   ; New Untitled
 (load (expand-file-name "modules/ui/drgnx-start" drgnx-dir) nil t)      ; the start page's mode
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-job-ui" drgnx-dir) nil t)  ; C8's one count of what needs you
 (defvar drgnx-job-ui--badge)
 (defvar drgnx-job-ui--needs-you)
@@ -168,36 +169,38 @@ Segments a, b, c are defined: their text is A, B, C."
           (should-not ran))))))
 
 (ert-deftest drgnx-statusbar/full-in-the-mru-editor-compact-elsewhere ()
-  (drgnx-statusbar-test--with
-    (let ((w1 (selected-window)) w2 (buf (generate-new-buffer " *sb-test*")))
-      (with-current-buffer buf (emacs-lisp-mode))
-      (unwind-protect
-          (progn
-            (delete-other-windows)
-            (setq w1 (selected-window) w2 (split-window-right))
-            (set-window-buffer w1 buf)
-            (set-window-buffer w2 buf)
-            (let ((drgnx-signal--editor-window w2))
-              (let ((full (with-current-buffer buf (with-selected-window w2 (drgnx-statusbar-mode-line))))
-                    (other (with-current-buffer buf (with-selected-window w1 (drgnx-statusbar-mode-line)))))
-                (should (string-match-p "A · B" full))
-                (should (string-match-p "C" full))
-                (should-not (string-match-p "A" other))
-                (should (string-match-p "C" other))))
-            ;; the host construct is the status bar's while the mode is on
-            (let ((drgnx-chrome-editor-mode-line drgnx-chrome-editor-mode-line))
-              (cl-letf (((symbol-function 'drgnx-chrome-apply) #'ignore))
-                (drgnx-statusbar-mode 1)
-                (should (equal drgnx-chrome-editor-mode-line '(:eval (drgnx-statusbar-mode-line))))
-                (drgnx-statusbar-mode -1)
-                (should (eq drgnx-chrome-editor-mode-line drgnx-chrome--mode-line)))))
-        (delete-other-windows)
-        (kill-buffer buf)
-        (drgnx-statusbar-mode -1)))
-    ;; a buffer whose own mode-line-format is nil keeps none
-    (with-temp-buffer
-      (setq-local mode-line-format nil)
-      (should-not (drgnx-statusbar-mode-line)))))
+  (drgnx-test-with-state
+    (drgnx-statusbar-test--with
+      (let ((w1 (selected-window)) w2 (buf (generate-new-buffer " *sb-test*")))
+        (with-current-buffer buf (emacs-lisp-mode))
+        (unwind-protect
+            (progn
+              (delete-other-windows)
+              (setq w1 (selected-window) w2 (split-window-right))
+              (set-window-buffer w1 buf)
+              (set-window-buffer w2 buf)
+              (progn
+                (drgnx-test-use-editor w2)
+                (let ((full (with-current-buffer buf (with-selected-window w2 (drgnx-statusbar-mode-line))))
+                      (other (with-current-buffer buf (with-selected-window w1 (drgnx-statusbar-mode-line)))))
+                  (should (string-match-p "A · B" full))
+                  (should (string-match-p "C" full))
+                  (should-not (string-match-p "A" other))
+                  (should (string-match-p "C" other))))
+              ;; the host construct is the status bar's while the mode is on
+              (let ((drgnx-chrome-editor-mode-line drgnx-chrome-editor-mode-line))
+                (cl-letf (((symbol-function 'drgnx-chrome-apply) #'ignore))
+                  (drgnx-statusbar-mode 1)
+                  (should (equal drgnx-chrome-editor-mode-line '(:eval (drgnx-statusbar-mode-line))))
+                  (drgnx-statusbar-mode -1)
+                  (should (eq drgnx-chrome-editor-mode-line drgnx-chrome--mode-line)))))
+          (delete-other-windows)
+          (kill-buffer buf)
+          (drgnx-statusbar-mode -1)))
+      ;; a buffer whose own mode-line-format is nil keeps none
+      (with-temp-buffer
+        (setq-local mode-line-format nil)
+        (should-not (drgnx-statusbar-mode-line))))))
 
 (ert-deftest drgnx-statusbar/segments-read-no-files-and-start-no-process ()
   (drgnx-statusbar-test--with
@@ -1283,8 +1286,9 @@ own cache), evil's state tag, other entries of `mode-line-misc-info'; each chang
                     (should (rebuilt-p)) (should-not (rebuilt-p))
                     (setq-local flymake-mode nil)
                     (setq-local eglot--cached-server nil)))
-                ;; the compact bar in another window is its own entry
-                (let ((other (split-window-right)))
+                ;; the compact bar in another window is its own entry (the store keeps this window the MRU editor, so
+                ;; the other one is compact: the counted segment is put in the compact bar too)
+                (let ((other (split-window-right)) (drgnx-statusbar-compact '(a c)))
                   (unwind-protect
                       (progn (set-window-buffer other (current-buffer))
                              (with-selected-window other (should (rebuilt-p)) (should-not (rebuilt-p))))

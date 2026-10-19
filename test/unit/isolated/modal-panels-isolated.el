@@ -12,6 +12,7 @@
 (require 'drgnx-outline)
 (require 'drgnx-modules)
 (load (expand-file-name "test/fixtures/modal-elpa" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 
 (defvar evil-state)
 (defvar drgnx-close--here)
@@ -90,71 +91,73 @@
 (defmacro drgnx-modal-panels-test--explorer (root &rest body)
   "BODY with the Explorer rooted at a temp ROOT holding a.txt … z.txt, shown in the selected window."
   (declare (indent 1))
-  `(let* ((,root (file-name-as-directory (make-temp-file "drgnx-modal-explorer" t)))
-          (drgnx-wb--sections nil) (drgnx-signal--editor-window nil) (drgnx-explorer--pressed nil)
-          (drgnx-explorer--selection nil) (drgnx-explorer--anchor nil) (drgnx-explorer--focused-before nil)
-          (drgnx-explorer--find nil) (drgnx-explorer-compact-folders nil))
-     (unwind-protect
-         (progn
-           (dolist (c (number-sequence ?a ?z))
-             (write-region "" nil (expand-file-name (format "%c.txt" c) ,root) nil 'silent))
-           (make-directory (expand-file-name "sub" ,root) t)
-           (write-region "" nil (expand-file-name "sub/in.txt" ,root) nil 'silent)
-           (delete-other-windows)
-           (drgnx-explorer-setup)
-           (drgnx-explorer-set-roots (list ,root))
-           (drgnx-modal-panels-test--show (drgnx-explorer--buffer) ,@body))
-       (drgnx-explorer-set-roots nil)
-       (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
-       (delete-directory ,root t))))
+  `(drgnx-test-with-state
+     (let* ((,root (file-name-as-directory (make-temp-file "drgnx-modal-explorer" t)))
+            (drgnx-wb--sections nil) (drgnx-explorer--pressed nil)
+            (drgnx-explorer--selection nil) (drgnx-explorer--anchor nil) (drgnx-explorer--focused-before nil)
+            (drgnx-explorer--find nil) (drgnx-explorer-compact-folders nil))
+       (unwind-protect
+           (progn
+             (dolist (c (number-sequence ?a ?z))
+               (write-region "" nil (expand-file-name (format "%c.txt" c) ,root) nil 'silent))
+             (make-directory (expand-file-name "sub" ,root) t)
+             (write-region "" nil (expand-file-name "sub/in.txt" ,root) nil 'silent)
+             (delete-other-windows)
+             (drgnx-explorer-setup)
+             (drgnx-explorer-set-roots (list ,root))
+             (drgnx-modal-panels-test--show (drgnx-explorer--buffer) ,@body))
+         (drgnx-explorer-set-roots nil)
+         (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
+         (delete-directory ,root t)))))
 
 (defmacro drgnx-modal-panels-test--buffers (&rest body)
   "BODY with the Buffers panel listing three file buffers, shown in the selected window."
   (declare (indent 0))
-  `(let ((drgnx-signal--subscribers nil) (drgnx-signal--state nil) (drgnx-signal--editor-window nil)
-         (drgnx-wb--sections nil) (drgnx-buffers--order nil) (drgnx-buffers--signature nil)
-         (extra nil) (dir (make-temp-file "drgnx-modal-buffers" t)))
-     (unwind-protect
-         (progn
-           (delete-other-windows)
-           (drgnx-buffers-setup)
-           (drgnx-signal--flush)
-           (drgnx-wb-show-sidebar)
-           (dolist (n '("pa.txt" "pb.txt" "pc.txt"))
-             (let ((f (expand-file-name n dir)))
-               (write-region "x\n" nil f nil 'silent)
-               (push (find-file-noselect f) extra)))
-           (drgnx-signal--flush)
-           (drgnx-modal-panels-test--show (get-buffer drgnx-buffers-buffer-name)
-             (should (> (count-lines (point-min) (point-max)) 2))
-             ,@body))
-       (dolist (b extra) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b))
-       (drgnx-wb-hide-sidebar)
-       (delete-other-windows)
-       (when (get-buffer drgnx-buffers-buffer-name) (kill-buffer drgnx-buffers-buffer-name))
-       (delete-directory dir t))))
+  `(drgnx-test-with-state
+     (let ((drgnx-wb--sections nil) (drgnx-buffers--order nil) (drgnx-buffers--signature nil)
+           (extra nil) (dir (make-temp-file "drgnx-modal-buffers" t)))
+       (unwind-protect
+           (progn
+             (delete-other-windows)
+             (drgnx-buffers-setup)
+             (drgnx-signal--flush)
+             (drgnx-wb-show-sidebar)
+             (dolist (n '("pa.txt" "pb.txt" "pc.txt"))
+               (let ((f (expand-file-name n dir)))
+                 (write-region "x\n" nil f nil 'silent)
+                 (push (find-file-noselect f) extra)))
+             (drgnx-signal--flush)
+             (drgnx-modal-panels-test--show (get-buffer drgnx-buffers-buffer-name)
+               (should (> (count-lines (point-min) (point-max)) 2))
+               ,@body))
+         (dolist (b extra) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b))
+         (drgnx-wb-hide-sidebar)
+         (delete-other-windows)
+         (when (get-buffer drgnx-buffers-buffer-name) (kill-buffer drgnx-buffers-buffer-name))
+         (delete-directory dir t)))))
 
 (defmacro drgnx-modal-panels-test--outline (&rest body)
   "BODY with the Outline of a four-definition elisp buffer, shown in the selected window."
   (declare (indent 0))
-  `(let ((drgnx-wb--sections nil) (drgnx-signal--subscribers nil) (drgnx-signal--editor-window nil)
-         (src (generate-new-buffer "outline-src.el")))
-     (delete-other-windows)
-     (with-current-buffer src
-       (insert "(defun alpha () 1)\n(defvar beta 2)\n(defun gamma () 3)\n(defun delta () 4)\n")
-       (emacs-lisp-mode))
-     (switch-to-buffer src)
-     (setq drgnx-signal--editor-window (selected-window))
-     (drgnx-outline-setup)
-     (drgnx-wb-show-sidebar)
-     (unwind-protect
-         (progn
-           (drgnx-outline-refresh)
-           (drgnx-modal-panels-test--show (get-buffer drgnx-outline-buffer-name) ,@body))
-       (drgnx-wb-hide-sidebar)
+  `(drgnx-test-with-state
+     (let ((drgnx-wb--sections nil)
+           (src (generate-new-buffer "outline-src.el")))
        (delete-other-windows)
-       (kill-buffer src)
-       (when (get-buffer drgnx-outline-buffer-name) (kill-buffer drgnx-outline-buffer-name)))))
+       (with-current-buffer src
+         (insert "(defun alpha () 1)\n(defvar beta 2)\n(defun gamma () 3)\n(defun delta () 4)\n")
+         (emacs-lisp-mode))
+       (switch-to-buffer src)
+       (drgnx-test-use-editor (selected-window))
+       (drgnx-outline-setup)
+       (drgnx-wb-show-sidebar)
+       (unwind-protect
+           (progn
+             (drgnx-outline-refresh)
+             (drgnx-modal-panels-test--show (get-buffer drgnx-outline-buffer-name) ,@body))
+         (drgnx-wb-hide-sidebar)
+         (delete-other-windows)
+         (kill-buffer src)
+         (when (get-buffer drgnx-outline-buffer-name) (kill-buffer drgnx-outline-buffer-name))))))
 
 (defun drgnx-modal-panels-test--press (keys)
   "Press KEYS (a `kbd' string) in the selected window."

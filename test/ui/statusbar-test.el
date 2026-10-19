@@ -8,6 +8,7 @@
   (add-to-list 'load-path (expand-file-name d drgnx-statusbar-ui-test--repo)))
 (dolist (m '("ui/drgnx-face" "ui/drgnx-statusbar"))
   (load (expand-file-name (concat "modules/" m) drgnx-statusbar-ui-test--repo) nil t))
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-statusbar-ui-test--repo) nil t)
 
 (defvar drgnx-statusbar-ui-test--seen nil "Window points at which redisplay evaluated the probe segment, newest first.")
 
@@ -101,7 +102,6 @@ drew them (the probe segments record the window each evaluation was for)."
   (let ((a (get-buffer-create "*drgnx-statusbar-a*")) (b (get-buffer-create "*drgnx-statusbar-b*"))
         (drawn (make-hash-table :test #'eq))
         (signal-was (bound-and-true-p drgnx-signal-mode)) (statusbar-was (bound-and-true-p drgnx-statusbar-mode))
-        (editor-was drgnx-signal--editor-window)
         (drgnx-statusbar--segments (make-hash-table :test #'eq))
         (drgnx-statusbar--errors nil)
         (drgnx-statusbar-left '(fprobe))
@@ -122,7 +122,7 @@ drew them (the probe segments record the window each evaluation was for)."
               (drgnx-statusbar-define-segment
                'cprobe :fn (lambda () (puthash (drgnx-statusbar-source-window) 'compact drawn) "C"))
               (drgnx-signal-mode 1)
-              (setq drgnx-signal--editor-window w1)
+              (drgnx-test-use-editor w1)
               (drgnx-statusbar-mode 1)
               (dolist (w (list w1 w2)) (set-window-parameter w 'mode-line-format drgnx-statusbar--host))
               (drgnx-uitest-run (drgnx-uitest-key-events "C-f"))   ; settled: w1 is the most recently used editor window
@@ -140,7 +140,6 @@ drew them (the probe segments record the window each evaluation was for)."
               (should-not (string-match-p "F" (format-mode-line drgnx-statusbar--host nil w2))))
           (drgnx-statusbar-mode (if statusbar-was 1 -1))     ; the session's other tests keep what they had
           (drgnx-signal-mode (if signal-was 1 -1))
-          (setq drgnx-signal--editor-window (and (window-live-p editor-was) editor-was))
           (dolist (w (list w1 w2)) (when (window-live-p w) (set-window-parameter w 'mode-line-format nil)))
           (delete-other-windows)
           (dolist (buf (list a b)) (with-current-buffer buf (set-buffer-modified-p nil)) (kill-buffer buf)))))))

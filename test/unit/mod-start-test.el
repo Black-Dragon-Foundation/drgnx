@@ -6,7 +6,7 @@
 (require 'drgnx-chrome)
 (load (expand-file-name "modules/ui/drgnx-face" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-start" drgnx-dir) nil t)
-(defvar drgnx-signal--editor-window)
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (defvar drgnx-signal--timer)
 (defvar drgnx-signal--subscribers)
 (defvar drgnx-persist-after-restore-functions)
@@ -35,41 +35,41 @@
 directory in a temp dir, the persist/server/signal hooks kept away from the rest of the process, and the selected
 window showing `*scratch*'.  `y-or-n-p' and every `read-*' fail: nothing here may ask."
   (declare (indent 1))
-  `(let* ((tmp (make-temp-file "drgnx-start-" t))
-          (process-environment (cons (concat "XDG_STATE_HOME=" tmp) process-environment))
-          (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-          (drgnx-start-test--ran nil)
-          (drgnx-persist-after-restore-functions nil) (drgnx-first-gui-frame-hook nil)
-          (server-after-make-frame-hook nil) (window-setup-hook nil) (drgnx-signal--subscribers nil)
-          (drgnx-start--after-file nil)
-          (drgnx-signal--timer (timer-create))             ; a timer already armed: nothing is scheduled
-          (drgnx-signal--editor-window nil)
-          (drgnx-modules--runs (list (list 'ui/face 'ui/face)))   ; ui/face is on: its timers start
-          (old (window-buffer (selected-window))))
-     (cl-letf (((symbol-function 'drgnx-face--ascii-frame-p) (lambda (_frame) nil))   ; the batch terminal is not UTF-8
-               ((symbol-function 'drgnx-onboard--welcome-due-p) (lambda () nil))      ; no first-run Welcome in the way
-               ((symbol-function 'y-or-n-p) (lambda (&rest _) (error "asked y-or-n-p")))
-               ((symbol-function 'yes-or-no-p) (lambda (&rest _) (error "asked yes-or-no-p")))
-               ((symbol-function 'read-string) (lambda (&rest _) (error "asked read-string")))
-               ((symbol-function 'read-from-minibuffer) (lambda (&rest _) (error "asked read-from-minibuffer")))
-               ((symbol-function 'completing-read) (lambda (&rest _) (error "asked completing-read")))
-               ((symbol-function 'read-directory-name) (lambda (&rest _) (error "asked read-directory-name")))
-               ((symbol-function 'read-file-name) (lambda (&rest _) (error "asked read-file-name")))
-               ((symbol-function 'read-key) (lambda (&rest _) (error "asked read-key")))
-               ((symbol-function 'read-char) (lambda (&rest _) (error "asked read-char"))))
-       (drgnx-command-define 'go-quick-open :title "Quick Open" :category "Go" :command #'drgnx-start-test-files)
-       (drgnx-command-define 'palette :title "Command Palette" :category "View" :command #'drgnx-start-test-palette)
-       (drgnx-command-define 'keys-sheet :title "Keys" :category "Help" :command #'drgnx-start-test-keys)
-       (drgnx-command-define 'open-folder :title "Open Folder…" :category "File" :command #'drgnx-start-test-folder)
-       (drgnx-command-define 'work-graph :title "Show Work as Graph" :category "Work" :command #'drgnx-start-test-graph)
-       (drgnx-start-test--bind ,profile)
-       (drgnx-start-test--fresh-scratch)
-       (set-window-buffer (selected-window) (get-scratch-buffer-create))
-       (unwind-protect (progn ,@body)
+  `(drgnx-test-with-state
+     (let* ((tmp (make-temp-file "drgnx-start-" t))
+            (process-environment (cons (concat "XDG_STATE_HOME=" tmp) process-environment))
+            (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
+            (drgnx-start-test--ran nil)
+            (drgnx-persist-after-restore-functions nil) (drgnx-first-gui-frame-hook nil)
+            (server-after-make-frame-hook nil) (window-setup-hook nil)
+            (drgnx-start--after-file nil)
+            (drgnx-signal--timer (timer-create))             ; a timer already armed: nothing is scheduled
+            (drgnx-modules--runs (list (list 'ui/face 'ui/face)))   ; ui/face is on: its timers start
+            (old (window-buffer (selected-window))))
+       (cl-letf (((symbol-function 'drgnx-face--ascii-frame-p) (lambda (_frame) nil))   ; the batch terminal is not UTF-8
+                 ((symbol-function 'drgnx-onboard--welcome-due-p) (lambda () nil))      ; no first-run Welcome in the way
+                 ((symbol-function 'y-or-n-p) (lambda (&rest _) (error "asked y-or-n-p")))
+                 ((symbol-function 'yes-or-no-p) (lambda (&rest _) (error "asked yes-or-no-p")))
+                 ((symbol-function 'read-string) (lambda (&rest _) (error "asked read-string")))
+                 ((symbol-function 'read-from-minibuffer) (lambda (&rest _) (error "asked read-from-minibuffer")))
+                 ((symbol-function 'completing-read) (lambda (&rest _) (error "asked completing-read")))
+                 ((symbol-function 'read-directory-name) (lambda (&rest _) (error "asked read-directory-name")))
+                 ((symbol-function 'read-file-name) (lambda (&rest _) (error "asked read-file-name")))
+                 ((symbol-function 'read-key) (lambda (&rest _) (error "asked read-key")))
+                 ((symbol-function 'read-char) (lambda (&rest _) (error "asked read-char"))))
+         (drgnx-command-define 'go-quick-open :title "Quick Open" :category "Go" :command #'drgnx-start-test-files)
+         (drgnx-command-define 'palette :title "Command Palette" :category "View" :command #'drgnx-start-test-palette)
+         (drgnx-command-define 'keys-sheet :title "Keys" :category "Help" :command #'drgnx-start-test-keys)
+         (drgnx-command-define 'open-folder :title "Open Folder…" :category "File" :command #'drgnx-start-test-folder)
+         (drgnx-command-define 'work-graph :title "Show Work as Graph" :category "Work" :command #'drgnx-start-test-graph)
+         (drgnx-start-test--bind ,profile)
          (drgnx-start-test--fresh-scratch)
-         (when-let* ((b (get-buffer "*drgnx start*"))) (kill-buffer b))
-         (set-window-buffer (selected-window) old)
-         (delete-directory tmp t)))))
+         (set-window-buffer (selected-window) (get-scratch-buffer-create))
+         (unwind-protect (progn ,@body)
+           (drgnx-start-test--fresh-scratch)
+           (when-let* ((b (get-buffer "*drgnx start*"))) (kill-buffer b))
+           (set-window-buffer (selected-window) old)
+           (delete-directory tmp t))))))
 
 (defun drgnx-start-test--text ()
   "The start page as plain text."
@@ -124,7 +124,7 @@ window showing `*scratch*'.  `y-or-n-p' and every `read-*' fail: nothing here ma
     (let* ((w1 (selected-window)) (w2 (split-window w1)))
       (unwind-protect
           (progn (set-window-buffer w2 (get-scratch-buffer-create))
-                 (setq drgnx-signal--editor-window w2)       ; w1 is selected, w2 is the editor used last
+                 (drgnx-test-use-editor w2)                  ; w1 is selected, w2 is the editor used last
                  (drgnx-start-maybe-show)
                  (should (equal (buffer-name (window-buffer w2)) "*drgnx start*"))
                  (should (eq (selected-window) w1))
