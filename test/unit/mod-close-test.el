@@ -250,13 +250,33 @@ their own (a test never changes the shipped map or `emulation-mode-map-alists').
           (should (eq (cdr (car drgnx-close--emulation)) drgnx-close-mode-map))
           (should (eq (car (car drgnx-close--emulation)) 'drgnx-close--here))
           (should (memq #'drgnx-close--update window-selection-change-functions))
-          (should (memq #'drgnx-close--update window-buffer-change-functions))
+          (should-not (memq #'drgnx-close--update window-buffer-change-functions))   ; the store's event instead
+          (should (eq 'now (drgnx-state--lane-of 'windows-changed #'drgnx-close--update)))
           (drgnx-close-mode -1)
           (should-not (memq 'drgnx-close--emulation emulation-mode-map-alists))
           (should (equal drgnx-modal-front-alists '(drgnx-quickhelp--emulation)))
           (should-not (memq #'drgnx-close--update window-selection-change-functions))
-          (should-not (memq #'drgnx-close--update window-buffer-change-functions)))
+          (should-not (drgnx-state--lane-of 'windows-changed #'drgnx-close--update)))
       (drgnx-close-mode -1))))
+
+(ert-deftest drgnx-close/here-follows-the-window-s-buffer-at-the-store-s-observation ()
+  "A buffer shown in the selected window recomputes `drgnx-close--here' when the store sees it — no hook of ours."
+  (drgnx-close-test--with
+    (let ((editor (selected-window)) (b (drgnx-close-test--read-only "*drgnx-test-top*")))
+      (unwind-protect
+          (progn
+            (drgnx-state-subscribe 'windows-changed #'drgnx-close--update :lane 'now)
+            (drgnx-state-sync)
+            (let ((panel (drgnx-wb-area-show 'panel 'results b)))
+              (select-window panel)
+              (drgnx-state-sync)
+              (should drgnx-close--here)
+              (select-window editor)
+              (drgnx-state-sync)
+              (set-window-buffer editor b)
+              (drgnx-state-sync)
+              (should-not drgnx-close--here)))
+        (drgnx-state-unsubscribe 'windows-changed #'drgnx-close--update)))))
 
 (ert-deftest drgnx-close/the-shipped-map-is-on-only-where-here-is ()
   ;; with the mode on and the real map bound, an editor keeps its Esc and q

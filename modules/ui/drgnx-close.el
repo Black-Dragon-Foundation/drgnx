@@ -19,6 +19,7 @@
 (require 'drgnx-registry)
 (require 'drgnx-modal)
 (require 'drgnx-chrome)
+(require 'drgnx-state)
 (require 'drgnx-popup)
 
 (defcustom drgnx-close-input-modes '(comint-mode eshell-mode term-mode vterm-mode eat-mode)
@@ -48,8 +49,8 @@ not Close Pane there.  A mode that takes the keyboard for itself adds its predic
       (run-hook-with-args-until-success 'drgnx-close-input-functions buffer)))
 
 (defun drgnx-close--update (&rest _)
-  "Recompute `drgnx-close--here' for the selected window (on `window-selection-change-functions' and
-`window-buffer-change-functions'; reads two window parameters and a mode)."
+  "Recompute `drgnx-close--here' for the selected window (on `window-selection-change-functions' and the
+state store's `windows-changed'; reads two window parameters and a mode)."
   (let ((w (selected-window)))
     (setq drgnx-close--here
           (and (memq (drgnx-chrome--role w) '(lane area))
@@ -91,12 +92,12 @@ the modal engine's visual state (it leaves the selection)."
         (add-to-list 'drgnx-modal-front-alists 'drgnx-close--emulation t)
         (drgnx-modal-order-alists)
         (add-hook 'window-selection-change-functions #'drgnx-close--update)
-        (add-hook 'window-buffer-change-functions #'drgnx-close--update)
+        (drgnx-state-subscribe 'windows-changed #'drgnx-close--update :lane 'now)
         (drgnx-close--update))
     (setq drgnx-modal-front-alists (delq 'drgnx-close--emulation drgnx-modal-front-alists)
           emulation-mode-map-alists (delq 'drgnx-close--emulation emulation-mode-map-alists))
     (remove-hook 'window-selection-change-functions #'drgnx-close--update)
-    (remove-hook 'window-buffer-change-functions #'drgnx-close--update)
+    (drgnx-state-unsubscribe 'windows-changed #'drgnx-close--update)
     (setq drgnx-close--here nil)))
 
 ;; `define-minor-mode' registered `drgnx-close-mode-map' for every buffer while the mode is on; the map is meant to be
