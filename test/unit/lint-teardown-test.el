@@ -17,7 +17,7 @@
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-teardown--not-yet
-  '((tools/agent-settings :until 22) (tools/remote :until 22) (tools/cockpit :until 23) (ui/face :until 23))
+  '((tools/cockpit :until 23) (ui/face :until 23))
   "Shipped modules not yet converted to turn off cleanly: (MODULE :until BATCH), BATCH the number of the
 migration batch that converts it and takes it off.  The dynamic check and the raw-forms lint skip them.")
 

@@ -440,22 +440,16 @@ choice of two nobody has."
 ;;;; The commands
 
 (ert-deftest drgnx-remote/commands-are-in-the-registry-and-every-profile ()
-  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-        (global-mode-string nil))
-    (unwind-protect
-        (progn
-          (funcall (plist-get (alist-get 'tools/remote drgnx-modules--table) :setup))
-          (dolist (id '(remote-open remote-reconnect))
-            (should (equal (drgnx-cmd-category (drgnx-commands-get id)) "Remote")))
-          (should (equal (drgnx-cmd-title (drgnx-commands-get 'remote-open)) "Open Remote…"))
-          (should (equal (drgnx-cmd-title (drgnx-commands-get 'remote-reconnect)) "Reconnect"))
-          (should (= 1 (seq-count (lambda (e) (and (consp e) (eq (car e) :eval))) global-mode-string))))
-      (drgnx-remote--teardown)
-      (setq global-mode-string nil))
-    (dolist (profile '("vscode" "emacs" "vim"))
-      (let ((text (with-temp-buffer (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir)) (buffer-string))))
-        (dolist (id '("remote-open" "remote-reconnect"))
-          (should (string-match-p (concat "(" id " ") text)))))))
+  (drgnx-test-with-modules '(tools/remote) :strict t
+                           (dolist (id '(remote-open remote-reconnect))
+                             (should (equal (drgnx-cmd-category (drgnx-commands-get id)) "Remote")))
+                           (should (equal (drgnx-cmd-title (drgnx-commands-get 'remote-open)) "Open Remote…"))
+                           (should (equal (drgnx-cmd-title (drgnx-commands-get 'remote-reconnect)) "Reconnect"))
+                           (should (= 1 (seq-count (lambda (e) (equal e drgnx-remote--mode-line-entry)) global-mode-string))))
+  (dolist (profile '("vscode" "emacs" "vim"))
+    (let ((text (with-temp-buffer (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir)) (buffer-string))))
+      (dolist (id '("remote-open" "remote-reconnect"))
+        (should (string-match-p (concat "(" id " ") text))))))
 
 ;;;; Nothing asks from nowhere
 
@@ -493,24 +487,28 @@ choice of two nobody has."
     (should-not drgnx-lang--user-command)))
 
 (ert-deftest drgnx-remote/the-module-puts-everything-back ()
-  (let ((global-mode-string nil) (pre pre-command-hook) (post post-command-hook) (err command-error-function)
-        (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-        (actions '(tramp-action-login tramp-action-password tramp-action-yesno tramp-action-yn tramp-action-otp-password
-                                      tramp-action-show-and-confirm-message)))
-    (unwind-protect
-        (progn
-          (drgnx-remote--setup)
-          (drgnx-remote--setup)                                        ; twice: still once
-          (should (= 1 (length global-mode-string)))
-          (should (memq #'drgnx-remote--command-start pre-command-hook))
-          (should (memq #'drgnx-remote--command-end post-command-hook))
-          (dolist (a actions) (should (advice-member-p #'drgnx-remote--guard-prompt a)))
-          (should (advice-member-p #'drgnx-remote--timer-without-command 'timer-event-handler)))
-      (drgnx-remote--teardown))
-    (should-not global-mode-string)
-    (should (equal pre-command-hook pre))
-    (should (equal post-command-hook post))
-    (should (equal command-error-function err))
+  ;; turned off, nothing of it is left — the function on `command-error-function' too, which no recorder sees — and
+  ;; the language servers running on a remote host stop (a local one stays)
+  (let ((actions '(tramp-action-login tramp-action-password tramp-action-yesno tramp-action-yn tramp-action-otp-password
+                                      tramp-action-show-and-confirm-message))
+        (eglot--servers-by-project (make-hash-table :test #'equal))
+        (stopped nil))
+    (puthash 'p '(kx-remote kx-local) eglot--servers-by-project)
+    (cl-letf (((symbol-function 'eglot--project)
+               (lambda (s) (cons 'transient (if (eq s 'kx-remote) "/ssh:kx-host:/src/" "/tmp/"))))
+              ((symbol-function 'eglot-shutdown) (lambda (s &rest _) (push s stopped))))
+      (drgnx-test-with-modules '(tools/remote) :strict t
+                               (should (= 1 (seq-count (lambda (e) (equal e drgnx-remote--mode-line-entry)) global-mode-string)))
+                               (should (memq #'drgnx-remote--command-start (default-value 'pre-command-hook)))
+                               (should (memq #'drgnx-remote--command-end (default-value 'post-command-hook)))
+                               (should (advice-function-member-p #'drgnx-remote--command-failed (default-value 'command-error-function)))
+                               (dolist (a actions) (should (advice-member-p #'drgnx-remote--guard-prompt a)))
+                               (should (advice-member-p #'drgnx-remote--timer-without-command 'timer-event-handler))))
+    (should (equal stopped '(kx-remote)))
+    (should-not (member drgnx-remote--mode-line-entry global-mode-string))
+    (should-not (memq #'drgnx-remote--command-start (default-value 'pre-command-hook)))
+    (should-not (memq #'drgnx-remote--command-end (default-value 'post-command-hook)))
+    (should-not (advice-function-member-p #'drgnx-remote--command-failed (default-value 'command-error-function)))
     (should-not (advice-member-p #'drgnx-remote--timer-without-command 'timer-event-handler))
     (dolist (a actions) (should-not (advice-member-p #'drgnx-remote--guard-prompt a)))))
 

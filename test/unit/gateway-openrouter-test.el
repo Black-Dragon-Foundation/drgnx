@@ -14,6 +14,7 @@
 (load (expand-file-name "test/fixtures/agent-config-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-agents-ui" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-agent-settings" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-gateway-openrouter-test--restrictions
   '(:only ("anthropic" "google-vertex") :ignore ("azure") :data-collection deny :zdr t)
@@ -485,8 +486,8 @@ answered is in `drgnx-gateway-openrouter-test--answer')."
             (kill-buffer (current-buffer))))))))
 
 (ert-deftest drgnx-gateway-openrouter/the-command-is-registered-with-keys ()
-  (drgnx-agent-settings--setup)
-  (should (drgnx-commands-get 'agent-settings-openrouter))
+  (drgnx-test-with-modules '(tools/agent-settings) :strict t
+                           (should (drgnx-commands-get 'agent-settings-openrouter)))
   (dolist (profile '("vscode" "emacs" "vim"))
     (let ((text (with-temp-buffer (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir)) (buffer-string))))
       (should (string-match-p "(agent-settings-openrouter \"r\" :map (drgnx-agent-settings \\. drgnx-agent-settings-mode-map))" text)))))
