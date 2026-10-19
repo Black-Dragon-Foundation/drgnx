@@ -729,7 +729,9 @@ A timer that outlives the current command goes through one door:
 ```
 
 FN (with ARGS) runs after SECS, or after SECS of idleness with `:idle t`. `:repeat` is a number of seconds for a wall
-timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run-with-idle-timer`. Then
+timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run-with-idle-timer`; a wall timer's
+`:repeat t` signals `wrong-type-argument` on every Emacs (Emacs 31's `run-at-time` refuses it, Emacs 30 ran the timer
+once). Then
 `(drgnx-timer-cancel KEY)`, `(drgnx-timer-active-p KEY)` and `(drgnx-timer-cancel-owner OWNER)` (→ how many).
 
 - **The key.** A second start of a KEY cancels its pending timer first, whatever started it: a setup run twice keeps

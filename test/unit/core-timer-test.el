@@ -124,6 +124,19 @@
    (should-not timer-list)
    (should-not (drgnx-timer-active-p 'tm-k))))
 
+(ert-deftest drgnx-timer/a-wall-repeat-must-be-seconds ()
+  ;; Emacs 31's `run-at-time' refuses a REPEAT that is not a number; Emacs 30 took t and ran the timer once.  The
+  ;; layer refuses it on every Emacs, so a setup with `:repeat t' on a wall timer fails here and not only on 31.
+  (drgnx-timer-test--with
+   (dolist (repeat (list t 'yes "30"))
+     (should-error (drgnx-timer-start 'tm-k 1 #'drgnx-timer-test--note :repeat repeat) :type 'wrong-type-argument))
+   (should-not timer-list)
+   (should-not (drgnx-timer-active-p 'tm-k))
+   ;; seconds, and an idle timer's non-nil, are fine
+   (should (drgnx-timer-start 'tm-k 1 #'drgnx-timer-test--note :repeat 30))
+   (should (drgnx-timer-start 'tm-i 1 #'drgnx-timer-test--note :repeat t :idle t))
+   (drgnx-timer-reset)))
+
 ;;;; Owners
 
 (ert-deftest drgnx-timer/a-dead-owner-is-never-called ()

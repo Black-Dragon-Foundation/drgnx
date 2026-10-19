@@ -697,7 +697,7 @@ name from a local session is rejected without a look at it."
                        (drgnx-view-define 'agents-list :render #'ignore :sync #'drgnx-agents-ui--list-print
                                           :delay drgnx-view-delay)
                        ;; the list's Last ages: marked every 30 s (it prints only while on screen)
-                       (drgnx-timer-start 'agents-ui-tick 30 #'drgnx-agents-ui--tick :repeat t)
+                       (drgnx-timer-start 'agents-ui-tick 30 #'drgnx-agents-ui--tick :repeat 30)
                        ;; the hub's sessions (they outlive this Emacs), once Emacs is idle
                        (drgnx-timer-start 'agents-ui-mirror-first 3 #'drgnx-agents-ui--maybe-mirror :idle t)
                        ;; …and again later: a hub started (or restarted) since is picked up
