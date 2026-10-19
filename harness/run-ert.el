@@ -152,7 +152,10 @@ writes into a directory being removed; a root that cannot be removed is reported
 in the temp directory TMP (its DRGNX_RUN_TMP: used, never deleted, by it), its summary to JSON.  Its output goes
 to BUFFER, or to this Emacs's standard error when BUFFER is nil."
   (let* ((process-environment (append (list (concat "DRGNX_TEST_RESULTS=" json) "DRGNX_TEST_ONE_PROCESS=1"
-                                            (concat "DRGNX_RUN_TMP=" tmp))
+                                            (concat "DRGNX_RUN_TMP=" tmp)
+                                            ;; the run's own: a test that runs the runner again runs its files
+                                            ;; one at a time, as in a serial run
+                                            "DRGNX_TEST_JOBS")
                                       process-environment))
          (p (make-process
              :name (concat "drgnx-test-file " (file-name-nondirectory file)) :noquery t :connection-type 'pipe

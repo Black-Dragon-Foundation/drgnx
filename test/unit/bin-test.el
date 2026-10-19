@@ -782,6 +782,30 @@ macOS (no /proc there)."
               (should-not (seq-find (lambda (a) (string-prefix-p "DRGNX_TEST_SELECTOR" a)) args)))))
       (delete-directory dir t))))
 
+(ert-deftest drgnx-bin/a-container-run-forwards-the-jobs ()
+  ;; CI runs the files in parallel (DRGNX_TEST_JOBS) inside the container too: the number goes in with its value,
+  ;; and nothing when it is unset.
+  (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
+         (log (expand-file-name "rt.log" dir))
+         (rt (drgnx-bin-test--fake-emacs (expand-file-name "fake-rt" dir)
+                                         (format "for a in \"$@\"; do echo \"$a\" >> %s; done" log)))
+         (drgnx-bin-test--cwd dir))
+    (unwind-protect
+        (dolist (with '(t nil))
+          (when (file-exists-p log) (delete-file log))
+          (should (eql 0 (car (drgnx-bin-test--call
+                               drgnx-bin-test--bin
+                               (append (list (concat "HOME=" dir) (concat "DRGNX_CONFIG_DIR=" dir "/config")
+                                             (concat "DRGNX_CONTAINER=" rt) "DRGNX_TEST_IMAGE=an-image")
+                                       (list (if with "DRGNX_TEST_JOBS=4" "DRGNX_TEST_JOBS")))
+                               "test" "--container"))))
+          (let ((args (split-string (drgnx-bin-test--slurp log) "\n" t)))
+            (should (member "run" args))
+            (if with
+                (should (member "DRGNX_TEST_JOBS=4" args))
+              (should-not (seq-find (lambda (a) (string-search "DRGNX_TEST_JOBS" a)) args)))))
+      (delete-directory dir t))))
+
 (ert-deftest drgnx-bin/a-container-run-gets-the-modal-elpa ()
   ;; DRGNX_MODAL_ELPA (evil for the modal tests) is mounted read-only into the container and named there, so the
   ;; 31.1 container runs the evil tests instead of skipping them.
