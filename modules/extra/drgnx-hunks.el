@@ -5,7 +5,9 @@
 ;;; Code:
 (require 'drgnx-modules)
 (require 'drgnx-registry)
+(require 'drgnx-large-file)
 (declare-function global-diff-hl-mode "diff-hl")
+(declare-function diff-hl--global-turn-on "diff-hl")
 (defvar diff-hl-disable-on-remote)
 
 (drgnx-module-define 'extra/hunks
@@ -14,6 +16,9 @@
                      :setup (lambda ()
                               (require 'diff-hl)
                               (drgnx-module-set 'diff-hl-disable-on-remote t)   ; VC on a remote file is a round trip, on every save and refresh
+                              ;; a large file gets no gutter: diffing it is a whole-file diff on every save
+                              (drgnx-module-advice #'diff-hl--global-turn-on :before-while not-large ()
+                                (not (drgnx-large-file-p)))
                               (global-diff-hl-mode 1)
                               (pcase-dolist (`(,id ,title ,fn ,doc)
                                              '((git-hunk-show "Show Change" diff-hl-show-hunk "The change at point, against the last commit")

@@ -19,6 +19,7 @@
 (require 'drgnx-state-intent)           ; the store: which frames, and the sizes you chose
 (require 'drgnx-groups)
 (require 'drgnx-timer)
+(defvar drgnx-large-file-open)          ; core/drgnx-large-file.el: bound around the visits, read by editor/large-files
 
 (defcustom drgnx-persist-restore-on-start t
   "Restore the last workbench layout at the first graphical frame."
@@ -244,9 +245,11 @@ none — they would come from a crafted file)."
 
 (defun drgnx-persist--visit (file)
   "FILE's buffer, visited without asking anything (this runs at start: nobody may be there to answer):
-no remote files, only safe local variables, no large-file question; nil if it cannot be visited."
+no remote files, only safe local variables, no large-file question (Emacs's off; a large file opens as
+editor/large-files opens automatic ones); nil if it cannot be visited."
   (when (and (stringp file) (not (file-remote-p file)))
-    (let ((non-essential t) (enable-local-variables :safe) (large-file-warning-threshold nil))
+    (let ((non-essential t) (enable-local-variables :safe) (large-file-warning-threshold nil)
+          (drgnx-large-file-open 'auto))
       (or (get-file-buffer file)
           (and (file-exists-p file) (ignore-errors (find-file-noselect file)))))))
 

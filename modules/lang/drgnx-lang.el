@@ -13,6 +13,7 @@
 (require 'seq)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
+(require 'drgnx-large-file)
 (defvar drgnx-grammars-modes)
 ;; The language/mode table is lang/grammars's: one table for both modules (its file sits beside this one).
 (unless (featurep 'drgnx-grammars)
@@ -269,8 +270,9 @@ outside the module's setup (a test).  The module's own teardown removes the ones
 
 (defun drgnx-lang--maybe-eglot ()
   "In a file's code buffer: start eglot when the server is installed (never asks) — unless DRGNX_NO_LANGUAGE_SERVERS
-is set non-empty (headless test sessions).  A remote file only looks at what Open Remote… or Reconnect found."
-  (when (and buffer-file-name (member (getenv "DRGNX_NO_LANGUAGE_SERVERS") '(nil "")))
+is set non-empty (headless test sessions).  A remote file only looks at what Open Remote… or Reconnect found.
+A large file (`drgnx-large-file-p') gets no server."
+  (when (and buffer-file-name (not (drgnx-large-file-p)) (member (getenv "DRGNX_NO_LANGUAGE_SERVERS") '(nil "")))
     (if (file-remote-p buffer-file-name)
         (drgnx-lang--maybe-eglot-remote buffer-file-name)
       (when (drgnx-lang-server-available-p) (eglot-ensure)))))

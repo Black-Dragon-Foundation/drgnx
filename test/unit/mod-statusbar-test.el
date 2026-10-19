@@ -729,6 +729,21 @@ frame's editor window (the full bar is the editor window's: the bar asks the sto
     (setq-local indent-tabs-mode t)
     (should (equal (drgnx-statusbar--seg-indent) "Spaces: 4"))))
 
+(ert-deftest drgnx-statusbar/quiet-in-a-large-file-buffer ()
+  ;; the flag editor/large-files sets (by hand here): the column without a line count, no indentation, and the memo's
+  ;; key reads no lines either (no scan of the buffer on a redisplay)
+  (require 'drgnx-large-file)
+  (with-temp-buffer
+    (insert "a\n  b\n  cdef\n")
+    (goto-char 11)                                      ; line 3, column 4
+    (setq-local drgnx-large-file 'lean)
+    (should (equal (substring-no-properties (drgnx-statusbar--seg-position)) "Col 5"))
+    (should-not (drgnx-statusbar--seg-indent))
+    (drgnx-statusbar--indent-width)
+    (should-not drgnx-statusbar--indent-cache)
+    (setq-local drgnx-large-file nil)
+    (should (equal (substring-no-properties (drgnx-statusbar--seg-position)) "Ln 3, Col 5"))))
+
 (ert-deftest drgnx-statusbar/indent-is-scanned-once-per-change ()
   (with-temp-buffer
     (insert "a\n  b\n")

@@ -27,6 +27,7 @@
 (require 'drgnx-chrome)
 (require 'drgnx-state)
 (require 'drgnx-timer)
+(require 'drgnx-large-file)
 (declare-function drgnx-face-glyph "drgnx-face")
 (declare-function drgnx-wb-editor-window "drgnx-wb")
 (declare-function drgnx-signal-subscribe "drgnx-signal")
@@ -981,13 +982,14 @@ real one."
   (and (window-live-p w) (eq w (selected-window)) (mode-line-window-selected-p)))
 
 (defun drgnx-statusbar--seg-position ()
+  "`Ln N, Col M'; in a large file `Col M' alone (its line number would count the lines from the top)."
   (let* ((w (drgnx-statusbar-source-window))
          (pt (if (eq (window-buffer w) (current-buffer)) (window-point w) (point))))
     (save-excursion
       (goto-char pt)
       (let* ((bol (pos-bol))
              (col (if (> (- pt bol) 2000) (- pt bol) (current-column))))   ; a minified line: characters, not columns
-        (format "Ln %d, Col %d%s" (drgnx-statusbar--line-at bol) (1+ col)
+        (format "%sCol %d%s" (if (drgnx-large-file-p) "" (format "Ln %d, " (drgnx-statusbar--line-at bol))) (1+ col)
                 (if (and (drgnx-statusbar--selected-p w) (use-region-p))
                     (format " (%d selected)" (abs (- (mark t) pt)))
                   ""))))))
@@ -1029,8 +1031,8 @@ change tick, so redisplay scans again only after an edit; reads the buffer only.
 (defun drgnx-statusbar--indent-width ()
   "The indentation width the `indent' segment shows: `tab-width' with tabs, else the least indent of the buffer's own
 space-indented lines, else the first of `drgnx-statusbar-indent-vars' that is bound to a natural number.  Part of the
-memo's key: no allocation beyond the scan's cache."
-  (if (drgnx-statusbar--indent-tabs-p)
+memo's key: no allocation beyond the scan's cache.  A large file is not scanned: `tab-width'."
+  (if (or (drgnx-large-file-p) (drgnx-statusbar--indent-tabs-p))
       tab-width
     (or (nth 3 (drgnx-statusbar--indent-scan))
         (let ((vars drgnx-statusbar-indent-vars) (found nil))
@@ -1041,7 +1043,9 @@ memo's key: no allocation beyond the scan's cache."
           (or found tab-width)))))
 
 (defun drgnx-statusbar--seg-indent ()
-  (format (if (drgnx-statusbar--indent-tabs-p) "Tab Size: %d" "Spaces: %d") (drgnx-statusbar--indent-width)))
+  "`Spaces: N' or `Tab Size: N'; nothing in a large file (its first lines are not scanned)."
+  (unless (drgnx-large-file-p)
+    (format (if (drgnx-statusbar--indent-tabs-p) "Tab Size: %d" "Spaces: %d") (drgnx-statusbar--indent-width))))
 
 (defun drgnx-statusbar--seg-trust ()
   "`Restricted Mode' while this file's folder is not trusted (drgnx-trust.el keeps the state; nothing is read)."

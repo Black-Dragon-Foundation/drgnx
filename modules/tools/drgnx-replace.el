@@ -36,6 +36,7 @@
 (declare-function project-root "project")
 (defvar eglot-move-to-linepos-function)
 (defvar apheleia-format-after-save-in-progress) ; bound around our saves: no format on save (extra/format)
+(defvar drgnx-large-file-open)          ; core/drgnx-large-file.el: Replace needs a large file whole (lean), never asks
 
 (defvar drgnx-replace-context-chars 80 "Characters of the line kept before and after a match (:before, :after).")
 
@@ -464,7 +465,7 @@ The buffer is saved unless it held unsaved edits before."
      (t
       (when (and buf (not (verify-visited-file-modtime buf)))
         (with-current-buffer buf (revert-buffer t t t)))
-      (setq buf (or buf (let ((large-file-warning-threshold nil)) (find-file-noselect file))))
+      (setq buf (or buf (let ((large-file-warning-threshold nil) (drgnx-large-file-open 'whole)) (find-file-noselect file))))
       (with-current-buffer buf
         (save-restriction
           (widen)
@@ -961,7 +962,7 @@ from `drgnx-replace--new'.  The view's RENDER, in the view's buffer."
 (defun drgnx-replace--show-match (m select)
   "Show match M in the editor, scrolled to it, marked; move there when SELECT."
   (let* ((view (current-buffer))
-         (buf (let ((large-file-warning-threshold nil)) (find-file-noselect (plist-get m :file))))
+         (buf (let ((large-file-warning-threshold nil) (drgnx-large-file-open 'whole)) (find-file-noselect (plist-get m :file))))
          (w (drgnx-wb-show-in-editor buf select)))
     (with-current-buffer buf
       (save-restriction
