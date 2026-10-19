@@ -17,6 +17,7 @@
 ;;; Code:
 (require 'cl-lib)
 (require 'subr-x)
+(require 'drgnx-timer)
 (require 'drgnx-config)
 
 (defconst drgnx-search-chunk-max-file-bytes 1048576
@@ -157,12 +158,16 @@ listing signals `drgnx-search-files-error' \"timed out\".")
   (when (and drgnx-search--git-deadline (> (float-time) drgnx-search--git-deadline))
     (signal 'drgnx-search-files-error (list (format "%s timed out" what)))))
 
+(defun drgnx-search--git-watchdog (proc)
+  "The listing's deadline passed: end the git process PROC, marked `:killed' (`drgnx-search--git-run-timed')."
+  (when (process-live-p proc) (process-put proc :killed t) (delete-process proc)))
+
 (defun drgnx-search--git-run-timed (input args)
   "Like `drgnx-search--git-run' for the caller's `default-directory' and environment, but with a hard bound:
 the deadline of `drgnx-search--git-deadline'.  Past it git is killed and `drgnx-search-files-error' is signaled."
   (drgnx-search--check-deadline (format "git %s" (string-join args " ")))
   (let* ((out (generate-new-buffer " *drgnx-search-git*" t)) (err (generate-new-buffer " *drgnx-search-git-err*" t))
-         (proc nil) (watchdog nil) (killed nil))
+         (proc nil))
     (unwind-protect
         (condition-case e
             (progn
@@ -171,8 +176,8 @@ the deadline of `drgnx-search--git-deadline'.  Past it git is killed and `drgnx-
               (when-let* ((errproc (get-buffer-process err))) (set-process-sentinel errproc #'ignore))
               ;; Sending can block for good when git does not read its input; at the deadline a timer
               ;; kills git, which ends the send.
-              (setq watchdog (run-at-time (max 0 (- drgnx-search--git-deadline (float-time))) nil
-                                          (lambda () (when (process-live-p proc) (setq killed t) (delete-process proc)))))
+              (drgnx-timer-start (cons 'search-git-watchdog proc) (max 0 (- drgnx-search--git-deadline (float-time)))
+                                 #'drgnx-search--git-watchdog :args (list proc) :owner proc)
               ;; The input goes in pieces, the output read in between: a git that fills its output pipe
               ;; while we fill its input pipe would wait for us forever.
               (let ((sent 0) (size (length input)))   ; by offsets: no copy of the remainder per piece
@@ -184,7 +189,7 @@ the deadline of `drgnx-search--git-deadline'.  Past it git is killed and `drgnx-
                   (setq sent (min size (+ sent 4096)))
                   (accept-process-output proc 0))
                 (if (< sent size)
-                    (when (or killed (process-live-p proc))
+                    (when (or (process-get proc :killed) (process-live-p proc))
                       (delete-process proc)
                       (signal 'drgnx-search-files-error (list (format "git %s timed out" (string-join args " ")))))
                   ;; git need not read its input: it may be gone already, which is no error of ours
@@ -195,7 +200,7 @@ the deadline of `drgnx-search--git-deadline'.  Past it git is killed and `drgnx-
               (while (and (or (process-live-p proc) (let ((p (get-buffer-process err))) (and p (process-live-p p))))
                           (<= (float-time) drgnx-search--git-deadline))
                 (accept-process-output nil 0.05))
-              (when (or killed (process-live-p proc))
+              (when (or (process-get proc :killed) (process-live-p proc))
                 (delete-process proc)
                 (signal 'drgnx-search-files-error (list (format "git %s timed out" (string-join args " ")))))
               (accept-process-output nil 0.01)
@@ -204,7 +209,7 @@ the deadline of `drgnx-search--git-deadline'.  Past it git is killed and `drgnx-
           (drgnx-search-files-error (signal (car e) (cdr e)))
           (error (drgnx-search--check-deadline (format "git %s" (string-join args " ")))   ; killed at the deadline
                  (list nil nil (error-message-string e))))
-      (when watchdog (cancel-timer watchdog))
+      (when proc (drgnx-timer-cancel (cons 'search-git-watchdog proc)))
       (when (process-live-p proc) (delete-process proc))
       (kill-buffer out) (kill-buffer err))))
 

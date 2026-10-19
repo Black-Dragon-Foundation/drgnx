@@ -5,6 +5,7 @@
 (require 'drgnx-gateway)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-gw-test--sse
   (concat "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":12,\"output_tokens\":1}}}\n\n"
@@ -73,6 +74,23 @@ the gateway told."
 (defun drgnx-gw-test--settle (pred &optional secs)
   (let ((deadline (+ (float-time) (or secs 5)))) (while (and (not (funcall pred)) (< (float-time) deadline)) (accept-process-output nil 0.02)))
   (funcall pred))
+
+(ert-deftest drgnx-gateway/a-closed-connection-goes-50-ms-later-and-its-timer-goes-with-it ()
+  (let ((conn (make-pipe-process :name "drgnx-gw-test" :noquery t))
+        (other (make-pipe-process :name "drgnx-gw-test2" :noquery t)))
+    (unwind-protect
+        (drgnx-test-with-clock ()
+          (drgnx-gateway--close conn)
+          (drgnx-gateway--close other)
+          (should (drgnx-timer-active-p (cons 'gateway-close conn)))
+          (should (process-live-p conn))                              ; what was sent goes first
+          (delete-process other)                                      ; it hung up by itself: its timer finds it gone
+          (drgnx-test-advance 0.05)
+          (should-not (drgnx-timer-active-p (cons 'gateway-close other)))
+          (should-not (process-live-p conn))
+          (should-not (drgnx-timer-active-p (cons 'gateway-close conn))))
+      (ignore-errors (delete-process conn))
+      (ignore-errors (delete-process other)))))
 
 (ert-deftest drgnx-gateway/no-token-no-service ()
   (drgnx-gw-test--with '((:path "/api/v1/messages" :body "{}")) '()

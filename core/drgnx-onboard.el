@@ -20,6 +20,7 @@
 (require 'drgnx-file)
 (require 'drgnx-config)
 (require 'drgnx-modules)
+(require 'drgnx-timer)
 (require 'drgnx-registry)
 (require 'drgnx-session)
 (require 'drgnx-tty)
@@ -713,7 +714,11 @@ job, then quits."
          (t0 (float-time)) (job nil)
          ;; the CLI (batch) ends on Ctrl-C without unwinding: the exit stops the job
          (stop (lambda () (drgnx-jobs-stop id)))
-         (timer (run-at-time 0.5 0.5 #'drgnx-onboard--show-progress drgnx-onboard--current what id)))
+         (key (cons 'onboard-progress id)))
+    ;; :core, not a process or buffer: the job is a detached unit, and the Welcome may not exist (the CLI); the
+    ;; `unwind-protect' below ends the timer with this wait.
+    (drgnx-timer-start key 0.5 #'drgnx-onboard--show-progress :repeat 0.5
+                       :args (list drgnx-onboard--current what id) :owner :core)
     (when noninteractive (add-hook 'kill-emacs-hook stop))
     (unwind-protect
         (condition-case nil
@@ -733,7 +738,7 @@ job, then quits."
                       log)))
           (quit (drgnx-jobs-stop id) (signal 'quit nil)))
       (remove-hook 'kill-emacs-hook stop)
-      (cancel-timer timer))))
+      (drgnx-timer-cancel key))))
 
 (declare-function browse-url "browse-url")
 
@@ -1559,7 +1564,7 @@ with windows (not batch, not a harness session)."
   "`drgnx-first-gui-frame-hook': the Welcome a moment after the first window shows, from an idle timer —
 never inside the hook (the window and the restored layout come first)."
   (when (drgnx-onboard--welcome-due-p)
-    (run-with-idle-timer 0.5 nil #'drgnx-onboard-maybe-welcome)))
+    (drgnx-timer-start 'onboard-welcome 0.5 #'drgnx-onboard-maybe-welcome :idle t :owner :core)))
 
 (defun drgnx-onboard-run-step (id)
   "Run onboarding step ID now (it may ask), then show the steps."

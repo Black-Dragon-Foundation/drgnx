@@ -114,7 +114,7 @@ run after input, never in the middle of a follow.")
           (should (equal (drgnx-lint-bt--timer-callers f) '(a add-hook c e))))
       (delete-file f))))
 
-;; Timers in modules/ and wb/ go through the layer (`drgnx-timer-*`, docs/develop/core.md "Timers").
+;; Timers in core/, modules/ and wb/ go through the layer (`drgnx-timer-*`, docs/develop/core.md "Timers").
 (defconst drgnx-lint-timers--raw-heads
   '(run-at-time run-with-timer run-with-idle-timer timer-set-time timer-set-idle-time)
   "Raw timer starts: allowed only as a deferral with delay 0 and no repeat.")
@@ -224,7 +224,9 @@ files' counts in its merge commit.")
 
 (ert-deftest drgnx-lint/timers-go-through-the-layer ()
   (let (bad)
-    (dolist (f (drgnx-lint-bt--files "modules" "wb"))
+    ;; core/ too, except the layer itself (it is the one place that calls the raw timer functions)
+    (dolist (f (seq-remove (lambda (f) (string-suffix-p "/core/drgnx-timer.el" f))
+                           (drgnx-lint-bt--files "core" "modules" "wb")))
       (let* ((rel (file-relative-name f drgnx-dir))
              (found (drgnx-lint-timers--violations f))
              (allowed (or (cadr (assoc rel drgnx-lint-timers--not-yet)) 0)))

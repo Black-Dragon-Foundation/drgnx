@@ -750,6 +750,17 @@ timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run
   `(tty-fallback-hint . FRAME)`, `tools/jobs` the coalesced `job-ui-recount`, `tools/ai` the `ai-probe` one-shot; the
   ghost-text pause is an idle debounce `(ai-ghost . BUFFER)` owned by the buffer, and an Ask's search limit
   `(ai-grep . PROCESS)` by the search process (its sentinel cancels it). With no run of the owner nothing starts.
+  Core process timeouts are keyed by their process and owned by it, so the layer drops them when it dies: a check's
+  limit `(agent-check-limit . PROC)` with its 3 s backstop and tree kill, the hung `systemctl` kill, a `claude` command's
+  limit `(claude-cli-limit . PROC)` and the gateway's `(gateway-close . CONN)`. Three core timers have no process to own
+  them and belong to `:core`: `ai-load-keys` (once per daemon, after `drgnx open`), `ai-first-window` (the idle look at
+  the local AI runner) and a finished check's 0.1 s `(agent-check-finish . PROC)`, whose process is already dead."
+
+`core/drgnx-platform.el` (window-manager calls) owns its timers as `:core`: each belongs to one call that ends itself
+(its answer, its error) and cancels the timer, so no module's end or process's death may drop one and leave the
+callback uncalled. They are keyed per call: `(platform-call . PROCESS)` (the tool's time limit),
+`(platform-watchdog . N)` (an adapter that never answers), `(wm-place-poll . N)` and `(wm-place-deadline . N)` (sway
+and i3 placement), `(wm-hn-poll . N)` (Hyprland and niri placement), `(kwin-answer . N)` and `(kwin-place . N)`.
 
 ### What the fire wrapper guarantees
 
@@ -880,8 +891,8 @@ checks the seams against the fixture; `test/unit/core-timer-test.el` covers the 
 > debounce, coalesce, throttle, poll and idle work use the primitives. `run-at-time 0 nil` deferrals out of filters
 > and sentinels may stay raw. A timer function that waits wraps the wait in `with-local-quit`.
 
-`drgnx-lint/timers-go-through-the-layer` (`test/unit/lint-buffers-timers-test.el`) holds the rule in `modules/` and
-`wb/`. It fails for a lambda, closure or `apply-partially` as the function of `run-at-time`, `run-with-timer`,
+`drgnx-lint/timers-go-through-the-layer` (`test/unit/lint-buffers-timers-test.el`) holds the rule in `core/` (except the layer
+itself), `modules/` and `wb/`. It fails for a lambda, closure or `apply-partially` as the function of `run-at-time`, `run-with-timer`,
 `run-with-idle-timer`, `timer-create`, `timer-set-function` or any `drgnx-timer-*` call, and for a raw
 `run-at-time`, `run-with-timer`, `run-with-idle-timer`, `timer-set-time` or `timer-set-idle-time` unless its delay is
 the literal `0` and its repeat is nil or absent (`(run-at-time 0 nil FN …)` passes, lambda or not). Sites that
