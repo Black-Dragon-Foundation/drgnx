@@ -4,6 +4,8 @@
 (require 'seq)
 (require 'drgnx-paths)
 (require 'drgnx-platform)
+(require 'drgnx-timer)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
 ;;;; Helpers
 
@@ -259,7 +261,64 @@ OPTS: (:delay SECONDS :exit CODE :out TEXT :stderr TEXT :map \"ARGS-REGEXP FILE\
                                        (drgnx-platform-frame-monitor frame (lambda (m) (setq fm m)))
                                        (should (drgnx-platform-test--await (lambda () (null fm)) 2))))))))
 
+(defun drgnx-platform-test--keys (symbol)
+  "The keys of the layer's pending timers named SYMBOL."
+  (seq-filter (lambda (k) (eq (car-safe k) symbol)) (mapcar #'car (drgnx-timer-pending))))
+
+(drgnx-platform-test--deftest drgnx-platform/the-watchdog-is-a-layer-timer-that-the-reply-ends ()
+                              (drgnx-test-with-clock ()
+                                (let ((drgnx-platform-command-timeout 0.2) (drgnx-platform-watchdog-margin 0.1) (calls nil) (answer nil))
+                                  (drgnx-platform-test--with-adapter
+                                   'silent (list :monitors (lambda (_ctx cb) (setq answer cb)) :frame-monitor (lambda (_ctx _cb) nil))
+                                   (lambda ()
+                                     (drgnx-platform-test--with-frame 'pgtk '("SILENT=1")
+                                       ;; one pending watchdog, owned by the core; the adapter's reply ends it
+                                       (drgnx-platform-monitors frame (lambda (r) (push r calls)))
+                                       (should (= 1 (length (drgnx-platform-test--keys 'platform-watchdog))))
+                                       (should (eq :core (cadr (assq (car (drgnx-platform-test--keys 'platform-watchdog)) (drgnx-timer-pending)))))
+                                       (funcall answer '(:error "no"))
+                                       (should-not (drgnx-platform-test--keys 'platform-watchdog))
+                                       (drgnx-test-advance 0)
+                                       (should (equal calls '((:error "no"))))
+                                       ;; an adapter that never answers is cut at the deadline plus the margin, once
+                                       (setq calls nil)
+                                       (drgnx-platform-monitors frame (lambda (r) (push r calls)))
+                                       (drgnx-test-advance 0.29)
+                                       (should-not calls)
+                                       (drgnx-test-advance 0.02)
+                                       (should (equal calls '((:error "timed out"))))
+                                       (should-not (drgnx-platform-test--keys 'platform-watchdog))))))))
+
 ;;;; The runner
+(drgnx-platform-test--deftest drgnx-platform/a-hanging-tools-cut-is-a-layer-timer-keyed-by-its-process ()
+                              (drgnx-platform-test--with-fake-wm (:delay 10 :map "get_outputs sway/get_outputs")
+                                (drgnx-test-with-clock ()
+                                  (let ((calls nil))
+                                    (drgnx-platform-call '("swaymsg" "-t" "get_outputs") :timeout 0.3
+                                                         :callback (lambda (s o) (push (list s o) calls)))
+                                    (let* ((proc (seq-find (lambda (p) (equal (process-name p) "drgnx-wm")) (process-list)))
+                                           (keys (drgnx-platform-test--keys 'platform-call)))
+                                      (should proc)
+                                      (should (equal keys (list (cons 'platform-call proc))))
+                                      (drgnx-test-advance 0.29)
+                                      (should-not calls)
+                                      (drgnx-test-advance 0.02)
+                                      (should (equal calls '((timeout ""))))
+                                      (should-not (process-live-p proc))
+                                      (should-not (drgnx-platform-test--keys 'platform-call)))))))
+
+(drgnx-platform-test--deftest drgnx-platform/a-finished-tools-cut-is-cancelled ()
+                              (drgnx-platform-test--with-fake-wm (:map "get_outputs sway/get_outputs")
+                                (drgnx-test-with-clock ()
+                                  (let ((calls nil))
+                                    (drgnx-platform-call '("swaymsg" "-t" "get_outputs") :timeout 5
+                                                         :callback (lambda (s o) (push (list s o) calls)))
+                                    (should (= 1 (length (drgnx-platform-test--keys 'platform-call))))
+                                    ;; the process runs in real time: wait on the real clock, not the virtual one
+                                    (let ((limit (+ (drgnx-test-real-time) 3)))
+                                      (while (and (not calls) (< (drgnx-test-real-time) limit)) (accept-process-output nil 0.02)))
+                                    (should (eq 'ok (car (car calls))))
+                                    (should-not (drgnx-platform-test--keys 'platform-call))))))
 
 (drgnx-platform-test--deftest drgnx-platform/the-runner-returns-the-output-of-the-tool ()
                               (drgnx-platform-test--with-fake-wm (:map "get_outputs sway/get_outputs")

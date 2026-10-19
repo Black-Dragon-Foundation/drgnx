@@ -16,6 +16,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-ui-kit)
+(require 'drgnx-timer)
 (require 'drgnx-work-db)
 (require 'drgnx-coord)
 
@@ -33,6 +34,11 @@ to add.  A new node kind needs only this (and a face for it).  A node is a plist
   "Functions that filter the cockpit's nodes: each is called with a node and the filter (`drgnx-cockpit-filter'); nil
 drops the node."
   :type 'hook :group 'drgnx-cockpit)
+
+(defcustom drgnx-cockpit-redraw-delay 0.5
+  "Seconds between the first change the Work graph or a feed pane hears of and its redraw: however many events come
+meanwhile, it redraws once.  Read when the cockpit's views are defined (at load)."
+  :type 'number :group 'drgnx-cockpit)
 
 (defcustom drgnx-cockpit-happened-limit 50
   "How many events \"what happened\" shows for an agent (the newest)."
@@ -83,6 +89,35 @@ the files past it show no count."
 (defun drgnx-cockpit--remote-p (dir)
   "Whether DIR is a remote (TRAMP) name — by its syntax alone: no file handler runs, nothing connects."
   (and (stringp dir) (string-match-p "\\`/[^/|:]+[:|]" dir)))
+
+;;;; For the panes (drgnx-cockpit.el and its parts; the model itself never calls these)
+
+(declare-function drgnx-state-frames "drgnx-state")
+(declare-function drgnx-state-windows "drgnx-state")
+
+(defun drgnx-cockpit-shown-p (buffer)
+  "Non-nil if a window of a visible frame shows BUFFER, as the workbench state store recorded it
+\(`drgnx-state-windows'): a pane in its home or the buffer in any window.  The panes run their checks and watches
+only then.  Nil without the store."
+  (and (buffer-live-p buffer) (fboundp 'drgnx-state-frames)
+       (let ((found nil))
+         (dolist (f (drgnx-state-frames))
+           (when (and (not found) (eq (frame-visible-p f) t))
+             (dolist (w (drgnx-state-windows f))
+               (when (eq (window-buffer w) buffer) (setq found t)))))
+         found)))
+
+(defvar drgnx-cockpit--row-generation 0 "Counts the row texts the cockpit's views made: each row's signature.")
+
+(defun drgnx-cockpit-row-cell (old key sig text)
+  "KEY's row of a cockpit view: OLD's cell for KEY (OLD a hash KEY → (SIG GENERATION . TEXT), or nil) when its SIG
+is SIG, faces included (`equal-including-properties'); else (SIG GENERATION . TEXT) with a new GENERATION, TEXT a
+string or a function making it (called only then).  The view's signature of the row is its GENERATION, so a row is
+drawn again only when what it shows changed."
+  (let ((cell (and old (gethash key old))))
+    (if (and cell (equal-including-properties (car cell) sig)) cell
+      (cons sig (cons (setq drgnx-cockpit--row-generation (1+ drgnx-cockpit--row-generation))
+                      (if (functionp text) (funcall text) text))))))
 
 ;;;; Plan files the tracker has not scanned (read, never written)
 
@@ -585,6 +620,10 @@ from its jtask row)."
 (defun drgnx-cockpit--later (fn &rest args)
   (run-at-time 0 nil (lambda () (apply #'drgnx-cockpit--call fn args))))
 
+(defun drgnx-cockpit--git-timed-out (p)
+  "The deadline of the git process P (`drgnx-cockpit--git'): mark it timed out and end it."
+  (when (process-live-p p) (process-put p :timed-out t) (delete-process p)))
+
 (defun drgnx-cockpit--git (dir args done &optional limit)
   "Run git ARGS in DIR as a process of its own and return at once.  DONE gets, from the sentinel, (:exit N :out TEXT
 :err TEXT); (:too-large N) when its output passed LIMIT bytes (it is ended then, having read N: at most one chunk
@@ -601,7 +640,6 @@ past `drgnx-cockpit-git-timeout'.  git takes pathspecs literally, no optional lo
       (condition-case err
           (let* ((default-directory (file-name-as-directory dir))
                  (process-environment (append '("GIT_OPTIONAL_LOCKS=0" "GIT_TERMINAL_PROMPT=0") process-environment))
-                 (timer nil)
                  (p (make-process
                      :name "drgnx-cockpit-git" :buffer out :stderr errbuf :noquery t :connection-type 'pipe
                      :coding 'utf-8-unix :command (append '("git" "-c" "core.quotePath=false" "--literal-pathspecs") args)
@@ -615,7 +653,7 @@ past `drgnx-cockpit-git-timeout'.  git takes pathspecs literally, no optional lo
                      :sentinel
                      (lambda (p _)
                        (unless (process-live-p p)
-                         (when timer (cancel-timer timer))
+                         (drgnx-timer-cancel (cons 'cockpit-git-timeout p))
                          (let ((r (cond
                                    ((process-get p :too-large) (list :too-large (process-get p :too-large)))
                                    ((process-get p :timed-out)
@@ -627,8 +665,8 @@ past `drgnx-cockpit-git-timeout'.  git takes pathspecs literally, no optional lo
                            (when (buffer-live-p errbuf) (let ((kill-buffer-query-functions nil)) (kill-buffer errbuf)))
                            (drgnx-cockpit--call done r)))))))
             (when-let* ((ep (get-buffer-process errbuf))) (set-process-sentinel ep #'ignore))
-            (setq timer (run-at-time drgnx-cockpit-git-timeout nil
-                                     (lambda () (when (process-live-p p) (process-put p :timed-out t) (delete-process p)))))
+            (drgnx-timer-start (cons 'cockpit-git-timeout p) drgnx-cockpit-git-timeout #'drgnx-cockpit--git-timed-out
+                               :args (list p) :owner p)
             (ignore-errors (process-send-eof p))
             p)
         (error

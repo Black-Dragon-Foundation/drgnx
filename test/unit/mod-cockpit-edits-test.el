@@ -10,10 +10,16 @@
 (defconst drgnx-cockpit-edits-test--ext "ext:claude-code:42"
   "The fixture's outside agent: README changed and new.txt added in its own worktree WT-A, both reported.")
 
+(defun drgnx-cockpit-edits-test--keys (buffer)
+  "BUFFER's pane's four timer keys: the tick, the listing's turn, the flush and the check."
+  (mapcar (lambda (k) (cons k buffer)) '(cockpit-edits-tick cockpit-edits-turn cockpit-edits-flush cockpit-edits-check)))
+
 (defun drgnx-cockpit-edits-test--settled-p (buffer)
   "Whether BUFFER's pane has listed and diffed everything, with nothing on its way."
   (with-current-buffer buffer
-    (and drgnx-cockpit-edits--loaded (not drgnx-cockpit-edits--busy) (not (timerp drgnx-cockpit-edits--timer))
+    (and drgnx-cockpit-edits--loaded (not drgnx-cockpit-edits--busy)
+         (not (drgnx-timer-active-p (cons 'cockpit-edits-tick buffer)))
+         (not (drgnx-timer-active-p (cons 'cockpit-edits-turn buffer)))
          (zerop (hash-table-count drgnx-cockpit-edits--dirty)) (not drgnx-cockpit-edits--list-dirty))))
 
 (defun drgnx-cockpit-edits-test--settle (buffer)
@@ -27,33 +33,37 @@
   "BODY in the cockpit fixture with AGENT's edits pane E shown in the selected window and loaded; the hub's sessions
 the fixture's (SESSIONS); NOTIFIED counts the hub told of a message.  File watches are recorded in WATCHES (descriptor → (DIR CALLBACK)), never real ones: in
 batch Emacs a real watch's events wait in an input queue nobody reads, and while one waits no process sentinel runs.
-The pane is killed after, and must leave no timer or watch behind."
+The pane is killed after, and must leave no timer or watch behind.  A fresh workbench state store has the panes'
+subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E calls `drgnx-state-sync' after, and
+`drgnx-state--deliver-idle' when no pane event says it (`windows-changed' is on the `idle' lane)."
   (declare (indent 1))
   `(drgnx-cockpit-fixture-with
-     (let ((drgnx-cockpit-edits--draws 0) (drgnx-cockpit-edits-check-interval 3600) (drgnx-cockpit-edits--list-every 0)
-           (drgnx-cockpit-edits--last nil) (config (current-window-configuration))
-           (temporary-file-directory (drgnx-cockpit-edits-test--tmp root))
-           (watches (make-hash-table)) (watch-n 0) (notified 0))
-       (cl-letf (((symbol-function 'drgnx-cockpit-sessions) (lambda () sessions))
-                 ((symbol-function 'drgnx-cockpit-edits--notify-hub) (lambda () (cl-incf notified)))
-                 ((symbol-function 'file-notify-add-watch) (lambda (dir _flags cb) (puthash (cl-incf watch-n) (list dir cb) watches) watch-n))
-                 ((symbol-function 'file-notify-rm-watch) (lambda (d) (remhash d watches)))
-                 ((symbol-function 'file-notify-valid-p) (lambda (d) (and (gethash d watches) t))))
-         (let ((e (drgnx-cockpit-edits-buffer ,agent)))
-           (unwind-protect
-               (save-window-excursion
-                 (delete-other-windows)
-                 (set-window-buffer (selected-window) e)
-                 (set-buffer e)
-                 (drgnx-cockpit-edits-test--settle e)
-                 ,@body)
-             (let ((timers (with-current-buffer e (list drgnx-cockpit-edits--timer drgnx-cockpit-edits--check-timer)))
-                   (own (buffer-local-value 'drgnx-cockpit-edits--neutral e)))
-               (kill-buffer e)
-               (should-not (file-exists-p own))                     ; its own folder went with it
-               (dolist (tm timers) (should-not (and (timerp tm) (memq tm timer-list))))   ; the buffer owned them
-               (should (zerop (hash-table-count watches))))
-             (set-window-configuration config)))))))
+     (drgnx-test-with-state
+       (drgnx-cockpit-edits--subscribe)
+       (let ((drgnx-cockpit-edits--draws 0) (drgnx-cockpit-edits-check-interval 3600) (drgnx-cockpit-edits--list-every 0)
+             (drgnx-cockpit-edits--last nil) (config (current-window-configuration))
+             (temporary-file-directory (drgnx-cockpit-edits-test--tmp root))
+             (watches (make-hash-table)) (watch-n 0) (notified 0))
+         (cl-letf (((symbol-function 'drgnx-cockpit-sessions) (lambda () sessions))
+                   ((symbol-function 'drgnx-cockpit-edits--notify-hub) (lambda () (cl-incf notified)))
+                   ((symbol-function 'file-notify-add-watch) (lambda (dir _flags cb) (puthash (cl-incf watch-n) (list dir cb) watches) watch-n))
+                   ((symbol-function 'file-notify-rm-watch) (lambda (d) (remhash d watches)))
+                   ((symbol-function 'file-notify-valid-p) (lambda (d) (and (gethash d watches) t))))
+           (let ((e (drgnx-cockpit-edits-buffer ,agent)))
+             (unwind-protect
+                 (save-window-excursion
+                   (delete-other-windows)
+                   (set-window-buffer (selected-window) e)
+                   (drgnx-state-sync) (drgnx-state--deliver-idle) ; the store sees it shown: it follows its agent
+                   (set-buffer e)
+                   (drgnx-cockpit-edits-test--settle e)
+                   ,@body)
+               (let ((own (buffer-local-value 'drgnx-cockpit-edits--neutral e)))
+                 (kill-buffer e)
+                 (should-not (file-exists-p own))                     ; its own folder went with it
+                 (dolist (k (drgnx-cockpit-edits-test--keys e)) (should-not (drgnx-timer-active-p k)))   ; the buffer owned them
+                 (should (zerop (hash-table-count watches))))
+               (set-window-configuration config))))))))
 
 (defun drgnx-cockpit-edits-test--watch (watches dir)
   "The callback of the watch on DIR in WATCHES."
@@ -117,7 +127,7 @@ The pane is killed after, and must leave no timer or watch behind."
     (drgnx-cockpit-edits-test--watch watches (concat wt-a "docs/"))
     (drgnx-cockpit-edits-test--notify wt-a ".git/index")
     (drgnx-cockpit-edits-test--notify repo "README")
-    (should-not (timerp drgnx-cockpit-edits--timer))
+    (should-not (drgnx-timer-active-p (cons 'cockpit-edits-tick (current-buffer))))
     ;; nothing here is ever remote: a remote agent folder is an error line, no git, no watch
     (let ((src (list :dir "/ssh:host:/w/" :base "main")))
       (cl-letf (((symbol-function 'drgnx-cockpit-edit-source) (lambda (&rest _) src))
@@ -129,6 +139,7 @@ The pane is killed after, and must leave no timer or watch behind."
         (should (null drgnx-cockpit-edits--files))))))
 
 (ert-deftest drgnx-cockpit-edits/a-burst-of-writes-is-one-redraw ()
+  :tags '(:timing)                                      ; wall-clock: 50 writes in about 1 s, a quiet machine
   (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
     (let ((drgnx-cockpit-edits-delay 0.3) (drgnx-cockpit-edits--list-every 1.5)
           (windows (window-list)))
@@ -236,7 +247,106 @@ The pane is killed after, and must leave no timer or watch behind."
       (should-error (clone-buffer))
       (should-error (clone-indirect-buffer nil nil))
       (should (= n (length (buffer-list))))
-      (should (timerp drgnx-cockpit-edits--check-timer)))))
+      (should (drgnx-timer-active-p (cons 'cockpit-edits-check (current-buffer)))))))
+
+(defun drgnx-cockpit-edits-test--hide (e)
+  "Show *scratch* where the pane E was, and let the store see it."
+  (dolist (w (get-buffer-window-list e nil t)) (set-window-buffer w (get-buffer-create "*scratch*")))
+  (drgnx-state-sync) (drgnx-state--deliver-idle))
+
+(ert-deftest drgnx-cockpit-edits/a-hidden-pane-keeps-no-timer ()
+  ;; shown, the pane looks at the store every few seconds; hidden (another buffer in its window), it keeps no timer
+  (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
+    (should (drgnx-timer-active-p (cons 'cockpit-edits-check e)))
+    (drgnx-cockpit-edits--schedule 3600)                                 ; a tick on its way, as after a write
+    (drgnx-cockpit-edits-test--hide e)
+    (should-not (seq-filter #'drgnx-timer-active-p (drgnx-cockpit-edits-test--keys e)))
+    (should-not (seq-find (lambda (p) (eq (nth 1 p) e)) (drgnx-timer-pending)))))
+
+(ert-deftest drgnx-cockpit-edits/hidden-edits-keep-no-watches ()
+  ;; M12f-C6-1: a hidden pane's file watches go; they come back when it shows
+  (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
+    (should (gethash wt-a drgnx-cockpit-edits--watches))
+    (should (> (hash-table-count watches) 0))
+    (drgnx-cockpit-edits-test--hide e)
+    (should (zerop (hash-table-count watches)))
+    (should (zerop (hash-table-count drgnx-cockpit-edits--watches)))
+    (set-window-buffer (selected-window) e)
+    (drgnx-state-sync) (drgnx-state--deliver-idle)
+    (drgnx-cockpit-edits-test--settle e)
+    (should (gethash wt-a drgnx-cockpit-edits--watches))
+    (should (= (hash-table-count watches) (hash-table-count drgnx-cockpit-edits--watches)))))
+
+(ert-deftest drgnx-cockpit-edits/following-walks-only-the-panes ()
+  ;; ST-T24-1: a window change looks at the edits panes the module keeps, never at every buffer
+  (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
+    (should (memq e drgnx-cockpit-edits--buffers))
+    (dolist (w (get-buffer-window-list e nil t)) (set-window-buffer w (get-buffer-create "*scratch*")))
+    (drgnx-state-sync)
+    (cl-letf (((symbol-function 'buffer-list) (lambda (&rest _) (ert-fail "Every buffer was looked at"))))
+      (drgnx-state--deliver-idle))
+    (should-not (seq-filter #'drgnx-timer-active-p (drgnx-cockpit-edits-test--keys e)))
+    (should (zerop (hash-table-count watches)))))
+
+(ert-deftest drgnx-cockpit-edits/showing-starts-it-again ()
+  ;; hidden while the agent writes a new file and reports it (no watch, no check sees it): shown again as its pane,
+  ;; its check runs, the changes are listed again (the new file shows) and their folders watched again
+  (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
+    (drgnx-cockpit-edits-test--hide e)
+    (drgnx-cockpit-fixture-write (concat wt-a "docs/while-hidden.md") "hidden\n")
+    (drgnx-coord-event-add :agent drgnx-cockpit-edits-test--ext :kind "edit" :summary "1 file"
+                           :data (list :root (directory-file-name wt-a) :paths '("docs/while-hidden.md")))
+    (should-not (seq-filter #'drgnx-timer-active-p (drgnx-cockpit-edits-test--keys e)))
+    (drgnx-cockpit-fixture-show-pane 'agent-edits e 'editor)
+    (should (drgnx-timer-active-p (cons 'cockpit-edits-check e)))
+    (drgnx-cockpit-edits-test--settle e)
+    (should (member "docs/while-hidden.md" drgnx-cockpit-edits--files))
+    (drgnx-cockpit-edits-test--goto "docs/while-hidden.md" "+hidden")
+    (should (gethash (concat wt-a "docs/") drgnx-cockpit-edits--watches))
+    ;; its pane hidden (the store's `pane-hidden', on the `now' lane): no timer and no watch at once
+    (drgnx-cockpit-fixture-hide-pane (selected-window))
+    (should-not (seq-filter #'drgnx-timer-active-p (drgnx-cockpit-edits-test--keys e)))
+    (should (zerop (hash-table-count watches)))))
+
+(ert-deftest drgnx-cockpit-edits/a-patch-keeps-each-window-on-its-hunk ()
+  ;; two windows on the pane, one in README's hunk, one in new.txt's; README's grows above new.txt's section: each
+  ;; window stays in its hunk at the same offset, and no window is added, closed or selected
+  (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
+    (let* ((w1 (selected-window)) (w2 (split-window w1 nil 'below)))
+      (set-window-buffer w2 e)
+      (drgnx-state-sync)
+      (set-window-point w1 (save-excursion (drgnx-cockpit-edits-test--goto "README" "+more") (+ (point) 2)))
+      (set-window-start w2 (save-excursion (drgnx-cockpit-edits-test--goto "new.txt") (point)))
+      (set-window-point w2 (save-excursion (drgnx-cockpit-edits-test--goto "new.txt" "+new") (1+ (point))))
+      (let ((before (window-start w2)) (windows (window-list)))
+        (drgnx-cockpit-fixture-write (concat wt-a "README") "readme\none\ntwo\nmore\n")
+        (drgnx-cockpit-edits-test--notify wt-a "README")
+        (drgnx-cockpit-edits-test--settle e)
+        (should (string-search "\n+two\n" (buffer-string)))
+        (should (equal (window-list) windows))
+        (should (eq (selected-window) w1))
+        ;; new.txt's section moved down; its window followed it
+        (should (> (window-start w2) before))
+        (should (= (window-start w2) (save-excursion (drgnx-cockpit-edits-test--goto "new.txt") (point))))
+        (should (= (window-point w2) (1+ (save-excursion (drgnx-cockpit-edits-test--goto "new.txt" "+new") (point)))))
+        ;; README's window: its hunk, the same offset from the hunk's `@@' line
+        (should (equal (drgnx-cockpit-edits--row-at (window-point w1)) (cons "README" 1)))
+        (should (= (- (window-point w1) (save-excursion (drgnx-cockpit-edits-test--goto "README" "@@") (point)))
+                   (+ 2 (length "@@ -1 +1,2 @@\n readme\n"))))))))
+
+(ert-deftest drgnx-cockpit-edits/a-listing-waiting-for-its-turn-never-holds-a-touch-back ()
+  ;; the turn has a timer of its own, so a tick asked for meanwhile is not behind it; a second ask moves the turn
+  (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
+    (let ((tick (cons 'cockpit-edits-tick e)) (turn (cons 'cockpit-edits-turn e)))
+      (drgnx-cockpit-edits--schedule-turn 3600)
+      (drgnx-cockpit-edits--schedule 0.2)
+      (should (drgnx-timer-active-p turn))
+      (should (drgnx-timer-active-p tick))
+      (should (= 1 (cl-count turn (drgnx-timer-pending) :key #'car :test #'equal)))
+      (drgnx-cockpit-edits--schedule-turn 3600)
+      (should (= 1 (cl-count turn (drgnx-timer-pending) :key #'car :test #'equal)))
+      (drgnx-timer-cancel turn)
+      (drgnx-timer-cancel tick))))
 
 (ert-deftest drgnx-cockpit-edits/diff-commands-by-name-and-g-change-no-file ()
   (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
@@ -264,7 +374,7 @@ The pane is killed after, and must leave no timer or watch behind."
 
 (ert-deftest drgnx-cockpit-edits/the-graph-opens-an-agents-edits ()
   (drgnx-cockpit-fixture-with
-    (let ((drgnx-cockpit-graph-current-filter nil) (drgnx-cockpit--timer nil) (drgnx-cockpit--check-timer nil)
+    (let ((drgnx-cockpit-graph-current-filter nil)
           (drgnx-cockpit--silent nil) (drgnx-cockpit--silent-n 0) (drgnx-cockpit--silent-at (float-time))
           (drgnx-cockpit--silent-running nil) (drgnx-cockpit-edits--last nil) (shown nil))
       (cl-letf (((symbol-function 'drgnx-cockpit-sessions) (lambda () sessions))
@@ -287,7 +397,12 @@ The pane is killed after, and must leave no timer or watch behind."
 (ert-deftest drgnx-cockpit-edits/keys-in-every-profile ()
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil) (kinds nil))
     (cl-letf (((symbol-function 'drgnx-pane-define-kind) (lambda (kind &rest props) (push (cons kind props) kinds))))
-      (funcall (plist-get (alist-get 'tools/cockpit drgnx-modules--table) :setup)))
+      (drgnx-cockpit-fixture-after-setup
+        ;; the panes hear from the workbench state store when they show, are hidden (at once), or swap buffers in one
+        ;; window (once Emacs is idle: never inside redisplay)
+        (should (memq #'drgnx-cockpit-edits--pane-shown (alist-get 'pane-shown drgnx-state--now)))
+        (should (memq #'drgnx-cockpit-edits--pane-hidden (alist-get 'pane-hidden drgnx-state--now)))
+        (should (memq #'drgnx-cockpit-edits--windows-changed (alist-get 'windows-changed drgnx-state--idle)))))
     (should (eq (plist-get (alist-get 'agent-edits kinds) :home) 'editor))
     (pcase-dolist (`(,id ,fn) '((cockpit-accept-file drgnx-cockpit-edits-accept-file)
                                 (cockpit-revert-file drgnx-cockpit-edits-revert-file)

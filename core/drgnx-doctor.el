@@ -17,10 +17,12 @@
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-paths)
+(require 'drgnx-file)
 (require 'drgnx-tty-recommend)   ; the terminal table, tmux, the fallback keys and the recommendation (all read-only)
 (require 'drgnx-platform)        ; the window manager (the Desktop row)
 
 (declare-function package-built-in-p "package")
+(declare-function drgnx-portable-config-problems "drgnx-portable")
 
 (defconst drgnx-doctor-install-hint
   "run the installer: curl -fsSL https://raw.githubusercontent.com/Black-Dragon-Foundation/drgnx/main/install.sh | bash  (see docs/guide/install.md)"
@@ -144,6 +146,36 @@ its package read from its package.json, never run), nil when none is installed, 
           (t (list 'ok (format "%s %s (%s)" (plist-get a :name) (plist-get a :version) (abbreviate-file-name (plist-get a :program)))
                    nil)))))
 
+(declare-function drgnx-sandbox-check "drgnx-sandbox")
+(defvar drgnx-sandbox-memory-max)
+
+(defun drgnx-doctor--sandbox ()
+  "The fact of the `job-sandbox' check: `drgnx-sandbox-check' (its probes take at most a few seconds) with
+:memory-max, `drgnx-sandbox-memory-max', and :memory-max-default t when no init file was loaded (`drgnx doctor'
+runs with -Q, so it sees the default, not the user's setting); or (:error MESSAGE)."
+  (condition-case err
+      (progn (require 'drgnx-sandbox)
+             (append (drgnx-sandbox-check)
+                     (list :memory-max drgnx-sandbox-memory-max :memory-max-default (null user-init-file))))
+    (error (list :error (error-message-string err)))))
+
+(defun drgnx-doctor--job-sandbox-check (s)
+  "The `job-sandbox' check of the fact S (`drgnx-doctor--sandbox')."
+  (let ((program (if (eq (plist-get s :backend) 'seatbelt) "sandbox-exec" "bwrap")))
+    (cond ((null s) (list 'info "not checked" nil))
+          ((plist-get s :error) (list 'warn (format "could not check: %s" (plist-get s :error)) "run drgnx doctor again"))
+          ((plist-get s :ok)
+           (list 'ok (concat program (if (plist-get s :version) (concat " " (plist-get s :version)) "") " ok"
+                             (cond ((not (eq (plist-get s :backend) 'bwrap)) "")
+                                   ((null (plist-get s :memory-max)) "; no memory cap (drgnx-sandbox-memory-max is nil)")
+                                   ((plist-get s :scope)
+                                    (format "; memory cap %s per agent%s" (plist-get s :memory-max)
+                                            (if (plist-get s :memory-max-default) " by default (drgnx-sandbox-memory-max)" "")))
+                                   (t "; no memory cap (no systemd user manager answers)")))
+                 nil))
+          (t (list 'warn (format "jobs' agents cannot be sandboxed, so jobs do not start: %s" (plist-get s :reason))
+                   (plist-get s :fix))))))
+
 (defvar drgnx-macos-app-dir)
 
 (defconst drgnx-doctor--brew-programs '("/opt/homebrew/bin/brew" "/usr/local/bin/brew")
@@ -191,6 +223,7 @@ default; it never reads ~/.profile), else ~/.profile.  With SHELL unset or empty
 
 (declare-function drgnx-trust-mode "drgnx-trust")
 (declare-function drgnx-trust-guards-status "drgnx-trust")
+(declare-function drgnx-commands-get "drgnx-registry")
 (defvar drgnx-trust-mode)
 
 (defun drgnx-doctor--trust-guards ()
@@ -208,6 +241,88 @@ off), or inside a session, the mode is read as it is and never switched: an off 
           (unwind-protect (progn (drgnx-trust-mode 1) (drgnx-trust-guards-status))
             (drgnx-trust-mode -1))))
     (error (list :error (error-message-string err)))))
+
+;; The config files (docs/guide/files.md): read fresh, applying nothing.  The core features whose loading defines config
+;; files are listed here, one line each; a module's file is loaded by `drgnx-config-doc' for its reference, not here.
+(defvar drgnx-doctor-config-features
+  '(
+    ;; one feature per line, appended below by each port
+    drgnx-projects
+    drgnx-agents
+    drgnx-modules
+    drgnx-keys
+    drgnx-ai
+    drgnx-pkg
+    drgnx-session
+    drgnx-search-chunk
+    drgnx-onboard
+    drgnx-face-state
+    )
+  "The core features whose loading defines config files, for the `config-files' check.")
+
+(declare-function drgnx-config-read "drgnx-config")
+(declare-function drgnx-config-names "drgnx-config")
+
+(defun drgnx-doctor--config-files ()
+  "The fact of the `config-files' check: (NAME :status :problem :unknown-keys :file) for every defined file that is
+not a project's, from a fresh `drgnx-config-read' (it applies nothing and writes nothing), by name; or (:error MESSAGE)."
+  (condition-case err
+      (progn
+        (require 'drgnx-config)
+        (dolist (feature drgnx-doctor-config-features) (require feature))
+        (mapcar (lambda (name)
+                  (let ((r (drgnx-config-read name)))
+                    (list name :status (plist-get r :status) :problem (plist-get r :problem)
+                          :unknown-keys (plist-get r :unknown-keys) :file (plist-get r :file))))
+                (drgnx-config-names '(config state))))
+    (error (list :error (error-message-string err)))))
+
+(defun drgnx-doctor--config-files-check (rows)
+  "The `config-files' check of the fact ROWS (`drgnx-doctor--config-files')."
+  (if (eq (car-safe rows) :error)
+      (list 'warn (format "could not check: %s" (cadr rows)) "run drgnx doctor again")
+    (let (fail warn info)
+      (dolist (row rows)
+        (let* ((r (cdr row)) (file (file-name-nondirectory (or (plist-get r :file) (symbol-name (car row))))))
+          (pcase (plist-get r :status)
+            ('problem (push (format "%s line %s: %s" file (plist-get (plist-get r :problem) :line)
+                                    (plist-get (plist-get r :problem) :text))
+                            fail))
+            ('newer (push (format "%s: written by a newer drgnx: update drgnx here" file) warn))
+            ('migrated (push (format "%s: an older format, read as the current one; Migrate Config File… writes it" file)
+                             info)))
+          (dolist (key (plist-get r :unknown-keys))
+            (push (format "%s: %s — a newer drgnx, or a typo?" file (mapconcat (lambda (k) (format "%s" k)) key " "))
+                  info))))
+      (cond (fail (list 'fail (string-join (append (nreverse fail) (nreverse warn) (nreverse info)) "\n")
+                        (concat "Preferences: Open Config File… or edit it; "
+                                "its last good copy is in use until then")))
+            (warn (list 'warn (string-join (append (nreverse warn) (nreverse info)) "\n") "update drgnx here"))
+            (info (list 'info (string-join (nreverse info) "\n") nil))
+            (t (list 'ok (format "%d file%s read" (length rows) (if (= (length rows) 1) "" "s")) nil))))))
+
+(defun drgnx-doctor--checkout-init (dir)
+  "The fact of the `checkout-clean' check: (:dir DIR :changed LINES), LINES being `git status --porcelain -- init/'
+of the checkout DIR, run with GIT_OPTIONAL_LOCKS=0 and bounded at 5 s; nil without DIR/.git (an installed copy
+that is not a checkout); (:error MESSAGE) when git cannot say."
+  (when (file-exists-p (expand-file-name ".git" dir))
+    (condition-case err
+        (let* ((process-environment (cons "GIT_OPTIONAL_LOCKS=0" process-environment))
+               (default-directory (file-name-as-directory (expand-file-name dir)))
+               (buf (generate-new-buffer " *drgnx-doctor-git*" t))
+               (proc (make-process :name "drgnx-doctor-git" :buffer buf :noquery t :connection-type 'pipe
+                                   :sentinel #'ignore   ; the default one writes "Process … finished" into the buffer
+                                   :command (list "git" "-C" (directory-file-name default-directory)
+                                                  "status" "--porcelain" "--" "init/")))
+               (deadline (+ (float-time) 5)))
+          (unwind-protect
+              (progn
+                (while (and (process-live-p proc) (< (float-time) deadline)) (accept-process-output proc 0.05))
+                (cond ((process-live-p proc) (delete-process proc) (list :error "git status took more than 5 s"))
+                      ((not (eql (process-exit-status proc) 0)) (list :error "git status failed"))
+                      (t (list :dir dir :changed (split-string (with-current-buffer buf (buffer-string)) "\n" t)))))
+            (kill-buffer buf)))
+      (error (list :error (error-message-string err))))))
 
 (defun drgnx-doctor-facts ()
   "Facts about the running Emacs and this machine."
@@ -243,8 +358,15 @@ off), or inside a session, the mode is read as it is and never switched: an off 
            :ai-keys (let ((k (getenv "OPENROUTER_API_KEY"))) (and k (not (string-empty-p k)) '(openrouter)))
            :ai-complete (ignore-errors (require 'drgnx-ai) (cdr (car (drgnx-ai-role 'complete))))
            :claude-adapter (drgnx-doctor--claude-adapter)
+           :sandbox (drgnx-doctor--sandbox)
            :vram (ignore-errors (require 'drgnx-ai-probe) (drgnx-ai-vram))
-           :trust-guards (drgnx-doctor--trust-guards))
+           :trust-guards (drgnx-doctor--trust-guards)
+           :config-files (drgnx-doctor--config-files)
+           :checkout-init (drgnx-doctor--checkout-init drgnx-dir)
+           :timers-report (drgnx-doctor--timers-report)
+           ;; file names only: a key found in the config dir is never part of the facts
+           :portable (condition-case err (progn (require 'drgnx-portable) (drgnx-portable-config-problems))
+                       (error (list :error (error-message-string err)))))
      (and (eq (drgnx-platform) 'macos) (drgnx-doctor--macos-facts)))))
 
 (defun drgnx-doctor--state-path (name)
@@ -253,9 +375,8 @@ off), or inside a session, the mode is read as it is and never switched: an off 
 
 (defun drgnx-doctor--state-file (name)
   "The .eld file NAME the last drgnx session wrote in the state dir, read, or nil."
-  (let ((file (drgnx-doctor--state-path name)))
-    (when (file-readable-p file)
-      (ignore-errors (with-temp-buffer (insert-file-contents file) (read (current-buffer)))))))
+  (let ((r (drgnx-file-read (drgnx-doctor--state-path name))))
+    (and (eq (plist-get r :status) 'ok) (plist-get r :data))))
 
 (defun drgnx-doctor--state-file-time (name)
   "When the state file NAME was last written (seconds since the epoch), or nil."
@@ -271,9 +392,7 @@ off), or inside a session, the mode is read as it is and never switched: an off 
 
 (defun drgnx-doctor--keys-report ()
   "The key report the last drgnx session wrote (keys-report.eld in the state dir), or nil."
-  (let ((file (expand-file-name "keys-report.eld" (drgnx-state-dir))))
-    (when (file-readable-p file)
-      (ignore-errors (with-temp-buffer (insert-file-contents file) (read (current-buffer)))))))
+  (drgnx-doctor--state-file "keys-report.eld"))
 
 ;;;; Checks
 
@@ -359,6 +478,28 @@ off), or inside a session, the mode is read as it is and never switched: an off 
 (drgnx-doctor-define 'claude-adapter :group "Tools"
                      :doc "The Claude Code adapter the claude agent profiles run: @agentclientprotocol/claude-agent-acp 0.93.0 or newer"
                      :check (lambda (f) (drgnx-doctor--claude-adapter-check (plist-get f :claude-adapter))))
+
+(drgnx-doctor-define 'config-files :group "drgnx" :doc "drgnx's config files read, with no mistakes"
+                     :check (lambda (f) (drgnx-doctor--config-files-check (plist-get f :config-files))))
+
+(drgnx-doctor-define 'checkout-clean :group "drgnx"
+                     :doc "The checkout's init/ has no local changes (install.sh's update needs that)"
+                     :check (lambda (f)
+                              (let ((c (plist-get f :checkout-init)))
+                                (cond ((null c) nil)
+                                      ((plist-get c :error)
+                                       (list 'warn (format "could not check: %s" (plist-get c :error)) "run drgnx doctor again"))
+                                      ((plist-get c :changed)
+                                       (list 'warn (format "init/ has local changes: %s"
+                                                           (mapconcat (lambda (l) (string-trim l)) (plist-get c :changed) ", "))
+                                             (format "move what you changed to config.el or custom.el in %s, then: git -C %s checkout -- init/"
+                                                     (abbreviate-file-name (drgnx-user-dir))
+                                                     (directory-file-name (plist-get c :dir)))))
+                                      (t (list 'ok "init/ has no local changes" nil))))))
+
+(drgnx-doctor-define 'job-sandbox :group "Agents"
+                     :doc "Jobs' agents run in a sandbox: bubblewrap (bwrap) on Linux, sandbox-exec on macOS"
+                     :check (lambda (f) (drgnx-doctor--job-sandbox-check (plist-get f :sandbox))))
 
 (drgnx-doctor-define 'modules :group "drgnx" :doc "Modules that failed or wait for packages (from the last session)"
                      :check (lambda (f)
@@ -502,6 +643,31 @@ MODEL), as a sentence, or nil."
                                       ((plist-get r :display-buffer-entry) (list 'ok "buffers are placed by drgnx's rules" nil))
                                       (t (list 'warn "drgnx's entry in display-buffer-alist is gone: something set the variable after startup, so buffers are no longer placed by the rules"
                                                "use (add-to-list 'display-buffer-alist …) instead of setq in your configuration, or restart drgnx"))))))
+
+(drgnx-doctor-define 'portable-config :group "drgnx"
+                     :doc "The config dir travels as it is: no key in plain text, no machine-local file (docs/guide/second-machine.md)"
+                     :check (lambda (f)
+                              ;; never ok unless everything was checked: a scan that failed, or skipped files, is info
+                              (let* ((p (plist-get f :portable)) (keys (plist-get p :keys)) (local (plist-get p :machine-local))
+                                     (both (plist-get p :in-both)) (unchecked (plist-get p :unchecked))
+                                     (err (plist-get p :error)) (roots (plist-get p :missing-roots))
+                                     (parts (delq nil (list (and keys (format "a key in plain text in %s" (string-join keys ", ")))
+                                                            (and local (format "machine-local files in the config dir: %s" (string-join local ", ")))
+                                                            (and err (format "could not check the config dir: %s" err))
+                                                            (and unchecked (format "could not check %d file%s: %s" (length unchecked)
+                                                                                   (if (cdr unchecked) "s" "") (string-join unchecked ", ")))
+                                                            (and roots (format "not cloned on this machine: %s" (string-join roots ", "))))))
+                                     (fixes (delq nil (append (list (and keys "move it to your keyring (docs/guide/ai.md#keys)")
+                                                                    (and (cl-set-difference local both :test #'equal)
+                                                                         "drgnx bootstrap --step config moves them"))
+                                                              (mapcar (lambda (i) (format "%s has its own copy in the data dir, which drgnx uses: compare them, then delete the config dir's"
+                                                                                          (directory-file-name i)))
+                                                                      both)
+                                                              (list (and (or err unchecked) "make them readable, then run drgnx doctor again")
+                                                                    (and roots "clone them to work on them here (docs/guide/second-machine.md)"))))))
+                                (cond ((or keys local) (list 'warn (string-join parts "; ") (string-join fixes "; ")))
+                                      (parts (list 'info (string-join parts "; ") (string-join fixes "; ")))
+                                      (t (list 'ok "the config dir can travel as it is" nil))))))
 
 (drgnx-doctor-define 'macos-app :group "drgnx" :platform 'macos :doc "The drgnx app in ~/Applications (Finder, Spotlight, the Dock)"
                      :check (lambda (f)
@@ -820,6 +986,31 @@ Hyprland; on Arch `i3' is a group and `i3-wm' has i3-msg).")
 (drgnx-doctor-define 'window-manager :group "Desktop"
                      :doc "The window manager, its monitors, and whether Move to Monitor and restore work there"
                      :check (lambda (f) (when-let* ((wf (plist-get f :window-manager))) (drgnx-doctor--window-manager wf))))
+
+(defun drgnx-doctor--timers-report ()
+  "The stopped timers the last session and the last hub wrote (timers-report.eld, hub-timers-report.eld in the
+state dir): a list of (:file NAME :stopped PLISTS :time WRITTEN), one per file there."
+  (let ((out nil))
+    (dolist (name '("timers-report.eld" "hub-timers-report.eld"))
+      (when-let* ((report (drgnx-doctor--state-file name)))
+        (push (list :file name :stopped (plist-get report :stopped) :time (drgnx-doctor--state-file-time name)) out)))
+    (nreverse out)))
+
+(drgnx-doctor-define 'timers :group "drgnx" :doc "Timers that stopped after failing 3 times in a row (from the last session)"
+                     :check (lambda (f)
+                              (let ((stopped nil) (time nil))
+                                (dolist (r (plist-get f :timers-report))
+                                  (when (plist-get r :stopped)
+                                    (setq stopped (append stopped (plist-get r :stopped)))
+                                    (when (plist-get r :time) (setq time (max (or time 0) (plist-get r :time))))))
+                                (if (null stopped)
+                                    (list 'ok "no timer stopped" nil)
+                                  (list 'warn
+                                        (concat (mapconcat (lambda (s) (format "%s (%s): %s" (plist-get s :key) (plist-get s :fn)
+                                                                               (plist-get s :error)))
+                                                           stopped "; ")
+                                                (if time (format " (from the last session, %s)" (drgnx-doctor--age time)) ""))
+                                        "report the error; drgnx starts the timer again at the next start")))))
 
 ;;;; Running and reporting
 

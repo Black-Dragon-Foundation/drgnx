@@ -16,44 +16,57 @@
 (defmacro drgnx-cockpit-feed-test--with (&rest body)
   "BODY in the cockpit fixture: the hub's sessions the fixture's, mirrors M1 (of s-1) and M2 (of s-2, busy) in this
 Emacs, the hub stubbed (it records each call in `drgnx-cockpit-feed-test--hub' and answers at once), nothing ever
-stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed after, and they owned their hooks."
+stopped (`drgnx-agents-stop' fails the test), and a fresh workbench state store with the feed's subscriptions
+\(`drgnx-cockpit-feed--subscribe'; a test that shows or hides a buffer calls `drgnx-state-sync').  The feed's
+buffers are killed after: they owned their hooks and their timers."
   (declare (indent 0))
   `(drgnx-cockpit-fixture-with
-     (let* ((drgnx-cockpit-feed--buffers nil) (drgnx-cockpit-feed--timer nil) (drgnx-cockpit-feed--check-timer nil)
-            (drgnx-cockpit-feed--waiting nil) (drgnx-cockpit-feed-test--hub nil)
-            (drgnx-cockpit-feed--told nil) (drgnx-cockpit-feed--in-flight nil)
-            (drgnx-cockpit-graph-current-filter nil) (drgnx-cockpit--timer nil) (drgnx-cockpit--check-timer nil)
-            (drgnx-cockpit--silent nil) (drgnx-cockpit--silent-at (float-time))
-            (m1 (drgnx-agents--make :id "m-1" :remote "s-1" :name "claude · jx#2" :status 'idle :job "jx" :task "jx#2"))
-            (m2 (drgnx-agents--make :id "m-2" :remote "s-2" :name "chat" :status 'busy :mode 'queue))
-            (mirrors (list m1 m2))
-            (config (current-window-configuration)))
-       (ignore m1 m2)
-       (cl-letf (((symbol-function 'drgnx-cockpit-sessions) (lambda () sessions))
-                 ((symbol-function 'drgnx-agents-sessions) (lambda () mirrors))
-                 ((symbol-function 'drgnx-hub-call)
-                  (lambda (method params cb) (push (list method params) drgnx-cockpit-feed-test--hub) (funcall cb t nil) 1))
-                 ((symbol-function 'drgnx-agents-stop) (lambda (&rest _) (ert-fail "an answer stopped an agent")))
-                 ((symbol-function 'drgnx-agents-kill) (lambda (&rest _) (ert-fail "an answer killed an agent"))))
-         (unwind-protect
-             (save-window-excursion
-               (delete-other-windows)
-               ,@body)
-           (dolist (b (buffer-list))
-             (when (string-match-p "\\`\\*\\(happened: .*\\|Timeline\\|timeline: .*\\|Work Graph\\)\\*\\'" (buffer-name b))
-               (kill-buffer b)))
-           (should-not drgnx-cockpit-feed--buffers)
-           (should-not (timerp drgnx-cockpit-feed--timer))
-           (should-not (timerp drgnx-cockpit-feed--check-timer))
-           (should-not (memq #'drgnx-cockpit-feed--hub-event (bound-and-true-p drgnx-hub-event-functions)))
-           (should-not (memq #'drgnx-cockpit-feed--agent-changed drgnx-agents-changed-functions))
-           (set-window-configuration config))))))
+     (drgnx-test-with-state
+       (drgnx-cockpit-feed--subscribe)
+       (let* ((drgnx-cockpit-feed--buffers nil)
+              (drgnx-cockpit-feed--waiting nil) (drgnx-cockpit-feed-test--hub nil)
+              (drgnx-cockpit-feed--told nil) (drgnx-cockpit-feed--in-flight nil)
+              (drgnx-cockpit-graph-current-filter nil)
+              (drgnx-cockpit--silent nil) (drgnx-cockpit--silent-at (float-time))
+              (m1 (drgnx-agents--make :id "m-1" :remote "s-1" :name "claude · jx#2" :status 'idle :job "jx" :task "jx#2"))
+              (m2 (drgnx-agents--make :id "m-2" :remote "s-2" :name "chat" :status 'busy :mode 'queue))
+              (mirrors (list m1 m2))
+              (config (current-window-configuration)))
+         (ignore m1 m2)
+         (cl-letf (((symbol-function 'drgnx-cockpit-sessions) (lambda () sessions))
+                   ;; a UTF-8 terminal whatever the locale (CI's C locale is not): the ASCII tests say so themselves
+                   ((symbol-function 'drgnx-cockpit-graph--ascii-p) #'ignore)
+                   ((symbol-function 'drgnx-agents-sessions) (lambda () mirrors))
+                   ((symbol-function 'drgnx-hub-call)
+                    (lambda (method params cb) (push (list method params) drgnx-cockpit-feed-test--hub) (funcall cb t nil) 1))
+                   ((symbol-function 'drgnx-agents-stop) (lambda (&rest _) (ert-fail "an answer stopped an agent")))
+                   ((symbol-function 'drgnx-agents-kill) (lambda (&rest _) (ert-fail "an answer killed an agent"))))
+           (unwind-protect
+               (save-window-excursion
+                 (delete-other-windows)
+                 ,@body)
+             (let ((feed drgnx-cockpit-feed--buffers))
+               (dolist (b (buffer-list))
+                 (when (string-match-p "\\`\\*\\(happened: .*\\|Timeline\\|timeline: .*\\|Work Graph\\)\\*\\'" (buffer-name b))
+                   (kill-buffer b)))
+               (should-not drgnx-cockpit-feed--buffers)
+               (should-not (seq-find (lambda (p) (memq (nth 1 p) feed)) (drgnx-timer-pending))))
+             (should-not (memq #'drgnx-cockpit-feed--hub-event (bound-and-true-p drgnx-hub-event-functions)))
+             (should-not (memq #'drgnx-cockpit-feed--agent-changed drgnx-agents-changed-functions))
+             (set-window-configuration config)))))))
 
 (defun drgnx-cockpit-feed-test--tick ()
-  "Run the feed's update on its way now, as its timer would."
-  (should (timerp drgnx-cockpit-feed--timer))
-  (cancel-timer drgnx-cockpit-feed--timer)
-  (drgnx-cockpit-feed--tick))
+  "Run the feed's draws on their way now (their views' timers), as the timers would."
+  (let ((ran nil))
+    (dolist (b drgnx-cockpit-feed--buffers)
+      (when (drgnx-timer-active-p (cons 'drgnx-view b))
+        (drgnx-timer-cancel (cons 'drgnx-view b))
+        (drgnx-view--draw-buffer b)
+        (setq ran t)))
+    (should ran)))
+
+(defun drgnx-cockpit-feed-test--view (buffer)
+  (buffer-local-value 'drgnx-view buffer))
 
 (defun drgnx-cockpit-feed-test--question (pred)
   "The open question PRED accepts (`drgnx-cockpit-feed--questions')."
@@ -110,7 +123,7 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
           (push-button (point)))
         (should (equal transcripts (list m1))))
       ;; a new event is appended under the others: nothing above it is drawn again
-      (let* ((footer (marker-position (buffer-local-value (quote drgnx-cockpit-feed--end) b)))
+      (let* ((footer (drgnx-view-row-start (drgnx-cockpit-feed-test--view b) :footer))
              (before (with-current-buffer b (buffer-substring-no-properties (point-min) footer)))
              (changes (drgnx-cockpit-feed-test--changes b
                         (drgnx-coord-event-add :agent "s-1" :job "jx" :task "jx#2" :kind "edit" :summary "1 file"
@@ -293,27 +306,25 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
         (should (= refreshes 1))                    ; first told
         (drgnx-cockpit-feed-tell-statusbar)
         (should (= refreshes 1))                    ; the same count: nothing
-        ;; another process asks (no hub event): the feed's check tells the bar
+        ;; another process asks (no hub event): the module's look (`cockpit-waiting') tells the bar, whatever shows
         (drgnx-coord-send :sender "ext:claude-code:42" :recipient "user" :text "[escalation] ok?" :question t)
-        (drgnx-cockpit-timeline-buffer)             ; a feed buffer lives: its check runs
-        (drgnx-cockpit-feed--check)
+        (drgnx-cockpit--waiting)
         (should (= refreshes 2))
-        (drgnx-cockpit-feed--check)
+        (drgnx-cockpit--waiting)
         (should (= refreshes 2))
-        ;; and so does the graph's
         (drgnx-coord-send :sender "s-2" :recipient "user" :text "[escalation] tabs?" :question t)
-        (drgnx-cockpit--check)
+        (drgnx-cockpit--waiting)
         (should (= refreshes 3))
         ;; a store write that changes no count tells nothing
         (drgnx-coord-event-add :agent "s-1" :kind "edit" :data '(:paths ("x.el")))
-        (drgnx-cockpit-feed--check)
+        (drgnx-cockpit--waiting)
         (should (= refreshes 3))
-        ;; a refresh that fails leaves the count untold: the next check tries again
+        ;; a refresh that fails leaves the count untold: the next look tries again
         (drgnx-coord-send :sender "s-1" :recipient "user" :text "[escalation] and then?" :question t)
         (cl-letf (((symbol-function 'drgnx-statusbar-refresh) (lambda (&rest _) (error "bar broken"))))
-          (drgnx-cockpit-feed--check))
+          (drgnx-cockpit--waiting))
         (should (= refreshes 3))
-        (drgnx-cockpit-feed--check)
+        (drgnx-cockpit--waiting)
         (should (= refreshes 4))))))
 
 (ert-deftest drgnx-cockpit-feed/timeline-chips-in-time-order ()
@@ -409,7 +420,7 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
       (drgnx-coord-send :sender "s-1" :recipient "user" :text "[escalation] and the tests?" :question t :job "jx")
       (let ((drgnx-cockpit-timeline-name-width 60))
         (with-current-buffer b
-          (drgnx-cockpit-feed--timeline-build)
+          (drgnx-cockpit-feed--draw-now)                 ; g: read anew, every row fitted again
           (let ((s1 (drgnx-cockpit-feed-test--line "claude · jx#2")))
             (should (string-match (format "‹ [0-9]+ %s %s s-1 asks you" mark mark) s1))
             (should (eq (get-text-property (match-beginning 0) 'face s1) 'drgnx-cockpit-waiting))))))))
@@ -471,12 +482,14 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
       (should-not (funcall waiting-p task5))
       (should (= (drgnx-cockpit-waiting-count) n0))
       ;; the chip is calm again (its row drawn again, though the answer is another row's); the window's point, on the
-      ;; chip, stays on it, and no window function ran from the timer
-      (cl-letf (((symbol-function 'set-window-point) (lambda (&rest _) (ert-fail "the timer moved a window")))
-                ((symbol-function 'set-window-start) (lambda (&rest _) (ert-fail "the timer scrolled a window"))))
-        (drgnx-cockpit-feed-test--tick))
-      (with-current-buffer b
-        (should (string-prefix-p "s-2 asks you" (buffer-substring (window-point (get-buffer-window b)) (point-max)))))
+      ;; chip, stays on its row, at the same column, and its start where it was (the view puts its own window back)
+      (let* ((w (get-buffer-window b)) (start (window-start w))
+             (column (with-current-buffer b (- (window-point w) (drgnx-view-row-start (drgnx-cockpit-feed-test--view b) '(:row "s-2"))))))
+        (drgnx-cockpit-feed-test--tick)
+        (with-current-buffer b
+          (should (equal (drgnx-view-key-at (window-point w)) '(:row "s-2")))
+          (should (= column (- (window-point w) (drgnx-view-row-start (drgnx-cockpit-feed-test--view b) '(:row "s-2")))))
+          (should (= start (window-start w)))))
       (with-current-buffer b
         (let ((row (drgnx-cockpit-feed-test--line "chat")))
           (should (string-search "s-2 asks you" row))
@@ -515,7 +528,7 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
   ;; the jobs segment's ⚑ and the agents segment's "waiting on you" never both count one ask card
   (drgnx-cockpit-feed-test--with
     (let ((drgnx-statusbar--tick 0) (drgnx-statusbar--agents-state nil) (drgnx-statusbar--jobs-state nil)
-          (drgnx-statusbar--refresh-timer nil) (drgnx-statusbar--redraw-wanted nil)
+          (drgnx-statusbar--redraw-wanted nil)
           (drgnx-statusbar--jobs-wanted nil) (drgnx-statusbar--jobs-pending nil) (drgnx-statusbar--errors nil)
           (drgnx-statusbar--state-texts (make-hash-table :test #'eq))
           (drgnx-statusbar--segments (make-hash-table :test #'eq))
@@ -547,36 +560,101 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
           (should (string-search "12/12 +" (buffer-string)))
           (should-not (string-match-p "[^[:ascii:]]" (buffer-string))))))))
 
-(ert-deftest drgnx-cockpit-feed/hidden-panes-wait-and-buffers-own-their-hooks ()
+(ert-deftest drgnx-cockpit-feed/buffers-own-their-hooks ()
   (drgnx-cockpit-feed-test--with
-    (let ((b (drgnx-cockpit-timeline-buffer)))
-      (should (memq #'drgnx-cockpit-feed--hub-event drgnx-hub-event-functions))
-      (should (timerp drgnx-cockpit-feed--check-timer))
-      ;; hidden: an event only marks it stale; showing it catches up
+    (drgnx-cockpit-timeline-buffer)
+    (should (memq #'drgnx-cockpit-feed--hub-event drgnx-hub-event-functions))
+    (should (memq #'drgnx-cockpit-feed--agent-changed drgnx-agents-changed-functions))
+    (drgnx-cockpit-feed-test--tick)                                      ; the draw its first drawing left armed
+    ;; a transcript's chunk is not news
+    (drgnx-cockpit-feed--hub-event "agent-entries" nil)
+    (should-not (seq-find (lambda (b) (drgnx-timer-active-p (cons 'drgnx-view b))) drgnx-cockpit-feed--buffers))
+    ;; the last feed buffer killed: its hooks go, and its timers (checked by the macro)
+    (kill-buffer (drgnx-cockpit-feed-happened-buffer "s-1"))
+    (should (memq #'drgnx-cockpit-feed--hub-event drgnx-hub-event-functions))))
+
+(ert-deftest drgnx-cockpit-feed/a-hidden-pane-keeps-no-timer ()
+  ;; shown (the store's `pane-shown'), a feed pane looks at the store every few seconds; hidden, it keeps no timer
+  (drgnx-cockpit-feed-test--with
+    (let* ((b (drgnx-cockpit-timeline-buffer)) (w (drgnx-cockpit-fixture-show-pane 'timeline b 'bottom)))
+      (should (drgnx-timer-active-p (cons 'cockpit-feed-check b)))
+      (drgnx-cockpit-feed-test--tick)                                    ; shown: it catches up
+      (drgnx-cockpit-fixture-hide-pane w)
+      (should-not (drgnx-timer-active-p (cons 'cockpit-feed-check b)))
+      ;; events while hidden: the draw on its way finds it hidden; after that nothing is armed, whatever comes
       (drgnx-coord-event-add :agent "s-2" :kind "stop" :summary "chat ended")
       (drgnx-cockpit-feed--hub-event "agent" nil)
-      (when (timerp drgnx-cockpit-feed--timer) (drgnx-cockpit-feed-test--tick))
-      (with-current-buffer b
-        (should drgnx-cockpit-feed--stale)
-        (should-not (string-search "stopped" (buffer-string))))
-      (set-window-buffer (selected-window) b)
-      (drgnx-cockpit-feed--on-show (selected-window))
+      (when (drgnx-timer-active-p (cons 'drgnx-view b)) (drgnx-cockpit-feed-test--tick))
+      (dotimes (_ 5) (drgnx-cockpit-feed--hub-event "agent" nil) (drgnx-cockpit-feed-schedule 0))
+      (should-not (seq-find (lambda (p) (eq (nth 1 p) b)) (drgnx-timer-pending))))))
+
+(ert-deftest drgnx-cockpit-feed/showing-starts-it-again ()
+  ;; shown again: its check runs again and what came while it was hidden is drawn; one agent's What happened in place
+  ;; of another's in the same pane (no pane event) follows too
+  (drgnx-cockpit-feed-test--with
+    (let* ((b (drgnx-cockpit-timeline-buffer)) (w (drgnx-cockpit-fixture-show-pane 'timeline b 'bottom)))
+      (drgnx-cockpit-fixture-hide-pane w)
+      (drgnx-coord-event-add :agent "s-2" :kind "stop" :summary "chat ended")
+      (drgnx-cockpit-feed--hub-event "agent" nil)
+      (when (drgnx-timer-active-p (cons 'drgnx-view b)) (drgnx-cockpit-feed-test--tick))
+      (with-current-buffer b (should-not (string-search "stopped" (buffer-string))))
+      (drgnx-cockpit-fixture-show-pane 'timeline b 'bottom)
+      (should (drgnx-timer-active-p (cons 'cockpit-feed-check b)))
       (drgnx-cockpit-feed-test--tick)
-      (with-current-buffer b (should (string-search "stopped" (buffer-string))))
-      ;; a transcript's chunk is not news
-      (drgnx-cockpit-feed--hub-event "agent-entries" nil)
-      (should-not (timerp drgnx-cockpit-feed--timer))
-      ;; the last feed buffer killed: its hooks and timers go (checked by the macro), its markers are released
-      (let ((h (drgnx-cockpit-feed-happened-buffer "s-1")))
-        (let ((m (buffer-local-value 'drgnx-cockpit-feed--end h)))
-          (kill-buffer h)
-          (should-not (marker-buffer m)))))))
+      (with-current-buffer b (should (string-search "stopped" (buffer-string)))))
+    (let* ((h1 (drgnx-cockpit-feed-happened-buffer "s-1")) (h2 (drgnx-cockpit-feed-happened-buffer "s-2"))
+           (w (drgnx-cockpit-fixture-show-pane 'happened h1 'right)))
+      (should (drgnx-timer-active-p (cons 'cockpit-feed-check h1)))
+      (set-window-buffer w h2)
+      (drgnx-state-sync)
+      (should-not (drgnx-timer-active-p (cons 'cockpit-feed-check h1)))
+      (should (drgnx-timer-active-p (cons 'cockpit-feed-check h2)))
+      (drgnx-cockpit-fixture-hide-pane w))))
+
+(ert-deftest drgnx-cockpit-feed/a-hidden-pane-draws-nothing ()
+  ;; hidden: the draw on its way finds it hidden (a stale skip) and draws no row
+  (drgnx-cockpit-feed-test--with
+    (let* ((b (drgnx-cockpit-timeline-buffer)) (w (drgnx-cockpit-fixture-show-pane 'timeline b 'bottom))
+           (view (drgnx-cockpit-feed-test--view b)))
+      (drgnx-cockpit-feed-test--tick)
+      (drgnx-cockpit-fixture-hide-pane w)
+      (let ((drawn (plist-get (drgnx-view-stats view) :rows-drawn)) (skips (plist-get (drgnx-view-stats view) :stale-skips)))
+        (drgnx-coord-event-add :agent "s-2" :kind "stop" :summary "chat ended")
+        (dotimes (_ 5) (drgnx-cockpit-feed--hub-event "agent" nil))
+        (drgnx-cockpit-feed-test--tick)
+        (should (> (plist-get (drgnx-view-stats view) :stale-skips) skips))
+        (should (= drawn (plist-get (drgnx-view-stats view) :rows-drawn)))))))
+
+(ert-deftest drgnx-cockpit-feed/a-new-event-draws-one-row ()
+  ;; a new event of one agent: What happened draws its one new line, the timeline that agent's row
+  (drgnx-cockpit-feed-test--with
+    (let* ((h (drgnx-cockpit-feed-happened-buffer "s-1")) (tl (drgnx-cockpit-timeline-buffer))
+           (wh (selected-window)) (wt (split-window wh nil 'below)))
+      (set-window-buffer wh h)
+      (set-window-buffer wt tl)
+      (let ((hd (plist-get (drgnx-view-stats (drgnx-cockpit-feed-test--view h)) :rows-drawn))
+            (td (plist-get (drgnx-view-stats (drgnx-cockpit-feed-test--view tl)) :rows-drawn))
+            (rows (drgnx-view-row-count (drgnx-cockpit-feed-test--view tl))))
+        (drgnx-coord-event-add :agent "s-1" :job "jx" :task "jx#2" :kind "edit" :summary "1 file"
+                               :data (list :root tree :paths '("c.el")))
+        (drgnx-cockpit-feed--hub-event "agent" nil)
+        (drgnx-cockpit-feed-test--tick)
+        (should (= 1 (- (plist-get (drgnx-view-stats (drgnx-cockpit-feed-test--view h)) :rows-drawn) hd)))
+        (should (= 1 (- (plist-get (drgnx-view-stats (drgnx-cockpit-feed-test--view tl)) :rows-drawn) td)))
+        (should (> rows 2))
+        (with-current-buffer h (should (string-search "edited 1 file: c.el" (buffer-string))))
+        (with-current-buffer tl (should (string-search "1 file" (drgnx-cockpit-feed-test--line "claude · jx#2"))))))))
 
 (ert-deftest drgnx-cockpit-feed/commands-and-keys-in-every-profile ()
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil) (kinds nil)
         (drgnx-statusbar-waiting-functions (list #'drgnx-statusbar-agents-waiting)))
     (cl-letf (((symbol-function 'drgnx-pane-define-kind) (lambda (kind &rest props) (push (cons kind props) kinds))))
-      (funcall (plist-get (alist-get 'tools/cockpit drgnx-modules--table) :setup)))
+      (drgnx-cockpit-fixture-after-setup
+        ;; the feed hears from the workbench state store when its panes show, are hidden, swap buffers or resize
+        (should (memq #'drgnx-cockpit-feed--pane-shown (alist-get 'pane-shown drgnx-state--now)))
+        (should (memq #'drgnx-cockpit-feed--pane-hidden (alist-get 'pane-hidden drgnx-state--now)))
+        (should (memq #'drgnx-cockpit-feed--windows-changed (alist-get 'windows-changed drgnx-state--now)))
+        (should (memq #'drgnx-cockpit-feed--pane-resized (alist-get 'pane-resized drgnx-state--idle)))))
     ;; the questions only the cockpit counts reach the status bar's "waiting on you"
     (should (memq #'drgnx-cockpit-waiting-count drgnx-statusbar-waiting-functions))
     (should (eq (plist-get (alist-get 'happened kinds) :home) 'right))
@@ -594,5 +672,19 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
     (let ((text (with-temp-buffer (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir)) (buffer-string))))
       (dolist (row '("(cockpit-answer \"A\")" "(cockpit-happened :none " "(cockpit-timeline :none "))
         (should (string-search row text))))))
+
+(ert-deftest drgnx-cockpit-feed/loads-alone-in-a-fresh-emacs ()
+  ;; the modules directory loads cockpit-feed before drgnx-cockpit.el (alphabetical): it must not need the graph's keymap
+  ;; or options then (its views are defined at load: core and the workbench are on the path, as when modules load)
+  (let* ((emacs (expand-file-name invocation-name invocation-directory))
+         (feed (expand-file-name "modules/tools/drgnx-cockpit-feed.el" drgnx-dir))
+         (out (with-temp-buffer
+                (cons (call-process emacs nil t nil "--batch" "-Q" "-L" (expand-file-name "core" drgnx-dir)
+                                    "-L" (expand-file-name "wb" drgnx-dir)
+                                    "--eval" (format "(load %S nil t)" feed)
+                                    "--eval" "(message \"loaded %S\" (featurep 'drgnx-cockpit-feed))")
+                      (buffer-string)))))
+    (should (eql (car out) 0))
+    (should (string-search "loaded t" (cdr out)))))
 
 ;;; mod-cockpit-feed-test.el ends here

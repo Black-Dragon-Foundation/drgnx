@@ -16,6 +16,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-modal)
+(require 'drgnx-timer)
 (require 'drgnx-ai)
 (require 'drgnx-ai-client)
 (require 'drgnx-ai-probe)
@@ -35,14 +36,14 @@
 (defvar-local drgnx-ai-ghost--tick nil "`buffer-chars-modified-tick' when the suggestion was shown.")
 (defvar-local drgnx-ai-ghost--request nil "The request in flight.")
 (defvar-local drgnx-ai-ghost--showing nil "Non-nil while a suggestion shows: its keys are active.")
-(defvar drgnx-ai-ghost--timer nil)
 (defvar drgnx-ai-ghost-mode)                            ; the minor mode, defined below
 (defvar drgnx-ai-ghost--said-unavailable nil "Told once this session that no provider completes.")
 (defvar drgnx-ai-ghost--last-probe 0 "When a pause with no provider last asked the probe to look again.")
 
 (defvar drgnx-ai-ghost-showing-map (make-sparse-keymap) "Keys active only while a suggestion shows.")
-(defvar drgnx-ai-ghost--emulation (list (cons 'drgnx-ai-ghost--showing drgnx-ai-ghost-showing-map)))
-(add-to-list 'emulation-mode-map-alists 'drgnx-ai-ghost--emulation)
+(defvar drgnx-ai-ghost--emulation (list (cons 'drgnx-ai-ghost--showing drgnx-ai-ghost-showing-map))
+  "On `emulation-mode-map-alists' while the module is on (its setup adds it); the modal core also keeps a place
+for it there, bound or not (`drgnx-modal-order-alists'), where it is inert while no suggestion shows.")
 
 (defvar drgnx-ai-ghost-mode-map (make-sparse-keymap) "Keys of buffers with ghost text (Tab: `drgnx-ai-tab').")
 
@@ -124,20 +125,23 @@ normal and visual state), so moving around never asks.  Runs once per pause, not
   '(drgnx-ai-accept drgnx-ai-accept-word drgnx-ai-accept-line drgnx-ai-tab)
   "Commands that work with a suggestion rather than clear it.")
 
+(defun drgnx-ai-ghost--pause (buf)
+  "The idle pause's function: ask for a suggestion in BUF when it is the buffer on screen (whatever buffer is
+current: the timer may fire inside a wait)."
+  (when (and (buffer-live-p buf) (eq buf (window-buffer (selected-window))))
+    (with-current-buffer buf
+      (with-demoted-errors "AI completion: %S" (drgnx-ai-ghost--trigger)))))
+
 (defun drgnx-ai-ghost--post-command ()
   "After a command: anything but accepting clears the suggestion and the question in flight; a new pause asks."
   (unless (memq this-command drgnx-ai-ghost--keep-commands)
     (drgnx-ai-ghost--clear)
     (when drgnx-ai-ghost--request (drgnx-ai-cancel drgnx-ai-ghost--request) (setq drgnx-ai-ghost--request nil)))
-  (when (timerp drgnx-ai-ghost--timer) (cancel-timer drgnx-ai-ghost--timer))
-  (when (and drgnx-ai-ghost-mode (not drgnx-ai-ghost--text))
-    (let ((buf (current-buffer)))
-      (setq drgnx-ai-ghost--timer
-            (run-with-idle-timer drgnx-ai-ghost-delay nil
-                                 ;; the buffer on screen, whatever is current (the timer may fire inside a wait)
-                                 (lambda () (when (and (buffer-live-p buf) (eq buf (window-buffer (selected-window))))
-                                              (with-current-buffer buf
-                                                (with-demoted-errors "AI completion: %S" (drgnx-ai-ghost--trigger))))))))))
+  (let ((key (cons 'ai-ghost (current-buffer))))
+    (if (and drgnx-ai-ghost-mode (not drgnx-ai-ghost--text))
+        (drgnx-timer-debounce key drgnx-ai-ghost-delay #'drgnx-ai-ghost--pause
+                              :args (list (current-buffer)) :idle t :owner (current-buffer))
+      (drgnx-timer-cancel key))))
 
 (define-minor-mode drgnx-ai-ghost-mode
   "Ghost-text completion from the `complete' role; Tab is `drgnx-ai-tab'."
@@ -206,6 +210,7 @@ process changed it and no command cleared the suggestion."
 
 ;;;; The Tab arbiter
 
+(declare-function project-root "project")
 (declare-function org-at-heading-p "org")
 (declare-function outline-on-heading-p "outline")
 
@@ -418,6 +423,10 @@ when the project has one.")
   (mapconcat (lambda (l) (if (> (length l) drgnx-ai--line-max) (substring l 0 drgnx-ai--line-max) l))
              (split-string text "\n") "\n"))
 
+(defun drgnx-ai--grep-cut (proc)
+  "The search's time limit (the timer's function): end PROC, which then answers with no context."
+  (when (process-live-p proc) (process-put proc :cut t) (delete-process proc)))
+
 (defun drgnx-ai--grep-retriever (question root done)
   "Files under ROOT holding the most of QUESTION's keywords (ripgrep, else grep), a snippet of each, to DONE.
 Returns the search process (or nil), so that a stopped Ask can end it.  A search still running after
@@ -437,14 +446,13 @@ Returns the search process (or nil), so that a stopped Ask can end it.  A search
                         (seq-mapcat (lambda (k) (list "-e" k)) kws) (list "{}" "+")))))
     (if (null kws) (progn (kill-buffer out) (funcall done nil) nil)
       (let* ((default-directory (file-name-as-directory root))
-             (timer nil)
              (proc
               (make-process
                :name "drgnx-ai-grep" :buffer out :command cmd :noquery t :connection-type 'pipe
                :sentinel
                (lambda (p _)
                  (unless (process-live-p p)
-                   (when (timerp timer) (cancel-timer timer))
+                   (drgnx-timer-cancel-owner p)
                    (let ((hits (make-hash-table :test #'equal)))
                      (with-current-buffer out
                        (goto-char (point-min))
@@ -473,8 +481,8 @@ Returns the search process (or nil), so that a stopped Ask can end it.  A search
                                                             (drgnx-ai--cut-lines
                                                              (buffer-substring-no-properties (point) (progn (forward-line 10) (point))))))))
                                           ranked)))))))))))
-        (setq timer (run-with-timer drgnx-ai-search-timeout nil
-                                    (lambda () (when (process-live-p proc) (process-put proc :cut t) (delete-process proc)))))
+        (drgnx-timer-start (cons 'ai-grep proc) drgnx-ai-search-timeout #'drgnx-ai--grep-cut
+                           :args (list proc) :owner proc)
         proc))))
 
 (defun drgnx-ai--open-source (file line)
@@ -579,14 +587,24 @@ and keep it in ai.eld (never a key)."
 
 ;;;; The module
 
+(defun drgnx-ai-ui--teardown ()
+  "Turned off: ghost text leaves every buffer it is on, with its suggestion, and a pause asks for none (each
+buffer's pending pause, a layer key the buffer owns, is cancelled).  The hook, the keys of a showing suggestion and
+the commands go with the cleanup stack; the probe's timer ends with the module's run."
+  (dolist (b (buffer-list))
+    (drgnx-timer-cancel (cons 'ai-ghost b))
+    (with-current-buffer b (when drgnx-ai-ghost-mode (drgnx-ai-ghost-mode -1)))))
+
 (drgnx-module-define 'tools/ai
                      :doc "AI: ghost-text completion in code buffers (the `complete' role) and one Tab for everything."
                      :stage 'startup :requires '(core/workbench)
+                     :teardown #'drgnx-ai-ui--teardown
                      :setup
                      (lambda ()
+                       (add-to-list 'emulation-mode-map-alists 'drgnx-ai-ghost--emulation)   ; a suggestion's keys
                        (add-hook 'prog-mode-hook #'drgnx-ai-ghost--maybe-enable)
                        ;; which providers run here: asked once Emacs is idle, never while it works
-                       (run-with-idle-timer 2 nil (lambda () (drgnx-ai-probe nil)))
+                       (drgnx-timer-start 'ai-probe 2 #'drgnx-ai-probe :args '(nil) :idle t)
                        (pcase-dolist (`(,id ,title ,fn ,doc ,map)
                                       '((ai-accept "Accept Suggestion" drgnx-ai-accept "Insert the whole suggestion" nil)
                                         (ai-accept-word "Accept Suggestion Word" drgnx-ai-accept-word "Insert its next word"

@@ -237,11 +237,10 @@
     (let ((s (drgnx-agents--make :id "s-x" :name "x" :cwd repo :status 'busy)))
       (drgnx-hub--session-events s)
       (should (gethash "s-x" drgnx-hub--event-state))
-      (should (timerp drgnx-hub--events-timer))
+      (should (drgnx-timer-active-p 'hub-events))
       (drgnx-hub-stop)
       (should (zerop (hash-table-count drgnx-hub--event-state)))
-      (should-not drgnx-hub--events-timer)
-      (should-not (seq-find (lambda (tm) (eq (timer--function tm) #'drgnx-hub--events-send)) timer-list)))))
+      (should-not (drgnx-timer-active-p 'hub-events)))))
 
 (ert-deftest drgnx-hub-events/a-job-agent-s-allowed-write-is-an-edit ()
   (drgnx-job-run-test--with "# P\n\n### Task 1: one\n"

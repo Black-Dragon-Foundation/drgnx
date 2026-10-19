@@ -70,9 +70,36 @@ window (its terminal is \"/dev/pts/9\").  `messages' collects what `message' say
         (should-not focused)
         (should (equal messages '("Restored into the graphical window")))))))
 
+(ert-deftest drgnx-persist/restore-from-a-terminal-frame ()
+  ;; Question 1 (the user, 2026-10-18): the store says which frame is the graphical one; the layout goes into it,
+  ;; the terminal frame is not touched, focus stays, and the echo area says where it went.  With none, the command
+  ;; says it works only in a graphical window.
+  (tty-persist-test--with dir
+    (tty-persist-test--write drgnx-persist-file '(:version 2 :frames ((:role main :groups ((:tabs nil))))))
+    (let (restored-in focused)
+      (cl-letf (((symbol-function 'drgnx-state-frame-kind) (lambda (f) (if (eq f 'gui-frame) 'gui 'tty)))
+                ((symbol-function 'frame-list) (lambda () (list (selected-frame) 'gui-frame)))
+                ((symbol-function 'select-frame-set-input-focus) (lambda (f &rest _) (push f focused)))
+                ((symbol-function 'select-frame) (lambda (f &optional _) (push f selected) f))
+                ((symbol-function 'frame-live-p) (lambda (f) (and f t)))
+                ((symbol-function 'frame-parameter) (lambda (&rest _) nil))
+                ((symbol-function 'set-frame-parameter) #'ignore)
+                ((symbol-function 'drgnx-state-sync) #'ignore)
+                ((symbol-function 'drgnx-persist--restore-frame)
+                 (lambda (_st) (setq restored-in (car selected)) t)))
+        (should (drgnx-persist-restore))
+        (should (eq restored-in 'gui-frame))
+        (should-not focused)
+        (should (equal messages '("Restored into the graphical window")))
+        (setq messages nil restored-in nil)
+        (cl-letf (((symbol-function 'frame-list) (lambda () (list (selected-frame)))))
+          (should-not (drgnx-persist-restore)))
+        (should-not restored-in)
+        (should (equal messages (list tty-persist-test--message)))))))
+
 (defmacro tty-persist-test--with-home (dir &rest body)
   "Like `tty-persist-test--with', but the selected frame is on the initial terminal (batch Emacs's, a daemon's
-first), so no terminal guard applies."
+first; the store calls it `initial'), so no terminal guard applies."
   (declare (indent 1))
   `(let* ((,dir (file-name-as-directory (make-temp-file "drgnx-tty-persist" t)))
           (drgnx-persist-file (expand-file-name "state.eld" ,dir))
@@ -80,6 +107,7 @@ first), so no terminal guard applies."
      (unwind-protect
          (cl-letf (((symbol-function 'message)
                     (lambda (fmt &rest args) (push (apply #'format fmt args) messages) nil))
+                   ((symbol-function 'drgnx-state-frame-kind) (lambda (f) (and (framep f) 'initial)))
                    ((symbol-function 'select-frame-set-input-focus) #'ignore))
            ,@body)
        (delete-directory ,dir t))))
@@ -109,18 +137,16 @@ first), so no terminal guard applies."
         (should (equal messages '("drgnx: a window was not restored: no graphical display")))))))
 
 (ert-deftest drgnx-persist/the-graphical-frame-is-never-a-child-frame ()
-  (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
-            ((symbol-function 'frame-list) (lambda () (list (selected-frame) 'top)))
-            ((symbol-function 'frame-parent) (lambda (&optional f) (and (not (eq f 'top)) 'parent))))
+  (cl-letf (((symbol-function 'frame-list) (lambda () (list (selected-frame) 'top)))
+            ((symbol-function 'drgnx-state-frame-kind) (lambda (f) (if (eq f 'top) 'gui 'child))))
     (should (eq (drgnx-persist--gui-frame) 'top))))
 
 (ert-deftest drgnx-persist/the-last-graphical-window-closing-still-saves-from-a-terminal-selection ()
   ;; a client closing its last graphical windows saves them all, though a terminal window is the selected frame
   (tty-persist-test--with dir
     (let (saved (drgnx-persist--saved-at-exit nil))
-      (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional f) (eq f 'gui-frame)))
+      (cl-letf (((symbol-function 'drgnx-state-frame-kind) (lambda (f) (and (eq f 'gui-frame) 'gui)))
                 ((symbol-function 'frame-live-p) (lambda (f) (and f t)))
-                ((symbol-function 'frame-parent) (lambda (&optional _) nil))
                 ((symbol-function 'frame-list) (lambda () '(gui-frame)))
                 ((symbol-function 'frame-parameter) (lambda (_f p) (and (eq p 'client) 'proc)))
                 ((symbol-function 'drgnx-persist--frames) (lambda () '(gui-frame)))

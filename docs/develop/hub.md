@@ -14,7 +14,11 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   environment (under systemd only named variables pass, `--setenv=NAME`, so no value is in a command line) and never
   a provider key: a systemd unit keeps its environment where `systemctl --user show` prints it, and the detached
   launcher passes the starting Emacs's environment on, so `drgnx-hub-ensure` unsets every provider's `:key-env` for
-  it. Keys come over the socket instead (`gateway/keys`, below).
+  it. Keys come over the socket instead (`gateway/keys`, below). Its `PATH` is the starting Emacs's, until an Emacs
+  that read the user's login shell (`core/drgnx-shell-env.el`, at start and Shell: Reload Environment) finds `PATH`
+  changed and sends `env/set`: the hub applies it to its own `process-environment` and `exec-path`, so the agents and
+  jobs it starts next (`drgnx-jobs` passes `PATH` on to systemd-run) get it. It is never restarted for that: a
+  restart would end its durable sessions.
   Its main loop is `accept-process-output` plus the event drain batch Emacs needs (queued events hold back
   sentinels). SIGTERM or `shutdown` removes its socket. It starts with SIGPIPE ignored (`trap '' PIPE`): the
   editing Emacs that launches it does not ignore it, and a write to a connection an agent closed must be an error,
@@ -23,6 +27,11 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   agent's children, and a write to a pipe whose reader left would otherwise end the server.
 - **The gateway** (`core/drgnx-gateway.el`) runs inside the hub: never in the editing Emacs, so streaming cannot
   touch the keystroke budget.
+  Besides the 127.0.0.1 port it can listen on **per-session Unix sockets** (`drgnx-gateway-listen-socket PATH`, for
+  agents in a sandbox without the host's loopback; the caller picks PATH, `gateway.sock` in the session's private
+  directory beside `mcp.sock` and `hub.sock`). Same filter, path allowlist and token check as the port; the socket
+  is mode 0600 and a stale file at PATH is replaced. `drgnx-gateway-close-socket PATH` (and `drgnx-gateway-stop`)
+  cuts the connections on it, with their upstream requests, and removes the file.
 - **curl**, one per forwarded request, reads its config on stdin (`-K -`): the URL, the provider's key header and the
   request body never appear in its argv.
   The config has `suppress-connect-headers`: behind an HTTPS proxy curl's `include` would otherwise print the
@@ -50,6 +59,7 @@ coordination server's `coord/notify` checks the same. One JSON object per line:
 | `gateway/register` `{job, task, agent, chain: [[provider, model-or-null]…], budget, keys: {provider: key}, owner, openrouter}` | `{token, url, openrouter}` (the restrictions kept; absent when none; restrictions that do not read are an error) |
 | `gateway/unregister` `{token}` | `true` |
 | `gateway/keys` `{keys: {provider: key}}` | `true`: the keys go to the gateway's memory |
+| `env/set` `{env: {NAME: value}}` | `true`: the names `drgnx-shell-env-names` allows (never a key, `drgnx-shell-env-refused-p`) go into the hub's environment (`drgnx-shell-env-apply`: `PATH` merged, the sender's dirs first) |
 | `spend` `{job?, task?, agent?}` | `{input, output, cost, requests}` |
 | `shutdown` | `true`, then the hub exits |
 
@@ -115,6 +125,8 @@ inherits: a hub whose parent is gone exits (checked each second), so an interrup
 
 ## Events
 
+The hub's own timers are layer timers keyed `hub-tick`, `hub-deliver`, `(hub-flush . ID)`, `hub-events` and `hub-exit` ([core.md](core.md#the-acp-watchdog-and-the-hubs-timers)): a burst of session changes delivers once, and `events` go at most every `drgnx-hub-events-interval`.
+
 The hub turns what happens into events in the store's event log ([coordination.md](coordination.md), `event`):
 
 - **Native sessions** (`drgnx-hub--session-events`, on each change of a session):
@@ -156,18 +168,65 @@ On each change to a session the hub keeps `<state>/hub/sessions.eld` (mode 0600,
 only when it differs): `(:id :name :profile :cwd :acp-id :task)` of each live session the agent made, oldest first —
 not a job's (a job frees the task of an agent the hub took with it and starts it again). A hub that starts, once it
 serves, resumes each with `drgnx-agents-take-over` (ACP `session/load`) under its own id and name (messages and
-spend follow them); a file that is not a list of sessions is logged and resumes none: the agent replays the
+spend follow them); a file that cannot be read, or is not a list of sessions, is copied aside
+(`sessions.eld.bak-…`, `drgnx-file-backup`), logged in one line and resumes none (the next save replaces it, the
+backup keeps the bytes): the agent replays the
 history into the transcript and the session is idle; an editor that reconnects fetches it again (`agents/get`). A
 session whose agent cannot load sessions (no `loadSession`, or an error) ends and says why, and so leaves the file.
 What was in flight is gone: a turn that was running, the queue, a pending permission or edit.
+
+## Per-session sockets
+
+A sandboxed session's agent reaches drgnx's MCP servers through a dir of its own, served by the hub
+(`core/drgnx-sandbox-mcp.el`). The agent's side, the bridge, is in [sandbox.md](sandbox.md#mcp-through-a-socket).
+
+- **Where.** `(drgnx-sandbox-mcp-dir SID)` is `s/SID` beside the hub's socket: `$XDG_RUNTIME_DIR/drgnx/s/SID`, or
+  `s/SID` beside the hub socket's fallback place. These are the dirs of `drgnx-sandbox-sessions-dirs`, so the sandbox
+  may bind it as its `:run` (`/run/drgnx` inside on Linux, its own path on macOS). Each level is made by
+  `drgnx-hub--private-dir`: mode 0700, this user's, never a link. SID is a name (letters, digits, `-`, `_`), never a
+  path. A socket's path there must fit 103 bytes, or there is no dir.
+- **Sockets.** `(drgnx-sandbox-mcp-open S &optional SEARCH)` listens on `mcp.sock` (coordination) and, when SEARCH
+  is given, on `search.sock`. SEARCH is the job's project root, given by name and spelled as its index is: a value
+  that is not a string, a root that is S's folder or lies inside it, or a folder the VC guard lists
+  (`drgnx-sandbox-vc-guarded-p`, or inside one), is an error, because the search server runs
+  git in its root and nothing outside the sandbox runs git in a task folder. The search server is **pinned** to that
+  root (`DRGNX_SEARCH_PINNED=1`): a `path` argument outside it is refused, and one inside it searches the root, so
+  no git runs where the agent points and no other project's index is read (`drgnx-search-mcp--pinned-root`). It sets
+  S's `mcp-dir` and returns the dir. `hub.sock` is kept in the same dir for the hub protocol's agent class, which is
+  not served yet.
+- **One server per connection, outside the sandbox.** The hub starts the server of `drgnx-coord-mcp-server-spec`
+  (or `drgnx-search-mcp-server-spec`) as a child of its own. Its environment is the hub's, with `DRGNX_AGENT` = S's
+  id, `DRGNX_JOB` and `DRGNX_TASK` = S's, and the data-dir variables set from the spec. The hub's own
+  `DRGNX_AGENT`, `DRGNX_AGENT_KIND`, `DRGNX_JOB` and `DRGNX_TASK` are unset. The server works in the session's dir,
+  never in the task folder: the coordination server runs git where it starts. Its stdio is spliced to the
+  connection. **The socket a connection comes in on is the identity.**
+- **Every byte from the socket is hostile.** Lines are split linearly (`drgnx-mcp-bridge--feed`). A line over
+  `drgnx-mcp-bridge-max-line` (16 MiB), or one that is not a JSON object, closes the connection and ends its server,
+  unforwarded. Writes either way go through the hub clients' queue (`drgnx-hub--enqueue`): a side that stops reading
+  for `drgnx-hub-client-stuck-after` seconds, or past `drgnx-hub-client-max-queued` bytes, is dropped. A socket
+  serves at most `drgnx-sandbox-mcp-max-connections` (4) connections at once; more are closed as they come.
+- **Ends.** A connection that closes ends its server; a server that ends closes its connection. The session's end
+  (its agent exits, or `drgnx-agents-kill`) calls `(drgnx-sandbox-mcp-close S)`: every server and connection, the
+  listeners and the dir go.
+- **What the agent gets.** `(drgnx-sandbox-mcp-server-specs S INSIDE-DIR)` gives the `mcpServers` entries `drgnx`
+  and, when `search.sock` listens, `drgnx-search`. Each runs `drgnx-mcp-bridge-command` on its socket in INSIDE-DIR,
+  with an empty `env`. `drgnx-agents--mcp-servers` gives them instead of the stdio servers when S's `mcp-dir` is set.
+  Every other session, interactive agents included, keeps the stdio servers.
+
+Tests: `test/unit/sandbox-mcp-test.el` (`drgnx-sandbox-mcp/`).
 
 ## Registrations
 
 `gateway/register` returns a token of 64 hex digits (32 bytes of `/dev/urandom`). The hub keeps
 `<state>/hub/registrations.eld` (mode 0600): `((SHA256-OF-TOKEN . REGISTRATION)…)` — never a token, never a key —
-written to a temporary file beside it, synced to disk (`write-region-inhibit-fsync` nil; the directory is not
-synced, which Emacs cannot do) and renamed over it (a hub or a machine that dies mid-write leaves the old one whole), and
-reads it back when it starts (a file it cannot read is logged: those agents register again); it also keeps the gateway's port (`<state>/hub/port`) and binds it again, so agents
+written by `drgnx-hub--write-private` = `drgnx-file-write` with `:private t` (a temporary file beside it, synced to
+disk — the directory is not synced, which Emacs cannot do — and renamed over it, so a hub or a machine that dies
+mid-write leaves the old one whole; an old file loses its group and other bits; content over 1 MiB or not plain data is
+refused and the file untouched), and
+reads it back with `drgnx-file-read` when it starts (a file it cannot read is copied aside as
+`registrations.eld.bak-…` and logged in one line: those agents register again). Both files and the port file are
+read and written by the hub only; the hub's pid file (`drgnx-hub--take-lock`) is its own lock protocol and stays
+outside the layer. It also keeps the gateway's port (`<state>/hub/port`, written with `drgnx-file-write-text`) and binds it again, so agents
 keep working across a hub restart (when the port is taken meanwhile, a new one is used and the log says so). A
 session's token is unregistered when its agent exits or is killed. Tokens have no expiry; instead a registration
 names its `owner`, the pid of the Emacs that registered it (`drgnx-agents--gateway` sends its own: the agent is its

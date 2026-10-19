@@ -19,6 +19,8 @@
 (require 'subr-x)
 (require 'package)
 (require 'drgnx-paths)
+(require 'drgnx-file)
+(require 'drgnx-config)
 (require 'drgnx-face-state)
 (require 'drgnx-modules)
 (require 'drgnx-pkg-activate)
@@ -43,24 +45,61 @@ still takes a lower priority archive's package when only it satisfies a requirem
 
 (defun drgnx-pkg--error (fmt &rest args) (signal 'drgnx-pkg-error (list (apply #'format fmt args))))
 
-(defun drgnx-pkg--read-file (file)
-  "The first form of FILE, nil when FILE does not exist; an unreadable FILE is a `drgnx-pkg-error'."
-  (when (file-exists-p file)
-    (condition-case err
-        (with-temp-buffer (insert-file-contents file) (read (current-buffer)))
-      (error (drgnx-pkg--error "%s is unreadable (%s); fix or remove it" file (error-message-string err))))))
+(defun drgnx-pkg--mistake (file line text)
+  "Signal a `drgnx-pkg-error': FILE has a mistake (at LINE, when known): TEXT."
+  (drgnx-pkg--error "%s has a mistake%s: %s" (abbreviate-file-name file) (if line (format " at line %d" line) "") text))
 
-(defun drgnx-pkg--write-file (file header data)
-  "Write DATA to FILE (atomically: a temp file .FILE.tmp-* renamed over it), after the comment HEADER.
-A write that stops half way leaves no temp file."
-  (make-directory (file-name-directory file) t)
-  (let ((tmp (make-temp-file (expand-file-name (concat "." (file-name-nondirectory file) ".tmp-") (file-name-directory file)))))
-    (unwind-protect
-        (progn (with-temp-file tmp
-                 (insert ";; " header "\n")
-                 (let ((print-length nil) (print-level nil)) (pp data (current-buffer))))
-               (rename-file tmp file t))
-      (ignore-errors (delete-file tmp)))))
+(defun drgnx-pkg--read-file (file)
+  "The first form of FILE, nil when FILE does not exist; a FILE with a mistake is a `drgnx-pkg-error'."
+  (let* ((r (drgnx-file-read file)) (p (plist-get r :problem)))
+    (when (eq (plist-get r :status) 'unreadable)
+      (drgnx-pkg--mistake file (plist-get p :line) (plist-get p :text)))
+    (plist-get r :data)))
+
+;;;; The config files: packages.eld and drgnx.lock.eld (docs/develop/core.md, "Config files: drgnx-config")
+
+(defun drgnx-pkg--lock-entry-p (entry)
+  "Whether ENTRY is a lock entry: (NAME :version … ), NAME a symbol and the rest a keyword plist (`:version' a string)."
+  (and (consp entry) (car entry) (symbolp (car entry)) (not (keywordp (car entry)))
+       (let ((rest (cdr entry)))
+         (and (proper-list-p rest) (cl-evenp (length rest))
+              (cl-loop for (key) on rest by #'cddr always (keywordp key))
+              (let ((version (plist-get rest :version))) (or (null version) (stringp version)))))))
+
+;; The schema fits what packages.eld always accepted (docs/guide/packages.md): a Git source's :url may be a local path
+;; or an ssh address, an archive's a directory, a priority any number, and :rev and :lisp-dir are the keys the guide teaches.
+(drgnx-config-define 'packages
+                     :file "packages.eld" :shape 'plist :version 1 :reload 'start :last-good nil
+                     :schema '(plist (:packages (list-of symbol) "Packages to install besides the modules'")
+                                     (:git (alist symbol (plist (:url string "Where the repository is")
+                                                                (:rev string "A branch, a tag or a commit")
+                                                                (:commit string "The commit to install")
+                                                                (:lisp-dir string "Where the package's files are")))
+                                           "Packages no archive has, installed from their repository")
+                                     (:archives (alist string string) "The archives: name and URL or directory")
+                                     (:archive-priorities (alist string number) "Which archive wins: name and priority"))
+                     :default nil
+                     :on-mistake "drgnx sync stops until it is fixed; nothing is changed"
+                     :doc "The packages you want besides the modules', their sources and archives.  Read at each drgnx sync; a mistake in it stops the sync (nothing is applied or replaced).")
+
+(drgnx-config-define 'lock
+                     :file "drgnx.lock.eld" :shape 'plist :version 1 :last-good nil
+                     :schema '(plist (:packages (list-of (pred drgnx-pkg--lock-entry-p
+                                                               "(NAME :version :archive :kind :file :sha256 :size :requires :summary)"))
+                                                "What is installed: one entry per package" :required t)
+                                     (:from-shipped boolean "Copied from the lock drgnx ships; the first sync completes it"))
+                     :default '(:packages nil)
+                     :on-mistake "drgnx sync stops until it is fixed; nothing is changed"
+                     :header ";; drgnx package lock — written by drgnx sync; commit it with your config\n"
+                     :doc "Every installed package, pinned by drgnx sync.  A mistake in it stops the sync, and drgnx never replaces the file.")
+
+(defun drgnx-pkg--config (name &optional fresh)
+  "Config file NAME's applied value (FRESH: after reading the file again).  A mistake in the file is a
+`drgnx-pkg-error': a sync stops, and nothing is ever replaced."
+  (when fresh (drgnx-config-reread name))
+  (when-let* ((p (drgnx-config-problem name)))
+    (drgnx-pkg--mistake (plist-get p :file) (plist-get p :line) (plist-get p :text)))
+  (drgnx-config-get name))
 
 (defun drgnx-pkg--bytes (file)
   (with-temp-buffer (set-buffer-multibyte nil) (insert-file-contents-literally file) (buffer-string)))
@@ -91,65 +130,94 @@ Read, never run."
   "Alist MODULE → packages of every `drgnx-module-define' in DIR's files — read, never run."
   (mapcar (lambda (m) (cons (car m) (plist-get (cdr m) :packages))) (drgnx-pkg--module-specs dir)))
 
-(defun drgnx-pkg--packages-eld () (drgnx-pkg--read-file (expand-file-name "packages.eld" (drgnx-user-dir))))
+(defun drgnx-pkg--packages-eld (&optional fresh)
+  "packages.eld's applied value (FRESH: read the file again, as each sync does); a mistake in it is a `drgnx-pkg-error'."
+  (drgnx-pkg--config 'packages fresh))
 
 (defun drgnx-pkg-manifest (&optional modules-dir)
   "The packages drgnx needs, sorted: every enabled module's :packages (MODULES-DIR, default drgnx's
 modules/; one that is off until chosen counts once modules.eld :enabled lists it), packages.eld's
-:packages and :git, and those use-package :ensure asked for in a session."
-  (let ((names (append (seq-mapcat (lambda (m) (plist-get (cdr m) :packages))
-                                   (seq-remove (lambda (m) (drgnx-module-disabled-p (car m) (plist-get (cdr m) :default)))
-                                               (drgnx-pkg--module-specs
-                                                (or modules-dir (expand-file-name "modules" drgnx-dir)))))
-                       (plist-get (drgnx-pkg--packages-eld) :packages)
-                       (mapcar #'car (plist-get (drgnx-pkg--packages-eld) :git))
-                       (ignore-errors (drgnx-pkg--read-file (drgnx-pkg-wanted-file))))))
+:packages and :git, and those use-package :ensure asked for in a session.  packages.eld is read again."
+  (let* ((eld (drgnx-pkg--packages-eld t))
+         (names (append (seq-mapcat (lambda (m) (plist-get (cdr m) :packages))
+                                    (seq-remove (lambda (m) (drgnx-module-disabled-p (car m) (plist-get (cdr m) :default)))
+                                                (drgnx-pkg--module-specs
+                                                 (or modules-dir (expand-file-name "modules" drgnx-dir)))))
+                        (plist-get eld :packages)
+                        (mapcar #'car (plist-get eld :git))
+                        (ignore-errors (drgnx-pkg--read-file (drgnx-pkg-wanted-file))))))
     (sort (delete-dups (seq-filter #'symbolp names)) (lambda (a b) (string< a b)))))
 
 (defun drgnx-pkg-archives ()
-  "The archives: packages.eld's :archives, else `drgnx-pkg-default-archives'."
-  (let ((p (drgnx-pkg--packages-eld)))
+  "The archives: packages.eld's :archives, else `drgnx-pkg-default-archives'.  packages.eld is read again."
+  (let ((p (drgnx-pkg--packages-eld t)))
     (if (plist-member p :archives) (plist-get p :archives) drgnx-pkg-default-archives)))
 
 (defun drgnx-pkg-archive-priorities ()
   "packages.eld's :archive-priorities when it has the key (even empty: the user's own choice), else
 `drgnx-pkg-default-archive-priorities' — unless packages.eld names its own :archives: package.el ranks an archive
 not listed below every listed one, so the default would put theirs under MELPA.  Their ranking is theirs to say.
-A value that is not an alist (ARCHIVE-NAME . NUMBER) is a `drgnx-pkg-error'."
-  (let ((p (drgnx-pkg--packages-eld)))
-    (cond ((plist-member p :archive-priorities)
-           (let ((v (plist-get p :archive-priorities)))
-             (unless (and (listp v) (seq-every-p (lambda (x) (and (consp x) (stringp (car x)) (numberp (cdr x)))) v))
-               (drgnx-pkg--error "packages.eld: :archive-priorities must be an alist of (\"archive-name\" . NUMBER), e.g. ((\"gnu\" . 3) (\"melpa\" . 1))"))
-             v))
+A value that is not an alist (ARCHIVE-NAME . NUMBER) is a mistake in packages.eld, a `drgnx-pkg-error'.
+packages.eld is read again."
+  (let ((p (drgnx-pkg--packages-eld t)))
+    (cond ((plist-member p :archive-priorities) (plist-get p :archive-priorities))
           ((plist-member p :archives) nil)
           (t drgnx-pkg-default-archive-priorities))))
 
 ;;;; Lock
 
-(defun drgnx-pkg-lock-file () (expand-file-name "drgnx.lock.eld" (drgnx-user-dir)))
+(defun drgnx-pkg-lock-file () (drgnx-config-file 'lock))
 
 (defun drgnx-pkg--read-lock-file (file)
-  "The entries of the lock FILE, nil when there is none; one that is not a lock is a `drgnx-pkg-error'."
-  (let ((data (drgnx-pkg--read-file file)))
-    (cond ((null data) nil)
-          ((and (eql (plist-get data :version) 1) (listp (plist-get data :packages))) (plist-get data :packages))
-          (t (drgnx-pkg--error "%s is not a drgnx lock (version 1)" file)))))
+  "The entries of the lock FILE (a lock drgnx ships, say), nil when there is none; one with a mistake, or not a
+version 1 lock, is a `drgnx-pkg-error'."
+  (let* ((r (drgnx-file-read file)) (p (plist-get r :problem)) (data (plist-get r :data)))
+    (when (eq (plist-get r :status) 'unreadable)
+      (drgnx-pkg--mistake file (plist-get p :line) (plist-get p :text)))
+    (when data
+      (when-let* ((bad (drgnx-schema-check (plist-get (drgnx-config-definition 'lock) :schema) data)))
+        (drgnx-pkg--mistake file nil (format "%s%s" (if (car bad) (format "%S: " (car bad)) "") (cdr bad))))
+      (unless (memq (plist-get data :version) '(nil 1))
+        (drgnx-pkg--mistake file nil (format "version %S is not a drgnx lock this drgnx reads (version 1)" (plist-get data :version))))
+      (plist-get data :packages))))
 
 (defun drgnx-pkg-read-lock ()
   "The lock: entries (NAME :version :archive :kind :file :sha256 :size :requires :summary), sorted; nil when
-there is none.  An unreadable lock is a `drgnx-pkg-error' (never silently replaced)."
-  (drgnx-pkg--read-lock-file (drgnx-pkg-lock-file)))
+there is none.  A lock with a mistake is a `drgnx-pkg-error' (never silently replaced)."
+  (plist-get (drgnx-pkg--config 'lock) :packages))
 
-(defun drgnx-pkg--write-lock-file (file header entries &optional marks)
-  "ENTRIES as the lock FILE, after the comment HEADER; MARKS: more of its plist (:from-shipped t)."
-  (drgnx-pkg--write-file file header (append (list :version 1) marks
-                                             (list :packages (sort (copy-sequence entries)
-                                                                   (lambda (a b) (string< (car a) (car b))))))))
+(defun drgnx-pkg--ensure-lock-writable ()
+  "A `drgnx-pkg-error' when the lock has a mistake or a newer drgnx wrote it: a sync that could not write it stops now."
+  (condition-case err (drgnx-config-ensure-writable 'lock)
+    (drgnx-config-refused (drgnx-pkg--error "%s" (error-message-string err)))))
+
+(defun drgnx-pkg--sorted-entries (entries)
+  (sort (copy-sequence entries) (lambda (a b) (string< (car a) (car b)))))
+
+(defun drgnx-pkg--update-lock (fn)
+  "`drgnx-config-update' of the lock with FN; a refusal (a mistake, a newer drgnx, a busy lock) is a `drgnx-pkg-error'."
+  (condition-case err (drgnx-config-update 'lock fn)
+    ((drgnx-config-refused drgnx-file-refused drgnx-file-busy) (drgnx-pkg--error "%s" (error-message-string err)))))
+
+(defun drgnx-pkg--write-lock-file (file header entries)
+  "ENTRIES as the lock FILE (a lock drgnx ships, written by `drgnx lock --ship'), after the comment HEADER."
+  (drgnx-file-write file (list :version 1 :packages (drgnx-pkg--sorted-entries entries))
+                    :header (concat ";; " header) :pretty t))
 
 (defun drgnx-pkg-write-lock (entries)
-  (drgnx-pkg--write-lock-file (drgnx-pkg-lock-file) "drgnx package lock — written by drgnx sync; commit it with your config"
-                              entries))
+  "Make ENTRIES the lock's packages: only `:packages' is replaced (and the mark `:from-shipped' taken out); the
+comments and keys the user put in the file stay."
+  (let ((sorted (drgnx-pkg--sorted-entries entries)))
+    (drgnx-pkg--update-lock
+     (lambda (data)
+       (if (null data) (list :packages sorted)
+         (let (out)
+           (while data
+             (let ((key (pop data)) (value (pop data)))
+               (cond ((eq key :from-shipped))
+                     ((eq key :packages) (push key out) (push sorted out))
+                     (t (push key out) (push value out)))))
+           (nreverse out)))))))
 
 (defvar drgnx-pkg-shipped-lock nil
   "The known-good lock drgnx ships (a file), which a first sync starts from; nil: etc/drgnx.lock.eld in drgnx.")
@@ -158,12 +226,11 @@ there is none.  An unreadable lock is a `drgnx-pkg-error' (never silently replac
   (or drgnx-pkg-shipped-lock (expand-file-name "etc/drgnx.lock.eld" drgnx-dir)))
 
 (defun drgnx-pkg--start-from-shipped-lock ()
-  "With no lock yet (a new user), the shipped lock becomes the user's (written whole, atomically), marked
-:from-shipped until a sync writes it: its pins are soft then (`drgnx-pkg-sync')."
+  "With no lock yet (a new user), the shipped lock becomes the user's, marked :from-shipped until a sync writes it:
+its pins are soft then (`drgnx-pkg-sync').  A lock that is there, whatever it holds, is left alone."
   (when (and (not (file-exists-p (drgnx-pkg-lock-file))) (file-exists-p (drgnx-pkg-shipped-lock-file)))
-    (drgnx-pkg--write-lock-file (drgnx-pkg-lock-file)
-                                "drgnx package lock — copied from the one drgnx ships; the first drgnx sync completes it"
-                                (drgnx-pkg--read-lock-file (drgnx-pkg-shipped-lock-file)) '(:from-shipped t))))
+    (let ((entries (drgnx-pkg--sorted-entries (drgnx-pkg--read-lock-file (drgnx-pkg-shipped-lock-file)))))
+      (drgnx-pkg--update-lock (lambda (data) (or data (list :from-shipped t :packages entries)))))))
 
 (defun drgnx-pkg--shipped-extras (lock)
   "The shipped lock's entries for packages that LOCK (the user's) lacks and that are not installed: the soft
@@ -173,7 +240,7 @@ pins of a module turned on after the first sync.  An installed package the lock 
 
 (defun drgnx-pkg--lock-from-shipped-p ()
   "Is the user lock still the shipped one, copied by a first sync that has not completed?"
-  (plist-get (ignore-errors (drgnx-pkg--read-file (drgnx-pkg-lock-file))) :from-shipped))
+  (plist-get (ignore-errors (drgnx-pkg--config 'lock)) :from-shipped))
 
 (defun drgnx-pkg--lock-closure (names lock &optional with-built-ins)
   "NAMES that LOCK has, and every package their entries require that LOCK has too — not one a built-in package
@@ -341,8 +408,7 @@ should be restarted to use the new ones (the CLI says so)."
     (if (memq n gens) n (car gens))))
 
 (defun drgnx-pkg--set-current (n)
-  (make-directory (drgnx-generations-dir) t)
-  (write-region (number-to-string n) nil (drgnx-pkg--current-file) nil 'silent))
+  (drgnx-file-write-text (drgnx-pkg--current-file) (number-to-string n)))
 
 (defun drgnx-pkg-snapshot (&optional note)
   "Snapshot the packages directory and the lock as a new generation (written as N.tmp, then renamed);
@@ -356,8 +422,8 @@ keep the newest five.  Returns N."
         (drgnx-pkg--copy-dir (drgnx-elpa-dir) (expand-file-name "elpa" tmp))
       (make-directory (expand-file-name "elpa" tmp)))
     (when (file-exists-p (drgnx-pkg-lock-file)) (copy-file (drgnx-pkg-lock-file) (expand-file-name "drgnx.lock.eld" tmp) t))
-    (drgnx-pkg--write-file (expand-file-name "generation.eld" tmp) "drgnx generation"
-                           (list :time (format-time-string "%FT%T%z") :note note))
+    (drgnx-file-write (expand-file-name "generation.eld" tmp) (list :time (format-time-string "%FT%T%z") :note note)
+                      :header ";; drgnx generation" :pretty t)
     (rename-file (directory-file-name tmp) (directory-file-name dir))
     (drgnx-pkg--set-current n)
     (dolist (g (nthcdr drgnx-pkg-generations-kept (drgnx-pkg-generations)))
@@ -378,6 +444,8 @@ lock.  Files come back at the same path, so their native code stays valid.  Retu
         (drgnx-pkg--copy-dir (expand-file-name "elpa" dir) staging)
         (drgnx-pkg--swap-in staging)
         (let ((lock (expand-file-name "drgnx.lock.eld" dir)))
+          (when (memq (plist-get (drgnx-config-read 'lock) :status) '(problem newer))   ; one we cannot read or write is kept aside
+            (drgnx-file-backup (drgnx-pkg-lock-file)))
           (if (file-exists-p lock) (copy-file lock (drgnx-pkg-lock-file) t)
             (when (file-exists-p (drgnx-pkg-lock-file)) (delete-file (drgnx-pkg-lock-file)))))
         (drgnx-pkg--set-current n)
@@ -912,7 +980,8 @@ the lock records (`drgnx-pkg--restore-prepare'), else reported missing."
          lock installed new-entries generation pruned)
     (drgnx-pkg--with-sync-lock
       (unless (or upgrade seed) (drgnx-pkg--start-from-shipped-lock))   ; seeded versions are the user's choice
-      (setq lock (drgnx-pkg-read-lock))                 ; unreadable → error before anything changes
+      (setq lock (drgnx-pkg-read-lock))                 ; a mistake in it → error before anything changes
+      (drgnx-pkg--ensure-lock-writable)                 ; and so is one a newer drgnx wrote: it could not be written
       (drgnx-pkg--recover)
       (drgnx-pkg--sweep)
       (unwind-protect
@@ -1074,9 +1143,9 @@ with every module off.  The user's own files are never changed."
     (cl-flet ((try (on)
                 (delete-directory tmp t)
                 (if (file-directory-p user) (copy-directory user tmp nil t t) (make-directory tmp t))
-                (drgnx-pkg--write-file (expand-file-name "modules.eld" tmp) "drgnx bisect"
-                                       (plist-put (copy-sequence state) :disabled
-                                                  (append off (seq-difference candidates on))))
+                (drgnx-file-write (expand-file-name "modules.eld" tmp)
+                                  (plist-put (copy-sequence state) :disabled (append off (seq-difference candidates on)))
+                                  :header ";; drgnx bisect" :pretty t)
                 (funcall fails tmp)))
       (unwind-protect
           (progn
@@ -1114,8 +1183,7 @@ user's step (docs/guide/packages.md)."
                          "")
                        "Restart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n")))
     (when dir
-      (make-directory dir t)
-      (write-region unit nil (expand-file-name "drgnx.service" dir) nil 'silent))
+      (drgnx-file-write-text (expand-file-name "drgnx.service" dir) unit))
     unit))
 
 ;;;; Status (for the doctor)

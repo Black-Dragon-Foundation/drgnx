@@ -18,10 +18,10 @@
   (skip-unless (executable-find "git"))
   (let ((dir (file-name-as-directory (make-temp-file "drgnx-git-err" t)))
         (drgnx-git--roots (make-hash-table :test #'equal))
-        (drgnx-git--repos (make-hash-table :test #'equal))
         (drgnx-git-errors-max 200))
     (unwind-protect
         (progn
+          (drgnx-cache--clear 'git-status)
           (when (get-buffer " *drgnx git errors*") (kill-buffer " *drgnx git errors*"))
           (make-directory (expand-file-name ".git" dir))   ; not a repository: git fails, on stderr
           (dotimes (_ 3) (drgnx-git-refresh dir t) (drgnx-git-edge--drain))
@@ -37,9 +37,9 @@
   "BODY with DIR a fresh folder (trailing /) and empty git caches."
   (declare (indent 1))
   `(let ((,dir (file-name-as-directory (make-temp-file "drgnx-git-edge" t)))
-         (drgnx-git--roots (make-hash-table :test #'equal))
-         (drgnx-git--repos (make-hash-table :test #'equal)))
-     (unwind-protect (progn ,@body) (delete-directory ,dir t))))
+         (drgnx-git--roots (make-hash-table :test #'equal)))
+     (drgnx-cache--clear 'git-status)
+     (unwind-protect (progn ,@body) (drgnx-cache--clear 'git-status) (delete-directory ,dir t))))
 
 (defun drgnx-git-edge--commit (dir &rest files)
   "Make DIR a repository with FILES committed."
@@ -106,9 +106,9 @@
       (let ((new (expand-file-name (format "new-%02d.txt" i) dir)))
         (write-region "x\n" nil new nil 'silent)
         (drgnx-git-refresh dir t)
-        (should (plist-get (gethash dir drgnx-git--repos) :files))
+        (should (plist-get (drgnx-cache-get 'git-status dir) :files))
         (should (eq (drgnx-git-status new) 'untracked))
-        (should-not (process-live-p (plist-get (gethash dir drgnx-git--repos) :proc)))))
+        (should-not (process-live-p (plist-get (drgnx-cache-get 'git-status dir) :proc)))))
     (drgnx-git-edge--drain)
     (should-not (seq-filter (lambda (p) (string-prefix-p "drgnx-git" (process-name p))) (process-list)))))
 
@@ -140,7 +140,7 @@
     (unwind-protect (drgnx-git-refresh dir t)
       (advice-remove 'make-process #'drgnx-git-edge--git-ends-first))
     (should (eq (drgnx-git-status (expand-file-name "new.txt" dir)) 'untracked))
-    (should-not (plist-get (gethash dir drgnx-git--repos) :proc))
+    (should-not (plist-get (drgnx-cache-get 'git-status dir) :proc))
     (drgnx-git-edge--no-procs)))
 
 (ert-deftest drgnx-git/a-late-sentinel-does-not-end-a-newer-wait ()
@@ -157,11 +157,11 @@
             (write-region (format "#!/bin/sh\nsleep 0.5\nexec %s \"$@\"\n" (shell-quote-argument (executable-find "git")))
                           nil (expand-file-name "git" bin) nil 'silent)
             (set-file-modes (expand-file-name "git" bin) #o755)
-            (drgnx-git-edge--until-ended (progn (drgnx-git-refresh dir) (plist-get (gethash dir drgnx-git--repos) :proc)))
+            (drgnx-git-edge--until-ended (progn (drgnx-git-refresh dir) (plist-get (drgnx-cache-get 'git-status dir) :proc)))
             (write-region "x\n" nil (expand-file-name "new.txt" dir) nil 'silent)
             (let ((exec-path (cons bin exec-path))) (drgnx-git-refresh dir t))
             (should (eq (drgnx-git-status (expand-file-name "new.txt" dir)) 'untracked))
-            (should-not (plist-get (gethash dir drgnx-git--repos) :proc))
+            (should-not (plist-get (drgnx-cache-get 'git-status dir) :proc))
             (drgnx-git-edge--no-procs))
         (delete-directory (file-name-directory bin) t)))))
 

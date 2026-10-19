@@ -29,9 +29,20 @@ a long branch): nothing is recorded automatically then.")
 
 (defvar drgnx-work--tasks nil "Alist agent session → its recording state (`drgnx-work-task-begin').")
 
+(defvar drgnx-work-source-functions nil
+  "Abnormal hook: each function gets an agent session and returns (:repo REPO :ref REF) or nil.  When one answers,
+the session's own folder is not the place to look (a sandboxed task's `.git' is the agent's: no git of ours runs
+there): `turn-end' collects nothing, and the job collects when it wants, with `drgnx-work-collect-now', from REPO
+at REF (the user's main repository, trusted).  At the start REF is the commit the task forks from; at collect time,
+the ref that holds the task's result.")
+
 ;;;; Recording
 
-(defun drgnx-work--head (dir) (drgnx-work--git dir "rev-parse" "HEAD"))
+(defun drgnx-work--head (dir &optional ref) (drgnx-work--git dir "rev-parse" (or ref "HEAD")))
+
+(defun drgnx-work--source (s)
+  "The (:repo REPO :ref REF) a `drgnx-work-source-functions' member names for session S, or nil."
+  (run-hook-with-args-until-success 'drgnx-work-source-functions s))
 
 (defun drgnx-work--notes-p () (or drgnx-work-git-notes (equal (getenv "DRGNX_WORK_GIT_NOTES") "1")))
 
@@ -54,17 +65,23 @@ later, newest first (`drgnx-work--log').  None when FROM is unknown, or TO does 
     (seq-filter (lambda (c) (>= (nth 1 c) (- since 2)))          ; a pull brings older commits
                 (drgnx-work--log dir "--first-parent" (concat from ".." to)))))
 
-(defun drgnx-work-task-begin (task dir)
-  "Start recording for TASK the commits made in DIR's repository from now on: the state."
-  (list :task task :dir dir :head (drgnx-work--head dir) :repo (drgnx-work--main-repo dir)
-        :tree (drgnx-work--git dir "rev-parse" "--show-toplevel")
-        :since (float-time) :busy nil :overlap nil))
+(defun drgnx-work-task-begin (task dir &optional source)
+  "Start recording for TASK the commits made in DIR's repository from now on: the state.
+SOURCE (`drgnx-work-source-functions') names the repository and ref instead: nothing runs in DIR then, and
+nothing is collected until `drgnx-work-collect-now'."
+  (if source
+      (let ((repo (plist-get source :repo)) (ref (plist-get source :ref)))
+        (list :task task :dir repo :ref ref :head (drgnx-work--head repo ref) :repo repo :tree nil :source t
+              :since (float-time) :busy nil :overlap nil))
+    (list :task task :dir dir :head (drgnx-work--head dir) :repo (drgnx-work--main-repo dir)
+          :tree (drgnx-work--git dir "rev-parse" "--show-toplevel")
+          :since (float-time) :busy nil :overlap nil)))
 
 (defun drgnx-work-task-collect (state &optional since overlap)
   "Record the commits made since STATE last looked (committed at SINCE or later, default when it
 began); the SHAs recorded (none twice).  OVERLAP: another task session was busy in the same
 checkout meanwhile — whose commits they are is unknown, so none is recorded (`drgnx work record')."
-  (let* ((dir (plist-get state :dir)) (head (drgnx-work--head dir)) (task (plist-get state :task))
+  (let* ((dir (plist-get state :dir)) (head (drgnx-work--head dir (plist-get state :ref))) (task (plist-get state :task))
          (new (drgnx-work--new-commits dir (plist-get state :head) head (or since (plist-get state :since)))))
     (plist-put state :head head)
     (cond ((null new) nil)
@@ -91,7 +108,17 @@ that checkout, the user's among them, are never the dead session's."
                                             (equal (plist-get (cdr o) :tree) (plist-get st :tree))))
                            drgnx-work--tasks)))
     (plist-put st :busy nil) (plist-put st :overlap nil)
-    (with-demoted-errors "drgnx work: %S" (drgnx-work-task-collect st nil overlap))))
+    (unless (plist-get st :source)                        ; a source session: the job collects, when it says so
+      (with-demoted-errors "drgnx work: %S" (drgnx-work-task-collect st nil overlap)))))
+
+(defun drgnx-work-collect-now (s)
+  "Record, for session S that has a work source (`drgnx-work-source-functions'), the commits its task made: those
+of the source's ref in its repository since the task began.  The SHAs recorded; none twice.  The job calls this
+once the task's result is in the main repository; the session's own folder is never read."
+  (when-let* ((st (alist-get s drgnx-work--tasks)) ((plist-get st :source)))
+    (when-let* ((src (drgnx-work--source s)))
+      (plist-put st :dir (plist-get src :repo)) (plist-put st :ref (plist-get src :ref)))
+    (drgnx-work-task-collect st)))
 
 (defun drgnx-work--agent-changed (s)
   "`drgnx-agents-changed-functions': the first time S is seen exited, its last commits are collected (on a timer,
@@ -110,9 +137,10 @@ on a timer, never inside the process filter that saw the turn end."
     (pcase event
       ('start
        (setq drgnx-work--tasks (seq-remove (lambda (e) (eq (drgnx-agent-session-status (car e)) 'exited)) drgnx-work--tasks))
-       (push (cons s (drgnx-work-task-begin (drgnx-agent-session-task s) (drgnx-agent-session-cwd s))) drgnx-work--tasks))
+       (push (cons s (drgnx-work-task-begin (drgnx-agent-session-task s) (drgnx-agent-session-cwd s) (drgnx-work--source s)))
+             drgnx-work--tasks))
       ('turn-start
-       (when st
+       (when (and st (not (plist-get st :source)))
          (plist-put st :since (float-time)) (plist-put st :busy t)
          (dolist (o drgnx-work--tasks)                 ; two task sessions at work in one checkout
            (when (and (not (eq (car o) s)) (plist-get (cdr o) :busy)
@@ -120,7 +148,7 @@ on a timer, never inside the process filter that saw the turn end."
                       (equal (plist-get (cdr o) :tree) (plist-get st :tree)))
              (plist-put (cdr o) :overlap t) (plist-put st :overlap t)))))
       ('turn-end
-       (when st
+       (when (and st (not (plist-get st :source)))
          (let ((since (plist-get st :since)) (overlap (plist-get st :overlap)))
            (plist-put st :busy nil) (plist-put st :overlap nil)
            (run-at-time 0 nil (lambda () (with-demoted-errors "drgnx work: %S" (drgnx-work-task-collect st since overlap))))))))))

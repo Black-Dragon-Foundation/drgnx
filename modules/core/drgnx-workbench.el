@@ -3,6 +3,18 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Code:
+(require 'drgnx-modules)
+(require 'drgnx-registry)
+(require 'drgnx-surfaces)
+(require 'drgnx-memo)
+(declare-function drgnx-signal-mode "drgnx-signal")
+(declare-function drgnx-state-mode "drgnx-state")
+(declare-function drgnx-state-subscribe "drgnx-state")
+(declare-function drgnx-state-intent--user-resized "drgnx-state-intent")
+(declare-function drgnx-wb-toggle-sidebar "drgnx-wb")
+(declare-function drgnx-wb-view-explorer "drgnx-wb")
+(declare-function drgnx-wb-view-search "drgnx-wb")
+(declare-function drgnx-wb-focus-editor "drgnx-wb")
 (declare-function drgnx-explorer-setup "drgnx-explorer")
 (declare-function drgnx-rules-mode "drgnx-rules")
 (declare-function drgnx-chrome-mode "drgnx-chrome")
@@ -57,10 +69,16 @@
 (drgnx-module-define 'core/workbench
                      :doc "The workbench: the change bus, the left dock (Buffers, Explorer) and editor windows."
                      :stage 'startup
+                     ;; Everything it sets is recorded (a test turns it off cleanly), but live windows, frames and
+                     ;; buffers are laid out by it: Preferences stops it at the next start.
+                     :teardown 'restart
                      :setup
                      (lambda ()
                        (require 'drgnx-wb)
+                       (drgnx-state-mode 1)    ; the state store first: the bus follows its window events
                        (drgnx-signal-mode 1)
+                       ;; A size you set by hand is intent; the docks keep it when the frame resizes.
+                       (drgnx-state-subscribe 'pane-resized #'drgnx-state-intent--user-resized)
                        ;; Where buffers go.
                        (require 'drgnx-rules)
                        (drgnx-rules-mode 1)
@@ -155,6 +173,7 @@
                                              :command #'drgnx-wb-focus-editor :map 'drgnx-wb-dock-map :doc "From the sidebar back to the editor")
                        ;; The Explorer.
                        (require 'drgnx-explorer)
+                       (drgnx-memo-activate 'git-status 'explorer-listing) ; capped caches: emptied on teardown
                        (drgnx-explorer-setup)
                        (drgnx-command-define 'focus-explorer :category "View" :title "Focus Explorer" :scope 'window
                                              :command #'drgnx-explorer-focus :menu '("View") :doc "Show the sidebar and move focus to the file tree")

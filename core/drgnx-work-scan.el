@@ -26,11 +26,14 @@
   "Directory names the scan never enters (dot directories are entered: ledgers live in .superpowers).")
 
 (defun drgnx-work--git (dir &rest args)
-  "git ARGS in DIR: its output (trimmed) or nil."
+  "git ARGS in DIR: its output (trimmed) or nil.  Nil too in a job's snapshot folder, where the VC guard refuses git
+(`drgnx-sandbox-vc'): the tracker reads the main repository (`drgnx-work-source-functions')."
   (when (file-directory-p dir)
     (with-temp-buffer
       (let ((default-directory (file-name-as-directory dir)))
-        (when (eql 0 (apply #'call-process "git" nil t nil args)) (string-trim (buffer-string)))))))
+        (condition-case nil
+            (when (eql 0 (apply #'call-process "git" nil t nil args)) (string-trim (buffer-string)))
+          (drgnx-sandbox-guarded nil))))))
 
 ;;;; Finding files
 

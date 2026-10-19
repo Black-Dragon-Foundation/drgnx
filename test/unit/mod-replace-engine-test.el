@@ -4,6 +4,7 @@
 (require 'eglot)
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-replace" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
 (defun drgnx-replace-test--run (query)
   "Search QUERY to the end: (MATCHES . EVENTS), EVENTS being every non-batch value the callback got, in order."
@@ -349,5 +350,81 @@
         (should (memq :done second-got))
         (should (null first-got))
         (should-not (process-live-p h2))))))
+
+(defmacro drgnx-replace-test--with-stream (&rest body)
+  "BODY on the virtual clock with PROC a pipe process set up as a search's (each line parsed to itself, the
+callback pushing what it gets on GOT, newest first), ERR its stderr buffer."
+  (declare (indent 0))
+  `(drgnx-test-with-clock (:allow-pending t)
+     (let* ((got nil) (err (generate-new-buffer " *drgnx-replace-test err*" t))
+            (proc (make-pipe-process :name "drgnx-replace-test" :noquery t)))
+       (unwind-protect
+           (cl-letf (((symbol-function 'process-exit-status) (lambda (_) 0)))
+             (drgnx-replace--stream-init proc #'list (lambda (x) (push x got)) err)
+             ,@body)
+         (when (buffer-live-p err) (kill-buffer err))
+         (delete-process proc)))))
+
+(ert-deftest drgnx-replace/the-filter-parses-a-bounded-part-per-call ()
+  ;; a 64 KB chunk is not parsed in one filter call: at most `drgnx-replace-parse-lines' lines per call or
+  ;; continuation, in order; the end of the stream comes after the last line
+  (let ((lines (mapcar (lambda (i) (format "l%d" i)) (number-sequence 0 299))))
+    (drgnx-replace-test--with-stream
+      (drgnx-replace--output proc (concat (mapconcat #'identity (take 299 lines) "\n") "\nl2"))
+      (should (equal (list (take drgnx-replace-parse-lines lines)) got))
+      (should (drgnx-timer-active-p (cons 'replace-parse proc)))
+      (drgnx-replace--output proc "99\n")                ; the partial line's end
+      (delete-process proc)
+      (drgnx-replace--finished proc)
+      (should-not (memq :done got))                      ; lines are still queued
+      (drgnx-test-advance 0)
+      (setq got (reverse got))
+      (should (eq :done (car (last got))))
+      (should (equal lines (apply #'append (butlast got))))
+      (should (> (length got) 4))
+      (should (cl-every (lambda (b) (<= (length b) drgnx-replace-parse-lines)) (butlast got)))
+      (should-not (buffer-live-p err)))))
+
+(ert-deftest drgnx-replace/a-cancelled-stream-sends-nothing-more ()
+  (drgnx-replace-test--with-stream
+    (drgnx-replace--output proc (mapconcat (lambda (i) (format "l%d\n" i)) (number-sequence 1 200) ""))
+    (should (= 1 (length got)))
+    (drgnx-replace-cancel proc)
+    (should-not (drgnx-timer-active-p (cons 'replace-parse proc)))   ; the continuation goes with the search
+    (drgnx-test-advance 0)
+    (should (= 1 (length got)))))
+
+(defun drgnx-replace-test--parse-but-l10 (line)
+  (if (equal line "l10") (error "Bad line") (list line)))
+
+(ert-deftest drgnx-replace/a-line-that-does-not-parse-never-stops-the-stream ()
+  ;; review I-1: the line is dropped, the others and :done still come, the error once
+  (drgnx-replace-test--with-stream
+    (drgnx-replace--stream-init proc #'drgnx-replace-test--parse-but-l10 (lambda (x) (push x got)) err)
+    (drgnx-replace--output proc (mapconcat (lambda (i) (format "l%d\n" i)) (number-sequence 0 99) ""))
+    (delete-process proc)
+    (drgnx-replace--finished proc)
+    (drgnx-test-advance 0)
+    (setq got (reverse got))
+    (should (eq :done (car (last got))))
+    (should (equal (delete "l10" (mapcar (lambda (i) (format "l%d" i)) (number-sequence 0 99)))
+                   (apply #'append (seq-filter (lambda (x) (stringp (car-safe x))) got))))
+    (should (= 1 (seq-count (lambda (x) (eq (car-safe x) :error)) got)))))
+
+(ert-deftest drgnx-replace/a-line-in-many-chunks-is-joined-once ()
+  ;; review M-4: the pieces of a partial line are kept and joined at its newline, never re-concatenated per chunk
+  (drgnx-replace-test--with-stream
+    (let* ((piece (make-string 4096 ?x)) (n 128)
+           (before (nth 4 (memory-use-counts))))        ; string characters made
+      (dotimes (_ n) (drgnx-replace--output proc piece))
+      (drgnx-replace--output proc "\nij")
+      ;; a few copies of the 512 KB line, not one per chunk (128 × 256 KB on average)
+      (should (< (- (nth 4 (memory-use-counts)) before) (* 4 n 4096)))
+      (should (equal (list (list (apply #'concat (make-list n piece)))) got)))
+    (drgnx-replace--output proc "kl")
+    (delete-process proc)
+    (drgnx-replace--finished proc)
+    (drgnx-test-advance 0)
+    (should (equal '(:done ("ijkl")) (take 2 got)))))   ; newest first
 
 ;;; mod-replace-engine-test.el ends here

@@ -40,6 +40,8 @@
 (require 'drgnx-tty)
 (require 'drgnx-wb)
 (require 'drgnx-tty-fallback)
+(require 'drgnx-frame-kind)
+(declare-function drgnx-state-sync "drgnx-state")
 (declare-function drgnx-tty-fallback-install "drgnx-tty-fallback-layer")
 (declare-function drgnx-tty-fallback-setup "drgnx-tty-fallback-layer")
 (declare-function drgnx-wb-area-hide "drgnx-area")
@@ -331,9 +333,7 @@ setting).  Nil: the terminal keeps the mouse.  Toggle Mouse in Terminal Windows 
 
 (defun drgnx-tty-frames--tty-frames ()
   "The live terminal frames of terminals Emacs set up (not the daemon's initial terminal)."
-  (seq-filter (lambda (f) (and (frame-live-p f) (not (display-graphic-p f))
-                               (not (equal (terminal-name (frame-terminal f)) "initial_terminal"))))
-              (frame-list)))
+  (seq-filter (lambda (f) (eq (drgnx-state-frame-kind f) 'tty)) (frame-list)))
 
 (defun drgnx-tty-frames-mouse-apply ()
   "Make the terminals follow `drgnx-tty-mouse': mouse reports on in the terminals that can send them while it
@@ -425,7 +425,8 @@ already showed (one reused by a later `emacsclient FILE') stays as it is."
                (not (frame-parameter frame 'drgnx-tty-shown)))
       (set-frame-parameter frame 'drgnx-tty-editor-only t)
       (set-frame-parameter frame 'drgnx-frame-role 'editor)
-      (when (fboundp 'drgnx-frames-mark-main) (drgnx-frames-mark-main)))))
+      (when (fboundp 'drgnx-frames-mark-main) (drgnx-frames-mark-main))
+      (drgnx-state-sync frame))))   ; the role is no window change: only this observation reads it
 
 (defun drgnx-tty-frames--editor-only (frame)
   "FRAME shows the editor only: no sidebar, panel or right dock."
@@ -586,8 +587,7 @@ focus.  Run by `drgnx-tty-frames-setup' after its keys step has asked for modify
 capabilities and the report, once per terminal; the mouse.  Never prompts or signals: each step on its own, a
 failing one does not stop the next."
   (let ((frame (or frame (selected-frame))))
-    (when (and (frame-live-p frame) (not (display-graphic-p frame))
-               (not (equal (terminal-name (frame-terminal frame)) "initial_terminal")))
+    (when (eq (drgnx-state-frame-kind frame) 'tty)
       (let ((first (not (terminal-parameter (frame-terminal frame) 'drgnx-tty-set-up))))
         (drgnx-tty-frames--guard "keys" #'drgnx-tty-frames--keys-setup frame)
         (when first

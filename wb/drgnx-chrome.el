@@ -9,8 +9,8 @@
 ;; mode line; a dock section has its title only; the panel and the right dock have their tab row
 ;; only.  The chrome lives in window parameters, which win over any mode's own
 ;; `header-line-format', `tab-line-format' or `mode-line-format', so no buffer can make a
-;; window's text jump.  New windows get their chrome before they are first drawn (the change
-;; bus's window setup); tabs and breadcrumbs follow the bus's edges.  A frame whose parameter
+;; window's text jump.  New windows get their chrome before they are first drawn (the state store's
+;; `windows-changed', `now' lane); tabs and breadcrumbs follow its `editor-changed' and the bus's buffer edges.  A frame whose parameter
 ;; `drgnx-chrome-breadcrumb' is `off' (a terminal frame below 30 lines) has no breadcrumb row.  See docs/guide/workbench.md.
 
 ;;; Code:
@@ -21,20 +21,24 @@
 (require 'drgnx-area)
 (declare-function drgnx-face-glyph "drgnx-face")
 
-(defface drgnx-chrome-tab '((t :inherit tab-line-tab-inactive)) "A tab in an editor's tab line." :group 'drgnx)
-(defface drgnx-chrome-tab-current '((t :inherit tab-line-tab-current)) "The shown tab." :group 'drgnx)
+(defface drgnx-chrome-tab '((t :inherit (shadow tab-line-tab-inactive) :height 1.0 :box nil))
+  "A tab in an editor's tab line: dimmed, at the text's height (the theme's `tab-line' is smaller)." :group 'drgnx)
+(defface drgnx-chrome-tab-current '((t :inherit tab-line-tab-current :height 1.0 :box nil :weight bold))
+  "The shown tab of an editor group that is not the active one." :group 'drgnx)
+(defface drgnx-chrome-tab-active '((t :inherit (link tab-line-tab-current) :height 1.0 :box nil :weight bold
+                                      :underline nil :overline t))
+  "The shown tab of the active editor group: the theme's link colour, overlined." :group 'drgnx)
+(defface drgnx-chrome-tab-hover '((t :inherit tab-line-highlight))
+  "The tab (or its ×) under the pointer; only that one." :group 'drgnx)
 (defface drgnx-chrome-crumb '((t :inherit shadow)) "The folders of a breadcrumb." :group 'drgnx)
 
 (defun drgnx-chrome--role (w)
-  "W's chrome role: `editor', `dock', `area', `lane', or nil (left alone)."
-  (let ((role (window-parameter w 'drgnx-role)))
-    (cond ((window-minibuffer-p w) nil)
-          ((frame-parent (window-frame w)) nil)   ; child frames: posframe, corfu, eldoc-box keep theirs
-          ((window-parameter w 'drgnx-popup) 'lane)
-          ((eq role 'popup) 'lane)
-          ((eq role 'dock) 'dock)
-          ((memq role '(panel right)) 'area)
-          ((drgnx-signal-editor-window-p w) 'editor))))
+  "W's chrome role: `editor', `dock', `area', `lane', or nil (left alone).
+From W's role in the state store (`drgnx-state-window-role'): an editor window is `editor', a role of the
+role table has its `:chrome' (`drgnx-state-define-role'), anything else is left alone."
+  (unless (frame-parent (window-frame w))   ; child frames: posframe, corfu, eldoc-box keep theirs
+    (let ((role (drgnx-state-window-role w)))
+      (if (eq role 'editor) 'editor (drgnx-state-role-chrome role)))))
 
 ;;;; Tabs
 
@@ -106,17 +110,22 @@ ASCII form on a terminal that is not UTF-8; × without ui/face."
   (or (and (fboundp 'drgnx-face-glyph) (drgnx-face-glyph 'close (window-frame w))) "×"))
 
 (defun drgnx-chrome--tab-line (w)
-  (let ((shown (window-buffer w)))
+  "W's tab line.  Each tab's name and × carry a mouse-face value of their own (a fresh list, not `eq' to any
+other): Emacs highlights the run of text whose `mouse-face' is `eq', so a shared value would light the whole strip.
+A plain space, without one, separates the tabs."
+  (let* ((shown (window-buffer w)) (active (eq w (drgnx-signal-editor-window))))
     (mapconcat (lambda (b)
-                 (let ((face (if (eq b shown) 'drgnx-chrome-tab-current 'drgnx-chrome-tab)))
-                   (concat (propertize (format " %s%s " (drgnx-chrome--text (buffer-name b))
+                 (let ((face (cond ((not (eq b shown)) 'drgnx-chrome-tab)
+                                   (active 'drgnx-chrome-tab-active)
+                                   (t 'drgnx-chrome-tab-current))))
+                   (concat (propertize (format "  %s%s " (drgnx-chrome--text (buffer-name b))
                                                (if (and (buffer-file-name b) (buffer-modified-p b)) " ●" ""))
                                        'face face 'drgnx-buffer b 'local-map drgnx-chrome--tab-map
-                                       'mouse-face 'highlight 'help-echo "Show; middle-click closes")
-                           (propertize (concat (drgnx-chrome--close-glyph w) " ")
+                                       'mouse-face (list 'drgnx-chrome-tab-hover) 'help-echo "Show; middle-click closes")
+                           (propertize (concat (drgnx-chrome--close-glyph w) "  ")
                                        'face face 'drgnx-buffer b 'local-map drgnx-chrome--close-map
-                                       'mouse-face 'highlight 'help-echo "Close this tab"))))
-               (drgnx-chrome-tabs w) "")))
+                                       'mouse-face (list 'drgnx-chrome-tab-hover) 'help-echo "Close this tab"))))
+               (drgnx-chrome-tabs w) " ")))
 
 (defcustom drgnx-chrome-closed-positions-max 30
   "How many closed tabs' positions are remembered (`drgnx-chrome-closed-positions')."
@@ -200,12 +209,13 @@ An error here must never stop the kill."
   (cdr drgnx-chrome--root))
 
 (defun drgnx-chrome-breadcrumb (w)
-  "W's breadcrumb: project › folders › file (● when unsaved), or the buffer's name."
+  "W's breadcrumb: project › folders › file (● when unsaved).  A buffer without a file has no path to show and its tab
+already names it: the row stays (a window's rows never change with its buffer, I3) but is empty."
   (let* ((b (window-buffer w)) (file (buffer-file-name b)))
     (concat
      " "
      (if (not file)
-         (drgnx-chrome--text (buffer-name b))
+         ""
        (let* ((root (with-current-buffer b (drgnx-chrome--project-root file)))
               (rel (if root (file-relative-name file root) (abbreviate-file-name file)))
               (parts (split-string rel "/" t)))
@@ -250,7 +260,10 @@ scopes: modules/editor/drgnx-sticky.el); re-apply the chrome after changing it."
                                 ;; a short terminal frame has no row to spare (ui/terminal-layout sets this)
                                 ((eq (frame-parameter (window-frame w) 'drgnx-chrome-breadcrumb) 'off) 'none)
                                 (t (let ((tail (buffer-local-value 'drgnx-chrome-header-tail (window-buffer w))))
-                                     (if tail (list (drgnx-chrome-breadcrumb w) tail) (drgnx-chrome-breadcrumb w)))))))
+                                     (if tail
+                                         (list (drgnx-wb-bar (drgnx-chrome-breadcrumb w) t) tail
+                                               (propertize " " 'display '(space :align-to right) 'face 'drgnx-wb-bar))
+                                       (drgnx-wb-bar (drgnx-chrome-breadcrumb w))))))))
      (drgnx-chrome--set w 'mode-line-format drgnx-chrome-editor-mode-line))
     ((or 'dock 'area)
      (drgnx-chrome--set w 'tab-line-format 'none)
@@ -270,19 +283,71 @@ those are previews)."
   (let ((note (not (active-minibuffer-window))))
     (dolist (f (frame-list)) (drgnx-chrome-apply f note))))
 
+(defvar drgnx-chrome--memo (make-hash-table :test 'eq :weakness 'key)
+  "Editor window -> [BUFFER TABS BREADCRUMB-PARAM TAB-LINE HEADER MODE-LINE NOTED]: what the store's subscribers last
+set on it (weak on the window).  They skip a window whose inputs and parameters are still those objects, so a
+change that touches no editor costs a few `eq' tests per window, not two strings built.  The bus's edges and
+`drgnx-chrome-apply' always rebuild.")
+
+(defun drgnx-chrome--memo-current-p (w note breadcrumb)
+  "Non-nil when editor window W still shows what the store's subscribers last set on it (with its buffer noted
+as a tab, if NOTE; BREADCRUMB is its frame's parameter `drgnx-chrome-breadcrumb')."
+  (let ((m (gethash w drgnx-chrome--memo)))
+    (and m
+         (or (not note) (aref m 6))
+         (eq (aref m 0) (window-buffer w))
+         (eq (aref m 1) (window-parameter w 'drgnx-tabs))
+         (eq (aref m 2) breadcrumb)
+         (eq (aref m 3) (window-parameter w 'tab-line-format))
+         (eq (aref m 4) (window-parameter w 'header-line-format))
+         (eq (aref m 5) (window-parameter w 'mode-line-format))
+         (eq (aref m 5) drgnx-chrome-editor-mode-line))))
+
+(defun drgnx-chrome--memo-set (w note breadcrumb)
+  (puthash w (vector (window-buffer w) (window-parameter w 'drgnx-tabs) breadcrumb
+                     (window-parameter w 'tab-line-format) (window-parameter w 'header-line-format)
+                     (window-parameter w 'mode-line-format) (and note t))
+           drgnx-chrome--memo))
+
+(defun drgnx-chrome--apply-changed (frame note)
+  "Set the chrome of FRAME's windows that need it (`drgnx-chrome-apply' for the ones whose inputs changed).
+The store lists the editor windows; the other roles are set as `drgnx-chrome-apply' does."
+  (unless (frame-parent frame)
+    (let ((editors (drgnx-state-windows frame 'editor))
+          (breadcrumb (frame-parameter frame 'drgnx-chrome-breadcrumb)))
+      (dolist (w (window-list frame 'nomini))
+        (if (not (memq w editors))
+            (drgnx-chrome--apply-window w note)
+          (unless (drgnx-chrome--memo-current-p w note breadcrumb)
+            (drgnx-chrome--apply-window w note)
+            (drgnx-chrome--memo-set w note breadcrumb)))))))
+
+(defun drgnx-chrome--windows-changed (data)
+  "The store's `windows-changed' (`now' lane: inside the observation, before the frame is drawn): set the
+chrome of the frame's windows, so a new window is never drawn once without it."
+  (drgnx-chrome--apply-changed (plist-get data :frame) nil))
+
+(defun drgnx-chrome--editor-changed (data)
+  "The store's `editor-changed' (`now' lane): the tab lines and breadcrumbs of the frame whose editor window
+or buffer changed (no new tabs while the minibuffer is active: those are previews)."
+  (drgnx-chrome--apply-changed (plist-get data :frame) (not (active-minibuffer-window))))
+
 (define-minor-mode drgnx-chrome-mode
   "Chrome by role: tab lines and breadcrumbs in editor windows, titles only elsewhere."
   :global t :group 'drgnx
   (if drgnx-chrome-mode
       (progn
-        (add-hook 'drgnx-signal-window-functions #'drgnx-chrome-apply)
+        (drgnx-state-subscribe 'windows-changed #'drgnx-chrome--windows-changed :lane 'now)
+        (drgnx-state-subscribe 'editor-changed #'drgnx-chrome--editor-changed :lane 'now)
         (add-hook 'kill-buffer-hook #'drgnx-chrome--killed)
-        (dolist (e '(editor-changed buffer-set-changed modified-changed))
+        (dolist (e '(buffer-set-changed modified-changed))
           (drgnx-signal-subscribe e #'drgnx-chrome--refresh))
         (drgnx-chrome--refresh))
-    (remove-hook 'drgnx-signal-window-functions #'drgnx-chrome-apply)
+    (drgnx-state-unsubscribe 'windows-changed #'drgnx-chrome--windows-changed)
+    (drgnx-state-unsubscribe 'editor-changed #'drgnx-chrome--editor-changed)
+    (clrhash drgnx-chrome--memo)
     (remove-hook 'kill-buffer-hook #'drgnx-chrome--killed)
-    (dolist (e '(editor-changed buffer-set-changed modified-changed))
+    (dolist (e '(buffer-set-changed modified-changed))
       (drgnx-signal-unsubscribe e #'drgnx-chrome--refresh))
     (dolist (f (frame-list))
       (dolist (w (window-list f 'nomini))

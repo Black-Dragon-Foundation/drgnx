@@ -240,7 +240,7 @@ answered at once with DIMS-wide vectors), and the index job start recorded in ST
     (write-region "(:off yes)" nil (expand-file-name ".drgnx/search.eld" root) nil 'silent)
     (let ((facts (drgnx-search-doctor-facts (list root))))
       (should (equal (plist-get facts :config-errors)
-                     (list (cons root ".drgnx/search.eld cannot be read: :off must be t or nil")))))
+                     (list (cons root ".drgnx/search.eld cannot be read: :off: expected t or nil, got symbol")))))
     ;; the wizard says so too, and starts nothing
     (should (string-match-p "\\.drgnx/search\\.eld cannot be read" (cadr (drgnx-search-setup root :interactive t))))
     (should-not started)))

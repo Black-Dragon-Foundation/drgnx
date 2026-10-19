@@ -1,22 +1,25 @@
 ;;; wb-popup-test.el --- batch tests: the popup lane -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'drgnx-popup)
 (require 'which-key)
 
 (defmacro drgnx-popup-test--with (&rest body)
   "BODY with rules on, one editor window, the panel hidden, fresh area state."
-  `(let ((drgnx-signal--editor-window nil) (drgnx-wb-unrouted nil)
-         (display-buffer-alist nil) (display-buffer-overriding-action '(nil)))
-     (delete-other-windows)
-     (set-frame-parameter nil 'drgnx-wb-areas nil)
-     (set-frame-parameter nil 'drgnx-wb-panel-px nil)
-     (drgnx-rules-mode 1)
-     (unwind-protect (progn ,@body)
-       (drgnx-rules-mode -1)
-       (drgnx-wb-area-hide 'panel)
+  `(drgnx-test-with-state
+     (let ((drgnx-wb-unrouted nil)
+           (display-buffer-alist nil) (display-buffer-overriding-action '(nil)))
        (delete-other-windows)
-       (dolist (b '("*Calendar*" " *transient*" "*drgnx-results*" " *which-key*"))
-         (when (get-buffer b) (kill-buffer b))))))
+       (set-frame-parameter nil 'drgnx-wb-areas nil)
+       (set-frame-parameter nil 'drgnx-wb-panel-px nil)
+       (drgnx-rules-mode 1)
+       (unwind-protect (progn ,@body)
+         (drgnx-rules-mode -1)
+         (drgnx-wb-area-hide 'panel)
+         (delete-other-windows)
+         (dolist (b '("*Calendar*" " *transient*" "*drgnx-results*" " *which-key*"))
+           (when (get-buffer b) (kill-buffer b)))))))
 
 (defun drgnx-popup-test--panel-on-results ()
   "Show the panel's Results tab scrolled to line 40; return (WINDOW BUFFER START POINT HEIGHT HEADER)."

@@ -5,13 +5,15 @@
 ;;; Commentary:
 ;; The Work cockpit's home screen is the Work graph (pane kind `work-graph', home `left', view `work'): specs, plans,
 ;; tasks, agents, jobs and reviews from the cockpit's model (core/drgnx-cockpit-model.el), drawn
-;; (drgnx-cockpit-graph.el) in a graphical window wide enough for it, else as an outline.  It follows the live store:
-;; hub events, agent sessions, work-tracker scans and theme changes schedule a redraw (`drgnx-cockpit-schedule'), and
-;; a check every few seconds catches what other processes wrote.  At most one redraw runs per
-;; `drgnx-cockpit-redraw-delay', only while the graph is visible; a cheap key (the store's data version and change
-;; count, counters, the filter, the options, the font) says whether anything changed before the model is built, and
-;; the graph draws only when what it would show changed.  It never prompts and never touches a remote file.  Click,
-;; or TAB and RET, opens a node's tab; f filters by milestone, agent and state.  See docs/guide/cockpit.md.
+;; (drgnx-cockpit-graph.el) in a graphical window wide enough for it, else as an outline.  Its buffer is a view
+;; (wb/drgnx-view.el, type `work-graph'): one row per outline line, or per head line and band of the drawing, drawn
+;; again only when it changed.  It follows the live store: hub events, agent sessions, work-tracker scans and theme
+;; changes touch the view (`drgnx-cockpit-schedule'), whose SYNC first compares a cheap key (the store's data version
+;; and change count, counters, the filter, the options, the font) and builds the model only when it changed.  The view
+;; draws at most once per `drgnx-cockpit-redraw-delay', only while the graph shows.  While a window shows it (the
+;; workbench state store's `pane-shown', `pane-hidden' and `windows-changed'), a check every few seconds catches what
+;; other processes wrote; hidden, the graph keeps no timer.  It never prompts and never touches a remote file.  Click, or TAB and
+;; RET, opens a node's tab; f filters by milestone, agent and state.  See docs/guide/cockpit.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -20,14 +22,18 @@
 (require 'image)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
+(require 'drgnx-timer)
 (require 'drgnx-cockpit-model)
 (require 'drgnx-panes)
+(require 'drgnx-state)
+(require 'drgnx-view)
 ;; the layout, the drawing and the outline sit beside this file
 (unless (featurep 'drgnx-cockpit-graph)
   (load (expand-file-name "drgnx-cockpit-graph" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (featurep 'drgnx-cockpit-edits)                 ; each agent's edits, beside it too
   (load (expand-file-name "drgnx-cockpit-edits" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 
+(declare-function image-flush "image.c" (spec &optional frame))   ; an Emacs built without a window system has none
 (declare-function drgnx-cockpit-graph-layout "drgnx-cockpit-graph")
 (declare-function drgnx-cockpit-graph-outline "drgnx-cockpit-graph")
 (declare-function drgnx-cockpit-graph-summary "drgnx-cockpit-graph")
@@ -57,14 +63,10 @@
 (defvar drgnx-cockpit-graph-svg)
 (defvar drgnx-cockpit-graph--generation)
 
-(defcustom drgnx-cockpit-redraw-delay 0.5
-  "Seconds between the first change the Work graph hears of and its redraw: however many events come meanwhile,
-it redraws once."
-  :type 'number :group 'drgnx-cockpit)
-
 (defcustom drgnx-cockpit-check-interval 3
-  "Seconds between two looks, while the Work graph shows, at whether another process wrote the store (an outside
-agent's MCP server, another Emacs).  One cheap query each; the graph redraws only when it changed."
+  "Seconds between two looks, while the Work graph or a feed pane shows, at whether another process wrote the store
+\(an outside agent's MCP server, another Emacs); also between two looks at the count of what waits on you, for the
+status bar.  One cheap query each; the graph redraws only when it changed."
   :type 'number :group 'drgnx-cockpit)
 
 (defcustom drgnx-cockpit-silent-interval 45
@@ -87,9 +89,6 @@ its file, when it has one."
 \(`drgnx-cockpit-filter'); nil shows everything.  Set by `drgnx-cockpit-graph-filter'; `:job' by Show Job in Work
 \(`drgnx-cockpit-show-job'), which What needs you and the decision log follow too (drgnx-cockpit-cards.el).")
 
-(defvar drgnx-cockpit--timer nil "The redraw on its way: one at a time.")
-(defvar drgnx-cockpit--check-timer nil "The repeating look at the store (`drgnx-cockpit--check'), while the graph lives.")
-(defvar drgnx-cockpit--draws 0 "How many times the Work graph was drawn (tests and the perf lab read it).")
 (defvar drgnx-cockpit--last-error nil "The last error a redraw said: the same one is said once.")
 (defvar drgnx-cockpit--scan-n 0 "Counts finished work-tracker scans: part of the redraw key.")
 (defvar drgnx-cockpit--silent nil "The worktrees nobody reports from, as `drgnx-cockpit-silent-worktrees' found them last.")
@@ -99,19 +98,21 @@ its file, when it has one."
 
 (defvar-local drgnx-cockpit--key nil "The cheap key of the last redraw (`drgnx-cockpit-graph-redraw'): equal, nothing to do.")
 (defvar-local drgnx-cockpit--signature nil "What the graph shows now: a redraw that would show the same draws nothing.")
-(defvar-local drgnx-cockpit--stale nil "Something changed while the graph was hidden: it redraws when it shows.")
 (defvar-local drgnx-cockpit--model nil "The model the graph shows (filtered).")
 (defvar-local drgnx-cockpit--built nil "The model last built, for `drgnx-cockpit--built-key'.")
 (defvar-local drgnx-cockpit--built-key nil "(STORE FILTER GENERATION) the last model was built for.")
 (defvar-local drgnx-cockpit--layout nil "The layout last measured (graphical windows only), for `drgnx-cockpit--layout-key'.")
 (defvar-local drgnx-cockpit--layout-key nil "(MODEL METRICS GENERATION) the last layout was measured for.")
-(defvar-local drgnx-cockpit--lines nil "The lines the outline shows, as they are in the buffer (patched in place).")
+(defvar-local drgnx-cockpit--cells nil
+  "The rows the graph's view shows: hash KEY → (SIG GENERATION . TEXT) (`drgnx-cockpit-row-cell').  The outline's
+rows are its lines, keyed (:node ID N), the Nth line of node ID, or (:line TEXT N) for a line of no node, and
+\(:filter); the drawing's are its head lines (:head N) and its bands (:band N), each a column of image slices.")
 (defvar-local drgnx-cockpit--spots nil "While the drawing shows: alist hot-spot area → node id.")
 (defvar-local drgnx-cockpit--svg nil "Non-nil while the drawing shows (nil: the outline).")
 (defvar-local drgnx-cockpit--elements nil "While the drawing shows: its elements (`drgnx-cockpit-graph--elements').")
 (defvar-local drgnx-cockpit--bands nil
-  "While the drawing shows: its bands ((Y0 HEIGHT IMAGE START ROWS)…), START the buffer position of its first slice.
-Their images are flushed when new ones replace them.")
+  "While the drawing shows: its bands ((Y0 HEIGHT IMAGE KEY ROWS)…), KEY its row of the view (its first slice is
+at `drgnx-view-row-start').  Their images are flushed when new ones replace them.")
 (defvar-local drgnx-cockpit--frame nil
   "While the drawing shows: what its buffer text depends on — the head lines, the bands, the width and every box's
 place (ID X Y W H).  The same again: a redraw changes only band images (`drgnx-cockpit--draw-svg').")
@@ -133,35 +134,36 @@ place (ID X Y W H).  The same again: a redraw changes only band images (`drgnx-c
   (setq truncate-lines t buffer-read-only t)
   (buffer-disable-undo)
   (setq-local revert-buffer-function #'drgnx-cockpit--revert)
-  (add-hook 'window-size-change-functions #'drgnx-cockpit--resized nil t)
-  (add-hook 'window-buffer-change-functions #'drgnx-cockpit--resized nil t)
   (add-hook 'kill-buffer-hook #'drgnx-cockpit--unwatch nil t))
 
 (with-eval-after-load 'evil                     ; its own letters, also in the Vim profile
   (when (fboundp 'evil-set-initial-state) (evil-set-initial-state 'drgnx-cockpit-graph-mode 'emacs)))
 
+(defun drgnx-cockpit--view ()
+  "The Work graph's view, or nil (no graph buffer)."
+  (when-let* ((b (get-buffer drgnx-cockpit-graph-buffer-name)))
+    (let ((view (buffer-local-value 'drgnx-view b))) (and (drgnx-view-p view) view))))
+
 (defun drgnx-cockpit-graph-buffer ()
-  "The Work graph's buffer, made the first time (it then follows the store while it lives).
-It draws when it shows (`drgnx-cockpit--on-show')."
+  "The Work graph's buffer, made the first time (it then follows the store while it lives): a view of type
+`work-graph', drawn when it shows."
   (or (get-buffer drgnx-cockpit-graph-buffer-name)
       (with-current-buffer (get-buffer-create drgnx-cockpit-graph-buffer-name)
         (drgnx-cockpit-graph-mode)
-        (setq drgnx-cockpit--stale t)
+        (drgnx-view-touch (drgnx-view-attach 'work-graph))
         (drgnx-cockpit--watch)
         (current-buffer))))
 
 ;;;; Following the store
 
 (defun drgnx-cockpit--watch ()
-  "Follow the store while the graph's buffer lives: hub events, agent sessions, work-tracker scans, theme changes,
-and a look every `drgnx-cockpit-check-interval' s (idempotent)."
+  "Follow the store while the graph's buffer lives: hub events, agent sessions, work-tracker scans and theme
+changes (idempotent).  The look at what other processes wrote runs only while the graph shows
+\(`drgnx-cockpit--follow')."
   (add-hook 'drgnx-hub-event-functions #'drgnx-cockpit--hub-event)
   (add-hook 'drgnx-agents-changed-functions #'drgnx-cockpit--agent-changed)
   (add-hook 'drgnx-work-ui-scanned-hook #'drgnx-cockpit--scanned)
-  (add-hook 'enable-theme-functions #'drgnx-cockpit--theme-changed)
-  (unless (timerp drgnx-cockpit--check-timer)
-    (setq drgnx-cockpit--check-timer
-          (run-with-timer drgnx-cockpit-check-interval drgnx-cockpit-check-interval #'drgnx-cockpit--check))))
+  (add-hook 'enable-theme-functions #'drgnx-cockpit--theme-changed))
 
 (defun drgnx-cockpit--flush-bands ()
   "Release the drawing's band images (their pixels) and forget them."
@@ -169,13 +171,12 @@ and a look every `drgnx-cockpit-check-interval' s (idempotent)."
   (setq drgnx-cockpit--bands nil))
 
 (defun drgnx-cockpit--unwatch ()
-  "The graph's buffer is killed: stop following the store (its `kill-buffer-hook'), release its images."
+  "The graph's buffer is killed: stop following the store (its `kill-buffer-hook'), release its images.  Its
+timers are its own: they go with it."
   (remove-hook 'drgnx-hub-event-functions #'drgnx-cockpit--hub-event)
   (remove-hook 'drgnx-agents-changed-functions #'drgnx-cockpit--agent-changed)
   (remove-hook 'drgnx-work-ui-scanned-hook #'drgnx-cockpit--scanned)
   (remove-hook 'enable-theme-functions #'drgnx-cockpit--theme-changed)
-  (dolist (tm (list drgnx-cockpit--timer drgnx-cockpit--check-timer)) (when (timerp tm) (cancel-timer tm)))
-  (setq drgnx-cockpit--timer nil drgnx-cockpit--check-timer nil)
   (drgnx-cockpit--flush-bands))
 
 (defconst drgnx-cockpit--quiet-events '("agent-entries" "request" "budget")
@@ -191,9 +192,10 @@ redraw's key holds what the model reads of the sessions, so a chunk that changes
   (drgnx-cockpit-schedule))
 
 (defun drgnx-cockpit--scanned ()
-  "`drgnx-work-ui-scanned-hook': the tracker changed — redraw, and look for silent worktrees again."
+  "`drgnx-work-ui-scanned-hook': the tracker changed — redraw, and look for silent worktrees again while the graph
+shows."
   (cl-incf drgnx-cockpit--scan-n)
-  (when-let* ((b (get-buffer drgnx-cockpit-graph-buffer-name)) ((drgnx-cockpit--visible-p b)))
+  (when-let* ((b (get-buffer drgnx-cockpit-graph-buffer-name)) ((drgnx-cockpit-shown-p b)))
     (drgnx-cockpit--call #'drgnx-cockpit--silent-scan t))
   (drgnx-cockpit-schedule))
 
@@ -202,18 +204,11 @@ redraw's key holds what the model reads of the sessions, so a chunk that changes
   (cl-incf drgnx-cockpit-graph--generation)
   (drgnx-cockpit-schedule))
 
-(defun drgnx-cockpit--visible-p (buffer)
-  "Whether BUFFER shows in a window of a visible frame."
-  (and (get-buffer-window buffer 'visible) t))
-
-(defun drgnx-cockpit-schedule (&optional delay)
-  "Redraw the Work graph within DELAY seconds (`drgnx-cockpit-redraw-delay'): one redraw however many calls come
-meanwhile, only while the graph is visible (hidden, it redraws when it shows), and it draws only when what it shows
-changed.  Cheap: called from every event."
-  (when-let* ((b (get-buffer drgnx-cockpit-graph-buffer-name)))
-    (cond ((not (drgnx-cockpit--visible-p b)) (with-current-buffer b (setq drgnx-cockpit--stale t)))
-          ((not (timerp drgnx-cockpit--timer))
-           (setq drgnx-cockpit--timer (run-at-time (or delay drgnx-cockpit-redraw-delay) nil #'drgnx-cockpit--tick))))))
+(defun drgnx-cockpit-schedule (&optional _delay)
+  "Ask for the Work graph to be drawn again: its view's SYNC runs at the view's next draw — one per
+`drgnx-cockpit-redraw-delay' however many calls come, only while the graph shows (hidden, when it shows again) — and
+only what changed is drawn.  Cheap: called from every event (a flag and a timer)."
+  (when-let* ((view (drgnx-cockpit--view))) (drgnx-view-touch view)))
 
 (defun drgnx-cockpit--error (err)
   "Say ERR, unless it is the one said last (a broken store would otherwise say it twice a second)."
@@ -227,22 +222,46 @@ changed.  Cheap: called from every event."
   (condition-case err (prog1 (apply fn args) (setq drgnx-cockpit--last-error nil))
     (error (drgnx-cockpit--error err) nil)))
 
-(defun drgnx-cockpit--tick ()
-  "The scheduled redraw (a timer).  A graph hidden since it was scheduled only notes it is stale."
-  (setq drgnx-cockpit--timer nil)
-  (when-let* ((b (get-buffer drgnx-cockpit-graph-buffer-name)))
-    (if (drgnx-cockpit--visible-p b) (drgnx-cockpit--call #'drgnx-cockpit-graph-redraw)
-      (with-current-buffer b (setq drgnx-cockpit--stale t)))))
-
-(defun drgnx-cockpit--on-show (window)
-  "The graph's pane shows in WINDOW: draw what changed while it was hidden (soon, never while showing it)."
-  (when (buffer-local-value 'drgnx-cockpit--stale (window-buffer window)) (drgnx-cockpit-schedule 0)))
-
-(defun drgnx-cockpit--resized (_window)
-  "A window showing the graph changed size, or started showing it: the drawing may now fit, or no longer."
-  (drgnx-cockpit-schedule))
-
 (defun drgnx-cockpit--revert (&rest _) (drgnx-cockpit-graph-redraw t))
+
+;;;; While the pane shows (the workbench state store's events)
+
+(defun drgnx-cockpit--follow ()
+  "While the Work graph shows (`drgnx-cockpit-shown-p': in its pane or any window), its check runs (the timer
+`(cockpit-check . BUFFER)', its buffer's) and, when the check was not running, it catches up with what changed while it
+was hidden; hidden, the check is cancelled."
+  (when-let* ((b (get-buffer drgnx-cockpit-graph-buffer-name)))
+    (let ((key (cons 'cockpit-check b)))
+      (cond ((not (drgnx-cockpit-shown-p b)) (drgnx-timer-cancel key))
+            ((not (drgnx-timer-active-p key))
+             (drgnx-timer-start key drgnx-cockpit-check-interval #'drgnx-cockpit--check
+                                :repeat drgnx-cockpit-check-interval :args (list b) :owner b)
+             (drgnx-cockpit-schedule))))))
+
+(defun drgnx-cockpit--pane-shown (data)
+  "`pane-shown', on the store's `now' lane: the Work graph shows — `drgnx-cockpit--follow'."
+  (when (eq (plist-get data :kind) 'work-graph) (drgnx-cockpit--follow)))
+
+(defun drgnx-cockpit--pane-hidden (data)
+  "`pane-hidden', on the store's `now' lane: the Work graph's pane went — `drgnx-cockpit--follow'."
+  (when (eq (plist-get data :kind) 'work-graph) (drgnx-cockpit--follow)))
+
+(defun drgnx-cockpit--windows-changed (_data)
+  "`windows-changed', on the store's `idle' lane (never inside redisplay): the graph shown or no longer shown in a
+window that is not its pane (`C-x b'), which is no pane event — `drgnx-cockpit--follow'."
+  (drgnx-cockpit--follow))
+
+(defun drgnx-cockpit--pane-resized (data)
+  "`pane-resized', on the store's `idle' lane: the graph's window changed size — the drawing may now fit, or no
+longer."
+  (when (eq (plist-get data :kind) 'work-graph) (drgnx-cockpit-schedule)))
+
+(defun drgnx-cockpit--subscribe ()
+  "Hear of the Work graph's pane from the workbench state store (tools/cockpit's setup; recorded there)."
+  (drgnx-state-subscribe 'pane-shown #'drgnx-cockpit--pane-shown :lane 'now)
+  (drgnx-state-subscribe 'pane-hidden #'drgnx-cockpit--pane-hidden :lane 'now)
+  (drgnx-state-subscribe 'windows-changed #'drgnx-cockpit--windows-changed)
+  (drgnx-state-subscribe 'pane-resized #'drgnx-cockpit--pane-resized))
 
 ;;;; What other processes wrote; worktrees nobody reports from
 
@@ -265,16 +284,22 @@ query: the data version moves when another connection commits, the change count 
 the change count when this Emacs writes.  The graph's, the feed's and the waiting count's keys start with it."
   (car (sqlite-select (drgnx-work-db) "select (select data_version from pragma_data_version()), total_changes()")))
 
-(defun drgnx-cockpit--check ()
-  "Every `drgnx-cockpit-check-interval' s while the graph lives (a timer): when it shows, ask for a redraw if the
-store changed since the last one (another process wrote it), and look for silent worktrees when that is due.  The
-status bar hears of a new waiting count (`drgnx-cockpit-feed-tell-statusbar'), shown or not."
-  (drgnx-cockpit--call #'drgnx-cockpit-feed-tell-statusbar)
-  (when-let* ((b (get-buffer drgnx-cockpit-graph-buffer-name)) ((drgnx-cockpit--visible-p b)))
+(defun drgnx-cockpit--check (buffer)
+  "Every `drgnx-cockpit-check-interval' s while the graph's BUFFER shows (its timer `(cockpit-check . BUFFER)',
+started and cancelled by `drgnx-cockpit--follow'): ask for a redraw if the store changed since the last one
+\(another process wrote it), and look for silent worktrees when that is due."
+  (when (buffer-live-p buffer)
     (drgnx-cockpit--call
      (lambda ()
-       (unless (equal (drgnx-cockpit--store-key) (car (buffer-local-value 'drgnx-cockpit--key b))) (drgnx-cockpit-schedule))
+       (unless (equal (drgnx-cockpit--store-key) (car (buffer-local-value 'drgnx-cockpit--key buffer)))
+         (drgnx-cockpit-schedule))
        (drgnx-cockpit--silent-scan)))))
+
+(defun drgnx-cockpit--waiting ()
+  "Every `drgnx-cockpit-check-interval' s while tools/cockpit runs (the timer `cockpit-waiting', its setup's): the
+status bar hears of a new waiting count (`drgnx-cockpit-feed-tell-statusbar'), whatever shows — another process may
+ask with no hub event.  One query when the store did not change."
+  (drgnx-cockpit--call #'drgnx-cockpit-feed-tell-statusbar))
 
 (defun drgnx-cockpit--roots ()
   "The folders the store knows in repositories — jobs' repos, the tracker's plans' repos, registered agents' working
@@ -361,105 +386,111 @@ An exited session is left out (it no longer works on anything)."
                  h)))
     h))
 
+(defun drgnx-cockpit--update (view force)
+  "Work out what the Work graph shows and mark VIEW's rows that changed; non-nil when what it shows changed (FORCE:
+read the store again and show it anyway).  The drawing in graphical windows wide enough for it
+\(`drgnx-cockpit-graph-svg'), else the outline.  First a cheap key: the store's data version and change count, what
+the model reads of the sessions, the scan and silent-worktree counters, the filter,
+`drgnx-cockpit-include-closed-jobs', the options' generation, the font's metrics, the widest window, ASCII or not.
+The same key: nothing to do.  Then the model is built only when the store, sessions, filter or options changed, the
+layout only when the model, metrics or options did.  Reads the store and the cached sessions only: never prompts.
+In the graph's buffer."
+  (let* ((windows (get-buffer-window-list (current-buffer) nil t))
+         (metrics (drgnx-work-ui--metrics))
+         (drawable (drgnx-cockpit--drawable-p windows))
+         (width (and drawable (apply #'max (mapcar (lambda (w) (window-body-width w t)) windows))))
+         (ascii (drgnx-cockpit-graph--ascii-p))
+         (filter drgnx-cockpit-graph-current-filter) (gen drgnx-cockpit-graph--generation)
+         (store (drgnx-cockpit--store-key))
+         (key (list store filter gen metrics width ascii)))
+    (when (or force (not (equal key drgnx-cockpit--key)))
+      (setq drgnx-cockpit--key key)
+      (let* ((mkey (list store filter gen))
+             (model (if (and (not force) (equal mkey drgnx-cockpit--built-key)) drgnx-cockpit--built
+                      (setq drgnx-cockpit--built-key mkey
+                            drgnx-cockpit--built (drgnx-cockpit--current-model))))
+             (lkey (list model metrics gen))
+             (layout (and drawable
+                          (if (equal lkey drgnx-cockpit--layout-key) drgnx-cockpit--layout
+                            (setq drgnx-cockpit--layout-key lkey
+                                  drgnx-cockpit--layout (drgnx-cockpit-graph-layout model metrics)))))
+             (svg (and layout (>= width (plist-get layout :w))))
+             (sig (list model filter (and svg metrics) ascii gen)))
+        (when (or force (not (equal sig drgnx-cockpit--signature)))
+          (setq drgnx-cockpit--signature sig drgnx-cockpit--model model
+                drgnx-cockpit--questions (drgnx-cockpit--question-lines model))
+          (if svg (drgnx-cockpit--draw-svg view model layout) (drgnx-cockpit--draw-outline view model))
+          t)))))
+
+(defun drgnx-cockpit--sync (view)
+  "The SYNC of the graph's view (after `drgnx-cockpit-schedule'): `drgnx-cockpit--update'; an error is said once."
+  (drgnx-cockpit--call #'drgnx-cockpit--update view nil))
+
+(defun drgnx-cockpit--render-row (key)
+  "The RENDER of the graph's view: KEY's row (`drgnx-cockpit--cells'), a line or a band (which ends in its newline)."
+  (let ((text (cddr (gethash key drgnx-cockpit--cells))))
+    (if (string-suffix-p "\n" text) text (concat text "\n"))))
+
+(defun drgnx-cockpit--show-rows (view cells keys)
+  "Make CELLS (`drgnx-cockpit--cells') VIEW's rows, in the order of KEYS: only the rows whose cell is new are drawn
+again (`drgnx-view-sync-rows'); each window keeps its start and point on its row."
+  (setq drgnx-cockpit--cells cells)
+  (drgnx-view-sync-rows view keys (lambda (key) (cadr (gethash key cells)))))
+
+(drgnx-view-define 'work-graph :render #'drgnx-cockpit--render-row :sync #'drgnx-cockpit--sync
+                   :delay drgnx-cockpit-redraw-delay :key-test 'equal)
+
 (defun drgnx-cockpit-graph-redraw (&optional force)
-  "Draw the Work graph again when what it shows changed (FORCE: read the store again and draw anyway); non-nil when
-it drew.  The drawing in graphical windows wide enough for it (`drgnx-cockpit-graph-svg'), else the outline.
-First a cheap key: the store's data version and change count, what the model reads of the sessions, the scan and
-silent-worktree counters, the filter, `drgnx-cockpit-include-closed-jobs', the options' generation, the font's
-metrics, the widest window, ASCII or not.  The same key: nothing to do.  Then the model is built only when the
-store, sessions, filter or options changed, the layout only when the model, metrics or options did.  Reads the store
-and the cached sessions only: never prompts."
-  (when-let* ((b (get-buffer drgnx-cockpit-graph-buffer-name)))
-    (with-current-buffer b
-      (let* ((windows (get-buffer-window-list b nil t))
-             (metrics (drgnx-work-ui--metrics))
-             (drawable (drgnx-cockpit--drawable-p windows))
-             (width (and drawable (apply #'max (mapcar (lambda (w) (window-body-width w t)) windows))))
-             (ascii (drgnx-cockpit-graph--ascii-p))
-             (filter drgnx-cockpit-graph-current-filter) (gen drgnx-cockpit-graph--generation)
-             (store (drgnx-cockpit--store-key))
-             (key (list store filter gen metrics width ascii)))
-        (setq drgnx-cockpit--stale nil)
-        (when (or force (not (equal key drgnx-cockpit--key)))
-          (setq drgnx-cockpit--key key)
-          (let* ((mkey (list store filter gen))
-                 (model (if (and (not force) (equal mkey drgnx-cockpit--built-key)) drgnx-cockpit--built
-                          (setq drgnx-cockpit--built-key mkey
-                                drgnx-cockpit--built (drgnx-cockpit--current-model))))
-                 (lkey (list model metrics gen))
-                 (layout (and drawable
-                              (if (equal lkey drgnx-cockpit--layout-key) drgnx-cockpit--layout
-                                (setq drgnx-cockpit--layout-key lkey
-                                      drgnx-cockpit--layout (drgnx-cockpit-graph-layout model metrics)))))
-                 (svg (and layout (>= width (plist-get layout :w))))
-                 (sig (list model filter (and svg metrics) ascii gen)))
-            (when (or force (not (equal sig drgnx-cockpit--signature)))
-              (setq drgnx-cockpit--signature sig drgnx-cockpit--model model
-                    drgnx-cockpit--questions (drgnx-cockpit--question-lines model))
-              (if svg (drgnx-cockpit--draw-svg model layout windows) (drgnx-cockpit--draw-outline model windows))
-              (cl-incf drgnx-cockpit--draws)
-              t)))))))
+  "Draw the Work graph again now when what it shows changed (FORCE: read the store again and draw anyway); non-nil
+when what it shows changed (`drgnx-cockpit--update').  For commands: events ask through `drgnx-cockpit-schedule'."
+  (when-let* ((view (drgnx-cockpit--view)))
+    (with-current-buffer drgnx-cockpit-graph-buffer-name
+      (prog1 (drgnx-cockpit--update view force)
+        (drgnx-view-draw-now view)))))
 
-(defun drgnx-cockpit--line-of (id)
-  "The line number of node ID's line in the outline, or nil."
-  (save-excursion
-    (goto-char (point-min))
-    (when-let* ((m (text-property-search-forward 'drgnx-cockpit-node id t)))
-      (line-number-at-pos (prop-match-beginning m)))))
-
-(defun drgnx-cockpit--draw-outline (model windows)
-  "Show MODEL as the outline, changing only the lines that changed: a window keeps its point (on its node when that
-line changed) and its start."
-  (let* ((new (mapcar (lambda (l)
-                        (if-let* ((id (get-text-property 0 'drgnx-cockpit-node l)))
-                            (propertize l 'keymap drgnx-cockpit--line-map 'mouse-face 'highlight
-                                        'help-echo (gethash id drgnx-cockpit--questions))
-                          l))
-                      (delq nil (cons (drgnx-cockpit--filter-line) (drgnx-cockpit-graph-outline model)))))
-         (old (if drgnx-cockpit--svg nil drgnx-cockpit--lines))
-         (inhibit-read-only t)
-         (pre 0) (o old) (n new))
-    (when drgnx-cockpit--svg
-      (erase-buffer)
-      (kill-local-variable 'cursor-type)
-      (drgnx-cockpit--flush-bands)
-      (setq drgnx-cockpit--elements nil))
-    (while (and o n (equal-including-properties (car o) (car n))) (setq o (cdr o) n (cdr n) pre (1+ pre)))
-    (let* ((ro (reverse o)) (rn (reverse n)) (post 0))
-      (while (and ro rn (equal-including-properties (car ro) (car rn))) (setq ro (cdr ro) rn (cdr rn) post (1+ post)))
-      (let* ((gone (- (length old) pre post))
-             ;; windows whose point is on a line about to change: back to the same node after
-             (moved (delq nil (mapcar (lambda (w)
-                                        (let ((line (line-number-at-pos (window-point w))))
-                                          (when (and (> line pre) (<= line (+ pre gone)))
-                                            (list w (get-text-property (save-excursion (goto-char (window-point w)) (line-beginning-position))
-                                                                       'drgnx-cockpit-node)
-                                                  line))))
-                                      windows))))
-        (save-excursion
-          (goto-char (point-min))
-          (forward-line pre)
-          (delete-region (point) (progn (forward-line gone) (point)))
-          (dolist (l (reverse rn)) (insert l "\n")))
-        (drgnx-wb-with-owned-windows windows
-          (pcase-dolist (`(,w ,id ,line) moved)
-            (let ((to (or (and id (drgnx-cockpit--line-of id)) line)))
-              (set-window-point w (save-excursion (goto-char (point-min)) (forward-line (1- to)) (point))))))))
-    (set-buffer-modified-p nil)
-    (setq drgnx-cockpit--lines new drgnx-cockpit--svg nil drgnx-cockpit--spots nil)))
+(defun drgnx-cockpit--draw-outline (view model)
+  "Show MODEL as the outline: one row per line of VIEW, each node's lines keyed by its id, so only the lines that
+changed are drawn again and each window keeps its start and point on its line."
+  (when drgnx-cockpit--svg
+    (kill-local-variable 'cursor-type)
+    (drgnx-cockpit--flush-bands)
+    (setq drgnx-cockpit--elements nil))
+  (let ((old drgnx-cockpit--cells) (cells (make-hash-table :test #'equal)) (seen (make-hash-table :test #'equal))
+        (keys nil))
+    (dolist (l (delq nil (cons (drgnx-cockpit--filter-line) (drgnx-cockpit-graph-outline model))))
+      (let* ((id (get-text-property 0 'drgnx-cockpit-node l))
+             (text (if id (propertize l 'keymap drgnx-cockpit--line-map 'mouse-face 'highlight
+                                      'help-echo (gethash id drgnx-cockpit--questions))
+                     l))
+             (base (cond (id (list :node id))
+                         ((and (null keys) (drgnx-cockpit--filtering-p)) (list :filter))
+                         (t (list :line (substring-no-properties l)))))
+             (key (append base (list (puthash base (1+ (gethash base seen -1)) seen)))))
+        (puthash key (drgnx-cockpit-row-cell old key text text) cells)
+        (push key keys)))
+    (setq drgnx-cockpit--svg nil drgnx-cockpit--spots nil)
+    (drgnx-cockpit--show-rows view cells (nreverse keys))))
 
 (defun drgnx-cockpit--band-svg (layout y0 hb)
   "The SVG text of the band of LAYOUT from Y0, HB pixels tall, with the selected node's focus stroke."
   (let ((focus (and drgnx-cockpit--selected (drgnx-cockpit-graph-focus-element layout drgnx-cockpit--selected))))
     (drgnx-cockpit-graph--print layout (if focus (append drgnx-cockpit--elements (list focus)) drgnx-cockpit--elements) y0 hb)))
 
-(defun drgnx-cockpit--draw-svg (model layout windows)
-  "Show LAYOUT (of MODEL) as the drawing: a summary line, then the image in bands of slices (it scrolls like text),
-every box a hot spot, the selected one stroked.
+(defun drgnx-cockpit--band-text (img rows map)
+  "IMG in ROWS slices of one column (it scrolls like text; it is drawn only where it fits across), with the keymap
+MAP: a band's row, ending in a newline."
+  (with-temp-buffer
+    (insert-sliced-image img nil nil rows 1)
+    (put-text-property (point-min) (point-max) 'keymap map)
+    (buffer-string)))
+
+(defun drgnx-cockpit--draw-svg (view model layout)
+  "Show LAYOUT (of MODEL) as the drawing: a summary line, then the image in bands of slices (rows of VIEW), every
+box a hot spot, the selected one stroked.
 When the head lines, the boxes' places and the bands are what they were (`drgnx-cockpit--frame'), the buffer's text
-stays: only the bands whose drawing changed get it, their old pixels flushed first.  Otherwise the buffer is drawn
-anew; then the old bands' images are flushed, except one drawn the same again (its cached pixels serve the new one),
-and windows keep their start and point where the buffer still reaches."
+stays: only the bands whose drawing changed get it, their old pixels flushed first.  Otherwise every band is a new
+row (a head line only when it changed); then the old bands' images are flushed, except one drawn the same again (its
+cached pixels serve the new one).  Windows keep their start and point on their rows."
   (let* ((head (delq nil (list (drgnx-cockpit--filter-line) (drgnx-cockpit-graph-summary model))))
          (ranges (drgnx-cockpit-graph-band-ranges layout))
          (frame (list head ranges (plist-get layout :w)
@@ -478,10 +509,10 @@ and windows keep their start and point where the buffer still reaches."
                          (setf (image-property img :data) svg (image-property img :map) m (image-property img :foreground) fg))))
                    drgnx-cockpit--bands (drgnx-cockpit--band-maps byid ranges))
           (force-window-update (current-buffer)))
-      (let* ((inhibit-read-only t) (map (make-sparse-keymap)) (spots nil) (i 0)
+      (let* ((map (make-sparse-keymap)) (spots nil) (i 0)
              (lh (cdr (plist-get layout :metrics)))
-             (old drgnx-cockpit--bands) (bands nil)
-             (keep (mapcar (lambda (w) (list w (window-start w) (window-point w))) windows)))
+             (old-bands drgnx-cockpit--bands) (bands nil)
+             (old (and drgnx-cockpit--svg drgnx-cockpit--cells)) (cells (make-hash-table :test #'equal)) (keys nil))
         (dolist (box (plist-get layout :boxes))
           (let ((area (intern (format "drgnx-cockpit-node-%d" (cl-incf i)))))
             (push (cons area (plist-get box :id)) spots)
@@ -492,28 +523,27 @@ and windows keep their start and point where the buffer still reaches."
         (define-key map [down-mouse-1] #'ignore)        ; a press neither moves point nor selects
         (define-key map [double-mouse-1] #'ignore)
         (setq drgnx-cockpit--spots (nreverse spots))
-        (erase-buffer)
-        (dolist (l head) (insert l "\n"))
-        (let ((start (point)) (maps (drgnx-cockpit--band-maps byid ranges)))
+        (cl-loop for l in head for n from 0
+                 do (let ((key (list :head n)))
+                      (puthash key (drgnx-cockpit-row-cell old key l l) cells)
+                      (push key keys)))
+        (let ((maps (drgnx-cockpit--band-maps byid ranges)) (n 0))
           (pcase-dolist (`(,y0 ,hb) ranges)
             (let ((img (create-image (drgnx-cockpit--band-svg layout y0 hb) 'svg t :scale 1.0
                                      :foreground (drgnx-work-ui--colour 'default :foreground)))
-                  (rows (max 1 (/ hb (* 2 lh)))))
+                  (rows (max 1 (/ hb (* 2 lh))))
+                  (key (list :band n)))
               ;; set after `create-image', which would measure the image for its hot spots
               (setf (image-property img :map) (pop maps))
-              (push (list y0 hb img (point) rows) bands)
-              ;; in slices of rows: it scrolls like text (it is drawn only where it fits across, so one column)
-              (insert-sliced-image img nil nil rows 1)))
-          (put-text-property start (point-max) 'keymap map))
-        (drgnx-wb-with-owned-windows windows
-          (pcase-dolist (`(,w ,s ,p) keep)
-            (set-window-start w (min s (point-max)) t)
-            (set-window-point w (min p (point-max)))))
-        (set-buffer-modified-p nil)
+              (push (list y0 hb img key rows) bands)
+              (puthash key (drgnx-cockpit-row-cell nil key nil (drgnx-cockpit--band-text img rows map)) cells)
+              (push key keys)
+              (cl-incf n))))
         (setq-local cursor-type nil)                    ; no cursor box drawn round a slice of the image
-        (setq drgnx-cockpit--svg t drgnx-cockpit--lines nil drgnx-cockpit--bands (nreverse bands) drgnx-cockpit--frame frame)
+        (setq drgnx-cockpit--svg t drgnx-cockpit--bands (nreverse bands) drgnx-cockpit--frame frame)
+        (drgnx-cockpit--show-rows view cells (nreverse keys))
         ;; an old band drawn the same again keeps its pixels (the image cache finds the equal image); the others go
-        (dolist (b old)
+        (dolist (b old-bands)
           (unless (seq-find (lambda (nb) (equal (nth 2 nb) (nth 2 b))) drgnx-cockpit--bands)
             (ignore-errors (image-flush (nth 2 b) t))))))))
 
@@ -553,12 +583,13 @@ described for hovering.  One pass over the boxes: each goes to the bands it reac
 images' pixels flushed first), and point goes to the row where its box starts."
   (let ((old drgnx-cockpit--selected) (layout drgnx-cockpit--layout))
     (setq drgnx-cockpit--selected id)
-    (pcase-dolist (`(,y0 ,hb ,img ,start ,rows) drgnx-cockpit--bands)
+    (pcase-dolist (`(,y0 ,hb ,img ,key ,rows) drgnx-cockpit--bands)
       (when (or (drgnx-cockpit--box-band layout old y0 hb) (drgnx-cockpit--box-band layout id y0 hb))
         (ignore-errors (image-flush img t))
         (setf (image-property img :data) (drgnx-cockpit--band-svg layout y0 hb)))
       (when-let* ((box (seq-find (lambda (b) (equal (plist-get b :id) id)) (plist-get layout :boxes)))
-                  (y (plist-get box :y)) ((and (>= y y0) (< y (+ y0 hb)))))
+                  (y (plist-get box :y)) ((and (>= y y0) (< y (+ y0 hb))))
+                  (start (drgnx-view-row-start drgnx-view key)))
         (goto-char (+ start (* 2 (min (1- rows) (/ (* (- y y0) rows) hb)))))))
     (force-window-update (current-buffer))))
 
@@ -740,7 +771,12 @@ or nil: any."
 ;; what happened, questions everywhere, the timeline (drgnx-cockpit-feed.el, beside this file)
 (unless (featurep 'drgnx-cockpit-feed)
   (load (expand-file-name "drgnx-cockpit-feed" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+;; the graph's keys get the cockpit's (A answers); here, not in the feed, which may load first (the modules directory
+;; loads files alphabetically)
+(defvar drgnx-cockpit-map)
+(set-keymap-parent drgnx-cockpit-graph-mode-map drgnx-cockpit-map)
 (declare-function drgnx-cockpit-feed--setup "drgnx-cockpit-feed")
+(declare-function drgnx-cockpit-feed--teardown "drgnx-cockpit-feed")
 (declare-function drgnx-cockpit-cards--schedule "drgnx-cockpit-cards")
 (declare-function drgnx-cockpit-feed-tell-statusbar "drgnx-cockpit-feed")
 ;; what needs you and the decision log, the job window's parts (drgnx-cockpit-cards.el, beside this file)
@@ -752,9 +788,13 @@ or nil: any."
 ;;;; The module
 
 (defun drgnx-cockpit--setup ()
-  "tools/cockpit's setup: the Work graph's pane kind and its commands."
+  "tools/cockpit's setup: the Work graph's pane kind, its commands and its subscriptions to the workbench state
+store, the status bar's look at what waits on you, and its parts'."
   (drgnx-pane-define-kind 'work-graph :title " WORK GRAPH" :home 'left :view 'work
-                          :buffer #'drgnx-cockpit-graph-buffer :on-show #'drgnx-cockpit--on-show)
+                          :buffer #'drgnx-cockpit-graph-buffer)
+  (drgnx-cockpit--subscribe)
+  (drgnx-timer-start 'cockpit-waiting drgnx-cockpit-check-interval #'drgnx-cockpit--waiting
+                     :repeat drgnx-cockpit-check-interval)
   (pcase-dolist (`(,id ,title ,fn ,doc)
                  '((cockpit-filter "Filter Graph…" drgnx-cockpit-graph-filter "Only a milestone's, an agent's or some states' nodes")
                    (cockpit-open "Open Node" drgnx-cockpit-graph-open "Its tab: a file at its line, a transcript, a job in the cockpit")
@@ -777,16 +817,19 @@ or nil: any."
   (drgnx-cockpit-cards--setup))          ; kinds `needs-you' and `decisions' (right, stacked with `happened')
 
 (defun drgnx-cockpit--teardown ()
-  "tools/cockpit's off path: undo what its parts' setups left global — agents' edits panes, What needs you and the
-decision log with their three global hook functions.  drgnx's modules have no runtime off yet (a module turned off
-stops at the next start): module teardown calls this."
+  "tools/cockpit's `:teardown': what its cleanup stack cannot see — the cockpit's buffers (the Work graph, What
+happened, the timeline, agents' edits, What needs you and the decision log: each one's `kill-buffer-hook' takes its
+hooks, and its timers and watches go with it) and the cards' three global hook functions.  Its pane kinds,
+commands, state subscriptions and `cockpit-waiting' timer are its setup's: the stack undoes them.  Idempotent."
+  (drgnx-cockpit-feed--teardown)
   (drgnx-cockpit-edits--teardown)
-  (drgnx-cockpit-cards--teardown))
+  (drgnx-cockpit-cards--teardown)
+  (when-let* ((b (get-buffer drgnx-cockpit-graph-buffer-name))) (kill-buffer b)))
 
 (drgnx-module-define 'tools/cockpit
                      :doc "The Work cockpit: the Work graph — specs, plans, tasks, agents, jobs and reviews; drawn in windows, an outline in terminals; what jobs need of you and their decisions."
                      :stage 'startup :requires '(tools/work tools/jobs)
-                     :setup #'drgnx-cockpit--setup)
+                     :setup #'drgnx-cockpit--setup :teardown #'drgnx-cockpit--teardown)
 
 (provide 'drgnx-cockpit)
 ;;; drgnx-cockpit.el ends here

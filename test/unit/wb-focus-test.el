@@ -1,27 +1,30 @@
 ;;; wb-focus-test.el --- batch tests: Focus Left/Right/Above/Below across editor groups and docks -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx-actions)
+(require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-wb-focus-test--with (&rest body)
   "BODY with the sidebar (two dummy sections) on the left of one editor group, rules and chrome on."
-  `(let ((drgnx-wb--sections nil) (drgnx-signal--editor-window nil) (display-buffer-alist nil))
-     (delete-other-windows)
-     (set-window-parameter (selected-window) 'drgnx-tabs nil)
-     (drgnx-rules-mode 1)
-     (drgnx-chrome-mode 1)
-     (drgnx-wb-define-section 'top :slot -1 :title "TOP" :buffer (lambda () (get-buffer-create "*drgnx-focus-top*")))
-     (drgnx-wb-define-section 'bottom :slot 0 :title "BOTTOM" :buffer (lambda () (get-buffer-create "*drgnx-focus-bottom*")))
-     (unwind-protect
-         (progn (switch-to-buffer (get-buffer-create "*drgnx-focus-a*"))
-                (drgnx-chrome-apply nil t)
-                (drgnx-wb-show-sidebar)
-                ,@body)
-       (drgnx-wb-hide-sidebar)
-       (drgnx-chrome-mode -1)
-       (drgnx-rules-mode -1)
+  `(drgnx-test-with-state
+     (let ((drgnx-wb--sections nil) (display-buffer-alist nil))
        (delete-other-windows)
-       (dolist (b '("*drgnx-focus-top*" "*drgnx-focus-bottom*" "*drgnx-focus-a*"))
-         (when (get-buffer b) (kill-buffer b))))))
+       (set-window-parameter (selected-window) 'drgnx-tabs nil)
+       (drgnx-rules-mode 1)
+       (drgnx-chrome-mode 1)
+       (drgnx-wb-define-section 'top :slot -1 :title "TOP" :buffer (lambda () (get-buffer-create "*drgnx-focus-top*")))
+       (drgnx-wb-define-section 'bottom :slot 0 :title "BOTTOM" :buffer (lambda () (get-buffer-create "*drgnx-focus-bottom*")))
+       (unwind-protect
+           (progn (switch-to-buffer (get-buffer-create "*drgnx-focus-a*"))
+                  (drgnx-chrome-apply nil t)
+                  (drgnx-wb-show-sidebar)
+                  ,@body)
+         (drgnx-wb-hide-sidebar)
+         (drgnx-chrome-mode -1)
+         (drgnx-rules-mode -1)
+         (delete-other-windows)
+         (dolist (b '("*drgnx-focus-top*" "*drgnx-focus-bottom*" "*drgnx-focus-a*"))
+           (when (get-buffer b) (kill-buffer b)))))))
 
 (ert-deftest drgnx-wb-focus/moves-between-groups-and-the-sidebar ()
   (drgnx-wb-focus-test--with

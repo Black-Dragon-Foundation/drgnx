@@ -27,10 +27,14 @@ treemacs; see
 The sidebar has **views**, like VS Code's activity bar: **View: Explorer** shows the Buffers panel, the Explorer
 and the Outline; **View: Search** shows the Search view. The two commands show their view and move focus to it (the Explorer's
 file tree, the Search view with the cursor in its Find field), like VS Code's `Ctrl+Shift+E` and `Ctrl+Shift+F`.
-Focus Explorer, Focus Outline and the like also switch the sidebar to their view first. The Search view is set up the
-first time it is asked for, also in the first second after a start (its module sets up once Emacs is idle). Swapping the view another way
+Focus Explorer, Focus Outline and the like also switch the sidebar to their view first. The Search view is there from
+the start (its module sets up in the startup stage), so its key works in the first second too. Swapping the view another way
 (`drgnx-wb-show-view`, as a layout does; there are no clickable view tabs yet) swaps the sections in place, at the same width, and leaves focus where it was (a focus inside the
 sidebar moves to the new view's first section); with the sidebar hidden it shows it. Hiding and showing the sidebar brings back the view it had.
+
+**Turning a module off** hides its panes (a panel tab, a right-dock tab) and removes its sections and tabs; nothing
+else in the workbench moves. The size you gave a pane and its place in front are remembered: turn the module on again
+and the pane comes back at that size, and shows at once when its panel or dock is open with it in front.
 
 In the **Explorer**: a click on a folder opens or closes it; a click on a file opens it and keeps the Explorer
 focused (so you can keep browsing); a double click on a file moves to the editor. Keys: up/down (`n`/`p` in the
@@ -62,7 +66,10 @@ same way). A click shows the definition in the editor and keeps you in the Outli
 editor, and half a second after you stop typing, your edits — only while it is shown (hidden, it lets go of the file
 at the next pause or editor change), and a key you press while it works wins (it tries again at the next pause). Files without an index, remote files and buffers over 1 MB get a
 one-line notice instead. The definition your cursor is in is highlighted in the Outline (an overlay, set a moment
-after the cursor stops — the Outline's own cursor is yours and never moves). Focus Outline: palette · `SPC o`.
+after the cursor stops — the Outline's own cursor is yours and never moves while you work in a file). Another file
+starts the Outline at its top, its cursor on the definition your cursor is in (scrolled into view). An edit that only
+moves definitions redraws nothing, and the Outline keeps your place in it when definitions are added above. Its rows
+and notices start in the column of the section's title. Focus Outline: palette · `SPC o`.
 
 ### Files
 
@@ -109,7 +116,8 @@ theme's version-control faces; a folder with changes inside shows `●` (also on
 a new folder itself shows `U`), and so does a root; ignored files are dimmed. One background `git status` per
 repository (never holding your git lock), repositories nested inside the tree included; a repository made after
 the tree was shown (`git init`) is picked up at the next refresh (a save, or Emacs getting the focus back).
-`drgnx-explorer-git` turns it off. What git complains
+The status of at most 16 repositories is kept; one that was pushed out is read again by the next refresh of its
+folder. `drgnx-explorer-git` turns it off. What git complains
 about is kept in the hidden buffer ` *drgnx git errors*` (its last `drgnx-git-errors-max` characters).
 
 ### Buffers panel
@@ -176,7 +184,7 @@ alone unless a rule names them.
 | `panel` Problems | flymake / flycheck lists |
 | `panel` Output | `*Messages*`, `*Warnings*`, `*Backtrace*`, ert results |
 | `panel` Results | compilation, grep, occur, xref |
-| `panel` Terminal | shell, eshell, term, vterm, ielm, other comint buffers |
+| `panel` Terminal | New Terminal (your shell in eat; eshell for a remote folder, on Windows, and until eat is synced), New Eshell, shell, eshell, term, vterm, ielm, other comint buffers |
 | `panel` Help | help, apropos, Info, man, eldoc documentation |
 | `right` | agents, chat, viewers — tabs come with their modules (M7) |
 | `popup` | transient, which-key, `*Completions*`, `*Calendar*` |
@@ -193,6 +201,10 @@ is not a frame line); with fewer, the frame parameter `drgnx-chrome-breadcrumb` 
 and the row is gone, sticky scroll's scopes with it. It comes back with room, and a buffer's own header line (column
 headings) stays.
 
+Hovering a file tab (or its ×) lights that one only. Tabs are dimmed, the shown tab of the active editor group is bold
+in the theme's link colour with an overline, and every row of chrome (tab line, breadcrumb, dock titles, panel tabs,
+the top line) is the theme's tab-line background; customize `drgnx-chrome-tab*` and `drgnx-wb-bar` to change them.
+
 - **Tabs**: the buffers an editor window has shown, in the order they were opened; switching never reorders them.
   Click a tab to show it, `×` or middle-click closes it (the buffer stays open — close it in the Buffers panel).
   Close Tab `C-<f4>` · palette · `SPC b d`; Next / Previous Tab `C-<next>` / `C-<prior>` · Emacs' `C-x <right>` /
@@ -200,6 +212,10 @@ headings) stays.
   out of every window at once; closing the shown tab (or killing its buffer) shows the tab you used before it, as in VS Code; with no such tab, the one to its right, else its left. Each window keeps its own history.
 - **Breadcrumb**: project › folders › file, `●` while unsaved. A buffer with a header line of its own (the column
   headings of a list, clicked to sort) keeps it.
+- **At once**: chrome follows the workbench state store, so it is in place before a frame is drawn. A window made by
+  anything — a split, a popup, a timer — has its tab line and header at the first redraw; `C-x o` between two windows
+  showing one buffer moves the tabs and the breadcrumb on the spot. Saving or reverting a buffer updates its `●` a
+  moment later.
 - A buffer shown only for a moment — a preview while you choose in the minibuffer — does not become a tab.
 - Popups in child frames (posframe, corfu, eldoc-box) keep their own look: they get no chrome.
 
@@ -238,15 +254,31 @@ restore failed is not tried again). A file that client asked for is shown in fro
 it after the restore); add a function to `drgnx-persist-after-restore-functions` (called with the restored frame, after
 every restore, never prompting; the other windows of a saved workbench are not passed to it) to do something of your
 own at that moment. To keep data of your own in the saved state, add a function to `drgnx-persist-state-functions`
-that returns a plist of namespaced keys (`:mymodule-thing`) with readable values only; one that returns anything else
-is left out (said once) without costing the other functions' keys.
+that returns a plist of namespaced keys (`:mymodule-thing`) with plain values only (symbols, numbers, strings, lists, vectors; text properties of strings are dropped); one that
+returns anything else (a buffer, a hash table, a record) is left out (said once) without costing the other functions'
+keys or the save.
 
-Each group's shown file opens at once and its other tabs open while you are idle, one every 0.2 s in the same pause (typing
-stops them until your next pause); nothing asks anything at start (no
+Each group's shown file opens at once and its other tabs open while you are idle, all within the first pause (typing
+stops them until your next pause, which carries on with the rest); nothing asks anything at start (no
 remote files are touched, only safe local variables, no large-file question). Files that no longer exist are skipped,
 sizes are clamped to the frame, window parameters in the file are ignored (drgnx saves none), and a state in another
-format is ignored. Save / Restore Workbench Layout are in the palette. Only graphical windows save and restore — a
+format is ignored. The file is written whole and atomically (a crash or a full disk leaves the last saved layout), and
+read with limits (4 MiB, no deep nesting, plain data only). A file written by a **newer drgnx** is never overwritten:
+the save says "workbench.eld was written by a newer drgnx: not saved" and stops, and the restore ignores it. A file
+that cannot be read (a typing mistake, a crafted file) is not restored, one message says so, and the next save keeps a
+copy of it beside the file (`workbench.eld.bak-…`, the newest three) before writing the new layout. A save that fails
+at exit (another Emacs holds the file for more than a second, the disk is full) is one message, never an error.
+Save / Restore Workbench Layout are in the palette. Only graphical windows save and restore — a
 batch run never writes your state.
+
+Which windows are saved is what the workbench state store says: its visible graphical frames, the main window first
+(a terminal window and a child frame are never saved). **The sizes saved are the ones you chose**: a dock or the
+panel is saved at the size you set (by dragging it, or by a restore), not at the one a popup, the window manager or a
+layout squeezed it to; a pane you never sized is saved at the size it has. The panel is saved at its own size even
+while a popup borrows its window. A restore writes the sizes and the sidebar view back as chosen, so they win over a
+size you set earlier in this session. The file format is the same as before; files saved by earlier versions restore
+as they did. Restore Workbench Layout typed in a terminal window, while a graphical window is open, restores into
+that window and says so in the echo area; with none open, it says layouts belong to graphical windows.
 
 **Terminal windows** (`emacs -nw`, `emacsclient -t`) open with the default layout for their size
 ([terminal.md](terminal.md)) and neither save nor restore their own layout: a terminal session never overwrites the
@@ -360,7 +392,10 @@ The **panel** (Toggle Panel: ``C-` `` · palette · `SPC j`) sits under the edit
 Right Dock: `C-M-b` · palette · `SPC R`) runs the frame's full height, like the left one. Each is one window with a
 **tab row** at the top (click a tab to show it). Showing a buffer there never takes focus (Focus Panel does), and
 switching tabs swaps the buffer *in place*: the window stays, nothing around it moves, and each tab comes back
-scrolled where you left it. Both keep their pixel size across hiding and showing. Killing the buffer a tab shows
+scrolled where you left it. Both keep their pixel size across hiding and showing. **The size you chose stays:**
+a size you set for the left dock, the panel or the right dock is the one it comes back at the next time it shows.
+A popup that squeezes the panel, the window manager shrinking the window or a layout applied later does not
+replace it. A dock you drag to a new width (or a panel to a new height) keeps that size when the frame is resized. Killing the buffer a tab shows
 leaves the tab empty — another buffer never slips into the panel. `C-x 1` keeps the docks and the panel; `C-x 0` in
 the panel hides it (size and tabs kept), and so does `q` in a panel buffer that binds it to quit (Help, Info, a
 compilation, …): the panel hides and focus goes back to the editor, as Escape does in VS Code. The echo
@@ -400,12 +435,19 @@ Not yet: file nesting, icons (an icon theme is a module, M4), problems decoratio
 
 ## How it works
 
-- **The change bus** (`wb/drgnx-signal.el`) is the only code that listens to Emacs' window and buffer hooks. A
-  hook only arms an idle flush; the flush compares the state with the previous one and emits **edges**:
-  `editor-changed` (the file in the editor you used last), `editor-point-changed` (its cursor moved), `buffer-set-changed`, `modified-changed`. Followers
+- **The change bus** (`wb/drgnx-signal.el`) is where followers subscribe. Window answers come from the workbench
+  state store (`wb/drgnx-state.el`), which watches the window hooks; the bus listens to the buffer hooks. A hook
+  only arms one idle flush (and notes which part changed: the buffer set, or the modified flags); the flush brings
+  the store up to date, rebuilds only the part that changed, compares the state with the previous one and emits
+  **edges**: `editor-changed` (the file in the editor you used last), `editor-point-changed` (its cursor moved),
+  `frame-changed` (another frame became the selected one), `buffer-set-changed`, `modified-changed`. Followers
   subscribe to these, never to hooks — so a focus change, a background buffer or a burst of events cannot make
   them fire. Internal buffers (names starting with a space) never count. A follower (or a window-setup function)
   that fails is recorded in `drgnx-signal-errors`; the others still run and the next flush stays armed.
+- **The editor you used last** is kept per frame, and is right at once: the moment a command ends (or a timer's
+  change is drawn), not after the next pause. Each frame — a second window of the workbench, a terminal client —
+  has its own, so a file chosen in one frame's dock opens in that frame's editor. Moving between two windows on one
+  file changes the editor but not the file, so the Explorer and the Outline stay as they are.
 - **Roles** (`wb/drgnx-wb.el`): each window is an `editor` or a `dock` window (window parameter `drgnx-role`). The
   dock is side windows with a pixel width kept across hide/show, no scroll bars, and titles in the
   `header-line-format` *window parameter*, where no mode can erase them. Showing the dock never takes focus; files
@@ -419,13 +461,13 @@ Not yet: file nesting, icons (an icon theme is a module, M4), problems decoratio
 - **Owned windows.** Code running from a timer or a follower may move only windows that show its own buffer, and
   says so with `drgnx-wb-with-owned-windows`; the harness's jank guard records any other window move made from a
   timer or a window change hook (invariant I9). Two lints (`test/unit/lint-buffers-timers-test.el`) keep the habits behind it: the
-  workbench follows on the bus's edges, never from `run-with-timer`/`run-at-time` (an allow-list names the
-  exceptions and why), and an internal ` *…*` buffer is made with `inhibit-buffer-hooks`, so no follower hears of it.
+  workbench follows on the bus's edges, never from `run-with-timer`/`run-at-time` or a wall-clock
+  `drgnx-timer-*` (an allow-list names the exceptions and why), and an internal ` *…*` buffer is made with `inhibit-buffer-hooks`, so no follower hears of it.
 - **Explorer** (`wb/drgnx-explorer.el`) and **Buffers** (`wb/drgnx-buffers.el`) are **virtual lists**: the buffer
   holds plain text, inserted in one go; a vector holds what each line is (path, depth, folder or file — or the
   buffer); faces are painted by jit-lock for the rows on screen only. Expanding a folder inserts its rows after the
   folder's row; collapsing deletes them; nothing else is redrawn. Folder listings are cached while the folder is
-  unchanged (one `directory-files-and-attributes` call per folder). The Buffers panel re-renders only when its rows
+  unchanged (one `directory-files-and-attributes` call per folder), for at most 64 folders (the least recently shown goes first). The Buffers panel re-renders only when its rows
   changed and puts every window's view and selection back on the same buffers.
 
 ## Performance

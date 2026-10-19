@@ -72,12 +72,94 @@ filename a.txt
     (should (equal (drgnx-blame--ago (- now (* 800 86400)) now) "2 years ago"))))
 
 (ert-deftest drgnx-blame/text-is-one-short-line ()
-  (let ((s (drgnx-blame--text (list :author "Bob" :time 1700000000 :summary (make-string 200 ?x)) (+ 1700000000 86400))))
+  (let ((s (drgnx-blame--text (list :author "Bob" :time 1700000000 :summary (make-string 200 ?x)) (+ 1700000000 86400) 200)))
     (should (string-prefix-p "Bob, 1 day ago · xxx" s))
     (should (<= (string-width s) 80))
     (should (eq (get-text-property 0 'face s) 'drgnx-blame)))
-  (should (equal (substring-no-properties (drgnx-blame--text '(:author "You" :summary "Uncommitted changes") 0))
+  (should (equal (substring-no-properties (drgnx-blame--text '(:author "You" :summary "Uncommitted changes") 0 80))
                  "You · Uncommitted changes")))
+
+;; UI audit #2: `now' is `float-time', so the division gave 1.2 days and "1 days ago"
+(ert-deftest drgnx-blame/ago-whole-counts-for-a-float-now ()
+  (let ((now 2000000000.4321))
+    (should (equal (drgnx-blame--ago (- 2000000000 (+ 86400 7200)) now) "1 day ago"))
+    (should (equal (drgnx-blame--ago (- 2000000000 (* 1.2 3600)) now) "1 hour ago"))
+    (should (equal (drgnx-blame--ago (- 2000000000 (* 1.5 60)) now) "1 minute ago"))
+    (should (equal (drgnx-blame--ago (- 2000000000 (* 1.5 86400)) now) "1 day ago"))
+    (should (equal (drgnx-blame--ago (- 2000000000 (* 2.9 86400)) now) "2 days ago"))
+    (should (equal (drgnx-blame--ago (- 2000000000 (* 45 86400)) now) "1 month ago"))
+    (should (equal (drgnx-blame--ago (- 2000000000 (* 400 86400)) now) "1 year ago"))
+    (dolist (secs '(61 3601 90000 4000000 40000000 70000000))
+      (should-not (string-match-p "[.]\\|\\b1 [a-z]+s ago" (drgnx-blame--ago (- 2000000000 secs) now))))))
+
+;; UI audit #1: the text fits the columns left after the end of the line; it never wraps
+(ert-deftest drgnx-blame/text-fits-the-room-it-is-given ()
+  (let* ((info (list :author "Bob" :time 1700000000 :summary "Fix the parser so that it never wraps mid-word"))
+         (now (+ 1700000000 86400))
+         (full (drgnx-blame--text info now 80))
+         (cut (drgnx-blame--text info now 30)))
+    (should (equal (substring-no-properties full) "Bob, 1 day ago · Fix the parser so that it never wraps mid-word"))
+    (should (= (string-width cut) 30))
+    (should (string-suffix-p "…" cut))
+    (should (string-prefix-p "Bob, 1 day ago · Fix" cut))
+    (should (eq (get-text-property 0 'face cut) 'drgnx-blame))
+    (should (= (string-width (drgnx-blame--text info now 20)) 20))
+    (should-not (drgnx-blame--text info now 19))            ; too little room: nothing, not a stump
+    (should-not (drgnx-blame--text info now 0))
+    (should-not (drgnx-blame--text info now -5))
+    (should (<= (string-width (drgnx-blame--text (list :author "B" :time 1 :summary (make-string 300 ?x)) 2 500)) 80))))
+
+(ert-deftest drgnx-blame/room-is-what-the-window-has-left ()
+  ;; batch: no pixel position, so the column count decides (frame 80 wide)
+  (with-temp-buffer
+    (set-window-buffer (selected-window) (current-buffer))
+    (insert "short\n" (make-string 70 ?x) "\n" (make-string 79 ?y))
+    (goto-char (point-min))
+    (let ((w (window-body-width)))
+      (should (= (drgnx-blame--room) (- w 5 drgnx-blame--gap 1)))
+      (forward-line 1)
+      (should (= (drgnx-blame--room) (- w 70 drgnx-blame--gap 1)))
+      (forward-line 1)
+      (should (<= (drgnx-blame--room) 0)))))
+
+;; the window is resized: the blame on show is fitted again, from what git said (no new request)
+(ert-deftest drgnx-blame/resize-refits-what-is-shown ()
+  (drgnx-blame-test--with-history
+    (set-window-buffer (selected-window) (current-buffer))
+    (goto-char (point-min))
+    (let ((room 60))
+      (cl-letf (((symbol-function 'drgnx-blame--room) (lambda () room)))
+        (drgnx-blame--show (list :author "Ada" :time 1700000000 :summary (make-string 100 ?x)))
+        (should (= (string-width (drgnx-blame-test--shown)) (+ 3 60)))
+        (setq room 30)
+        (with-temp-buffer (drgnx-blame--resized (selected-window)))   ; hook: another buffer is current
+        (should (= (string-width (drgnx-blame-test--shown)) (+ 3 30)))
+        (setq room 10)
+        (drgnx-blame--resized (selected-window))
+        (should-not (drgnx-blame-test--shown))
+        (setq room 50)
+        (drgnx-blame--resized (selected-window))
+        (should (= (string-width (drgnx-blame-test--shown)) (+ 3 50)))
+        (forward-line 1)                                      ; point left the line: not this line's blame to refit
+        (setq room 25)
+        (drgnx-blame--resized (selected-window))
+        (should (= (string-width (drgnx-blame-test--shown)) (+ 3 50)))))
+    (should (memq #'drgnx-blame--resized window-size-change-functions))
+    (drgnx-blame-mode -1)
+    (should-not (memq #'drgnx-blame--resized window-size-change-functions))))
+
+(ert-deftest drgnx-blame/narrow-window-shows-nothing-and-never-wraps ()
+  (drgnx-blame-test--with-history
+    (set-window-buffer (selected-window) (current-buffer))
+    (goto-char (point-min)) (insert (make-string 65 ?x)) (save-buffer) (goto-char (point-min))
+    (let ((info (list :author "Ada" :time nil :summary "Uncommitted changes")))
+      (drgnx-blame--show info)                              ; 80 - 65 - gap: under 20 columns left
+      (should-not (drgnx-blame-test--shown))
+      (should drgnx-blame--bol)                             ; answered, only not shown: no git again
+      (goto-char (point-max)) (forward-line -1) (goto-char (line-end-position))
+      (drgnx-blame--show info)
+      (should (drgnx-blame-test--shown))
+      (should (<= (+ (current-column) (string-width (overlay-get drgnx-blame--overlay 'after-string))) (window-body-width))))))
 
 (ert-deftest drgnx-blame/the-current-line-shows-its-commit ()
   (drgnx-blame-test--with-history
@@ -188,26 +270,20 @@ filename a.txt
 (ert-deftest drgnx-blame/timer-cancelled ()
   ;; M11b-12: the one idle timer lives while some buffer has inline blame, not for the rest of the session
   (dolist (b (buffer-list)) (with-current-buffer b (when (bound-and-true-p drgnx-blame-mode) (drgnx-blame-mode -1))))
-  (should-not drgnx-blame--timer)
+  (should-not (drgnx-timer-active-p 'blame-tick))
   (drgnx-blame-test--with-history
-    (let ((first (current-buffer)) (second (progn (drgnx-git-test-write repo "b.txt" "b\n") (find-file-noselect (expand-file-name "b.txt" repo)))) (timer nil))
+    (let ((first (current-buffer)) (second (progn (drgnx-git-test-write repo "b.txt" "b\n") (find-file-noselect (expand-file-name "b.txt" repo)))))
       (with-current-buffer second (drgnx-blame-mode 1))
-      (setq timer drgnx-blame--timer)
-      (should (timerp timer))
-      (should (memq timer timer-idle-list))
+      (should (drgnx-timer-active-p 'blame-tick))
       (drgnx-blame-mode -1)                                  ; one buffer still has it
-      (should (eq drgnx-blame--timer timer))
-      (should (memq timer timer-idle-list))
+      (should (drgnx-timer-active-p 'blame-tick))
       (with-current-buffer second (drgnx-blame-mode -1))     ; the last one
-      (should-not drgnx-blame--timer)
-      (should-not (memq timer timer-idle-list))
+      (should-not (drgnx-timer-active-p 'blame-tick))
       ;; on again, then the last buffer killed
       (drgnx-blame-mode 1)
-      (should (timerp drgnx-blame--timer))
-      (setq timer drgnx-blame--timer)
+      (should (drgnx-timer-active-p 'blame-tick))
       (kill-buffer first)
-      (should-not drgnx-blame--timer)
-      (should-not (memq timer timer-idle-list))
+      (should-not (drgnx-timer-active-p 'blame-tick))
       (kill-buffer second))))
 
 ;;; mod-blame-test.el ends here

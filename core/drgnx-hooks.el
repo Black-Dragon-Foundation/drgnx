@@ -8,6 +8,8 @@
 ;; `drgnx-hooks-problems', never shown as prompts.
 
 ;;; Code:
+(require 'drgnx-frame-kind)
+
 (defvar drgnx-first-input-hook nil "Run once, before the first command the user gives.")
 (defvar drgnx-first-file-hook nil "Run once, when the first file is visited.")
 (defvar drgnx-first-gui-frame-hook nil "Run once, when the first graphical frame exists.")
@@ -34,7 +36,7 @@
   (drgnx-hooks-run-once 'drgnx-first-file-hook))
 
 (defun drgnx-hooks--gui-frame (&optional frame)
-  (when (display-graphic-p frame)
+  (when (eq (drgnx-state-frame-kind (or frame (selected-frame))) 'gui)
     (drgnx-hooks-run-once 'drgnx-first-gui-frame-hook)))
 
 (defun drgnx-hooks-install ()

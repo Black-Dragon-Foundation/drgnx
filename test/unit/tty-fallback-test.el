@@ -72,6 +72,9 @@ binding are taken off afterwards."
                    ((symbol-function 'frame-terminal) (lambda (&optional _) tty-fallback-test--term))
                    ((symbol-function 'terminal-name) (lambda (&optional term) (symbol-name term)))
                    ((symbol-function 'terminal-live-p) (lambda (_term) t))
+                   ;; the editor tabs' close glyph (drgnx-face-glyph) asks the terminal for its coding system; a
+                   ;; fake terminal has none, and the failure left core/workbench unset-up (a table of 27 chords, not 37)
+                   ((symbol-function 'terminal-coding-system) (lambda (&optional _) 'utf-8-unix))
                    ((symbol-function 'display-graphic-p) (lambda (&optional _) tty-fallback-test--graphic))
                    ((symbol-function 'terminal-parameter)
                     (lambda (term p) (gethash (cons (or term tty-fallback-test--term) p) table)))
@@ -80,7 +83,8 @@ binding are taken off afterwards."
                    ((symbol-function 'drgnx-tty-frames--ask) (lambda (_frame) nil))
                    ((symbol-function 'display-color-cells) (lambda (&optional _) 256))
                    ;; the hint waits for the server's own message: at once here
-                   ((symbol-function 'run-with-timer) (lambda (_secs _repeat fn &rest args) (apply fn args)))
+                   ((symbol-function 'drgnx-timer-start)
+                    (lambda (key _secs fn &rest plist) (should (eq (car-safe key) 'tty-fallback-hint)) (apply fn (plist-get plist :args))))
                    ((symbol-function 'message)
                     (lambda (fmt &rest args) (when fmt (push (apply #'format fmt args) messages))))
                    ((symbol-function 'y-or-n-p) (lambda (&rest _) (error "Asked")))
@@ -336,6 +340,18 @@ binding are taken off afterwards."
         (should-not (drgnx-tty-frame-sends-p (selected-frame) "C-S-p"))
         (should (drgnx-tty-frame-sends-p (selected-frame) "C-p"))))))
 
+(ert-deftest drgnx-tty-fallback/a-child-frame-leaves-its-terminals-layer-on ()
+  ;; Emacs 31 terminal child frames share the parent's terminal: asked about one, the layer answers for the parent
+  (tty-fallback-test--with-terminal nil '("TERM=xterm-256color")
+    (let ((drgnx-keys-last (list :bindings (tty-fallback-test--bindings "VS Code")))
+          (parent (selected-frame)) (live (symbol-function 'frame-live-p)) (up (symbol-function 'frame-parent)))
+      (should (drgnx-tty-fallback-install parent tty-fallback-test--legacy))
+      (cl-letf (((symbol-function 'frame-live-p) (lambda (f) (or (eq f 'child) (funcall live f))))
+                ((symbol-function 'frame-parent) (lambda (&optional f) (if (eq f 'child) parent (funcall up f)))))
+        (should (drgnx-tty-fallback-install 'child tty-fallback-test--legacy)))
+      (should (terminal-parameter nil 'drgnx-tty-fallback))
+      (should (functionp (lookup-key input-decode-map "\eF"))))))
+
 (ert-deftest drgnx-tty-fallback/installed-only-on-legacy-terminals ()
   (tty-fallback-test--with-terminal nil '("TERM=xterm-256color")
     (let ((drgnx-keys-last (list :bindings (tty-fallback-test--bindings "VS Code"))))
@@ -469,7 +485,8 @@ binding are taken off afterwards."
     (tty-fallback-test--with-terminal nil '("TERM=xterm-kitty" "KITTY_WINDOW_ID=1")
       (let ((drgnx-keys-last (list :bindings bindings))
             (timers nil))
-        (cl-letf (((symbol-function 'run-with-timer) (lambda (_secs _repeat fn &rest args) (push (cons fn args) timers))))
+        (cl-letf (((symbol-function 'drgnx-timer-start)
+                   (lambda (_key _secs fn &rest plist) (push (cons fn (plist-get plist :args)) timers))))
           (drgnx-tty-frames-write-report (selected-frame))
           (should (terminal-parameter nil 'drgnx-tty-fallback))
           (set-terminal-parameter nil 'drgnx-tty-kkp t)

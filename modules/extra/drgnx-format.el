@@ -49,9 +49,10 @@ formatter of its own (prettier, clang-format, black… would reformat code its a
 
 (defun drgnx-format--setup ()
   (require 'apheleia)
-  (setq apheleia-log-only-errors t)
+  (drgnx-module-set 'apheleia-log-only-errors t)
   ;; formatters that need no program re-indent every Lisp and BibTeX file saved: never
-  (setq apheleia-mode-alist (seq-remove (lambda (e) (memq (cdr e) '(lisp-indent bibtex))) apheleia-mode-alist))
+  (drgnx-module-set 'apheleia-mode-alist
+                    (seq-remove (lambda (e) (memq (cdr e) '(lisp-indent bibtex))) apheleia-mode-alist))
   (add-hook 'apheleia-inhibit-functions #'drgnx-format--inhibit-p)
   (apheleia-global-mode 1))
 

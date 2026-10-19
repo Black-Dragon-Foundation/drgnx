@@ -15,7 +15,7 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
                                              "OPENROUTER_API_KEY")
                                        process-environment))
           (drgnx-ai-presets nil) (drgnx-ai-detected nil) (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq))
-          (drgnx-modules--state nil) (mock nil))
+          (mock nil))
      (unwind-protect
          (progn
            (make-directory (concat root "config") t)
@@ -60,7 +60,7 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
 (ert-deftest drgnx-onboard/the-ai-step-checks-chats-module-when-providers-work ()
   ;; a provider that answers is not Chat yet: the ide preset leaves extra/llm (gptel) off
   (drgnx-ai-onboard-test--with
-    (drgnx-modules-write-state (list :disabled '(extra/llm)))
+    (drgnx-modules-update-state (lambda (s) (plist-put (copy-sequence s) :disabled '(extra/llm))))
     (let ((r (drgnx-onboard--ai-step '(:interactive nil))))
       (should (eq (car r) 'warn))
       (should (string-match-p "chat: o/llama3:8b answered" (cadr r)))
@@ -77,7 +77,7 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
       (should (eq (car r) 'warn))
       (should (drgnx-module-disabled-p 'extra/llm)))
     ;; module on: ok as before
-    (drgnx-modules-write-state (list :disabled nil))
+    (drgnx-modules-update-state (lambda (s) (plist-put (copy-sequence s) :disabled nil)))
     (let ((r (drgnx-onboard--ai-step '(:interactive nil))))
       (should (eq (car r) 'ok))
       (should (string-match-p "Chat (module extra/llm) is on" (cadr r))))))
@@ -215,7 +215,7 @@ with BODY."
                               (ollama :name "Ollama" :kind ollama :url ,url :caps (chat fim embed))
                               (lmstudio :name "LM Studio" :kind openai :url ,(concat url "/v1") :caps (chat fim embed))))
           (drgnx-ai-detected nil) (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq))
-          (drgnx-modules--state nil) (drgnx-ai--ensure-time nil) (drgnx-onboard--progress nil)
+          (drgnx-ai--ensure-time nil) (drgnx-onboard--progress nil)
           (mock-cmd (format "env MOCK_LLM_SERVE=1 MOCK_LLM_PORT=%d MOCK_LLM_SCRIPT=%s MOCK_LLM_LOG=%s MOCK_LLM_PARENT=%d %s --batch -Q -l %s"
                             port script llm-log (emacs-pid)
                             (shell-quote-argument (expand-file-name invocation-name invocation-directory))
@@ -413,13 +413,17 @@ with BODY."
   ;; once the wait is over.
   (drgnx-ai-onboard-test--with-mac nil
     (should noninteractive)
-    (let ((before kill-emacs-hook) (during nil) (r nil))
+    (let ((before kill-emacs-hook) (during nil) (r nil) (progress nil)
+          (progress-p (lambda () (seq-find (lambda (e) (eq (car-safe (car e)) 'onboard-progress)) (drgnx-timer-pending)))))
       (run-at-time 1 nil (lambda ()
-                           (setq during kill-emacs-hook)
+                           (setq during kill-emacs-hook progress (funcall progress-p))
                            (dolist (f (seq-difference kill-emacs-hook before)) (funcall f))))   ; what exiting runs
       (setq r (drgnx-onboard--job "Sleeping" (list "sleep" "30") 15))
       (should (> (length during) (length before)))
       (should (equal kill-emacs-hook before))
+      (should progress)                                   ; the progress repeat ran in the timer layer, owned by :core
+      (should (eq (cadr progress) :core))
+      (should-not (funcall progress-p))                   ; and ended with the wait
       (should (eq (car r) 'fail))
       (should-not (seq-find (lambda (j) (eq (plist-get j :status) 'running)) (drgnx-jobs-list))))))
 
@@ -584,7 +588,7 @@ with BODY."
           (process-environment (cons "OPENROUTER_API_KEY=sk-or-test-123" process-environment)))
       (unwind-protect
           (progn
-            (drgnx-modules-write-state (list :disabled '(extra/llm)))
+            (drgnx-modules-update-state (lambda (s) (plist-put (copy-sequence s) :disabled '(extra/llm))))
             (let ((r (drgnx-onboard--ai-setup 'openrouter '(:interactive nil))))
               (should (eq (car r) 'warn))
               (should (string-match-p "Chat needs module extra/llm (Preferences: Modules)" (cadr r)))
@@ -606,13 +610,13 @@ with BODY."
          (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" root "config") (concat "XDG_STATE_HOME=" root "state")
                                             (concat "DRGNX_DATA_DIR=" root "data"))
                                       process-environment))
-         (drgnx-modules--state nil) (drgnx-onboard--restart-needed nil) (jobs nil) (done 'ok))
+         (drgnx-onboard--restart-needed nil) (jobs nil) (done 'ok))
     (unwind-protect
         (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
                   ((symbol-function 'locate-library) (lambda (&rest _) "/somewhere/gptel.el"))   ; never asked
                   ((symbol-function 'drgnx-onboard--job) (lambda (what command &rest _) (push (cons what command) jobs) done)))
           (make-directory (concat root "config") t)
-          (drgnx-modules-write-state (list :disabled '(extra/llm)))
+          (drgnx-modules-update-state (lambda (s) (plist-put (copy-sequence s) :disabled '(extra/llm))))
           (let ((r (drgnx-onboard--chat-module '(:interactive t))))
             (should (car r))
             (should-not (drgnx-module-disabled-p 'extra/llm))
@@ -631,12 +635,12 @@ with BODY."
             (should (car r))
             (should-not jobs)
             (should (string-match-p "loads at drgnx's next start" (cdr r))))
-          (drgnx-modules-write-state (list :disabled '(extra/llm)))
+          (drgnx-modules-update-state (lambda (s) (plist-put (copy-sequence s) :disabled '(extra/llm))))
           (drgnx-onboard--chat-module '(:interactive t))
           (should-not jobs)
           ;; the install fails: Chat is not ready, and the result says why
           (delete-directory (drgnx-elpa-dir) t)
-          (drgnx-modules-write-state (list :disabled '(extra/llm)))
+          (drgnx-modules-update-state (lambda (s) (plist-put (copy-sequence s) :disabled '(extra/llm))))
           (setq done '(fail "Installing the packages failed (exit 1): no network" nil))
           (let ((r (drgnx-onboard--chat-module '(:interactive t))))
             (should-not (car r))

@@ -9,6 +9,7 @@
 (require 'eglot)
 (require 'python)
 (load (expand-file-name "test/fixtures/tramp-mock" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/lang/drgnx-lang" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-remote" drgnx-dir) nil t)
 (defvar drgnx-remote-test--answers nil "The answers `completing-read' gives, in order.")
@@ -43,6 +44,9 @@ choice of two nobody has."
           (drgnx-lang--remote-pending nil)
           (drgnx-lang--user-command nil)
           (drgnx-remote-may-prompt nil)
+          ;; a terminal that draws ⇄, whatever the locale (CI's C locale does not), and no answer kept from another
+          ;; test: the ASCII test asks again itself
+          (drgnx-remote--arrows (let ((h (make-hash-table :test #'eq :weakness 'key))) (puthash (frame-terminal) 'yes h) h))
           (explorer-roots nil)
           (messages nil))
      (make-directory bin) (make-directory (expand-file-name "src" dir))
@@ -678,25 +682,14 @@ is attached by the next start (a Reconnect) and one of another host never is."
           (should (eq (drgnx-lang--guard-reconnect reconnect 'remote) 'reconnected)))))))
 
 (ert-deftest drgnx-remote/the-lang-module-wires-the-remote-guards-into-eglot ()
-  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-        (eglot-connect-hook eglot-connect-hook) (prog-mode-hook prog-mode-hook)
-        (was (advice-member-p #'drgnx-lang--guard-reconnect 'eglot-reconnect)))
-    (unwind-protect
-        (progn
-          (remove-hook 'eglot-connect-hook #'drgnx-lang--no-remote-autoreconnect)
-          (advice-remove 'eglot-reconnect #'drgnx-lang--guard-reconnect)
-          (advice-remove 'eglot--maybe-activate-editing-mode #'drgnx-lang--guard-eglot-activation)
-          (funcall (plist-get (alist-get 'lang/eglot drgnx-modules--table) :setup))
-          (should (memq #'drgnx-lang--no-remote-autoreconnect eglot-connect-hook))
-          (should (advice-member-p #'drgnx-lang--guard-reconnect 'eglot-reconnect))
-          (should (advice-member-p #'drgnx-lang--guard-eglot-activation 'eglot--maybe-activate-editing-mode))
-          (drgnx-lang--teardown-eglot-guards)                  ; and the teardown takes all three away
-          (should-not (memq #'drgnx-lang--no-remote-autoreconnect eglot-connect-hook))
-          (should-not (advice-member-p #'drgnx-lang--guard-reconnect 'eglot-reconnect))
-          (should-not (advice-member-p #'drgnx-lang--guard-eglot-activation 'eglot--maybe-activate-editing-mode)))
-      (unless was (advice-remove 'eglot-reconnect #'drgnx-lang--guard-reconnect))
-      (advice-remove 'eglot--maybe-activate-editing-mode #'drgnx-lang--guard-eglot-activation)
-      (remove-hook 'eglot-connect-hook #'drgnx-lang--no-remote-autoreconnect))))
+  (drgnx-test-with-modules '(lang/eglot) :strict t
+                           (should (memq #'drgnx-lang--no-remote-autoreconnect eglot-connect-hook))
+                           (should (advice-member-p #'drgnx-lang--guard-reconnect 'eglot-reconnect))
+                           (should (advice-member-p #'drgnx-lang--guard-eglot-activation 'eglot--maybe-activate-editing-mode)))
+  ;; and the module's teardown took all three away
+  (should-not (memq #'drgnx-lang--no-remote-autoreconnect eglot-connect-hook))
+  (should-not (advice-member-p #'drgnx-lang--guard-reconnect 'eglot-reconnect))
+  (should-not (advice-member-p #'drgnx-lang--guard-eglot-activation 'eglot--maybe-activate-editing-mode)))
 
 (ert-deftest drgnx-remote/an-eglot-without-the-activation-function-is-reported-once ()
   (let ((warned nil) (drgnx-lang--eglot-warned nil) (orig (symbol-function 'fboundp)))

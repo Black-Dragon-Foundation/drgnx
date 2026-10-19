@@ -1,16 +1,20 @@
 ;;; wb-panes-test.el --- batch tests: pane kinds, forwarded to the docks before the grid -*- lexical-binding: t -*-
 (require 'ert)
+(require 'cl-lib)
+(require 'drgnx-paths)
 (require 'drgnx-panes)
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-panes-test--with (&rest body)
   "BODY with fresh pane, section, area and rule tables, one editor window and the docks hidden."
   `(let ((drgnx-pane--kinds nil) (drgnx-pane-backend 'areas) (drgnx-wb--sections nil)
          (drgnx-wb--areas (copy-tree drgnx-wb--areas)) (drgnx-rules--table (copy-sequence drgnx-rules--table))
-         (drgnx-signal--editor-window nil) (drgnx-wb-unrouted nil)
+         (drgnx-wb-unrouted nil)
          (display-buffer-alist nil) (display-buffer-overriding-action '(nil)))
      (delete-other-windows)
      (set-frame-parameter nil 'drgnx-wb-areas nil)
      (set-frame-parameter nil 'drgnx-wb-view nil)
+     (set-frame-parameter nil 'drgnx-intent-by nil)
      (drgnx-rules-mode 1)
      (unwind-protect (progn ,@body)
        (drgnx-rules-mode -1)
@@ -350,6 +354,102 @@
    (drgnx-pane-define-kind 'pane-term :home 'bottom)
    (let ((drgnx-pane-backend 'nope))
      (should-error (drgnx-pane-show 'pane-term)))))
+
+;;;; Writes: who asked, resize, move and stack
+
+(defun drgnx-panes-test--no-sizes ()
+  (dolist (p '(drgnx-wb-dock-px drgnx-wb-panel-px drgnx-wb-right-px)) (set-frame-parameter nil p nil)))
+
+(ert-deftest drgnx-panes/resize-dock-and-areas-pixelwise ()
+  (drgnx-panes-test--with
+   (drgnx-panes-test--no-sizes)
+   (drgnx-pane-define-kind 'pane-term :home 'bottom :placeholder (drgnx-panes-test--buffer " *drgnx pane-term*"))
+   (drgnx-pane-define-kind 'pane-chat :home 'right :placeholder (drgnx-panes-test--buffer " *drgnx pane-chat*"))
+   (drgnx-pane-define-kind 'pane-tree :home 'left :slot 0 :buffer (drgnx-panes-test--buffer " *drgnx pane-tree*"))
+   (drgnx-pane-define-kind 'pane-list :home 'left :slot 1 :buffer (drgnx-panes-test--buffer " *drgnx pane-list*"))
+   (drgnx-pane-define-kind 'pane-notes :home 'editor :buffer "*pane-notes*")
+   (dolist (k '(pane-term pane-chat pane-tree)) (drgnx-pane-show k))
+   (let ((w (drgnx-pane-resize 'pane-tree 21 :by 'user)))
+     (should (eq w (drgnx-pane-window 'pane-tree)))
+     (should (= 21 (window-pixel-width w)))
+     (should (= 21 (window-pixel-width (drgnx-pane-window 'pane-list)))) ; the dock is one column
+     (should (equal '(:px 21 :by user) (drgnx-state-intent nil :sizes 'left))))
+   (let ((w (drgnx-pane-resize 'pane-term 7 :by 'user)))
+     (should (eq w (drgnx-pane-window 'pane-term)))
+     (should (= 7 (window-pixel-height w)))
+     (should (equal '(:px 7 :by user) (drgnx-state-intent nil :sizes 'bottom))))
+   (let ((w (drgnx-pane-resize 'pane-chat 23 :by 'user)))
+     (should (= 23 (window-pixel-width w)))
+     (should (equal '(:px 23 :by user) (drgnx-state-intent nil :sizes 'right))))
+   (should (= 21 (window-pixel-width (drgnx-pane-window 'pane-tree))))
+   ;; the size stays across hiding and showing
+   (drgnx-pane-hide 'pane-term)
+   (should (= 7 (window-pixel-height (drgnx-pane-show 'pane-term))))
+   ;; a hidden pane: the size it comes back at
+   (drgnx-pane-hide 'pane-chat)
+   (should-not (drgnx-pane-resize 'pane-chat 26 :by 'user))
+   (should (= 26 (window-pixel-width (drgnx-pane-show 'pane-chat))))
+   ;; an editor kind has no size of its own
+   (should-not (drgnx-pane-resize 'pane-notes 30))
+   (should-error (drgnx-pane-resize 'pane-term 0))))
+
+(ert-deftest drgnx-panes/by-defaults-to-user-in-a-command-auto-outside ()
+  (drgnx-test-with-state
+    (drgnx-panes-test--with
+     (drgnx-panes-test--no-sizes)
+     (let (seen)
+       (drgnx-pane-define-kind 'pane-term :home 'bottom :placeholder (drgnx-panes-test--buffer " *drgnx pane-term*")
+                               :on-show (lambda (_) (push (plist-get drgnx-state--writing :by) seen)))
+       (drgnx-pane-show 'pane-term)
+       (drgnx-pane-resize 'pane-term 6)
+       (should (equal '(:px 6 :by auto) (drgnx-state-intent nil :sizes 'bottom)))
+       (drgnx-state--pre-command)                         ; a command runs
+       (drgnx-pane-show 'pane-term)
+       (drgnx-pane-resize 'pane-term 8)
+       (drgnx-state--post-command)
+       (should (equal '(:px 8 :by user) (drgnx-state-intent nil :sizes 'bottom)))
+       (should (equal '(user auto) seen))
+       ;; outside a command again: `auto', which leaves the size you chose
+       (drgnx-pane-resize 'pane-term 5)
+       (should (equal '(:px 8 :by user) (drgnx-state-intent nil :sizes 'bottom)))))))
+
+(ert-deftest drgnx-panes/move-and-stack-need-the-grid ()
+  (drgnx-panes-test--with
+   (drgnx-pane-define-kind 'pane-term :home 'bottom)
+   (drgnx-pane-define-kind 'pane-chat :home 'right)
+   (should (equal '(user-error "Moving panes needs the grid")
+                  (should-error (drgnx-pane-move 'pane-term 'pane-chat 'left) :type 'user-error)))
+   (should (equal '(user-error "Moving panes needs the grid")
+                  (should-error (drgnx-pane-stack 'pane-term 'pane-chat) :type 'user-error)))
+   (should-error (drgnx-pane-move 'pane-none 'pane-chat 'left) :type 'user-error)
+   ;; a backend that has them is called, inside a write
+   (let ((drgnx-pane--backends
+          (cons (list 'st-fake
+                      :move (lambda (kind target zone) (list kind target zone (plist-get drgnx-state--writing :by)))
+                      :stack (lambda (kind onto) (list kind onto (plist-get drgnx-state--writing :by))))
+                drgnx-pane--backends))
+         (drgnx-pane-backend 'st-fake))
+     (should (equal '(pane-term pane-chat left layout) (drgnx-pane-move 'pane-term 'pane-chat 'left :by 'layout)))
+     (should (equal '(pane-term pane-chat user) (drgnx-pane-stack 'pane-term 'pane-chat :by 'user))))))
+
+(ert-deftest drgnx-panes/show-hide-focus-toggle-take-by ()
+  (drgnx-panes-test--with
+   (drgnx-panes-test--no-sizes)
+   (let ((seen nil) (hide (symbol-function 'drgnx-wb-area-hide)))
+     (drgnx-pane-define-kind 'pane-term :home 'bottom :placeholder (drgnx-panes-test--buffer " *drgnx pane-term*")
+                             :on-show (lambda (_) (push (list 'show (plist-get drgnx-state--writing :by)) seen)))
+     (cl-letf (((symbol-function 'drgnx-wb-area-hide)
+                (lambda (area) (push (list 'hide (plist-get drgnx-state--writing :by)) seen) (funcall hide area))))
+       (drgnx-pane-show 'pane-term :by 'layout)
+       (drgnx-pane-hide 'pane-term :by 'teardown)
+       (drgnx-pane-focus 'pane-term :by 'restore)
+       (drgnx-pane-toggle 'pane-term :by 'other)          ; shown: hides
+       (drgnx-pane-toggle 'pane-term :by 'user))          ; hidden: shows
+     (should (equal '((show layout) (hide teardown) (show restore) (hide other) (show user)) (reverse seen)))
+     ;; the front tab is intent, with who asked; a hide noted the size as `auto', whoever asked for it
+     (should (eq 'pane-term (drgnx-state-intent nil :front 'panel)))
+     (should (eq 'user (cdr (assoc '(:front . panel) (frame-parameter nil 'drgnx-intent-by)))))
+     (should (eq 'auto (plist-get (drgnx-state-intent nil :sizes 'bottom) :by))))))
 
 (provide 'wb-panes-test)
 ;;; wb-panes-test.el ends here

@@ -28,6 +28,10 @@
   "`dape-active-mode-hook': the session keys while a session runs."
   (drgnx-debug-session-mode (if (and (boundp 'dape-active-mode) dape-active-mode) 1 -1)))
 
+(defun drgnx-debug--teardown ()
+  "The session keys go with the module (a running session turned them on, not the setup)."
+  (drgnx-debug-session-mode -1))
+
 (defun drgnx-debug-start-or-continue ()
   "Continue the stopped session, or start one (dape asks which configuration)."
   (interactive)
@@ -38,9 +42,10 @@
 (drgnx-module-define 'extra/debug
                      :doc "A debugger (dape, Debug Adapter Protocol): breakpoints, stepping, VS Code's keys in that profile."
                      :stage 'idle :packages '(dape)
+                     :teardown #'drgnx-debug--teardown
                      :setup (lambda ()
                               (require 'dape)
-                              (setq dape-buffer-window-arrangement 'right)   ; the panel stays the workbench's
+                              (drgnx-module-set 'dape-buffer-window-arrangement 'right)   ; the panel stays the workbench's
                               (add-hook 'dape-active-mode-hook #'drgnx-debug--follow-session)
                               (pcase-dolist (`(,id ,title ,fn ,doc)
                                              '((debug-start "Start Debugging…" drgnx-debug-start-or-continue "Start a session, or continue the stopped one")

@@ -1,6 +1,7 @@
 ;;; mod-amenities-test.el --- batch tests: M11a's package modules — they wait without their package, run with it -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-amenities-test--modules
   '(("extra/drgnx-booster" extra/booster (eglot-booster) ())
@@ -48,51 +49,40 @@
   (skip-unless (file-directory-p drgnx-amenities-test--elpa))
   (let ((load-path (append load-path (drgnx-amenities-test--elpa-path))) (ran 0))
     (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) nil)))   ; no booster binary, no formatters
-      (drgnx-amenities-test--fresh
-       (unwind-protect
-           (progn
-             (drgnx-modules-run 'startup) (drgnx-modules-run 'idle)
-             (drgnx-modules-run 'first-frame)
-             (pcase-dolist (`(,_ ,mod ,pkgs ,cmds) drgnx-amenities-test--modules)
-               (when (seq-every-p #'drgnx-amenities-test--installed-p pkgs)
-                 (setq ran (1+ ran))
-                 (should (equal (list mod (plist-get (alist-get mod (drgnx-modules-report)) :status)) (list mod 'ok)))
-                 (dolist (c cmds) (should (drgnx-commands-get c))))))
-         (dolist (m '(apheleia-global-mode eglot-booster-mode))
-           (when (and (fboundp m) (boundp m) (symbol-value m)) (funcall m -1))))))
+      (drgnx-test-with-modules (mapcar #'cadr drgnx-amenities-test--modules) :strict t
+                               (pcase-dolist (`(,_ ,mod ,pkgs ,cmds) drgnx-amenities-test--modules)
+                                 (when (seq-every-p #'drgnx-amenities-test--installed-p pkgs)
+                                   (setq ran (1+ ran))
+                                   (should (equal (list mod (plist-get (alist-get mod (drgnx-modules-report)) :status)) (list mod 'ok)))
+                                   (dolist (c cmds) (should (drgnx-commands-get c)))))))
     (should (> ran 0))))
 
 (ert-deftest drgnx-booster/only-with-the-binary ()
   (skip-unless (drgnx-amenities-test--installed-p 'eglot-booster))
   (let ((load-path (append load-path (drgnx-amenities-test--elpa-path))))
-    (load (expand-file-name "modules/extra/drgnx-booster" drgnx-dir) nil t)
-    (unwind-protect
-        (progn
-          (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) nil)))
-            (drgnx-booster--setup))
-          (should-not (and (boundp 'eglot-booster-mode) eglot-booster-mode))       ; no binary: eglot as it was
-          (cl-letf (((symbol-function 'executable-find) (lambda (p &rest _) (and (equal p "emacs-lsp-booster") "/usr/bin/emacs-lsp-booster"))))
-            (drgnx-booster--setup))
-          (should eglot-booster-mode))
-      (when (and (boundp 'eglot-booster-mode) eglot-booster-mode) (eglot-booster-mode -1)))))
+    (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) nil)))
+      (drgnx-test-with-modules '(extra/booster) :strict t
+                               (should-not (and (boundp 'eglot-booster-mode) eglot-booster-mode))))       ; no binary: eglot as it was
+    (cl-letf (((symbol-function 'executable-find) (lambda (p &rest _) (and (equal p "emacs-lsp-booster") "/usr/bin/emacs-lsp-booster"))))
+      (drgnx-test-with-modules '(extra/booster) :strict t
+                               (should eglot-booster-mode)))))
 
 (ert-deftest drgnx-format/a-missing-formatter-still-saves ()
   (skip-unless (drgnx-amenities-test--installed-p 'apheleia))
   (let* ((load-path (append load-path (drgnx-amenities-test--elpa-path)))
          (file (make-temp-file "drgnx-format" nil ".py" "x  =  1\n")) (exec-path nil))
-    (require 'apheleia)
+    (require 'python)                   ; python.el's own load-time registrations are not the module's
     (unwind-protect
         (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) (error "Prompted")))
                   ((symbol-function 'yes-or-no-p) (lambda (&rest _) (error "Prompted"))))
-          (apheleia-global-mode 1)
-          (with-current-buffer (find-file-noselect file)
-            (python-mode)
-            (goto-char (point-max)) (insert "y  =  2\n")
-            (save-buffer)
-            (let ((deadline (+ (float-time) 2))) (while (< (float-time) deadline) (accept-process-output nil 0.05)))
-            (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "x  =  1\ny  =  2\n"))
-            (set-buffer-modified-p nil) (kill-buffer)))
-      (apheleia-global-mode -1)
+          (drgnx-test-with-modules '(extra/format) :strict t
+                                   (with-current-buffer (find-file-noselect file)
+                                     (python-mode)
+                                     (goto-char (point-max)) (insert "y  =  2\n")
+                                     (save-buffer)
+                                     (let ((deadline (+ (float-time) 2))) (while (< (float-time) deadline) (accept-process-output nil 0.05)))
+                                     (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "x  =  1\ny  =  2\n"))
+                                     (set-buffer-modified-p nil) (kill-buffer))))
       (delete-file file))))
 
 (ert-deftest drgnx-debug/start-or-continue ()
@@ -129,6 +119,11 @@
     (should (string-search "(debug-start \"<f5>\")" vs))
     (should (string-search "(debug-step-in \"<f11>\" :map drgnx-debug-session-map)" vs))))
 
+(ert-deftest drgnx-guides/colour-comes-from-shadow-not-highlight ()
+  (with-temp-buffer
+    (insert-file-contents (expand-file-name "modules/extra/drgnx-guides.el" drgnx-dir))
+    (should (search-forward "(drgnx-module-set 'indent-bars-color '(shadow" nil t))))
+
 (ert-deftest drgnx-guides/only-on-graphical-frames ()
   (load (expand-file-name "modules/extra/drgnx-guides" drgnx-dir) nil t)
   (let ((on nil))
@@ -160,6 +155,16 @@
         (drgnx-smooth--setup))
       (should (equal used '(ultra pixel))))))
 
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+(ert-deftest drgnx-smooth/turning-the-module-off-turns-scrolling-off ()
+  (let (on-inside)
+    (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t)))
+      (drgnx-test-with-modules '(ui/smooth) :strict t
+                               (setq on-inside (or pixel-scroll-precision-mode (bound-and-true-p ultra-scroll-mode)))))
+    (should on-inside)
+    (should-not pixel-scroll-precision-mode)
+    (should-not (bound-and-true-p ultra-scroll-mode))))
+
 (ert-deftest drgnx-smooth/a-daemon-s-first-frame-gets-it ()
   ;; the first-frame stage runs before the new graphical frame is selected (a daemon's terminal frame still is)
   (load (expand-file-name "modules/ui/drgnx-smooth" drgnx-dir) nil t)
@@ -175,34 +180,27 @@
   (skip-unless (drgnx-amenities-test--installed-p 'apheleia))
   (let* ((load-path (append load-path (drgnx-amenities-test--elpa-path)))
          (dir (file-name-as-directory (make-temp-file "drgnx-fmt" t))) (py (concat dir "a.py")))
-    (load (expand-file-name "modules/extra/drgnx-format" drgnx-dir) nil t)
     (unwind-protect
-        (progn
-          (drgnx-format--setup)
-          (should-not (rassq 'lisp-indent apheleia-mode-alist))
-          (should-not (rassq 'bibtex apheleia-mode-alist))
-          (write-region "x = 1\n" nil py nil 'silent)
-          (with-current-buffer (find-file-noselect py)
-            (python-mode)
-            (should (drgnx-format--inhibit-p))                              ; no formatter configured here
-            (kill-buffer))
-          (write-region "[tool.black]\nline-length = 100\n" nil (concat dir "pyproject.toml") nil 'silent)
-          (with-current-buffer (find-file-noselect py)
-            (python-mode)
-            (should-not (drgnx-format--inhibit-p))
-            (kill-buffer)))
-      (when (bound-and-true-p apheleia-global-mode) (apheleia-global-mode -1))
+        (drgnx-test-with-modules '(extra/format) :strict t
+                                 (should-not (rassq 'lisp-indent apheleia-mode-alist))
+                                 (should-not (rassq 'bibtex apheleia-mode-alist))
+                                 (write-region "x = 1\n" nil py nil 'silent)
+                                 (with-current-buffer (find-file-noselect py)
+                                   (python-mode)
+                                   (should (drgnx-format--inhibit-p))                              ; no formatter configured here
+                                   (kill-buffer))
+                                 (write-region "[tool.black]\nline-length = 100\n" nil (concat dir "pyproject.toml") nil 'silent)
+                                 (with-current-buffer (find-file-noselect py)
+                                   (python-mode)
+                                   (should-not (drgnx-format--inhibit-p))
+                                   (kill-buffer)))
       (delete-directory dir t))))
 
 (ert-deftest drgnx-booster/never-for-remote-servers ()
   (skip-unless (drgnx-amenities-test--installed-p 'eglot-booster))
   (let ((load-path (append load-path (drgnx-amenities-test--elpa-path))))
-    (load (expand-file-name "modules/extra/drgnx-booster" drgnx-dir) nil t)
-    (unwind-protect
-        (progn
-          (cl-letf (((symbol-function 'executable-find) (lambda (p &rest _) (and (equal p "emacs-lsp-booster") "/usr/bin/emacs-lsp-booster"))))
-            (drgnx-booster--setup))
-          (should eglot-booster-no-remote-boost))                         ; a remote host seldom has the program
-      (when (bound-and-true-p eglot-booster-mode) (eglot-booster-mode -1)))))
+    (cl-letf (((symbol-function 'executable-find) (lambda (p &rest _) (and (equal p "emacs-lsp-booster") "/usr/bin/emacs-lsp-booster"))))
+      (drgnx-test-with-modules '(extra/booster) :strict t
+                               (should eglot-booster-no-remote-boost)))))                         ; a remote host seldom has the program
 
 ;;; mod-amenities-test.el ends here

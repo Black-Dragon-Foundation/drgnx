@@ -38,7 +38,9 @@
 
 (defun drgnx-job-policy-test--agent (wt job &optional no-job)
   "A mock session working on J#1 in WT (or, NO-JOB, a plain session there), idle."
-  (let ((s (if no-job (drgnx-agents-start "mock" wt) (drgnx-agents-start "mock" wt (concat job "#1") job))))
+  (let ((s (if no-job (drgnx-agents-start "mock" wt)
+             (cl-letf (((symbol-function 'drgnx-agents-job-safe-p) #'always))   ; the mock is no Claude: never job-safe
+               (drgnx-agents-start "mock" wt (concat job "#1") job)))))
     (unless no-job (drgnx-coord-force-status (concat job "#1") "running" (drgnx-agent-session-id s)))
     (drgnx-job-policy-test--wait (lambda () (eq (drgnx-agent-session-status s) 'idle)))
     s))
@@ -203,13 +205,18 @@
       (should (= (file-modes (concat wt "run.sh")) #o755))
       (should (equal (directory-files wt nil "\\`[^.]\\|\\.drgnx") '("link.sh" "run.sh"))))))
 
-(ert-deftest drgnx-job/a-new-file-gets-the-usual-modes-and-a-read-only-one-is-refused ()
-  ;; the temp file is made 0600: a new file gets what `write-region' would give (0666 less the umask); a file the
-  ;; agent could not write before (0444) is not replaced by the rename
+(ert-deftest drgnx-job/a-new-file-gets-the-usual-modes ()
+  ;; the temp file is made 0600: a new file gets what `write-region' would give (0666 less the umask)
   (drgnx-job-policy-test--with
     (let ((s (drgnx-agents--make :id "s-w" :name "w" :profile "mock" :cwd wt :task (concat job "#1") :job job)))
       (should (equal (drgnx-job--request s "fs/write_text_file" (list :path (concat wt "new.txt") :content "x\n") 1) '(:result nil)))
-      (should (= (file-modes (concat wt "new.txt")) (logand #o666 (default-file-modes))))
+      (should (= (file-modes (concat wt "new.txt")) (logand #o666 (default-file-modes)))))))
+
+(ert-deftest drgnx-job/a-read-only-file-is-refused ()
+  ;; a file the agent could not write before (0444) is not replaced by the rename
+  (skip-unless (/= 0 (user-uid)))       ; root can write a 0444 file (CI's containers run as root): nothing to refuse
+  (drgnx-job-policy-test--with
+    (let ((s (drgnx-agents--make :id "s-w" :name "w" :profile "mock" :cwd wt :task (concat job "#1") :job job)))
       (write-region "keep\n" nil (concat wt "ro.txt") nil 'silent)
       (set-file-modes (concat wt "ro.txt") #o444)
       (should-error (drgnx-job--request s "fs/write_text_file" (list :path (concat wt "ro.txt") :content "x\n") 2))

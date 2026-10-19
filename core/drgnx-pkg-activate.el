@@ -14,6 +14,7 @@
 ;;; Code:
 (require 'seq)
 (require 'drgnx-paths)
+(require 'drgnx-file)
 
 (define-error 'drgnx-pkg-error "drgnx packages")
 
@@ -43,15 +44,21 @@
 (defun drgnx-pkg-wanted-file () (expand-file-name "packages-wanted.eld" (drgnx-state-dir)))
 
 (defun drgnx-pkg--record-want (name)
+  "Add NAME to packages-wanted.eld, for the next `drgnx sync'.  Called at startup (use-package :ensure), so it never
+prompts or waits: a file another process holds is skipped (the next startup records the want), and an error is one
+message, never raised.  A wanted file that does not read is copied aside first."
   (unless (or (and (fboundp 'package-installed-p) (package-installed-p name))
               (locate-library (symbol-name name)))
-    (let* ((file (drgnx-pkg-wanted-file))
-           (old (and (file-readable-p file)
-                     (ignore-errors (with-temp-buffer (insert-file-contents file) (read (current-buffer)))))))
-      (unless (memq name old)
-        (make-directory (file-name-directory file) t)
-        (with-temp-file file (prin1 (append old (list name)) (current-buffer)))
-        (message "drgnx: %s is not installed — drgnx sync installs it (until then its configuration waits)" name)))))
+    (let ((added nil) (inhibit-interaction t))
+      (condition-case err
+          (progn
+            (drgnx-file-update (drgnx-pkg-wanted-file)
+                               (lambda (old) (if (memq name old) old (setq added t) (append old (list name))))
+                               :on-unreadable 'backup :timeout 0)
+            (when added
+              (message "drgnx: %s is not installed — drgnx sync installs it (until then its configuration waits)" name)))
+        (drgnx-file-busy nil)
+        (error (message "drgnx: %s could not be recorded as wanted: %s" name (error-message-string err)))))))
 
 (defun drgnx-pkg-ensure (name &optional args &rest _)
   "`use-package-ensure-function': record what use-package would install for the next `drgnx sync'; nil.

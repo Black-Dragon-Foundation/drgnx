@@ -1,6 +1,7 @@
 ;;; jank-guard-test.el --- batch tests: jank guard -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx-jank-guard)
+(require 'drgnx-timer)
 
 (defmacro drgnx-test--with-guard (&rest body)
   `(let ((drgnx-jank-guard-log nil))
@@ -71,3 +72,13 @@
       (drgnx-jank-guard-disable))
     (should (equal window-configuration-change-hook (list #'drgnx-jank-test--quiet #'drgnx-jank-test--mover)))
     (should (equal window-size-change-functions (list #'drgnx-jank-test--mover)))))
+
+(defun drgnx-jank-test--named () nil)
+
+(ert-deftest drgnx-jank-guard/a-layer-timer-is-named-by-its-function ()
+  (unwind-protect
+      (progn
+        (drgnx-timer-start 'jank-k 3600 #'drgnx-jank-test--named)
+        (let ((tm (drgnx-timer--entry-timer (gethash 'jank-k drgnx-timer--table))))
+          (should (eq 'drgnx-jank-test--named (drgnx-jank-guard--timer (lambda (_) drgnx-jank-guard--timer-fn) tm)))))
+    (drgnx-timer-cancel 'jank-k)))

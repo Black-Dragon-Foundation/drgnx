@@ -3,6 +3,7 @@
 (require 'drgnx)
 (require 'drgnx-keys-edit)
 (load (expand-file-name "modules/tools/drgnx-shortcuts" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defvar drgnx-shortcuts-test-mode-map (make-sparse-keymap) "A view's keymap for the tests.")
 
@@ -38,7 +39,7 @@ the usage counts go there, never the user's), no usage counted, and every bindin
           (drgnx-keys-profiles (copy-tree drgnx-shortcuts-test--profiles))
           (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-problems nil) (drgnx-keys-last nil)
           (drgnx-keys-presets '(("Alpha" . ((alpha app editing window))) ("Beta" . ((beta app editing window)))))
-          (drgnx-surfaces--usage nil) (drgnx-surfaces--usage-dirty nil) (drgnx-surfaces--usage-timer nil)
+          (drgnx-surfaces--usage nil) (drgnx-surfaces--usage-dirty nil)
           (drgnx-shortcuts-chord-wait 0.05))
      (unwind-protect
          (cl-letf* ((read-key (symbol-function 'read-key))
@@ -58,6 +59,7 @@ the usage counts go there, never the user's), no usage counted, and every bindin
        (drgnx-keys--restore)
        (keymap-unset global-map "C-c 9" t)
        (when (get-buffer "*drgnx keyboard shortcuts*") (kill-buffer "*drgnx keyboard shortcuts*"))
+       (drgnx-timer-cancel 'surfaces-usage)
        (delete-directory dir t))))
 
 (defun drgnx-shortcuts-test--row (id) (seq-find (lambda (r) (eq (plist-get r :id) id)) (drgnx-shortcuts--rows)))
@@ -513,5 +515,21 @@ table is the terminal's, as the layer would have put it there for a legacy termi
     (drgnx-shortcuts-undo)
     (should (equal (drgnx-shortcuts-test--keys 'sc-g) '("C-c w")))
     (should (string-match-p "Eta +C-c w +keys\\.eld" (drgnx-shortcuts-test--line 'sc-g)))))
+
+(ert-deftest drgnx-shortcuts/the-vim-profile-state-and-the-view-go-with-the-module ()
+  ;; evil had loaded (the Vim profile): the initial state is set at once and put back by the module's undo; the
+  ;; open view is killed by its :teardown.
+  (let ((states (list (cons 'drgnx-shortcuts-mode 'normal))))
+    (unwind-protect
+        (cl-letf (((symbol-function 'evil-initial-state) (lambda (m &rest _) (alist-get m states)))
+                  ((symbol-function 'evil-set-initial-state) (lambda (m s) (setf (alist-get m states) s))))
+          (provide 'evil)
+          (drgnx-test-with-modules '(tools/shortcuts) :strict t
+                                   (should (eq (alist-get 'drgnx-shortcuts-mode states) 'emacs))
+                                   (get-buffer-create drgnx-shortcuts--buffer))
+          (should (eq (alist-get 'drgnx-shortcuts-mode states) 'normal))
+          (should-not (get-buffer drgnx-shortcuts--buffer)))
+      (setq features (delq 'evil features)))))
+
 
 ;;; mod-shortcuts-test.el ends here

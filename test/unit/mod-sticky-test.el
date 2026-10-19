@@ -1,7 +1,9 @@
 ;;; mod-sticky-test.el --- batch tests: sticky scroll — the scopes scrolled past, in the header after the breadcrumb -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx)
+(load (expand-file-name "test/fixtures/memo-alloc-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/editor/drgnx-sticky" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defun drgnx-sticky-test--elisp (n)
   "A buffer text: a defun of N body lines."
@@ -29,6 +31,33 @@
   (drgnx-sticky-test--in (drgnx-sticky-test--elisp 40) #'emacs-lisp-mode
     (drgnx-sticky-test--start-at-line 20)
     (should (string-search "(defun drgnx-sticky-test-fn" (drgnx-sticky--segment (selected-window))))))
+
+(ert-deftest drgnx-sticky/an-unchanged-start-allocates-nothing ()
+  (drgnx-sticky-test--in (drgnx-sticky-test--elisp 40) #'emacs-lisp-mode
+    (drgnx-sticky-test--start-at-line 20)
+    (let* ((w (selected-window)) (s (drgnx-sticky--segment w)))
+      (should (string-search "(defun drgnx-sticky-test-fn" s))
+      (should (eq s (drgnx-sticky--segment w)))
+      (should-not (window-parameter w 'drgnx-sticky))        ; the memo keeps it, not a window parameter
+      (should (= 0 (drgnx-memo-fixture-alloc (lambda () (drgnx-sticky--segment w)) 'drgnx-sticky--segment))))))
+
+(ert-deftest drgnx-sticky/an-edit-above-the-start-rebuilds ()
+  (drgnx-sticky-test--in (drgnx-sticky-test--elisp 40) #'emacs-lisp-mode
+    (drgnx-sticky-mode 1)
+    (drgnx-sticky-test--start-at-line 20)
+    (let* ((w (selected-window)) (s (drgnx-sticky--segment w)) (start (window-start w)))
+      ;; below the start: the scopes cannot have changed, the same string comes back
+      (goto-char (point-max))
+      (insert ";; tail\n")
+      (should (eq s (drgnx-sticky--segment w)))
+      ;; above it, the start where it was: rebuilt from the new text
+      (goto-char (+ (point-min) 2))
+      (delete-char 1)
+      (insert "x")
+      (should (= start (window-start w)))
+      (let ((new (drgnx-sticky--segment w)))
+        (should-not (eq s new))
+        (should (string-search "(dxfun" new))))))
 
 (ert-deftest drgnx-sticky/no-header-at-the-top ()
   (drgnx-sticky-test--in (drgnx-sticky-test--elisp 40) #'emacs-lisp-mode
@@ -138,6 +167,18 @@
         (drgnx-sticky-test--start-at-line (+ 5000 (* i 40)))
         (drgnx-sticky--segment (selected-window)))
       (should (< (/ (- (float-time) t0) 100) 0.002)))))
+
+(ert-deftest drgnx-sticky/turning-the-module-off-turns-sticky-scroll-off-in-live-buffers ()
+  (let ((b (generate-new-buffer "sticky-off")))
+    (unwind-protect
+        (progn
+          (drgnx-test-with-modules '(editor/sticky) :strict t
+                                   (should (memq #'drgnx-sticky--maybe prog-mode-hook))
+                                   (with-current-buffer b (emacs-lisp-mode) (drgnx-sticky-mode 1))
+                                   (should (buffer-local-value 'drgnx-sticky-mode b)))
+          (should-not (buffer-local-value 'drgnx-sticky-mode b))
+          (should-not (memq #'drgnx-sticky--maybe prog-mode-hook)))
+      (kill-buffer b))))
 
 ;;; mod-sticky-test.el ends here
 

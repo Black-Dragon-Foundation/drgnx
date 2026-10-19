@@ -21,6 +21,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-paths)
+(require 'drgnx-config)
 (require 'drgnx-wb)
 
 (declare-function drgnx-wb-area-window "drgnx-area")
@@ -69,16 +70,31 @@ arranges as `one'.")
   "The layout FRAME shows: the last one applied, or nil before any (that arrangement has no name)."
   (frame-parameter frame 'drgnx-layouts-current))
 
-(defun drgnx-layouts--file () (expand-file-name "layouts.eld" (drgnx-user-dir)))
+(defun drgnx-layouts--name-p (x)
+  "Whether X can name a layout: a symbol that is not nil, t or a keyword."
+  (and (symbolp x) x (not (eq x t)) (not (keywordp x))))
+
+(defun drgnx-layouts--define-config ()
+  "Define the config file `layouts' (layouts.eld).  The module's setup calls this first; teardown undefines it."
+  (drgnx-config-define
+   'layouts
+   :file "layouts.eld" :shape 'alist :version 1 :reload 'mtime :last-good t :default nil
+   :schema '(alist (pred drgnx-layouts--name-p "a layout name: a symbol, not nil, t or a keyword")
+                   (plist (:left (or symbol null) "The left dock's view")
+                          (:right (or symbol null) "The right area's tab")
+                          (:panel (or symbol null) "The panel's tab")
+                          (:editor symbol "The editor area's shape")
+                          (:windows any "The editor area's window state")
+                          (:px (plist (:left (or natnum null)) (:panel (or natnum null)) (:right (or natnum null)))
+                               "Sizes in pixels")))
+   :header ";; drgnx: your layouts, written by View: Save Layout As… (docs/guide/layouts.md)\n"
+   :doc "Your own layouts; the built-in ones are not stored."))
 
 (defun drgnx-layouts--user ()
-  "Your layouts from layouts.eld: NAME → plist (an unreadable file holds none; built-in names are skipped)."
-  (let* ((f (drgnx-layouts--file))
-         (data (and (file-readable-p f)
-                    (ignore-errors (with-temp-buffer (insert-file-contents f) (read (current-buffer)))))))
-    (and (proper-list-p data)
-         (seq-filter (lambda (e) (and (consp e) (symbolp (car e)) (proper-list-p (cdr e)) (not (assq (car e) drgnx-layouts))))
-                     data))))
+  "Your layouts from layouts.eld: NAME → plist, without the entries named like a built-in layout (those stay in
+the file).  A file with a mistake gives its last good copy; with the module off, no layouts."
+  (and (drgnx-config-defined-p 'layouts)
+       (seq-remove (lambda (e) (assq (car e) drgnx-layouts)) (drgnx-config-get 'layouts))))
 
 (defun drgnx-layouts--all () (append drgnx-layouts (drgnx-layouts--user)))
 
@@ -131,9 +147,10 @@ groups, KIND `agent' or `browser'."
           :right (drgnx-layouts--area-snapshot 'right))))
 
 (defun drgnx-layouts--close-bars ()
-  "Close this frame's find bars: an arrangement must not keep their windows."
+  "Close this frame's find bars (windows of role `bar', which tools/replace defines): an arrangement must not
+keep their windows."
   (dolist (w (window-list nil 'nomini))
-    (when (and (window-live-p w) (eq (window-parameter w 'drgnx-role) 'bar))
+    (when (and (window-live-p w) (eq (drgnx-state-window-role w) 'bar))
       (when (fboundp 'drgnx-replace--bar-clear) (with-current-buffer (window-buffer w) (drgnx-replace--bar-clear)))
       (ignore-errors (delete-window w)))))
 
@@ -144,16 +161,17 @@ groups, KIND `agent' or `browser'."
   (drgnx-wb-area-hide 'right))
 
 (defun drgnx-layouts--show-left (spec)
-  "Show the left dock as SPEC says (:shown :view :px)."
-  (when (integerp (plist-get spec :px)) (set-frame-parameter nil 'drgnx-wb-dock-px (plist-get spec :px)))
+  "Show the left dock as SPEC says (:shown :view :px).  The width is noted `:by layout': a width you chose stays."
+  (when (integerp (plist-get spec :px)) (drgnx-state-note-intent nil :sizes 'left (plist-get spec :px) :by 'layout))
   (when (plist-get spec :shown)
     (let ((view (plist-get spec :view)))
       (if (and view (drgnx-wb--view-defined-p view)) (drgnx-wb-show-view view) (drgnx-wb-show-sidebar)))))
 
 (defun drgnx-layouts--show-area (area spec)
-  "Show AREA as SPEC says (:shown :tab :px); a tab no module defines is not shown."
+  "Show AREA as SPEC says (:shown :tab :px); a tab no module defines is not shown.
+The size is noted `:by layout': a size you chose stays."
   (when (integerp (plist-get spec :px))
-    (set-frame-parameter nil (intern (format "drgnx-wb-%s-px" area)) (plist-get spec :px)))
+    (drgnx-state-note-intent nil :sizes area (plist-get spec :px) :by 'layout))
   (let ((tab (plist-get spec :tab)))
     (when (and (plist-get spec :shown) tab (assq tab (plist-get (alist-get area drgnx-wb--areas) :tabs)))
       (drgnx-wb-area-show area tab))))
@@ -399,7 +417,7 @@ NAME nil (leaving Zen when no layout was picked before) puts it back as it was."
     (set-frame-parameter nil 'drgnx-layouts-current name)
     (drgnx-layouts--zen-margins from name)
     (unless (drgnx-signal-editor-window-p (selected-window)) (select-window (drgnx-wb-editor-window)))
-    (setq drgnx-signal--editor-window (selected-window))
+    (drgnx-state-use-editor (selected-window) :by 'layout)
     (when (fboundp 'drgnx-chrome-apply) (drgnx-chrome-apply nil t))
     name))
 
@@ -444,18 +462,14 @@ was picked yet, to the arrangement you had)."
   (interactive (list (intern (completing-read "Layout: " (mapcar #'symbol-name (drgnx-layouts-names)) nil t))))
   (drgnx-layouts-apply name))
 
-(defun drgnx-layouts--write-user (alist)
-  (let ((f (drgnx-layouts--file)))
-    (make-directory (file-name-directory f) t)
-    (with-temp-file f
-      (insert ";; drgnx: your layouts, written by View: Save Layout As… (docs/guide/layouts.md)\n")
-      (let ((print-length nil) (print-level nil)) (pp alist (current-buffer))))))
-
 (defun drgnx-layouts-save (name)
-  "Save the selected frame's arrangement as your layout NAME (in layouts.eld); you are then in it."
+  "Save the selected frame's arrangement as your layout NAME (in layouts.eld); you are then in it.
+NAME is a string or a symbol.  Only that entry of the file changes; a layouts.eld with a mistake is left as it is
+and `drgnx-config-refused' says where the mistake is."
   (interactive (list (read-string "Save layout as: ")))
-  (let ((sym (intern (string-trim name))))
-    (when (string-empty-p (string-trim name)) (user-error "A layout needs a name"))
+  (let ((sym (if (stringp name) (intern (string-trim name)) name)))
+    (when (and (stringp name) (string-empty-p (string-trim name))) (user-error "A layout needs a name"))
+    (unless (drgnx-layouts--name-p sym) (user-error "%S is not a layout name" sym))
     (when (assq sym drgnx-layouts) (user-error "%s is a built-in layout: choose another name" sym))
     (drgnx-layouts--close-bars)
     (let* ((snap (drgnx-layouts--snapshot))
@@ -464,10 +478,13 @@ was picked yet, to the arrangement you had)."
                       :editor (or (plist-get (alist-get (drgnx-layouts-current) (drgnx-layouts--all)) :editor) 'one)
                       :windows (window-state-get (window-main-window) t)
                       :px (list :left (plist-get (plist-get snap :left) :px) :panel (plist-get (plist-get snap :panel) :px)
-                                :right (plist-get (plist-get snap :right) :px))))
-           (user (drgnx-layouts--user)))
-      (setf (alist-get sym user) def)
-      (drgnx-layouts--write-user user)
+                                :right (plist-get (plist-get snap :right) :px)))))
+      (drgnx-config-update
+       'layouts
+       (lambda (data)
+         (if (assq sym data)
+             (mapcar (lambda (e) (if (eq (car e) sym) (cons sym def) e)) data)
+           (append data (list (cons sym def))))))
       (when-let* ((from (drgnx-layouts-current)))
         (drgnx-layouts--remember from snap)
         (unless (eq from sym) (set-frame-parameter nil 'drgnx-layouts-previous from)))
@@ -559,14 +576,26 @@ before this ran (the module sets up at idle) is adopted now."
   (add-hook 'drgnx-persist-after-restore-functions #'drgnx-layouts--adopt)
   (mapc #'drgnx-layouts--adopt (frame-list)))
 
+(defun drgnx-layouts--teardown ()
+  "Forget the layouts in every frame: Zen's margins and its resize hook go, and the frame parameters of the
+current layout, the remembered arrangements, the previous layout and Zen's way back."
+  (dolist (f (frame-list))
+    (when (eq (frame-parameter f 'drgnx-layouts-current) 'zen)
+      (with-selected-frame f (drgnx-layouts--zen-margins 'zen nil)))
+    (dolist (p '(drgnx-layouts-current drgnx-layouts-state drgnx-layouts-previous drgnx-layouts-zen-return))
+      (set-frame-parameter f p nil)))
+  (remove-hook 'window-size-change-functions #'drgnx-layouts--zen-resize))
+
 (drgnx-module-define 'tools/layouts
                      :doc "Layouts: Agent, Editor, Zen, Browser and your own; one key cycles."
                      :stage 'idle :requires '(core/workbench)
+                     :teardown #'drgnx-layouts--teardown
                      :setup
                      (lambda ()
                        (require 'drgnx-area)
                        (require 'drgnx-groups)
                        (require 'drgnx-persist)
+                       (drgnx-layouts--define-config)
                        (drgnx-layouts--wire-persist)
                        (drgnx-layouts--define-commands)))
 

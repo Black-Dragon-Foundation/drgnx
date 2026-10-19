@@ -285,6 +285,23 @@ cat %s\n"
             (should (equal (plist-get facts :report) '(:kkp t)))))
       (delete-directory tmp t))))
 
+(ert-deftest drgnx-tty/the-report-is-read-through-the-file-layer ()
+  ;; a plist is the report; a file with a mistake, one that is not a plist and a missing one are nil
+  (let* ((tmp (drgnx-tty-test--tmp))
+         (process-environment (cons (concat "XDG_STATE_HOME=" tmp) process-environment))
+         (file (expand-file-name "drgnx/terminal-report.eld" tmp)))
+    (unwind-protect
+        (progn
+          (should-not (drgnx-tty--read-report))
+          (make-directory (file-name-directory file))
+          (dolist (text '("(:kkp t" "(:kkp t) (:more)" "(1 2 3)" "#1=(:kkp . #1#)" "[:kkp t]"))
+            (write-region text nil file nil 'silent)
+            (should-not (drgnx-tty--read-report))
+            (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) text)))
+          (write-region ";; a note\n(:kkp t :terminals ((\"/dev/pts/1\" . (:caps nil))))\n" nil file nil 'silent)
+          (should (equal (drgnx-tty--read-report) '(:kkp t :terminals (("/dev/pts/1" :caps nil))))))
+      (delete-directory tmp t))))
+
 (ert-deftest drgnx-tty/the-client-environment-wins ()
   ;; in a daemon, process-environment is the daemon's own: the client's ENV (or its FRAME) decides
   (let* ((tmp (drgnx-tty-test--tmp))

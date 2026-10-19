@@ -157,7 +157,8 @@
         (should (string-suffix-p "<2>" name))
         (drgnx-hub-call-sync "agents/kill" (list :id first))
         (drgnx-coord-job-create :id "j" :tasks '((:n 1 :title "one")))
-        (let ((job-agent (drgnx-agents-start "mock" temporary-file-directory nil "j")))
+        (let ((job-agent (cl-letf (((symbol-function 'drgnx-agents-job-safe-p) #'always))   ; the mock: never job-safe
+                           (drgnx-agents-start "mock" temporary-file-directory nil "j"))))
           (should (drgnx-hub-agents-test--wait (lambda () (eq (drgnx-agent-session-status job-agent) 'idle))))
           (should (drgnx-hub-agents-test--wait (lambda () (equal (mapcar (lambda (e) (plist-get e :id)) (funcall saved)) (list second))))))
         (drgnx-hub-disconnect)

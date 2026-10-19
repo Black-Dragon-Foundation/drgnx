@@ -15,6 +15,7 @@
 (require 'seq)
 (require 'drgnx-signal)
 (require 'drgnx-modules-helpers)
+(require 'drgnx-state-intent)
 
 (defcustom drgnx-wb-dock-columns 32
   "Width of the left dock, in columns, the first time it shows (later: the width it had)."
@@ -22,6 +23,10 @@
 
 (defface drgnx-wb-close '((t :inherit shadow))
   "The close button (×) of a title, tab row or popup header." :group 'drgnx)
+
+(defface drgnx-wb-bar '((t :inherit tab-line :height 1.0 :box nil))
+  "The band of a header row (breadcrumb, a dock section's title, a panel's tab row): the theme's tab-line
+background, not the header line's, so every row of chrome is one colour and follows the theme." :group 'drgnx)
 
 (declare-function drgnx-face-glyph "drgnx-face")
 
@@ -59,10 +64,17 @@ Built once when a title or tab row is set, never while drawing."
     (apply #'propertize (drgnx-wb-close-glyph)
            'face 'drgnx-wb-close 'mouse-face 'highlight 'local-map map 'help-echo help props)))
 
+(defun drgnx-wb-bar (string &optional filled)
+  "STRING as a header row: `drgnx-wb-bar' behind it (under any face it has), and a filler to the window's right edge,
+so the whole row is the bar's colour and not the header line's.  FILLED: STRING already reaches the edge."
+  (let ((s (copy-sequence string)))
+    (add-face-text-property 0 (length s) 'drgnx-wb-bar t s)
+    (if filled s (concat s (propertize " " 'display '(space :align-to right) 'face 'drgnx-wb-bar)))))
+
 (defun drgnx-wb-header-with-close (title command help &rest props)
   "TITLE, then the close button for COMMAND (see `drgnx-wb-close-button') at the right edge of the window."
   (let ((button (apply #'drgnx-wb-close-button command help props)))
-    (concat title (propertize " " 'display `(space :align-to (- right ,(1+ (string-width button))))) " " button)))
+    (drgnx-wb-bar (concat title (propertize " " 'display `(space :align-to (- right ,(1+ (string-width button))))) " " button) t)))
 
 (defun drgnx-wb--close-dock-click (event)
   "A click on a dock section's ✕: hide the sidebar."
@@ -74,8 +86,8 @@ Built once when a title or tab row is set, never while drawing."
   "A dock section's header: the ✕ that hides the sidebar, then TITLE.
 The ✕ comes first: a title with buttons (Buffers) fills the dock's width, so one at the end would be clipped.  A
 space before it keeps it off the frame's edge."
-  (concat " " (drgnx-wb-close-button #'drgnx-wb--close-dock-click "Close sidebar")
-          (if (string-prefix-p " " title) "" " ") title))
+  (drgnx-wb-bar (concat " " (drgnx-wb-close-button #'drgnx-wb--close-dock-click "Close sidebar")
+                        (if (string-prefix-p " " title) "" " ") title)))
 
 (defun drgnx-wb-display-name (name)
   "NAME as it can be shown on one row: control characters (a newline in a file name) as ^X."
@@ -176,15 +188,17 @@ It is `explorer' unless another view with sections was chosen (a stale choice fa
           (funcall fn w))))))
 
 (defun drgnx-wb-hide-sidebar ()
-  "Hide the left dock, remembering its pixel width for the next show."
+  "Hide the left dock, remembering its pixel width for the next show.
+The width is noted `:by auto' (`drgnx-state-note-intent'): a width you chose is kept instead."
   (when-let* ((windows (drgnx-wb--dock-windows)))
-    (set-frame-parameter nil 'drgnx-wb-dock-px (window-pixel-width (car windows)))
+    (drgnx-state-note-intent nil :sizes 'left (window-pixel-width (car windows)) :by 'auto)
     (when (memq (selected-window) windows) (drgnx-wb-focus-editor))
     (dolist (w windows) (when (window-live-p w) (delete-window w)))))
 
 (defvar drgnx-wb-view-providers nil
-  "Alist VIEW → function that defines VIEW's sections now.  A module that sets up at idle registers one when its file
-loads, so the view's key works before then (`drgnx-wb-show-view' calls it when VIEW has no sections).")
+  "Alist VIEW → function that defines VIEW's sections now.  A module that sets up late can register one in its setup,
+so the view's key works before its sections exist (`drgnx-wb-show-view' calls it when VIEW has no sections).
+None does today: the Search view's module sets up at startup.")
 
 (defun drgnx-wb-show-view (view)
   "Show only VIEW's sections in the left dock, swapping them in place at the same width.
@@ -196,10 +210,10 @@ sidebar is shown first.  A view with no sections is a `user-error' and changes n
   (let ((in-dock (memq (selected-window) (drgnx-wb--dock-windows))))
     (unless (and (eq view (drgnx-wb-sidebar-view)) (drgnx-wb-sidebar-showing-p))
       (when-let* ((windows (drgnx-wb--dock-windows)))
-        (set-frame-parameter nil 'drgnx-wb-dock-px (window-pixel-width (car windows)))
+        (drgnx-state-note-intent nil :sizes 'left (window-pixel-width (car windows)) :by 'auto)
         (when in-dock (drgnx-wb-focus-editor))
         (dolist (w windows) (when (window-live-p w) (delete-window w))))
-      (set-frame-parameter nil 'drgnx-wb-view view)
+      (drgnx-state-note-intent nil :view nil view)            ; who asked: the running write's, or the default
       (drgnx-wb-show-sidebar)
       (when-let* ((_ in-dock) (w (car (drgnx-wb--dock-windows))))
         (select-window w)))))
@@ -231,7 +245,7 @@ Like VS Code's Ctrl+Shift+F;
   "Show BUFFER in the most recently used editor window, never splitting; SELECT it if asked."
   (let ((w (drgnx-wb-editor-window)))
     (set-window-buffer w buffer)
-    (setq drgnx-signal--editor-window w)
+    (drgnx-state-use-editor w)
     (when select (select-window w))
     w))
 

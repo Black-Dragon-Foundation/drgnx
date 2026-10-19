@@ -135,6 +135,16 @@ reports what it does with four more tools. Their events feed the Work cockpit:
   `. _ : -`, not starting with one of those four, at most 64 characters (`drgnx-coord-mcp--id-regexp`) — else every
   tool is refused (`not a plain id`): a newline or `]` would break out of the hub's header, and a lookalike of `user`
   (a no-break or zero-width space, a Cyrillic `ѕ`) would read as the user. Binding it to a token, as the gateway binds an agent's key, is deferred.
+- **Sandboxed job agents:** their identity comes from their socket. The agent's `drgnx` entry is a bridge to its
+  session's own `mcp.sock`, with no environment. The hub starts the server outside the sandbox, sets `DRGNX_AGENT`,
+  `DRGNX_JOB` and `DRGNX_TASK` from the session, and splices it to the connection ([hub.md](hub.md#per-session-sockets)).
+  Nothing inside the sandbox names the agent, and a `DRGNX_AGENT` set there reaches no server, so no agent can claim
+  to be another. Agents outside the sandbox keep the path above.
+- **A job agent's row is the hub's.** `drgnx-job--launch-task` registers it (kind `job`: cwd and worktree the task
+  folder, branch, base). For an agent with `DRGNX_JOB` and such a row, `hello` changes nothing of it, runs no git and
+  answers the hub's cwd, worktree and base; `report_edit` resolves paths against that row
+  (`drgnx-coord-mcp--job-row`). A sandboxed agent's server works in the session's dir, never in the task folder, so
+  its own view would be wrong; the cockpit keeps showing the task folder's edits.
 - **Agents outside drgnx:** when `DRGNX_AGENT` is empty and `DRGNX_AGENT_KIND` is set (a short lower-case name:
   `claude`, `codex`, `zed`…), the server speaks for an agent outside drgnx, as `ext:KIND:PID-HASH`. PID is the
   agent's process: the server's parent (`(alist-get 'ppid (process-attributes (emacs-pid)))`). HASH is 6 hex digits

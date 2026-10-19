@@ -17,6 +17,7 @@
 (require 'drgnx-rules)
 (require 'drgnx-modules-helpers)
 (require 'drgnx-wb)
+(require 'drgnx-state-intent)
 (require 'tab-line)                     ; the tab faces we inherit
 
 (defface drgnx-wb-tab '((t :inherit tab-line-tab-inactive)) "A tab in an area's tab row." :group 'drgnx)
@@ -245,12 +246,16 @@ Returns the window — the same one across tab switches."
               (drgnx-area--remember area w))))))))
 
 (defun drgnx-wb-area-hide (area)
-  "Hide AREA, remembering its pixel size and its tabs."
+  "Hide AREA, remembering its pixel size and its tabs.
+The panel's and the right dock's size is noted `:by auto' (`drgnx-state-note-intent'): a size you chose is
+kept instead of the one a popup squeezed the area to."
   (when-let* ((w (drgnx-wb-area-window area)))
     (drgnx-area--end-popup w)
     (drgnx-area--remember area w)
-    (set-frame-parameter nil (drgnx-area--px-param area)
-                         (if (drgnx-area--horizontal-p area) (window-pixel-width w) (window-pixel-height w)))
+    (let ((px (if (drgnx-area--horizontal-p area) (window-pixel-width w) (window-pixel-height w))))
+      (if (memq area '(panel right))                  ; the areas intent knows (homes `bottom' and `right')
+          (drgnx-state-note-intent nil :sizes area px :by 'auto)
+        (set-frame-parameter nil (drgnx-area--px-param area) px)))
     (when (eq (selected-window) w) (drgnx-wb-focus-editor))
     (set-window-parameter w 'delete-window nil)
     (delete-window w)))
@@ -296,9 +301,9 @@ area, so its size and tabs are kept."
                  ("\\`\\*Flycheck errors\\*\\'" problems)
                  ((messages-buffer-mode debugger-mode ert-results-mode process-menu-mode timer-list-mode) output)
                  ("\\`\\*\\(Warnings\\|Backtrace\\|Messages\\|timer-list\\|Process List\\)\\*\\'" output)
-                 ((shell-mode eshell-mode term-mode vterm-mode inferior-emacs-lisp-mode comint-mode) terminal)
-                 ;; shell and eshell show their buffer before setting its mode.
-                 ("\\`\\*\\(shell\\|eshell\\|ielm\\|terminal\\|ansi-term\\|vterm\\)\\*\\(<[0-9]+>\\)?\\'" terminal)))
+                 ((shell-mode eshell-mode eat-mode term-mode vterm-mode inferior-emacs-lisp-mode comint-mode) terminal)
+                 ;; shell, eshell and eat show their buffer before setting its mode.
+                 ("\\`\\*\\(shell\\|eshell\\|eat\\|ielm\\|terminal\\|ansi-term\\|vterm\\)\\*\\(<[0-9]+>\\)?\\'" terminal)))
   (drgnx-wb-place matcher 'panel :tab tab))
 
 (provide 'drgnx-area)

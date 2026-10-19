@@ -502,4 +502,423 @@ a refused spec writes nothing."
         (should-not seen)
         (should-not (file-exists-p (concat folder "/p.sb")))))))
 
+;;;; The check, toolchain roots, the memory cap, short sandboxed steps
+
+(defmacro drgnx-sandbox-test--quiet (&rest body)
+  "BODY with nothing checked or found yet, and any prompt an error: every path here is automatic."
+  (declare (indent 0))
+  `(let ((drgnx-sandbox--checked nil) (drgnx-sandbox--check-waiting nil) (drgnx-sandbox--programs nil))
+     (cl-letf (((symbol-function 'read-from-minibuffer) (lambda (&rest _) (error "Prompted in an automatic path")))
+               ((symbol-function 'y-or-n-p) (lambda (&rest _) (error "Prompted in an automatic path"))))
+       ,@body)))
+
+(defun drgnx-sandbox-test--wait (pred &optional seconds)
+  "Wait until PRED is true, at most SECONDS (default 10)."
+  (let ((deadline (+ (float-time) (or seconds 10))))
+    (while (and (not (funcall pred)) (< (float-time) deadline)) (accept-process-output nil 0.02))
+    (funcall pred)))
+
+(ert-deftest drgnx-sandbox/check-reports-a-missing-bwrap ()
+  "With no bwrap where it is trusted nor on `exec-path', the check fails, says so, and says how to install it on this
+distribution (/etc/os-release).  A bwrap installed meanwhile is seen at the next check: the program's cached miss is
+looked at again."
+  (let* ((dir (directory-file-name (file-truename (make-temp-file "drgnx-sb-os" t))))
+         (os (concat dir "/os-release")))
+    (unwind-protect
+        (drgnx-sandbox-test--quiet
+          (let ((system-type 'gnu/linux) (exec-path (list dir)) (drgnx-sandbox-trusted-programs nil)
+                (drgnx-sandbox-container-files nil) (drgnx-sandbox-os-release os))
+            (write-region "NAME=\"Fedora Linux\"\nID=fedora\n" nil os nil 'silent)
+            (let ((c (drgnx-sandbox-check)))
+              (should-not (plist-get c :ok))
+              (should (eq (plist-get c :backend) 'bwrap))
+              (should (string-match-p "bubblewrap" (plist-get c :reason)))
+              (should (equal (plist-get c :fix) "sudo dnf install bubblewrap")))
+            (pcase-dolist (`(,text . ,fix) '(("ID=ubuntu\nID_LIKE=debian\n" . "sudo apt install bubblewrap")
+                                             ("ID=linuxmint\nID_LIKE=\"ubuntu debian\"\n" . "sudo apt install bubblewrap")
+                                             ("ID=arch\n" . "sudo pacman -S bubblewrap")
+                                             ("ID=manjaro\nID_LIKE=arch\n" . "sudo pacman -S bubblewrap")
+                                             ("ID=\"rocky\"\nID_LIKE=\"rhel centos fedora\"\n" . "sudo dnf install bubblewrap")))
+              (write-region text nil os nil 'silent)
+              (drgnx-sandbox-check-reset)
+              (ert-info (text) (should (equal (plist-get (drgnx-sandbox-check) :fix) fix))))
+            ;; installed since: a program only root can change (true stands in for bwrap and answers 0)
+            (let ((true (file-truename "/usr/bin/true")))
+              (unless (eql 0 (file-attribute-user-id (file-attributes true 'integer))) (ert-skip "/usr/bin/true is not root's"))
+              (setq drgnx-sandbox-trusted-programs `(("bwrap" . ,true)))
+              (should-not (plist-get (drgnx-sandbox-check) :ok))     ; the answer is kept
+              (should (equal drgnx-sandbox--programs '(("bwrap"))))   ; and so is the program's miss…
+              (setq drgnx-sandbox--checked nil)                       ; …which the next check looks at again
+              (should (plist-get (drgnx-sandbox-check) :ok)))))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-sandbox/explains-apparmor ()
+  "Ubuntu's AppArmor rule on unprivileged user namespaces is named, with its `bwrap-userns-restrict' fix; so are
+user namespaces the kernel refuses, and anything else is quoted."
+  (let ((drgnx-sandbox-container-files nil) (system-type 'gnu/linux))
+    (let ((e (drgnx-sandbox--explain "bwrap: setting up uid map: Permission denied\n")))
+      (should (equal (car e) "AppArmor restricts unprivileged user namespaces"))
+      (should (string-match-p "bwrap-userns-restrict" (cdr e))))
+    (let ((e (drgnx-sandbox--explain "bwrap: No permissions to creating new namespace, likely because the kernel does not allow non-privileged user namespaces.")))
+      (should (string-match-p "user namespaces" (car e)))
+      (should (string-match-p "sysctl" (cdr e))))
+    (should (string-match-p "bwrap: odd failure" (car (drgnx-sandbox--explain "bwrap: odd failure\nmore")))))
+  ;; through the check: the probe's stderr is what is explained
+  (drgnx-sandbox-test--quiet
+    (let ((drgnx-sandbox-container-files nil) (system-type 'gnu/linux))
+      (cl-letf (((symbol-function 'drgnx-sandbox--probes)
+                 (lambda (_b) '((:probe "/bin/sh" "-c" "echo 'bwrap: setting up uid map: Permission denied' >&2; exit 1")
+                                (:version "/bin/sh" "-c" "echo bubblewrap 0.11.0")))))
+        (let ((c (drgnx-sandbox-check)))
+          (should-not (plist-get c :ok))
+          (should (equal (plist-get c :version) "0.11.0"))
+          (should (equal (plist-get c :reason) "AppArmor restricts unprivileged user namespaces"))
+          (should (string-match-p "bwrap-userns-restrict" (plist-get c :fix))))))))
+
+(ert-deftest drgnx-sandbox/explains-containers ()
+  "Inside a container (podman's /run/.containerenv, docker's /.dockerenv) the reason says so, with no fix: a missing
+bwrap and a failing one alike."
+  (let* ((dir (make-temp-file "drgnx-sb-ctr" t)) (marker (expand-file-name ".containerenv" dir)))
+    (unwind-protect
+        (progn
+          (write-region "" nil marker nil 'silent)
+          (let ((drgnx-sandbox-container-files (list (expand-file-name "none" dir) marker)) (system-type 'gnu/linux))
+            (dolist (stderr '(nil "bwrap: setting up uid map: Permission denied" "bwrap: Creating new namespace failed"))
+              (let ((e (drgnx-sandbox--explain stderr)))
+                (should (string-match-p "inside a container" (car e)))
+                (should-not (cdr e))))))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-sandbox/check-is-cached ()
+  "The probes run once: later checks, synchronous or not, get the same answer until `drgnx-sandbox-check-reset',
+which also forgets the programs found."
+  (drgnx-sandbox-test--quiet
+    (let ((n 0) (system-type 'gnu/linux) (got nil))
+      (cl-letf (((symbol-function 'drgnx-sandbox--probes)
+                 (lambda (_b) (cl-incf n) '((:probe "/bin/sh" "-c" "exit 0") (:version "/bin/sh" "-c" "echo bubblewrap 0.12.0")))))
+        (let ((c (drgnx-sandbox-check)))
+          (should (equal (list (plist-get c :ok) (plist-get c :backend) (plist-get c :version)) '(t bwrap "0.12.0")))
+          (should (eq (drgnx-sandbox-check) c))
+          (drgnx-sandbox-check-async (lambda (a) (setq got a)))
+          (should (eq got c))
+          (should (= n 1))
+          (setq drgnx-sandbox--programs '(("bwrap" . "/usr/bin/bwrap")))
+          (drgnx-sandbox-check-reset)
+          (should-not drgnx-sandbox--programs)
+          (should-not (eq (drgnx-sandbox-check) c))
+          (should (= n 2)))))))
+
+(ert-deftest drgnx-sandbox/check-async-never-blocks ()
+  "The hub's check returns at once and answers later, every caller once; a probe that hangs is ended after
+`drgnx-sandbox-check-timeout' and the answer says so."
+  (drgnx-sandbox-test--quiet
+    (let ((n 0) (system-type 'gnu/linux) (a nil) (b nil) (t0 (float-time)))
+      (cl-letf (((symbol-function 'drgnx-sandbox--probes)
+                 (lambda (_b) (cl-incf n) '((:probe "/bin/sh" "-c" "sleep 0.5") (:version "/bin/sh" "-c" "echo bubblewrap 0.12.0")))))
+        (drgnx-sandbox-check-async (lambda (x) (setq a x)))
+        (drgnx-sandbox-check-async (lambda (x) (setq b x)))
+        (should (< (- (float-time) t0) 0.3))
+        (should-not (or a b))
+        (should (drgnx-sandbox-test--wait (lambda () (and a b))))
+        (should (eq a b))
+        (should (plist-get a :ok))
+        (should (= n 1)))
+      (drgnx-sandbox-check-reset)
+      (let ((drgnx-sandbox-check-timeout 0.3) (c nil))
+        (cl-letf (((symbol-function 'drgnx-sandbox--probes) (lambda (_b) '((:probe "/bin/sh" "-c" "sleep 30")))))
+          (drgnx-sandbox-check-async (lambda (x) (setq c x)))
+          (should-not c)
+          (should (drgnx-sandbox-test--wait (lambda () c) 5))
+          (should-not (plist-get c :ok))
+          (should (string-match-p "did not finish" (plist-get c :reason))))))))
+
+(defmacro drgnx-sandbox-test--toolchains (&rest body)
+  "BODY in `drgnx-sandbox-test--with', with toolchains under HOME: mise's node 20 (TOOL) and python 3.12, cargo with
+rustup's toolchains, go, nvm's node, a link ~/bin to ~/tools/bin, and in ~/.local/bin links to python and to
+claude's versioned binary.  PATH-DIRS lists them on PATH, with /usr/bin and one that is not there."
+  (declare (indent 0))
+  `(drgnx-sandbox-test--with
+     (let* ((mise (concat home "/.local/share/mise/installs"))
+            (py (concat mise "/python/3.12"))
+            (nvm (concat home "/.nvm/versions/node/v20.1.0"))
+            (claude (concat home "/.local/share/claude/versions"))
+            (path-dirs (list (concat tool "/bin") (concat home "/.cargo/bin") (concat home "/go/bin") (concat nvm "/bin")
+                             (concat home "/.local/bin") (concat home "/bin") "/usr/bin" (concat home "/gone/bin"))))
+       (dolist (d (list (concat tool "/bin") (concat tool "/etc") (concat py "/bin") (concat home "/.cargo/bin")
+                        (concat home "/.rustup/toolchains/stable/bin") (concat home "/go/bin") (concat nvm "/bin")
+                        (concat home "/.local/bin") (concat home "/tools/bin") claude))
+         (make-directory d t))
+       (write-region "token" nil (concat tool "/etc/npmrc") nil 'silent)
+       (write-region "token" nil (concat home "/.cargo/credentials.toml") nil 'silent)
+       (write-region "" nil (concat py "/bin/python3.12") nil 'silent)
+       (write-region "" nil (concat claude "/2.0.1") nil 'silent)
+       (make-symbolic-link (concat py "/bin/python3.12") (concat home "/.local/bin/python"))
+       (make-symbolic-link (concat claude "/2.0.1") (concat home "/.local/bin/claude"))
+       (make-symbolic-link (concat home "/tools/bin") (concat home "/bin"))
+       ,@body)))
+
+(ert-deftest drgnx-sandbox/toolchain-roots-from-path ()
+  "Each `PATH' entry under HOME gives its install root: mise's installs/TOOL/VER, ~/.cargo/bin (and rustup's
+toolchains), ~/go/bin, nvm's versions/node/V, a linked dir's target, ~/.local/bin and the roots its links lead to."
+  (drgnx-sandbox-test--toolchains
+    (should (equal (drgnx-sandbox-toolchain-roots path-dirs home)
+                   (sort (list tool py (concat home "/.cargo/bin") (concat home "/.rustup/toolchains") (concat home "/go/bin")
+                               nvm (concat home "/.local/bin") (concat home "/tools/bin") claude)
+                         #'string<)))
+    ;; a HOME spelled through a link finds the same roots
+    (make-symbolic-link home (concat root "/home-link"))
+    (should (equal (drgnx-sandbox-toolchain-roots path-dirs (concat root "/home-link"))
+                   (drgnx-sandbox-toolchain-roots path-dirs home)))
+    ;; and the sandbox takes them
+    (should-not (drgnx-sandbox-validate (drgnx-sandbox-spec :read (drgnx-sandbox-toolchain-roots path-dirs home))))))
+
+(ert-deftest drgnx-sandbox/toolchain-roots-hide-credentials ()
+  "The tokens package managers keep inside a toolchain root (`drgnx-sandbox-secret-files') are hidden; those beside
+it (~/.cargo/credentials.toml) are never bound at all."
+  (drgnx-sandbox-test--toolchains
+    (let* ((roots (drgnx-sandbox-toolchain-roots path-dirs home))
+           (hide (drgnx-sandbox-toolchain-hide roots))
+           (argv (drgnx-sandbox-bwrap-argv (drgnx-sandbox-spec :read roots :hide hide) '("a"))))
+      (should (equal hide (list secret (concat tool "/etc/npmrc"))))
+      (dolist (s hide)
+        (should (cl-loop for (a b c) on argv thereis (and (equal a "--ro-bind") (equal b "/dev/null") (equal c s)))))
+      (dolist (src (drgnx-sandbox-test--sources argv))
+        (should-not (drgnx-sandbox-test--within-p (concat home "/.cargo/credentials.toml") src)))
+      (let ((drgnx-sandbox-secret-files '("bin")))
+        (should (equal (drgnx-sandbox-toolchain-hide roots)
+                       (sort (cl-remove-if-not #'file-directory-p (mapcar (lambda (r) (concat r "/bin")) roots))
+                             #'string<)))))))
+
+(ert-deftest drgnx-sandbox/toolchain-roots-never-home ()
+  "No root is HOME or a parent of it, nor ~/.local, ~/.local/share, ~/.config or ~/.cache (they hold drgnx's own
+dirs and every tool's config), nor in ~/.ssh: not from `PATH', not through a link."
+  (drgnx-sandbox-test--toolchains
+    (dolist (d '("/.local/share/x" "/.config/x" "/.cache" "/.ssh/bin")) (make-directory (concat home d) t))
+    (write-region "" nil (concat home "/script") nil 'silent)
+    (write-region "" nil (concat home "/.local/share/x/tool") nil 'silent)
+    (make-symbolic-link (concat home "/script") (concat home "/.local/bin/script"))
+    (make-symbolic-link (concat home "/.local/share/x/tool") (concat home "/.local/bin/x"))
+    (make-symbolic-link home (concat home "/.local/bin/home"))
+    (make-symbolic-link "/" (concat home "/.local/bin/root"))
+    (let ((roots (drgnx-sandbox-toolchain-roots
+                  (append (list home root "/" (concat home "/.local") (concat home "/.local/share") (concat home "/.config")
+                                (concat home "/.cache") (concat home "/.ssh/bin") (concat home "/.local/bin/home"))
+                          path-dirs)
+                  home)))
+      (should roots)
+      (dolist (r roots)
+        (ert-info (r)
+          (should (string-prefix-p (concat home "/") r))
+          (dolist (d '("/.local" "/.local/share" "/.config" "/.cache")) (should-not (equal r (concat home d))))
+          (should-not (drgnx-sandbox-test--within-p r (concat home "/.ssh"))))))))
+
+(ert-deftest drgnx-sandbox/toolchain-roots-links-reach-no-dirs ()
+  "A link in a `PATH' dir that leads into no toolchain layout gives its target file alone: never the dir it is in
+nor a dir it leads to — another repo, dotfiles with a key, notes — and nothing at all in ~/.config, ~/.local/share
+or ~/.cache but a known layout.  The file must be a program: executable, not directly in HOME, its name none of
+`drgnx-sandbox-secret-files' — so a link to ~/.netrc or a key brings nothing.  Every root passes `:read' validation."
+  (drgnx-sandbox-test--toolchains
+    (dolist (d '("/dotfiles" "/src/otherrepo/.git" "/notes" "/.config/gh" "/.local/share/keyrings" "/.cache/x"))
+      (make-directory (concat home d) t))
+    (dolist (f '("/dotfiles/sync.sh" "/dotfiles/id_ed25519" "/src/otherrepo/run.sh" "/notes/n.org" "/.config/gh/hosts.yml"
+                 "/.local/share/keyrings/login.keyring" "/.cache/x/tool" "/.netrc" "/dotfiles/.env" "/run-me"))
+      (write-region "x" nil (concat home f) nil 'silent))
+    ;; programs: the two scripts; and, executable but refused, a .env and a file directly in HOME
+    (dolist (f '("/dotfiles/sync.sh" "/src/otherrepo/run.sh" "/dotfiles/.env" "/run-me" "/.cache/x/tool"))
+      (set-file-modes (concat home f) #o755))
+    (pcase-dolist (`(,name . ,target) '(("sync" . "/dotfiles/sync.sh") ("run" . "/src/otherrepo/run.sh") ("notesdir" . "/notes")
+                                        ("ghx" . "/.config/gh/hosts.yml") ("kr" . "/.local/share/keyrings/login.keyring")
+                                        ("cx" . "/.cache/x/tool") ("cfg" . "/.config/gh")
+                                        ("netrc" . "/.netrc") ("key" . "/dotfiles/id_ed25519")
+                                        ("env" . "/dotfiles/.env") ("runme" . "/run-me")))
+      (make-symbolic-link (concat home target) (concat home "/.local/bin/" name)))
+    (let ((roots (drgnx-sandbox-toolchain-roots path-dirs home)))
+      (dolist (r roots)
+        (ert-info (r)
+          (dolist (closed '("/notes" "/.config" "/.cache" "/.local/share/keyrings" "/dotfiles/id_ed25519" "/src/otherrepo/.git"
+                            "/.netrc" "/dotfiles/.env" "/run-me"))
+            (should-not (drgnx-sandbox-test--within-p r (concat home closed))))
+          (dolist (dir '("/dotfiles" "/src" "/src/otherrepo" "/.local/share"))
+            (should-not (equal r (concat home dir))))))
+      ;; the scripts themselves, alone
+      (should (member (concat home "/dotfiles/sync.sh") roots))
+      (should (member (concat home "/src/otherrepo/run.sh") roots))
+      (should-not (drgnx-sandbox-validate (drgnx-sandbox-spec :read roots))))))
+
+(ert-deftest drgnx-sandbox/toolchain-roots-skip-drgnx-itself ()
+  "install.sh's layout (~/.local/bin/drgnx → ~/.local/share/drgnx/drgnx/bin/drgnx) and a link into a checkout give
+no root: drgnx's own files reach a sandbox only through Task 15's explicit bind.  A spec of the roots validates."
+  (drgnx-sandbox-test--toolchains
+    (let* ((data (concat home "/.local/share/drgnx")) (bin (concat data "/drgnx/bin"))
+           (process-environment (cons (concat "DRGNX_DATA_DIR=" data) process-environment))
+           (checkout (concat home "/src/drgnx")) (drgnx-dir (file-name-as-directory checkout)))
+      (make-directory bin t)
+      (make-directory (concat checkout "/bin") t)
+      (write-region "" nil (concat bin "/drgnx") nil 'silent)
+      (write-region "" nil (concat checkout "/bin/drgnx") nil 'silent)
+      (make-symbolic-link (concat bin "/drgnx") (concat home "/.local/bin/drgnx"))
+      (make-symbolic-link (concat checkout "/bin/drgnx") (concat home "/.local/bin/drgnx-dev"))
+      (let ((roots (drgnx-sandbox-toolchain-roots path-dirs home)))
+        (should (member tool roots))
+        (dolist (r roots)
+          (should-not (drgnx-sandbox-test--within-p r data))
+          (should-not (drgnx-sandbox-test--within-p r checkout)))
+        (should-not (drgnx-sandbox-validate (drgnx-sandbox-spec :read roots)))))))
+
+(ert-deftest drgnx-sandbox/toolchain-roots-npm-pipx-uv ()
+  "npm's prefix (~/.npm-global, or ~/.local/lib/node_modules/PKG), pipx's and uv's tool venvs are roots whole, so a
+package finds its own files; layouts match whole path components only."
+  (drgnx-sandbox-test--toolchains
+    (let ((npm (concat home "/.npm-global")) (local-npm (concat home "/.local/lib/node_modules/y"))
+          (pipx (concat home "/.local/share/pipx/venvs/black")) (uv (concat home "/.local/share/uv/tools/ruff")))
+      (dolist (d (list (concat npm "/lib/node_modules/x/bin") (concat npm "/bin") local-npm (concat pipx "/bin")
+                       (concat uv "/bin")))
+        (make-directory d t))
+      (dolist (f (list (concat npm "/lib/node_modules/x/bin/x.js") (concat local-npm "/cli.js") (concat pipx "/bin/black")
+                       (concat uv "/bin/ruff")))
+        (write-region "" nil f nil 'silent))
+      (make-symbolic-link "../lib/node_modules/x/bin/x.js" (concat npm "/bin/x"))
+      (make-symbolic-link (concat local-npm "/cli.js") (concat home "/.local/bin/y"))
+      (make-symbolic-link (concat pipx "/bin/black") (concat home "/.local/bin/black"))
+      (make-symbolic-link (concat uv "/bin/ruff") (concat home "/.local/bin/ruff"))
+      (let ((roots (drgnx-sandbox-toolchain-roots (cons (concat npm "/bin") path-dirs) home)))
+        (dolist (r (list npm local-npm pipx uv)) (should (member r roots)))
+        (should-not (member (concat npm "/bin") roots))
+        (should-not (drgnx-sandbox-validate (drgnx-sandbox-spec :read roots))))
+      (let ((h (file-name-as-directory home)))
+        (should (equal (drgnx-sandbox--toolchain-root (concat h "go/binx/foo") h) (concat h "go/binx/foo")))
+        (should (equal (drgnx-sandbox--toolchain-root (concat h ".cargo/binaries") h) (concat h ".cargo/binaries")))
+        (should (equal (drgnx-sandbox--toolchain-root (concat h "go/bin") h) (concat h "go/bin")))
+        ;; mise's installs only in its data dir: ~/.local/share/mise, $XDG_DATA_HOME/mise or $MISE_DATA_DIR
+        (let ((process-environment (append '("MISE_DATA_DIR" "XDG_DATA_HOME") process-environment)))
+          (should (equal (drgnx-sandbox--toolchain-root (concat h ".local/share/mise/installs/node/20/bin") h)
+                         (concat h ".local/share/mise/installs/node/20")))
+          (dolist (p '(".config/mise/installs/x/1/bin" "src/mise/installs/x/1/bin" "tools/mise/installs/x/1/bin"))
+            (should (equal (drgnx-sandbox--toolchain-root (concat h p) h) (concat h p)))))
+        (make-directory (concat h "tools/mise") t)
+        (make-directory (concat h "xdg/mise") t)
+        ;; $MISE_DATA_DIR wins over $XDG_DATA_HOME, as in mise
+        (let ((process-environment (append (list (concat "MISE_DATA_DIR=" h "tools/mise") (concat "XDG_DATA_HOME=" h "xdg"))
+                                           process-environment)))
+          (should (equal (drgnx-sandbox--toolchain-root (concat h "tools/mise/installs/x/1/bin") h)
+                         (concat h "tools/mise/installs/x/1")))
+          (should (equal (drgnx-sandbox--toolchain-root (concat h "xdg/mise/installs/x/1/bin") h)
+                         (concat h "xdg/mise/installs/x/1/bin"))))
+        (let ((process-environment (append (list "MISE_DATA_DIR" (concat "XDG_DATA_HOME=" h "xdg")) process-environment)))
+          (should (equal (drgnx-sandbox--toolchain-root (concat h "xdg/mise/installs/x/1/bin") h)
+                         (concat h "xdg/mise/installs/x/1"))))))))
+
+(ert-deftest drgnx-sandbox/check-never-wedges ()
+  "An error while the probes are built, or while their answer is made, still answers every caller and ends the
+check.  A reset while a check runs: the next call starts a new one, the old one answers its own callers and its
+answer is not kept."
+  (drgnx-sandbox-test--quiet
+    (let ((system-type 'gnu/linux) (a nil) (b nil))
+      (cl-letf (((symbol-function 'drgnx-sandbox--probes) (lambda (_b) (error "Boom"))))
+        (drgnx-sandbox-check-async (lambda (x) (setq a x)))
+        (should a)
+        (should-not (plist-get a :ok))
+        (should (string-match-p "Boom" (plist-get a :reason)))
+        (should-not drgnx-sandbox--check-waiting))
+      (drgnx-sandbox-check-reset)
+      (setq a nil)
+      (cl-letf (((symbol-function 'drgnx-sandbox--probes) (lambda (_b) '((:probe "/bin/sh" "-c" "sleep 0.2"))))
+                ((symbol-function 'drgnx-sandbox--answer) (lambda (&rest _) (error "Bad answer"))))
+        (drgnx-sandbox-check-async (lambda (x) (setq a x)))
+        (drgnx-sandbox-check-async (lambda (x) (setq b x)))
+        (should (drgnx-sandbox-test--wait (lambda () (and a b))))
+        (should (string-match-p "Bad answer" (plist-get a :reason)))
+        (should (eq a b))
+        (should-not drgnx-sandbox--check-waiting))
+      (drgnx-sandbox-check-reset)
+      (let ((old nil) (new nil) (n 0))
+        (cl-letf (((symbol-function 'drgnx-sandbox--probes)
+                   (lambda (_b) (cl-incf n)
+                     (if (= n 1) '((:probe "/bin/sh" "-c" "sleep 0.3; exit 1")) '((:probe "/bin/sh" "-c" "exit 0"))))))
+          (drgnx-sandbox-check-async (lambda (x) (setq old x)))
+          (drgnx-sandbox-check-reset)
+          (should-not drgnx-sandbox--check-waiting)
+          (drgnx-sandbox-check-async (lambda (x) (setq new x)))
+          (should (drgnx-sandbox-test--wait (lambda () (and old new))))
+          (should (= n 2))
+          (should-not (plist-get old :ok))
+          (should (plist-get new :ok))
+          (should (eq drgnx-sandbox--checked new)))))))
+
+(ert-deftest drgnx-sandbox/memory-prefix-only-with-a-manager ()
+  "The memory cap is a systemd scope (the trusted systemd-run) in front of the sandbox, when the spec has a
+`:memory-max' (`drgnx-sandbox-memory-max' unless given) and the check found a user manager that answers."
+  (drgnx-sandbox-test--with
+    (let ((drgnx-sandbox--programs '(("bwrap" . "/usr/bin/bwrap") ("systemd-run" . "/usr/bin/systemd-run")))
+          (drgnx-sandbox--checked '(:ok t :backend bwrap :scope t)))
+      (should (equal (drgnx-sandbox-memory-prefix (drgnx-sandbox-spec :memory-max "2G"))
+                     '("/usr/bin/systemd-run" "--user" "--scope" "--quiet" "-p" "MemoryMax=2G" "-p" "MemorySwapMax=0" "--")))
+      (should (equal (plist-get (drgnx-sandbox-spec) :memory-max) "4G"))
+      (let ((drgnx-sandbox-memory-max "3G"))
+        (should (member "MemoryMax=3G" (drgnx-sandbox-memory-prefix (drgnx-sandbox-spec)))))
+      (should-not (drgnx-sandbox-memory-prefix (drgnx-sandbox-spec :memory-max nil)))
+      ;; `drgnx-sandbox-wrap' puts it first
+      (let ((spec (drgnx-sandbox-spec :write (list folder) :memory-max "2G")))
+        (should (equal (drgnx-sandbox-wrap spec '("a"))
+                       (append (drgnx-sandbox-memory-prefix spec) (drgnx-sandbox-bwrap-argv spec '("a"))))))
+      ;; a size and nothing else, whoever asks
+      (dolist (bad '("4G -p Delegate=yes" "lots" ""))
+        (drgnx-sandbox-test--refused (drgnx-sandbox-spec :memory-max bad))
+        (should-error (drgnx-sandbox-memory-prefix (list :memory-max bad)) :type 'drgnx-sandbox-refused)))
+    ;; no manager answered, no check yet, no trusted systemd-run: no cap
+    (dolist (case '(((:ok t :scope nil) ("systemd-run" . "/usr/bin/systemd-run"))
+                    (nil ("systemd-run" . "/usr/bin/systemd-run"))
+                    ((:ok t :scope t) ("systemd-run"))))
+      (let ((drgnx-sandbox--checked (car case)) (drgnx-sandbox--programs (cdr case)))
+        (should-not (drgnx-sandbox-memory-prefix (drgnx-sandbox-spec :memory-max "2G")))))))
+
+(ert-deftest drgnx-sandbox/run-gives-exit-and-output ()
+  "A short sandboxed step: the process returns at once; DONE gets (EXIT . OUTPUT), stdout and stderr; past its
+timeout it is ended and DONE gets (:timeout . MSG); a refused spec signals and starts nothing."
+  (drgnx-sandbox-test--with
+    (drgnx-sandbox-test--quiet
+      (let ((r nil) (argvs nil))
+        (cl-letf (((symbol-function 'drgnx-sandbox-wrap)
+                   (lambda (_spec argv) (push argv argvs) (list "/bin/sh" "-c" (car argv)))))
+          (should (processp (drgnx-sandbox-run (drgnx-sandbox-spec) '("echo out; echo err >&2; exit 3") (lambda (x) (setq r x)))))
+          (should-not r)
+          (should (drgnx-sandbox-test--wait (lambda () r)))
+          (should (eql (car r) 3))
+          (should (string-match-p "out" (cdr r)))
+          (should (string-match-p "err" (cdr r)))
+          (setq r nil)
+          (let ((p (drgnx-sandbox-run (drgnx-sandbox-spec) '("sleep 30") (lambda (x) (setq r x)) 0.3)))
+            (should (drgnx-sandbox-test--wait (lambda () r) 5))
+            (should (eq (car r) :timeout))
+            (should (string-match-p "0.3 s" (cdr r)))
+            (should-not (process-live-p p))))
+        (let ((before (length (process-list))))
+          (should-error (drgnx-sandbox-run (drgnx-sandbox-spec :write (list home)) '("true") #'ignore)
+                        :type 'drgnx-sandbox-refused)
+          (should (= (length (process-list)) before)))))))
+
+(ert-deftest drgnx-sandbox/wrapped-cat-cannot-read-the-canary ()
+  "Under the real sandbox, a step given only the task folder cannot read a key in ~/.ssh nor list the runtime dir.
+Skipped with the check's reason where the sandbox cannot run."
+  (drgnx-sandbox-test--with
+    (let ((drgnx-sandbox-system-read drgnx-sandbox-test--system-read) (drgnx-sandbox-resolv-conf "/etc/resolv.conf")
+          (drgnx-sandbox--checked nil) (drgnx-sandbox--check-waiting nil) (drgnx-sandbox--programs nil))
+      (let ((c (drgnx-sandbox-check)))
+        (unless (plist-get c :ok) (ert-skip (format "the sandbox cannot run here: %s" (plist-get c :reason)))))
+      (let* ((canary (format "canary-%s" (md5 (format "%s%s" (random) (float-time)))))
+             (listed (format "listed-%s" (md5 (format "%s%s" (random) (float-time)))))
+             (script (concat "echo STARTED; cat ~/.ssh/id_canary; ls " (shell-quote-argument run)))
+             (r nil))
+        (write-region canary nil (concat home "/.ssh/id_canary") nil 'silent)
+        (write-region "" nil (concat run "/" listed) nil 'silent)
+        (drgnx-sandbox-run (drgnx-sandbox-spec :write (list folder) :chdir folder :env (drgnx-sandbox-base-env))
+                           (list "/bin/sh" "-c" script) (lambda (x) (setq r x)))
+        (should (drgnx-sandbox-test--wait (lambda () r)))
+        (ert-info ((format "%S" r))
+          (should (integerp (car r)))
+          (should-not (eql (car r) 0))
+          (should (string-match-p "STARTED" (cdr r)))
+          (should-not (string-match-p canary (cdr r)))
+          (should-not (string-match-p listed (cdr r))))))))
+
 ;;; sandbox-test.el ends here
