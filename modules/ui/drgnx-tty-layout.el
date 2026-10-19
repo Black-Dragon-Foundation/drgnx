@@ -294,10 +294,27 @@ fraction, except one you resized (`drgnx-tty-layout--notice-drags'), which keeps
   (dolist (f '(drgnx-wb-area-show drgnx-wb-area-hide))
     (advice-remove f #'drgnx-tty-layout--area-toggled)))
 
+(defconst drgnx-tty-layout--frame-parameters
+  '(drgnx-tty-layout-size drgnx-tty-layout-set drgnx-tty-layout-owned drgnx-tty-layout-withheld)
+  "What the layout keeps on each terminal frame (the docks' sizes are the docks' own, `drgnx-wb-dock-px' …).")
+
+(defun drgnx-tty-layout--off ()
+  "The module's teardown: it lays nothing out from now on (`drgnx-tty-layout--uninstall'), and each terminal frame
+forgets what the layout kept, so the module turned on again lays it out as new.  The docks keep the sizes they
+have; the breadcrumb the layout turned off in a short terminal comes back."
+  (drgnx-tty-layout--uninstall)
+  (dolist (frame (frame-list))
+    (when (frame-parameter frame 'drgnx-tty-layout-size)
+      (dolist (p drgnx-tty-layout--frame-parameters) (set-frame-parameter frame p nil))
+      (when (eq (frame-parameter frame 'drgnx-chrome-breadcrumb) 'off)
+        (set-frame-parameter frame 'drgnx-chrome-breadcrumb nil)
+        (when (bound-and-true-p drgnx-chrome-mode) (ignore-errors (drgnx-chrome-apply frame)))))))
+
 (drgnx-module-define 'ui/terminal-layout
                      :doc "The workbench in a small terminal: docks by the terminal's size, as fractions of it, never closing one you opened."
                      :stage 'startup
-                     :setup #'drgnx-tty-layout--install)
+                     :setup #'drgnx-tty-layout--install
+                     :teardown #'drgnx-tty-layout--off)
 
 (provide 'drgnx-tty-layout)
 ;;; drgnx-tty-layout.el ends here

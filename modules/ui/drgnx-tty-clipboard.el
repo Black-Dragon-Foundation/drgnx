@@ -78,6 +78,21 @@ The message comes once per terminal.  In tmux the sequence is built here (`drgnx
   "Put the too-long guard on `gui-backend-set-selection' (once)."
   (advice-add 'gui-backend-set-selection :around #'drgnx-tty-clip--guard))
 
+(defun drgnx-tty-clip-off ()
+  "Copy and reads as Emacs had them, in every terminal (only what drgnx turned on goes), and the guard off:
+ui/terminal's teardown.  The guard was put on from a frame's setup, which nothing records."
+  (advice-remove 'gui-backend-set-selection #'drgnx-tty-clip--guard)
+  (dolist (term (terminal-list))
+    (when (terminal-live-p term)
+      (when (terminal-parameter term 'drgnx-tty-clip-set)
+        (set-terminal-parameter term 'drgnx-tty-clip-set nil)
+        (set-terminal-parameter term 'xterm--set-selection nil))
+      (when (terminal-parameter term 'drgnx-tty-clip-read)
+        (set-terminal-parameter term 'drgnx-tty-clip-read nil)
+        (set-terminal-parameter term 'xterm--get-selection nil))
+      (dolist (param '(drgnx-tty-clip-tmux drgnx-tty-clip-warned))
+        (when (terminal-parameter term param) (set-terminal-parameter term param nil))))))
+
 (defun drgnx-tty-clip--apply-read (term)
   "Make TERM's reads of the terminal's clipboard follow `drgnx-tty-clipboard-read': on while it is non-nil,
 and off again only when drgnx turned them on (terminal parameter `drgnx-tty-clip-read'), so a getSelection

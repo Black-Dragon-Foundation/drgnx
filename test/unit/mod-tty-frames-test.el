@@ -5,6 +5,9 @@
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-tty-frames" drgnx-dir) nil t)
+(load (expand-file-name "modules/ui/drgnx-tty-clipboard" drgnx-dir) nil t)
+(load (expand-file-name "modules/ui/drgnx-tty-fallback-layer" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defvar drgnx-tty-frames-test--term 'kx-a "The terminal `frame-terminal' answers in these tests.")
 
@@ -204,11 +207,47 @@ strings; the real frame is not touched), an empty cache and no terminal to ask: 
                              (buffer-string))))))
 
 (ert-deftest drgnx-tty-frames/toggle-mouse-is-a-registered-command ()
-  (funcall (plist-get (alist-get 'ui/terminal drgnx-modules--table) :setup))
-  (let ((c (drgnx-commands-get 'terminal-toggle-mouse)))
-    (should c)
-    (should (equal (list (drgnx-cmd-category c) (drgnx-cmd-title c) (drgnx-cmd-command c))
-                   '("Terminal" "Toggle Mouse in Terminal Windows" drgnx-tty-frames-toggle-mouse)))))
+  (drgnx-test-with-modules '(ui/terminal) :strict t
+                           (let ((c (drgnx-commands-get 'terminal-toggle-mouse)))
+                             (should c)
+                             (should (equal (list (drgnx-cmd-category c) (drgnx-cmd-title c) (drgnx-cmd-command c))
+                                            '("Terminal" "Toggle Mouse in Terminal Windows" drgnx-tty-frames-toggle-mouse))))))
+
+(ert-deftest drgnx-tty-frames/turning-it-off-gives-the-terminals-back ()
+  ;; a terminal's frame hooks run after the setup, so nothing recorded what they did: the module's teardown takes
+  ;; back copy and its guard, the fallback layer's prefix key, the decodings and tmux's level 2, and the terminal is
+  ;; no longer set up (turned on again, the module sets it up anew)
+  (let ((parent (keymap-parent input-decode-map)) (sent nil)
+        (prefix (key-parse drgnx-tty-chord-prefix))
+        (prefix-before (lookup-key key-translation-map (key-parse drgnx-tty-chord-prefix))))
+    (unwind-protect
+        (progn
+          (drgnx-tty-frames-test--terminal '((tty-mode-set-strings . ("\e[>4;1m" "\e[>4;2m")) (drgnx-tty-mok-level . 2)) nil
+            (cl-letf (((symbol-function 'terminal-list) (lambda () '(kx-a)))
+                      ((symbol-function 'send-string-to-terminal) (lambda (s &rest _) (push s sent))))
+              (drgnx-test-with-modules '(ui/terminal) :strict t
+                                       ;; what a terminal frame's setup did
+                                       (set-terminal-parameter nil 'drgnx-tty-set-up t)
+                                       (drgnx-tty-frames--decode-mok)
+                                       (drgnx-tty-clip--install)
+                                       (set-terminal-parameter nil 'drgnx-tty-clip-set t)
+                                       (set-terminal-parameter nil 'xterm--set-selection t)
+                                       (drgnx-tty-fallback--bind-prefix)
+                                       (set-terminal-parameter nil 'drgnx-tty-fallback t)
+                                       (should (advice-member-p #'drgnx-tty-clip--guard 'gui-backend-set-selection))
+                                       (should (eq (lookup-key key-translation-map prefix) #'drgnx-tty-fallback--prefix)))
+              (should-not (terminal-parameter nil 'drgnx-tty-set-up))
+              (should-not (terminal-parameter nil 'drgnx-tty-mok-decoded))
+              (should-not (terminal-parameter nil 'xterm--set-selection))
+              (should-not (terminal-parameter nil 'drgnx-tty-fallback))
+              (should (equal (terminal-parameter nil 'tty-mode-set-strings) '("\e[>4;1m")))
+              (should (equal sent '("\e[>4;1m")))))
+          (should (eq (keymap-parent input-decode-map) parent))
+          (should-not (advice-member-p #'drgnx-tty-clip--guard 'gui-backend-set-selection))
+          (should (equal (lookup-key key-translation-map prefix) prefix-before)))
+      (set-keymap-parent input-decode-map parent)
+      (advice-remove 'gui-backend-set-selection #'drgnx-tty-clip--guard)
+      (drgnx-tty-fallback--unbind-prefix))))
 
 (ert-deftest drgnx-tty-frames/toggle-mouse-saves-only-when-run-interactively ()
   (let (saved set (drgnx-tty-mouse t))
@@ -368,9 +407,11 @@ types `infocmp' was asked about."
       (delete-process proc))))
 
 (ert-deftest drgnx-tty-frames/true-colour-is-asked-for-once-server-is-loaded ()
-  (funcall (plist-get (alist-get 'ui/terminal drgnx-modules--table) :setup))
+  ;; the advice is the module's: turned off, it goes
   (require 'server)
-  (should (advice-member-p #'drgnx-tty-frames--create-tty-frame 'server-create-tty-frame)))
+  (drgnx-test-with-modules '(ui/terminal) :strict t
+                           (should (advice-member-p #'drgnx-tty-frames--create-tty-frame 'server-create-tty-frame)))
+  (should-not (advice-member-p #'drgnx-tty-frames--create-tty-frame 'server-create-tty-frame)))
 
 (ert-deftest drgnx-tty-frames/a-daemon-loading-server-after-init-gets-the-advice ()
   ;; a daemon loads server.el after init: the module's setup runs before there is a function to advise

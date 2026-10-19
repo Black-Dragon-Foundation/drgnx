@@ -224,6 +224,15 @@ terminal anything."
                   (drgnx-tty-frames-refresh-report f)   ; installs or removes, then writes the report
                 (error (push (format "ui/terminal: fallback: %s" (error-message-string err)) drgnx-hooks-problems))))))))))
 
+(defun drgnx-tty-fallback-off ()
+  "The layer off every terminal and the prefix key out of `key-translation-map': ui/terminal's teardown.  They
+were put there from frame hooks, which nothing records; the advice of `drgnx-tty-fallback-setup' is recorded."
+  (dolist (term (terminal-list))
+    (when (and (terminal-live-p term)
+               (or (terminal-parameter term 'drgnx-tty-fallback) (terminal-parameter term 'drgnx-tty-fallback-installed)))
+      (drgnx-tty-fallback-remove term)))
+  (drgnx-tty-fallback--unbind-prefix))
+
 (defun drgnx-tty-fallback-setup ()
   "From ui/terminal's setup: rebuild the layer after every key apply (a profile switch, `drgnx-keys-use')."
   (advice-add 'drgnx-keys-apply :after #'drgnx-tty-fallback-apply))

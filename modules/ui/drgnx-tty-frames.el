@@ -63,6 +63,8 @@
 (declare-function drgnx-tty-clip-setup "drgnx-tty-clipboard")
 (declare-function drgnx-tty-layout-apply "drgnx-tty-layout")
 (declare-function drgnx-tty-popups-setup "drgnx-tty-popups")
+(declare-function drgnx-tty-clip-off "drgnx-tty-clipboard")
+(declare-function drgnx-tty-fallback-off "drgnx-tty-fallback-layer")
 
 (defvar drgnx-tty-frames-query-timeout 0.2
   "Seconds to wait for a terminal's answer to XTVERSION (a late answer is still taken off the input).")
@@ -710,9 +712,48 @@ asked."
 `letter', `word' and `label' are in the text on the screen; `attribute' is in the faces themselves.  :attribute-faces
 are the faces of a group that rely on an attribute because their state has no text.")
 
+;;;; Turning the module off
+
+(defun drgnx-tty-frames--undecode (map)
+  "Take MAP out of the parent of the selected terminal's `input-decode-map', where `drgnx-tty-frames--decode-mok'
+or the csi-u step composed it in; the maps around it stay."
+  (let ((parent (keymap-parent input-decode-map)))
+    (when (and (keymapp parent) (memq map (cdr parent)))
+      (let ((rest (remq map (cdr parent))))
+        (set-keymap-parent input-decode-map
+                           (cond ((null rest) nil)
+                                 ((and (null (cdr rest)) (keymapp (car rest))) (car rest))
+                                 (t (make-composed-keymap rest))))))))
+
+(defun drgnx-tty-frames--release (term)
+  "Give TERM back what drgnx changed on it: its decodings of modifyOtherKeys and csi-u, tmux's modifyOtherKeys
+level 2 back to 1; then it counts as not set up, so the module turned on again sets it up anew.  What Emacs asked
+the terminal for (modifyOtherKeys, focus reports, the mouse) stays: those requests may be Emacs's own."
+  (when-let* ((frame (seq-find (lambda (f) (eq (frame-terminal f) term)) (frame-list))))
+    (with-selected-frame frame
+      (when drgnx-tty-frames--csi-u-map (drgnx-tty-frames--undecode drgnx-tty-frames--csi-u-map))
+      (when drgnx-tty-frames--mok-map (drgnx-tty-frames--undecode drgnx-tty-frames--mok-map))))
+  (when (eql (terminal-parameter term 'drgnx-tty-mok-level) 2)
+    (send-string-to-terminal "\e[>4;1m" term)
+    (set-terminal-parameter term 'tty-mode-set-strings (remove "\e[>4;2m" (terminal-parameter term 'tty-mode-set-strings))))
+  (dolist (param '(drgnx-tty-set-up drgnx-tty-mok-decoded drgnx-tty-csi-u drgnx-tty-mok-level drgnx-tty-tmux))
+    (when (terminal-parameter term param) (set-terminal-parameter term param nil))))
+
+(defun drgnx-tty-frames--teardown ()
+  "ui/terminal's teardown: what its frame hooks did to the terminals since the setup, which nothing recorded — OSC
+52 copy and the copy guard (drgnx-tty-clipboard.el), the fallback layer and its prefix key, each terminal's
+decodings (`drgnx-tty-frames--release').  Its hooks, advice, commands and timers are recorded and go after this.
+Never prompts or signals: a terminal that fails is skipped."
+  (when (fboundp 'drgnx-tty-clip-off) (drgnx-tty-clip-off))
+  (when (fboundp 'drgnx-tty-fallback-off) (drgnx-tty-fallback-off))
+  (dolist (term (terminal-list))
+    (when (and (terminal-live-p term) (terminal-parameter term 'drgnx-tty-set-up))
+      (drgnx-tty-frames--guard "turning off" #'drgnx-tty-frames--release term))))
+
 (drgnx-module-define 'ui/terminal
                      :doc "Terminal windows: what each terminal can do, asked once; the mouse; editor-only EDITOR frames."
                      :stage 'startup
+                     :teardown #'drgnx-tty-frames--teardown
                      :setup (lambda ()
                               (drgnx-command-define 'terminal-toggle-mouse :category "Terminal"
                                                     :title "Toggle Mouse in Terminal Windows" :scope 'window
@@ -727,9 +768,11 @@ are the faces of a group that rely on an attribute because their state has no te
                               (add-hook 'server-after-make-frame-hook #'drgnx-tty-frames--after-make-frame)
                               (advice-add 'drgnx-chrome-close-tab :around #'drgnx-tty-frames--close-tab)
                               (advice-add 'drgnx-chrome--close-clicked :around #'drgnx-tty-frames--close-clicked)
-                              ;; a daemon loads server.el after init: there is nothing to advise yet
-                              (with-eval-after-load 'server
-                                (advice-add 'server-create-tty-frame :around #'drgnx-tty-frames--create-tty-frame))
+                              ;; a daemon loads server.el after init: there is nothing to advise yet (the
+                              ;; advice is the module's, whenever server.el loads)
+                              (eval-after-load 'server
+                                (drgnx-modules-with-owner
+                                  (advice-add 'server-create-tty-frame :around #'drgnx-tty-frames--create-tty-frame)))
                               ;; the fallback layer is rebuilt after every key apply (drgnx-tty-fallback-layer.el)
                               (when (fboundp 'drgnx-tty-fallback-setup) (drgnx-tty-fallback-setup))
                               ;; a terminal Emacs set up before this module ran (`emacs -nw' sets its own up after init)

@@ -23,6 +23,7 @@
 ;; Nothing here prompts or signals in a hook: errors go to `drgnx-hooks-problems'.  See docs/guide/terminal.md.
 
 ;;; Code:
+(require 'seq)
 (require 'drgnx-hooks)
 (require 'drgnx-modules)
 (require 'drgnx-tty)
@@ -125,9 +126,9 @@ capabilities and report say so."
 (defun drgnx-tty-keys--start ()
   "The module's setup: kkp on where it is wanted, its question bounded, C-g covered for programs."
   (require 'kkp)
-  ;; both are read when the mode turns on
-  (setq kkp-terminal-query-timeout drgnx-tty-frames-query-timeout
-        kkp-restore-legacy-keys-around-subprocesses t)
+  ;; both are read when the mode turns on; kkp's own options, given back when the module is turned off
+  (drgnx-module-set 'kkp-terminal-query-timeout drgnx-tty-frames-query-timeout)
+  (drgnx-module-set 'kkp-restore-legacy-keys-around-subprocesses t)
   (add-hook 'kkp-terminal-setup-complete-hook #'drgnx-tty-keys--kkp-on)
   (add-hook 'kkp-terminal-teardown-complete-hook #'drgnx-tty-keys--kkp-off)
   (advice-add 'kkp-enable-in-terminal :around #'drgnx-tty-keys--enable-guard)
@@ -137,10 +138,28 @@ capabilities and report say so."
     (drgnx-tty-keys--problem "kkp--terminal-setup is missing in this kkp: a setup that cannot finish is not undone"))
   (global-kkp-mode 1))
 
+(defun drgnx-tty-keys--stop ()
+  "The module's teardown: kkp off now, so every terminal gets its plain keys back (kkp's teardown runs
+`drgnx-tty-keys--kkp-off' there) and its report says so; a terminal declined once may be asked again when the
+module is turned on.  The hooks, advice and options are recorded and go after this."
+  (let ((had (seq-filter (lambda (term) (and (terminal-live-p term) (terminal-parameter term 'drgnx-tty-kkp)
+                                             (terminal-parameter term 'drgnx-tty-set-up)))   ; it has a report
+                         (terminal-list))))
+    (when (bound-and-true-p global-kkp-mode) (global-kkp-mode -1))
+    (dolist (term (terminal-list))
+      (when (terminal-live-p term)
+        (dolist (param '(drgnx-tty-kkp drgnx-tty-kkp-declined))
+          (when (terminal-parameter term param) (set-terminal-parameter term param nil)))))
+    (dolist (term had)
+      (when-let* (((terminal-live-p term))
+                  (frame (car (frames-on-display-list term))))
+        (ignore-errors (drgnx-tty-frames-refresh-report frame))))))
+
 (drgnx-module-define 'ui/terminal-keys
                      :doc "The kitty keyboard protocol (kkp) in terminals without confirmed modifyOtherKeys (kitty, Ghostty): C-S- chords."
                      :stage 'startup :packages '(kkp) :requires '(ui/terminal)
-                     :setup #'drgnx-tty-keys--start)
+                     :setup #'drgnx-tty-keys--start
+                     :teardown #'drgnx-tty-keys--stop)
 
 (provide 'drgnx-tty-keys)
 ;;; drgnx-tty-keys.el ends here

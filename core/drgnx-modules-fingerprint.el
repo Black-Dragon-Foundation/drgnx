@@ -37,12 +37,15 @@
                      drgnx-signal-window-functions drgnx-rules-mode-hook drgnx-persist-state-functions
                      drgnx-persist-after-restore-functions drgnx-modules-after-stage-functions drgnx-job-tick-functions
                      drgnx-job-clash-answer-functions drgnx-job-card-action-functions drgnx-job-before-review-functions
-                     drgnx-ai-refused-functions drgnx-ai-probe-done-hook)
+                     drgnx-ai-refused-functions drgnx-ai-probe-done-hook
+                     tty-setup-hook server-visit-hook pre-redisplay-functions kkp-terminal-setup-complete-hook
+                     kkp-terminal-teardown-complete-hook)
   "The hooks whose default value the cheap fingerprint reads: those drgnx adds to.
 `unload-feature-special-hooks' is read as well.  A branch that adds to a hook not listed here adds the
 symbol with one line; the FULL scan finds the rest.")
 
-(defvar drgnx-modules-fingerprint-function-variables '(after-focus-change-function)
+(defvar drgnx-modules-fingerprint-function-variables
+  '(after-focus-change-function interprogram-cut-function interprogram-paste-function command-error-function)
   "Function-valued variables drgnx wraps with `add-function' (read by their advice, or their value).")
 
 (defvar drgnx-modules-fingerprint-registries

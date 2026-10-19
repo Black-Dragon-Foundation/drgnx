@@ -6,6 +6,7 @@
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-tty-popups" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (defvar corfu-mode)
 (defvar corfu-auto)
 (defvar corfu-auto-prefix)
@@ -294,6 +295,34 @@ of them non-UTF-8."
               ((symbol-function 'drgnx-tty-popups--update-borders) (lambda () (setq called t))))
       (drgnx-tty-popups-setup 'gui)
       (should-not called))))
+
+(ert-deftest drgnx-tty-popups/turning-it-off-takes-what-the-terminals-got ()
+  ;; a terminal frame's setup runs from ui/terminal's hooks, after this module's setup: nothing recorded the hooks
+  ;; it keeps, the ASCII table of its windows or the box slots; the module's teardown takes them (a window's own
+  ;; display table stays)
+  (let ((frame (selected-frame)) (window (selected-window))
+        (standard-display-table (and standard-display-table (copy-sequence standard-display-table))))
+    (unwind-protect
+        (progn
+          (drgnx-test-with-modules '(ui/terminal-popups) :strict t
+                                   (set-frame-parameter frame 'drgnx-tty-ascii t)
+                                   (set-window-display-table window (drgnx-tty-popups--ascii-table))
+                                   (drgnx-tty-popups--hook t 'pre-redisplay-functions #'drgnx-tty-popups--pre-redisplay)
+                                   (drgnx-tty-popups--hook t 'post-command-hook #'drgnx-tty-popups--post-command)
+                                   (advice-add 'drgnx-chrome--set :around #'drgnx-tty-popups--chrome-set)
+                                   (drgnx-tty-popups--borders t))
+          (should-not (frame-parameter frame 'drgnx-tty-ascii))
+          (should-not (window-display-table window))
+          (should-not (memq #'drgnx-tty-popups--pre-redisplay (default-value 'pre-redisplay-functions)))
+          (should-not (memq #'drgnx-tty-popups--post-command (default-value 'post-command-hook)))
+          (should-not (advice-member-p #'drgnx-tty-popups--chrome-set 'drgnx-chrome--set))
+          (when (drgnx-tty-popups--slots-p)
+            (should-not (display-table-slot standard-display-table 'box-vertical))))
+      (set-frame-parameter frame 'drgnx-tty-ascii nil)
+      (set-window-display-table window nil)
+      (remove-hook 'pre-redisplay-functions #'drgnx-tty-popups--pre-redisplay)
+      (remove-hook 'post-command-hook #'drgnx-tty-popups--post-command)
+      (advice-remove 'drgnx-chrome--set #'drgnx-tty-popups--chrome-set))))
 
 ;;; mod-tty-popups-test.el ends here
 
