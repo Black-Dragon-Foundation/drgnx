@@ -5,7 +5,7 @@
 ;;; Commentary:
 ;; docs/reference/config.md is generated from the config definitions (`drgnx-config-define') and their schemas, so it
 ;; cannot drift from the code.  Regenerate it after a change to a definition (docs/develop/core.md):
-;;   emacs --batch -Q -L core -L wb -L harness -L modules/tools -l drgnx-config-doc \
+;;   emacs --batch -Q -L core -L wb -L harness -L modules/tools -L modules/editor -l drgnx-config-doc \
 ;;         --eval '(drgnx-config-doc-regenerate "docs/reference/config.md")'
 ;; Files defined at load are reached by a `(require FEATURE)' entry of `drgnx-config-doc-sources'; files a module
 ;; defines in its setup, by a `(require FILE)' entry for the module's file and a `(setup MODULE)' entry after it.
@@ -36,6 +36,8 @@
     (require drgnx-search-chunk)
     (require drgnx-onboard)
     (require drgnx-face-state)
+    (require drgnx-large-files)
+    (setup editor/large-files)
     )
   "What defines the config files of the reference: entries `(require FEATURE)' and `(setup MODULE)'.
 `(require FEATURE)' loads a core feature that defines files at load.  `(setup MODULE)' runs the setup of the module

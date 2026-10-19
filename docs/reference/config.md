@@ -77,6 +77,29 @@ Your key bindings: the profile stack, entries that win over it, keys taken away.
 | `:mac-option` | characters or meta | no | What the left Option key does on a Mac with VS Code's keys |
 | `:tty-fallback` | any | no | Chord → another Alt key for it, in a legacy terminal: (("C-S-p" . "M-Z")) |
 
+## large-files.eld
+
+Folder: config. Format: 1. Read: when it changes. On a mistake: its last good copy, else the defaults.
+
+When a file is large: the size that asks (or opens in chunks, lean or raw), the size above which chunks is the default, and a chunk's size.
+
+| Key | Type | Required | What |
+| --- | --- | --- | --- |
+| `:ask-above` | null or a size in MiB above 0 | no | Above this size (MiB) a file opens in chunks, lean or raw (a command asks once); nil: never |
+| `:chunks-above` | a size in MiB above 0 | no | Above this size (MiB) the question's default is chunks, else lean |
+| `:chunk-size` | a size in MiB above 0 | no | How much of the file (MiB) a chunk holds |
+
+## large-files.eld
+
+Folder: project. Format: 1. Read: when it changes. On a mistake: refused.
+
+A project's lower large-file sizes: it can only lower yours, never raise them or set the chunk size.
+
+| Key | Type | Required | What |
+| --- | --- | --- | --- |
+| `:ask-above` | null or a size in MiB above 0 | no | Lowers your :ask-above for the project (a higher value or nil is ignored) |
+| `:chunks-above` | a size in MiB above 0 | no | Lowers your :chunks-above for the project (a higher value is ignored) |
+
 ## layouts.eld
 
 Folder: config. Format: 1. Read: when it changes. On a mistake: its last good copy, else the defaults.
