@@ -200,12 +200,13 @@ An error here must never stop the kill."
   (cdr drgnx-chrome--root))
 
 (defun drgnx-chrome-breadcrumb (w)
-  "W's breadcrumb: project › folders › file (● when unsaved), or the buffer's name."
+  "W's breadcrumb: project › folders › file (● when unsaved).  A buffer without a file has no path to show and its tab
+already names it: the row stays (a window's rows never change with its buffer, I3) but is empty."
   (let* ((b (window-buffer w)) (file (buffer-file-name b)))
     (concat
      " "
      (if (not file)
-         (drgnx-chrome--text (buffer-name b))
+         ""
        (let* ((root (with-current-buffer b (drgnx-chrome--project-root file)))
               (rel (if root (file-relative-name file root) (abbreviate-file-name file)))
               (parts (split-string rel "/" t)))

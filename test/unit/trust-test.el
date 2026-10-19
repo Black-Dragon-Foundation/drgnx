@@ -399,7 +399,9 @@ together; wait for all under a 30 s bound.  Fails the test unless every child ex
     (let ((b (find-file-noselect (drgnx-trust-test--file dir "a.txt" "text\n")))
           ;; the segment's form, evaluated in B as redisplay does (`format-mode-line' is empty in batch)
           (mark (lambda (b) (with-current-buffer b (eval (cadr drgnx-trust--mark-segment) t)))))
-      (should (equal (funcall mark b) " restricted"))
+      (should (equal (funcall mark b) " Restricted Mode"))
+      (should (string-match-p "not trusted" (get-text-property 1 'help-echo (funcall mark b))))   ; says what it is
+      (should (string-match-p "Trust This Folder" (get-text-property 1 'help-echo (funcall mark b))))   ; and what to do
       (should (eq (get-text-property 1 'local-map (funcall mark b)) drgnx-trust-mark-map))
       (with-temp-buffer (should (equal (funcall mark (current-buffer)) "")))
       (with-temp-buffer                                         ; a remote file's buffer: no mark, no connection
@@ -416,7 +418,7 @@ together; wait for all under a 30 s bound.  Fails the test unless every child ex
       (let ((inhibit-message t)) (drgnx-trust-folder dir))
       (should (equal (funcall mark b) ""))
       (let ((inhibit-message t)) (drgnx-trust-untrust-folder dir))
-      (should (equal (funcall mark b) " restricted")))))
+      (should (equal (funcall mark b) " Restricted Mode")))))
 
 ;;;; Compile output, links, status
 

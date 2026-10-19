@@ -1,4 +1,4 @@
-# Trusted folders and the "restricted" mark
+# Trusted folders and the "Restricted Mode" mark
 
 A file you open can ask Emacs to do things: run a syntax checker that executes the file, rename symbols as it is
 read, or make Emacs reach out to another machine. drgnx lets files from folders you trust do all of that, and holds
@@ -21,9 +21,10 @@ here ever asks you a question; you trust a folder when you choose to.
 
 Every other folder is untrusted, including the projects you open, until you trust them.
 
-## The "restricted" mark
+## The "Restricted Mode" mark
 
-A file from an untrusted folder shows **restricted** in the mode line, in a quiet colour from your theme. Click it
+A file from an untrusted folder shows **Restricted Mode** in the status bar, in a quiet colour from your theme;
+hovering it says what that means (Flymake checkers and symbol shorthands from the folder are off). Click it
 to trust the file's folder: its project's root when the file is in a project (a git repository, for example), else
 the file's own folder. The mark is not shown for remote files, and Trust This Folder refuses a remote folder.
 
@@ -71,7 +72,7 @@ shorthands come back, without reopening them.
 
 ## When something you trust is held back
 
-A checker that stays silent, or a shorthand that does not apply: look for **restricted** in the mode line, and trust
+A checker that stays silent, or a shorthand that does not apply: look for **Restricted Mode** in the status bar, and trust
 the folder if you trust its files. A remote name refused by TRAMP because of an unusual user name: open it with a
 plain `user@host` (an ssh config `Host` alias works for anything ssh accepts).
 

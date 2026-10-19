@@ -17,6 +17,8 @@
 (defvar eglot--cached-server)
 (defvar eglot--managed-mode)
 (defvar yaml-indent-offset)
+(defvar drgnx-explorer--roots)
+(defvar drgnx-trust--state)
 (defvar drgnx-statusbar-test--offset nil "An indentation variable of a test.")
 (require 'which-func)                   ; its own table and variables, as in a session that turned it on
 ;; keycast and evil are never loaded here: their variables are declared special, so the tests bind them dynamically
@@ -597,10 +599,70 @@ Segments a, b, c are defined: their text is A, B, C."
                     (should (equal (drgnx-statusbar--seg-position) "Ln 3, Col 2 (3 selected)"))
                     (deactivate-mark)
                     (should (equal (drgnx-statusbar--seg-position) "Ln 3, Col 2"))
-                    (setq-local indent-tabs-mode t)
-                    (should (string-match-p "\\`Tab Size: [0-9]+\\'" (drgnx-statusbar--seg-indent))))
+                    (setq-local indent-tabs-mode t)             ; the file's own lines say spaces: the bar says so too
+                    (should (equal (drgnx-statusbar--seg-indent) "Spaces: 2")))
                 (kill-buffer buf))))
         (delete-file file)))))
+
+(ert-deftest drgnx-statusbar/indent-reports-what-the-buffer-uses ()
+  ;; Emacs Lisp has `indent-tabs-mode' t and `tab-width' 8; a file indented with two spaces is "Spaces: 2"
+  (with-temp-buffer
+    (setq-local indent-tabs-mode t tab-width 8)
+    (insert "(defun f ()\n  (g)\n  (h\n   1))\n")
+    (should (equal (drgnx-statusbar--seg-indent) "Spaces: 2"))
+    (erase-buffer)
+    (insert "int f() {\n\treturn 1;\n\t\treturn 2;\n}\n")
+    (setq-local indent-tabs-mode nil)
+    (should (equal (drgnx-statusbar--seg-indent) "Tab Size: 8"))
+    ;; nothing indented: the mode's own settings
+    (setq-local drgnx-statusbar-indent-vars nil)
+    (erase-buffer)
+    (insert "a\nb\n")
+    (should (equal (drgnx-statusbar--seg-indent) "Spaces: 8"))
+    (setq-local indent-tabs-mode t)
+    (should (equal (drgnx-statusbar--seg-indent) "Tab Size: 8"))
+    ;; one space is alignment, not indentation
+    (erase-buffer)
+    (insert "/*\n * x\n */\nint a;\n    b;\n")
+    (setq-local indent-tabs-mode t)
+    (should (equal (drgnx-statusbar--seg-indent) "Spaces: 4"))))
+
+(ert-deftest drgnx-statusbar/indent-is-scanned-once-per-change ()
+  (with-temp-buffer
+    (insert "a\n  b\n")
+    (drgnx-statusbar--seg-indent)
+    (let ((cache drgnx-statusbar--indent-cache))
+      (drgnx-statusbar--seg-indent)
+      (should (eq cache drgnx-statusbar--indent-cache))           ; no new scan
+      (insert "   c\n")
+      (drgnx-statusbar--seg-indent)
+      (should-not (eq cache drgnx-statusbar--indent-cache)))))
+
+(ert-deftest drgnx-statusbar/restricted-mode-is-a-labelled-segment-with-a-click ()
+  (drgnx-statusbar-test--with
+    (drgnx-statusbar--define-defaults)
+    (should (memq 'trust (eval (car (get 'drgnx-statusbar-left 'standard-value)) t)))
+    (with-temp-buffer
+      (should-not (drgnx-statusbar--seg-trust))
+      (setq drgnx-trust--state 'trusted)
+      (should-not (drgnx-statusbar--seg-trust))
+      (setq drgnx-trust--state 'restricted)
+      (should (equal (drgnx-statusbar--seg-trust) "Restricted Mode"))
+      (let ((s (drgnx-statusbar--text 'trust)))
+        (should (string-match-p "not trusted" (get-text-property 0 'help-echo s)))
+        (should (string-match-p "Trust This Folder\\|trust it" (get-text-property 0 'help-echo s)))
+        (should (equal (plist-get (gethash 'trust drgnx-statusbar--segments) :click) 'drgnx-trust-folder))))
+    ;; the plain mark in `global-mode-string' is the segment's: `misc' leaves it out
+    (should (member '(:eval (drgnx-trust--mark)) drgnx-statusbar-misc-exclude))))
+
+(ert-deftest drgnx-statusbar/the-quiet-bar-names-the-folder ()
+  (let ((drgnx-explorer--roots nil))
+    (should (equal (drgnx-statusbar--seg-folder) "No folder open"))
+    (setq drgnx-explorer--roots '("/x/proj/"))
+    (should (equal (drgnx-statusbar--seg-folder) "proj"))
+    (setq drgnx-explorer--roots '("/x/proj/" "/y/other/"))
+    (should (equal (drgnx-statusbar--seg-folder) "proj +1")))
+  (should (eq (car drgnx-statusbar-quiet) 'folder)))
 
 (ert-deftest drgnx-statusbar/language-names-are-the-ones-vs-code-uses-worked-out-once-per-mode ()
   (let ((drgnx-statusbar--language-names (make-hash-table :test #'eq)) (warning-minimum-level :emergency))

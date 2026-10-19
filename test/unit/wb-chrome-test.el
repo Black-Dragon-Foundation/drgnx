@@ -104,6 +104,19 @@
       (insert "y")
       (should (string-match-p "●" (drgnx-chrome-breadcrumb (selected-window)))))))
 
+(ert-deftest drgnx-chrome/a-buffer-without-a-file-has-no-path-to-show ()
+  ;; the tab already names it (the start page used to repeat "*drgnx start*"); the row stays: rows never change
+  (drgnx-chrome-test--with dir
+    (drgnx-chrome-test--open dir "a.txt")
+    (let ((rows (drgnx-chrome-test--heights (selected-window))))
+      (switch-to-buffer (get-buffer-create "*drgnx-nofile*"))
+      (unwind-protect
+          (progn
+            (drgnx-chrome-apply nil t)
+            (should (equal (string-trim (substring-no-properties (drgnx-chrome-breadcrumb (selected-window)))) ""))
+            (should (equal rows (drgnx-chrome-test--heights (selected-window)))))
+        (kill-buffer "*drgnx-nofile*")))))
+
 (ert-deftest drgnx-chrome/child-frames-get-no-chrome ()
   ;; C1: posframe, vertico-posframe, corfu, eldoc-box windows live in child frames.
   (cl-letf (((symbol-function 'frame-parent) (lambda (&optional _f) (selected-frame))))
