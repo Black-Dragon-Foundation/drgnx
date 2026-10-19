@@ -189,8 +189,10 @@ Inside BODY, `drgnx-modules--table` holds only the selected modules and the modu
   installed. Use it only for tests of a result shape (the key snapshot): a later `require` of a hidden feature loads
   it again and runs its top level again. With one Emacs per test file this is rarely needed.
 - **Own process for what cannot be undone** (evil loaded into a process, a global mode with no off path): a file in
-  its own Emacs, run from a test that checks the child's result. The helper for it, `drgnx-test-run-isolated`, arrives
-  with the isolated tests of the modal editing work.
+  its own Emacs, run from a test that checks the child's result: `(should (null (drgnx-test-run-isolated FILE
+  SELECTOR)))` (`test/fixtures/modules-fixture.el`) starts the runner on FILE in a fresh batch Emacs, memory-capped,
+  with this run's environment (its temp directories, `DRGNX_TEST_LEAKS`, `DRGNX_TEST_ELN_DIR`); it returns nil when
+  the child passed, else the child's output, and skips when the child skipped every test (a package missing).
 
 Prefer the `ert-x` helpers over hand-written equivalents in new and touched tests: `ert-with-temp-directory` (and
 `ert-with-temp-file`) for files, `ert-with-message-capture` for what a function says, `ert-simulate-command` to run a
@@ -844,7 +846,7 @@ for a timer. Load it with `(load (expand-file-name "test/fixtures/clock-fixture"
 Loading evil cannot be undone in a process (its hooks and advice stay), and ERT runs tests by name, so the tests that
 load evil live in `test/unit/isolated/*.el` — no `-test.el` suffix, so the main run skips them — and run in a fresh
 batch Emacs: `modal-isolated-test.el` has one test per file (`drgnx-evil/own-process`,
-`drgnx-modal-fixture/own-process`) that starts the runner on it (`drgnx-modal-test-isolated-result`, memory-capped,
+`drgnx-modal-fixture/own-process`) that starts the runner on it (`drgnx-test-run-isolated`, above; memory-capped,
 the child's output in the failure). To run one file directly: `bin/drgnx`'s runner command with the file as the
 argument and `DRGNX_TEST_SELECTOR='"^drgnx-evil/"'`.
 

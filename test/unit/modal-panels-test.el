@@ -4,10 +4,11 @@
 (require 'ert)
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/modal-elpa" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (ert-deftest drgnx-modal-panels/own-process ()
-  (should (null (drgnx-modal-test-isolated-result "test/unit/isolated/modal-panels-isolated.el"
-                                                  "^drgnx-modal-panels/"))))
+  (should (null (drgnx-test-run-isolated "test/unit/isolated/modal-panels-isolated.el"
+                                         "^drgnx-modal-panels/"))))
 
 (provide 'modal-panels-test)
 ;;; modal-panels-test.el ends here

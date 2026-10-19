@@ -4,9 +4,10 @@
 (require 'ert)
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/modal-elpa" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (ert-deftest drgnx-evil-ex/own-process ()
-  (should (null (drgnx-modal-test-isolated-result "test/unit/isolated/mod-evil-ex-isolated.el" "^drgnx-evil-ex/"))))
+  (should (null (drgnx-test-run-isolated "test/unit/isolated/mod-evil-ex-isolated.el" "^drgnx-evil-ex/"))))
 
 (provide 'mod-evil-ex-test)
 ;;; mod-evil-ex-test.el ends here

@@ -275,4 +275,21 @@
       (should-not drgnx-modules--report))
     (should (equal real (getenv "DRGNX_CONFIG_DIR")))))
 
+(ert-deftest drgnx-test-modules/run-isolated-reports-the-childs-result ()
+  ;; a file run in its own Emacs: nil when its tests pass, the child's output when one fails, a skip when it skipped
+  ;; them all; the child inherits this run's environment (here a variable the file checks)
+  (ert-with-temp-directory dir
+                           (let ((file (expand-file-name "kx-isolated.el" dir))
+                                 (process-environment (cons "DRGNX_KX_ISOLATED=inherited" process-environment)))
+                             (with-temp-file file
+                               (insert ";;; kx-isolated.el --- a file for the own-process runner -*- lexical-binding: t -*-\n"
+                                       "(require 'ert)\n"
+                                       "(ert-deftest kx-iso/passes () (should (equal (getenv \"DRGNX_KX_ISOLATED\") \"inherited\")))\n"
+                                       "(ert-deftest kx-iso/fails () (should (equal 1 2)))\n"
+                                       "(ert-deftest kx-iso/skips () (ert-skip \"no package\"))\n"))
+                             (should (null (drgnx-test-run-isolated file "^kx-iso/passes")))
+                             (should (string-match-p "kx-iso/fails" (drgnx-test-run-isolated file "^kx-iso/fails")))
+                             (should (eq (car (should-error (drgnx-test-run-isolated file "^kx-iso/skips") :type 'ert-test-skipped))
+                                         'ert-test-skipped)))))
+
 ;;; modules-fixture-test.el ends here

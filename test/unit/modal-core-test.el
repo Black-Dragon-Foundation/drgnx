@@ -3,6 +3,8 @@
 (require 'drgnx)
 (require 'drgnx-outline)
 (require 'drgnx-modal)
+(require 'ert-x)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-modal-test--profiles
   (drgnx-keys-load-profiles (expand-file-name "keys" drgnx-dir))
@@ -469,6 +471,35 @@
     (should (eq (drgnx-cmd-map (drgnx-commands-get 'panel-next)) 'drgnx-modal-panel-map))
     (should (eq (drgnx-cmd-map (drgnx-commands-get 'panel-previous)) 'drgnx-modal-panel-map))
     (should (eq (drgnx-cmd-scope (drgnx-commands-get 'panel-next)) 'app))))
+
+(defvar drgnx-modal-test--engine-log nil "What the fake engine's start and stop did, newest first.")
+
+(ert-deftest drgnx-modal/an-engine-defined-in-a-setup-goes-with-its-module ()
+  ;; the engine registry pushes its undo: the module turned off stops its engine if it runs (every buffer's state
+  ;; cleared) and takes the definition out; one defined again by someone else since stays
+  (ert-with-temp-directory dir
+                           (let ((file (expand-file-name "fake-engine.el" dir))
+                                 (drgnx-modal-test--engine-log nil))
+                             (with-temp-file file
+                               (insert ";;; fake-engine.el --- a fake module -*- lexical-binding: t -*-\n"
+                                       "(drgnx-module-define 'fake/engine :doc \"an engine\"\n"
+                                       "  :setup (lambda () (drgnx-modal-define-engine 'kx-engine :module 'fake/engine\n"
+                                       "           :start (lambda () (push 'start drgnx-modal-test--engine-log))\n"
+                                       "           :stop (lambda () (push 'stop drgnx-modal-test--engine-log)))))\n"))
+                             (let ((drgnx-modal-running nil))
+                               (drgnx-test-with-modules (list file) :strict t
+                                                        (should (assq 'kx-engine drgnx-modal-engines))
+                                                        (setq drgnx-modal-running 'kx-engine))
+                               (should-not (assq 'kx-engine drgnx-modal-engines))
+                               (should-not drgnx-modal-running)
+                               (should (equal drgnx-modal-test--engine-log '(stop)))
+                               ;; redefined by someone else since: the undo (of an older definition) leaves it
+                               (let ((drgnx-modal-engines nil))
+                                 (drgnx-modal-define-engine 'kx-engine :module 'other)
+                                 (should-not (drgnx-modal-undefine-engine 'kx-engine (list :module 'fake/engine)))
+                                 (should (eq (plist-get (alist-get 'kx-engine drgnx-modal-engines) :module) 'other))
+                                 (should (drgnx-modal-undefine-engine 'kx-engine))
+                                 (should-not (assq 'kx-engine drgnx-modal-engines)))))))
 
 (provide 'modal-core-test)
 ;;; modal-core-test.el ends here

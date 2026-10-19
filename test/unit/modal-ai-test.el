@@ -8,9 +8,10 @@
 (load (expand-file-name "modules/tools/drgnx-ai-ui" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modal-elpa" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (ert-deftest drgnx-modal-ai/own-process ()
-  (should (null (drgnx-modal-test-isolated-result "test/unit/isolated/modal-ai-isolated.el" "^drgnx-modal-ai/"))))
+  (should (null (drgnx-test-run-isolated "test/unit/isolated/modal-ai-isolated.el" "^drgnx-modal-ai/"))))
 
 (ert-deftest drgnx-modal-ai/vscode-stack-unchanged ()
   ;; no engine: nothing inhibits ghost text, a pause asks in any code buffer, and the selection is the region

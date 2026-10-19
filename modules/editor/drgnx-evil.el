@@ -64,15 +64,17 @@
 ;;;; Settings
 
 (defun drgnx-evil--settings ()
-  "Set evil's defaults after it loaded, with `setopt' so evil's own setters run (C-u binding, undo functions,
-search keys): Emacs' `undo-redo', C-u scrolls, evil's own search, no evil in the minibuffer, no evil mode-line
-tag (drgnx's indicator replaces it).  Users override these in config.el with `setopt', which runs later.
-`evil-want-keybinding' (nil: evil-collection brings the keys) is read when evil loads, so it is set before."
-  (setopt evil-undo-system 'undo-redo
-          evil-want-C-u-scroll t
-          evil-search-module 'evil-search
-          evil-want-minibuffer nil
-          evil-mode-line-format nil))
+  "Set evil's defaults after it loaded, through their custom setters (as `setopt' does) so evil's own setters run
+\(C-u binding, undo functions, search keys): Emacs' `undo-redo', C-u scrolls, evil's own search, no evil in the
+minibuffer, no evil mode-line tag (drgnx's indicator replaces it).  Users override these in config.el with
+`setopt', which runs later.  The module turned off gives each its old value back (`drgnx-module-set'), one the user
+set since stays.  `evil-want-keybinding' (nil: evil-collection brings the keys) is read when evil loads, so it is
+set before."
+  (drgnx-module-set 'evil-undo-system 'undo-redo)
+  (drgnx-module-set 'evil-want-C-u-scroll t)
+  (drgnx-module-set 'evil-search-module 'evil-search)
+  (drgnx-module-set 'evil-want-minibuffer nil)
+  (drgnx-module-set 'evil-mode-line-format nil))
 
 ;;;; evil-collection
 
@@ -684,6 +686,13 @@ later application of the keys (`drgnx-modal-suspended'); another stack ends it."
   (drgnx-modal-sync-engine)
   (when drgnx-keys-last (drgnx-keys-apply)))
 
+(defun drgnx-evil--teardown ()
+  "The module's teardown: Vim editing stops now, as the core stops an engine (`drgnx-evil-stop', then every
+buffer's state cleared), and the engine is no longer registered.  The engine may have started after the setup (a
+key stack chosen later), so what its start did is no setup's record: the stop undoes it.  Evil itself stays
+loaded (it cannot be unloaded); its options go back with the module's record."
+  (drgnx-modal-undefine-engine 'evil))
+
 (drgnx-module-define 'editor/evil
                      :doc "Vim editing (evil); on when you choose a Vim key stack"
                      :stage 'startup
@@ -691,6 +700,7 @@ later application of the keys (`drgnx-modal-suspended'); another stack ends it."
                      :packages '(evil evil-collection)
                      :flags '(no-collection)
                      :setup #'drgnx-evil-setup
+                     :teardown #'drgnx-evil--teardown
                      :doctor #'drgnx-evil-doctor)
 
 (provide 'drgnx-evil)
