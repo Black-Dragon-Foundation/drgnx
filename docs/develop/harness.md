@@ -38,7 +38,9 @@ own `make check` does: a hook, timer, advice, feature or variable a file leaves 
 so a test cannot pass or fail because of the file that happened to run before it. Within a file, ERT still runs the
 tests in name order in one Emacs. Each file's Emacs gets the runner's `load-path` and environment — the temp HOME
 and XDG directories, the dead session bus, `$DRGNX_TEST_SELECTOR` (applied inside each file), the trampoline
-directory below — and a temp directory of its own (its `TMPDIR`, HOME, state and `XDG_RUNTIME_DIR`), removed when it
+directory below — SIGPIPE ignored as in the run's own Emacs (Emacs starts its children with the default action, which
+ended a file's Emacs, exit 13 and no summary, when a test wrote to a reader that had left), and a temp directory of
+its own (its `TMPDIR`, HOME, state and `XDG_RUNTIME_DIR`), removed when it
 ends. Those directories are made in a short root of the run's, `/tmp/drgnx-t-XXXXXX/` (mode 0700; the caller's
 `$TMPDIR` only where `/tmp` cannot be written), whatever `$TMPDIR` is, and the root goes when the run ends or is
 stopped: a Unix socket's path has at most 103 bytes on macOS (104 with its closing NUL; 107 on Linux), the hub's tests

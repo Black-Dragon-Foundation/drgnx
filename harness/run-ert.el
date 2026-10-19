@@ -399,9 +399,13 @@ to BUFFER, or to this Emacs's standard error when BUFFER is nil."
          (p (make-process
              :name (concat "drgnx-test-file " (file-name-nondirectory file)) :noquery t :connection-type 'pipe
              :coding 'utf-8
-             :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
-                            "--eval" (format "(setq load-prefer-newer %S load-path '%S)" load-prefer-newer load-path)
-                            "-l" drgnx-run-ert--self "-f" "drgnx-run-ert-batch" file)
+             ;; SIGPIPE ignored, as bin/drgnx runs this Emacs: Emacs starts its children with the default action,
+             ;; and a write to a reader that left (the gateway answering an agent that hung up) would end the file's
+             ;; Emacs with no summary (`drgnx-command-ignoring-sigpipe', which the harness cannot load)
+             :command (append (and (not (eq system-type 'windows-nt)) (list "sh" "-c" "trap '' PIPE; exec \"$0\" \"$@\""))
+                              (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
+                                    "--eval" (format "(setq load-prefer-newer %S load-path '%S)" load-prefer-newer load-path)
+                                    "-l" drgnx-run-ert--self "-f" "drgnx-run-ert-batch" file))
              :filter (lambda (_ s) (if buffer
                                        (with-current-buffer buffer (goto-char (point-max)) (insert s))
                                      (princ s #'external-debugging-output)))

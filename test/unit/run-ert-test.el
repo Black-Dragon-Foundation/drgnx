@@ -370,6 +370,28 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
                          "iso-b/sees-nothing")))
       (delete-directory tmp t))))
 
+(ert-deftest drgnx-run-ert/a-file-s-emacs-ignores-sigpipe-as-the-run-does ()
+  ;; bin/drgnx runs the tests with SIGPIPE ignored, as the hub runs: a write to a reader that left is an error in the
+  ;; test, never the end of its Emacs.  Emacs starts its children with the default action, so each file's Emacs
+  ;; died of the signal (exit 13, no summary) — the gateway's tests, answering an agent that had hung up.
+  (skip-unless (and (not (eq system-type 'windows-nt)) (executable-find "sh")))
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-iso" t)))
+         (suite (expand-file-name "suite" tmp)) (results (expand-file-name "r.json" tmp)))
+    (unwind-protect
+        (progn
+          (drgnx-run-ert-test--suite
+           suite '(("pipe-test.el" . "(ert-deftest iso-pipe/a-reader-that-left ()
+  (let* ((ready nil)
+         (p (make-process :name \"iso-pipe\" :command '(\"sh\" \"-c\" \"exec 0<&-; echo closed; exec sleep 30\")
+                          :connection-type 'pipe :noquery t :filter (lambda (_p _s) (setq ready t)))))
+    (while (not ready) (accept-process-output p 5))
+    (should (condition-case nil (progn (process-send-string p (make-string 100000 ?x)) nil) (error t)))
+    (delete-process p)))")))
+          (should (eql 0 (drgnx-run-ert-test--batch suite results "DRGNX_TEST_FILE_TIMEOUT=60")))
+          (let ((r (drgnx-run-ert-test--json results)))
+            (should (equal (list (plist-get r :total) (plist-get r :passed) (plist-get r :failed)) '(1 1 0)))))
+      (delete-directory tmp t))))
+
 (ert-deftest drgnx-run-ert/a-crashing-file-is-named ()
   ;; A file whose Emacs dies (a test calls `kill-emacs') or hangs past DRGNX_TEST_FILE_TIMEOUT is a failure that
   ;; names the file; the other files still run and count.
