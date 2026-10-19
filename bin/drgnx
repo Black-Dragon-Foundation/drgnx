@@ -575,9 +575,10 @@ update_lock() { # one update at a time (the timer and a person): a mkdir lock ho
   printf '%s\n' "$$" >"$lock/pid"
   UPD_LOCK="$lock"
   trap update_on_exit EXIT
-  trap 'exit 130' INT       # Ctrl-C, the timer's timeout, logout: leave through the EXIT handler, which rolls back
-  trap 'exit 143' TERM
-  trap 'exit 129' HUP
+  trap 'UPD_SIGNALED=1; exit 130' INT       # Ctrl-C, the timer's timeout, logout: leave through the EXIT handler, which rolls back
+  trap 'UPD_SIGNALED=1; exit 143' TERM
+  trap 'UPD_SIGNALED=1; exit 129' HUP
+  : >"$(update_state_dir)/last.log"         # this run's sync/build output only
 }
 
 update_on_exit() { # whatever ends the script: an update that did not finish is rolled back, then the lock is released
@@ -588,6 +589,7 @@ update_on_exit() { # whatever ends the script: an update that did not finish is 
     update_rollback "$UPD_ROLLBACK_TO" || true
     update_err "$UPD_BACK_NOTE"
   fi
+  if [[ -n "${UPD_SIGNALED:-}" ]]; then update_record_run "interrupted${UPD_BACK_NOTE:+: $UPD_BACK_NOTE}"; fi
   if [[ -n "${UPD_LOCK:-}" ]]; then rm -rf "${UPD_LOCK:?}"; fi
   exit "$rc"
 }
@@ -763,7 +765,7 @@ update_plist() { printf '%s/Library/LaunchAgents/%s.plist' "$HOME" "$UPD_LABEL";
 
 update_service_text() { # the oneshot service the timer starts
   printf '[Unit]\nDescription=Update drgnx to the newest main\nDocumentation=https://github.com/Black-Dragon-Foundation/drgnx\n\n'
-  printf '[Service]\nType=oneshot\nNice=10\nTimeoutStartSec=1h\n'
+  printf '[Service]\nType=oneshot\nNice=10\nTimeoutStartSec=1h\nTimeoutStopSec=30min\n'
   printf 'Environment=%s\n' "$(systemd_word "PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin")"
   local v   # what makes the timer's run find the same Emacs, config and state as yours
   for v in DRGNX_EMACS DRGNX_CONFIG_DIR XDG_STATE_HOME; do
@@ -802,6 +804,7 @@ update_plist_text() { # HOUR MINUTE — launchd has no randomized delay: the ins
   <key>StartCalendarInterval</key>
   <dict><key>Hour</key><integer>$1</integer><key>Minute</key><integer>$2</integer></dict>
   <key>ProcessType</key><string>Background</string>
+  <key>ExitTimeOut</key><integer>1800</integer>
   <key>LowPriorityIO</key><true/>
   <key>StandardOutPath</key><string>$log</string>
   <key>StandardErrorPath</key><string>$log</string>

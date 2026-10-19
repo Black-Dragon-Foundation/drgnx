@@ -210,7 +210,8 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
         (should (string-match-p "interrupted" (cdr r)))
         (should (equal "sync\nsync --offline\nbuild\n" (drgnx-update-test--hooks dir)))
         (should-not (file-exists-p (expand-file-name "lock" state)))
-        (should-not (file-exists-p (expand-file-name "previous" state)))))))
+        (should-not (file-exists-p (expand-file-name "previous" state)))
+        (should (string-match-p "interrupted" (drgnx-update-test--slurp (expand-file-name "last-run" state))))))))
 
 (ert-deftest drgnx-update/an-unreachable-origin-fails-without-changes ()
   (drgnx-update-test--with-install
@@ -283,6 +284,7 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
         (should (string-match-p "^Type=oneshot$" service-text))
         (should (string-match-p "^Nice=" service-text))
         (should (string-match-p "^TimeoutStartSec=" service-text))
+        (should (string-match-p "^TimeoutStopSec=30min$" service-text))
         ;; the PATH names the real home (no specifier left as text), and the state directory the timer shares with you
         (should (string-match-p (format "^Environment=\"PATH=%s/.local/bin:" (regexp-quote dir)) service-text))
         (should-not (string-match-p "%" service-text))
@@ -311,6 +313,7 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
         (should (string-match-p (format "<string>%s</string>" (regexp-quote bin)) text))
         (should (string-match-p "<string>update</string>\\s-*<string>--quiet</string>" text))
         (should (string-match-p "<key>StartCalendarInterval</key>" text))
+        (should (string-match-p "<key>ExitTimeOut</key><integer>1800</integer>" text))
         (should (string-match-p "<key>Hour</key><integer>[0-9]+</integer>" text)))
       (should (string-match-p "bootstrap gui/[0-9]+ " (drgnx-update-test--slurp ctl)))
       (should (string-match-p "automatic updates: on" (cdr (drgnx-update-test--run dir env bin "update" "--auto" "status"))))
