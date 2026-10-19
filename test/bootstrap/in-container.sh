@@ -30,7 +30,16 @@ if [[ "${1:-}" != --as-tester ]]; then
     printf '%s\n' "$out"
     { ls -l /etc/shadow /usr/bin/sudo; grep -c '^tester:' /etc/shadow; grep -E '^(Cap(Eff|Bnd)|NoNewPrivs):' /proc/self/status
       cat /proc/self/attr/current; echo; ls /sys/fs/selinux; grep -E '^(passwd|shadow):' /etc/nsswitch.conf
-      sudo -u tester grep -E '^(Cap(Eff|Bnd)|NoNewPrivs):' /proc/self/status; } 2>&1 || true
+      sudo -u tester grep -E '^(Cap(Eff|Bnd)|NoNewPrivs):' /proc/self/status
+      # pam_unix reads the shadow entry itself (euid 0: needs DAC_OVERRIDE at mode 0000) or through unix_chkpwd
+      grep -E '^account' /etc/pam.d/sudo /etc/pam.d/system-auth
+      ls -l /usr/sbin/unix_chkpwd; if command -v getcap >/dev/null; then getcap /usr/sbin/unix_chkpwd; fi
+      getent shadow tester | cut -d: -f1,3-
+      # mode 0400: euid 0 reads it as its owner, without DAC_OVERRIDE
+      mode="$(stat -c %a /etc/shadow)"; chmod 0400 /etc/shadow
+      if sudo -u tester sudo -n true; then echo "with /etc/shadow 0400: tester's sudo works"
+      else echo "with /etc/shadow 0400: tester's sudo still fails"; fi
+      chmod "$mode" /etc/shadow; } 2>&1 || true
     fail "sudo does not work for a user in this container: the container runtime, not drgnx (the evidence is above)"
   fi
   home="$(getent passwd tester | cut -d: -f6)"
