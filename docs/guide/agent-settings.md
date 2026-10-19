@@ -158,7 +158,8 @@ what the page shows (someone changed the file), they stop with "changed on disk:
 a server and says so.
 
 The last result of each item is kept, masked, in `agent-checks.eld` in drgnx's state directory, so the page shows it
-again with its age. The file keeps the newest 300 results and drops those of settings files that no longer exist.
+again with its age. The file keeps the newest 300 results and drops those of settings files that no longer exist,
+and the oldest while it would be over 1 MiB (the size drgnx reads).
 
 The page keeps no undo (it is drawn again whole), works in the project's directory (or your home directory when it
 shows only your own settings) whatever buffer it was opened from, and Test All draws it once after starting the

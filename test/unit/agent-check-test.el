@@ -377,6 +377,31 @@ with the HTTP mock stopped afterwards."
                                  (buffer-string)))))
                  2)))))
 
+(ert-deftest drgnx-agent-check/the-results-file-is-written-atomically-and-privately ()
+  ;; a rename that fails keeps the old file as it was and leaves no temp file; the file is for the user alone
+  (drgnx-agent-check-test-env
+    (let* ((file (expand-file-name "agent-checks.eld" (drgnx-state-dir)))
+           (a (list :kind 'claude :section 'mcp :name "a" :file nil :spec nil)) old)
+      (drgnx-agent-check-remember a (list :status 'ok :time 0.1))
+      (should (= (logand (file-modes file) #o077) 0))
+      (setq old (with-temp-buffer (insert-file-contents file) (buffer-string)))
+      (cl-letf (((symbol-function 'rename-file) (lambda (&rest _) (signal 'file-error '("Renaming" "no")))))
+        (should-error (drgnx-agent-check-remember a (list :status 'failed :time 0.2)) :type 'file-error))
+      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) old))
+      (should (equal (directory-files (file-name-directory file)) '("." ".." "agent-checks.eld")))
+      (drgnx-agent-check-remember a (list :status 'failed :time 0.2))
+      (should (eq (plist-get (drgnx-agent-check-last a) :status) 'failed))
+      (should (= (logand (file-modes file) #o077) 0)))))
+
+(ert-deftest drgnx-agent-check/a-results-file-with-a-mistake-reads-as-none ()
+  (drgnx-agent-check-test-env
+    (let ((file (expand-file-name "agent-checks.eld" (drgnx-state-dir))))
+      (make-directory (file-name-directory file) t)
+      (with-temp-file file (insert "(((claude mcp \"a\" nil) . (:status ok"))
+      (should-not (drgnx-agent-check-results))
+      (with-temp-file file (insert "(not an alist) junk"))
+      (should-not (drgnx-agent-check-results)))))
+
 (ert-deftest drgnx-agent-check/remembered-results-are-pruned ()
   ;; agent-checks.eld is read for every page and written for every Test: it keeps the newest 300 results, and none of
   ;; a settings file that is gone
@@ -399,6 +424,28 @@ with the HTTP mock stopped afterwards."
         (should-not (assoc (funcall key "s5" kept) all))           ; the oldest went
         (should (assoc (funcall key "s6" kept) all))))))
 
+(ert-deftest drgnx-agent-check/results-are-pruned-to-fit-the-size-cap ()
+  ;; 300 results of up to ~32 K characters each would pass the reader's cap: the oldest go until the file fits
+  (drgnx-agent-check-test-env
+    (let* ((kept (expand-file-name "kept.json" root))
+           (file (expand-file-name "agent-checks.eld" (drgnx-state-dir)))
+           (key (lambda (name) (list 'claude 'hooks name kept)))
+           (out (make-string 30000 ?x)))
+      (write-region "{}" nil kept)
+      (make-directory (file-name-directory file) t)
+      (with-temp-file file                                      ; 34 × 30 KB: just under 1 MiB, 35 are over
+        (prin1 (cl-loop for i below 34 collect (cons (funcall key (format "s%d" i)) (list :status 'ok :stdout out :at (float i))))
+               (current-buffer)))
+      (should (= (length (drgnx-agent-check-results)) 34))
+      (drgnx-agent-check-remember (list :kind 'claude :section 'hooks :name "new" :file kept)
+                                  (list :status 'ok :stdout out :time 0.1))
+      (should (<= (file-attribute-size (file-attributes file)) drgnx-file-max-bytes))
+      (let ((all (drgnx-agent-check-results)))
+        (should (equal (plist-get (cdr (assoc (funcall key "new") all)) :stdout) out))
+        (should-not (assoc (funcall key "s0") all))                ; the oldest went
+        (should (assoc (funcall key "s33") all))
+        (should (= (length all) 34))))))
+
 ;;;; Fix round 1
 
 (ert-deftest drgnx-agent-check/the-process-table-is-read-from-proc ()
@@ -410,15 +457,16 @@ with the HTTP mock stopped afterwards."
     (should (equal (nth 1 mine) (alist-get 'ppid attrs)))
     (should (equal (nth 2 mine) (alist-get 'pgrp attrs)))
     (should (equal (nth 3 mine) (alist-get 'sess attrs)))
-    ;; a process called "a) S 1 2 3 (b" (sleep run through a symlink with that name) does not confuse the reader
+    ;; a process called "a) S 1 2 3 (b" (a shell script of that name, waiting on its input) does not confuse the
+    ;; reader.  Not `sleep' through a symlink: a multi-call coreutils (Ubuntu 26.04's) refuses another name.
     (let* ((dir (make-temp-file "drgnx-comm" t))
-           (link (expand-file-name "a) S 1 2 3 (b" dir))
-           (sleep (executable-find "sleep"))
+           (script (expand-file-name "a) S 1 2 3 (b" dir))
            (proc nil))
       (unwind-protect
           (progn
-            (make-symbolic-link sleep link)
-            (setq proc (make-process :name "x" :command (list link "30") :noquery t))
+            (write-region "#!/bin/sh\nread x\n" nil script nil 'silent)
+            (set-file-modes script #o700)
+            (setq proc (make-process :name "x" :command (list script) :noquery t))
             (sleep-for 0.2)
             (let ((raw (with-temp-buffer (insert-file-contents (format "/proc/%d/stat" (process-id proc))) (buffer-string)))
                   (row (assq (process-id proc) (drgnx-agent-check--proc-rows))))

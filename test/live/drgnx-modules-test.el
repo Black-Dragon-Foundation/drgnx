@@ -84,8 +84,8 @@
     (drgnx-ui-call sess (format "(progn (when (file-directory-p (expand-file-name \"~/.config/emacs/elpa\"))
                                    (dolist (d (directory-files (expand-file-name \"~/.config/emacs/elpa\") t \"\\\\`[^.]\"))
                                      (when (file-directory-p d) (add-to-list 'load-path d t))))
-                                 (drgnx-modules-write-state (list :version 1 :external (list (list :name 'gryphn :path %S
-                                                                     :features '(gryphn-org gryphn-run gryphn-board gryphn-board-ui gryphn-agents gryphn-search gryphn-llm)))))
+                                 (drgnx-modules-update-state (lambda (_) (list :external (list (list :name 'gryphn :path %S
+                                                                     :features '(gryphn-org gryphn-run gryphn-board gryphn-board-ui gryphn-agents gryphn-search gryphn-llm))))))
                                  (drgnx-modules-load-external) (drgnx-modules-run 'idle)
                                  (drgnx-uitest--json (list :ok t)))" (getenv "DRGNX_GRYPHN_DIR")))
     (should (drgnx-live-mod--q sess "(assq 'external/gryphn/gryphn-board (drgnx-modules-report))"))

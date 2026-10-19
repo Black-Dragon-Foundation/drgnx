@@ -21,6 +21,7 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
+(require 'mule-util)                    ; `truncate-string-ellipsis'
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-chrome)
@@ -87,7 +88,7 @@ changes: every window's memoized bar is built again on its next redisplay.")
   (drgnx-statusbar--bump)
   (force-mode-line-update t))
 
-(defcustom drgnx-statusbar-left '(branch problems tests jobs agents modal misc)
+(defcustom drgnx-statusbar-left '(branch trust problems tests jobs agents modal misc)
   "The segments on the left of the status bar, in order (see `drgnx-statusbar-define-segment')."
   :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
 
@@ -95,7 +96,7 @@ changes: every window's memoized bar is built again on its next redisplay.")
   "The segments on the right of the status bar, in order."
   :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
 
-(defcustom drgnx-statusbar-drop-order '(eol indent encoding lsp language misc tests jobs)
+(defcustom drgnx-statusbar-drop-order '(eol indent encoding lsp language misc tests jobs trust)
   "Segments dropped, first to last, when the bar is wider than its window.
 The branch is cut with an ellipsis instead, and only after these are gone."
   :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
@@ -104,7 +105,7 @@ The branch is cut with an ellipsis instead, and only after these are gone."
   "The segments the other editor groups show (the most recently used one shows the whole bar)."
   :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
 
-(defcustom drgnx-statusbar-quiet '(branch agents jobs tests misc)
+(defcustom drgnx-statusbar-quiet '(folder branch agents jobs tests misc)
   "The segments of the quiet bar (`drgnx-statusbar-quiet-modes': the start page), on the left, in order."
   :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
 
@@ -237,8 +238,14 @@ Within `drgnx-statusbar-retry-seconds' of the last record nothing is formatted: 
               ((> excess 0))
               (target (max min 1 (- (string-width (cdr b)) excess)))
               ((< target (string-width (cdr b)))))
-    (mapcar (lambda (s) (if (eq (car s) 'branch) (cons 'branch (truncate-string-to-width (cdr b) target nil nil t)) s))
+    (mapcar (lambda (s) (if (eq (car s) 'branch) (cons 'branch (drgnx-statusbar--cut (cdr b) target)) s))
             left)))
+
+(defun drgnx-statusbar--cut (s width)
+  "S cut to WIDTH columns, ending in Emacs's ellipsis when that fits in WIDTH.
+`truncate-string-to-width' gives back all of S, and the ellipsis, when the ellipsis is wider than WIDTH: \"...\" is,
+in 1 or 2 columns, on a terminal that cannot show \"…\"."
+  (truncate-string-to-width s width nil nil (>= width (string-width (truncate-string-ellipsis)))))
 
 (defun drgnx-statusbar--fit (left right width)
   "LEFT and RIGHT (alists ID → text) reduced until the bar fits WIDTH: (LEFT . RIGHT).
@@ -290,7 +297,7 @@ COMPACT: only the segments of `drgnx-statusbar-compact' (on the right); `quiet':
           ;; a last guard: whatever the segments were, the bar is never wider than the window
           (cond ((<= (string-width bar) width) bar)
                 ((<= width 0) "")
-                (t (truncate-string-to-width bar width nil nil t))))))))
+                (t (drgnx-statusbar--cut bar width))))))))
 
 ;;;; The mode line
 
@@ -362,6 +369,7 @@ Weak on the window, so a deleted window's entry goes with it; emptied when the m
       (drgnx-statusbar--flymake-backends)
       (bound-and-true-p eglot--managed-mode) (bound-and-true-p eglot--cached-server) (drgnx-statusbar--eglot-live-p)
       (drgnx-statusbar--indent-width)
+      (bound-and-true-p drgnx-trust--state) (bound-and-true-p drgnx-explorer--roots)
       (bound-and-true-p drgnx-modal-state) (bound-and-true-p drgnx-job-ui--badge) (bound-and-true-p drgnx-face-glyphs)
       (bound-and-true-p evil-mode-line-tag) (drgnx-statusbar--which-func w)
       ;; keycast's keys: a new vector after every command (its text changes even when nothing else did)
@@ -872,8 +880,9 @@ changed: drgnx's own segments are worked out once per change of their state, not
                      " ")))
          (unless (string-empty-p text) text))))))
 
-(defcustom drgnx-statusbar-misc-exclude '((:eval (drgnx-job-ui--badge-segment)))
-  "Entries of `global-mode-string' the `misc' segment leaves out because the bar already shows them (the job badge)."
+(defcustom drgnx-statusbar-misc-exclude '((:eval (drgnx-job-ui--badge-segment)) (:eval (drgnx-trust--mark)))
+  "Entries of `global-mode-string' the `misc' segment leaves out because the bar already shows them (the job badge,
+the Restricted Mode mark: the `trust' segment)."
   :type 'sexp :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
 
 (defun drgnx-statusbar--construct-text (c)
@@ -996,20 +1005,69 @@ real one."
                     (format " (%d selected)" (abs (- (mark t) pt)))
                   ""))))))
 
+(defvar-local drgnx-statusbar--indent-cache nil
+  "(TICK TABS SPACES MIN-SPACES): what the start of this buffer's text indents with, as of the buffer's change TICK.")
+
+(defun drgnx-statusbar--indent-scan ()
+  "The indentation the first 300 lines use, as (TICK TABS SPACES MIN-SPACES): lines that start with a tab, lines that
+start with two or more spaces, and the least number of those spaces (a lone space is alignment).  Cached on the buffer's
+change tick, so redisplay scans again only after an edit; reads the buffer only."
+  (let ((tick (buffer-chars-modified-tick)) (c drgnx-statusbar--indent-cache))
+    (if (eql (car c) tick)
+        c
+      (setq drgnx-statusbar--indent-cache
+            (save-match-data
+              (save-excursion
+                (save-restriction
+                  (widen)
+                  (goto-char (point-min))
+                  (let ((n 0) (tabs 0) (spaces 0) (least nil))
+                    (while (and (< n 300) (not (eobp)))
+                      (let ((ch (char-after)))
+                        (cond ((eq ch ?\t) (setq tabs (1+ tabs)))
+                              ((and (eq ch ?\s) (looking-at " \\{2,\\}[^ \t\n]"))
+                               (let ((w (- (match-end 0) (point) 1)))
+                                 (setq spaces (1+ spaces) least (if least (min least w) w))))))
+                      (forward-line 1)
+                      (setq n (1+ n)))
+                    (list tick tabs spaces least)))))))))
+
+(defun drgnx-statusbar--indent-tabs-p ()
+  "Non-nil when this buffer is indented with tabs: what its first lines use, else `indent-tabs-mode'."
+  (let ((c (drgnx-statusbar--indent-scan)))
+    (cond ((> (nth 1 c) (nth 2 c)) t)
+          ((> (nth 2 c) 0) nil)
+          (t indent-tabs-mode))))
+
 (defun drgnx-statusbar--indent-width ()
-  "The indentation width the `indent' segment shows: `tab-width' with tabs, else the first of
-`drgnx-statusbar-indent-vars' that is bound to a natural number.  Part of the memo's key: no allocation."
-  (if indent-tabs-mode
+  "The indentation width the `indent' segment shows: `tab-width' with tabs, else the least indent of the buffer's own
+space-indented lines, else the first of `drgnx-statusbar-indent-vars' that is bound to a natural number.  Part of the
+memo's key: no allocation beyond the scan's cache."
+  (if (drgnx-statusbar--indent-tabs-p)
       tab-width
-    (let ((vars drgnx-statusbar-indent-vars) (found nil))
-      (while (and vars (not found))
-        (let ((v (car vars)))
-          (when (and (boundp v) (natnump (symbol-value v))) (setq found (symbol-value v))))
-        (setq vars (cdr vars)))
-      (or found tab-width))))
+    (or (nth 3 (drgnx-statusbar--indent-scan))
+        (let ((vars drgnx-statusbar-indent-vars) (found nil))
+          (while (and vars (not found))
+            (let ((v (car vars)))
+              (when (and (boundp v) (natnump (symbol-value v))) (setq found (symbol-value v))))
+            (setq vars (cdr vars)))
+          (or found tab-width)))))
 
 (defun drgnx-statusbar--seg-indent ()
-  (format (if indent-tabs-mode "Tab Size: %d" "Spaces: %d") (drgnx-statusbar--indent-width)))
+  (format (if (drgnx-statusbar--indent-tabs-p) "Tab Size: %d" "Spaces: %d") (drgnx-statusbar--indent-width)))
+
+(defun drgnx-statusbar--seg-trust ()
+  "`Restricted Mode' while this file's folder is not trusted (drgnx-trust.el keeps the state; nothing is read)."
+  (when (eq (bound-and-true-p drgnx-trust--state) 'restricted)
+    (propertize "Restricted Mode" 'face 'drgnx-trust-restricted)))
+
+(defun drgnx-statusbar--seg-folder ()
+  "The folder the Explorer shows (the first, and how many more), else `No folder open'."
+  (let ((roots (bound-and-true-p drgnx-explorer--roots)))
+    (if roots
+        (concat (file-name-nondirectory (directory-file-name (car roots)))
+                (if (cdr roots) (format " +%d" (length (cdr roots))) ""))
+      "No folder open")))
 
 (defun drgnx-statusbar--flymake-backends ()
   "Flymake's backends that run and that reported, as one number (a part of the memo's key), 0 without flymake."
@@ -1102,6 +1160,11 @@ Click the language in the status bar for it.  A command: it asks; the bar itself
   "Define the segments the bar ships with."
   (drgnx-statusbar-define-segment 'branch :fn #'drgnx-statusbar--seg-branch :click #'drgnx-statusbar--click-branch
                                   :help "Branch; click for the repository status")
+  (drgnx-statusbar-define-segment 'trust :fn #'drgnx-statusbar--seg-trust :click 'drgnx-trust-folder
+                                  :help (if (boundp 'drgnx-trust--mark-help) drgnx-trust--mark-help
+                                          "Restricted Mode: this folder is not trusted; click to trust it"))
+  (drgnx-statusbar-define-segment 'folder :fn #'drgnx-statusbar--seg-folder :click 'drgnx-session-open-folder
+                                  :help "The folder in the Explorer; click to open another")
   (drgnx-statusbar-define-segment 'problems :fn #'drgnx-statusbar--seg-problems :click 'flymake-show-buffer-diagnostics
                                   :help "Problems in this file; click to list them")
   (drgnx-statusbar-define-segment 'tests :fn #'drgnx-statusbar--seg-tests :click #'drgnx-statusbar--click-tests
@@ -1118,7 +1181,7 @@ Click the language in the status bar for it.  A command: it asks; the bar itself
   (drgnx-statusbar-define-segment 'position :fn #'drgnx-statusbar--seg-position :click 'goto-line
                                   :help "Line and column; click to go to a line")
   (drgnx-statusbar-define-segment 'indent :fn #'drgnx-statusbar--seg-indent :click 'indent-tabs-mode
-                                  :help "Indentation; click to switch between tabs and spaces")
+                                  :help "Indentation of this file (tabs or spaces, as its first lines use them); click to switch what new lines use")
   (drgnx-statusbar-define-segment 'encoding :fn #'drgnx-statusbar--seg-encoding :click 'set-buffer-file-coding-system
                                   :help "File encoding; click to change it")
   (drgnx-statusbar-define-segment 'eol :fn #'drgnx-statusbar--seg-eol :click 'set-buffer-file-coding-system

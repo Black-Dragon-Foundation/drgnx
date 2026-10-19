@@ -19,6 +19,13 @@ Mac) opens the Agents tab. Profiles live in
             ("local" :command ("my-acp-agent" "--model" "qwen") :mode steer)))
 ```
 
+**If `agents.eld` has a mistake** (it does not read, or a value is the wrong kind: a `:command` that is not a list of
+strings, a `:mcp` name that is neither `coordination` nor `search`, an `:openrouter` value that is not a restriction),
+drgnx does not apply any of it and says where the mistake is, once. Only the built-in profiles are offered, the agents
+get the coordination tools alone, and OpenRouter agents wait until it is fixed: a restriction you wrote is never
+dropped for a typo. The settings pages and onboarding do not write to a file with a mistake; they say so. The file is
+read again at the next use after you save it, with no restart.
+
 `:command` is the agent program; `:mode` is what a message to a busy agent does: `queue` (default), `steer` (when
 the agent advertises steering — sent as `_session/steering`; if the agent refuses, the message is queued instead) or
 `interrupt` (stop the turn, then send). A profile whose program is not installed gives a session that says so. Keys and tokens are
@@ -61,6 +68,12 @@ A session's **transcript** (RET on its row; opens in the editor) shows:
 - "working…" with a **[Stop]** button, the queued messages (each with **[×]** to remove it; **[Deliver]** after a
   Stop), and how the agent exited if it did (with the end of its error output).
 
+A transcript is drawn only while a window shows it, at most ten times a second: what the agent streams is added at
+the end of its answer, and only a part that changed (a tool call's status, a permission answered) is drawn again, so a
+long transcript costs no more to follow than a short one. A transcript you are not looking at draws nothing; when it
+shows again it catches up at once. Scrolled to the end, it follows what comes in; scrolled up to read, it keeps your
+place while the agent streams. `g` redraws it at once.
+
 Agents: Send to Agent (RET in a transcript) sends; Stop Agent (`C-c C-c` in a transcript, or [Stop]) cancels the
 running turn — it ends within a second, pending permission requests are answered "cancelled", pending edits
 rejected, and queued messages wait (Deliver Queued Messages, `C-c C-d`, sends them; Edit Queued Message changes or
@@ -68,8 +81,13 @@ removes one before it is sent). If the agent answers the cancel late, its last w
 is sent until that answer came — never two turns at once. Answer Agent picks an option for a pending permission. Take Over Agent Session resumes a session by its id
 (the agent replays it), when the agent can load sessions (otherwise the new session ends and says why). The **context** column shows how full the agent's
 context is (from the agent's `usage_update`, or usage in its answer). The **Last** column shows how long ago the
-agent last did something (`30s`, `5m`, `2h`, `3d`), as this Emacs saw it. While the list is on screen, it is redrawn every 30
-seconds so the ages stay current, and the cursor stays on its row. When the list is not shown, nothing runs. The Agent layout ([layouts.md](layouts.md)) puts this list on the right and the chat of the agent that
+agent last did something (`30s`, `5m`, `2h`, `3d`), as this Emacs saw it. The list updates in place: when an agent changes, or every 30
+seconds for the ages, only the lines that differ are rewritten, and each window (and the cursor) stays on its
+session even when lines move. While the list is not shown nothing is printed; it is brought up to date when you show
+it again. The dock's tab strip uses the header line, so the column titles (Name, Status, Last, …) are the list's first
+line, in the theme's header face. With no sessions the list says how to start one (*New Agent Session…*, with its key
+when your key profile has one, or from the palette) and, when the default profile is claude and its adapter is missing
+or too old, what Claude needs. The Agent layout ([layouts.md](layouts.md)) puts this list on the right and the chat of the agent that
 acted last beside your file.
 
 Nothing an agent asks is ever a question in the minibuffer: the agent waits, the Agents tab says "1 to answer",
@@ -105,7 +123,7 @@ never signalled). Under systemd the job's wrapper line passes through the unit's
 every `$` in it: the `pid` file holds the job shell's real pid, and the job reads as running and can be stopped. A job can be memory-capped (`:memory-max "1G"` in `drgnx-jobs-start`: systemd's `MemoryMax`, no swap;
 `:nice 10` lowers its priority (`Nice=`); the detached launcher can do neither and ignores both). `:no-wait t`
 returns without waiting for the job's pid (the boot and start time that make it trustworthy are stamped from a short
-timer, or at once when Emacs exits first): for callers in a timer that must not block, such as drgnx starting the local AI runner again. Sessions and jobs started on a task get it as `DRGNX_TASK`, and the commits they make are
+poll that gives up after 2 s, or at once when Emacs exits first): for callers in a timer that must not block, such as drgnx starting the local AI runner again. A job's `job.eld` is written atomically and stamped without waiting; a `job.eld` drgnx cannot read is never overwritten, and that job does not show in the list. Sessions and jobs started on a task get it as `DRGNX_TASK`, and the commits they make are
 recorded for it ([Work tracker](work.md)).
 
 ## The hub and the gateway
@@ -127,8 +145,11 @@ reach it over its private socket from the Emacs or `drgnx hub start` that starts
 environment), from auth-source files that never ask, or from the command you ran (a key in `~/.authinfo.gpg` is read
 then) — and stay in its memory (a restarted hub gets them again when Emacs reconnects to it); tokens are kept only as hashes, so a restarted hub still
 takes them; an agent's token is revoked when it exits, or once the Emacs that started it is gone (a crash). The hub keeps the environment, `PATH` included, of the Emacs
-that started it: when an agent's program was installed while a hub ran (onboarding's Agents step, say), run
-`drgnx hub stop` (its durable sessions end), so the hub the next durable session starts finds the program.
+that started it, except that drgnx sends it your login shell's `PATH` when that changed ([shell.md](shell.md#your-path-in-drgnx):
+at each start, and **Shell: Reload Environment**). So when an agent's program was installed while a hub ran, into a
+directory on your shell's `PATH`, run Shell: Reload Environment: the agents the hub starts from then on find it. When
+it went somewhere your shell's `PATH` does not reach (onboarding's Agents step adds such a directory to the running
+Emacs only), run `drgnx hub stop` (its durable sessions end), so the hub the next durable session starts finds the program.
 With no hub to be had, an agent goes to its provider directly and says so. The Agents list's **Via**
 column shows which.
 
@@ -159,7 +180,7 @@ per token; Kimi's coding membership is a different endpoint these profiles do no
 **New Durable Agent Session…** (palette) starts an agent in the **hub** instead of this Emacs: it keeps working when
 you close Emacs, and the next Emacs shows it again in the Agents tab — its whole transcript, pending permission
 requests and edits to review — and drives it the same way (send, Stop, answer, review). Emacs mirrors the hub's
-sessions when it is idle whenever a hub is running (and looks again every 30 s); it never starts a hub for that.
+sessions when it is idle whenever a hub is running (and looks again every 30 s of idleness, until the Agents module is turned off); it never starts a hub for that.
 Durable sessions live as long as the hub: if the hub ends (`drgnx hub stop`, a crash), its sessions end too, and the
 Agents tab shows them as exited. The next hub (the next durable session, an agent that needs the gateway, or `drgnx
 hub start`) resumes them when their agent can load sessions: each comes back idle with its history,
@@ -273,12 +294,15 @@ run it, with the plan's own encoding and line endings — and leaves alone a pla
   npm, no agent): the maintained package wins wherever it is on the `PATH`, the deprecated one still runs and says so
   once with its fix, an old version, a copy instead of a link, a program of no known package, other commands left
   alone, sessions and jobs starting the chosen program, and the doctor's fact.
-- `test/unit/jobs-test.el`, `test/unit/agents-ui-test.el` (the transcript, the list, hunk-by-hunk review),
+- `test/unit/jobs-test.el`, `test/unit/agents-ui-test.el` (the transcript, the list, hunk-by-hunk review; the
+  transcript's view: a thousand chunks grow one row, a grow costs the same on a 4 kB and a 400 kB answer, a hidden
+  transcript draws nothing, a tool's status or a permission draws one row, the tail is followed and a reader scrolled up
+  stays put), `test/ui/view-ui-test.el` (typing beside a streaming transcript: no jank),
   `test/unit/plans-sync-test.el`, `test/live/drgnx-agents-test.el` (queue, Stop and the dock in a GUI session).
 - `test/unit/agents-parity-test.el` — slash commands, context %, `/compact` lowering it: against the mock, or against
   a real profile with `DRGNX_AGENT_PROFILE=NAME` (uses your subscription or key, and the network).
 
 The mock agent (`test/fixtures/mock-acp.el`) is a batch Emacs whose turns are chosen by words in the prompt
-(`slow`, `tool`, `plan`, `subagent`, `permission`, `write PATH`, `crash`, `/compact`). Tests start it through
+(`slow`, `stream N`, `tool`, `plan`, `subagent`, `permission`, `write PATH`, `crash`, `/compact`). Tests start it through
 `test/fixtures/mock-acp-stdin.sh` (`sh mock-acp-stdin.sh emacs --batch -Q -l mock-acp.el`), which copies its stdin into
 a FIFO the mock reads while a turn streams; without the wrapper it reads `/proc/PID/fd/0`, which only Linux has.

@@ -53,6 +53,14 @@ Your layouts are kept in `~/.config/drgnx/layouts.eld` (`$DRGNX_CONFIG_DIR` when
 next Emacs too. The first time you use one in a new Emacs, its windows show the buffers of the same names if they
 are open.
 
+Save Layout As… changes only the entry it saves: your other layouts, your comments and anything you added to the file
+stay as they are, and an entry named like a built-in layout is kept. `nil`, `t` and names starting with a colon are
+not layout names.
+
+**A `layouts.eld` with a mistake:** your last good layouts are used, and drgnx says once where the mistake is
+(`Open Config File…` takes you there). Save Layout As… waits until it is fixed: it never overwrites a file it cannot
+read, and says so. A `layouts.eld` written by a newer drgnx is used when it fits, but is not changed.
+
 ## After a restart
 
 The layout you were in is saved with the workbench ([workbench.md](workbench.md#the-layout-survives-a-restart))
@@ -91,4 +99,4 @@ switches the selected window's layout. To keep your own data in the saved workbe
 
 ## Tests
 
-`test/unit/mod-layouts-test.el` (the shape and pane registration tests have the prefix `drgnx-layouts-shape/`) and `test/unit/mod-layouts-persist-test.el`; `test/ui/editor-m11c1-test.el` (`drgnx test --ui`) walks the Search view with results, the find bar, the Agent and Zen layouts, the Browser layout without WebKit, the Live view on a mock browser and the Keyboard Shortcuts editor recording a chord on a graphical frame, with a screenshot of each.
+`test/unit/mod-layouts-test.el` (the shape and pane registration tests have the prefix `drgnx-layouts-shape/`) `test/unit/mod-layouts-persist-test.el` and `test/unit/layouts-eld-test.el` (the file, prefix `drgnx-layouts-eld/`); `test/ui/editor-m11c1-test.el` (`drgnx test --ui`) walks the Search view with results, the find bar, the Agent and Zen layouts, the Browser layout without WebKit, the Live view on a mock browser and the Keyboard Shortcuts editor recording a chord on a graphical frame, with a screenshot of each.

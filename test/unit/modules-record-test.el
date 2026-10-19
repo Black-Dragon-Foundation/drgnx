@@ -1,6 +1,8 @@
 ;;; modules-record-test.el --- batch tests: the safety net records what a setup reaches -*- lexical-binding: t -*-
 (require 'ert)
+(require 'cl-lib)
 (require 'drgnx-modules)
+(require 'drgnx-timer)
 (require 'bytecomp)                                  ; `byte-compile-warnings' is let-bound below
 
 (defvar drgnx-modules-record-test-hook nil "A hook the fake modules add to.")
@@ -163,7 +165,7 @@ test hook, list and modes as they were after."
    (should-not (drgnx-module-teardown 'test/a))
    (should (equal drgnx-modules-record-test-list '(q y)))))
 
-(ert-deftest drgnx-modules-record/new-timers-are-cancelled ()
+(ert-deftest drgnx-modules-record/a-drgnx-timer-is-cancelled ()
   (drgnx-modules-record-test--with
    (let ((before (run-with-timer 3600 nil #'ignore)) repeating pending)
      (unwind-protect
@@ -180,6 +182,105 @@ test hook, list and modes as they were after."
            (should-not (drgnx-modules-record-test--timer-p pending))
            (should (drgnx-modules-record-test--timer-p before)))
        (dolist (tm (list before repeating pending)) (when tm (cancel-timer tm)))))))
+
+(defun drgnx-modules-record-test--left (name) (plist-get (alist-get name drgnx-modules--report) :left))
+
+(defvar drgnx-modules-record-test--ends nil "What the run-end hook saw, newest first: (MODULE TOKEN INHIBIT).")
+(defun drgnx-modules-record-test--end (module)
+  (push (list module (alist-get module drgnx-modules--runs) inhibit-interaction) drgnx-modules-record-test--ends))
+(defun drgnx-modules-record-test--end-fails (_module) (error "Boom"))
+
+(ert-deftest drgnx-modules-record/the-run-end-hook-runs-on-teardown-rollback-and-rerun ()
+  (drgnx-modules-record-test--with
+   (let ((drgnx-modules-run-end-functions '(drgnx-modules-record-test--end)) (drgnx-modules-record-test--ends nil))
+     (drgnx-module-define 'test/a :doc "a" :setup #'ignore)
+     (drgnx-module-define 'test/bad :doc "bad" :setup (lambda () (error "No")))
+     (drgnx-module-define 'test/r :doc "r" :setup #'ignore :teardown 'restart)
+     ;; teardown: the token is gone when the hook runs, and nothing can prompt
+     (drgnx-modules-record-test--run 'test/a)
+     (should-not drgnx-modules-record-test--ends)
+     (should-not (drgnx-module-teardown 'test/a))
+     (should (equal drgnx-modules-record-test--ends '((test/a nil t))))
+     ;; rollback
+     (drgnx-modules-record-test--run 'test/bad)
+     (should (eq (drgnx-modules-record-test--status 'test/bad) 'failed))
+     (should (equal (car drgnx-modules-record-test--ends) '(test/bad nil t)))
+     (should (= 2 (length drgnx-modules-record-test--ends)))
+     ;; a run again: a restart module keeps its token until the new run, which ends the old one first
+     (drgnx-modules-record-test--run 'test/r)
+     (should (= 2 (length drgnx-modules-record-test--ends)))
+     (let ((old (alist-get 'test/r drgnx-modules--runs)))
+       (drgnx-modules-record-test--run 'test/r)
+       (should (= 3 (length drgnx-modules-record-test--ends)))
+       (should (equal (car drgnx-modules-record-test--ends) '(test/r nil t)))
+       (should (alist-get 'test/r drgnx-modules--runs))
+       (should-not (eq old (alist-get 'test/r drgnx-modules--runs)))))))
+
+(ert-deftest drgnx-modules-record/a-failing-run-end-function-is-a-problem-not-an-error ()
+  (drgnx-modules-record-test--with
+   (let ((drgnx-modules-run-end-functions '(drgnx-modules-record-test--end-fails drgnx-modules-record-test--end))
+         (drgnx-modules-record-test--ends nil))
+     (drgnx-module-define 'test/a :doc "a" :setup #'ignore)
+     (drgnx-modules-record-test--run 'test/a)
+     (should (equal (drgnx-module-teardown 'test/a)
+                    '("run end: drgnx-modules-record-test--end-fails: Boom")))
+     (should (= 1 (length drgnx-modules-record-test--ends))))))   ; the next function still ran
+
+(ert-deftest drgnx-modules-record/an-elpa-singleton-survives-and-is-left ()
+  ;; A library outside drgnx-dir starts its singleton timer lazily from a function a setup calls.
+  (drgnx-modules-record-test--with
+   (let* ((dir (make-temp-file "drgnx-elpa" t)) (file (expand-file-name "fake-elpa.el" dir)))
+     (unwind-protect
+         (progn
+           (with-temp-file file
+             (insert "(defvar fake-elpa--timer nil)\n(defun fake-elpa--tick () nil)\n"
+                     "(defun fake-elpa-start ()\n"
+                     "  (unless fake-elpa--timer (setq fake-elpa--timer (run-with-timer 3600 nil #'fake-elpa--tick))))\n"))
+           (load file nil t)
+           (drgnx-module-define 'test/a :doc "a" :setup (lambda () (fake-elpa-start)))
+           (drgnx-modules-record-test--run 'test/a)
+           (should-not (drgnx-modules-record-test--labels 'test/a))
+           (should-not (drgnx-module-teardown 'test/a))
+           (should (drgnx-modules-record-test--timer-p fake-elpa--timer))
+           (should (equal (drgnx-modules-record-test--left 'test/a)
+                          (list (format "timer fake-elpa--tick (%s)" (symbol-file 'fake-elpa--tick 'defun)))))
+           (should (string-suffix-p "fake-elpa.el)" (car (drgnx-modules-record-test--left 'test/a)))))
+       (when (boundp 'fake-elpa--timer) (when (timerp fake-elpa--timer) (cancel-timer fake-elpa--timer)))
+       (dolist (s '("fake-elpa--timer" "fake-elpa--tick" "fake-elpa-start")) (unintern s obarray)) ; 31: OBARRAY needed
+       (setq load-history (cl-remove file load-history :key #'car :test #'equal))
+       (delete-directory dir t)))))
+
+(ert-deftest drgnx-modules-record/a-lambda-is-left-and-reported ()
+  (drgnx-modules-record-test--with
+   (let (tm)
+     (unwind-protect
+         (progn
+           (drgnx-module-define 'test/a :doc "a" :setup (lambda () (setq tm (run-with-timer 3600 nil (lambda () nil)))))
+           (drgnx-modules-record-test--run 'test/a)
+           (should-not (drgnx-modules-record-test--labels 'test/a))
+           (should-not (drgnx-module-teardown 'test/a))
+           (should (drgnx-modules-record-test--timer-p tm))
+           (should (equal (drgnx-modules-record-test--left 'test/a) '("timer a lambda")))
+           ;; a new run starts the list again
+           (cancel-timer tm)
+           (drgnx-modules-record-test--run 'test/a)
+           (should (equal (drgnx-modules-record-test--left 'test/a) '("timer a lambda"))))
+       (when tm (cancel-timer tm))
+       (drgnx-module-teardown 'test/a)))))
+
+(ert-deftest drgnx-modules-record/a-layer-timer-gets-no-net-undo ()
+  (drgnx-modules-record-test--with
+   (unwind-protect
+       (progn
+         (drgnx-module-define 'test/a :doc "a"
+                              :setup (lambda () (drgnx-timer-start 'rec-k 3600 #'drgnx-modules-record-test-fn)))
+         (drgnx-modules-record-test--run 'test/a)
+         (should-not (drgnx-modules-record-test--labels 'test/a))   ; the run token owns it
+         (should-not (drgnx-modules-record-test--left 'test/a))     ; and it is not "left"
+         (should (drgnx-timer-active-p 'rec-k))
+         (should-not (drgnx-module-teardown 'test/a))
+         (should-not (drgnx-timer-active-p 'rec-k)))
+     (drgnx-timer-reset))))
 
 (ert-deftest drgnx-modules-record/newly-on-global-modes-go-off ()
   (drgnx-modules-record-test--with
@@ -377,7 +478,12 @@ Returns (STATUSES COMMANDS STACKS), STACKS the number of modules with a cleanup 
            (should-not (drgnx-modules-record-test--labels 'test/a))
            (should-not (drgnx-module-teardown 'test/a))     ; torn down at once, well inside undo's 10 s
            (should (drgnx-modules-record-test--timer-p undo-auto-current-boundary-timer))
-           (should (drgnx-modules-record-test--timer-p jit-lock-context-timer)))
+           (should (drgnx-modules-record-test--timer-p jit-lock-context-timer))
+           (let ((left (drgnx-modules-record-test--left 'test/a)))   ; and said so
+             (should (cl-some (lambda (l) (string-prefix-p "timer undo-auto--boundary-timer (" l)) left))
+             ;; jit-lock's context timer: a lambda up to Emacs 30, a named function from 31
+             (should (or (member "timer a lambda" left)
+                         (cl-some (lambda (l) (string-prefix-p "timer jit-lock-context--update (" l)) left)))))
        (kill-buffer buf)))))
 
 (ert-deftest drgnx-modules-record/a-helpers-mode-stays-while-another-module-claims-it ()

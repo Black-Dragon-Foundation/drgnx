@@ -17,6 +17,8 @@
 ;;; Code:
 (require 'cl-lib)
 (require 'subr-x)
+(require 'drgnx-timer)
+(require 'drgnx-config)
 
 (defconst drgnx-search-chunk-max-file-bytes 1048576
   "Files larger than this are never indexed.")
@@ -80,28 +82,19 @@ whitespace are dropped, so empty TEXT has none."
 
 ;;;; Configuration
 
-(defvar read-eval)                      ; `let'-bound below: must be dynamic once compiled
-
-(defun drgnx-search--string-list (value)
-  "VALUE when it is a list of strings, else nil."
-  (and (proper-list-p value) (cl-every #'stringp value) value))
-
-(defun drgnx-search--config-problem (data)
-  "Why DATA (the form read from .drgnx/search.eld) is no search configuration, or nil."
-  (cond ((not (and (proper-list-p data) (cl-evenp (length data)))) "it is not a plist")
-        ((not (or (null (plist-get data :include)) (drgnx-search--string-list (plist-get data :include))))
-         ":include must be a list of strings")
-        ((not (or (null (plist-get data :exclude)) (drgnx-search--string-list (plist-get data :exclude))))
-         ":exclude must be a list of strings")
-        ((not (memq (plist-get data :off) '(nil t))) ":off must be t or nil")))
+(drgnx-config-define 'search-project
+                     :dir 'project :file "search.eld"
+                     :schema '(plist (:include (list-of string)) (:exclude (list-of string)) (:off boolean))
+                     :doc "Narrows what a project's semantic search indexes: only these globs, not these, or off.")
 
 (defun drgnx-search-config (root)
   "The search configuration of the project at ROOT.
-A plist (:include GLOBS :exclude GLOBS :off BOOL), read from
-ROOT/.drgnx/search.eld with `read-eval' off; the defaults (all nil) when there is no such file.  A file that
-is there but cannot be read (also: a `.drgnx' that cannot be searched, a `search.eld' that is a dangling
-symlink), does not hold a plist, or gives a key the wrong type (:include or :exclude not a
-list of strings, :off not t or nil) is (:error \".drgnx/search.eld cannot be read: WHY\"), never the defaults:
+A plist (:include GLOBS :exclude GLOBS :off BOOL), read by the config layer (`search-project') from
+ROOT/.drgnx/search.eld; the defaults (all nil) when there is no such file.  The file is only read as data, never
+evaluated, and at most 64 KiB.  A file that is there but cannot be read (also: a `.drgnx' that cannot be searched,
+a `search.eld' that is a dangling symlink, not a regular file, over the limit or empty), does not hold a plist, or
+gives a key the wrong type (:include or :exclude not a list of strings, :off not t or nil) is
+\(:error \".drgnx/search.eld cannot be read: WHY\"), never the defaults:
 `drgnx-search-files' then signals instead of listing more than the project asked for.  With `:include' only the
 files matching one of its globs are indexed; `:exclude' removes files; `:off' t turns the
 project's search off.  This can only narrow the list: dot files, big files, binaries and symlinks
@@ -110,29 +103,21 @@ one path component, `**/' stands for any number of directories and `**' for anyt
 without `/' matches at any depth (\"*.md\"), and a trailing `/' means everything below that
 directory (\"vendor/\")."
   (let* ((dir (expand-file-name ".drgnx" root))
-         (file (expand-file-name "search.eld" dir)))
-    (cond
-     ;; Something is there but hides the file: a .drgnx that cannot be searched, or search.eld a dangling symlink.
-     ((and (file-attributes dir) (not (file-accessible-directory-p dir)))
-      (list :error ".drgnx/search.eld cannot be read: .drgnx is not an accessible directory"))
-     ((and (not (file-exists-p file)) (file-symlink-p file))
-      (list :error ".drgnx/search.eld cannot be read: it is a symbolic link to nothing"))
-     ;; a FIFO or device would block the reader (and every query reads the config)
-     ((and (file-exists-p file) (not (file-regular-p file)))
-      (list :error ".drgnx/search.eld cannot be read: it is not a regular file"))
-     (t
-      (if (not (file-exists-p file))
-          (list :include nil :exclude nil :off nil)
-        (let* ((data (condition-case err
-                         (with-temp-buffer
-                           (let ((read-eval nil) (coding-system-for-read 'utf-8-unix))
-                             (insert-file-contents file nil 0 65536)
-                             (read (current-buffer))))
-                       (error (cons 'drgnx-search--unreadable (error-message-string err)))))
-               (problem (if (eq (car-safe data) 'drgnx-search--unreadable) (cdr data) (drgnx-search--config-problem data))))
-          (if problem
-              (list :error (concat ".drgnx/search.eld cannot be read: " problem))
-            (list :include (plist-get data :include) :exclude (plist-get data :exclude) :off (plist-get data :off)))))))))
+         (file (expand-file-name "search.eld" dir))
+         (problem
+          (cond
+           ;; Something is there but hides the file: a .drgnx that cannot be searched.
+           ((and (file-attributes dir) (not (file-accessible-directory-p dir)))
+            ".drgnx is not an accessible directory")
+           ((when-let* ((attrs (file-attributes (file-truename file))))
+              (and (zerop (file-attribute-size attrs))
+                   (string-prefix-p "-" (or (file-attribute-modes attrs) "")))) ; a FIFO is the layer's to refuse
+            "it is empty")
+           (t (plist-get (drgnx-config-problem 'search-project root) :text)))))
+    (if problem
+        (list :error (concat ".drgnx/search.eld cannot be read: " problem))
+      (let ((data (drgnx-config-get 'search-project nil root)))
+        (list :include (plist-get data :include) :exclude (plist-get data :exclude) :off (plist-get data :off))))))
 
 (defun drgnx-search--glob-regexp (glob)
   "A regexp matching the relative paths GLOB selects (see `drgnx-search-config')."
@@ -173,12 +158,16 @@ listing signals `drgnx-search-files-error' \"timed out\".")
   (when (and drgnx-search--git-deadline (> (float-time) drgnx-search--git-deadline))
     (signal 'drgnx-search-files-error (list (format "%s timed out" what)))))
 
+(defun drgnx-search--git-watchdog (proc)
+  "The listing's deadline passed: end the git process PROC, marked `:killed' (`drgnx-search--git-run-timed')."
+  (when (process-live-p proc) (process-put proc :killed t) (delete-process proc)))
+
 (defun drgnx-search--git-run-timed (input args)
   "Like `drgnx-search--git-run' for the caller's `default-directory' and environment, but with a hard bound:
 the deadline of `drgnx-search--git-deadline'.  Past it git is killed and `drgnx-search-files-error' is signaled."
   (drgnx-search--check-deadline (format "git %s" (string-join args " ")))
   (let* ((out (generate-new-buffer " *drgnx-search-git*" t)) (err (generate-new-buffer " *drgnx-search-git-err*" t))
-         (proc nil) (watchdog nil) (killed nil))
+         (proc nil))
     (unwind-protect
         (condition-case e
             (progn
@@ -187,8 +176,8 @@ the deadline of `drgnx-search--git-deadline'.  Past it git is killed and `drgnx-
               (when-let* ((errproc (get-buffer-process err))) (set-process-sentinel errproc #'ignore))
               ;; Sending can block for good when git does not read its input; at the deadline a timer
               ;; kills git, which ends the send.
-              (setq watchdog (run-at-time (max 0 (- drgnx-search--git-deadline (float-time))) nil
-                                          (lambda () (when (process-live-p proc) (setq killed t) (delete-process proc)))))
+              (drgnx-timer-start (cons 'search-git-watchdog proc) (max 0 (- drgnx-search--git-deadline (float-time)))
+                                 #'drgnx-search--git-watchdog :args (list proc) :owner proc)
               ;; The input goes in pieces, the output read in between: a git that fills its output pipe
               ;; while we fill its input pipe would wait for us forever.
               (let ((sent 0) (size (length input)))   ; by offsets: no copy of the remainder per piece
@@ -200,7 +189,7 @@ the deadline of `drgnx-search--git-deadline'.  Past it git is killed and `drgnx-
                   (setq sent (min size (+ sent 4096)))
                   (accept-process-output proc 0))
                 (if (< sent size)
-                    (when (or killed (process-live-p proc))
+                    (when (or (process-get proc :killed) (process-live-p proc))
                       (delete-process proc)
                       (signal 'drgnx-search-files-error (list (format "git %s timed out" (string-join args " ")))))
                   ;; git need not read its input: it may be gone already, which is no error of ours
@@ -211,7 +200,7 @@ the deadline of `drgnx-search--git-deadline'.  Past it git is killed and `drgnx-
               (while (and (or (process-live-p proc) (let ((p (get-buffer-process err))) (and p (process-live-p p))))
                           (<= (float-time) drgnx-search--git-deadline))
                 (accept-process-output nil 0.05))
-              (when (or killed (process-live-p proc))
+              (when (or (process-get proc :killed) (process-live-p proc))
                 (delete-process proc)
                 (signal 'drgnx-search-files-error (list (format "git %s timed out" (string-join args " ")))))
               (accept-process-output nil 0.01)
@@ -220,7 +209,7 @@ the deadline of `drgnx-search--git-deadline'.  Past it git is killed and `drgnx-
           (drgnx-search-files-error (signal (car e) (cdr e)))
           (error (drgnx-search--check-deadline (format "git %s" (string-join args " ")))   ; killed at the deadline
                  (list nil nil (error-message-string e))))
-      (when watchdog (cancel-timer watchdog))
+      (when proc (drgnx-timer-cancel (cons 'search-git-watchdog proc)))
       (when (process-live-p proc) (delete-process proc))
       (kill-buffer out) (kill-buffer err))))
 

@@ -16,6 +16,8 @@
 (require 'button)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
+(require 'drgnx-timer)
+(require 'drgnx-memo)
 
 (declare-function drgnx-hub-call "drgnx-hub")
 (declare-function drgnx-hub-call-sync "drgnx-hub")
@@ -62,7 +64,6 @@ own (`(drgnx-job-ui-show ID)') restores as the cockpit filtered to that job."
 (defvar drgnx-job-ui--badge "" "The mode line's badge: \" ⚑N\" while N things of jobs need you, else empty.")
 (defvar drgnx-job-ui--badge-job nil "The job with the newest card: the one the badge opens.")
 (defvar drgnx-job-ui--notified (make-hash-table :test #'equal) "Card ids already notified.")
-(defvar drgnx-job-ui--recount-timer nil)
 (defvar drgnx-job-ui--desktop :unknown "Whether desktop notifications can be sent (asked once).")
 
 (defvar drgnx-job-ui-badge-map
@@ -77,10 +78,15 @@ own (`(drgnx-job-ui-show ID)') restores as the cockpit filtered to that job."
   (cond (drgnx-job-ui--badge-job (drgnx-job-ui-show drgnx-job-ui--badge-job))
         ((fboundp 'drgnx-cockpit-show-jobs) (drgnx-cockpit-show-jobs))))
 
+(drgnx-memo-define job-badge :keys (drgnx-job-ui--badge)
+                   :doc "The mode line's badge string, built again only when the badge text is set to another string.")
+
 (defun drgnx-job-ui--badge-segment ()
-  (if (string-empty-p drgnx-job-ui--badge) ""
-    (propertize drgnx-job-ui--badge 'face 'warning 'mouse-face 'mode-line-highlight 'local-map drgnx-job-ui-badge-map
-                'help-echo "A job needs you: click to see it in the Work cockpit")))
+  "The badge for the mode line: the memo `job-badge' (a redisplay with the badge unchanged allocates nothing)."
+  (drgnx-memo job-badge nil
+              (if (string-empty-p drgnx-job-ui--badge) ""
+                (propertize drgnx-job-ui--badge 'face 'warning 'mouse-face 'mode-line-highlight 'local-map drgnx-job-ui-badge-map
+                            'help-echo "A job needs you: click to see it in the Work cockpit"))))
 
 ;;;; What needs you, counted once: the badge, the Work cockpit's What needs you, the status bar
 
@@ -139,8 +145,7 @@ for redisplay code (the status bar's jobs segment)."
 
 (defun drgnx-job-ui--schedule-recount ()
   "Count again within a second (once, however many events)."
-  (unless (timerp drgnx-job-ui--recount-timer)
-    (setq drgnx-job-ui--recount-timer (run-at-time 1 nil (lambda () (setq drgnx-job-ui--recount-timer nil) (drgnx-job-ui--recount))))))
+  (drgnx-timer-soon 'job-ui-recount 1 #'drgnx-job-ui--recount :owner 'tools/jobs))
 
 (defun drgnx-job-ui--event (event data)
   "`drgnx-hub-event-functions' (while the badge is on): a job or a card changed — count again; a new card notifies."
@@ -236,14 +241,19 @@ else a message.  A failed osascript says so once.  Never a prompt."
   (drgnx-hub-call-sync "job/stop" (list :id id))
   (message "Job %s stopped" id))
 
+(defun drgnx-job-ui--idle-recount ()
+  "Count again, once the hub's client is loaded: the 60 s idle timer's function."
+  (when (featurep 'drgnx-hub) (drgnx-job-ui--recount)))
+
 (drgnx-module-define 'tools/jobs
                      :doc "Jobs: agents through a plan you approve — cards, clashes, the badge; shown in the Work cockpit."
                      :stage 'startup :requires '(tools/agents)
                      :setup
                      (lambda ()
+                       (drgnx-memo-activate 'job-badge)
                        (drgnx-job-ui-badge-mode 1)
                        ;; counted again now and then once the hub's client is here (the Agents mirror loads it)
-                       (run-with-idle-timer 60 t (lambda () (when (featurep 'drgnx-hub) (drgnx-job-ui--recount))))
+                       (drgnx-timer-start 'job-ui-recount-idle 60 #'drgnx-job-ui--idle-recount :repeat t :idle t)
                        (when (fboundp 'drgnx-wb-place) (drgnx-wb-place "\\`\\*plan jobs\\*\\'" 'editor))
                        (pcase-dolist (`(,id ,title ,fn ,doc)
                                       '((job-show "Show Job in Work…" drgnx-job-ui-show "The Work cockpit filtered to a job: what needs you, its tasks, its decisions")

@@ -39,13 +39,24 @@ or a key variable of its own, so a cloned repository cannot send your code, or a
          (complete (ollama . "qwen2.5-coder:1.5b"))))
 ```
 
-`:kind` is `openai` (any OpenAI-compatible server), `ollama`, `llamacpp` or `tei`.
+`:kind` is `openai` (any OpenAI-compatible server), `ollama`, `llamacpp` or `tei` (`anthropic` too, for a provider of
+the agent gateway that speaks Anthropic's API; see below).
+
+**An `ai.eld` with a mistake** (a parenthesis missing, a `:kind` that is none of these, a `:price` that is not
+`(IN . OUT)`, a model that is not a string): your last good providers and roles are used, and drgnx says once where the
+mistake is (`Open Config File…` takes you there). Choosing a provider or model never overwrites a file it cannot read,
+and says so; an `ai.eld` written by a newer drgnx is used when it fits, but is not changed. Choosing changes only the
+role you chose: your comments, your providers and any key of your own stay as they are.
+
+A project's `.drgnx/ai.eld` is read with a limit of 64 KiB. A bigger file, or one with a mistake, is not used at all
+(there is no last good copy of a project's file: its roles are left out and drgnx says why once), and drgnx never writes it.
 
 A project's role may still name a provider that is not on this machine (OpenRouter, say): every pause in that
 repository would then make a paid call and send your code away. So the first time you run a command that uses AI
 there (Edit with AI, Ask the Codebase, Generate Commit Message, the semantic search commands), drgnx asks once whether that project may use the remote provider, and keeps
 your answer for that project root in `ai-project-routes.eld` in drgnx's state directory (delete the entry to be asked
-again; it is asked again only if the project later names a remote provider you were not asked about). The project is
+again; it is asked again only if the project later names a remote provider you were not asked about; a file that
+does not read is copied aside, as `ai-project-routes.eld.bak-…`, before your answer is written). The project is
 its real directory, so one repository reached through two paths is asked once, and a link re-pointed at another
 repository does not inherit the answer. A provider whose address has no host counts as remote. Choose Provider/Model
 changes your own `ai.eld` chain, never a copy of the project's. Until you say
@@ -181,11 +192,14 @@ sends.
 
 drgnx asks the local providers whether they run — every address at once, one second each, in the background,
 never holding up Emacs — and remembers which answered and which models they have (a probe updates the providers it
-asked; what it knows of the others stays). It probes once Emacs is first idle, again in onboarding and Choose, and while no `complete` provider runs. Something
+asked; what it knows of the others stays). The answers are also saved in `ai-detected.eld` in the state directory
+(for the doctor), under a lock, adding to what another Emacs saved; a probe that finds the file locked skips the
+save and the next one writes it, and a file with a mistake is copied aside (`ai-detected.eld.bak-…`) first. It probes once Emacs is first idle, again in onboarding and Choose, and while no `complete` provider runs. Something
 answering on TEI's
 port is taken for TEI only when its `/info` says so (LocalAI can answer there too).
 
-The local runner onboarding set up (`drgnx-ai-managed`, kept in `ai-local.eld` in the state directory) is started
+The local runner onboarding set up (`drgnx-ai-managed`, kept in `ai-local.eld` in the state directory, changed under
+a lock with its other keys left alone) is started
 again when it is down: `drgnx-ai-ensure-local` asks its address in the background and, when nothing answers and no
 drgnx job runs it, starts it as a drgnx job with one message ("Starting Ollama…"). It runs a moment after the first
 window opens (never at daemon start) and when a request finds nothing listening there (`drgnx-ai-refused-functions`),
@@ -239,7 +253,20 @@ roles name once per start, a moment after its window shows (macOS may ask whethe
 "AI: Load Keys reads your key from the Keychain" when its provider's key is not loaded. The `drgnx` command-line
 tool, which runs in batch Emacs, never reads the Keychain or keyring: set `OPENROUTER_API_KEY` for it. In short: the
 key you gave onboarding works in the drgnx app; in a terminal (`drgnx onboard`, `drgnx search`, …) use the
-environment variable.
+environment variable. The one exception is `drgnx secrets` (below), which you run on a terminal to carry your keys
+to another machine.
+
+### Keys on a second machine
+
+`drgnx secrets export` puts the keys your keyring holds for the providers that take one (OpenRouter, Anthropic, any
+provider of yours with a `:key-env`) into `secrets.age` in your config dir, encrypted with
+[age](https://age-encryption.org) and a passphrase you choose. Copy the config dir to the other machine (or clone
+it), then run `drgnx secrets import` there and type the passphrase: each key goes into that machine's Keychain or
+keyring, where drgnx finds it as above. A key in the environment only is not exported — store it first
+(onboarding's AI step) or set the variable on the other machine too. The palette has both as **Portability: Export
+Keys** and **Portability: Import Keys** (a terminal opens, where age asks for the passphrase). The details — what the
+file holds, age keys instead of a passphrase, a machine without a keyring — are in
+[second-machine.md](second-machine.md#your-provider-keys-secretsage).
 
 ## Agents
 

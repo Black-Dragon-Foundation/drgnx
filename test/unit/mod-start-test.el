@@ -43,7 +43,8 @@ window showing `*scratch*'.  `y-or-n-p' and every `read-*' fail: nothing here ma
           (server-after-make-frame-hook nil) (window-setup-hook nil) (drgnx-signal--subscribers nil)
           (drgnx-start--after-file nil)
           (drgnx-signal--timer (timer-create))             ; a timer already armed: nothing is scheduled
-          (drgnx-signal--editor-window nil) (drgnx-start--timer nil)
+          (drgnx-signal--editor-window nil)
+          (drgnx-modules--runs (list (list 'ui/face 'ui/face)))   ; ui/face is on: its timers start
           (old (window-buffer (selected-window))))
      (cl-letf (((symbol-function 'drgnx-face--ascii-frame-p) (lambda (_frame) nil))   ; the batch terminal is not UTF-8
                ((symbol-function 'drgnx-onboard--welcome-due-p) (lambda () nil))      ; no first-run Welcome in the way
@@ -107,6 +108,20 @@ window showing `*scratch*'.  `y-or-n-p' and every `read-*' fail: nothing here ma
       (drgnx-start-test--press "Open the Work Graph")
       (drgnx-start-test--press "All Keys")
       (should (equal (reverse drgnx-start-test--ran) '(folder graph keys))))))
+
+(ert-deftest drgnx-start/centred-with-plain-bullets ()
+  (drgnx-start-test--with 'vscode
+    (drgnx-start-maybe-show)
+    (let ((text (drgnx-start-test--text)))
+      (should-not (string-match-p "⌕" text))
+      (should (string-match-p (format "^%s C-p " (regexp-quote (drgnx-face-glyph 'bullet))) text))   ; a plain bullet
+      (should (member (drgnx-face-glyph 'bullet nil) '("•" ">")))
+      (should-not (string-match-p "^  " text)))
+    (with-current-buffer "*drgnx start*"
+      ;; every line, wrapped rows too, starts at the column that centres the block, whatever the window's width
+      (should (equal (get-text-property (point-min) 'line-prefix) drgnx-start--centre))
+      (should (equal (get-text-property (1- (point-max)) 'wrap-prefix) drgnx-start--centre))
+      (should (equal (car drgnx-start--centre) 'space)))))
 
 (ert-deftest drgnx-start/not-over-a-file ()
   (drgnx-start-test--with 'vscode
@@ -335,20 +350,20 @@ absolute local name expanded against a remote folder) passes; everything else, \
     (should (= 1 (cl-count #'drgnx-start--on-editor-changed (alist-get 'editor-changed drgnx-signal--subscribers))))
     (should (drgnx-commands-get 'start-page))
     (drgnx-start--on-first-frame)                             ; batch: no timer
-    (should-not drgnx-start--timer)
+    (should-not (drgnx-timer-active-p 'start-first-frame))
     (let ((noninteractive nil))                               ; an owned, single timer
       (drgnx-start--on-first-frame)
-      (let ((first drgnx-start--timer))
-        (should (timerp first))
-        (drgnx-start--on-first-frame)
-        (should-not (memq first timer-idle-list))))
+      (drgnx-start--on-first-frame)
+      (should (equal (seq-filter (lambda (e) (eq (car e) 'start-first-frame)) (drgnx-timer-pending))
+                     '((start-first-frame ui/face start))))
+      (should (= 1 (cl-count #'drgnx-timer--fire timer-idle-list :key #'timer--function))))
+    (should (= 1 (drgnx-timer-cancel-owner 'ui/face)))        ; the module's run ends: the timer goes
     (drgnx-start-teardown)
     (should-not (memq #'drgnx-start-maybe-show drgnx-persist-after-restore-functions))
     (should-not (memq #'drgnx-start-maybe-show server-after-make-frame-hook))
     (should-not (memq #'drgnx-start--on-first-frame drgnx-first-gui-frame-hook))
     (should-not (memq #'drgnx-start--on-first-frame window-setup-hook))
-    (should-not (memq #'drgnx-start--on-editor-changed (alist-get 'editor-changed drgnx-signal--subscribers)))
-    (should-not drgnx-start--timer)))
+    (should-not (memq #'drgnx-start--on-editor-changed (alist-get 'editor-changed drgnx-signal--subscribers)))))
 
 (ert-deftest drgnx-start/a-transient-tab ()
   ;; the default of the setting names the page

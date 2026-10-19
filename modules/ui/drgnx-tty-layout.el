@@ -32,6 +32,7 @@
 (require 'drgnx-wb)
 (declare-function drgnx-wb-area-show "drgnx-area")
 (declare-function drgnx-wb-area-window "drgnx-area")
+(declare-function drgnx-wb-area-hide "drgnx-area")
 (declare-function drgnx-chrome-apply "drgnx-chrome")
 
 (defcustom drgnx-tty-layout-columns 120

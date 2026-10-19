@@ -19,10 +19,10 @@ Emacs, the hub stubbed (it records each call in `drgnx-cockpit-feed-test--hub' a
 stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed after, and they owned their hooks."
   (declare (indent 0))
   `(drgnx-cockpit-fixture-with
-     (let* ((drgnx-cockpit-feed--buffers nil) (drgnx-cockpit-feed--timer nil) (drgnx-cockpit-feed--check-timer nil)
+     (let* ((drgnx-cockpit-feed--buffers nil)
             (drgnx-cockpit-feed--waiting nil) (drgnx-cockpit-feed-test--hub nil)
             (drgnx-cockpit-feed--told nil) (drgnx-cockpit-feed--in-flight nil)
-            (drgnx-cockpit-graph-current-filter nil) (drgnx-cockpit--timer nil) (drgnx-cockpit--check-timer nil)
+            (drgnx-cockpit-graph-current-filter nil)
             (drgnx-cockpit--silent nil) (drgnx-cockpit--silent-at (float-time))
             (m1 (drgnx-agents--make :id "m-1" :remote "s-1" :name "claude · jx#2" :status 'idle :job "jx" :task "jx#2"))
             (m2 (drgnx-agents--make :id "m-2" :remote "s-2" :name "chat" :status 'busy :mode 'queue))
@@ -30,6 +30,8 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
             (config (current-window-configuration)))
        (ignore m1 m2)
        (cl-letf (((symbol-function 'drgnx-cockpit-sessions) (lambda () sessions))
+                 ;; a UTF-8 terminal whatever the locale (CI's C locale is not): the ASCII tests say so themselves
+                 ((symbol-function 'drgnx-cockpit-graph--ascii-p) #'ignore)
                  ((symbol-function 'drgnx-agents-sessions) (lambda () mirrors))
                  ((symbol-function 'drgnx-hub-call)
                   (lambda (method params cb) (push (list method params) drgnx-cockpit-feed-test--hub) (funcall cb t nil) 1))
@@ -43,16 +45,16 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
              (when (string-match-p "\\`\\*\\(happened: .*\\|Timeline\\|timeline: .*\\|Work Graph\\)\\*\\'" (buffer-name b))
                (kill-buffer b)))
            (should-not drgnx-cockpit-feed--buffers)
-           (should-not (timerp drgnx-cockpit-feed--timer))
-           (should-not (timerp drgnx-cockpit-feed--check-timer))
+           (should-not (drgnx-timer-active-p 'cockpit-feed-update))
+           (should-not (drgnx-timer-active-p 'cockpit-feed-check))
            (should-not (memq #'drgnx-cockpit-feed--hub-event (bound-and-true-p drgnx-hub-event-functions)))
            (should-not (memq #'drgnx-cockpit-feed--agent-changed drgnx-agents-changed-functions))
            (set-window-configuration config))))))
 
 (defun drgnx-cockpit-feed-test--tick ()
   "Run the feed's update on its way now, as its timer would."
-  (should (timerp drgnx-cockpit-feed--timer))
-  (cancel-timer drgnx-cockpit-feed--timer)
+  (should (drgnx-timer-active-p 'cockpit-feed-update))
+  (drgnx-timer-cancel 'cockpit-feed-update)
   (drgnx-cockpit-feed--tick))
 
 (defun drgnx-cockpit-feed-test--question (pred)
@@ -551,11 +553,11 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
   (drgnx-cockpit-feed-test--with
     (let ((b (drgnx-cockpit-timeline-buffer)))
       (should (memq #'drgnx-cockpit-feed--hub-event drgnx-hub-event-functions))
-      (should (timerp drgnx-cockpit-feed--check-timer))
+      (should (drgnx-timer-active-p 'cockpit-feed-check))
       ;; hidden: an event only marks it stale; showing it catches up
       (drgnx-coord-event-add :agent "s-2" :kind "stop" :summary "chat ended")
       (drgnx-cockpit-feed--hub-event "agent" nil)
-      (when (timerp drgnx-cockpit-feed--timer) (drgnx-cockpit-feed-test--tick))
+      (when (drgnx-timer-active-p 'cockpit-feed-update) (drgnx-cockpit-feed-test--tick))
       (with-current-buffer b
         (should drgnx-cockpit-feed--stale)
         (should-not (string-search "stopped" (buffer-string))))
@@ -565,7 +567,7 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
       (with-current-buffer b (should (string-search "stopped" (buffer-string))))
       ;; a transcript's chunk is not news
       (drgnx-cockpit-feed--hub-event "agent-entries" nil)
-      (should-not (timerp drgnx-cockpit-feed--timer))
+      (should-not (drgnx-timer-active-p 'cockpit-feed-update))
       ;; the last feed buffer killed: its hooks and timers go (checked by the macro), its markers are released
       (let ((h (drgnx-cockpit-feed-happened-buffer "s-1")))
         (let ((m (buffer-local-value 'drgnx-cockpit-feed--end h)))
@@ -594,5 +596,17 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
     (let ((text (with-temp-buffer (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir)) (buffer-string))))
       (dolist (row '("(cockpit-answer \"A\")" "(cockpit-happened :none " "(cockpit-timeline :none "))
         (should (string-search row text))))))
+
+(ert-deftest drgnx-cockpit-feed/loads-alone-in-a-fresh-emacs ()
+  ;; the modules directory loads cockpit-feed before drgnx-cockpit.el (alphabetical): it must not need the graph's keymap then
+  (let* ((emacs (expand-file-name invocation-name invocation-directory))
+         (feed (expand-file-name "modules/tools/drgnx-cockpit-feed.el" drgnx-dir))
+         (out (with-temp-buffer
+                (cons (call-process emacs nil t nil "--batch" "-Q" "-L" (expand-file-name "core" drgnx-dir)
+                                    "--eval" (format "(load %S nil t)" feed)
+                                    "--eval" "(message \"loaded %S\" (featurep 'drgnx-cockpit-feed))")
+                      (buffer-string)))))
+    (should (eql (car out) 0))
+    (should (string-search "loaded t" (cdr out)))))
 
 ;;; mod-cockpit-feed-test.el ends here

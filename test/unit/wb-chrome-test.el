@@ -104,6 +104,19 @@
       (insert "y")
       (should (string-match-p "●" (drgnx-chrome-breadcrumb (selected-window)))))))
 
+(ert-deftest drgnx-chrome/a-buffer-without-a-file-has-no-path-to-show ()
+  ;; the tab already names it (the start page used to repeat "*drgnx start*"); the row stays: rows never change
+  (drgnx-chrome-test--with dir
+    (drgnx-chrome-test--open dir "a.txt")
+    (let ((rows (drgnx-chrome-test--heights (selected-window))))
+      (switch-to-buffer (get-buffer-create "*drgnx-nofile*"))
+      (unwind-protect
+          (progn
+            (drgnx-chrome-apply nil t)
+            (should (equal (string-trim (substring-no-properties (drgnx-chrome-breadcrumb (selected-window)))) ""))
+            (should (equal rows (drgnx-chrome-test--heights (selected-window)))))
+        (kill-buffer "*drgnx-nofile*")))))
+
 (ert-deftest drgnx-chrome/child-frames-get-no-chrome ()
   ;; C1: posframe, vertico-posframe, corfu, eldoc-box windows live in child frames.
   (cl-letf (((symbol-function 'frame-parent) (lambda (&optional _f) (selected-frame))))
@@ -160,6 +173,48 @@
         (should-not (string-search "×" tabs))
         (should (equal (get-text-property (string-search "x " tabs (string-search "a.txt" tabs)) 'help-echo tabs)
                        "Close this tab"))))))
+
+(defun drgnx-chrome-test--mouse-runs (s)
+  "The runs of S (start . value) where its `mouse-face' is set, split where the value is not `eq'."
+  (let ((i 0) runs)
+    (while i
+      (let ((v (get-text-property i 'mouse-face s)) (next (next-single-property-change i 'mouse-face s)))
+        (when v (push (cons i v) runs))
+        (setq i next)))
+    (nreverse runs)))
+
+(ert-deftest drgnx-chrome/hover-lights-one-tab-not-the-strip ()
+  ;; Emacs highlights the run of text whose mouse-face is `eq': one shared value lit every tab.
+  (drgnx-chrome-test--with dir
+    (drgnx-chrome-test--open dir "a.txt")
+    (drgnx-chrome-test--open dir "b.txt")
+    (drgnx-chrome-test--open dir "c.txt")
+    (let* ((tabs (window-parameter (selected-window) 'tab-line-format))
+           (runs (drgnx-chrome-test--mouse-runs tabs)))
+      (should (= 6 (length runs)))                      ; a name and a × for each of the three tabs
+      (should (= 6 (length (seq-uniq (mapcar #'cdr runs) #'eq))))
+      (should-not (get-text-property (1- (string-search "  b.txt" tabs)) 'mouse-face tabs))   ; the gap: no hover
+      (should (get-text-property (string-search "b.txt" tabs) 'mouse-face tabs)))))
+
+(ert-deftest drgnx-chrome/tab-faces-pad-dim-and-mark-the-active-group ()
+  (drgnx-chrome-test--with dir
+    (drgnx-chrome-test--open dir "a.txt")
+    (drgnx-chrome-test--open dir "b.txt")
+    (let* ((tabs (window-parameter (selected-window) 'tab-line-format))
+           (face-of (lambda (name) (get-text-property (string-search name tabs) 'face tabs))))
+      (should (string-search "  a.txt " tabs))            ; 2-space padding
+      (should (eq (funcall face-of "a.txt") 'drgnx-chrome-tab))
+      (should (eq (funcall face-of "b.txt") 'drgnx-chrome-tab-active)))
+    (dolist (f '(drgnx-chrome-tab drgnx-chrome-tab-current drgnx-chrome-tab-active))
+      (should (eql (face-attribute f :height nil nil) 1.0))))
+  (should (eq (face-attribute 'drgnx-chrome-tab-active :overline nil nil) t))
+  (should (memq (face-attribute 'drgnx-chrome-tab-current :overline nil nil) '(nil unspecified))))
+
+(ert-deftest drgnx-chrome/header-rows-are-one-band-to-the-edge ()
+  (let ((s (drgnx-wb-bar "x")))
+    (should (eq (get-text-property 0 'face s) 'drgnx-wb-bar))
+    (should (equal (get-text-property 1 'display s) '(space :align-to right)))
+    (should (eq (get-text-property 1 'face s) 'drgnx-wb-bar))))
 
 (ert-deftest drgnx-chrome/tab-faces-are-defined ()
   ;; Minor 2 (re-graded): the faces we inherit exist without loading tab-line by hand.

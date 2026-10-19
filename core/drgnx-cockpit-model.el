@@ -15,6 +15,7 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
+(require 'drgnx-timer)
 (require 'drgnx-work-db)
 (require 'drgnx-coord)
 
@@ -585,6 +586,10 @@ from its jtask row)."
 (defun drgnx-cockpit--later (fn &rest args)
   (run-at-time 0 nil (lambda () (apply #'drgnx-cockpit--call fn args))))
 
+(defun drgnx-cockpit--git-timed-out (p)
+  "The deadline of the git process P (`drgnx-cockpit--git'): mark it timed out and end it."
+  (when (process-live-p p) (process-put p :timed-out t) (delete-process p)))
+
 (defun drgnx-cockpit--git (dir args done &optional limit)
   "Run git ARGS in DIR as a process of its own and return at once.  DONE gets, from the sentinel, (:exit N :out TEXT
 :err TEXT); (:too-large N) when its output passed LIMIT bytes (it is ended then, having read N: at most one chunk
@@ -601,7 +606,6 @@ past `drgnx-cockpit-git-timeout'.  git takes pathspecs literally, no optional lo
       (condition-case err
           (let* ((default-directory (file-name-as-directory dir))
                  (process-environment (append '("GIT_OPTIONAL_LOCKS=0" "GIT_TERMINAL_PROMPT=0") process-environment))
-                 (timer nil)
                  (p (make-process
                      :name "drgnx-cockpit-git" :buffer out :stderr errbuf :noquery t :connection-type 'pipe
                      :coding 'utf-8-unix :command (append '("git" "-c" "core.quotePath=false" "--literal-pathspecs") args)
@@ -615,7 +619,7 @@ past `drgnx-cockpit-git-timeout'.  git takes pathspecs literally, no optional lo
                      :sentinel
                      (lambda (p _)
                        (unless (process-live-p p)
-                         (when timer (cancel-timer timer))
+                         (drgnx-timer-cancel (cons 'cockpit-git-timeout p))
                          (let ((r (cond
                                    ((process-get p :too-large) (list :too-large (process-get p :too-large)))
                                    ((process-get p :timed-out)
@@ -627,8 +631,8 @@ past `drgnx-cockpit-git-timeout'.  git takes pathspecs literally, no optional lo
                            (when (buffer-live-p errbuf) (let ((kill-buffer-query-functions nil)) (kill-buffer errbuf)))
                            (drgnx-cockpit--call done r)))))))
             (when-let* ((ep (get-buffer-process errbuf))) (set-process-sentinel ep #'ignore))
-            (setq timer (run-at-time drgnx-cockpit-git-timeout nil
-                                     (lambda () (when (process-live-p p) (process-put p :timed-out t) (delete-process p)))))
+            (drgnx-timer-start (cons 'cockpit-git-timeout p) drgnx-cockpit-git-timeout #'drgnx-cockpit--git-timed-out
+                               :args (list p) :owner p)
             (ignore-errors (process-send-eof p))
             p)
         (error

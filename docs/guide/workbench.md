@@ -62,7 +62,10 @@ same way). A click shows the definition in the editor and keeps you in the Outli
 editor, and half a second after you stop typing, your edits — only while it is shown (hidden, it lets go of the file
 at the next pause or editor change), and a key you press while it works wins (it tries again at the next pause). Files without an index, remote files and buffers over 1 MB get a
 one-line notice instead. The definition your cursor is in is highlighted in the Outline (an overlay, set a moment
-after the cursor stops — the Outline's own cursor is yours and never moves). Focus Outline: palette · `SPC o`.
+after the cursor stops — the Outline's own cursor is yours and never moves while you work in a file). Another file
+starts the Outline at its top, its cursor on the definition your cursor is in (scrolled into view). An edit that only
+moves definitions redraws nothing, and the Outline keeps your place in it when definitions are added above. Its rows
+and notices start in the column of the section's title. Focus Outline: palette · `SPC o`.
 
 ### Files
 
@@ -109,7 +112,8 @@ theme's version-control faces; a folder with changes inside shows `●` (also on
 a new folder itself shows `U`), and so does a root; ignored files are dimmed. One background `git status` per
 repository (never holding your git lock), repositories nested inside the tree included; a repository made after
 the tree was shown (`git init`) is picked up at the next refresh (a save, or Emacs getting the focus back).
-`drgnx-explorer-git` turns it off. What git complains
+The status of at most 16 repositories is kept; one that was pushed out is read again by the next refresh of its
+folder. `drgnx-explorer-git` turns it off. What git complains
 about is kept in the hidden buffer ` *drgnx git errors*` (its last `drgnx-git-errors-max` characters).
 
 ### Buffers panel
@@ -176,7 +180,7 @@ alone unless a rule names them.
 | `panel` Problems | flymake / flycheck lists |
 | `panel` Output | `*Messages*`, `*Warnings*`, `*Backtrace*`, ert results |
 | `panel` Results | compilation, grep, occur, xref |
-| `panel` Terminal | shell, eshell, term, vterm, ielm, other comint buffers |
+| `panel` Terminal | New Terminal (your shell in eat; eshell for a remote folder, on Windows, and until eat is synced), New Eshell, shell, eshell, term, vterm, ielm, other comint buffers |
 | `panel` Help | help, apropos, Info, man, eldoc documentation |
 | `right` | agents, chat, viewers — tabs come with their modules (M7) |
 | `popup` | transient, which-key, `*Completions*`, `*Calendar*` |
@@ -192,6 +196,10 @@ needs at least 30 frame lines for the breadcrumb row, which is 31 terminal rows 
 is not a frame line); with fewer, the frame parameter `drgnx-chrome-breadcrumb` is `off` (set by the terminal layout)
 and the row is gone, sticky scroll's scopes with it. It comes back with room, and a buffer's own header line (column
 headings) stays.
+
+Hovering a file tab (or its ×) lights that one only. Tabs are dimmed, the shown tab of the active editor group is bold
+in the theme's link colour with an overline, and every row of chrome (tab line, breadcrumb, dock titles, panel tabs,
+the top line) is the theme's tab-line background; customize `drgnx-chrome-tab*` and `drgnx-wb-bar` to change them.
 
 - **Tabs**: the buffers an editor window has shown, in the order they were opened; switching never reorders them.
   Click a tab to show it, `×` or middle-click closes it (the buffer stays open — close it in the Buffers panel).
@@ -238,14 +246,21 @@ restore failed is not tried again). A file that client asked for is shown in fro
 it after the restore); add a function to `drgnx-persist-after-restore-functions` (called with the restored frame, after
 every restore, never prompting; the other windows of a saved workbench are not passed to it) to do something of your
 own at that moment. To keep data of your own in the saved state, add a function to `drgnx-persist-state-functions`
-that returns a plist of namespaced keys (`:mymodule-thing`) with readable values only; one that returns anything else
-is left out (said once) without costing the other functions' keys.
+that returns a plist of namespaced keys (`:mymodule-thing`) with plain values only (symbols, numbers, strings, lists, vectors; text properties of strings are dropped); one that
+returns anything else (a buffer, a hash table, a record) is left out (said once) without costing the other functions'
+keys or the save.
 
-Each group's shown file opens at once and its other tabs open while you are idle, one every 0.2 s in the same pause (typing
-stops them until your next pause); nothing asks anything at start (no
+Each group's shown file opens at once and its other tabs open while you are idle, all within the first pause (typing
+stops them until your next pause, which carries on with the rest); nothing asks anything at start (no
 remote files are touched, only safe local variables, no large-file question). Files that no longer exist are skipped,
 sizes are clamped to the frame, window parameters in the file are ignored (drgnx saves none), and a state in another
-format is ignored. Save / Restore Workbench Layout are in the palette. Only graphical windows save and restore — a
+format is ignored. The file is written whole and atomically (a crash or a full disk leaves the last saved layout), and
+read with limits (4 MiB, no deep nesting, plain data only). A file written by a **newer drgnx** is never overwritten:
+the save says "workbench.eld was written by a newer drgnx: not saved" and stops, and the restore ignores it. A file
+that cannot be read (a typing mistake, a crafted file) is not restored, one message says so, and the next save keeps a
+copy of it beside the file (`workbench.eld.bak-…`, the newest three) before writing the new layout. A save that fails
+at exit (another Emacs holds the file for more than a second, the disk is full) is one message, never an error.
+Save / Restore Workbench Layout are in the palette. Only graphical windows save and restore — a
 batch run never writes your state.
 
 **Terminal windows** (`emacs -nw`, `emacsclient -t`) open with the default layout for their size
@@ -419,13 +434,13 @@ Not yet: file nesting, icons (an icon theme is a module, M4), problems decoratio
 - **Owned windows.** Code running from a timer or a follower may move only windows that show its own buffer, and
   says so with `drgnx-wb-with-owned-windows`; the harness's jank guard records any other window move made from a
   timer or a window change hook (invariant I9). Two lints (`test/unit/lint-buffers-timers-test.el`) keep the habits behind it: the
-  workbench follows on the bus's edges, never from `run-with-timer`/`run-at-time` (an allow-list names the
-  exceptions and why), and an internal ` *…*` buffer is made with `inhibit-buffer-hooks`, so no follower hears of it.
+  workbench follows on the bus's edges, never from `run-with-timer`/`run-at-time` or a wall-clock
+  `drgnx-timer-*` (an allow-list names the exceptions and why), and an internal ` *…*` buffer is made with `inhibit-buffer-hooks`, so no follower hears of it.
 - **Explorer** (`wb/drgnx-explorer.el`) and **Buffers** (`wb/drgnx-buffers.el`) are **virtual lists**: the buffer
   holds plain text, inserted in one go; a vector holds what each line is (path, depth, folder or file — or the
   buffer); faces are painted by jit-lock for the rows on screen only. Expanding a folder inserts its rows after the
   folder's row; collapsing deletes them; nothing else is redrawn. Folder listings are cached while the folder is
-  unchanged (one `directory-files-and-attributes` call per folder). The Buffers panel re-renders only when its rows
+  unchanged (one `directory-files-and-attributes` call per folder), for at most 64 folders (the least recently shown goes first). The Buffers panel re-renders only when its rows
   changed and puts every window's view and selection back on the same buffers.
 
 ## Performance

@@ -1,6 +1,7 @@
 ;;; core-guard-test.el --- batch tests: no prompts in automatic paths -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx-guard)
+(require 'drgnx-timer)
 
 (defun drgnx-test--fake-prompt (&rest _) 'answered)
 
@@ -63,3 +64,17 @@
     (cl-letf (((symbol-function 'daemonp) (lambda () t)))
       (drgnx-test--with-guard
        (should (eq (drgnx-test--fake-prompt "q") 'answered))))))
+
+(defun drgnx-guard-test--named () nil)
+
+(ert-deftest drgnx-guard/a-layer-timer-is-named-by-its-function ()
+  (drgnx-test--with-guard
+   (let ((raw (run-with-timer 3600 nil #'drgnx-guard-test--named)))
+     (unwind-protect
+         (progn
+           (drgnx-timer-start 'guard-k 3600 #'drgnx-guard-test--named)
+           (let ((tm (drgnx-timer--entry-timer (gethash 'guard-k drgnx-timer--table))))
+             (should (eq 'drgnx-guard-test--named (drgnx-guard--timer (lambda (_) drgnx-guard--timer-fn) tm)))
+             (should (eq 'drgnx-guard-test--named (drgnx-guard--timer (lambda (_) drgnx-guard--timer-fn) raw)))))   ; a raw timer as before
+       (drgnx-timer-cancel 'guard-k)
+       (cancel-timer raw)))))

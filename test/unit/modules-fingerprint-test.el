@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-modules-fingerprint)
+(require 'drgnx-timer)
 
 (defvar drgnx-keys--applied)                  ; let-bound by one test
 (defvar drgnx-fp-test-hook nil "A hook the fingerprint reads in these tests.")
@@ -83,6 +84,24 @@
                             (drgnx-modules-fingerprint-diff before (drgnx-modules-fingerprint)))))
       (mapc (lambda (tm) (when tm (cancel-timer tm))) (list repeating once idle)))
     (should-not (drgnx-fp-test--ours (drgnx-modules-fingerprint-diff before (drgnx-modules-fingerprint))))))
+
+(ert-deftest drgnx-fingerprint/a-layer-timer-is-named-by-key-and-owner ()
+  ;; Every layer timer's Emacs function is `drgnx-timer--fire': the line names the key, the owner and the real function.
+  (let ((before (drgnx-modules-fingerprint)))
+    (unwind-protect
+        (progn
+          (drgnx-timer-start 'fp-once 1000 #'drgnx-fp-test-timer-fn)
+          (drgnx-timer-start 'fp-rep 1000 #'drgnx-fp-test-timer-fn :repeat 5 :owner :core)
+          (drgnx-timer-start 'fp-idle 1000 #'drgnx-fp-test-timer-fn :idle t)
+          (let* ((diff (drgnx-modules-fingerprint-diff before (drgnx-modules-fingerprint)))
+                 (whats (drgnx-fp-test--whats diff)))
+            (should (= 3 (length whats)))
+            (should (member "timer +fp-once (:core) drgnx-fp-test-timer-fn" whats))
+            (should (member "timer +fp-rep (:core) drgnx-fp-test-timer-fn repeat 5" whats))
+            (should (cl-some (lambda (w) (string-match-p "\\`timer \\+fp-idle (:core) drgnx-fp-test-timer-fn idle" w)) whats))
+            (should-not (cl-some (lambda (w) (string-search "drgnx-timer--fire" w)) whats))
+            (should (cl-every (lambda (d) (string-suffix-p "modules-fingerprint-test.el" (plist-get d :source))) diff))))
+      (dolist (k '(fp-once fp-rep fp-idle)) (drgnx-timer-cancel k)))))
 
 (ert-deftest drgnx-fingerprint/a-registry-key-shows ()
   (drgnx-fp-test--with-reads
@@ -256,6 +275,21 @@
   (let ((ms (drgnx-fp-test--median-ms #'drgnx-modules-fingerprint)))
     (message "cheap fingerprint: %.3f ms (median)" ms)
     (should (< ms 2))))
+
+(ert-deftest drgnx-fingerprint/the-full-scan-runs-compiled ()
+  ;; Interpreted the scan costs ~10× more.  In an Emacs that has not loaded bytecomp (Emacs 31's ERT no longer loads
+  ;; it), compiling the scan is its first load: a `byte-compile-warnings' bound before it would be lexical, and the
+  ;; load fails.  A fresh Emacs, so what this one loaded hides nothing.
+  (with-temp-buffer
+    (call-process (expand-file-name invocation-name invocation-directory) nil t nil
+                  "--batch" "-Q" "-L" (expand-file-name "core" drgnx-dir)
+                  "--eval" (prin1-to-string
+                            '(progn (require 'drgnx-modules-fingerprint)
+                                    (drgnx-modules-fingerprint t)
+                                    (princ (format "\nbytecomp=%s compiled=%s" (featurep 'bytecomp)
+                                                   (compiled-function-p
+                                                    (symbol-function 'drgnx-modules-fingerprint--scan)))))))
+    (should (string-search "bytecomp=t compiled=t" (buffer-string)))))
 
 (ert-deftest drgnx-fingerprint/full-costs-under-50-ms ()
   :tags '(:timing)

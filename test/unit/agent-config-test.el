@@ -1,5 +1,6 @@
 ;;; agent-config-test.el --- batch tests: the agent settings model (homes, JSON files, secrets, skills) -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-file)
 (require 'cl-lib)
 (require 'drgnx)
 (require 'drgnx-agent-config)
@@ -129,11 +130,17 @@
       (should (equal (sort (directory-files (file-name-directory file) nil "\\`[^.]") #'string<)
                      '("settings.json" "settings.json.drgnx-bak")))
       (should (equal (directory-files (file-name-directory file) nil "\\`\\.drgnx") nil))
-      ;; other modes are kept too
+      ;; other modes are kept for the file; the backup (the secrets of before) is for the owner alone, from the start:
+      ;; an old backup's wider mode never reaches the new one, not even until the rename
       (set-file-modes file #o640)
-      (drgnx-agent-config-json-write file '((n . 4)) 2)
+      (set-file-modes bak #o644)
+      (let ((orig (symbol-function 'rename-file)) (at-rename nil))
+        (cl-letf (((symbol-function 'rename-file)
+                   (lambda (from to &rest r) (push (cons to (file-modes from)) at-rename) (apply orig from to r))))
+          (drgnx-agent-config-json-write file '((n . 4)) 2))
+        (should (= (cdr (assoc (file-truename bak) at-rename)) #o600)))
       (should (= (file-modes file) #o640))
-      (should (= (file-modes bak) #o640)))))
+      (should (= (file-modes bak) #o600)))))
 
 (ert-deftest drgnx-agent-config/write-text-checks-and-follows-symlinks ()
   (drgnx-agent-config-test-env
@@ -150,6 +157,45 @@
       (should-error (drgnx-agent-config-write-text link "newer\n" #'ignore (lambda (_) (error "bad"))))
       (should (equal (drgnx-agent-config-test--read real) "new\n"))
       (should (equal (drgnx-agent-config-test--read (concat real ".drgnx-bak")) "old\n")))))
+
+(ert-deftest drgnx-agent-config/an-agent-settings-file-keeps-its-symlink-and-mode ()
+  (drgnx-agent-config-test-env
+    (let* ((real (expand-file-name "dotfiles/settings.json" home))
+           (link (expand-file-name "settings.json" home))
+           (calls nil)
+           (orig (symbol-function 'drgnx-file-write-text)))
+      (drgnx-agent-config-test--write real "old\n" #o640)
+      (make-symbolic-link real link)
+      (cl-letf (((symbol-function 'drgnx-file-write-text)
+                 (lambda (file text &rest args) (push file calls) (apply orig file text args))))
+        (drgnx-agent-config-write-text link "new\n" #'ignore))
+      ;; both the backup and the file go through the file layer
+      (should (= (length calls) 2))
+      (should (file-symlink-p link))
+      (should (equal (drgnx-agent-config-test--read real) "new\n"))
+      (should (= (file-modes real) #o640))
+      (should (equal (drgnx-agent-config-test--read (concat real ".drgnx-bak")) "old\n"))
+      (should (= (file-modes (concat real ".drgnx-bak")) #o600))       ; a backup is the owner's alone
+      ;; no temp file is left beside it
+      (should (equal (sort (directory-files (file-name-directory real) nil "\\`[^.]\\|\\`\\.[^.]") #'string<)
+                     '("settings.json" "settings.json.drgnx-bak")))
+      ;; a new file is private, and its folder too
+      (let ((fresh (expand-file-name "new/dir/settings.json" home)))
+        (drgnx-agent-config-write-text fresh "x\n" #'ignore)
+        (should (= (file-modes fresh) #o600))
+        (should (= (file-modes (file-name-directory fresh)) #o700))))))
+
+(ert-deftest drgnx-agent-config/a-backup-keeps-the-bytes-of-a-file-that-is-not-utf-8 ()
+  (drgnx-agent-config-test-env
+    (let ((file (expand-file-name "config.toml" home))
+          (bytes (unibyte-string ?a ?\n #xff #xfe ?\r ?\n #xc3 ?\n)))
+      (make-directory home t)
+      (let ((coding-system-for-write 'no-conversion)) (write-region bytes nil file nil 'silent))
+      (drgnx-agent-config-save-backup file)
+      (should (equal (with-temp-buffer (set-buffer-multibyte nil) (insert-file-contents-literally (concat file ".drgnx-bak"))
+                                       (buffer-string))
+                     bytes)))))
+
 
 (ert-deftest drgnx-agent-config/secrets-are-found-and-masked ()
   (let* ((spec '(:type stdio :command "npx" :args ("-y" "srv")

@@ -20,6 +20,8 @@
 (require 'drgnx-registry)
 (require 'drgnx-paths)
 (require 'drgnx-modal)
+(require 'drgnx-timer)
+(require 'drgnx-memo)
 
 (declare-function websocket-open "websocket")
 (declare-function websocket-send-text "websocket")
@@ -202,12 +204,18 @@ it ends, and a stop returns before it has)."
 (defvar-local drgnx-live--targets nil "The browser's pages: target plists, in order.")
 (defvar-local drgnx-live--target nil "The watched page's targetId.")
 (defvar-local drgnx-live--session nil "The flat CDP session on the watched page.")
+
+(drgnx-epoch-define 'live-tabs :per 'buffer
+                    :doc "Raised in a Live view when its tabs, the watched tab or taking over change (the header shows them).")
+(drgnx-memo-define live-header :on buffer :keys ((drgnx-epoch 'live-tabs object))
+                   :doc "A Live view's header line, built again only when its tabs, the watched tab or driving change.")
+
+(defun drgnx-live--tabs-changed ()
+  "The tabs, the watched tab or driving changed in this buffer: the header is built again."
+  (drgnx-epoch-bump 'live-tabs (current-buffer)))
 (defvar-local drgnx-live--status nil "What the view says about the connection (a string), or nil.")
 (defvar-local drgnx-live--closing nil "Non-nil while the view closes its own connection.")
 (defvar-local drgnx-live--pending nil "The newest frame not yet drawn (see `drgnx-live--on-frame').")
-(defvar-local drgnx-live--timer nil "The timer that draws the pending frame.")
-(defvar-local drgnx-live--notes-timer nil)
-(defvar-local drgnx-live--last-draw 0)
 (defvar-local drgnx-live--meta nil "The shown frame's metadata (page size in CSS pixels).")
 (defvar-local drgnx-live--image nil "The shown image.")
 (defvar-local drgnx-live--drawn 0 "Frames drawn.")
@@ -239,6 +247,7 @@ it ends, and a stop returns before it has)."
           drgnx-live--callbacks nil drgnx-live--pending nil drgnx-live--meta nil drgnx-live--drawn 0 drgnx-live--dropped 0
           drgnx-live--ready nil drgnx-live--paused nil
           drgnx-live--status (format "Connecting to the browser for agents (127.0.0.1:%d)…" (plist-get endpoint :port)))
+    (drgnx-live--tabs-changed)
     (drgnx-live--render-notes)
     (condition-case err
         (setq drgnx-live--ws
@@ -264,8 +273,8 @@ it ends, and a stop returns before it has)."
     (let ((drgnx-live--closing t) (ws drgnx-live--ws))
       (setq drgnx-live--ws nil)
       (ignore-errors (websocket-close ws))))
-  (dolist (tm (list drgnx-live--timer drgnx-live--notes-timer)) (when (timerp tm) (cancel-timer tm)))
-  (setq drgnx-live--timer nil drgnx-live--notes-timer nil)
+  (drgnx-timer-cancel (cons 'live-draw (current-buffer)))
+  (drgnx-timer-cancel (cons 'live-notes (current-buffer)))
   (when drgnx-live--image (ignore-errors (image-flush drgnx-live--image t)) (setq drgnx-live--image nil)))
 
 (defun drgnx-live--opened ()
@@ -276,6 +285,7 @@ it ends, and a stop returns before it has)."
                       ;; the pages Chrome announced as discovery started are these: one attach, to the first
                       (setq drgnx-live--targets (seq-filter #'drgnx-live--page-p (append (plist-get r :targetInfos) nil))
                             drgnx-live--ready t)
+                      (drgnx-live--tabs-changed)
                       (cond (drgnx-live--target)
                             (drgnx-live--targets (drgnx-live--watch (plist-get (car drgnx-live--targets) :targetId)))
                             (t (drgnx-live--say "Live: the browser has no page open yet")))
@@ -297,6 +307,7 @@ it ends, and a stop returns before it has)."
     (drgnx-live--send "Page.stopScreencast" nil drgnx-live--session)
     (drgnx-live--send "Target.detachFromTarget" (list :sessionId drgnx-live--session)))
   (setq drgnx-live--target target-id drgnx-live--session nil)
+  (drgnx-live--tabs-changed)
   (let ((buf (current-buffer)))
     (drgnx-live--send "Target.attachToTarget" (list :targetId target-id :flatten t) nil
                       (lambda (r)
@@ -391,11 +402,13 @@ only the newest waits to be drawn."
        (when (and (drgnx-live--page-p info)
                   (not (seq-find (lambda (tg) (equal (plist-get tg :targetId) (plist-get info :targetId))) drgnx-live--targets)))
          (setq drgnx-live--targets (append drgnx-live--targets (list info)))
+         (drgnx-live--tabs-changed)
          (when drgnx-live--ready (drgnx-live--watch (plist-get info :targetId))))))
     ("Target.targetInfoChanged"
      (let ((info (plist-get params :targetInfo)))
        (setq drgnx-live--targets (mapcar (lambda (tg) (if (equal (plist-get tg :targetId) (plist-get info :targetId)) info tg))
                                          drgnx-live--targets))
+       (drgnx-live--tabs-changed)
        (drgnx-live--schedule-notes)
        (force-mode-line-update)))
     ("Target.targetDestroyed"
@@ -405,19 +418,17 @@ only the newest waits to be drawn."
          (setq drgnx-live--session nil)
          (if drgnx-live--targets (drgnx-live--watch (plist-get (car drgnx-live--targets) :targetId))
            (setq drgnx-live--target nil)))
+       (drgnx-live--tabs-changed)
        (force-mode-line-update)))))
 
 ;;;; Drawing
 
 (defun drgnx-live--schedule-draw ()
   "Draw the pending frame from a timer: off the input path, at most once per `drgnx-live-frame-interval'."
-  (unless drgnx-live--timer
-    (setq drgnx-live--timer
-          (run-at-time (max 0 (- (+ drgnx-live--last-draw drgnx-live-frame-interval) (float-time))) nil
-                       #'drgnx-live--in (current-buffer) #'drgnx-live--draw))))
+  (drgnx-timer-soon (cons 'live-draw (current-buffer)) 0 #'drgnx-live--draw
+                    :min-interval drgnx-live-frame-interval :owner (current-buffer)))
 
 (defun drgnx-live--draw ()
-  (setq drgnx-live--timer nil)
   (when-let* ((frame drgnx-live--pending))
     (setq drgnx-live--pending nil)
     (if (not (drgnx-live--window))
@@ -430,7 +441,7 @@ only the newest waits to be drawn."
 
 (defun drgnx-live--draw-frame (frame)
   "Show FRAME (see `drgnx-live--on-frame')."
-  (setq drgnx-live--last-draw (float-time) drgnx-live--meta (drgnx-live--frame-meta frame))
+  (setq drgnx-live--meta (drgnx-live--frame-meta frame))
   (let* ((w (drgnx-live--window))
          (old drgnx-live--image)
          (img (create-image (drgnx-live--frame-data frame) 'jpeg t
@@ -460,10 +471,7 @@ only the newest waits to be drawn."
                     (drgnx-agents-sessions))))))
 
 (defun drgnx-live--schedule-notes ()
-  (unless drgnx-live--notes-timer
-    (setq drgnx-live--notes-timer
-          (run-at-time 0.3 nil (lambda (buf) (drgnx-live--in buf (lambda () (setq drgnx-live--notes-timer nil) (drgnx-live--render-notes))))
-                       (current-buffer)))))
+  (drgnx-timer-soon (cons 'live-notes (current-buffer)) 0.3 #'drgnx-live--render-notes :owner (current-buffer)))
 
 (defun drgnx-live--render-notes ()
   "The text below the page: the connection's state and agents that do not use this browser."
@@ -480,18 +488,20 @@ only the newest waits to be drawn."
 ;;;; The view
 
 (defun drgnx-live--header ()
-  "The tabs (the watched one in bold), its URL, and DRIVING while you have taken over."
-  (let ((current (seq-find (lambda (tg) (equal (plist-get tg :targetId) drgnx-live--target)) drgnx-live--targets)))
-    (concat " Live  "
-            (mapconcat (lambda (tg)
-                         (let ((title (truncate-string-to-width (let ((x (plist-get tg :title))) (if (and x (not (string-empty-p x))) x (or (plist-get tg :url) "")))
-                                                                24 nil nil "…")))
-                           (if (eq tg current) (propertize title 'face 'bold) title)))
-                       drgnx-live--targets "  │  ")
-            (if current (concat "   " (propertize (or (plist-get current :url) "") 'face 'link)) "")
-            (if (bound-and-true-p drgnx-live-driving-mode)
-                (propertize "   DRIVING — your clicks and keys go to the page" 'face 'warning)
-              ""))))
+  "The tabs (the watched one in bold), its URL, and DRIVING while you have taken over: the memo `live-header',
+built again only when `live-tabs' was bumped (the tabs, the watched tab or driving changed)."
+  (drgnx-memo live-header (current-buffer)
+              (let ((current (seq-find (lambda (tg) (equal (plist-get tg :targetId) drgnx-live--target)) drgnx-live--targets)))
+                (concat " Live  "
+                        (mapconcat (lambda (tg)
+                                     (let ((title (truncate-string-to-width (let ((x (plist-get tg :title))) (if (and x (not (string-empty-p x))) x (or (plist-get tg :url) "")))
+                                                                            24 nil nil "…")))
+                                       (if (eq tg current) (propertize title 'face 'bold) title)))
+                                   drgnx-live--targets "  │  ")
+                        (if current (concat "   " (propertize (or (plist-get current :url) "") 'face 'link)) "")
+                        (if (bound-and-true-p drgnx-live-driving-mode)
+                            (propertize "   DRIVING — your clicks and keys go to the page" 'face 'warning)
+                          "")))))
 
 (defvar drgnx-live-mode-map (make-sparse-keymap) "Keys in the Live view (Live: Take Over / Hand Back).")
 
@@ -554,6 +564,7 @@ the page; evil's own keys are out of the way in its emacs state."
   (when (bound-and-true-p evil-local-mode)
     (if drgnx-live-driving-mode (evil-emacs-state) (evil-change-to-previous-state)))
   (drgnx-modal-set-state drgnx-modal-state)
+  (drgnx-live--tabs-changed)
   (force-mode-line-update))
 
 (defun drgnx-live--page-xy (posn)
@@ -637,6 +648,7 @@ the page; evil's own keys are out of the way in its emacs state."
 (defun drgnx-live--setup ()
   "Give agents the browser's endpoint, stop the browser when Emacs ends, define the commands."
   (require 'drgnx-agents)
+  (drgnx-memo-activate 'live-header)
   (add-hook 'drgnx-agents-env-functions #'drgnx-live--agent-env)
   (add-hook 'kill-emacs-hook #'drgnx-live--cleanup)
   (drgnx-live--define-commands))

@@ -15,6 +15,7 @@
 (require 'subr-x)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
+(require 'drgnx-timer)
 
 (declare-function drgnx-diff-show "drgnx-diff")
 
@@ -25,10 +26,10 @@
 
 (defvar-local drgnx-blame--overlay nil "The overlay showing the blame.")
 (defvar-local drgnx-blame--bol nil "Where the line the overlay belongs to starts.")
+(defvar-local drgnx-blame--info nil "What the overlay shows, kept to refit it when the window changes size.")
 (defvar-local drgnx-blame--cache nil "Line → (TIME . INFO).")
 (defvar-local drgnx-blame--proc nil "The git process asking for a line.")
 (defvar-local drgnx-blame--off nil "git refused this file: not asked again.")
-(defvar drgnx-blame--timer nil "The idle timer (one for every buffer).")
 (defvar drgnx-blame-mode)
 
 (defun drgnx-blame--parse (porcelain)
@@ -43,8 +44,8 @@
               :summary (funcall field "summary"))))))
 
 (defun drgnx-blame--ago (seconds now)
-  "How long before NOW the time SECONDS was, in words."
-  (let* ((d (max 0 (- now seconds)))
+  "How long before NOW the time SECONDS was, in words (whole counts: NOW is a float)."
+  (let* ((d (floor (max 0 (- now seconds))))
          (say (lambda (n unit) (format "%d %s%s ago" n unit (if (= n 1) "" "s")))))
     (cond ((< d 60) "just now")
           ((< d 3600) (funcall say (/ d 60) "minute"))
@@ -53,24 +54,51 @@
           ((< d (* 365 86400)) (funcall say (/ d (* 30 86400)) "month"))
           (t (funcall say (/ d (* 365 86400)) "year")))))
 
-(defun drgnx-blame--text (info now)
-  "INFO (see `drgnx-blame--parse') as one line of at most 80 columns, in the face `drgnx-blame'."
-  (let ((s (if (plist-get info :time)
-               (format "%s, %s · %s" (plist-get info :author) (drgnx-blame--ago (plist-get info :time) now) (plist-get info :summary))
-             (format "%s · %s" (plist-get info :author) (plist-get info :summary)))))
-    (propertize (truncate-string-to-width (replace-regexp-in-string "[\n\r]" " " s) 80 nil nil "…") 'face 'drgnx-blame)))
+(defconst drgnx-blame--gap 3 "Columns between the end of the line and the blame.")
+(defconst drgnx-blame--min-width 20 "Fewer columns than this left: no blame (a stump says nothing).")
+(defconst drgnx-blame--max-width 80 "The blame is never wider than this.")
+
+(defun drgnx-blame--room ()
+  "Columns left in the window after the end of the current line, less the gap and a column kept free (the
+continuation arrow): what the blame may use without wrapping.  Counted from the line's text, not from what is on
+screen: the screen still shows the last blame at the line's end."
+  (let* ((win (or (get-buffer-window) (selected-window)))
+         (numbers (line-number-display-width))
+         (text (- (window-body-width win) numbers))
+         (col (save-excursion (goto-char (line-end-position)) (current-column))))
+    (- text (if truncate-lines (- col (window-hscroll win)) (mod col (max text 1))) drgnx-blame--gap 1)))
+
+(defun drgnx-blame--text (info now width)
+  "INFO (see `drgnx-blame--parse') as one line in the face `drgnx-blame', at most WIDTH columns (cut with an
+ellipsis) and at most `drgnx-blame--max-width'; nil when WIDTH is under `drgnx-blame--min-width'."
+  (let ((width (min width drgnx-blame--max-width)))
+    (when (>= width drgnx-blame--min-width)
+      (let ((s (if (plist-get info :time)
+                   (format "%s, %s · %s" (plist-get info :author) (drgnx-blame--ago (plist-get info :time) now) (plist-get info :summary))
+                 (format "%s · %s" (plist-get info :author) (plist-get info :summary)))))
+        (propertize (truncate-string-to-width (replace-regexp-in-string "[\n\r]" " " s) width nil nil "…") 'face 'drgnx-blame)))))
 
 (defun drgnx-blame--hide ()
   (when drgnx-blame--overlay (delete-overlay drgnx-blame--overlay))
-  (setq drgnx-blame--bol nil))
+  (setq drgnx-blame--bol nil drgnx-blame--info nil))
 
 (defun drgnx-blame--show (info)
-  "Show INFO at the end of the current line."
-  (unless drgnx-blame--overlay (setq drgnx-blame--overlay (make-overlay 1 1 nil t nil)))
-  (move-overlay drgnx-blame--overlay (line-end-position) (line-end-position))
-  (overlay-put drgnx-blame--overlay 'after-string
-               (concat (propertize "   " 'cursor t) (drgnx-blame--text info (float-time))))
-  (setq drgnx-blame--bol (line-beginning-position)))
+  "Show INFO at the end of the current line, fitted to the room the window has there (nothing when there is none)."
+  (setq drgnx-blame--info info drgnx-blame--bol (line-beginning-position))    ; answered for this line, shown or not
+  (if-let* ((text (drgnx-blame--text info (float-time) (drgnx-blame--room))))
+      (progn
+        (unless drgnx-blame--overlay (setq drgnx-blame--overlay (make-overlay 1 1 nil t nil)))
+        (move-overlay drgnx-blame--overlay (line-end-position) (line-end-position))
+        (overlay-put drgnx-blame--overlay 'after-string (concat (propertize (make-string drgnx-blame--gap ?\s) 'cursor t) text)))
+    (when drgnx-blame--overlay (delete-overlay drgnx-blame--overlay))))
+
+(defun drgnx-blame--resized (window)
+  "`window-size-change-functions' (buffer-local; called for each WINDOW showing the buffer, with another buffer
+current): the selected window's blame is fitted again to its new width (one line, not git)."
+  (when (eq window (selected-window))
+    (with-current-buffer (window-buffer window)
+      (when (and drgnx-blame--bol drgnx-blame--info (= (line-beginning-position) drgnx-blame--bol))
+        (drgnx-blame--show drgnx-blame--info)))))
 
 (defun drgnx-blame--follow ()
   "`post-command-hook': the blame goes when point leaves its line or a region is active."
@@ -143,8 +171,7 @@ has not answered).  The empty line after the last newline has none."
 (defun drgnx-blame--release-timer ()
   "Cancel the idle timer when no buffer but this one has inline blame (this one is going: off or killed)."
   (unless (seq-some (lambda (b) (and (not (eq b (current-buffer))) (buffer-local-value 'drgnx-blame-mode b))) (buffer-list))
-    (when (timerp drgnx-blame--timer) (cancel-timer drgnx-blame--timer))
-    (setq drgnx-blame--timer nil)))
+    (drgnx-timer-cancel 'blame-tick)))
 
 (define-minor-mode drgnx-blame-mode
   "Inline blame: who last changed the current line, when, and the commit's subject, at its end."
@@ -153,13 +180,15 @@ has not answered).  The empty line after the last newline has none."
       (progn
         (setq drgnx-blame--off nil)                          ; turned on again: asked again
         (add-hook 'post-command-hook #'drgnx-blame--follow nil t)
+        (add-hook 'window-size-change-functions #'drgnx-blame--resized nil t)
         (add-hook 'after-change-functions #'drgnx-blame--forget nil t)
         (add-hook 'after-save-hook #'drgnx-blame--forget nil t)
         (add-hook 'after-revert-hook #'drgnx-blame--forget nil t)
         (add-hook 'kill-buffer-hook #'drgnx-blame--release-timer nil t)
-        (unless (timerp drgnx-blame--timer)
-          (setq drgnx-blame--timer (run-with-idle-timer drgnx-blame-delay t #'drgnx-blame--tick))))
+        (unless (drgnx-timer-active-p 'blame-tick)           ; one idle timer for every buffer
+          (drgnx-timer-start 'blame-tick drgnx-blame-delay #'drgnx-blame--tick :repeat t :idle t)))
     (remove-hook 'post-command-hook #'drgnx-blame--follow t)
+    (remove-hook 'window-size-change-functions #'drgnx-blame--resized t)
     (remove-hook 'after-change-functions #'drgnx-blame--forget t)
     (remove-hook 'after-save-hook #'drgnx-blame--forget t)
     (remove-hook 'after-revert-hook #'drgnx-blame--forget t)

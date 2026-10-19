@@ -8,14 +8,13 @@
 (require 'drgnx-modal)
 (load (expand-file-name "test/unit/isolated/mod-evil-isolated" drgnx-dir) nil t)
 
-(defvar drgnx-modules--state)
 (declare-function dired "dired")
 
 (defun drgnx-evil-flag-test--flag (root)
   "In the temp configuration under ROOT: editor/evil is chosen and has the flag no-collection."
   (write-region "(:version 1 :enabled (editor/evil) :flags ((editor/evil no-collection)))\n" nil
                 (concat root "config/modules.eld") nil 'silent)
-  (setq drgnx-modules--state nil))
+  (drgnx-config-reread 'modules))
 
 ;; dired is loaded in this process already (the Explorer needs it); ediff is not.
 (ert-deftest drgnx-evil-flag/keeps-collection-keys-out ()

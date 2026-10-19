@@ -38,63 +38,65 @@
 of the script text, or nil for \"never answers\") gives the JSON the script reports by calling `Reply'.  The
 temporary directory is private to the test."
   (declare (indent 1))
-  `(let* ((drgnx-platform-kwin-test--calls nil) (drgnx-platform-kwin-test--sync-calls nil)
-          (drgnx-platform-kwin-test--script nil) (drgnx-platform-kwin-test--script-file nil)
-          (drgnx-platform-kwin-test--reply-return nil) (drgnx-platform-kwin-test--fail-load nil)
-          (drgnx-platform-kwin-test--held-load nil)
-          (dbus-registered-objects-table (make-hash-table :test 'equal))
-          (dbus-event-error-functions nil)
-          (tmp (make-temp-file "drgnx-kwin-test" t)) (temporary-file-directory (file-name-as-directory tmp))
-          (answer ,answer) (serial 0))
-     (unwind-protect
-         (cl-letf (((symbol-function 'drgnx-platform-kwin--dbus-p) (lambda () t))
-                   ((symbol-function 'dbus-get-unique-name) (lambda (&rest _) ":1.99"))
-                   ((symbol-function 'dbus-call-method)
-                    (lambda (&rest args) (push args drgnx-platform-kwin-test--sync-calls) (error "synchronous dbus-call-method")))
-                   ((symbol-function 'dbus-call-method-asynchronously)
-                    (lambda (bus service path interface method handler &rest args)
-                      (should (eq bus :session))
-                      ;; dbus.el takes `:timeout' only right after the handler: anywhere else it is marshalled as a
-                      ;; method argument and the call fails ("Wrong type argument: D-Bus, :timeout", seen on KWin)
-                      (should (eq (car args) :timeout))
-                      (should (natnump (cadr args)))
-                      (setq args (cddr args))
-                      (setq serial (1+ serial))
-                      (setq drgnx-platform-kwin-test--calls
-                            (append drgnx-platform-kwin-test--calls (list (list service path method args serial))))
-                      (should (equal service "org.kde.KWin"))
-                      (let ((this serial))
-                        (cond
-                         ((equal method "loadScript")
-                          (setq drgnx-platform-kwin-test--script-file (car args)
-                                drgnx-platform-kwin-test--script
-                                (with-temp-buffer (insert-file-contents (car args)) (buffer-string)))
-                          (cond (drgnx-platform-kwin-test--fail-load
-                                 ;; dbus.el hands an error reply to `dbus-event-error-functions', not to the handler
-                                 (run-at-time 0 nil #'run-hook-with-args 'dbus-event-error-functions
-                                              (list 'dbus-event :session 3 this "org.freedesktop.DBus" ":1.99" "/"
-                                                    "org.freedesktop.DBus" "org.freedesktop.DBus.Error.ServiceUnknown" nil)
-                                              '(dbus-error "org.freedesktop.DBus.Error.ServiceUnknown"
-                                                           "The name org.kde.KWin was not provided")))
-                                (drgnx-platform-kwin-test--held-load
-                                 (setq drgnx-platform-kwin-test--held-load handler))
-                                (handler (run-at-time 0 nil handler 7))))
-                         ;; `start' runs every loaded script that is not running yet.  Not `run' on
-                         ;; /Scripting/Script<id>: KWin numbers a script by the count of loaded ones, so after an
-                         ;; unload two loaded scripts can share an id and one path (seen on KWin 6.7.5), and `run'
-                         ;; then runs the other call's script
-                         ((equal method "start")
-                          (should (equal path "/Scripting"))
-                          (when-let* ((json (and answer (funcall answer drgnx-platform-kwin-test--script))))
-                            ;; the script calls back into Emacs at the registered object
-                            (run-at-time 0 nil
-                                         (lambda ()
-                                           (setq drgnx-platform-kwin-test--reply-return
-                                                 (funcall (nth 3 (car (drgnx-platform-kwin-test--entries))) json))))))))
-                      (list :serial bus serial))))
-           (prog1 (progn ,@body)
-             (should-not drgnx-platform-kwin-test--sync-calls)))
-       (delete-directory tmp t))))
+  ;; `dlet': the registry is a variable of dbusbind.c, so on an Emacs built without D-Bus (macOS) it is not special
+  ;; and a `let' would bind it lexically; dbus.el would then see it void
+  `(dlet ((dbus-registered-objects-table (make-hash-table :test 'equal)))
+     (let* ((drgnx-platform-kwin-test--calls nil) (drgnx-platform-kwin-test--sync-calls nil)
+            (drgnx-platform-kwin-test--script nil) (drgnx-platform-kwin-test--script-file nil)
+            (drgnx-platform-kwin-test--reply-return nil) (drgnx-platform-kwin-test--fail-load nil)
+            (drgnx-platform-kwin-test--held-load nil)
+            (dbus-event-error-functions nil)
+            (tmp (make-temp-file "drgnx-kwin-test" t)) (temporary-file-directory (file-name-as-directory tmp))
+            (answer ,answer) (serial 0))
+       (unwind-protect
+           (cl-letf (((symbol-function 'drgnx-platform-kwin--dbus-p) (lambda () t))
+                     ((symbol-function 'dbus-get-unique-name) (lambda (&rest _) ":1.99"))
+                     ((symbol-function 'dbus-call-method)
+                      (lambda (&rest args) (push args drgnx-platform-kwin-test--sync-calls) (error "synchronous dbus-call-method")))
+                     ((symbol-function 'dbus-call-method-asynchronously)
+                      (lambda (bus service path interface method handler &rest args)
+                        (should (eq bus :session))
+                        ;; dbus.el takes `:timeout' only right after the handler: anywhere else it is marshalled as a
+                        ;; method argument and the call fails ("Wrong type argument: D-Bus, :timeout", seen on KWin)
+                        (should (eq (car args) :timeout))
+                        (should (natnump (cadr args)))
+                        (setq args (cddr args))
+                        (setq serial (1+ serial))
+                        (setq drgnx-platform-kwin-test--calls
+                              (append drgnx-platform-kwin-test--calls (list (list service path method args serial))))
+                        (should (equal service "org.kde.KWin"))
+                        (let ((this serial))
+                          (cond
+                           ((equal method "loadScript")
+                            (setq drgnx-platform-kwin-test--script-file (car args)
+                                  drgnx-platform-kwin-test--script
+                                  (with-temp-buffer (insert-file-contents (car args)) (buffer-string)))
+                            (cond (drgnx-platform-kwin-test--fail-load
+                                   ;; dbus.el hands an error reply to `dbus-event-error-functions', not to the handler
+                                   (run-at-time 0 nil #'run-hook-with-args 'dbus-event-error-functions
+                                                (list 'dbus-event :session 3 this "org.freedesktop.DBus" ":1.99" "/"
+                                                      "org.freedesktop.DBus" "org.freedesktop.DBus.Error.ServiceUnknown" nil)
+                                                '(dbus-error "org.freedesktop.DBus.Error.ServiceUnknown"
+                                                             "The name org.kde.KWin was not provided")))
+                                  (drgnx-platform-kwin-test--held-load
+                                   (setq drgnx-platform-kwin-test--held-load handler))
+                                  (handler (run-at-time 0 nil handler 7))))
+                           ;; `start' runs every loaded script that is not running yet.  Not `run' on
+                           ;; /Scripting/Script<id>: KWin numbers a script by the count of loaded ones, so after an
+                           ;; unload two loaded scripts can share an id and one path (seen on KWin 6.7.5), and `run'
+                           ;; then runs the other call's script
+                           ((equal method "start")
+                            (should (equal path "/Scripting"))
+                            (when-let* ((json (and answer (funcall answer drgnx-platform-kwin-test--script))))
+                              ;; the script calls back into Emacs at the registered object
+                              (run-at-time 0 nil
+                                           (lambda ()
+                                             (setq drgnx-platform-kwin-test--reply-return
+                                                   (funcall (nth 3 (car (drgnx-platform-kwin-test--entries))) json))))))))
+                        (list :serial bus serial))))
+             (prog1 (progn ,@body)
+               (should-not drgnx-platform-kwin-test--sync-calls)))
+         (delete-directory tmp t)))))
 
 (defun drgnx-platform-kwin-test--methods ()
   (mapcar #'caddr drgnx-platform-kwin-test--calls))

@@ -24,11 +24,13 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 | tabs | 20 next-tab switches among 20 open files | input latency |
 | explorer | focus the Explorer, 10 rows down (each one moves), back | input latency |
 | agent-typing | typing while an agent (the mock) streams a reply into the Agents tab (checked: still streaming at the end) | input latency |
+| agent-stream | the typing workload's six strings while the editor's other window shows a transcript whose running answer starts 400 kB long (not done) and the mock streams 100-character chunks onto it, 50 a second (`stream 500`; checked: still streaming at the end): a chunk costs the chunk, and only the new text is drawn | input latency |
 | cockpit-cards | typing while the Work cockpit is filtered to a job (Show Job in Work: the graph, and What needs you with four cards, three tasks and their agents; twenty decisions) and three mock agents stream, the panes following their changes (checked: still streaming at the end); until M12f `job-window`, the job's own frame | input latency |
 | code-scrolling | `<next>`×30 then `<prior>`×30 through the 12k-line fixture with sticky scroll and indent guides (when installed) on — smooth scrolling is on but pixel scrolling is a wheel's, not `<next>`'s | input latency |
 | diff-scrolling | `<next>`×30 then `<prior>`×30 through a 10k-line diff in the split layout | input latency |
 | typing-with-ghost | the typing workload with ghost text on: a mock model answers every pause at once, the pause shortened to 10 ms so each key asks and the next cancels (checked: it asked) | input latency |
 | replace-typing | 22 characters into the fixture while the Search view lists 10k matches in 100 files: the first key starts the search (checked: at least 5 keys typed while it streamed, all 10k listed) | input latency |
+| replace-retype | the same 10k matches listed and drawn, then the string `pi` typed 5 times into the Replace field: after the pause each match row is patched with its new preview, in slices, the visible rows first (checked: no full draw, the rows equal a fresh render of the view's keys) | input latency, and `:slice_ms`: the wall time of each view draw (`drgnx-view--draw-buffer`, timed by a harness-side advice; budget: max 6 ms) |
 | live-view | the typing workload's 186 characters while the Live view, beside the file, shows a mock browser's JPEG frames as wide as the view asked for (as Chrome sends them), 30 a second, each sent once the last was acknowledged (the mock runs in the same Emacs, so its message and websocket frame are made once; without ImageMagick the frames are a few bytes no decoder takes, so drawing costs less) (checked: frames were drawn) | input latency |
 | agent-settings-open | the Claude Code settings page opened and drawn (`redisplay`) against a fixture home: a 5 MB `.claude.json` (300 projects with history), 50 MCP servers and 200 skills; three runs | milliseconds until drawn (budget 150) and the processes started (budget 0: opening the page starts nothing) |
 | remote-typing | the typing workload's 186 characters in a local file while the Explorer lists a mock-method root (test/fixtures/tramp-mock.el: a real TRAMP connection to a local `sh`) and its connection is dead, the segment showing it lost (checked: nothing was sent to the remote, the connection stayed dead) | input latency |
@@ -36,6 +38,8 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 | typing-evil | the typing workload with Vim keys: `i`, the same six strings, `<escape>` (checked: typed, back in normal state) | input latency |
 | motions-evil | a 5000-line copy of the fixture, normal state, from the middle: `j`×20, `w`×20, `}`×10, `C-d`×5, `C-u`×5 (checked: point moved) | input latency |
 | explorer-evil | the explorer workload with Vim keys: `SPC E`, `j`×10, `<escape>` | input latency |
+| terminal-typing | 6 × 20 characters (`echo hello world 123`) typed into an eat terminal in the panel running `cat` (no shell, so no shell configuration; the tty echoes every key and eat draws it) | input latency |
+| terminal-output | the same 120 characters typed into the fixture while an eat terminal in the panel streams `seq 1 2000` in a loop (checked: the terminal's process is alive, its window is shown and its text changed while typing) | input latency |
 | frames | 5 new frames until drawn | frame time |
 | redisplay | 30 forced redisplays of the fixture | redisplay time |
 | startup | a drgnx daemon (isolated: its own HOME and drgnx dirs, the harness's environment allowlist) until its server answers (a daemon that never answers fails), 4 starts, the first dropped | server-ready time, modules' time |
@@ -119,12 +123,81 @@ Run `--perf` on its own: no other test tiers, agents or builds at the same time.
 | RSS | 147 MB | 218 MB |
 | key resolution (startup) | 82 ms | 20 ms |
 
+## The terminal (eat), 2026-10-18
+
+Measured on this machine at load 2.5–5 (other builds ran; each figure is the workload's median of three repeats, over
+several runs, range shown):
+
+| | input p50 | input p95 | input max | GC while typing |
+|---|---|---|---|---|
+| terminal-typing (`cat` echoing) | 1.3–1.8 ms | 3.5–4.9 ms | 4.0–12.5 ms | none |
+| terminal-output (`seq 1 2000` in a loop, in the panel) | 1.8–2.7 ms | 4.1–6.0 ms | 23–68 ms | 9–10 collections, ~46 ms each, ~460 ms in all |
+
+Budgets (`test/perf/budgets.eld`): terminal-typing p95 7 ms, max 13 ms; terminal-output p95 6 ms, max 50 ms (provisional, below). Typing into
+a terminal costs about what typing into a file does.
+
+**Where the output garbage comes from.** Eat's terminal emulation allocates about 470 bytes for every text segment it
+writes (14 conses, 3 intervals, 10 vector cells and a string in `eat--t-write`) and 56 for each line feed, whatever the
+segment's length: 110 bytes per output byte for `seq` lines, 7 for 80-column lines. A flood saturates Emacs (about 0.2 MB/s of
+`seq`), so 20 to 30 MB of garbage a second and a collection every ~2 s. drgnx's own hooks do not appear in the memory
+profile, `eat-minimum-latency`/`eat-maximum-latency` change nothing about the amount (larger values only make batches of
+250 to 600 ms), and neither does the scrollback. Cutting the garbage means rewriting eat's writer (a fast path saved about
+a quarter: not worth shadowing eat's internals).
+
+**Where the pause lands.** A collection (45 to 55 ms: the live heap, not the garbage, sets it) is run by whichever code
+allocates when the threshold is crossed. That is often the keystroke's own handling (the command, its redisplay, the
+harness recorder) or the eat batch that runs before the latency timer; the pause then counts. So while a terminal prints,
+`tools/terminal-eat` takes the collection itself, after an eat output batch, when no key was handled in the last 20 ms, no
+input is waiting (`input-pending-p`) and 85% of `gc-cons-threshold` has been allocated: it calls the GC owner's `drgnx-gc-gap`
+(below; `drgnx-gc-gap-quiet`, nil
+turns it off). The threshold is
+unchanged (a higher one only trades the pause for a longer one: 95 ms at 256 MB, and 410 MB of memory), and the natural
+collection stays as the backstop. The pause is not shortened, only kept out of a keystroke's handling; a key that arrives
+during it still waits.
+
+Measured on a machine at load 2.7 to 6.2, ten runs of terminal-output each (the workload's median of three repeats):
+
+| | max, sorted | over 50 ms |
+|---|---|---|
+| without the early collection | 8.7 16.8 23.9 24.1 25.3 39.5 41.9 53.3 54.6 54.9 | 3 of 10 |
+| with it | 5.3 5.6 5.9 5.9 22.3 24.0 30.7 36.3 40.7 49.4 | 0 of 10 |
+
+A second comparison, five runs each on a busy machine (load 3.3 to 7.8), could not tell the two apart (with: 29 6 17 36
+44; without: 26 5 38 32 35), so the evidence that the early collection helps is the mechanism (no collection overlapped a
+slow keystroke with it) and the first ten-run comparison, not a large margin.
+
+What remains is an eat output batch of 20 to 60 ms (under load) that a key waits for; slicing the batches (one chunk per
+timer) made the p95 worse, because each slice redraws the terminal. **terminal-output's max budget is provisional**: 50 ms
+is the ceiling, not a measurement (ten runs per arm, a busy machine, worst 49.4). The failures it can still give come from
+the length of eat's output batches, not from GC (DEFERRED M12e-5-1: throttle or slice eat's output without the redraw cost).
+terminal-typing's p95 is 7 ms: the worst of 16 runs with the module active (1.9 to 6.4, load 3 to 6), rounded up.
+
 ## Tuning (and why)
 
-- **GC.** Emacs' default threshold (800 kB) collected 28 times in 186 keystrokes. drgnx raises it to 512 MB while
-  starting (early-init; set back after startup even if drgnx fails to start), then uses 64 MB (`drgnx-gc-cons-threshold`) and collects after 8 s idle
-  (`drgnx-gc-idle-seconds`), where nobody waits. The price is memory: +70 MB, within budget. A threshold your own
-  init set (no longer early-init's) is kept, and with `gcmh-mode` on drgnx sets neither (gcmh does both).
+- **GC.** One owner, `core/drgnx-gc.el`. Emacs' default threshold (800 kB) collected 28 times in 186 keystrokes.
+  drgnx raises it to 512 MB while starting (early-init; set back after startup even if drgnx fails to start), then
+  uses 64 MB (`drgnx-gc-cons-threshold`). A threshold your own init set (no longer early-init's) is kept.
+  - **The idle collection** is the timer layer's key `gc-idle` (`drgnx-gc-idle-seconds`, 8 s; started again by a
+    second setup, never doubled), owner `:core`, so it is covered by the timer lint like every other timer. It
+    collects only when more than a quarter of the threshold was allocated since the last collection
+    (`drgnx-gc--consed` minus `drgnx-gc--base`, which `drgnx-gc--note` on `post-gc-hook` sets): an idle Emacs that
+    allocated nothing stays still. `drgnx-gc-mode` (on after `drgnx-gc-setup`) owns that hook function, so it is
+    one function, removed when the mode turns off.
+  - **A gap collection for producers:** `(drgnx-gc-gap)` collects, and returns t, when `drgnx-gc-gap-quiet` (0.02 s,
+    nil: never) has passed without input, no input is pending and at least `drgnx-gc-gap-share` (85%) of the
+    threshold was allocated since the last collection. A producer that finished a burst of work calls it instead
+    of waiting for the threshold to be hit in the middle of the next keystroke.
+  - **gcmh:** `drgnx-gc-mode` watches `gcmh-mode`. Turned on, gcmh does the threshold and the idle collection and
+    `gc-idle` is cancelled; turned off, drgnx's threshold, `gc-cons-percentage` 0.1 and `gc-idle` are back
+    (gcmh's own mode function sets its low threshold after the watcher ran, so `gcmh-mode-off-hook` restores
+    them too). A `let` of `gcmh-mode` changes nothing.
+  - **Batch Emacs** (the hub and workers): `drgnx-gc-batch-setup` sets 32 MB (`drgnx-gc-batch-threshold`) and
+    `gc-cons-percentage` 0.2.
+  - **Harness sessions** of the minimal configuration run at the same settings (`drgnx-ui-gc-early` and
+    `drgnx-ui-gc-setup` in `harness/init/prelude.el`); a session of an external configuration brings its own.
+- **The Outline** keeps no imenu markers: each refresh turns them into integer positions and releases them, since a
+  marker in the source buffer costs every edit of that buffer until a collection frees it. Its rows are patched by key
+  (an edit that moves definitions redraws none). Wall numbers: perf deferred.
 - **Key resolution** at startup checked every pair of bindings for prefixes and re-parsed keys each time; it now
   caches parsed keys and compares only keys in one keymap with the same first event.
 - **Harness sessions** share one native-code cache per state root, so advice trampolines (the no-prompt guard

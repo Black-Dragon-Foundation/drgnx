@@ -56,6 +56,8 @@ machine at any time.
 
 Running it again is safe: a good Emacs is kept, the checkout is fast-forwarded.
 
+Later, `drgnx update` does the same for the checkout, packages and build in one command ([Staying up to date](#staying-up-to-date)).
+
 The whole script consists of functions, called from `main` on its last line, so a truncated download
 runs nothing.
 
@@ -70,9 +72,44 @@ runs nothing.
 | `--source-dir DIR` | use an existing drgnx checkout instead of cloning |
 | `--method M` | `auto` (default), `package`, `source`, `keep` (do not touch Emacs), or `formula` (macOS only: Homebrew's `emacs-plus@31`, built from source — also on Apple silicon, beside an older `/Applications/Emacs.app`); `package` and `source` only where the platform has that recipe (Fedora and Arch packages; Fedora and Debian-family source builds) — elsewhere it stops before the plan (exit 2) |
 | `--branch B` | drgnx branch to clone (default `main`) |
+| `--config URL` | after installing, set this machine up from your configuration repository: hands over to `drgnx bootstrap --config URL` ([below](#on-a-second-machine)); an `https://` URL or a local path |
+| `--chezmoi URL` | the same with a chezmoi source repository (`drgnx bootstrap --chezmoi URL`); not together with `--config` |
+| `--identity FILE` | an age identity file for the `secrets.age` in the configuration; with `--config` or `--chezmoi` |
 
 Exit codes: 0 done, 1 a step failed (the message names it and its log), 2 unsupported platform or bad
 option (an option without its value too), 3 no terminal to ask on and no `--yes`.
+With `--config` or `--chezmoi` the exit code is `drgnx bootstrap`'s.
+
+## On a second machine
+
+One command installs drgnx and sets the machine up from your configuration repository
+([second-machine.md](second-machine.md)):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Black-Dragon-Foundation/drgnx/main/install.sh | bash -s -- --config https://example.org/you/drgnx-config.git
+```
+
+It does everything above up to the `PATH` hint, skips its own doctor and "Done" lines, and runs `drgnx bootstrap
+--config URL` instead: that clones the configuration into `~/.config/drgnx`, imports your provider keys from
+`secrets.age` into the Keychain or keyring, installs the packages from the lock, and asks before the desktop entry
+and the shell integration. The plan names this as its last line (`Then: drgnx bootstrap …`), so `--dry-run` shows
+it. `bootstrap` asks on your terminal (`/dev/tty`), even when the script itself comes down a pipe.
+
+- **The URL** is `https://…` or a local path (a clone on a USB stick, a mounted directory). `http://`, `ssh://`,
+  `git@host:path`, `file://` and a URL with a user name, password or query (`?…`, `#…`) in it are refused (exit 2): a password in a URL
+  shows in `ps` and in the shell history, so use a git credential helper for a private repository. The value is passed
+  on as one argument and never evaluated by the shell. A local path must exist.
+- **`--identity FILE`** is an age identity file that decrypts `secrets.age` without a passphrase (for a machine
+  where nobody types, for example a container). The installer only checks it is a readable file that nobody
+  else can read (`chmod 600 FILE`; it refuses otherwise, before installing anything) and passes the *path* on; it
+  never reads or prints the file. Without it, `bootstrap` asks for the bundle's passphrase on the terminal.
+- **`--chezmoi URL`** takes a chezmoi source repository instead of a drgnx configuration (your dotfiles). `bootstrap`
+  shows `chezmoi diff` first and applies only after a separate yes.
+- **`--yes`** is passed on: it confirms the announced `age`/`chezmoi` install, the key import and `chezmoi init`, and
+  nothing else. Editing a shell startup file, the desktop entry, a commit in the configuration directory, `chezmoi
+  apply` and replacing a key your keyring holds still wait for you, or are skipped with the command to run
+  ([second-machine.md](second-machine.md#one-command-drgnx-bootstrap)).
+- An existing `~/.config/drgnx` is never overwritten: `bootstrap` stops and says how to move it aside.
 
 ## Per platform
 
@@ -188,9 +225,12 @@ drgnx keeps working on 30.2 until every target platform ships 31.1. `drgnx docto
 
 Every `drgnx` subcommand (build, doctor, test, sync, …) runs in one Emacs: `$DRGNX_EMACS` if set, else the one the
 installer recorded, else `emacs` on your PATH. The installer writes the path of the Emacs it installed or kept to
-the first line of `~/.config/drgnx/emacs` (`$DRGNX_CONFIG_DIR/emacs`); this matters on macOS, where
-`/Applications/Emacs.app/Contents/MacOS/Emacs` is usually not on PATH. If that file names something that is no
-longer an executable file, drgnx falls back to PATH's `emacs`. Edit the file, or set `DRGNX_EMACS`, to use another.
+the first line of `~/.local/share/drgnx/emacs` (drgnx's data dir: `$DRGNX_DATA_DIR/emacs`, else
+`$XDG_DATA_HOME/drgnx/emacs`); this matters on macOS, where `/Applications/Emacs.app/Contents/MacOS/Emacs` is
+usually not on PATH. The path is this machine's, so it is not in `~/.config/drgnx`, which travels to your other
+machines ([second-machine.md](second-machine.md)). Older installs wrote it to `~/.config/drgnx/emacs`: that
+file is still read when the data dir has no usable record, and `drgnx doctor` asks you to move it. If neither names
+an executable file, drgnx falls back to PATH's `emacs`. Edit the file, or set `DRGNX_EMACS`, to use another.
 
 ## drgnx doctor
 
@@ -200,7 +240,9 @@ one line per check, `OK`, `WARN` or `FAIL`, with a fix under anything that is no
 pgtk Emacs; on a Mac, which has no mutter, D-Bus or pgtk, only ImageMagick). On a Mac the doctor also checks that the
 drgnx app is installed (fix: `drgnx macos-app`), that Homebrew is there (also looked for in `/opt/homebrew/bin` and
 `/usr/local/bin`, in case it is not on PATH) and that the `drgnx` command is on PATH (fix: add `~/.local/bin` to PATH in
-your shell's profile, `~/.zprofile` for zsh or, with `SHELL` unset, when it exists; else `~/.profile`) — each only a warning. With Vim keys the `modal` check warns when the stack needs evil and it is not
+your shell's profile, `~/.zprofile` for zsh or, with `SHELL` unset, when it exists; else `~/.profile`) — each only a warning. `portable-config` warns when the config dir holds a key in plain text (it names the file,
+never the key) or a machine-local file such as the old `emacs` record, and says which `projects.eld` roots are not
+cloned on this machine (info only; [second-machine.md](second-machine.md#the-doctors-check)). With Vim keys the `modal` check warns when the stack needs evil and it is not
 installed or not running (fix: `drgnx sync`, then restart, or choose another Keyboard Profile…), says when Vim waits for `drgnx sync`, and on
 GNOME notes that Alt+Space opens the window menu before drgnx sees it (Settings → Keyboard → Keyboard Shortcuts → Windows; the Leader
 Menu is on `M-SPC`, which replaces Emacs' `cycle-spacing`).
@@ -240,11 +282,63 @@ installs anything and never asks.
 | another Wayland compositor | `info river (Wayland): no adapter; drgnx leaves window placement to it` |
 | over SSH, or no display | `info no graphical session here: run drgnx doctor in your desktop's terminal to check its window manager` |
 
+## Staying up to date
+
+One command brings the install to the newest `main` on GitHub:
+
+```sh
+drgnx update
+```
+
+It works in the install's own checkout (the folder the `drgnx` command runs from), and:
+
+1. **Refuses, changing nothing**, when that folder is not a git checkout, is not on `main`, or has local changes to
+   tracked files (the message says what to do).
+2. **Fetches** `origin main` with a time limit and no prompts (no password, no credential helper, no ssh question).
+   If you are already at `main` it says so and stops.
+3. **Fast-forwards only.** If the checkout has local commits `main` does not have (it has *diverged*), it refuses and
+   names the fix: `git rebase origin/main`, or `git reset --hard origin/main` to discard them.
+4. Runs **`drgnx sync`** (packages, from the lock the new version ships) and **`drgnx build`**. If either fails, the
+   checkout goes back to the commit it was on, that commit's packages are synced again (from the cache first) and it is
+   rebuilt, and the message says how far that got. The same happens if the update is interrupted (Ctrl-C, a timeout,
+   logout) before it finished. Output of the steps is kept in `~/.local/state/drgnx/update/last.log`.
+5. Prints what changed (`old..new`, one line per commit, at most 15) and ends with "Restart drgnx to use it": it
+   never restarts or talks to a running drgnx. Restart it soon: a running drgnx still has the old code in memory, and
+   files it loads later come from the new version.
+
+`drgnx update --back` returns to the commit before the last update (and re-syncs and rebuilds); it refuses when you
+ changed the checkout's history since, so that commit is no longer part of it. It is named `--back`
+because `drgnx rollback` already exists for *packages*. A second `--back` goes forward again.
+
+### Updating by itself
+
+```sh
+drgnx update --auto on       # a daily timer
+drgnx update --auto status   # is it on, when did it last run
+drgnx update --auto off
+```
+
+On Linux this writes a systemd user timer and service (`drgnx-update.timer` / `.service` in
+`~/.config/systemd/user`): daily, with a random delay of up to an hour, `Persistent=true` (a day missed while the
+computer was off runs when it is back). On macOS it writes a launchd agent
+(`~/Library/LaunchAgents/org.blackdragonfoundation.drgnx-update.plist`) that runs once a day at a time picked when you
+turn it on. Both run `drgnx update --quiet`: no output when already current, one line on an update or a failure,
+never a prompt; the timer runs only while you are logged in; the line is in the journal (`journalctl --user -u drgnx-update`) or, on macOS, in
+`~/.local/state/drgnx/update/launchd.log`. `--auto status` also shows the last run: it is kept in
+`~/.local/state/drgnx/update/last-run` (`$XDG_STATE_HOME/drgnx/update/`; the timer uses the `XDG_STATE_HOME`,
+`DRGNX_CONFIG_DIR` and `DRGNX_EMACS` you had when you turned it on).
+
+The timer does not undo your choices: after `drgnx update --back`, or after an update that failed and was moved back,
+the timer skips that same commit and waits for a newer one; running `drgnx update` yourself takes it. A checkout with
+local changes, on another branch or diverged fails the timer's run with the same message, until you fix it.
+
 ## Uninstall
 
 ```sh
 rm -rf ~/.local/share/drgnx ~/.local/bin/drgnx "${XDG_CACHE_HOME:-$HOME/.cache}/drgnx" "${XDG_STATE_HOME:-$HOME/.local/state}/drgnx"
 ```
+
+If you turned on automatic updates, run `drgnx update --auto off` first (it removes the timer or launchd agent).
 
 Your settings (`~/.config/drgnx`) stay unless you remove them too.
 

@@ -18,6 +18,8 @@
 (require 'subr-x)
 (require 'drgnx-registry)
 (require 'drgnx-paths)
+(require 'drgnx-file)
+(require 'drgnx-config)
 (require 'drgnx-keys-modal)
 
 (defvar drgnx-keys-profiles nil
@@ -82,6 +84,41 @@ cannot be read (never an error or a prompt)."
          (format "unknown scope %s (scopes: %s)" (seq-find (lambda (s) (not (memq s drgnx-command-scopes)))
                                                            (apply #'append (mapcar #'cdr layers)))
                  (mapconcat #'symbol-name drgnx-command-scopes " ")))))
+
+;;;; keys.eld, on the config layer
+
+(defun drgnx-keys--layers-ok-p (layers)
+  "Non-nil when LAYERS is a key stack; else a `user-error' saying why, which the schema's problem shows."
+  (if-let* ((why (drgnx-keys--layers-error layers))) (user-error "%s" why) t))
+
+(defun drgnx-keys--bind-entry-p (entry)
+  "Non-nil when ENTRY is a keys.eld `:bind' entry; else a `user-error' saying why, which the schema's problem shows."
+  (if-let* ((why (drgnx-keys--entry-error entry))) (user-error "%s" why) t))
+
+(defun drgnx-keys--mac-option-p (option)
+  "Whether OPTION is what the left Option key can be set to: `characters' or `meta' (`drgnx-keys-set-mac-option')."
+  (and (memq option '(characters meta)) t))
+
+(defconst drgnx-keys--header
+  ";; drgnx keys (docs/guide/keys.md): :layers — profile stack, :bind — (ID KEY… [:map M]),\n;; :unbind — (ID…)\n"
+  "The comment a new keys.eld starts with.")
+
+(drgnx-config-define 'keys
+                     :file "keys.eld" :shape 'plist :version 1 :reload 'start :last-good t
+                     :schema '(plist
+                               (:layers (pred drgnx-keys--layers-ok-p "a profile stack such as ((emacs editing) (vscode app window))")
+                                        "The key profile stack, later layers winning; omitted: the default (VS Code)")
+                               (:pending-layers (pred drgnx-keys--layers-ok-p "a profile stack such as ((vim app editing window))")
+                                                "A stack waiting for its modal engine to be installed (drgnx sync)")
+                               (:bind (list-of (pred drgnx-keys--bind-entry-p "(ID KEY… [:map MAP])"))
+                                      "Command id → keys, winning over every layer")
+                               (:unbind (list-of symbol) "Command ids that get no key")
+                               (:mac-option (pred drgnx-keys--mac-option-p "characters or meta")
+                                            "What the left Option key does on a Mac with VS Code's keys")
+                               (:tty-fallback any "Chord → another Alt key for it, in a legacy terminal: ((\"C-S-p\" . \"M-Z\"))"))
+                     :default '(:layers nil)
+                     :header drgnx-keys--header
+                     :doc "Your key bindings: the profile stack, entries that win over it, keys taken away.")
 
 (defun drgnx-keys-load-profiles (dir)
   "Profiles from DIR/*.eld, as an alist PROFILE → plist, in file-name order."
@@ -440,29 +477,34 @@ adds `drgnx-modal-sync-engine' so a runtime switch starts and stops the engine. 
   (unless drgnx-keys-profiles
     (setq drgnx-keys-profiles (drgnx-keys-load-profiles (expand-file-name "keys" drgnx-dir)))))
 
+(defun drgnx-keys--config-changed (name)
+  "A listener on `drgnx-config-changed-functions': keys.eld, saved by hand (Open Config File…), applies at once.
+The file is the authority then, so a stack chosen earlier in this session no longer wins over its `:layers'.
+Not for drgnx's own writes: they apply what they write."
+  (when (and (eq name 'keys) drgnx-config-user-save drgnx-keys-last)
+    (setq drgnx-keys--session-layers nil)
+    (drgnx-keys-apply)
+    (when (fboundp 'drgnx-surfaces-refresh) (drgnx-surfaces-refresh))))
+
+(add-hook 'drgnx-config-changed-functions #'drgnx-keys--config-changed)
+
+(defun drgnx-keys-unload-function ()
+  "Remove the keys.eld listener (`unload-feature'); nil, so the feature unloads as usual."
+  (remove-hook 'drgnx-config-changed-functions #'drgnx-keys--config-changed)
+  nil)
+
 (defun drgnx-keys-file () (expand-file-name "keys.eld" (drgnx-user-dir)))
 
 (defun drgnx-keys-read-user ()
-  "The user's keys.eld plist (:layers :bind :unbind), nil if absent; problems, never errors."
-  (let ((file (drgnx-keys-file)))
-    (when (file-exists-p file)
-      (let ((form (drgnx-keys--read-file file)) (name (abbreviate-file-name file)))
-        (cond ((null form) nil)
-              ((not (and (proper-list-p form) (cl-evenp (length form)) (keywordp (car form))))
-               (push (format "%s: not a plist like (:layers … :bind … :unbind …)" name) drgnx-keys-problems)
-               nil)
-              (t
-               (setq form (copy-sequence form))
-               (when-let* ((why (and (plist-member form :layers) (drgnx-keys--layers-error (plist-get form :layers)))))
-                 (push (format "%s: :layers %s — using the default stack" name why) drgnx-keys-problems)
-                 (setq form (plist-put form :layers nil)))
-               (unless (proper-list-p (plist-get form :bind))
-                 (push (format "%s: :bind must be a list of (ID KEY…)" name) drgnx-keys-problems)
-                 (setq form (plist-put form :bind nil)))
-               (unless (and (proper-list-p (plist-get form :unbind)) (seq-every-p #'symbolp (plist-get form :unbind)))
-                 (push (format "%s: :unbind must be a list of command ids" name) drgnx-keys-problems)
-                 (setq form (plist-put form :unbind nil)))
-               form))))))
+  "The user's keys.eld plist (:layers :bind :unbind …) as applied (`drgnx-config-get'): the file, else its last good
+copy when the file has a mistake, else the default stack; never an error.  A file is never applied in part.  The
+mistake's text goes on `drgnx-keys-problems'.  The file is read at the first call and again by `drgnx-keys-apply'."
+  (let ((value (drgnx-config-get 'keys)))
+    (when-let* ((p (drgnx-config-problem 'keys)))
+      (cl-pushnew (format "%s: %s (line %d) — not applied: its last good copy (else the default stack) is used"
+                          (abbreviate-file-name (plist-get p :file)) (plist-get p :text) (plist-get p :line))
+                  drgnx-keys-problems :test #'equal))
+    value))
 
 (define-obsolete-function-alias 'drgnx-keys-platform #'drgnx-platform "drgnx M12a")
 
@@ -595,6 +637,7 @@ Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolut
   (setq drgnx-keys-problems nil)
   (condition-case err
       (progn
+        (drgnx-config-reread 'keys)                     ; keys.eld is read at start and at each apply
         (drgnx-keys--ensure-profiles)
         ;; Restore first: resolution then sees Emacs' own bindings, not drgnx's previous ones.
         (drgnx-keys--restore)
@@ -733,17 +776,13 @@ Vim keys left waiting for `drgnx sync' (`:pending-layers' in keys.eld, read as d
   "Write the conflicts and problems to the state dir for `drgnx doctor' (never prompts).  The conflicts end with the
 modal core's notes (`drgnx-modal-default-notes'); `:modal' says which engine the stack needs and whether it runs."
   (condition-case err
-      (let* ((file (expand-file-name "keys-report.eld" (drgnx-state-dir)))
-             (tmp (progn (make-directory (file-name-directory file) t)
-                         (make-temp-file (expand-file-name ".keys-report-" (file-name-directory file))))))
-        (with-temp-file tmp
-          (prin1 (list :time (format-time-string "%FT%T%z") :layers (plist-get drgnx-keys-last :layers)
-                       :conflicts (append (drgnx-keys-conflict-lines)
-                                          (and (fboundp 'drgnx-modal-default-notes) (drgnx-modal-default-notes)))
-                       :problems (plist-get drgnx-keys-last :problems)
-                       :modal (drgnx-keys--report-modal) :leader-menu-key (drgnx-keys--leader-menu-key))
-                 (current-buffer)))
-        (rename-file tmp file t))
+      (drgnx-file-write (expand-file-name "keys-report.eld" (drgnx-state-dir))
+                        (list :time (format-time-string "%FT%T%z") :layers (plist-get drgnx-keys-last :layers)
+                              :conflicts (append (drgnx-keys-conflict-lines)
+                                                 (and (fboundp 'drgnx-modal-default-notes) (drgnx-modal-default-notes)))
+                              :problems (plist-get drgnx-keys-last :problems)
+                              :modal (drgnx-keys--report-modal) :leader-menu-key (drgnx-keys--leader-menu-key))
+                        :fsync nil)
     (error (push (format "cannot write the key report: %s" (error-message-string err))
                  (plist-get drgnx-keys-last :problems)))))
 
@@ -764,45 +803,10 @@ French, … layouts; Option+← / → still move by word) or `meta' — in keys.
   (drgnx-keys--save-key :mac-option option)
   (when drgnx-keys-last (drgnx-keys-apply)))
 
-(defun drgnx-keys--save-key (key data &optional file header)
-  "Write DATA as KEY's value into keys.eld (FILE: another .eld, started with HEADER): only that value changes;
-comments and layout stay."
-  (let* ((file (or file (drgnx-keys-file)))
-         (value (prin1-to-string data))
-         (text (with-temp-buffer
-                 (if (file-exists-p file)
-                     (insert-file-contents file)
-                   (insert (or header (concat ";; drgnx keys (docs/guide/keys.md): :layers — profile stack, :bind — (ID KEY… [:map M]),\n"
-                                              ";; :unbind — (ID…)\n"))))
-                 (set-syntax-table emacs-lisp-mode-syntax-table)
-                 (goto-char (point-min))
-                 (forward-comment (buffer-size))
-                 (if (eobp)
-                     (insert (format "(%s " key) value ")\n")
-                   (let ((start (point)) found)
-                     (unless (and (eq (char-after) ?\() (ignore-errors (scan-sexps start 1)))
-                       (user-error "%s cannot be read — fix it first (it was not changed)" (abbreviate-file-name file)))
-                     (down-list 1)
-                     (while (and (not found) (progn (forward-comment (buffer-size)) (not (eq (char-after) ?\)))))
-                       (let ((k (read (current-buffer))))
-                         (forward-comment (buffer-size))
-                         (let ((vbeg (point)))
-                           (forward-sexp 1)
-                           (when (eq k key)
-                             (delete-region vbeg (point))
-                             (goto-char vbeg)
-                             (insert value)
-                             (setq found t)))))
-                     (unless found
-                       (goto-char (1+ start))
-                       (insert (format "%s " key) value "\n "))))
-                 (buffer-string)))
-         (tmp (progn (make-directory (file-name-directory file) t)
-                     (make-temp-file (expand-file-name ".keys-" (file-name-directory file))))))
-    ;; A temp file renamed over keys.eld: writing it directly could ask about a stale buffer.
-    (with-temp-file tmp (insert text))
-    (set-file-modes tmp #o644)
-    (rename-file tmp file t)))
+(defun drgnx-keys--save-key (key data)
+  "Write DATA as KEY's value into keys.eld: only that value changes; comments, layout and the other keys stay.
+A keys.eld with a mistake is refused (`drgnx-config-refused'), not written."
+  (drgnx-config-set 'keys key data))
 
 (declare-function drgnx-modal-prepare "drgnx-modal-choose")
 (declare-function drgnx-modal-wait-text "drgnx-modal-choose")
@@ -819,6 +823,7 @@ sync and the next start.  Until then the current stack stays and the message say
                      t))
   (unless (assoc name drgnx-keys-presets)
     (user-error "No keyboard profile %S (profiles: %s)" name (mapconcat #'car drgnx-keys-presets ", ")))
+  (drgnx-config-ensure-writable 'keys)                  ; a keys.eld with a mistake: refused before anything changes
   (require 'drgnx-modal-choose)
   (let* ((layers (cdr (assoc name drgnx-keys-presets)))
          (ready (drgnx-modal-prepare layers interactive)))

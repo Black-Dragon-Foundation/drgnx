@@ -31,8 +31,10 @@
 (require 'diff-mode)                     ; its faces only: the pane is no diff-mode buffer
 (require 'filenotify)
 (require 'drgnx-registry)
+(require 'drgnx-timer)
 (require 'drgnx-cockpit-model)
 (require 'drgnx-panes)
+(eval-when-compile (require 'drgnx-agents))     ; its session struct's places (`setf' of a mode)
 
 (declare-function drgnx-cockpit-sessions "drgnx-cockpit")
 (declare-function drgnx-cockpit--open-task "drgnx-cockpit")
@@ -110,9 +112,6 @@ reported); a file already listed is diffed again at once.")
 (defvar-local drgnx-cockpit-edits--queue nil "This round's files waiting for git.")
 (defvar-local drgnx-cockpit-edits--running 0 "This round's git processes.")
 (defvar-local drgnx-cockpit-edits--ready nil "Diffs back from git, not shown yet: ((FILE . RESULT)…), newest first.")
-(defvar-local drgnx-cockpit-edits--timer nil "The tick on its way: one at a time.")
-(defvar-local drgnx-cockpit-edits--flush-timer nil "Shows the diffs back so far while a long round runs.")
-(defvar-local drgnx-cockpit-edits--check-timer nil "The repeating look at the store (`drgnx-cockpit-edits--check').")
 (defvar-local drgnx-cockpit-edits--watches nil "Hash folder → its file watch.")
 (defvar-local drgnx-cockpit-edits--store-key nil "The store's data version and change count at the last look.")
 (defvar-local drgnx-cockpit-edits--event-id 0 "The last event the pane read: edits reported after it are new.")
@@ -324,14 +323,17 @@ round, so the next one can start."
 
 (defun drgnx-cockpit-edits--schedule (&optional delay)
   "Patch this pane within DELAY seconds (`drgnx-cockpit-edits-delay'): one tick however many calls come meanwhile.  A
-tick set later (a listing waiting for its turn) is brought forward."
-  (let ((delay (or delay drgnx-cockpit-edits-delay)))
-    (when (and (timerp drgnx-cockpit-edits--timer)
-               (> (float-time (timer--time drgnx-cockpit-edits--timer)) (+ (float-time) delay)))
-      (cancel-timer drgnx-cockpit-edits--timer)
-      (setq drgnx-cockpit-edits--timer nil))
-    (unless (timerp drgnx-cockpit-edits--timer)
-      (setq drgnx-cockpit-edits--timer (run-at-time delay nil #'drgnx-cockpit-edits--tick (current-buffer))))))
+listing waiting for its turn has a timer of its own (`drgnx-cockpit-edits--schedule-turn'), so it never holds this
+one back."
+  (let ((buffer (current-buffer)))
+    (drgnx-timer-soon (cons 'cockpit-edits-tick buffer) (or delay drgnx-cockpit-edits-delay) #'drgnx-cockpit-edits--tick
+                      :args (list buffer) :owner buffer)))
+
+(defun drgnx-cockpit-edits--schedule-turn (wait)
+  "Tick this pane in WAIT seconds: the listing's turn comes then (a second call moves it)."
+  (let ((buffer (current-buffer)))
+    (drgnx-timer-start (cons 'cockpit-edits-turn buffer) wait #'drgnx-cockpit-edits--tick
+                       :args (list buffer) :owner buffer)))
 
 (defun drgnx-cockpit-edits--touched (file)
   "FILE (relative to the agent's folder) changed: diff it again soon, or list the files again when it is not listed."
@@ -427,7 +429,6 @@ is stale; a round still running goes first."
   (drgnx-cockpit-edits--in-round
    buffer
    (lambda ()
-     (setq drgnx-cockpit-edits--timer nil)
      (cond
       ((not (drgnx-cockpit-edits--visible-p)) (setq drgnx-cockpit-edits--stale t))
       (drgnx-cockpit-edits--busy (drgnx-cockpit-edits--schedule))
@@ -436,7 +437,7 @@ is stale; a round still running goes first."
               (list (and drgnx-cockpit-edits--list-dirty (<= wait 0)))
               (files (hash-table-keys drgnx-cockpit-edits--dirty)))
          (setq drgnx-cockpit-edits--stale nil)
-         (when (and drgnx-cockpit-edits--list-dirty (not list)) (drgnx-cockpit-edits--schedule wait))   ; its turn comes
+         (when (and drgnx-cockpit-edits--list-dirty (not list)) (drgnx-cockpit-edits--schedule-turn wait))   ; its turn comes
          (when (or list files)
            (clrhash drgnx-cockpit-edits--dirty)
            (when list (setq drgnx-cockpit-edits--list-dirty nil drgnx-cockpit-edits--listed-at (float-time)))
@@ -532,18 +533,16 @@ while a long one runs)."
   (push (cons file r) drgnx-cockpit-edits--ready)
   (drgnx-cockpit-edits--pump)
   (cond ((and (null drgnx-cockpit-edits--queue) (zerop drgnx-cockpit-edits--running)) (drgnx-cockpit-edits--finish))
-        ((not (timerp drgnx-cockpit-edits--flush-timer))
-         (setq drgnx-cockpit-edits--flush-timer
-               (run-at-time drgnx-cockpit-edits-delay nil #'drgnx-cockpit-edits--in-round (current-buffer) #'drgnx-cockpit-edits--flush)))))
+        (t (drgnx-timer-soon (cons 'cockpit-edits-flush (current-buffer)) drgnx-cockpit-edits-delay
+                             #'drgnx-cockpit-edits--in-round :args (list (current-buffer) #'drgnx-cockpit-edits--flush)
+                             :owner (current-buffer)))))
 
 (defun drgnx-cockpit-edits--flush ()
-  (setq drgnx-cockpit-edits--flush-timer nil)
   (drgnx-cockpit-edits--apply-diffs))
 
 (defun drgnx-cockpit-edits--finish ()
   "The round ended: show its diffs, watch the folders now listed, and start the next round when changes came meanwhile."
-  (when (timerp drgnx-cockpit-edits--flush-timer) (cancel-timer drgnx-cockpit-edits--flush-timer))
-  (setq drgnx-cockpit-edits--flush-timer nil)
+  (drgnx-timer-cancel (cons 'cockpit-edits-flush (current-buffer)))
   (drgnx-cockpit-edits--apply-diffs)
   (setq drgnx-cockpit-edits--busy nil)
   (unless drgnx-cockpit-edits--loaded
@@ -601,10 +600,7 @@ while a long one runs)."
     (when drgnx-cockpit-edits--stale (drgnx-cockpit-edits--schedule 0))))
 
 (defun drgnx-cockpit-edits--unwatch ()
-  "The pane is killed (its `kill-buffer-hook'): its timers and file watches go."
-  (dolist (tm (list drgnx-cockpit-edits--timer drgnx-cockpit-edits--check-timer drgnx-cockpit-edits--flush-timer))
-    (when (timerp tm) (cancel-timer tm)))
-  (setq drgnx-cockpit-edits--timer nil drgnx-cockpit-edits--check-timer nil drgnx-cockpit-edits--flush-timer nil)
+  "The pane is killed (its `kill-buffer-hook'): its file watches go (the buffer owns its timers)."
   (when (hash-table-p drgnx-cockpit-edits--watches)
     (maphash (lambda (_ w) (ignore-errors (file-notify-rm-watch w))) drgnx-cockpit-edits--watches)
     (clrhash drgnx-cockpit-edits--watches))
@@ -697,9 +693,9 @@ follows the agent's edits while it lives (when it shows)."
                 drgnx-cockpit-edits--event-id (or (caar (sqlite-select (drgnx-work-db) "select max(id) from event")) 0))
           (ignore-errors (drgnx-cockpit-edits--read-marks))
           (drgnx-cockpit-edits--header-line)
-          (setq drgnx-cockpit-edits--check-timer
-                (run-with-timer drgnx-cockpit-edits-check-interval drgnx-cockpit-edits-check-interval
-                                #'drgnx-cockpit-edits--check (current-buffer)))
+          (drgnx-timer-start (cons 'cockpit-edits-check (current-buffer)) drgnx-cockpit-edits-check-interval
+                             #'drgnx-cockpit-edits--check :repeat drgnx-cockpit-edits-check-interval
+                             :args (list (current-buffer)) :owner (current-buffer))
           (drgnx-cockpit-edits--schedule 0)
           (current-buffer)))))
 
@@ -877,9 +873,9 @@ matches the diff's, which is what the merge gate compares."
     (cond
      ((and live (not (drgnx-agent-session-remote s)))
       (if (not (eq mode 'interrupt)) (drgnx-agents-send s text)
-        (setf (cl-struct-slot-value 'drgnx-agent-session 'mode s) 'queue)
+        (setf (drgnx-agent-session-mode s) 'queue)
         (unwind-protect (drgnx-agents-send s text)
-          (setf (cl-struct-slot-value 'drgnx-agent-session 'mode s) mode)))
+          (setf (drgnx-agent-session-mode s) mode)))
       'session)
      ((and live (not (eq mode 'interrupt))) (drgnx-agents-send s text) 'session)
      (t
