@@ -136,8 +136,8 @@ and strings are not code and never count.  Each name is listed once."
 ;;;; One frame classifier
 ;; `drgnx-state-frame-kind' (core/drgnx-frame-kind.el) is the only place that decides what a frame is.  No other
 ;; library compares a terminal's name with "initial_terminal".  The rows below are sites not moved yet; each
-;; names the task that moves it and the most strings it may still hold.  The count can only fall: a task
-;; that migrates its sites lowers or removes its row, a task that has not merged yet still passes.
+;; names the task that moves it and how many strings it still holds.  A library with more fails, and so does
+;; one with fewer: a task that migrates its sites lowers or removes its row.
 
 (defconst drgnx-lint-state--classifier-home "core/drgnx-frame-kind.el"
   "The one library that may hold the terminal-name test.")
@@ -148,7 +148,7 @@ and strings are not code and never count.  Each name is listed once."
     ("wb/drgnx-persist.el" 1 "Task 15")
     ("core/drgnx-timer.el" 1 "the debugger test: a core library no store task owns")
     ("core/drgnx-modal-choose.el" 1 "the daemon's own terminal cannot ask: a core library no store task owns"))
-  "Rows (FILE MOST WHO): FILE, relative to the checkout root, may still hold MOST of the string.")
+  "Rows (FILE COUNT WHO): FILE, relative to the checkout root, still holds COUNT of the string.")
 
 (defun drgnx-lint-state--count-string (form string)
   "How many times the string STRING is an atom of FORM."
@@ -176,6 +176,10 @@ and strings are not code and never count.  Each name is listed once."
       (let ((most (if (equal (car c) drgnx-lint-state--classifier-home) most-positive-fixnum
                     (or (nth 1 (assoc (car c) allowed)) 0))))
         (when (> (cdr c) most) (push (format "%s: %d" (car c) (cdr c)) bad))))
+    ;; the count can only fall, and a row says so: a library under its row's count has a row to lower
+    (dolist (row allowed)
+      (let ((n (or (cdr (assoc (car row) found)) 0)))
+        (when (< n (nth 1 row)) (push (format "%s: %d, row says %d" (car row) n (nth 1 row)) bad))))
     (nreverse bad)))
 
 (ert-deftest drgnx-lint/one-frame-classifier ()
@@ -184,11 +188,15 @@ and strings are not code and never count.  Each name is listed once."
                  nil)))
 
 (ert-deftest drgnx-lint/the-classifier-lint-sees-a-second-classifier ()
-  (let ((found '(("core/drgnx-frame-kind.el" . 1) ("modules/ui/drgnx-x.el" . 1) ("core/drgnx-session.el" . 3))))
-    (should (equal (drgnx-lint-state--classifier-excess found drgnx-lint-state--classifier-allowed)
-                   '("modules/ui/drgnx-x.el: 1" "core/drgnx-session.el: 3")))
-    (should (equal (drgnx-lint-state--classifier-excess '(("core/drgnx-session.el" . 1)) drgnx-lint-state--classifier-allowed)
-                   nil))
+  (let* ((allowed '(("core/a.el" 2 "Task X") ("core/b.el" 1 "Task Y")))
+         (found '(("core/drgnx-frame-kind.el" . 1) ("modules/ui/drgnx-x.el" . 1) ("core/a.el" . 3) ("core/b.el" . 1))))
+    ;; a new place, and a row exceeded, fail
+    (should (equal (drgnx-lint-state--classifier-excess found allowed) '("modules/ui/drgnx-x.el: 1" "core/a.el: 3")))
+    ;; exactly the rows (and the home) pass
+    (should-not (drgnx-lint-state--classifier-excess '(("core/drgnx-frame-kind.el" . 4) ("core/a.el" . 2) ("core/b.el" . 1)) allowed))
+    ;; fewer than a row says, or none, fail: the row is lowered or removed
+    (should (equal (drgnx-lint-state--classifier-excess '(("core/a.el" . 1) ("core/b.el" . 1)) allowed) '("core/a.el: 1, row says 2")))
+    (should (equal (drgnx-lint-state--classifier-excess '(("core/a.el" . 2)) allowed) '("core/b.el: 0, row says 1")))
     (drgnx-lint-state--with-source "(defun a (f) (equal (terminal-name f) \"initial_terminal\")) ; \"initial_terminal\"\n(defun b () \"the initial_terminal\")"
       (should (equal (drgnx-lint-state--count-string (car (drgnx-lint-state--forms file)) "initial_terminal") 1))
       (should (equal (drgnx-lint-state--count-string (cadr (drgnx-lint-state--forms file)) "initial_terminal") 0)))))

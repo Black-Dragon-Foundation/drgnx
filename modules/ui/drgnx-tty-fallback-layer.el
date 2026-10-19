@@ -64,7 +64,9 @@ frame."
 (defun drgnx-tty-fallback-install (frame &optional caps)
   "Give FRAME's terminal the fallback layer when it needs it (`drgnx-tty-fallback--wanted-p'), from CAPS (default
 its terminal parameter `drgnx-tty-caps'); take it off otherwise (kkp turned on later).  Rebuilt from the active
-profile each time.  Returns non-nil when the layer is on.  Never prompts: the hint is a message."
+profile each time.  Returns non-nil when the layer is on.  Never prompts: the hint is a message.
+A child frame (31.1) stands for the top-level frame of its terminal."
+  (while (and (frame-live-p frame) (frame-parent frame)) (setq frame (frame-parent frame)))
   (let* ((term (frame-terminal frame))
          (caps (or caps (terminal-parameter term 'drgnx-tty-caps))))
     (drgnx-tty-fallback-remove term)
