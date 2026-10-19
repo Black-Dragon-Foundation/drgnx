@@ -45,7 +45,7 @@
                 :name "drgnx-config-doc" :buffer buf :noquery t :stderr (generate-new-buffer " *config-doc-err*" t)
                 :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
                                "--eval" "(setq load-prefer-newer t)"
-                               "-L" "core" "-L" "wb" "-L" "harness" "-L" "modules/tools" "-l" "drgnx-config-doc"
+                               "-L" "core" "-L" "wb" "-L" "harness" "-L" "modules/tools" "-L" "modules/editor" "-l" "drgnx-config-doc"
                                "--eval" (prin1-to-string form))))
          (deadline (+ (float-time) 30)))
     (while (and (process-live-p proc) (< (float-time) deadline)) (accept-process-output proc 0.05))

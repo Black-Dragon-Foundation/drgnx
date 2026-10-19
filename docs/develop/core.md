@@ -327,7 +327,7 @@ name, its file, folder, format, reload rule, what happens on a mistake, its `:do
 (or a new file), regenerate it and commit it with the change:
 
 ```sh
-emacs --batch -Q -L core -L wb -L harness -L modules/tools -l drgnx-config-doc \
+emacs --batch -Q -L core -L wb -L harness -L modules/tools -L modules/editor -l drgnx-config-doc \
   --eval '(drgnx-config-doc-regenerate "docs/reference/config.md")'
 ```
 
