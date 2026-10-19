@@ -249,9 +249,11 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
       (delete-directory dir t))))
 
 (ert-deftest drgnx-session/no-window-in-batch ()
-  ;; A daemon's (or batch Emacs's) own terminal frame is not a window.
-  (should-not (drgnx-session-gui-frame-p))
-  (should-not (drgnx-session--windows)))
+  ;; A daemon's own terminal frame is not a window (batch Emacs counts as a terminal workbench, so the test says it
+  ;; is not batch: the classifier then calls the frame `initial').
+  (let ((noninteractive nil))
+    (should-not (drgnx-session-gui-frame-p))
+    (should-not (drgnx-session--windows))))
 
 (defun drgnx-session-test--repo (root name file)
   "A git repo NAME under ROOT holding FILE; its directory."
@@ -358,5 +360,15 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
         (cl-letf (((symbol-function 'drgnx-terminal-eat-refresh-query-flags) (lambda () (error "eat is gone"))))
           (should (memq p (drgnx-session--running-programs))))
       (delete-process p))))
+
+
+(ert-deftest drgnx-session/windows-ask-the-classifier ()
+  ;; the frames that count as windows are the visible workbench frames (gui or tty), whatever else the frame list holds
+  (let ((kinds '((kx-gui . gui) (kx-tty . tty) (kx-initial . initial) (kx-child . child) (kx-other . other)
+                 (kx-hidden . tty))))
+    (cl-letf (((symbol-function 'frame-list) (lambda () '(kx-hidden kx-other kx-child kx-initial kx-tty kx-gui)))
+              ((symbol-function 'drgnx-state-frame-kind) (lambda (f) (cdr (assq f kinds))))
+              ((symbol-function 'frame-visible-p) (lambda (f) (not (eq f 'kx-hidden)))))
+      (should (equal (drgnx-session--windows) '(kx-tty kx-gui))))))
 
 ;;; session-test.el ends here

@@ -10,6 +10,7 @@
 (require 'drgnx-platform)
 (require 'drgnx-monitors)
 (require 'drgnx-persist)
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (unless (fboundp 'drgnx-persist-test--graphical)    ; its helpers: a restore in a batch frame
   (load (expand-file-name "wb-persist-test.el" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (fboundp 'drgnx-platform-test--deftest)
@@ -706,6 +707,33 @@ pgtk Emacs does: its geometry only, no name, make, model or serial)."
                               (drgnx-monitors-test--with-fake ()
                                 (set-frame-parameter nil 'drgnx-monitor '(:number 1 :label "1"))
                                 (should-not (drgnx-monitors--state))))
+
+
+;;;; The store sees a monitor written (Task 16)
+
+(defun drgnx-monitors-test--stored (frame)
+  "The monitor the store has recorded for FRAME, without observing anything."
+  (drgnx-state--fr-monitor (drgnx-state--record frame)))
+
+(drgnx-platform-test--deftest drgnx-monitors/a-monitor-written-is-seen-at-once ()
+                              ;; the store compares `drgnx-monitor' only when it observes: every writer observes the frame
+                              (drgnx-monitors-test--with-fake (:monitors drgnx-monitors-test--twins :current 1)
+                                (drgnx-test-with-state
+                                  (drgnx-state-sync frame)
+                                  (should-not (drgnx-monitors-test--stored frame))
+                                  (drgnx-monitors--set-monitor frame '(:name "DP-9"))      ; after a move
+                                  (should (equal (drgnx-monitors-test--stored frame) '(:name "DP-9")))
+                                  (drgnx-monitors--fetch-monitor frame)                    ; the adapter's answer
+                                  (should (drgnx-platform-test--await
+                                           (lambda () (equal (plist-get (drgnx-monitors-test--stored frame) :serial) "BBB")))))))
+
+(drgnx-platform-test--deftest drgnx-monitors/an-emacs-answer-resolved-against-the-list-is-seen-at-once ()
+                              (drgnx-monitors-test--with-fake (:monitors drgnx-monitors-test--twins :current 1 :emacs-answer t)
+                                (drgnx-test-with-state
+                                  (drgnx-state-sync frame)
+                                  (drgnx-monitors--fetch-monitor frame)
+                                  (should (drgnx-platform-test--await
+                                           (lambda () (equal (plist-get (drgnx-monitors-test--stored frame) :serial) "BBB")))))))
 
 (provide 'wb-monitors-test)
 ;;; wb-monitors-test.el ends here
