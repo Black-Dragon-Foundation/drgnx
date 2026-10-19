@@ -143,9 +143,12 @@ a new id gets a line where its entry stands; a line out of order is deleted and 
 (defun drgnx-agents-ui--list-print (view)
   "SYNC of `agents-list': update the list's lines in place, each window keeping its point and start on their
 session.  Then the view's START goes to the end: the view has no rows, and the text is tabulated-list's."
-  (drgnx-view-with-kept-windows (:key-at #'drgnx-agents-ui--id-at :pos-of #'drgnx-agents-ui--pos-of)
-    (drgnx-agents-ui--update-lines))
-  (set-marker (drgnx-view--start view) (point-max)))
+  (unwind-protect
+      (drgnx-view-with-kept-windows (:key-at #'drgnx-agents-ui--id-at :pos-of #'drgnx-agents-ui--pos-of)
+        (drgnx-agents-ui--update-lines))
+    ;; even when the update signalled: the self-check must not take the lines for foreign text and delete them
+    (set-marker (drgnx-view--start view) (point-max))
+    (set-buffer-modified-p nil)))
 
 (defun drgnx-agents-ui--list-view ()
   "The view of the Agents list, or nil (no list, or it was made without the module)."
