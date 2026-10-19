@@ -619,6 +619,14 @@ windows once and tells subscribers what changed; a module subscribes to the even
 `(:file F :what W :why STRING :until TASK)`: the sites that exist today, each with the task that moves it. The task
 that moves a site deletes its line, because `drgnx-lint/no-stale-allowlist-entries` fails on an entry that matches
 nothing. A new site is not added to the list; it subscribes instead.
+
+The Live view is such a consumer (`drgnx-live--subscribe`, from the module's setup): `drgnx-live--shown-again` on
+`windows-changed` and `drgnx-live--resized` on `pane-resized`, both on the `idle` lane. Each takes the windows of the
+event's frame that show a Live view (not only the window the event names: an idle subscriber gets one event per
+frame and kind, the last, so a divider moved between two editor windows names only one of them), remembers the window
+in `drgnx-live--seen-window`, and acts: resume the screencast, or restart it at the window's width.
+`drgnx-live--window` returns the remembered window while it is live and still shows the view, else the first window
+of `drgnx-state-windows` that does.
 ### A run's end
 
 A module's setup run has a token (`drgnx-modules--runs`). It ends when the module is turned off, when its setup is
