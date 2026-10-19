@@ -6,22 +6,24 @@
 (load (expand-file-name "modules/editor/drgnx-editing" drgnx-dir) nil t)
 
 (defmacro drgnx-edit-clip-test--keys (layers &rest body)
-  "BODY with the editing module's commands registered and the key LAYERS applied (undone after)."
+  "BODY with the editing module's commands registered and the key LAYERS applied (undone after), on Linux:
+on a Mac the VS Code profile's copy, cut and paste are Cmd keys (`drgnx-editing/copy-keys-on-a-mac-are-cmd')."
   (declare (indent 1))
-  `(let* ((dir (make-temp-file "drgnx-edit-clip" t))
-          (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" dir) (concat "XDG_STATE_HOME=" dir "/state"))
-                                       process-environment))
-          (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-          (drgnx-keys--applied nil) (drgnx-keys--session-layers ,layers) (drgnx-keys-profiles nil)
-          (drgnx-keys-problems nil) (drgnx-keys-last nil)
-          (emulation-mode-map-alists emulation-mode-map-alists) (drgnx-editing-prefix-delay 0.05)
-          (kill-ring nil) (kill-ring-yank-pointer nil) (interprogram-cut-function nil) (interprogram-paste-function nil))
-     (unwind-protect
-         (progn (funcall (plist-get (alist-get 'editor/editing drgnx-modules--table) :setup))
-                (drgnx-keys-apply)
-                ,@body)
-       (drgnx-keys--restore)
-       (delete-directory dir t))))
+  `(cl-letf (((symbol-function 'drgnx-platform) (lambda () 'linux)))
+     (let* ((dir (make-temp-file "drgnx-edit-clip" t))
+            (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" dir) (concat "XDG_STATE_HOME=" dir "/state"))
+                                         process-environment))
+            (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
+            (drgnx-keys--applied nil) (drgnx-keys--session-layers ,layers) (drgnx-keys-profiles nil)
+            (drgnx-keys-problems nil) (drgnx-keys-last nil)
+            (emulation-mode-map-alists emulation-mode-map-alists) (drgnx-editing-prefix-delay 0.05)
+            (kill-ring nil) (kill-ring-yank-pointer nil) (interprogram-cut-function nil) (interprogram-paste-function nil))
+       (unwind-protect
+           (progn (funcall (plist-get (alist-get 'editor/editing drgnx-modules--table) :setup))
+                  (drgnx-keys-apply)
+                  ,@body)
+         (drgnx-keys--restore)
+         (delete-directory dir t)))))
 
 (defmacro drgnx-edit-clip-test--buffer (text &rest body)
   "BODY in the selected window showing a fresh buffer with TEXT (point at the start)."

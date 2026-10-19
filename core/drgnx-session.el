@@ -14,11 +14,13 @@
 ;;; Code:
 (require 'seq)
 (require 'drgnx-paths)
+(require 'drgnx-config)
 (require 'drgnx-registry)
 
 (defvar server-name)
 (defvar server-process)
 (defvar server-socket-dir)
+(defvar server-client-instructions)
 (declare-function server-running-p "server")
 (declare-function drgnx-explorer-roots "drgnx-explorer")
 (declare-function drgnx-explorer-set-roots "drgnx-explorer")
@@ -36,23 +38,26 @@ Preferences: Keep drgnx Running in the Background, which remembers it (session.e
 
 ;;;; The choice, remembered
 
-(defun drgnx-session-file () (expand-file-name "session.eld" (drgnx-user-dir)))
+(drgnx-config-define 'session
+                     :file "session.eld" :shape 'plist :version 1 :reload 'start :last-good t
+                     :schema '(plist (:keep-running boolean "Keep drgnx running when its last window closes"))
+                     :default nil
+                     :doc "Whether drgnx keeps running when its last window closes (read at every start).")
+
+(defun drgnx-session-file () (drgnx-config-file 'session))
 
 (defun drgnx-session-load ()
-  "Set `drgnx-keep-running' from session.eld when it holds the choice; anything else leaves it alone."
-  (let ((data (and (file-readable-p (drgnx-session-file))
-                   (ignore-errors (with-temp-buffer (insert-file-contents (drgnx-session-file)) (read (current-buffer)))))))
+  "Set `drgnx-keep-running' from session.eld when it holds the choice; anything else leaves it alone.
+A file with a mistake gives its last good copy, else nothing (`drgnx-config-get')."
+  (let ((data (drgnx-config-get 'session)))
     (when (and (proper-list-p data) (plist-member data :keep-running))
       (setq drgnx-keep-running (and (plist-get data :keep-running) t)))))
 
 (defun drgnx-session-set-keep-running (keep)
-  "Keep drgnx running when its last window closes (KEEP non-nil) or quit then; saved in session.eld."
+  "Keep drgnx running when its last window closes (KEEP non-nil) or quit then; saved in session.eld.
+Only that key changes in the file; a file with a mistake is refused (`drgnx-config-refused'), never replaced."
   (setq drgnx-keep-running (and keep t))
-  (let ((dir (file-name-directory (drgnx-session-file))))
-    (make-directory dir t)
-    (let ((tmp (make-temp-file (expand-file-name ".session-" dir))))
-      (with-temp-file tmp (prin1 (list :keep-running drgnx-keep-running) (current-buffer)) (insert "\n"))
-      (rename-file tmp (drgnx-session-file) t)))
+  (drgnx-config-set 'session :keep-running drgnx-keep-running)
   drgnx-keep-running)
 
 (defun drgnx-session-toggle-keep-running ()
@@ -203,6 +208,7 @@ Elsewhere — a terminal frame — as in Emacs; ARG is then passed on."
 and `C-x 5 0' (remapped).  On macOS the server socket ignores XDG_RUNTIME_DIR: a shell exports it, Finder does
 not, and `drgnx PATH' (bin/drgnx runs emacsclient without it there) must find the same socket from both."
   (drgnx-session-load)
+  (setq server-client-instructions nil)         ; every `emacsclient -c' frame said "When done with a buffer, type C-x 5 0"
   (define-key special-event-map [delete-frame] #'drgnx-session-close-frame)
   (define-key global-map [remap save-buffers-kill-terminal] #'drgnx-session-kill-terminal)
   (define-key global-map [remap delete-frame] #'drgnx-session-delete-frame)

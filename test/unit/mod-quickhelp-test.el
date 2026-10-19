@@ -8,20 +8,22 @@
 (defmacro drgnx-quickhelp-test--with (&rest body)
   "BODY with the quick help's state, hooks and commands kept away from the rest of the test process; one window."
   (declare (indent 0))
-  `(let ((drgnx-quickhelp--request 0) (drgnx-quickhelp--timer nil) (drgnx-quickhelp--origin nil)
+  `(let ((drgnx-quickhelp--request 0) (drgnx-quickhelp--origin nil)
          (drgnx-quickhelp--strip nil) (drgnx-quickhelp--showing nil) (emulation-mode-map-alists emulation-mode-map-alists)
          (drgnx-modal-front-alists drgnx-modal-front-alists)
-         (drgnx-quickhelp--card-up nil) (drgnx-quickhelp--unmap-timer nil)
+         (drgnx-quickhelp--card-up nil)
          (drgnx-quickhelp--active nil) (drgnx-quickhelp-hover nil)
-         (drgnx-quickhelp--hover-timer nil) (drgnx-quickhelp--poll nil) (drgnx-quickhelp--rest nil)
+         (drgnx-quickhelp--rest nil)
          (pre-command-hook nil) (post-command-hook nil)
+         (drgnx-modules--runs (list (list 'ui/face 'ui/face)))   ; ui/face is on: its timers start
          (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
      (save-window-excursion
        (delete-other-windows)
        (unwind-protect (progn ,@body)
          (drgnx-quickhelp-hide)
          (setq drgnx-quickhelp--active nil)
-         (drgnx-quickhelp--apply-hover)))))
+         (drgnx-quickhelp--apply-hover)
+         (mapc #'drgnx-timer-cancel '(quickhelp-timeout quickhelp-unmap quickhelp-look quickhelp-hover))))))
 
 (defmacro drgnx-quickhelp-test--elisp (text &rest body)
   "BODY in a buffer of Emacs Lisp TEXT shown in the selected window."
@@ -324,7 +326,7 @@ idle for a while, a focused frame, and `drgnx-quickhelp--request' recording its 
                ((symbol-function 'current-idle-time) (lambda () (seconds-to-time 5)))
                ((symbol-function 'drgnx-quickhelp--request) (lambda (&rest args) (push args requests))))
        ,@body
-       (when (timerp drgnx-quickhelp--poll) (cancel-timer drgnx-quickhelp--poll)))))
+       (drgnx-timer-cancel 'quickhelp-look))))
 
 (ert-deftest drgnx-quickhelp/hover-waits-for-the-pointer-to-move-after-typing ()
   (drgnx-quickhelp-test--with
@@ -348,11 +350,11 @@ idle for a while, a focused frame, and `drgnx-quickhelp--request' recording its 
         (should (= (length requests) 2))
         ;; no graphical frame has the focus: no look, nothing re-armed
         (cl-letf (((symbol-function 'drgnx-quickhelp--focused-p) (lambda () nil)))
-          (when (timerp drgnx-quickhelp--poll) (cancel-timer drgnx-quickhelp--poll))
+          (drgnx-timer-cancel 'quickhelp-look)
           (setq pointer (cons (selected-frame) (cons 120 100)) drgnx-quickhelp--rest nil)
           (drgnx-quickhelp--hover-look)
           (should (= (length requests) 2))
-          (should-not drgnx-quickhelp--poll))))))
+          (should-not (drgnx-timer-active-p 'quickhelp-look)))))))
 
 (ert-deftest drgnx-quickhelp/a-quick-move-to-the-next-symbol-gets-its-card ()
   (drgnx-quickhelp-test--with
@@ -379,17 +381,17 @@ idle for a while, a focused frame, and `drgnx-quickhelp--request' recording its 
                                               :start (window-start) :edges (window-pixel-edges))
                 drgnx-quickhelp--card-up t)
           (drgnx-quickhelp--watch-card)
-          (should (timerp drgnx-quickhelp--poll))     ; looks come though hover is off
-          (cancel-timer drgnx-quickhelp--poll)
+          (should (drgnx-timer-active-p 'quickhelp-look))     ; looks come though hover is off
+          (drgnx-timer-cancel 'quickhelp-look)
           (drgnx-quickhelp--hover-look)
           (should drgnx-quickhelp--origin)            ; nothing moved: it stays, and the looks go on
-          (should (timerp drgnx-quickhelp--poll))
-          (cancel-timer drgnx-quickhelp--poll)
+          (should (drgnx-timer-active-p 'quickhelp-look))
+          (drgnx-timer-cancel 'quickhelp-look)
           (set-window-start (selected-window) 30)
           (drgnx-quickhelp--hover-look)
           (should-not drgnx-quickhelp--origin)
           (should-not drgnx-quickhelp--card-up)
-          (should-not drgnx-quickhelp--poll))))))     ; no card, no hover: the looks stop
+          (should-not (drgnx-timer-active-p 'quickhelp-look)))))))     ; no card, no hover: the looks stop
 
 (ert-deftest drgnx-quickhelp/again-while-shown-opens-help ()
   (drgnx-quickhelp-test--with
@@ -457,6 +459,90 @@ idle for a while, a focused frame, and `drgnx-quickhelp--request' recording its 
         (should-not (window-live-p drgnx-quickhelp--strip))
         (should (equal (mapcar #'window-pixel-edges (list editor below)) before))))))
 
+;;;; The card's width and colours (pure)
+
+(ert-deftest drgnx-quickhelp/card-is-never-narrower-than-its-buttons ()
+  ;; text 120, a character 9, at most 400, buttons row 396
+  (should (= (drgnx-quickhelp--text-width 120 396 9 400) 396))   ; short docs: the buttons set the width
+  (should (= (drgnx-quickhelp--text-width 390 396 9 400) 399))   ; docs and the ✕ a little wider than the buttons
+  (should (= (drgnx-quickhelp--text-width 700 396 9 400) 400))   ; long docs: the limit
+  ;; a window narrower than the buttons does not clip them: the buttons win over the limit
+  (should (= (drgnx-quickhelp--text-width 120 396 9 350) 396))
+  (should (= (drgnx-quickhelp--text-width 700 396 9 350) 396)))
+
+(defmacro drgnx-quickhelp-test--with-faces (alist &rest body)
+  "BODY with `face-attribute' answering from ALIST ((FACE ATTR) . VALUE); anything else `unspecified'."
+  (declare (indent 1))
+  `(cl-letf (((symbol-function 'face-attribute)
+              (lambda (face attr &rest _) (alist-get (list face attr) ,alist 'unspecified nil #'equal))))
+     ,@body))
+
+(ert-deftest drgnx-quickhelp/the-card-stands-out-from-the-editor ()
+  (should (= (drgnx-quickhelp--contrast "#000000" "#ffffff") 21.0))
+  (should-not (drgnx-quickhelp--contrast "unspecified-bg" "#ffffff"))
+  ;; a dark theme whose tooltip is the editor's own background (kusanagi's): the card is lighter, and its
+  ;; border is a third colour between the text and the card
+  (drgnx-quickhelp-test--with-faces '(((default :background) . "#050810") ((default :foreground) . "#68b8cc")
+                                      ((drgnx-quickhelp :background) . "#050810") ((drgnx-quickhelp :foreground) . "#68b8cc"))
+    (pcase-let ((`(,bg . ,border) (drgnx-quickhelp-colors)))
+      (should-not (equal bg "#050810"))
+      (should (>= (drgnx-quickhelp--contrast bg "#050810") drgnx-quickhelp--distinct))
+      (should (> (drgnx-quickhelp--contrast bg "#68b8cc") 4.5))             ; the text stays readable
+      (should-not (member border (list bg "#68b8cc" "#050810")))
+      (should (>= (drgnx-quickhelp--contrast border bg) 1.3))))
+  ;; a light theme with the same: the card is darker than the page, not lighter than white
+  (drgnx-quickhelp-test--with-faces '(((default :background) . "#ffffff") ((default :foreground) . "#000000")
+                                      ((drgnx-quickhelp :background) . "#ffffff") ((drgnx-quickhelp :foreground) . "#000000"))
+    (pcase-let ((`(,bg . ,border) (drgnx-quickhelp-colors)))
+      (should-not (equal bg "#ffffff"))
+      (should (>= (drgnx-quickhelp--contrast bg "#ffffff") drgnx-quickhelp--distinct))
+      (should (> (drgnx-quickhelp--contrast bg "#000000") 7))
+      (should (>= (drgnx-quickhelp--contrast border bg) 1.3))))
+  ;; a face background that already stands out (modus-operandi's tooltip) is kept
+  (drgnx-quickhelp-test--with-faces '(((default :background) . "#ffffff") ((default :foreground) . "#000000")
+                                      ((drgnx-quickhelp :background) . "#c4c4c4") ((drgnx-quickhelp :foreground) . "#000000"))
+    (should (equal (car (drgnx-quickhelp-colors)) "#c4c4c4")))
+  ;; a frame without colours (a terminal of few colours): nothing to go by
+  (drgnx-quickhelp-test--with-faces '(((default :background) . unspecified-bg) ((default :foreground) . unspecified-fg))
+    (should-not (drgnx-quickhelp-colors))))
+
+;;;; No documentation: no card
+
+(ert-deftest drgnx-quickhelp/no-docs-no-card-one-line-in-the-echo-area ()
+  (drgnx-quickhelp-test--with
+    (drgnx-quickhelp-test--elisp "(car x)\n"
+      (goto-char 2)
+      (setq-local eldoc-documentation-functions (list (lambda (_cb) nil)))   ; answers: nothing
+      (let (said carded)
+        (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))   ; a window: a card would show
+                  ((symbol-function 'drgnx-quickhelp--show-card) (lambda (_docs) (setq carded t)))
+                  ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+          ;; the key: the line in the echo area, no card
+          (call-interactively #'drgnx-quickhelp-show)
+          (should-not carded)
+          (should (equal said '("No documentation here.")))
+          (should-not (drgnx-quickhelp-shown-p))
+          (should-not drgnx-quickhelp--origin)
+          ;; hovering over such a symbol: nothing at all
+          (setq said nil)
+          (drgnx-quickhelp--request (selected-window) 2 nil)
+          (should-not carded)
+          (should-not said)
+          (should-not drgnx-quickhelp--origin))))))
+
+(ert-deftest drgnx-quickhelp/no-docs-gives-the-strip-back ()
+  (drgnx-quickhelp-test--with
+    (should-not (display-graphic-p))            ; batch: a terminal frame
+    (drgnx-quickhelp-test--elisp (mapconcat (lambda (i) (format "(car x%d)" i)) (number-sequence 1 60) "\n")
+      (let* ((editor (selected-window)) (before (window-pixel-edges editor)) said)
+        (goto-char 2)
+        (setq-local eldoc-documentation-functions (list (lambda (_cb) nil)))
+        (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+          (call-interactively #'drgnx-quickhelp-show))
+        (should-not (window-live-p drgnx-quickhelp--strip))
+        (should (equal (window-pixel-edges editor) before))
+        (should (equal said '("No documentation here.")))))))
+
 ;;;; Commands and keys
 
 (ert-deftest drgnx-quickhelp/commands-are-registered ()
@@ -470,13 +556,28 @@ idle for a while, a focused frame, and `drgnx-quickhelp--request' recording its 
     (let ((drgnx-quickhelp-hover t))
       (call-interactively (drgnx-cmd-command (drgnx-commands-get 'quick-help-toggle-hover)))
       (should-not drgnx-quickhelp-hover)
-      (should-not (timerp drgnx-quickhelp--hover-timer))
+      (should-not (drgnx-timer-active-p 'quickhelp-hover))
       (call-interactively (drgnx-cmd-command (drgnx-commands-get 'quick-help-toggle-hover)))
       (should drgnx-quickhelp-hover)
-      (should (timerp drgnx-quickhelp--hover-timer))
+      (should (drgnx-timer-active-p 'quickhelp-hover))
       (setq drgnx-quickhelp--active nil)
       (drgnx-quickhelp--apply-hover)
-      (should-not (timerp drgnx-quickhelp--hover-timer)))))
+      (should-not (drgnx-timer-active-p 'quickhelp-hover)))))
+
+(ert-deftest drgnx-quickhelp/its-timers-belong-to-the-face-module ()
+  ;; one hover timer however often it is applied; the look and the hover end with the module's run; no run, no timer
+  (drgnx-quickhelp-test--with
+    (setq drgnx-quickhelp--active t drgnx-quickhelp-hover t)
+    (drgnx-quickhelp--apply-hover)
+    (drgnx-quickhelp--apply-hover)
+    (should (equal (seq-filter (lambda (e) (eq (car e) 'quickhelp-hover)) (drgnx-timer-pending))
+                   '((quickhelp-hover ui/face start))))
+    (drgnx-quickhelp--watch-card)
+    (should (drgnx-timer-active-p 'quickhelp-look))
+    (should (= 2 (drgnx-timer-cancel-owner 'ui/face)))
+    (let ((drgnx-modules--runs nil))
+      (drgnx-quickhelp--apply-hover)
+      (should-not (drgnx-timer-active-p 'quickhelp-hover)))))
 
 (ert-deftest drgnx-quickhelp/keys-in-every-profile ()
   (dolist (p '(("vscode" . "(quick-help \"C-k C-i\")")
@@ -491,7 +592,7 @@ idle for a while, a focused frame, and `drgnx-quickhelp--request' recording its 
       (should (search-forward "(quick-help-close \"<escape>\" \"q\" :map drgnx-quickhelp-showing-map)" nil t)))))
 
 (ert-deftest drgnx-quickhelp/faces-inherit-the-theme ()
-  (should (eq (face-attribute 'drgnx-quickhelp :inherit) 'tooltip))
+  (should (eq (face-attribute 'drgnx-quickhelp :inherit) 'tooltip))        ; the theme's own card, when it stands out
   (should (eq (face-attribute 'drgnx-quickhelp-title :inherit) 'bold)))
 
 ;;; mod-quickhelp-test.el ends here

@@ -41,7 +41,8 @@ is good or builds the signed GNU release with native compilation. On macOS, run 
 (after asking) and Emacs from it, adds a **drgnx** app to `~/Applications` and opens it, and the Welcome sets up keys,
 AI and Claude Code; afterwards open drgnx with Spotlight (⌘Space, type "drgnx") or Launchpad, or run `drgnx .` in a
 project, like `code .`; to keep it in the Dock, drag `~/Applications/drgnx.app` there.
-`--dry-run` shows the plan only. Details,
+`--dry-run` shows the plan only. On a second machine, `bash -s -- --config URL` (after the `| bash`) also sets it up from
+your configuration repository ([docs/guide/second-machine.md](docs/guide/second-machine.md)). Details,
 manual install and uninstall: [docs/guide/install.md](docs/guide/install.md). Check a machine with `drgnx doctor`.
 
 ## Documentation
@@ -58,7 +59,8 @@ manual install and uninstall: [docs/guide/install.md](docs/guide/install.md). Ch
   review, the perf lab, the work tracker, AI completion and inline edits with any model (local runners first),
   built-in semantic search, terminal windows (`drgnx -t`, SSH, tmux: keys, mouse, clipboard, colours), several
   monitors under sway, i3, Hyprland, niri, KDE Plasma, X11 and macOS (move a window to another monitor, restore each
-  window to its own; GNOME explains its key).
+  window to its own; GNOME explains its key), your own shell in drgnx's terminal, and a second machine from one command
+  (`drgnx bootstrap`).
 - **Later:** editor amenities to match VS Code and Zed (tree-sitter, language servers, formatting, debugging,
   multi-cursor, git gutter, a settings and shortcuts editor), platforms (macOS, a Meow modal module), then the public
   launch.

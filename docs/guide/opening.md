@@ -32,7 +32,8 @@ What happens:
   `~/.local/state/drgnx/daemon.log`). On Linux, when the systemd user unit `drgnx` is installed and enabled ([packages.md](packages.md#running-drgnx-as-a-daemon)), drgnx starts that unit instead.
   Two `drgnx` commands started at once make one daemon and one window: the second waits for the first (a lock,
   `~/.local/state/drgnx/open-drgnx.lock`, dropped as stale 15 s after the wait above, 45 s by default, if its owner
-  died). A window that takes more than 10 s to appear is not waited for further.
+  died; it is taken by making its `owner` file, never by `mkdir` alone, which uutils' coreutils let two commands both
+  win). A window that takes more than 10 s to appear is not waited for further.
 - **No window is open:** a window opens, with the layout you left — groups, tabs, docks, Explorer folders
   ([workbench.md](workbench.md#the-layout-survives-a-restart)) — and the paths in front of it.
 - **A window is open:** the paths open there and the window comes to the front.
@@ -94,6 +95,23 @@ You are done with a file when you press `C-x #` in it (Emacs' "done with this se
 first) or kill its buffer. Closing its tab is not enough: the buffer stays open, so the command keeps waiting. With
 no display (over ssh, on a console; never on a Mac) the file opens in the terminal you ran the command in, and waits
 there. `--wait` takes files only; a folder, or no path, is an error (exit 2) before drgnx is asked.
+
+## From drgnx's terminal
+
+In drgnx's own terminal (New Terminal, [shell.md](shell.md)) the same commands reach *this* drgnx — the one the
+terminal runs in — and open in the frame you are typing in:
+
+```sh
+drgnx .                  # this folder becomes the Explorer's first folder
+drgnx 'My "File" café.py' # the file opens in an editor next to the terminal
+git commit               # the message opens in drgnx; save it and press C-x # to finish the commit
+```
+
+No new window is ever made from there, not even when drgnx shows only a terminal frame, and no other drgnx is asked
+or started. `drgnx open --wait FILE` (an `EDITOR` of your own) waits for `C-x #` in this drgnx too. `git commit` uses
+the terminal's `GIT_EDITOR`, which points at this drgnx's server ([shell.md](shell.md#editor-git-and-drgnx-reach-the-emacs-hosting-the-terminal));
+`cd` in the shell moves the terminal's directory with it, so `C-x C-f` in the terminal starts in the folder the shell
+is in.
 
 ## On macOS: the drgnx app
 
@@ -162,6 +180,10 @@ Onboarding's Daemon and Desktop step asks it once ([onboarding.md](onboarding.md
 Change the choice with **Preferences: Keep drgnx Running in the Background** (palette, Options menu): it switches
 between the two and says which one is on. The choice is kept in `~/.config/drgnx/session.eld` as
 `(:keep-running t)` or `(:keep-running nil)` and read at every start. drgnx never asks it when a window closes.
+Changing the choice edits only that key: comments and other keys you added stay as they are. If the file has a mistake,
+drgnx keeps using the last good choice and says where the mistake is (`drgnx doctor` too); the toggle then refuses to
+write, so your file is never replaced. Fix the file, or delete it, and toggle again. The file is described in
+[the config reference](../reference/config.md).
 
 ## For CI and scripts
 
@@ -178,10 +200,13 @@ their own, so they never reach your drgnx); a server named anything but `drgnx` 
 to the front with `(drgnx-session-raise)`, has it read the AI keys once per start (`drgnx-ai-load-keys-soon`: from
 a timer, [ai.md](ai.md#keys)), sends files as file arguments and each folder as
 `(drgnx-session-open-folder "…")`. Every call but `--wait`'s file call has `-n` (no waiting); with no display,
-`--wait` is just `emacsclient -t -- FILE…`. The daemon starts detached (`setsid`, else `perl` on macOS) as
+`--wait` is just `emacsclient -t -- FILE…`. In drgnx's terminal (`INSIDE_EMACS` names eat and `DRGNX_SERVER_NAME`
+is set: the terminal's Emacs's socket) none of that runs: the files and folders go straight to that server, with
+neither `-c` nor `-t`, so they open in its selected frame. The daemon starts detached (`setsid`, else `perl` on macOS) as
 `emacs --bg-daemon=drgnx --init-directory=<checkout>/init`. The close button's `delete-frame` event and Close Window
 run `drgnx-session-close-frame`, as do `C-x C-c` and `C-x 5 0` (`drgnx-session-kill-terminal`,
-`drgnx-session-delete-frame`: remaps of the stock commands); Quit drgnx runs `drgnx-session-quit`. On macOS drgnx
+`drgnx-session-delete-frame`: remaps of the stock commands); Quit drgnx runs `drgnx-session-quit`. An `emacsclient -c` frame does not print Emacs's "When done with a buffer, type C-x 5 0"
+(`server-client-instructions` is nil). On macOS drgnx
 ignores `XDG_RUNTIME_DIR`: a shell exports it and an app started from Finder does not, which would put the server
 socket in two places. The daemon puts it in Emacs' non-XDG directory, `emacs<uid>` under `$TMPDIR`, and `bin/drgnx`
 runs `emacsclient` with `env -u XDG_RUNTIME_DIR`, so Terminal and Finder reach the same drgnx. Code: `core/drgnx-session.el`; tests:
@@ -189,3 +214,5 @@ runs `emacsclient` with `env -u XDG_RUNTIME_DIR`, so Terminal and Finder reach t
 `test/unit/bin-test.el` (fake `emacs`, `emacsclient` and `systemctl`, and one real
 headless `open --check`), and the live scenario `test/live/drgnx-session-keep-or-quit-test.el` (a daemon session:
 `bin/drgnx open` with a file and a folder with a space and an accent, then the last window closed in each mode).
+From drgnx's terminal: `test/unit/terminal-bin-test.el` (the emacsclient calls inside and outside eat) and the live
+`test/live/drgnx-terminal-test.el` (zsh in eat: `cd` followed, `drgnx` with odd names, `git commit`, the key split).

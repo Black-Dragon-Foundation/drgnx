@@ -1,6 +1,8 @@
 ;;; wb-persist-test.el --- batch tests: the workbench survives a restart -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx-persist)
+(require 'drgnx-timer)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-persist-test--with (dir &rest body)
   "BODY with rules and chrome on, a dock section, one editor window, files in DIR, a state file."
@@ -16,6 +18,7 @@
      (drgnx-rules-mode 1)
      (drgnx-chrome-mode 1)
      (unwind-protect (progn ,@body)
+       (drgnx-timer-cancel 'persist-visit)
        (drgnx-chrome-mode -1)
        (drgnx-rules-mode -1)
        (drgnx-wb-area-hide 'panel)
@@ -151,53 +154,61 @@
       (should (equal (mapcar #'buffer-file-name (drgnx-chrome-tabs (car (drgnx-groups-list))))
                      (mapcar (lambda (n) (expand-file-name n dir)) '("a.txt" "b.txt" "c.txt")))))))
 
-;;;; A fake idle clock (a minimal local version of the timer research's clock fixture)
+;;;; The other tabs, on the clock fixture
 
-(defvar drgnx-persist-test--idle 0 "Seconds Emacs has been idle on the fake clock; 0: not idle.")
+(defun drgnx-persist-test--five (dir)
+  "Write five files in DIR and a state file with them as one group's tabs (the second shown); return the files."
+  (let ((files (mapcar (lambda (n) (expand-file-name n dir)) '("a.txt" "b.txt" "c.txt" "d.txt" "e.txt"))))
+    (dolist (f files) (write-region "x\n" nil f nil 'silent))
+    (with-temp-file drgnx-persist-file
+      (prin1 `(:version 1 :left (:shown nil) :panel (:shown nil) :right (:shown nil) :main nil
+                        :groups ((:tabs ,files :shown ,(nth 1 files))))
+             (current-buffer)))
+    files))
 
-(defmacro drgnx-persist-test--with-idle-clock (&rest body)
-  "BODY with fresh timer lists and `current-idle-time' on a fake clock: the idle timers BODY starts run only in
-`drgnx-persist-test--pause', by Emacs's own `timer-event-handler'."
-  `(let ((timer-list nil) (timer-idle-list nil) (drgnx-persist-test--idle 0))
-     (cl-letf (((symbol-function 'current-idle-time)
-                (lambda () (and (> drgnx-persist-test--idle 0) (seconds-to-time drgnx-persist-test--idle)))))
-       ,@body)))
+(defun drgnx-persist-test--tabs ()
+  (mapcar #'buffer-file-name (drgnx-chrome-tabs (car (drgnx-groups-list)))))
 
-(defun drgnx-persist-test--pause (secs)
-  "One pause of SECS seconds, as Emacs's command loop runs it: every idle timer is a candidate again (keyboard.c's
-timer_start_idle clears their triggered flag), then each one due — its idle time reached, not run yet in this
-pause — runs in time order, the clock moving to its time; a timer one of them arms runs too when it is due within
-SECS.  A repeating idle timer is re-armed as triggered (timer.el): once per pause.  Then you type: the pause ends."
-  (dolist (tm timer-idle-list) (setf (timer--triggered tm) nil))
-  (let ((runs 0) next)
-    (while (setq next (seq-find (lambda (tm) (and (not (timer--triggered tm)) (<= (float-time (timer--time tm)) secs)))
-                                timer-idle-list))
-      (when (> (cl-incf runs) 1000) (error "Idle timers re-arm themselves at once: a busy loop"))
-      (setq drgnx-persist-test--idle (max drgnx-persist-test--idle (float-time (timer--time next))))
-      (timer-event-handler next))
-    (setq drgnx-persist-test--idle 0)))
-
-(ert-deftest drgnx-persist/the-other-tabs-open-within-one-pause ()
-  ;; B2: a repeating idle timer runs once per pause, so the other tabs came one per pause.  They come every 0.2 s
-  ;; within the same pause; typing ends it, and the rest come in the next pause.
+(ert-deftest drgnx-persist/other-tabs-open-in-one-pause ()
+  ;; B2: a repeating idle timer runs once per pause, so the other tabs came one per pause.  The layer's idle steps
+  ;; open them all in the first pause, in order, and leave no timer.
   (drgnx-persist-test--with dir
-    (drgnx-persist-test--with-idle-clock
-     (let ((files (mapcar (lambda (n) (expand-file-name n dir)) '("a.txt" "b.txt" "c.txt" "d.txt" "e.txt")))
-           (tabs (lambda () (length (drgnx-chrome-tabs (car (drgnx-groups-list)))))))
-       (dolist (f files) (write-region "x\n" nil f nil 'silent))
-       (with-temp-file drgnx-persist-file
-         (prin1 `(:version 1 :left (:shown nil) :panel (:shown nil) :right (:shown nil) :main nil
-                           :groups ((:tabs ,files :shown ,(nth 1 files))))
-                (current-buffer)))
-       (drgnx-persist-restore)
-       (should (= 1 (funcall tabs)))
-       (drgnx-persist-test--pause 0.5)                 ; at 0.2 s and 0.4 s, then you type
-       (should (= 3 (funcall tabs)))
-       (drgnx-persist-test--pause 3)                   ; the next pause: the rest
-       (should (= 5 (funcall tabs)))
-       (should (equal (mapcar #'buffer-file-name (drgnx-chrome-tabs (car (drgnx-groups-list)))) files))
-       (drgnx-persist-test--pause 3)                   ; nothing left: no timer either
-       (should-not timer-idle-list)))))
+    (drgnx-test-with-clock ()
+      (let ((files (drgnx-persist-test--five dir)))
+        (drgnx-persist-restore)
+        (should (= 1 (length (drgnx-persist-test--tabs))))
+        (should (drgnx-timer-active-p 'persist-visit))
+        (drgnx-test-idle 3)
+        (should (equal (drgnx-persist-test--tabs) files))
+        (should-not (drgnx-timer-active-p 'persist-visit))
+        (should-not timer-idle-list)))))
+
+(ert-deftest drgnx-persist/typing-stops-the-visits-until-the-next-pause ()
+  (drgnx-persist-test--with dir
+    (drgnx-test-with-clock ()
+      (let ((files (drgnx-persist-test--five dir)) (visited 0))
+        (drgnx-persist-restore)
+        (cl-letf* ((visit (symbol-function 'drgnx-persist--visit))
+                   ((symbol-function 'drgnx-persist--visit)
+                    (lambda (f) (cl-incf visited) (funcall visit f)))
+                   ((symbol-function 'drgnx-timer--input-pending-p) (lambda () (> visited 0))))
+          (drgnx-test-idle 3))                          ; you type after the first visit
+        (should (= 2 (length (drgnx-persist-test--tabs))))
+        (should (drgnx-timer-active-p 'persist-visit))
+        (drgnx-test-idle 3)                             ; the next pause: the rest
+        (should (equal (drgnx-persist-test--tabs) files))
+        (should-not (drgnx-timer-active-p 'persist-visit))))))
+
+(ert-deftest drgnx-persist/persist-mode-off-stops-the-visits ()
+  (drgnx-persist-test--with dir
+    (drgnx-test-with-clock ()
+      (drgnx-persist-test--five dir)
+      (drgnx-persist-restore)
+      (should (drgnx-timer-active-p 'persist-visit))
+      (let ((drgnx-persist-mode t)) (drgnx-persist-mode -1))
+      (should-not (drgnx-timer-active-p 'persist-visit))
+      (drgnx-test-idle 3)
+      (should (= 1 (length (drgnx-persist-test--tabs)))))))
 
 (ert-deftest drgnx-persist/custom-frames-restore-by-their-function ()
   ;; a window that rebuilds itself (a job window) is saved as its function and restored by calling it

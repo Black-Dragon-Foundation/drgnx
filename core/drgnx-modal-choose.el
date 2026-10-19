@@ -53,9 +53,11 @@
         (drgnx-modules-set-enabled module on)
       ;; Not defined in this process (`drgnx onboard' loads no modules): an engine's module is off until chosen,
       ;; so :enabled is its switch, as `drgnx-modules-set-enabled' writes it.
-      (let ((state (copy-sequence (drgnx-modules-read-state))))
-        (setq state (plist-put state :enabled (append (remq module (plist-get state :enabled)) (and on (list module)))))
-        (drgnx-modules-write-state (plist-put state :disabled (remq module (plist-get state :disabled))))))))
+      (drgnx-modules-update-state
+       (lambda (state)
+         (drgnx-modules--put-list
+          (drgnx-modules--put-list state :enabled (append (remq module (plist-get state :enabled)) (and on (list module))))
+          :disabled (remq module (plist-get state :disabled))))))))
 
 (defun drgnx-modal-set-module (layers)
   "Turn on the module of the engine LAYERS need (it runs from the next start, or now through
@@ -96,36 +98,9 @@ directory (what drgnx sync installed, loadable after `drgnx-pkg-activate')."
 
 (defun drgnx-modal--forget-pending ()
   "Take `:pending-layers' and its value out of keys.eld; the rest of the file stays as it is."
-  (let ((file (drgnx-keys-file)))
-    (when (and (file-exists-p file) (let ((drgnx-keys-problems nil)) (plist-member (drgnx-keys-read-user) :pending-layers)))
-      (let ((text (with-temp-buffer
-                    (insert-file-contents file)
-                    (set-syntax-table emacs-lisp-mode-syntax-table)
-                    (goto-char (point-min))
-                    (forward-comment (buffer-size))
-                    (down-list 1)
-                    (let ((done nil))
-                      (while (and (not done) (progn (forward-comment (buffer-size)) (not (eq (char-after) ?\)))))
-                        (let ((beg (point)) (k (read (current-buffer))))
-                          (forward-comment (buffer-size))
-                          (forward-sexp 1)
-                          (when (eq k :pending-layers)
-                            (skip-chars-forward " \t")
-                            (when (eolp) (skip-chars-forward "\n") (skip-chars-forward " \t"))
-                            (let ((end (point)))
-                              (when (eq (char-after) ?\))  ; the last entry: the space before it goes too
-                                (goto-char beg)
-                                (skip-chars-backward " \t")
-                                (setq beg (point)))
-                              (delete-region beg end))
-                            (setq done t)))))
-                    (buffer-string)))
-            (tmp (make-temp-file (expand-file-name ".keys-" (file-name-directory file)))))
-        ;; As `drgnx-keys--save-key' writes: a temp file renamed over keys.eld.
-        (with-temp-file tmp (insert text))
-        (set-file-modes tmp #o644)
-        (rename-file tmp file t)
-        (drgnx-modal--write-report)))))   ; the key report no longer says a stack waits
+  (when (plist-member (plist-get (drgnx-config-read 'keys) :data) :pending-layers)   ; a fresh read: no lock when none
+    (drgnx-config-unset 'keys :pending-layers)
+    (drgnx-modal--write-report)))   ; the key report no longer says a stack waits
 
 (defun drgnx-modal--write-report ()
   "Write the key report now (no apply runs when a stack starts or stops waiting) — only in a process that applied
@@ -192,7 +167,9 @@ Switch to LAYERS only on `ready', `started' or `installed'.  Those also set the 
                   ;; a session without modules (drgnx safe): its keys never become Vim's without evil
                   (t (list 'fail "modules are off in this session (drgnx safe)" nil))))
            ((not (drgnx-modal--can-ask-p interactive))
-            ;; keys.eld first: a failure there (an unreadable file) leaves the module as it was
+            ;; keys.eld first: a failure there (an unreadable file) leaves the module as it was; a modules.eld that
+            ;; refuses a write is found before keys.eld changes
+            (drgnx-config-ensure-writable 'modules)
             (drgnx-keys--save-key :pending-layers layers)
             (drgnx-modal-set-module layers)
             (drgnx-modal--write-report)

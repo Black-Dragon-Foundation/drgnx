@@ -147,16 +147,19 @@ A `completing-read' answer is the first candidate that starts with it.  The prom
         (should (string-search "X-Api: ••••" text))))))
 
 (defun drgnx-agent-settings-test--count-processes (thunk)
-  "How many processes THUNK starts (every way a process is made is counted, and still made)."
-  (let ((count 0))
-    (cl-letf* ((counting (lambda (orig) (lambda (&rest args) (cl-incf count) (apply orig args))))
+  "How many processes THUNK starts (every way a process is made is counted, and still made).
+Only THUNK's: redefining these primitives with native compilation compiles a trampoline for each in a child Emacs
+the first time (a fresh eln cache, as in CI), and those runs are not THUNK's."
+  (let ((count 0) (on nil))
+    (cl-letf* ((counting (lambda (orig) (lambda (&rest args) (when on (cl-incf count)) (apply orig args))))
                ((symbol-function 'make-process) (funcall counting (symbol-function 'make-process)))
                ((symbol-function 'call-process) (funcall counting (symbol-function 'call-process)))
                ((symbol-function 'call-process-region) (funcall counting (symbol-function 'call-process-region)))
                ((symbol-function 'process-file) (funcall counting (symbol-function 'process-file)))
                ((symbol-function 'start-process) (funcall counting (symbol-function 'start-process)))
                ((symbol-function 'start-file-process) (funcall counting (symbol-function 'start-file-process))))
-      (funcall thunk))
+      (setq on t)
+      (unwind-protect (funcall thunk) (setq on nil)))
     count))
 
 (ert-deftest drgnx-agent-settings/opening-spawns-nothing ()

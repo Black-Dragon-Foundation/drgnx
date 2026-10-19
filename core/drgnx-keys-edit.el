@@ -16,8 +16,7 @@
 (require 'drgnx-keys)
 (require 'drgnx-tty-fallback)
 
-(defconst drgnx-keys-edit--header
-  ";; drgnx keys (docs/guide/keys.md): :layers — profile stack, :bind — (ID KEY… [:map M]),\n;; :unbind — (ID…)\n"
+(defconst drgnx-keys-edit--header drgnx-keys--header
   "The comment a new keys.eld starts with.")
 
 (defun drgnx-keys-edit--undo-file ()
@@ -46,19 +45,6 @@
                   ((not (and (proper-list-p (plist-get form :unbind)) (seq-every-p #'symbolp (plist-get form :unbind))))
                    ":unbind is not a plain list of command ids (no quote); fix it by hand")))))
     (error (format "it cannot be read (%s)" (error-message-string err)))))
-
-(defun drgnx-keys-edit--write-file (file text)
-  "Replace FILE by TEXT (as UTF-8) through a temp file, so a stale buffer is never asked about.  A symlink FILE
-is written through, so it stays a link; FILE keeps its permissions (a new one gets the default ones)."
-  (let* ((file (file-truename file))
-         (modes (or (file-modes file) (default-file-modes)))
-         (tmp (progn (make-directory (file-name-directory file) t)
-                     (make-temp-file (expand-file-name ".keys-" (file-name-directory file))))))
-    (condition-case err
-        (progn (let ((coding-system-for-write 'utf-8-unix)) (with-temp-file tmp (insert text)))
-               (set-file-modes tmp modes)
-               (rename-file tmp file t))
-      (error (ignore-errors (delete-file tmp)) (signal (car err) (cdr err))))))
 
 ;;;; Editing the text in a buffer (point-min, emacs-lisp syntax)
 
@@ -221,7 +207,8 @@ resolved one), :keep-map (the :map to write back)."
 ;;;; Changing keys.eld
 
 (defun drgnx-keys-edit--read (file)
-  (with-temp-buffer (insert-file-contents file) (buffer-string)))
+  "FILE's text, decoded as UTF-8 as it is written."
+  (with-temp-buffer (let ((coding-system-for-read 'utf-8-unix)) (insert-file-contents file)) (buffer-string)))
 
 (defvar drgnx-keys-edit--step nil
   "Inside `drgnx-keys-edit-one-step': a cons (WRITTEN . OLD), OLD keys.eld's text before the step's first write.
@@ -243,8 +230,10 @@ A step inside a step shares the outer one's cons.")
   "Run FN in a buffer holding keys.eld's text (a header if there is none) and write the result.
 A file that does not read, or a result that does not, is a `user-error' and nothing is written.  Keeps the
 previous and the new text in keys.eld.undo for `drgnx-keys-edit-undo', applies the keys, and returns non-nil;
-nil when nothing changed."
+nil when nothing changed.  The write is `drgnx-config-write-text': under the lock, refused (`drgnx-config-refused', a
+`user-error') when keys.eld changed since it was read here or the new text has a mistake."
   (let* ((file (file-truename (drgnx-keys-file))) (existed (file-exists-p file))
+         (stamp (drgnx-file-stamp file))
          (old (if existed (drgnx-keys-edit--read file) drgnx-keys-edit--header)))
     (when-let* ((why (drgnx-keys-edit--check old)))
       (user-error "%s %s — fix it first (it was not changed)" (abbreviate-file-name file) why))
@@ -256,10 +245,9 @@ nil when nothing changed."
       (unless (equal new old)
         (when-let* ((why (drgnx-keys-edit--check new)))
           (error "drgnx keys.eld writer produced a file that %s" why))
-        (drgnx-keys-edit--write-file
-         (drgnx-keys-edit--undo-file)
-         (let ((print-length nil) (print-level nil)) (prin1-to-string (list :old (drgnx-keys-edit--undo-old (if existed old :absent)) :new new))))
-        (drgnx-keys-edit--write-file file new)
+        (drgnx-config-write-text 'keys new :expect-stamp stamp)
+        (drgnx-file-write (drgnx-keys-edit--undo-file)
+                          (list :old (drgnx-keys-edit--undo-old (if existed old :absent)) :new new))
         (drgnx-keys-edit--applied)
         t))))
 
@@ -417,12 +405,13 @@ since)."
                      (or (stringp (plist-get saved :old)) (eq (plist-get saved :old) :absent))))
            (user-error "The undo copy %s cannot be read; keys.eld was not changed" (abbreviate-file-name undo))))
     (let* ((file (file-truename (drgnx-keys-file)))
+           (stamp (drgnx-file-stamp file))
            (now (and (file-exists-p file) (drgnx-keys-edit--read file))))
       (unless (equal now (plist-get saved :new))
         (user-error "keys.eld changed since that edit; it was not undone"))
       (if (eq (plist-get saved :old) :absent)
-          (delete-file file)
-        (drgnx-keys-edit--write-file file (plist-get saved :old)))
+          (progn (delete-file file) (drgnx-config-reread 'keys))
+        (drgnx-config-write-text 'keys (plist-get saved :old) :expect-stamp stamp))
       (delete-file undo)
       (drgnx-keys-edit--applied)
       t)))

@@ -22,6 +22,7 @@
 (require 'button)
 (require 'drgnx-registry)
 (require 'drgnx-face-state)
+(require 'drgnx-timer)
 (declare-function drgnx-face-glyph "drgnx-face")
 (declare-function drgnx-surfaces-key "drgnx-surfaces")
 (declare-function drgnx-surfaces-run "drgnx-surfaces")
@@ -67,7 +68,6 @@
   "The buttons: a registry command ID (or `dismiss'), the label and the help text.  A command that is not there
 \(its module is off) has no button.")
 
-(defvar drgnx-start--timer nil "The idle timer that shows the page after a start's first window, or nil.")
 (defvar drgnx-start--after-file nil
   "Non-nil when the editor used last showed a file (or the first-run Welcome) at the previous `editor-changed' (a
 boolean, not the buffer).")
@@ -89,8 +89,22 @@ On a terminal a chord it cannot send is shown the way it can (`drgnx-tty-sendabl
           key)))))
 
 (defun drgnx-start--glyph ()
-  "The search glyph for the selected frame (`drgnx-face-glyph'), an ASCII slash when it is not known."
-  (or (and (fboundp 'drgnx-face-glyph) (drgnx-face-glyph 'search)) "/"))
+  "The bullet glyph for the selected frame (`drgnx-face-glyph'), an ASCII `>' when it is not known."
+  (or (and (fboundp 'drgnx-face-glyph) (drgnx-face-glyph 'bullet)) ">"))
+
+(defconst drgnx-start--width 76
+  "Columns of the widest line of the page: the block is centred as this wide (a wider window shows it centred).")
+
+(defconst drgnx-start--centre
+  `(space :align-to (- (0.5 . text) ,(/ drgnx-start--width 2.0)))
+  "A line's prefix: spaces up to the column that centres the block, whatever the window's width (a window narrower
+than the block starts it at the left edge).")
+
+(defun drgnx-start--top-padding ()
+  "Blank lines above the name: the page sits in the upper third of the editor window that shows it."
+  (let* ((w (drgnx-start--window (selected-frame)))
+         (rows (if (window-live-p w) (window-body-height w) 24)))
+    (max 1 (/ (- rows 17) 3))))
 
 (defun drgnx-start--press (button)
   "Run what BUTTON stands for: a registry command (as if from the palette), or dismiss the page."
@@ -104,7 +118,6 @@ On a terminal a chord it cannot send is shown the way it can (`drgnx-tty-sendabl
 
 (defun drgnx-start--insert-button (id label help)
   "Insert the button LABEL for ID (a registry command ID or `dismiss'), resting on HELP, on a line of its own."
-  (insert "  ")
   (insert-text-button label :type 'drgnx-start-button 'drgnx-start-id id 'help-echo help)
   (insert "\n"))
 
@@ -113,18 +126,20 @@ On a terminal a chord it cannot send is shown the way it can (`drgnx-tty-sendabl
 The keys are read from the registry now, so a changed profile shows when the page shows again."
   (let ((inhibit-read-only t) (search (drgnx-start--glyph)))
     (erase-buffer)
-    (insert "\n  " (propertize "drgnx" 'face 'drgnx-start-title) "\n\n")
-    (insert "  " (propertize "A workbench for Emacs: your files, your agents and your work, side by side." 'face 'drgnx-start-quiet) "\n")
-    (insert "  " (propertize "Everything it does is a command, and the keys below find all of them." 'face 'drgnx-start-quiet) "\n\n")
+    (insert (make-string (drgnx-start--top-padding) ?\n) (propertize "drgnx" 'face 'drgnx-start-title) "\n\n")
+    (insert (propertize "A workbench for Emacs: your files, your agents and your work, side by side." 'face 'drgnx-start-quiet) "\n")
+    (insert (propertize "Everything it does is a command, and the keys below find all of them." 'face 'drgnx-start-quiet) "\n\n")
     (pcase-dolist (`(,id ,what) drgnx-start--keys)
       (when-let* ((key (drgnx-start--key id)))
-        (insert "  " (propertize search 'face 'drgnx-start-quiet) " "
+        (insert (propertize search 'face 'drgnx-start-quiet) " "
                 (propertize (format "%-10s" key) 'face 'drgnx-start-key)
                 (propertize what 'face 'drgnx-start-quiet) "\n")))
     (insert "\n")
     (pcase-dolist (`(,id ,label ,help) drgnx-start--buttons)
       (when (or (eq id 'dismiss) (drgnx-commands-get id))
         (drgnx-start--insert-button id label help)))
+    (add-text-properties (point-min) (point-max)
+                         (list 'line-prefix drgnx-start--centre 'wrap-prefix drgnx-start--centre))
     (goto-char (point-min))
     (when-let* ((b (next-button (point)))) (goto-char (button-start b)))
     (set-buffer-modified-p nil)))
@@ -212,7 +227,7 @@ Always returns nil, so it can be a hook function."
 (defun drgnx-start-dismiss ()
   "Never show the start page by itself again (kept in face.eld), and put it away: its windows show `*scratch*'."
   (interactive)
-  (drgnx-face-state-write (plist-put (copy-sequence (drgnx-face-state-read)) :start-dismissed t))
+  (drgnx-face-state-put '(:start-dismissed t))
   (when-let* ((buf (get-buffer drgnx-start-buffer-name)))
     (dolist (w (get-buffer-window-list buf nil t))
       (set-window-buffer w (get-scratch-buffer-create)))
@@ -223,7 +238,6 @@ Always returns nil, so it can be a hook function."
 
 (defun drgnx-start--first-frame-run ()
   "The idle timer's function, a moment after a start's first window: show the page for the selected frame."
-  (setq drgnx-start--timer nil)
   (drgnx-start-maybe-show))
 
 (defun drgnx-start--on-first-frame ()
@@ -232,8 +246,7 @@ hook (the files asked for and the restored layout come first).  A daemon's own f
 clients are left to `server-after-make-frame-hook'.  The timer waits a second, after the Welcome's (0.5 s), which
 comes first on a first run."
   (unless (or noninteractive (and (daemonp) (not (display-graphic-p))))
-    (when (timerp drgnx-start--timer) (cancel-timer drgnx-start--timer))
-    (setq drgnx-start--timer (run-with-idle-timer 1 nil #'drgnx-start--first-frame-run))))
+    (drgnx-timer-start 'start-first-frame 1 #'drgnx-start--first-frame-run :idle t :owner 'ui/face)))
 
 (defun drgnx-start--no-file-tabs-p ()
   "Non-nil when the editor window used last holds no tab that visits a file."
@@ -270,15 +283,15 @@ Going to `*scratch*' from anything else is the user's own doing and stays."
     (drgnx-signal-subscribe 'editor-changed #'drgnx-start--on-editor-changed)))
 
 (defun drgnx-start-teardown ()
-  "Take the page off every hook, the bus and the timer (what `drgnx-start-setup' added; the command stays)."
+  "Take the page off every hook and the bus (what `drgnx-start-setup' added; the command stays).  Its timer
+belongs to ui/face's run and ends with it."
   (remove-hook 'drgnx-persist-after-restore-functions #'drgnx-start-maybe-show)
   (remove-hook 'server-after-make-frame-hook #'drgnx-start-maybe-show)
   (remove-hook 'drgnx-first-gui-frame-hook #'drgnx-start--on-first-frame)
   (remove-hook 'window-setup-hook #'drgnx-start--on-first-frame)
   (when (fboundp 'drgnx-signal-unsubscribe)
     (drgnx-signal-unsubscribe 'editor-changed #'drgnx-start--on-editor-changed))
-  (when (timerp drgnx-start--timer) (cancel-timer drgnx-start--timer))
-  (setq drgnx-start--timer nil drgnx-start--after-file nil))
+  (setq drgnx-start--after-file nil))
 
 (provide 'drgnx-start)
 ;;; drgnx-start.el ends here

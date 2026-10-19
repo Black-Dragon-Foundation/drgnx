@@ -32,6 +32,10 @@ setup changes neither the dividers nor the faces of the test process."
           (drgnx-face--wm-noted nil) (enable-theme-functions nil)
           (drgnx-face-menu-bar drgnx-face-menu-bar) (drgnx-face-scroll-bars drgnx-face-scroll-bars)
           (drgnx-face-line-spacing drgnx-face-line-spacing)
+          (drgnx-face-line-wrap drgnx-face-line-wrap) (drgnx-face--wrap-saved nil)
+          (word-wrap word-wrap) (truncate-lines truncate-lines)
+          (truncate-partial-width-windows truncate-partial-width-windows)
+          (drgnx-face-frame-title drgnx-face-frame-title) (frame-title-format frame-title-format)
           (drgnx-face-line-numbers-modes drgnx-face-line-numbers-modes)
           (drgnx-face-inline-problems drgnx-face-inline-problems)
           (line-spacing line-spacing)
@@ -59,21 +63,22 @@ setup changes neither the dividers nor the faces of the test process."
 
 (ert-deftest drgnx-face/no-menu-bar-and-no-scroll-bars-by-default ()
   (drgnx-face-test--with
-    (should-not drgnx-face-menu-bar)
-    (should (eq drgnx-face-scroll-bars 'none))
-    (drgnx-face-test--setup)
-    ;; new frames: the alist (early-init.el also has them before the first frame exists)
-    (should (eql (alist-get 'menu-bar-lines default-frame-alist) 0))
-    (should (assq 'vertical-scroll-bars default-frame-alist))
-    (should-not (alist-get 'vertical-scroll-bars default-frame-alist))
-    ;; live frames and later ones: the parameters
-    (let (seen)
-      (cl-letf (((symbol-function 'modify-frame-parameters) (lambda (_f params) (setq seen params))))
-        (drgnx-face-apply-frame (selected-frame)))
-      (should (eql (alist-get 'menu-bar-lines seen) 0))
-      (should (assq 'vertical-scroll-bars seen))
-      (should-not (alist-get 'vertical-scroll-bars seen)))
-    (should (memq #'drgnx-face-apply-frame after-make-frame-functions))))
+    (let ((system-type 'gnu/linux))       ; a Mac keeps its menu bar (drgnx-face/a-mac-keeps-its-system-menu-bar)
+      (should-not drgnx-face-menu-bar)
+      (should (eq drgnx-face-scroll-bars 'none))
+      (drgnx-face-test--setup)
+      ;; new frames: the alist (early-init.el also has them before the first frame exists)
+      (should (eql (alist-get 'menu-bar-lines default-frame-alist) 0))
+      (should (assq 'vertical-scroll-bars default-frame-alist))
+      (should-not (alist-get 'vertical-scroll-bars default-frame-alist))
+      ;; live frames and later ones: the parameters
+      (let (seen)
+        (cl-letf (((symbol-function 'modify-frame-parameters) (lambda (_f params) (setq seen params))))
+          (drgnx-face-apply-frame (selected-frame)))
+        (should (eql (alist-get 'menu-bar-lines seen) 0))
+        (should (assq 'vertical-scroll-bars seen))
+        (should-not (alist-get 'vertical-scroll-bars seen)))
+      (should (memq #'drgnx-face-apply-frame after-make-frame-functions)))))
 
 (ert-deftest drgnx-face/a-mac-keeps-its-system-menu-bar ()
   (drgnx-face-test--with
@@ -94,7 +99,8 @@ setup changes neither the dividers nor the faces of the test process."
 (ert-deftest drgnx-face/setopt-brings-the-menu-bar-back ()
   (drgnx-face-test--with
     (drgnx-face-test--setup)
-    (let ((frames (list 'a 'b)) (calls nil))
+    (let ((frames (list 'a 'b)) (calls nil)
+          (system-type 'gnu/linux))     ; a Mac keeps its menu bar (drgnx-face/a-mac-keeps-its-system-menu-bar)
       (cl-letf (((symbol-function 'frame-list) (lambda () frames))
                 ((symbol-function 'frame-parent) (lambda (_f) nil))
                 ((symbol-function 'frame-live-p) (lambda (_f) t))
@@ -201,6 +207,67 @@ setup changes neither the dividers nor the faces of the test process."
     (should (eql (default-value 'line-spacing) 3))
     (setopt drgnx-face-line-spacing nil)
     (should (eql (default-value 'line-spacing) 5))))
+
+(ert-deftest drgnx-face/long-lines-wrap-at-a-word-in-every-window ()
+  ;; one policy: Emacs cuts below 50 columns and breaks mid-word above; drgnx wraps at words everywhere
+  (drgnx-face-test--with
+    (setq-default word-wrap nil truncate-lines nil truncate-partial-width-windows 50)
+    (drgnx-face-test--setup)
+    (should (eq (default-value 'word-wrap) t))
+    (should-not (default-value 'truncate-lines))
+    (should-not (default-value 'truncate-partial-width-windows))
+    (setopt drgnx-face-line-wrap 'truncate)
+    (should (default-value 'truncate-lines))
+    (should-not (default-value 'truncate-partial-width-windows))
+    (setopt drgnx-face-line-wrap nil)                       ; Emacs's own again
+    (should-not (default-value 'word-wrap))
+    (should-not (default-value 'truncate-lines))
+    (should (eql (default-value 'truncate-partial-width-windows) 50))))
+
+(ert-deftest drgnx-face/toggle-word-wrap-flips-one-buffer ()
+  (drgnx-face-test--with
+    (cl-letf (((symbol-function 'frame-list) (lambda () nil)))
+      (drgnx-face-test--setup)
+      (should (drgnx-commands-get 'face-toggle-wrap))
+      (with-temp-buffer
+        (should-not truncate-lines)
+        (call-interactively (drgnx-cmd-command (drgnx-commands-get 'face-toggle-wrap)))
+        (should truncate-lines)
+        (call-interactively (drgnx-cmd-command (drgnx-commands-get 'face-toggle-wrap)))
+        (should-not truncate-lines)
+        (should word-wrap))
+      (should-not (default-value 'truncate-lines)))))              ; other buffers keep the policy
+
+(ert-deftest drgnx-face/the-wrap-toggle-is-in-every-profile ()
+  (dolist (p '("vscode" "emacs" "vim"))
+    (with-temp-buffer
+      (insert-file-contents (expand-file-name (format "keys/%s.eld" p) drgnx-dir))
+      (should (search-forward "(face-toggle-wrap " nil t)))))
+
+(ert-deftest drgnx-face/the-frame-title-is-file-project-drgnx ()
+  (with-temp-buffer
+    (setq buffer-file-name "/x/proj/src/main.rs" default-directory "/x/proj/src/")
+    (setq-local drgnx-chrome--root (cons "/x/proj/src/" "/x/proj/"))   ; the breadcrumb's cache
+    (should (equal (drgnx-face-frame-title) "main.rs — proj — drgnx"))
+    (setq-local drgnx-chrome--root (cons "/elsewhere/" "/x/proj/"))    ; a stale cache is not trusted
+    (should (equal (drgnx-face-frame-title) "main.rs — drgnx")))
+  (with-temp-buffer
+    (rename-buffer " *scratch-test*" t)
+    (should (string-suffix-p " — drgnx" (drgnx-face-frame-title))))
+  (with-temp-buffer
+    (setq major-mode 'drgnx-start-mode)
+    (should (equal (drgnx-face-frame-title) "drgnx"))))
+
+(ert-deftest drgnx-face/the-frame-title-setting-leaves-your-own-alone ()
+  (drgnx-face-test--with
+    (setq-default frame-title-format drgnx-face--stock-title)
+    (drgnx-face-test--setup)
+    (should (equal (default-value 'frame-title-format) drgnx-face--frame-title-construct))
+    (setopt drgnx-face-frame-title nil)                       ; back to Emacs's standard one
+    (should (drgnx-face--stock-title-p (default-value 'frame-title-format)))
+    (setq-default frame-title-format "mine")
+    (setopt drgnx-face-frame-title t)
+    (should (equal (default-value 'frame-title-format) "mine"))))
 
 (ert-deftest drgnx-face/dividers-are-thin-and-inherit-the-theme ()
   (drgnx-face-test--with

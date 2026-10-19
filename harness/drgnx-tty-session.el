@@ -198,6 +198,14 @@ ends after $DRGNX_TTY_MAX_RUNTIME seconds (default 1800) even if no one stops it
     (drgnx-ui--write (expand-file-name "keys.eld" dir)
                      (format "%S\n" (list :layers (list (list p 'app 'editing 'window)))))))
 
+(defun drgnx-tty-session--dismiss-start-page (run)
+  "Write RUN's state/drgnx/face.eld as \"Don't show this again\" leaves it.  An empty editor would show the start
+page a moment after a window appears (a daemon's client at once); the tests look at the editor, whose buffer is
+`*scratch*', so the start page is put away as a person would put it away.  The start page has tests of its own."
+  (let ((dir (expand-file-name "state/drgnx" run)))
+    (make-directory dir t)
+    (drgnx-ui--write (expand-file-name "face.eld" dir) "(:start-dismissed t)\n")))
+
 (defun drgnx-tty-session--emacs-argv (sess daemon)
   (list (drgnx-ui-emacs-bin) "--init-directory" (expand-file-name "init" (plist-get sess :run))
         (if daemon "--fg-daemon" "-nw")))
@@ -315,6 +323,7 @@ The plist has the `drgnx-ui' keys plus :tmux (the server's socket), :target (the
         (pcase-let ((`(,w ,h) (split-string size "x")))
           (dolist (d '("home" "xdg/config" "xdg/data" "xdg/cache")) (make-directory (expand-file-name d run) t))
           (when keys (drgnx-tty-session--write-keys (expand-file-name "drgnx-config" run) keys))
+          (unless command (drgnx-tty-session--dismiss-start-page run))
           (drgnx-tty-session--start-server sess)
           (let* ((env (drgnx-tty-session--env sess env))
                  (first (if nested

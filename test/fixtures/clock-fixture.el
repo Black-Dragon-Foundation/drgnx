@@ -195,6 +195,7 @@ run in the same order, virtual time moving with it.  From INPUT-AT seconds into 
 
 ;;;; The fixture
 
+(defvar undo-auto-current-boundary-timer)
 (declare-function drgnx-timer-pending "drgnx-timer" ())
 (declare-function drgnx-timer-reset "drgnx-timer" ())
 
@@ -211,9 +212,28 @@ run in the same order, virtual time moving with it.  From INPUT-AT seconds into 
   (append (and (fboundp 'drgnx-timer-pending) (ignore-errors (drgnx-timer-pending)))
           (mapcar #'drgnx-test--timer-name (append timer-list timer-idle-list))))
 
+(defun drgnx-test--drop-emacs-timers ()
+  "Cancel the housekeeping timer Emacs arms by itself (`undo-auto--boundary-timer'): it is not the code under test's."
+  (dolist (timer (copy-sequence timer-list))
+    (when (eq (timer--function timer) 'undo-auto--boundary-timer)
+      (cancel-timer timer)
+      (when (eq timer undo-auto-current-boundary-timer) (setq undo-auto-current-boundary-timer nil)))))
+
+(defun drgnx-test--warm-trampolines ()
+  "Advise and unadvise each primitive the fixture advises, on scratch timer lists.
+Emacs 31 native-compiles a primitive's advice trampoline on the first `advice-add' of it, and logging that compile
+arms `undo-auto--boundary-timer'; done here, the body's lists never see it and the real lists are left as they were."
+  (let ((timer-list nil) (timer-idle-list nil))
+    (dolist (a (drgnx-test--advice))
+      (when (subrp (symbol-function (nth 0 a)))
+        (advice-add (nth 0 a) :around #'ignore)
+        (advice-remove (nth 0 a) #'ignore)))
+    (drgnx-test--drop-emacs-timers)))
+
 (defun drgnx-test--call-with-clock (body allow-pending)
   "Run BODY (a function) on the virtual clock; see `drgnx-test-with-clock'."
   (when drgnx-test--active (error "drgnx-test-with-clock: already inside one"))
+  (drgnx-test--warm-trampolines)
   (let* ((timer-list nil) (timer-idle-list nil)
          (start (time-convert nil t))
          (drgnx-test--active t) (drgnx-test--start start) (drgnx-test--now start)
@@ -226,6 +246,7 @@ run in the same order, virtual time moving with it.  From INPUT-AT seconds into 
                (funcall body)
                (when (and (not layer) (fboundp 'drgnx-timer--now))
                  (error "drgnx-timer was loaded inside drgnx-test-with-clock: require it first"))
+               (drgnx-test--drop-emacs-timers)
                (when (and (not allow-pending) (or timer-list timer-idle-list (fboundp 'drgnx-timer-pending)))
                  (setq names (drgnx-test--pending-names))))
       (dolist (a advice) (advice-remove (nth 0 a) (nth 2 a)))

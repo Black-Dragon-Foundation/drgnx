@@ -17,6 +17,8 @@
 (require 'diff-mode)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
+(require 'drgnx-timer)
+(require 'drgnx-view)
 (require 'drgnx-trust)
 (require 'drgnx-agents)
 (require 'drgnx-jobs)
@@ -28,6 +30,7 @@
 
 (defface drgnx-agents-ui-dim '((t :inherit shadow)) "Thoughts and finished tool calls." :group 'drgnx)
 (defface drgnx-agents-ui-user '((t :inherit bold)) "What you said." :group 'drgnx)
+(defface drgnx-agents-ui-header '((t :inherit header-line)) "The Agents list's column titles (its first line)." :group 'drgnx)
 (defface drgnx-agents-ui-ask '((t :inherit warning)) "What the agent waits for." :group 'drgnx)
 
 (defvar-local drgnx-agents-ui--session nil "The session this transcript shows.")
@@ -58,6 +61,8 @@
 (define-derived-mode drgnx-agents-list-mode tabulated-list-mode "Agents"
   "Agent sessions and durable jobs: RET opens one."
   (setq tabulated-list-format [("Name" 26 nil) ("Status" 9 nil) ("Last" 5 nil) ("Ctx" 5 nil) ("Via" 8 nil) ("Waiting" 0 nil)])
+  ;; the dock's tab strip owns the header line: the column titles are the list's first line instead
+  (setq-local tabulated-list-use-header-line nil)
   (add-hook 'tabulated-list-revert-hook (lambda () (setq drgnx-agents-ui--jobs-cache nil)) nil t)   ; g reads jobs now
   (tabulated-list-init-header))
 
@@ -89,39 +94,157 @@
                            (if (plist-get j :exit) (format "exit %s" (plist-get j :exit)) ""))))
            (drgnx-agents-ui--jobs))))
 
+;; The list is a view with no rows (`agents-list'): the view gives it the timer, the visibility check and the stale
+;; mark; its SYNC prints.  tabulated-list owns the text, so the view's START is moved to the end after each print.
+
+(defun drgnx-agents-ui--id-at (pos)
+  "The session or job id of the list line at POS (`tabulated-list-id'), or nil."
+  (get-text-property pos 'tabulated-list-id))
+
+(defun drgnx-agents-ui--pos-of (id)
+  "The start of the line of ID in the current Agents list, or nil."
+  (save-excursion
+    (goto-char (point-min))
+    (let (found)
+      (while (and (not found) (not (eobp)))
+        (if (equal (get-text-property (point) 'tabulated-list-id) id)
+            (setq found (point))
+          (goto-char (or (next-single-property-change (point) 'tabulated-list-id) (point-max)))))
+      found)))
+
+(defvar tabulated-list--header-overlay)
+
+(defun drgnx-agents-ui--header-end ()
+  "Make the column titles the list's first line (a fake header: the dock's tab strip has the header line) in the
+theme's header face, and return where the lines start (`point-min' when the list uses a real header line)."
+  (if tabulated-list-use-header-line
+      (point-min)
+    (let ((inhibit-read-only t))
+      (unless (tabulated-list-header-overlay-p (point-min))
+        (save-excursion (tabulated-list-print-fake-header)))
+      (if (not (overlayp tabulated-list--header-overlay))
+          (point-min)
+        (unless (eq (overlay-get tabulated-list--header-overlay 'face) 'drgnx-agents-ui-header)
+          (overlay-put tabulated-list--header-overlay 'face 'drgnx-agents-ui-header))
+        (overlay-end tabulated-list--header-overlay)))))
+
+(declare-function drgnx-commands-get "drgnx-registry")
+(declare-function drgnx-surfaces-key "drgnx-surfaces")
+
+(defun drgnx-agents-ui--new-key ()
+  "The key that runs New Agent Session… in the active key profile, or nil (it is then in the palette only)."
+  (when-let* ((cmd (and (fboundp 'drgnx-surfaces-key) (drgnx-commands-get 'agents-new)))
+              (s (ignore-errors (drgnx-surfaces-key cmd)))
+              ((not (string-empty-p s))))
+    (substring s 0 (string-search " (in " s))))
+
+(defun drgnx-agents-ui--claude-needs ()
+  "What the claude profile still needs when it is the default one and its adapter is missing or too old, as a
+sentence, or nil when it is ready (or another profile is the default)."
+  (when (equal (car (plist-get (cdr (ignore-errors (drgnx-agents-profile (drgnx-agents-default-profile)))) :command))
+               drgnx-agents-claude-program)
+    (let ((a (ignore-errors (drgnx-agents-claude-adapter))))
+      (cond ((null a) (format "Claude needs its adapter, %s: run drgnx onboard --step agents (or Help → Welcome → Agents) to install it."
+                              drgnx-agents-claude-program))
+            ((ignore-errors (drgnx-agents-adapter-problem a))
+             (format "Claude's adapter %s needs updating: drgnx doctor says how." drgnx-agents-claude-program))))))
+
+(defun drgnx-agents-ui--empty-state ()
+  "The text of an empty list: how to start a session (with its key when it has one), and what Claude needs when
+the claude profile is not ready.  Wrapped to the list's window (at most 40 columns)."
+  (let* ((key (drgnx-agents-ui--new-key))
+         (width (min 40 (max 20 (if-let* ((w (get-buffer-window (current-buffer) t))) (window-body-width w) 40))))
+         (paragraphs (delq nil (list (format "No agent sessions yet — New Agent Session… (%s) starts one"
+                                             (if key (concat key ", or the palette") "palette"))
+                                     (drgnx-agents-ui--claude-needs)))))
+    (propertize
+     (concat (mapconcat (lambda (p)
+                          (with-temp-buffer
+                            (insert p)
+                            (let ((fill-column width) (sentence-end-double-space nil)) (fill-region (point-min) (point-max)))
+                            (buffer-string)))
+                        paragraphs "\n")
+             "\n")
+     'face 'drgnx-agents-ui-dim)))
+
+(defun drgnx-agents-ui--update-lines ()
+  "Make the current list's lines those of `tabulated-list-entries', in their order, touching only lines that differ:
+a line whose id and columns are the same stays as it is (`tabulated-list-print' with UPDATE keeps a line of the same
+id even when its columns changed, and without a sort key prints everything again).  Lines of ids no longer listed go;
+a new id gets a line where its entry stands; a line out of order is deleted and printed again at its place.  The
+column titles stay the first line; with no entries the empty state follows them."
+  (let* ((entries (if (functionp tabulated-list-entries) (funcall tabulated-list-entries) tabulated-list-entries))
+         (new (make-hash-table :test #'equal)) (present (make-hash-table :test #'equal))
+         (inhibit-read-only t) (start (drgnx-agents-ui--header-end)))
+    (dolist (e entries) (puthash (car e) t new))
+    (goto-char start)
+    (while (not (eobp))
+      (puthash (get-text-property (point) 'tabulated-list-id) t present)
+      (forward-line 1))
+    (goto-char start)
+    (unless entries
+      (let ((text (drgnx-agents-ui--empty-state)))
+        ;; the same text already there: keep it; else it goes in first and the old tail is dropped below
+        (if (equal-including-properties text (buffer-substring (point) (point-max)))
+            (goto-char (point-max))
+          (insert text))))
+    (dolist (e entries)
+      (let ((id (car e)) (cols (cadr e)) done)
+        (while (not done)
+          (let ((here (and (not (eobp)) (get-text-property (point) 'tabulated-list-id))))
+            (cond ((eobp) (funcall tabulated-list-printer id cols) (puthash id t present) (setq done t))
+                  ((equal here id)
+                   (if (equal cols (get-text-property (point) 'tabulated-list-entry))
+                       (forward-line 1)
+                     (delete-region (point) (progn (forward-line 1) (point)))
+                     (funcall tabulated-list-printer id cols))
+                   (setq done t))
+                  ((or (not (gethash here new)) (gethash id present))
+                   (remhash here present)    ; gone, or out of order: printed again at its entry
+                   (delete-region (point) (progn (forward-line 1) (point))))
+                  (t (funcall tabulated-list-printer id cols) (puthash id t present) (setq done t)))))))
+    (delete-region (point) (point-max))))
+
+(defun drgnx-agents-ui--leave-header ()
+  "Windows of the current list whose point is in the column titles move to the first line below them."
+  (let ((start (drgnx-agents-ui--header-end)))
+    (when (< (point) start) (goto-char start))
+    (dolist (w (get-buffer-window-list nil nil t))
+      (when (< (window-point w) start) (set-window-point w start)))))
+
+(defun drgnx-agents-ui--list-print (view)
+  "SYNC of `agents-list': update the list's lines in place, each window keeping its point and start on their
+session.  Then the view's START goes to the end: the view has no rows, and the text is tabulated-list's."
+  (unwind-protect
+      (drgnx-view-with-kept-windows (:key-at #'drgnx-agents-ui--id-at :pos-of #'drgnx-agents-ui--pos-of)
+        (drgnx-agents-ui--update-lines))
+    (drgnx-agents-ui--leave-header)
+    ;; even when the update signalled: the self-check must not take the lines for foreign text and delete them
+    (set-marker (drgnx-view--start view) (point-max))
+    (set-buffer-modified-p nil)))
+
+(defun drgnx-agents-ui--list-view ()
+  "The view of the Agents list, or nil (no list, or it was made without the module)."
+  (when-let* ((b (get-buffer "*drgnx Agents*")) (view (buffer-local-value 'drgnx-view b)))
+    (and (drgnx-view-p view) view)))
+
 (defun drgnx-agents-ui-list-buffer ()
+  "The Agents list, up to date.  With the `agents-list' view type (the module is on) the view prints it."
   (let ((b (get-buffer-create "*drgnx Agents*")))
     (with-current-buffer b
       (unless (derived-mode-p 'drgnx-agents-list-mode) (drgnx-agents-list-mode))
       (setq tabulated-list-entries #'drgnx-agents-ui--entries)
-      (tabulated-list-print t))
+      (if (not (alist-get 'agents-list drgnx-view--types))  ; the type is the module's: none while it is off
+          (tabulated-list-print t t)
+        (unless (drgnx-view-p drgnx-view) (drgnx-view-attach 'agents-list))
+        (drgnx-view-touch drgnx-view)
+        (drgnx-view-draw-now drgnx-view)))
     b))
 
-(defvar drgnx-wb--owned)                ; drgnx-wb.el: windows the running code may move from a timer
-(defvar drgnx-agents-ui--tick-timer nil "Redraws the Agents list every 30 s while it is visible (its Last ages).")
-
-(defun drgnx-agents-ui--tick-update (&rest _)
-  "Run the 30 s redraw while the Agents list is visible in some window; cancel it when it is not.
-On `window-buffer-change-functions'; never asks anything."
-  (if (when-let* ((b (get-buffer "*drgnx Agents*"))) (get-buffer-window b t))
-      (unless (timerp drgnx-agents-ui--tick-timer)
-        (setq drgnx-agents-ui--tick-timer (run-with-timer 30 30 #'drgnx-agents-ui--tick)))
-    (when (timerp drgnx-agents-ui--tick-timer) (cancel-timer drgnx-agents-ui--tick-timer))
-    (setq drgnx-agents-ui--tick-timer nil)))
-
 (defun drgnx-agents-ui--tick ()
-  "Redraw the visible Agents list so its ages are current, each window's point on its row; stop when hidden."
-  (let* ((b (get-buffer "*drgnx Agents*")) (ws (and b (get-buffer-window-list b nil t))))
-    (if (not ws)
-        (drgnx-agents-ui--tick-update)
-      (with-current-buffer b
-        (let ((rows (mapcar (lambda (w) (list w (line-number-at-pos (window-point w)) (line-number-at-pos (window-start w))))
-                            ws))
-              (drgnx-wb--owned (append ws (and (boundp 'drgnx-wb--owned) drgnx-wb--owned))))  ; our own buffer's windows (jank guard, I9)
-          (tabulated-list-print t)
-          (pcase-dolist (`(,w ,pt ,start) rows)
-            (set-window-start w (save-excursion (goto-char (point-min)) (forward-line (1- start)) (point)) t)
-            (set-window-point w (save-excursion (goto-char (point-min)) (forward-line (1- pt)) (point)))))))))
+  "The 30 s tick (layer key `agents-ui-tick'): mark the Agents list so its Last ages are printed again.  The view
+prints only while the list is shown; hidden, it is marked stale and prints when shown."
+  (when-let* ((view (drgnx-agents-ui--list-view))) (drgnx-view-touch view)))
 
 (defun drgnx-agents-ui-view ()
   "Show the Agents tab in the right dock."
@@ -136,91 +259,231 @@ On `window-buffer-change-functions'; never asks anything."
     (cond ((drgnx-agent-session-p id) (drgnx-agents-ui-transcript id))
           ((stringp id) (drgnx-agents-ui-job-log id)))))
 
-;;;; Transcripts
+;;;; Transcripts: a view (wb/drgnx-view.el), one row per entry, patched in place
+
+;; What streams in is appended to its row (GROW), a changed row is drawn again on its own, and nothing is drawn while
+;; no window shows the transcript.  The agent's process filter only marks the view (`drgnx-agents-ui--changed').
 
 (defvar drgnx-agents-transcript-mode-map
   (let ((m (make-sparse-keymap))) (set-keymap-parent m special-mode-map) m)
   "Keys come from the key profiles (command `agents-reply').")
 
 (define-derived-mode drgnx-agents-transcript-mode special-mode "Agent"
-  "A live agent transcript: RET sends (queued while the agent works); Stop cancels; g redraws."
+  "A live agent transcript: RET sends (queued while the agent works); Stop cancels; g redraws.
+Its rows are a view of type `agent-transcript' (read-only, no undo), drawn only while a window shows it."
   (setq-local truncate-lines nil
-              revert-buffer-function (lambda (&rest _) (drgnx-agents-ui-refresh))))
+              revert-buffer-function (lambda (&rest _) (drgnx-agents-ui-refresh)))
+  (when (drgnx-view-type-p 'agent-transcript)        ; the type is the module's: none while it is off
+    (drgnx-view-attach 'agent-transcript)))
 
-(defun drgnx-agents-ui--insert-tool (e depth)
-  (insert (make-string (* 2 depth) ?\s)
-          (propertize (format "⚙ %s [%s]" (or (plist-get e :title) "tool") (or (plist-get e :status) ""))
-                      'face (if (equal (plist-get e :status) "completed") 'drgnx-agents-ui-dim 'default))
-          "\n")
-  (dolist (c (plist-get e :children)) (drgnx-agents-ui--insert-tool c (1+ depth))))
+(defvar-local drgnx-agents-ui--synced nil
+  "What this transcript's last full sync saw: [SESSION ENTRIES COUNT PERMISSIONS REVIEWS STATUS QUEUE-VECTOR
+COMMANDS PAUSED EXIT STDERR LIVE PERMISSION-COUNT REVIEW-COUNT], LIVE being ((ENTRY . SIGNATURE)...) for its tool
+and plan entries not done yet (they change in place).  When all of it is the same, a sync only looks at the growing
+text (`drgnx-agents-ui--sync').")
+
+(defun drgnx-agents-ui--tool-lines (e depth)
+  "Tool entry E and its children (nested DEPTH deep) as a list of lines."
+  (cons (concat (make-string (* 2 depth) ?\s)
+                (propertize (format "⚙ %s [%s]" (or (plist-get e :title) "tool") (or (plist-get e :status) ""))
+                            'face (if (equal (plist-get e :status) "completed") 'drgnx-agents-ui-dim 'default))
+                "\n")
+        (mapcan (lambda (c) (drgnx-agents-ui--tool-lines c (1+ depth))) (plist-get e :children))))
 
 (defun drgnx-agents-ui--button (label action)
-  (insert-text-button label 'action (lambda (_) (funcall action)) 'follow-link t))
+  "A copy of LABEL made a text button that calls ACTION."
+  (make-text-button (copy-sequence label) nil 'action (lambda (_) (funcall action)) 'follow-link t))
+
+(defun drgnx-agents-ui--blank-p (e)
+  "Non-nil if entry E shows nothing (a turn's end that was not a Stop)."
+  (pcase (plist-get e :type)
+    ((or 'user 'agent 'thought 'tool 'plan 'error) nil)
+    ('stop (not (equal (plist-get e :stop) "cancelled")))
+    (_ t)))
+
+(defun drgnx-agents-ui--keys (s)
+  "Session S's rows, in order: `:commands' (when it has commands), each entry that shows something, each permission
+and review to answer, `:status' (working or exited) and `:queue' (when messages wait)."
+  (let (keys)
+    (when (drgnx-agent-session-commands s) (push :commands keys))
+    (dolist (e (drgnx-agent-session-entries s)) (unless (drgnx-agents-ui--blank-p e) (push e keys)))
+    (dolist (p (drgnx-agent-session-permissions s)) (push p keys))
+    (dolist (r (drgnx-agent-session-reviews s)) (push r keys))
+    (when (memq (drgnx-agent-session-status s) '(busy exited)) (push :status keys))
+    (when (drgnx-agent-session-queue s) (push :queue keys))
+    (nreverse keys)))
+
+(defun drgnx-agents-ui--entry-row (e)
+  "Entry E's row: a string ending in a newline, or (BODY . SUFFIX) for the agent's text and thinking (they grow)."
+  (pcase (plist-get e :type)
+    ('user (concat (propertize (concat (if (plist-get e :steer) "↪ " "▸ ") (plist-get e :text)) 'face 'drgnx-agents-ui-user) "\n\n"))
+    ('agent (cons (drgnx-agents-entry-text e) "\n\n"))
+    ('thought (cons (propertize (concat "… " (drgnx-agents-entry-text e)) 'face 'drgnx-agents-ui-dim) "\n"))
+    ('tool (apply #'concat (drgnx-agents-ui--tool-lines e 0)))
+    ('plan (concat (mapconcat (lambda (p) (concat (pcase (plist-get p :status) ("completed" "☑ ") ("in_progress" "◐ ") (_ "☐ "))
+                                                  (plist-get p :content) "\n"))
+                              (plist-get e :entries))
+                   "\n"))
+    ('error (concat (propertize (concat "! " (plist-get e :text)) 'face 'error) "\n"))
+    ('stop (propertize "■ stopped\n\n" 'face 'drgnx-agents-ui-dim))))
+
+(defun drgnx-agents-ui--row (s key)
+  "The text of session S's row KEY (`drgnx-agents-ui--keys').  Buttons are made here, their closures with them."
+  (pcase key
+    (:commands
+     (concat (propertize (concat "Commands: " (mapconcat (lambda (c) (concat "/" (plist-get c :name))) (drgnx-agent-session-commands s) " "))
+                         'face 'drgnx-agents-ui-dim)
+             "\n\n"))
+    (:status
+     (if (eq (drgnx-agent-session-status s) 'busy)
+         (concat (propertize "working…  " 'face 'drgnx-agents-ui-dim) (drgnx-agents-ui--button "[Stop]" (lambda () (drgnx-agents-stop s))) "\n")
+       (concat (propertize (format "the agent exited%s\n%s" (if (drgnx-agent-session-exit s) (format " (%s)" (drgnx-agent-session-exit s)) "")
+                                   (or (drgnx-agent-session-stderr s) ""))
+                           'face 'error)
+               "\n")))
+    (:queue
+     (let ((i -1))
+       (concat (propertize (format "\n%d queued%s:" (length (drgnx-agent-session-queue s))
+                                   (if (drgnx-agent-session-paused s) " (held by Stop)" ""))
+                           'face 'drgnx-agents-ui-dim)
+               (if (drgnx-agent-session-paused s)
+                   (concat " " (drgnx-agents-ui--button "[Deliver]" (lambda () (drgnx-agents-deliver-queue s))))
+                 "")
+               (mapconcat (lambda (text)
+                            (let ((n (setq i (1+ i))))
+                              (concat "\n  " (propertize text 'face 'drgnx-agents-ui-dim) " "
+                                      (drgnx-agents-ui--button "[×]" (lambda () (drgnx-agents-unqueue s n))))))
+                          (drgnx-agent-session-queue s))
+               "\n")))
+    ((guard (plist-get key :type)) (drgnx-agents-ui--entry-row key))
+    ((guard (memq key (drgnx-agent-session-reviews s)))
+     (concat (propertize (format "? the agent wants to change %s  " (plist-get key :path)) 'face 'drgnx-agents-ui-ask)
+             (drgnx-agents-ui--button "[Review]" (lambda () (drgnx-agents-ui-review s key)))
+             "\n"))
+    (_                                  ; a permission
+     (concat (propertize (format "? %s  " (plist-get key :title)) 'face 'drgnx-agents-ui-ask)
+             (mapconcat (lambda (o) (concat (drgnx-agents-ui--button (format "[%s]" (plist-get o :name))
+                                                                     (lambda () (drgnx-agents-answer-permission s key (plist-get o :optionId))))
+                                            " "))
+                        (plist-get key :options))
+             "\n"))))
 
 (defun drgnx-agents-ui-render (s)
-  "Insert session S's transcript (and what waits for an answer) at point."
-  (when-let* ((cmds (drgnx-agent-session-commands s)))
-    (insert (propertize (concat "Commands: " (mapconcat (lambda (c) (concat "/" (plist-get c :name))) cmds " ")) 'face 'drgnx-agents-ui-dim)
-            "\n\n"))
-  (dolist (e (drgnx-agent-session-entries s))
-    (pcase (plist-get e :type)
-      ('user (insert (propertize (concat (if (plist-get e :steer) "↪ " "▸ ") (plist-get e :text)) 'face 'drgnx-agents-ui-user) "\n\n"))
-      ('agent (insert (plist-get e :text) "\n\n"))
-      ('thought (insert (propertize (concat "… " (plist-get e :text)) 'face 'drgnx-agents-ui-dim) "\n"))
-      ('tool (drgnx-agents-ui--insert-tool e 0))
-      ('plan (dolist (p (plist-get e :entries))
-               (insert (pcase (plist-get p :status) ("completed" "☑ ") ("in_progress" "◐ ") (_ "☐ ")) (plist-get p :content) "\n"))
-             (insert "\n"))
-      ('error (insert (propertize (concat "! " (plist-get e :text)) 'face 'error) "\n"))
-      ('stop (when (equal (plist-get e :stop) "cancelled") (insert (propertize "■ stopped\n\n" 'face 'drgnx-agents-ui-dim))))))
-  (dolist (p (drgnx-agent-session-permissions s))
-    (insert (propertize (format "? %s  " (plist-get p :title)) 'face 'drgnx-agents-ui-ask))
-    (dolist (o (plist-get p :options))
-      (let ((o o) (p p))
-        (drgnx-agents-ui--button (format "[%s]" (plist-get o :name))
-                                 (lambda () (drgnx-agents-answer-permission s p (plist-get o :optionId))))
-        (insert " ")))
-    (insert "\n"))
-  (dolist (r (drgnx-agent-session-reviews s))
-    (let ((r r))
-      (insert (propertize (format "? the agent wants to change %s  " (plist-get r :path)) 'face 'drgnx-agents-ui-ask))
-      (drgnx-agents-ui--button "[Review]" (lambda () (drgnx-agents-ui-review s r)))
-      (insert "\n")))
-  (pcase (drgnx-agent-session-status s)
-    ('busy (insert (propertize "working…  " 'face 'drgnx-agents-ui-dim))
-           (drgnx-agents-ui--button "[Stop]" (lambda () (drgnx-agents-stop s))))
-    ('exited (insert (propertize (format "the agent exited%s\n%s" (if (drgnx-agent-session-exit s) (format " (%s)" (drgnx-agent-session-exit s)) "")
-                                         (or (drgnx-agent-session-stderr s) ""))
-                                 'face 'error))))
-  (when (drgnx-agent-session-queue s)
-    (insert (propertize (format "\n%d queued%s:" (length (drgnx-agent-session-queue s))
-                                (if (drgnx-agent-session-paused s) " (held by Stop)" ""))
-                        'face 'drgnx-agents-ui-dim))
-    (when (drgnx-agent-session-paused s)
-      (insert " ") (drgnx-agents-ui--button "[Deliver]" (lambda () (drgnx-agents-deliver-queue s))))
-    (seq-do-indexed (lambda (text i)
-                      (insert "\n  " (propertize text 'face 'drgnx-agents-ui-dim) " ")
-                      (drgnx-agents-ui--button "[×]" (lambda () (drgnx-agents-unqueue s i))))
-                    (drgnx-agent-session-queue s))))
+  "Insert session S's transcript (and what waits for an answer) at point: its rows, as the transcript draws them."
+  (dolist (key (drgnx-agents-ui--keys s))
+    (let ((r (drgnx-agents-ui--row s key))) (if (consp r) (insert (car r) (cdr r)) (insert r)))))
+
+(defun drgnx-agents-ui--render-row (key)
+  "RENDER of the view type `agent-transcript': row KEY of this buffer's session."
+  (drgnx-agents-ui--row drgnx-agents-ui--session key))
+
+(defun drgnx-agents-ui--grow-row (key body)
+  "GROW of `agent-transcript': for an agent's text or thinking, what came after the BODY characters drawn (the
+thinking's with its 2-character prefix and dim face), read from the newest chunks only (`drgnx-agents-entry-tail');
+nil (draw the row again) for anything else, or a text shorter than what was drawn."
+  (let* ((type (and (consp key) (plist-get key :type))) (from (if (eq type 'thought) (- body 2) body))
+         (new (and (memq type '(agent thought)) (>= from 0) (drgnx-agents-entry-tail key from))))
+    (when (and new (eq type 'thought)) (put-text-property 0 (length new) 'face 'drgnx-agents-ui-dim new))
+    new))
+
+(defun drgnx-agents-ui--tool-fields (children)
+  "The status, title and children of each of CHILDREN and their own, depth first, as a list."
+  (mapcan (lambda (c) (nconc (list (plist-get c :status) (plist-get c :title) (plist-get c :children))
+                             (drgnx-agents-ui--tool-fields (plist-get c :children))))
+          children))
+
+(defun drgnx-agents-ui--sig (key)
+  "KEY's signature for `drgnx-view-sync-rows' (compared element by element with `eq'): for an entry its type,
+status, title, children, plan entries and done (an agent's text or thinking: its type only, its text grows and
+`:done' does not change what it shows), with a tool's subagent calls' status, title and children; a permission or
+review is its own; the footer rows take the session's status, exit and each queued message (and what else they
+show)."
+  (let ((s drgnx-agents-ui--session))
+    (pcase key
+      (:commands (vector (drgnx-agent-session-commands s)))
+      (:status (vector (drgnx-agent-session-status s) (drgnx-agent-session-exit s) (drgnx-agent-session-stderr s)))
+      (:queue (apply #'vector (drgnx-agent-session-paused s) (drgnx-agent-session-queue s)))
+      ((guard (memq (plist-get key :type) '(agent thought))) (vector (plist-get key :type)))
+      ((guard (plist-get key :type))
+       (apply #'vector (plist-get key :type) (plist-get key :status) (plist-get key :title) (plist-get key :children)
+              (plist-get key :entries) (plist-get key :done) (drgnx-agents-ui--tool-fields (plist-get key :children))))
+      (_ key))))
+
+(defun drgnx-agents-ui--same-sig-p (a b)
+  "Non-nil if the signature vectors A and B hold `eq' elements."
+  (and (= (length a) (length b))
+       (let ((i 0) (n (length a)))
+         (while (and (< i n) (eq (aref a i) (aref b i))) (setq i (1+ i)))
+         (= i n))))
+
+(defun drgnx-agents-ui--sync (view)
+  "SYNC of `agent-transcript': mark VIEW's rows that changed since the last sync.
+Fast path: when the session's entries, permissions and reviews (the same lists, as long), status, queued messages
+\(each one), commands, pause and exit are `eq' to the last sync's and no tool or plan entry still running changed,
+nothing but the growing text can have changed.  Otherwise `drgnx-view-sync-rows' diffs every row.  Then an
+agent's text or thinking not done yet that is longer than its drawn body is marked to grow."
+  (let ((s drgnx-agents-ui--session))
+    (when s
+      (let ((old drgnx-agents-ui--synced) (entries (drgnx-agent-session-entries s)) (count 0) live texts)
+        (dolist (e entries)
+          (setq count (1+ count))
+          (unless (plist-get e :done)
+            (pcase (plist-get e :type)
+              ((or 'agent 'thought) (push e texts))
+              ((or 'tool 'plan) (push e live)))))
+        (unless (and old (eq s (aref old 0)) (eq entries (aref old 1)) (= count (aref old 2))
+                     ;; a `delq' keeps the head of a list whose first item stays: the lengths tell
+                     (eq (drgnx-agent-session-permissions s) (aref old 3))
+                     (= (length (drgnx-agent-session-permissions s)) (aref old 12))
+                     (eq (drgnx-agent-session-reviews s) (aref old 4)) (= (length (drgnx-agent-session-reviews s)) (aref old 13))
+                     (eq (drgnx-agent-session-status s) (aref old 5))
+                     ;; a requeue replaces a message in place: each one is compared
+                     (drgnx-agents-ui--same-items-p (drgnx-agent-session-queue s) (aref old 6))
+                     (eq (drgnx-agent-session-commands s) (aref old 7)) (eq (drgnx-agent-session-paused s) (aref old 8))
+                     (eq (drgnx-agent-session-exit s) (aref old 9)) (eq (drgnx-agent-session-stderr s) (aref old 10))
+                     (= (length live) (length (aref old 11)))
+                     (let ((ok t) (pairs (aref old 11)))
+                       (while (and ok pairs)
+                         (setq ok (and (memq (caar pairs) live)
+                                       (drgnx-agents-ui--same-sig-p (cdar pairs) (drgnx-agents-ui--sig (caar pairs))))
+                               pairs (cdr pairs)))
+                       ok))
+          (drgnx-view-sync-rows view (drgnx-agents-ui--keys s) #'drgnx-agents-ui--sig)
+          (setq drgnx-agents-ui--synced
+                (vector s entries count (drgnx-agent-session-permissions s) (drgnx-agent-session-reviews s)
+                        (drgnx-agent-session-status s) (vconcat (drgnx-agent-session-queue s)) (drgnx-agent-session-commands s)
+                        (drgnx-agent-session-paused s) (drgnx-agent-session-exit s) (drgnx-agent-session-stderr s)
+                        (mapcar (lambda (e) (cons e (drgnx-agents-ui--sig e))) live)
+                        (length (drgnx-agent-session-permissions s)) (length (drgnx-agent-session-reviews s)))))
+        (dolist (e texts)
+          (let ((body (drgnx-view-body-length view e)))
+            (when (and body (/= body (+ (drgnx-agents-entry-length e) (if (eq (plist-get e :type) 'thought) 2 0))))
+              (drgnx-view-grow view e))))))))
+
+(defun drgnx-agents-ui--same-items-p (list vec)
+  "Non-nil if LIST holds the elements of the vector VEC, in order, `eq'."
+  (let ((i 0) (n (length vec)))
+    (while (and list (< i n) (eq (car list) (aref vec i))) (setq list (cdr list) i (1+ i)))
+    (and (null list) (= i n))))
 
 (defun drgnx-agents-ui--buffer (s) (get-buffer-create (format "*agent: %s*" (drgnx-agent-session-name s))))
 
 (defun drgnx-agents-ui-refresh (&optional s)
-  "Redraw the transcript of S (default: this buffer's)."
+  "Redraw the transcript of S (default: this buffer's) now, even when no window shows it: its view syncs and draws
+at once (`drgnx-view-draw-now')."
   (interactive)
-  (let* ((s (or s drgnx-agents-ui--session)) (b (and s (get-buffer (format "*agent: %s*" (drgnx-agent-session-name s))))))
-    (when (buffer-live-p b)
-      (with-current-buffer b
-        (let ((at-end (= (point) (point-max))) (pt (point)) (inhibit-read-only t))
-          (erase-buffer)
-          (drgnx-agents-ui-render s)
-          (goto-char (if at-end (point-max) (min pt (point-max)))))))))
+  (let* ((s (or s drgnx-agents-ui--session)) (b (and s (get-buffer (format "*agent: %s*" (drgnx-agent-session-name s)))))
+         (view (and (buffer-live-p b) (buffer-local-value 'drgnx-view b))))
+    (when (drgnx-view-p view)
+      (drgnx-view-touch view)
+      (drgnx-view-draw-now view))))
 
 (defun drgnx-agents-ui-transcript-buffer (s)
   "Session S's transcript buffer, drawn (not shown)."
   (let ((b (drgnx-agents-ui--buffer s)))
     (with-current-buffer b
-      (unless (derived-mode-p 'drgnx-agents-transcript-mode) (drgnx-agents-transcript-mode))
+      (unless (and (derived-mode-p 'drgnx-agents-transcript-mode) (drgnx-view-p drgnx-view))
+        (drgnx-agents-transcript-mode))
       (setq drgnx-agents-ui--session s))
     (drgnx-agents-ui-refresh s)
     b))
@@ -231,23 +494,14 @@ On `window-buffer-change-functions'; never asks anything."
     (pop-to-buffer b)
     b))
 
-(defvar drgnx-agents-ui--dirty nil)
-(defvar drgnx-agents-ui--timer nil)
-
 (defun drgnx-agents-ui--changed (s)
-  "A session changed: note when (the list's Last column); redraw its transcript and the list, at most
-every 0.1 s (from a timer)."
+  "A session changed: note when (the list's Last column) and mark its transcript's view and the list's (each draws
+from its own timer, at most every 0.1 s, only while shown).  Called from the agent's process filter: only marks."
   (puthash s (float-time) drgnx-agents-ui--last)
-  (cl-pushnew s drgnx-agents-ui--dirty)
-  (unless (timerp drgnx-agents-ui--timer)
-    (setq drgnx-agents-ui--timer
-          (run-with-timer 0.1 nil (lambda ()
-                                    (setq drgnx-agents-ui--timer nil)
-                                    (let ((dirty drgnx-agents-ui--dirty))
-                                      (setq drgnx-agents-ui--dirty nil)
-                                      (mapc #'drgnx-agents-ui-refresh dirty))
-                                    (when-let* ((b (get-buffer "*drgnx Agents*")))
-                                      (with-current-buffer b (tabulated-list-print t))))))))
+  (let* ((b (get-buffer (format "*agent: %s*" (drgnx-agent-session-name s))))
+         (view (and b (buffer-local-value 'drgnx-view b))))
+    (when (drgnx-view-p view) (drgnx-view-touch view)))
+  (when-let* ((view (drgnx-agents-ui--list-view))) (drgnx-view-touch view)))
 
 ;;;; Commands
 
@@ -434,13 +688,20 @@ name from a local session is rejected without a look at it."
                      :stage 'startup :requires '(core/workbench)
                      :setup
                      (lambda ()
+                       ;; transcripts: rows patched in place, drawn only while shown
+                       (drgnx-view-define 'agent-transcript :render #'drgnx-agents-ui--render-row
+                                          :grow #'drgnx-agents-ui--grow-row :sync #'drgnx-agents-ui--sync
+                                          :delay drgnx-view-delay :slice drgnx-view-slice :follow-tail t :key-test 'eq)
                        (add-hook 'drgnx-agents-changed-functions #'drgnx-agents-ui--changed)
-                       ;; the list's Last ages: redrawn every 30 s while it is on screen, nothing otherwise
-                       (add-hook 'window-buffer-change-functions #'drgnx-agents-ui--tick-update)
+                       ;; the list: no rows, its SYNC prints it in place; drawn only while shown
+                       (drgnx-view-define 'agents-list :render #'ignore :sync #'drgnx-agents-ui--list-print
+                                          :delay drgnx-view-delay)
+                       ;; the list's Last ages: marked every 30 s (it prints only while on screen)
+                       (drgnx-timer-start 'agents-ui-tick 30 #'drgnx-agents-ui--tick :repeat 30)
                        ;; the hub's sessions (they outlive this Emacs), once Emacs is idle
-                       (run-with-idle-timer 3 nil #'drgnx-agents-ui--maybe-mirror)
+                       (drgnx-timer-start 'agents-ui-mirror-first 3 #'drgnx-agents-ui--maybe-mirror :idle t)
                        ;; …and again later: a hub started (or restarted) since is picked up
-                       (run-with-idle-timer 30 t #'drgnx-agents-ui--maybe-mirror)
+                       (drgnx-timer-start 'agents-ui-mirror 30 #'drgnx-agents-ui--maybe-mirror :repeat t :idle t)
                        (when (fboundp 'drgnx-wb-define-tab)
                          (drgnx-wb-define-tab 'right 'agents :title "Agents" :placeholder #'drgnx-agents-ui-list-buffer))
                        (when (fboundp 'drgnx-wb-place)

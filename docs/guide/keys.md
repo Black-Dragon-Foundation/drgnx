@@ -453,6 +453,39 @@ Vim's keys exist only in some states: `C-o` is jump back in normal, visual and m
 The key sheet says who wins where: `C-o Jump Back (vim; normal, visual, motion state) over Open File… (vscode)
 [claim]; Open File… in insert state and panels`.
 
+## In the terminal
+
+A terminal (New Terminal, `tools/terminal-eat`) is a program that wants most keys itself, so the active profile
+decides which keys it gets, the way VS Code's terminal does:
+
+- **App and window keys reach drgnx** when they are not control or Alt characters: the palette, panel and terminal
+  keys of the VS Code profile (`Ctrl+Shift+P`, `F1`, ``Ctrl+` ``), function keys, `C-c` keys, whatever the profile uses.
+- **Editing keys go to the shell**: a control or Alt key (`C-a`, `C-e`, `C-w`, `C-d`, `M-f`) means what readline or zle
+  make of it, even when the profile gives it to a drgnx command outside the terminal (VS Code's `C-w` Close Tab, `C-s`
+  Save, `C-n` New Untitled). Eat's own reserved keys (`C-x`, `C-c`, `C-g`, `C-h`, `C-u`, `C-q`, `M-x`, `M-:`, `M-!`,
+  `M-&`) stay with Emacs.
+- **VS Code's own exceptions, in the VS Code profile**: VS Code's terminal skips the shell for some control keys
+  (`terminal.integrated.commandsToSkipShell`), so the VS Code profile gets them in the terminal too: `C-p` Quick Open
+  (Go to File), `C-b` Toggle Sidebar, every `C-k` chord (Keyboard Shortcuts, Open Folder, ...), and `C-f` Find in File,
+  which searches the text of the terminal. This is the option `drgnx-terminal-skip-shell-keys` (a list of first keys,
+  default `("C-p" "C-b" "C-k" "C-f")`; drop a key from it and that key reaches the shell again). It only applies
+  to keys the active profile binds: in the Emacs and Vim profiles nothing is bound to these keys, so `C-p` (previous
+  history entry), `C-b`, `C-k` (kill to end of line) and `C-f` all reach the shell. In the VS Code profile `C-k` is a
+  chord prefix, so it does not kill to the end of the line in a terminal.
+
+On a Mac the profile's keys are `Cmd` keys, which no shell uses, so those reach drgnx; the Alt aliases the VS Code
+profile also has there (such as `M-j` for the panel) are Alt keys and go to the shell.
+
+The split is computed from the active stack of the registry, so it follows a profile switch at once. The key sheet
+(**Keyboard Shortcuts**) ends with an **In the terminal** section: one line "Reach drgnx: …" and one line for every
+key that goes to the shell instead, such as "C-w goes to the shell (Close Tab: outside the terminal, or the
+palette)". Several chords of one key are shown once ("C-k chords").
+
+**Copy and paste**: `Ctrl+Shift+C` copies the selected text of the terminal (nothing selected, nothing happens) and
+`Ctrl+Shift+V` pastes, on a Mac `Cmd+C` / `Cmd+V`. They are the commands *Terminal: Copy* and *Terminal: Paste* and
+work in terminal buffers only. The Emacs profile leaves eat's own keys: `C-y` pastes, and copying is `C-c C-e`
+(Emacs mode) then `M-w`.
+
 ## Conflicts are reported, never hidden
 
 A conflict is one of:
@@ -502,9 +535,18 @@ With Vim keys the sheet shows leader keys plain (`SPC f f`) and a key that works
   `eval-print-last-sexp`, ielm's and term's; to keep a mode's `C-j`, write ``(toggle-panel "C-`" "M-j")`` in
   `keys.eld`. It applies only when the profile also owns the editing keys: with "Emacs editing + VS Code app keys"
   or Vim editing, `C-j` stays the editing layer's in modes and Toggle Panel has it only where Emacs' global key was.
-- A mistake never breaks startup: an unreadable file, an unknown command or an invalid key is a problem on the key
-  sheet and in the doctor, and everything else still applies.
-- Keyboard Profile… rewrites only `:layers` and keeps the rest of the file.
+- A mistake never breaks startup. `keys.eld` is read and written through drgnx's config layer, which never applies
+  a file in part: a file that does not read, or whose `:layers`, `:bind` entries, `:unbind` or `:mac-option` are not
+  in the shape above (one bad `:bind` entry is enough), is not applied at all. The last good copy of `keys.eld`
+  (kept per machine in the state folder) is applied instead, or the default stack if there never was one, and the
+  problem, with its line, is on the key sheet and in the doctor. An unknown command or an invalid key is a smaller
+  problem, listed the same way, and everything else in the file still applies.
+- `keys.eld` is read when drgnx starts and each time keys are applied (a profile switch, the editor), not
+  while you type in it. Change it by hand in Preferences: Open Config File… and save, and the file is read again
+  and the keys apply at once (the mistake notice clears too). Saved some other way, it applies at the next profile
+  switch, editor change or start.
+- Keyboard Profile… rewrites only `:layers` and keeps the rest of the file (a new `keys.eld` also gets `:version 1`).
+  It, the editor and Onboarding refuse a `keys.eld` with a mistake, naming the line, and change nothing.
 - The Keyboard Shortcuts editor writes through `drgnx-keys-edit` (`core/drgnx-keys-edit.el`): `drgnx-keys-edit-bind`,
   `-add`, `-replace`, `-unbind`, `-reset`, `-reset-all` and `-undo`. Each changes one entry of `:bind` or `:unbind` and
   keeps your comments, `:layers` and the other entries as they are; an entry keeps its `:mac` keys and `:none` reason
@@ -516,7 +558,9 @@ With Vim keys the sheet shows leader keys plain (`SPC f f`) and a key that works
   key away puts the command in `:unbind`.
 - Undo goes one step back, also after a restart: `keys.eld.undo` holds the text before and after the last change made
   by the editor. If `keys.eld` has been changed since (by you, another session, or Keyboard Profile…), undo refuses and
-  writes nothing. The keys apply at once after every change. Changes made inside `drgnx-keys-edit-one-step` are one
+  writes nothing. The editor writes the whole file under a lock and only if it is still the file it read: a change
+  made by hand or by another session while an edit was being made is refused ("keys.eld changed since you opened
+  it"), never overwritten. The keys apply at once after every change. Changes made inside `drgnx-keys-edit-one-step` are one
   step (the editor's Replace: the key taken from other commands and given to this one).
 
 In a terminal that cannot send `C-S-` chords and the like (GNOME Terminal, Ptyxis, Terminal.app), each chord of the

@@ -54,8 +54,14 @@ a prompt, and with `drgnx-guard-mode' on one would signal."
     (signal 'drgnx-prompt-in-automatic-path
             (list (format "%s %S asked from %s" fn (car args) why)))))
 
+(declare-function drgnx-timer-describe "drgnx-timer")
+
 (defun drgnx-guard--timer (orig timer)
-  (let ((drgnx-guard--timer-fn (or (and (timerp timer) (timer--function timer)) 'unknown-timer)))
+  (let ((drgnx-guard--timer-fn
+         (or (and (timerp timer)       ; a layer timer's function is named by its entry, not `drgnx-timer--fire'
+                  (let ((layer (and (fboundp 'drgnx-timer-describe) (drgnx-timer-describe timer))))
+                    (if layer (plist-get layer :fn) (timer--function timer))))
+             'unknown-timer)))
     (funcall orig timer)))
 
 (defun drgnx-guard--command (orig &rest args)

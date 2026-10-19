@@ -236,6 +236,8 @@ terminal, as when a person types the command; else /dev/null and a pipe) → (EX
     (tty-bin-test--touch dir "running")
     (write-region "(\"kitty\" \"--\")\n" nil (expand-file-name "capable" dir))
     (make-directory (expand-file-name "proj" dir))
+    ;; a Linux host (macOS runs the client through `env -u XDG_RUNTIME_DIR': drgnx-bin/emacsclient-ignores-…)
+    (tty-bin-test--script (expand-file-name "uname" pathdir) "echo Linux")
     (should (equal (call '("-t" "proj") '(("VTE_VERSION" . "7600"))) '(0 . "")))
     ;; the new terminal runs the client; this one does not
     (let ((deadline (+ (float-time) 10)))
@@ -298,16 +300,16 @@ terminal, as when a person types the command; else /dev/null and a pipe) → (EX
   (tty-bin-test--with
     (let ((seen (expand-file-name "seen" dir)))
       (tty-bin-test--script (expand-file-name "emacs" pathdir)
-                            (format "printf '%%s\\n' \"$@\" > %s\necho \"ENV ${DISPLAY-unset} ${WAYLAND_DISPLAY-unset} ${SWAYSOCK-unset} $DBUS_SESSION_BUS_ADDRESS\" >> %s\ngrep -E '^SigIgn:' /proc/$$/status >> %s" seen seen seen))
+                            ;; SIGPIPE ignored: `yes' into a closed pipe gets a write error (exit 1), not the signal
+                            ;; (141); no /proc on macOS
+                            (format "printf '%%s\\n' \"$@\" > %s\necho \"ENV ${DISPLAY-unset} ${WAYLAND_DISPLAY-unset} ${SWAYSOCK-unset} $DBUS_SESSION_BUS_ADDRESS\" >> %s\n{ yes 2>/dev/null; echo \"PIPE $?\" >> %s; } | head -n 1 >/dev/null" seen seen seen))
       (should (eql 0 (car (call '("test" "--tty") '(("WAYLAND_DISPLAY" . "wayland-0") ("SWAYSOCK" . "/run/sway"))))))
       (let ((lines (split-string (tty-bin-test--slurp seen) "\n" t)))
         (should (equal (seq-take (reverse (seq-take lines (- (length lines) 2))) 3)
                        (list (expand-file-name "test/tty" tty-bin-test--root) "drgnx-run-ert-batch" "-f")))
         ;; no display or compositor, a dead session bus: the tier never reaches the user's desktop
         (should (member "ENV unset unset unset unix:path=/nonexistent/drgnx-unit-test" lines))
-        ;; SIGPIPE is signal 13: bit 12 of the mask, 0x1000
-        (let ((mask (string-to-number (car (last (split-string (car (last lines)))) ) 16)))
-          (should (/= 0 (logand mask #x1000))))))))
+        (should (equal (car (last lines)) "PIPE 1"))))))
 
 (ert-deftest drgnx-bin/container-tty-builds-and-runs-the-tty-image ()
   (tty-bin-test--with

@@ -67,6 +67,15 @@ buffer of the selected window (a temp buffer in project `proj', no git).  Faces 
   "The line's item named KEY."
   (assq key (drgnx-topline--line)))
 
+(ert-deftest drgnx-topline/faces-follow-the-theme-chrome-and-keep-the-text-colour ()
+  ;; The strong text fell back to the tab bar's dim foreground: it takes the text colour, on the tab line's band.
+  (dolist (f '(drgnx-topline drgnx-topline-strong))
+    (let ((inh (face-attribute f :inherit nil nil)))
+      (should (memq 'tab-line inh))
+      (should-not (memq 'header-line inh))
+      (should-not (memq 'tab-bar inh))))
+  (should (memq 'bold (face-attribute 'drgnx-topline-strong :inherit nil nil))))
+
 (ert-deftest drgnx-topline/shows-project-branch-and-the-three-keys ()
   (drgnx-topline-test--with 'vscode
     (setq-local vc-mode " Git-main")
@@ -169,6 +178,17 @@ buffer of the selected window (a temp buffer in project `proj', no git).  Faces 
     ;; a window always has it
     (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
               ((symbol-function 'frame-height) (lambda (&optional _) 5)))
+      (should (= 1 (drgnx-topline--lines (selected-frame)))))))
+
+(ert-deftest drgnx-topline/a-terminal-of-the-minimum-keeps-the-line ()
+  ;; `frame-height' is one less while the line shows: a terminal of exactly the minimum must not lose it and win it back
+  ;; on every size change (the frame resized itself between 19 and 20 lines, for ever)
+  (drgnx-topline-test--with 'vscode
+    (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) nil))
+              ((symbol-function 'frame-height) (lambda (&optional _) 19))
+              ((symbol-function 'frame-parameter)
+               (let ((real (symbol-function 'frame-parameter)))
+                 (lambda (frame param) (if (eq param 'tab-bar-lines) 1 (funcall real frame param))))))
       (should (= 1 (drgnx-topline--lines (selected-frame)))))))
 
 (ert-deftest drgnx-topline/a-new-width-gives-items-that-are-not-equal ()
@@ -356,7 +376,7 @@ buffer of the selected window (a temp buffer in project `proj', no git).  Faces 
     (let ((tab-bar-mode nil) (spec (get 'tab-bar 'face-defface-spec)))
       (drgnx-topline--apply)
       (should-not (equal (get 'tab-bar 'face-defface-spec) spec))
-      (should (equal (get 'tab-bar 'face-defface-spec) '((t :inherit header-line :box nil))))
+      (should (equal (get 'tab-bar 'face-defface-spec) '((t :inherit tab-line :height 1.0 :box nil))))
       (drgnx-topline--off)
       (should (equal (get 'tab-bar 'face-defface-spec) spec)))))
 
@@ -393,25 +413,26 @@ buffer of the selected window (a temp buffer in project `proj', no git).  Faces 
 (ert-deftest drgnx-topline/the-branch-comes-from-the-git-cache-the-status-bar-reads ()
   "An untracked file has no branch in `vc-mode'; the status bar shows it from drgnx's git cache, so does the line."
   (drgnx-topline-test--with 'vscode
-    (let ((drgnx-git--repos (make-hash-table :test #'equal)) (drgnx-git--roots (make-hash-table :test #'equal))
+    (let ((drgnx-git--roots (make-hash-table :test #'equal))
           (root "/tmp/drgnx-tl-repo/"))
+      (drgnx-cache--clear 'git-status)
       (setq-local buffer-file-name "/tmp/drgnx-tl-repo/src/new.el")
       (setq-local vc-mode nil)
       (should (string-match-p "◆ proj +⌕" (drgnx-topline-test--text)))   ; the cache has not read it yet
       ;; the cache finds the repository, then a status run reads its branch: the line is made again each time
       (puthash "/tmp/drgnx-tl-repo/src/" root drgnx-git--roots)
       (should (string-match-p "◆ proj +⌕" (drgnx-topline-test--text)))
-      (puthash root (list :branch (list :head "main")) drgnx-git--repos)
+      (drgnx-cache-put 'git-status root (list :branch (list :head "main")))
       (should (string-match-p "◆ proj · main" (drgnx-topline-test--text)))
-      (puthash root (list :branch (list :head "feature")) drgnx-git--repos)
+      (drgnx-cache-put 'git-status root (list :branch (list :head "feature")))
       (should (string-match-p "◆ proj · feature" (drgnx-topline-test--text)))
       ;; `vc-mode' is only the fallback (the same as the status bar's)
       (setq-local vc-mode " Git-other")
       (should (string-match-p "· feature" (drgnx-topline-test--text)))
-      (puthash root (list :branch (list :head nil :detached t)) drgnx-git--repos)
+      (drgnx-cache-put 'git-status root (list :branch (list :head nil :detached t)))
       (should (string-match-p "· (detached)" (drgnx-topline-test--text)))
       ;; no cache entry: vc-mode's branch
-      (remhash root drgnx-git--repos)
+      (drgnx-cache-remove 'git-status root)
       (should (string-match-p "· other" (drgnx-topline-test--text))))))
 
 (ert-deftest drgnx-topline/a-memo-hit-allocates-nothing ()
@@ -479,7 +500,8 @@ buffer of the selected window (a temp buffer in project `proj', no git).  Faces 
              (text (mapconcat (lambda (i) (substring-no-properties (nth 2 i))) items "")))
         (should (<= (string-width text) 40))
         (should (string-match-p "– ▢ × *\\'" text))              ; the controls are whole at the right end
-        (should (string-match-p "…" text))))))
+        ;; cut with Emacs's ellipsis: "…" where the terminal shows it, "..." in a C locale (CI's)
+        (should (string-search (truncate-string-ellipsis) text))))))
 
 (ert-deftest drgnx-topline/a-clock-that-went-back-does-not-keep-the-line-failing ()
   (drgnx-topline-test--with 'vscode

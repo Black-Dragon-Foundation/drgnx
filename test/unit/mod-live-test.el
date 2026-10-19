@@ -19,6 +19,7 @@
   (let ((load-path (cons (file-name-directory drgnx-live-test--websocket) load-path)))
     (require 'websocket))
   (load (expand-file-name "test/fixtures/mock-cdp" drgnx-dir) nil t))
+(load (expand-file-name "test/fixtures/memo-alloc-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-browser" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-live" drgnx-dir) nil t)
 
@@ -91,6 +92,53 @@ no agents, and everything closed afterwards."
                                                       (drgnx-mock-cdp-received "Page.startScreencast")))))
     (with-current-buffer "*drgnx live*"
       (should (string-search "https://new.example/" (substring-no-properties (drgnx-live--header)))))))
+
+(ert-deftest drgnx-live/an-unchanged-header-allocates-nothing ()
+  (with-temp-buffer
+    (setq-local drgnx-live--targets (list (list :targetId "T1" :type "page" :title "Example" :url "https://example.org/"))
+                drgnx-live--target "T1")
+    (let ((h (drgnx-live--header)))
+      (should (string-search "https://example.org/" h))
+      (should (eq h (drgnx-live--header)))
+      (should (= 0 (drgnx-memo-fixture-alloc (lambda () (drgnx-live--header)) 'drgnx-live--header))))))
+
+(ert-deftest drgnx-live/a-new-tab-rebuilds-the-header ()
+  (with-temp-buffer
+    (setq-local drgnx-live--targets (list (list :targetId "T1" :type "page" :title "Example" :url "https://example.org/"))
+                drgnx-live--target "T1")
+    (let ((h (drgnx-live--header)))
+      (drgnx-live--event "Target.targetCreated" '(:targetInfo (:targetId "T2" :type "page" :title "Docs" :url "https://docs.example/")) nil)
+      (let ((h2 (drgnx-live--header)))
+        (should-not (eq h h2))
+        (should (string-search "Docs" h2)))
+      ;; a title change, the watched tab going away, and taking over each show at once
+      (drgnx-live--event "Target.targetInfoChanged" '(:targetInfo (:targetId "T2" :type "page" :title "Manual" :url "https://docs.example/")) nil)
+      (should (string-search "Manual" (drgnx-live--header)))
+      (drgnx-live--event "Target.targetDestroyed" '(:targetId "T2") nil)
+      (should-not (string-search "Manual" (drgnx-live--header)))
+      (should-not (string-search "DRIVING" (drgnx-live--header)))
+      (drgnx-live-driving-mode 1)
+      (should (string-search "DRIVING" (drgnx-live--header)))
+      (drgnx-live-driving-mode -1)
+      (should-not (string-search "DRIVING" (drgnx-live--header))))))
+
+(ert-deftest drgnx-live/its-timers-are-the-layers ()
+  (let ((buf (generate-new-buffer " live-timers")))
+    (unwind-protect
+        (with-current-buffer buf
+          (let ((draw (cons 'live-draw buf)) (notes (cons 'live-notes buf)))
+            (drgnx-live--schedule-draw)
+            (drgnx-live--schedule-notes)
+            (should (drgnx-timer-active-p draw))
+            (should (drgnx-timer-active-p notes))
+            (should (eq (cadr (assoc draw (drgnx-timer-pending))) buf))
+            (drgnx-live--disconnect)                          ; the connection closing
+            (should-not (drgnx-timer-active-p draw))
+            (should-not (drgnx-timer-active-p notes))
+            (drgnx-live--schedule-notes)
+            (kill-buffer buf)                                 ; the buffer's death
+            (should-not (drgnx-timer-active-p notes))))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
 
 (ert-deftest drgnx-live/busy-drops-frames ()
   (skip-unless drgnx-live-test--websocket)

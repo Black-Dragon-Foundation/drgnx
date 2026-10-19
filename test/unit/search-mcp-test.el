@@ -175,7 +175,7 @@
          (process-environment (append (list "XDG_STATE_HOME=/tmp/st" "DRGNX_DATA_DIR=/tmp/dd" (concat "DRGNX_CONFIG_DIR=" conf)
                                             "MCP_TEST_KEY=sk-never-for-agents")
                                       process-environment))
-         (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq)) (drgnx-ai--read-cache (make-hash-table :test #'equal)))
+         (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq)))
     (unwind-protect
         (progn
           (with-temp-file (expand-file-name "ai.eld" conf)

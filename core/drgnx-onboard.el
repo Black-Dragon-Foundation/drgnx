@@ -17,7 +17,10 @@
 (require 'subr-x)
 (require 'tabulated-list)
 (require 'drgnx-paths)
+(require 'drgnx-file)
+(require 'drgnx-config)
 (require 'drgnx-modules)
+(require 'drgnx-timer)
 (require 'drgnx-registry)
 (require 'drgnx-session)
 (require 'drgnx-tty)
@@ -41,23 +44,39 @@ a plist (:interactive BOOL :options PLIST).  STATUS: ok, info, warn or fail."
 
 ;;;; Progress
 
-(defun drgnx-onboard-state-file () (expand-file-name "onboarding.eld" (drgnx-state-dir)))
+(drgnx-config-define 'onboarding
+                     :file "onboarding.eld" :dir 'state :shape 'alist :version 1 :reload 'mtime :last-good t :default nil
+                     :schema '(alist symbol
+                                     (plist (:status symbol "How the step ended: ok, info, warn or fail")
+                                            (:message (or string null) "What it said")
+                                            (:time (or string null) "When it ended")))
+                     :header ";; drgnx: which onboarding steps ran, written by Onboarding (docs/guide/onboarding.md)\n"
+                     :doc "Which onboarding steps ran and how they ended, so a run resumes where it stopped.")
+
+(defun drgnx-onboard-state-file () (drgnx-config-file 'onboarding))
 
 (defun drgnx-onboard-state ()
-  "Alist ID → (:status :message :time) of the steps run so far."
-  (and (file-readable-p (drgnx-onboard-state-file))
-       (ignore-errors (with-temp-buffer (insert-file-contents (drgnx-onboard-state-file)) (read (current-buffer))))))
+  "Alist ID → (:status :message :time) of the steps run so far.  A file that cannot be read gives nil (and the
+doctor names its mistake).  Do not change the value: it is shared."
+  (drgnx-config-get 'onboarding))
 
 (defun drgnx-onboard--write-state (state)
-  (make-directory (file-name-directory (drgnx-onboard-state-file)) t)
-  (let ((tmp (make-temp-file (expand-file-name ".onboarding-" (file-name-directory (drgnx-onboard-state-file))))))
-    (with-temp-file tmp (let ((print-length nil)) (prin1 state (current-buffer))))
-    (rename-file tmp (drgnx-onboard-state-file) t)))
+  "Write STATE, the whole alist, as onboarding.eld."
+  (drgnx-file-write (drgnx-onboard-state-file) state
+                    :header (plist-get (drgnx-config-definition 'onboarding) :header) :pretty t))
 
 (defun drgnx-onboard--record (id status message)
-  (let ((state (drgnx-onboard-state)))
-    (setf (alist-get id state) (list :status status :message message :time (format-time-string "%FT%T%z")))
-    (drgnx-onboard--write-state state)))
+  "Record that step ID ended with STATUS and MESSAGE.  Under the file's lock and on a fresh read, so the command
+line and the daemon each keep their steps; a file that cannot be read is copied aside (`drgnx-file-backup') and
+started again."
+  (drgnx-file-update
+   (drgnx-onboard-state-file)
+   (lambda (state)
+     (let ((entry (list :status status :message message :time (format-time-string "%FT%T%z")))
+           (cell (assq id state)))
+       (if cell (progn (setcdr cell entry) state) (append state (list (cons id entry))))))
+   :on-unreadable 'backup :pretty t
+   :header (plist-get (drgnx-config-definition 'onboarding) :header)))
 
 (cl-defun drgnx-onboard-run (&key only non-interactive resume options)
   "Run the steps (ONLY: a list of ids) in order; RESUME skips steps done (ok or info) before.
@@ -186,11 +205,11 @@ the Xcode Command Line Tools.  :fix is the one for this platform."
                 ('minimal extras)
                 ('ide (seq-filter (lambda (m) (memq m '(extra/llm))) extras))
                 ('full-ai nil)
-                (_ (user-error "Unknown preset %s (minimal, ide, full-ai)" preset))))
-         (state (drgnx-modules-read-state)))
-    (drgnx-modules-write-state
-     (plist-put (copy-sequence state) :disabled
-                (append (seq-remove (lambda (m) (memq m extras)) (plist-get state :disabled)) off)))))
+                (_ (user-error "Unknown preset %s (minimal, ide, full-ai)" preset)))))
+    (drgnx-modules-update-state
+     (lambda (state)
+       (drgnx-modules--put-list
+        state :disabled (append (seq-remove (lambda (m) (memq m extras)) (plist-get state :disabled)) off))))))
 
 (defvar drgnx-keys-presets)
 (declare-function drgnx-keys--save-layers "drgnx-keys")
@@ -200,6 +219,7 @@ the Xcode Command Line Tools.  :fix is the one for this platform."
 (defvar drgnx-keys-file)
 (defvar drgnx-keys-layers)
 (declare-function drgnx-keys-file "drgnx-keys")
+(declare-function drgnx-config-read "drgnx-config")
 (declare-function drgnx-keys-read-user "drgnx-keys")
 (declare-function drgnx-keys-set-mac-option "drgnx-keys")
 (declare-function drgnx-keys--save-key "drgnx-keys")
@@ -209,9 +229,7 @@ the Xcode Command Line Tools.  :fix is the one for this platform."
 
 (defun drgnx-onboard--current-keys ()
   "The name of the key preset keys.eld uses now, or nil."
-  (let ((layers (ignore-errors
-                  (plist-get (with-temp-buffer (insert-file-contents (drgnx-keys-file)) (read (current-buffer))) :layers))))
-    (car (rassoc layers drgnx-keys-presets))))
+  (car (rassoc (plist-get (plist-get (drgnx-config-read 'keys) :data) :layers) drgnx-keys-presets)))
 
 (defun drgnx-onboard--current-preset ()
   "The preset the extra/ modules match now (none off — a fresh install too — is full-ai), or nil: a mix of your own."
@@ -271,6 +289,12 @@ current choice as the default) — with no option and no question, the current c
                                  "types characters")
                           'characters 'meta)))
          (modal nil))
+    ;; a modules.eld with a mistake (or a newer one) refuses every write to it: say so before anything changes
+    (when (or (and preset (not (eq preset cur-preset))) theme (and keys (not (equal keys cur-keys))))
+      (drgnx-config-ensure-writable 'modules))
+    ;; the same for keys.eld: a mistake in it stops the step before the preset, the engine or the live keys change
+    (when (or (and layers (or (not (equal keys cur-keys)) pending)) option)
+      (drgnx-config-ensure-writable 'keys))
     (when (and preset (not (eq preset cur-preset))) (drgnx-onboard-apply-preset preset))
     ;; A Vim stack switches only once its engine is loaded: asked to install it when interactive, else it waits
     (when (and layers (or (not (equal keys cur-keys)) pending))
@@ -278,13 +302,13 @@ current choice as the default) — with no option and no question, the current c
       (setq modal (drgnx-modal-prepare layers ask))
       (when (memq modal '(ready started installed))
         (if (and (not noninteractive) (fboundp 'drgnx-keys-apply))
-            (progn (drgnx-keys-use layers) (drgnx-keys--save-layers layers))
+            (drgnx-keys-use layers t)                   ; saves first, then switches the live keys
           (drgnx-keys--save-layers layers))))
     (when option
       (if (and (not noninteractive) (fboundp 'drgnx-keys-apply)) (drgnx-keys-set-mac-option option) (drgnx-keys--save-key :mac-option option)))
     (when theme
       (if (and (not noninteractive) (fboundp 'drgnx-look-load-theme)) (drgnx-look-load-theme theme)
-        (drgnx-modules-write-state (plist-put (copy-sequence (drgnx-modules-read-state)) :theme theme))))
+        (drgnx-modules-update-state (lambda (state) (plist-put (copy-sequence state) :theme theme)))))
     (let* ((pkgs (drgnx-onboard--packages-to-install))
            (bytes (plist-get pkgs :bytes))
            (done (cond ((null pkgs) 'none)
@@ -395,22 +419,35 @@ locked version.  BYTES: the downloads' size from the lock, nil when it does not 
               (concat (if found "no projects imported (none picked)"
                         (format "no git repositories found under %s" (string-join roots ", ")))
                       stopped))
-      (let ((r (drgnx-projects-import picked :todos todos)))
-        (list (if truncated 'warn 'ok)
-              (concat (format "%d projects on the board (%d new), %d TODOs added%s — %s"
-                              (length picked) (length (plist-get r :added)) (plist-get r :todos)
-                              (if (plist-get r :capped) (format " (first %d only for %s)" drgnx-projects-todo-cap
-                                                                (string-join (plist-get r :capped) ", "))
-                                "")
-                              (drgnx-projects-board-file))
-                      stopped))))))
+      ;; The board is the user's own file: first only look at what would go on it (drgnx's own
+      ;; projects.eld is kept either way), and write it only after a yes, asked in an interactive run.
+      (let* ((r (drgnx-projects-import picked :todos todos :write nil))
+             (board (abbreviate-file-name (drgnx-projects-board-file)))
+             (new (plist-get r :added)) (n (plist-get r :todos))
+             (capped (if (plist-get r :capped)
+                         (format " (first %d only for %s)" drgnx-projects-todo-cap (string-join (plist-get r :capped) ", "))
+                       ""))
+             (what (format "%d projects%s and %d TODOs" (length new)
+                           (if new (format " (%s%s)" (string-join (seq-take new 8) ", ") (if (> (length new) 8) ", …" "")) "")
+                           n)))
+        (cond ((and (null new) (zerop n))
+               (list (if truncated 'warn 'ok)
+                     (concat (format "%d projects, all on the board already, no TODOs to add — %s" (length picked) board)
+                             stopped)))
+              ((and ask (y-or-n-p (format "Add %s to %s? " what board)))
+               (let ((w (drgnx-projects-import picked :todos todos)))
+                 (list (if truncated 'warn 'ok)
+                       (concat (format "%d projects on the board (%d new), %d TODOs added%s — %s"
+                                       (length picked) (length (plist-get w :added)) (plist-get w :todos) capped board)
+                               stopped))))
+              (t
+               (list (if truncated 'warn 'info)
+                     (concat (format "would add %s to %s%s — %s" what board capped
+                                     (if ask "you said no: the board is unchanged"
+                                       "not written without interaction (run Import Projects in drgnx, or drgnx onboard without --non-interactive)"))
+                             stopped))))))))
 
 ;;;; Steps 4–6, 8: what is there (completed by later milestones)
-
-(defun drgnx-onboard--detect (programs then)
-  (lambda (_ctx)
-    (let ((found (seq-filter #'executable-find programs)))
-      (list 'info (format "%s; %s" (if found (concat "found: " (string-join found ", ")) "nothing found") then)))))
 
 ;;;; Step 4: AI providers
 
@@ -553,7 +590,17 @@ the latest; the doctor checks the version.")
                               :page "https://nodejs.org/en/download"))
     (claude-agent-acp :name "the Claude Code adapter" :check (:program "claude-agent-acp" :dirs ("~/.local/bin"))
                       :macos (:job ("npm" "install" "-g" ,drgnx-onboard-claude-package))
-                      :linux (:job ("npm" "install" "-g" "--prefix" "~/.local" ,drgnx-onboard-claude-package))))
+                      :linux (:job ("npm" "install" "-g" "--prefix" "~/.local" ,drgnx-onboard-claude-package)))
+    (age :name "age" :check (:program "age")
+         :macos (:install ("brew" "install" "age"))
+         :linux (:by-program (("dnf" . "sudo dnf install -y age") ("apt-get" . "sudo apt-get install -y age")
+                              ("pacman" . "sudo pacman -S --noconfirm age"))))
+    (chezmoi :name "chezmoi" :check (:program "chezmoi" :dirs ("~/.local/bin"))
+             :macos (:install ("brew" "install" "chezmoi"))
+             ;; Debian and Ubuntu do not package chezmoi: its own installer, into ~/.local/bin (no sudo)
+             :linux (:by-program (("dnf" . "sudo dnf install -y chezmoi")
+                                  ("apt-get" . "sh -c \"$(curl -fsLS https://get.chezmoi.io)\" -- -b ~/.local/bin")
+                                  ("pacman" . "sudo pacman -S --noconfirm chezmoi")))))
   "How onboarding sets up a local model runner: ID → plist.  :check — it is there when its :program is found (lms
 also in ~/.lmstudio/bin, where LM Studio puts it; :dirs: more directories) or its :provider's address answers.
 :macos :install — the Homebrew command, a drgnx job; :launch — LM Studio's first start, which puts lms in place.
@@ -561,7 +608,8 @@ also in ~/.lmstudio/bin, where LM Studio puts it; :dirs: more directories) or it
 terminal to ask your password in); :by-program — the same for the first package manager found; :page — LM Studio's
 download page.  :job (either platform) — a command that needs no sudo, a drgnx job.  :start — the server, a drgnx
 job (never at login); :pull — the download, the model's name after it.  claude, node and claude-agent-acp are
-Claude Code's parts (`drgnx-onboard--agents-step').")
+Claude Code's parts (`drgnx-onboard--agents-step'); age and chezmoi carry keys and the config to a second machine
+\(docs/guide/second-machine.md).")
 
 (defconst drgnx-onboard-embed-model "nomic-embed-text"
   "The embedding model a local runner set up here downloads (Ollama's name; LM Studio's: `drgnx-ai-lmstudio-models').")
@@ -690,7 +738,11 @@ job, then quits."
          (t0 (float-time)) (job nil)
          ;; the CLI (batch) ends on Ctrl-C without unwinding: the exit stops the job
          (stop (lambda () (drgnx-jobs-stop id)))
-         (timer (run-at-time 0.5 0.5 #'drgnx-onboard--show-progress drgnx-onboard--current what id)))
+         (key (cons 'onboard-progress id)))
+    ;; :core, not a process or buffer: the job is a detached unit, and the Welcome may not exist (the CLI); the
+    ;; `unwind-protect' below ends the timer with this wait.
+    (drgnx-timer-start key 0.5 #'drgnx-onboard--show-progress :repeat 0.5
+                       :args (list drgnx-onboard--current what id) :owner :core)
     (when noninteractive (add-hook 'kill-emacs-hook stop))
     (unwind-protect
         (condition-case nil
@@ -710,7 +762,7 @@ job, then quits."
                       log)))
           (quit (drgnx-jobs-stop id) (signal 'quit nil)))
       (remove-hook 'kill-emacs-hook stop)
-      (cancel-timer timer))))
+      (drgnx-timer-cancel key))))
 
 (declare-function browse-url "browse-url")
 
@@ -750,7 +802,11 @@ job on either platform.  Every run starts from the top: nothing is resumed from 
              (open (if (eq tool 'lmstudio) " and open it" "")))
         (if shell
             (progn (kill-new shell)
-                   (drgnx-onboard--say (format "Run in a terminal (copied): %s — it asks for your password (sudo); waiting for %s…" shell name)))
+                   (drgnx-onboard--say (format "Run in a terminal (copied): %s%s; waiting for %s…" shell
+                                               ;; Ollama's installer runs sudo itself (:sudo); chezmoi's never does
+                                               (if (or (plist-get l :sudo) (string-match-p "\\_<sudo\\_>" shell))
+                                                   " — it asks for your password (sudo)" "")
+                                               name)))
           (browse-url (plist-get l :page))
           (drgnx-onboard--say (format "Install %s from %s%s%s; waiting for it…" name (plist-get l :page) open
                                       (if (eq tool 'lmstudio) " (Developer → Start Server)" ""))))
@@ -896,7 +952,7 @@ text says so — with the Finish step's restart offer only when this run changed
                   (cons t (concat "Chat (module extra/llm) is on" later)))
                  (t (cons t "Chat (module extra/llm) is on; its package is not installed yet: run drgnx sync (or the Look and Keys step)"))))
           ((and (plist-get ctx :interactive) (y-or-n-p "Turn on Chat (module extra/llm)? "))
-           (drgnx-modules-toggle 'extra/llm)
+           (drgnx-modules-set-enabled 'extra/llm t)     ; on, whatever the file says now (a toggle could turn it off)
            (setq drgnx-onboard--restart-needed t)
            (let ((done (if (drgnx-onboard--installed-p 'gptel) 'ok (drgnx-onboard--sync-job))))
              (if (eq done 'ok)
@@ -1337,19 +1393,43 @@ parentheses when it is not ok.  Never prompts, never installs."
         (concat detail (if (and fix (not (eq status 'ok))) (format " (%s)" fix) "")))
     (error (format "not checked (%s)" (error-message-string err)))))
 
+(declare-function drgnx-shell-name "drgnx-shell")
+(declare-function drgnx-shell-rc-file "drgnx-shell")
+(declare-function drgnx-portable-path "drgnx-portable")
+(declare-function drgnx-shell-line "drgnx-shell")
+(declare-function drgnx-shell-line-present-p "drgnx-shell")
+(declare-function drgnx-shell-install "drgnx-shell")
+
+(defun drgnx-onboard--shell-part (ctx)
+  "The shell-integration sentence of step 7 (docs/guide/shell.md): one line in the shell's rc file.
+Interactive: asked (`drgnx-shell-install'), never written without a yes; otherwise only said."
+  (require 'drgnx-shell)
+  (let ((name (drgnx-shell-name)))
+    (if (null name)
+        "shell integration: none for your shell (zsh, bash and fish have one: drgnx shell install --shell NAME)"
+      (let ((rc (drgnx-portable-path (drgnx-shell-rc-file name))))
+        (cond ((drgnx-shell-line-present-p name) (format "shell integration: already in %s" rc))
+              ((plist-get ctx :interactive)
+               (pcase (drgnx-shell-install name :ask #'y-or-n-p)
+                 ('added (format "shell integration: added to %s (open a new terminal)" rc))
+                 ('present (format "shell integration: already in %s" rc))
+                 ('failed (format "shell integration: not added, %s cannot be written; to add it by hand: %s" rc (drgnx-shell-line name)))
+                 (_ (format "shell integration: not added; to add it: drgnx shell install"))))
+              (t (format "shell integration: add this to %s (or: drgnx shell install): %s" rc (drgnx-shell-line name))))))))
+
 (defun drgnx-onboard--daemon-step (ctx)
   "Keep running or quit (asked once), then macOS: the drgnx app; Linux: the systemd unit and desktop entry.  The
-result reads: keep running; that platform part; the terminal note (`drgnx-onboard--terminal-note'); the desktop
-\(`drgnx-onboard--desktop-note')."
+result reads: keep running; that platform part; the shell integration line (`drgnx-onboard--shell-part'); the
+terminal note (`drgnx-onboard--terminal-note'); the desktop (`drgnx-onboard--desktop-note')."
   (let ((keep (drgnx-onboard--keep-running ctx)))
     (pcase-let ((`(,status ,message) (if (eq (drgnx-platform) 'macos) (drgnx-onboard--macos-app ctx)
                                        (drgnx-onboard--linux-desktop ctx))))
-      (list status (concat keep "; " message ". " (drgnx-onboard--terminal-note)
+      (list status (concat keep "; " message "; " (drgnx-onboard--shell-part ctx) ". " (drgnx-onboard--terminal-note)
                            "; desktop: " (drgnx-onboard--desktop-note))))))
 
 (defun drgnx-onboard--linux-desktop (ctx)
   (require 'drgnx-pkg)
-  (let* ((dir (drgnx-user-dir))
+  (let* ((dir (drgnx-data-dir))           ; this machine's files: the config dir travels (docs/guide/second-machine.md)
          (unit (expand-file-name "systemd/drgnx.service" dir))
          (desktop (expand-file-name "applications/drgnx.desktop" dir))
          (unit-target (expand-file-name "~/.config/systemd/user/drgnx.service"))
@@ -1359,8 +1439,7 @@ result reads: keep running; that platform part; the terminal note (`drgnx-onboar
                       (shell-quote-argument unit) (shell-quote-argument unit-target)
                       (shell-quote-argument desktop) (shell-quote-argument desktop-target))))
     (drgnx-pkg-service-unit (file-name-directory unit))
-    (make-directory (file-name-directory desktop) t)
-    (write-region drgnx-onboard-desktop-entry nil desktop nil 'silent)
+    (drgnx-file-write-text desktop drgnx-onboard-desktop-entry)
     (if (and (plist-get ctx :interactive)
              (y-or-n-p (format "Install the drgnx service and desktop entry into %s and %s%s? "
                                (file-name-directory unit-target) (file-name-directory desktop-target)
@@ -1372,6 +1451,183 @@ result reads: keep running; that platform part; the terminal note (`drgnx-onboar
           (call-process "systemctl" nil nil nil "--user" "daemon-reload")
           (list 'ok (format "installed; start it with: systemctl --user enable --now drgnx")))
       (list 'info (format "written (not installed): %s and %s. To install: %s" unit desktop how)))))
+
+;;;; Step 8: portability
+
+(declare-function drgnx-portable-move-machine-local "drgnx-portable")
+(declare-function drgnx-portable-config-problems "drgnx-portable")
+(declare-function drgnx-secrets-file "drgnx-secrets")
+(declare-function drgnx-secrets-keyring-p "drgnx-secrets")
+(declare-function drgnx-secrets--entries "drgnx-secrets")
+(declare-function drgnx-secrets--wipe-entries "drgnx-secrets")
+(declare-function drgnx-secrets-export-keys "drgnx-secrets")
+(defvar drgnx-portable-machine-local)
+(defvar drgnx-portable-install-url)
+
+(defvar drgnx-onboard-call-timeout 30
+  "Seconds a program step 8 runs (git, chezmoi) may take before it is stopped.")
+
+(defun drgnx-onboard--call (program &rest args)
+  "Run PROGRAM with ARGS (stdin empty, no terminal prompt), for at most `drgnx-onboard-call-timeout' seconds:
+\(EXIT . OUTPUT), OUTPUT trimmed; (timeout . TEXT) when it was stopped; nil when PROGRAM cannot run."
+  (with-temp-buffer
+    (let* ((process-environment (cons "GIT_TERMINAL_PROMPT=0" process-environment))
+           (buf (current-buffer))
+           (proc (condition-case nil
+                     (make-process :name "drgnx-onboard-call" :buffer buf :command (cons program args)
+                                   :connection-type 'pipe :noquery t :sentinel #'ignore)
+                   (file-error nil)))
+           (deadline (+ (float-time) drgnx-onboard-call-timeout)))
+      (when proc
+        (ignore-errors (process-send-eof proc)) ; a fast program is gone already: never an error
+        (while (and (process-live-p proc) (< (float-time) deadline))
+          (accept-process-output proc 0.05))
+        (if (process-live-p proc)
+            (progn (delete-process proc)
+                   (cons 'timeout (format "did not finish within %s s" drgnx-onboard-call-timeout)))
+          (while (accept-process-output proc 0.01)) ; what it wrote before it went
+          (cons (process-exit-status proc) (string-trim (buffer-string))))))))
+
+(defun drgnx-onboard--git-remote (dir)
+  "The remote of the git repository DIR: origin's URL, else the first remote's; nil without one."
+  (let ((origin (drgnx-onboard--call "git" "-C" dir "remote" "get-url" "origin")))
+    (if (eql (car origin) 0) (cdr origin)
+      (let ((first (car (split-string (or (cdr (drgnx-onboard--call "git" "-C" dir "remote")) "") "\n" t))))
+        (and first (cdr (drgnx-onboard--call "git" "-C" dir "remote" "get-url" first)))))))
+
+(defun drgnx-onboard--chezmoi ()
+  "chezmoi's program, or nil (`drgnx-onboard-install-recipes': on the path or in ~/.local/bin)."
+  (drgnx-onboard--program 'chezmoi))
+
+(defun drgnx-onboard--config-source ()
+  "Where the config dir comes from: (git . REMOTE-OR-NIL) when it is a git work tree of its own, (chezmoi .
+SOURCE) when chezmoi manages it (`chezmoi source-path DIR', read-only), (inside . TOP) when it lies in the work
+tree of another repository TOP, else (none)."
+  (let* ((dir (directory-file-name (drgnx-user-dir)))
+         (top (and (file-directory-p dir) (executable-find "git")
+                   (drgnx-onboard--call "git" "-C" dir "rev-parse" "--show-toplevel")))
+         (chezmoi (drgnx-onboard--chezmoi))
+         (source (and chezmoi (drgnx-onboard--call chezmoi "source-path" dir))))
+    (cond ((and (eql (car top) 0) (equal (file-truename (cdr top)) (file-truename dir)))
+           (cons 'git (drgnx-onboard--git-remote dir)))
+          ((and (eql (car source) 0) (not (string-empty-p (cdr source)))) (cons 'chezmoi (cdr source)))
+          ((and (eql (car top) 0) (not (string-empty-p (cdr top)))) (cons 'inside (cdr top)))
+          (t (list 'none)))))
+
+(defun drgnx-onboard--remote-label (remote)
+  "REMOTE to show or save: a URL of any scheme without its user, password, query and fragment (\"ssh://u:pw@h/x\"
+→ \"ssh://h/x\"); the scp form \"git@host:path\" (a user, never a password) as it is."
+  (when remote
+    (let ((r (replace-regexp-in-string "[?#].*\\'" "" remote)))
+      (if (string-match "\\`\\([A-Za-z][A-Za-z0-9+.-]*://\\)[^/]*@" r)
+          (concat (match-string 1 r) (substring r (match-end 0)))
+        r))))
+
+(defun drgnx-onboard--https-remote (remote)
+  "REMOTE as install.sh takes it — an https URL, without user, password, query or fragment — or nil."
+  (let ((r (drgnx-onboard--remote-label remote)))
+    (and r (string-match-p "\\`https://[^/@[:space:][:cntrl:]]+/[^[:space:][:cntrl:]]*\\'" r) r)))
+
+(defun drgnx-onboard--keys-to-export-p ()
+  "Non-nil when this machine's keyring holds a provider key that secrets.age would carry.  It opens the keyring,
+so only in drgnx's window (never batch: `drgnx onboard' says the command instead); the keys read are wiped."
+  (and (not noninteractive)
+       (require 'drgnx-secrets)
+       (drgnx-secrets-keyring-p)
+       (condition-case nil
+           (let ((entries (drgnx-secrets--entries))) (drgnx-secrets--wipe-entries entries) t)
+         (error nil))))
+
+(defun drgnx-onboard--make-repo (dir)
+  "git init DIR, add everything but the machine-local items, one commit.  Returns (STATUS SENTENCE).
+The user's git hooks, templates and commit signing are left out (a hook or a pinentry would run inside this
+step), and every git call is bounded (`drgnx-onboard--call')."
+  (let* ((shown (drgnx-portable-path dir))
+         (git (lambda (&rest args)
+                (apply #'drgnx-onboard--call "git" "-c" "core.hooksPath=/dev/null" "-c" "commit.gpgsign=false" "-C" dir args)))
+         (init (funcall git "init" "-q" "--template="))
+         (add (and (eql (car init) 0)
+                   (apply git "add" "-A" "--" "."
+                          (mapcar (lambda (i) (concat ":(exclude)" (directory-file-name i))) drgnx-portable-machine-local))))
+         (commit (and (eql (car add) 0)
+                      (funcall git "commit" "-q" "--no-verify" "--no-gpg-sign" "-m" "drgnx configuration")))
+         (why (lambda (what r) (if (eq (car r) 'timeout) (format "%s %s" what (cdr r))
+                                 (format "%s failed: %s" what (or (cdr r) "git could not run"))))))
+    (cond ((not (eql (car init) 0)) (list 'warn (format "%s in %s" (funcall why "git init" init) shown)))
+          ((not (eql (car add) 0)) (list 'warn (format "made %s a git repository, but %s" shown (funcall why "git add" add))))
+          ((eq (car commit) 'timeout) (list 'warn (format "made %s a git repository, but %s" shown (funcall why "git commit" commit))))
+          ((not (eql (car commit) 0))
+           (list 'info (format "made %s a git repository; the commit needs your git identity: git config --global user.name \"Your Name\"; git config --global user.email you@example.org; then: git -C %s commit -m \"drgnx configuration\""
+                               shown shown)))
+          (t (list 'ok (format "made %s a git repository with one commit; add a remote of your choice and push it (drgnx never pushes)" shown))))))
+
+(defun drgnx-onboard--portability-step (ctx)
+  "Step 8 (docs/guide/second-machine.md): where the config comes from (`drgnx-onboard--config-source') and the next
+machine's command.  Interactive, a config dir that is no repository: the machine-local items move to the data dir,
+then, with no key in plain text, it asks to make the dir a git repository (one commit; never a remote, a push or a
+later commit).  chezmoi installed: how to add the dir (drgnx runs nothing of chezmoi's but `source-path').
+Interactive in drgnx's window, with a key in the keyring: asks to export the keys (age installed first), in a
+terminal.  Without interaction it only reports."
+  (require 'drgnx-portable)
+  (let* ((ask (plist-get ctx :interactive))
+         (dir (directory-file-name (drgnx-user-dir)))
+         (shown (drgnx-portable-path dir))
+         (source (drgnx-onboard--config-source))
+         (status 'ok) (parts nil)
+         (say (lambda (st text)
+                (push text parts)
+                (when (> (cl-position st '(ok info warn)) (cl-position status '(ok info warn))) (setq status st)))))
+    (pcase source
+      (`(git . ,remote)
+       (funcall say (if remote 'ok 'info)
+                (if remote (format "config: %s is a git repository (remote %s)" shown (drgnx-onboard--remote-label remote))
+                  (format "config: %s is a git repository with no remote: add one of your choice and push it" shown))))
+      (`(chezmoi . ,src) (funcall say 'ok (format "config: chezmoi manages %s (source %s)" shown (drgnx-portable-path src))))
+      (`(inside . ,top)
+       (funcall say 'info (format "config: %s is inside the git repository %s, so it travels with that one; no repository of its own is made"
+                                  shown (drgnx-portable-path top))))
+      (_
+       (if (not (and ask (file-directory-p dir) (executable-find "git")))
+           (funcall say 'info (format "config: %s is not a git repository%s" shown
+                                      (if ask "" " (run this step interactively to make it one)")))
+         (let* ((moved (drgnx-portable-move-machine-local))
+                (gone (mapcar #'car (seq-filter (lambda (m) (memq (cdr m) '(moved dropped))) moved)))
+                (kept (mapcar #'car (seq-filter (lambda (m) (eq (cdr m) 'kept)) moved)))
+                (problems (drgnx-portable-config-problems))
+                (keys (plist-get problems :keys)) (unchecked (plist-get problems :unchecked)))
+           (when gone
+             (funcall say 'ok (format "moved to the data dir: %s" (string-join (mapcar #'directory-file-name gone) ", "))))
+           (when kept
+             (funcall say 'info (format "%s stays: the data dir has a different copy (compare them, then delete the config dir's)"
+                                        (string-join (mapcar #'directory-file-name kept) ", "))))
+           (cond (keys (funcall say 'warn (format "a key in plain text in %s: never committed: move the key to your keyring first (docs/guide/ai.md), then run this step again"
+                                                  (string-join keys ", "))))
+                 (unchecked (funcall say 'warn (format "could not read %s: never committed: make it readable, then run this step again"
+                                                       (string-join unchecked ", "))))
+                 ((y-or-n-p (format "Make %s a git repository (you push it to a remote of your choice)? " shown))
+                  (apply say (drgnx-onboard--make-repo dir)))
+                 (t (funcall say 'info (format "config: %s is not a git repository" shown))))))))
+    (when (and (not (eq (car source) 'chezmoi)) (drgnx-onboard--chezmoi))
+      (funcall say 'ok (format "chezmoi: to keep it with your dotfiles, chezmoi add %s (secrets.age as a plain file, not --encrypt: it is encrypted already)" shown)))
+    (cond ((not ask))
+          ((progn (require 'drgnx-secrets) (file-exists-p (drgnx-secrets-file)))
+           (funcall say 'ok "keys: secrets.age is there (Portability: Export Keys replaces it)"))
+          ((not (drgnx-onboard--keys-to-export-p))
+           (funcall say 'ok "keys: drgnx secrets export (on a terminal) carries your provider keys, encrypted, in secrets.age"))
+          ((not (y-or-n-p "Export your provider keys to secrets.age, encrypted with a passphrase? "))
+           (funcall say 'ok "keys: not exported (Portability: Export Keys does it later)"))
+          (t (let ((age (drgnx-onboard--install 'age ctx)))
+               (if (not (eq age 'ok))
+                   (funcall say 'warn (format "keys: not exported, %s" (cadr age)))
+                 (require 'drgnx-secrets)
+                 (drgnx-secrets-export-keys)
+                 (funcall say 'info "keys: finish in the terminal (age asks for a passphrase); then copy or push secrets.age with the config")))))
+    (let* ((remote (cdr source))
+           (url (and (memq (car source) '(git chezmoi))
+                     (drgnx-onboard--https-remote (if (eq (car source) 'chezmoi) (drgnx-onboard--git-remote remote) remote)))))
+      (funcall say 'ok (format "next machine: curl -fsSL %s | bash -s -- %s %s" drgnx-portable-install-url
+                               (if (eq (car source) 'chezmoi) "--chezmoi" "--config") (or url "YOUR-REPO-URL"))))
+    (list status (string-join (nreverse parts) "; "))))
 
 ;;;; Step 9: finish
 
@@ -1453,8 +1709,8 @@ modules on or installed packages here, in the drgnx app (CTX interactive): asked
                            :doc "Keep running in the background or quit when the last window closes; macOS: the drgnx app; Linux: the systemd user service, the desktop entry and EDITOR — installed only if you say so"
                            :run #'drgnx-onboard--daemon-step)
 (drgnx-onboard-define-step 'portability :order 80 :title "Portability"
-                           :doc "chezmoi and age for your configuration and secrets on a second machine"
-                           :run (drgnx-onboard--detect '("chezmoi" "age") "setting up a second machine is documented with the platforms milestone (M12)"))
+                           :doc "Where your config comes from, a git repository of it (asked), your provider keys exported to secrets.age (asked), and the command that sets up your next machine"
+                           :run #'drgnx-onboard--portability-step)
 (drgnx-onboard-define-step 'finish :order 90 :title "Finish"
                            :doc "drgnx doctor: what is left to fix"
                            :run #'drgnx-onboard--finish-step)
@@ -1537,7 +1793,7 @@ with windows (not batch, not a harness session)."
   "`drgnx-first-gui-frame-hook': the Welcome a moment after the first window shows, from an idle timer —
 never inside the hook (the window and the restored layout come first)."
   (when (drgnx-onboard--welcome-due-p)
-    (run-with-idle-timer 0.5 nil #'drgnx-onboard-maybe-welcome)))
+    (drgnx-timer-start 'onboard-welcome 0.5 #'drgnx-onboard-maybe-welcome :idle t :owner :core)))
 
 (defun drgnx-onboard-run-step (id)
   "Run onboarding step ID now (it may ask), then show the steps."

@@ -5,7 +5,8 @@
 ;;; Commentary:
 ;; One registry for every AI feature — ghost text, inline edit, chat (gptel), embeddings, agents.  Providers are
 ;; presets for OpenRouter and the local runners, plus the user's (ai.eld in the config dir) and the project's
-;; (.drgnx/ai.eld); roles (complete, edit, chat, embed, agent) are fallback chains of (PROVIDER . MODEL).
+;; (.drgnx/ai.eld); roles (complete, edit, chat, embed, agent) are fallback chains of (PROVIDER . MODEL).  Both files
+;; are config files (`drgnx-config': a mistake keeps the last good providers; a project's file is read-only, 64 KiB).
 ;; Keys come from where the user keeps them — the environment, then auth-source (the macOS Keychain and the Linux
 ;; keyring included, for commands the user ran) — when they are needed.  drgnx writes a key in one place only, that
 ;; Keychain or keyring, and only when the user asks (`drgnx-ai-store-key'); never in a command line, a log or a
@@ -17,6 +18,9 @@
 (require 'subr-x)
 (require 'url-parse)
 (require 'drgnx-paths)
+(require 'drgnx-file)
+(require 'drgnx-config)
+(require 'drgnx-timer)
 
 (defconst drgnx-ai-presets
   '((openrouter :name "OpenRouter" :kind openai :url "https://openrouter.ai/api/v1" :key-env "OPENROUTER_API_KEY"
@@ -80,27 +84,39 @@ it when both fit, else the 3B, else the 1.5B too.  ROOM nil: as little as can be
 
 ;;;; Configuration
 
-(defun drgnx-ai-file () (expand-file-name "ai.eld" (drgnx-user-dir)))
+(defconst drgnx-ai--roles-schema '(alist symbol (alist symbol (or string null)))
+  "A role → its chain: ((ROLE (PROVIDER . MODEL)…)…); a MODEL is a name, or nil for the provider's own.")
 
-(defvar drgnx-ai--read-cache (make-hash-table :test #'equal)
-  "FILE → (MTIME . FORM): ai.eld files are read again only when they change (ghost text asks on every pause).")
+(defun drgnx-ai--price-p (price)
+  "Non-nil when PRICE is (IN . OUT): two non-negative numbers."
+  (and (consp price) (numberp (car price)) (numberp (cdr price)) (>= (car price) 0) (>= (cdr price) 0)))
 
-(defun drgnx-ai--read (file)
-  "FILE's form, or nil when FILE is missing; `drgnx-ai-unreadable' when it exists but does not read."
-  (let* ((attrs (and file (file-attributes file)))
-         (mtime (and attrs (list (file-attribute-modification-time attrs) (file-attribute-size attrs)))))
-    (if (not mtime) (progn (remhash file drgnx-ai--read-cache) nil)
-      (let ((hit (gethash file drgnx-ai--read-cache)))
-        (if (and hit (equal (car hit) mtime)) (cdr hit)
-          (let ((form (condition-case nil
-                          (with-temp-buffer (insert-file-contents file) (read (current-buffer)))
-                        (error 'drgnx-ai-unreadable))))
-            (puthash file (cons mtime form) drgnx-ai--read-cache)
-            form))))))
+(drgnx-config-define 'ai
+                     :file "ai.eld" :shape 'plist :version 1 :reload 'mtime :last-good t
+                     :schema `(plist (:providers (alist symbol
+                                                        (plist (:name string "What the provider is called")
+                                                               ;; anthropic: the presets that serve agents only
+                                                               (:kind (enum openai ollama llamacpp tei anthropic) "How to talk to it")
+                                                               (:url string "Its address")
+                                                               (:key-env string "The environment variable holding its key (never the key)")
+                                                               (:caps (list-of symbol) "What it does: chat, fim, embed")
+                                                               (:price (pred drgnx-ai--price-p "(IN . OUT) dollars per million tokens")
+                                                                       "What the agent gateway counts its spend by")
+                                                               (:messages boolean "Whether it serves Anthropic's Messages API")))
+                                                 "Providers of your own, or presets moved (an entry replaces the preset with its id)")
+                                     (:roles ,drgnx-ai--roles-schema "Each role's chain of (PROVIDER . MODEL), tried in order"))
+                     :default nil
+                     :header ";; drgnx AI providers and roles (docs/guide/ai.md) — never a key here\n"
+                     :doc "Your AI providers and each role's chain of providers and models; never a key.")
 
-(defun drgnx-ai--config (file)
-  "FILE's configuration plist, nil when it is missing or does not read."
-  (let ((c (drgnx-ai--read file))) (and (consp c) c)))
+(drgnx-config-define 'ai-project
+                     :dir 'project :file "ai.eld" :shape 'plist :version 1 :reload 'mtime
+                     :schema `(plist (:roles ,drgnx-ai--roles-schema
+                                             "The project's roles (a remote provider in a chain is asked about once)"))
+                     :default nil
+                     :doc "A project's roles, among the providers you have: never a provider or a key of its own.")
+
+(defun drgnx-ai-file () (drgnx-config-file 'ai))
 
 (defun drgnx-ai--project-file ()
   "The project's .drgnx/ai.eld; never looked for on a remote directory (a timer asks: no remote round-trips)."
@@ -108,11 +124,16 @@ it when both fit, else the 3B, else the 1.5B too.  ROOM nil: as little as can be
     (when-let* ((dir (locate-dominating-file default-directory ".drgnx/ai.eld")))
       (expand-file-name ".drgnx/ai.eld" dir))))
 
+(defun drgnx-ai--project-roles ()
+  "The roles in the project's .drgnx/ai.eld; none when it has a mistake or is over 64 KiB (one problem says so)."
+  (when-let* ((file (drgnx-ai--project-file)))
+    (drgnx-config-get 'ai-project :roles (file-name-directory (directory-file-name (file-name-directory file))))))
+
 (defun drgnx-ai-providers ()
   "Every provider: the presets, then the user's ai.eld (an entry replaces a preset with its id).  A project's
 ai.eld never adds or changes one: a cloned repository must not choose where your code and keys go."
   (let ((ps (copy-sequence drgnx-ai-presets)))
-    (dolist (p (plist-get (drgnx-ai--config (drgnx-ai-file)) :providers))
+    (dolist (p (drgnx-config-get 'ai :providers))
       (setq ps (cons p (assq-delete-all (car p) ps))))
     ps))
 
@@ -144,12 +165,14 @@ of the project whose .drgnx/ai.eld applies here, or nil."
 (defun drgnx-ai--project-remote-ids ()
   "The remote providers the project's roles name."
   (drgnx-ai--chain-remote-ids
-   (apply #'append (mapcar #'cdr (plist-get (drgnx-ai--config (drgnx-ai--project-file)) :roles)))))
+   (apply #'append (mapcar #'cdr (drgnx-ai--project-roles)))))
 
 (defun drgnx-ai--route-answer ()
-  "This project's answer (:allow BOOL :ids IDS: the remote providers it was about), or nil."
+  "This project's answer (:allow BOOL :ids IDS: the remote providers it was about), or nil; a routes file that does
+not read has none (the user is asked again, and the file is copied aside before the answer is written)."
   (when-let* ((root (drgnx-ai--project-root)))
-    (cdr (assoc root (plist-get (drgnx-ai--config (drgnx-ai-routes-file)) :projects)))))
+    (let ((data (plist-get (drgnx-file-read (drgnx-ai-routes-file)) :data)))
+      (and (proper-list-p data) (cdr (assoc root (plist-get data :projects)))))))
 
 (defun drgnx-ai--allowed-remote-ids ()
   "The remote providers the user allowed this project to use."
@@ -169,32 +192,32 @@ batch); call it at the start of such a command, never from a timer, hook or proc
      (t (let* ((allow (y-or-n-p (format "%s routes AI roles to %s (remote: your code leaves this machine, and it may cost money).  Use that route in this project? "
                                         (abbreviate-file-name (drgnx-ai--project-file))
                                         (mapconcat #'symbol-name ids ", "))))
-               (file (drgnx-ai-routes-file))
-               (conf (let ((c (drgnx-ai--config file))) (or c (list :version 1))))
-               (projects (assoc-delete-all root (copy-sequence (plist-get conf :projects)))))
-          (make-directory (file-name-directory file) t)
-          (with-temp-file file
-            (insert ";; drgnx: projects whose .drgnx/ai.eld routes a role to a remote provider, and your answer\n")
-            (let ((print-length nil) (print-level nil))
-              (pp (plist-put conf :projects (cons (list root :allow (and allow t) :ids ids) projects)) (current-buffer))))
-          (remhash file drgnx-ai--read-cache)
+               (file (drgnx-ai-routes-file)))
+          (drgnx-file-update
+           file
+           (lambda (conf)                       ; the other keys and projects stay; an unreadable file is copied aside
+             (let ((conf (if (and (proper-list-p conf) (keywordp (car conf))) conf (list :version 1))))
+               (plist-put conf :projects (cons (list root :allow (and allow t) :ids ids)
+                                               (assoc-delete-all root (copy-sequence (plist-get conf :projects)))))))
+           :on-unreadable 'backup :pretty t
+           :header ";; drgnx: projects whose .drgnx/ai.eld routes a role to a remote provider, and your answer\n")
           allow)))))
 
 (defun drgnx-ai-role (role)
   "ROLE's chain ((PROVIDER . MODEL)…): the project's, else the user's, else the default.  A project's steps
 that name a remote provider count only once the user allowed it (`drgnx-ai-confirm-project-route'); this never asks."
-  (let ((project (alist-get role (plist-get (drgnx-ai--config (drgnx-ai--project-file)) :roles))))
+  (let ((project (alist-get role (drgnx-ai--project-roles))))
     (when (seq-some (lambda (step) (drgnx-ai-remote-p (car step))) project)   ; the common case reads nothing more
       (let ((allowed (drgnx-ai--allowed-remote-ids)))
         (setq project (seq-remove (lambda (step) (and (drgnx-ai-remote-p (car step)) (not (memq (car step) allowed)))) project))))
     (or project
-        (alist-get role (plist-get (drgnx-ai--config (drgnx-ai-file)) :roles))
+        (alist-get role (drgnx-config-get 'ai :roles))
         (alist-get role drgnx-ai-default-roles))))
 
 (defun drgnx-ai-user-role (role)
   "ROLE's chain in the user's own configuration (their ai.eld, else the default), without any project's: what a
 choice written back to ai.eld starts from, so one project's route never becomes global."
-  (or (alist-get role (plist-get (drgnx-ai--config (drgnx-ai-file)) :roles))
+  (or (alist-get role (drgnx-config-get 'ai :roles))
       (alist-get role drgnx-ai-default-roles)))
 
 ;;;; Keys
@@ -283,8 +306,13 @@ agents.  Returns the ids that have a key."
 later — after the window it opened shows, never inside its emacsclient call.  Never in batch."
   (unless (or noninteractive drgnx-ai--keys-loading)
     (setq drgnx-ai--keys-loading t)
-    (run-at-time 0.5 nil (lambda () (with-demoted-errors "drgnx: AI keys not loaded: %S" (drgnx-ai-load-keys)))))
+    ;; the daemon's own, once, with no module or process to own it
+    (drgnx-timer-start 'ai-load-keys 0.5 #'drgnx-ai--load-keys-timer :owner :core))
   nil)
+
+(defun drgnx-ai--load-keys-timer ()
+  "The timer function of `drgnx-ai-load-keys-soon'."
+  (with-demoted-errors "drgnx: AI keys not loaded: %S" (drgnx-ai-load-keys)))
 
 (defun drgnx-ai--stored-key (host)
   "What the secret store alone holds for HOST (a string), or nil; auth-source's cache is forgotten and not used."
@@ -500,20 +528,12 @@ login, which drgnx never reads."
 
 (defun drgnx-ai-set-role (role chain)
   "Make CHAIN ((PROVIDER . MODEL)…) ROLE's in the user's ai.eld; everything else in it stays.  An ai.eld that
-does not read is never replaced: the error says so."
-  (let* ((file (drgnx-ai-file))
-         (read (drgnx-ai--read file))
-         (conf (cond ((eq read 'drgnx-ai-unreadable)
-                      (user-error "%s does not read: fix it first (nothing was written)" (abbreviate-file-name file)))
-                     ((consp read) read)
-                     (t (list :version 1))))
-         (roles (plist-get conf :roles)))
-    (setf (alist-get role roles) chain)
-    (setq conf (plist-put conf :roles roles))
-    (make-directory (file-name-directory file) t)
-    (with-temp-file file
-      (insert ";; drgnx AI providers and roles (docs/guide/ai.md) — never a key here\n")
-      (let ((print-length nil) (print-level nil)) (pp conf (current-buffer))))))
+has a mistake, or was written by a newer drgnx, is never replaced: the error (`drgnx-config-refused') says so."
+  (drgnx-config-update 'ai
+                       (lambda (conf)
+                         (let ((roles (plist-get conf :roles)))
+                           (setf (alist-get role roles) chain)
+                           (plist-put conf :roles roles)))))
 
 ;;;; gptel (the chat UI) from the registry
 

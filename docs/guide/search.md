@@ -179,7 +179,7 @@ depth, and a trailing `/` means everything below that directory.
 not a plist or gives a key another type (`:exclude "vendor/"` instead of `:exclude ("vendor/")`) never falls back to
 the defaults — that could send files you meant to exclude to the provider. Instead nothing is indexed for the project:
 the indexer stops with ".drgnx/search.eld cannot be read: …", a search of an index made earlier refuses with the same message (in the editor, from the command line and for agents), saving a file does not schedule a re-index, and Index
-Project, Index Status and `drgnx doctor` say what is wrong. Without the file, the defaults apply. A `.drgnx` or `search.eld` that is a symlink to a readable config (dotfile managers do that) works like the file itself.
+Project, Index Status and `drgnx doctor` say what is wrong. Without the file, the defaults apply. The file is read as plain data (nothing in it is ever evaluated, and `;;` comments and keys this drgnx does not know are fine), and it may be at most 64 KiB: a bigger file is refused, not cut. An empty file is refused too; delete it for the defaults. The file is one of drgnx's configuration files: see the [configuration reference](../reference/config.md). A `.drgnx` or `search.eld` that is a symlink to a readable config (dotfile managers do that) works like the file itself.
 
 ## How fast
 

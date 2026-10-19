@@ -81,6 +81,9 @@ no longer has (rebased, squashed) is marked ⚠. Keys in the tab: `TAB` folds, `
 line (a commit: its diff in the editor), `g` scans again, `f` filters the plans by title or path, `m` hides the
 merged ones (Vim: `R`, `F`, `M`). Opening the tab, and `g`, scan in a separate batch Emacs (`drgnx work scan`): this
 Emacs never waits, and the tab redraws when the scan is done — and after each turn of an agent working on a task.
+The tab is a view (`docs/develop/core.md`, "Views"): a scan, a fold or a filter changes only the rows whose task
+changed (or that came or went), and your place stays on the same task through every one of them. A tab nobody is
+looking at draws nothing; it catches up when you show it.
 
 - **Start Agent on Task…** starts an agent on the task (or TODO, or plan) at point, in the plan's worktree (else
   its repository, else the plan's folder); its commits are recorded for that task.

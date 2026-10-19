@@ -12,11 +12,14 @@ init/init.el         core/ on the load path, (require 'drgnx), (drgnx-init); a p
 core/drgnx.el        drgnx-init: guard on, staged hooks armed, keep-running choice read, the first window's Welcome
                      (a first start only), packages activated, core commands, modules, surfaces (DRGNX_SAFE — drgnx
                      safe — skips packages and modules)
-core/drgnx-session.el  drgnx PATH's Emacs side, Open Folder…, keep running or quit, Quit drgnx (../guide/opening.md)
+core/drgnx-session.el  drgnx PATH's Emacs side, Open Folder…, keep running or quit, Quit drgnx; session.eld is a config file (../guide/opening.md)
 core/drgnx-macos.el  the drgnx app on macOS (drgnx macos-app; ../guide/opening.md)
 core/drgnx-tty.el    terminals, batch-safe: which one, what it can do, keys it can send, terminfo, tmux (../guide/terminal.md)
 core/drgnx-tty-recommend.el  a terminal that sends every key: installed ones, the install command per OS, the opt-in opener
 core/drgnx-tty-fallback.el   keys a legacy terminal cannot send: their Alt+Shift and F6 forms, drgnx-tty-sendable-key (the layer: modules/ui/drgnx-tty-fallback-layer.el)
+core/drgnx-file.el   files drgnx keeps: the bounded reader, the atomic writer, the locked update, backups (below)
+core/drgnx-shell-env.el  PATH, MANPATH, INFOPATH from the login shell, once per start, asynchronously; never a key;
+                     the hub follows (env/set); Shell: Reload Environment (../guide/shell.md)
 modules/<category>/drgnx-<name>.el   one drgnx-module-define per file
 ```
 
@@ -25,8 +28,11 @@ modules/<category>/drgnx-<name>.el   one drgnx-module-define per file
 `drgnx-dir` is the checkout (code only, never written to). User configuration: `(drgnx-user-dir)` —
 `$DRGNX_CONFIG_DIR` or `~/.config/drgnx/`. State and caches: `(drgnx-state-dir)` and `(drgnx-cache-dir)` under
 the XDG directories (`$XDG_STATE_HOME`, `$XDG_CACHE_HOME`, `$XDG_DATA_HOME`: only an absolute path counts — empty or
-relative is ignored, as the XDG spec says, here and in `bin/drgnx`'s `xdg_dir`). Packages: `(drgnx-data-dir)` — `$DRGNX_DATA_DIR` or `~/.local/share/drgnx/` — holds `elpa/`
-(the packages every session uses) and `generations/`; `(drgnx-package-cache-dir)` keeps downloaded package files
+relative is ignored, as the XDG spec says, here and in `bin/drgnx`'s `xdg_dir`). Packages: `(drgnx-data-dir)` —
+`$DRGNX_DATA_DIR`, else `$XDG_DATA_HOME/drgnx/`, else `~/.local/share/drgnx/`; an empty `$DRGNX_DATA_DIR` or
+`$DRGNX_CONFIG_DIR` counts as unset, as in `bin/drgnx` and `install.sh` — holds `elpa/`
+(the packages every session uses), `generations/` and this machine's files that must not travel (`emacs`,
+`systemd/`, `applications/`: [second-machine.md](../guide/second-machine.md)); `(drgnx-package-cache-dir)` keeps downloaded package files
 ([packages.md](../guide/packages.md)).
 Every helper expands with `default-directory` bound to `"/"`, so a `~` is always the local home: in a remote
 buffer (a Tramp `*scratch*`, dired over ssh) a timer, hook or save never makes Tramp contact the host.
@@ -36,6 +42,322 @@ nothing is written into the checkout; a harness session keeps both in its run di
 `(drgnx-user-dir)custom.el` (set and made when missing by early-init, loaded by `drgnx-init` once the packages are activated and guarded, as
 config.el is: an error is said, `drgnx safe` skips it): Customize and `package-install` save there,
 never into the checkout's tracked `init/init.el`.
+
+## Files drgnx keeps: drgnx-file (`drgnx-file.el`)
+
+One reader and one writer for every file drgnx keeps. It requires only `cl-lib` and `subr-x`, so an
+`emacs --batch -Q` hub loads it. Every name is used with no file name handlers and `default-directory` `"/"`:
+nothing here reaches Tramp, and nothing prompts or visits a buffer. Errors: `drgnx-file-refused` (data
+`(FILE REASON)`) and `drgnx-file-busy` (data `(FILE HOLDER)`), both `file-error`s.
+
+**Which call.** Config files go through drgnx-config, which uses this layer. State files change through
+`drgnx-file-update` with `:on-unreadable 'backup`. Reports and other files rewritten whole use `drgnx-file-write`
+with `:fsync nil`. Text files drgnx writes (unit files, desktop entries, exports) use `drgnx-file-write-text`.
+A state file whose content grants something falls back to granting nothing: trusted-folders.eld
+(`core/drgnx-trust.el`) trusts no folder when it is unreadable, has a mistake or has a newer `:version`, and its
+writer (`drgnx-trust--write`) backs up the first two and refuses the third (`user-error`), since `:on-unreadable
+'backup` covers only a file that does not read. Its reader also drops remote entries and those Trust This Folder
+refuses (`drgnx-trust--read-entry-p`: `file-remote-p` only parses, and the truenames are taken with no file name
+handlers, so a read at startup or from the palette never connects; an entry that signals is dropped), and messages
+once per change of an unusable file. The mode body reads under `condition-case`, so a bad file never keeps a guard
+off. Untrust This Folder takes effect in the session (`drgnx-trust--added`) even when the file cannot be changed.
+
+The report files in the state folder go this way: `wb-report.eld` (`drgnx-rules--write-report`, a startup hook: an
+error becomes one `message`), `agent-checks.eld` (`drgnx-agent-check-remember`, `:private t`) and `check/durations.eld`
+(`drgnx-check--save-durations`) are written with `drgnx-file-write ... :fsync nil`, so a failed write keeps the old
+report. They are read with `drgnx-file-read`: `drgnx-tty--read-report`, `drgnx-agent-check-results`,
+`drgnx-check-durations` and the doctor's `drgnx-doctor--state-file` / `drgnx-doctor--keys-report` give the data of an
+`ok` file, else nil (missing, over 1 MiB, a mistake, text after the form, not plain data). A report is rebuilt by its
+next run, so a report with a mistake is not kept aside.
+
+**job.eld.** A durable job's `jobs/ID/job.eld` is a plist of plain data in one form: `drgnx-jobs-start` writes it with
+`drgnx-file-write` (text properties on the name and command are dropped first), `drgnx-jobs--read` reads it with
+`drgnx-file-read` (nil for a missing or unreadable file), and the stamp (`drgnx-jobs--stamp`: `:boot` and `:start`) is
+`drgnx-file-update` with `:timeout 0` from the poll, `1.0` from `kill-emacs-hook`, `inhibit-interaction` bound; a `:start`
+already stamped within 0.5 s of the process's is kept (Emacs's reading of it jitters by a clock tick). A busy lock
+skips the stamp; an unreadable job.eld is left alone and the error becomes one `message`; the stamp never creates a
+missing job.eld or its directory. Files written by older versions (one `prin1` form) read unchanged.
+
+**Reading.** `(drgnx-file-read-bounded FILE &key max-bytes)` gives the file's text decoded as UTF-8, or nil when it
+does not exist. It refuses, in this order:
+- a remote name (`/method:host:…`): "a remote file";
+- a symbolic link to nothing;
+- anything that is not a regular file, checked by the mode string before opening, so a FIFO never blocks
+  (`file-attribute-type` is nil for a FIFO as for a file);
+- a file over `drgnx-file-max-bytes` (1 MiB), also one that grew past it while it was read. It is never truncated.
+
+A file swapped for a FIFO between the check and the open would still block: Emacs cannot open without blocking.
+
+`(drgnx-file-read FILE &key max-bytes)` gives `(:status S :data D :text T :problem P :stamp ST)`:
+- S is `absent` (missing, empty, or only whitespace and comments), `ok` or `unreadable`.
+- It reads exactly one form with `read-circle` and `read-symbol-shorthands` nil. These are problems: `#1=`, text
+  after the form, lists or vectors nested deeper than `drgnx-file-max-depth` (64), and any object other than a
+  symbol, a number, a string without text properties, a cons or a vector (records, `#s(hash-table …)`, byte-code,
+  bool-vectors, char-tables).
+- P is `(:text STRING :line N :column N)`, both 1-based. A refusal of the bounded read is a problem at line 1.
+- ST is `(drgnx-file-stamp FILE)`: `(INODE MTIME SIZE)` of the truename from one `file-attributes` call. The inode
+  sees a file renamed over another within one mtime tick. The stamp is taken before the read, so a change in between
+  shows as a change at the next compare.
+
+**Writing.** `(drgnx-file-write FILE DATA &key header mode private (fsync t) pretty text max-bytes)` returns the path
+written:
+- Content over MAX-BYTES (default `drgnx-file-max-bytes`, the read limit) is refused ("over N bytes") before any
+  temp file is made, so drgnx never writes a file its own reader would refuse. A file that grows passes a larger
+  limit, to its reads too.
+- It writes to FILE's truename, so a symlink stays a symlink, and makes missing folders. A non-regular file there is
+  refused.
+- The content goes to a temp file `.NAME.tmp-XXXXXX` beside the target (made 0600), which is renamed over it. A
+  reader sees the old file or the new one, never half of one. An error before the rename leaves the old file and
+  deletes the temp file.
+- The mode is the old file's, else MODE, else 0644. With PRIVATE it is 0600 for a new file, and an old file loses its
+  group and other bits.
+- The content is HEADER (comment lines), then TEXT when given, else DATA printed by `prin1` (`pp` with PRETTY) with
+  `print-length`, `print-level`, `print-circle`, `print-integers-as-characters` and `float-output-format` nil, in
+  UTF-8. A user's `print-length` never shortens a file.
+- The temp file is read back by `drgnx-file-read`'s rules and must be `equal` to DATA, else the write is refused
+  ("not printable as data") and the target is untouched. A buffer object, a hash table or a TEXT that is not DATA
+  never reaches the file.
+- FSYNC binds `write-region-inhibit-fsync` to nil. No lock file is made, and no buffer visits the target, so one that
+  visits it is never modified or asked about.
+
+`(drgnx-file-write-text FILE TEXT &key mode private (fsync t))` writes text with the same rules, no read back and no
+size limit: reports, units and exports are not read back through the bounded reader.
+The text files drgnx writes all use it: the markdown export (`drgnx-surfaces-export-markdown`: an old file keeps its
+modes, a new one gets 0644), the systemd unit (`drgnx-pkg-service-unit`), the Linux desktop entry, the `config.el`
+template (made only when the file is missing) and the agents' settings files and their backups (below).
+
+**The locked update.** `(drgnx-file-update FILE FN &key on-unreadable (timeout 1.0) max-bytes header pretty render)`
+takes the lock, reads the file fresh, and writes `(FN DATA)`. FN gets a deep copy of the data, so a `plist-put` in
+place is a change like any other, and nil for an absent file. When FN's result is `equal` to the data, nothing is
+written. MAX-BYTES limits both the read and the write. RENDER, when given, is called with the old text, the data as
+read (untouched by FN) and the new data, and returns the text to write (a surgical edit that keeps comments). The
+lock is released in `unwind-protect`.
+- An unreadable file is refused (`drgnx-file-refused` with the problem) and left untouched.
+- With `:on-unreadable 'backup` (state files only), it is copied aside first and FN gets nil.
+- A write from a timer, filter or sentinel passes `:timeout 0` and skips the write on `drgnx-file-busy`. The site's
+  next run writes.
+
+**The lock** is the directory `.NAME.lock/` beside the truename. `make-directory`, without parents, decides who holds
+it. Its `owner` file holds `(:pid :host :started :time)`. `(drgnx-file-lock-holder FILE)` reads it.
+- An attempt is made every `drgnx-file-lock-retry` (10 ms) up to TIMEOUT. With TIMEOUT 0 there is one attempt.
+  Then `drgnx-file-busy` names the holder. It never prompts.
+- A lock is stale when its `:time` (or, with no owner file, the directory's mtime) is older than
+  `drgnx-file-lock-stale` (10 s). It is also stale when it is on this host and its pid is gone or started at
+  another time (`:started` compared within 1 s), so a reused pid is not taken for the holder. Where Emacs cannot
+  tell a process's start time, only the age counts.
+- A stale lock is renamed to `.NAME.lock.stale-PID-RANDOM` and deleted, then `make-directory` decides again. A lock
+  is released only while its owner file is still the holder's.
+- **Limits.** Two processes stealing one stale lock within milliseconds can both hold it: the second renames the
+  first's fresh lock away. Plain files cannot compare-and-swap; the search index's lock takeover has the same
+  limit. A holder that keeps the lock over 10 s loses it, so FN must stay a quick change of data. A call to
+  `drgnx-file-update` inside FN on the same file waits for itself and ends busy. On a network filesystem the
+  rename and `make-directory` are only as atomic as the server makes them.
+- The clock and the wait go through `drgnx-file--now` and `drgnx-file--sleep`, which tests replace.
+
+**Backups.** `(drgnx-file-backup FILE)` copies the file to `NAME.bak-YYYYmmdd-HHMMSS-mmm` (UTC, so the names sort in
+time order) beside its truename, keeping its times and mode. Then it keeps only the newest
+`drgnx-file-backups-kept` (3). It gives the backup's path, or nil for a missing file, and refuses anything that is
+not a regular file.
+
+## Schema (`drgnx-schema.el`)
+
+One DSL describes drgnx's data (config files today; the hub's parameters and results next). A schema is data: an atom
+or a list. `(drgnx-schema-check SCHEMA VALUE)` returns nil, or `(PATH . TEXT)` for the first problem. PATH lists the
+plist keys, alist keys and list indices from the top, e.g. `(:profiles "local" :command 0)`. It walks the schema, not
+the data, tests every list with `proper-list-p` first (an improper or circular list is a problem, never an error)
+and never quotes the value in TEXT (it may be a token). A schema that is not one signals
+`(error "drgnx-schema: unknown form …")`: that is the definition's bug, so it is an error, not a problem. A PATH holds alist and map keys taken from the value (fine for ids); a problem's TEXT never does.
+`(drgnx-schema-validate SCHEMA)` finds those bugs when a schema is defined rather than when data reaches it: heads, options and their value types, plist entries, `pred` arguments, bound named types, and a type that refers to itself with nothing in between. `drgnx-schema-deftype` calls it (a refused type leaves the table as it was); the config layer's and the hub's definition forms call it too. A type may name itself only inside a container.
+
+| Form | Accepts |
+|---|---|
+| `any` | anything (hub: results only; see `drgnx-schema-uses-form-p`) |
+| `symbol` / `keyword` | a non-nil, non-keyword symbol / a keyword |
+| `string`, `boolean`, `null` | a string / `t` or `nil` / `nil` |
+| `integer`, `natnum`, `number` | an integer / an integer >= 0 / any number except NaN |
+| `(integer :min N :max N)`, `(number :min N :max N)` | the same within the bounds |
+| `(string :max N :match RE)` | a string at most N long that matches RE (case-sensitive, unanchored: write `\\``…`\\'`) |
+| `(enum V…)` | a member (`member`, so strings work) |
+| `(or S…)` | a value that fits one of the schemas (`(or null S)` reports a problem inside S at its own path) |
+| `(list-of S [:max N])` | a proper list of S |
+| `(plist (KEY S [DOC] [:required t])…)` | an even proper list of keywords and values; no key twice; required keys present; **unknown keys are allowed** and a value under one is not walked |
+| `(alist KEY-S VAL-S)` | a proper list of conses, no key twice (`equal`) |
+| `(map VAL-S [:max N] [:keys KEY-S])` | a JSON object whose keys are not fixed: a keyword plist (how the hub decodes JSON) or an alist with string keys; at most N entries, no key twice. Keys are named without the colon in the path and to KEY-S |
+| `home-path` | absolute, `~` or `~/…`; no NUL; not a remote name (`/ssh:host:…`) |
+| `https-url` | `https://` and a host; no user info, query, fragment, blank or control character (as bootstrap; a use that needs a query makes its own `pred` type) |
+| `(pred FN DOC)` | `(funcall FN VALUE)` non-nil. An unbound FN, or one that signals, **fails** (never passes); DOC is the problem's text |
+| NAME | a type made with `(drgnx-schema-deftype NAME SCHEMA DOC)` (redefinable; the built-in names are not) |
+
+Also: `(drgnx-schema-unknown-keys SCHEMA VALUE)` lists the PATH of every unknown key in every plist the schema reaches
+(what the config layer reports and keeps byte for byte); `(drgnx-schema-describe SCHEMA)` gives rows
+`(PATH TYPE-TEXT DOC REQUIRED)` for the generated reference (`*` in a PATH stands for any alist or map key and any
+list element); `(drgnx-schema-uses-form-p SCHEMA FORM)` says whether a form occurs at any depth, through named types
+(the hub refuses a `:params` schema holding `any`).
+
+**There is one DSL.** Design 2 (the hub protocol: parameter schemas, JSON Schema for MCP) adds the forms it needs to
+this file and derives its JSON Schema output from the same schema data; it does not define another. `number`, `map`,
+`natnum` and `any` are here for it.
+
+## Config files: drgnx-config (`drgnx-config.el`)
+
+Every config file drgnx keeps has one definition, and is read, applied and written through this layer. It requires
+only `cl-lib`, `subr-x`, `drgnx-paths`, `drgnx-file` and `drgnx-schema`, so the `emacs --batch -Q` hub loads it.
+
+**Define.** `(drgnx-config-define NAME &key file dir shape version schema default reload last-good max-bytes migrate
+header doc)` returns NAME:
+- `:dir` is `config` (`drgnx-user-dir`, the default), `state` (`drgnx-state-dir`) or `project` (`ROOT/.drgnx/`:
+  untrusted, read-only, no last good copy, 64 KiB).
+- `:shape` is `plist` (the default) or `alist`, and the `:schema`'s head must be the same. The schema is validated
+  when the file is defined (`drgnx-schema-validate`).
+- `:version` is the format this drgnx writes (1). `:reload` is `mtime` (the default: a get costs one stat, and a
+  changed file is applied at once) or `start` (read at the first get, then only on `drgnx-config-reread`). Use
+  `start` only where applying a change mid-session is unsafe.
+- Code outside the layer never touches `drgnx-config--` names. It asks: `(drgnx-config-defined-p NAME)`,
+  `(drgnx-config-definition NAME)` (the definition plist, read only) and `(drgnx-config-names &optional DIR)` (sorted;
+  DIR is `config`, `state` or `project`, or a list of them). `(drgnx-config-ensure-writable NAME &optional ROOT)` is
+  the pre-flight for a flow that ends in a write: it reads the file fresh and signals `drgnx-config-refused` when it
+  has a mistake or is newer, so call it before the flow's first side effect (Import, Save Layout As…, a settings page
+  that asks questions first) and a refusal changes nothing.
+- A project file is untrusted data: it is read, never evaluated. `search-project` (`.drgnx/search.eld`, in
+  `core/drgnx-search-chunk.el`) is the first: `drgnx-search-config` asks `drgnx-config-problem` and turns a mistake into
+  `(:error …)`, because a search must fail closed rather than fall back to the defaults the layer applies.
+- `:last-good` (t) applies the last good copy on a mistake. `:max-bytes` (1 MiB) caps reads and writes.
+- `:on-mistake` is a string saying what happens instead of using the file when it is not the last good copy or the
+  defaults ("drgnx sync stops until it is fixed; nothing is changed"). The mistake notice and the reference's "On a
+  mistake:" line print it; a project file with none is said to be refused.
+- `:migrate` is `((FROM . FN)…)`; `:header` is the comment a new file starts with (default
+  `;; drgnx: FILE (docs/reference/config.md)`); `:doc` is one line for the reference.
+- Open Config File… visits the file with a buffer-local `after-save-hook` that reads it again (`drgnx-config-reread`),
+  so a hand fix clears the notice at once. Listeners of `drgnx-config-changed-functions` see
+  `drgnx-config-user-save` t then, and keys.eld's (`drgnx-keys--config-changed`) re-applies the keys; drgnx's own writes
+  do not set it, as they apply what they write.
+- Defined in a module's setup, it is undone at teardown: the previous definition comes back, or NAME is undefined,
+  unless NAME was defined again since. Core files define theirs at load. `(drgnx-config-undefine NAME)` takes one
+  out. `drgnx-config--defs` is in the teardown census.
+
+**Get.** `(drgnx-config-get NAME &optional KEY ROOT)` gives the applied value, or KEY's value in it. A KEY the file
+does not have (not `plist-member`, not `assoc`) gives the default's. The value is shared: do not change it. A file
+is applied when it is `ok`, `newer` or `migrated`; an absent file applies `:default`. `(drgnx-config-read NAME
+&optional ROOT)` reads fresh and applies nothing: `(:status :data :problem :version :unknown-keys :file :stamp)`.
+`(drgnx-config-file NAME &optional ROOT)` is the path. When a re-read (or our write) changes the applied value,
+`drgnx-config-changed-functions` runs with NAME (no prompts, each function guarded). Code that draws from a value
+caches it and listens there instead of getting it per redisplay.
+
+**The fallback.** A file with a mistake is never applied, in whole or in part. Its last good copy is, when
+`:last-good` is t and the copy still reads well; else the default. Last good copies are kept per machine in
+`<state>/config-good/NAME.eld`, written when a good read has a new stamp and its text differs. A mistake is one
+problem: `(drgnx-config-problem NAME &optional ROOT)` gives `(:name :file :text :line :column)`,
+`(drgnx-config-problems)` every current one (from what was applied, no I/O). Each mistake is said once: one
+`*Messages*` line ("drgnx: FILE: TEXT (line L) — using its last good copy", or "the defaults") until design 5's
+`drgnx-notify` exists, then a `fail` condition of the `config` source.
+
+**Versions.** A plist file's `:version` is its format; a missing one means 1, and an alist file is always 1. The
+rule for authors: **add a key, never change one.** Unknown keys are kept, so a new key needs no new format. Bump
+the version only for a change of shape or meaning, and add a `:migrate` step from the old one.
+- An older file is migrated in memory and applied (`migrated`). Only a user's write, or Migrate Config File…, writes
+  it back: the old file is backed up first (`NAME.bak-…`), and the new one gets this format's `:version`. Nothing
+  automatic writes a version change, so a machine that only starts never migrates a shared folder.
+- A newer file is applied when it fits our schema (`newer`), and is read-only here. One that does not fit is a
+  mistake.
+- A plist file whose first element is not a keyword is format 0: only a definition with a `(0 . FN)` step reads it.
+
+**Writers.** `(drgnx-config-set NAME KEY VALUE &optional ROOT)`, `(drgnx-config-unset NAME KEY)` and
+`(drgnx-config-update NAME FN &key root (timeout 1.0))` return the new applied value. Each is a
+`drgnx-file-update`: the lock, a fresh read, FN on the data (migrated when the file is older; nil when it is absent,
+not the default), the write.
+- They refuse a file with a mistake and a newer one with `drgnx-config-refused` (a `user-error`, and a `file-error` so its text prints without quotes; a handler for
+  `file-error` catches it too), and leave it as it
+  was: "FILE has a mistake at line L: TEXT — fix it (Preferences: Open Config File…) or reset it; it was not
+  changed", or "FILE was written by a newer drgnx (format V; this one writes W): update drgnx here; …". A project
+  file is read-only (an `error`).
+- FN's result must fit the schema, else an `error`: it is the caller's bug. A result `equal` to the data writes
+  nothing.
+- **The surgical render.** Only the top-level plist keys or alist entries (keyed by their `car`) that changed are
+  touched in the text. A changed one has its value (or entry) replaced, printed with `prin1`, or `pp` indented to
+  its column when it is wider than 70 columns. A removed one goes with its blanks up to the next item (the last one
+  takes the blanks before it). A new one goes after the item before it in the new data, past that item's own
+  comment, else first. Comments, layout and unknown keys stay byte for byte; **comments inside a replaced value are
+  lost.** Items keep their places: a result that moves items the file has is an `error`, never a rewrite of the
+  whole file. An absent file gets the header and the data pretty-printed, `:version` first for a plist. The write's
+  read-back (`drgnx-file-write`'s `:text` check) refuses a text that does not read back as the new data.
+- From timers, filters and sentinels, pass `:timeout 0` and catch `drgnx-file-busy` (the next run writes).
+- **A whole text.** `(drgnx-config-write-text NAME TEXT &key expect-stamp (timeout 1.0))` is for an editor that holds
+  the file's whole text and changes it its own way (the keys editor): it replaces the file by exactly TEXT, under
+  the lock, through `drgnx-file-write-text`, and returns the new applied value. TEXT must read, fit the schema, be no
+  newer than this drgnx writes and fit the size limit, else `drgnx-config-refused` names the line ("the new text of
+  FILE has a mistake at line L: …; it was not written"). EXPECT-STAMP is `drgnx-file-stamp` of the file as the
+  editor read it (nil: it was absent); when it is given and the file's stamp is not `equal` now, the write is
+  refused: "FILE changed since you opened it; nothing was written". Given, a file that has a mistake may be written
+  over (the editor showed it); without it a file with a mistake is refused, as the other writers do. A file a newer
+  drgnx wrote is refused either way.
+
+**Commands** (Preferences, in the palette): Open Config File… (`drgnx-config-open`, at the mistake's line and column),
+Reset Config File… (`drgnx-config-reset`: asks, keeps a backup, writes the header and the default; refused in batch;
+`drgnx-config--reset` does it without asking) and Migrate Config File… (`drgnx-config-migrate`, for a `migrated`
+file). The name is completed over the defined files, those with a mistake first.
+
+**Tests** load `test/fixtures/config-fixture.el`. `(drgnx-test-with-config BODY…)` points the config and state
+folders at a fresh temp root (`drgnx-test-config-root`), and sets the definitions, the applied state, the problems
+said and `drgnx-config-changed-functions` back afterwards. `(drgnx-test-config-put NAME TEXT &optional ROOT)`
+replaces a file as an editor would (a new inode, so its stamp changes), and `(drgnx-test-config-text NAME &optional
+ROOT)` reads it.
+
+**The packages' files** (`core/drgnx-pkg.el`, `core/drgnx-pkg-activate.el`; [packages.md](../guide/packages.md)):
+- `packages` (`packages.eld`) is `:reload start`, read again (`drgnx-config-reread`) by `drgnx-pkg-manifest`,
+  `-archives` and `-archive-priorities`, so each sync sees the file as it is. `lock` (`drgnx.lock.eld`) reloads on
+  change. Neither has a last good copy: a mistake in either is a `drgnx-pkg-error` ("FILE has a mistake at line L:
+  TEXT"), a sync stops before it changes anything, and nothing replaces the file. The lock's `:packages` entries are
+  checked by `drgnx-pkg--lock-entry-p`. The schema is wider than the first sketch, so files that worked still do: a
+  Git `:url` and an archive may be a path or an ssh address (strings), a priority any number, and `:rev` and
+  `:lisp-dir` are known keys.
+- The lock is written by `drgnx-config-update 'lock`: `drgnx-pkg-write-lock` replaces `:packages` (and takes out
+  `:from-shipped`), so a comment or a key of the user's in the file stays. A sync checks `drgnx-config-ensure-writable`
+  up front, so a lock a newer drgnx wrote stops it before the install. Rollback keeps a lock it cannot read or write
+  in a `.bak-` copy before it puts the generation's lock back. The lock drgnx ships (`etc/drgnx.lock.eld`) is not a
+  config file: `drgnx lock --ship` writes it with `drgnx-file-write`, and `drgnx-pkg--read-lock-file` checks it
+  against the lock's schema.
+- `generation.eld` is written with `drgnx-file-write` and `generations/current` with `drgnx-file-write-text`.
+  `packages-wanted.eld` (a bare list of names, a state file) is changed with `drgnx-file-update … :on-unreadable
+  'backup :timeout 0` from `drgnx-pkg--record-want`, which runs at startup: it never prompts or waits, skips a file
+  another process holds (the next startup records the want), and turns an error into one message.
+
+**The reference and the doctor.** `docs/reference/config.md` is generated from the definitions: for each, sorted by
+name, its file, folder, format, reload rule, what happens on a mistake, its `:doc` and a table of its keys from
+`drgnx-schema-describe`. A test fails when it is out of date, and prints the command. After a change to a definition
+(or a new file), regenerate it and commit it with the change:
+
+```sh
+emacs --batch -Q -L core -L wb -L harness -L modules/tools -l drgnx-config-doc \
+  --eval '(drgnx-config-doc-regenerate "docs/reference/config.md")'
+```
+
+`drgnx-config-doc-regenerate` loads the sources (`drgnx-config-doc-load`) and then writes (`drgnx-config-doc-write`,
+which does not load anything). Run it once in a fresh batch Emacs; a test runs this very command and compares.
+
+`harness/drgnx-config-doc.el` finds the definitions through `drgnx-config-doc-sources`, one entry per line:
+`(require FEATURE)` for a core feature that defines files at load, `(setup MODULE)` (after a `(require FILE)` for the
+module's file) for files a module defines in its setup, run through `drgnx-modules--run-setup`. A port that adds a
+definition appends its entry and regenerates. Every definition needs a `:doc` (a test checks).
+The doctor's `config-files` check reads each non-project file fresh (`drgnx-config-read`, writing nothing), and the
+core features that define files are listed in `drgnx-doctor-config-features`: a port appends its feature there too.
+Tests: `test/unit/config-doc-test.el` and `test/unit/doctor-test.el`.
+
+`onboarding.eld` (state folder, an alist of step → `(:status :message :time)`, `core/drgnx-onboard.el`) is the one
+state file that is not refused when it cannot be read: `drgnx-onboard--record` is a `drgnx-file-update` with
+`:on-unreadable 'backup` (the file is copied aside, the step is recorded in a new one), so two processes keep their
+steps and a damaged progress file never stops onboarding. `drgnx-onboard-state` reads through `drgnx-config-get`;
+`drgnx-onboard--write-state` (the Welcome's first-start marker) is a plain `drgnx-file-write`. Tests:
+`test/unit/onboard-test.el`.
+
+`face.eld` (state folder, a plist, `core/drgnx-face-state.el`) is a config file read by two programs: drgnx, and
+`bin/drgnx`, which finds `:variant` and `:gtk-theme` in it with `sed` before any Emacs runs. So it is printed with `prin1`
+on one line (a comment header on a new file names neither key), and the schema stays as wide as what M12f-a wrote:
+no version key, unknown keys allowed. A change is `drgnx-face-state-put PLIST [TIMEOUT]` (sets those keys, keeps the
+rest) or `drgnx-face-state-update FN`, both a `drgnx-file-update` with `:on-unreadable 'backup`: under the lock, on a
+fresh read, nothing written when nothing changed, and a file that is unreadable or not a plist is copied aside to
+`face.eld.bak-<time>` before it is started again. `drgnx-face-state-write` (replace the whole plist) stays for callers
+that mean it. The theme hook passes TIMEOUT 0 and skips when `drgnx-file-busy`; a failure becomes one message.
+`drgnx-face-state-read` is `drgnx-file-read`, never signals. Tests: `test/unit/face-state-test.el`.
 
 ## Staged hooks (`drgnx-hooks.el`)
 
@@ -105,10 +427,15 @@ command as "Category: Title" with its key and description beside it, through the
 **Run hook and usage counter.** `drgnx-surfaces-run` (what the palette and the menus call) runs
 `drgnx-surfaces-run-functions` with the command id after the command ran; an error in a member is swallowed. The
 first member counts the run: in memory only, so a run costs nothing noticeable. The counts are written at idle, at
-most once a minute and at exit, never prompting, to `command-usage.eld` in the state dir
+most once a minute and at exit, never prompting (one idle timer under the key `surfaces-usage`, `drgnx-timer-soon`
+with `:idle t`: a burst of runs makes one write per pause; the exit hook cancels it and writes), to `command-usage.eld` in the state dir
 (`drgnx-shortcuts-usage-file`): `((ID COUNT (DAY . N)…)…)`, with the per-day counts (`time-to-days`) of the last 7
 days. The file stays on your machine; it feeds the suggestions of the Keyboard Shortcuts editor ("you ran X 12
 times this week; give it a key?"). Read it with `drgnx-surfaces-usage-count` and `drgnx-surfaces-usage-week`.
+The file goes through the file layer: the write is `drgnx-file-update` with `:on-unreadable 'backup` and `:timeout 0`
+(the exit write waits up to a second), so a busy lock (another drgnx writing) keeps the counts dirty and the timer tries
+again, quietly. A file that cannot be read, or has malformed entries, is copied aside once (`NAME.bak-…`) before the next
+write replaces it; any other failure is one message. The last writer wins.
 
 **Removing what a command added.** The palette, the key sheet, the cheat sheet and the right-click menu are computed
 from the registry on each use, so an undefined command is gone from them at once. The menu bar and which-key are
@@ -136,6 +463,18 @@ Module files are `modules/<category>/drgnx-<name>.el`. Stages: `startup` (during
 Emacs is idle). Each setup runs under its own error guard and is timed; a file that fails to load is reported as
 a module too. "Help: Module Report" (`drgnx-modules-show-report`) lists stage, milliseconds and errors. Flags,
 settings, doctor checks, more stages and the modules index come with M4.
+
+**modules.eld** is a config file (`drgnx-config-define 'modules`, format 2, read at start, last good copy kept; the
+reference is `docs/reference/config.md`). `(drgnx-modules-read-state)` is `(drgnx-config-get 'modules)`: what this Emacs
+applied at its start, or after its own write. Every writer goes through `(drgnx-modules-update-state FN)`
+(`drgnx-config-update`): FN gets the file as it is now, under the file's lock, so a change another Emacs (batch
+onboarding, a second daemon) just made is kept, and only the keys FN changed are written. `drgnx-modules-toggle`,
+`drgnx-modules-set-enabled`, `drgnx-modal--set-enabled`, `drgnx-onboard-apply-preset` and the theme write
+(`drgnx-look-load-theme`, onboarding) use it; a flow with a side effect before its write calls
+`(drgnx-config-ensure-writable 'modules)` first. A modules.eld with a mistake or one a newer drgnx wrote is never
+written (`drgnx-config-refused`); an older one (format 0, a bare list; format 1) is migrated in memory and written as
+format 2 by the first write, after a backup. A malformed `:external` entry is not a file mistake: that module is
+reported failed (`drgnx-modules--external-ok-p`). The Modules list reads the "Next start" column from the file, fresh.
 
 ### Teardown: the cleanup stack (`drgnx-modules-record.el`)
 
@@ -275,6 +614,17 @@ AGENTS.md asks of every global hook and advice ("named, with an owner", no lambd
   `-alist-put`, `-face-spec`) makes its change inside `drgnx-modules--quietly`. A raw call is a fallback; use the
   helper.
 
+### A run's end
+
+A module's setup run has a token (`drgnx-modules--runs`). It ends when the module is turned off, when its setup is
+rolled back, and when its setup runs again while the token is still there (a `:teardown 'restart` module run again).
+`drgnx-modules--end-run MODULE` drops the token and then calls each function of `drgnx-modules-run-end-functions`
+with MODULE, under `condition-case` and with `inhibit-interaction` t; a failure becomes a problem
+`"run end: FN: MESSAGE"` in the teardown's, the rollback's or the new run's problems, and the next function still
+runs. `drgnx-timer.el` adds `drgnx-timer-cancel-owner` at load: **a module's layer timers die before its `:teardown`
+runs**, whether the setup, deferred work (`drgnx-modules-with-owner`) or a later hook with `:owner` started them,
+and their keys leave the table. A timer owned by a buffer or a process is not the module's and stays.
+
 ### The safety net: what a setup reaches through Emacs's own doors
 
 Code a setup reaches that does not push its own undo — wb modes, the setup functions of `wb/` libraries, packages'
@@ -289,12 +639,11 @@ no call goes through the net; what stays is two properties `advice-remove` leave
 | `add-hook` on a hook's global value | the function was not on it before | `remove-hook`, if it is still there |
 | `advice-add` | `advice-member-p` was nil before | `advice-remove`, if still there |
 | `add-to-list` on a list's global value | the element was not a member before (same test as `add-to-list`) | remove that one element, if still a member; others' additions stay |
-| a new timer (`timer-list`, `timer-idle-list` compared before and after) | it is not one of Emacs's own (below) | `cancel-timer`, if still pending |
+| a new timer (`timer-list`, `timer-idle-list` compared before and after) | its function is a symbol defined under `drgnx-dir` (a layer timer is skipped: its run token owns it; anything else is *left*, below) | `cancel-timer`, if still pending |
 | a global minor mode newly in `global-minor-modes` | it was off before | `(MODE -1)`, if still on; pushed after everything the setup pushed, so modes go off first and their own off code runs before the hook and timer undos. This is the one break in last in, first out: a mode goes off before undos the setup pushed after turning it on |
 | a feature newly in `features` | always | none: kept for the report, `(drgnx-modules-features-of MODULE)` |
 
-Labels read `hook HOOK FN`, `advice SYMBOL FN`, `list VAR ELEMENT`, `timer FN`, `mode MODE` (`a lambda` for an
-anonymous function), cut to 100 characters. The undos make teardown and rollback complete for these doors.
+Labels read `hook HOOK FN`, `advice SYMBOL FN`, `list VAR ELEMENT`, `timer FN`, `mode MODE`, cut to 100 characters. The undos make teardown and rollback complete for these doors.
 
 The net's undos are unconditional: they check that the thing is still there, not whether another module still
 needs it. So a change made by a claim-aware API — one whose undo hands over to another module's claim (the helpers
@@ -310,11 +659,15 @@ What it does **not** record:
 - **`add-to-list` on `global-minor-modes` or `local-minor-modes`**: Emacs 31's `define-minor-mode` keeps them that
   way; the modes are compared after the setup instead.
 - **A drgnx helper's own changes** (`drgnx-modules--quietly`, above).
-- **Emacs's own timers.** Emacs's libraries start singleton timers lazily from code a setup calls (an edit starts
-  undo's boundary timer, a buffer's jit-lock its context timer) and keep them in a variable; cancelled, they would
-  stay dead for the session (undo boundaries for process output would stop). A timer whose function is defined
-  under `lisp-directory` (or preloaded), or that sits in one of `drgnx-modules--emacs-timer-variables` (jit-lock's
-  lambdas), is left alone.
+- **Timers drgnx did not make are left, and listed.** The net cancels a timer only when its function is a symbol
+  defined under `drgnx-dir`. Anything else — Emacs, an ELPA package, a user's module outside `drgnx-dir`, a lambda —
+  may be a library's singleton, started lazily from code a setup calls (an edit starts undo's boundary timer, a buffer's
+  jit-lock its context timer) and kept in a variable; cancelled, it would stay dead for the session (undo boundaries
+  for process output would stop). Such a timer stays pending, and the module's report says so: `:left`, a list of
+  `"timer FN (FILE)"` (FILE is where FN is defined, `no file` when it is not) or `"timer a lambda"`, newest first. It
+  is cleared when the module's run starts and is in `modules-report.eld`. Read it as "this module's setup started
+  these, and turning it off did not stop them": a line for a function that is the module's own means the module should
+  start it through `drgnx-timer-start`, which ends it with the run.
 - **Global modes are owned by the first module that turns them on.** "Newly on" is all the net sees: when module
   A turns `drgnx-signal-mode` on and B relies on it, tearing A down turns it off. Modes a module shares go through
   an option (`drgnx-module-set`, claim-aware) or B's `:teardown`/`requires`. And a mode a setup turns *off* is not
@@ -345,8 +698,10 @@ safety net — what BODY changes is recorded onto the module, as in its setup. U
 
 ```elisp
 (eval-after-load 'drgnx-ai-ui (drgnx-modules-with-owner (add-to-list 'drgnx-ai-retrievers #'my-retriever t)))
-(run-with-idle-timer 1 nil (drgnx-modules-with-owner (my-mode 1)))
 ```
+
+A timer needs no wrapper: `(drgnx-timer-start 'my-key 1 #'my-fn :idle t)` in a setup is owned by that module run by
+default, and its one-shot runs as the module's code, recorded the same way ([Timers](#timers), below).
 
 Not `(with-eval-after-load 'x (drgnx-modules-with-owner …))`: there the form is evaluated only when `x` loads, so
 it names no module, and its function is never called. Once the module is turned off, rolled back, or run again
@@ -361,6 +716,588 @@ brings a collection forward (65–73 µs measured so); 41 setups × 75 µs ≈ 3
 it and 28.2 ms without (5 runs each, within the runs' noise); the budget is 5 ms across all setups.
 `test/unit/modules-record-test.el` covers it, including `startup-is-unchanged`: the shipped modules' startup stage
 gives the same statuses and commands with the recorder as without it.
+
+## Timers
+
+### Keys and owners (`drgnx-timer.el`)
+
+A timer that outlives the current command goes through one door:
+
+```elisp
+(drgnx-timer-start KEY SECS FN &key repeat idle args owner)   ; → KEY, or nil when OWNER is gone already
+(drgnx-timer-start 'my-key 1 #'my-fn :idle t)                 ; in a setup: owned by that module run
+(drgnx-timer-start (cons 'my-check buf) 30 #'my-check :repeat 30 :owner buf)
+```
+
+FN (with ARGS) runs after SECS, or after SECS of idleness with `:idle t`. `:repeat` is a number of seconds for a wall
+timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run-with-idle-timer`; a wall timer's
+`:repeat t` signals `wrong-type-argument` on every Emacs (Emacs 31's `run-at-time` refuses it, Emacs 30 ran the timer
+once). Then
+`(drgnx-timer-cancel KEY)`, `(drgnx-timer-active-p KEY)` and `(drgnx-timer-cancel-owner OWNER)` (→ how many).
+
+- **The key.** A second start of a KEY cancels its pending timer first, whatever started it: a setup run twice keeps
+  one timer. KEY is a symbol named after its site (`hub-tick`, `persist-visit`), or `(SYMBOL . OBJECT)` for one timer
+  per buffer, process or root, OBJECT a symbol, number, string, buffer, process, frame or window. Keys are compared
+  with `equal`, so a struct or a list would hash by contents that change (a connection struct whose stderr grows):
+  anything else signals `wrong-type-argument`. Key a timer by the process, never by its connection struct.
+- **The function** is a symbol (`list-timers`, the fingerprint and the errors name it); a lambda, a closure or an
+  `apply-partially` signals `wrong-type-argument`.
+- **The owner.** nil (the default) is the module whose setup or `drgnx-modules-with-owner` code runs now, with its
+  run token, else `:core`. A module symbol (`:owner 'tools/agents-ui`, from a hook function that runs later) takes
+  the module's current run; a module with no run refuses the start (nil, nothing started). A buffer owns its timers
+  until it is killed: its first timer adds `drgnx-timer--buffer-killed` to the buffer's own `kill-buffer-hook`
+  (permanent-local, as is its key list `drgnx-timer--buffer-keys`; no global hook). A process owns them while it
+  lives; its sentinel (or the job runner) must call `(drgnx-timer-cancel-owner PROCESS)` when it dies, which also
+  forgets the last runs of its `:min-interval` keys. `:core` lives as long as Emacs (the hub tick, the idle GC under
+  the key `gc-idle`, the job stamp poll `(jobs-stamp . ID)`, the usage write `surfaces-usage`).
+  Module repeats are keyed this way: `tools/agents` owns `agents-ui-mirror` (idle, every 30 s; its first look is the
+  one-shot `agents-ui-mirror-first`, 3 s into the first pause) and `tools/jobs` owns
+  `job-ui-recount-idle` (idle, every 60 s), so a second setup replaces the timer instead of stacking another, and
+  turning the module off ends it. Timers started later (from a command or a hook) name their module with `:owner`:
+  `tools/agents` owns the Agents list's 30 s tick `agents-ui-tick` (it only marks the list's view; see Views),
+  `ui/face` owns quick help's `quickhelp-timeout`, `-unmap`, `-look` and `-hover` and the start page's
+  `start-first-frame`, `ui/terminal-popups` the debounced `tty-popups-show`, `ui/terminal` the per-frame
+  `(tty-fallback-hint . FRAME)`, `tools/jobs` the coalesced `job-ui-recount`, `tools/ai` the `ai-probe` one-shot; the
+  ghost-text pause is an idle debounce `(ai-ghost . BUFFER)` owned by the buffer, the Search view's typing pause
+  and its pause after a listed file changed are debounces `(replace-pause . BUFFER)` and `(replace-refresh . BUFFER)`
+  owned by the view's buffer (its rows are a view: below); a search's output is parsed `drgnx-replace-parse-lines`
+  (64) lines at a time, the rest by `drgnx-timer-soon` `(replace-parse . PROCESS)` owned by the search's stderr
+  buffer (killed when the search ends; `drgnx-replace-cancel` also cancels the key, since that buffer runs no
+  kill hook). A line that does not parse is left out, and the first such error reaches the callback as `(:error
+  REASON)`; a partial line's pieces are joined once, at its newline. And an Ask's search limit
+  `(ai-grep . PROCESS)` by the search process (its sentinel cancels it). With no run of the owner nothing starts.
+  Core process timeouts are keyed by their process and owned by it, so the layer drops them when it dies: a check's
+  limit `(agent-check-limit . PROC)` with its 3 s backstop and tree kill, the hung `systemctl` kill, a `claude` command's
+  limit `(claude-cli-limit . PROC)` and the gateway's `(gateway-close . CONN)`. Three core timers have no process to own
+  them and belong to `:core`: `ai-load-keys` (once per daemon, after `drgnx open`), `ai-first-window` (the idle look at
+  the local AI runner) and a finished check's 0.1 s `(agent-check-finish . PROC)`, whose process is already dead."
+
+`core/drgnx-platform.el` (window-manager calls) owns its timers as `:core`: each belongs to one call that ends itself
+(its answer, its error) and cancels the timer, so no module's end or process's death may drop one and leave the
+callback uncalled. They are keyed per call: `(platform-call . PROCESS)` (the tool's time limit),
+`(platform-watchdog . N)` (an adapter that never answers), `(wm-place-poll . N)` and `(wm-place-deadline . N)` (sway
+and i3 placement), `(wm-hn-poll . N)` (Hyprland and niri placement), `(kwin-answer . N)` and `(kwin-place . N)`.
+
+### What the fire wrapper guarantees
+
+Every layer timer's Emacs function is `drgnx-timer--fire` with the entry as its argument. At each firing, in order:
+
+1. A timer whose key now holds another entry (replaced or cancelled while it was ripe) does nothing.
+2. An owner that is gone (a module turned off, rolled back or run again; a dead buffer or process) drops the entry:
+   FN is never called for it. A buffer made with `inhibit-buffer-hooks` runs no `kill-buffer-hook`, so its timers
+   go here, at their next firing.
+3. A one-shot leaves the table before FN runs, so FN may start its key again.
+4. FN runs in `save-match-data`, with a buffer owner current. A one-shot `drgnx-timer-start` owned by a module runs
+   as the module's code (`drgnx-modules--record-call`, as `drgnx-modules-with-owner` work does): what it changes is
+   undone when the module is turned off. A repeating timer and every firing of the primitives (debounce, soon,
+   poll, idle steps, their ON-TIMEOUT and ON-DONE) do not install the safety net, so they must not register hooks,
+   advice or global modes.
+5. Every error is caught: pushed on `drgnx-timer-errors` (newest first, at most 50 plists
+   `(:key :owner :fn :error :failures :stopped :time)`) and shown once as `drgnx: timer KEY failed: MESSAGE`. A
+   success resets the count. A timer that would run again (repeating, a poll, idle steps) stops at its
+   `drgnx-timer-failure-limit`-th failure in a row (3): it is cancelled, its record says `:stopped t`, and
+   `timers-report.eld` in the state dir (`drgnx-timer-report-file`; the hub writes `hub-timers-report.eld`) is
+   rewritten, buffers and processes in it written as their printed names. The doctor's `timers` check lists what
+   stopped in the last session. The debugger opens only with `debug-on-error` and a frame to show it: never in batch
+   or a daemon with no client. Nothing on these paths prompts.
+
+`(drgnx-timer-describe TIMER)` → `(:key K :owner O :kind KIND :fn FN)` for a layer timer (O without the run token),
+else nil; `(drgnx-timer-pending)` → `(KEY OWNER KIND)` for every live key; `(drgnx-timer-reset)` cancels them all
+(tests and the census). The layer never cancels a timer it did not make.
+
+### The primitives: debounce, soon, poll, idle steps
+
+Four calls cover the idioms a hand-written timer used to. Each takes a KEY, an `:owner` (default as in
+`drgnx-timer-start`) and a named function, returns KEY (nil when the owner is gone already), and fires through
+`drgnx-timer--fire`, so the owner check, the error record and the failure limit are the same.
+
+```elisp
+(drgnx-timer-debounce KEY SECS FN &key args idle owner)
+(drgnx-timer-soon KEY SECS FN &key args idle min-interval owner)
+(drgnx-timer-poll KEY INTERVAL FN &key deadline on-timeout args owner)
+(drgnx-timer-idle-steps KEY SECS STEP &key args budget interruptible owner on-done)
+```
+
+| The old idiom | Use |
+|---|---|
+| cancel the timer and start it again on every event | `drgnx-timer-debounce` |
+| `(unless (timerp X) (setq X (run-at-time …)))` | `drgnx-timer-soon` |
+| a minimum interval between runs | `drgnx-timer-soon … :min-interval` |
+| a lambda that looks "every N s" until something is true | `drgnx-timer-poll … :deadline` |
+| "keep going while idle", a step at a time | `drgnx-timer-idle-steps` |
+| `run-at-time 0 nil` out of a process filter or sentinel | stays raw |
+
+- **Debounce.** FN runs with the last call's ARGS once SECS pass with no further call. While one is pending a call
+  only stores ARGS and, for a wall debounce, the time (`drgnx-timer--now`): it makes no timer, does not look at the
+  owner again and, for `:idle t`, reads no clock (an idle debounce arms one idle timer once; input resets idleness,
+  so calls only store ARGS). A wall timer that fires earlier than SECS after the last call waits the remainder, in a
+  new timer made from a delay. SECS and IDLE are those of the call that armed it. A call on a key that holds another
+  kind of timer replaces it. The pending path costs 4 conses (the `&key` list) and one float per call under
+  byte-compilation, no vector cell: `drgnx-timer-prim/debounce-while-pending-makes-no-timer` and
+  `…/an-idle-debounce-reads-no-clock` assert it.
+- **Soon.** FN runs once, SECS after the first call of a burst, with that call's ARGS; a call while pending does
+  nothing and returns KEY. With `:min-interval` the delay is `max(SECS, LAST + MIN-INTERVAL - now)`, LAST being when
+  the key's previous run began; a clock that stepped back never makes the wait longer than MIN-INTERVAL. LAST is
+  in `drgnx-timer--last-run` (key → `(TIME . OWNER)`), kept only for keys that have a MIN-INTERVAL;
+  `drgnx-timer-cancel`, `-cancel-owner` (a module's run end and a process owner's sentinel call it), `-reset` and
+  the killing of the buffer that owns the key or is its OBJECT remove it. A key `(SYMBOL . FRAME)` or
+  `(SYMBOL . WINDOW)` under a `:core` owner keeps its entry until one of those. `:idle t` with `:min-interval` mixes
+  a wall-clock LAST with an idle delay: use it only if that is what you want. A live view uses it as its draw throttle (one key for the mark, another, plain `drgnx-timer-start`, for the
+  continuation, so the interval never delays the next slice).
+- **Poll.** `:deadline` is required: a positive number of seconds from the call, or the call signals
+  `(wrong-type-argument numberp DEADLINE)` at once. Every INTERVAL FN runs with ARGS; non-nil ends the poll. At the
+  first firing at or past the deadline ON-TIMEOUT runs with ARGS instead (once) and the poll ends. An owner that
+  goes ends it with no ON-TIMEOUT; the failure limit ends it and calls ON-TIMEOUT once.
+- **Idle steps.** For work that must finish soon after the user stops but never while they type. The *pause starter*
+  is a repeating idle timer at SECS; after a firing that leaves work and saw no input, the *chain*, a one-shot idle
+  timer SECS further into the same pause, carries on, so a pause long enough finishes all the steps. A firing calls
+  STEP at least once, and again while it returns non-nil, no input is pending and BUDGET (default
+  `drgnx-timer-step-budget`, 8 ms) is not spent. STEP returning nil cancels both timers, drops the key and runs
+  ON-DONE. Input pending cancels the chain and the starter resumes SECS into the next pause (a stale chain is
+  cancelled when the starter fires, so it never delays it). `:interruptible t` runs each step in `while-no-input`;
+  an aborted step counts as input and runs again in the next pause (leave it off for steps that are unsafe to
+  abort). A step that signals ends its firing with no chain; the failure limit stops the key with no ON-DONE
+  (`drgnx-timer-errors` and the doctor's `timers` check show it). Drawing never uses idle steps.
+
+All four read the clock only through `drgnx-timer--now` and schedule by delays, so the clock fixture drives them:
+`test/unit/core-timer-primitives-test.el` (`drgnx-timer-prim/`).
+
+### The ACP watchdog and the hub's timers
+
+The agent connection and the hub are the layer's first core users; their keys are by process or name, never by the
+connection struct.
+
+- **ACP.** `drgnx-acp-start` starts the key `(acp-watchdog . PROCESS)`, repeating every 0.5 s, whose function
+  `drgnx-acp--watchdog` (CONN PROC) reports an agent that died without its sentinel being called. `drgnx-acp--exited`
+  and `drgnx-acp-stop` cancel the key; two connections have two keys. A watchdog that fails stops after
+  `drgnx-timer-failure-limit` failures and is named in `drgnx-timer-errors`, instead of failing every half second. The
+  0.05 s tick that reads the last of a dead agent's stderr is the key `(acp-exit . PROCESS)`
+  (`drgnx-acp--report-exit`, one-shot, :core): the wait for the pipe is in `with-local-quit`, and a failing on-exit
+  handler is recorded in `drgnx-timer-errors` while the stderr process and input buffer are still cleaned up.
+- **Agent sessions.** Stop's two deadlines are the keys `(agents-stop . SESSION-ID)` (0.9 s: an agent that did not
+  answer the cancel has its turn ended anyway) and `(agents-drain . SESSION-ID)` (10 s more: the held messages go
+  if the late answer never came), functions `drgnx-agents--stop-deadline` and `drgnx-agents--drain-deadline`, both
+  :core. A second Stop replaces the pending deadline instead of stacking another. A session with no live agent
+  connection when the deadline ends its turn becomes `exited` (the old raw timer signalled
+  `wrong-type-argument drgnx-acp-conn nil`).
+- **Hub.** `hub-tick` (every 2 s, repeating) keeps its own `with-demoted-errors`: its steps' transient errors (a busy
+  `work.db`) never reach the failure limit. `hub-deliver` is `drgnx-timer-soon` 0.1 s: a burst of session changes
+  delivers once. `(hub-flush . SESSION-ID)` is `drgnx-timer-soon` 0.05 s: one `agent` flush per session per burst.
+  `hub-events` is `drgnx-timer-soon` `drgnx-hub-events-interval`: `events` go at most that often. `hub-exit` is the
+  `shutdown` request's exit 0.1 s later (`drgnx-hub--exit-now` with the exit function that was set when it came); a
+  hub stopped meanwhile cancels it. `drgnx-hub-stop` cancels all of them. The hub's `coord/notify` deferrals
+  (`run-at-time 0`) stay raw. `drgnx-hub-main` sets `drgnx-timer-report-file` to `hub-timers-report.eld`, so a timer
+  the hub stops is written beside, not over, the editor's report.
+
+### The clock seams
+
+The layer reads time and input only through `drgnx-timer--now` (`float-time`), `drgnx-timer--idle-time`
+(`current-idle-time`) and `drgnx-timer--input-pending-p` (`input-pending-p`): plain functions, never `defsubst`, so
+the clock fixture ([harness.md](harness.md#virtual-time)) overrides them and the layer follows virtual time. It
+schedules by delays only (SECS is seconds from now, handed to `run-at-time` or `run-with-idle-timer` as is), never by
+an absolute time computed from a clock read, which the fixture would shift twice. It reads `drgnx-timer--now` only
+for differences (the debounce remainder, the throttle, the poll deadline, the step budget) and to stamp `:time` on an
+error record.
+`(drgnx-timer-now)` is the public clock for code outside the layer (notices, drawing). `drgnx-timer/the-clock-fixture-drives-the-seams`
+checks the seams against the fixture; `test/unit/core-timer-test.el` covers the rest, all on the virtual clock.
+
+### The rule and its lint
+
+> A timer that outlives the current command goes through `drgnx-timer-*` with a key, an owner and a named function;
+> debounce, coalesce, throttle, poll and idle work use the primitives. `run-at-time 0 nil` deferrals out of filters
+> and sentinels may stay raw. A timer function that waits wraps the wait in `with-local-quit`.
+
+`drgnx-lint/timers-go-through-the-layer` (`test/unit/lint-buffers-timers-test.el`) holds the rule in `core/` (except the layer
+itself), `modules/` and `wb/`. It fails for a lambda, closure or `apply-partially` as the function of `run-at-time`, `run-with-timer`,
+`run-with-idle-timer`, `timer-create`, `timer-set-function` or any `drgnx-timer-*` call, and for a raw
+`run-at-time`, `run-with-timer`, `run-with-idle-timer`, `timer-set-time` or `timer-set-idle-time` unless its delay is
+the literal `0` and its repeat is nil or absent (`(run-at-time 0 nil FN …)` passes, lambda or not). Sites that
+predate the layer are counted per file in `drgnx-lint-timers--not-yet`; the lint compares each file's number of
+violations with its count, so a new raw timer fails ("use `drgnx-timer-*`") and so does a migrated one that leaves
+the count too high ("lower the count"). See [check.md](check.md#lints-on-the-source). The follow-path lint
+(`drgnx-lint/no-timers-in-workbench-follow-paths`) counts a `drgnx-timer-start`, `-soon`, `-debounce` or `-poll`
+form without `:idle t` as a timer start in `wb/`.
+
+## Epochs, memos and caches (`drgnx-memo.el`)
+
+Code that runs on redisplay or per keystroke only reads what is cached. Three tools keep the cache honest and
+cheap. The library needs nothing but Emacs (the recorder is reached through `fboundp`), so batch processes load it.
+
+| Use | When | Cost of a read |
+| --- | --- | --- |
+| **Epoch** | Something several results depend on changes now and then, and a hook or a variable set tells you when. | 0 allocation |
+| **Memo** | One result per window, buffer, frame or (no object) per session, rebuilt only when its inputs changed. | a hit allocates 0 |
+| **Cache** | Many results by key: per buffer, window, frame or process, or by string, kept within a cap. | a string hit stamps with `setcdr`, 0 |
+
+### Epochs
+
+`(drgnx-epoch-define NAME &key per redisplay watch doc)` declares a counter. `per` is nil (one global counter),
+`buffer` (a base plus one count per buffer, weak on the buffer) or `object` (an `equal` table of counts: one fixnum per
+distinct object for as long as the epoch is defined, so key it by ids; it is never weak on the key, because a collected
+key would take its count back to 0 and a memo could see a value again). `(drgnx-epoch NAME
+&optional OBJECT)` is a fixnum: for a per epoch the base plus the object's own count, so either bump moves it;
+without OBJECT, a `buffer` epoch gives its base and an `object` epoch the total of every bump. Counters wrap at the
+fixnum limit. `(drgnx-epoch-bump NAME &optional OBJECT)` returns the new value; with `:redisplay t` it also calls
+`force-mode-line-update` (every window for a global, base or object bump, that buffer's for a buffer's).
+
+`drgnx-epoch` is a macro. A quoted literal NAME that is not defined signals `No epoch NAME` when the form is
+expanded, so a typo fails the build; define the epoch above its first use in the file (`drgnx-epoch-define` with a
+literal name is noted at expansion), or `require` the file that does. A computed NAME is checked at run time.
+
+`:watch VARIABLES` (or `(drgnx-epoch-watch NAME VARIABLES)`) declares the variables whose setting bumps NAME;
+nothing is watched until a module activates the epoch (below). The watcher `drgnx-memo--watcher`
+(`add-variable-watcher`) reacts to `set`, `makunbound` and `defvaralias`, never to a reported `let` or `unlet`.
+Emacs does not report every binding as a `let`, so the watcher also skips a `set` of an atom `eq` to the value
+it replaces (a cons is never skipped: an in-place edit keeps its head). What that means for a per-buffer variable
+such as `tab-width`, `indent-tabs-mode` or `buffer-file-coding-system`:
+
+- already local in the buffer: `let` and `unlet` are reported as such and ignored;
+- not local in the buffer: a `let` binds the *default*, and Emacs 30 reports the binding and the unbinding as a
+  `set` with no buffer. Bound to the value it already has, nothing moves. Bound to a *different* value, each of the two
+  reports is a global `set`: it bumps the base and moves every buffer's epoch, twice per `let`. A consumer's watched
+  list must not include a per-buffer variable that other code often rebinds to other values (Task 16 checks its list
+  against this);
+- a buffer-local set bumps that buffer's own count (the watcher's WHERE); a global set (`setq-default`) bumps the base.
+
+`drgnx-memo--watched` maps each variable that is watched now to its epochs.
+
+**What is watched is a closed list**, each entry tested. A watcher costs about 0.2 µs per set (a `setq` of an unwatched
+variable 0.011 µs; an empty watcher costs 0.066 µs), so it goes on variables that change rarely. **Hot values stay plain
+`eq` memo keys and are never watched**: point, `buffer-chars-modified-tick`, `default-directory`, `mode-line-process`,
+keycast's keys, the window's start and width. The memo compares them for free.
+
+### Memos
+
+```elisp
+(drgnx-memo-define window-badge :on window
+  :keys ((window-point object) (buffer-chars-modified-tick) (drgnx-epoch 'git)))
+(drgnx-memo window-badge (selected-window) (build-the-badge))
+```
+
+`drgnx-memo-define` (a macro, `eval-and-compile`: a declaration at the top level of a file) takes an unquoted NAME and
+`:on` `window`, `buffer`, `frame` or nil (one global slot). The key forms are evaluated where `drgnx-memo` is used;
+they may refer to `object`. The table is weak on the object. `(drgnx-memo NAME OBJECT BUILD)` evaluates each key form
+once. When every value is `eq` to the stored one it returns the stored value and conses nothing; otherwise it runs
+BUILD, writes the values into the object's vector with `aset` (made on the first miss) and returns BUILD's value.
+Keys compare with `eq`: use fixnums, symbols, objects and epochs, not fresh strings, lists or floats (those never
+hit). `(drgnx-memo-forget NAME &optional OBJECT)` drops one object's value, or all.
+
+### Memo clients
+
+What redisplay reads, built once per change (PERF-L L6):
+
+| Memo | On | Rebuilt when | Epoch |
+| --- | --- | --- | --- |
+| `sticky-segment` (`drgnx-sticky.el`) | window | the window's start moves, it shows another buffer, or the epoch `sticky` of its buffer moves | `sticky` (per buffer), bumped by an edit at or above the start of a window showing the buffer |
+| `job-badge` (`drgnx-job-ui.el`) | none | `drgnx-job-ui--badge` is set to another string (the count changed) | none: the badge string is the key |
+| `live-header` (`drgnx-live.el`) | buffer | the epoch `live-tabs` of the view moves | `live-tabs` (per buffer), bumped where the tabs, the watched tab or driving change (`drgnx-live--tabs-changed`) |
+
+Each module activates its memo in its `:setup` (`drgnx-memo-activate`), so turning the module off empties it. The Live
+view bumps by hand rather than by `:watch`: its tests and its use do not wait for the module's setup, and the sites are
+all in one file. The segment and the header are read per redisplay; a hit allocates 0 (tests: `mod-sticky-test.el`,
+`job-ui-test.el`, `mod-live-test.el`).
+
+### Caches
+
+`(drgnx-cache-define NAME &key key cap doc)` (a declaration, at the top level): `key` `object` is a weak `eq` table; a get checks `buffer-live-p`,
+`window-live-p`, `frame-live-p` or `process-live-p` and drops a dead entry. `key` `string` is an `equal` table with an
+LRU; `cap` is required and positive. A get stamps the entry; a put past the cap evicts the oldest stamp (a scan of the
+table, on put only). `drgnx-cache-get`, `-put`, `-remove` and `-size` take the NAME and the key; `drgnx-cache-keys NAME` lists the keys (a pass over the
+table, stamping nothing: not for redisplay). **Every cache has a
+cap or is weak**; the docstring or `:doc` says which event or cap bounds it.
+
+The workbench has two string caches, both activated by `core/workbench`: `git-status` (repository root → its status
+plist, 16 roots; `wb/drgnx-git.el`) and `explorer-listing` (folder → `(MTIME . CHILDREN)`, 64 folders;
+`wb/drgnx-explorer.el`). A root pushed out of `git-status` while its `git status` runs is not killed: the finished
+run puts the root back (`drgnx-git--done` sees no entry and no earlier read of that process). A folder the Explorer shows
+is got on every render and stays recent; a tree with more than 64 expanded folders re-lists the oldest on each
+render (an `mtime` check, then a directory read).
+
+### Declarations, activation and ownership
+
+`drgnx-epoch-define`, `drgnx-memo-define` and `drgnx-cache-define` are **declarations, like `defvar`**: they go at
+the top level of a file (`core/` or `modules/`), run once at load, and are never undone. They have to be
+declarations: `drgnx-epoch` and `drgnx-memo` read them when the code that uses them is expanded or compiled, and a
+definition inside a `:setup` runs once at load from source but once per setup when compiled
+(`eval-and-compile`). They are listed in `drgnx-memo--registry` and `drgnx-memo-census`, and the fingerprint does not
+treat them as owned registrations. An epoch keeps its count across a redefinition.
+
+What a module **owns** is what has a global effect, and it takes it in its `:setup` with one call:
+
+```elisp
+(drgnx-memo-activate 'git 'statusbar-bar 'git-status)   ; epochs, memos and caches declared above
+```
+
+For an epoch it installs the declared variable watchers (the first activation does; an epoch two modules activate
+keeps them until the last is off). For a memo or a cache it records that its contents are emptied. Each step pushes
+its undo (`drgnx-modules-push-undo`), so turning the module off removes its watchers and empties its memos and
+caches, and turning it on again activates afresh. An epoch's count is not reset. The call does nothing recorded
+outside a `:setup`, and an undeclared name signals. The fingerprint reads the live watches
+(`drgnx-memo--watched`), so a test that leaves one is named by `test --leaks`.
+
+`(drgnx-memo-census)` returns `((NAME KIND SIZE CAP) …)` for every memo and cache; `bin/drgnx test --soak` prints it
+after each round and fails when a cache's SIZE passes its CAP. Tests: `test/unit/core-memo-test.el` (prefix
+`drgnx-memo/`; the 0-allocation tests byte-compile the library's functions in place first, because the tests run on
+source and an interpreted call conses).
+
+## Views (`wb/drgnx-view.el`)
+
+A view draws a buffer as keyed rows: one row per KEY, from START (the view's only marker) to the end of the buffer.
+**Never erase, mark:** code that changes the model only marks the view (a hash put or a queue push, plus a timer
+arm: cheap enough for a process filter), and the draw applies the marks in place, from the view's timer, only while
+the view shows. A dirty row is deleted and inserted again at its integer start, a growing row gets only its new
+characters, removed rows are deleted one by one. Row starts are integers relative to START; no row has a marker.
+Undo is off.
+
+### Declaring a type
+
+```elisp
+(drgnx-view-define 'my-list
+  :render #'my-list--row          ; KEY → "text\n", or (BODY . SUFFIX)
+  :grow #'my-list--grow           ; KEY BODY-LENGTH → the new characters, or nil to render again
+  :sync #'my-list--sync           ; VIEW → marks (usually `drgnx-view-sync-rows')
+  :slice 0.004                    ; draw in slices (nil: all at once)
+  :key-test 'eq)                  ; or `equal' (the default)
+```
+
+`drgnx-view-define` returns NAME and stores a `drgnx-view-type` in `drgnx-view--types` (the fingerprint reads its
+names). SLICE is nil or at most `drgnx-view-slice` (0.004 s); DELAY is the throttle (nil: `drgnx-view-delay`, 0.1 s;
+0: the next timer pass); FOLLOW-TAIL keeps a window at the end; PATCHED (VIEW KEYS) runs after a draw with the keys
+it drew or grew, to put the view's own overlays back. A definition made in a module's setup pushes the undo
+`"view type NAME"`. A view looks its type up by name at each draw: once the type is removed (its module turned off)
+the view draws nothing more, and a redefinition (the module on again, a reload) is picked up. No view is tracked.
+`(drgnx-view-type-p NAME)` is non-nil while NAME is defined (a mode that attaches a module's view checks it first).
+
+**RENDER** returns a string ending in a newline, or `(BODY . SUFFIX)` whose concatenation does: growth goes between
+BODY and SUFFIX, and the view remembers BODY's length (`drgnx-view-body-length`). A row may span several lines.
+**GROW** (KEY BODY-LENGTH) returns the characters to add at the end of BODY ("" adds nothing), or nil to render the
+row again; a row rendered as a plain string, or a type without GROW, is rendered again.
+
+### Attaching
+
+`(drgnx-view-attach NAME &key buffer start)` sets the buffer-local `drgnx-view`, `buffer-undo-list` to t, and makes
+START a marker (insertion type nil; default `point-min`). Attach after the major mode: a mode call kills the local
+variable. START to the end of the buffer belongs to the view: text there that is no row is deleted by the first draw
+(the self-check below). When START is `point-min` the buffer becomes read-only; otherwise each drawn row gets
+`read-only t` and `front-sticky (read-only)`, so typing at START, inside a row, between two rows or after the last
+row is refused (`text-read-only`), while text above START (replace's widgets) stays editable. A widget field that
+ends exactly at START cannot grow at its end: end the text above START with a newline. Attaching also puts
+`drgnx-view--buffer-shown` on the buffer's own `window-buffer-change-functions`. Attaching again removes the old
+view's rows first and releases its marker.
+
+### Marks
+
+| Call | Meaning |
+|---|---|
+| `(drgnx-view-reset VIEW KEYS)` | a new row set: every row goes, KEYS are appended (earlier pending changes are dropped) |
+| `(drgnx-view-append VIEW KEYS)` | new rows at the end |
+| `(drgnx-view-insert VIEW KEYS &key after)` | new rows right after AFTER, a drawn or pending key; nil: at the start; any other key: at the end |
+| `(drgnx-view-remove VIEW KEYS)` | rows go (a pending row's followers take its place) |
+| `(drgnx-view-dirty VIEW KEYS)` | rows to render again; KEYS t: every row, patched, never erased |
+| `(drgnx-view-grow VIEW KEY)` | the row only grew at the end of its BODY (a pending `dirty` wins) |
+| `(drgnx-view-touch VIEW)` | the model changed: SYNC runs at the next draw |
+
+A key already shown or pending is left where it is by `append` and `insert`. Structural marks queue as
+`(OP KEYS AFTER)` and are worked out in order at draw time, so a burst of marks costs one pass. Every mark arms the
+view's draw (`drgnx-view--arm`); nothing draws from a mark, so a mark from a process filter, a sentinel or
+`post-command-hook` only marks.
+
+`(drgnx-view-sync-rows VIEW KEYS SIG)` is the SYNC helper: it diffs the ordered KEYS against the drawn and pending
+rows. A row whose `(funcall SIG KEY)` is not `eq` to the signature stored at the last sync is dirty (a vector is
+compared element by element, with `eq`, so a fresh vector of the same values is unchanged). New keys are inserted,
+missing ones removed; a row that moved (outside a longest run kept in order) is removed and inserted, and when more
+than half the rows moved, or KEYS share no key with the rows (a new row set: another file's Outline), the view is
+reset instead. A reset appends the new rows after the ones that go, so window start and point (Keeping places) fall
+to the first new row: a new row set starts at the top. (Inserted at the start instead, they fell back to the last
+new row: UI audit #3.)
+
+### Drawing
+
+A draw (`drgnx-view--draw`) runs SYNC when touched, the self-check, then two steps:
+
+1. **The fold** applies the structural marks to the row vectors only; the buffer does not change. A row that goes
+   stays as an entry marked `gone`, a new row is an empty entry marked `new`. The vectors are rewritten in place
+   when new rows only go at the end (appends and removals), and grown by doubling only when full; an append to a long
+   view copies nothing. Otherwise (an insert before a row that stays) fresh vectors are made. Marks that only add
+   rows at the end (no row goes) fold in `drgnx-view--fold-tail`, which visits only the new rows: the entries already
+   there, rows left to delete between slices included, stay as they are (`drgnx-view/an-append-folds-only-the-new-tail`
+   counts the entries a fold visits).
+2. **The sweep** works entry by entry in buffer order with one running shift of the starts: `gone` is deleted,
+   `new` rendered and inserted, a dirty row deleted and inserted again at its integer start, a growing row gets an
+   `insert` before SUFFIX. Dirty marks are moved onto the entries first (`patch` wins over `grow`). When every entry
+   is done, the empty entries are dropped and the index follows the rows that moved.
+
+It returns the number of rows drawn, grown or removed, clears the modified flag and calls PATCHED. It binds
+`inhibit-read-only` and `inhibit-interaction`. A RENDER or GROW that signals draws the row `⚠ KEY: MESSAGE` in the
+`error` face (KEY printed to 60 characters); the first error of a view (also from SYNC or PATCHED) is pushed onto
+`drgnx-signal-errors` as `"view NAME: MESSAGE"` (kept to 20), later ones are not recorded again. Errors are never
+raised. Between two slices the vectors always describe the buffer: `key-at`, `row-start` and the self-check stay
+right while work is left.
+
+`(drgnx-view-draw-now VIEW)` draws everything at once, even when the view is hidden (`g` and tests); it returns 0
+for a view object no longer attached to its buffer, or whose type was removed.
+
+**Self-check:** before a draw, when the region (START to the end of the buffer) is not as long as the entries, a
+foreign edit moved them: the view deletes the region, draws every row again before the pending changes, and counts
+a `:full-draws`.
+
+### Drawing live: the timer, the frame budget, visibility
+
+**The timer.** A mark arms `(drgnx-timer-soon (cons 'drgnx-view BUFFER) DELAY #'drgnx-view--draw-buffer :args
+(list BUFFER) :min-interval DELAY :owner BUFFER)`: one draw DELAY after the first mark of a burst, at most one per
+DELAY. A type with DELAY 0 arms `soon` with 0 and no min-interval. A slice that leaves work re-arms a second key,
+`(drgnx-timer-start (cons 'drgnx-view-more BUFFER) 0 …)`, so the throttle never delays the next slice. A mark made
+during a chain arms nothing (`--arm` returns while the continuation is pending): the next slice takes it, so one
+view never draws two slices in one gap; re-arming the continuation also cancels a throttle armed during that draw.
+A chain broken by hiding leaves no timer, and showing the view arms it again. Both keys are owned by the buffer
+(killing it cancels them). Marks made by the view's own SYNC arm nothing (that draw takes them).
+
+**The frame budget: one deadline, no queue, no priority.** A type with SLICE draws one slice per timer firing. The
+slice's deadline is `drgnx-view--deadline` when it is still ahead of `(drgnx-timer-now)` (another view drew in this
+timer pass and left time), else now + SLICE. Every 8 rows (`drgnx-view--check-every`; a clock read boxes a float)
+the slice stops when the deadline has passed or `input-pending-p`. The first check comes after 8 rows, so a slice
+draws at least `min(8, work)` rows, and its rows are a multiple of 8 except the last. Views ripe in one timer pass
+share the deadline while it is unspent: a view that finishes early leaves the next the rest of the slice. A view
+that finds the deadline already spent starts a fresh one, so N sliced views that each use a whole slice cost
+N × SLICE in one gap; the spec's "at most 4 ms per gap for all views" needs a timer-pass identity (the store,
+Task 15). Views are not queued or ranked: each one's timer fires in turn. Each slice draws the **visible rows first** (for each window on a visible frame, the
+entries from the one at `window-start`, `window-body-height` of them), then the rest, each sweep in buffer order.
+`:slices` counts the slices of SLICE types and `:max-slice-rows` the most rows one drew. When a draw leaves no view
+with work (and the view is not stale), the gap is quiet: `drgnx-gc-gap` runs (when `drgnx-gc` is loaded).
+
+**Visibility (before the store).** `(drgnx-view-shown-p VIEW)` is non-nil when a window on a visible frame shows the
+buffer, as `get-buffer-window` with `'visible` answers but without its window list: it walks the frames `next-frame`
+reaches from the selected one and their window trees, allocating nothing. (That is the selected frame's terminal: a
+view shown only on another terminal counts as hidden until a window change there.) The view keeps the last answer
+in its `shown`. A timer draw of a hidden view sets `stale`, adds 1 to `:stale-skips` and returns: **a hidden view
+draws nothing and allocates nothing**. While it is stale its marks arm no timer (they cost a hash put and the frame
+walk). When a window starts showing the buffer, `drgnx-view--buffer-shown` (on the buffer's own
+`window-buffer-change-functions`, which redisplay runs) arms the draw of a stale view; a mark on a stale view that
+shows again does too. Store Task 15 replaces this with the store's visibility.
+
+### Keeping places
+
+A draw keeps the buffer's point and, for each window showing the buffer (all frames), its start and point on their
+row. It records each as an entry and an offset into it after the fold, and puts it back after the sweep: an entry
+that was deleted falls to the next row (the previous one at the end), an offset longer than the row is clamped to
+its last character, a position above START stays where it is. A point at the end of the rows stays at the end of
+the last row, or, for a FOLLOW-TAIL type, at the end of the buffer, so it follows appends. The windows are moved
+inside `drgnx-wb-with-owned-windows`, with `set-window-start W POS t` and `set-window-point`, so the jank guard sees
+the view's own windows move.
+
+Buffers that are not views keep places with the same idea:
+
+```elisp
+(drgnx-view-with-kept-windows (:key-at #'my-key-at :pos-of #'my-row-start)
+  (erase-buffer)
+  (my-insert-everything))
+```
+
+`(drgnx-view-save-places KEY-AT)` returns the buffer's point and each showing window's start and point as `(KEY
+OFFSET LINE)`, KEY being `(funcall KEY-AT POS)` and OFFSET the distance from the start of KEY's row (the first line
+above POS with the same key). `(drgnx-view-restore-places PLACES POS-OF)` puts each back at `(+ (funcall POS-OF KEY)
+OFFSET)`, or at the start of LINE (clamped) when POS-OF returns nil; dead windows are skipped, and the windows move
+inside `drgnx-wb-with-owned-windows`. The macro is save, BODY, restore, and returns BODY's value.
+
+### Reads
+
+`(drgnx-view-key-at &optional POS)` (the current buffer's view; a binary search on the starts that allocates
+nothing), `(drgnx-view-row-start VIEW KEY)`, `(drgnx-view-row-count VIEW)` (rows in the buffer; between slices, rows
+still to delete count), `(drgnx-view-pending-p VIEW)` (marks not drawn, or work left by a slice),
+`(drgnx-view-body-length VIEW KEY)`, `(drgnx-view-shown-p VIEW)`, and `(drgnx-view-stats &optional VIEW)` →
+`(:rows-drawn :rows-grown :appended :removed :slices :max-slice-rows :full-draws :stale-skips)`. `:rows-drawn`
+counts every row rendered (patched, inserted or appended, an error row too); `:rows-grown` the rows that took GROW's
+text; `:appended` the rows added; `:removed` the rows deleted. Without VIEW it sums every live view
+(`:max-slice-rows`: the largest).
+
+### Consumers
+
+- **The Search view** (`modules/tools/drgnx-replace.el`, type `replace-results`, defined with its sidebar section): DELAY 0,
+  SLICE `drgnx-view-slice`, `eq` keys. A match's key is its plist; a file's header is `(drgnx-replace-file . FILE)`,
+  made once per search. Arrivals append (a new file after its header) or insert after the file's last row; a new
+  replacement text marks every match row dirty (headers stay); a file searched again removes its old rows and inserts
+  the new ones after its header, marked dirty for its box; a new search resets the view. PATCHED updates the status
+  line. Tests: `drgnx-replace/` in `test/unit/mod-replace-view-test.el`, `drgnx-view-ui/` in `test/ui/view-ui-test.el`.
+
+- **The agent transcript**: `tools/agents` defines `agent-transcript` in its setup (`modules/tools/drgnx-agents-ui.el`; `:follow-tail t`,
+  `:key-test 'eq`, the default DELAY and SLICE). Its rows are `:commands`, each entry plist that shows something, each
+  permission and review plist, `:status` and `:queue`. An `agent` entry renders as `(TEXT . "\n\n")` and a `thought` as
+  `("… " TEXT . "\n")`, so a streamed chunk is a GROW of the text after BODY-LENGTH. The agent's process filter only
+  touches the view (`drgnx-agents-ui--changed`). SYNC has a fast path: when the session's lists are `eq` to those of
+  the last sync, the entries, permissions and reviews lists are as long (a `delq` keeps the head when the first item
+  stays), each queued message is the same (a requeue replaces one in place) and no tool or plan entry still running
+  changed (they change in place: compared by signature), it only compares each running text's length with its drawn
+  body and marks a grow; otherwise `drgnx-view-sync-rows` diffs the rows. An answer's or a thought's signature is its
+  type alone, so the turn's end (`:done`) draws nothing again. A grow draw allocates the same on a 4 kB and a 400 kB
+  answer (`drgnx-agents-ui/grow-allocation-is-independent-of-size`). The footer rows follow the entries, so a new
+  entry while a turn runs is an insert, not an append.
+
+  The model keeps streamed text as chunks (`core/drgnx-agents.el`): a running `agent` or `thought` entry has `:chunks`
+  (newest first) and `:length`, so appending a chunk costs a cons whatever the answer's size
+  (`drgnx-agents/a-chunk-costs-the-chunk-not-the-answer`). `(drgnx-agents-entry-text E)` joins them into `:text` once and
+  keeps it until the next chunk; `(drgnx-agents-entry-length E)` reads the length without joining; `(drgnx-agents-entry-tail
+  E FROM)` builds the text after FROM from the newest chunks only (the transcript's GROW). Code that reads an answer's
+  whole text goes through `drgnx-agents-entry-text`. The turn's end, `agents/get` and the hub's `agent-entries` flush
+  join every entry first (`drgnx-agents-join-text`), so a done entry and the wire carry a whole `:text`.
+
+- **The Agents list**, a view with no rows, is `agents-list` (`:render #'ignore`, `:sync #'drgnx-agents-ui--list-print`,
+  the default DELAY): the buffer is a `tabulated-list-mode` buffer whose text belongs to tabulated-list, and the view
+  gives it the throttle, the visibility check and the stale mark. A session's change (`drgnx-agents-ui--changed`) and
+  the 30 s tick (`agents-ui-tick`) only touch the view; SYNC runs `drgnx-agents-ui--update-lines` inside
+  `drgnx-view-with-kept-windows` (key = `tabulated-list-id`): a line whose id and columns are unchanged is not touched,
+  a changed one is replaced, gone and new ids are deleted and inserted, so a window stays on its session when lines move.
+  (`tabulated-list-print` with UPDATE cannot do this: it needs a sort key and keeps a line of the same id even when its
+  columns changed.) The view's START is the only marker; SYNC moves it to the end of the buffer after each update,
+  because the self-check would otherwise take the list's text for foreign text and delete it. A hidden list draws and
+  allocates nothing, and `drgnx-agents-ui-list-buffer` (the placeholder, `agents-view`) touches and draws it now.
+
+- **The Outline** (`wb/drgnx-outline.el`) is the view type `outline` (DELAY 0, `equal` keys, PATCHED `drgnx-outline--mark-current`), attached to its
+  buffer when `drgnx-outline--buffer` makes it. A refresh builds imenu's index once and makes the rows integers:
+  `drgnx-outline--flatten` reads each marker's position and releases it with `(set-marker M nil)`, so no imenu marker
+  stays in the source buffer (PERF-M1; the test counts them over 50 refreshes of 2,000 definitions). Row keys are
+  `(NAME DEPTH ORDINAL)`, ORDINAL counting the earlier rows with the same name and depth; a notice is the single row
+  `(:notice TEXT)`. `drgnx-outline--refresh-1` fills `drgnx-outline--rows` (vectors `[NAME DEPTH POSITION KEY]`) and
+  `drgnx-outline--table` (KEY → row), then calls `(drgnx-view-sync-rows view KEYS #'drgnx-outline--sig)`. The signature is
+  whether the row is a group, so an edit that only moves definitions redraws no row, and a new definition draws one.
+  The view keeps the Outline's point and window start on their row. The current-definition overlay is put back after a
+  draw by PATCHED. The follow-the-edit timer is the layer's key `outline-refresh` (`drgnx-timer-soon`, idle, delay
+  `drgnx-outline-delay`, owned by the Outline's buffer once it exists). Tests: `test/unit/wb-outline-test.el`,
+  `test/unit/wb-outline-edge-test.el` (prefix `drgnx-outline`).
+
+- **The Work tree** (`work-tree`, `modules/tools/drgnx-work-ui.el`; DELAY 0): row keys are node ids (a node the tree
+  shows twice, as a commit under two tasks, has its parent's key appended from the second time on). SYNC
+  (`drgnx-work-ui--render`) walks the open tree into the ordered keys and calls `drgnx-view-sync-rows`; a row's
+  signature is the vector `[(sxhash-equal LINE) DEPTH FOLD]` (a database's strings are never `eq`, a fixnum is).
+  Folding, the filter and a scan's sentinel only touch the view; point and window start stay on their row.
+  `drgnx-work-ui-buffer` draws a new buffer at once and only marks an existing one.
+
+### The invariant
+
+`(drgnx-view--check VIEW)` is nil when the starts are the entries' actual extents: entry 0 starts at 0, every
+non-empty entry ends with a newline just before the next start, an empty entry is a row to insert or a deleted one,
+the index points at each row and row to insert (never at a row to delete), and the last start is the end of the
+buffer. Otherwise it names the first fault. Tests: `test/unit/wb-view-test.el` (prefix `drgnx-view/`, including 200
+seeded random marks checked against a plain list and an append that stays in place) and
+`test/unit/wb-view-live-test.el` (prefix `drgnx-view-live/`: the timer, visibility, slices, places, all on the
+virtual clock; slices replace `drgnx-timer-now` with a clock that steps per read, and since batch Emacs runs no
+redisplay the visibility tests call `drgnx-view--buffer-shown` as redisplay would). Helpers in
+`test/fixtures/view-fixture.el` (`drgnx-view-test-with-type`, `drgnx-view-test--text`, `drgnx-view-test--expected`,
+`drgnx-view-test--alloc`).
+
+### Mark, don't erase
+
+A live view is never redrawn by throwing its rows away: `erase-buffer`, `tabulated-list-print` without UPDATE and
+`delete-region` to `(point-max)` lose the scroll position, the selection and every row's identity, and cost a full
+redraw for one changed row. Code that learns of a change marks the view. The lint
+`drgnx-lint/views-never-erase` (`test/unit/lint-render-test.el`) fails on such a call in `wb/` and `modules/`
+unless `test/lint-render-allowed.eld` lists it as `(:file F :in DEFUN :what CALL :kind KIND :why STRING)`, one entry
+per (file, defun, call) with `:n` for more than one site. KIND is `document` (drawn once, on a user action),
+`listing` (Explorer and Buffers, styled by jit-lock), `job-window`, `recovery` (the view core's own reset after a
+foreign edit) or `migrate`, a live view whose `:until` names the task that moves it onto the view core. Counts can
+only fall: the task that rewrites a site deletes its entry, and `drgnx-lint/no-stale-render-allowlist-entries` fails
+on an entry that matches nothing. In the same way `drgnx-lint/garbage-collect-only-in-the-gc-owner` fails on
+`garbage-collect` or an addition to `post-gc-hook` anywhere but `core/drgnx-gc.el`, `harness/` and `test/`: one
+owner decides when to collect.
 
 ## Modal core (`drgnx-modal.el`)
 
@@ -502,11 +1439,23 @@ compilation available, Emacs then compiles them natively in the background as th
 times faster and makes far less garbage. `install.sh` runs it; drgnx sets `load-prefer-newer`, so a stale `.elc`
 never shadows newer source. The build must stay warning-free (`test/unit/build-test.el`).
 
+Each file compiles in a fresh batch Emacs (`-Q`, `core/` and `wb/` on `load-path`), as the native compiler compiles
+it when a session loads the `.elc`: in one shared Emacs, a library an earlier file's compile loaded (`project`, `cl-macs`,
+another drgnx file) hid a missing `declare-function` or `require`, and the native compiler's warning then opened
+`*Warnings*` in the user's frame. `drgnx-build-jobs` files compile at once: one per 150 MiB of `MemAvailable` beyond
+1 GiB kept free, at most the processor count (`DRGNX_BUILD_JOBS` sets it); a file that takes more than
+`drgnx-build-file-timeout` (120 s) is an error. A file's result is read when its process's sentinel has run (Emacs
+runs it only after reading what the process left in its pipe), never when `process-status` first says `exit`: under
+load that came before the output, and a finished compile looked like one that ended without a result. The whole build takes about as long as the single-Emacs one did (3 s
+on 16 cores). Warnings are printed, and the build test fails on any; `bin/drgnx build` exits 1 only on errors, so a
+warning a newer Emacs adds never stops an install or an update.
+
 ## The Emacs `bin/drgnx` runs in
 
 The shell function `emacs_bin` picks the one Emacs every subcommand uses: `$DRGNX_EMACS`, else the first line of
-`$DRGNX_CONFIG_DIR/emacs` (default `~/.config/drgnx/emacs`, written by `install.sh`'s `remember_emacs`) when it
-names an executable file, else `emacs`. The file is read as a path, never evaluated. A new subcommand calls
+the data dir's `emacs` (`$DRGNX_DATA_DIR/emacs`, default `~/.local/share/drgnx/emacs`, written by `install.sh`'s
+`remember_emacs`) when it names an executable file, then the same of `$DRGNX_CONFIG_DIR/emacs` (where older
+installs wrote it), else `emacs`. The files are read as paths, never evaluated. A new subcommand calls
 `"$(emacs_bin)"`, never a bare `emacs`. All of them run with `load-prefer-newer`, so a stale `.elc` after a pull
 never prints before the output. `emacsclient_bin` is that Emacs's `emacsclient` (beside it, or in an Emacs.app's
 `Contents/MacOS/bin/`; else PATH's) — what `drgnx open` and `drgnx PATH` talk to the daemon with
@@ -552,7 +1501,7 @@ An item is a plist `(:kind :section mcp|hook|skill :name :from user|project|loca
 | `-read KIND ROOT`, `-scopes KIND SECTION ROOT`, `-write KIND OP ITEM SCOPE ROOT CALLBACK` | Generic functions (`cl-defgeneric`, `eql` specializers on KIND) each agent file implements: everything configured as `(:rules :items :problems :routes :notes)`; where an add may go, `((SCOPE LABEL FILE)…)`; add/edit/remove/toggle with a callback getting `(:ok t :note S)` or `(:error S)`. |
 | `-json-read FILE` | `(:value V :indent N)`: objects are alists with symbol keys in file order, arrays vectors, `:null`, `:false`. A missing or blank file is `(:value nil :indent 2)`; one that does not parse signals `drgnx-agent-config-unreadable` with `(FILE LINE MESSAGE)` (a trailing comma names the comma's line). |
 | `-json-write FILE VALUE INDENT [EXPECT]` | Key order as in VALUE, INDENT spaces, a final newline; through `-write-text`, with the file's and the new text's JSON parse as checks. Unreadable files are never written. A VALUE that is not JSON is an error naming its place and type (`Not a JSON value at mcpServers.x.args (a list, expected a vector)`), never its content. |
-| `-write-text FILE TEXT CHECK [VERIFY [EXPECT]]` | EXPECT (the text, or the modification time, seen when the caller read FILE): a FILE that differs now signals `drgnx-agent-config-changed` and nothing is touched (Claude Code rewrites `~/.claude.json` often). CHECK (called with FILE's current text) must not signal, else nothing is touched; VERIFY the same with TEXT. TEXT equal to what FILE holds is not written and the backup stays. Then FILE is copied to `FILE.drgnx-bak` (exactly one backup, with FILE's modes), TEXT goes to a temp file next to FILE with FILE's modes (0600 for a new file) and is renamed over it. A symlink is written through; directories it has to make get 0700. The TOML writes use it too. |
+| `-write-text FILE TEXT CHECK [VERIFY [EXPECT]]` | EXPECT (the text, or the modification time, seen when the caller read FILE): a FILE that differs now signals `drgnx-agent-config-changed` and nothing is touched (Claude Code rewrites `~/.claude.json` often). CHECK (called with FILE's current text) must not signal, else nothing is touched; VERIFY the same with TEXT. TEXT equal to what FILE holds is not written and the backup stays. Then FILE is copied to `FILE.drgnx-bak` (exactly one backup, 0600 whatever FILE's modes: it holds the secrets of before; its temp file is owner-only before the rename), TEXT goes through `drgnx-file-write-text` (a temp file next to FILE, renamed over it) with FILE's modes (0600 for a new file). A symlink is written through; directories it has to make get 0700. The TOML writes use it too. |
 | `-secrets SPEC`, `-mask-text TEXT SECRETS` | Every env and header value, and the value of any key matching token, secret, key, password or authorization (case-insensitive; every string inside a list or object under such a key), longer than 3 characters. Also, in `:args`, `:url`, a hook's `:command` and every other string, only the secret part of: `NAME=VALUE` / `--flag=VALUE` with a secret-ish name, `Bearer`/`Basic`/`Token` values, `Authorization:` values, URL userinfo and secret-ish query parameters, well-known token shapes (`sk-`, `ghp_`, `github_pat_`, `xox?-`, `AKIA`, `AIza`, JWTs), the argument after a secret-ish flag, `-p`, `-H`/`--header` and `-e`/`--env`, and 24+ character `:url` path segments. `-mask-text` replaces each by `••••` and keeps the context. |
 | `-cheap-status ITEM [ROOT]` | `(ok . DETAIL)`, `missing-command`, `no-url` or `unreadable`, from files and `exec-path` only: nothing is run. A relative command with a slash is the spec's `cwd`'s (relative to ROOT), else ROOT's, else `~/`'s, never `default-directory`'s. The detail is masked like any text shown (a URL keeps its host and path, not its secrets). |
 | `-save-backup FILE`, `-json-read-text FILE TEXT` | The one-backup copy used by `-write-text` (public: a CLI write takes its own backup first); `-json-read` for a text already read. |
@@ -711,7 +1660,7 @@ they never create a scope in the user's systemd manager.
 | `drgnx-agent-check-main` | Child side. stdio: starts the server in ROOT with its environment, sends `initialize` (MCP revision 2025-06-18), `notifications/initialized` and `tools/list` (every page), ends the server's whole tree (descendants, its group and session) at the end. HTTP (`http` and `sse` items; Streamable HTTP only): POSTs the same, keeps the `Mcp-Session-Id` and `MCP-Protocol-Version`, reads JSON or SSE answers (an SSE stream the server leaves open is fine). A 401 with `WWW-Authenticate` is `needs-login`, and `:error` says how to log in (`drgnx-agent-check-login-hint`: Claude `/mcp`, Codex `codex mcp login NAME`, Gemini `/mcp auth NAME`). Limits: the timeout; 256 KB of output that is not JSON-RPC (a flood); 4 MB for one message or answer; stderr 8 KB. This Emacs ends the child (and everything under it) 5 seconds after the timeout if it did not. A TLS certificate that cannot be verified is refused (the child cannot ask), so a server with a self-signed certificate fails with a message saying so. A connection that never completes is ended by the 5-second backstop above. |
 | `(drgnx-agent-check-hook ITEM ROOT CALLBACK)` | Runs the hook's command with `sh -c` in ROOT (in the same memory cap), the sample event as JSON on stdin, for the hook's timeout (Gemini's is milliseconds) or 60 seconds. The command travels in the environment (`DRGNX_HOOK_COMMAND`, unset before it runs), not on a command line. CALLBACK gets `(:exit N :stdout S :stderr S :time F)`, masked, 16 KB each; a hook that ran out of time has `:exit nil :timeout t`; one that could not start has `:exit nil :error S`. |
 | `(drgnx-agent-check-sample-event KIND EVENT ROOT)` | The event as an alist. Claude Code and Kimi Code: `session_id`, `transcript_path`, `cwd`, `hook_event_name` and per event `tool_name` `Bash` with `tool_input` `{"command": "echo drgnx-hook-test"}` (and `tool_response`, `prompt`, `source`, `trigger`, … as the event has them). Codex: the same plus `model` and `turn_id`. Gemini: its own events (`BeforeTool` with `run_shell_command`, `BeforeAgent` with `prompt`, …) and `timestamp`. The Codex and Gemini fields are the builder's table from their documentation, not checked against a running agent. |
-| `(drgnx-agent-check-remember ITEM RESULT)`, `(drgnx-agent-check-last ITEM)` | The last result per `(KIND SECTION NAME FILE)` in `(drgnx-state-dir)/agent-checks.eld` (0600), masked, with `:at` (the time). Each write keeps the newest 300 (by `:at`) and drops results whose local FILE is gone. |
+| `(drgnx-agent-check-remember ITEM RESULT)`, `(drgnx-agent-check-last ITEM)` | The last result per `(KIND SECTION NAME FILE)` in `(drgnx-state-dir)/agent-checks.eld` (0600), masked, with `:at` (the time). Each write keeps the newest 300 (by `:at`), drops results whose local FILE is gone, then drops the oldest while the printed file would pass `drgnx-file-max-bytes` (`drgnx-agent-check--fit`; the newest always stays), so the reader's cap never makes the file unreadable. |
 | `(drgnx-agent-check-results)` | Every remembered result in one read, `((KIND SECTION NAME FILE) . RESULT)…` (the settings page reads it once per drawing). |
 
 Ending a check: the child Emacs and the scope it runs in are named (`systemd-run --scope --unit=drgnx-check-PID-N`); at
@@ -765,6 +1714,15 @@ check"). When the mode is already on, when startup ran (its commands are registe
 mode as it is: a mode that was turned off is reported off, with a WARN. OK while every guard is on, WARN naming
 each guard that is off (and when the guards cannot be read); facts without `:trust-guards` are judged by version alone.
 
+`config-files` (group drgnx) is the fact `:config-files`, a fresh `drgnx-config-read` of every defined file that is not a
+project's (after requiring `drgnx-doctor-config-features`). FAIL names each mistake as "FILE line L: TEXT" (the file's
+last good copy is in use meanwhile); WARN for a file a newer drgnx wrote; INFO for unknown keys ("a newer drgnx, or a
+typo?") and for a file in an older format; otherwise OK, "N files read". The doctor reads and never writes. See
+[files.md](../guide/files.md). `checkout-clean` (group drgnx) is the fact `:checkout-init`: `git -C CHECKOUT status
+--porcelain -- init/` (`GIT_OPTIONAL_LOCKS=0`, bounded at 5 s). A change there is a WARN, because install.sh's update needs
+`init/` unchanged; the fix is to move it to `config.el` or `custom.el` in the config folder and `git checkout -- init/`.
+Without a `.git` (not a checkout) the check is absent.
+
 Native compilation is checked by actually compiling a function, not only by asking whether it is built in. Any
 FAIL makes the exit status 1. `--dev` adds the tools for developing drgnx (mutter, dbus-run-session, ImageMagick, a
 pgtk Emacs) and the environment, container runtime and session launcher. Without any Emacs, the doctor prints the
@@ -800,6 +1758,12 @@ pre-release version is compared without its `-…`/`+…` suffix. Tests: `test/u
 The **Desktop** group's `window-manager` row reads the fact `:window-manager`, `(drgnx-platform-doctor-facts
 &optional FRAME)` (see [Window managers](#window-managers-drgnx-platformel)); onboarding step 7 shows the same row
 for the selected frame. Tests: `test/unit/doctor-wm-test.el`, `test/unit/onboard-wm-test.el`.
+
+`timers` (group drgnx) reads the fact `:timers-report`: `timers-report.eld` and `hub-timers-report.eld` from the
+state dir (`drgnx-doctor--timers-report`), which the last session and the last hub rewrite each time a timer stops
+after failing 3 times in a row ([Timers](#timers)). OK "no timer stopped"; else WARN `KEY (FN): ERROR; …` with the
+report's age, fix "report the error; drgnx starts the timer again at the next start". A report stays until the next
+stop rewrites it, so an old one shows its age.
 
 ## Window managers (`drgnx-platform.el`)
 
@@ -987,6 +1951,20 @@ What the `areas` backend does with the edges:
   first, so focus ends in the editor window rather than in the new dock.
 - Redefining a kind with another home takes it out of its old dock; an editor kind's place rule goes when its
   `:buffer` or home changes.
+
+## Read and write through drgnx-file
+
+A file drgnx keeps (a config file, a state file, a report) is read and written through `drgnx-file`
+(`core/drgnx-file.el`): it takes a lock, writes atomically, backs the file up and refuses to overwrite one it
+could not read or one a newer drgnx wrote. Do not call `with-temp-file`, `write-region` or `rename-file`, or read
+a file by `insert-file-contents` followed by `read`, in `core/`, `wb/` or `modules/`.
+`test/unit/lint-files-test.el` reads those files form by form and fails on such a form (a flagged site is
+`(FILE FN WHAT)`; `WHAT` is the function, or `read-site`) unless `test/lint-files-allowed.eld` has a row
+`(:file F :fn FN :what WHAT :why "…" :until N)`. `:until` is the task of the config-layer plan that ports the
+site, and the port deletes the row (a row that matches nothing fails the second test). A row marked `never` is a
+site that is not drgnx's own file, and its `:why` starts with the reason: `"a user's file"`, `"a temporary file"`,
+`"a directory move"`, `"its own lock protocol"`, `"age writes it"`, `"a developer tool"` or `"Lisp source"` (a module's source read, never run). A new site is a new
+row only when it is one of those.
 
 ## Tests
 

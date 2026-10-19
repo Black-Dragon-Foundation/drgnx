@@ -20,6 +20,7 @@
 
 ;;; Code:
 (require 'subr-x)
+(require 'drgnx-timer)
 
 (defcustom drgnx-job-snapshot-timeout 300
   "Seconds one step of a task's snapshot (the store's clone or fetch, the copy, the clone) may take; then it fails."
@@ -185,6 +186,10 @@ uses the asynchronous probe of `drgnx-job-snapshot-make'."
 
 ;;;; Steps: asynchronous processes
 
+(defun drgnx-job-snapshot--timed-out (p)
+  "The deadline of the step process P (`drgnx-job-snapshot--run'): mark it timed out and end it."
+  (when (process-live-p p) (process-put p :timed-out t) (delete-process p)))
+
 (defun drgnx-job-snapshot--run (dir argv job done)
   "Run ARGV in DIR in a process of its own; DONE gets (EXIT STDOUT . STDERR) once it ended.  EXIT is its status,
 `:timeout' after `drgnx-job-snapshot-timeout', or `:stopped' when stopping JOB ended it.  When the process cannot
@@ -194,7 +199,6 @@ start, this signals, and leaves no process or buffer behind."
          (default-directory (file-name-as-directory dir))
          (process-environment (append drgnx-job-snapshot--env process-environment))
          (errp nil)
-         (timer nil)
          (p nil))
     (condition-case e
         (setq errp (make-pipe-process :name "drgnx-snapshot-err" :buffer err :noquery t :sentinel #'ignore)
@@ -202,7 +206,7 @@ start, this signals, and leaves no process or buffer behind."
                  :name "drgnx-snapshot" :buffer out :stderr errp :noquery t :connection-type 'pipe :command argv
                  :sentinel (lambda (p _event)
                              (unless (process-live-p p)
-                               (when timer (cancel-timer timer))
+                               (drgnx-timer-cancel (cons 'job-snapshot-timeout p))
                                ;; what is still in the stderr pipe: read without waiting, so no message is cut short
                                (while (and (process-live-p errp) (accept-process-output errp 0 nil 1)))   ; 1: no timers run here
                                (let ((stdout (with-current-buffer out (buffer-string)))
@@ -220,8 +224,8 @@ start, this signals, and leaves no process or buffer behind."
              (kill-buffer err)
              (signal (car e) (cdr e))))
     (when job (process-put p :job job))
-    (setq timer (run-at-time drgnx-job-snapshot-timeout nil
-                             (lambda () (when (process-live-p p) (process-put p :timed-out t) (delete-process p)))))
+    (drgnx-timer-start (cons 'job-snapshot-timeout p) drgnx-job-snapshot-timeout #'drgnx-job-snapshot--timed-out
+                       :args (list p) :owner p)
     (ignore-errors (process-send-eof p))
     p))
 

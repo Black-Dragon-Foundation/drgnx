@@ -21,8 +21,15 @@
 (require 'drgnx-area)
 (declare-function drgnx-face-glyph "drgnx-face")
 
-(defface drgnx-chrome-tab '((t :inherit tab-line-tab-inactive)) "A tab in an editor's tab line." :group 'drgnx)
-(defface drgnx-chrome-tab-current '((t :inherit tab-line-tab-current)) "The shown tab." :group 'drgnx)
+(defface drgnx-chrome-tab '((t :inherit (shadow tab-line-tab-inactive) :height 1.0 :box nil))
+  "A tab in an editor's tab line: dimmed, at the text's height (the theme's `tab-line' is smaller)." :group 'drgnx)
+(defface drgnx-chrome-tab-current '((t :inherit tab-line-tab-current :height 1.0 :box nil :weight bold))
+  "The shown tab of an editor group that is not the active one." :group 'drgnx)
+(defface drgnx-chrome-tab-active '((t :inherit (link tab-line-tab-current) :height 1.0 :box nil :weight bold
+                                      :underline nil :overline t))
+  "The shown tab of the active editor group: the theme's link colour, overlined." :group 'drgnx)
+(defface drgnx-chrome-tab-hover '((t :inherit tab-line-highlight))
+  "The tab (or its ×) under the pointer; only that one." :group 'drgnx)
 (defface drgnx-chrome-crumb '((t :inherit shadow)) "The folders of a breadcrumb." :group 'drgnx)
 
 (defun drgnx-chrome--role (w)
@@ -106,17 +113,22 @@ ASCII form on a terminal that is not UTF-8; × without ui/face."
   (or (and (fboundp 'drgnx-face-glyph) (drgnx-face-glyph 'close (window-frame w))) "×"))
 
 (defun drgnx-chrome--tab-line (w)
-  (let ((shown (window-buffer w)))
+  "W's tab line.  Each tab's name and × carry a mouse-face value of their own (a fresh list, not `eq' to any
+other): Emacs highlights the run of text whose `mouse-face' is `eq', so a shared value would light the whole strip.
+A plain space, without one, separates the tabs."
+  (let* ((shown (window-buffer w)) (active (eq w (drgnx-signal-editor-window))))
     (mapconcat (lambda (b)
-                 (let ((face (if (eq b shown) 'drgnx-chrome-tab-current 'drgnx-chrome-tab)))
-                   (concat (propertize (format " %s%s " (drgnx-chrome--text (buffer-name b))
+                 (let ((face (cond ((not (eq b shown)) 'drgnx-chrome-tab)
+                                   (active 'drgnx-chrome-tab-active)
+                                   (t 'drgnx-chrome-tab-current))))
+                   (concat (propertize (format "  %s%s " (drgnx-chrome--text (buffer-name b))
                                                (if (and (buffer-file-name b) (buffer-modified-p b)) " ●" ""))
                                        'face face 'drgnx-buffer b 'local-map drgnx-chrome--tab-map
-                                       'mouse-face 'highlight 'help-echo "Show; middle-click closes")
-                           (propertize (concat (drgnx-chrome--close-glyph w) " ")
+                                       'mouse-face (list 'drgnx-chrome-tab-hover) 'help-echo "Show; middle-click closes")
+                           (propertize (concat (drgnx-chrome--close-glyph w) "  ")
                                        'face face 'drgnx-buffer b 'local-map drgnx-chrome--close-map
-                                       'mouse-face 'highlight 'help-echo "Close this tab"))))
-               (drgnx-chrome-tabs w) "")))
+                                       'mouse-face (list 'drgnx-chrome-tab-hover) 'help-echo "Close this tab"))))
+               (drgnx-chrome-tabs w) " ")))
 
 (defcustom drgnx-chrome-closed-positions-max 30
   "How many closed tabs' positions are remembered (`drgnx-chrome-closed-positions')."
@@ -200,12 +212,13 @@ An error here must never stop the kill."
   (cdr drgnx-chrome--root))
 
 (defun drgnx-chrome-breadcrumb (w)
-  "W's breadcrumb: project › folders › file (● when unsaved), or the buffer's name."
+  "W's breadcrumb: project › folders › file (● when unsaved).  A buffer without a file has no path to show and its tab
+already names it: the row stays (a window's rows never change with its buffer, I3) but is empty."
   (let* ((b (window-buffer w)) (file (buffer-file-name b)))
     (concat
      " "
      (if (not file)
-         (drgnx-chrome--text (buffer-name b))
+         ""
        (let* ((root (with-current-buffer b (drgnx-chrome--project-root file)))
               (rel (if root (file-relative-name file root) (abbreviate-file-name file)))
               (parts (split-string rel "/" t)))
@@ -250,7 +263,10 @@ scopes: modules/editor/drgnx-sticky.el); re-apply the chrome after changing it."
                                 ;; a short terminal frame has no row to spare (ui/terminal-layout sets this)
                                 ((eq (frame-parameter (window-frame w) 'drgnx-chrome-breadcrumb) 'off) 'none)
                                 (t (let ((tail (buffer-local-value 'drgnx-chrome-header-tail (window-buffer w))))
-                                     (if tail (list (drgnx-chrome-breadcrumb w) tail) (drgnx-chrome-breadcrumb w)))))))
+                                     (if tail
+                                         (list (drgnx-wb-bar (drgnx-chrome-breadcrumb w) t) tail
+                                               (propertize " " 'display '(space :align-to right) 'face 'drgnx-wb-bar))
+                                       (drgnx-wb-bar (drgnx-chrome-breadcrumb w))))))))
      (drgnx-chrome--set w 'mode-line-format drgnx-chrome-editor-mode-line))
     ((or 'dock 'area)
      (drgnx-chrome--set w 'tab-line-format 'none)

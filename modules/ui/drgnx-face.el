@@ -51,6 +51,8 @@
       ('drgnx-face-line-numbers-modes (drgnx-face--apply-line-numbers))
       ('drgnx-face-inline-problems (drgnx-face--apply-inline-problems))
       ('drgnx-face-line-spacing (drgnx-face--apply-line-spacing))
+      ('drgnx-face-line-wrap (drgnx-face--apply-line-wrap))
+      ('drgnx-face-frame-title (drgnx-face--apply-frame-title))
       ((or 'drgnx-face-title-bar 'drgnx-face-gtk-theme) (drgnx-face--apply-title-all)))))
 
 (defcustom drgnx-face-menu-bar nil
@@ -86,6 +88,18 @@ Toggle for this session with the command Toggle Menu Bar."
   :type '(choice (const :tag "Default" nil) (natnum :tag "Pixels"))
   :set #'drgnx-face--set :group 'drgnx-face)
 
+(defcustom drgnx-face-line-wrap 'word
+  "What a line longer than its window does: `word' (continue on the next row, breaking at a space, never in the middle
+of a word; narrow windows too), `truncate' (one row, the rest is off the edge) or nil (leave Emacs's own setting).
+The command Toggle Word Wrap flips it for one buffer.  Buffers that set their own (the Explorer, tables) keep it."
+  :type '(choice (const :tag "Word wrap" word) (const :tag "Truncate" truncate) (const :tag "Emacs's own" nil))
+  :set #'drgnx-face--set :group 'drgnx-face)
+
+(defcustom drgnx-face-frame-title t
+  "Non-nil: a frame's title is `FILE — PROJECT — drgnx' (the buffer's name when it has no file;
+with no project: `FILE — drgnx').  A `frame-title-format' of your own is left alone."
+  :type 'boolean :set #'drgnx-face--set :group 'drgnx-face)
+
 (defcustom drgnx-face-title-bar 'dark
   "The window's title bar (graphical frames): `dark' (the system's own title bar in its dark variant while the theme
 is dark, light while it is light), `system' (leave it as the desktop has it), or `drgnx' (drgnx draws it in the top
@@ -104,7 +118,7 @@ drgnx (`systemctl --user restart drgnx'); on X11 and on a Mac it applies at once
   '((handle "⠿" . "::") (close "×" . "x") (branch "⑂" . "Y") (warning "⚠" . "!") (ok "✓" . "+")
     (busy "◎" . "@") (waiting "◐" . "?") (paused "⏸" . "||") (ahead "↑" . "^") (behind "↓" . "v")
     (dot "●" . "*") (circle "○" . "o") (sep " · " . " | ") (flag "⚑" . "#")
-    (diamond "◆" . "<>") (search "⌕" . "/") (minimize "–" . "-") (maximize "▢" . "[]"))
+    (diamond "◆" . "<>") (search "⌕" . "/") (bullet "•" . ">") (minimize "–" . "-") (maximize "▢" . "[]"))
   "The glyphs drgnx draws: NAME → (UNICODE . ASCII).  The ASCII form is used on a terminal frame that is not UTF-8.
 Change one to suit your font; `drgnx-face-glyph' reads this."
   :type '(alist :key-type symbol :value-type (cons (string :tag "Unicode") (string :tag "ASCII")))
@@ -251,8 +265,11 @@ when they changed.  The variant is that of a graphical frame; with none, or a ba
     (let ((variant (drgnx-face-title-variant frame)) (state (drgnx-face-state-read)))
       (when (or variant (eq drgnx-face-title-bar 'system))
         (unless (and (eq (plist-get state :variant) variant) (equal (plist-get state :gtk-theme) drgnx-face-gtk-theme))
-          (drgnx-face-state-write (plist-put (plist-put (copy-sequence state) :variant variant)
-                                             :gtk-theme drgnx-face-gtk-theme)))))))
+          ;; an automatic path: no wait for the lock; when another drgnx holds it, the next theme change writes
+          (condition-case err
+              (drgnx-face-state-put (list :variant variant :gtk-theme drgnx-face-gtk-theme) 0)
+            (drgnx-file-busy nil)
+            (error (message "drgnx: face.eld not written: %s" (error-message-string err)))))))))
 
 (defun drgnx-face--apply-title-all ()
   "The title bar on every open frame, and the state the launchers read."
@@ -322,6 +339,66 @@ On `after-change-major-mode-hook'."
          (setq-default line-spacing (car drgnx-face--line-spacing-saved))
          (setq drgnx-face--line-spacing-saved nil))))
 
+;;;; Line wrap
+
+(defvar drgnx-face--wrap-saved nil
+  "(WORD-WRAP TRUNCATE-LINES TRUNCATE-PARTIAL-WIDTH-WINDOWS) the defaults this module replaced, to give back.")
+
+(defun drgnx-face--apply-line-wrap ()
+  "The setting into the default values of `word-wrap', `truncate-lines' and `truncate-partial-width-windows': one
+policy for every window, narrow ones included (Emacs cuts below 50 columns, and wraps in the middle of a word above).
+nil gives back what it replaced."
+  (when (and drgnx-face-line-wrap (not drgnx-face--wrap-saved))
+    (setq drgnx-face--wrap-saved (list (default-value 'word-wrap) (default-value 'truncate-lines)
+                                       (default-value 'truncate-partial-width-windows))))
+  (pcase drgnx-face-line-wrap
+    ('word (setq-default word-wrap t truncate-lines nil truncate-partial-width-windows nil))
+    ('truncate (setq-default truncate-lines t truncate-partial-width-windows nil))
+    (_ (when drgnx-face--wrap-saved
+         (setq-default word-wrap (nth 0 drgnx-face--wrap-saved) truncate-lines (nth 1 drgnx-face--wrap-saved)
+                       truncate-partial-width-windows (nth 2 drgnx-face--wrap-saved))
+         (setq drgnx-face--wrap-saved nil)))))
+
+(defun drgnx-face-toggle-wrap ()
+  "Wrap long lines at a word or cut them at the window's edge, in this buffer only."
+  (interactive)
+  (setq-local truncate-lines (not truncate-lines))
+  (unless truncate-lines (setq-local word-wrap t))
+  (force-mode-line-update)
+  (message "Word wrap %s" (if truncate-lines "off" "on")))
+
+;;;; The frame's title
+
+(defun drgnx-face-frame-title ()
+  "`FILE — PROJECT — drgnx' for the selected window's buffer: the file's name (else the buffer's), the project from the
+breadcrumb's cache (no lookup: this runs in redisplay), then the framework's name.  The start page is just `drgnx'."
+  (let* ((b (current-buffer))
+         (name (cond ((derived-mode-p 'drgnx-start-mode) nil)
+                     (buffer-file-name (file-name-nondirectory buffer-file-name))
+                     (t (string-trim (buffer-name b)))))
+         (cache (and (boundp 'drgnx-chrome--root) drgnx-chrome--root))
+         (project (and name (consp cache) (stringp (cdr cache)) (equal (car cache) default-directory)
+                       (file-name-nondirectory (directory-file-name (cdr cache))))))
+    (string-join (delq nil (list (and name (not (string-empty-p name)) name) project "drgnx")) " — ")))
+
+(defconst drgnx-face--frame-title-construct '(:eval (drgnx-face-frame-title)) "Our value of `frame-title-format'.")
+
+(defun drgnx-face--stock-title-p (format)
+  "Non-nil when FORMAT is Emacs's own `frame-title-format': the `multiple-frames' conditional it starts with."
+  (and (consp format) (eq (car format) 'multiple-frames)))
+
+(defconst drgnx-face--stock-title '(multiple-frames "%b" ("" "%b - GNU Emacs at " system-name))
+  "What `frame-title-format' goes back to when the setting is turned off.")
+
+(defun drgnx-face--apply-frame-title ()
+  "`frame-title-format' to drgnx's title when the setting is on and Emacs's own format is still there; back to Emacs's
+when it is off and ours is there.  A format of your own stays."
+  (let ((now (default-value 'frame-title-format)))
+    (cond ((and drgnx-face-frame-title (drgnx-face--stock-title-p now))
+           (setq-default frame-title-format drgnx-face--frame-title-construct))
+          ((and (not drgnx-face-frame-title) (equal now drgnx-face--frame-title-construct))
+           (setq-default frame-title-format drgnx-face--stock-title)))))
+
 ;;;; Commands
 
 (defun drgnx-face-toggle-menu-bar ()
@@ -347,6 +424,9 @@ F10's `menu-bar-open' has no menu to open on a toolkit frame whose bar is hidden
   (drgnx-command-define 'face-toggle-menu-bar :category "View" :title "Toggle Menu Bar" :menu '("View")
                         :command #'drgnx-face-toggle-menu-bar
                         :doc "Show or hide Emacs's menu bar for this session (hidden, F10 opens the menu as text)")
+  (drgnx-command-define 'face-toggle-wrap :category "View" :title "Toggle Word Wrap" :menu '("View")
+                        :command #'drgnx-face-toggle-wrap
+                        :doc "Wrap long lines at a word, or cut them at the window's edge, in this buffer")
   (drgnx-command-define 'face-menu :category "View" :title "Open the Menu" :command #'drgnx-face-menu
                         :doc "Open the menu: the menu bar when it is shown, else the same menu as text in the minibuffer (F10)")
   (drgnx-command-define 'face-preferences :category "Preferences" :title "Look and Layout Settings…" :menu '("Options")
@@ -367,7 +447,9 @@ F10's `menu-bar-open' has no menu to open on a toolkit frame whose bar is hidden
   (drgnx-face--apply-dividers)
   (drgnx-face--apply-line-numbers)
   (drgnx-face--apply-inline-problems)
-  (drgnx-face--apply-line-spacing))
+  (drgnx-face--apply-line-spacing)
+  (drgnx-face--apply-line-wrap)
+  (drgnx-face--apply-frame-title))
 
 (drgnx-module-define 'ui/face
                      :doc "The frame and the buffers: no menu bar or scroll bar, thin themed dividers, line numbers in code, problems at the end of the line."
@@ -379,6 +461,8 @@ F10's `menu-bar-open' has no menu to open on a toolkit frame whose bar is hidden
                                  (drgnx-face-line-numbers-modes . "modes whose files show line numbers")
                                  (drgnx-face-inline-problems . "nil, short (default) or t: problems at the end of the line")
                                  (drgnx-face-line-spacing . "extra pixels between lines")
+                                 (drgnx-face-line-wrap . "word (default), truncate or nil: what a long line does")
+                                 (drgnx-face-frame-title . "the frame's title: FILE — PROJECT — drgnx")
                                  (drgnx-face-title-bar . "dark (default), system or drgnx: the window's title bar")
                                  (drgnx-face-gtk-theme . "the GTK theme whose dark variant the title bar uses")
                                  (drgnx-face-glyphs . "the glyphs drgnx draws, each with an ASCII form")

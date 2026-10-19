@@ -639,3 +639,42 @@
             (should-not drgnx-jank-guard-log))
         (drgnx-jank-guard-disable)
         (kill-buffer main)))))
+
+;;;; The listing cache is capped (PERF-L L1)
+
+(ert-deftest drgnx-explorer/at-most-64-listings-are-kept ()
+  (drgnx-explorer-test--with root
+    (drgnx-cache--clear 'explorer-listing)
+    (let (dirs)
+      (dotimes (i 80) (push (file-name-as-directory (expand-file-name (format "many/d%02d" i) root)) dirs))
+      (setq dirs (nreverse dirs))
+      (drgnx-explorer-test--tree root (mapcar (lambda (d) (file-relative-name d root)) dirs))
+      (dolist (d dirs) (drgnx-explorer-children d))
+      (should (= (drgnx-cache-size 'explorer-listing) 64))
+      (should (equal (seq-find (lambda (r) (eq (car r) 'explorer-listing)) (drgnx-memo-census))
+                     '(explorer-listing cache 64 64)))
+      (should-not (drgnx-cache-get 'explorer-listing (car dirs)))            ; the oldest went first
+      (should (drgnx-cache-get 'explorer-listing (car (last dirs))))
+      ;; an evicted folder is listed again on the next ask, and the cache stays at its cap
+      (should (equal (drgnx-explorer-children (car dirs)) nil))
+      (should (drgnx-cache-get 'explorer-listing (car dirs)))
+      (should (= (drgnx-cache-size 'explorer-listing) 64)))))
+
+(ert-deftest drgnx-explorer/shown-folders-are-not-evicted ()
+  ;; A shown folder is got by every render, so a flood of other listings does not push it out.
+  (drgnx-explorer-test--with root
+    (drgnx-cache--clear 'explorer-listing)
+    (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "src"))
+    (let ((src (file-name-as-directory (expand-file-name "src" root)))
+          (docs (file-name-as-directory (expand-file-name "docs" root)))
+          (root (file-name-as-directory root)))
+      (drgnx-explorer-children docs)                                         ; listed once, never shown
+      (dotimes (i 100)
+        (let ((d (file-name-as-directory (expand-file-name (format "flood/d%03d" i) root))))
+          (make-directory d t)
+          (drgnx-explorer-children d)
+          (drgnx-explorer--render)))                                         ; what a refresh or a file event does
+      (should (= (drgnx-cache-size 'explorer-listing) 64))
+      (should (drgnx-cache-get 'explorer-listing root))
+      (should (drgnx-cache-get 'explorer-listing src))
+      (should-not (drgnx-cache-get 'explorer-listing docs)))))
