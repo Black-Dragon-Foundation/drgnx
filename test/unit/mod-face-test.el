@@ -63,21 +63,22 @@ setup changes neither the dividers nor the faces of the test process."
 
 (ert-deftest drgnx-face/no-menu-bar-and-no-scroll-bars-by-default ()
   (drgnx-face-test--with
-    (should-not drgnx-face-menu-bar)
-    (should (eq drgnx-face-scroll-bars 'none))
-    (drgnx-face-test--setup)
-    ;; new frames: the alist (early-init.el also has them before the first frame exists)
-    (should (eql (alist-get 'menu-bar-lines default-frame-alist) 0))
-    (should (assq 'vertical-scroll-bars default-frame-alist))
-    (should-not (alist-get 'vertical-scroll-bars default-frame-alist))
-    ;; live frames and later ones: the parameters
-    (let (seen)
-      (cl-letf (((symbol-function 'modify-frame-parameters) (lambda (_f params) (setq seen params))))
-        (drgnx-face-apply-frame (selected-frame)))
-      (should (eql (alist-get 'menu-bar-lines seen) 0))
-      (should (assq 'vertical-scroll-bars seen))
-      (should-not (alist-get 'vertical-scroll-bars seen)))
-    (should (memq #'drgnx-face-apply-frame after-make-frame-functions))))
+    (let ((system-type 'gnu/linux))       ; a Mac keeps its menu bar (drgnx-face/a-mac-keeps-its-system-menu-bar)
+      (should-not drgnx-face-menu-bar)
+      (should (eq drgnx-face-scroll-bars 'none))
+      (drgnx-face-test--setup)
+      ;; new frames: the alist (early-init.el also has them before the first frame exists)
+      (should (eql (alist-get 'menu-bar-lines default-frame-alist) 0))
+      (should (assq 'vertical-scroll-bars default-frame-alist))
+      (should-not (alist-get 'vertical-scroll-bars default-frame-alist))
+      ;; live frames and later ones: the parameters
+      (let (seen)
+        (cl-letf (((symbol-function 'modify-frame-parameters) (lambda (_f params) (setq seen params))))
+          (drgnx-face-apply-frame (selected-frame)))
+        (should (eql (alist-get 'menu-bar-lines seen) 0))
+        (should (assq 'vertical-scroll-bars seen))
+        (should-not (alist-get 'vertical-scroll-bars seen)))
+      (should (memq #'drgnx-face-apply-frame after-make-frame-functions)))))
 
 (ert-deftest drgnx-face/a-mac-keeps-its-system-menu-bar ()
   (drgnx-face-test--with
@@ -98,7 +99,8 @@ setup changes neither the dividers nor the faces of the test process."
 (ert-deftest drgnx-face/setopt-brings-the-menu-bar-back ()
   (drgnx-face-test--with
     (drgnx-face-test--setup)
-    (let ((frames (list 'a 'b)) (calls nil))
+    (let ((frames (list 'a 'b)) (calls nil)
+          (system-type 'gnu/linux))     ; a Mac keeps its menu bar (drgnx-face/a-mac-keeps-its-system-menu-bar)
       (cl-letf (((symbol-function 'frame-list) (lambda () frames))
                 ((symbol-function 'frame-parent) (lambda (_f) nil))
                 ((symbol-function 'frame-live-p) (lambda (_f) t))

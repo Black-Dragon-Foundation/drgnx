@@ -23,7 +23,9 @@ The unit suite runs on both systems, so a test never assumes Linux: no `/proc` (
 `test/fixtures/mock-acp-stdin.sh`, which hands it its stdin through a FIFO; a process's command line or memory comes
 from `process-attributes`); temp paths compared with git's go through `file-truename` (macOS's `/var` is
 `/private/var`); sockets live under a short directory (macOS's temp dir is long); a test that expects Linux keys or
-prompts pins `drgnx-platform`; only tools the system has are linked into a fake PATH (macOS has no `setsid`), and only
+prompts pins `drgnx-platform`, one that expects Linux frame parameters (the menu bar) binds `system-type`; a variable
+of an optional C feature is bound with `dlet` (Homebrew's Emacs has no D-Bus, so `dbus-registered-objects-table` is
+not special there and a `let` binds it lexically); only tools the system has are linked into a fake PATH (macOS has no `setsid`), and only
 POSIX options are used (no `timeout`, `dd iflag=`, GNU grep's `--exclude`); a test puts back the mode tables it
 changes (`major-mode-remap-alist`: Emacs 31 asks to install a missing grammar, which in batch reads stdin); native
 compilation is optional (Homebrew's Emacs has none). On Linux, `TMPDIR` set to a symlinked or long directory shows
