@@ -47,11 +47,12 @@ summary; the runner merges them into one, in the same shape, plus `"files"`
 test, or runs longer than `$DRGNX_TEST_FILE_TIMEOUT` seconds (default 300; it gets TERM, 5 s, then KILL, with what it
 started) is a failure named `file NAME-test.el`, and the other files still run. Files run one after another;
 `$DRGNX_TEST_JOBS` runs that many at once (their output is then printed whole as each ends, after a `drgnx: FILE`
-line; the merged summary and the exit status are the same as a serial run's). `bin/drgnx test --container` passes it
-into the container. CI sets it to the runner's cores for everything but the `:timing` tests, which it runs afterwards
-on their own, a file at a time ([ci.md](ci.md), "Parallel files"). The files' Emacsen do not see it: a test that runs
-the runner again runs its suite's files one at a time, as in a serial run. Interrupting the run ends the files'
-Emacsen too.
+line; a file is over once its process sentinel has run, after Emacs has read the rest of its output, not when
+`process-live-p` turns nil; the merged summary and the exit status are the same as a serial run's). `bin/drgnx test
+--container` passes it into the container. CI sets it to the runner's cores for everything but the `:timing` tests,
+which it runs afterwards on their own, a file at a time ([ci.md](ci.md), "Parallel files"). The files' Emacsen do not
+see it: a test that runs the runner again runs its suite's files one at a time, as in a serial run. Interrupting the
+run ends the files' Emacsen too.
 
 With a name selector (a string: a regexp on test names), only the files that define a matching test (`(ert-deftest
 NAME`) get an Emacs, so a narrow run stays quick; any other selector (a tag, `(not …)`) runs every file.

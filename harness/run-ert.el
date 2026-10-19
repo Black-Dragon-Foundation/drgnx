@@ -147,6 +147,12 @@ writes into a directory being removed; a root that cannot be removed is reported
       (error (message "drgnx: could not remove %s: %s" drgnx-run-ert--file-root (error-message-string err))))
     (setq drgnx-run-ert--file-root nil)))
 
+(defun drgnx-run-ert--file-ended (p _event)
+  "Sentinel of a file's Emacs P: the file is over once this has run, as Emacs reads what is left in the pipe before
+it runs a sentinel.  `process-live-p' is nil earlier: a buffer killed then, with output still coming, made the next
+chunk's filter fail, which ends a batch Emacs (the whole run)."
+  (unless (process-live-p p) (process-put p :ended t)))
+
 (defun drgnx-run-ert--start-file (file tmp json buffer)
   "Start an Emacs that runs the test FILE alone (`drgnx-run-ert-batch', this Emacs's `load-path' and environment),
 in the temp directory TMP (its DRGNX_RUN_TMP: used, never deleted, by it), its summary to JSON.  Its output goes
@@ -170,7 +176,7 @@ to BUFFER, or to this Emacs's standard error when BUFFER is nil."
              :filter (lambda (_ s) (if buffer
                                        (with-current-buffer buffer (goto-char (point-max)) (insert s))
                                      (princ s #'external-debugging-output)))
-             :sentinel #'ignore)))
+             :sentinel #'drgnx-run-ert--file-ended)))
     (process-send-eof p)                ; stdin at its end: a stray prompt in a test fails, never waits
     (push p drgnx-run-ert--file-processes)
     p))
@@ -253,7 +259,7 @@ file passed."
                   (message "drgnx: %s ran %d s: ending it" (plist-get f :file) timeout)
                   (plist-put f :timed-out t)
                   (drgnx-run-ert--end-process p))
-                (unless (process-live-p p)
+                (when (process-get p :ended)    ; its output is whole (`drgnx-run-ert--file-ended')
                   (setq running (delq f running)
                         drgnx-run-ert--file-processes (delq p drgnx-run-ert--file-processes)
                         drgnx-run-ert--file-dirs (delete (plist-get f :tmp) drgnx-run-ert--file-dirs))
