@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-markdown-test--elpa (expand-file-name (or (getenv "DRGNX_USER_ELPA") "~/.config/emacs/elpa")))
 
@@ -9,22 +10,22 @@
   (and (file-directory-p drgnx-markdown-test--elpa) (directory-files drgnx-markdown-test--elpa nil "\\`markdown-mode-[0-9]")))
 
 (defmacro drgnx-markdown-test--with (&rest body)
-  "BODY with markdown-mode from the user's ELPA, the module loaded and set up, drgnx's cache in a temp dir."
+  "BODY with markdown-mode from the user's ELPA, the module set up and, after, turned off (strictly), drgnx's cache in a temp dir."
   (declare (indent 0))
   `(progn
      (skip-unless (drgnx-markdown-test--available-p))
      (let* ((load-path (append load-path (seq-filter #'file-directory-p (directory-files drgnx-markdown-test--elpa t "\\`markdown-mode-"))))
             (tmp (file-name-as-directory (make-temp-file "drgnx-md" t)))
-            (process-environment (cons (concat "XDG_CACHE_HOME=" tmp "cache") process-environment))
-            (auto-mode-alist auto-mode-alist))
-       (load (expand-file-name "modules/lang/drgnx-markdown" drgnx-dir) nil t)
-       (drgnx-markdown--setup)
-       (clrhash drgnx-markdown--drawing) (clrhash drgnx-markdown--failed)   ; each test's diagrams its own
-       (unwind-protect (progn ,@body)
-         (dolist (b (buffer-list))
-           (when (or (string-prefix-p "*markdown preview" (buffer-name b))
-                     (and (buffer-file-name b) (string-prefix-p tmp (buffer-file-name b))))
-             (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b)))
+            (process-environment (cons (concat "XDG_CACHE_HOME=" tmp "cache") process-environment)))
+       (unwind-protect
+           (drgnx-test-with-modules '(lang/markdown) :strict t
+                                    (clrhash drgnx-markdown--drawing) (clrhash drgnx-markdown--failed)   ; each test's diagrams its own
+                                    (unwind-protect (progn ,@body)
+                                      (dolist (b (buffer-list))
+                                        (when (or (string-prefix-p "*markdown preview" (buffer-name b))
+                                                  (equal (buffer-name b) " *string-pixel-width*")   ; shr's work buffer
+                                                  (and (buffer-file-name b) (string-prefix-p tmp (buffer-file-name b))))
+                                          (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b)))))
          (delete-directory tmp t)))))
 
 (defun drgnx-markdown-test--wait (pred &optional secs)
@@ -40,6 +41,27 @@
       (with-current-buffer (find-file-noselect f) (should (eq major-mode 'gfm-mode)))
       (with-current-buffer (find-file-noselect g) (should (eq major-mode 'markdown-mode))
                            (should markdown-fontify-code-blocks-natively) (should markdown-enable-math)))))
+
+(defcustom drgnx-markdown-test-fake-option 'standard "A stand-in for a package's option." :type 'symbol)
+(defcustom drgnx-markdown-test-fake-other 'standard "A second stand-in." :type 'symbol)
+
+(ert-deftest drgnx-markdown/an-option-the-user-set-is-left-alone ()
+  (let ((drgnx-markdown-test-fake-option 'user) (drgnx-markdown-test-fake-other 'standard))
+    (drgnx-markdown--set-option 'drgnx-markdown-test-fake-option 'module)
+    (drgnx-markdown--set-option 'drgnx-markdown-test-fake-other 'module)
+    (should (eq drgnx-markdown-test-fake-option 'user))
+    (should (eq drgnx-markdown-test-fake-other 'module))))
+
+(ert-deftest drgnx-markdown/turned-off-the-options-and-file-modes-are-back ()
+  (skip-unless (drgnx-markdown-test--available-p))
+  (let ((load-path (append load-path (seq-filter #'file-directory-p (directory-files drgnx-markdown-test--elpa t "\\`markdown-mode-")))))
+    (require 'markdown-mode)
+    (let ((math markdown-enable-math) (modes auto-mode-alist))
+      (drgnx-test-with-modules '(lang/markdown) :strict t
+                               (should (eq markdown-enable-math t))
+                               (should (eq (cdr (assoc "/README\\.md\\'" auto-mode-alist)) 'gfm-mode)))
+      (should (eq markdown-enable-math math))
+      (should (equal auto-mode-alist modes)))))
 
 (ert-deftest drgnx-markdown/preview-without-a-program-uses-view-mode ()
   (drgnx-markdown-test--with

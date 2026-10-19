@@ -8,6 +8,7 @@
 (require 'drgnx-groups)
 (load (expand-file-name "modules/tools/drgnx-agents-ui" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-layouts" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-layouts-test--buffers
   '("*drgnx-layouts-explorer*" "*drgnx-layouts-code*" "*drgnx-layouts-a*" "*drgnx-layouts-b*" "*drgnx-layouts-proc*"
@@ -423,6 +424,22 @@ problems.  The shape and filler registries are restored afterwards."
     (should-not (drgnx-layouts-shape-test--teardown))
     (should-not (assq 'editor+browser drgnx-layouts-shapes))
     (should-not (assq 'browser drgnx-layouts-pane-fillers))))
+
+(ert-deftest drgnx-layouts/off-forgets-the-layouts-and-zens-margins ()
+  ;; Zen's margins, its resize hook and the frame's layout parameters are live state: the :teardown's.
+  (delete-other-windows)
+  (unwind-protect
+      (progn
+        (drgnx-test-with-modules '(tools/layouts) :strict t
+                                 (drgnx-layouts-zen)
+                                 (should (eq (drgnx-layouts-current) 'zen))
+                                 (should (memq #'drgnx-layouts--zen-resize window-size-change-functions)))
+        (should-not (drgnx-layouts-current))
+        (should-not (frame-parameter nil 'drgnx-layouts-zen-return))
+        (should-not (memq #'drgnx-layouts--zen-resize window-size-change-functions))
+        (should (equal (window-margins (selected-window)) '(nil))))
+    (set-frame-parameter nil 'drgnx-wb-view nil)
+    (delete-other-windows)))
 
 ;;; mod-layouts-test.el ends here
 

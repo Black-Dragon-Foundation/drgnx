@@ -145,9 +145,15 @@ trimmed."
                             (lambda (text info) (drgnx-commit-message--answer buf text info))
                             :interactive t :timeout 60))))
 
+(defun drgnx-commit-message--teardown ()
+  "Turned off: a message still being written is cancelled."
+  (when drgnx-commit-message--request
+    (drgnx-ai-cancel drgnx-commit-message--request)
+    (setq drgnx-commit-message--request nil)))
+
 (drgnx-module-define 'tools/commit-message
                      :doc "Git: Generate Commit Message — the staged diff through the chat role; never a trailer."
-                     :stage 'idle
+                     :stage 'idle :teardown #'drgnx-commit-message--teardown
                      :setup (lambda ()
                               (drgnx-command-define 'git-generate-commit-message :category "Source Control"
                                                     :title "Git: Generate Commit Message" :command #'drgnx-commit-message-generate

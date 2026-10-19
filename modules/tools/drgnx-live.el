@@ -698,6 +698,8 @@ the page; evil's own keys are out of the way in its emacs state."
 (drgnx-module-define 'tools/live
                      :doc "Live: watch and take over the browser drgnx starts for agents (CDP screencast)."
                      :stage 'idle :packages '(websocket)
+                     ;; turned off: the browser for agents stops and its profile goes, as when Emacs ends
+                     :teardown #'drgnx-live--cleanup
                      :setup #'drgnx-live--setup)
 
 (provide 'drgnx-live)

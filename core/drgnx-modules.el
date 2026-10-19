@@ -345,13 +345,18 @@ Emacs applied."
                                           ('nil "not run yet") (_ (symbol-name st)))
                                    (symbol-name (or (plist-get (cdr m) :stage) (plist-get r :stage) 'load))
                                    (format "%s" (or (plist-get r :ms) ""))
-                                   (cond ((not (drgnx-modules--disabled-in next name)) "on")
+                                   (cond ((not (or (drgnx-modules--disabled-in next name)   ; or it needs one that is: it waits for it
+                                                   (seq-some (lambda (q) (drgnx-modules--disabled-in next q))
+                                                             (plist-get (cdr m) :requires))))
+                                          "on")
+                                         ((eq st 'ok) "off at next start")   ; still running: it stays until restart
                                          ((and (drgnx-module-default-off-p name)
                                                (not (memq name (plist-get next :disabled))))
                                           "off (chosen by the key profile)")
-                                         (t "off at next start"))
-                                   (or (plist-get (cdr m) :doc)
-                                       (if (string-prefix-p "external/" (symbol-name name)) (drgnx-modules--external-about name) ""))))))
+                                         (t "off"))
+                                   (concat (or (plist-get (cdr m) :doc)
+                                               (if (string-prefix-p "external/" (symbol-name name)) (drgnx-modules--external-about name) ""))
+                                           (if (eq st 'off) "; code stays loaded until restart" ""))))))
             ;; The table, and what only the report knows: external modules, files that failed to load.
             (append drgnx-modules--table
                     (seq-remove (lambda (r) (assq (car r) drgnx-modules--table)) (reverse drgnx-modules--report))))))
@@ -367,16 +372,77 @@ Emacs applied."
     (when (called-interactively-p 'any) (pop-to-buffer b))
     b))
 
-(defun drgnx-modules-toggle (module)
-  "Turn MODULE off at the next start, or back on (a module that is off until chosen: in or out of :enabled)."
-  (drgnx-modules-update-state            ; the direction comes from the file as it is now, not from this Emacs's copy
-   (lambda (state) (drgnx-modules--choose state module (and (drgnx-modules--disabled-in state module) t))))
+(defun drgnx-modules--refresh-list ()
   (when-let* ((b (get-buffer "*drgnx modules*"))) (with-current-buffer b (tabulated-list-print t))))
 
+(defun drgnx-modules-toggle (module)
+  "Turn MODULE off at the next start, or back on (a module that is off until chosen: in or out of :enabled).
+Nothing runs or stops now (onboarding uses this)."
+  (drgnx-modules-update-state            ; the direction comes from the file as it is now, not from this Emacs's copy
+   (lambda (state) (drgnx-modules--choose state module (and (drgnx-modules--disabled-in state module) t))))
+  (drgnx-modules--refresh-list))
+
+(defun drgnx-modules--dependents (module)
+  "The running modules that need MODULE, directly or not, the deepest first (the order to turn them off)."
+  (let ((out nil))
+    (dolist (m drgnx-modules--table)
+      (when (and (memq module (plist-get (cdr m) :requires)) (drgnx-modules--ok-p (car m)))
+        (dolist (d (append (drgnx-modules--dependents (car m)) (list (car m))))
+          (unless (memq d out) (setq out (append out (list d)))))))
+    out))
+
+(cl-defun drgnx-modules-turn-off (module &key dependents)
+  "Turn MODULE off now and remember it in modules.eld.  Never prompts.
+Without DEPENDENTS, when running modules need MODULE nothing is done and they are returned.  With it,
+they are torn down first (deepest first), then MODULE, which is written to modules.eld; the dependents
+are not (they wait for MODULE at the next start).  A module that stays running until restart (defined
+`:teardown \\='restart', or needed by a running one that is) is only written, whatever DEPENDENTS says: nothing
+is torn down, nothing is asked, and it stops at the next start.  Returns nil, else the running dependents."
+  (let* ((deps (drgnx-modules--dependents module))
+         (now (not (or (drgnx-modules--restart-p module) (seq-some #'drgnx-modules--restart-p deps)))))
+    (if (and now deps (not dependents)) deps
+      (dolist (m (if now (append deps (list module)) (list module)))
+        (let ((r (alist-get m drgnx-modules--report)))
+          (cond ((not (drgnx-modules--ok-p m))
+                 (when r (drgnx-modules--record m (plist-get r :stage) 0 'disabled)))   ; waiting or failed: it will not run
+                (now (drgnx-module-teardown m)))))
+      (drgnx-modules-set-enabled module nil)
+      (when now (run-hooks 'drgnx-modules-after-teardown-functions))
+      (drgnx-modules-write-report)
+      (drgnx-modules--refresh-list)
+      nil)))
+
+(defun drgnx-modules-turn-on (module)
+  "Turn MODULE on: remember it in modules.eld and, when its stage has passed, run its setup now.
+A module whose packages are missing or whose requirements are not running waits, reported as such; one whose
+stage has not come runs when it does.  A module still running (turned off only for the next start) just stays.
+Keys and menus follow the registry afterwards, whatever the stage (`drgnx-modules-after-teardown-functions')."
+  (drgnx-modules-set-enabled module t)
+  (let ((spec (assq module drgnx-modules--table)) (r (alist-get module drgnx-modules--report)))
+    (when (and spec r (not (drgnx-modules--ok-p module)))
+      (when (drgnx-modules--run-one module (cdr spec) (plist-get (cdr spec) :stage))
+        (run-hooks 'drgnx-modules-after-teardown-functions))))
+  (drgnx-modules-write-report)
+  (drgnx-modules--refresh-list)
+  nil)
+
+(defun drgnx-modules--say-problems (modules)
+  "Say what went wrong while MODULES were turned off or on (the doctor's report keeps it too)."
+  (dolist (m modules)
+    (when-let* ((p (plist-get (alist-get m drgnx-modules--report) :problems)))
+      (message "drgnx: %s: %s" m (mapconcat #'identity p "; ")))))
+
 (defun drgnx-modules-list-toggle ()
-  "Turn the module on this row off at the next start, or back on."
+  "Turn the module on this row off now, or back on (one that cannot be turned off while Emacs runs: at the next start).
+When running modules need it, asks once whether to turn them off too."
   (interactive)
-  (when-let* ((m (tabulated-list-get-id))) (drgnx-modules-toggle m)))
+  (when-let* ((m (tabulated-list-get-id)))
+    (if (or (drgnx-module-disabled-p m) (eq (plist-get (alist-get m drgnx-modules--report) :status) 'off))
+        (progn (drgnx-modules-turn-on m) (drgnx-modules--say-problems (list m)))
+      (let* ((deps (drgnx-modules-turn-off m)) (all (cons m deps)))
+        (when (and deps (y-or-n-p (format "Also turn off %s? " (mapconcat #'symbol-name deps ", "))))
+          (drgnx-modules-turn-off m :dependents t))
+        (drgnx-modules--say-problems all)))))
 
 (defalias 'drgnx-modules-show-report #'drgnx-modules-list)
 

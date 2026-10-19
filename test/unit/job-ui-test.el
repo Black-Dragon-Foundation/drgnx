@@ -6,6 +6,7 @@
 (load (expand-file-name "test/fixtures/memo-alloc-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-job-ui" drgnx-dir) nil t)
 (require 'drgnx-hub)                                   ; before any stub of its functions
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-job-ui-test--summary
   ;; as `job/status' gives it back through JSON: nil as :null, false as :false
@@ -68,18 +69,33 @@
         (should (= 1 (length sent)))))))
 
 (ert-deftest drgnx-job-ui/the-commands-are-registered ()
-  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
-    (funcall (plist-get (alist-get 'tools/jobs drgnx-modules--table) :setup))
-    (dolist (id '(job-show job-start job-approve job-status job-stop))
-      (should (drgnx-commands-get id))
-      (dolist (profile '("vscode" "emacs" "vim"))
-        (should (with-temp-buffer (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir))
-                                  (search-forward (format "(%s " id) nil t)))))
-    ;; M12f: a job shows in the Work cockpit; the window of its own is gone (closing a frame forgets nothing here)
-    (should (equal (drgnx-cmd-title (drgnx-commands-get 'job-show)) "Show Job in Work…"))
-    (should-not (memq 'drgnx-job-ui--frame-deleted delete-frame-functions))
-    (should-not (fboundp 'drgnx-job-ui--frame))
-    (should-not (fboundp 'drgnx-job-ui--layout))))
+  (drgnx-test-with-modules '(tools/jobs) :strict t
+                           (dolist (id '(job-show job-start job-approve job-status job-stop))
+                             (should (drgnx-commands-get id))
+                             (dolist (profile '("vscode" "emacs" "vim"))
+                               (should (with-temp-buffer (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir))
+                                                         (search-forward (format "(%s " id) nil t)))))
+                           ;; M12f: a job shows in the Work cockpit; the window of its own is gone (closing a frame forgets nothing here)
+                           (should (equal (drgnx-cmd-title (drgnx-commands-get 'job-show)) "Show Job in Work…"))
+                           (should-not (memq 'drgnx-job-ui--frame-deleted delete-frame-functions))
+                           (should-not (fboundp 'drgnx-job-ui--frame))
+                           (should-not (fboundp 'drgnx-job-ui--layout))))
+
+(ert-deftest drgnx-job-ui/turned-off-it-hears-the-hub-no-more ()
+  ;; the badge hears the hub through its mode and counts again through layer keys; turned off, both end, and the
+  ;; last count goes (the status bar's jobs segment reads it)
+  (cl-letf (((symbol-function 'drgnx-hub-call) #'ignore))
+    (drgnx-test-with-modules '(tools/jobs) :strict t
+                             (should (memq #'drgnx-job-ui--event drgnx-hub-event-functions))
+                             (drgnx-job-ui--schedule-recount)
+                             (should (drgnx-timer-active-p 'job-ui-recount))
+                             (drgnx-job-ui-note-jobs (list drgnx-job-ui-test--summary))
+                             (should (eql (drgnx-job-ui-needs-you) 3))
+                             (drgnx-module-teardown 'tools/jobs)
+                             (should-not (memq #'drgnx-job-ui--event drgnx-hub-event-functions))
+                             (should-not (drgnx-timer-active-p 'job-ui-recount))
+                             (should-not (drgnx-timer-active-p 'job-ui-recount-idle))
+                             (should-not (drgnx-job-ui-needs-you)))))
 
 ;; From the old UI list ("stale status values after gry failures"): a status that cannot be read says nothing
 ;; instead of keeping the last count.

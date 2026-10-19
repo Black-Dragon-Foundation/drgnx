@@ -3,6 +3,7 @@
 (require 'drgnx)
 (require 'drgnx-agents)                ; loaded before any test stubs its functions
 (load (expand-file-name "modules/tools/drgnx-work-ui" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defun drgnx-work-ui-test--git (dir &rest args)
   (with-temp-buffer
@@ -336,10 +337,9 @@ without SVG (librsvg), e.g. a terminal-only build."
           (should (equal (nth 1 started) (concat root "code/"))))))))
 
 (ert-deftest drgnx-work-ui/every-command-is-registered ()
-  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
-    (funcall (plist-get (alist-get 'tools/work drgnx-modules--table) :setup))
-    (dolist (id '(work-view work-refresh work-open work-toggle work-filter work-hide-merged work-graph work-start-agent work-open-worktree))
-      (should (drgnx-commands-get id)))))
+  (drgnx-test-with-modules '(tools/work) :strict t
+                           (dolist (id '(work-view work-refresh work-open work-toggle work-filter work-hide-merged work-graph work-start-agent work-open-worktree))
+                             (should (drgnx-commands-get id)))))
 
 (ert-deftest drgnx-work-ui/doctor-says-whether-the-tracker-can-work ()
   (require 'drgnx-doctor)

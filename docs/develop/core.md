@@ -515,6 +515,15 @@ stack — the code that knows what it changed knows how to change it back):
   runs `drgnx-modules-after-stage-functions` (keys and menus apply) once after the whole stage, so a hook per re-run
   would only add a second full keys resolve while the registry is half rebuilt. Whoever tears down on purpose
   (Preferences, the batch teardown) runs the after-teardown hook once.
+- Preferences: Modules calls `(drgnx-modules-turn-off MODULE &key dependents)` and `(drgnx-modules-turn-on MODULE)`
+  (`core/drgnx-modules.el`; user guide: `docs/guide/modules.md`). Turn-off returns the running modules that
+  `:requires` MODULE, doing nothing, unless `:dependents t`: then it tears them down deepest first, then MODULE, runs
+  the after-teardown hook once and writes MODULE with `drgnx-modules-set-enabled`. If MODULE is `restart`, or a
+  running dependent is, it only writes (nothing torn down; the dependents wait for it at the next start). Turn-on
+  writes it and, when the report shows the module's stage has run, calls `drgnx-modules--run-one` (which checks
+  packages and requirements) and runs `drgnx-modules-after-teardown-functions` (not the after-stage hook, whose
+  subscriber skips `startup`) so keys and menus follow whatever the stage. Neither prompts; the question "Also turn off X, Y?" belongs to the
+  command `drgnx-modules-list-toggle`. `drgnx-modules-toggle` (onboarding) only writes.
 - Teardown and rollback run in automatic paths: they never prompt. Undos and `:teardown` run with
   `inhibit-interaction` bound, so one that would ask fails at once and is reported. Every undo checks before it
   changes anything, so off, on, off is the same as off once, and two undos of the same thing (a `:teardown` that
@@ -642,7 +651,7 @@ and their keys leave the table. A timer owned by a buffer or a process is not th
 
 Code a setup reaches that does not push its own undo — wb modes, the setup functions of `wb/` libraries, packages'
 mode functions — is recorded anyway. For each setup's extent only (`drgnx-modules--with-recorder`, inside
-`drgnx-modules--run-setup`), drgnx advises four functions and removes the advice in `unwind-protect`, also after
+`drgnx-modules--run-setup`), drgnx advises five functions and removes the advice in `unwind-protect`, also after
 an error, a quit or a throw (a second quit during the removal is held off). Outside a setup nothing is advised and
 no call goes through the net; what stays is two properties `advice-remove` leaves on each advised symbol's plist
 (`function-documentation`, `defalias-fset-function`), which change nothing.
@@ -652,11 +661,12 @@ no call goes through the net; what stays is two properties `advice-remove` leave
 | `add-hook` on a hook's global value | the function was not on it before | `remove-hook`, if it is still there |
 | `advice-add` | `advice-member-p` was nil before | `advice-remove`, if still there |
 | `add-to-list` on a list's global value | the element was not a member before (same test as `add-to-list`) | remove that one element, if still a member; others' additions stay |
+| `eval-after-load` (also what `with-eval-after-load` expands to) | the function it adds was not in the feature's `after-load-alist` entry before | removed from the entry, if still there; others' forms stay. Emacs adds the function even when the feature is already loaded and keeps it after the feature loads: left there, a module turned off would keep an entry, and turned on again its new function would be dropped as `equal` to the old one, so its deferred work would never run |
 | a new timer (`timer-list`, `timer-idle-list` compared before and after) | its function is a symbol defined under `drgnx-dir` (a layer timer is skipped: its run token owns it; anything else is *left*, below) | `cancel-timer`, if still pending |
 | a global minor mode newly in `global-minor-modes` | it was off before | `(MODE -1)`, if still on; pushed after everything the setup pushed, so modes go off first and their own off code runs before the hook and timer undos. This is the one break in last in, first out: a mode goes off before undos the setup pushed after turning it on |
 | a feature newly in `features` | always | none: kept for the report, `(drgnx-modules-features-of MODULE)` |
 
-Labels read `hook HOOK FN`, `advice SYMBOL FN`, `list VAR ELEMENT`, `timer FN`, `mode MODE`, cut to 100 characters. The undos make teardown and rollback complete for these doors.
+Labels read `hook HOOK FN`, `advice SYMBOL FN`, `list VAR ELEMENT`, `after-load FEATURE`, `timer FN`, `mode MODE`, cut to 100 characters. The undos make teardown and rollback complete for these doors.
 
 The net's undos are unconditional: they check that the thing is still there, not whether another module still
 needs it. So a change made by a claim-aware API — one whose undo hands over to another module's claim (the helpers
@@ -723,12 +733,58 @@ late `eval-after-load` or idle step of a turned-off module never runs and an off
 work twice. Evaluated outside a setup, it just runs BODY. Each call installs the safety net for its extent (about
 20 µs): for one-off work, not for a hook that runs on every command.
 
-**Cost.** The safety net around a setup costs 16–22 µs (byte-compiled, 30.2: four `advice-add` and
+**Cost.** The safety net around a setup costs 16–22 µs (byte-compiled, 30.2, measured with four doors: four `advice-add` and
 `advice-remove`, two snapshots and their comparison), and up to about 70 µs in runs where the garbage it makes
 brings a collection forward (65–73 µs measured so); 41 setups × 75 µs ≈ 3 ms at worst. The shipped startup stage (16 modules, batch) took 29.4 ms with
-it and 28.2 ms without (5 runs each, within the runs' noise); the budget is 5 ms across all setups.
+it and 28.2 ms without (5 runs each, within the runs' noise); the budget is 5 ms across all setups. The fifth door
+(`eval-after-load`) adds one `advice-add` and `advice-remove` pair per setup, a few µs, not measured on its own.
 `test/unit/modules-record-test.el` covers it, including `startup-is-unchanged`: the shipped modules' startup stage
 gives the same statuses and commands with the recorder as without it.
+
+### Writing a module that can be turned off
+
+**Every module can be turned off.** A module's `:setup` changes global state only through recorded doors: drgnx's
+`define` functions, `drgnx-module-hook` / `drgnx-module-advice` (named, paired with their removal) or `add-hook` /
+`advice-add` of a named function, timers, `add-to-list` of a `defvar`ed variable (see "`add-to-list` that the
+compiler rewrote" above), `eval-after-load`, global minor modes, `drgnx-module-set` for another
+package's options, `drgnx-module-alist-put` for alist keys, `drgnx-module-face-spec` for face specs and
+`drgnx-module-define-key` for remaps in global maps. Anything else — a theme, a connection, live frames'
+parameters, a mode turned on in live buffers, a sub-module's own state — is undone by the module's `:teardown`
+(which calls the sub-modules' off functions), or the module declares `:teardown 'restart`. A test never stubs a
+setup to keep its effects out of the process: it sets the module up and tears it down. Code a setup defers
+(`eval-after-load`, a timer callback) runs inside `drgnx-modules-with-owner`. Files under `modules/` register
+nothing at top level. A new registry calls `drgnx-modules-push-undo` and has an undefine. Tests that set modules up
+use `drgnx-test-with-modules` ([harness.md](harness.md)), and `bin/drgnx test --leaks` reports nothing for the
+tests you add.
+
+`test/unit/lint-teardown-test.el` checks it:
+
+- `drgnx-teardown/every-module-leaves-nothing` sets each shipped module up alone with
+  `(drgnx-test-with-modules (list M) :strict t)` and turns it off: the state after equals the state before, taken
+  after the libraries its setup loads are loaded (features excepted, and the timers the recorder leaves alone;
+  [harness.md](harness.md)). Every module is checked and the failures are reported together, each named with its
+  module and what it left. Packages come from the
+  user's ELPA when present (read-only, `DRGNX_USER_ELPA`), and no outside program is found, so none starts; a module
+  whose packages are missing does not set up, and the test's message says which were not set up.
+  `drgnx-teardown/off-on-off-is-off` turns each one off and on again in between: the second setup must set up the
+  same things as the first, compared by what they are (a timer made again is a new object but the same timer) —
+  no stacked timers, no idempotence guard that outlived the teardown.
+  `restart` modules are not set up here: their own tests set them up `:strict`, and the helper unwinds their record
+  (`core/basics`, `core/workbench`: `test/unit/mod-core-test.el`).
+- `drgnx-lint/modules-register-nothing-at-load`: a registration (`add-hook`, `advice-add`, `add-to-list`,
+  `with-eval-after-load`, a timer, a drgnx `define`…) that runs when a module file loads fails — it runs outside every setup, so nothing records it.
+- `drgnx-lint/raw-global-forms-need-a-teardown`: in a module file, `with-eval-after-load` or an `eval-after-load`
+  without `drgnx-modules-with-owner`, `setf (alist-get … VAR)` on a global variable, `face-spec-set`,
+  `custom-set-*`, `setopt`, `setq-default`, `define-key global-map`, `default-frame-alist`,
+  `modify-frame-parameters` and `add-function` on a global variable fail unless the module has a `:teardown`. Two fail whatever it has: a lambda on a global
+  hook (name it) and `drgnx-modules-with-owner` directly inside `with-eval-after-load` (evaluated only when the
+  feature loads, it names no module and never runs).
+
+Modules not converted yet are on `drgnx-teardown--not-yet`, each with the migration batch that converts it; the
+dynamic check and the raw-forms lint skip them, and the test's message counts them. Known top-level registrations
+waiting for their batch are on `drgnx-teardown--load-registrations`; an entry whose registration is gone fails
+too. Both lists shrink to empty. A file under `modules/` that defines no module is listed in
+`drgnx-teardown--library-files` with the module that uses it.
 
 ## Timers
 

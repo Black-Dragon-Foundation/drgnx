@@ -185,8 +185,9 @@ The width is noted `:by auto' (`drgnx-state-note-intent'): a width you chose is 
     (dolist (w windows) (when (window-live-p w) (delete-window w)))))
 
 (defvar drgnx-wb-view-providers nil
-  "Alist VIEW → function that defines VIEW's sections now.  A module that sets up at idle registers one when its file
-loads, so the view's key works before then (`drgnx-wb-show-view' calls it when VIEW has no sections).")
+  "Alist VIEW → function that defines VIEW's sections now.  A module that sets up late can register one in its setup,
+so the view's key works before its sections exist (`drgnx-wb-show-view' calls it when VIEW has no sections).
+None does today: the Search view's module sets up at startup.")
 
 (defun drgnx-wb-show-view (view)
   "Show only VIEW's sections in the left dock, swapping them in place at the same width.

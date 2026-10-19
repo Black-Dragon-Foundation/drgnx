@@ -4,6 +4,10 @@
 (require 'drgnx-timer)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-agents-ui" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+(defvar drgnx-hub--events)
+(defvar drgnx-hub--client)
+(defvar drgnx-hub--subscribing)
 
 (defconst drgnx-agents-ui-test--mock (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir))
 
@@ -101,11 +105,29 @@
         (delete-directory dir t)))))
 
 (ert-deftest drgnx-agents-ui/every-command-is-registered ()
-  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
-    (funcall (plist-get (alist-get 'tools/agents drgnx-modules--table) :setup))
-    (dolist (id '(agents-view agents-new agents-send agents-stop agents-deliver agents-take-over agents-answer jobs-log jobs-stop agents-open agents-reply agents-review-done agents-review-reject
-                              agents-new-durable))
-      (should (drgnx-commands-get id)))))
+  (drgnx-test-with-modules '(tools/agents) :strict t
+                           (dolist (id '(agents-view agents-new agents-send agents-stop agents-deliver agents-take-over agents-answer jobs-log jobs-stop agents-open agents-reply agents-review-done agents-review-reject
+                                                     agents-new-durable))
+                             (should (drgnx-commands-get id)))))
+
+(ert-deftest drgnx-agents-ui/turned-off-it-stops-mirroring-and-closes-the-hub-events ()
+  ;; what no door records: the mirror's hooks (added at idle, outside the setup) and the event connection
+  (require 'drgnx-agents-mirror)
+  (let ((drgnx-hub--events nil) (drgnx-hub--client nil) (drgnx-hub--subscribing nil) (p nil))
+    (unwind-protect
+        (drgnx-test-with-modules '(tools/agents) :strict t
+                                 (setq p (make-pipe-process :name "drgnx-test-hub-events" :noquery t)
+                                       drgnx-hub--events p)
+                                 (add-hook 'drgnx-hub-event-functions #'drgnx-agents-mirror--event)       ; as `drgnx-agents-mirror-sync'
+                                 (add-hook 'drgnx-hub-disconnect-functions #'drgnx-agents-mirror--hub-gone)
+                                 (drgnx-module-teardown 'tools/agents)
+                                 (should-not (memq #'drgnx-agents-mirror--event drgnx-hub-event-functions))
+                                 (should-not (memq #'drgnx-agents-mirror--hub-gone drgnx-hub-disconnect-functions))
+                                 (should-not (process-live-p p))
+                                 (should-not drgnx-hub--events)
+                                 (when (buffer-live-p (process-buffer p)) (kill-buffer (process-buffer p))))
+      (when (process-live-p p) (delete-process p))
+      (when (and p (buffer-live-p (process-buffer p))) (kill-buffer (process-buffer p))))))
 
 (ert-deftest drgnx-agents-ui/hub-sessions-are-mirrored-only-when-a-hub-runs ()
   ;; at idle: never a wait (no ping), never a hub started — only a socket that is there is connected to

@@ -4,8 +4,6 @@
 
 ;;; Code:
 (require 'seq)
-(defvar native-comp-async-report-warnings-errors)
-(defvar project-list-file)
 (require 'drgnx-paths)
 (require 'drgnx-session)
 (require 'drgnx-trust)
@@ -45,14 +43,16 @@ none.  It survives a change of major mode (Change Language Mode).")
 (drgnx-module-define 'core/basics
                      :doc "Quiet, predictable defaults and the basic file and view commands."
                      :stage 'startup
+                     ;; Everything it sets is recorded (a test turns it off cleanly); Preferences stops it at the next start.
+                     :teardown 'restart
                      :setup
                      (lambda ()
-                       (setq ring-bell-function #'ignore
-                             use-dialog-box nil
-                             use-short-answers t
-                             inhibit-startup-screen t
-                             ;; Background native compilation: warnings go to the log, never a window popping up.
-                             native-comp-async-report-warnings-errors 'silent)
+                       (drgnx-module-set 'ring-bell-function #'ignore)
+                       (drgnx-module-set 'use-dialog-box nil)
+                       (drgnx-module-set 'use-short-answers t)
+                       (drgnx-module-set 'inhibit-startup-screen t)
+                       ;; Background native compilation: warnings go to the log, never a window popping up.
+                       (drgnx-module-set 'native-comp-async-report-warnings-errors 'silent)
                        ;; Trusted folders and the guards for files from the others, before any file opens
                        (drgnx-trust-setup)
                        (drgnx-command-define 'open-file :category "File" :title "Open File…" :command #'find-file
@@ -63,7 +63,7 @@ none.  It survives a change of major mode (Change Language Mode).")
                                              :command #'display-line-numbers-mode :menu '("View") :doc "Line numbers in this buffer")
                        (add-hook 'kill-buffer-hook #'drgnx-basics--note-closed)
                        ;; project.el's list of known projects in drgnx's state dir, not in the checkout (--init-directory)
-                       (setq project-list-file (expand-file-name "projects" (drgnx-state-dir)))
+                       (drgnx-module-set 'project-list-file (expand-file-name "projects" (drgnx-state-dir)))
                        (make-directory (drgnx-state-dir) t)
                        (pcase-dolist (`(,id ,title ,fn ,doc)
                                       '((file-save-as "Save As…" write-file "Save under a new name")

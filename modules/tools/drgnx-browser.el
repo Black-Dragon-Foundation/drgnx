@@ -362,9 +362,23 @@ An error ends the wait (it would repeat every half second), and nothing here blo
                           :map (and (eq id 'browser-go) '(drgnx-browser . drgnx-browser-mode-map))
                           :when (and (eq id 'browser-go) (lambda () (bound-and-true-p drgnx-browser-mode))))))
 
+(defun drgnx-browser--teardown ()
+  "Cancel the polls waiting for a Playwright server's address, close the pane's windows and kill its pages.
+A poll of Test Report belongs to no setup (it is `:core''s), nor does a page."
+  (dolist (entry (drgnx-timer-pending))
+    (when (eq (car-safe (car entry)) 'browser-watch) (drgnx-timer-cancel (car entry))))
+  (dolist (w (window-list nil 'nomini))
+    (when (and (eq (window-parameter w 'drgnx-layouts-pane) 'browser) (cdr (window-list (window-frame w) 'nomini)))
+      (ignore-errors (delete-window w))))
+  (let ((kill-buffer-query-functions nil))
+    (dolist (b (buffer-list))
+      (when (buffer-local-value 'drgnx-browser-mode b) (kill-buffer b))))
+  (setq drgnx-browser--buffer nil drgnx-browser--told nil))
+
 (drgnx-module-define 'tools/browser
                      :doc "A web page pane beside the editor (WebKit), Test Report and Agent's Page."
                      :stage 'idle :requires '(core/workbench tools/layouts tools/agents)
+                     :teardown #'drgnx-browser--teardown
                      :setup
                      (lambda ()
                        (require 'drgnx-groups)

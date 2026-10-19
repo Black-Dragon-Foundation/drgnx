@@ -1,7 +1,7 @@
 ;;; mod-extras-test.el --- batch tests: modules that need packages -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx)
-(defvar features)                                      ; a test that loads packages gives the feature list back
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-extras-test--modules
   '(("extra/drgnx-jump" extra/jump (avy) (go-jump))
@@ -41,20 +41,13 @@
 
 (ert-deftest drgnx-extras/with-packages-they-run ()
   (skip-unless (file-directory-p drgnx-extras-test--elpa))
-  (let ((features features)       ; the packages these modules load (gptel, magit, …) are not left "loaded" for later tests
-        (load-path (append load-path (seq-filter #'file-directory-p (directory-files drgnx-extras-test--elpa t "\\`[^.]"))))
+  (let ((load-path (append load-path (seq-filter #'file-directory-p (directory-files drgnx-extras-test--elpa t "\\`[^.]"))))
         ;; extra/llm points gptel at the `chat' role's OpenRouter step (a key: a fake one, never sent)
         (process-environment (cons "OPENROUTER_API_KEY=sk-or-fake" process-environment)))
-    (drgnx-extras-test--fresh
-     (unwind-protect
-         (progn
-           (drgnx-modules-run 'idle)
-           (pcase-dolist (`(,_ ,mod ,_ ,cmds) drgnx-extras-test--modules)
-             (should (equal (list mod (plist-get (alist-get mod (drgnx-modules-report)) :status)) (list mod 'ok)))
-             (dolist (c cmds) (should (drgnx-commands-get c)))))
-       (dolist (m '(vertico-mode marginalia-mode global-corfu-mode global-diff-hl-mode))
-         (when (and (fboundp m) (boundp m) (symbol-value m)) (funcall m -1)))
-       (when (boundp 'drgnx-ai-probe-done-hook) (setq drgnx-ai-probe-done-hook nil))))))
+    (drgnx-test-with-modules (mapcar #'cadr drgnx-extras-test--modules) :strict t
+                             (pcase-dolist (`(,_ ,mod ,_ ,cmds) drgnx-extras-test--modules)
+                               (should (equal (list mod (plist-get (alist-get mod (drgnx-modules-report)) :status)) (list mod 'ok)))
+                               (dolist (c cmds) (should (drgnx-commands-get c)))))))
 
 (ert-deftest drgnx-modules/later-stages-re-apply-the-keys ()
   ;; A module that runs at idle registers commands after the keys were applied.

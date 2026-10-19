@@ -135,9 +135,15 @@ again only when the start moves or the text above it changes)."
   "`prog-mode-hook': sticky scroll in file buffers."
   (when buffer-file-name (drgnx-sticky-mode 1)))
 
+(defun drgnx-sticky--teardown ()
+  "Sticky scroll off in every live buffer that has it (the hook and the command go with the setup)."
+  (dolist (b (buffer-list))
+    (with-current-buffer b (when drgnx-sticky-mode (drgnx-sticky-mode -1)))))
+
 (drgnx-module-define 'editor/sticky
                      :doc "Sticky scroll: the function (class, block) you are in, when its start has scrolled off, after the breadcrumb."
                      :stage 'startup
+                     :teardown #'drgnx-sticky--teardown
                      :setup (lambda ()
                               (drgnx-memo-activate 'sticky-segment)
                               (add-hook 'prog-mode-hook #'drgnx-sticky--maybe)

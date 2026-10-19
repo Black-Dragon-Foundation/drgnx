@@ -74,7 +74,7 @@ the start."
                         :command #'drgnx-palette-preferences :doc "The palette, on every Preferences command")
   (drgnx-command-define 'modules-toggle :category "Modules" :title "Turn On / Off" :command #'drgnx-modules-list-toggle
                         :map 'drgnx-modules-list-mode-map :when (lambda () (derived-mode-p 'drgnx-modules-list-mode))
-                        :doc "Turn the module on this row off at the next start, or back on")
+                        :doc "Turn the module on this row off now, or back on (asks once when other modules need it); a few stop at the next start")
   (drgnx-command-define 'keyboard-profile :category "Preferences" :title "Keyboard Profile…"
                         :command #'drgnx-keys-choose-profile :menu '("Options")
                         :doc "VS Code, Emacs or Vim keys, or Emacs/Vim editing with VS Code app keys"))

@@ -23,6 +23,7 @@
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-browser" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-live" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-live-test--with (&rest body)
   "BODY with a temp state dir, the mock browser serving on PORT as the running live browser (job \"job-live\"),
@@ -230,11 +231,7 @@ no agents, and everything closed afterwards."
               ((symbol-function 'drgnx-jobs-get) (lambda (id) (and (equal id "job-1") (list :id id :status status))))
               ((symbol-function 'drgnx-jobs-stop) (lambda (id) (push id stopped) (setq status 'stopped) (delete-process chrome))))
       (unwind-protect
-          (let ((drgnx-agents-env-functions nil)
-                (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
-            (drgnx-live--setup)
-            (should (memq #'drgnx-live--agent-env drgnx-agents-env-functions))
-            (dolist (c '(live-start-browser live-stop-browser live-view live-take-over)) (should (drgnx-commands-get c)))
+          (let ((drgnx-agents-env-functions (list #'drgnx-live--agent-env)))   ; as the module's setup adds it
             ;; no browser yet: nothing extra
             (should-not (seq-find (lambda (e) (string-prefix-p "PLAYWRIGHT_MCP_CDP_ENDPOINT=" e)) (drgnx-agents--env s)))
             ;; Live: Start Browser for Agents starts Chrome once, headless, on 127.0.0.1, a throwaway profile, capped
@@ -266,8 +263,30 @@ no agents, and everything closed afterwards."
             (should (equal stopped '("job-1")))
             (should-not (file-exists-p dir))
             (should-not (seq-find (lambda (e) (string-prefix-p "PLAYWRIGHT_MCP_CDP_ENDPOINT=" e)) (drgnx-agents--env s))))
-        (remove-hook 'kill-emacs-hook #'drgnx-live--cleanup)
         (delete-process chrome)
+        (delete-directory root t)))))
+
+(ert-deftest drgnx-live/the-module-turns-off-and-stops-the-browser ()
+  ;; set up: agents get the endpoint, Emacs's end stops the browser, the commands; turned off: the browser stops
+  (skip-unless drgnx-live-test--websocket)
+  (let* ((root (make-temp-file "drgnx-live" t))
+         (process-environment (cons (concat "XDG_STATE_HOME=" root) process-environment))
+         (dir (expand-file-name "profile" root)) (stopped nil)
+         (drgnx-live--browser nil) (drgnx-live--given nil))
+    (make-directory dir)
+    (cl-letf (((symbol-function 'drgnx-jobs-stop) (lambda (id) (push id stopped)))
+              ((symbol-function 'drgnx-jobs-get) (lambda (id) (list :id id :status 'stopped))))
+      (unwind-protect
+          (drgnx-test-with-modules '(tools/live) :strict t
+                                   (should (memq #'drgnx-live--agent-env drgnx-agents-env-functions))
+                                   (should (memq #'drgnx-live--cleanup kill-emacs-hook))
+                                   (dolist (c '(live-start-browser live-stop-browser live-view live-take-over)) (should (drgnx-commands-get c)))
+                                   (setq drgnx-live--browser (list :port 9555 :job "job-live" :dir dir))
+                                   (drgnx-module-teardown 'tools/live)
+                                   (should-not drgnx-live--browser)
+                                   (should (equal stopped '("job-live")))
+                                   (should-not (file-exists-p dir))
+                                   (should-not (memq #'drgnx-live--agent-env drgnx-agents-env-functions)))
         (delete-directory root t)))))
 
 (ert-deftest drgnx-live/failures-say-why ()

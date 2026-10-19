@@ -245,9 +245,16 @@ else a message.  A failed osascript says so once.  Never a prompt."
   "Count again, once the hub's client is loaded: the 60 s idle timer's function."
   (when (featurep 'drgnx-hub) (drgnx-job-ui--recount)))
 
+(defun drgnx-job-ui--teardown ()
+  "Turned off: the last count goes too, so neither the mode line nor the status bar's jobs segment shows it as if
+it were current.  The badge's mode (and with it the hub's hooks), the memo, the commands and the layer timers (the
+recounts on their way end with the module's run) go with the cleanup stack."
+  (drgnx-job-ui--badge-clear))
+
 (drgnx-module-define 'tools/jobs
                      :doc "Jobs: agents through a plan you approve — cards, clashes, the badge; shown in the Work cockpit."
                      :stage 'startup :requires '(tools/agents)
+                     :teardown #'drgnx-job-ui--teardown
                      :setup
                      (lambda ()
                        (drgnx-memo-activate 'job-badge)

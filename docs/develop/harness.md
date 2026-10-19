@@ -61,6 +61,9 @@ earlier file left). `bin/drgnx check`'s `unit-timing` job uses it too (16 tests 
 the variable for the tests themselves, so a test that runs the runner gets one Emacs per file unless it sets it. The
 GUI and live tiers and the tests that start an Emacs of their own keep their own runners.
 
+`bin/drgnx test --shuffle[=SEED]` shuffles each file's tests from a seed, and `--find-polluter TEST [FILE…]` bisects the
+tests before TEST down to the one that makes it fail ([check.md](check.md#the-order-of-the-tests---shuffle---find-polluter)).
+
 ### Native trampolines
 
 A test that `cl-letf`s a primitive (`buffer-list`, `message`, …) makes Emacs compile a native trampoline, which it
@@ -134,6 +137,65 @@ symbols; about 90 hooks), nothing that grows with the number of symbols. The ful
 checkout it compiles its scanner once first (interpreted, the scan takes ~110 ms; a built drgnx skips that). Both only
 read: no prompt, no display. The `drgnx-fingerprint/cheap-costs-under-2-ms` and `…/full-costs-under-50-ms` tests
 (tag `:timing`) hold the costs.
+
+The census that reads it around every test, `bin/drgnx test --leaks`, is described in
+[check.md](check.md#the-leak-census---leaks).
+
+### Tests that set modules up
+
+A test that needs a module's commands, hooks or registrations uses `drgnx-test-with-modules`
+(`test/fixtures/modules-fixture.el`; a test file loads it with
+`(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)`), not a hand-made macro that
+let-binds the registries the module touches:
+
+```elisp
+(drgnx-test-with-modules '(tools/browser) :strict t
+  (should (assq 'browser drgnx-layouts-pane-fillers)))
+```
+
+The first argument is a list of module names (evaluated): their files are loaded, and so are the modules they
+`:requires`. An element that is a string is a file to load instead, for a fake module a test writes to a temporary
+directory. `:stages '(startup idle)` sets up every shipped module of those stages as well. The module table, report
+and state are fresh, and `DRGNX_CONFIG_DIR` is a temporary directory, so the user's `modules.eld` is never read.
+Inside BODY, `drgnx-modules--table` holds only the selected modules and the modules they require, not every module file that was loaded.
+
+- **Teardown is part of the test.** After BODY (also when BODY signals) the modules are turned off last first through
+  `drgnx-module-teardown`, then `drgnx-modules-after-teardown-functions` run: every use of the helper tests the
+  module's teardown too. The product's after-teardown function re-applies the keys and menus from the registry; the
+  helper puts what it changed back (the applied keys, the menu items, the which-key labels, `menu-bar-update-hook`,
+  `context-menu-functions`, `context-menu-mode`, and the everywhere alist's place in `emulation-mode-map-alists`,
+  which the modal core keeps there even while it holds no key) before the `:strict` comparison, provided none of the keys or menus
+  were applied before the helper ran (in a live session they were: then the re-application stays). A teardown problem (an undo that failed, named by its label) fails the test. A module that
+  is `:teardown 'restart`, which stays on in a session, is unwound all the same (its cleanup stack, newest first):
+  its record must be exact.
+- **Registries come back.** Whatever happened to a variable of `drgnx-modules-fingerprint-registries` (a table, an
+  alist, a keymap) is put back from a copy taken before the setups, after the module files and the libraries their
+  setups load are loaded (a library's own top-level registrations, such as the panel areas, are the library's and
+  stay; `drgnx-test-modules/a-librarys-registrations-stay-for-the-next-module`): tables and keymaps in place, the rest with `set`. It is a
+  safety net for what no door recorded, not a way to avoid writing the teardown. Never `let`-bind such a variable in
+  a test that sets modules up: binding the variable of a library that is first loaded inside the `let` leaves it void
+  afterwards (`drgnx-test-modules/no-let-binding-trap`).
+- **`:strict t`** fails the test with the fingerprint diff (the lines `drgnx-modules-fingerprint-diff` names, each with
+  the file that defined the leaked function) when the state after the teardown differs from the state before the first
+  setup; features are excepted. New tests use it. The state before is taken after the libraries the setups load are
+  loaded — each module's `:packages` and the features its file `require`s by a quoted name — because a library's
+  top level is the library's and stays loaded; so the result does not depend on which test loaded it first, and
+  nothing a setup does comes before the snapshot. The timers the recorder leaves alone too — those whose function
+  drgnx does not define (`drgnx-modules--undoable-timer-p`), such as Emacs's own lazy ones (undo's boundary timer…)
+  and an ELPA library's — are not counted (`drgnx-test-modules/strict-skips-emacss-own-timers`,
+  `drgnx-test-modules/strict-blames-no-library-top-level`).
+- **`:packages hidden`** hides third-party features (those neither Emacs's own nor drgnx's) from `featurep` and
+  `locate-library` while the setups run, so a module that needs a package stays out whatever the machine has
+  installed. Use it only for tests of a result shape (the key snapshot): a later `require` of a hidden feature loads
+  it again and runs its top level again. With one Emacs per test file this is rarely needed.
+- **Own process for what cannot be undone** (evil loaded into a process, a global mode with no off path): a file in
+  its own Emacs, run from a test that checks the child's result. The helper for it, `drgnx-test-run-isolated`, arrives
+  with the isolated tests of the modal editing work.
+
+Prefer the `ert-x` helpers over hand-written equivalents in new and touched tests: `ert-with-temp-directory` (and
+`ert-with-temp-file`) for files, `ert-with-message-capture` for what a function says, `ert-simulate-command` to run a
+command as the command loop would, `ert-run-idle-timers` to run idle timers now. On Emacs 30.2 `(require 'ert-x)`;
+on 31 some of the macros are in `ert`, and the `require` is harmless.
 
 ## Sessions
 

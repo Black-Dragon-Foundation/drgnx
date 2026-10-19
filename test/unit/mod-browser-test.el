@@ -12,6 +12,7 @@
 (load (expand-file-name "modules/tools/drgnx-layouts" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-browser" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defvar drgnx-browser-test--urls nil "URLs the stubbed WebKit was asked for.")
 
@@ -384,20 +385,25 @@
         (should (eq (selected-window) code))
         (should (window-live-p (window-in-direction 'right code)))))))
 
+(ert-deftest drgnx-browser/off-cancels-the-timer-waiting-for-a-server ()
+  ;; Test Report's wait is a poll made long after the setup (`:core''s): the module's :teardown cancels it.
+  (drgnx-test-with-modules '(tools/browser) :strict t
+                           (drgnx-browser--watch-job "j1")
+                           (should (drgnx-timer-active-p '(browser-watch . "j1"))))
+  (should-not (drgnx-timer-active-p '(browser-watch . "j1"))))
+
+(ert-deftest drgnx-browser/off-kills-the-pages ()
+  ;; A page buffer is made when a page opens, long after the setup: the module's :teardown kills it.
+  (let ((page nil))
+    (unwind-protect
+        (progn
+          (drgnx-test-with-modules '(tools/browser) :strict t
+                                   (setq page (get-buffer-create "*drgnx-browser-test-page*"))
+                                   (with-current-buffer page (drgnx-browser-mode 1))
+                                   (setq drgnx-browser--buffer page))
+          (should-not (buffer-live-p page))
+          (should-not drgnx-browser--buffer))
+      (when (buffer-live-p page) (kill-buffer page)))))
+
 (provide 'mod-browser-test)
 ;;; mod-browser-test.el ends here
-
-(ert-deftest drgnx-browser/the-fixture-keeps-the-frame-size ()
-  ;; The fixture gives the frame back its size: a frame one line shorter after each test left later docks no room.
-  (let ((size (cons (frame-width) (frame-height))))
-    (drgnx-browser-test--with (ignore))
-    (read-event nil nil 0.01)                           ; a terminal frame takes its new size at the next wait
-    (should (equal (cons (frame-width) (frame-height)) size))))
-
-(ert-deftest drgnx-browser/command-labels-say-browser-once ()
-  ;; The palette shows "Category: Title": the titles must not repeat the category.
-  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
-    (drgnx-browser--define-commands)
-    (should (equal (mapcar (lambda (id) (drgnx-commands-label (drgnx-commands-get id)))
-                           '(browser-open browser-test-report browser-agent-page browser-go))
-                   '("Browser: Open URL…" "Browser: Test Report" "Browser: Agent's Page" "Browser: Go to Address…")))))

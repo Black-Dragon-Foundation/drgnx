@@ -44,13 +44,13 @@ Commands, options and the CLI, generated from the command registry — not writt
 How drgnx is built, tested and measured.
 
 - [Architecture overview](develop/architecture.md)
-- [Core](develop/core.md): paths, staged hooks, no-prompt guard, command registry, surfaces, palette, modules.
+- [Core](develop/core.md): paths, staged hooks, no-prompt guard, command registry, surfaces, palette, modules (every module turns off cleanly: the rule and its check).
 - [Harness](develop/harness.md): headless GUI test sessions, test tiers (each unit test file in an Emacs of its
   own), CLI and MCP tools for agents.
 - [Performance](develop/perf.md): the perf lab — input latency, frames, GC, startup, memory, budgets, the soak, tuning.
 - [Scenarios](develop/scenarios.md): behaviour scenarios and the evidence behind the workbench design.
 - [Formatting](develop/formatting.md): `bin/drgnx fmt` — the Emacs Lisp formatter, and where it is enforced.
-- [bin/drgnx check](develop/check.md): build and every test tier in one parallel run; shards, GUI slots, phases.
+- [bin/drgnx check](develop/check.md): build and every test tier in one parallel run; shards, GUI slots, phases, the leak census, the shuffled test order and the polluter bisect.
 - [CI](develop/ci.md): the GitHub Actions workflows — Emacs 31.1 and 30.2 suites, shellcheck, leak scan, nightly GUI tier.
 - [The hub and the gateway](develop/hub.md): the durable process behind agents, its socket protocol, the traffic gateway.
 - [Agent coordination](develop/coordination.md): jobs, tasks and leases, the decision log, messages, the MCP tools (and the identity and limits of agents outside drgnx), delivery.

@@ -18,12 +18,33 @@
 
 (defun drgnx-look--saved-theme () (plist-get (drgnx-modules-read-state) :theme))
 
+(defvar drgnx-look--taken nil
+  "While the module is on: (:previous THEMES :ours THEMES), the themes enabled when its setup began and those it
+loaded since.  Its teardown gives the previous ones back.")
+
+(defun drgnx-look--load (theme)
+  "Make THEME the only enabled theme, noting that the module loaded it."
+  (mapc #'disable-theme custom-enabled-themes)
+  (when drgnx-look--taken (cl-pushnew theme (plist-get drgnx-look--taken :ours)))
+  (load-theme theme t))
+
+(defun drgnx-look--teardown ()
+  "Zen mode off; the themes the module loaded off, the ones enabled before its setup on again (a theme someone
+else enabled since stays)."
+  (when (frame-parameter nil 'drgnx-look-zen) (drgnx-look-zen))
+  (when drgnx-look--taken
+    (dolist (theme (plist-get drgnx-look--taken :ours))
+      (when (memq theme custom-enabled-themes) (disable-theme theme)))
+    (dolist (theme (reverse (plist-get drgnx-look--taken :previous)))
+      (unless (memq theme custom-enabled-themes)
+        (if (custom-theme-p theme) (enable-theme theme) (load-theme theme t))))
+    (setq drgnx-look--taken nil)))
+
 (defun drgnx-look-load-theme (theme)
   "Make THEME the only theme and remember it.  A modules.eld with a mistake refuses (`drgnx-config-refused') before the
 theme changes."
   (drgnx-config-ensure-writable 'modules)
-  (mapc #'disable-theme custom-enabled-themes)
-  (load-theme theme t)
+  (drgnx-look--load theme)
   (drgnx-modules-update-state (lambda (state) (plist-put (copy-sequence state) :theme theme))))
 
 (defun drgnx-look-choose-theme (theme)
@@ -75,8 +96,10 @@ theme changes."
 (drgnx-module-define 'ui/look
                      :doc "Colour theme (remembered) and zen mode."
                      :stage 'startup
+                     :teardown #'drgnx-look--teardown
                      :setup
                      (lambda ()
+                       (setq drgnx-look--taken (list :previous (copy-sequence custom-enabled-themes) :ours nil))
                        (drgnx-command-define 'preferences-theme :category "Preferences" :title "Color Theme"
                                              :command #'drgnx-look-choose-theme :menu '("Options") :doc "Pick the colour theme (remembered)")
                        (drgnx-command-define 'view-zen :category "View" :title "Zen Mode" :scope 'window
@@ -87,8 +110,7 @@ theme changes."
                        ;; last, and guarded: a theme that errors leaves the commands (Color Theme picks another)
                        (when-let* ((theme (drgnx-look--saved-theme)))
                          (when (memq theme (custom-available-themes))
-                           (mapc #'disable-theme custom-enabled-themes)
-                           (condition-case e (load-theme theme t)
+                           (condition-case e (drgnx-look--load theme)
                              (error (message "drgnx: the colour theme %s does not load (%s); Color Theme picks another"
                                              theme (error-message-string e))))))))
 

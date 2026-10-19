@@ -27,8 +27,8 @@ treemacs; see
 The sidebar has **views**, like VS Code's activity bar: **View: Explorer** shows the Buffers panel, the Explorer
 and the Outline; **View: Search** shows the Search view. The two commands show their view and move focus to it (the Explorer's
 file tree, the Search view with the cursor in its Find field), like VS Code's `Ctrl+Shift+E` and `Ctrl+Shift+F`.
-Focus Explorer, Focus Outline and the like also switch the sidebar to their view first. The Search view is set up the
-first time it is asked for, also in the first second after a start (its module sets up once Emacs is idle). Swapping the view another way
+Focus Explorer, Focus Outline and the like also switch the sidebar to their view first. The Search view is there from
+the start (its module sets up in the startup stage), so its key works in the first second too. Swapping the view another way
 (`drgnx-wb-show-view`, as a layout does; there are no clickable view tabs yet) swaps the sections in place, at the same width, and leaves focus where it was (a focus inside the
 sidebar moves to the new view's first section); with the sidebar hidden it shows it. Hiding and showing the sidebar brings back the view it had.
 

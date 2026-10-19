@@ -442,3 +442,24 @@ pending at the end is cancelled."
                 (if (eq cmd 'drgnx-search-semantic) (funcall cmd "alpha") (funcall cmd))
                 (should (equal asked (list (file-truename root)))))))     ; once, with the project root
         (delete-directory outside t)))))
+
+(ert-deftest drgnx-search/off-stops-a-running-indexer-and-leaves-no-lock ()
+  (skip-unless (executable-find "sleep"))
+  (drgnx-search-ui-test--project
+    (let* ((proc (make-process :name "fake-indexer" :command '("sleep" "60") :noquery t))
+           (pid (process-id proc))
+           (lock (drgnx-search-index--lock-file root))
+           (job (list :status 'running :name "search-index: proj" :pid pid
+                      :command (list "emacs" "--batch" "-f" "drgnx-search-index-cli" (directory-file-name root)))))
+      (unwind-protect
+          (progn
+            (make-directory (file-name-directory lock) t)
+            (write-region (format "%d 0" pid) nil lock nil 'silent)
+            (should (drgnx-search-index-running-p root))
+            (cl-letf (((symbol-function 'drgnx-jobs-list) (lambda () (list job))))
+              (drgnx-search--teardown))
+            (should-not (file-exists-p lock))                   ; at once: no stale lock
+            (let ((deadline (+ (float-time) 5)))                 ; the signal does the rest, nothing here waited
+              (while (and (process-live-p proc) (< (float-time) deadline)) (accept-process-output nil 0.05)))
+            (should-not (process-live-p proc)))
+        (when (process-live-p proc) (kill-process proc))))))

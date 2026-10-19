@@ -66,6 +66,26 @@ far.  DURATIONS: alist file → seconds (a file it lacks weighs 1)."
     (pcase-dolist (`(,file . ,secs) now) (setf (alist-get file per nil nil #'equal) secs))   ; this run's times win
     (drgnx-file-write (drgnx-check-durations-file) per :fsync nil)))
 
+;;;; The leak census, merged
+
+(defun drgnx-check-leaks (dir)
+  "The leaks (plists :test :file :what :source) in the unit shards' results in DIR, each once, in shard order.
+A summary that is missing, unreadable or has no :leaks (the census was off) adds none."
+  (let (out (seen (make-hash-table :test #'equal)))
+    (dolist (f (sort (directory-files dir t "\\`unit[-a-z0-9]*\\.json\\'") #'string<))
+      (seq-doseq (l (plist-get (ignore-errors (json-parse-string (with-temp-buffer (insert-file-contents f) (buffer-string))
+                                                                 :object-type 'plist))
+                               :leaks))
+        (unless (gethash l seen) (puthash l t seen) (push l out))))
+    (nreverse out)))
+
+(declare-function drgnx-run-ert-leaks-report "run-ert" (leaks))
+
+(defun drgnx-check-leaks-report (leaks)
+  "LEAKS as the runner prints them (\"Leaks (N)\" and a line each), \"\" for none."
+  (unless (fboundp 'drgnx-run-ert-leaks-report) (load (expand-file-name "harness/run-ert.el" drgnx-dir) nil t))
+  (drgnx-run-ert-leaks-report leaks))
+
 ;;;; The plan
 
 (defun drgnx-check--emacs () (or (getenv "DRGNX_EMACS") (expand-file-name invocation-name invocation-directory)))
@@ -78,14 +98,16 @@ so a test cannot reach the user's desktop.  `bin/drgnx test' sets the same, plus
 own (XDG_RUNTIME_DIR); here the runner (harness/run-ert.el) gives each shard that one inside Emacs, which is
 enough for everything but dbus.el: it reads the process's own environment.")
 
-(cl-defun drgnx-check-plan (&key (root drgnx-dir) (unit-shards 4) (live-shards 2) perf (gui t) (tty (and (executable-find "tmux") t)) dir)
+(cl-defun drgnx-check-plan (&key (root drgnx-dir) (unit-shards 4) (live-shards 2) perf (gui t) (tty (and (executable-find "tmux") t)) dir leaks)
   "The jobs of a check of the checkout ROOT: (:name :phase :command :gui :env :timeout)…  DIR: where shard
-results go (default: none).  TTY (default: tmux is installed): with GUI, the terminal tier, `bin/drgnx test --tty'."
+results go (default: none).  TTY (default: tmux is installed): with GUI, the terminal tier, `bin/drgnx test --tty'.
+LEAKS: the unit jobs (not the live ones) run with the leak census on (`drgnx-check-leaks' merges what they find)."
   (let* ((bin (expand-file-name "bin/drgnx" root))
          (durations (drgnx-check-durations))
          (paths (list "-L" (expand-file-name "harness" root) "-L" (expand-file-name "core" root) "-L" (expand-file-name "wb" root)))
          (run-ert (expand-file-name "harness/run-ert.el" root))
          (results (lambda (name) (and dir (list (concat "DRGNX_TEST_RESULTS=" (expand-file-name (concat name ".json") dir))))))
+         (census (and leaks (list "DRGNX_TEST_LEAKS=1")))
          (job (lambda (name phase kind command &rest props)
                 (append (list :name name :phase phase :command command :timeout (alist-get kind drgnx-check-timeouts)) props)))
          (jobs (list (funcall job "build" 1 'build (list bin "build")))))
@@ -97,7 +119,7 @@ results go (default: none).  TTY (default: tmux is installed): with GUI, the ter
                                (append (list (drgnx-check--emacs) "--batch" "-Q" "--eval" "(setq load-prefer-newer t)")
                                        paths (list "-l" run-ert "-f" "drgnx-run-ert-batch") files)
                                :env (append (list "DRGNX_TEST_SELECTOR=(not (tag :timing))") (funcall results name)
-                                            drgnx-check-unit-env))
+                                            census drgnx-check-unit-env))
                       jobs))
     ;; the unit tests that measure time, alone once the parallel phase is over, in one Emacs (16 tests: an Emacs
     ;; for each of ~140 files would cost more than they take; each shard above runs a file per Emacs)
@@ -105,7 +127,7 @@ results go (default: none).  TTY (default: tmux is installed): with GUI, the ter
                    (append (list (drgnx-check--emacs) "--batch" "-Q" "--eval" "(setq load-prefer-newer t)")
                            paths (list "-l" run-ert "-f" "drgnx-run-ert-batch" (expand-file-name "test/unit" root)))
                    :env (append (list "DRGNX_TEST_SELECTOR=(tag :timing)" "DRGNX_TEST_ONE_PROCESS=1") (funcall results "unit-timing")
-                                drgnx-check-unit-env))
+                                census drgnx-check-unit-env))
           jobs)
     (when gui
       ;; the session test's 110 s default is too tight beside the parallel shards (a session boots slower under load)
@@ -245,37 +267,41 @@ reaps (GitHub's job containers), an ended job's processes stay as zombies and si
 ;;;; Command line
 
 (defun drgnx-check--parse-args (args)
-  "ARGS of `drgnx check' as (:jobs N :shards N :perf BOOL :gui BOOL), or (:error WHY)."
+  "ARGS of `drgnx check' as (:jobs N :shards N :perf BOOL :gui BOOL [:leaks t]), or (:error WHY)."
   (let ((opts (list :jobs 8 :shards 4 :perf t :gui t)) (err nil))
     (while (and args (not err))
       (let ((a (pop args)))
         (pcase a
           ("--no-perf" (setq opts (plist-put opts :perf nil)))
           ("--no-gui" (setq opts (plist-put opts :gui nil)))
+          ("--leaks" (setq opts (plist-put opts :leaks t)))
           ((or "--jobs" "--shards")
            (let ((v (pop args)))
              (if (and v (string-match-p "\\`[1-9][0-9]*\\'" v))
                  (setq opts (plist-put opts (intern (concat ":" (substring a 2))) (string-to-number v)))
                (setq err (format "%s needs a whole number above 0, not %s" a (or v "nothing"))))))
-          (_ (setq err (format "unknown option %s (--no-perf, --no-gui, --jobs N, --shards N)" a))))))
+          (_ (setq err (format "unknown option %s (--no-perf, --no-gui, --leaks, --jobs N, --shards N)" a))))))
     (if err (list :error err) opts)))
 
 (defvar drgnx-check--jobs nil "The jobs of the run in progress (C-c ends those still running).")
 
 (defun drgnx-check-cli-run (args)
-  "`drgnx check [--no-perf] [--no-gui] [--jobs N] [--shards N]'; the exit code (2: bad arguments)."
+  "`drgnx check [--no-perf] [--no-gui] [--leaks] [--jobs N] [--shards N]'; the exit code (2: bad arguments)."
   (let ((o (drgnx-check--parse-args args)))
     (if (plist-get o :error)
         (progn (princ (format "drgnx check: %s\n" (plist-get o :error))) 2)
       (let* ((slots (drgnx-check-gui-slots))
              (dir (expand-file-name (format-time-string "check/%Y%m%d-%H%M%S") (drgnx-state-dir)))
              (jobs (drgnx-check-plan :unit-shards (plist-get o :shards) :live-shards (max 1 (min 3 slots))
-                                     :perf (plist-get o :perf) :gui (plist-get o :gui) :dir dir))
+                                     :perf (plist-get o :perf) :gui (plist-get o :gui) :dir dir
+                                     :leaks (plist-get o :leaks)))
              (_ (princ (format "check: %d jobs, %d GUI at a time (%s MiB free), logs in %s\n"
                                (length jobs) slots (or (drgnx-check--mem-available) "?") dir)))
              (r (drgnx-check-run jobs :dir dir :jobs (plist-get o :jobs) :gui-slots slots :verbose t)))
         (ignore-errors (drgnx-check--save-durations dir))
         (princ (drgnx-check-summary r))
+        ;; the census is report-only: the exit status is the jobs'
+        (when (plist-get o :leaks) (princ (drgnx-check-leaks-report (drgnx-check-leaks dir))))
         (drgnx-check-exit-code r)))))
 
 (defun drgnx-check--end-running ()

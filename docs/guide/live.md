@@ -21,7 +21,7 @@ drgnx starts the browser as a durable job named `live-browser` (Show Job Log, St
 - headless, with `--remote-debugging-address=127.0.0.1 --remote-debugging-port=0`: the debugging port is on this
   machine only, and a random one;
 - with a throwaway profile, `live-profile-<pid>` under drgnx's state directory: none of your logins or cookies. It
-  is deleted when you stop the browser or quit Emacs; a profile left by an Emacs that crashed is cleaned up (its
+  is deleted when you stop the browser, quit Emacs or turn `tools/live` off (Preferences: Modules); a profile left by an Emacs that crashed is cleaned up (its
   browser stopped) the next time a browser for agents starts;
 - capped at 1 GiB of memory (where jobs run under systemd).
 

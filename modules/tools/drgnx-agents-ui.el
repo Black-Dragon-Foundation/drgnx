@@ -610,9 +610,20 @@ name from a local session is rejected without a look at it."
 
 ;;;; The module
 
+(declare-function drgnx-agents-mirror-stop "drgnx-agents-mirror")
+(declare-function drgnx-hub-disconnect "drgnx-hub")
+
+(defun drgnx-agents-ui--teardown ()
+  "Turned off: the hub's sessions are mirrored no more and the hub's event connection closes.  The layer timers (the
+list's tick, the mirror's) end with the module's run; the hooks, the views, the tab, the rules and the commands go
+with the cleanup stack."
+  (when (featurep 'drgnx-agents-mirror) (drgnx-agents-mirror-stop))
+  (when (featurep 'drgnx-hub) (drgnx-hub-disconnect)))
+
 (drgnx-module-define 'tools/agents
                      :doc "Agents: sessions over ACP in the right dock's Agents tab, durable jobs, edit review."
                      :stage 'startup :requires '(core/workbench)
+                     :teardown #'drgnx-agents-ui--teardown
                      :setup
                      (lambda ()
                        ;; transcripts: rows patched in place, drawn only while shown
