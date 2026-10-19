@@ -85,6 +85,35 @@ the files past it show no count."
   "Whether DIR is a remote (TRAMP) name — by its syntax alone: no file handler runs, nothing connects."
   (and (stringp dir) (string-match-p "\\`/[^/|:]+[:|]" dir)))
 
+;;;; For the panes (drgnx-cockpit.el and its parts; the model itself never calls these)
+
+(declare-function drgnx-state-frames "drgnx-state")
+(declare-function drgnx-state-windows "drgnx-state")
+
+(defun drgnx-cockpit-shown-p (buffer)
+  "Non-nil if a window of a visible frame shows BUFFER, as the workbench state store recorded it
+\(`drgnx-state-windows'): a pane in its home or the buffer in any window.  The panes run their checks and watches
+only then.  Nil without the store."
+  (and (buffer-live-p buffer) (fboundp 'drgnx-state-frames)
+       (let ((found nil))
+         (dolist (f (drgnx-state-frames))
+           (when (and (not found) (eq (frame-visible-p f) t))
+             (dolist (w (drgnx-state-windows f))
+               (when (eq (window-buffer w) buffer) (setq found t)))))
+         found)))
+
+(defvar drgnx-cockpit--row-generation 0 "Counts the row texts the cockpit's views made: each row's signature.")
+
+(defun drgnx-cockpit-row-cell (old key sig text)
+  "KEY's row of a cockpit view: OLD's cell for KEY (OLD a hash KEY → (SIG GENERATION . TEXT), or nil) when its SIG
+is SIG, faces included (`equal-including-properties'); else (SIG GENERATION . TEXT) with a new GENERATION, TEXT a
+string or a function making it (called only then).  The view's signature of the row is its GENERATION, so a row is
+drawn again only when what it shows changed."
+  (let ((cell (and old (gethash key old))))
+    (if (and cell (equal-including-properties (car cell) sig)) cell
+      (cons sig (cons (setq drgnx-cockpit--row-generation (1+ drgnx-cockpit--row-generation))
+                      (if (functionp text) (funcall text) text))))))
+
 ;;;; Plan files the tracker has not scanned (read, never written)
 
 (defvar drgnx-cockpit--plan-cache (make-hash-table :test #'equal)

@@ -775,6 +775,11 @@ timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run
   them and belong to `:core`: `ai-load-keys` (once per daemon, after `drgnx open`), `ai-first-window` (the idle look at
   the local AI runner) and a finished check's 0.1 s `(agent-check-finish . PROC)`, whose process is already dead."
 
+The Work cockpit's panes start their checks on the workbench state store's `pane-shown` and cancel them on
+`pane-hidden` (lane `now`), so a hidden pane keeps no timer: the Work graph's `(cockpit-check . BUFFER)`, owned by its
+buffer, every `drgnx-cockpit-check-interval`. Their draws are their views' timers. `tools/cockpit` owns
+`cockpit-waiting` (its setup's: the status bar's count of what waits on you, every `drgnx-cockpit-check-interval`).
+
 `core/drgnx-platform.el` (window-manager calls) owns its timers as `:core`: each belongs to one call that ends itself
 (its answer, its error) and cancels the timer, so no module's end or process's death may drop one and leave the
 callback uncalled. They are keyed per call: `(platform-call . PROCESS)` (the tool's time limit),
@@ -1270,6 +1275,14 @@ text; `:appended` the rows added; `:removed` the rows deleted. Without VIEW it s
   signature is the vector `[(sxhash-equal LINE) DEPTH FOLD]` (a database's strings are never `eq`, a fixnum is).
   Folding, the filter and a scan's sentinel only touch the view; point and window start stay on their row.
   `drgnx-work-ui-buffer` draws a new buffer at once and only marks an existing one.
+
+- **The Work graph** (`work-graph`, `modules/tools/drgnx-cockpit.el`; DELAY `drgnx-cockpit-redraw-delay`, `equal`
+  keys): hub events, agent sessions, scans and themes only touch the view; SYNC compares a cheap key before it builds
+  the model. Outline rows are the lines keyed by node, `(:node ID N)`; the drawing's rows are its head lines and its
+  bands of image slices, `(:head N)` and `(:band N)`. Each row's signature is a generation that moves only when its
+  text changed (`drgnx-cockpit-row-cell`). A drawing whose boxes did not move changes band images in place and marks
+  nothing. Its check timer runs only while its pane shows (the store's `pane-shown` and `pane-hidden`).
+  [cockpit.md](cockpit.md#redraws) has the rest.
 
 ### The invariant
 

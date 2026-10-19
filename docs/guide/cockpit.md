@@ -248,9 +248,8 @@ oldest open question, so it stays in view after its line scrolls away. An answer
 The timeline's head counts escalations, `ask_user` questions and ask cards. The status bar's "waiting on you" adds
 the questions no job holds (`drgnx-cockpit-waiting-count`); an ask card and a job's message to you are its jobs
 segment's ⚑, so each shows once. Permissions show in the graph, and their
-own count is the status bar's. While the graph or a feed pane is open, its check (every
-`drgnx-cockpit-check-interval`) tells the status bar when the number changed, so it moves even when another process
-asked.
+own count is the status bar's. While the cockpit module runs, a look every `drgnx-cockpit-check-interval` tells the
+status bar when the number changed, so it moves even when another process asked, whatever shows.
 
 **Answer Question…** (`cockpit-answer`, `A` in the graph, What happened and the timeline) answers the question
 under point: a line or a chip, or the graph node on this line or selected. Otherwise it answers the agent of What
@@ -301,7 +300,9 @@ The graph never asks anything, and it never blocks typing. It redraws when one o
 - the work tracker finishes a scan;
 - a theme is enabled (the drawing's colours come from faces);
 - a check every `drgnx-cockpit-check-interval` (3 s) finds that another process wrote the store, for example an
-  outside agent's MCP server or another Emacs. The check is one query, and it runs only while the graph shows.
+  outside agent's MCP server or another Emacs. The check is one query, and it runs only while the graph's pane shows:
+  it starts when the pane shows and stops when it is hidden;
+- its pane shows again, or its window changes size (the drawing may now fit, or no longer).
 
 However many events come, at most one redraw runs per `drgnx-cockpit-redraw-delay` (0.5 s). A redraw first
 compares a cheap key, which costs about 20 µs. The key covers the store's version and change count, what the graph
@@ -309,12 +310,13 @@ shows of each agent session (not its transcript, so an agent that streams costs 
 worktrees, the filter, the options, the font, and the windows. When the key is the same, the redraw ends there.
 
 Otherwise it reads the store, and it draws only what changed:
-- In the outline, an unchanged line stays, and so does your place in it.
+- In the outline, each line belongs to its node: only the lines that changed are drawn again, and your place stays
+  on its line.
 - In the drawing, while no box moves, the buffer's text stays and only the images of the bands that changed are
   drawn again. Their old pixels are released first.
 
-A hidden graph does nothing: it remembers that something changed and catches up when it shows. Remote (TRAMP)
-folders are never touched.
+A hidden graph does nothing and keeps no timer: an event only notes that something changed, and the graph catches
+up when it shows. Remote (TRAMP) folders are never touched.
 
 What happened and the timeline follow the same events, the same check and the same delay, only while one shows.
 When the store did not change, an update ends after one query. Otherwise they only add: new lines go under What

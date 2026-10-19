@@ -41,6 +41,35 @@
   (concat "# M99 — the plan\n\n**Spec:** `docs/specs/s.md`\n\n## Tasks\n\n"
           (mapconcat (lambda (n) (format "### Task %d: task %d\n\n- [ ] Step 1: do %d\n\n" n n n)) (number-sequence 1 6) "")))
 
+(declare-function drgnx-state-sync "drgnx-state")
+
+(defun drgnx-cockpit-fixture-show-pane (kind buffer home)
+  "Show BUFFER as pane KIND in its HOME (`left', `right', `bottom' or `editor') of the selected frame, marked as the
+workbench marks it, and let the state store see it (`drgnx-state-sync'; run it inside `drgnx-test-with-state').
+Returns the window."
+  (let ((w (if (eq home 'editor)
+               (let ((w (selected-window)))
+                 (set-window-buffer w buffer)
+                 (set-window-parameter w 'drgnx-layouts-pane kind)
+                 w)
+             (let ((area (pcase home ('right 'right) ('bottom 'panel))))
+               (when area (set-frame-parameter nil 'drgnx-wb-areas (list (list area :tab kind))))
+               (display-buffer-in-side-window
+                buffer `((side . ,home) (slot . 0)
+                         (window-parameters . ,(if area `((drgnx-role . ,area)) `((drgnx-role . dock) (drgnx-section . ,kind))))))))))
+    (drgnx-state-sync)
+    w))
+
+(defun drgnx-cockpit-fixture-hide-pane (window)
+  "Hide the pane in WINDOW (`drgnx-cockpit-fixture-show-pane'): a side window goes, an editor window shows *scratch*;
+the state store sees it."
+  (if (window-parameter window 'window-side)
+      (let ((ignore-window-parameters t)) (delete-window window))
+    (set-window-parameter window 'drgnx-layouts-pane nil)
+    (set-window-buffer window (get-buffer-create "*scratch*")))
+  (set-frame-parameter nil 'drgnx-wb-areas nil)
+  (drgnx-state-sync))
+
 (defun drgnx-cockpit-fixture-wait (pred &optional secs)
   "Wait (processes run) until PRED is non-nil, at most SECS (10): PRED's value."
   (let ((deadline (+ (float-time) (or secs 10))))

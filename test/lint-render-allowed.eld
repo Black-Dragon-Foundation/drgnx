@@ -14,8 +14,6 @@
  (:file "modules/tools/drgnx-cockpit-cards.el" :in drgnx-cockpit-cards--put :what erase-buffer :kind migrate :why "a card is put whole" :until "R7 (store Tasks 23-25)")
  (:file "modules/tools/drgnx-cockpit-edits.el" :in drgnx-cockpit-edits--show-note :what erase-buffer :kind migrate :why "the edits note is replaced whole" :until "R7 (store Tasks 23-25)")
  (:file "modules/tools/drgnx-cockpit-edits.el" :in drgnx-cockpit-edits--show-list :what erase-buffer :kind migrate :why "the edits list is replaced whole" :until "R7 (store Tasks 23-25)")
- (:file "modules/tools/drgnx-cockpit.el" :in drgnx-cockpit--draw-outline :what erase-buffer :kind migrate :why "the cockpit outline pane is drawn whole" :until "R7 (store Tasks 23-25)")
- (:file "modules/tools/drgnx-cockpit.el" :in drgnx-cockpit--draw-svg :what erase-buffer :kind migrate :why "the cockpit graph pane is drawn whole" :until "R7 (store Tasks 23-25)")
  (:file "modules/tools/drgnx-live.el" :in drgnx-live--render-notes :what delete-region :kind migrate :why "the notes below the live page are cut and redrawn on a state change (no render task owns this file: the manager assigns one)" :until "unassigned (live browser notes)")
  (:file "wb/drgnx-explorer.el" :in drgnx-explorer--render :what erase-buffer :kind listing :why "Explorer is styled by jit-lock and rebuilt on a root change (spec non-goal)")
  (:file "wb/drgnx-explorer.el" :in drgnx-explorer--find-apply :what erase-buffer :kind listing :why "the find-in-tree result is the same listing, built whole (spec non-goal)")

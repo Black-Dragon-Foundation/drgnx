@@ -263,8 +263,11 @@ outline. `modules/tools/drgnx-cockpit.el` holds the pane, the redraws and the co
 
 ### Redraws
 
-`drgnx-cockpit-schedule` keeps one owned one-shot timer, and only while the graph is visible. A tick that finds
-the graph hidden only marks it stale; `:on-show` catches up. `drgnx-cockpit-graph-redraw` works in four steps:
+The graph's buffer is a view ([core.md](core.md#views-wbdrgnx-viewel), type `work-graph`, `equal` keys, DELAY
+`drgnx-cockpit-redraw-delay`). `drgnx-cockpit-schedule` only touches it: the view draws at most once per DELAY, only
+while the buffer shows (hidden, its first draw counts a stale skip and its marks arm nothing until it shows), and its
+SYNC, `drgnx-cockpit--sync`, runs `drgnx-cockpit--update` in four steps. `drgnx-cockpit-graph-redraw` (commands, `g`)
+runs the same steps and draws at once (`drgnx-view-draw-now`).
 
 1. **The key** (about 20 µs, one query):
    - `PRAGMA data_version` (moves when another connection commits) and `total_changes()` (this Emacs's writes);
@@ -277,19 +280,34 @@ the graph hidden only marks it stale; `:on-show` catches up. `drgnx-cockpit-grap
    The same key: return.
 2. **The model**, built only when the store part, the filter or the generation changed.
 3. **The layout**, cached by `(model metrics generation)`.
-4. **The signature**: the model, the mode and the metrics. It decides whether anything is drawn.
+4. **The signature**: the model, the mode and the metrics. It decides whether anything is marked.
 
-How the views change:
-- The outline is patched line by line.
+The rows (`drgnx-cockpit--cells`, KEY → `(SIG GENERATION . TEXT)`, made by `drgnx-cockpit-row-cell` in
+`core/drgnx-cockpit-model.el`): a row's view signature is its GENERATION, new only when its text changed (faces
+included), and `drgnx-view-sync-rows` draws only those rows.
+- The outline: one row per line, keyed `(:node ID N)` (the Nth line of node ID: its label, its needs and blocks),
+  `(:line TEXT N)` for a line of no node (the summary, `AGENTS`), `(:filter)`. A store change redraws the lines that
+  changed; a window stays on its row.
 - The drawing redraws in place while its frame (head lines, bands, every box's place) is the same: only the bands
-  whose SVG changed get it, through `image-property`, with `image-flush` on the old pixels first.
-- Otherwise the buffer is rebuilt, and the old band images are flushed except one equal to a new one (the image
-  cache serves it).
-- TAB re-renders only the bands the old and the new focus stroke reach.
+  whose SVG changed get it, through `image-property`, with `image-flush` on the old pixels first; no row is marked.
+- Otherwise its rows are the head lines `(:head N)` and the bands `(:band N)` (a column of image slices with the hot
+  spots' keymap), every band a new row, and the old band images are flushed except one equal to a new one (the image
+  cache serves it). The mode switching between the outline and the drawing replaces every row.
+- TAB re-renders only the bands the old and the new focus stroke reach; point goes to the band's row
+  (`drgnx-view-row-start`).
 
 Owners:
-- The buffer owns its hooks (hub events, agent changes, tracker scans, `enable-theme-functions`; all named) and
-  the repeating `drgnx-cockpit--check` timer. Its `kill-buffer-hook` removes them and flushes its images.
+- The buffer owns its hooks (hub events, agent changes, tracker scans, `enable-theme-functions`; all named), its
+  view's timers and the check. Its `kill-buffer-hook` removes the hooks and flushes its images.
+- **While the pane shows.** tools/cockpit's setup subscribes `drgnx-cockpit--pane-shown` and `--pane-hidden` to the
+  workbench state store's `pane-shown` and `pane-hidden` (lane `now`), and `--pane-resized` to `pane-resized` (lane
+  `idle`). For the kind `work-graph` they call `drgnx-cockpit--follow`: while a window the store recorded on a visible
+  frame shows the buffer (`drgnx-cockpit-shown-p`), the repeating `(cockpit-check . BUFFER)` (owned by the buffer,
+  every `drgnx-cockpit-check-interval`) looks for another process's writes and silent worktrees, and the view is
+  touched to catch up; otherwise the check is cancelled. A resize touches the view (the drawing may now fit). Hidden,
+  the graph keeps no timer.
+- `cockpit-waiting` (owned by tools/cockpit's run, every `drgnx-cockpit-check-interval`) tells the status bar of a new
+  waiting count (`drgnx-cockpit-feed-tell-statusbar`), whatever shows.
 - `drgnx-cockpit-graph--encoded` (the SVG form of a text) is emptied at 4,096 texts.
 
 ### Cost
@@ -318,8 +336,11 @@ why a change touches as few bands as it can.
 - that every colour in the drawing comes from a face;
 - the outline in terminals and small windows;
 - clicks and `RET`, keyboard selection in column order;
-- one redraw per burst of events, none when nothing changed and no model built then, none while hidden (a pending
-  timer included);
+- one redraw per burst of events, none when nothing changed and no model built then; a store change draws only the
+  rows that changed;
+- with a fresh state store (`drgnx-test-with-state`, the pane shown with `drgnx-cockpit-fixture-show-pane`): a
+  hidden pane keeps no timer and draws nothing (a stale skip, no model built), and showing it starts the check
+  again and draws what changed meanwhile;
 - options and fonts reaching the drawing, old band images flushed (and kept when drawn the same);
 - writes of another connection caught by the check;
 - an agent that streams builds no model (a status change does, and so does showing done jobs);
