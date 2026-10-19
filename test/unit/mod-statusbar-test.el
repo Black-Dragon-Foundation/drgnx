@@ -1255,6 +1255,7 @@ own cache), evil's state tag, other entries of `mode-line-misc-info'; each chang
   (let ((drgnx-statusbar-test--refreshing t)) (apply fn args)))
 
 (ert-deftest drgnx-statusbar/refresh-is-debounced ()
+  :tags '(:timing)                                      ; wall-clock sleeps around a raw timer: a quiet machine
   (require 'drgnx-agents)
   (drgnx-statusbar-test--with
     (drgnx-statusbar-test--state
