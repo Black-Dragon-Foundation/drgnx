@@ -53,7 +53,7 @@ visible, without parent."
   (let* ((dir (make-temp-file "drgnx-frames" t)) (drgnx-persist-file (expand-file-name "s.eld" dir))
          (drgnx-persist--saved-at-exit nil))
     (unwind-protect
-        (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t)))
+        (cl-letf (((symbol-function 'drgnx-state-frame-kind) (lambda (f) (and (framep f) 'gui))))   ; batch's frame, as a window
           (set-frame-parameter nil 'client 'kx-proc)
           (drgnx-persist--before-client-delete 'kx-proc)
           (should (file-exists-p drgnx-persist-file))

@@ -261,6 +261,15 @@ at exit (another Emacs holds the file for more than a second, the disk is full) 
 Save / Restore Workbench Layout are in the palette. Only graphical windows save and restore — a
 batch run never writes your state.
 
+Which windows are saved is what the workbench state store says: its visible graphical frames, the main window first
+(a terminal window and a child frame are never saved). **The sizes saved are the ones you chose**: a dock or the
+panel is saved at the size you set (by dragging it, or by a restore), not at the one a popup, the window manager or a
+layout squeezed it to; a pane you never sized is saved at the size it has. The panel is saved at its own size even
+while a popup borrows its window. A restore writes the sizes and the sidebar view back as chosen, so they win over a
+size you set earlier in this session. The file format is the same as before; files saved by earlier versions restore
+as they did. Restore Workbench Layout typed in a terminal window, while a graphical window is open, restores into
+that window and says so in the echo area; with none open, it says layouts belong to graphical windows.
+
 **Terminal windows** (`emacs -nw`, `emacsclient -t`) open with the default layout for their size
 ([terminal.md](terminal.md)) and neither save nor restore their own layout: a terminal session never overwrites the
 layout of your desktop windows. Save Workbench Layout, run in a terminal window, does nothing and says "Layouts are
