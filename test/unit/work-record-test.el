@@ -4,6 +4,7 @@
 (require 'drgnx-agents)
 (require 'drgnx-jobs)
 (require 'drgnx-projects)
+(require 'drgnx-sandbox-vc)
 
 (defun drgnx-work-rec--git (dir &rest args)
   (with-temp-buffer
@@ -261,3 +262,43 @@
       (should-not (drgnx-work-rec--titles "task:/p.md#33")))))
 
 ;;; work-record-test.el ends here
+
+;;;; A session with a work source (a sandboxed job's task): the main repository is read, when the job says so
+
+(ert-deftest drgnx-work/source-function-defers-collection ()
+  (drgnx-work-rec--with repo
+    (let* ((folder (concat root "task/")) (a (drgnx-work-rec--session "task:/p.md#20" folder))
+           (drgnx-work-source-functions (list (lambda (_s) (list :repo repo :ref "main")))))
+      (make-directory folder t)                                       ; the session's folder is no repository
+      (drgnx-work--agent-task a 'start)
+      (drgnx-work--agent-task a 'turn-start)
+      (drgnx-work-rec--commit repo "the task's work")
+      (drgnx-work--agent-task a 'turn-end)
+      (drgnx-work-rec--pump)
+      (should-not (drgnx-work-rec--titles "task:/p.md#20"))           ; turn-end collects nothing
+      (should (= 1 (length (drgnx-work-collect-now a))))              ; the job collects
+      (should (equal (drgnx-work-rec--titles "task:/p.md#20") '("the task's work")))
+      (should-not (drgnx-work-collect-now a)))))                      ; none twice
+
+(ert-deftest drgnx-work/collect-now-reads-the-main-repo ()
+  (drgnx-work-rec--with repo
+    (let* ((folder (concat root "task/")) (a (drgnx-work-rec--session "task:/p.md#21" folder))
+           (drgnx-work-source-functions (list (lambda (_s) (list :repo repo :ref "main"))))
+           (drgnx-sandbox-vc--cache nil) (drgnx-sandbox-vc--added nil) (vc-ignore-dir-regexp vc-ignore-dir-regexp))
+      (drgnx-work-rec--git repo "clone" "-q" repo folder)
+      (drgnx-sandbox-vc-register folder)
+      (drgnx-sandbox-vc-mode 1)
+      (unwind-protect
+          (progn
+            (drgnx-work--agent-task a 'start)                         ; no git runs in the guarded folder
+            (drgnx-work--agent-task a 'turn-start)
+            (let ((default-directory folder))                         ; what the agent commits in its copy is not read
+              (should-error (call-process "git" nil nil nil "log") :type 'drgnx-sandbox-guarded))
+            (drgnx-work-rec--commit repo "arrived in the main repository")
+            (drgnx-work--agent-task a 'turn-end)
+            (should (= 1 (length (drgnx-work-collect-now a))))
+            (should (equal (drgnx-work-rec--titles "task:/p.md#21") '("arrived in the main repository")))
+            ;; a tracker call on the folder itself says nothing instead of failing
+            (should-not (drgnx-work--git folder "rev-parse" "HEAD")))
+        (drgnx-sandbox-vc-unregister folder)
+        (drgnx-sandbox-vc-mode -1)))))

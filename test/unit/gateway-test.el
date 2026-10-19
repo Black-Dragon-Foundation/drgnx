@@ -50,7 +50,9 @@ the gateway told."
                                        hang-up-after (wait 8) extra)
   "Send a request to the gateway; (:status N :head S :body S :first SECS :closed BOOL) once it closed (or WAIT s)."
   (let* ((got "") (first nil) (t0 (float-time)) (closed nil)
-         (c (open-network-stream "gw-test" nil "127.0.0.1" port :coding 'binary))
+         (c (if (stringp port)          ; a socket path: the per-session Unix socket
+                (make-network-process :name "gw-test" :family 'local :service port :coding 'binary :noquery t)
+              (open-network-stream "gw-test" nil "127.0.0.1" port :coding 'binary)))
          (bytes (if (multibyte-string-p body) (encode-coding-string body 'utf-8) body)))
     (set-process-sentinel c (lambda (_p _e) (setq closed t)))
     (set-process-filter c (lambda (p s)
@@ -341,5 +343,65 @@ the gateway told."
       (let ((config (drgnx-gw-test--config root)))
         (should (string-match-p "^header = \"accept: aX-Evil: 1bcd\"$" config))
         (should-not (string-match-p "[\000-\011\013-\037\177]" config))))))
+
+;;;; The per-session Unix socket
+
+(defun drgnx-gw-test--sock (root) (concat root "gw.sock"))
+
+(ert-deftest drgnx-gateway-socket/token-checked ()
+  (drgnx-gw-test--with `((:path "/api/v1/messages" :chunks ((0 . ,drgnx-gw-test--sse)))) '()
+    (let ((sock (drgnx-gw-test--sock root)) (token (drgnx-gateway-register '(:chain ((openrouter . "m1"))))))
+      (drgnx-gateway-listen-socket sock)
+      (should (= (plist-get (drgnx-gw-test--request sock) :status) 401))
+      (should (= (plist-get (drgnx-gw-test--request sock :token "not-a-token") :status) 401))
+      (should-not (string-search "sk-or-test" (drgnx-gw-test--log or-log)))
+      (let ((r (drgnx-gw-test--request sock :token token)))
+        (should (= (plist-get r :status) 200))
+        (should (equal (plist-get r :body) drgnx-gw-test--sse)))
+      ;; an unregistered token stops working at once
+      (drgnx-gateway-unregister token)
+      (should (= (plist-get (drgnx-gw-test--request sock :token token) :status) 401))
+      ;; and the socket is private
+      (should (= (logand #o777 (file-modes sock)) #o600)))))
+
+(ert-deftest drgnx-gateway-socket/path-allowlist-applies ()
+  (drgnx-gw-test--with '() '()
+    (let ((sock (drgnx-gw-test--sock root)) (token (drgnx-gateway-register '(:chain ((openrouter . nil))))))
+      (drgnx-gateway-listen-socket sock)
+      (dolist (path '("/v1/chat/completions" "/v1/messages/../../etc" "/admin"))
+        (should (= (plist-get (drgnx-gw-test--request sock :token token :path path) :status) 404)))
+      (should-not (string-search "sk-or-test" (drgnx-gw-test--log or-log))))))
+
+(ert-deftest drgnx-gateway-socket/same-answers-as-tcp ()
+  (drgnx-gw-test--with `((:path "/api/v1/messages" :chunks ((0 . ,drgnx-gw-test--sse)))) '()
+    (let ((sock (drgnx-gw-test--sock root)) (token (drgnx-gateway-register '(:chain ((openrouter . "m1"))))))
+      (drgnx-gateway-listen-socket sock)
+      (dolist (args `((:token ,token) (:token "bad") nil (:token ,token :path "/nope")))
+        (let ((tcp (apply #'drgnx-gw-test--request port args)) (unix (apply #'drgnx-gw-test--request sock args)))
+          (should (equal (plist-get tcp :status) (plist-get unix :status)))
+          (should (equal (plist-get tcp :body) (plist-get unix :body))))))))
+
+(ert-deftest drgnx-gateway-socket/closed-with-the-session ()
+  (drgnx-gw-test--with '((:path "/api/v1/messages" :chunks ((0 . "data: {}\n\n") (5 . "data: {}\n\n")))) '()
+    (let* ((sock (drgnx-gw-test--sock root)) (other (concat root "gw2.sock"))
+           (token (drgnx-gateway-register '(:chain ((openrouter . "m1"))))) (closed nil))
+      (drgnx-gateway-listen-socket sock)
+      (drgnx-gateway-listen-socket other)
+      ;; a request in flight when the session ends is cut
+      (let ((c (make-network-process :name "gw-test" :family 'local :service sock :coding 'binary :noquery t
+                                     :sentinel (lambda (_p _e) (setq closed t)))))
+        (process-send-string c (format "POST /v1/messages HTTP/1.1\r\nAuthorization: Bearer %s\r\nContent-Length: 2\r\n\r\n{}" token))
+        (drgnx-gw-test--settle (lambda () (seq-find (lambda (p) (string-prefix-p "drgnx-gw-curl" (process-name p))) (process-list))))
+        (drgnx-gateway-close-socket sock)
+        (should (drgnx-gw-test--settle (lambda () closed)))
+        (should-not (seq-find (lambda (p) (string-prefix-p "drgnx-gw-curl" (process-name p))) (process-list))))
+      (should-not (file-exists-p sock))
+      (should-error (make-network-process :name "gw-test" :family 'local :service sock :noquery t))
+      ;; closing a socket twice is harmless; the other session's socket is untouched
+      (drgnx-gateway-close-socket sock)
+      (should (= (plist-get (drgnx-gw-test--request other :token "bad") :status) 401))
+      ;; stopping the gateway closes what is left
+      (drgnx-gateway-stop)
+      (should-not (file-exists-p other)))))
 
 ;;; gateway-test.el ends here

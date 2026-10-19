@@ -47,11 +47,25 @@ level, so a sub-directory never makes an index of its own; an error when PATH is
   (let ((hits (drgnx-search root query :k (max 1 (min drgnx-search-mcp-max-k (or k drgnx-search-mcp-default-k))))))
     (cons (mapcar #'drgnx-search-mcp--line hits) drgnx-search-last-notice)))
 
+(defun drgnx-search-mcp--pinned-root (root path)
+  "ROOT, for a server pinned to it (DRGNX_SEARCH_PINNED, set by the hub for a sandboxed agent): PATH, when given,
+must name ROOT or a place inside it (lexically), or it is an error.  ROOT is searched whatever PATH names, and
+nothing runs where PATH points: no git, no other project's index."
+  (let ((root (directory-file-name (expand-file-name root))))
+    (when (and (stringp path) (not (string-empty-p path)))
+      (let ((p (directory-file-name (expand-file-name path root))))
+        (unless (or (string= p root) (string-prefix-p (file-name-as-directory root) p))
+          (error "%s is outside %s, the one project this server searches" path root))))
+    root))
+
 (defun drgnx-search-mcp--call (default-root args)
-  "The `search' tool for ARGS (a plist: :query, :k, :path), the path defaulting to DEFAULT-ROOT."
+  "The `search' tool for ARGS (a plist: :query, :k, :path), the path defaulting to DEFAULT-ROOT.  Pinned
+\(DRGNX_SEARCH_PINNED non-empty): DEFAULT-ROOT alone (`drgnx-search-mcp--pinned-root')."
   (let* ((query (string-trim (or (plist-get args :query) "")))
          (path (plist-get args :path))
-         (root (drgnx-search-mcp--project (if (and (stringp path) (not (string-empty-p path))) path default-root)))
+         (pinned (let ((v (getenv "DRGNX_SEARCH_PINNED"))) (and v (not (string-empty-p v)))))
+         (root (if pinned (drgnx-search-mcp--pinned-root default-root path)
+                 (drgnx-search-mcp--project (if (and (stringp path) (not (string-empty-p path))) path default-root))))
          (k (plist-get args :k)))
     (when (string-empty-p query) (error "query is required: ask in words what the code does"))
     (when (and k (not (integerp k)))

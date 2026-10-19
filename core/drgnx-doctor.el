@@ -145,6 +145,36 @@ its package read from its package.json, never run), nil when none is installed, 
           (t (list 'ok (format "%s %s (%s)" (plist-get a :name) (plist-get a :version) (abbreviate-file-name (plist-get a :program)))
                    nil)))))
 
+(declare-function drgnx-sandbox-check "drgnx-sandbox")
+(defvar drgnx-sandbox-memory-max)
+
+(defun drgnx-doctor--sandbox ()
+  "The fact of the `job-sandbox' check: `drgnx-sandbox-check' (its probes take at most a few seconds) with
+:memory-max, `drgnx-sandbox-memory-max', and :memory-max-default t when no init file was loaded (`drgnx doctor'
+runs with -Q, so it sees the default, not the user's setting); or (:error MESSAGE)."
+  (condition-case err
+      (progn (require 'drgnx-sandbox)
+             (append (drgnx-sandbox-check)
+                     (list :memory-max drgnx-sandbox-memory-max :memory-max-default (null user-init-file))))
+    (error (list :error (error-message-string err)))))
+
+(defun drgnx-doctor--job-sandbox-check (s)
+  "The `job-sandbox' check of the fact S (`drgnx-doctor--sandbox')."
+  (let ((program (if (eq (plist-get s :backend) 'seatbelt) "sandbox-exec" "bwrap")))
+    (cond ((null s) (list 'info "not checked" nil))
+          ((plist-get s :error) (list 'warn (format "could not check: %s" (plist-get s :error)) "run drgnx doctor again"))
+          ((plist-get s :ok)
+           (list 'ok (concat program (if (plist-get s :version) (concat " " (plist-get s :version)) "") " ok"
+                             (cond ((not (eq (plist-get s :backend) 'bwrap)) "")
+                                   ((null (plist-get s :memory-max)) "; no memory cap (drgnx-sandbox-memory-max is nil)")
+                                   ((plist-get s :scope)
+                                    (format "; memory cap %s per agent%s" (plist-get s :memory-max)
+                                            (if (plist-get s :memory-max-default) " by default (drgnx-sandbox-memory-max)" "")))
+                                   (t "; no memory cap (no systemd user manager answers)")))
+                 nil))
+          (t (list 'warn (format "jobs' agents cannot be sandboxed, so jobs do not start: %s" (plist-get s :reason))
+                   (plist-get s :fix))))))
+
 (defvar drgnx-macos-app-dir)
 
 (defconst drgnx-doctor--brew-programs '("/opt/homebrew/bin/brew" "/usr/local/bin/brew")
@@ -326,6 +356,7 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
            :ai-keys (let ((k (getenv "OPENROUTER_API_KEY"))) (and k (not (string-empty-p k)) '(openrouter)))
            :ai-complete (ignore-errors (require 'drgnx-ai) (cdr (car (drgnx-ai-role 'complete))))
            :claude-adapter (drgnx-doctor--claude-adapter)
+           :sandbox (drgnx-doctor--sandbox)
            :vram (ignore-errors (require 'drgnx-ai-probe) (drgnx-ai-vram))
            :trust-guards (drgnx-doctor--trust-guards)
            :config-files (drgnx-doctor--config-files)
@@ -460,6 +491,10 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
                                                      (abbreviate-file-name (drgnx-user-dir))
                                                      (directory-file-name (plist-get c :dir)))))
                                       (t (list 'ok "init/ has no local changes" nil))))))
+
+(drgnx-doctor-define 'job-sandbox :group "Agents"
+                     :doc "Jobs' agents run in a sandbox: bubblewrap (bwrap) on Linux, sandbox-exec on macOS"
+                     :check (lambda (f) (drgnx-doctor--job-sandbox-check (plist-get f :sandbox))))
 
 (drgnx-doctor-define 'modules :group "drgnx" :doc "Modules that failed or wait for packages (from the last session)"
                      :check (lambda (f)

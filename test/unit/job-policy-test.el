@@ -38,7 +38,9 @@
 
 (defun drgnx-job-policy-test--agent (wt job &optional no-job)
   "A mock session working on J#1 in WT (or, NO-JOB, a plain session there), idle."
-  (let ((s (if no-job (drgnx-agents-start "mock" wt) (drgnx-agents-start "mock" wt (concat job "#1") job))))
+  (let ((s (if no-job (drgnx-agents-start "mock" wt)
+             (cl-letf (((symbol-function 'drgnx-agents-job-safe-p) #'always))   ; the mock is no Claude: never job-safe
+               (drgnx-agents-start "mock" wt (concat job "#1") job)))))
     (unless no-job (drgnx-coord-force-status (concat job "#1") "running" (drgnx-agent-session-id s)))
     (drgnx-job-policy-test--wait (lambda () (eq (drgnx-agent-session-status s) 'idle)))
     s))

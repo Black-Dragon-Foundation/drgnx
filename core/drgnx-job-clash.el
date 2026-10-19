@@ -218,17 +218,19 @@ advisory.  The diffs are looked at once per branch head."
 
 (defun drgnx-job-clash--start-reviewer (job card &optional asks)
   "A reviewer for clash CARD of JOB, in the job's worktree (the review policy): role `review', `review-long' for a
-long clash when it has a route."
+long clash when it has a route.  On a profile that is not job-safe none starts (nil): the job gets a card that says
+why (`drgnx-job--refuse-unsafe'), and the try counts as a start, so the clash card says `:reviewer-gone' in the end."
   (let* ((long (equal (plist-get (plist-get (drgnx-coord-card card) :data) :size) "long"))
-         (profile (car (drgnx-job-route (if (and long (alist-get 'review-long (drgnx-job--routes))) 'review-long 'review))))
-         (s (drgnx-agents-start profile (drgnx-job--job-tree job) nil job)) (sid (drgnx-agent-session-id s)))
+         (profile (car (drgnx-job-route (if (and long (alist-get 'review-long (drgnx-job--routes))) 'review-long 'review)))))
     (puthash (cons job card) (1+ (gethash (cons job card) drgnx-job-clash--starts 0)) drgnx-job-clash--starts)
-    (puthash sid (list :clash card) drgnx-job--reviewers)
-    (drgnx-coord-card-set card :data (plist-put (plist-put (copy-sequence (plist-get (drgnx-coord-card card) :data)) :reviewer sid)   ; Discuss opens its transcript
-                                                :reviewer-gone nil))
-    (puthash sid (drgnx-job-clash--prompt card asks) drgnx-job--prompts)
-    (drgnx-job--session-changed s)
-    s))
+    (unless (drgnx-job--refuse-unsafe job nil profile (list :clash card))
+      (let* ((s (drgnx-agents-start profile (drgnx-job--job-tree job) nil job)) (sid (drgnx-agent-session-id s)))
+        (puthash sid (list :clash card) drgnx-job--reviewers)
+        (drgnx-coord-card-set card :data (plist-put (plist-put (copy-sequence (plist-get (drgnx-coord-card card) :data)) :reviewer sid)   ; Discuss opens its transcript
+                                                    :reviewer-gone nil))
+        (puthash sid (drgnx-job-clash--prompt card asks) drgnx-job--prompts)
+        (drgnx-job--session-changed s)
+        s))))
 
 (defun drgnx-job-clash--ensure-reviewers (job)
   "Every open clash of JOB without a recommendation has a reviewer: started at most twice per hub run (once, then

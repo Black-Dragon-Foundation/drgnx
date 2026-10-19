@@ -5,9 +5,10 @@ process from reaching what the user can reach: the hub's socket (and with it the
 repositories, the Emacs server, D-Bus. So each job agent's **whole process tree** runs inside a boundary the kernel
 enforces: bubblewrap on Linux, Seatbelt on macOS. The agent's command line is wrapped; everything it starts is inside.
 
-This page describes `core/drgnx-sandbox.el`: the spec, what it refuses, and the bubblewrap command line it becomes.
-The code is pure. It builds data and an argv and runs nothing; the tests assert the argv element by element, and two
-smoke tests run it under the real bwrap where bwrap can run (`test/unit/sandbox-test.el`).
+This page describes `core/drgnx-sandbox.el`: the spec, what it refuses, and the bubblewrap command line it becomes;
+then the check, the toolchain roots, the memory cap and the short sandboxed steps. The spec and the argv are pure
+data: the tests assert the argv element by element, and three smoke tests run it under the real bwrap where bwrap can
+run (`test/unit/sandbox-test.el`). The check and `drgnx-sandbox-run` start processes, never blocking.
 
 ## What is inside, and what is not
 
@@ -33,7 +34,8 @@ holds only the spec's variables.
 ## The spec
 
 `(drgnx-sandbox-spec &rest PROPS)` returns a plist. Every path goes through `file-truename` (links resolved, no
-trailing slash), so a link planted in the task folder cannot widen a bind. `:net` defaults to `shared`.
+trailing slash), so a link planted in the task folder cannot widen a bind. `:net` defaults to `shared`, and
+`:memory-max` to `drgnx-sandbox-memory-max` (an explicit nil means no cap).
 
 | Key | Value | Linux |
 |---|---|---|
@@ -50,7 +52,7 @@ trailing slash), so a link planted in the task folder cannot widen a bind. `:net
 | `:net` | `shared` or `isolated` | `--share-net` only for `shared` |
 | `:proxy`, `:gateway` | ports | macOS, phase 2 |
 | `:tmp`, `:profile-file` | paths | macOS: the session's `TMPDIR`, where the profile is written |
-| `:memory-max` | string | the memory cap |
+| `:memory-max` | a size (`4G`, `512M`, `50%`) or nil | the memory cap: a systemd scope in front (see below) |
 
 ## What is refused
 
@@ -169,6 +171,127 @@ or `sandbox-exec` (root's only, see above), else nil. `(drgnx-sandbox-wrap SPEC 
   mode 0600, as a new file, and the command line is `/usr/bin/sandbox-exec -f FILE COMMAND…`.
 - **Neither**: `drgnx-sandbox-refused`. A missing sandbox is never a silent fallback to the bare command.
 
+Where there is a memory cap (below), its scope comes first: `systemd-run … -- bwrap … -- COMMAND`.
+
+## The check
+
+Before a job's first agent starts, the hub asks whether the sandbox works here. A missing or broken one stops the job
+with a card that says why and how to fix it; the doctor shows the same answer.
+
+- `(drgnx-sandbox-check-async DONE)` is the hub's: it never blocks and never prompts. Its probes run side by side as
+  processes of their own, each for at most `drgnx-sandbox-check-timeout` seconds (5), and DONE gets the answer. With
+  an answer kept, or when no probe can run (no program), DONE is called before it returns; a call while a check runs
+  waits for that one. Any error, while the probes are built or their answer is made, ends the check with an answer
+  that says so: every caller is always answered, and the check never stays "running".
+- `(drgnx-sandbox-check)` is the same, synchronous, for the doctor and the CLI: it waits for the async one.
+- The answer: `(:ok BOOL :backend SYM :version STRING :reason STRING :fix STRING :scope BOOL)`. `:fix` is nil where
+  nothing can be done here; `:scope` says whether a systemd user manager answers (the memory cap).
+- It is kept in `drgnx-sandbox--checked` until `drgnx-sandbox-check-reset`, which also forgets the programs found.
+  A check that runs looks for its programs again (`drgnx-sandbox-program-reset`), so a bubblewrap installed while the
+  hub runs is seen at the next check rather than never. A reset while a check runs lets that check answer its own
+  callers, but its answer is not kept (a generation counter), and the next call starts a new check.
+
+The probes (`drgnx-sandbox--probes`), all run by the hub:
+
+| Probe | Linux | macOS |
+|---|---|---|
+| `:probe` | the argv every agent gets (`drgnx-sandbox-bwrap-argv` of an empty spec) around `/usr/bin/true` | `sandbox-exec -p '(version 1)(allow default)' /usr/bin/true` |
+| `:version` | `bwrap --version` | — |
+| `:scope` | `systemd-run --user --scope --quiet -p MemoryMax=64M -p MemorySwapMax=0 -- /usr/bin/true`, with the trusted systemd-run | — |
+
+The probe is the real argv, not a smaller one, so whatever an agent's start would trip on (`--proc` without a pid
+namespace, `--disable-userns` without a user namespace) fails the check first. Its spec is empty, though: it has no
+`:home` and no `:run` bind, so a failure particular to those binds shows only when an agent starts.
+
+`(drgnx-sandbox--explain STDERR)` turns a failure into `(REASON . FIX)`:
+
+| When | Reason | Fix |
+|---|---|---|
+| `/run/.containerenv` or `/.dockerenv` exists | inside a container | none |
+| no bwrap (STDERR nil) | bubblewrap is not installed, or not where only root can change it | by `/etc/os-release`'s ID, then ID_LIKE: `sudo dnf install bubblewrap`, `sudo apt install bubblewrap`, `sudo pacman -S bubblewrap`, `sudo zypper install bubblewrap`, else "with your package manager" |
+| `setting up uid map: Permission denied` | AppArmor restricts unprivileged user namespaces (Ubuntu 23.10 and later) | load Ubuntu's `bwrap-userns-restrict` profile |
+| bwrap's "user namespaces" message | the kernel does not allow unprivileged user namespaces | the sysctl that allows them |
+| anything else | its first line | run the probe by hand |
+
+A probe that hangs is ended at the timeout, and the reason says so. The container case comes first: inside one, any
+failure is "inside a container", and `bin/drgnx test --container` skips the real-bwrap tests with it.
+
+## Toolchain roots
+
+An agent needs the user's compilers, linters and test runners, many of which live under `~`. Binding `~` is refused,
+so `(drgnx-sandbox-toolchain-roots PATH-DIRS HOME)` finds the read-only roots under HOME that the `PATH` entries
+there need, as sorted true names: dirs, and single files. A known **toolchain layout**
+(`drgnx-sandbox--toolchain-layouts`, matched on whole path components) gives its install root:
+
+| Layout | Root |
+|---|---|
+| `~/.local/share/mise/installs/TOOL/VER/…`, or in the data dir `$MISE_DATA_DIR` (else `$XDG_DATA_HOME/mise`) names, where that is under `~` | `…/mise/installs/TOOL/VER` |
+| `~/.cargo/bin` | `~/.cargo/bin`, and `~/.rustup/toolchains` where it exists (cargo's proxies run them) |
+| `~/.rustup/toolchains/…` | `~/.rustup/toolchains` |
+| `~/go/bin` | `~/go/bin` |
+| `~/.nvm/versions/node/V/…` | `~/.nvm/versions/node/V` |
+| npm's prefix: `~/.npm-global/…`, or `~/.local/lib/node_modules/PKG/…` | `~/.npm-global`, or that package |
+| pipx: `~/.local/share/pipx/venvs/APP/…` (older: `~/.local/pipx/venvs/APP`) | the venv |
+| uv: `~/.local/share/uv/tools/APP/…`, `~/.local/share/uv/python/V/…` | the tool's venv, the Python |
+| Claude Code: `~/.local/share/claude/versions/…` | `~/.local/share/claude/versions` |
+
+- **Each `PATH` dir inside HOME**, its links resolved (`~/bin` → `~/tools/bin`), gives the root of its layout, else
+  the dir itself (`~/.local/bin`, `~/.bun/bin`).
+- **Each link inside such a dir** gives the root of the layout it leads into (`~/.local/bin/python` → mise's python).
+  A link into no layout gives **its target file alone**, read-only: `~/.local/bin/sync` → `~/dotfiles/sync.sh` binds
+  that script, never `~/dotfiles` with the key beside it. The file must be a program: a regular file with an execute
+  bit, not directly in `~` (`~/.netrc`, `~/.npmrc`), its name none of `drgnx-sandbox-secret-files`; so a link to
+  `~/.netrc` or to `~/dotfiles/id_ed25519` gives nothing. A link to a dir in no layout gives nothing.
+- **A link into drgnx's own data dir or checkout gives nothing** (install.sh's `~/.local/bin/drgnx` →
+  `~/.local/share/drgnx/drgnx/bin/drgnx`). drgnx's files reach a sandbox only through the explicit bind the hub
+  makes for what needs them (the MCP bridge), never through `PATH`.
+
+Never a root: HOME or a parent of it; `~/.local` itself; anything in `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.kube`,
+`~/.docker` or `~/.password-store`; anything in `~/.config`, `~/.local/share`, `~/.local/state` or `~/.cache` but a
+known layout's root (`~/.config/gh`, `~/.local/share/keyrings` never). A `PATH` dir that would be one of these is
+skipped with its links. Last, every root goes through validation's `:read` rules, and what they refuse is dropped. A
+root inside another is left to the outer one; dirs outside HOME are the system's reads already. Broader reads are the
+user's to give, through `:sandbox-read` in `agents.eld`.
+
+Bin dirs rather than whole tool homes keep the credentials beside them out: `~/.cargo/credentials.toml` is not
+inside `~/.cargo/bin`. Those inside a root are hidden: `(drgnx-sandbox-toolchain-hide ROOTS)` is the `:hide` list,
+each name of `drgnx-sandbox-secret-files` (`.npmrc`, npm's global `etc/npmrc`, `.yarnrc.yml`, `.pypirc`, `.netrc`,
+`.git-credentials`, `.env`, `credentials*`, `auth.json`) relative to each root, where it exists, as its true name.
+
+## The memory cap
+
+The whole command can run in a systemd scope, so that one agent's build cannot run the session out of memory. This
+is an operational guard, not a security boundary.
+
+- `drgnx-sandbox-memory-max` (default `"4G"`; nil for none) is a spec's `:memory-max` unless the spec gives one.
+  Validation takes only a size: digits with `K`, `M`, `G` or `T`, or a percentage. `drgnx-sandbox-memory-prefix`
+  checks it too, so a caller that builds its own argv cannot pass anything else.
+- `(drgnx-sandbox-memory-prefix SPEC)` is `(SYSTEMD-RUN "--user" "--scope" "--quiet" "-p" "MemoryMax=M" "-p"
+  "MemorySwapMax=0" "--")`, with the trusted systemd-run (`drgnx-sandbox-program`, never one found on `PATH`
+  first). It is nil when `:memory-max` is nil, or when the last check found no user manager that answers (`:scope`),
+  or has not run: it never starts a process itself.
+- `drgnx-sandbox-wrap` puts it first. A scope keeps stdin, stdout and stderr; systemd-run execs the command, so
+  ending the process ends the agent.
+
+## Short sandboxed steps
+
+`(drgnx-sandbox-run SPEC ARGV DONE &optional TIMEOUT)` runs ARGV inside SPEC (through `drgnx-sandbox-wrap`, so under
+the memory cap) as a process of its own, started in `/` with stdin closed, and returns the process. It is for the
+hub's short steps (a checkout, a bundle) and never blocks. DONE gets `(EXIT . OUTPUT)`, stdout and stderr together
+and trimmed, or `(:timeout . MSG)` when it ran past TIMEOUT seconds (default `drgnx-job-git-timeout`) and was ended.
+A refused spec signals `drgnx-sandbox-refused`, and nothing runs.
+
+## Cost
+
+Measured on Fedora 44 (bubblewrap 0.12.0, systemd 259), 20 runs of `/usr/bin/true` each, from a batch Emacs:
+
+| Command | Median | Range |
+|---|---|---|
+| the generated bwrap argv | 7.0 ms | 6.5–7.9 ms |
+| the memory cap's scope, then the argv | 23.3 ms | 14.9–30.3 ms |
+
+The check runs its probes side by side once per hub start, so it costs about as much as the scope.
+
 ## Limits
 
 - **Resolution and mounting are two steps.** The spec's paths are resolved and checked when the argv is built;
@@ -181,8 +304,169 @@ or `sandbox-exec` (root's only, see above), else nil. `(drgnx-sandbox-wrap SPEC 
   - sources the hub made itself, in directories only the hub writes, are safe.
 - **Toolchains under `/run`** (NixOS's and Guix's `/run/current-system`) are hidden by `--tmpfs /run`. Their `PATH`
   entries do not resolve inside yet.
-- **The program is found once.** A bubblewrap installed while the hub runs is seen after
-  `drgnx-sandbox-program-reset`.
+- **The program is found once per check.** A bubblewrap installed while the hub runs is seen at the next check that
+  runs: after `drgnx-sandbox-check-reset`, or when the hub checks again.
+- **Toolchains that write under `~`** (mise's shims and state, rustup updating, go's module cache) fail read-only.
+  Their caches belong in the private home (`CARGO_HOME`, `GOMODCACHE` pointing there). rustup's proxies in
+  `~/.cargo/bin` read `~/.rustup/settings.toml`, which is not bound: the agent's environment needs
+  `RUSTUP_TOOLCHAIN`. mise's shims (`…/mise/shims`) run mise itself, which reads its config: put mise's
+  `installs/…/bin` on `PATH` (mise's activation does) rather than the shims (they are in `~/.local/share`, so no
+  root anyway).
+- **A script linked from `PATH` gets only itself.** A link into no layout binds the target file alone, so a script
+  that loads files beside it, or a tool installed in a layout drgnx does not know, fails inside. A pipx or uv venv's
+  `python` is a link to the interpreter it was made from: that interpreter must be a root too (a system one, or one
+  of mise's or uv's on `PATH`). The fix is a layout entry, or `:sandbox-read` for that profile. A linked file that is
+  not executable, or sits directly in `~`, is never bound.
+- **`PATH` dirs under `~/.config`, `~/.local/share` or `~/.cache` are dropped** unless they are a known layout:
+  Doom Emacs's `~/.config/emacs/bin`, composer's `~/.config/composer/vendor/bin`, mise's shims. Those dirs sit beside
+  config and tokens, so drgnx does not guess. Add one with `:sandbox-read` in that profile (`agents.eld`) to have it
+  inside.
+- **Secret files are looked for at fixed places** in each root (`drgnx-sandbox-secret-files`), not throughout a
+  toolchain's tree. The layout roots are install dirs, where that is enough.
+
+
+## macOS: Seatbelt
+
+`core/drgnx-sandbox-macos.el`. `(drgnx-sandbox-sbpl SPEC)` turns the same spec into a Seatbelt profile (SBPL, the
+policy language of `sandbox-exec`); `drgnx-sandbox-wrap` writes it to `:profile-file` and runs
+`/usr/bin/sandbox-exec -f FILE COMMAND…`. The code is pure: it validates the spec (`drgnx-sandbox-validate`, the same
+refusals as on Linux) and builds text. The tests (`test/unit/sandbox-macos-test.el`) run everywhere: they read the
+profile back as data and ask a small evaluator, which applies SBPL's rule order, what it allows. The profile itself is
+verified on a Mac only (the MAC-SB rows of the Mac checklist).
+
+### What differs from Linux
+
+macOS has no mount namespace. Nothing is bound anywhere: every path is seen at its own place, and what the agent may
+touch is the profile's allow list.
+
+- **`:home`**: the private home, readable and writable at its own path. It must be `(OUTSIDE . OUTSIDE)`, and the
+  session's `HOME` names it. A `:home` whose INSIDE is not its OUTSIDE is refused, so the real `$HOME` is never
+  passed by habit.
+- **`:binds`**: each is at its own path. One whose INSIDE is not its OUTSIDE is refused.
+- **`:run`**: readable at its own path (there is no `/run/drgnx`), never writable.
+- **`:sockets`**: the only Unix sockets the agent may connect to, one by one.
+- **`:env`, `:chdir`, `:memory-max`**: not in the profile. The caller sets the environment and the directory.
+
+### The profile, in order
+
+SBPL decides by the **last rule that matches**, so the order is the policy:
+
+```
+(version 1) (deny default) …                    ; the base: drgnx-sandbox-macos-base (Codex's, see below)
+(allow system-socket (socket-domain AF_UNIX))   ; pipes to child processes; connecting is decided at the end
+(deny file-read* (subpath "/Users"))            ; before every allow: only what is allowed below is readable there
+(allow file-read* (literal "/"))
+(allow file-read-metadata (literal …))          ; /tmp, /var, /etc, and every directory above an allowed path
+(allow file-read* (subpath …))                  ; the system's roots, :read, :write, :home, :run, :tmp
+(allow file-read* (literal "/dev/null") …)      ; the devices, each by name
+(deny file-read* (subpath "/opt/homebrew/var") (regex …) …)          ; Homebrew's data
+(allow file-write* (subpath …))                 ; :write, :home, :tmp
+(allow file-read* (subpath B)) (allow file-write* (subpath B))       ; each of :binds, in order: rw…
+                               (deny file-write* (subpath B) (regex …))   ; …or ro (the pins)
+(deny file-read* file-write* (subpath H) (regex …) …)                ; :hide
+(deny file-write-unlink (literal D) (regex …) …)                     ; no rename of a root or a pin's parents
+(allow network-outbound (remote ip "*:*"))      ; :net shared, with the services a networked CLI needs:
+  (allow system-socket … AF_SYSTEM …) (allow mach-lookup …)          ; TLS trust, the network's configuration
+  — or, :net isolated: (deny network*) (allow network-outbound (remote ip "localhost:PORT"))   ; :proxy, :gateway
+(deny network-outbound (remote unix-socket))    ; every Unix socket…
+(allow network-outbound (remote unix-socket (path-literal S)))   ; …but each of :sockets (and, shared, the resolver's)
+```
+
+- **The system's roots** (`drgnx-sandbox-macos-system-read`): `/usr`, `/bin`, `/sbin`, `/System`, `/Library`,
+  `/opt/homebrew`, `/private/etc`; `/dev/fd` (the process's own descriptors); `/private/var/select` (the link
+  `/bin/sh` and `xcrun` follow), the time zones and the selected developer directory (the git of the Command Line
+  Tools). Homebrew's data (`/opt/homebrew/var`, `/usr/local/var`: the databases of Postgres, MySQL, Redis) is
+  denied after every read, so a spec that reads `/opt/homebrew` does not reach it.
+- **Devices, each by name** (`drgnx-sandbox-macos-devices`): `/dev/null`, `/dev/zero`, `/dev/random`,
+  `/dev/urandom`, `/dev/tty` (the controlling terminal) and `/dev/dtracehelper`. Never all of `/dev`: the user's
+  other terminals (`/dev/ttysN`) belong to the same user, and a process that reads one races the shell for its
+  keystrokes, `sudo` passwords included. The base allows only the ptys the sandbox opened itself.
+- **`subpath` or `literal`**: every allowed or hidden path is a `subpath`, which covers a file itself and a whole
+  directory, component by component (`/a/b` covers `/a/b/c`, not `/a/bc`). A `literal` would hide a directory but
+  not its contents. `literal` is used only for `/` and for the metadata of the directories above an allowed path:
+  `realpath()` needs to stat each of them, but none of them can be listed. Sockets are `path-literal`.
+- **One kind of operation per path.** Seatbelt lets a deny of a specific operation win over a later allow of a
+  wildcard (sandbox-runtime found this for `file-write-unlink`). So the allows and denies on a path use the same
+  wildcards (`file-read*`, `file-write*`), and the later rule wins. The one specific deny is the rename block below,
+  which is meant to win.
+- **No rename past a deny.** Seatbelt's rules match paths, not files. Renaming a directory above a pin or a hidden
+  path would carry it to a name no deny covers: `mv conf c2; cat c2/.env`, or moving the whole task folder out,
+  editing its `.git` pointer and moving it back, which a bind mount (EBUSY) prevents on Linux. So
+  `(deny file-write-unlink (literal D))` (a rename's source is an unlink) covers every writable root (`:write`,
+  `:home`, `:tmp`, the rw `:binds`) and every directory from such a root down to the parent of each ro pin and
+  `:hide` path (`drgnx-sandbox-macos--move-blocks`). The pins and hidden paths themselves are covered by their own
+  `file-write*` denies. A `literal` touches the directory alone: files in it can still be removed and renamed, and
+  other directories moved. This is sandbox-runtime's move-blocking deny (`generateMoveBlockingRules` and
+  `generateReadDenyUnlinkRules` in `src/sandbox/macos-sandbox-utils.ts`, anthropics/sandbox-runtime at
+  `626a596`, Apache-2.0), cut to what drgnx's spec needs: drgnx denies unlink only, not create: the roots and pins
+  exist when the profile is made, and a hidden path that does not exist yet holds nothing to read.
+- **Every deny holds in every case.** APFS is case-insensitive by default, so `.GIT/config` is `.git/config`. Whether
+  Seatbelt compares paths that way is not known, so each deny (the pins, `:hide`, the rename blocks, Homebrew's data)
+  also carries a `regex` built from character classes (`drgnx-sandbox-macos--case-regex`: `\.[Gg][Ii][Tt](/.*)?$`;
+  a non-ASCII letter as `(é|É)`; no `(?i)`). Allows stay exact: a path spelled otherwise is simply not allowed. The
+  regex is about four times the path's length, so a deny path of more than about 250 characters makes the profile
+  refused (1024 bytes, below).
+- **`/tmp`, `/var` and `/etc` are links into `/private`.** Seatbelt matches the resolved path, so every rule names
+  `/private/…`. A spec's paths are true names (`file-truename` gives `/private/tmp/…` on a Mac), and the constants
+  are spelled that way. The links themselves get their metadata only, so a path through one still resolves.
+- **No `~` read.** `/Users` is denied before every allow. Validation refuses `~` and its parents in any key, as on
+  Linux. The home appears only as the parent of an allowed path, with its metadata: it can be stat'ed but not
+  listed, and nothing in it but what the spec allows can be read.
+- **The session's sockets only.** The hub's socket, the Emacs server's, `SSH_AUTH_SOCK` and every other Unix socket
+  are refused by path. With `:net shared` the system resolver's socket (`/private/var/run/mDNSResponder`) is allowed
+  too: every host name lookup on macOS goes through it, so without it nothing resolves (Chromium's network policy
+  allows it for the same reason). So is `/private/var/run/resolv.conf`, for resolvers that read it (Go's).
+- **Network.** Phase 1 (`:net shared`) allows outbound IP anywhere, like Linux's shared network, and nothing
+  inbound. `:net isolated` denies all network, then allows outbound to localhost's `:proxy` and `:gateway` ports
+  only. macOS has no network namespace, so the ports are what isolates. A port outside 1–65535 is refused. The
+  network mach services (TLS trust, the network's configuration) and the AF_SYSTEM socket come with `:net shared`
+  only, as in Codex: `trustd` and `ocspd` fetch a certificate's AIA, OCSP and CRL URLs outside the sandbox, a way
+  past `(deny network*)`. The trade-off, for phase 2: tools that verify TLS through Apple's frameworks (`curl` and
+  `git` from the Command Line Tools) may fail in isolated mode even through the proxy; Node's own TLS does not ask
+  `trustd`.
+- **No escape through other processes.** No `appleevent-send` (an AppleEvent to Terminal runs anything), no
+  `lsopen` (LaunchServices starts apps outside the sandbox), no mach-lookup of `com.apple.coreservices.launchservicesd`.
+  No Keychain either (`com.apple.SecurityServer`): job agents on macOS use the gateway profiles.
+
+### Quoting
+
+Every path is an SBPL string, made by `drgnx-sandbox-macos--quote`: in double quotes, with `"` and `\` escaped by a
+backslash. A path with a control character (a newline, a tab, NUL, DEL) is refused: SBPL's reader would take some
+of them as escapes, and validation already refuses newlines and NULs. So is a literal over 1024 bytes, which
+`sandbox-exec` refuses ("Error reading string"). A folder named `x") (allow default) ("` stays one path in one rule.
+
+### The session's TMPDIR
+
+`(drgnx-sandbox-macos-tmpdir SID)` makes a new directory, mode 0700, under `temporary-file-directory` (on macOS the
+user's own `/private/var/folders/…/T/`), with a random suffix, so nothing planted before is used. It returns the true
+name, for the spec's `:tmp` and the session's `TMPDIR`. `SID` must be a plain name. Removing it is the session's job.
+
+### The base policy
+
+`drgnx-sandbox-macos-base` is the Seatbelt base policy of OpenAI's Codex, unchanged:
+[`codex-rs/sandboxing/src/seatbelt_base_policy.sbpl`](https://github.com/openai/codex/blob/8c076942cb70fba8e5c4732c23f1faabc4aed484/codex-rs/sandboxing/src/seatbelt_base_policy.sbpl)
+at commit `8c07694`, Copyright 2025 OpenAI, under the
+[Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0), whose text is
+`LICENSES/Apache-2.0.txt`. The list of network mach services
+(`drgnx-sandbox-macos-net-services`) is Codex's `seatbelt_network_policy.sbpl` at the same commit, without
+`com.apple.SecurityServer`. The Apache License 2.0 is compatible with drgnx's GPL-3.0-or-later. Codex's base was
+chosen over Anthropic's sandbox-runtime (also Apache-2.0) because it is a published policy file of its own and
+holds no LaunchServices or Keychain service, which drgnx must leave out. drgnx's rules come after it.
+
+### Limits (macOS)
+
+- **Unverified on a Mac until the MAC-SB rows pass.** The mach services, the system's roots and the resolver
+  allowance are from Codex and Chromium. The deny log on a real job (`log show --predicate 'sender == "Sandbox"'`)
+  settles them.
+- **Case** is handled on the deny side only (above), and unverified on a Mac. So are hard links and clones of a
+  hidden file (`ln`, `cp -c`): whether `file-link` and `file-clone` fall under `file-write*` or under
+  `(deny default)` is a Mac row. Worktree mode stays off on macOS until those rows pass.
+- **Existence.** A denied path probably fails with EPERM and a missing one with ENOENT, so names in `~` can be
+  probed one by one, never listed. Linux gives ENOENT for both.
+- **Tools' own Unix sockets** (a language server's socket in `TMPDIR`) cannot be connected to, and nothing can listen
+  on a port in phase 1. Only `:sockets`, the resolver's socket and outbound IP are allowed.
+- **No nesting.** A `sandbox-exec` inside the sandbox is believed to fail: macOS is not known to nest Seatbelt
+  profiles.
 
 ## MCP through a socket
 
@@ -196,7 +480,7 @@ emacs --batch -Q --eval "(setq load-prefer-newer t)" -L CORE -l drgnx-mcp-bridge
 
 `drgnx-mcp-bridge-command SOCKET` builds that argv (through `drgnx-command-ignoring-sigpipe`, like the other MCP
 servers). The socket a connection comes in on tells the hub which session it is: nothing inside the sandbox names the
-agent, so nothing there can claim to be another.
+agent, so nothing there can claim to be another. The hub's side is in [hub.md](hub.md#per-session-sockets).
 
 What the bridge does, and nothing more:
 
@@ -322,18 +606,20 @@ merged), the next task's snapshot first runs
 `drgnx-job-snapshot-make REPO FOLDER BASE DONE` makes the store, or fetches into it, and then the task's `.git`. It is
 asynchronous, like every step here (separate processes with a deadline, so the hub never waits). DONE gets one of:
 
-- `(:mode snapshot :read nil)`: a copy-on-write copy of the store. On Linux it uses `cp -a --reflink=always` (btrfs,
+- `(:mode snapshot :read nil :start START)`: a copy-on-write copy of the store. On Linux it uses `cp -a --reflink=always` (btrfs,
   XFS). On macOS it uses `cp -c -a` (clonefile, APFS). The store is inside the repository, so the copy is on the same
   filesystem.
-- `(:mode clone :read DIRS)`: the fallback without copy-on-write (tmpfs, ext4, network filesystems, HFS+). It runs
+- `(:mode clone :read DIRS :start START)`: the fallback without copy-on-write (tmpfs, ext4, network filesystems, HFS+). It runs
   `git clone -q --shared --no-checkout --single-branch --no-tags --template= --branch BASE STORE FOLDER`. DIRS is the
   store's `objects`, which the sandbox mounts read-only. Never the user's.
 - `(:error MSG)`: BASE is not a branch name, REPO is not a repository, FOLDER exists and is not empty, or the store
   failed twice.
 
 In both modes, the task's config is the store's whitelist again, with `core.bare false`. Then
-`cat-file -e refs/heads/BASE^{commit}` checks the copy. Nothing is checked out: the sandbox's first step checks out
-`job/ID-N` at BASE in the empty folder.
+`rev-parse --verify -q refs/heads/BASE^{commit}` checks the copy, before any agent has it, and its answer is START:
+the task's start, the commit it forks from (40 or 64 hex digits). The caller keeps START with the task. Its bundles
+and fetches are checked against it, not against BASE's later tip, which moves as other tasks merge. Nothing is
+checked out: the sandbox's first step checks out `job/ID-N` at BASE in the empty folder.
 
 The caller keeps DIRS with the task, in the hub's state, never in the folder. At bind time it checks them against
 `drgnx-job-snapshot-read-dirs REPO BASE`, which is derived from the repository. Once an agent has had a folder, its
@@ -382,26 +668,107 @@ Nothing else is carried:
 
 The clone's local upload-pack reads the user's own repository config, which is trusted.
 
-**Inside the sandbox**, git runs what the task's config and checkout name:
-- checkout runs `filter.lfs.*` and the hooks under a relative `core.hooksPath` (`post-checkout`);
-- `bundle create` runs none.
-
-drgnx's own sandboxed steps should still pass `-c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.pager=cat
--c core.editor=false`, with `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1`. Then an agent's config only
-ever runs with the agent's own power.
+**Inside the sandbox**, the agent's own git runs what the task's config and checkout name: `filter.lfs.*`, and the
+hooks under a relative `core.hooksPath`. drgnx's own steps there (below) run none of them.
 
 After DONE, nothing outside the sandbox runs git in the folder again (the VC guard enforces it).
 
 **Limits:**
-- **Git LFS repositories do not check out yet.** LFS content (`.git/lfs/objects`) is not in the store.
-  - The task's config has the LFS filter (with `filter.lfs.required`) but no remote and no `lfs.url`, so
-    `git-lfs smudge` has no endpoint even with network. The checkout likely aborts.
-  - A checkout with `GIT_LFS_SKIP_SMUDGE=1` would leave pointer files instead.
+- **Git LFS: a task gets pointer files.** LFS content (`.git/lfs/objects`) is not in the store, and the task's
+  config has the LFS filter but no remote and no `lfs.url`, so `git-lfs smudge` would have no endpoint even with
+  network. drgnx's steps therefore run with `GIT_LFS_SKIP_SMUDGE=1`: LFS files are left as their pointers. With
+  `git-lfs` inside (a system path), an agent that leaves a pointer unchanged commits it as it was (the clean filter
+  passes a pointer through), so the work comes back intact; an agent that needs the content cannot have it yet.
+  Without `git-lfs` inside, `filter.lfs.required` makes the checkout fail, as it would for the user.
 - Submodules' git directories are not copied. A task gets empty submodule directories.
 - On macOS, `cp -c` may fall back to a full copy without failing on a filesystem without clonefile. The probe then
   answers yes. For a store this costs little (it holds BASE alone).
 - The store's time and disk grow with BASE's reachable history. A very large repository pays seconds once per job,
   not per task.
+
+### Inside, and back out: the checkout and the bundle
+
+Once the folder's `.git` is the agent's, the hub's git steps on it run **inside the sandbox**, as short steps of
+`drgnx-sandbox-run` (so under the memory cap). Their spec is `(drgnx-job-snapshot-step-spec FOLDER &key writable out
+read)`:
+- the system's reads, FOLDER read-only, or read-write when WRITABLE;
+- OUT, when given, read-write at `/run/drgnx/out` (at its own path on macOS, which has no mounts);
+- READ read-only: the objects of the job's store, which a shared clone borrows. The hub derives them from the
+  folder's name and the base (`drgnx-job-snapshot-read-dirs`), never from the folder's alternates file;
+- no home, `:net isolated`, and only this environment: `PATH=/usr/local/bin:/usr/bin:/bin`, `HOME=/nonexistent`,
+  `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_TERMINAL_PROMPT=0`, `GIT_ALLOW_PROTOCOL=file`,
+  `GIT_LFS_SKIP_SMUDGE=1`, `LC_ALL=C`.
+
+Every step's git gets `-c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.pager=cat -c core.editor=false`.
+The folder's config is the agent's: even inside, drgnx's steps run none of its programs, so an agent's config only
+ever runs with the agent's own power, in the agent's own git.
+
+Without a sandbox a step does not run: it ends with `(:error "… no sandbox …")`, never as a plain process. Only a job
+the user let run unsandboxed passes UNSANDBOXED, and its steps then run plainly with the same overrides and
+environment (but the hub's `PATH`). Such a step starts with `drgnx-sandbox-vc-trusted` let-bound to t, around that
+one process start alone, so the VC guard lets the hub's own step into the task folder. Nothing else binds it.
+
+| Function | What it runs | DONE gets |
+|---|---|---|
+| `drgnx-job-snapshot-checkout FOLDER BRANCH BASE DONE &optional UNSANDBOXED` | inside, FOLDER writable: `git checkout -q -f -B BRANCH refs/heads/BASE` | `t`, `(:error MSG)` |
+| `drgnx-job-snapshot-bundle FOLDER BASE BRANCH OUT DONE &optional UNSANDBOXED START` | inside, FOLDER read-only, only OUT writable: `git bundle create -q /run/drgnx/out/task.bundle START..refs/heads/BRANCH` (without START, the folder's `refs/heads/BASE`, which the agent can move) | `(:bundle FILE)`, `(:empty)` (no commits), `(:error MSG)` |
+| `drgnx-job-snapshot-fetch REPO BUNDLE BRANCH BASE DONE` | outside, in the trusted REPO only (below) | `(:fetched COMMIT)`, `(:error MSG)` |
+| `drgnx-job-snapshot-review-folder REPO BRANCH FOLDER DONE &optional UNSANDBOXED JOB` | a fresh snapshot of BRANCH, then the checkout inside | `drgnx-job-snapshot-make`'s result, `(:error MSG)` |
+| `drgnx-job-snapshot-refresh-base REPO FOLDER BASE DONE &optional UNSANDBOXED` | a bundle of BASE from REPO, fetched inside, FOLDER writable | `(:refreshed COMMIT)`: the task's new start; `(:error MSG)` |
+
+**OUT** is a directory the hub made, where no agent writes: never inside a session's directory (`s/SID/out` is
+refused as a bind source, since a live agent could swap it for a link), but for example inside the job's own
+directory under the state directory. An earlier `task.bundle` there is removed (a link is removed, never followed)
+before each bundle step.
+
+**The bundle is data.** A bundle is a pack and a list of refs. Reading one runs nothing of the agent's: no config, no
+hooks. `drgnx-job-snapshot-fetch` treats it as hostile input and refuses, with the reason:
+1. a BUNDLE that is not there, is a link, is not a regular file (a FIFO would hang git), or is larger than
+   `drgnx-job-snapshot-bundle-max` (1 GiB; the checks run outside, without the memory cap);
+2. heads (`git bundle list-heads`) that are anything but one line, `HEX refs/heads/BRANCH`: a second ref (an agent's
+   `refs/heads/main`) would otherwise be written into the user's repository;
+3. a bundle `git bundle verify` rejects (a prerequisite the repository does not have);
+4. an object `fsckObjects` rejects: the fetch runs with `-c transfer.fsckObjects=true -c fetch.fsckObjects=true`
+   (the user's own `fetch.fsckObjects=false` would otherwise win);
+5. a commit that does not descend from BASE (`merge-base --is-ancestor`). BASE is the task's START, a commit the hub
+   recorded. A branch name also works, but it means that branch's tip now: once another task merged into `job/ID`,
+   a parallel task's work no longer descends from it, though it merges cleanly.
+
+The fetch brings the objects alone, without writing a ref: `git -C REPO fetch -q --no-tags --no-write-fetch-head
+--no-recurse-submodules --no-auto-gc BUNDLE refs/heads/BRANCH`, with the hub's overrides. Only once every check passed
+does `update-ref refs/heads/BRANCH COMMIT OLD` write the branch, and only if it is still OLD (empty: it must not
+exist). A refused commit is never on the branch, so nothing needs putting back. A branch that cannot be read (not
+"missing", but a git failure) is a failure. `refs/heads/job/ID-N` in the main repository is written only by the hub,
+and the reviewer, the clash scan and the merge read it there.
+
+**The reviewer** gets a fresh snapshot (`drgnx-job-snapshot-review-folder`): a store of `job/ID-N` made from the main
+repository after the fetch (`job~ID-N.base.git`), a copy of it, and `job/ID-N` checked out inside. It holds only what
+passed through the bundle, objects and one ref: none of the implementer's config or hooks, so an implementer's
+`core.fsmonitor` can never run in the reviewer's sandbox.
+
+**A merge-conflict retry** (`drgnx-job-snapshot-refresh-base`) gets the new `job/ID` the same way. The hub bundles
+`refs/heads/job/ID` from the main repository into a private directory of its own,
+`<repo>/.claude/worktrees/.drgnx-base-XXXX/`, and a step inside the sandbox fetches it into the folder's repository
+(the directory read-only). The directory is removed afterwards. The bundle holds all of `job/ID`'s history: the same
+objects as the job's store. DONE gets `(:refreshed COMMIT)`, the commit read from the hub's own bundle. That is the
+task's new START: its later bundles and fetches are checked against it.
+
+**Cost** (drgnx's own repository cloned on tmpfs, real bwrap and the memory cap's scope, load about 3; three runs
+each):
+
+| Commits | Create inside | Verify and fetch outside | Total |
+|---|---|---|---|
+| 1 | 38–43 ms | 22–27 ms | 60–66 ms |
+| 5 | 33–44 ms | 24–34 ms | 57–78 ms |
+| 50 | 44–49 ms | 33–34 ms | 76–82 ms |
+
+Most of the step inside is the sandbox's start (the scope and bwrap, about 30 ms), not git.
+
+**Limits:**
+- macOS: a step needs the session's `:profile-file` for its Seatbelt profile, which the step spec does not give
+  yet. On macOS the steps are refused until the job's session supplies one.
+- Between the hub's check of `task.bundle` and git opening it, only something that can write OUT could swap it.
+  No sandbox has OUT once the bundle step has ended.
 
 ### Bounded
 
@@ -425,3 +792,406 @@ Measured on drgnx's own repository on btrfs (base `main`, 7572 objects reachable
 | the job's store, fetched (BASE unchanged) | 11–12 ms | |
 | a task's copy-on-write copy | 11 ms | 2.4 MB by `du`, exclusive 0 |
 | a task's shared clone | 21–22 ms | 28 KB |
+
+## Git: worktree mode
+
+Snapshot mode is the default. Worktree mode is opt-in: a profile's `:git worktree`, `drgnx job propose --git
+worktree`, or the plan's `**Git:** worktree` line. One job uses one mode for all its tasks. `core/drgnx-job-worktree.el`
+builds it: it makes the worktree, returns the binds as data, checks the branch and scrubs the worktree's git state.
+The sandbox applies the binds.
+
+Each task gets a classic linked worktree that shares the repository's `.git`:
+
+```
+git worktree add -q -b job/ID-N/work <repo>/.claude/worktrees/ID-N refs/heads/job/ID
+```
+
+Why someone picks it:
+- The task's branch is in the main repository the moment the agent commits. There is no bundle step.
+- `git worktree list` shows every task.
+- The user's own tools work in the folder (magit, `git log`, a shell prompt) **once the task's agent has stopped** and
+  the hub has scrubbed its git state (below). While it runs, VC stays out of the folder, as in snapshot mode.
+- There is no copy, even on ext4.
+
+Git's security guidance is the rule here too: a `.git` an agent can write is untrusted, and git run in it runs that
+agent's config and hooks. So the sandbox mounts the main `.git` **read-only**, except for what one worktree's commits
+must write.
+
+### The binds
+
+`(drgnx-job-worktree-binds REPO FOLDER NAME ID N)` returns them in the order bubblewrap applies them. A later bind
+covers an earlier one, so each pin comes after the writable directory it sits in. `GIT` is the repository's common
+git directory; NAME is the worktree's directory in it (git names it after the folder, `ID-N`).
+
+| # | Mode | Path | Why |
+|---|---|---|---|
+| 1 | ro | `GIT` | config, `hooks/`, `info/`, `packed-refs`, other refs, other worktrees |
+| 2 | rw | `GIT/objects` | new objects: commits need it |
+| 3 | rw | `GIT/refs/heads/job/ID-N` | its own branch `job/ID-N/work`, and no other ref |
+| 4 | rw | `GIT/logs/refs/heads/job/ID-N` | that branch's reflog |
+| 5 | rw | `GIT/worktrees/NAME` | its `HEAD`, `index`, `logs/HEAD` |
+| 6 | ro | `GIT/worktrees/NAME/commondir` | pinned: where its repository is |
+| 7 | ro | `GIT/worktrees/NAME/gitdir` | pinned |
+| 8 | ro | `GIT/worktrees/NAME/config.worktree` | pinned; the hub makes it empty first |
+| 9 | rw | `FOLDER` | the working tree |
+| 10 | ro | `FOLDER/.git` | pinned: the `gitdir:` pointer |
+
+- The branch is `job/ID-N/work`, so it is a file inside its own directory `refs/heads/job/ID-N/`. That directory is
+  the only writable one among the refs. Every other branch, `job/ID` and `main` stay read-only. That includes the
+  trick of writing a loose `refs/heads/main` that shadows a packed one.
+- A bind mount point cannot be renamed or removed (EBUSY), so the pinned files stay.
+- The main checkout is not mounted. Its untracked and uncommitted files (a `.env`) are not inside.
+- The paths are true names. ID, N and NAME are checked first: an id like `../x` would widen the ref directory, so it is
+  an error.
+- `(drgnx-job-worktree-binds … t)` gives the same binds, every one read-only, for a reviewer's worktree.
+
+The tests in `test/unit/job-worktree-test.el` assert this data: the order, which paths end up writable, and the
+read-only variant. The escape tests prove under the real bwrap that each pinned path gives EROFS or EBUSY.
+
+What fails inside, because the shared state is read-only:
+- `git stash` ("Cannot save the current status"): `refs/stash` is shared.
+- `git rerere`: its `rr-cache/` is read-only.
+- With git 2.56, a commit prints `error: Unable to create '…/packed-refs.lock': Read-only file system` and still
+  succeeds.
+
+### Making the worktree
+
+`(drgnx-job-worktree-add REPO FOLDER ID N BASE DONE)` runs `git worktree add` as a process of its own: the hub never
+waits. Git runs in the main repository, with `core.hooksPath=/dev/null` and `core.fsmonitor=false`, as snapshot mode
+does. Then, before any agent, it reads the worktree's NAME from `FOLDER/.git`, and keeps it only when that worktree's
+`gitdir` leads back. It then calls `drgnx-job-worktree-prepare`. DONE gets `(:name NAME)` or `(:error MSG)`. A bad id
+or base, a folder that is there already, and a reftable repository are refused before git runs.
+
+Call `(drgnx-job-worktree-prepare REPO NAME ID N)` before each start of the task's agent. It makes what the binds
+need, where it is missing:
+- the two ref directories. `git pack-refs`, which `git gc` runs, packs the branch and removes its now empty
+  `refs/heads/job/` directories, and bubblewrap cannot bind a directory that is not there;
+- an empty `GIT/worktrees/NAME/config.worktree`, so that it can be pinned. A job stopped between `git worktree add` and
+  this step never made it. A file that is there (git copies the user's own) is kept.
+
+### A reftable repository is refused
+
+A repository on the reftable backend keeps every ref in one `reftable/` directory. It cannot be split into the
+task's own branch and the rest. `(drgnx-job-worktree-refusal REPO)` returns the reason, from `git rev-parse
+--show-ref-format` (git 2.45 or later) or else `extensions.refStorage`:
+
+> this repository keeps its refs in reftable: worktree mode cannot limit the agent to its own branch; use snapshot mode
+
+`drgnx-job-worktree-add` asks it before git runs.
+
+### The worktree's git state: scrubbed
+
+`worktrees/NAME/` must be writable: git replaces `HEAD`, `index` and `logs/HEAD` there by rename. **Per-worktree state
+is the agent's, and the user's git trusts it.** The agent can leave in it:
+- an operation in progress (`rebase-merge/`, `rebase-apply/`, `sequencer/`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, …).
+  `git rebase --continue` runs its todo's `exec` lines as the user. `--continue` or `--abort` moves the branch its
+  `head-name` names (`main`) to a commit of the agent's;
+- links in place of files git writes by opening them (`COMMIT_EDITMSG`, `MERGE_MSG`, `FETCH_HEAD`, `logs/HEAD`, and
+  the branch's reflog in `logs/refs/heads/job/ID-N/`). An amend in the folder writes the agent's commit message
+  through the link: to `~/.bashrc`, or to the main `.git/config` with a `core.fsmonitor` of its own;
+- a `HEAD` naming another branch, so that a commit in the folder moves it.
+
+Read-only binds cannot prevent this. `(drgnx-job-worktree-scrub REPO NAME ID N)` removes it, and returns the names
+(relative to `GIT`) it removed or rewrote, or nil:
+- In `worktrees/NAME/` it keeps only `HEAD`, `index`, `ORIG_HEAD`, `COMMIT_EDITMSG`, `logs/HEAD` and the three pins,
+  each a regular file, and `refs/` as the empty directory `git worktree add` makes. `COMMIT_EDITMSG` is written by
+  every commit; only a link there is dangerous.
+- `HEAD` must be `ref: refs/heads/job/ID-N/work` or an object name. Otherwise it is rewritten to the first.
+- In `refs/heads/job/ID-N/` and `logs/refs/heads/job/ID-N/` it keeps only `work`, a regular file.
+
+It runs no git and follows no link:
+- It takes types from lstat. What goes is renamed (a link itself) into `GIT/.drgnx-scrub-*`, a directory the agent
+  cannot write. `rm -rf`, which never follows a link, then removes it in a process of its own.
+- It never descends into a directory the agent can write. `logs/` is moved out whole, and `logs/HEAD` comes back
+  only if it is a regular file.
+- It reads `HEAD` only after moving it out, and only when it is a regular file, so a FIFO in its place never blocks
+  the hub.
+- It never renames across devices. An entry whose own device or whose directory's device differs from the trash's
+  (a btrfs subvolume the agent made) would make `rename-file` copy and delete it, opening its files. Such an entry is
+  left in place. After the rest is done, the scrub signals `drgnx-job-worktree-scrub-failed` with the names left and
+  those removed.
+- The trash is removed even when the scrub fails (`unwind-protect`).
+
+Call it at each turn end, before a review, and once more after the agent's sandbox has exited. Only then can the
+agent not plant again. While the sandbox lives, the folder belongs with the VC guard, as in snapshot mode. The user's
+tools are safe in the folder only after the agent has stopped and the hub has scrubbed. A shell `git` in the folder
+while the agent runs is outside drgnx's reach, as in snapshot mode. `objects/` is not scrubbed: git writes there by
+temporary file and rename, and its gap is below.
+
+### After each turn
+
+`(drgnx-job-worktree-check REPO ID N BASE DONE)` asks whether `job/ID-N/work` still descends from BASE: the task's
+start (a commit the hub recorded, 40 or 64 hex digits) or a branch. Check a running task against its start. A
+branch's tip moves as other tasks merge, and a parallel task's branch does not descend from it. It runs two
+gits in the main repository, whose config the agent cannot write, each as a process of its own with the deadline
+`drgnx-job-worktree-timeout`:
+1. `for-each-ref` reads the branch. Its `%(symref)` must be empty and its object name 40 or 64 hex digits. A link in
+   the ref directory (lstat) counts as no branch.
+2. `merge-base --is-ancestor`.
+
+DONE gets `t` and the commit checked (merge that commit, never the branch's name), `nil` (rewound, replaced, a
+symbolic ref or a link, junk, no branch), or `(:error MSG)`. A timeout is a failure, never a pass. The ref file and
+the objects are the agent's: a FIFO planted as one blocks git, never the hub. The check catches a rewound or replaced
+branch. It is not a guard against a hostile agent: the objects it reads are writable.
+
+### What it protects
+
+- The main `.git/config`, `hooks/` and `info/` are read-only inside the sandbox. Through the worktree's own state
+  (links, an operation in progress) the user's git outside could still write or run them. The scrub removes that
+  state; see above for when.
+- Every ref but its own branch.
+- The hub's socket, `~`, the user's sockets, `work.db` and the environment, as in snapshot mode.
+- The main checkout's untracked and uncommitted files: they are not mounted.
+
+### What it cannot protect
+
+- **The repository's objects.** `objects/` must be writable for commits. A writable directory lets the agent delete or
+  overwrite existing object files and packs. That means **data loss for anything not pushed elsewhere**, or a corrupt
+  repository. The agent can also add `objects/info/alternates` entries, or a `commit-graph`. They inject objects or
+  ancestry, but run no code.
+- **Reading the whole repository.** The agent sees all history, all branches, unreachable objects (a file staged then
+  unstaged, a dropped stash) and the main `config`, including remote URLs. A token in a remote URL is visible to the
+  model.
+- **The worktree's git state while the agent lives.** A scrub at turn end can be followed by a new plant. Only the
+  scrub after the sandbox has exited leaves the state clean.
+- **A nested `.git`** the agent creates in a subdirectory of the folder is a repository with the agent's config. A
+  gitlink in the agent's index at that path makes a plain `git status` at the folder's root run the nested
+  repository's `core.fsmonitor`. The hub checks for one after each turn, as in snapshot mode.
+- `git gc` of the user's while an agent runs can remove the branch's ref directory under it. The agent's next commit
+  then fails to update its branch. `drgnx-job-worktree-prepare` makes the directory again at the next start.
+- Objects of an `objects/info/alternates` outside `.git` are not mounted. Git inside cannot read them.
+
+### Risks, row by row
+
+Snapshot mode against worktree mode (spec §4b):
+
+| Risk | Snapshot (default) | Worktree (opt-in) |
+|---|---|---|
+| Agent-written config or hooks run outside the sandbox | no: git never runs in the copy outside the sandbox | no once scrubbed: main config and hooks read-only, pointers pinned, the worktree's state scrubbed |
+| Agent-planted git state (a rebase todo, links in the git dir) used by the user's git | n/a: no git runs in the copy outside | scrubbed at each turn end and after exit; VC kept out while the agent runs |
+| Other branches, `job/ID`, `main` moved | no | no: only its own `job/ID-N/` ref directory is writable, and the scrub removes a `head-name` or `HEAD` naming another |
+| Repository objects deleted or corrupted | no: its own copy | **yes**: data loss for anything unpushed |
+| User's uncommitted or untracked files (`.env`) seen | no | no |
+| Remote URLs and their tokens seen | no: not in the store | yes: the main config is readable |
+| The reviewer influenced by the implementer's git config | no: a fresh snapshot | no: a fresh worktree of the tip, read-only; the shared config is read-only |
+| User's own tools (magit, `git` in a shell) in the folder | unsafe: the folder's `.git` is the agent's; drgnx keeps VC out | safe once the task's agent has stopped and the hub has scrubbed its git state; while it runs, drgnx keeps VC out |
+| Nested `.git` in a subdirectory | hub check and a card | hub check and a card |
+| Branch visible in the main repository | after the bundle fetch | at once |
+| `git worktree list` shows the task | no | yes |
+| Disk and time to start | ≈ 0 extra disk with copy-on-write | ≈ 0: today's `worktree add` |
+| Works on | btrfs, XFS, APFS (a shared clone elsewhere) | any filesystem; not reftable repositories |
+
+## The VC guard
+
+`core/drgnx-sandbox-vc.el`. The `.git` of a job's task folder is the agent's. Its config can name a program
+(`core.fsmonitor`, `core.pager`, `core.sshCommand`, a hook) that git runs the moment any git of the user's runs there:
+visiting a file under VC is enough. So while a task's sandbox lives, nothing of drgnx's or the user's runs git in its
+folder.
+
+- **The list.** `(drgnx-sandbox-vc-register FOLDER)` and `(drgnx-sandbox-vc-unregister FOLDER)` keep the registered
+  folders (true names, trailing slash) in `<state>/sandbox/folders.eld` (0600, written beside it and renamed over it).
+  `(drgnx-sandbox-vc-folders)` re-reads the file when its stamp (time, size, inode) changes, so the editor sees what
+  the hub registered. Only absolute strings count; a damaged file guards nothing and breaks nothing. The hub
+  registers a snapshot folder once its copy is prepared; a worktree-mode folder at the task's start, and
+  unregisters it after the exit scrub (spec §4b). The agent cannot write the file (Task 3's validation keeps the
+  state directory out of its reach).
+- **`drgnx-sandbox-vc-guarded-p DIR`** compares true names on directory boundaries: `7-1/` never matches `7-10/`, and
+  a link into a folder is the folder.
+- **`drgnx-sandbox-vc-mode`** (core, on in the editor and in the hub) does two things:
+  - `vc-ignore-dir-regexp` is extended with the registered folders, so VC does not look there. It is refreshed
+    before each `find-file`.
+  - An `:around` advice on `call-process`, `process-file`, `make-process` (`drgnx-sandbox-vc--refuse-git`) and
+    `call-process-region` (`drgnx-sandbox-vc--refuse-git-region`: its program is the third argument; blame, the
+    indexer and magit's hunk staging run git through it) signals `drgnx-sandbox-guarded` when the program is `git` (by name or any path ending in `/git`) and
+    `default-directory` is guarded. Global options count: `-C DIR` (cumulative, relative to the directory so far),
+    `--git-dir` and `--work-tree`, as `=` or a separate argument. Everything else costs one `string=` on the
+    program's name, and a stat of the list file when the name is `git`. Measured: 1.2 µs per non-git `call-process`
+    for the advice function; the whole call is lost in the noise of the fork (about 0.8 ms).
+  - magit, project.el (`project-try-vc` ignores errors), VC and drgnx's own callers go through these primitives.
+    Also covered because they end in these: `process-lines` (`call-process`), `vc-git--call` and `start-file-process`
+    (`process-file`, `start-process` then `make-process`). `shell-command-to-string` runs `sh`, outside the reach.
+    The work tracker's `drgnx-work--git` answers nil in a guarded folder instead of failing.
+- **The hub's own trusted steps.** A step the hub runs outside the sandbox with git in a task folder (its own
+  commands, an environment it built) binds `drgnx-sandbox-vc-trusted` to non-nil around that one call; the guard lets
+  it through. It is a Lisp variable of the hub's process: an agent cannot reach it, since it only talks to the hub
+  through the MCP socket and the files the hub validates. Bind it nowhere else, and never around a user-driven call.
+- **What it does not cover.** A `git` started through a shell (`shell-command`, a terminal buffer, `sh -c`) or a
+  wrapper program is outside its reach, and so is a `GIT_DIR` set in the environment. A call from natively compiled
+  code reaches the advice only through Emacs's trampolines, which need a working native compiler.
+- **Nested `.git`.** `(drgnx-sandbox-vc-nested-git FOLDER)` lists the `.git` entries under FOLDER other than
+  `FOLDER/.git`: a directory, a gitfile or a link named `.git`. It never follows a link and never enters a `.git`
+  directory. The job code of the hub is to call it after each turn.
+- **The work tracker reads the main repository.** `drgnx-work-source-functions` (abnormal hook): each function gets
+  an agent session and returns `(:repo REPO :ref REF)` or nil. When one answers, the session's folder is not read:
+  `turn-end` and the session's exit collect nothing, and the job collects with `(drgnx-work-collect-now SESSION)`,
+  which records the commits of REF in REPO since the task began. At the session's start REF is the commit the task
+  forks from; when `drgnx-work-collect-now` runs, the function answers with the ref that holds the result (the
+  task's branch in the main repository, after the bundle fetch).
+- Tests: `test/unit/sandbox-vc-test.el` (prefix `drgnx-sandbox-vc/`, including a `core.fsmonitor` canary through
+  `find-file`, `project-current`, `vc-dir` and magit), `work-record-test.el` (`drgnx-work/source-function-…`).
+
+## Testing: the mock's probes and the fixture
+
+The escape tests need no model. The mock ACP agent (`test/fixtures/mock-acp.el`) has a prompt word,
+`probe NAME…`, that tries each named escape and says one line per name in its turn: `probe NAME: reached`, or `probe
+NAME: blocked (WHY)` with the system's own wording (`No such file or directory`, `Read-only file system`). `probe env`
+says `reached (NAME,…)` with the names of the variables that are set, never their values. A probe never says what it
+read. Where it writes, it opens the file for appending nothing, so a file that exists is kept.
+
+| Probe | What it tries |
+|---|---|
+| `hub-socket` | connect to the hub's socket |
+| `hub-card`, `hub-card-no-hello` | `job/card` (dismiss) for its own pending card, with and without a `hello {cap}` (the cap is read from the file `MOCK_PROBE_HUB_CAP` names, when there is one) |
+| `work-db` | open `work.db` for writing |
+| `coord-forged` | start its first MCP server with `DRGNX_AGENT=OTHER`, send a message and read OTHER's inbox, where the fixture left a message; reached only when that inbox comes back, i.e. the forged identity was accepted (through a bridge it is the session's own inbox, so: blocked) |
+| `git-config`, `git-hooks`, `git-ref-main`, `git-ref-job`, `git-pointer` | open the repository's config, a hook, two refs and the task's `.git` pointer for writing |
+| `git-objects-delete` | delete an object file |
+| `dot-env`, `dirty-file` | read the untracked `.env` and the uncommitted file |
+| `emacs-server`, `bus`, `ssh-agent`, `abstract-socket`, `host-loopback` | connect to a user's socket, an abstract socket, a TCP port on 127.0.0.1 |
+| `ssh-key`, `other-repo`, `other-task` | read a key, a file of another repository, a file of another task's folder |
+| `env` | look for `SSH_AUTH_SOCK`, `DBUS_SESSION_BUS_ADDRESS`, `XDG_RUNTIME_DIR`, `DRGNX_DATA_DIR`, `DISPLAY`, `WAYLAND_DISPLAY` and provider keys |
+| `nested-git` | plant a repository with a `core.fsmonitor` in a subdirectory of the folder |
+| `fsmonitor-plant` | set `core.fsmonitor` and a `post-merge` hook in its own copy of a `.git` |
+| `connect HOST:PORT` | connect, through `HTTPS_PROXY` (a `CONNECT`) when it is set |
+
+The paths come from `MOCK_PROBE_*` variables in the profile's `:env` (paths and ids only, never contents).
+`test/fixtures/sandbox-fixture.el` makes them: `(drgnx-sandbox-fixture-with BODY…)` builds, under the test's temporary
+directory, a HOME with canaries of random text (`~/.ssh/id_canary`, `~/other-repo/secret`), a runtime directory with
+an Emacs server, a `bus` and an ssh-agent socket (listeners that count their connections:
+`drgnx-sandbox-fixture-connections`), an abstract socket and a TCP listener on 127.0.0.1, a repository with an
+untracked `.env`, an uncommitted change and a remote URL holding a token, a linked worktree for the task, the hub served
+in the test's Emacs (`DRGNX_HUB_PARENT_PID`) and two open cards. `drgnx-sandbox-fixture-canaries` lists every random
+string for the "never in a transcript" check, `drgnx-sandbox-fixture-probe-env` is the environment, and
+`drgnx-sandbox-fixture-mock-profile` is a profile of the mock that carries it. The macro skips with
+`drgnx-sandbox-check`'s reason where the sandbox cannot run; `:unsandboxed` as its first form skips that check (the
+probes' own test runs the mock with no sandbox and wants every probe reached, which shows the probes are real).
+The real HOME, the user's runtime directory, bus and Emacs are never touched.
+
+## Network: phase 2
+
+In phase 1 the sandbox shares the host's network (`--share-net`): the paths are closed, but abstract sockets and every
+service on the host's `127.0.0.1` stay reachable. Phase 2 gives the sandbox a network of its own: only a private
+loopback exists inside. The agent's way out is two Unix sockets the hub binds into `/run/drgnx`: the job's proxy
+(`proxy.sock`, which answers `CONNECT` only for the job's allowlist) and the gateway (`gateway.sock`, with its token
+check). The agent is told `HTTPS_PROXY=http://127.0.0.1:3128` and, for gateway profiles,
+`ANTHROPIC_BASE_URL=http://127.0.0.1:3129`; a relay inside turns those ports into the sockets. macOS has no network
+namespace and needs no relay: Seatbelt allows only the proxy's and the gateway's localhost ports.
+
+### The relay
+
+`core/drgnx-sandbox-relay.el` is a batch Emacs that listens on `127.0.0.1:PORT` for each argument `PORT=SOCKET` and
+forwards every connection, as bytes, to SOCKET:
+
+```
+emacs --batch -Q --eval "(setq load-prefer-newer t)" -L CORE -l drgnx-sandbox-relay -f drgnx-sandbox-relay-main \
+      3128=/run/drgnx/proxy.sock 3129=/run/drgnx/gateway.sock
+```
+
+`drgnx-sandbox-relay-command PAIRS` builds that argv from `((PORT . SOCKET)…)`. The sandbox does not run it alone:
+`drgnx-sandbox-relay-entry PAIRS COMMAND` wraps the agent's command in
+
+```
+/bin/sh -c '<make a FIFO in a fresh mktemp -d under $TMPDIR>; RELAY </dev/null >FIFO &
+            read -r r <FIFO; <remove the directory>; [ "$r" = ready ] || exit 1; exec "$@"' drgnx-sandbox-relay COMMAND…
+```
+
+- **Ready before the agent.** The relay writes `ready` on its stdout once every port listens, and the shell `exec`s
+  the agent only then, so the agent's first connect never finds a closed port. A relay that cannot listen (a bad
+  argument, a port in use) exits 1 with a line on stderr, the shell reads end of file, and the agent never starts:
+  the entry exits 1.
+- **The agent's stdio is the sandbox's own.** The relay's stdout is the FIFO and its stdin `/dev/null`; after the
+  `exec` the agent holds the shell's stdin and stdout, so the ACP stream never passes through the relay. The relay
+  shares the agent's stderr for its own lines (`drgnx-sandbox-relay: cannot reach SOCKET: …`).
+- **It ends with the agent.** After the `exec` the relay's parent is the agent. The relay reads its parent's pid once
+  a second (`process-attributes`) and exits 0 when it has changed, closing its connections. Under bwrap the pid
+  namespace ends it at once anyway; the check covers runs without one (the tests) and is the only cost while idle.
+- **Bytes only.** Both sides use the `binary` coding; the relay reads nothing it forwards and opens nothing but the
+  sockets of its arguments. A socket it cannot reach closes that one connection. When either side of a pair closes,
+  the relay closes the other: Emacs has no half-close, so a client that shuts down its write side to wait for an
+  answer gets none. HTTP clients through a proxy do not do that.
+- **Not a security boundary.** Anything inside can connect to the sockets directly. The proxy and the gateway, outside,
+  are the gate.
+
+`princ` is not used for `ready`: in batch Emacs it leaves a non-terminal stdout unflushed, and the shell would wait
+for ever. `send-string-to-terminal` writes and flushes it.
+
+**Cost** (Emacs 30.2, Linux, no sandbox, a fake upstream on a local socket): launch to the agent's first output
+65 ms (median of 20; a bare `emacs --batch -Q` is 60 ms), started before the agent and not in parallel with it. A
+32 MB stream through the relay ran at 19 MB/s against 17 MB/s straight to the socket: the test's own reader is the
+limit, and streamed tokens are a few KB/s. One more batch Emacs per session.
+
+Tests: `test/unit/sandbox-relay-test.el` (`drgnx-sandbox-relay/`) runs the entry around fake agents (`sh`, a batch
+Emacs that connects first thing) and a fake upstream on a socket in the test's temporary directory, on free ports of
+the host's loopback: bytes both ways, ready before the agent, many connections, and the end with the agent.
+
+### The proxy
+
+In phase 2 (`:net isolated`) the agent has no network but its own loopback. Its `HTTPS_PROXY` leads, through the
+relay inside, to its job's proxy outside: `core/drgnx-sandbox-proxy.el`, one batch Emacs per job, the hub's child, so
+that a streamed response never blocks the hub. It listens on a Unix socket in the session's directory, or on macOS
+(no network namespace) on a random port of `127.0.0.1`, which Seatbelt alone lets the agent reach.
+
+```elisp
+(drgnx-sandbox-proxy-start JOB HOSTS SOCKET-OR-NIL) ; → the process; :ready once it listens, :port without a socket
+(drgnx-sandbox-proxy-allow PROC "registry.npmjs.org:443") ; this job only; the agent's retry goes through
+(drgnx-sandbox-proxy-send PROC "deny" HOST-PORT)    ; takes an entry away again
+drgnx-sandbox-proxy-denied-functions                ; called with (JOB HOST-PORT) for each refused target
+```
+
+**What it answers.** `CONNECT host:port` only. A target on the job's allowlist gets `200 Connection established`,
+and from then on the bytes are spliced both ways as they are: TLS is not terminated, the agent's ClientHello reaches
+the server, and the server's certificate the agent. Everything else gets `403` and the connection is closed: another
+method (plain `GET http://…` too), a request line that is not `CONNECT TARGET HTTP/1.x`, a head (line and headers)
+over `drgnx-sandbox-proxy-max-head` (8 KiB) or not complete within `drgnx-sandbox-proxy-head-timeout` (10 s), a
+wildcard target (`CONNECT *.example.com:443`), a connection past `drgnx-sandbox-proxy-max-connections` (64 at once),
+and a target not on the list. Only the last is said on stdout, as `denied HOST:PORT`, once per target and proxy; the
+hub turns it into a `network` card. A bad request, another method or a wildcard gets no card: **Allow** could not
+help the first two, and the agent must never be able to ask for a wildcard grant. A listed target that cannot be
+reached gets `502`.
+
+**Matching.** Entries and targets are compared after normalization (`drgnx-sandbox-proxy-normalize`), exactly:
+
+- names in lower case, one trailing dot dropped; labels of letters, digits, `_` and inner `-`; the last label starts
+  with a letter, so that no name is one a resolver reads as an address (`127.1`, `2130706433`, `0x7f.0.0.1`);
+- an entry in Unicode is encoded to its IDNA ASCII form (`xn--…`); a request's target must already be ASCII (a
+  client sends the A-label);
+- addresses: IPv4 as four decimal octets without leading zeros, IPv6 in brackets, written in one fixed form;
+- `*.example.com:443` matches `a.example.com` and `b.a.example.com`, never `example.com`, `evilexample.com` or
+  `a.example.com.attacker`. The proxy looks up each parent of the name as `*.PARENT:PORT`, never a suffix of the
+  string. A wildcard needs two labels or more (`*.com` is refused) and never covers an address;
+- the port is part of the entry: no wildcard ports.
+
+**Addresses.** A listed name is resolved once, by the proxy, and the proxy connects to the very address it checked
+(`:remote`): there is no second resolution for DNS to answer differently. Of the answer it keeps the public
+addresses only. When DNS answers only private, shared, loopback, link-local, multicast or reserved ones (IPv6's
+mapped, NAT64 and 6to4 forms are judged by the IPv4 inside), the target gets `403` and stdout says `refused
+HOST:PORT private`: a name the user allowed on a card cannot lead to the user's own `127.0.0.1` services. An address
+literal that is not public (`127.0.0.1`, `0.0.0.0`, `169.254.169.254`, `[::1]`) and not listed gets the same `403`
+and `refused` line, never a `denied` one, so no card offers a one-click **Allow** of it. Such an address is reached
+only when the allowlist names the address itself (`127.0.0.1:8443`, from configuration), or through a name pinned in
+`drgnx-sandbox-proxy-pinned-addresses` (`(("registry.corp" . "10.0.0.5"))`): a company registry, a test's local
+upstream. Pinning resolves only; the name must still be on the list.
+
+**The control channel.** stdin lines `allow HOST:PORT` and `deny HOST:PORT` change the list; anything else is
+ignored. A batch Emacs cannot wait on stdin and on sockets at once (`read-from-minibuffer` blocks without reading
+process output), so the start command hands the proxy's stdin over as fd 3 (`exec emacs … 3<&0 </dev/null`) and the
+proxy reads it through a `cat <&3` child. When the hub ends, by exit or by a kill, the pipe closes, `cat` ends, and
+the proxy with it. stdout carries `ready` (`ready PORT` without a socket), `denied …` and `refused …`; the hub's
+filter acts only on `ready` and on a `denied` line whose target is already normalized.
+
+**Limits.** No TLS termination means no inspection: an allowed host gets whatever the agent sends it. A name is
+resolved with the blocking `getaddrinfo`, which stalls the job's other connections for that time (one proxy per job,
+so never another job's). A spliced connection has no idle timeout: it stays until either side closes, within the cap
+of 64. On macOS any local process can reach the port, as with the gateway. Unicode entries are not NFC-normalized
+before encoding.
+
+### The gateway socket
+
+A gateway profile's agent reaches the hub's gateway (`core/drgnx-gateway.el`) through `gateway.sock`, a per-session Unix
+socket in the session's directory beside `mcp.sock` and `hub.sock` (inside the sandbox, `/run/drgnx/gateway.sock`); the
+relay turns `127.0.0.1:3129` into it. `(drgnx-gateway-listen-socket PATH)` makes it, mode 0600 (a stale file at PATH is
+replaced), and `(drgnx-gateway-close-socket PATH)` cuts its connections, with their upstream requests, and removes the
+file; `drgnx-gateway-stop` closes them all. It shares the port's code: the same filter, path allowlist and token check.
+The caller chooses PATH, and on macOS PATH must fit 104 bytes (`make-network-process` errors when it is too long). The
+socket is not wired to a session yet. Tests: `test/unit/gateway-test.el` (`drgnx-gateway-socket/`). The gateway itself is
+described in [the hub](hub.md).

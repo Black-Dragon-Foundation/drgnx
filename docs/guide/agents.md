@@ -28,7 +28,12 @@ read again at the next use after you save it, with no restart.
 
 `:command` is the agent program; `:mode` is what a message to a busy agent does: `queue` (default), `steer` (when
 the agent advertises steering — sent as `_session/steering`; if the agent refuses, the message is queued instead) or
-`interrupt` (stop the turn, then send). A profile whose program is not installed gives a session that says so. Keys and tokens are
+`interrupt` (stop the turn, then send). A profile whose program is not installed gives a session that says so.
+`:mcp-servers` lists MCP servers of your own for every session of the profile, job sessions included, after drgnx's
+own: ACP `mcpServers` entries, written with vectors where ACP has arrays, e.g.
+`:mcp-servers ((:name "docs" :command "docs-mcp" :args ["--read-only"] :env []))`. An entry named `drgnx` or
+`drgnx-search` (drgnx's own servers) is left out, and a message says so. `:job-safe t` lets a [job](jobs.md) run the
+profile (see [Jobs and your Claude settings](#jobs-and-your-claude-settings)). Keys and tokens are
 never written there — the agent reads them from its environment or its own login. The built-in `claude` profile
 runs the unmodified `claude-agent-acp` (npm package `@agentclientprotocol/claude-agent-acp`) when it is installed, with
 your own Claude login. Onboarding's Agents step installs Claude Code, Node and that adapter if they are missing
@@ -123,6 +128,37 @@ returns without waiting for the job's pid (the boot and start time that make it 
 poll that gives up after 2 s, or at once when Emacs exits first): for callers in a timer that must not block, such as drgnx starting the local AI runner again. A job's `job.eld` is written atomically and stamped without waiting; a `job.eld` drgnx cannot read is never overwritten, and that job does not show in the list. Sessions and jobs started on a task get it as `DRGNX_TASK`, and the commits they make are
 recorded for it ([Work tracker](work.md)).
 
+## The job sandbox
+
+The agents of a [job](jobs.md) run in a sandbox: bubblewrap (`bwrap`) on Linux, `sandbox-exec` on macOS. Inside,
+they see the system, your toolchains read-only, their task's folder and a private home, and nothing else of yours
+(how it works: [the job sandbox](../develop/sandbox.md)). `drgnx doctor` says whether it works here, in the Agents
+group:
+
+```
+OK    job-sandbox          bwrap 0.12.0 ok; memory cap 4G per agent by default (drgnx-sandbox-memory-max)
+```
+
+or a warning with the reason and the fix. (`drgnx doctor` runs without your configuration, so it shows the cap's
+default; the doctor of the Welcome's Finish step shows yours.) Without a working sandbox, jobs do not start. What to install:
+
+- **Fedora, RHEL:** `sudo dnf install bubblewrap`. **Debian, Ubuntu:** `sudo apt install bubblewrap`. **Arch:**
+  `sudo pacman -S bubblewrap`. **openSUSE:** `sudo zypper install bubblewrap`. drgnx uses only a `bwrap` that only
+  root can change (`/usr/bin/bwrap`, or one on `PATH` in a root-owned directory).
+- **Ubuntu 23.10 and later** restrict unprivileged user namespaces with AppArmor ("AppArmor restricts unprivileged
+  user namespaces"). The doctor gives the command that loads Ubuntu's `bwrap-userns-restrict` profile, which lets
+  bwrap make them.
+- **macOS** ships `sandbox-exec`.
+- **Inside a container** there is no sandbox for jobs: run drgnx on the host.
+
+Your toolchains under `~` are found from `PATH` and bound read-only: the install dirs of mise, cargo and rustup, go,
+nvm, npm's prefix, pipx and uv, and the `PATH` dirs themselves (`~/.local/bin`). A link in a `PATH` dir to anything
+else (a script in your dotfiles or another repository) brings that one file, never the directory it is in; nothing
+of `~/.config`, `~/.local/share` or `~/.cache` comes in but those install dirs, and nothing of drgnx's own. The token
+files package managers keep in the install dirs (`.npmrc`, `etc/npmrc`, `.pypirc` …, `drgnx-sandbox-secret-files`)
+are hidden. Where systemd runs your session, each agent also runs under a memory cap,
+`drgnx-sandbox-memory-max` (4G; nil for none), so one agent's build cannot run your session out of memory.
+
 ## The hub and the gateway
 
 Agents on **OpenRouter, Ollama, your own Anthropic key, Kimi or DeepSeek** (profiles with `:ai claude-openrouter`,
@@ -195,6 +231,57 @@ the agent works in. `agents.eld` holds the choice, next to `:profiles`:
 Onboarding's Agents step asks for both and writes them without touching the rest of the file (comments stay); you can
 edit them by hand too. The search tool lets an agent read the indexed code of any of your projects, so it is off until
 you say yes.
+
+## Jobs and your Claude settings
+
+A [job](jobs.md)'s agent works unwatched, in a repository you may not have written, so nothing in a settings file may
+let it act without asking. When a job runs a profile on Claude Code's adapter (when either the package of the
+program it starts, `@agentclientprotocol/claude-agent-acp`, or a file name in its command says so: a pnpm, volta,
+asdf or mise shim counts by its name), its `session/new` and `session/load` carry
+options for the adapter (`_meta.claudeCode.options`, `drgnx-agents-job-claude-options`), and that session's Claude
+**ignores**:
+
+- the **allow rules and hooks** of your user settings (`~/.claude/settings.json`, or `settings.json` in
+  `CLAUDE_CONFIG_DIR`), the project's (`.claude/settings.json`) and the local ones (`.claude/settings.local.json`) —
+  drgnx passes the policy tier (`allowManagedPermissionRulesOnly`, `allowManagedHooksOnly`), so a tool you allowed
+  for your own sessions asks in a job;
+- **bypass mode** (`bypassPermissions`, `--dangerously-skip-permissions`) from any tier;
+- **any default mode**: once the session is made or loaded, drgnx sets its mode to `default` (ACP
+  `session/set_mode`) before it takes a turn, so neither `auto` nor `acceptEdits` from any settings file, nor the
+  mode a resumed session last had, applies. An agent that refuses ends the session (the job then falls back or
+  shows a card);
+- **MCP servers** other than drgnx's own: a repository's `.mcp.json`, your user and plugin servers and those of
+  agent definitions are not started (`strictMcpConfig`).
+
+The policy tier makes Claude ignore the deny and ask rules of those files too, so drgnx copies them into it: the
+**deny and ask rules** of your user, project and local settings still apply (an allow rule is never copied). drgnx
+reads those files when the session starts: regular files up to 1 MB that parse as JSON — your user settings file
+may be a link (as stow or home-manager make it), while the project and local ones must be plain files inside the
+task's folder, never links; any other is skipped. `CLAUDE.md`, skills and agent definitions still
+load (which settings files Claude reads is left as it is: they are content, and the permission check bounds what they
+can make the agent do). Claude Code's own sandbox is off in a job: drgnx's is the boundary.
+
+Your own sessions (New Agent Session…, Take Over) and agents other than Claude get none of this. Other agents
+(Gemini CLI, Codex) have no such switch yet, so a job runs only **job-safe** profiles (`drgnx-agents-job-safe-p`):
+those whose options say `:job-safe t` and that run Claude Code's adapter, so a job-safe profile always gets these
+options. drgnx's built-in profiles say so (their bare `claude-agent-acp` is the adapter drgnx chooses, a shim
+included). A profile of yours may say so too, but it counts only when the program it starts belongs to the
+adapter's npm package (read from its `package.json`): a wrapper whose name says claude gets the options above, not a
+job, and a profile that runs any other agent is never job-safe, whatever it says. On macOS a profile without `:ai` (the
+plain `claude`, which logs in with your subscription, its token in the Keychain) is not job-safe: jobs there use the
+gateway profiles. A job routed to a profile that is not job-safe starts no agent: the task gets an **agent** card
+that says why and names the profiles that may run it ([jobs.md](jobs.md#routes-and-the-estimate)). Since a job's
+Claude starts only drgnx's MCP servers, list a server you want in jobs as the profile's `:mcp-servers`. On a machine whose administrator installed a `managed-settings.json`
+(`/etc/claude-code/` on Linux, `/Library/Application Support/ClaudeCode/` on macOS), Claude Code uses the
+administrator's policy instead of drgnx's unless that file sets `"parentSettingsBehavior": "merge"`; the refusal of
+bypass mode, the `default` mode and the MCP lock hold either way.
+
+Tests: `test/unit/agents-claude-options-test.el` (what job sessions send through `session/new` and `session/load`,
+the mode set before any turn and a refusal ending the session, deny and ask rules copied and allow rules never,
+the folder's settings files that are links or do not parse skipped and a linked user file followed, nothing for your
+sessions or other agents, the lock for a shim install and for a program that only has claude in its name, a
+repository's bypass settings and `.mcp.json` changing nothing sent, an
+environment value JSON cannot carry ending the start without showing it).
 
 ## Working together
 
@@ -284,6 +371,8 @@ run it, with the plan's own encoding and line endings — and leaves alone a pla
 - `test/unit/agents-test.el` — sessions: a turn's transcript, queueing during a turn (delivered in order, never
   cancelling), steering (and its fallback), Stop within a second, permissions, tool calls, plans and subagents, a
   dying agent, Take Over, `/compact`.
+- `test/unit/agents-claude-options-test.el` — a job session's Claude cannot be pre-allowed
+  ([above](#jobs-and-your-claude-settings)).
 - `test/unit/agents-adapter-test.el` — which adapter runs, from fake npm prefixes with `package.json` files only (no
   npm, no agent): the maintained package wins wherever it is on the `PATH`, the deprecated one still runs and says so
   once with its fix, an old version, a copy instead of a link, a program of no known package, other commands left
@@ -297,6 +386,8 @@ run it, with the plan's own encoding and line endings — and leaves alone a pla
   a real profile with `DRGNX_AGENT_PROFILE=NAME` (uses your subscription or key, and the network).
 
 The mock agent (`test/fixtures/mock-acp.el`) is a batch Emacs whose turns are chosen by words in the prompt
-(`slow`, `stream N`, `tool`, `plan`, `subagent`, `permission`, `write PATH`, `crash`, `/compact`). Tests start it through
+(`slow`, `stream N`, `tool`, `plan`, `subagent`, `permission`, `write PATH`, `crash`, `/compact`, `meta`: the `_meta`
+its `session/new` or `session/load` got, `mode`: the mode `session/set_mode` set; `MOCK_ACP_SET_MODE_FAILS` and
+`MOCK_ACP_SET_MODE_SLOW=SECS` make it refuse or answer late). Tests start it through
 `test/fixtures/mock-acp-stdin.sh` (`sh mock-acp-stdin.sh emacs --batch -Q -l mock-acp.el`), which copies its stdin into
 a FIFO the mock reads while a turn streams; without the wrapper it reads `/proc/PID/fd/0`, which only Linux has.

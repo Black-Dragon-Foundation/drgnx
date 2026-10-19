@@ -95,6 +95,17 @@ goes through the gateway; profiles drgnx cannot price (a subscription) are liste
 proposal also warns about a profile on a route whose provider has no `:price` in `ai.eld`: the gateway cannot count
 what it spends, so the budget would not stop it.
 
+**Only job-safe profiles run a job's agents.** A job's agent works unwatched in a repository you may not have
+written, and that repository's own settings (`.claude/settings.json`, a `.gemini/` folder, …) could let its agent act
+without asking. drgnx can switch them off only for Claude Code, so a job runs only profiles that say `:job-safe t`
+and run Claude Code's adapter: drgnx's built-in ones (on macOS not the plain `claude`, whose subscription token is in
+the Keychain: use a gateway profile there). A task or review routed to any other profile (a Gemini CLI or Codex
+profile, one of yours without `:job-safe`, a profile that does not exist) starts no agent; it gets an **agent** card
+that says why and names the profiles to route it to. Change `:routes`, then Retry (or Review now). A clash's reviewer
+on such a profile gives the job a **profile** card (Dismiss) instead, and the clash card is yours to decide. Any
+other start of a session for a job (the hub's `agents/start` with a `job`) on such a profile ends at once and says
+why. Details in [agents.md](agents.md#jobs-and-your-claude-settings).
+
 ## While it runs
 
 - **Worktrees:** the job's branch `job/ID` (from your HEAD when you approved) in `.claude/worktrees/ID`; each task
@@ -230,11 +241,20 @@ the perf workload `job-window` ([perf.md](../develop/perf.md)). Developer detail
   Allow lets the call through, Reject refuses it. drgnx tells its own servers apart by the tool's name (`mcp__`, the
   server's name, `__` and a name with no further `__`) and, where the adapter names the server
   (`_meta.claudeCode.mcpServer`, sent by `@agentclientprotocol/claude-agent-acp`), by that server being the same one
-  as drgnx gave the session (source `dynamic`). The adapter drgnx installs today names no server, so there a server
-  of yours that is itself called `drgnx` or `drgnx-search` is taken for drgnx's. A call whose tool cannot be named,
-  or whose kind is not a string, asks. Other calls of the kind `other` (loading a skill, a to-do list) are allowed
-  as before. A tool that Claude Code itself allows from your settings (`permissions.allow`) never asks anyone,
-  drgnx included.
+  as drgnx gave the session (source `dynamic`). A job's Claude starts no server of your configuration at all (see
+  below), and a profile's own `:mcp-servers` cannot take the names `drgnx` or `drgnx-search`, so no other server
+  passes for drgnx's. A call whose tool cannot be named, or whose kind is not a string, asks. Other calls of the
+  kind `other` (loading a skill, a to-do list) are allowed as before.
+- **Another server's resources ask.** Claude Code's `ReadMcpResourceTool` and `ListMcpResourcesTool` read an MCP
+  server's resources; the server is the call's `server` input. They go through without asking only for `drgnx` and
+  `drgnx-search`; for any other server, or with no server (every server's), they are a permission card.
+- **Your allow rules no longer pre-allow inside jobs.** A job's Claude Code session ignores the allow rules and hooks
+  of your user, project and local settings, bypass mode, and every MCP server but drgnx's (a repository's
+  `.mcp.json` included): drgnx sends it these options with `session/new` and `session/load`. It also sets the
+  session's mode to `default` before the first turn, so no `auto` or `acceptEdits` default mode from any settings
+  file applies; an agent that refuses ends the session. The deny and ask rules of those settings still apply (drgnx
+  copies them into the policy tier), so do `CLAUDE.md` and skills, and your own sessions are unchanged. Details in
+  [agents.md](agents.md#jobs-and-your-claude-settings).
 - **The agents' configuration asks.** A change to a `.claude/` directory at any depth of the worktree (its settings
   can set a permission mode such as `bypassPermissions`, allow rules or hooks, and hold for the reviewer and every
   agent that works in the worktree after it; nested ones hold skills) or to a `.mcp.json` anywhere in the worktree
@@ -252,4 +272,24 @@ the perf workload `job-window` ([perf.md](../develop/perf.md)). Developer detail
   limit (an agent may answer `Internal error` with the provider's `429 Too Many Requests` in `data`).
 
 Tests: `test/unit/job-mcp-policy-test.el` (drgnx's servers allowed, a user's server asks, a denial blocks, an agent
-cannot approve its own request, the agents' configuration in the worktree, the limit in an error's data).
+cannot approve its own request, the agents' configuration in the worktree, the limit in an error's data);
+`test/unit/job-safe-test.el` (built-ins job-safe, a user's profile not unless it says so and runs the adapter's
+package, a wrapper named claude refused, the plain `claude` refused on macOS, a refused profile gives a card and no
+agent for a task, a reviewer and a clash's reviewer, a job session on it never starts — directly or through the hub's
+`agents/start` —, another server's resources ask, a profile's MCP servers after drgnx's and never under drgnx's
+names); `test/unit/job-cli-test.el` (the CLI's job on a mock profile is refused with a card).
+
+## Snapshot folders: use the job window
+
+A job agent works in a folder of its own (`.claude/worktrees/ID-N/`). In the default **snapshot** mode that folder
+holds a private copy of the repository, and its `.git` belongs to the agent: its config could make git run a
+program of the agent's the moment any git of yours ran there. So drgnx refuses git in that folder for as long as the
+task's sandbox lives: version control, magit, project.el and drgnx's own tools say "no git in a job's snapshot
+folder" instead of running it, and VC ignores the folder.
+
+- **Look at the work from the job window.** Open a file of the folder from there; reading and editing files is fine.
+- **For git, use the main repository.** What the agent committed arrives there as the branch `job/ID-N` once the task
+  returns its result: `git log job/ID`, `git diff main...job/ID`. The work tracker reads the main repository too.
+- **A `git` you type in a shell** inside the folder is outside drgnx's reach. Do not run it there.
+- **Worktree mode** (opt-in) keeps your tools working once the task's agent has stopped and drgnx has scrubbed its
+  git state; while the agent runs, the folder is guarded the same way.
