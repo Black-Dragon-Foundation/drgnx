@@ -231,6 +231,37 @@
           (should (equal (drgnx-explorer-node-at (window-start w)) (expand-file-name "f200.txt" big)))
           (should (equal (drgnx-explorer-node-at (window-point w)) (expand-file-name "f205.txt" big))))))))
 
+(ert-deftest drgnx-explorer/a-render-keeps-each-window-on-its-path ()
+  ;; Two windows on the Explorer and the buffer's own point: a render with a row added above them all keeps each
+  ;; start and point on its path, at the same place in the row (a redraw never moves the cursor under the user).
+  (drgnx-explorer-test--with root
+    (let ((big (expand-file-name "big" root)))
+      (make-directory big)
+      (dotimes (i 300) (write-region "" nil (expand-file-name (format "f%03d.txt" i) big) nil 'silent))
+      (drgnx-explorer-refresh)
+      (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "big"))
+      (drgnx-wb-show-sidebar)
+      (select-window (drgnx-wb-editor-window))
+      (let ((w1 (drgnx-wb-section-window 'explorer)) (w2 (split-window (drgnx-wb-editor-window)))
+            (pos (lambda (name) (drgnx-explorer--row-pos (expand-file-name name big)))))
+        (set-window-buffer w2 drgnx-explorer-buffer-name)
+        (with-current-buffer drgnx-explorer-buffer-name
+          (set-window-start w1 (funcall pos "f200.txt"))
+          (set-window-point w1 (+ (funcall pos "f205.txt") 3))
+          (set-window-start w2 (funcall pos "f100.txt"))
+          (set-window-point w2 (+ (funcall pos "f110.txt") 2))
+          (goto-char (1+ (funcall pos "f150.txt"))))
+        (write-region "" nil (expand-file-name "e.txt" big) nil 'silent) ; sorts above every fNNN row
+        (drgnx-cache-remove 'explorer-listing (file-name-as-directory big))
+        (drgnx-explorer-refresh)
+        (with-current-buffer drgnx-explorer-buffer-name
+          (should (equal (drgnx-explorer-node-at (funcall pos "e.txt")) (expand-file-name "e.txt" big)))
+          (should (= (window-start w1) (funcall pos "f200.txt")))
+          (should (= (window-point w1) (+ (funcall pos "f205.txt") 3)))
+          (should (= (window-start w2) (funcall pos "f100.txt")))
+          (should (= (window-point w2) (+ (funcall pos "f110.txt") 2)))
+          (should (= (point) (1+ (funcall pos "f150.txt")))))))))
+
 (ert-deftest drgnx-explorer/a-click-never-scrolls-the-dock ()
   ;; Pressing a partly visible bottom row must not scroll (the row would move under the pointer).
   (drgnx-explorer-test--with root

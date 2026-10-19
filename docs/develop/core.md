@@ -1289,10 +1289,14 @@ Buffers that are not views keep places with the same idea:
 ```
 
 `(drgnx-view-save-places KEY-AT)` returns the buffer's point and each showing window's start and point as `(KEY
-OFFSET LINE)`, KEY being `(funcall KEY-AT POS)` and OFFSET the distance from the start of KEY's row (the first line
-above POS with the same key). `(drgnx-view-restore-places PLACES POS-OF)` puts each back at `(+ (funcall POS-OF KEY)
-OFFSET)`, or at the start of LINE (clamped) when POS-OF returns nil; dead windows are skipped, and the windows move
-inside `drgnx-wb-with-owned-windows`. The macro is save, BODY, restore, and returns BODY's value.
+OFFSET LINE ROW-LINE)`, KEY being `(funcall KEY-AT POS)`, OFFSET the distance from the start of KEY's row (the first
+line above POS with the same key) and ROW-LINE POS's line within that row. `(drgnx-view-restore-places PLACES
+POS-OF)` puts each back at `(+ (funcall POS-OF KEY) OFFSET)`, but no further than the end of the row's ROW-LINE (a row
+drawn shorter keeps the cursor on it, never on the next row); when POS-OF returns nil (the row went), at the start of
+LINE, or of the last line when the rows now end above it. Dead windows are skipped, and the windows move inside
+`drgnx-wb-with-owned-windows`. The macro is save, BODY, restore, and returns BODY's value. The Explorer and the
+Buffers panel keep their places this way (keyed by path and by buffer), as do the Agents list and the cockpit's
+edits pane.
 
 ### Reads
 

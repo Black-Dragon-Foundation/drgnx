@@ -17,6 +17,7 @@
 (require 'text-property-search)
 (require 'hl-line)
 (require 'drgnx-wb)
+(require 'drgnx-view)                   ; `drgnx-view-with-kept-windows'
 (require 'drgnx-git)
 
 (defface drgnx-buffers-close '((t :inherit shadow)) "The × of each row." :group 'drgnx)
@@ -164,22 +165,13 @@ While a button is held in the panel, wait for the release: rows never move under
       (cl-incf drgnx-buffers--renders)
       (with-current-buffer (get-buffer-create drgnx-buffers-buffer-name)
         (unless (derived-mode-p 'drgnx-buffers-mode) (drgnx-buffers-mode))
-        (let* ((windows (get-buffer-window-list (current-buffer) nil t))
-               (kept (mapcar (lambda (w) (list w (drgnx-buffers-buffer-at (window-start w))
-                                               (drgnx-buffers-buffer-at (window-point w))))
-                             windows))
-               (at (drgnx-buffers-buffer-at (point)))
-               (inhibit-read-only t))
-          (erase-buffer)
-          (let ((drgnx-buffers--dirs (make-hash-table :test #'equal)))
-            ;; One insertion of plain text (faces: jit-lock, for the visible rows only).
-            (insert (mapconcat #'drgnx-buffers--row (drgnx-buffers--shown) "")))
-          (setq drgnx-buffers--rows (vconcat (drgnx-buffers--shown)))
-          (goto-char (or (and at (drgnx-buffers--row-pos at)) (point-min)))
-          (pcase-dolist (`(,w ,top ,pt) kept)
-            (drgnx-wb-with-owned-windows (list w)           ; the panel's own windows
-              (when-let* ((p (and top (drgnx-buffers--row-pos top)))) (set-window-start w p t))
-              (when-let* ((p (and pt (drgnx-buffers--row-pos pt)))) (set-window-point w p))))
+        (let ((inhibit-read-only t))
+          (drgnx-view-with-kept-windows (:key-at #'drgnx-buffers-buffer-at :pos-of #'drgnx-buffers--row-pos)
+            (erase-buffer)
+            (let ((drgnx-buffers--dirs (make-hash-table :test #'equal)))
+              ;; One insertion of plain text (faces: jit-lock, for the visible rows only).
+              (insert (mapconcat #'drgnx-buffers--row (drgnx-buffers--shown) "")))
+            (setq drgnx-buffers--rows (vconcat (drgnx-buffers--shown))))
           (when hl-line-mode (hl-line-highlight))
           (drgnx-buffers--mark-active))))))
 

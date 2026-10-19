@@ -480,6 +480,27 @@ never draws two slices in one gap (review T4-I1)."
       (should (= 4 (line-number-at-pos)))
       (should (bolp)))))
 
+(ert-deftest drgnx-view-live/kept-windows-macro-keeps-an-offset-on-its-row ()
+  ;; A row drawn shorter: a place past its new end stays at the end of that row, never on the next one.
+  (with-temp-buffer
+    (drgnx-view-live-test--fill (drgnx-view-live-test--line-keys 1 5))
+    (goto-char (1- (drgnx-view-live-test--line-pos "k4")))          ; the end of k3's row
+    (drgnx-view-with-kept-windows (:key-at #'drgnx-view-live-test--line-key :pos-of #'drgnx-view-live-test--line-pos)
+      (erase-buffer)
+      (dolist (k (drgnx-view-live-test--line-keys 1 5)) (insert k (if (equal k "k3") " " " a longer text ") "\n")))
+    (should (equal "k3" (drgnx-view-live-test--line-key (point))))
+    (should (eolp))))
+
+(ert-deftest drgnx-view-live/kept-windows-macro-falls-to-the-last-row-at-the-end ()
+  ;; A place whose row went, on a line past the rows left, falls to the last row, not to the empty end of the buffer.
+  (with-temp-buffer
+    (drgnx-view-live-test--fill (drgnx-view-live-test--line-keys 1 10))
+    (goto-char (drgnx-view-live-test--line-pos "k9"))
+    (drgnx-view-with-kept-windows (:key-at #'drgnx-view-live-test--line-key :pos-of #'drgnx-view-live-test--line-pos)
+      (drgnx-view-live-test--fill (drgnx-view-live-test--line-keys 1 5)))
+    (should (equal "k5" (drgnx-view-live-test--line-key (point))))
+    (should (bolp))))
+
 ;;;; The pass over
 
 (ert-deftest drgnx-view-live/the-pass-over-calls-the-gc-gap-once ()
