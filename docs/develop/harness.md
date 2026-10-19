@@ -651,7 +651,7 @@ dirs) and drive the session through `harness/drgnx-tty-session.el`:
   `drgnx-tty-session-client SESS :env ENV :args ARGS` opens more clients, each in its own window, with extra
   variables (`TERM=…`) and emacsclient arguments (files, `-e FORM`). `drgnx-tty-session-pty-start` opens a client
   under Emacs's own pty that never answers a query: a silent terminal. `:keys PROFILE` (`vscode`, `emacs` or `vim`)
-  writes the session's `keys.eld` with that profile. `drgnx-tty-session-tmux SESS ARGS…` runs any tmux command on the
+  writes the session's `keys.eld` with that profile. A session with Emacs also gets `face.eld` with the start page dismissed ("Don't show this again"), so an empty editor keeps showing `*scratch*`, which the tests look at. `drgnx-tty-session-tmux SESS ARGS…` runs any tmux command on the
   session's server.
 - **Isolation:** every program runs under `env -i` with the GUI harness's allowlist. HOME, `XDG_CONFIG_HOME`,
   `XDG_DATA_HOME`, `XDG_CACHE_HOME` and `XDG_STATE_HOME` are in the run directory, and `TMUX` is unset. Every tmux
