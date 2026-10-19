@@ -191,8 +191,10 @@ a.txt in the editor, wait until both are on the screen.  Returns the project dir
                                       (define-key global-map [menu-bar file drgnx-test-item]
                                                   '(menu-item "Mouse Test Item" drgnx-tty-mouse-test--item))
                                       t))
+    ;; drgnx hides the menu bar by default (`drgnx-face-menu-bar'): this person has brought it back
+    (drgnx-tty-session-eval s '(progn (customize-set-variable 'drgnx-face-menu-bar t) t))
     ;; the menu bar is the first row of the frame; the click opens a tty menu (modal) with the new item on top
-    (should (= (cdr (drgnx-tty-session-find s "File")) 1))
+    (should (= (cdr (drgnx-tty-session-wait-screen s "File +Edit")) 1))
     (should-not (drgnx-tty-session-find s "Mouse Test Item"))
     (drgnx-tty-mouse-test--click-on s "File")
     (drgnx-tty-session-wait-screen s "Mouse Test Item")

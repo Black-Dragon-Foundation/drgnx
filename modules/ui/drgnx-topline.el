@@ -351,8 +351,13 @@ nil while it is off.")
              (and drgnx-topline--format (equal now drgnx-topline--format))))))
 
 (defun drgnx-topline--lines (frame)
-  "1 when FRAME shows the top line, else 0: a terminal with fewer than `drgnx-topline-min-lines' lines shows none."
-  (if (or (display-graphic-p frame) (>= (frame-height frame) drgnx-topline-min-lines)) 1 0))
+  "1 when FRAME shows the top line, else 0: a terminal with fewer than `drgnx-topline-min-lines' lines shows none.
+The terminal's lines are the frame's height plus the tab bar's own: `frame-height' is one less while the line shows,
+so counting it alone made a terminal of exactly the minimum show the line, then lose it, then show it again, for
+as long as it stayed that size."
+  (if (or (display-graphic-p frame)
+          (>= (+ (frame-height frame) (or (frame-parameter frame 'tab-bar-lines) 0)) drgnx-topline-min-lines))
+      1 0))
 
 (defun drgnx-topline--fit (&optional frame)
   "Give FRAME (default: the selected one) its top line, or none when it is a short terminal.

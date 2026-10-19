@@ -171,6 +171,17 @@ buffer of the selected window (a temp buffer in project `proj', no git).  Faces 
               ((symbol-function 'frame-height) (lambda (&optional _) 5)))
       (should (= 1 (drgnx-topline--lines (selected-frame)))))))
 
+(ert-deftest drgnx-topline/a-terminal-of-the-minimum-keeps-the-line ()
+  ;; `frame-height' is one less while the line shows: a terminal of exactly the minimum must not lose it and win it back
+  ;; on every size change (the frame resized itself between 19 and 20 lines, for ever)
+  (drgnx-topline-test--with 'vscode
+    (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) nil))
+              ((symbol-function 'frame-height) (lambda (&optional _) 19))
+              ((symbol-function 'frame-parameter)
+               (let ((real (symbol-function 'frame-parameter)))
+                 (lambda (frame param) (if (eq param 'tab-bar-lines) 1 (funcall real frame param))))))
+      (should (= 1 (drgnx-topline--lines (selected-frame)))))))
+
 (ert-deftest drgnx-topline/a-new-width-gives-items-that-are-not-equal ()
   ;; The tab bar redraws only when its items are not `equal', and `equal' ignores text properties: a gap made of one space
   ;; with an :align-to property left the hint centred for the old width on the screen after a resize.
