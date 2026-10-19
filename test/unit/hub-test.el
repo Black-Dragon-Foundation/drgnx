@@ -11,7 +11,7 @@
 to OR-LOG, OPENROUTER_API_KEY unset."
   (declare (indent 0))
   `(let* ((root (file-name-as-directory (make-temp-file "drgnx-hub" t)))
-          (or-port (+ 20000 (random 20000))) (or-log (concat root "or.log"))
+          (or-port nil) (or-log (concat root "or.log"))
           (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" root "config") (concat "DRGNX_DATA_DIR=" root "data")
                                              (concat "XDG_STATE_HOME=" root "state") (concat "HOME=" root "home")
                                              "OPENROUTER_API_KEY" "DRGNX_JOBS_LAUNCHER=detached"
@@ -26,11 +26,12 @@ to OR-LOG, OPENROUTER_API_KEY unset."
            (make-directory (concat root "config") t) (make-directory (concat root "home") t)
            (with-temp-file (concat root "or.eld")
              (prin1 '((:path "/api/v1/messages" :body "{\"usage\":{\"input_tokens\":3,\"output_tokens\":4}}")) (current-buffer)))
+           (setq mock (drgnx-ai-test-mock-llm nil (concat root "or.eld") or-log)
+                 or-port (process-get mock :port))
            (with-temp-file (concat root "config/ai.eld")
              (prin1 `(:version 1 :providers ((openrouter :name "OR" :kind openai :url ,(format "http://127.0.0.1:%d/api/v1" or-port)
                                                          :key-env "OPENROUTER_API_KEY" :caps (chat) :messages t)))
                     (current-buffer)))
-           (setq mock (drgnx-ai-test-mock-llm or-port (concat root "or.eld") or-log))
            ,@body)
        (ignore-errors (drgnx-hub-call-sync "shutdown" nil 2))
        (drgnx-hub-stop)

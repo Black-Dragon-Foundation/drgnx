@@ -7,6 +7,7 @@
 (require 'drgnx-search-query)
 (require 'drgnx-search-mcp)
 (load (expand-file-name "modules/tools/drgnx-search" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
 
 (defconst drgnx-search-mcp-test--dims 32)
 
@@ -243,7 +244,7 @@
          (state (make-temp-file "drgnx-mcp-cli-state" t))
          (conf (make-temp-file "drgnx-mcp-cli-conf" t))
          (err (make-temp-file "drgnx-mcp-err"))
-         (dead (+ 40000 (random 9000)))
+         (dead (drgnx-test-free-port))
          ;; the child never reaches a real embedding provider: its config has an embed role on a dead local port
          (process-environment (append (list (concat "XDG_STATE_HOME=" state) (concat "XDG_CONFIG_HOME=" conf)
                                             (concat "DRGNX_CONFIG_DIR=" conf "/drgnx"))

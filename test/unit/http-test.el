@@ -71,12 +71,12 @@
 
 (ert-deftest drgnx-http/the-mock-streams-chunks ()
   :tags '(:timing)
-  (let* ((dir (make-temp-file "drgnx-http" t)) (script (expand-file-name "s.eld" dir)) (port (+ 20000 (random 20000)))
+  (let* ((dir (make-temp-file "drgnx-http" t)) (script (expand-file-name "s.eld" dir)) (port nil)
          (mock nil) (got nil) (times nil))
     (unwind-protect
         (progn
           (with-temp-file script (prin1 '((:path "/s" :chunks ((0 . "aa") (0.3 . "bb")))) (current-buffer)))
-          (setq mock (drgnx-ai-test-mock-llm port script))
+          (setq mock (drgnx-ai-test-mock-llm nil script) port (process-get mock :port))
           (let ((c (open-network-stream "c" nil "127.0.0.1" port :coding 'binary)) (t0 (float-time)))
             (set-process-filter c (lambda (_p s) (setq got (concat got s)) (push (- (float-time) t0) times)))
             (process-send-string c "GET /s HTTP/1.1\r\n\r\n")

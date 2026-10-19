@@ -17,7 +17,7 @@
 (ert-deftest drgnx-live/ghost-text-takes-tab-and-an-inline-edit-is-reviewed-hunk-by-hunk ()
   (let* ((root (file-name-as-directory (make-temp-file "drgnx-ai-live" t)))
          (process-environment (cons (concat "DRGNX_UI_STATE=" root "ui") process-environment))
-         (port (+ 20000 (random 20000))) (script (concat root "llm.eld"))
+         (script (concat root "llm.eld"))
          (filler (mapconcat (lambda (i) (format ";; line %d\n" i)) (number-sequence 1 8) ""))
          (mock nil) (s nil) (sess nil))
     (make-directory (concat root "config") t)
@@ -27,15 +27,15 @@
                (:path "/api/chat" :body ,(json-serialize
                                           (list :message (list :content (concat "```elisp\n(defun one () 10)\n" filler "(defun two () 20)\n```"))))))
              (current-buffer)))
-    (with-temp-file (concat root "config/ai.eld")
-      (prin1 `(:version 1 :providers ((o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" port) :caps (chat fim)))
-                        :roles ((complete (o . "coder")) (edit (o . "coder"))))
-             (current-buffer)))
     (write-region "(defun greet (name)\n  )\n" nil (concat root "a.el") nil 'silent)
     (write-region (concat "(defun one () 1)\n" filler "(defun two () 2)\n") nil (concat root "b.el") nil 'silent)
     (unwind-protect
         (progn
-          (setq mock (drgnx-ai-test-mock-llm port script))
+          (setq mock (drgnx-ai-test-mock-llm nil script))
+          (with-temp-file (concat root "config/ai.eld")
+            (prin1 `(:version 1 :providers ((o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" (process-get mock :port)) :caps (chat fim)))
+                              :roles ((complete (o . "coder")) (edit (o . "coder"))))
+                   (current-buffer)))
           (setq s (drgnx-ui-start "drgnx" "1400x800" 30) sess (drgnx-ui-own-session (plist-get s :name)))
           ;; the session's providers: the mock, found running by the probe
           (drgnx-live-ai--q sess (format "(progn (setenv \"DRGNX_CONFIG_DIR\" %S) (drgnx-ai-probe nil) t)" (concat root "config")))
