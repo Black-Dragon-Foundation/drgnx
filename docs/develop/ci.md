@@ -26,7 +26,13 @@ from `process-attributes`); temp paths compared with git's go through `file-true
 prompts pins `drgnx-platform`; only tools the system has are linked into a fake PATH (macOS has no `setsid`), and only
 POSIX options are used (no `timeout`, `dd iflag=`, GNU grep's `--exclude`); a test puts back the mode tables it
 changes (`major-mode-remap-alist`: Emacs 31 asks to install a missing grammar, which in batch reads stdin); native
-compilation is optional (Homebrew's Emacs has none). On Linux, `TMPDIR` set to a symlinked or long directory shows
+compilation is optional (Homebrew's Emacs has none).
+
+The two Emacs versions differ too. Emacs 31's ERT no longer loads bytecomp, so code that let-binds
+`byte-compile-warnings` (or any variable of a library not loaded yet) requires the library first: bound before, the
+variable is lexical and loading the library fails. Emacs 31 rejects a wall timer's `:repeat t` (30 ran it once):
+a repeat is a number of seconds. Ubuntu's `emacs-nox` has no image functions (`image-flush` is declared, not
+assumed), and without a UTF-8 locale Emacs quotes messages `like this', so a test matches either quote. On Linux, `TMPDIR` set to a symlinked or long directory shows
 most of these before macOS CI does.
 
 ## Reproduce a job locally
