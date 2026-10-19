@@ -186,7 +186,6 @@ lambda or not)."
 
 (defconst drgnx-lint-timers--not-yet
   '(("modules/ui/drgnx-statusbar.el" 1)
-    ("modules/ui/drgnx-topline.el" 1)
     ("wb/drgnx-explorer.el" 4)
     ("wb/drgnx-signal.el" 1))
   "Timer sites that do not go through `drgnx-timer-*' yet: (FILE COUNT).

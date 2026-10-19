@@ -22,8 +22,6 @@
 ;; Sites from the branches merged at Task 14 (m12f-a's close and top line; C-UI's cockpit).
 (:file "modules/ui/drgnx-close.el" :what "window-buffer-change-functions"
  :why "Esc and q close a pane: recomputes whether the selected window is a lane or area (global)" :until "Task 18")
-(:file "modules/ui/drgnx-topline.el" :what "window-size-change-functions"
- :why "the top line fits a terminal frame and redraws at the new width (two global add-hooks)" :until "Task 20")
 (:file "modules/tools/drgnx-cockpit.el" :what "window-size-change-functions"
  :why "the Work graph re-fits at its window's size (buffer-local)" :until "Task 23")
 (:file "modules/tools/drgnx-cockpit.el" :what "window-buffer-change-functions"
