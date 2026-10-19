@@ -140,22 +140,23 @@ Skipped without evil otherwise."
 
 (ert-deftest drgnx-modal-choose/a-vim-stack-without-evil-stays-usable ()
   ;; keys.eld names the Vim stack, editor/evil is on, evil is not installed: the start goes on, the module waits,
-  ;; the palette and the Leader Menu keep their keys.
+  ;; the palette and the Leader Menu keep their keys — Linux's (on a Mac the palette is Cmd+Shift+P: keys/vim.eld).
   (let* ((doctor 0) (count (lambda (&rest _) (cl-incf doctor))))
     ;; advice, not a stub: loading the module file defines the function again (the advice stays)
     (advice-add 'drgnx-evil-doctor :before count)
     (unwind-protect
-        (drgnx-modal-choose-isolated--with "(:layers ((vim app editing window)))\n" "(:version 1 :enabled (editor/evil))\n" 'none
-          (let ((inhibit-interaction t)) (drgnx-modal-apply-pending))
-          (should (eq (plist-get (alist-get 'editor/evil drgnx-modules--report) :status) 'missing-packages))
-          (should (= doctor 0))
-          (should-not (seq-filter (lambda (m) (eq (plist-get (cdr m) :status) 'failed)) drgnx-modules--report))
-          (should-not (seq-find (lambda (p) (string-match-p "could not be applied" p)) (plist-get drgnx-keys-last :problems)))
-          (should (equal (plist-get drgnx-keys-last :layers) drgnx-modal-choose-test--vim))
-          (should-not drgnx-modal-running)
-          (should (eq (keymap-lookup global-map "C-S-p") #'drgnx-palette))
-          (should (eq (keymap-lookup global-map "<f1>") #'drgnx-palette))
-          (should (eq (keymap-lookup global-map "M-SPC") #'drgnx-modal-leader-menu)))
+        (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'linux)))
+          (drgnx-modal-choose-isolated--with "(:layers ((vim app editing window)))\n" "(:version 1 :enabled (editor/evil))\n" 'none
+            (let ((inhibit-interaction t)) (drgnx-modal-apply-pending))
+            (should (eq (plist-get (alist-get 'editor/evil drgnx-modules--report) :status) 'missing-packages))
+            (should (= doctor 0))
+            (should-not (seq-filter (lambda (m) (eq (plist-get (cdr m) :status) 'failed)) drgnx-modules--report))
+            (should-not (seq-find (lambda (p) (string-match-p "could not be applied" p)) (plist-get drgnx-keys-last :problems)))
+            (should (equal (plist-get drgnx-keys-last :layers) drgnx-modal-choose-test--vim))
+            (should-not drgnx-modal-running)
+            (should (eq (keymap-lookup global-map "C-S-p") #'drgnx-palette))
+            (should (eq (keymap-lookup global-map "<f1>") #'drgnx-palette))
+            (should (eq (keymap-lookup global-map "M-SPC") #'drgnx-modal-leader-menu))))
       (advice-remove 'drgnx-evil-doctor count))))
 
 (provide 'modal-choose-isolated)

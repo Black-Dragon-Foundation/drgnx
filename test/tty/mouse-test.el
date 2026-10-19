@@ -95,6 +95,11 @@ a.txt in the editor, wait until both are on the screen.  Returns the project dir
 (ert-deftest drgnx-tty-mouse/explorer-ctrl-click-toggles-selection ()
   (drgnx-tty-session-with (s :size "120x40")
     (drgnx-tty-mouse-test--project s)
+    ;; A Ctrl-click selects from the focused row: that is a.txt only once the follower revealed it, on the bus's idle
+    ;; flush (wb/drgnx-signal.el).  Clicks sent before it start from the PROJECT row and select it too.
+    (drgnx-tty-session-wait s '(let ((w (drgnx-wb-section-window 'explorer)))
+                                 (equal (with-current-buffer (window-buffer w) (drgnx-explorer-node-at (window-point w)))
+                                        (buffer-file-name (get-buffer "a.txt")))))
     (drgnx-tty-mouse-test--click-on s "^  a\\.txt" :mods '(control))
     (drgnx-tty-mouse-test--click-on s "^  b\\.txt" :mods '(control))
     (should (equal (drgnx-tty-session-wait

@@ -8,7 +8,7 @@ serve() {
     case $line in
       Content-Length:*) len=${line#*: } ;;
       "")
-        IFS= read -r -N "$len" body
+        body=$(dd bs=1 count="$len" 2>/dev/null)   # exactly the body: macOS's bash 3.2 has no `read -N'
         id=$(printf '%s' "$body" | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
         case $body in
           *'"method":"initialize"'*) reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"capabilities\":{}}}" ;;
