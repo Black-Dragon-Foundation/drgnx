@@ -96,9 +96,9 @@ text; dropped when it comes back with other text, falls off the ring, or its sou
 (defvar drgnx-notice-functions nil
   "Abnormal hook: the `now' lane.  Each function is called with CHANGE, a plist (:op OP :key KEY :source SOURCE
 :notice NOTICE :added IDS :removed IDS) holding only its non-nil keys, OP one of `post' `clear' `set' `unknown'
-`dismiss' `undefine'.  NOTICE is the plist the model holds: read it, never change it.  Synchronous, inside `drgnx-automatic' with `inhibit-interaction': cheap reactions only (set
-a flag, `force-mode-line-update', start a timer).  An error is recorded in `drgnx-notice--hook-errors'; a change
-made meanwhile is queued, never recursive.")
+`dismiss' `undefine'.  NOTICE is the plist the model holds: read it, never change it.  Synchronous, inside
+`drgnx-automatic' with `inhibit-interaction': cheap reactions only (set a flag, `force-mode-line-update', start a
+timer).  An error is recorded in `drgnx-notice--hook-errors'; a change made meanwhile is queued, never recursive.")
 
 (defvar drgnx-notice--hook-errors nil "(FUNCTION MESSAGE TIME) of failed hook calls, newest first; at most 20.")
 
