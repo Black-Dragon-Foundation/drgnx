@@ -395,6 +395,37 @@ panel's rules on."
     (should (advice-member-p #'drgnx-terminal-eat--collect-in-gap 'eat--process-output-queue))
     (should-not (memq 'drgnx-terminal-eat--gc-note post-gc-hook))))   ; the GC owner keeps the one note
 
+(ert-deftest drgnx-terminal/the-output-advice-calls-the-gc-gap ()
+  ;; eat's real output function (a dead buffer: it does nothing) ends a batch, so its advice asks the GC owner once
+  (unless (drgnx-terminal-test--eat-dir) (ert-skip drgnx-terminal-test--skip))
+  (drgnx-terminal-test--fresh t
+    (require 'eat)
+    (let ((gaps 0) (dead (generate-new-buffer " *drgnx-test-dead*")))
+      (kill-buffer dead)
+      (cl-letf (((symbol-function 'drgnx-gc-gap) (lambda () (cl-incf gaps) nil)))
+        (eat--process-output-queue dead))
+      (should (= gaps 1)))))
+
+(ert-deftest drgnx-terminal/no-post-gc-hook-of-its-own ()
+  ;; the GC owner's `drgnx-gc--note' is the one `post-gc-hook' function; eat's copy of the allocation rule is gone
+  (unless (drgnx-terminal-test--eat-dir) (ert-skip drgnx-terminal-test--skip))
+  (let ((before (default-value 'post-gc-hook)))
+    (drgnx-terminal-test--fresh t
+      (should (equal (default-value 'post-gc-hook) before))
+      (should-not (seq-some (lambda (f) (and (symbolp f) (string-prefix-p "drgnx-terminal" (symbol-name f))))
+                            (default-value 'post-gc-hook)))
+      (dolist (gone '(drgnx-terminal-eat--consed drgnx-terminal-eat--gc-note))
+        (should-not (fboundp gone)))
+      (dolist (gone '(drgnx-terminal-eat--gc-base drgnx-terminal-eat--gc-share))
+        (should-not (boundp gone))))))
+
+(ert-deftest drgnx-terminal/the-old-quiet-setting-is-the-gc-owners ()
+  ;; `drgnx-terminal-eat-gc-quiet' (M12e) is an obsolete alias: a value set under the old name reaches `drgnx-gc-gap'
+  (should (eq (indirect-variable 'drgnx-terminal-eat-gc-quiet) 'drgnx-gc-gap-quiet))
+  (should (get 'drgnx-terminal-eat-gc-quiet 'byte-obsolete-variable))
+  (let ((drgnx-terminal-eat-gc-quiet nil))
+    (should-not drgnx-gc-gap-quiet)))
+
 (ert-deftest drgnx-terminal/turning-eat-off-takes-its-advice-and-hooks ()
   ;; the four advice and the two hooks of tools/terminal-eat's setup are named and recorded: turned off, none is left
   (unless (drgnx-terminal-test--eat-dir) (ert-skip drgnx-terminal-test--skip))

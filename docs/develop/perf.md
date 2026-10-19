@@ -153,7 +153,7 @@ harness recorder) or the eat batch that runs before the latency timer; the pause
 `tools/terminal-eat` takes the collection itself, after an eat output batch, when no key was handled in the last 20 ms, no
 input is waiting (`input-pending-p`) and 85% of `gc-cons-threshold` has been allocated: it calls the GC owner's `drgnx-gc-gap`
 (below; `drgnx-gc-gap-quiet`, nil
-turns it off). The threshold is
+turns it off; the module's old `drgnx-terminal-eat-gc-quiet` is an obsolete alias of it). The threshold is
 unchanged (a higher one only trades the pause for a longer one: 95 ms at 256 MB, and 410 MB of memory), and the natural
 collection stays as the backstop. The pause is not shortened, only kept out of a keystroke's handling; a key that arrives
 during it still waits.

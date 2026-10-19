@@ -18,6 +18,9 @@
 (defvar drgnx-gc-idle-seconds 8 "Collect after this long without input.")
 (defvar drgnx-gc-batch-threshold (* 32 1024 1024) "Bytes allocated between collections in a batch Emacs.")
 
+;; before the defcustom, so a value set under the old name (tools/terminal-eat's, M12e) before this file loads is kept
+(define-obsolete-variable-alias 'drgnx-terminal-eat-gc-quiet 'drgnx-gc-gap-quiet "drgnx render R5")
+
 (defcustom drgnx-gc-gap-quiet 0.02
   "Seconds without input before `drgnx-gc-gap' may collect; nil: never."
   :type '(choice (const :tag "Never" nil) number)
