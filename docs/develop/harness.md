@@ -160,7 +160,10 @@ Unix socket paths are limited to ~108 bytes; the hash keeps two state roots (say
 - Everything the session writes lands in its run directory (`user-emacs-directory`), or in the state root's
   shared eln cache (`ROOT/eln-cache`: native code and trampolines compiled once for every session; starting a
   session and `reap` delete `.eln` files unused — neither read nor written — for 30 days, and directories left
-  empty, so the cache of an Emacs no longer run goes too). An external
+  empty, so the cache of an Emacs no longer run goes too). In a built tree (`bin/drgnx build`) a session loads the
+  `.elc` files and Emacs native-compiles the ones its cache lacks in the background; a warning from that compile (a
+  function used without a `declare-function`, which `bin/drgnx build` does not report, as it compiles every file in
+  one Emacs) opens `*Warnings*` in a new window of the root frame, under the running test's feet. An external
   configuration is only read: code directories (`lisp/`, `extras/`, `site-lisp/`, `tree-sitter/`, `snippets/`,
   `themes/`) are linked, `custom.el` is copied, packages load from its `elpa/`; history, recentf, places and
   other state files are not brought in.
