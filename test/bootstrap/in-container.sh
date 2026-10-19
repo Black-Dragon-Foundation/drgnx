@@ -146,6 +146,7 @@ PATH="$HOME/fakebin:$PATH" pty_run /tmp/pty.typescript \
   "drgnx bootstrap --config /srv/config-pass.git --step preflight --step config --step keys" \
   "(y or n)" y "(y or n)" y "password for" "$SUDO_PASSWORD" "Enter passphrase" "$PASSPHRASE"
 cat /tmp/pty.typescript
+[[ -z "$PTY_STUCK" ]] || fail "the terminal run was waiting for $PTY_STUCK (exit $PTY_RC; the screen is above)"
 [[ "$PTY_RC" == 0 ]] || fail "the terminal run exited $PTY_RC"
 grep -aq 'sudo dnf install -y age' "$HOME/fake-sudo.log" || fail "the stand-in sudo did not run the age install"
 rpm -q age >/dev/null || fail "the terminal run did not install age"

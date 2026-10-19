@@ -42,7 +42,7 @@ step "secrets.age locked with a passphrase, typed on a terminal"
 printf '%s\n' "$bundle" >"$work/bundle.txt"
 pty_run "$work/age.typescript" "age -e -p -o '$work/secrets-pass.age' '$work/bundle.txt'" \
   "Enter passphrase" "drgnx-exit-test-passphrase" "Confirm passphrase" "drgnx-exit-test-passphrase"
-[[ "$PTY_RC" == 0 ]] || { cat "$work/age.typescript"; fail "age -p exited $PTY_RC"; }
+[[ "$PTY_RC" == 0 && -z "$PTY_STUCK" ]] || { cat "$work/age.typescript"; fail "age -p exited $PTY_RC${PTY_STUCK:+ (waiting for $PTY_STUCK)}"; }
 git_ clone -q /src/config-pass.git "$work/p"
 cp "$work/secrets-pass.age" "$work/p/secrets.age"
 git_ -C "$work/p" add secrets.age

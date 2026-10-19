@@ -389,6 +389,10 @@ cloned `--bare` beside the snapshot. Two containers follow, each with a memory c
      stand-in `sudo` that asks for a password on `/dev/tty`. The test types `y` twice (the key import, the age
      install), the sudo password and the age passphrase when each prompt appears (`test/bootstrap/pty-run.sh`), and
      checks that the hand-back to `bin/drgnx` ran both, the key is back, and neither password reached the screen.
+     The driver answers the prompts in order, each only when it shows up after the one answered before it (a
+     question that mentions a passphrase is not age's prompt), and never hangs: a prompt (or the end) that does not
+     come within `PTY_STEP_TIMEOUT` seconds (300) stops the command, and the test fails naming what it waited for,
+     with the screen printed above.
 
 Fedora 44 builds Emacs from source and takes much longer. A test never touches your home: the snapshot, the fixture
 repositories and the log live in a fresh `mktemp -d` directory under `$TMPDIR` (`/tmp`), and the run refuses to start
