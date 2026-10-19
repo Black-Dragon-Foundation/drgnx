@@ -12,16 +12,16 @@
   "d=$1
 trap 'rm -rf \"$d\"' EXIT
 trap 'exit 143' HUP INT TERM
-while :; do
-  while read -r cmd arg; do
-    case $cmd in
-      emit) cat \"$d/$arg\" && rm -f \"$d/$arg\" ;;
-      exit) exit \"$arg\" ;;
-    esac
-  done < \"$d/ctl\"
+exec 3<>\"$d/ctl\"
+while read -r cmd arg <&3; do
+  case $cmd in
+    emit) cat \"$d/$arg\" && rm -f \"$d/$arg\" ;;
+    exit) exit \"$arg\" ;;
+  esac
 done"
-  "The child: it reads one command per line from the FIFO $1/ctl, reopening it after each writer, and removes $1
-when it exits.  `emit N' writes the file $1/N to stdout; `exit CODE' exits.  Its stdin is left alone.")
+  "The child: it reads one command per line from the FIFO $1/ctl, held open read-write for its whole life (so it
+never sees an end of file and a writer never meets a closed FIFO between two commands), and removes $1 when it
+exits.  `emit N' writes the file $1/N to stdout; `exit CODE' exits.  Its stdin is left alone.")
 
 (cl-defun drgnx-test-scripted-process (name &key buffer filter sentinel)
   "Start a scripted child process called NAME with BUFFER, FILTER and SENTINEL; return it.
@@ -40,7 +40,8 @@ process's own, so `process-send-string' and `process-send-eof' reach it as they 
       p)))
 
 (defun drgnx-test-proc--send (p command)
-  "Write the line COMMAND to P's FIFO.  Opening it blocks until the child reads it, so P must not have exited."
+  "Write the line COMMAND to P's FIFO.  The child holds it open, so the line waits there until the child reads it;
+P must not have exited (or been told to), or nobody ever would."
   (when (or (process-get p :drgnx-test-proc-exiting) (not (process-live-p p)))
     (error "drgnx-test-proc: %s has exited (or been told to)" (process-name p)))
   (let ((coding-system-for-write 'utf-8-unix))
