@@ -59,8 +59,10 @@ off. Untrust This Folder takes effect in the session (`drgnx-trust--added`) even
 
 The report files in the state folder go this way: `wb-report.eld` (`drgnx-rules--write-report`, a startup hook: an
 error becomes one `message`), `agent-checks.eld` (`drgnx-agent-check-remember`, `:private t`) and `check/durations.eld`
-(`drgnx-check--save-durations`) are written with `drgnx-file-write ... :fsync nil`, so a failed write keeps the old
-report. They are read with `drgnx-file-read`: `drgnx-tty--read-report`, `drgnx-agent-check-results`,
+(`drgnx-check--save-durations`) and `terminal-report.eld` (`drgnx-tty-frames--save-report`, from a terminal frame's
+hooks: an error goes to `drgnx-hooks-problems`) are written with `drgnx-file-write ... :fsync nil`, so a failed write
+keeps the old report. They are read with `drgnx-file-read`: `drgnx-tty--read-report` (which ui/terminal's
+`drgnx-tty-frames--read-report-data` calls too), `drgnx-agent-check-results`,
 `drgnx-check-durations` and the doctor's `drgnx-doctor--state-file` / `drgnx-doctor--keys-report` give the data of an
 `ok` file, else nil (missing, over 1 MiB, a mistake, text after the form, not plain data). A report is rebuilt by its
 next run, so a report with a mistake is not kept aside.

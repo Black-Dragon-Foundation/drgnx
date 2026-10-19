@@ -20,8 +20,9 @@
 ;;   setup, never for a graphical frame; Toggle Mouse in Terminal Windows.  The terminal's own selection is then
 ;;   Shift+drag.  Each terminal keeps its own enable and disable strings (Emacs 30.2 puts them on the selected one).
 ;; - `drgnx-tty-frames-write-report': terminal-report.eld in the state dir — each terminal's capabilities and
-;;   the active profile's keys it cannot send — for the doctor and the key sheet; written whole, then renamed
-;;   into place.  `drgnx-tty-frames-refresh-report' writes it again (ui/terminal-keys, once kkp is on).
+;;   the active profile's keys it cannot send — for the doctor and the key sheet; read and written through the
+;;   file layer (core/drgnx-file.el: written whole, then renamed into place).  `drgnx-tty-frames-refresh-report'
+;;   writes it again (ui/terminal-keys, once kkp is on).
 ;; - The fallback layer (drgnx-tty-fallback-layer.el) follows each report: a terminal that cannot send C-S- chords
 ;;   gets Alt+Shift with the key and F6 then the key for them; one that can loses it.
 ;; - EDITOR frames: `emacsclient -t FILE' (git's editor) shows the editor only and is never the main window;
@@ -33,6 +34,7 @@
 
 ;;; Code:
 (require 'seq)
+(require 'drgnx-file)
 (require 'drgnx-hooks)
 (require 'drgnx-modules)
 (require 'drgnx-paths)
@@ -254,28 +256,15 @@ decodes a few: C-tab, C-. …; its decodings come first).  A terminal that never
 (defun drgnx-tty-frames--report-file () (expand-file-name "terminal-report.eld" (drgnx-state-dir)))
 
 (defun drgnx-tty-frames--read-report-data ()
-  "terminal-report.eld as a plist, nil when missing or broken (a broken report heals on the next write)."
-  (let ((data (ignore-errors (with-temp-buffer (insert-file-contents (drgnx-tty-frames--report-file))
-                                               (read (current-buffer))))))
-    (and (consp data) (plistp data) data)))
+  "terminal-report.eld as a plist, nil when missing or broken (a broken report heals on the next write): read by
+the file layer, as the doctor reads it (`drgnx-tty--read-report')."
+  (drgnx-tty--read-report))
 
 (defun drgnx-tty-frames--save-report (data)
-  "Write DATA (a plist) as terminal-report.eld."
-  (let ((file (drgnx-tty-frames--report-file)))
-    (make-directory (file-name-directory file) t)
-    ;; written whole under a new name, then renamed: no lock on the report (whose owner would be asked about,
-    ;; a prompt in a daemon hook), and a reader sees the old report or the new one, never half of one
-    (let* ((create-lockfiles nil)
-           (tmp (make-temp-file (expand-file-name ".terminal-report-" (file-name-directory file)))))
-      (condition-case err
-          (progn
-            (with-temp-file tmp
-              (let ((print-length nil) (print-level nil))
-                (prin1 data (current-buffer))
-                (insert "\n")))
-            (rename-file tmp file t))
-        (error (ignore-errors (delete-file tmp))
-               (signal (car err) (cdr err)))))))
+  "Write DATA (a plist) as terminal-report.eld, through the file layer: written whole beside it, then renamed (a
+reader sees the old report or the new one, never half of one), no lock file (whose owner would be asked about, a
+prompt in a daemon hook), no fsync (a report is made again)."
+  (drgnx-file-write (drgnx-tty-frames--report-file) data :fsync nil))
 
 (defun drgnx-tty-frames--update-report (fn)
   "Call FN with terminal-report.eld's data (a fresh plist); write what it returns, when that is non-nil."

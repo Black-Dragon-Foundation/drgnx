@@ -181,6 +181,30 @@ strings; the real frame is not touched), an empty cache and no terminal to ask: 
          (should (eq (plist-get (plist-get entry :caps) :keys) 'kkp))
          (should-not (plist-get entry :unsendable)))))))
 
+(ert-deftest drgnx-terminal-report-eld/the-report-is-written-atomically ()
+  ;; through the file layer: a rename that fails keeps the old report as it was and leaves no temp file
+  (drgnx-tty-frames-test--state
+   (let ((file (drgnx-tty-frames--report-file)))
+     (make-directory (file-name-directory file) t)
+     (write-region "(:terminals nil :hinted (kitty))\n" nil file nil 'silent)
+     (cl-letf (((symbol-function 'rename-file) (lambda (&rest _) (signal 'file-error '("Renaming" "no")))))
+       (should-error (drgnx-tty-frames--save-report '(:terminals nil :hinted (foot)))))
+     (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "(:terminals nil :hinted (kitty))\n"))
+     (should (equal (directory-files (file-name-directory file) nil "terminal-report") '("terminal-report.eld")))
+     (drgnx-tty-frames--save-report '(:terminals nil :hinted (foot)))
+     (should (equal (drgnx-tty-frames--read-report-data) '(:terminals nil :hinted (foot)))))))
+
+(ert-deftest drgnx-terminal-report-eld/a-report-with-a-mistake-reads-as-none ()
+  ;; the file layer reads one plain data form: text after it, or a form that is not a plist, is no report (the
+  ;; next write replaces it)
+  (drgnx-tty-frames-test--state
+   (let ((file (drgnx-tty-frames--report-file)))
+     (make-directory (file-name-directory file) t)
+     (dolist (text '("(:terminals nil :hinted (kitty)) (:more t)\n" "(:terminals . 5)\n" "#1=(:a #1#)\n"))
+       (write-region text nil file nil 'silent)
+       (should-not (drgnx-tty-frames--read-report-data))
+       (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) text))))))
+
 (ert-deftest drgnx-tty-frames/the-report-is-written-past-a-lock-and-a-corrupt-file ()
   ;; another Emacs's lock on the report, or a broken report, never makes a daemon hook ask or fail
   (drgnx-tty-frames-test--state
