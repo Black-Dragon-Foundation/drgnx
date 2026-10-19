@@ -2053,3 +2053,32 @@ config is written with it. The readiness check is that report, so another progra
 the mock. A number instead of `nil` asks for that port and errors when it is taken. A "dead provider" that must refuse
 connections uses `(drgnx-test-free-port)`: a port a listener of this Emacs just bound and released. The mock CDP and
 MCP servers listen on `:service t` and return their port the same way.
+
+### Scripted processes (`test/fixtures/scripted-process.el`)
+
+A race between a child's output, its exit and Emacs's reads (class C) shows up only under load, so a test forces the
+ordering instead of hoping for it. `(drgnx-test-scripted-process NAME &key buffer filter sentinel)` starts a `sh` child
+that does only what the test tells it, through a FIFO in a fresh directory under `temporary-file-directory` (never
+`~`; the child removes it when it exits). Its stdin is the process's own, so `process-send-string` and
+`process-send-eof` reach it as they would a real child.
+
+- `(drgnx-test-proc-emit P TEXT)`: the child writes TEXT to its stdout, after everything it was told before. The call
+  returns at once.
+- `(drgnx-test-proc-exit P CODE &key before-read)`: the child exits with CODE. With `:before-read t` the call returns
+  only once Emacs has recorded the exit, and it has read none of P's output and run no filter, sentinel or timer (it
+  blocks in `call-process`). Output and exit are then all pending when Emacs next reads, and `process-live-p` is
+  already nil while the sentinel has not run (M3b-19).
+- Telling an exited child anything more is an error.
+
+What Emacs guarantees, and what the tests (`drgnx-test-proc/`, each ordering 100 times out of 100) force:
+
+- **Output, then exit, before Emacs reads:** the filter gets all the output, and the sentinel runs after it.
+- **No filter call after the sentinel:** before it runs a sentinel, Emacs reads the output left and closes the pipe.
+  The sentinel can still run *inside* a filter call: a filter that waits (a nested `accept-process-output`, `sit-for`,
+  a synchronous request) lets the last output and the sentinel run before the call goes on. Code after a wait in a
+  filter must expect the process to be finished.
+- **`process-send-eof` after the exit** signals `Process NAME not running: finished` (A-44), before the sentinel and
+  after it: a runner that sends EOF to a child that may already have exited handles that error.
+
+Concurrency tests use explicit barriers (A-23) — a scripted step, a done flag, a marker the child writes — and never
+sleeps: a sleep only makes the race rarer.
