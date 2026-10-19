@@ -757,7 +757,7 @@ timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run
   one-shot `agents-ui-mirror-first`, 3 s into the first pause) and `tools/jobs` owns
   `job-ui-recount-idle` (idle, every 60 s), so a second setup replaces the timer instead of stacking another, and
   turning the module off ends it. Timers started later (from a command or a hook) name their module with `:owner`:
-  `tools/agents` owns the Agents list's 30 s tick `agents-ui-tick` (it only marks the list's view; see Views),
+  `tools/agents` owns the Agents list's 30 s tick `agents-ui-tick` (it only marks the list's view, and runs only while a window shows the list; see Views),
   `ui/face` owns quick help's `quickhelp-timeout`, `-unmap`, `-look` and `-hover` and the start page's
   `start-first-frame`, `ui/terminal-popups` the debounced `tty-popups-show`, `ui/terminal` the per-frame
   `(tty-fallback-hint . FRAME)`, `tools/jobs` the coalesced `job-ui-recount`, `tools/ai` the `ai-probe` one-shot; the
@@ -1250,6 +1250,14 @@ text; `:appended` the rows added; `:removed` the rows deleted. Without VIEW it s
   columns changed.) The view's START is the only marker; SYNC moves it to the end of the buffer after each update,
   because the self-check would otherwise take the list's text for foreign text and delete it. A hidden list draws and
   allocates nothing, and `drgnx-agents-ui-list-buffer` (the placeholder, `agents-view`) touches and draws it now.
+  The tick itself runs only while the list shows: `drgnx-agents-ui--tick-update`, subscribed (idle lane) to
+  `windows-changed`, `pane-shown`, `pane-hidden` and `frame-removed`, starts `agents-ui-tick` (owner `tools/agents`,
+  30 s, repeating) while a window in `drgnx-state-windows` of any recorded frame shows `*drgnx Agents*`, and cancels it
+  when none does (a running tick keeps its phase). It reads the records and ignores the event's data; the setup
+  also calls it once. The list may show in the dock or in an editor window, so it checks buffers, not pane kinds. A
+  window on an iconified frame still counts (the store has no event for visibility; the tick only marks, and the view
+  draws nothing there). The view's own check stays the one that hides the drawing. Tests: `drgnx-agents-ui/the-tick-runs-only-while-the-list-shows`,
+  `…/hiding-stops-the-tick`, `…/the-list-in-an-editor-window-ticks-too`.
 
 - **The Outline** (`wb/drgnx-outline.el`) is the view type `outline` (DELAY 0, `equal` keys, PATCHED `drgnx-outline--mark-current`), attached to its
   buffer when `drgnx-outline--buffer` makes it. A refresh builds imenu's index once and makes the rows integers:

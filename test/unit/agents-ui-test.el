@@ -3,6 +3,7 @@
 (require 'drgnx)
 (require 'drgnx-timer)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-agents-ui" drgnx-dir) nil t)
 
 (defconst drgnx-agents-ui-test--mock (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir))
@@ -220,11 +221,10 @@ answers recorded in ANSWERS)."
             (drgnx-modules--record 'tools/agents 'startup 0 'ok)
             (should (drgnx-timer-active-p 'agents-ui-mirror))
             (should (drgnx-timer-active-p 'agents-ui-mirror-first))     ; the first look, 3 s into the first pause
-            (should (drgnx-timer-active-p 'agents-ui-tick))             ; the list's 30 s tick is the layer's, too
+            (should-not (drgnx-timer-active-p 'agents-ui-tick))         ; the list's tick runs only while it shows
             (should (= 2 (drgnx-agents-ui-test--fires)))
             (should-not (drgnx-module-teardown 'tools/agents))
             (should-not (drgnx-timer-active-p 'agents-ui-mirror))
-            (should-not (drgnx-timer-active-p 'agents-ui-tick))
             (should (= 0 (drgnx-agents-ui-test--fires)))
             (should (= 0 (drgnx-timer-cancel-owner 'tools/agents))))
           ;; the 30 s idle repeat is unchanged: once per pause
@@ -505,37 +505,45 @@ three runs after two warm ones)."
 
 ;;;; The Agents list on a view: updated in place from its SYNC, drawn only while shown
 
+(defun drgnx-agents-ui-test--settle ()
+  "Let the store see the windows and deliver its idle events, as the idle flush does."
+  (drgnx-state-sync)
+  (drgnx-state--deliver-idle))
+
 (defmacro drgnx-agents-ui-test--with-list (spec &rest body)
-  "SPEC: (SESSIONS BUFFER).  BODY on the virtual clock with tools/agents set up (torn down after), the sessions
-\(`drgnx-agents--sessions') made from SESSIONS (a list of (NAME . ARGS)), BUFFER the Agents list, drawn and shown in
-the only window and current.  The hub mirror does nothing."
+  "SPEC: (SESSIONS BUFFER).  BODY on the virtual clock and a fresh workbench state store, with tools/agents set up
+\(torn down after), the sessions (`drgnx-agents--sessions') made from SESSIONS (a list of (NAME . ARGS)), BUFFER the
+Agents list, drawn and shown in the only window and current, the store settled (so the list's tick runs).  The hub
+mirror does nothing."
   (declare (indent 1))
   (let ((names (nth 0 spec)) (buffer (nth 1 spec)))
-    `(let* ((state (make-temp-file "drgnx-agents-ui-state" t))
-            (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment))
-            (drgnx-modules--table (list (assq 'tools/agents drgnx-modules--table)))
-            (drgnx-modules--report nil) (drgnx-modules--stacks nil) (drgnx-modules--runs nil) (drgnx-modules--features nil)
-            (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-            (drgnx-agents-ui--last (make-hash-table :test #'eq :weakness 'key))
-            (drgnx-agents-ui--jobs-cache (cons 1.0e+INF nil))
-            (drgnx-agents--sessions (mapcar (lambda (e) (apply #'drgnx-agents--make :name (car e) (cdr e))) ,names))
-            (drgnx-view--deadline nil)
-            (config (current-window-configuration))
-            (,buffer nil))
-       (unwind-protect
-           (cl-letf (((symbol-function 'drgnx-agents-ui--maybe-mirror) #'ignore))
-             (drgnx-test-with-clock (:allow-pending t)
-               (should-not (drgnx-modules--run-setup 'tools/agents (plist-get (cdar drgnx-modules--table) :setup)))
-               (drgnx-modules--record 'tools/agents 'startup 0 'ok)
-               (delete-other-windows)
-               (setq ,buffer (drgnx-agents-ui-list-buffer))
-               (set-window-buffer (selected-window) ,buffer)
-               (should (drgnx-view-p (buffer-local-value 'drgnx-view ,buffer)))
-               (with-current-buffer ,buffer ,@body)))
-         (drgnx-module-teardown 'tools/agents)
-         (set-window-configuration config)
-         (when (buffer-live-p ,buffer) (kill-buffer ,buffer))
-         (delete-directory state t)))))
+    `(drgnx-test-with-state
+       (let* ((state (make-temp-file "drgnx-agents-ui-state" t))
+              (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment))
+              (drgnx-modules--table (list (assq 'tools/agents drgnx-modules--table)))
+              (drgnx-modules--report nil) (drgnx-modules--stacks nil) (drgnx-modules--runs nil) (drgnx-modules--features nil)
+              (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
+              (drgnx-agents-ui--last (make-hash-table :test #'eq :weakness 'key))
+              (drgnx-agents-ui--jobs-cache (cons 1.0e+INF nil))
+              (drgnx-agents--sessions (mapcar (lambda (e) (apply #'drgnx-agents--make :name (car e) (cdr e))) ,names))
+              (drgnx-view--deadline nil)
+              (config (current-window-configuration))
+              (,buffer nil))
+         (unwind-protect
+             (cl-letf (((symbol-function 'drgnx-agents-ui--maybe-mirror) #'ignore))
+               (drgnx-test-with-clock (:allow-pending t)
+                 (should-not (drgnx-modules--run-setup 'tools/agents (plist-get (cdar drgnx-modules--table) :setup)))
+                 (drgnx-modules--record 'tools/agents 'startup 0 'ok)
+                 (delete-other-windows)
+                 (setq ,buffer (drgnx-agents-ui-list-buffer))
+                 (set-window-buffer (selected-window) ,buffer)
+                 (should (drgnx-view-p (buffer-local-value 'drgnx-view ,buffer)))
+                 (drgnx-agents-ui-test--settle)
+                 (with-current-buffer ,buffer ,@body)))
+           (drgnx-module-teardown 'tools/agents)
+           (set-window-configuration config)
+           (when (buffer-live-p ,buffer) (kill-buffer ,buffer))
+           (delete-directory state t))))))
 
 (defun drgnx-agents-ui-test--line-of (session)
   "The start of SESSION's line in the current Agents list."
@@ -625,16 +633,19 @@ the only window and current.  The hub mirror does nothing."
       (unwind-protect
           (progn
             (set-window-buffer (selected-window) other)
+            (drgnx-agents-ui-test--settle)
+            (should-not (drgnx-timer-active-p 'agents-ui-tick))
             (drgnx-agents-ui-test--set-status sb 'busy)
             (drgnx-test-advance 0.2)
             (should (equal text (buffer-string)))
             (should (= tick (buffer-modified-tick)))
             (should (drgnx-view--stale v))
-            (drgnx-test-advance 30)                           ; the 30 s tick prints nothing either
+            (drgnx-test-advance 30)                           ; no tick runs while hidden
             (should (= tick (buffer-modified-tick)))
             (should (= 0 (drgnx-view-test--alloc (lambda () (drgnx-view--draw-buffer b)))))
             ;; shown again: the list is drawn
             (set-window-buffer (selected-window) b)
+            (drgnx-agents-ui-test--settle)
             (drgnx-view--buffer-shown (selected-window))      ; what redisplay runs
             (drgnx-test-advance 0.2)
             (should (string-match-p "b +busy" (buffer-string))))
@@ -653,5 +664,61 @@ the only window and current.  The hub mirror does nothing."
       (drgnx-test-advance 15)                                 ; the tick at 30 s
       (should (string-match-p "b +idle +[345][0-9]s" (buffer-string)))
       (should (= (window-point) (drgnx-agents-ui-test--line-of sb))))))
+
+(ert-deftest drgnx-agents-ui/the-tick-runs-only-while-the-list-shows ()
+  ;; Learned from the store: `windows-changed' (and the pane events) start the layer key when a recorded window
+  ;; shows the list, and cancel it when none does; a window staying put keeps the tick's phase.
+  (drgnx-agents-ui-test--with-list ('(("a" :status idle)) b)
+    (should (drgnx-timer-active-p 'agents-ui-tick))
+    (let ((timer (gethash 'agents-ui-tick drgnx-timer--table)))
+      (drgnx-test-advance 10)
+      (drgnx-agents-ui-test--settle)
+      (should (eq timer (gethash 'agents-ui-tick drgnx-timer--table))))   ; same timer: not restarted
+    (should (eq 'tools/agents (drgnx-timer--entry-owner (gethash 'agents-ui-tick drgnx-timer--table))))
+    (dolist (event '(windows-changed pane-shown pane-hidden frame-removed))
+      (should (eq 'idle (drgnx-state--lane-of event #'drgnx-agents-ui--tick-update))))
+    ;; the module off: the tick, the subscriptions
+    (drgnx-module-teardown 'tools/agents)
+    (should-not (drgnx-timer-active-p 'agents-ui-tick))
+    (dolist (event '(windows-changed pane-shown pane-hidden frame-removed))
+      (should-not (drgnx-state--lane-of event #'drgnx-agents-ui--tick-update)))))
+
+(ert-deftest drgnx-agents-ui/hiding-stops-the-tick ()
+  (drgnx-agents-ui-test--with-list ('(("a" :status idle)) b)
+    (let ((other (get-buffer-create " *drgnx-agents-ui-other*")))
+      (unwind-protect
+          (progn
+            (should (drgnx-timer-active-p 'agents-ui-tick))
+            (set-window-buffer (selected-window) other)
+            (drgnx-agents-ui-test--settle)
+            (should-not (drgnx-timer-active-p 'agents-ui-tick))
+            (set-window-buffer (selected-window) b)
+            (drgnx-agents-ui-test--settle)
+            (should (drgnx-timer-active-p 'agents-ui-tick))
+            ;; the list killed with its window: nothing shows it
+            (set-window-buffer (selected-window) other)
+            (kill-buffer b)
+            (drgnx-agents-ui-test--settle)
+            (should-not (drgnx-timer-active-p 'agents-ui-tick)))
+        (kill-buffer other)))))
+
+(ert-deftest drgnx-agents-ui/the-list-in-an-editor-window-ticks-too ()
+  ;; The list may show in an editor window (or any window), not only its dock: any recorded window counts, on any frame.
+  (drgnx-agents-ui-test--with-list ('(("a" :status idle)) b)
+    (let ((other (get-buffer-create " *drgnx-agents-ui-other*")) (win (selected-window)))
+      (unwind-protect
+          (progn
+            (set-window-buffer win other)
+            (drgnx-agents-ui-test--settle)
+            (should-not (drgnx-timer-active-p 'agents-ui-tick))
+            (let ((second (split-window win nil 'right)))
+              (set-window-buffer second b)
+              (drgnx-agents-ui-test--settle)
+              (should (eq 'editor (drgnx-state-window-role second)))
+              (should (drgnx-timer-active-p 'agents-ui-tick))
+              (delete-window second)
+              (drgnx-agents-ui-test--settle)
+              (should-not (drgnx-timer-active-p 'agents-ui-tick))))
+        (kill-buffer other)))))
 
 ;;; agents-ui-test.el ends here
