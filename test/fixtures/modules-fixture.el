@@ -215,7 +215,7 @@ library's; the recorder lists them in `drgnx-modules--left'.  Layer timers stay:
 ;;;; Running
 
 (defconst drgnx-test-modules--emacs-buffers
-  "\\`buffer [+-] \\*\\(?:code-conversion-work\\|code-converting-work\\|tab-line-hscroll\\|jka-compr-wr-temp\\|string-pixel-width\\|Native-compile-Log\\)\\*\\'"
+  "\\`buffer [+-]\\(?: \\*\\(?:code-conversion-work\\|code-converting-work\\|tab-line-hscroll\\|jka-compr-wr-temp\\|string-pixel-width\\)\\|\\*Native-compile-Log\\)\\*\\'"
   "The hidden work buffers Emacs makes for itself, the first time some code needs one, and keeps (as in
 test/leaks-allowed.eld): not a module's.  Native compilation's log too: Emacs 31 compiles a trampoline the first
 time a primitive is advised (a test's advice on `y-or-n-p'), whichever body that is.")
