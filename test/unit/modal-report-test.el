@@ -285,7 +285,9 @@ no registered modal engine; every binding is undone after."
 
 (ert-deftest drgnx-modal-report/state-conflicts-reach-the-doctor ()
   (drgnx-modal-report-test--live
-    (drgnx-keys-use drgnx-modal-report-test--mixed)
+    ;; Linux keys: on macOS VS Code's Open is s-o, so C-o is vim's alone
+    (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'linux)))
+      (drgnx-keys-use drgnx-modal-report-test--mixed))
     (let* ((report (drgnx-modal-report-test--report))
            (line (seq-find (lambda (l) (string-prefix-p "C-o " l)) (plist-get report :conflicts)))
            (r (drgnx-doctor-check 'key-conflicts (drgnx-modal-report-test--facts :keys-report report))))
