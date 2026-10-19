@@ -1,5 +1,6 @@
 ;;; agents-ui-test.el --- batch tests: transcripts, the Agents list, edit review -*- lexical-binding: t -*-
 (require 'ert)
+(require 'bytecomp)                                  ; `byte-compile-warnings' is let-bound below
 (require 'drgnx)
 (require 'drgnx-timer)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
@@ -656,7 +657,9 @@ the only window and current.  The hub mirror does nothing."
       (should (string-match-p "\\`a +idle" (drgnx-agents-ui-test--body)))
       (drgnx-test-advance 15)                                 ; the tick at 30 s
       (should (string-match-p "b +idle +[345][0-9]s" (buffer-string)))
-      (should (= (window-point) (drgnx-agents-ui-test--line-of sb))))))
+      (should (= (window-point) (drgnx-agents-ui-test--line-of sb)))
+      (drgnx-test-advance 30)                                 ; and again at 60 s: the tick repeats
+      (should (string-match-p "b +idle +1m" (buffer-string))))))
 
 ;;;; The column titles are the first line; an empty list says how to start
 
