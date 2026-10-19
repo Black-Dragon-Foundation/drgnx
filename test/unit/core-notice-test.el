@@ -1,20 +1,12 @@
 ;;; core-notice-test.el --- batch tests: the notice model (events, conditions, attention sets, the now lane) -*- lexical-binding: t -*-
 (require 'ert)
+(require 'ert-x)
 (require 'cl-lib)
 (require 'drgnx-paths)
 (require 'drgnx-modules)
 (load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
-
-(defvar drgnx-notice-test--clock 1000.0 "The time `drgnx-notice--now' reads in tests that set it.")
-
-(defmacro drgnx-notice-test--with-clock (&rest body)
-  "BODY with `drgnx-notice--now' reading `drgnx-notice-test--clock' (from 1000.0)."
-  (declare (indent 0))
-  `(let ((drgnx-notice-test--clock 1000.0))
-     (cl-letf (((symbol-function 'drgnx-notice--now) (lambda () drgnx-notice-test--clock)))
-       ,@body)))
-
-(defun drgnx-notice-test--tick (secs) (setq drgnx-notice-test--clock (+ drgnx-notice-test--clock secs)))
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 ;;;; Posting
 
@@ -144,6 +136,30 @@
     (drgnx-notify 'keys 'fail "problem 0" :id 0 :life 'condition)
     (should (= (length (drgnx-notices :source 'keys)) 1))))
 
+(ert-deftest drgnx-notice/past-the-cap-an-id-counts-once ()
+  ;; a producer that re-asserts its conditions does not make "and N more" grow
+  (drgnx-notice-test-with-model
+    (dotimes (i 101) (drgnx-notify 'keys 'fail (format "problem %d" i) :id i :life 'condition))
+    (should (equal (plist-get (gethash '(keys . more) drgnx-notice--table) :text) "and 1 more"))
+    (let ((tick (drgnx-notice-tick)))
+      (drgnx-notify 'keys 'fail "problem 100" :id 100 :life 'condition)       ; the 101st again
+      (drgnx-notify 'keys 'fail "problem 100, again" :id 100 :life 'condition)
+      (should (= (drgnx-notice-tick) tick))
+      (should (equal (plist-get (gethash '(keys . more) drgnx-notice--table) :text) "and 1 more")))
+    (drgnx-notify 'keys 'fail "problem 101" :id 101 :life 'condition)
+    (should (equal (plist-get (gethash '(keys . more) drgnx-notice--table) :text) "and 2 more"))
+    (drgnx-notice-clear 'keys 'more)                          ; the count starts again with its condition
+    (drgnx-notify 'keys 'fail "problem 100" :id 100 :life 'condition)
+    (should (equal (plist-get (gethash '(keys . more) drgnx-notice--table) :text) "and 1 more"))))
+
+(ert-deftest drgnx-notice/unknown-is-not-swallowed-by-the-cap ()
+  (drgnx-notice-test-with-model
+    (drgnx-notice-define-source 'jobs :title "Jobs")
+    (dotimes (i 100) (drgnx-notify 'jobs 'fail (format "problem %d" i) :id i :life 'condition))
+    (drgnx-notice-set 'jobs :unknown :reason "the hub did not answer")
+    (should (equal (plist-get (gethash '(jobs . unknown) drgnx-notice--table) :text) "the hub did not answer"))
+    (should-not (gethash '(jobs . more) drgnx-notice--table))))
+
 ;;;; Clearing
 
 (ert-deftest drgnx-notice/clear-one-and-clear-all ()
@@ -225,10 +241,10 @@
 
 (ert-deftest drgnx-notice/an-unchanged-set-does-not-tick ()
   (drgnx-notice-test-with-model
-    (drgnx-notice-test--with-clock
+    (drgnx-test-with-clock ()
       (drgnx-notice-set 'agents '((:id a :text "A") (:id b :text "B")))
       (let ((tick (drgnx-notice-tick)) (at (plist-get (gethash 'a drgnx-notice--union) :at)))
-        (drgnx-notice-test--tick 5)
+        (drgnx-test-advance 5)
         (drgnx-notice-set 'agents (list (list :id 'a :text (concat "A" "")) (list :id 'b :text "B")))
         (should (= (drgnx-notice-tick) tick))
         (drgnx-notice-set 'agents '((:id a :text "A, again") (:id b :text "B")))
@@ -237,7 +253,7 @@
 
 (ert-deftest drgnx-notice/an-id-in-two-sources-counts-once ()
   (drgnx-notice-test-with-model
-    (drgnx-notice-test--with-clock
+    (drgnx-test-with-clock ()
       (drgnx-notice-define-source 'jobs :title "Jobs")
       (drgnx-notice-define-source 'questions :title "Questions")
       (drgnx-notice-set 'jobs '((:id (card . 7) :text "from jobs") (:id (card . 8) :text "eight")))
@@ -245,12 +261,12 @@
       (should (= (drgnx-needs-you-count) 2))
       ;; same :at: the source defined first wins
       (should (equal (plist-get (gethash '(card . 7) drgnx-notice--union) :text) "from jobs"))
-      (drgnx-notice-test--tick 1)
+      (drgnx-test-advance 1)
       (drgnx-notice-set 'questions '((:id (card . 7) :text "from questions, later")))
       ;; other text, same ID: :at is kept, so still a tie
       (should (equal (plist-get (gethash '(card . 7) drgnx-notice--union) :text) "from jobs"))
       (drgnx-notice-set 'questions '((:id (card . 9) :text "nine")))
-      (drgnx-notice-test--tick 1)
+      (drgnx-test-advance 1)
       (drgnx-notice-set 'questions '((:id (card . 9) :text "nine") (:id (card . 7) :text "newer")))
       (should (equal (plist-get (gethash '(card . 7) drgnx-notice--union) :text) "newer"))  ; the later :at wins
       (should (= (drgnx-needs-you-count) 3))
@@ -300,22 +316,22 @@
 
 (ert-deftest drgnx-notice/stale-is-opt-in ()
   (drgnx-notice-test-with-model
-    (drgnx-notice-test--with-clock
+    (drgnx-test-with-clock ()
       (drgnx-notice-define-source 'quiet :title "Quiet")
       (drgnx-notice-define-source 'watched :title "Watched" :stale 600)
       (drgnx-notice-define-source 'other :title "Other")
       (drgnx-notice-set 'quiet '((:id q :text "q")))
       (drgnx-notice-set 'watched '((:id w :text "w")))
-      (drgnx-notice-test--tick 599)
+      (drgnx-test-advance 599)
       (drgnx-notice-set 'other nil)
       (should-not (drgnx-needs-you-unknown))
-      (drgnx-notice-test--tick 2)
+      (drgnx-test-advance 2)
       (drgnx-notice--check-stale)
       (should (equal (drgnx-needs-you-unknown) '(watched)))
       (should (equal (plist-get (gethash '(watched . unknown) drgnx-notice--table) :text)
                      "not heard from in 10 min"))
       (should (= (drgnx-needs-you-count) 1))                    ; quiet never goes stale
-      (drgnx-notice-test--tick 100000)
+      (drgnx-test-advance 100000)
       (drgnx-notice--check-stale)
       (should (equal (drgnx-needs-you-unknown) '(watched))))))
 
@@ -434,23 +450,27 @@
       (should (equal (plist-get (gethash 'test-src drgnx-notice--sources) :title) "Again")))))
 
 (ert-deftest drgnx-notice/teardown-clears-a-module-source ()
-  (drgnx-notice-test-with-model
-    (drgnx-notice-test--with-modules
-      (should-not (drgnx-modules--run-setup 'test/notices
-                                            (lambda () (drgnx-notice-define-source 'test-src :title "T"))))
-      (drgnx-modules--record 'test/notices 'startup 0 'ok)
-      (drgnx-notify 'test-src 'fail "broken" :id 'a :life 'condition)
-      (drgnx-notify 'test-src 'warn "an event")
-      (drgnx-notice-set 'test-src '((:id x :text "x")))
-      (should (= (drgnx-needs-you-count) 1))
-      (should-not (drgnx-module-teardown 'test/notices))
-      (should-not (gethash 'test-src drgnx-notice--sources))
-      (should-not (gethash 'test-src drgnx-notice--sets))
-      (should (= (drgnx-needs-you-count) 0))
-      (should-not (drgnx-notices))
-      (should-not drgnx-notice--events)
-      (should (equal (drgnx-problems-count) '(0 . 0)))
-      (should-error (drgnx-notify 'test-src 'warn "x") :type 'wrong-type-argument))))
+  ;; a fake module defines a source in its setup; the strict helper turns it off and fails on what it leaves
+  (ert-with-temp-directory dir
+                           (let ((file (expand-file-name "fake-notices.el" dir)))
+                             (with-temp-file file
+                               (insert ";;; fake-notices.el --- a fake module -*- lexical-binding: t -*-\n"
+                                       "(drgnx-module-define 'test/notices :doc \"a notice source\"\n"
+                                       "  :setup (lambda () (drgnx-notice-define-source 'test-src :title \"T\")))\n"))
+                             (drgnx-notice-test-with-model
+                               (drgnx-test-with-modules (list file) :strict t
+                                                        (should (eq (plist-get (gethash 'test-src drgnx-notice--sources) :owner) 'test/notices))
+                                                        (drgnx-notify 'test-src 'fail "broken" :id 'a :life 'condition)
+                                                        (drgnx-notify 'test-src 'warn "an event")
+                                                        (drgnx-notice-set 'test-src '((:id x :text "x")))
+                                                        (should (= (drgnx-needs-you-count) 1)))
+                               (should-not (gethash 'test-src drgnx-notice--sources))
+                               (should-not (gethash 'test-src drgnx-notice--sets))
+                               (should (= (drgnx-needs-you-count) 0))
+                               (should-not (drgnx-notices))
+                               (should-not drgnx-notice--events)
+                               (should (equal (drgnx-problems-count) '(0 . 0)))
+                               (should-error (drgnx-notify 'test-src 'warn "x") :type 'wrong-type-argument)))))
 
 ;;;; Cost
 
@@ -499,33 +519,30 @@ item says something else and the last is another entity — what changes between
                                      :scope "j1" :command (list 'drgnx-job-ui-show "j1")))))
     (list (items 0 40) (items 20 60) (items 60 80))))
 
-(ert-deftest drgnx-notice/a-set-replace-and-recount-is-cheap ()
-  :tags '(:timing)
+(defun drgnx-notice-test--replace-3 ()
+  "Replace the 3 sets with the next copy in `drgnx-notice-test--sets'; return the count."
+  (let ((s (aref drgnx-notice-test--sets (setq drgnx-notice-test--i (1+ drgnx-notice-test--i)))))
+    (drgnx-notice-set 'jobs (nth 0 s))
+    (drgnx-notice-set 'questions (nth 1 s))
+    (drgnx-notice-set 'agents (nth 2 s))
+    (drgnx-needs-you-count)))
+
+(ert-deftest drgnx-notice/a-set-replace-and-recount-allocates-at-most-275 ()
+  ;; allocation is the gate (wall time is a perf number, kept in the ledger)
   (drgnx-notice-test-with-model
     (drgnx-notice-define-source 'jobs :title "Jobs")
     (drgnx-notice-define-source 'questions :title "Questions")
-    (drgnx-notice-test--compile)
-    ;; 202 fresh copies, alternating: each run replaces all 3 sets, 3 items say something else, 3 ids come and 3 go
+    ;; fresh copies, alternating: each run replaces all 3 sets, 3 items say something else, 3 ids come and 3 go
     (setq drgnx-notice-test--sets (vconcat (mapcar (lambda (i) (drgnx-notice-test--make-sets (cl-oddp i)))
-                                                   (number-sequence 0 201))))
-    (let ((run (byte-compile
-                '(lambda (v)
-                   (let ((s (aref drgnx-notice-test--sets v)))
-                     (drgnx-notice-set 'jobs (nth 0 s))
-                     (drgnx-notice-set 'questions (nth 1 s))
-                     (drgnx-notice-set 'agents (nth 2 s))
-                     (drgnx-needs-you-count)))))
-          (samples nil))
-      (should (= (funcall run 0) 80))
-      (should (= (funcall run 1) 81))                           ; card 59 leaves, 1039, 1059 and 1079 come
-      (let ((tick (drgnx-notice-tick)))
-        (dotimes (i 101)
-          (let ((t0 (float-time)))
-            (funcall run (+ 2 i))
-            (push (* 1e6 (- (float-time) t0)) samples)))
-        (should (= (drgnx-notice-tick) (+ tick (* 3 101)))))     ; every set changed
-      (let ((median (nth 50 (sort samples #'<))))
-        (message "replace 3 sets and recount: median %.1f µs" median)
-        (should (<= median (* 60 (if (fboundp 'drgnx-run-ert-time-factor) (drgnx-run-ert-time-factor) 1))))))))
+                                                   (number-sequence 0 7)))
+          drgnx-notice-test--i -1)
+    (byte-compile 'drgnx-notice-test--replace-3)
+    (should (= (drgnx-notice-test--replace-3) 80))
+    (should (= (drgnx-notice-test--replace-3) 81))              ; card 59 leaves, 1039, 1059 and 1079 come
+    (let* ((tick (drgnx-notice-tick))
+           (n (drgnx-notice-test--alloc (drgnx-notice-test--replace-3))))
+      (should (= (drgnx-notice-tick) (+ tick (* 3 4))))         ; every set of the 4 runs changed
+      (message "replace 3 sets and recount: %d conses" n)
+      (should (<= n 275)))))                                 ; 250 measured on 30.2
 
 ;;; core-notice-test.el ends here

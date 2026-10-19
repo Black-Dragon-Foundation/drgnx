@@ -15,6 +15,7 @@
 (require 'cl-lib)
 (require 'drgnx-guard)
 (require 'drgnx-modules-record)
+(require 'drgnx-timer)
 
 ;;;; Vocabulary
 
@@ -51,7 +52,8 @@ by `drgnx-notice-condition-limit' per source.")
   "SOURCE → the number of its conditions in the table (the cap's count).")
 
 (defvar drgnx-notice--more (make-hash-table :test #'eq)
-  "SOURCE → N of its \"and N more\" condition, while it has one.")
+  "SOURCE → the ids (a hash table ID → t) its \"and N more\" condition counts, while it has one.  An id past the
+cap counts once, however often it is posted again.")
 
 (defvar drgnx-notice--sources (make-hash-table :test #'eq)
   "Defined (non-core) sources: SOURCE → (:title T :command C :stale S :owner MODULE :rank R).  R orders them by
@@ -94,7 +96,7 @@ text; dropped when it comes back with other text, falls off the ring, or its sou
 (defvar drgnx-notice-functions nil
   "Abnormal hook: the `now' lane.  Each function is called with CHANGE, a plist (:op OP :key KEY :source SOURCE
 :notice NOTICE :added IDS :removed IDS) holding only its non-nil keys, OP one of `post' `clear' `set' `unknown'
-`dismiss' `undefine'.  Synchronous, inside `drgnx-automatic' with `inhibit-interaction': cheap reactions only (set
+`dismiss' `undefine'.  NOTICE is the plist the model holds: read it, never change it.  Synchronous, inside `drgnx-automatic' with `inhibit-interaction': cheap reactions only (set
 a flag, `force-mode-line-update', start a timer).  An error is recorded in `drgnx-notice--hook-errors'; a change
 made meanwhile is queued, never recursive.")
 
@@ -103,8 +105,6 @@ made meanwhile is queued, never recursive.")
 (defvar drgnx-notice--queue nil "Changes made while the hook runs, newest first.")
 
 (defvar drgnx-notice--running nil "Non-nil while `drgnx-notice-functions' runs.")
-
-(defun drgnx-notice--now () "The time, for :at and staleness (tests stub it)." (float-time))
 
 ;;;; Checks
 
@@ -145,7 +145,7 @@ made meanwhile is queued, never recursive.")
 (defun drgnx-notice--hook-failed (fn err)
   "Record that FN failed with ERR; the first failure of FN gives one message."
   (let ((seen (assq fn drgnx-notice--hook-errors)) (text (error-message-string err)))
-    (push (list fn text (drgnx-notice--now)) drgnx-notice--hook-errors)
+    (push (list fn text (drgnx-timer-now)) drgnx-notice--hook-errors)
     (when (nthcdr 20 drgnx-notice--hook-errors) (setq drgnx-notice--hook-errors (ntake 20 drgnx-notice--hook-errors)))
     (unless seen (message "drgnx: notice hook %s failed: %s" fn text))))
 
@@ -218,12 +218,14 @@ made meanwhile is queued, never recursive.")
       (dolist (k (cdr tail)) (remhash k drgnx-notice--table) (remhash k drgnx-notice--dismissed))
       (setcdr tail nil))))
 
-(defun drgnx-notice--overflow (source)
-  "One more condition of SOURCE past its cap: update its \"and N more\" condition."
-  (let ((n (1+ (gethash source drgnx-notice--more 0))))
-    (drgnx-notice--post source 'more 'warn 'condition (format "and %d more" n) nil nil
-                        (plist-get (gethash source drgnx-notice--sources) :command) nil nil nil)
-    (puthash source n drgnx-notice--more)))
+(defun drgnx-notice--overflow (source id)
+  "SOURCE's condition ID came past its cap: count ID in its \"and N more\" condition, once."
+  (let ((ids (or (gethash source drgnx-notice--more)
+                 (puthash source (make-hash-table :test #'equal) drgnx-notice--more))))
+    (unless (gethash id ids)
+      (puthash id t ids)
+      (drgnx-notice--post source 'more 'warn 'condition (format "and %d more" (hash-table-count ids)) nil nil
+                          (plist-get (gethash source drgnx-notice--sources) :command) nil nil nil))))
 
 (defun drgnx-notice--post (source id severity life text detail fix command scope echo echo-p)
   "Store a checked notice; return its key.  See `drgnx-notify'."
@@ -234,11 +236,11 @@ made meanwhile is queued, never recursive.")
      ((and old (eq (plist-get old :severity) severity) (eq (plist-get old :life) life)
            (equal (plist-get old :text) text))
       (plist-put old :count (1+ (or (plist-get old :count) 1))))
-     ;; a new condition past the source's cap
-     ((and (eq life 'condition) (not (eq id 'more))
+     ;; a new condition past the source's cap (its own `more' and `unknown' conditions always get in)
+     ((and (eq life 'condition) (not (memq id '(more unknown)))
            (not (and old (eq (plist-get old :life) 'condition)))
            (>= (gethash source drgnx-notice--conditions 0) drgnx-notice-condition-limit))
-      (drgnx-notice--overflow source))
+      (drgnx-notice--overflow source id))
      (t
       (when old (drgnx-notice--unstore key old))
       (let ((d (gethash key drgnx-notice--dismissed)))
@@ -250,7 +252,7 @@ made meanwhile is queued, never recursive.")
         (when fix (setq tail (cons :fix (cons fix tail))))
         (when detail (setq tail (cons :detail (cons detail tail))))
         (let ((n (nconc (list :source source :id id :severity severity :life life :text text
-                              :at (drgnx-notice--now))
+                              :at (drgnx-timer-now))
                         tail)))
           (puthash key n drgnx-notice--table)
           (if (eq life 'event)
@@ -268,7 +270,8 @@ LIFE: `event' (the default) or `condition'.  ID: what it is about; an event with
 text repeats as a count.  KEY is (SOURCE . ID).  DETAIL: more text.  FIX: what to do about it.  COMMAND: a
 registry id, a command symbol, or (FN . ARGS) with ARGS readable data (never a closure).  SCOPE: what it belongs
 to (a job id, a project).  ECHO: t or nil overrides the echo rule; given, it is stored even when nil.
-The same key, text and severity again only counts (:count, absent means 1): no tick, no hook call.  Other text or
+The same key, text and severity again only counts (:count, absent means 1): no tick, no hook call; a repeated
+event keeps its :at (its first post) and its place in the ring, so it can age out and come back new.  Other text or
 another severity at the key is a new notice, and lifts a dismissal.  Signals `wrong-type-argument' on a severity
 or life outside the vocabulary, a command that does not read back, or an undefined source."
   (drgnx-notice--check-source source)
@@ -398,7 +401,7 @@ then applied in order, so a later item with the same ID wins.  An ID no item rea
                 (setcar (cdr e) (drgnx-notice--item source it id text (plist-get n :at)))
                 (push id dirty))
              (t (setq e (cons it (cons (drgnx-notice--item source it id text
-                                                           (or now (setq now (drgnx-notice--now))))
+                                                           (or now (setq now (drgnx-timer-now))))
                                        pending)))
                 (puthash id e table)
                 (push id added) (push id dirty)))
@@ -433,7 +436,7 @@ then applied in order, so a later item with the same ID wins.  An ID no item rea
 
 (defun drgnx-notice--check-stale ()
   "Make `:unknown' each source with `:stale' SECS that holds items and has not set them for SECS."
-  (let ((now (and drgnx-notice--stale (drgnx-notice--now))) (stale nil))
+  (let ((now (and drgnx-notice--stale (drgnx-timer-now))) (stale nil))
     (dolist (s drgnx-notice--stale)
       (when (and (consp (gethash (car s) drgnx-notice--sets))
                  (> (- now (gethash (car s) drgnx-notice--heard now)) (cdr s)))
@@ -450,7 +453,7 @@ them after the call (send fresh plists).  ITEMS `:unknown': SOURCE cannot tell; 
 `warn' condition (SOURCE . unknown) says REASON (default \"not known\"), until a later list clears it."
   (drgnx-notice--check-source source)
   (unless (or (eq items :unknown) (listp items)) (signal 'wrong-type-argument (list 'drgnx-notice-items items)))
-  (puthash source (drgnx-notice--now) drgnx-notice--heard)
+  (puthash source (drgnx-timer-now) drgnx-notice--heard)
   (prog1 (if (eq items :unknown) (drgnx-notice--unknown source reason) (drgnx-notice--replace source items))
     (drgnx-notice--check-stale)))
 

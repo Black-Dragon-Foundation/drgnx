@@ -388,15 +388,17 @@ than signal (choosing a Vim stack records it as pending instead of offering to i
 ## Notices (`drgnx-notice.el`)
 
 One model for everything drgnx tells the user. Producers post; the chrome (status bar, cockpit, Notices list) and the
-routes (echo area, desktop, the session file the doctor reads) read it. It is core and requires only `drgnx-guard`
-and `drgnx-modules-record`: nothing in `wb/` or `modules/`, and it never calls UI.
+routes (echo area, desktop, the session file the doctor reads) read it. It is core and requires only `drgnx-guard`,
+`drgnx-modules-record` and `drgnx-timer` (its clock, `drgnx-timer-now`: tests run it on `drgnx-test-with-clock`):
+nothing in `wb/` or `modules/`, and it never calls UI.
 
 **Severity and lifetime.** A notice's `:severity` is `info` (worth knowing), `warn` (degraded; drgnx works around
 it) or `fail` (something you expect does not work); `ok` is only a check result. Its `:life` is:
 
 - `event`: something happened. Kept in a ring of `drgnx-notice-event-limit` (200), oldest out.
 - `condition`: something is wrong now, until its producer clears it. At most `drgnx-notice-condition-limit` (100)
-  per source; past that, a new one only updates the source's `warn` condition `(SOURCE . more)`, "and N more".
+  per source; past that, a new one only updates the source's `warn` condition `(SOURCE . more)`, "and N more", where N
+  counts each id once, however often it is posted again. The source's own `(SOURCE . unknown)` is never held back.
 - `attention`: something waits on your decision. Only a source's set makes these (below); their severity is
   `needs-you`.
 
@@ -461,7 +463,8 @@ are dropped, with one message. The change plist is built only when the hook has 
 
 **Cost** (allocation is the gate; `test/unit/core-notice-test.el`, byte-compiled): a count read 0 conses; a new
 event 14 (22 with one hook function); a repeat 1 (its key). Replacing three sets of 40/40/20 items (80 ids) in
-which three items change and three ids come and go, then reading the count, takes a median of about 55 µs.
+which three items change and three ids come and go, then reading the count, 250 conses (gated at 275; the wall
+time, about 55 µs, is a perf number and not tested).
 
 **Tests** use `test/fixtures/notice-fixture.el`: `(drgnx-notice-test-with-model BODY…)` starts BODY on an empty
 model and sets the model it found back afterwards, variable by variable (`drgnx-notice-test--variables`), with
