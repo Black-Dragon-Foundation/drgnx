@@ -2188,7 +2188,8 @@ The answer is remembered for the session. Every other open takes the remembered 
 the chunks module, `drgnx-large-files-chunk-open-function` nil). A second advice, on `server-execute`, binds
 `drgnx-large-file-open`: `whole` for a client that waits for its files (`drgnx open --wait`), `auto` for every
 other request, the `-e (find-file …)` forms of `drgnx -t` included. Quit is a `user-error`; the door always
-returns a buffer.
+returns a buffer. A large file's raw buffer is reused with RAWFILE t, because without it Emacs itself would ask
+to revisit the file normally, a timer's open included.
 
 **Lean** is `drgnx-large-file-mode`. While a lean open runs, `drgnx-large-file--opening` makes the predicate true,
 `treesit-max-buffer-size` is below the size (a `*-ts-mode` starts no parser, and its warning is suppressed) and a

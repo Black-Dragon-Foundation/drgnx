@@ -15,6 +15,7 @@
 (require 'python)
 (require 'js)
 (require 'treesit nil t)
+(require 'eglot)                        ; an :override advice on its autoload loads it
 (require 'jka-compr)
 (require 'display-line-numbers)
 (require 'hl-line)
@@ -27,6 +28,7 @@
 
 (defvar drgnx-large-files-chunk-open-function)
 (defvar drgnx-large-file-mode)
+(defvar revert-buffer-internal-hook)    ; files.el only declares it
 
 (defmacro drgnx-large-files-test--with (&rest body)
   "BODY with the module editor/large-files set up, in a fresh config folder; torn down after, strictly."
@@ -340,7 +342,9 @@ Return the errors it sent the client."
                   ((symbol-function 'server-switch-buffer) #'ignore)
                   ((symbol-function 'server-return-error) (lambda (_proc err) (push err errors))))
           (server-execute proc files nowait commands nil nil nil nil))
-      (delete-process proc))
+      (let ((buf (process-buffer proc)))      ; a pipe process without :buffer makes one of its name
+        (delete-process proc)
+        (when (buffer-live-p buf) (kill-buffer buf))))
     errors))
 
 (ert-deftest drgnx-large-files/an-eval-form-from-the-server-is-automatic ()
@@ -430,9 +434,14 @@ Return the errors it sent the client."
   (drgnx-large-files-test--door
     (let* ((f (drgnx-large-files-test--file "big.log" 32768))
            (buf (find-file-noselect f)))          ; automatic: raw
+      ;; a raw buffer: Emacs's own "revisit the file normally?" is not asked either, from a command or a timer
+      (should (eq (buffer-local-value 'drgnx-large-file buf) 'raw))
       (drgnx-large-files-test--answering ?n
         (should (eq (find-file-noselect f) buf))
-        (should-not drgnx-large-files-test--asked)))))
+        (should-not drgnx-large-files-test--asked))
+      (drgnx-large-files-test--never-asks
+        (let ((drgnx-guard--timer-fn 'some-timer))
+          (should (eq (find-file-noselect f) buf)))))))
 
 (ert-deftest drgnx-large-files/below-the-threshold-nothing-changes ()
   (drgnx-large-files-test--door
@@ -517,6 +526,11 @@ Return the errors it sent the client."
 
 ;;;;; Revert
 
+(defun drgnx-large-files-test--revert ()
+  "Revert the current buffer from its file, unasked.  `revert-buffer' leaves its copy of `after-revert-hook' in
+`revert-buffer-internal-hook''s default value: bound here, so it is not left behind."
+  (let ((revert-buffer-internal-hook nil)) (revert-buffer nil t)))
+
 (ert-deftest drgnx-large-files/shrunk-on-revert-turns-lean-off ()
   (drgnx-large-files-test--door
     (let ((f (drgnx-large-files-test--file "big.el" 32768))
@@ -525,7 +539,7 @@ Return the errors it sent the client."
         (should (eq drgnx-large-file 'lean))
         (should-not hl-line-mode)
         (drgnx-large-files-test--file "big.el" 1024)
-        (drgnx-large-files-test--never-asks (revert-buffer nil t))
+        (drgnx-large-files-test--never-asks (drgnx-large-files-test--revert))
         (should-not drgnx-large-file)
         (should-not drgnx-large-file-mode)
         (should (drgnx-large-files-test--undo-on-p))
@@ -539,7 +553,7 @@ Return the errors it sent the client."
         (should-not drgnx-large-file)
         (drgnx-large-files-test--file "log.el" 32768)
         (drgnx-large-files-test--never-asks
-          (let ((this-command 'revert-buffer)) (revert-buffer nil t)))
+          (let ((this-command 'revert-buffer)) (drgnx-large-files-test--revert)))
         (should (eq drgnx-large-file 'lean))
         (should drgnx-large-file-mode)
         (should (eq buffer-undo-list t))))))
@@ -550,7 +564,7 @@ Return the errors it sent the client."
       (with-current-buffer (find-file-noselect f)
         (should (eq drgnx-large-file 'raw))
         (drgnx-large-files-test--file "big.log" 1024)
-        (drgnx-large-files-test--never-asks (revert-buffer nil t))
+        (drgnx-large-files-test--never-asks (drgnx-large-files-test--revert))
         (should (eq drgnx-large-file 'raw))
         (should (= (buffer-size) 1024))))))
 
@@ -563,7 +577,9 @@ Return the errors it sent the client."
     (dolist (m '(indent-bars-mode drgnx-blame-mode drgnx-sticky-mode diff-hl-margin-mode
                                   display-line-numbers-mode diff-hl-mode))
       (should (memq m so-long-minor-modes)))
-    (let ((f (drgnx-large-files-test--file "long.js" 12000 t)))
+    (let ((f (drgnx-large-files-test--file "long.js" 12000 t))
+          ;; so-long acts when a buffer is first displayed; a buffer nobody shows acts at once
+          (so-long-invisible-buffer-function nil))
       (drgnx-large-files-test--never-asks
         (with-current-buffer (find-file-noselect f)
           (should-not drgnx-large-file)
