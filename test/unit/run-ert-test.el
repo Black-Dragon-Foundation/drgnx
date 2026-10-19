@@ -392,6 +392,32 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
             (should (equal (list (plist-get r :total) (plist-get r :passed) (plist-get r :failed)) '(1 1 0)))))
       (delete-directory tmp t))))
 
+(ert-deftest drgnx-run-ert/a-file-s-output-is-whole-when-files-run-at-once ()
+  ;; DRGNX_TEST_JOBS > 1 keeps each file's output in a buffer until the file ends.  A file is over when its sentinel
+  ;; has run — Emacs reads what is left in the pipe first — not once `process-live-p' is nil: the buffer went while
+  ;; output was still coming, and the next chunk's filter ("Selecting deleted buffer") ended the whole run.
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-iso" t)))
+         (suite (expand-file-name "suite" tmp)) (results (expand-file-name "r.json" tmp)) (out nil) (code nil))
+    (unwind-protect
+        (progn
+          (drgnx-run-ert-test--suite
+           suite (mapcar (lambda (n) (cons (format "loud%d-test.el" n)
+                                           (format "(ert-deftest iso-loud/a%d () (dotimes (i 3000) (message \"line %%d %s\" i)) (message \"loud%d done\"))"
+                                                   n (make-string 200 ?x) n)))
+                         '(1 2 3 4)))
+          (let ((process-environment (append (list (concat "DRGNX_TEST_RESULTS=" results) "DRGNX_TEST_JOBS=4"
+                                                   "DRGNX_TEST_SELECTOR")
+                                             process-environment)))
+            (setq out (with-temp-buffer
+                        (setq code (call-process (expand-file-name invocation-name invocation-directory) nil t nil
+                                                 "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
+                                                 "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch" suite))
+                        (buffer-string))))
+          (should-not (string-search "deleted buffer" out))
+          (should (eql 0 code))
+          (dolist (n '(1 2 3 4)) (should (string-search (format "loud%d done" n) out))))
+      (delete-directory tmp t))))
+
 (ert-deftest drgnx-run-ert/a-crashing-file-is-named ()
   ;; A file whose Emacs dies (a test calls `kill-emacs') or hangs past DRGNX_TEST_FILE_TIMEOUT is a failure that
   ;; names the file; the other files still run and count.
