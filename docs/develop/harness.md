@@ -80,6 +80,12 @@ unit run compiles ~60 trampolines at ~0.2 s each, which would cost every run 12�
 trampolines (~1 MB); delete it at any time. When it cannot be made, the run's temp directory (`eln/`) is used.
 `$DRGNX_TEST_ELN_DIR` set from outside (an absolute path) chooses another.
 
+An installed trampoline is what all native code then calls for that primitive, and `comp-installed-trampolines-h` is
+what keeps it from being collected. A test that let-binds that table to a fresh one (to compile trampolines cold)
+puts what it installed into Emacs's own table before it returns: dropped with the binding, the next garbage
+collection unloads them and the file's Emacs dies of SIGSEGV at the next `current-time` ERT calls — no more test
+lines and no summary for the file.
+
 `/tmp` is RAM on many machines, so a test run leaves nothing there. `bin/drgnx test` (every tier) and `bin/drgnx check`
 run in a `$TMPDIR` of their own — a fresh `mktemp -d` (`drgnx-run.XXXXXX`, made absolute) below the caller's `$TMPDIR` or
 `/tmp`, so `temporary-file-directory` and the native compiler's libgccjit files land in it too — and remove it on every

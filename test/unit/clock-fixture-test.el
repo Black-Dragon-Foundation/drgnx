@@ -298,19 +298,26 @@
 
 (ert-deftest drgnx-test-clock/a-cold-advice-trampoline-arms-nothing-in-the-virtual-lists ()
   "Emacs 31 native-compiles a primitive's advice trampoline when it is first advised, and logging that compile arms
-`undo-auto--boundary-timer'; the fixture compiles them before it swaps the lists, so the body starts clean."
+`undo-auto--boundary-timer'; the fixture compiles them before it swaps the lists, so the body starts clean.
+The trampolines compiled here replace the old ones for all native code, and `comp-installed-trampolines-h' is what
+keeps a trampoline from being collected: they go into Emacs's own table at the end, or the next collection unloads
+them and native code that calls `current-time' (ERT itself) jumps into unmapped memory."
   (skip-unless (and (fboundp 'native-comp-available-p) (native-comp-available-p)
                     (boundp 'comp-installed-trampolines-h)))
-  (let* ((dir (make-temp-file "drgnx-clock-eln" t))
-         (native-comp-eln-load-path (list (file-name-as-directory dir)))   ; no trampoline cached on disk either
-         (comp-installed-trampolines-h (make-hash-table :test #'eq))      ; and none installed in this process
-         (undo-auto-current-boundary-timer nil))
+  (let ((fresh (make-hash-table :test #'eq)))
     (unwind-protect
-        (drgnx-test-with-clock ()
-          (should-not timer-list)
-          (should-not timer-idle-list))
-      (when (timerp undo-auto-current-boundary-timer) (cancel-timer undo-auto-current-boundary-timer))
-      (delete-directory dir t))))
+        (let* ((dir (make-temp-file "drgnx-clock-eln" t))
+               (native-comp-eln-load-path (list (file-name-as-directory dir)))   ; no trampoline cached on disk either
+               (comp-installed-trampolines-h fresh)                             ; and none installed in this process
+               (undo-auto-current-boundary-timer nil))
+          (unwind-protect
+              (drgnx-test-with-clock ()
+                (should-not timer-list)
+                (should-not timer-idle-list))
+            (when (timerp undo-auto-current-boundary-timer) (cancel-timer undo-auto-current-boundary-timer))
+            (delete-directory dir t)))
+      (maphash (lambda (subr trampoline) (puthash subr trampoline comp-installed-trampolines-h)) fresh)))
+  (garbage-collect))                    ; an unprotected trampoline is unloaded here and ERT's `current-time' crashes
 
 (ert-deftest drgnx-test-clock/the-undo-boundary-timer-is-not-the-bodys ()
   (let ((undo-auto-current-boundary-timer nil))
