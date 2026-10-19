@@ -6,31 +6,37 @@
 (require 'drgnx-timer)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
+(defun drgnx-persist-test--kind-gui (frame)
+  "`drgnx-state-frame-kind' for these tests: batch Emacs's frame is a graphical window (it is `tty' for the store)."
+  (and (framep frame) (frame-live-p frame) 'gui))
+
 (defmacro drgnx-persist-test--with (dir &rest body)
-  "BODY with rules and chrome on, a dock section, one editor window, files in DIR, a state file."
+  "BODY with rules and chrome on, a dock section, one editor window, files in DIR, a state file.  The selected
+frame is a graphical workbench frame for the store."
   (declare (indent 1))
   `(drgnx-test-with-state
      (let* ((,dir (file-name-as-directory (make-temp-file "drgnx-persist" t)))
             (drgnx-persist-file (expand-file-name "state.eld" ,dir))
             (drgnx-wb--sections nil) (display-buffer-alist nil))
-       (delete-other-windows)
-       (dolist (p '(drgnx-tabs)) (set-window-parameter (selected-window) p nil))
-       (set-window-prev-buffers (selected-window) nil)
-       (dolist (p '(drgnx-wb-areas drgnx-wb-panel-px drgnx-wb-right-px drgnx-wb-dock-px)) (set-frame-parameter nil p nil))
-       (drgnx-wb-define-section 'top :slot 0 :title "TOP" :buffer (lambda () (get-buffer-create "*drgnx-test-top*")))
-       (drgnx-rules-mode 1)
-       (drgnx-chrome-mode 1)
-       (unwind-protect (progn ,@body)
-         (drgnx-timer-cancel 'persist-visit)
-         (drgnx-chrome-mode -1)
-         (drgnx-rules-mode -1)
-         (drgnx-wb-area-hide 'panel)
-         (drgnx-wb-hide-sidebar)
+       (cl-letf (((symbol-function 'drgnx-state-frame-kind) #'drgnx-persist-test--kind-gui))
          (delete-other-windows)
-         (dolist (b (buffer-list))
-           (when (and (buffer-file-name b) (string-prefix-p ,dir (buffer-file-name b))) (kill-buffer b)))
-         (when (get-buffer "*drgnx-test-top*") (kill-buffer "*drgnx-test-top*"))
-         (delete-directory ,dir t)))))
+         (dolist (p '(drgnx-tabs)) (set-window-parameter (selected-window) p nil))
+         (set-window-prev-buffers (selected-window) nil)
+         (dolist (p '(drgnx-wb-areas drgnx-wb-panel-px drgnx-wb-right-px drgnx-wb-dock-px)) (set-frame-parameter nil p nil))
+         (drgnx-wb-define-section 'top :slot 0 :title "TOP" :buffer (lambda () (get-buffer-create "*drgnx-test-top*")))
+         (drgnx-rules-mode 1)
+         (drgnx-chrome-mode 1)
+         (unwind-protect (progn ,@body)
+           (drgnx-timer-cancel 'persist-visit)
+           (drgnx-chrome-mode -1)
+           (drgnx-rules-mode -1)
+           (drgnx-wb-area-hide 'panel)
+           (drgnx-wb-hide-sidebar)
+           (delete-other-windows)
+           (dolist (b (buffer-list))
+             (when (and (buffer-file-name b) (string-prefix-p ,dir (buffer-file-name b))) (kill-buffer b)))
+           (when (get-buffer "*drgnx-test-top*") (kill-buffer "*drgnx-test-top*"))
+           (delete-directory ,dir t))))))
 
 (defun drgnx-persist-test--file (dir name)
   (let ((f (expand-file-name name dir))) (write-region "x\n" nil f nil 'silent) (find-file-noselect f)))
@@ -127,11 +133,11 @@
   ;; restore and the save on closing the last graphical frame use that frame.
   (drgnx-persist-test--with dir
     (let ((f (selected-frame)))
-      (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional x) (eq (or x (selected-frame)) f))))
+      (cl-letf (((symbol-function 'drgnx-state-frame-kind) (lambda (x) (and (eq x f) 'gui))))
         (should (eq (drgnx-persist--gui-frame) f))
         (drgnx-persist--on-delete-frame f)
         (should (file-exists-p drgnx-persist-file)))
-      (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) nil)))
+      (cl-letf (((symbol-function 'drgnx-state-frame-kind) (lambda (x) (and (eq x f) 'tty))))
         (should-not (drgnx-persist--gui-frame))))))
 
 (ert-deftest drgnx-persist/tabs-load-lazily-and-safely ()
@@ -255,6 +261,7 @@
                    (current-buffer)))
           (cl-letf (((symbol-function 'drgnx-persist-test--rebuild) (lambda (&rest _) frame))
                     ((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+                    ((symbol-function 'drgnx-state-frame-kind) #'drgnx-persist-test--kind-gui)
                     ((symbol-function 'select-frame-set-input-focus) #'ignore)
                     ((symbol-function 'display-monitor-attributes-list) (lambda (&optional _) '(((workarea 0 0 1920 1080)))))
                     ((symbol-function 'set-frame-position) (lambda (f x y) (push (list f x y) placed)))
@@ -389,12 +396,12 @@
     (drgnx-persist-test--graphical
       (let ((calls 0) (other (make-symbol "other-frame")) (drgnx-persist-restore-on-start t))
         (cl-letf (((symbol-function 'drgnx-persist-restore) (lambda (&rest _) (cl-incf calls) t))
-                  ((symbol-function 'frame-parent) (lambda (&optional _) nil))
+                  ((symbol-function 'drgnx-state-frame-kind) (lambda (f) (and (or (framep f) (eq f other)) 'gui)))
                   ((symbol-function 'frame-list) (lambda () (list (selected-frame) other))))
           (drgnx-persist--on-new-frame (selected-frame))
           (should (= 0 calls)))
         (cl-letf (((symbol-function 'drgnx-persist-restore) (lambda (&rest _) (cl-incf calls) t)) ; a terminal client
-                  ((symbol-function 'display-graphic-p) (lambda (&optional _) nil)))
+                  ((symbol-function 'drgnx-state-frame-kind) (lambda (_f) 'tty)))
           (drgnx-persist--on-new-frame (selected-frame))
           (should (= 0 calls)))
         (let ((drgnx-persist-restore-on-start nil))
@@ -470,3 +477,119 @@
       (cl-letf (((symbol-function 'message) #'ignore))
         (drgnx-persist-save))
       (should (equal (plist-get (car (plist-get (drgnx-persist--read drgnx-persist-file) :frames)) :extra) '(:a 1 :b 2))))))
+
+;;; Task 15: persist on the store — the sizes you chose, and the intent a restore writes
+
+(defun drgnx-persist-test--saved (key)
+  "KEY (`:left', `:panel', `:right') of the selected frame's saved state."
+  (plist-get (drgnx-persist-state) key))
+
+(ert-deftest drgnx-persist/a-squeezed-panel-is-saved-at-the-size-you-chose ()
+  ;; a popup (or a layout, or the window manager) squeezed the panel; the size you chose is what is kept
+  (drgnx-persist-test--with dir
+    (drgnx-wb-show-sidebar)
+    (drgnx-wb-area-show 'panel 'output)
+    (let* ((panel (drgnx-wb-area-window 'panel)) (dock (drgnx-wb-section-window 'top))
+           (panel-chosen (+ 3 (window-pixel-height panel))) (dock-chosen (+ 5 (window-pixel-width dock))))
+      (drgnx-state-note-intent nil :sizes 'panel panel-chosen :by 'user)
+      (drgnx-state-note-intent nil :sizes 'left dock-chosen :by 'user)
+      (should-not (eql panel-chosen (window-pixel-height panel)))      ; on screen it is smaller
+      (should (eql panel-chosen (plist-get (drgnx-persist-test--saved :panel) :px)))
+      (should (eql dock-chosen (plist-get (drgnx-persist-test--saved :left) :px)))
+      ;; hidden, the same
+      (drgnx-wb-area-hide 'panel)
+      (should (eql panel-chosen (plist-get (drgnx-persist-test--saved :panel) :px))))))
+
+(ert-deftest drgnx-persist/no-intent-saves-the-live-size ()
+  (drgnx-persist-test--with dir
+    (drgnx-wb-area-show 'panel 'output)
+    (let ((panel (drgnx-wb-area-window 'panel)))
+      (should-not (drgnx-state-intent nil :sizes 'panel))
+      (should (eql (window-pixel-height panel) (plist-get (drgnx-persist-test--saved :panel) :px)))
+      (should (plist-get (drgnx-persist-test--saved :panel) :shown))
+      (should-not (plist-get (drgnx-persist-test--saved :right) :shown)))))
+
+(ert-deftest drgnx-persist/a-borrowed-panel-is-saved-at-its-own-size ()
+  ;; a popup borrowing the panel's window: the panel is still shown, at its size, not the popup's
+  (drgnx-persist-test--with dir
+    (drgnx-wb-area-show 'panel 'output)
+    (let ((panel (drgnx-wb-area-window 'panel)))
+      (set-window-parameter panel 'drgnx-popup (list :borrowed t :popup (current-buffer)))
+      (unwind-protect
+          (progn
+            (should (eql (window-pixel-height panel) (plist-get (drgnx-persist-test--saved :panel) :px)))
+            (should (plist-get (drgnx-persist-test--saved :panel) :shown))
+            (drgnx-state-note-intent nil :sizes 'panel (+ 2 (window-pixel-height panel)) :by 'user)
+            (should (eql (+ 2 (window-pixel-height panel)) (plist-get (drgnx-persist-test--saved :panel) :px))))
+        (set-window-parameter panel 'drgnx-popup nil)))))
+
+(ert-deftest drgnx-persist/restore-notes-sizes-as-restore ()
+  ;; sizes and the view come back as intent `restore': they replace a size you chose earlier, and count as yours after
+  (drgnx-persist-test--with dir
+    (with-temp-file drgnx-persist-file
+      (prin1 '(:version 2 :frames ((:role main :left (:shown nil :view explorer :px 20)
+                                          :panel (:shown nil :tab output :px 6) :right (:shown nil :px 15)
+                                          :groups nil :main nil)))
+             (current-buffer)))
+    (drgnx-state-note-intent nil :sizes 'panel 3 :by 'user)
+    (let ((calls nil) (orig (symbol-function 'drgnx-state-note-intent)))
+      (cl-letf (((symbol-function 'drgnx-state-note-intent)
+                 (lambda (frame key subkey value &rest args)
+                   (push (list key subkey value (plist-get args :by)) calls)
+                   (apply orig frame key subkey value args))))
+        (should (drgnx-persist-restore)))
+      (should (member '(:sizes left 20 restore) calls))
+      (should (member '(:sizes panel 6 restore) calls))
+      (should (member '(:sizes right 15 restore) calls))
+      (should (member '(:view nil explorer restore) calls)))
+    (should (equal (drgnx-state-intent nil :sizes 'panel) '(:px 6 :by user)))
+    (should (eql 20 (plist-get (drgnx-state-intent nil :sizes 'left) :px)))
+    (should (eq 'explorer (drgnx-state-intent nil :view)))))
+
+(ert-deftest drgnx-persist/restore-tells-the-store-who-is-main ()
+  ;; the roles the restore writes are seen by the store at once (no observation has run)
+  (drgnx-persist-test--with dir
+    (let ((role (frame-parameter nil 'drgnx-frame-role)))
+      (unwind-protect
+          (progn
+            (set-frame-parameter nil 'drgnx-frame-role 'aux)
+            (drgnx-state-sync)
+            (should-not (drgnx-state-main-frame))
+            (with-temp-file drgnx-persist-file
+              (prin1 '(:version 2 :frames ((:role main :groups ((:tabs nil))))) (current-buffer)))
+            (should (drgnx-persist-restore))
+            (should (eq (selected-frame) (drgnx-state-main-frame))))
+        (set-frame-parameter nil 'drgnx-frame-role role)
+        (drgnx-state-sync)))))
+
+(defun drgnx-persist-test--keys (plist)
+  (cl-loop for (k) on plist by #'cddr collect k))
+
+(ert-deftest drgnx-persist/the-file-format-is-unchanged ()
+  ;; what is saved has the shape of the format-2 files already on disk, and such a file restores
+  (drgnx-persist-test--with dir
+    (switch-to-buffer (drgnx-persist-test--file dir "a.txt"))
+    (drgnx-chrome-apply nil t)
+    (drgnx-wb-show-sidebar)
+    (drgnx-wb-area-show 'panel 'results)
+    (drgnx-state-note-intent nil :sizes 'panel 5 :by 'user)
+    (drgnx-persist-save)
+    (let* ((state (drgnx-persist--read drgnx-persist-file)) (frame (car (plist-get state :frames))))
+      (should (equal (drgnx-persist-test--keys state) '(:version :frames)))
+      (should (equal (drgnx-persist-test--keys frame) '(:role :left :panel :right :roots :main :groups :extra)))
+      (should (equal (drgnx-persist-test--keys (plist-get frame :left)) '(:shown :view :px)))
+      (should (equal (drgnx-persist-test--keys (plist-get frame :panel)) '(:shown :tab :px)))
+      (should (equal (drgnx-persist-test--keys (plist-get frame :right)) '(:shown :tab :px)))
+      (should (equal (drgnx-persist-test--keys (car (plist-get frame :groups))) '(:tabs :shown :px)))
+      (should (eql 5 (plist-get (plist-get frame :panel) :px))))
+    (drgnx-persist-test--reset)
+    ;; a file as an earlier drgnx wrote it
+    (with-temp-file drgnx-persist-file
+      (prin1 '(:version 2 :frames ((:role main :left (:shown t :view explorer :px 18)
+                                          :panel (:shown t :tab results :px 6) :right (:shown nil :tab nil :px nil)
+                                          :roots nil :main nil :groups ((:tabs nil :shown nil :px 40)) :extra nil)))
+             (current-buffer)))
+    (should (drgnx-persist-restore))
+    (should (drgnx-wb-sidebar-showing-p))
+    (should (eq 'results (drgnx-wb-area-tab 'panel)))
+    (should (eql 18 (frame-parameter nil 'drgnx-wb-dock-px)))))

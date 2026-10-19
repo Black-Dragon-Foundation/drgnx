@@ -14,7 +14,8 @@ into `msgs' (a list, newest first)."
           (drgnx-persist-file (expand-file-name "workbench.eld" ,var))
           (msgs nil))
      (unwind-protect
-         (cl-letf (((symbol-function 'drgnx-persist-state) (lambda (&optional _f) (list :role 'main :main '(leaf)))))
+         (cl-letf (((symbol-function 'drgnx-persist-state) (lambda (&optional _f) (list :role 'main :main '(leaf))))
+                   ((symbol-function 'drgnx-state-frame-kind) (lambda (f) (and (framep f) 'gui))))   ; batch's frame, as a window
            (cl-letf (((symbol-function 'message)
                       (lambda (fmt &rest args) (when fmt (push (apply #'format fmt args) msgs)) nil)))
              ,@body))

@@ -5,31 +5,37 @@
 (require 'drgnx-persist)
 (require 'drgnx-timer)
 
+(defun drgnx-persist-edge-test--kind-gui (frame)
+  "`drgnx-state-frame-kind' for these tests: batch Emacs's frame is a graphical window (it is `tty' for the store)."
+  (and (framep frame) (frame-live-p frame) 'gui))
+
 (defmacro drgnx-persist-edge-test--with (dir &rest body)
-  "BODY with rules and chrome on, one editor window, files in DIR, a state file."
+  "BODY with rules and chrome on, one editor window, files in DIR, a state file.  The selected frame is a
+graphical workbench frame for the store."
   (declare (indent 1))
   `(drgnx-test-with-state
      (let* ((,dir (file-name-as-directory (make-temp-file "drgnx-persist-edge" t)))
             (drgnx-persist-file (expand-file-name "state.eld" ,dir))
             (drgnx-persist--pending nil)
             (drgnx-wb--sections nil) (display-buffer-alist nil))
-       (delete-other-windows)
-       (set-window-parameter (selected-window) 'drgnx-tabs nil)
-       (set-window-prev-buffers (selected-window) nil)
-       (dolist (p '(drgnx-wb-areas drgnx-wb-panel-px drgnx-wb-right-px drgnx-wb-dock-px)) (set-frame-parameter nil p nil))
-       (drgnx-rules-mode 1)
-       (drgnx-chrome-mode 1)
-       (unwind-protect (progn ,@body)
-         (drgnx-timer-cancel 'persist-visit)
-         (drgnx-chrome-mode -1)
-         (drgnx-rules-mode -1)
-         (drgnx-wb-area-hide 'panel)
-         (drgnx-wb-hide-sidebar)
+       (cl-letf (((symbol-function 'drgnx-state-frame-kind) #'drgnx-persist-edge-test--kind-gui))
          (delete-other-windows)
-         (dolist (w (window-list)) (set-window-parameter w 'drgnx-test-crafted nil))
-         (dolist (b (buffer-list))
-           (when (and (buffer-file-name b) (string-prefix-p ,dir (buffer-file-name b))) (kill-buffer b)))
-         (delete-directory ,dir t)))))
+         (set-window-parameter (selected-window) 'drgnx-tabs nil)
+         (set-window-prev-buffers (selected-window) nil)
+         (dolist (p '(drgnx-wb-areas drgnx-wb-panel-px drgnx-wb-right-px drgnx-wb-dock-px)) (set-frame-parameter nil p nil))
+         (drgnx-rules-mode 1)
+         (drgnx-chrome-mode 1)
+         (unwind-protect (progn ,@body)
+           (drgnx-timer-cancel 'persist-visit)
+           (drgnx-chrome-mode -1)
+           (drgnx-rules-mode -1)
+           (drgnx-wb-area-hide 'panel)
+           (drgnx-wb-hide-sidebar)
+           (delete-other-windows)
+           (dolist (w (window-list)) (set-window-parameter w 'drgnx-test-crafted nil))
+           (dolist (b (buffer-list))
+             (when (and (buffer-file-name b) (string-prefix-p ,dir (buffer-file-name b))) (kill-buffer b)))
+           (delete-directory ,dir t))))))
 
 (ert-deftest drgnx-persist-edge/a-state-file-sets-no-window-parameters ()
   "M3d-4: the saved window tree is put back without the window parameters it carries (a crafted
@@ -113,7 +119,8 @@ the next window or hook (and the after-restore functions, which need a restored 
 
 (defmacro drgnx-persist-edge-test--with-frames (frames &rest body)
   "BODY with `frame-list' FRAMES, the first (the selected frame) graphical and visible; the others are symbols:
-GUI-n are graphical windows, CHILD a child frame of the first, TTY a terminal one."
+GUI-n are graphical windows, CHILD a child frame of the first, TTY a terminal one.  The store records all of
+them and classifies them by name (`drgnx-state-frame-kind')."
   (declare (indent 1))
   `(let ((first (selected-frame)) (orig-param (symbol-function 'frame-parameter)))
      (cl-letf (((symbol-function 'frame-list) (lambda () ,frames))
@@ -121,8 +128,30 @@ GUI-n are graphical windows, CHILD a child frame of the first, TTY a terminal on
                ((symbol-function 'frame-visible-p) (lambda (_f) t))
                ((symbol-function 'frame-parent) (lambda (&optional f) (and (eq f 'child) first)))
                ((symbol-function 'display-graphic-p) (lambda (&optional f) (not (eq f 'tty))))
+               ((symbol-function 'drgnx-state-frame-kind)
+                (lambda (f) (cond ((eq f 'child) 'child) ((eq f 'tty) 'tty) (t 'gui))))
+               ((symbol-function 'drgnx-state-frames)
+                (lambda (&optional kind) (seq-filter (lambda (f) (or (null kind) (eq kind (drgnx-state-frame-kind f)))) ,frames)))
                ((symbol-function 'frame-parameter) (lambda (f p) (if (symbolp f) nil (funcall orig-param f p)))))
        ,@body)))
+
+(ert-deftest drgnx-persist/frames-come-from-the-store ()
+  "The windows to save are the store's graphical frames that are visible, its main frame first; a frame the store
+does not record, a hidden one and a terminal one are not saved."
+  (drgnx-persist-edge-test--with dir
+    (let ((first (selected-frame)))
+      (cl-letf (((symbol-function 'drgnx-state-frame-kind) (lambda (f) (if (eq f 'tty-1) 'tty 'gui)))
+                ((symbol-function 'drgnx-state-frames)
+                 (lambda (&optional kind) (if (eq kind 'gui) (list first 'gui-2 'hidden) (list first 'gui-2 'hidden 'tty-1))))
+                ((symbol-function 'drgnx-state-main-frame) (lambda () 'gui-2))
+                ((symbol-function 'frame-list) (lambda () (list first 'gui-2 'hidden 'tty-1 'unrecorded)))
+                ((symbol-function 'frame-live-p) (lambda (_f) t))
+                ((symbol-function 'frame-visible-p) (lambda (f) (not (eq f 'hidden))))
+                ((symbol-function 'frame-parent) (lambda (&optional _f) nil))
+                ((symbol-function 'display-graphic-p) (lambda (&optional f) (not (eq f 'tty-1)))))
+        (should (equal (drgnx-persist--frames) (list 'gui-2 first)))
+        (cl-letf (((symbol-function 'drgnx-state-main-frame) (lambda () nil)))      ; no main one: the selected frame first
+          (should (equal (drgnx-persist--frames) (list first 'gui-2))))))))
 
 (ert-deftest drgnx-persist-edge/a-child-frame-does-not-block-the-last-save ()
   "M12a-13: a child frame (a posframe) is no window of the workbench: closing the last real window still saves."
