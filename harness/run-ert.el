@@ -361,6 +361,9 @@ exit 0 or 1."
           (append (mapcar (lambda (v) (format "%s=%s" (car v) (expand-file-name (cdr v) tmp)))
                           '(("DRGNX_CONFIG_DIR" . "config") ("DRGNX_DATA_DIR" . "data")
                             ("XDG_STATE_HOME" . "state") ("XDG_CACHE_HOME" . "cache") ("HOME" . "home")
+                            ;; …nor the user's XDG config and data homes: a test that unsets DRGNX_CONFIG_DIR or
+                            ;; DRGNX_DATA_DIR lands here, never in ~/.config/drgnx or ~/.local/share/drgnx
+                            ("XDG_CONFIG_HOME" . "xdg-config") ("XDG_DATA_HOME" . "xdg-data")
                             ("TMPDIR" . ".")))
                   (list "DRGNX_TEST_ISOLATED=1")
                   ;; …every Emacs this run starts compiles its trampolines into the same directory, once

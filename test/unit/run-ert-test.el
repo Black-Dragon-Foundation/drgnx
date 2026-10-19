@@ -119,6 +119,14 @@
     (should (string-prefix-p (file-truename temporary-file-directory) (file-truename (getenv v)))))
   (should (string-prefix-p (file-truename temporary-file-directory) (file-truename project-list-file))))
 
+(ert-deftest drgnx-run-ert/no-test-sees-the-users-xdg-dirs ()
+  ;; XDG_CONFIG_HOME and XDG_DATA_HOME count for drgnx's config and data dirs: a test that unsets DRGNX_CONFIG_DIR or
+  ;; DRGNX_DATA_DIR must still land under the run, never in the user's ~/.config or ~/.local/share.
+  (skip-unless (getenv "DRGNX_TEST_ISOLATED"))
+  (dolist (v '("XDG_CONFIG_HOME" "XDG_DATA_HOME"))
+    (should (getenv v))
+    (should (string-prefix-p (file-truename temporary-file-directory) (file-truename (getenv v))))))
+
 (ert-deftest drgnx-run-ert/unit-tests-never-see-the-users-desktop ()
   ;; A test that loads dbus.el, opens a frame or talks to a compositor must not reach the user's session.
   (skip-unless (getenv "DRGNX_TEST_ISOLATED"))
