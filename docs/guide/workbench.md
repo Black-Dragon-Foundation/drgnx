@@ -62,8 +62,10 @@ same way). A click shows the definition in the editor and keeps you in the Outli
 editor, and half a second after you stop typing, your edits — only while it is shown (hidden, it lets go of the file
 at the next pause or editor change), and a key you press while it works wins (it tries again at the next pause). Files without an index, remote files and buffers over 1 MB get a
 one-line notice instead. The definition your cursor is in is highlighted in the Outline (an overlay, set a moment
-after the cursor stops — the Outline's own cursor is yours and never moves). An edit that only moves definitions redraws
-nothing, and the Outline keeps your place in it when definitions are added above. Focus Outline: palette · `SPC o`.
+after the cursor stops — the Outline's own cursor is yours and never moves while you work in a file). Another file
+starts the Outline at its top, its cursor on the definition your cursor is in (scrolled into view). An edit that only
+moves definitions redraws nothing, and the Outline keeps your place in it when definitions are added above. Its rows
+and notices start in the column of the section's title. Focus Outline: palette · `SPC o`.
 
 ### Files
 
