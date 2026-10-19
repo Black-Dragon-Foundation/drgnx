@@ -104,14 +104,16 @@
      (should-not (input-pending-p)))))
 
 (ert-deftest drgnx-test-clock/a-timed-accept-advances-by-the-real-wait ()
+  ;; The real clock the wait is measured by is scripted (the wait itself stays real): a loaded machine cannot move
+  ;; virtual time by anything but the 0.25 s the wait reads.
   (drgnx-clock-test--with
-   (let ((began (drgnx-test-real-time)))
+   (let ((reads (list 100.0 100.25)))
      (run-at-time 0.1 nil #'drgnx-clock-test--note)
-     (accept-process-output nil 0.2)
-     (let ((waited (- (drgnx-test-real-time) began)))
-       (should (>= waited 0.15))
-       (should (< (abs (- (drgnx-test-clock-now) waited)) 0.05))
-       (should (= 1 (length drgnx-clock-test--runs)))))))      ; the 0.1 s timer came due in it
+     (cl-letf (((symbol-function 'drgnx-test-real-time) (lambda () (or (pop reads) (error "Read the real clock again")))))
+       (accept-process-output nil 0.2))
+     (should-not reads)
+     (should (= 0.25 (drgnx-test-clock-now)))
+     (should (= 1 (length drgnx-clock-test--runs))))))      ; the 0.1 s timer came due in it
 
 (ert-deftest drgnx-test-clock/a-polling-loop-with-a-float-time-deadline-ends ()
   (drgnx-clock-test--with
@@ -241,6 +243,14 @@
         (should (< (string-match "hub-tick" (format "%S" err)) (string-match "ignore" (format "%S" err)))))
       (setq reset nil)
       (drgnx-test-with-clock (:allow-pending t) (run-at-time 5 nil #'ignore))
+      (should reset))))
+
+(ert-deftest drgnx-test-clock/a-layer-timer-from-before-the-body-is-not-the-bodys ()
+  ;; a test outside the clock left a layer entry (its timer on the real list): the next clock body has none of its own
+  (let (reset)
+    (cl-letf (((symbol-function 'drgnx-timer-pending) (lambda () '(((acp-exit . "earlier") :core start))))
+              ((symbol-function 'drgnx-timer-reset) (lambda () (setq reset t))))
+      (drgnx-test-with-clock () (cancel-timer (run-at-time 5 nil #'ignore)))
       (should reset))))
 
 (ert-deftest drgnx-test-clock/contract-1-the-seams-read-the-virtual-clock ()

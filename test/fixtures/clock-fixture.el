@@ -247,7 +247,9 @@ arms `undo-auto--boundary-timer'; done here, the body's lists never see it and t
                (when (and (not layer) (fboundp 'drgnx-timer--now))
                  (error "drgnx-timer was loaded inside drgnx-test-with-clock: require it first"))
                (drgnx-test--drop-emacs-timers)
-               (when (and (not allow-pending) (or timer-list timer-idle-list (fboundp 'drgnx-timer-pending)))
+               ;; Only the body's own lists: a layer entry started before the body (its timer on the real list)
+               ;; is not the body's, so `drgnx-timer-pending' is read only to name what these lists hold.
+               (when (and (not allow-pending) (or timer-list timer-idle-list))
                  (setq names (drgnx-test--pending-names))))
       (dolist (a advice) (advice-remove (nth 0 a) (nth 2 a)))
       (mapc #'cancel-timer (append timer-list timer-idle-list))

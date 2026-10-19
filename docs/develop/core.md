@@ -2005,10 +2005,11 @@ check never finds it ripe during a real wait: a real wait fires no virtual timer
 when it was made at *v* with delay *d*, also after an advance. A re-armed repeat is already in that era and is left
 alone. Give timers delays, not absolute times computed from `float-time`: such a time reads as a real stamp.
 
-**The end.** A timer still pending when the body ends fails the test
+**The end.** A timer still pending in the body's own lists when the body ends fails the test
 (`timers still pending at the end of drgnx-test-with-clock`), named by `(KEY OWNER KIND)` for the timer layer's
-timers (`drgnx-timer-pending`), then by function; `:allow-pending t` cancels them quietly. `drgnx-timer-reset` runs
-either way. Nesting is an error.
+timers (`drgnx-timer-pending`), then by function; `:allow-pending t` cancels them quietly. A layer timer started before
+the body (its timer is on the real list) is not the body's and fails nothing. `drgnx-timer-reset` runs either way.
+Emacs's own `undo-auto--boundary-timer` is dropped first: it is never the body's. Nesting is an error.
 
 **The timer layer.** When `drgnx-timer--now` is defined at entry, the layer's three seams (`drgnx-timer--now`,
 `drgnx-timer--idle-time`, `drgnx-timer--input-pending-p`) follow the same clock, pause and input. Require the timer
