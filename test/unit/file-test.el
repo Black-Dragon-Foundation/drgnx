@@ -498,4 +498,16 @@
         (should (drgnx-file-inside-p "a.zip/y" tree))
         (should-not drgnx-test-handler-calls)))))
 
+(ert-deftest drgnx-file/a-link-loop-or-a-too-long-chain-resolves-to-nothing ()
+  ;; `file-truename' signals "Apparent cycle" past 100 links: an agent's loop made every check of its names an error
+  (drgnx-file-test--with-dir dir
+    (let ((file-name-handler-alist nil))
+      (make-symbolic-link "loop" (concat dir "loop"))
+      (dotimes (i 110) (make-symbolic-link (format "c%d" (1+ i)) (concat dir (format "c%d" i))))
+      (write-region "" nil (concat dir "c110") nil 'silent))
+    (dolist (name '("loop" "loop/y" "c0"))
+      (should-not (drgnx-file-truename name dir))
+      (should-not (drgnx-file-inside-p name dir)))
+    (should (equal (drgnx-file-truename "c100" dir) (concat (file-truename dir) "c110")))))
+
 ;;; file-test.el ends here

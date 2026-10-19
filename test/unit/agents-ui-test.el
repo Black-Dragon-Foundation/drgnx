@@ -763,4 +763,28 @@ the only window and current.  The hub mirror does nothing."
             (should-not drgnx-test-handler-calls)))
       (delete-directory root t))))
 
+(ert-deftest drgnx-agents-ui/a-quoted-name-is-refused-and-an-edit-is-copied-and-written-with-no-handler ()
+  ;; with handlers off `/:' is a plain folder, so a quoted name read as local; `copy-file' and `write-region' then ran
+  ;; with handlers on (`file-name-non-special' unquotes it), and the copy took the agent's suffix (`.gpg': EasyPG)
+  (let* ((root (file-name-as-directory (make-temp-file "drgnx-ui-quoted" t))) (wt (concat root "wt/"))
+         (file (concat wt "n.gpg")))
+    (unwind-protect
+        (progn
+          (make-directory wt)
+          (let ((file-name-handler-alist nil)) (write-region "old\n" nil file nil 'silent))
+          (drgnx-test-with-handler-trap
+            (let* ((s (drgnx-agents--make :name "fake" :cwd wt)) (item (list :id 6 :path file :content "new\n")))
+              (dolist (p (list "/:/ssh:drgnx-test.invalid:/x" (concat "/:" file)))
+                (should-not (drgnx-agents-ui--path-ok-p s p)))
+              (should (drgnx-agents-ui--path-ok-p s file))
+              (setf (drgnx-agent-session-reviews s) (list item))
+              (cl-letf (((symbol-function 'drgnx-acp-respond) #'ignore))
+                (with-current-buffer (drgnx-agents-ui-review s item)
+                  (should-not (string-suffix-p ".gpg" (nth 2 drgnx-agents-ui--review)))   ; the copy's own suffix
+                  (drgnx-agents-ui-review-done))))
+            (should-not drgnx-test-handler-calls))
+          (should (equal (let ((file-name-handler-alist nil)) (with-temp-buffer (insert-file-contents-literally file) (buffer-string)))
+                         "old\n")))                  ; Done with no hunk applied: written as it was
+      (delete-directory root t))))
+
 ;;; agents-ui-test.el ends here

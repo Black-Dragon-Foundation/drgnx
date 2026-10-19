@@ -16,7 +16,7 @@
 (require 'subr-x)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
-(require 'drgnx-file)                   ; `drgnx-file-inside-p': the model's paths, with no file name handler
+(require 'drgnx-file)                   ; `drgnx-file-truename': the model's paths, with no file name handler
 
 (declare-function drgnx-diff-default-base "drgnx-diff")
 (declare-function drgnx-diff-show "drgnx-diff")
@@ -222,9 +222,10 @@ that changes whether HEAD has moved.  One check at a time; the summary never run
   (interactive)
   (let ((f (get-text-property (point) 'drgnx-review-finding)) (run (drgnx-review--run)))
     (unless (and f run) (user-error "No finding here"))
-    ;; the path is the model's: checked with no file name handler (`drgnx-file-inside-p'); only a file inside is opened
-    (let ((file (let ((file-name-handler-alist nil)) (expand-file-name (plist-get f :path) (plist-get run :root)))))
-      (unless (drgnx-file-inside-p file (plist-get run :root))
+    ;; the path is the model's: resolved with no file name handler (`drgnx-file-truename'), checked, and opened by that
+    ;; true name — `find-file' of the model's own name follows its links again, with handlers on; only a file inside
+    (let ((file (drgnx-file-truename (plist-get f :path) (plist-get run :root))))
+      (unless (and file (drgnx-file-inside-p file (plist-get run :root)))
         (user-error "%s is outside the repository" (plist-get f :path)))
       (unless (let ((file-name-handler-alist nil)) (file-exists-p file))
         (user-error "%s is not in the working tree" (plist-get f :path)))

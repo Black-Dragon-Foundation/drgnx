@@ -19,6 +19,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-trust)
+(require 'drgnx-file)                   ; `drgnx-file-truename': a row's file, with no file name handler
 (require 'drgnx-work)
 (require 'drgnx-view)
 (require 'drgnx-projects)
@@ -220,6 +221,13 @@ a remote name is never visited or even checked (M2-6 c).  A `user-error' says so
     (user-error "Work: not opening %s: a remote name from local text" path))
   path)
 
+(defun drgnx-work-ui--local-file (path)
+  "PATH's true name, resolved with no file name handler (`drgnx-file-truename'), to open: a row's file may lie in an
+agent's worktree, and `find-file' of the name as written follows its links again, with handlers on (a link out
+through `ssh:host:' and back reached Tramp).  A `user-error' when PATH is, or leads to, a remote name."
+  (or (drgnx-file-truename (drgnx-work-ui--local-only path))
+      (user-error "Work: not opening %s: it leads to a remote name" path)))
+
 (defun drgnx-work-ui--show-commit (node)
   (let* ((sha (plist-get node :sha)) (repo (drgnx-work-ui--local-only (or (plist-get node :repo) (plist-get node :path))))
          (_ (unless (file-directory-p repo) (user-error "The repository of %s is gone: %s" (substring sha 0 7) repo)))
@@ -240,7 +248,7 @@ a remote name is never visited or even checked (M2-6 c).  A `user-error' says so
   (interactive)
   (let ((n (or (drgnx-work-ui--node) (user-error "Nothing on this line"))))
     (if (eq (plist-get n :kind) 'commit) (drgnx-work-ui--show-commit n)
-      (let ((path (drgnx-work-ui--local-only (or (plist-get n :path) (user-error "This line has no file")))))
+      (let ((path (drgnx-work-ui--local-file (or (plist-get n :path) (user-error "This line has no file")))))
         (pop-to-buffer (find-file-noselect path))
         (goto-char (point-min))
         (forward-line (1- (or (plist-get n :line) 1)))
@@ -448,8 +456,8 @@ window (viewBox) on the same drawing, so lines cross from one band into the next
                          ((file-directory-p wt)))
                    (progn (drgnx-work-ui--show-worktree wt) wt)
                  (message "Work: branch %s has no worktree" (car (plist-get b :lines)))))
-      (_ (let ((path (and (plist-get node :path) (drgnx-work-ui--local-only (plist-get node :path)))))
-           (if (and path (file-readable-p path)) (pop-to-buffer (find-file-noselect path))
+      (_ (let ((path (and (plist-get node :path) (drgnx-work-ui--local-file (plist-get node :path)))))
+           (if (and path (let ((file-name-handler-alist nil)) (file-readable-p path))) (pop-to-buffer (find-file-noselect path))
              (message "Work: %s is gone" (or path (plist-get node :title)))))))))
 
 (defvar drgnx-work-ui--graph-spots nil "Alist hot-spot id → the box it is (the graph shown last).")

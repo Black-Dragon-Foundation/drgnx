@@ -450,8 +450,8 @@ buffer is not affected."
       (drgnx-remote-auto--on-work-row (list :kind 'task :path file :line 2)
         (unwind-protect
             (with-current-buffer (save-window-excursion (drgnx-work-ui-open) (current-buffer))
-              (should (equal (buffer-file-name) file)) (should (= (line-number-at-pos) 2)))
-          (when-let* ((b (get-file-buffer file))) (kill-buffer b)))))))
+              (should (equal (buffer-file-name) (file-truename file))) (should (= (line-number-at-pos) 2)))   ; by its true name
+          (when-let* ((b (find-buffer-visiting file))) (kill-buffer b)))))))
 
 (ert-deftest drgnx-remote/work-commit-and-worktree-rows-never-reach-a-remote ()
   "A commit row whose repository, and a plan row whose worktree, is a remote name: nothing is asked of the remote."

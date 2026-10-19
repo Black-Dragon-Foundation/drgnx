@@ -256,7 +256,9 @@
   (let* ((root (file-name-as-directory (make-temp-file "drgnx-job-links" t))) (wt (concat root "wt/")))
     (unwind-protect
         (let* ((paths (progn (make-directory wt) (drgnx-test-hostile-paths wt)))
-               (all (append (plist-get paths :outside) (plist-get paths :inside)))
+               ;; inside first: `back' goes out through `ssh:…:' before an absolute link's quoted name can drop Tramp's
+               ;; autoloading handlers (the fixture's note)
+               (all (append (plist-get paths :inside) (plist-get paths :outside)))
                (form `(progn
                         (with-eval-after-load 'tramp
                           (advice-add 'tramp-file-name-handler :override (lambda (&rest _) (error "Tramp was reached"))))
@@ -276,8 +278,8 @@
                       (buffer-string)))
                (result (car (read-from-string out))))
           (should (equal (nth 0 result) '(nil nil nil)))
-          (should (equal (nth 1 result) (append (mapcar (lambda (_) '(ask t)) (plist-get paths :outside))
-                                                (mapcar (lambda (_) '(allow nil)) (plist-get paths :inside)))))
+          (should (equal (nth 1 result) (append (mapcar (lambda (_) '(allow nil)) (plist-get paths :inside))
+                                                (mapcar (lambda (_) '(ask t)) (plist-get paths :outside)))))
           (should (equal (nth 2 result) '(nil nil nil))))
       (delete-directory root t))))
 

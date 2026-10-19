@@ -592,4 +592,14 @@
             (should-not drgnx-test-handler-calls)))
       (delete-directory root t))))
 
+(ert-deftest drgnx-cockpit-model/a-link-loop-is-no-file-to-show ()
+  ;; an agent's link loop made `file-truename' signal "Apparent cycle" in the cockpit's listing
+  (let ((wt (file-name-as-directory (make-temp-file "drgnx-cockpit-loop" t))))
+    (unwind-protect
+        (progn
+          (let ((file-name-handler-alist nil)) (make-symbolic-link "loop" (concat wt "loop")))
+          (should-not (drgnx-cockpit--file-ok wt "loop"))
+          (should-not (drgnx-cockpit--true-dir (concat wt "loop/"))))
+      (delete-directory wt t))))
+
 ;;; cockpit-model-test.el ends here

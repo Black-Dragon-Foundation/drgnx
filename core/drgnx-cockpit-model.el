@@ -689,23 +689,26 @@ lines (`create mode', `delete mode'), whose names git C-quotes even under -z (`d
 (defun drgnx-cockpit--file-ok (dir file &optional truedir memo)
   "Whether FILE (relative to DIR) may be shown: t for a regular file whose true name lies inside DIR, `missing' when
 nothing is there (a deleted file), nil for anything else — a remote name, outside DIR, a device, FIFO, socket or
-folder, a link out of DIR or a dangling one.  Decided from names and attributes only (lstat, readlink), with no file
-name handler: nothing is opened, and no remote name is expanded, also one a link leads to.  TRUEDIR: DIR's true name, when the caller has it; MEMO: a hash table of the
-true names of the folders seen, when the caller checks many files."
+folder, a link out of DIR, a dangling one or a loop.  Decided from names and attributes only (lstat, readlink), with
+no file name handler: nothing is opened, and no remote name is expanded, also one a link leads to.  TRUEDIR: DIR's
+true name, when the caller has it; MEMO: a hash table of the true names of the folders seen, when the caller checks
+many files.  Open FILE by its true name (`drgnx-file-truename'), never as named: `find-file' follows its links again,
+with handlers on."
   (when (and (stringp dir) (stringp file) (not (drgnx-cockpit--remote-p dir)) (not (drgnx-cockpit--remote-p file)))
     (let* ((file-name-handler-alist nil)            ; the names and links are the agent's (`drgnx-file-truename')
            (dir (file-name-as-directory (expand-file-name dir))) (abs (expand-file-name file dir)))
       (when (string-prefix-p dir abs)
-        (let ((attrs (file-attributes abs)) (truedir (or truedir (file-name-as-directory (file-truename dir)))))
-          (cond ((null attrs) 'missing)
+        (let ((attrs (file-attributes abs)) (truedir (or truedir (drgnx-cockpit--true-dir dir))))   ; nil: a loop
+          (cond ((null truedir) nil)
+                ((null attrs) 'missing)
                 ((stringp (file-attribute-type attrs))              ; a link: where it leads
-                 (let ((true (file-truename abs))) (and (string-prefix-p truedir true) (file-regular-p true) t)))
+                 (let ((true (drgnx-file-truename abs))) (and true (string-prefix-p truedir true) (file-regular-p true) t)))
                 ((not (eq (aref (file-attribute-modes attrs) 0) ?-)) nil)    ; a folder, device, FIFO or socket
                 ;; a regular file (lstat: its own name is no link) inside DIR when its folder truly is
                 (t (let* ((parent (file-name-directory abs))
-                          (true (if memo (with-memoization (gethash parent memo) (file-name-as-directory (file-truename parent)))
-                                  (file-name-as-directory (file-truename parent)))))
-                     (and (string-prefix-p truedir true) t)))))))))
+                          (true (if memo (with-memoization (gethash parent memo) (drgnx-cockpit--true-dir parent))
+                                  (drgnx-cockpit--true-dir parent))))
+                     (and true (string-prefix-p truedir true) t)))))))))
 
 (defun drgnx-cockpit--lines (file)
   "FILE's line count, read into the current buffer (emptied first; the caller checked its size), or nil when it cannot

@@ -405,18 +405,22 @@ group and other bits.  The lock is released whatever happens."
 
 (defun drgnx-file-truename (file &optional dir)
   "FILE, expanded against DIR (default: `default-directory'), with `.', `..' and every symbolic link resolved, as a
-local name — or nil when it is, or leads through a link to, a remote (Tramp) name.  For a name an agent or a model
-gave (an ACP tool call's locations, an fs/* request, a review finding): no file name handler runs, on FILE or on any
-link on its way.  With handlers on, `file-truename' looks one up again at each link: a link in an agent's worktree
-climbing `../' to the root and on to `ssh:host:' made Emacs load Tramp and connect (`sudo::': start sudo), and a
-`.gz', `.gpg' or archive name reaches jka-compr, EasyPG or tramp-archive."
+local name — or nil when it is, or leads through a link to, a remote (Tramp) name or a quoted one (`/:…', which
+`file-name-non-special' unquotes once handlers are on), and when its links loop or run past the 100 `file-truename'
+follows (that signals \"Apparent cycle\"): fail closed, callers take nil as outside or refused.  For a name an agent
+or a model gave (an ACP tool call's locations, an fs/* request, a review finding): no file name handler runs, on FILE
+or on any link on its way.  With handlers on, `file-truename' looks one up again at each link: a link in an agent's
+worktree climbing `../' to the root and on to `ssh:host:' made Emacs load Tramp and connect (`sudo::': start sudo),
+and a `.gz', `.gpg' or archive name reaches jka-compr, EasyPG or tramp-archive.  Use the name this gives, not the
+one checked: opening the agent's own name (`find-file') follows its links again, with handlers on."
   (let* ((file-name-handler-alist nil)
-         (true (file-truename (expand-file-name file dir))))
-    (and (not (string-match-p drgnx-file--remote-re true)) true)))
+         (true (condition-case nil (file-truename (expand-file-name file dir)) (error nil))))
+    (and true (not (string-match-p drgnx-file--remote-re true)) (not (string-prefix-p "/:" true)) true)))
 
 (defun drgnx-file-inside-p (file dir)
   "Whether FILE (relative: to DIR) is DIR or inside it once `..' and symbolic links are resolved, with no file name
-handler (`drgnx-file-truename'): a name that is or leads to a remote one is not inside."
+handler (`drgnx-file-truename'): a name that is or leads to a remote or quoted one, or whose links loop, is not
+inside."
   (and (stringp file) (stringp dir)
        (let ((true (drgnx-file-truename file dir)) (top (drgnx-file-truename dir)))
          (and true top (let ((file-name-handler-alist nil)) (file-in-directory-p true top))))))

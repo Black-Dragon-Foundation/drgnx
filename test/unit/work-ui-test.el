@@ -87,7 +87,7 @@ git repository ROOT/code), a lone plan, and the tracker's database in a temp dat
       (let ((b (save-window-excursion (drgnx-work-ui-open) (current-buffer))))
         (unwind-protect
             (with-current-buffer b
-              (should (equal (buffer-file-name) (concat root "docs/plans/alpha.md")))
+              (should (equal (buffer-file-name) (file-truename (concat root "docs/plans/alpha.md"))))
               (should (looking-at-p "### Task 2: second")))
           (kill-buffer b)))
       (with-current-buffer (drgnx-work-ui-buffer)
@@ -253,7 +253,7 @@ without SVG (librsvg), e.g. a terminal-only build."
             (should (eq (car (car a)) 'rect))
             (should (eq (lookup-key keymap (vector (nth 1 a) 'mouse-1)) (lookup-key keymap [mouse-1])))   ; prefixed: the same
             (let ((b (save-window-excursion (funcall click a) (current-buffer))))
-              (unwind-protect (should (equal (buffer-file-name b) (concat root "docs/plans/alpha.md")))
+              (unwind-protect (should (equal (buffer-file-name b) (file-truename (concat root "docs/plans/alpha.md"))))
                 (kill-buffer b)))
             ;; a branch without a worktree, a plan whose file went: said, never an error
             (should (stringp (funcall click br)))
@@ -447,7 +447,23 @@ without SVG (librsvg), e.g. a terminal-only build."
           (should (= (+ 100 (or line 0)) (plist-get (drgnx-work-ui--node) :line)))
           (let ((b (save-window-excursion (drgnx-work-ui-open) (current-buffer))))
             (unwind-protect
-                (with-current-buffer b (should (equal (buffer-file-name) (concat root "docs/plans/alpha.md"))))
+                (with-current-buffer b (should (equal (buffer-file-name) (file-truename (concat root "docs/plans/alpha.md")))))
               (kill-buffer b))))))))
+
+(load (expand-file-name "test/fixtures/handler-trap" drgnx-dir) nil t)
+
+(ert-deftest drgnx-work-ui/a-file-is-opened-by-its-true-name-with-no-file-name-handler ()
+  ;; a row's file is a name from tracked text, maybe in an agent's worktree: a link there out through `ssh:host:' and
+  ;; back, opened as named, made `find-file' follow it with handlers on, into Tramp
+  (let* ((root (file-name-as-directory (make-temp-file "drgnx-work-ui-back" t))) (wt (concat root "wt/")))
+    (unwind-protect
+        (let* ((paths (progn (make-directory wt) (drgnx-test-hostile-paths wt))) (real (file-truename (plist-get paths :real))))
+          (drgnx-test-with-handler-trap
+            (dolist (how '(work work-graph))
+              (let ((b (drgnx-test-visit how "back" wt)))
+                (unwind-protect (should (equal (buffer-file-name b) real)) (kill-buffer b))))
+            (should-error (drgnx-test-visit 'work "up-ssh" wt) :type 'user-error)   ; a link to a remote name
+            (should-not drgnx-test-handler-calls)))
+      (delete-directory root t))))
 
 ;;; work-ui-test.el ends here
