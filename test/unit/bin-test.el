@@ -320,7 +320,9 @@ with a display: `drgnx open' stays graphical (the unit tier has no DISPLAY, and 
   (drgnx-bin-test--with-open
     (drgnx-bin-test--touch dir "running" "gui")
     (let ((env (cons "XDG_RUNTIME_DIR=/xdg/run" env)) (xdg (expand-file-name "xdg.log" dir)))
-      ;; Linux: the variable reaches emacsclient
+      ;; Linux (a fake uname, so a macOS host runs this half too): the variable reaches emacsclient
+      (write-region "#!/bin/sh\necho Linux\n" nil (expand-file-name "uname" pathdir))
+      (set-file-modes (expand-file-name "uname" pathdir) #o755)
       (drgnx-bin-test--call drgnx-bin-test--bin env "open")
       (should (equal (delete-dups (split-string (drgnx-bin-test--slurp xdg) "\n" t)) '("/xdg/run")))
       ;; Darwin (a fake uname): it does not
@@ -329,6 +331,17 @@ with a display: `drgnx open' stays graphical (the unit tier has no DISPLAY, and 
       (set-file-modes (expand-file-name "uname" pathdir) #o755)
       (drgnx-bin-test--call drgnx-bin-test--bin env "open")
       (should (equal (delete-dups (split-string (drgnx-bin-test--slurp xdg) "\n" t)) '("unset"))))))
+
+;; macOS's bash reads "$name…" as a variable named "name" plus the first byte of "…" (its libc calls bytes above 127
+;; letters in a UTF-8 locale), so under `set -u' the script stops: "name\342: unbound variable".  ${name}… is safe.
+(ert-deftest drgnx-bin/no-shell-variable-runs-into-a-non-ascii-character ()
+  (dolist (file '("bin/drgnx" "install.sh"))
+    (with-temp-buffer
+      (insert-file-contents (expand-file-name file drgnx-bin-test--root))
+      (let (hits)
+        (while (re-search-forward "\\$[A-Za-z_][A-Za-z0-9_]*[^[:ascii:]]" nil t)
+          (push (format "%s:%d: %s" file (line-number-at-pos) (match-string 0)) hits))
+        (should (equal (nreverse hits) nil))))))
 
 (ert-deftest drgnx-bin/open-waits-for-a-slow-daemon ()
   ;; DRGNX_OPEN_WAIT seconds (30 by default) for the daemon; it says so a third of the way in (10 s of 30).

@@ -757,7 +757,7 @@ update_step() { # NAME HOOK [ARG…] — `drgnx NAME ARG…' (or the test hook H
   # always kept in last.log (quiet: only there)
   local name="$1" hook="$2" log; shift 2
   log="$(update_state_dir)/last.log"
-  update_say "drgnx update: $name…"
+  update_say "drgnx update: ${name}…"   # braces: macOS's bash would read the first byte of … as part of the name
   if [[ "${UPD_QUIET:-0}" == 1 ]]; then
     if [[ -n "$hook" ]]; then (cd "$here" && bash -c "$hook" _ "$@") >>"$log" 2>&1; else (cd "$here" && "$here/bin/drgnx" "$name" "$@") >>"$log" 2>&1; fi
   elif [[ -n "$hook" ]]; then (cd "$here" && bash -c "$hook" _ "$@") 2>&1 | tee -a "$log"
