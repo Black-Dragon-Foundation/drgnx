@@ -927,6 +927,21 @@ on an entry that matches nothing. In the same way `drgnx-lint/garbage-collect-on
 `garbage-collect` or an addition to `post-gc-hook` anywhere but `core/drgnx-gc.el`, `harness/` and `test/`: one
 owner decides when to collect.
 
+### Consumer: the Outline (`wb/drgnx-outline.el`)
+
+The Outline is the view type `outline` (DELAY 0, `equal` keys, PATCHED `drgnx-outline--mark-current`), attached to its
+buffer when `drgnx-outline--buffer` makes it. A refresh builds imenu's index once and makes the rows integers:
+`drgnx-outline--flatten` reads each marker's position and releases it with `(set-marker M nil)`, so no imenu marker
+stays in the source buffer (PERF-M1; the test counts them over 50 refreshes of 2,000 definitions). Row keys are
+`(NAME DEPTH ORDINAL)`, ORDINAL counting the earlier rows with the same name and depth; a notice is the single row
+`(:notice TEXT)`. `drgnx-outline--refresh-1` fills `drgnx-outline--rows` (vectors `[NAME DEPTH POSITION KEY]`) and
+`drgnx-outline--table` (KEY → row), then calls `(drgnx-view-sync-rows view KEYS #'drgnx-outline--sig)`. The signature is
+whether the row is a group, so an edit that only moves definitions redraws no row, and a new definition draws one.
+The view keeps the Outline's point and window start on their row. The current-definition overlay is put back after a
+draw by PATCHED. The follow-the-edit timer is the layer's key `outline-refresh` (`drgnx-timer-soon`, idle, delay
+`drgnx-outline-delay`, owned by the Outline's buffer once it exists). Tests: `test/unit/wb-outline-test.el`,
+`test/unit/wb-outline-edge-test.el` (prefix `drgnx-outline`).
+
 ## Modal core (`drgnx-modal.el`)
 
 The engine-neutral half of modal editing; evil plugs into it (the `editor/evil` module, below), another engine could.
