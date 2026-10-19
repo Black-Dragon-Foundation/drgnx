@@ -271,6 +271,40 @@
       (when (process-live-p writer) (delete-process writer))
       (delete-directory dir t))))
 
+(defun drgnx-agents-test--read-open (disk text &optional flag)
+  "Serve fs/read_text_file for a file holding DISK while a buffer visits it holding TEXT (unsaved) and, with FLAG,
+marked as a large file: the answer plist."
+  (let* ((dir (make-temp-file "drgnx-read" t)) (f (expand-file-name "f.txt" dir))
+         (s (drgnx-agents--make :cwd dir)) buf)
+    (unwind-protect
+        (progn
+          (write-region disk nil f nil 'silent)
+          (setq buf (find-file-noselect f))
+          (with-current-buffer buf
+            (erase-buffer)
+            (insert text)
+            (when flag (setq-local drgnx-large-file flag)))
+          (drgnx-agents--on-request s "fs/read_text_file" (list :path f) 1))
+      (when (buffer-live-p buf)
+        (with-current-buffer buf (set-buffer-modified-p nil))
+        (kill-buffer buf))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-agents/a-large-file-buffer-is-read-from-disk ()
+  ;; a chunk, lean or raw buffer holds a part of the file, or a file too big to serve whole: the disk decides
+  (should (equal (plist-get (plist-get (drgnx-agents-test--read-open "DISK" "CHUNK" 'chunks) :result) :content)
+                 "DISK")))
+
+(ert-deftest drgnx-agents/an-open-buffer-over-the-cap-is-read-from-disk ()
+  ;; `drgnx-agents-read-max' stays a defconst: its symbol value is set for the test by `cl-letf'
+  (cl-letf (((symbol-value 'drgnx-agents-read-max) 1024))
+    (let ((text (make-string 2048 ?x)))
+      (should (eql (plist-get (plist-get (drgnx-agents-test--read-open text text) :error) :code) -32002)))))
+
+(ert-deftest drgnx-agents/a-small-open-buffer-is-still-served-with-its-edits ()
+  (should (equal (plist-get (plist-get (drgnx-agents-test--read-open "DISK" "EDITED") :result) :content)
+                 "EDITED")))
+
 (ert-deftest drgnx-agents/stop-answers-pending-writes-too ()
   (let* ((answers nil)
          (s (drgnx-agents--make :status 'busy :acp-id "x" :id "s-writes" :reviews (list '(:id 9 :path "/tmp/x" :content "y")))))

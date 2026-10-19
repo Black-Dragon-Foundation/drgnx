@@ -2146,6 +2146,27 @@ site, and the port deletes the row (a row that matches nothing fails the second 
 site that is not drgnx's own file, and its `:why` starts with the reason: `"a user's file"`, `"a temporary file"`,
 `"a directory move"`, `"its own lock protocol"`, `"age writes it"`, `"a developer tool"` or `"Lisp source"` (a module's source read, never run). A new site is a new
 row only when it is one of those.
+
+## Large files: the flag producers check (`core/drgnx-large-file.el`)
+
+A buffer that holds a large file carries the buffer-local flag `drgnx-large-file`: `lean` (the whole file, with the
+expensive modes off), `raw` (the whole file, literally) or `chunks` (a part at a time); nil otherwise. It is
+permanent-local, so a major-mode change keeps it. The module `editor/large-files` sets it; with the module off it
+is never set. The file has no dependencies, so core code and every module require it without loading the module.
+
+A producer (a mode hook, a `find-file-hook` function, a status-bar segment) checks `(drgnx-large-file-p)` and shows
+nothing in such a buffer. The predicate is one variable read, safe in redisplay. It takes an optional BUFFER, and
+for the current buffer it is also true while `drgnx-large-file--opening` is non-nil: a lean open binds it to `lean`
+around the original `find-file-noselect`, so the major mode and its hooks see "large" before the flag is set.
+Agents' `fs/read_text_file` serves an open buffer only when it is not a large file and not over
+`drgnx-agents-read-max`; otherwise it reads the disk, under the cap.
+
+A caller that visits a file says what it needs if the file is large by binding `drgnx-large-file-open`: `auto`
+(never ask: the remembered answer, else chunks), `whole` (the whole file, lean, never ask) or nil (decided by
+context). A buffer whose commands visit files can set it buffer-locally (`setq-local`); the module reads it in the
+caller's buffer. A file that only binds it, without requiring `drgnx-large-file`, declares
+`(defvar drgnx-large-file-open)` so that a lexical-binding `let` binds it dynamically.
+
 ## The workbench state store (`wb/drgnx-state.el`, `core/drgnx-frame-kind.el`)
 
 One observed answer for "which windows, panes and frames are there". The store keeps one record per workbench
