@@ -115,11 +115,14 @@ a.txt in the editor, wait until both are on the screen.  Returns the project dir
 ;;;; Tabs, breadcrumb, status bar
 
 (defun drgnx-tty-mouse-test--two-tabs (sess)
-  "a.txt then b.txt in the editor, so both are tabs; wait for both on the tab line."
+  "a.txt then b.txt in the editor, so both are tabs; wait for both on the tab line.
+a.txt is a tab only once the bus's idle flush noted it (a buffer replaced before that is a preview): wait for its
+tab before b.txt replaces it.  Tabs are apart by a gap of spaces (wb/drgnx-chrome.el)."
+  (drgnx-tty-session-wait-screen sess "a\\.txt ×")
   (drgnx-tty-session-eval sess '(let ((dir (file-name-directory (buffer-file-name (get-buffer "a.txt")))))
                                   (drgnx-wb-show-in-editor (find-file-noselect (expand-file-name "b.txt" dir)) t)
                                   t))
-  (drgnx-tty-session-wait-screen sess "a\\.txt ×  b\\.txt ×"))
+  (drgnx-tty-session-wait-screen sess "a\\.txt × +b\\.txt ×"))
 
 (ert-deftest drgnx-tty-mouse/tab-line-click-selects-a-tab ()
   (drgnx-tty-session-with (s :size "120x40")
