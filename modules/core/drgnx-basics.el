@@ -6,6 +6,7 @@
 (require 'seq)
 (defvar native-comp-async-report-warnings-errors)
 (defvar project-list-file)
+(require 'drgnx-modules)
 (require 'drgnx-paths)
 (require 'drgnx-session)
 (require 'drgnx-trust)

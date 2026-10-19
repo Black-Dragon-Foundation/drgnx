@@ -17,6 +17,7 @@
 (require 'drgnx-memo)
 
 (defvar drgnx-chrome-header-tail)
+(declare-function drgnx-chrome-apply "drgnx-chrome")
 (declare-function treesit-parser-list "treesit.c")
 (declare-function treesit-node-at "treesit")
 (declare-function treesit-node-parent "treesit.c")

@@ -209,6 +209,7 @@ process changed it and no command cleared the suggestion."
 
 ;;;; The Tab arbiter
 
+(declare-function project-root "project")
 (declare-function org-at-heading-p "org")
 (declare-function outline-on-heading-p "outline")
 

@@ -304,6 +304,8 @@ a pid.  How many went."
   "A chain from JSON ([[provider, model-or-null]…]) as ((PROVIDER . MODEL)…)."
   (mapcar (lambda (step) (cons (intern (car step)) (cadr step))) chain))
 
+(defvar drgnx-hub--seq)                 ; defined with the events below
+
 (defun drgnx-hub--method (method params)
   "The result of METHOD with PARAMS, or (:error MESSAGE)."
   (pcase method
