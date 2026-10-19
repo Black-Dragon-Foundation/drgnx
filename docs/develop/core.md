@@ -1050,8 +1050,10 @@ such as `tab-width`, `indent-tabs-mode` or `buffer-file-coding-system`:
 - not local in the buffer: a `let` binds the *default*, and Emacs 30 reports the binding and the unbinding as a
   `set` with no buffer. Bound to the value it already has, nothing moves. Bound to a *different* value, each of the two
   reports is a global `set`: it bumps the base and moves every buffer's epoch, twice per `let`. A consumer's watched
-  list must not include a per-buffer variable that other code often rebinds to other values (Task 16 checks its list
-  against this);
+  list must not include a per-buffer variable that other code often rebinds to other values. The status bar's
+  `buffer-look` watches `tab-width`, `indent-tabs-mode` and `buffer-file-coding-system`: Emacs 30's own Lisp binds
+  `indent-tabs-mode` to nil in a handful of commands (Dired, Org, picture, texinfo, chart), none on a per-keystroke
+  path, so such a rebind rebuilds every bar once;
 - a buffer-local set bumps that buffer's own count (the watcher's WHERE); a global set (`setq-default`) bumps the base.
 
 `drgnx-memo--watched` maps each variable that is watched now to its epochs.
@@ -1086,6 +1088,21 @@ What redisplay reads, built once per change (PERF-L L6):
 | `sticky-segment` (`drgnx-sticky.el`) | window | the window's start moves, it shows another buffer, or the epoch `sticky` of its buffer moves | `sticky` (per buffer), bumped by an edit at or above the start of a window showing the buffer |
 | `job-badge` (`drgnx-job-ui.el`) | none | `drgnx-job-ui--badge` is set to another string (the count changed) | none: the badge string is the key |
 | `live-header` (`drgnx-live.el`) | buffer | the epoch `live-tabs` of the view moves | `live-tabs` (per buffer), bumped where the tabs, the watched tab or driving change (`drgnx-live--tabs-changed`) |
+| `statusbar-bar` (`drgnx-statusbar.el`) | window | one of six epochs moves, or a plain value: point, the change tick, the narrowing, width, full or compact, the selection, the buffer, `default-directory`, `mode-line-process`, a macro being recorded, keycast's keys, which-function's name, the text of other packages' entries this redisplay (21 keys) | `buffer-look` (per buffer, `:redisplay`: `after-change-major-mode-hook`; watches `vc-mode`, the encoding, `tab-width`, `indent-tabs-mode`, `drgnx-statusbar-indent-vars`, the modal state, evil's tag, trust), `flymake` (per buffer: `flymake-mode-hook`, a backend's report), `eglot` (per buffer: `eglot-managed-mode-hook`; the base: `eglot-server-initialized-hook`), `git` (per root: a branch or its ahead/behind changed), `misc-info` (watches `global-mode-string`, `mode-line-misc-info` and the two lists of what the bar leaves out), `statusbar` (`drgnx-statusbar--bump`; watches the glyphs, the job badge, the Explorer's roots, the segment lists) |
+
+**Other packages' entries** (`mode-line-misc-info`, `global-mode-string`) stay real time, the user's call, but are
+formatted once per redisplay for all windows: `drgnx-statusbar--misc` is a key of the bar, made again when a seventh
+epoch, `redisplay`, moves (bumped on `pre-redisplay-functions`, which runs for each window before any is drawn). An
+entry of strings and `:propertize` of strings with no `%` is *static*: its text is taken when `misc-info` moves.
+Every other one is *live*, formatted and timed with `drgnx-timer-now`; a text `equal` to the last keeps the old
+string, so the memo still hits. A live entry whose moving average (`avg += (ms - avg) / 8`, judged from the 8th
+sample) passes `drgnx-statusbar-misc-slow-ms` is *slow*: the timer `statusbar-misc-slow` (1 s repeat, owner
+`ui/face`, started only while a slow entry exists) formats it instead, and after 8 ticks in a row under half the limit
+it is live again; with none left the tick cancels the timer. A `misc-info` move forgets every average. The slow set is
+written to `statusbar-slow.eld` in the state dir from the tick, never from redisplay; the doctor's `statusbar-misc`
+check reads it. Tests: `drgnx-statusbar/` (`a-memo-hit-allocates-nothing`, `each-epoch-rebuilds-the-bar-*`,
+`a-live-entry-is-formatted-once-per-redisplay-for-four-windows`, `a-slow-entry-falls-back-alone`) and
+`drgnx-doctor/statusbar-*`.
 
 Each module activates its memo in its `:setup` (`drgnx-memo-activate`), so turning the module off empties it. The Live
 view bumps by hand rather than by `:watch`: its tests and its use do not wait for the module's setup, and the sites are
@@ -2324,7 +2341,8 @@ is `(eq W (drgnx-state-editor-window (window-frame W)))` and `drgnx-statusbar-so
 `drgnx-state-editor-window`; the bar keeps no window of its own and posts nothing to the bus. Its post-command check
 compares the buffer, point, change tick and mark only. Its git read stays on the bus's idle `editor-changed`. Its
 debounced refresh is the layer timer `statusbar-refresh` (`drgnx-timer-soon`, owner `:core`, cancelled when the mode
-turns off). Tests: `drgnx-statusbar/` in `test/unit/mod-statusbar-test.el`; `drgnx-statusbar-ui/` in
+turns off); a slow entry of another package is refreshed by `statusbar-misc-slow` (owner `ui/face`; "Memo clients"
+above). Each window's bar is the memo `statusbar-bar` on six epochs, which `drgnx-statusbar-setup` activates. Tests: `drgnx-statusbar/` in `test/unit/mod-statusbar-test.el`; `drgnx-statusbar-ui/` in
 `test/ui/statusbar-state-ui-test.el`.
 
 ### Intent (`wb/drgnx-state-intent.el`)

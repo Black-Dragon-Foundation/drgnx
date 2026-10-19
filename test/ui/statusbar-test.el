@@ -66,7 +66,6 @@
   (let ((buf (get-buffer-create "*drgnx-statusbar-selection*"))
         (drgnx-statusbar--segments (make-hash-table :test #'eq))
         (drgnx-statusbar--errors nil)
-        (drgnx-statusbar--memo (make-hash-table :test #'eq :weakness 'key))
         (drgnx-statusbar-left nil) (drgnx-statusbar-right '(probe)) (drgnx-statusbar-compact '(probe))
         (transient-mark-mode t)
         (seen nil))
