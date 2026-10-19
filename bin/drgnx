@@ -418,8 +418,10 @@ open_lock() { # one `drgnx open' at a time decides whether to start the daemon a
   deadline=$((SECONDS + stale + 10))
   token="$$.$RANDOM$RANDOM"
   while ((SECONDS < deadline)); do
-    if mkdir "$lock" 2>/dev/null; then
-      printf '%s\n' "$token" >"$lock/owner"; date +%s >"$lock/since"
+    # the owner file is the lock: made with O_EXCL (noclobber), as uutils' mkdir (Ubuntu 26.04's) lets two
+    # commands that race both "make" the directory
+    if mkdir "$lock" 2>/dev/null && (set -C; printf '%s\n' "$token" >"$lock/owner") 2>/dev/null; then
+      date +%s >"$lock/since"
       OPEN_LOCK="$lock" OPEN_TOKEN="$token"; return 0
     fi
     since="$(cat "$lock/since" 2>/dev/null || true)" owner="$(cat "$lock/owner" 2>/dev/null || true)"

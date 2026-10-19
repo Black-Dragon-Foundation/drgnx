@@ -32,7 +32,8 @@ What happens:
   `~/.local/state/drgnx/daemon.log`). On Linux, when the systemd user unit `drgnx` is installed and enabled ([packages.md](packages.md#running-drgnx-as-a-daemon)), drgnx starts that unit instead.
   Two `drgnx` commands started at once make one daemon and one window: the second waits for the first (a lock,
   `~/.local/state/drgnx/open-drgnx.lock`, dropped as stale 15 s after the wait above, 45 s by default, if its owner
-  died). A window that takes more than 10 s to appear is not waited for further.
+  died; it is taken by making its `owner` file, never by `mkdir` alone, which uutils' coreutils let two commands both
+  win). A window that takes more than 10 s to appear is not waited for further.
 - **No window is open:** a window opens, with the layout you left — groups, tabs, docks, Explorer folders
   ([workbench.md](workbench.md#the-layout-survives-a-restart)) — and the paths in front of it.
 - **A window is open:** the paths open there and the window comes to the front.
