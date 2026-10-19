@@ -2053,6 +2053,10 @@ graphical window when the selected frame is `gui` or `initial`. A minibuffer-onl
 counts as a window for `drgnx-session--windows`. The writers of `drgnx-frame-role`
 (`drgnx-frames-mark-main`, `drgnx-frames--deleted`, `drgnx-frames--first-gui`) and of `drgnx-monitor`
 (`drgnx-monitors--write`) call `drgnx-state-sync` on the frame after writing.
+No other library compares a terminal's name with `"initial_terminal"` or asks `frame-parent` to tell a child
+frame: the terminal modules (layout, frames, popups, fallback layer), the face and the start page ask the
+classifier (`(eq (drgnx-state-frame-kind frame) 'tty)`, `'child`). `drgnx-lint/one-frame-classifier` fails on a
+second place; its list of libraries not yet moved can only shrink.
 
 **A frame's record** holds its kind, its `drgnx-frame-role` (copied), whether it is visible (`t`, `icon`, nil), its
 size (text columns and lines, pixel width and height), its `drgnx-monitor` (copied), its selected window, its MRU

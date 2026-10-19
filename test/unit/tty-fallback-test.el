@@ -340,6 +340,18 @@ binding are taken off afterwards."
         (should-not (drgnx-tty-frame-sends-p (selected-frame) "C-S-p"))
         (should (drgnx-tty-frame-sends-p (selected-frame) "C-p"))))))
 
+(ert-deftest drgnx-tty-fallback/a-child-frame-leaves-its-terminals-layer-on ()
+  ;; Emacs 31 terminal child frames share the parent's terminal: asked about one, the layer answers for the parent
+  (tty-fallback-test--with-terminal nil '("TERM=xterm-256color")
+    (let ((drgnx-keys-last (list :bindings (tty-fallback-test--bindings "VS Code")))
+          (parent (selected-frame)) (live (symbol-function 'frame-live-p)) (up (symbol-function 'frame-parent)))
+      (should (drgnx-tty-fallback-install parent tty-fallback-test--legacy))
+      (cl-letf (((symbol-function 'frame-live-p) (lambda (f) (or (eq f 'child) (funcall live f))))
+                ((symbol-function 'frame-parent) (lambda (&optional f) (if (eq f 'child) parent (funcall up f)))))
+        (should (drgnx-tty-fallback-install 'child tty-fallback-test--legacy)))
+      (should (terminal-parameter nil 'drgnx-tty-fallback))
+      (should (functionp (lookup-key input-decode-map "\eF"))))))
+
 (ert-deftest drgnx-tty-fallback/installed-only-on-legacy-terminals ()
   (tty-fallback-test--with-terminal nil '("TERM=xterm-256color")
     (let ((drgnx-keys-last (list :bindings (tty-fallback-test--bindings "VS Code"))))

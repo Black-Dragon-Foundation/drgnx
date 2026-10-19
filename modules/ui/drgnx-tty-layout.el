@@ -30,6 +30,7 @@
 (require 'drgnx-hooks)
 (require 'drgnx-modules)
 (require 'drgnx-wb)
+(require 'drgnx-frame-kind)
 (declare-function drgnx-wb-area-show "drgnx-area")
 (declare-function drgnx-wb-area-window "drgnx-area")
 (declare-function drgnx-chrome-apply "drgnx-chrome")
@@ -246,8 +247,7 @@ fraction, except one you resized (`drgnx-tty-layout--notice-drags'), which keeps
 
 (defun drgnx-tty-layout--own-frame-p (frame)
   "FRAME is a terminal frame of this Emacs's own terminal (`emacs -nw'), not a daemon's client or its initial frame."
-  (and (frame-live-p frame) (not (display-graphic-p frame)) (not (frame-parameter frame 'client))
-       (not (equal (terminal-name (frame-terminal frame)) "initial_terminal"))))
+  (and (eq (drgnx-state-frame-kind frame) 'tty) (not (frame-parameter frame 'client))))
 
 (defun drgnx-tty-layout--startup ()
   "`window-setup-hook': the first window of `emacs -nw' is new (a daemon's clients are laid out as

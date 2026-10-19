@@ -27,6 +27,7 @@
 (require 'drgnx-hooks)
 (require 'drgnx-modules)
 (require 'drgnx-timer)
+(require 'drgnx-frame-kind)
 (defvar corfu-mode)
 (defvar corfu-auto)
 (defvar corfu-auto-delay)
@@ -81,9 +82,7 @@ Only these slots: the window dividers and everything else keep what they have.  
   "The live terminal frames of terminals Emacs set up."
   (if (fboundp 'drgnx-tty-frames--tty-frames)
       (drgnx-tty-frames--tty-frames)
-    (seq-filter (lambda (f) (and (frame-live-p f) (not (display-graphic-p f))
-                                 (not (equal (terminal-name (frame-terminal f)) "initial_terminal"))))
-                (frame-list))))
+    (seq-filter (lambda (f) (eq (drgnx-state-frame-kind f) 'tty)) (frame-list))))
 
 (defun drgnx-tty-popups--update-borders ()
   "Follow the terminals now connected: the table is shared, so one terminal that does not write UTF-8 makes the
@@ -213,8 +212,8 @@ without tty child frames.  A session with graphical windows only, or UTF-8 termi
 
 (defun drgnx-tty-popups--frame-deleted (frame)
   "`delete-frame-functions': once it is gone, the terminals left decide the borders and the hooks again.
-A killed terminal's frames are dead when this runs (`frame-parent' signals on them): they count as top-level."
-  (unless (and (frame-live-p frame) (frame-parent frame))
+A killed terminal's frames are dead when this runs (the classifier says nil for them): they count as top-level."
+  (unless (eq (drgnx-state-frame-kind frame) 'child)
     (run-at-time 0 nil (lambda ()
                          (let ((inhibit-interaction t))
                            (condition-case nil
