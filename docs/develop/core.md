@@ -2199,7 +2199,11 @@ off every mode of `so-long-minor-modes` that is on (the module adds indent-bars,
 mode to that one list), then undo and auto-save. A raw visit (`find-file-noselect` with RAWFILE) runs no
 `find-file-hook`, so the door runs the sweep itself. An `after-revert-hook` follows the size across `:ask-above`
 without a question: a lean buffer at or below it turns lean off and runs `normal-mode` again (only safe local
-variables), a normal one above it turns lean; raw and chunk buffers stay. `global-so-long-mode` is on. The
+variables), a normal one above it turns lean; raw and chunk buffers stay. Before the revert reads a lean or raw
+buffer's file, a `before-revert-hook` makes the buffer's record of the file's time current
+(`set-visited-file-modtime`): Emacs 31.1 truncates a buffer whose file shrank to a prefix of its text (a file read
+without decoding, as raw is) with a change that asks `ask-user-about-supersession-threat` while that record is
+stale, and an auto-revert from a timer must not ask. `global-so-long-mode` is on. The
 teardown turns lean off in lean and raw buffers but does not re-run their major modes, and says so.
 
 **Chunks** are a second module, `editor/large-files-chunks` (`modules/editor/drgnx-large-files-chunks.el`,

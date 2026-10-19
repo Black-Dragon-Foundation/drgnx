@@ -558,13 +558,27 @@ Return the errors it sent the client."
         (should drgnx-large-file-mode)
         (should (eq buffer-undo-list t))))))
 
+(defvar drgnx-large-files-test--current nil "Whether the buffer's record of its file's time was current, per read.")
+
+(defun drgnx-large-files-test--note-current (file-name auto-save-p)
+  "In place of `revert-buffer-insert-file-contents-function': note whether the visited time is current, then read."
+  (push (verify-visited-file-modtime) drgnx-large-files-test--current)
+  (revert-buffer-insert-file-contents--default-function file-name auto-save-p))
+
 (ert-deftest drgnx-large-files/raw-stays-raw-on-revert ()
   (drgnx-large-files-test--door
     (let ((f (drgnx-large-files-test--file "big.log" 131072)))
       (with-current-buffer (find-file-noselect f)
         (should (eq drgnx-large-file 'raw))
+        ;; the file shrinks to a prefix of the buffer's text, and its time moves on (as an agent's log does)
         (drgnx-large-files-test--file "big.log" 1024)
-        (drgnx-large-files-test--never-asks (drgnx-large-files-test--revert))
+        (set-file-times f (time-add nil 10))
+        ;; Emacs 31.1 truncates the buffer with a change that asks `ask-user-about-supersession-threat' while
+        ;; the buffer's record of the file's time is stale: the revert reads with it current
+        (let ((drgnx-large-files-test--current nil)
+              (revert-buffer-insert-file-contents-function #'drgnx-large-files-test--note-current))
+          (drgnx-large-files-test--never-asks (drgnx-large-files-test--revert))
+          (should (equal drgnx-large-files-test--current '(t))))
         (should (eq drgnx-large-file 'raw))
         (should (= (buffer-size) 1024))))))
 
@@ -627,6 +641,7 @@ Return the errors it sent the client."
       (should-not (advice-member-p 'drgnx-editor/large-files--not-large 'eglot-ensure))
       (should-not (memq 'drgnx-editor/large-files--sweep (default-value 'find-file-hook)))
       (should-not (memq 'drgnx-editor/large-files--revert (default-value 'after-revert-hook)))
+      (should-not (memq 'drgnx-editor/large-files--before-revert (default-value 'before-revert-hook)))
       (should-not global-so-long-mode)
       (should (equal (default-value 'so-long-minor-modes) so-long-before)))))
 

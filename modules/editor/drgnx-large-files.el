@@ -280,6 +280,14 @@ off and runs its major mode again; a buffer above it turns lean.  Raw and chunk 
             ((and big (not (eq drgnx-large-file 'lean)))
              (drgnx-large-file-mode 1))))))
 
+(defun drgnx-large-files--before-revert ()
+  "Before a revert reads a lean or raw buffer's file: the buffer's record of the file's time becomes the file's.
+Emacs 31.1 truncates a buffer whose file shrank to a prefix of its text (a file read without decoding: raw) with a
+change that asks `ask-user-about-supersession-threat' while that record is stale; 30.2 truncates without asking.
+A revert, auto-revert's from a timer too, never asks: it replaces the text with the file's anyway."
+  (when (and (memq drgnx-large-file '(lean raw)) buffer-file-name (file-readable-p buffer-file-name))
+    (set-visited-file-modtime)))
+
 (defun drgnx-large-files--teardown ()
   "Turn lean off in every lean or raw buffer, without running major modes again on huge buffers (it says so).
 Chunk buffers stay."
@@ -321,6 +329,8 @@ Chunk buffers stay."
                                 (not (drgnx-large-file-p)))
                               (drgnx-module-hook 'find-file-hook sweep () :depth -90
                                                  (when (drgnx-large-files--sweep-p) (drgnx-large-file-mode 1)))
+                              (drgnx-module-hook 'before-revert-hook before-revert ()
+                                (drgnx-large-files--before-revert))
                               (drgnx-module-hook 'after-revert-hook revert ()
                                 (drgnx-large-files--after-revert))
                               ;; so-long everywhere, on the same list of modes
