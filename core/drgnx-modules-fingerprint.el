@@ -57,7 +57,8 @@ symbol with one line; the FULL scan finds the rest.")
                           (drgnx-signal--subscribers . :functions) drgnx-surfaces-contexts drgnx-layouts-shapes
                           drgnx-layouts-pane-fillers drgnx-config--defs drgnx-memo--watched
                           drgnx-view--types (drgnx-state--now . :functions) (drgnx-state--idle . :functions)
-                          drgnx-state--roles drgnx-pane--kinds drgnx-modal-engines)
+                          drgnx-state--roles drgnx-pane--kinds drgnx-modal-engines
+                          drgnx-notice--sources)
   "drgnx's registries whose keys the fingerprint reads: a variable that holds a hash table, an alist or a
 list of conses (the key is the car).  `(VAR . :functions)' is an alist KEY → list of functions: each
 function is read too.  Unbound variables are skipped.  Branches that add a registry add one line.")

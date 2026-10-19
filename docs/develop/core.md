@@ -394,6 +394,91 @@ signal `drgnx-prompt-in-automatic-path` instead — naming the prompt and where 
 `(drgnx-guard-automatic-p)` says whether the code running now is such a path, for code that would rather not ask
 than signal (choosing a Vim stack records it as pending instead of offering to install evil).
 
+## Notices (`drgnx-notice.el`)
+
+One model for everything drgnx tells the user. Producers post; the chrome (status bar, cockpit, Notices list) and the
+routes (echo area, desktop, the session file the doctor reads) read it. It is core and requires only `drgnx-guard`,
+`drgnx-modules-record` and `drgnx-timer` (its clock, `drgnx-timer-now`: tests run it on `drgnx-test-with-clock`):
+nothing in `wb/` or `modules/`, and it never calls UI.
+
+**Severity and lifetime.** A notice's `:severity` is `info` (worth knowing), `warn` (degraded; drgnx works around
+it) or `fail` (something you expect does not work); `ok` is only a check result. Its `:life` is:
+
+- `event`: something happened. Kept in a ring of `drgnx-notice-event-limit` (200), oldest out.
+- `condition`: something is wrong now, until its producer clears it. At most `drgnx-notice-condition-limit` (100)
+  per source; past that, a new one only updates the source's `warn` condition `(SOURCE . more)`, "and N more", where N
+  counts each id once, however often it is posted again. The source's own `(SOURCE . unknown)` is never held back.
+- `attention`: something waits on your decision. Only a source's set makes these (below); their severity is
+  `needs-you`.
+
+**A notice** is a readable plist (it round-trips through `prin1` and `read`, so it can be written to disk) holding
+only its non-nil keys: `:source :id :severity :life :text :detail :fix :command :scope :at :count :echo`.
+
+- Its key is `(SOURCE . ID)`; an attention item's key is its ID alone, the entity you act on (`(card . 12)`).
+- `:text` is one line: newlines become spaces and a leading `drgnx: ` goes.
+- `:command` is a registry id, a command symbol or `(FN . ARGS)` with ARGS readable data — never a closure.
+- `:at` is when that key first said that text. `:count` appears with the first repeat (absent means 1).
+- `:echo`, when the producer passed it, is stored even when nil: `t` or nil overrides the echo rule, and nil on an
+  attention item also keeps it off the desktop.
+
+**The API.**
+
+| Call | Does |
+|---|---|
+| `(drgnx-notify SOURCE SEVERITY TEXT &key id life detail fix command scope echo)` | Posts an event (the default) or a condition; returns its key. An event without ID uses its text, so the same text repeats as a count. |
+| `(drgnx-notice-clear SOURCE &optional ID)` | Clears one notice, or all of SOURCE's events and conditions. |
+| `(drgnx-notice-dismiss KEY)` | Hides an event or condition until it comes back with other text (also after a clear). An attention item cannot be dismissed: that signals. |
+| `(drgnx-notice-set SOURCE ITEMS &key reason)` | Replaces SOURCE's whole attention set. ITEMS `:unknown`: see below. |
+| `(drgnx-notice-define-source SOURCE &key title command stale)` / `drgnx-notice-undefine-source` | A module's own source. |
+| `(drgnx-notices &key source severity life scope)` | Notices not dismissed, newest first (attention items too when LIFE is nil or `attention`). |
+| `(drgnx-needs-you-count &optional SCOPE)`, `(drgnx-needs-you-items &optional SCOPE)`, `(drgnx-needs-you-unknown)` | The one "needs you" count, its items, the sources that cannot tell. |
+| `(drgnx-problems-count)` | `(WARN . FAIL)`: conditions of those severities, not dismissed. |
+| `(drgnx-notice-tick)` | Changes whenever the model does; memoise readers on it. |
+
+The core sources (`drgnx-notice-core-sources`: `modules keys hooks commands bus guard hub config agents timers
+terminal wb store render notice`) need no definition. A module defines its own in its setup; the definition pushes
+its undo (`notice source SOURCE`), so turning the module off removes the source with its notices and its set. Any
+other source is refused (`wrong-type-argument`), as are a severity or life outside the vocabulary (`attention`
+included: only sets make those) and a `:command` that does not read back.
+
+A **repeat** — the same key, text, severity and life — only counts: no tick, no hook call, no echo. Other text or
+another severity at the key is a new notice (new `:at`) and lifts a dismissal.
+
+**Sets and the union.** A source of things waiting on you sends its *whole* set whenever it learns it, so a lost
+retraction cannot leave a stale item: `(drgnx-notice-set 'jobs (list (list :id (cons 'card 12) :text "j1 — Merge?"
+:command '(drgnx-job-ui-show "j1") :scope "j1")))`. Items are plists with `:id` and `:text`, and optionally `:command
+:scope :detail :echo`; a later item with the same ID wins, and an unchanged ID keeps its `:at`. Only a change of
+ids or of what they say ticks: a source may send the same set every second. The model keeps ITEMS to compare the
+next set with, so send fresh plists and do not change them afterwards. The needs-you count is the size of the
+**union** of the sets, keyed by ID: an ask card that `jobs` and `questions` both hold counts once (the item with
+the later `:at` shows; on a tie, the source defined first, core sources before all). `(drgnx-needs-you-count)` is
+a cached integer; with a SCOPE (a job id) it is memoised until the next change. Neither allocates.
+
+**`:unknown`.** A source that cannot learn its state (the hub went away, a recount failed) sends `(drgnx-notice-set
+SOURCE :unknown :reason "…")`: its items drop out of the count and the `warn` condition `(SOURCE . unknown)` says
+REASON (default "not known"), with the source's `:command`, until its next list clears it. A source defined with
+`:stale SECS` that holds items and has not sent a set for SECS goes `:unknown` by itself ("not heard from in N
+min"); this is opt-in, and no shipped source uses it. `drgnx-notice--check-stale` runs on every set and from the
+session file's save timer.
+
+**The `now` lane.** `drgnx-notice-functions` is called synchronously with each change, a plist `(:op OP :key KEY
+:source SOURCE :notice NOTICE :added IDS :removed IDS)` holding only its non-nil keys, OP one of `post clear set
+unknown dismiss undefine`. Each function runs inside `drgnx-automatic` with `inhibit-interaction`, so it cannot
+ask. What a hook function may do: set a flag, `force-mode-line-update`, start a timer (`drgnx-timer-start`) for the
+real work. An error is recorded in `drgnx-notice--hook-errors` (the last 20) with one `message` per function, and
+never posted back into the model. A notice a hook function posts updates the model at once, but its own hook call
+is queued and runs after the current one returns — never recursively; past 100 queued changes in one pass the rest
+are dropped, with one message. The change plist is built only when the hook has functions.
+
+**Cost** (allocation is the gate; `test/unit/core-notice-test.el`, byte-compiled): a count read 0 conses; a new
+event 14 (22 with one hook function); a repeat 1 (its key). Replacing three sets of 40/40/20 items (80 ids) in
+which three items change and three ids come and go, then reading the count, 250 conses (gated at 275; the wall
+time, about 55 µs, is a perf number and not tested).
+
+**Tests** use `test/fixtures/notice-fixture.el`: `(drgnx-notice-test-with-model BODY…)` starts BODY on an empty
+model and sets the model it found back afterwards, variable by variable (`drgnx-notice-test--variables`), with
+`set`; `drgnx-notice-test--alloc` counts the conses a byte-compiled body allocates (the fewest of 3 warm runs).
+
 ## Command registry (`drgnx-registry.el`)
 
 Every command is registered once, without keys:
