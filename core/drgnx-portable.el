@@ -22,8 +22,9 @@
 
 (defconst drgnx-portable-leftovers '("*.bak-*" ".*.lock" ".*.lock.stale-*" ".*.tmp-*" "keys.eld.undo")
   "Name patterns (shell globs) of the config layer's own files: backups, lock directories (and a stale one being
-taken over), temp files and the keys undo file.  They never travel: onboarding's repository leaves them out (and its .gitignore names them), bootstrap's
-empty-config check ignores them, and they are neither moved nor machine-local.")
+taken over), temp files and the keys undo file.  They never travel: onboarding's repository leaves them out (and
+its .gitignore names them), bootstrap's empty-config check ignores them, and they are neither moved nor
+machine-local.")
 
 (defconst drgnx-portable-install-url "https://raw.githubusercontent.com/Black-Dragon-Foundation/drgnx/main/install.sh"
   "install.sh, for the command a new machine runs.")
