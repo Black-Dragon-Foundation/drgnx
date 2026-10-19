@@ -135,7 +135,7 @@ and answered yes."
    (cl-flet ((row (m) (cadr (assq m (drgnx-modules--entries)))))
      (should (equal (aref (row 'test/a) 4) "on"))
      (drgnx-modules-turn-off 'test/a)
-     (should (equal (aref (row 'test/a) 1) "off"))
+     (should (equal (aref (row 'test/a) 1) (drgnx-ui-status 'info "off")))   ; the kit's info status (core-ui-test.el)
      (should (equal (aref (row 'test/a) 4) "off"))
      (should (string-search "code stays loaded until restart" (aref (row 'test/a) 5)))
      (drgnx-modules-turn-on 'test/a)
