@@ -2199,7 +2199,9 @@ that stays large across a revert gets no parser either. The sweep, in `find-file
 for a large file, or for a buffer whose text is above `:ask-above` (a compressed file that expands). The mode turns
 off every mode of `so-long-minor-modes` that is on (the module adds indent-bars, blame, sticky and diff-hl's margin
 mode to that one list), then undo and auto-save. A raw visit (`find-file-noselect` with RAWFILE) runs no
-`find-file-hook`, so the door runs the sweep itself. An `after-revert-hook` follows the size across `:ask-above`
+`find-file-hook`, so the door runs the sweep itself. A major mode changed by hand (`M-x text-mode`) resets the
+minor modes but keeps the flag: `after-change-major-mode-hook`, at depth 90 (after the global modes' turn-on), turns
+the mode on again in a lean or raw buffer. An `after-revert-hook` follows the size across `:ask-above`
 without a question: a lean buffer at or below it turns lean off and runs `normal-mode` again (only safe local
 variables), a normal one above it turns lean; raw and chunk buffers stay. Before the revert reads a lean or raw
 buffer's file, a `before-revert-hook` makes the buffer's record of the file's time current

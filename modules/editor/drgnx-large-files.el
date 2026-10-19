@@ -338,6 +338,11 @@ Chunk buffers stay."
                                   (apply orig args)))
                               (drgnx-module-hook 'find-file-hook sweep () :depth -90
                                                  (when (drgnx-large-files--sweep-p) (drgnx-large-file-mode 1)))
+                              ;; a major mode changed by hand resets the minor modes: the sweep again (after the
+                              ;; global modes' turn-on, at the default depth); the flag is permanent
+                              (drgnx-module-hook 'after-change-major-mode-hook major-mode () :depth 90
+                                                 (when (and (memq drgnx-large-file '(lean raw)) (not drgnx-large-file-mode))
+                                                   (drgnx-large-file-mode 1)))
                               (drgnx-module-hook 'before-revert-hook before-revert ()
                                 (drgnx-large-files--before-revert))
                               (drgnx-module-hook 'after-revert-hook revert ()

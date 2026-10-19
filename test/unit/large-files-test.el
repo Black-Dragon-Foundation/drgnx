@@ -475,6 +475,31 @@ Return the errors it sent the client."
               (should-not buffer-auto-save-file-name)))
         (global-display-line-numbers-mode -1)))))
 
+(ert-deftest drgnx-large-files/a-major-mode-change-stays-lean ()
+  (drgnx-large-files-test--door
+    (let ((f (drgnx-large-files-test--file "big.json" 32768))
+          (raw (drgnx-large-files-test--file "big.log" 32768))
+          (prog-mode-hook (list #'hl-line-mode))
+          (text-mode-hook (list #'hl-line-mode)))
+      (global-display-line-numbers-mode 1)
+      (unwind-protect
+          (progn
+            (with-current-buffer (let ((drgnx-large-file-open 'whole)) (find-file-noselect f))
+              (should drgnx-large-file-mode)
+              (emacs-lisp-mode)                       ; by hand: the swept modes come back with it
+              (should (eq drgnx-large-file 'lean))
+              (should drgnx-large-file-mode)
+              (should-not display-line-numbers-mode)
+              (should-not hl-line-mode)
+              (should (eq buffer-undo-list t)))
+            (with-current-buffer (find-file-noselect raw)   ; automatic: raw
+              (should (eq drgnx-large-file 'raw))
+              (text-mode)
+              (should drgnx-large-file-mode)
+              (should-not display-line-numbers-mode)
+              (should-not hl-line-mode)))
+        (global-display-line-numbers-mode -1)))))
+
 (ert-deftest drgnx-large-files/lean-starts-no-parser ()
   (skip-unless (and (fboundp 'treesit-language-available-p) (treesit-language-available-p 'python)))
   (drgnx-large-files-test--door
@@ -673,6 +698,7 @@ Return the errors it sent the client."
       (should-not (memq 'drgnx-editor/large-files--sweep (default-value 'find-file-hook)))
       (should-not (memq 'drgnx-editor/large-files--revert (default-value 'after-revert-hook)))
       (should-not (memq 'drgnx-editor/large-files--before-revert (default-value 'before-revert-hook)))
+      (should-not (memq 'drgnx-editor/large-files--major-mode (default-value 'after-change-major-mode-hook)))
       (should-not global-so-long-mode)
       (should (equal (default-value 'so-long-minor-modes) so-long-before)))))
 
