@@ -6,16 +6,7 @@
 ;; Counts can only fall: the task that rewrites a site deletes its entry.  A branch merged later adds its sites.
 (
  (:file "modules/tools/drgnx-agents-ui.el" :in drgnx-agents-ui--update-lines :what delete-region :kind migrate :why "drops the trailing lines of ids no longer listed; a line diff, not an erase" :until "RP8-a")
- (:file "modules/tools/drgnx-cockpit-feed.el" :in drgnx-cockpit-feed--happened-build :what erase-buffer :kind migrate :why "the happened pane is built whole" :until "R7 (store Tasks 23-25)")
- (:file "modules/tools/drgnx-cockpit-feed.el" :in drgnx-cockpit-feed--happened-update :what delete-region :kind migrate :why "the happened footer is cut and redrawn" :until "R7 (store Tasks 23-25)")
- (:file "modules/tools/drgnx-cockpit-feed.el" :in drgnx-cockpit-feed--timeline-build :what erase-buffer :kind migrate :why "the timeline is built whole" :until "R7 (store Tasks 23-25)")
- (:file "modules/tools/drgnx-cockpit-feed.el" :in drgnx-cockpit-feed--timeline-update :what delete-region :kind migrate :why "the \"Nothing yet\" line is cut when the first row arrives" :until "R7 (store Tasks 23-25)")
- (:file "modules/tools/drgnx-cockpit-feed.el" :in drgnx-cockpit-feed--earlier :what erase-buffer :kind migrate :why "\"earlier\" rebuilds the timeline" :until "R7 (store Tasks 23-25)")
- (:file "modules/tools/drgnx-cockpit-cards.el" :in drgnx-cockpit-cards--put :what erase-buffer :kind migrate :why "a card is put whole" :until "R7 (store Tasks 23-25)")
- (:file "modules/tools/drgnx-cockpit-edits.el" :in drgnx-cockpit-edits--show-note :what erase-buffer :kind migrate :why "the edits note is replaced whole" :until "R7 (store Tasks 23-25)")
- (:file "modules/tools/drgnx-cockpit-edits.el" :in drgnx-cockpit-edits--show-list :what erase-buffer :kind migrate :why "the edits list is replaced whole" :until "R7 (store Tasks 23-25)")
- (:file "modules/tools/drgnx-cockpit.el" :in drgnx-cockpit--draw-outline :what erase-buffer :kind migrate :why "the cockpit outline pane is drawn whole" :until "R7 (store Tasks 23-25)")
- (:file "modules/tools/drgnx-cockpit.el" :in drgnx-cockpit--draw-svg :what erase-buffer :kind migrate :why "the cockpit graph pane is drawn whole" :until "R7 (store Tasks 23-25)")
+ (:file "modules/tools/drgnx-cockpit-feed.el" :in drgnx-cockpit-feed--earlier :what erase-buffer :kind document :why "a row's older chips, listed when the user pushes its `‹ N' (no live view: it never updates)")
  (:file "modules/tools/drgnx-live.el" :in drgnx-live--render-notes :what delete-region :kind migrate :why "the notes below the live page are cut and redrawn on a state change (no render task owns this file: the manager assigns one)" :until "unassigned (live browser notes)")
  (:file "wb/drgnx-explorer.el" :in drgnx-explorer--render :what erase-buffer :kind listing :why "Explorer is styled by jit-lock and rebuilt on a root change (spec non-goal)")
  (:file "wb/drgnx-explorer.el" :in drgnx-explorer--find-apply :what erase-buffer :kind listing :why "the find-in-tree result is the same listing, built whole (spec non-goal)")

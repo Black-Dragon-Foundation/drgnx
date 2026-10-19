@@ -10,12 +10,13 @@
 ;; model
 ;; (`drgnx-cockpit-changed-files', `drgnx-cockpit-file-diff': git, asynchronously, local regular files only).
 ;;
-;; It follows the agent live: file watches on its folder and the changed files' folders, and the `edit' events it
-;; reports (an outside agent's MCP server writes them; a look at the store every `drgnx-cockpit-edits-check-interval'
-;; seconds while the pane shows) name the files that changed.  Only those are diffed again, at most once per
-;; `drgnx-cockpit-edits-delay', and only their sections of the buffer are replaced: each window keeps its point and
-;; start on the same file and line.  While it shows, the changes are also listed again every few seconds, so a first
-;; write in a folder nobody watches yet shows.  A hidden pane only notes what changed and catches up when it shows.
+;; It follows the agent live while it shows (the workbench state store says so): file watches on its folder and the
+;; changed files' folders, and the `edit' events it reports (an outside agent's MCP server writes them; a look at the
+;; store every `drgnx-cockpit-edits-check-interval' seconds) name the files that changed.  Only those are diffed
+;; again, at most once per `drgnx-cockpit-edits-delay', and only their sections of the buffer are replaced: each window
+;; keeps its point and start on the same file, hunk and offset.  The changes are also listed again every few seconds,
+;; so a first write in a folder nobody watches yet shows.  Hidden, the pane keeps no timer and no watch; when it shows
+;; again it lists the changes again and watches their folders.
 ;;
 ;; a accepts a file (a review mark with the diff's hash, for the merge gate; it never merges or commits); when the file
 ;; changes again its header says so.  r asks the agent to undo its changes to a file (a queued message, never an
@@ -34,6 +35,8 @@
 (require 'drgnx-timer)
 (require 'drgnx-cockpit-model)
 (require 'drgnx-panes)
+(require 'drgnx-state)
+(require 'drgnx-view)                    ; `drgnx-view-with-kept-windows'
 
 (declare-function drgnx-cockpit-sessions "drgnx-cockpit")
 (declare-function drgnx-cockpit--open-task "drgnx-cockpit")
@@ -87,6 +90,9 @@ reported); a file already listed is diffed again at once.")
 
 (defvar drgnx-cockpit-edits--draws 0 "How many times an edits pane was patched (tests and the perf lab read it).")
 (defvar drgnx-cockpit-edits--last nil "The edits buffer shown last: what pane `agent-edits' shows when none is named.")
+(defvar drgnx-cockpit-edits--buffers nil
+  "The live edits panes: each one adds itself in its mode and goes in its `kill-buffer-hook'.
+`drgnx-cockpit-edits--follow' walks these, never every buffer.")
 (defvar drgnx-cockpit-edits--last-error nil "The last error said: the same one is said once.")
 
 (defvar-local drgnx-cockpit-edits--agent nil
@@ -106,12 +112,11 @@ reported); a file already listed is diffed again at once.")
 (defvar-local drgnx-cockpit-edits--list-dirty nil "Non-nil: list the changed files again at the next tick.")
 (defvar-local drgnx-cockpit-edits--listed-at 0 "When the files were last listed (`float-time').")
 (defvar-local drgnx-cockpit-edits--loaded nil "Non-nil once the first listing and its diffs came back.")
-(defvar-local drgnx-cockpit-edits--stale nil "Something changed while the pane was hidden: it catches up when it shows.")
 (defvar-local drgnx-cockpit-edits--busy nil "Non-nil while a round (a listing, its diffs) runs: the next one waits.")
 (defvar-local drgnx-cockpit-edits--queue nil "This round's files waiting for git.")
 (defvar-local drgnx-cockpit-edits--running 0 "This round's git processes.")
 (defvar-local drgnx-cockpit-edits--ready nil "Diffs back from git, not shown yet: ((FILE . RESULT)…), newest first.")
-(defvar-local drgnx-cockpit-edits--watches nil "Hash folder → its file watch.")
+(defvar-local drgnx-cockpit-edits--watches nil "Hash folder → its file watch, while the pane shows.")
 (defvar-local drgnx-cockpit-edits--store-key nil "The store's data version and change count at the last look.")
 (defvar-local drgnx-cockpit-edits--event-id 0 "The last event the pane read: edits reported after it are new.")
 (defvar-local drgnx-cockpit-edits--neutral nil "The pane's own empty folder (`drgnx-cockpit-edits--neutral-dir').")
@@ -219,11 +224,23 @@ text)."
       (or (previous-single-property-change pos 'drgnx-cockpit-edits-file) (point-min))
     pos))
 
+(defun drgnx-cockpit-edits--mark-hunks (start end)
+  "Number the rows of the section from START to END (text property `drgnx-cockpit-edits-hunk'): 0 for its header
+line and diff head, then 1, 2… from each `@@' line.  A patch keeps places by them (`drgnx-cockpit-edits--row-at')."
+  (save-excursion
+    (goto-char start)
+    (let ((n 0) (from start))
+      (while (re-search-forward "^@@ " end t)
+        (put-text-property from (match-beginning 0) 'drgnx-cockpit-edits-hunk n)
+        (setq from (match-beginning 0) n (1+ n)))
+      (put-text-property from end 'drgnx-cockpit-edits-hunk n))))
+
 (defun drgnx-cockpit-edits--insert-section (file body)
   "Insert FILE's section at point: its header line, BODY (its diff or a note), a blank line."
   (let ((start (point)))
     (insert (drgnx-cockpit-edits--header-text file) body (if (string-suffix-p "\n" body) "" "\n") "\n")
-    (put-text-property start (point) 'drgnx-cockpit-edits-file file)))
+    (put-text-property start (point) 'drgnx-cockpit-edits-file file)
+    (drgnx-cockpit-edits--mark-hunks start (point))))
 
 (defun drgnx-cockpit-edits--put-section (file body)
   "FILE's section, with BODY, in place of the old one (else at the end)."
@@ -234,50 +251,48 @@ text)."
 
 (defun drgnx-cockpit-edits--placeholder () (drgnx-cockpit-edits--note-text (if (drgnx-cockpit-edits--ascii-p) "  ..." "  …")))
 
-(defun drgnx-cockpit-edits--place (pos)
-  "Where POS is, to find again after a patch: (FILE LINE-IN-ITS-SECTION LINE COLUMN), FILE nil off any file."
-  (save-excursion
-    (goto-char pos)
-    (let* ((bol (line-beginning-position)) (f (get-text-property bol 'drgnx-cockpit-edits-file)))
-      (list f (and f (count-lines (drgnx-cockpit-edits--start-at bol) bol)) (count-lines (point-min) bol) (- pos bol)))))
+(defun drgnx-cockpit-edits--row-at (pos)
+  "The row POS is in, to find again after a patch: (FILE . HUNK) (`drgnx-cockpit-edits--mark-hunks'), nil off any
+file.  Cheap: two text properties."
+  (let ((f (get-text-property pos 'drgnx-cockpit-edits-file)))
+    (and f (cons f (get-text-property pos 'drgnx-cockpit-edits-hunk)))))
 
-(defun drgnx-cockpit-edits--pos (place)
-  "The position PLACE (`drgnx-cockpit-edits--place') is now: the same file and line (its last line when the section is
-shorter now), else the same line of the buffer."
-  (pcase-let ((`(,f ,n ,line ,col) place))
-    (save-excursion
-      (let ((s (and f (drgnx-cockpit-edits--section f))))
-        (if s
-            (progn (goto-char (car s)) (forward-line n)
-                   (when (>= (point) (cdr s)) (goto-char (max (car s) (1- (cdr s)))) (forward-line 0)))
-          (goto-char (point-min)) (forward-line line))
-        (min (+ (point) col) (line-end-position))))))
+(defun drgnx-cockpit-edits--row-pos (row)
+  "Where ROW (`drgnx-cockpit-edits--row-at') starts now, or nil when its file's section or its hunk is gone."
+  (when-let* ((s (drgnx-cockpit-edits--section (car row))))
+    (text-property-any (car s) (cdr s) 'drgnx-cockpit-edits-hunk (cdr row))))
 
 (defun drgnx-cockpit-edits--patch (fn)
-  "Call FN to change the buffer, then put each window's point and start back on the same file and line.  It moves
-no window and selects none; a redrawn generated buffer, so no undo."
-  (let* ((windows (get-buffer-window-list (current-buffer) nil t))
-         (places (mapcar (lambda (w) (list w (drgnx-cockpit-edits--place (window-point w)) (drgnx-cockpit-edits--place (window-start w))))
-                         windows))
-         (here (drgnx-cockpit-edits--place (point))))
-    (let ((inhibit-read-only t)) (save-excursion (funcall fn)))
-    (goto-char (drgnx-cockpit-edits--pos here))
-    (drgnx-wb-with-owned-windows windows
-      (pcase-dolist (`(,w ,p ,s) places)
-        (let ((ps (drgnx-cockpit-edits--pos s)) (pp (drgnx-cockpit-edits--pos p)))
-          (unless (= ps (window-start w)) (set-window-start w ps t))
-          (unless (= pp (window-point w)) (set-window-point w pp)))))
-    (set-buffer-modified-p nil)
-    (cl-incf drgnx-cockpit-edits--draws)
-    (drgnx-cockpit-edits--header-line)))
+  "Call FN to change the buffer, then put point and each window's start and point back on the same file, hunk and
+offset (`drgnx-view-with-kept-windows'; the same line of the buffer when its hunk is gone).  It moves no other
+window and selects none; a redrawn generated buffer, so no undo."
+  (drgnx-view-with-kept-windows (:key-at #'drgnx-cockpit-edits--row-at :pos-of #'drgnx-cockpit-edits--row-pos)
+    (let ((inhibit-read-only t)) (save-excursion (funcall fn))))
+  (set-buffer-modified-p nil)
+  (cl-incf drgnx-cockpit-edits--draws)
+  (drgnx-cockpit-edits--header-line))
+
+(defun drgnx-cockpit-edits--delete-runs (prop)
+  "Delete every run of text whose PROP is non-nil (the files' sections, or the note), the last first."
+  (let ((pos (point-max)))
+    (while (> pos (point-min))
+      (let ((start (or (previous-single-property-change pos prop) (point-min))))
+        (when (get-text-property start prop) (delete-region start pos))
+        (setq pos start)))))
 
 (defun drgnx-cockpit-edits--show-note (text)
-  "Show TEXT instead of any file (no changes, an error); nothing when it already shows."
+  "Show TEXT instead of any file (no changes, an error): every file's section goes, the note comes (text property
+`drgnx-cockpit-edits-note'); nothing when it already shows."
   (unless (and (equal text drgnx-cockpit-edits--note) (null drgnx-cockpit-edits--files))
     (setq drgnx-cockpit-edits--files nil drgnx-cockpit-edits--note text)
     (clrhash drgnx-cockpit-edits--info)
     (clrhash drgnx-cockpit-edits--dirty)
-    (drgnx-cockpit-edits--patch (lambda () (erase-buffer) (insert (drgnx-cockpit-edits--note-text text))))))
+    (drgnx-cockpit-edits--patch
+     (lambda ()
+       (drgnx-cockpit-edits--delete-runs 'drgnx-cockpit-edits-file)
+       (drgnx-cockpit-edits--delete-runs 'drgnx-cockpit-edits-note)
+       (goto-char (point-min))
+       (insert (propertize (drgnx-cockpit-edits--note-text text) 'drgnx-cockpit-edits-note t))))))
 
 (defun drgnx-cockpit-edits--patch-headers (files)
   "Draw again the header lines of FILES (their marks changed)."
@@ -291,7 +306,7 @@ no window and selects none; a redrawn generated buffer, so no undo."
              (delete-region (point) (line-beginning-position 2))
              (let ((start (point)))
                (insert (drgnx-cockpit-edits--header-text obj))
-               (put-text-property start (point) 'drgnx-cockpit-edits-file obj)))))))))
+               (add-text-properties start (point) (list 'drgnx-cockpit-edits-file obj 'drgnx-cockpit-edits-hunk 0))))))))))
 
 ;;;; Following the agent: watches, reported edits, ticks, rounds of git
 
@@ -316,9 +331,6 @@ round, so the next one can start."
       (condition-case err (apply fn args)
         (error (setq drgnx-cockpit-edits--busy nil drgnx-cockpit-edits--queue nil)
                (drgnx-cockpit-edits--say err))))))
-
-(defun drgnx-cockpit-edits--visible-p (&optional buffer)
-  (and (get-buffer-window (or buffer (current-buffer)) 'visible) t))
 
 (defun drgnx-cockpit-edits--schedule (&optional delay)
   "Patch this pane within DELAY seconds (`drgnx-cockpit-edits-delay'): one tick however many calls come meanwhile.  A
@@ -409,8 +421,9 @@ to diff again; review marks set elsewhere redraw their headers."
           (drgnx-cockpit-edits--patch-headers (delete-dups (mapcar #'car (append old drgnx-cockpit-edits--marks)))))))))
 
 (defun drgnx-cockpit-edits--check (buffer)
-  "Every `drgnx-cockpit-edits-check-interval' s while BUFFER lives (a timer): when it shows, look at the store."
-  (when (and (buffer-live-p buffer) (drgnx-cockpit-edits--visible-p buffer))
+  "Every `drgnx-cockpit-edits-check-interval' s while BUFFER shows (its timer `(cockpit-edits-check . BUFFER)',
+started and cancelled by `drgnx-cockpit-edits--follow'): look at the store."
+  (when (buffer-live-p buffer)
     (drgnx-cockpit-edits--in buffer #'drgnx-cockpit-edits--look-and-list)))
 
 (defun drgnx-cockpit-edits--look-and-list ()
@@ -423,19 +436,19 @@ find nothing new space themselves out, up to `drgnx-cockpit-edits--quiet-max' se
     (drgnx-cockpit-edits--schedule)))
 
 (defun drgnx-cockpit-edits--tick (buffer)
-  "The scheduled patch (a timer): list again when due, and diff the files that changed.  A hidden pane only notes it
-is stale; a round still running goes first."
+  "The scheduled patch (a timer): list again when due, and diff the files that changed.  A hidden pane does nothing:
+what changed stays noted, and showing it lists the changes again (`drgnx-cockpit-edits--follow'); a round still
+running goes first."
   (drgnx-cockpit-edits--in-round
    buffer
    (lambda ()
      (cond
-      ((not (drgnx-cockpit-edits--visible-p)) (setq drgnx-cockpit-edits--stale t))
+      ((not (drgnx-cockpit-shown-p buffer)))
       (drgnx-cockpit-edits--busy (drgnx-cockpit-edits--schedule))
       (t
        (let* ((wait (- (+ drgnx-cockpit-edits--listed-at drgnx-cockpit-edits--list-every) (float-time)))
               (list (and drgnx-cockpit-edits--list-dirty (<= wait 0)))
               (files (hash-table-keys drgnx-cockpit-edits--dirty)))
-         (setq drgnx-cockpit-edits--stale nil)
          (when (and drgnx-cockpit-edits--list-dirty (not list)) (drgnx-cockpit-edits--schedule-turn wait))   ; its turn comes
          (when (or list files)
            (clrhash drgnx-cockpit-edits--dirty)
@@ -498,10 +511,13 @@ then diff the new ones, FILES and those whose counts moved."
     (dolist (f gone) (remhash f drgnx-cockpit-edits--info) (remhash f drgnx-cockpit-edits--dirty))
     (cond
      ((null names) (drgnx-cockpit-edits--show-note (format "no changes since %s" (drgnx-cockpit-edits--base-name))))
-     ((null old)                                      ; from a note (or nothing) to files: drawn anew
+     ((null old)                                      ; from a note (or nothing) to files: the note goes
       (setq drgnx-cockpit-edits--files (copy-sequence names) drgnx-cockpit-edits--note nil)
       (drgnx-cockpit-edits--patch
-       (lambda () (erase-buffer) (dolist (f drgnx-cockpit-edits--files) (drgnx-cockpit-edits--insert-section f (drgnx-cockpit-edits--placeholder))))))
+       (lambda ()
+         (drgnx-cockpit-edits--delete-runs 'drgnx-cockpit-edits-note)
+         (goto-char (point-max))
+         (dolist (f drgnx-cockpit-edits--files) (drgnx-cockpit-edits--insert-section f (drgnx-cockpit-edits--placeholder))))))
      ((or gone new)
       (setq drgnx-cockpit-edits--files (append (seq-remove (lambda (f) (member f gone)) old) new))
       (drgnx-cockpit-edits--patch
@@ -540,14 +556,15 @@ while a long one runs)."
   (drgnx-cockpit-edits--apply-diffs))
 
 (defun drgnx-cockpit-edits--finish ()
-  "The round ended: show its diffs, watch the folders now listed, and start the next round when changes came meanwhile."
+  "The round ended: show its diffs, watch the folders now listed (only while the pane shows), and start the next
+round when changes came meanwhile."
   (drgnx-timer-cancel (cons 'cockpit-edits-flush (current-buffer)))
   (drgnx-cockpit-edits--apply-diffs)
   (setq drgnx-cockpit-edits--busy nil)
   (unless drgnx-cockpit-edits--loaded
     (setq drgnx-cockpit-edits--loaded t)
     (drgnx-cockpit-edits--header-line))
-  (drgnx-cockpit-edits--update-watches)
+  (if (drgnx-cockpit-shown-p (current-buffer)) (drgnx-cockpit-edits--update-watches) (drgnx-cockpit-edits--drop-watches))
   (when (or drgnx-cockpit-edits--list-dirty (> (hash-table-count drgnx-cockpit-edits--dirty) 0)) (drgnx-cockpit-edits--schedule)))
 
 (defun drgnx-cockpit-edits--apply-diffs ()
@@ -593,16 +610,58 @@ while a long one runs)."
 
 (defun drgnx-cockpit-edits--revert (&rest _) (drgnx-cockpit-edits--refresh))
 
-(defun drgnx-cockpit-edits--shown (window)
-  "The pane shows in WINDOW (`window-buffer-change-functions'): catch up with what changed while it was hidden."
-  (with-current-buffer (window-buffer window)
-    (when drgnx-cockpit-edits--stale (drgnx-cockpit-edits--schedule 0))))
-
-(defun drgnx-cockpit-edits--unwatch ()
-  "The pane is killed (its `kill-buffer-hook'): its file watches go (the buffer owns its timers)."
+(defun drgnx-cockpit-edits--drop-watches ()
+  "Remove this pane's file watches."
   (when (hash-table-p drgnx-cockpit-edits--watches)
     (maphash (lambda (_ w) (ignore-errors (file-notify-rm-watch w))) drgnx-cockpit-edits--watches)
-    (clrhash drgnx-cockpit-edits--watches))
+    (clrhash drgnx-cockpit-edits--watches)))
+
+(defconst drgnx-cockpit-edits--timers '(cockpit-edits-check cockpit-edits-tick cockpit-edits-turn cockpit-edits-flush)
+  "The names of a pane's timer keys, each `(NAME . BUFFER)' and owned by its buffer.")
+
+(defun drgnx-cockpit-edits--follow ()
+  "Each agent's edits pane follows its agent while a window of a visible frame shows it (`drgnx-cockpit-shown-p'):
+shown, its check runs (`(cockpit-edits-check . BUFFER)', every `drgnx-cockpit-edits-check-interval') and, when it was
+not running, the changes are listed again at once, which watches their folders again.  Hidden, the check, the
+ticks and the file watches go: it keeps no timer and no watch.  It walks `drgnx-cockpit-edits--buffers' only."
+  (dolist (b drgnx-cockpit-edits--buffers)
+    (when (buffer-live-p b)
+      (with-current-buffer b
+        (let ((check (cons 'cockpit-edits-check b)))
+          (cond ((drgnx-cockpit-shown-p b)
+                 (unless (drgnx-timer-active-p check)
+                   (drgnx-timer-start check drgnx-cockpit-edits-check-interval #'drgnx-cockpit-edits--check
+                                      :repeat drgnx-cockpit-edits-check-interval :args (list b) :owner b)
+                   (setq drgnx-cockpit-edits--list-dirty t)
+                   (drgnx-cockpit-edits--schedule 0)))
+                (t (dolist (name drgnx-cockpit-edits--timers) (drgnx-timer-cancel (cons name b)))
+                   (drgnx-cockpit-edits--drop-watches))))))))
+
+(defun drgnx-cockpit-edits--pane-shown (data)
+  "`pane-shown', on the store's `now' lane: an agent's edits show — `drgnx-cockpit-edits--follow'."
+  (when (eq (plist-get data :kind) 'agent-edits) (drgnx-cockpit-edits--follow)))
+
+(defun drgnx-cockpit-edits--pane-hidden (data)
+  "`pane-hidden', on the store's `now' lane: an agent's edits went — `drgnx-cockpit-edits--follow'."
+  (when (eq (plist-get data :kind) 'agent-edits) (drgnx-cockpit-edits--follow)))
+
+(defun drgnx-cockpit-edits--windows-changed (_data)
+  "`windows-changed', on the store's `idle' lane (never inside redisplay): a window shows another buffer — one agent's
+edits in place of another's in the same window, which is no pane event, or edits shown with `C-x b' —
+`drgnx-cockpit-edits--follow'."
+  (when drgnx-cockpit-edits--buffers (drgnx-cockpit-edits--follow)))
+
+(defun drgnx-cockpit-edits--subscribe ()
+  "Hear of the edits panes from the workbench state store (tools/cockpit's setup; recorded there)."
+  (drgnx-state-subscribe 'pane-shown #'drgnx-cockpit-edits--pane-shown :lane 'now)
+  (drgnx-state-subscribe 'pane-hidden #'drgnx-cockpit-edits--pane-hidden :lane 'now)
+  (drgnx-state-subscribe 'windows-changed #'drgnx-cockpit-edits--windows-changed))
+
+(defun drgnx-cockpit-edits--unwatch ()
+  "The pane is killed (its `kill-buffer-hook'): it leaves `drgnx-cockpit-edits--buffers' and its file watches go (the
+buffer owns its timers)."
+  (setq drgnx-cockpit-edits--buffers (delq (current-buffer) drgnx-cockpit-edits--buffers))
+  (drgnx-cockpit-edits--drop-watches)
   ;; its private folder goes too (only while empty: nothing put there by hand is deleted)
   (when (and (stringp drgnx-cockpit-edits--neutral) (file-directory-p drgnx-cockpit-edits--neutral))
     (ignore-errors (delete-directory drgnx-cockpit-edits--neutral))))
@@ -655,8 +714,8 @@ the agent's files."
   (setq-local font-lock-defaults '(drgnx-cockpit-edits--font-lock-keywords t))
   (setq-local revert-buffer-function #'drgnx-cockpit-edits--revert)
   (add-hook 'change-major-mode-hook #'drgnx-cockpit-edits--keep-mode nil t)
-  (add-hook 'window-buffer-change-functions #'drgnx-cockpit-edits--shown nil t)
-  (add-hook 'kill-buffer-hook #'drgnx-cockpit-edits--unwatch nil t))
+  (add-hook 'kill-buffer-hook #'drgnx-cockpit-edits--unwatch nil t)
+  (cl-pushnew (current-buffer) drgnx-cockpit-edits--buffers))
 
 (dolist (v '(drgnx-cockpit-edits--agent drgnx-cockpit-edits--id drgnx-cockpit-edits--source drgnx-cockpit-edits--neutral))
   (put v 'permanent-local t))
@@ -666,9 +725,11 @@ the agent's files."
 
 (defun drgnx-cockpit-edits--teardown ()
   "Undo the module's part for agents' edits: kill every edits pane (each one's `kill-buffer-hook' ends its timers and
-watches).  Nothing else of it is global."
+watches) and the pane's placeholder.  Nothing else of it is global (its state subscriptions are the setup's)."
   (dolist (b (buffer-list))
-    (when (eq (buffer-local-value 'major-mode b) 'drgnx-cockpit-edits-mode) (kill-buffer b))))
+    (when (eq (buffer-local-value 'major-mode b) 'drgnx-cockpit-edits-mode) (kill-buffer b)))
+  (when-let* ((b (get-buffer " *drgnx agent-edits*"))) (kill-buffer b))
+  (setq drgnx-cockpit-edits--last nil))
 
 (with-eval-after-load 'evil                     ; its own letters, also in the Vim profile
   (when (fboundp 'evil-set-initial-state) (evil-set-initial-state 'drgnx-cockpit-edits-mode 'emacs)))
@@ -677,7 +738,7 @@ watches).  Nothing else of it is global."
 
 (defun drgnx-cockpit-edits-buffer (agent)
   "AGENT's edits buffer, `*edits: ID*' — AGENT an id, or its plist from the cockpit's model — made the first time; it
-follows the agent's edits while it lives (when it shows)."
+follows the agent's edits while it shows (`drgnx-cockpit-edits--follow'), and lists them first once it shows."
   (let* ((id (drgnx-cockpit-edits--agent-id agent)) (name (format "*edits: %s*" id)))
     (or (get-buffer name)
         (with-current-buffer (get-buffer-create name)
@@ -692,9 +753,6 @@ follows the agent's edits while it lives (when it shows)."
                 drgnx-cockpit-edits--event-id (or (caar (sqlite-select (drgnx-work-db) "select max(id) from event")) 0))
           (ignore-errors (drgnx-cockpit-edits--read-marks))
           (drgnx-cockpit-edits--header-line)
-          (drgnx-timer-start (cons 'cockpit-edits-check (current-buffer)) drgnx-cockpit-edits-check-interval
-                             #'drgnx-cockpit-edits--check :repeat drgnx-cockpit-edits-check-interval
-                             :args (list (current-buffer)) :owner (current-buffer))
           (drgnx-cockpit-edits--schedule 0)
           (current-buffer)))))
 
@@ -703,7 +761,6 @@ follows the agent's edits while it lives (when it shows)."
   (let ((b (drgnx-cockpit-edits-buffer agent)))
     (setq drgnx-cockpit-edits--last b)
     (if (drgnx-pane-kind 'agent-edits) (drgnx-pane-show 'agent-edits :buffer b :select t) (pop-to-buffer b))
-    (with-current-buffer b (when drgnx-cockpit-edits--stale (drgnx-cockpit-edits--schedule 0)))
     b))
 
 (defun drgnx-cockpit-edits-pane-buffer ()
@@ -1022,8 +1079,9 @@ agent, never an interruption."
 ;;;; The module's part
 
 (defun drgnx-cockpit-edits--setup ()
-  "tools/cockpit's part for agents' edits: their commands (the pane kind is `agent-edits').  Nothing global:
-`drgnx-cockpit-edits--teardown' only kills the panes."
+  "tools/cockpit's part for agents' edits: their commands and their subscriptions to the workbench state store (the
+pane kind is `agent-edits').  Nothing else global: `drgnx-cockpit-edits--teardown' only kills the panes."
+  (drgnx-cockpit-edits--subscribe)
   (pcase-dolist (`(,id ,title ,fn ,doc)
                  '((cockpit-accept-file "Accept File" drgnx-cockpit-edits-accept-file
                                         "Mark the agent's change to this file accepted (a review mark; never a merge)")

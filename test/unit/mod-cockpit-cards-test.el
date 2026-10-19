@@ -10,6 +10,8 @@
 (require 'drgnx-coord)
 (require 'drgnx-job)                                   ; job/reply, as the hub runs it
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/cockpit-fixture" drgnx-dir) nil t)   ; panes the state store sees; a project
+(defvar drgnx-statusbar-waiting-functions)             ; the setup adds the cockpit's count to it
 
 (defconst drgnx-cockpit-cards-test--summary
   ;; as `job/status' gives it back through JSON: nil as :null, false as :false
@@ -32,43 +34,56 @@
 
 (defmacro drgnx-cockpit-cards-test--with (&rest body)
   "BODY with no cockpit filter, the hub stubbed (each call recorded in `drgnx-cockpit-cards-test--calls', answered
-by `drgnx-cockpit-cards-test--answer' when that is a function of METHOD and PARAMS), and the parts' buffers killed
-after — they owned their hooks and timers."
+by `drgnx-cockpit-cards-test--answer' when that is a function of METHOD and PARAMS), a fresh workbench state store
+with the parts' subscriptions (`drgnx-cockpit-cards--subscribe'), and the parts' buffers killed after — they owned
+their hooks and timers."
   (declare (indent 0))
-  `(let ((drgnx-cockpit-graph-current-filter nil) (drgnx-cockpit-cards--stale nil)
-         (drgnx-cockpit-cards-test--calls nil)
-         (config (current-window-configuration)) (frames (frame-list)))
-     (cl-letf (((symbol-function 'drgnx-hub-call)
-                (lambda (method params &optional cb)
-                  (push (cons method params) drgnx-cockpit-cards-test--calls)
-                  (when (and cb (functionp drgnx-cockpit-cards-test--answer))
-                    (apply cb (funcall drgnx-cockpit-cards-test--answer method params)))))
-               ((symbol-function 'drgnx-hub-connect) #'ignore)
-               ((symbol-function 'drgnx-job-ui--schedule-recount) #'ignore)   ; the badge's own count: job-ui-test.el
-               ((symbol-function 'make-frame) (lambda (&rest _) (ert-fail "a frame was made"))))
-       (unwind-protect
-           (save-window-excursion
-             (delete-other-windows)
-             (drgnx-cockpit-cards-buffer) (drgnx-cockpit-decisions-buffer)   ; both parts live, as when the cockpit shows them
-             ,@body)
-         (dolist (b (list (get-buffer drgnx-cockpit-cards-buffer-name) (get-buffer drgnx-cockpit-decisions-buffer-name)))
-           (when b (kill-buffer b)))
-         (should-not (drgnx-timer-active-p 'cockpit-cards-refresh))
-         (should-not (drgnx-timer-active-p 'cockpit-cards-retry))
-         (should-not (memq #'drgnx-cockpit-cards--hub-event (bound-and-true-p drgnx-hub-event-functions)))
-         (should-not (memq #'drgnx-cockpit-cards--hub-gone (bound-and-true-p drgnx-hub-disconnect-functions)))
-         (should (equal frames (frame-list)))
-         (set-window-configuration config)))))
+  `(drgnx-test-with-state
+     (drgnx-cockpit-cards--subscribe)
+     (let ((drgnx-cockpit-graph-current-filter nil)
+           (drgnx-cockpit-cards-test--calls nil)
+           (config (current-window-configuration)) (frames (frame-list)))
+       (cl-letf (((symbol-function 'drgnx-hub-call)
+                  (lambda (method params &optional cb)
+                    (push (cons method params) drgnx-cockpit-cards-test--calls)
+                    (when (and cb (functionp drgnx-cockpit-cards-test--answer))
+                      (apply cb (funcall drgnx-cockpit-cards-test--answer method params)))))
+                 ((symbol-function 'drgnx-hub-connect) #'ignore)
+                 ((symbol-function 'drgnx-job-ui--schedule-recount) #'ignore)   ; the badge's own count: job-ui-test.el
+                 ((symbol-function 'make-frame) (lambda (&rest _) (ert-fail "a frame was made"))))
+         (unwind-protect
+             (save-window-excursion
+               (delete-other-windows)
+               (drgnx-cockpit-cards-buffer) (drgnx-cockpit-decisions-buffer)   ; both parts live, as when the cockpit shows them
+               ,@body)
+           (dolist (b (list (get-buffer drgnx-cockpit-cards-buffer-name) (get-buffer drgnx-cockpit-decisions-buffer-name)))
+             (when b (kill-buffer b)))
+           (should-not (drgnx-timer-active-p 'cockpit-cards-refresh))
+           (should-not (drgnx-timer-active-p 'cockpit-cards-retry))
+           (should-not (memq #'drgnx-cockpit-cards--hub-event (bound-and-true-p drgnx-hub-event-functions)))
+           (should-not (memq #'drgnx-cockpit-cards--hub-gone (bound-and-true-p drgnx-hub-disconnect-functions)))
+           (should (equal frames (frame-list)))
+           (set-window-configuration config))))))
 
 (defvar drgnx-cockpit-cards-test--answer nil
   "nil: the stubbed hub never answers; else a function of METHOD and PARAMS giving (RESULT ERROR).")
 
+(defun drgnx-cockpit-cards-test--drawn (part)
+  "PART's buffer, its view's marks drawn (as when it shows)."
+  (let ((b (drgnx-cockpit-cards--buffer part)))
+    (drgnx-view-draw-now (buffer-local-value 'drgnx-view b))
+    b))
+
 (defun drgnx-cockpit-cards-test--text (part)
-  (with-current-buffer (drgnx-cockpit-cards--buffer part) (buffer-string)))
+  (with-current-buffer (drgnx-cockpit-cards-test--drawn part) (buffer-string)))
+
+(defun drgnx-cockpit-cards-test--ticks ()
+  "Both parts' `buffer-modified-tick', their marks drawn."
+  (mapcar (lambda (p) (buffer-modified-tick (drgnx-cockpit-cards-test--drawn p))) '(cards log)))
 
 (defun drgnx-cockpit-cards-test--button (part label)
   "The button of PART labelled LABEL."
-  (with-current-buffer (drgnx-cockpit-cards--buffer part)
+  (with-current-buffer (drgnx-cockpit-cards-test--drawn part)
     (let ((b (next-button (point-min) t)) found)
       (while (and b (not found))
         (if (equal (button-get b 'drgnx-label) label) (setq found b) (setq b (next-button (button-end b)))))
@@ -78,10 +93,11 @@ after — they owned their hooks and timers."
   (let ((deadline (+ (float-time) secs))) (while (< (float-time) deadline) (accept-process-output nil 0.05))))
 
 (defun drgnx-cockpit-cards-test--show ()
-  "Both parts in windows of this frame, as the cockpit shows them."
+  "Both parts in windows of this frame, as the cockpit shows them; the state store sees them."
   (delete-other-windows)
   (set-window-buffer (selected-window) (drgnx-cockpit-cards-buffer))
-  (set-window-buffer (split-window nil nil 'right) (drgnx-cockpit-decisions-buffer)))
+  (set-window-buffer (split-window nil nil 'right) (drgnx-cockpit-decisions-buffer))
+  (drgnx-state-sync))
 
 ;;;; The job window's cases, in the cockpit
 
@@ -157,15 +173,19 @@ after — they owned their hooks and timers."
 (ert-deftest drgnx-cockpit-cards/a-part-redraws-only-when-what-it-shows-changed ()
   (drgnx-cockpit-cards-test--with
     (drgnx-cockpit-cards--draw "j1" drgnx-cockpit-cards-test--summary)
-    (let ((ticks (mapcar (lambda (p) (buffer-modified-tick (drgnx-cockpit-cards--buffer p))) '(cards log))))
+    (let ((ticks (drgnx-cockpit-cards-test--ticks)))
       (drgnx-cockpit-cards--draw "j1" (copy-tree drgnx-cockpit-cards-test--summary))
-      (should (equal ticks (mapcar (lambda (p) (buffer-modified-tick (drgnx-cockpit-cards--buffer p))) '(cards log))))
-      ;; a task's status changed: what needs you (which shows the tasks), not the decisions
-      (let ((s (copy-tree drgnx-cockpit-cards-test--summary)))
+      (should (equal ticks (drgnx-cockpit-cards-test--ticks)))
+      ;; a task's status changed: what needs you's tasks row (not its cards row), not the decisions
+      (let ((s (copy-tree drgnx-cockpit-cards-test--summary))
+            (drawn (plist-get (drgnx-view-stats (buffer-local-value 'drgnx-view (drgnx-cockpit-cards--buffer 'cards))) :rows-drawn)))
         (plist-put (car (plist-get s :tasks)) :status "in-review")
-        (drgnx-cockpit-cards--draw "j1" s))
-      (should-not (equal (nth 0 ticks) (buffer-modified-tick (drgnx-cockpit-cards--buffer 'cards))))
-      (should (equal (nth 1 ticks) (buffer-modified-tick (drgnx-cockpit-cards--buffer 'log)))))))
+        (drgnx-cockpit-cards--draw "j1" s)
+        (let ((now (drgnx-cockpit-cards-test--ticks)))
+          (should-not (equal (nth 0 ticks) (nth 0 now)))
+          (should (equal (nth 1 ticks) (nth 1 now))))
+        (should (= 1 (- (plist-get (drgnx-view-stats (buffer-local-value 'drgnx-view (drgnx-cockpit-cards--buffer 'cards))) :rows-drawn)
+                        drawn)))))))
 
 (ert-deftest drgnx-cockpit-cards/events-are-one-refresh-and-only-while-shown ()
   (drgnx-cockpit-cards-test--with
@@ -177,17 +197,50 @@ after — they owned their hooks and timers."
     (drgnx-cockpit-cards-test--wait 1)
     (should (equal (seq-count (lambda (c) (equal (car c) "job/status")) drgnx-cockpit-cards-test--calls) 1))
     (should (equal (assoc "job/status" drgnx-cockpit-cards-test--calls) '("job/status" :id "j1" :decisions t)))
-    ;; hidden: no question to the hub, only a note to catch up when a part shows again
+    ;; hidden: no question to the hub; a part that shows again asks (the store's `pane-shown')
     (setq drgnx-cockpit-cards-test--calls nil)
     (delete-other-windows)
     (switch-to-buffer "*scratch*")
+    (drgnx-state-sync)
     (drgnx-cockpit-cards--hub-event "card" '(:job "j1"))
     (should-not (drgnx-timer-active-p 'cockpit-cards-refresh))
-    (should drgnx-cockpit-cards--stale)
-    (drgnx-cockpit-cards-test--show)
-    (drgnx-cockpit-cards--on-show (selected-window))
+    (drgnx-cockpit-fixture-show-pane 'needs-you (drgnx-cockpit-cards-buffer) 'right)
+    (should (drgnx-timer-active-p 'cockpit-cards-refresh))
     (drgnx-cockpit-cards-test--wait 0.3)
     (should (assoc "job/status" drgnx-cockpit-cards-test--calls))))
+
+(ert-deftest drgnx-cockpit-cards/a-hidden-pane-keeps-no-timer ()
+  ;; with no part showing, the refresh and the look-again are cancelled: the parts keep no timer, whatever comes
+  (drgnx-cockpit-cards-test--with
+    (let ((w (drgnx-cockpit-fixture-show-pane 'needs-you (drgnx-cockpit-cards-buffer) 'right)))
+      (should (drgnx-timer-active-p 'cockpit-cards-refresh))             ; shown: it asks the hub soon
+      (drgnx-cockpit-cards--no-hub "test")                               ; and a look again is on its way
+      (should (drgnx-timer-active-p 'cockpit-cards-retry))
+      (drgnx-cockpit-fixture-hide-pane w)
+      (should-not (drgnx-timer-active-p 'cockpit-cards-refresh))
+      (should-not (drgnx-timer-active-p 'cockpit-cards-retry))
+      ;; the draw its marks armed while it showed finds it hidden (its view's stale skip); after that nothing is armed
+      (dolist (b (drgnx-cockpit-cards--buffers))
+        (when (drgnx-timer-active-p (cons 'drgnx-view b))
+          (drgnx-timer-cancel (cons 'drgnx-view b))
+          (drgnx-view--draw-buffer b)))
+      (dotimes (_ 5) (drgnx-cockpit-cards--hub-event "agent" nil) (drgnx-cockpit-cards--schedule 0))
+      (should-not (drgnx-timer-active-p 'cockpit-cards-refresh))
+      (should-not (seq-find (lambda (p) (memq (nth 1 p) (drgnx-cockpit-cards--buffers))) (drgnx-timer-pending))))))
+
+(ert-deftest drgnx-cockpit-cards/showing-starts-it-again ()
+  ;; a part that shows again asks the hub, and what changed meanwhile is drawn
+  (drgnx-cockpit-cards-test--with
+    (setq drgnx-cockpit-graph-current-filter '(:job "j1"))
+    (let ((w (drgnx-cockpit-fixture-show-pane 'decisions (drgnx-cockpit-decisions-buffer) 'right))
+          (drgnx-cockpit-cards-test--answer (lambda (_m _p) (list drgnx-cockpit-cards-test--summary nil))))
+      (drgnx-cockpit-fixture-hide-pane w)
+      (drgnx-timer-cancel 'cockpit-cards-refresh)
+      (should-not (string-search "#3 build" (drgnx-cockpit-cards-test--text 'log)))
+      (drgnx-cockpit-fixture-show-pane 'decisions (drgnx-cockpit-decisions-buffer) 'right)
+      (should (drgnx-timer-active-p 'cockpit-cards-refresh))
+      (drgnx-cockpit-cards-test--wait 0.3)
+      (should (string-search "#3 build" (drgnx-cockpit-cards-test--text 'log))))))
 
 (ert-deftest drgnx-cockpit-cards/without-a-hub-it-says-so-and-looks-again ()
   (drgnx-cockpit-cards-test--with
@@ -235,7 +288,7 @@ after — they owned their hooks and timers."
   (drgnx-cockpit-cards-test--with
     (kill-buffer drgnx-cockpit-decisions-buffer-name)
     (drgnx-cockpit-cards--draw "j1" drgnx-cockpit-cards-test--summary)
-    (should (string-search "its agent ended 3 times" (with-current-buffer drgnx-cockpit-cards-buffer-name (buffer-string))))
+    (should (string-search "its agent ended 3 times" (drgnx-cockpit-cards-test--text (quote cards))))
     (should-not (get-buffer drgnx-cockpit-decisions-buffer-name))
     (drgnx-cockpit-cards--no-hub "test")
     (should-not (get-buffer drgnx-cockpit-decisions-buffer-name))
@@ -244,7 +297,7 @@ after — they owned their hooks and timers."
     (drgnx-cockpit-cards--draw-all (list drgnx-cockpit-cards-test--summary
                                          (list :id "j2" :title "Other" :status "paused" :cards :null
                                                :messages '((:id 5 :sender "s-b" :text "done?" :state "queued")))))
-    (should (string-search "\n\n[j2]" (with-current-buffer drgnx-cockpit-cards-buffer-name (buffer-string))))
+    (should (string-search "\n\n[j2]" (drgnx-cockpit-cards-test--text (quote cards))))
     (should-not (get-buffer drgnx-cockpit-decisions-buffer-name))))
 
 ;;;; All jobs or one
@@ -432,9 +485,13 @@ after — they owned their hooks and timers."
 (ert-deftest drgnx-cockpit-cards/the-commands-are-registered ()
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
         (drgnx-pane--kinds nil) (drgnx-cockpit-filter-functions nil)
-        (drgnx-persist-state-functions nil) (drgnx-persist-after-restore-functions nil))
+        (drgnx-persist-state-functions nil) (drgnx-persist-after-restore-functions nil)
+        (drgnx-statusbar-waiting-functions nil))
     (cl-letf (((symbol-function 'drgnx-pane--call) #'ignore))
-      (drgnx-cockpit--setup))
+      (drgnx-cockpit-fixture-after-setup
+        ;; the parts hear from the workbench state store when they show and are hidden
+        (should (memq #'drgnx-cockpit-cards--pane-shown (alist-get 'pane-shown drgnx-state--now)))
+        (should (memq #'drgnx-cockpit-cards--pane-hidden (alist-get 'pane-hidden drgnx-state--now)))))
     (should (eq (plist-get (drgnx-pane-kind 'needs-you) :home) 'right))
     (should (eq (plist-get (drgnx-pane-kind 'needs-you) :stack) 'happened))
     (should (eq (plist-get (drgnx-pane-kind 'decisions) :home) 'right))
@@ -454,9 +511,10 @@ after — they owned their hooks and timers."
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
         (drgnx-pane--kinds nil) (drgnx-cockpit-filter-functions nil)
         (drgnx-persist-state-functions nil) (drgnx-persist-after-restore-functions nil)
-        (drgnx-hub-event-functions nil) (drgnx-hub-disconnect-functions nil))
+        (drgnx-hub-event-functions nil) (drgnx-hub-disconnect-functions nil)
+        (drgnx-statusbar-waiting-functions nil))
     (cl-letf (((symbol-function 'drgnx-pane--call) #'ignore))
-      (drgnx-cockpit--setup))
+      (drgnx-cockpit-fixture-after-setup))           ; its subscriptions go with the state store afterwards
     (drgnx-cockpit-cards-buffer)
     (drgnx-cockpit-decisions-buffer)
     (drgnx-timer-start 'cockpit-cards-refresh 60 #'ignore :owner :core)
@@ -474,6 +532,56 @@ after — they owned their hooks and timers."
     (should-not (drgnx-timer-active-p 'cockpit-cards-refresh))
     (should-not (drgnx-timer-active-p 'cockpit-cards-retry))
     (drgnx-cockpit--teardown)))                        ; twice: nothing to do, no error
+
+(defconst drgnx-cockpit-cards-test--buffer-names
+  "\\`\\(\\*\\(Work Graph\\|Timeline\\|happened: .*\\|timeline: .*\\|edits: .*\\|Needs You\\|Decisions\\)\\*\\| \\*\\(happened\\|drgnx agent-edits\\)\\*\\)\\'"
+  "The names of the Work cockpit's buffers.")
+
+(ert-deftest drgnx-cockpit-cards/turning-the-module-off-leaves-no-timer-subscription-or-buffer ()
+  ;; TL-MB-1: tools/cockpit set up in a module run, its buffers made and shown (their checks running): turned off, it
+  ;; leaves no timer, no subscription to the workbench state store, no hook and no buffer behind
+  (drgnx-cockpit-fixture-with
+    (drgnx-test-with-state
+      (let* ((drgnx-modules--table (list (assq 'tools/cockpit drgnx-modules--table)))
+             (drgnx-modules--report nil) (drgnx-modules--stacks nil) (drgnx-modules--runs nil) (drgnx-modules--features nil)
+             (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
+             (drgnx-pane--kinds nil) (drgnx-cockpit-filter-functions nil)
+             (drgnx-persist-state-functions nil) (drgnx-persist-after-restore-functions nil)
+             (drgnx-statusbar-waiting-functions nil) (drgnx-cockpit-feed--buffers nil) (drgnx-cockpit-edits--last nil)
+             (drgnx-cockpit-graph-current-filter nil)
+             (temporary-file-directory (let ((d (concat root "tmp/"))) (make-directory d t) d))
+             (config (current-window-configuration))
+             (cockpit-p (lambda (fn) (and (symbolp fn) (string-prefix-p "drgnx-cockpit" (symbol-name fn))))))
+        (unwind-protect
+            (cl-letf (((symbol-function 'drgnx-pane--call) #'ignore)
+                      ((symbol-function 'drgnx-cockpit-sessions) (lambda () sessions)))
+              (should-not (drgnx-modules--run-setup 'tools/cockpit (plist-get (cdar drgnx-modules--table) :setup)))
+              (drgnx-modules--record 'tools/cockpit 'startup 0 'ok)
+              (should (drgnx-timer-active-p 'cockpit-waiting))
+              (should (seq-find cockpit-p (alist-get 'windows-changed drgnx-state--now)))
+              (delete-other-windows)
+              (let ((tl (drgnx-cockpit-timeline-buffer)) (e (drgnx-cockpit-edits-buffer "ext:claude-code:42")))
+                (drgnx-cockpit-graph-buffer)
+                (drgnx-cockpit-feed-happened-buffer "s-1")
+                (drgnx-cockpit-cards-buffer)
+                (drgnx-cockpit-decisions-buffer)
+                (set-window-buffer (selected-window) tl)
+                (set-window-buffer (split-window nil nil 'right) e)
+                (drgnx-state-sync) (drgnx-state--deliver-idle) ; the edits pane hears `windows-changed' on `idle'
+                (should (drgnx-timer-active-p (cons 'cockpit-feed-check tl)))
+                (should (drgnx-timer-active-p (cons 'cockpit-edits-check e))))
+              (should-not (drgnx-module-teardown 'tools/cockpit))
+              (should-not (seq-find (lambda (b) (string-match-p drgnx-cockpit-cards-test--buffer-names (buffer-name b))) (buffer-list)))
+              (should-not (seq-find (lambda (p) (let ((k (car p))) (string-prefix-p "cockpit-" (symbol-name (if (consp k) (car k) k)))))
+                                    (drgnx-timer-pending)))
+              (dolist (lane (list drgnx-state--now drgnx-state--idle))
+                (dolist (entry lane) (should-not (seq-find cockpit-p (cdr entry)))))
+              (should-not (seq-find cockpit-p (bound-and-true-p drgnx-hub-event-functions)))
+              (should-not (seq-find cockpit-p (bound-and-true-p drgnx-agents-changed-functions)))
+              (should-not (memq #'drgnx-cockpit-waiting-count (bound-and-true-p drgnx-statusbar-waiting-functions)))
+              (should-not drgnx-cockpit-filter-functions))
+          (drgnx-module-teardown 'tools/cockpit)
+          (set-window-configuration config))))))
 
 (ert-deftest drgnx-cockpit-cards/what-reaches-an-agent-is-the-user-s-and-its-own-words-stay-quoted ()
   ;; Reply… and Message… leave the user's text in the store (drgnx-coord-send, sender: the user), never a raw prompt;

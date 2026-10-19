@@ -45,7 +45,7 @@ jobs count) drops the job filter; **Filter Graph…** (`f` in the graph) asks fo
 the filter is saved with the workbench.
 
 The panes follow the hub's events and redraw only what changed, at most twice a second, and only while one shows (a
-hidden one catches up when it shows). Hiding them stops nothing. Without a hub What needs you says so, and fills in
+hidden one keeps no timer and catches up when it shows). Hiding them stops nothing of the job. Without a hub What needs you says so, and fills in
 when the hub runs again; if the hub does not know the job (it was deleted), the cockpit shows every job again.
 
 You do not have to watch it: while something of a job needs you, the mode line shows **⚑N** (the cards and messages

@@ -3,6 +3,7 @@
 (require 'cl-lib)
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/cockpit-fixture" drgnx-dir) nil t)   ; a project, a job, worktrees, events
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)     ; a fresh workbench state store
 (load (expand-file-name "modules/tools/drgnx-cockpit" drgnx-dir) nil t)
 
 (defun drgnx-cockpit-graph-test--box (layout id)
@@ -17,7 +18,7 @@
 the fixture's."
   (declare (indent 0))
   `(drgnx-cockpit-fixture-with
-     (let ((drgnx-cockpit-graph-current-filter nil) (drgnx-cockpit--draws 0)
+     (let ((drgnx-cockpit-graph-current-filter nil)
            (drgnx-cockpit--last-error nil)
            ;; no search for silent worktrees unless a test asks for one
            (drgnx-cockpit--silent nil) (drgnx-cockpit--silent-n 0) (drgnx-cockpit--silent-at (float-time))
@@ -30,17 +31,35 @@ the fixture's."
                  (delete-other-windows)
                  (set-window-buffer (selected-window) g)
                  ,@body)
-             (drgnx-timer-cancel 'cockpit-redraw)
              (kill-buffer g)
-             (should-not (drgnx-timer-active-p 'cockpit-check))     ; the buffer owned it
+             (should-not (seq-find (lambda (p) (eq (nth 1 p) g)) (drgnx-timer-pending)))   ; the buffer owned its timers
              (drgnx-cockpit-fixture-wait (lambda () (not drgnx-cockpit--silent-running)))
              (set-window-configuration config)))))))
 
+(defmacro drgnx-cockpit-graph-test--with-store (&rest body)
+  "BODY as `drgnx-cockpit-graph-test--with', with a fresh workbench state store that has the graph's subscriptions
+\(`drgnx-cockpit--subscribe', as the module's setup makes them) and *scratch* in the selected window: show the graph
+with `drgnx-cockpit-fixture-show-pane'."
+  (declare (indent 0))
+  `(drgnx-test-with-state
+     (drgnx-cockpit--subscribe)
+     (drgnx-cockpit-graph-test--with
+       (set-window-buffer (selected-window) (get-buffer-create "*scratch*"))
+       ,@body)))
+
+(defun drgnx-cockpit-graph-test--view ()
+  (buffer-local-value 'drgnx-view (get-buffer drgnx-cockpit-graph-buffer-name)))
+
 (defun drgnx-cockpit-graph-test--tick ()
-  "Run the redraw on its way now (as its timer would)."
-  (should (drgnx-timer-active-p 'cockpit-redraw))
-  (drgnx-timer-cancel 'cockpit-redraw)
-  (drgnx-cockpit--tick))
+  "Run the graph's draw on its way now (its view's timer), as the timer would."
+  (let ((b (get-buffer drgnx-cockpit-graph-buffer-name)))
+    (should (drgnx-timer-active-p (cons 'drgnx-view b)))
+    (drgnx-timer-cancel (cons 'drgnx-view b))
+    (drgnx-view--draw-buffer b)))
+
+(defun drgnx-cockpit-graph-test--stat (name)
+  "The graph's view's counter NAME (`drgnx-view-stats')."
+  (plist-get (drgnx-view-stats (drgnx-cockpit-graph-test--view)) name))
 
 (defun drgnx-cockpit-graph-test--goto (id)
   "Point on node ID's line in the graph's outline."
@@ -257,61 +276,122 @@ the fixture's."
 (ert-deftest drgnx-cockpit-graph/redraw-only-when-changed ()
   (drgnx-cockpit-graph-test--with
     (drgnx-cockpit-graph-redraw t)
-    (let ((n drgnx-cockpit--draws))
-      ;; a change, then a burst of events: one redraw on its way, one draw
+    (let ((n (drgnx-cockpit-graph-test--stat :rows-drawn)))
+      ;; a change, then a burst of events: one draw on its way, the changed rows drawn
       (drgnx-coord-force-status "jx#4" "running" "s-1")
       (dotimes (_ 20) (drgnx-cockpit--hub-event "job" '(:id "jx")))
       (drgnx-cockpit-graph-test--tick)
-      (should (= drgnx-cockpit--draws (1+ n)))
+      (should (> (drgnx-cockpit-graph-test--stat :rows-drawn) n))
       (with-current-buffer g (drgnx-cockpit-graph-test--goto (format "task:%s#4" plan)) (should (looking-at ".*running")))
       ;; the same burst again, nothing changed: nothing drawn
+      (setq n (drgnx-cockpit-graph-test--stat :rows-drawn))
       (dotimes (_ 20) (drgnx-cockpit--hub-event "card" '(:job "jx")) (drgnx-cockpit--agent-changed nil))
       (drgnx-cockpit-graph-test--tick)
-      (should (= drgnx-cockpit--draws (1+ n)))
-      ;; a transcript's chunks never schedule one
+      (should (= n (drgnx-cockpit-graph-test--stat :rows-drawn)))
+      ;; a transcript's chunks never ask for one
       (drgnx-cockpit--hub-event "agent-entries" '(:id "s-1"))
-      (should-not (drgnx-timer-active-p 'cockpit-redraw))
-      ;; a patch: an outline line that did not change keeps its text (and the window its point)
+      (should-not (drgnx-timer-active-p (cons 'drgnx-view g)))
+      ;; a line that did not change keeps its text (and the window its point)
       (with-current-buffer g (drgnx-cockpit-graph-test--goto (concat "spec:" spec)))
       (let ((pt (window-point (get-buffer-window g))))
         (drgnx-coord-force-status "jx#4" "done" "s-1")
         (drgnx-cockpit-schedule)
         (drgnx-cockpit-graph-test--tick)
-        (should (= drgnx-cockpit--draws (+ 2 n)))
+        (should (> (drgnx-cockpit-graph-test--stat :rows-drawn) n))
         (should (= pt (window-point (get-buffer-window g))))))))
 
-(ert-deftest drgnx-cockpit-graph/hidden-pane-does-not-redraw ()
+(ert-deftest drgnx-cockpit-graph/a-hidden-pane-keeps-no-timer ()
+  ;; shown (the store's `pane-shown'), the graph looks at the store every few seconds; hidden, it keeps no timer
+  (drgnx-cockpit-graph-test--with-store
+    (let ((w (drgnx-cockpit-fixture-show-pane 'work-graph g 'left)))
+      (should (drgnx-timer-active-p (cons 'cockpit-check g)))
+      (drgnx-cockpit-graph-test--tick)                                   ; shown: it draws
+      (drgnx-cockpit-fixture-hide-pane w)
+      (should-not (drgnx-timer-active-p (cons 'cockpit-check g)))
+      ;; events while hidden: the draw on its way finds it hidden; after that nothing is armed, whatever comes
+      (drgnx-coord-force-status "jx#4" "running" "s-1")
+      (drgnx-cockpit--hub-event "job" '(:id "jx"))
+      (when (drgnx-timer-active-p (cons 'drgnx-view g)) (drgnx-cockpit-graph-test--tick))
+      (dotimes (_ 5) (drgnx-cockpit--hub-event "job" '(:id "jx")) (drgnx-cockpit--agent-changed nil) (drgnx-cockpit-schedule))
+      (should-not (seq-find (lambda (p) (eq (nth 1 p) g)) (drgnx-timer-pending))))))
+
+(ert-deftest drgnx-cockpit-graph/showing-starts-it-again ()
+  ;; shown again: its check runs again, and what changed while it was hidden is drawn
+  (drgnx-cockpit-graph-test--with-store
+    (let ((w (drgnx-cockpit-fixture-show-pane 'work-graph g 'left)))
+      (drgnx-cockpit-graph-test--tick)
+      (drgnx-cockpit-fixture-hide-pane w)
+      (drgnx-coord-force-status "jx#4" "running" "s-1")
+      (drgnx-cockpit--hub-event "job" '(:id "jx"))
+      (when (drgnx-timer-active-p (cons 'drgnx-view g)) (drgnx-cockpit-graph-test--tick))
+      (with-current-buffer g (drgnx-cockpit-graph-test--goto (format "task:%s#4" plan)) (should-not (looking-at ".*running")))
+      (drgnx-cockpit-fixture-show-pane 'work-graph g 'left)
+      (should (drgnx-timer-active-p (cons 'cockpit-check g)))
+      (drgnx-cockpit-graph-test--tick)
+      (with-current-buffer g (drgnx-cockpit-graph-test--goto (format "task:%s#4" plan)) (should (looking-at ".*running"))))))
+
+(ert-deftest drgnx-cockpit-graph/its-check-follows-every-window-not-only-its-pane ()
+  ;; the graph in its pane and in an editor window (C-x b); the pane closed: it still shows, so its check stays; the
+  ;; editor window switched away (no pane event, only the store's `windows-changed'): shown nowhere, no check
+  (drgnx-cockpit-graph-test--with-store
+    (let* ((editor (selected-window)) (w (drgnx-cockpit-fixture-show-pane 'work-graph g 'left)))
+      (set-window-buffer editor g)
+      (drgnx-state-sync) (drgnx-state--deliver-idle)
+      (drgnx-cockpit-fixture-hide-pane w)
+      (should (drgnx-timer-active-p (cons 'cockpit-check g)))
+      (set-window-buffer editor (get-buffer-create "*scratch*"))
+      (drgnx-state-sync) (drgnx-state--deliver-idle)
+      (should-not (drgnx-timer-active-p (cons 'cockpit-check g)))
+      ;; shown again only in a window, never as its pane: its check runs
+      (set-window-buffer editor g)
+      (drgnx-state-sync) (drgnx-state--deliver-idle)
+      (should (drgnx-timer-active-p (cons 'cockpit-check g))))))
+
+(ert-deftest drgnx-cockpit-graph/a-hidden-pane-draws-nothing ()
+  ;; hidden: the draw on its way finds it hidden (a stale skip), draws no row and builds no model
+  (drgnx-cockpit-graph-test--with-store
+    (let ((w (drgnx-cockpit-fixture-show-pane 'work-graph g 'left)))
+      (drgnx-cockpit-graph-test--tick)
+      (drgnx-cockpit-fixture-hide-pane w)
+      (let ((drawn (drgnx-cockpit-graph-test--stat :rows-drawn)) (skips (drgnx-cockpit-graph-test--stat :stale-skips))
+            (built 0) (orig (symbol-function 'drgnx-cockpit-model)))
+        (cl-letf (((symbol-function 'drgnx-cockpit-model) (lambda (&rest args) (cl-incf built) (apply orig args))))
+          (drgnx-coord-force-status "jx#4" "running" "s-1")
+          (dotimes (_ 5) (drgnx-cockpit--hub-event "job" '(:id "jx")))
+          (drgnx-cockpit-graph-test--tick))
+        (should (> (drgnx-cockpit-graph-test--stat :stale-skips) skips))
+        (should (= drawn (drgnx-cockpit-graph-test--stat :rows-drawn)))
+        (should (= 0 built))))))
+
+(ert-deftest drgnx-cockpit-graph/a-store-change-redraws-only-changed-nodes ()
+  ;; one task's state changes: its line is drawn again, the other lines stay as they are
   (drgnx-cockpit-graph-test--with
     (drgnx-cockpit-graph-redraw t)
-    (let ((n drgnx-cockpit--draws))
-      (set-window-buffer (selected-window) (get-buffer-create "*scratch*"))
+    (let* ((view (drgnx-cockpit-graph-test--view)) (rows (drgnx-view-row-count view))
+           (drawn (drgnx-cockpit-graph-test--stat :rows-drawn))
+           (spec-line (with-current-buffer g (drgnx-cockpit-graph-test--goto (concat "spec:" spec)) (point))))
+      (should (> rows 15))
       (drgnx-coord-force-status "jx#4" "running" "s-1")
-      (dotimes (_ 5) (drgnx-cockpit--hub-event "job" '(:id "jx")))
-      (drgnx-cockpit-schedule)
-      (should-not (drgnx-timer-active-p 'cockpit-redraw))                        ; nothing on its way
-      (should (= n drgnx-cockpit--draws))
-      (should (buffer-local-value 'drgnx-cockpit--stale g))
-      ;; shown again: it catches up
-      (set-window-buffer (selected-window) g)
-      (drgnx-cockpit--on-show (selected-window))
+      (drgnx-cockpit--hub-event "job" '(:id "jx"))
       (drgnx-cockpit-graph-test--tick)
-      (should (= (1+ n) drgnx-cockpit--draws))
-      (should-not (buffer-local-value 'drgnx-cockpit--stale g))
-      (drgnx-cockpit--on-show (selected-window))                ; shown again, nothing missed: nothing to do
-      (should-not (drgnx-timer-active-p 'cockpit-redraw))
-      ;; a redraw on its way when the graph is hidden draws nothing: it only notes the graph is stale
-      (drgnx-coord-force-status "jx#4" "done" "s-1")
-      (drgnx-cockpit-schedule)
-      (should (drgnx-timer-active-p 'cockpit-redraw))
-      (set-window-buffer (selected-window) (get-buffer "*scratch*"))
-      (drgnx-cockpit-graph-test--tick)
-      (should (= (1+ n) drgnx-cockpit--draws))
-      (should (buffer-local-value 'drgnx-cockpit--stale g)))))
+      (should (<= 1 (- (drgnx-cockpit-graph-test--stat :rows-drawn) drawn) 3))
+      (should (= rows (drgnx-view-row-count view)))
+      (should-not (drgnx-view--check view))
+      (with-current-buffer g
+        (should (= spec-line (progn (drgnx-cockpit-graph-test--goto (concat "spec:" spec)) (point))))
+        (drgnx-cockpit-graph-test--goto (format "task:%s#4" plan))
+        (should (looking-at ".*running"))))))
 
 (ert-deftest drgnx-cockpit-graph/commands-and-keys-in-every-profile ()
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
     (cl-letf (((symbol-function 'drgnx-pane-define-kind) #'ignore))
-      (funcall (plist-get (alist-get 'tools/cockpit drgnx-modules--table) :setup)))
+      (drgnx-cockpit-fixture-after-setup
+        ;; the graph hears of its pane from the workbench state store; the status bar's count is looked at
+        (should (memq #'drgnx-cockpit--pane-shown (alist-get 'pane-shown drgnx-state--now)))
+        (should (memq #'drgnx-cockpit--pane-hidden (alist-get 'pane-hidden drgnx-state--now)))
+        (should (memq #'drgnx-cockpit--windows-changed (alist-get 'windows-changed drgnx-state--idle)))
+        (should (memq #'drgnx-cockpit--pane-resized (alist-get 'pane-resized drgnx-state--idle)))
+        (should (drgnx-timer-active-p 'cockpit-waiting))))
     (should (equal (plist-get (alist-get 'tools/cockpit drgnx-modules--table) :requires) '(tools/work tools/jobs)))
     (pcase-dolist (`(,id ,fn) '((cockpit-filter drgnx-cockpit-graph-filter) (cockpit-open drgnx-cockpit-graph-open)
                                 (cockpit-open-in-plan drgnx-cockpit-graph-open-in-plan) (cockpit-refresh drgnx-cockpit-graph-refresh)
@@ -467,22 +547,22 @@ the fixture's."
 (ert-deftest drgnx-cockpit-graph/writes-of-other-processes-show ()
   (drgnx-cockpit-graph-test--with
     (drgnx-cockpit-graph-redraw)
-    (should (drgnx-timer-active-p 'cockpit-check))                       ; started with the buffer
-    (drgnx-cockpit--check)
-    (should-not (drgnx-timer-active-p 'cockpit-redraw))                                   ; nothing written: nothing to do
+    (drgnx-cockpit-graph-test--tick)                                     ; the draw the redraw armed: nothing left
+    (drgnx-cockpit--check g)                                             ; the pane's check (it runs while it shows)
+    (should-not (drgnx-timer-active-p (cons 'drgnx-view g)))             ; nothing written: nothing to do
     ;; another process (a second connection) writes the store
     (let ((db2 (sqlite-open (drgnx-work-db-file))))
       (unwind-protect (sqlite-execute db2 "update jtask set status = 'running' where id = 'jx#4'")
         (sqlite-close db2)))
-    (drgnx-cockpit--check)
-    (drgnx-cockpit--check)
-    (should (drgnx-timer-active-p 'cockpit-redraw))                              ; one redraw on its way
-    (let ((n drgnx-cockpit--draws))
+    (drgnx-cockpit--check g)
+    (drgnx-cockpit--check g)
+    (should (drgnx-timer-active-p (cons 'drgnx-view g)))                 ; one redraw on its way
+    (let ((n (drgnx-cockpit-graph-test--stat :rows-drawn)))
       (drgnx-cockpit-graph-test--tick)
-      (should (= (1+ n) drgnx-cockpit--draws)))
+      (should (> (drgnx-cockpit-graph-test--stat :rows-drawn) n)))
     (with-current-buffer g (drgnx-cockpit-graph-test--goto (format "task:%s#4" plan)) (should (looking-at ".*running")))
-    (drgnx-cockpit--check)
-    (should-not (drgnx-timer-active-p 'cockpit-redraw))))
+    (drgnx-cockpit--check g)
+    (should-not (drgnx-timer-active-p (cons 'drgnx-view g)))))
 
 (ert-deftest drgnx-cockpit-graph/silent-worktrees-show-as-not-reporting ()
   (drgnx-cockpit-graph-test--with
@@ -571,10 +651,11 @@ the fixture's."
   (drgnx-cockpit-graph-test--with
     (drgnx-cockpit-graph-redraw)
     (should (memq #'drgnx-cockpit--theme-changed enable-theme-functions))
-    (let ((n drgnx-cockpit--draws))
+    ;; its colours come from faces: what it shows is worked out again (an outline whose faces stay draws no row)
+    (let ((sig (buffer-local-value 'drgnx-cockpit--signature g)))
       (drgnx-cockpit--theme-changed 'some-theme)
       (drgnx-cockpit-graph-test--tick)
-      (should (= (1+ n) drgnx-cockpit--draws)))))
+      (should-not (eq sig (buffer-local-value 'drgnx-cockpit--signature g))))))
 
 (ert-deftest drgnx-cockpit-graph/the-drawing-tells-the-question-and-keeps-the-selection ()
   (drgnx-cockpit-graph-test--with

@@ -197,12 +197,13 @@ Each accept, revert and comment is also an event (`accept`, `revert`, `comment`)
   `drgnx-cockpit-edits-check-interval` (2 s).
 - Only the files that changed are diffed again, at most once per `drgnx-cockpit-edits-delay` (0.3 s), however often
   the agent writes. Only their sections of the buffer are replaced.
-- Your point and the window's scroll stay on the same file and line. No window moves.
+- Your point and the window's scroll stay on the same file, hunk and place in the hunk. No window moves.
 - A file the pane does not list yet makes it list the changes again, at most every 2 s. While the pane shows, it
   also lists them on its own, so a first write in a folder nobody watches yet shows without `g`. That happens every
   `drgnx-cockpit-edits-check-interval`, and the gap doubles, up to 10 s, while these listings find nothing new. Any
   change heard of brings it back.
-- A hidden pane only notes what changed. It catches up when it shows.
+- A hidden pane keeps no timer and no file watch. When it shows again, in its pane or any window, it lists the
+  changes again and watches their folders again.
 - Remote (TRAMP) folders are never touched: such an agent's pane says so, with no git and no watch.
 
 ## What happened, the timeline, questions
@@ -248,9 +249,8 @@ oldest open question, so it stays in view after its line scrolls away. An answer
 The timeline's head counts escalations, `ask_user` questions and ask cards. The status bar's "waiting on you" adds
 the questions no job holds (`drgnx-cockpit-waiting-count`); an ask card and a job's message to you are its jobs
 segment's ⚑, so each shows once. Permissions show in the graph, and their
-own count is the status bar's. While the graph or a feed pane is open, its check (every
-`drgnx-cockpit-check-interval`) tells the status bar when the number changed, so it moves even when another process
-asked.
+own count is the status bar's. While the cockpit module runs, a look every `drgnx-cockpit-check-interval` tells the
+status bar when the number changed, so it moves even when another process asked, whatever shows.
 
 **Answer Question…** (`cockpit-answer`, `A` in the graph, What happened and the timeline) answers the question
 under point: a line or a chip, or the graph node on this line or selected. Otherwise it answers the agent of What
@@ -301,7 +301,9 @@ The graph never asks anything, and it never blocks typing. It redraws when one o
 - the work tracker finishes a scan;
 - a theme is enabled (the drawing's colours come from faces);
 - a check every `drgnx-cockpit-check-interval` (3 s) finds that another process wrote the store, for example an
-  outside agent's MCP server or another Emacs. The check is one query, and it runs only while the graph shows.
+  outside agent's MCP server or another Emacs. The check is one query, and it runs only while the graph shows, in its
+  pane or any other window: it starts when a window shows it and stops when none does;
+- it shows again, or its window changes size (the drawing may now fit, or no longer).
 
 However many events come, at most one redraw runs per `drgnx-cockpit-redraw-delay` (0.5 s). A redraw first
 compares a cheap key, which costs about 20 µs. The key covers the store's version and change count, what the graph
@@ -309,22 +311,26 @@ shows of each agent session (not its transcript, so an agent that streams costs 
 worktrees, the filter, the options, the font, and the windows. When the key is the same, the redraw ends there.
 
 Otherwise it reads the store, and it draws only what changed:
-- In the outline, an unchanged line stays, and so does your place in it.
+- In the outline, each line belongs to its node: only the lines that changed are drawn again, and your place stays
+  on its line.
 - In the drawing, while no box moves, the buffer's text stays and only the images of the bands that changed are
   drawn again. Their old pixels are released first.
 
-A hidden graph does nothing: it remembers that something changed and catches up when it shows. Remote (TRAMP)
-folders are never touched.
+A hidden graph does nothing and keeps no timer: an event only notes that something changed, and the graph catches
+up when it shows. Remote (TRAMP) folders are never touched.
 
-What happened and the timeline follow the same events, the same check and the same delay, only while one shows.
-When the store did not change, an update ends after one query. Otherwise they only add: new lines go under What
-happened's last line, and new chips go into their rows. Only the rows that changed are written again, and only when
-a window's width changes is every row fitted again. `drgnx-cockpit-waiting-count` returns a cached number, counted
-again only when the store changed.
+What happened and the timeline follow the same events and the same delay, and each has the same check while it
+shows; hidden, it keeps no timer and catches up when it shows (one agent's What happened replacing another's in the
+pane counts too). When the store did not change, an update ends after one query. Otherwise only the lines and rows
+that changed are drawn: a new event adds its line under What happened's last one and redraws its agent's row of the
+timeline, an answered question redraws its line or row, and only when a window's size changes is every row fitted
+again. Your place stays on its line. `drgnx-cockpit-waiting-count` returns a cached number, counted again only when
+the store changed.
 
 What needs you and Decisions ask the hub (never waiting for it) after a job, card, agent or lease event that
-concerns the job they show, at most once per 0.5 s and only while one shows. A part is drawn again only when what it
-shows changed, and its windows keep their place.
+concerns the job they show, at most once per 0.5 s and only while one shows; one that shows again asks at once, and
+with neither showing they keep no timer. Only the part of what they show that changed is drawn again (the cards and
+messages, the tasks, one job of every job's list), and their windows keep their place.
 
 ## Customizing
 
@@ -344,6 +350,7 @@ The options:
 - `drgnx-cockpit-graph-states`: each state's face and mark.
 - `drgnx-cockpit-open-functions`: what opening a node of each kind does.
 - `drgnx-cockpit-redraw-delay` (0.5 s), `drgnx-cockpit-check-interval` (3 s), `drgnx-cockpit-silent-interval` (45 s).
+  The redraw delay is read once, when the cockpit's code loads: a change after that takes effect at the next start.
 - An agent's edits: `drgnx-cockpit-edits-delay` (0.3 s), `drgnx-cockpit-edits-check-interval` (2 s),
   `drgnx-cockpit-edits-watch-max` (32).
 - `drgnx-cockpit-happened-limit` (50): the most lines in What happened. `drgnx-cockpit-timeline-limit` (300): chips the
