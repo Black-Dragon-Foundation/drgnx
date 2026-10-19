@@ -2161,6 +2161,17 @@ around the original `find-file-noselect`, so the major mode and its hooks see "l
 Agents' `fs/read_text_file` serves an open buffer only when it is not a large file and not over
 `drgnx-agents-read-max`; otherwise it reads the disk, under the cap.
 
+The producers that check it today: sticky scroll (`drgnx-sticky--maybe`), indent guides (`drgnx-guides--maybe`),
+inline blame (`drgnx-blame--maybe`), lang's language server (`drgnx-lang--maybe-eglot`), the gutter's changes
+(`extra/hunks` advises `diff-hl--global-turn-on`, `:before-while`, so diff-hl's global mode skips the buffer), the
+Outline dock (`drgnx-outline--index`: "This file is too large for an outline", also for a small chunk buffer) and
+the status bar (`position` shows `Col N` without the line number, `indent` shows nothing, and the memo's key reads
+`tab-width` instead of scanning the first lines). **A new producer that reads or scans the buffer checks the flag
+too** and returns early. The callers that visit files bind `drgnx-large-file-open`: Persist (`drgnx-persist--visit`)
+and layouts (`drgnx-layouts--put-main`) bind `auto`; Replace's two visits and AI apply-hunk bind `whole`; the agent
+edit review sets it to `whole` in its diff buffer, where diff-mode visits the copy. They keep their
+`(large-file-warning-threshold nil)`: with the module off, Emacs's own question would come back at start.
+
 A caller that visits a file says what it needs if the file is large by binding `drgnx-large-file-open`: `auto`
 (never ask: the remembered answer, else chunks), `whole` (the whole file, lean, never ask) or nil (decided by
 context). A buffer whose commands visit files can set it buffer-locally (`setq-local`); the module reads it in the

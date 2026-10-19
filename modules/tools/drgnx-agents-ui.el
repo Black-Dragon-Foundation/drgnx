@@ -114,6 +114,7 @@
       found)))
 
 (defvar tabulated-list--header-overlay)
+(defvar drgnx-large-file-open)          ; core/drgnx-large-file.el: a review's diff visits its copy whole
 
 (defun drgnx-agents-ui--header-end ()
   "Make the column titles the list's first line (a fake header: the dock's tab strip has the header line) in the
@@ -645,6 +646,7 @@ name from a local session is rejected without a look at it."
       (with-current-buffer b
         (drgnx-agents-review-mode 1)
         (setq drgnx-agents-ui--review (list s item copy))
+        (setq-local drgnx-large-file-open 'whole)   ; diff-mode visits the copy from here (C-c C-a): whole, no question
         (setq header-line-format
               (concat (format " %s wants to change %s" (drgnx-agent-session-name s) (abbreviate-file-name path))
                       (if (and cwd (not (file-in-directory-p path cwd))) "  — OUTSIDE the session's project" "")

@@ -15,6 +15,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-memo)
+(require 'drgnx-large-file)
 
 (defvar drgnx-chrome-header-tail)
 (declare-function drgnx-chrome-apply "drgnx-chrome")
@@ -133,8 +134,8 @@ again only when the start moves or the text above it changes)."
   (when (and (bound-and-true-p drgnx-chrome-mode) (get-buffer-window)) (drgnx-chrome-apply)))   ; the header shows it now
 
 (defun drgnx-sticky--maybe ()
-  "`prog-mode-hook': sticky scroll in file buffers."
-  (when buffer-file-name (drgnx-sticky-mode 1)))
+  "`prog-mode-hook': sticky scroll in file buffers, not in a large file's."
+  (when (and buffer-file-name (not (drgnx-large-file-p))) (drgnx-sticky-mode 1)))
 
 (defun drgnx-sticky--teardown ()
   "Sticky scroll off in every live buffer that has it (the hook and the command go with the setup)."

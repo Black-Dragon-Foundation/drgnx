@@ -4,6 +4,8 @@ What drgnx adds to editing code, module by module. Each is a module (Preferences
 off), and each that needs a package names it: `drgnx sync` installs it ([packages.md](packages.md)); until then the
 module waits.
 
+In a large file, sticky scroll, guides, blame and the language server stay off.
+
 ## Language support (tree-sitter)
 
 Code buffers use a language's **tree-sitter mode** (faster, more precise highlighting and navigation) when its

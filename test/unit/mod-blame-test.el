@@ -286,4 +286,15 @@ filename a.txt
       (should-not (drgnx-timer-active-p 'blame-tick))
       (kill-buffer second))))
 
+(ert-deftest drgnx-blame/quiet-in-a-large-file-buffer ()
+  ;; the flag editor/large-files sets (by hand here): blame stays off, and git is not even asked about the file
+  (require 'drgnx-large-file)
+  (with-temp-buffer
+    (setq buffer-file-name (expand-file-name "big.txt" temporary-file-directory))
+    (setq-local drgnx-large-file 'lean)
+    (cl-letf (((symbol-function 'vc-backend) (lambda (&rest _) (error "Never asked for a large file"))))
+      (drgnx-blame--maybe)
+      (should-not drgnx-blame-mode))
+    (setq buffer-file-name nil)))
+
 ;;; mod-blame-test.el ends here

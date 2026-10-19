@@ -37,6 +37,7 @@
 (defvar-local drgnx-ai-ghost--request nil "The request in flight.")
 (defvar-local drgnx-ai-ghost--showing nil "Non-nil while a suggestion shows: its keys are active.")
 (defvar drgnx-ai-ghost-mode)                            ; the minor mode, defined below
+(defvar drgnx-large-file-open)          ; core/drgnx-large-file.el: the review's copy is needed whole, never asked about
 (defvar drgnx-ai-ghost--said-unavailable nil "Told once this session that no provider completes.")
 (defvar drgnx-ai-ghost--last-probe 0 "When a pause with no provider last asked the probe to look again.")
 
@@ -365,7 +366,7 @@ hunk by hunk before anything changes."
     ;; the copy is only text for diff to patch: visited without its mode (and the hooks that start with it)
     (unless (find-buffer-visiting copy)
       (let ((auto-mode-alist nil) (interpreter-mode-alist nil) (magic-mode-alist nil) (magic-fallback-mode-alist nil)
-            (enable-local-variables nil))
+            (enable-local-variables nil) (drgnx-large-file-open 'whole))
         (find-file-noselect copy)))
     (save-window-excursion (diff-apply-hunk))
     (goto-char pt)))
