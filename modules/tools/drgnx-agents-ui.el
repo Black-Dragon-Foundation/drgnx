@@ -30,6 +30,7 @@
 
 (defface drgnx-agents-ui-dim '((t :inherit shadow)) "Thoughts and finished tool calls." :group 'drgnx)
 (defface drgnx-agents-ui-user '((t :inherit bold)) "What you said." :group 'drgnx)
+(defface drgnx-agents-ui-header '((t :inherit header-line)) "The Agents list's column titles (its first line)." :group 'drgnx)
 (defface drgnx-agents-ui-ask '((t :inherit warning)) "What the agent waits for." :group 'drgnx)
 
 (defvar-local drgnx-agents-ui--session nil "The session this transcript shows.")
@@ -60,6 +61,8 @@
 (define-derived-mode drgnx-agents-list-mode tabulated-list-mode "Agents"
   "Agent sessions and durable jobs: RET opens one."
   (setq tabulated-list-format [("Name" 26 nil) ("Status" 9 nil) ("Last" 5 nil) ("Ctx" 5 nil) ("Via" 8 nil) ("Waiting" 0 nil)])
+  ;; the dock's tab strip owns the header line: the column titles are the list's first line instead
+  (setq-local tabulated-list-use-header-line nil)
   (add-hook 'tabulated-list-revert-hook (lambda () (setq drgnx-agents-ui--jobs-cache nil)) nil t)   ; g reads jobs now
   (tabulated-list-init-header))
 
@@ -109,20 +112,82 @@
           (goto-char (or (next-single-property-change (point) 'tabulated-list-id) (point-max)))))
       found)))
 
+(defvar tabulated-list--header-overlay)
+
+(defun drgnx-agents-ui--header-end ()
+  "Make the column titles the list's first line (a fake header: the dock's tab strip has the header line) in the
+theme's header face, and return where the lines start (`point-min' when the list uses a real header line)."
+  (if tabulated-list-use-header-line
+      (point-min)
+    (let ((inhibit-read-only t))
+      (unless (tabulated-list-header-overlay-p (point-min))
+        (save-excursion (tabulated-list-print-fake-header)))
+      (if (not (overlayp tabulated-list--header-overlay))
+          (point-min)
+        (unless (eq (overlay-get tabulated-list--header-overlay 'face) 'drgnx-agents-ui-header)
+          (overlay-put tabulated-list--header-overlay 'face 'drgnx-agents-ui-header))
+        (overlay-end tabulated-list--header-overlay)))))
+
+(declare-function drgnx-commands-get "drgnx-registry")
+(declare-function drgnx-surfaces-key "drgnx-surfaces")
+
+(defun drgnx-agents-ui--new-key ()
+  "The key that runs New Agent Session… in the active key profile, or nil (it is then in the palette only)."
+  (when-let* ((cmd (and (fboundp 'drgnx-surfaces-key) (drgnx-commands-get 'agents-new)))
+              (s (ignore-errors (drgnx-surfaces-key cmd)))
+              ((not (string-empty-p s))))
+    (substring s 0 (string-search " (in " s))))
+
+(defun drgnx-agents-ui--claude-needs ()
+  "What the claude profile still needs when it is the default one and its adapter is missing or too old, as a
+sentence, or nil when it is ready (or another profile is the default)."
+  (when (equal (car (plist-get (cdr (ignore-errors (drgnx-agents-profile (drgnx-agents-default-profile)))) :command))
+               drgnx-agents-claude-program)
+    (let ((a (ignore-errors (drgnx-agents-claude-adapter))))
+      (cond ((null a) (format "Claude needs its adapter, %s: run drgnx onboard --step agents (or Help → Welcome → Agents) to install it."
+                              drgnx-agents-claude-program))
+            ((ignore-errors (drgnx-agents-adapter-problem a))
+             (format "Claude's adapter %s needs updating: drgnx doctor says how." drgnx-agents-claude-program))))))
+
+(defun drgnx-agents-ui--empty-state ()
+  "The text of an empty list: how to start a session (with its key when it has one), and what Claude needs when
+the claude profile is not ready.  Wrapped to the list's window (at most 40 columns)."
+  (let* ((key (drgnx-agents-ui--new-key))
+         (width (min 40 (max 20 (if-let* ((w (get-buffer-window (current-buffer) t))) (window-body-width w) 40))))
+         (paragraphs (delq nil (list (format "No agent sessions yet — New Agent Session… (%s) starts one"
+                                             (if key (concat key ", or the palette") "palette"))
+                                     (drgnx-agents-ui--claude-needs)))))
+    (propertize
+     (concat (mapconcat (lambda (p)
+                          (with-temp-buffer
+                            (insert p)
+                            (let ((fill-column width) (sentence-end-double-space nil)) (fill-region (point-min) (point-max)))
+                            (buffer-string)))
+                        paragraphs "\n")
+             "\n")
+     'face 'drgnx-agents-ui-dim)))
+
 (defun drgnx-agents-ui--update-lines ()
   "Make the current list's lines those of `tabulated-list-entries', in their order, touching only lines that differ:
 a line whose id and columns are the same stays as it is (`tabulated-list-print' with UPDATE keeps a line of the same
 id even when its columns changed, and without a sort key prints everything again).  Lines of ids no longer listed go;
-a new id gets a line where its entry stands; a line out of order is deleted and printed again at its place."
+a new id gets a line where its entry stands; a line out of order is deleted and printed again at its place.  The
+column titles stay the first line; with no entries the empty state follows them."
   (let* ((entries (if (functionp tabulated-list-entries) (funcall tabulated-list-entries) tabulated-list-entries))
          (new (make-hash-table :test #'equal)) (present (make-hash-table :test #'equal))
-         (inhibit-read-only t))
+         (inhibit-read-only t) (start (drgnx-agents-ui--header-end)))
     (dolist (e entries) (puthash (car e) t new))
-    (goto-char (point-min))
+    (goto-char start)
     (while (not (eobp))
       (puthash (get-text-property (point) 'tabulated-list-id) t present)
       (forward-line 1))
-    (goto-char (point-min))
+    (goto-char start)
+    (unless entries
+      (let ((text (drgnx-agents-ui--empty-state)))
+        ;; the same text already there: keep it; else it goes in first and the old tail is dropped below
+        (if (equal-including-properties text (buffer-substring (point) (point-max)))
+            (goto-char (point-max))
+          (insert text))))
     (dolist (e entries)
       (let ((id (car e)) (cols (cadr e)) done)
         (while (not done)
@@ -140,12 +205,20 @@ a new id gets a line where its entry stands; a line out of order is deleted and 
                   (t (funcall tabulated-list-printer id cols) (puthash id t present) (setq done t)))))))
     (delete-region (point) (point-max))))
 
+(defun drgnx-agents-ui--leave-header ()
+  "Windows of the current list whose point is in the column titles move to the first line below them."
+  (let ((start (drgnx-agents-ui--header-end)))
+    (when (< (point) start) (goto-char start))
+    (dolist (w (get-buffer-window-list nil nil t))
+      (when (< (window-point w) start) (set-window-point w start)))))
+
 (defun drgnx-agents-ui--list-print (view)
   "SYNC of `agents-list': update the list's lines in place, each window keeping its point and start on their
 session.  Then the view's START goes to the end: the view has no rows, and the text is tabulated-list's."
   (unwind-protect
       (drgnx-view-with-kept-windows (:key-at #'drgnx-agents-ui--id-at :pos-of #'drgnx-agents-ui--pos-of)
         (drgnx-agents-ui--update-lines))
+    (drgnx-agents-ui--leave-header)
     ;; even when the update signalled: the self-check must not take the lines for foreign text and delete them
     (set-marker (drgnx-view--start view) (point-max))
     (set-buffer-modified-p nil)))

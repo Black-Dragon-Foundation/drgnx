@@ -545,6 +545,10 @@ the only window and current.  The hub mirror does nothing."
                       (if (eq (get-text-property (point) 'tabulated-list-id) session) (setq found (point)) (forward-line 1)))
                     found)))
 
+(defun drgnx-agents-ui-test--body ()
+  "The current Agents list without its first line (the column titles)."
+  (buffer-substring (overlay-end tabulated-list--header-overlay) (point-max)))
+
 (defun drgnx-agents-ui-test--set-status (s status)
   "What the agent's process filter does when S changes status."
   (setf (drgnx-agent-session-status s) status)
@@ -556,8 +560,8 @@ the only window and current.  The hub mirror does nothing."
            (sc (nth 2 drgnx-agents--sessions))
            (entry (lambda (s) (get-text-property (drgnx-agents-ui-test--line-of s) 'tabulated-list-entry)))
            (a (funcall entry sa)) (bb (funcall entry sb)) (c (funcall entry sc)))
-      (should (string-match-p "\\`a +idle" (buffer-string)))
-      (should (= 3 (length (split-string (string-trim-right (buffer-string)) "\n"))))
+      (should (string-match-p "\\`a +idle" (drgnx-agents-ui-test--body)))
+      (should (= 3 (length (split-string (string-trim-right (drgnx-agents-ui-test--body)) "\n"))))
       (drgnx-agents-ui-test--set-status sb 'busy)
       (should (drgnx-view-pending-p v))
       (should (string-match-p "b +idle" (buffer-string)))             ; marked: nothing drawn yet
@@ -568,7 +572,7 @@ the only window and current.  The hub mirror does nothing."
       (should (eq a (funcall entry sa)))
       (should (eq c (funcall entry sc)))
       (should-not (eq bb (funcall entry sb)))
-      (should (= 3 (length (split-string (string-trim-right (buffer-string)) "\n"))))
+      (should (= 3 (length (split-string (string-trim-right (drgnx-agents-ui-test--body)) "\n"))))
       (should-not (drgnx-view--check v)))))
 
 (ert-deftest drgnx-agents-ui/the-list-keeps-each-window-on-its-session ()
@@ -586,7 +590,7 @@ the only window and current.  The hub mirror does nothing."
         (puthash sb (- (float-time) 400) drgnx-agents-ui--last)
         (run-hook-with-args 'drgnx-agents-changed-functions new))
       (drgnx-test-advance 0.2)
-      (should (string-match-p "\\`new" (buffer-string)))
+      (should (string-match-p "\\`new" (drgnx-agents-ui-test--body)))
       (should (string-match-p "6m" (buffer-string)))
       (should (= (window-point w1) (+ 3 (drgnx-agents-ui-test--line-of sb))))
       (should (= (window-point w2) (drgnx-agents-ui-test--line-of sc)))
@@ -596,7 +600,7 @@ the only window and current.  The hub mirror does nothing."
   (drgnx-agents-ui-test--with-list ('(("a" :status idle) ("b" :status idle) ("c" :status idle) ("d" :status idle)) b)
     (let* ((v drgnx-view) (all drgnx-agents--sessions) (sa (nth 0 all)) (sb (nth 1 all)) (sc (nth 2 all))
            (sd (nth 3 all)) (c-line (get-text-property (drgnx-agents-ui-test--line-of sc) 'tabulated-list-entry))
-           (names (lambda () (mapcar (lambda (l) (car (split-string l))) (split-string (string-trim-right (buffer-string)) "\n")))))
+           (names (lambda () (mapcar (lambda (l) (car (split-string l))) (split-string (string-trim-right (drgnx-agents-ui-test--body)) "\n")))))
       (should (equal '("a" "b" "c" "d") (funcall names)))
       ;; b goes: the other lines are not touched
       (setq drgnx-agents--sessions (list sa sc sd))
@@ -616,7 +620,7 @@ the only window and current.  The hub mirror does nothing."
       (setq drgnx-agents--sessions nil)
       (run-hook-with-args 'drgnx-agents-changed-functions sa)
       (drgnx-test-advance 0.2)
-      (should (equal "" (buffer-string))))))
+      (should (string-prefix-p "No agent sessions yet" (drgnx-agents-ui-test--body))))))
 
 (ert-deftest drgnx-agents-ui/a-hidden-list-prints-nothing ()
   (drgnx-agents-ui-test--with-list ('(("a" :status idle) ("b" :status idle)) b)
@@ -649,9 +653,89 @@ the only window and current.  The hub mirror does nothing."
       (puthash sb (- (float-time) 20) drgnx-agents-ui--last)
       (set-window-point (selected-window) (drgnx-agents-ui-test--line-of sb))
       (drgnx-test-advance 20)                                 ; 40 s old now, but nothing marked the list yet
-      (should (string-match-p "\\`a +idle" (buffer-string)))
+      (should (string-match-p "\\`a +idle" (drgnx-agents-ui-test--body)))
       (drgnx-test-advance 15)                                 ; the tick at 30 s
       (should (string-match-p "b +idle +[345][0-9]s" (buffer-string)))
       (should (= (window-point) (drgnx-agents-ui-test--line-of sb))))))
+
+;;;; The column titles are the first line; an empty list says how to start
+
+(ert-deftest drgnx-agents-ui/the-column-titles-are-the-first-line ()
+  (drgnx-agents-ui-test--with-list ('(("a" :status idle) ("b" :status idle)) b)
+    (let ((titles (buffer-substring (point-min) (overlay-end tabulated-list--header-overlay))))
+      (should-not header-line-format)                        ; the dock's tab strip has the header line
+      (should (string-match-p "\\` Name Status Last Ctx Via Waiting \n\\'" titles))
+      (should (eq 'drgnx-agents-ui-header (overlay-get tabulated-list--header-overlay 'face)))
+      (should (eq 'header-line (face-attribute 'drgnx-agents-ui-header :inherit nil)))   ; the theme's face
+      (should-not (get-text-property (point-min) 'tabulated-list-id))
+      (should (>= (point) (overlay-end tabulated-list--header-overlay)))   ; the cursor is on a session, not the titles
+      (should (>= (window-point) (overlay-end tabulated-list--header-overlay)))
+      ;; the updater keeps the titles through every kind of update, and never takes them for a session line
+      (let ((sa (nth 0 drgnx-agents--sessions)) (sb (nth 1 drgnx-agents--sessions)))
+        (drgnx-agents-ui-test--set-status sb 'busy)
+        (drgnx-test-advance 0.2)
+        (should (string-prefix-p titles (buffer-string)))
+        (should (string-match-p "b +busy" (drgnx-agents-ui-test--body)))
+        (setq drgnx-agents--sessions (list sb sa))             ; a reorder
+        (run-hook-with-args 'drgnx-agents-changed-functions sa)
+        (drgnx-test-advance 0.2)
+        (should (string-prefix-p titles (buffer-string)))
+        (should (string-match-p "\\`b +busy.*\na +idle" (drgnx-agents-ui-test--body)))
+        (should (= 1 (how-many "^ Name " (point-min) (point-max))))
+        (setq drgnx-agents--sessions nil)                      ; all gone
+        (run-hook-with-args 'drgnx-agents-changed-functions sa)
+        (drgnx-test-advance 0.2)
+        (should (string-prefix-p titles (buffer-string)))
+        (should-not (drgnx-view--check drgnx-view))
+        (should-not (buffer-modified-p))))))
+
+(ert-deftest drgnx-agents-ui/an-empty-list-says-how-to-start ()
+  (cl-letf (((symbol-function 'drgnx-agents-ui--claude-needs) #'ignore))
+    (drgnx-agents-ui-test--with-list (nil b)
+      (let ((body (drgnx-agents-ui-test--body)))
+        (should (string-match-p "No agent sessions yet" (replace-regexp-in-string "\n" " " body)))
+        (should (string-match-p "New Agent Session…" (replace-regexp-in-string "\n" " " body)))
+        (should (string-match-p "palette" body))
+        (should-not (string-match-p "Claude needs" body))
+        ;; printing again with the same state changes nothing
+        (let ((tick (buffer-modified-tick)))
+          (drgnx-view-touch drgnx-view)
+          (drgnx-test-advance 0.2)
+          (should (= tick (buffer-modified-tick))))
+        ;; a session replaces the hint; none again brings it back
+        (setq drgnx-agents--sessions (list (drgnx-agents--make :name "a" :status 'idle)))
+        (run-hook-with-args 'drgnx-agents-changed-functions (car drgnx-agents--sessions))
+        (drgnx-test-advance 0.2)
+        (should-not (string-search "No agent sessions" (buffer-string)))
+        (should (string-match-p "\\`a +idle +[0-9]+s +\n\\'" (drgnx-agents-ui-test--body)))
+        (setq drgnx-agents--sessions nil)
+        (drgnx-view-touch drgnx-view)
+        (drgnx-test-advance 0.2)
+        (should (string-search "No agent sessions" (buffer-string)))))))
+
+(ert-deftest drgnx-agents-ui/the-empty-hint-names-the-key-and-what-claude-needs ()
+  (cl-letf (((symbol-function 'drgnx-agents-ui--new-key) (lambda () "C-c a n"))
+            ((symbol-function 'drgnx-agents-ui--claude-needs) (lambda () "Claude needs its adapter, claude-agent-acp: install it.")))
+    (drgnx-agents-ui-test--with-list (nil b)
+      (let ((flat (replace-regexp-in-string "\n" " " (drgnx-agents-ui-test--body))))
+        (should (string-search "(C-c a n, or the palette)" flat))
+        (should (string-search "Claude needs its adapter" flat))
+        (dolist (l (split-string (drgnx-agents-ui-test--body) "\n" t)) (should (<= (length l) 40))))))
+  ;; the claude need: only when claude is the default profile and its adapter is missing or too old
+  (cl-letf (((symbol-function 'drgnx-agents-default-profile) (lambda () "claude"))
+            ((symbol-function 'drgnx-agents-claude-adapter) (lambda () nil)))
+    (should (string-match-p "adapter, claude-agent-acp" (drgnx-agents-ui--claude-needs))))
+  (cl-letf (((symbol-function 'drgnx-agents-default-profile) (lambda () "claude"))
+            ((symbol-function 'drgnx-agents-claude-adapter) (lambda () '(:name "x")))
+            ((symbol-function 'drgnx-agents-adapter-problem) (lambda (_a) '("old" . "fix"))))
+    (should (string-match-p "needs updating" (drgnx-agents-ui--claude-needs))))
+  (cl-letf (((symbol-function 'drgnx-agents-default-profile) (lambda () "claude"))
+            ((symbol-function 'drgnx-agents-claude-adapter) (lambda () '(:name "x")))
+            ((symbol-function 'drgnx-agents-adapter-problem) #'ignore))
+    (should-not (drgnx-agents-ui--claude-needs)))
+  (cl-letf (((symbol-function 'drgnx-agents-default-profile) (lambda () "other"))
+            ((symbol-function 'drgnx-agents-profile) (lambda (_n) '("other" :command ("some-agent"))))
+            ((symbol-function 'drgnx-agents-claude-adapter) (lambda () nil)))
+    (should-not (drgnx-agents-ui--claude-needs))))
 
 ;;; agents-ui-test.el ends here
