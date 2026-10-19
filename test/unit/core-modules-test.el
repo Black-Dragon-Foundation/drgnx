@@ -245,6 +245,10 @@
      (should (eq (drgnx-modules-test--status 'test/top) 'ok))
      (should (eq (drgnx-modules-test--status 'test/loop) 'missing-requires)))))
 
+(defun drgnx-modules-test--idle-keys ()
+  "The idle stage's keys in the timer layer (other tests' keys are not ours to count)."
+  (seq-filter (lambda (e) (eq (car-safe (car e)) 'modules-idle-step)) (drgnx-timer-pending)))
+
 (ert-deftest drgnx-modules/each-idle-module-has-its-own-idle-tick ()
   ;; M4-1: idle modules run one per idle timer, staggered, so input between them is handled; the
   ;; external modules load first, the last re-applies keys and writes the report.
@@ -253,19 +257,21 @@
           (drgnx-modules-after-stage-functions (list (lambda (stage) (push (list 'after stage) log)))))
      (drgnx-module-define 'test/i1 :doc "1" :stage 'idle :setup (lambda () (push 'i1 log)))
      (drgnx-module-define 'test/i2 :doc "2" :stage 'idle :setup (lambda () (push 'i2 log)))
-     (cl-letf (((symbol-function 'run-with-idle-timer)
-                (lambda (secs repeat fn &rest args) (should-not repeat) (push (list secs fn args) timers)))
-               ((symbol-function 'drgnx-modules-load-external) (lambda () (push 'external log)))
-               ((symbol-function 'drgnx-modules-write-report) (lambda () (push 'report log))))
-       (drgnx-modules-start cfg)
-       (setq log nil timers (sort timers (lambda (a b) (< (car a) (car b)))))
-       (should (= (length timers) 4))
-       (should (apply #'< (mapcar #'car timers)))
-       (should (= (length (drgnx-timer-pending)) 4))               ; four keys in the timer layer, owned by :core
-       (should (drgnx-timer-active-p '(modules-idle-step . 0)))
-       (pcase-dolist (`(,_ ,fn ,args) timers) (apply fn args) (push '| log))
-       (should (equal (reverse log) '(external | i1 | i2 | (after idle) report |)))
-       (should-not (drgnx-timer-pending))))))                      ; one-shots: nothing left
+     (unwind-protect                      ; the stubbed timers are lists: a failure must not leave them in the table
+         (cl-letf (((symbol-function 'run-with-idle-timer)
+                    (lambda (secs repeat fn &rest args) (should-not repeat) (push (list secs fn args) timers)))
+                   ((symbol-function 'drgnx-modules-load-external) (lambda () (push 'external log)))
+                   ((symbol-function 'drgnx-modules-write-report) (lambda () (push 'report log))))
+           (drgnx-modules-start cfg)
+           (setq log nil timers (sort timers (lambda (a b) (< (car a) (car b)))))
+           (should (= (length timers) 4))
+           (should (apply #'< (mapcar #'car timers)))
+           (should (= (length (drgnx-modules-test--idle-keys)) 4))  ; four keys in the timer layer, owned by :core
+           (should (drgnx-timer-active-p '(modules-idle-step . 0)))
+           (pcase-dolist (`(,_ ,fn ,args) timers) (apply fn args) (push '| log))
+           (should (equal (reverse log) '(external | i1 | i2 | (after idle) report |)))
+           (should-not (drgnx-modules-test--idle-keys)))           ; one-shots: nothing left
+       (drgnx-timer-reset)))))
 
 (ert-deftest drgnx-modules/a-load-error-names-the-file-that-failed ()
   ;; M4-9: an error inside a library the module file loads names that library, not only the module.

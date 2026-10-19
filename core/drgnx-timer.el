@@ -187,10 +187,11 @@ process, frame or window; anything else signals `wrong-type-argument'.  See docs
     (nreverse out)))
 
 (defun drgnx-timer-reset ()
-  "Cancel every layer timer and empty the table (tests and the census)."
+  "Cancel every layer timer and empty the table (tests and the census).
+An entry that cannot be cancelled (its timer is a test's stub, not a timer) never stops the rest."
   (let ((all nil))
     (maphash (lambda (_key entry) (push entry all)) drgnx-timer--table)
-    (dolist (entry all) (drgnx-timer--drop entry))
+    (dolist (entry all) (ignore-errors (drgnx-timer--drop entry)))
     (clrhash drgnx-timer--table)
     (clrhash drgnx-timer--last-run)))
 

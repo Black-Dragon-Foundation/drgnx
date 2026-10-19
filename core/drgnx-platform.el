@@ -954,6 +954,7 @@ still not found answers \"did not show the window\".  A missing tool is reported
          (finish (lambda (r)
                    (unless done
                      (setq done t)
+                     (drgnx-timer-cancel key)
                      (when (frame-live-p frame) (ignore-errors (set-frame-parameter frame 'title previous)))
                      (funcall callback r)))))
     (cl-labels
@@ -1446,6 +1447,7 @@ CTX's one deadline."
          (finish (lambda (r)
                    (unless done
                      (setq done t)
+                     (drgnx-timer-cancel key)
                      (when (frame-live-p frame) (set-frame-parameter frame 'title old-title))
                      (funcall callback r))))
          (resume (lambda (fn)

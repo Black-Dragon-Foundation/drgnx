@@ -819,7 +819,7 @@ output, the errors, `timed-out' (non-nil when LIMIT ended it) and the time.  The
     (let ((finish (lambda ()
                     (unless (process-get proc :check-finished)
                       (process-put proc :check-finished t)
-                      (drgnx-timer-cancel (cons 'agent-check-limit proc))
+                      (drgnx-timer-cancel-owner proc)       ; the limit, the backstop, the tree and kill timers
                       (ignore-errors (delete-process err-proc))
                       ;; whatever the scope still holds (a server's daemon) goes; a scope that is gone is no error
                       (when unit (drgnx-agent-check--kill-scope unit))
