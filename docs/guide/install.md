@@ -259,11 +259,15 @@ It works in the install's own checkout (the folder the `drgnx` command runs from
 3. **Fast-forwards only.** If the checkout has local commits `main` does not have (it has *diverged*), it refuses and
    names the fix: `git rebase origin/main`, or `git reset --hard origin/main` to discard them.
 4. Runs **`drgnx sync`** (packages, from the lock the new version ships) and **`drgnx build`**. If either fails, the
-   checkout goes back to the commit it was on, the build of that commit is redone, and the message says so.
+   checkout goes back to the commit it was on, that commit's packages are synced again (from the cache first) and it is
+   rebuilt, and the message says how far that got. The same happens if the update is interrupted (Ctrl-C, a timeout,
+   logout) before it finished. Output of the steps is kept in `~/.local/state/drgnx/update/last.log`.
 5. Prints what changed (`old..new`, one line per commit, at most 15) and ends with "Restart drgnx to use it": it
-   never restarts or talks to a running drgnx; a running one keeps the old version until you restart it.
+   never restarts or talks to a running drgnx. Restart it soon: a running drgnx still has the old code in memory, and
+   files it loads later come from the new version.
 
-`drgnx update --back` returns to the commit before the last update (and re-syncs and rebuilds). It is named `--back`
+`drgnx update --back` returns to the commit before the last update (and re-syncs and rebuilds); it refuses when you
+ changed the checkout's history since, so that commit is no longer part of it. It is named `--back`
 because `drgnx rollback` already exists for *packages*. A second `--back` goes forward again.
 
 ### Updating by itself
@@ -279,9 +283,10 @@ On Linux this writes a systemd user timer and service (`drgnx-update.timer` / `.
 computer was off runs when it is back). On macOS it writes a launchd agent
 (`~/Library/LaunchAgents/org.blackdragonfoundation.drgnx-update.plist`) that runs once a day at a time picked when you
 turn it on. Both run `drgnx update --quiet`: no output when already current, one line on an update or a failure,
-never a prompt; the line is in the journal (`journalctl --user -u drgnx-update`) or, on macOS, in
+never a prompt; the timer runs only while you are logged in; the line is in the journal (`journalctl --user -u drgnx-update`) or, on macOS, in
 `~/.local/state/drgnx/update/launchd.log`. `--auto status` also shows the last run: it is kept in
-`~/.local/state/drgnx/update/last-run` (`$XDG_STATE_HOME/drgnx/update/`).
+`~/.local/state/drgnx/update/last-run` (`$XDG_STATE_HOME/drgnx/update/`; the timer uses the `XDG_STATE_HOME`,
+`DRGNX_CONFIG_DIR` and `DRGNX_EMACS` you had when you turned it on).
 
 The timer does not undo your choices: after `drgnx update --back`, or after an update that failed and was moved back,
 the timer skips that same commit and waits for a newer one; running `drgnx update` yourself takes it. A checkout with

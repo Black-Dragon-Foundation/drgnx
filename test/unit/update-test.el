@@ -14,8 +14,8 @@
           (list (concat "HOME=" dir) (concat "XDG_STATE_HOME=" dir "/state") (concat "XDG_CONFIG_HOME=" dir "/config")
                 (concat "PATH=" dir "/stubs:/usr/bin:/bin") "GIT_CONFIG_GLOBAL=/dev/null" "GIT_CONFIG_NOSYSTEM=1"
                 "GIT_AUTHOR_NAME=t" "GIT_AUTHOR_EMAIL=t@example.org" "GIT_COMMITTER_NAME=t" "GIT_COMMITTER_EMAIL=t@example.org"
-                (concat "DRGNX_UPDATE_SYNC_CMD=echo sync >> " dir "/hooks.log")
-                (concat "DRGNX_UPDATE_BUILD_CMD=echo build >> " dir "/hooks.log"))))
+                (concat "DRGNX_UPDATE_SYNC_CMD=echo sync $* >> " dir "/hooks.log")
+                (concat "DRGNX_UPDATE_BUILD_CMD=echo build $* >> " dir "/hooks.log"))))
 
 (defun drgnx-update-test--run (dir extra-env program &rest args)
   "Run PROGRAM with ARGS in DIR's environment (plus EXTRA-ENV); return (EXIT . OUTPUT), stderr included."
@@ -159,23 +159,81 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
       (should (equal head (drgnx-update-test--head dir)))
       (should (string-empty-p (drgnx-update-test--hooks dir))))))
 
-(ert-deftest drgnx-update/a-failing-sync-or-build-moves-the-checkout-back ()
+(defun drgnx-update-test--fail-once (dir step)
+  "The hook for STEP (\"SYNC\" or \"BUILD\") that fails its first call and logs the later ones."
+  (format "DRGNX_UPDATE_%s_CMD=if [ ! -e %s/%s.flag ]; then touch %s/%s.flag; exit 3; fi; echo %s $* >> %s/hooks.log"
+          step dir step dir step (downcase step) dir))
+
+(ert-deftest drgnx-update/a-failing-sync-or-build-moves-the-checkout-back-and-resyncs ()
   (dolist (step '("SYNC" "BUILD"))
     (drgnx-update-test--with-install
       (let ((old (drgnx-update-test--head dir)))
         (drgnx-update-test--push dir "README" "two\n" "second")
-        (let ((r (drgnx-update-test--run dir (list (format "DRGNX_UPDATE_%s_CMD=exit 3" step)) bin "update")))
+        (let ((r (drgnx-update-test--run dir (list (drgnx-update-test--fail-once dir step)) bin "update")))
           (should (eq (car r) 1))
           (should (string-match-p "moved the checkout back" (cdr r)))
+          (should (string-match-p "re-synced" (cdr r)))
           (should (string-match-p (if (equal step "SYNC") "sync failed" "build failed") (cdr r)))
           (should (equal old (drgnx-update-test--head dir)))
           (should-not (file-exists-p (expand-file-name "previous" state)))
-          (should (equal "one\n" (drgnx-update-test--slurp (expand-file-name "install/README" dir)))))
+          (should (equal "one\n" (drgnx-update-test--slurp (expand-file-name "install/README" dir))))
+          ;; the old commit's packages come back (offline first), then its build
+          (should (equal (if (equal step "SYNC") "sync --offline\nbuild\n" "sync\nsync --offline\nbuild\n")
+                         (drgnx-update-test--hooks dir)))
+          (should (file-exists-p (expand-file-name "last.log" state))))
         ;; the timer does not retry the commit that failed; a manual update does
         (should (equal '(0 . "") (drgnx-update-test--run dir nil bin "update" "--quiet")))
         (should (equal old (drgnx-update-test--head dir)))
         (should (eq 0 (car (drgnx-update-test--run dir nil bin "update"))))
         (should-not (equal old (drgnx-update-test--head dir)))))))
+
+(ert-deftest drgnx-update/a-failed-resync-is-said-plainly ()
+  (drgnx-update-test--with-install
+    (let ((old (drgnx-update-test--head dir)))
+      (drgnx-update-test--push dir "README" "two\n" "second")
+      (let ((r (drgnx-update-test--run dir '("DRGNX_UPDATE_SYNC_CMD=exit 3") bin "update")))
+        (should (eq (car r) 1))
+        (should (equal old (drgnx-update-test--head dir)))
+        (should (string-match-p "may be newer than this commit" (cdr r)))))))
+
+(ert-deftest drgnx-update/an-interrupted-update-is-rolled-back ()
+  (drgnx-update-test--with-install
+    (let ((old (drgnx-update-test--head dir)))
+      (drgnx-update-test--push dir "README" "two\n" "second")
+      ;; the first sync terminates the update script itself (its pid is in the lock) while it runs
+      (let ((r (drgnx-update-test--run
+                dir (list (format "DRGNX_UPDATE_SYNC_CMD=if [ ! -e %s/k.flag ]; then touch %s/k.flag; kill -TERM $(cat %s/lock/pid); sleep 1; fi; echo sync $* >> %s/hooks.log"
+                                  dir dir state dir))
+                bin "update")))
+        (should (eq (car r) 143))
+        (should (equal old (drgnx-update-test--head dir)))
+        (should (string-match-p "interrupted" (cdr r)))
+        (should (equal "sync\nsync --offline\nbuild\n" (drgnx-update-test--hooks dir)))
+        (should-not (file-exists-p (expand-file-name "lock" state)))
+        (should-not (file-exists-p (expand-file-name "previous" state)))))))
+
+(ert-deftest drgnx-update/an-unreachable-origin-fails-without-changes ()
+  (drgnx-update-test--with-install
+    (let ((head (drgnx-update-test--head dir)))
+      (drgnx-update-test--git dir "install" "remote" "set-url" "origin" (expand-file-name "nowhere.git" dir))
+      (let ((r (drgnx-update-test--run dir nil bin "update")))
+        (should (eq (car r) 1))
+        (should (string-match-p "could not fetch" (cdr r)))
+        (should (equal head (drgnx-update-test--head dir)))
+        (should (string-empty-p (drgnx-update-test--hooks dir)))
+        (should (string-match-p "failed" (drgnx-update-test--slurp (expand-file-name "last-run" state))))))))
+
+(ert-deftest drgnx-update/the-lock-refuses-a-live-owner-and-replaces-a-dead-one ()
+  (drgnx-update-test--with-install
+    (make-directory (expand-file-name "lock" state) t)
+    (write-region (format "%d\n" (emacs-pid)) nil (expand-file-name "lock/pid" state))
+    (let ((r (drgnx-update-test--run dir nil bin "update")))
+      (should (eq (car r) 1))
+      (should (string-match-p "another update is running" (cdr r))))
+    (should (file-exists-p (expand-file-name "lock/pid" state)))   ; the live owner's lock stays
+    (write-region "99999999\n" nil (expand-file-name "lock/pid" state))
+    (should (eq 0 (car (drgnx-update-test--run dir nil bin "update"))))
+    (should-not (file-exists-p (expand-file-name "lock" state)))))
 
 (ert-deftest drgnx-update/back-returns-to-the-commit-before-the-update ()
   (drgnx-update-test--with-install
@@ -196,6 +254,18 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
       (write-region "mine\n" nil (expand-file-name "install/README" dir))
       (should (eq 1 (car (drgnx-update-test--run dir nil bin "update" "--back")))))))
 
+(ert-deftest drgnx-update/back-refuses-a-commit-unrelated-to-this-checkout ()
+  (drgnx-update-test--with-install
+    (let ((head (drgnx-update-test--head dir))
+          (stray (drgnx-update-test--git dir "install" "commit-tree" "-m" "stray" "4b825dc642cb6eb9a060e54bf8d69288fbee4904")))
+      (make-directory state t)
+      (write-region (concat stray "\n") nil (expand-file-name "previous" state))
+      (let ((r (drgnx-update-test--run dir nil bin "update" "--back")))
+        (should (eq (car r) 1))
+        (should (string-match-p "Nothing changed" (cdr r)))
+        (should (equal head (drgnx-update-test--head dir)))
+        (should (string-empty-p (drgnx-update-test--hooks dir)))))))
+
 (ert-deftest drgnx-update/auto-on-writes-a-systemd-timer-and-off-removes-it ()
   (drgnx-update-test--with-install
     (let* ((units (expand-file-name "config/systemd/user" dir))
@@ -211,6 +281,12 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
         (should (string-match-p "^Persistent=true$" timer-text))
         (should (string-match-p "^WantedBy=timers.target$" timer-text))
         (should (string-match-p "^Type=oneshot$" service-text))
+        (should (string-match-p "^Nice=" service-text))
+        (should (string-match-p "^TimeoutStartSec=" service-text))
+        ;; the PATH names the real home (no specifier left as text), and the state directory the timer shares with you
+        (should (string-match-p (format "^Environment=\"PATH=%s/.local/bin:" (regexp-quote dir)) service-text))
+        (should-not (string-match-p "%" service-text))
+        (should (string-match-p (format "^Environment=\"XDG_STATE_HOME=%s/state\"$" (regexp-quote dir)) service-text))
         (should (string-match-p (format "^ExecStart=\"%s\" update --quiet$" (regexp-quote bin)) service-text)))
       (should (string-match-p "--user enable --now drgnx-update.timer" (drgnx-update-test--slurp ctl)))
       (drgnx-update-test--run dir nil bin "update")    ; a run to report
