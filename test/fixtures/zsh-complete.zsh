@@ -34,7 +34,9 @@ HOME=$tmp/home ZDOTDIR=$tmp/home TERM=xterm HISTFILE=/dev/null zpty z zsh -d -i 
 zpty -r z buf '*DRGNX_PROMPT> *' || { zpty -d z; rm -rf "$tmp"; echo "no prompt" >&2; exit 4; }
 seen+=$buf
 zpty -w z "print READY_\$((6*7))"
-zpty -r z buf '*READY_42*' >/dev/null 2>&1 || { zpty -d z; rm -rf "$tmp"; echo "shell not ready" >&2; exit 4; }
+# …and for the prompt after it: the line editor reads keys only from there.  Typed before, the line meets the
+# terminal's own line editing (its echo, ^U erasing the line in the kernel) and zsh never sees the TAB (macOS CI)
+zpty -r z buf '*READY_42*DRGNX_PROMPT> *' >/dev/null 2>&1 || { zpty -d z; rm -rf "$tmp"; echo "shell not ready" >&2; exit 4; }
 seen+=$buf
 zpty -n -w z "$line"$'\t'
 sleep 0.3

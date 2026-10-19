@@ -32,7 +32,9 @@ compilation is optional (Homebrew's Emacs has none). A test of a Linux-only bran
 in Lisp, a fake `uname` on the fake PATH or `DRGNX_UPDATE_PLATFORM` for `bin/drgnx`. Shell scripts and the snippets
 tests run run under macOS's `/bin/bash` 3.2: no `source <(…)` (it sources nothing; `eval "$(…)"` works), and a
 variable before a non-ASCII character takes braces (`${name}…`: macOS's bash reads `$name…` as an unknown variable;
-`drgnx-bin/no-shell-variable-runs-into-a-non-ascii-character` checks it).
+`drgnx-bin/no-shell-variable-runs-into-a-non-ascii-character` checks it). A test that types into an interactive shell
+(the zpty fixture `test/fixtures/zsh-complete.zsh`) types only once the shell's prompt is on the screen: text typed
+before meets the terminal's own line editing (^U erases the line in the kernel), which macOS's slower runners show.
 
 The two Emacs versions differ too. Emacs 31's ERT no longer loads bytecomp, so code that let-binds
 `byte-compile-warnings` (or any variable of a library not loaded yet) requires the library first: bound before, the
