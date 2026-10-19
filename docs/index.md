@@ -54,8 +54,8 @@ How drgnx is built, tested and measured.
 - [CI](develop/ci.md): the GitHub Actions workflows — Emacs 31.1 and 30.2 suites, shellcheck, leak scan, nightly GUI tier.
 - [The hub and the gateway](develop/hub.md): the durable process behind agents, its socket protocol, the traffic gateway.
 - [Agent coordination](develop/coordination.md): jobs, tasks and leases, the decision log, messages, the MCP tools (and the identity and limits of agents outside drgnx), delivery.
-- [The Work cockpit's model](develop/cockpit.md): one model of specs, plans, tasks, agents, jobs and reviews from the live store; what happened, the timeline; each agent's edits (async git, regular files only); the Work graph's redraws, cost and tests; an agent's edits pane: live patches, accept, revert, comment; what needs you and the decisions: the job window's parts, the job filter, its saved state.
+- [The Work cockpit's model](develop/cockpit.md): one model of specs, plans, tasks, agents, jobs and reviews from the live store; what happened, the timeline; each agent's edits (async git, regular files only); the Work graph's redraws, cost and tests; an agent's edits pane: live patches, accept, revert, comment; what happened, the timeline and answers: appends, routes, cost and tests; what needs you and the decisions: the job window's parts, the job filter, its saved state.
 - [The job sandbox](develop/sandbox.md): what a job agent can see — the spec, what it refuses, the bubblewrap argv
-  and why each flag, the Seatbelt profile on macOS, phase 2's network relay, proxy and gateway socket.
+  and why each flag, the MCP bridge into the sandbox, the Seatbelt profile on macOS, phase 2's network relay, proxy and gateway socket.
 
 Docs are updated in the same commit as the code they describe.
