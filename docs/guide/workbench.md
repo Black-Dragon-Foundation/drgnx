@@ -206,6 +206,10 @@ headings) stays.
   out of every window at once; closing the shown tab (or killing its buffer) shows the tab you used before it, as in VS Code; with no such tab, the one to its right, else its left. Each window keeps its own history.
 - **Breadcrumb**: project › folders › file, `●` while unsaved. A buffer with a header line of its own (the column
   headings of a list, clicked to sort) keeps it.
+- **At once**: chrome follows the workbench state store, so it is in place before a frame is drawn. A window made by
+  anything — a split, a popup, a timer — has its tab line and header at the first redraw; `C-x o` between two windows
+  showing one buffer moves the tabs and the breadcrumb on the spot. Saving or reverting a buffer updates its `●` a
+  moment later.
 - A buffer shown only for a moment — a preview while you choose in the minibuffer — does not become a tab.
 - Popups in child frames (posframe, corfu, eldoc-box) keep their own look: they get no chrome.
 
