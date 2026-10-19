@@ -26,14 +26,19 @@ from `process-attributes`); temp paths compared with git's go through `file-true
 prompts pins `drgnx-platform`; only tools the system has are linked into a fake PATH (macOS has no `setsid`), and only
 POSIX options are used (no `timeout`, `dd iflag=`, GNU grep's `--exclude`); a test puts back the mode tables it
 changes (`major-mode-remap-alist`: Emacs 31 asks to install a missing grammar, which in batch reads stdin); native
-compilation is optional (Homebrew's Emacs has none).
+compilation is optional (Homebrew's Emacs has none). A test of a Linux-only branch pins the system too: `system-type`
+in Lisp, a fake `uname` on the fake PATH or `DRGNX_UPDATE_PLATFORM` for `bin/drgnx`. Shell scripts and the snippets
+tests run run under macOS's `/bin/bash` 3.2: no `source <(…)` (it sources nothing; `eval "$(…)"` works), and a
+variable before a non-ASCII character takes braces (`${name}…`: macOS's bash reads `$name…` as an unknown variable;
+`drgnx-bin/no-shell-variable-runs-into-a-non-ascii-character` checks it).
 
 The two Emacs versions differ too. Emacs 31's ERT no longer loads bytecomp, so code that let-binds
 `byte-compile-warnings` (or any variable of a library not loaded yet) requires the library first: bound before, the
 variable is lexical and loading the library fails. Emacs 31 rejects a wall timer's `:repeat t` (30 ran it once):
 a repeat is a number of seconds. Ubuntu's `emacs-nox` has no image functions (`image-flush` is declared, not
-assumed), and without a UTF-8 locale Emacs quotes messages `like this', so a test matches either quote. On Linux, `TMPDIR` set to a symlinked or long directory shows
-most of these before macOS CI does.
+assumed), and without a UTF-8 locale Emacs quotes messages `like this', so a test matches either quote. On Linux,
+`TMPDIR` set to a symlinked or long directory shows most of these before macOS CI does; `LC_ALL=en_US.iso88591` shows
+the `$name…` one.
 
 ## Reproduce a job locally
 

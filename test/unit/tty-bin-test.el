@@ -236,6 +236,8 @@ terminal, as when a person types the command; else /dev/null and a pipe) → (EX
     (tty-bin-test--touch dir "running")
     (write-region "(\"kitty\" \"--\")\n" nil (expand-file-name "capable" dir))
     (make-directory (expand-file-name "proj" dir))
+    ;; a Linux host (macOS runs the client through `env -u XDG_RUNTIME_DIR': drgnx-bin/emacsclient-ignores-…)
+    (tty-bin-test--script (expand-file-name "uname" pathdir) "echo Linux")
     (should (equal (call '("-t" "proj") '(("VTE_VERSION" . "7600"))) '(0 . "")))
     ;; the new terminal runs the client; this one does not
     (let ((deadline (+ (float-time) 10)))
