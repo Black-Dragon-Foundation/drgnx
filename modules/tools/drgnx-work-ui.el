@@ -119,16 +119,20 @@
            (and (eq (plist-get node :kind) 'todo) (drgnx-work-edges-to (plist-get node :id) 'implements)))
        (if (drgnx-work-ui--open-p node) 'open 'closed)))
 
-(defun drgnx-work-ui--node () (get-text-property (line-beginning-position) 'drgnx-work-node))
+(defun drgnx-work-ui--node ()
+  "The node of the row on this line, looked up by the row's key in the table of the last sync: a scan that changed
+the node's file, line or worktree without changing its row's text still gives the new node."
+  (when-let* ((key (and (drgnx-view-p drgnx-view) (drgnx-view-key-at (line-beginning-position))))
+              ((not (eq key :empty))) (info (and drgnx-work-ui--nodes (gethash key drgnx-work-ui--nodes))))
+    (car info)))
 
 (defun drgnx-work-ui--render-row (key)
-  "The text of the row KEY: indentation, fold marker, the node's line.  The node is on the whole row."
+  "The text of the row KEY: indentation, fold marker, the node's line."
   (if (eq key :empty)
       (propertize "Nothing tracked yet — g scans the projects' specs, plans and ledgers.\n" 'face 'drgnx-work-ui-done)
     (pcase-let ((`(,node ,depth ,fold) (or (gethash key drgnx-work-ui--nodes) (error "Work: no node for the row %S" key))))
       (let ((text (concat (make-string (* 2 depth) ?\s) (pcase fold ('open "▾ ") ('closed "▸ ") (_ "  "))
                           (drgnx-work-ui--line node) "\n")))
-        (put-text-property 0 (length text) 'drgnx-work-node node text)
         text))))
 
 (defun drgnx-work-ui--sig (key)
@@ -172,6 +176,13 @@ is marked and draws when shown."
   (when-let* ((b (get-buffer "*drgnx Work*")) (view (buffer-local-value 'drgnx-view b)) ((drgnx-view-p view)))
     (drgnx-view-touch view)))
 
+(defun drgnx-work-ui--update ()
+  "For a command the user invoked (fold, filter, hide merged): mark the Work view and draw it at once, so the buffer
+is current when the command returns."
+  (when-let* ((b (get-buffer "*drgnx Work*")) (view (buffer-local-value 'drgnx-view b)) ((drgnx-view-p view)))
+    (drgnx-view-touch view)
+    (drgnx-view-draw-now view)))
+
 (defun drgnx-work-ui-view ()
   "Show the Work tab in the right dock (scanning again in the background)."
   (interactive)
@@ -185,19 +196,19 @@ is marked and draws when shown."
   (interactive)
   (when-let* ((n (drgnx-work-ui--node)) ((memq (plist-get n :kind) '(spec plan task todo))))
     (puthash (plist-get n :id) (if (drgnx-work-ui--open-p n) 'closed 'open) drgnx-work-ui--expanded)
-    (drgnx-work-ui--redraw)))
+    (drgnx-work-ui--update)))
 
 (defun drgnx-work-ui-filter (text)
   "Show only the plans whose title or path contain TEXT (empty: all)."
   (interactive (list (read-string "Plans containing (empty: all): " drgnx-work-ui-filter-text)))
   (setq drgnx-work-ui-filter-text (if (string-empty-p text) nil text))
-  (drgnx-work-ui--redraw))
+  (drgnx-work-ui--update))
 
 (defun drgnx-work-ui-toggle-merged ()
   "Hide or show the merged plans."
   (interactive)
   (setq drgnx-work-ui-hide-merged (not drgnx-work-ui-hide-merged))
-  (drgnx-work-ui--redraw)
+  (drgnx-work-ui--update)
   (message "Merged plans %s" (if drgnx-work-ui-hide-merged "hidden" "shown")))
 
 ;;;; Opening

@@ -420,4 +420,34 @@ without SVG (librsvg), e.g. a terminal-only build."
         (beginning-of-line)
         (should (looking-at-p "▾ ▣ 0/1 Plan Beta"))))))
 
+(ert-deftest drgnx-work-ui/a-fold-a-filter-and-hide-merged-draw-before-they-return ()
+  (drgnx-work-ui-test--with root
+    (with-current-buffer (drgnx-work-ui-buffer)
+      (drgnx-work-ui-test--goto "Plan Alpha")
+      (drgnx-work-ui-toggle)                                     ; no draw call here
+      (should (string-search "Task 2: second" (buffer-string)))
+      (drgnx-work-ui-filter "beta")
+      (should-not (string-search "Plan Alpha" (buffer-string)))
+      (drgnx-work-ui-filter "")
+      (drgnx-work-update-node (concat "plan:" root "docs/plans/beta.md") :merged t)
+      (drgnx-work-ui-toggle-merged)
+      (should-not (string-search "Plan Beta" (buffer-string))))))
+
+(ert-deftest drgnx-work-ui/the-node-at-point-is-fresh-after-a-scan-that-leaves-its-row-alone ()
+  (drgnx-work-ui-test--with root
+    (with-current-buffer (drgnx-work-ui-buffer)
+      (drgnx-work-ui-test--goto "Plan Alpha") (drgnx-work-ui-toggle)
+      (let ((task (concat "task:" root "docs/plans/alpha.md#2")))
+        (drgnx-work-ui-test--goto "Task 2: second")
+        (let ((line (plist-get (drgnx-work-ui--node) :line)) (before (drgnx-work-ui-test--rows-drawn)))
+          (drgnx-work-update-node task :line (+ 100 (or line 0)))   ; moved in its file; its row text is the same
+          (drgnx-work-ui--redraw) (drgnx-work-ui-test--draw)
+          (should (= before (drgnx-work-ui-test--rows-drawn)))      ; the row was not drawn again
+          (drgnx-work-ui-test--goto "Task 2: second")
+          (should (= (+ 100 (or line 0)) (plist-get (drgnx-work-ui--node) :line)))
+          (let ((b (save-window-excursion (drgnx-work-ui-open) (current-buffer))))
+            (unwind-protect
+                (with-current-buffer b (should (equal (buffer-file-name) (concat root "docs/plans/alpha.md"))))
+              (kill-buffer b))))))))
+
 ;;; work-ui-test.el ends here
