@@ -23,9 +23,12 @@
 (require 'drgnx-onboard)
 (require 'drgnx-modal-choose)
 (autoload 'drgnx-ai--on-first-window "drgnx-ai-probe")
+(autoload 'drgnx-secrets-export-keys "drgnx-secrets" nil t)
+(autoload 'drgnx-secrets-import-keys "drgnx-secrets" nil t)
 (require 'drgnx-gc)
 (require 'drgnx-session)
 (require 'drgnx-config)
+(require 'drgnx-shell-env)
 
 (defgroup drgnx nil "drgnx, a workbench-first Emacs framework." :group 'convenience)
 
@@ -59,6 +62,7 @@ the start."
   (drgnx-session-register-commands)
   (drgnx-modal-register-commands)
   (drgnx-config-register-commands)
+  (drgnx-shell-env-register-commands)
   (drgnx-command-define 'palette :category "View" :title "Command Palette"
                         :command #'drgnx-palette :menu '("View") :doc "Every command by name, with its key")
   (drgnx-command-define 'keys-sheet :category "Help" :title "Keyboard Shortcuts"
@@ -77,7 +81,13 @@ the start."
                         :doc "Turn the module on this row off now, or back on (asks once when other modules need it); a few stop at the next start")
   (drgnx-command-define 'keyboard-profile :category "Preferences" :title "Keyboard Profile…"
                         :command #'drgnx-keys-choose-profile :menu '("Options")
-                        :doc "VS Code, Emacs or Vim keys, or Emacs/Vim editing with VS Code app keys"))
+                        :doc "VS Code, Emacs or Vim keys, or Emacs/Vim editing with VS Code app keys")
+  (drgnx-command-define 'portability-export-keys :category "Portability" :title "Export Keys"
+                        :command #'drgnx-secrets-export-keys
+                        :doc "Your provider keys into secrets.age (age, a passphrase), for a second machine")
+  (drgnx-command-define 'portability-import-keys :category "Portability" :title "Import Keys"
+                        :command #'drgnx-secrets-import-keys
+                        :doc "The provider keys of secrets.age into this machine's keyring"))
 
 (defun drgnx--after-teardown ()
   "Once a batch of module teardowns is done: keys, menus and which-key labels follow the registry.
@@ -96,6 +106,7 @@ The steady GC threshold is set at the end, also when a step fails (early-init de
         (drgnx-sandbox-vc-mode 1)                      ; no git in a job's folder outside its sandbox
         (drgnx-hooks-install)
         (drgnx-session-setup)                          ; keep running or quit; the close button
+        (drgnx-shell-env-start)                        ; the login shell's PATH, asynchronously
         (add-hook 'drgnx-first-gui-frame-hook #'drgnx-onboard--on-first-window)   ; a first start: the Welcome
         (add-hook 'drgnx-first-gui-frame-hook #'drgnx-ai--on-first-window)        ; the local AI runner, started again
         (let ((safe (getenv "DRGNX_SAFE")))            ; drgnx safe: the core only

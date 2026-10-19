@@ -23,9 +23,11 @@
 
 (defmacro drgnx-tty-rec-test--with-path (names &rest body)
   "BODY with only the fake executables NAMES on PATH and exec-path; each appends its name to `calls'.
-NAMES may be empty.  A fixed set of variables is cleared: display, SSH."
+NAMES may be empty.  A fixed set of variables is cleared: display, SSH.  The system is Linux (on a macOS host
+too) unless BODY binds `system-type'."
   (declare (indent 1))
-  `(let* ((dir (make-temp-file "drgnx-rec-bin" t))
+  `(let* ((system-type 'gnu/linux)
+          (dir (make-temp-file "drgnx-rec-bin" t))
           (log (expand-file-name "calls" dir))
           (exec-path (list dir))
           (process-environment

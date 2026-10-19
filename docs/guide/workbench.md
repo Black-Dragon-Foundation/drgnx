@@ -66,8 +66,10 @@ same way). A click shows the definition in the editor and keeps you in the Outli
 editor, and half a second after you stop typing, your edits — only while it is shown (hidden, it lets go of the file
 at the next pause or editor change), and a key you press while it works wins (it tries again at the next pause). Files without an index, remote files and buffers over 1 MB get a
 one-line notice instead. The definition your cursor is in is highlighted in the Outline (an overlay, set a moment
-after the cursor stops — the Outline's own cursor is yours and never moves). An edit that only moves definitions redraws
-nothing, and the Outline keeps your place in it when definitions are added above. Focus Outline: palette · `SPC o`.
+after the cursor stops — the Outline's own cursor is yours and never moves while you work in a file). Another file
+starts the Outline at its top, its cursor on the definition your cursor is in (scrolled into view). An edit that only
+moves definitions redraws nothing, and the Outline keeps your place in it when definitions are added above. Its rows
+and notices start in the column of the section's title. Focus Outline: palette · `SPC o`.
 
 ### Files
 
@@ -182,7 +184,7 @@ alone unless a rule names them.
 | `panel` Problems | flymake / flycheck lists |
 | `panel` Output | `*Messages*`, `*Warnings*`, `*Backtrace*`, ert results |
 | `panel` Results | compilation, grep, occur, xref |
-| `panel` Terminal | shell, eshell, term, vterm, ielm, other comint buffers |
+| `panel` Terminal | New Terminal (your shell in eat; eshell for a remote folder, on Windows, and until eat is synced), New Eshell, shell, eshell, term, vterm, ielm, other comint buffers |
 | `panel` Help | help, apropos, Info, man, eldoc documentation |
 | `right` | agents, chat, viewers — tabs come with their modules (M7) |
 | `popup` | transient, which-key, `*Completions*`, `*Calendar*` |
@@ -198,6 +200,10 @@ needs at least 30 frame lines for the breadcrumb row, which is 31 terminal rows 
 is not a frame line); with fewer, the frame parameter `drgnx-chrome-breadcrumb` is `off` (set by the terminal layout)
 and the row is gone, sticky scroll's scopes with it. It comes back with room, and a buffer's own header line (column
 headings) stays.
+
+Hovering a file tab (or its ×) lights that one only. Tabs are dimmed, the shown tab of the active editor group is bold
+in the theme's link colour with an overline, and every row of chrome (tab line, breadcrumb, dock titles, panel tabs,
+the top line) is the theme's tab-line background; customize `drgnx-chrome-tab*` and `drgnx-wb-bar` to change them.
 
 - **Tabs**: the buffers an editor window has shown, in the order they were opened; switching never reorders them.
   Click a tab to show it, `×` or middle-click closes it (the buffer stays open — close it in the Buffers panel).

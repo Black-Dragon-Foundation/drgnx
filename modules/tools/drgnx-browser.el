@@ -25,6 +25,7 @@
 (declare-function xwidget-webkit-back "xwidget")
 (declare-function xwidget-webkit-forward "xwidget")
 (declare-function xwidget-webkit-reload "xwidget")
+(declare-function project-root "project")
 (declare-function drgnx-wb-editor-window "drgnx-wb")
 (declare-function drgnx-groups--split "drgnx-groups")
 (declare-function drgnx-jobs-stop "drgnx-jobs")

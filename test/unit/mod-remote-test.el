@@ -44,6 +44,9 @@ choice of two nobody has."
           (drgnx-lang--remote-pending nil)
           (drgnx-lang--user-command nil)
           (drgnx-remote-may-prompt nil)
+          ;; a terminal that draws ⇄, whatever the locale (CI's C locale does not), and no answer kept from another
+          ;; test: the ASCII test asks again itself
+          (drgnx-remote--arrows (let ((h (make-hash-table :test #'eq :weakness 'key))) (puthash (frame-terminal) 'yes h) h))
           (explorer-roots nil)
           (messages nil))
      (make-directory bin) (make-directory (expand-file-name "src" dir))

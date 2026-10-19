@@ -154,5 +154,26 @@ after another (the last repeats).  Binds `history' (the history file) and `start
   (drgnx-perf-run-test--with-fake-run '(1.0)
     (should (eql (drgnx-perf-run) 0))
     (should (file-exists-p history))))
+(ert-deftest drgnx-perf-run/every-input-workload-has-an-input-p95-and-max-budget ()
+  "A workload that types or scrolls is judged: a budget row for its p95 and its max (a new workload without one would pass unjudged)."
+  (let ((budgets (drgnx-perf-run--budgets)))
+    (dolist (w (drgnx-perf-run--workloads))
+      (when (plist-get (cdr w) :actions)
+        (dolist (path '((:input :p95) (:input :max)))
+          (should (seq-find (lambda (b) (and (eq (car b) (car w)) (equal (cadr b) path))) budgets)))))))
+
+(ert-deftest drgnx-perf-run/the-terminal-workloads-run-a-program-not-a-shell ()
+  "terminal-typing runs cat, terminal-output a seq loop; their setup forms are readable and name no shell config."
+  (let ((ws (drgnx-perf-run--workloads)))
+    (dolist (spec '((terminal-typing "\"cat\"") (terminal-output "\"sh\"")))
+      (let ((setup (plist-get (cdr (assq (car spec) ws)) :setup)))
+        (should (stringp setup))
+        (should (consp (read setup)))
+        (should (string-match-p (regexp-quote (cadr spec)) setup))
+        (should (string-match-p "tools/terminal-eat" setup))   ; the session has no eat package at start: the module runs here
+        (should (string-match-p "need the tools/terminal-eat module" setup))   ; and the workload stops when it did not reach ok
+        (should-not (string-match-p "\\.bashrc\\|\\.zshrc\\|SHELL" setup))))
+    (should (string-match-p "seq 1 2000" (plist-get (cdr (assq 'terminal-output ws)) :setup)))))
+
 
 ;;; perf-run-test.el ends here

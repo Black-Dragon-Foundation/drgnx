@@ -139,6 +139,7 @@ subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E c
         (should (null drgnx-cockpit-edits--files))))))
 
 (ert-deftest drgnx-cockpit-edits/a-burst-of-writes-is-one-redraw ()
+  :tags '(:timing)                                      ; wall-clock: 50 writes in about 1 s, a quiet machine
   (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
     (let ((drgnx-cockpit-edits-delay 0.3) (drgnx-cockpit-edits--list-every 1.5)
           (windows (window-list)))

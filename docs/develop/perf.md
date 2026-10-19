@@ -41,6 +41,8 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 | motions-evil | a 5000-line copy of the fixture, normal state, from the middle: `j`×20, `w`×20, `}`×10, `C-d`×5, `C-u`×5 (checked: point moved) | input latency |
 | explorer-evil | the explorer workload with Vim keys: `SPC E`, `j`×10, `<escape>` | input latency |
 | window-switch | `C-x o` ×50 across three editor groups showing one file, with the left dock, the panel and the right dock shown (checked: the selected window changed 50 times) | input latency |
+| terminal-typing | 6 × 20 characters (`echo hello world 123`) typed into an eat terminal in the panel running `cat` (no shell, so no shell configuration; the tty echoes every key and eat draws it) | input latency |
+| terminal-output | the same 120 characters typed into the fixture while an eat terminal in the panel streams `seq 1 2000` in a loop (checked: the terminal's process is alive, its window is shown and its text changed while typing) | input latency |
 | frames | 5 new frames until drawn | frame time |
 | redisplay | 30 forced redisplays of the fixture | redisplay time |
 | startup | a drgnx daemon (isolated: its own HOME and drgnx dirs, the harness's environment allowlist) until its server answers (a daemon that never answers fails), 4 starts, the first dropped | server-ready time, modules' time |
@@ -123,6 +125,55 @@ Run `--perf` on its own: no other test tiers, agents or builds at the same time.
 | daemon server ready | — | 206 ms (modules 24 ms) |
 | RSS | 147 MB | 218 MB |
 | key resolution (startup) | 82 ms | 20 ms |
+
+## The terminal (eat), 2026-10-18
+
+Measured on this machine at load 2.5–5 (other builds ran; each figure is the workload's median of three repeats, over
+several runs, range shown):
+
+| | input p50 | input p95 | input max | GC while typing |
+|---|---|---|---|---|
+| terminal-typing (`cat` echoing) | 1.3–1.8 ms | 3.5–4.9 ms | 4.0–12.5 ms | none |
+| terminal-output (`seq 1 2000` in a loop, in the panel) | 1.8–2.7 ms | 4.1–6.0 ms | 23–68 ms | 9–10 collections, ~46 ms each, ~460 ms in all |
+
+Budgets (`test/perf/budgets.eld`): terminal-typing p95 7 ms, max 13 ms; terminal-output p95 6 ms, max 50 ms (provisional, below). Typing into
+a terminal costs about what typing into a file does.
+
+**Where the output garbage comes from.** Eat's terminal emulation allocates about 470 bytes for every text segment it
+writes (14 conses, 3 intervals, 10 vector cells and a string in `eat--t-write`) and 56 for each line feed, whatever the
+segment's length: 110 bytes per output byte for `seq` lines, 7 for 80-column lines. A flood saturates Emacs (about 0.2 MB/s of
+`seq`), so 20 to 30 MB of garbage a second and a collection every ~2 s. drgnx's own hooks do not appear in the memory
+profile, `eat-minimum-latency`/`eat-maximum-latency` change nothing about the amount (larger values only make batches of
+250 to 600 ms), and neither does the scrollback. Cutting the garbage means rewriting eat's writer (a fast path saved about
+a quarter: not worth shadowing eat's internals).
+
+**Where the pause lands.** A collection (45 to 55 ms: the live heap, not the garbage, sets it) is run by whichever code
+allocates when the threshold is crossed. That is often the keystroke's own handling (the command, its redisplay, the
+harness recorder) or the eat batch that runs before the latency timer; the pause then counts. So while a terminal prints,
+`tools/terminal-eat` takes the collection itself, after an eat output batch, when no key was handled in the last 20 ms, no
+input is waiting (`input-pending-p`) and 85% of `gc-cons-threshold` has been allocated: it calls the GC owner's `drgnx-gc-gap`
+(below; `drgnx-gc-gap-quiet`, nil
+turns it off). The threshold is
+unchanged (a higher one only trades the pause for a longer one: 95 ms at 256 MB, and 410 MB of memory), and the natural
+collection stays as the backstop. The pause is not shortened, only kept out of a keystroke's handling; a key that arrives
+during it still waits.
+
+Measured on a machine at load 2.7 to 6.2, ten runs of terminal-output each (the workload's median of three repeats):
+
+| | max, sorted | over 50 ms |
+|---|---|---|
+| without the early collection | 8.7 16.8 23.9 24.1 25.3 39.5 41.9 53.3 54.6 54.9 | 3 of 10 |
+| with it | 5.3 5.6 5.9 5.9 22.3 24.0 30.7 36.3 40.7 49.4 | 0 of 10 |
+
+A second comparison, five runs each on a busy machine (load 3.3 to 7.8), could not tell the two apart (with: 29 6 17 36
+44; without: 26 5 38 32 35), so the evidence that the early collection helps is the mechanism (no collection overlapped a
+slow keystroke with it) and the first ten-run comparison, not a large margin.
+
+What remains is an eat output batch of 20 to 60 ms (under load) that a key waits for; slicing the batches (one chunk per
+timer) made the p95 worse, because each slice redraws the terminal. **terminal-output's max budget is provisional**: 50 ms
+is the ceiling, not a measurement (ten runs per arm, a busy machine, worst 49.4). The failures it can still give come from
+the length of eat's output batches, not from GC (DEFERRED M12e-5-1: throttle or slice eat's output without the redraw cost).
+terminal-typing's p95 is 7 ms: the worst of 16 runs with the module active (1.9 to 6.4, load 3 to 6), rounded up.
 
 ## Tuning (and why)
 

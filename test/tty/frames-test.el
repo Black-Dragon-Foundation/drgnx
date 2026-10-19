@@ -15,7 +15,7 @@
   "SESS's screen shows the workbench: the tab line, the status bar (the mode line), the main role, and the
 Explorer once the sidebar is shown.  EVAL evaluates a form in the frame on that screen."
   (drgnx-tty-session-wait-screen sess "\\*scratch\\* ×" 20)            ; the editor's tab line
-  (drgnx-tty-session-wait-screen sess "\\*scratch\\* +All +L[0-9]")    ; the status bar
+  (drgnx-tty-session-wait-screen sess "Ln [0-9]+, Col [0-9]+ ")             ; the status bar (it names no buffer)
   (should (eq (funcall eval '(drgnx-frame-role)) 'main))
   (should (eq (funcall eval '(plist-get (terminal-parameter nil 'drgnx-tty-caps) :id)) 'tmux))
   (funcall eval '(progn (drgnx-wb-show-sidebar) t))
@@ -194,7 +194,9 @@ once TEXT is on its screen."
 
 (ert-deftest drgnx-tty-frames/a-silent-terminal-does-not-freeze-the-daemon ()
   (drgnx-tty-session-with (s :daemon t)
-    (let ((limit (1+ (drgnx-tty-session-eval s 'xterm-query-timeout)))
+    ;; Emacs's own xterm.el waits `xterm-query-timeout' for each query it sends a new terminal: one (DA2) on Emacs
+    ;; 30, two (DA2, then DA1 for OSC 52) on 31.  drgnx may add less than a second to that.
+    (let ((limit (1+ (drgnx-tty-session-eval s '(* xterm-query-timeout (if (>= emacs-major-version 31) 2 1)))))
           (slowest 0)
           (deadline (+ (float-time) 15))
           frame)

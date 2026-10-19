@@ -7,6 +7,8 @@
 
 (:file "modules/tools/drgnx-diff.el" :what "window-size-change-functions"
  :why "a diff view re-renders at its window's width (buffer-local)" :until "B12")
+(:file "modules/extra/drgnx-blame.el" :what "window-size-change-functions"
+ :why "the inline blame refits to its window's width (buffer-local)" :until "B12")
 (:file "modules/tools/drgnx-layouts.el" :what "window-size-change-functions"
  :why "Zen centres its text again after a resize" :until "B10")
 (:file "modules/ui/drgnx-tty-layout.el" :what "window-size-change-functions"

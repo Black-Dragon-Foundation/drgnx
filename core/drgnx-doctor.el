@@ -22,6 +22,7 @@
 (require 'drgnx-platform)        ; the window manager (the Desktop row)
 
 (declare-function package-built-in-p "package")
+(declare-function drgnx-portable-config-problems "drgnx-portable")
 
 (defconst drgnx-doctor-install-hint
   "run the installer: curl -fsSL https://raw.githubusercontent.com/Black-Dragon-Foundation/drgnx/main/install.sh | bash  (see docs/guide/install.md)"
@@ -222,6 +223,7 @@ default; it never reads ~/.profile), else ~/.profile.  With SHELL unset or empty
 
 (declare-function drgnx-trust-mode "drgnx-trust")
 (declare-function drgnx-trust-guards-status "drgnx-trust")
+(declare-function drgnx-commands-get "drgnx-registry")
 (defvar drgnx-trust-mode)
 
 (defun drgnx-doctor--trust-guards ()
@@ -361,7 +363,10 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
            :trust-guards (drgnx-doctor--trust-guards)
            :config-files (drgnx-doctor--config-files)
            :checkout-init (drgnx-doctor--checkout-init drgnx-dir)
-           :timers-report (drgnx-doctor--timers-report))
+           :timers-report (drgnx-doctor--timers-report)
+           ;; file names only: a key found in the config dir is never part of the facts
+           :portable (condition-case err (progn (require 'drgnx-portable) (drgnx-portable-config-problems))
+                       (error (list :error (error-message-string err)))))
      (and (eq (drgnx-platform) 'macos) (drgnx-doctor--macos-facts)))))
 
 (defun drgnx-doctor--state-path (name)
@@ -638,6 +643,31 @@ MODEL), as a sentence, or nil."
                                       ((plist-get r :display-buffer-entry) (list 'ok "buffers are placed by drgnx's rules" nil))
                                       (t (list 'warn "drgnx's entry in display-buffer-alist is gone: something set the variable after startup, so buffers are no longer placed by the rules"
                                                "use (add-to-list 'display-buffer-alist …) instead of setq in your configuration, or restart drgnx"))))))
+
+(drgnx-doctor-define 'portable-config :group "drgnx"
+                     :doc "The config dir travels as it is: no key in plain text, no machine-local file (docs/guide/second-machine.md)"
+                     :check (lambda (f)
+                              ;; never ok unless everything was checked: a scan that failed, or skipped files, is info
+                              (let* ((p (plist-get f :portable)) (keys (plist-get p :keys)) (local (plist-get p :machine-local))
+                                     (both (plist-get p :in-both)) (unchecked (plist-get p :unchecked))
+                                     (err (plist-get p :error)) (roots (plist-get p :missing-roots))
+                                     (parts (delq nil (list (and keys (format "a key in plain text in %s" (string-join keys ", ")))
+                                                            (and local (format "machine-local files in the config dir: %s" (string-join local ", ")))
+                                                            (and err (format "could not check the config dir: %s" err))
+                                                            (and unchecked (format "could not check %d file%s: %s" (length unchecked)
+                                                                                   (if (cdr unchecked) "s" "") (string-join unchecked ", ")))
+                                                            (and roots (format "not cloned on this machine: %s" (string-join roots ", "))))))
+                                     (fixes (delq nil (append (list (and keys "move it to your keyring (docs/guide/ai.md#keys)")
+                                                                    (and (cl-set-difference local both :test #'equal)
+                                                                         "drgnx bootstrap --step config moves them"))
+                                                              (mapcar (lambda (i) (format "%s has its own copy in the data dir, which drgnx uses: compare them, then delete the config dir's"
+                                                                                          (directory-file-name i)))
+                                                                      both)
+                                                              (list (and (or err unchecked) "make them readable, then run drgnx doctor again")
+                                                                    (and roots "clone them to work on them here (docs/guide/second-machine.md)"))))))
+                                (cond ((or keys local) (list 'warn (string-join parts "; ") (string-join fixes "; ")))
+                                      (parts (list 'info (string-join parts "; ") (string-join fixes "; ")))
+                                      (t (list 'ok "the config dir can travel as it is" nil))))))
 
 (drgnx-doctor-define 'macos-app :group "drgnx" :platform 'macos :doc "The drgnx app in ~/Applications (Finder, Spotlight, the Dock)"
                      :check (lambda (f)

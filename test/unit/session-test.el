@@ -8,6 +8,7 @@
 (require 'drgnx-session)
 (require 'drgnx-explorer)
 (require 'project)
+(defvar server-client-instructions)
 
 (defmacro drgnx-session-test--with (spec &rest body)
   "BODY with the stubs SPEC asks for, in a temp config dir.
@@ -68,7 +69,9 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
   (drgnx-session-test--with (:keep-running t :daemon t :windows (list 'f1 'f2))
     (drgnx-session-close-frame (list 'delete-frame (list 'f2)))
     (should (equal deleted '(f2)))
-    (drgnx-session-setup)
+    (let ((server-client-instructions t))
+      (drgnx-session-setup)
+      (should-not server-client-instructions))      ; no "When done with a buffer, type C-x 5 0" in every emacsclient frame
     (should (eq (lookup-key special-event-map [delete-frame]) #'drgnx-session-close-frame))))
 
 (ert-deftest drgnx-session/unsaved-work-is-never-lost ()

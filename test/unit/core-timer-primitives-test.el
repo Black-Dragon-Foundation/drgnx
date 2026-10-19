@@ -1,5 +1,6 @@
 ;;; core-timer-primitives-test.el --- batch tests: debounce, soon, poll and idle steps over the timer layer -*- lexical-binding: t -*-
 (require 'ert)
+(require 'bytecomp)                                  ; `byte-compile-warnings' is let-bound below
 (require 'cl-lib)
 (require 'drgnx-paths)
 (require 'drgnx-modules)

@@ -10,6 +10,7 @@
 (load (expand-file-name "modules/core/drgnx-basics" drgnx-dir) nil t)   ; New Untitled
 (load (expand-file-name "modules/ui/drgnx-start" drgnx-dir) nil t)      ; the start page's mode
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-job-ui" drgnx-dir) nil t)  ; C8's one count of what needs you
 (defvar drgnx-job-ui--badge)
 (defvar drgnx-job-ui--needs-you)
@@ -18,6 +19,8 @@
 (defvar eglot--cached-server)
 (defvar eglot--managed-mode)
 (defvar yaml-indent-offset)
+(defvar drgnx-explorer--roots)
+(defvar drgnx-trust--state)
 (defvar drgnx-statusbar-test--offset nil "An indentation variable of a test.")
 (require 'which-func)                   ; its own table and variables, as in a session that turned it on
 ;; keycast and evil are never loaded here: their variables are declared special, so the tests bind them dynamically
@@ -110,6 +113,11 @@ frame's editor window (the full bar is the editor window's: the bar asks the sto
             ;; what is shown shrinks: never a segment back that a narrower window lost
             (when previous (should (seq-every-p (lambda (id) (memq id previous)) shown)))
             (setq previous shown)))))
+    ;; a terminal that cannot show "…" cuts with "...", wider than 1 or 2 columns (CI's C locale): still never wider
+    (let ((truncate-string-ellipsis "...") (drgnx-statusbar-left '(branch a)) (drgnx-statusbar-right '(c)))
+      (drgnx-statusbar-define-segment 'branch :fn (lambda () "a-very-long-branch-name"))
+      (dolist (width '(5 4 3 2 1))
+        (should (<= (string-width (drgnx-statusbar-render width)) width))))
     ;; segments go in `drgnx-statusbar-drop-order'
     (let ((drgnx-statusbar-left '(branch problems tests jobs agents modal misc))
           (drgnx-statusbar-right '(lsp position indent encoding eol language))
@@ -131,7 +139,7 @@ frame's editor window (the full bar is the editor window's: the bar asks the sto
       (drgnx-statusbar-define-segment 'branch :fn (lambda () "⑂ feature/extremely-long-branch-name"))
       (let* ((s (drgnx-statusbar-render 20)) (plain (substring-no-properties s)))
         (should (<= (string-width s) 20))
-        (should (string-match-p "…" plain))
+        (should (string-search (truncate-string-ellipsis) plain))   ; Emacs's: "..." in a C locale (CI's)
         (should (string-match-p "⑂ feat" plain))))))
 
 (ert-deftest drgnx-statusbar/a-failing-segment-is-skipped-and-recorded-once ()
@@ -618,7 +626,9 @@ frame's editor window (the full bar is the editor window's: the bar asks the sto
   (drgnx-statusbar-test--with
     (with-temp-buffer
       (insert "one\ntwo\n")
-      (let ((flymake-diagnostic-functions
+      ;; Emacs 31's flymake runs a backend only in trusted content: this one is the test's own
+      (let ((trusted-content :all)
+            (flymake-diagnostic-functions
              (list (lambda (report-fn &rest _)
                      (funcall report-fn (list (flymake-make-diagnostic (current-buffer) 1 3 :error "e")
                                               (flymake-make-diagnostic (current-buffer) 5 7 :warning "w")))))))
@@ -639,6 +649,7 @@ frame's editor window (the full bar is the editor window's: the bar asks the sto
             (should (= 1 (length (seq-filter (lambda (f) (eq f #'drgnx-statusbar--flymake-reported))
                                              (let (l) (advice-mapc (lambda (f _) (push f l)) 'flymake--handle-report) l)))))
             (let* (report
+                   (trusted-content :all)      ; Emacs 31: a backend runs only in trusted content
                    (flymake-diagnostic-functions (list (lambda (report-fn &rest _) (setq report report-fn)))))
               (flymake-mode 1)
               (unwind-protect
@@ -690,10 +701,70 @@ frame's editor window (the full bar is the editor window's: the bar asks the sto
                     (should (equal (drgnx-statusbar--seg-position) "Ln 3, Col 2 (3 selected)"))
                     (deactivate-mark)
                     (should (equal (drgnx-statusbar--seg-position) "Ln 3, Col 2"))
-                    (setq-local indent-tabs-mode t)
-                    (should (string-match-p "\\`Tab Size: [0-9]+\\'" (drgnx-statusbar--seg-indent))))
+                    (setq-local indent-tabs-mode t)             ; the file's own lines say spaces: the bar says so too
+                    (should (equal (drgnx-statusbar--seg-indent) "Spaces: 2")))
                 (kill-buffer buf))))
         (delete-file file)))))
+
+(ert-deftest drgnx-statusbar/indent-reports-what-the-buffer-uses ()
+  ;; Emacs Lisp has `indent-tabs-mode' t and `tab-width' 8; a file indented with two spaces is "Spaces: 2"
+  (with-temp-buffer
+    (setq-local indent-tabs-mode t tab-width 8)
+    (insert "(defun f ()\n  (g)\n  (h\n   1))\n")
+    (should (equal (drgnx-statusbar--seg-indent) "Spaces: 2"))
+    (erase-buffer)
+    (insert "int f() {\n\treturn 1;\n\t\treturn 2;\n}\n")
+    (setq-local indent-tabs-mode nil)
+    (should (equal (drgnx-statusbar--seg-indent) "Tab Size: 8"))
+    ;; nothing indented: the mode's own settings
+    (setq-local drgnx-statusbar-indent-vars nil)
+    (erase-buffer)
+    (insert "a\nb\n")
+    (should (equal (drgnx-statusbar--seg-indent) "Spaces: 8"))
+    (setq-local indent-tabs-mode t)
+    (should (equal (drgnx-statusbar--seg-indent) "Tab Size: 8"))
+    ;; one space is alignment, not indentation
+    (erase-buffer)
+    (insert "/*\n * x\n */\nint a;\n    b;\n")
+    (setq-local indent-tabs-mode t)
+    (should (equal (drgnx-statusbar--seg-indent) "Spaces: 4"))))
+
+(ert-deftest drgnx-statusbar/indent-is-scanned-once-per-change ()
+  (with-temp-buffer
+    (insert "a\n  b\n")
+    (drgnx-statusbar--seg-indent)
+    (let ((cache drgnx-statusbar--indent-cache))
+      (drgnx-statusbar--seg-indent)
+      (should (eq cache drgnx-statusbar--indent-cache))           ; no new scan
+      (insert "   c\n")
+      (drgnx-statusbar--seg-indent)
+      (should-not (eq cache drgnx-statusbar--indent-cache)))))
+
+(ert-deftest drgnx-statusbar/restricted-mode-is-a-labelled-segment-with-a-click ()
+  (drgnx-statusbar-test--with
+    (drgnx-statusbar--define-defaults)
+    (should (memq 'trust (eval (car (get 'drgnx-statusbar-left 'standard-value)) t)))
+    (with-temp-buffer
+      (should-not (drgnx-statusbar--seg-trust))
+      (setq drgnx-trust--state 'trusted)
+      (should-not (drgnx-statusbar--seg-trust))
+      (setq drgnx-trust--state 'restricted)
+      (should (equal (drgnx-statusbar--seg-trust) "Restricted Mode"))
+      (let ((s (drgnx-statusbar--text 'trust)))
+        (should (string-match-p "not trusted" (get-text-property 0 'help-echo s)))
+        (should (string-match-p "Trust This Folder\\|trust it" (get-text-property 0 'help-echo s)))
+        (should (equal (plist-get (gethash 'trust drgnx-statusbar--segments) :click) 'drgnx-trust-folder))))
+    ;; the plain mark in `global-mode-string' is the segment's: `misc' leaves it out
+    (should (member '(:eval (drgnx-trust--mark)) drgnx-statusbar-misc-exclude))))
+
+(ert-deftest drgnx-statusbar/the-quiet-bar-names-the-folder ()
+  (let ((drgnx-explorer--roots nil))
+    (should (equal (drgnx-statusbar--seg-folder) "No folder open"))
+    (setq drgnx-explorer--roots '("/x/proj/"))
+    (should (equal (drgnx-statusbar--seg-folder) "proj"))
+    (setq drgnx-explorer--roots '("/x/proj/" "/y/other/"))
+    (should (equal (drgnx-statusbar--seg-folder) "proj +1")))
+  (should (eq (car drgnx-statusbar-quiet) 'folder)))
 
 (ert-deftest drgnx-statusbar/language-names-are-the-ones-vs-code-uses-worked-out-once-per-mode ()
   (let ((drgnx-statusbar--language-names (make-hash-table :test #'eq)) (warning-minimum-level :emergency))
@@ -702,9 +773,9 @@ frame's editor window (the full bar is the editor window's: the bar asks the sto
                  (tsx-ts-mode . "TypeScript JSX") (js-mode . "JavaScript") (emacs-lisp-mode . "Emacs Lisp")
                  (sh-mode . "Shell Script") (c-mode . "C") (text-mode . "Plain Text") (fundamental-mode . "Plain Text")
                  (json-ts-mode . "JSON") (css-mode . "CSS") (conf-unix-mode . "Conf Unix")))
-      (when (fboundp (car c))
-        (with-temp-buffer
-          (funcall (car c))
+      (with-temp-buffer
+        ;; a tree-sitter mode refuses to start without its grammar (30.2's java-ts-mode on CI): nothing to name
+        (when (and (fboundp (car c)) (ignore-errors (funcall (car c)) t))
           (should (equal (cons (car c) (drgnx-statusbar--seg-language)) c)))))
     ;; a mode whose own name says something else (or nothing yet): the name made from the mode's symbol
     (with-temp-buffer
@@ -1286,34 +1357,35 @@ own cache), evil's state tag, other entries of `mode-line-misc-info'; each chang
             (drgnx-agents--sessions (list (drgnx-agents--make :name "a" :status 'busy))))
         (advice-add 'drgnx-statusbar--refresh-now :around #'drgnx-statusbar-test--mark-refresh)
         (unwind-protect
-            (cl-letf (((symbol-function 'force-mode-line-update)
-                       (lambda (&optional all) (when drgnx-statusbar-test--refreshing (should all) (cl-incf calls)))))
-              ;; 20 agent changes in 0.1 s: one refresh, one redraw of every bar
-              (dotimes (_ 20)
-                (drgnx-statusbar--agents-changed (car drgnx-agents--sessions))
-                (sleep-for 0.005))
-              (should (= calls 0))
-              (should (= drgnx-statusbar-test--refreshes 0))
-              (sleep-for 0.4)
-              (should (= drgnx-statusbar-test--refreshes 1))
-              (should (= calls 1))
-              (should (equal (drgnx-statusbar-test--seg 'agents) "◎ 1 busy"))
-              ;; the hub's and git's change hooks go through the same debounce
-              (drgnx-statusbar--hub-event "agent-entries" nil)
-              (drgnx-cache-put 'git-status "/repo/" (list :branch '(:head "a" :ahead 1)))   ; a new branch state
-              (drgnx-statusbar--git-changed "/repo/")
-              (drgnx-statusbar--git-changed "/repo/")
-              (sleep-for 0.4)
-              (should (= drgnx-statusbar-test--refreshes 2))
-              (should (= calls 2))                             ; git: one redraw, the agents' counts did not change
-              (should-not (drgnx-timer-active-p 'statusbar-refresh))
-              ;; a status run that changed only files, or failed: the same branch, no redraw
-              (drgnx-statusbar--git-changed "/repo/")
-              (should-not (drgnx-timer-active-p 'statusbar-refresh))
-              (drgnx-cache-put 'git-status "/repo/" (list :branch '(:head "a" :ahead 2)))   ; one more commit ahead
-              (drgnx-statusbar--git-changed "/repo/")
-              (should (drgnx-timer-active-p 'statusbar-refresh))
-              (drgnx-timer-cancel 'statusbar-refresh))
+            (drgnx-test-with-clock ()                         ; the debounce is a layer timer: virtual time
+              (cl-letf (((symbol-function 'force-mode-line-update)
+                         (lambda (&optional all) (when drgnx-statusbar-test--refreshing (should all) (cl-incf calls)))))
+                ;; 20 agent changes in 0.1 s: one refresh, one redraw of every bar
+                (dotimes (_ 20)
+                  (drgnx-statusbar--agents-changed (car drgnx-agents--sessions))
+                  (drgnx-test-advance 0.005))
+                (should (= calls 0))
+                (should (= drgnx-statusbar-test--refreshes 0))
+                (drgnx-test-advance 0.4)
+                (should (= drgnx-statusbar-test--refreshes 1))
+                (should (= calls 1))
+                (should (equal (drgnx-statusbar-test--seg 'agents) "◎ 1 busy"))
+                ;; the hub's and git's change hooks go through the same debounce
+                (drgnx-statusbar--hub-event "agent-entries" nil)
+                (drgnx-cache-put 'git-status "/repo/" (list :branch '(:head "a" :ahead 1)))   ; a new branch state
+                (drgnx-statusbar--git-changed "/repo/")
+                (drgnx-statusbar--git-changed "/repo/")
+                (drgnx-test-advance 0.4)
+                (should (= drgnx-statusbar-test--refreshes 2))
+                (should (= calls 2))                             ; git: one redraw, the agents' counts did not change
+                (should-not (drgnx-timer-active-p 'statusbar-refresh))
+                ;; a status run that changed only files, or failed: the same branch, no redraw
+                (drgnx-statusbar--git-changed "/repo/")
+                (should-not (drgnx-timer-active-p 'statusbar-refresh))
+                (drgnx-cache-put 'git-status "/repo/" (list :branch '(:head "a" :ahead 2)))   ; one more commit ahead
+                (drgnx-statusbar--git-changed "/repo/")
+                (should (drgnx-timer-active-p 'statusbar-refresh))
+                (drgnx-timer-cancel 'statusbar-refresh)))
           (advice-remove 'drgnx-statusbar--refresh-now #'drgnx-statusbar-test--mark-refresh))))))
 
 (ert-deftest drgnx-statusbar/a-redisplay-that-changes-nothing-reuses-the-bar ()
