@@ -36,4 +36,15 @@
  ;; typing-evil p95 may also exceed typing p95 by at most 1 ms in the same run (`drgnx-perf-run--relative-fails').
  (typing-evil (:input :p95) 16) (typing-evil (:input :max) 50)
  (motions-evil (:input :p95) 16) (motions-evil (:input :max) 50)
- (explorer-evil (:input :p95) 8) (explorer-evil (:input :max) 50))
+ (explorer-evil (:input :p95) 8) (explorer-evil (:input :max) 50)
+ ;; eat (2026-10-18, with the tools/terminal-eat module running, medians of the workload's three repeats, load 3-6; the
+ ;; machine was never quiet): terminal-typing p95 1.9-6.4 ms over 16 runs (two above 5, at load 3.9 and 5.8), max 2.5-10.6;
+ ;; terminal-output p95 4.2-8.0 (above 5.2 only at load 5.5 and above), max 5-49 with drgnx's early collection
+ ;; (`drgnx-terminal-eat-gc-quiet') over ten runs at load 2.7-6.2, 5-44 over five more at load 3.3-6.6.
+ ;; terminal-typing's p95 and max rows are the worst measured, rounded up (p95 6.4 -> 7; max 12.5 in the first measurements -> 13);
+ ;; terminal-output's p95 is the worst measured below load 5.5 (5.2), rounded up (the 7.9-8.0 came at load 5.5 and above).
+ ;; terminal-output's max is PROVISIONAL: 50 ms is the ceiling, not a measurement (n=10 per arm, a busy machine).  The
+ ;; collection no longer lands in a keystroke (that was the failure before: 3 of 10 runs over 50); what is left comes from
+ ;; the length of eat's output batches (20-60 ms under load), not from GC: DEFERRED M12e-5-1.  See docs/develop/perf.md.
+ (terminal-typing (:input :p95) 7) (terminal-typing (:input :max) 13)
+ (terminal-output (:input :p95) 6) (terminal-output (:input :max) 50))

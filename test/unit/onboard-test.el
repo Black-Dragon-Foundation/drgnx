@@ -14,7 +14,8 @@
   "BODY with ROOT a temp dir holding config, state, data and org dirs."
   (declare (indent 1))
   `(let* ((,root (file-name-as-directory (make-temp-file "drgnx-onboard" t)))
-          (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" ,root "config")
+          (process-environment (append (list "SHELL=/bin/sh"   ; step 7's shell-integration question is not asked here (shell-rc-test.el covers it)
+                                             (concat "DRGNX_CONFIG_DIR=" ,root "config")
                                              (concat "XDG_STATE_HOME=" ,root "state")
                                              (concat "DRGNX_DATA_DIR=" ,root "data"))
                                        process-environment))
@@ -242,8 +243,8 @@
     (let ((r (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'linux)))
                (car (drgnx-onboard-run :only '(daemon) :non-interactive t)))))
       (should (eq (cadr r) 'info))
-      (should (file-exists-p (expand-file-name "systemd/drgnx.service" (drgnx-user-dir))))
-      (should (file-exists-p (expand-file-name "applications/drgnx.desktop" (drgnx-user-dir))))
+      (should (file-exists-p (expand-file-name "systemd/drgnx.service" (drgnx-data-dir))))
+      (should (file-exists-p (expand-file-name "applications/drgnx.desktop" (drgnx-data-dir))))
       (should (string-match-p "systemctl --user" (nth 2 r))))))
 
 (defun drgnx-onboard-test--step-7 (platform keep install)
@@ -315,8 +316,8 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
         (should (= 2 (length prompts)))
         (should-not installed)
         (should-not (member "systemctl" programs))                       ; said no: nothing installed
-        (should (file-exists-p (expand-file-name "systemd/drgnx.service" (drgnx-user-dir))))
-        (should (file-exists-p (expand-file-name "applications/drgnx.desktop" (drgnx-user-dir))))
+        (should (file-exists-p (expand-file-name "systemd/drgnx.service" (drgnx-data-dir))))
+        (should (file-exists-p (expand-file-name "applications/drgnx.desktop" (drgnx-data-dir))))
         (should (string-match-p "systemctl --user" (nth 2 r)))
         (should (string-search "drgnx keeps running in the background" (nth 2 r)))
         (should (drgnx-onboard-test--keep-running-is t))))))

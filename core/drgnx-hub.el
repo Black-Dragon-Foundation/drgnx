@@ -21,6 +21,7 @@
 (require 'drgnx-job)
 (require 'drgnx-job-clash)
 (require 'drgnx-timer)
+(require 'drgnx-shell-env)
 
 (defvar drgnx-hub-event-functions nil
   "Functions called with (EVENT DATA) for each event the hub sends this Emacs (after `drgnx-hub-connect'); EVENT a
@@ -314,6 +315,7 @@ a pid.  How many went."
     ("gateway/unregister" (drgnx-gateway-unregister (plist-get params :token)) (drgnx-hub--save-registrations) t)
     ("gateway/keys" (drgnx-hub--set-keys (plist-get params :keys)) t)
     ("events/since" (drgnx-hub--events-since params))
+    ("env/set" (drgnx-hub--set-env (plist-get params :env)) t)
     ("coord/notify" (run-at-time 0 nil #'drgnx-hub--deliver)   ; a coordination server wrote: deliver now, look for clashes
      (drgnx-hub--events-soon)                                    ; and send its events
      (run-at-time 0 nil (lambda () (dolist (j (drgnx-coord-jobs "running")) (with-demoted-errors "drgnx job: %S" (drgnx-job-clash-scan j)))))
@@ -402,6 +404,18 @@ this Emacs found (`drgnx-ai--keys'), which the agents the hub starts read withou
            do (let ((id (intern (substring (symbol-name k) 1))))
                 (drgnx-gateway-set-key id v)
                 (puthash id v drgnx-ai--keys))))
+
+(defun drgnx-hub--set-env (env)
+  "ENV, the variables an Emacs read from the user's login shell — ((NAME . VALUE)…), or {NAME: VALUE} from JSON —
+applied to the hub's own environment (`drgnx-shell-env-apply'), only the names `drgnx-shell-env-names' allows and
+never a key: the agents and jobs the hub starts from now on get the new PATH (running ones keep theirs)."
+  (let ((allowed (drgnx-shell-env--names)))
+    (drgnx-shell-env-apply
+     (cl-loop for c in (if (keywordp (car-safe env))
+                           (cl-loop for (k v) on env by #'cddr collect (cons (substring (symbol-name k) 1) v))
+                         env)
+              when (and (consp c) (stringp (car c)) (stringp (cdr c)) (member (car c) allowed))
+              collect c))))
 
 (defun drgnx-hub-register (params)
   "Register an agent with the gateway: PARAMS (:job :task :agent :chain ((PROVIDER MODEL)…) :budget :openrouter (the

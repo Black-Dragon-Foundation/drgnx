@@ -569,6 +569,7 @@ a later entry wins, so one of those would move a session out of its run director
                 ;; no language server per fixture project (12 pyrights in one scenario run); a test that wants
                 ;; one sets this to "" in its session
                 "DRGNX_NO_LANGUAGE_SERVERS=1"
+                "DRGNX_NO_SHELL_ENV=1"     ; the session's PATH, never the login shell's (a test clears it)
                 ;; drgnx's own config and state stay in the run dir: a session never reads the
                 ;; user's ~/.config/drgnx or writes ~/.local/state.
                 (concat "DRGNX_CONFIG_DIR=" (expand-file-name "drgnx-config" (plist-get sess :run)))

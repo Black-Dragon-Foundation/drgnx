@@ -23,8 +23,10 @@ from timers, hooks and persistence."
     (expand-file-name name dir)))
 
 (defun drgnx-user-dir ()
-  "The user's drgnx configuration: $DRGNX_CONFIG_DIR, else ~/.config/drgnx/."
-  (file-name-as-directory (drgnx-paths--expand (or (getenv "DRGNX_CONFIG_DIR") "~/.config/drgnx"))))
+  "The user's drgnx configuration: $DRGNX_CONFIG_DIR, else ~/.config/drgnx/.  An empty variable counts as unset, as
+in bin/drgnx and install.sh (\"${VAR:-…}\"), so all three pick the same dir."
+  (let ((dir (getenv "DRGNX_CONFIG_DIR")))
+    (file-name-as-directory (drgnx-paths--expand (if (member dir '(nil "")) "~/.config/drgnx" dir)))))
 
 (defun drgnx-paths--xdg (var default)
   "The XDG base directory in the environment variable VAR, else DEFAULT.  Only an absolute path counts: the XDG spec
@@ -41,10 +43,13 @@ says an empty or relative value is to be ignored (else it would mean the current
   (file-name-as-directory (drgnx-paths--expand "drgnx" (drgnx-paths--xdg "XDG_CACHE_HOME" "~/.cache"))))
 
 (defun drgnx-data-dir ()
-  "drgnx data: $DRGNX_DATA_DIR, else $XDG_DATA_HOME/drgnx/ (default ~/.local/share/drgnx/)."
-  (file-name-as-directory
-   (drgnx-paths--expand (or (getenv "DRGNX_DATA_DIR")
-                            (drgnx-paths--expand "drgnx" (drgnx-paths--xdg "XDG_DATA_HOME" "~/.local/share"))))))
+  "drgnx data: $DRGNX_DATA_DIR, else $XDG_DATA_HOME/drgnx/ (default ~/.local/share/drgnx/).  An empty
+DRGNX_DATA_DIR counts as unset, as in bin/drgnx and install.sh (\"${VAR:-…}\"), so all three pick the same dir."
+  (let ((data (getenv "DRGNX_DATA_DIR")))
+    (file-name-as-directory
+     (drgnx-paths--expand (if (member data '(nil ""))
+                              (drgnx-paths--expand "drgnx" (drgnx-paths--xdg "XDG_DATA_HOME" "~/.local/share"))
+                            data)))))
 
 (defun drgnx-elpa-dir ()
   "The packages every session uses — a fixed real path (generations are copied into it)."

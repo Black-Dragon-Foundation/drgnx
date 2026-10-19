@@ -1,0 +1,180 @@
+#compdef drgnx
+# Completion for drgnx: its commands and their options, then files and folders (drgnx PATH opens them).
+# Static lists, kept honest by a test that reads bin/drgnx (test/unit/shell-completion-test.el); only --keys looks
+# at the disk (a glob of keys/*.eld in the checkout this file belongs to, at TAB time).
+local -a commands profiles expl
+local cmd=$words[2] sub=$words[3] dir state
+
+commands=(
+  'open:open folders and files in drgnx'
+  'doctor:is this machine ready for drgnx?'
+  'build:byte-compile drgnx'
+  'test:run the tests'
+  'ui:headless GUI Emacs sessions'
+  'macos-app:install drgnx.app (macOS)'
+  'sync:install the packages drgnx needs'
+  'upgrade:newest packages'
+  'rollback:the packages of an earlier generation'
+  'generations:list the package generations'
+  'lock:the package lock'
+  'bisect:find the module that breaks'
+  'service-unit:print the systemd user unit'
+  'onboard:set drgnx up'
+  'check:build, then every test tier'
+  'fmt:format drgnx'"'"'s Emacs Lisp'
+  'work:the work tracker'
+  'hub:the hub behind agents and jobs'
+  'job:jobs from plans'
+  'search:semantic search'
+  'keys:compare key profiles'
+  'safe:Emacs with drgnx'"'"'s core only'
+  'help:usage'
+  'shell:add the drgnx line to your shell rc file'
+  'secrets:provider keys to a second machine'
+  'bootstrap:set this machine up from your configuration'
+)
+
+if (( CURRENT == 2 )); then
+  if [[ $PREFIX == -* ]]; then
+    _wanted options expl option compadd -- -h --help
+  else
+    _alternative 'commands:command:_describe -t commands command commands' 'files:file or folder:_files'
+  fi
+  return
+fi
+
+# from here words[1] is the command, so _arguments counts only what follows it
+shift words; (( CURRENT-- ))
+case $cmd in
+  open)
+    _arguments '--check[start the daemon if needed, print its Emacs version]' \
+      '--wait[return when you are done with the files]' '*:file or folder:_files' ;;
+  doctor)
+    _arguments '--json[machine-readable]' '--dev[also the tools to develop drgnx]' ;;
+  test)
+    _arguments '--one-process[every test file in one Emacs]' '--ui[GUI tests in a headless session]' '--scenario[behaviour scenarios]' \
+      '--config[configuration of the session]:configuration:(drgnx gryphn)' \
+      '--bench[the workbench vs treemacs and ibuffer]' '--perf[input latency, redisplay, frames, GC]' \
+      '--audit[what each hook function costs]' '--soak[the workloads in a loop]' \
+      '--container[inside a container]' '--install[install.sh in fresh distribution containers]' \
+      '--bootstrap[drgnx bootstrap on a fresh Fedora container]' '--fedora[Fedora release for --bootstrap]:release:(44 45)' \
+      '*:image:(fedora-44 debian-trixie ubuntu-26.04 fedora-45 archlinux)' ;;
+  sync)
+    _arguments '--offline[from the lock and the cache]' '--seed[copy another elpa first]:directory:_files -/' '--prune[remove packages the manifest no longer needs]' '--dry-run[with --prune: only list them]' ;;
+  lock)
+    _arguments '--ship[write etc/drgnx.lock.eld]' ;;
+  onboard)
+    _arguments '--non-interactive[no questions]' '--again[run the steps again]' \
+      '--preset[module preset]:preset:(minimal ide full-ai)' '--keys[key profile]:key profile:->keys' \
+      '--theme[theme]:theme:' '--roots[folders to look for projects in]:directory:_files -/' \
+      '--todos[import TODOs]' \
+      '--step[run one step]:step:(environment look-and-keys projects ai search agents daemon portability finish)' \
+      '*:directory:_files -/'
+    if [[ $state == keys ]]; then
+      dir=${functions_source[_drgnx]:h}
+      profiles=("$dir"/../../keys/*.eld(N:t:r))
+      _wanted profiles expl 'key profile' compadd -a profiles
+    fi ;;
+  check)
+    _arguments '--no-perf[skip the performance tier]' '--no-gui[skip the GUI tiers]' \
+      '--jobs[parallel jobs]:jobs:' '--shards[shards]:shards:' ;;
+  fmt)
+    _arguments '--check[only report]' '*:file:_files' ;;
+  work)
+    if (( CURRENT == 2 )); then
+      _values 'work command' 'record[link commits to a task]' 'scan[read specs, plans and the board]' 'status[every plan]'
+    else
+      shift words; (( CURRENT-- ))
+      case $sub in
+        record) _arguments '--task[task id]:task:' '*:commit:' ;;
+        scan) _arguments '--board[board file]:file:_files' '*:directory:_files -/' ;;
+        status) _arguments '--json[machine-readable]' ;;
+      esac
+    fi ;;
+  hub)
+    if (( CURRENT == 2 )); then
+      _values 'hub command' 'start[start the hub]' 'stop[stop the hub]' 'status[is it running?]'
+    else
+      shift words; (( CURRENT-- ))
+      _arguments '--json[machine-readable]'
+    fi ;;
+  job)
+    if (( CURRENT == 2 )); then
+      _values 'job command' 'propose[a job from a plan]' 'approve[run a proposed job]' 'resume[resume a paused job]' \
+        'stop[stop a job]' 'status[jobs and their state]'
+    else
+      shift words; (( CURRENT-- ))
+      case $sub in
+        propose) _arguments '--repo[repository]:directory:_files -/' '--budget[budget in USD]:budget:' \
+                   '--auto[approve at once]' '*:plan:_files' ;;
+        approve|resume) _arguments '--budget[budget in USD]:budget:' ;;
+        status) _arguments '--json[machine-readable]' ;;
+      esac
+    fi ;;
+  search)
+    if (( CURRENT == 2 )); then
+      _values 'search command' 'index[build or refresh a project index]' 'query[ask a question]' 'mcp[serve the search tool to an agent]'
+    else
+      shift words; (( CURRENT-- ))
+      case $sub in
+        index) _arguments '--rebuild[from scratch]' '*:project:_files -/' ;;
+        query) _arguments '-k[number of chunks]:number:' '*:project:_files -/' ;;
+        mcp) _arguments '*:project:_files -/' ;;
+      esac
+    fi ;;
+  keys)
+    if (( CURRENT == 2 )); then
+      _values 'keys command' 'diff[compare against gryphn]'
+    else
+      shift words; (( CURRENT-- ))
+      _arguments '--against[what to compare with]:name:' '*:directory:_files -/'
+    fi ;;
+  ui)
+    if (( CURRENT == 2 )); then
+      _values 'ui command' 'start[start a session]' 'frame[open a frame]' 'stop[stop a session]' 'ls[list sessions]' \
+        'reap[stop all sessions]' 'state[frames and windows]' 'shot[screenshot]' 'click[click]' 'keys[send keys]' \
+        'type[type text]' 'measure[actions with one jank report]' 'mcp[serve the MCP tools]' 'test-ui[the GUI test tier]' \
+        'test-ui-session[its session half]'
+    else
+      shift words; (( CURRENT-- ))
+      case $sub in
+        start) _arguments '--config[configuration]:configuration:(minimal drgnx gryphn)' '--size[WxH]:size:' \
+                 '--daemon[no frame yet]' ;;
+        click) _arguments '--buffer[buffer]:buffer:' '--text[text]:text:' '--button[button]:button:' \
+                 '--count[count]:count:' '--hold-ms[hold in ms]:ms:' ;;
+      esac
+    fi ;;
+  service-unit)
+    _arguments '*:directory:_files -/' ;;
+  shell)
+    if (( CURRENT == 2 )); then
+      _values 'shell command' 'install[add the line to your rc file, after you say yes]' 'line[print the line]'
+    else
+      shift words; (( CURRENT-- ))
+      case $sub in
+        install) _arguments '--shell[shell]:shell:(zsh bash fish)' '--yes[print the line, write nothing]' ;;
+        line) _arguments '--shell[shell]:shell:(zsh bash fish)' ;;
+      esac
+    fi ;;
+  secrets)
+    if (( CURRENT == 2 )); then
+      _values 'secrets command' 'export[keys into secrets.age]' 'import[the keys of secrets.age into the keyring]' \
+        'ls[the hosts in secrets.age]'
+    else
+      shift words; (( CURRENT-- ))
+      case $sub in
+        export) _arguments '*--recipient[age recipient]:recipient:' ;;
+        import) _arguments '--identity[age identity file]:file:_files' '--replace[overwrite a different key in the keyring]' ;;
+        ls) _arguments '--identity[age identity file]:file:_files' ;;
+      esac
+    fi ;;
+  bootstrap)
+    _arguments '(--chezmoi)--config[your configuration repository (https or a path)]:url or directory:_files -/' \
+      '(--config)--chezmoi[a chezmoi source repository instead]:url or directory:_files -/' \
+      '--identity[age identity file for secrets.age]:file:_files' \
+      '*--step[run only this step]:step:(preflight config keys sync onboard desktop shell doctor)' \
+      '--dry-run[say what each step would do, change nothing]' '--yes[confirm the age/chezmoi install and the key import]' \
+      '--replace[overwrite a different key in the keyring]' ;;
+  *)
+    _files ;;
+esac

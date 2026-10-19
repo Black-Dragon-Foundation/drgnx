@@ -14,7 +14,11 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   environment (under systemd only named variables pass, `--setenv=NAME`, so no value is in a command line) and never
   a provider key: a systemd unit keeps its environment where `systemctl --user show` prints it, and the detached
   launcher passes the starting Emacs's environment on, so `drgnx-hub-ensure` unsets every provider's `:key-env` for
-  it. Keys come over the socket instead (`gateway/keys`, below).
+  it. Keys come over the socket instead (`gateway/keys`, below). Its `PATH` is the starting Emacs's, until an Emacs
+  that read the user's login shell (`core/drgnx-shell-env.el`, at start and Shell: Reload Environment) finds `PATH`
+  changed and sends `env/set`: the hub applies it to its own `process-environment` and `exec-path`, so the agents and
+  jobs it starts next (`drgnx-jobs` passes `PATH` on to systemd-run) get it. It is never restarted for that: a
+  restart would end its durable sessions.
   Its main loop is `accept-process-output` plus the event drain batch Emacs needs (queued events hold back
   sentinels). SIGTERM or `shutdown` removes its socket. It starts with SIGPIPE ignored (`trap '' PIPE`): the
   editing Emacs that launches it does not ignore it, and a write to a connection an agent closed must be an error,
@@ -50,6 +54,7 @@ coordination server's `coord/notify` checks the same. One JSON object per line:
 | `gateway/register` `{job, task, agent, chain: [[provider, model-or-null]…], budget, keys: {provider: key}, owner, openrouter}` | `{token, url, openrouter}` (the restrictions kept; absent when none; restrictions that do not read are an error) |
 | `gateway/unregister` `{token}` | `true` |
 | `gateway/keys` `{keys: {provider: key}}` | `true`: the keys go to the gateway's memory |
+| `env/set` `{env: {NAME: value}}` | `true`: the names `drgnx-shell-env-names` allows (never a key, `drgnx-shell-env-refused-p`) go into the hub's environment (`drgnx-shell-env-apply`: `PATH` merged, the sender's dirs first) |
 | `spend` `{job?, task?, agent?}` | `{input, output, cost, requests}` |
 | `shutdown` | `true`, then the hub exits |
 

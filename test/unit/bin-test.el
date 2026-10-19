@@ -48,6 +48,7 @@ logging to PATHLOG), CONFIG (a DRGNX_CONFIG_DIR) and ENV (the environment lists 
           (pathlog (expand-file-name "path.log" dir))
           (config (expand-file-name "config" dir))
           (env (list (concat "HOME=" dir) (concat "DRGNX_CONFIG_DIR=" config)
+                     (concat "DRGNX_DATA_DIR=" dir "/data")
                      (concat "PATH=" pathdir ":/usr/bin:/bin"))))
      (ignore pathlog config env)
      (make-directory pathdir)
@@ -124,6 +125,36 @@ logging to PATHLOG), CONFIG (a DRGNX_CONFIG_DIR) and ENV (the environment lists 
         (drgnx-bin-test--call drgnx-bin-test--bin env "build")
         (should (string-empty-p (drgnx-bin-test--slurp log)))
         (should (string-search "--batch" (drgnx-bin-test--slurp pathlog)))))))
+
+(ert-deftest drgnx-bin/the-emacs-record-moves-to-the-data-dir ()
+  ;; install.sh records the Emacs in the data dir (machine-local); the old record in the config dir still counts.
+  (drgnx-bin-test--with-setup ()
+    (let* ((data (expand-file-name "data" dir))
+           (new-log (expand-file-name "new.log" dir)) (old-log (expand-file-name "old.log" dir))
+           (new (drgnx-bin-test--fake (expand-file-name "new-emacs" dir) new-log))
+           (old (drgnx-bin-test--fake (expand-file-name "old-emacs" dir) old-log)))
+      (make-directory data)
+      (let ((run (lambda () (dolist (l (list new-log old-log pathlog)) (when (file-exists-p l) (delete-file l)))
+                   (drgnx-bin-test--call drgnx-bin-test--bin env "build"))))
+        ;; only in the data dir
+        (write-region (concat new "\n") nil (expand-file-name "emacs" data))
+        (funcall run)
+        (should (string-search new (drgnx-bin-test--slurp new-log)))
+        (should (string-empty-p (drgnx-bin-test--slurp pathlog)))
+        ;; both: the data dir's
+        (write-region (concat old "\n") nil (expand-file-name "emacs" config))
+        (funcall run)
+        (should (string-search new (drgnx-bin-test--slurp new-log)))
+        (should (string-empty-p (drgnx-bin-test--slurp old-log)))
+        ;; only in the old place
+        (delete-file (expand-file-name "emacs" data))
+        (funcall run)
+        (should (string-search old (drgnx-bin-test--slurp old-log)))
+        (should (string-empty-p (drgnx-bin-test--slurp pathlog)))
+        ;; the data dir's names an Emacs that is gone: the old record still counts
+        (write-region (concat (expand-file-name "gone-emacs" dir) "\n") nil (expand-file-name "emacs" data))
+        (funcall run)
+        (should (string-search old (drgnx-bin-test--slurp old-log)))))))
 
 (ert-deftest drgnx-bin/the-launcher-probe-prefers-newer-sources ()
   ;; `doctor --dev' loads harness/drgnx-ui.el in a batch Emacs: with a stale .elc beside it Emacs would
@@ -940,3 +971,90 @@ echo \"agent ${DRGNX_AGENT-unset} job ${DRGNX_JOB-unset} task ${DRGNX_TASK-unset
           (should (eql 2 (car r)))
           (should (string-match-p "usage: drgnx coord mcp --kind KIND" (cdr r))))
         (should-not (file-exists-p log))))))
+
+;;;; drgnx test --bootstrap: the exit test of a second machine (test/bootstrap/, docs/develop/harness.md)
+
+(ert-deftest drgnx-bin/test-bootstrap-is-listed ()
+  ;; usage names the tier and its flag; the three scripts parse; a Fedora other than 44 or 45 is refused before any
+  ;; container is looked for
+  (with-temp-buffer
+    (call-process drgnx-bin-test--bin nil t nil "help")
+    (should (string-search "drgnx test --bootstrap [--fedora 44|45]" (buffer-string))))
+  (dolist (script '("in-container.sh" "make-secrets.sh" "pty-run.sh"))
+    (should (= 0 (call-process "bash" nil nil nil "-n" (expand-file-name (concat "test/bootstrap/" script)
+                                                                         drgnx-bin-test--root)))))
+  (dolist (args '(("--fedora" "40") ("--fedora") ("--nope")))
+    (with-temp-buffer
+      (should (= 2 (apply #'call-process drgnx-bin-test--bin nil t nil "test" "--bootstrap" args)))
+      (should (string-match-p "usage: drgnx test --bootstrap\\|--fedora is 44 or 45" (buffer-string))))))
+
+;; the fake runtime copies what each container would mount (the run removes its temporary directory when it succeeds)
+(defun drgnx-bin-test--bootstrap-rt (dir)
+  (drgnx-bin-test--fake-emacs
+   (expand-file-name "fake-rt" dir)
+   (format "echo \"$*\" >> %1$s/rt.log\nn=$(wc -l < %1$s/rt.log)\nfor a in \"$@\"; do case $a in *:/src*) cp -R \"${a%%%%:/src*}\" %1$s/seen$n ;; esac; done" dir)))
+
+(ert-deftest drgnx-bin/test-bootstrap-runs-two-containers-with-memory-caps ()
+  ;; With a recording runtime: a snapshot of the tree, the fixture configuration (with this tree's lock) as a bare
+  ;; repository beside it, then container 1 (3g, the keys) and container 2 (6g, the second machine, snapshot read-only).
+  ;; Everything lives in a fresh directory under TMPDIR (never under HOME), removed after a green run.
+  (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
+         (tmp (make-temp-file "drgnx-bin-tmpdir" t))
+         (home (expand-file-name "home" dir))
+         (log (expand-file-name "rt.log" dir))
+         (rt (drgnx-bin-test--bootstrap-rt dir))
+         (drgnx-bin-test--cwd dir))
+    (make-directory home)
+    (unwind-protect
+        (let ((r (drgnx-bin-test--call
+                  drgnx-bin-test--bin
+                  (list (concat "HOME=" home) (concat "TMPDIR=" tmp) (concat "XDG_STATE_HOME=" home "/state")
+                        (concat "DRGNX_CONFIG_DIR=" dir "/config") (concat "DRGNX_CONTAINER=" rt))
+                  "test" "--bootstrap" "--fedora" "44"))
+              (calls (split-string (drgnx-bin-test--slurp log) "\n" t))
+              (snap (expand-file-name "seen1" dir))
+              (repo (expand-file-name "seen1/config.git" dir)))
+          (should (eql 0 (car r)))
+          (should (= 2 (length calls)))
+          (should (string-match-p "--memory 3g --memory-swap 3g .*fedora:44 bash /src/test/bootstrap/make-secrets\\.sh\\'" (nth 0 calls)))
+          (should (string-match-p "--memory 6g --memory-swap 6g .*:ro.* .*fedora:44 bash /src/test/bootstrap/in-container\\.sh\\'" (nth 1 calls)))
+          (should-not (string-match-p ":ro" (nth 0 calls)))   ; container 1 writes secrets.age into the repository
+          (dolist (c calls) (should (string-match-p (concat "-v " (regexp-quote tmp) "/drgnx-bootstrap\\.[A-Za-z0-9]+/src:/src") c)))
+          (should-not (string-search home (car calls)))       ; nothing of the run is in the user's home
+          (should-not (file-exists-p (expand-file-name "state" home)))
+          (should (directory-empty-p tmp))                    ; and a green run leaves nothing behind
+          (should (file-exists-p (expand-file-name "drgnx.bundle" snap)))
+          (should (file-exists-p (expand-file-name "test/bootstrap/in-container.sh" snap)))
+          (with-temp-buffer
+            (call-process "git" nil t nil "--git-dir" repo "ls-tree" "-r" "--name-only" "HEAD")
+            (let ((files (split-string (buffer-string) "\n" t)))
+              (dolist (f '("keys.eld" "modules.eld" "ai.eld" "agents.eld" "projects.eld" "config.el" "session.eld" "drgnx.lock.eld"))
+                (should (member f files)))
+              (should-not (member "secrets.age" files))))
+          (should (equal (shell-command-to-string
+                          (format "git --git-dir %s show HEAD:drgnx.lock.eld | cmp - %s && echo same"
+                                  (shell-quote-argument repo)
+                                  (shell-quote-argument (expand-file-name "etc/drgnx.lock.eld" drgnx-bin-test--root))))
+                         "same\n")))
+      (delete-directory dir t)
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-bin/test-bootstrap-refuses-a-temporary-directory-under-home ()
+  ;; A test never touches ~: with TMPDIR under HOME (also through a symlink) nothing is created and no container runs.
+  (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
+         (home (expand-file-name "home" dir))
+         (rt (drgnx-bin-test--bootstrap-rt dir))
+         (drgnx-bin-test--cwd dir))
+    (make-directory (expand-file-name "scratch" home) t)
+    (make-symbolic-link home (expand-file-name "link" dir))
+    (unwind-protect
+        (dolist (tmp (list (expand-file-name "scratch" home) home (expand-file-name "link/scratch" dir)))
+          (let ((r (drgnx-bin-test--call
+                    drgnx-bin-test--bin
+                    (list (concat "HOME=" home) (concat "TMPDIR=" tmp) (concat "DRGNX_CONTAINER=" rt))
+                    "test" "--bootstrap")))
+            (should (eql 1 (car r)))
+            (should (string-match-p "refuses to run under \\$HOME" (cdr r)))
+            (should-not (file-exists-p (expand-file-name "rt.log" dir)))
+            (should (directory-empty-p (expand-file-name "scratch" home)))))
+      (delete-directory dir t))))

@@ -253,7 +253,20 @@ roles name once per start, a moment after its window shows (macOS may ask whethe
 "AI: Load Keys reads your key from the Keychain" when its provider's key is not loaded. The `drgnx` command-line
 tool, which runs in batch Emacs, never reads the Keychain or keyring: set `OPENROUTER_API_KEY` for it. In short: the
 key you gave onboarding works in the drgnx app; in a terminal (`drgnx onboard`, `drgnx search`, …) use the
-environment variable.
+environment variable. The one exception is `drgnx secrets` (below), which you run on a terminal to carry your keys
+to another machine.
+
+### Keys on a second machine
+
+`drgnx secrets export` puts the keys your keyring holds for the providers that take one (OpenRouter, Anthropic, any
+provider of yours with a `:key-env`) into `secrets.age` in your config dir, encrypted with
+[age](https://age-encryption.org) and a passphrase you choose. Copy the config dir to the other machine (or clone
+it), then run `drgnx secrets import` there and type the passphrase: each key goes into that machine's Keychain or
+keyring, where drgnx finds it as above. A key in the environment only is not exported — store it first
+(onboarding's AI step) or set the variable on the other machine too. The palette has both as **Portability: Export
+Keys** and **Portability: Import Keys** (a terminal opens, where age asks for the passphrase). The details — what the
+file holds, age keys instead of a passphrase, a machine without a keyring — are in
+[second-machine.md](second-machine.md#your-provider-keys-secretsage).
 
 ## Agents
 

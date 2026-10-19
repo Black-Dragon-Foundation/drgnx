@@ -22,6 +22,7 @@
 (require 'drgnx-paths)
 (require 'drgnx-file)
 (require 'drgnx-config)
+(require 'drgnx-portable)
 
 (drgnx-config-define 'projects
                      :file "projects.eld" :shape 'plist :version 1 :reload 'mtime :last-good t
@@ -250,12 +251,17 @@ is copied aside first."
 
 (defun drgnx-projects-file () (drgnx-config-file 'projects))
 
+(defun drgnx-projects--with-root (p f)
+  "Project plist P with its :root passed through F (P itself when it has no string root)."
+  (let ((root (plist-get p :root)))
+    (if (stringp root) (plist-put (copy-sequence p) :root (funcall f root)) p)))
+
 (defun drgnx-projects-read ()
-  "projects.eld: (:version 1 :projects ((:name :root :url)…)), each root expanded.
+  "projects.eld: (:version 1 :projects ((:name :root :url)…)), each :root absolute (the file writes \"~/…\" under
+home, so it travels: docs/guide/second-machine.md).
 A file with a mistake gives its last good copy, else no projects (`drgnx-config-get')."
   (list :version 1
-        :projects (mapcar (lambda (p)
-                            (plist-put (copy-sequence p) :root (expand-file-name (plist-get p :root))))
+        :projects (mapcar (lambda (p) (drgnx-projects--with-root p #'expand-file-name))
                           (drgnx-config-get 'projects :projects))))
 
 (defun drgnx-projects--remember (entries)
@@ -271,7 +277,8 @@ A file with a mistake gives its last good copy, else no projects (`drgnx-config-
          (let ((key (drgnx-projects--norm (plist-get e :root))))
            (unless (member key known)
              (push key known)
-             (push e new))))
+             ;; written "~/…" under home, so the file travels (compared above as true names)
+             (push (drgnx-projects--with-root e #'drgnx-portable-path) new))))
        (if new (plist-put data :projects (append old (nreverse new))) data))))
   ;; project.el's list in drgnx's state dir: the session's own list when it already uses that file
   ;; (so it learns them too), else a fresh read of that file (the command line).
