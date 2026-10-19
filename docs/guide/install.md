@@ -56,6 +56,8 @@ machine at any time.
 
 Running it again is safe: a good Emacs is kept, the checkout is fast-forwarded.
 
+Later, `drgnx update` does the same for the checkout, packages and build in one command ([Staying up to date](#staying-up-to-date)).
+
 The whole script consists of functions, called from `main` on its last line, so a truncated download
 runs nothing.
 
@@ -240,11 +242,63 @@ installs anything and never asks.
 | another Wayland compositor | `info river (Wayland): no adapter; drgnx leaves window placement to it` |
 | over SSH, or no display | `info no graphical session here: run drgnx doctor in your desktop's terminal to check its window manager` |
 
+## Staying up to date
+
+One command brings the install to the newest `main` on GitHub:
+
+```sh
+drgnx update
+```
+
+It works in the install's own checkout (the folder the `drgnx` command runs from), and:
+
+1. **Refuses, changing nothing**, when that folder is not a git checkout, is not on `main`, or has local changes to
+   tracked files (the message says what to do).
+2. **Fetches** `origin main` with a time limit and no prompts (no password, no credential helper, no ssh question).
+   If you are already at `main` it says so and stops.
+3. **Fast-forwards only.** If the checkout has local commits `main` does not have (it has *diverged*), it refuses and
+   names the fix: `git rebase origin/main`, or `git reset --hard origin/main` to discard them.
+4. Runs **`drgnx sync`** (packages, from the lock the new version ships) and **`drgnx build`**. If either fails, the
+   checkout goes back to the commit it was on, that commit's packages are synced again (from the cache first) and it is
+   rebuilt, and the message says how far that got. The same happens if the update is interrupted (Ctrl-C, a timeout,
+   logout) before it finished. Output of the steps is kept in `~/.local/state/drgnx/update/last.log`.
+5. Prints what changed (`old..new`, one line per commit, at most 15) and ends with "Restart drgnx to use it": it
+   never restarts or talks to a running drgnx. Restart it soon: a running drgnx still has the old code in memory, and
+   files it loads later come from the new version.
+
+`drgnx update --back` returns to the commit before the last update (and re-syncs and rebuilds); it refuses when you
+ changed the checkout's history since, so that commit is no longer part of it. It is named `--back`
+because `drgnx rollback` already exists for *packages*. A second `--back` goes forward again.
+
+### Updating by itself
+
+```sh
+drgnx update --auto on       # a daily timer
+drgnx update --auto status   # is it on, when did it last run
+drgnx update --auto off
+```
+
+On Linux this writes a systemd user timer and service (`drgnx-update.timer` / `.service` in
+`~/.config/systemd/user`): daily, with a random delay of up to an hour, `Persistent=true` (a day missed while the
+computer was off runs when it is back). On macOS it writes a launchd agent
+(`~/Library/LaunchAgents/org.blackdragonfoundation.drgnx-update.plist`) that runs once a day at a time picked when you
+turn it on. Both run `drgnx update --quiet`: no output when already current, one line on an update or a failure,
+never a prompt; the timer runs only while you are logged in; the line is in the journal (`journalctl --user -u drgnx-update`) or, on macOS, in
+`~/.local/state/drgnx/update/launchd.log`. `--auto status` also shows the last run: it is kept in
+`~/.local/state/drgnx/update/last-run` (`$XDG_STATE_HOME/drgnx/update/`; the timer uses the `XDG_STATE_HOME`,
+`DRGNX_CONFIG_DIR` and `DRGNX_EMACS` you had when you turned it on).
+
+The timer does not undo your choices: after `drgnx update --back`, or after an update that failed and was moved back,
+the timer skips that same commit and waits for a newer one; running `drgnx update` yourself takes it. A checkout with
+local changes, on another branch or diverged fails the timer's run with the same message, until you fix it.
+
 ## Uninstall
 
 ```sh
 rm -rf ~/.local/share/drgnx ~/.local/bin/drgnx "${XDG_CACHE_HOME:-$HOME/.cache}/drgnx" "${XDG_STATE_HOME:-$HOME/.local/state}/drgnx"
 ```
+
+If you turned on automatic updates, run `drgnx update --auto off` first (it removes the timer or launchd agent).
 
 Your settings (`~/.config/drgnx`) stay unless you remove them too.
 
