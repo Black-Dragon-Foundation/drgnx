@@ -840,26 +840,37 @@ or everything; work left re-arms `(drgnx-view-more . BUFFER)' at 0; when no view
 ;;;; Keeping places in any buffer
 
 (defun drgnx-view--key-place (pos key-at)
-  "POS as (KEY OFFSET LINE): KEY = (KEY-AT POS), OFFSET from the start of KEY's row (the first of the lines above
-POS whose key is KEY), LINE POS's line number."
+  "POS as (KEY OFFSET LINE ROW-LINE): KEY = (KEY-AT POS), OFFSET from the start of KEY's row (the first of the lines
+above POS whose key is KEY), LINE POS's line number, ROW-LINE POS's line within the row (0 = its first)."
   (save-excursion
     (goto-char pos)
-    (let ((key (funcall key-at pos)) (line (line-number-at-pos pos t)))
+    (let ((key (funcall key-at pos)) (line (line-number-at-pos pos t)) (row-line 0))
       (forward-line 0)
       (when key
-        (while (and (not (bobp)) (equal (funcall key-at (line-beginning-position 0)) key)) (forward-line -1)))
-      (list key (- pos (point)) line))))
+        (while (and (not (bobp)) (equal (funcall key-at (line-beginning-position 0)) key))
+          (forward-line -1)
+          (setq row-line (1+ row-line))))
+      (list key (- pos (point)) line row-line))))
 
 (defun drgnx-view--key-place-pos (place pos-of)
-  "Where PLACE (`drgnx-view--key-place') is now: (POS-OF KEY) + OFFSET, or the start of its LINE (clamped)."
+  "Where PLACE (`drgnx-view--key-place') is now: (POS-OF KEY) + OFFSET, but no further than the end of the row's
+ROW-LINE (a row drawn shorter keeps the place on it); or, when KEY's row is gone, the start of its LINE, clamped to
+the last line when the rows now end above it."
   (let ((start (and (car place) (funcall pos-of (car place)))))
-    (if start
-        (max (point-min) (min (+ start (nth 1 place)) (point-max)))
-      (save-excursion (goto-char (point-min)) (forward-line (1- (nth 2 place))) (point)))))
+    (save-excursion
+      (if start
+          (progn (goto-char start)
+                 (forward-line (or (nth 3 place) 0))
+                 (max (point-min) (min (+ start (nth 1 place)) (line-end-position))))
+        (goto-char (point-min))
+        (forward-line (1- (nth 2 place)))
+        (when (and (car place) (eobp) (bolp) (not (bobp))) (forward-line -1)) ; past the rows: the last one
+        (point)))))
 
 (defun drgnx-view-save-places (key-at)
   "The current buffer's point and, for each window showing it (all frames), its start and point, each as
-\(KEY OFFSET LINE) with KEY = (KEY-AT POS) and OFFSET the distance from KEY's row start.  The value is
+\(KEY OFFSET LINE ROW-LINE) with KEY = (KEY-AT POS), OFFSET the distance from KEY's row start, LINE the line
+number and ROW-LINE the line within the row.  The value is
 \(POINT-PLACE (WINDOW START-PLACE POINT-PLACE)...), for `drgnx-view-restore-places'."
   (cons (drgnx-view--key-place (point) key-at)
         (mapcar (lambda (w) (list w (drgnx-view--key-place (window-start w) key-at)
@@ -868,7 +879,8 @@ POS whose key is KEY), LINE POS's line number."
 
 (defun drgnx-view-restore-places (places pos-of)
   "Put the point and windows of PLACES (`drgnx-view-save-places') back: each at (+ (POS-OF KEY) OFFSET), POS-OF
-giving a row's start, or at its LINE (clamped) when POS-OF returns nil.  Dead windows, and windows that show
+giving a row's start, but no further than the end of the row's ROW-LINE; or at its LINE (clamped to the last
+line) when POS-OF returns nil.  Dead windows, and windows that show
 another buffer now, are skipped.  The windows move as the caller's own (`drgnx-wb-with-owned-windows')."
   (goto-char (drgnx-view--key-place-pos (car places) pos-of))
   (drgnx-wb-with-owned-windows (mapcar #'car (cdr places))

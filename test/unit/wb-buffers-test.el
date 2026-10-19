@@ -89,6 +89,32 @@
         (should (eq (drgnx-buffers-buffer-at (window-start w)) (nth 15 bufs)))
         (should (eq (drgnx-buffers-buffer-at (window-point w)) (nth 20 bufs)))))))
 
+(ert-deftest drgnx-buffers/a-render-keeps-each-window-on-its-buffer ()
+  ;; Two windows on the panel and its own point: rows closing above them keep each start and point on its buffer, at
+  ;; the same place in the row; a window whose first row closed falls to the row now in its place, not to the top.
+  (drgnx-buffers-test--with dir
+    (let* ((bufs (mapcar (lambda (i) (drgnx-buffers-test--open dir (format "f%02d.txt" i))) (number-sequence 0 39)))
+           (w1 (drgnx-wb-section-window 'buffers)) (w2 (split-window (drgnx-wb-editor-window)))
+           (pos (lambda (i) (drgnx-buffers--row-pos (nth i bufs)))))
+      (select-window (drgnx-wb-editor-window))
+      (set-window-buffer w2 drgnx-buffers-buffer-name)
+      (with-current-buffer drgnx-buffers-buffer-name
+        (set-window-start w1 (funcall pos 15))
+        (set-window-point w1 (+ (funcall pos 20) 4))
+        (set-window-start w2 (funcall pos 5))
+        (set-window-point w2 (+ (funcall pos 8) 2))
+        (goto-char (1+ (funcall pos 30))))
+      (kill-buffer (nth 12 bufs))                       ; between the two windows' rows
+      (kill-buffer (nth 5 bufs))                        ; the second window's first row
+      (drgnx-signal--flush)
+      (with-current-buffer drgnx-buffers-buffer-name
+        (should-not (drgnx-buffers--row-pos (nth 5 bufs)))
+        (should (= (window-start w1) (funcall pos 15)))
+        (should (= (window-point w1) (+ (funcall pos 20) 4)))
+        (should (= (window-start w2) (funcall pos 6)))
+        (should (= (window-point w2) (+ (funcall pos 8) 2)))
+        (should (= (point) (1+ (funcall pos 30))))))))
+
 (ert-deftest drgnx-buffers/close-kills-exactly-the-rows-buffer ()
   (drgnx-buffers-test--with dir
     (let ((a (drgnx-buffers-test--open dir "a.txt")) (b (drgnx-buffers-test--open dir "b.txt"))

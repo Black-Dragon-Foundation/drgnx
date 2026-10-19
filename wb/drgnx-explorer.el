@@ -23,6 +23,7 @@
 (require 'filenotify)
 (require 'drgnx-wb)
 (require 'drgnx-memo)
+(require 'drgnx-view)                   ; `drgnx-view-with-kept-windows'
 (require 'drgnx-git)
 
 (defgroup drgnx-explorer nil "The drgnx Explorer." :group 'drgnx)
@@ -277,15 +278,16 @@ faces come later, from jit-lock, for the rows on screen."
   "Render every root from scratch, keeping the row at point by its path."
   (with-current-buffer (get-buffer-create drgnx-explorer-buffer-name)
     (cl-incf drgnx-explorer--renders)
-    (let* ((inhibit-read-only t) (views (drgnx-explorer--save-views)) data)
-      (erase-buffer)
-      (dolist (root drgnx-explorer--roots)
-        (let ((path (directory-file-name (expand-file-name root))))
-          (insert (drgnx-explorer--prefix 0 'open) (drgnx-wb-display-name (upcase (file-name-nondirectory path))) "\n")
-          (push (list (vector path 0 t nil)) data)
-          (push (drgnx-explorer--insert-subtree path 1) data)))
-      (setq drgnx-explorer--rows (apply #'vconcat (nreverse data)))
-      (drgnx-explorer--restore-views views)
+    (let ((inhibit-read-only t) data)
+      (drgnx-view-with-kept-windows (:key-at #'drgnx-explorer-node-at :pos-of #'drgnx-explorer--row-pos)
+        (erase-buffer)
+        (dolist (root drgnx-explorer--roots)
+          (let ((path (directory-file-name (expand-file-name root))))
+            (insert (drgnx-explorer--prefix 0 'open) (drgnx-wb-display-name (upcase (file-name-nondirectory path))) "\n")
+            (push (list (vector path 0 t nil)) data)
+            (push (drgnx-explorer--insert-subtree path 1) data)))
+        (setq drgnx-explorer--rows (apply #'vconcat (nreverse data))))
+      (when hl-line-mode (hl-line-highlight))
       (drgnx-explorer--sync-watches)
       (drgnx-explorer--git-refresh))))
 
@@ -304,28 +306,6 @@ faces come later, from jit-lock, for the rows on screen."
   "A git status arrived: repaint the visible rows."
   (when-let* ((buf (get-buffer drgnx-explorer-buffer-name)))
     (with-current-buffer buf (jit-lock-refontify))))
-
-(defun drgnx-explorer--save-views ()
-  "The row (path) at point, and each window's first row and selected row."
-  (cons (cons (drgnx-explorer-node-at (point)) (drgnx-explorer--index (point)))
-        (mapcar (lambda (w) (list w (cons (drgnx-explorer-node-at (window-start w)) (drgnx-explorer--index (window-start w)))
-                                  (cons (drgnx-explorer-node-at (window-point w)) (drgnx-explorer--index (window-point w)))))
-                (get-buffer-window-list (current-buffer) nil t))))
-
-(defun drgnx-explorer--place (spot)
-  "Where SPOT (PATH . LINE) is now: PATH's row, else the same line (a deleted row's neighbour)."
-  (or (and (car spot) (drgnx-explorer--row-pos (car spot)))
-      (drgnx-explorer--line-pos (max 0 (min (cdr spot) (1- (length drgnx-explorer--rows)))))))
-
-(defun drgnx-explorer--restore-views (views)
-  "Put point and every window back on the rows (paths) VIEWS recorded."
-  (goto-char (drgnx-explorer--place (car views)))
-  (pcase-dolist (`(,w ,top ,pt) (cdr views))
-    (when (window-live-p w)
-      (drgnx-wb-with-owned-windows (list w)               ; the Explorer's own windows
-        (set-window-start w (drgnx-explorer--place top) t)
-        (set-window-point w (drgnx-explorer--place pt)))))
-  (when hl-line-mode (hl-line-highlight)))
 
 ;;;; Live updates
 
@@ -424,14 +404,15 @@ watched — the inotify limit — is tried again)."
 (defun drgnx-explorer--reinsert-entry (i)
   "Show the entry of row I (and the rows below it) again from its folder's listing: a joined row may
 split, a plain one may join.  The folder's own row and everything else stay."
-  (let* ((inhibit-read-only t) (views (drgnx-explorer--save-views))
+  (let* ((inhibit-read-only t)
          (v (aref drgnx-explorer--rows i)) (rows drgnx-explorer--rows)
          (j (drgnx-explorer--subtree-last i)) (bol (drgnx-explorer--line-pos i))
          (head (car (split-string (aref v 0) "/"))) (inhibit-quit t))
-    (delete-region bol (save-excursion (goto-char bol) (forward-line (- j i)) (point)))
-    (let ((new (save-excursion (goto-char bol) (drgnx-explorer--insert-subtree (aref v 3) (aref v 1) head))))
-      (setq drgnx-explorer--rows (vconcat (seq-subseq rows 0 i) new (seq-subseq rows j))))
-    (drgnx-explorer--restore-views views)
+    (drgnx-view-with-kept-windows (:key-at #'drgnx-explorer-node-at :pos-of #'drgnx-explorer--row-pos)
+      (delete-region bol (save-excursion (goto-char bol) (forward-line (- j i)) (point)))
+      (let ((new (save-excursion (goto-char bol) (drgnx-explorer--insert-subtree (aref v 3) (aref v 1) head))))
+        (setq drgnx-explorer--rows (vconcat (seq-subseq rows 0 i) new (seq-subseq rows j)))))
+    (when hl-line-mode (hl-line-highlight))
     (drgnx-explorer--sync-watches)))
 
 (defun drgnx-explorer--refresh-dir (dir)
@@ -453,13 +434,14 @@ shows its whole entry again."
                (drgnx-explorer--only-folder (drgnx-explorer-children dir)))
           (drgnx-explorer--reinsert-entry i)                         ; it joins its folder now
         (let* ((pos (drgnx-explorer--line-pos i))
-               (inhibit-read-only t) (views (drgnx-explorer--save-views))
+               (inhibit-read-only t)
                (j (drgnx-explorer--subtree-last i)) (rows drgnx-explorer--rows)
                (next (save-excursion (goto-char pos) (forward-line 1) (point))))
-          (delete-region next (save-excursion (goto-char next) (forward-line (- j i 1)) (point)))
-          (let ((new (save-excursion (goto-char next) (drgnx-explorer--insert-subtree dir (1+ (aref v 1))))))
-            (setq drgnx-explorer--rows (vconcat (seq-subseq rows 0 (1+ i)) new (seq-subseq rows j))))
-          (drgnx-explorer--restore-views views)
+          (drgnx-view-with-kept-windows (:key-at #'drgnx-explorer-node-at :pos-of #'drgnx-explorer--row-pos)
+            (delete-region next (save-excursion (goto-char next) (forward-line (- j i 1)) (point)))
+            (let ((new (save-excursion (goto-char next) (drgnx-explorer--insert-subtree dir (1+ (aref v 1))))))
+              (setq drgnx-explorer--rows (vconcat (seq-subseq rows 0 (1+ i)) new (seq-subseq rows j)))))
+          (when hl-line-mode (hl-line-highlight))
           (drgnx-explorer--sync-watches)))))))
 
 (defun drgnx-explorer--row-pos (path)
@@ -703,7 +685,7 @@ excluded names left out.  A root that is your home or / and not a project is ref
     (unless drgnx-explorer--find
       (setq drgnx-explorer--find (list :files (drgnx-explorer--all-files)
                                        :expanded (copy-hash-table drgnx-explorer--expanded)
-                                       :views (drgnx-explorer--save-views))))
+                                       :views (drgnx-view-save-places #'drgnx-explorer-node-at))))
     (setq drgnx-explorer--find (plist-put drgnx-explorer--find :query query))
     (let ((tree (make-hash-table :test #'equal)) (q (downcase query)))
       (dolist (file (seq-take (seq-filter (lambda (file) (string-search q (downcase (file-name-nondirectory file))))
@@ -750,7 +732,8 @@ excluded names left out.  A root that is your home or / and not a project is ref
     (with-current-buffer (drgnx-explorer--buffer)
       (let ((drgnx-explorer--remote-reads t))              ; a command of the user
         (drgnx-explorer--render))
-      (drgnx-explorer--restore-views (plist-get state :views)))
+      (drgnx-view-restore-places (plist-get state :views) #'drgnx-explorer--row-pos)
+      (when hl-line-mode (hl-line-highlight)))
     (drgnx-explorer--plain-title)
     (when drgnx-explorer--dirty (drgnx-explorer--apply-file-events))))
 
