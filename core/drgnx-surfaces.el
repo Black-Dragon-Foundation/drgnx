@@ -67,17 +67,31 @@ state)\" in a modal state's map (`drgnx-modal-where'), else suffixed with that k
           (modal (format "%s (%s)" key modal))
           (t (format "%s (in %s)" key (string-remove-suffix "-mode-map" (string-remove-suffix "-map" (symbol-name mapsym))))))))
 
+(cl-defun drgnx-surfaces-key-label (cmd-or-id &key context any short)
+  "The one key formatter: CMD-OR-ID's (a registry struct or id) first active key as a display string, or nil.
+A key in a mode's keymap is suffixed with that keymap (\"C-c b (in org)\"), a leader key (SPC f f) is plain, a key in
+a modal state's map carries the state (\"g d (normal state)\").  CONTEXT nil: the key as the selected frame's terminal
+can send it (`drgnx-surfaces--here', applied once); `menu': the form that is right in every buffer (F6 then the key,
+never an Alt+Shift key a mode may rebind), for text a menu keeps while the buffer changes (`drgnx-surfaces--always');
+`plain': the key as written, the same on every frame (the markdown export).  ANY: when the profile binds nothing,
+whatever key runs the command now (`where-is-internal').  SHORT: without the \" (in MAP)\" suffix."
+  (when-let* ((cmd (if (drgnx-cmd-p cmd-or-id) cmd-or-id (drgnx-commands-get cmd-or-id))))
+    (let* ((bound (car (drgnx-cmd-bound cmd)))
+           (key (or (car bound)
+                    (and any
+                         (let ((c (drgnx-cmd-command cmd)))
+                           (when-let* ((k (and (symbolp c) (where-is-internal c nil t)))) (key-description k))))))
+           (shown (and key (pcase context
+                             ('nil (drgnx-surfaces--here key))
+                             ('menu (drgnx-surfaces--always key))
+                             (_ key))))
+           (text (and shown (if bound (drgnx-surfaces--key-text shown (cdr bound)) shown))))
+      (if (and text short) (car (split-string text " (in " t)) text))))
+
 (defun drgnx-surfaces-key (cmd &optional plain)
-  "Display string for CMD's first active key, a key in a mode's keymap suffixed with that
-keymap; a leader key (SPC f f) plain, a key in a modal state's map with the state (g d (normal state)); \"\" if none.
-The key is shown as the selected frame's terminal can send it, unless PLAIN is t \(the markdown export: the same on
-every frame).  PLAIN `menu': the form that is right in every buffer (F6 then the key, never an Alt+Shift key a mode
-may rebind), for text a menu keeps while the buffer changes."
-  (pcase (car (drgnx-cmd-bound cmd))
-    ('nil "")
-    (`(,key . ,map)
-     (drgnx-surfaces--key-text (pcase plain ('nil (drgnx-surfaces--here key)) ('menu (drgnx-surfaces--always key)) (_ key))
-                               map))))
+  "Display string for CMD's first active key (`drgnx-surfaces-key-label'), \"\" if none.
+PLAIN is the label's CONTEXT: nil, t (the markdown export: the same on every frame) or `menu'."
+  (or (drgnx-surfaces-key-label cmd :context plain) ""))
 
 (defun drgnx-surfaces--sheet-key (cmd &optional plain)
   "The sheet's key column for CMD: its first key, then its other keys that work in a modal state or in panels
@@ -91,17 +105,16 @@ may rebind), for text a menu keeps while the buffer changes."
                   collect (drgnx-surfaces--key-text (if plain key (drgnx-surfaces--here key)) map)))
    ", "))
 
-(defun drgnx-surfaces--any-key (cmd)
-  "CMD's active key, else whatever key currently runs its command; as the selected frame's terminal sends it."
-  (when-let* ((key (or (car (car (drgnx-cmd-bound cmd)))
-                       (let ((c (drgnx-cmd-command cmd)))
-                         (when-let* ((k (and (symbolp c) (where-is-internal c nil t)))) (key-description k))))))
-    (drgnx-surfaces--here key)))
+(defconst drgnx-surfaces-starter-commands
+  '((go-quick-open "Open a file of the project by name")
+    (palette "Run any command by name")
+    (keys-sheet "See every key of this profile"))
+  "The three keys the start page and the top line show: registry command ID and what it does.")
 
 (defun drgnx-surfaces-tip (cmd)
   "Echo how CMD could have been run with a key, keeping any message the command printed.
 Returns the tip, or nil when CMD has no key."
-  (when-let* ((key (drgnx-surfaces--any-key cmd)))
+  (when-let* ((key (drgnx-surfaces-key-label cmd :any t :short t)))
     (let ((prev (current-message))
           (tip (format "%s — next time: %s" (drgnx-commands-label cmd) key)))
       (message "%s" (if (and prev (not (string-empty-p prev))) (concat prev "   ·   " tip) tip))

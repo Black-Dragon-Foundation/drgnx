@@ -386,3 +386,19 @@ absolute local name expanded against a remote folder) passes; everything else, \
 
 (provide 'mod-start-test)
 ;;; mod-start-test.el ends here
+
+(ert-deftest drgnx-start/keys-come-from-the-label ()
+  ;; the page's three keys are `drgnx-surfaces-key-label' of the starter list: any key, without the keymap
+  (drgnx-start-test--with 'vscode
+    (let (asked)
+      (cl-letf (((symbol-function 'drgnx-surfaces-key-label)
+                 (lambda (id &rest args) (push (cons id args) asked) (format "K-%s" id))))
+        (drgnx-start-maybe-show))
+      (should (equal (reverse asked)
+                     (mapcar (lambda (row) (list (car row) :any t :short t)) drgnx-surfaces-starter-commands)))
+      (let ((text (drgnx-start-test--text)))
+        (dolist (row drgnx-surfaces-starter-commands)
+          (should (string-search (format "K-%s" (car row)) text))
+          (should (string-search (cadr row) text)))))
+    (should-not (fboundp 'drgnx-start--key))
+    (should-not (boundp 'drgnx-start--keys))))

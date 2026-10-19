@@ -129,15 +129,13 @@ theme's header face, and return where the lines start (`point-min' when the list
           (overlay-put tabulated-list--header-overlay 'face 'drgnx-agents-ui-header))
         (overlay-end tabulated-list--header-overlay)))))
 
-(declare-function drgnx-commands-get "drgnx-registry")
-(declare-function drgnx-surfaces-key "drgnx-surfaces")
+(declare-function drgnx-surfaces-key-label "drgnx-surfaces")
 
 (defun drgnx-agents-ui--new-key ()
-  "The key that runs New Agent Session… in the active key profile, or nil (it is then in the palette only)."
-  (when-let* ((cmd (and (fboundp 'drgnx-surfaces-key) (drgnx-commands-get 'agents-new)))
-              (s (ignore-errors (drgnx-surfaces-key cmd)))
-              ((not (string-empty-p s))))
-    (substring s 0 (string-search " (in " s))))
+  "The key that runs New Agent Session… in the active key profile (`drgnx-surfaces-key-label', without the keymap),
+or nil (it is then in the palette only)."
+  (and (fboundp 'drgnx-surfaces-key-label)
+       (ignore-errors (drgnx-surfaces-key-label 'agents-new :short t))))
 
 (defun drgnx-agents-ui--claude-needs ()
   "What the claude profile still needs when it is the default one and its adapter is missing or too old, as a

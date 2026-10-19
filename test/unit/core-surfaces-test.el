@@ -286,3 +286,73 @@
    (drgnx-module-teardown 'test/a)
    (drgnx-module-teardown 'test/b)
    (should (eq (funcall (alist-get 'extra drgnx-surfaces-contexts) nil) 'user))))
+
+;;;; One key label (notices plan Task 3)
+
+(ert-deftest drgnx-surfaces/key-label-contexts ()
+  ;; nil is the frame's form, `menu' the form that is right in every buffer, `plain' the key as written
+  (drgnx-test--with-commands
+   (cl-letf (((symbol-function 'drgnx-surfaces--here) (lambda (key) (concat "here:" key)))
+             ((symbol-function 'drgnx-surfaces--always) (lambda (key) (concat "always:" key))))
+     (let ((cmd (drgnx-commands-get 'b-cmd)))
+       (should (equal (drgnx-surfaces-key-label cmd) "here:C-c b (in drgnx-test-surf)"))
+       (should (equal (drgnx-surfaces-key-label cmd :context 'menu) "always:C-c b (in drgnx-test-surf)"))
+       (should (equal (drgnx-surfaces-key-label cmd :context 'plain) "C-c b (in drgnx-test-surf)"))
+       (should (equal (drgnx-surfaces-key-label 'b-cmd :context 'plain) "C-c b (in drgnx-test-surf)"))))))
+
+(ert-deftest drgnx-surfaces/key-label-rewrites-once ()
+  ;; a terminal's key is rewritten once per label, whichever way the label is asked for
+  (drgnx-test--with-commands
+   (drgnx-command-define 'stock :title "Stock" :category "Able" :command #'save-buffer)
+   (let ((calls 0))
+     (cl-letf (((symbol-function 'drgnx-tty-sendable-key) (lambda (_frame key) (setq calls (1+ calls)) key)))
+       (dolist (args '((b-cmd) (a-cmd :any t) (stock :any t) (stock :any t :short t) (b-cmd :short t :any t)))
+         (setq calls 0)
+         (should (apply #'drgnx-surfaces-key-label args))
+         (should (= calls 1)))
+       (setq calls 0)
+       (drgnx-surfaces-key-label 'b-cmd :context 'plain)
+       (should (= calls 0))))))
+
+(ert-deftest drgnx-surfaces/key-label-any-falls-back ()
+  (drgnx-test--with-commands
+   (drgnx-command-define 'stock :title "Stock" :category "Able" :command #'save-buffer)
+   (should-not (drgnx-surfaces-key-label 'stock))
+   (should (equal (drgnx-surfaces-key-label 'stock :any t) (key-description (where-is-internal 'save-buffer nil t))))
+   ;; a profile's key wins over the stock one
+   (should (equal (drgnx-surfaces-key-label 'a-cmd :any t) "<f19>"))))
+
+(ert-deftest drgnx-surfaces/key-label-short-drops-the-map ()
+  (drgnx-test--with-commands
+   (should (equal (drgnx-surfaces-key-label 'b-cmd) "C-c b (in drgnx-test-surf)"))
+   (should (equal (drgnx-surfaces-key-label 'b-cmd :short t) "C-c b"))
+   (should (equal (drgnx-surfaces-key-label 'a-cmd :short t) "<f19>"))))
+
+(ert-deftest drgnx-surfaces/key-label-nil-without-a-key ()
+  (drgnx-test--with-commands
+   (drgnx-command-define 'free :title "Free" :category "Able" :command #'drgnx-test--surf-cmd)
+   (should-not (drgnx-surfaces-key-label 'free))
+   (should-not (drgnx-surfaces-key-label 'free :any t))
+   (should-not (drgnx-surfaces-key-label 'no-such-command :any t))))
+
+(ert-deftest drgnx-surfaces/key-is-a-wrapper ()
+  ;; `drgnx-surfaces-key' is the label with "" for none, its PLAIN argument the label's context
+  (drgnx-test--with-commands
+   (drgnx-command-define 'free :title "Free" :category "Able" :command #'drgnx-test--surf-cmd)
+   (cl-letf (((symbol-function 'drgnx-surfaces--here) (lambda (key) (concat "here:" key)))
+             ((symbol-function 'drgnx-surfaces--always) (lambda (key) (concat "always:" key))))
+     (dolist (context '(nil menu plain))
+       (dolist (id '(b-cmd a-cmd free))
+         (let ((cmd (drgnx-commands-get id)))
+           (should (equal (drgnx-surfaces-key cmd context)
+                          (or (drgnx-surfaces-key-label cmd :context context) ""))))))
+     (should-not (fboundp 'drgnx-surfaces--any-key)))))
+
+(ert-deftest drgnx-surfaces/starter-commands-are-one-list ()
+  (should (equal (mapcar #'car drgnx-surfaces-starter-commands) '(go-quick-open palette keys-sheet)))
+  (dolist (row drgnx-surfaces-starter-commands) (should (stringp (cadr row))))
+  ;; the tip uses the same label: any key, without the keymap
+  (drgnx-test--with-commands
+   (should (string-search "next time: <f19>" (drgnx-surfaces-tip (drgnx-commands-get 'a-cmd))))
+   (should (string-search "next time: C-c b" (drgnx-surfaces-tip (drgnx-commands-get 'b-cmd))))
+   (should-not (string-search "(in " (drgnx-surfaces-tip (drgnx-commands-get 'b-cmd))))))

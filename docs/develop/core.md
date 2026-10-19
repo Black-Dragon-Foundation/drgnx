@@ -433,6 +433,17 @@ the **key sheet** ("Keyboard Shortcuts", `*drgnx keys*`), a markdown cheat sheet
 KEY" tips after a command run from a menu or the palette, and the **command palette** (`C-S-p` in every profile): every available
 command as "Category: Title" with its key and description beside it, through the normal completion UI.
 
+**One key label.** `(drgnx-surfaces-key-label CMD-OR-ID &key context any short)` is the only function that turns a
+command's key into text: the key sheet, the menus, the palette, the tips, the start page, the top line and the
+Agents list's New Agent Session hint all call it.
+CONTEXT nil gives the key as the selected frame's terminal can send it (`drgnx-surfaces--here`, applied once, so a
+chord is never rewritten twice), `menu` the form that is right in every buffer (`drgnx-surfaces--always`), `plain` the key
+as written (the markdown export). ANY falls back to `where-is-internal` when the profile binds nothing; SHORT drops the
+" (in MAP)" suffix. It returns nil without a key; `drgnx-surfaces-key` is the wrapper that returns "" (PLAIN is the
+context). `drgnx-surfaces-starter-commands` is the one list of the three keys everyone shows (Quick Open, the
+palette, the key sheet) with what each does: the start page uses it as it is, the top line takes its ids and keeps
+its own short labels.
+
 **Run hook and usage counter.** `drgnx-surfaces-run` (what the palette and the menus call) runs
 `drgnx-surfaces-run-functions` with the command id after the command ran; an error in a member is swallowed. The
 first member counts the run: in memory only, so a run costs nothing noticeable. The counts are written at idle, at
