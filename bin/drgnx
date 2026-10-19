@@ -537,6 +537,309 @@ cmd_open() { # [--check] [--wait] [-t | --gui] [PATH…] — open PATHs (none: t
   done
 }
 
+# ---- drgnx update: the install updates itself from GitHub main (docs/guide/install.md#staying-up-to-date) ----
+# Plain bash on purpose: it must work when the Emacs side is what an update broke.  Test hooks: DRGNX_UPDATE_SYNC_CMD and
+# DRGNX_UPDATE_BUILD_CMD (run with bash -c in the checkout instead of `drgnx sync' / `drgnx build'), DRGNX_UPDATE_PLATFORM
+# (Linux | Darwin, instead of uname -s).
+UPD_UNIT=drgnx-update
+UPD_LABEL=org.blackdragonfoundation.drgnx-update
+
+update_state_dir() { printf '%s/drgnx/update' "$(xdg_dir XDG_STATE_HOME "$HOME/.local/state")"; }
+update_platform() { printf '%s' "${DRGNX_UPDATE_PLATFORM:-$(uname -s)}"; }
+update_say() { if [[ "${UPD_QUIET:-0}" != 1 ]]; then printf '%s\n' "$*"; fi; }
+update_err() { printf 'drgnx update: %s\n' "$*" >&2; }
+ugit() { git -C "$here" "$@"; }
+
+update_write_atomic() { # FILE TEXT — a temp file in the same directory, then rename: a reader never sees half a line
+  local t; t="$(mktemp "$1.XXXXXX")"
+  printf '%s\n' "$2" >"$t"
+  mv -f "$t" "$1"
+}
+
+update_record_run() { # TEXT — the line `drgnx update --auto status' shows as the last run
+  local mode=manual
+  if [[ "${UPD_QUIET:-0}" == 1 ]]; then mode=auto; fi
+  mkdir -p "$(update_state_dir)"
+  update_write_atomic "$(update_state_dir)/last-run" "$(date '+%Y-%m-%d %H:%M:%S%z') $mode: $1"
+}
+
+update_lock() { # one update at a time (the timer and a person): a mkdir lock holding the owner's pid
+  local lock owner=""
+  lock="$(update_state_dir)/lock"
+  mkdir -p "$(update_state_dir)"
+  if ! mkdir "$lock" 2>/dev/null; then
+    owner="$(cat "$lock/pid" 2>/dev/null || true)"
+    if [[ -n "$owner" ]] && kill -0 "$owner" 2>/dev/null; then update_err "another update is running (pid $owner)"; return 1; fi
+    rm -rf "${lock:?}"; mkdir "$lock" 2>/dev/null || { update_err "cannot take the update lock ($lock)"; return 1; }
+  fi
+  printf '%s\n' "$$" >"$lock/pid"
+  UPD_LOCK="$lock"
+  trap update_unlock EXIT
+}
+
+update_unlock() { if [[ -n "${UPD_LOCK:-}" ]]; then rm -rf "${UPD_LOCK:?}"; fi; }
+
+update_is_checkout() { # is $here the top of a git checkout?
+  local top
+  top="$(ugit rev-parse --show-toplevel 2>/dev/null)" || return 1
+  [[ "$(cd "$top" && pwd -P)" == "$(cd "$here" && pwd -P)" ]]
+}
+
+update_check_checkout() { # refuse (return 1, message on stderr, UPD_WHY set) unless an update may touch the checkout
+  local branch
+  if ! update_is_checkout; then
+    UPD_WHY="not a git checkout"
+    update_err "$here is not a git checkout, so it cannot update itself. Reinstall with install.sh (docs/guide/install.md). Nothing changed."
+    return 1
+  fi
+  branch="$(ugit symbolic-ref --short -q HEAD 2>/dev/null || true)"
+  if [[ "$branch" != main ]]; then
+    UPD_WHY="not on main"
+    update_err "the checkout is on '${branch:-a detached HEAD}', not main. Fix: git -C $here switch main. Nothing changed."
+    return 1
+  fi
+  if [[ -n "$(ugit status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
+    UPD_WHY="local changes"
+    update_err "the checkout has local changes (git -C $here status). Commit, stash or discard them first. Nothing changed."
+    return 1
+  fi
+}
+
+update_fetch() { # origin's main, bounded in time and never asking anything (no terminal, no credential helper, no ssh prompt)
+  local t=()
+  if command -v timeout >/dev/null 2>&1; then t=(timeout 120); elif command -v gtimeout >/dev/null 2>&1; then t=(gtimeout 120); fi
+  GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=true SSH_ASKPASS=true GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes}" \
+    ${t[@]+"${t[@]}"} git -C "$here" -c credential.helper= -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 \
+    fetch --quiet origin main </dev/null
+}
+
+update_step() { # NAME HOOK — `drgnx NAME' (or the test hook HOOK) in the checkout; quiet: its output goes to the log
+  local name="$1" hook="$2" log
+  log="$(update_state_dir)/last.log"
+  update_say "drgnx update: $name…"
+  if [[ "${UPD_QUIET:-0}" == 1 ]]; then
+    if [[ -n "$hook" ]]; then (cd "$here" && bash -c "$hook") >"$log" 2>&1; else (cd "$here" && "$here/bin/drgnx" "$name") >"$log" 2>&1; fi
+  else
+    if [[ -n "$hook" ]]; then (cd "$here" && bash -c "$hook"); else (cd "$here" && "$here/bin/drgnx" "$name"); fi
+  fi
+}
+
+update_apply() { # sync + build for the checkout as it is now; 0 when both worked, else 1 with UPD_WHY naming the step
+  update_step sync "${DRGNX_UPDATE_SYNC_CMD:-}" || { UPD_WHY="sync failed"; return 1; }
+  update_step build "${DRGNX_UPDATE_BUILD_CMD:-}" || { UPD_WHY="build failed"; return 1; }
+}
+
+update_fail() { # MESSAGE — the one line a failure gets (quiet or not), and the run record
+  update_err "$1"
+  update_record_run "failed: $1"
+}
+
+update_restart_note() { update_say "Restart drgnx to use it (a running drgnx keeps the old version until then)."; }
+
+update_summary() { # OLD NEW — what changed, one line per commit, capped
+  local old="$1" new="$2" n cap=15 s=s
+  n="$(ugit rev-list --count "$old..$new" 2>/dev/null || echo 0)"
+  if [[ "$n" == 1 ]]; then s=""; fi
+  if [[ "${UPD_QUIET:-0}" == 1 ]]; then
+    printf 'drgnx updated %s..%s (%s commit%s); restart drgnx to use it\n' "${old:0:7}" "${new:0:7}" "$n" "$s"
+    return
+  fi
+  printf 'drgnx updated %s..%s (%s commit%s):\n' "${old:0:7}" "${new:0:7}" "$n" "$s"
+  ugit log --oneline --no-decorate -n "$cap" "$old..$new" | sed 's/^/  /'
+  if ((n > cap)); then printf '  … and %s more\n' "$((n - cap))"; fi
+}
+
+update_run() { # the update itself (UPD_QUIET: the timer's way)
+  local state old new held
+  state="$(update_state_dir)"
+  update_check_checkout || { update_record_run "refused: $UPD_WHY"; return 1; }
+  old="$(ugit rev-parse HEAD)"
+  if ! update_fetch; then update_fail "could not fetch origin main (network? check: git -C $here remote -v)"; return 1; fi
+  new="$(ugit rev-parse 'FETCH_HEAD^{commit}')"
+  if [[ "$new" == "$old" ]] || ugit merge-base --is-ancestor "$new" "$old" 2>/dev/null; then
+    update_say "drgnx is already up to date (${old:0:7})."
+    update_record_run "already current (${old:0:7})"
+    return 0
+  fi
+  held="$(cat "$state/held" 2>/dev/null || true)"
+  if [[ "${UPD_QUIET:-0}" == 1 && "$held" == "$new" ]]; then   # --back or a failed update set this commit aside: the timer waits for a newer one
+    update_record_run "skipped ${new:0:7} (set aside by update --back or a failed update; drgnx update takes it)"
+    return 0
+  fi
+  if ! ugit merge-base --is-ancestor "$old" "$new"; then
+    update_err "this checkout has diverged from origin main (local commits not on main). Nothing changed. Fix: git -C $here rebase origin/main, or discard them with git -C $here reset --hard origin/main."
+    update_record_run "refused: diverged"
+    return 1
+  fi
+  if ! ugit merge --ff-only --quiet "$new" </dev/null; then update_fail "could not fast-forward to ${new:0:7}; nothing else changed"; return 1; fi
+  if ! update_apply; then
+    ugit reset --hard --quiet "$old"
+    update_write_atomic "$state/held" "$new"
+    update_fail "$UPD_WHY for ${new:0:7}; moved the checkout back to ${old:0:7}. Log: $state/last.log. The build of ${old:0:7} is redone now."
+    (cd "$here" && if [[ -n "${DRGNX_UPDATE_BUILD_CMD:-}" ]]; then bash -c "$DRGNX_UPDATE_BUILD_CMD"; else "$here/bin/drgnx" build; fi) >>"$state/last.log" 2>&1 || true
+    return 1
+  fi
+  update_write_atomic "$state/previous" "$old"
+  rm -f "${state:?}/held"
+  update_summary "$old" "$new"
+  update_restart_note
+  update_record_run "updated ${old:0:7}..${new:0:7}"
+}
+
+update_back() { # return to the commit before the last update, then sync + build
+  local state old prev
+  state="$(update_state_dir)"
+  update_check_checkout || { update_record_run "refused: $UPD_WHY"; return 1; }
+  prev="$(cat "$state/previous" 2>/dev/null || true)"
+  if [[ -z "$prev" ]] || ! ugit cat-file -e "$prev^{commit}" 2>/dev/null; then
+    update_err "there is no earlier update to go back to. Nothing changed."
+    return 1
+  fi
+  old="$(ugit rev-parse HEAD)"
+  if [[ "$prev" == "$old" ]]; then update_err "already at ${prev:0:7}, the commit before the last update. Nothing changed."; return 1; fi
+  ugit reset --hard --quiet "$prev"
+  update_write_atomic "$state/held" "$old"        # the timer does not redo what you undid
+  update_write_atomic "$state/previous" "$old"    # a second --back goes forward again
+  if ! update_apply; then
+    update_fail "$UPD_WHY after going back to ${prev:0:7} (the checkout stays there). Log: $state/last.log"
+    return 1
+  fi
+  update_say "drgnx went back ${old:0:7} -> ${prev:0:7}. The timer skips ${old:0:7}; drgnx update takes it again."
+  update_restart_note
+  update_record_run "went back ${old:0:7} -> ${prev:0:7}"
+}
+
+systemd_word() { # $1 as one quoted word of a systemd unit's ExecStart/Environment line
+  local s="$1"
+  s="${s//\\/\\\\}"; s="${s//\"/\\\"}"; s="${s//%/%%}"; s="${s//\$/\$\$}"
+  printf '"%s"' "$s"
+}
+
+xml_escape() { local s="$1"; s="${s//&/&amp;}"; s="${s//</&lt;}"; s="${s//>/&gt;}"; printf '%s' "$s"; }
+
+update_systemd_dir() { printf '%s/systemd/user' "$(xdg_dir XDG_CONFIG_HOME "$HOME/.config")"; }
+update_plist() { printf '%s/Library/LaunchAgents/%s.plist' "$HOME" "$UPD_LABEL"; }
+
+update_service_text() { # the oneshot service the timer starts
+  printf '[Unit]\nDescription=Update drgnx to the newest main\nDocumentation=https://github.com/Black-Dragon-Foundation/drgnx\n\n'
+  printf '[Service]\nType=oneshot\nNice=10\nTimeoutStartSec=1h\n'
+  printf 'Environment=%s\n' "$(systemd_word "PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin")"
+  if [[ "${DRGNX_EMACS:-}" == /* ]]; then printf 'Environment=%s\n' "$(systemd_word "DRGNX_EMACS=$DRGNX_EMACS")"; fi
+  printf 'ExecStart=%s update --quiet\n' "$(systemd_word "$here/bin/drgnx")"
+}
+
+update_timer_text() {
+  printf '[Unit]\nDescription=Update drgnx daily\n\n[Timer]\nOnCalendar=daily\nRandomizedDelaySec=1h\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n'
+}
+
+update_plist_text() { # HOUR MINUTE — launchd has no randomized delay: the install picks a time of day
+  local log; log="$(xml_escape "$(update_state_dir)/launchd.log")"
+  cat <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$UPD_LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$(xml_escape "$here/bin/drgnx")</string>
+    <string>update</string>
+    <string>--quiet</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>$(xml_escape "$HOME")/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string></dict>
+  <key>StartCalendarInterval</key>
+  <dict><key>Hour</key><integer>$1</integer><key>Minute</key><integer>$2</integer></dict>
+  <key>ProcessType</key><string>Background</string>
+  <key>LowPriorityIO</key><true/>
+  <key>StandardOutPath</key><string>$log</string>
+  <key>StandardErrorPath</key><string>$log</string>
+</dict>
+</plist>
+PLIST
+}
+
+update_auto_darwin() { # on | off | status
+  local plist uid
+  plist="$(update_plist)"
+  uid="$(id -u)"
+  case "$1" in
+    on)
+      update_is_checkout || { update_err "$here is not a git checkout, so it cannot update itself; no timer set."; return 1; }
+      command -v launchctl >/dev/null 2>&1 || { update_err "launchctl not found; no timer set."; return 1; }
+      mkdir -p "${plist%/*}"
+      update_plist_text "$((10 + RANDOM % 8))" "$((RANDOM % 60))" >"$plist.tmp" && mv -f "$plist.tmp" "$plist"
+      launchctl bootout "gui/$uid" "$plist" >/dev/null 2>&1 || true
+      launchctl bootstrap "gui/$uid" "$plist" || { update_err "launchctl could not load $plist"; return 1; }
+      echo "drgnx update: automatic updates on (a launchd agent, daily; $plist)." ;;
+    off)
+      if [[ -f "$plist" ]]; then launchctl bootout "gui/$uid" "$plist" >/dev/null 2>&1 || true; rm -f "$plist"; fi
+      echo "drgnx update: automatic updates off." ;;
+    status)
+      if [[ -f "$plist" ]]; then echo "automatic updates: on (launchd agent $UPD_LABEL, daily)"; else echo "automatic updates: off"; fi ;;
+  esac
+}
+
+update_auto_systemd() { # on | off | status
+  local dir next=""
+  dir="$(update_systemd_dir)"
+  case "$1" in
+    on)
+      update_is_checkout || { update_err "$here is not a git checkout, so it cannot update itself; no timer set."; return 1; }
+      command -v systemctl >/dev/null 2>&1 || { update_err "systemctl not found: automatic updates need a systemd user session. Run drgnx update by hand, or from your own cron."; return 1; }
+      mkdir -p "$dir"
+      update_service_text >"$dir/$UPD_UNIT.service.tmp" && mv -f "$dir/$UPD_UNIT.service.tmp" "$dir/$UPD_UNIT.service"
+      update_timer_text >"$dir/$UPD_UNIT.timer.tmp" && mv -f "$dir/$UPD_UNIT.timer.tmp" "$dir/$UPD_UNIT.timer"
+      systemctl --user daemon-reload || true
+      systemctl --user enable --now "$UPD_UNIT.timer" || { update_err "systemctl could not enable $UPD_UNIT.timer (units are in $dir)"; return 1; }
+      echo "drgnx update: automatic updates on (systemd user timer $UPD_UNIT.timer, daily; units in $dir)." ;;
+    off)
+      if [[ -f "$dir/$UPD_UNIT.timer" ]] && command -v systemctl >/dev/null 2>&1; then systemctl --user disable --now "$UPD_UNIT.timer" >/dev/null 2>&1 || true; fi
+      rm -f "$dir/$UPD_UNIT.timer"
+      rm -f "$dir/$UPD_UNIT.service"
+      if command -v systemctl >/dev/null 2>&1; then systemctl --user daemon-reload >/dev/null 2>&1 || true; fi
+      echo "drgnx update: automatic updates off." ;;
+    status)
+      if [[ ! -f "$dir/$UPD_UNIT.timer" ]]; then echo "automatic updates: off"
+      elif command -v systemctl >/dev/null 2>&1 && ! systemctl --user is-enabled "$UPD_UNIT.timer" >/dev/null 2>&1; then
+        echo "automatic updates: off (units exist in $dir but the timer is not enabled: drgnx update --auto on)"
+      else
+        echo "automatic updates: on (systemd user timer $UPD_UNIT.timer, daily)"
+        next="$(systemctl --user show "$UPD_UNIT.timer" -p NextElapseUSecRealtime --value 2>/dev/null || true)"
+        if [[ -n "$next" ]]; then echo "next run: $next"; fi
+      fi ;;
+  esac
+}
+
+update_auto() { # on | off | status
+  local rc=0
+  mkdir -p "$(update_state_dir)"
+  if [[ "$(update_platform)" == Darwin ]]; then update_auto_darwin "$1" || rc=$?; else update_auto_systemd "$1" || rc=$?; fi
+  if [[ "$1" == status && "$rc" == 0 ]]; then
+    if [[ -f "$(update_state_dir)/last-run" ]]; then echo "last run: $(cat "$(update_state_dir)/last-run")"; else echo "last run: never"; fi
+  fi
+  return "$rc"
+}
+
+cmd_update() { # [--quiet] [--back] [--auto on|off|status]
+  local back=0 auto=""
+  UPD_QUIET=0
+  while (($#)); do
+    case "$1" in
+      --quiet|-q) UPD_QUIET=1 ;;
+      --back) back=1 ;;
+      --auto) shift; auto="${1:-}"
+              case "$auto" in on|off|status) ;; *) echo "usage: drgnx update --auto on|off|status" >&2; return 2 ;; esac ;;
+      *) echo "usage: drgnx update [--quiet] | --back | --auto on|off|status" >&2; return 2 ;;
+    esac
+    shift
+  done
+  if [[ -n "$auto" ]]; then update_auto "$auto"; return; fi
+  command -v git >/dev/null 2>&1 || { update_err "git not found"; return 1; }
+  update_lock || return 1
+  if ((back)); then update_back; else update_run; fi
+}
+
 usage() {
   cat <<'USAGE'
 usage: drgnx PATH…             open folders and files in drgnx, like code . (docs/guide/opening.md)
@@ -548,6 +851,11 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx open --check      start drgnx's daemon if needed, print its Emacs version, stop it if this started it
        drgnx macos-app         macOS: install drgnx.app into ~/Applications (Finder, Spotlight, Dock, Open With)
        drgnx build             byte-compile drgnx (core, wb, modules); native compilation follows on load
+       drgnx update [--quiet]  update this install to GitHub main: fast-forward, then sync and build; the previous
+                               commit is kept and comes back if sync or build fails (docs/guide/install.md)
+       drgnx update --back     return to the commit before the last update (re-sync, rebuild)
+       drgnx update --auto on|off|status
+                               a daily timer (systemd user timer; launchd agent on macOS) running update --quiet
        drgnx doctor [--json] [--dev]
                                is this machine ready for drgnx? (--dev: also the tools to develop it)
        drgnx test [--one-process]
@@ -673,6 +981,7 @@ case "${1:-help}" in
   fmt) shift
         "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-fmt -f drgnx-fmt-cli -- "$@" ;;
+  update) shift; cmd_update "$@" ;;
   open) shift; cmd_open "$@" ;;
   -t|--gui) cmd_open "$@" ;;
   macos-app) "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" -l drgnx-macos -f drgnx-macos-cli ;;
