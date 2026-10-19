@@ -62,11 +62,6 @@
 (defvar drgnx-cockpit-graph-svg)
 (defvar drgnx-cockpit-graph--generation)
 
-(defcustom drgnx-cockpit-redraw-delay 0.5
-  "Seconds between the first change the Work graph hears of and its redraw: however many events come meanwhile,
-it redraws once.  Read when the cockpit's views are defined (at load)."
-  :type 'number :group 'drgnx-cockpit)
-
 (defcustom drgnx-cockpit-check-interval 3
   "Seconds between two looks, while the Work graph or a feed pane shows, at whether another process wrote the store
 \(an outside agent's MCP server, another Emacs); also between two looks at the count of what waits on you, for the
@@ -774,6 +769,7 @@ or nil: any."
 (defvar drgnx-cockpit-map)
 (set-keymap-parent drgnx-cockpit-graph-mode-map drgnx-cockpit-map)
 (declare-function drgnx-cockpit-feed--setup "drgnx-cockpit-feed")
+(declare-function drgnx-cockpit-feed--teardown "drgnx-cockpit-feed")
 (declare-function drgnx-cockpit-cards--schedule "drgnx-cockpit-cards")
 (declare-function drgnx-cockpit-feed-tell-statusbar "drgnx-cockpit-feed")
 ;; what needs you and the decision log, the job window's parts (drgnx-cockpit-cards.el, beside this file)
@@ -814,16 +810,19 @@ store, the status bar's look at what waits on you, and its parts'."
   (drgnx-cockpit-cards--setup))          ; kinds `needs-you' and `decisions' (right, stacked with `happened')
 
 (defun drgnx-cockpit--teardown ()
-  "tools/cockpit's off path: undo what its parts' setups left global — agents' edits panes, What needs you and the
-decision log with their three global hook functions.  drgnx's modules have no runtime off yet (a module turned off
-stops at the next start): module teardown calls this."
+  "tools/cockpit's `:teardown': what its cleanup stack cannot see — the cockpit's buffers (the Work graph, What
+happened, the timeline, agents' edits, What needs you and the decision log: each one's `kill-buffer-hook' takes its
+hooks, and its timers and watches go with it) and the cards' three global hook functions.  Its pane kinds,
+commands, state subscriptions and `cockpit-waiting' timer are its setup's: the stack undoes them.  Idempotent."
+  (drgnx-cockpit-feed--teardown)
   (drgnx-cockpit-edits--teardown)
-  (drgnx-cockpit-cards--teardown))
+  (drgnx-cockpit-cards--teardown)
+  (when-let* ((b (get-buffer drgnx-cockpit-graph-buffer-name))) (kill-buffer b)))
 
 (drgnx-module-define 'tools/cockpit
                      :doc "The Work cockpit: the Work graph — specs, plans, tasks, agents, jobs and reviews; drawn in windows, an outline in terminals; what jobs need of you and their decisions."
                      :stage 'startup :requires '(tools/work tools/jobs)
-                     :setup #'drgnx-cockpit--setup)
+                     :setup #'drgnx-cockpit--setup :teardown #'drgnx-cockpit--teardown)
 
 (provide 'drgnx-cockpit)
 ;;; drgnx-cockpit.el ends here

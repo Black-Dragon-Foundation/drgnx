@@ -319,15 +319,18 @@ Otherwise it reads the store, and it draws only what changed:
 A hidden graph does nothing and keeps no timer: an event only notes that something changed, and the graph catches
 up when it shows. Remote (TRAMP) folders are never touched.
 
-What happened and the timeline follow the same events, the same check and the same delay, only while one shows.
-When the store did not change, an update ends after one query. Otherwise they only add: new lines go under What
-happened's last line, and new chips go into their rows. Only the rows that changed are written again, and only when
-a window's width changes is every row fitted again. `drgnx-cockpit-waiting-count` returns a cached number, counted
-again only when the store changed.
+What happened and the timeline follow the same events and the same delay, and each has the same check while it
+shows; hidden, it keeps no timer and catches up when it shows (one agent's What happened replacing another's in the
+pane counts too). When the store did not change, an update ends after one query. Otherwise only the lines and rows
+that changed are drawn: a new event adds its line under What happened's last one and redraws its agent's row of the
+timeline, an answered question redraws its line or row, and only when a window's size changes is every row fitted
+again. Your place stays on its line. `drgnx-cockpit-waiting-count` returns a cached number, counted again only when
+the store changed.
 
 What needs you and Decisions ask the hub (never waiting for it) after a job, card, agent or lease event that
-concerns the job they show, at most once per 0.5 s and only while one shows. A part is drawn again only when what it
-shows changed, and its windows keep their place.
+concerns the job they show, at most once per 0.5 s and only while one shows; one that shows again asks at once, and
+with neither showing they keep no timer. Only the part of what they show that changed is drawn again (the cards and
+messages, the tasks, one job of every job's list), and their windows keep their place.
 
 ## Customizing
 

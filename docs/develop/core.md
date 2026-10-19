@@ -779,8 +779,11 @@ The Work cockpit's panes start their checks on the workbench state store's `pane
 `pane-hidden` (lane `now`), so a hidden pane keeps no timer: the Work graph's `(cockpit-check . BUFFER)`, owned by its
 buffer, every `drgnx-cockpit-check-interval`; an agent's edits pane's `(cockpit-edits-check . BUFFER)` (with its
 one-shots `-tick`, `-turn` and `-flush`, and its file watches, all dropped when it is hidden; it also hears
-`windows-changed`, since its buffers swap in one window). Their draws are their views' timers. `tools/cockpit` owns
-`cockpit-waiting` (its setup's: the status bar's count of what waits on you, every `drgnx-cockpit-check-interval`).
+`windows-changed`, since its buffers swap in one window); a feed buffer's `(cockpit-feed-check . BUFFER)` (also on
+`windows-changed`). What needs you and the decision log share `cockpit-cards-refresh` and `cockpit-cards-retry`
+(`:core`), cancelled when neither shows. Their draws are their views' timers. `tools/cockpit` owns `cockpit-waiting`
+(its setup's: the status bar's count of what waits on you, every `drgnx-cockpit-check-interval`); its `:teardown`
+kills the cockpit's buffers, so turning it off leaves no timer.
 
 `core/drgnx-platform.el` (window-manager calls) owns its timers as `:core`: each belongs to one call that ends itself
 (its answer, its error) and cancels the timer, so no module's end or process's death may drop one and leave the
@@ -1285,6 +1288,12 @@ text; `:appended` the rows added; `:removed` the rows deleted. Without VIEW it s
   text changed (`drgnx-cockpit-row-cell`). A drawing whose boxes did not move changes band images in place and marks
   nothing. Its check timer runs only while its pane shows (the store's `pane-shown` and `pane-hidden`).
   [cockpit.md](cockpit.md#redraws) has the rest.
+
+- **The cockpit's feed and parts** (`modules/tools/drgnx-cockpit-feed.el`, `-cards.el`): What happened
+  (`cockpit-happened`: `:head`, a row per event line, `:footer`), the timeline (`cockpit-timeline`: `:head`, a row per
+  agent's chips) and What needs you and the decision log (`cockpit-cards`, DELAY 0: a row per part of the hub's answer,
+  kept while what it shows of it is the same). Events touch the feed's views; a hub answer marks the parts'. A new
+  event draws one row in each feed pane. [cockpit.md](cockpit.md) has the rest.
 
 ### The invariant
 
@@ -2161,6 +2170,12 @@ them, oldest first, after observing the selected frame; the store has no timer o
 records then. Every call binds `inhibit-interaction`, so a subscriber that prompts gets an error.
 An error is recorded in `drgnx-signal-errors` as `"EVENT FN: message"` (newest first, at most 20), never raised.
 Subscribers of one event run in subscription order.
+
+The Work cockpit's panes are such consumers ([cockpit.md](cockpit.md)): `pane-shown` and `pane-hidden` on `now` start
+and cancel each pane's check (and an agent's edits' file watches), so a hidden pane keeps no timer; `pane-resized` on
+`idle` re-fits the graph and the feed. A kind whose buffers swap in one window (an agent's edits, What happened) hears
+`windows-changed` too: one buffer replacing another in a pane's window is no pane event. Whether a buffer shows is
+`drgnx-cockpit-shown-p`: a window the store recorded on a visible frame shows it.
 
 **The fixture** (`test/fixtures/state-fixture.el`): `(drgnx-test-with-state BODY…)` runs BODY with a fresh store
 and bus and the store's hooks off. It saves every bound variable listed in `drgnx-state-test--variables` (the

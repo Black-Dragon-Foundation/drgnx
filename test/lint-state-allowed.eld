@@ -24,11 +24,3 @@
  :why "Esc and q close a pane: recomputes whether the selected window is a lane or area (global)" :until "Task 18")
 (:file "modules/ui/drgnx-topline.el" :what "window-size-change-functions"
  :why "the top line fits a terminal frame and redraws at the new width (two global add-hooks)" :until "Task 20")
-(:file "modules/tools/drgnx-cockpit-feed.el" :what "window-buffer-change-functions"
- :why "a feed pane catches up when it is shown (buffer-local)" :until "Task 25")
-(:file "modules/tools/drgnx-cockpit-feed.el" :what "window-size-change-functions"
- :why "a feed pane re-fits at its window's size (buffer-local)" :until "Task 25")
-(:file "modules/tools/drgnx-cockpit-feed.el" :what "get-buffer-window"
- :why "asks which feed buffers show in a visible frame" :until "Task 25")
-(:file "modules/tools/drgnx-cockpit-cards.el" :what "get-buffer-window"
- :why "asks whether a card part shows in a visible frame (shares the feed's refresh)" :until "Task 25")

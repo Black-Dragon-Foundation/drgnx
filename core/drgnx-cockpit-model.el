@@ -34,6 +34,11 @@ to add.  A new node kind needs only this (and a face for it).  A node is a plist
 drops the node."
   :type 'hook :group 'drgnx-cockpit)
 
+(defcustom drgnx-cockpit-redraw-delay 0.5
+  "Seconds between the first change the Work graph or a feed pane hears of and its redraw: however many events come
+meanwhile, it redraws once.  Read when the cockpit's views are defined (at load)."
+  :type 'number :group 'drgnx-cockpit)
+
 (defcustom drgnx-cockpit-happened-limit 50
   "How many events \"what happened\" shows for an agent (the newest)."
   :type 'natnum :group 'drgnx-cockpit)

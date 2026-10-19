@@ -10,10 +10,12 @@
 ;; marked ◐ (`drgnx-cockpit-waiting') in both, in the graph (drgnx-cockpit.el) and, through
 ;; `drgnx-cockpit-waiting-count', in the status bar.  `drgnx-cockpit-answer' (A) answers it from any of them: queued
 ;; to its agent, never interrupting it, and an `answer' event closes it.
-;; The feed's buffers follow the store as the graph does — hub events and a look every
-;; `drgnx-cockpit-check-interval' s, at most one update per `drgnx-cockpit-redraw-delay', only while one shows, and
-;; nothing when the store did not change — and an update only appends lines and chips (a row is one line, patched).
-;; It never prompts on an automatic path.  This file is loaded by drgnx-cockpit.el.  See docs/guide/cockpit.md.
+;; The feed's buffers are views (wb/drgnx-view.el; types `cockpit-happened' and `cockpit-timeline'): one row per event
+;; line, per agent's row of chips, per head and last lines, drawn again only when it changed.  They follow the store
+;; as the graph does — hub events touch them, at most one update per `drgnx-cockpit-redraw-delay', only while one
+;; shows, nothing when the store did not change — and while one shows (the workbench state store says so) a look
+;; every `drgnx-cockpit-check-interval' s catches what other processes wrote; hidden, it keeps no timer.  It never
+;; prompts on an automatic path.  This file is loaded by drgnx-cockpit.el.  See docs/guide/cockpit.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -23,6 +25,8 @@
 (require 'text-property-search)
 (require 'drgnx-timer)
 (require 'drgnx-cockpit-model)
+(require 'drgnx-state)
+(require 'drgnx-view)
 (eval-when-compile (require 'drgnx-agents))     ; its session struct's places (`cl-letf' of a mode)
 
 (declare-function drgnx-cockpit--db-key "drgnx-cockpit")
@@ -51,7 +55,6 @@
 (defvar drgnx-cockpit-graph-mode-map)
 (defvar drgnx-cockpit-graph-buffer-name)
 (defvar drgnx-cockpit-open-functions)
-(defvar drgnx-cockpit-redraw-delay)
 (defvar drgnx-cockpit-check-interval)
 (defvar drgnx-cockpit--quiet-events)
 (defvar drgnx-cockpit--silent)
@@ -68,7 +71,8 @@
 `drgnx-cockpit-waiting', a failure in `drgnx-cockpit-blocked'."
   :group 'drgnx-cockpit)
 
-(defvar drgnx-cockpit-feed--buffers nil "The feed's live buffers (what happened, the timeline): they own its hooks.")
+(defvar drgnx-cockpit-feed--buffers nil
+  "The feed's live buffers (what happened, the timeline): they own its hooks while one lives.")
 (defvar drgnx-cockpit-feed--waiting nil
   "(KEY QUESTIONS . TOTAL): `drgnx-cockpit-feed--waiting-pair' for the store at KEY.")
 (defvar drgnx-cockpit-feed--told nil "The waiting count the status bar was last told of (`drgnx-cockpit-feed-tell-statusbar').")
@@ -86,19 +90,19 @@ once (`drgnx-cockpit-feed--open-questions'); nil outside an update.")
 
 (defvar-local drgnx-cockpit-feed--key nil
   "The feed's key (`drgnx-cockpit-feed--key-now') at this buffer's last successful update.")
-(defvar-local drgnx-cockpit-feed--stale nil "Something may have changed while this buffer was hidden: it updates when shown.")
+(defvar-local drgnx-cockpit-feed--cells nil
+  "The rows this buffer's view shows: hash KEY → (SIG GENERATION . TEXT) (`drgnx-cockpit-row-cell').  What
+happened: :head, (:event ID N) per line, :empty, :footer.  The timeline: :head, (:row KEY) per agent's row, :empty.")
 (defvar-local drgnx-cockpit-feed--agent nil "What happened: the agent it shows.")
 (defvar-local drgnx-cockpit-feed--last 0 "The newest event this buffer shows (its id).")
-(defvar-local drgnx-cockpit-feed--end nil "What happened: a marker where the event lines end (the transcript and reply lines follow).")
 (defvar-local drgnx-cockpit-feed--lines 0 "What happened: how many event lines it shows.")
-(defvar-local drgnx-cockpit-feed--asking nil "The open questions (event ids) this buffer shows marked: calmed when answered.")
-(defvar-local drgnx-cockpit-feed--footer nil "What happened: what its last lines were drawn for (`drgnx-cockpit-feed--footer-key').")
+(defvar-local drgnx-cockpit-feed--footer nil
+  "What happened: ((KIND ASCII) . TEXT), its last lines' text as made for KIND (`drgnx-cockpit-feed--footer-key').")
 (defvar-local drgnx-cockpit-feed--rows nil
   "The timeline's rows, top to bottom: each (KEY NAME CHIPS SHOWN), CHIPS newest first, SHOWN the waiting question ids
-its line marks.  Row I is the buffer's line I + 2 (the first line is the head).")
+its line marks; the view's row of each is (:row KEY), under the head.")
 (defvar-local drgnx-cockpit-feed--fit nil
   "What this buffer was fitted to (`drgnx-cockpit-feed--fit-now'): the timeline's width, What happened's line count.")
-(defvar-local drgnx-cockpit-feed--head nil "The timeline: its first line as drawn.")
 (defvar-local drgnx-cockpit-feed--old nil
   "The timeline: the open questions whose events are older than every chip it holds, as chips, newest first (pinned
 in their agents' rows).")
@@ -128,26 +132,6 @@ in their agents' rows).")
   (apply #'make-text-button (copy-sequence text) nil 'action action 'follow-link t
          (append props (unless (plist-member props 'face) (list 'face nil)))))
 
-(defun drgnx-cockpit-feed--replace-line (n text)
-  "Make line N of the current buffer TEXT, faces and all.  Only what differs is replaced (`replace-buffer-contents'),
-so point and every window's point and start stay where they were in the text that stays: no window is touched."
-  (save-excursion
-    (goto-char (point-min))
-    (forward-line (1- n))
-    (let ((beg (point)) (end (line-end-position)) (buf (current-buffer)) (inhibit-read-only t))
-      (unless (equal-including-properties (buffer-substring beg end) text)
-        (with-temp-buffer
-          (insert text)
-          (let ((src (current-buffer)))
-            (with-current-buffer buf
-              (save-restriction
-                (narrow-to-region beg end)
-                (replace-buffer-contents src)
-                ;; the same characters may come with other properties (a question calmed)
-                (set-text-properties (point-min) (point-max) nil)
-                (pcase-dolist (`(,s ,e ,props) (object-intervals text))
-                  (set-text-properties (+ (point-min) s) (+ (point-min) e) props))))))))))
-
 ;;;; Following the store
 
 (defun drgnx-cockpit-feed--key-now ()
@@ -158,24 +142,18 @@ transcript links).  It changes when this Emacs or another process writes the sto
              (mapcar (lambda (s) (or (drgnx-agent-session-remote s) (drgnx-agent-session-id s))) (drgnx-agents-sessions)))))
 
 (defun drgnx-cockpit-feed--watch ()
-  "Follow the store while a feed buffer lives: hub events, agent sessions and a look every
-`drgnx-cockpit-check-interval' s (idempotent)."
+  "Follow the store while a feed buffer lives: hub events and agent sessions (idempotent).  The look at what other
+processes wrote runs only while a buffer shows (`drgnx-cockpit-feed--follow-shown')."
   (add-hook 'drgnx-hub-event-functions #'drgnx-cockpit-feed--hub-event)
-  (add-hook 'drgnx-agents-changed-functions #'drgnx-cockpit-feed--agent-changed)
-  ;; One look for all the feed's buffers, so `:core' owns it; the last buffer's `drgnx-cockpit-feed--unwatch' ends it.
-  (unless (drgnx-timer-active-p 'cockpit-feed-check)
-    (drgnx-timer-start 'cockpit-feed-check drgnx-cockpit-check-interval #'drgnx-cockpit-feed--check
-                       :repeat drgnx-cockpit-check-interval :owner :core)))
+  (add-hook 'drgnx-agents-changed-functions #'drgnx-cockpit-feed--agent-changed))
 
 (defun drgnx-cockpit-feed--unwatch ()
-  "A feed buffer is killed (its `kill-buffer-hook'): release its marker; the last one takes the hooks and timers."
-  (when (markerp drgnx-cockpit-feed--end) (set-marker drgnx-cockpit-feed--end nil))
+  "A feed buffer is killed (its `kill-buffer-hook'): the last one takes the hooks.  Its timers are its own: they go
+with it."
   (setq drgnx-cockpit-feed--buffers (delq (current-buffer) (seq-filter #'buffer-live-p drgnx-cockpit-feed--buffers)))
   (unless drgnx-cockpit-feed--buffers
     (remove-hook 'drgnx-hub-event-functions #'drgnx-cockpit-feed--hub-event)
-    (remove-hook 'drgnx-agents-changed-functions #'drgnx-cockpit-feed--agent-changed)
-    (drgnx-timer-cancel 'cockpit-feed-update)
-    (drgnx-timer-cancel 'cockpit-feed-check)))
+    (remove-hook 'drgnx-agents-changed-functions #'drgnx-cockpit-feed--agent-changed)))
 
 (defun drgnx-cockpit-feed--hub-event (event _data)
   "`drgnx-hub-event-functions': a job, a card, an agent or a lease changed — the feed updates soon."
@@ -186,58 +164,64 @@ transcript links).  It changes when this Emacs or another process writes the sto
 holds only the sessions' ids, so a chunk costs one comparison."
   (drgnx-cockpit-feed-schedule))
 
-(defun drgnx-cockpit-feed--visible ()
-  "The feed buffers that show in a window of a visible frame."
-  (seq-filter (lambda (b) (get-buffer-window b 'visible)) drgnx-cockpit-feed--buffers))
+(defun drgnx-cockpit-feed--view (buffer)
+  "BUFFER's view, or nil."
+  (let ((view (and (buffer-live-p buffer) (buffer-local-value 'drgnx-view buffer)))) (and (drgnx-view-p view) view)))
 
-(defun drgnx-cockpit-feed--check ()
-  "Every `drgnx-cockpit-check-interval' s while a feed buffer lives (a timer): the status bar hears of a new waiting
-count (`drgnx-cockpit-feed-tell-statusbar'); when a feed buffer shows and the store changed since its update
-\(another process wrote it), update soon."
-  (drgnx-cockpit--call #'drgnx-cockpit-feed-tell-statusbar)
-  (when-let* ((shown (drgnx-cockpit-feed--visible)))
+(defun drgnx-cockpit-feed-schedule (&optional _delay)
+  "Ask the feed's buffers to update: each one's view runs its SYNC (`drgnx-cockpit-feed--update') at its next draw —
+one per `drgnx-cockpit-redraw-delay' however many calls come, only while it shows (hidden, when it shows again) — and
+only the rows that changed are drawn.  Cheap: called from every event (a flag and a timer per buffer)."
+  (dolist (b drgnx-cockpit-feed--buffers)
+    (when-let* ((view (drgnx-cockpit-feed--view b))) (drgnx-view-touch view))))
+
+(defun drgnx-cockpit-feed--check (buffer)
+  "Every `drgnx-cockpit-check-interval' s while the feed BUFFER shows (its timer `(cockpit-feed-check . BUFFER)',
+started and cancelled by `drgnx-cockpit-feed--follow-shown'): when the store changed since its update (another process
+wrote it), ask for one."
+  (when-let* ((view (drgnx-cockpit-feed--view buffer)))
     (drgnx-cockpit--call
      (lambda ()
-       (let ((key (drgnx-cockpit-feed--key-now)))
-         (unless (seq-every-p (lambda (b) (equal key (buffer-local-value 'drgnx-cockpit-feed--key b))) shown)
-           (drgnx-cockpit-feed-schedule)))))))
+       (unless (equal (drgnx-cockpit-feed--key-now) (buffer-local-value 'drgnx-cockpit-feed--key buffer))
+         (drgnx-view-touch view))))))
 
-(defun drgnx-cockpit-feed-schedule (&optional delay)
-  "Update the feed's buffers within DELAY seconds (`drgnx-cockpit-redraw-delay'): one update however many calls come
-meanwhile, only while one shows (a hidden one updates when it shows).  Cheap: called from every event."
-  (when drgnx-cockpit-feed--buffers
-    (if (not (drgnx-cockpit-feed--visible))
-        (dolist (b drgnx-cockpit-feed--buffers) (with-current-buffer b (setq drgnx-cockpit-feed--stale t)))
-      (drgnx-timer-soon 'cockpit-feed-update (or delay drgnx-cockpit-redraw-delay) #'drgnx-cockpit-feed--tick
-                        :owner :core))))
+(defun drgnx-cockpit-feed--follow-shown ()
+  "Each feed buffer's check runs while a window of a visible frame shows it (`drgnx-cockpit-shown-p'), and a buffer
+that starts showing catches up (its view is touched); hidden, its check is cancelled: it keeps no timer."
+  (dolist (b drgnx-cockpit-feed--buffers)
+    (when (buffer-live-p b)
+      (let ((key (cons 'cockpit-feed-check b)))
+        (cond ((not (drgnx-cockpit-shown-p b)) (drgnx-timer-cancel key))
+              ((not (drgnx-timer-active-p key))
+               (drgnx-timer-start key drgnx-cockpit-check-interval #'drgnx-cockpit-feed--check
+                                  :repeat drgnx-cockpit-check-interval :args (list b) :owner b)
+               (when-let* ((view (drgnx-cockpit-feed--view b))) (drgnx-view-touch view))))))))
 
-(defun drgnx-cockpit-feed--tick ()
-  "The scheduled update (a timer): each shown feed buffer appends what is new; a hidden one is marked stale."
-  (drgnx-cockpit--call
-   (lambda ()
-     (let ((key (drgnx-cockpit-feed--key-now)) (open nil) (open-known nil)
-           (drgnx-cockpit-feed--questions-now (cons nil nil)))
-       (dolist (b drgnx-cockpit-feed--buffers)
-         (with-current-buffer b
-           (cond ((not (get-buffer-window b 'visible)) (setq drgnx-cockpit-feed--stale t))
-                 ((or (not (equal key drgnx-cockpit-feed--key)) (not (eql drgnx-cockpit-feed--fit (drgnx-cockpit-feed--fit-now))))
-                  (unless open-known (setq open (drgnx-cockpit-feed--open-ids) open-known t))
-                  ;; one buffer's error leaves the others' update, and its own key, as it was: tried again next time
-                  (drgnx-cockpit--call
-                   (lambda ()
-                     (if (derived-mode-p 'drgnx-cockpit-timeline-mode)
-                         (drgnx-cockpit-feed--timeline-update open)
-                       (drgnx-cockpit-feed--happened-update open))
-                     (setq drgnx-cockpit-feed--key key drgnx-cockpit-feed--stale nil))))
-                 (t (setq drgnx-cockpit-feed--stale nil)))))))))
+(defun drgnx-cockpit-feed--pane-shown (data)
+  "`pane-shown', on the store's `now' lane: a feed pane shows — `drgnx-cockpit-feed--follow-shown'."
+  (when (memq (plist-get data :kind) '(happened timeline)) (drgnx-cockpit-feed--follow-shown)))
 
-(defun drgnx-cockpit-feed--on-show (window)
-  "A feed pane shows in WINDOW: catch up with what changed while it was hidden (soon, never while showing it)."
-  (when (buffer-local-value 'drgnx-cockpit-feed--stale (window-buffer window)) (drgnx-cockpit-feed-schedule 0)))
+(defun drgnx-cockpit-feed--pane-hidden (data)
+  "`pane-hidden', on the store's `now' lane: a feed pane went — `drgnx-cockpit-feed--follow-shown'."
+  (when (memq (plist-get data :kind) '(happened timeline)) (drgnx-cockpit-feed--follow-shown)))
 
-(defun drgnx-cockpit-feed--shown (&rest _)
-  "A window started showing a feed buffer, or changed size: update (each fits its window, `drgnx-cockpit-feed--fit')."
-  (drgnx-cockpit-feed-schedule 0))
+(defun drgnx-cockpit-feed--windows-changed (_data)
+  "`windows-changed', on the store's `now' lane: a window shows another buffer — one agent's What happened in place of
+another's in the `happened' pane is no pane event — `drgnx-cockpit-feed--follow-shown'."
+  (when drgnx-cockpit-feed--buffers (drgnx-cockpit-feed--follow-shown)))
+
+(defun drgnx-cockpit-feed--pane-resized (data)
+  "`pane-resized', on the store's `idle' lane: a feed pane's window changed size — it fits it again."
+  (when (memq (plist-get data :kind) '(happened timeline))
+    (when-let* ((w (plist-get data :window)) ((window-live-p w)) (view (drgnx-cockpit-feed--view (window-buffer w))))
+      (drgnx-view-touch view))))
+
+(defun drgnx-cockpit-feed--subscribe ()
+  "Hear of the feed's panes from the workbench state store (tools/cockpit's setup; recorded there)."
+  (drgnx-state-subscribe 'pane-shown #'drgnx-cockpit-feed--pane-shown :lane 'now)
+  (drgnx-state-subscribe 'pane-hidden #'drgnx-cockpit-feed--pane-hidden :lane 'now)
+  (drgnx-state-subscribe 'windows-changed #'drgnx-cockpit-feed--windows-changed :lane 'now)
+  (drgnx-state-subscribe 'pane-resized #'drgnx-cockpit-feed--pane-resized))
 
 (defun drgnx-cockpit-feed--fit-now ()
   "What the current feed buffer fits now: the timeline its widest window's width (else 80 columns), What happened
@@ -260,6 +244,43 @@ as many lines as its tallest window shows below its head and above its last line
   "The open questions' event ids."
   (delq nil (mapcar (lambda (q) (plist-get q :id)) (drgnx-cockpit-feed--open-questions))))
 
+;;;; The views
+
+(defun drgnx-cockpit-feed--update (view force)
+  "Work out what this feed buffer (VIEW's) shows and mark its rows that changed, when the store's key or the window's
+fit changed since its last update (FORCE: read the store anew, whatever changed); non-nil when it did.  The key is
+kept only once the update went through, so a failed one is tried again."
+  (let ((key (drgnx-cockpit-feed--key-now)) (drgnx-cockpit-feed--questions-now (cons nil nil)))
+    (when (or force (not (equal key drgnx-cockpit-feed--key)) (not (eql drgnx-cockpit-feed--fit (drgnx-cockpit-feed--fit-now))))
+      (if (derived-mode-p 'drgnx-cockpit-timeline-mode)
+          (drgnx-cockpit-feed--timeline-rows view force)
+        (drgnx-cockpit-feed--happened-rows view))
+      (setq drgnx-cockpit-feed--key key)
+      t)))
+
+(defun drgnx-cockpit-feed--sync (view)
+  "The SYNC of both feed views (after `drgnx-cockpit-feed-schedule'): `drgnx-cockpit-feed--update'; an error is said
+once and leaves the key as it was."
+  (drgnx-cockpit--call #'drgnx-cockpit-feed--update view nil))
+
+(defun drgnx-cockpit-feed--render-row (key)
+  "The RENDER of both feed views: KEY's row (`drgnx-cockpit-feed--cells')."
+  (let ((text (cddr (gethash key drgnx-cockpit-feed--cells))))
+    (if (string-suffix-p "\n" text) text (concat text "\n"))))
+
+(defun drgnx-cockpit-feed--show-rows (view cells keys)
+  "Make CELLS (`drgnx-cockpit-feed--cells') VIEW's rows, in the order of KEYS: only the rows whose cell is new are
+drawn again (`drgnx-view-sync-rows'), each window keeping its start and point on its row."
+  (setq drgnx-cockpit-feed--cells cells)
+  (drgnx-view-sync-rows view keys (lambda (key) (cadr (gethash key cells)))))
+
+(defun drgnx-cockpit-feed--draw-now (&optional buffer)
+  "Read the store anew and draw the feed BUFFER (default: the current one) now: a new buffer, and g."
+  (with-current-buffer (or buffer (current-buffer))
+    (when-let* ((view (drgnx-cockpit-feed--view (current-buffer))))
+      (drgnx-cockpit-feed--update view t)
+      (drgnx-view-draw-now view))))
+
 ;;;; The modes
 
 (defvar drgnx-cockpit-map
@@ -272,24 +293,23 @@ as many lines as its tallest window shows below its head and above its last line
 (defvar drgnx-cockpit-timeline-mode-map (let ((m (make-sparse-keymap))) (set-keymap-parent m drgnx-cockpit-map) m)
   "The timeline's keys: A answers; RET or a click follows a chip.")
 
-(defun drgnx-cockpit-feed--setup-buffer ()
-  "What both feed modes do: a generated, read-only buffer that owns the feed's hooks while it lives."
+(defun drgnx-cockpit-feed--setup-buffer (type)
+  "What both feed modes do: a generated, read-only buffer, a view of TYPE, that owns the feed's hooks while it lives."
   (setq truncate-lines t buffer-read-only t)
   (buffer-disable-undo)
   (setq-local revert-buffer-function #'drgnx-cockpit-feed--revert)
-  (add-hook 'window-buffer-change-functions #'drgnx-cockpit-feed--shown nil t)
-  (add-hook 'window-size-change-functions #'drgnx-cockpit-feed--shown nil t)
   (add-hook 'kill-buffer-hook #'drgnx-cockpit-feed--unwatch nil t)
+  (drgnx-view-attach type)
   (cl-pushnew (current-buffer) drgnx-cockpit-feed--buffers)
   (drgnx-cockpit-feed--watch))
 
 (define-derived-mode drgnx-cockpit-happened-mode special-mode "What happened"
   "What one agent did, one line per event (docs/guide/cockpit.md)."
-  (drgnx-cockpit-feed--setup-buffer))
+  (drgnx-cockpit-feed--setup-buffer 'cockpit-happened))
 
 (define-derived-mode drgnx-cockpit-timeline-mode special-mode "Timeline"
   "Every agent's events as chips, one row per agent (docs/guide/cockpit.md)."
-  (drgnx-cockpit-feed--setup-buffer))
+  (drgnx-cockpit-feed--setup-buffer 'cockpit-timeline))
 
 (with-eval-after-load 'evil                     ; their own letters, also in the Vim profile
   (when (fboundp 'evil-set-initial-state)
@@ -297,8 +317,7 @@ as many lines as its tallest window shows below its head and above its last line
 
 (defun drgnx-cockpit-feed--revert (&rest _)
   "g: draw the buffer anew from the store."
-  (if (derived-mode-p 'drgnx-cockpit-timeline-mode) (drgnx-cockpit-feed--timeline-build)
-    (drgnx-cockpit-feed--happened-build)))
+  (drgnx-cockpit-feed--draw-now))
 
 ;;;; Following a target
 
@@ -345,7 +364,7 @@ as many lines as its tallest window shows below its head and above its last line
         (with-current-buffer (get-buffer-create name)
           (drgnx-cockpit-happened-mode)
           (setq drgnx-cockpit-feed--agent agent)
-          (drgnx-cockpit-feed--happened-build)
+          (drgnx-cockpit-feed--draw-now)
           (current-buffer)))))
 
 (defun drgnx-cockpit-feed--line-text (l open)
@@ -407,85 +426,33 @@ reports from), `outside' or `none'."
                                   'face 'drgnx-cockpit-waiting 'drgnx-cockpit-question (plist-get q :id)
                                   'help-echo "A answers it (queued, never interrupting)"))))))
 
-(defun drgnx-cockpit-feed--happened-build ()
-  "Draw this \"what happened\" buffer anew: a head line, its agent's newest lines (as many as fit,
-`drgnx-cockpit-feed--fit-now'), the transcript and reply lines; point on the head line."
-  (let* ((key (drgnx-cockpit-feed--key-now))           ; first: what changes while it draws is drawn next time
-         (agent drgnx-cockpit-feed--agent) (open (drgnx-cockpit-feed--open-ids)) (fit (drgnx-cockpit-feed--fit-now))
-         (lines (last (drgnx-cockpit-happened agent) fit)) (inhibit-read-only t))
-    (setq drgnx-cockpit-feed--fit fit)
-    (erase-buffer)
-    (insert (drgnx-cockpit-feed--happened-head agent) "\n")
-    (dolist (l lines) (insert (drgnx-cockpit-feed--line-text l open) "\n"))
-    (unless lines (insert (propertize "Nothing yet." 'face 'drgnx-cockpit-edge 'drgnx-cockpit-event 0) "\n"))
-    (if (markerp drgnx-cockpit-feed--end) (set-marker drgnx-cockpit-feed--end (point)) (setq drgnx-cockpit-feed--end (point-marker)))
-    (setq drgnx-cockpit-feed--footer (drgnx-cockpit-feed--footer-key agent)
-          drgnx-cockpit-feed--last (or (plist-get (plist-get (car (last lines)) :target) :event) drgnx-cockpit-feed--last)
-          drgnx-cockpit-feed--lines (length lines)
-          drgnx-cockpit-feed--asking (seq-filter (lambda (id) (memql id open))
-                                                 (delq nil (mapcar (lambda (l) (and (equal (plist-get l :kind) "question")
-                                                                                    (plist-get (plist-get l :target) :event)))
-                                                                   lines))))
-    (insert (drgnx-cockpit-feed--footer-text agent drgnx-cockpit-feed--footer))
-    (set-buffer-modified-p nil)
-    (setq drgnx-cockpit-feed--key key drgnx-cockpit-feed--stale nil)
-    ;; above every update: the windows' point and start never move (all of it fits, the newest in view)
-    (goto-char (point-min))))
+(defun drgnx-cockpit-feed--footer (agent)
+  "What happened's last lines for AGENT (`drgnx-cockpit-feed--footer-text'), made again only when what they say
+changed (`drgnx-cockpit-feed--footer-key', ASCII or not): the same text object, so its row is not drawn again."
+  (let ((k (list (drgnx-cockpit-feed--footer-key agent) (drgnx-cockpit-graph--ascii-p))))
+    (unless (equal k (car drgnx-cockpit-feed--footer))
+      (setq drgnx-cockpit-feed--footer (cons k (drgnx-cockpit-feed--footer-text agent (car k)))))
+    (cdr drgnx-cockpit-feed--footer)))
 
-(defun drgnx-cockpit-feed--event-line (id)
-  "The line number of event ID's line in this buffer, or nil."
-  (save-excursion
-    (goto-char (point-min))
-    (when-let* ((m (text-property-search-forward 'drgnx-cockpit-event id t)))
-      (line-number-at-pos (prop-match-beginning m)))))
-
-(defun drgnx-cockpit-feed--happened-update (open)
-  "Append the events that came since this buffer's last one (OPEN: the open questions' ids), calm the questions
-answered since, keep as many lines as fit (the oldest go), and redo the last lines only when they changed.  A
-window of another height: drawn anew."
-  (let* ((agent drgnx-cockpit-feed--agent) (lines (drgnx-cockpit-happened agent))
-         (n (length lines)) (now (drgnx-cockpit-feed--fit-now))
-         (limit (if (= (min n now) (min n drgnx-cockpit-feed--fit)) (setq drgnx-cockpit-feed--fit now) drgnx-cockpit-feed--fit))
-         (new (seq-filter (lambda (l) (> (or (plist-get (plist-get l :target) :event) 0) drgnx-cockpit-feed--last)) lines)))
-    (if (or (not (eql limit now))                     ; another height that shows other lines
-            (and new (>= (length new) drgnx-cockpit-happened-limit) (> drgnx-cockpit-feed--last 0)))
-        (drgnx-cockpit-feed--happened-build)          ; resized, or more came than it reads: the whole of it
-      (let ((inhibit-read-only t))
-        (when new
-          (when (zerop drgnx-cockpit-feed--lines)       ; "Nothing yet." goes
-            (when-let* ((n (drgnx-cockpit-feed--event-line 0)))
-              (save-excursion (goto-char (point-min)) (forward-line (1- n)) (delete-region (point) (progn (forward-line 1) (point))))))
-          (save-excursion
-            (goto-char drgnx-cockpit-feed--end)
-            (dolist (l new) (insert (drgnx-cockpit-feed--line-text l open) "\n"))
-            (set-marker drgnx-cockpit-feed--end (point)))
-          (setq drgnx-cockpit-feed--last (plist-get (plist-get (car (last new)) :target) :event)
-                drgnx-cockpit-feed--lines (+ drgnx-cockpit-feed--lines (length new)))
-          (dolist (l new)
-            (let ((id (plist-get (plist-get l :target) :event)))
-              (when (and (equal (plist-get l :kind) "question") (memql id open)) (push id drgnx-cockpit-feed--asking)))))
-        ;; questions answered since: their lines lose the mark
-        (dolist (id (seq-remove (lambda (id) (memql id open)) drgnx-cockpit-feed--asking))
-          (setq drgnx-cockpit-feed--asking (delq id drgnx-cockpit-feed--asking))
-          (when-let* ((n (drgnx-cockpit-feed--event-line id))
-                      (l (seq-find (lambda (l) (eql (plist-get (plist-get l :target) :event) id)) lines)))
-            (drgnx-cockpit-feed--replace-line n (drgnx-cockpit-feed--line-text l open))))
-        ;; at most LIMIT lines: the oldest go (below the head line, where point is)
-        (when (> drgnx-cockpit-feed--lines limit)
-          (save-excursion
-            (goto-char (point-min))
-            (forward-line 1)
-            (delete-region (point) (progn (forward-line (- drgnx-cockpit-feed--lines limit)) (point))))
-          (setq drgnx-cockpit-feed--lines limit))
-        (drgnx-cockpit-feed--replace-line 1 (drgnx-cockpit-feed--happened-head agent))
-        (let ((footer (drgnx-cockpit-feed--footer-key agent)))
-          (unless (eq footer drgnx-cockpit-feed--footer)
-            (setq drgnx-cockpit-feed--footer footer)
-            (save-excursion
-              (delete-region drgnx-cockpit-feed--end (point-max))
-              (goto-char drgnx-cockpit-feed--end)
-              (insert (drgnx-cockpit-feed--footer-text agent footer)))))
-        (set-buffer-modified-p nil)))))
+(defun drgnx-cockpit-feed--happened-rows (view)
+  "What happened's rows in VIEW: a head line, its agent's newest lines, as many as fit (`drgnx-cockpit-feed--fit-now';
+\"Nothing yet.\" when there are none), then the transcript and reply lines.  Each event's line is a row of its own:
+a new event is one row added, a question answered one row drawn again (it loses its mark), the oldest go when more
+came than fit.  Point stays on the head line, above every change, so no window's point or start moves."
+  (let* ((agent drgnx-cockpit-feed--agent) (open (drgnx-cockpit-feed--open-ids)) (fit (drgnx-cockpit-feed--fit-now))
+         (lines (last (drgnx-cockpit-happened agent) fit))
+         (old drgnx-cockpit-feed--cells) (cells (make-hash-table :test #'equal)) (seen (make-hash-table :test #'eql))
+         (keys nil))
+    (cl-flet ((row (key text) (puthash key (drgnx-cockpit-row-cell old key text text) cells) (push key keys)))
+      (row :head (drgnx-cockpit-feed--happened-head agent))
+      (dolist (l lines)
+        (let ((eid (plist-get (plist-get l :target) :event)))
+          (row (list :event eid (puthash eid (1+ (gethash eid seen -1)) seen)) (drgnx-cockpit-feed--line-text l open))))
+      (unless lines (row :empty (propertize "Nothing yet." 'face 'drgnx-cockpit-edge)))
+      (row :footer (drgnx-cockpit-feed--footer agent)))
+    (setq drgnx-cockpit-feed--fit fit drgnx-cockpit-feed--lines (length lines)
+          drgnx-cockpit-feed--last (or (plist-get (plist-get (car (last lines)) :target) :event) drgnx-cockpit-feed--last))
+    (drgnx-cockpit-feed--show-rows view cells (nreverse keys))))
 
 (defun drgnx-cockpit-happened-show (agent)
   "Show what AGENT did, one line per event, in the `happened' pane (beside the editor), and focus it."
@@ -518,7 +485,7 @@ window of another height: drawn anew."
   (or (get-buffer drgnx-cockpit-timeline-buffer-name)
       (with-current-buffer (get-buffer-create drgnx-cockpit-timeline-buffer-name)
         (drgnx-cockpit-timeline-mode)
-        (drgnx-cockpit-feed--timeline-build)
+        (drgnx-cockpit-feed--draw-now)
         (current-buffer))))
 
 (defun drgnx-cockpit-feed--row-key (chip)
@@ -672,69 +639,61 @@ questions (`drgnx-cockpit-feed--old').  Their keys."
         (push k made)))
     made))
 
-(defun drgnx-cockpit-feed--timeline-build ()
-  "Draw the timeline anew from the store: a head line, then one line per agent."
-  (let ((key (drgnx-cockpit-feed--key-now))            ; first: what changes while it draws is drawn next time
-        (inhibit-read-only t) (open (drgnx-cockpit-feed--open-ids)))
-    (setq drgnx-cockpit-feed--rows nil drgnx-cockpit-feed--last 0
-          drgnx-cockpit-feed--cards (drgnx-cockpit-feed--card-chips)
-          drgnx-cockpit-feed--fit (drgnx-cockpit-feed--fit-now))
-    (drgnx-cockpit-feed--add-chips (drgnx-cockpit-timeline))
-    (setq drgnx-cockpit-feed--old (drgnx-cockpit-feed--old-chips open))
-    (drgnx-cockpit-feed--ensure-rows)
-    (erase-buffer)
-    (setq drgnx-cockpit-feed--head (drgnx-cockpit-feed--head-text (drgnx-cockpit-feed--head-count)))
-    (insert drgnx-cockpit-feed--head "\n")
-    (dolist (row drgnx-cockpit-feed--rows)
-      (pcase-let ((`(,text ,marks) (drgnx-cockpit-feed--row-text row drgnx-cockpit-feed--fit open)))
-        (setf (nth 3 row) marks)
-        (insert text "\n")))
-    (unless drgnx-cockpit-feed--rows (insert (propertize "Nothing yet: events show here as agents work." 'face 'drgnx-cockpit-edge) "\n"))
-    (set-buffer-modified-p nil)
-    (setq drgnx-cockpit-feed--key key drgnx-cockpit-feed--stale nil)
-    (goto-char (point-min))))             ; above every update: the windows' point never moves
-
-(defun drgnx-cockpit-feed--timeline-update (open)
-  "Add the chips that came since the last one (OPEN: the open questions' ids): only the rows they reach, the rows
-whose marked questions or cards were answered, the `jobs' row when the open ask cards changed, and the head are
-drawn again — all rows when the window's width changed.  It reads at most `drgnx-cockpit-timeline-limit' (300)
-events past its last chip: more between two updates (at most one per `drgnx-cockpit-redraw-delay', so over 600
-events a second) leaves the older of them out of the rows until the timeline is drawn anew (g)."
-  (if (null drgnx-cockpit-feed--rows)
-      (drgnx-cockpit-feed--timeline-build)
-    (let* ((width (drgnx-cockpit-feed--fit-now))
-           (old (length drgnx-cockpit-feed--rows))
-           (cards (drgnx-cockpit-feed--card-chips))
+(defun drgnx-cockpit-feed--timeline-read (open force)
+  "Bring the timeline's rows (`drgnx-cockpit-feed--rows') up to date with the store (OPEN: the open questions' ids):
+anew when FORCE or there are none yet, else only the chips that came since the last one.  Returns the keys of the
+rows whose text may have changed: those the new chips reach, those a pinned chip came to or left, the `jobs' row
+when the open ask cards changed, the rows made — t when every row is new.  It reads at most
+`drgnx-cockpit-timeline-limit' (300) events past its last chip: more between two updates (at most one per
+`drgnx-cockpit-redraw-delay', so over 600 events a second) leaves the older of them out of the rows until the
+timeline is read anew (g)."
+  (if (or force (null drgnx-cockpit-feed--rows))
+      (progn (setq drgnx-cockpit-feed--rows nil drgnx-cockpit-feed--last 0
+                   drgnx-cockpit-feed--cards (drgnx-cockpit-feed--card-chips))
+             (drgnx-cockpit-feed--add-chips (drgnx-cockpit-timeline))
+             (setq drgnx-cockpit-feed--old (drgnx-cockpit-feed--old-chips open))
+             (drgnx-cockpit-feed--ensure-rows)
+             t)
+    (let* ((cards (drgnx-cockpit-feed--card-chips))
            (cards-changed (not (equal (mapcar #'drgnx-cockpit-feed--mark cards)
                                       (mapcar #'drgnx-cockpit-feed--mark drgnx-cockpit-feed--cards))))
            (touched (progn (setq drgnx-cockpit-feed--cards cards)
-                           (drgnx-cockpit-feed--add-chips (drgnx-cockpit-timeline :since drgnx-cockpit-feed--last))))
-           (inhibit-read-only t))
+                           (drgnx-cockpit-feed--add-chips (drgnx-cockpit-timeline :since drgnx-cockpit-feed--last)))))
       (let ((old-chips (drgnx-cockpit-feed--old-chips open)))
         (unless (equal (mapcar #'drgnx-cockpit-feed--mark old-chips) (mapcar #'drgnx-cockpit-feed--mark drgnx-cockpit-feed--old))
           (setq touched (append (mapcar #'drgnx-cockpit-feed--row-key (append old-chips drgnx-cockpit-feed--old)) touched)
                 drgnx-cockpit-feed--old old-chips)))
       (setq touched (append (drgnx-cockpit-feed--ensure-rows) touched))
-      (when cards-changed (push "" touched))
-      (unless (eql width drgnx-cockpit-feed--fit)
-        (setq drgnx-cockpit-feed--fit width touched (mapcar #'car drgnx-cockpit-feed--rows)))
-      (let ((head (drgnx-cockpit-feed--head-text (drgnx-cockpit-feed--head-count))))
-        (unless (equal-including-properties head drgnx-cockpit-feed--head)
-          (setq drgnx-cockpit-feed--head head)
-          (drgnx-cockpit-feed--replace-line 1 head)))
-      (cl-loop for row in drgnx-cockpit-feed--rows
-               for i from 0
-               when (or (member (car row) touched) (seq-some (lambda (m) (not (drgnx-cockpit-feed--mark-open-p m open))) (nth 3 row)))
-               do (pcase-let ((`(,text ,marks) (drgnx-cockpit-feed--row-text row width open)))
-                    (setf (nth 3 row) marks)
-                    (if (< i old) (drgnx-cockpit-feed--replace-line (+ i 2) text)
-                      (save-excursion
-                        (goto-char (point-max))
-                        (when (and (zerop old) (= i 0))       ; "Nothing yet" goes
-                          (delete-region (progn (goto-char (point-min)) (forward-line 1) (point)) (point-max)))
-                        (goto-char (point-max))
-                        (insert text "\n")))))
-      (set-buffer-modified-p nil))))
+      (if cards-changed (cons "" touched) touched))))
+
+(defun drgnx-cockpit-feed--timeline-rows (view force)
+  "The timeline's rows in VIEW: its head line, then one row per agent (\"Nothing yet\" while there is none), oldest
+first.  A row's text is made again only when its chips may have changed (`drgnx-cockpit-feed--timeline-read'), when
+a question or card it marks was answered, or, for every row, when the window's width changed; only the rows whose
+text changed are drawn.  FORCE: read the store anew."
+  (let* ((open (drgnx-cockpit-feed--open-ids)) (width (drgnx-cockpit-feed--fit-now))
+         (touched (drgnx-cockpit-feed--timeline-read open force))
+         (all (or (eq touched t) (not (eql width drgnx-cockpit-feed--fit))))
+         (old drgnx-cockpit-feed--cells) (cells (make-hash-table :test #'equal))
+         (keys (list :head)))
+    (puthash :head (let ((head (drgnx-cockpit-feed--head-text (drgnx-cockpit-feed--head-count))))
+                     (drgnx-cockpit-row-cell old :head head head))
+             cells)
+    (dolist (row drgnx-cockpit-feed--rows)
+      (let* ((key (list :row (car row))) (cell (and old (gethash key old))))
+        (if (and cell (not all) (not (member (car row) touched))
+                 (not (seq-some (lambda (m) (not (drgnx-cockpit-feed--mark-open-p m open))) (nth 3 row))))
+            (puthash key cell cells)
+          (pcase-let ((`(,text ,marks) (drgnx-cockpit-feed--row-text row width open)))
+            (setf (nth 3 row) marks)
+            (puthash key (drgnx-cockpit-row-cell old key text text) cells)))
+        (push key keys)))
+    (unless drgnx-cockpit-feed--rows
+      (let ((text (propertize "Nothing yet: events show here as agents work." 'face 'drgnx-cockpit-edge)))
+        (puthash :empty (drgnx-cockpit-row-cell old :empty text text) cells)
+        (push :empty keys)))
+    (setq drgnx-cockpit-feed--fit width)
+    (drgnx-cockpit-feed--show-rows view cells (nreverse keys))))
 
 (defun drgnx-cockpit-feed--earlier (key)
   "Show every chip the timeline holds for row KEY, one per line with its time, oldest first: each a button."
@@ -974,12 +933,12 @@ when it has one (`drgnx-cockpit-answer'), else a message it gets when its turn e
 ;;;; The module's part
 
 (defun drgnx-cockpit-feed--setup ()
-  "tools/cockpit's setup, the feed's part: the `happened' and `timeline' pane kinds, their commands, and the
-questions only the cockpit counts in the status bar (`drgnx-cockpit-waiting-count')."
-  (drgnx-pane-define-kind 'happened :title " WHAT HAPPENED" :home 'right :placeholder #'drgnx-cockpit-feed--happened-placeholder
-                          :on-show #'drgnx-cockpit-feed--on-show)
-  (drgnx-pane-define-kind 'timeline :title " TIMELINE" :home 'bottom :buffer #'drgnx-cockpit-timeline-buffer
-                          :on-show #'drgnx-cockpit-feed--on-show)
+  "tools/cockpit's setup, the feed's part: the `happened' and `timeline' pane kinds, their commands, their
+subscriptions to the workbench state store, and the questions only the cockpit counts in the status bar
+\(`drgnx-cockpit-waiting-count')."
+  (drgnx-pane-define-kind 'happened :title " WHAT HAPPENED" :home 'right :placeholder #'drgnx-cockpit-feed--happened-placeholder)
+  (drgnx-pane-define-kind 'timeline :title " TIMELINE" :home 'bottom :buffer #'drgnx-cockpit-timeline-buffer)
+  (drgnx-cockpit-feed--subscribe)
   (drgnx-command-define 'cockpit-answer :category "Work" :title "Answer Question…" :command #'drgnx-cockpit-answer
                         :doc "Answer what waits on you: queued to the agent, never interrupting it" :map 'drgnx-cockpit-map)
   (drgnx-command-define 'cockpit-happened :category "Work" :title "Show What Happened…" :command #'drgnx-cockpit-happened-show
@@ -988,6 +947,20 @@ questions only the cockpit counts in the status bar (`drgnx-cockpit-waiting-coun
                         :doc "Every agent's events as chips, one row per agent")
   ;; the questions no jobs count holds join the status bar's "waiting on you"
   (add-hook 'drgnx-statusbar-waiting-functions #'drgnx-cockpit-waiting-count))
+
+(defun drgnx-cockpit-feed--teardown ()
+  "Undo the feed's part of the module: kill its buffers — What happened, the timeline, the timeline's earlier chips
+and the `happened' placeholder; the last feed buffer's `kill-buffer-hook' takes out its hub hooks, and each owns its
+timers.  Its pane kinds, commands, state subscriptions and status-bar hook are the setup's."
+  (dolist (b (buffer-list))
+    (when (or (memq b drgnx-cockpit-feed--buffers)
+              (string-match-p "\\`\\(\\*timeline: .*\\*\\| \\*happened\\*\\)\\'" (buffer-name b)))
+      (kill-buffer b))))
+
+(drgnx-view-define 'cockpit-happened :render #'drgnx-cockpit-feed--render-row :sync #'drgnx-cockpit-feed--sync
+                   :delay drgnx-cockpit-redraw-delay :key-test 'equal)
+(drgnx-view-define 'cockpit-timeline :render #'drgnx-cockpit-feed--render-row :sync #'drgnx-cockpit-feed--sync
+                   :delay drgnx-cockpit-redraw-delay :key-test 'equal)
 
 (provide 'drgnx-cockpit-feed)
 ;;; drgnx-cockpit-feed.el ends here
