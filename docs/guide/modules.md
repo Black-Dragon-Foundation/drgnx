@@ -30,7 +30,7 @@ nothing — the package is recorded and the module reported as waiting for it.
 
 ## modules.eld
 
-Your choices live in `~/.config/drgnx/modules.eld` (`$DRGNX_CONFIG_DIR`):
+Your choices live in `~/.config/drgnx/modules.eld` (in your config folder: [where drgnx keeps its files](files.md#where-drgnx-keeps-its-files)):
 
 ```elisp
 (:version 2
@@ -70,7 +70,7 @@ for any other change to the file, `(drgnx-modules-update-state FN)` (FN gets the
 
 ## Your own code: config.el
 
-`~/.config/drgnx/config.el` (`$DRGNX_CONFIG_DIR`) is your own Emacs Lisp. It loads at the end of every start,
+`~/.config/drgnx/config.el` (in your config folder: [where drgnx keeps its files](files.md#where-drgnx-keeps-its-files)) is your own Emacs Lisp. It loads at the end of every start,
 after the `startup` modules, so what you set there wins; for a package that loads later, use
 `with-eval-after-load`. **Preferences: Open User Config** (palette, Options menu) opens it, made from a short
 template the first time. An error in it is said in `*Messages*` (what came before it ran, the rest did not) and

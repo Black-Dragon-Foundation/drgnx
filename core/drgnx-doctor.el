@@ -271,6 +271,10 @@ not a project's, from a fresh `drgnx-config-read' (it applies nothing and writes
             (info (list 'info (string-join (nreverse info) "\n") nil))
             (t (list 'ok (format "%d file%s read" (length rows) (if (= (length rows) 1) "" "s")) nil))))))
 
+(defun drgnx-doctor--config-dir ()
+  "The fact of the `config-dir' check: (:dir THE-CONFIG-DIR :moved WHERE-IT-BELONGS-OR-NIL)."
+  (list :dir (drgnx-user-dir) :moved (drgnx-paths-config-moved-p)))
+
 (defun drgnx-doctor--checkout-init (dir)
   "The fact of the `checkout-clean' check: (:dir DIR :changed LINES), LINES being `git status --porcelain -- init/'
 of the checkout DIR, run with GIT_OPTIONAL_LOCKS=0 and bounded at 5 s; nil without DIR/.git (an installed copy
@@ -330,6 +334,7 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
            :claude-adapter (drgnx-doctor--claude-adapter)
            :vram (ignore-errors (require 'drgnx-ai-probe) (drgnx-ai-vram))
            :trust-guards (drgnx-doctor--trust-guards)
+           :config-dir (drgnx-doctor--config-dir)
            :config-files (drgnx-doctor--config-files)
            :checkout-init (drgnx-doctor--checkout-init drgnx-dir)
            :timers-report (drgnx-doctor--timers-report)
@@ -447,6 +452,17 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
 (drgnx-doctor-define 'claude-adapter :group "Tools"
                      :doc "The Claude Code adapter the claude agent profiles run: @agentclientprotocol/claude-agent-acp 0.93.0 or newer"
                      :check (lambda (f) (drgnx-doctor--claude-adapter-check (plist-get f :claude-adapter))))
+
+(drgnx-doctor-define 'config-dir :group "drgnx" :doc "The config folder is where XDG_CONFIG_HOME says (docs/guide/files.md)"
+                     :check (lambda (f)
+                              (let ((c (plist-get f :config-dir)))
+                                (cond ((null c) nil)
+                                      ((plist-get c :moved)
+                                       (list 'warn (format "%s is used: $XDG_CONFIG_HOME/drgnx does not exist"
+                                                           (abbreviate-file-name (plist-get c :dir)))
+                                             (format "move ~/.config/drgnx to %s ($XDG_CONFIG_HOME/drgnx)"
+                                                     (abbreviate-file-name (directory-file-name (plist-get c :moved))))))
+                                      (t (list 'ok (abbreviate-file-name (plist-get c :dir)) nil))))))
 
 (drgnx-doctor-define 'config-files :group "drgnx" :doc "drgnx's config files read, with no mistakes"
                      :check (lambda (f) (drgnx-doctor--config-files-check (plist-get f :config-files))))
@@ -592,7 +608,8 @@ MODEL), as a sentence, or nil."
                                 (cond ((null r) (list 'info "no key report yet — start drgnx once" nil))
                                       (problems (list 'warn (format "%d key problem%s: %s" (length problems) (if (cdr problems) "s" "")
                                                                     (string-join problems "; "))
-                                                      "fix ~/.config/drgnx/keys.eld (docs/guide/keys.md)"))
+                                                      (format "fix %s (docs/guide/keys.md)"
+                                                              (abbreviate-file-name (expand-file-name "keys.eld" (drgnx-user-dir))))))
                                       (conflicts (list 'info (format "%d key conflicts, resolved by layer order (%s): %s" (length conflicts)
                                                                      (mapconcat (lambda (l) (symbol-name (car l))) (plist-get r :layers) " < ")
                                                                      (string-join (seq-take conflicts 3) "; "))

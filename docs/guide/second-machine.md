@@ -1,6 +1,7 @@
 # drgnx on a second machine
 
-Your drgnx settings are one directory, `~/.config/drgnx` (`$DRGNX_CONFIG_DIR`). The whole of it travels: copy it,
+Your drgnx settings are one directory, `$XDG_CONFIG_HOME/drgnx`, by default `~/.config/drgnx` (`$DRGNX_CONFIG_DIR`
+when set: [files.md](files.md#where-drgnx-keeps-its-files)). The whole of it travels: copy it,
 or keep it as a git repository and clone it on the next machine. Nothing in it belongs to one machine, and no
 secret is in it in plain text. Everything that is this machine's lives in drgnx's data, state and cache dirs, which
 never travel.
@@ -36,7 +37,8 @@ doctor keeps saying so. `drgnx bootstrap --step config` does the move, or do it 
 when the data dir has none, so it never replaces the data dir's (newer) copy:
 
 ```sh
-c="${DRGNX_CONFIG_DIR:-$HOME/.config/drgnx}"; d="${DRGNX_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/drgnx}"
+. "$(dirname "$(readlink -f "$(command -v drgnx)")")/drgnx-paths.sh"   # drgnx_dir: the folders drgnx uses
+c="$(drgnx_dir config)"; d="$(drgnx_dir data)"
 mkdir -p "$d"
 for f in emacs systemd applications; do
   if [ -e "$c/$f" ] && [ ! -e "$d/$f" ]; then mv "$c/$f" "$d/"; fi

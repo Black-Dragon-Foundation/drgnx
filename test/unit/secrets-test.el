@@ -404,7 +404,7 @@ STORED-CALLS a list of the ids `drgnx-ai-store-key' was called with (newest firs
         (should-not (string-match-p "read by other users" out))))))
 
 (ert-deftest drgnx-secrets/an-empty-config-dir-variable-counts-as-unset ()
-  (let ((process-environment (cons "DRGNX_CONFIG_DIR=" process-environment)))
+  (let ((process-environment (append '("DRGNX_CONFIG_DIR=" "XDG_CONFIG_HOME") process-environment)))   ; the default
     (should (equal (drgnx-user-dir) (file-name-as-directory (expand-file-name "~/.config/drgnx"))))
     (should (equal (drgnx-secrets-file) (expand-file-name "~/.config/drgnx/secrets.age")))))
 

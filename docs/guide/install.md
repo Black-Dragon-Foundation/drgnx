@@ -90,7 +90,8 @@ curl -fsSL https://raw.githubusercontent.com/Black-Dragon-Foundation/drgnx/main/
 ```
 
 It does everything above up to the `PATH` hint, skips its own doctor and "Done" lines, and runs `drgnx bootstrap
---config URL` instead: that clones the configuration into `~/.config/drgnx`, imports your provider keys from
+--config URL` instead: that clones the configuration into your config folder (`$XDG_CONFIG_HOME/drgnx`, by default
+`~/.config/drgnx`: [files.md](files.md#where-drgnx-keeps-its-files)), imports your provider keys from
 `secrets.age` into the Keychain or keyring, installs the packages from the lock, and asks before the desktop entry
 and the shell integration. The plan names this as its last line (`Then: drgnx bootstrap …`), so `--dry-run` shows
 it. `bootstrap` asks on your terminal (`/dev/tty`), even when the script itself comes down a pipe.
@@ -109,7 +110,7 @@ it. `bootstrap` asks on your terminal (`/dev/tty`), even when the script itself 
   nothing else. Editing a shell startup file, the desktop entry, a commit in the configuration directory, `chezmoi
   apply` and replacing a key your keyring holds still wait for you, or are skipped with the command to run
   ([second-machine.md](second-machine.md#one-command-drgnx-bootstrap)).
-- An existing `~/.config/drgnx` is never overwritten: `bootstrap` stops and says how to move it aside.
+- An existing config folder is never overwritten: `bootstrap` stops and says how to move it aside.
 
 ## Per platform
 
@@ -227,7 +228,7 @@ Every `drgnx` subcommand (build, doctor, test, sync, …) runs in one Emacs: `$D
 installer recorded, else `emacs` on your PATH. The installer writes the path of the Emacs it installed or kept to
 the first line of `~/.local/share/drgnx/emacs` (drgnx's data dir: `$DRGNX_DATA_DIR/emacs`, else
 `$XDG_DATA_HOME/drgnx/emacs`); this matters on macOS, where `/Applications/Emacs.app/Contents/MacOS/Emacs` is
-usually not on PATH. The path is this machine's, so it is not in `~/.config/drgnx`, which travels to your other
+usually not on PATH. The path is this machine's, so it is not in your config folder, which travels to your other
 machines ([second-machine.md](second-machine.md)). Older installs wrote it to `~/.config/drgnx/emacs`: that
 file is still read when the data dir has no usable record, and `drgnx doctor` asks you to move it. If neither names
 an executable file, drgnx falls back to PATH's `emacs`. Edit the file, or set `DRGNX_EMACS`, to use another.
@@ -326,7 +327,7 @@ turn it on. Both run `drgnx update --quiet`: no output when already current, one
 never a prompt; the timer runs only while you are logged in; the line is in the journal (`journalctl --user -u drgnx-update`) or, on macOS, in
 `~/.local/state/drgnx/update/launchd.log`. `--auto status` also shows the last run: it is kept in
 `~/.local/state/drgnx/update/last-run` (`$XDG_STATE_HOME/drgnx/update/`; the timer uses the `XDG_STATE_HOME`,
-`DRGNX_CONFIG_DIR` and `DRGNX_EMACS` you had when you turned it on).
+`XDG_CONFIG_HOME`, `DRGNX_CONFIG_DIR` and `DRGNX_EMACS` you had when you turned it on).
 
 The timer does not undo your choices: after `drgnx update --back`, or after an update that failed and was moved back,
 the timer skips that same commit and waits for a newer one; running `drgnx update` yourself takes it. A checkout with
@@ -340,7 +341,7 @@ rm -rf ~/.local/share/drgnx ~/.local/bin/drgnx "${XDG_CACHE_HOME:-$HOME/.cache}/
 
 If you turned on automatic updates, run `drgnx update --auto off` first (it removes the timer or launchd agent).
 
-Your settings (`~/.config/drgnx`) stay unless you remove them too.
+Your settings (`$XDG_CONFIG_HOME/drgnx`, by default `~/.config/drgnx`) stay unless you remove them too.
 
 On macOS, also `rm -rf ~/Applications/drgnx.app`, and if you want them gone:
 

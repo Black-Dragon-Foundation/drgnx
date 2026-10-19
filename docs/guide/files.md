@@ -3,6 +3,24 @@
 drgnx keeps its settings in a few small text files. You can edit them in any editor, and drgnx reads them again
 when they change. [The reference](../reference/config.md) lists each file, its keys and what they mean.
 
+## Where drgnx keeps its files
+
+| Kind | Folder | What is in it |
+| --- | --- | --- |
+| config | `$DRGNX_CONFIG_DIR`, else `$XDG_CONFIG_HOME/drgnx`, else `~/.config/drgnx` | your settings: the folder that travels to your other machines ([second-machine.md](second-machine.md)) |
+| state | `$XDG_STATE_HOME/drgnx`, else `~/.local/state/drgnx` | what drgnx remembers on this machine: the workbench, reports, last good copies, logs |
+| cache | `$XDG_CACHE_HOME/drgnx`, else `~/.cache/drgnx` | what can be made again: downloaded packages, native code, a source build |
+| data | `$DRGNX_DATA_DIR`, else `$XDG_DATA_HOME/drgnx`, else `~/.local/share/drgnx` | this machine's packages, and files that must not travel |
+
+- **Only an absolute value counts.** A variable that is unset, empty, relative (`config`) or starts with `~` means the
+  default, as the XDG spec says (a relative one would otherwise mean wherever drgnx happened to start). `bin/drgnx`,
+  `install.sh` and drgnx itself follow the same rule, so they always agree on the folder.
+- **An old `~/.config/drgnx` still works.** When `XDG_CONFIG_HOME` is set, `DRGNX_CONFIG_DIR` is not, there is no
+  `$XDG_CONFIG_HOME/drgnx` yet and `~/.config/drgnx` exists, drgnx keeps using `~/.config/drgnx`. `drgnx doctor` warns in
+  its `config-dir` check and says where to move it; once moved, drgnx uses the new folder.
+- A folder in a remote buffer's directory is never meant: drgnx works these folders out locally, so a remote buffer
+  never makes it connect to the host.
+
 ## When a file has a mistake
 
 A file with a mistake (a missing bracket, a value of the wrong kind) is never applied half way. You see one

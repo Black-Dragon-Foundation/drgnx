@@ -309,6 +309,19 @@
         (drgnx-doctor--keys-report))
       (should (equal read '("/tmp/drgnx-home/.local/state/drgnx/keys-report.eld"))))))
 
+(ert-deftest drgnx-doctor/the-hint-names-the-real-config-dir ()
+  ;; M2.6-3: the hint names the config dir in use, never a literal ~/.config/drgnx
+  (let* ((dir (file-name-as-directory (make-temp-file "drgnx-cfg" t)))
+         (process-environment (cons (concat "DRGNX_CONFIG_DIR=" dir) process-environment))
+         (r (drgnx-doctor-check 'key-conflicts
+                                (drgnx-doctor-test--facts :keys-report '(:layers ((vscode app)) :conflicts nil
+                                                                                 :problems ("keys.eld: no command nope"))))))
+    (unwind-protect
+        (progn
+          (should (string-search (abbreviate-file-name (concat dir "keys.eld")) (nth 2 r)))
+          (should-not (string-search "~/.config/drgnx" (nth 2 r))))
+      (delete-directory dir t))))
+
 (ert-deftest drgnx-doctor/the-state-files-are-read-through-the-file-layer ()
   ;; data is data; a file with a mistake, a missing one and a huge one give nil, and no reader changes the bytes
   (let* ((state (make-temp-file "drgnx-state" t))

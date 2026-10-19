@@ -22,34 +22,61 @@ from timers, hooks and persistence."
   (let ((default-directory "/"))
     (expand-file-name name dir)))
 
-(defun drgnx-user-dir ()
-  "The user's drgnx configuration: $DRGNX_CONFIG_DIR, else ~/.config/drgnx/.  An empty variable counts as unset, as
-in bin/drgnx and install.sh (\"${VAR:-…}\"), so all three pick the same dir."
-  (let ((dir (getenv "DRGNX_CONFIG_DIR")))
-    (file-name-as-directory (drgnx-paths--expand (if (member dir '(nil "")) "~/.config/drgnx" dir)))))
+(defun drgnx-paths-env-dir (var)
+  "The value of the environment variable VAR when it begins with \"/\", else nil.  Unset, empty, relative and \"~/…\"
+values all mean \"the default\" (the XDG spec ignores a relative one, else it would mean the current directory).
+bin/drgnx-paths.sh's xdg_dir has the same rule."
+  (let ((v (getenv var)))
+    (and v (string-prefix-p "/" v) v)))
 
-(defun drgnx-paths--xdg (var default)
-  "The XDG base directory in the environment variable VAR, else DEFAULT.  Only an absolute path counts: the XDG spec
-says an empty or relative value is to be ignored (else it would mean the current directory), as bin/drgnx's xdg_dir."
-  (let ((dir (getenv var)))
-    (if (and dir (file-name-absolute-p dir) (not (string-prefix-p "~" dir))) dir default)))
+(defconst drgnx-paths--kinds
+  '((config "DRGNX_CONFIG_DIR" "XDG_CONFIG_HOME" "~/.config")
+    (state nil "XDG_STATE_HOME" "~/.local/state")
+    (cache nil "XDG_CACHE_HOME" "~/.cache")
+    (data "DRGNX_DATA_DIR" "XDG_DATA_HOME" "~/.local/share"))
+  "KIND → (drgnx's own variable, the XDG variable, the XDG default) of `drgnx-paths-dir'.")
+
+(defun drgnx-paths-config-moved-p ()
+  "Where the config dir belongs ($XDG_CONFIG_HOME/drgnx/) while the old ~/.config/drgnx/ is used instead, else nil.
+That is when DRGNX_CONFIG_DIR is unset, $XDG_CONFIG_HOME/drgnx is missing and ~/.config/drgnx is a directory: an install
+from before XDG_CONFIG_HOME counted keeps working, and the doctor says to move it."
+  (let ((default-directory "/") (file-name-handler-alist nil))
+    (when-let* (((not (drgnx-paths-env-dir "DRGNX_CONFIG_DIR")))
+                (xdg (drgnx-paths-env-dir "XDG_CONFIG_HOME"))
+                (new (file-name-as-directory (expand-file-name "drgnx" xdg)))
+                (old (file-name-as-directory (expand-file-name "~/.config/drgnx"))))
+      (and (not (equal new old)) (not (file-directory-p new)) (file-directory-p old) new))))
+
+(defun drgnx-paths-dir (kind)
+  "Where drgnx keeps files of KIND (`config', `state', `cache' or `data'): a directory name ending in \"/\".
+config: $DRGNX_CONFIG_DIR, else $XDG_CONFIG_HOME/drgnx, else ~/.config/drgnx (also while `drgnx-paths-config-moved-p');
+state: $XDG_STATE_HOME/drgnx, else ~/.local/state/drgnx; cache: $XDG_CACHE_HOME/drgnx, else ~/.cache/drgnx;
+data: $DRGNX_DATA_DIR, else $XDG_DATA_HOME/drgnx, else ~/.local/share/drgnx.  Only absolute values count
+\(`drgnx-paths-env-dir').  Never remote: `default-directory' is \"/\" and no file name handler runs, so a remote buffer
+never makes Tramp connect.  Nothing is memoized; bin/drgnx-paths.sh's drgnx_dir is the same rule in bash."
+  (pcase-let ((`(,own ,xdg ,base) (or (alist-get kind drgnx-paths--kinds) (error "drgnx: no path kind %S" kind))))
+    (let ((default-directory "/") (file-name-handler-alist nil))
+      (file-name-as-directory
+       (expand-file-name
+        (or (and own (drgnx-paths-env-dir own))
+            (and (eq kind 'config) (drgnx-paths-config-moved-p) "~/.config/drgnx")
+            (expand-file-name "drgnx" (or (drgnx-paths-env-dir xdg) base))))))))
+
+(defun drgnx-user-dir ()
+  "The user's drgnx configuration: (drgnx-paths-dir \\='config)."
+  (drgnx-paths-dir 'config))
 
 (defun drgnx-state-dir ()
-  "drgnx state: $XDG_STATE_HOME/drgnx/ (default ~/.local/state/drgnx/)."
-  (file-name-as-directory (drgnx-paths--expand "drgnx" (drgnx-paths--xdg "XDG_STATE_HOME" "~/.local/state"))))
+  "drgnx state: (drgnx-paths-dir \\='state)."
+  (drgnx-paths-dir 'state))
 
 (defun drgnx-cache-dir ()
-  "drgnx caches: $XDG_CACHE_HOME/drgnx/ (default ~/.cache/drgnx/)."
-  (file-name-as-directory (drgnx-paths--expand "drgnx" (drgnx-paths--xdg "XDG_CACHE_HOME" "~/.cache"))))
+  "drgnx caches: (drgnx-paths-dir \\='cache)."
+  (drgnx-paths-dir 'cache))
 
 (defun drgnx-data-dir ()
-  "drgnx data: $DRGNX_DATA_DIR, else $XDG_DATA_HOME/drgnx/ (default ~/.local/share/drgnx/).  An empty
-DRGNX_DATA_DIR counts as unset, as in bin/drgnx and install.sh (\"${VAR:-…}\"), so all three pick the same dir."
-  (let ((data (getenv "DRGNX_DATA_DIR")))
-    (file-name-as-directory
-     (drgnx-paths--expand (if (member data '(nil ""))
-                              (drgnx-paths--expand "drgnx" (drgnx-paths--xdg "XDG_DATA_HOME" "~/.local/share"))
-                            data)))))
+  "drgnx data: (drgnx-paths-dir \\='data)."
+  (drgnx-paths-dir 'data))
 
 (defun drgnx-elpa-dir ()
   "The packages every session uses — a fixed real path (generations are copied into it)."

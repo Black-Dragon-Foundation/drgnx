@@ -179,8 +179,10 @@ function that does not demote."
       names)))
 
 (defun drgnx-clipboard--config-file (relative)
-  "RELATIVE (a path under the XDG config directory) as a file name."
-  (expand-file-name relative (or (getenv "XDG_CONFIG_HOME") (expand-file-name ".config" (getenv "HOME")))))
+  "RELATIVE (a path under the XDG config directory) as a file name.  Only an absolute $XDG_CONFIG_HOME counts
+\(`drgnx-paths-env-dir'), and \"~\" is the local home even in a remote buffer."
+  (let ((default-directory "/"))
+    (expand-file-name relative (or (drgnx-paths-env-dir "XDG_CONFIG_HOME") "~/.config"))))
 
 (defun drgnx-clipboard--file-has (file regexp)
   "Non-nil when FILE exists and a line of it matches REGEXP (the file is read, never written)."
