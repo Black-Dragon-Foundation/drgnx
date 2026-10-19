@@ -124,8 +124,9 @@ it never ends a run."
 
 (defun drgnx-run-ert-census (run test &rest args)
   "Around `ert-run-test': the cheap fingerprint before and after TEST; each difference is a leak of TEST.  A timer
-the test left pending is cancelled, so it cannot fire inside the next test.  An error in the census is a line of
-the report (`drgnx-run-ert--census-guard'), never an error of the test run."
+the test left pending is cancelled, so it cannot fire inside the next test; a layer timer (core/drgnx-timer.el) by
+its key, so the layer forgets it too.  An error in the census is a line of the report
+\(`drgnx-run-ert--census-guard'), never an error of the test run."
   (if drgnx-run-ert--census-busy
       (apply run test args)
     (let* ((file (ert-test-file-name test)) (name (symbol-name (ert-test-name test)))
@@ -141,7 +142,9 @@ the report (`drgnx-run-ert--census-guard'), never an error of the test run."
                (drgnx-run-ert--census-note name file (drgnx-modules-fingerprint-diff before after))
                (let ((old (drgnx-run-ert--census-timers before)))
                  (dolist (tm (drgnx-run-ert--census-timers after))
-                   (unless (memq tm old) (cancel-timer tm))))))))))))
+                   (unless (memq tm old)
+                     (let ((layer (and (fboundp 'drgnx-timer-describe) (drgnx-timer-describe tm))))
+                       (if layer (drgnx-timer-cancel (plist-get layer :key)) (cancel-timer tm))))))))))))))
 
 (defun drgnx-run-ert--census-start ()
   "Turn the census on: load the fingerprint, read the allowlist, advise `ert-run-test'."

@@ -629,6 +629,27 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
           (should (eql 1 (drgnx-run-ert-test--batch suite results))))
       (delete-directory tmp t))))
 
+(ert-deftest drgnx-run-ert/layer-timers-are-reset-after-a-test ()
+  ;; A layer timer test A leaves pending is cancelled by its key (and reported by its key): the layer forgets it,
+  ;; so test B sees no key whose timer a plain `cancel-timer' killed behind the layer's back.
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-leak" t)))
+         (suite (expand-file-name "suite" tmp)) (results (expand-file-name "r.json" tmp)))
+    (unwind-protect
+        (progn
+          (drgnx-run-ert-test--suite
+           suite `(("layer-test.el" . ,(format "(add-to-list 'load-path %S)
+(require 'drgnx-timer)
+(defun iso-layer--fire () nil)
+(ert-deftest iso-layer/a-starts () (drgnx-timer-start 'iso-layer 600 #'iso-layer--fire :owner :core))
+(ert-deftest iso-layer/b-sees-none () (should-not (drgnx-timer-active-p 'iso-layer)))"
+                                               (file-name-directory (locate-library "drgnx-timer"))))))
+          (let ((r (drgnx-run-ert-test--census suite results (concat "DRGNX_TEST_LEAKS_ALLOWED=" (drgnx-run-ert-test--allow-file tmp)))))
+            (should (eql 0 (car r)))
+            (should (equal (plist-get (drgnx-run-ert-test--leak (plist-get (drgnx-run-ert-test--json results) :leaks) "iso-layer")
+                                      :test)
+                           "iso-layer/a-starts"))))
+      (delete-directory tmp t))))
+
 (ert-deftest drgnx-run-ert/census-off-costs-nothing ()
   ;; Off (the default): no advice, no fingerprint library, no :leaks in the summary.
   (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-leak" t)))

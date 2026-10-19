@@ -97,8 +97,9 @@ and every shard inherits. It combines with `--one-process`. It is **report only*
 - **Around every test file** it reads the full fingerprint, which adds every hook variable and every advised function
   (about 10 ms), and compares the file's start with its end. What a test was already named for is not said twice. An
   advice or a hook outside the listed ones shows only here, so its line names the file, not the test (`(file)`).
-- A **timer a test left pending is cancelled** after it (and reported), so it cannot fire inside the next test;
-  `ert-kill-all-test-buffers` runs after each file.
+- A **timer a test left pending is cancelled** after it (and reported), so it cannot fire inside the next test; a
+  layer timer ([core.md](core.md#timers)) is cancelled by its key and reported by it, so the layer forgets it too
+  (`drgnx-run-ert/layer-timers-are-reset-after-a-test`). `ert-kill-all-test-buffers` runs after each file.
 - Each leak's **source** is the file that defined the function, advice or timer function (`symbol-file`), or that
   provided the feature; inside the checkout it is relative to it.
 
