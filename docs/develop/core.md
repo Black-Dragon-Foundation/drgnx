@@ -857,6 +857,21 @@ redisplay the visibility tests call `drgnx-view--buffer-shown` as redisplay woul
 `test/fixtures/view-fixture.el` (`drgnx-view-test-with-type`, `drgnx-view-test--text`, `drgnx-view-test--expected`,
 `drgnx-view-test--alloc`).
 
+### Mark, don't erase
+
+A live view is never redrawn by throwing its rows away: `erase-buffer`, `tabulated-list-print` without UPDATE and
+`delete-region` to `(point-max)` lose the scroll position, the selection and every row's identity, and cost a full
+redraw for one changed row. Code that learns of a change marks the view. The lint
+`drgnx-lint/views-never-erase` (`test/unit/lint-render-test.el`) fails on such a call in `wb/` and `modules/`
+unless `test/lint-render-allowed.eld` lists it as `(:file F :in DEFUN :what CALL :kind KIND :why STRING)`, one entry
+per (file, defun, call) with `:n` for more than one site. KIND is `document` (drawn once, on a user action),
+`listing` (Explorer and Buffers, styled by jit-lock), `job-window`, `recovery` (the view core's own reset after a
+foreign edit) or `migrate`, a live view whose `:until` names the task that moves it onto the view core. Counts can
+only fall: the task that rewrites a site deletes its entry, and `drgnx-lint/no-stale-render-allowlist-entries` fails
+on an entry that matches nothing. In the same way `drgnx-lint/garbage-collect-only-in-the-gc-owner` fails on
+`garbage-collect` or an addition to `post-gc-hook` anywhere but `core/drgnx-gc.el`, `harness/` and `test/`: one
+owner decides when to collect.
+
 ## Modal core (`drgnx-modal.el`)
 
 The engine-neutral half of modal editing; evil plugs into it (the `editor/evil` module, below), another engine could.
