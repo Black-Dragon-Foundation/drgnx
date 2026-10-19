@@ -27,7 +27,7 @@
           (unless on
             (should-not (drgnx-modules--run-setup 'tools/agents (plist-get (cdr (assq 'tools/agents drgnx-modules--table)) :setup)))
             (drgnx-modules--record 'tools/agents 'startup 0 'ok))
-          (should (assq 'agent-transcript drgnx-view--types))
+          (should (drgnx-view-type-p 'agent-transcript))
           (setq s (drgnx-agents-start "mock" temporary-file-directory))
           (should (drgnx-view-ui-test--wait (lambda () (eq (drgnx-agent-session-status s) 'idle))))
           (delete-other-windows)

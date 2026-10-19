@@ -346,12 +346,11 @@ error if it does not hold)."
                     :actions ,(make-list 2 (funcall type "(setq y 2) "))
                     :check "(eq (drgnx-agent-session-status drgnx-perf--agent) 'busy)"   ; typed while it streamed
                     :teardown ,(concat "(progn (ignore-errors (drgnx-agents-kill drgnx-perf--agent)) " kill-fixture ")"))
-      ;; typing while the editor's other window shows a transcript that holds a 400 kB answer and streams 100-character
-      ;; chunks, 50 a second: only the new text is drawn
+      ;; typing while the editor's other window shows a transcript whose running answer is 400 kB long and grows by
+      ;; 100-character chunks, 50 a second: a chunk costs the chunk (model) and only the new text is drawn (view)
       (agent-stream :setup ,(format "(progn (setq drgnx-agents-profiles (list (list \"mock\" :command (list (expand-file-name invocation-name invocation-directory) \"--batch\" \"-Q\" \"-l\" %S))))
                                           (setq drgnx-perf--stream (drgnx-agents-start \"mock\" temporary-file-directory))
                                           (let ((d (+ (float-time) 10))) (while (and (not (eq (drgnx-agent-session-status drgnx-perf--stream) 'idle)) (< (float-time) d)) (accept-process-output nil 0.05)))
-                                          (setf (drgnx-agent-session-entries drgnx-perf--stream) (list (list :type 'agent :text (make-string 409600 ?a) :done t)))
                                           t)"
                                     (expand-file-name "test/fixtures/mock-acp.el" drgnx-ui-repo-dir))
                     :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form)
@@ -359,7 +358,10 @@ error if it does not hold)."
                                    " (let ((editor (selected-window)) (b (drgnx-agents-ui-transcript-buffer drgnx-perf--stream)))"
                                    "   (unless (get-buffer-window b) (set-window-buffer (split-window editor nil 'right) b))"
                                    "   (select-window editor))"
-                                   " (drgnx-agents-send drgnx-perf--stream \"stream 500\") t)")
+                                   " (drgnx-agents-send drgnx-perf--stream \"stream 500\")"
+                                   ;; the turn's answer starts 400 kB long (not done): the chunks are appended to it
+                                   " (drgnx-agents--append-text drgnx-perf--stream 'agent (make-string 409600 ?a))"
+                                   " (drgnx-agents--changed drgnx-perf--stream) t)")
                     :actions ,(make-list 6 (funcall type "(let ((x 1)) (message \"%s\" x)) "))
                     :check "(eq (drgnx-agent-session-status drgnx-perf--stream) 'busy)"   ; typed while it streamed
                     :teardown ,(concat "(progn (ignore-errors (drgnx-agents-kill drgnx-perf--stream))"

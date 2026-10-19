@@ -709,6 +709,7 @@ names). SLICE is nil or at most `drgnx-view-slice` (0.004 s); DELAY is the throt
 it drew or grew, to put the view's own overlays back. A definition made in a module's setup pushes the undo
 `"view type NAME"`. A view looks its type up by name at each draw: once the type is removed (its module turned off)
 the view draws nothing more, and a redefinition (the module on again, a reload) is picked up. No view is tracked.
+`(drgnx-view-type-p NAME)` is non-nil while NAME is defined (a mode that attaches a module's view checks it first).
 
 **RENDER** returns a string ending in a newline, or `(BODY . SUFFIX)` whose concatenation does: growth goes between
 BODY and SUFFIX, and the view remembers BODY's length (`drgnx-view-body-length`). A row may span several lines.
@@ -837,13 +838,23 @@ inside `drgnx-wb-with-owned-windows`. The macro is save, BODY, restore, and retu
 `tools/agents` defines `agent-transcript` in its setup (`modules/tools/drgnx-agents-ui.el`; `:follow-tail t`,
 `:key-test 'eq`, the default DELAY and SLICE). Its rows are `:commands`, each entry plist that shows something, each
 permission and review plist, `:status` and `:queue`. An `agent` entry renders as `(TEXT . "\n\n")` and a `thought` as
-`("… " TEXT . "\n")`, so a streamed chunk is a GROW of `(substring TEXT BODY-LENGTH)`. The agent's process filter only
+`("… " TEXT . "\n")`, so a streamed chunk is a GROW of the text after BODY-LENGTH. The agent's process filter only
 touches the view (`drgnx-agents-ui--changed`). SYNC has a fast path: when the session's lists are `eq` to those of
-the last sync, the entries list is as long (a `delq` keeps its head) and no tool or plan entry still running changed
-(they change in place: compared by signature), it only compares each running text's length with its drawn body and
-marks a grow; otherwise `drgnx-view-sync-rows` diffs the rows. A grow draw allocates the same on a 4 kB and a 400 kB
+the last sync, the entries, permissions and reviews lists are as long (a `delq` keeps the head when the first item
+stays), each queued message is the same (a requeue replaces one in place) and no tool or plan entry still running
+changed (they change in place: compared by signature), it only compares each running text's length with its drawn
+body and marks a grow; otherwise `drgnx-view-sync-rows` diffs the rows. An answer's or a thought's signature is its
+type alone, so the turn's end (`:done`) draws nothing again. A grow draw allocates the same on a 4 kB and a 400 kB
 answer (`drgnx-agents-ui/grow-allocation-is-independent-of-size`). The footer rows follow the entries, so a new
 entry while a turn runs is an insert, not an append.
+
+The model keeps streamed text as chunks (`core/drgnx-agents.el`): a running `agent` or `thought` entry has `:chunks`
+(newest first) and `:length`, so appending a chunk costs a cons whatever the answer's size
+(`drgnx-agents/a-chunk-costs-the-chunk-not-the-answer`). `(drgnx-agents-entry-text E)` joins them into `:text` once and
+keeps it until the next chunk; `(drgnx-agents-entry-length E)` reads the length without joining; `(drgnx-agents-entry-tail
+E FROM)` builds the text after FROM from the newest chunks only (the transcript's GROW). Code that reads an answer's
+whole text goes through `drgnx-agents-entry-text`. The turn's end, `agents/get` and the hub's `agent-entries` flush
+join every entry first (`drgnx-agents-join-text`), so a done entry and the wire carry a whole `:text`.
 
 ### Reads
 

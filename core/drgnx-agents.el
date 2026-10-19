@@ -245,11 +245,44 @@ OpenRouter route; it applies through the gateway only."
   (setf (drgnx-agent-session-entries s) (append (drgnx-agent-session-entries s) (list entry))))
 
 (defun drgnx-agents--append-text (s type text)
-  "Add TEXT to the last entry when it is of TYPE (a streamed chunk), else start an entry."
+  "Add TEXT to the last entry when it is of TYPE (a streamed chunk), else start an entry.
+A chunk is kept, not joined: the running entry's :chunks (newest first) and :length grow, so a chunk costs a cons
+whatever the answer's size.  `drgnx-agents-entry-text' joins them when the text is read."
   (let ((last (car (last (drgnx-agent-session-entries s)))))
     (if (and last (eq (plist-get last :type) type) (not (plist-get last :done)))
-        (plist-put last :text (concat (plist-get last :text) text))
-      (drgnx-agents--add s (list :type type :text text)))))
+        (progn (plist-put last :length (+ (drgnx-agents-entry-length last) (length text)))
+               (plist-put last :chunks (cons text (plist-get last :chunks))))
+      (drgnx-agents--add s (list :type type :text text :chunks nil :length (length text))))))
+
+(defun drgnx-agents-entry-length (e)
+  "The length of entry E's text (an `agent' or `thought' entry: its chunks included) without joining it."
+  (or (plist-get e :length) (length (or (plist-get e :text) ""))))
+
+(defun drgnx-agents-entry-text (e)
+  "Entry E's whole text.  A running answer's chunks are joined into its :text once, kept until the next chunk."
+  (let ((chunks (plist-get e :chunks)))
+    (when chunks
+      (plist-put e :text (apply #'concat (or (plist-get e :text) "") (reverse chunks)))
+      (plist-put e :chunks nil))
+    (plist-get e :text)))
+
+(defun drgnx-agents-entry-tail (e from)
+  "Entry E's text from character FROM to its end, read from the newest chunks only (the joined :text only when they
+do not reach back to FROM), or nil when the text is shorter than FROM."
+  (let ((need (- (drgnx-agents-entry-length e) from)) (chunks (plist-get e :chunks)) (have 0) parts)
+    (cond ((< need 0) nil)
+          ((= need 0) "")
+          (t (while (and chunks (< have need))
+               (push (car chunks) parts)
+               (setq have (+ have (length (car chunks))) chunks (cdr chunks)))
+             (if (< have need)
+                 (let ((text (or (plist-get e :text) "")))
+                   (apply #'concat (substring text (- (length text) (- need have))) parts))
+               (apply #'concat (substring (car parts) (- have need)) (cdr parts)))))))
+
+(defun drgnx-agents-join-text (s)
+  "Join the chunks of every entry of session S (`drgnx-agents-entry-text'): each :text is whole after."
+  (dolist (e (drgnx-agent-session-entries s)) (when (plist-get e :chunks) (drgnx-agents-entry-text e))))
 
 (defun drgnx-agents--find-tool (s id)
   (let (found)
@@ -722,6 +755,7 @@ turn Stop's deadline ended lets the held messages go."
           (interrupt (eq (drgnx-agent-session-stopping s) 'interrupt)))
       (when-let* ((u (or (plist-get (car r) :usage) (plist-get (plist-get (car r) :_meta) :usage))))
         (setf (drgnx-agent-session-usage s) u))
+      (drgnx-agents-join-text s)                ; a done entry's :text is whole
       (dolist (e (drgnx-agent-session-entries s)) (plist-put e :done t))
       (when (cdr r) (drgnx-agents--add s (list :type 'error :text (format "%s" (plist-get (cdr r) :message)))))
       (drgnx-agents--add s (list :type 'stop :stop reason :done t))

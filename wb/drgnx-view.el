@@ -76,9 +76,13 @@ draws its first row."
 
 ;;;; Types
 
-(cl-defstruct (drgnx-view-type (:constructor drgnx-view--make-type) (:copier nil))
+(cl-defstruct (drgnx-view-type (:constructor drgnx-view--make-type) (:copier nil) (:predicate drgnx-view--type-struct-p))
   "A view type: how its rows are rendered, grown and synced (`drgnx-view-define')."
   name render grow sync slice delay follow-tail key-test patched)
+
+(defun drgnx-view-type-p (name)
+  "Non-nil if the view type NAME is defined now (`drgnx-view-define'; its module may have been turned off)."
+  (and (assq name drgnx-view--types) t))
 
 (cl-defun drgnx-view-define (name &key render grow sync slice delay follow-tail key-test patched)
   "Define the view type NAME and return NAME.

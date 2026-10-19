@@ -152,13 +152,14 @@ On `window-buffer-change-functions'; never asks anything."
 Its rows are a view of type `agent-transcript' (read-only, no undo), drawn only while a window shows it."
   (setq-local truncate-lines nil
               revert-buffer-function (lambda (&rest _) (drgnx-agents-ui-refresh)))
-  (when (alist-get 'agent-transcript drgnx-view--types)  ; the type is the module's: none while it is off
+  (when (drgnx-view-type-p 'agent-transcript)        ; the type is the module's: none while it is off
     (drgnx-view-attach 'agent-transcript)))
 
 (defvar-local drgnx-agents-ui--synced nil
-  "What this transcript's last full sync saw: [SESSION ENTRIES COUNT PERMISSIONS REVIEWS STATUS QUEUE COMMANDS PAUSED
-EXIT STDERR LIVE], LIVE being ((ENTRY . SIGNATURE)...) for its tool and plan entries not done yet (they change in
-place).  When all of it is the same, a sync only looks at the growing text (`drgnx-agents-ui--sync').")
+  "What this transcript's last full sync saw: [SESSION ENTRIES COUNT PERMISSIONS REVIEWS STATUS QUEUE-VECTOR
+COMMANDS PAUSED EXIT STDERR LIVE PERMISSION-COUNT REVIEW-COUNT], LIVE being ((ENTRY . SIGNATURE)...) for its tool
+and plan entries not done yet (they change in place).  When all of it is the same, a sync only looks at the growing
+text (`drgnx-agents-ui--sync').")
 
 (defun drgnx-agents-ui--tool-lines (e depth)
   "Tool entry E and its children (nested DEPTH deep) as a list of lines."
@@ -195,8 +196,8 @@ and review to answer, `:status' (working or exited) and `:queue' (when messages 
   "Entry E's row: a string ending in a newline, or (BODY . SUFFIX) for the agent's text and thinking (they grow)."
   (pcase (plist-get e :type)
     ('user (concat (propertize (concat (if (plist-get e :steer) "↪ " "▸ ") (plist-get e :text)) 'face 'drgnx-agents-ui-user) "\n\n"))
-    ('agent (cons (plist-get e :text) "\n\n"))
-    ('thought (cons (propertize (concat "… " (plist-get e :text)) 'face 'drgnx-agents-ui-dim) "\n"))
+    ('agent (cons (drgnx-agents-entry-text e) "\n\n"))
+    ('thought (cons (propertize (concat "… " (drgnx-agents-entry-text e)) 'face 'drgnx-agents-ui-dim) "\n"))
     ('tool (apply #'concat (drgnx-agents-ui--tool-lines e 0)))
     ('plan (concat (mapconcat (lambda (p) (concat (pcase (plist-get p :status) ("completed" "☑ ") ("in_progress" "◐ ") (_ "☐ "))
                                                   (plist-get p :content) "\n"))
@@ -257,14 +258,12 @@ and review to answer, `:status' (working or exited) and `:queue' (when messages 
 
 (defun drgnx-agents-ui--grow-row (key body)
   "GROW of `agent-transcript': for an agent's text or thinking, what came after the BODY characters drawn (the
-thinking's with its 2-character prefix and dim face); nil (draw the row again) for anything else, or a text shorter
-than what was drawn."
-  (let* ((type (and (consp key) (plist-get key :type))) (text (and (memq type '(agent thought)) (plist-get key :text)))
-         (from (if (eq type 'thought) (- body 2) body)))
-    (when (and (stringp text) (>= from 0) (<= from (length text)))
-      (let ((new (substring text from)))
-        (when (eq type 'thought) (put-text-property 0 (length new) 'face 'drgnx-agents-ui-dim new))
-        new))))
+thinking's with its 2-character prefix and dim face), read from the newest chunks only (`drgnx-agents-entry-tail');
+nil (draw the row again) for anything else, or a text shorter than what was drawn."
+  (let* ((type (and (consp key) (plist-get key :type))) (from (if (eq type 'thought) (- body 2) body))
+         (new (and (memq type '(agent thought)) (>= from 0) (drgnx-agents-entry-tail key from))))
+    (when (and new (eq type 'thought)) (put-text-property 0 (length new) 'face 'drgnx-agents-ui-dim new))
+    new))
 
 (defun drgnx-agents-ui--tool-fields (children)
   "The status, title and children of each of CHILDREN and their own, depth first, as a list."
@@ -274,15 +273,16 @@ than what was drawn."
 
 (defun drgnx-agents-ui--sig (key)
   "KEY's signature for `drgnx-view-sync-rows' (compared element by element with `eq'): for an entry its type,
-status, title, children, plan entries and done (an agent's text or thinking: type and done, its text grows), with a
-tool's subagent calls' status, title and children; a permission or review is its own; the footer rows take the
-session's status, exit and queue (and what else they show)."
+status, title, children, plan entries and done (an agent's text or thinking: its type only, its text grows and
+`:done' does not change what it shows), with a tool's subagent calls' status, title and children; a permission or
+review is its own; the footer rows take the session's status, exit and each queued message (and what else they
+show)."
   (let ((s drgnx-agents-ui--session))
     (pcase key
       (:commands (vector (drgnx-agent-session-commands s)))
       (:status (vector (drgnx-agent-session-status s) (drgnx-agent-session-exit s) (drgnx-agent-session-stderr s)))
-      (:queue (vector (drgnx-agent-session-queue s) (drgnx-agent-session-paused s)))
-      ((guard (memq (plist-get key :type) '(agent thought))) (vector (plist-get key :type) (plist-get key :done)))
+      (:queue (apply #'vector (drgnx-agent-session-paused s) (drgnx-agent-session-queue s)))
+      ((guard (memq (plist-get key :type) '(agent thought))) (vector (plist-get key :type)))
       ((guard (plist-get key :type))
        (apply #'vector (plist-get key :type) (plist-get key :status) (plist-get key :title) (plist-get key :children)
               (plist-get key :entries) (plist-get key :done) (drgnx-agents-ui--tool-fields (plist-get key :children))))
@@ -297,10 +297,10 @@ session's status, exit and queue (and what else they show)."
 
 (defun drgnx-agents-ui--sync (view)
   "SYNC of `agent-transcript': mark VIEW's rows that changed since the last sync.
-Fast path: when the session's entries (the same list, as long), permissions, reviews, status, queue, commands,
-pause and exit are `eq' to the last sync's and no tool or plan entry still running changed, nothing but the growing
-text can have changed.  Otherwise `drgnx-view-sync-rows' diffs every row.  Then an agent's text or thinking not done
-yet that is longer than its drawn body is marked to grow."
+Fast path: when the session's entries, permissions and reviews (the same lists, as long), status, queued messages
+\(each one), commands, pause and exit are `eq' to the last sync's and no tool or plan entry still running changed,
+nothing but the growing text can have changed.  Otherwise `drgnx-view-sync-rows' diffs every row.  Then an
+agent's text or thinking not done yet that is longer than its drawn body is marked to grow."
   (let ((s drgnx-agents-ui--session))
     (when s
       (let ((old drgnx-agents-ui--synced) (entries (drgnx-agent-session-entries s)) (count 0) live texts)
@@ -311,8 +311,13 @@ yet that is longer than its drawn body is marked to grow."
               ((or 'agent 'thought) (push e texts))
               ((or 'tool 'plan) (push e live)))))
         (unless (and old (eq s (aref old 0)) (eq entries (aref old 1)) (= count (aref old 2))
-                     (eq (drgnx-agent-session-permissions s) (aref old 3)) (eq (drgnx-agent-session-reviews s) (aref old 4))
-                     (eq (drgnx-agent-session-status s) (aref old 5)) (eq (drgnx-agent-session-queue s) (aref old 6))
+                     ;; a `delq' keeps the head of a list whose first item stays: the lengths tell
+                     (eq (drgnx-agent-session-permissions s) (aref old 3))
+                     (= (length (drgnx-agent-session-permissions s)) (aref old 12))
+                     (eq (drgnx-agent-session-reviews s) (aref old 4)) (= (length (drgnx-agent-session-reviews s)) (aref old 13))
+                     (eq (drgnx-agent-session-status s) (aref old 5))
+                     ;; a requeue replaces a message in place: each one is compared
+                     (drgnx-agents-ui--same-items-p (drgnx-agent-session-queue s) (aref old 6))
                      (eq (drgnx-agent-session-commands s) (aref old 7)) (eq (drgnx-agent-session-paused s) (aref old 8))
                      (eq (drgnx-agent-session-exit s) (aref old 9)) (eq (drgnx-agent-session-stderr s) (aref old 10))
                      (= (length live) (length (aref old 11)))
@@ -325,13 +330,20 @@ yet that is longer than its drawn body is marked to grow."
           (drgnx-view-sync-rows view (drgnx-agents-ui--keys s) #'drgnx-agents-ui--sig)
           (setq drgnx-agents-ui--synced
                 (vector s entries count (drgnx-agent-session-permissions s) (drgnx-agent-session-reviews s)
-                        (drgnx-agent-session-status s) (drgnx-agent-session-queue s) (drgnx-agent-session-commands s)
+                        (drgnx-agent-session-status s) (vconcat (drgnx-agent-session-queue s)) (drgnx-agent-session-commands s)
                         (drgnx-agent-session-paused s) (drgnx-agent-session-exit s) (drgnx-agent-session-stderr s)
-                        (mapcar (lambda (e) (cons e (drgnx-agents-ui--sig e))) live))))
+                        (mapcar (lambda (e) (cons e (drgnx-agents-ui--sig e))) live)
+                        (length (drgnx-agent-session-permissions s)) (length (drgnx-agent-session-reviews s)))))
         (dolist (e texts)
           (let ((body (drgnx-view-body-length view e)))
-            (when (and body (/= body (+ (length (plist-get e :text)) (if (eq (plist-get e :type) 'thought) 2 0))))
+            (when (and body (/= body (+ (drgnx-agents-entry-length e) (if (eq (plist-get e :type) 'thought) 2 0))))
               (drgnx-view-grow view e))))))))
+
+(defun drgnx-agents-ui--same-items-p (list vec)
+  "Non-nil if LIST holds the elements of the vector VEC, in order, `eq'."
+  (let ((i 0) (n (length vec)))
+    (while (and list (< i n) (eq (car list) (aref vec i))) (setq list (cdr list) i (1+ i)))
+    (and (null list) (= i n))))
 
 (defun drgnx-agents-ui--buffer (s) (get-buffer-create (format "*agent: %s*" (drgnx-agent-session-name s))))
 
