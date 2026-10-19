@@ -62,7 +62,7 @@ _drgnx() {
         case "$cmd $sub" in
           'open '*) words='--check --wait -t --gui' ;;
           'doctor '*) words='--json --dev' ;;
-          'test '*) words='--one-process --ui --compositor --tty --scenario --config --bench --perf --audit --soak --container --install --bootstrap --fedora' ;;
+          'test '*) words='--one-process --leaks --shuffle --find-polluter --ui --compositor --tty --scenario --config --bench --perf --audit --soak --container --install --bootstrap --fedora' ;;
           'sync '*) words='--offline --seed --prune --dry-run' ;;
           'lock '*) words='--ship' ;;
           'onboard '*) words='--non-interactive --again --preset --keys --theme --roots --todos --step' ;;

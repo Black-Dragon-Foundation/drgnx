@@ -74,6 +74,9 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l install -d 'install.sh in fresh distribution containers'
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l bootstrap -d 'drgnx bootstrap on a fresh Fedora container'
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l fedora -x -a '44 45' -d 'Fedora release for --bootstrap'
+    complete -c drgnx -n '__fish_seen_subcommand_from test' -l leaks -d 'Report what each test file leaves behind'
+    complete -c drgnx -n '__fish_seen_subcommand_from test' -l shuffle -d "Each file's tests in a random order (=SEED fixes it)"
+    complete -c drgnx -n '__fish_seen_subcommand_from test' -l find-polluter -x -d 'Bisect to the test that breaks TEST'
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l tty -d 'Terminal tests: Emacs in private tmux servers'
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l compositor -x -a 'mutter sway x11 i3 kwin niri' -d 'Compositor of the GUI session'
     complete -c drgnx -n '__fish_seen_subcommand_from test; and __fish_seen_argument -l install' -a 'fedora-44 debian-trixie ubuntu-26.04 fedora-45 archlinux' -d 'Distribution image'
