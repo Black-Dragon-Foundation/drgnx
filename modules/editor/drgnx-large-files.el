@@ -12,15 +12,27 @@
 ;;   automatic path, a caller that needs the whole text), the remembered answer and the thresholds.
 ;; - The answers are remembered per file (its truename, or a remote name as it is) in a capped cache.
 ;; - `large-file-warning-threshold' follows `:ask-above', so `insert-file' still gets Emacs's own question.
-;; See docs/guide/modules.md and docs/reference/config.md.
+;; - The one door, an around-advice on `find-file-noselect': a new visit of a file above `:ask-above' opens in
+;;   chunks, lean or raw.  Only a command the user gave asks (`drgnx-large-files--ask'); every other open takes the
+;;   remembered answer, else chunks (raw without the chunks module), and never asks.  The server's requests are
+;;   automatic (`drgnx open --wait' needs the whole file).
+;; - Lean is `drgnx-large-file-mode': the gate (no parser, no eglot while the major mode runs) and the sweep (the
+;;   modes of `so-long-minor-modes' off, no undo, no auto-save).  A revert across `:ask-above' turns it on or off
+;;   without a question.  so-long runs everywhere.
+;; See docs/guide/modules.md, docs/develop/core.md ("Large files") and docs/reference/config.md.
 
 ;;; Code:
 (require 'drgnx-modules)
 (require 'drgnx-config)
 (require 'drgnx-memo)
 (require 'drgnx-guard)
+(require 'drgnx-large-file)
+(require 'so-long)
 
-(defvar drgnx-large-file-open)
+(defvar treesit-max-buffer-size)
+(defvar warning-suppress-log-types)
+(defvar warning-suppress-types)
+(declare-function server-execute "server")   ; advised before server.el loads; it applies once it does
 
 (defconst drgnx-large-files--mib 1048576 "Bytes in a MiB: the config's sizes are numbers of MiB.")
 
@@ -110,7 +122,7 @@ chunks can be built; without them chunks becomes raw.  Pure: the first rule that
   "How the open running now came: `whole' or `auto' when `drgnx-large-file-open' says so in the current buffer;
 else `auto' in automatic code (a timer, `drgnx-automatic', daemon startup), under `inhibit-interaction' or outside
 a command; else `command'."
-  (cond ((bound-and-true-p drgnx-large-file-open) (if (eq drgnx-large-file-open 'whole) 'whole 'auto))
+  (cond (drgnx-large-file-open (if (eq drgnx-large-file-open 'whole) 'whole 'auto))
         ((or (drgnx-guard-automatic-p) inhibit-interaction (null this-command)) 'auto)
         (t 'command)))
 
@@ -132,11 +144,157 @@ a command; else `command'."
   "SIZE bytes as a person reads it, for example \"412 MB\"."
   (file-size-human-readable size nil " " "B"))
 
+;;;; The door: one advice on `find-file-noselect'
+
+(defvar drgnx-large-files-chunk-open-function nil
+  "A function of (FILE SIZE THRESHOLDS) that returns a buffer holding FILE in chunks; nil when chunks cannot be
+built, and chunks then becomes raw.  The module editor/large-files-chunks sets it (`drgnx-module-set').")
+
+(defvar drgnx-large-files--door nil
+  "The thresholds of the file the door lets through to Emacs (dynamically bound around the visit): the sweep in
+`find-file-hook' reuses them rather than looking for the project file again.")
+
+(defun drgnx-large-files--chunks-ok ()
+  "Non-nil when chunk buffers can be built."
+  (and drgnx-large-files-chunk-open-function t))
+
+(defun drgnx-large-files--size (file)
+  "FILE's size on disk, following a link; nil when it does not exist or is a directory."
+  (let ((attrs (file-attributes file)))
+    (when (stringp (file-attribute-type attrs))
+      (setq attrs (file-attributes (file-truename file))))
+    (and attrs (not (eq (file-attribute-type attrs) t)) (file-attribute-size attrs))))
+
+(defun drgnx-large-files--ask (file size default chunks-ok)
+  "Ask how to open FILE of SIZE bytes: `lean', `raw' or `chunks' (only when CHUNKS-OK); quit is a `user-error'.
+DEFAULT, the mode listed first.  In the minibuffer, in a GUI too."
+  (let* ((choices (delq nil (list (and chunks-ok '(?c "chunks")) '(?n "normal (lean)") '(?r "raw") '(?q "quit"))))
+         (first (assq (pcase default ('chunks ?c) ('raw ?r) (_ ?n)) choices))
+         (answer (let ((use-dialog-box nil))
+                   (car (read-multiple-choice
+                         (format "%s is %s: " (file-name-nondirectory file) (drgnx-large-files--size-text size))
+                         (cons first (delq first choices)))))))
+    (pcase answer
+      (?c 'chunks)
+      (?n 'lean)
+      (?r 'raw)
+      (_ (user-error "Aborted")))))
+
+(defun drgnx-large-files--open-as (mode orig file nowarn size thresholds)
+  "Visit FILE of SIZE bytes in MODE (`lean', `raw' or `chunks') through ORIG, the original `find-file-noselect'
+\(NOWARN passed on); return the buffer.  THRESHOLDS: FILE's, for the chunks."
+  (pcase mode
+    ('lean
+     (require 'treesit nil t)
+     (require 'warnings)
+     (let ((buf (let ((large-file-warning-threshold nil)
+                      ;; the major mode and its hooks run before the flag is set: they see "large" all the same
+                      (drgnx-large-file--opening 'lean)
+                      ;; a *-ts-mode starts no parser, and does not warn about it
+                      (treesit-max-buffer-size (max 0 (1- size)))
+                      (warning-suppress-types (cons '(treesit) warning-suppress-types))
+                      (warning-suppress-log-types (cons '(treesit) warning-suppress-log-types)))
+                  (funcall orig file nowarn nil nil))))
+       (with-current-buffer buf
+         (unless (eq drgnx-large-file 'lean) (drgnx-large-file-mode 1)))
+       buf))
+    ('raw
+     (let ((buf (let ((large-file-warning-threshold nil)) (funcall orig file nowarn t nil))))
+       (with-current-buffer buf
+         (setq drgnx-large-file 'raw)
+         (drgnx-large-file-mode 1))      ; a raw visit runs no `find-file-hook': the sweep runs here
+       buf))
+    ('chunks (funcall drgnx-large-files-chunk-open-function file size thresholds))))
+
+(defun drgnx-large-files--visit (orig filename nowarn rawfile wildcards)
+  "The door: `find-file-noselect' (ORIG) of FILENAME, NOWARN, RAWFILE, WILDCARDS.
+A new visit of a readable file above `:ask-above' opens in the mode `drgnx-large-files--decide' gives: a command
+asks once, everything else never asks.  Anything else goes to ORIG unchanged."
+  (let* ((file (expand-file-name filename))
+         (size (and (not rawfile)
+                    (not (and wildcards (string-match-p "[[*?]" filename)))
+                    (drgnx-large-files--size file)))
+         (th (and size (drgnx-large-files-thresholds file)))
+         (ask (plist-get th :ask-above))
+         (mode (and ask (> size ask)
+                    (not (find-buffer-visiting file))
+                    (file-readable-p file)
+                    (drgnx-large-files--decide size (drgnx-large-files--how) (drgnx-large-files-remembered file)
+                                               th (drgnx-large-files--chunks-ok)))))
+    (pcase mode
+      ((or 'nil 'pass)
+       (let ((drgnx-large-files--door th)) (funcall orig filename nowarn rawfile wildcards)))
+      (`(ask . ,default)
+       (let ((answer (drgnx-large-files--ask file size default (drgnx-large-files--chunks-ok))))
+         (drgnx-large-files-remember file answer)
+         (drgnx-large-files--open-as answer orig file nowarn size th)))
+      (_ (drgnx-large-files--open-as mode orig file nowarn size th)))))
+
+;;;; Lean
+
+(defun drgnx-large-files--header-refresh ()
+  "Refresh the current buffer's header line, which offers the other modes.  Nothing yet: it has none."
+  nil)
+
+(define-minor-mode drgnx-large-file-mode
+  "Lean: this buffer holds a large file whole, without the expensive modes (those of `so-long-minor-modes'),
+undo or auto-save.  On, it sets the flag `drgnx-large-file' (a raw or chunk buffer keeps its own); off, it clears
+it and gives undo and auto-save back, but turns no mode back on (a revert does, by running the major mode again)."
+  :lighter nil
+  (if drgnx-large-file-mode
+      (progn
+        (unless (memq drgnx-large-file '(raw chunks)) (setq drgnx-large-file 'lean))
+        (dolist (m so-long-minor-modes)       ; as so-long turns them off
+          (when (and (boundp m) (symbol-value m) (fboundp m)) (funcall m 0)))
+        (buffer-disable-undo)
+        (auto-save-mode -1)
+        (drgnx-large-files--header-refresh))
+    (setq drgnx-large-file nil)
+    (buffer-enable-undo)
+    (auto-save-mode (if auto-save-default 1 -1))))
+
+(defun drgnx-large-files--sweep-p ()
+  "Non-nil when the buffer `find-file-hook' runs in should be lean: it holds a large file, or its text is above
+`:ask-above' (a compressed file is asked about by its size on disk, and turns lean here)."
+  (or (drgnx-large-file-p)
+      (let ((ask (plist-get (or drgnx-large-files--door (drgnx-large-files-thresholds buffer-file-name))
+                            :ask-above)))
+        (and ask (> (buffer-size) ask)))))
+
+(defun drgnx-large-files--after-revert ()
+  "After a revert, follow the size across `:ask-above' without a question: a lean buffer at or below it turns lean
+off and runs its major mode again; a buffer above it turns lean.  Raw and chunk buffers stay as they are."
+  (when (and buffer-file-name (not (memq drgnx-large-file '(raw chunks))))
+    (let* ((ask (plist-get (drgnx-large-files-thresholds buffer-file-name) :ask-above))
+           (size (drgnx-large-files--size buffer-file-name))
+           (big (and ask (or (> (buffer-size) ask) (and size (> size ask))))))
+      (cond ((and (eq drgnx-large-file 'lean) (not big))
+             (drgnx-large-file-mode -1)
+             ;; a revert may run from a timer (auto-revert): only safe local variables, never a question
+             (let ((enable-local-variables (if (eq enable-local-variables t) :safe enable-local-variables)))
+               (normal-mode t)))
+            ((and big (not (eq drgnx-large-file 'lean)))
+             (drgnx-large-file-mode 1))))))
+
+(defun drgnx-large-files--teardown ()
+  "Turn lean off in every lean or raw buffer, without running major modes again on huge buffers (it says so).
+Chunk buffers stay."
+  (let ((any nil))
+    (dolist (b (buffer-list))
+      (when (memq (buffer-local-value 'drgnx-large-file b) '(lean raw))
+        (with-current-buffer b (drgnx-large-file-mode -1))
+        (setq any t)))
+    (when any (message "Large files off: lean buffers keep their mode until you revert them"))))
+
+(defconst drgnx-large-files--sweep-modes '(indent-bars-mode drgnx-blame-mode drgnx-sticky-mode diff-hl-margin-mode)
+  "The expensive modes so-long's `so-long-minor-modes' lacks: the module adds them, so lean and so-long share one list.")
+
 ;;;; The module
 
 (drgnx-module-define 'editor/large-files
                      :doc "Large files: above a size, a file opens in chunks, lean or raw (a command asks once), never freezing Emacs."
                      :stage 'startup
+                     :teardown #'drgnx-large-files--teardown
                      :setup (lambda ()
                               (drgnx-large-files--define-config)
                               (drgnx-memo-activate 'drgnx-large-files--answers)
@@ -144,7 +302,28 @@ a command; else `command'."
                               ;; the listener sets the threshold as this module, so each change is undone at teardown
                               (let ((sync (drgnx-modules-with-owner (drgnx-large-files--sync-threshold))))
                                 (drgnx-module-hook 'drgnx-config-changed-functions config-changed (name)
-                                  (when (eq name 'large-files) (funcall sync))))))
+                                  (when (eq name 'large-files) (funcall sync))))
+                              ;; the door, and the server's requests, which are automatic
+                              (drgnx-module-advice #'find-file-noselect :around open
+                                                   (orig filename &optional nowarn rawfile wildcards)
+                                (drgnx-large-files--visit orig filename nowarn rawfile wildcards))
+                              (drgnx-module-advice #'server-execute :around server (orig proc files nowait &rest rest)
+                                ;; `drgnx open --wait': drgnx as $EDITOR needs the whole file
+                                (let ((drgnx-large-file-open (if (and files (not nowait)) 'whole 'auto)))
+                                  (apply orig proc files nowait rest)))
+                              ;; lean: the gate, the sweep, the revert
+                              (drgnx-module-advice #'eglot-ensure :before-while not-large ()
+                                (not (drgnx-large-file-p)))
+                              (drgnx-module-hook 'find-file-hook sweep () :depth -90
+                                                 (when (drgnx-large-files--sweep-p) (drgnx-large-file-mode 1)))
+                              (drgnx-module-hook 'after-revert-hook revert ()
+                                (drgnx-large-files--after-revert))
+                              ;; so-long everywhere, on the same list of modes
+                              (unless global-so-long-mode (global-so-long-mode 1))
+                              (let ((modes so-long-minor-modes))
+                                (dolist (m drgnx-large-files--sweep-modes)
+                                  (unless (memq m modes) (setq modes (append modes (list m)))))
+                                (drgnx-module-set 'so-long-minor-modes modes))))
 
 (provide 'drgnx-large-files)
 ;;; drgnx-large-files.el ends here

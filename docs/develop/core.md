@@ -2167,6 +2167,29 @@ context). A buffer whose commands visit files can set it buffer-locally (`setq-l
 caller's buffer. A file that only binds it, without requiring `drgnx-large-file`, declares
 `(defvar drgnx-large-file-open)` so that a lexical-binding `let` binds it dynamically.
 
+**The door** (`modules/editor/drgnx-large-files.el`) is one named around-advice on `find-file-noselect`. It lets a
+visit through unchanged when RAWFILE is given, the name has wildcards, a buffer already visits the file, the file is
+missing, a directory or unreadable, or its size on disk is at or below `:ask-above` (one `file-attributes`, one
+`drgnx-config-get` and, for a local file, one `locate-dominating-file`). Above it, `drgnx-large-files--decide`
+picks the mode. Only a command the user gave asks (`read-multiple-choice`, never a dialog box): `this-command` is
+set, `drgnx-guard-automatic-p` and `inhibit-interaction` are nil and the caller bound no `drgnx-large-file-open`.
+The answer is remembered for the session. Every other open takes the remembered answer, else chunks (raw without
+the chunks module, `drgnx-large-files-chunk-open-function` nil). A second advice, on `server-execute`, binds
+`drgnx-large-file-open`: `whole` for a client that waits for its files (`drgnx open --wait`), `auto` for every
+other request, the `-e (find-file …)` forms of `drgnx -t` included. Quit is a `user-error`; the door always
+returns a buffer.
+
+**Lean** is `drgnx-large-file-mode`. While a lean open runs, `drgnx-large-file--opening` makes the predicate true,
+`treesit-max-buffer-size` is below the size (a `*-ts-mode` starts no parser, and its warning is suppressed) and a
+`:before-while` advice makes `eglot-ensure` a no-op. The sweep, in `find-file-hook` at depth -90, turns the mode on
+for a large file, or for a buffer whose text is above `:ask-above` (a compressed file that expands). The mode turns
+off every mode of `so-long-minor-modes` that is on (the module adds indent-bars, blame, sticky and diff-hl's margin
+mode to that one list), then undo and auto-save. A raw visit (`find-file-noselect` with RAWFILE) runs no
+`find-file-hook`, so the door runs the sweep itself. An `after-revert-hook` follows the size across `:ask-above`
+without a question: a lean buffer at or below it turns lean off and runs `normal-mode` again (only safe local
+variables), a normal one above it turns lean; raw and chunk buffers stay. `global-so-long-mode` is on. The
+teardown turns lean off in lean and raw buffers but does not re-run their major modes, and says so.
+
 ## The workbench state store (`wb/drgnx-state.el`, `core/drgnx-frame-kind.el`)
 
 One observed answer for "which windows, panes and frames are there". The store keeps one record per workbench
