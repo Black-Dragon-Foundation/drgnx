@@ -1176,9 +1176,9 @@ variable. START to the end of the buffer belongs to the view: text there that is
 (the self-check below). When START is `point-min` the buffer becomes read-only; otherwise each drawn row gets
 `read-only t` and `front-sticky (read-only)`, so typing at START, inside a row, between two rows or after the last
 row is refused (`text-read-only`), while text above START (replace's widgets) stays editable. A widget field that
-ends exactly at START cannot grow at its end: end the text above START with a newline. Attaching also puts
-`drgnx-view--buffer-shown` on the buffer's own `window-buffer-change-functions`. Attaching again removes the old
-view's rows first and releases its marker.
+ends exactly at START cannot grow at its end: end the text above START with a newline. Attaching adds the view to
+`drgnx-view--live` (weak), whose views the workbench state store's events update (Visibility, below), and adds
+nothing to a window hook. Attaching again removes the old view's rows first and releases its marker.
 
 ### Marks
 
@@ -1254,21 +1254,30 @@ the slice stops when the deadline has passed or `input-pending-p`. The first che
 draws at least `min(8, work)` rows, and its rows are a multiple of 8 except the last. Views ripe in one timer pass
 share the deadline while it is unspent: a view that finishes early leaves the next the rest of the slice. A view
 that finds the deadline already spent starts a fresh one, so N sliced views that each use a whole slice cost
-N × SLICE in one gap; the spec's "at most 4 ms per gap for all views" needs a timer-pass identity (the store,
-Task 15). Views are not queued or ranked: each one's timer fires in turn. Each slice draws the **visible rows first** (for each window on a visible frame, the
+N × SLICE in one gap; the spec's "at most 4 ms per gap for all views" needs a timer-pass identity, which nothing
+gives yet. Views are not queued or ranked: each one's timer fires in turn. Each slice draws the **visible rows first** (for each window on a visible frame, the
 entries from the one at `window-start`, `window-body-height` of them), then the rest, each sweep in buffer order.
 `:slices` counts the slices of SLICE types and `:max-slice-rows` the most rows one drew. When a draw leaves no view
 with work (and the view is not stale), the gap is quiet: `drgnx-gc-gap` runs (when `drgnx-gc` is loaded).
 
-**Visibility (before the store).** `(drgnx-view-shown-p VIEW)` is non-nil when a window on a visible frame shows the
-buffer, as `get-buffer-window` with `'visible` answers but without its window list: it walks the frames `next-frame`
-reaches from the selected one and their window trees, allocating nothing. (That is the selected frame's terminal: a
-view shown only on another terminal counts as hidden until a window change there.) The view keeps the last answer
-in its `shown`. A timer draw of a hidden view sets `stale`, adds 1 to `:stale-skips` and returns: **a hidden view
-draws nothing and allocates nothing**. While it is stale its marks arm no timer (they cost a hash put and the frame
-walk). When a window starts showing the buffer, `drgnx-view--buffer-shown` (on the buffer's own
-`window-buffer-change-functions`, which redisplay runs) arms the draw of a stale view; a mark on a stale view that
-shows again does too. Store Task 15 replaces this with the store's visibility.
+**Visibility: from the workbench state store.** `(drgnx-view-shown-p VIEW)` is non-nil when a window on a visible
+frame shows the buffer. It has one source at a time. While `drgnx-state-mode` is on (core/workbench turns it on),
+the answer is the view's `shown`, which only the store's events set: `drgnx-view--windows-changed`, subscribed in
+core/workbench's setup on the `now` lane to `windows-changed`, `frame-visibility` and `frame-removed` (before the
+store first observes), sets every attached view's `shown` from the store's records: some window the store recorded
+(`drgnx-state-windows` over `drgnx-state-frames`, every terminal's frames) on a frame that `frame-visible-p` calls
+visible shows the buffer. Attaching sets it the same way. For a stale view that shows now, the subscriber also arms
+the draw. It only marks and arms, never draws: it runs inside the observation, possibly during redisplay (the
+store's `now` lane). So a view shown only on another terminal's frame (a daemon with a graphical and a terminal
+client) draws, and a stale view wakes when its frame is shown again (de-iconified: `frame-visibility`), not only on
+a window change. The store observes at the end of each command and on window changes during redisplay, so a frame
+shown again by the window manager alone is seen at the next command in it. With the store off (core/workbench
+turned off), the answer is the live windows': the frames `next-frame` reaches from the selected one (that
+terminal's) and their window trees, as `get-buffer-window` with `'visible` answers but without its window list;
+then a stale view wakes only on its next mark. Either way the answer allocates nothing. A timer draw of a hidden
+view sets `stale`, adds 1 to `:stale-skips` and returns: **a hidden view draws nothing and allocates nothing**.
+While it is stale its marks arm no timer (they cost a hash put and the visibility read). No view adds a function to
+a window-change hook.
 
 ### Keeping places
 
@@ -1397,9 +1406,10 @@ buffer. Otherwise it names the first fault. Tests: `test/unit/wb-view-test.el` (
 seeded random marks checked against a plain list and an append that stays in place) and
 `test/unit/wb-view-live-test.el` (prefix `drgnx-view-live/`: the timer, visibility, slices, places, all on the
 virtual clock; slices replace `drgnx-timer-now` with a clock that steps per read, and since batch Emacs runs no
-redisplay the visibility tests call `drgnx-view--buffer-shown` as redisplay would). Helpers in
-`test/fixtures/view-fixture.el` (`drgnx-view-test-with-type`, `drgnx-view-test--text`, `drgnx-view-test--expected`,
-`drgnx-view-test--alloc`).
+redisplay the visibility tests turn the store on with `drgnx-view-test-store-on`, inside `drgnx-test-with-state`, and
+call `drgnx-state-sync` where a command's end or redisplay would observe; a frame shown again is a stubbed
+`frame-visible-p`). Helpers in `test/fixtures/view-fixture.el` (`drgnx-view-test-with-type`, `drgnx-view-test--text`,
+`drgnx-view-test--expected`, `drgnx-view-test--alloc`, `drgnx-view-test-store-on`).
 
 ### Mark, don't erase
 
@@ -2270,6 +2280,7 @@ computed. In one observation they go out in this order; `frame-removed` comes on
 | `frame-added` | a `gui` or `tty` frame is first recorded | `:frame :kind` |
 | `frame-kind` | its kind, `drgnx-frame-role` or `drgnx-monitor` changed (seen at `drgnx-state-sync`) | `:frame :old :new`, each `(:kind :role :monitor)` |
 | `frame-resized` | its text columns or lines, or its pixel size, changed | `:frame :old :new`, each `(:cols :lines :width :height)` |
+| `frame-visibility` | its `frame-visible-p` changed: iconified, made invisible, shown again (no window changes) | `:frame :old :new`, each `t`, `icon` or nil |
 | `windows-changed` | a window came or went, or shows another buffer or role | `:frame :windows` |
 | `groups-changed` | editor windows came or went | `:frame :added :removed` |
 | `pane-hidden` | a pane kind stopped showing in a window: its window went, an area's front tab changed, a dock shows another section | `:frame :kind :window :cause :by` |
@@ -2309,7 +2320,9 @@ and cancel each pane's check (and an agent's edits' file watches), so a hidden p
 and bus and the store's hooks off. It saves every bound variable listed in `drgnx-state-test--variables` (the
 store's tables, its subscribers and idle queue, `drgnx-signal--subscribers`, `--state`, `--posted`, `--timer`,
 `--editor`, `--switched`, `drgnx-signal-errors`) and restores them with `set` afterwards, never `let`; timers are
-cancelled on the way in and out. A batch test delivers the idle lane by calling `drgnx-signal--flush` (or only
+cancelled on the way in and out, and `global-minor-modes` lists `drgnx-state-mode` again only if it did before (a
+mode turned on inside and restored by value would stay listed, and a module recorder that later sees the mode turned
+on would push no undo for it). A batch test delivers the idle lane by calling `drgnx-signal--flush` (or only
 `drgnx-state--deliver-idle`). A task that adds store or bus state adds its variable there. `(drgnx-test-use-editor
 WINDOW)` makes WINDOW the MRU editor through `drgnx-state-use-editor`. Tests never set bus internals by hand. Tests: `test/unit/wb-state-test.el`, `test/unit/wb-state-events-test.el`
 (one per event, the lanes, `:cause`); the terminal tier's `test/tty/state-test.el` (a split made by a timer is seen

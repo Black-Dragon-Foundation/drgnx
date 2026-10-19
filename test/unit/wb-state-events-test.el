@@ -56,8 +56,8 @@
 ;;;; Listening
 
 (defconst drgnx-state-events-test--events
-  '(frame-added frame-kind frame-resized windows-changed groups-changed pane-hidden pane-shown pane-resized
-                selected-changed editor-changed frame-removed)
+  '(frame-added frame-kind frame-resized frame-visibility windows-changed groups-changed pane-hidden pane-shown
+                pane-resized selected-changed editor-changed frame-removed)
   "Every event, in the order one observation emits them.")
 
 (defvar drgnx-state-events-test--log nil "(EVENT . DATA) delivered, newest first.")
@@ -130,6 +130,20 @@
       (drgnx-state-sync f)
       (should (equal '(:kind tty :role main :monitor (:name "DP-1"))
                      (plist-get (car (drgnx-state-events-test--of 'frame-kind (drgnx-state-events-test--take))) :new))))))
+
+(ert-deftest drgnx-state-events/frame-visibility-when-iconified-and-shown-again ()
+  ;; No window changes: only the frame's visibility (`frame-visible-p' answers `icon' while iconified).
+  (drgnx-state-events-test--with
+    (let ((f (selected-frame)))
+      (drgnx-state-sync f)
+      (drgnx-state-events-test--listen)
+      (cl-letf (((symbol-function 'frame-visible-p) (lambda (_frame) 'icon)))
+        (drgnx-state-sync f))
+      (should (equal (list (list 'frame-visibility :frame f :old t :new 'icon)) (drgnx-state-events-test--take)))
+      (drgnx-state-sync f)
+      (should (equal (list (list 'frame-visibility :frame f :old 'icon :new t)) (drgnx-state-events-test--take)))
+      (drgnx-state-sync f)
+      (should-not (drgnx-state-events-test--take)))))
 
 (ert-deftest drgnx-state-events/windows-changed-on-split ()
   (drgnx-state-events-test--with

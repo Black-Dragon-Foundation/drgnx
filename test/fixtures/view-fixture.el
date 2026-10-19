@@ -6,7 +6,8 @@
 ;; `drgnx-view-test-with-type' defines a throwaway view type around a body.  `drgnx-view-test--text' is a view's
 ;; region as a string; `drgnx-view-test--expected' is every row rendered fresh, concatenated: a view is right when
 ;; the two are equal and `drgnx-view--check' is nil.  `drgnx-view-test--alloc' counts what a byte-compiled call
-;; allocates (until the determinism suite's `drgnx-test-alloc' replaces it).
+;; allocates (until the determinism suite's `drgnx-test-alloc' replaces it).  `drgnx-view-test-store-on' makes views
+;; follow the workbench state store, as core/workbench does.
 
 ;;; Code:
 (require 'cl-lib)
@@ -36,6 +37,15 @@ signals)."
                   (error (drgnx-view--error-text key (error-message-string err))))))
         (push (if (consp r) (concat (car r) (cdr r)) r) parts)))
     (apply #'concat (nreverse parts))))
+
+(defun drgnx-view-test-store-on ()
+  "Inside `drgnx-test-with-state' (test/fixtures/state-fixture.el): views learn whether they show from the workbench
+state store, as core/workbench's setup has it — `drgnx-view--windows-changed' on the store's `windows-changed',
+`frame-visibility' and `frame-removed' (lane `now'), then `drgnx-state-mode' on, which observes the frames.  Batch
+Emacs has no redisplay: a test calls `drgnx-state-sync' where a command's end or redisplay would observe."
+  (dolist (event '(windows-changed frame-visibility frame-removed))
+    (drgnx-state-subscribe event #'drgnx-view--windows-changed :lane 'now))
+  (drgnx-state-mode 1))
 
 (defun drgnx-view-test--compile-library ()
   "Byte-compile the view library's functions in place: the tests run on source, and an interpreted call conses."
