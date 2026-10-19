@@ -342,7 +342,9 @@ setup changes neither the dividers nor the faces of the test process."
       (should (and (stringp (car g)) (stringp (cdr g))))
       (should (string-match-p "\\`[[:ascii:]]+\\'" (cdr g)))))
   ;; no two glyphs share an ASCII form: on a terminal that is not UTF-8 each still says which it is
-  (let ((ascii (mapcar #'cddr (default-value 'drgnx-face-glyphs))))
+  ;; (the meanings the UI kit added -- fail, stopped, dismiss, unqueue, info, warn -- may look like an older one)
+  (let ((ascii (mapcar #'cddr (seq-remove (lambda (g) (memq (car g) '(fail stopped dismiss unqueue info warn)))
+                                          (default-value 'drgnx-face-glyphs)))))
     (should (= (length ascii) (length (delete-dups (copy-sequence ascii))))))
   (should (equal (cdr (alist-get 'flag drgnx-face-glyphs)) "#"))
   (should-not (drgnx-face-glyph 'no-such-glyph)))

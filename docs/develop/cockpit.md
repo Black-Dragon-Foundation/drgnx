@@ -66,7 +66,8 @@ matches a node whose title or path contains it, or one of its ancestors' (case i
 - `(drgnx-cockpit-timeline &key since)` gives chips `(:id :at :agent :kind :label :target)` after an event id, such as
   `T6 ✓`, `T7 review: fail` or `s-1 asks you`. A turn's `start` and `stop` (`:turn t`) are not chips.
 - A `:target` is `(:node ID :event ID)`. The node is the event's task node, else its agent's, else its job's.
-- Glyphs come from `drgnx-face-glyph` when the face is loaded.
+- Glyphs come from `drgnx-face-glyph` (the UI kit in core, always loaded), so a terminal that is not UTF-8 shows
+  their ASCII forms. Tests that compare glyphs pin `drgnx-ui-ascii-frame-p` (CI runs in the C locale).
 - The limits are `drgnx-cockpit-happened-limit` (50) and `drgnx-cockpit-timeline-limit` (300).
 
 ## Edits

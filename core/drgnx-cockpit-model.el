@@ -15,6 +15,7 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
+(require 'drgnx-ui-kit)
 (require 'drgnx-timer)
 (require 'drgnx-work-db)
 (require 'drgnx-coord)
@@ -74,12 +75,11 @@ the files past it show no count."
   "The most files `drgnx-cockpit-changed-files' checks, and so lists; the rest are counted, as (:more N)."
   :type 'natnum :group 'drgnx-cockpit)
 
-(declare-function drgnx-face-glyph "drgnx-face")
 (defvar read-eval)                      ; so a let binds it dynamically in compiled code
 
 (defun drgnx-cockpit--glyph (name unicode)
-  "The glyph NAME (`drgnx-face-glyph', when the face is loaded), else UNICODE."
-  (if (fboundp 'drgnx-face-glyph) (drgnx-face-glyph name) unicode))
+  "The glyph NAME (`drgnx-face-glyph', the core's table), else UNICODE when the table has no such glyph."
+  (or (drgnx-face-glyph name) unicode))
 
 (defun drgnx-cockpit--line (text &optional max)
   "TEXT as one line of at most MAX (200) characters."

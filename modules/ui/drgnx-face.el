@@ -15,6 +15,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-face-state)
+(require 'drgnx-ui-kit)                     ; the glyph table and `drgnx-face-glyph' live in core
 (require 'drgnx-frame-kind)
 (defvar flymake-show-diagnostics-at-end-of-line)
 (defvar display-line-numbers-width-start)
@@ -25,7 +26,6 @@
 (declare-function drgnx-quickhelp-setup "drgnx-quickhelp")
 (declare-function drgnx-topline-setup "drgnx-topline")
 (declare-function drgnx-start-setup "drgnx-start")
-(declare-function drgnx-tty-popups-ascii-p "drgnx-tty-popups")
 (declare-function drgnx-platform-wm "drgnx-platform-wm")
 (declare-function x-change-window-property "xfns.c")
 (declare-function x-delete-window-property "xfns.c")
@@ -114,32 +114,6 @@ drgnx (`systemctl --user restart drgnx'); on X11 and on a Mac it applies at once
 (defcustom drgnx-face-gtk-theme "Adwaita"
   "The GTK theme whose dark (or light) variant the title bar uses: GTK_THEME becomes NAME:dark when drgnx starts."
   :type 'string :set #'drgnx-face--set :group 'drgnx-face)
-
-(defcustom drgnx-face-glyphs
-  '((handle "⠿" . "::") (close "×" . "x") (branch "⑂" . "Y") (warning "⚠" . "!") (ok "✓" . "+")
-    (busy "◎" . "@") (waiting "◐" . "?") (paused "⏸" . "||") (ahead "↑" . "^") (behind "↓" . "v")
-    (dot "●" . "*") (circle "○" . "o") (sep " · " . " | ") (flag "⚑" . "#")
-    (diamond "◆" . "<>") (search "⌕" . "/") (bullet "•" . ">") (minimize "–" . "-") (maximize "▢" . "[]"))
-  "The glyphs drgnx draws: NAME → (UNICODE . ASCII).  The ASCII form is used on a terminal frame that is not UTF-8.
-Change one to suit your font; `drgnx-face-glyph' reads this."
-  :type '(alist :key-type symbol :value-type (cons (string :tag "Unicode") (string :tag "ASCII")))
-  :group 'drgnx-face)
-
-;;;; Glyphs
-
-(defun drgnx-face--ascii-frame-p (frame)
-  "Non-nil when FRAME is a terminal frame whose terminal does not write UTF-8."
-  (if (fboundp 'drgnx-tty-popups-ascii-p)
-      (drgnx-tty-popups-ascii-p frame)
-    (and (not (display-graphic-p frame))
-         (let ((coding (terminal-coding-system (frame-terminal frame))))
-           (not (and coding (string-prefix-p "utf-8" (symbol-name (coding-system-base coding)))))))))
-
-(defun drgnx-face-glyph (name &optional frame)
-  "The glyph NAME (see `drgnx-face-glyphs') as a string: its ASCII form on a terminal frame that is not UTF-8.
-FRAME defaults to the selected one.  nil when NAME is unknown."
-  (when-let* ((g (alist-get name drgnx-face-glyphs)))
-    (if (drgnx-face--ascii-frame-p (or frame (selected-frame))) (cdr g) (car g))))
 
 ;;;; Frames
 

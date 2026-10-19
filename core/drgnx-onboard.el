@@ -17,6 +17,7 @@
 (require 'subr-x)
 (require 'tabulated-list)
 (require 'drgnx-paths)
+(require 'drgnx-ui-kit)
 (require 'drgnx-file)
 (require 'drgnx-config)
 (require 'drgnx-modules)
@@ -1770,6 +1771,10 @@ there; it runs nothing (each step keeps its own consent)."
     (buttonize (format "Next: %s" (plist-get (alist-get next drgnx-onboard--steps) :title))
                #'drgnx-onboard--goto-step next)))
 
+(defun drgnx-onboard--status-text (status)
+  "STATUS (a step's result) as its name with the kit's glyph and face."
+  (drgnx-ui-status (pcase status ('ok 'ok) ('fail 'fail) ((or 'missing 'warn) 'warn) (_ 'info)) (symbol-name status)))
+
 (defun drgnx-onboard--entries ()
   (let ((state (drgnx-onboard-state)))
     (mapcar (lambda (id)
@@ -1777,7 +1782,7 @@ there; it runs nothing (each step keeps its own consent)."
                      (busy (and (eq id (car drgnx-onboard--progress)) (cdr drgnx-onboard--progress)))
                      (next (and s (not busy) (drgnx-onboard--next-button id state))))
                 (list id (vector (plist-get spec :title)
-                                 (cond (busy "…") (s (symbol-name (plist-get s :status))) (t "—"))
+                                 (cond (busy "…") (s (drgnx-onboard--status-text (plist-get s :status))) (t "—"))
                                  (if next
                                      (concat (plist-get s :message) "  " next)
                                    (or busy (plist-get s :message) (plist-get spec :doc)))))))

@@ -12,6 +12,7 @@ init/init.el         core/ on the load path, (require 'drgnx), (drgnx-init); a p
 core/drgnx.el        drgnx-init: guard on, staged hooks armed, keep-running choice read, the first window's Welcome
                      (a first start only), packages activated, core commands, modules, surfaces (DRGNX_SAFE — drgnx
                      safe — skips packages and modules)
+core/drgnx-ui-kit.el  the UI kit: glyphs by meaning, status faces (the UI kit section)
 core/drgnx-session.el  drgnx PATH's Emacs side, Open Folder…, keep running or quit, Quit drgnx; session.eld is a config file (../guide/opening.md)
 core/drgnx-macos.el  the drgnx app on macOS (drgnx macos-app; ../guide/opening.md)
 core/drgnx-tty.el    terminals, batch-safe: which one, what it can do, keys it can send, terminfo, tmux (../guide/terminal.md)
@@ -2249,6 +2250,22 @@ What the `areas` backend does with the edges:
   first, so focus ends in the editor window rather than in the new dock.
 - Redefining a kind with another home takes it out of its old dock; an editor kind's place rule goes when its
   `:buffer` or home changes.
+
+## The UI kit (`drgnx-ui-kit.el`)
+
+What every surface that draws a mark shares. It is in core and requires nothing beyond `subr-x`, so the status bar,
+the lists and the notices work without the `ui/face` module.
+
+- `drgnx-face-glyphs` (group `drgnx`; the name is kept so a saved value still applies, and a name a saved value
+  lacks comes from the standard table, `drgnx-ui--default-glyphs`) and
+  `(drgnx-face-glyph NAME &optional FRAME)`. One glyph per meaning (`close`, `fail`, `stopped`, `dismiss`,
+  `unqueue`, `info`, `warn`, `waiting`, …), each `(UNICODE . ASCII)`. Never hard-code a character or a fallback:
+  call `drgnx-face-glyph`.
+- `(drgnx-ui-ascii-frame-p &optional FRAME)`: a terminal frame whose terminal does not write UTF-8. Tests stub it.
+  `drgnx-tty-popups-ascii-p` is an alias.
+- Faces `drgnx-status-ok`, `-info`, `-warn`, `-fail` and `-needs-you`. They inherit theme faces only.
+- `(drgnx-ui-status SEVERITY &optional TEXT)`: the glyph for `ok`, `info`, `warn`, `fail` or `needs-you` (glyph
+  `waiting`), then a space and TEXT, in the status face. The module list and the onboarding steps use it.
 
 ## Read and write through drgnx-file
 

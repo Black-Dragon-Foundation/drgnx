@@ -35,7 +35,7 @@ buffers are killed after: they owned their hooks and their timers."
          (ignore m1 m2)
          (cl-letf (((symbol-function 'drgnx-cockpit-sessions) (lambda () sessions))
                    ;; a UTF-8 terminal whatever the locale (CI's C locale is not): the ASCII tests say so themselves
-                   ((symbol-function 'drgnx-cockpit-graph--ascii-p) #'ignore)
+                   ((symbol-function 'drgnx-ui-ascii-frame-p) #'ignore)
                    ((symbol-function 'drgnx-agents-sessions) (lambda () mirrors))
                    ((symbol-function 'drgnx-hub-call)
                     (lambda (method params cb) (push (list method params) drgnx-cockpit-feed-test--hub) (funcall cb t nil) 1))
@@ -171,7 +171,7 @@ buffers are killed after: they owned their hooks and their timers."
       (should (string-search "not reporting — add drgnx on its settings page" text))
       (should-not (string-search "an outside agent" text)))
     ;; a terminal that does not write UTF-8 gets ASCII
-    (cl-letf (((symbol-function 'drgnx-cockpit-graph--ascii-p) #'always))
+    (cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) #'always))
       (let ((text (drgnx-cockpit-feed--footer-text "silent:/work/wt-b" 'silent)))
         (should (string-search "not reporting - add drgnx on its settings page" text))
         (should-not (string-match-p "[^[:ascii:]]" text))))))
@@ -547,7 +547,7 @@ buffers are killed after: they owned their hooks and their timers."
 
 (ert-deftest drgnx-cockpit-feed/terminals-get-the-same-text-in-ascii ()
   (drgnx-cockpit-feed-test--with
-    (cl-letf (((symbol-function 'drgnx-cockpit-graph--ascii-p) #'always))
+    (cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) #'always))
       (let ((h (drgnx-cockpit-feed-happened-buffer "s-1")) (tl (drgnx-cockpit-timeline-buffer)))
         (with-current-buffer h
           (should (string-search "tests 12/12 + (make test)" (buffer-string)))

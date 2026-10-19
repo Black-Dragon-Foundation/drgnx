@@ -106,6 +106,9 @@ drawn title bar) uses the one `close` glyph, `×`, which every monospace font ha
 (setopt drgnx-face-glyphs (cons '(close "✕" . "x") drgnx-face-glyphs))   ; yours first
 ```
 
+The table is in Customize's group `drgnx` (not `drgnx-face`), because it is part of the core. A table you saved
+before drgnx added a glyph still works: a glyph missing from it is drawn as the standard one.
+
 | Name | Unicode | ASCII | Name | Unicode | ASCII |
 |---|---|---|---|---|---|
 | `handle` | ⠿ | `::` | `paused` | ⏸ | `\|\|` |
@@ -118,6 +121,16 @@ drawn title bar) uses the one `close` glyph, `×`, which every monospace font ha
 | `diamond` | ◆ | `<>` | `search` | ⌕ | `/` |
 | `minimize` | – | `-` | `maximize` | ▢ | `[]` |
 | `bullet` | • | `>` | | | |
+| `fail` | ✕ | `X` | `stopped` | ■ | `#` |
+| `dismiss` | × | `x` | `unqueue` | − | `-` |
+| `info` | ℹ | `i` | `warn` | ⚠ | `!` |
+
+The glyphs are by meaning. `close` is the mark of a close button, `fail` is "something failed", `dismiss` dismisses a
+notice and `unqueue` takes a queued message back. Some look alike by default, but each is its own entry, so restyling
+`close` leaves "tests failed" alone. The table and `drgnx-face-glyph` are part of the core (`core/drgnx-ui-kit.el`): they
+work whether or not this module is on. The lists use the same kit: a module's status in Preferences: Modules and an
+onboarding step's status show a glyph in the status face (`drgnx-status-ok`, `-info`, `-warn`, `-fail` and
+`-needs-you`, which inherit `success`, `shadow`, `warning`, `error` and `error`), so they read without colour too.
 
 For code: `(drgnx-face-glyph 'close)` is the string for the selected frame, `(drgnx-face-glyph 'close FRAME)` for another.
 
