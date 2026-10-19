@@ -99,7 +99,8 @@ Returns the names of the modules ENTRIES stand for."
           ((and (keymapp copy) (keymapp object))
            (setcdr object (cdr copy))
            (set var object))
-          (t (set var copy)))))
+          ;; unchanged: the object itself, so a fingerprint that keys entries by identity sees nothing new
+          (t (set var (if (equal object copy) object copy))))))
 
 ;;;; Hiding third-party features
 
