@@ -837,7 +837,7 @@ timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run
   limit `(agent-check-limit . PROC)` with its 3 s backstop and tree kill, the hung `systemctl` kill, a `claude` command's
   limit `(claude-cli-limit . PROC)` and the gateway's `(gateway-close . CONN)`. Three core timers have no process to own
   them and belong to `:core`: `ai-load-keys` (once per daemon, after `drgnx open`), `ai-first-window` (the idle look at
-  the local AI runner) and a finished check's 0.1 s `(agent-check-finish . PROC)`, whose process is already dead."
+  the local AI runner) and a finished check's 0.1 s `(agent-check-finish . PROC)`, whose process is already dead. The status bar's debounced refresh is a fourth, `statusbar-refresh`, cancelled when the bar's mode turns off."
 
 `core/drgnx-platform.el` (window-manager calls) owns its timers as `:core`: each belongs to one call that ends itself
 (its answer, its error) and cancels the timer, so no module's end or process's death may drop one and leave the
@@ -2233,6 +2233,16 @@ WINDOW)` makes WINDOW the MRU editor through `drgnx-state-use-editor`. Tests nev
 with no command run; two clients: per-frame editors, a resized terminal); the GUI tier's `test/ui/state-ui-test.el`
 (with `now` subscribers on, splits, `C-x o`, a popup and a frame resize leave no jank-guard entry from the store; a
 minibuffer-only frame is no workbench frame).
+
+**The status bar** (`modules/ui/drgnx-statusbar.el`) is a `now` subscriber of `editor-changed`
+(`drgnx-statusbar--editor-changed`: one `(force-mode-line-update t)`), so the full and the compact bar trade places
+on the first redraw, `C-x o` between two windows of one buffer included, in every frame. `drgnx-statusbar--mru-editor-p`
+is `(eq W (drgnx-state-editor-window (window-frame W)))` and `drgnx-statusbar-source-window` falls back to
+`drgnx-state-editor-window`; the bar keeps no window of its own and posts nothing to the bus. Its post-command check
+compares the buffer, point, change tick and mark only. Its git read stays on the bus's idle `editor-changed`. Its
+debounced refresh is the layer timer `statusbar-refresh` (`drgnx-timer-soon`, owner `:core`, cancelled when the mode
+turns off). Tests: `drgnx-statusbar/` in `test/unit/mod-statusbar-test.el`; `drgnx-statusbar-ui/` in
+`test/ui/statusbar-state-ui-test.el`.
 
 ### Intent (`wb/drgnx-state-intent.el`)
 

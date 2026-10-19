@@ -188,7 +188,6 @@ lambda or not)."
   '(("core/drgnx-job-worktree.el" 1)
     ("core/drgnx-sandbox-proxy.el" 1)
     ("core/drgnx-sandbox.el" 1)
-    ("modules/ui/drgnx-statusbar.el" 1)
     ("modules/ui/drgnx-topline.el" 1)
     ("wb/drgnx-explorer.el" 4)
     ("wb/drgnx-signal.el" 1))

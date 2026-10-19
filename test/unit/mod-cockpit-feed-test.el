@@ -515,7 +515,7 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
   ;; the jobs segment's ⚑ and the agents segment's "waiting on you" never both count one ask card
   (drgnx-cockpit-feed-test--with
     (let ((drgnx-statusbar--tick 0) (drgnx-statusbar--agents-state nil) (drgnx-statusbar--jobs-state nil)
-          (drgnx-statusbar--refresh-timer nil) (drgnx-statusbar--redraw-wanted nil)
+          (drgnx-statusbar--redraw-wanted nil)
           (drgnx-statusbar--jobs-wanted nil) (drgnx-statusbar--jobs-pending nil) (drgnx-statusbar--errors nil)
           (drgnx-statusbar--state-texts (make-hash-table :test #'eq))
           (drgnx-statusbar--segments (make-hash-table :test #'eq))
