@@ -7,9 +7,9 @@
 ;;   - calls `insert-file-contents' (or `-literally') and also `read' (a hand-made reader).
 ;; A flagged site is (FILE FN WHAT).  FN is the `defun' / `cl-defun' / `defmacro' name, or `toplevel-N'
 ;; (the Nth form of the file that is none of those).  WHAT is the function called, or `read-site' for the
-;; read pattern.  `test/lint-files-allowed.eld' lists today's sites, each with the task of the
-;; config-layer plan that ports it (`:until' N) or `never' (with `:why' naming its category); a port
-;; removes its lines, and the second test fails on a line that matches nothing.
+;; read pattern.  `test/lint-files-allowed.eld' lists the permanent exceptions (`:until' `never', with
+;; `:why' naming its category); every port of the config-layer plan is done, so a numbered row fails
+;; `only-permanent-file-exceptions-remain', and the second test fails on a line that matches nothing.
 (require 'ert)
 (require 'seq)
 (require 'cl-lib)
@@ -109,6 +109,12 @@
         (should (string-match-p
                  "\\`\\(a user's file\\|a temporary file\\|a directory move\\|its own lock protocol\\|age writes it\\|a developer tool\\|Lisp source\\)"
                  (plist-get e :why)))))))
+
+(ert-deftest drgnx-lint/only-permanent-file-exceptions-remain ()
+  "Every port of the config-layer plan is done (C6): each row left is a `never' exception."
+  (should (equal (mapcar (lambda (e) (format "%S (port the site through drgnx-file, or mark it never with its category)" e))
+                         (seq-remove (lambda (e) (eq (plist-get e :until) 'never)) (drgnx-lint-files--allowed)))
+                 nil)))
 
 (ert-deftest drgnx-lint/the-file-check-sees-each-pattern ()
   (drgnx-lint-files--with-file
