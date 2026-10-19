@@ -23,6 +23,10 @@
 (defface drgnx-wb-close '((t :inherit shadow))
   "The close button (×) of a title, tab row or popup header." :group 'drgnx)
 
+(defface drgnx-wb-bar '((t :inherit tab-line :height 1.0 :box nil))
+  "The band of a header row (breadcrumb, a dock section's title, a panel's tab row): the theme's tab-line
+background, not the header line's, so every row of chrome is one colour and follows the theme." :group 'drgnx)
+
 (declare-function drgnx-face-glyph "drgnx-face")
 
 (defvar drgnx-wb-dock-map (make-sparse-keymap)
@@ -59,10 +63,17 @@ Built once when a title or tab row is set, never while drawing."
     (apply #'propertize (drgnx-wb-close-glyph)
            'face 'drgnx-wb-close 'mouse-face 'highlight 'local-map map 'help-echo help props)))
 
+(defun drgnx-wb-bar (string &optional filled)
+  "STRING as a header row: `drgnx-wb-bar' behind it (under any face it has), and a filler to the window's right edge,
+so the whole row is the bar's colour and not the header line's.  FILLED: STRING already reaches the edge."
+  (let ((s (copy-sequence string)))
+    (add-face-text-property 0 (length s) 'drgnx-wb-bar t s)
+    (if filled s (concat s (propertize " " 'display '(space :align-to right) 'face 'drgnx-wb-bar)))))
+
 (defun drgnx-wb-header-with-close (title command help &rest props)
   "TITLE, then the close button for COMMAND (see `drgnx-wb-close-button') at the right edge of the window."
   (let ((button (apply #'drgnx-wb-close-button command help props)))
-    (concat title (propertize " " 'display `(space :align-to (- right ,(1+ (string-width button))))) " " button)))
+    (drgnx-wb-bar (concat title (propertize " " 'display `(space :align-to (- right ,(1+ (string-width button))))) " " button) t)))
 
 (defun drgnx-wb--close-dock-click (event)
   "A click on a dock section's ✕: hide the sidebar."
@@ -74,8 +85,8 @@ Built once when a title or tab row is set, never while drawing."
   "A dock section's header: the ✕ that hides the sidebar, then TITLE.
 The ✕ comes first: a title with buttons (Buffers) fills the dock's width, so one at the end would be clipped.  A
 space before it keeps it off the frame's edge."
-  (concat " " (drgnx-wb-close-button #'drgnx-wb--close-dock-click "Close sidebar")
-          (if (string-prefix-p " " title) "" " ") title))
+  (drgnx-wb-bar (concat " " (drgnx-wb-close-button #'drgnx-wb--close-dock-click "Close sidebar")
+                        (if (string-prefix-p " " title) "" " ") title)))
 
 (defun drgnx-wb-display-name (name)
   "NAME as it can be shown on one row: control characters (a newline in a file name) as ^X."

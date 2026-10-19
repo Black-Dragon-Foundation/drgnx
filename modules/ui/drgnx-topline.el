@@ -45,12 +45,12 @@
   "The top line: project and branch, the keys that open everything, window controls."
   :group 'drgnx-face :prefix "drgnx-topline-")
 
-(defface drgnx-topline '((t :inherit (shadow header-line)))
-  "The top line's quiet text (labels, separators, the empty area)."
+(defface drgnx-topline '((t :inherit (shadow tab-line) :height 1.0 :box nil))
+  "The top line's quiet text (labels, separators, the empty area), on the tab line's background like every row of chrome."
   :group 'drgnx-topline)
 
-(defface drgnx-topline-strong '((t :inherit (bold header-line)))
-  "The project and the keys on the top line."
+(defface drgnx-topline-strong '((t :inherit (bold tab-line) :height 1.0 :box nil))
+  "The project and the keys on the top line: the text colour of the theme (not the tab bar's dim one)."
   :group 'drgnx-topline)
 
 (defvar drgnx-topline--active nil
@@ -215,8 +215,9 @@ left out), each one running its command.  nil when none has a key."
         (let ((gap (max 2 (- (/ (- width hint-w) 2) column))))   ; never touching the mark
           (setq items (append items (cons (drgnx-topline--gap 'drgnx-topline-gap-1 gap drawn) hint))
                 column (+ column gap hint-w))))
-      (when drawn                                        ; at the right end
-        (setq items (append items (cons (drgnx-topline--gap 'drgnx-topline-gap-2 (- width controls-w column) t) controls))))
+      (if drawn                                          ; at the right end
+          (setq items (append items (cons (drgnx-topline--gap 'drgnx-topline-gap-2 (- width controls-w column) t) controls)))
+        (setq items (append items (list (drgnx-topline--gap 'drgnx-topline-gap-2 (- width column) nil)))))   ; one background to the edge
       items)))
 
 ;;;; The memo: a redisplay that changes nothing reuses the line
@@ -414,7 +415,7 @@ text frame, whose size and parameters (the top line's among them) the window's f
     (setq-default tab-bar-auto-width nil))
   (setq-default tab-bar-format drgnx-topline--format
                 tab-bar-show t)                          ; 1 would hide the bar: it has one tab
-  (face-spec-set 'tab-bar '((t :inherit header-line :box nil)) 'face-defface-spec)   ; the quiet line, in the theme's chrome
+  (face-spec-set 'tab-bar '((t :inherit tab-line :height 1.0 :box nil)) 'face-defface-spec)   ; the quiet line, in the theme's chrome
   (add-hook 'after-make-frame-functions #'drgnx-topline--fit)
   (add-hook 'window-size-change-functions #'drgnx-topline--fit)
   (add-hook 'window-size-change-functions #'drgnx-topline--resized)
