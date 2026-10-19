@@ -390,8 +390,41 @@ callback pushing what it gets on GOT, newest first), ERR its stderr buffer."
     (drgnx-replace--output proc (mapconcat (lambda (i) (format "l%d\n" i)) (number-sequence 1 200) ""))
     (should (= 1 (length got)))
     (drgnx-replace-cancel proc)
+    (should-not (drgnx-timer-active-p (cons 'replace-parse proc)))   ; the continuation goes with the search
     (drgnx-test-advance 0)
-    (should (= 1 (length got)))
-    (should-not (drgnx-timer-active-p (cons 'replace-parse proc)))))
+    (should (= 1 (length got)))))
+
+(defun drgnx-replace-test--parse-but-l10 (line)
+  (if (equal line "l10") (error "Bad line") (list line)))
+
+(ert-deftest drgnx-replace/a-line-that-does-not-parse-never-stops-the-stream ()
+  ;; review I-1: the line is dropped, the others and :done still come, the error once
+  (drgnx-replace-test--with-stream
+    (drgnx-replace--stream-init proc #'drgnx-replace-test--parse-but-l10 (lambda (x) (push x got)) err)
+    (drgnx-replace--output proc (mapconcat (lambda (i) (format "l%d\n" i)) (number-sequence 0 99) ""))
+    (delete-process proc)
+    (drgnx-replace--finished proc)
+    (drgnx-test-advance 0)
+    (setq got (reverse got))
+    (should (eq :done (car (last got))))
+    (should (equal (delete "l10" (mapcar (lambda (i) (format "l%d" i)) (number-sequence 0 99)))
+                   (apply #'append (seq-filter (lambda (x) (stringp (car-safe x))) got))))
+    (should (= 1 (seq-count (lambda (x) (eq (car-safe x) :error)) got)))))
+
+(ert-deftest drgnx-replace/a-line-in-many-chunks-is-joined-once ()
+  ;; review M-4: the pieces of a partial line are kept and joined at its newline, never re-concatenated per chunk
+  (drgnx-replace-test--with-stream
+    (let* ((piece (make-string 4096 ?x)) (n 128)
+           (before (nth 4 (memory-use-counts))))        ; string characters made
+      (dotimes (_ n) (drgnx-replace--output proc piece))
+      (drgnx-replace--output proc "\nij")
+      ;; a few copies of the 512 KB line, not one per chunk (128 × 256 KB on average)
+      (should (< (- (nth 4 (memory-use-counts)) before) (* 4 n 4096)))
+      (should (equal (list (list (apply #'concat (make-list n piece)))) got)))
+    (drgnx-replace--output proc "kl")
+    (delete-process proc)
+    (drgnx-replace--finished proc)
+    (drgnx-test-advance 0)
+    (should (equal '(:done ("ijkl")) (take 2 got)))))   ; newest first
 
 ;;; mod-replace-engine-test.el ends here

@@ -203,12 +203,19 @@ which owns the parse continuation."
   "PROC's output CHUNK: its complete lines join PROC's queue (a partial last line waits for its end), then a bounded
 part of the queue is parsed (`drgnx-replace--parse-some')."
   (unless (process-get proc 'drgnx-replace-cancelled)
-    (let* ((lines (split-string chunk "\n")) (rest (process-get proc 'drgnx-replace-rest)) (tail (last lines)))
-      (when (> (length rest) 0) (setcar lines (concat rest (car lines))))
-      (process-put proc 'drgnx-replace-rest (car tail))  ; "" when CHUNK ends with a newline
-      (when (cdr lines)
+    (let ((lines (split-string chunk "\n")) (rest (process-get proc 'drgnx-replace-rest)))
+      (if (null (cdr lines))
+          (when (> (length chunk) 0)
+            (process-put proc 'drgnx-replace-rest (cons chunk rest)))   ; no newline yet: one more piece
+        (when rest (setcar lines (drgnx-replace--join (cons (car lines) rest))))
+        (let ((tail (car (last lines))))                             ; "" when CHUNK ends with a newline
+          (process-put proc 'drgnx-replace-rest (and (> (length tail) 0) (list tail))))
         (drgnx-replace--enqueue proc (delete "" (nbutlast lines 1)))
         (drgnx-replace--parse-some proc)))))
+
+(defun drgnx-replace--join (pieces)
+  "A partial line's PIECES (newest first) as one string: joined once, at its end, never per chunk."
+  (apply #'concat (reverse pieces)))
 
 (defun drgnx-replace--enqueue (proc lines)
   "Put LINES (a fresh list) at the end of PROC's queue of lines to parse."
@@ -220,17 +227,23 @@ part of the queue is parsed (`drgnx-replace--parse-some')."
 (defun drgnx-replace--parse-some (proc)
   "Parse at most `drgnx-replace-parse-lines' of PROC's queued lines and send their matches as one batch.  Lines
 left: the rest at the next timer pass (`drgnx-timer-soon', owned by the search's stderr buffer).  None left and
-PROC ended: the end of the stream (`drgnx-replace--end').  A cancelled search parses and sends nothing."
+PROC ended: the end of the stream (`drgnx-replace--end').  A line that does not parse is left out; the first such
+error of the search goes to the callback as (:error REASON).  A cancelled search parses and sends nothing."
   (unless (process-get proc 'drgnx-replace-cancelled)
     (let ((q (process-get proc 'drgnx-replace-queue)) (parse (process-get proc 'drgnx-replace-parse))
-          (n drgnx-replace-parse-lines) (parts nil))
+          (n drgnx-replace-parse-lines) (parts nil) (bad nil))
       (while (and q (> n 0))
-        (push (funcall parse (car q)) parts)
-        (setq q (cdr q) n (1- n)))
+        (let ((line (car q)))
+          (setq q (cdr q) n (1- n))                 ; taken before it is parsed: a bad line never stops the queue
+          (condition-case e (push (funcall parse line) parts)
+            (error (unless bad (setq bad (error-message-string e)))))))
       (process-put proc 'drgnx-replace-queue q)
       (unless q (process-put proc 'drgnx-replace-tail nil))
-      (let ((ms (apply #'nconc (nreverse parts))))
-        (when ms (funcall (process-get proc 'drgnx-replace-callback) ms)))
+      (let ((ms (apply #'nconc (nreverse parts))) (callback (process-get proc 'drgnx-replace-callback)))
+        (when ms (funcall callback ms))
+        (when (and bad (not (process-get proc 'drgnx-replace-parse-failed)))
+          (process-put proc 'drgnx-replace-parse-failed t)
+          (funcall callback (list :error (format "Search output not read: %s" bad)))))
       (unless (process-get proc 'drgnx-replace-cancelled)  ; the callback may have started another search
         (cond (q (drgnx-timer-soon (cons 'replace-parse proc) 0 #'drgnx-replace--parse-some :args (list proc)
                                    :owner (process-get proc 'drgnx-replace-err)))
@@ -244,7 +257,7 @@ PROC ended: the end of the stream (`drgnx-replace--end').  A cancelled search pa
                (drgnx-replace--cleanup proc))
       (let ((rest (process-get proc 'drgnx-replace-rest)))
         (process-put proc 'drgnx-replace-rest nil)
-        (when (> (length rest) 0) (drgnx-replace--enqueue proc (list rest))))
+        (when rest (drgnx-replace--enqueue proc (list (drgnx-replace--join rest)))))
       (process-put proc 'drgnx-replace-ended t)
       (drgnx-replace--parse-some proc))))
 
@@ -306,6 +319,7 @@ this one; a stopped search calls CALLBACK no more."
     (process-put handle 'drgnx-replace-cancelled t)
     (process-put handle 'drgnx-replace-queue nil)
     (process-put handle 'drgnx-replace-tail nil)
+    (drgnx-timer-cancel (cons 'replace-parse handle))   ; its owner buffer runs no kill hook
     (when (process-live-p handle) (delete-process handle))
     (when (eq handle drgnx-replace--search-proc) (setq drgnx-replace--search-proc nil))
     (drgnx-replace--cleanup handle)))

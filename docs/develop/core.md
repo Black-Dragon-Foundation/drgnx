@@ -420,7 +420,9 @@ timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run
   and its pause after a listed file changed are debounces `(replace-pause . BUFFER)` and `(replace-refresh . BUFFER)`
   owned by the view's buffer (its rows are a view: below); a search's output is parsed `drgnx-replace-parse-lines`
   (64) lines at a time, the rest by `drgnx-timer-soon` `(replace-parse . PROCESS)` owned by the search's stderr
-  buffer (killed when the search ends or is cancelled); and an Ask's search limit
+  buffer (killed when the search ends; `drgnx-replace-cancel` also cancels the key, since that buffer runs no
+  kill hook). A line that does not parse is left out, and the first such error reaches the callback as `(:error
+  REASON)`; a partial line's pieces are joined once, at its newline. And an Ask's search limit
   `(ai-grep . PROCESS)` by the search process (its sentinel cancels it). With no run of the owner nothing starts.
 
 ### What the fire wrapper guarantees
