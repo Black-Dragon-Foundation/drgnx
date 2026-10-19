@@ -98,7 +98,7 @@ In a terminal frame (`drgnx -t DIR', or the command typed there) DIR opens in th
 is not raised.  As File → Open Folder… it asks for DIR; bin/drgnx's call never asks."
   (interactive (list (read-directory-name "Open folder: " nil nil t)))
   (let ((dir (file-name-as-directory (expand-file-name dir))))
-    (when (or (display-graphic-p) (equal (terminal-name (frame-terminal)) "initial_terminal"))
+    (when (memq (drgnx-state-frame-kind (selected-frame)) '(gui initial))
       (drgnx-session-raise))
     (if (not (fboundp 'drgnx-explorer-set-roots))
         (dired dir)

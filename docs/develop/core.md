@@ -1941,7 +1941,9 @@ Emacs's before its first frame; in batch Emacs that frame is `tty`, so batch tes
 non-nil for `gui` and `tty`; only those frames get a record. The frame roles (`wb/drgnx-frames.el`) ask it:
 `drgnx-frames--workbench-p` is that and `frame-visible-p`, `drgnx-frames--candidate-p` the same with a role other than
 `editor`; `drgnx-session--windows` lists the visible workbench frames; `drgnx-first-gui-frame-hook` runs when a frame's
-kind is `gui` (the `core/` files require only `drgnx-frame-kind`). The writers of `drgnx-frame-role`
+kind is `gui` (the `core/` files require only `drgnx-frame-kind`); `drgnx-session-open-folder` raises the
+graphical window when the selected frame is `gui` or `initial`. A minibuffer-only frame is `other`, so it no longer
+counts as a window for `drgnx-session--windows`. The writers of `drgnx-frame-role`
 (`drgnx-frames-mark-main`, `drgnx-frames--deleted`, `drgnx-frames--first-gui`) and of `drgnx-monitor`
 (`drgnx-monitors--write`) call `drgnx-state-sync` on the frame after writing.
 

@@ -243,7 +243,8 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
           (should (eq focused-in (selected-frame)))
           (should (equal roots (list dir)))
           (setq term "initial_terminal")
-          (drgnx-session-open-folder dir)
+          (let ((noninteractive nil))   ; batch Emacs's initial terminal is a `tty' workbench; a daemon's is `initial'
+            (drgnx-session-open-folder dir))
           (should (= raised 1)))
       (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
       (delete-directory dir t))))
@@ -279,7 +280,8 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
             (drgnx-explorer-setup)
             (setq buf (find-file-noselect (expand-file-name "a.py" a)))
             (switch-to-buffer buf)                    ; project A's file in front, as after a restore
-            (drgnx-session-open-folder (directory-file-name b))
+            (let ((noninteractive nil))         ; as a daemon's initial frame: bin/drgnx's graphical path raises
+              (drgnx-session-open-folder (directory-file-name b)))
             (should (= raised 1))
             (with-current-buffer (window-buffer (selected-window))
               (should (equal (buffer-name) drgnx-explorer-buffer-name))   ; the Explorer is selected
