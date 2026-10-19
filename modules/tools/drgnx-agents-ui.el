@@ -18,6 +18,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-timer)
+(require 'drgnx-state)
 (require 'drgnx-view)
 (require 'drgnx-trust)
 (require 'drgnx-agents)
@@ -168,9 +169,27 @@ session.  Then the view's START goes to the end: the view has no rows, and the t
         (drgnx-view-draw-now drgnx-view)))
     b))
 
+(defun drgnx-agents-ui--list-shown-p ()
+  "Non-nil if a window the workbench state records, on any frame, shows the Agents list."
+  (when-let* ((b (get-buffer "*drgnx Agents*")))
+    (let (found)
+      (dolist (f (drgnx-state-frames))
+        (dolist (w (drgnx-state-windows f))
+          (when (eq (window-buffer w) b) (setq found t))))
+      found)))
+
+(defun drgnx-agents-ui--tick-update (&optional _data)
+  "Start the list's 30 s tick (layer key `agents-ui-tick') while a window shows the list, cancel it when none does.
+A store subscriber (idle lane): it reads the state's records and ignores the event's data.  A tick already running
+keeps its phase."
+  (if (drgnx-agents-ui--list-shown-p)
+      (unless (drgnx-timer-active-p 'agents-ui-tick)
+        (drgnx-timer-start 'agents-ui-tick 30 #'drgnx-agents-ui--tick :repeat 30 :owner 'tools/agents))
+    (drgnx-timer-cancel 'agents-ui-tick)))
+
 (defun drgnx-agents-ui--tick ()
   "The 30 s tick (layer key `agents-ui-tick'): mark the Agents list so its Last ages are printed again.  The view
-prints only while the list is shown; hidden, it is marked stale and prints when shown."
+prints only while the list is shown.  The tick itself runs only while the list shows (`drgnx-agents-ui--tick-update')."
   (when-let* ((view (drgnx-agents-ui--list-view))) (drgnx-view-touch view)))
 
 (defun drgnx-agents-ui-view ()
@@ -634,8 +653,10 @@ with the cleanup stack."
                        ;; the list: no rows, its SYNC prints it in place; drawn only while shown
                        (drgnx-view-define 'agents-list :render #'ignore :sync #'drgnx-agents-ui--list-print
                                           :delay drgnx-view-delay)
-                       ;; the list's Last ages: marked every 30 s (it prints only while on screen)
-                       (drgnx-timer-start 'agents-ui-tick 30 #'drgnx-agents-ui--tick :repeat t)
+                       ;; the list's Last ages: marked every 30 s, a tick that runs only while a window shows the list
+                       (dolist (event '(windows-changed pane-shown pane-hidden frame-removed))
+                         (drgnx-state-subscribe event #'drgnx-agents-ui--tick-update))
+                       (drgnx-agents-ui--tick-update)
                        ;; the hub's sessions (they outlive this Emacs), once Emacs is idle
                        (drgnx-timer-start 'agents-ui-mirror-first 3 #'drgnx-agents-ui--maybe-mirror :idle t)
                        ;; …and again later: a hub started (or restarted) since is picked up
