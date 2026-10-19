@@ -200,6 +200,21 @@
     (should-not (lookup-key map "b"))
     (should (equal '((a 1)) drgnx-fixture-test-alist))))
 
+(ert-deftest drgnx-test-modules/registry-keys-keep-their-identity ()
+  ;; a list registry the test left unchanged underneath (an entry pushed on top) comes back as the object it was,
+  ;; its list keys too: the fingerprint compares such keys by identity, so a copy would show in the leak census as
+  ;; every entry removed and added again
+  (let* ((key (list 'kx 'rule))
+         (drgnx-fixture-test-alist (list (cons key (list 1))))
+         (drgnx-modules-fingerprint-registries '(drgnx-fixture-test-alist))
+         (before (drgnx-modules-fingerprint--registry-items 'drgnx-fixture-test-alist)))
+    (drgnx-test-with-modules nil
+      (push (cons (list 'kx 'new) t) drgnx-fixture-test-alist))
+    (should (eq (caar drgnx-fixture-test-alist) key))
+    (should (equal drgnx-fixture-test-alist (list (cons (list 'kx 'rule) (list 1)))))
+    (should-not (drgnx-modules-fingerprint--diff-items
+                 before (drgnx-modules-fingerprint--registry-items 'drgnx-fixture-test-alist)))))
+
 (ert-deftest drgnx-test-modules/tears-down-last-first-and-requires-come-along ()
   (ert-with-temp-directory dir
                            (let ((file (drgnx-fixture-test--module-file

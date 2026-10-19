@@ -499,7 +499,7 @@ choice of two nobody has."
     (puthash 'p '(kx-remote kx-local) eglot--servers-by-project)
     (cl-letf (((symbol-function 'eglot--project)
                (lambda (s) (cons 'transient (if (eq s 'kx-remote) "/ssh:kx-host:/src/" "/tmp/"))))
-              ((symbol-function 'eglot-shutdown) (lambda (s &rest _) (push s stopped))))
+              ((symbol-function 'eglot-shutdown) (lambda (s &rest args) (push (cons s args) stopped))))
       (drgnx-test-with-modules '(tools/remote) :strict t
                                (should (= 1 (seq-count (lambda (e) (equal e drgnx-remote--mode-line-entry)) global-mode-string)))
                                (should (memq #'drgnx-remote--command-start (default-value 'pre-command-hook)))
@@ -507,7 +507,7 @@ choice of two nobody has."
                                (should (advice-function-member-p #'drgnx-remote--command-failed (default-value 'command-error-function)))
                                (dolist (a actions) (should (advice-member-p #'drgnx-remote--guard-prompt a)))
                                (should (advice-member-p #'drgnx-remote--timer-without-command 'timer-event-handler))))
-    (should (equal stopped '(kx-remote)))
+    (should (equal stopped '((kx-remote nil 0.5 t))))   ; 0.5 s, the buffers kept
     (should-not (member drgnx-remote--mode-line-entry global-mode-string))
     (should-not (memq #'drgnx-remote--command-start (default-value 'pre-command-hook)))
     (should-not (memq #'drgnx-remote--command-end (default-value 'post-command-hook)))

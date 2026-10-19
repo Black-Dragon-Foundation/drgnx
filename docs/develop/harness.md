@@ -172,7 +172,9 @@ Inside BODY, `drgnx-modules--table` holds only the selected modules and the modu
 - **Registries come back.** Whatever happened to a variable of `drgnx-modules-fingerprint-registries` (a table, an
   alist, a keymap) is put back from a copy taken before the setups, after the module files and the libraries their
   setups load are loaded (a library's own top-level registrations, such as the panel areas, are the library's and
-  stay; `drgnx-test-modules/a-librarys-registrations-stay-for-the-next-module`): tables and keymaps in place, the rest with `set`. It is a
+  stay; `drgnx-test-modules/a-librarys-registrations-stay-for-the-next-module`): tables and keymaps in place, the rest with `set` — the original object when it is still `equal` to the copy (the
+  fingerprint compares list keys by identity, so a copied key would show in `--leaks` as removed and added again;
+  `drgnx-test-modules/registry-keys-keep-their-identity`). It is a
   safety net for what no door recorded, not a way to avoid writing the teardown. Never `let`-bind such a variable in
   a test that sets modules up: binding the variable of a library that is first loaded inside the `let` leaves it void
   afterwards (`drgnx-test-modules/no-let-binding-trap`).

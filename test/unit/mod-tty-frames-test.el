@@ -273,6 +273,53 @@ strings; the real frame is not touched), an empty cache and no terminal to ask: 
       (advice-remove 'gui-backend-set-selection #'drgnx-tty-clip--guard)
       (drgnx-tty-fallback--unbind-prefix))))
 
+(ert-deftest drgnx-tty-frames/turning-it-off-withdraws-only-its-own-requests ()
+  ;; drgnx asks for modifyOtherKeys and focus reports only where Emacs has not: turned off, it sends the reset of
+  ;; what it asked (the terminal would go on sending CSI 27 keys nothing decodes any more) and leaves what Emacs
+  ;; asked.  kx-a: modifyOtherKeys is Emacs's, the focus reports drgnx's; kx-b the other way round.
+  (let ((sent nil))
+    (drgnx-tty-frames-test--terminal '((tty-mode-set-strings . ("\e[>4;1m")) (tty-mode-reset-strings . ("\e[>4m"))) nil
+      (puthash '(kx-b . tty-mode-set-strings) '("\e[?1004h") table)
+      (puthash '(kx-b . tty-mode-reset-strings) '("\e[?1004l") table)
+      (cl-letf (((symbol-function 'terminal-list) (lambda () '(kx-a kx-b)))
+                ((symbol-function 'send-string-to-terminal)
+                 (lambda (s &optional term) (push (cons (or term drgnx-tty-frames-test--term) s) sent))))
+        (drgnx-test-with-modules '(ui/terminal) :strict t
+                                 ;; faked here: the setup loads the module file again, which defines it anew
+                                 (cl-letf (((symbol-function 'drgnx-tty-frames--tmux-options)
+                                            (lambda (&rest _) '(:focus-events "on"))))
+                                   (dolist (term '(kx-a kx-b))
+                                     (setq drgnx-tty-frames-test--term term)
+                                     (set-terminal-parameter nil 'drgnx-tty-set-up t)
+                                     (drgnx-tty-frames--ask-mok (selected-frame))
+                                     (drgnx-tty-frames--tmux-focus (selected-frame))))
+                                 (should (equal (reverse sent) '((kx-a . "\e[?1004h") (kx-b . "\e[>4;1m"))))
+                                 (setq sent nil drgnx-tty-frames-test--term 'kx-a))
+        (should (equal (reverse sent) '((kx-a . "\e[?1004l") (kx-b . "\e[>4m"))))
+        (should (equal (terminal-parameter 'kx-a 'tty-mode-set-strings) '("\e[>4;1m")))
+        (should (equal (terminal-parameter 'kx-a 'tty-mode-reset-strings) '("\e[>4m")))
+        (should (equal (terminal-parameter 'kx-b 'tty-mode-set-strings) '("\e[?1004h")))
+        (should (equal (terminal-parameter 'kx-b 'tty-mode-reset-strings) '("\e[?1004l")))))))
+
+(ert-deftest drgnx-tty-frames/turning-it-off-turns-off-only-the-mouse-it-turned-on ()
+  ;; Emacs 30.2 leaves `xterm-mouse-mode' off, so the module turns it on, and turned off it turns it off again (the
+  ;; terminals' tracking too); Emacs 31 turns it on by itself, and then it stays on
+  (require 'xt-mouse)
+  (dolist (emacs-on '(nil t))
+    (let ((xterm-mouse-mode emacs-on) (drgnx-tty-mouse t) (calls nil))
+      (drgnx-tty-frames-test--terminal nil nil
+        (cl-letf (((symbol-function 'xterm-mouse-mode)
+                   (lambda (arg) (push arg calls) (setq xterm-mouse-mode (> arg 0))))
+                  ((symbol-function 'turn-on-xterm-mouse-tracking-on-terminal) (lambda (_term) (push 'on calls)))
+                  ((symbol-function 'turn-off-xterm-mouse-tracking-on-terminal) (lambda (_term) (push 'off calls)))
+                  ((symbol-function 'drgnx-state-frame-kind) (lambda (_f) 'tty)))
+          (drgnx-test-with-modules '(ui/terminal) :strict t
+                                   (drgnx-tty-frames-mouse-apply)
+                                   (should xterm-mouse-mode)
+                                   (setq calls nil))
+          (should (eq xterm-mouse-mode emacs-on))
+          (should (equal (reverse calls) (if emacs-on nil '(-1 off)))))))))
+
 (ert-deftest drgnx-tty-frames/toggle-mouse-saves-only-when-run-interactively ()
   (let (saved set (drgnx-tty-mouse t))
     (cl-letf (((symbol-function 'customize-save-variable) (lambda (sym val &rest _) (push (list sym val) saved)))

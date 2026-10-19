@@ -8,6 +8,7 @@
 (require 'drgnx-tty-recommend)          ; `drgnx-tty--fallback-hint': the recommendation says the same keys
 (load (expand-file-name "modules/ui/drgnx-tty-frames" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-tty-fallback-layer" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defconst tty-fallback-test--profiles (drgnx-keys-load-profiles (expand-file-name "keys" drgnx-dir)))
 (defconst tty-fallback-test--defaults (copy-keymap global-map) "Emacs's own bindings, as `drgnx-keys' keeps them.")
@@ -420,28 +421,34 @@ binding are taken off afterwards."
       (should-not drgnx-hooks-problems))))
 
 (ert-deftest drgnx-tty-fallback/profile-switch-rebuilds-it ()
-  ;; a real switch (`drgnx-keys-use', the Keyboard Profile command's), with the core and module commands; the
-  ;; modules are loaded before the terminal is faked (loading them defines the functions the fake replaces)
+  ;; a real switch (`drgnx-keys-use', the Keyboard Profile command's), with the core and the startup modules'
+  ;; commands, set up and torn down after; the modules are loaded before the terminal is faked (loading them
+  ;; defines the functions the fake replaces)
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-        (drgnx-commands-problems nil) (drgnx-modules--table nil) (drgnx-modules--report nil)
+        (drgnx-commands-problems nil)
         (ring-bell-function ring-bell-function) (use-dialog-box use-dialog-box)
         (use-short-answers use-short-answers) (inhibit-startup-screen inhibit-startup-screen)
         (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-profiles nil)
         (drgnx-keys-problems nil) (drgnx-keys-last nil))
     (drgnx--core-commands)
-    (drgnx-modules-load-directory (expand-file-name "modules" drgnx-dir))
-    (drgnx-modules-run 'startup)            ; ui/terminal's setup adds the rebuild after every key apply
     (unwind-protect
-        (tty-fallback-test--with-terminal '((drgnx-tty-set-up . t)) '("TERM=xterm-256color" "VTE_VERSION=7800")
-          (should (advice-member-p #'drgnx-tty-fallback-apply 'drgnx-keys-apply))
-          (drgnx-keys-use '((vscode app editing window)))
-          (should (terminal-parameter nil 'drgnx-tty-fallback))
-          (should (functionp (lookup-key input-decode-map "\eF")))
-          ;; the Emacs profile: only C-S-p is left, and it has no Alt+Shift key
-          (drgnx-keys-use '((emacs app editing window)))
-          (should-not (functionp (lookup-key input-decode-map "\eF")))
-          (should (equal (terminal-parameter nil 'drgnx-tty-fallback-table) '(("C-S-p" :alt nil :prefix "<f6> p"))))
-          (should-not drgnx-hooks-problems))
+        ;; ui/terminal's setup adds the rebuild after every key apply
+        (drgnx-test-with-modules nil :stages '(startup)
+                                 (tty-fallback-test--with-terminal '((drgnx-tty-set-up . t)) '("TERM=xterm-256color" "VTE_VERSION=7800")
+                                   (should (advice-member-p #'drgnx-tty-fallback-apply 'drgnx-keys-apply))
+                                   (drgnx-keys-use '((vscode app editing window)))
+                                   (should (terminal-parameter nil 'drgnx-tty-fallback))
+                                   (should (functionp (lookup-key input-decode-map "\eF")))
+                                   ;; the Emacs profile: VS Code's C-S-f is gone, nothing decodes "\eF", and C-S-p
+                                   ;; has no Alt+Shift key.  The table holds every chord of the profile this
+                                   ;; terminal cannot send, so its rows follow the startup modules' keys (replace-all's
+                                   ;; C-<return>, F6 Enter, since tools/replace sets up at startup): only C-S-p's is checked
+                                   (drgnx-keys-use '((emacs app editing window)))
+                                   (should-not (functionp (lookup-key input-decode-map "\eF")))
+                                   (let ((table (terminal-parameter nil 'drgnx-tty-fallback-table)))
+                                     (should (equal (assoc "C-S-p" table) '("C-S-p" :alt nil :prefix "<f6> p")))
+                                     (should-not (assoc "C-S-f" table)))
+                                   (should-not drgnx-hooks-problems)))
       (drgnx-keys--restore))))
 
 (ert-deftest drgnx-tty-fallback/the-hint-once-per-terminal-type ()
