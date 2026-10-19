@@ -5,13 +5,7 @@
 ;; migrate (a live view; :until names the task that rewrites it), recovery (the view core's own reset).
 ;; Counts can only fall: the task that rewrites a site deletes its entry.  A branch merged later adds its sites.
 (
- (:file "modules/tools/drgnx-replace.el" :in drgnx-replace--erase-results :what delete-region :kind migrate :why "the results list is cut and redrawn on every search change" :until "Task 6")
- (:file "modules/tools/drgnx-agents-ui.el" :in drgnx-agents-ui-refresh :what erase-buffer :kind migrate :why "the agents list redraws whole" :until "Tasks 7, 8, store Task 22")
- (:file "modules/tools/drgnx-agents-ui.el" :in drgnx-agents-ui--changed :what tabulated-list-print :kind migrate :why "a changed session reprints the list" :until "Tasks 7, 8, store Task 22")
- (:file "modules/tools/drgnx-agents-ui.el" :in drgnx-agents-ui--tick :what tabulated-list-print :kind migrate :why "the elapsed-time tick reprints the list" :until "Tasks 7, 8, store Task 22")
- (:file "modules/tools/drgnx-agents-ui.el" :in drgnx-agents-ui-list-buffer :what tabulated-list-print :kind migrate :why "opening the list prints it whole" :until "Tasks 7, 8, store Task 22")
- (:file "wb/drgnx-outline.el" :in drgnx-outline--refresh-1 :what erase-buffer :kind migrate :why "the outline erases and rebuilds on a change" :until "Task 11")
- (:file "modules/tools/drgnx-work-ui.el" :in drgnx-work-ui--render :what erase-buffer :kind migrate :why "the work tree redraws whole on a change" :until "Task 12")
+ (:file "modules/tools/drgnx-agents-ui.el" :in drgnx-agents-ui--update-lines :what delete-region :kind migrate :why "drops the trailing lines of ids no longer listed; a line diff, not an erase" :until "RP8-a")
  (:file "modules/tools/drgnx-cockpit-feed.el" :in drgnx-cockpit-feed--happened-build :what erase-buffer :kind migrate :why "the happened pane is built whole" :until "R7 (store Tasks 23-25)")
  (:file "modules/tools/drgnx-cockpit-feed.el" :in drgnx-cockpit-feed--happened-update :what delete-region :kind migrate :why "the happened footer is cut and redrawn" :until "R7 (store Tasks 23-25)")
  (:file "modules/tools/drgnx-cockpit-feed.el" :in drgnx-cockpit-feed--timeline-build :what erase-buffer :kind migrate :why "the timeline is built whole" :until "R7 (store Tasks 23-25)")
