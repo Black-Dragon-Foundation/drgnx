@@ -88,7 +88,7 @@ parse_args() {
 
 need_value() { [[ -n "$2" ]] || { usage >&2; die 2 "$1 needs $3"; }; }   # OPTION VALUE WHAT — a bad option: exit 2
 
-home_path() { case "$1" in "~/"*) printf '%s' "$HOME/${1#"~/"}" ;; *) printf '%s' "$1" ;; esac; }   # ~/x → $HOME/x
+home_path() { case "$1" in \~/*) printf '%s' "$HOME/${1#\~/}" ;; *) printf '%s' "$1" ;; esac; }   # ~/x → $HOME/x
 
 # VAR OPTION VALUE — set VAR to VALUE if it is an https URL (no user name or password in it, no blank) or a
 # local path (made absolute); anything else (http, ssh, git@host:…, file://, ext::…) is a bad option: exit 2.
