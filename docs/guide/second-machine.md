@@ -11,7 +11,7 @@ never travel.
 | --- | --- |
 | Travels (the config dir) | `keys.eld`, `modules.eld`, `packages.eld`, `drgnx.lock.eld`, `ai.eld`, `agents.eld`, `projects.eld`, `session.eld`, `config.el`; `secrets.age` (your provider keys, encrypted: ciphertext only) |
 | Stays on this machine | the data dir `~/.local/share/drgnx` (`$DRGNX_DATA_DIR`): `emacs` (the Emacs the installer recorded), `systemd/drgnx.service` and `applications/drgnx.desktop` (written by onboarding's Daemon and Desktop step), the packages (`elpa/`, rebuilt from the lock on the next machine), generations, the work tracker's `work.db`; the state dir `~/.local/state/drgnx` (`workbench.eld` fits this machine's monitors); the cache dir `~/.cache/drgnx` (downloaded packages). The search index is rebuilt where it is needed. |
-| Never travels | drgnx's own leftovers beside the files it writes: backups (`*.bak-*`), lock directories (`.*.lock`), unfinished temp files (`.*.tmp-*`) and `keys.eld.undo` ([keys.md](keys.md)). Onboarding's repository leaves them out and its `.gitignore` names them; bootstrap counts a config dir that holds only them as empty |
+| Never travels | drgnx's own leftovers beside the files it writes: backups (`*.bak-*`), lock directories (`.*.lock`, and `.*.lock.stale-*` while a stale one is taken over), unfinished temp files (`.*.tmp-*`) and `keys.eld.undo` ([keys.md](keys.md)). Onboarding's repository leaves them out and its `.gitignore` names them; bootstrap counts a config dir that holds only them as empty |
 | Not drgnx's | your dotfiles, `~/org`, your project repositories, agent CLI logins (`claude` logs in again on each machine; drgnx never reads its tokens) |
 
 Your provider keys stay in your Keychain or keyring ([ai.md](ai.md#keys)); they never travel in plain text. To
@@ -67,7 +67,7 @@ asks before it changes anything:
    configuration" — without your git hooks,
    templates or commit signing, and each git command stopped after 30 seconds. That is all: drgnx never adds a
    remote, never pushes and never commits again. A config dir without a `.gitignore` gets one that names drgnx's
-   leftovers (`*.bak-*`, `.*.lock`, `.*.tmp-*`, `keys.eld.undo`), committed with the rest; your own `.gitignore` is
+   leftovers (`*.bak-*`, `.*.lock`, `.*.lock.stale-*`, `.*.tmp-*`, `keys.eld.undo`), committed with the rest; your own `.gitignore` is
    never changed, and the step names the lines it lacks. Add a remote and push yourself:
 
    ```sh
@@ -116,7 +116,7 @@ run changes nothing. A failed `preflight`, `config` or `sync` stops the steps af
 | Step | What it does | Asks |
 | --- | --- | --- |
 | `preflight` | the OS, `git` (missing: failed), `age` when there is or may be a `secrets.age`, the keyring; moves the [machine-local files](#machine-local-files-from-older-installs) of an older install to the data dir | nothing |
-| `config` | `--config URL`: a missing or empty `~/.config/drgnx` (machine-local files moved first; one that holds only drgnx's backups, locks and temp files counts as empty, and they stay beside the cloned files) gets `git clone URL`; a clone of the same URL is left as it is (`git -C ~/.config/drgnx pull` updates it: bootstrap never pulls); anything else stops it: "~/.config/drgnx already holds a configuration (…): move it aside (mv ~/.config/drgnx ~/.config/drgnx.before) and run this again", and nothing is touched. `--chezmoi URL`: see below. Neither: says what the config dir is. `--step config` alone also moves the machine-local files | for chezmoi |
+| `config` | `--config URL`: a missing or empty `~/.config/drgnx` (machine-local files moved first; one that holds only drgnx's backups, locks and temp files counts as empty, and they stay beside the cloned files; if the clone cannot be put in place they go back, and one that cannot is kept in the clone, which the error names) gets `git clone URL`; a clone of the same URL is left as it is (`git -C ~/.config/drgnx pull` updates it: bootstrap never pulls); anything else stops it: "~/.config/drgnx already holds a configuration (…): move it aside (mv ~/.config/drgnx ~/.config/drgnx.before) and run this again", and nothing is touched. `--chezmoi URL`: see below. Neither: says what the config dir is. `--step config` alone also moves the machine-local files | for chezmoi |
 | `keys` | the keys of `secrets.age` into the keyring ([below](#your-provider-keys-secretsage)): with `--identity FILE`, or age's passphrase on the terminal. No `secrets.age`: ok; no keyring: skipped; no terminal and no identity: skipped with the command. A key the keyring holds differently is kept (failed, naming the host) unless you pass `--replace` | "Import the provider keys of secrets.age…?"; age's install |
 | `sync` | the packages of your configuration's lock (`drgnx sync`); a pinned package nobody serves fails, named | nothing |
 | `onboard` | `drgnx onboard --non-interactive`: records what is set up, changes nothing ([onboarding.md](onboarding.md)) | nothing |

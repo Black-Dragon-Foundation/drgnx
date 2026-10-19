@@ -325,6 +325,6 @@ Returns (RESULT QUESTIONS)."
       (write-region "*.log\nkeys.eld.undo\n" nil file nil 'silent)
       (let ((r (drgnx-onboard-portability-test--run t '(("git repository" . t)))))
         (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "*.log\nkeys.eld.undo\n"))
-        (should (string-match-p "add to \\.gitignore: \\*\\.bak-\\* \\.\\*\\.lock \\.\\*\\.tmp-\\*\\(;\\|$\\)" (cadr (car r))))))))
+        (should (string-match-p "add to \\.gitignore: \\*\\.bak-\\* \\.\\*\\.lock \\.\\*\\.lock\\.stale-\\* \\.\\*\\.tmp-\\*\\(;\\|$\\)" (cadr (car r))))))))
 
 ;;; onboard-portability-test.el ends here

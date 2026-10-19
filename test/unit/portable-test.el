@@ -330,7 +330,8 @@
 
 (ert-deftest drgnx-portable/leftovers-are-the-layers-own-files ()
   ;; backups, lock directories, temp files and the keys undo file: never moved, never machine-local
-  (dolist (name '("keys.eld.bak-20261019-120000-000" ".keys.eld.lock" ".keys.eld.tmp-a1b2c3" "keys.eld.undo"))
+  (dolist (name '("keys.eld.bak-20261019-120000-000" ".keys.eld.lock" ".keys.eld.lock.stale-4242-a1b2c3"
+                  ".keys.eld.tmp-a1b2c3" "keys.eld.undo"))
     (should (drgnx-portable-leftover-p name)))
   (dolist (name '("keys.eld" "config.el" "secrets.age" ".gitignore" "lock" "undo"))
     (should-not (drgnx-portable-leftover-p name)))

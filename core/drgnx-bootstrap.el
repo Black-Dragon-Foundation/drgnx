@@ -275,8 +275,9 @@ an entry."
 (defun drgnx-bootstrap--git-clone (url dir)
   "Clone URL into DIR (missing, empty, or holding only the config layer's leftovers): into a new directory beside
 it, then renamed into place, so a failed or stopped clone leaves nothing.  The leftovers (backups, locks) go
-beside the cloned files; a name the clone has too stops it, and nothing moves."
-  (let* ((parent (file-name-directory dir)) tmp)
+beside the cloned files; a name the clone has too stops it, and nothing moves.  When a rename fails, the leftovers
+moved so far go back into DIR; one that cannot keeps the clone, which the error names."
+  (let* ((parent (file-name-directory dir)) tmp keep)
     (make-directory parent t)
     (setq tmp (make-temp-file (expand-file-name ".drgnx-clone-" parent) t))
     (unwind-protect
@@ -292,14 +293,25 @@ beside the cloned files; a name the clone has too stops it, and nothing moves."
             (list 'failed (format "%s holds %s, and so does the clone: move it aside and run this again; nothing was changed"
                                   (drgnx-portable-path dir) (string-join both ", "))))
            (t
-            (dolist (f left) (rename-file (expand-file-name f dir) (expand-file-name f into)))
-            (condition-case err
-                (progn (when (file-directory-p dir) (delete-directory dir)) ; empty: anything else fails here
-                       (rename-file into dir))
-              (error (dolist (f left) (rename-file (expand-file-name f into) (expand-file-name f dir))) ; put back
-                     (signal (car err) (cdr err))))
+            (let (moved)
+              (condition-case err
+                  (progn (dolist (f left)
+                           (rename-file (expand-file-name f dir) (expand-file-name f into))
+                           (push f moved))
+                         (when (file-directory-p dir) (delete-directory dir)) ; empty: anything else fails here
+                         (rename-file into dir))
+                (error
+                 (ignore-errors (make-directory dir t)) ; the delete may have succeeded
+                 (if-let* ((lost (seq-remove (lambda (f) (ignore-errors (rename-file (expand-file-name f into)
+                                                                                     (expand-file-name f dir))
+                                                                        t))
+                                             moved)))
+                     (progn (setq keep t)
+                            (error "%s; %s could not go back: kept in %s" (error-message-string err)
+                                   (string-join (nreverse lost) ", ") (drgnx-portable-path into)))
+                   (signal (car err) (cdr err))))))
             (list 'changed (format "cloned %s into %s" (drgnx-bootstrap--label url) (drgnx-portable-path dir))))))
-      (delete-directory tmp t))))
+      (unless keep (delete-directory tmp t)))))
 
 (defun drgnx-bootstrap--clone (ctx)
   "--config URL: clone it into a missing or empty config dir; the same clone there is ok; anything else stops."

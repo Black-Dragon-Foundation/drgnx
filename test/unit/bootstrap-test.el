@@ -686,6 +686,37 @@ printf '%%s\\n' %s > \"$d/argv\"; exit 10
         (should (equal (drgnx-bootstrap-test--text (concat config "/keys.eld.bak-20261019-120000-000")) "(:profile emacs)\n"))
         (should (equal (directory-files root nil "drgnx-clone") nil))))))
 
+(ert-deftest drgnx-bootstrap/a-failed-rename-puts-the-leftovers-back ()
+  ;; the clone's final rename fails, or a leftover's move into the clone does: every leftover is back in the config
+  ;; dir with its bytes, and the clone is gone.  When a put-back fails too, the clone is kept and the error names it.
+  (drgnx-bootstrap-test--with (root url)
+    (let* ((config (concat root "config"))
+           (bak (concat config "/keys.eld.bak-20261019-120000-000"))
+           (owner (concat config "/.keys.eld.lock/owner"))
+           (rename (symbol-function 'rename-file)))
+      (drgnx-bootstrap-test--write bak "(:profile emacs)\n")
+      (drgnx-bootstrap-test--write owner "(:pid 1)\n")
+      (dolist (fails (list (lambda (_from to) (equal to config))
+                           (lambda (from _to) (equal from bak)))) ; the second leftover: the lock moved already
+        (cl-letf (((symbol-function 'rename-file)
+                   (lambda (from to &rest r) (if (funcall fails from to) (error "Rename refused") (apply rename from to r)))))
+          (should (string-match-p "Rename refused" (error-message-string (should-error (drgnx-bootstrap--git-clone url config))))))
+        (should (equal (drgnx-bootstrap-test--text bak) "(:profile emacs)\n"))
+        (should (equal (drgnx-bootstrap-test--text owner) "(:pid 1)\n"))
+        (should-not (file-exists-p (concat config "/keys.eld")))
+        (should (equal (directory-files root nil "drgnx-clone") nil)))
+      ;; the final rename and the lock's put-back fail: the clone, holding the lock, is kept and named
+      (cl-letf (((symbol-function 'rename-file)
+                 (lambda (from to &rest r)
+                   (if (or (equal to config) (equal to (concat config "/.keys.eld.lock"))) (error "Rename refused")
+                     (apply rename from to r)))))
+        (let* ((msg (error-message-string (should-error (drgnx-bootstrap--git-clone url config))))
+               (kept (car (directory-files root t "drgnx-clone"))))
+          (should kept)
+          (should (string-search (drgnx-portable-path (concat kept "/config")) msg))
+          (should (equal (drgnx-bootstrap-test--text (concat kept "/config/.keys.eld.lock/owner")) "(:pid 1)\n"))
+          (should (equal (drgnx-bootstrap-test--text bak) "(:profile emacs)\n")))))))
+
 (ert-deftest drgnx-bootstrap/the-handback-files-are-written-atomically ()
   ;; a failure before the rename keeps the files there and leaves no temp file
   (drgnx-bootstrap-test--with (root _url)
