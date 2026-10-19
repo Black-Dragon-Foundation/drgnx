@@ -419,15 +419,33 @@ locked version.  BYTES: the downloads' size from the lock, nil when it does not 
               (concat (if found "no projects imported (none picked)"
                         (format "no git repositories found under %s" (string-join roots ", ")))
                       stopped))
-      (let ((r (drgnx-projects-import picked :todos todos)))
-        (list (if truncated 'warn 'ok)
-              (concat (format "%d projects on the board (%d new), %d TODOs added%s — %s"
-                              (length picked) (length (plist-get r :added)) (plist-get r :todos)
-                              (if (plist-get r :capped) (format " (first %d only for %s)" drgnx-projects-todo-cap
-                                                                (string-join (plist-get r :capped) ", "))
-                                "")
-                              (drgnx-projects-board-file))
-                      stopped))))))
+      ;; The board is the user's own file: first only look at what would go on it (drgnx's own
+      ;; projects.eld is kept either way), and write it only after a yes, asked in an interactive run.
+      (let* ((r (drgnx-projects-import picked :todos todos :write nil))
+             (board (abbreviate-file-name (drgnx-projects-board-file)))
+             (new (plist-get r :added)) (n (plist-get r :todos))
+             (capped (if (plist-get r :capped)
+                         (format " (first %d only for %s)" drgnx-projects-todo-cap (string-join (plist-get r :capped) ", "))
+                       ""))
+             (what (format "%d projects%s and %d TODOs" (length new)
+                           (if new (format " (%s%s)" (string-join (seq-take new 8) ", ") (if (> (length new) 8) ", …" "")) "")
+                           n)))
+        (cond ((and (null new) (zerop n))
+               (list (if truncated 'warn 'ok)
+                     (concat (format "%d projects, all on the board already, no TODOs to add — %s" (length picked) board)
+                             stopped)))
+              ((and ask (y-or-n-p (format "Add %s to %s? " what board)))
+               (let ((w (drgnx-projects-import picked :todos todos)))
+                 (list (if truncated 'warn 'ok)
+                       (concat (format "%d projects on the board (%d new), %d TODOs added%s — %s"
+                                       (length picked) (length (plist-get w :added)) (plist-get w :todos) capped board)
+                               stopped))))
+              (t
+               (list (if truncated 'warn 'info)
+                     (concat (format "would add %s to %s%s — %s" what board capped
+                                     (if ask "you said no: the board is unchanged"
+                                       "not written without interaction (run Import Projects in drgnx, or drgnx onboard without --non-interactive)"))
+                             stopped))))))))
 
 ;;;; Steps 4–6, 8: what is there (completed by later milestones)
 

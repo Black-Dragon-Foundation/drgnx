@@ -140,21 +140,22 @@ the text (and which repeat of that text it is)."
 
 ;;;; The board, as text
 
-(defun drgnx-projects--board-update (fn)
+(defun drgnx-projects--board-update (fn &optional dry-run)
   "Call FN in a buffer holding the board text; write the board back only when FN changed it — with
-its encoding and line endings, its modes, through its symlink."
+its encoding and line endings, its modes, through its symlink.  DRY-RUN: only read the board, never
+write it (nor mind its locks)."
   (let* ((file (drgnx-projects-board-file)) (visiting (find-buffer-visiting file))
          (lock (and (file-exists-p file) (file-locked-p file))))
-    (when (and visiting (buffer-modified-p visiting))
+    (when (and visiting (not dry-run) (buffer-modified-p visiting))
       (user-error "%s has unsaved changes in Emacs; save it and import again" file))
-    (when (stringp lock)
+    (when (and (stringp lock) (not dry-run))
       (user-error "%s is being edited by %s; save it there and import again" file lock))
     (let* ((coding nil)
            (old (if (file-exists-p file)
                     (with-temp-buffer (insert-file-contents file) (setq coding last-coding-system-used) (buffer-string))
                   ""))
            (new (with-temp-buffer (insert old) (goto-char (point-min)) (funcall fn) (buffer-string))))
-      (unless (equal old new)
+      (unless (or dry-run (equal old new))
         (let* ((target (file-truename file))
                (modes (and (file-exists-p target) (file-modes target))))
           (make-directory (file-name-directory target) t)
@@ -297,10 +298,12 @@ A file with a mistake gives its last good copy, else no projects (`drgnx-config-
 not even the board."
   (drgnx-config-ensure-writable 'projects))
 
-(cl-defun drgnx-projects-import (roots &key (todos t))
+(cl-defun drgnx-projects-import (roots &key (todos t) (write t))
   "Put the git repositories ROOTS on the board (once each); TODOS: t for every root's open TODOs, a
 list of roots for theirs, nil for none (each TODO once, and never again once removed from the
-board).  Returns (:added NAMES :todos N :capped NAMES)."
+board).  WRITE nil: the board (a file of yours) and the record of what was imported are not touched
+— only projects.eld and project.el's list are; the result says what WRITE t would add.
+Returns (:added NAMES :todos N :capped NAMES)."
   (drgnx-projects--refuse-bad-file)
   (let* ((roots (delete-dups (mapcar (lambda (r) (directory-file-name (expand-file-name r)))
                                      (seq-filter #'file-directory-p roots))))
@@ -325,8 +328,9 @@ board).  Returns (:added NAMES :todos N :capped NAMES)."
                          (cl-pushnew (plist-get e :name) capped :test #'equal)
                        (when (drgnx-projects--add-todo (drgnx-projects--find root) text id file rep)
                          (setq n (1+ n) count (1+ count)))
-                       (puthash key t imported)))))))))))
-    (drgnx-projects--save-imported imported)
+                       (puthash key t imported))))))))))
+     (not write))
+    (when write (drgnx-projects--save-imported imported))
     (drgnx-projects--remember entries)
     (list :added (nreverse added) :todos count :capped (nreverse capped))))
 
