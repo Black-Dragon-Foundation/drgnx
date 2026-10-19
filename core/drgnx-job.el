@@ -632,7 +632,8 @@ commit to the job's branch, a card: there is nothing to review."
 
 (defun drgnx-job--verdict (s)
   "Reviewer S's verdict, from the last non-empty line of its last words: `pass', (fail . REASONS), or nil."
-  (let* ((text (plist-get (car (last (seq-filter (lambda (e) (eq (plist-get e :type) 'agent)) (drgnx-agent-session-entries s)))) :text))
+  (let* ((last (car (last (seq-filter (lambda (e) (eq (plist-get e :type) 'agent)) (drgnx-agent-session-entries s)))))
+         (text (and last (drgnx-agents-entry-text last)))
          ;; the last non-empty line, without the Markdown emphasis, quote or code marks a model puts round it
          (line (car (last (split-string (or text "") "\n" t "[ \t\r]+"))))
          (line (and line (string-trim line "[*_`> \t]+" "[*_`> \t]+"))))
@@ -978,7 +979,7 @@ review route; with none left, a card."
   (let* ((commit (pcase (drgnx-job--git (drgnx-agent-session-cwd s) "log" "-1" "--format=%h %s" (format "job/%s..HEAD" id))
                    (`(0 . ,out) out)
                    (_ "")))                                  ; git failed: no commit to name, never its error
-         (said (mapconcat (lambda (e) (or (plist-get e :text) ""))
+         (said (mapconcat (lambda (e) (or (drgnx-agents-entry-text e) ""))
                           (seq-filter (lambda (e) (eq (plist-get e :type) 'agent)) (drgnx-agent-session-entries s)) ""))
          (said (substring said (max 0 (- (length said) 2000)))))
     (format "You are continuing this task: an agent began it here and stopped (its provider failed).  Its last commit: %s.  The decision log was at version %d then.%s\n\n"

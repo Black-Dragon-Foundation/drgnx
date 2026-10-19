@@ -742,13 +742,21 @@ timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run
   lives; its sentinel (or the job runner) must call `(drgnx-timer-cancel-owner PROCESS)` when it dies, which also
   forgets the last runs of its `:min-interval` keys. `:core` lives as long as Emacs (the hub tick, the idle GC under
   the key `gc-idle`, the job stamp poll `(jobs-stamp . ID)`, the usage write `surfaces-usage`).
-  Module repeats are keyed this way: `tools/agents` owns `agents-ui-mirror` (idle, every 30 s) and `tools/jobs` owns
+  Module repeats are keyed this way: `tools/agents` owns `agents-ui-mirror` (idle, every 30 s; its first look is the
+  one-shot `agents-ui-mirror-first`, 3 s into the first pause) and `tools/jobs` owns
   `job-ui-recount-idle` (idle, every 60 s), so a second setup replaces the timer instead of stacking another, and
   turning the module off ends it. Timers started later (from a command or a hook) name their module with `:owner`:
+  `tools/agents` owns the Agents list's 30 s tick `agents-ui-tick` (it only marks the list's view; see Views),
   `ui/face` owns quick help's `quickhelp-timeout`, `-unmap`, `-look` and `-hover` and the start page's
   `start-first-frame`, `ui/terminal-popups` the debounced `tty-popups-show`, `ui/terminal` the per-frame
   `(tty-fallback-hint . FRAME)`, `tools/jobs` the coalesced `job-ui-recount`, `tools/ai` the `ai-probe` one-shot; the
-  ghost-text pause is an idle debounce `(ai-ghost . BUFFER)` owned by the buffer, and an Ask's search limit
+  ghost-text pause is an idle debounce `(ai-ghost . BUFFER)` owned by the buffer, the Search view's typing pause
+  and its pause after a listed file changed are debounces `(replace-pause . BUFFER)` and `(replace-refresh . BUFFER)`
+  owned by the view's buffer (its rows are a view: below); a search's output is parsed `drgnx-replace-parse-lines`
+  (64) lines at a time, the rest by `drgnx-timer-soon` `(replace-parse . PROCESS)` owned by the search's stderr
+  buffer (killed when the search ends; `drgnx-replace-cancel` also cancels the key, since that buffer runs no
+  kill hook). A line that does not parse is left out, and the first such error reaches the callback as `(:error
+  REASON)`; a partial line's pieces are joined once, at its newline. And an Ask's search limit
   `(ai-grep . PROCESS)` by the search process (its sentinel cancels it). With no run of the owner nothing starts.
   Core process timeouts are keyed by their process and owned by it, so the layer drops them when it dies: a check's
   limit `(agent-check-limit . PROC)` with its 3 s backstop and tree kill, the hung `systemctl` kill, a `claude` command's
@@ -1050,6 +1058,7 @@ names). SLICE is nil or at most `drgnx-view-slice` (0.004 s); DELAY is the throt
 it drew or grew, to put the view's own overlays back. A definition made in a module's setup pushes the undo
 `"view type NAME"`. A view looks its type up by name at each draw: once the type is removed (its module turned off)
 the view draws nothing more, and a redefinition (the module on again, a reload) is picked up. No view is tracked.
+`(drgnx-view-type-p NAME)` is non-nil while NAME is defined (a mode that attaches a module's view checks it first).
 
 **RENDER** returns a string ending in a newline, or `(BODY . SUFFIX)` whose concatenation does: growth goes between
 BODY and SUFFIX, and the view remembers BODY's length (`drgnx-view-body-length`). A row may span several lines.
@@ -1098,7 +1107,10 @@ A draw (`drgnx-view--draw`) runs SYNC when touched, the self-check, then two ste
 1. **The fold** applies the structural marks to the row vectors only; the buffer does not change. A row that goes
    stays as an entry marked `gone`, a new row is an empty entry marked `new`. The vectors are rewritten in place
    when new rows only go at the end (appends and removals), and grown by doubling only when full; an append to a long
-   view copies nothing. Otherwise (an insert before a row that stays) fresh vectors are made.
+   view copies nothing. Otherwise (an insert before a row that stays) fresh vectors are made. Marks that only add
+   rows at the end (no row goes) fold in `drgnx-view--fold-tail`, which visits only the new rows: the entries already
+   there, rows left to delete between slices included, stay as they are (`drgnx-view/an-append-folds-only-the-new-tail`
+   counts the entries a fold visits).
 2. **The sweep** works entry by entry in buffer order with one running shift of the starts: `gone` is deleted,
    `new` rendered and inserted, a dirty row deleted and inserted again at its integer start, a growing row gets an
    `insert` before SUFFIX. Dirty marks are moved onto the entries first (`patch` wins over `grow`). When every entry
@@ -1187,6 +1199,67 @@ counts every row rendered (patched, inserted or appended, an error row too); `:r
 text; `:appended` the rows added; `:removed` the rows deleted. Without VIEW it sums every live view
 (`:max-slice-rows`: the largest).
 
+### Consumers
+
+- **The Search view** (`modules/tools/drgnx-replace.el`, type `replace-results`, defined with its sidebar section): DELAY 0,
+  SLICE `drgnx-view-slice`, `eq` keys. A match's key is its plist; a file's header is `(drgnx-replace-file . FILE)`,
+  made once per search. Arrivals append (a new file after its header) or insert after the file's last row; a new
+  replacement text marks every match row dirty (headers stay); a file searched again removes its old rows and inserts
+  the new ones after its header, marked dirty for its box; a new search resets the view. PATCHED updates the status
+  line. Tests: `drgnx-replace/` in `test/unit/mod-replace-view-test.el`, `drgnx-view-ui/` in `test/ui/view-ui-test.el`.
+
+- **The agent transcript**: `tools/agents` defines `agent-transcript` in its setup (`modules/tools/drgnx-agents-ui.el`; `:follow-tail t`,
+  `:key-test 'eq`, the default DELAY and SLICE). Its rows are `:commands`, each entry plist that shows something, each
+  permission and review plist, `:status` and `:queue`. An `agent` entry renders as `(TEXT . "\n\n")` and a `thought` as
+  `("… " TEXT . "\n")`, so a streamed chunk is a GROW of the text after BODY-LENGTH. The agent's process filter only
+  touches the view (`drgnx-agents-ui--changed`). SYNC has a fast path: when the session's lists are `eq` to those of
+  the last sync, the entries, permissions and reviews lists are as long (a `delq` keeps the head when the first item
+  stays), each queued message is the same (a requeue replaces one in place) and no tool or plan entry still running
+  changed (they change in place: compared by signature), it only compares each running text's length with its drawn
+  body and marks a grow; otherwise `drgnx-view-sync-rows` diffs the rows. An answer's or a thought's signature is its
+  type alone, so the turn's end (`:done`) draws nothing again. A grow draw allocates the same on a 4 kB and a 400 kB
+  answer (`drgnx-agents-ui/grow-allocation-is-independent-of-size`). The footer rows follow the entries, so a new
+  entry while a turn runs is an insert, not an append.
+
+  The model keeps streamed text as chunks (`core/drgnx-agents.el`): a running `agent` or `thought` entry has `:chunks`
+  (newest first) and `:length`, so appending a chunk costs a cons whatever the answer's size
+  (`drgnx-agents/a-chunk-costs-the-chunk-not-the-answer`). `(drgnx-agents-entry-text E)` joins them into `:text` once and
+  keeps it until the next chunk; `(drgnx-agents-entry-length E)` reads the length without joining; `(drgnx-agents-entry-tail
+  E FROM)` builds the text after FROM from the newest chunks only (the transcript's GROW). Code that reads an answer's
+  whole text goes through `drgnx-agents-entry-text`. The turn's end, `agents/get` and the hub's `agent-entries` flush
+  join every entry first (`drgnx-agents-join-text`), so a done entry and the wire carry a whole `:text`.
+
+- **The Agents list**, a view with no rows, is `agents-list` (`:render #'ignore`, `:sync #'drgnx-agents-ui--list-print`,
+  the default DELAY): the buffer is a `tabulated-list-mode` buffer whose text belongs to tabulated-list, and the view
+  gives it the throttle, the visibility check and the stale mark. A session's change (`drgnx-agents-ui--changed`) and
+  the 30 s tick (`agents-ui-tick`) only touch the view; SYNC runs `drgnx-agents-ui--update-lines` inside
+  `drgnx-view-with-kept-windows` (key = `tabulated-list-id`): a line whose id and columns are unchanged is not touched,
+  a changed one is replaced, gone and new ids are deleted and inserted, so a window stays on its session when lines move.
+  (`tabulated-list-print` with UPDATE cannot do this: it needs a sort key and keeps a line of the same id even when its
+  columns changed.) The view's START is the only marker; SYNC moves it to the end of the buffer after each update,
+  because the self-check would otherwise take the list's text for foreign text and delete it. A hidden list draws and
+  allocates nothing, and `drgnx-agents-ui-list-buffer` (the placeholder, `agents-view`) touches and draws it now.
+
+- **The Outline** (`wb/drgnx-outline.el`) is the view type `outline` (DELAY 0, `equal` keys, PATCHED `drgnx-outline--mark-current`), attached to its
+  buffer when `drgnx-outline--buffer` makes it. A refresh builds imenu's index once and makes the rows integers:
+  `drgnx-outline--flatten` reads each marker's position and releases it with `(set-marker M nil)`, so no imenu marker
+  stays in the source buffer (PERF-M1; the test counts them over 50 refreshes of 2,000 definitions). Row keys are
+  `(NAME DEPTH ORDINAL)`, ORDINAL counting the earlier rows with the same name and depth; a notice is the single row
+  `(:notice TEXT)`. `drgnx-outline--refresh-1` fills `drgnx-outline--rows` (vectors `[NAME DEPTH POSITION KEY]`) and
+  `drgnx-outline--table` (KEY → row), then calls `(drgnx-view-sync-rows view KEYS #'drgnx-outline--sig)`. The signature is
+  whether the row is a group, so an edit that only moves definitions redraws no row, and a new definition draws one.
+  The view keeps the Outline's point and window start on their row. The current-definition overlay is put back after a
+  draw by PATCHED. The follow-the-edit timer is the layer's key `outline-refresh` (`drgnx-timer-soon`, idle, delay
+  `drgnx-outline-delay`, owned by the Outline's buffer once it exists). Tests: `test/unit/wb-outline-test.el`,
+  `test/unit/wb-outline-edge-test.el` (prefix `drgnx-outline`).
+
+- **The Work tree** (`work-tree`, `modules/tools/drgnx-work-ui.el`; DELAY 0): row keys are node ids (a node the tree
+  shows twice, as a commit under two tasks, has its parent's key appended from the second time on). SYNC
+  (`drgnx-work-ui--render`) walks the open tree into the ordered keys and calls `drgnx-view-sync-rows`; a row's
+  signature is the vector `[(sxhash-equal LINE) DEPTH FOLD]` (a database's strings are never `eq`, a fixnum is).
+  Folding, the filter and a scan's sentinel only touch the view; point and window start stay on their row.
+  `drgnx-work-ui-buffer` draws a new buffer at once and only marks an existing one.
+
 ### The invariant
 
 `(drgnx-view--check VIEW)` is nil when the starts are the entries' actual extents: entry 0 starts at 0, every
@@ -1199,6 +1272,21 @@ virtual clock; slices replace `drgnx-timer-now` with a clock that steps per read
 redisplay the visibility tests call `drgnx-view--buffer-shown` as redisplay would). Helpers in
 `test/fixtures/view-fixture.el` (`drgnx-view-test-with-type`, `drgnx-view-test--text`, `drgnx-view-test--expected`,
 `drgnx-view-test--alloc`).
+
+### Mark, don't erase
+
+A live view is never redrawn by throwing its rows away: `erase-buffer`, `tabulated-list-print` without UPDATE and
+`delete-region` to `(point-max)` lose the scroll position, the selection and every row's identity, and cost a full
+redraw for one changed row. Code that learns of a change marks the view. The lint
+`drgnx-lint/views-never-erase` (`test/unit/lint-render-test.el`) fails on such a call in `wb/` and `modules/`
+unless `test/lint-render-allowed.eld` lists it as `(:file F :in DEFUN :what CALL :kind KIND :why STRING)`, one entry
+per (file, defun, call) with `:n` for more than one site. KIND is `document` (drawn once, on a user action),
+`listing` (Explorer and Buffers, styled by jit-lock), `job-window`, `recovery` (the view core's own reset after a
+foreign edit) or `migrate`, a live view whose `:until` names the task that moves it onto the view core. Counts can
+only fall: the task that rewrites a site deletes its entry, and `drgnx-lint/no-stale-render-allowlist-entries` fails
+on an entry that matches nothing. In the same way `drgnx-lint/garbage-collect-only-in-the-gc-owner` fails on
+`garbage-collect` or an addition to `post-gc-hook` anywhere but `core/drgnx-gc.el`, `harness/` and `test/`: one
+owner decides when to collect.
 
 ## Modal core (`drgnx-modal.el`)
 

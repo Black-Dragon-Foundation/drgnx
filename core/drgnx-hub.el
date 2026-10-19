@@ -324,6 +324,7 @@ a pid.  How many went."
        (list :id (drgnx-agent-session-id s) :name (drgnx-agent-session-name s))))
     ("agents/list" (list :sessions (vconcat (mapcar #'drgnx-hub--snapshot-lisp (drgnx-agents-sessions)))))
     ("agents/get" (let ((s (drgnx-hub--session params)))
+                    (drgnx-agents-join-text s)          ; the wire carries whole texts
                     (list :lisp (drgnx-hub--snapshot-lisp s) :entries (drgnx-hub--lisp (drgnx-agent-session-entries s))
                           :seq (gethash (drgnx-agent-session-id s) drgnx-hub--seq 0))))
     ("agents/send" (drgnx-agents-send (drgnx-hub--session params) (plist-get params :text)) t)
@@ -746,6 +747,7 @@ for an agent that is not here (or exited) stays queued."
 (defun drgnx-hub--flush (s)
   "Send S's snapshot, and the entries that are new or changed since the last time, as `agent' / `agent-entries'."
   (let* ((id (drgnx-agent-session-id s)) (sent (gethash id drgnx-hub--sent)) (changed nil) (i 0))
+    (drgnx-agents-join-text s)                  ; the wire carries whole texts (RP7-e: send deltas instead)
     (dolist (e (drgnx-agent-session-entries s))
       (unless (equal e (and sent (< i (length sent)) (aref sent i)))
         (push (vector i (drgnx-hub--lisp e)) changed))

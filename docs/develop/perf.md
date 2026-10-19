@@ -24,11 +24,13 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 | tabs | 20 next-tab switches among 20 open files | input latency |
 | explorer | focus the Explorer, 10 rows down (each one moves), back | input latency |
 | agent-typing | typing while an agent (the mock) streams a reply into the Agents tab (checked: still streaming at the end) | input latency |
+| agent-stream | the typing workload's six strings while the editor's other window shows a transcript whose running answer starts 400 kB long (not done) and the mock streams 100-character chunks onto it, 50 a second (`stream 500`; checked: still streaming at the end): a chunk costs the chunk, and only the new text is drawn | input latency |
 | cockpit-cards | typing while the Work cockpit is filtered to a job (Show Job in Work: the graph, and What needs you with four cards, three tasks and their agents; twenty decisions) and three mock agents stream, the panes following their changes (checked: still streaming at the end); until M12f `job-window`, the job's own frame | input latency |
 | code-scrolling | `<next>`×30 then `<prior>`×30 through the 12k-line fixture with sticky scroll and indent guides (when installed) on — smooth scrolling is on but pixel scrolling is a wheel's, not `<next>`'s | input latency |
 | diff-scrolling | `<next>`×30 then `<prior>`×30 through a 10k-line diff in the split layout | input latency |
 | typing-with-ghost | the typing workload with ghost text on: a mock model answers every pause at once, the pause shortened to 10 ms so each key asks and the next cancels (checked: it asked) | input latency |
 | replace-typing | 22 characters into the fixture while the Search view lists 10k matches in 100 files: the first key starts the search (checked: at least 5 keys typed while it streamed, all 10k listed) | input latency |
+| replace-retype | the same 10k matches listed and drawn, then the string `pi` typed 5 times into the Replace field: after the pause each match row is patched with its new preview, in slices, the visible rows first (checked: no full draw, the rows equal a fresh render of the view's keys) | input latency, and `:slice_ms`: the wall time of each view draw (`drgnx-view--draw-buffer`, timed by a harness-side advice; budget: max 6 ms) |
 | live-view | the typing workload's 186 characters while the Live view, beside the file, shows a mock browser's JPEG frames as wide as the view asked for (as Chrome sends them), 30 a second, each sent once the last was acknowledged (the mock runs in the same Emacs, so its message and websocket frame are made once; without ImageMagick the frames are a few bytes no decoder takes, so drawing costs less) (checked: frames were drawn) | input latency |
 | agent-settings-open | the Claude Code settings page opened and drawn (`redisplay`) against a fixture home: a 5 MB `.claude.json` (300 projects with history), 50 MCP servers and 200 skills; three runs | milliseconds until drawn (budget 150) and the processes started (budget 0: opening the page starts nothing) |
 | remote-typing | the typing workload's 186 characters in a local file while the Explorer lists a mock-method root (test/fixtures/tramp-mock.el: a real TRAMP connection to a local `sh`) and its connection is dead, the segment showing it lost (checked: nothing was sent to the remote, the connection stayed dead) | input latency |
@@ -142,6 +144,9 @@ Run `--perf` on its own: no other test tiers, agents or builds at the same time.
     `gc-cons-percentage` 0.2.
   - **Harness sessions** of the minimal configuration run at the same settings (`drgnx-ui-gc-early` and
     `drgnx-ui-gc-setup` in `harness/init/prelude.el`); a session of an external configuration brings its own.
+- **The Outline** keeps no imenu markers: each refresh turns them into integer positions and releases them, since a
+  marker in the source buffer costs every edit of that buffer until a collection frees it. Its rows are patched by key
+  (an edit that moves definitions redraws none). Wall numbers: perf deferred.
 - **Key resolution** at startup checked every pair of bindings for prefixes and re-parsed keys each time; it now
   caches parsed keys and compares only keys in one keymap with the same first event.
 - **Harness sessions** share one native-code cache per state root, so advice trampolines (the no-prompt guard

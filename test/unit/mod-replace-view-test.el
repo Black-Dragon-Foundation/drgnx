@@ -5,6 +5,8 @@
 (require 'drgnx-wb)
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-replace" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/view-fixture" drgnx-dir) nil t)
 (require 'drgnx-run-ert "run-ert")                     ; `drgnx-run-ert-time-factor'
 
 (defun drgnx-replace-view-test--bind-keys ()
@@ -22,7 +24,8 @@
 bar's keymaps), one editor window, no view or bar left over."
   (declare (indent 0))
   `(let ((drgnx-wb--sections nil) (drgnx-signal--editor-window nil)
-         (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
+         (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
+         (drgnx-replace-view-test--types drgnx-view--types)) ; the section defines the rows' view type
      (delete-other-windows)
      (set-frame-parameter nil 'drgnx-wb-view nil)
      (drgnx-replace--define-section)
@@ -36,7 +39,8 @@ bar's keymaps), one editor window, no view or bar left over."
        (setcdr drgnx-replace-keys-map nil)
        (setcdr drgnx-replace-bar-keys-map nil)
        (dolist (b (list drgnx-replace-buffer-name drgnx-replace-bar-buffer-name))
-         (when (get-buffer b) (kill-buffer b))))))
+         (when (get-buffer b) (kill-buffer b)))
+       (setq drgnx-view--types drgnx-replace-view-test--types))))
 
 (defun drgnx-replace-view-test--view () (get-buffer drgnx-replace-buffer-name))
 
@@ -126,7 +130,7 @@ count says which rows."
       ;; typing waits for a pause, then searches
       (drgnx-replace-view-test--set 'include "src/**")
       (with-current-buffer (drgnx-replace-view-test--view)
-        (should (timerp drgnx-replace--search-timer))
+        (should (drgnx-timer-active-p (cons 'replace-pause (current-buffer))))
         (should (= (length drgnx-replace--matches) 4)))
       (drgnx-replace-view-test--wait)
       (should (equal (drgnx-replace-view-test--files) '("a.el" "b.md")))
@@ -389,7 +393,231 @@ count says which rows."
       (should (equal (drgnx-replace-view-test--files) '("f.txt")))
       (should (= (drgnx-replace-view-test--count) 2)))))
 
+;;;; The rows on a view (wb/drgnx-view.el), on the virtual clock
+
+(defvar drgnx-replace-view-test--reads 0 "How many times the replaced `drgnx-timer-now' was read.")
+
+(defmacro drgnx-replace-view-test--ticking (step &rest body)
+  "BODY with `drgnx-timer-now' returning 1000 + STEP × the reads so far: each read costs STEP seconds."
+  (declare (indent 1))
+  `(let ((drgnx-replace-view-test--reads 0))
+     (cl-letf (((symbol-function 'drgnx-timer-now)
+                (lambda () (prog1 (+ 1000.0 (* drgnx-replace-view-test--reads ,step))
+                             (setq drgnx-replace-view-test--reads (1+ drgnx-replace-view-test--reads))))))
+       ,@body)))
+
+(defmacro drgnx-replace-view-test--fed (&rest body)
+  "BODY on the virtual clock with the Search view shown in the sidebar and empty: `dir' its root (a temp folder),
+`view' its buffer, `v' its view.  Nothing searches: BODY feeds matches through `drgnx-replace--got'."
+  (declare (indent 0))
+  `(drgnx-replace-view-test--with
+     (let ((dir (file-name-as-directory (make-temp-file "drgnx-replace-view" t))) (drgnx-view--deadline nil))
+       (unwind-protect
+           (drgnx-test-with-clock (:allow-pending t)
+             (let* ((view (drgnx-replace--view-buffer)) (v (buffer-local-value 'drgnx-view view)))
+               (ignore v)
+               (drgnx-wb-show-view 'search)
+               (with-current-buffer view (setq drgnx-replace--root dir))
+               ,@body))
+         (delete-directory dir t)))))
+
+(defun drgnx-replace-view-test--matches (dir from to lines &optional text)
+  "LINES matches of TEXT (default: a needle line) in each of the files DIR/d/fNNN.txt, NNN from FROM below TO, in
+file order, as a search sends them."
+  (let ((text (or text "a needle in the haystack, line after line")) (out nil))
+    (dotimes (k (- to from))
+      (let ((file (expand-file-name (format "d/f%03d.txt" (+ from k)) dir)))
+        (dotimes (l lines) (push (drgnx-replace--match file (1+ l) text 2 8) out))))
+    (nreverse out)))
+
+(defun drgnx-replace-view-test--feed (view ms)
+  "The engine sends MS to VIEW in one batch."
+  (with-current-buffer view (drgnx-replace--got (copy-sequence ms))))
+
+(defun drgnx-replace-view-test--fresh-p (view)
+  "VIEW's rows are what a fresh render of its keys gives, and its starts are right."
+  (with-current-buffer view
+    (should-not (drgnx-view--check drgnx-view))
+    (should (equal (drgnx-view-test--expected drgnx-view) (drgnx-view-test--text drgnx-view)))))
+
+(defun drgnx-replace-view-test--stat (v name) (plist-get (drgnx-view-stats v) name))
+
+(defun drgnx-replace-view-test--keys (v)
+  "VIEW V's row keys, in order."
+  (let (out) (dotimes (i (drgnx-view-row-count v)) (push (aref (drgnx-view--keys v) i) out)) (nreverse out)))
+
 (ert-deftest drgnx-replace/ten-thousand-matches-stream ()
+  ;; REPLACE-REDRAW-1 (the macOS CI failure): typing a replacement erased all 10k rows in one `delete-region' and
+  ;; drew them again.  Now, on the virtual clock, each `drgnx-timer-now' read costing 0.056 ms (8 rows at the
+  ;; probe's 7 µs): no slice draws more than 576 rows, the retype patches exactly the 10,000 match rows in place
+  ;; (headers untouched, no full draw), and the rows the window shows are in its first slice.
+  (drgnx-replace-view-test--fed
+    (let* ((ms (drgnx-replace-view-test--matches dir 0 100 100)) (slices nil) (w (get-buffer-window view))
+           (orig (symbol-function 'drgnx-replace--rows-drawn)))
+      (cl-letf (((symbol-function 'drgnx-replace--rows-drawn)
+                 (lambda (vw keys) (push keys slices) (funcall orig vw keys))))
+        (drgnx-replace-view-test--ticking 0.000056
+          ;; 100 batches, each across two files (a search's output chunks), time passing between them
+          (let ((start 0) (rest ms))
+            (dolist (end (append (number-sequence 50 9850 100) (list 10000)))
+              (drgnx-replace-view-test--feed view (take (- end start) rest))
+              (setq rest (nthcdr (- end start) rest) start end)
+              (drgnx-test-advance 0.01)))
+          (should (= 10100 (drgnx-view-row-count v)))      ; 100 headers, 10,000 rows
+          (should-not (drgnx-view-pending-p v))
+          (should (= 0 (drgnx-replace-view-test--stat v :full-draws)))
+          (drgnx-replace-view-test--fresh-p view)
+          ;; the window halfway down the list; then a replacement is typed
+          (set-window-start w (drgnx-view-row-start v (nth 5000 ms)))
+          (let ((drawn (drgnx-replace-view-test--stat v :rows-drawn))
+                (visible (let (out)
+                           (pcase-dolist (`(,from . ,to) (drgnx-view--visible-ranges v))
+                             (cl-loop for i from from below (min to (drgnx-view-row-count v))
+                                      for key = (aref (drgnx-view--keys v) i)
+                                      unless (eq (car key) 'drgnx-replace-file) do (push key out)))
+                           out)))
+            (should visible)
+            (setq slices nil)
+            (drgnx-replace-view-test--set 'replace "pin")
+            (drgnx-test-advance drgnx-replace-delay)        ; the pause, then every slice at once
+            (should (= 10000 (- (drgnx-replace-view-test--stat v :rows-drawn) drawn)))
+            (should (= 0 (drgnx-replace-view-test--stat v :full-draws)))
+            (should (<= (drgnx-replace-view-test--stat v :max-slice-rows) 576))
+            (should (> (length slices) 1))
+            (let ((first (car (last slices))))
+              (dolist (key visible) (should (memq key first))))
+            (should-not (drgnx-view-pending-p v))
+            (drgnx-replace-view-test--fresh-p view)
+            (with-current-buffer view
+              (should (string-search "needlepin" (buffer-substring-no-properties (window-start w) (point-max)))))))))))
+
+(ert-deftest drgnx-replace/a-late-match-joins-its-file ()
+  ;; a match of a file listed already goes after that file's last row, not at the end
+  (drgnx-replace-view-test--fed
+    (let ((a (drgnx-replace-view-test--matches dir 0 1 3)) (b (drgnx-replace-view-test--matches dir 1 2 2)))
+      (drgnx-replace-view-test--feed view (append (take 2 a) b))
+      (drgnx-test-advance 0.01)
+      (drgnx-replace-view-test--feed view (last a))
+      (drgnx-test-advance 0.01)
+      (let ((keys (drgnx-replace-view-test--keys v)))
+        (should (= 7 (length keys)))
+        (should (equal (cdr (take 4 keys)) a))
+        (should (equal (nthcdr 5 keys) b)))
+      (drgnx-replace-view-test--fresh-p view))))
+
+(ert-deftest drgnx-replace/a-rescanned-file-moves-only-its-rows ()
+  (drgnx-replace-view-test--fed
+    (let ((files (mapcar (lambda (n) (expand-file-name n dir)) '("a.txt" "b.txt" "c.txt"))))
+      (pcase-let ((`(,a ,b ,c) files))
+        (write-region "foo 1\nfoo 2\n" nil a nil 'silent)
+        (write-region "foo 3\n" nil b nil 'silent)
+        (write-region "foo 4\n" nil c nil 'silent)
+        (with-current-buffer view
+          (drgnx-replace--fill 'find "foo")
+          (dolist (f files) (puthash f t drgnx-replace--listed) (drgnx-replace--got (drgnx-replace--scan f))))
+        (drgnx-test-advance 0.01)
+        (should (= 7 (drgnx-view-row-count v)))
+        ;; b.txt changes on disk: its row goes, its three rows come after its header, which is drawn again
+        (let ((drawn (drgnx-replace-view-test--stat v :rows-drawn)) (removed (drgnx-replace-view-test--stat v :removed)))
+          (write-region "foo 3\nfoo 5\nfoo 6\n" nil b nil 'silent)
+          (with-current-buffer view (drgnx-replace--file-changed b))
+          (drgnx-test-advance drgnx-replace-refresh-delay)
+          (should (= 9 (drgnx-view-row-count v)))
+          (should (= 4 (- (drgnx-replace-view-test--stat v :rows-drawn) drawn)))
+          (should (= 1 (- (drgnx-replace-view-test--stat v :removed) removed)))
+          (should (= 0 (drgnx-replace-view-test--stat v :full-draws)))
+          (drgnx-replace-view-test--fresh-p view))
+        ;; c.txt has no match left: its header goes too
+        (let ((drawn (drgnx-replace-view-test--stat v :rows-drawn)))
+          (write-region "bar\n" nil c nil 'silent)
+          (with-current-buffer view (drgnx-replace--file-changed c))
+          (drgnx-test-advance drgnx-replace-refresh-delay)
+          (should (= 7 (drgnx-view-row-count v)))
+          (should (= drawn (drgnx-replace-view-test--stat v :rows-drawn)))
+          (should (equal '("a.txt" "b.txt") (drgnx-replace-view-test--files)))
+          (drgnx-replace-view-test--fresh-p view))))))
+
+(ert-deftest drgnx-replace/a-new-search-resets-in-slices ()
+  (drgnx-replace-view-test--fed
+    (drgnx-replace-view-test--ticking 0.000056
+      (drgnx-replace-view-test--feed view (drgnx-replace-view-test--matches dir 0 20 100))
+      (drgnx-test-advance 0.01)
+      (should (= 2020 (drgnx-view-row-count v)))
+      ;; a new search: the rows go a slice at a time, never in one erase
+      (with-current-buffer view
+        (drgnx-replace--clear)
+        (drgnx-replace--add (drgnx-replace-view-test--matches dir 50 51 3 "another needle")))
+      (drgnx-view--draw-buffer view)
+      (let ((removed (drgnx-replace-view-test--stat v :removed)))
+        (should (> removed 0))
+        (should (< removed 2020)))
+      (with-current-buffer view (should-not (drgnx-view--check drgnx-view)))
+      (drgnx-test-advance 0)
+      (should (= 2020 (drgnx-replace-view-test--stat v :removed)))
+      (should (= 0 (drgnx-replace-view-test--stat v :full-draws)))
+      (should (<= (drgnx-replace-view-test--stat v :max-slice-rows) 576))
+      (should (= 4 (drgnx-view-row-count v)))
+      (drgnx-replace-view-test--fresh-p view))))
+
+(ert-deftest drgnx-replace/the-view-keeps-its-place-when-rows-above-change ()
+  (drgnx-replace-view-test--fed
+    (let ((ms (drgnx-replace-view-test--matches dir 0 10 10)) (w (get-buffer-window view)))
+      (drgnx-replace-view-test--feed view ms)
+      (drgnx-test-advance 0.01)
+      (let ((key (nth 75 ms)))
+        (set-window-start w (drgnx-view-row-start v key))
+        (set-window-point w (+ 4 (drgnx-view-row-start v key)))
+        ;; rows arrive above it (file 0's), and file 1's rows go: the window stays on its row
+        (drgnx-replace-view-test--feed view (list (drgnx-replace--match (plist-get (car ms) :file) 99 "needle late" 0 6)))
+        (with-current-buffer view (drgnx-view-remove drgnx-view (take 10 (nthcdr 10 ms))))
+        (drgnx-test-advance 0.01)
+        (should (= (window-start w) (drgnx-view-row-start v key)))
+        (should (= (window-point w) (+ 4 (drgnx-view-row-start v key))))
+        (with-current-buffer view (should (eq (drgnx-view-key-at (window-start w)) key)))))))
+
+(defun drgnx-replace-view-test--markers (buffer)
+  "How many markers into BUFFER its buffer-local variables reach (through conses, vectors, records, hash tables)."
+  (let ((seen (make-hash-table :test #'eq)) (found (make-hash-table :test #'eq))
+        (stack (mapcar (lambda (b) (if (consp b) (cdr b) nil)) (buffer-local-variables buffer))))
+    (while stack
+      (let ((x (pop stack)))
+        (unless (or (null x) (symbolp x) (numberp x) (stringp x) (bufferp x) (gethash x seen))
+          (puthash x t seen)
+          (cond ((markerp x) (when (eq (marker-buffer x) buffer) (puthash x t found)))
+                ((consp x) (push (car x) stack) (push (cdr x) stack))
+                ((or (vectorp x) (recordp x))
+                 (let ((i 0)) (while (ignore-errors (progn (push (aref x i) stack) t)) (setq i (1+ i)))))
+                ((hash-table-p x) (maphash (lambda (k val) (push k stack) (push val stack)) x))))))
+    (hash-table-count found)))
+
+(ert-deftest drgnx-replace/no-marker-per-file ()
+  ;; the view's START is its only marker: 30 files listed add none to what the fields and the status line hold
+  (drgnx-replace-view-test--fed
+    (let ((before (drgnx-replace-view-test--markers view)))
+      (drgnx-replace-view-test--feed view (drgnx-replace-view-test--matches dir 0 30 2))
+      (drgnx-test-advance 0.01)
+      (should (= 90 (drgnx-view-row-count v)))
+      (should (= before (drgnx-replace-view-test--markers view))))))
+
+(ert-deftest drgnx-replace/a-hidden-view-catches-up-when-shown ()
+  (drgnx-replace-view-test--fed
+    (drgnx-wb-hide-sidebar)
+    (should-not (get-buffer-window view))
+    (drgnx-replace-view-test--feed view (drgnx-replace-view-test--matches dir 0 5 4))
+    (drgnx-test-advance 0.01)
+    ;; hidden: nothing drawn
+    (should (= 0 (drgnx-replace-view-test--stat v :rows-drawn)))
+    (should (= 0 (drgnx-view-row-count v)))
+    (should (drgnx-view-pending-p v))
+    ;; shown again (redisplay runs the buffer's `window-buffer-change-functions'; batch Emacs has none)
+    (drgnx-wb-show-view 'search)
+    (drgnx-view--buffer-shown (get-buffer-window view))
+    (drgnx-test-advance 0)
+    (should (= 25 (drgnx-view-row-count v)))
+    (should-not (drgnx-view-pending-p v))
+    (drgnx-replace-view-test--fresh-p view)))
+
+(ert-deftest drgnx-replace/ten-thousand-matches-stream-wall-clock ()
   :tags '(:timing)                                      ; wall-clock: a quiet machine
   (drgnx-replace-view-test--with
     (drgnx-git-test-with-repo
@@ -398,7 +626,7 @@ count says which rows."
       (drgnx-replace-view-test--visit repo "d/f000.txt" 3)
       ;; three runs, each judged by its worst slice; the budgets hold for the median run: one slice the machine
       ;; stole (macOS CI: 32.1 ms once, 17.6 and 20.5 before) is not the view's, a slow slice in every run is
-      (let* ((drawn (lambda () (with-current-buffer (drgnx-replace-view-test--view) drgnx-replace--drawn)))
+      (let* ((drawn (lambda () (with-current-buffer (drgnx-replace-view-test--view) (drgnx-view-row-count drgnx-view))))
              (watch (lambda (t0)
                       ;; until the view is idle: (FIRST-ROW-AFTER WORST-SLICE), from T0
                       (let ((first nil) (worst 0))
@@ -420,14 +648,14 @@ count says which rows."
           (let ((t0 (progn (garbage-collect) (float-time))))
             (drgnx-replace-in-files)              ; searches at once (no typing to wait for)
             (pcase-let ((`(,first ,worst) (funcall watch t0)))
-              (should (= (funcall drawn) 10000))
+              (should (= (funcall drawn) 10100))   ; 100 headers, 10,000 rows
               (should (= (drgnx-replace-view-test--count) 10000))
               (push first firsts)
               (push worst streams)))
           ;; typing a replacement draws all 10000 rows again (new previews): in slices too
           (drgnx-replace-view-test--set 'replace "pin")
           (push (cadr (funcall watch (float-time))) redraws)
-          (should (= (funcall drawn) 10000)))
+          (should (= (funcall drawn) 10100)))
         (message "ten thousand matches: first row %S s, worst slice %S s streaming, %S s redrawing (factor %s)"
                  firsts streams redraws factor)
         (should (< (funcall median firsts) (* 0.1 factor)))
@@ -500,7 +728,7 @@ count says which rows."
         (drgnx-replace-view-test--press-box (funcall row " 2"))
         ;; an unsaved edit above: after a pause the file's rows follow the buffer; the unticked match stays unticked
         (with-current-buffer buf (goto-char (point-min)) (insert "foo 0\nfoo 0b\n"))
-        (with-current-buffer view (should (timerp drgnx-replace--refresh-timer)))
+        (should (drgnx-timer-active-p (cons 'replace-refresh view)))
         (drgnx-replace-view-test--wait)
         (should (= (drgnx-replace-view-test--count) 5))
         (should (equal (drgnx-replace-view-test--box-at (funcall row " 2")) "[ ]"))

@@ -45,6 +45,13 @@ git repository ROOT/code), a lone plan, and the tracker's database in a temp dat
   (should (search-forward text nil t))
   (beginning-of-line))
 
+(defun drgnx-work-ui-test--draw ()
+  "Draw the Work buffer's view now (a command or a scan only marks it; the timer draws it)."
+  (drgnx-view-draw-now drgnx-view))
+
+(defun drgnx-work-ui-test--rows-drawn ()
+  (plist-get (drgnx-view-stats drgnx-view) :rows-drawn))
+
 (ert-deftest drgnx-work-ui/the-tree-shows-each-spec-with-its-plans-and-their-counts ()
   (drgnx-work-ui-test--with root
     (with-current-buffer (drgnx-work-ui-buffer)
@@ -59,23 +66,23 @@ git repository ROOT/code), a lone plan, and the tracker's database in a temp dat
   (drgnx-work-ui-test--with root
     (with-current-buffer (drgnx-work-ui-buffer)
       (drgnx-work-ui-test--goto "Plan Alpha")
-      (drgnx-work-ui-toggle)
+      (drgnx-work-ui-toggle) (drgnx-work-ui-test--draw)
       (should (string-search "☐ Task 1: first" (buffer-string)))
       (should (equal (plist-get (drgnx-work-ui--node) :title) "Plan Alpha"))   ; point stays on the line folded
       (drgnx-work-ui-test--goto "Task 1: first")
-      (drgnx-work-ui-toggle)
+      (drgnx-work-ui-toggle) (drgnx-work-ui-test--draw)
       (let ((text (buffer-string)))
         (should (string-search "☑ Step 1: write it" text))
         (should (string-search "☐ Step 2: run it" text))
         (should (string-match-p "● [0-9a-f]\\{7\\} did the first task" text)))
       (drgnx-work-ui-test--goto "Plan Alpha")
-      (drgnx-work-ui-toggle)                                     ; folds again, its children with it
+      (drgnx-work-ui-toggle) (drgnx-work-ui-test--draw)          ; folds again, its children with it
       (should-not (string-search "Task 1: first" (buffer-string))))))
 
 (ert-deftest drgnx-work-ui/ret-opens-a-task-at-its-line-and-a-commit-as-a-diff ()
   (drgnx-work-ui-test--with root
     (with-current-buffer (drgnx-work-ui-buffer)
-      (drgnx-work-ui-test--goto "Plan Alpha") (drgnx-work-ui-toggle)
+      (drgnx-work-ui-test--goto "Plan Alpha") (drgnx-work-ui-toggle) (drgnx-work-ui-test--draw)
       (drgnx-work-ui-test--goto "Task 2: second")
       (let ((b (save-window-excursion (drgnx-work-ui-open) (current-buffer))))
         (unwind-protect
@@ -84,7 +91,7 @@ git repository ROOT/code), a lone plan, and the tracker's database in a temp dat
               (should (looking-at-p "### Task 2: second")))
           (kill-buffer b)))
       (with-current-buffer (drgnx-work-ui-buffer)
-        (drgnx-work-ui-test--goto "Task 1: first") (drgnx-work-ui-toggle)
+        (drgnx-work-ui-test--goto "Task 1: first") (drgnx-work-ui-toggle) (drgnx-work-ui-test--draw)
         (drgnx-work-ui-test--goto "did the first task")
         (let ((b (save-window-excursion (drgnx-work-ui-open) (current-buffer))))
           (unwind-protect
@@ -96,14 +103,14 @@ git repository ROOT/code), a lone plan, and the tracker's database in a temp dat
 (ert-deftest drgnx-work-ui/the-filter-and-hide-merged-narrow-the-plans ()
   (drgnx-work-ui-test--with root
     (with-current-buffer (drgnx-work-ui-buffer)
-      (drgnx-work-ui-filter "beta")
+      (drgnx-work-ui-filter "beta") (drgnx-work-ui-test--draw)
       (should (string-search "Plan Beta" (buffer-string)))
       (should-not (string-search "Plan Alpha" (buffer-string)))
       (should-not (string-search "The Spec" (buffer-string)))   ; a spec with no plan shown is hidden too
-      (drgnx-work-ui-filter "")
+      (drgnx-work-ui-filter "") (drgnx-work-ui-test--draw)
       (should (string-search "Plan Alpha" (buffer-string)))
       (drgnx-work-update-node (concat "plan:" root "docs/plans/beta.md") :merged t)
-      (drgnx-work-ui-toggle-merged)
+      (drgnx-work-ui-toggle-merged) (drgnx-work-ui-test--draw)
       (should-not (string-search "Plan Beta" (buffer-string)))
       (should (string-search "Plan Alpha" (buffer-string))))))
 
@@ -284,6 +291,9 @@ without SVG (librsvg), e.g. a terminal-only build."
           (should (processp p))                                 ; not the scan itself: Emacs stays free
           (let ((d (+ (float-time) 60))) (while (and (process-live-p p) (< (float-time) d)) (accept-process-output p 0.1)))
           (accept-process-output nil 0.2))
+        (should (drgnx-view-pending-p drgnx-view))              ; the sentinel only marked the view
+        (should-not (string-search "Plan Gamma" (buffer-string)))
+        (drgnx-work-ui-test--draw)
         (should (string-search "Plan Gamma" (buffer-string)))))))
 
 (ert-deftest drgnx-work-ui/a-failed-scan-says-only-its-own-output-and-never-errors ()
@@ -317,7 +327,7 @@ without SVG (librsvg), e.g. a terminal-only build."
       (cl-letf (((symbol-function 'drgnx-agents-start) (lambda (profile cwd task) (setq started (list profile cwd task)) 'session))
                 ((symbol-function 'drgnx-agents-ui-transcript) #'ignore))
         (with-current-buffer (drgnx-work-ui-buffer)
-          (drgnx-work-ui-test--goto "Plan Alpha") (drgnx-work-ui-toggle)
+          (drgnx-work-ui-test--goto "Plan Alpha") (drgnx-work-ui-toggle) (drgnx-work-ui-test--draw)
           (drgnx-work-ui-test--goto "Task 2: second")
           (drgnx-work-ui-start-agent "mock")
           (should (equal started (list "mock" (concat root "docs/plans/") (concat "task:" root "docs/plans/alpha.md#2"))))
@@ -349,10 +359,95 @@ without SVG (librsvg), e.g. a terminal-only build."
       (drgnx-work-record plan code (funcall commit "for-the-plan"))
       (with-current-buffer (drgnx-work-ui-buffer)
         (should (string-match-p "Plan Alpha  steps 1/3 · todos 0/1 · 3 commits" (buffer-string)))
-        (drgnx-work-ui-test--goto "Plan Alpha") (drgnx-work-ui-toggle)
+        (drgnx-work-ui-test--goto "Plan Alpha") (drgnx-work-ui-toggle) (drgnx-work-ui-test--draw)
         (drgnx-work-ui-test--goto "TODO a todo")
         (should (looking-at-p "    ▸ ○ TODO a todo"))
-        (drgnx-work-ui-toggle)
+        (drgnx-work-ui-toggle) (drgnx-work-ui-test--draw)
         (should (string-search "for-the-todo" (buffer-string)))))))
+
+(ert-deftest drgnx-work-ui/a-scan-that-changes-one-task-redraws-one-row ()
+  (drgnx-work-ui-test--with root
+    (with-current-buffer (drgnx-work-ui-buffer)
+      (drgnx-work-ui-test--goto "Plan Alpha") (drgnx-work-ui-toggle) (drgnx-work-ui-test--draw)
+      (let ((text (buffer-string)) (before (drgnx-work-ui-test--rows-drawn)))
+        (drgnx-work-ui--redraw)                                  ; what a scan's sentinel does: marks only
+        (should (equal text (buffer-string)))
+        (drgnx-work-ui-test--draw)
+        (should (= before (drgnx-work-ui-test--rows-drawn)))     ; nothing changed: no row drawn again
+        (drgnx-work-update-node (concat "task:" root "docs/plans/alpha.md#2") :title "second, renamed")
+        (drgnx-work-ui--redraw)
+        (should (equal text (buffer-string)))                    ; the mark draws nothing
+        (drgnx-work-ui-test--draw)
+        (should (= (1+ before) (drgnx-work-ui-test--rows-drawn)))
+        (should (string-search "☐ Task 2: second, renamed" (buffer-string)))
+        (should (string-search "☐ Task 1: first" (buffer-string)))
+        (should-not (drgnx-view--check drgnx-view))))))
+
+(ert-deftest drgnx-work-ui/folding-inserts-and-removes-children ()
+  (drgnx-work-ui-test--with root
+    (with-current-buffer (drgnx-work-ui-buffer)
+      (let ((rows (drgnx-view-row-count drgnx-view)) (drawn (drgnx-work-ui-test--rows-drawn))
+            (appended (plist-get (drgnx-view-stats drgnx-view) :appended)))
+        (drgnx-work-ui-test--goto "Plan Alpha")
+        (drgnx-work-ui-toggle) (drgnx-work-ui-test--draw)
+        (should (= (+ rows 2) (drgnx-view-row-count drgnx-view)))   ; Alpha's two tasks
+        (should (equal (list (concat "task:" root "docs/plans/alpha.md#1") (concat "task:" root "docs/plans/alpha.md#2"))
+                       (list (drgnx-view-key-at (progn (drgnx-work-ui-test--goto "Task 1: first") (point)))
+                             (drgnx-view-key-at (progn (drgnx-work-ui-test--goto "Task 2: second") (point))))))
+        (should (= (+ drawn 3) (drgnx-work-ui-test--rows-drawn)))   ; Alpha's fold marker and its two tasks; no other row
+        (should (= (+ appended 2) (plist-get (drgnx-view-stats drgnx-view) :appended)))
+        (drgnx-work-ui-test--goto "Plan Alpha")
+        (drgnx-work-ui-toggle) (drgnx-work-ui-test--draw)
+        (should (= rows (drgnx-view-row-count drgnx-view)))
+        (should (= 2 (plist-get (drgnx-view-stats drgnx-view) :removed)))
+        (should-not (string-search "Task 1: first" (buffer-string)))
+        (should-not (drgnx-view--check drgnx-view))))))
+
+(ert-deftest drgnx-work-ui/point-stays-on-its-node ()
+  (drgnx-work-ui-test--with root
+    (with-current-buffer (drgnx-work-ui-buffer)
+      (let ((beta (concat "plan:" root "docs/plans/beta.md")) (alpha (concat "plan:" root "docs/plans/alpha.md")))
+        (drgnx-work-ui-test--goto "Plan Beta")
+        (forward-char 5)
+        (let ((col (current-column)))
+          (dolist (state '(open closed))              ; rows come in above point, then go again
+            (puthash alpha state drgnx-work-ui--expanded)
+            (drgnx-work-ui--redraw) (drgnx-work-ui-test--draw)
+            (should (equal beta (plist-get (drgnx-work-ui--node) :id)))
+            (should (= col (current-column)))))
+        (drgnx-work-ui-toggle) (drgnx-work-ui-test--draw)     ; Beta itself unfolds: point stays on it
+        (should (equal beta (plist-get (drgnx-work-ui--node) :id)))
+        (beginning-of-line)
+        (should (looking-at-p "▾ ▣ 0/1 Plan Beta"))))))
+
+(ert-deftest drgnx-work-ui/a-fold-a-filter-and-hide-merged-draw-before-they-return ()
+  (drgnx-work-ui-test--with root
+    (with-current-buffer (drgnx-work-ui-buffer)
+      (drgnx-work-ui-test--goto "Plan Alpha")
+      (drgnx-work-ui-toggle)                                     ; no draw call here
+      (should (string-search "Task 2: second" (buffer-string)))
+      (drgnx-work-ui-filter "beta")
+      (should-not (string-search "Plan Alpha" (buffer-string)))
+      (drgnx-work-ui-filter "")
+      (drgnx-work-update-node (concat "plan:" root "docs/plans/beta.md") :merged t)
+      (drgnx-work-ui-toggle-merged)
+      (should-not (string-search "Plan Beta" (buffer-string))))))
+
+(ert-deftest drgnx-work-ui/the-node-at-point-is-fresh-after-a-scan-that-leaves-its-row-alone ()
+  (drgnx-work-ui-test--with root
+    (with-current-buffer (drgnx-work-ui-buffer)
+      (drgnx-work-ui-test--goto "Plan Alpha") (drgnx-work-ui-toggle)
+      (let ((task (concat "task:" root "docs/plans/alpha.md#2")))
+        (drgnx-work-ui-test--goto "Task 2: second")
+        (let ((line (plist-get (drgnx-work-ui--node) :line)) (before (drgnx-work-ui-test--rows-drawn)))
+          (drgnx-work-update-node task :line (+ 100 (or line 0)))   ; moved in its file; its row text is the same
+          (drgnx-work-ui--redraw) (drgnx-work-ui-test--draw)
+          (should (= before (drgnx-work-ui-test--rows-drawn)))      ; the row was not drawn again
+          (drgnx-work-ui-test--goto "Task 2: second")
+          (should (= (+ 100 (or line 0)) (plist-get (drgnx-work-ui--node) :line)))
+          (let ((b (save-window-excursion (drgnx-work-ui-open) (current-buffer))))
+            (unwind-protect
+                (with-current-buffer b (should (equal (buffer-file-name) (concat root "docs/plans/alpha.md"))))
+              (kill-buffer b))))))))
 
 ;;; work-ui-test.el ends here

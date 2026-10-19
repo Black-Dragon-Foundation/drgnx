@@ -11,6 +11,20 @@
         (should (= n 3))
         (should (eql (plist-get (plist-get r :frame) :p95) 200))))))
 
+(ert-deftest drgnx-perf-run/a-measure-joins-an-input-run ()
+  ;; replace-retype: the input's numbers and its own (:slice_ms) in one run, medians over the runs
+  (let ((n 0))
+    (cl-letf (((symbol-function 'drgnx-perf-run--call)
+               (lambda (_s f &rest _)
+                 (cond ((equal f "(drgnx-perf-end)") (list :input (list :p95 5)))
+                       ((equal f "m") (setq n (1+ n)) (list :slice_ms (list :max (* n 2))))
+                       (t t))))
+              ((symbol-function 'drgnx-ui-measure) #'ignore))
+      (let ((r (drgnx-perf-run-workload 'sess '(:actions ((:keys "a")) :measure "m" :repeat 3))))
+        (should (= n 3))
+        (should (eql (plist-get (plist-get r :input) :p95) 5))
+        (should (eql (plist-get (plist-get r :slice_ms) :max) 4))))))
+
 (ert-deftest drgnx-perf-run/teardown-runs-when-a-workload-fails ()
   ;; I8
   (let (calls)
