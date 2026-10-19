@@ -14,8 +14,6 @@
 (:file "modules/ui/drgnx-tty-popups.el" :what "window-configuration-change-hook"
  :why "windows made on an ASCII terminal get the ASCII table" :until "B11")
 ;; Sites from the branches merged at Task 14 (m12f-a's close and top line; C-UI's cockpit).
-(:file "modules/ui/drgnx-topline.el" :what "window-size-change-functions"
- :why "the top line fits a terminal frame and redraws at the new width (two global add-hooks)" :until "Task 20")
 (:file "modules/tools/drgnx-cockpit.el" :what "window-size-change-functions"
  :why "the Work graph re-fits at its window's size (buffer-local)" :until "Task 23")
 (:file "modules/tools/drgnx-cockpit.el" :what "window-buffer-change-functions"

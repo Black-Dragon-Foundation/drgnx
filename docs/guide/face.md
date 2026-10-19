@@ -269,7 +269,10 @@ branch from drgnx's git cache, as the status bar reads it (until the cache has r
 version-control text; never by running git), and the project from the same cache the breadcrumb
 keeps, which is filled when you switch editor, so a directory it has not met yet shows `drgnx` for a moment. Nothing
 in it touches the disk or a process while you type. If something in it fails it shows the mark alone for ten seconds
-rather than disappearing. A `tab-bar-format` of your own is never replaced, and a tab bar that was already on is
+rather than disappearing; when the ten seconds are over the line is made again and redrawn in every frame, without a
+key press, so a frame you left alone gets its line back. A resize redraws the line at the new width, and a new or
+resized terminal frame gets its number of lines decided once Emacs is idle (that can resize the windows, so it never
+happens in the middle of a redraw). A `tab-bar-format` of your own is never replaced, and a tab bar that was already on is
 yours: then the top line stays off. While the line is on, `tab-bar-auto-width` is `nil` (there are no tabs to size),
 unless you set it yourself. Turning the setting off puts back what it changed (the tab bar's format, auto width, mode
 and face). A terminal with fewer than 20 lines shows no line at all (it needs the room).
