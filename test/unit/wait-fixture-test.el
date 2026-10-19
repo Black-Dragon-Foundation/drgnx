@@ -1,6 +1,7 @@
 ;;; wait-fixture-test.el --- drgnx-test-wait -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
 (defun drgnx-wait-test--fail (thunk)
@@ -17,9 +18,13 @@
   (let ((proc (make-process :name "wait-test-sleeper" :command '("sleep" "60") :noquery t))
         (timer (run-at-time 600 nil #'drgnx-wait-test--tick)))
     (unwind-protect
-        (let ((d (drgnx-wait-test--fail (lambda () (drgnx-test-wait (lambda () nil) :secs 0.05 :what "the sleeper")))))
+        (let* ((reads 0)
+               (d (cl-letf (((symbol-function 'drgnx-uitest-settle-scale) (lambda (&rest _) (cl-incf reads) 3.0)))
+                    ;; the scale is read once, by the wait: a load-based second read here could differ
+                    (drgnx-wait-test--fail (lambda () (drgnx-test-wait (lambda () nil) :secs 0.05 :what "the sleeper"))))))
+          (should (= reads 1))
           (should (equal (plist-get d :waited-for) "the sleeper"))
-          (should (= (plist-get d :secs) (* 0.05 (drgnx-uitest-settle-scale))))
+          (should (= (plist-get d :secs) (* 0.05 3.0)))
           (should (plist-member d :last-value))
           (should (member '("wait-test-sleeper" run) (plist-get d :processes)))
           (should (memq 'drgnx-wait-test--tick (plist-get d :timers))))
@@ -46,10 +51,7 @@
     (should (drgnx-test-wait (lambda () (process-get proc :done)) :what "the sentinel"))))
 
 (ert-deftest drgnx-test-wait/works-inside-the-clock-fixture ()
-  (let ((clock (expand-file-name "test/fixtures/clock-fixture" drgnx-dir)))
-    (skip-unless (load clock t t))
-    ;; Each timed `accept-process-output' advances virtual time by the real wait, so a virtual-time PRED comes true.
-    (eval '(drgnx-test-with-clock
-            (let ((start (float-time)))
-              (should (drgnx-test-wait (lambda () (> (float-time) (+ start 0.05))) :secs 5))))
-          t)))
+  ;; Each timed `accept-process-output' advances virtual time by the real wait, so a virtual-time PRED comes true.
+  (drgnx-test-with-clock ()
+    (let ((start (float-time)))
+      (should (drgnx-test-wait (lambda () (> (float-time) (+ start 0.05))) :secs 5)))))

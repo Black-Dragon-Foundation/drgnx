@@ -158,7 +158,8 @@ a keyboard key of a command.")
                    nil))))
 
 (defun drgnx-lint--wait-on-process-live-p (form)
-  "A message when FORM is a `drgnx-test-wait' call whose PRED mentions `process-live-p'."
+  "A message when FORM is a `drgnx-test-wait' call whose PRED mentions `process-live-p'.
+Only a literal PRED form is read: `(drgnx-test-wait #\\='my-pred)' is not followed into `my-pred'."
   (when (and (consp form) (eq (car form) 'drgnx-test-wait)
              (let (hit) (drgnx-lint--walk (cadr form) (lambda (f) (when (eq f 'process-live-p) (setq hit t)))) hit))
     "drgnx-test-wait on process-live-p (wait on the sentinel's done flag: process-live-p turns nil before it has run)"))
