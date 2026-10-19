@@ -60,7 +60,7 @@ Returns (RESULT QUESTIONS)."
            (r (drgnx-onboard-portability-test--run t '(("git repository" . t)))))
       (should (file-directory-p (concat config "/.git")))
       (should (equal (drgnx-onboard-portability-test--git config "rev-list" "--count" "HEAD") "1"))
-      (should (equal (drgnx-onboard-portability-test--git config "ls-tree" "-r" "--name-only" "HEAD") "keys.eld"))
+      (should (equal (drgnx-onboard-portability-test--git config "ls-tree" "-r" "--name-only" "HEAD") ".gitignore\nkeys.eld"))
       (should (equal (drgnx-onboard-portability-test--git config "remote") ""))   ; never a remote
       (should (equal (drgnx-onboard-portability-test--git config "log" "-1" "--format=%s") "drgnx configuration"))
       (should (string-match-p "YOUR-REPO-URL" (cadr (car r))))
@@ -90,7 +90,7 @@ Returns (RESULT QUESTIONS)."
            (r (drgnx-onboard-portability-test--run t '(("git repository" . t)))))
       (should-not (file-exists-p (concat config "/emacs")))
       (should (file-exists-p (concat root "data/emacs")))
-      (should (equal (drgnx-onboard-portability-test--git config "ls-tree" "-r" "--name-only" "HEAD") "keys.eld"))
+      (should (equal (drgnx-onboard-portability-test--git config "ls-tree" "-r" "--name-only" "HEAD") ".gitignore\nkeys.eld"))
       (should (string-match-p "moved to the data dir: emacs" (cadr (car r))))))
   ;; a different copy in the data dir: the config dir's stays, and is never committed
   (drgnx-onboard-portability-test--with root
@@ -100,7 +100,7 @@ Returns (RESULT QUESTIONS)."
     (let* ((config (concat root "config"))
            (r (drgnx-onboard-portability-test--run t '(("git repository" . t)))))
       (should (file-exists-p (concat config "/emacs")))
-      (should (equal (drgnx-onboard-portability-test--git config "ls-tree" "-r" "--name-only" "HEAD") "keys.eld"))
+      (should (equal (drgnx-onboard-portability-test--git config "ls-tree" "-r" "--name-only" "HEAD") ".gitignore\nkeys.eld"))
       (should (string-match-p "emacs stays" (cadr (car r)))))))
 
 (ert-deftest drgnx-onboard-portability/a-repo-is-reported-with-the-next-command ()
@@ -285,5 +285,46 @@ Returns (RESULT QUESTIONS)."
                (lambda (&rest args) (let ((p (apply orig args))) (sleep-for 0.3) p))))
       (should (equal (drgnx-onboard--call "true") '(0 . "")))
       (should (equal (drgnx-onboard--call "sh" "-c" "echo out; exit 4") '(4 . "out"))))))
+
+(defun drgnx-onboard-portability-test--leftovers (config)
+  "The config layer's leftovers in CONFIG, at the top and in a sub-directory."
+  (dolist (f '("keys.eld.bak-20261019-120000-000" ".keys.eld.tmp-a1b2c3" "keys.eld.undo" ".keys.eld.lock/owner"
+               "hub/.sessions.eld.lock/owner" "hub/sessions.eld.bak-20261019-120000-000" "hub/.x.eld.tmp-d4e5f6"))
+    (let ((file (expand-file-name f config)))
+      (make-directory (file-name-directory file) t)
+      (write-region "x\n" nil file nil 'silent))))
+
+(ert-deftest drgnx-onboard-portability/leftovers-never-travel ()
+  ;; backups, locks, temp files and the keys undo file never reach the first commit
+  (drgnx-onboard-portability-test--with root
+    (let ((config (concat root "config")))
+      (drgnx-onboard-portability-test--leftovers config)
+      (drgnx-onboard-portability-test--run t '(("git repository" . t)))
+      (should (equal (drgnx-onboard-portability-test--git config "ls-tree" "-r" "--name-only" "HEAD")
+                     ".gitignore\nkeys.eld"))))
+  ;; a .gitignore of the user's own that lacks the lines: the pathspecs keep them out all the same
+  (drgnx-onboard-portability-test--with root
+    (let ((config (concat root "config")))
+      (write-region "*.log\n" nil (concat config "/.gitignore") nil 'silent)
+      (drgnx-onboard-portability-test--leftovers config)
+      (drgnx-onboard-portability-test--run t '(("git repository" . t)))
+      (should (equal (drgnx-onboard-portability-test--git config "ls-tree" "-r" "--name-only" "HEAD")
+                     ".gitignore\nkeys.eld")))))
+
+(ert-deftest drgnx-onboard-portability/the-gitignore-is-written-once ()
+  ;; none there: written with the leftovers' lines
+  (drgnx-onboard-portability-test--with root
+    (let* ((file (concat root "config/.gitignore"))
+           (r (drgnx-onboard-portability-test--run t '(("git repository" . t))))
+           (lines (split-string (with-temp-buffer (insert-file-contents file) (buffer-string)) "\n" t)))
+      (dolist (l drgnx-portable-leftovers) (should (member l lines)))
+      (should-not (string-match-p "\\.gitignore" (cadr (car r))))))
+  ;; the user's own: left byte for byte, and the step names the lines it lacks
+  (drgnx-onboard-portability-test--with root
+    (let ((file (concat root "config/.gitignore")))
+      (write-region "*.log\nkeys.eld.undo\n" nil file nil 'silent)
+      (let ((r (drgnx-onboard-portability-test--run t '(("git repository" . t)))))
+        (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "*.log\nkeys.eld.undo\n"))
+        (should (string-match-p "add to \\.gitignore: \\*\\.bak-\\* \\.\\*\\.lock \\.\\*\\.tmp-\\*\\(;\\|$\\)" (cadr (car r))))))))
 
 ;;; onboard-portability-test.el ends here

@@ -20,6 +20,11 @@
 (defconst drgnx-portable-machine-local '("emacs" "systemd/" "applications/")
   "The config dir's items that belong to one machine (a trailing slash: a directory).  They live in the data dir.")
 
+(defconst drgnx-portable-leftovers '("*.bak-*" ".*.lock" ".*.tmp-*" "keys.eld.undo")
+  "Name patterns (shell globs) of the config layer's own files: backups, lock directories, temp files and the keys
+undo file.  They never travel: onboarding's repository leaves them out (and its .gitignore names them), bootstrap's
+empty-config check ignores them, and they are neither moved nor machine-local.")
+
 (defconst drgnx-portable-install-url "https://raw.githubusercontent.com/Black-Dragon-Foundation/drgnx/main/install.sh"
   "install.sh, for the command a new machine runs.")
 
@@ -90,27 +95,50 @@ with `expand-file-name'."
   "Delete PATH: a directory with its files; a symlink (to a directory too) as the link only."
   (if (and (file-directory-p path) (not (file-symlink-p path))) (delete-directory path t) (delete-file path)))
 
+(defun drgnx-portable--delete-new (to)
+  "Delete TO.drgnx-new, the unfinished copy a crash left, when it is there."
+  (let ((new (concat to ".drgnx-new")))
+    (when (or (file-exists-p new) (file-symlink-p new)) (drgnx-portable--delete new))))
+
+(defun drgnx-portable--copy-into-place (from to)
+  "Copy FROM (a file or a directory) to TO, which is not there: into TO.drgnx-new, verified, then renamed to TO.
+An error leaves neither TO nor TO.drgnx-new; a crash can leave only TO.drgnx-new."
+  (let ((new (concat to ".drgnx-new")))
+    (unwind-protect
+        (progn
+          (if (file-directory-p from) (copy-directory from new t t) (copy-file from new nil t t t))
+          (unless (drgnx-portable--same-p from new)
+            (error "drgnx: copying %s to %s did not give the same files: nothing moved" from to))
+          (rename-file new to))
+      (drgnx-portable--delete-new to))))
+
 (defun drgnx-portable-move-machine-local ()
   "Move the machine-local items of the config dir to the data dir: copy, verify, then delete.
 Returns (ITEM . STATUS) for each item the config dir has: `moved'; `dropped' (an identical copy is in the data
-dir already: the config dir's is deleted); `kept' (a different copy is there: neither is touched)."
+dir already: the config dir's is deleted); `kept' (a different copy is there: neither is touched).  The copy is
+renamed into place only once verified, so the data dir never holds part of an item; an unfinished copy
+\(ITEM.drgnx-new in the data dir, left by a crash) is drgnx's own and is deleted first."
   (let ((config (drgnx-user-dir)) (data (drgnx-data-dir)))
     (cl-loop for item in drgnx-portable-machine-local
              for from = (directory-file-name (expand-file-name item config))
              for to = (directory-file-name (expand-file-name item data))
+             do (drgnx-portable--delete-new to)
              when (file-exists-p from)
              collect (cons item
                            (cond ((file-exists-p to)
                                   (if (drgnx-portable--same-p from to) (progn (drgnx-portable--delete from) 'dropped)
                                     'kept))
                                  (t (make-directory data t)
-                                    (if (file-directory-p from) (copy-directory from to t t)
-                                      (copy-file from to nil t t t))
-                                    (unless (drgnx-portable--same-p from to)
-                                      (drgnx-portable--delete to)
-                                      (error "drgnx: copying %s to %s did not give the same files: nothing moved" from to))
+                                    (drgnx-portable--copy-into-place from to)
                                     (drgnx-portable--delete from)
                                     'moved))))))
+
+(defconst drgnx-portable--leftover-regexp (mapconcat #'wildcard-to-regexp drgnx-portable-leftovers "\\|")
+  "`drgnx-portable-leftovers' as one regexp, matched against a file name's last part.")
+
+(defun drgnx-portable-leftover-p (name)
+  "Non-nil when NAME's last part is one of the config layer's own files (`drgnx-portable-leftovers')."
+  (string-match-p drgnx-portable--leftover-regexp (file-name-nondirectory (directory-file-name name))))
 
 ;;;; Problems: keys in plain text, machine-local items, roots not here
 
