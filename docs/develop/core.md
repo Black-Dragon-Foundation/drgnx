@@ -1103,7 +1103,10 @@ view's draw (`drgnx-view--arm`); nothing draws from a mark, so a mark from a pro
 rows. A row whose `(funcall SIG KEY)` is not `eq` to the signature stored at the last sync is dirty (a vector is
 compared element by element, with `eq`, so a fresh vector of the same values is unchanged). New keys are inserted,
 missing ones removed; a row that moved (outside a longest run kept in order) is removed and inserted, and when more
-than half the rows moved the view is reset instead.
+than half the rows moved, or KEYS share no key with the rows (a new row set: another file's Outline), the view is
+reset instead. A reset appends the new rows after the ones that go, so window start and point (Keeping places) fall
+to the first new row: a new row set starts at the top. (Inserted at the start instead, they fell back to the last
+new row: UI audit #3.)
 
 ### Drawing
 

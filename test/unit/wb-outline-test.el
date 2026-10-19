@@ -211,6 +211,44 @@
                                         (save-excursion (goto-char (window-point window))
                                                         (buffer-substring-no-properties (pos-bol) (pos-eol)))))))))
 
+(ert-deftest drgnx-outline/another-file-starts-at-the-top-or-the-current-definition ()
+  ;; UI audit #3: after a file switch the Outline's window sat on its last row.  Another file starts at the top, with
+  ;; the Outline's point on the definition the editor's point is in.
+  (drgnx-outline-test--with src
+    (let* ((outline (get-buffer drgnx-outline-buffer-name)) (window (get-buffer-window outline t))
+           (editor (selected-window)) (other (generate-new-buffer "outline-other.el"))
+           (row-at (lambda (pos) (with-current-buffer outline
+                                   (save-excursion (goto-char pos) (buffer-substring-no-properties (pos-bol) (pos-eol)))))))
+      (unwind-protect
+          (progn
+            (drgnx-outline-test--big-source other 200)
+            (with-current-buffer other (emacs-lisp-mode) (goto-char (point-min)))
+            (with-current-buffer outline (set-window-point window (point-max)) (goto-char (point-max)))
+            (set-window-buffer editor other)
+            (set-window-point editor 1)
+            (drgnx-outline--refresh-1)
+            (drgnx-outline-test--draw)
+            (should (= (window-start window) (with-current-buffer outline (point-min))))
+            (should (string-match-p "fn-0$" (funcall row-at (window-point window))))
+            ;; back and forth: the current definition, far down, is shown
+            (set-window-buffer editor src)
+            (drgnx-outline--refresh-1)
+            (drgnx-outline-test--draw)
+            (set-window-buffer editor other)
+            (set-window-point editor (with-current-buffer other (goto-char (point-min)) (search-forward "fn-150 ") (point)))
+            (drgnx-outline--refresh-1)
+            (drgnx-outline-test--draw)
+            (should (string-match-p "fn-150$" (funcall row-at (window-point window))))
+            (should (< (window-start window) (window-point window)))
+            ;; the same file again: the Outline's own point stays
+            (with-current-buffer outline (set-window-point window (point-min)))
+            (with-current-buffer other (goto-char (point-max)) (insert "(defun fn-200 () 0)\n"))
+            (drgnx-outline--refresh-1)
+            (drgnx-outline-test--draw)
+            (should (= (window-point window) (with-current-buffer outline (point-min)))))
+        (set-window-buffer editor src)
+        (kill-buffer other)))))
+
 (ert-deftest drgnx-outline/the-current-mark-follows-the-patch ()
   ;; The mark is an overlay on a row; drawing the row again (or a row above it) puts the mark back (PATCHED).
   (drgnx-outline-test--with src
