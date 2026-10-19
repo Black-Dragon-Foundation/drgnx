@@ -2045,7 +2045,14 @@ windows or keeping their own copy (an MRU window, a visibility flag, a frame kin
 quick help's card, Emacs 31's terminal child frames), `initial` (the initial terminal's frame: a daemon's, or a GUI
 Emacs's before its first frame; in batch Emacs that frame is `tty`, so batch tests have a workbench frame),
 `other` (a minibuffer-only frame), `gui`, else `tty`; nil for a dead frame. `drgnx-state-workbench-frame-p` is
-non-nil for `gui` and `tty`; only those frames get a record.
+non-nil for `gui` and `tty`; only those frames get a record. The frame roles (`wb/drgnx-frames.el`) ask it:
+`drgnx-frames--workbench-p` is that and `frame-visible-p`, `drgnx-frames--candidate-p` the same with a role other than
+`editor`; `drgnx-session--windows` lists the visible workbench frames; `drgnx-first-gui-frame-hook` runs when a frame's
+kind is `gui` (the `core/` files require only `drgnx-frame-kind`); `drgnx-session-open-folder` raises the
+graphical window when the selected frame is `gui` or `initial`. A minibuffer-only frame is `other`, so it no longer
+counts as a window for `drgnx-session--windows`. The writers of `drgnx-frame-role`
+(`drgnx-frames-mark-main`, `drgnx-frames--deleted`, `drgnx-frames--first-gui`) and of `drgnx-monitor`
+(`drgnx-monitors--write`) call `drgnx-state-sync` on the frame after writing.
 
 **A frame's record** holds its kind, its `drgnx-frame-role` (copied), whether it is visible (`t`, `icon`, nil), its
 size (text columns and lines, pixel width and height), its `drgnx-monitor` (copied), its selected window, its MRU

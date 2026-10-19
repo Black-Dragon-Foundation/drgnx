@@ -22,6 +22,7 @@
 (require 'seq)
 (require 'drgnx-platform)
 (require 'drgnx-timer)
+(require 'drgnx-state)
 
 (defvar drgnx-monitors--count nil
   "How many monitors the window manager lists, as of the last refresh (nil: not known yet).")
@@ -211,11 +212,17 @@ which is a prompt in a command the user ran (a prompt cannot be opened from a ca
   "How many monitors Emacs itself sees from FRAME (nil when it cannot say)."
   (ignore-errors (length (display-monitor-attributes-list frame))))
 
+(defun drgnx-monitors--write (frame monitor)
+  "Set FRAME's parameter `drgnx-monitor' to MONITOR and let the store see it now (it compares the parameter only
+when it observes the frame)."
+  (set-frame-parameter frame 'drgnx-monitor monitor)
+  (drgnx-state-sync frame))
+
 (defun drgnx-monitors--set-monitor (frame monitor)
   "Record MONITOR (a plist, or nil: none known) as the monitor FRAME is on; older queries still in flight lose.
 nil rather than a removed parameter: Emacs cannot delete a frame parameter, and `frame-parameter' reads both as nil."
   (puthash frame (1+ (gethash frame drgnx-monitors--gens 0)) drgnx-monitors--gens)
-  (set-frame-parameter frame 'drgnx-monitor monitor))
+  (drgnx-monitors--write frame monitor))
 
 (defun drgnx-monitors--anonymous-p (mon)
   "Non-nil when MON names no monitor: no name, make, model or serial (Emacs' own answer under pgtk)."
@@ -237,14 +244,14 @@ same geometry), that one is kept as it is."
                (when (current-p)
                  (let ((old nil))
                    (cond ((or (null mon) (not (drgnx-monitors--anonymous-p mon)))
-                          (set-frame-parameter frame 'drgnx-monitor mon))
+                          (drgnx-monitors--write frame mon))
                          ((and (consp (setq old (frame-parameter frame 'drgnx-monitor)))
                                (equal (geometry old) (geometry mon))))   ; still there: keep it
                          (t (drgnx-platform-monitors
                              frame (lambda (mons)
                                      (when (current-p)
-                                       (set-frame-parameter
-                                        frame 'drgnx-monitor
+                                       (drgnx-monitors--write
+                                        frame
                                         (or (and (not (drgnx-monitors--error-p mons))
                                                  (seq-find (lambda (m) (equal (geometry m) (geometry mon))) mons))
                                             mon))))))))))))))

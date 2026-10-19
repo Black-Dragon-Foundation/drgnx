@@ -14,6 +14,7 @@
 ;;; Code:
 (require 'seq)
 (require 'drgnx-paths)
+(require 'drgnx-frame-kind)
 (require 'drgnx-config)
 (require 'drgnx-registry)
 
@@ -70,10 +71,8 @@ Only that key changes in the file; a file with a mistake is refused (`drgnx-conf
 ;;;; Windows
 
 (defun drgnx-session--windows ()
-  "The frames that count as windows: live, top-level, shown or minimised — not a daemon's own terminal frame."
-  (seq-filter (lambda (f) (and (frame-live-p f) (not (frame-parent f)) (frame-visible-p f)
-                               (not (equal (terminal-name (frame-terminal f)) "initial_terminal"))))
-              (frame-list)))
+  "The frames that count as windows: the workbench frames (`drgnx-state-workbench-frame-p'), shown or minimised."
+  (seq-filter (lambda (f) (and (drgnx-state-workbench-frame-p f) (frame-visible-p f))) (frame-list)))
 
 (defun drgnx-session--gui-frame ()
   "The graphical window to show things in: the selected frame if it is one, else the first."
@@ -99,7 +98,7 @@ In a terminal frame (`drgnx -t DIR', or the command typed there) DIR opens in th
 is not raised.  As File → Open Folder… it asks for DIR; bin/drgnx's call never asks."
   (interactive (list (read-directory-name "Open folder: " nil nil t)))
   (let ((dir (file-name-as-directory (expand-file-name dir))))
-    (when (or (display-graphic-p) (equal (terminal-name (frame-terminal)) "initial_terminal"))
+    (when (memq (drgnx-state-frame-kind (selected-frame)) '(gui initial))
       (drgnx-session-raise))
     (if (not (fboundp 'drgnx-explorer-set-roots))
         (dired dir)

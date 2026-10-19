@@ -6,15 +6,21 @@
 (require 'drgnx-frames)
 (require 'drgnx-persist)
 
+(defvar drgnx-frames-test--synced nil "The frames `drgnx-state-sync' was asked about, newest first.")
+
 (defmacro drgnx-frames-test--fake (frames &rest body)
   "BODY with `frame-list' answering FRAMES (newest first, as Emacs does) and every frame graphical,
-visible, without parent."
+visible, without parent.  The classifier answers from those (`child', `gui' or `tty'); `drgnx-state-sync'
+only notes the frame in `drgnx-frames-test--synced' (the frames are symbols)."
   (declare (indent 1))
   `(cl-letf (((symbol-function 'frame-list) (lambda () ,frames))
              ((symbol-function 'frame-live-p) (lambda (f) (memq f ,frames)))
              ((symbol-function 'display-graphic-p) (lambda (&optional _) t))
              ((symbol-function 'frame-visible-p) (lambda (_) t))
-             ((symbol-function 'frame-parent) (lambda (&optional _) nil)))
+             ((symbol-function 'frame-parent) (lambda (&optional _) nil))
+             ((symbol-function 'drgnx-state-frame-kind)
+              (lambda (f) (and (memq f ,frames) (cond ((frame-parent f) 'child) ((display-graphic-p f) 'gui) (t 'tty)))))
+             ((symbol-function 'drgnx-state-sync) (lambda (&optional f) (push f drgnx-frames-test--synced) nil)))
      ,@body))
 
 (ert-deftest drgnx-frames/main-is-the-selected-or-oldest-frame-never-a-child ()
@@ -88,6 +94,7 @@ visible, without parent."
   "BODY with every frame a visible, parentless text frame on a terminal named TERMINAL; `daemonp' DAEMON."
   (declare (indent 2))
   `(cl-letf (((symbol-function 'daemonp) (lambda () ,daemon))
+             (noninteractive nil)         ; the classifier counts the initial terminal as a workbench in batch
              ((symbol-function 'display-graphic-p) (lambda (&optional _) nil))
              ((symbol-function 'frame-visible-p) (lambda (_) t))
              ((symbol-function 'frame-parent) (lambda (&optional _) nil))
@@ -116,7 +123,13 @@ visible, without parent."
       (drgnx-frames-test--terminal "drgnx" terminal
         (cl-letf (((symbol-function 'frame-list) (lambda () '(kx-new)))
                   ((symbol-function 'frame-live-p) (lambda (f) (eq f 'kx-new)))
-                  ((symbol-function 'frame-parent) (lambda (&optional _) parent)))
+                  ((symbol-function 'frame-parent) (lambda (&optional _) parent))
+                  ;; the real classifier on a symbol frame: what `drgnx-state-frame-kind' says of a text frame
+                  ((symbol-function 'drgnx-state-frame-kind)
+                   (lambda (f)
+                     (cond ((not (eq f 'kx-new)) nil) (parent 'child)
+                           ((equal terminal "initial_terminal") 'initial) (t 'tty))))
+                  ((symbol-function 'drgnx-state-sync) #'ignore))
           (setq parent 'kx-parent)
           (drgnx-frames--made 'kx-new)
           (should-not (gethash 'kx-new params))
@@ -168,3 +181,64 @@ visible, without parent."
         (cl-letf (((symbol-function 'drgnx-signal-post) #'ignore))
           (drgnx-frames--deleted 'kx-later))
         (should (eq (gethash 'kx-editor params) 'editor))))))
+
+;;;; The classifier (Task 16)
+
+(ert-deftest drgnx-frames/predicates-ask-the-classifier ()
+  ;; what a frame is comes from `drgnx-state-frame-kind' alone: gui and tty frames are workbench frames, children,
+  ;; the daemon's initial frame and minibuffer-only frames are not; a hidden frame is not a window; an EDITOR frame
+  ;; is a window but never a candidate for main
+  (let ((frame (selected-frame)) (kind nil) (asked 0) (role (frame-parameter nil 'drgnx-frame-role)))
+    (cl-letf (((symbol-function 'drgnx-state-frame-kind) (lambda (_f) (cl-incf asked) kind))
+              ((symbol-function 'frame-visible-p) (lambda (_f) t)))
+      (unwind-protect
+          (progn
+            (set-frame-parameter frame 'drgnx-frame-role nil)
+            (dolist (case '((gui . t) (tty . t) (child . nil) (initial . nil) (other . nil) (nil . nil)))
+              (setq kind (car case))
+              (should (eq (and (drgnx-frames--workbench-p frame) t) (cdr case)))
+              (should (eq (and (drgnx-frames--candidate-p frame) t) (cdr case))))
+            (should (> asked 0))
+            (setq kind 'gui)
+            (set-frame-parameter frame 'drgnx-frame-role 'editor)
+            (should (drgnx-frames--workbench-p frame))
+            (should-not (drgnx-frames--candidate-p frame))
+            (set-frame-parameter frame 'drgnx-frame-role 'main)
+            (should (drgnx-frames--candidate-p frame))
+            (cl-letf (((symbol-function 'frame-visible-p) (lambda (_f) nil)))
+              (should-not (drgnx-frames--workbench-p frame))))
+        (set-frame-parameter frame 'drgnx-frame-role role)))))
+
+(ert-deftest drgnx-frames/a-role-written-is-seen-at-once ()
+  ;; the store compares `drgnx-frame-role' only when it observes: the writers observe the frame themselves
+  (drgnx-test-with-state
+    (let* ((frame (selected-frame)) (role (frame-parameter frame 'drgnx-frame-role)))
+      (unwind-protect
+          (progn
+            (set-frame-parameter frame 'drgnx-frame-role nil)
+            (drgnx-state-sync frame)
+            (should-not (drgnx-state-main-frame))
+            (drgnx-frames-mark-main frame)
+            (should (eq (drgnx-state-main-frame) frame)))     ; no sync of ours in between
+        (set-frame-parameter frame 'drgnx-frame-role role))))
+  ;; the same for the frames the other writers touch: the next main window, and the terminal frame that gives up
+  (let ((params (make-hash-table)))
+    (cl-letf (((symbol-function 'frame-parameter) (lambda (f p) (and (eq p 'drgnx-frame-role) (gethash f params))))
+              ((symbol-function 'set-frame-parameter) (lambda (f p v) (when (eq p 'drgnx-frame-role) (puthash f v params))))
+              ((symbol-function 'drgnx-signal-post) #'ignore))
+      (drgnx-frames-test--fake (list 'kx-next 'kx-main)
+        (setq drgnx-frames-test--synced nil)
+        (puthash 'kx-main 'main params)
+        (drgnx-frames--deleted 'kx-main)
+        (should (eq (gethash 'kx-next params) 'main))
+        (should (memq 'kx-next drgnx-frames-test--synced)))
+      (drgnx-frames-test--fake (list 'kx-gui 'kx-tty)
+        (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional f) (eq f 'kx-gui))))
+          (clrhash params)
+          (setq drgnx-frames-test--synced nil)
+          (puthash 'kx-tty 'main params)
+          (drgnx-frames--first-gui)
+          (should-not (gethash 'kx-tty params))
+          (should (eq (gethash 'kx-gui params) 'main))
+          (should (memq 'kx-tty drgnx-frames-test--synced))
+          (should (memq 'kx-gui drgnx-frames-test--synced)))))))
