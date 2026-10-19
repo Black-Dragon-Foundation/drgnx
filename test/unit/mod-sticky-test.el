@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/memo-alloc-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/measure-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/editor/drgnx-sticky" drgnx-dir) nil t)
 
 (defun drgnx-sticky-test--elisp (n)
@@ -158,14 +159,20 @@
         (should (= n 2))))))
 
 (ert-deftest drgnx-sticky/a-long-class-without-tree-sitter-stays-cheap ()
-  :tags '(:timing)                                      ; wall-clock: a quiet machine
+  ;; A-45: the class at line 1 is found from line 9000 without a walk over the lines between, so the segment there
+  ;; allocates about what it does at line 1000; allocation does not move with the machine's load (the wall-clock
+  ;; form missed its 2 ms under load).  Compiled first: what users run, and the same whatever ran before.
+  (drgnx-test-compile "drgnx-sticky-" "drgnx-memo" "drgnx-epoch" "drgnx-cache")
   (drgnx-sticky-test--in (concat "class Big:\n" (mapconcat (lambda (i) (format "    x%d = %d" i i)) (number-sequence 1 10000) "\n") "\n")
       #'python-mode
-    (let ((t0 (float-time)))
-      (dotimes (i 100)
-        (drgnx-sticky-test--start-at-line (+ 5000 (* i 40)))
-        (drgnx-sticky--segment (selected-window)))
-      (should (< (/ (- (float-time) t0) 100) 0.002)))))
+    (let ((w (selected-window)))
+      (cl-flet ((at (line)                                   ; the segment built afresh with the window at LINE
+                  (drgnx-sticky-test--start-at-line line)
+                  (drgnx-test-alloc (drgnx-epoch-bump 'sticky (current-buffer)) (drgnx-sticky--segment w))))
+        (let ((near (at 1000)) (far (at 9000)))
+          (should (string-search "class Big:" (drgnx-sticky--segment w)))
+          (should (<= far (* 1.25 near)))
+          (should (<= far 319)))))))                         ; ceil(1.25 × 255): 255 on 30.2 and on 31.1
 
 ;;; mod-sticky-test.el ends here
 
