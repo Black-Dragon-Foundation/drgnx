@@ -187,3 +187,39 @@ The runner's own side: `DRGNX_TEST_ORDER_IN=FILE` (the names to run, one a line,
 names would not fit in the environment) and `DRGNX_TEST_ORDER_OUT=FILE` (write the names in run order, run none) are
 what the bisect's Emacsen are given; they are not for people (the runner reads them first and removes them from the
 environment of the tests, so a runner a test starts is a normal one).
+
+## The host lease
+
+Every worktree on a machine runs tests, and a dozen runs at once starve each other (and the machine). `bin/drgnx lease`
+keeps them to what the memory and cores carry, across all checkouts.
+
+    bin/drgnx lease light|heavy|exclusive [--wait SECS] -- CMD…
+    bin/drgnx lease status
+
+- **Where:** `$DRGNX_LEASE_DIR`, else `$XDG_RUNTIME_DIR/drgnx/lease` (mode 700). Locks are `flock` files `host`,
+  `light-1..L`, `heavy-1..H`; the kernel drops a lock when its holder dies, so a killed run frees its slot.
+- **Slots:** L = max(1, min(cores/3, (RAM GiB − 4)/2)), H = max(1, (RAM GiB − 8)/4). `DRGNX_LEASE_LIGHT` and
+  `DRGNX_LEASE_HEAVY` override; `lease status` prints the numbers.
+- **Classes:**
+
+  | Class | Holds | Memory cap |
+  |---|---|---|
+  | light | `host` shared, one `light-k` | `MemoryMax=1G` |
+  | heavy | `host` shared, one `heavy-k` and one `light-k` | `MemoryMax=4G` |
+  | exclusive | `host` exclusive | none |
+
+  The cap is a `systemd-run --user --scope` when a user manager answers, and none otherwise
+  (`DRGNX_LEASE_CAP=off` turns it off).
+- **Holding:** the lease's bash keeps the locks and runs CMD with those descriptors closed, so a daemon CMD leaves
+  behind holds no slot. CMD gets `DRGNX_LEASE_HELD=CLASS:K`.
+- **Waiting:** a slot is polled every 2 s (`DRGNX_LEASE_POLL`, for tests). Light and heavy wait forever unless
+  `--wait SECS`; on timeout the exit status is 75 and the holders are printed. Exclusive only polls (`--wait`, default
+  600) and never blocks the others, so nothing deadlocks; on timeout it prints `wall clock not judged: host busy`,
+  runs CMD anyway and sets `DRGNX_LEASE_BUSY=1` (a perf run then judges no wall clock).
+- **Status:** `lease status` prints one line per live holder (class, slot, pid, worktree, command, since) and removes the
+  files of holders whose pid is gone.
+- **Off** (CMD runs directly, no cap): `CI=true`, `DRGNX_LEASE=off`, no `flock` on PATH (macOS), bash older than 4,
+  no lease directory, or `DRGNX_LEASE_HELD` set (a nested call).
+
+The tests are `test/unit/bin-lease-test.el`; they use a temp lease dir and unset `DRGNX_LEASE_HELD` and `CI` for the
+`bin/drgnx` they start.
