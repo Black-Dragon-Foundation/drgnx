@@ -18,6 +18,7 @@
 (require 'subr-x)
 (require 'drgnx-paths)
 (require 'drgnx-config)
+(require 'drgnx-file)                   ; `drgnx-file-truename': an agent's names, with no file name handler
 (require 'drgnx-acp)
 (require 'drgnx-timer)
 (require 'drgnx-agent-config)          ; `drgnx-agent-config-vendor-env'
@@ -401,11 +402,13 @@ a task whose provider failed to the next profile (drgnx-job.el).  Called in the 
      (drgnx-agents--changed s)
      :deferred)
     ("fs/read_text_file"
-     ;; local files only (no TRAMP: `file-remote-p' names the host without connecting); an open buffer as it is,
-     ;; else a regular file up to `drgnx-agents-read-max', read with no file name handlers.  A large-file buffer (a
-     ;; chunk, or a lean or raw file) or an open buffer over the cap is not served: it holds a part of the file, or
-     ;; more than an agent may get, so the disk is read under the cap, as for a file no buffer visits
-     (let* ((path (plist-get params :path)) (local (and (drgnx-agents--path-ok-p path) (not (file-remote-p path))))
+     ;; local files only, the agent's name used with no file name handler (`drgnx-file-truename': a link to a remote
+     ;; name is remote too, and nothing reaches Tramp, jka-compr or EasyPG); an open buffer as it is, else a regular
+     ;; file up to `drgnx-agents-read-max'.  A large-file buffer (a chunk, or a lean or raw file) or an open buffer
+     ;; over the cap is not served: it holds a part of the file, or more than an agent may get, so the disk is read
+     ;; under the cap, as for a file no buffer visits
+     (let* ((file-name-handler-alist nil)
+            (path (plist-get params :path)) (local (and (drgnx-agents--path-ok-p path) (drgnx-file-truename path)))
             (buf (let ((b (and local (find-buffer-visiting path))))
                    (and b (not (drgnx-large-file-p b)) (<= (buffer-size b) drgnx-agents-read-max) b)))
             (problem (and local (not buf) (drgnx-agents--read-problem path))))
@@ -414,12 +417,15 @@ a task whose provider failed to the next profile (drgnx-job.el).  Called in the 
              (problem (list :error (list :code -32002 :message problem)))
              ((or buf (file-readable-p path))
               (list :result (list :content (drgnx-agents--lines (if buf (with-current-buffer buf (buffer-substring-no-properties (point-min) (point-max)))
-                                                                  (let ((file-name-handler-alist nil))
-                                                                    (with-temp-buffer (insert-file-contents path nil 0 drgnx-agents-read-max) (buffer-string))))
+                                                                  (with-temp-buffer (insert-file-contents path nil 0 drgnx-agents-read-max) (buffer-string)))
                                                                 (plist-get params :line) (plist-get params :limit)))))
              (t (list :error (list :code -32002 :message (format "%s is not readable" path)))))))
     ((and "fs/write_text_file" (guard (not (and (drgnx-agents--path-ok-p (plist-get params :path)) (stringp (plist-get params :content))))))
      (list :error '(:code -32602 :message "an absolute path and the content are needed")))
+    ((and "fs/write_text_file" (guard (drgnx-file-sealed-p (plist-get params :path))))
+     ;; plain text never goes into a `.gpg' or `.gz' file, not even through a review (`drgnx-file-sealed-p')
+     (list :error (list :code -32002 :message (format "%s is a file Emacs keeps encrypted or compressed: an agent never writes it; ask the user to"
+                                                      (plist-get params :path)))))
     ("fs/write_text_file"
      ;; never written behind the user's back: a review item (accept hunks, then Done answers)
      (setf (drgnx-agent-session-reviews s)

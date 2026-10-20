@@ -234,4 +234,77 @@
         (should (eq (drgnx-job-policy "implement" (list :kind "edit" :locations (vector '(:path "/ssh:nobody@example.invalid:/x"))) wt)
                     'ask))))))
 
+(load (expand-file-name "test/fixtures/handler-trap" drgnx-dir) nil t)
+
+(ert-deftest drgnx-job/a-path-through-a-planted-link-is-decided-with-no-file-name-handler ()
+  ;; the policy and the write resolved the agent's path with handlers on: a link in the worktree climbing `../' to
+  ;; `ssh:host:' made the hub load Tramp and connect (`sudo::': start sudo)
+  (drgnx-job-policy-test--with
+    (let ((s (drgnx-agents--make :id "s-l" :name "w" :profile "mock" :cwd wt :task (concat job "#1") :job job))
+          (paths (drgnx-test-hostile-paths wt)) (n 0))
+      (drgnx-test-with-handler-trap
+        (dolist (p (plist-get paths :outside))
+          (dolist (kind '("read" "edit"))
+            (should (eq (drgnx-job-policy "implement" (list :kind kind :locations (vector (list :path p))) wt) 'ask)))
+          (should-not (drgnx-job--request s "fs/write_text_file" (list :path p :content "x\n") (cl-incf n))))   ; a card
+        (dolist (p (plist-get paths :inside))       ; an edit to `n.gz' or `n.gpg' asks (`drgnx-file-sealed-p')
+          (should (eq (drgnx-job-policy "implement" (list :kind "read" :locations (vector (list :path p))) wt) 'allow))
+          (should (eq (drgnx-job-policy "implement" (list :kind "edit" :locations (vector (list :path p))) wt)
+                      (if (string-match-p "\\.g\\(?:z\\|pg\\)\\'" p) 'ask 'allow))))
+        (should (equal (drgnx-job--request s "fs/write_text_file" (list :path (concat wt "a.zip/y") :content "z\n") 99) '(:result nil)))
+        (should-not drgnx-test-handler-calls))
+      (should (equal (with-temp-buffer (insert-file-contents-literally (concat wt "a.zip/y")) (buffer-string)) "z\n")))))
+
+(ert-deftest drgnx-job/an-agent-never-writes-an-encrypted-or-compressed-file ()
+  ;; written with no file name handler, an agent's plain text landed unencrypted in a `.gpg' file (uncompressed in a
+  ;; `.gz' one), also through a link to one: the write is an error that says why, an edit tool call asks the user
+  (drgnx-job-policy-test--with
+    (let ((s (drgnx-agents--make :id "s-g" :name "w" :profile "mock" :cwd wt :task (concat job "#1") :job job)) (n 0))
+      (make-directory wt t)
+      (let ((file-name-handler-alist nil))
+        (dolist (f '("n.gpg" "n.gz" "n.tar.xz")) (write-region "sealed\n" nil (concat wt f) nil 'silent))
+        (make-symbolic-link "n.gpg" (concat wt "plain.txt")))
+      (dolist (f '("n.gpg" "n.gz" "n.tar.xz" "plain.txt" "new.gpg"))
+        (let ((p (concat wt f)))
+          (should (eq (drgnx-job-policy "implement" (list :kind "edit" :locations (vector (list :path p))) wt) 'ask))
+          (should (eq (drgnx-job-policy "implement" (list :kind "read" :locations (vector (list :path p))) wt) 'allow))
+          (let ((r (drgnx-job--request s "fs/write_text_file" (list :path p :content "plain\n") (cl-incf n))))
+            (should (string-match-p "encrypted or compressed" (plist-get (plist-get r :error) :message))))))
+      (let ((file-name-handler-alist nil))
+        (dolist (f '("n.gpg" "n.gz" "n.tar.xz"))
+          (should (equal (with-temp-buffer (insert-file-contents-literally (concat wt f)) (buffer-string)) "sealed\n")))
+        (should-not (file-exists-p (concat wt "new.gpg")))))))
+
+(ert-deftest drgnx-job/planted-links-never-load-tramp-jka-compr-or-epa ()
+  ;; end to end, in an Emacs of its own (-Q: nothing loaded them before); Tramp's handler fails if it is ever reached
+  (let* ((root (file-name-as-directory (make-temp-file "drgnx-job-links" t))) (wt (concat root "wt/")))
+    (unwind-protect
+        (let* ((paths (progn (make-directory wt) (drgnx-test-hostile-paths wt)))
+               ;; inside first: `back' goes out through `ssh:…:' before an absolute link's quoted name can drop Tramp's
+               ;; autoloading handlers (the fixture's note)
+               (all (append (plist-get paths :inside) (plist-get paths :outside)))
+               (form `(progn
+                        (with-eval-after-load 'tramp
+                          (advice-add 'tramp-file-name-handler :override (lambda (&rest _) (error "Tramp was reached"))))
+                        (require 'drgnx-job)
+                        (let* ((loaded (lambda () (list (featurep 'tramp) (featurep 'jka-compr) (featurep 'epa-file))))
+                               (before (funcall loaded))
+                               (decisions (mapcar (lambda (p)
+                                                    (condition-case err
+                                                        (list (drgnx-job-policy "implement" (list :kind "read" :locations (vector (list :path p))) ,wt)
+                                                              (and (drgnx-job--agent-config-p p ,wt) t))
+                                                      (error (error-message-string err))))
+                                                  ',all)))
+                          (prin1 (list before decisions (funcall loaded))))))
+               (out (with-temp-buffer
+                      (call-process (expand-file-name invocation-name invocation-directory) nil '(t nil) nil
+                                    "-Q" "--batch" "-L" (expand-file-name "core" drgnx-dir) "--eval" (prin1-to-string form))
+                      (buffer-string)))
+               (result (car (read-from-string out))))
+          (should (equal (nth 0 result) '(nil nil nil)))
+          (should (equal (nth 1 result) (append (mapcar (lambda (_) '(allow nil)) (plist-get paths :inside))
+                                                (mapcar (lambda (_) '(ask t)) (plist-get paths :outside)))))
+          (should (equal (nth 2 result) '(nil nil nil))))
+      (delete-directory root t))))
+
 ;;; job-policy-test.el ends here

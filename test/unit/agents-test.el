@@ -401,4 +401,38 @@ marked as a large file: the answer plist."
     (should (= small big))
     (should (< big 100))))
 
+(load (expand-file-name "test/fixtures/handler-trap" drgnx-dir) nil t)
+
+(ert-deftest drgnx-agents/a-read-through-a-planted-link-runs-no-file-name-handler ()
+  ;; `file-remote-p' only parses the name the agent sent: a link in it to a remote name defeated it, and the open
+  ;; buffer lookup (`find-buffer-visiting' → `file-truename') then reached Tramp
+  (let* ((root (file-name-as-directory (make-temp-file "drgnx-read-links" t))) (wt (concat root "wt/"))
+         (s (drgnx-agents--make :cwd wt)))
+    (unwind-protect
+        (let ((paths (progn (make-directory wt) (drgnx-test-hostile-paths wt))))
+          (let ((file-name-handler-alist nil)) (write-region "plain\n" nil (concat wt "n.gz") nil 'silent))   ; not gzipped
+          (drgnx-test-with-handler-trap
+            (dolist (p (plist-get paths :outside))
+              (should (plist-get (drgnx-agents--on-request s "fs/read_text_file" (list :path p) 1) :error)))
+            (should (plist-get (drgnx-agents--on-request s "fs/read_text_file" (list :path (concat wt "a.zip/y")) 2) :error))
+            (should (equal (plist-get (plist-get (drgnx-agents--on-request s "fs/read_text_file" (list :path (concat wt "n.gz")) 3) :result) :content)
+                           "plain\n"))
+            (should-not drgnx-test-handler-calls)))
+      (delete-directory root t))))
+
+(ert-deftest drgnx-agents/a-write-to-an-encrypted-or-compressed-file-is-refused ()
+  ;; an agent's plain text for a `.gpg' or `.gz' file (or a link to one) would land in it as it is: an error that
+  ;; says why, never a review item
+  (let* ((root (file-name-as-directory (make-temp-file "drgnx-sealed" t))) (s (drgnx-agents--make :cwd root)))
+    (unwind-protect
+        (progn
+          (let ((file-name-handler-alist nil)) (make-symbolic-link "n.gpg" (concat root "plain.txt")))
+          (dolist (f '("n.gpg" "n.gz" "plain.txt"))
+            (let ((r (drgnx-agents--on-request s "fs/write_text_file" (list :path (concat root f) :content "x\n") 1)))
+              (should (string-match-p "encrypted or compressed" (plist-get (plist-get r :error) :message)))))
+          (should-not (drgnx-agent-session-reviews s))
+          (should (eq (drgnx-agents--on-request s "fs/write_text_file" (list :path (concat root "n.txt") :content "x\n") 2)
+                      :deferred)))
+      (delete-directory root t))))
+
 ;;; agents-test.el ends here

@@ -1112,12 +1112,14 @@ none, only the tool); `user' otherwise, for the user's servers and anything that
 (defun drgnx-job--agent-config-p (path tree)
   "Does PATH, inside TREE, configure the agents that work in TREE — a `.claude' directory or anything in it, at any
 depth (settings: a permission mode, allow rules, hooks; skills), or a `.mcp.json' anywhere in TREE?  Once `//', `..'
-and symlinks are resolved; case ignored, for a file system that ignores it.  A PATH that cannot be placed inside TREE
+and symlinks are resolved, with no file name handler; case ignored, for a file system that ignores it.  A PATH that cannot be placed inside TREE
 counts as one (fail closed)."
-  (let* ((true (file-truename (replace-regexp-in-string "\\`//+" "/" (expand-file-name path tree))))
-         (rel (file-relative-name true (file-truename tree)))
+  (let* ((file-name-handler-alist nil)                ; the agent's name: resolved with no handler (`drgnx-file-truename')
+         (true (drgnx-file-truename (replace-regexp-in-string "\\`//+" "/" (expand-file-name path tree))))
+         (top (drgnx-file-truename tree))
+         (rel (and true top (file-relative-name true top)))
          (case-fold-search t))
-    (or (file-name-absolute-p rel) (string-match-p "\\`\\.\\.\\(?:/\\|\\'\\)" rel)
+    (or (null rel) (file-name-absolute-p rel) (string-match-p "\\`\\.\\.\\(?:/\\|\\'\\)" rel)
         (string-match-p "\\(?:\\`\\|/\\)\\.claude\\(?:/\\|\\'\\)\\|\\(?:\\`\\|/\\)\\.mcp\\.json\\'" rel))))
 
 (defun drgnx-job--names-agent-config-p (line tree)
@@ -1146,9 +1148,9 @@ is not just part of the path of TREE itself (the worktree, `…/.claude/worktree
       found)))
 
 (defun drgnx-job--inside-p (path tree)
-  "Is PATH inside TREE, once `..' and symlinks are resolved?"
-  (and (stringp path) (not (file-remote-p path))     ; never TRAMP: a connection (a prompt) from the hub
-       (file-in-directory-p (file-truename (expand-file-name path tree)) (file-truename tree))))
+  "Is PATH inside TREE, once `..' and symlinks are resolved?  With no file name handler (`drgnx-file-inside-p'): a
+remote name, or a link to one, is outside — never Tramp, a connection (a prompt) from the hub."
+  (drgnx-file-inside-p path tree))
 
 (defun drgnx-job-policy (role tool tree)
   "`allow' or `ask': the policy of ROLE (a string) for the ACP TOOL call (its :kind, :title, :locations, :_meta) of an
@@ -1165,6 +1167,8 @@ hold for every agent that works in TREE after it."
      ((null kind) 'ask)
      ((not (seq-every-p (lambda (p) (drgnx-job--inside-p p tree)) paths)) 'ask)
      ((and (not (memq kind '(read search))) (seq-some (lambda (p) (drgnx-job--agent-config-p p tree)) paths)) 'ask)
+     ;; a file Emacs keeps encrypted or compressed (`.gpg', `.gz'): the agent's plain text would land in it as it is
+     ((and (not (memq kind '(read search))) (seq-some (lambda (p) (drgnx-file-sealed-p p tree)) paths)) 'ask)
      ((eq (drgnx-job--mcp-tool tool) 'user) 'ask)
      ((drgnx-job--other-server-resources-p tool) 'ask)
      ((and (eq kind 'other)
@@ -1502,18 +1506,22 @@ its worktree done at once; anything else waits for the user as a card (nil: the 
             (t (drgnx-job--card job task "permission" (or (plist-get tool :title) "a permission") s (list :request id))
                nil))))
         ("fs/write_text_file"
-         ;; an absolute path only: the check and the write must mean the same file
-         (let ((path (plist-get params :path)) (content (plist-get params :content)))
-           (if (and (stringp content) (drgnx-agents--path-ok-p path) (drgnx-job--inside-p path tree)
-                    (not (drgnx-job--agent-config-p path tree)) (not (equal (drgnx-job--role s) "review")))
-               (progn (make-directory (file-name-directory path) t)
-                      (drgnx-job--write-inside path content tree)
-                      (drgnx-coord-event-add-best-effort :agent (drgnx-agent-session-id s) :job job :task task :kind "edit"
-                                                         :summary (format "wrote %s" (file-name-nondirectory path))
-                                                         :data (list :root tree :paths (list path)))
-                      (list :result nil))
-             (drgnx-job--card job task "write" (format "write %s" path) s (list :request id))
-             nil)))))))
+         ;; an absolute path only: the check and the write must mean the same file; the agent's name, used with no
+         ;; file name handler (`drgnx-file-truename')
+         (let ((path (plist-get params :path)) (content (plist-get params :content)) (file-name-handler-alist nil))
+           (cond
+            ((drgnx-file-sealed-p path tree)   ; never written: plain text into a `.gpg' or `.gz' file (`drgnx-file-sealed-p')
+             (list :error (list :code -32002 :message (format "%s is a file Emacs keeps encrypted or compressed: an agent never writes it; ask the user to" path))))
+            ((and (stringp content) (drgnx-agents--path-ok-p path) (drgnx-job--inside-p path tree)
+                  (not (drgnx-job--agent-config-p path tree)) (not (equal (drgnx-job--role s) "review")))
+             (make-directory (file-name-directory path) t)
+             (drgnx-job--write-inside path content tree)
+             (drgnx-coord-event-add-best-effort :agent (drgnx-agent-session-id s) :job job :task task :kind "edit"
+                                                :summary (format "wrote %s" (file-name-nondirectory path))
+                                                :data (list :root tree :paths (list path)))
+             (list :result nil))
+            (t (drgnx-job--card job task "write" (format "write %s" path) s (list :request id))
+               nil))))))))
 
 (defun drgnx-job--answered (s)
   "The user answered S's request: its task goes on (when nothing else waits) — a reviewer's, or a finished agent's,

@@ -17,6 +17,7 @@
 (require 'subr-x)
 (require 'drgnx-ui-kit)
 (require 'drgnx-timer)
+(require 'drgnx-file)                   ; `drgnx-file-truename': an agent's names, with no file name handler
 (require 'drgnx-work-db)
 (require 'drgnx-coord)
 
@@ -628,52 +629,55 @@ from its jtask row)."
   "Run git ARGS in DIR as a process of its own and return at once.  DONE gets, from the sentinel, (:exit N :out TEXT
 :err TEXT); (:too-large N) when its output passed LIMIT bytes (it is ended then, having read N: at most one chunk
 more); or (:error MESSAGE) when DIR is remote (no TRAMP call is made) or not a folder, git cannot start, or it ran
-past `drgnx-cockpit-git-timeout'.  git takes pathspecs literally, no optional locks, and never asks."
-  (cond
-   ((not (stringp dir)) (drgnx-cockpit--later done (list :error (format "no folder to run git in: %S" dir))))
-   ((drgnx-cockpit--remote-p dir)
-    (drgnx-cockpit--later done (list :error (format "%s is remote: the cockpit never runs git there" dir))))
-   ((not (file-directory-p dir)) (drgnx-cockpit--later done (list :error (format "%s is not a folder" dir))))
-   (t
-    (let ((out (generate-new-buffer " *drgnx-cockpit-git*" t))
-          (errbuf (generate-new-buffer " *drgnx-cockpit-git-err*" t)))
-      (condition-case err
-          (let* ((default-directory (file-name-as-directory dir))
-                 (process-environment (append '("GIT_OPTIONAL_LOCKS=0" "GIT_TERMINAL_PROMPT=0") process-environment))
-                 (p (make-process
-                     :name "drgnx-cockpit-git" :buffer out :stderr errbuf :noquery t :connection-type 'pipe
-                     :coding 'utf-8-unix :command (append '("git" "-c" "core.quotePath=false" "--literal-pathspecs") args)
-                     :filter
-                     (lambda (p s)
-                       (let ((n (+ (or (process-get p :bytes) 0) (string-bytes s))))
-                         (process-put p :bytes n)
-                         (cond ((and limit (> n limit)) (process-put p :too-large n) (delete-process p))
-                               ((buffer-live-p (process-buffer p))
-                                (with-current-buffer (process-buffer p) (goto-char (point-max)) (insert s))))))
-                     :sentinel
-                     (lambda (p _)
-                       (unless (process-live-p p)
-                         (drgnx-timer-cancel (cons 'cockpit-git-timeout p))
-                         (let ((r (cond
-                                   ((process-get p :too-large) (list :too-large (process-get p :too-large)))
-                                   ((process-get p :timed-out)
-                                    (list :error (format "git %s did not finish in %s s" (car args) drgnx-cockpit-git-timeout)))
-                                   (t (list :exit (process-exit-status p)
-                                            :out (if (buffer-live-p out) (with-current-buffer out (buffer-string)) "")
-                                            :err (if (buffer-live-p errbuf) (with-current-buffer errbuf (string-trim (buffer-string))) ""))))))
-                           (when (buffer-live-p out) (kill-buffer out))
-                           (when (buffer-live-p errbuf) (let ((kill-buffer-query-functions nil)) (kill-buffer errbuf)))
-                           (drgnx-cockpit--call done r)))))))
-            (when-let* ((ep (get-buffer-process errbuf))) (set-process-sentinel ep #'ignore))
-            (drgnx-timer-start (cons 'cockpit-git-timeout p) drgnx-cockpit-git-timeout #'drgnx-cockpit--git-timed-out
-                               :args (list p) :owner p)
-            (ignore-errors (process-send-eof p))
-            p)
-        (error
-         ;; git could not start: its buffers go too (and a stderr pipe made before the failure with them)
-         (let ((kill-buffer-query-functions nil))
-           (dolist (b (list out errbuf)) (when (buffer-live-p b) (kill-buffer b))))
-         (drgnx-cockpit--later done (list :error (error-message-string err)))))))))
+past `drgnx-cockpit-git-timeout'.  git takes pathspecs literally, no optional locks, and never asks.  DIR may be an
+agent's folder: it is checked and git started in it with no file name handler (an `a.zip/' folder reached
+tramp-archive)."
+  (let ((file-name-handler-alist nil))
+    (cond
+     ((not (stringp dir)) (drgnx-cockpit--later done (list :error (format "no folder to run git in: %S" dir))))
+     ((drgnx-cockpit--remote-p dir)
+      (drgnx-cockpit--later done (list :error (format "%s is remote: the cockpit never runs git there" dir))))
+     ((not (file-directory-p dir)) (drgnx-cockpit--later done (list :error (format "%s is not a folder" dir))))
+     (t
+      (let ((out (generate-new-buffer " *drgnx-cockpit-git*" t))
+            (errbuf (generate-new-buffer " *drgnx-cockpit-git-err*" t)))
+        (condition-case err
+            (let* ((default-directory (file-name-as-directory dir))
+                   (process-environment (append '("GIT_OPTIONAL_LOCKS=0" "GIT_TERMINAL_PROMPT=0") process-environment))
+                   (p (make-process
+                       :name "drgnx-cockpit-git" :buffer out :stderr errbuf :noquery t :connection-type 'pipe
+                       :coding 'utf-8-unix :command (append '("git" "-c" "core.quotePath=false" "--literal-pathspecs") args)
+                       :filter
+                       (lambda (p s)
+                         (let ((n (+ (or (process-get p :bytes) 0) (string-bytes s))))
+                           (process-put p :bytes n)
+                           (cond ((and limit (> n limit)) (process-put p :too-large n) (delete-process p))
+                                 ((buffer-live-p (process-buffer p))
+                                  (with-current-buffer (process-buffer p) (goto-char (point-max)) (insert s))))))
+                       :sentinel
+                       (lambda (p _)
+                         (unless (process-live-p p)
+                           (drgnx-timer-cancel (cons 'cockpit-git-timeout p))
+                           (let ((r (cond
+                                     ((process-get p :too-large) (list :too-large (process-get p :too-large)))
+                                     ((process-get p :timed-out)
+                                      (list :error (format "git %s did not finish in %s s" (car args) drgnx-cockpit-git-timeout)))
+                                     (t (list :exit (process-exit-status p)
+                                              :out (if (buffer-live-p out) (with-current-buffer out (buffer-string)) "")
+                                              :err (if (buffer-live-p errbuf) (with-current-buffer errbuf (string-trim (buffer-string))) ""))))))
+                             (when (buffer-live-p out) (kill-buffer out))
+                             (when (buffer-live-p errbuf) (let ((kill-buffer-query-functions nil)) (kill-buffer errbuf)))
+                             (drgnx-cockpit--call done r)))))))
+              (when-let* ((ep (get-buffer-process errbuf))) (set-process-sentinel ep #'ignore))
+              (drgnx-timer-start (cons 'cockpit-git-timeout p) drgnx-cockpit-git-timeout #'drgnx-cockpit--git-timed-out
+                                 :args (list p) :owner p)
+              (ignore-errors (process-send-eof p))
+              p)
+          (error
+           ;; git could not start: its buffers go too (and a stderr pipe made before the failure with them)
+           (let ((kill-buffer-query-functions nil))
+             (dolist (b (list out errbuf)) (when (buffer-live-p b) (kill-buffer b))))
+           (drgnx-cockpit--later done (list :error (error-message-string err))))))))))
 
 (defun drgnx-cockpit--failed (r)
   "nil when git's answer R went well, else (:error MESSAGE) — or R itself when it is (:too-large N)."
@@ -722,22 +726,26 @@ lines (`create mode', `delete mode'), whose names git C-quotes even under -z (`d
 (defun drgnx-cockpit--file-ok (dir file &optional truedir memo)
   "Whether FILE (relative to DIR) may be shown: t for a regular file whose true name lies inside DIR, `missing' when
 nothing is there (a deleted file), nil for anything else — a remote name, outside DIR, a device, FIFO, socket or
-folder, a link out of DIR or a dangling one.  Decided from names and attributes only (lstat, readlink): nothing is
-opened, and no remote name is expanded.  TRUEDIR: DIR's true name, when the caller has it; MEMO: a hash table of the
-true names of the folders seen, when the caller checks many files."
+folder, a link out of DIR, a dangling one or a loop.  Decided from names and attributes only (lstat, readlink), with
+no file name handler: nothing is opened, and no remote name is expanded, also one a link leads to.  TRUEDIR: DIR's
+true name, when the caller has it; MEMO: a hash table of the true names of the folders seen, when the caller checks
+many files.  Open FILE by its true name (`drgnx-file-truename'), never as named: `find-file' follows its links again,
+with handlers on."
   (when (and (stringp dir) (stringp file) (not (drgnx-cockpit--remote-p dir)) (not (drgnx-cockpit--remote-p file)))
-    (let* ((dir (file-name-as-directory (expand-file-name dir))) (abs (expand-file-name file dir)))
+    (let* ((file-name-handler-alist nil)            ; the names and links are the agent's (`drgnx-file-truename')
+           (dir (file-name-as-directory (expand-file-name dir))) (abs (expand-file-name file dir)))
       (when (string-prefix-p dir abs)
-        (let ((attrs (file-attributes abs)) (truedir (or truedir (file-name-as-directory (file-truename dir)))))
-          (cond ((null attrs) 'missing)
+        (let ((attrs (file-attributes abs)) (truedir (or truedir (drgnx-cockpit--true-dir dir))))   ; nil: a loop
+          (cond ((null truedir) nil)
+                ((null attrs) 'missing)
                 ((stringp (file-attribute-type attrs))              ; a link: where it leads
-                 (let ((true (file-truename abs))) (and (string-prefix-p truedir true) (file-regular-p true) t)))
+                 (let ((true (drgnx-file-truename abs))) (and true (string-prefix-p truedir true) (file-regular-p true) t)))
                 ((not (eq (aref (file-attribute-modes attrs) 0) ?-)) nil)    ; a folder, device, FIFO or socket
                 ;; a regular file (lstat: its own name is no link) inside DIR when its folder truly is
                 (t (let* ((parent (file-name-directory abs))
-                          (true (if memo (with-memoization (gethash parent memo) (file-name-as-directory (file-truename parent)))
-                                  (file-name-as-directory (file-truename parent)))))
-                     (and (string-prefix-p truedir true) t)))))))))
+                          (true (if memo (with-memoization (gethash parent memo) (drgnx-cockpit--true-dir parent))
+                                  (drgnx-cockpit--true-dir parent))))
+                     (and true (string-prefix-p truedir true) t)))))))))
 
 (defun drgnx-cockpit--lines (file)
   "FILE's line count, read into the current buffer (emptied first; the caller checked its size), or nil when it cannot
@@ -805,10 +813,12 @@ DIR is local (git ran there) and the names are git's own, relative to it: no fil
 file against nothing.  Returns at once; CALLBACK gets, from the sentinel or a timer, the diff text (empty when FILE did
 not change), (:too-large BYTES) when the file or its diff is over `drgnx-cockpit-diff-max-bytes' (git is ended as soon
 as its output passes it), or (:error MESSAGE) — for a remote folder, or a FILE that is not a regular file inside the
-folder (`drgnx-cockpit--file-ok': a device, FIFO, socket, a link out of it), without running git or reading it."
+folder (`drgnx-cockpit--file-ok': a device, FIFO, socket, a link out of it), without running git or reading it.
+FILE is the agent's name: its size is read from the true name it was checked by, with no file name handler."
   (let* ((dir (plist-get source :dir))
          (ok (drgnx-cockpit--file-ok dir file))
-         (size (and (eq ok t) (file-attribute-size (file-attributes (expand-file-name file dir)))))
+         (true (and (eq ok t) (drgnx-file-truename file dir)))
+         (size (and true (let ((file-name-handler-alist nil)) (file-attribute-size (file-attributes true)))))
          (limit drgnx-cockpit-diff-max-bytes))
     (cond
      ((or (not (stringp dir)) (drgnx-cockpit--remote-p dir))
@@ -853,7 +863,10 @@ folder (`drgnx-cockpit--file-ok': a device, FIFO, socket, a link out of it), wit
 
 (defconst drgnx-cockpit--git-jobs 3 "The most git processes `drgnx-cockpit-silent-worktrees' runs at a time.")
 
-(defun drgnx-cockpit--true-dir (d) (and d (not (drgnx-cockpit--remote-p d)) (file-name-as-directory (file-truename d))))
+(defun drgnx-cockpit--true-dir (d)
+  "D's true name as a directory name, with no file name handler (an agent names its folders); nil for a remote one."
+  (when-let* ((true (and d (not (drgnx-cockpit--remote-p d)) (drgnx-file-truename d))))
+    (let ((file-name-handler-alist nil)) (file-name-as-directory true))))
 
 (defun drgnx-cockpit--taken (sessions)
   "The folders an agent works in: registered agents' cwd and worktree, SESSIONS' cwd, every job's worktrees."

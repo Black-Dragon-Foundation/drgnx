@@ -615,39 +615,63 @@ exists is connected to (asynchronously)."
 applied to the file, C-c C-k rejects — nothing touches the file before Done."
   :lighter " Review")
 
+(defun drgnx-agents-ui--local-p (s)
+  "Whether session S works in a local folder: its agent's paths are then resolved with no file name handler."
+  (not (file-remote-p (or (drgnx-agent-session-cwd s) "/"))))
+
 (defun drgnx-agents-ui--path-ok-p (s path)
   "May the agent of session S have PATH reviewed?  A remote name only when the session's folder is remote
-(`drgnx-trust-link-ok-p' with that folder as the source): what the agent says never makes Emacs connect (M2-6 c)."
-  (with-temp-buffer
-    (setq default-directory (or (drgnx-agent-session-cwd s) "/"))
-    (drgnx-trust-link-ok-p path (current-buffer))))
+(`drgnx-trust-link-ok-p' with that folder as the source): what the agent says never makes Emacs connect (M2-6 c).
+In a local session PATH must resolve, with no file name handler, to a local name (`drgnx-file-truename'): a link
+on its way to a remote name, a quoted name (`/:…') and a link loop are refused too."
+  (if (drgnx-agents-ui--local-p s)
+      (and (drgnx-file-truename path) t)            ; also nil for a remote name as written
+    (with-temp-buffer
+      (setq default-directory (or (drgnx-agent-session-cwd s) "/"))
+      (drgnx-trust-link-ok-p path (current-buffer)))))
 
 (defun drgnx-agents-ui-review (s item)
   "Show the change ITEM proposes as a diff against a copy of its file: apply the hunks you want (to
 the copy), then Done writes the copy to the file (Reject, or closing the diff, writes nothing).  A remote
-name from a local session is rejected without a look at it."
-  (if (not (drgnx-agents-ui--path-ok-p s (plist-get item :path)))
-      (progn (message "Agent edit rejected: %s is a remote name from a local session" (plist-get item :path))
-             (drgnx-agents-finish-review s item t)
-             nil)
-    (drgnx-agents-ui--review-open s item)))
+name from a local session is rejected without a look at it, and so is a file Emacs keeps encrypted or compressed
+\(`drgnx-file-sealed-p': the agent's plain text would land in it as it is)."
+  (cond ((not (drgnx-agents-ui--path-ok-p s (plist-get item :path)))
+         (message "Agent edit rejected: %s is a remote name from a local session" (plist-get item :path))
+         (drgnx-agents-finish-review s item t)
+         nil)
+        ((drgnx-file-sealed-p (plist-get item :path))
+         (message "Agent edit rejected: %s is kept encrypted or compressed: edit it yourself" (plist-get item :path))
+         (drgnx-agents-finish-review s item t)
+         nil)
+        (t (drgnx-agents-ui--review-open s item))))
+
+(defun drgnx-agents-ui--target (s path)
+  "Where the edit of session S to PATH goes, and the file name handlers to use on it: (FILE . HANDLERS).  A local
+session's PATH is used by its true name, resolved with no file name handler, and with none (`drgnx-file-truename':
+the agent's name as written would be followed again, with handlers on); a remote session's as it is, with them."
+  (if (drgnx-agents-ui--local-p s)
+      (cons (or (drgnx-file-truename path) (user-error "%s leads to a remote name: refused" path)) nil)
+    (cons path file-name-handler-alist)))
 
 (defun drgnx-agents-ui--review-open (s item)
-  (let* ((path (plist-get item :path))
-         (copy (make-temp-file "drgnx-review-" nil (concat "-" (file-name-nondirectory path))))
-         (new (make-temp-file "drgnx-proposed-"))
-         (cwd (drgnx-agent-session-cwd s)))
-    (when (file-exists-p path) (copy-file path copy t))
+  (pcase-let* ((path (plist-get item :path))
+               (`(,file . ,handlers) (drgnx-agents-ui--target s path))
+               (shown (let ((file-name-handler-alist handlers)) (abbreviate-file-name file)))
+               (copy (make-temp-file "drgnx-review-"))   ; a suffix of its own: the agent's `.gpg' reached EasyPG
+               (new (make-temp-file "drgnx-proposed-"))
+               (cwd (drgnx-agent-session-cwd s)))
+    (let ((file-name-handler-alist handlers)) (when (file-exists-p file) (copy-file file copy t)))
     (with-temp-file new (insert (plist-get item :content)))
-    (let ((b (diff-no-select copy new "-u" t (get-buffer-create (format "*review: %s*" (abbreviate-file-name path))))))
+    (let ((b (diff-no-select copy new "-u" t (get-buffer-create (format "*review: %s*" shown)))))
       (delete-file new)                             ; hunks can apply to the copy alone
       (with-current-buffer b
         (drgnx-agents-review-mode 1)
         (setq drgnx-agents-ui--review (list s item copy))
         (setq-local drgnx-large-file-open 'whole)   ; diff-mode visits the copy from here (C-c C-a): whole, no question
         (setq header-line-format
-              (concat (format " %s wants to change %s" (drgnx-agent-session-name s) (abbreviate-file-name path))
-                      (if (and cwd (not (file-in-directory-p path cwd))) "  — OUTSIDE the session's project" "")
+              (concat (format " %s wants to change %s" (drgnx-agent-session-name s) shown)
+                      (if (and cwd (not (if (drgnx-agents-ui--local-p s) (drgnx-file-inside-p file cwd) (file-in-directory-p path cwd))))
+                          "  — OUTSIDE the session's project" "")
                       "  (C-c C-a apply a hunk · C-c C-c done · C-c C-k reject)"))
         (add-hook 'kill-buffer-hook #'drgnx-agents-ui--review-killed nil t))
       (pop-to-buffer b)
@@ -669,14 +693,21 @@ name from a local session is rejected without a look at it."
   "Write what you applied to the file; tell the agent."
   (interactive)
   (pcase-let ((`(,s ,item ,copy) (or drgnx-agents-ui--review (user-error "Not an agent's edit"))))
-    (let* ((path (plist-get item :path)) (visiting (find-buffer-visiting path)) (cb (find-buffer-visiting copy)))
+    ;; resolved again now, and written by that name (`drgnx-agents-ui--target': a local session's, with no handler)
+    (pcase-let* ((path (plist-get item :path)) (`(,file . ,handlers) (drgnx-agents-ui--target s path))
+                 (cb (find-buffer-visiting copy))
+                 (visiting (let ((file-name-handler-alist handlers)) (find-buffer-visiting file))))
+      (when (drgnx-file-sealed-p path)              ; it may lead to one now: never plain text into it
+        (user-error "%s is kept encrypted or compressed: not written (reject the edit, and edit it yourself)" path))
       (when (and visiting (buffer-modified-p visiting))
-        (user-error "%s has unsaved changes: save or revert them first" (abbreviate-file-name path)))
+        (user-error "%s has unsaved changes: save or revert them first"
+                    (let ((file-name-handler-alist handlers)) (abbreviate-file-name file))))
       (let ((text (if cb (with-current-buffer cb (buffer-substring-no-properties (point-min) (point-max)))
                     (with-temp-buffer (insert-file-contents copy) (buffer-string))))
             (coding (and cb (with-current-buffer cb buffer-file-coding-system))))
-        (make-directory (file-name-directory path) t)
-        (let ((coding-system-for-write (or coding 'utf-8-unix))) (write-region text nil path nil 'silent))
+        (let ((file-name-handler-alist handlers) (coding-system-for-write (or coding 'utf-8-unix)))
+          (make-directory (file-name-directory file) t)
+          (write-region text nil file nil 'silent))
         (when visiting (with-current-buffer visiting (revert-buffer t t t))))
       (setq drgnx-agents-ui--review nil)
       (drgnx-agents-ui--review-cleanup copy)

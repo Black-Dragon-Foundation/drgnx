@@ -830,4 +830,75 @@ mirror does nothing."
             ((symbol-function 'drgnx-agents-claude-adapter) (lambda () nil)))
     (should-not (drgnx-agents-ui--claude-needs))))
 
+(load (expand-file-name "test/fixtures/handler-trap" drgnx-dir) nil t)
+
+(ert-deftest drgnx-agents-ui/a-write-through-a-planted-link-runs-no-file-name-handler ()
+  ;; a local session's write path is checked as written (`file-remote-p'): a link in it to a remote name passed, and
+  ;; the review's own checks (`file-in-directory-p', `find-buffer-visiting') then reached Tramp
+  (let* ((root (file-name-as-directory (make-temp-file "drgnx-ui-links" t))) (wt (concat root "wt/")))
+    (unwind-protect
+        (let ((paths (progn (make-directory wt) (drgnx-test-hostile-paths wt))))
+          (drgnx-test-with-handler-trap
+            (let* ((s (drgnx-agents--make :name "fake" :cwd wt)) (item (list :id 5 :path (concat wt "gz/y") :content "x\n")))
+              (dolist (name '("abs-ssh/y" "abs-sudo/y" "up-ssh/y" "up-sudo/y"))
+                (should-not (drgnx-agents-ui--path-ok-p s (concat wt name))))
+              (should (drgnx-agents-ui--path-ok-p s (concat wt "gz/y")))     ; local, outside: shown as such
+              (should (drgnx-agents-ui--path-ok-p s (car (plist-get paths :inside))))
+              (setf (drgnx-agent-session-reviews s) (list item))
+              (cl-letf (((symbol-function 'drgnx-acp-respond) #'ignore))
+                (with-current-buffer (drgnx-agents-ui-review s item)
+                  (should (string-search "OUTSIDE" (format "%s" header-line-format)))
+                  (drgnx-agents-ui-review-reject))))
+            (should-not drgnx-test-handler-calls)))
+      (delete-directory root t))))
+
+(ert-deftest drgnx-agents-ui/a-quoted-name-is-refused-and-an-edit-is-copied-and-written-with-no-handler ()
+  ;; with handlers off `/:' is a plain folder, so a quoted name read as local; `copy-file' and `write-region' then ran
+  ;; with handlers on (`file-name-non-special' unquotes it), and the copy took the agent's suffix (`.gpg' reached EasyPG)
+  (let* ((root (file-name-as-directory (make-temp-file "drgnx-ui-quoted" t))) (wt (concat root "wt/"))
+         (file (concat wt "n.txt")))
+    (unwind-protect
+        (progn
+          (make-directory wt)
+          (let ((file-name-handler-alist nil)) (write-region "old\n" nil file nil 'silent))
+          (drgnx-test-with-handler-trap
+            (let* ((s (drgnx-agents--make :name "fake" :cwd wt)) (item (list :id 6 :path file :content "new\n")))
+              (dolist (p (list "/:/ssh:drgnx-test.invalid:/x" (concat "/:" file)))
+                (should-not (drgnx-agents-ui--path-ok-p s p)))
+              (should (drgnx-agents-ui--path-ok-p s file))
+              (setf (drgnx-agent-session-reviews s) (list item))
+              (cl-letf (((symbol-function 'drgnx-acp-respond) #'ignore))
+                (with-current-buffer (drgnx-agents-ui-review s item)
+                  (should-not (string-suffix-p "n.txt" (nth 2 drgnx-agents-ui--review)))   ; the copy's own suffix
+                  (drgnx-agents-ui-review-done))))
+            (should-not drgnx-test-handler-calls))
+          (should (equal (let ((file-name-handler-alist nil)) (with-temp-buffer (insert-file-contents-literally file) (buffer-string)))
+                         "old\n")))                  ; Done with no hunk applied: written as it was
+      (delete-directory root t))))
+
+(ert-deftest drgnx-agents-ui/an-edit-to-an-encrypted-or-compressed-file-is-refused ()
+  ;; Done wrote the agent's plain text into a `.gpg' file as it is (handlers off): the review is rejected, the agent
+  ;; told; and Done refuses when the file became a link to one after the review opened
+  (let* ((root (file-name-as-directory (make-temp-file "drgnx-ui-sealed" t))) (secret (concat root "n.gpg"))
+         (plain (concat root "plain.txt")) (said nil))
+    (unwind-protect
+        (let ((s (drgnx-agents--make :name "fake" :cwd root)))
+          (let ((file-name-handler-alist nil)) (write-region "sealed\n" nil secret nil 'silent))
+          (cl-letf (((symbol-function 'drgnx-acp-respond) (lambda (_conn id _result &optional err) (push (list id err) said))))
+            (dolist (p (list secret (concat root "n.gz")))
+              (let ((item (list :id 7 :path p :content "plain\n")))
+                (setf (drgnx-agent-session-reviews s) (list item))
+                (should-not (drgnx-agents-ui-review s item))
+                (should (plist-get (cadr (car said)) :message))     ; rejected: the agent hears it
+                (should-not (drgnx-agent-session-reviews s))))
+            (let ((item (list :id 8 :path plain :content "plain\n")))
+              (setf (drgnx-agent-session-reviews s) (list item))
+              (with-current-buffer (drgnx-agents-ui-review s item)
+                (let ((file-name-handler-alist nil)) (make-symbolic-link "n.gpg" plain))
+                (should-error (drgnx-agents-ui-review-done) :type 'user-error)
+                (drgnx-agents-ui-review-reject))))
+          (should (equal (let ((file-name-handler-alist nil)) (with-temp-buffer (insert-file-contents-literally secret) (buffer-string)))
+                         "sealed\n")))
+      (delete-directory root t))))
+
 ;;; agents-ui-test.el ends here

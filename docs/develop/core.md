@@ -169,6 +169,73 @@ time order) beside its truename, keeping its times and mode. Then it keeps only 
 `drgnx-file-backups-kept` (3). It gives the backup's path, or nil for a missing file, and refuses anything that is
 not a regular file.
 
+### Names an agent gave
+
+**Rule: a path an agent or a model supplies is resolved with file name handlers off, and then used by the name
+that resolution gave.** Never check one string and open another. The rule covers an ACP tool call's `:locations`,
+the `fs/read_text_file` and `fs/write_text_file` paths, a review finding, the names git lists in an agent's
+worktree, the folders an agent registers, and the files of Work rows.
+
+Why handlers must be off: with handlers on, `file-truename` looks a handler up again at every link it follows, so
+checking the literal string with `file-remote-p` is not enough. An agent can plant a link in its worktree that climbs
+`../` to the root and goes on to `ssh:host:`. Resolving `TREE/link/y` then loads Tramp and connects (`sudo::` starts
+sudo), in the hub or in the user's Emacs. A link straight to `/ssh:host:/` is quoted by Emacs 30, but nothing else
+is. Names ending in `.gz`, `.gpg` or an archive suffix (`a.zip/y`) reach jka-compr, EasyPG (gpg, pinentry) and
+tramp-archive the same way.
+
+Why the resolved name must be the one used: a link can go out through a remote name and come back,
+`x -> ../../../../ssh:host:/../TREE/real`. Resolved with no handler, it is `TREE/real`, inside the tree, so the
+check passes. `find-file` on `TREE/x` then resolves it again, with handlers on, and reaches Tramp. Opening
+`TREE/real` does not. So a command that opens such a file visits it by its true name.
+
+- `(drgnx-file-truename FILE &optional DIR)` gives FILE expanded against DIR, with `.`, `..` and every link
+  resolved and no handler running. It gives nil (fail closed: outside, refused) when:
+  - the result is a remote name;
+  - the result is a quoted one (`/:…`). With handlers off, `/:` is a plain folder, but `file-name-non-special`
+    unquotes the name once handlers are on again;
+  - the links loop, or are more than the 100 `file-truename` follows (it signals "Apparent cycle").
+- `(drgnx-file-inside-p FILE DIR)` says whether FILE is DIR or inside it by those true names. A name for which
+  `drgnx-file-truename` gives nil is not inside.
+- Code that does more with such a path binds `file-name-handler-alist` to nil around it:
+  - the job policy (`drgnx-job--inside-p`, `drgnx-job--agent-config-p`) and the job write
+    (`drgnx-job--write-inside` and the `make-directory` before it);
+  - the agents' `fs/read_text_file` (`core/drgnx-agents.el`);
+  - the Work cockpit's file checks (`drgnx-cockpit--file-ok`, `drgnx-cockpit--true-dir`,
+    `drgnx-cockpit-edits--inside-p`);
+  - the cockpit's file watches and edit-event paths (`drgnx-cockpit-edits--update-watches`,
+    `drgnx-cockpit-edits--event-paths`), a file's diff (`drgnx-cockpit-file-diff` reads its size by the true
+    name) and the git it runs in an agent's folder (`drgnx-cockpit--git`).
+- These commands open the true name, checked with no handler:
+  - Review's RET on a finding (`drgnx-review-visit`);
+  - RET in an agent's edits (`drgnx-cockpit-edits-visit`);
+  - a node of the cockpit's Work graph: a spec, a plan, a task (`drgnx-cockpit-graph-open-node`,
+    `drgnx-cockpit--show-file`);
+  - the diff's Open File at Line (`drgnx-diff-visit`);
+  - Work's open of a row and of a graph box (`drgnx-work-ui-open`, `drgnx-work-ui--graph-open`).
+  The buffer visits the file under that name: a link's target, not the link.
+- **Agents never write a file Emacs keeps encrypted or compressed.** `(drgnx-file-sealed-p FILE &optional DIR)`
+  says whether FILE matches one of these, as written or through its links:
+  - EasyPG's `epa-file-name-regexp` (`.gpg`);
+  - auto-compression's suffixes (`jka-compr-build-file-regexp`: `.gz`, `.bz2`, `.xz`, `.zst`…);
+  - the shipped defaults of both, whatever the user's options say.
+
+  An agent's content is plain text, and agents' names are written with no handler. Written into such a file, it
+  would leave the secret unencrypted on disk (or the archive uncompressed). With handlers on it would reach EasyPG
+  (gpg, pinentry) or jka-compr. So:
+  - an agent's `fs/write_text_file` gets an ACP error that says why, in a job (`drgnx-job--request`) and in a
+    session (`core/drgnx-agents.el`);
+  - the job policy asks the user (a permission card) for an edit tool call on such a name;
+  - the edit review rejects the edit (the agent is told), and Done refuses if the file became one since.
+- A local agent session's edit review (`drgnx-agents-ui--path-ok-p`) refuses a path that resolves to nil (above).
+  - The review copies the file, and Done writes it, by the true name, with no handler (`drgnx-agents-ui--target`).
+  - The copy has a suffix of its own, never the agent's.
+  - For a session whose folder is remote, handlers stay on: its paths are remote by design.
+- Tests use `test/fixtures/handler-trap.el`:
+  - it plants the links in a temp worktree, and the trap replaces the handlers with one that records every call;
+  - `drgnx-test-visit` opens a name the way each command above does;
+  - two tests check end to end in a fresh `emacs -Q`: `drgnx-job/planted-links-never-load-tramp-jka-compr-or-epa`
+    (the policy) and `drgnx-cockpit-edits/visiting-a-link-out-through-a-remote-name-never-loads-tramp` (the visits).
+
 ## Schema (`drgnx-schema.el`)
 
 One DSL describes drgnx's data (config files today; the hub's parameters and results next). A schema is data: an atom

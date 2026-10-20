@@ -574,4 +574,52 @@
     (should (equal (mapcar (lambda (c) (plist-get c :label)) (seq-filter (lambda (c) (equal (plist-get c :agent) "s-2")) (drgnx-cockpit-timeline)))
                    '("started" "stopped")))))
 
+(load (expand-file-name "test/fixtures/handler-trap" drgnx-dir) nil t)
+
+(ert-deftest drgnx-cockpit-model/an-agents-links-are-checked-with-no-file-name-handler ()
+  ;; the names git lists are the agent's, and so are the links among them: one climbing `../' to `ssh:host:' made the
+  ;; cockpit (the user's Emacs) load Tramp
+  (let* ((root (file-name-as-directory (make-temp-file "drgnx-cockpit-links" t))) (wt (concat root "wt/")))
+    (unwind-protect
+        (progn
+          (make-directory wt)
+          (drgnx-test-hostile-paths wt)
+          (drgnx-test-with-handler-trap
+            (dolist (name '("abs-ssh" "abs-sudo" "up-ssh" "up-sudo" "gz" "gpg"))
+              (should-not (drgnx-cockpit--file-ok wt name)))     ; a link out of the folder
+            (dolist (name '("abs-ssh" "abs-sudo" "up-ssh" "up-sudo"))
+              (should-not (drgnx-cockpit--true-dir (concat wt name "/"))))
+            (should (eq (drgnx-cockpit--file-ok wt "n.gz") 'missing))
+            (should (eq (drgnx-cockpit--file-ok wt "a.zip/y") 'missing))
+            (should-not drgnx-test-handler-calls)))
+      (delete-directory root t))))
+
+(load (expand-file-name "test/fixtures/git-fixture" drgnx-dir) nil t)
+
+(ert-deftest drgnx-cockpit-model/a-files-diff-reads-its-true-name-with-no-file-name-handler ()
+  ;; FILE is the agent's name: its size was read through it with handlers on (`a.zip/' reached tramp-archive), and
+  ;; git started in an agent's folder with them on too
+  (drgnx-git-test-with-repo
+    (drgnx-git-test repo "commit" "-q" "--allow-empty" "-m" "start")
+    (let ((paths (drgnx-test-hostile-paths repo)) (diffs nil))
+      (let ((file-name-handler-alist nil)) (drgnx-cockpit-fixture-write (concat repo "a.zip/y") "y\n"))
+      (drgnx-test-with-handler-trap
+        (dolist (f '("back" "a.zip/y"))
+          (drgnx-cockpit-file-diff (list :dir repo) f (lambda (r) (push (cons f r) diffs))))
+        (should (drgnx-cockpit-fixture-wait (lambda () (= 2 (length diffs)))))
+        (should-not drgnx-test-handler-calls))
+      (should (plist-get paths :back))
+      (dolist (d diffs) (should (stringp (cdr d))))
+      (should (string-search "+y" (cdr (assoc "a.zip/y" diffs)))))))
+
+(ert-deftest drgnx-cockpit-model/a-link-loop-is-no-file-to-show ()
+  ;; an agent's link loop made `file-truename' signal "Apparent cycle" in the cockpit's listing
+  (let ((wt (file-name-as-directory (make-temp-file "drgnx-cockpit-loop" t))))
+    (unwind-protect
+        (progn
+          (let ((file-name-handler-alist nil)) (make-symbolic-link "loop" (concat wt "loop")))
+          (should-not (drgnx-cockpit--file-ok wt "loop"))
+          (should-not (drgnx-cockpit--true-dir (concat wt "loop/"))))
+      (delete-directory wt t))))
+
 ;;; cockpit-model-test.el ends here

@@ -206,7 +206,7 @@ new file mode 100644
             (drgnx-diff-test--goto-line-of 3 1)
             (let ((b (current-buffer)))
               (drgnx-diff-visit)
-              (should (equal (buffer-file-name) (concat root "dir with space/f.txt")))
+              (should (equal (buffer-file-name) (file-truename (concat root "dir with space/f.txt"))))   ; by its true name
               (kill-buffer) (set-buffer b))))
       (delete-directory root t))))
 
@@ -350,5 +350,21 @@ new file mode 100644
           (should-not (buffer-live-p buf))
           (should (buffer-live-p other)))
       (kill-buffer other))))
+
+(load (expand-file-name "test/fixtures/handler-trap" drgnx-dir) nil t)
+
+(ert-deftest drgnx-diff/a-file-is-opened-by-its-true-name-with-no-file-name-handler ()
+  ;; git lists the names in an agent's worktree, links too: one out through `ssh:host:' and back, opened as named,
+  ;; made `find-file' follow it with handlers on, into Tramp
+  (let* ((root (file-name-as-directory (make-temp-file "drgnx-diff-back" t))) (wt (concat root "wt/")))
+    (unwind-protect
+        (let* ((paths (progn (make-directory wt) (drgnx-test-hostile-paths wt))) (real (file-truename (plist-get paths :real))))
+          (drgnx-test-with-handler-trap
+            (let ((b (drgnx-test-visit 'diff "back" wt)))
+              (unwind-protect (should (equal (buffer-file-name b) real)) (kill-buffer b)))
+            (dolist (name '("up-ssh" "abs-ssh"))           ; a link to a remote name: never opened
+              (should-error (drgnx-test-visit 'diff name wt) :type 'user-error))
+            (should-not drgnx-test-handler-calls)))
+      (delete-directory root t))))
 
 ;;; mod-diff-test.el ends here

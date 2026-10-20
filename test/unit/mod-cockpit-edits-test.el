@@ -391,7 +391,7 @@ subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E c
                 (should (equal (plist-get (car shown) :worktree) (directory-file-name wt-a)))   ; the model's agent
                 (drgnx-cockpit-graph-open-node (format "task:%s#1" plan))
                 (should (= 2 (length shown)))
-                (should (equal (buffer-file-name (window-buffer (selected-window))) plan)))
+                (should (equal (buffer-file-name (window-buffer (selected-window))) (file-truename plan))))   ; by its true name
             (kill-buffer g)))))))
 
 (ert-deftest drgnx-cockpit-edits/keys-in-every-profile ()
@@ -657,7 +657,7 @@ NOTIFIED counts the hub told; (INBOX) is s-1's messages; (SLURP FILE) a file's t
       (let ((pane (current-buffer)) (b nil))
         (save-window-excursion
           (setq b (drgnx-cockpit-edits-visit))
-          (should (equal (buffer-file-name b) (concat wt-a "README")))
+          (should (equal (buffer-file-name b) (file-truename (concat wt-a "README"))))   ; by its true name
           (should (= 2 (with-current-buffer b (line-number-at-pos)))))
         (kill-buffer b)
         (set-buffer pane))
@@ -701,5 +701,85 @@ NOTIFIED counts the hub told; (INBOX) is s-1's messages; (SLURP FILE) a file's t
       (drgnx-cockpit-edits-test--notify wt-b "b.txt")
       (should-not drgnx-cockpit-edits--quiet-gap)
       (should (<= drgnx-cockpit-edits--quiet-next (+ (float-time) 2))))))
+
+(load (expand-file-name "test/fixtures/handler-trap" drgnx-dir) nil t)
+
+(ert-deftest drgnx-cockpit-edits/an-agents-folder-through-a-link-runs-no-file-name-handler ()
+  ;; another agent's folder is the agent's to name: a link to a remote one is never inside, and never reaches Tramp
+  (let* ((root (file-name-as-directory (make-temp-file "drgnx-edits-links" t))) (wt (concat root "wt/")))
+    (unwind-protect
+        (progn
+          (make-directory wt)
+          (drgnx-test-hostile-paths wt)
+          (drgnx-test-with-handler-trap
+            (dolist (name '("abs-ssh" "abs-sudo" "up-ssh" "up-sudo" "gz" "gpg"))
+              (should-not (drgnx-cockpit-edits--inside-p wt (concat wt name))))
+            (should (drgnx-cockpit-edits--inside-p wt (concat wt "n.gz")))
+            (should-not drgnx-test-handler-calls)))
+      (delete-directory root t))))
+
+(ert-deftest drgnx-cockpit-edits/a-file-is-opened-by-the-name-it-was-checked-by ()
+  ;; a link out through `ssh:host:' and back into the agent's folder passes `drgnx-cockpit--file-ok' (resolved with no
+  ;; handler, it is a regular file inside); opening the agent's name as written then made `find-file-noselect' follow
+  ;; it with handlers on, into Tramp
+  (let* ((root (file-name-as-directory (make-temp-file "drgnx-edits-back" t))) (wt (concat root "wt/")))
+    (unwind-protect
+        (let* ((paths (progn (make-directory wt) (drgnx-test-hostile-paths wt))) (real (file-truename (plist-get paths :real))))
+          (drgnx-test-with-handler-trap
+            (let ((b (drgnx-test-visit 'cockpit "back" wt)))
+              (unwind-protect (should (equal (buffer-file-name b) real)) (kill-buffer b)))
+            (should-not drgnx-test-handler-calls)))
+      (delete-directory root t))))
+
+(ert-deftest drgnx-cockpit-edits/visiting-a-link-out-through-a-remote-name-never-loads-tramp ()
+  ;; end to end, in an Emacs of its own (-Q, Tramp's handlers as shipped; reaching Tramp fails): every command that
+  ;; opens an agent's or a model's name opens the linked file, and Tramp, jka-compr and EasyPG stay unloaded
+  (let* ((root (file-name-as-directory (make-temp-file "drgnx-edits-child" t))) (wt (concat root "wt/")))
+    (unwind-protect
+        (let* ((paths (progn (make-directory wt) (drgnx-test-hostile-paths wt)))
+               (form `(progn
+                        (with-eval-after-load 'tramp
+                          (advice-add 'tramp-file-name-handler :override (lambda (&rest _) (error "Tramp was reached"))))
+                        (load ,(expand-file-name "test/fixtures/handler-trap" drgnx-dir) nil t)
+                        (require 'drgnx-review) (require 'drgnx-cockpit-edits) (require 'drgnx-diff) (require 'drgnx-work-ui)
+                        (require 'drgnx-cockpit)
+                        (let* ((loaded (lambda () (list (featurep 'tramp) (featurep 'jka-compr) (featurep 'epa-file))))
+                               (before (funcall loaded))
+                               (opened (mapcar (lambda (how)
+                                                 (condition-case err
+                                                     (let ((b (drgnx-test-visit how "back" ,wt)))
+                                                       (prog1 (buffer-file-name b) (kill-buffer b)))
+                                                   (error (error-message-string err))))
+                                               '(review cockpit diff work work-graph cockpit-graph))))
+                          (prin1 (list before opened (funcall loaded))))))
+               (out (with-temp-buffer
+                      (call-process (expand-file-name invocation-name invocation-directory) nil '(t nil) nil
+                                    "-Q" "--batch" "-L" (expand-file-name "core" drgnx-dir) "-L" (expand-file-name "wb" drgnx-dir)
+                                    "-L" (expand-file-name "modules/tools" drgnx-dir) "-L" (expand-file-name "modules/ui" drgnx-dir)
+                                    "--eval" (prin1-to-string form))
+                      (buffer-string)))
+               (result (car (read-from-string out))))
+          (should (equal (nth 0 result) '(nil nil nil)))
+          (should (equal (nth 1 result) (make-list 6 (file-truename (plist-get paths :real)))))
+          (should (equal (nth 2 result) '(nil nil nil))))
+      (delete-directory root t))))
+
+(ert-deftest drgnx-cockpit-edits/an-agents-names-are-watched-and-placed-with-no-file-name-handler ()
+  ;; the folders of the agent's changed files, and the paths of its edit events, are its names: `a.zip/' reached
+  ;; tramp-archive (gvfs mounts the agent's archive)
+  (let* ((root (file-name-as-directory (make-temp-file "drgnx-edits-watch" t))) (wt (concat root "wt/")))
+    (unwind-protect
+        (with-temp-buffer
+          (make-directory (concat wt "a.zip") t)
+          (setq drgnx-cockpit-edits--source (list :dir wt) drgnx-cockpit-edits--files '("a.zip/y")
+                drgnx-cockpit-edits--watches (make-hash-table :test #'equal))
+          (unwind-protect
+              (drgnx-test-with-handler-trap
+                (drgnx-cockpit-edits--update-watches)
+                (should (equal (drgnx-cockpit-edits--event-paths (list :data (list :paths (list "a.zip/y" (concat wt "a.zip/z")))))
+                               '("a.zip/y" "a.zip/z")))
+                (should-not drgnx-test-handler-calls))
+            (maphash (lambda (_ w) (ignore-errors (file-notify-rm-watch w))) drgnx-cockpit-edits--watches)))
+      (delete-directory root t))))
 
 ;;; mod-cockpit-edits-test.el ends here

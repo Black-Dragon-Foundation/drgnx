@@ -373,8 +373,10 @@ one back."
 
 (defun drgnx-cockpit-edits--update-watches ()
   "Watch the agent's folder and the folders of its changed files (at most `drgnx-cockpit-edits-watch-max'), and no
-other: a local folder only, never a remote one."
-  (let* ((dir (plist-get drgnx-cockpit-edits--source :dir))
+other: a local folder only, never a remote one.  The folders are the agent's names: placed, checked and watched with
+no file name handler (an `a.zip/' folder reached tramp-archive; docs/develop/core.md, \"Names an agent gave\")."
+  (let* ((file-name-handler-alist nil)
+         (dir (plist-get drgnx-cockpit-edits--source :dir))
          (want (and (stringp dir) (not (drgnx-cockpit--remote-p dir)) (file-directory-p dir)
                     (seq-take (delete-dups (cons dir (mapcar (lambda (f) (file-name-directory (expand-file-name f dir)))
                                                              drgnx-cockpit-edits--files)))
@@ -399,8 +401,9 @@ other: a local folder only, never a remote one."
 
 (defun drgnx-cockpit-edits--event-paths (e)
   "The paths edit event E names, relative to the agent's folder; a remote name or one outside the folder is left out
-\(no remote name is expanded)."
-  (let* ((dir (plist-get drgnx-cockpit-edits--source :dir)) (data (plist-get e :data)) (root (or (plist-get data :root) dir)))
+\(no remote name is expanded).  They are the agent's names: placed with no file name handler."
+  (let* ((file-name-handler-alist nil)
+         (dir (plist-get drgnx-cockpit-edits--source :dir)) (data (plist-get e :data)) (root (or (plist-get data :root) dir)))
     (when (and (stringp dir) (stringp root) (not (drgnx-cockpit--remote-p dir)) (not (drgnx-cockpit--remote-p root)))
       (delq nil (mapcar (lambda (p)
                           (when (and (stringp p) (not (drgnx-cockpit--remote-p p)))
@@ -872,10 +875,13 @@ any hunk."
 another window).  A deleted file, or a remote folder, is said, never opened."
   (interactive)
   (let* ((file (drgnx-cockpit-edits--file-here)) (line (drgnx-cockpit-edits--line-here))
-         (dir (plist-get drgnx-cockpit-edits--source :dir)) (ok (and (stringp dir) (drgnx-cockpit--file-ok dir file))))
+         (dir (plist-get drgnx-cockpit-edits--source :dir)) (ok (and (stringp dir) (drgnx-cockpit--file-ok dir file)))
+         ;; opened by the true name it was checked by: `find-file-noselect' of the agent's own name follows its links
+         ;; again, with handlers on (a link out through `ssh:host:' and back reached Tramp)
+         (true (and (eq ok t) (drgnx-file-truename file dir))))
     (cond ((or (not (stringp dir)) (drgnx-cockpit--remote-p dir)) (user-error "The agent's folder is not a local one"))
-          ((not (eq ok t)) (user-error "%s is not there to open (deleted, or not a regular file)" (drgnx-wb-display-name file)))
-          (t (let ((b (find-file-noselect (expand-file-name file dir))))
+          ((not true) (user-error "%s is not there to open (deleted, or not a regular file)" (drgnx-wb-display-name file)))
+          (t (let ((b (find-file-noselect true)))
                (pop-to-buffer b t)
                (goto-char (point-min))
                (forward-line (1- line))
@@ -957,10 +963,11 @@ claimed, running or waiting for input.  Any other agent (an outside one's stop e
            t))))
 
 (defun drgnx-cockpit-edits--inside-p (dir name)
-  "Whether NAME (a folder, local) is DIR or inside it, by true names (links resolved); a remote NAME is not (it is
-never expanded)."
-  (and (stringp name) (stringp dir) (not (drgnx-cockpit--remote-p name)) (not (drgnx-cockpit--remote-p dir))
-       (string-prefix-p (file-name-as-directory (file-truename dir)) (file-name-as-directory (file-truename name)))))
+  "Whether NAME (a folder, local) is DIR or inside it, by true names (links resolved, with no file name handler: an
+agent names its folder); a remote NAME, or one a link leads to, is not (it is never expanded)."
+  (and (stringp name) (stringp dir)
+       (let ((d (drgnx-cockpit--true-dir dir)) (n (drgnx-cockpit--true-dir name)))   ; nil for a remote one
+         (and d n (string-prefix-p d n)))))
 
 (defun drgnx-cockpit-edits--alone-p (src)
   "Whether no other agent works in SRC's folder: no other live session (here or the hub's) and no other registered

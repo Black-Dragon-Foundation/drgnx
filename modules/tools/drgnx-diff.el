@@ -16,6 +16,7 @@
 (require 'text-property-search)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
+(require 'drgnx-file)                   ; `drgnx-file-truename': git's names in an agent's worktree, with no file name handler
 
 (declare-function drgnx-wb-editor-window "drgnx-wb")
 
@@ -258,8 +259,11 @@
   (let ((loc (get-text-property (point) 'drgnx-diff-loc)))
     (unless loc (user-error "No file here"))
     (unless (nth 1 loc) (user-error "This file is deleted in this change"))
-    (let ((f (expand-file-name (nth 1 loc) drgnx-diff--root)))
-      (unless (file-exists-p f) (user-error "%s is not in the working tree" (nth 1 loc)))
+    ;; git's name, maybe a link an agent made in its worktree: resolved with no file name handler and opened by that
+    ;; true name (`find-file' of the name as listed follows its links again, with handlers on: into Tramp)
+    (let ((f (drgnx-file-truename (nth 1 loc) drgnx-diff--root)))
+      (unless (and f (let ((file-name-handler-alist nil)) (file-exists-p f)))
+        (user-error "%s is not in the working tree" (nth 1 loc)))
       (when-let* ((w (drgnx-diff--editor-window))) (select-window w))
       (find-file f)
       (goto-char (point-min))

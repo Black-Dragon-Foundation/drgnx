@@ -12,6 +12,8 @@
 ;;   stays a symlink, the mode is kept, data must read back `equal', and no buffer ever visits the file.
 ;; - `drgnx-file-update' is the locked read-modify-write: a `make-directory' lock, a fresh read, the change applied,
 ;;   the lock released.
+;; - `drgnx-file-truename' and `drgnx-file-inside-p' resolve a name an agent gave, with no file name handler
+;;   (docs/develop/core.md, "Names an agent gave").
 ;; Every name is used with no file name handlers and `default-directory' "/", so nothing here reaches Tramp, and
 ;; nothing prompts.  It requires only cl-lib and subr-x, so an `emacs --batch -Q' hub can load it.
 
@@ -398,6 +400,50 @@ group and other bits.  The lock is released whatever happens."
                                 :text (and render (funcall render old data new))))
             new))
       (drgnx-file--unlock held))))
+
+;;;; Names an agent gave
+
+(defun drgnx-file-truename (file &optional dir)
+  "FILE, expanded against DIR (default: `default-directory'), with `.', `..' and every symbolic link resolved, as a
+local name — or nil when it is, or leads through a link to, a remote (Tramp) name or a quoted one (`/:…', which
+`file-name-non-special' unquotes once handlers are on), and when its links loop or run past the 100 `file-truename'
+follows (that signals \"Apparent cycle\"): fail closed, callers take nil as outside or refused.  For a name an agent
+or a model gave (an ACP tool call's locations, an fs/* request, a review finding): no file name handler runs, on FILE
+or on any link on its way.  With handlers on, `file-truename' looks one up again at each link: a link in an agent's
+worktree climbing `../' to the root and on to `ssh:host:' made Emacs load Tramp and connect (`sudo::': start sudo),
+and a `.gz', `.gpg' or archive name reaches jka-compr, EasyPG or tramp-archive.  Use the name this gives, not the
+one checked: opening the agent's own name (`find-file') follows its links again, with handlers on."
+  (let* ((file-name-handler-alist nil)
+         (true (condition-case nil (file-truename (expand-file-name file dir)) (error nil))))
+    (and true (not (string-match-p drgnx-file--remote-re true)) (not (string-prefix-p "/:" true)) true)))
+
+(defun drgnx-file-inside-p (file dir)
+  "Whether FILE (relative: to DIR) is DIR or inside it once `..' and symbolic links are resolved, with no file name
+handler (`drgnx-file-truename'): a name that is or leads to a remote or quoted one, or whose links loop, is not
+inside."
+  (and (stringp file) (stringp dir)
+       (let ((true (drgnx-file-truename file dir)) (top (drgnx-file-truename dir)))
+         (and true top (let ((file-name-handler-alist nil)) (file-in-directory-p true top))))))
+
+(defconst drgnx-file--sealed-default-res
+  '("\\.gpg\\(?:~\\|\\.~[0-9]+~\\)?\\'"
+    "\\.\\(?:g?z\\|Z\\|bz2\\|tbz2?\\|tgz\\|xz\\|txz\\|lz\\|lzma\\|zst\\|tzst\\|dz\\)\\(?:~\\|\\.~[0-9]+~\\)?\\'")
+  "The names Emacs encrypts (EasyPG) or compresses (auto-compression) on write as shipped, checked even when the user's
+`epa-file-name-regexp' or `jka-compr-compression-info-list' says less.")
+
+(defun drgnx-file-sealed-p (file &optional dir)
+  "Whether FILE (relative: to DIR) names a file Emacs writes encrypted or compressed — EasyPG's `epa-file-name-regexp'
+\(`.gpg'), auto-compression's suffixes (`jka-compr-build-file-regexp': `.gz', `.bz2', `.xz'…), or the shipped ones
+\(`drgnx-file--sealed-default-res') — as written, or once its links are resolved with no file name handler
+\(`drgnx-file-truename').  An agent's content for such a file is plain text: written with no handler it would leave
+it unencrypted (uncompressed) on disk, with handlers on it reaches EasyPG (gpg, pinentry) or jka-compr.  Agents never
+write one; the user does (docs/develop/core.md, \"Names an agent gave\")."
+  (when (stringp file)
+    (let ((res (delq nil (append (list (bound-and-true-p epa-file-name-regexp)
+                                       (and (fboundp 'jka-compr-build-file-regexp) (jka-compr-build-file-regexp)))
+                                 drgnx-file--sealed-default-res)))
+          (names (list (let ((file-name-handler-alist nil)) (expand-file-name file dir)) (drgnx-file-truename file dir))))
+      (cl-some (lambda (n) (and n (cl-some (lambda (re) (string-match-p re n)) res))) names))))
 
 (provide 'drgnx-file)
 ;;; drgnx-file.el ends here

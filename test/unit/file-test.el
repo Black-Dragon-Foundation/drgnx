@@ -476,4 +476,51 @@
                     :type 'drgnx-file-refused)
       (should (equal (drgnx-file-test--bytes f) ";; my comment\n(:a 2 :zz unknown)\n")))))
 
+;;;; Names an agent gave
+
+(require 'drgnx-paths)                                ; `drgnx-dir'
+(load (expand-file-name "test/fixtures/handler-trap" drgnx-dir) nil t)
+
+(ert-deftest drgnx-file/an-agents-path-is-resolved-with-no-file-name-handler ()
+  ;; `file-truename' with handlers on looks one up again at each link: a link in the worktree climbing `../' to the
+  ;; root and on to `ssh:host:' loaded Tramp (an ssh connection; `sudo::' a sudo prompt)
+  (drgnx-file-test--with-dir dir
+    (let* ((tree (concat dir "wt/")) (paths (progn (make-directory tree) (drgnx-test-hostile-paths tree)))
+           (true-tree (file-truename tree)) (true-dir (file-truename dir)))
+      (drgnx-test-with-handler-trap
+        (dolist (p (plist-get paths :outside)) (should-not (drgnx-file-inside-p p tree)))
+        (dolist (name '("abs-ssh/y" "abs-sudo/y" "up-ssh/y" "up-sudo/y"))
+          (should-not (drgnx-file-truename name tree))           ; it leads to a remote name
+          (should-not (drgnx-file-inside-p name tree)))
+        (should (equal (drgnx-file-truename "gz/y" tree) (concat true-dir "x.gz/y")))
+        (dolist (p (plist-get paths :inside)) (should (drgnx-file-inside-p p tree)))
+        (should (equal (drgnx-file-truename "n.gpg" tree) (concat true-tree "n.gpg")))
+        (should (drgnx-file-inside-p "a.zip/y" tree))
+        (should-not drgnx-test-handler-calls)))))
+
+(ert-deftest drgnx-file/a-link-loop-or-a-too-long-chain-resolves-to-nothing ()
+  ;; `file-truename' signals "Apparent cycle" past 100 links: an agent's loop made every check of its names an error
+  (drgnx-file-test--with-dir dir
+    (let ((file-name-handler-alist nil))
+      (make-symbolic-link "loop" (concat dir "loop"))
+      (dotimes (i 110) (make-symbolic-link (format "c%d" (1+ i)) (concat dir (format "c%d" i))))
+      (write-region "" nil (concat dir "c110") nil 'silent))
+    (dolist (name '("loop" "loop/y" "c0"))
+      (should-not (drgnx-file-truename name dir))
+      (should-not (drgnx-file-inside-p name dir)))
+    (should (equal (drgnx-file-truename "c100" dir) (concat (file-truename dir) "c110")))))
+
+(ert-deftest drgnx-file/an-encrypted-or-compressed-name-is-sealed ()
+  ;; the names EasyPG and auto-compression write encrypted or compressed, as written or through a link
+  (drgnx-file-test--with-dir dir
+    (let ((file-name-handler-alist nil)) (make-symbolic-link "n.gpg" (concat dir "plain.txt")))
+    (dolist (name '("n.gpg" "n.gpg~" "n.gz" "x.tar.xz" "x.bz2" "x.zst" "plain.txt"))
+      (should (drgnx-file-sealed-p name dir)))
+    (require 'epa-hook)                                   ; its option is let-bound next
+    (let ((epa-file-name-regexp "\\`never\\'"))             ; the shipped names hold whatever the user's options say
+      (should (drgnx-file-sealed-p "n.gpg" dir)))
+    (dolist (name '("n.txt" "gz/y" "a.zip/y" "gpg.el"))
+      (should-not (drgnx-file-sealed-p name dir)))
+    (should-not (drgnx-file-sealed-p nil dir))))
+
 ;;; file-test.el ends here

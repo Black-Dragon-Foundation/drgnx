@@ -269,4 +269,43 @@
     (should (zerop (hash-table-count drgnx-review--runs)))
     (should-not drgnx-review--current)))
 
+(load (expand-file-name "test/fixtures/handler-trap" drgnx-dir) nil t)
+
+(ert-deftest drgnx-review/a-path-through-a-planted-link-runs-no-file-name-handler ()
+  ;; the reviewer's tool calls and findings name paths in the user's own Emacs: a link in the repository to a remote
+  ;; name never makes it load Tramp; it is outside the repository
+  (let* ((root (file-name-as-directory (make-temp-file "drgnx-review-links" t))) (repo (concat root "repo/"))
+         (drgnx-review--runs (make-hash-table :test #'equal)) (drgnx-review--current "rev-links")
+         (s (drgnx-agents--make :id "rev-links")) (opts (vector '(:optionId "o1" :kind "allow_once"))))
+    (unwind-protect
+        (let ((paths (progn (make-directory repo) (drgnx-test-hostile-paths repo))))
+          (puthash "rev-links" (list :root repo) drgnx-review--runs)
+          (drgnx-test-with-handler-trap
+            (dolist (p (plist-get paths :outside))
+              (should-not (drgnx-review--request s "session/request_permission"
+                                                 (list :toolCall (list :kind "read" :locations (vector (list :path p))) :options opts) 1))
+              (with-temp-buffer
+                (insert (propertize "finding" 'drgnx-review-finding (list :path p :line 1)))
+                (goto-char (point-min))
+                (should (string-match-p "outside" (cadr (should-error (drgnx-review-visit) :type 'user-error))))))
+            (dolist (p (remove (plist-get paths :back) (plist-get paths :inside)))     ; inside, and not there
+              (with-temp-buffer
+                (insert (propertize "finding" 'drgnx-review-finding (list :path p :line 1)))
+                (goto-char (point-min))
+                (should (string-match-p "not in the working tree" (cadr (should-error (drgnx-review-visit) :type 'user-error))))))
+            (should-not drgnx-test-handler-calls)))
+      (delete-directory root t))))
+
+(ert-deftest drgnx-review/a-finding-is-opened-by-the-name-it-was-checked-by ()
+  ;; a link out through `ssh:host:' and back into the repository is inside once resolved with no handler; opening the
+  ;; model's name as written then made `find-file' follow it with handlers on, into Tramp
+  (let* ((root (file-name-as-directory (make-temp-file "drgnx-review-back" t))) (repo (concat root "repo/")))
+    (unwind-protect
+        (let* ((paths (progn (make-directory repo) (drgnx-test-hostile-paths repo))) (real (file-truename (plist-get paths :real))))
+          (drgnx-test-with-handler-trap
+            (let ((b (drgnx-test-visit 'review "back" repo)))
+              (unwind-protect (should (equal (buffer-file-name b) real)) (kill-buffer b)))
+            (should-not drgnx-test-handler-calls)))
+      (delete-directory root t))))
+
 ;;; mod-review-test.el ends here
