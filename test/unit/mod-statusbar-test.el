@@ -1639,10 +1639,11 @@ of other packages' entries; the rest are the six epochs and plain values."
     (should (equal (sort epochs #'string<) '(buffer-look eglot flymake git misc-info statusbar)))
     (should (= 21 (length keys)))))                     ; 6 epochs, 8 values of the window, 7 hot plain values
 
-(defmacro drgnx-statusbar-test--epoch-test (epoch object doc &rest triggers)
-  "A test that each of TRIGGERS moves EPOCH (read for OBJECT) and makes the next redisplay build the bar again."
-  (declare (indent 3))
-  `(ert-deftest ,(intern (format "drgnx-statusbar/each-epoch-rebuilds-the-bar-%s" epoch)) ()
+(defmacro drgnx-statusbar-test--epoch-deftest (name epoch object doc &rest triggers)
+  "The test NAME (spelt out: the selector prefilter reads it) that each of TRIGGERS moves EPOCH (read for OBJECT) and
+makes the next redisplay build the bar again."
+  (declare (indent 4))
+  `(ert-deftest ,name ()
      ,doc
      (drgnx-statusbar-test--counted
        ,@(mapcar (lambda (trigger)
@@ -1656,8 +1657,8 @@ of other packages' entries; the rest are the six epochs and plain values."
 (defvar drgnx-trust--state)
 (defvar c-basic-offset)
 
-(drgnx-statusbar-test--epoch-test buffer-look (current-buffer)
-                                  "The buffer's mode, version control, encoding, indentation, modal state, evil's tag and trust."
+(drgnx-statusbar-test--epoch-deftest drgnx-statusbar/each-epoch-rebuilds-the-bar-buffer-look buffer-look (current-buffer)
+                                     "The buffer's mode, version control, encoding, indentation, modal state, evil's tag and trust."
   (drgnx-statusbar--mode-changed)
   (setq-local vc-mode " Git-feature")
   (setq-local buffer-file-coding-system 'utf-8-dos)
@@ -1668,33 +1669,33 @@ of other packages' entries; the rest are the six epochs and plain values."
   (setq-local evil-mode-line-tag " <I> ")
   (setq-local drgnx-trust--state 'restricted))
 
-(drgnx-statusbar-test--epoch-test flymake (current-buffer)
-                                  "flymake turned on or off here, a check started, a backend reported."
+(drgnx-statusbar-test--epoch-deftest drgnx-statusbar/each-epoch-rebuilds-the-bar-flymake flymake (current-buffer)
+                                     "flymake turned on or off here, a check started, a backend reported."
   (drgnx-statusbar--flymake-changed)
   (drgnx-statusbar--flymake-started)
   (drgnx-statusbar--flymake-reported))
 
-(drgnx-statusbar-test--epoch-test eglot (current-buffer)
-                                  "eglot manages the buffer or let it go; a server finished starting."
+(drgnx-statusbar-test--epoch-deftest drgnx-statusbar/each-epoch-rebuilds-the-bar-eglot eglot (current-buffer)
+                                     "eglot manages the buffer or let it go; a server finished starting."
   (drgnx-statusbar--eglot-changed)
   (drgnx-statusbar--eglot-initialized 'server))
 
-(drgnx-statusbar-test--epoch-test git nil
-                                  "A repository's branch or its ahead and behind counts changed."
+(drgnx-statusbar-test--epoch-deftest drgnx-statusbar/each-epoch-rebuilds-the-bar-git git nil
+                                     "A repository's branch or its ahead and behind counts changed."
   (progn (drgnx-cache-put 'git-status "/repo/" (list :branch '(:head "a")))
          (drgnx-statusbar--git-changed "/repo/"))
   (progn (drgnx-cache-put 'git-status "/repo/" (list :branch '(:head "a" :ahead 1)))
          (drgnx-statusbar--git-changed "/repo/")))
 
-(drgnx-statusbar-test--epoch-test misc-info nil
-                                  "Other packages' entries changed, or which of them the bar leaves out."
+(drgnx-statusbar-test--epoch-deftest drgnx-statusbar/each-epoch-rebuilds-the-bar-misc-info misc-info nil
+                                     "Other packages' entries changed, or which of them the bar leaves out."
   (setq global-mode-string '("MARK"))
   (setq mode-line-misc-info (cons "INFO" mode-line-misc-info))
   (setq mode-line-misc-info (cdr mode-line-misc-info))
   (setq drgnx-statusbar-misc-exclude (cons "MARK" drgnx-statusbar-misc-exclude)))
 
-(drgnx-statusbar-test--epoch-test statusbar nil
-                                  "drgnx's own state, a setting or the glyphs."
+(drgnx-statusbar-test--epoch-deftest drgnx-statusbar/each-epoch-rebuilds-the-bar-statusbar statusbar nil
+                                     "drgnx's own state, a setting or the glyphs."
   (drgnx-statusbar--bump)
   (setq drgnx-statusbar-left '(misc a))
   (setq drgnx-statusbar-quiet '(a))
