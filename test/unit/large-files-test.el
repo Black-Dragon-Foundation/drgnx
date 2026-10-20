@@ -943,7 +943,7 @@ Return the errors it sent the client."
 
 (defun drgnx-large-files-test--segment (ascii)
   "The status bar's `large-file' segment as the bar defines it, in the current buffer, on an ASCII frame or not."
-  (cl-letf (((symbol-function 'drgnx-face--ascii-frame-p) (lambda (_frame) ascii)))
+  (cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) (lambda (&optional _frame) ascii)))
     (funcall (plist-get (gethash 'large-file drgnx-statusbar--segments) :fn))))
 
 (ert-deftest drgnx-large-files/the-segment-shows-size-and-mode ()

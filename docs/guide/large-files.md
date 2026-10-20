@@ -14,7 +14,8 @@ A buffer that holds a large file says so in its header line, with a button for e
 412 MB, in chunks: [Open Whole] [Open Raw]
 ```
 
-The status bar shows the same, on the right: `412 MB · chunk 3/412`, `412 MB · lean` or `412 MB · raw`.
+The status bar shows the same, on the right: `412 MB · chunk 3/412`, `412 MB · lean` or `412 MB · raw`
+(on a terminal that does not write UTF-8, `-` takes the place of `·`).
 
 ## What asks, and what never does
 
