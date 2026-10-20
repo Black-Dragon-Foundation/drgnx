@@ -4,15 +4,14 @@
 (require 'ert)
 (require 'drgnx-ui)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-ui-repo-dir) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-ui-repo-dir) nil t)
 
 (defun drgnx-live-ai--q (sess form)
   (car (read-from-string (plist-get (drgnx-ui-call sess (format "(drgnx-uitest--json (list :v (prin1-to-string %s)))" form) 60) :v))))
 
 (defun drgnx-live-ai--until (sess form secs)
-  "Poll FORM in SESS until non-nil (SECS at most); its value."
-  (let ((deadline (+ (float-time) secs)) v)
-    (while (and (not (setq v (drgnx-live-ai--q sess form))) (< (float-time) deadline)) (sleep-for 0.2))
-    v))
+  "Poll FORM in SESS until non-nil; its value (`drgnx-test-wait', at least 30 s or SECS)."
+  (drgnx-test-wait (lambda () (drgnx-live-ai--q sess form)) :secs (max 30 secs) :what form))
 
 (ert-deftest drgnx-live/ghost-text-takes-tab-and-an-inline-edit-is-reviewed-hunk-by-hunk ()
   (let* ((root (file-name-as-directory (make-temp-file "drgnx-ai-live" t)))

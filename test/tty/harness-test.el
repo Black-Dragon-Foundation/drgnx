@@ -2,16 +2,16 @@
 ;; Run under `drgnx-run-ert-batch' (temp HOME and XDG dirs); every test has its own tmux server.
 (require 'ert)
 (require 'drgnx-tty-session)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-ui-repo-dir) nil t)
 
 (defun drgnx-tty-harness-test--wait-file (file size &optional timeout)
-  "Wait until FILE has SIZE bytes (at most TIMEOUT s, default 5); its bytes, or what arrived."
-  (let ((deadline (+ (float-time) (or timeout 5))))
-    (while (and (< (or (file-attribute-size (file-attributes file)) -1) size) (< (float-time) deadline))
-      (sleep-for 0.05))
-    (with-temp-buffer
-      (set-buffer-multibyte nil)
-      (when (file-exists-p file) (insert-file-contents-literally file))
-      (buffer-string))))
+  "Wait until FILE has SIZE bytes (`drgnx-test-wait', at least 30 s or TIMEOUT); its bytes."
+  (drgnx-test-wait (lambda () (>= (or (file-attribute-size (file-attributes file)) -1) size))
+                   :secs (max 30 (or timeout 0)) :what (format "%s bytes in %s" size file))
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (when (file-exists-p file) (insert-file-contents-literally file))
+    (buffer-string)))
 
 (ert-deftest drgnx-tty-harness/raw-bytes-arrive-unchanged ()
   (let* ((bytes (concat "\e[112;6u" "\e[27;6;80~" "\e[<0;10;5M\e[<0;10;5m"
@@ -143,11 +143,10 @@
 (ert-deftest drgnx-tty-harness/the-server-ends-at-its-budget ()
   (let ((process-environment (cons "DRGNX_TTY_MAX_RUNTIME=2" process-environment)))
     (drgnx-tty-session-with (s :command "sleep 60")
-      (let ((pattern (format "(%s/|-L %s )" (regexp-quote (plist-get s :run)) (regexp-quote (plist-get s :name))))
-            (deadline (+ (float-time) 20)))
+      (let ((pattern (format "(%s/|-L %s )" (regexp-quote (plist-get s :run)) (regexp-quote (plist-get s :name)))))
         (should (eq 0 (car (drgnx-ui--run "pgrep" "-f" "--" pattern))))
-        (while (and (eq 0 (car (drgnx-ui--run "pgrep" "-f" "--" pattern))) (< (float-time) deadline))
-          (sleep-for 0.2))
+        (drgnx-test-wait (lambda () (not (eq 0 (car (drgnx-ui--run "pgrep" "-f" "--" pattern)))))
+                         :what "the tmux server and its Emacs ended")
         (should-not (eq 0 (car (drgnx-ui--run "pgrep" "-f" "--" pattern))))
         (should-not (drgnx-tty-session--pane-alive-p s))))))
 
@@ -189,9 +188,7 @@
     ;; the pane's mouse mode follows what Emacs asks of its terminal
     (should (equal (plist-get (drgnx-tty-session-pane-flags s) :mouse-sgr) 0))
     (drgnx-tty-session-eval s '(xterm-mouse-mode 1))
-    (let ((deadline (+ (float-time) 5)))
-      (while (and (/= 1 (plist-get (drgnx-tty-session-pane-flags s) :mouse-sgr)) (< (float-time) deadline))
-        (sleep-for 0.05)))
+    (drgnx-test-wait (lambda () (eql 1 (plist-get (drgnx-tty-session-pane-flags s) :mouse-sgr))) :what "the pane's SGR mouse mode")
     (should (equal (plist-get (drgnx-tty-session-pane-flags s) :mouse-sgr) 1))
     (should (string-match-p "\\`\\(VT10x\\|Ext [0-9]\\)\\'" (plist-get (drgnx-tty-session-pane-flags s) :key-mode)))
     ;; resizing reaches the frame
@@ -215,8 +212,7 @@
     ;; an OSC 52 copy lands in the server's paste buffer
     (should-not (drgnx-tty-session-clipboard s))
     (drgnx-tty-session-eval s '(send-string-to-terminal (concat "\e]52;c;" (base64-encode-string "hello") "\a")))
-    (let ((deadline (+ (float-time) 5)))
-      (while (and (not (drgnx-tty-session-clipboard s)) (< (float-time) deadline)) (sleep-for 0.05)))
+    (drgnx-test-wait (lambda () (drgnx-tty-session-clipboard s)) :what "the OSC 52 copy in the paste buffer")
     (should (equal (drgnx-tty-session-clipboard s) "hello"))))
 
 ;;; harness-test.el ends here

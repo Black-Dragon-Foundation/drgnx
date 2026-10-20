@@ -8,12 +8,12 @@
 (require 'drgnx-agents)
 (require 'drgnx-job)
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-git-ui-test--repo) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-git-ui-test--repo) nil t)
 (dolist (m '("tools/drgnx-diff" "extra/drgnx-blame" "tools/drgnx-review" "tools/drgnx-prs"))
   (load (expand-file-name (concat "modules/" m) drgnx-git-ui-test--repo) nil t))
 
 (defun drgnx-git-ui-test--wait (pred &optional secs)
-  (let ((deadline (+ (float-time) (or secs 10)))) (while (and (not (funcall pred)) (< (float-time) deadline)) (accept-process-output nil 0.05)))
-  (funcall pred))
+  (drgnx-test-wait pred :secs (max 30 (or secs 0)) :what "the git GUI test's predicate"))
 
 (defun drgnx-git-ui-test--shot (dir name)
   (let ((shot (plist-get (drgnx-uitest-capture dir) :root)) (out (expand-file-name name temporary-file-directory)))

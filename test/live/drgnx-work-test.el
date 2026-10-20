@@ -3,15 +3,14 @@
 ;; editor at its line, the graph opens in the editor and a click on a box opens its plan, nothing unrouted.
 (require 'ert)
 (require 'drgnx-ui)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-ui-repo-dir) nil t)
 
 (defun drgnx-live-wk--q (sess form)
   (car (read-from-string (plist-get (drgnx-ui-call sess (format "(drgnx-uitest--json (list :v (prin1-to-string %s)))" form) 60) :v))))
 
 (defun drgnx-live-wk--until (sess form secs)
-  "Poll FORM in SESS until non-nil (SECS at most); its value."
-  (let ((deadline (+ (float-time) secs)) v)
-    (while (and (not (setq v (drgnx-live-wk--q sess form))) (< (float-time) deadline)) (sleep-for 0.2))
-    v))
+  "Poll FORM in SESS until non-nil; its value (`drgnx-test-wait', at least 30 s or SECS)."
+  (drgnx-test-wait (lambda () (drgnx-live-wk--q sess form)) :secs (max 30 secs) :what form))
 
 (ert-deftest drgnx-live/the-work-tab-fills-in-and-opens-what-it-shows ()
   (let* ((root (file-name-as-directory (make-temp-file "drgnx-work-live" t)))

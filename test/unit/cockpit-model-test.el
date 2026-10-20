@@ -439,7 +439,7 @@
       (let ((drgnx-cockpit-diff-max-bytes 1000))
         (drgnx-cockpit-changed-files (list :dir wt-a :base sha) (lambda (x) (cl-incf calls) (setq r x)))
         (should (drgnx-cockpit-fixture-wait (lambda () r)))
-        (drgnx-cockpit-fixture-wait (lambda () nil) 0.5))          ; a second answer would come now
+        (drgnx-test-pause 0.5))          ; a second answer would come now
       (should (plist-get r :too-large))
       (should (= calls 1)))
     ;; a diff over the cap: one answer too
@@ -451,7 +451,7 @@
       (let ((drgnx-cockpit-diff-max-bytes 1000))
         (drgnx-cockpit-file-diff (list :dir wt-a :base "HEAD") "big.txt" (lambda (x) (cl-incf calls) (setq r x)))
         (should (drgnx-cockpit-fixture-wait (lambda () r)))
-        (drgnx-cockpit-fixture-wait (lambda () nil) 0.5))
+        (drgnx-test-pause 0.5))
       (should (plist-get r :too-large))
       (should (= calls 1)))))
 

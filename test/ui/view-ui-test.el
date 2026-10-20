@@ -15,18 +15,18 @@
 (require 'drgnx-wb)
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-view-ui-test--repo) nil t)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-view-ui-test--repo) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-view-ui-test--repo) nil t)
 (load (expand-file-name "modules/tools/drgnx-replace" drgnx-view-ui-test--repo) nil t)
 (load (expand-file-name "modules/tools/drgnx-agents-ui" drgnx-view-ui-test--repo) nil t)
 
 (defun drgnx-view-ui-test--wait (pred &optional secs)
-  "Wait (SECS, default 30) until PRED holds, reading process output; PRED's last value."
-  (let ((deadline (+ (float-time) (or secs 30))))
-    (while (and (not (funcall pred)) (< (float-time) deadline)) (accept-process-output nil 0.05)))
-  (funcall pred))
+  "Wait until PRED holds, reading process output: PRED's value (`drgnx-test-wait', at least 30 s or SECS).
+It runs the view's slice chain back to back (CI-GUI-1: a poll per slice starved 10,100 rows)."
+  (drgnx-test-wait pred :secs (max 30 (or secs 0)) :what "the view GUI test's predicate"))
 
 (ert-deftest drgnx-view-ui/replace-retype-has-no-jank ()
-  ;; wall-clock: the wait below runs one timer pass per poll, so the 10,100 rows' slice chain gets one slice per 50 ms
-  ;; (about 600 slices on a slow runner: over the 30 s).  Until one `drgnx-test-wait' (test determinism, Tasks 3/9).
+  ;; Known red until the render pipeline's Replace port (R2, REPLACE-REDRAW-1): the busy waits pass now, but the first
+  ;; slice after the typing need not hold the rows the window showed (seen: f099's line 41 shown, lines 1-8 drawn first).
   :tags '(:timing)
   (let* ((root (drgnx-uitest-root-frame))
          (drgnx-wb--sections nil)

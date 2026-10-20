@@ -364,7 +364,7 @@ are pushed to STEERED as (NAME TEXT)."
   (skip-unless drgnx-live-test--websocket)
   (drgnx-live-test--with
     (drgnx-live-test--open)
-    (drgnx-mock-cdp-wait #'ignore 0.3)
+    (drgnx-test-pause 0.3)
     (should (equal (mapcar (lambda (m) (plist-get (plist-get m :params) :targetId)) (drgnx-mock-cdp-received "Target.attachToTarget"))
                    '("T1")))
     (should (= 1 (length (drgnx-mock-cdp-received "Page.startScreencast"))))
