@@ -1127,3 +1127,35 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
       (should (file-symlink-p (expand-file-name ".local/bin/nidhogg" home)))
       (should (file-symlink-p (expand-file-name ".local/bin/nidhoggclient" home)))
       (should-not (string-search "build.sh" (or (drgnx-install-test--file (expand-file-name "log" tmp)) ""))))))
+
+(ert-deftest drgnx-install/jobs-and-memory-are-passed-through ()
+  (drgnx-install-test--with-tmp tmp
+    (let ((podman (concat "DRGNX_INSTALL_PODMAN=" (drgnx-install-test--podman tmp 0))))
+      ;; the environment
+      (drgnx-install-test--expect
+       (drgnx-install-test--plan "fedora-44" podman "DRGNX_INSTALL_JOBS=3" "DRGNX_INSTALL_MEMORY=5" "DRGNX_INSTALL_NPROC=16"
+                                 (format "DRGNX_INSTALL_MEMORY_KB=%d" (* 64 1024 1024)))
+       "capped at 5g" "make -j3")
+      ;; the flags win over the environment
+      (drgnx-install-test--expect
+       (drgnx-install-test--plan "fedora-44" podman "DRGNX_INSTALL_JOBS=3" "--jobs" "2" "--memory" "4" "DRGNX_INSTALL_NPROC=16"
+                                 (format "DRGNX_INSTALL_MEMORY_KB=%d" (* 64 1024 1024)))
+       "capped at 4g" "make -j2")
+      ;; nothing given: the installer's own sizing
+      (drgnx-install-test--expect
+       (drgnx-install-test--plan "fedora-44" podman "DRGNX_INSTALL_NPROC=16" (format "DRGNX_INSTALL_MEMORY_KB=%d" (* 64 1024 1024)))
+       "capped at 6g" "make -j4")
+      (should (= 2 (car (drgnx-install-test--plan "fedora-44" "--jobs" "0"))))
+      (should (= 2 (car (drgnx-install-test--plan "fedora-44" podman "--memory" "2")))))))
+
+(ert-deftest drgnx-install/the-build-gets-the-jobs-and-memory-asked-for ()
+  (skip-unless (/= 0 (user-uid)))
+  (drgnx-install-test--with-tmp tmp
+    (let* ((fx (drgnx-install-test--nidhogg-fixture tmp))
+           (r (drgnx-install-test--nidhogg-run
+               tmp fx (append (list (concat "DRGNX_INSTALL_PODMAN=" (drgnx-install-test--podman tmp 0))
+                                    "DRGNX_INSTALL_JOBS=2" "DRGNX_INSTALL_MEMORY=5")
+                              drgnx-install-test--roomy)))
+           (log (drgnx-install-test--file (expand-file-name "log" tmp))))
+      (should (= (car r) 0))
+      (should (string-search "build.sh --container fedora-44 --memory 5g --jobs 2 --prefix " log)))))

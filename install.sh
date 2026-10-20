@@ -82,6 +82,9 @@ usage: install.sh [options]
   --method M         auto (default) | nidhogg (drgnx's own Emacs, built from source: Fedora 44/45,
                      Ubuntu 26.04, macOS) | keep (do not install Emacs) | package | source
                      | cask | formula (macOS: Homebrew's emacs-plus; stock GNU Emacs, drgnx doctor warns)
+  --jobs N           parallel make jobs for the build (default: by CPUs and memory; or DRGNX_INSTALL_JOBS)
+  --memory GIB       memory cap of the Nidhogg container build, whole GiB, at least 3 (default: by available
+                     memory; or DRGNX_INSTALL_MEMORY)
   --branch B         drgnx branch to check out (default main)
   --config URL       then set this machine up from your configuration repository: runs
                      "drgnx bootstrap --config URL" (an https URL or a local path; asks before keys,
@@ -96,6 +99,7 @@ EOF
 parse_args() {
   DRY_RUN=0 YES=0 PREFIX="$HOME/.local" DIR="$HOME/.local/share/drgnx/drgnx" SOURCE_DIR="" METHOD=auto BRANCH=main
   CONFIG="" CHEZMOI="" IDENTITY="" CONFIG_LOCAL=0
+  OPT_JOBS="${DRGNX_INSTALL_JOBS:-}" OPT_MEMORY="${DRGNX_INSTALL_MEMORY:-}"
   while (($#)); do
     case "$1" in
       --dry-run) DRY_RUN=1 ;;
@@ -104,6 +108,8 @@ parse_args() {
       --dir) need_value "$1" "${2-}" "a directory"; DIR="$2"; shift ;;
       --source-dir) need_value "$1" "${2-}" "a directory"; SOURCE_DIR="$2"; shift ;;
       --method) need_value "$1" "${2-}" "a value"; METHOD="$2"; shift ;;
+      --jobs) need_value "$1" "${2-}" "a number"; OPT_JOBS="$2"; shift ;;
+      --memory) need_value "$1" "${2-}" "a number of GiB"; OPT_MEMORY="$2"; shift ;;
       --branch) need_value "$1" "${2-}" "a value"; BRANCH="$2"; shift ;;
       --config) need_value "$1" "${2-}" "a URL or a path"; config_ref CONFIG "$1" "$2"; shift ;;
       --chezmoi) need_value "$1" "${2-}" "a URL or a path"; config_ref CHEZMOI "$1" "$2"; shift ;;
@@ -114,6 +120,8 @@ parse_args() {
     shift
   done
   case "$METHOD" in auto|nidhogg|package|source|keep|cask|formula) ;; *) die 2 "--method must be auto, nidhogg, keep, package, source, cask or formula" ;; esac
+  if [[ -n "$OPT_JOBS" && ! "$OPT_JOBS" =~ ^[1-9][0-9]*$ ]]; then die 2 "--jobs (DRGNX_INSTALL_JOBS) must be a whole number, 1 or more"; fi
+  if [[ -n "$OPT_MEMORY" && ! "$OPT_MEMORY" =~ ^[1-9][0-9]*$ ]]; then die 2 "--memory (DRGNX_INSTALL_MEMORY) must be whole GiB, 3 or more"; fi
   if [[ -n "$CONFIG" && -n "$CHEZMOI" ]]; then die 2 "--config and --chezmoi cannot be used together"; fi
   if [[ -n "$IDENTITY" && -z "$CONFIG$CHEZMOI" ]]; then die 2 "--identity needs --config or --chezmoi"; fi
   HANDOVER=0 BOOTSTRAP_ARGS=()   # the hand-over to `drgnx bootstrap' (Task 12): always an array, never a string to eval
@@ -285,6 +293,11 @@ mem_available_kb() {
 
 build_memory() { # NIDHOGG_MEM (GiB) = min(6, available - 1): the container's cap; refused below 3 GiB, not an OOM kill
   local gib
+  if [[ -n "$OPT_MEMORY" ]]; then   # asked for: taken as given, as nidhogg/build.sh takes --memory
+    NIDHOGG_MEM="$OPT_MEMORY"
+    if ((NIDHOGG_MEM < 3)); then die 2 "--memory (DRGNX_INSTALL_MEMORY) must be at least 3 GiB for a Nidhogg build"; fi
+    return 0
+  fi
   gib=$(($(mem_available_kb) / 1024 / 1024))
   NIDHOGG_MEM=$((gib - 1))
   ((NIDHOGG_MEM <= 6)) || NIDHOGG_MEM=6
@@ -359,6 +372,7 @@ choose_method() {
   CONFIGURE=(./configure "--prefix=$PREFIX" --with-native-compilation=aot --with-tree-sitter "$GUI_FLAG")
   JOBS="$(build_jobs)"
   if [[ "$CHOSEN" == nidhogg ]]; then choose_nidhogg_mode; fi
+  if [[ -n "$OPT_JOBS" ]]; then JOBS="$OPT_JOBS"; fi
 }
 
 find_brew() {

@@ -74,6 +74,7 @@ runs nothing.
 | `--prefix DIR` | where a source-built Emacs and the `drgnx` command go (default `~/.local`) |
 | `--dir DIR` | where drgnx is checked out (default `~/.local/share/drgnx/drgnx`; it does not follow `DRGNX_DATA_DIR` or `XDG_DATA_HOME`) |
 | `--source-dir DIR` | use an existing drgnx checkout instead of cloning |
+| `--jobs N`, `--memory GIB` | the build's parallel `make` jobs, and the memory cap (whole GiB, at least 3) of a Nidhogg container build; the same as the environment variables `DRGNX_INSTALL_JOBS` and `DRGNX_INSTALL_MEMORY`, and the flag wins. Without them the installer sizes the build itself (below). They go on to Nidhogg's `build.sh` as `--jobs` and `--memory` |
 | `--method M` | `auto` (default), `nidhogg` (build [Nidhogg](#nidhogg); only where there is a recipe — Fedora 44/45, Ubuntu 26.04, macOS — else exit 2), `keep` (do not touch Emacs), or the stock GNU Emacs methods `package`, `source`, `cask` and `formula` (macOS only: Homebrew's `emacs-plus-app` / `emacs-plus@31`, built from source — also on Apple silicon, beside an older `/Applications/Emacs.app`); `package` and `source` only where the platform has that recipe (Fedora and Arch packages; Fedora and Debian-family source builds) — elsewhere it stops before the plan (exit 2) |
 | `--branch B` | drgnx branch to clone (default `main`) |
 | `--config URL` | after installing, set this machine up from your configuration repository: hands over to `drgnx bootstrap --config URL` ([below](#on-a-second-machine)); an `https://` URL or a local path |
@@ -223,8 +224,9 @@ builds Nidhogg. Anything older than 31.1 fails the check either way.
 The installer builds Nidhogg from a pinned release: it fetches the tag (`v31.1-nidhogg.1`) of the Nidhogg repository and
 checks that it is the exact commit the installer pins, before building anything. Where it goes: `~/.local/opt/nidhogg/<version>`
 (under `--prefix`), with `~/.local/bin/nidhogg` and `nidhoggclient` linking to it; the Emacs drgnx records is that
-`nidhogg`. A Nidhogg of the pinned version that is already installed is kept (no rebuild, no root step); an older one is
-rebuilt beside it.
+`nidhogg`. A Nidhogg of the pinned version that is already installed at that prefix is kept, whether `auto` or
+`--method keep` chose that: no fetch, no rebuild, no root step — but `nidhogg` and `nidhoggclient` are linked again, so
+`~/.local/bin` has them; an older one is rebuilt beside it.
 
 Where `podman` can run containers, the build happens in a podman container (Fedora 44/45, Ubuntu 26.04 image) capped at
 min(6 GiB, available memory − 1 GiB) of memory, with `make -jN`, N = one job per 1.5 GiB of the cap (at most one per CPU);
