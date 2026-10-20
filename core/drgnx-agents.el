@@ -415,6 +415,10 @@ a task whose provider failed to the next profile (drgnx-job.el).  Called in the 
              (t (list :error (list :code -32002 :message (format "%s is not readable" path)))))))
     ((and "fs/write_text_file" (guard (not (and (drgnx-agents--path-ok-p (plist-get params :path)) (stringp (plist-get params :content))))))
      (list :error '(:code -32602 :message "an absolute path and the content are needed")))
+    ((and "fs/write_text_file" (guard (drgnx-file-sealed-p (plist-get params :path))))
+     ;; plain text never goes into a `.gpg' or `.gz' file, not even through a review (`drgnx-file-sealed-p')
+     (list :error (list :code -32002 :message (format "%s is a file Emacs keeps encrypted or compressed: an agent never writes it; ask the user to"
+                                                      (plist-get params :path)))))
     ("fs/write_text_file"
      ;; never written behind the user's back: a review item (accept hunks, then Done answers)
      (setf (drgnx-agent-session-reviews s)

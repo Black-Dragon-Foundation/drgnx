@@ -217,12 +217,12 @@ the fixture's."
         ;; RET: a spec or plan → its file at its line
         (with-current-buffer g (drgnx-cockpit-graph-test--goto (concat "plan:" plan)))
         (with-selected-window (get-buffer-window g) (call-interactively #'drgnx-cockpit-graph-open))
-        (should (equal (funcall opened) (list plan 1)))
+        (should (equal (funcall opened) (list (file-truename plan) 1)))   ; opened by its true name
         ;; a plan task no job runs and nobody works on: read-only — open in plan, and Start as Job is named, never done
         (set-window-buffer (selected-window) g) (setq msg nil)
         (with-current-buffer g (drgnx-cockpit-graph-test--goto (format "task:%s#1" plan)))
         (with-selected-window (get-buffer-window g) (call-interactively #'drgnx-cockpit-graph-open))
-        (should (equal (funcall opened) (list plan (plan-line 1))))
+        (should (equal (funcall opened) (list (file-truename plan) (plan-line 1))))
         (should (string-match-p "read-only.*Start as Job" msg))
         (should-not jobs)
         ;; a task an agent works on (the chat on plan task 5): that agent's edits
@@ -240,7 +240,7 @@ the fixture's."
         ;; o on an agent: the plan line of its task
         (with-current-buffer g (drgnx-cockpit-graph-test--goto "agent:s-2"))
         (with-selected-window (get-buffer-window g) (drgnx-cockpit-graph-open-in-plan (drgnx-cockpit--node-here)))
-        (should (equal (funcall opened) (list plan (plan-line 5))))
+        (should (equal (funcall opened) (list (file-truename plan) (plan-line 5))))
         ;; a click on an outline line opens it (task 2, which s-1 works on: its edits)
         (set-window-buffer (selected-window) g)
         (let ((pos (with-current-buffer g (drgnx-cockpit-graph-test--goto (format "task:%s#2" plan)) (point))))
@@ -256,7 +256,22 @@ the fixture's."
             (with-current-buffer g
               (should (eq (lookup-key (get-text-property (1- (point-max)) 'keymap) (vector area 'mouse-1)) #'drgnx-cockpit-graph-click)))
             (drgnx-cockpit-graph-click (list 'mouse-1 (list (get-buffer-window g) area '(0 . 0) 0)))
-            (should (equal (funcall opened) (list spec 1)))))))))
+            (should (equal (funcall opened) (list (file-truename spec) 1)))))))))
+
+(load (expand-file-name "test/fixtures/handler-trap" drgnx-dir) nil t)
+
+(ert-deftest drgnx-cockpit-graph/a-file-is-opened-by-its-true-name-with-no-file-name-handler ()
+  ;; a node's file is a name from tracked text, maybe in an agent's worktree: a link there out through `ssh:host:'
+  ;; and back, opened as named, made `find-file' follow it with handlers on, into Tramp
+  (let* ((root (file-name-as-directory (make-temp-file "drgnx-graph-back" t))) (wt (concat root "wt/")))
+    (unwind-protect
+        (let* ((paths (progn (make-directory wt) (drgnx-test-hostile-paths wt))) (real (file-truename (plist-get paths :real))))
+          (drgnx-test-with-handler-trap
+            (let ((b (drgnx-test-visit 'cockpit-graph "back" wt)))
+              (unwind-protect (should (and b (equal (buffer-file-name b) real))) (when b (kill-buffer b))))
+            (should-not (drgnx-test-visit 'cockpit-graph "up-ssh" wt))   ; a link to a remote name: said, not opened
+            (should-not drgnx-test-handler-calls)))
+      (delete-directory root t))))
 
 (ert-deftest drgnx-cockpit-graph/redraw-only-when-changed ()
   (drgnx-cockpit-graph-test--with

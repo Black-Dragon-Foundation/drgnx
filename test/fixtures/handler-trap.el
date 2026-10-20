@@ -7,7 +7,7 @@
 ;;                                         through them: (:outside PATHS :inside PATHS :back PATH :real FILE)
 ;; (drgnx-test-visit HOW NAME ROOT)        open NAME (relative to ROOT, as an agent or a model names it) the way a
 ;;                                         command does: Review's RET, the cockpit's RET, the diff's visit, Work's
-;;                                         row and graph box; the buffer visiting it
+;;                                         row and graph box, the cockpit graph's node; the buffer visiting it
 ;;
 ;; An agent's path is resolved with no file name handler, and the file is opened by that resolved name
 ;; (docs/develop/core.md, "Names an agent gave"): a test asserts `drgnx-test-handler-calls' stays nil.  Everything is
@@ -24,6 +24,7 @@
 (declare-function drgnx-diff-visit "drgnx-diff")
 (declare-function drgnx-work-ui-open "drgnx-work-ui")
 (declare-function drgnx-work-ui--graph-open "drgnx-work-ui")
+(declare-function drgnx-cockpit--open-file "drgnx-cockpit")
 
 (defun drgnx-test--handler-trap (operation &rest args)
   "A file name handler that records (OPERATION . ARGS), then runs OPERATION without itself."
@@ -68,8 +69,9 @@ names in TREE that only look special: `n.gz', `n.gpg', `a.zip/y' (nothing is mad
 
 (defun drgnx-test-visit (how name root)
   "Open NAME (relative to the folder ROOT) the way HOW does: `review' (RET on a finding), `cockpit' (RET in an agent's
-edits), `diff' (Open File at Line), `work' (Work: open a row), `work-graph' (a box of the Work graph).  The buffer
-visiting the file; the caller kills it."
+edits), `diff' (Open File at Line), `work' (Work: open a row), `work-graph' (a box of the Work graph),
+`cockpit-graph' (a node of the cockpit's Work graph: a spec, plan or task).  The buffer visiting the file; the caller
+kills it."
   (save-window-excursion
     (pcase how
       ('review
@@ -103,7 +105,10 @@ visiting the file; the caller kills it."
          (drgnx-work-ui-open)))
       ('work-graph
        (require 'drgnx-work-ui)
-       (drgnx-work-ui--graph-open (list :kind 'plan :node (list :path (concat root name))))))))
+       (drgnx-work-ui--graph-open (list :kind 'plan :node (list :path (concat root name)))))
+      ('cockpit-graph
+       (require 'drgnx-cockpit)
+       (drgnx-cockpit--open-file (list :path (concat root name) :line 1))))))
 
 (provide 'handler-trap)
 ;;; handler-trap.el ends here

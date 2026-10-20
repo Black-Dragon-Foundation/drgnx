@@ -425,5 +425,25 @@ inside."
        (let ((true (drgnx-file-truename file dir)) (top (drgnx-file-truename dir)))
          (and true top (let ((file-name-handler-alist nil)) (file-in-directory-p true top))))))
 
+(defconst drgnx-file--sealed-default-res
+  '("\\.gpg\\(?:~\\|\\.~[0-9]+~\\)?\\'"
+    "\\.\\(?:g?z\\|Z\\|bz2\\|tbz2?\\|tgz\\|xz\\|txz\\|lz\\|lzma\\|zst\\|tzst\\|dz\\)\\(?:~\\|\\.~[0-9]+~\\)?\\'")
+  "The names Emacs encrypts (EasyPG) or compresses (auto-compression) on write as shipped, checked even when the user's
+`epa-file-name-regexp' or `jka-compr-compression-info-list' says less.")
+
+(defun drgnx-file-sealed-p (file &optional dir)
+  "Whether FILE (relative: to DIR) names a file Emacs writes encrypted or compressed — EasyPG's `epa-file-name-regexp'
+\(`.gpg'), auto-compression's suffixes (`jka-compr-build-file-regexp': `.gz', `.bz2', `.xz'…), or the shipped ones
+\(`drgnx-file--sealed-default-res') — as written, or once its links are resolved with no file name handler
+\(`drgnx-file-truename').  An agent's content for such a file is plain text: written with no handler it would leave
+it unencrypted (uncompressed) on disk, with handlers on it reaches EasyPG (gpg, pinentry) or jka-compr.  Agents never
+write one; the user does (docs/develop/core.md, \"Names an agent gave\")."
+  (when (stringp file)
+    (let ((res (delq nil (append (list (bound-and-true-p epa-file-name-regexp)
+                                       (and (fboundp 'jka-compr-build-file-regexp) (jka-compr-build-file-regexp)))
+                                 drgnx-file--sealed-default-res)))
+          (names (list (let ((file-name-handler-alist nil)) (expand-file-name file dir)) (drgnx-file-truename file dir))))
+      (cl-some (lambda (n) (and n (cl-some (lambda (re) (string-match-p re n)) res))) names))))
+
 (provide 'drgnx-file)
 ;;; drgnx-file.el ends here

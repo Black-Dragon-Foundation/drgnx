@@ -606,15 +606,19 @@ say what it is; with N, N nodes on (back when negative).  RET opens it."
     (seq-find (lambda (n) (equal (plist-get n :id) id)) (plist-get (buffer-local-value 'drgnx-cockpit--model b) :nodes))))
 
 (defun drgnx-cockpit--show-file (path line)
-  "Open PATH at LINE in the editor area and select it; a file that is gone is said, never an error."
-  (if (not (and path (file-exists-p path)))
-      (progn (message "Work graph: %s is gone" (or path "the file")) nil)
-    (let ((b (find-file-noselect path)))
-      (if (fboundp 'drgnx-wb-show-in-editor) (drgnx-wb-show-in-editor b t) (pop-to-buffer b))
-      (with-selected-window (or (get-buffer-window b) (selected-window))
-        (goto-char (point-min))
-        (forward-line (1- (or line 1))))
-      b)))
+  "Open PATH at LINE in the editor area and select it; a file that is gone, or not a local one, is said, never an
+error.  PATH is a name from tracked text, maybe in an agent's worktree: it is resolved with no file name handler and
+opened by that true name (`drgnx-file-truename': `find-file' of the name as written follows its links again, with
+handlers on — a link out through `ssh:host:' and back reached Tramp)."
+  (let ((true (and path (drgnx-file-truename path))))
+    (if (not (and true (let ((file-name-handler-alist nil)) (file-exists-p true))))
+        (progn (message "Work graph: %s is gone, or not a local file" (or path "the file")) nil)
+      (let ((b (find-file-noselect true)))
+        (if (fboundp 'drgnx-wb-show-in-editor) (drgnx-wb-show-in-editor b t) (pop-to-buffer b))
+        (with-selected-window (or (get-buffer-window b) (selected-window))
+          (goto-char (point-min))
+          (forward-line (1- (or line 1))))
+        b))))
 
 (defun drgnx-cockpit--open-file (node)
   "Open NODE's file at its line (a spec, a plan, a TODO, a task's plan)."

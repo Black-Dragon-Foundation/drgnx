@@ -592,6 +592,24 @@
             (should-not drgnx-test-handler-calls)))
       (delete-directory root t))))
 
+(load (expand-file-name "test/fixtures/git-fixture" drgnx-dir) nil t)
+
+(ert-deftest drgnx-cockpit-model/a-files-diff-reads-its-true-name-with-no-file-name-handler ()
+  ;; FILE is the agent's name: its size was read through it with handlers on (`a.zip/' reached tramp-archive), and
+  ;; git started in an agent's folder with them on too
+  (drgnx-git-test-with-repo
+    (drgnx-git-test repo "commit" "-q" "--allow-empty" "-m" "start")
+    (let ((paths (drgnx-test-hostile-paths repo)) (diffs nil))
+      (let ((file-name-handler-alist nil)) (drgnx-cockpit-fixture-write (concat repo "a.zip/y") "y\n"))
+      (drgnx-test-with-handler-trap
+        (dolist (f '("back" "a.zip/y"))
+          (drgnx-cockpit-file-diff (list :dir repo) f (lambda (r) (push (cons f r) diffs))))
+        (should (drgnx-cockpit-fixture-wait (lambda () (= 2 (length diffs)))))
+        (should-not drgnx-test-handler-calls))
+      (should (plist-get paths :back))
+      (dolist (d diffs) (should (stringp (cdr d))))
+      (should (string-search "+y" (cdr (assoc "a.zip/y" diffs)))))))
+
 (ert-deftest drgnx-cockpit-model/a-link-loop-is-no-file-to-show ()
   ;; an agent's link loop made `file-truename' signal "Apparent cycle" in the cockpit's listing
   (let ((wt (file-name-as-directory (make-temp-file "drgnx-cockpit-loop" t))))

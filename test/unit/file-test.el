@@ -510,4 +510,17 @@
       (should-not (drgnx-file-inside-p name dir)))
     (should (equal (drgnx-file-truename "c100" dir) (concat (file-truename dir) "c110")))))
 
+(ert-deftest drgnx-file/an-encrypted-or-compressed-name-is-sealed ()
+  ;; the names EasyPG and auto-compression write encrypted or compressed, as written or through a link
+  (drgnx-file-test--with-dir dir
+    (let ((file-name-handler-alist nil)) (make-symbolic-link "n.gpg" (concat dir "plain.txt")))
+    (dolist (name '("n.gpg" "n.gpg~" "n.gz" "x.tar.xz" "x.bz2" "x.zst" "plain.txt"))
+      (should (drgnx-file-sealed-p name dir)))
+    (require 'epa-hook)                                   ; its option is let-bound next
+    (let ((epa-file-name-regexp "\\`never\\'"))             ; the shipped names hold whatever the user's options say
+      (should (drgnx-file-sealed-p "n.gpg" dir)))
+    (dolist (name '("n.txt" "gz/y" "a.zip/y" "gpg.el"))
+      (should-not (drgnx-file-sealed-p name dir)))
+    (should-not (drgnx-file-sealed-p nil dir))))
+
 ;;; file-test.el ends here

@@ -615,12 +615,17 @@ on its way to a remote name, a quoted name (`/:…') and a link loop are refused
 (defun drgnx-agents-ui-review (s item)
   "Show the change ITEM proposes as a diff against a copy of its file: apply the hunks you want (to
 the copy), then Done writes the copy to the file (Reject, or closing the diff, writes nothing).  A remote
-name from a local session is rejected without a look at it."
-  (if (not (drgnx-agents-ui--path-ok-p s (plist-get item :path)))
-      (progn (message "Agent edit rejected: %s is a remote name from a local session" (plist-get item :path))
-             (drgnx-agents-finish-review s item t)
-             nil)
-    (drgnx-agents-ui--review-open s item)))
+name from a local session is rejected without a look at it, and so is a file Emacs keeps encrypted or compressed
+\(`drgnx-file-sealed-p': the agent's plain text would land in it as it is)."
+  (cond ((not (drgnx-agents-ui--path-ok-p s (plist-get item :path)))
+         (message "Agent edit rejected: %s is a remote name from a local session" (plist-get item :path))
+         (drgnx-agents-finish-review s item t)
+         nil)
+        ((drgnx-file-sealed-p (plist-get item :path))
+         (message "Agent edit rejected: %s is kept encrypted or compressed: edit it yourself" (plist-get item :path))
+         (drgnx-agents-finish-review s item t)
+         nil)
+        (t (drgnx-agents-ui--review-open s item))))
 
 (defun drgnx-agents-ui--target (s path)
   "Where the edit of session S to PATH goes, and the file name handlers to use on it: (FILE . HANDLERS).  A local
@@ -673,6 +678,8 @@ the agent's name as written would be followed again, with handlers on); a remote
     (pcase-let* ((path (plist-get item :path)) (`(,file . ,handlers) (drgnx-agents-ui--target s path))
                  (cb (find-buffer-visiting copy))
                  (visiting (let ((file-name-handler-alist handlers)) (find-buffer-visiting file))))
+      (when (drgnx-file-sealed-p path)              ; it may lead to one now: never plain text into it
+        (user-error "%s is kept encrypted or compressed: not written (reject the edit, and edit it yourself)" path))
       (when (and visiting (buffer-modified-p visiting))
         (user-error "%s has unsaved changes: save or revert them first"
                     (let ((file-name-handler-alist handlers)) (abbreviate-file-name file))))

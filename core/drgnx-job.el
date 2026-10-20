@@ -1124,6 +1124,8 @@ hold for every agent that works in TREE after it."
      ((null kind) 'ask)
      ((not (seq-every-p (lambda (p) (drgnx-job--inside-p p tree)) paths)) 'ask)
      ((and (not (memq kind '(read search))) (seq-some (lambda (p) (drgnx-job--agent-config-p p tree)) paths)) 'ask)
+     ;; a file Emacs keeps encrypted or compressed (`.gpg', `.gz'): the agent's plain text would land in it as it is
+     ((and (not (memq kind '(read search))) (seq-some (lambda (p) (drgnx-file-sealed-p p tree)) paths)) 'ask)
      ((eq (drgnx-job--mcp-tool tool) 'user) 'ask)
      ((and (eq kind 'other)
            (not (seq-some (lambda (n) (and (stringp n) (not (member n drgnx-job--unnamed-tool-titles))))
@@ -1463,16 +1465,19 @@ its worktree done at once; anything else waits for the user as a card (nil: the 
          ;; an absolute path only: the check and the write must mean the same file; the agent's name, used with no
          ;; file name handler (`drgnx-file-truename')
          (let ((path (plist-get params :path)) (content (plist-get params :content)) (file-name-handler-alist nil))
-           (if (and (stringp content) (drgnx-agents--path-ok-p path) (drgnx-job--inside-p path tree)
-                    (not (drgnx-job--agent-config-p path tree)) (not (equal (drgnx-job--role s) "review")))
-               (progn (make-directory (file-name-directory path) t)
-                      (drgnx-job--write-inside path content tree)
-                      (drgnx-coord-event-add-best-effort :agent (drgnx-agent-session-id s) :job job :task task :kind "edit"
-                                                         :summary (format "wrote %s" (file-name-nondirectory path))
-                                                         :data (list :root tree :paths (list path)))
-                      (list :result nil))
-             (drgnx-job--card job task "write" (format "write %s" path) s (list :request id))
-             nil)))))))
+           (cond
+            ((drgnx-file-sealed-p path tree)   ; never written: plain text into a `.gpg' or `.gz' file (`drgnx-file-sealed-p')
+             (list :error (list :code -32002 :message (format "%s is a file Emacs keeps encrypted or compressed: an agent never writes it; ask the user to" path))))
+            ((and (stringp content) (drgnx-agents--path-ok-p path) (drgnx-job--inside-p path tree)
+                  (not (drgnx-job--agent-config-p path tree)) (not (equal (drgnx-job--role s) "review")))
+             (make-directory (file-name-directory path) t)
+             (drgnx-job--write-inside path content tree)
+             (drgnx-coord-event-add-best-effort :agent (drgnx-agent-session-id s) :job job :task task :kind "edit"
+                                                :summary (format "wrote %s" (file-name-nondirectory path))
+                                                :data (list :root tree :paths (list path)))
+             (list :result nil))
+            (t (drgnx-job--card job task "write" (format "write %s" path) s (list :request id))
+               nil))))))))
 
 (defun drgnx-job--answered (s)
   "The user answered S's request: its task goes on (when nothing else waits) — a reviewer's, or a finished agent's,

@@ -193,16 +193,32 @@ check passes. `find-file` on `TREE/x` then resolves it again, with handlers on, 
   - the Work cockpit's file checks (`drgnx-cockpit--file-ok`, `drgnx-cockpit--true-dir`,
     `drgnx-cockpit-edits--inside-p`);
   - the cockpit's file watches and edit-event paths (`drgnx-cockpit-edits--update-watches`,
-    `drgnx-cockpit-edits--event-paths`).
+    `drgnx-cockpit-edits--event-paths`), a file's diff (`drgnx-cockpit-file-diff` reads its size by the true
+    name) and the git it runs in an agent's folder (`drgnx-cockpit--git`).
 - These commands open the true name, checked with no handler:
   - Review's RET on a finding (`drgnx-review-visit`);
   - RET in an agent's edits (`drgnx-cockpit-edits-visit`);
+  - a node of the cockpit's Work graph: a spec, a plan, a task (`drgnx-cockpit-graph-open-node`,
+    `drgnx-cockpit--show-file`);
   - the diff's Open File at Line (`drgnx-diff-visit`);
   - Work's open of a row and of a graph box (`drgnx-work-ui-open`, `drgnx-work-ui--graph-open`).
   The buffer visits the file under that name: a link's target, not the link.
+- **Agents never write a file Emacs keeps encrypted or compressed.** `(drgnx-file-sealed-p FILE &optional DIR)`
+  says whether FILE matches one of these, as written or through its links:
+  - EasyPG's `epa-file-name-regexp` (`.gpg`);
+  - auto-compression's suffixes (`jka-compr-build-file-regexp`: `.gz`, `.bz2`, `.xz`, `.zst`…);
+  - the shipped defaults of both, whatever the user's options say.
+
+  An agent's content is plain text, and agents' names are written with no handler. Written into such a file, it
+  would leave the secret unencrypted on disk (or the archive uncompressed). With handlers on it would reach EasyPG
+  (gpg, pinentry) or jka-compr. So:
+  - an agent's `fs/write_text_file` gets an ACP error that says why, in a job (`drgnx-job--request`) and in a
+    session (`core/drgnx-agents.el`);
+  - the job policy asks the user (a permission card) for an edit tool call on such a name;
+  - the edit review rejects the edit (the agent is told), and Done refuses if the file became one since.
 - A local agent session's edit review (`drgnx-agents-ui--path-ok-p`) refuses a path that resolves to nil (above).
   - The review copies the file, and Done writes it, by the true name, with no handler (`drgnx-agents-ui--target`).
-  - The copy has a suffix of its own, never the agent's (a `.gpg` or `.gz` copy reached EasyPG or jka-compr).
+  - The copy has a suffix of its own, never the agent's.
   - For a session whose folder is remote, handlers stay on: its paths are remote by design.
 - Tests use `test/fixtures/handler-trap.el`:
   - it plants the links in a temp worktree, and the trap replaces the handlers with one that records every call;

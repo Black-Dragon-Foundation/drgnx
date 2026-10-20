@@ -301,7 +301,7 @@ The pane is killed after, and must leave no timer or watch behind."
                 (should (equal (plist-get (car shown) :worktree) (directory-file-name wt-a)))   ; the model's agent
                 (drgnx-cockpit-graph-open-node (format "task:%s#1" plan))
                 (should (= 2 (length shown)))
-                (should (equal (buffer-file-name (window-buffer (selected-window))) plan)))
+                (should (equal (buffer-file-name (window-buffer (selected-window))) (file-truename plan))))   ; by its true name
             (kill-buffer g)))))))
 
 (ert-deftest drgnx-cockpit-edits/keys-in-every-profile ()
@@ -647,6 +647,7 @@ NOTIFIED counts the hub told; (INBOX) is s-1's messages; (SLURP FILE) a file's t
                           (advice-add 'tramp-file-name-handler :override (lambda (&rest _) (error "Tramp was reached"))))
                         (load ,(expand-file-name "test/fixtures/handler-trap" drgnx-dir) nil t)
                         (require 'drgnx-review) (require 'drgnx-cockpit-edits) (require 'drgnx-diff) (require 'drgnx-work-ui)
+                        (require 'drgnx-cockpit)
                         (let* ((loaded (lambda () (list (featurep 'tramp) (featurep 'jka-compr) (featurep 'epa-file))))
                                (before (funcall loaded))
                                (opened (mapcar (lambda (how)
@@ -654,7 +655,7 @@ NOTIFIED counts the hub told; (INBOX) is s-1's messages; (SLURP FILE) a file's t
                                                      (let ((b (drgnx-test-visit how "back" ,wt)))
                                                        (prog1 (buffer-file-name b) (kill-buffer b)))
                                                    (error (error-message-string err))))
-                                               '(review cockpit diff work work-graph))))
+                                               '(review cockpit diff work work-graph cockpit-graph))))
                           (prin1 (list before opened (funcall loaded))))))
                (out (with-temp-buffer
                       (call-process (expand-file-name invocation-name invocation-directory) nil '(t nil) nil
@@ -664,7 +665,7 @@ NOTIFIED counts the hub told; (INBOX) is s-1's messages; (SLURP FILE) a file's t
                       (buffer-string)))
                (result (car (read-from-string out))))
           (should (equal (nth 0 result) '(nil nil nil)))
-          (should (equal (nth 1 result) (make-list 5 (file-truename (plist-get paths :real)))))
+          (should (equal (nth 1 result) (make-list 6 (file-truename (plist-get paths :real)))))
           (should (equal (nth 2 result) '(nil nil nil))))
       (delete-directory root t))))
 

@@ -386,4 +386,19 @@
             (should-not drgnx-test-handler-calls)))
       (delete-directory root t))))
 
+(ert-deftest drgnx-agents/a-write-to-an-encrypted-or-compressed-file-is-refused ()
+  ;; an agent's plain text for a `.gpg' or `.gz' file (or a link to one) would land in it as it is: an error that
+  ;; says why, never a review item
+  (let* ((root (file-name-as-directory (make-temp-file "drgnx-sealed" t))) (s (drgnx-agents--make :cwd root)))
+    (unwind-protect
+        (progn
+          (let ((file-name-handler-alist nil)) (make-symbolic-link "n.gpg" (concat root "plain.txt")))
+          (dolist (f '("n.gpg" "n.gz" "plain.txt"))
+            (let ((r (drgnx-agents--on-request s "fs/write_text_file" (list :path (concat root f) :content "x\n") 1)))
+              (should (string-match-p "encrypted or compressed" (plist-get (plist-get r :error) :message)))))
+          (should-not (drgnx-agent-session-reviews s))
+          (should (eq (drgnx-agents--on-request s "fs/write_text_file" (list :path (concat root "n.txt") :content "x\n") 2)
+                      :deferred)))
+      (delete-directory root t))))
+
 ;;; agents-test.el ends here
