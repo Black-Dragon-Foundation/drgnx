@@ -19,7 +19,10 @@
 (defun drgnx-jobs-test--stop-all ()
   "Stop every running job and wait until each has written its exit file: a stopped job's shell is still writing
 (head, exit) when the signal returns, and the fixture's clean-up deleting its directory under it fails."
-  (let ((ids (delq nil (mapcar (lambda (j) (and (eq (plist-get j :status) 'running) (plist-get j :id)))
+  (let ((ids (delq nil (mapcar (lambda (j) (and (eq (plist-get j :status) 'running)
+                                                ;; a `drgnx-jobs-test--job-dir' names this Emacs: no shell, no exit file
+                                                (not (eql (plist-get j :pid) (emacs-pid)))
+                                                (plist-get j :id)))
                                (drgnx-jobs-list)))))
     (dolist (id ids) (ignore-errors (drgnx-jobs-stop id)))
     (dolist (id ids)
