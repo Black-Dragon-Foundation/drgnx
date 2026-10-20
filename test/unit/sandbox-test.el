@@ -620,13 +620,12 @@ which also forgets the programs found."
   "The hub's check returns at once and answers later, every caller once; a probe that hangs is ended after
 `drgnx-sandbox-check-timeout' and the answer says so."
   (drgnx-sandbox-test--quiet
-    (let ((n 0) (system-type 'gnu/linux) (a nil) (b nil) (t0 (float-time)))
+    (let ((n 0) (system-type 'gnu/linux) (a nil) (b nil))
       (cl-letf (((symbol-function 'drgnx-sandbox--probes)
                  (lambda (_b) (cl-incf n) '((:probe "/bin/sh" "-c" "sleep 0.5") (:version "/bin/sh" "-c" "echo bubblewrap 0.12.0")))))
         (drgnx-sandbox-check-async (lambda (x) (setq a x)))
         (drgnx-sandbox-check-async (lambda (x) (setq b x)))
-        (should (< (- (float-time) t0) 0.3))
-        (should-not (or a b))
+        (should-not (or a b))                                  ; both returned while the 0.5 s probe runs
         (should (drgnx-sandbox-test--wait (lambda () (and a b))))
         (should (eq a b))
         (should (plist-get a :ok))

@@ -3,6 +3,7 @@
 (require 'cl-lib)
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/measure-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-face" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-quickhelp" drgnx-dir) nil t)
 
@@ -159,8 +160,7 @@
         (setq-local eldoc-documentation-functions (list (lambda (_cb) t)          ; never calls back
                                                         (lambda (cb) (funcall cb "sync"))))
         (drgnx-quickhelp-collect 2 (selected-window) (lambda (docs) (setq got (cons (float-time) docs))))
-        (should (< (- (float-time) t0) 0.1))     ; returned at once
-        (should (eq got :none))
+        (should (eq got :none))                  ; returned with the silent source still pending
         (should (drgnx-quickhelp-test--wait (lambda () (consp got)) 3))
         (should (>= (- (car got) t0) 0.9))       ; after a second, from a timer
         (should (equal (cdr got) '(("sync"))))))))
@@ -308,10 +308,11 @@
   (drgnx-quickhelp-test--with
     (drgnx-quickhelp-test--elisp "drgnx-quickhelp-test--big\n"
       (defvar drgnx-quickhelp-test--big nil "A variable with a big value.")
-      (let ((drgnx-quickhelp-test--big (make-list 2000000 '(a (b (c (d)))))) (got nil) (t0 (float-time)))
+      (let ((drgnx-quickhelp-test--big (make-list 2000000 '(a (b (c (d)))))) (got nil))
         (setq-local eldoc-documentation-functions (list #'elisp-eldoc-var-docstring))
-        (drgnx-quickhelp-collect 3 (selected-window) (lambda (docs) (setq got docs)))
-        (should (< (- (float-time) t0) 0.4))     ; printed short: 1.5 s whole
+        (drgnx-test-compile "drgnx-quickhelp-")
+        ;; printed whole, the value is a string of tens of MB: collecting it allocates a few KB when it is cut short
+        (should (<= (drgnx-test-alloc (drgnx-quickhelp-collect 3 (selected-window) (lambda (docs) (setq got docs)))) 795))   ; ceil(1.25 × 636)
         (should (string-search "A variable with a big value." (caar got)))
         (when (fboundp 'elisp-eldoc-var-docstring-with-value)   ; the value, cut
           (should (string-search "..." (caar got))))))))

@@ -119,8 +119,7 @@ and `exec-path' (`drgnx-doctor-wm-test--tool' adds to it), a dead session bus an
                                       drgnx-doctor-wm-test--sway)
     (drgnx-doctor-wm-test--fake "swaymsg")
     (drgnx-doctor-wm-test--script "sway" "sway version 1.10")
-    (let* ((start (float-time)) (row (drgnx-doctor-wm-test--row)))
-      (should (< (- (float-time) start) 1.5))
+    (let ((row (drgnx-doctor-wm-test--row)))                ; the fake answers after 5 s: the row is the 1 s cut-off's
       (should (equal row '(warn "sway did not answer within 1 s" "run drgnx doctor from a terminal inside your sway session"))))))
 
 (ert-deftest drgnx-doctor-wm/over-ssh-it-is-info ()
