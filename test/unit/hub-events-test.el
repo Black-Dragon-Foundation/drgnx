@@ -165,10 +165,8 @@
         (drgnx-coord-event-add :agent "ext:t:1" :kind "test" :summary (format "run %d" i) :data (list :passed i :failed 0))
         (drgnx-hub-call "coord/notify" nil #'ignore)
         (when (zerop (% i 10)) (accept-process-output nil 0.02)))
-      ;; a broadcast is due once the notifies are served: one, not one per add
-      (should (drgnx-test-wait (lambda () (seq-find (lambda (tm) (eq (timer--function tm) #'drgnx-hub--events-send)) timer-list))
-                               :what "the first broadcast armed"))
-      (should (<= (seq-count (lambda (tm) (eq (timer--function tm) #'drgnx-hub--events-send)) timer-list) 1))
+      ;; the notifies are served once a broadcast is pending (the timer layer holds one per key, the timer is its own)
+      (should (drgnx-test-wait (lambda () (gethash 'hub-events drgnx-timer--table)) :what "the first broadcast armed"))
       (should (drgnx-job-run-test--wait (lambda () (assoc "events" heard)) 3))
       (drgnx-test-pause 1.2)       ; a second batch would be here now
       (let ((batches (seq-filter (lambda (h) (equal (car h) "events")) heard)))
