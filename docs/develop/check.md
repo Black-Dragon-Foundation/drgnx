@@ -122,6 +122,22 @@ skips is not a pass nobody sees.
   test that skipped fails the run: `NAME must run on PLATFORM but skipped: REASON`. With a selector it is ignored (a
   narrow run may not have the tool). `DRGNX_TEST_NO_SKIP=FILE` names another list (the runner's own tests).
 
+## A flake is a result (`DRGNX_TEST_RERUN`)
+
+With `DRGNX_TEST_RERUN=1` (CI sets it), a test file with an unexpected result runs once more in a fresh Emacs, the whole
+file so that order effects stay. A test that failed first and passed on the rerun is **flaky**: the summary's `:flaky`
+holds `(:name N :file F :condition C)`, the run prints `Flaky (N):`, and the run **fails** unless `test/flaky.eld` lists
+the test. A test red on both runs is an ordinary failure (the rerun does not hide it); the rerun's result is the
+file's.
+
+`test/flaky.eld` entries are `(NAME :reason STRING :stress STRING)`: the cause, and the stress run
+(`bin/drgnx test --stress`: the command and its result) that the commit adding the entry quotes. A listed flake
+prints `flaky (listed: REASON)` and passes. `drgnx-lint/flaky-entries-have-a-reason-and-a-stress-run` checks every
+entry; a flake without a cause is fixed, not listed. `DRGNX_TEST_FLAKY=FILE` names another list (the runner's own tests).
+
+## The leak census (`--leaks`)
+
+
 `bin/drgnx test --leaks` (and `bin/drgnx check --leaks`, for the unit shards and the timing job) turns on a census of
 what the tests leave behind: `DRGNX_TEST_LEAKS=1`, read by the runner (`harness/run-ert.el`), which every per-file Emacs
 and every shard inherits. It combines with `--one-process`. It is **report only**: the exit status is the tests'.
