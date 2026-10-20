@@ -253,9 +253,8 @@
           (should (eql 0 (call-process "mkfifo" nil nil nil fifo)))
           ;; were the FIFO opened, this writer lets it go after 2 s: the test fails instead of hanging
           (setq writer (start-process "drgnx-fifo-writer" nil "sh" "-c" (format "sleep 2; echo x > %s" (shell-quote-argument fifo))))
-          (let ((t0 (float-time)))
-            (should (funcall err fifo))
-            (should (< (- (float-time) t0) 1)))
+          (should (funcall err fifo))
+          (should (process-live-p writer))              ; the refusal came before the writer's 2 s: the FIFO was not opened
           (should (funcall err "/dev/null"))
           (write-region (make-string (1+ drgnx-agents-read-max) ?x) nil big nil 'silent)
           (should (funcall err big))

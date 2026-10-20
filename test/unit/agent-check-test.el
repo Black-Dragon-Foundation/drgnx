@@ -788,6 +788,7 @@ nothing and the fake `systemctl' (SYSTEMCTL-BODY, a shell command) is the only p
   (drgnx-agent-check-mcp (drgnx-agent-check-test--stdio-item "fork-child" marker) default-directory callback))
 
 (ert-deftest drgnx-agent-check/a-systemctl-that-hangs-does-not-hang-the-check ()
+  :tags '(:timing)                                      ; wall-clock budget: the :timing group runs alone
   (drgnx-agent-check-test-env
     (drgnx-agent-check-test-with-fake-scope "exec sleep 3176"
       (let* ((drgnx-agent-check-timeout 3) (drgnx-agent-check--grace -2)

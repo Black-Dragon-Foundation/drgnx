@@ -124,13 +124,12 @@
         (should (= jobs 1))))))
 
 (ert-deftest drgnx-markdown/the-preview-is-made-in-the-background-without-stderr ()
-  :tags '(:timing)                                      ; wall-clock: a quiet machine
   (drgnx-markdown-test--with
     (let ((drgnx-markdown-programs '(("sh" "-c" "cat >/dev/null; sleep 0.3; echo '<p>made</p>'; echo WARNING >&2"))))
       (with-temp-buffer
         (markdown-mode) (insert "# Hello\n")
-        (let* ((t0 (float-time)) (p (drgnx-markdown-preview)))
-          (should (< (- (float-time) t0) 0.25))                           ; it did not wait for the program
+        (let* ((p (drgnx-markdown-preview)))
+          (should-not (string-search "made" (with-current-buffer p (buffer-string))))   ; it did not wait for the program
           (should (drgnx-markdown-test--wait (lambda () (string-search "made" (with-current-buffer p (buffer-string))))))
           (should-not (string-search "WARNING" (with-current-buffer p (buffer-string)))))))))
 

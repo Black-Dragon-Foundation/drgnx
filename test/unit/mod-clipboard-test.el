@@ -335,10 +335,8 @@ uninstalled afterwards."
   (drgnx-clip-test--env nil
     (drgnx-clip-test--gsettings "echo true")
     (drgnx-clip-test--x11 '("bash")
-      (let ((t0 (float-time)))
-        (drgnx-clipboard-install)
-        (should (< (- (float-time) t0) 0.3)))         ; the asks run in the background
-      (should select-active-regions)                  ; not known yet
+      (drgnx-clipboard-install)                       ; the asks run in the background:
+      (should select-active-regions)                  ; the answer is not known yet
       (should (drgnx-clip-test--wait (lambda () (not select-active-regions)) 3))
       (should (eq (plist-get (drgnx-clipboard-doctor-facts) :manager) 'gpaste))))
   ;; either setting alone records a selection (primary-to-history directly, synchronize-clipboards through the clipboard)
@@ -364,9 +362,8 @@ uninstalled afterwards."
   (drgnx-clip-test--env nil
     (drgnx-clip-test--gsettings "sleep 30; echo true")
     (drgnx-clip-test--x11 '("bash")
-      (let ((t0 (float-time)))
-        (drgnx-clipboard-install)
-        (should (< (- (float-time) t0) 0.3)))
+      (drgnx-clipboard-install)
+      (should select-active-regions)                  ; the hanging ask did not block the install
       (drgnx-test-pause 1.5)
       (should select-active-regions)
       (should-not (plist-get (drgnx-clipboard-doctor-facts) :manager))

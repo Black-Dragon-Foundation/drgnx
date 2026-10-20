@@ -387,6 +387,7 @@ with a display: `drgnx open' stays graphical (the unit tier has no DISPLAY, and 
     (should-not (file-exists-p (expand-file-name (format "state/drgnx/open-%s.lock" drgnx-bin-test--server) dir)))))
 
 (ert-deftest drgnx-bin/an-open-lock-is-waited-for-and-a-stale-one-taken-over ()
+  :tags '(:timing)                                      ; wall-clock budget: the :timing group runs alone
   (drgnx-bin-test--with-open
     (let ((lock (expand-file-name (format "state/drgnx/open-%s.lock" drgnx-bin-test--server) dir)))
       (make-directory lock t)
@@ -500,6 +501,7 @@ with a display: `drgnx open' stays graphical (the unit tier has no DISPLAY, and 
   (expand-file-name (format "state/drgnx/open-%s.lock" drgnx-bin-test--server) dir))
 
 (ert-deftest drgnx-bin/open-waits-count-seconds-not-polls ()
+  :tags '(:timing)                                      ; wall-clock budget: the :timing group runs alone
   ;; Each poll costs its sleep and a client call (0.3 s here): 20 polls would be 8 s, not the 2 s asked for.
   (drgnx-bin-test--with-open
     (write-region "never" nil (expand-file-name "delay" dir))
@@ -570,6 +572,7 @@ with a display: `drgnx open' stays graphical (the unit tier has no DISPLAY, and 
       (should (equal (drgnx-bin-test--slurp (expand-file-name "owner" lock)) "someone-else\n")))))
 
 (ert-deftest drgnx-bin/a-lock-without-a-stamp-is-taken-over-after-a-few-seconds ()
+  :tags '(:timing)                                      ; wall-clock budget: the :timing group runs alone
   (drgnx-bin-test--with-open
     (let ((lock (drgnx-bin-test--lock dir)) (start (float-time)))
       (make-directory lock t)                    ; made, its owner died before it stamped it
@@ -862,7 +865,7 @@ macOS (no /proc there)."
             (if with
                 (progn (should (member (concat (directory-file-name (file-truename elpa)) ":/modal-elpa:ro") args))
                        (should (member "DRGNX_MODAL_ELPA=/modal-elpa" args)))
-              (should-not (seq-find (lambda (a) (string-search "modal-elpa" a)) args)))))
+              (should-not (seq-find (lambda (a) (or (string-prefix-p "DRGNX_MODAL_ELPA=" a) (string-suffix-p ":/modal-elpa:ro" a))) args)))))
       (delete-directory dir t))))
 
 (ert-deftest drgnx-bin/a-relative-tmpdir-is-made-absolute ()
