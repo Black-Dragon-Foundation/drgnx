@@ -28,6 +28,7 @@
 ;; the status bar is loaded first: the module's segment is defined in its setup when the bar is there
 (load (expand-file-name "modules/ui/drgnx-face" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-statusbar" drgnx-dir) nil t)
+(load (expand-file-name "modules/tools/drgnx-replace" drgnx-dir) nil t)   ; Replace skips a raw buffer
 ;; a Python mode's first run registers an `eval-after-load' of grep (Emacs 31): here, not in a strict body
 (let ((python-indent-guess-indent-offset nil)) (with-temp-buffer (python-mode)))
 
@@ -107,6 +108,8 @@
       (drgnx-automatic (should (eq (drgnx-large-files--how) 'auto)))
       (let ((drgnx-guard--timer-fn 'some-timer-fn)) (should (eq (drgnx-large-files--how) 'auto)))
       (let ((inhibit-interaction t)) (should (eq (drgnx-large-files--how) 'auto)))
+      ;; a preview from post-command (consult's file preview binds it)
+      (let ((non-essential t)) (should (eq (drgnx-large-files--how) 'auto)))
       ;; a caller's binding wins, whatever the context
       (let ((drgnx-large-file-open 'whole)) (should (eq (drgnx-large-files--how) 'whole)))
       (let ((drgnx-large-file-open 'auto)) (should (eq (drgnx-large-files--how) 'auto)))
@@ -199,6 +202,24 @@
       (drgnx-config-get 'large-files)
       (should (null large-file-warning-threshold)))
     (should (equal large-file-warning-threshold before))))
+
+(ert-deftest drgnx-large-files/thresholds-read-each-config-once ()
+  ;; one `drgnx-config-get' of large-files.eld, and one of the project's when there is one
+  (drgnx-large-files-test--with
+    (let ((root (drgnx-large-files-test--project "(:version 1 :ask-above 0.015625)")) (n 0))
+      (cl-letf* ((orig (symbol-function 'drgnx-config-get))
+                 ((symbol-function 'drgnx-config-get) (lambda (&rest args) (cl-incf n) (apply orig args))))
+        (should (equal (drgnx-large-files-thresholds (expand-file-name "sub/big.log" root))
+                       (list :ask-above 16384 :chunks-above (* 500 1048576) :chunk-size 1048576)))
+        (should (= n 2))
+        (setq n 0)
+        (drgnx-large-files-thresholds (expand-file-name "elsewhere.log" temporary-file-directory))
+        (should (= n 1))))))
+
+(ert-deftest drgnx-large-files/automatic-paths-take-only-safe-local-variables ()
+  ;; every value of `enable-local-variables' that would query becomes :safe; nil, :all and :safe stay
+  (dolist (c '((t . :safe) (query . :safe) (:query . :safe) (nil . nil) (:all . :all) (:safe . :safe)))
+    (should (equal (cons (car c) (drgnx-large-files--never-query (car c))) c))))
 
 ;;;; The remembered answers
 
@@ -382,6 +403,53 @@ Return the errors it sent the client."
           (should drgnx-large-file-mode)
           (should enable-multibyte-characters))))))
 
+(defun drgnx-large-files-test--grow (file bytes)
+  "Write FILE (in the test folder) again with BYTES bytes, its time moved on (as a growing log's)."
+  (drgnx-large-files-test--file (file-name-nondirectory file) bytes)
+  (set-file-times file (time-add nil 10)))
+
+(ert-deftest drgnx-large-files/drgnx-open-reverts-a-changed-lean-or-raw-buffer-unasked ()
+  ;; `drgnx open BIG' while a lean or raw buffer holds BIG and the file grew: Emacs's `server-visit-files' reverts
+  ;; the buffer with (revert-buffer t nil), which asks; here it is reverted without the question
+  (drgnx-large-files-test--door
+    (let* ((lean (drgnx-large-files-test--file "lean.log" 32768))
+           (raw (drgnx-large-files-test--file "raw.log" 32768))
+           (lb (let ((drgnx-large-file-open 'whole)) (find-file-noselect lean)))
+           (rb (find-file-noselect raw)))          ; automatic: raw
+      (should (eq (buffer-local-value 'drgnx-large-file rb) 'raw))
+      (drgnx-large-files-test--grow lean 65536)
+      (drgnx-large-files-test--grow raw 65536)
+      (should-not (verify-visited-file-modtime lb))
+      (drgnx-large-files-test--never-asks
+        ;; bound: `revert-buffer' leaves its copy of `after-revert-hook' there (see `drgnx-large-files-test--revert')
+        (let ((revert-buffer-internal-hook nil))
+          (should-not (drgnx-large-files-test--serve (list (list lean) (list raw)) t nil))))
+      (dolist (b (list lb rb))
+        (should (= (buffer-size b) 65536))
+        (should (verify-visited-file-modtime b))
+        (should-not (buffer-modified-p b))))))
+
+(ert-deftest drgnx-large-files/drgnx-open-leaves-a-modified-lean-buffer-unasked ()
+  ;; unsaved changes are never reverted silently: the open leaves the buffer as it is and says so
+  (drgnx-large-files-test--door
+    (let* ((f (drgnx-large-files-test--file "big.log" 32768))
+           (b (let ((drgnx-large-file-open 'whole)) (find-file-noselect f)))
+           (said nil))
+      (with-current-buffer b (goto-char (point-min)) (insert "unsaved"))
+      (drgnx-large-files-test--grow f 65536)
+      (cl-letf* ((orig (symbol-function 'message))
+                 ((symbol-function 'message)
+                  (lambda (fmt &rest args)
+                    (when fmt (push (apply #'format fmt args) said))
+                    (apply orig fmt args))))
+        (drgnx-large-files-test--never-asks
+          (should-not (drgnx-large-files-test--serve (list (list f)) t nil))))
+      (with-current-buffer b
+        (should (buffer-modified-p))
+        (should (= (buffer-size) (+ 32768 7)))
+        (should-not (verify-visited-file-modtime b)))     ; still stale: saving it asks, as a command may
+      (should (member "big.log changed on disk; its buffer has unsaved changes and is left as it is" said)))))
+
 ;;;;; A command asks
 
 (ert-deftest drgnx-large-files/a-command-open-asks-once ()
@@ -450,6 +518,75 @@ Return the errors it sent the client."
       (drgnx-large-files-test--never-asks
         (let ((drgnx-guard--timer-fn 'some-timer))
           (should (eq (find-file-noselect f) buf)))))))
+
+(ert-deftest drgnx-large-files/a-raw-buffer-is-reused-raw-below-a-raised-threshold ()
+  ;; :ask-above raised above the file's size: the raw buffer is still reused raw, without Emacs's "revisit normally?"
+  (drgnx-large-files-test--door
+    (let* ((f (drgnx-large-files-test--file "big.log" 32768))
+           (buf (find-file-noselect f)))          ; automatic: raw
+      (should (eq (buffer-local-value 'drgnx-large-file buf) 'raw))
+      (drgnx-test-config-put 'large-files "(:version 1 :ask-above 1)")
+      (should (= (plist-get (drgnx-large-files-thresholds f) :ask-above) 1048576))
+      (drgnx-large-files-test--never-asks
+        (let ((this-command 'find-file))
+          (should (eq (find-file-noselect f) buf)))))))
+
+(ert-deftest drgnx-large-files/an-unreadable-large-file-never-asks ()
+  ;; not opened in a mode (unreadable): Emacs's own size question is not asked either
+  (drgnx-large-files-test--door
+    (let ((f (drgnx-large-files-test--file "locked.log" 32768)))
+      (set-file-modes f 0)
+      (unwind-protect
+          (progn
+            (skip-unless (not (file-readable-p f)))       ; root reads it all the same
+            (drgnx-large-files-test--never-asks
+              (should-error (find-file-noselect f) :type 'file-error)))
+        (set-file-modes f #o600)))))
+
+(ert-deftest drgnx-large-files/an-open-reads-the-size-once ()
+  ;; the header's size is the door's: no second stat (a remote file's included)
+  (drgnx-large-files-test--door
+    (let ((raw (drgnx-large-files-test--file "raw.log" 32768))
+          (lean (drgnx-large-files-test--file "lean.log" 32768))
+          (n 0))
+      (cl-letf* ((orig (symbol-function 'drgnx-large-files--size))
+                 ((symbol-function 'drgnx-large-files--size) (lambda (file) (cl-incf n) (funcall orig file))))
+        (with-current-buffer (find-file-noselect raw)    ; automatic: raw
+          (should (eq drgnx-large-file 'raw))
+          (should (equal drgnx-large-files--shown-size (drgnx-large-files--size-text 32768))))
+        (should (= n 1))
+        (setq n 0)
+        (with-current-buffer (let ((drgnx-large-file-open 'whole)) (find-file-noselect lean))
+          (should (eq drgnx-large-file 'lean))
+          (should (equal drgnx-large-files--shown-size (drgnx-large-files--size-text 32768))))
+        (should (= n 1))))))
+
+(ert-deftest drgnx-large-files/the-sweep-leaves-a-chunk-buffer-alone ()
+  ;; undo stays on in chunks, even if `find-file-hook' ever ran in one
+  (drgnx-large-files-test--door
+    (let ((f (drgnx-large-files-test--file "big.log" 131072)))
+      (with-current-buffer (drgnx-large-files-test--chunks f 131072 nil)
+        (setq buffer-file-name f)
+        (funcall 'drgnx-editor/large-files--sweep)
+        (should (eq drgnx-large-file 'chunks))
+        (should-not drgnx-large-file-mode)
+        (should (drgnx-large-files-test--undo-on-p))))))
+
+(ert-deftest drgnx-large-files/replace-skips-a-raw-buffer ()
+  ;; a raw buffer is unibyte: rg's columns and a multibyte replacement do not fit it
+  (drgnx-large-files-test--door
+    (let* ((f (drgnx-large-files-test--file "raw.log" 32768))
+           (disk (with-temp-buffer (insert-file-contents-literally f) (buffer-string)))
+           (buf (find-file-noselect f)))         ; automatic, without chunks: raw
+      (should (eq (buffer-local-value 'drgnx-large-file buf) 'raw))
+      (pcase-let ((`(,n ,skipped ,undo)
+                   (drgnx-replace--apply-file f (list (list :file f :line 2 :col 0 :text "xxxx")) "yyyy")))
+        (should (= n 0))
+        (should-not undo)
+        (should (equal (mapcar (lambda (m) (plist-get m :reason)) skipped)
+                       '("open raw: Large File: Open Whole first"))))
+      (should-not (buffer-modified-p buf))
+      (should (equal (with-temp-buffer (insert-file-contents-literally f) (buffer-string)) disk)))))
 
 (ert-deftest drgnx-large-files/below-the-threshold-nothing-changes ()
   (drgnx-large-files-test--door
@@ -547,6 +684,45 @@ Return the errors it sent the client."
             (find-file-noselect small)
             (should (= (length drgnx-large-files-test--eglot-calls) 1)))
         (advice-remove 'eglot-ensure #'drgnx-large-files-test--eglot)))))
+
+(defvar eglot--managed-mode)
+
+(ert-deftest drgnx-large-files/turning-lean-on-revert-drops-the-parser-and-eglot ()
+  ;; auto-revert keeps the modes: a buffer that turns lean then loses its parser and eglot's management
+  (skip-unless (and (fboundp 'treesit-language-available-p) (treesit-language-available-p 'python)))
+  (drgnx-large-files-test--door
+    (let ((f (drgnx-large-files-test--file "grow.py" 1024))
+          (major-mode-remap-alist '((python-mode . python-ts-mode)))
+          (auto-mode-alist auto-mode-alist)       ; python-ts-mode's first run with a parser adds itself there
+          (offs nil))
+      (with-current-buffer (find-file-noselect f)
+        (should (eq major-mode 'python-ts-mode))
+        (should (treesit-parser-list nil nil t))
+        (setq-local eglot--managed-mode t)
+        (drgnx-large-files-test--grow f 65536)
+        (cl-letf (((symbol-function 'eglot--managed-mode)
+                   (lambda (&optional arg) (push arg offs) (setq eglot--managed-mode nil))))
+          (drgnx-large-files-test--never-asks
+            (let ((revert-buffer-internal-hook nil)) (revert-buffer t t t))))   ; as auto-revert does
+        (should (eq drgnx-large-file 'lean))
+        (should-not (treesit-parser-list nil nil t))
+        (should (equal offs '(-1)))))))
+
+(ert-deftest drgnx-large-files/no-line-numbers-from-the-face-module-in-lean-or-raw ()
+  ;; a setting change re-applies line numbers to every buffer: never to a lean or raw one
+  (drgnx-large-files-test--door
+    (let ((lean (drgnx-large-files-test--file "lean.el" 32768))
+          (raw (drgnx-large-files-test--file "raw.el" 32768))
+          (small (drgnx-large-files-test--file "small.el" 1024)))
+      (with-current-buffer (let ((drgnx-large-file-open 'whole)) (find-file-noselect lean))
+        (should (derived-mode-p 'prog-mode))
+        (should-not (drgnx-face--numbers-wanted-p)))
+      (with-current-buffer (find-file-noselect raw)    ; automatic: raw
+        (emacs-lisp-mode)
+        (should (eq drgnx-large-file 'raw))
+        (should-not (drgnx-face--numbers-wanted-p)))
+      (with-current-buffer (find-file-noselect small)
+        (should (drgnx-face--numbers-wanted-p))))))
 
 (ert-deftest drgnx-large-files/a-compressed-file-that-expands-turns-lean ()
   (skip-unless (executable-find "gzip"))

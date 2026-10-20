@@ -22,6 +22,7 @@
 (defvar vlf-end-pos)
 (defvar vlf-file-size)
 (declare-function vlf-mode "vlf")
+(declare-function drgnx-large-files--never-query "drgnx-large-files")
 
 (defun drgnx-large-files-chunks-p ()
   "Non-nil in a buffer holding a large file in chunks."
@@ -31,10 +32,11 @@
   "A new buffer holding FILE in chunks of THRESHOLDS' `:chunk-size' bytes, not displayed; SIZE is unused.
 Copied from vlf 1.7.2's `vlf', which builds the buffer and then selects it with `switch-to-buffer': this does the
 same four steps (`generate-new-buffer', `set-visited-file-name', `set-buffer-modified-p' nil, `vlf-mode') and
-selects nothing.  Three additions:
+selects nothing.  Four additions:
 - the flag is set first, so the major mode that `set-visited-file-name' runs, and its hooks, see a large file;
 - vlf's batch-size tuning is off, so a chunk always holds `:chunk-size' bytes;
-- auto-save goes off at the end.  Undo stays on."
+- auto-save goes off at the end, and `auto-save-visited-mode' skips the buffer.  Undo stays on;
+- local variables are only the safe ones: the open may be automatic."
   (require 'vlf)
   (let ((buf (generate-new-buffer "*vlf*")) (done nil))
     (unwind-protect
@@ -42,13 +44,16 @@ selects nothing.  Three additions:
           (setq drgnx-large-file 'chunks)
           ;; the buffer is still empty, so only .dir-locals.el applies, and it never asks: an open may be automatic.
           ;; NO-QUERY: the door builds chunks only for a file no buffer visits, so the question cannot come up anyway
-          (let ((enable-local-variables (if (eq enable-local-variables t) :safe enable-local-variables)))
+          (let ((enable-local-variables (drgnx-large-files--never-query enable-local-variables)))
             (set-visited-file-name file t))
           (set-buffer-modified-p nil)
           (setq-local vlf-batch-size (max 1 (plist-get thresholds :chunk-size)))
           (setq-local vlf-tune-enabled nil)
           (vlf-mode 1)
           (auto-save-mode -1)
+          ;; the user's `auto-save-visited-mode' skips it: its timer would save the chunk, and vlf asks when the size
+          ;; changed
+          (setq-local auto-save-visited-mode nil)
           (setq done t))
       (unless done (kill-buffer buf)))
     buf))

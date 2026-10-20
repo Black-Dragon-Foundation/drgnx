@@ -40,7 +40,8 @@ With **.\*** on, Replace can use the regexp's groups: `\1`, `\2`.
 
 **Replace All** writes every ticked match; **Replace This Match** writes the one on the row, ticked or not. Each
 match is checked against the file as it is now: a match whose text changed since the search is skipped and listed
-with the reason, never written blind. A file's replacements are one change; files are saved, except a file whose
+with the reason, never written blind. So is every match in a large file open in chunks or raw ("open in chunks:
+Large File: Open Whole first"; [large-files.md](large-files.md)). A file's replacements are one change; files are saved, except a file whose
 buffer held unsaved edits: it gets the replacement and stays unsaved, as in VS Code. **Undo Replace** (the view's
 Undo button) puts every file of the last replacement back in one step; a file edited since is left alone.
 
