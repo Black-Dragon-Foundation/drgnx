@@ -41,4 +41,14 @@ Unlike `sleep-for', which runs one link of a chain of timers, it runs the chain 
     (while (< (drgnx-test-wait-now) end)
       (accept-process-output nil (if (drgnx-test-wait--due-p) 0 0.02)))))
 
+;; Emacs itself creates these buffers when native compilation runs mid-test (a cold eln cache, as in a fresh CI
+;; container); a before/after comparison of the buffer list must not see them.
+(defconst drgnx-test-native-comp-buffer-names
+  '("*Native-compile-Log*" "*Async-native-compile-log*" "*Warnings*" "*Compile-Log*")
+  "Buffers Emacs's native compiler creates on its own.")
+
+(defun drgnx-test-buffer-list ()
+  "`buffer-list' without the buffers native compilation creates (`drgnx-test-native-comp-buffer-names')."
+  (cl-remove-if (lambda (b) (member (buffer-name b) drgnx-test-native-comp-buffer-names)) (buffer-list)))
+
 (provide 'drgnx-wait-fixture)
