@@ -661,6 +661,25 @@ A remote file is never revealed: this runs from the change bus, where remote I/O
   (interactive)
   (drgnx-explorer--navigate-type last-command-event))
 
+(defvar grep-find-ignored-files)
+(declare-function grep-find-ignored-files "grep" (dir))
+
+(defun drgnx-explorer--project-files (p root)
+  "The files of project P (`project-files').  On a remote ROOT, the ignored files (`grep-find-ignored-files') are left
+out here, not by find on the host (a project without a VC listing): their ~70 globs made project.el's find a 2 KB
+line, and TRAMP's shell on a macOS host reads at most 1024 bytes per line (MAX_CANON) — the line never runs and Emacs
+waits for ever.  find-dired is loaded on this machine first: its options run find when it loads, which would ask the
+host."
+  (if (not (file-remote-p root))
+      (project-files p)
+    (let ((default-directory temporary-file-directory))
+      (require 'find-dired)
+      (require 'grep))
+    (let* ((globs (grep-find-ignored-files root))
+           (re (and globs (mapconcat #'wildcard-to-regexp globs "\\|"))))
+      (seq-remove (lambda (f) (and re (string-match-p re (file-name-nondirectory f))))
+                  (let ((grep-find-ignored-files nil)) (project-files p))))))
+
 (defun drgnx-explorer--all-files ()
   "Every file under the roots — the project's files (only those under the root) when there is a project;
 excluded names left out.  A root that is your home or / and not a project is refused (far too many files)."
@@ -669,7 +688,7 @@ excluded names left out.  A root that is your home or / and not a project is ref
                   (seq-remove (lambda (f) (seq-some (lambda (part) (string-match-p drgnx-explorer-exclude part))
                                                     (split-string (string-remove-prefix root f) "/" t)))
                               (if-let* ((p (project-current nil root)))
-                                  (seq-filter (lambda (f) (string-prefix-p root f)) (project-files p))
+                                  (seq-filter (lambda (f) (string-prefix-p root f)) (drgnx-explorer--project-files p root))
                                 (when (member (directory-file-name root)
                                               (list (directory-file-name (expand-file-name "~")) "" "/"))
                                   (user-error "Find needs a project folder here, not %s" (abbreviate-file-name root)))

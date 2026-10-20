@@ -989,6 +989,11 @@ exit 0 or 1."
                   (and (getenv "DRGNX_USER_ELPA") (list (concat "DRGNX_USER_ELPA=" (getenv "DRGNX_USER_ELPA"))))
                   (and (not (getenv "DRGNX_USER_ELPA")) (file-directory-p elpa) (list (concat "DRGNX_USER_ELPA=" elpa)))
                   process-environment))
+         ;; …and it is this Emacs's own environment, as the startup one is in the user's Emacs: TRAMP gives a remote
+         ;; process only what differs from the top-level value, so a let-bound one put all of it, and an unset per
+         ;; cleared variable, on every remote command line (1.7 KB; a macOS terminal takes 1024 bytes per line and
+         ;; the remote tests hung there: test/fixtures/tramp-mock.el, `drgnx-tramp-mock-line-max')
+         (_ (set-default-toplevel-value 'process-environment process-environment))
          (_ (make-directory (expand-file-name "home" tmp) t))
          (abbreviated-home-dir nil)                     ; recomputed for the temp home
          ;; Emacs computed this at startup from the real HOME (~/.emacs.d or ~/.config/emacs): a test that writes under it

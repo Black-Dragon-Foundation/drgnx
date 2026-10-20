@@ -103,19 +103,31 @@ fires while one waits: C binds `inhibit-quit' for filters and sentinels, and the
           (let ((prog (drgnx-lang--program contact))) (or (nreverse asked) (and prog (list prog))))))
     (when-let* ((prog (drgnx-lang--program contact))) (list prog))))
 
+(defconst drgnx-lang--remote-which-bytes 400
+  "The most bytes of program names one shell call of `drgnx-lang--remote-which' asks about.  TRAMP sends the call as one
+line to a shell on a terminal, and a macOS host's terminal reads at most 1024 bytes per line (MAX_CANON): a longer
+line never runs and Emacs waits for ever.  eglot's own list names ~1.1 KB of programs: three calls.")
+
 (defun drgnx-lang--remote-which (names)
-  "The ones of NAMES that are on the PATH of the host of `default-directory', asked in one shell call."
-  (when names
-    (with-temp-buffer
-      (process-file "sh" nil t nil "-c"
-                    (concat "for p in " (mapconcat (lambda (n) (shell-quote-argument n t)) names " ")
-                            "; do command -v \"$p\" >/dev/null 2>&1 && echo \"$p\"; done"))
-      (split-string (buffer-string) "\n" t))))
+  "The ones of NAMES that are on the PATH of the host of `default-directory', asked in one shell call per
+`drgnx-lang--remote-which-bytes' of names."
+  (let (found)
+    (while names
+      (let* ((batch (list (pop names))) (bytes (string-bytes (car batch))))
+        (while (and names (<= (+ bytes 1 (string-bytes (car names))) drgnx-lang--remote-which-bytes))
+          (setq bytes (+ bytes 1 (string-bytes (car names))))
+          (push (pop names) batch))
+        (with-temp-buffer
+          (process-file "sh" nil t nil "-c"
+                        (concat "for p in " (mapconcat (lambda (n) (shell-quote-argument n t)) (nreverse batch) " ")
+                                "; do command -v \"$p\" >/dev/null 2>&1 && echo \"$p\"; done"))
+          (setq found (nconc found (split-string (buffer-string) "\n" t))))))
+    found))
 
 (defun drgnx-lang-probe-remote (root)
-  "Look up, on the host of the remote folder ROOT, the program of every `eglot-server-programs' entry (one shell
-call for all of them); remember the result for that connection and return it: ((MODES . PROGRAM-or-nil)…).  This
-may open the connection, so it is only for the user's commands."
+  "Look up, on the host of the remote folder ROOT, the program of every `eglot-server-programs' entry (a shell
+call per few hundred bytes of names: `drgnx-lang--remote-which'); remember the result for that connection and return
+it: ((MODES . PROGRAM-or-nil)…).  This may open the connection, so it is only for the user's commands."
   (require 'eglot)
   (let* ((default-directory root) (key (file-remote-p root))
          (entries (mapcar (lambda (e) (cons (car e) (drgnx-lang--names (cdr e)))) eglot-server-programs))
