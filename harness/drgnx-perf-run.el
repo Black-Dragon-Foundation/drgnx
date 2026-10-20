@@ -55,7 +55,8 @@
                                :origin (with-current-buffer (find-file-noselect (expand-file-name "f000.txt" drgnx-perf--needles))
                                          (point-min-marker)))
           (select-window editor))
-        (setq drgnx-perf--replace-started nil drgnx-perf--replace-typed 0)
+        (setq drgnx-perf--replace-started nil drgnx-perf--replace-typed 0 drgnx-perf--slices nil)
+        (advice-add 'drgnx-view--draw-buffer :around #'drgnx-perf--slice-timed)
         (add-hook 'post-command-hook #'drgnx-perf--replace-key))
       (defun drgnx-perf--replace-key ()
         "After a key: the first starts the search (from a timer, as the view's own typing pause does); the next
@@ -79,6 +80,7 @@ ones are counted while the view streams."
              t))
       (defun drgnx-perf--replace-teardown ()
         (remove-hook 'post-command-hook #'drgnx-perf--replace-key)
+        (advice-remove 'drgnx-view--draw-buffer #'drgnx-perf--slice-timed)
         (when-let* ((v (drgnx-perf--replace-view)))
           (with-current-buffer v (drgnx-replace-cancel drgnx-replace--handle)))
         (ignore-errors (drgnx-wb-show-view 'explorer))
@@ -594,6 +596,7 @@ error if it does not hold).  With :actions, :measure runs after the input and it
        :setup ,(drgnx-perf-run--replace-setup-form)
        :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (drgnx-perf--replace-arm) t)")
        :actions ,(make-list 2 (funcall type "(setq y 2) "))
+       :measure "(drgnx-perf--retype-measure)"     ; the view draws while the 10k matches stream
        :check "(drgnx-perf--replace-check)"
        :teardown ,(concat "(progn (drgnx-perf--replace-teardown) " kill-fixture ")"))
       ;; retyping the replacement over 10k listed matches: the rows are patched in place, in slices
