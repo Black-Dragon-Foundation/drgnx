@@ -229,16 +229,16 @@ matches fails the test.  LOG: a function called with each question and the outpu
       (should (eq (drgnx-bootstrap-test--status (car (drgnx-bootstrap-test--run :only '(sync))) 'sync) 'changed)))))
 
 (ert-deftest drgnx-bootstrap/the-doctor-fails-only-on-a-fail ()
-  ;; a WARN is fine (Emacs 30.2 is supported, and warns): it is named; only a FAIL fails the step
+  ;; a WARN is fine (a missing tree-sitter warns): it is named; only a FAIL fails the step
   (drgnx-bootstrap-test--with (root _url)
     (should (eq (drgnx-bootstrap-test--status (car (drgnx-bootstrap-test--run :only '(doctor))) 'doctor) 'ok))
     (cl-letf (((symbol-function 'drgnx-doctor-run)
                (lambda (&rest _) '((:name security :status warn :detail "fixed in 31.2")
-                                   (:name emacs-version :status warn :detail "Emacs 30.2 works, 31.1 is recommended")
+                                   (:name tree-sitter :status warn :detail "this Emacs has no tree-sitter support")
                                    (:name ai :status info :detail "no provider")))))
       (let ((row (drgnx-bootstrap-test--row (car (drgnx-bootstrap-test--run :only '(doctor))) 'doctor)))
         (should (eq (nth 1 row) 'ok))
-        (should (string-match-p "\\_<emacs-version\\_>" (nth 2 row)))
+        (should (string-match-p "\\_<tree-sitter\\_>" (nth 2 row)))
         (should (string-match-p "\\_<security\\_>" (nth 2 row)))))
     (cl-letf (((symbol-function 'drgnx-doctor-run)
                (lambda (&rest _) '((:name gui :status warn :detail "not a graphical build")

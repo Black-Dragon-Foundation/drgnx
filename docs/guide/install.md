@@ -1,6 +1,6 @@
 # Installing drgnx
 
-drgnx needs **GNU Emacs 31.1 or newer with native compilation**. Emacs 30.2 still works (the doctor warns).
+drgnx needs **GNU Emacs 31.1 or newer with native compilation**. Anything older than 31.1 is not supported: the doctor fails on it.
 The installer gets you such an Emacs if you do not have one, then drgnx, and checks the result.
 
 ```sh
@@ -125,7 +125,7 @@ it. `bootstrap` asks on your terminal (`/dev/tty`), even when the script itself 
 | macOS, Intel or older | Homebrew `brew install emacs-plus@31` (builds, ~30 min) | same |
 | anything else, including RHEL, Rocky, Alma and Amazon Linux | — (exit 2) | install Emacs 31.1 yourself (below), then `bash install.sh --method keep` |
 
-Not used, on purpose: Flathub's Emacs (still 30.2) and the Snap (native compilation unverified; the sandbox
+Not used, on purpose: Flathub's Emacs (older than 31.1) and the Snap (native compilation unverified; the sandbox
 gets in the way of language servers and tools).
 
 ### macOS
@@ -151,7 +151,7 @@ The details:
 - **A good Emacs is kept.** An `emacs` on your PATH (or in `--prefix`) that is 31.1+, graphical (`ns`) and compiles
   natively is used as it is; nothing is installed. `/Applications/Emacs.app/Contents/MacOS/Emacs` is looked at too
   (it is usually not on PATH): good enough, it is kept and remembered. **An older Emacs.app there stops the installer
-  before Homebrew** (exit 2) — the cask would install over it: "an older Emacs.app is in /Applications (Emacs 30.2):
+  before Homebrew** (exit 2) — the cask would install over it: "an older Emacs.app is in /Applications (an older Emacs):
   move it aside, or run with --method formula". `--method formula` builds `emacs-plus@31`, which lives in Homebrew's
   prefix beside your Emacs.app.
 - **Homebrew first, if it is missing.** The plan lists it as the first step. Before running anything the installer
@@ -206,16 +206,16 @@ Expect 10–40 minutes depending on the machine (most of it is compiling the Lis
 
 To do it by hand, follow the same steps; any Emacs ≥ 31.1 built with `--with-native-compilation` works.
 
-## Emacs 30.2
+## Older Emacs
 
-drgnx keeps working on 30.2 until every target platform ships 31.1. `drgnx doctor` warns; nothing fails.
+Anything older than 31.1 is not supported. `drgnx doctor` fails the `emacs-version` check and points to the installer; the
+installer never keeps an Emacs older than 31.1.
 
 ## Security
 
-- Emacs up to 31.1 has known issues that are fixed in 31.2 (not yet released). On 30.2: command injection through
-  crafted TRAMP file names (CVE-2026-79992, CVE-2026-108976), Flymake running code from files being edited
-  (CVE-2026-96442) and code execution through `read-symbol-shorthands` when opening a file (CVE-2026-96269). On
-  31.1: the last three (the shorthands one is only partly fixed there). `drgnx doctor`'s `security` line names
+- Emacs 31.1 has known issues that are fixed in 31.2 (not yet released): command injection through crafted TRAMP
+  user names (CVE-2026-108976), Flymake running code from files being edited (CVE-2026-96442) and code execution
+  through `read-symbol-shorthands` when opening a file (CVE-2026-96269; only partly fixed in 31.1). `drgnx doctor`'s `security` line names
   the ones that apply to your Emacs. It says OK while drgnx's own guards for them are on (see
   [Trusted folders](security.md)) and WARN when one is off, so a warning that stays means a guard is missing, not
   that you must upgrade. Until you run 31.2, avoid opening files you do not trust.
@@ -253,7 +253,7 @@ run, without running it. It wants `@agentclientprotocol/claude-agent-acp` 0.93.0
 one-line command that fixes it, or advice when the adapter is not in a global npm prefix ([agents.md](agents.md#sessions)). No adapter is only a notice. Details: [core.md](../develop/core.md#doctor-drgnx-doctorel).
 
 A terminal-only Emacs (no graphical build) passes the `gui` check: drgnx runs in terminals, with no images and one font
-size, and popups in the bottom lane on Emacs 30.2.
+size.
 
 **The Terminal group.** Run from a terminal, the doctor also checks that terminal: `terminal` (which one it is, its
 `TERM` and terminfo), `terminal-colours`, `terminal-mouse`, `terminal-keys` (the kitty keyboard protocol,
@@ -261,7 +261,7 @@ modifyOtherKeys or neither; for a terminal that sends neither, a table of the sh
 Alt+Shift key and the F6 form that stand for each, and the terminals that would send them: the ones you have installed,
 else the install command for your system), `terminal-clipboard` (copy to your clipboard by OSC 52), `terminal-tmux`
 (inside tmux, the lines to add to `~/.tmux.conf`; drgnx never edits it), `terminal-ssh` (over SSH, whether this machine
-has your terminal's terminfo) and `terminal-popups`. Outside a terminal it says `not run from a terminal` and nothing
+has your terminal's terminfo). Outside a terminal it says `not run from a terminal` and nothing
 more. Nothing in it prompts or installs anything; inside tmux it asks tmux once (1 second at most). Each warning
 carries its fix. In drgnx, **Check This Terminal** (Help, in the palette) shows the same group for the terminal window
 you are in. Details: [terminal.md](terminal.md#check-this-terminal).

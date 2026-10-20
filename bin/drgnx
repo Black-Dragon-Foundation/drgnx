@@ -151,9 +151,9 @@ env_eval() { # FORM — evaluate with harness/drgnx-env.el loaded, print the res
   "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -l drgnx-env --eval "(princ (or $1 \"\"))"
 }
 
-test_container() { # [--ui [--compositor C] | --tty [--fedora 44|45]] — the batch (GUI, terminal) tier inside a fedora:45 / Emacs 31.1 container
+test_container() { # [--ui [--compositor C] | --tty [--fedora 45]] — the batch (GUI, terminal) tier inside a fedora:45 / Emacs 31.1 container
   # DRGNX_TEST_IMAGE / DRGNX_TEST_GUI_IMAGE / DRGNX_TEST_TTY_IMAGE: use that image (CI pulls a prebuilt one) instead of building it
-  # --tty --fedora 44 runs the terminal tier on Fedora 44's Emacs 30.2 (default 45: Emacs 31.1)
+  # --tty --fedora 45 (the default): Fedora 44's Emacs is 30.2, which drgnx no longer supports
   local rt mount image file elpa prebuilt="${DRGNX_TEST_IMAGE:-}" args=() cmd=(bin/drgnx test) build=() tier="" fedora="" compositor=""
   while (($#)); do
     case "$1" in
@@ -162,12 +162,12 @@ test_container() { # [--ui [--compositor C] | --tty [--fedora 44|45]] — the ba
         tier="${1#--}" ;;
       --fedora) fedora="${2:-?}"; if (($# > 1)); then shift; fi ;;
       --compositor) compositor="${2:-}"; ui_compositor_ok "$compositor" || return 2; shift ;;
-      *) echo "drgnx: unknown option for test --container: $1 (--ui [--compositor C] | --tty [--fedora 44|45])" >&2; return 2 ;;
+      *) echo "drgnx: unknown option for test --container: $1 (--ui [--compositor C] | --tty [--fedora 45])" >&2; return 2 ;;
     esac
     shift
   done
-  if [ -n "$fedora" ] && { [ "$tier" != tty ] || [[ ! "$fedora" =~ ^(44|45)$ ]]; }; then
-    echo "drgnx: --fedora 44|45 goes with --tty (the terminal tier's image); got: $fedora" >&2; return 2
+  if [ -n "$fedora" ] && { [ "$tier" != tty ] || [[ ! "$fedora" =~ ^45$ ]]; }; then
+    echo "drgnx: --fedora 45 goes with --tty (the terminal tier's image); got: $fedora" >&2; return 2
   fi
   if [ -n "$compositor" ] && [ "$tier" != ui ]; then
     echo "drgnx: --compositor goes with --ui (the GUI tier)" >&2; return 2
@@ -405,7 +405,7 @@ cmd_test() {
     --soak) shift; run_in_tmp ui_exec test-soak "${1:-30}" ;;
     --container) shift; test_container "$@" ;;
     --podman) shift; DRGNX_CONTAINER=podman test_container "$@" ;;
-    *) echo "usage: drgnx test [--one-process] [--leaks] [--shuffle[=SEED]] | drgnx test [--shuffle=SEED] --find-polluter TEST [FILE…] | drgnx test [--ui [--compositor C] | --tty | --scenario [--config C] | --bench | --perf [--audit] | --soak [MIN] | --container [--ui [--compositor C] | --tty [--fedora 44|45]] | --install [NAME…] | --bootstrap [--fedora 44|45]]" >&2; exit 2 ;;
+    *) echo "usage: drgnx test [--one-process] [--leaks] [--shuffle[=SEED]] | drgnx test [--shuffle=SEED] --find-polluter TEST [FILE…] | drgnx test [--ui [--compositor C] | --tty | --scenario [--config C] | --bench | --perf [--audit] | --soak [MIN] | --container [--ui [--compositor C] | --tty [--fedora 45]] | --install [NAME…] | --bootstrap [--fedora 44|45]]" >&2; exit 2 ;;
   esac
 }
 
@@ -1153,8 +1153,8 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
                                the same inside a fedora:45 / Emacs 31.1 container (GUI: capped at 3 GB, no swap;
                                DRGNX_TEST_GUI_MEMORY overrides; image builds 3 GB, DRGNX_TEST_BUILD_MEMORY)
                                (podman, else docker, else nerdctl; DRGNX_CONTAINER overrides)
-       drgnx test --container --tty [--fedora 44|45]
-                               the terminal tier in a container (44: Emacs 30.2, 45: Emacs 31.1; default 45)
+       drgnx test --container --tty [--fedora 45]
+                               the terminal tier in a container (45: Emacs 31.1, the default; 44's 30.2 is no longer supported)
        drgnx test --install [NAME…]
                                install.sh end to end in fresh distribution containers (slow;
                                names: fedora-44 debian-trixie ubuntu-26.04 fedora-45 archlinux)

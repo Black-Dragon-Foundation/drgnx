@@ -828,7 +828,7 @@ active (`drgnx-statusbar-test--epochs')."
                  (sh-mode . "Shell Script") (c-mode . "C") (text-mode . "Plain Text") (fundamental-mode . "Plain Text")
                  (json-ts-mode . "JSON") (css-mode . "CSS") (conf-unix-mode . "Conf Unix")))
       (with-temp-buffer
-        ;; a tree-sitter mode refuses to start without its grammar (30.2's java-ts-mode on CI): nothing to name
+        ;; a tree-sitter mode refuses to start without its grammar (java-ts-mode on CI): nothing to name
         (when (and (fboundp (car c)) (ignore-errors (funcall (car c)) t))
           (should (equal (cons (car c) (drgnx-statusbar--seg-language)) c)))))
     ;; a mode whose own name says something else (or nothing yet): the name made from the mode's symbol

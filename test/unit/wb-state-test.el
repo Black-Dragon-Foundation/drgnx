@@ -555,7 +555,7 @@ Returns an alist NAME → window, NAME one of buffers explorer outline g1 g2 pan
           (drgnx-state-mode 1)
           (pcase-dolist (`(,hook . ,fn) drgnx-state-test--mode-hooks)
             (should (memq fn (default-value hook))))
-          (let ((depths (get 'post-command-hook 'hook--depth-alist)))   ; Emacs 30: a symbol holding the alist
+          (let ((depths (get 'post-command-hook 'hook--depth-alist)))   ; a symbol holding the alist, or the alist
             (should (= -90 (alist-get 'drgnx-state--post-command (if (symbolp depths) (default-value depths) depths)))))
           (should (gethash (selected-frame) drgnx-state--frames))   ; on: every workbench frame observed
           (should (equal (list (selected-frame)) drgnx-state--order))

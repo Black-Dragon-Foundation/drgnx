@@ -125,7 +125,7 @@
    (should-not (drgnx-timer-active-p 'tm-k))))
 
 (ert-deftest drgnx-timer/a-wall-repeat-must-be-seconds ()
-  ;; Emacs 31's `run-at-time' refuses a REPEAT that is not a number; Emacs 30 took t and ran the timer once.  The
+  ;; `run-at-time' refuses a REPEAT that is not a number.  The
   ;; layer refuses it on every Emacs, so a setup with `:repeat t' on a wall timer fails here and not only on 31.
   (drgnx-timer-test--with
    (dolist (repeat (list t 'yes "30"))

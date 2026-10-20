@@ -54,7 +54,7 @@ names in TREE that only look special: `n.gz', `n.gpg', `a.zip/y' (nothing is mad
 :real the file it leads to."
   (let* ((up (apply #'concat (make-list (+ 2 (length (split-string tree "/" t))) "../")))
          (beside (file-name-directory (directory-file-name tree)))
-         ;; the climbing ones first: in Emacs 30 a quoted name (`/:/ssh:…', what an absolute link gives) drops Tramp's
+         ;; the climbing ones first: a quoted name (`/:/ssh:…', what an absolute link gives) drops Tramp's
          ;; autoloading handlers, after which nothing in that Emacs reaches Tramp — a later case would prove nothing
          (links `(("up-ssh" . ,(concat up "ssh:drgnx-test.invalid:")) ("up-sudo" . ,(concat up "sudo::"))
                   ("abs-ssh" . "/ssh:drgnx-test.invalid:/") ("abs-sudo" . "/sudo::/")

@@ -179,7 +179,7 @@ worktree, the folders an agent registers, and the files of Work rows.
 Why handlers must be off: with handlers on, `file-truename` looks a handler up again at every link it follows, so
 checking the literal string with `file-remote-p` is not enough. An agent can plant a link in its worktree that climbs
 `../` to the root and goes on to `ssh:host:`. Resolving `TREE/link/y` then loads Tramp and connects (`sudo::` starts
-sudo), in the hub or in the user's Emacs. A link straight to `/ssh:host:/` is quoted by Emacs 30, but nothing else
+sudo), in the hub or in the user's Emacs. A link straight to `/ssh:host:/` is quoted by Emacs, but nothing else
 is. Names ending in `.gz`, `.gpg` or an archive suffix (`a.zip/y`) reach jka-compr, EasyPG (gpg, pinentry) and
 tramp-archive the same way.
 
@@ -890,7 +890,7 @@ What it does **not** record:
 - **`add-to-list` that the compiler rewrote.** Its compiler macro turns `(add-to-list 'VAR …)` into a plain
   `push` when VAR is not special at compile time — a lexical variable, or one whose `defvar` the compiling Emacs
   has not run, such as one defined in the caller's own file or declared with a bare `(defvar VAR)`
-  (`drgnx-search.el`'s `drgnx-ai-retrievers`). Checked on 30.2 and 31.1. Use `drgnx-modules-push-undo` (or the
+  (`drgnx-search.el`'s `drgnx-ai-retrievers`). Checked on 31.1. Use `drgnx-modules-push-undo` (or the
   module helpers) for such a list.
 - `setq`, `setf`, `put`, `add-function`, key bindings, faces, frames: the module's own undo or `:teardown`.
 
@@ -912,7 +912,7 @@ late `eval-after-load` or idle step of a turned-off module never runs and an off
 work twice. Evaluated outside a setup, it just runs BODY. Each call installs the safety net for its extent (about
 20 µs): for one-off work, not for a hook that runs on every command.
 
-**Cost.** The safety net around a setup costs 16–22 µs (byte-compiled, 30.2, measured with four doors: four `advice-add` and
+**Cost.** The safety net around a setup costs 16–22 µs (byte-compiled, measured with four doors: four `advice-add` and
 `advice-remove`, two snapshots and their comparison), and up to about 70 µs in runs where the garbage it makes
 brings a collection forward (65–73 µs measured so); 41 setups × 75 µs ≈ 3 ms at worst. The shipped startup stage (16 modules, batch) took 29.4 ms with
 it and 28.2 ms without (5 runs each, within the runs' noise); the budget is 5 ms across all setups. The fifth door
@@ -979,8 +979,7 @@ A timer that outlives the current command goes through one door:
 
 FN (with ARGS) runs after SECS, or after SECS of idleness with `:idle t`. `:repeat` is a number of seconds for a wall
 timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run-with-idle-timer`; a wall timer's
-`:repeat t` signals `wrong-type-argument` on every Emacs (Emacs 31's `run-at-time` refuses it, Emacs 30 ran the timer
-once). Then
+`:repeat t` signals `wrong-type-argument` on every Emacs (`run-at-time` refuses it). Then
 `(drgnx-timer-cancel KEY)`, `(drgnx-timer-active-p KEY)` and `(drgnx-timer-cancel-owner OWNER)` (→ how many).
 
 - **The key.** A second start of a KEY cancels its pending timer first, whatever started it: a setup run twice keeps
@@ -1004,7 +1003,7 @@ once). Then
   turning the module off ends it. Timers started later (from a command or a hook) name their module with `:owner`:
   `tools/agents` owns the Agents list's 30 s tick `agents-ui-tick` (it only marks the list's view, and runs only while a window shows the list; see Views),
   `ui/face` owns quick help's `quickhelp-timeout`, `-unmap`, `-look`, `-away` and `-hover` and the start page's
-  `start-first-frame`, `ui/terminal-popups` the debounced `tty-popups-show`, `ui/terminal` the per-frame
+  `start-first-frame`, `ui/terminal` the per-frame
   `(tty-fallback-hint . FRAME)`, `tools/jobs` the coalesced `job-ui-recount`, `tools/ai` the `ai-probe` one-shot; the
   ghost-text pause is an idle debounce `(ai-ghost . BUFFER)` owned by the buffer, the Search view's typing pause
   and its pause after a listed file changed are debounces `(replace-pause . BUFFER)` and `(replace-refresh . BUFFER)`
@@ -1223,11 +1222,11 @@ it replaces (a cons is never skipped: an in-place edit keeps its head). What tha
 such as `tab-width`, `indent-tabs-mode` or `buffer-file-coding-system`:
 
 - already local in the buffer: `let` and `unlet` are reported as such and ignored;
-- not local in the buffer: a `let` binds the *default*, and Emacs 30 reports the binding and the unbinding as a
+- not local in the buffer: a `let` binds the *default*, and Emacs reports the binding and the unbinding as a
   `set` with no buffer. Bound to the value it already has, nothing moves. Bound to a *different* value, each of the two
   reports is a global `set`: it bumps the base and moves every buffer's epoch, twice per `let`. A consumer's watched
   list must not include a per-buffer variable that other code often rebinds to other values. The status bar's
-  `buffer-look` watches `tab-width`, `indent-tabs-mode` and `buffer-file-coding-system`: Emacs 30's own Lisp binds
+  `buffer-look` watches `tab-width`, `indent-tabs-mode` and `buffer-file-coding-system`: Emacs's own Lisp binds
   `indent-tabs-mode` to nil in a handful of commands (Dired, Org, picture, texinfo, chart), none on a per-keystroke
   path, and so do drgnx's config writer and formatter (`(let ((indent-tabs-mode nil)) …)`), so such a rebind rebuilds
   every bar once (pinned by `drgnx-statusbar/a-let-of-tab-width-to-another-value-rebuilds-every-bar`; a `let` to the
@@ -2086,7 +2085,7 @@ The only file written is `agent-checks.eld`; the child Emacs writes nothing.
 machine is ready, and gives a fix for anything that is not:
 
 ```
-OK    emacs-version        Emacs 31.1                 (30.2: WARN — works, 31.1 recommended; older: FAIL)
+OK    emacs-version        Emacs 31.1                 (older than 31.1: FAIL)
 OK    native-compilation   native compilation works   (built without it, or libgccjit broken: FAIL)
 OK    tree-sitter          tree-sitter available
 OK    gui                  graphical build (pgtk)     (terminal-only: OK, with a note)
@@ -2131,7 +2130,7 @@ PATH, `/opt/homebrew/bin/brew` or `/usr/local/bin/brew`; the doctor may run with
 
 A check that returns nil is absent from the results; `drgnx-doctor-run` also takes a group name to run one group.
 The **Terminal** group (`terminal`, `terminal-colours`, `terminal-mouse`, `terminal-keys`, `terminal-clipboard`,
-`terminal-tmux`, `terminal-ssh`, `terminal-popups`) reads the fact `:terminal`, which `drgnx-doctor-terminal-facts`
+`terminal-tmux`, `terminal-ssh`) reads the fact `:terminal`, which `drgnx-doctor-terminal-facts`
 gathers: `drgnx-tty-facts` (the environment of the process the doctor runs in; inside tmux one `tmux show`, 1 s),
 `:caps` and the fallback rows from the newest entry of `terminal-report.eld` for that kind of terminal, and `:os`.
 Check This Terminal (`ui/terminal`) runs the same group with the selected terminal window's own capabilities and its
@@ -2628,7 +2627,7 @@ A frame's first record emits `frame-added`, then everything it shows as new: `wi
 
 **`:cause` and `:by`** say who changed a pane. `write` with `:by` from the write (`user`, `auto`, `layout`,
 `restore`, `teardown`, `other`; `drgnx-state-with-write`). `user` with `:by user`: a command in
-`drgnx-state-user-resize-commands` (a user option), or any step of a mouse drag on a divider (Emacs 30+ runs the steps as commands of a transient
+`drgnx-state-user-resize-commands` (a user option), or any step of a mouse drag on a divider (Emacs runs the steps as commands of a transient
 map, `this-command` is a closure, and `track-mouse` is `dragging`). Else `other` with `:by` nil: Emacs fitting a popup, the minibuffer growing, the
 window manager resizing the frame, a package.
 
@@ -2819,7 +2818,7 @@ A test that guards a cost asserts what load does not move. Load the fixture as t
   measured runs of the `memory-use-counts` delta summed over its seven kinds (conses, floats, vector cells, symbols,
   string characters, intervals, strings), less the 7 conses the reading itself makes, so an empty BODY gives 0. The
   same code on the same Emacs gives the same number however loaded the machine is. A bound is
-  `ceil(1.25 × max(measured on 30.2, measured on 31.1))`, both numbers in the commit message; "stays linear" or "does
+  `ceil(1.25 × measured on 31.1)`, the number in the commit message; "stays linear" or "does
   not scan the whole file" is a ratio between two sizes (A-45: the sticky segment at line 9000 allocates at most
   1.25 × the one at line 1000; a walk over the lines between allocates 45231 against 5231).
 - **Compile what you measure.** Tests load code from source when it is newer than its `.elc`, and interpreted code

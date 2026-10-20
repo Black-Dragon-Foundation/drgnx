@@ -376,7 +376,7 @@ at the next observation).  During an observation a recorded frame's choice is se
   '(mouse-drag-vertical-line mouse-drag-mode-line mouse-drag-header-line enlarge-window shrink-window
                              enlarge-window-horizontally shrink-window-horizontally)
   "Commands whose window changes are the user's own resizes: their events carry `:cause user'.
-A mouse drag on a divider counts at each step: Emacs 30+ runs the steps as commands of a transient map (so
+A mouse drag on a divider counts at each step: Emacs runs the steps as commands of a transient map (so
 `this-command' is a closure) with `track-mouse' set to `dragging', which is what is checked."
   :type '(repeat function) :group 'drgnx)
 
@@ -490,7 +490,7 @@ arm the bus's idle flush (one timer for the store and the bus)."
   (cond (drgnx-state--writing (cons 'write (plist-get drgnx-state--writing :by)))
         ((and drgnx-state--in-command
               (or (memq this-command drgnx-state-user-resize-commands)
-                  (eq track-mouse 'dragging)))  ; Emacs 30+: each step of a divider drag runs a transient-map closure
+                  (eq track-mouse 'dragging)))  ; each step of a divider drag runs a transient-map closure
          '(user . user))
         (t '(other))))
 

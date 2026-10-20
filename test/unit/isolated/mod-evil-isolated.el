@@ -418,7 +418,7 @@ stopped.  Evil's packages are not on `load-path' here."
 
 (ert-deftest drgnx-evil/the-terminal-follows-the-cursor-where-emacs-can ()
   (drgnx-evil-test--running
-    ;; as on Emacs 31.1, where the option exists (30.2 has none: nothing to set).  Shape only (`type'): no colour.
+    ;; Shape only (`type'): no colour.
     (let ((inits nil) (updates 0))
       (cl-progv '(xterm-update-cursor) '(nil)
         (cl-letf (((symbol-function 'xterm--init-update-cursor) (lambda () (push (selected-frame) inits)))

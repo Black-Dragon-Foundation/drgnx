@@ -47,7 +47,7 @@ keys it cannot send (never a prompt; remembered in terminal-report.eld)."
 (defconst drgnx-tty-fallback-never
   '("M-." "M->" "M-<" "M-x" "M-:" "M-%" "M-!" "M-&" "M-;" "M-/" "M-$" "M-^" "M-w" "M-y" "M-q"
     ;; what a terminal starts a sequence with: CSI, SS3 (F1–F4), OSC, ST, APC, SOS, PM, and DCS — the reply to
-    ;; XTVERSION (`ESC P > |'), which Emacs 30.2 and 31.1 (xterm.el) and drgnx read through `input-decode-map'
+    ;; XTVERSION (`ESC P > |'), which Emacs (xterm.el) and drgnx read through `input-decode-map'
     ;; when it comes late, so M-P there would turn a late reply into a key
     "M-[" "M-O" "M-]" "M-\\" "M-_" "M-X" "M-P")
   "Keys that are never an ALT, whatever the maps say: Emacs's own keys every user knows, and the bytes a terminal

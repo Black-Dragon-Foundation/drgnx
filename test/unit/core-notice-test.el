@@ -548,6 +548,6 @@ item says something else and the last is another entity — what changes between
            (n (drgnx-notice-test--alloc (drgnx-notice-test--replace-3))))
       (should (= (drgnx-notice-tick) (+ tick (* 3 4))))         ; every set of the 4 runs changed
       (message "replace 3 sets and recount: %d conses" n)
-      (should (<= n 275)))))                                 ; 250 measured on 30.2
+      (should (<= n 275)))))                                 ; 250 measured
 
 ;;; core-notice-test.el ends here

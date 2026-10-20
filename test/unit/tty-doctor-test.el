@@ -59,7 +59,7 @@
 (ert-deftest drgnx-tty-doctor/a-terminal-only-build-passes-with-a-note ()
   (let ((r (drgnx-doctor-check 'gui (drgnx-tty-doctor-test--facts nil :gui nil))))
     (should (eq (car r) 'ok))
-    (should (equal (nth 1 r) "terminal-only Emacs: drgnx runs in terminals (no images, one font size; popups in the bottom lane on 30.2)"))
+    (should (equal (nth 1 r) "terminal-only Emacs: drgnx runs in terminals (no images, one font size)"))
     (should-not (nth 2 r)))
   (should (eq (car (drgnx-doctor-check 'gui (drgnx-tty-doctor-test--facts nil :gui 'pgtk))) 'ok)))
 
@@ -209,15 +209,10 @@
 
 (ert-deftest drgnx-tty-doctor/kitty-with-everything-is-ok ()
   (let ((results (drgnx-tty-doctor-test--results (drgnx-tty-doctor-test--facts (drgnx-tty-doctor-test--tf)))))
-    (should (equal (mapcar #'car results) '(terminal terminal-colours terminal-mouse terminal-keys terminal-clipboard terminal-popups)))
+    (should (equal (mapcar #'car results) '(terminal terminal-colours terminal-mouse terminal-keys terminal-clipboard)))
     (dolist (r results)
       (should (eq (plist-get (cdr r) :status) 'ok)))
-    (should (string-search "kitty" (drgnx-tty-doctor-test--get results 'terminal :detail))))
-  ;; 30.2 has popups in the bottom lane: said, not a problem
-  (let ((results (drgnx-tty-doctor-test--results (drgnx-tty-doctor-test--facts (drgnx-tty-doctor-test--tf) :version "30.2"))))
-    (should (eq (drgnx-tty-doctor-test--get results 'terminal-popups :status) 'info))
-    (should (string-search "popups in the bottom lane; 31.1 has floating ones"
-                           (drgnx-tty-doctor-test--get results 'terminal-popups :detail)))))
+    (should (string-search "kitty" (drgnx-tty-doctor-test--get results 'terminal :detail)))))
 
 (ert-deftest drgnx-tty-doctor/colours-and-mouse-warn-with-the-terminals-fix ()
   (let* ((tf (drgnx-tty-doctor-test--tf :identity '(:id linux :outer nil :version nil) :term "linux" :colorterm nil

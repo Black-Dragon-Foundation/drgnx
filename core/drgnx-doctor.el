@@ -29,13 +29,12 @@
   "How to get a suitable Emacs.")
 
 (defconst drgnx-doctor-security-issues
-  '(("CVE-2026-79992" "TRAMP command injection through crafted file names" "31.1")
-    ("CVE-2026-108976" "TRAMP: the first fix left user names with ! # & , and control characters" "31.2")
+  '(("CVE-2026-108976" "TRAMP: the first fix left user names with ! # & , and control characters" "31.2")
     ("CVE-2026-96442" "Flymake backends run code from the file being edited" "31.2")
     ("CVE-2026-96269" "read-symbol-shorthands in a file's local variables redirect symbol lookup" "31.2" "31.1"))
   "The Emacs issues the `security' check names: (ID WHAT FIXED-IN [PARTLY-FROM]).
 An issue applies below FIXED-IN; from PARTLY-FROM on, only some of its ways in are closed.  The elisp Flymake
-backend (CVE-2024-53920) is not here: every supported Emacs (30.2 and later) closes it with `trusted-content'.")
+backend (CVE-2024-53920) is not here: every supported Emacs (31.1 and later) closes it with `trusted-content'.")
 
 (defvar drgnx-doctor--checks nil "Alist NAME → plist (:group :doc :check :dev :platform), in definition order.")
 
@@ -408,13 +407,11 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
 
 (defun drgnx-doctor--version< (a b) (version< a b))
 
-(drgnx-doctor-define 'emacs-version :group "Emacs" :doc "GNU Emacs 31.1 or newer (30.2 still works)"
+(drgnx-doctor-define 'emacs-version :group "Emacs" :doc "GNU Emacs 31.1 or newer"
                      :check (lambda (f)
                               (let ((v (plist-get f :version)))
                                 (cond ((not (drgnx-doctor--version< v "31.1")) (list 'ok (format "Emacs %s" v) nil))
-                                      ((not (drgnx-doctor--version< v "30.2"))
-                                       (list 'warn (format "Emacs %s works, 31.1 is recommended" v) drgnx-doctor-install-hint))
-                                      (t (list 'fail (format "Emacs %s is too old (30.2 or newer needed)" v) drgnx-doctor-install-hint))))))
+                                      (t (list 'fail (format "Emacs %s is too old (31.1 or newer needed)" v) drgnx-doctor-install-hint))))))
 
 (drgnx-doctor-define 'native-compilation :group "Emacs" :doc "Native compilation works (drgnx's speed depends on it)"
                      :check (lambda (f)
@@ -433,7 +430,7 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
 (drgnx-doctor-define 'gui :group "Emacs" :doc "A graphical build (pgtk on Wayland, X11 or macOS), or a terminal-only one"
                      :check (lambda (f)
                               (if-let* ((g (plist-get f :gui))) (list 'ok (format "graphical build (%s)" g) nil)
-                                (list 'ok "terminal-only Emacs: drgnx runs in terminals (no images, one font size; popups in the bottom lane on 30.2)" nil))))
+                                (list 'ok "terminal-only Emacs: drgnx runs in terminals (no images, one font size)" nil))))
 
 (defun drgnx-doctor--security-issues (version)
   "The `drgnx-doctor-security-issues' that apply to Emacs VERSION, as \"ID\" or \"ID (partly fixed here)\" strings."
@@ -961,13 +958,6 @@ what its table row or tmux's extended-keys say), nil when that cannot be told."
            (list 'ok (format "over SSH: terminfo for %s found here; keys, mouse and OSC 52 travel unchanged" term) nil)
          (list 'warn (format "over SSH: this machine has no terminfo entry for TERM=%s (Emacs falls back to 8 colours or refuses the terminal)" term)
                (drgnx-doctor--terminfo-fix term)))))))
-
-(drgnx-doctor--tty-define
- 'terminal-popups "Popups: floating on Emacs 31.1, in the bottom lane on 30.2"
- (lambda (_tf f)
-   (if (version< (plist-get f :version) "31.1")
-       (list 'info "popups in the bottom lane; 31.1 has floating ones" nil)
-     (list 'ok "popups float over the text (child frames)" nil))))
 
 ;;;; Desktop: the window manager (core/drgnx-platform.el)
 

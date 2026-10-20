@@ -192,7 +192,7 @@ load is reported as module <category>/<file name>, naming the library it loaded 
   (dolist (file (directory-files-recursively dir "\\`drgnx-.*\\.el\\'"))
     (let ((t0 (float-time)) (inner nil))
       (condition-case e
-          ;; the innermost file being loaded when the error was signalled (Emacs 30's handler-bind)
+          ;; the innermost file being loaded when the error was signalled (`handler-bind')
           (handler-bind ((error (lambda (_) (setq inner load-file-name))))
             (load (file-name-sans-extension file) nil t))   ; the .elc when `drgnx build' made one
         (error (drgnx-modules--record

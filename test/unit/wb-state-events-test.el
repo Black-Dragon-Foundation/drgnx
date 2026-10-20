@@ -489,7 +489,7 @@
         (should (eq 'other (plist-get d :cause)))))))
 
 (ert-deftest drgnx-state-events/cause-user-for-a-divider-drag ()
-  ;; Emacs 30+: each step of a divider drag is a command of a transient map, `this-command' a closure, `track-mouse' `dragging'.
+  ;; each step of a divider drag is a command of a transient map, `this-command' a closure, `track-mouse' `dragging'.
   (drgnx-state-events-test--with
     (let* ((f (selected-frame)) (a (selected-window)))
       (split-window a nil 'below)

@@ -1,7 +1,6 @@
-;;; popups-test.el --- tty tier: popups in terminal windows (child frames on 31.1, the bottom lane on 30.2) -*- lexical-binding: t -*-
+;;; popups-test.el --- tty tier: popups in terminal windows (child frames) -*- lexical-binding: t -*-
 ;; Run under `drgnx-run-ert-batch' (temp HOME and XDG dirs); every test has its own tmux server.  The inner Emacs
-;; is whatever `emacs' is on PATH: 30.2 on the host (no tty child frames), 31.1 in the f45 container.  A test that
-;; needs one of them says `skip-unless' on the inner Emacs's own `(featurep 'tty-child-frames)'.
+;; is whatever `emacs' is on PATH (31.1 or later: tty child frames).
 (require 'ert)
 (require 'seq)
 (require 'drgnx-tty-session)
@@ -25,9 +24,6 @@
   "Wait until SESS shows the workbench: the *scratch* tab with its CLOSE mark (default: ×; a UTF-8 terminal
 keeps the glyph)."
   (drgnx-tty-session-wait-screen sess (concat "\\*scratch\\* " (or close "×")) 20))
-
-(defun drgnx-tty-popups-test--child-frames-p (sess)
-  (drgnx-tty-session-eval sess '(and (featurep 'tty-child-frames) t)))
 
 (defun drgnx-tty-popups-test--corfu-dirs ()
   "The corfu and compat directories (the version etc/drgnx.lock.eld pins, when there), read-only; the test is
@@ -145,56 +141,15 @@ Lisp file in the editor."
   "A form, in the inner Emacs: the visible child frames of the selected frame.")
 
 (ert-deftest drgnx-tty-popups/completion-as-you-type ()
-  ;; 31.1: corfu's popup is a child frame of the selected frame, hidden by C-g.  30.2: no child frames, so the
-  ;; candidates show in *Completions* in the popup lane, nothing is inserted, and C-g removes them.
+  ;; corfu's popup is a child frame of the selected frame, hidden by C-g; nothing is inserted
   (let ((dirs (drgnx-tty-popups-test--corfu-dirs)))
     (drgnx-tty-popups-test--with (s :size "100x30")
-      (should (drgnx-tty-popups-test--corfu s dirs))
-      (let ((child-frames (drgnx-tty-popups-test--child-frames-p s)))
-        (drgnx-tty-session-send s "(with-")
-        (if child-frames
-            (progn
-              (drgnx-tty-session-wait s `(and ,drgnx-tty-popups-test--child-frames-of-selected t) 10)
-              (drgnx-tty-popups-test--key s "C-g")
-              (drgnx-tty-session-wait s `(null ,drgnx-tty-popups-test--child-frames-of-selected) 10))
-          (drgnx-tty-session-wait s '(let ((w (get-buffer-window "*Completions*")))
-                                       (and w (window-parameter w 'drgnx-popup) t))
-                                  10)
-          (should (equal (drgnx-tty-session-eval s '(with-current-buffer "x.el" (buffer-string))) "(with-"))
-          (should (eql 1 (drgnx-tty-session-eval s '(length (frame-list)))))
-          (drgnx-tty-popups-test--key s "C-g")
-          (drgnx-tty-session-wait s '(null (get-buffer-window "*Completions*")) 10))
-        (should (equal (drgnx-tty-session-eval s '(with-current-buffer "x.el" (buffer-string))) "(with-"))))))
-
-(ert-deftest drgnx-tty-popups/completion-as-you-type-follows-what-is-typed ()
-  ;; the list in the lane is refreshed as the word grows, and goes when the word ends (30.2 only)
-  (let ((dirs (drgnx-tty-popups-test--corfu-dirs)))
-    (drgnx-tty-popups-test--with (s :size "100x30")
-      (skip-when (drgnx-tty-popups-test--child-frames-p s))
       (should (drgnx-tty-popups-test--corfu s dirs))
       (drgnx-tty-session-send s "(with-")
-      (drgnx-tty-session-wait s '(and (get-buffer-window "*Completions*") t) 10)
-      (drgnx-tty-session-send s "temp-b")
-      (drgnx-tty-session-wait s '(with-current-buffer "*Completions*"
-                                   (save-excursion
-                                     (goto-char (point-min))
-                                     (and (search-forward "with-temp-buffer" nil t)
-                                          (progn (goto-char (point-min)) (not (search-forward "with-mutex" nil t))))))
-                              10)
-      (drgnx-tty-session-send s " ")
-      (drgnx-tty-session-wait s '(null (get-buffer-window "*Completions*")) 10))))
-
-(ert-deftest drgnx-tty-popups/completion-as-you-type-can-be-turned-off ()
-  ;; 30.2: `drgnx-tty-popups-auto-completions' nil leaves a terminal window without the list (corfu-auto stays on)
-  (let ((dirs (drgnx-tty-popups-test--corfu-dirs)))
-    (drgnx-tty-popups-test--with (s :size "100x30")
-      (skip-when (drgnx-tty-popups-test--child-frames-p s))
-      (should (drgnx-tty-popups-test--corfu s dirs))
-      (drgnx-tty-session-eval s '(progn (setq drgnx-tty-popups-auto-completions nil) t))
-      (drgnx-tty-session-send s "(with-")
-      (sleep-for 1)
-      (should-not (drgnx-tty-session-eval s '(and (get-buffer-window "*Completions*") t)))
-      (should (drgnx-tty-session-eval s '(with-current-buffer "x.el" corfu-auto))))))
+      (drgnx-tty-session-wait s `(and ,drgnx-tty-popups-test--child-frames-of-selected t) 10)
+      (drgnx-tty-popups-test--key s "C-g")
+      (drgnx-tty-session-wait s `(null ,drgnx-tty-popups-test--child-frames-of-selected) 10)
+      (should (equal (drgnx-tty-session-eval s '(with-current-buffer "x.el" (buffer-string))) "(with-")))))
 
 ;;;; The cursor line stays visible
 
@@ -246,9 +201,8 @@ Lisp file in the editor."
                 (and (frame-parent f) t)))))
 
 (ert-deftest drgnx-tty-popups/borders-are-box-drawing ()
-  ;; 31.1, a UTF-8 terminal: a child frame's border is ┌ ─ ┐ │ └ ┘
+  ;; a UTF-8 terminal: a child frame's border is ┌ ─ ┐ │ └ ┘
   (drgnx-tty-popups-test--with (s :size "80x24")
-    (skip-unless (drgnx-tty-popups-test--child-frames-p s))
     (drgnx-tty-popups-test--bordered-child s)
     (let ((screen (drgnx-tty-session-wait-screen s (string #x250c #x2500 #x2500))))
       (ignore screen)
@@ -261,7 +215,7 @@ Lisp file in the editor."
 
 (ert-deftest drgnx-tty-popups/a-c-locale-gets-ascii ()
   ;; LANG=C: the terminal does not write UTF-8.  The tab line, the breadcrumb, the Explorer and the docks' headers
-  ;; show ASCII marks (x for ×, * for ●, > for › ▸, v for ▾) — no `?' and no \uXXXX escapes — and, on 31.1, so does
+  ;; show ASCII marks (x for ×, * for ●, > for › ▸, v for ▾) — no `?' and no \uXXXX escapes — and so does
   ;; a child frame's border (+ - |)
   ;; 31 lines: the menu bar takes one, and a frame under 30 lines has no breadcrumb (ui/terminal-layout)
   (drgnx-tty-session-with (s :size "100x31" :env '("LANG=C" "LC_ALL=C"))
@@ -281,9 +235,8 @@ Lisp file in the editor."
       (drgnx-tty-session-wait-screen s "^v PROJECT")                   ; Explorer: open root
       (drgnx-tty-session-wait-screen s "^> src")                       ; …closed folder
       (drgnx-tty-session-wait-screen s "| [a-z]+ > [a-zA-Z0-9.-]+ > ")  ; breadcrumb (cut off at the window's edge)
-      (when (drgnx-tty-popups-test--child-frames-p s)
-        (drgnx-tty-popups-test--bordered-child s)
-        (drgnx-tty-session-wait-screen s "[+]-----"))
+      (drgnx-tty-popups-test--bordered-child s)
+      (drgnx-tty-session-wait-screen s "[+]-----")
       (let ((screen (drgnx-tty-session-quiet s)))
         (should-not (string-match-p "\\\\u[0-9A-F]\\{4\\}" screen))
         (should-not (string-match-p "[?]" screen))

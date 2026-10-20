@@ -5,7 +5,7 @@
 ;; it matches :source (leave :source out for any).  Sources inside the checkout are relative to it.  Say why: an
 ;; entry without a reason is a leak somebody hid.
 ;;
-;; Emacs's lisp directory: /usr/share/emacs/30.2/lisp/ (Linux), .../Emacs.app/Contents/Resources/lisp/ (macOS).
+;; Emacs's lisp directory: /usr/share/emacs/31.1/lisp/ (Linux), .../Emacs.app/Contents/Resources/lisp/ (macOS).
 (
  (:what "\\`feature \\+"
   :source "/emacs/[0-9.]+/\\(?:lisp\\|etc/themes\\)/\\|/Contents/Resources/\\(?:lisp\\|etc/themes\\)/"

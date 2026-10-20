@@ -1,5 +1,5 @@
-# Nightly and on demand: the terminal test tier — Emacs in tmux sessions, on Fedora 44 (Emacs 30.2) and
-# Fedora 45 (Emacs 31.1), in test/container/Containerfile.tty. docs/develop/ci.md
+# Nightly and on demand: the terminal test tier — Emacs in tmux sessions, on Fedora 45
+# (Emacs 31.1), in test/container/Containerfile.tty. docs/develop/ci.md
 name: Terminal tier
 
 on:
@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        fedora: [44, 45]
+        fedora: [45]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

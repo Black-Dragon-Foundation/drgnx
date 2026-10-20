@@ -20,19 +20,12 @@
     (drgnx-doctor-check 'security (append (list :version version)
                                           (unless (eq status 'none) (list :trust-guards status))))))
 
-(ert-deftest drgnx-doctor-security/30.2-names-all-the-issues ()
-  (let ((r (drgnx-doctor-security-test--check "30.2")))
-    (dolist (id '("CVE-2026-79992" "CVE-2026-108976" "CVE-2026-96442" "CVE-2026-96269"))
-      (should (string-search id (nth 1 r))))
-    (should-not (string-search "CVE-2024-53920" (nth 1 r)))))   ; closed by `trusted-content' on 30.1 and later
-
 (ert-deftest drgnx-doctor-security/31.1-names-its-issues-and-says-shorthands-are-partly-fixed ()
   (let* ((r (drgnx-doctor-security-test--check "31.1")) (text (nth 1 r)))
     (dolist (id '("CVE-2026-108976" "CVE-2026-96442" "CVE-2026-96269"))
       (should (string-search id text)))
-    (should-not (string-search "CVE-2026-79992" text))          ; the first TRAMP fix is in 31.1
     (should (string-search "partly" text))
-    (should-not (string-search "partly" (nth 1 (drgnx-doctor-security-test--check "30.2"))))))
+    ))
 
 (ert-deftest drgnx-doctor-security/31.2-has-none ()
   (let ((r (drgnx-doctor-security-test--check "31.2")))
@@ -41,7 +34,7 @@
     (should-not (string-search "CVE-" (nth 1 r)))))
 
 (ert-deftest drgnx-doctor-security/guards-on-is-ok-and-guards-off-is-warn ()
-  (dolist (v '("30.2" "31.1" "31.2"))
+  (dolist (v '("31.1" "31.2"))
     (let ((r (drgnx-doctor-security-test--check v)))
       (should (eq (car r) 'ok))
       (should (string-search "guards are on" (nth 1 r)))))
@@ -52,7 +45,7 @@
                   (:ffap nil "ffap guard") (:enable-remote-dir-locals t "enable-remote-dir-locals is on")
                   (:auto-revert-remote-files t "auto-revert-remote-files is on")
                   (:remote-file-name-inhibit-auto-save-visited nil "auto-save guard")))
-    (dolist (v '("30.2" "31.1" "31.2"))
+    (dolist (v '("31.1" "31.2"))
       (let ((r (drgnx-doctor-security-test--check v (nth 0 case) (nth 1 case))))
         (should (eq (car r) 'warn))
         ;; the guard is named; checked on 31.2, where no issue text can say the same word
@@ -66,7 +59,6 @@
 (ert-deftest drgnx-doctor-security/no-guard-facts-is-judged-by-version-alone ()
   (should (eq (car (drgnx-doctor-security-test--check "31.1" 'none)) 'warn))
   (should (string-search "31.2" (nth 1 (drgnx-doctor-security-test--check "31.1" 'none))))
-  (should (eq (car (drgnx-doctor-security-test--check "30.2" 'none)) 'warn))
   (should (eq (car (drgnx-doctor-security-test--check "31.2" 'none)) 'ok)))
 
 (ert-deftest drgnx-doctor-security/facts-hold-the-guards-this-emacs-gets ()
@@ -116,8 +108,8 @@
     (should-not (string-search "not verified" (nth 1 (drgnx-doctor-security-test--check "31.2" :flymake f))))))
 
 (ert-deftest drgnx-doctor-security/the-detail-is-short ()
-  (let ((r (drgnx-doctor-security-test--check "30.2")))
-    (should (string-search "4 known issues" (nth 1 r)))
+  (let ((r (drgnx-doctor-security-test--check "31.1")))
+    (should (string-search "3 known issues" (nth 1 r)))
     (should (string-search "security.md" (nth 1 r)))
     (should (< (length (nth 1 r)) 250))))
 
