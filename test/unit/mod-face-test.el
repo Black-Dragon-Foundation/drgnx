@@ -176,7 +176,8 @@ too, no stubs — and turned off after, strictly: the state after equals the sta
 
 (ert-deftest drgnx-face/an-untitled-buffer-has-line-numbers-in-any-language ()
   "New Untitled (VS Code's New File) numbers its lines like a file, before and after Change Language Mode."
-  (require 'python)                        ; what python.el registers when it loads is its own
+  (require 'python)                        ; what python.el registers when it loads is its own,
+  (with-temp-buffer (python-mode))         ; and so is its `eval-after-load' on grep, made by the first python-mode
   (drgnx-face-test--with
     (let ((b (save-window-excursion (drgnx-basics-new-untitled))))
       (unwind-protect
