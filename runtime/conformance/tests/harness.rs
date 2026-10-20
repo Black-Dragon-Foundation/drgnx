@@ -79,6 +79,16 @@ fn serve(stream: UnixStream, v1: bool) {
                     );
                 }
             }
+            // for bad_params: `t/need` wants a string `a` and says where it is wrong; `t/broken` never says where
+            Some("t/need") => match req["params"].get("a") {
+                Some(Value::String(_)) => send(json!({"id": id, "result": true})),
+                _ => send(
+                    json!({"id": id, "error": {"code": "invalid-params", "message": "a is a string", "path": "a"}}),
+                ),
+            },
+            Some("t/broken") => {
+                send(json!({"id": id, "error": {"code": "invalid-params", "message": "somewhere"}}))
+            }
             _ => send(json!({"id": id, "error": {"code": "no-method", "message": "scripted hub"}})),
         }
         first = false;
@@ -201,4 +211,63 @@ fn a_user_connect_on_a_v1_target_does_the_hello() {
     let (out, code) = run("lisp", &hub, &v0);
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("PASS hello/user-connect"), "{out}");
+}
+
+const BAD_PARAMS_ROW: &str = r#"{"scenario": "params/bad", "requires": ["v0"], "doc": "bad_params over a registry"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "bad_params", "conn": "c", "registry": "REGISTRY"}
+"#;
+
+fn registry(dir: &Path, methods: Value) -> PathBuf {
+    let path = dir.join("methods.json");
+    std::fs::write(&path, json!({"proto": 1, "methods": methods}).to_string()).unwrap();
+    path
+}
+
+#[test]
+fn bad_params_sends_empty_and_a_wrong_type_to_every_method_with_required_params() {
+    let dir = tempfile::tempdir().unwrap();
+    let hub = wrapper(dir.path());
+    let need = json!({"name": "t/need", "params": {"type": "object", "required": ["a"],
+                      "properties": {"a": {"$ref": "#/$defs/A"}}, "$defs": {"A": {"type": "string"}}}});
+    let none = json!({"name": "t/none", "params": {"type": "object"}});
+    let good = registry(dir.path(), json!([need, none]));
+    let rows_dir = dir.path().join("good");
+    rows(
+        &rows_dir,
+        &[(
+            "params/bad.jsonl",
+            &BAD_PARAMS_ROW.replace("REGISTRY", good.to_str().unwrap()),
+        )],
+    );
+    let (out, code) = run("lisp", &hub, &rows_dir);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("PASS params/bad"), "{out}");
+
+    // a refusal without a path fails the row, naming the method
+    let broken = json!({"name": "t/broken", "params": {"type": "object", "required": ["b"],
+                        "properties": {"b": {"type": "array"}}}});
+    let bad = dir.path().join("bad");
+    std::fs::create_dir_all(&bad).unwrap();
+    let reg = registry(&bad, json!([need, broken]));
+    rows(
+        &bad,
+        &[(
+            "params/bad.jsonl",
+            &BAD_PARAMS_ROW.replace("REGISTRY", reg.to_str().unwrap()),
+        )],
+    );
+    let (out, code) = run("lisp", &hub, &bad);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("FAIL params/bad: step 3 (bad_params)"),
+        "{out}"
+    );
+    assert!(out.contains("t/broken {}"), "{out}");
+    assert!(
+        out.contains("t/broken {\"b\":true}"),
+        "the wrong type for a list is true: {out}"
+    );
+    assert!(!out.contains("t/need"), "{out}");
 }

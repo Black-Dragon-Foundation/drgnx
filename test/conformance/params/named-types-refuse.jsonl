@@ -1,0 +1,22 @@
+{"scenario": "params/named-types-refuse", "requires": ["v1"], "doc": "ids, absolute local paths, bounded lists and nonces that do not fit are refused with invalid-params and their path, never rewritten"}
+{"do": "start"}
+{"do": "connect", "conn": "c"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/stop", "params": {"id": "a b"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "error": {"code": "invalid-params", "path": "id"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "job/stop", "params": {"id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "error": {"code": "invalid-params", "path": "id"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "job/stop", "params": {"id": "-x"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "error": {"code": "invalid-params", "path": "id"}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/start", "params": {"profile": "p", "cwd": "x"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "error": {"code": "invalid-params", "path": "cwd"}}}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/start", "params": {"profile": "p", "cwd": "/ssh:canary:/x"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "error": {"code": "invalid-params", "path": "cwd"}}}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "agents/start", "params": {"profile": "p", "cwd": "/a\u0000b"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "error": {"code": "invalid-params", "path": "cwd"}}}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "job/propose", "params": {"plan": "/ssh:canary:/x"}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "error": {"code": "invalid-params", "path": "plan"}}}
+{"do": "send", "conn": "c", "json": {"id": 8, "method": "env/set", "params": {"env": [{"name": "A", "value": "1"}, {"name": "A", "value": "2"}, {"name": "A", "value": "3"}, {"name": "A", "value": "4"}, {"name": "A", "value": "5"}, {"name": "A", "value": "6"}, {"name": "A", "value": "7"}, {"name": "A", "value": "8"}, {"name": "A", "value": "9"}, {"name": "A", "value": "10"}, {"name": "A", "value": "11"}, {"name": "A", "value": "12"}, {"name": "A", "value": "13"}, {"name": "A", "value": "14"}, {"name": "A", "value": "15"}, {"name": "A", "value": "16"}, {"name": "A", "value": "17"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 8, "error": {"code": "invalid-params", "path": "env"}}}
+{"do": "connect", "conn": "h", "as": "service"}
+{"do": "send", "conn": "h", "json": {"id": 9, "method": "hello", "params": {"proto": 1, "nonce": "0123456789ABCDEF0123456789abcdef"}}}
+{"do": "expect", "conn": "h", "json": {"id": 9, "error": {"code": "invalid-params", "path": "nonce"}}}

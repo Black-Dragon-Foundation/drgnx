@@ -84,6 +84,10 @@ Only `Cargo.lock` regeneration (`cargo generate-lockfile`, `cargo update -w`) ru
   past 103 bytes there too it is `PathError::TooLong`. `private_dir` makes a directory 0700 (parents too) when it is not
   there, refuses one that is a link, not a directory or another user's, and chmods it 0700 through the descriptor it
   checked (opened with `O_NOFOLLOW`), as the Lisp `drgnx-hub--private-dir` does.
+- **`registry`**, **`methods`**, **`types`**, **`events`**: every method with its classes, typed params and result,
+  `writes` flag and doc; the named input types; the event types. `runtime/protocol/methods.json` and the method table
+  in `docs/develop/hub.md` are generated from them and checked by tests. See
+  [hub.md, "The registry"](hub.md#the-registry-protocol-v1).
 
 `cargo test -p drgnx-proto` runs the unit tests (RFC 4231 case 2 for the HMAC, the socket fixture below), a
 compile-fail doc test that `Cap` has no `Debug`, and the proptest `tests/proptest_line.rs`: random byte streams, read in
@@ -153,7 +157,7 @@ Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in fai
 | `backend_log` | `hub`, `expect_line`, `expect_no_line`, `within_ms`, `for_ms` | lines the fake backend received (`$STATE/fake-backend.log`): a substring, or a pattern for lines that are JSON |
 | `pid` | `capture`, `alive` (true), `within_ms` (5000) | a captured pid is (or is no longer) running; a reused pid does not count |
 | `class_matrix` | `table` | generated checks over the class table: the reader arrives with the hello task |
-| `bad_params` | `registry` | generated checks over the registry: the reader arrives with the registry task |
+| `bad_params` | `conn`, `registry`, `within_ms` | every method of the registry file (`methods.json`; a relative path is from the current directory) with required params gets `{}` and a wrong type for its first required key (`true` where a list belongs, else `[]`) on `conn`; each must be `invalid-params` with a `path` (one of the required keys, then that key). `hello` goes on a fresh connection each time |
 | `measure` | `name`, `repeat`, `steps` | times the steps, `repeat` times, and records the milliseconds for `--perf` |
 
 **Variables** in strings: `$ROOT $HOME $RUN $STATE $DATA $CONFIG $SOCKET $SOCKET_DIR $CAP $LOCK $PID(hub) $HARNESS_PID`
@@ -211,3 +215,14 @@ runtime/target/debug/drgnx-conformance --target lisp --hub-bin test/conformance/
 
 Green is 11 `PASS` for these rows (plus the 2 `self/` rows). In CI the `conformance-lisp` step runs this in the Linux job
 (Nidhogg from `test/container/nidhogg.sh fedora-45`) and the macOS job (`nidhogg.sh macos`, which sets `DRGNX_EMACS`).
+
+### The v1 rows
+
+Rows with `"requires": ["v1"]` run only against Ratatoskr (`--target ratatoskr`):
+
+| Group | Rows |
+|---|---|
+| `params/` | `bad-params-are-refused-with-a-path` (`bad_params` over `runtime/protocol/methods.json`), `named-types-refuse` (ids, absolute local paths, a 17-item `env/set`, an uppercase nonce: each `invalid-params` with its path) |
+
+`test/conformance/class-matrix.json` is not a row: it is the hand-written class table (`{method: [classes]}`) that the
+registry's test and the `class_matrix` step read.

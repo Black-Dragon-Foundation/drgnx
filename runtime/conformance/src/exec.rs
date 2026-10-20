@@ -116,6 +116,27 @@ pub fn start_time(pid: u32) -> Option<String> {
     (!t.is_empty()).then_some(t)
 }
 
+/// Whether `schema` (a property of `root`'s, `$ref`s resolved against its `$defs`) takes a list: then the wrong type
+/// `bad_params` sends is `true`, else `[]`.
+fn accepts_array(root: &Value, schema: &Value) -> bool {
+    if let Some(r) = schema.get("$ref").and_then(Value::as_str) {
+        let name = r.trim_start_matches("#/$defs/");
+        return accepts_array(root, &root["$defs"][name]);
+    }
+    let typed = match schema.get("type") {
+        Some(Value::String(t)) => t == "array",
+        Some(Value::Array(ts)) => ts.iter().any(|t| t == "array"),
+        _ => false,
+    };
+    typed
+        || ["anyOf", "oneOf"].iter().any(|k| {
+            schema
+                .get(*k)
+                .and_then(Value::as_array)
+                .is_some_and(|alts| alts.iter().any(|a| accepts_array(root, a)))
+        })
+}
+
 fn is_zombie(pid: u32) -> bool {
     if let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
         return stat
@@ -357,9 +378,7 @@ impl Runner<'_> {
             "class_matrix" => {
                 Err("class_matrix is filled by the hello task (14): no table reader yet".into())
             }
-            "bad_params" => {
-                Err("bad_params is filled by the registry task (12): no registry reader yet".into())
-            }
+            "bad_params" => self.bad_params(step),
             "measure" => self.measure(step),
             v => Err(format!("verb {v} has no executor")),
         }
@@ -773,6 +792,87 @@ impl Runner<'_> {
             conn.expect_next(&pattern, within, &mut self.caps)
         }
         .map(|_| ())
+    }
+
+    /// Every method of `registry` (`methods.json`; a relative path is from the current directory) with required
+    /// params gets `{}` and a wrong type for its first required key, on `conn`.  Each must be refused
+    /// `invalid-params` with a `path`: for `{}` one of the required keys, for the wrong type that key.  `hello`, which
+    /// a connection says once, goes on a fresh connection each time.
+    fn bad_params(&mut self, step: &Step) -> R {
+        let file = self.text(None, step, "registry")?;
+        let text = std::fs::read_to_string(&file).map_err(|e| format!("{file}: {e}"))?;
+        let reg: Value = serde_json::from_str(&text).map_err(|e| format!("{file}: {e}"))?;
+        let methods = reg
+            .get("methods")
+            .and_then(Value::as_array)
+            .ok_or_else(|| format!("{file} has no \"methods\""))?;
+        let conn_name = str_of(&step.obj, "conn").unwrap_or("c").to_string();
+        let socket = self.hubs[self.hub_index(str_of(&step.obj, "hub"))?]
+            .socket
+            .clone();
+        let within = ms(&step.obj, "within_ms", 5000);
+        let (mut id, mut probed, mut failed) = (1_000_000u64, 0, Vec::new());
+        for m in methods {
+            let name = m["name"].as_str().unwrap_or_default();
+            let params = &m["params"];
+            let required: Vec<&str> = params["required"]
+                .as_array()
+                .map(|r| r.iter().filter_map(Value::as_str).collect())
+                .unwrap_or_default();
+            let Some(first) = required.first().copied() else {
+                continue;
+            };
+            probed += 1;
+            let wrong = if accepts_array(params, &params["properties"][first]) {
+                json!(true)
+            } else {
+                json!([])
+            };
+            let mut one = Map::new();
+            one.insert(first.to_string(), wrong);
+            for (p, want) in [
+                (json!({}), required.clone()),
+                (Value::Object(one), vec![first]),
+            ] {
+                id += 1;
+                let line = json!({"id": id, "method": name, "params": p}).to_string();
+                let pattern = json!({ "id": id });
+                let answer = if name == "hello" {
+                    let mut fresh = Conn::open(&socket, Duration::from_secs(2))?;
+                    fresh.send_line(&line, true)?;
+                    fresh.expect(&pattern, within, &mut self.caps)
+                } else {
+                    let conn = self
+                        .conns
+                        .get_mut(&conn_name)
+                        .ok_or_else(|| format!("no connection named {conn_name:?}"))?;
+                    conn.send_line(&line, true)?;
+                    conn.expect(&pattern, within, &mut self.caps)
+                };
+                match answer {
+                    Err(e) => failed.push(format!("{name} {p}: {e}")),
+                    Ok(a) => {
+                        let code = a["error"]["code"].as_str();
+                        let path = a["error"]["path"].as_str();
+                        if code != Some("invalid-params")
+                            || !path.is_some_and(|x| want.contains(&x))
+                        {
+                            failed.push(format!(
+                                "{name} {p}: wanted invalid-params at one of {want:?}, got {a}"
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        if probed == 0 {
+            return Err(format!("{file}: no method has required params"));
+        }
+        if failed.is_empty() {
+            Ok(())
+        } else {
+            Err(failed.join("; "))
+        }
     }
 
     fn kill(&mut self, step: &Step) -> R {

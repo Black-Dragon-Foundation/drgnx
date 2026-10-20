@@ -1,0 +1,4 @@
+{"scenario": "params/bad-params-are-refused-with-a-path", "requires": ["v1"], "doc": "every method with required params refuses {} and a wrong type with invalid-params and the path (generated from the registry)"}
+{"do": "start"}
+{"do": "connect", "conn": "c"}
+{"do": "bad_params", "conn": "c", "registry": "runtime/protocol/methods.json"}
