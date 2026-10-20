@@ -22,6 +22,7 @@
 (require 'drgnx-wb)
 (require 'drgnx-timer)
 (require 'drgnx-view)
+(require 'drgnx-large-file)
 
 (defface drgnx-outline-group '((t :inherit shadow)) "A group of definitions (imenu submenu)." :group 'drgnx)
 
@@ -76,7 +77,8 @@
   "SRC's rows, or a notice string."
   (with-current-buffer src
     (cond ((and buffer-file-name (file-remote-p buffer-file-name)) "Outline is off for remote files")
-          ((> (buffer-size) drgnx-outline-max-size) "This file is too large for an outline")
+          ((or (drgnx-large-file-p) (> (buffer-size) drgnx-outline-max-size))   ; a chunk is small, its file is not
+           "This file is too large for an outline")
           (t (let ((rows (while-no-input            ; a key pressed meanwhile wins: try again later
                            (ignore-errors
                              (let ((imenu-auto-rescan t) (imenu--index-alist nil) (non-essential t))

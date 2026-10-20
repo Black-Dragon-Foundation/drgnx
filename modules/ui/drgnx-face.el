@@ -17,6 +17,7 @@
 (require 'drgnx-face-state)
 (require 'drgnx-ui-kit)                     ; the glyph table and `drgnx-face-glyph' live in core
 (require 'drgnx-frame-kind)
+(require 'drgnx-large-file)
 (defvar flymake-show-diagnostics-at-end-of-line)
 (defvar display-line-numbers-width-start)
 (defvar display-line-numbers-grow-only)
@@ -259,10 +260,12 @@ when they changed.  The variant is that of a graphical frame; with none, or a ba
 ;;;; Buffers
 
 (defun drgnx-face--numbers-wanted-p ()
-  "Non-nil when this buffer is code or configuration that visits a file, or an Untitled editor (any mode)."
-  (or (bound-and-true-p drgnx-untitled-p)
-      (and buffer-file-name drgnx-face-line-numbers-modes
-           (apply #'derived-mode-p drgnx-face-line-numbers-modes))))
+  "Non-nil when this buffer is code or configuration that visits a file, or an Untitled editor (any mode).
+Never in a large file held lean or raw: counting its lines for the number column is what lean avoids."
+  (and (not (memq drgnx-large-file '(lean raw)))
+       (or (bound-and-true-p drgnx-untitled-p)
+           (and buffer-file-name drgnx-face-line-numbers-modes
+                (apply #'derived-mode-p drgnx-face-line-numbers-modes)))))
 
 (defun drgnx-face-line-numbers-maybe ()
   "Line numbers in this buffer when it is code visiting a file or an Untitled editor; the number column never changes

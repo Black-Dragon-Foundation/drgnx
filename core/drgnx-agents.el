@@ -21,6 +21,7 @@
 (require 'drgnx-acp)
 (require 'drgnx-timer)
 (require 'drgnx-agent-config)          ; `drgnx-agent-config-vendor-env'
+(require 'drgnx-large-file)            ; `drgnx-large-file-p': a large file is read from disk
 
 (declare-function drgnx-gateway--restrictions-check "drgnx-gateway")
 
@@ -401,9 +402,13 @@ a task whose provider failed to the next profile (drgnx-job.el).  Called in the 
      :deferred)
     ("fs/read_text_file"
      ;; local files only (no TRAMP: `file-remote-p' names the host without connecting); an open buffer as it is,
-     ;; else a regular file up to `drgnx-agents-read-max', read with no file name handlers
+     ;; else a regular file up to `drgnx-agents-read-max', read with no file name handlers.  A large-file buffer (a
+     ;; chunk, or a lean or raw file) or an open buffer over the cap is not served: it holds a part of the file, or
+     ;; more than an agent may get, so the disk is read under the cap, as for a file no buffer visits
      (let* ((path (plist-get params :path)) (local (and (drgnx-agents--path-ok-p path) (not (file-remote-p path))))
-            (buf (and local (find-buffer-visiting path))) (problem (and local (not buf) (drgnx-agents--read-problem path))))
+            (buf (let ((b (and local (find-buffer-visiting path))))
+                   (and b (not (drgnx-large-file-p b)) (<= (buffer-size b) drgnx-agents-read-max) b)))
+            (problem (and local (not buf) (drgnx-agents--read-problem path))))
        (cond ((not (drgnx-agents--path-ok-p path)) (list :error '(:code -32602 :message "an absolute path is needed")))
              ((not local) (list :error (list :code -32602 :message (format "%s is remote: only local files are served" path))))
              (problem (list :error (list :code -32002 :message problem)))

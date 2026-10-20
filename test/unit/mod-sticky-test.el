@@ -200,3 +200,18 @@
       (should-not (window-parameter nil 'tab-line-format))
       (should-not (window-parameter nil 'header-line-format))
       (drgnx-sticky-mode -1))))
+
+(ert-deftest drgnx-sticky/quiet-in-a-large-file-buffer ()
+  ;; the flag editor/large-files sets (by hand here: the module is not needed): no sticky scroll
+  (require 'drgnx-large-file)
+  (with-temp-buffer
+    (setq buffer-file-name (expand-file-name "big.el" temporary-file-directory))
+    (unwind-protect
+        (progn (setq-local drgnx-large-file 'lean)
+               (drgnx-sticky--maybe)
+               (should-not drgnx-sticky-mode)
+               (setq-local drgnx-large-file nil)            ; the same buffer, not large: on
+               (drgnx-sticky--maybe)
+               (should drgnx-sticky-mode))
+      (drgnx-sticky-mode -1)
+      (setq buffer-file-name nil))))

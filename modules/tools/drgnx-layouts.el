@@ -41,6 +41,7 @@
 (declare-function drgnx-agents-ui-last-active "drgnx-agents-ui")
 (declare-function drgnx-agents-ui-transcript-buffer "drgnx-agents-ui")
 (defvar drgnx-wb--areas)
+(defvar drgnx-large-file-open)          ; core/drgnx-large-file.el: bound around the restore's visits
 
 (defcustom drgnx-layouts-zen-width 100
   "Text width in the Zen layout, in columns."
@@ -377,7 +378,8 @@ without asking or visiting anything unsafe, marks and fills its pane, and return
       (progn (drgnx-layouts--with-kept-parameters (window-state-put (plist-get snap :main) (window-main-window) 'safe)) t)
     (condition-case err
         (let ((window-restore-killed-buffer-windows #'ignore) (non-essential t)
-              (enable-local-variables :safe) (large-file-warning-threshold nil))
+              (enable-local-variables :safe) (large-file-warning-threshold nil)
+              (drgnx-large-file-open 'auto))       ; a large file opens as an automatic open does: never asks
           (window-state-put (plist-get snap :main) (window-main-window) 'safe)
           (drgnx-layouts--reopen-groups (plist-get snap :groups))
           (dolist (p (plist-get snap :panes)) (drgnx-layouts--mark-pane p t))

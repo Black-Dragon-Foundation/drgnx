@@ -10,6 +10,7 @@
 ;;; Code:
 (require 'drgnx-modules)
 (require 'drgnx-registry)
+(require 'drgnx-large-file)
 (declare-function indent-bars-mode "indent-bars")
 (defvar indent-bars-mode)
 (defvar indent-bars-color)
@@ -18,8 +19,8 @@
 (defvar drgnx-guides-modes '(prog-mode-hook yaml-mode-hook yaml-ts-mode-hook) "Where the guides go.")
 
 (defun drgnx-guides--maybe ()
-  "Guides in this buffer, on a graphical frame."
-  (when (display-graphic-p) (indent-bars-mode 1)))
+  "Guides in this buffer, on a graphical frame, unless it holds a large file."
+  (when (and (display-graphic-p) (not (drgnx-large-file-p))) (indent-bars-mode 1)))
 
 (defun drgnx-guides-toggle ()
   "Indent guides off or on in this buffer."

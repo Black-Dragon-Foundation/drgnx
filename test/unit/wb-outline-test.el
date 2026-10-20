@@ -75,6 +75,17 @@
       (drgnx-outline-test--draw)
       (should (string-match-p "too large" (with-current-buffer drgnx-outline-buffer-name (buffer-string)))))))
 
+(ert-deftest drgnx-outline/quiet-in-a-large-file-buffer ()
+  ;; a chunk of a large file is small (under `drgnx-outline-max-size'); the flag editor/large-files sets (by hand here)
+  ;; says what it is: no index is built
+  (require 'drgnx-large-file)
+  (with-temp-buffer
+    (insert "(defun alpha () 1)\n")
+    (emacs-lisp-mode)
+    (setq-local drgnx-large-file 'chunks)
+    (cl-letf (((symbol-function 'imenu--make-index-alist) (lambda (&rest _) (ert-fail "an index of a large file"))))
+      (should (equal (drgnx-outline--index (current-buffer)) "This file is too large for an outline")))))
+
 (ert-deftest drgnx-outline/an-edit-updates-it-after-a-pause ()
   (drgnx-outline-test--with src
     (with-current-buffer src (goto-char (point-max)) (insert "(defun delta () 4)\n"))

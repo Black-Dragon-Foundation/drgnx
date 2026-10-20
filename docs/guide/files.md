@@ -22,6 +22,13 @@ when they change. [The reference](../reference/config.md) lists each file, its k
 - A folder in a remote buffer's directory is never meant: drgnx works these folders out locally, so a remote buffer
   never makes it connect to the host.
 
+## Files a project carries
+
+Some settings can also come from a project, in its `.drgnx/` folder. `.drgnx/large-files.eld` is someone else's
+text, so it can only make drgnx do less: it can lower your `:ask-above` and `:chunks-above` from `large-files.eld`,
+never raise them or set the chunk size ([large-files.md](large-files.md#the-settings)). With a mistake it is ignored,
+with one notice.
+
 ## When a file has a mistake
 
 A file with a mistake (a missing bracket, a value of the wrong kind) is never applied half way. You see one

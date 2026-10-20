@@ -112,7 +112,9 @@ unsaved changes in Emacs. Reads (`fs/read_text_file`, also a range of lines) get
 edits included; both need absolute paths. A read is served only for a local path (never a remote, TRAMP one) and,
 when no buffer visits it, only for a regular file of at most 10 MiB (`drgnx-agents-read-max`): a FIFO or a device is
 refused, never opened. The file is read with no file name handlers: a `.gz` or `.gpg` file comes back as its bytes
-(never decompressed or decrypted in the hub), and a link that leads nowhere is "not a regular file".
+(never decompressed or decrypted in the hub), and a link that leads nowhere is "not a regular file". An agent never
+gets a file bigger than 10 MiB, open or not: a buffer over that size, or a large file drgnx holds in chunks, lean or
+raw, is not served, and the file on disk is read instead, under the same limit.
 
 ## Durable jobs
 
