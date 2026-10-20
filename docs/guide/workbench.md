@@ -37,7 +37,7 @@ else in the workbench moves. The size you gave a pane and its place in front are
 and the pane comes back at that size, and shows at once when its panel or dock is open with it in front.
 
 In the **Explorer**: a click on a folder opens or closes it; a click on a file opens it and keeps the Explorer
-focused (so you can keep browsing); a double click on a file moves to the editor. Keys: up/down (`n`/`p` in the
+focused (so you can keep browsing; a row cut off at the bottom of the list is brought into view by a few pixels, never by whole rows, so the list does not move under the pointer); a double click on a file moves to the editor. Keys: up/down (`n`/`p` in the
 Emacs profile, `j`/`k` in Vim), right expands or enters a folder, left collapses or goes to the parent, `RET`
 opens (and focuses), `SPC` opens and stays (`g o` in Vim), `TAB` toggles a folder (Emacs), `g` / `R` refreshes.
 Folders come first, names sort naturally (`file2` before `file10`) and case-insensitively; `.git` and other

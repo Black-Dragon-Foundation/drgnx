@@ -1026,6 +1026,20 @@ is read.  File events and timers read none."
   (and drgnx-explorer--pressed
        (or (not (integerp drgnx-explorer--pressed)) (= drgnx-explorer--pressed num-input-keys))))
 
+;; Point in a row that shows only in part at the window's bottom makes every full redisplay scroll the window
+;; to that row (try_window's margin check, `make-cursor-line-fully-visible' and `scroll-margin' do not matter;
+;; it is also what runs after any mode-line update or another window's buffer change).  A click on such a row
+;; must not move the rows under the pointer, so the hidden part is brought in by the window's pixel scroll: the
+;; text moves up by less than a row, `window-start' stays, and the pointer stays on the row it pressed.
+(defun drgnx-explorer--goto-in-place (pos)
+  "Move point to POS without the window scrolling by rows when POS is on a row that shows only in part."
+  (goto-char pos)
+  (let ((w (selected-window)))
+    (when (eq (window-buffer w) (current-buffer))
+      (let ((v (pos-visible-in-window-p pos w t)))
+        (when (and (consp v) (nth 3 v) (> (nth 3 v) 0))
+          (set-window-vscroll w (+ (window-vscroll w t) (nth 3 v)) t))))))
+
 (defun drgnx-explorer-mouse-press (event)
   "Press: select the row under EVENT (and the Explorer); nothing else happens until release."
   (interactive "e")
@@ -1034,7 +1048,7 @@ is read.  File events and timers read none."
     (when (window-live-p w)
       (unless (eq w (selected-window)) (select-window w))
       (setq drgnx-explorer--focused-before (drgnx-explorer--node))   ; Ctrl/Shift-click start from it
-      (when (integer-or-marker-p pos) (goto-char pos)))))
+      (when (integer-or-marker-p pos) (drgnx-explorer--goto-in-place pos)))))
 
 
 (defun drgnx-explorer-mouse-toggle (event)
@@ -1044,7 +1058,7 @@ is read.  File events and timers read none."
   (when-let* ((pos (posn-point (event-end event))) ((integer-or-marker-p pos)) (p (drgnx-explorer-node-at pos)))
     (unless (or drgnx-explorer--selection (null drgnx-explorer--focused-before) (equal drgnx-explorer--focused-before p))
       (setq drgnx-explorer--selection (list drgnx-explorer--focused-before)))
-    (goto-char pos)
+    (drgnx-explorer--goto-in-place pos)
     (setq drgnx-explorer--anchor p)
     (drgnx-explorer--set-selection (if (member p drgnx-explorer--selection) (remove p drgnx-explorer--selection)
                                      (append drgnx-explorer--selection (list p))))))
@@ -1057,7 +1071,7 @@ is read.  File events and timers read none."
     (unless (and drgnx-explorer--anchor (drgnx-explorer--row-pos drgnx-explorer--anchor))
       (setq drgnx-explorer--anchor drgnx-explorer--focused-before))
     (drgnx-explorer--select-range-to pos)
-    (goto-char pos)))
+    (drgnx-explorer--goto-in-place pos)))
 
 (defun drgnx-explorer-mouse-click (event)
   "Release without moving: a folder toggles, a file opens keeping the Explorer focused."
@@ -1065,7 +1079,7 @@ is read.  File events and timers read none."
   (setq drgnx-explorer--pressed nil)
   (drgnx-explorer--clear-selection)
   (let ((pos (posn-point (event-end event))))
-    (when (integer-or-marker-p pos) (goto-char pos) (drgnx-explorer-activate pos t))))
+    (when (integer-or-marker-p pos) (drgnx-explorer--goto-in-place pos) (drgnx-explorer-activate pos t))))
 
 (defun drgnx-explorer-mouse-double (event)
   "Double click: on a file, focus the editor (the first click opened it); on a folder, nothing
