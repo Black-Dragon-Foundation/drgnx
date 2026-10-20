@@ -1038,3 +1038,26 @@ this test are not passed on."
     (let ((r (drgnx-run-ert-test--stress suite results "DRGNX_TEST_STRESS=2")))
       (should (eql 2 (car r)))
       (should (string-match-p "--stress needs DRGNX_TEST_SELECTOR" (cdr r))))))
+
+(ert-deftest drgnx-run-ert/a-run-dir-with-podman-storage-is-removed-through-unshare ()
+  ;; Rootless podman storage holds files of sub-UIDs that a plain delete cannot remove (stood in for by an
+  ;; unwritable directory): the runner removes it with `podman unshare rm -rf' before it deletes the run dir.
+  (let* ((tmp (make-temp-file "drgnx-run-ert-storage" t))
+         (bin (expand-file-name "bin" tmp))
+         (run (expand-file-name "run" tmp))
+         (stuck (expand-file-name "home/.local/share/containers/storage/stuck" run))
+         (other (expand-file-name "xdg-data/containers/storage/stuck" run)))
+    (unwind-protect
+        (progn
+          (make-directory bin) (make-directory stuck t) (make-directory other t)
+          (dolist (d (list stuck other))
+            (write-region "x" nil (expand-file-name "f" d) nil 'silent) (set-file-modes d #o500))
+          (with-temp-file (expand-file-name "podman" bin)
+            (insert "#!/bin/sh\n[ \"$1 $2 $3\" = 'unshare rm -rf' ] || exit 2\nshift 3\nchmod -R u+w \"$@\"; exec rm -rf \"$@\"\n"))
+          (set-file-modes (expand-file-name "podman" bin) #o755)
+          (let ((exec-path (cons bin exec-path))
+                (process-environment (cons (concat "PATH=" bin ":" (getenv "PATH")) process-environment)))
+            (drgnx-run-ert--delete-run-dir run))
+          (should-not (file-exists-p run)))
+      (ignore-errors (call-process "chmod" nil nil nil "-R" "u+w" tmp))
+      (delete-directory tmp t))))
