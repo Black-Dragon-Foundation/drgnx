@@ -6,6 +6,7 @@
 (require 'drgnx-agent-check)
 (load (expand-file-name "test/fixtures/agent-config-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/mock-mcp" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
 (defvar drgnx-agent-check-test--counter 0)
 
@@ -30,10 +31,9 @@
 
 (defun drgnx-agent-check-test--wait (start)
   "Call START with a callback and wait (the mock HTTP server is served meanwhile) for the result."
-  (let ((result nil) (deadline (+ (float-time) 40)))
+  (let ((result nil))
     (funcall start (lambda (r) (setq result r)))
-    (while (and (not result) (< (float-time) deadline)) (accept-process-output nil 0.05))
-    result))
+    (drgnx-test-wait (lambda () result) :secs 40 :what "the check's result")))
 
 (defun drgnx-agent-check-test--marked (marker)
   "The pids of processes that have MARKER on their command line."
@@ -55,10 +55,9 @@
     (delq (emacs-pid) set)))
 
 (defun drgnx-agent-check-test--gone-p (marker)
-  "Non-nil when no process with MARKER is left (after a short while for the kernel)."
-  (let ((deadline (+ (float-time) 3)))
-    (while (and (drgnx-agent-check-test--marked marker) (< (float-time) deadline)) (sleep-for 0.1))
-    (null (drgnx-agent-check-test--marked marker))))
+  "Non-nil when no process with MARKER is left (after a while for the kernel: `drgnx-test-wait')."
+  (drgnx-test-wait (lambda () (null (drgnx-agent-check-test--marked marker)))
+                   :what (format "no process with %s left" marker)))
 
 (defun drgnx-agent-check-test--mcp (item root)
   (drgnx-agent-check-test--wait (lambda (cb) (drgnx-agent-check-mcp item root cb))))
@@ -128,11 +127,10 @@ with the HTTP mock stopped afterwards."
            (results (make-vector 3 nil))
            (items (list (drgnx-agent-check-test--stdio-item "hang" (nth 0 markers))
                         (drgnx-agent-check-test--stdio-item "fork-child" (nth 1 markers))
-                        (drgnx-agent-check-test--http-item port)))
-           (deadline (+ (float-time) 30)))
+                        (drgnx-agent-check-test--http-item port))))
       (dotimes (i 3)
         (let ((i i)) (drgnx-agent-check-mcp (nth i items) root (lambda (r) (aset results i r)))))
-      (while (and (cl-some #'null results) (< (float-time) deadline)) (accept-process-output nil 0.05))
+      (drgnx-test-wait (lambda () (not (cl-some #'null results))) :what "the three checks' results")
       (dotimes (i 3)
         (should (eq (plist-get (aref results i) :status) 'timeout))
         (should (< (plist-get (aref results i) :time) 8)))
@@ -147,9 +145,8 @@ with the HTTP mock stopped afterwards."
       (let* ((result nil)
              (proc (drgnx-agent-check-mcp (drgnx-agent-check-test--stdio-item "fork-child" marker) root
                                           (lambda (r) (setq result r))))
-             (child (process-id proc))
-             (deadline (+ (float-time) 20)))
-        (while (and (not result) (< (float-time) deadline)) (accept-process-output nil 0.05))
+             (child (process-id proc)))
+        (drgnx-test-wait (lambda () result) :what "the check's result")
         (should (eq (plist-get result :status) 'timeout))
         (should (string-search "was stopped" (plist-get result :error)))
         (should (< (plist-get result :time) 3))
@@ -168,10 +165,8 @@ with the HTTP mock stopped afterwards."
       (drgnx-agent-check-mcp item root (lambda (r) (setq result r)))
       (drgnx-agent-check-hook hook root (lambda (r) (setq hook-result r)))
       ;; until both run (a loaded machine starts the child Emacs slowly)
-      (let ((until (+ (float-time) 15)))
-        (while (and (< (float-time) until)
-                    (not (and (drgnx-agent-check-test--marked marker) (drgnx-agent-check-test--marked "sleep 3174"))))
-          (accept-process-output nil 0.1)))
+      (drgnx-test-wait (lambda () (and (drgnx-agent-check-test--marked marker) (drgnx-agent-check-test--marked "sleep 3174")))
+                       :what "the server and the hook running")
       ;; both are running now: look at the command line of everything this Emacs started
       (dolist (pid (drgnx-agent-check-test--descendants))
         (let ((args (or (alist-get 'args (ignore-errors (process-attributes pid))) "")))
@@ -180,8 +175,7 @@ with the HTTP mock stopped afterwards."
       (should (drgnx-agent-check-test--marked marker))
       (should (drgnx-agent-check-test--marked "sleep 3174"))
       (should-not seen)
-      (let ((deadline (+ (float-time) 20)))
-        (while (and (not (and result hook-result)) (< (float-time) deadline)) (accept-process-output nil 0.05)))
+      (drgnx-test-wait (lambda () (and result hook-result)) :what "both checks' results")
       (should (eq (plist-get result :status) 'timeout)))))
 
 (ert-deftest drgnx-agent-check/a-check-that-cannot-start-says-so ()
@@ -467,7 +461,7 @@ with the HTTP mock stopped afterwards."
             (write-region "#!/bin/sh\nread x\n" nil script nil 'silent)
             (set-file-modes script #o700)
             (setq proc (make-process :name "x" :command (list script) :noquery t))
-            (sleep-for 0.2)
+            (drgnx-test-wait (lambda () (ignore-errors (file-exists-p (format "/proc/%d/stat" (process-id proc))))) :what "the process's stat")
             (let ((raw (with-temp-buffer (insert-file-contents (format "/proc/%d/stat" (process-id proc))) (buffer-string)))
                   (row (assq (process-id proc) (drgnx-agent-check--proc-rows))))
               ;; the name is really in the file, and the numbers after it are still the right ones
@@ -483,7 +477,7 @@ with the HTTP mock stopped afterwards."
          (pid (process-id proc)))
     (unwind-protect
         (progn
-          (sleep-for 0.5)
+          (drgnx-test-wait (lambda () (>= (length (drgnx-agent-check--tree pid)) 3)) :what "the shell's two sleeps")
           (should (>= (length (drgnx-agent-check--tree pid)) 3))
           (drgnx-agent-check--kill-tree pid)
           (should (drgnx-agent-check-test--gone-p "sleep 3175")))
@@ -794,20 +788,21 @@ nothing and the fake `systemctl' (SYSTEMCTL-BODY, a shell command) is the only p
   (drgnx-agent-check-mcp (drgnx-agent-check-test--stdio-item "fork-child" marker) default-directory callback))
 
 (ert-deftest drgnx-agent-check/a-systemctl-that-hangs-does-not-hang-the-check ()
+  :tags '(:timing)                                      ; wall-clock budget: the :timing group runs alone
   (drgnx-agent-check-test-env
     (drgnx-agent-check-test-with-fake-scope "exec sleep 3176"
       (let* ((drgnx-agent-check-timeout 3) (drgnx-agent-check--grace -2)
              (marker (drgnx-agent-check-test--marker))
              (calls 0) (result nil) (t0 (float-time)))
         (drgnx-agent-check-test--start-hanging marker (lambda (r) (cl-incf calls) (setq result r)))
-        (while (and (not result) (< (float-time) (+ t0 20))) (accept-process-output nil 0.05))
+        (drgnx-test-wait (lambda () result) :what "the check's result")
         (should (eq (plist-get result :status) 'timeout))
         ;; the backstop (3 s after the timer at 1 s), not the 20 s of waiting
         (should (< (- (float-time) t0) 8))
         (should (drgnx-agent-check-test--gone-p marker))
         ;; the hanging systemctl was deleted
         (should (drgnx-agent-check-test--gone-p "sleep 3176"))
-        (sleep-for 0.5)
+        (drgnx-test-pause 0.5)                                  ; no second result
         (should (= calls 1))))))
 
 (ert-deftest drgnx-agent-check/a-systemctl-that-cannot-be-started-falls-back-to-the-tree ()
@@ -816,19 +811,19 @@ nothing and the fake `systemctl' (SYSTEMCTL-BODY, a shell command) is the only p
       (let* ((drgnx-agent-check-timeout 3) (drgnx-agent-check--grace -2)
              (marker (drgnx-agent-check-test--marker))
              (orig (symbol-function 'make-process))
-             (calls 0) (result nil) (t0 (float-time)))
+             (calls 0) (result nil))
         (cl-letf (((symbol-function 'make-process)
                    (lambda (&rest args)
                      (if (equal (plist-get args :name) "drgnx-check-kill")
                          (error "no process for you")
                        (apply orig args)))))
           (drgnx-agent-check-test--start-hanging marker (lambda (r) (cl-incf calls) (setq result r)))
-          (while (and (not result) (< (float-time) (+ t0 20))) (accept-process-output nil 0.05)))
+          (drgnx-test-wait (lambda () result) :what "the check's result"))
         (should (eq (plist-get result :status) 'timeout))
         ;; at the timer's 1 s plus the child's start, long before the 3 s backstop
         (should (< (plist-get result :time) 2.8))
         (should (drgnx-agent-check-test--gone-p marker))
-        (sleep-for 0.5)
+        (drgnx-test-pause 0.5)                                  ; no second result
         (should (= calls 1))))))
 
 (ert-deftest drgnx-agent-check/a-timer-in-a-buffer-with-no-directory-still-ends-the-check ()
@@ -838,19 +833,19 @@ nothing and the fake `systemctl' (SYSTEMCTL-BODY, a shell command) is the only p
       (let* ((drgnx-agent-check-timeout 3) (drgnx-agent-check--grace -2)
              (marker (drgnx-agent-check-test--marker))
              (gone (generate-new-buffer " *no directory*"))
-             (calls 0) (result nil) (t0 (float-time)))
+             (calls 0) (result nil))
         (with-current-buffer gone (setq default-directory "/nowhere/at/all/"))
         (unwind-protect
             (progn
               (drgnx-agent-check-test--start-hanging marker (lambda (r) (cl-incf calls) (setq result r)))
               (with-current-buffer gone
-                (while (and (not result) (< (float-time) (+ t0 20))) (accept-process-output nil 0.05))))
+                (drgnx-test-wait (lambda () result) :what "the check's result")))
           (kill-buffer gone))
         (should (eq (plist-get result :status) 'timeout))
         (should (< (plist-get result :time) 2.8))
         (should (drgnx-agent-check-test--gone-p marker))
         (should (member "--user kill --signal=KILL drgnx-check-fake.scope" (drgnx-agent-check-test--systemctl-log)))
-        (sleep-for 0.5)
+        (drgnx-test-pause 0.5)                                  ; no second result
         (should (= calls 1))))))
 
 (ert-deftest drgnx-agent-check/a-finished-check-asks-systemd-to-clear-its-scope ()
@@ -858,8 +853,7 @@ nothing and the fake `systemctl' (SYSTEMCTL-BODY, a shell command) is the only p
     (drgnx-agent-check-test-with-fake-scope "exit 1"
       (let ((r (drgnx-agent-check-test--mcp (drgnx-agent-check-test--stdio-item "ok" (drgnx-agent-check-test--marker)) root)))
         (should (eq (plist-get r :status) 'ok))
-        (let ((until (+ (float-time) 3)))
-          (while (and (not (drgnx-agent-check-test--systemctl-log)) (< (float-time) until)) (sleep-for 0.1)))
+        (drgnx-test-wait #'drgnx-agent-check-test--systemctl-log :what "systemctl's log")
         (should (member "--user kill --signal=KILL drgnx-check-fake.scope" (drgnx-agent-check-test--systemctl-log)))))))
 
 (ert-deftest drgnx-agent-check/scope-names-do-not-repeat-across-emacs-sessions ()

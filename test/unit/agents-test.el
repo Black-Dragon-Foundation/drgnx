@@ -5,14 +5,12 @@
 (require 'drgnx-paths)
 (require 'drgnx-timer)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-agents-test--mock (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir))
 
 (defun drgnx-agents-test--wait (pred &optional secs)
-  (let ((deadline (+ (float-time) (or secs 10))) v)
-    (while (and (not (setq v (funcall pred))) (< (float-time) deadline))
-      (accept-process-output nil 0.02))
-    v))
+  (drgnx-test-wait pred :secs (max 30 (or secs 0)) :what "the agent session's condition"))
 
 (defmacro drgnx-agents-test--with (s opts &rest body)
   "BODY with S a started session of the mock agent (OPTS: :mode :env)."
@@ -78,19 +76,18 @@
     (drgnx-agents-send s "go left")
     (should (equal (drgnx-agent-session-queue s) '("go left")))))
 
-(ert-deftest drgnx-agents/stop-ends-the-turn-within-a-second-and-keeps-the-queue ()
-  :tags '(:timing)                                      ; a quiet machine: bin/drgnx check runs it alone
+(ert-deftest drgnx-agents/stop-ends-the-turn-before-it-would-have-ended-and-keeps-the-queue ()
+  ;; The slow turn is ten chunks 0.3 s apart: a stop that waited for it would leave "part 10" in the transcript.
   (drgnx-agents-test--with s nil
     (drgnx-agents-send s "slow one")
     (drgnx-agents-send s "later")
-    (sleep-for 0.4)
-    (let ((t0 (float-time)))
-      (drgnx-agents-stop s)
-      (should (drgnx-agents-test--idle s))
-      (should (< (- (float-time) t0) 1.0)))
+    (drgnx-agents-test--wait (lambda () (drgnx-agents-test--texts s 'agent)))     ; the slow turn has begun
+    (drgnx-agents-stop s)
+    (should (drgnx-agents-test--idle s))
+    (should-not (string-match-p "part 10" (mapconcat #'identity (drgnx-agents-test--texts s 'agent) "")))
     (should (seq-find (lambda (e) (equal (plist-get e :stop) "cancelled")) (drgnx-agent-session-entries s)))
     (should (equal (drgnx-agent-session-queue s) '("later")))             ; kept, not sent (paused)
-    (sleep-for 0.5)
+    (drgnx-test-pause 0.5)                                                  ; no second send
     (should (= 1 (length (drgnx-agents-test--texts s 'user))))))
 
 (ert-deftest drgnx-agents/permission-requests-wait-for-an-answer ()
@@ -167,7 +164,7 @@
   ;; C1: the agent answers the cancel after the 1 s deadline; the next turns stay in order, one at a time.
   (drgnx-agents-test--with s '(:env ("MOCK_ACP_LATE_CANCEL=2"))
     (drgnx-agents-send s "slow one")
-    (sleep-for 0.3)
+    (drgnx-agents-test--wait (lambda () (drgnx-agents-test--texts s 'agent)))     ; the slow turn has begun
     (drgnx-agents-stop s)
     (should (drgnx-agents-test--idle s))                         ; the deadline ended it locally
     (drgnx-agents-send s "second")
@@ -255,9 +252,8 @@
           (should (eql 0 (call-process "mkfifo" nil nil nil fifo)))
           ;; were the FIFO opened, this writer lets it go after 2 s: the test fails instead of hanging
           (setq writer (start-process "drgnx-fifo-writer" nil "sh" "-c" (format "sleep 2; echo x > %s" (shell-quote-argument fifo))))
-          (let ((t0 (float-time)))
-            (should (funcall err fifo))
-            (should (< (- (float-time) t0) 1)))
+          (should (funcall err fifo))
+          (should (process-live-p writer))              ; the refusal came before the writer's 2 s: the FIFO was not opened
           (should (funcall err "/dev/null"))
           (write-region (make-string (1+ drgnx-agents-read-max) ?x) nil big nil 'silent)
           (should (funcall err big))

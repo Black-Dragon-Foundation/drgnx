@@ -4,14 +4,15 @@ drgnx is measured, not guessed at: every interaction it cares about is timed in 
 [harness](harness.md)), judged against budgets, and kept in a history.
 
 ```
-drgnx test --perf           every workload; fails when a budget breaks; WORSE lines for what got worse
+drgnx test --perf           every workload; fails when a gated budget (allocation, CPU, rows) breaks; wall clock is reported;
+                            what got worse than the local history is printed
 drgnx test --perf --audit   the workloads with every hook function timed: judged on the hook budget only
 drgnx test --soak [MIN]     the input workloads in a loop for MIN minutes (30); fails when memory grows
 DRGNX_STARTUP_TRACE=FILE    emacs --init-directory …/init: where startup time goes, written to FILE
 DRGNX_PERF_WORKLOADS='A B'  only those workloads (space-separated names from the table below; unset: all; a typo is an error).
                             A partial run is judged against its own budgets and writes no history line
-DRGNX_PERF_MAX_LOAD=N       the load average above which --perf does not judge (default: CPUs / 4, at least 3)
-DRGNX_PERF_WAIT=S           how long --perf waits for a quiet machine before giving up (180 s)
+DRGNX_PERF_RESULTS=FILE     write the results as JSON: every metric (wall clock included), each workload's calibration,
+                            the Emacs version and the commit
 DRGNX_PERF_ONLY=REGEXP      run only the workloads whose name matches (an Emacs regexp: `\|` for alternation): judged
                             against their own budgets, the history is not written
 DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the three evil workloads
@@ -53,6 +54,21 @@ before it reads the clock (timers can run before the command loop's own redispla
 and mode-line work out). Keys arrive one at a time (the harness), so typed-ahead input — where Emacs skips
 redisplay — is not covered; the harness's own recorder runs inside the measured span (small).
 
+**Per command** (`drgnx-perf-begin` / `drgnx-perf-end`), from `pre-command-hook` to the redisplay after the command,
+three numbers are recorded for each of the commands of a workload:
+
+- `:input`, wall milliseconds, as above;
+- `:alloc`, the objects allocated: the seven `memory-use-counts` added, less the 7 conses of the reading itself.
+  The same code allocates the same on a quiet machine and a busy one (a timer or a process filter that happens to run
+  inside the span adds its own, so two sessions agree to within a few per cent, not to the object);
+- `:cpu_ms`, this process's CPU time (`current-cpu-time`).
+
+Each is `(:n :p50 :p90 :p95 :p99 :max :mean)` (nearest rank); **`:p95` and `:p99` are null below n = 100**: the tail of
+fewer samples is the maximum or next to it. A run also has `:rows`, the growth of the sum of the row counters
+(`drgnx-perf-row-counters`: the Explorer's and the Buffers panel's renders, the cockpit's draws), `:gc_count`, `:gc_ms`
+and `:gc_pause`. A perf session runs at drgnx's GC settings, as a user's does (HARNESS-GC-1): the run stops with an error
+when its `gc-cons-threshold` is not `drgnx-gc-cons-threshold`.
+
 Every workload runs three times (each with its own setup, its typing fixture reused, everything it opened closed
 after it) and the median of each number is kept, so one noisy run never decides.
 
@@ -66,7 +82,7 @@ cannot be unloaded from a session and the other workloads (and the memory figure
 `drgnx test --perf` passes the variable on to the session.
 
 Their budgets are those of the stack without evil, except the Explorer's keys (p95 8 ms, the Explorer key budget of
-`harness/drgnx-bench.el`). One more rule is judged beside them: **`typing-evil` input p95 may exceed `typing` input
+`harness/drgnx-bench.el`). One more rule is reported beside them: **`typing-evil` input p95 may exceed `typing` input
 p95 by at most 1 ms in the same run** (`drgnx-perf-run--relative-fails`), so evil's cost shows even when both stay
 under 16 ms.
 
@@ -88,30 +104,62 @@ and the run says so; a filter that is not a valid regexp, or matches no workload
 
 ## Budgets
 
-`test/perf/budgets.eld`. From the design: keystroke and scroll p95 < 16 ms, a GC pause p95 < 50 ms, any hook
-function p95 < 2 ms (judged in the `--audit` pass), a new frame p95 < 500 ms, a daemon's server ready < 1 s,
-modules < 1.8 s, RSS < 400 MB (and after the 30-minute soak). Also: input max 50 ms, redisplay p95 16 ms, GC while
-typing 100 ms.
+`test/perf/budgets.eld`: entries `(WORKLOAD PATH LIMIT &rest PLIST)`; `:emacs MAJOR` limits an entry to that Emacs
+major version (for a budget that differs between versions; none exist now that 31.1 is the only target).
 
-The history (`perf-history.jsonl` in the harness state root) gets one line per run in which every workload ran,
-with its commit. A p95 more than 15% **and** 5 ms worse than the median of the last five runs **fails** the run
-(the 5 ms keeps noise in tiny numbers from failing it). The new-frame path from a daemon (`emacsclient -c`) is
-judged by the scenario `frame-from-daemon-fast` ([scenarios.md](scenarios.md)).
+**Gated** (`drgnx-perf-gated-metrics`: `:alloc :cpu_ms :rows :processes :rss_kb`) - what the load on the machine does
+not move. A broken one fails the run (`drgnx-perf-verdict`; `--perf` exits 1):
 
-## A quiet machine
+| Path | Limit | Seeded as |
+|---|---|---|
+| `(:alloc :p50)` | objects allocated per command | measured x 1.25, rounded up |
+| `(:cpu_ms :p90)` | CPU ms per command, times `DRGNX_PERF_CPU_FACTOR` (default 1; 2 on hosted runners) | the container's p90 x 2 |
+| `(:rows)` | rows drawn during the run, exact | measured |
+| `(:processes)`, `(:rss_kb)` | as before | the design |
 
-Timings only mean something when nothing else takes the CPU: next to other test runs, scrolling p95 went from
-11.6 to 17.6 ms on the same commit, and every other number rose with it (with ten busy loops: 24.5 ms). So
-`--perf` reads the 1-minute load average before the run and after every workload:
+**Reported** (every other path: `:input`, `:redisplay`, `:frame`, `:server_ms`, `:modules_ms`, `:draw_ms`,
+`:slice_ms`, the GC numbers): wall clock. The run prints `report ...` lines with the value and the budget and does not
+judge them; the paired A/B run at n >= 100 does. The numbers the design fixed - keystroke and scroll p95 < 16 ms, max
+50 ms, a GC pause p95 < 50 ms, a new frame p95 < 500 ms, a daemon's server ready < 1 s, modules < 1.8 s, redisplay p95
+16 ms - stay in the file as the targets those reports are read against; a p95 of fewer than 100 samples is shown as `-`.
 
-- before the run, it waits (up to `DRGNX_PERF_WAIT`) for the load to fall to `DRGNX_PERF_MAX_LOAD`; if it never
-  does, nothing is measured;
-- if the load passed the limit during the run, the numbers are printed but **not judged** and not written to the
-  history;
-- both end with exit code **3** (0: every budget holds, 1: a failure), so a busy machine never reads as a pass or
-  a regression. A judged run records its highest load in its history line (`load`).
+**Seeding.** `:alloc` and `:rows` come from the Emacs 31.1 container (the GUI image; `bin/drgnx test --container`
+has no `--perf` yet, so the tier runs by hand: `podman run --memory 4g --memory-swap 4g --security-opt
+seccomp=unconfined --security-opt label=disable -v CHECKOUT:/src:ro -v OUT:/out -e DRGNX_PERF_RESULTS=/out/r.json -w
+/src drgnx-test-gui:f45 bin/drgnx test --perf`, through the heavy slot), twice: allocation and rows must agree
+between the runs. The checkout is not built there, so the figures are those of code loaded from source; compiled
+code allocates less, so a built checkout stays under them. A workload that could not run in the container has no
+gated rows yet and is named, with the reason, in `drgnx-perf-run-unseeded` (a test checks both ways).
 
-Run `--perf` on its own: no other test tiers, agents or builds at the same time.
+**Raising a budget** is a change of its own: edit `budgets.eld` in the same commit as the code that needs it, with the
+reason in a comment on the row. A budget is raised for a measured, explained increase, never to make a run pass.
+
+**History.** `perf-history.jsonl` (the harness state root) gets one line per run in which every workload ran, with its
+commit. After a run, `drgnx-perf-regressions` prints the metrics whose `(:alloc :p50)` or `(:cpu_ms :p50)` is more than
+15% worse than the median of the last five runs and worse by more than a floor: the larger of 8 conses (0.5 ms of CPU)
+and twice the metric's spread (max - min) over those five runs. It is a local report (`regression (reported, local
+history)`), never a failure: CI has no history and gates on the budgets. The new-frame path from a daemon
+(`emacsclient -c`) is judged by the scenario `frame-from-daemon-fast` ([scenarios.md](scenarios.md)).
+
+## Load, the wall clock and the calibration
+
+A busy machine used to refuse the run (exit 3) because wall-clock numbers rose with the load: next to other test
+runs, scrolling p95 went from 11.6 to 17.6 ms on the same commit. Nothing refuses now. `--perf` exits 0 or 1, and
+what it can judge on any machine is what load does not move (allocation, CPU, rows). Wall clock is **reported**
+with its sample count, and every workload carries a **calibration** (`drgnx-perf-calibrate`): a fixed byte-compiled
+loop of 2,000,000 iterations timed on the wall clock and on the process's CPU clock. Alone on a core they agree;
+`:loaded` is t when wall / CPU > 1.3, and the run prints `(loaded)` after that workload's wall numbers. The history
+line still records the highest load average seen (`load`). A wall-clock judgement is made by the paired A/B run at
+n >= 100, not by one run.
+
+## The audit's per-command hook time
+
+`--audit` times every function on the busy hooks (`drgnx-perf-busy-hooks`, `window-state-change-functions` among
+them). Besides the per-function rows (judged on `:p90`, 2 ms) it records, per command, the summed time of the audited
+hook functions and of the timers that ran from that command's start to the next command's: `:hooks` per workload,
+judged on its `:p90` against `drgnx-perf-run-hook-command-budget` (1.5 ms: twice the larger of the p90s measured on
+2026-10-20, `typing` 0.46 and `explorer` 0.67 ms; the plan's starting value was 4). The probe's own timer, which holds the
+redisplay, is left out. Process filters are not timed yet.
 
 ## Where things stood (2026-10-17, this machine)
 

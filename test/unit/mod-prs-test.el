@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/measure-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-diff" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-prs" drgnx-dir) nil t)
@@ -152,13 +153,16 @@
         (should (equal (mapcar (lambda (e) (cons (plist-get (car e) :number) (cdr e))) (drgnx-prs-stacks prs))
                        (mapcar (lambda (e) (cons (plist-get (car e) :number) (cdr e))) (drgnx-prs-test--stacks-reference prs))))))))
 
-(ert-deftest drgnx-prs/2000-prs-stack-fast ()
-  :tags '(:timing)                                       ; wall-clock: a quiet machine
-  (let* ((prs (cl-loop for n from 1 to 2000
-                       collect (drgnx-prs-test--pr n (if (zerop (mod n 3)) (format "h%d" (1- n)) "main") (format "h%d" n))))
-         (t0 (float-time)) (s (drgnx-prs-stacks prs)))
-    (should (= 2000 (length s)))
-    (should (< (- (float-time) t0) 0.25))))
+(ert-deftest drgnx-prs/2000-prs-stack-in-linear-allocation ()
+  ;; Four times the PRs allocate about four times as much (a scan per PR, sixteen); the wall-clock form (0.25 s)
+  ;; missed under load.
+  (drgnx-test-compile "drgnx-prs-")
+  (cl-flet ((prs (count) (cl-loop for n from 1 to count
+                                  collect (drgnx-prs-test--pr n (if (zerop (mod n 3)) (format "h%d" (1- n)) "main") (format "h%d" n)))))
+    (should (= 2000 (length (drgnx-prs-stacks (prs 2000)))))
+    (let* ((small (prs 500)) (big (prs 2000))
+           (a (drgnx-test-alloc (drgnx-prs-stacks small))) (b (drgnx-test-alloc (drgnx-prs-stacks big))))
+      (should (<= b (* 5 a))))))
 
 (ert-deftest drgnx-prs/only-closed-message ()
   ;; M11b-10: only merged and closed pull requests: the tab says how many are hidden, not that there are none

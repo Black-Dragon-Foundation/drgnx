@@ -23,7 +23,9 @@ It runs in phases:
    - the live tests in shards, each in the unit suite's sandbox (`drgnx-run-ert-batch`: a temp HOME and drgnx dirs,
      a dead session bus, no display, the provider keys unset), its files in one Emacs. The sessions they start run
      detached (no systemd user manager answers there), and `test/live/jobs-systemd-test.el` skips. A live test that
-     needs the user's ELPA reads it from `DRGNX_USER_ELPA` (named before HOME is swapped), never from `~`.
+     needs the user's ELPA reads it from `DRGNX_USER_ELPA` (named before HOME is swapped), never from `~`. Every shard's
+     C environment (the dead bus, no display) comes from `drgnx-test-env-outer` (`docs/develop/harness.md`, "One test
+     environment"); `bin/drgnx test --ui` runs its live half the same way, in a child Emacs, never in its own process.
 
    GUI jobs (each starts headless Emacs sessions; the terminal tier counts as one) run no more at a time than free memory allows: 1 GiB each beyond
    1.5 GiB kept free, at least one, at most four.
@@ -33,8 +35,8 @@ It runs in phases:
 4. **The scenario tier, alone.** Its scenarios hold frame budgets; a frame from the daemon in under 500 ms failed
    at 514 ms next to the parallel phase.
 5. **The bench, alone.**
-6. **Perf, alone.** It measures input latency. When the machine stays too busy to measure, `--perf` exits 3: the
-   summary says NOT JUDGED (busy). That is not a pass.
+6. **Perf, alone.** It gates allocation, CPU and rows per command, which a busy machine does not move
+   ([perf.md](perf.md)); wall clock is reported with a calibration. Exit 0 or 1, like every job.
 
 Every job runs with SIGPIPE ignored (`trap '' PIPE`), as `bin/drgnx test` and the hub do: a hub served inside a
 test Emacs that does not ignore it is killed (exit 141) by a write to a client that left. A test that needs it
@@ -49,11 +51,12 @@ test process ended that way stops the harness sessions it started on its way out
 exit is finished by systemd. `bin/drgnx ui start` sessions are meant to outlive the command and are never stopped
 like this.
 
-The summary lists every job — ok, FAILED (exit N), TIMED OUT, NOT JUDGED or skipped — with its time and log, then
+The summary lists every job — ok, FAILED (exit N), TIMED OUT or skipped — with its time and log, then
 the wall time against the time the same jobs take one after another. The exit status is 0 only when all passed.
 
-Shards are balanced by how long each test file took last time (`check/durations.eld`, kept from the shards'
-results). Sessions started at the same moment never share a name:
+Shards are balanced by how long each test file took last time (`check/durations/<8 hex of the checkout's path>.eld`, one per checkout, kept
+from the shards' per-file times, each including its Emacs's start; the old shared `check/durations.eld` is read as a
+fallback until a checkout has its own, and never written). Sessions started at the same moment never share a name:
 - within one state root, a name is claimed by creating its run directory;
 - across roots, a unit name another session holds (systemd: "already loaded", "has a fragment file" or "already exists") is passed over for the next one.
 
@@ -164,6 +167,14 @@ file's base name, so it is the same whether the file runs in its own Emacs (the 
 gives the same order on any machine for the same test names; a test added or renamed changes the orders. It combines with `--leaks`, `--one-process` and a name selector.
 Technically the runner turns the selected tests into a `(member …)` selector — ERT keeps the order of that.
 
+**A name selector and the prefilter.** `DRGNX_TEST_SELECTOR='"^drgnx-foo/"'` (a Lisp string: an Emacs regexp, so `\|`
+for alternation, never `|`) starts an Emacs only for the test files that can hold a matching test. The runner reads each
+file's top-level forms, and the first argument of every form whose head ends in `deftest` (`ert-deftest`, a file's own
+`…--deftest` macro) is a test name; a file with a computed name is always kept. So a test must be defined by such a
+form with its full name spelt out: a macro that builds the name, or a `dolist` around `ert-deftest`, hides the test from
+a name selector. A full run (no selector) fails on each test its file's index lacks (`unindexed test NAME in FILE: the
+selector prefilter cannot see it`), and a string selector that matches no test fails the run (`DRGNX_TEST_SELECTOR … matched 0 tests`).
+
 **`--find-polluter TEST [FILE…]`** answers "which test before TEST makes it fail?". TEST is a test name; FILEs are test
 files or directories (none: the file under `test/unit` that defines TEST). The tests before TEST are those a one-Emacs
 run of the files would run first — name order, or the shuffled order when `--shuffle=SEED` comes first. It runs, each
@@ -187,3 +198,53 @@ The runner's own side: `DRGNX_TEST_ORDER_IN=FILE` (the names to run, one a line,
 names would not fit in the environment) and `DRGNX_TEST_ORDER_OUT=FILE` (write the names in run order, run none) are
 what the bisect's Emacsen are given; they are not for people (the runner reads them first and removes them from the
 environment of the tests, so a runner a test starts is a normal one).
+
+## The host lease
+
+Every worktree on a machine runs tests, and a dozen runs at once starve each other (and the machine). `bin/drgnx lease`
+keeps them to what the memory and cores carry, across all checkouts.
+
+    bin/drgnx lease light|heavy|exclusive [--wait SECS] -- CMD…
+    bin/drgnx lease status
+
+- **Where:** `$DRGNX_LEASE_DIR`, else `$XDG_RUNTIME_DIR/drgnx/lease` (mode 700). Locks are `flock` files `host`,
+  `light-1..L`, `heavy-1..H`; the kernel drops a lock when its holder dies, so a killed run frees its slot.
+- **Slots:** L = max(1, min(cores/3, (RAM GiB − 4)/2)), H = max(1, (RAM GiB − 8)/4). `DRGNX_LEASE_LIGHT` and
+  `DRGNX_LEASE_HEAVY` override; `lease status` prints the numbers.
+- **Classes:**
+
+  | Class | Holds | Memory cap |
+  |---|---|---|
+  | light | `host` shared, one `light-k` | `MemoryMax=2G` (the slot script's; L is sized at 2 GiB per light slot) |
+  | heavy | `host` shared, one `heavy-k` and one `light-k` | `MemoryMax=4G` |
+  | exclusive | `host` exclusive | none |
+
+  The cap is a `systemd-run --user --scope` when a user manager answers, and none otherwise
+  (`DRGNX_LEASE_CAP=off` turns it off).
+- **Holding:** the lease's bash takes the locks and CMD inherits the descriptors, so the command itself holds the
+  slot: killing the lease's bash (the OOM killer, a scope kill) does not free it while CMD runs, and a daemon CMD
+  leaves behind keeps it until that daemon ends. CMD gets `DRGNX_LEASE_HELD=CLASS:K`; a shell that leaks
+  `DRGNX_LEASE_HELD` silently turns leasing off.
+- **Waiting:** a slot is polled every 2 s (`DRGNX_LEASE_POLL`, for tests). Light and heavy wait `--wait SECS`, else
+  `$DRGNX_LEASE_WAIT`, else 1800 (30 minutes: a queue of test runs; longer is a hung holder, and `drgnx test` and
+  `drgnx check` end with the same message instead of blocking); on timeout the exit status is 75 and the holders are
+  printed. Exclusive only polls (`--wait`, default
+  600) and never blocks the others, so nothing deadlocks; on timeout it prints `wall clock not judged: host busy`,
+  runs CMD anyway and sets `DRGNX_LEASE_BUSY=1` (a perf run then judges no wall clock).
+- **Status:** `lease status` prints one line per live holder (class, slot, pid, worktree, command, since) and removes the
+  files of holders whose pid is gone.
+- **Off** (CMD runs directly, no cap): `CI=true`, `DRGNX_LEASE=off`, no `flock` on PATH (macOS), bash older than 4,
+  no lease directory, or `DRGNX_LEASE_HELD` set (a nested call).
+
+**Which command takes which class.** You do not call `lease` yourself: `bin/drgnx` takes its own lease and re-runs
+itself inside it (the child has `DRGNX_LEASE_HELD` set, so everything it starts takes nothing again).
+
+| Command | Class |
+|---|---|
+| `test` (also `--one-process`, `--leaks`, `--shuffle`, `--find-polluter`) | light |
+| `test --ui`, `--tty`, `--scenario`, `--bench`, `--perf`, `--soak`, `--container`, `--podman`, `--install`, `--bootstrap` | heavy |
+| `test --perf --ab`, `check` | exclusive |
+| an interactive `drgnx ui start` or MCP `ui_start` | light, while the session lives (`docs/develop/harness.md`) |
+
+The tests are `test/unit/bin-lease-test.el`; they use a temp lease dir and unset `DRGNX_LEASE_HELD` and `CI` for the
+`bin/drgnx` they start.

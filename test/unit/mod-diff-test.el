@@ -2,7 +2,9 @@
 (require 'ert)
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/measure-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-diff" drgnx-dir) nil t)
 
 (defconst drgnx-diff-test--two-files
@@ -103,8 +105,7 @@ new file mode 100644
     (goto-char (prop-match-beginning m))))
 
 (defun drgnx-diff-test--wait (buf)
-  (let ((deadline (+ (float-time) 10)))
-    (while (and (buffer-local-value 'drgnx-diff--proc buf) (< (float-time) deadline)) (accept-process-output nil 0.05))))
+  (drgnx-test-wait (lambda () (not (buffer-local-value 'drgnx-diff--proc buf))) :what "the diff's git"))
 
 (ert-deftest drgnx-diff/parse-files-and-hunks ()
   (let ((files (drgnx-diff-parse drgnx-diff-test--two-files)))
@@ -243,13 +244,16 @@ new file mode 100644
     (drgnx-git-test repo "symbolic-ref" "refs/remotes/origin/HEAD" "refs/remotes/origin/main")
     (should (equal (drgnx-diff-default-base repo) "origin/main"))))
 
-(ert-deftest drgnx-diff/a-10k-line-diff-renders-fast ()
-  :tags '(:timing)                                      ; wall-clock: a quiet machine
-  (let ((text (drgnx-diff-test--hunk-file "big.txt" 1 10000)) (drgnx-diff-fold-lines most-positive-fixnum))
+(ert-deftest drgnx-diff/a-10k-line-diff-renders-in-linear-allocation ()
+  ;; Ten times the lines allocate about ten times as much (a quadratic render, 100 times); the wall-clock form
+  ;; (0.5 s) missed under load.
+  (drgnx-test-compile "drgnx-diff-")
+  (let ((drgnx-diff-fold-lines most-positive-fixnum))
+    (drgnx-diff-test--in (drgnx-diff-test--hunk-file "big.txt" 1 10000) 'unified (should (string-search "ctx 9999" (buffer-string))))
     (dolist (layout '(unified split))
-      (let ((t0 (float-time)))
-        (drgnx-diff-test--in text layout (should (string-search "ctx 9999" (buffer-string))))
-        (should (< (- (float-time) t0) 0.5))))))
+      (cl-flet ((alloc (n) (let ((text (drgnx-diff-test--hunk-file "big.txt" 1 n))) (drgnx-test-alloc (drgnx-diff-test--in text layout nil)))))
+        (let ((small (alloc 1000)) (big (alloc 10000)))
+          (should (<= big (* 13.25 small))))))))     ; ratios measured: 10.57 unified, 10.04 split
 
 ;; review fixes (M11b final review)
 (ert-deftest drgnx-diff/view-commands-never-touch-another-buffer ()

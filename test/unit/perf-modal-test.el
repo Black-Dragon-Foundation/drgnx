@@ -73,7 +73,8 @@
                    ((symbol-function 'drgnx-ui-stop) #'ignore)
                    ((symbol-function 'drgnx-perf-run--make-fixture) (lambda () (make-temp-file "drgnx-perf-fixture")))
                    ((symbol-function 'drgnx-perf-run--workloads) (lambda () ,workloads))
-                   ((symbol-function 'drgnx-perf-run--call) (lambda (&rest _) '(:frame (:p50 1 :p95 1 :max 1))))
+                   ((symbol-function 'drgnx-perf-run--call)
+                    (lambda (_s form &rest _) (if (string-match-p "gc-cons-threshold" form) '(:now 1 :want 1) '(:frame (:p50 1 :p95 1 :max 1)))))
                    ((symbol-function 'drgnx-perf-run--budgets) (lambda () ,budgets))
                    ((symbol-function 'drgnx-perf-run--commit) (lambda () "c0")))
            (setq out (with-output-to-string (setq code (drgnx-perf-run))))
@@ -93,7 +94,7 @@
   ;; a renamed or misspelled workload must not make its budget vanish
   (drgnx-perf-modal-test--run '("DRGNX_PERF_ONLY" "DRGNX_MODAL_ELPA=/x")
       '((frames :measure "m"))
-      '((frames (:frame :p95) 500) (scrolling (:input :p95) 16))
+      '((frames (:frame :p95) 500) (scrolling (:rows) 0))
     (should (eql code 1))
     (should (string-search "scrolling: not measured" out))))
 
@@ -108,7 +109,7 @@
 (ert-deftest drgnx-perf-modal/with-the-elpa-a-missing-evil-budget-is-reported ()
   (drgnx-perf-modal-test--run '("DRGNX_PERF_ONLY" "DRGNX_MODAL_ELPA=/x")
       '((frames :measure "m"))
-      '((frames (:frame :p95) 500) (typing-evil (:input :p95) 16))
+      '((frames (:frame :p95) 500) (typing-evil (:rows) 0))
     (should (eql code 1))
     (should (string-search "typing-evil: not measured" out))
     (should-not (string-search drgnx-perf-run-modal-skipped out))))

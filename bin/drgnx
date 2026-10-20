@@ -409,6 +409,167 @@ cmd_test() {
   esac
 }
 
+## drgnx lease — the host lease: how many test runs the machine carries at once (docs/develop/check.md, "The host lease")
+
+lease_dir() { # the directory of the lock files; empty: no lease
+  if [[ -n "${DRGNX_LEASE_DIR:-}" ]]; then printf '%s\n'  "$DRGNX_LEASE_DIR"
+  elif [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then printf '%s\n' "$XDG_RUNTIME_DIR/drgnx/lease"; fi
+}
+
+lease_off() { # true: CMD runs directly (CI, DRGNX_LEASE=off, no flock, a nested call inside a lease, no directory)
+  [[ "${CI:-}" == true || "${DRGNX_LEASE:-}" == off || -n "${DRGNX_LEASE_HELD:-}" ]] && return 0
+  command -v flock >/dev/null 2>&1 || return 0
+  ((BASH_VERSINFO[0] >= 4)) || return 0                   # {fd}> redirections
+  [[ -z "$(lease_dir)" ]]
+}
+
+lease_slots() { # sets LEASE_L and LEASE_H: light and heavy slots from the memory and cores (DRGNX_LEASE_LIGHT/HEAVY override)
+  local kb gib cores
+  kb="$(awk '/^MemTotal:/ {print $2; exit}' "${DRGNX_LEASE_MEMINFO:-/proc/meminfo}" 2>/dev/null || true)"
+  [[ "$kb" =~ ^[0-9]+$ ]] || kb=0
+  gib=$((kb / 1048576))
+  cores="${DRGNX_LEASE_NPROC:-$(nproc 2>/dev/null || echo 1)}"
+  LEASE_L=$((cores / 3)); ((LEASE_L <= (gib - 4) / 2)) || LEASE_L=$(((gib - 4) / 2)); ((LEASE_L >= 1)) || LEASE_L=1
+  LEASE_H=$(((gib - 8) / 4)); ((LEASE_H >= 1)) || LEASE_H=1
+  [[ "${DRGNX_LEASE_LIGHT:-}" =~ ^[0-9]+$ ]] && LEASE_L="$DRGNX_LEASE_LIGHT"
+  [[ "${DRGNX_LEASE_HEAVY:-}" =~ ^[0-9]+$ ]] && LEASE_H="$DRGNX_LEASE_HEAVY"
+  return 0
+}
+
+lease_release() { # close the lock fds: the kernel drops the locks
+  local fd
+  for fd in ${LEASE_FDS[@]+"${LEASE_FDS[@]}"}; do eval "exec $fd>&-"; done
+  LEASE_FDS=()
+}
+
+lease_grab() { # PREFIX N — lock the first free PREFIX-k, k in 1..N (fd kept in LEASE_FDS, k in LEASE_GOT); false: all taken
+  local k
+  for ((k = 1; k <= $2; k++)); do
+    exec {LEASE_FD}>>"$LEASE_DIR/$1-$k"
+    if flock -n "$LEASE_FD"; then LEASE_FDS+=("$LEASE_FD"); LEASE_GOT="$k"; return 0; fi
+    eval "exec $LEASE_FD>&-"
+  done
+  return 1
+}
+
+lease_try() { # CLASS — one non-blocking pass for every lock the class needs; all or none
+  local class="$1"
+  LEASE_FDS=() LEASE_SLOT=0
+  exec {LEASE_FD}>>"$LEASE_DIR/host"; LEASE_FDS+=("$LEASE_FD")
+  if [[ "$class" == exclusive ]]; then
+    flock -x -n "$LEASE_FD" || { lease_release; return 1; }
+    return 0
+  fi
+  flock -s -n "$LEASE_FD" || { lease_release; return 1; }
+  if [[ "$class" == heavy ]]; then
+    lease_grab heavy "$LEASE_H" || { lease_release; return 1; }
+    LEASE_SLOT="$LEASE_GOT"
+    lease_grab light "$LEASE_L" || { lease_release; return 1; }
+  else
+    lease_grab light "$LEASE_L" || { lease_release; return 1; }
+    LEASE_SLOT="$LEASE_GOT"
+  fi
+}
+
+lease_prune_and_list() { # one line per live holder: class slot pid worktree command since; files of dead pids are removed
+  local f pid class slot tree cmd since
+  for f in "$LEASE_DIR"/holders/*.eld; do
+    [[ -e "$f" ]] || continue
+    pid="${f##*/}"; pid="${pid%.eld}"
+    if ! kill -0 "$pid" 2>/dev/null; then rm -f -- "$f"; continue; fi
+    class="$(sed -n 's/.*:class \([a-z]*\).*/\1/p' "$f")"; slot="$(sed -n 's/.*:slot \([0-9]*\).*/\1/p' "$f")"
+    tree="$(sed -n 's/.*:worktree "\([^"]*\)".*/\1/p' "$f")"; cmd="$(sed -n 's/.*:command "\(.*\)" :since.*/\1/p' "$f")"
+    since="$(sed -n 's/.*:since "\([^"]*\)".*/\1/p' "$f")"
+    printf '%s %s %s %s %s since %s\n' "$class" "$slot" "$pid" "$tree" "$cmd" "$since"
+  done
+}
+
+lease_status() {
+  LEASE_DIR="$(lease_dir)"
+  lease_slots
+  if [[ -z "$LEASE_DIR" ]]; then echo "lease off (no XDG_RUNTIME_DIR or DRGNX_LEASE_DIR)"; return 0; fi
+  printf 'slots light=%s heavy=%s\n' "$LEASE_L" "$LEASE_H"
+  lease_prune_and_list
+}
+
+lease_self() { # CLASS ARGS… — take the lease for this command: re-exec as `drgnx lease CLASS -- drgnx ARGS…`, whose child
+  # runs with DRGNX_LEASE_HELD set (so it takes nothing again); with the lease off, go on
+  local class="$1"; shift
+  if lease_off; then return 0; fi
+  exec "$here/bin/drgnx" lease "$class" -- "$here/bin/drgnx" "$@"
+}
+
+lease_test_class() { # ARGS of `drgnx test` → light (the batch tier), heavy (the GUI, tty and container tiers), exclusive (A/B perf)
+  case "${1:-}" in
+    --ui|--tty|--scenario|--bench|--soak|--container|--podman|--install|--bootstrap|--stress) echo heavy ;;
+    --perf) case " $* " in *" --ab "*) echo exclusive ;; *) echo heavy ;; esac ;;
+    *) echo light ;;
+  esac
+}
+
+lease_holder_done() { # EXIT trap of a lease: the holder file goes, the locks go with the process
+  [[ -z "${LEASE_HOLDER:-}" ]] || rm -f -- "$LEASE_HOLDER"
+  return 0
+}
+
+cmd_lease() { # light|heavy|exclusive [--wait SECS] -- CMD… | status
+  local class maxwait="" lcap=() child rc since started
+  case "${1:-}" in
+    status) lease_status; return ;;
+    light|heavy|exclusive) class="$1"; shift ;;
+    *) echo "usage: drgnx lease light|heavy|exclusive [--wait SECS] -- CMD… | drgnx lease status" >&2; exit 2 ;;
+  esac
+  if [[ "${1:-}" == --wait ]]; then
+    [[ "${2:-}" =~ ^[0-9]+$ ]] || { echo "drgnx lease: --wait takes whole seconds" >&2; exit 2; }
+    maxwait="$2"; shift 2
+  fi
+  [[ "${1:-}" == -- ]] && shift
+  [[ $# -gt 0 ]] || { echo "usage: drgnx lease CLASS [--wait SECS] -- CMD…" >&2; exit 2; }
+  if lease_off; then exec "$@"; fi
+  LEASE_DIR="$(lease_dir)"
+  mkdir -p "$LEASE_DIR/holders" && chmod 700 "$LEASE_DIR" "${LEASE_DIR%/*}" 2>/dev/null || true
+  lease_slots
+  # No wait is endless: exclusive gives up after 10 minutes (and runs anyway), light and heavy after DRGNX_LEASE_WAIT
+  # seconds (default 30 minutes: a queue of test runs; a longer wait is a hung holder) with the holders listed
+  if [[ -z "$maxwait" ]]; then
+    if [[ "$class" == exclusive ]]; then maxwait=600
+    else maxwait="${DRGNX_LEASE_WAIT:-1800}"; [[ "$maxwait" =~ ^[0-9]+$ ]] || maxwait=1800; fi
+  fi
+  started=$SECONDS
+  while ! lease_try "$class"; do
+    if [[ -n "$maxwait" ]] && ((SECONDS - started >= maxwait)); then
+      if [[ "$class" == exclusive ]]; then
+        echo "drgnx lease: wall clock not judged: host busy; holders:" >&2; lease_prune_and_list >&2
+        DRGNX_LEASE_BUSY=1 DRGNX_LEASE_HELD="exclusive:0" exec "$@"
+      fi
+      echo "drgnx lease: no $class slot free in $maxwait s (--wait SECS or DRGNX_LEASE_WAIT waits longer); holders:" >&2
+      lease_prune_and_list >&2
+      exit 75
+    fi
+    sleep "${DRGNX_LEASE_POLL:-2}"
+  done
+  since="$(date +%Y-%m-%dT%H:%M:%S)"
+  LEASE_HOLDER="$LEASE_DIR/holders/$$.eld"
+  trap lease_holder_done EXIT
+  printf '(:class %s :slot %s :pid %s :worktree "%s" :command "%s" :since "%s")\n' "$class" "$LEASE_SLOT" "$$" "$here" \
+    "$(printf '%s' "$*" | tr -d '"\\' | cut -c1-200)" "$since" >"$LEASE_HOLDER"
+  if [[ "$class" != exclusive && "${DRGNX_LEASE_CAP:-}" != off ]] && command -v systemd-run >/dev/null 2>&1 \
+     && [[ "$(timeout 5 systemctl --user is-system-running 2>/dev/null || true)" =~ ^(running|degraded|starting)$ ]]; then
+    lcap=(systemd-run --user --scope -q -p "MemoryMax=$([[ "$class" == heavy ]] && echo 4G || echo 2G)" -p MemorySwapMax=0 --)
+  fi
+  # CMD inherits the lock fds: the slot is held by the command itself, so killing this shell (the OOM killer, a scope
+  # kill) does not free it while CMD runs.  A daemon CMD leaves behind keeps the slot until it ends.
+  (
+    export DRGNX_LEASE_HELD="$class:$LEASE_SLOT"
+    exec ${lcap[@]+"${lcap[@]}"} "$@"
+  ) <&0 &
+  child=$!
+  trap 'kill -TERM "$child" 2>/dev/null || true' INT TERM HUP
+  rc=0
+  while kill -0 "$child" 2>/dev/null; do wait "$child" && rc=0 || rc=$?; done
+  return "$rc"
+}
+
 ## drgnx open / drgnx PATH — one drgnx, a daemon started on the first open (core/drgnx-session.el)
 
 emacsclient_cmd() { # EC: the emacsclient command; on macOS without XDG_RUNTIME_DIR (a shell exports it, Finder does not:
@@ -1246,6 +1407,9 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx shell install [--shell zsh|bash|fish] [--yes]
                                add one line to your shell's rc file, after you say yes (--yes: print it,
                                write nothing); drgnx shell line prints the line (docs/guide/shell.md)
+       drgnx lease light|heavy|exclusive [--wait SECS] -- CMD…
+                               run CMD in a slot of the host lease, shared by every checkout (drgnx lease status
+                               lists the holders; docs/develop/check.md)
        drgnx ui COMMAND        headless GUI Emacs sessions: start, stop, ls, reap, state, shot,
                                click, keys, type, measure (drgnx ui --help; docs/develop/harness.md)
 USAGE
@@ -1254,7 +1418,8 @@ USAGE
 case "${1:-help}" in
   doctor) shift; cmd_doctor "$@" ;;
   build) cmd_build ;;
-  test) shift; cmd_test "$@" ;;
+  test) shift; lease_self "$(lease_test_class "$@")" test "$@"; cmd_test "$@" ;;
+  lease) shift; cmd_lease "$@" ;;
   ui) shift; ui "$@" ;;
   sync|upgrade|rollback|generations|lock|bisect|service-unit)
         "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
@@ -1305,7 +1470,7 @@ case "${1:-help}" in
         DRGNX_STDIN_TTY=$([ -t 0 ] && echo 1 || echo 0) \
         "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-shell -f drgnx-shell-cli -- "$@" ;;
-  check) shift; run_in_tmp_shards check_emacs "$@" ;;
+  check) shift; lease_self exclusive check "$@"; run_in_tmp_shards check_emacs "$@" ;;
   fmt) shift
         "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-fmt -f drgnx-fmt-cli -- "$@" ;;

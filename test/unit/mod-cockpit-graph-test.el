@@ -4,6 +4,7 @@
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/cockpit-fixture" drgnx-dir) nil t)   ; a project, a job, worktrees, events
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)     ; a fresh workbench state store
+(load (expand-file-name "test/fixtures/measure-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-cockpit" drgnx-dir) nil t)
 
 (defun drgnx-cockpit-graph-test--box (layout id)
@@ -546,6 +547,7 @@ with `drgnx-cockpit-fixture-show-pane'."
             (should-not (funcall images))))))))
 
 (ert-deftest drgnx-cockpit-graph/nothing-changed-builds-no-model ()
+  (drgnx-test-compile "drgnx-cockpit-" "drgnx-memo" "drgnx-view")      ; before the stub below: it is a closure
   (drgnx-cockpit-graph-test--with
     (drgnx-cockpit-graph-redraw)
     (let* ((built 0) (orig (symbol-function 'drgnx-cockpit-model)))
@@ -553,9 +555,7 @@ with `drgnx-cockpit-fixture-show-pane'."
         ;; events, nothing written: the key is the same, no model is built
         (dotimes (_ 5) (drgnx-cockpit--hub-event "job" '(:id "jx")) (drgnx-cockpit-graph-test--tick))
         (should (= 0 built))
-        (let ((t0 (float-time)))
-          (dotimes (_ 100) (drgnx-cockpit-graph-redraw))
-          (should (< (/ (- (float-time) t0) 100) 0.002)))                ; about 30 µs; loose for a loaded machine
+        (should (<= (drgnx-test-alloc (dotimes (_ 100) (drgnx-cockpit-graph-redraw))) 52130))   ; 100 redraws of an unchanged graph: ceil(1.25 × 41704)
         (should (= 0 built))
         ;; this Emacs writes the store: one build, one draw
         (drgnx-coord-force-status "jx#4" "running" "s-1")

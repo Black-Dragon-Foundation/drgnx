@@ -6,6 +6,7 @@
 (require 'drgnx-mcp-bridge)
 (require 'drgnx-paths)
 (load(expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/measure-fixture" drgnx-dir) nil t)
 
 (defvar drgnx-mcp-bridge-test--got nil "The lines the fake server received, oldest first.")
 (defvar drgnx-mcp-bridge-test--conns nil "The connections the fake server accepted.")
@@ -253,14 +254,19 @@
     (should (equal (mapcar (lambda (m) (gethash "id" m)) (drgnx-mcp-bridge-test--out bridge)) (number-sequence 1 2000)))))
 
 (ert-deftest drgnx-mcp-bridge/split-is-linear ()
-  ;; 4 MB of one line in 64-byte pieces (well under a second): copying the pending input per piece takes minutes
+  ;; one line in 64-byte pieces: copying the pending input per piece is quadratic, so 4× the input would cost 16×
+  ;; the allocation, not 4×
+  (drgnx-test-compile "drgnx-mcp-bridge-")
+  (let* ((drgnx-mcp-bridge-max-line (* 16 1024 1024)) (piece (make-string 64 ?x))
+         (feed (lambda (pieces) (let ((state (drgnx-mcp-bridge--state)))
+                                  (dotimes (_ pieces) (drgnx-mcp-bridge--feed state piece #'ignore)))))
+         (small (drgnx-test-alloc (funcall feed 4096))) (big (drgnx-test-alloc (funcall feed 16384))))
+    (should (<= big (* 1.25 4 small))))
+  ;; 4 MB in all
   (let* ((drgnx-mcp-bridge-max-line (* 16 1024 1024)) (state (drgnx-mcp-bridge--state)) (lines nil)
-         (piece (make-string 64 ?x)) (n (/ (* 4 1024 1024) 64)) (t0 (float-time)) (i 0))
-    (while (and (< i n) (< (- (float-time) t0) 5))   ; stops early when it is not linear
-      (drgnx-mcp-bridge--feed state piece (lambda (l) (push l lines)))
-      (setq i (1+ i)))
+         (piece (make-string 64 ?x)) (n (/ (* 4 1024 1024) 64)))
+    (dotimes (_ n) (drgnx-mcp-bridge--feed state piece (lambda (l) (push l lines))))
     (drgnx-mcp-bridge--feed state "y\nz1\nz2\nrest" (lambda (l) (push l lines)))
-    (should (< (- (float-time) t0) 5))
     (should (equal (mapcar #'length lines) (list 2 2 (1+ (* n 64)))))
     (should (equal (cdr (reverse lines)) '("z1" "z2")))))
 

@@ -4,6 +4,7 @@
 (require 'drgnx-paths)
 (require 'drgnx-search-chunk)
 (load (expand-file-name "test/fixtures/config-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/measure-fixture" drgnx-dir) nil t)
 
 (defun drgnx-search-chunk-test--lines (from to &optional blank)
   "Lines \"line FROM\" .. \"line TO\" joined by newlines, each BLANK line number replaced by an empty line."
@@ -65,14 +66,18 @@
   (should (= (length (drgnx-search-chunks "x")) 1)))
 
 (ert-deftest drgnx-search-chunk/a-big-file-is-cheap ()
-  (let* ((text (mapconcat (lambda (n) (format "(defun f%d () (message \"hello %d\"))" n n))
-                          (number-sequence 1 25000) "\n"))
-         (t0 (float-time))
-         (chunks (drgnx-search-chunks text)))
+  (drgnx-test-compile "drgnx-search-chunk")
+  (let* ((lines (lambda (n) (mapconcat (lambda (n) (format "(defun f%d () (message \"hello %d\"))" n n)) (number-sequence 1 n) "\n")))
+         (text (funcall lines 25000))
+         chunks)
+    ;; linear: 5× the lines allocate about 5× (a rescan per chunk would be far more); measured first, so a quadratic
+    ;; chunker goes red here
+    (let ((small (drgnx-test-alloc (drgnx-search-chunks (funcall lines 5000))))
+          (big (drgnx-test-alloc (setq chunks (drgnx-search-chunks text)))))
+      (should (<= big (* 1.25 5 small))))
     (should (> (length text) 800000))
     (should (> (length chunks) 300))
-    (should (= (plist-get (car (last chunks)) :end) 25000))
-    (should (< (- (float-time) t0) 5.0))))
+    (should (= (plist-get (car (last chunks)) :end) 25000))))
 
 ;;;; Files
 
