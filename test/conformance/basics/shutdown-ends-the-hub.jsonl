@@ -1,0 +1,6 @@
+{"scenario": "basics/shutdown-ends-the-hub", "requires": ["v0"], "doc": "shutdown is answered, then the hub exits with 0."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "shutdown"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": true}}
+{"do": "expect_exit", "hub": "h", "code": 0, "within_ms": 10000}

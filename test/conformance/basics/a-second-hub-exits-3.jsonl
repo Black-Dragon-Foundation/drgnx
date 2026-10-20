@@ -1,0 +1,7 @@
+{"scenario": "basics/a-second-hub-exits-3", "requires": ["v0"], "doc": "A second hub on the same data dir exits with 3 and the first keeps serving."}
+{"do": "start", "hub": "h"}
+{"do": "start", "hub": "h2", "same_root_as": "h", "wait": false}
+{"do": "expect_exit", "hub": "h2", "code": 3, "within_ms": 10000}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "ping"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"pid": "$PID(h)"}}}

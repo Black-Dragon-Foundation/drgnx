@@ -153,3 +153,24 @@ it. To add a case, run the Lisp side to measure it and put the result in; never 
 `cargo test -p drgnx-conformance` covers the parser, the matcher, the paths, the proofs and, in `tests/harness.rs`, whole
 runs against a scripted hub (a small hub inside the test binary). `test/conformance/self/*.jsonl` are the harness's own
 rows: they are valid against any hub, so they also run against the Lisp hub.
+
+### The v0 rows
+
+The rows with `"requires": ["v0"]` pin what every hub does, today's Lisp hub and Ratatoskr alike. Each `connect` takes the
+default `"as": "user"`, so the same rows run through Ratatoskr's front once it exists.
+
+| Group | Rows |
+|---|---|
+| `framing/` | `one-object-per-line`, `line-over-1-mib-closes`, `malformed-line-with-id-gets-an-error`, `malformed-line-without-id-is-dropped` |
+| `basics/` | `ping`, `status-shape`, `agents-list-empty`, `shutdown-ends-the-hub`, `a-second-hub-exits-3` (a second hub on the same data dir exits 3) |
+| `events/` | `since-shape`, `subscribe-relays-events` (a proposed then stopped job: its event's `data` is a JSON object, from `events/since` and as an `events` event) |
+
+Run them against the Lisp hub (Emacs from `$DRGNX_EMACS`, else `emacs` on `PATH`):
+
+```
+cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-conformance
+runtime/target/debug/drgnx-conformance --target lisp --hub-bin test/conformance/lisp-hub.sh --scenarios test/conformance
+```
+
+Green is 11 `PASS` for these rows (plus the 2 `self/` rows). In CI the `conformance-lisp` step runs this in the Linux job
+(Nidhogg from `test/container/nidhogg.sh fedora-45`) and the macOS job (`nidhogg.sh macos`, which sets `DRGNX_EMACS`).

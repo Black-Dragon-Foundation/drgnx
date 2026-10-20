@@ -1,0 +1,5 @@
+{"scenario": "framing/malformed-line-with-id-gets-an-error", "requires": ["v0"], "doc": "A line that is not a whole JSON object but carries an id is answered with an error."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "raw": "{\"id\":7,\"method\":"}
+{"do": "expect", "conn": "c", "json": {"id": 7, "error": {"message": "$string"}}}

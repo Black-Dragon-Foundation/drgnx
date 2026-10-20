@@ -1,0 +1,10 @@
+{"scenario": "events/subscribe-relays-events", "requires": ["v0"], "doc": "The same job's events arrive as an events event on a subscribed connection."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": true}}
+{"do": "write_file", "path": "$ROOT/plan.md", "text": "# One task\n\n**Repo:** $ROOT/repo\n\n### Task 1: Do the thing\n\n**Role:** implement\n\nNothing to do.\n"}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "job/propose", "params": {"plan": "$ROOT/plan.md"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:job"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "job/stop", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"event": "events", "data": {"since": "$number", "last": "$number", "events": {"$contains": [{"kind": "job", "data": {"status": "stopped"}}]}}}, "within_ms": 10000}

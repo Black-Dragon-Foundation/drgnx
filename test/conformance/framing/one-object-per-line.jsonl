@@ -1,0 +1,6 @@
+{"scenario": "framing/one-object-per-line", "requires": ["v0"], "doc": "Two requests in one write are answered one line each, in order."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "raw": "{\"id\":1,\"method\":\"ping\"}\n{\"id\":2,\"method\":\"ping\"}"}
+{"do": "expect_next", "conn": "c", "json": {"id": 1, "result": {"pid": "$number"}}}
+{"do": "expect_next", "conn": "c", "json": {"id": 2, "result": {"pid": "$number"}}}

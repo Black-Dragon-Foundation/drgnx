@@ -1,0 +1,7 @@
+{"scenario": "framing/malformed-line-without-id-is-dropped", "requires": ["v0"], "doc": "A malformed line with no id gets no answer; the next request is answered."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "raw": "not json at all"}
+{"do": "expect_silent", "conn": "c", "for_ms": 300}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "ping"}}
+{"do": "expect_next", "conn": "c", "json": {"id": 1, "result": {"pid": "$number"}}}

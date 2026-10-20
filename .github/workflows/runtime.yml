@@ -41,6 +41,16 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
+      - name: Nidhogg 31.1 (the Emacs drgnx ships on)
+        working-directory: ${{ github.workspace }}
+        run: |
+          dnf -y install curl tar xz
+          bash test/container/nidhogg.sh fedora-45
+      - name: conformance-lisp (the v0 rows against the Lisp hub)
+        working-directory: ${{ github.workspace }}
+        run: |
+          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-conformance
+          runtime/target/debug/drgnx-conformance --target lisp --hub-bin test/conformance/lisp-hub.sh --scenarios test/conformance
 
   msrv:
     name: MSRV 1.88 builds
@@ -83,3 +93,9 @@ jobs:
           persist-credentials: false
       - run: brew install rust
       - run: cargo test --locked --manifest-path runtime/Cargo.toml
+      - name: Nidhogg 31.1 (writes DRGNX_EMACS to the environment)
+        run: /bin/bash test/container/nidhogg.sh macos
+      - name: conformance-lisp (the v0 rows against the Lisp hub)
+        run: |
+          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-conformance
+          runtime/target/debug/drgnx-conformance --target lisp --hub-bin test/conformance/lisp-hub.sh --scenarios test/conformance
