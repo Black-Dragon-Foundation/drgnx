@@ -3,10 +3,14 @@
 # GTK loads icons through glycin, whose bwrap sandbox needs namespaces the default policy denies.
 # M12c: sway (headless, wlroots) and Xvfb + i3 (X11) for the window-manager adapters' tests.  emacs-lucid is the
 # X11 build, started by name (emacs-lucid): unlike emacs-gtk+x11 it reads RandR 1.5 monitors (xrandr --setmonitor), the
-# only way to get two monitors out of Xvfb.  "emacs" stays the pgtk build (alternatives pinned).  sway ships with a
+# only way to get two monitors out of Xvfb (DEFERRED NIDHOGG-X11-1: Nidhogg has no X11 build yet).  "emacs" is Nidhogg
+# (nidhogg.sh links it into /usr/local/bin, ahead of the alternatives' /usr/bin/emacs).  sway ships with a
 # cap_sys_nice file capability that the container does not grant, so it would not exec; the capability is dropped.
 # Docs on (tsflags=): the Emacs and Elisp manuals the command fuzz opens; findutils for project search.
 FROM registry.fedoraproject.org/fedora:45
-RUN dnf -y --setopt=tsflags= install emacs-pgtk info diffutils findutils git mutter sway i3 xorg-x11-server-Xvfb xrandr xprop emacs-lucid dbus-daemon mesa-dri-drivers ImageMagick procps-ng util-linux \
+RUN dnf -y --setopt=tsflags= install info diffutils findutils git mutter sway i3 xorg-x11-server-Xvfb xrandr xprop emacs-lucid dbus-daemon mesa-dri-drivers ImageMagick procps-ng util-linux \
     && dnf clean all
-RUN alternatives --set emacs /usr/bin/emacs-pgtk && setcap -r /usr/bin/sway
+RUN setcap -r /usr/bin/sway
+COPY nidhogg.sh /tmp/nidhogg.sh
+RUN bash /tmp/nidhogg.sh fedora-45 && rm /tmp/nidhogg.sh
+ENV DRGNX_EMACS=/opt/nidhogg/31.1-nidhogg.1/bin/nidhogg

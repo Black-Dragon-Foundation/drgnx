@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   emacs-31:
-    name: Emacs 31.1 (Fedora 45)
+    name: Nidhogg 31.1 (Fedora 45)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:

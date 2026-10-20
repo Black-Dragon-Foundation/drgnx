@@ -171,7 +171,7 @@ env_eval() { # FORM — evaluate with harness/drgnx-env.el loaded, print the res
   "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -l drgnx-env --eval "(princ (or $1 \"\"))"
 }
 
-test_container() { # [--ui [--compositor C] | --scenario | --perf | --tty [--fedora 45]] — the batch (GUI, scenario, perf, terminal) tier inside a fedora:45 / Emacs 31.1 container
+test_container() { # [--ui [--compositor C] | --scenario | --perf | --tty [--fedora 45]] — the batch (GUI, scenario, perf, terminal) tier inside a fedora:45 / Nidhogg 31.1 container
   # DRGNX_TEST_IMAGE / DRGNX_TEST_GUI_IMAGE / DRGNX_TEST_TTY_IMAGE: use that image (CI pulls a prebuilt one) instead of building it
   # --tty --fedora 45 (the default): Fedora 44's Emacs is 30.2, which drgnx no longer supports
   local rt mount image file elpa prebuilt="${DRGNX_TEST_IMAGE:-}" args=() cmd=(bin/drgnx test) build=() tier="" fedora="" compositor=""
@@ -252,8 +252,9 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf | --tty [--fed
     args+=(-v "$resdir:/out" -e "DRGNX_PERF_RESULTS=/out/$(basename "$res")")
   fi
   args+=(-e DRGNX_LEASE=off)   # the host's lease is not the container's: one run owns it
-  # the image's own Emacs, named: drgnx never falls back to a bare `emacs' (set in the run, not the Containerfiles: no image rebuild)
-  args+=(-e DRGNX_EMACS=/usr/bin/emacs)
+  # the image's own Emacs, named: drgnx never falls back to a bare `emacs' (Nidhogg, which test/container/nidhogg.sh links
+  # into /usr/local/bin; the Containerfiles' ENV names the same build)
+  args+=(-e DRGNX_EMACS=/usr/local/bin/emacs)
   # evil for the modal tests (DRGNX_MODAL_ELPA), read-only; ,z: a shared label, other containers may read it too
   if [ -n "${DRGNX_MODAL_ELPA:-}" ] && [ -d "$DRGNX_MODAL_ELPA" ]; then
     local elpa; elpa="$(cd "$DRGNX_MODAL_ELPA" && pwd -P):/modal-elpa:ro"
@@ -1449,11 +1450,11 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx test --scenario [--config drgnx|gryphn|DIR]
                                behaviour scenarios in a session of that configuration
        drgnx test --container [--ui [--compositor C]]
-                               the same inside a fedora:45 / Emacs 31.1 container (GUI: capped at 3 GB, no swap;
+                               the same inside a fedora:45 / Nidhogg 31.1 container (GUI: capped at 3 GB, no swap;
                                DRGNX_TEST_GUI_MEMORY overrides; image builds 3 GB, DRGNX_TEST_BUILD_MEMORY)
                                (podman, else docker, else nerdctl; DRGNX_CONTAINER overrides)
        drgnx test --container --tty [--fedora 45]
-                               the terminal tier in a container (45: Emacs 31.1, the default; 44's 30.2 is no longer supported)
+                               the terminal tier in a container (45: Nidhogg 31.1, the default; 44's 30.2 is no longer supported)
        drgnx test --install [NAME…]
                                install.sh end to end in fresh distribution containers (slow;
                                names: fedora-44 debian-trixie ubuntu-26.04 fedora-45 archlinux)
