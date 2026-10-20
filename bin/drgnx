@@ -783,7 +783,9 @@ open_start() { # start drgnx's daemon (the systemd unit when it is enabled), wai
     fi
   fi
   deadline=$((SECONDS + OPEN_WAIT)) notice=$((SECONDS + OPEN_WAIT / 3))   # wall-clock seconds: a poll takes more than its sleep
-  while ((SECONDS < deadline)); do
+  # SECONDS counts whole seconds and its first one can be nearly over: `<' would give up as early as OPEN_WAIT - 1 s
+  # (macOS CI: 2.4 s of 3), `<=' waits at least OPEN_WAIT s and under one more
+  while ((SECONDS <= deadline)); do
     probe -e t >/dev/null 2>&1 && return 0
     if [[ -z "$noticed" ]] && ((SECONDS >= notice)); then
       echo "drgnx: drgnx is still starting (waiting up to $OPEN_WAIT s)…" >&2; noticed=1
