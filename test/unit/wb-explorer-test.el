@@ -141,13 +141,17 @@
 
 (ert-deftest drgnx-explorer/a-big-folder-expands-fast ()
   (drgnx-explorer-test--with root
-    (let ((big (expand-file-name "big" root)))
-      (make-directory big)
+    (let ((big (expand-file-name "big" root)) (small (expand-file-name "small" root)))
+      (make-directory big) (make-directory small)
       (dotimes (i 5000) (write-region "" nil (expand-file-name (format "f%04d.txt" i) big) nil 'silent))
+      (dotimes (i 1000) (write-region "" nil (expand-file-name (format "f%04d.txt" i) small) nil 'silent))
       (drgnx-explorer-refresh)
-      (let ((t0 (float-time)))
-        (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "big"))
-        (should (< (- (float-time) t0) 0.5)))     ; batch, generous; the GUI budget is in test/bench
+      (drgnx-test-compile "drgnx-explorer-" "drgnx-wb-" "drgnx-view" "drgnx-memo")
+      ;; linear: a folder of 5× the entries expands and collapses for about 5× the allocation (the GUI budget is in test/bench)
+      (cl-flet ((cost (name) (drgnx-test-alloc (drgnx-explorer-toggle-at (drgnx-explorer-test--goto name))
+                                               (drgnx-explorer-toggle-at (drgnx-explorer-test--goto name)))))
+        (should (<= (cost "big") (* 1.25 5 (cost "small")))))
+      (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "big"))
       (should (= 5000 (seq-count (lambda (r) (= (car r) 2)) (drgnx-explorer-test--rows)))))))
 
 (ert-deftest drgnx-explorer/showing-the-sidebar-reveals-the-editors-file ()
