@@ -45,7 +45,7 @@
 (declare-function drgnx-agent-session-permissions "drgnx-agents")
 (declare-function drgnx-agent-session-reviews "drgnx-agents")
 (declare-function drgnx-agents-sessions "drgnx-agents")
-(declare-function drgnx-hub-call "drgnx-hub")
+(declare-function drgnx-hub-call "drgnx-hub-client")
 (declare-function drgnx-job-ui-needs-you "drgnx-job-ui")
 (declare-function drgnx-agents-ui-view "drgnx-agents-ui")
 (declare-function flymake--mode-line-counter "flymake")

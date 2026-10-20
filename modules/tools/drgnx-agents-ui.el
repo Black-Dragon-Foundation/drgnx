@@ -536,14 +536,14 @@ from its own timer, at most every 0.1 s, only while shown).  Called from the age
   (or (when-let* ((p (and (fboundp 'project-current) (project-current)))) (project-root p)) default-directory))
 
 (declare-function drgnx-agents-mirror-sync "drgnx-agents-mirror")
-(declare-function drgnx-hub-socket "drgnx-hub")
-(declare-function drgnx-hub-ensure "drgnx-hub")
-(declare-function drgnx-hub-call-sync "drgnx-hub")
+(declare-function drgnx-hub-socket "drgnx-hub-client")
+(declare-function drgnx-hub-ensure "drgnx-hub-client")
+(declare-function drgnx-hub-call-sync "drgnx-hub-client")
 
 (defun drgnx-agents-ui--maybe-mirror ()
   "At idle: mirror the hub's agent sessions when a hub runs.  Never waits and never starts one: only a socket that
 exists is connected to (asynchronously)."
-  (require 'drgnx-hub)
+  (require 'drgnx-hub-client)
   (when (and (file-exists-p (drgnx-hub-socket)) (not (process-live-p (bound-and-true-p drgnx-hub--events))))
     (require 'drgnx-agents-mirror)
     (with-demoted-errors "drgnx: the agent hub does not answer: %S" (drgnx-agents-mirror-sync))))
@@ -735,14 +735,14 @@ the agent's name as written would be followed again, with handlers on); a remote
 ;;;; The module
 
 (declare-function drgnx-agents-mirror-stop "drgnx-agents-mirror")
-(declare-function drgnx-hub-disconnect "drgnx-hub")
+(declare-function drgnx-hub-disconnect "drgnx-hub-client")
 
 (defun drgnx-agents-ui--teardown ()
   "Turned off: the hub's sessions are mirrored no more and the hub's event connection closes.  The layer timers (the
 list's tick, the mirror's) end with the module's run; the hooks, the views, the tab, the rules and the commands go
 with the cleanup stack."
   (when (featurep 'drgnx-agents-mirror) (drgnx-agents-mirror-stop))
-  (when (featurep 'drgnx-hub) (drgnx-hub-disconnect)))
+  (when (featurep 'drgnx-hub-client) (drgnx-hub-disconnect)))
 
 (drgnx-module-define 'tools/agents
                      :doc "Agents: sessions over ACP in the right dock's Agents tab, durable jobs, edit review."

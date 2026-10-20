@@ -1163,11 +1163,11 @@ end: a program you chose earlier on the PATH keeps winning."
     (setenv "PATH" (concat (getenv "PATH") path-separator dir))
     dir))
 
-(declare-function drgnx-hub-running-p "drgnx-hub")
+(declare-function drgnx-hub-running-p "drgnx-hub-client")
 
 (defun drgnx-onboard--hub-running-p ()
   "Does a hub run (one quiet look at its socket, a second at most)?  It keeps the PATH it started with."
-  (require 'drgnx-hub)
+  (require 'drgnx-hub-client)
   (drgnx-hub-running-p))
 
 (defun drgnx-onboard--claude-login-state (claude)

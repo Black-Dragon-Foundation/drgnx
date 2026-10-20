@@ -549,8 +549,8 @@ a task whose provider failed to the next profile (drgnx-job.el).  Called in the 
 (declare-function drgnx-ai-agent-gateway-chain "drgnx-ai")
 (declare-function drgnx-ai-provider "drgnx-ai")
 (declare-function drgnx-ai-key "drgnx-ai")
-(declare-function drgnx-hub-ensure "drgnx-hub")
-(declare-function drgnx-hub-call-sync "drgnx-hub")
+(declare-function drgnx-hub-ensure "drgnx-hub-client")
+(declare-function drgnx-hub-call-sync "drgnx-hub-client")
 (declare-function drgnx-hub-serving-p "drgnx-hub")
 (declare-function drgnx-hub-register "drgnx-hub")
 (defvar drgnx-ai-gateway-kinds)
@@ -561,7 +561,7 @@ without a hub they go to the provider directly.")
 
 (defun drgnx-agents--in-hub-p ()
   "Is this Emacs the hub?  A daemon: it never looks a key up where that may ask."
-  (and (fboundp 'drgnx-hub-serving-p) (drgnx-hub-serving-p)))
+  (and (featurep 'drgnx-hub) (drgnx-hub-serving-p)))
 
 (defun drgnx-agents--gateway (s kind &optional model)
   "Register S's agent (profile KIND, with the profile's MODEL) with the hub's gateway: (:url :token), or nil when
@@ -579,8 +579,8 @@ not read, no hub, or a hub that did not keep them all is a `user-error' — neve
                     (mapconcat (lambda (st) (symbol-name (car st))) chain ", "))))
     (let ((r (condition-case err
                  (progn
-                   (require 'drgnx-hub)
-                   (unless (drgnx-hub-serving-p) (drgnx-hub-ensure))
+                   (require 'drgnx-hub-client)
+                   (unless (drgnx-agents--in-hub-p) (drgnx-hub-ensure))
                    (let* (;; keys this command can read (also from sources that ask) travel to the hub's memory — never
                           ;; in the hub, which has what editors gave it
                           (keys (unless (drgnx-agents--in-hub-p)
@@ -595,7 +595,7 @@ not read, no hub, or a hub that did not keep them all is a `user-error' — neve
                           (params (if restrictions
                                       (append params (list :openrouter (drgnx-agents--openrouter-json restrictions)))
                                     params))
-                          (r (if (drgnx-hub-serving-p) (drgnx-hub-register params)
+                          (r (if (drgnx-agents--in-hub-p) (drgnx-hub-register params)
                                (drgnx-hub-call-sync "gateway/register"
                                                     (plist-put (plist-put (copy-sequence params) :chain (vconcat (mapcar #'vconcat (plist-get params :chain))))
                                                                :keys (or keys (make-hash-table)))))))
@@ -625,7 +625,7 @@ its chain has an OpenRouter step and restrictions are set (or do not read) — t
     (user-error "OpenRouter restrictions are set in agents.eld and apply through drgnx's gateway only, which is turned off (drgnx-agents-use-gateway): %s is not started without them; turn the gateway on, or remove :openrouter from agents.eld"
                 (drgnx-agent-session-name s))))
 
-(declare-function drgnx-hub-call "drgnx-hub")
+(declare-function drgnx-hub-call "drgnx-hub-client")
 
 (defun drgnx-agents--release-gateway (s)
   "S's agent is gone: its gateway token goes too (asynchronously; never waits — an exit runs from a timer)."
@@ -877,11 +877,11 @@ outside, as S."
 
 (defun drgnx-agents-get (id) (seq-find (lambda (s) (equal (drgnx-agent-session-id s) id)) drgnx-agents--sessions))
 
-(declare-function drgnx-hub-call "drgnx-hub")
+(declare-function drgnx-hub-call "drgnx-hub-client")
 
 (defun drgnx-agents--remote (s method params)
   "Ask the hub to do METHOD (with PARAMS) on mirror S's session; asynchronous, never waits."
-  (require 'drgnx-hub)
+  (require 'drgnx-hub-client)
   (drgnx-hub-call method (append (list :id (drgnx-agent-session-remote s)) params)
                   (lambda (_r err) (when err (message "drgnx agent %s: %s" (drgnx-agent-session-name s) err)))))
 

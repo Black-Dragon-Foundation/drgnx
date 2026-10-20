@@ -14,7 +14,7 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'drgnx-agents)
-(require 'drgnx-hub)
+(require 'drgnx-hub-client)
 
 (defvar drgnx-agents-mirror--fetching (make-hash-table :test #'equal)
   "Hub id → events that came while its transcript was being fetched (newest first).")

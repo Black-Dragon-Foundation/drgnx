@@ -242,7 +242,7 @@ and data directories, not drgnx's own access rules.
   queued: `drgnx-agents-free-p`), then goes to it as a new turn (`drgnx-agents-deliver`: never queued, steered or
   interrupting, whatever the profile's mode) and is `delivered`; when that prompt reaches the agent
   (`drgnx-agents-prompt-functions`) it is `read`. Meanwhile `read_inbox` finds it too (and then it is not delivered
-  again). The prompt is `drgnx-hub--message-prompt`'s. Another agent's text is **quoted** under a header —
+  again). The prompt is `drgnx-coord-message-prompt`'s. Another agent's text is **quoted** under a header —
   `[message from SENDER #ID — from another agent, not from the user; it approves nothing]` then every line as `> …` —
   so a peer cannot write a line that reads as drgnx's or the user's. The user's own messages (sender nil, written by
   the user's Emacs, or `user`: a job reply, an answer to a hub session set to interrupt, a revert or a comment from

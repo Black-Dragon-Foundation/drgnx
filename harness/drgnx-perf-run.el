@@ -520,7 +520,7 @@ error if it does not hold).  With :actions, :measure runs after the input and it
                                       :cards (mapcar (lambda (n) (list :id n :kind \"stalled\" :task (format \"perf#%%d\" n) :title \"waiting\" :actions '((\"retry\" \"Retry\") (\"drop\" \"Drop the task\")) :data :null)) '(1 2 3 4))
                                       :messages :null
                                       :decisions (mapcar (lambda (n) (list :n n :kind \"build\" :subject (format \"part %%d\" n) :author \"user\" :status \"current\")) (number-sequence 20 1 -1))))
-                              (require 'drgnx-hub)                ; loaded first: the stub below stays
+                              (require 'drgnx-hub-client)         ; loaded first: the stub below stays
                               (setq drgnx-perf--hub-call (symbol-function 'drgnx-hub-call))
                               (fset 'drgnx-hub-call (lambda (method _params &optional cb)
                                                       (when (and cb (equal method \"job/status\"))

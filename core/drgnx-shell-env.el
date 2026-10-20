@@ -16,8 +16,8 @@
 
 (declare-function drgnx-command-define "drgnx-registry")
 (declare-function drgnx-ai-providers "drgnx-ai")
-(declare-function drgnx-hub-running-p "drgnx-hub")
-(declare-function drgnx-hub-call "drgnx-hub")
+(declare-function drgnx-hub-running-p "drgnx-hub-client")
+(declare-function drgnx-hub-call "drgnx-hub-client")
 
 (defcustom drgnx-shell-env-names '("PATH" "MANPATH" "INFOPATH")
   "The variables drgnx takes from your login shell at start (`drgnx-shell-env-start')."
@@ -108,7 +108,7 @@ and `exec-path' follows; other names are replaced.  The names that changed."
 (defun drgnx-shell-env--tell-hub (alist)
   "Send a running hub ALIST, so the agents and jobs it starts from now on get the new PATH.  Never an error."
   (condition-case nil
-      (progn (require 'drgnx-hub)
+      (progn (require 'drgnx-hub-client)
              (when (drgnx-hub-running-p)
                (drgnx-hub-call "env/set"
                                (list :env (mapcan (lambda (c) (list (intern (concat ":" (car c))) (cdr c))) alist))

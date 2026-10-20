@@ -612,7 +612,7 @@ side is in [jobs.md](../guide/jobs.md#a-job-in-the-work-cockpit).
   `drgnx-cockpit-show-jobs`), and notifications.
 - **What reaches an agent.** Reply… is the hub's `job/reply` (`drgnx-job-reply`: `drgnx-coord-send` from the user,
   `:answers` the agent's message); Message… is `drgnx-coord-send` from the user to the agent, then `coord/notify`.
-  Neither is a raw prompt (`agents/send`): the hub gives both under the user's header (`drgnx-hub--message-prompt`),
+  Neither is a raw prompt (`agents/send`): the hub gives both under the user's header (`drgnx-coord-message-prompt`),
   and the agent's own words (the question answered) only on a quoted line. Discuss is the clash code's
   (`drgnx-job-card-act`), which quotes the user's text to the reviewer.
 - **One count of what needs you,** in `drgnx-job-ui.el`: `drgnx-job-ui-needs-you-count JOBS` gives `(N . NEWEST-JOB)`

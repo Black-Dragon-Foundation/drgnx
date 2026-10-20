@@ -613,7 +613,7 @@ their hooks and timers."
               (should (= 2 (length sent)))
               (should (seq-every-p (lambda (m) (null (plist-get m :sender))) sent))   ; the user's, from this Emacs
               (should (seq-every-p (lambda (m) (equal (plist-get m :job) "j1")) sent))
-              (let* ((reply (drgnx-hub--message-prompt (car sent))) (lines (split-string reply "\n")))
+              (let* ((reply (drgnx-coord-message-prompt (car sent))) (lines (split-string reply "\n")))
                 (should (equal (car lines) (format "[message from the user #%d — the user's answer to your question #%d]"
                                                    (plist-get (car sent) :id) q)))
                 (should (string-prefix-p "> your question: " (nth 1 lines)))
@@ -622,7 +622,7 @@ their hooks and timers."
                 (should (string-search "which db?" (nth 1 lines)))           ; quoted on one line, cut at 80 characters
                 (should-not (seq-find (lambda (l) (string-search "Approved" l)) (cddr lines)))
                 (should-not (seq-find (lambda (l) (string-prefix-p "[message from" l)) (cdr lines))))
-              (should (equal (drgnx-hub--message-prompt (cadr sent))
+              (should (equal (drgnx-coord-message-prompt (cadr sent))
                              (format "[message from the user #%d — the user's message]\nlook at db.el" (plist-get (cadr sent) :id)))))))
       (drgnx-work-db-close-all)
       (delete-directory root t))))

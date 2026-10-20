@@ -21,7 +21,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'drgnx-paths)
-(require 'drgnx-hub)
+(require 'drgnx-hub-client)
 (require 'drgnx-agents)
 (require 'drgnx-mcp-bridge)
 (require 'drgnx-sandbox-vc)

@@ -49,8 +49,8 @@
 (declare-function drgnx-agent-session-id "drgnx-agents")
 (declare-function drgnx-agent-session-mode "drgnx-agents")
 (declare-function drgnx-agent-session-status "drgnx-agents")
-(declare-function drgnx-hub-socket "drgnx-hub")
-(declare-function drgnx-hub-call "drgnx-hub")
+(declare-function drgnx-hub-socket "drgnx-hub-client")
+(declare-function drgnx-hub-call "drgnx-hub-client")
 (defvar drgnx-cockpit-graph-buffer-name)
 (defvar drgnx-cockpit--model)
 

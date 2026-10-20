@@ -4,7 +4,16 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
 
 ## Processes
 
-- **The hub** (`core/drgnx-hub.el`): a batch Emacs started as a durable job (`drgnx-jobs-start "drgnx-hub" …`), one
+- **The client** (`core/drgnx-hub-client.el`, feature `drgnx-hub-client`): everything an editor, the CLI or the
+  sandbox needs to talk to a hub, and nothing of the hub's runtime — the socket path and its trust check, the line
+  protocol, `drgnx-hub-call` / `-call-sync`, the event subscription, `drgnx-hub-ensure` (which starts the hub),
+  the write queue and `drgnx hub start|stop|status`. It requires only `cl-lib`, `subr-x`, `drgnx-paths`, `drgnx-jobs`
+  and `drgnx-guard` (the AI provider list comes from `drgnx-ai`, which the caller has loaded). Editor files require
+  this and never `drgnx-hub`; `drgnx-agents.el` calls the server's `drgnx-hub-serving-p` and `drgnx-hub-register` only
+  when `(featurep 'drgnx-hub)`. The message prompt both the cockpit preview and the hub's delivery use is
+  `drgnx-coord-message-prompt` (`core/drgnx-coord.el`). A `declare-function` of a client function names
+  `"drgnx-hub-client"`.
+- **The hub** (`core/drgnx-hub.el`, the server half; it requires the client): a batch Emacs started as a durable job (`drgnx-jobs-start "drgnx-hub" …`), one
   per drgnx data directory. Without a systemd user manager (always on macOS) the job is detached by
   `drgnx-jobs--detach`: `setsid -f`, or where there is no `setsid` (macOS) perl, which forks and calls setsid(2)
   itself — Emacs's child already leads its own process group, and setsid(2) refuses a group leader. Either way the
