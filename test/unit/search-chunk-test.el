@@ -69,14 +69,15 @@
   (drgnx-test-compile "drgnx-search-chunk")
   (let* ((lines (lambda (n) (mapconcat (lambda (n) (format "(defun f%d () (message \"hello %d\"))" n n)) (number-sequence 1 n) "\n")))
          (text (funcall lines 25000))
-         (chunks (drgnx-search-chunks text)))
+         chunks)
+    ;; linear: 5× the lines allocate about 5× (a rescan per chunk would be far more); measured first, so a quadratic
+    ;; chunker goes red here
+    (let ((small (drgnx-test-alloc (drgnx-search-chunks (funcall lines 5000))))
+          (big (drgnx-test-alloc (setq chunks (drgnx-search-chunks text)))))
+      (should (<= big (* 1.25 5 small))))
     (should (> (length text) 800000))
     (should (> (length chunks) 300))
-    (should (= (plist-get (car (last chunks)) :end) 25000))
-    ;; linear: 5× the lines allocate about 5× (a rescan per chunk would be far more)
-    (let ((small (drgnx-test-alloc (drgnx-search-chunks (funcall lines 5000))))
-          (big (drgnx-test-alloc (drgnx-search-chunks text))))
-      (should (<= big (* 1.25 5 small))))))
+    (should (= (plist-get (car (last chunks)) :end) 25000))))
 
 ;;;; Files
 

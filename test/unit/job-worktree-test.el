@@ -264,7 +264,7 @@ the one against job/7's tip would not.  A start that is no commit fails the chec
       (should (eql 0 (call-process "mkfifo" nil nil nil (concat dir "/" (substring sha 2)))))
       (write-region (concat sha "\n") nil (concat git "/refs/heads/job/7-1/work") nil 'silent)
       (let* ((drgnx-job-worktree-timeout 1)
-             (deadline (+ (float-time) 10))
+             (deadline (+ (float-time) 5))
              (got :none))
         (drgnx-job-worktree-check repo "7" 1 "job/7" (lambda (r &optional _tip) (setq got r)))
         (should (eq got :none))                                       ; the call returned with git still blocked in open()
