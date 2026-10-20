@@ -891,6 +891,29 @@ kkp tests and the kitty exit test run there too; without it they skip.
 accounting, in the parallel phase) when tmux is installed; `--no-gui` leaves it out. The `Terminal tier` workflow runs
 the two container runs nightly ([ci.md](ci.md)).
 
+## One test environment
+
+`harness/drgnx-test-env.el` is the only place that says what a test may see. `(drgnx-test-env TIER RUN &key display
+config)` returns the strings for `process-environment` (`"K=V"` sets, a bare `"K"` unsets); TIER is `unit`, `live`,
+`ui`, `scenario`, `bench` or `perf`, RUN the run's private directory.
+
+Every tier gets:
+- `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME`, `DRGNX_CONFIG_DIR`, `DRGNX_DATA_DIR`
+  and `TMPDIR` under RUN, and a private `XDG_RUNTIME_DIR` (RUN/run, mode 700);
+- `DRGNX_TEST_ISOLATED=1`, `DRGNX_NO_HUB_START=1`, `DRGNX_HUB_PARENT_PID` (the hub ends with this Emacs);
+- a dead session bus (`drgnx-test-env-dead-bus`), and no provider key or agent home
+  (`drgnx-test-env-provider-variables`).
+
+The display and compositor variables (`drgnx-test-env-desktop-variables`) are unset, except in the GUI tiers (`ui`,
+`scenario`, `bench`, `perf`), which get only the `:display` strings of the harness compositor. `:config` is an external
+configuration directory whose code directories (`drgnx-test-env-config-links`) are linked into RUN/config. Packages
+stay readable, read-only, through `DRGNX_USER_ELPA`.
+
+The unit runner (`drgnx-run-ert-batch`) calls it for `unit` and adds only its own variables (the native-compilation
+directory, the runner's switches). `drgnx-test-env-outer` is the part a parent sets in a child's C environment before
+Emacs starts, because dbus.el reads that one: the dead bus and the desktop variables unset. `bin/drgnx` repeats those
+lines in bash for the unit tier, and a test (`drgnx-test-env/bin-drgnx-matches-it`) fails if they drift.
+
 ## Virtual time
 
 `test/fixtures/clock-fixture.el` runs Emacs's own timer lists on a clock the test moves, so no test waits in real time

@@ -15,6 +15,7 @@
 (require 'json)
 (require 'subr-x)
 (require 'drgnx-env)
+(require 'drgnx-test-env (expand-file-name "drgnx-test-env" (file-name-directory (or load-file-name buffer-file-name))))
 
 (defconst drgnx-ui-harness-dir (file-name-directory (or load-file-name buffer-file-name)))
 (defconst drgnx-ui-repo-dir (file-name-directory (directory-file-name drgnx-ui-harness-dir)))
@@ -35,7 +36,7 @@
   '("HOME" "USER" "LOGNAME" "LANG" "LC_ALL" "PATH" "GRYPHN_EMACS_DIR" "DRGNX_STARTUP_TRACE"
     "DRGNX_UITEST_SETTLE_SCALE" "DRGNX_MODAL_ELPA")
   "The only variables a session inherits; everything else (keys, tokens) stays out.")
-(defconst drgnx-ui-link '("extras" "lisp" "site-lisp" "tree-sitter" "snippets" "themes")
+(defconst drgnx-ui-link drgnx-test-env-config-links
   "Code directories of an external config, linked read-only into the session.")
 (defconst drgnx-ui-copy '("custom.el") "Files of an external config the session may write: copied.")
 

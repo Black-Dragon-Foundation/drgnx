@@ -11,6 +11,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'ert)
+(require 'drgnx-test-env (expand-file-name "drgnx-test-env" (file-name-directory (or load-file-name buffer-file-name))))
 
 (defun drgnx-run-ert-drain-events ()
   "Handle the events queued for a command loop batch Emacs does not have (file-notify events from a test's
@@ -682,19 +683,6 @@ passes after all the tests before it, 2 when it cannot run."
 
 (defvar project-list-file)
 
-(defconst drgnx-run-ert--dead-bus "unix:path=/nonexistent/drgnx-unit-test"
-  "The session bus address a unit test sees: no listener, so nothing reaches the user's desktop.")
-
-(defconst drgnx-run-ert--desktop-variables
-  '("DISPLAY" "WAYLAND_DISPLAY" "SWAYSOCK" "I3SOCK" "HYPRLAND_INSTANCE_SIGNATURE" "NIRI_SOCKET")
-  "Variables that point a program at the user's display or compositor; unset for the unit tier.")
-
-(defun drgnx-run-ert--private-dir (dir)
-  "Make DIR (mode 700) and return it."
-  (make-directory dir t)
-  (set-file-modes dir #o700)
-  dir)
-
 (defun drgnx-run-ert--given-tmp ()
   "The directory bin/drgnx made for this run (DRGNX_RUN_TMP), or nil: it must be absolute, named
 drgnx-run.XXXXXX, a real directory (no symlink) of the user's."
@@ -771,39 +759,13 @@ exit 0 or 1."
          ;; tests that load packages from it, read-only, through DRGNX_USER_ELPA)
          (elpa (expand-file-name "~/.config/emacs/elpa"))
          (process-environment
-          (append (mapcar (lambda (v) (format "%s=%s" (car v) (expand-file-name (cdr v) tmp)))
-                          '(("DRGNX_CONFIG_DIR" . "config") ("DRGNX_DATA_DIR" . "data")
-                            ("XDG_STATE_HOME" . "state") ("XDG_CACHE_HOME" . "cache") ("HOME" . "home")
-                            ;; …nor the user's XDG config and data homes: a test that unsets DRGNX_CONFIG_DIR or
-                            ;; DRGNX_DATA_DIR lands here, never in ~/.config/drgnx or ~/.local/share/drgnx
-                            ("XDG_CONFIG_HOME" . "xdg-config") ("XDG_DATA_HOME" . "xdg-data")
-                            ("TMPDIR" . ".")))
-                  (list "DRGNX_TEST_ISOLATED=1")
+          (append (drgnx-test-env 'unit tmp)      ; HOME, XDG, the hub, provider keys, bus, desktop: one list for every tier
                   ;; …every Emacs this run starts compiles its trampolines into the same directory, once
                   (and eln (list (concat "DRGNX_TEST_ELN_DIR=" eln)))
                   ;; …a test that runs the runner gets one Emacs per file unless it says otherwise
                   (list "DRGNX_TEST_ONE_PROCESS" "DRGNX_TEST_LEAKS_QUIET" "DRGNX_TEST_ORDER_IN" "DRGNX_TEST_ORDER_OUT")
                   ;; …a test that runs the runner or bin/drgnx again must not reuse (and delete) this directory
                   (list "DRGNX_RUN_TMP")
-                  ;; …nor start a durable hub that would outlive it (the hub's own tests unset this)
-                  (list "DRGNX_NO_HUB_START=1")
-                  ;; …and a hub one starts anyway ends with this Emacs (an interrupted run leaves none)
-                  (list (format "DRGNX_HUB_PARENT_PID=%d" (emacs-pid)))
-                  ;; …nor the user's provider keys: no test may reach a paid model (bare names unset them) — and
-                  ;; not the agents' home directories, which would point a test at the user's real settings
-                  (list "OPENROUTER_API_KEY" "ANTHROPIC_API_KEY" "ANTHROPIC_AUTH_TOKEN" "OPENAI_API_KEY"
-                        "MOONSHOT_API_KEY" "DEEPSEEK_API_KEY" "GEMINI_API_KEY" "GOOGLE_API_KEY" "OPENAI_BASE_URL"
-                        "ANTHROPIC_BASE_URL" "ANTHROPIC_MODEL" "ANTHROPIC_SMALL_FAST_MODEL"
-                        "ANTHROPIC_DEFAULT_HAIKU_MODEL" "ANTHROPIC_DEFAULT_SONNET_MODEL" "ANTHROPIC_DEFAULT_OPUS_MODEL"
-                        "ANTHROPIC_DEFAULT_FABLE_MODEL" "CLAUDE_CODE_SUBAGENT_MODEL" "CLAUDE_CODE_OAUTH_TOKEN"
-                        "CLAUDE_CODE_USE_BEDROCK" "CLAUDE_CODE_USE_VERTEX"
-                        "CLAUDE_CONFIG_DIR" "CODEX_HOME" "KIMI_CODE_HOME")
-                  ;; …nor the user's desktop: no display, no compositor socket, no session bus, a private
-                  ;; runtime directory (bin/drgnx and `drgnx check' do the same for the process itself: dbus.el
-                  ;; connects with the C environment, which this binding does not reach)
-                  (list (concat "DBUS_SESSION_BUS_ADDRESS=" drgnx-run-ert--dead-bus)
-                        (concat "XDG_RUNTIME_DIR=" (drgnx-run-ert--private-dir (expand-file-name "run" tmp))))
-                  drgnx-run-ert--desktop-variables
                   (and (getenv "DRGNX_USER_ELPA") (list (concat "DRGNX_USER_ELPA=" (getenv "DRGNX_USER_ELPA"))))
                   (and (not (getenv "DRGNX_USER_ELPA")) (file-directory-p elpa) (list (concat "DRGNX_USER_ELPA=" elpa)))
                   process-environment))
