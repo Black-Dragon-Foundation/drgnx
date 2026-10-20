@@ -165,7 +165,7 @@ after another (the last repeats).  Binds `history' (the history file) and `start
     (let ((process-environment (cons "DRGNX_PERF_WORKLOADS=frames" process-environment)))
       (cl-letf (((symbol-function 'drgnx-perf-run--workloads) (lambda () '((frames :measure "m") (typing :measure "m"))))
                 ((symbol-function 'drgnx-perf-run--budgets)
-                 (lambda () '((frames (:frame :p95) 500) (typing (:input :p95) 16)))))
+                 (lambda () '((frames (:frame :p95) 500) (typing (:rows) 0)))))
         (should (eql (drgnx-perf-run) 0))        ; typing's budget is not "not measured"
         (should-not (file-exists-p history))))))  ; a partial run is no history line
 
@@ -173,20 +173,30 @@ after another (the last repeats).  Binds `history' (the history file) and `start
 (ert-deftest drgnx-perf-run/a-full-run-reports-a-budget-with-no-workload ()
   (drgnx-perf-run-test--with-fake-run '(1.0)
     (cl-letf (((symbol-function 'drgnx-perf-run--budgets)
-               (lambda () '((frames (:frame :p95) 500) (ghost (:input :p95) 16)))))
+               (lambda () '((frames (:frame :p95) 500) (ghost (:rows) 0)))))
       (should (eql (drgnx-perf-run) 1)))))
 
 (ert-deftest drgnx-perf-run/an-unfiltered-run-keeps-its-history ()
   (drgnx-perf-run-test--with-fake-run '(1.0)
     (should (eql (drgnx-perf-run) 0))
     (should (file-exists-p history))))
-(ert-deftest drgnx-perf-run/every-input-workload-has-an-input-p95-and-max-budget ()
-  "A workload that types or scrolls is judged: a budget row for its p95 and its max (a new workload without one would pass unjudged)."
+(ert-deftest drgnx-perf-run/every-input-workload-has-allocation-cpu-and-rows-budgets ()
+  "A workload that types or scrolls is gated: a budget row for its allocation, its CPU and its rows (a new workload
+without them would pass unjudged), unless `drgnx-perf-run-unseeded' says why it has none yet."
   (let ((budgets (drgnx-perf-run--budgets)))
     (dolist (w (drgnx-perf-run--workloads))
       (when (plist-get (cdr w) :actions)
-        (dolist (path '((:input :p95) (:input :max)))
-          (should (seq-find (lambda (b) (and (eq (car b) (car w)) (equal (cadr b) path))) budgets)))))))
+        (let ((rows (mapcar (lambda (path) (seq-find (lambda (b) (and (eq (car b) (car w)) (equal (cadr b) path))) budgets))
+                            '((:alloc :p50) (:cpu_ms :p90) (:rows)))))
+          (if (assq (car w) drgnx-perf-run-unseeded)
+              (should-not (seq-some #'identity rows))        ; seeded: take it off the list
+            (should (seq-every-p #'identity rows))))))))
+
+(ert-deftest drgnx-perf-run/the-unseeded-list-names-workloads-and-reasons ()
+  (let ((process-environment (cons "DRGNX_MODAL_ELPA=/tmp/drgnx-elpa-x" process-environment)))   ; the evil workloads exist with it
+    (dolist (u drgnx-perf-run-unseeded)
+      (should (assq (car u) (drgnx-perf-run--workloads)))
+      (should (stringp (cdr u))))))
 
 (ert-deftest drgnx-perf-run/the-terminal-workloads-run-a-program-not-a-shell ()
   "terminal-typing runs cat, terminal-output a seq loop; their setup forms are readable and name no shell config."

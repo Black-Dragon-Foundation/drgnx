@@ -736,7 +736,7 @@ error if it does not hold).  With :actions, :measure runs after the input and it
                        :teardown ,(drgnx-perf-run--modal-teardown-form))))))
 
 (defun drgnx-perf-run--relative-fails (results)
-  "Failure lines: `typing-evil' input p95 more than 1 ms over `typing' in the same RESULTS (both measured)."
+  "Lines: `typing-evil' input p95 more than 1 ms over `typing' in the same RESULTS (both measured)."
   (let ((plain (drgnx-perf--get results 'typing '(:input :p95)))
         (evil (drgnx-perf--get results 'typing-evil '(:input :p95))))
     (when (and (numberp plain) (numberp evil) (> (- evil plain) 1.0))
@@ -928,6 +928,20 @@ version and the commit, as JSON in FILE."
     (make-directory (file-name-directory (expand-file-name file)) t)
     (write-region (concat (json-serialize doc) "\n") nil file nil 'silent)))
 
+(defconst drgnx-perf-run-unseeded
+  '((agent-stream . "errored in the Emacs 31.1 container: the mock agent was not busy at the end (2026-10-20)")
+    (cockpit-cards . "errored in the container: no agent busy at the end")
+    (replace-retype . "errored in the container: the session stopped answering (a prompt)")
+    (live-view . "the container image has no websocket package")
+    (typing-with-index . "the container's /src is not a git project; the workload indexes the repo")
+    (terminal-typing . "the container image has no eat package")
+    (terminal-output . "the container image has no eat package")
+    (typing-evil . "needs DRGNX_MODAL_ELPA (evil); not run in the container")
+    (motions-evil . "needs DRGNX_MODAL_ELPA")
+    (explorer-evil . "needs DRGNX_MODAL_ELPA"))
+  "Input workloads with no allocation, CPU or rows budget yet, and why: they could not be seeded from the 31.1
+container.  Seed one (budgets.eld) and take it off this list.")
+
 (defconst drgnx-perf-run-hook-budget 2 "ms: any hook function's p90 (the spec), judged in the --audit pass.")
 (defconst drgnx-perf-run-hook-command-budget 1.5
   "ms (p90): all the audited hook functions and timers together, per command, judged in the --audit pass.  The
@@ -950,8 +964,9 @@ plan's starting value was 4; measured (2026-10-20, typing 0.46, explorer 0.67) i
       (error "perf: the session runs at gc-cons-threshold %s, not drgnx's %s (HARNESS-GC-1)" now want))))
 
 (defun drgnx-perf-run (&optional audit)
-  "`drgnx test --perf': every workload in one session; print, judge (the gated budgets, `drgnx-perf-verdict'),
-report the rest, keep the history.  Exit code: 0 every gated budget holds, 1 a failure.  The load on the machine
+  "`drgnx test --perf': every workload in one session; print, judge the gated budgets (`drgnx-perf-verdict':
+allocation, CPU, rows), report the rest (`drgnx-perf-report'), print what got worse than the history (never a
+failure), keep the history.  Exit code: 0 every gated budget holds, 1 a failure.  The load on the machine
 never decides: allocation, CPU and rows do not move with it, and wall clock is reported with a calibration (see
 docs/develop/perf.md).  AUDIT (`--audit'): the hook audit on — judged on the hook budgets only (the audit adds
 its own cost to the other numbers)."
@@ -1000,20 +1015,23 @@ its own cost to the other numbers)."
         (let* ((history (expand-file-name "perf-history.jsonl" (drgnx-ui-state-root)))
                (only (drgnx-perf-run--only-regexp))
                (partial (/= (length selected) (length all)))   ; DRGNX_PERF_WORKLOADS: judge those, keep no history
-               (judged (drgnx-perf-run--budgets-judged results))
-               (fails (append (drgnx-perf-verdict results (if partial (seq-filter (lambda (b) (assq (car b) results)) judged) judged))
-                              (drgnx-perf-run--relative-fails results)))
+               (judged (let ((all (drgnx-perf-run--budgets-judged results)))
+                         (if partial (seq-filter (lambda (b) (assq (car b) results)) all) all)))
+               (fails (drgnx-perf-verdict results judged))
                (worse (drgnx-perf-regressions history results)))
           (dolist (f fails) (princ (format "FAIL %s\n" f)))
-          (dolist (r worse) (princ (format "FAIL regression: %s\n" r)))
+          ;; wall clock is reported, never judged here: the paired A/B run at n >= 100 judges it
+          (dolist (l (append (drgnx-perf-report results judged) (drgnx-perf-run--relative-fails results)))
+            (princ (format "report %s\n" l)))
+          (dolist (r worse) (princ (format "regression (reported, local history): %s\n" r)))
           (when-let* ((note (drgnx-perf-run--relative-note results))) (princ (concat note "\n")))
           (unless (or errors only partial) (drgnx-perf-history-append history (drgnx-perf-run--commit) results (seq-max (cons 0 (delq nil loads)))))
           (princ (format "history: %s%s\n" history (cond (errors " (not written: a workload failed)")
                                                          (only " (not written: DRGNX_PERF_ONLY ran some of the workloads)")
                                                          (partial " (not written: only some workloads ran)")
                                                          (t ""))))
-          (if (or fails worse errors) 1
-            (princ "perf: every budget holds\n") 0)))))))
+          (if (or fails errors) 1
+            (princ "perf: every gated budget holds\n") 0)))))))
 
 (defconst drgnx-perf-run--census-form
   "(vconcat (mapcar (lambda (r) (vector (symbol-name (nth 0 r)) (symbol-name (nth 1 r)) (nth 2 r) (or (nth 3 r) :null)))

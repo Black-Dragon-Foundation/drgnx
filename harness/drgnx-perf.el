@@ -289,17 +289,48 @@ most workloads, where there is no p95)."
   (let ((v (cdr (assq workload results))))
     (dolist (k path v) (setq v (plist-get v k)))))
 
-(defun drgnx-perf-verdict (results budgets)
-  "What RESULTS break of BUDGETS ((WORKLOAD PATH LIMIT)…): a list of lines, nil when all hold."
+(defconst drgnx-perf-gated-metrics '(:alloc :cpu_ms :rows :processes :rss_kb)
+  "The metrics a budget can fail a run on: what load does not move.  Every other path (wall clock) is reported.")
+
+(defun drgnx-perf--cpu-factor ()
+  "$DRGNX_PERF_CPU_FACTOR (a number; default 1, 2 on hosted runners): the headroom CPU budgets get."
+  (let ((env (getenv "DRGNX_PERF_CPU_FACTOR")))
+    (if (and env (string-match-p "\\`[0-9]+\\(?:\\.[0-9]+\\)?\\'" env)) (string-to-number env) 1)))
+
+(defun drgnx-perf--path-name (path) (mapconcat (lambda (k) (substring (symbol-name k) 1)) path " "))
+
+(defun drgnx-perf--budget-applies-p (budget emacs-major)
+  "BUDGET is (WORKLOAD PATH LIMIT &rest PLIST); `:emacs MAJOR' in PLIST limits it to that Emacs major version."
+  (let ((major (plist-get (nthcdr 3 budget) :emacs)))
+    (or (null major) (eql major emacs-major))))
+
+(cl-defun drgnx-perf-verdict (results budgets &key (emacs-major emacs-major-version) (cpu-factor (drgnx-perf--cpu-factor)))
+  "What RESULTS break of the gated BUDGETS ((WORKLOAD PATH LIMIT &rest PLIST)…): a list of lines, nil when all
+hold.  Gated: `drgnx-perf-gated-metrics' — allocation (:alloc :p50, measured x 1.25 rounded up), CPU (:cpu_ms
+:p90, x CPU-FACTOR) and rows (exact).  Entries for another EMACS-MAJOR are skipped; wall-clock paths are
+`drgnx-perf-report's."
   (let (out)
-    (pcase-dolist (`(,w ,path ,limit) budgets)
-      (let ((v (drgnx-perf--get results w path)))
-        (cond ((not (assq w results)) (cl-pushnew (format "%s: not measured" w) out :test #'equal))
-              ((and (null v) (memq (car (last path)) '(:p95 :p99))))   ; fewer than 100 samples: no tail to judge
-              ((not (numberp v)) (push (format "%s %s: no value" w (mapconcat (lambda (k) (substring (symbol-name k) 1)) path " ")) out))
-              ((> v limit) (push (format "%s %s %s > %s" w (mapconcat (lambda (k) (substring (symbol-name k) 1)) path " ")
-                                         (drgnx-perf--round v) limit)
-                                 out)))))
+    (dolist (b budgets)
+      (pcase-let ((`(,w ,path ,limit . ,_) b))
+        (when (and (memq (car path) drgnx-perf-gated-metrics) (drgnx-perf--budget-applies-p b emacs-major))
+          (let ((v (drgnx-perf--get results w path))
+                (limit (if (eq (car path) :cpu_ms) (* limit cpu-factor) limit)))
+            (cond ((not (assq w results)) (cl-pushnew (format "%s: not measured" w) out :test #'equal))
+                  ((not (numberp v)) (push (format "%s %s: no value" w (drgnx-perf--path-name path)) out))
+                  ((> v limit) (push (format "%s %s %s > %s" w (drgnx-perf--path-name path) (drgnx-perf--round v) limit) out)))))))
+    (nreverse out)))
+
+(cl-defun drgnx-perf-report (results budgets &key (emacs-major emacs-major-version))
+  "Lines for every BUDGETS path of a measured workload that is not gated (wall clock): the value, the budget,
+and that it is reported, not judged.  A p95 or p99 below n = 100 has no value."
+  (let (out)
+    (dolist (b budgets)
+      (pcase-let ((`(,w ,path ,limit . ,_) b))
+        (when (and (not (memq (car path) drgnx-perf-gated-metrics)) (assq w results)
+                   (drgnx-perf--budget-applies-p b emacs-major))
+          (push (format "%s %s %s (budget %s): reported (wall clock; judge with --perf --ab)" w (drgnx-perf--path-name path)
+                        (or (drgnx-perf--round (drgnx-perf--get results w path)) "-") limit)
+                out))))
     (nreverse out)))
 
 (defun drgnx-perf-history-append (file commit results &optional load)
@@ -317,23 +348,27 @@ most workloads, where there is no p95)."
                                           (car (read-from-string (plist-get (json-parse-string line :object-type 'plist) :results)))))
                          (split-string (with-temp-buffer (insert-file-contents file) (buffer-string)) "\n" t)))))
 
-(defconst drgnx-perf-regression-floor 5 "Milliseconds a metric must also worsen by to count (noise below).")
+(defconst drgnx-perf-regression-floors '((:alloc . 8) (:cpu_ms . 0.5))
+  "What a metric must also worsen by, to count: 8 conses of allocation, 0.5 ms of CPU.  The floor of a metric is
+the larger of this and twice its spread over the runs compared.")
 
 (defun drgnx-perf-regressions (file results &optional paths)
-  "Metrics of RESULTS more than 15% (and `drgnx-perf-regression-floor' ms) worse than the median of
-the last five runs in FILE — the spec's regression gate.
-PATHS: the metrics compared (default the p95s: input, redisplay, frame)."
+  "Metrics of RESULTS more than 15% worse than the median of the last five runs in FILE, and worse by more than
+their floor: the larger of `drgnx-perf-regression-floors' and twice the metric's spread (max - min) over those
+runs.  PATHS: the metrics compared (default allocation and CPU, the p50s).  A local report: the caller prints it
+and never fails on it — CI has no history and gates on budgets."
   (let ((past (last (drgnx-perf--history file) 5)) out)
     (when past
       (pcase-dolist (`(,w . ,_) results)
-        (dolist (path (or paths '((:input :p95) (:redisplay :p95) (:frame :p95))))
+        (dolist (path (or paths '((:alloc :p50) (:cpu_ms :p50))))
           (let ((now (drgnx-perf--get results w path))
                 (old (delq nil (mapcar (lambda (r) (let ((v (drgnx-perf--get r w path))) (and (numberp v) v))) past))))
             (when (and (numberp now) old)
-              (let ((median (plist-get (drgnx-perf-stats old) :p50)))
-                (when (and (> now (* 1.15 median)) (> (- now median) drgnx-perf-regression-floor))
-                  (push (format "%s %s %s vs %s (median of the last %d)" w
-                                (mapconcat (lambda (k) (substring (symbol-name k) 1)) path " ")
+              (let* ((median (plist-get (drgnx-perf-stats old) :p50))
+                     (floor (max (or (alist-get (car path) drgnx-perf-regression-floors) 0)
+                                 (* 2 (- (seq-max old) (seq-min old))))))
+                (when (and (> now (* 1.15 median)) (> (- now median) floor))
+                  (push (format "%s %s %s vs %s (median of the last %d)" w (drgnx-perf--path-name path)
                                 (drgnx-perf--round now) (drgnx-perf--round median) (length old))
                         out))))))))
     (nreverse out)))

@@ -4,7 +4,8 @@ drgnx is measured, not guessed at: every interaction it cares about is timed in 
 [harness](harness.md)), judged against budgets, and kept in a history.
 
 ```
-drgnx test --perf           every workload; fails when a budget breaks; WORSE lines for what got worse
+drgnx test --perf           every workload; fails when a gated budget (allocation, CPU, rows) breaks; wall clock is reported;
+                            what got worse than the local history is printed
 drgnx test --perf --audit   the workloads with every hook function timed: judged on the hook budget only
 drgnx test --soak [MIN]     the input workloads in a loop for MIN minutes (30); fails when memory grows
 DRGNX_STARTUP_TRACE=FILE    emacs --init-directory …/init: where startup time goes, written to FILE
@@ -81,7 +82,7 @@ cannot be unloaded from a session and the other workloads (and the memory figure
 `drgnx test --perf` passes the variable on to the session.
 
 Their budgets are those of the stack without evil, except the Explorer's keys (p95 8 ms, the Explorer key budget of
-`harness/drgnx-bench.el`). One more rule is judged beside them: **`typing-evil` input p95 may exceed `typing` input
+`harness/drgnx-bench.el`). One more rule is reported beside them: **`typing-evil` input p95 may exceed `typing` input
 p95 by at most 1 ms in the same run** (`drgnx-perf-run--relative-fails`), so evil's cost shows even when both stay
 under 16 ms.
 
@@ -103,15 +104,42 @@ and the run says so; a filter that is not a valid regexp, or matches no workload
 
 ## Budgets
 
-`test/perf/budgets.eld`. From the design: keystroke and scroll p95 < 16 ms, a GC pause p95 < 50 ms, any hook
-function p90 < 2 ms (judged in the `--audit` pass), a new frame p95 < 500 ms, a daemon's server ready < 1 s,
-modules < 1.8 s, RSS < 400 MB (and after the 30-minute soak). Also: input max 50 ms, redisplay p95 16 ms, GC while
-typing 100 ms.
+`test/perf/budgets.eld`: entries `(WORKLOAD PATH LIMIT &rest PLIST)`; `:emacs MAJOR` limits an entry to that Emacs
+major version (for a budget that differs between versions; none exist now that 31.1 is the only target).
 
-The history (`perf-history.jsonl` in the harness state root) gets one line per run in which every workload ran,
-with its commit. A p95 more than 15% **and** 5 ms worse than the median of the last five runs **fails** the run
-(the 5 ms keeps noise in tiny numbers from failing it). The new-frame path from a daemon (`emacsclient -c`) is
-judged by the scenario `frame-from-daemon-fast` ([scenarios.md](scenarios.md)).
+**Gated** (`drgnx-perf-gated-metrics`: `:alloc :cpu_ms :rows :processes :rss_kb`) - what the load on the machine does
+not move. A broken one fails the run (`drgnx-perf-verdict`; `--perf` exits 1):
+
+| Path | Limit | Seeded as |
+|---|---|---|
+| `(:alloc :p50)` | objects allocated per command | measured x 1.25, rounded up |
+| `(:cpu_ms :p90)` | CPU ms per command, times `DRGNX_PERF_CPU_FACTOR` (default 1; 2 on hosted runners) | the container's p90 x 2 |
+| `(:rows)` | rows drawn during the run, exact | measured |
+| `(:processes)`, `(:rss_kb)` | as before | the design |
+
+**Reported** (every other path: `:input`, `:redisplay`, `:frame`, `:server_ms`, `:modules_ms`, `:draw_ms`,
+`:slice_ms`, the GC numbers): wall clock. The run prints `report ...` lines with the value and the budget and does not
+judge them; the paired A/B run at n >= 100 does. The numbers the design fixed - keystroke and scroll p95 < 16 ms, max
+50 ms, a GC pause p95 < 50 ms, a new frame p95 < 500 ms, a daemon's server ready < 1 s, modules < 1.8 s, redisplay p95
+16 ms - stay in the file as the targets those reports are read against; a p95 of fewer than 100 samples is shown as `-`.
+
+**Seeding.** `:alloc` and `:rows` come from the Emacs 31.1 container (the GUI image; `bin/drgnx test --container`
+has no `--perf` yet, so the tier runs by hand: `podman run --memory 4g --memory-swap 4g --security-opt
+seccomp=unconfined --security-opt label=disable -v CHECKOUT:/src:ro -v OUT:/out -e DRGNX_PERF_RESULTS=/out/r.json -w
+/src drgnx-test-gui:f45 bin/drgnx test --perf`, through the heavy slot), twice: allocation and rows must agree
+between the runs. The checkout is not built there, so the figures are those of code loaded from source; compiled
+code allocates less, so a built checkout stays under them. A workload that could not run in the container has no
+gated rows yet and is named, with the reason, in `drgnx-perf-run-unseeded` (a test checks both ways).
+
+**Raising a budget** is a change of its own: edit `budgets.eld` in the same commit as the code that needs it, with the
+reason in a comment on the row. A budget is raised for a measured, explained increase, never to make a run pass.
+
+**History.** `perf-history.jsonl` (the harness state root) gets one line per run in which every workload ran, with its
+commit. After a run, `drgnx-perf-regressions` prints the metrics whose `(:alloc :p50)` or `(:cpu_ms :p50)` is more than
+15% worse than the median of the last five runs and worse by more than a floor: the larger of 8 conses (0.5 ms of CPU)
+and twice the metric's spread (max - min) over those five runs. It is a local report (`regression (reported, local
+history)`), never a failure: CI has no history and gates on the budgets. The new-frame path from a daemon
+(`emacsclient -c`) is judged by the scenario `frame-from-daemon-fast` ([scenarios.md](scenarios.md)).
 
 ## Load, the wall clock and the calibration
 

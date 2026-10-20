@@ -94,7 +94,7 @@
   ;; a renamed or misspelled workload must not make its budget vanish
   (drgnx-perf-modal-test--run '("DRGNX_PERF_ONLY" "DRGNX_MODAL_ELPA=/x")
       '((frames :measure "m"))
-      '((frames (:frame :p95) 500) (scrolling (:input :p95) 16))
+      '((frames (:frame :p95) 500) (scrolling (:rows) 0))
     (should (eql code 1))
     (should (string-search "scrolling: not measured" out))))
 
@@ -109,7 +109,7 @@
 (ert-deftest drgnx-perf-modal/with-the-elpa-a-missing-evil-budget-is-reported ()
   (drgnx-perf-modal-test--run '("DRGNX_PERF_ONLY" "DRGNX_MODAL_ELPA=/x")
       '((frames :measure "m"))
-      '((frames (:frame :p95) 500) (typing-evil (:input :p95) 16))
+      '((frames (:frame :p95) 500) (typing-evil (:rows) 0))
     (should (eql code 1))
     (should (string-search "typing-evil: not measured" out))
     (should-not (string-search drgnx-perf-run-modal-skipped out))))

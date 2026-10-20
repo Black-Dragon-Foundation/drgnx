@@ -25,10 +25,12 @@
     (should-not (plist-get s :p99))))
 
 (ert-deftest drgnx-perf/p95-below-100-is-not-judged ()
-  ;; a p95 of fewer samples is the maximum or next to it: it neither passes nor fails a budget
+  ;; a p95 of fewer samples is the maximum or next to it: it has no value, and wall clock is only reported anyway
   (let ((r (list 'tabs :input (drgnx-perf-stats '(1 2 3 400)))))
     (should-not (drgnx-perf-verdict (list r) '((tabs (:input :p95) 16))))
-    (should (drgnx-perf-verdict (list r) '((tabs (:input :p90) 16))))))   ; the p90 is judged
+    (should (equal (drgnx-perf-report (list r) '((tabs (:input :p95) 16) (tabs (:input :p90) 16)))
+                   '("tabs input p95 - (budget 16): reported (wall clock; judge with --perf --ab)"
+                     "tabs input p90 400 (budget 16): reported (wall clock; judge with --perf --ab)")))))
 
 (defvar drgnx-perf-test--rows-a 0)
 (defvar drgnx-perf-test--rows-b 0)
@@ -155,30 +157,89 @@
           (should (>= (plist-get top :ms) 40)))))))
 
 (ert-deftest drgnx-perf/budgets-judge-medians-and-say-what-failed ()
-  (let ((budgets '((typing (:input :p95) 50) (frames (:frame :p95) 500))))
-    (should-not (drgnx-perf-verdict '((typing :input (:p95 30)) (frames :frame (:p95 400))) budgets))
-    (should (equal (drgnx-perf-verdict '((typing :input (:p95 80)) (frames :frame (:p95 400))) budgets)
-                   '("typing input p95 80 > 50")))
-    (should (equal (drgnx-perf-verdict '((frames :frame (:p95 400))) budgets)
-                   '("typing: not measured")))))
+  (let ((budgets '((typing (:alloc :p50) 50) (memory (:rss_kb) 500))))
+    (should-not (drgnx-perf-verdict '((typing :alloc (:p50 30)) (memory :rss_kb 400)) budgets))
+    (should (equal (drgnx-perf-verdict '((typing :alloc (:p50 80)) (memory :rss_kb 400)) budgets)
+                   '("typing alloc p50 80 > 50")))
+    (should (equal (drgnx-perf-verdict '((memory :rss_kb 400)) budgets) '("typing: not measured")))
+    (should (equal (drgnx-perf-verdict '((typing :input (:p50 1)) (memory :rss_kb 400)) budgets) '("typing alloc p50: no value")))))
+
+(ert-deftest drgnx-perf/an-alloc-budget-fails-at-plus-one ()
+  (let ((budgets '((typing (:alloc :p50) 1000))))
+    (should-not (drgnx-perf-verdict '((typing :alloc (:p50 1000))) budgets))
+    (should (equal (drgnx-perf-verdict '((typing :alloc (:p50 1001))) budgets) '("typing alloc p50 1001 > 1000")))))
+
+(ert-deftest drgnx-perf/a-rows-budget-is-exact ()
+  (let ((budgets '((explorer (:rows) 12))))
+    (should-not (drgnx-perf-verdict '((explorer :rows 12)) budgets))
+    (should (drgnx-perf-verdict '((explorer :rows 13)) budgets))
+    (should (equal (drgnx-perf-verdict '((explorer :rows 11)) budgets) nil))))   ; fewer rows drawn is not a failure
+
+(ert-deftest drgnx-perf/cpu-budgets-scale-with-the-factor ()
+  (let ((budgets '((typing (:cpu_ms :p90) 2.0))) (r '((typing :cpu_ms (:p90 3.5)))))
+    (should (drgnx-perf-verdict r budgets))                                          ; default factor 1
+    (should (drgnx-perf-verdict r budgets :cpu-factor 1.5))
+    (should-not (drgnx-perf-verdict r budgets :cpu-factor 2))                        ; hosted runners
+    (let ((process-environment (cons "DRGNX_PERF_CPU_FACTOR=2" process-environment)))
+      (should-not (drgnx-perf-verdict r budgets)))
+    ;; the factor is for CPU only: allocation and rows stay exact
+    (should (drgnx-perf-verdict '((typing :alloc (:p50 11))) '((typing (:alloc :p50) 10)) :cpu-factor 2))))
+
+(ert-deftest drgnx-perf/a-budget-for-another-emacs-is-skipped ()
+  (let ((budgets '((typing (:alloc :p50) 100 :emacs 30) (typing (:alloc :p50) 500 :emacs 31)))
+        (r '((typing :alloc (:p50 300)))))
+    (should-not (drgnx-perf-verdict r budgets :emacs-major 31))                      ; 300 > 100, but that row is for Emacs 30
+    (should (equal (drgnx-perf-verdict r budgets :emacs-major 30) '("typing alloc p50 300 > 100")))
+    (should (equal (drgnx-perf-verdict '((typing :alloc (:p50 600))) budgets :emacs-major 31) '("typing alloc p50 600 > 500")))
+    (should-not (drgnx-perf-verdict '((typing :alloc (:p50 9999))) budgets :emacs-major 32))))   ; no row for 32 at all
+
+(ert-deftest drgnx-perf/wall-paths-are-reported-not-judged ()
+  (let ((budgets '((typing (:input :p90) 16) (typing (:alloc :p50) 100) (frames (:frame :p95) 500) (scrolling (:input :max) 50)))
+        (r '((typing :input (:p90 400) :alloc (:p50 90)) (frames :frame (:p95 9000)))))
+    (should-not (drgnx-perf-verdict r budgets))                                     ; 400 ms against 16 ms does not fail
+    (should (equal (drgnx-perf-report r budgets)
+                   '("typing input p90 400 (budget 16): reported (wall clock; judge with --perf --ab)"
+                     "frames frame p95 9000 (budget 500): reported (wall clock; judge with --perf --ab)")))))   ; scrolling did not run
+
+(ert-deftest drgnx-perf/regressions-use-the-spread-floor ()
+  (let* ((dir (make-temp-file "drgnx-perf-hist" t)) (file (expand-file-name "history.jsonl" dir)))
+    (unwind-protect
+        (progn
+          ;; alloc 100 x4 and 140: median 100, spread 40, so the floor is 80
+          (dolist (a '(100 100 100 100 140)) (drgnx-perf-history-append file "c" `((typing :alloc (:p50 ,a)))))
+          (should-not (drgnx-perf-regressions file '((typing :alloc (:p50 150)))))   ; +50%, but 50 < 80
+          (should (equal (drgnx-perf-regressions file '((typing :alloc (:p50 181))))
+                         '("typing alloc p50 181 vs 100 (median of the last 5)"))))
+      (delete-directory dir t)))
+  (let* ((dir (make-temp-file "drgnx-perf-hist" t)) (file (expand-file-name "history.jsonl" dir)))
+    (unwind-protect
+        (progn
+          ;; a steady history: the floors alone (8 conses, 0.5 ms), and 15%
+          (dotimes (i 5) (drgnx-perf-history-append file (format "c%d" i) '((typing :alloc (:p50 100) :cpu_ms (:p50 2.0)))))
+          (should-not (drgnx-perf-regressions file '((typing :alloc (:p50 114) :cpu_ms (:p50 2.4)))))   ; under 15%
+          (should-not (drgnx-perf-regressions file '((typing :alloc (:p50 6) :cpu_ms (:p50 2.5)))))      ; better, or exactly 25% and 0.5 ms
+          (should (equal (drgnx-perf-regressions file '((typing :alloc (:p50 120) :cpu_ms (:p50 2.6))))
+                         '("typing alloc p50 120 vs 100 (median of the last 5)" "typing cpu_ms p50 2.6 vs 2.0 (median of the last 5)")))
+          (should-not (drgnx-perf-regressions file '((typing :alloc (:p50 105))))))   ; 5%: not worse by 15%
+      (delete-directory dir t))))
 
 (ert-deftest drgnx-perf/history-says-what-got-worse ()
   (let* ((dir (make-temp-file "drgnx-perf-hist" t)) (file (expand-file-name "history.jsonl" dir)))
     (unwind-protect
         (progn
-          (dotimes (i 5) (drgnx-perf-history-append file (format "c%d" i) '((typing :input (:p95 20)))))
-          (should-not (drgnx-perf-regressions file '((typing :input (:p95 22)))))
-          (should-not (drgnx-perf-regressions file '((typing :input (:p95 24)))))   ; 20% … and noise below 5 ms
-          (should (equal (drgnx-perf-regressions file '((typing :input (:p95 40))))
-                         '("typing input p95 40 vs 20 (median of the last 5)"))))
+          (dotimes (i 5) (drgnx-perf-history-append file (format "c%d" i) '((typing :alloc (:p50 200)))))
+          (should-not (drgnx-perf-regressions file '((typing :alloc (:p50 220)))))
+          (should-not (drgnx-perf-regressions file '((typing :alloc (:p50 229)))))   ; under 15%
+          (should (equal (drgnx-perf-regressions file '((typing :alloc (:p50 400))))
+                         '("typing alloc p50 400 vs 200 (median of the last 5)"))))
       (delete-directory dir t))))
 
 (ert-deftest drgnx-perf/small-differences-are-noise ()
   (let* ((dir (make-temp-file "drgnx-perf-hist" t)) (file (expand-file-name "history.jsonl" dir)))
     (unwind-protect
         (progn
-          (drgnx-perf-history-append file "c0" '((typing :input (:p95 2.2))))
-          (should-not (drgnx-perf-regressions file '((typing :input (:p95 3.5))))))   ; +60%, but 1.3 ms
+          (drgnx-perf-history-append file "c0" '((typing :alloc (:p50 20))))
+          (should-not (drgnx-perf-regressions file '((typing :alloc (:p50 27))))))   ; +35%, but 7 conses
       (delete-directory dir t))))
 
 (defvar drgnx-perf-test-hook2 nil)
@@ -248,15 +309,6 @@
       (should (numberp (plist-get row :p90)))))
   (should (equal (drgnx-perf-audit-verdict '((:fn "slow" :hooks "post-command-hook" :p90 3.1) (:fn "fast" :p90 0.1)) 2)
                  '("hook function slow (post-command-hook) p90 3.1 > 2 ms"))))
-
-(ert-deftest drgnx-perf/a-regression-is-fifteen-percent-and-five-ms ()
-  (let* ((dir (make-temp-file "drgnx-perf-hist" t)) (file (expand-file-name "history.jsonl" dir)))
-    (unwind-protect
-        (progn
-          (dotimes (i 3) (drgnx-perf-history-append file (format "c%d" i) '((typing :input (:p95 30)))))
-          (should-not (drgnx-perf-regressions file '((typing :input (:p95 34)))))     ; 13%
-          (should (drgnx-perf-regressions file '((typing :input (:p95 36))))))        ; 20% and 6 ms
-      (delete-directory dir t))))
 
 (ert-deftest drgnx-perf/the-history-keeps-the-load-of-a-run ()
   (let* ((dir (make-temp-file "drgnx-perf-hist" t)) (file (expand-file-name "history.jsonl" dir)))
