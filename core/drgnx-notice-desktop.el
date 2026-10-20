@@ -61,15 +61,19 @@ cannot hold Emacs).  Else a message.  Never a prompt."
                                   "-e" "display notification (item 1 of argv) with title (item 2 of argv)"
                                   "-e" "end run" "--"
                                   (replace-regexp-in-string "[\n\r]+" " " body) (replace-regexp-in-string "[\n\r]+" " " title))
-                   :sentinel (lambda (p _event)
-                               (when (and (memq (process-status p) '(exit signal)) (/= 0 (process-exit-status p)))
-                                 (message "drgnx: the macOS notification failed (%s — %s)" title body)))))
+                   :sentinel (drgnx-guard-wrap
+                              (lambda (p _event)
+                                (when (and (memq (process-status p) '(exit signal)) (/= 0 (process-exit-status p)))
+                                  (message "drgnx: the macOS notification failed (%s — %s)" title body)))
+                              "desktop notification")))
     ('dbus
-     (dbus-call-method-asynchronously :session "org.freedesktop.Notifications" "/org/freedesktop/Notifications"
-                                      "org.freedesktop.Notifications" "Notify" nil
-                                      :string notifications-application-name :uint32 0
-                                      :string notifications-application-icon :string title :string body
-                                      '(:array) '(:array :signature "{sv}") :int32 -1))
+     (condition-case err
+         (dbus-call-method-asynchronously :session "org.freedesktop.Notifications" "/org/freedesktop/Notifications"
+                                          "org.freedesktop.Notifications" "Notify" nil
+                                          :string notifications-application-name :uint32 0
+                                          :string notifications-application-icon :string title :string body
+                                          '(:array) '(:array :signature "{sv}") :int32 -1)
+       (error (drgnx-guard--record "desktop notification" err))))
     (_ (message "%s — %s" title body))))
 
 ;;;; The route

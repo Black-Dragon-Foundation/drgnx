@@ -56,7 +56,6 @@
  (:file "modules/lang/drgnx-markdown.el" :form make-process :near "drgnx-markdown--render" :why "the markdown preview's renderer" :until "td-t17")
  (:file "modules/extra/drgnx-blame.el" :form make-process :near "drgnx-blame--update" :why "git blame of a buffer" :until "td-t18")
  (:file "modules/tools/drgnx-ai-ui.el" :form make-process :near "drgnx-ai--grep-retriever" :why "the AI context's grep" :until "td-t19")
- (:file "modules/tools/drgnx-job-ui.el" :form make-process :near "drgnx-job-ui--send" :why "the macOS notification's osascript" :until "td-t19")
  (:file "modules/tools/drgnx-work-ui.el" :form make-process :near "drgnx-work-ui-refresh" :why "the work scan job" :until "td-t19")
  (:file "modules/tools/drgnx-replace.el" :form make-process :near "drgnx-replace-search" :why "the search behind Replace" :until "td-t20")
  (:file "modules/tools/drgnx-diff.el" :form make-process :near "drgnx-diff--load" :why "the diff's git" :until "td-t21")
