@@ -6,6 +6,7 @@
 (require 'seq)
 (require 'drgnx-ui)
 (require 'drgnx-tty-session)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-ui-repo-dir) nil t)
 
 (defconst drgnx-tty-mixed-test--state
   '(let ((gui (seq-find (lambda (f) (and (display-graphic-p f) (not (frame-parent f)))) (frame-list)))
@@ -22,14 +23,13 @@
 which frame (`gui' or `tty') shows the transient menu, if any.")
 
 (defun drgnx-tty-mixed-test--wait (gui form &optional timeout)
-  "FORM's value in the daemon once it is non-nil (polled for TIMEOUT s, default 10); else fail with FORM and the state."
-  (let ((deadline (+ (float-time) (or timeout 10))) v)
-    (while (not (setq v (drgnx-tty-session-eval gui form 5)))
-      (when (> (float-time) deadline)
-        (ert-fail (format "%S stayed nil for %ss; the daemon's windows: %S" form (or timeout 10)
-                          (ignore-errors (drgnx-tty-session-eval gui drgnx-tty-mixed-test--state)))))
-      (sleep-for 0.05))
-    v))
+  "FORM's value in the daemon once it is non-nil (`drgnx-test-wait', at least 30 s or TIMEOUT); else fail with FORM and
+the state."
+  (condition-case err
+      (drgnx-test-wait (lambda () (drgnx-tty-session-eval gui form 5)) :secs (max 30 (or timeout 0)) :what form)
+    (ert-test-failed
+     (signal 'ert-test-failed
+             (append (cdr err) (list :windows (ignore-errors (drgnx-tty-session-eval gui drgnx-tty-mixed-test--state))))))))
 
 (defun drgnx-tty-mixed-test--state (gui)
   (drgnx-tty-session-eval gui drgnx-tty-mixed-test--state))

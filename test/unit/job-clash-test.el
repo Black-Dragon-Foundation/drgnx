@@ -94,7 +94,7 @@
       (let ((card (car (drgnx-job-clash-test--cards id "clash"))))
         (should (equal (plist-get (plist-get card :data) :rule) "against-decision"))
         (should (equal (plist-get card :task) (concat id "#1"))))
-      (drgnx-job-run-test--wait #'ignore 2.5)                                 ; a tick: no reviewer, still in review
+      (drgnx-test-pause 2.5)                                 ; a tick: no reviewer, still in review
       (should-not (drgnx-job--reviewer-of (concat id "#1")))
       (should (equal (drgnx-job-run-test--status id 1) "in-review")))))
 

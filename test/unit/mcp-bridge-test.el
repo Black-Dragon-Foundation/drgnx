@@ -4,6 +4,8 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-mcp-bridge)
+(require 'drgnx-paths)
+(load(expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
 (defvar drgnx-mcp-bridge-test--got nil "The lines the fake server received, oldest first.")
 (defvar drgnx-mcp-bridge-test--conns nil "The connections the fake server accepted.")
@@ -41,11 +43,8 @@
       p)))
 
 (defun drgnx-mcp-bridge-test--wait (pred &optional secs)
-  "Wait until PRED is true (at most SECS, default 20): its value."
-  (let ((deadline (+ (float-time) (or secs 20))) v)
-    (while (and (not (setq v (funcall pred))) (< (float-time) deadline))
-      (accept-process-output nil 0.02))
-    v))
+  "Wait until PRED is true: its value (`drgnx-test-wait', at least 30 s or SECS)."
+  (drgnx-test-wait pred :secs (max 30 (or secs 0)) :what "the bridge test's predicate"))
 
 (defun drgnx-mcp-bridge-test--out (bridge)
   "The JSON messages BRIDGE wrote to its stdout so far (hash tables), whole lines only."
@@ -55,7 +54,7 @@
             (split-string (buffer-substring (point-min) (if (search-backward "\n" nil t) (point) (point-min))) "\n" t))))
 
 (defun drgnx-mcp-bridge-test--exit (bridge)
-  "BRIDGE's exit status once it has ended, or nil after 20 s."
+  "BRIDGE's exit status once it has ended."
   (and (drgnx-mcp-bridge-test--wait (lambda () (memq (process-status bridge) '(exit signal))))
        (process-exit-status bridge)))
 

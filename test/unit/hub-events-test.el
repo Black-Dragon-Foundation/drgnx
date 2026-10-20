@@ -165,11 +165,11 @@
         (drgnx-coord-event-add :agent "ext:t:1" :kind "test" :summary (format "run %d" i) :data (list :passed i :failed 0))
         (drgnx-hub-call "coord/notify" nil #'ignore)
         (when (zerop (% i 10)) (accept-process-output nil 0.02)))
-      (drgnx-job-run-test--wait (lambda () nil) 0.05)     ; the notifies are served
+      (drgnx-test-pause 0.05)     ; the notifies are served
       ;; one broadcast due, not one per add
       (should (<= (seq-count (lambda (tm) (eq (timer--function tm) #'drgnx-hub--events-send)) timer-list) 1))
       (should (drgnx-job-run-test--wait (lambda () (assoc "events" heard)) 3))
-      (drgnx-job-run-test--wait (lambda () nil) 1.2)       ; a second batch would be here now
+      (drgnx-test-pause 1.2)       ; a second batch would be here now
       (let ((batches (seq-filter (lambda (h) (equal (car h) "events")) heard)))
         (should (= (length batches) 1))
         (let ((d (cdar batches)))

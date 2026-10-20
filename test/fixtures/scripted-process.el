@@ -5,7 +5,7 @@
 ;; pending when Emacs next reads, the sentinel inside a filter call, `process-send-eof' after the exit.
 (require 'ert)
 (require 'cl-lib)
-;; `drgnx-test-wait--now' (real seconds, also inside the clock fixture) and `drgnx-uitest-settle-scale'
+;; `drgnx-test-wait-now' (real seconds, also inside the clock fixture) and `drgnx-uitest-settle-scale'
 (require 'drgnx-wait-fixture (expand-file-name "wait-fixture" (file-name-directory (macroexp-file-name))))
 
 (defconst drgnx-test-proc--script
@@ -69,11 +69,11 @@ after SECS times `drgnx-uitest-settle-scale' real seconds."
 (cl-defun drgnx-test-proc-await-exit (p &key (secs 30))
   "Return once Emacs has recorded the exit of P (any process), without reading its output or running a filter,
 sentinel or timer.  Blocks in `call-process'; fails after SECS times `drgnx-uitest-settle-scale' real seconds."
-  (let ((deadline (+ (drgnx-test-wait--now) (* secs (drgnx-uitest-settle-scale)))))
+  (let ((deadline (+ (drgnx-test-wait-now) (* secs (drgnx-uitest-settle-scale)))))
     ;; `process-live-p' only decodes the status Emacs's SIGCHLD handler recorded (it reaps children even while
     ;; `call-process' blocks); `call-process' reads no other process's output.
     (while (process-live-p p)
-      (when (> (drgnx-test-wait--now) deadline)
+      (when (> (drgnx-test-wait-now) deadline)
         (signal 'ert-test-failed (list :waited-for (format "%s to exit" (process-name p)) :secs secs)))
       (call-process "sleep" nil nil nil "0.005"))))
 

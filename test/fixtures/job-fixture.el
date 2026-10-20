@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'drgnx-hub)
 (require 'drgnx-job)
+(require 'drgnx-wait-fixture (expand-file-name "wait-fixture" (file-name-directory (macroexp-file-name))))
 
 (defun drgnx-job-run-test--git (dir &rest args)
   (with-temp-buffer
@@ -66,9 +67,7 @@ profile \"mock\" on every route, taken for job-safe (`drgnx-job-run-test--safe')
            (file-error (accept-process-output nil 0.3) (delete-directory root t)))))))
 
 (defun drgnx-job-run-test--wait (pred &optional secs)
-  (let ((deadline (+ (float-time) (or secs 15))))
-    (while (and (not (funcall pred)) (< (float-time) deadline)) (accept-process-output nil 0.05)))
-  (funcall pred))
+  (drgnx-test-wait pred :secs (max 30 (or secs 0)) :what "the job fixture's predicate"))
 
 (defun drgnx-job-run-test--status (job n)
   (plist-get (seq-find (lambda (task) (= (plist-get task :n) n)) (drgnx-coord-tasks job)) :status))

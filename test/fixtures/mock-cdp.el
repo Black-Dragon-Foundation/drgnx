@@ -6,6 +6,7 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'websocket)
+(require 'drgnx-wait-fixture (expand-file-name "wait-fixture" (file-name-directory (macroexp-file-name))))
 
 (defvar drgnx-mock-cdp-targets
   '((:targetId "T1" :type "page" :title "Example" :url "https://example.org/")
@@ -77,10 +78,8 @@
                         session))
 
 (defun drgnx-mock-cdp-wait (pred &optional secs)
-  "Wait (SECS, default 5) until PRED holds, reading process output; PRED's last value."
-  (let ((deadline (+ (float-time) (or secs 5))))
-    (while (and (not (funcall pred)) (< (float-time) deadline)) (accept-process-output nil 0.02)))
-  (funcall pred))
+  "Wait until PRED holds, reading process output: PRED's value (`drgnx-test-wait', at least 30 s or SECS)."
+  (drgnx-test-wait pred :secs (max 30 (or secs 0)) :what "the mock browser's predicate"))
 
 (provide 'mock-cdp)
 ;;; mock-cdp.el ends here

@@ -30,7 +30,8 @@ MIDWAY (a function of the id) is called once the job is running, its tasks not d
              (lambda () (or both (setq both (and (file-directory-p (drgnx-job--task-tree id 1)) (file-directory-p (drgnx-job--task-tree id 2))
                                                  (not (file-directory-p (drgnx-job--task-tree id 3)))))))
              15))
-    (let ((done (drgnx-job-run-test--wait (lambda () (equal (plist-get (drgnx-coord-job id) :status) "done")) 90)))
+    (let ((done (condition-case nil (drgnx-job-run-test--wait (lambda () (equal (plist-get (drgnx-coord-job id) :status) "done")) 90)
+                  (ert-test-failed nil))))
       ;; a job that does not finish says where it stands (the failure carries it): the tasks, the open cards, what each session last said
       (unless done (ert-fail (list :tasks (mapcar (lambda (task) (list (plist-get task :n) (plist-get task :status) (plist-get task :agent)))
                                                   (drgnx-coord-tasks id))
