@@ -67,6 +67,20 @@
     (should timeouts)
     (should (equal (delete-dups timeouts) '(0)))))
 
+(defun drgnx-wait-test--rearm ()
+  "A timer that is due again the moment it has run."
+  (run-at-time 0 nil #'drgnx-wait-test--rearm))
+
+(ert-deftest drgnx-test-wait/the-deadline-holds-while-a-timer-stays-due ()
+  ;; The wait gives up at its deadline (it signals, it does not return) though a timer is due at every poll.
+  (let ((t0 (float-time)))
+    (run-at-time 0 nil #'drgnx-wait-test--rearm)
+    (unwind-protect
+        (let ((d (drgnx-wait-test--fail (lambda () (drgnx-test-wait (lambda () nil) :secs 0.2)))))
+          (should (= (plist-get d :secs) (* 0.2 (drgnx-uitest-settle-scale))))
+          (should (< (- (float-time) t0) 5)))
+      (cancel-function-timers #'drgnx-wait-test--rearm))))
+
 (ert-deftest drgnx-test-pause/runs-processes-and-a-timer-chain-for-its-window ()
   ;; A test that asserts something does NOT happen gives it a short window: the whole window, every link of a chain
   ;; (a `sleep-for' runs one).  The clock is a counter here, 1/16 s per read: about 60 polls, 50 of them the links.
