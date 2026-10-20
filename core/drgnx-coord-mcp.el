@@ -18,13 +18,14 @@
 (require 'subr-x)
 (require 'drgnx-mcp)
 (require 'drgnx-coord)
+(require 'drgnx-records)
 (require 'drgnx-paths)
 (require 'drgnx-gc)
 
-(declare-function drgnx-hub-socket "drgnx-hub")
+(declare-function drgnx-hub-socket "drgnx-hub-client")
 (declare-function drgnx-work--status-rows "drgnx-work")
 (declare-function drgnx-work--json-row "drgnx-work")
-(declare-function drgnx-hub--untrusted "drgnx-hub")
+(declare-function drgnx-hub--untrusted "drgnx-hub-client")
 
 ;;;; Who this server speaks for
 
@@ -76,7 +77,7 @@ says which fallback was taken.")
   "Who this server speaks for: DRGNX_AGENT (drgnx's own agents), else ext:KIND:PID-HASH for an agent outside drgnx —
 PID its process, this server's parent, HASH its start time (see `drgnx-coord-mcp--parent' for the fallbacks) — else
 nil (it only reads).  Never from a tool's arguments.  An error when DRGNX_AGENT is \"user\", in any case: that is
-the user, whose messages the hub gives agents as the user's (`drgnx-hub--message-prompt'); and when it is not a
+the user, whose messages the hub gives agents as the user's (`drgnx-coord-message-prompt'); and when it is not a
 plain ASCII id (`drgnx-coord-mcp--id-regexp'): a newline or `]' would break out of the hub's header, a lookalike of
 \"user\" would read as the user."
   (let ((a (getenv "DRGNX_AGENT")))
@@ -331,11 +332,11 @@ its hello changes nothing of it, runs no git, and answers the hub's values."
   (append (list :root root :paths paths) (and (> more 0) (list :more more))))
 
 (defun drgnx-coord-mcp--fitting (root paths)
-  "The first of PATHS that an edit event's data keeps whole: printed as C1 prints it (`drgnx-coord--data-print': at
-most 100 elements of a list), within `drgnx-coord--data-max' characters."
+  "The first of PATHS (at most 100) that an edit event's data keeps whole: as JSON (`drgnx-coord--data-print'),
+within `drgnx-coord--data-max' characters."
   (let ((kept (seq-take paths 100)))
-    (while (and kept (> (length (let ((print-length 100) (print-level 6) (print-escape-newlines t))
-                                  (prin1-to-string (drgnx-coord-mcp--edit-data root kept (- (length paths) (length kept))))))
+    (while (and kept (> (length (drgnx-records-encode 'drgnx-records-event-data
+                                                      (drgnx-coord-mcp--edit-data root kept (- (length paths) (length kept)))))
                         drgnx-coord--data-max))
       (setq kept (butlast kept)))
     kept))
@@ -421,7 +422,7 @@ most 100 elements of a list), within `drgnx-coord--data-max' characters."
 (defun drgnx-coord-mcp--notify-hub ()
   "Tell the hub something was written (it delivers at once); never waits, never fails."
   (ignore-errors
-    (require 'drgnx-hub)
+    (require 'drgnx-hub-client)
     (let ((socket (drgnx-hub-socket)))
       (when (and (file-exists-p socket) (not (drgnx-hub--untrusted socket)))   ; never a socket not private to the user
         (let ((c (make-network-process :name "drgnx-coord-notify" :family 'local :service socket :noquery t)))
@@ -434,19 +435,17 @@ most 100 elements of a list), within `drgnx-coord--data-max' characters."
      (ignore-errors (drgnx-coord-note-held (drgnx-coord-mcp--me) (and (consp r) (plist-get r :held))))   ; stale twice: a card
      (prog1 (drgnx-coord-mcp--answer r) (drgnx-coord-mcp--notify-hub))))
 
-(defvar read-eval)                      ; `let'-bound in `--hub-agents': must be dynamic once compiled
-(declare-function drgnx-hub-running-p "drgnx-hub")
-(declare-function drgnx-hub-call-sync "drgnx-hub")
+(declare-function drgnx-hub-running-p "drgnx-hub-client")
+(declare-function drgnx-hub-call-sync "drgnx-hub-client")
 
 (defun drgnx-coord-mcp--hub-agents ()
   "The sessions the hub runs, ((:id :name :job :task …)…) — or `none' when no hub answers."
   (condition-case nil
       (progn
-        (require 'drgnx-hub)
+        (require 'drgnx-hub-client)
         (if (not (drgnx-hub-running-p)) 'none
-          (let ((read-eval nil))
-            (mapcar (lambda (lisp) (car (read-from-string lisp)))
-                    (plist-get (drgnx-hub-call-sync "agents/list" nil 2) :sessions)))))
+          (mapcar (lambda (json) (drgnx-records-from-json 'drgnx-records-session json))
+                  (plist-get (drgnx-hub-call-sync "agents/list" nil 2) :sessions))))
     (error 'none)))
 
 (defun drgnx-coord-mcp--agents ()

@@ -1,0 +1,23 @@
+[package]
+name = "drgnx-conformance"
+description = "The hub protocol's conformance harness: scenarios as data, run against a hub binary"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "drgnx-conformance"
+path = "src/main.rs"
+
+# std-only harness (threads, blocking UnixStreams): no async runtime here.
+[dependencies]
+tempfile.workspace = true
+rusqlite.workspace = true
+hmac.workspace = true
+sha2.workspace = true
+sha1.workspace = true
+getrandom.workspace = true
+serde_json.workspace = true
+libc.workspace = true

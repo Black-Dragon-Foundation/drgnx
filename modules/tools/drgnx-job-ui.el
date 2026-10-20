@@ -20,16 +20,16 @@
 (require 'drgnx-memo)
 (require 'drgnx-notice-desktop)
 
-(declare-function drgnx-hub-call "drgnx-hub")
-(declare-function drgnx-hub-call-sync "drgnx-hub")
-(declare-function drgnx-hub-ensure "drgnx-hub")
+(declare-function drgnx-hub-call "drgnx-hub-client")
+(declare-function drgnx-hub-call-sync "drgnx-hub-client")
+(declare-function drgnx-hub-ensure "drgnx-hub-client")
 (declare-function drgnx-job-format "drgnx-job")
 (declare-function drgnx-cockpit-show-job "drgnx-cockpit-cards")
 (declare-function drgnx-cockpit-show-jobs "drgnx-cockpit-cards")
 
 (defun drgnx-job-ui--hub ()
   "The hub's client, loaded when it is not yet."
-  (unless (fboundp 'drgnx-hub-call) (require 'drgnx-hub)))
+  (unless (fboundp 'drgnx-hub-call) (require 'drgnx-hub-client)))
 
 (defvar drgnx-job-ui-badge-mode)
 (defvar drgnx-job-merge-gate)
@@ -172,7 +172,7 @@ for redisplay code (the status bar's jobs segment)."
       (progn (add-to-list 'global-mode-string '(:eval (drgnx-job-ui--badge-segment)) t)
              (add-hook 'drgnx-hub-event-functions #'drgnx-job-ui--event)
              (add-hook 'drgnx-hub-disconnect-functions #'drgnx-job-ui--badge-clear)
-             (when (featurep 'drgnx-hub) (drgnx-job-ui--schedule-recount)))   ; never loads the hub by itself
+             (when (featurep 'drgnx-hub-client) (drgnx-job-ui--schedule-recount)))   ; never loads the client by itself
     (setq global-mode-string (delete '(:eval (drgnx-job-ui--badge-segment)) global-mode-string))
     (remove-hook 'drgnx-hub-event-functions #'drgnx-job-ui--event)
     (remove-hook 'drgnx-hub-disconnect-functions #'drgnx-job-ui--badge-clear)))
@@ -221,7 +221,7 @@ for redisplay code (the status bar's jobs segment)."
 
 (defun drgnx-job-ui--idle-recount ()
   "Count again, once the hub's client is loaded: the 60 s idle timer's function."
-  (when (featurep 'drgnx-hub) (drgnx-job-ui--recount)))
+  (when (featurep 'drgnx-hub-client) (drgnx-job-ui--recount)))
 
 (defun drgnx-job-ui--teardown ()
   "Turned off: the last count goes too, so neither the mode line nor the status bar's jobs segment shows it as if

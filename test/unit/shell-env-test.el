@@ -174,18 +174,23 @@ its environment, then AFTER."
         (drgnx-shell-env-test--run)
         (should (= 1 (length calls)))
         (should (equal (car (car calls)) "env/set"))
-        (should (equal (cadr (car calls)) (list :env (list :PATH (concat dir "shellbin:/usr/bin")))))
+        (should (equal (cadr (car calls)) (list :env (list (list :name "PATH" :value (concat dir "shellbin:/usr/bin"))))))
         (drgnx-shell-env-test--run)          ; the same PATH again: unchanged, the hub is not told
         (should (= 1 (length calls)))))))
 
 (ert-deftest drgnx-shell-env/the-hub-refuses-keys ()
   (let ((process-environment (append (list "PATH=/usr/bin" "OPENAI_API_KEY" "MANPATH") (copy-sequence process-environment)))
         (exec-path (copy-sequence exec-path)))
-    (drgnx-hub--set-env '(("PATH" . "/x") ("OPENAI_API_KEY" . "k")))
+    (drgnx-hub--set-env '((:name "PATH" :value "/x") (:name "OPENAI_API_KEY" :value "k")))
     (should (equal (getenv "PATH") "/x:/usr/bin"))
     (should-not (getenv "OPENAI_API_KEY"))
-    ;; as it comes over the socket: {"env": {"PATH": …}}
-    (should (eq t (drgnx-hub--method "env/set" (list :env (list :PATH "/y" :MANPATH "/m" :OPENAI_API_KEY "k")))))
+    ;; as it comes over the socket: {"env": [{"name": …, "value": …}]}; the object form is refused
+    (should-error (drgnx-hub--method "env/set" (list :env (list :PATH "/z"))))
+    (should (equal (getenv "PATH") "/x:/usr/bin"))
+    (should (equal (drgnx-hub--method "env/set" (list :env (list (list :name "PATH" :value "/y")
+                                                                 (list :name "MANPATH" :value "/m")
+                                                                 (list :name "OPENAI_API_KEY" :value "k"))))
+                   (list :applied ["PATH" "MANPATH"])))
     (should (equal (getenv "PATH") "/y:/x:/usr/bin"))
     (should (equal (getenv "MANPATH") "/m"))
     (should-not (getenv "OPENAI_API_KEY"))))

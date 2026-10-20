@@ -1,0 +1,5 @@
+{"scenario": "basics/status-shape", "requires": ["v0"], "doc": "status has the pid, the socket and the start time."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"pid": "$number", "socket": "$SOCKET", "started": "$string"}}}

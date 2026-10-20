@@ -50,7 +50,7 @@
 (declare-function drgnx-agent-session-id "drgnx-agents")
 (declare-function drgnx-agent-session-mode "drgnx-agents")
 (declare-function drgnx-agent-session-status "drgnx-agents")
-(declare-function drgnx-hub-call "drgnx-hub")
+(declare-function drgnx-hub-call "drgnx-hub-client")
 (declare-function drgnx-statusbar-refresh "drgnx-statusbar")
 (defvar drgnx-cockpit-graph-mode-map)
 (defvar drgnx-cockpit-graph-buffer-name)
@@ -750,10 +750,10 @@ bar's `drgnx-statusbar-waiting-functions', next to the jobs count."
 (`drgnx-cockpit-feed--open-questions') names — as the model counts them: ((ID JOB TASK TITLE AT)…), oldest first."
   (let ((asked (delq nil (mapcar (lambda (q) (plist-get (plist-get q :data) :card)) (drgnx-cockpit-feed--open-questions)))))
     (seq-remove (lambda (c) (memql (car c) asked))
-                (sqlite-select (drgnx-work-db) (concat "select c.id, c.job, c.task, c.title, c.at from card c join job j on j.id = c.job"
-                                                       " where c.state = 'open' and c.kind = 'ask'"
-                                                       (if drgnx-cockpit-include-closed-jobs "" " and j.status is not 'done'")
-                                                       " order by c.id")))))
+                (sqlite-select (drgnx-work-db-read) (concat "select c.id, c.job, c.task, c.title, c.at from card c join job j on j.id = c.job"
+                                                            " where c.state = 'open' and c.kind = 'ask'"
+                                                            (if drgnx-cockpit-include-closed-jobs "" " and j.status is not 'done'")
+                                                            " order by c.id")))))
 
 (defun drgnx-cockpit-feed-tell-statusbar ()
   "Tell the status bar when `drgnx-cockpit-waiting-count' changed since it was last told (`drgnx-statusbar-refresh',
@@ -806,7 +806,7 @@ happened when its agent has none (a reply then)."
   "Ask the hub METHOD with PARAMS; DONE runs when it answered without an error, an error is said.  No hub: an error.
 FLIGHT, when given, is the question on its way: a second answer to it is refused (`drgnx-cockpit-feed--in-flight')
 until the hub answers, the call fails or `drgnx-cockpit-feed-in-flight-timeout' passes."
-  (unless (fboundp 'drgnx-hub-call) (require 'drgnx-hub))
+  (unless (fboundp 'drgnx-hub-call) (require 'drgnx-hub-client))
   (when flight
     (let ((cut (- (float-time) drgnx-cockpit-feed-in-flight-timeout)))
       ;; older entries are free: a hub that went away never answers them

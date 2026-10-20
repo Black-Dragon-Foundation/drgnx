@@ -33,8 +33,8 @@
 (declare-function drgnx-job-ui-needs-you-count "drgnx-job-ui")
 (declare-function drgnx-job-ui-note-jobs "drgnx-job-ui")
 
-(declare-function drgnx-hub-call "drgnx-hub")
-(declare-function drgnx-hub-connect "drgnx-hub")
+(declare-function drgnx-hub-call "drgnx-hub-client")
+(declare-function drgnx-hub-connect "drgnx-hub-client")
 (declare-function drgnx-agents-mirror--find "drgnx-agents-mirror")
 (declare-function drgnx-agents-ui-transcript "drgnx-agents-ui")
 (declare-function drgnx-cockpit-edits-show "drgnx-cockpit-edits")
@@ -63,7 +63,7 @@ the decision log: :log, or :no-log.")
 
 (defun drgnx-cockpit-cards--hub ()
   "The hub's client, loaded when it is not yet."
-  (unless (fboundp 'drgnx-hub-call) (require 'drgnx-hub)))
+  (unless (fboundp 'drgnx-hub-call) (require 'drgnx-hub-client)))
 
 (defun drgnx-cockpit-cards-job ()
   "The job the cockpit is filtered to (`:job' of `drgnx-cockpit-graph-current-filter'), or nil: every job."
@@ -455,7 +455,7 @@ job's repository, for Open."
 
 (defun drgnx-cockpit-cards--message (job id)
   "Ask for a message to agent ID of JOB and leave it in the store as the user's (`drgnx-coord-send', no sender): the
-hub gives it to the agent when its turn ends, under the user's header (`drgnx-hub--message-prompt'), never
+hub gives it to the agent when its turn ends, under the user's header (`drgnx-coord-message-prompt'), never
 interrupting it and never as a raw prompt."
   (let ((text (read-string (format "Message to %s (queues, never interrupts): " id))))
     (when (string-blank-p text) (user-error "An empty message: nothing sent"))

@@ -61,7 +61,7 @@ decided build / won't build on one subject (decisions A-N and B-N), the clash sc
   (let ((process-environment (cons "MOCK_ACP_RECOMMEND=neither: both are fine" process-environment)))
     (drgnx-job-clash-review-test--clash
       (should (drgnx-job-run-test--wait (lambda () (drgnx-job-clash-review-test--recommendation card)) 15))
-      (should (equal (drgnx-job-clash-review-test--recommendation card) '(:side nil :why "both are fine because it was first")))
+      (should (equal (drgnx-job-clash-review-test--recommendation card) '(:why "both are fine because it was first")))
       (should-error (drgnx-job-card-act card "accept"))                          ; no side to accept
       (should (equal (plist-get (drgnx-coord-card card) :state) "open")))))
 

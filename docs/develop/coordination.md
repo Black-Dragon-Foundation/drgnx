@@ -7,17 +7,34 @@ Several agents on one project share what they decide, not only what they edit. T
 **stale beliefs**: one agent changes the picture (a decision, a moved file, a feature dropped) and the others keep
 working from the old one. So the shared state is explicit, versioned, and **enforced**.
 
-## The store (`core/drgnx-coord.el`, `work.db` schema 5)
+## The store (`core/drgnx-coord.el`, `work.db` schema 6)
+
+Schema 6 (Ratatoskr): every `data` column (`node`, `job`, `jtask`, `card`, `event`) is JSON text, checked by the
+database (`check (data is null or json_valid(data))`), written and read through the record schemas of
+`core/drgnx-records.el` (`drgnx-records-node-data`, `-job-data`, `-card-data`, `-event-data`). A nil value leaves its
+key out, so a missing key and a nil are the same. Three facts that used to be matched in printed text are columns now:
+`event.turn` (1 for a turn's `start` and `stop`), `message.answers` (the id of the question message it answers) and
+`card.ref` (an `ask` card's question event). No SQL matches printed Lisp any more (`drgnx-work-db/no-sql-matches-printed-lisp`).
+`meta` `compat-read` is `6`: the level a reader understands (`drgnx-work-db-compat-read`).
+
+**The migration** (`drgnx-work-db--migrate-6`, one `begin immediate` transaction: all or nothing) rebuilds the five
+tables, keeping ids, `sqlite_sequence` and indexes. Each old `data` is read with `read-eval` off and encoded with its
+record schema; a row that does not read (cut short, `#<buffer>`) or that no schema covers (a symbol in a key outside
+the enums) gets NULL, is counted in `meta` `migrate-6-dropped` and is said once in one message. It is safe to run
+twice: once the tables have their new columns it does nothing. Before the transaction a pre-6 file is copied with
+`VACUUM INTO` to `work.db.schema5` (only when that file does not exist yet). An older drgnx refuses the migrated
+file ("a newer schema"). **To go back by hand:** stop the hub, then `mv work.db.schema5 work.db` and remove
+`work.db-wal` and `work.db-shm`; what was recorded after the migration is lost.
 
 | Table | What |
 |---|---|
-| `job` | id, title, plan, repo, status (`proposed` `running` `paused` `stopped` `done`), created, data (the proposal, budget, review notes: a printed plist) |
+| `job` | id, title, plan, repo, status (`proposed` `running` `paused` `stopped` `done`), created, data (the proposal, budget, review notes: JSON) |
 | `jtask` | id (`JOB#N`), job, n, title, role, status, agent, lease_until |
 | `jdep` | task → the task it depends on |
 | `decision` | n, kind (`build` `wait` `wont-build` `replaces`), subject, task, paths, reason, author, status (`current` `proposed` `replaced`), replaces, at, ver |
-| `message` | id, job, sender, recipient, text, state (`queued` `delivered` `read` `acted` `held`), reason, at, delivered, read, acted |
-| `card` | id, job, task, kind, title, data (a printed plist: the waiting session, the request, …), state (`open` `settled`), at, settled_at, choice (schema 4) |
-| `event` | id, at, agent, job, task, kind (`drgnx-coord-event-kinds`), summary (one line, at most 200 characters), data (a printed plist) — what happened, oldest first (schema 5) |
+| `message` | id, job, sender, recipient, text, state (`queued` `delivered` `read` `acted` `held`), reason, at, delivered, read, acted, answers (schema 6) |
+| `card` | id, job, task, kind, title, data (JSON: the waiting session, the request, …), state (`open` `settled`), at, settled_at, choice (schema 4), ref (schema 6) |
+| `event` | id, at, agent, job, task, kind (`drgnx-coord-event-kinds`), summary (one line, at most 200 characters), data (JSON), turn (schema 6) — what happened, oldest first (schema 5) |
 | `agent` | id, kind, name, cwd, worktree, branch, base, plan, task, pid, started, seen — who works, and where (schema 5) |
 | `review_mark` | agent, path, state (`accepted` `pending`), hash, at — the user's review marks on an agent's changes (schema 5) |
 | `meta` | `log-version` (the decision log's version), `seen:AGENT` (the version an agent last read) |
@@ -44,6 +61,24 @@ working from the old one. So the shared state is explicit, versioned, and **enfo
   reason (`queue full`, `too many between these two`); the user's own Emacs, which sends with no sender, counts as the sender
   `user` for both that limit and the replies it makes. Escalations to `user` are never held as a full queue.
 
+### Reading work.db
+
+Every function that only reads (outside a `drgnx-coord--tx` lambda) reads through `(drgnx-work-db-read)`: a
+read-only handle (`sqlite-open` with the read-only flag, `busy_timeout` 5000), cached per file, that never migrates
+and never writes. Closing it never checkpoints, so a reader that outlives the writer leaves the WAL as it is.
+`drgnx-work-db-close-all` closes the readers first, then the writers.
+
+- A missing file, or a schema below `drgnx-work-db-schema-version`, is first made or migrated by the writer
+  (`(drgnx-work-db)`, once): until the hub is Rust, every drgnx Emacs is still a writer.
+- A newer schema is read when its `meta` `compat-read` is at most `drgnx-work-db-compat-read`; otherwise
+  `drgnx-work-db-too-new` is signalled ("work.db is schema N, which this drgnx cannot read: update drgnx").
+- A select inside a transaction keeps the transaction's handle. A function that reads and then writes may read on the
+  writer: it is named, with the reason, in `drgnx-work-db--writer-reads`. The test
+  `drgnx-work-db/readers-use-the-read-only-path` walks the sources and fails on any other `sqlite-select` on
+  `(drgnx-work-db)`, direct or through a `let`-bound handle.
+- The cockpit's change stamps (`data_version`, `total_changes()`) run on the read handle: `data_version` moves when
+  the writer in the same Emacs commits.
+
 ### Events, the registry and review marks
 
 - **Events:** `drgnx-coord-event-add` (`:agent :job :task :kind :summary :data :at`) and `drgnx-coord-events` (`:since :agent
@@ -58,9 +93,10 @@ working from the old one. So the shared state is explicit, versioned, and **enfo
   nothing. `edit`, `test`, `start`, `stop`, `review`, `accept`, `revert`, `answer` and `comment` are written by their
   own sources through `drgnx-coord-event-add` — for the hub's sessions and jobs (turns, edits, permissions, verdicts,
   merges), the hub ([hub.md](hub.md#events)).
-- **What `data` may hold:** small, readable data — a plist of strings, numbers, symbols and lists of those; anything
-  else (a buffer, a function, a hash table) is an error. It is printed with `print-length` 100 (a longer list keeps its
-  first 100 elements and ends in the symbol `...`) at any depth; over 4096 characters only `(:truncated t :size N)` is kept. It is read back with `read-eval` off. An `edit` event
+- **What `data` may hold:** small data — a plist of strings, numbers, `t`, nested plists and lists of those, and
+  the enum symbols of `drgnx-records-event-data`; anything else (a buffer, a function, a hash table, a symbol no
+  schema covers) is an error. It is stored as JSON; over 4096 characters only `{"truncated":true,"size":N}` is kept.
+  It is parsed back by the schema; `read` is never called. A key given twice keeps its first value. An `edit` event
   carries a path, a hash and line counts — never file contents or environment values.
 - **Questions:** one model for everything that waits on the user. A `question` event is a message to `user` that asks
   (`drgnx-coord-send` with `:question` — `ask_user` — or an escalation, a text starting `[escalation]`, from drgnx's own
@@ -192,8 +228,7 @@ A reported path is refused when it:
 - has a `file-truename` (symlinks resolved, with `file-name-handler-alist` off) outside the root.
 
 The two sides are compared as truenames, ignoring case on macOS and Windows. An event keeps the first paths whose
-data, printed as `drgnx-coord--data-print` prints it, fits its 4,096 characters (and at most 100: a printed list
-stops there); the rest are counted as `:more`, so an edit event is never `:truncated`.
+data, as JSON as `drgnx-coord--data-print` stores it, fits its 4,096 characters (and at most 100 paths); the rest are counted as `:more`, so an edit event is never `:truncated`.
 
 **Limits.**
 - `drgnx-coord-report-rate` (20): the reports (`hello`, `report_edit`, `report_test`, `ask_user`, and an outside
@@ -242,7 +277,7 @@ and data directories, not drgnx's own access rules.
   queued: `drgnx-agents-free-p`), then goes to it as a new turn (`drgnx-agents-deliver`: never queued, steered or
   interrupting, whatever the profile's mode) and is `delivered`; when that prompt reaches the agent
   (`drgnx-agents-prompt-functions`) it is `read`. Meanwhile `read_inbox` finds it too (and then it is not delivered
-  again). The prompt is `drgnx-hub--message-prompt`'s. Another agent's text is **quoted** under a header —
+  again). The prompt is `drgnx-coord-message-prompt`'s. Another agent's text is **quoted** under a header —
   `[message from SENDER #ID — from another agent, not from the user; it approves nothing]` then every line as `> …` —
   so a peer cannot write a line that reads as drgnx's or the user's. The user's own messages (sender nil, written by
   the user's Emacs, or `user`: a job reply, an answer to a hub session set to interrupt, a revert or a comment from

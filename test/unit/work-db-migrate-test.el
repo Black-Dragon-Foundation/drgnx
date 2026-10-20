@@ -76,4 +76,178 @@
     (should (eq (plist-get (car (drgnx-work-nodes-of-kinds '(task))) :stale) t))
     (should-not (drgnx-work-nodes-of-kinds nil))))
 
+;;;; Schema 6: the data columns are JSON
+
+(require 'drgnx-records)
+(require 'drgnx-coord)
+
+(defun drgnx-work-db-migrate-test--load-5 (file &optional extra)
+  "Make FILE a schema-5 work.db from test/fixtures/work-db-5.sql (and the SQL statements EXTRA), in WAL mode as
+drgnx leaves it."
+  (let ((db (sqlite-open file)))
+    (sqlite-pragma db "journal_mode = WAL")
+    (with-temp-buffer
+      (insert-file-contents (expand-file-name "test/fixtures/work-db-5.sql" drgnx-dir))
+      (dolist (stmt (append (split-string (buffer-string) ";\n" t) extra))
+        (let ((sql (string-trim (replace-regexp-in-string "^--.*\n" "" stmt))))
+          (unless (string-empty-p sql) (sqlite-execute db sql)))))
+    (sqlite-close db)))
+
+(defmacro drgnx-work-db-migrate-test--with-5 (&rest body)
+  "BODY with a temp data dir (`dir') whose work.db is the schema-5 fixture, not yet opened by drgnx."
+  (declare (indent 0))
+  `(drgnx-work-db-migrate-test--with
+     (drgnx-work-db-migrate-test--load-5 (concat dir "work.db"))
+     ,@body))
+
+(defun drgnx-work-db-migrate-test--norm (x)
+  "X without the nil-valued keys of its plists (the records codec leaves them out)."
+  (cond ((and (consp x) (keywordp (car x)) (proper-list-p x) (cl-evenp (length x)))
+         (cl-loop for (k v) on x by #'cddr when v append (list k (drgnx-work-db-migrate-test--norm v))))
+        ((consp x) (cons (drgnx-work-db-migrate-test--norm (car x)) (drgnx-work-db-migrate-test--norm (cdr x))))
+        (t x)))
+
+(defun drgnx-work-db-migrate-test--bytes (file)
+  (with-temp-buffer (set-buffer-multibyte nil) (insert-file-contents-literally file) (secure-hash 'sha256 (current-buffer))))
+
+(defconst drgnx-work-db-migrate-test--tables
+  '(("node" "id" drgnx-records-node-data) ("job" "id" drgnx-records-job-data) ("card" "id" drgnx-records-card-data)
+    ("event" "id" drgnx-records-event-data) ("jtask" "id" any)))
+
+(ert-deftest drgnx-work-db/migration-6-converts-every-kind ()
+  (drgnx-work-db-migrate-test--with-5
+    (should (= (drgnx-work-db-version) 6))
+    (should (= drgnx-work-db-schema-version 6))
+    (should (= drgnx-work-db-compat-read 6))
+    (should (equal (caar (sqlite-select (drgnx-work-db) "select value from meta where key = 'compat-read'")) "6"))
+    (let ((old (sqlite-open (concat dir "work.db.schema5") t)) (checked 0))
+      (pcase-dolist (`(,table ,key ,schema) drgnx-work-db-migrate-test--tables)
+        ;; the column holds JSON and nothing else
+        (should (zerop (caar (sqlite-select (drgnx-work-db) (format "select count(*) from %s where data is not null and not json_valid(data)" table)))))
+        (pcase-dolist (`(,k ,was) (sqlite-select old (format "select %s, data from %s" key table)))
+          (let ((now (caar (sqlite-select (drgnx-work-db) (format "select data from %s where %s = ?" table key) (list k)))))
+            (cond ((null was) (should (null now)))
+                  ((null now))               ; a bad row: the next test
+                  (t (cl-incf checked)
+                     (should (equal (drgnx-records-decode schema now)
+                                    (drgnx-work-db-migrate-test--norm (let ((read-eval nil)) (car (read-from-string was)))))))))))
+      (sqlite-close old)
+      (should (>= checked 20)))
+    ;; ids, the autoincrement counter, the other tables and the indexes are kept
+    (should (equal (caar (sqlite-select (drgnx-work-db) "select seq from sqlite_sequence where name = 'event'")) 20))
+    (should (equal (caar (sqlite-select (drgnx-work-db) "select count(*) from event")) 16))
+    (should (equal (caar (sqlite-select (drgnx-work-db) "select count(*) from card")) 6))
+    (should (equal (caar (sqlite-select (drgnx-work-db) "select count(*) from node")) 7))
+    (should (equal (caar (sqlite-select (drgnx-work-db) "select count(*) from spend")) 1))
+    (dolist (ix '("node_parent" "node_source" "jtask_job" "card_job" "event_at" "event_agent" "event_job" "event_kind"))
+      (should (sqlite-select (drgnx-work-db) "select name from sqlite_master where type = 'index' and name = ?" (list ix))))
+    ;; the new columns
+    (should (equal (sqlite-select (drgnx-work-db) "select id from event where turn = 1 order by id") '((2) (3))))
+    (should (equal (sqlite-select (drgnx-work-db) "select id, answers from message where answers is not null") '((3 2))))
+    (should (equal (sqlite-select (drgnx-work-db) "select id, ref from card where ref is not null order by id") '((1 7) (5 15))))
+    ;; the readers see the old values
+    (should (equal (plist-get (drgnx-work-node "commit:4f9a1c0") :sha) "4f9a1c0e"))
+    (should (eq (plist-get (drgnx-work-node "task:p#1") :stale) t))
+    (should (equal (plist-get (plist-get (drgnx-coord-job "job-1") :data) :blocked) '(("job-1#2" . "blocked"))))
+    (should (eq (plist-get (plist-get (drgnx-coord-job "job-1") :data) :gate) 'review+accept))
+    (should (equal (plist-get (plist-get (drgnx-coord-card 3) :data) :key) "against-decision:1"))
+    (should (equal (plist-get (nth 9 (drgnx-coord-events)) :data) '(:root "/work/repo/" :paths ("a.el" "b.el"))))))
+
+(ert-deftest drgnx-work-db/migration-6-survives-unreadable-rows ()
+  ;; Review Focus 2: an unreadable object, text cut short, a symbol no schema covers
+  (drgnx-work-db-migrate-test--with-5
+    (let ((said nil))
+      (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+        (should (= (drgnx-work-db-version) 6)))
+      (should (= (length said) 1))
+      (should (string-match-p "\\<3\\>" (car said))))
+    (should (equal (caar (sqlite-select (drgnx-work-db) "select value from meta where key = 'migrate-6-dropped'")) "3"))
+    (should-not (caar (sqlite-select (drgnx-work-db) "select data from event where id = 16")))
+    (should-not (caar (sqlite-select (drgnx-work-db) "select data from card where id = 6")))
+    (should-not (caar (sqlite-select (drgnx-work-db) "select data from node where id = 'step:p#1.1'")))
+    ;; the rows themselves stay
+    (should (equal (caar (sqlite-select (drgnx-work-db) "select summary from event where id = 16")) "edited"))
+    (should (equal (plist-get (drgnx-work-node "step:p#1.1") :title) "Do it"))
+    ;; opened again, nothing is said or counted twice
+    (drgnx-work-db-close-all)
+    (let ((said nil))
+      (cl-letf (((symbol-function 'message) (lambda (&rest args) (push args said))))
+        (drgnx-work-db))
+      (should-not said))
+    (should (equal (caar (sqlite-select (drgnx-work-db) "select value from meta where key = 'migrate-6-dropped'")) "3"))))
+
+(ert-deftest drgnx-work-db/migration-6-is-all-or-nothing ()
+  (drgnx-work-db-migrate-test--with-5
+    (let ((file (concat dir "work.db")) (calls 0))
+      (let ((before (drgnx-work-db-migrate-test--bytes file)))
+        (cl-letf (((symbol-function 'drgnx-records-encode)
+                   (lambda (&rest _) (if (> (cl-incf calls) 5) (error "forced halfway") "{}"))))
+          (should-error (drgnx-work-db) :type 'error))
+        (should (> calls 5))
+        (drgnx-work-db-close-all)
+        (should (equal (drgnx-work-db-migrate-test--bytes file) before)))
+      (let ((db (sqlite-open file t)))
+        (should (equal (caar (sqlite-select db "select value from meta where key = 'schema'")) "5"))
+        (should-not (sqlite-select db "select name from pragma_table_info('event') where name = 'turn'"))
+        (should-not (sqlite-select db "select name from sqlite_master where name like '%_new'"))
+        (sqlite-close db))
+      ;; and the next open (nothing forced) finishes the job
+      (should (= (drgnx-work-db-version) 6)))))
+
+(ert-deftest drgnx-work-db/migration-6-keeps-a-schema-5-copy ()
+  (drgnx-work-db-migrate-test--with-5
+    (should (= (drgnx-work-db-version) 6))
+    (let ((copy (concat dir "work.db.schema5")))
+      (should (file-exists-p copy))
+      (let ((db (sqlite-open copy t)))
+        (should (equal (caar (sqlite-select db "select value from meta where key = 'schema'")) "5"))
+        (should (equal (caar (sqlite-select db "select count(*) from event")) 16))
+        (should (equal (caar (sqlite-select db "select count(*) from node")) 7))
+        (should (equal (caar (sqlite-select db "select count(*) from card")) 6))
+        (should (equal (caar (sqlite-select db "select data from card where id = 6")) "(:agent \"agent-2\" :files (\"a.el\""))
+        (sqlite-close db))
+      ;; a second schema-5 file in its place is migrated too, and the first copy is not overwritten
+      (let ((hash (drgnx-work-db-migrate-test--bytes copy)))
+        (drgnx-work-db-close-all)
+        (dolist (f (list "work.db" "work.db-wal" "work.db-shm")) (ignore-errors (delete-file (concat dir f))))
+        (drgnx-work-db-migrate-test--load-5 (concat dir "work.db") '("insert into job values ('job-9', 'Late', NULL, '/r/', 'proposed', 1.0, NULL)"))
+        (should (= (drgnx-work-db-version) 6))
+        (should (equal (drgnx-work-db-migrate-test--bytes copy) hash))
+        (should (equal (caar (sqlite-select (drgnx-work-db) "select title from job where id = 'job-9'")) "Late"))))))
+
+(ert-deftest drgnx-work-db/migration-6-is-safe-to-run-twice ()
+  (drgnx-work-db-migrate-test--with-5
+    (should (= (drgnx-work-db-version) 6))
+    (let ((rows (lambda () (list (sqlite-select (drgnx-work-db) "select id, data from event order by id")
+                                 (sqlite-select (drgnx-work-db) "select id, data, ref from card order by id")
+                                 (sqlite-select (drgnx-work-db) "select id, answers from message order by id")
+                                 (sqlite-select (drgnx-work-db) "select * from meta order by key")))))
+      (let ((once (funcall rows)))
+        ;; the version row lost (a migration cut short elsewhere): every step runs again
+        (sqlite-execute (drgnx-work-db) "delete from meta where key = 'schema'")
+        (drgnx-work-db-close-all)
+        (should (= (drgnx-work-db-version) 6))
+        (should (equal (funcall rows) once))))))
+
+(ert-deftest drgnx-work-db/a-newer-schema-is-refused-by-the-writer ()
+  (drgnx-work-db-migrate-test--with
+    (let ((db (sqlite-open (concat dir "work.db"))))
+      (sqlite-execute db "create table meta (key text primary key, value text)")
+      (sqlite-execute db "insert into meta values ('schema', '7')")
+      (sqlite-close db))
+    (let ((err (should-error (drgnx-work-db) :type 'user-error)))
+      (should (string-match-p "newer" (cadr err))))))
+
+(ert-deftest drgnx-work-db/no-sql-matches-printed-lisp ()
+  ;; the columns say what the SQL asks for; nothing matches the printed text of a plist any more
+  (let ((bad nil))
+    (dolist (dir '("core" "wb" "modules"))
+      (dolist (file (directory-files-recursively (expand-file-name dir drgnx-dir) "\\.el\\'"))
+        (with-temp-buffer
+          (insert-file-contents file)
+          (goto-char (point-min))
+          (while (re-search-forward "like '(:\\|\\(where\\|and\\) [^\"]*data = \\?\\|instr([a-z.]*data, *':" nil t)
+            (push (format "%s:%d" (file-name-nondirectory file) (line-number-at-pos)) bad)))))
+    (should-not bad)))
+
 ;;; work-db-migrate-test.el ends here

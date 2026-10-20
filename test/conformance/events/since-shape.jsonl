@@ -1,0 +1,10 @@
+{"scenario": "events/since-shape", "requires": ["v0"], "doc": "A stopped job is in events/since, its data a JSON object."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "write_file", "path": "$ROOT/plan.md", "text": "# One task\n\n**Repo:** $ROOT/repo\n\n### Task 1: Do the thing\n\n**Role:** implement\n\nNothing to do.\n"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/propose", "params": {"plan": "$ROOT/plan.md"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "job/stop", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": "$any"}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "events/since", "params": {"since": 0}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"since": 0, "last": "$number", "events": {"$contains": [{"kind": "job", "data": {"status": "stopped"}}]}}}}

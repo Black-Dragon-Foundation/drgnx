@@ -1,0 +1,8 @@
+{"scenario": "framing/line-over-1-mib-closes", "requires": ["v0"], "doc": "A line over 1 MiB closes the connection; the hub keeps serving others."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "bytes": {"fill": "a", "n": 1048577, "newline": true}}
+{"do": "expect_closed", "conn": "c"}
+{"do": "connect", "conn": "d", "hub": "h"}
+{"do": "send", "conn": "d", "json": {"id": 1, "method": "ping"}}
+{"do": "expect", "conn": "d", "json": {"id": 1, "result": {"pid": "$number"}}}

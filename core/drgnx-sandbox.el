@@ -16,7 +16,7 @@
 (require 'drgnx-paths)
 (require 'drgnx-timer)
 
-(declare-function drgnx-hub-socket "drgnx-hub" ())
+(declare-function drgnx-hub-socket "drgnx-hub-client" ())
 (declare-function drgnx-sandbox-sbpl "drgnx-sandbox-macos" (spec))
 (declare-function drgnx-sandbox-macos-program "drgnx-sandbox-macos" (program path))
 
@@ -150,7 +150,7 @@ Nothing is checked here: `drgnx-sandbox-validate' says what is refused, and the 
 
 (defun drgnx-sandbox--hub-dirs ()
   "Every directory the hub's socket may be in: where `drgnx-hub-socket' puts it now, and its other places."
-  (require 'drgnx-hub)
+  (require 'drgnx-hub-client)
   (let ((run (getenv "XDG_RUNTIME_DIR")))
     (list (file-name-directory (drgnx-hub-socket))
           (and run (file-name-absolute-p run) (expand-file-name "drgnx" run))
@@ -160,7 +160,7 @@ Nothing is checked here: `drgnx-sandbox-validate' says what is refused, and the 
 (defun drgnx-sandbox-sessions-dirs ()
   "The directories a session's own socket dir (`:run') is made in: drgnx/s/ under $XDG_RUNTIME_DIR, and s/ beside
 the hub's socket (its fallback place when there is no runtime dir).  True names."
-  (require 'drgnx-hub)
+  (require 'drgnx-hub-client)
   (let ((run (getenv "XDG_RUNTIME_DIR")))
     (delete-dups (delq nil (mapcar (lambda (d) (and d (drgnx-sandbox--truename d)))
                                    (list (and run (file-name-absolute-p run) (expand-file-name "drgnx/s" run))

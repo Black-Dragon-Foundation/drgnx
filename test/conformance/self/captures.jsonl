@@ -1,0 +1,12 @@
+{"scenario": "self/captures", "requires": ["v0"], "doc": "The harness's own row: a captured pid is reused, a captured pid is alive, a quiet connection stays quiet, and a hub that is killed is gone."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "ping"}}
+{"do": "expect_next", "conn": "c", "json": {"id": 7, "result": {"pid": "$capture:hubpid"}}}
+{"do": "pid", "capture": "hubpid", "alive": true}
+{"do": "expect_silent", "conn": "c", "for_ms": 100}
+{"do": "send", "conn": "c", "json": {"id": 8, "method": "ping"}}
+{"do": "expect", "conn": "c", "json": {"id": 8, "result": {"pid": "$hubpid"}}}
+{"do": "kill", "hub": "h", "signal": "KILL"}
+{"do": "expect_closed", "conn": "c"}
+{"do": "pid", "capture": "hubpid", "alive": false, "within_ms": 5000}

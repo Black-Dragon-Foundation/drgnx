@@ -4,6 +4,7 @@
 (require 'drgnx-hub)
 (require 'drgnx-agents)
 (require 'drgnx-coord)
+(require 'drgnx-records)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-hub-agents-test--with (&rest body)
@@ -35,11 +36,11 @@
   (drgnx-test-wait pred :secs (max 30 (or secs 0)) :what "the hub agent's condition"))
 
 (defun drgnx-hub-agents-test--snapshot (id)
-  (car (read-from-string (plist-get (drgnx-hub-call-sync "agents/get" (list :id id)) :lisp))))
+  (drgnx-records-from-json 'drgnx-records-session (plist-get (drgnx-hub-call-sync "agents/get" (list :id id)) :session)))
 
 (defun drgnx-hub-agents-test--text (id)
   "Everything in session ID's transcript, as the hub has it."
-  (let ((entries (car (read-from-string (plist-get (drgnx-hub-call-sync "agents/get" (list :id id)) :entries)))))
+  (let ((entries (plist-get (drgnx-hub-call-sync "agents/get" (list :id id)) :entries)))
     (mapconcat (lambda (e) (format "%s" (or (plist-get e :text) ""))) entries " ")))
 
 (defun drgnx-hub-agents-test--start ()
@@ -59,7 +60,7 @@
                                                      (string-search "hello hub" (format "%s" (plist-get (cdr e) :entries)))))
                                     events))))
       (should (seq-find (lambda (e) (equal (car e) "agent")) events))
-      (should (seq-find (lambda (s) (equal (plist-get (car (read-from-string s)) :id) id))
+      (should (seq-find (lambda (s) (equal (plist-get s :id) id))
                         (plist-get (drgnx-hub-call-sync "agents/list" nil) :sessions))))))
 
 (ert-deftest drgnx-hub-agents/the-agent-gets-the-coordination-tools ()
@@ -96,7 +97,7 @@
       (should (= rc 0))
       (let ((sessions (plist-get (drgnx-hub-call-sync "agents/list" nil) :sessions)))
         (should (= (length sessions) 1))
-        (let ((id (plist-get (car (read-from-string (car sessions))) :id)))
+        (let ((id (plist-get (car sessions) :id)))
           (should (drgnx-hub-agents-test--wait (lambda () (eq (plist-get (drgnx-hub-agents-test--snapshot id) :status) 'idle)))))))))
 
 (ert-deftest drgnx-hub-agents/sessions-resume-in-a-new-hub ()

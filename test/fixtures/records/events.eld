@@ -1,0 +1,20 @@
+;; One event `data' per kind in `drgnx-coord-event-kinds', as the code that writes it builds it (drgnx-coord.el,
+;; drgnx-coord-mcp.el, drgnx-hub.el, drgnx-job.el, drgnx-cockpit-edits.el, drgnx-cockpit-feed.el).  (KIND DATA…): a kind
+;; may have several shapes.
+(("start" (:head "9f2c1ab") (:turn t) (:kind "claude" :cwd "/work/repo" :branch "job/j1" :base "9f2c1ab"))
+ ("stop" (:turn t))
+ ("claim")
+ ("release")
+ ("status" (:status "ready") (:status "merged" :into "job/j1"))
+ ("decision" (:n 3 :kind "wont-build" :status "current" :version 7))
+ ("edit" (:root "/work/repo" :paths ("a.el" "docs/b.md") :more 3) (:root "/work/repo" :paths ("/work/repo/c.el")))
+ ("test" (:command "bin/drgnx test" :passed 41 :failed 0) (:command "make"))
+ ("question" (:permission 5) (:card 2) (:message 4 :to "user" :state "delivered" :answers 3))
+ ("answer" (:question 9) (:question 9 :permission 5 :by "user" :option "allow_once") (:question 9 :permission "p-1" :by "drgnx"))
+ ("review" (:verdict pass) (:verdict fail))
+ ("message" (:message 1 :to "agent-2" :state "delivered"))
+ ("card" (:card 4 :state "open") (:card 4 :state "settled" :choice "merge"))
+ ("accept" (:path "/work/repo/a.el" :by "user" :hash "5e1f"))
+ ("revert" (:path "/work/repo/a.el" :by "user" :direct t :to "HEAD") (:path "/work/repo/a.el" :by "user" :requested t))
+ ("comment" (:path "/work/repo/a.el" :by "user" :line 12))
+ ("job" (:status "running")))

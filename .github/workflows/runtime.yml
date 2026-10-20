@@ -1,0 +1,101 @@
+# The Rust runtime (runtime/): every push to main and every pull request, on Linux (Fedora 45) and macOS 27, plus the
+# oldest supported compiler (MSRV 1.88) and the supply-chain policy. The policy also runs daily on its own: advisories
+# land without any change on our side. docs/develop/runtime.md, docs/develop/ci.md
+name: Runtime
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-${{ github.event_name }}-${{ github.ref }}   # a push never cancels the daily policy run
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  linux:
+    name: fmt, clippy, tests (Fedora 45)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    container: registry.fedoraproject.org/fedora:45
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: runtime
+    steps:
+      - name: Tools
+        working-directory: /
+        run: dnf -y install git cargo rust gcc clippy rustfmt
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+      - name: Nidhogg 31.1 (the Emacs drgnx ships on)
+        working-directory: ${{ github.workspace }}
+        run: |
+          dnf -y install curl tar xz
+          bash test/container/nidhogg.sh fedora-45
+      - name: conformance-lisp (the v0 rows against the Lisp hub)
+        working-directory: ${{ github.workspace }}
+        run: |
+          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-conformance
+          runtime/target/debug/drgnx-conformance --target lisp --hub-bin test/conformance/lisp-hub.sh --scenarios test/conformance
+
+  msrv:
+    name: MSRV 1.88 builds
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install 1.88.0 --profile minimal
+      - run: cargo +1.88.0 build --locked --manifest-path runtime/Cargo.toml
+
+  deny:
+    name: cargo deny (advisories, licenses, bans, sources)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: cargo-deny 0.20.2 (checksum verified)
+        run: |
+          url=https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz
+          sha256=9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
+          curl -fsSL -o "$RUNNER_TEMP/cargo-deny.tgz" "$url"
+          echo "$sha256  $RUNNER_TEMP/cargo-deny.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/cargo-deny.tgz" -C "$RUNNER_TEMP" --strip-components=1 cargo-deny-0.20.2-x86_64-unknown-linux-musl/cargo-deny
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - run: cargo-deny --manifest-path runtime/Cargo.toml check
+
+  macos:
+    name: tests (macOS 27)
+    if: github.event_name != 'schedule'
+    runs-on: xcode-27
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: brew install rust
+      - run: cargo test --locked --manifest-path runtime/Cargo.toml
+      - name: Nidhogg 31.1 (writes DRGNX_EMACS to the environment)
+        run: /bin/bash test/container/nidhogg.sh macos
+      - name: conformance-lisp (the v0 rows against the Lisp hub)
+        run: |
+          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-conformance
+          runtime/target/debug/drgnx-conformance --target lisp --hub-bin test/conformance/lisp-hub.sh --scenarios test/conformance

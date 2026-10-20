@@ -1,0 +1,82 @@
+-- A schema-5 work.db as SQL text (one statement per ";" at a line end), the shape main wrote before schema 6:
+-- every `data' column holds printed Lisp.  Loaded by test/unit/work-db-migrate-test.el into a temp file.
+-- Three rows cannot be converted (the Review Focus 2 kinds): an unreadable object, text cut short, a symbol no
+-- schema covers.  They are marked BAD in a comment above them.
+create table meta (key text primary key, value text);
+create table node (id text primary key, kind text, title text, path text, line integer, status text, parent text, ord integer, source text, data text, updated real);
+create index node_parent on node(parent);
+create index node_source on node(source);
+create table edge (src text, dst text, kind text, origin text, source text, primary key (src, dst, kind));
+create index edge_dst on edge(dst, kind);
+create table file (path text primary key, mtime real);
+create table spend (at real, job text, task text, agent text, provider text, model text, input integer, output integer, cost real, status integer);
+create index spend_job on spend(job);
+create table job (id text primary key, title text, plan text, repo text, status text, created real, data text);
+create table jtask (id text primary key, job text, n integer, title text, role text, status text, agent text, lease_until real, data text);
+create index jtask_job on jtask(job);
+create table jdep (task text, dep text, primary key (task, dep));
+create table decision (n integer primary key, kind text, subject text, task text, paths text, reason text, author text, status text, replaces integer, at real, ver integer, job text);
+create table message (id integer primary key, job text, sender text, recipient text, text text, state text, reason text, at real, delivered real, read real, acted real);
+create index message_to on message(recipient, state);
+create table card (id integer primary key, job text, task text, kind text, title text, data text, state text, at real, settled_at real, choice text);
+create index card_job on card(job, state);
+create table event (id integer primary key autoincrement, at real, agent text, job text, task text, kind text, summary text, data text);
+create index event_at on event(at);
+create index event_agent on event(agent, id);
+create index event_job on event(job, id);
+create index event_kind on event(kind, id);
+create table agent (id text primary key, kind text, name text, cwd text, worktree text, branch text, base text, plan text, task text, pid integer, started real, seen real);
+create table review_mark (agent text, path text, state text, hash text, at real, primary key (agent, path));
+insert into meta values ('schema', '5');
+insert into meta values ('events-pruned', '1760000000.0');
+insert into file values ('/work/repo/docs/plans/p.md', 1760000000.5);
+insert into spend values (1760000100.0, 'job-1', 'job-1#1', 'agent-2', 'openrouter', 'm', 100, 50, 0.25, 200);
+insert into node values ('spec:s', 'spec', 'The spec', '/work/repo/docs/specs/s.md', 1, 'open', NULL, 0, '/work/repo/docs/specs/s.md', 'nil', 1760000000.0);
+insert into node values ('plan:p', 'plan', 'The plan', '/work/repo/docs/plans/p.md', 1, 'open', NULL, 0, '/work/repo/docs/plans/p.md', 'nil', 1760000000.0);
+insert into node values ('task:p#1', 'task', 'The lexer', '/work/repo/docs/plans/p.md', 12, 'open', 'plan:p', 1, '/work/repo/docs/plans/p.md', '(:stale t)', 1760000000.0);
+insert into node values ('commit:4f9a1c0', 'commit', 'Add the lexer', NULL, NULL, NULL, NULL, NULL, 'recorded', '(:sha "4f9a1c0e" :date 1760000000 :repo "/work/repo/" :seq 2)', 1760000000.0);
+insert into node values ('branch:feat', 'branch', 'feat', NULL, NULL, NULL, NULL, NULL, 'branch', '(:name "feat" :branch "feat" :worktree "/work/repo/.claude/worktrees/feat" :merged t :gone nil)', 1760000000.0);
+insert into node values ('todo:p#9', 'todo', 'Later', '/work/repo/docs/plans/p.md', 40, 'open', 'plan:p', 9, '/work/repo/docs/plans/p.md', NULL, 1760000000.0);
+-- BAD: a symbol in a key no schema covers
+insert into node values ('step:p#1.1', 'step', 'Do it', '/work/repo/docs/plans/p.md', 13, 'open', 'task:p#1', 1, '/work/repo/docs/plans/p.md', '(:flavour sweet)', 1760000000.0);
+insert into edge values ('task:p#1', 'plan:p', 'implements', 'parsed', '/work/repo/docs/plans/p.md');
+insert into edge values ('plan:p', 'spec:s', 'derives', 'recorded', 'recorded');
+insert into job values ('job-1', 'Build the parser', '/work/repo/docs/plans/p.md', '/work/repo/', 'running', 1760000010.0, '(:plan "/work/repo/docs/plans/p.md" :sha "4f9a" :repo "/work/repo/" :title "Build the parser" :tasks ((:n 1 :title "The lexer" :role "implement" :deps nil :body "- [ ] Step 1") (:n 2 :title "The tests" :role "test" :deps (1) :body "- [ ] Step 1")) :routes ((implement . "claude") (test . "claude") (review . "claude")) :estimate (:usd 1.5 :tokens 330000 :unpriced ("claude")) :budget 5 :gate review+accept :unpriced-budget ("claude") :fails (("job-1#2" . 1)) :exits (("job-1#1" . 2)) :nudged (("job-1#1" . 1)) :in-review-since (("job-1#2" . 1760000000.5)) :notes (("job-1#2" . "the reviewer wants a test")) :waiting (("job-1#1" :sid "agent-2" :back "in-review")) :blocked (("job-1#2" . "blocked")) :profiles (("job-1#1" . "claude")) :bases (("job-1#1" . "9f2c1ab")) :order ("job-1#2" "job-1#1") :clashes ("overlap:1:2"))');
+insert into job values ('job-2', 'Docs', NULL, '/work/repo/', 'proposed', 1760000020.0, NULL);
+insert into job values ('job-3', 'Big', '/work/repo/docs/plans/q.md', '/work/repo/', 'proposed', 1760000030.0, '(:truncated t :size 5000)');
+insert into jtask values ('job-1#1', 'job-1', 1, 'The lexer', 'implement', 'in-review', 'agent-2', 1760000900.0, NULL);
+insert into jtask values ('job-1#2', 'job-1', 2, 'The tests', 'test', 'pending', NULL, NULL, NULL);
+insert into jdep values ('job-1#2', 'job-1#1');
+insert into decision values (1, 'wont-build', 'the xml export', NULL, NULL, 'the plan says so', 'user', 'active', NULL, 1760000040.0, 1, 'job-1');
+insert into message values (1, 'job-1', NULL, 'agent-2', 'start on the lexer', 'read', NULL, 1760000050.0, 1760000051.0, 1760000052.0, NULL);
+insert into message values (2, 'job-1', 'agent-2', 'user', 'which parser style?', 'queued', NULL, 1760000060.0, NULL, NULL, NULL);
+insert into message values (3, 'job-1', NULL, 'agent-2', 'recursive descent', 'delivered', NULL, 1760000070.0, 1760000071.0, NULL, NULL);
+insert into message values (4, NULL, NULL, 'agent-2', 'unrelated', 'queued', NULL, 1760000080.0, NULL, NULL, NULL);
+insert into card values (1, 'job-1', 'job-1#1', 'ask', 'Which parser style?', '(:agent "agent-2")', 'settled', 1760000061.0, 1760000069.0, 'recursive descent');
+insert into card values (2, 'job-1', 'job-1#1', 'review', 'Review the lexer', '(:review t)', 'open', 1760000100.0, NULL, NULL);
+insert into card values (3, 'job-1', NULL, 'clash', 'A clash', '(:key "against-decision:1" :rule "against-decision" :subject "the xml export" :size "long" :lines 240 :sides ((:label "A" :text "#1 wont-build: the xml export" :decision 1 :agent "user" :task "job-1#1" :reason "the plan says so") (:label "B" :text "keep the work")) :recommendation (:side "A" :why "it was first") :message 4)', 'open', 1760000110.0, NULL, NULL);
+insert into card values (4, 'job-1', NULL, 'agent', 'Stalled', NULL, 'open', 1760000120.0, NULL, NULL);
+insert into card values (5, 'job-1', 'job-1#2', 'ask', 'Another question?', '(:agent "agent-3")', 'open', 1760000130.0, NULL, NULL);
+-- BAD: text cut short
+insert into card values (6, 'job-1', NULL, 'fallback', 'Cut', '(:agent "agent-2" :files ("a.el"', 'open', 1760000140.0, NULL, NULL);
+insert into event (id, at, agent, job, task, kind, summary, data) values (1, 1760000001.0, 'agent-2', 'job-1', 'job-1#1', 'start', 'agent-2 started', NULL);
+insert into event (id, at, agent, job, task, kind, summary, data) values (2, 1760000002.0, 'agent-2', 'job-1', 'job-1#1', 'start', 'turn started', '(:turn t)');
+insert into event (id, at, agent, job, task, kind, summary, data) values (3, 1760000003.0, 'agent-2', 'job-1', 'job-1#1', 'stop', 'turn ended', '(:turn t)');
+insert into event (id, at, agent, job, task, kind, summary, data) values (4, 1760000004.0, 'agent-2', 'job-1', 'job-1#1', 'claim', 'claimed', NULL);
+insert into event (id, at, agent, job, task, kind, summary, data) values (5, 1760000050.0, 'user', 'job-1', NULL, 'message', 'to agent-2: start on the lexer', '(:message 1 :to "agent-2" :state "queued")');
+insert into event (id, at, agent, job, task, kind, summary, data) values (6, 1760000060.0, 'agent-2', 'job-1', NULL, 'question', 'which parser style?', '(:message 2 :to "user" :state "queued")');
+insert into event (id, at, agent, job, task, kind, summary, data) values (7, 1760000061.0, NULL, 'job-1', 'job-1#1', 'question', 'ask: Which parser style?', '(:card 1)');
+insert into event (id, at, agent, job, task, kind, summary, data) values (8, 1760000069.0, 'user', 'job-1', 'job-1#1', 'answer', 'ask: Which parser style? -> recursive descent', '(:question 7)');
+insert into event (id, at, agent, job, task, kind, summary, data) values (9, 1760000070.0, 'user', 'job-1', NULL, 'message', 'to agent-2: recursive descent', '(:message 3 :to "agent-2" :state "queued" :answers 2)');
+insert into event (id, at, agent, job, task, kind, summary, data) values (10, 1760000090.0, 'agent-2', 'job-1', 'job-1#1', 'edit', 'edited 2 files', '(:root "/work/repo/" :paths ("a.el" "b.el"))');
+insert into event (id, at, agent, job, task, kind, summary, data) values (11, 1760000095.0, 'agent-2', 'job-1', 'job-1#1', 'edit', 'edited many', '(:truncated t :size 5000)');
+insert into event (id, at, agent, job, task, kind, summary, data) values (12, 1760000100.0, 'agent-9', 'job-1', 'job-1#1', 'review', 'review: pass', '(:verdict pass)');
+insert into event (id, at, agent, job, task, kind, summary, data) values (13, 1760000101.0, NULL, 'job-1', 'job-1#1', 'card', 'review: Review the lexer', '(:card 2 :state "open")');
+insert into event (id, at, agent, job, task, kind, summary, data) values (14, 1760000102.0, NULL, 'job-1', NULL, 'decision', '#1 wont-build', '(:n 1 :kind "wont-build" :status "active" :version 1)');
+insert into event (id, at, agent, job, task, kind, summary, data) values (15, 1760000130.0, NULL, 'job-1', 'job-1#2', 'question', 'ask: Another question?', '(:card 5)');
+-- BAD: an unreadable object
+insert into event (id, at, agent, job, task, kind, summary, data) values (16, 1760000150.0, 'agent-2', 'job-1', 'job-1#1', 'edit', 'edited', '(:path "a.el" :buf #<buffer x>)');
+insert into event (id, at, agent, job, task, kind, summary, data) values (20, 1760000160.0, NULL, NULL, NULL, 'start', 'gone', NULL);
+delete from event where id = 20;
+insert into agent values ('agent-2', 'claude', 'agent-2', '/work/repo/', NULL, NULL, NULL, NULL, 'job-1#1', 4242, 1760000001.0, 1760000100.0);
+insert into review_mark values ('agent-2', 'a.el', 'reviewed', 'abc123', 1760000105.0);

@@ -15,3 +15,7 @@ eln-cache/
 secrets.env
 *.pem
 *.key
+
+# Rust build output (runtime/)
+runtime/target/
+runtime/fuzz/target/

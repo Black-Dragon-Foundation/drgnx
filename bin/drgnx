@@ -1538,7 +1538,7 @@ case "${1:-help}" in
   safe) shift; DRGNX_SAFE=1 exec "$(emacs_bin || echo false)" --init-directory="$here/init" "$@" ;;
   hub) shift
         "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
-              -l drgnx-hub -f drgnx-hub-cli -- "$@" ;;
+              -l drgnx-hub-client -f drgnx-hub-cli -- "$@" ;;
   job) shift
         "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-hub -f drgnx-job-cli -- "$@" ;;

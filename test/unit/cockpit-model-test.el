@@ -584,6 +584,21 @@
     (should (equal (mapcar (lambda (c) (plist-get c :label)) (seq-filter (lambda (c) (equal (plist-get c :agent) "s-2")) (drgnx-cockpit-timeline)))
                    '("started" "stopped")))))
 
+(ert-deftest drgnx-cockpit-model/turns-come-from-the-turn-column ()
+  (drgnx-cockpit-fixture-with
+    (drgnx-coord-agent-register :id "s-2" :name "chat" :cwd repo)
+    (let ((a (drgnx-coord-event-add :agent "s-2" :kind "start" :summary "turn started" :data '(:turn t)))
+          (b (drgnx-coord-event-add :agent "s-2" :kind "stop" :summary "turn ended (end_turn)" :data '(:turn t))))
+      (should (equal (sqlite-select (drgnx-work-db) "select id, turn from event where id in (?, ?) order by id" (list a b))
+                     (list (list a 1) (list b 1))))
+      ;; whatever the data text says, the column decides: no turn column set, a life event; set, a turn
+      (sqlite-execute (drgnx-work-db) "update event set data = null where id in (?, ?)" (list a b))
+      (should (equal (mapcar (lambda (c) (plist-get c :label)) (seq-filter (lambda (c) (equal (plist-get c :agent) "s-2")) (drgnx-cockpit-timeline)))
+                     '("started")))
+      (should (equal (plist-get (drgnx-cockpit-model-test--agent (drgnx-cockpit-model :sessions nil) "s-2") :state) "not running"))
+      (sqlite-execute (drgnx-work-db) "update event set turn = null where id = ?" (list b))
+      (should (equal (plist-get (drgnx-cockpit-model-test--agent (drgnx-cockpit-model :sessions nil) "s-2") :state) "stopped")))))
+
 (load (expand-file-name "test/fixtures/handler-trap" drgnx-dir) nil t)
 
 (ert-deftest drgnx-cockpit-model/an-agents-links-are-checked-with-no-file-name-handler ()

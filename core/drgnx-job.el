@@ -1625,9 +1625,9 @@ permissions — and, with DECISIONS, its decision log (newest first)."
      (mapconcat (lambda (m) (format "  message #%s from %s: %s\n" (plist-get m :id) (plist-get m :sender) (plist-get m :text)))
                 (funcall v (plist-get job :messages)) ""))))
 
-(declare-function drgnx-hub-ensure "drgnx-hub")
-(declare-function drgnx-hub-call-sync "drgnx-hub")
-(declare-function drgnx-hub--jsonable "drgnx-hub")
+(declare-function drgnx-hub-ensure "drgnx-hub-client")
+(declare-function drgnx-hub-call-sync "drgnx-hub-client")
+(declare-function drgnx-hub--jsonable "drgnx-hub-client")
 
 (defconst drgnx-job--json-lists '(:tasks :agents :cards :messages :permissions :decisions :deps :jobs :unpriced :warnings :order)
   "Keys of a job's JSON that are lists: with nothing in them they are `[]', not null.")
