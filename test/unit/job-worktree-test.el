@@ -256,6 +256,7 @@ the one against job/7's tip would not.  A start that is no commit fails the chec
 
 (ert-deftest drgnx-job-worktree/check-never-blocks ()
   "The objects are the agent's: a FIFO planted as the tip's loose object blocks git in open(), never the hub."
+  :tags '(:timing)
   (drgnx-job-worktree-test--with
     (should (equal (drgnx-job-worktree-test--add repo folder "7" 1 "job/7") '(:name "7-1")))
     (let* ((sha (concat "12" (make-string 38 ?a)))

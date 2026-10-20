@@ -201,6 +201,7 @@ Returns (RESULT QUESTIONS)."
   (set-file-modes file #o755))
 
 (ert-deftest drgnx-onboard-portability/the-users-hooks-and-signing-never-run ()
+  :tags '(:timing)
   ;; The user's global config names a hooks directory and signs every commit: neither runs for drgnx's commit.
   (drgnx-onboard-portability-test--with root
     (let ((marker (concat root "ran")))
@@ -220,6 +221,7 @@ Returns (RESULT QUESTIONS)."
         (should-not (file-exists-p marker))))))
 
 (ert-deftest drgnx-onboard-portability/a-hung-git-fails-with-a-clear-problem ()
+  :tags '(:timing)
   (drgnx-onboard-portability-test--with root
     (drgnx-onboard-portability-test--script (concat root "bin/git") "sleep 30")
     (let* ((drgnx-onboard-call-timeout 0.5)

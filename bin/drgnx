@@ -365,6 +365,59 @@ test_bootstrap() { # [--fedora 44|45] — the exit test of a second machine: one
   else echo "FAILED (exit $rcc; log: $log)" >&2; tail -n 25 "$log" >&2; return 1; fi
 }
 
+stress_loops_stop() { # the busy loops this stress run started (their pids, in STRESS_LOOPS): ended with it, on every exit
+  local p
+  for p in ${STRESS_LOOPS[@]+"${STRESS_LOOPS[@]}"}; do kill "$p" 2>/dev/null || true; done
+  for p in ${STRESS_LOOPS[@]+"${STRESS_LOOPS[@]}"}; do wait "$p" 2>/dev/null || true; done
+  STRESS_LOOPS=()
+}
+
+stress_run() { # N LOAD [TIER-FLAG ARGS…] — N runs of the selected tests beside LOAD busy loops (runs inside run_in_tmp)
+  local n="$1" load="$2" i k fails=0 out names
+  shift 2
+  STRESS_LOOPS=()
+  trap stress_loops_stop EXIT
+  trap 'exit 143' TERM
+  trap 'exit 130' INT
+  trap 'exit 129' HUP
+  # $0 of each loop names it (and DRGNX_STRESS_TAG, for a test that counts its own): the loops are found by that
+  for ((k = 0; k < load; k++)); do
+    sh -c 'while :; do :; done' "drgnx-stress-loop${DRGNX_STRESS_TAG:+ $DRGNX_STRESS_TAG}" &
+    STRESS_LOOPS+=("$!")
+  done
+  if (($# == 0)); then
+    # the unit tier: the runner repeats it (harness/run-ert.el, drgnx-run-ert-stress) and counts per test
+    # (a subshell: test_batch_emacs execs, and this shell must stay to end the loops)
+    (DRGNX_TEST_STRESS="$n" DRGNX_TEST_LOAD="$load" test_batch_emacs drgnx-run-ert-stress-batch "${DRGNX_TEST_DIR:-$here/test/unit}")
+    return
+  fi
+  # a GUI, terminal or scenario tier: one session for each repeat; the failed tests are the FAILED lines of its output
+  names="$(mktemp)"
+  for ((i = 1; i <= n; i++)); do
+    out="$(mktemp)"
+    if "$here/bin/drgnx" test "$@" >"$out" 2>&1; then :; else fails=$((fails + 1)); fi
+    sed -n 's/^ *FAILED  *\([^ ]*\).*/\1/p' "$out" | sort -u >>"$names"
+    rm -f -- "$out"
+  done
+  echo "stress: $n runs at load $load: $((n - fails)) passed, $fails failed" >&2
+  sort "$names" | uniq -c | sort -rn | while read -r c name; do echo "   $name  failed $c of $n" >&2; done
+  rm -f -- "$names"
+  ((fails == 0))
+}
+
+test_stress() { # N [--load K] [--ui|--tty|--scenario [ARGS…]] — the selected tests N times beside K busy loops (a flake closes with this)
+  local n="${1:-}" load=0
+  [[ "$n" =~ ^[1-9][0-9]*$ ]] || { echo "usage: drgnx test --stress N [--load K] [--ui|--tty|--scenario]" >&2; exit 2; }
+  shift
+  if [[ "${1:-}" == --load ]]; then
+    [[ "${2:-}" =~ ^[0-9]+$ ]] || { echo "usage: drgnx test --stress N [--load K] [--ui|--tty|--scenario]" >&2; exit 2; }
+    load="$2"; shift 2
+  fi
+  case "${1:-}" in ""|--ui|--tty|--scenario) ;; *) echo "usage: drgnx test --stress N [--load K] [--ui|--tty|--scenario]" >&2; exit 2 ;; esac
+  [[ -n "${DRGNX_TEST_SELECTOR:-}" ]] || { echo "drgnx: --stress needs DRGNX_TEST_SELECTOR (the tests to run again and again)" >&2; exit 2; }
+  run_in_tmp stress_run "$n" "$load" "$@"
+}
+
 cmd_test() {
   case "${1:-}" in
     "") test_batch ;;
@@ -394,6 +447,7 @@ cmd_test() {
       else
         test_batch
       fi ;;
+    --stress) shift; test_stress "$@" ;;
     --install) shift; test_install "$@" ;;
     --tty) test_tty ;;
     --ui) if [ "${2:-}" = --compositor ]; then ui_compositor_ok "${3:-}" || exit 2; export DRGNX_UI_COMPOSITOR="$3"; fi
@@ -405,7 +459,7 @@ cmd_test() {
     --soak) shift; run_in_tmp ui_exec test-soak "${1:-30}" ;;
     --container) shift; test_container "$@" ;;
     --podman) shift; DRGNX_CONTAINER=podman test_container "$@" ;;
-    *) echo "usage: drgnx test [--one-process] [--leaks] [--shuffle[=SEED]] | drgnx test [--shuffle=SEED] --find-polluter TEST [FILE…] | drgnx test [--ui [--compositor C] | --tty | --scenario [--config C] | --bench | --perf [--audit] | --soak [MIN] | --container [--ui [--compositor C] | --tty [--fedora 45]] | --install [NAME…] | --bootstrap [--fedora 44|45]]" >&2; exit 2 ;;
+    *) echo "usage: drgnx test [--one-process] [--leaks] [--shuffle[=SEED]] | drgnx test [--shuffle=SEED] --find-polluter TEST [FILE…] | drgnx test --stress N [--load K] [--ui|--tty|--scenario] | drgnx test [--ui [--compositor C] | --tty | --scenario [--config C] | --bench | --perf [--audit] | --soak [MIN] | --container [--ui [--compositor C] | --tty [--fedora 45]] | --install [NAME…] | --bootstrap [--fedora 44|45]]" >&2; exit 2 ;;
   esac
 }
 
@@ -1322,6 +1376,9 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
                                --shuffle: each file's tests in a random order, the seed printed and kept)
        drgnx test [--shuffle=SEED] --find-polluter TEST [FILE…]
                                which test before TEST makes it fail? (halves them, in one Emacs per run)
+       drgnx test --stress N [--load K] [--ui|--tty|--scenario]
+                               the tests DRGNX_TEST_SELECTOR picks, N times in fresh Emacsen, while K busy loops
+                               run; prints the runs that failed and how often each test did (heavy lease)
        drgnx test --ui [--compositor mutter|sway|x11|i3|kwin|niri]
                                GUI tests in a headless session (mutter; or sway, Xvfb, Xvfb with i3, KWin, niri)
        drgnx test --tty        terminal tests: Emacs in private tmux servers (needs tmux; docs/develop/harness.md)

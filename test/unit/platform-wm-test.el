@@ -273,6 +273,7 @@
                                                       (lambda (cb) (drgnx-platform-move-frame frame (drgnx-platform-wm-test--monitor "HEADLESS-2" 1280) cb))))))))))
 
 (drgnx-platform-test--deftest drgnx-platform-wm/a-whole-move-stays-inside-one-deadline ()
+                              :tags '(:timing)
                               ;; two tool calls (tree, then move) share the operation's deadline: with a delay of 0.4 s each and a 0.6 s
                               ;; deadline the second call is cut at the deadline, not 0.4 s after it
                               (drgnx-platform-wm-test--with-replies (("get_tree.json" . (drgnx-platform-wm-test--ours)))

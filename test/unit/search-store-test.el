@@ -230,6 +230,7 @@
       (delete-directory dir t))))
 
 (ert-deftest drgnx-search-store/open-read-reads-while-a-writer-holds-the-lock ()
+  :tags '(:timing)
   (drgnx-search-store-test--with
     (drgnx-search-store-put-file db "a.el" "h" (list (drgnx-search-store-test--chunk "alpha words" 1)))
     (drgnx-search-store-set-meta db '(:dims 1024 :indexed-at 5.0))
@@ -340,6 +341,7 @@
         (should (= (length (plist-get full :ids)) 2))))))
 
 (ert-deftest drgnx-search-store/opening-a-current-index-does-not-wait-for-the-write-lock ()
+  :tags '(:timing)
   (drgnx-search-store-test--with
     (sqlite-execute db "begin immediate")      ; an indexer in the middle of a write
     (unwind-protect

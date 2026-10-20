@@ -846,3 +846,194 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
             (should line)
             (should (string-match-p "listp" (plist-get line :what)))))
       (delete-directory tmp t))))
+
+;;;; Skips are listed (det Task 21)
+
+(defun drgnx-run-ert-test--go (suite results &rest env)
+  "Run SUITE (the runner's default: a fresh Emacs for each file); return (EXIT . OUTPUT).  The summary goes to
+RESULTS.  ENV is added; the selector, shuffle, census, no-timing, no-skip and rerun variables of the run that runs
+this test are not passed on."
+  (let ((process-environment (append (cons (concat "DRGNX_TEST_RESULTS=" results) env)
+                                     (list "DRGNX_TEST_SELECTOR" "DRGNX_TEST_SHUFFLE" "DRGNX_TEST_LEAKS" "DRGNX_TEST_NO_TIMING"
+                                           "DRGNX_TEST_NO_SKIP" "DRGNX_TEST_RERUN")
+                                     process-environment))
+        (default-directory temporary-file-directory))
+    (with-temp-buffer
+      (cons (call-process (expand-file-name invocation-name invocation-directory) nil t nil
+                          "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
+                          "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch" suite)
+            (buffer-string)))))
+
+(defmacro drgnx-run-ert-test--with-suite (spec &rest body)
+  "Run BODY with SPEC = (TMP SUITE RESULTS FILES): a suite of FILES (an alist NAME → contents) made in a temp TMP."
+  (declare (indent 1))
+  (pcase-let ((`(,tmp ,suite ,results ,files) spec))
+    `(let* ((,tmp (file-name-as-directory (make-temp-file "drgnx-skip" t)))
+            (,suite (expand-file-name "suite" ,tmp)) (,results (expand-file-name "r.json" ,tmp)))
+       (unwind-protect (progn (drgnx-run-ert-test--suite ,suite ,files) ,@body)
+         (delete-directory ,tmp t)))))
+
+(defconst drgnx-run-ert-test--skipper
+  '(("skip-test.el" . "(ert-deftest iso-skip/needs () (ert-skip \"no frobnicator\"))
+(ert-deftest iso-skip/other () (should t))")))
+
+(ert-deftest drgnx-run-ert/skips-are-listed-with-their-reason ()
+  (drgnx-run-ert-test--with-suite (tmp suite results drgnx-run-ert-test--skipper)
+    (let* ((r (drgnx-run-ert-test--go suite results))
+           (skipped (plist-get (drgnx-run-ert-test--json results) :skipped)))
+      (should (eql 0 (car r)))
+      (should (= 1 (length skipped)))
+      (should (equal (plist-get (aref skipped 0) :name) "iso-skip/needs"))
+      (should (equal (plist-get (aref skipped 0) :reason) "no frobnicator"))
+      (should (string-match-p "Skipped (1):\n.*iso-skip/needs.*no frobnicator" (cdr r))))))
+
+(ert-deftest drgnx-run-ert/no-timing-lists-timing-tests-as-skipped ()
+  ;; the timing test would fail if it ran
+  (drgnx-run-ert-test--with-suite (tmp suite results
+                                       '(("slow-test.el" . "(ert-deftest iso-slow/wall () :tags '(:timing) (should nil))
+(ert-deftest iso-slow/fine () (should t))")))
+    (let ((r (drgnx-run-ert-test--go suite results "DRGNX_TEST_NO_TIMING=1")))
+      (should (eql 0 (car r)))
+      (let* ((json (drgnx-run-ert-test--json results)) (skipped (plist-get json :skipped)))
+        (should (equal (list (plist-get json :total) (plist-get json :passed)) '(1 1)))
+        (should (equal (plist-get (aref skipped 0) :name) "iso-slow/wall"))
+        (should (equal (plist-get (aref skipped 0) :reason) "wall clock: not run in CI")))
+      (should (string-match-p "Skipped (1):" (cdr r))))
+    ;; off by default: the timing test runs, and fails
+    (should (eql 1 (car (drgnx-run-ert-test--go suite results))))))
+
+(defun drgnx-run-ert-test--no-skip (tmp text)
+  "TMP's no-skip file holding TEXT, as an environment entry."
+  (let ((f (expand-file-name "no-skip.eld" tmp))) (with-temp-file f (insert text)) (concat "DRGNX_TEST_NO_SKIP=" f)))
+
+(ert-deftest drgnx-run-ert/a-must-run-test-that-skips-fails-a-full-run ()
+  (drgnx-run-ert-test--with-suite (tmp suite results drgnx-run-ert-test--skipper)
+    (let* ((listed (drgnx-run-ert-test--no-skip tmp (format "((%s \"iso-skip/needs\"))" system-type)))
+           (r (drgnx-run-ert-test--go suite results listed))
+           (failures (plist-get (drgnx-run-ert-test--json results) :failures)))
+      (should (eql 1 (car r)))
+      (should (= 1 (length failures)))
+      (should (equal (plist-get (aref failures 0) :condition)
+                     (format "iso-skip/needs must run on %s but skipped: no frobnicator" system-type)))
+      ;; another platform's entry does not bind this one
+      (should (eql 0 (car (drgnx-run-ert-test--go
+                           suite results (drgnx-run-ert-test--no-skip tmp "((no-such-os \"iso-skip/needs\"))"))))))))
+
+(ert-deftest drgnx-run-ert/no-skip-is-ignored-with-a-selector ()
+  (drgnx-run-ert-test--with-suite (tmp suite results drgnx-run-ert-test--skipper)
+    (let ((listed (drgnx-run-ert-test--no-skip tmp (format "((%s \"iso-skip/needs\"))" system-type))))
+      (should (eql 0 (car (drgnx-run-ert-test--go suite results listed "DRGNX_TEST_SELECTOR=\"^iso-skip/\"")))))))
+
+;;;; A flake is a result (det Task 22)
+
+(defconst drgnx-run-ert-test--flaker
+  '(("flake-test.el" . "(ert-deftest iso-flake/once ()
+  ;; red while its marker is absent; makes it, so the rerun in a fresh Emacs passes
+  (let ((marker (getenv \"ISO_FLAKE_MARKER\")))
+    (unless (file-exists-p marker) (write-region \"x\" nil marker nil 'silent) (should nil))))
+(ert-deftest iso-flake/fine () (should t))"))
+  "A suite with one test that fails the first time it runs and passes after.")
+
+(defun drgnx-run-ert-test--flaky-file (tmp text)
+  "TMP's flaky list holding TEXT, as an environment entry."
+  (let ((f (expand-file-name "flaky.eld" tmp))) (with-temp-file f (insert text)) (concat "DRGNX_TEST_FLAKY=" f)))
+
+(ert-deftest drgnx-run-ert/a-pass-on-rerun-is-flaky-and-fails-unless-listed ()
+  (drgnx-run-ert-test--with-suite (tmp suite results drgnx-run-ert-test--flaker)
+    (let* ((marker (expand-file-name "marker" tmp))
+           (r (drgnx-run-ert-test--go suite results "DRGNX_TEST_RERUN=1" (concat "ISO_FLAKE_MARKER=" marker)
+                                      (drgnx-run-ert-test--flaky-file tmp "()")))
+           (json (drgnx-run-ert-test--json results)) (flaky (plist-get json :flaky)))
+      (should (eql 1 (car r)))
+      (should (= 1 (length flaky)))
+      (should (equal (plist-get (aref flaky 0) :name) "iso-flake/once"))
+      (should (string-suffix-p "flake-test.el" (plist-get (aref flaky 0) :file)))
+      (should (plist-get (aref flaky 0) :condition))
+      ;; the run fails because of it, and the rerun's tests passed
+      (should (equal (plist-get (aref (plist-get json :failures) 0) :name) "iso-flake/once"))
+      (should (string-match-p "flaky" (plist-get (aref (plist-get json :failures) 0) :condition)))
+      (should (string-match-p "Flaky (1):" (cdr r))))))
+
+(ert-deftest drgnx-run-ert/a-listed-flake-passes-and-is-printed ()
+  (drgnx-run-ert-test--with-suite (tmp suite results drgnx-run-ert-test--flaker)
+    (let* ((marker (expand-file-name "marker" tmp))
+           (r (drgnx-run-ert-test--go
+               suite results "DRGNX_TEST_RERUN=1" (concat "ISO_FLAKE_MARKER=" marker)
+               (drgnx-run-ert-test--flaky-file
+                tmp "((iso-flake/once :reason \"first start\" :stress \"stress 20: 20 passed\"))"))))
+      (should (eql 0 (car r)))
+      (should (string-match-p "flaky (listed: first start)" (cdr r)))
+      (should (= 1 (length (plist-get (drgnx-run-ert-test--json results) :flaky)))))))
+
+(ert-deftest drgnx-run-ert/rerun-is-off-by-default ()
+  (drgnx-run-ert-test--with-suite (tmp suite results drgnx-run-ert-test--flaker)
+    (let ((r (drgnx-run-ert-test--go suite results (concat "ISO_FLAKE_MARKER=" (expand-file-name "marker" tmp)))))
+      (should (eql 1 (car r)))
+      (should-not (string-match-p "Flaky" (cdr r)))
+      (should (equal (plist-get (drgnx-run-ert-test--json results) :flaky) [])))))
+
+(ert-deftest drgnx-run-ert/a-test-red-twice-is-a-failure ()
+  (drgnx-run-ert-test--with-suite (tmp suite results '(("red-test.el" . "(ert-deftest iso-red/always () (should nil))
+(ert-deftest iso-red/fine () (should t))")))
+    (let* ((r (drgnx-run-ert-test--go suite results "DRGNX_TEST_RERUN=1"))
+           (json (drgnx-run-ert-test--json results)))
+      (should (eql 1 (car r)))
+      (should (equal (plist-get json :flaky) []))
+      (should (= 1 (length (plist-get json :failures))))
+      (should (equal (plist-get (aref (plist-get json :failures) 0) :name) "iso-red/always"))
+      (should (equal (list (plist-get json :total) (plist-get json :passed)) '(2 1))))))
+
+;;;; --stress (det Task 23)
+
+(defun drgnx-run-ert-test--stress (suite results &rest env)
+  "Run `drgnx-run-ert-stress-batch' over SUITE with ENV; return (EXIT . OUTPUT).  The summary goes to RESULTS."
+  (let ((process-environment (append (cons (concat "DRGNX_TEST_RESULTS=" results) env)
+                                     (list "DRGNX_TEST_SELECTOR" "DRGNX_TEST_STRESS" "DRGNX_TEST_LOAD" "DRGNX_TEST_RERUN"
+                                           "DRGNX_TEST_NO_TIMING" "DRGNX_TEST_NO_SKIP" "DRGNX_RUN_TMP")
+                                     process-environment))
+        (default-directory temporary-file-directory))
+    (with-temp-buffer
+      (cons (call-process (expand-file-name invocation-name invocation-directory) nil t nil
+                          "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
+                          "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-stress-batch" suite)
+            (buffer-string)))))
+
+(defconst drgnx-run-ert-test--stressed
+  '(("stress-test.el" . "(ert-deftest iso-stress/flip ()
+  ;; the odd runs (1st, 3rd) fail: the notes file gains a line per run
+  (let ((notes (getenv \"ISO_STRESS_NOTES\")))
+    (write-region (format \"%d\\n\" (emacs-pid)) nil notes t 'silent)
+    (should (cl-evenp (with-temp-buffer (insert-file-contents notes) (count-lines (point-min) (point-max)))))))
+(ert-deftest iso-stress/steady () (should t))"))
+  "A suite whose test fails on every odd run, and notes its Emacs's pid in ISO_STRESS_NOTES.")
+
+(ert-deftest drgnx-run-ert/stress-runs-n-times-in-fresh-emacsen ()
+  (drgnx-run-ert-test--with-suite (tmp suite results '(("stress-test.el" . "(ert-deftest iso-stress/ok ()
+  (write-region (format \"%d\\n\" (emacs-pid)) nil (getenv \"ISO_STRESS_NOTES\") t 'silent))")))
+    (let* ((notes (expand-file-name "notes" tmp))
+           (r (drgnx-run-ert-test--stress suite results "DRGNX_TEST_STRESS=3" "DRGNX_TEST_LOAD=0"
+                                          "DRGNX_TEST_SELECTOR=\"^iso-stress/\"" (concat "ISO_STRESS_NOTES=" notes)))
+           (stress (plist-get (drgnx-run-ert-test--json results) :stress)))
+      (should (eql 0 (car r)))
+      (should (string-match-p "stress: 3 runs at load 0: 3 passed, 0 failed" (cdr r)))
+      (should (= 3 (length (delete-dups (split-string (with-temp-buffer (insert-file-contents notes) (buffer-string)) "\n" t)))))
+      (should (equal (list (plist-get stress :runs) (plist-get stress :load) (plist-get stress :failures)) '(3 0 []))))))
+
+(ert-deftest drgnx-run-ert/stress-counts-failures-per-test ()
+  (drgnx-run-ert-test--with-suite (tmp suite results drgnx-run-ert-test--stressed)
+    (let* ((notes (expand-file-name "notes" tmp))
+           (r (drgnx-run-ert-test--stress suite results "DRGNX_TEST_STRESS=3" "DRGNX_TEST_LOAD=0"
+                                          "DRGNX_TEST_SELECTOR=\"^iso-stress/\"" (concat "ISO_STRESS_NOTES=" notes)))
+           (failures (plist-get (plist-get (drgnx-run-ert-test--json results) :stress) :failures)))
+      (should (eql 1 (car r)))
+      (should (string-match-p "stress: 3 runs at load 0: 1 passed, 2 failed" (cdr r)))
+      (should (= 1 (length failures)))
+      (should (equal (plist-get (aref failures 0) :name) "iso-stress/flip"))
+      (should (= 2 (plist-get (aref failures 0) :count)))
+      (should (string-match-p "iso-stress/flip.* 2" (cdr r))))))
+
+(ert-deftest drgnx-run-ert/stress-needs-a-selector ()
+  (drgnx-run-ert-test--with-suite (tmp suite results drgnx-run-ert-test--stressed)
+    (let ((r (drgnx-run-ert-test--stress suite results "DRGNX_TEST_STRESS=2")))
+      (should (eql 2 (car r)))
+      (should (string-match-p "--stress needs DRGNX_TEST_SELECTOR" (cdr r))))))

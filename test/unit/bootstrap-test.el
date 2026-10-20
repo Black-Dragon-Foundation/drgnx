@@ -435,6 +435,7 @@ age is not on the path.  Returns the identity file."
 ;;;; Fail closed
 
 (ert-deftest drgnx-bootstrap/a-hung-clone-fails-and-changes-nothing ()
+  :tags '(:timing)
   (drgnx-bootstrap-test--with (root url)
     (drgnx-bootstrap-test--fake root "git" "for a; do last=$a; done; mkdir -p \"$last\"; exec /bin/sleep 30")
     (let* ((drgnx-bootstrap-call-timeout 0.5)

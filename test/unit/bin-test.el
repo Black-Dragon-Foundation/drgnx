@@ -1203,3 +1203,46 @@ echo \"agent ${DRGNX_AGENT-unset} job ${DRGNX_JOB-unset} task ${DRGNX_TASK-unset
             (should-not (file-exists-p (expand-file-name "rt.log" dir)))
             (should (directory-empty-p (expand-file-name "scratch" home)))))
       (delete-directory dir t))))
+
+;;;; drgnx test --stress — the busy loops it starts end with it
+
+(defun drgnx-bin-test--loops (tag)
+  "How many busy loops of the stress run TAG run (their command line names the tag)."
+  (with-temp-buffer
+    (call-process "pgrep" nil t nil "-fc" (concat "drgnx-stress-loop " tag))
+    (string-to-number (buffer-string))))
+
+(ert-deftest drgnx-bin/stress-kills-its-busy-loops ()
+  (let* ((dir (make-temp-file "drgnx-bin-stress" t))
+         ;; the run's TMPDIR is outside HOME: the runner keeps writes out of the home it replaced (its summaries are in TMPDIR)
+         (parent (make-temp-file "drgnx-bin-stress-tmp" t)) (suite (expand-file-name "suite" dir))
+         (seen (expand-file-name "seen" dir)) (tag (file-name-nondirectory dir))
+         (env (drgnx-bin-test--env dir parent (concat "DRGNX_EMACS=" (expand-file-name invocation-name invocation-directory))
+                                   (concat "DRGNX_TEST_DIR=" suite) "DRGNX_TEST_SELECTOR=\"^iso-stress/\""
+                                   (concat "DRGNX_STRESS_TAG=" tag) "DRGNX_LEASE=off" "DRGNX_LEASE_HELD" "CI")))
+    (unwind-protect
+        (progn
+          (make-directory suite)
+          (with-temp-file (expand-file-name "stress-test.el" suite)
+            (insert (format "(require 'ert)
+(ert-deftest iso-stress/loops ()
+  (with-temp-buffer (call-process \"pgrep\" nil t nil \"-fc\" %S) (write-region (buffer-string) nil %S nil 'silent)))
+(ert-deftest iso-stress/hangs-when-asked ()
+  (when (file-exists-p %S) (sleep-for 3600)))
+" (concat "drgnx-stress-loop " tag) seen (expand-file-name "hang" dir))))
+          ;; a run to its end: the loops ran during it, none is left after it
+          (let ((r (drgnx-bin-test--call drgnx-bin-test--bin env "test" "--stress" "2" "--load" "3")))
+            (should (eql 0 (car r)))
+            (should (string-match-p "stress: 2 runs at load 3: 2 passed, 0 failed" (cdr r)))
+            (should (equal (string-trim (drgnx-bin-test--slurp seen)) "3"))
+            (should (= 0 (drgnx-bin-test--loops tag))))
+          ;; a run ended by a signal in the middle: the loops go with it
+          (write-region "x" nil (expand-file-name "hang" dir) nil 'silent)
+          (let ((p (drgnx-bin-test--spawn env "test" "--stress" "5" "--load" "2")))
+            (drgnx-bin-test--wait-for (lambda () (= 2 (drgnx-bin-test--loops tag))) 30)
+            (signal-process p 'TERM)
+            (drgnx-bin-test--wait-exit p 60)
+            (should (= 0 (drgnx-bin-test--loops tag)))))
+      (call-process "pkill" nil nil nil "-KILL" "-f" (concat "drgnx-stress-loop " tag))
+      (delete-directory parent t)
+      (delete-directory dir t))))

@@ -29,10 +29,11 @@ The tests fake a Linux session, so `system-type' is gnu/linux (batch Emacs on ma
        ,@body)))
 
 (defmacro drgnx-platform-test--deftest (name &rest body)
-  "`ert-deftest' NAME () with BODY run under `drgnx-platform-test--isolated'."
+  "`ert-deftest' NAME () with BODY (after an optional :tags LIST) run under `drgnx-platform-test--isolated'."
   (declare (indent 1))
-  (let ((args (pop body))) (ignore args)
-       `(ert-deftest ,name () (drgnx-platform-test--isolated ,@body))))
+  (let ((args (pop body)) (tags nil)) (ignore args)
+       (when (eq (car body) :tags) (setq tags (list :tags (cadr body)) body (cddr body)))
+       `(ert-deftest ,name () ,@tags (drgnx-platform-test--isolated ,@body))))
 
 (defvar drgnx-platform-test--log nil "The fake tools' log file, inside `drgnx-platform-test--with-fake-wm'.")
 
@@ -239,6 +240,7 @@ OPTS: (:delay SECONDS :exit CODE :out TEXT :stderr TEXT :map \"ARGS-REGEXP FILE\
                                      (should (equal mv '(:error "refused"))))))))
 
 (drgnx-platform-test--deftest drgnx-platform/an-adapter-that-never-answers-is-cut-by-the-watchdog ()
+                              :tags '(:timing)
                               (let ((drgnx-platform-command-timeout 0.2) (drgnx-platform-watchdog-margin 0.1))
                                 (drgnx-platform-test--with-adapter
                                  'silent (list :monitors (lambda (_ctx _cb) nil)
@@ -354,6 +356,7 @@ OPTS: (:delay SECONDS :exit CODE :out TEXT :stderr TEXT :map \"ARGS-REGEXP FILE\
                                     (should (equal res '(ok "{\"name\": \"Bildschirm ✓\"}")))))))
 
 (drgnx-platform-test--deftest drgnx-platform/a-hanging-tool-is-cut-at-the-deadline ()
+                              :tags '(:timing)
                               ;; Review focus 2
                               (drgnx-platform-test--with-fake-wm (:delay 10 :map "get_outputs sway/get_outputs")
                                 (let* ((calls nil) (start (float-time))
@@ -392,6 +395,7 @@ OPTS: (:delay SECONDS :exit CODE :out TEXT :stderr TEXT :map \"ARGS-REGEXP FILE\
                                   (should (string-match-p "boom" (car msgs))))))
 
 (drgnx-platform-test--deftest drgnx-platform/the-sync-call-is-bounded ()
+                              :tags '(:timing)
                               (drgnx-platform-test--with-fake-wm (:delay 10)
                                 (let ((start (float-time)))
                                   (should (eq 'timeout (car (drgnx-platform-call-sync '("swaymsg") :timeout 0.3))))

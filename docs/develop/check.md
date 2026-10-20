@@ -106,7 +106,52 @@ teardown batch whose rider wraps the module) or `"runner"` (the hub-protocol swe
 `drgnx-proc-start`). The list only shrinks: the change that wraps a site deletes its row in the same commit; a branch
 merged later that adds a site adds its row in its merge commit.
 
+## Skips are listed, and some must not happen
+
+A run prints `Skipped (N):` with each skipped test and its reason, and its JSON summary holds them as `:skipped`, a
+vector of `(:name N :reason R)` (the reason is the `ert-skip` message; the files' summaries are merged). A test that
+skips is not a pass nobody sees.
+
+- **`DRGNX_TEST_NO_TIMING=1`** leaves out the tests tagged `:timing` (they assert wall-clock bounds: a hung child
+  given up on, a lock waited for, a cost in milliseconds) and lists them as skipped, reason `wall clock: not run in
+  CI`. A shared runner is not a place to judge them; `bin/drgnx check` runs them alone (job 3 above). The tests that
+  bound a child or a lock *outside* drgnx (a real hung `git`, a lock held by another process) keep a generous wall
+  bound and carry the tag; a give-up that is a `drgnx-timer-*` timer is tested on virtual time instead
+  (`drgnx-test-with-clock`) and needs no tag.
+- **`test/no-skip.eld`**, `((PLATFORM NAME…)…)` with PLATFORM a `system-type` (`gnu/linux`, `darwin`), lists tests that
+  must run on that platform because the CI image installs what they need. In a run **without a selector**, a listed
+  test that skipped fails the run: `NAME must run on PLATFORM but skipped: REASON`. With a selector it is ignored (a
+  narrow run may not have the tool). `DRGNX_TEST_NO_SKIP=FILE` names another list (the runner's own tests).
+
+## A flake is a result (`DRGNX_TEST_RERUN`)
+
+With `DRGNX_TEST_RERUN=1` (CI sets it), a test file with an unexpected result runs once more in a fresh Emacs, the whole
+file so that order effects stay. A test that failed first and passed on the rerun is **flaky**: the summary's `:flaky`
+holds `(:name N :file F :condition C)`, the run prints `Flaky (N):`, and the run **fails** unless `test/flaky.eld` lists
+the test. A test red on both runs is an ordinary failure (the rerun does not hide it); the rerun's result is the
+file's.
+
+`test/flaky.eld` entries are `(NAME :reason STRING :stress STRING)`: the cause, and the stress run
+(`bin/drgnx test --stress`: the command and its result) that the commit adding the entry quotes. A listed flake
+prints `flaky (listed: REASON)` and passes. `drgnx-lint/flaky-entries-have-a-reason-and-a-stress-run` checks every
+entry; a flake without a cause is fixed, not listed. `DRGNX_TEST_FLAKY=FILE` names another list (the runner's own tests).
+
+## Stress (`bin/drgnx test --stress N [--load K]`)
+
+`DRGNX_TEST_SELECTOR='"^drgnx-ai-embed/"' bin/drgnx test --stress 20 --load 8` runs the selected tests 20 times, each run
+a plain unit run (a fresh Emacs for each file, as CI runs it; the rerun is off, so a flake shows), while 8 busy loops
+(`sh -c 'while :; do :; done'`) take the CPUs. The loops are killed with the command, on every exit, by their exact pids.
+It takes the heavy lease and needs `DRGNX_TEST_SELECTOR` (without one it exits 2: `--stress needs DRGNX_TEST_SELECTOR`).
+
+It prints `stress: 20 runs at load 8: 19 passed, 1 failed` and, for each test that failed, how often. The summary gains
+`:stress (:runs N :load K :failures [(:name N :count C)…])`. Exit 0 only when every run passed. With `--ui`, `--tty` or
+`--scenario` each repeat is one session of that tier and the failed tests are counted from its `FAILED` lines.
+
+A flake row in `DEFERRED.md` closes only with a stress run (the command and its result, quoted in the fixing commit
+and in a `test/flaky.eld` entry if it stays) or with a named cause.
+
 ## The leak census (`--leaks`)
+
 
 `bin/drgnx test --leaks` (and `bin/drgnx check --leaks`, for the unit shards and the timing job) turns on a census of
 what the tests leave behind: `DRGNX_TEST_LEAKS=1`, read by the runner (`harness/run-ert.el`), which every per-file Emacs

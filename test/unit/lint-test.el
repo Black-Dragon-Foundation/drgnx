@@ -176,3 +176,28 @@ Only a literal PRED form is read: `(drgnx-test-wait #\\='my-pred)' is not follow
           (should (= (length (drgnx-lint--violations (list bad) #'drgnx-lint--wait-on-process-live-p)) 1))
           (should-not (drgnx-lint--violations (list good) #'drgnx-lint--wait-on-process-live-p)))
       (delete-directory dir t))))
+
+(defun drgnx-lint--flaky-problems (entries)
+  "Strings, one for each of ENTRIES (`(NAME :reason STRING :stress STRING)') that lacks a name, a reason or the stress run
+\(command and result) the commit that added it quotes."
+  (cl-loop for e in entries
+           for name = (car-safe e)
+           unless (or (symbolp name) (stringp name))
+           collect (format "%S: no test name" e)
+           else
+           append (cl-loop for key in '(:reason :stress)
+                           for v = (plist-get (cdr e) key)
+                           unless (and (stringp v) (not (string-empty-p (string-trim v))))
+                           collect (format "%s: no %s" name key))))
+
+(ert-deftest drgnx-lint/flaky-entries-have-a-reason-and-a-stress-run ()
+  ;; test/flaky.eld: a flake the CI tolerates is a decision with a cause and a measured stress run (bin/drgnx test --stress)
+  (let ((entries (with-temp-buffer
+                   (insert-file-contents (expand-file-name "test/flaky.eld" drgnx-dir))
+                   (read (current-buffer)))))
+    (should (listp entries))
+    (should (equal (drgnx-lint--flaky-problems entries) nil)))
+  (should (equal (drgnx-lint--flaky-problems '((a/b :reason "slow disk" :stress "drgnx test --stress 20: 20 passed")))
+                 nil))
+  (should (equal (drgnx-lint--flaky-problems '((a/b :reason "slow disk") (c/d :stress "x") (e/f :reason " " :stress "y")))
+                 '("a/b: no :stress" "c/d: no :reason" "e/f: no :reason"))))
