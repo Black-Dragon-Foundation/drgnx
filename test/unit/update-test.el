@@ -390,20 +390,20 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
 (ert-deftest drgnx-update/refreshes-the-unit-after-an-update ()
   (drgnx-update-test--with-install
     (drgnx-update-test--push dir "README" "two\n" "second")
-    (let ((r (drgnx-update-test--run dir nil bin "update")))
+    (let ((r (drgnx-update-test--run dir '("DRGNX_UPDATE_PLATFORM=Linux") bin "update")))
       (should (eq (car r) 0))
       (should (equal (split-string (drgnx-update-test--hooks dir) "\n" t) '("sync" "build")))
       (should (equal (drgnx-update-test--unit-log dir) '("unit --refresh"))))))
 
 (ert-deftest drgnx-update/already-current-still-refreshes-the-unit ()
   (drgnx-update-test--with-install
-    (let ((r (drgnx-update-test--run dir nil bin "update")))
+    (let ((r (drgnx-update-test--run dir '("DRGNX_UPDATE_PLATFORM=Linux") bin "update")))
       (should (eq (car r) 0))
       (should (equal (drgnx-update-test--unit-log dir) '("unit --refresh"))))))
 
 (ert-deftest drgnx-update/a-failed-unit-refresh-does-not-fail-the-update ()
   (drgnx-update-test--with-install
-    (let ((r (drgnx-update-test--run dir (list "DRGNX_UPDATE_UNIT_CMD=false") bin "update")))
+    (let ((r (drgnx-update-test--run dir (list "DRGNX_UPDATE_PLATFORM=Linux" "DRGNX_UPDATE_UNIT_CMD=false") bin "update")))
       (should (eq (car r) 0))
       (should (string-search "could not check drgnx.service" (cdr r))))))
 
