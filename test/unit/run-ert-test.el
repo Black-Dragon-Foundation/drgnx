@@ -744,7 +744,8 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
           (drgnx-run-ert-test--suite suite '(("clean-test.el" . "(ert-deftest iso-clean/ok () (should (= 2 (+ 1 1))))")))
           (let ((r (drgnx-run-ert-test--census suite results)))
             (should (eql 0 (car r)))
-            (should-not (string-match-p "Leaks" (cdr r)))
+            ;; the report's heading, case and all: the run's own dir is drgnx-leakXXXXXX (macOS CI: drgnx-leakSrSTb2)
+            (should-not (let ((case-fold-search nil)) (string-match-p "^Leaks (" (cdr r))))
             (should (equal (plist-get (drgnx-run-ert-test--json results) :leaks) []))))
       (delete-directory tmp t))))
 
