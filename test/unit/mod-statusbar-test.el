@@ -12,6 +12,8 @@
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-job-ui" drgnx-dir) nil t)  ; C8's one count of what needs you
+(load (expand-file-name "test/fixtures/memo-alloc-fixture" drgnx-dir) nil t)
+(require 'drgnx-file)
 (defvar drgnx-job-ui--badge)
 (defvar drgnx-job-ui--needs-you)
 (defvar compilation-arguments)
@@ -30,25 +32,44 @@
 (defvar evil-mode-line-tag)
 (defvar evil-mode-line-format)
 
+(defun drgnx-statusbar-test--activate ()
+  "The setup of the tests' own `ui/face': what `drgnx-statusbar-setup' activates."
+  (apply #'drgnx-memo-activate drgnx-statusbar--declared))
+
+(defmacro drgnx-statusbar-test--epochs (&rest body)
+  "BODY with the bar's epochs watching and its memo owned as `ui/face''s setup has them, in a module table of the
+test's own (`ui/face' is torn down after: the watchers go, the memo empties), and other packages' entries read afresh."
+  (declare (indent 0))
+  `(let ((drgnx-modules--table (list (list 'ui/face :setup #'drgnx-statusbar-test--activate)))
+         (drgnx-modules--report nil) (drgnx-modules--stacks nil) (drgnx-modules--runs nil)
+         (drgnx-modules--features nil) (drgnx-modules--left nil)
+         (drgnx-statusbar--misc-all nil) (drgnx-statusbar--misc-split nil) (drgnx-statusbar--misc-made nil)
+         (drgnx-statusbar--misc-read nil) (drgnx-statusbar--misc-texts (make-hash-table :test #'eq :weakness 'key))
+         (drgnx-statusbar--misc-report-due nil))
+     (drgnx-modules--run-one 'ui/face (alist-get 'ui/face drgnx-modules--table) 'startup)
+     (unwind-protect (progn ,@body) (drgnx-module-teardown 'ui/face))))
+
 (defmacro drgnx-statusbar-test--with (&rest body)
   "BODY with the status bar's segments, lists and error record kept away from the rest of the test process.
 Segments a, b, c are defined: their text is A, B, C.  The store is the test's own, with the selected window as the
-frame's editor window (the full bar is the editor window's: the bar asks the store)."
+frame's editor window (the full bar is the editor window's: the bar asks the store).  The bar's epochs and memo are
+active (`drgnx-statusbar-test--epochs')."
   (declare (indent 0))
   `(drgnx-test-with-state
      (drgnx-test-use-editor (selected-window))
-     (let ((drgnx-statusbar--segments (make-hash-table :test #'eq))
-           (drgnx-statusbar--errors nil)
-           (drgnx-statusbar-left '(a b)) (drgnx-statusbar-right '(c))
-           (drgnx-statusbar-drop-order drgnx-statusbar-drop-order)
-           (drgnx-statusbar-compact '(c))
-           (drgnx-statusbar--window nil))
-       ;; the batch terminal is not UTF-8: the tests that look at glyphs say which they mean
-       (cl-letf (((symbol-function 'drgnx-face--ascii-frame-p) (lambda (_frame) nil)))
-         (drgnx-statusbar-define-segment 'a :fn (lambda () "A"))
-         (drgnx-statusbar-define-segment 'b :fn (lambda () "B"))
-         (drgnx-statusbar-define-segment 'c :fn (lambda () "C"))
-         ,@body))))
+     (drgnx-statusbar-test--epochs
+       (let ((drgnx-statusbar--segments (make-hash-table :test #'eq))
+             (drgnx-statusbar--errors nil)
+             (drgnx-statusbar-left '(a b)) (drgnx-statusbar-right '(c))
+             (drgnx-statusbar-drop-order drgnx-statusbar-drop-order)
+             (drgnx-statusbar-compact '(c))
+             (drgnx-statusbar--window nil))
+         ;; the batch terminal is not UTF-8: the tests that look at glyphs say which they mean
+         (cl-letf (((symbol-function 'drgnx-face--ascii-frame-p) (lambda (_frame) nil)))
+           (drgnx-statusbar-define-segment 'a :fn (lambda () "A"))
+           (drgnx-statusbar-define-segment 'b :fn (lambda () "B"))
+           (drgnx-statusbar-define-segment 'c :fn (lambda () "C"))
+           ,@body)))))
 
 (defmacro drgnx-statusbar-test--in-buffer (mode &rest body)
   "BODY in a temp buffer in MODE, shown in the selected window (the bar reads the window's buffer)."
@@ -59,6 +80,18 @@ frame's editor window (the full bar is the editor window's: the bar asks the sto
        (set-window-buffer (selected-window) (current-buffer))
        (unwind-protect (progn ,@body)
          (set-window-buffer (selected-window) old)))))
+
+(defun drgnx-statusbar-test--format-mode-line (c &rest _)
+  "`format-mode-line' of C as a frame does it for the constructs these tests use: strings, symbols, `:eval',
+`:propertize' and lists of them (a batch Emacs formats every construct as \"\")."
+  (cond ((null c) "")
+        ((stringp c) c)
+        ((symbolp c) (let ((v (and (boundp c) (symbol-value c))))
+                       (if (eq v c) "" (drgnx-statusbar-test--format-mode-line v))))
+        ((eq (car-safe c) :eval) (drgnx-statusbar-test--format-mode-line (eval (cadr c) t)))
+        ((eq (car-safe c) :propertize) (drgnx-statusbar-test--format-mode-line (cadr c)))
+        ((consp c) (mapconcat #'drgnx-statusbar-test--format-mode-line c ""))
+        (t "")))
 
 (defun drgnx-statusbar-test--gap (s)
   "The `:align-to' display spec in S, or nil."
@@ -258,7 +291,8 @@ frame's editor window (the full bar is the editor window's: the bar asks the sto
                (setq-local vc-mode nil)
                (should-not (text 'branch)))
              ;; no test run yet; misc has nothing to say in a plain buffer
-             (let ((drgnx-statusbar-tests-state nil) (drgnx-statusbar--tick (1+ drgnx-statusbar--tick)))
+             (let ((drgnx-statusbar-tests-state nil))
+               (drgnx-statusbar--bump)                   ; drgnx's own segments are worked out again
                (should-not (text 'tests)))
              (with-temp-buffer
                (let ((global-mode-string nil) (mode-line-process nil) (defining-kbd-macro nil))
@@ -640,7 +674,7 @@ frame's editor window (the full bar is the editor window's: the bar asks the sto
 
 (ert-deftest drgnx-statusbar/a-flymake-report-redraws-the-bars ()
   (require 'flymake)
-  (let ((calls nil))
+  (let ((calls nil) (drgnx-statusbar--redraw-wanted nil))
     (cl-letf (((symbol-function 'drgnx-statusbar-refresh) (lambda (&optional changed) (push changed calls))))
       (advice-add 'flymake--handle-report :after #'drgnx-statusbar--flymake-reported)
       (advice-add 'flymake--handle-report :after #'drgnx-statusbar--flymake-reported)       ; again: still one
@@ -655,8 +689,13 @@ frame's editor window (the full bar is the editor window's: the bar asks the sto
               (unwind-protect
                   (progn (flymake-start)
                          (should-not calls)
-                         (funcall report nil)              ; an asynchronous backend answers later
-                         (should (equal calls '(t))))
+                         (let ((epoch (drgnx-epoch 'flymake (current-buffer))) (other (drgnx-epoch 'statusbar)))
+                           (funcall report nil)            ; an asynchronous backend answers later
+                           ;; this buffer's flymake epoch moves (not every bar's) and a redraw is asked for, debounced
+                           (should (equal calls '(nil)))
+                           (should drgnx-statusbar--redraw-wanted)
+                           (should (/= epoch (drgnx-epoch 'flymake (current-buffer))))
+                           (should (= other (drgnx-epoch 'statusbar)))))
                 (flymake-mode -1))))
         (advice-remove 'flymake--handle-report #'drgnx-statusbar--flymake-reported)))))
 
@@ -910,13 +949,14 @@ frame's editor window (the full bar is the editor window's: the bar asks the sto
           (should (equal (substring-no-properties (drgnx-statusbar--seg-misc)) "● Rec")))
         (let ((default-directory "/ssh:me@box.example:/srv/work/"))
           (should (equal (drgnx-statusbar--seg-misc) "Remote: box.example")))
-        ;; other entries of global-mode-string; the job badge is left out (the jobs segment shows it)
-        (let ((global-mode-string (list "" "12:30" '(:eval (drgnx-job-ui--badge-segment)))))
-          (should (equal (drgnx-statusbar--seg-misc) "12:30")))
-        ;; a construct that is not plain strings is formatted by Emacs
+        ;; other entries of global-mode-string; the job badge is left out (the jobs segment shows it).  Set, not
+        ;; let-bound: the bar reads the entries when they are set
+        (setq global-mode-string (list "" "12:30" '(:eval (drgnx-job-ui--badge-segment))))
+        (should (equal (drgnx-statusbar--seg-misc) "12:30"))
+        ;; a construct that is not plain strings is formatted by Emacs, entry by entry
         (cl-letf (((symbol-function 'format-mode-line) (lambda (c &rest _) (format "<%S>" c))))
-          (let ((global-mode-string '(display-time-string)))
-            (should (equal (drgnx-statusbar--seg-misc) "<(display-time-string)>"))))))))
+          (setq global-mode-string '(display-time-string))
+          (should (equal (drgnx-statusbar--seg-misc) "<display-time-string>")))))))
 
 (ert-deftest drgnx-statusbar/the-separator-is-ascii-on-a-terminal-that-is-not-utf-8 ()
   (drgnx-statusbar-test--with
@@ -967,14 +1007,13 @@ frame's editor window (the full bar is the editor window's: the bar asks the sto
         (should (eq (car (car drgnx-statusbar--errors)) 'host))))))
 
 (defmacro drgnx-statusbar-test--state (&rest body)
-  "BODY with the drgnx side's state (ticks, tests, jobs, agents, the refresh timer, the memo) kept to this test."
+  "BODY with the drgnx side's state (tests, jobs, agents, their texts, the refresh timer) kept to this test."
   (declare (indent 0))
-  `(let ((drgnx-statusbar--tick 0) (drgnx-statusbar-tests-state nil) (drgnx-statusbar--jobs-state nil)
+  `(let ((drgnx-statusbar-tests-state nil) (drgnx-statusbar--jobs-state nil)
          (drgnx-statusbar--agents-state nil)
          (drgnx-statusbar--redraw-wanted nil) (drgnx-statusbar--jobs-wanted nil) (drgnx-statusbar--jobs-pending nil)
          (drgnx-statusbar--state-texts (make-hash-table :test #'eq))
          (drgnx-statusbar--git-branches (make-hash-table :test #'equal))
-         (drgnx-statusbar--memo (make-hash-table :test #'eq :weakness 'key))
          (drgnx-statusbar-waiting-functions (list #'drgnx-statusbar-agents-waiting)))
      (drgnx-cache--clear 'git-status)
      (unwind-protect (progn ,@body)
@@ -1028,14 +1067,14 @@ frame's editor window (the full bar is the editor window's: the bar asks the sto
                   "   passed  41/41  drgnx-x/y (0.001 sec)"
                   "Ran 41 tests, 41 results as expected, 0 unexpected (2026-10-18 12:00:01+0000, 2.3 sec)")))
           (unwind-protect
-              (let ((tick drgnx-statusbar--tick))
+              (let ((tick (drgnx-epoch 'statusbar)))
                 (drgnx-statusbar--compilation-finished b "finished\n")
                 (should (equal (drgnx-statusbar-test--seg 'tests) "✓ tests 41/41"))
                 (should (equal (plist-get drgnx-statusbar-tests-state :passed) 41))
                 (should (equal (plist-get drgnx-statusbar-tests-state :failed) 0))
                 (should (eq (plist-get drgnx-statusbar-tests-state :source) b))
                 (should (numberp (plist-get drgnx-statusbar-tests-state :at)))
-                (should (> drgnx-statusbar--tick tick))) ; the bars' memo knows it changed
+                (should (/= (drgnx-epoch 'statusbar) tick))) ; the bars' memo knows it changed
             (kill-buffer b)))
         ;; failures
         (let ((b (drgnx-statusbar-test--compilation
@@ -1249,10 +1288,7 @@ frame's editor window (the full bar is the editor window's: the bar asks the sto
             (global-mode-string (list "" '(:eval (drgnx-job-ui--badge-segment)))))
         (cl-letf (((symbol-function 'drgnx-job-ui--badge-segment) (lambda () drgnx-job-ui--badge))
                   ;; a batch Emacs formats every mode-line construct as "": strings and :eval forms, as a frame would
-                  ((symbol-function 'format-mode-line)
-                   (lambda (c &rest _)
-                     (mapconcat (lambda (e) (cond ((stringp e) e) ((eq (car-safe e) :eval) (eval (cadr e) t)) (t "")))
-                                c ""))))
+                  ((symbol-function 'format-mode-line) #'drgnx-statusbar-test--format-mode-line))
           (drgnx-statusbar-test--in-buffer #'emacs-lisp-mode
             (should-not (string-match-p "⚑" (drgnx-statusbar-mode-line)))   ; the jobs segment shows the badge
             ;; another module (the remote mark, the trust mark) pushes an entry: it appears, no coupling
@@ -1262,8 +1298,9 @@ frame's editor window (the full bar is the editor window's: the bar asks the sto
             ;; …and goes when it is taken out
             (pop global-mode-string)
             (should-not (string-match-p "TRUST" (drgnx-statusbar-mode-line)))
-            ;; a plain string is shown as it is
-            (let ((global-mode-string " 12:30")) (should (string-match-p "12:30" (drgnx-statusbar-mode-line))))))))))
+            ;; a plain string is shown as it is (set: a `let' is not seen, the bar reads the entries when they are set)
+            (setq global-mode-string " 12:30")
+            (should (string-match-p "12:30" (drgnx-statusbar-mode-line)))))))))
 
 (ert-deftest drgnx-statusbar/misc-shows-keycast-which-function-and-evils-state ()
   "What other packages put in the stock mode line shows in `misc': keycast's key, which-function's name (from its
@@ -1428,27 +1465,24 @@ own cache), evil's state tag, other entries of `mode-line-misc-info'; each chang
                   (drgnx-statusbar--git-changed "/repo/")
                   (drgnx-statusbar--refresh-now)
                   (should (rebuilt-p)) (should-not (rebuilt-p))
-                  ;; the indentation width, flymake's backends and eglot's server state are in the key
+                  ;; the indentation (a variable of `drgnx-statusbar-indent-vars', as of the setup), flymake's and
+                  ;; eglot's state are epochs of the buffer
+                  (drgnx-epoch-watch 'buffer-look '(drgnx-statusbar-test--offset))
                   (let ((drgnx-statusbar-indent-vars '(drgnx-statusbar-test--offset)))
-                    (setq-local indent-tabs-mode nil)
+                    (setq-local indent-tabs-mode (not indent-tabs-mode))
+                    (should (rebuilt-p)) (should-not (rebuilt-p))
                     (setq-local drgnx-statusbar-test--offset 2)
                     (should (rebuilt-p)) (should-not (rebuilt-p))
                     (setq-local drgnx-statusbar-test--offset 4)
                     (should (rebuilt-p)) (should-not (rebuilt-p)))
-                  (let ((running '(b1)) (reporting nil) (alive t))
-                    (cl-letf (((symbol-function 'flymake-running-backends) (lambda () running))
-                              ((symbol-function 'flymake-reporting-backends) (lambda () reporting))
-                              ((symbol-function 'jsonrpc-running-p) (lambda (_s) alive)))
-                      (setq-local flymake-mode t)
-                      (should (rebuilt-p)) (should-not (rebuilt-p))
-                      (setq reporting '(b1))                     ; the backend reported
-                      (should (rebuilt-p)) (should-not (rebuilt-p))
-                      (setq-local eglot--cached-server 'server)
-                      (should (rebuilt-p)) (should-not (rebuilt-p))
-                      (setq alive nil)                           ; the server exited
-                      (should (rebuilt-p)) (should-not (rebuilt-p))
-                      (setq-local flymake-mode nil)
-                      (setq-local eglot--cached-server nil)))
+                  (drgnx-statusbar--flymake-changed)              ; flymake turned on (`flymake-mode-hook')
+                  (should (rebuilt-p)) (should-not (rebuilt-p))
+                  (drgnx-statusbar--flymake-reported)             ; a backend reported
+                  (should (rebuilt-p)) (should-not (rebuilt-p))
+                  (drgnx-statusbar--eglot-changed)                ; eglot manages the buffer, or let it go
+                  (should (rebuilt-p)) (should-not (rebuilt-p))
+                  (drgnx-statusbar--eglot-initialized 'server)    ; a server told its name
+                  (should (rebuilt-p)) (should-not (rebuilt-p))
                   ;; the compact bar in another window is its own entry (the store keeps this window the MRU editor, so
                   ;; the other one is compact: the counted segment is put in the compact bar too)
                   (let ((other (split-window-right)) (drgnx-statusbar-compact '(a c)))
@@ -1468,7 +1502,12 @@ own cache), evil's state tag, other entries of `mode-line-misc-info'; each chang
                  (drgnx-hub-event-functions . drgnx-statusbar--hub-event)
                  (drgnx-hub-disconnect-functions . drgnx-statusbar--hub-gone)
                  (drgnx-git-changed-functions . drgnx-statusbar--git-changed)
-                 (compilation-finish-functions . drgnx-statusbar--compilation-finished))))
+                 (compilation-finish-functions . drgnx-statusbar--compilation-finished)
+                 (after-change-major-mode-hook . drgnx-statusbar--mode-changed)
+                 (flymake-mode-hook . drgnx-statusbar--flymake-changed)
+                 (eglot-managed-mode-hook . drgnx-statusbar--eglot-changed)
+                 (eglot-server-initialized-hook . drgnx-statusbar--eglot-initialized)
+                 (pre-redisplay-functions . drgnx-statusbar--pre-redisplay))))
     (drgnx-statusbar-test--state
       (cl-letf (((symbol-function 'drgnx-chrome-apply) #'ignore) ((symbol-function 'force-mode-line-update) #'ignore))
         (unwind-protect
@@ -1480,16 +1519,21 @@ own cache), evil's state tag, other entries of `mode-line-misc-info'; each chang
               (should (= 1 (seq-count (lambda (f) (eq f #'drgnx-statusbar--ask-git))
                                       (alist-get 'editor-changed drgnx-signal--subscribers))))
               (should (advice-member-p #'drgnx-statusbar--flymake-reported 'flymake--handle-report))
+              (should (advice-member-p #'drgnx-statusbar--flymake-started 'flymake-start))
               (drgnx-statusbar-refresh)
               (should (drgnx-timer-active-p 'statusbar-refresh))
-              (puthash (selected-window) [x] drgnx-statusbar--memo)
+              (puthash (selected-window) [x] (drgnx-memo--def-table (get 'statusbar-bar 'drgnx-memo--def)))
+              (should (> (nth 2 (assq 'statusbar-bar (drgnx-memo-census))) 0))
+              (setq drgnx-statusbar--misc-made -1)
               (drgnx-statusbar-mode -1)
               (should-not (drgnx-timer-active-p 'statusbar-refresh))
               (dolist (h hooks) (should-not (memq (cdr h) (default-value (car h)))))
               (should-not (memq #'drgnx-statusbar--ask-git (alist-get 'editor-changed drgnx-signal--subscribers)))
               (should-not (advice-member-p #'drgnx-statusbar--flymake-reported 'flymake--handle-report))
+              (should-not (advice-member-p #'drgnx-statusbar--flymake-started 'flymake-start))
               (should-not (drgnx-timer-active-p 'statusbar-refresh))
-              (should (= 0 (hash-table-count drgnx-statusbar--memo))))
+              (should (= 0 (nth 2 (assq 'statusbar-bar (drgnx-memo-census)))))   ; the memo is empty
+              (should-not drgnx-statusbar--misc-made))                         ; the entries are read afresh
           (drgnx-statusbar-mode (if was 1 -1)))))))
 
 (ert-deftest drgnx-statusbar/the-modal-indicator-moves-into-the-bar ()
@@ -1520,6 +1564,378 @@ own cache), evil's state tag, other entries of `mode-line-misc-info'; each chang
         (let ((ms (* 1000 (- (float-time) t0))))
           (message "drgnx-statusbar: 1000 renders in %.1f ms (%.3f ms each)" ms (/ ms 1000))
           (should (< ms 500)))))))
+
+;;;; Epochs and the memo; other packages' entries once per redisplay (render Task 16)
+
+(defvar drgnx-statusbar-test--builds 0 "How many times the counted segment `a' was worked out.")
+
+(defun drgnx-statusbar-test--count-a ()
+  (setq drgnx-statusbar-test--builds (1+ drgnx-statusbar-test--builds))
+  "A")
+
+(defun drgnx-statusbar-test--rebuilt-p ()
+  "Non-nil when the selected window's bar was built again now."
+  (let ((before drgnx-statusbar-test--builds))
+    (drgnx-statusbar-mode-line)
+    (/= before drgnx-statusbar-test--builds)))
+
+(defmacro drgnx-statusbar-test--counted (&rest body)
+  "BODY in an Emacs Lisp buffer shown in the selected window, whose full bar (`a' counting its builds, then `misc')
+was built once; no other package's entry yet."
+  (declare (indent 0))
+  `(drgnx-statusbar-test--with
+     (drgnx-statusbar-test--state
+       (let ((drgnx-statusbar-test--builds 0) (global-mode-string nil) (drgnx-statusbar-left '(a misc))
+             ;; what the tests set (a set is seen, a `let' is not): theirs only
+             (mode-line-misc-info mode-line-misc-info) (drgnx-statusbar-misc-exclude drgnx-statusbar-misc-exclude)
+             (drgnx-statusbar-quiet drgnx-statusbar-quiet) (drgnx-job-ui--badge drgnx-job-ui--badge)
+             (drgnx-explorer--roots nil) (drgnx-face-glyphs drgnx-face-glyphs))
+         (drgnx-statusbar-define-segment 'a :fn #'drgnx-statusbar-test--count-a)
+         (drgnx-statusbar-define-segment 'misc :fn #'drgnx-statusbar--seg-misc)
+         (cl-letf (((symbol-function 'force-mode-line-update) #'ignore))
+           (drgnx-statusbar-test--in-buffer #'emacs-lisp-mode
+             (insert "one\ntwo\n")
+             (drgnx-statusbar-mode-line)
+             ,@body))))))
+
+(ert-deftest drgnx-statusbar/a-memo-hit-allocates-nothing ()
+  (drgnx-statusbar-test--counted
+    (let ((w (selected-window)) (width (window-total-width)))
+      (should (eq (drgnx-statusbar--bar w width nil) (drgnx-statusbar-mode-line)))
+      (should (= 0 (drgnx-memo-fixture-alloc (lambda () (drgnx-statusbar--bar w width nil))
+                                             'drgnx-statusbar--bar 'drgnx-statusbar--misc 'drgnx-statusbar--misc-entries
+                                             'drgnx-statusbar--selected-p 'drgnx-statusbar--which-func)))
+      (should (= drgnx-statusbar-test--builds 1)))))
+
+(ert-deftest drgnx-statusbar/the-key-is-epochs-and-plain-values ()
+  "The memo's keys call no helper of the bar but the window's selection, which-function's cached name and the text
+of other packages' entries; the rest are the six epochs and plain values."
+  (let ((keys (drgnx-memo--def-keys (get 'statusbar-bar 'drgnx-memo--def))) (helpers nil) (epochs nil))
+    (cl-labels ((walk (f)
+                  (when (consp f)
+                    (when (and (symbolp (car f)) (string-prefix-p "drgnx-statusbar--" (symbol-name (car f))))
+                      (push (car f) helpers))
+                    (when (eq (car f) 'drgnx-epoch) (push (cadr (cadr f)) epochs))
+                    (mapc #'walk (cdr f)))))
+      (mapc #'walk keys))
+    (should (equal (sort (delete-dups helpers) #'string<)
+                   '(drgnx-statusbar--misc drgnx-statusbar--selected-p drgnx-statusbar--which-func)))
+    (should (equal (sort epochs #'string<) '(buffer-look eglot flymake git misc-info statusbar)))
+    (should (= 21 (length keys)))))                     ; 6 epochs, 8 values of the window, 7 hot plain values
+
+(defmacro drgnx-statusbar-test--epoch-test (epoch object doc &rest triggers)
+  "A test that each of TRIGGERS moves EPOCH (read for OBJECT) and makes the next redisplay build the bar again."
+  (declare (indent 3))
+  `(ert-deftest ,(intern (format "drgnx-statusbar/each-epoch-rebuilds-the-bar-%s" epoch)) ()
+     ,doc
+     (drgnx-statusbar-test--counted
+       ,@(mapcar (lambda (trigger)
+                   `(let ((before (drgnx-epoch ',epoch ,object)))
+                      ,trigger
+                      (should (/= before (drgnx-epoch ',epoch ,object)))
+                      (should (drgnx-statusbar-test--rebuilt-p))
+                      (should-not (drgnx-statusbar-test--rebuilt-p))))
+                 triggers))))
+
+(defvar drgnx-trust--state)
+(defvar c-basic-offset)
+
+(drgnx-statusbar-test--epoch-test buffer-look (current-buffer)
+                                  "The buffer's mode, version control, encoding, indentation, modal state, evil's tag and trust."
+  (drgnx-statusbar--mode-changed)
+  (setq-local vc-mode " Git-feature")
+  (setq-local buffer-file-coding-system 'utf-8-dos)
+  (setq-local indent-tabs-mode (not indent-tabs-mode))
+  (setq-local tab-width 3)
+  (setq-local c-basic-offset 3)                         ; one of `drgnx-statusbar-indent-vars'
+  (setq-local drgnx-modal-state 'insert)
+  (setq-local evil-mode-line-tag " <I> ")
+  (setq-local drgnx-trust--state 'restricted))
+
+(drgnx-statusbar-test--epoch-test flymake (current-buffer)
+                                  "flymake turned on or off here, a check started, a backend reported."
+  (drgnx-statusbar--flymake-changed)
+  (drgnx-statusbar--flymake-started)
+  (drgnx-statusbar--flymake-reported))
+
+(drgnx-statusbar-test--epoch-test eglot (current-buffer)
+                                  "eglot manages the buffer or let it go; a server finished starting."
+  (drgnx-statusbar--eglot-changed)
+  (drgnx-statusbar--eglot-initialized 'server))
+
+(drgnx-statusbar-test--epoch-test git nil
+                                  "A repository's branch or its ahead and behind counts changed."
+  (progn (drgnx-cache-put 'git-status "/repo/" (list :branch '(:head "a")))
+         (drgnx-statusbar--git-changed "/repo/"))
+  (progn (drgnx-cache-put 'git-status "/repo/" (list :branch '(:head "a" :ahead 1)))
+         (drgnx-statusbar--git-changed "/repo/")))
+
+(drgnx-statusbar-test--epoch-test misc-info nil
+                                  "Other packages' entries changed, or which of them the bar leaves out."
+  (setq global-mode-string '("MARK"))
+  (setq mode-line-misc-info (cons "INFO" mode-line-misc-info))
+  (setq mode-line-misc-info (cdr mode-line-misc-info))
+  (setq drgnx-statusbar-misc-exclude (cons "MARK" drgnx-statusbar-misc-exclude)))
+
+(drgnx-statusbar-test--epoch-test statusbar nil
+                                  "drgnx's own state, a setting or the glyphs."
+  (drgnx-statusbar--bump)
+  (setq drgnx-statusbar-left '(misc a))
+  (setq drgnx-statusbar-quiet '(a))
+  (setq drgnx-job-ui--badge " ⚑3")
+  (setq drgnx-explorer--roots '("/elsewhere/"))
+  (setq drgnx-face-glyphs (copy-sequence drgnx-face-glyphs)))
+
+(ert-deftest drgnx-statusbar/a-let-of-tab-width-to-its-value-or-a-local-one-rebuilds-nothing ()
+  ;; code that binds the indentation variables for a moment, to the value they have or where they are local, moves
+  ;; no epoch: a `let' is not a change
+  (drgnx-statusbar-test--counted
+    (let ((tab-width tab-width) (indent-tabs-mode indent-tabs-mode)) (should tab-width))   ; not local here
+    (should-not (drgnx-statusbar-test--rebuilt-p))
+    (setq-local tab-width 4)
+    (should (drgnx-statusbar-test--rebuilt-p))
+    (let ((tab-width 2)) (should (= tab-width 2)))                                          ; local here
+    (should-not (drgnx-statusbar-test--rebuilt-p))))
+
+(ert-deftest drgnx-statusbar/a-let-of-tab-width-to-another-value-rebuilds-every-bar ()
+  ;; Known over-invalidation (the memo layer's, RP16-M1): where `tab-width' is not local, Emacs reports a `let' of it
+  ;; to another value as a `set' of the default, so `buffer-look' moves (for every buffer) and every bar is built
+  ;; again once.  Nothing goes stale; drgnx's own `(let ((indent-tabs-mode nil)) …)' costs one rebuild per bar.
+  (drgnx-statusbar-test--counted
+    (should-not (local-variable-p 'tab-width))
+    (let ((tab-width (1+ tab-width))) (should tab-width))
+    (should (drgnx-statusbar-test--rebuilt-p))
+    (should-not (drgnx-statusbar-test--rebuilt-p))))
+
+(defvar drgnx-statusbar-test--live-calls 0 "How many times the live entry was formatted.")
+(defvar drgnx-statusbar-test--clock "10:00" "What the live entry shows.")
+
+(defun drgnx-statusbar-test--live ()
+  (setq drgnx-statusbar-test--live-calls (1+ drgnx-statusbar-test--live-calls))
+  drgnx-statusbar-test--clock)
+
+(defun drgnx-statusbar-test--redisplay (&optional windows)
+  "One redisplay: `pre-redisplay-functions' for each of WINDOWS (the selected one), then each bar."
+  (let ((ws (or windows (list (selected-window)))))
+    (dolist (w ws) (drgnx-statusbar--pre-redisplay w))
+    (mapcar (lambda (w) (with-selected-window w (drgnx-statusbar-mode-line))) ws)))
+
+(ert-deftest drgnx-statusbar/a-live-entry-is-formatted-once-per-redisplay-for-four-windows-on-one-buffer ()
+  (drgnx-statusbar-test--counted
+    (let ((drgnx-statusbar-test--live-calls 0) (drgnx-statusbar-test--clock "10:00")
+          (drgnx-statusbar-compact '(misc)))
+      (cl-letf (((symbol-function 'format-mode-line) #'drgnx-statusbar-test--format-mode-line))
+        (setq global-mode-string '((:eval (drgnx-statusbar-test--live))))
+        (let* ((w1 (selected-window)) (w2 (split-window-right)) (w3 (split-window-below))
+               (w4 (with-selected-window w2 (split-window-below))) (ws (list w1 w2 w3 w4)))
+          (unwind-protect
+              (progn
+                (dolist (w (cdr ws)) (set-window-buffer w (window-buffer w1)))
+                (dotimes (i 3)
+                  (dolist (bar (drgnx-statusbar-test--redisplay ws)) (should (string-match-p "10:00" bar)))
+                  (should (= drgnx-statusbar-test--live-calls (1+ i))))      ; once per redisplay, not per window
+                (mapc (lambda (w) (with-selected-window w (drgnx-statusbar-mode-line))) ws)   ; no redisplay
+                (should (= drgnx-statusbar-test--live-calls 3)))
+            (dolist (w (cdr ws)) (delete-window w))))))))
+
+(defvar-local drgnx-statusbar-test--local nil "Buffer-local state an entry of the tests reads.")
+(defvar drgnx-statusbar-test--local-calls 0 "How many times the buffer-dependent entry was formatted.")
+
+(defun drgnx-statusbar-test--local-text ()
+  (setq drgnx-statusbar-test--local-calls (1+ drgnx-statusbar-test--local-calls))
+  (or drgnx-statusbar-test--local ""))
+
+(ert-deftest drgnx-statusbar/a-buffer-dependent-entry-shows-each-buffers-own-value ()
+  ;; An entry that reads buffer-local state (lsp-mode's `(:eval …)' entries, a minor mode's conditional) is formatted
+  ;; in each bar's own buffer, once per buffer per redisplay: never the text of whichever bar was drawn first.
+  (drgnx-statusbar-test--counted
+    (let ((drgnx-statusbar-test--local-calls 0) (drgnx-statusbar-compact '(misc))
+          (b (generate-new-buffer " *sb-other*")))
+      (cl-letf (((symbol-function 'format-mode-line) #'drgnx-statusbar-test--format-mode-line))
+        (setq global-mode-string '((:eval (drgnx-statusbar-test--local-text))))
+        (setq-local drgnx-statusbar-test--local "LOCAL")
+        (with-current-buffer b (emacs-lisp-mode))
+        (let* ((w1 (selected-window)) (w2 (split-window-right)) (w3 (split-window-below)))
+          (unwind-protect
+              (progn
+                (set-window-buffer w2 b)
+                (set-window-buffer w3 b)
+                (dolist (ws (list (list w1 w2 w3) (list w2 w3 w1)))     ; whichever bar is drawn first
+                  (let ((calls drgnx-statusbar-test--local-calls)
+                        (bars (drgnx-statusbar-test--redisplay ws)))
+                    (dolist (pair (cl-mapcar #'cons ws bars))
+                      (if (eq (car pair) w1)
+                          (should (string-match-p "LOCAL" (cdr pair)))
+                        (should-not (string-match-p "LOCAL" (cdr pair)))))
+                    (should (= drgnx-statusbar-test--local-calls (+ calls 2)))))) ; once per buffer, not per window
+            (delete-window w2) (delete-window w3)
+            (kill-buffer b)))))))
+
+(ert-deftest drgnx-statusbar/a-let-of-global-mode-string-is-seen ()
+  ;; a `let' moves no epoch, but the entries are read again when the variable's value is not the one they were read
+  ;; from (two `eq' tests): the bar shows the let-bound entries, and the old ones once the `let' is over
+  (drgnx-statusbar-test--counted
+    (cl-letf (((symbol-function 'format-mode-line) #'drgnx-statusbar-test--format-mode-line))
+      (setq global-mode-string '("OUTER"))
+      (should (string-match-p "OUTER" (car (drgnx-statusbar-test--redisplay))))
+      (let ((global-mode-string '("INNER")))
+        (should (string-match-p "INNER" (car (drgnx-statusbar-test--redisplay)))))
+      (should (string-match-p "OUTER" (car (drgnx-statusbar-test--redisplay)))))))
+
+(ert-deftest drgnx-statusbar/a-live-entry-is-real-time ()
+  (drgnx-statusbar-test--counted
+    (let ((drgnx-statusbar-test--clock "10:00") (drgnx-statusbar-test--live-calls 0))
+      (cl-letf (((symbol-function 'format-mode-line) #'drgnx-statusbar-test--format-mode-line))
+        (setq global-mode-string '(drgnx-statusbar-test--clock))   ; a symbol: its value changes unannounced
+        (should (string-match-p "10:00" (car (drgnx-statusbar-test--redisplay))))
+        (setq drgnx-statusbar-test--clock "10:01")
+        (should (string-match-p "10:01" (car (drgnx-statusbar-test--redisplay))))
+        ;; the same text on the next redisplay: the same string, so the memo hits
+        (let ((text (drgnx-statusbar--misc)))
+          (drgnx-statusbar--pre-redisplay (selected-window))
+          (should (eq text (drgnx-statusbar--misc)))
+          (should-not (drgnx-statusbar-test--rebuilt-p)))))))
+
+(ert-deftest drgnx-statusbar/a-static-entry-is-formatted-only-when-misc-info-bumps ()
+  (drgnx-statusbar-test--counted
+    (let* ((entry '(:propertize "STATIC" face bold)) (formats 0)
+           (static-text (symbol-function 'drgnx-statusbar--static-text)))
+      (cl-letf (((symbol-function 'format-mode-line) #'drgnx-statusbar-test--format-mode-line)
+                ((symbol-function 'drgnx-statusbar--static-text)
+                 (lambda (c)
+                   (when (eq c entry) (setq formats (1+ formats)))
+                   (funcall static-text c))))
+        (setq global-mode-string (list entry))
+        (should (string-match-p "STATIC" (car (drgnx-statusbar-test--redisplay))))
+        (should (memq entry (mapcar #'drgnx-statusbar--entry-form (car (drgnx-statusbar--misc-entries)))))   ; static
+        (should-not (memq entry (mapcar #'drgnx-statusbar--entry-form (cdr (drgnx-statusbar--misc-entries)))))
+        (should (= formats 1))
+        (dotimes (_ 5) (drgnx-statusbar-test--redisplay))
+        (should (= formats 1))
+        (setq global-mode-string (list entry "TWO"))                 ; the list changed: read and formatted again
+        (should (string-match-p "STATICTWO" (car (drgnx-statusbar-test--redisplay))))
+        (should (= formats 2))))))
+
+;; A slow and a fast entry on a clock of the test's own: formatting the slow one takes 2 ms, the fast one 0.1 ms.
+(defvar drgnx-statusbar-test--now 0.0 "What `drgnx-timer-now' says in the slow-entry tests.")
+(defvar drgnx-statusbar-test--slow-secs 0.002 "How long the slow entry takes to format.")
+(defvar drgnx-statusbar-test--slow-calls 0)
+(defvar drgnx-statusbar-test--fast-calls 0)
+(defvar drgnx-statusbar-test--slow-text "SLOW")
+
+(defun drgnx-statusbar-test--slow ()
+  (setq drgnx-statusbar-test--slow-calls (1+ drgnx-statusbar-test--slow-calls)
+        drgnx-statusbar-test--now (+ drgnx-statusbar-test--now drgnx-statusbar-test--slow-secs))
+  drgnx-statusbar-test--slow-text)
+
+(defun drgnx-statusbar-test--fast ()
+  (setq drgnx-statusbar-test--fast-calls (1+ drgnx-statusbar-test--fast-calls)
+        drgnx-statusbar-test--now (+ drgnx-statusbar-test--now 0.0001))
+  "FAST")
+
+(defun drgnx-statusbar-test--report ()
+  "The slow entries the bar last reported (statusbar-slow.eld in the state dir)."
+  (plist-get (drgnx-file-read (expand-file-name "statusbar-slow.eld" (drgnx-state-dir))) :data))
+
+(defmacro drgnx-statusbar-test--slow-case (&rest body)
+  "BODY with a slow and a fast entry in `global-mode-string', on the virtual clock, with a state dir of its own."
+  (declare (indent 0))
+  `(let* ((state (make-temp-file "drgnx-sb-state" t))
+          (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment)))
+     (unwind-protect
+         (drgnx-statusbar-test--counted
+           (let ((drgnx-statusbar-test--now 0.0) (drgnx-statusbar-test--slow-secs 0.002)
+                 (drgnx-statusbar-test--slow-calls 0) (drgnx-statusbar-test--fast-calls 0)
+                 (drgnx-statusbar-test--slow-text "SLOW"))
+             (cl-letf (((symbol-function 'format-mode-line) #'drgnx-statusbar-test--format-mode-line)
+                       ((symbol-function 'drgnx-timer-now) (lambda () drgnx-statusbar-test--now)))
+               (drgnx-test-with-clock ()
+                 (setq global-mode-string '((:eval (drgnx-statusbar-test--slow)) (:eval (drgnx-statusbar-test--fast))))
+                 (unwind-protect (progn ,@body) (drgnx-timer-cancel 'statusbar-misc-slow))))))
+       (delete-directory state t))))
+
+(ert-deftest drgnx-statusbar/a-slow-entry-falls-back-alone ()
+  (drgnx-statusbar-test--slow-case
+    (dotimes (_ 7) (drgnx-statusbar-test--redisplay))
+    (should-not (drgnx-timer-active-p 'statusbar-misc-slow))      ; judged after 8 samples
+    (drgnx-statusbar-test--redisplay)
+    (should (= drgnx-statusbar-test--slow-calls 8))
+    (should (drgnx-timer-active-p 'statusbar-misc-slow))          ; 2 ms on average: slow
+    ;; from now on: the fast one every redisplay, the slow one only by the timer, once a second
+    (dotimes (_ 5) (should (string-match-p "SLOWFAST" (car (drgnx-statusbar-test--redisplay)))))
+    (should (= drgnx-statusbar-test--slow-calls 8))
+    (should (= drgnx-statusbar-test--fast-calls 13))
+    (setq drgnx-statusbar-test--slow-text "SLOW2")
+    (drgnx-test-advance 1)
+    (should (= drgnx-statusbar-test--slow-calls 9))
+    (should (string-match-p "SLOW2FAST" (car (drgnx-statusbar-test--redisplay))))
+    (drgnx-test-advance 2)
+    (should (= drgnx-statusbar-test--slow-calls 11))
+    ;; the report names it, with its cost, for the doctor
+    (let ((report (drgnx-statusbar-test--report)))
+      (should (= 1 (length report)))
+      (should (string-search "drgnx-statusbar-test--slow" (plist-get (car report) :entry)))
+      (should (>= (plist-get (car report) :avg-ms) 1.0))
+      (should (numberp (plist-get (car report) :since))))))
+
+(ert-deftest drgnx-statusbar/the-slow-timer-exists-only-while-a-slow-entry-does ()
+  (drgnx-statusbar-test--slow-case
+    (setq drgnx-statusbar-test--slow-secs 0.0001)                  ; both fast: no timer
+    (dotimes (_ 10) (drgnx-statusbar-test--redisplay))
+    (should-not (drgnx-timer-active-p 'statusbar-misc-slow))
+    (should-not (seq-some #'drgnx-statusbar--entry-slow drgnx-statusbar--misc-all))
+    (setq drgnx-statusbar-test--slow-secs 0.002)                   ; slow from now on
+    (dotimes (_ 10) (drgnx-statusbar-test--redisplay))
+    (should (drgnx-timer-active-p 'statusbar-misc-slow))
+    ;; the entries change (the list is set again): every average is forgotten, the slow one is live again, and the
+    ;; next tick writes the report and cancels the timer
+    (setq global-mode-string (copy-sequence global-mode-string))
+    (drgnx-statusbar-test--redisplay)
+    (should-not (seq-some #'drgnx-statusbar--entry-slow drgnx-statusbar--misc-all))
+    (drgnx-test-advance 1)
+    (should-not (drgnx-timer-active-p 'statusbar-misc-slow))
+    (should-not (drgnx-statusbar-test--report))))
+
+(ert-deftest drgnx-statusbar/a-slow-entry-that-gets-fast-is-live-again ()
+  (drgnx-statusbar-test--slow-case
+    (dotimes (_ 8) (drgnx-statusbar-test--redisplay))
+    (should (drgnx-timer-active-p 'statusbar-misc-slow))
+    (drgnx-test-advance 1)
+    (should (drgnx-statusbar-test--report))
+    (setq drgnx-statusbar-test--slow-secs 0.0001)                  ; under half the limit from now on
+    (drgnx-test-advance 7)
+    (should (drgnx-timer-active-p 'statusbar-misc-slow))           ; 7 fast ticks: still slow
+    (drgnx-test-advance 1)
+    (should-not (drgnx-timer-active-p 'statusbar-misc-slow))       ; 8: live again, the timer gone
+    (should-not (drgnx-statusbar-test--report))
+    (let ((calls drgnx-statusbar-test--slow-calls))
+      (dotimes (_ 3) (drgnx-statusbar-test--redisplay))
+      (should (= drgnx-statusbar-test--slow-calls (+ calls 3))))))  ; formatted on every redisplay again
+
+(require 'drgnx-doctor)
+
+(ert-deftest drgnx-doctor/statusbar-ok-after-the-entry-is-gone ()
+  ;; The last session reported a slow entry; this one has none (you removed it, or its package made it cheaper).
+  ;; Turning the bar on rewrites the report once, a second later from the timer layer (never from redisplay), so
+  ;; the doctor stops naming the entry.
+  (drgnx-statusbar-test--slow-case
+    (setq global-mode-string nil)
+    (let ((file (expand-file-name "statusbar-slow.eld" (drgnx-state-dir)))
+          (was drgnx-statusbar-mode) (drgnx-signal--subscribers nil)
+          (drgnx-chrome-editor-mode-line drgnx-chrome-editor-mode-line))
+      (drgnx-file-write file '((:entry "(:eval (gone))" :avg-ms 3.0 :since 1.0)) :fsync nil)
+      (should (eq 'warn (car (drgnx-doctor-check 'statusbar-misc (list :statusbar-slow (drgnx-statusbar-test--report))))))
+      (cl-letf (((symbol-function 'drgnx-chrome-apply) #'ignore))
+        (unwind-protect
+            (progn
+              (drgnx-statusbar-mode 1)
+              (should (drgnx-statusbar-test--report))                   ; not written by the mode itself
+              (drgnx-test-advance 1)
+              (should (file-exists-p file))
+              (should-not (drgnx-statusbar-test--report))               ; the current set: none
+              (should (eq 'ok (car (drgnx-doctor-check 'statusbar-misc
+                                                       (list :statusbar-slow (drgnx-statusbar-test--report)))))))
+          (drgnx-statusbar-mode (if was 1 -1)))))))
 
 (provide 'mod-statusbar-test)
 ;;; mod-statusbar-test.el ends here

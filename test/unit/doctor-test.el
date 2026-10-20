@@ -688,3 +688,30 @@
             (should (string-search "from the last session, 2 h ago" (nth 1 r)))
             (should (equal (nth 2 r) "report the error; drgnx starts the timer again at the next start"))))
       (delete-directory state t))))
+
+(ert-deftest drgnx-doctor/statusbar-ok-without-a-report ()
+  (let ((r (drgnx-doctor-check 'statusbar-misc (drgnx-doctor-test--facts))))
+    (should (eq (car r) 'ok))
+    (should (equal (nth 1 r) "every entry is formatted in real time"))))
+
+(ert-deftest drgnx-doctor/statusbar-names-a-slow-entry ()
+  ;; the fact reads the status bar's report from the state dir; the check names each slow entry with its cost
+  (let* ((state (make-temp-file "drgnx-state" t))
+         (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment)))
+    (unwind-protect
+        (progn
+          (should-not (drgnx-doctor--state-file "statusbar-slow.eld"))
+          (make-directory (expand-file-name "drgnx" state))
+          (with-temp-file (expand-file-name "drgnx/statusbar-slow.eld" state)
+            (prin1 '((:entry "(:eval (my-clock))" :avg-ms 2.5 :since 1.0)) (current-buffer)))
+          (set-file-times (expand-file-name "drgnx/statusbar-slow.eld" state) (time-subtract nil 7200))
+          (let* ((slow (drgnx-doctor--state-file "statusbar-slow.eld"))
+                 (r (drgnx-doctor-check 'statusbar-misc
+                                        (drgnx-doctor-test--facts
+                                         :statusbar-slow slow
+                                         :statusbar-slow-time (drgnx-doctor--state-file-time "statusbar-slow.eld")))))
+            (should (eq (car r) 'warn))
+            (should (equal (nth 1 r) (concat "(:eval (my-clock)) takes 2.5 ms per redisplay: refreshed once a second"
+                                             " (reported 2 h ago)")))
+            (should (equal (nth 2 r) "ask its package for a cheaper `:eval', or remove it from `mode-line-misc-info'"))))
+      (delete-directory state t))))

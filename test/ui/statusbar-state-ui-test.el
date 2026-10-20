@@ -10,6 +10,7 @@
 (dolist (m '("ui/drgnx-face" "ui/drgnx-statusbar"))
   (load (expand-file-name (concat "modules/" m) drgnx-statusbar-state-ui-test--repo) nil t))
 (require 'drgnx-state)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-statusbar-state-ui-test--repo) nil t)   ; `drgnx-test-wait'
 
 (defmacro drgnx-statusbar-state-ui-test--with (drawn &rest body)
   "BODY with two probe segments (full: `fprobe', compact: `cprobe') that record in the hash table DRAWN, per window,
@@ -21,7 +22,6 @@ moved the bar), and the status bar mode on; the session's modes and variables co
          (drgnx-signal-delay 3600)
          (drgnx-statusbar--segments (make-hash-table :test #'eq))
          (drgnx-statusbar--errors nil)
-         (drgnx-statusbar--memo (make-hash-table :test #'eq :weakness 'key))
          (drgnx-statusbar-left '(fprobe))
          (drgnx-statusbar-right nil)
          (drgnx-statusbar-compact '(cprobe)))
@@ -82,6 +82,9 @@ moved the bar), and the status bar mode on; the session's modes and variables co
   (let* ((buf (get-buffer-create "*drgnx-statusbar-frames*"))
          (root (drgnx-uitest-root-frame))         ; before the second frame exists: it may become the "first" one
          (aux (make-frame '((name . "drgnx statusbar aux") (width . 80) (height . 20)))))
+    ;; the compositor maps a new frame when it gets to it (pgtk under mutter: after `make-frame' returned), and
+    ;; redisplay skips a frame that is not mapped yet: its bars would never be drawn
+    (drgnx-test-wait (lambda () (eq (frame-visible-p aux) t)) :secs 10 :what "the second frame is mapped")
     (with-current-buffer buf (emacs-lisp-mode) (insert "(a)\n(b)\n"))
     (with-selected-frame root
       (delete-other-windows)
@@ -106,6 +109,8 @@ moved the bar), and the status bar mode on; the session's modes and variables co
               (should (eq (drgnx-state-editor-window aux) a2))
               (force-mode-line-update t)
               (clrhash drawn)
+              (should (eq (frame-visible-p aux) t))
+              (should (window-live-p a1))
               (redisplay t)
               (should (eq (gethash r1 drawn) 'full))
               (should (eq (gethash r2 drawn) 'compact))

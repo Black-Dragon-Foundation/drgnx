@@ -16,11 +16,13 @@
 ;; The editor is the workbench state store's (`drgnx-state-editor-window'); a frame resize reaches the line as the
 ;; store's `frame-resized' event (a redraw request, on the `now' lane), and a new or resized frame gets its number of
 ;; lines decided on the `idle' lane (that may resize windows).
-;; What the line makes is memoized on what it shows (the editor buffer, its `vc-mode' text, directory and cached
-;; project, the frame and its width, the keys, the glyph forms), so a redisplay that changes nothing costs a few
-;; comparisons.  An error while making it never escapes: the line shows its mark alone for a few seconds (an
-;; empty tab bar is taken away by Emacs, which resizes every window), and nothing here then touches the frames.  A
-;; timer (`topline-retry') then ends the failure and redraws every tab bar, so an idle frame needs no command.
+;; What the line makes is memoized per frame (the memo `topline', docs/develop/core.md "Memo clients") on what it
+;; shows: the editor buffer, its directory, file and cached project, the frame's width, the keys, the glyph forms, and
+;; two epochs the status bar declares, `buffer-look' (its `vc-mode' text) and `git' (a repository's branch changed),
+;; so a redisplay that changes nothing costs a few comparisons and reads no cache.  An error while making it never
+;; escapes: the line shows its mark alone for a few seconds (an empty tab bar is taken away by Emacs, which resizes
+;; every window), and nothing here then touches the frames.  A timer (`topline-retry') then ends the failure and
+;; redraws every tab bar, so an idle frame needs no command.
 ;; Only terminal frames get their number of lines decided here (a graphical frame has one, from `tab-bar-mode'),
 ;; and a decision is made once, never repeated against what redisplay has done since.  A tab-bar format of your
 ;; own, or a tab bar that was on before this module, is never replaced.  See docs/guide/face.md ("The top line").
@@ -32,6 +34,7 @@
 (require 'drgnx-registry)
 (require 'drgnx-timer)
 (require 'drgnx-state)
+(require 'drgnx-memo)
 (declare-function drgnx-face-glyph "drgnx-face")
 (declare-function drgnx-face-drawn-title-p "drgnx-face")
 (declare-function drgnx-surfaces-key "drgnx-surfaces")
@@ -47,6 +50,7 @@
 (defvar vc-mode)
 (defvar drgnx-chrome--root)
 (defvar drgnx-face-glyphs)
+(defvar drgnx-git-changed-functions)
 
 (defgroup drgnx-topline nil
   "The top line: project and branch, the keys that open everything, window controls."
@@ -229,64 +233,53 @@ left out), each one running its command.  nil when none has a key."
 
 ;;;; The memo: a redisplay that changes nothing reuses the line
 
-(defvar drgnx-topline--memo (make-hash-table :test #'eq :weakness 'key)
-  "Frame → the vector of the items last made for it and what they were made from, compared in place so a redisplay
-that changes nothing allocates nothing: [FRAME BUFFER VC-MODE DIRECTORY PROJECT-CACHE WIDTH DRAWN, then for each of the
-three hint commands its command and its keys, GLYPHS ITEMS, GIT-ROOT BRANCH-PLIST ROOTS-KNOWN FILE].  One vector per
-frame (the tab bar of each frame is drawn with that frame selected, so two frames would otherwise make the line again
-at every redisplay), weak on the frame, so a deleted frame's goes with it.  The vector holds the editor's buffer
-strongly: a killed buffer is kept until that frame's next redisplay replaces it (a few objects that are otherwise
-gone; it never accumulates).")
+(defconst drgnx-topline--look-epoch 'buffer-look
+  "The epoch that moves when a buffer's `vc-mode' text is set (declared by drgnx-statusbar.el, which loads first).
+Named through this constant: `drgnx-epoch' checks a literal name when the code is compiled, and the build compiles
+this file alone.")
 
-(defun drgnx-topline--forget ()
-  "Empty the memo."
-  (clrhash drgnx-topline--memo))
+(defconst drgnx-topline--git-epoch 'git
+  "The epoch that moves when a repository's branch was read again (declared by drgnx-statusbar.el; see
+`drgnx-topline--look-epoch').")
 
-(defun drgnx-topline--same-p (m frame buffer width drawn)
-  "Non-nil when the memo vector M was made from exactly these: FRAME, BUFFER (its `vc-mode' text, file, directory,
-project cache and git cache entry), WIDTH columns, DRAWN, the hint commands and their keys, and the glyph table.
-Allocates nothing."
-  (let ((i 7) (same t))
-    (and (eq (aref m 0) frame) (eq (aref m 1) buffer)
-         (eq (aref m 2) (buffer-local-value 'vc-mode buffer))
-         (eq (aref m 3) (buffer-local-value 'default-directory buffer))
-         (eq (aref m 4) (and (boundp 'drgnx-chrome--root) (buffer-local-value 'drgnx-chrome--root buffer)))
-         (eql (aref m 5) width) (eq (aref m 6) drawn)
-         (eq (aref m 13) drgnx-face-glyphs)
-         (eq (aref m 18) (buffer-local-value 'buffer-file-name buffer))
-         ;; the git cache: the branch plist of the root found (a status run makes a new one), else whether the cache
-         ;; has learnt more folders' roots since (one of them may be this buffer's)
-         (let ((root (aref m 15)))
-           (if root
-               (eq (aref m 16) (drgnx-git-branch root))
-             (eql (aref m 17) (and (fboundp 'drgnx-git-roots-known) (drgnx-git-roots-known)))))
-         (dolist (spec drgnx-topline--hint-commands same)
-           (let ((cmd (drgnx-commands-get (car spec))))
-             (unless (and (eq (aref m i) (and cmd (drgnx-cmd-command cmd)))
-                          (eq (aref m (1+ i)) (and cmd (drgnx-cmd-bound cmd))))
-               (setq same nil))
-             (setq i (+ i 2)))))))
+(defsubst drgnx-topline--hint-command (id)
+  "The command of hint command ID, or nil.  A memo key: allocates nothing."
+  (let ((cmd (drgnx-commands-get id))) (and cmd (drgnx-cmd-command cmd))))
 
-(defun drgnx-topline--stamp (m frame buffer width drawn items)
-  "Remember ITEMS in the memo vector M with what they were made from (see `drgnx-topline--same-p')."
-  (let ((i 7))
-    (aset m 0 frame) (aset m 1 buffer)
-    (aset m 2 (buffer-local-value 'vc-mode buffer))
-    (aset m 3 (buffer-local-value 'default-directory buffer))
-    (aset m 4 (and (boundp 'drgnx-chrome--root) (buffer-local-value 'drgnx-chrome--root buffer)))
-    (aset m 5 width) (aset m 6 drawn)
-    (aset m 13 drgnx-face-glyphs) (aset m 14 items)
-    (let ((root (drgnx-topline--git-root buffer)))
-      (aset m 15 root)
-      (aset m 16 (and root (drgnx-git-branch root)))
-      (aset m 17 (and (fboundp 'drgnx-git-roots-known) (drgnx-git-roots-known))))
-    (aset m 18 (buffer-local-value 'buffer-file-name buffer))
-    (dolist (spec drgnx-topline--hint-commands)
-      (let ((cmd (drgnx-commands-get (car spec))))
-        (aset m i (and cmd (drgnx-cmd-command cmd)))
-        (aset m (1+ i) (and cmd (drgnx-cmd-bound cmd)))
-        (setq i (+ i 2))))
-    items))
+(defsubst drgnx-topline--hint-bound (id)
+  "The keys of hint command ID, or nil.  A memo key: allocates nothing."
+  (let ((cmd (drgnx-commands-get id))) (and cmd (drgnx-cmd-bound cmd))))
+
+;; One stored line per frame (the tab bar of each frame is drawn with that frame selected, so one for all would make
+;; the line again at every redisplay), weak on the frame.  It holds the editor's buffer strongly: a killed buffer is
+;; kept until that frame's next redisplay replaces it (it never accumulates).  BUFFER, WIDTH and DRAWN are
+;; `drgnx-topline--line''s.  The branch is not read from the git cache here: the epoch `git' moves when a status run
+;; read a new branch, and the count of folders whose repository is known moves when the cache may answer for this
+;; buffer's folder (a status run of a root it already knew moves no epoch).
+(drgnx-memo-define topline :on frame
+                   :keys (buffer
+                          (drgnx-epoch drgnx-topline--look-epoch buffer)
+                          (buffer-local-value 'default-directory buffer)
+                          (and (boundp 'drgnx-chrome--root) (buffer-local-value 'drgnx-chrome--root buffer))
+                          (buffer-local-value 'buffer-file-name buffer)
+                          width drawn drgnx-face-glyphs
+                          (drgnx-epoch drgnx-topline--git-epoch)
+                          (and (fboundp 'drgnx-git-roots-known) (drgnx-git-roots-known))
+                          ;; one pair per entry of `drgnx-topline--hint-commands'
+                          (drgnx-topline--hint-command 'go-quick-open) (drgnx-topline--hint-bound 'go-quick-open)
+                          (drgnx-topline--hint-command 'palette) (drgnx-topline--hint-bound 'palette)
+                          (drgnx-topline--hint-command 'keys-sheet) (drgnx-topline--hint-bound 'keys-sheet))
+                   :doc "Frame → the top line's items.")
+
+(defconst drgnx-topline--declared '(buffer-look git topline)
+  "The epochs and the memo `drgnx-topline-setup' activates (the status bar activates the epochs too; the watchers stay
+until both are off).")
+
+(defun drgnx-topline--git-changed (&optional root &rest _)
+  "On `drgnx-git-changed-functions' (ROOT's status was read), while the status bar is off: move the epoch `git' for
+ROOT.  While the status bar is on it moves the epoch itself, only when the branch changed."
+  (when (and root (not (bound-and-true-p drgnx-statusbar-mode)))
+    (drgnx-epoch-bump drgnx-topline--git-epoch root)))
 
 (defvar drgnx-topline--error nil
   "The message of the error the line last failed with, or nil while it works.  Never shown as a message.
@@ -322,11 +315,8 @@ alone for `drgnx-topline-retry-seconds'.  A memo hit allocates nothing."
                (buffer (if (window-live-p window) (window-buffer window) (current-buffer)))
                (width (frame-text-cols frame))   ; `frame-width' conses ~140 cells and 14 strings per call
                (drawn (and (drgnx-topline--drawn-title-p frame) t)))
-          (let ((m (or (gethash frame drgnx-topline--memo) (puthash frame (make-vector 19 nil) drgnx-topline--memo))))
-            (unless (drgnx-topline--same-p m frame buffer width drawn)
-              (drgnx-topline--stamp m frame buffer width drawn (drgnx-topline--build buffer width drawn)))
-            (setq drgnx-topline--error nil drgnx-topline--error-at nil)
-            (aref m 14)))
+          (prog1 (drgnx-memo topline frame (drgnx-topline--build buffer width drawn))
+            (setq drgnx-topline--error nil drgnx-topline--error-at nil)))
       ;; An error would leave the tab bar without items, which Emacs answers by taking the line away; and then
       ;; every redisplay would give it back and take it away again.
       (error (setq drgnx-topline--error (error-message-string err) drgnx-topline--error-at (drgnx-topline--now))
@@ -345,13 +335,13 @@ Without it the line came back only with the next command (an idle frame stayed o
   (if (consp arg) (plist-get arg :frame) arg))
 
 (defun drgnx-topline--resized (data)
-  "On the store's `frame-resized' (`now' lane): redraw the tab bar when the frame in DATA is not the width the line
-was made for.  Only asks for a redraw; never touches `tab-bar-lines'.  Does nothing while the line is failing."
+  "On the store's `frame-resized' (`now' lane): redraw the tab bar when the frame in DATA changed its number of
+columns (`:cols' of DATA's `:old' and `:new'); a change of height alone redraws nothing.  Only asks for a redraw;
+never touches `tab-bar-lines'.  Does nothing while the line is failing."
   (let ((frame (drgnx-topline--frame-of data)))
-    (when (and (not drgnx-topline--error) (frame-live-p frame) (not (eq (drgnx-state-frame-kind frame) 'child)))
-      (let ((m (gethash frame drgnx-topline--memo)))
-        (unless (and m (eql (aref m 5) (frame-text-cols frame)))
-          (force-mode-line-update t))))))
+    (when (and (not drgnx-topline--error) (frame-live-p frame) (not (eq (drgnx-state-frame-kind frame) 'child))
+               (not (eql (plist-get (plist-get data :old) :cols) (plist-get (plist-get data :new) :cols))))
+      (force-mode-line-update t))))
 
 (defun drgnx-topline-format ()
   "The `tab-bar-format' list that draws the top line (one function, `drgnx-topline--line')."
@@ -441,6 +431,7 @@ text frame, whose size and parameters (the top line's among them) the window's f
   (add-hook 'emacs-startup-hook #'drgnx-topline--fit-all)
   (add-hook 'window-setup-hook #'drgnx-topline--fit-all)
   (when (fboundp 'drgnx-signal-subscribe) (drgnx-signal-subscribe 'editor-changed #'drgnx-topline--note-editor))
+  (add-hook 'drgnx-git-changed-functions #'drgnx-topline--git-changed)
   (unless (drgnx-timer-active-p 'topline-first-note)     ; the project of the editor that is open now, once, when idle
     (drgnx-timer-start 'topline-first-note 0.5 #'drgnx-topline--first-note :idle t :owner 'ui/face))
   (tab-bar-mode 1)
@@ -456,11 +447,12 @@ text frame, whose size and parameters (the top line's among them) the window's f
   (remove-hook 'emacs-startup-hook #'drgnx-topline--fit-all)
   (remove-hook 'window-setup-hook #'drgnx-topline--fit-all)
   (when (fboundp 'drgnx-signal-unsubscribe) (drgnx-signal-unsubscribe 'editor-changed #'drgnx-topline--note-editor))
+  (remove-hook 'drgnx-git-changed-functions #'drgnx-topline--git-changed)
   (when drgnx-topline--saved
     (let ((saved drgnx-topline--saved) (format drgnx-topline--format))
       (setq drgnx-topline--saved nil drgnx-topline--format nil
             drgnx-topline--error nil drgnx-topline--error-at nil)
-      (drgnx-topline--forget)
+      (drgnx-memo-forget 'topline)
       (when-let* ((spec (plist-get saved :face))) (face-spec-set 'tab-bar spec 'face-defface-spec))
       (dolist (f (frame-list))
         (set-frame-parameter f 'tab-bar-lines-keep-state nil)
@@ -481,7 +473,9 @@ tab bar was already on before this module (then it is theirs)."
     (drgnx-topline--off)))
 
 (defun drgnx-topline-setup ()
-  "Turn the top line on (called by the module ui/face)."
+  "Turn the top line on (called by the module ui/face), with its epochs and memo active (`drgnx-topline--declared':
+their watchers go, and the memo empties, when `ui/face' is turned off)."
+  (apply #'drgnx-memo-activate drgnx-topline--declared)
   (setq drgnx-topline--active t)
   (drgnx-topline--apply))
 
