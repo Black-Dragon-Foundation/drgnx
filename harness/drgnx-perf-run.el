@@ -853,7 +853,7 @@ when a step fails."
       (unwind-protect
           (progn
             (when (plist-get spec :setup) (drgnx-perf-run--call sess (plist-get spec :setup) 120) (drgnx-ui-measure sess nil))
-            (let (runs audit-rows)
+            (let (runs audit-rows audit-hooks)
               (dotimes (_ (or (plist-get spec :repeat) 3))
                 (when (plist-get spec :each) (drgnx-perf-run--call sess (plist-get spec :each) 120) (drgnx-ui-measure sess nil))
                 (if (not actions)
@@ -864,12 +864,17 @@ when a step fails."
                                 (and measure (drgnx-perf-run--call sess measure 120)))   ; what input cannot show
                         runs)
                   (when audit
-                    (setq audit-rows (append audit-rows (append (drgnx-perf-run--call sess "(vconcat (seq-take (drgnx-perf-audit-end) 30))") nil)))))
+                    (let ((r (drgnx-perf-run--call sess "(let ((rows (vconcat (seq-take (drgnx-perf-audit-end) 30)))) (list :rows rows :hooks (drgnx-perf-audit-hooks)))")))
+                      (setq audit-rows (append audit-rows (append (plist-get r :rows) nil)))
+                      (push (list :hooks (plist-get r :hooks)) audit-hooks))))
                 (when (plist-get spec :check)
                   (unless (eq t (drgnx-perf-run--call sess (plist-get spec :check)))
                     (error "The workload did not do what it measures (%s)" (plist-get spec :check)))))
               (let ((r (drgnx-perf-run--medians runs)))
-                (if audit (plist-put r :audit (vconcat audit-rows)) r))))
+                (if audit
+                    (plist-put (plist-put r :audit (vconcat audit-rows))
+                               :hooks (plist-get (drgnx-perf-run--medians audit-hooks) :hooks))
+                  r))))
         ;; never leave the probes or the audit on, nor what the workload made
         (ignore-errors (drgnx-perf-run--call sess "(progn (when drgnx-perf--audit (drgnx-perf-audit-end)) (drgnx-perf-end) t)"))
         (when (plist-get spec :teardown) (ignore-errors (drgnx-perf-run--call sess (plist-get spec :teardown))))))))
@@ -883,80 +888,112 @@ when a step fails."
 
 (defun drgnx-perf-run--table (results)
   (mapconcat (lambda (r)
-               (let ((p (cdr r)))
+               (let* ((p (cdr r)) (loaded (plist-get (plist-get p :calibration) :loaded)))
                  (format "%-13s %s" (car r)
                          (string-join
-                          (delq nil (list (when-let* ((i (plist-get p :input))) (format "input p50 %s p95 %s max %s ms (n=%s)" (plist-get i :p50) (plist-get i :p95) (plist-get i :max) (plist-get i :n)))
-                                          (when (plist-get p :gc_count) (format "gc %s/%s ms (pause p95 %s)" (plist-get p :gc_count) (plist-get p :gc_ms)
-                                                                                (or (plist-get (plist-get p :gc_pause) :p95) "-")))
+                          (delq nil (list (when-let* ((i (plist-get p :input)))
+                                            (format "input p50 %s p90 %s max %s ms (n=%s)%s" (plist-get i :p50) (plist-get i :p90) (plist-get i :max) (plist-get i :n)
+                                                    (if loaded " (loaded)" "")))
+                                          (when-let* ((a (plist-get p :alloc))) (format "alloc p50 %s objects" (plist-get a :p50)))
+                                          (when-let* ((c (plist-get p :cpu_ms))) (format "cpu p90 %s ms" (plist-get c :p90)))
+                                          (when (and (plist-get p :input) (numberp (plist-get p :rows))) (format "rows %s" (plist-get p :rows)))
+                                          (when (plist-get p :gc_count) (format "gc %s/%s ms (pause p90 %s)" (plist-get p :gc_count) (plist-get p :gc_ms)
+                                                                                (or (plist-get (plist-get p :gc_pause) :p90) "-")))
                                           (when (plist-get p :draw_ms) (format "drawn in %s ms, %s processes started" (plist-get p :draw_ms) (plist-get p :processes)))
-                                          (when-let* ((f (plist-get p :frame))) (format "frame p50 %s p95 %s ms" (plist-get f :p50) (plist-get f :p95)))
-                                          (when-let* ((d (plist-get p :redisplay))) (format "redisplay p50 %s p95 %s ms" (plist-get d :p50) (plist-get d :p95)))
-                                          (when-let* ((sv (plist-get p :server_ms))) (format "daemon server ready p50 %s max %s ms, modules %s ms" (plist-get sv :p50) (plist-get sv :max) (plist-get p :modules_ms)))
+                                          (when-let* ((f (plist-get p :frame))) (format "frame p50 %s p90 %s ms%s" (plist-get f :p50) (plist-get f :p90) (if loaded " (loaded)" "")))
+                                          (when-let* ((d (plist-get p :redisplay))) (format "redisplay p50 %s p90 %s ms%s" (plist-get d :p50) (plist-get d :p90) (if loaded " (loaded)" "")))
+                                          (when-let* ((sv (plist-get p :server_ms))) (format "daemon server ready p50 %s max %s ms, modules %s ms%s" (plist-get sv :p50) (plist-get sv :max) (plist-get p :modules_ms) (if loaded " (loaded)" "")))
                                           (when (and (plist-get p :rss_kb) (not (plist-get p :input))) (format "rss %d MB" (/ (plist-get p :rss_kb) 1024)))))
                           ", "))))
              results "\n"))
 
-(defconst drgnx-perf-run-hook-budget 2 "ms: any hook function's p95 (the spec), judged in the --audit pass.")
+(defun drgnx-perf-run--json-ready (v)
+  "V (a result: plists, stats, vectors) for `json-serialize': nil is null, a boolean :loaded is true or false."
+  (cond ((null v) :null)
+        ((vectorp v) (vconcat (mapcar #'drgnx-perf-run--json-ready v)))
+        ((and (consp v) (keywordp (car v)))
+         (let (out)
+           (cl-loop for (k x) on v by #'cddr
+                    do (setq out (nconc out (list k (if (eq k :loaded) (if x t :false) (drgnx-perf-run--json-ready x))))))
+           out))
+        (t v)))
 
-(defun drgnx-perf-run--wait-for-quiet (limit)
-  "Wait up to $DRGNX_PERF_WAIT seconds (180) for the load average to fall to LIMIT.  The load then."
-  (let* ((env (getenv "DRGNX_PERF_WAIT"))
-         (deadline (+ (float-time) (if (and env (string-match-p "\\`[0-9]+\\'" env)) (string-to-number env) 180)))
-         (load (drgnx-perf-load)))
-    (while (and load (> load limit) (< (float-time) deadline))
-      (message "perf: the machine is busy (load %.1f > %.1f), waiting…" load limit)
-      (sleep-for 10)
-      (setq load (drgnx-perf-load)))
-    load))
+(defun drgnx-perf-run--write-results (file results)
+  "$DRGNX_PERF_RESULTS: RESULTS (every metric, wall clock included, each workload's calibration), the Emacs
+version and the commit, as JSON in FILE."
+  (let ((doc (list :emacs emacs-version :commit (drgnx-perf-run--commit)
+                   :results (apply #'append (mapcar (lambda (r) (list (intern (concat ":" (symbol-name (car r))))
+                                                                      (drgnx-perf-run--json-ready (cdr r))))
+                                                    results)))))
+    (make-directory (file-name-directory (expand-file-name file)) t)
+    (write-region (concat (json-serialize doc) "\n") nil file nil 'silent)))
+
+(defconst drgnx-perf-run-hook-budget 2 "ms: any hook function's p90 (the spec), judged in the --audit pass.")
+(defconst drgnx-perf-run-hook-command-budget 1.5
+  "ms (p90): all the audited hook functions and timers together, per command, judged in the --audit pass.  The
+plan's starting value was 4; measured (2026-10-20, typing 0.46, explorer 0.67) it is 2x the larger, rounded up.")
+
+(defun drgnx-perf-run--hooks-fails (results)
+  "Failure lines: workloads of an audit pass whose per-command hook time passes `drgnx-perf-run-hook-command-budget'."
+  (delq nil (mapcar (lambda (r)
+                      (let ((p90 (plist-get (plist-get (cdr r) :hooks) :p90)))
+                        (when (and (numberp p90) (> p90 drgnx-perf-run-hook-command-budget))
+                          (format "%s: hook functions and timers take %s ms per command (p90) > %s ms"
+                                  (car r) p90 drgnx-perf-run-hook-command-budget))))
+                    results)))
+
+(defun drgnx-perf-run--check-gc (sess)
+  "HARNESS-GC-1: the session must run at drgnx's GC settings (`drgnx-gc-cons-threshold'), as a user's does."
+  (let* ((r (drgnx-perf-run--call sess "(list :now gc-cons-threshold :want (and (require 'drgnx-gc nil t) drgnx-gc-cons-threshold))"))
+         (now (plist-get r :now)) (want (plist-get r :want)))
+    (unless (and (numberp want) (eql now want))
+      (error "perf: the session runs at gc-cons-threshold %s, not drgnx's %s (HARNESS-GC-1)" now want))))
 
 (defun drgnx-perf-run (&optional audit)
-  "`drgnx test --perf': every workload in one session; print, judge (budgets, regressions against the
-history), keep the history.  An exit code: 0 all hold, 1 a failure, 3 not judged — the load average
-passed `drgnx-perf-max-load' before or during the run (other processes took the CPU, so the timings
-say nothing about drgnx; the history is not written).  AUDIT (`--audit'): the hook audit on — judged on
-the hook budget only (the audit adds its own cost to the other numbers)."
+  "`drgnx test --perf': every workload in one session; print, judge (the gated budgets, `drgnx-perf-verdict'),
+report the rest, keep the history.  Exit code: 0 every gated budget holds, 1 a failure.  The load on the machine
+never decides: allocation, CPU and rows do not move with it, and wall clock is reported with a calibration (see
+docs/develop/perf.md).  AUDIT (`--audit'): the hook audit on — judged on the hook budgets only (the audit adds
+its own cost to the other numbers)."
   (unless (drgnx-perf-run--modal-elpa) (princ (concat drgnx-perf-run-modal-skipped "\n")))
   (if (null (drgnx-perf-run--only (drgnx-perf-run--workloads)))
       (progn (princ (format "perf: DRGNX_PERF_ONLY %S matches no workload\n" (drgnx-perf-run--only-regexp))) 1)
-    (let* ((limit (drgnx-perf-max-load)) (start (drgnx-perf-run--wait-for-quiet limit)))
-      (if (drgnx-perf-busy (list start) limit)
-          (progn (princ (format "perf: not run — the machine stayed busy (load %.1f > %.1f); rerun when it is quiet (no other test runs or agents), or set DRGNX_PERF_MAX_LOAD.\n"
-                                start limit))
-                 3)
-        (drgnx-perf-run--judged audit limit start)))))
+    (drgnx-perf-run--judged audit)))
 
-(defun drgnx-perf-run--judged (audit limit start)
-  "The run of `drgnx-perf-run' on a quiet machine: LIMIT the load allowed, START the load before it."
-  (let* ((loads (list start))
+(defun drgnx-perf-run--judged (audit)
+  "The run of `drgnx-perf-run'."
+  (let* ((loads (list (drgnx-perf-load)))
          (drgnx-perf-run--fixture (drgnx-perf-run--make-fixture))
          (all (drgnx-perf-run--workloads)) (selected (drgnx-perf-run--select all))
          (s (drgnx-ui-start "drgnx" "1400x800" 60)) (sess (drgnx-ui-own-session (plist-get s :name))) results)
     (unwind-protect
-        (dolist (w (drgnx-perf-run--only selected))
-          (message "perf: %s…" (car w))
-          (push (cons (car w) (condition-case err (drgnx-perf-run-workload sess (cdr w) audit)
-                                (error (list :error (error-message-string err)))))
-                results)
-          (push (drgnx-perf-load) loads))
+        (progn
+          (drgnx-perf-run--check-gc sess)
+          (dolist (w (drgnx-perf-run--only selected))
+            (message "perf: %s…" (car w))
+            (let* ((cal (drgnx-perf-run--call sess "(drgnx-perf-calibrate)"))
+                   (r (condition-case err (drgnx-perf-run-workload sess (cdr w) audit)
+                        (error (list :error (error-message-string err))))))
+              (push (cons (car w) (if (plist-get r :error) r (plist-put r :calibration cal))) results))
+            (push (drgnx-perf-load) loads)))
       (drgnx-ui-stop (plist-get s :name))
       (delete-file drgnx-perf-run--fixture))
     (setq results (nreverse results))
     (princ (concat (drgnx-perf-run--table results) "\n"))
-    (let ((errors (seq-filter (lambda (r) (plist-get (cdr r) :error)) results))
-          (busy (drgnx-perf-busy loads limit)))
+    (when-let* ((file (getenv "DRGNX_PERF_RESULTS")))
+      (unless (string-empty-p file) (drgnx-perf-run--write-results file results)))
+    (let ((errors (seq-filter (lambda (r) (plist-get (cdr r) :error)) results)))
       (pcase-dolist (`(,w . ,p) errors) (princ (format "ERROR %s: %s\n" w (plist-get p :error))))
       (cond
-       ((and busy (not errors))
-        (princ (format "perf: not judged — the machine was busy (load %.1f > %.1f): other processes took the CPU, so these timings say nothing about drgnx; the history is not written.  Rerun when the machine is quiet (no other test runs or agents), or set DRGNX_PERF_MAX_LOAD.\n"
-                       busy limit))
-        3)
        (audit
         (let ((rows (seq-mapcat (lambda (r) (append (plist-get (cdr r) :audit) nil)) results)))
           (dolist (row (seq-take (sort (copy-sequence rows) (lambda (a b) (> (plist-get a :ms) (plist-get b :ms)))) 40))
-            (princ (format "audit %-40s %-34s %6s calls  p95 %6s  max %6s  total %8s ms\n" (plist-get row :fn) (plist-get row :hooks)
-                           (plist-get row :calls) (plist-get row :p95) (plist-get row :max) (plist-get row :ms))))
-          (let ((fails (drgnx-perf-audit-verdict rows drgnx-perf-run-hook-budget)))
+            (princ (format "audit %-40s %-34s %6s calls  p90 %6s  max %6s  total %8s ms\n" (plist-get row :fn) (plist-get row :hooks)
+                           (plist-get row :calls) (plist-get row :p90) (plist-get row :max) (plist-get row :ms))))
+          (dolist (r results)
+            (when-let* ((h (plist-get (cdr r) :hooks)))
+              (princ (format "audit %-13s per command: hooks and timers p50 %s p90 %s max %s ms\n" (car r) (plist-get h :p50) (plist-get h :p90) (plist-get h :max)))))
+          (let ((fails (append (drgnx-perf-audit-verdict rows drgnx-perf-run-hook-budget) (drgnx-perf-run--hooks-fails results))))
             (dolist (f fails) (princ (format "FAIL %s\n" f)))
             (if (or fails errors) 1 (princ "perf audit: every hook function within its budget\n") 0))))
        (t
@@ -1004,7 +1041,7 @@ each round; fails when RSS grows by more than 20% from the first round or passes
          (loads (seq-filter (lambda (w) (plist-get (cdr w) :actions)) (drgnx-perf-run--workloads)))
          samples over)
     (unwind-protect
-        (while (< (float-time) deadline)
+        (while (progn (unless samples (drgnx-perf-run--check-gc sess)) (< (float-time) deadline))
           (dolist (w loads) (ignore-errors (drgnx-perf-run-workload sess (cdr w))))   ; each cleans up after itself
           (let* ((r (drgnx-perf-run--call sess (format "(progn (garbage-collect) (list :rss_kb (drgnx-perf-rss-kb) :census %s))"
                                                        drgnx-perf-run--census-form)))

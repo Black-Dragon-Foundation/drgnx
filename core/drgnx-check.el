@@ -151,8 +151,7 @@ LEAKS: the unit jobs (not the live ones) run with the leak census on (`drgnx-che
                      :env (list "DRGNX_SCENARIO_TIMEOUT=600"))
             jobs)
       (push (funcall job "bench" 5 'bench (list bin "test" "--bench") :gui t) jobs)
-      ;; exit 3: the machine stayed too busy to measure — not judged, and not a pass
-      (when perf (push (funcall job "perf" 6 'perf (list bin "test" "--perf") :gui t :not-judged 3) jobs)))
+      (when perf (push (funcall job "perf" 6 'perf (list bin "test" "--perf") :gui t) jobs)))
     (nreverse jobs)))
 
 ;;;; Running
@@ -192,8 +191,6 @@ each logging to DIR/NAME.log.  A failing phase 1 (the build) stops the rest.  Re
                   (plist-put j :exit (process-exit-status p))
                   (unless (eq (plist-get j :status) 'timeout)
                     (plist-put j :status (cond ((eql (process-exit-status p) 0) 'ok)
-                                               ;; perf: the machine was too busy to measure (not a pass)
-                                               ((eql (process-exit-status p) (plist-get j :not-judged)) 'not-judged)
                                                (t 'failed))))
                   (when verbose (princ (format "check: %s %s (%.0f s)\n" (plist-get j :name) (plist-get j :status) (plist-get j :seconds)))))))))
         (when (and (eql phase 1) (seq-find (lambda (j) (and (eql (plist-get j :phase) 1) (not (eq (plist-get j :status) 'ok)))) all))
@@ -253,7 +250,7 @@ reaps (GitHub's job containers), an ended job's processes stay as zombies and si
      (mapconcat (lambda (j)
                   (format "%-10s %-16s %7.1f s  %s" (plist-get j :name)
                           (pcase (plist-get j :status)
-                            ('ok "ok") ('skipped "skipped") ('timeout "TIMED OUT") ('not-judged "NOT JUDGED (busy)")
+                            ('ok "ok") ('skipped "skipped") ('timeout "TIMED OUT")
                             (_ (format "FAILED (exit %s)" (plist-get j :exit))))
                           (or (plist-get j :seconds) 0) (or (plist-get j :log) "")))
                 jobs "\n")

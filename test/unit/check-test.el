@@ -198,16 +198,15 @@
   (should (equal (drgnx-check--parse-args '("--jobs" "6" "--no-perf"))
                  '(:jobs 6 :shards 4 :perf nil :gui t))))
 
-(ert-deftest drgnx-check/perf-on-a-busy-machine-is-not-judged-and-not-a-pass ()
-  ;; bin/drgnx test --perf exits 3 when the machine was too busy to measure (no history line written)
-  (drgnx-check-test--with dir
-    (let* ((r (drgnx-check-run (list (drgnx-check-test--job dir "perf" 5 :code 3 :not-judged 3)) :dir dir :jobs 2 :gui-slots 1)))
-      (should (eq (plist-get (car (plist-get r :jobs)) :status) 'not-judged))
-      (should (string-match-p "perf +NOT JUDGED (busy)" (drgnx-check-summary r)))
-      (should (eql (drgnx-check-exit-code r) 1))))
-  (should (eql 3 (plist-get (seq-find (lambda (j) (equal (plist-get j :name) "perf"))
+(ert-deftest drgnx-check/perf-is-a-plain-job ()
+  ;; --perf exits 0 or 1: a busy machine does not make it a third outcome (it judges what load does not move)
+  (should-not (plist-member (seq-find (lambda (j) (equal (plist-get j :name) "perf"))
                                       (drgnx-check-plan :root drgnx-dir :unit-shards 1 :live-shards 1 :perf t))
-                            :not-judged))))
+                            :not-judged))
+  (drgnx-check-test--with dir
+    (let ((r (drgnx-check-run (list (drgnx-check-test--job dir "perf" 5 :code 3)) :dir dir :jobs 2 :gui-slots 1)))
+      (should (eq (plist-get (car (plist-get r :jobs)) :status) 'failed))
+      (should (string-match-p "perf +FAILED (exit 3)" (drgnx-check-summary r))))))
 
 (ert-deftest drgnx-check/a-group-of-zombies-has-ended ()
   ;; In a container whose PID 1 never reaps (GitHub's job containers), an ended job's processes stay as zombies:

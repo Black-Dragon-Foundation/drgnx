@@ -33,8 +33,8 @@ It runs in phases:
 4. **The scenario tier, alone.** Its scenarios hold frame budgets; a frame from the daemon in under 500 ms failed
    at 514 ms next to the parallel phase.
 5. **The bench, alone.**
-6. **Perf, alone.** It measures input latency. When the machine stays too busy to measure, `--perf` exits 3: the
-   summary says NOT JUDGED (busy). That is not a pass.
+6. **Perf, alone.** It gates allocation, CPU and rows per command, which a busy machine does not move
+   ([perf.md](perf.md)); wall clock is reported with a calibration. Exit 0 or 1, like every job.
 
 Every job runs with SIGPIPE ignored (`trap '' PIPE`), as `bin/drgnx test` and the hub do: a hub served inside a
 test Emacs that does not ignore it is killed (exit 141) by a write to a client that left. A test that needs it
@@ -49,7 +49,7 @@ test process ended that way stops the harness sessions it started on its way out
 exit is finished by systemd. `bin/drgnx ui start` sessions are meant to outlive the command and are never stopped
 like this.
 
-The summary lists every job — ok, FAILED (exit N), TIMED OUT, NOT JUDGED or skipped — with its time and log, then
+The summary lists every job — ok, FAILED (exit N), TIMED OUT or skipped — with its time and log, then
 the wall time against the time the same jobs take one after another. The exit status is 0 only when all passed.
 
 Shards are balanced by how long each test file took last time (`check/durations.eld`, kept from the shards'
