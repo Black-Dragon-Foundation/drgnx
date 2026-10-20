@@ -427,7 +427,8 @@ print_plan() {
   case "$CHOSEN" in
     keep) if [[ -n "$EMACS_NIDHOGG" ]]; then note "keep the installed Nidhogg $EMACS_NIDHOGG ($EMACS_FOUND)"
           elif [[ -n "$EMACS_FOUND" ]]; then note "keep the installed Emacs ${EMACS_INFO%% *} ($EMACS_FOUND): native compilation works"
-          else note "keep the installed Emacs (--method keep)${EMACS_INFO:+: $EMACS_INFO}"; fi ;;
+          else note "keep the installed Emacs (--method keep)${EMACS_INFO:+: $EMACS_INFO}"; fi
+          if keeps_installed_nidhogg; then note "link $PREFIX/bin/nidhogg and $PREFIX/bin/nidhoggclient to it"; fi ;;
     nidhogg)
       note "build Nidhogg $NIDHOGG_VERSION (drgnx's own Emacs: GNU Emacs $EMACS_VERSION with drgnx's patches) into $NIDHOGG_PREFIX (about 30-60 minutes)"
       note "fetch $NIDHOGG_REPO at $NIDHOGG_TAG and check that it is commit ${NIDHOGG_COMMIT:0:12} before building anything"
@@ -757,6 +758,11 @@ install_nidhogg() { # build.sh (from the pinned tag) builds and installs into NI
   fi
 }
 
+keeps_installed_nidhogg() { # true when the Emacs kept is this version's Nidhogg, at its prefix (or linked from $PREFIX/bin)
+  [[ "$EMACS_NIDHOGG" == "$NIDHOGG_VERSION" && -x "$(nidhogg_bin)" ]] || return 1
+  [[ "$EMACS_FOUND" == "$(nidhogg_bin)" || "$EMACS_FOUND" == "$PREFIX/bin/nidhogg" ]]
+}
+
 link_nidhogg() { # nidhogg and nidhoggclient in $PREFIX/bin; what drgnx records is the nidhogg binary
   mkdir -p "$PREFIX/bin"
   if [[ "$FAMILY" == macos ]]; then
@@ -876,7 +882,7 @@ main() {
   confirm "Go ahead?" || die 1 "nothing was changed"
   EMACS_BIN="${EMACS_FOUND:-emacs}"
   case "$CHOSEN" in
-    keep) ;;
+    keep) if keeps_installed_nidhogg; then link_nidhogg; fi ;;   # bin/nidhogg and nidhoggclient must exist for drgnx to find it
     package) install_emacs_package ;;
     cask|formula) install_homebrew; install_emacs_brew ;;
     source) install_emacs_source ;;

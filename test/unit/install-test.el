@@ -1090,3 +1090,40 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
       ;; after the build, before the doctor
       (should (< (string-search "drgnx build" log) (string-search "service-unit --refresh" log)))
       (should (< (string-search "service-unit --refresh" log) (string-search "drgnx doctor" log))))))
+
+;;; Fix round: keep of an installed Nidhogg, the build's sizing, the pin
+
+(defun drgnx-install-test--installed-nidhogg (tmp)
+  "Put a Nidhogg of the pinned version at the fixture's prefix in TMP; return its nidhogg binary."
+  (let* ((prefix (concat tmp "/home/.local/opt/nidhogg/31.1-nidhogg.1")) (bin (concat prefix "/bin")))
+    (make-directory bin t)
+    (dolist (n '("nidhogg" "emacs" "nidhoggclient"))
+      (drgnx-install-test--script (concat bin "/" n) "#!/bin/sh\necho \"31.1 t pgtk 31.1-nidhogg.1\"\n"))
+    (concat bin "/nidhogg")))
+
+(ert-deftest drgnx-install/keep-of-an-installed-nidhogg-links-it ()
+  (skip-unless (/= 0 (user-uid)))
+  (drgnx-install-test--with-tmp tmp
+    (let* ((fx (drgnx-install-test--nidhogg-fixture tmp))
+           (home (expand-file-name "home" tmp))
+           (nid (drgnx-install-test--installed-nidhogg tmp))
+           (r (drgnx-install-test--nidhogg-run tmp fx (list (concat "DRGNX_INSTALL_EMACS=" nid)) nil)))
+      (should (= (car r) 0))
+      (should (equal (file-truename (expand-file-name ".local/bin/nidhogg" home)) (file-truename nid)))
+      (should (file-symlink-p (expand-file-name ".local/bin/nidhoggclient" home)))
+      ;; an installed Nidhogg of the pinned version is not rebuilt: no fetch, no build, no root step
+      (should-not (string-search "build.sh" (or (drgnx-install-test--file (expand-file-name "log" tmp)) "")))
+      (should-not (string-search "As root:" (cdr r))))))
+
+(ert-deftest drgnx-install/explicit-keep-links-an-installed-nidhogg ()
+  (skip-unless (/= 0 (user-uid)))
+  (drgnx-install-test--with-tmp tmp
+    (let* ((fx (drgnx-install-test--nidhogg-fixture tmp))
+           (home (expand-file-name "home" tmp))
+           (nid (drgnx-install-test--installed-nidhogg tmp))
+           (r (drgnx-install-test--run (append (list (concat "DRGNX_INSTALL_EMACS=" nid)) (car fx))
+                                       "--yes" "--method" "keep" "--source-dir" (expand-file-name "drgnx" tmp))))
+      (should (= (car r) 0))
+      (should (file-symlink-p (expand-file-name ".local/bin/nidhogg" home)))
+      (should (file-symlink-p (expand-file-name ".local/bin/nidhoggclient" home)))
+      (should-not (string-search "build.sh" (or (drgnx-install-test--file (expand-file-name "log" tmp)) ""))))))
