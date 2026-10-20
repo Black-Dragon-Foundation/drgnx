@@ -277,6 +277,40 @@ list element); `(drgnx-schema-uses-form-p SCHEMA FORM)` says whether a form occu
 this file and derives its JSON Schema output from the same schema data; it does not define another. `number`, `map`,
 `natnum` and `any` are here for it.
 
+## Records (`drgnx-records.el`)
+
+The hub's records (a session's snapshot, a transcript entry, an event's, a card's, a job's and a work node's `data`)
+travel and rest as JSON, not as printed Lisp. `core/drgnx-records.el` turns a Lisp record into JSON and back by walking
+the record's schema (the DSL above) and the data together. Requires only `cl-lib`, `subr-x` and `drgnx-schema`.
+
+- `(drgnx-records-encode SCHEMA VALUE)` gives a JSON string, `(drgnx-records-decode SCHEMA STRING)` the record.
+  `drgnx-records-to-json` and `drgnx-records-from-json` are the halves around the parser: the first gives a value
+  `json-serialize` takes, the second reads what `json-parse-string` gives with `:object-type 'plist :array-type 'list
+  :null-object nil :false-object nil` (the settings `drgnx-records-decode` uses).
+- **Writing.** A keyword plist is an object. `(enum …)` and `symbol` become strings. `(alist string S)` and `(map S)`
+  become objects. `(list-of S)` becomes an array, and a nil list is `[]`, never `null`. `boolean` is `true` or `false`.
+  Any other nil value leaves its key out. Keys the schema does not list pass through by plain JSON rules: a string,
+  a number, `t`, a nested keyword plist, a list of those.
+- **Every symbol is an enum in a schema.** A symbol where no schema covers it (a key the schema does not list, a value
+  under `any`) signals `drgnx-records-unknown-symbol` with `(PATH . TEXT)`: the fix is an `(enum …)` in the record's
+  schema, never a wider reader. A value its schema refuses signals `drgnx-records-invalid`, also with `(PATH . TEXT)`
+  (`drgnx-records-unknown-symbol` is a kind of it). A PATH is as `drgnx-schema-check` gives it.
+- **Reading.** `read` is never called, and nothing is interned for a string: an enum string becomes the member it names
+  and any other string is refused. A bare `symbol` or `keyword` schema reads only a symbol that already exists
+  (`intern-soft`), so a record uses an enum. A key with a nil value (`null`, `false`, `[]`) is left out, so the record
+  is the one the writer was given minus its nil-valued keys. The result is checked against the schema before it is
+  returned. Nesting deeper than 100 levels is refused.
+- **The named records**, each with a doc string (`drgnx-schema-describe` gives the reference): `drgnx-records-session`
+  (the keys of `drgnx-hub--snapshot`), `drgnx-records-entry` (a transcript entry, its text joined),
+  `drgnx-records-event-data` (one plist for every event kind's keys), `drgnx-records-card-data`,
+  `drgnx-records-job-data` and `drgnx-records-node-data`.
+- **The symbols the records carry today** (the audit), each an enum: a session's `:status` (`starting idle busy
+  exited`), `:via` (`gateway direct`) and `:mode` (`queue steer interrupt`); an entry's `:type` (`user agent thought
+  tool plan stop error usage notice compaction`; the last three are reserved); an event's `:verdict` (`pass fail`); a
+  job's `:gate` (`review review+accept`) and the roles that key `:routes` (`implement test docs review review-long`);
+  a node's kind is a column, not part of its data. Everything else the records carry is a string, a number or a
+  boolean (a card's kind and an event's states are strings already).
+
 ## Config files: drgnx-config (`drgnx-config.el`)
 
 Every config file drgnx keeps has one definition, and is read, applied and written through this layer. It requires
