@@ -64,13 +64,27 @@ P's output and its exit are then all pending when Emacs next reads.  That wait b
 after SECS times `drgnx-uitest-settle-scale' real seconds."
   (drgnx-test-proc--send p (format "exit %d" code))
   (process-put p :drgnx-test-proc-exiting t)
-  (when before-read
-    (let ((deadline (+ (drgnx-test-wait--now) (* secs (drgnx-uitest-settle-scale)))))
-      ;; `process-live-p' only decodes the status Emacs's SIGCHLD handler recorded (it reaps children even while
-      ;; `call-process' blocks); `call-process' reads no other process's output.
-      (while (process-live-p p)
-        (when (> (drgnx-test-wait--now) deadline)
-          (signal 'ert-test-failed (list :waited-for (format "%s to exit" (process-name p)) :secs secs)))
-        (call-process "sleep" nil nil nil "0.005")))))
+  (when before-read (drgnx-test-proc-await-exit p :secs secs)))
+
+(cl-defun drgnx-test-proc-await-exit (p &key (secs 30))
+  "Return once Emacs has recorded the exit of P (any process), without reading its output or running a filter,
+sentinel or timer.  Blocks in `call-process'; fails after SECS times `drgnx-uitest-settle-scale' real seconds."
+  (let ((deadline (+ (drgnx-test-wait--now) (* secs (drgnx-uitest-settle-scale)))))
+    ;; `process-live-p' only decodes the status Emacs's SIGCHLD handler recorded (it reaps children even while
+    ;; `call-process' blocks); `call-process' reads no other process's output.
+    (while (process-live-p p)
+      (when (> (drgnx-test-wait--now) deadline)
+        (signal 'ert-test-failed (list :waited-for (format "%s to exit" (process-name p)) :secs secs)))
+      (call-process "sleep" nil nil nil "0.005"))))
+
+(defmacro drgnx-test-with-exit-before-read (&rest body)
+  "Run BODY with every `make-process' returning its process only once the child has exited and Emacs has recorded
+the exit (`drgnx-test-proc-await-exit'): a real child that ends at once, before the code that started it sends it
+anything or reads.  Only for children that end without input."
+  (declare (indent 0) (debug t))
+  `(let ((real (symbol-function 'make-process)))
+     (cl-letf (((symbol-function 'make-process)
+                (lambda (&rest args) (let ((p (apply real args))) (drgnx-test-proc-await-exit p) p))))
+       ,@body)))
 
 (provide 'drgnx-scripted-process)

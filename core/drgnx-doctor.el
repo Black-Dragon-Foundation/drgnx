@@ -316,14 +316,16 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
                (default-directory (file-name-as-directory (expand-file-name dir)))
                (buf (generate-new-buffer " *drgnx-doctor-git*" t))
                (proc (make-process :name "drgnx-doctor-git" :buffer buf :noquery t :connection-type 'pipe
-                                   :sentinel #'ignore   ; the default one writes "Process … finished" into the buffer
+                                   ;; done once Emacs has read all of git's output (`process-live-p' turns nil
+                                   ;; before that); the default sentinel would write "Process … finished" into BUF
+                                   :sentinel (lambda (p _event) (unless (process-live-p p) (process-put p :done t)))
                                    :command (list "git" "-C" (directory-file-name default-directory)
                                                   "status" "--porcelain" "--" "init/")))
                (deadline (+ (float-time) 5)))
           (unwind-protect
               (progn
-                (while (and (process-live-p proc) (< (float-time) deadline)) (accept-process-output proc 0.05))
-                (cond ((process-live-p proc) (delete-process proc) (list :error "git status took more than 5 s"))
+                (while (and (not (process-get proc :done)) (< (float-time) deadline)) (accept-process-output proc 0.05))
+                (cond ((not (process-get proc :done)) (delete-process proc) (list :error "git status took more than 5 s"))
                       ((not (eql (process-exit-status proc) 0)) (list :error "git status failed"))
                       (t (list :dir dir :changed (split-string (with-current-buffer buf (buffer-string)) "\n" t)))))
             (kill-buffer buf)))

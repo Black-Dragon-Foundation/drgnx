@@ -2716,6 +2716,10 @@ that does only what the test tells it, through a FIFO in a fresh directory under
   blocks in `call-process`). Output and exit are then all pending when Emacs next reads, and `process-live-p` is
   already nil while the sentinel has not run (M3b-19).
 - Telling an exited child anything more is an error.
+- `(drgnx-test-proc-await-exit P)`: the same wait for any process P.
+- `(drgnx-test-with-exit-before-read BODY…)`: every `make-process` in BODY returns its (real) process only once the
+  child has exited and Emacs has recorded the exit — a child that ends at once, before the code that started it sends
+  it anything or reads it. For children that need no input (`git status`, a `git blame` git refuses).
 
 What Emacs guarantees, and what the tests (`drgnx-test-proc/`, each ordering 100 times out of 100) force:
 

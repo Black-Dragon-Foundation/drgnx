@@ -221,6 +221,9 @@
                    '("hunter22")))))
 
 (ert-deftest drgnx-agent-config/cheap-status-never-runs-anything ()
+  ;; A primitive's first `cl-letf' compiles its native trampoline, and the compiler runs an Emacs through
+  ;; `call-process': with an empty trampoline cache (CI) that tripped the guard below.  Compile them before it is up.
+  (dolist (f '(call-process make-process)) (cl-letf (((symbol-function f) #'ignore))))
   (drgnx-agent-config-test-env
     (cl-letf (((symbol-function 'make-process) (lambda (&rest _) (ert-fail "make-process")))
               ((symbol-function 'start-process) (lambda (&rest _) (ert-fail "start-process")))

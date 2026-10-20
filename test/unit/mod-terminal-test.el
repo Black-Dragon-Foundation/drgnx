@@ -35,7 +35,7 @@ panel's rules on."
   (declare (indent 1))
   `(let* ((load-path (if ,eat (append load-path (list (drgnx-terminal-test--eat-dir)))
                        (seq-remove (lambda (d) (string-prefix-p drgnx-terminal-test--elpa d)) load-path)))
-          (display-buffer-alist nil) (drgnx-signal--editor-window nil) (drgnx-wb-unrouted nil)
+          (display-buffer-alist nil) (drgnx-wb-unrouted nil)
           (drgnx-terminal--notice-shown nil))
      (unwind-protect
          (progn

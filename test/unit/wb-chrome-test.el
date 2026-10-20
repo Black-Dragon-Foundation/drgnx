@@ -1,5 +1,6 @@
 ;;; wb-chrome-test.el --- batch tests: chrome by role, tabs, breadcrumbs (I3) -*- lexical-binding: t -*-
 (require 'ert)
+(require 'bytecomp)                                  ; `byte-compile-warnings' is let-bound below
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'drgnx-chrome)

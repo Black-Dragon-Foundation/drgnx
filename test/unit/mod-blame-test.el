@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/scripted-process" drgnx-dir) nil t)
 (load (expand-file-name "modules/extra/drgnx-blame" drgnx-dir) nil t)
 
 (defconst drgnx-blame-test--committed
@@ -224,6 +225,22 @@ filename a.txt
       (drgnx-blame--maybe)
       (should-not drgnx-blame-mode))
     (setq buffer-file-name nil)))
+
+(ert-deftest drgnx-blame/a-git-that-ends-before-its-input-is-no-error ()
+  ;; git refuses an untracked file at once: it may have ended before the request sends its EOF (A-44)
+  (drgnx-git-test-with-repo
+    (drgnx-git-test-write repo "a.txt" "one\n")
+    (drgnx-git-test repo "add" "-A") (drgnx-git-test repo "commit" "-q" "-m" "Start")
+    (drgnx-git-test-write repo "new.txt" "x\n")
+    (with-current-buffer (find-file-noselect (expand-file-name "new.txt" repo))
+      (unwind-protect
+          (progn
+            (drgnx-blame-mode 1)
+            (drgnx-test-with-exit-before-read (drgnx-blame--update))
+            (should (drgnx-blame-test--wait-for (lambda () (null drgnx-blame--proc))))
+            (should (= 0 (drgnx-blame-test--live))))
+        (drgnx-blame-mode -1)
+        (kill-buffer)))))
 
 (ert-deftest drgnx-blame/show-commit-of-line ()
   (drgnx-blame-test--with-history

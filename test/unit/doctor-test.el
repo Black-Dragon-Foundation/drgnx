@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'drgnx-doctor)
 (require 'drgnx-macos)   ; so `drgnx-macos-app-dir' is special before a test let-binds it
+(load (expand-file-name "test/fixtures/scripted-process" drgnx-dir) nil t)
 
 (defun drgnx-doctor-test--facts (&rest kv)
   (append kv (list :version "31.1" :native-available t :native-compiles t :treesit t :gui 'pgtk :git t :sqlite t)))
@@ -643,6 +644,21 @@
             (should (string-search "init/init.el" (nth 1 r)))
             (should (string-search "config.el or custom.el" (nth 2 r)))
             (should (string-search (format "git -C %s checkout -- init/" (directory-file-name dir)) (nth 2 r)))))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-doctor/checkout-clean-reads-a-git-that-ended-at-once ()
+  ;; git's exit recorded before Emacs read its output: the change is still seen (CI's fast container)
+  (let ((dir (file-name-as-directory (make-temp-file "drgnx-doctor-checkout" t))))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name "init" dir))
+          (write-region "(a)\n" nil (expand-file-name "init/init.el" dir) nil 'silent)
+          (drgnx-doctor-test--git dir "init" "-q")
+          (drgnx-doctor-test--git dir "add" ".")
+          (drgnx-doctor-test--git dir "commit" "-q" "-m" "first")
+          (write-region "(b)\n" nil (expand-file-name "init/init.el" dir) nil 'silent)
+          (let ((fact (drgnx-test-with-exit-before-read (drgnx-doctor--checkout-init dir))))
+            (should (equal (plist-get fact :changed) '(" M init/init.el")))))
       (delete-directory dir t))))
 
 (ert-deftest drgnx-doctor/checkout-clean-absent-without-git ()

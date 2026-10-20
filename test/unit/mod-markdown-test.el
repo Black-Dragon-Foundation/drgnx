@@ -46,11 +46,13 @@
 (defcustom drgnx-markdown-test-fake-other 'standard "A second stand-in." :type 'symbol)
 
 (ert-deftest drgnx-markdown/an-option-the-user-set-is-left-alone ()
-  (let ((drgnx-markdown-test-fake-option 'user) (drgnx-markdown-test-fake-other 'standard))
-    (drgnx-markdown--set-option 'drgnx-markdown-test-fake-option 'module)
-    (drgnx-markdown--set-option 'drgnx-markdown-test-fake-other 'module)
-    (should (eq drgnx-markdown-test-fake-option 'user))
-    (should (eq drgnx-markdown-test-fake-other 'module))))
+  ;; the module loaded here: without markdown-mode (CI) no earlier test of this file has loaded it
+  (drgnx-test-with-modules '(lang/markdown)
+    (let ((drgnx-markdown-test-fake-option 'user) (drgnx-markdown-test-fake-other 'standard))
+      (drgnx-markdown--set-option 'drgnx-markdown-test-fake-option 'module)
+      (drgnx-markdown--set-option 'drgnx-markdown-test-fake-other 'module)
+      (should (eq drgnx-markdown-test-fake-option 'user))
+      (should (eq drgnx-markdown-test-fake-other 'module)))))
 
 (ert-deftest drgnx-markdown/turned-off-the-options-and-file-modes-are-back ()
   (skip-unless (drgnx-markdown-test--available-p))

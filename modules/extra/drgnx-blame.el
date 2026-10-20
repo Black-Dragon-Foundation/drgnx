@@ -158,10 +158,14 @@ has not answered).  The empty line after the last newline has none."
                        (when-let* ((ep (get-buffer-process err))) (delete-process ep))
                        (kill-buffer out) (kill-buffer err))))))
           (setq drgnx-blame--proc p)
-          (when modified                                     ; the text as the file has it: its coding, its line ends
-            (set-process-coding-system p 'utf-8-unix (or buffer-file-coding-system 'utf-8-unix))
-            (process-send-region p (point-min) (point-max)))
-          (process-send-eof p))))))
+          ;; git may have ended already (it refuses an untracked file at once): its sentinel has the answer
+          (condition-case err
+              (progn
+                (when modified                               ; the text as the file has it: its coding, its line ends
+                  (set-process-coding-system p 'utf-8-unix (or buffer-file-coding-system 'utf-8-unix))
+                  (process-send-region p (point-min) (point-max)))
+                (process-send-eof p))
+            (error (when (process-live-p p) (signal (car err) (cdr err))))))))))
 
 (defun drgnx-blame--tick ()
   "The idle timer: the selected window's buffer, if it has inline blame."
