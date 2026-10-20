@@ -247,6 +247,18 @@
                              (should-error (drgnx-test-with-modules (list file) (error "boom")))
                              (should (equal '(body) drgnx-fixture-test-log)))))
 
+(defun drgnx-fixture-test--bindings (map)
+  "MAP as (OTHERS CONSES): OTHERS the char-tables and strings of its list in place, CONSES its (EVENT . DEFINITION)
+entries sorted by event, a sub-keymap the same way.  A key the after-teardown function lifts and puts back (macOS:
+ns-win's s- keys under VS Code's s-k chords) is re-added in front of its keymap, so the same bindings can sit in
+another order, which `equal' on two keymaps sees."
+  (let (conses others)
+    (dolist (e (cdr map))
+      (cond ((not (consp e)) (push e others))
+            ((cdr e) (push (cons (car e) (if (and (consp (cdr e)) (keymapp (cdr e))) (drgnx-fixture-test--bindings (cdr e)) (cdr e))) conses))))
+    (list (nreverse others)
+          (sort conses (lambda (x y) (string< (format "%S" (car x)) (format "%S" (car y))))))))
+
 (ert-deftest drgnx-test-modules/the-keys-and-surfaces-of-the-after-teardown-are-put-back ()
   ;; `drgnx--after-teardown' applies the keys of the registry and installs the context menu; with a populated
   ;; registry the helper puts the process's global state back, so :strict is clean there.
@@ -262,7 +274,7 @@
           (applied drgnx-keys--applied))
       (drgnx-test-with-modules '(tools/browser) :strict t (ignore))
       (should (> (hash-table-count drgnx-commands--table) 4))
-      (should (equal map global-map))
+      (should (equal (drgnx-fixture-test--bindings map) (drgnx-fixture-test--bindings global-map)))
       (should (eq context context-menu-mode))
       (should (equal menu-hook (default-value 'menu-bar-update-hook)))
       (should (equal context-fns (default-value 'context-menu-functions)))
