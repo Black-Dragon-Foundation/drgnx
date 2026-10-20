@@ -25,6 +25,7 @@
 (require 'drgnx-memo)
 (require 'drgnx-view)                   ; `drgnx-view-with-kept-windows'
 (require 'drgnx-git)
+(require 'drgnx-timer)
 
 (defgroup drgnx-explorer nil "The drgnx Explorer." :group 'drgnx)
 
@@ -291,16 +292,16 @@ faces come later, from jit-lock, for the rows on screen."
       (drgnx-explorer--sync-watches)
       (drgnx-explorer--git-refresh))))
 
-(defvar drgnx-explorer--git-timer nil)
-
 (defun drgnx-explorer--git-refresh ()
   "Read the git status of every root in the background — started once the tree is on screen
-(starting a process costs milliseconds the render should not wait for)."
-  (when (and drgnx-explorer-git (not (timerp drgnx-explorer--git-timer)))
-    (setq drgnx-explorer--git-timer
-          (run-with-idle-timer 0.05 nil (lambda ()
-                                          (setq drgnx-explorer--git-timer nil)
-                                          (drgnx-git-refresh-tree drgnx-explorer--roots))))))
+\(starting a process costs milliseconds the render should not wait for): the key `explorer-git',
+0.05 s into a pause, owned by the Explorer buffer (no Explorer: nothing to read for)."
+  (when-let* ((drgnx-explorer-git) (buf (get-buffer drgnx-explorer-buffer-name)))
+    (drgnx-timer-soon 'explorer-git 0.05 #'drgnx-explorer--git-run :idle t :owner buf)))
+
+(defun drgnx-explorer--git-run ()
+  "Read the git status of every root (the key `explorer-git')."
+  (drgnx-git-refresh-tree drgnx-explorer--roots))
 
 (defun drgnx-explorer--git-changed (_root)
   "A git status arrived: repaint the visible rows."
@@ -315,7 +316,6 @@ faces come later, from jit-lock, for the rows on screen."
 
 (defvar drgnx-explorer--watches (make-hash-table :test #'equal) "Shown folder → watch descriptor (or `none').")
 (defvar drgnx-explorer--dirty nil "Folders with file events not shown yet.")
-(defvar drgnx-explorer--event-timer nil)
 (defvar drgnx-explorer--relists 0 "How many folders were refreshed from events (tests read it).")
 (defconst drgnx-explorer--splice-limit 20 "More changed folders than this at once: one full render instead.")
 
@@ -359,7 +359,8 @@ watched — the inotify limit — is tried again)."
     (dolist (desc descs) (ignore-errors (file-notify-rm-watch desc)))))
 
 (defun drgnx-explorer--file-event (event dir)
-  "A watch on DIR saw EVENT: remember DIR and arm one delayed refresh (no work here)."
+  "A watch on DIR saw EVENT: remember DIR and arm one delayed refresh (no work here): the key
+`explorer-file-events', `drgnx-explorer-event-delay' after the first event, owned by the Explorer buffer."
   (when (eq (nth 1 event) 'stopped)
     (if (not (equal (gethash dir drgnx-explorer--watches) (car event)))
         (setq event nil)                            ; we removed it (collapse, re-render): nothing changed
@@ -367,16 +368,15 @@ watched — the inotify limit — is tried again)."
       (setq dir (drgnx-explorer--parent dir))))
   (when (memq (nth 1 event) '(created deleted renamed stopped))
     (cl-pushnew dir drgnx-explorer--dirty :test #'equal)
-    (unless (timerp drgnx-explorer--event-timer)
-      (setq drgnx-explorer--event-timer
-            (run-with-timer drgnx-explorer-event-delay nil #'drgnx-explorer--apply-file-events)))))
+    (when-let* ((buf (get-buffer drgnx-explorer-buffer-name)))
+      (drgnx-timer-soon 'explorer-file-events drgnx-explorer-event-delay #'drgnx-explorer--apply-file-events :owner buf))))
 
 (defun drgnx-explorer--apply-file-events ()
-  "Show the changed folders again — each once, in place; wait while a button is held."
-  (setq drgnx-explorer--event-timer nil)
+  "Show the changed folders again — each once, in place; wait while a button is held (or Find is on)."
+  (drgnx-timer-cancel 'explorer-file-events)          ; called directly (Find cleared): the pending one is this
   (if (or (drgnx-explorer--held-p) drgnx-explorer--find)
-      (setq drgnx-explorer--event-timer
-            (run-with-timer drgnx-explorer-event-delay nil #'drgnx-explorer--apply-file-events))
+      (when-let* ((buf (get-buffer drgnx-explorer-buffer-name)))
+        (drgnx-timer-soon 'explorer-file-events drgnx-explorer-event-delay #'drgnx-explorer--apply-file-events :owner buf))
     (let ((dirs drgnx-explorer--dirty))
       (setq drgnx-explorer--dirty nil)
       (when-let* ((buf (get-buffer drgnx-explorer-buffer-name)))
@@ -740,22 +740,24 @@ excluded names left out.  A root that is your home or / and not a project is ref
 (defun drgnx-explorer-find ()
   "Filter the Explorer to files whose names contain what you type (live); empty input clears it."
   (interactive)
-  (let ((timer nil))
-    (condition-case nil
-        (let ((query (minibuffer-with-setup-hook
-                         (lambda ()
-                           (add-hook 'after-change-functions
-                                     (lambda (&rest _)
-                                       (let ((q (minibuffer-contents-no-properties)))
-                                         (when (timerp timer) (cancel-timer timer))
-                                         (setq timer (run-with-idle-timer
-                                                      0.1 nil (lambda () (if (string-empty-p q) (drgnx-explorer-find-clear)
-                                                                           (drgnx-explorer--find-apply q)))))))
-                                     nil t))
-                       (read-string "Find in Explorer: " (plist-get drgnx-explorer--find :query)))))
-          (when (timerp timer) (cancel-timer timer))
-          (if (string-empty-p query) (drgnx-explorer-find-clear) (drgnx-explorer--find-apply query)))
-      (quit (when (timerp timer) (cancel-timer timer)) (drgnx-explorer-find-clear)))))
+  (condition-case nil
+      (let ((query (minibuffer-with-setup-hook
+                       (lambda () (add-hook 'after-change-functions #'drgnx-explorer--find-changed nil t))
+                     (read-string "Find in Explorer: " (plist-get drgnx-explorer--find :query)))))
+        (drgnx-timer-cancel 'explorer-find)
+        (drgnx-explorer--find-typed query))
+    (quit (drgnx-timer-cancel 'explorer-find) (drgnx-explorer-find-clear))))
+
+(defun drgnx-explorer--find-changed (&rest _)
+  "Find's input changed (on the minibuffer's `after-change-functions'): filter once typing pauses —
+the idle debounce `explorer-find', 0.1 s, owned by the Explorer buffer."
+  (drgnx-timer-debounce 'explorer-find 0.1 #'drgnx-explorer--find-typed :idle t
+                        :args (list (minibuffer-contents-no-properties))
+                        :owner (let ((drgnx-explorer--remote-reads t)) (drgnx-explorer--buffer)))) ; as `--find-apply'
+
+(defun drgnx-explorer--find-typed (query)
+  "Filter by QUERY; empty shows the whole tree again."
+  (if (string-empty-p query) (drgnx-explorer-find-clear) (drgnx-explorer--find-apply query)))
 
 ;;;; File operations
 ;; Each command takes its target paths when it starts — before any question — so a refresh while

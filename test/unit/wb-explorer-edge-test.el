@@ -273,7 +273,7 @@
     (kill-buffer drgnx-explorer-buffer-name)
     (should-not drgnx-explorer--find)
     (drgnx-explorer--apply-file-events)
-    (should-not drgnx-explorer--event-timer)))          ; the 0.15 s poll stops
+    (should-not (drgnx-timer-active-p 'explorer-file-events))))   ; the 0.15 s poll stops
 
 (ert-deftest drgnx-explorer-edge/new-roots-drop-the-find-title ()
   (drgnx-explorer-edge--with root

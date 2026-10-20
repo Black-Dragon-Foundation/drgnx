@@ -867,6 +867,12 @@ swap in one window); a feed buffer's `(cockpit-feed-check . BUFFER)` (also on
 (its setup's: the status bar's count of what waits on you, every `drgnx-cockpit-check-interval`); its `:teardown`
 kills the cockpit's buffers, so turning it off leaves no timer.
 
+The Explorer's three timers are owned by its buffer, so killing it ends them (and with no Explorer none starts):
+`explorer-file-events` (`drgnx-timer-soon`, a wall timer `drgnx-explorer-event-delay` after a burst's first file event;
+while a button is held or Find is on it waits again, so a redraw never lands under a press), `explorer-git` (soon, 0.05 s
+into a pause: the git status of every root, read once the tree is on screen) and `explorer-find` (Find's idle debounce,
+0.1 s after typing pauses; the command cancels it when the minibuffer ends).
+
 `core/drgnx-platform.el` (window-manager calls) owns its timers as `:core`: each belongs to one call that ends itself
 (its answer, its error) and cancels the timer, so no module's end or process's death may drop one and leave the
 callback uncalled. They are keyed per call: `(platform-call . PROCESS)` (the tool's time limit),
