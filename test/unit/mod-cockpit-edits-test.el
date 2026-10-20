@@ -5,6 +5,7 @@
 (require 'drgnx)
 (require 'drgnx-agents)
 (load (expand-file-name "test/fixtures/cockpit-fixture" drgnx-dir) nil t)   ; a project, a job, worktrees, events
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)   ; virtual time
 (load (expand-file-name "modules/tools/drgnx-cockpit" drgnx-dir) nil t)
 
 (defconst drgnx-cockpit-edits-test--ext "ext:claude-code:42"
@@ -139,37 +140,41 @@ subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E c
         (should (null drgnx-cockpit-edits--files))))))
 
 (ert-deftest drgnx-cockpit-edits/a-burst-of-writes-is-one-redraw ()
-  :tags '(:timing)                                      ; wall-clock: 50 writes in about 1 s, a quiet machine
-  (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
-    (let ((drgnx-cockpit-edits-delay 0.3) (drgnx-cockpit-edits--list-every 1.5)
-          (windows (window-list)))
-      ;; point in README's "+more" line, two characters in; the window starting at README's header
-      (drgnx-cockpit-edits-test--goto "README" "+more")
-      (forward-char 2)
-      (let* ((start (save-excursion (drgnx-cockpit-edits-test--goto "README") (point)))
-             (line (count-lines start (line-beginning-position)))
-             (draws drgnx-cockpit-edits--draws) (t0 (float-time)))
-        (set-window-start (selected-window) start)
-        ;; the agent writes README 50 times in a second; the folder's watch says so each time, and of a file the pane
-        ;; does not list (a lock or temp file) too, whose listing waits for its turn
-        (setq drgnx-cockpit-edits--listed-at (float-time))
-        (let ((watch (drgnx-cockpit-edits-test--watch watches wt-a)))
-          (dotimes (i 50)
-            (drgnx-cockpit-fixture-write (concat wt-a "README") (format "readme\n%s\nmore\n" i))
-            (funcall watch (list 1 'changed (concat wt-a "README")))
-            (funcall watch (list 1 'created (concat wt-a ".#README")))
-            (accept-process-output nil 0.018)))
-        (should (< (- (float-time) t0) 1.2))
-        (drgnx-cockpit-edits-test--settle e)
-        ;; one redraw per 0.3 s, not one per write, and not held back by the listing: 3 or 4 in all
-        (should (<= 3 (- drgnx-cockpit-edits--draws draws) 4))
-        (should (string-search "\n+49\n" (buffer-string)))                ; the last write shows
-        (should (string-match-p "\\`README \\+2 " (drgnx-cockpit-edits-test--header "README")))
-        ;; no window moved; point and scroll stay on the same file, line and column (the line now reads +49)
-        (should (equal (window-list) windows))
-        (should (= (window-start) (save-excursion (drgnx-cockpit-edits-test--goto "README") (point))))
-        (should (= line (count-lines (window-start) (line-beginning-position))))
-        (should (equal (buffer-substring-no-properties (line-beginning-position) (point)) "+4"))))))
+  ;; virtual time: the 50 writes take 0.9 virtual seconds, whatever the machine does with them
+  (drgnx-test-with-clock ()
+    (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
+      (let ((drgnx-cockpit-edits-delay 0.3) (drgnx-cockpit-edits--list-every 1.5)
+            (windows (window-list)))
+        ;; point in README's "+more" line, two characters in; the window starting at README's header
+        (drgnx-cockpit-edits-test--goto "README" "+more")
+        (forward-char 2)
+        (let* ((start (save-excursion (drgnx-cockpit-edits-test--goto "README") (point)))
+               (line (count-lines start (line-beginning-position)))
+               (draws drgnx-cockpit-edits--draws))
+          (set-window-start (selected-window) start)
+          ;; the agent writes README 50 times in a second; the folder's watch says so each time, and of a file the pane
+          ;; does not list (a lock or temp file) too, whose listing waits for its turn
+          (setq drgnx-cockpit-edits--listed-at (float-time))
+          (let ((watch (drgnx-cockpit-edits-test--watch watches wt-a)))
+            (dotimes (i 50)
+              (drgnx-cockpit-fixture-write (concat wt-a "README") (format "readme\n%s\nmore\n" i))
+              (funcall watch (list 1 'changed (concat wt-a "README")))
+              (funcall watch (list 1 'created (concat wt-a ".#README")))
+              (drgnx-test-advance 0.018)
+              ;; a diff in flight finishes in real time, which costs no virtual time: the 0.3 s tick counts only the test's steps
+              (let ((until (+ (drgnx-test-real-time) 20)))
+                (while (and drgnx-cockpit-edits--busy (< (drgnx-test-real-time) until))
+                  (funcall drgnx-test--accept nil 0.005)))))
+          (drgnx-cockpit-edits-test--settle e)
+          ;; one redraw per 0.3 s, not one per write, and not held back by the listing: 3 or 4 in all
+          (should (<= 3 (- drgnx-cockpit-edits--draws draws) 4))
+          (should (string-search "\n+49\n" (buffer-string)))                ; the last write shows
+          (should (string-match-p "\\`README \\+2 " (drgnx-cockpit-edits-test--header "README")))
+          ;; no window moved; point and scroll stay on the same file, line and column (the line now reads +49)
+          (should (equal (window-list) windows))
+          (should (= (window-start) (save-excursion (drgnx-cockpit-edits-test--goto "README") (point))))
+          (should (= line (count-lines (window-start) (line-beginning-position))))
+          (should (equal (buffer-substring-no-properties (line-beginning-position) (point)) "+4")))))))
 
 (ert-deftest drgnx-cockpit-edits/accept-marks-and-a-change-unmarks ()
   (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
