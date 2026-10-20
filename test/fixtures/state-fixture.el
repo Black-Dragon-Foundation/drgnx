@@ -15,20 +15,18 @@
     (drgnx-signal--subscribers . nil)
     (drgnx-signal--state . nil)
     (drgnx-signal--posted . nil)
-    (drgnx-signal--timer . nil)                                ; Task 10: the one idle flush, store and bus
     (drgnx-signal--editor . nil)
     (drgnx-signal--switched . nil)
     (drgnx-signal-errors . nil))
   "Alist VARIABLE → FORM: the store and bus state `drgnx-test-with-state' saves by value and sets to FORM's
 value for its body (only the variables that are bound).  Each task that adds store or bus state adds it here.")
 
-(defvar drgnx-state-test--timers '(drgnx-signal--timer)
-  "Variables of `drgnx-state-test--variables' that hold a timer: cancelled on the way in and out, and nil
-afterwards (a cancelled timer left in the variable would keep the bus from arming a new one).")
+(defvar drgnx-state-test--timers '(signal-flush)
+  "The timer layer's keys of the store and bus (Task 10: the one idle flush, store and bus): cancelled on the
+way in and out.")
 
 (defun drgnx-state-test--cancel-timers ()
-  (dolist (v drgnx-state-test--timers)
-    (when (and (boundp v) (timerp (symbol-value v))) (cancel-timer (symbol-value v)))))
+  (mapc #'drgnx-timer-cancel drgnx-state-test--timers))
 
 (defun drgnx-state-test--call (fn)
   "Call FN with a fresh store and bus, the store's hooks off; restore everything by value (`set') after."
@@ -46,7 +44,7 @@ afterwards (a cancelled timer left in the variable would keep the bus from armin
       (drgnx-state-test--cancel-timers)
       (drgnx-state--install nil)        ; BODY may have turned the mode on
       (pcase-dolist (`(,var . ,value) saved)
-        (set var (if (memq var drgnx-state-test--timers) nil value)))
+        (set var value))
       (when on (drgnx-state--install t)))))
 
 (defmacro drgnx-test-with-state (&rest body)

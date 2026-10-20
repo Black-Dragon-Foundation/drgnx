@@ -27,6 +27,7 @@
 
 ;;; Code:
 (require 'subr-x)
+(require 'drgnx-timer)
 
 (declare-function puny-encode-domain "puny" (domain))
 (defvar drgnx-dir)
@@ -254,7 +255,7 @@ documentation, benchmarking, multicast or reserved."
          (line (substring head 0 (string-search "\r\n" head)))
          (target (and (string-match "\\`CONNECT \\([!-~]+\\) HTTP/1\\.[01]\\'" line)
                       (drgnx-sandbox-proxy--parse (match-string 1 line) t))))
-    (when (process-get conn :timer) (cancel-timer (process-get conn :timer)))
+    (drgnx-timer-cancel (cons 'sandbox-proxy-head conn))
     (pcase-let ((`(,key ,name ,port ,addr) target))
       (cond
        ((null target) (drgnx-sandbox-proxy--refuse conn))
@@ -298,13 +299,14 @@ documentation, benchmarking, multicast or reserved."
   (when (and (process-live-p conn) (null (process-get conn :phase))) (drgnx-sandbox-proxy--refuse conn)))
 
 (defun drgnx-sandbox-proxy--accept (_server conn _message)
-  "Take the new client CONN: 403 at once past `drgnx-sandbox-proxy-max-connections', else a deadline for its head."
+  "Take the new client CONN: 403 at once past `drgnx-sandbox-proxy-max-connections', else a deadline for its head
+\(the timer layer's (sandbox-proxy-head . CONN), owned by CONN: a client that goes takes it with it)."
   (process-put conn :client t)
   (let ((n 0))
     (dolist (p (process-list)) (when (and (process-get p :client) (process-live-p p)) (setq n (1+ n))))
     (if (> n drgnx-sandbox-proxy-max-connections) (drgnx-sandbox-proxy--refuse conn)
-      (process-put conn :timer (run-at-time drgnx-sandbox-proxy-head-timeout nil
-                                            #'drgnx-sandbox-proxy--head-expired conn)))))
+      (drgnx-timer-start (cons 'sandbox-proxy-head conn) drgnx-sandbox-proxy-head-timeout
+                         #'drgnx-sandbox-proxy--head-expired :args (list conn) :owner conn))))
 
 (defun drgnx-sandbox-proxy--client-sentinel (conn event)
   "Close CONN's upstream once CONN has ended."

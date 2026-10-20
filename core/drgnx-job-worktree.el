@@ -16,6 +16,7 @@
 
 ;;; Code:
 (require 'subr-x)
+(require 'drgnx-timer)
 (require 'drgnx-job-snapshot)
 
 (defcustom drgnx-job-worktree-timeout 300
@@ -115,19 +116,23 @@ short git, in the main repository."
 
 ;;;; Making the worktree
 
+(defun drgnx-job-worktree--timed-out (p)
+  "The deadline of the git process P (`drgnx-job-worktree--run'): mark it timed out and end it."
+  (when (process-live-p p) (process-put p :timed-out t) (delete-process p)))
+
 (defun drgnx-job-worktree--run (dir argv job done)
   "Run ARGV in DIR in a process of its own; DONE gets (EXIT . OUTPUT) once it ended (stderr in OUTPUT).  EXIT is
-`:timeout' after `drgnx-job-worktree-timeout'.  Stopping JOB ends it, and DONE is not called."
+`:timeout' after `drgnx-job-worktree-timeout' (the timer layer's (job-worktree-timeout . PROCESS), owned by the
+process).  Stopping JOB ends it, and DONE is not called."
   (let* ((out (generate-new-buffer " *drgnx-worktree*" t))
          (default-directory (file-name-as-directory dir))
          (process-environment (append drgnx-job-worktree--env process-environment))
-         (timer nil)
          (p (condition-case e
                 (make-process
                  :name "drgnx-worktree" :buffer out :noquery t :connection-type 'pipe :command argv
                  :sentinel (lambda (p _event)
                              (unless (process-live-p p)
-                               (when timer (cancel-timer timer))
+                               (drgnx-timer-cancel (cons 'job-worktree-timeout p))
                                (let ((text (string-trim (with-current-buffer out (buffer-string)))))
                                  (kill-buffer out)
                                  (unless (process-get p :stopped)
@@ -136,8 +141,8 @@ short git, in the main repository."
                                                          text))))))))
               (error (kill-buffer out) (signal (car e) (cdr e))))))
     (when job (process-put p :job job))
-    (setq timer (run-at-time drgnx-job-worktree-timeout nil
-                             (lambda () (when (process-live-p p) (process-put p :timed-out t) (delete-process p)))))
+    (drgnx-timer-start (cons 'job-worktree-timeout p) drgnx-job-worktree-timeout #'drgnx-job-worktree--timed-out
+                       :args (list p) :owner p)
     (ignore-errors (process-send-eof p))
     p))
 

@@ -14,6 +14,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'drgnx-paths)
+(require 'drgnx-timer)
 
 (declare-function drgnx-hub-socket "drgnx-hub" ())
 (declare-function drgnx-sandbox-sbpl "drgnx-sandbox-macos" (spec))
@@ -471,19 +472,23 @@ Signals `drgnx-sandbox-refused' when `:memory-max' is not a size (`drgnx-sandbox
 
 (defvar drgnx-job-git-timeout)
 
+(defun drgnx-sandbox--timed-out (p)
+  "The deadline of the step process P (`drgnx-sandbox--spawn'): mark it timed out and end it."
+  (when (process-live-p p) (process-put p :timed-out t) (delete-process p)))
+
 (defun drgnx-sandbox--spawn (name argv timeout done)
   "Run ARGV as process NAME, started in /, stdin closed, never waiting for it.  DONE gets (EXIT . OUTPUT) once it
 ended — OUTPUT is its stdout and stderr together, trimmed — or (:timeout . \"did not finish in TIMEOUT s\") when it
-ran past TIMEOUT seconds and was ended.  The process; signals when it cannot start, leaving nothing behind."
+ran past TIMEOUT seconds (the timer layer's (sandbox-step-timeout . PROCESS), owned by the process) and was ended.
+The process; signals when it cannot start, leaving nothing behind."
   (let* ((out (generate-new-buffer (format " *%s*" name) t))
          (default-directory "/")
-         (timer nil)
          (p (condition-case e
                 (make-process
                  :name name :buffer out :noquery t :connection-type 'pipe :command argv
                  :sentinel (lambda (p _event)
                              (unless (process-live-p p)
-                               (when timer (cancel-timer timer))
+                               (drgnx-timer-cancel (cons 'sandbox-step-timeout p))
                                (let ((text (string-trim (with-current-buffer out (buffer-string)))))
                                  (kill-buffer out)
                                  (with-demoted-errors "drgnx sandbox: %S"
@@ -491,7 +496,7 @@ ran past TIMEOUT seconds and was ended.  The process; signals when it cannot sta
                                                      (cons :timeout (format "did not finish in %s s" timeout))
                                                    (cons (process-exit-status p) text))))))))
               (error (kill-buffer out) (signal (car e) (cdr e))))))
-    (setq timer (run-at-time timeout nil (lambda () (when (process-live-p p) (process-put p :timed-out t) (delete-process p)))))
+    (drgnx-timer-start (cons 'sandbox-step-timeout p) timeout #'drgnx-sandbox--timed-out :args (list p) :owner p)
     (ignore-errors (process-send-eof p))
     p))
 

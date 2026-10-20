@@ -5,16 +5,17 @@
 (ert-deftest drgnx-signal-edge/a-failing-window-function-is-recorded-and-the-flush-still-armed ()
   "M3d-3: an error in one `drgnx-signal-window-functions' function neither skips the others nor the
 flush schedule, and it is recorded."
-  (let* ((drgnx-signal-errors nil) (drgnx-signal--timer nil) (called nil)
+  (let* ((drgnx-signal-errors nil) (called nil)
          (drgnx-signal-window-functions
           (list (lambda (_f) (error "Boom")) (lambda (f) (push f called)))))
+    (drgnx-timer-cancel 'signal-flush)
     (unwind-protect
         (progn
           (drgnx-signal--windows (selected-frame))
           (should (equal called (list (selected-frame))))
-          (should (timerp drgnx-signal--timer))
+          (should (drgnx-timer-active-p 'signal-flush))
           (should (string-match-p "Boom" (car drgnx-signal-errors))))
-      (when (timerp drgnx-signal--timer) (cancel-timer drgnx-signal--timer)))))
+      (drgnx-timer-cancel 'signal-flush))))
 
 (ert-deftest drgnx-signal-edge/a-flush-with-many-buffers-is-cheap ()
   "M3d-8: a flush with 1500 file buffers takes under 10 ms — the best of five, so one slice of a
@@ -34,7 +35,7 @@ busy machine is not judged."
                      0.01)))
       (dolist (b (buffer-list))
         (when (and (buffer-file-name b) (string-prefix-p dir (buffer-file-name b))) (kill-buffer b)))
-      (when (timerp drgnx-signal--timer) (cancel-timer drgnx-signal--timer))
+      (drgnx-timer-cancel 'signal-flush)
       (delete-directory dir t))))
 
 ;;; Dirty flags (PERF-M2): a flush rebuilds only what a hook said changed.
@@ -44,7 +45,7 @@ busy machine is not judged."
 Every emission is pushed onto EVENTS-VAR as (EVENT . DATA)."
   (declare (indent 1))
   `(let ((drgnx-signal--subscribers nil) (drgnx-signal--state nil) (drgnx-signal-errors nil)
-         (drgnx-signal--timer nil) (drgnx-signal--dirty nil) (drgnx-signal--seen-buffer nil)
+         (drgnx-signal--dirty nil) (drgnx-signal--seen-buffer nil)
          (drgnx-signal--seen-modified nil) (drgnx-signal--seen-name nil)
          (was-on drgnx-signal-mode) (,events-var nil)
          (dir (make-temp-file "drgnx-signal-edge" t)))
@@ -57,7 +58,7 @@ Every emission is pushed onto EVENTS-VAR as (EVENT . DATA)."
            (setq ,events-var nil)
            ,@body)
        (unless was-on (drgnx-signal-mode -1))
-       (when (timerp drgnx-signal--timer) (cancel-timer drgnx-signal--timer))
+       (drgnx-timer-cancel 'signal-flush)
        (dolist (b (buffer-list))
          (when (and (buffer-file-name b) (string-prefix-p dir (buffer-file-name b)))
            (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b)))
