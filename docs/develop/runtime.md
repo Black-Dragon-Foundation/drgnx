@@ -31,6 +31,7 @@ runtime/
 | Name | What it is |
 |---|---|
 | `drgnx-ratatoskr` (binary `ratatoskr`, symlink `rtsk`) | the runtime: the hub protocol's server |
+| `drgnx-proto` | the hub protocol's contract: wire types, strict lines, typed decode, proofs, paths ([below](#drgnx-proto-the-contract)) |
 | `urdr` | the SQLite store; self-contained, its public API names no drgnx type |
 | `gleipnir` | the sandbox; self-contained |
 | `hrafn` | search and the indexer |
@@ -52,6 +53,41 @@ cargo deny  --manifest-path runtime/Cargo.toml check
 ```
 
 Only `Cargo.lock` regeneration (`cargo generate-lockfile`, `cargo update -w`) runs without `--locked`.
+
+## drgnx-proto: the contract
+
+`crates/drgnx-proto` holds what the hub protocol is on the Rust side; the server, the client half and the tests share it.
+
+- **`wire`**: `Request {id?, method, params}` (`params` is `{}` when absent; no `id` makes a notification), `Answer {id,
+  result, ignored?}` (`ignored` left out when empty), `ErrorAnswer {id, error}`, `Error {code, message, path?}` and
+  `Event {event, data}`. An `Id` is a number or a string. The codes are `no-method`, `not-allowed`, `proto`,
+  `invalid-params`, `schema` and `internal`. Not JSON-RPC: no `jsonrpc` key.
+- **`line`**: a client line is at most `MAX_CLIENT_LINE` (1 MiB) and `codec()` enforces it (a longer line is an error,
+  and the connection is closed); a hub line is at most `MAX_HUB_LINE` (16 MiB). `parse_strict` refuses a duplicate key at
+  any depth, nesting deeper than 64 (the top object is depth 1) and anything but an object at the top. Its `LineError`
+  carries the path (`params.env[1].k`) and the line's `id` when it can be read: the top-level `id` of a line that is JSON
+  (duplicates and depth aside), else the Lisp hub's rule (the first `"id": <digits>` followed by `,` or `}`), so the
+  sender gets an `invalid-params` answer instead of waiting.
+- **`decode`**: `typed::<T>(&params)` decodes through `serde_path_to_error` around `serde_ignored`. It returns the value
+  and the keys `T` has no field for, as paths (`env[0].x`), which become the answer's `ignored`. A value that does not
+  fit is `invalid-params` with the path of the part that did not; a field missing at the top has no path.
+- **`proof`**: `Cap` is 32 random bytes as 64 lowercase hex, kept in a `secrecy` string (no `Debug`, zeroed on drop);
+  `Cap::read` refuses a file over 256 bytes or one that is not exactly 64 lowercase hex. `nonce()` is 16 random bytes as
+  32 hex. The client proves `HMAC-SHA256(cap, "drgnx-hub client " + hub_nonce + " " + client_nonce)` and the hub
+  `HMAC-SHA256(cap, "drgnx-hub hub " + client_nonce + " " + hub_nonce)`, keyed with the cap's 64 hex characters as ASCII
+  (as the Lisp `drgnx-hub-hmac`). `verify` decodes both proofs to 32 bytes (a malformed one, uppercase included, is never
+  valid) and compares the bytes in constant time (`subtle`).
+- **`paths`**: `data_dir`, `socket_path`, `cap_path` (`hub-HASH.cap`), `lock_path` (`hub-HASH.sock.lock`) and
+  `backend_socket_path`, the Lisp backend's private socket `<socket dir>/hub-HASH.d/backend.sock` (one per data dir, so
+  two data dirs sharing a runtime dir never collide). Over 103 bytes it goes to `<tmp>/drgnx-hub-UID/hub-HASH.d/`, and
+  past 103 bytes there too it is `PathError::TooLong`. `private_dir` makes a directory 0700 (parents too) when it is not
+  there, refuses one that is a link, not a directory or another user's, and chmods it 0700 through the descriptor it
+  checked (opened with `O_NOFOLLOW`), as the Lisp `drgnx-hub--private-dir` does.
+
+`cargo test -p drgnx-proto` runs the unit tests (RFC 4231 case 2 for the HMAC, the socket fixture below), a
+compile-fail doc test that `Cap` has no `Debug`, and the proptest `tests/proptest_line.rs`: random byte streams, read in
+random pieces, through the codec and `parse_strict` never panic, and the codec never holds more than one line's limit
+plus the read that went past it.
 
 ## The conformance harness
 
@@ -137,7 +173,7 @@ Special strings: `"$any"`, `"$string"`, `"$number"`, `"$hex64"`, `"$absent"` (th
 ### Where the socket is: one fixture for Lisp and Rust
 
 The data directory and the socket path follow Lisp's `drgnx-paths-dir 'data` and `drgnx-hub-socket` exactly
-(`conformance/src/paths.rs` is the Rust side): only an absolute environment value counts; names are normalised as Emacs's
+(`crates/drgnx-proto/src/paths.rs` and, until it switches to that module, `conformance/src/paths.rs` are the Rust side): only an absolute environment value counts; names are normalised as Emacs's
 `expand-file-name` does it, oddities kept (`/a/../../b` is `/../b`, `//a` stays `//a`); `sha1` of the data directory
 (with its trailing `/`), cut to 8 hex digits, names `hub-HASH.sock`; it is under `$XDG_RUNTIME_DIR/drgnx/` when that is a
 directory, else under `<state>/hub/`; a path over 103 bytes goes to `<tmp>/drgnx-hub-UID/`, where `<tmp>` is the first
@@ -145,8 +181,8 @@ of `TMPDIR`, `TMP`, `TEMP` that is set, else `/tmp` (Emacs's `temporary-file-dir
 scope.
 
 `test/fixtures/hub-socket-cases.json` holds cases `{env, data_dir, socket}` (`$UID` stands for the uid); the Lisp test
-`drgnx-hub-socket-cases/lisp-agrees-with-the-fixture` and the Rust test `paths::tests::socket_cases_fixture` both read
-it. To add a case, run the Lisp side to measure it and put the result in; never write an expected value by hand.
+`drgnx-hub-socket-cases/lisp-agrees-with-the-fixture` and the Rust tests `paths::tests::socket_cases_fixture` (in the
+harness and in `drgnx-proto`) all read it. To add a case, run the Lisp side to measure it and put the result in; never write an expected value by hand.
 
 ### Testing the harness
 
