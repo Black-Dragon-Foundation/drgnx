@@ -712,8 +712,12 @@ with a display: `drgnx open' stays graphical (the unit tier has no DISPLAY, and 
           (should (string-search (format "GNU Emacs %s" emacs-version) (cdr r)))
           (should-not (file-exists-p (expand-file-name (concat "emacs/" name) run))))
       (let ((process-environment (append env process-environment)))   ; never left running, even when it failed
-        (call-process (expand-file-name "emacsclient" invocation-directory) nil nil nil
-                      "-a" "false" "-s" name "-e" "(kill-emacs)"))
+        ;; Emacs.app keeps emacsclient in Contents/MacOS/bin/, as bin/drgnx's emacsclient_bin knows
+        (call-process (seq-find #'file-executable-p
+                                (list (expand-file-name "emacsclient" invocation-directory)
+                                      (expand-file-name "bin/emacsclient" invocation-directory))
+                                (expand-file-name "emacsclient" invocation-directory))
+                      nil nil nil "-a" "false" "-s" name "-e" "(kill-emacs)"))
       (delete-directory dir t))))
 
 ;;;; drgnx test — a run leaves nothing behind in the parent temp dir (/tmp is RAM)
