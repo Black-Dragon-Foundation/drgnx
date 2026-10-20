@@ -21,6 +21,7 @@ commands=(
   'service-unit:print the systemd user unit'
   'onboard:set drgnx up'
   'check:build, then every test tier'
+  'lease:run a command in a slot of the host lease'
   'fmt:format drgnx'"'"'s Emacs Lisp'
   'work:the work tracker'
   'hub:the hub behind agents and jobs'
@@ -67,6 +68,8 @@ case $cmd in
       '*:image:(fedora-44 debian-trixie ubuntu-26.04 fedora-45 archlinux)' ;;
   sync)
     _arguments '--offline[from the lock and the cache]' '--seed[copy another elpa first]:directory:_files -/' '--prune[remove packages the manifest no longer needs]' '--dry-run[with --prune: only list them]' ;;
+  lease)
+    _arguments '--wait[seconds to wait for a slot]:seconds' '1:class:(light heavy exclusive status)' ;;
   lock)
     _arguments '--ship[write etc/drgnx.lock.eld]' ;;
   onboard)

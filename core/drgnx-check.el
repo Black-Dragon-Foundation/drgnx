@@ -15,6 +15,8 @@
 (require 'subr-x)
 (require 'drgnx-paths)
 (require 'drgnx-file)
+;; the one test environment (harness/): a shard's C environment comes from it
+(require 'drgnx-test-env (expand-file-name "harness/drgnx-test-env" drgnx-dir))
 
 (defconst drgnx-check-timeouts
   '((build . 300) (unit . 900) (ui . 900) (tty . 1500) (live . 1500) (scenario . 1500) (bench . 1200) (perf . 2400))
@@ -90,14 +92,6 @@ A summary that is missing, unreadable or has no :leaks (the census was off) adds
 
 (defun drgnx-check--emacs () (or (getenv "DRGNX_EMACS") (expand-file-name invocation-name invocation-directory)))
 
-(defconst drgnx-check-unit-env
-  '("DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/drgnx-unit-test"
-    "DISPLAY" "WAYLAND_DISPLAY" "SWAYSOCK" "I3SOCK" "HYPRLAND_INSTANCE_SIGNATURE" "NIRI_SOCKET")
-  "The environment of a unit shard (bare names are unset): a dead session bus and no display or compositor,
-so a test cannot reach the user's desktop.  `bin/drgnx test' sets the same, plus a runtime directory of its
-own (XDG_RUNTIME_DIR); here the runner (harness/run-ert.el) gives each shard that one inside Emacs, which is
-enough for everything but dbus.el: it reads the process's own environment.")
-
 (cl-defun drgnx-check-plan (&key (root drgnx-dir) (unit-shards 4) (live-shards 2) perf (gui t) (tty (and (executable-find "tmux") t)) dir leaks)
   "The jobs of a check of the checkout ROOT: (:name :phase :command :gui :env :timeout)…  DIR: where shard
 results go (default: none).  TTY (default: tmux is installed): with GUI, the terminal tier, `bin/drgnx test --tty'.
@@ -119,7 +113,7 @@ LEAKS: the unit jobs (not the live ones) run with the leak census on (`drgnx-che
                                (append (list (drgnx-check--emacs) "--batch" "-Q" "--eval" "(setq load-prefer-newer t)")
                                        paths (list "-l" run-ert "-f" "drgnx-run-ert-batch") files)
                                :env (append (list "DRGNX_TEST_SELECTOR=(not (tag :timing))") (funcall results name)
-                                            census drgnx-check-unit-env))
+                                            census (drgnx-test-env-outer)))
                       jobs))
     ;; the unit tests that measure time, alone once the parallel phase is over, in one Emacs (16 tests: an Emacs
     ;; for each of ~140 files would cost more than they take; each shard above runs a file per Emacs)
@@ -127,14 +121,14 @@ LEAKS: the unit jobs (not the live ones) run with the leak census on (`drgnx-che
                    (append (list (drgnx-check--emacs) "--batch" "-Q" "--eval" "(setq load-prefer-newer t)")
                            paths (list "-l" run-ert "-f" "drgnx-run-ert-batch" (expand-file-name "test/unit" root)))
                    :env (append (list "DRGNX_TEST_SELECTOR=(tag :timing)" "DRGNX_TEST_ONE_PROCESS=1") (funcall results "unit-timing")
-                                census drgnx-check-unit-env))
+                                census (drgnx-test-env-outer)))
           jobs)
     (when gui
       ;; the session test's 110 s default is too tight beside the parallel shards (a session boots slower under load)
       (push (funcall job "ui" 2 'ui (list bin "ui" "test-ui-session") :gui t :env (list "DRGNX_UI_TEST_TIMEOUT=300")) jobs)
       ;; the terminal tier: Emacs sessions in private tmux servers, a file at a time in an Emacs of its own (the runner
       ;; does that, as for a unit shard).  A GUI job for the memory accounting: one session is an Emacs of its own.
-      (when tty (push (funcall job "tty" 2 'tty (list bin "test" "--tty") :gui t :env drgnx-check-unit-env) jobs))
+      (when tty (push (funcall job "tty" 2 'tty (list bin "test" "--tty") :gui t :env (drgnx-test-env-outer)) jobs))
       (cl-loop for files in (drgnx-check-shard (directory-files-recursively (expand-file-name "test/live" root) "-test\\.el\\'")
                                                live-shards durations)
                for i from 1
@@ -143,7 +137,7 @@ LEAKS: the unit jobs (not the live ones) run with the leak census on (`drgnx-che
                do (push (funcall job name 2 'live
                                  (append (list (drgnx-check--emacs) "--batch" "-Q" "--eval" "(setq load-prefer-newer t)")
                                          paths (list "-l" "drgnx-ui" "-l" run-ert "-f" "drgnx-run-ert-batch") files)
-                                 :gui t :env (append (list "DRGNX_TEST_ONE_PROCESS=1") (funcall results name) drgnx-check-unit-env))
+                                 :gui t :env (append (list "DRGNX_TEST_ONE_PROCESS=1") (funcall results name) (drgnx-test-env-outer)))
                         jobs))
       ;; the tiers that measure time, each alone: scenarios hold frame budgets (a frame from the daemon in
       ;; < 500 ms failed at 514 ms next to the parallel phase), then the bench, then perf

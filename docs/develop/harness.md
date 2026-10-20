@@ -12,7 +12,7 @@ how every drgnx UI change is developed and verified.
 | `bin/drgnx test --scenario [--config C]` | behaviour scenarios in `test/scenario/` inside a session of configuration C (default `drgnx`; `gryphn` is skipped where that config is absent) | the host (needs mutter) |
 | `bin/drgnx test --container` | the batch tier in a `fedora:45` container (Emacs 31.1, drgnx's baseline); `DRGNX_TEST_IMAGE` / `DRGNX_TEST_GUI_IMAGE` use a prebuilt image ([ci.md](ci.md)) | podman, docker or nerdctl |
 | `bin/drgnx test --container --ui [--compositor C]` | the GUI tier in a container (mutter renders without a GPU; sway, Xvfb and i3 are in the image too; `kwin` and `niri` run in an image of their own — see [Compositors](#compositors)), capped at 3 GB with no swap on top (`--memory 3g --memory-swap 3g`; `DRGNX_TEST_GUI_MEMORY` sets another size) | podman, docker or nerdctl |
-| `bin/drgnx test --ui [--compositor C]` | GUI ERT suites in `test/ui/` inside a headless session, then live ERT suites in `test/live/` (batch Emacs starting real sessions); `--compositor sway\|x11\|i3\|kwin\|niri` runs every session of the tier under that compositor (`DRGNX_UI_COMPOSITOR`) | the host (needs mutter, or that compositor) |
+| `bin/drgnx test --ui [--compositor C]` | GUI ERT suites in `test/ui/` inside a headless session, then live ERT suites in `test/live/` (a child batch Emacs in `drgnx-test-env`'s sandbox, as `bin/drgnx check`'s live shards: a temp HOME and state directory, a dead bus, no provider keys; it starts real sessions); `--compositor sway\|x11\|i3\|kwin\|niri` runs every session of the tier under that compositor (`DRGNX_UI_COMPOSITOR`) | the host (needs mutter, or that compositor) |
 | `bin/drgnx test --tty` / `--container --tty [--fedora 45]` | the terminal tier in `test/tty/`: drgnx in Emacs sessions inside private tmux servers — see [Terminal tier](#terminal-tier) | the host (needs tmux); a container |
 | `bin/drgnx test --bench` | the workbench timed against treemacs and ibuffer in a GUI session on a 25k-file project — see [workbench.md](../guide/workbench.md#performance) | the host (needs mutter); treemacs from `$DRGNX_BENCH_ELPA` |
 | `bin/drgnx test --perf` / `--soak [MIN]` | input latency, frames, GC, startup and memory against budgets; the memory soak — see [perf.md](perf.md) | the host (needs mutter) |
@@ -284,6 +284,15 @@ Unix socket paths are limited to ~108 bytes; the hash keeps two state roots (say
 A `minimal` session runs at drgnx's GC settings (`drgnx-gc-setup`, so timings do not include Emacs' 800 kB
 default collecting every few keystrokes); a session of any other configuration brings its own.
 The Emacs binary is `$DRGNX_EMACS`, else `emacs-pgtk`, else `emacs`.
+
+## A session holds a light slot
+
+A session started interactively (`drgnx ui start`, MCP `ui_start`: `DRGNX_LEASE_HELD` unset) holds a light slot of the
+host lease (`docs/develop/check.md`, "The host lease") while it lives: its unit command is `bin/drgnx lease light
+--wait 120 -- <compositor command>`, with `DRGNX_LEASE_DIR` passed in the environment because a session's environment
+is `env -i`. With no slot free in 120 s the session exits, and `drgnx-ui-start` fails with `no light slot free in 120 s:
+HOLDERS`. Sessions started inside a leased command (`test`, `check`, `perf`) take none: `DRGNX_LEASE_HELD` reaches them
+through the session's allowlist. The lease is off in CI, in the detached launcher (containers) and without `flock`.
 
 ## Driving a session
 
@@ -890,6 +899,37 @@ kkp tests and the kitty exit test run there too; without it they skip.
 `DRGNX_TEST_TTY_IMAGE` uses a prebuilt image. `bin/drgnx check` runs the tier as the `tty` job (a GUI job for the memory
 accounting, in the parallel phase) when tmux is installed; `--no-gui` leaves it out. The `Terminal tier` workflow runs
 the two container runs nightly ([ci.md](ci.md)).
+
+## One test environment
+
+`harness/drgnx-test-env.el` is the only place that says what a test may see. `(drgnx-test-env TIER RUN &key display
+config)` returns the strings for `process-environment` (`"K=V"` sets, a bare `"K"` unsets); TIER is `unit`, `live`,
+`ui`, `scenario`, `bench` or `perf`, RUN the run's private directory.
+
+Every tier gets:
+- `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME`, `DRGNX_CONFIG_DIR`, `DRGNX_DATA_DIR`
+  and `TMPDIR` under RUN, and a private `XDG_RUNTIME_DIR` (RUN/run, mode 700);
+- `DRGNX_TEST_ISOLATED=1`, `DRGNX_NO_HUB_START=1`, `DRGNX_HUB_PARENT_PID` (the hub ends with this Emacs);
+- a dead session bus (`drgnx-test-env-dead-bus`), and no provider key or agent home
+  (`drgnx-test-env-provider-variables`).
+
+Also unset: `drgnx-test-env-ambient-variables` (the SSH agent, `GPG_AGENT_INFO`, the caller's `XAUTHORITY`, the system
+`XDG_DATA_DIRS`/`XDG_CONFIG_DIRS`, git's global configuration and ssh command, `EMACSLOADPATH`, the Claude Code
+socket and token) and every other variable of the caller that holds a path under the real HOME (found by a scan; the
+only exceptions are `PATH`, `PWD`, `OLDPWD` and `DRGNX_USER_ELPA`). `GNUPGHOME` is RUN/gnupg (mode 700). The unit
+runner also binds `user-emacs-directory` to RUN/emacs, so nothing under `~/.emacs.d` or `~/.config/emacs` is written.
+`DRGNX_USER_ELPA` (the real `~/.config/emacs/elpa`, read-only) is the deliberate exception: tests that load packages
+read it and never write it. `TMPDIR` the runner reads before it fakes anything (its own run directory is made there).
+
+The display and compositor variables (`drgnx-test-env-desktop-variables`) are unset, except in the GUI tiers (`ui`,
+`scenario`, `bench`, `perf`), which get only the `:display` strings of the harness compositor. `:config` is an external
+configuration directory whose code directories (`drgnx-test-env-config-links`) are linked into RUN/config. Packages
+stay readable, read-only, through `DRGNX_USER_ELPA`.
+
+The unit runner (`drgnx-run-ert-batch`) calls it for `unit` and adds only its own variables (the native-compilation
+directory, the runner's switches). `drgnx-test-env-outer` is the part a parent sets in a child's C environment before
+Emacs starts, because dbus.el reads that one: the dead bus and the desktop variables unset. `bin/drgnx` repeats those
+lines in bash for the unit tier, and a test (`drgnx-test-env/bin-drgnx-matches-it`) fails if they drift.
 
 ## Virtual time
 
