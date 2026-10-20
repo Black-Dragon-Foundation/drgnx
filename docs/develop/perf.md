@@ -113,6 +113,7 @@ not move. A broken one fails the run (`drgnx-perf-verdict`; `--perf` exits 1):
 | Path | Limit | Seeded as |
 |---|---|---|
 | `(:alloc :p50)` | objects allocated per command | measured x 1.25, rounded up |
+| `(:cpu_ms :p50)` (typing, typing-with-ghost, remote-typing) | a normal key: about 30 ms (the p90 sits on the 1-in-10 spike, PERF-KEYSPIKE-1) | the measured p50 with the same headroom |
 | `(:cpu_ms :p90)` | CPU ms per command, times `DRGNX_PERF_CPU_FACTOR` (default 1; 2 on hosted runners) | the container's p90 x 2 |
 | `(:rows)` | rows drawn during the run, exact | measured |
 | `(:processes)`, `(:rss_kb)` | as before | the design |
@@ -151,6 +152,36 @@ loop of 2,000,000 iterations timed on the wall clock and on the process's CPU cl
 `:loaded` is t when wall / CPU > 1.3, and the run prints `(loaded)` after that workload's wall numbers. The history
 line still records the highest load average seen (`load`). A wall-clock judgement is made by the paired A/B run at
 n >= 100, not by one run.
+
+## Judging wall clock: `--perf --ab REF`
+
+```sh
+DRGNX_PERF_WORKLOADS=typing bin/drgnx test --perf --ab main [--n 100]
+```
+
+Wall clock is judged by interleaving two trees, so no quiet machine is needed. REF is exported with `git archive`
+(a plain directory under `$DRGNX_RUN_TMP`, not a worktree), both trees are built (`bin/drgnx build`), and each gets a
+session: the work tree's own, and one whose `init/`, `core/`, `wb/` and `modules/` come from REF
+(`drgnx-ui-session-repo`; the harness and the probes are always the work tree's). Per workload: setup in both, one
+discarded warm-up run per side, then runs A, B, A, B, ... until each side has at least N (default 100) per-command wall
+samples and two runs. A calibration runs in both sessions before and after; one loaded calibration means the
+workload is not judged. The command takes the host for itself (the exclusive lease); if it waits ten minutes without
+getting it, it runs plain `--perf` on the work tree and prints `wall clock not judged: host busy`.
+
+The verdict is a seeded bootstrap (2000 resamples, its own generator): the median of the work tree minus the median
+of REF, with a 95% interval. The threshold is T = max(1 ms, 10% of REF's median). **regressed**: the whole
+interval is above T. **no-regression**: all of it is at or below T. **inconclusive**: T is inside it. The
+report also prints both sides' n, p50, p90, p95, allocation, CPU and rows, and judges the work tree's absolute wall
+budgets (`(:input :p95)` and `:max`) at n >= 100. A workload that errors on REF (it did not exist there), or that
+has no per-command samples (frames, startup, memory), is reported "not comparable".
+
+Exit: 0 judged, no regression, budgets hold; 1 regressed or a wall budget fails; 3 not judged (a loaded calibration,
+a busy host, an inconclusive interval). `DRGNX_PERF_RESULTS` gets the verdicts and both sides' stats.
+
+**Fresh builds and the eln cache (PERF-ELN-1).** A tree that was just built has no native-compiled files yet: its
+session compiles them in the background while it runs, and the first runs cost several times more. Both sessions
+therefore wait until their native compilation has drained, and both run a discarded warm-up before the samples; the
+report prints each side's warm-up p50 next to the measured one.
 
 ## The audit's per-command hook time
 
