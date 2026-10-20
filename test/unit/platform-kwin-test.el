@@ -256,6 +256,7 @@ temporary directory is private to the test."
                                   (set-frame-parameter frame 'title old))))
 
 (drgnx-platform-test--deftest drgnx-platform-kwin/place-moves-again-while-kwin-shows-the-window-elsewhere ()
+                              :tags '(:timing)
                               ;; KWin places a new window when it first shows it, which can come after a move made at once
                               ;; (seen on KWin 6.7.5: the restored window ended up back on the first screen): the move is made
                               ;; again until Emacs sees the frame on the target screen, within the one deadline.  On virtual
@@ -354,6 +355,7 @@ temporary directory is private to the test."
 ;; A D-Bus error reply (KWin is not running) does not reach an asynchronous call's handler; dbus.el runs
 ;; `dbus-event-error-functions' with an event whose serial is the call's.
 (drgnx-platform-test--deftest drgnx-platform-kwin/a-dbus-error-reply-is-reported-at-once ()
+                              :tags '(:timing)
                               (drgnx-platform-kwin-test--with-kwin nil
                                 (setq drgnx-platform-kwin-test--fail-load t)
                                 (let* ((start (float-time))

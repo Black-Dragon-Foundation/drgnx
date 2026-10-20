@@ -213,6 +213,7 @@ no agents, and everything closed afterwards."
         (should (= 2 (length steered)))))))
 
 (ert-deftest drgnx-live/agents-get-the-endpoint ()
+  :tags '(:timing)
   (let* ((root (make-temp-file "drgnx-live" t))
          (process-environment (cons (concat "XDG_STATE_HOME=" root) process-environment))
          (drgnx-live--browser nil) (drgnx-live--given nil) (drgnx-live-chrome-programs '("sh"))
@@ -290,6 +291,7 @@ no agents, and everything closed afterwards."
         (delete-directory root t)))))
 
 (ert-deftest drgnx-live/failures-say-why ()
+  :tags '(:timing)
   ;; no Chrome: a user error that names it, and nothing is started
   (let ((drgnx-live--browser nil) (drgnx-live-chrome-programs '("drgnx-no-such-chrome")) (started nil))
     (cl-letf (((symbol-function 'drgnx-jobs-start) (lambda (&rest _) (setq started t) "x")))

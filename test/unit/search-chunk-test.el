@@ -65,6 +65,7 @@
   (should (= (length (drgnx-search-chunks "x")) 1)))
 
 (ert-deftest drgnx-search-chunk/a-big-file-is-cheap ()
+  :tags '(:timing)
   (let* ((text (mapconcat (lambda (n) (format "(defun f%d () (message \"hello %d\"))" n n))
                           (number-sequence 1 25000) "\n"))
          (t0 (float-time))
@@ -292,6 +293,7 @@
 
 (ert-deftest drgnx-search-files/git-input-has-a-deadline ()
   "A git that never reads its input cannot hold a timed listing past its deadline."
+  :tags '(:timing)
   (skip-unless (executable-find "sleep"))
   (let* ((bin (make-temp-file "drgnx-slow-git" t))
          (exec-path (cons bin exec-path))
@@ -497,6 +499,7 @@ them): checked on the environment each call gets — a machine without the Germa
        (delete-directory bin t))))
 
 (ert-deftest drgnx-search-files/a-git-timeout-cuts-a-slow-git-off ()
+  :tags '(:timing)
   (skip-unless (executable-find "sleep"))
   (let ((root (make-temp-file "drgnx-search-slow" t)))
     (unwind-protect
@@ -515,6 +518,7 @@ them): checked on the environment each call gets — a machine without the Germa
       (should (equal (mapcar #'car (drgnx-search-files root)) '("a.txt"))))))
 
 (ert-deftest drgnx-search-files/a-git-gone-before-its-stderr-ends-is-not-waited-for ()
+  :tags '(:timing)
   ;; git's exit can be seen before the end of its stderr pipe (macOS: often); here a child holds that pipe
   ;; a little longer.  Once git is gone, the timed path still reads that end instead of spinning to the deadline.
   (skip-unless (and (executable-find "git") (executable-find "sleep")))

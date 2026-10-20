@@ -226,6 +226,7 @@ DIR/NAME with SWAP-FROM replaced by that title (what the window manager would re
 ;;;; Placing a restored window by pid and title
 
 (drgnx-platform-test--deftest drgnx-platform-wm/hyprland-places-a-restored-window-by-pid-and-title ()
+                              :tags '(:timing)
                               (drgnx-platform-hn-test--session 'hyprland (drgnx-platform-hn-test--hypr-files)
                                                                "-j clients clients\ndispatch hl\\.dsp ok"
                                 (set-frame-parameter frame 'title "before")
@@ -285,6 +286,7 @@ DIR/NAME with SWAP-FROM replaced by that title (what the window manager would re
                                                  "niri msg action move-window-to-monitor --id 2 winit")))))
 
 (drgnx-platform-test--deftest drgnx-platform-wm/place-polls-and-gives-the-title-back-at-the-deadline ()
+                              :tags '(:timing)
                               ;; no window ever has the title: the answer is an error within the deadline, and the title is back
                               (dolist (wm '(hyprland niri))
                                 (let ((drgnx-platform-restore-timeout 0.6))
@@ -327,6 +329,7 @@ DIR/NAME with SWAP-FROM replaced by that title (what the window manager would re
 ;;;; One deadline for a move that makes several calls
 
 (drgnx-platform-test--deftest drgnx-platform-wm/a-move-with-several-calls-is-cut-at-one-deadline ()
+                              :tags '(:timing)
                               ;; each call takes 0.4 s, the move may take 0.6 s: the second call gets what is left and is cut; the adapter
                               ;; answers with its own message, not the watchdog's
                               (let ((drgnx-platform-command-timeout 0.6))

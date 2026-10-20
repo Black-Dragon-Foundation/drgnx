@@ -227,6 +227,44 @@ the run's tests.")
   "The value of the environment variable VAR, or nil when it is unset or empty."
   (let ((s (getenv var))) (and s (not (string-empty-p s)) s)))
 
+(defun drgnx-run-ert--no-timing-p ()
+  "Whether DRGNX_TEST_NO_TIMING=1: the run leaves out the tests tagged `:timing' (wall-clock assertions) and lists them
+as skipped (CI's shared runners)."
+  (equal (drgnx-run-ert--env "DRGNX_TEST_NO_TIMING") "1"))
+
+(defun drgnx-run-ert--timing-skipped (selector)
+  "The tests tagged `:timing' that SELECTOR (the raw selector, nil for every test) picks, as skipped entries
+\(:name :reason), when `drgnx-run-ert--no-timing-p'; else nil.  They are loaded, not run."
+  (when (and (drgnx-run-ert--no-timing-p) (not drgnx-run-ert--order-in))
+    (mapcar (lambda (tt) (list :name (symbol-name (ert-test-name tt)) :reason "wall clock: not run in CI"))
+            (ert-select-tests `(and ,(or selector t) (tag :timing)) t))))
+
+(defun drgnx-run-ert--no-skip-file ()
+  "The must-run list: DRGNX_TEST_NO_SKIP (a file), else test/no-skip.eld of this checkout."
+  (let ((given (drgnx-run-ert--env "DRGNX_TEST_NO_SKIP")))
+    (if given (expand-file-name given)
+      (expand-file-name "../test/no-skip.eld" (file-name-directory drgnx-run-ert--self)))))
+
+(defun drgnx-run-ert--no-skip-failures (skipped)
+  "Failures (:name :condition), one for each of SKIPPED (entries :name :reason) that the must-run list names for
+this `system-type'.  The list is `((PLATFORM NAME…)…)'; a file that is missing names nothing."
+  (let ((file (drgnx-run-ert--no-skip-file)) failures)
+    (when (file-readable-p file)
+      (let ((must (cl-loop for entry in (with-temp-buffer (insert-file-contents file) (read (current-buffer)))
+                           when (eq (car entry) system-type) append (cdr entry))))
+        (dolist (s skipped)
+          (when (member (plist-get s :name) must)
+            (push (list :name (plist-get s :name)
+                        :condition (format "%s must run on %s but skipped: %s" (plist-get s :name) system-type (plist-get s :reason)))
+                  failures)))))
+    (nreverse failures)))
+
+(defun drgnx-run-ert--say-skipped (skipped)
+  "Print the SKIPPED entries (:name :reason), if any."
+  (when skipped
+    (message "\nSkipped (%d):" (length skipped))
+    (dolist (s skipped) (message "   %s  %s" (plist-get s :name) (plist-get s :reason)))))
+
 (defun drgnx-run-ert--selector ()
   "The ERT selector of this run: DRGNX_TEST_SELECTOR (an ERT selector; `bin/drgnx check' runs :timing ones alone),
 else every test; with a shuffle seed, the selected tests as a `(member …)' in the shuffled order.  The Emacsen of
@@ -234,7 +272,8 @@ else every test; with a shuffle seed, the selected tests as a `(member …)' in 
 line (a file: a whole suite's names would not fit in the environment), and DRGNX_TEST_ORDER_OUT=FILE, which writes the
 names the run would run, in that order, to FILE and runs none."
   (let* ((s (drgnx-run-ert--env "DRGNX_TEST_SELECTOR"))
-         (selector (if s (car (read-from-string s)) t))
+         (selector (let ((sel (if s (car (read-from-string s)) t)))
+                     (if (drgnx-run-ert--no-timing-p) `(and ,sel (not (tag :timing))) sel)))
          (seed (drgnx-run-ert--shuffle-seed))
          (in drgnx-run-ert--order-in)
          (out drgnx-run-ert--order-out))
@@ -283,7 +322,7 @@ summary to RESULTS-FILE.  Return t if every test passed."
                        (zerop (+ (ert-stats-total stats) (length load-failures)))
                        (list (drgnx-run-ert--matched-nothing selector)))))
          (leaks (and census (drgnx-run-ert--census-finish)))
-         (tests nil) (known-red nil) (failures nil))
+         (tests nil) (known-red nil) (failures nil) (skipped nil))
     (cl-loop
      for test across (ert--stats-tests stats)
      for name = (symbol-name (ert-test-name test))
@@ -301,6 +340,8 @@ summary to RESULTS-FILE.  Return t if every test passed."
                  :file (or (ert-test-file-name test) :null)
                  :seconds (or (ignore-errors (ert-test-result-duration result)) 0))
            tests)
+     (when (ert-test-skipped-p result)
+       (push (list :name name :reason (if (cdr-safe condition) (format "%s" (cadr condition)) "skipped")) skipped))
      (cond
       ((not expected)
        (push (list :name name :condition (if condition (format "%S" condition) "unexpected result")) failures))
@@ -320,6 +361,12 @@ summary to RESULTS-FILE.  Return t if every test passed."
                       failures))
           (t (push (list :name name :condition (format "known red, but it errored: %S" condition))
                    failures)))))))
+    (setq skipped (nreverse skipped))
+    ;; a test the must-run list names that skipped: a full run only (a per-file Emacs leaves it to its parent)
+    (when (and (null selector) (not drgnx-run-ert--order-in) (not drgnx-run-ert--file-child))
+      (setq load-failures (append load-failures (drgnx-run-ert--no-skip-failures skipped))))
+    (setq skipped (append skipped (drgnx-run-ert--timing-skipped selector)))
+    (unless drgnx-run-ert--file-child (drgnx-run-ert--say-skipped skipped))
     (setq failures (append load-failures (nreverse failures)))
     (when (and seed failures (not drgnx-run-ert--leaks-quiet)) (drgnx-run-ert--say-seed seed)) ; again, where the failures are
     ;; the per-file Emacsen of a run say nothing: the run that started them prints one report from their summaries
@@ -330,7 +377,8 @@ summary to RESULTS-FILE.  Return t if every test passed."
         (write-region
          (decode-coding-string
           (json-serialize
-           (append (list :total (+ (ert-stats-total stats) (length load-failures))
+           (append (list :skipped (vconcat skipped)
+                         :total (+ (ert-stats-total stats) (length load-failures))
                          :passed (ert-stats-completed-expected stats)
                          :failed (length failures)
                          :failures (vconcat failures)
@@ -444,7 +492,7 @@ to BUFFER, or to this Emacs's standard error when BUFFER is nil."
   "One summary of the ended files DONE (each :file :exit :seconds :timed-out :summary), in the shape of a
 one-Emacs run plus :files.  A file whose Emacs timed out (after TIMEOUT s), died or exited non-zero without a
 failed test is a failure named after the file."
-  (let ((total 0) (passed 0) failures known-red tests files leaks (census nil))
+  (let ((total 0) (passed 0) failures known-red tests files leaks skipped (census nil))
     (dolist (f done)
       (let* ((s (plist-get f :summary)) (exit (plist-get f :exit))
              (why (cond ((plist-get f :timed-out) (format "its Emacs timed out after %d s (DRGNX_TEST_FILE_TIMEOUT)" timeout))
@@ -455,7 +503,8 @@ failed test is a failure named after the file."
           (cl-incf passed (plist-get s :passed))
           (setq failures (append failures (plist-get s :failures) nil)
                 known-red (append known-red (plist-get s :known_red) nil)
-                tests (append tests (plist-get s :tests) nil))
+                tests (append tests (plist-get s :tests) nil)
+                skipped (append skipped (plist-get s :skipped) nil))
           (when (plist-member s :leaks)
             (setq census t leaks (append leaks (plist-get s :leaks) nil))))
         (when why
@@ -464,7 +513,8 @@ failed test is a failure named after the file."
                                                       :condition why)))))
         (push (list :file (plist-get f :file) :exit exit :seconds (plist-get f :seconds)) files)))
     (append (list :total total :passed passed :failed (length failures) :failures (vconcat failures)
-                  :known_red (vconcat known-red) :tests (vconcat tests) :files (vconcat (nreverse files)))
+                  :known_red (vconcat known-red) :tests (vconcat tests) :skipped (vconcat skipped)
+                  :files (vconcat (nreverse files)))
             (and census (list :leaks (vconcat leaks))))))
 
 (defun drgnx-run-ert--index (file)
@@ -582,10 +632,17 @@ file passed."
           (setq summary (plist-put (plist-put (plist-put (plist-put summary :total 1) :failed 1)
                                               :failures (vector f))
                                    :passed 0))))
+      ;; a must-run test that skipped, in a full run (the files' own Emacsen leave it to this one)
+      (when (and (null selector) (not drgnx-run-ert--order-in))
+        (when-let* ((more (drgnx-run-ert--no-skip-failures (append (plist-get summary :skipped) nil))))
+          (setq summary (plist-put (plist-put (plist-put summary :total (+ (plist-get summary :total) (length more)))
+                                              :failed (+ (plist-get summary :failed) (length more)))
+                                   :failures (vconcat (plist-get summary :failures) more)))))
       (when seed (setq summary (append summary (list :seed seed))))
       (message "\ndrgnx: %d test files, each in an Emacs of its own: %d tests, %d as expected, %d unexpected (%.0f s)"
                count (plist-get summary :total) (plist-get summary :passed) (plist-get summary :failed) (- (float-time) t0))
       (cl-loop for f across (plist-get summary :failures) do (message "   FAILED  %s" (plist-get f :name)))
+      (drgnx-run-ert--say-skipped (append (plist-get summary :skipped) nil))
       (when (and seed (> (plist-get summary :failed) 0)) (drgnx-run-ert--say-seed seed))
       (when (and (plist-get summary :leaks) (> (length (plist-get summary :leaks)) 0))
         (message "\n%s" (drgnx-run-ert-leaks-report (plist-get summary :leaks))))

@@ -131,6 +131,7 @@ choice of two nobody has."
     (unwind-protect (should-not (drgnx-remote-ssh-hosts)) (delete-directory home t))))
 
 (ert-deftest drgnx-remote/containers-from-podman ()
+  :tags '(:timing)
   (let* ((sleep (executable-find "sleep")) (bin (make-temp-file "drgnx-podman" t))
          (exec-path (list bin)) (process-environment (cons (concat "PATH=" bin) process-environment)))
     (unwind-protect

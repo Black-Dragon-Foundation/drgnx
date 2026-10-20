@@ -439,6 +439,7 @@ pgtk Emacs does: its geometry only, no name, make, model or serial)."
                                   (should (eq 'ok (drgnx-monitors-test--move frame 1))))))              ; free again
 
 (drgnx-platform-test--deftest drgnx-monitors/the-picker-waits-a-bounded-time-for-an-adapter-that-never-answers ()
+                              :tags '(:timing)
                               (drgnx-monitors-test--with-fake ()
                                 (let ((drgnx-platform-command-timeout 0.05) (drgnx-platform-watchdog-margin 0))
                                   (cl-letf (((symbol-function 'drgnx-platform-monitors) (lambda (&rest _) nil))
@@ -648,6 +649,7 @@ pgtk Emacs does: its geometry only, no name, make, model or serial)."
                                   (should (string-match-p "no such output" (car messages))))))
 
 (drgnx-platform-test--deftest drgnx-monitors/a-hanging-wm-never-delays-the-restore ()
+                              :tags '(:timing)
                               ;; The adapter never answers.  `drgnx-persist--restore-into' returns at once with the files and the
                               ;; layout in place; the placement gives up at the deadline and says so, once.
                               (drgnx-monitors-test--with-fake (:place-reply 'hang)

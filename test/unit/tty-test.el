@@ -246,6 +246,7 @@ cat %s\n"
     (should-not (drgnx-tty-tmux-conf-lines nil))))
 
 (ert-deftest drgnx-tty/tmux-options-give-up-after-a-second ()
+  :tags '(:timing)
   (let* ((tmp (drgnx-tty-test--tmp))
          (exec-path (list tmp))
          (process-environment (append (list (format "PATH=%s:%s" tmp (getenv "PATH")) "TMUX=/tmp/fake,1,0")

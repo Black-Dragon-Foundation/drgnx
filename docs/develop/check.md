@@ -105,7 +105,22 @@ teardown batch whose rider wraps the module) or `"runner"` (the hub-protocol swe
 `drgnx-proc-start`). The list only shrinks: the change that wraps a site deletes its row in the same commit; a branch
 merged later that adds a site adds its row in its merge commit.
 
-## The leak census (`--leaks`)
+## Skips are listed, and some must not happen
+
+A run prints `Skipped (N):` with each skipped test and its reason, and its JSON summary holds them as `:skipped`, a
+vector of `(:name N :reason R)` (the reason is the `ert-skip` message; the files' summaries are merged). A test that
+skips is not a pass nobody sees.
+
+- **`DRGNX_TEST_NO_TIMING=1`** leaves out the tests tagged `:timing` (they assert wall-clock bounds: a hung child
+  given up on, a lock waited for, a cost in milliseconds) and lists them as skipped, reason `wall clock: not run in
+  CI`. A shared runner is not a place to judge them; `bin/drgnx check` runs them alone (job 3 above). The tests that
+  bound a child or a lock *outside* drgnx (a real hung `git`, a lock held by another process) keep a generous wall
+  bound and carry the tag; a give-up that is a `drgnx-timer-*` timer is tested on virtual time instead
+  (`drgnx-test-with-clock`) and needs no tag.
+- **`test/no-skip.eld`**, `((PLATFORM NAME…)…)` with PLATFORM a `system-type` (`gnu/linux`, `darwin`), lists tests that
+  must run on that platform because the CI image installs what they need. In a run **without a selector**, a listed
+  test that skipped fails the run: `NAME must run on PLATFORM but skipped: REASON`. With a selector it is ignored (a
+  narrow run may not have the tool). `DRGNX_TEST_NO_SKIP=FILE` names another list (the runner's own tests).
 
 `bin/drgnx test --leaks` (and `bin/drgnx check --leaks`, for the unit shards and the timing job) turns on a census of
 what the tests leave behind: `DRGNX_TEST_LEAKS=1`, read by the runner (`harness/run-ert.el`), which every per-file Emacs

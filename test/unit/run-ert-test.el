@@ -846,3 +846,80 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
             (should line)
             (should (string-match-p "listp" (plist-get line :what)))))
       (delete-directory tmp t))))
+
+;;;; Skips are listed (det Task 21)
+
+(defun drgnx-run-ert-test--go (suite results &rest env)
+  "Run SUITE (the runner's default: a fresh Emacs for each file); return (EXIT . OUTPUT).  The summary goes to
+RESULTS.  ENV is added; the selector, shuffle, census, no-timing, no-skip and rerun variables of the run that runs
+this test are not passed on."
+  (let ((process-environment (append (cons (concat "DRGNX_TEST_RESULTS=" results) env)
+                                     (list "DRGNX_TEST_SELECTOR" "DRGNX_TEST_SHUFFLE" "DRGNX_TEST_LEAKS" "DRGNX_TEST_NO_TIMING"
+                                           "DRGNX_TEST_NO_SKIP" "DRGNX_TEST_RERUN")
+                                     process-environment))
+        (default-directory temporary-file-directory))
+    (with-temp-buffer
+      (cons (call-process (expand-file-name invocation-name invocation-directory) nil t nil
+                          "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
+                          "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch" suite)
+            (buffer-string)))))
+
+(defmacro drgnx-run-ert-test--with-suite (spec &rest body)
+  "Run BODY with SPEC = (TMP SUITE RESULTS FILES): a suite of FILES (an alist NAME → contents) made in a temp TMP."
+  (declare (indent 1))
+  (pcase-let ((`(,tmp ,suite ,results ,files) spec))
+    `(let* ((,tmp (file-name-as-directory (make-temp-file "drgnx-skip" t)))
+            (,suite (expand-file-name "suite" ,tmp)) (,results (expand-file-name "r.json" ,tmp)))
+       (unwind-protect (progn (drgnx-run-ert-test--suite ,suite ,files) ,@body)
+         (delete-directory ,tmp t)))))
+
+(defconst drgnx-run-ert-test--skipper
+  '(("skip-test.el" . "(ert-deftest iso-skip/needs () (ert-skip \"no frobnicator\"))
+(ert-deftest iso-skip/other () (should t))")))
+
+(ert-deftest drgnx-run-ert/skips-are-listed-with-their-reason ()
+  (drgnx-run-ert-test--with-suite (tmp suite results drgnx-run-ert-test--skipper)
+    (let* ((r (drgnx-run-ert-test--go suite results))
+           (skipped (plist-get (drgnx-run-ert-test--json results) :skipped)))
+      (should (eql 0 (car r)))
+      (should (= 1 (length skipped)))
+      (should (equal (plist-get (aref skipped 0) :name) "iso-skip/needs"))
+      (should (equal (plist-get (aref skipped 0) :reason) "no frobnicator"))
+      (should (string-match-p "Skipped (1):\n.*iso-skip/needs.*no frobnicator" (cdr r))))))
+
+(ert-deftest drgnx-run-ert/no-timing-lists-timing-tests-as-skipped ()
+  ;; the timing test would fail if it ran
+  (drgnx-run-ert-test--with-suite (tmp suite results
+                                       '(("slow-test.el" . "(ert-deftest iso-slow/wall () :tags '(:timing) (should nil))
+(ert-deftest iso-slow/fine () (should t))")))
+    (let ((r (drgnx-run-ert-test--go suite results "DRGNX_TEST_NO_TIMING=1")))
+      (should (eql 0 (car r)))
+      (let* ((json (drgnx-run-ert-test--json results)) (skipped (plist-get json :skipped)))
+        (should (equal (list (plist-get json :total) (plist-get json :passed)) '(1 1)))
+        (should (equal (plist-get (aref skipped 0) :name) "iso-slow/wall"))
+        (should (equal (plist-get (aref skipped 0) :reason) "wall clock: not run in CI")))
+      (should (string-match-p "Skipped (1):" (cdr r))))
+    ;; off by default: the timing test runs, and fails
+    (should (eql 1 (car (drgnx-run-ert-test--go suite results))))))
+
+(defun drgnx-run-ert-test--no-skip (tmp text)
+  "TMP's no-skip file holding TEXT, as an environment entry."
+  (let ((f (expand-file-name "no-skip.eld" tmp))) (with-temp-file f (insert text)) (concat "DRGNX_TEST_NO_SKIP=" f)))
+
+(ert-deftest drgnx-run-ert/a-must-run-test-that-skips-fails-a-full-run ()
+  (drgnx-run-ert-test--with-suite (tmp suite results drgnx-run-ert-test--skipper)
+    (let* ((listed (drgnx-run-ert-test--no-skip tmp (format "((%s \"iso-skip/needs\"))" system-type)))
+           (r (drgnx-run-ert-test--go suite results listed))
+           (failures (plist-get (drgnx-run-ert-test--json results) :failures)))
+      (should (eql 1 (car r)))
+      (should (= 1 (length failures)))
+      (should (equal (plist-get (aref failures 0) :condition)
+                     (format "iso-skip/needs must run on %s but skipped: no frobnicator" system-type)))
+      ;; another platform's entry does not bind this one
+      (should (eql 0 (car (drgnx-run-ert-test--go
+                           suite results (drgnx-run-ert-test--no-skip tmp "((no-such-os \"iso-skip/needs\"))"))))))))
+
+(ert-deftest drgnx-run-ert/no-skip-is-ignored-with-a-selector ()
+  (drgnx-run-ert-test--with-suite (tmp suite results drgnx-run-ert-test--skipper)
+    (let ((listed (drgnx-run-ert-test--no-skip tmp (format "((%s \"iso-skip/needs\"))" system-type))))
+      (should (eql 0 (car (drgnx-run-ert-test--go suite results listed "DRGNX_TEST_SELECTOR=\"^iso-skip/\"")))))))

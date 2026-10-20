@@ -104,6 +104,7 @@ its environment, then AFTER."
     (should-not (string-search "evil" (getenv "PATH")))))
 
 (ert-deftest drgnx-shell-env/a-slow-shell-times-out-quietly ()
+  :tags '(:timing)
   (drgnx-shell-env-test--with
     (drgnx-shell-env-test--fake dir "sleep 30")
     (let* ((drgnx-shell-env-timeout 0.3)
