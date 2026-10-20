@@ -75,7 +75,7 @@ killing the starter's whole process group does not take the job along."
              (ignore-errors (signal-process (- spid) 'SIGKILL))                   ; the starter's whole group
              (signal-process spid 'SIGKILL)
              (should (drgnx-jobs-test--wait (lambda () (process-get starter :done)) 5))
-             (sleep-for 0.3)
+             (drgnx-test-pause 0.3)                                                   ; a window in which nothing may happen
              (should (eq (drgnx-jobs-test--status id) 'running))
              (should (process-attributes pid)))
            (should (drgnx-jobs-test--wait (lambda () (eq (drgnx-jobs-test--status id) 'exited))))

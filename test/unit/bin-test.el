@@ -895,7 +895,7 @@ macOS (no /proc there)."
            (suite (expand-file-name "suite" dir))
            (probe (expand-file-name "probe" dir))
            (emacs (expand-file-name invocation-name invocation-directory))
-           proc)
+           proc pid)
       (unwind-protect
           (progn
             (make-directory parent) (make-directory suite)
@@ -904,8 +904,9 @@ macOS (no /proc there)."
                                                                    (concat "DRGNX_TEST_DIR=" suite))
                                               "test"))
             (should (drgnx-bin-test--wait-for (lambda () (file-exists-p probe)) 60))   ; the test is under way
+            (setq pid (drgnx-bin-test--slurp-number (concat probe ".pid")))             ; first: the clean-up below kills it
             (should (drgnx-bin-test--left parent))                                      ; using its temp dir
-            (let ((pid (drgnx-bin-test--slurp-number (concat probe ".pid"))))
+            (progn
               (should (drgnx-bin-test--pid-alive-p pid))
               (signal-process proc sig)
               (should (drgnx-bin-test--wait-exit proc 30))
@@ -914,6 +915,7 @@ macOS (no /proc there)."
             ;; nor the runner's short root its test ran in
             (should-not (file-exists-p (file-name-directory (directory-file-name (drgnx-bin-test--slurp probe))))))
         (when (process-live-p proc) (kill-process proc))
+        (when (and pid (> pid 0) (drgnx-bin-test--pid-alive-p pid)) (signal-process pid 'SIGKILL))   ; the 3600 s hang
         (delete-directory dir t)))))
 
 (ert-deftest drgnx-bin/a-gui-tier-stopped-by-a-signal-leaves-no-process-and-no-dir ()
@@ -937,7 +939,7 @@ macOS (no /proc there)."
                  (alive (lambda () (seq-filter #'drgnx-bin-test--pid-alive-p ids))))
             (should (= 2 (length (funcall alive))))
             (signal-process proc 'TERM)
-            (sleep-for 0.5)
+            (drgnx-test-pause 0.5)                        ; the first TERM is taken before the second arrives
             (signal-process proc 'TERM)
             (should (drgnx-bin-test--wait-exit proc 30))
             (should-not (funcall alive))
@@ -955,9 +957,9 @@ macOS (no /proc there)."
          (emacs (drgnx-bin-test--fake-emacs
                  (expand-file-name "fake-check" dir)
                  ;; a session of its own: setsid(1), else perl's (macOS has no setsid command), as bin/drgnx does
-                 (format "newsession() { if command -v setsid >/dev/null 2>&1; then setsid \"$@\"; else perl -MPOSIX -e 'POSIX::setsid() or die \"setsid: $!\"; exec @ARGV or die \"exec: $!\"' \"$@\"; fi; }
+                 (format "trap 'kill -TERM $(cat %s); sleep 7; kill -KILL $(cat %s); exit 0' TERM
+newsession() { if command -v setsid >/dev/null 2>&1; then setsid \"$@\"; else perl -MPOSIX -e 'POSIX::setsid() or die \"setsid: $!\"; exec @ARGV or die \"exec: $!\"' \"$@\"; fi; }
 newsession sh -c 'trap \"\" TERM; echo $$ > %s.tmp && mv %s.tmp %s; exec sleep 300' &
-trap 'kill -TERM $(cat %s); sleep 7; kill -KILL $(cat %s); exit 0' TERM
 while :; do wait; done" job job job job job)))
          proc)
     (unwind-protect
@@ -965,7 +967,6 @@ while :; do wait; done" job job job job job)))
           (make-directory parent)
           (setq proc (drgnx-bin-test--spawn (drgnx-bin-test--env dir parent (concat "DRGNX_EMACS=" emacs)) "check"))
           (should (drgnx-bin-test--wait-for (lambda () (file-exists-p job)) 30))
-          (sleep-for 0.3)                                  ; the fake has set its trap
           (let ((pid (drgnx-bin-test--slurp-number job)))
             (should (drgnx-bin-test--pid-alive-p pid))
             (signal-process proc 'TERM)
@@ -1151,7 +1152,7 @@ echo \"agent ${DRGNX_AGENT-unset} job ${DRGNX_JOB-unset} task ${DRGNX_TASK-unset
          (log (expand-file-name "rt.log" dir))
          (rt (drgnx-bin-test--fake-emacs
               (expand-file-name "fake-rt" dir)
-              (format "echo \"$*\" >> %s\ncase $1 in run) exec sleep 20 ;; esac" log)))
+              (format "echo \"$*\" >> %s\ncase $1 in run) echo $$ > %s.runpid; exec sleep 20 ;; esac" log log)))
          (default-directory (file-name-as-directory dir))
          (process-environment (append (list (concat "HOME=" home) (concat "TMPDIR=" tmp) "DRGNX_EMACS"
                                             (concat "DRGNX_CONFIG_DIR=" dir "/config") (concat "DRGNX_CONTAINER=" rt))
@@ -1161,18 +1162,22 @@ echo \"agent ${DRGNX_AGENT-unset} job ${DRGNX_JOB-unset} task ${DRGNX_TASK-unset
     (unwind-protect
         (progn
           (setq proc (make-process :name "drgnx-bin-stop" :buffer nil :noquery t :connection-type 'pipe
+                                   :sentinel (lambda (p _e) (process-put p :done t))
                                    :command (list drgnx-bin-test--bin "test" "--bootstrap")))
-          (drgnx-test-wait (lambda () (string-match-p "^run " (or (ignore-errors (drgnx-bin-test--slurp log)) "")))
+          (drgnx-test-wait (lambda () (and (string-match-p "^run " (or (ignore-errors (drgnx-bin-test--slurp log)) ""))
+                                           (string-match-p "[0-9]" (or (ignore-errors (drgnx-bin-test--slurp (concat log ".runpid"))) ""))))
                            :secs 60 :what "the container's run")
           (should (string-match-p "^run .*--name drgnx-bootstrap-[0-9]+-keys " (drgnx-bin-test--slurp log)))
           (signal-process proc 'term)
-          (let ((deadline (+ (float-time) 10)))
-            (while (and (process-live-p proc) (< (float-time) deadline)) (accept-process-output nil 0.1)))
-          (should-not (process-live-p proc))                 ; at once, not when the container's run ends
+          (should (drgnx-test-wait (lambda () (process-get proc :done)) :what "bin/drgnx's exit"))
+          ;; at once, not when the container's run ends: the fake run (it sleeps 20 s) is still there
+          (should (drgnx-bin-test--pid-alive-p (drgnx-bin-test--slurp-number (concat log ".runpid"))))
           (let ((name (progn (string-match "--name \\([^ ]+\\)" (drgnx-bin-test--slurp log))
                              (match-string 1 (drgnx-bin-test--slurp log)))))
             (should (string-match-p (concat "^rm -f " (regexp-quote name) "$") (drgnx-bin-test--slurp log)))))
       (when (process-live-p proc) (delete-process proc))
+      (when-let* ((pid (ignore-errors (drgnx-bin-test--slurp-number (concat log ".runpid")))))
+        (when (> pid 0) (ignore-errors (signal-process pid 'SIGKILL))))
       (delete-directory dir t)
       (delete-directory tmp t))))
 

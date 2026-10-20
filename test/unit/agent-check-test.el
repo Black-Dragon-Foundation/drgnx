@@ -461,7 +461,7 @@ with the HTTP mock stopped afterwards."
             (write-region "#!/bin/sh\nread x\n" nil script nil 'silent)
             (set-file-modes script #o700)
             (setq proc (make-process :name "x" :command (list script) :noquery t))
-            (sleep-for 0.2)
+            (drgnx-test-wait (lambda () (ignore-errors (file-exists-p (format "/proc/%d/stat" (process-id proc))))) :what "the process's stat")
             (let ((raw (with-temp-buffer (insert-file-contents (format "/proc/%d/stat" (process-id proc))) (buffer-string)))
                   (row (assq (process-id proc) (drgnx-agent-check--proc-rows))))
               ;; the name is really in the file, and the numbers after it are still the right ones
@@ -477,7 +477,7 @@ with the HTTP mock stopped afterwards."
          (pid (process-id proc)))
     (unwind-protect
         (progn
-          (sleep-for 0.5)
+          (drgnx-test-wait (lambda () (>= (length (drgnx-agent-check--tree pid)) 3)) :what "the shell's two sleeps")
           (should (>= (length (drgnx-agent-check--tree pid)) 3))
           (drgnx-agent-check--kill-tree pid)
           (should (drgnx-agent-check-test--gone-p "sleep 3175")))
@@ -801,7 +801,7 @@ nothing and the fake `systemctl' (SYSTEMCTL-BODY, a shell command) is the only p
         (should (drgnx-agent-check-test--gone-p marker))
         ;; the hanging systemctl was deleted
         (should (drgnx-agent-check-test--gone-p "sleep 3176"))
-        (sleep-for 0.5)
+        (drgnx-test-pause 0.5)                                  ; no second result
         (should (= calls 1))))))
 
 (ert-deftest drgnx-agent-check/a-systemctl-that-cannot-be-started-falls-back-to-the-tree ()
@@ -822,7 +822,7 @@ nothing and the fake `systemctl' (SYSTEMCTL-BODY, a shell command) is the only p
         ;; at the timer's 1 s plus the child's start, long before the 3 s backstop
         (should (< (plist-get result :time) 2.8))
         (should (drgnx-agent-check-test--gone-p marker))
-        (sleep-for 0.5)
+        (drgnx-test-pause 0.5)                                  ; no second result
         (should (= calls 1))))))
 
 (ert-deftest drgnx-agent-check/a-timer-in-a-buffer-with-no-directory-still-ends-the-check ()
@@ -844,7 +844,7 @@ nothing and the fake `systemctl' (SYSTEMCTL-BODY, a shell command) is the only p
         (should (< (plist-get result :time) 2.8))
         (should (drgnx-agent-check-test--gone-p marker))
         (should (member "--user kill --signal=KILL drgnx-check-fake.scope" (drgnx-agent-check-test--systemctl-log)))
-        (sleep-for 0.5)
+        (drgnx-test-pause 0.5)                                  ; no second result
         (should (= calls 1))))))
 
 (ert-deftest drgnx-agent-check/a-finished-check-asks-systemd-to-clear-its-scope ()

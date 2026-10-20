@@ -304,7 +304,7 @@ the gateway told."
            (got "") (c (open-network-stream "gw-test" nil "127.0.0.1" port :coding 'binary)))
       (set-process-filter c (lambda (_p s) (setq got (concat got s))))
       (process-send-string c (format "POST /v1/messages HTTP/1.1\r\nAuthorization: Bearer %s\r\nContent-Length: 10\r\n\r\n01234" token))
-      (accept-process-output nil 0.3)
+      (drgnx-test-pause 0.3)                                   ; half a body is not an answer
       (should (equal got ""))
       (process-send-string c "56789")
       (should (drgnx-gw-test--settle (lambda () (string-prefix-p "HTTP/1.1 200" got)) 5))

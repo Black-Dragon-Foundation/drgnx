@@ -723,7 +723,7 @@ about) and keeps the tests within their time limits."
                                          (plist-get r :token)))
           (drgnx-hub-test--wait (lambda () (string-search "data:" got)) 5)
           (delete-process c)))
-      (sleep-for 2)
+      (drgnx-test-pause 2)                                             ; the hang-ups must not kill the hub
       (should (drgnx-hub-running-p)))))
 
 (ert-deftest drgnx-hub/agents-keep-their-address-across-a-restart ()

@@ -454,17 +454,20 @@ with BODY."
           (setq child (make-process :name "drgnx-sigint" :connection-type 'pipe :noquery t :buffer nil
                                     :command (list "env" "--default-signal=INT" (expand-file-name invocation-name invocation-directory)
                                                    "--batch" "-Q" "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-onboard"
-                                                   "--eval" "(drgnx-onboard--job \"Sleeping\" (list \"sleep\" \"3600\"))")
+                                                   ;; the marker is written from a timer, which first runs inside the job's wait: after the hook
+                                                   "--eval" (format "(progn (run-at-time 0.1 nil (lambda () (write-region \"\" nil %S nil 'silent))) (drgnx-onboard--job \"Sleeping\" (list \"sleep\" \"3600\")))"
+                                                                    (concat root "hooked")))
                                     :sentinel (lambda (p _e) (process-put p :done t))))
           (should (drgnx-test-wait (lambda () (seq-find (lambda (j) (eq (plist-get j :status) 'running)) (drgnx-jobs-list)))
                                    :what "the child's job running"))
-          (sleep-for 1)                 ; the child has put its hook in
+          (should (drgnx-test-wait (lambda () (file-exists-p (concat root "hooked"))) :what "the child's hook in"))
           (signal-process child 'SIGINT)
           (should (drgnx-test-wait (lambda () (process-get child :done)) :what "the child's exit"))
           (should (drgnx-test-wait (lambda () (not (seq-find (lambda (j) (eq (plist-get j :status) 'running)) (drgnx-jobs-list))))
                                    :what "the job stopped")))
-      (when (and child (process-live-p child)) (kill-process child))
-      (dolist (j (drgnx-jobs-list)) (ignore-errors (drgnx-jobs-stop (plist-get j :id))))
+      (when (and child (process-live-p child)) (signal-process child 'SIGKILL))
+      (dolist (j (drgnx-jobs-list))   ; the job's `sleep 3600' (not the child's child: detached) is stopped here
+        (ignore-errors (drgnx-jobs-stop (plist-get j :id))))
       (delete-directory root t))))
 
 (defvar drgnx-ai-onboard-test--job-what nil "The job `drgnx-onboard--job' is waiting on (the test's view).")

@@ -81,14 +81,14 @@
   (drgnx-agents-test--with s nil
     (drgnx-agents-send s "slow one")
     (drgnx-agents-send s "later")
-    (sleep-for 0.4)
+    (drgnx-agents-test--wait (lambda () (drgnx-agents-test--texts s 'agent)))     ; the slow turn has begun
     (let ((t0 (float-time)))
       (drgnx-agents-stop s)
       (should (drgnx-agents-test--idle s))
       (should (< (- (float-time) t0) 1.0)))
     (should (seq-find (lambda (e) (equal (plist-get e :stop) "cancelled")) (drgnx-agent-session-entries s)))
     (should (equal (drgnx-agent-session-queue s) '("later")))             ; kept, not sent (paused)
-    (sleep-for 0.5)
+    (drgnx-test-pause 0.5)                                                  ; no second send
     (should (= 1 (length (drgnx-agents-test--texts s 'user))))))
 
 (ert-deftest drgnx-agents/permission-requests-wait-for-an-answer ()
@@ -165,7 +165,7 @@
   ;; C1: the agent answers the cancel after the 1 s deadline; the next turns stay in order, one at a time.
   (drgnx-agents-test--with s '(:env ("MOCK_ACP_LATE_CANCEL=2"))
     (drgnx-agents-send s "slow one")
-    (sleep-for 0.3)
+    (drgnx-agents-test--wait (lambda () (drgnx-agents-test--texts s 'agent)))     ; the slow turn has begun
     (drgnx-agents-stop s)
     (should (drgnx-agents-test--idle s))                         ; the deadline ended it locally
     (drgnx-agents-send s "second")

@@ -24,7 +24,7 @@
            (drgnx-hub-ensure)
            ,@body)
        (ignore-errors (drgnx-hub-call-sync "shutdown" nil 3))
-       (let ((deadline (+ (float-time) 5))) (while (and (drgnx-hub-running-p) (< (float-time) deadline)) (sleep-for 0.1)))
+       (ignore-errors (drgnx-test-wait (lambda () (not (drgnx-hub-running-p))) :what "the hub gone"))
        (drgnx-agents-mirror-stop)
        (drgnx-hub-disconnect)
        (delete-directory root t))))
@@ -83,18 +83,17 @@
       (drgnx-agents-mirror-sync)
       (drgnx-agents-mirror-test--wait (lambda () (drgnx-agents-mirror-test--mirror id)))
       (drgnx-hub-call-sync "agents/send" (list :id id :text "slow work"))       ; it streams while this Emacs goes away
-      (sleep-for 0.5)
+      (drgnx-agents-mirror-test--wait (lambda () (string-search "part 1" (drgnx-agents-mirror-test--text (drgnx-agents-mirror-test--mirror id)))))
       (drgnx-agents-mirror-stop) (drgnx-hub-disconnect) (setq drgnx-agents--sessions nil)
-      (sleep-for 0.7)
+      (drgnx-agents-mirror-test--wait (lambda () (string-search "part 3" (plist-get (drgnx-hub-call-sync "agents/get" (list :id id)) :entries))))   ; it went on in the hub
       (drgnx-agents-mirror-sync)                                             ; a new editor
       (should (drgnx-agents-mirror-test--wait (lambda () (let ((m (drgnx-agents-mirror-test--mirror id)))
                                                            (and m (string-search "part 10" (drgnx-agents-mirror-test--text m)))))
                                               15))
       (drgnx-agents-mirror-test--wait (lambda () (eq (drgnx-agent-session-status (drgnx-agents-mirror-test--mirror id)) 'idle)))
-      (sleep-for 0.3) (accept-process-output nil 0.2)
       ;; nothing lost: the mirror's transcript is the hub's
       (let ((hub (car (read-from-string (plist-get (drgnx-hub-call-sync "agents/get" (list :id id)) :entries)))))
-        (should (equal (drgnx-agent-session-entries (drgnx-agents-mirror-test--mirror id)) hub))
+        (should (drgnx-agents-mirror-test--wait (lambda () (equal (drgnx-agent-session-entries (drgnx-agents-mirror-test--mirror id)) hub))))
         ;; and once the session is quiet (no event will come): a new editor still gets the whole transcript
         (drgnx-agents-mirror-stop) (drgnx-hub-disconnect) (setq drgnx-agents--sessions nil)
         (drgnx-agents-mirror-sync)

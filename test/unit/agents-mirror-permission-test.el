@@ -24,7 +24,7 @@
            (drgnx-hub-ensure)
            ,@body)
        (ignore-errors (drgnx-hub-call-sync "shutdown" nil 3))
-       (let ((deadline (+ (float-time) 5))) (while (and (drgnx-hub-running-p) (< (float-time) deadline)) (sleep-for 0.1)))
+       (ignore-errors (drgnx-test-wait (lambda () (not (drgnx-hub-running-p))) :what "the hub gone"))
        (drgnx-agents-mirror-stop)
        (drgnx-hub-disconnect)
        (delete-directory root t))))
