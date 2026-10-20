@@ -1,5 +1,5 @@
 # The test images, prebuilt so CI pulls them instead of installing packages every run: built from
-# test/container/Containerfile{,.gui} and tagged with the Containerfile's hash (CI pulls the tag of the
+# test/container/Containerfile{,.gui,.tty} and tagged with the Containerfile's hash (CI pulls the tag of the
 # Containerfile it checked out, else builds it itself). Weekly too, so distribution updates arrive.
 # docs/develop/ci.md
 name: Test images
@@ -33,6 +33,9 @@ jobs:
             file: Containerfile
           - name: drgnx-test-gui
             file: Containerfile.gui
+          - name: drgnx-test-tty
+            file: Containerfile.tty
+            args: --build-arg FEDORA=45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -43,12 +46,14 @@ jobs:
           ACTOR: ${{ github.actor }}
           NAME: ${{ matrix.name }}
           FILE: ${{ matrix.file }}
+          BUILD_ARGS: ${{ matrix.args }}
           SOURCE: ${{ github.server_url }}/${{ github.repository }}
         run: |
           image="ghcr.io/black-dragon-foundation/$NAME"
           tag="$(sha256sum "test/container/$FILE" | cut -c1-16)"
           printf '%s' "$TOKEN" | podman login ghcr.io -u "$ACTOR" --password-stdin
-          podman build --pull=always --label "org.opencontainers.image.source=$SOURCE" \
+          # shellcheck disable=SC2086
+          podman build --pull=always $BUILD_ARGS --label "org.opencontainers.image.source=$SOURCE" \
             -t "$image:$tag" -t "$image:f45" -f "test/container/$FILE" test/container
           podman push "$image:$tag"
           podman push "$image:f45"
