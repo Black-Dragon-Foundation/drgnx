@@ -185,6 +185,7 @@
             (drgnx-agents-mirror--event "agent" (list :id "s-r" :seq 1 :session '(:id "s-r" :name "r" :status "idle")))
             (let ((m (drgnx-agents-mirror--find "s-r")))
               (should m)
+              (clrhash drgnx-agents-mirror--fetching)       ; the transcript fetch (a no-op call here) is not waited on
               (drgnx-agents-mirror--event "agent-entries" (list :id "s-r" :seq 2 :entries '((0 (:type "agent" :text "hi")))))
               (should (equal (plist-get (car (drgnx-agent-session-entries m)) :text) "hi"))))
         (advice-remove 'read-from-string #'drgnx-agents-mirror-test--no-read)
