@@ -12,7 +12,7 @@ init/init.el         core/ on the load path, (require 'drgnx), (drgnx-init); a p
 core/drgnx.el        drgnx-init: guard on, staged hooks armed, keep-running choice read, the first window's Welcome
                      (a first start only), packages activated, core commands, modules, surfaces (DRGNX_SAFE — drgnx
                      safe — skips packages and modules)
-core/drgnx-ui-kit.el  the UI kit: glyphs by meaning, status faces (the UI kit section)
+core/drgnx-ui-kit.el  the UI kit: glyphs by meaning, status faces, buttons, the close button (the UI kit section)
 core/drgnx-session.el  drgnx PATH's Emacs side, Open Folder…, keep running or quit, Quit drgnx; session.eld is a config file (../guide/opening.md)
 core/drgnx-macos.el  the drgnx app on macOS (drgnx macos-app; ../guide/opening.md)
 core/drgnx-tty.el    terminals, batch-safe: which one, what it can do, keys it can send, terminfo, tmux (../guide/terminal.md)
@@ -2375,8 +2375,9 @@ What the `areas` backend does with the edges:
 
 ## The UI kit (`drgnx-ui-kit.el`)
 
-What every surface that draws a mark shares. It is in core and requires nothing beyond `subr-x`, so the status bar,
-the lists and the notices work without the `ui/face` module.
+What every surface that draws a mark or a button shares. It is in core and requires only the registry and the
+surfaces (for buttons that run registry commands), so the status bar, the lists and the notices work without the
+`ui/face` module.
 
 - `drgnx-face-glyphs` (group `drgnx`; the name is kept so a saved value still applies, and a name a saved value
   lacks comes from the standard table, `drgnx-ui--default-glyphs`) and
@@ -2388,6 +2389,20 @@ the lists and the notices work without the `ui/face` module.
 - Faces `drgnx-status-ok`, `-info`, `-warn`, `-fail` and `-needs-you`. They inherit theme faces only.
 - `(drgnx-ui-status SEVERITY &optional TEXT)`: the glyph for `ok`, `info`, `warn`, `fail` or `needs-you` (glyph
   `waiting`), then a space and TEXT, in the status face. The module list and the onboarding steps use it.
+- `(drgnx-ui-button LABEL ACTION &key help face where props)`: LABEL as a button. ACTION is a registry id (run
+  through `drgnx-surfaces-run`, so `drgnx-surfaces-run-functions` count its use and the key tip shows), else a
+  command (`call-interactively`), else a function of no arguments. WHERE is `text` (the default: `mouse-1` and RET,
+  `follow-link`), `header-line`, `mode-line` or `tab-line` (`mouse-1` there, through `local-map`). FACE defaults to
+  `drgnx-ui-button` (inherits `button`); HELP is the `help-echo`; PROPS are more text properties. The keymap is built
+  once per (ACTION . WHERE) in `drgnx-ui--button-maps`, a table weak on ACTION, so drawing a named action builds
+  nothing and a closure's keymaps go with it. `(drgnx-ui-insert-button LABEL ACTION &rest KEYS)` inserts it at point.
+- `(drgnx-ui-close-button COMMAND HELP &key where props)`: the `close` glyph in face `drgnx-ui-close` (inherits
+  `shadow`) as a button on WHERE (default `header-line`); `mouse-1` runs COMMAND itself, so it gets the click event
+  and reads PROPS from the clicked string. One keymap per (COMMAND . WHERE). Build it when a title or row is set,
+  never while drawing. The workbench's `drgnx-wb-close-button`, `drgnx-wb-close-glyph` and
+  `drgnx-wb-header-with-close` are one-line wrappers over it, and the face `drgnx-wb-close` is an alias of
+  `drgnx-ui-close`. No close or unqueue mark is a literal `×`: the Buffers panel's rows, the find bar and the agents
+  queue (glyph `unqueue`) draw kit glyphs, so a terminal that is not UTF-8 shows `x`, `x` and `-`.
 
 ## Read and write through drgnx-file
 

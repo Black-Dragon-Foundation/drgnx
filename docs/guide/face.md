@@ -99,7 +99,8 @@ turns them off in one buffer.
 drgnx draws a few symbols (a drag handle, a close mark, a branch sign, warnings, checks, busy and waiting marks,
 ahead and behind arrows, the bullet). They all come from one table, `drgnx-face-glyphs`: NAME → (UNICODE . ASCII). In a terminal
 whose encoding is not UTF-8 (a bare Linux console, an old `LANG=C` session), the ASCII form is used so nothing shows
-as a box. Every close button (the editor's tabs, the panes' and popups' headers, the dock's sections, quick help, the
+as a box. Every close button (the editor's tabs, the panes' and popups' headers, the dock's sections, the Buffers
+panel's rows, the find bar, quick help, the
 drawn title bar) uses the one `close` glyph, `×`, which every monospace font has. Change one for your font:
 
 ```elisp
@@ -404,4 +405,5 @@ styles `window-divider` itself keeps its choice, and every colour you see comes 
 (Preferences: Color Theme). The quick help card is `drgnx-quickhelp` (inherits `tooltip`) with the symbol's name in
 `drgnx-quickhelp-title` (inherits `bold`); its border is Emacs's `child-frame-border` face. The start page uses
 `drgnx-start-title` (inherits `bold`), `drgnx-start-key` (inherits `bold`) and `drgnx-start-quiet` (inherits `shadow`).
-The × of the panes, popups and dock sections is `drgnx-wb-close` (inherits `shadow`).
+The × of the panes, popups and dock sections is `drgnx-ui-close` (inherits `shadow`; `drgnx-wb-close`, its old
+name, is the same face). The UI kit's buttons are `drgnx-ui-button` (inherits `button`).

@@ -83,8 +83,9 @@
           text))))
 
 (defun drgnx-buffers--row (b)
-  "Buffer B's row as plain text: × ● name  folder (faces come from jit-lock, for visible rows)."
-  (concat "× " (if (buffer-modified-p b) "●" " ") " " (drgnx-wb-display-name (buffer-name b)) "  "
+  "Buffer B's row as plain text: × ● name  folder (faces come from jit-lock, for visible rows).
+The × is the kit's `close' glyph (x on a terminal that is not UTF-8); the row's columns assume it is one character."
+  (concat (drgnx-face-glyph 'close) " " (if (buffer-modified-p b) "●" " ") " " (drgnx-wb-display-name (buffer-name b)) "  "
           (drgnx-wb-display-name (drgnx-buffers--dir b)) "\n"))
 
 (defun drgnx-buffers--index (pos) (1- (line-number-at-pos pos t)))

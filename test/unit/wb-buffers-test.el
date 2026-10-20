@@ -120,7 +120,7 @@
     (let ((a (drgnx-buffers-test--open dir "a.txt")) (b (drgnx-buffers-test--open dir "b.txt"))
           (c (drgnx-buffers-test--open dir "c.txt")))
       (with-current-buffer drgnx-buffers-buffer-name
-        (let ((x (save-excursion (goto-char (drgnx-buffers--row-pos b)) (search-forward "×" (pos-eol)) (match-beginning 0))))
+        (let ((x (save-excursion (goto-char (drgnx-buffers--row-pos b)) (search-forward (drgnx-face-glyph 'close) (pos-eol)) (match-beginning 0))))
           (should (drgnx-buffers--close-p x))
           (drgnx-buffers-close-at x)))
       (should (buffer-live-p a))
