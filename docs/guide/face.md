@@ -2,7 +2,8 @@
 
 How drgnx looks. The aim is a calm editor like Zed that is as informed as VS Code: nothing on screen that you did
 not ask for, everything you need one glance away. Every choice below is a setting of the module `ui/face`
-(Preferences: Modules turns the module off; **Preferences: Look and Layout Settings…** in the palette or the Options
+(Preferences: Modules turns the module off at once: the menu bar, scroll bars, title bar, dividers, tab bar and the
+other defaults go back to what they were, and the status bar, top line, quick help and start page go; **Preferences: Look and Layout Settings…** in the palette or the Options
 menu opens them all in Customize, group `drgnx-face`), every one applies
 at once when you change it, and every one works in a terminal as well as in a window.
 
@@ -270,6 +271,8 @@ with faces: a `%` is a percent sign (not a mode-line construct) and `display` pr
 count its columns. One that signals an error shows nothing, is skipped for 10 seconds and then tried again (when it
 works, it comes back; when it fails again, it is skipped for another 10 seconds), and the message is kept in
 `drgnx-statusbar--errors` (no message per redisplay). Defining it again gives it a new chance at once.
+`(drgnx-statusbar-undefine-segment 'clock)` removes it. A segment a module defines in its setup goes when the module
+is turned off (Preferences: Modules), and the one it replaced, if any, comes back.
 
 ## The top line
 

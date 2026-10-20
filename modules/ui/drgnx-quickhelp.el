@@ -751,5 +751,16 @@ on and a graphical frame focused, `drgnx-quickhelp--hover-step'.  Looks go on wh
   (setq drgnx-quickhelp--active t)
   (drgnx-quickhelp--apply-hover))
 
+(defun drgnx-quickhelp-off ()
+  "Turn quick help off (ui/face's teardown; idempotent): the card or strip put away, hover off, the card's child
+frame and buffer gone.  Its commands, map entry, role, window subscriptions and timers are its setup's: ui/face's
+cleanup stack and the end of its run undo them."
+  (setq drgnx-quickhelp--active nil)
+  (drgnx-quickhelp--teardown)
+  (drgnx-quickhelp--apply-hover)
+  (when (frame-live-p drgnx-quickhelp--frame) (delete-frame drgnx-quickhelp--frame t))
+  (setq drgnx-quickhelp--frame nil)
+  (when-let* ((b (get-buffer drgnx-quickhelp--buffer-name))) (kill-buffer b)))
+
 (provide 'drgnx-quickhelp)
 ;;; drgnx-quickhelp.el ends here
