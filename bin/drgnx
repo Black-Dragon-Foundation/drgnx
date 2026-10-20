@@ -48,7 +48,7 @@ cmd_doctor() { # [--json] [--dev] — checks run inside the Emacs drgnx uses (co
     local env rt launcher
     env="$(env_eval '(drgnx-env-container)')"
     rt="${DRGNX_CONTAINER:-$(env_eval '(drgnx-env-container-runtime)')}"   # set: no host Emacs needed (CI)
-    launcher="$("$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -l drgnx-ui --eval '(princ (drgnx-ui-launcher))')"
+    launcher="$("$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -l drgnx-ui --eval '(princ (drgnx-ui-launcher))')"
     printf 'INFO  %-20s %s\n' "environment" "${env:-host}" "container-runtime" "${rt:-none}" \
       "session-launcher" "$launcher$([ "$launcher" = detached ] && echo ' (process group, no systemd unit)')"
   fi
@@ -56,16 +56,16 @@ cmd_doctor() { # [--json] [--dev] — checks run inside the Emacs drgnx uses (co
 }
 
 cmd_build() { # byte-compile core/, wb/, modules/ in place (core/drgnx-build.el)
-  "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" -l drgnx-build -f drgnx-build-cli
+  "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" -l drgnx-build -f drgnx-build-cli
 }
 
 ui() { # the harness controller, in batch Emacs (harness/drgnx-ui.el)
-  "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
+  "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
         -l drgnx-ui -f drgnx-ui-cli -- "$@"
 }
 
 ui_exec() { # ui, as the Emacs itself (run_in_tmp signals and waits for that process, not for a subshell around it)
-  exec "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
+  exec "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
         -l drgnx-ui -f drgnx-ui-cli -- "$@"
 }
 
@@ -134,7 +134,7 @@ run_tmp_stop_pause() { # Rootless podman run by a test under the run's private X
 }
 
 check_emacs() { # the CI check (core/drgnx-check.el); exec'd, see ui_exec
-  exec "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+  exec "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
         -l drgnx-check -f drgnx-check-cli -- "$@"
 }
 
@@ -148,7 +148,7 @@ test_batch_emacs() { # [FUNCTION ARGS…] — SIGPIPE ignored, as the hub runs (
   # DRGNX_TEST_DIR: a smaller suite (the test of the temp-dir cleanup runs one)
   exec env -u DISPLAY -u WAYLAND_DISPLAY -u SWAYSOCK -u I3SOCK -u HYPRLAND_INSTANCE_SIGNATURE -u NIRI_SOCKET \
        DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/drgnx-unit-test XDG_RUNTIME_DIR="$run" \
-       "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
+       "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
        -l "$here/harness/run-ert.el" \
        -f "$fn" "${@:-${DRGNX_TEST_DIR:-$here/test/unit}}"
 }
@@ -161,14 +161,14 @@ test_tty_emacs() { # the terminal tier (test/tty): each file in an Emacs of its 
   trap '' PIPE
   exec env -u DISPLAY -u WAYLAND_DISPLAY -u SWAYSOCK -u I3SOCK -u HYPRLAND_INSTANCE_SIGNATURE -u NIRI_SOCKET \
        DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/drgnx-unit-test \
-       "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
+       "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
        -l "$here/harness/run-ert.el" -f drgnx-run-ert-batch "$here/test/tty"
 }
 
 test_tty() { run_in_tmp test_tty_emacs; }
 
 env_eval() { # FORM — evaluate with harness/drgnx-env.el loaded, print the result
-  "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -l drgnx-env --eval "(princ (or $1 \"\"))"
+  "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -l drgnx-env --eval "(princ (or $1 \"\"))"
 }
 
 test_container() { # [--ui [--compositor C] | --scenario | --perf | --tty [--fedora 45]] — the batch (GUI, scenario, perf, terminal) tier inside a fedora:45 / Emacs 31.1 container
@@ -252,6 +252,8 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf | --tty [--fed
     args+=(-v "$resdir:/out" -e "DRGNX_PERF_RESULTS=/out/$(basename "$res")")
   fi
   args+=(-e DRGNX_LEASE=off)   # the host's lease is not the container's: one run owns it
+  # the image's own Emacs, named: drgnx never falls back to a bare `emacs' (set in the run, not the Containerfiles: no image rebuild)
+  args+=(-e DRGNX_EMACS=/usr/bin/emacs)
   # evil for the modal tests (DRGNX_MODAL_ELPA), read-only; ,z: a shared label, other containers may read it too
   if [ -n "${DRGNX_MODAL_ELPA:-}" ] && [ -d "$DRGNX_MODAL_ELPA" ]; then
     local elpa; elpa="$(cd "$DRGNX_MODAL_ELPA" && pwd -P):/modal-elpa:ro"
@@ -771,11 +773,12 @@ open_start() { # start drgnx's daemon (the systemd unit when it is enabled), wai
     log="$(drgnx_dir state)/daemon.log"
     mkdir -p "${log%/*}"
     # in its own session, outliving this shell: setsid, else perl (macOS), as core/drgnx-jobs.el does
+    emacs_bin >/dev/null || return 1   # none found: say so, start nothing
     if command -v setsid >/dev/null 2>&1; then
-      setsid -f "$(emacs_bin)" --bg-daemon="$name" --init-directory="$here/init" </dev/null >>"$log" 2>&1
+      setsid -f "$(emacs_bin || echo false)" --bg-daemon="$name" --init-directory="$here/init" </dev/null >>"$log" 2>&1
     else
       perl -MPOSIX -e 'fork and exit; POSIX::setsid(); exec @ARGV' \
-           "$(emacs_bin)" --bg-daemon="$name" --init-directory="$here/init" </dev/null >>"$log" 2>&1
+           "$(emacs_bin || echo false)" --bg-daemon="$name" --init-directory="$here/init" </dev/null >>"$log" 2>&1
     fi
   fi
   deadline=$((SECONDS + OPEN_WAIT)) notice=$((SECONDS + OPEN_WAIT / 3))   # wall-clock seconds: a poll takes more than its sleep
@@ -1287,7 +1290,7 @@ update_auto() { # on | off | status
 }
 
 secrets_emacs() { # the Emacs side of drgnx secrets (core/drgnx-secrets.el)
-  "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+  "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
         -l drgnx-secrets -f drgnx-secrets-cli -- "$@"
 }
 
@@ -1377,7 +1380,7 @@ cmd_bootstrap() { # [--config URL | --chezmoi URL] [--identity FILE] [--step NAM
   trap 'rm -rf -- "$bootstrap_dir"' EXIT
   while :; do
     rc=0
-    DRGNX_BOOTSTRAP_HANDBACK="$bootstrap_dir" "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' \
+    DRGNX_BOOTSTRAP_HANDBACK="$bootstrap_dir" "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' \
       -L "$here/core" -L "$here/wb" -l drgnx-bootstrap -f drgnx-bootstrap-cli -- "$@" || rc=$?
     [ "$rc" -eq 10 ] || return "$rc"
     n=$((n + 1))
@@ -1526,29 +1529,29 @@ case "${1:-help}" in
   lease) shift; cmd_lease "$@" ;;
   ui) shift; ui "$@" ;;
   sync|upgrade|rollback|generations|lock|bisect|service-unit)
-        "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+        "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-pkg -f drgnx-pkg-cli -- "$@" ;;
   onboard) shift
-        "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" -L "$here/wb" \
+        "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" -L "$here/wb" \
               -l drgnx-onboard -f drgnx-onboard-cli -- "$@" ;;
-  safe) shift; DRGNX_SAFE=1 exec "$(emacs_bin)" --init-directory="$here/init" "$@" ;;
+  safe) shift; DRGNX_SAFE=1 exec "$(emacs_bin || echo false)" --init-directory="$here/init" "$@" ;;
   hub) shift
-        "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+        "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-hub -f drgnx-hub-cli -- "$@" ;;
   job) shift
-        "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+        "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-hub -f drgnx-job-cli -- "$@" ;;
   work) shift
-        "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+        "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-work -f drgnx-work-cli -- "$@" ;;
   search) shift
         sub="${1:-}"; [ "$#" -gt 0 ] && shift
         case "$sub" in
-          index) "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+          index) "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
                        -l drgnx-search-index -f drgnx-search-index-cli "$@" ;;
-          query) "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+          query) "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
                        -l drgnx-search-mcp -f drgnx-search-mcp-query-cli -- "$@" ;;
-          mcp) "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+          mcp) "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
                      -l drgnx-search-mcp -f drgnx-search-mcp-main -- "$@" ;;
           *) echo "usage: drgnx search index ROOT [--rebuild] | query ROOT QUESTION… [-k N] | mcp [ROOT]" >&2; exit 2 ;;
         esac ;;
@@ -1558,7 +1561,7 @@ case "${1:-help}" in
         if [[ "${1:-}" == mcp && "${2:-}" == --kind && "$#" -eq 3 && "$3" =~ ^[a-z0-9][a-z0-9_-]{0,31}$ ]]; then
           unset DRGNX_AGENT DRGNX_JOB DRGNX_TASK
           trap '' PIPE
-          DRGNX_AGENT_KIND="$3" exec "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+          DRGNX_AGENT_KIND="$3" exec "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
                -l drgnx-coord-mcp -f drgnx-coord-mcp-main
         fi
         echo "usage: drgnx coord mcp --kind KIND   (KIND: a short lower-case name: claude, codex, zed…)" >&2; exit 2 ;;
@@ -1568,20 +1571,20 @@ case "${1:-help}" in
           exit 2
         fi
         shift
-        "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
+        "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
               -l drgnx-keys-diff -f drgnx-keys-diff-cli -- "$@" ;;
   shell) shift
         DRGNX_STDIN_TTY=$([ -t 0 ] && echo 1 || echo 0) \
-        "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+        "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-shell -f drgnx-shell-cli -- "$@" ;;
   check) shift; lease_self exclusive check "$@"; run_in_tmp_shards check_emacs "$@" ;;
   fmt) shift
-        "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+        "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-fmt -f drgnx-fmt-cli -- "$@" ;;
   update) shift; cmd_update "$@" ;;
   open) shift; cmd_open "$@" ;;
   -t|--gui) cmd_open "$@" ;;
-  macos-app) "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" -l drgnx-macos -f drgnx-macos-cli ;;
+  macos-app) "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" -l drgnx-macos -f drgnx-macos-cli ;;
   secrets) shift; cmd_secrets "$@" ;;
   bootstrap) shift; cmd_bootstrap "$@" ;;
   help|-h|--help) usage ;;
