@@ -1020,7 +1020,9 @@ once). Then
   `(sandbox-step-timeout . PROC)`, worktree mode's git `(job-worktree-timeout . PROC)` (both cancelled by their
   sentinel) and, in a job proxy's own batch Emacs, each client's head deadline `(sandbox-proxy-head . CONN)` (a whole
   head cancels it). The change bus's one idle flush is `drgnx-timer-soon` `signal-flush` (`:core`): a burst of raw
-  hooks arms it once, and a flush called directly cancels the pending one. Three core timers have no process to own
+  hooks arms it once, and a flush called directly cancels the pending one. It also delivers the state store's idle
+  lane, so it goes when the last of `drgnx-signal-mode` and `drgnx-state-mode` turns off (a module's net skips
+  `:core` timers). Three core timers have no process to own
   them and belong to `:core`: `ai-load-keys` (once per daemon, after `drgnx open`), `ai-first-window` (the idle look at
   the local AI runner) and a finished check's 0.1 s `(agent-check-finish . PROC)`, whose process is already dead. The status bar's debounced refresh is a fourth, `statusbar-refresh`, cancelled when the bar's mode turns off."
 
@@ -1785,7 +1787,7 @@ editor with `drgnx-state-use-editor`.
 `drgnx-signal-mode` listens to the raw buffer hooks, and on the store's `now` lane to `windows-changed`,
 `editor-changed` and `selected-changed` (`drgnx-signal--store-events`); it emits deduplicated edges after an idle
 delay (`drgnx-signal-delay`). There is one idle flush, `drgnx-signal--flush`, for the bus and the store: the store's
-idle lane arms it too. It observes the selected frame (`drgnx-state-sync`), makes the store's waiting idle calls
+idle lane arms it too, and its timer (`signal-flush`) is cancelled only when both modes are off. It observes the selected frame (`drgnx-state-sync`), makes the store's waiting idle calls
 (`drgnx-state--deliver-idle`), then compares the buffer state:
 
 - `editor-changed` gets the *buffer* of the selected frame's MRU editor, only when it is not the one it sent last

@@ -255,6 +255,43 @@ and only when it differs from the last one it got."
     (should drgnx-signal-test--store)
     (should-not (drgnx-timer-active-p 'signal-flush))))
 
+(ert-deftest drgnx-signal/the-flush-goes-when-the-bus-and-the-store-are-off ()
+  ;; One `signal-flush' (`:core', so no module's net cancels it) serves the bus and the store's idle lane: the
+  ;; first of the two modes to go keeps it, the last one cancels it, in either order.
+  (drgnx-signal-test--with-store
+    (let ((was-on drgnx-signal-mode))
+      (unwind-protect
+          (dolist (order '((drgnx-signal-mode drgnx-state-mode) (drgnx-state-mode drgnx-signal-mode)))
+            (drgnx-state-mode 1)
+            (drgnx-signal-mode 1)                      ; arms the flush
+            (should (drgnx-timer-active-p 'signal-flush))
+            (funcall (car order) -1)
+            (should (drgnx-timer-active-p 'signal-flush))
+            (funcall (cadr order) -1)
+            (should-not (drgnx-timer-active-p 'signal-flush)))
+        (drgnx-state-mode -1)
+        (drgnx-signal-mode (if was-on 1 -1))))))
+
+(ert-deftest drgnx-signal/the-store-alone-keeps-its-idle-flush ()
+  ;; The bus turned off while a store idle call waits: the store is still on, so the call is made in the next pause.
+  (drgnx-signal-test--with-store
+    (let ((was-on drgnx-signal-mode))
+      (unwind-protect
+          (drgnx-test-with-clock ()
+            (drgnx-state-mode 1)
+            (drgnx-signal-mode 1)
+            (drgnx-state-subscribe 'windows-changed #'drgnx-signal-test--on-store)
+            (split-window nil nil 'right)
+            (drgnx-state-sync)                         ; an idle call waits…
+            (drgnx-signal-mode -1)                     ; …and the bus goes
+            (should-not drgnx-signal-test--store)
+            (drgnx-test-idle (* 2 drgnx-signal-delay))
+            (should drgnx-signal-test--store)          ; …made all the same
+            (should-not (drgnx-timer-active-p 'signal-flush))
+            (drgnx-state-mode -1))
+        (drgnx-state-mode -1)
+        (drgnx-signal-mode (if was-on 1 -1))))))
+
 (ert-deftest drgnx-signal/the-editor-window-variable-is-gone ()
   (let ((name (concat "drgnx-signal--" "editor-window")) (hits nil))
     (should-not (boundp (intern name)))

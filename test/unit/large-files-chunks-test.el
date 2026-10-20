@@ -157,7 +157,7 @@ large-files.eld and `drgnx-large-files-chunks-test--dir' a fresh folder whose bu
         (should (eq header-line-format 'drgnx-large-files--header))
         (should (equal (substring-no-properties drgnx-large-files--header)
                        (format " %s, in chunks: [Open Whole] [Open Raw]" size)))
-        (cl-letf (((symbol-function 'drgnx-face--ascii-frame-p) (lambda (_frame) nil)))
+        (cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) (lambda (&optional _frame) nil)))
           (should (equal (drgnx-large-files-chunks-test--segment) (concat size " · chunk 1/4")))
           (drgnx-large-files-chunks-test--run 'large-file-next-chunk)
           (should (equal (drgnx-large-files-chunks-test--segment) (concat size " · chunk 2/4")))))

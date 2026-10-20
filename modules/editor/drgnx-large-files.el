@@ -27,6 +27,7 @@
 
 ;;; Code:
 (require 'drgnx-modules)
+(require 'drgnx-ui-kit)                 ; `drgnx-ui-ascii-frame-p', for the status bar segment
 (require 'drgnx-registry)
 (require 'drgnx-config)
 (require 'drgnx-memo)
@@ -421,7 +422,6 @@ Outside a large file's buffer it takes the header out."
 (defvar drgnx-statusbar--segments)
 (declare-function drgnx-statusbar-define-segment "drgnx-statusbar")
 (declare-function drgnx-statusbar-source-window "drgnx-statusbar")
-(declare-function drgnx-face--ascii-frame-p "drgnx-face")
 (declare-function drgnx-large-files-chunks-position "drgnx-large-files-chunks")
 
 (defun drgnx-large-files--segment ()
@@ -429,9 +429,7 @@ Outside a large file's buffer it takes the header out."
 an ASCII terminal); nothing outside a large file's buffer.  Reads the flag, the cached size and the chunk position."
   (when-let* ((mode drgnx-large-file) (size drgnx-large-files--shown-size))
     (concat size
-            (if (and (fboundp 'drgnx-face--ascii-frame-p)
-                     (drgnx-face--ascii-frame-p (window-frame (drgnx-statusbar-source-window))))
-                " - " " · ")
+            (if (drgnx-ui-ascii-frame-p (window-frame (drgnx-statusbar-source-window))) " - " " · ")
             (if (eq mode 'chunks)
                 (let ((p (and (fboundp 'drgnx-large-files-chunks-position) (drgnx-large-files-chunks-position))))
                   (if p (format "chunk %d/%d" (car p) (cdr p)) "chunks"))
