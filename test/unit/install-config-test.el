@@ -183,15 +183,15 @@ FAKE_BOOTSTRAP_EXIT for `bootstrap'."
   (drgnx-install-config-test--with-fake-checkout (tmp log env src)
     (let* ((r (drgnx-install-config-test--run
                (append env (list "FAKE_BOOTSTRAP_EXIT=7"))
-               "--yes" "--prefix" (expand-file-name "prefix" tmp) "--source-dir" src
+               "--yes" "--method" "keep" "--prefix" (expand-file-name "prefix" tmp) "--source-dir" src
                "--config" "https://example.invalid/c.git"))
            (calls (drgnx-install-config-test--file log))
            (args (drgnx-install-config-test--file (concat log ".args"))))
       ;; its exit code is bootstrap's
       (should (= (car r) 7))
-      ;; build, then bootstrap; no doctor of install.sh's own, no "Done" line
+      ;; build, the unit's refresh, then bootstrap; no doctor of install.sh's own, no "Done" line
       (should (equal (split-string args "\n" t)
-                     '("build" "bootstrap --config https://example.invalid/c.git --yes")))
+                     '("build" "service-unit --refresh" "bootstrap --config https://example.invalid/c.git --yes")))
       (should-not (string-search "doctor" calls))
       (should-not (string-search "Done" (cdr r)))
       ;; the Emacs just chosen, and no stdin: the rest of a `curl | bash' script is not for bootstrap
@@ -203,17 +203,17 @@ FAKE_BOOTSTRAP_EXIT for `bootstrap'."
       (write-region "main \"$@\"\nrm -rf /nonexistent\n" nil piped)
       (let* ((drgnx-install-config-test--stdin piped)
              (r (drgnx-install-config-test--run
-                 env "--yes" "--prefix" (expand-file-name "prefix" tmp) "--source-dir" src
+                 env "--yes" "--method" "keep" "--prefix" (expand-file-name "prefix" tmp) "--source-dir" src
                  "--config" "https://example.invalid/c.git")))
         (should (= (car r) 0))
         (should (string-search "|stdin=0" (drgnx-install-config-test--file log)))))))
 
 (ert-deftest drgnx-install-config/no-config-keeps-the-doctor-and-done ()
   (drgnx-install-config-test--with-fake-checkout (tmp log env src)
-    (let ((r (drgnx-install-config-test--run env "--yes" "--prefix" (expand-file-name "prefix" tmp) "--source-dir" src)))
+    (let ((r (drgnx-install-config-test--run env "--yes" "--method" "keep" "--prefix" (expand-file-name "prefix" tmp) "--source-dir" src)))
       (should (= (car r) 0))
       (should (equal (split-string (drgnx-install-config-test--file (concat log ".args")) "\n" t)
-                     '("build" "doctor")))
+                     '("build" "service-unit --refresh" "doctor")))
       (should (string-search "Done." (cdr r))))))
 
 (ert-deftest drgnx-install-config/the-url-is-never-evaluated ()
@@ -224,7 +224,7 @@ FAKE_BOOTSTRAP_EXIT for `bootstrap'."
            (r (progn
                 (make-directory evil t)
                 (drgnx-install-config-test--run (cons (concat "PWNED=" marker) env)
-                                                "--yes" "--prefix" (expand-file-name "prefix" tmp) "--source-dir" src
+                                                "--yes" "--method" "keep" "--prefix" (expand-file-name "prefix" tmp) "--source-dir" src
                                                 "--config" evil))))
       (should-not (file-exists-p marker))
       (should (= (car r) 0))
@@ -233,7 +233,7 @@ FAKE_BOOTSTRAP_EXIT for `bootstrap'."
 
 (ert-deftest drgnx-install-config/a-missing-local-config-stops-before-anything ()
   (drgnx-install-config-test--with-fake-checkout (tmp log env src)
-    (let ((r (drgnx-install-config-test--run env "--yes" "--prefix" (expand-file-name "prefix" tmp) "--source-dir" src
+    (let ((r (drgnx-install-config-test--run env "--yes" "--method" "keep" "--prefix" (expand-file-name "prefix" tmp) "--source-dir" src
                                              "--config" (expand-file-name "no-such.git" tmp))))
       (should (= (car r) 2))
       (should (string-search "does not exist" (cdr r)))
@@ -245,7 +245,7 @@ FAKE_BOOTSTRAP_EXIT for `bootstrap'."
     (let* ((id (expand-file-name "identity.txt" tmp))
            (sentinel "SENTINEL-not-a-real-identity")
            (run (lambda (&rest more)
-                  (apply #'drgnx-install-config-test--run env "--yes" "--prefix" (expand-file-name "prefix" tmp)
+                  (apply #'drgnx-install-config-test--run env "--yes" "--method" "keep" "--prefix" (expand-file-name "prefix" tmp)
                          "--source-dir" src "--config" "https://example.invalid/c.git" more))))
       ;; missing → exit 2, before anything is installed
       (let ((r (funcall run "--identity" id)))

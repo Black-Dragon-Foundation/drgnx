@@ -937,3 +937,156 @@ the key's fingerprint."
         (should (= (car r) 1))
         (should (string-search "needs 3 GiB of free memory" (cdr r)))
         (should-not (string-search "1. Emacs" (cdr r)))))))
+
+;;; Nidhogg: fetch, build, install (Task 11)
+
+(defun drgnx-install-test--script (file text)
+  (write-region text nil file)
+  (set-file-modes file #o755))
+
+(defun drgnx-install-test--nidhogg-fixture (tmp)
+  "In TMP: a git repo `nidhogg' (tag v31.1-nidhogg.1) with a stub nidhogg/build.sh that logs its arguments to $NH_LOG
+and writes PREFIX/bin/{nidhogg,emacs,nidhoggclient} answering the probe (NH_FAIL=1: exits 1; NH_BROKEN=1: binaries that do
+not start) and deps lists; `bin' with a sudo and an rpm stub (RPM_ALL=1: everything installed); `drgnx', a checkout whose
+bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real run on Fedora 44."
+  (let* ((repo (expand-file-name "nidhogg" tmp)) (bin (expand-file-name "bin" tmp))
+         (checkout (expand-file-name "drgnx" tmp)) (home (expand-file-name "home" tmp))
+         (git (lambda (&rest args)
+                (should (= 0 (apply #'call-process "git" nil nil nil "-C" repo "-c" "user.name=t" "-c" "user.email=t@t.invalid"
+                                    "-c" "commit.gpgsign=false" "-c" "core.hooksPath=/dev/null" args))))))
+    (dolist (d (list (expand-file-name "nidhogg/deps" repo) bin (expand-file-name "bin" checkout) home))
+      (make-directory d t))
+    (drgnx-install-test--script
+     (expand-file-name "nidhogg/build.sh" repo)
+     (concat "#!/bin/sh\necho \"build.sh $*\" >> \"$NH_LOG\"\n[ -z \"$NH_FAIL\" ] || exit 1\n"
+             "while [ $# -gt 0 ]; do case $1 in --prefix) P=$2; shift ;; esac; shift; done\nmkdir -p \"$P/bin\"\n"
+             "for n in nidhogg emacs nidhoggclient; do\n"
+             "  if [ -n \"$NH_BROKEN\" ]; then printf '#!/bin/sh\\nexit 127\\n' > \"$P/bin/$n\"\n"
+             "  else printf '#!/bin/sh\\necho \"31.1 t pgtk 31.1-nidhogg.1\"\\n' > \"$P/bin/$n\"; fi\n"
+             "  chmod +x \"$P/bin/$n\"\ndone\n"))
+    (dolist (f '(("fedora-44.runtime" . "# runtime\nlibfoo\nlibbar\n") ("fedora-44.build" . "# build\n\nlibbuildfoo\nlibbuildbar\n")))
+      (write-region (cdr f) nil (expand-file-name (concat "nidhogg/deps/" (car f)) repo)))
+    (funcall git "init" "-q")
+    (funcall git "add" "-A")
+    (funcall git "commit" "-qm" "nidhogg: fixture")
+    (funcall git "tag" "v31.1-nidhogg.1")
+    (drgnx-install-test--script (expand-file-name "sudo" bin) "#!/bin/sh\necho \"sudo $*\" >> \"$NH_LOG\"\n")
+    (drgnx-install-test--script (expand-file-name "rpm" bin) "#!/bin/sh\n[ -n \"$RPM_ALL\" ]\n")
+    (drgnx-install-test--script (expand-file-name "bin/drgnx" checkout)
+                                "#!/bin/sh\necho \"drgnx $* [DRGNX_EMACS=$DRGNX_EMACS]\" >> \"$NH_LOG\"\n")
+    (cons (list (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os "fedora-44")) "DRGNX_INSTALL_UNAME=Linux"
+                (concat "DRGNX_INSTALL_NIDHOGG_REPO=" repo)
+                (concat "NH_LOG=" tmp "/log") (concat "HOME=" home)
+                (concat "DRGNX_DATA_DIR=" home "/.local/share/drgnx") (concat "DRGNX_CONFIG_DIR=" home "/.config/drgnx")
+                (concat "XDG_CACHE_HOME=" tmp "/cache") (concat "PATH=" bin ":" (getenv "PATH")))
+          (with-temp-buffer (call-process "git" nil t nil "-C" repo "rev-parse" "HEAD") (string-trim (buffer-string))))))
+
+(defun drgnx-install-test--nidhogg-run (tmp fixture &optional env commit)
+  "Run install.sh --yes in the fixture of TMP with ENV added; COMMIT overrides the pinned one."
+  (drgnx-install-test--run (append env (list (concat "DRGNX_INSTALL_NIDHOGG_COMMIT=" (or commit (cdr fixture)))) (car fixture))
+                           "--yes" "--source-dir" (expand-file-name "drgnx" tmp)))
+
+(defun drgnx-install-test--file (file)
+  (and (file-exists-p file) (with-temp-buffer (insert-file-contents file) (buffer-string))))
+
+(ert-deftest drgnx-install/nidhogg-pin-mismatch-installs-nothing ()
+  (skip-unless (/= 0 (user-uid)))     ; as root, as_root runs commands without sudo: they would really run
+  (drgnx-install-test--with-tmp tmp
+    (let* ((fx (drgnx-install-test--nidhogg-fixture tmp))
+           (r (drgnx-install-test--nidhogg-run tmp fx nil (make-string 40 ?0))))
+      (should (= (car r) 1))
+      (should (string-search "not the commit drgnx pins" (cdr r)))
+      (should (string-search "nothing was installed" (cdr r)))
+      (should-not (string-search "As root:" (cdr r)))
+      (should-not (file-exists-p (expand-file-name "home/.local/opt" tmp)))
+      (should-not (file-exists-p (expand-file-name "home/.local/share/drgnx/emacs" tmp)))
+      (should-not (drgnx-install-test--file (expand-file-name "log" tmp))))))
+
+(ert-deftest drgnx-install/nidhogg-container-build-runs-capped ()
+  (skip-unless (/= 0 (user-uid)))
+  (drgnx-install-test--with-tmp tmp
+    (let* ((fx (drgnx-install-test--nidhogg-fixture tmp))
+           (home (expand-file-name "home" tmp))
+           (r (drgnx-install-test--nidhogg-run
+               tmp fx (append (list (concat "DRGNX_INSTALL_PODMAN=" (drgnx-install-test--podman tmp 0))) drgnx-install-test--roomy)))
+           (log (drgnx-install-test--file (expand-file-name "log" tmp)))
+           (prefix (concat home "/.local/opt/nidhogg/31.1-nidhogg.1")))
+      (should (= (car r) 0))
+      (should (string-search (concat "build.sh --container fedora-44 --memory 6g --jobs 4 --prefix " prefix) log))
+      (should (string-search "--build-dir " log))
+      (should (string-search "sudo dnf install -y libfoo libbar" log))
+      (should-not (string-search "libbuildfoo" log))
+      (should (equal (drgnx-install-test--file (expand-file-name ".local/share/drgnx/emacs" home))
+                     (concat prefix "/bin/nidhogg\n")))
+      (should (equal (file-truename (expand-file-name ".local/bin/nidhogg" home)) (file-truename (concat prefix "/bin/nidhogg"))))
+      (should (file-symlink-p (expand-file-name ".local/bin/nidhoggclient" home)))
+      ;; the bootstrap steps ran in the new Emacs
+      (should (string-search (concat "drgnx build [DRGNX_EMACS=" prefix "/bin/nidhogg]") log)))))
+
+(ert-deftest drgnx-install/nidhogg-host-build-without-podman ()
+  (skip-unless (/= 0 (user-uid)))
+  (drgnx-install-test--with-tmp tmp
+    (let* ((fx (drgnx-install-test--nidhogg-fixture tmp))
+           (r (drgnx-install-test--nidhogg-run tmp fx drgnx-install-test--roomy))
+           (log (drgnx-install-test--file (expand-file-name "log" tmp))))
+      (should (= (car r) 0))
+      (should (string-match-p "build\\.sh --host --jobs 10 --prefix " log))
+      (should-not (string-search "--container" log))
+      (should (string-search "sudo dnf install -y libbuildfoo libbuildbar" log))
+      (should-not (string-search "libfoo" log)))))
+
+(ert-deftest drgnx-install/deps-already-installed-need-no-root ()
+  (skip-unless (/= 0 (user-uid)))
+  (drgnx-install-test--with-tmp tmp
+    (let* ((fx (drgnx-install-test--nidhogg-fixture tmp))
+           (r (drgnx-install-test--nidhogg-run tmp fx '("RPM_ALL=1")))
+           (log (drgnx-install-test--file (expand-file-name "log" tmp))))
+      (should (= (car r) 0))
+      (should-not (string-search "As root:" (cdr r)))
+      (should-not (string-search "sudo " log))
+      (should (string-search "build.sh " log)))))
+
+(ert-deftest drgnx-install/a-failed-nidhogg-build-keeps-the-old-emacs ()
+  (skip-unless (/= 0 (user-uid)))
+  (drgnx-install-test--with-tmp tmp
+    (let* ((fx (drgnx-install-test--nidhogg-fixture tmp))
+           (home (expand-file-name "home" tmp))
+           (record (expand-file-name ".local/share/drgnx/emacs" home)))
+      (make-directory (file-name-directory record) t)
+      (write-region "/old/emacs\n" nil record)
+      (let ((r (drgnx-install-test--nidhogg-run tmp fx '("NH_FAIL=1"))))
+        (should (= (car r) 1))
+        (should (string-search "the Nidhogg build failed" (cdr r)))
+        (should (string-search "drgnx still uses the Emacs it used" (cdr r)))
+        (should (equal (drgnx-install-test--file record) "/old/emacs\n"))
+        (should-not (file-exists-p (expand-file-name ".local/bin/nidhogg" home)))
+        (should-not (file-exists-p (expand-file-name ".local/opt/nidhogg/31.1-nidhogg.1" home)))
+        (should-not (string-search "drgnx build" (drgnx-install-test--file (expand-file-name "log" tmp))))))))
+
+(ert-deftest drgnx-install/a-built-nidhogg-that-does-not-start-is-refused ()
+  (skip-unless (/= 0 (user-uid)))
+  (drgnx-install-test--with-tmp tmp
+    (let* ((fx (drgnx-install-test--nidhogg-fixture tmp))
+           (home (expand-file-name "home" tmp))
+           (record (expand-file-name ".local/share/drgnx/emacs" home)))
+      (make-directory (file-name-directory record) t)
+      (write-region "/old/emacs\n" nil record)
+      (let ((r (drgnx-install-test--nidhogg-run tmp fx '("NH_BROKEN=1"))))
+        (should (= (car r) 1))
+        (should (string-search "does not start or is incomplete" (cdr r)))
+        (should (string-search "not found" (cdr r)))
+        (should (equal (drgnx-install-test--file record) "/old/emacs\n"))
+        (should-not (file-exists-p (expand-file-name ".local/bin/nidhogg" home)))))))
+
+(ert-deftest drgnx-install/nidhogg-install-refreshes-the-unit ()
+  (skip-unless (/= 0 (user-uid)))
+  (drgnx-install-test--with-tmp tmp
+    (let* ((fx (drgnx-install-test--nidhogg-fixture tmp))
+           (r (drgnx-install-test--nidhogg-run tmp fx))
+           (log (drgnx-install-test--file (expand-file-name "log" tmp)))
+           (prefix (concat tmp "/home/.local/opt/nidhogg/31.1-nidhogg.1")))
+      (should (= (car r) 0))
+      (should (string-search (concat "drgnx service-unit --refresh [DRGNX_EMACS=" prefix "/bin/nidhogg]") log))
+      ;; after the build, before the doctor
+      (should (< (string-search "drgnx build" log) (string-search "service-unit --refresh" log)))
+      (should (< (string-search "service-unit --refresh" log) (string-search "drgnx doctor" log))))))

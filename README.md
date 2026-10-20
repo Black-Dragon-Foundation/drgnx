@@ -36,9 +36,10 @@ Pre-release: this installs the work in progress.
 curl -fsSL https://raw.githubusercontent.com/Black-Dragon-Foundation/drgnx/main/install.sh | bash
 ```
 
-It prints a plan first, asks before every root step, and gets Emacs 31.1 from your distribution where it
-is good or builds the signed GNU release with native compilation. On macOS, run it in Terminal: it installs Homebrew
-(after asking) and Emacs from it, adds a **drgnx** app to `~/Applications` and opens it, and the Welcome sets up keys,
+It prints a plan first, asks before every root step, and builds Nidhogg, drgnx's own Emacs (GNU Emacs 31.1 with drgnx's
+patches, native compilation), on Fedora 44/45, Ubuntu 26.04 and macOS; elsewhere it gets stock GNU Emacs 31.1 from
+your distribution or builds the signed GNU release (drgnx runs on it, with a warning). On macOS, run it in Terminal: it installs Homebrew
+(after asking) and builds Nidhogg with it, adds a **drgnx** app to `~/Applications` and opens it, and the Welcome sets up keys,
 AI and Claude Code; afterwards open drgnx with Spotlight (⌘Space, type "drgnx") or Launchpad, or run `drgnx .` in a
 project, like `code .`; to keep it in the Dock, drag `~/Applications/drgnx.app` there.
 `--dry-run` shows the plan only. On a second machine, `bash -s -- --config URL` (after the `| bash`) also sets it up from
@@ -60,7 +61,7 @@ manual install and uninstall: [docs/guide/install.md](docs/guide/install.md). Ch
   built-in semantic search, terminal windows (`drgnx -t`, SSH, tmux: keys, mouse, clipboard, colours), several
   monitors under sway, i3, Hyprland, niri, KDE Plasma, X11 and macOS (move a window to another monitor, restore each
   window to its own; GNOME explains its key), your own shell in drgnx's terminal, and a second machine from one command
-  (`drgnx bootstrap`).
+  (`drgnx bootstrap`), and Nidhogg, drgnx's own Emacs build, which the installer builds and drgnx runs on.
 - **Later:** editor amenities to match VS Code and Zed (tree-sitter, language servers, formatting, debugging,
   multi-cursor, git gutter, a settings and shortcuts editor), platforms (macOS, a Meow modal module), then the public
   launch.

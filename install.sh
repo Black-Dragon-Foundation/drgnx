@@ -687,6 +687,91 @@ need_git() { # a package install (Arch, Fedora 45) does not bring git
   esac
 }
 
+fetch_nidhogg() { # NIDHOGG_SRC: the tag, checked out; it must be the commit drgnx pins, before anything is built
+  need_git
+  NIDHOGG_SRC="$BUILD_DIR/nidhogg"
+  local url="$NIDHOGG_REPO" got
+  if [[ "$url" == /* ]]; then url="file://$url"; fi
+  say "Fetching $NIDHOGG_TAG of ${NIDHOGG_REPO}…"
+  rm -rf "$NIDHOGG_SRC"
+  mkdir -p "$NIDHOGG_SRC"
+  git -C "$NIDHOGG_SRC" init -q
+  git -C "$NIDHOGG_SRC" fetch --depth 1 --quiet "$url" "refs/tags/$NIDHOGG_TAG" ||
+    die 1 "could not fetch $NIDHOGG_TAG of $NIDHOGG_REPO — nothing was installed (no network, or the release is not published yet)"
+  got="$(git -C "$NIDHOGG_SRC" rev-parse 'FETCH_HEAD^{commit}')"
+  if [[ "$got" != "$NIDHOGG_COMMIT" ]]; then
+    die 1 "$NIDHOGG_TAG of $NIDHOGG_REPO is commit $got, not the commit drgnx pins (${NIDHOGG_COMMIT:0:12}) — nothing was installed"
+  fi
+  git -C "$NIDHOGG_SRC" checkout -q --detach FETCH_HEAD
+}
+
+nidhogg_deps_present() { # PACKAGE… → true if all are installed
+  local p
+  for p in "$@"; do
+    case "$FAMILY" in
+      fedora) rpm -q "$p" >/dev/null 2>&1 || return 1 ;;
+      debian) dpkg -s "$p" >/dev/null 2>&1 || return 1 ;;
+      macos) [[ -n "$("$BREW" list --versions "$p" 2>/dev/null)" ]] || return 1 ;;
+      *) return 1 ;;
+    esac
+  done
+}
+
+nidhogg_deps() { # the packages Nidhogg's own lists name: runtime libraries for a container build, build dependencies for a host build
+  local kind=build list line pkgs=()
+  if [[ "$NIDHOGG_MODE" == container ]]; then kind=runtime; fi
+  list="$NIDHOGG_SRC/nidhogg/deps/$NIDHOGG_DISTRO.$kind"
+  [[ -r "$list" ]] || die 1 "$NIDHOGG_TAG has no $list — nothing was installed"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in ""|"#"*) continue ;; esac
+    pkgs+=("$line")
+  done <"$list"
+  if ((${#pkgs[@]} == 0)); then return 0; fi
+  if nidhogg_deps_present "${pkgs[@]}"; then return 0; fi
+  case "$FAMILY" in
+    fedora) as_root dnf install -y "${pkgs[@]}" ;;
+    debian)
+      as_root apt-get update -qq
+      as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${pkgs[@]}" ;;
+    macos) "$BREW" install "${pkgs[@]}" ;;
+  esac
+}
+
+install_nidhogg() { # build.sh (from the pinned tag) builds and installs into NIDHOGG_PREFIX; the new binary must start
+  local args=() log="$BUILD_DIR/nidhogg-build" bin info v native gui nid
+  case "$NIDHOGG_PREFIX" in "$PREFIX"/opt/nidhogg/?*) rm -rf "$NIDHOGG_PREFIX" ;; esac   # a leftover of a failed run
+  if [[ "$NIDHOGG_MODE" == container ]]; then args=(--container "$NIDHOGG_DISTRO" --memory "${NIDHOGG_MEM}g")
+  else args=(--host); fi
+  args+=(--jobs "$JOBS" --prefix "$NIDHOGG_PREFIX" --build-dir "$log")
+  if [[ -n "${DRGNX_INSTALL_PODMAN:-}" && "$DRGNX_INSTALL_PODMAN" != none ]]; then export NIDHOGG_BUILD_PODMAN="$DRGNX_INSTALL_PODMAN"; fi
+  say "Building Nidhogg $NIDHOGG_VERSION, this takes a while (logs: $log)…"
+  if ! bash "$NIDHOGG_SRC/nidhogg/build.sh" "${args[@]}"; then
+    case "$NIDHOGG_PREFIX" in "$PREFIX"/opt/nidhogg/?*) rm -rf "$NIDHOGG_PREFIX" ;; esac
+    die 1 "the Nidhogg build failed — see $log/*.log (nothing changed: drgnx still uses the Emacs it used)"
+  fi
+  bin="$(nidhogg_bin)"
+  info="$(emacs_info "$bin")"
+  read -r v native gui nid <<<"$info"
+  if [[ -z "$info" || "$v" != "$EMACS_VERSION" || "$native" != t || "$gui" == nil || "${nid:--}" != "$NIDHOGG_VERSION" ]]; then
+    die 1 "Nidhogg was built but does not start or is incomplete (probe: ${info:-no answer}): missing runtime libraries? see: ldd $NIDHOGG_PREFIX/bin/emacs | grep 'not found'"
+  fi
+}
+
+link_nidhogg() { # nidhogg and nidhoggclient in $PREFIX/bin; what drgnx records is the nidhogg binary
+  mkdir -p "$PREFIX/bin"
+  if [[ "$FAMILY" == macos ]]; then
+    local app="$NIDHOGG_PREFIX/Nidhogg.app"
+    rm -f "$PREFIX/bin/nidhogg" "$PREFIX/bin/nidhoggclient"
+    printf '#!/bin/sh\nexec %q "$@"\n' "$app/Contents/MacOS/Emacs" >"$PREFIX/bin/nidhogg"
+    chmod +x "$PREFIX/bin/nidhogg"
+    ln -sfn "$app/Contents/MacOS/bin/emacsclient" "$PREFIX/bin/nidhoggclient"
+  else
+    ln -sfn "$NIDHOGG_PREFIX/bin/nidhogg" "$PREFIX/bin/nidhogg"
+    ln -sfn "$NIDHOGG_PREFIX/bin/nidhoggclient" "$PREFIX/bin/nidhoggclient"
+  fi
+  EMACS_BIN="$(planned_emacs)"
+}
+
 fetch_drgnx() {
   if [[ -n "$SOURCE_DIR" ]]; then return; fi
   need_git
@@ -795,12 +880,21 @@ main() {
     package) install_emacs_package ;;
     cask|formula) install_homebrew; install_emacs_brew ;;
     source) install_emacs_source ;;
+    nidhogg)
+      fetch_nidhogg
+      if [[ "$FAMILY" == macos ]]; then install_homebrew; fi
+      nidhogg_deps
+      install_nidhogg
+      link_nidhogg ;;
   esac
   fetch_drgnx
   link_drgnx
   remember_emacs
   say ""
   DRGNX_EMACS="$EMACS_BIN" "$DIR/bin/drgnx" build >/dev/null || warn "drgnx build failed: run $DIR/bin/drgnx build to see why (drgnx still runs, uncompiled)"
+  if [[ "$OS" == linux ]]; then   # a unit that names the Emacs it was made for would keep running that one
+    DRGNX_EMACS="$EMACS_BIN" "$DIR/bin/drgnx" service-unit --refresh || warn "could not check drgnx.service: run drgnx service-unit --refresh"
+  fi
   local app=""   # the app and the PATH line first: the doctor checks them
   if [[ "$OS" == macos ]] && install_app; then app="$HOME/Applications/drgnx.app"; fi
   path_hint
