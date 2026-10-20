@@ -170,9 +170,8 @@ paths no WM serves."
                   ((symbol-function 'drgnx-ui--run-with-timeout)
                    (lambda (&rest _) (setq seen process-environment) (list 0 ""))))
           (should (eql 0 (plist-get (drgnx-ui-new-frame s 2) :exit))))
-        (should (member "HOME=/home/caller" seen))
-        (dolist (kv caller)
-          (unless (equal kv "HOME=/home/caller") (should-not (member kv seen))))
+        (should (member (concat "HOME=" (expand-file-name "home" (plist-get s :run))) seen))   ; the run's, not the caller's
+        (dolist (kv caller) (should-not (member kv seen)))
         (should-not (seq-find (lambda (kv) (string-match-p "\\`\\(SWAYSOCK\\|I3SOCK\\|NIRI_SOCKET\\|HYPRLAND_INSTANCE_SIGNATURE\\|XDG_CURRENT_DESKTOP\\|XDG_SESSION_TYPE\\|DBUS_SESSION_BUS_ADDRESS\\|SECRET_TOKEN\\)=" kv))
                               seen))
         (if (equal c "x11")
