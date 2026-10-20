@@ -820,6 +820,9 @@ output, the errors, `timed-out' (non-nil when LIMIT ended it) and the time.  The
                     (unless (process-get proc :check-finished)
                       (process-put proc :check-finished t)
                       (drgnx-timer-cancel-owner proc)       ; the limit, the backstop, the tree and kill timers
+                      ;; the sentinel does not promise the pipes are read: what the child wrote before it ended is
+                      ;; read now, not left for a later wait
+                      (ignore-errors (accept-process-output proc 0) (accept-process-output err-proc 0))
                       (ignore-errors (delete-process err-proc))
                       ;; whatever the scope still holds (a server's daemon) goes; a scope that is gone is no error
                       (when unit (drgnx-agent-check--kill-scope unit))
