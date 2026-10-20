@@ -281,16 +281,19 @@ rename or new buffer).  `after-change-major-mode-hook' covers a mode change on a
 changes come from the state store (`drgnx-signal--store-events').")
 
 (define-minor-mode drgnx-signal-mode
-  "The workbench change bus: raw buffer hooks and the state store's window events become deduplicated edges."
+  "The workbench change bus: raw buffer hooks and the state store's window events become deduplicated edges.
+Off, the idle flush `signal-flush' is cancelled unless the store (`drgnx-state-mode') is still on: its idle
+lane shares the flush."
   :global t :group 'drgnx
   (pcase-dolist (`(,hook . ,fn) drgnx-signal--hooks)
     (if drgnx-signal-mode (add-hook hook fn) (remove-hook hook fn)))
   (pcase-dolist (`(,event . ,fn) drgnx-signal--store-events)
     (if drgnx-signal-mode (drgnx-state-subscribe event fn :lane 'now) (drgnx-state-unsubscribe event fn)))
   (setq drgnx-signal--seen-buffer nil drgnx-signal--switched nil)
-  (when drgnx-signal-mode
-    (setq drgnx-signal--dirty '(set modified))
-    (drgnx-signal--schedule)))
+  (if drgnx-signal-mode
+      (progn (setq drgnx-signal--dirty '(set modified))
+             (drgnx-signal--schedule))
+    (unless drgnx-state-mode (drgnx-timer-cancel 'signal-flush))))
 
 (provide 'drgnx-signal)
 ;;; drgnx-signal.el ends here

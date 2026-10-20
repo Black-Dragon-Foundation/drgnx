@@ -27,6 +27,7 @@
 (require 'cl-lib)
 (require 'drgnx-frame-kind)
 (require 'drgnx-modules-helpers)
+(require 'drgnx-timer)                  ; the off path cancels the shared flush, `signal-flush'
 
 (defvar drgnx-wb--areas)                ; drgnx-area.el: the areas' tabs (read, when loaded)
 (defvar drgnx-pane--last)               ; drgnx-panes.el: frame → kind → the last buffer an editor kind showed
@@ -35,6 +36,7 @@
 (defvar drgnx-signal-errors nil "Recent subscriber errors of the store and the bus (newest first, at most 20).")
 (defvar drgnx-signal-delay 0.05 "Idle seconds before the bus's flush delivers the idle lane and the buffer edges.")
 (declare-function drgnx-signal--schedule "drgnx-signal")
+(defvar drgnx-signal-mode)
 
 ;;;; Records
 
@@ -479,7 +481,7 @@ arm the bus's idle flush (one timer for the store and the bus)."
       (drgnx-state--call (nth 1 c) (car c) (nth 4 c)))))
 
 (defun drgnx-state--drop-idle ()
-  "Forget the waiting idle calls (the bus's flush stays armed: it has its own edges)."
+  "Forget the waiting idle calls (the bus's flush stays armed while the bus is on: it has its own edges)."
   (setq drgnx-state--queue nil))
 
 (defun drgnx-state--cause ()
@@ -725,13 +727,15 @@ then `frame-removed' is emitted (FRAME is still live for its subscribers)."
 
 (define-minor-mode drgnx-state-mode
   "The workbench state store: keep one record per workbench frame, observed when windows change.
-On, it observes every live workbench frame, oldest first; off, the records go."
+On, it observes every live workbench frame, oldest first; off, the records go, and so does the shared idle
+flush `signal-flush' unless the bus (`drgnx-signal-mode') is still on."
   :global t :group 'drgnx
   (drgnx-state--install drgnx-state-mode)
   (if drgnx-state-mode
       (let ((drgnx-state--watching t)) (dolist (f (reverse (frame-list))) (drgnx-state--observe f)))
     (clrhash drgnx-state--frames)
     (drgnx-state--drop-idle)
+    (unless (bound-and-true-p drgnx-signal-mode) (drgnx-timer-cancel 'signal-flush))
     (setq drgnx-state--order nil drgnx-state--in-command nil drgnx-state--selected-frame nil)))
 
 (provide 'drgnx-state)
