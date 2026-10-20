@@ -162,6 +162,13 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
       (should (member "TimeoutStopSec=10" argv))
       (should (equal (seq-take (cdr (member "--" argv)) 2) '("env" "-i"))))))
 
+;; every variable that could carry the real home's paths into a test: the child must see it unset or inside its run
+(defconst drgnx-ui-test--path-classes
+  '("XDG_CONFIG_HOME" "XDG_DATA_HOME" "XDG_CACHE_HOME" "XDG_RUNTIME_DIR" "XDG_DATA_DIRS" "XDG_CONFIG_DIRS"
+    "DRGNX_CONFIG_DIR" "DRGNX_DATA_DIR" "DRGNX_UI_STATE" "TMPDIR" "SSH_AUTH_SOCK" "SSH_AGENT_PID" "GNUPGHOME" "XAUTHORITY"
+    "CLAUDE_CONFIG_DIR" "CODEX_HOME" "KIMI_CODE_HOME" "GIT_CONFIG_GLOBAL" "SOME_TOOL_DIR"))
+;; (EMACSLOADPATH is read by the child Emacs itself at startup, before the runner can unset it: test-env-test covers it)
+
 ;; URGENT-3-UI-LIVE: `test --ui' ran test/live in its own process with the real HOME, state directory, bus and keys
 (ert-deftest drgnx-ui/the-ui-tiers-live-half-runs-sandboxed ()
   (let* ((base (make-temp-file "drgnx-ui-live" t))
@@ -172,6 +179,7 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
         (progn
           (make-directory real-home)
           (make-directory suite)
+          (make-directory (expand-file-name "tmpdir" base))          ; the fake TMPDIR must exist, as the real one does
           (with-temp-file (expand-file-name "probe-test.el" suite)
             (insert (format "(require 'ert)\n(require 'drgnx-ui)
 (ert-deftest live-probe/record ()
@@ -180,17 +188,24 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
     (write-region \"x\" nil (expand-file-name \"scenarios/minimal.json\" root))
     (with-temp-file %S
       (prin1 (list (getenv \"HOME\") (getenv \"OPENROUTER_API_KEY\") (getenv \"DISPLAY\") (getenv \"DBUS_SESSION_BUS_ADDRESS\") root
-                   (expand-file-name \"~/probe\") (getenv \"XDG_STATE_HOME\"))
-             (current-buffer)))))\n" out)))
+                   (expand-file-name \"~/probe\") (getenv \"XDG_STATE_HOME\")
+                   ;; every path class: its value in this process, and Emacs' own directory
+                   (mapcar (lambda (v) (cons v (getenv v))) '%S)
+                   user-emacs-directory)
+             (current-buffer)))))\n" out drgnx-ui-test--path-classes)))
           (let ((process-environment
                  (append (list (concat "HOME=" real-home) (concat "XDG_STATE_HOME=" real-home "/.local/state")
                                (concat "DRGNX_UI_STATE=" real-home "/ui-state") "OPENROUTER_API_KEY=sk-x" "DISPLAY=:0"
                                "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1/bus" "DRGNX_TEST_SELECTOR")
+                         (mapcar (lambda (v) (format "%s=%s/%s" v real-home (downcase v))) (remove "TMPDIR" drgnx-ui-test--path-classes))
+                         ;; (the runner makes its own directory under TMPDIR before anything is faked: outside the real home)
+                         (list (concat "TMPDIR=" base "/tmpdir"))
                          process-environment))
                 ok)
-            (with-output-to-string (setq ok (drgnx-ui-run-live-tests suite)))
+            (let ((log (with-output-to-string (setq ok (drgnx-ui-run-live-tests suite)))))
+              (unless ok (message "live child:\n%s" log)))
             (should ok))
-          (pcase-let ((`(,home ,key ,display ,bus ,state ,tilde ,xdg-state)
+          (pcase-let ((`(,home ,key ,display ,bus ,state ,tilde ,xdg-state ,classes ,emacs-dir)
                        (with-temp-buffer (insert-file-contents out) (read (current-buffer)))))
             (should-not key)
             (should-not display)
@@ -200,6 +215,13 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
             (should (string-prefix-p (file-name-directory home) state))
             (should (string-prefix-p (file-name-directory home) xdg-state))
             (should (string-prefix-p home tilde))
+            ;; every path class is unset or inside the run; user-emacs-directory too
+            (should (equal (mapcar #'car classes) drgnx-ui-test--path-classes))
+            (dolist (c classes)
+              (should-not (and (cdr c) (string-search real-home (cdr c)))))
+            (should-not (string-search real-home emacs-dir))
+            (should-not (equal (cdr (assoc "TMPDIR" classes)) (concat base "/tmpdir")))
+            (should (string-prefix-p (file-name-directory home) emacs-dir))
             (should-not (directory-files-recursively real-home ".")))
           )
       (delete-directory base t))))

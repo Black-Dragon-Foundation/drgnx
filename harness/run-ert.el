@@ -771,6 +771,9 @@ exit 0 or 1."
                   process-environment))
          (_ (make-directory (expand-file-name "home" tmp) t))
          (abbreviated-home-dir nil)                     ; recomputed for the temp home
+         ;; Emacs computed this at startup from the real HOME (~/.emacs.d or ~/.config/emacs): a test that writes under it
+         ;; (the custom file, eln-cache, auto-save lists …) lands in the run
+         (user-emacs-directory (file-name-as-directory (expand-file-name "emacs" tmp)))
          ;; project.el remembers projects it sees: never in the user's own Emacs's list
          (project-list-file (expand-file-name "projects" tmp))
          (ok (if one-process
