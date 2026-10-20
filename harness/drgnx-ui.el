@@ -481,8 +481,10 @@ without its \"drgnx-ui-\" (the socket inside it has the whole NAME)."
   "Create DIR and missing parents, each mode 0700 (server-start refuses anything else)."
   (unless (file-directory-p dir)
     (drgnx-ui--make-private-dir (directory-file-name (file-name-directory (directory-file-name dir))))
-    ;; another Emacs may make a shared parent between the check and here (sessions start from several processes)
-    (condition-case nil (make-directory dir) (file-already-exists nil))
+    ;; another Emacs may make a shared parent between the check and here (sessions start from several processes);
+    ;; a file of that name that is no directory is still an error (and keeps its mode)
+    (condition-case err (make-directory dir)
+      (file-already-exists (unless (file-directory-p dir) (signal (car err) (cdr err)))))
     (set-file-modes dir #o700)))
 
 (defun drgnx-ui--owner ()
