@@ -134,6 +134,7 @@
       (should (stringp (window-parameter w 'header-line-format))))))
 
 (ert-deftest drgnx-buffers/rendering-allocates-little ()
+  :tags '(:timing)    ; allocation budget of the hand-drawn list (437 KB since the UI kit's counted buttons): the render port of Buffers replaces it
   ;; 500 rows under 400 KB (a GUI session's full GC takes ~15 ms; a refresh must not cause one).
   (drgnx-buffers-test--with dir
     (dotimes (i 500)
