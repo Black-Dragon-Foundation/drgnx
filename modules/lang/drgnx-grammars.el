@@ -42,8 +42,8 @@
     (typescript "https://github.com/tree-sitter/tree-sitter-typescript" "v0.23.2" "typescript/src")
     (yaml "https://github.com/tree-sitter-grammars/tree-sitter-yaml" "v0.7.2"))
   "LANGUAGE URL REVISION [SOURCE-DIR]: where a grammar comes from (`treesit-language-source-alist' entries).  REVISION is
-the newest tag whose parser is tree-sitter ABI 14 (what an ABI 14 library loads, and what the tree-sitter modes' queries were
-written against); `drgnx-grammars-recipe' drops it with an ABI 15 library.")
+the newest tag whose parser is tree-sitter ABI 14 (what an ABI 14 library loads, and what the tree-sitter modes'
+queries were written against); `drgnx-grammars-recipe' drops it with an ABI 15 library.")
 
 (defun drgnx-grammars--abi ()
   "The tree-sitter ABI version of this Emacs's library, or nil when it cannot say."
