@@ -261,13 +261,13 @@ with the HTTP mock stopped afterwards."
 
 (ert-deftest drgnx-agent-check/memory-cap-where-systemd-is ()
   (let ((process-environment (cons "DRGNX_JOBS_LAUNCHER=systemd" process-environment)))
-    (let ((argv (drgnx-agent-check--wrap '("emacs" "--batch"))))
+    (let ((argv (drgnx-agent-check--wrap '("prog" "--batch"))))
       (should (equal (seq-take argv 4) '("systemd-run" "--user" "--scope" "-q")))
       (should (member "MemoryMax=512M" argv))
       (should (member "MemorySwapMax=0" argv))
-      (should (equal (last argv 2) '("emacs" "--batch")))))
+      (should (equal (last argv 2) '("prog" "--batch")))))
   (let ((process-environment (cons "DRGNX_JOBS_LAUNCHER=detached" process-environment)))
-    (should (equal (drgnx-agent-check--wrap '("emacs" "--batch")) '("emacs" "--batch")))))
+    (should (equal (drgnx-agent-check--wrap '("prog" "--batch")) '("prog" "--batch")))))
 
 (ert-deftest drgnx-agent-check/hook-gets-the-sample-event-on-stdin ()
   (drgnx-agent-check-test-env
@@ -485,7 +485,7 @@ with the HTTP mock stopped afterwards."
 
 (ert-deftest drgnx-agent-check/a-named-scope-where-systemd-is ()
   (let ((process-environment (cons "DRGNX_JOBS_LAUNCHER=systemd" process-environment)))
-    (should (member "--unit=drgnx-check-test" (drgnx-agent-check--wrap '("emacs") "drgnx-check-test")))
+    (should (member "--unit=drgnx-check-test" (drgnx-agent-check--wrap '("prog") "drgnx-check-test")))
     (should (string-prefix-p "drgnx-check-" (drgnx-agent-check--unit)))
     (should-not (string= (drgnx-agent-check--unit) (drgnx-agent-check--unit))))
   (let ((process-environment (cons "DRGNX_JOBS_LAUNCHER=detached" process-environment)))

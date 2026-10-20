@@ -59,6 +59,7 @@
   (let* ((tmp (make-temp-file "drgnx-config-doc" nil ".md"))
          (documented (drgnx-config-doc-test--command))
          (command (replace-regexp-in-string "docs/reference/config\\.md" tmp documented t t))
+         (emacs (shell-quote-argument (drgnx-emacs-program)))
          (read (lambda (file)
                  (with-temp-buffer
                    (let ((coding-system-for-read 'utf-8-unix)) (insert-file-contents file))
@@ -69,7 +70,7 @@
         (progn
           ;; a stale .elc must not hide a changed source
           (drgnx-config-doc-test--run-documented
-           (replace-regexp-in-string "emacs --batch -Q" "emacs --batch -Q --eval '(setq load-prefer-newer t)'" command t t))
+           (replace-regexp-in-string "\\`emacs --batch -Q" (concat emacs " --batch -Q --eval '(setq load-prefer-newer t)'") command t t))
           (unless (equal (funcall read tmp) (funcall read (expand-file-name "docs/reference/config.md" drgnx-dir)))
             (ert-fail (format "docs/reference/config.md is out of date; regenerate it with:\n  %s" documented))))
       (delete-file tmp))))

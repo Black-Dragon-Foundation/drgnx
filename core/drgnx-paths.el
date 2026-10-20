@@ -64,6 +64,11 @@ never makes Tramp connect.  Nothing is memoized; bin/drgnx-paths.sh's drgnx_dir 
 
 (declare-function drgnx-file-read-bounded "drgnx-file")
 
+(defun drgnx-emacs-program ()
+  "The Emacs that is running: the one to start as a subprocess.  Never the bare name `emacs': a machine with only
+Nidhogg has none on PATH.  bash uses `$(emacs_bin)' / $DRGNX_EMACS."
+  (expand-file-name invocation-name invocation-directory))
+
 (defun drgnx-paths-recorded-emacs ()
   "The Emacs install.sh recorded: the first line of `emacs' in the data dir, else in the config dir (where older installs
 wrote it), trimmed, when it is an absolute name of an executable regular file; else nil.  Never evaluated, never

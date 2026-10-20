@@ -401,7 +401,7 @@
   (let ((dir (drgnx-jobs--dir id)))
     (make-directory dir t)
     (with-temp-file (expand-file-name "job.eld" dir)
-      (prin1 (list :id id :name name :command (list "emacs" "-f" "drgnx-search-index-cli" root)) (current-buffer)))
+      (prin1 (list :id id :name name :command (list (drgnx-emacs-program) "-f" "drgnx-search-index-cli" root)) (current-buffer)))
     (when exit (write-region exit nil (expand-file-name "exit" dir) nil 'silent))
     dir))
 
