@@ -1,0 +1,13 @@
+{"scenario": "readonly/a-newer-work-db-refuses-writes", "requires": ["v1"], "doc": "work.db of schema 9 (a newer drgnx wrote it) makes the hub read-only within its 2 s tick: a method that writes is schema, status says read_only 9, and what only reads still answers."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql": ["create table meta (key text primary key, value text)", "insert into meta values ('schema', '9')"]}
+{"do": "expect_silent", "conn": "c", "for_ms": 2600}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/stop", "params": {"id": "j1"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "error": {"code": "schema", "message": "work.db is schema 9, newer than this hub's 6: update drgnx"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "ping"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"pid": "$PID(h)"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"read_only": 9, "schema": 9}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "events/since"}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"since": 0, "events": []}}}

@@ -1,0 +1,19 @@
+{"scenario": "hello/an-agent-socket-is-agent-class", "requires": ["v1", "test-hooks"], "doc": "A connection on an agent socket (--agent-socket s1:j1) is challenged too and is agent class: any proof leaves it agent, agent methods answer, user methods are not-allowed."}
+{"do": "start", "hub": "h", "args": ["--agent-socket", "s1:j1"]}
+{"do": "connect", "conn": "b", "hub": "h", "socket": "agent:s1", "as": "service"}
+{"do": "expect_next", "conn": "b", "json": {"event": "challenge", "data": {"nonce": "$string"}}, "within_ms": 2000}
+{"do": "send", "conn": "b", "json": {"id": 1, "method": "ping"}}
+{"do": "expect", "conn": "b", "json": {"id": 1, "result": {"pid": "$PID(h)"}}}
+{"do": "send", "conn": "b", "json": {"id": 2, "method": "events/since"}}
+{"do": "expect", "conn": "b", "json": {"id": 2, "error": {"code": "not-allowed", "message": "events/since is not allowed on this connection (agent class)"}}}
+{"do": "connect", "conn": "a", "hub": "h", "socket": "agent:s1", "as": "service"}
+{"do": "hello", "conn": "a", "proof": "valid", "expect_class": "agent"}
+{"do": "send", "conn": "a", "json": {"id": 3, "method": "events/since"}}
+{"do": "expect", "conn": "a", "json": {"id": 3, "error": {"code": "not-allowed"}}}
+{"do": "send", "conn": "a", "json": {"id": 4, "method": "status"}}
+{"do": "expect", "conn": "a", "json": {"id": 4, "result": {"pid": "$PID(h)"}}}
+{"do": "connect", "conn": "n", "hub": "h", "socket": "agent:s1", "as": "service"}
+{"do": "hello", "conn": "n", "proof": "none", "expect_class": "agent"}
+{"do": "connect", "conn": "m", "hub": "h"}
+{"do": "send", "conn": "m", "json": {"id": 5, "method": "events/since"}}
+{"do": "expect", "conn": "m", "json": {"id": 5, "result": {"since": 0}}}

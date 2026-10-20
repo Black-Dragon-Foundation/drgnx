@@ -1,0 +1,6 @@
+{"scenario": "hello/newer-proto-refused", "requires": ["v1"], "doc": "A user connection whose hello said a newer protocol gets proto for its calls (the hello itself is answered, with proto_min, so the client can tell)."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h", "as": "service"}
+{"do": "hello", "conn": "c", "proof": "valid", "proto": 2, "expect_class": "user", "expect_result": {"proto": 1, "proto_min": 1}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/status"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "error": {"code": "proto", "message": "$string"}}}

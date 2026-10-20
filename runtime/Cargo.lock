@@ -232,6 +232,7 @@ name = "drgnx-ratatoskr"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "drgnx-proc",
  "drgnx-proto",
  "lexopt",
  "libc",

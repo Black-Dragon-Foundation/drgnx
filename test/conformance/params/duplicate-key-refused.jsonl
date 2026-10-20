@@ -1,0 +1,9 @@
+{"scenario": "params/duplicate-key-refused", "requires": ["v1"], "doc": "A duplicate key at any depth is refused invalid-params with its path, before any method runs; the connection keeps working."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "raw": "{\"id\":1,\"method\":\"events/since\",\"params\":{\"since\":0,\"since\":5}}"}
+{"do": "expect", "conn": "c", "json": {"id": 1, "error": {"code": "invalid-params", "path": "params.since"}}}
+{"do": "send", "conn": "c", "raw": "{\"id\":2,\"method\":\"ping\",\"method\":\"shutdown\"}"}
+{"do": "expect", "conn": "c", "json": {"id": 2, "error": {"code": "invalid-params", "path": "method"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "ping"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"pid": "$PID(h)"}}}

@@ -17,6 +17,12 @@ fn main() -> ExitCode {
     match command {
         Command::Version { json: true } => println!("{}", version::json()),
         Command::Version { json: false } => println!("{}", version::text()),
+        Command::Methods { markdown: false } => {
+            print!("{}", drgnx_proto::registry::methods_json_text())
+        }
+        Command::Methods { markdown: true } => {
+            print!("{}", drgnx_proto::registry::markdown_table())
+        }
         Command::Serve(args) => {
             let runtime = match tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)

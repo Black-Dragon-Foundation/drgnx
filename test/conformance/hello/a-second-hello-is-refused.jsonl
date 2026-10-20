@@ -1,0 +1,6 @@
+{"scenario": "hello/a-second-hello-is-refused", "requires": ["v1"], "doc": "hello is answered at most once per connection: a second one, valid too, is proto, and the connection stays user."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "hello", "conn": "c", "proof": "valid", "expect_error": "proto"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "events/since"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"since": 0, "last": 0, "events": []}}}

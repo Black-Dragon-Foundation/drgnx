@@ -184,10 +184,9 @@ lines and limits, with these differences:
 - **Peer credentials:** on accept, before any line, the peer's uid is read (`SO_PEERCRED` on Linux, `getpeereid` on
   macOS, through tokio's `peer_cred`). A peer of another uid (root included) is closed at once and logged with its
   pid and uid (`conn::peer_allowed`).
-- **The first line on a connection is the hub's challenge** `{"event":"challenge","data":{"nonce"}}` (hello v1). Until
-  the hello task's dispatcher, the server core answers only `ping` `{pid}` and a minimal `hello`. A valid proof over
-  both nonces makes the connection `user` and is answered with the hub's proof, a wrong one is `not-allowed`, and
-  none leaves it `service`. Any other method is `no-method`.
+- **The first line on a connection is the hub's challenge** `{"event":"challenge","data":{"nonce"}}`, on the main
+  socket and on every agent socket ([hello and versions](#hello-and-versions)). Every line then goes through the
+  dispatcher ([Errors](#errors)).
 - **Lines in:** the 1 MiB codec (`drgnx_proto::line::codec`). A codec error (a line too long, not UTF-8) closes the
   connection. A line that fails `parse_strict` is answered `invalid-params` (with its `path`) when its id reads, and
   is otherwise dropped and logged. On EOF a partial line is dropped and what is queued is still written, then the
@@ -196,6 +195,72 @@ lines and limits, with these differences:
   (logged) when more than 16 MiB is queued for it (the line being written included), or when one write makes no
   progress for 10 s, so a stopped reader never stalls another client. An answer over 16 MiB is replaced by `internal`
   "answer over 16 MiB", and an event over 16 MiB is not sent (logged).
+
+### hello and versions
+
+Ratatoskr's `hello` (protocol v1, `runtime/crates/drgnx-ratatoskr/src/hello.rs`) closes SB-T12-6: a hello line is
+worth nothing on another connection, because each connection's challenge differs.
+
+1. On accept the hub sends `{"event":"challenge","data":{"nonce":HUB_NONCE}}`, 32 lowercase hex from 16 random bytes.
+2. The client sends `hello` `{proto, nonce, drgnx_version?, schema?, records?, client?, proof?}`. `proof` is
+   `HMAC-SHA256(cap, "drgnx-hub client " + HUB_NONCE + " " + nonce)` as 64 lowercase hex, keyed with the cap file's 64
+   hex characters.
+3. The hub compares the decoded digests in constant time:
+   - a valid proof makes a main-socket connection `user`; an agent socket's connection stays `agent`;
+   - a wrong proof is `not-allowed` ("refused a hello with a wrong proof" in the log, counted with the refusals), and
+     the class does not change;
+   - no proof leaves the class as it is (`service` on the main socket).
+4. The reply is `{proto: 1, proto_min: 1, drgnx_version, schema, records: 2, class, methods, runtime: {version,
+   commit}, proof?}`. `drgnx_version` is the build commit, `schema` is work.db's `meta.schema` (0 when there is no
+   work.db yet), and `methods` names every method of the registry. `proof` is the hub's own, `HMAC-SHA256(cap,
+   "drgnx-hub hub " + nonce + " " + HUB_NONCE)`. It is sent only after a valid client proof.
+
+A connection answers one `hello`: a second one is `proto` "hello was already answered on this connection", whatever
+it holds, and changes nothing. A hello refused for its params (`invalid-params`) does not count as that one. A wrong
+proof does. The protocol a user connection's hello said is kept: when it is newer than the hub's, every call on it but
+`hello` is `proto` ("this hub speaks protocol 1, the connection's hello said N: restart the hub (drgnx hub stop)").
+
+**Agent sockets.** With the `test-hooks` feature, `serve --foreground --agent-socket SID[:JOB]` binds
+`<socket dir>/hub-HASH.d/agent-SID.sock` (the directory private, the socket 0600, removed at the stop). A connection
+there is `agent` class, bound to SID and JOB: the forwarded calls carry them (`Caller {class, sid, job, conn_id}`). The
+sandbox phase binds the real per-session sockets.
+
+**`work.db` read-only.** The front reads work.db through `urdr::open_readonly` on a thread of its own (`store.rs`),
+and never writes it. It reads `meta.schema` at the start and every 2 s. While it is above this hub's 6, the hub is
+read-only: a method that writes is `schema`, and `status.read_only` is the schema. A work.db that does not exist yet
+(a fresh install) is schema 0 and has no events.
+
+**`ratatoskr methods --json|--markdown`** prints the registry: `runtime/protocol/methods.json`'s content, or the table
+in [The registry](#the-registry-protocol-v1).
+
+### Errors
+
+An error is `{"id", "error": {"code", "message", "path"?}}`. Every line goes through the dispatcher
+(`dispatch::prelude`) before any method runs, in the contract's order:
+
+| Step | Refusal | When |
+|---|---|---|
+| (line) | `invalid-params` (with `path` when it is known) | not a JSON object, a duplicate key at any depth, nesting deeper than 64, no `method`. Answered when the line's `id` reads, else dropped and logged |
+| 1 | `no-method` | the method is not in the registry |
+| 2 | `not-allowed` | the connection's class may not call it. A `service` connection calling a `user` method gets "METHOD needs the user's capability (an editor or CLI of an older drgnx: update it)" |
+| 3 | `proto` | a call (not `hello`) on a user connection whose hello said a newer protocol |
+| 4 | `invalid-params` with `path` | the typed decode failed. Keys the method does not know are dropped and listed in the answer's `ignored` |
+| 5 | `schema` | the method writes while the hub is read-only: "work.db is schema N, newer than this hub's 6: update drgnx" |
+| 6 | `internal` | the handler failed |
+
+A notification (no `id`) is dispatched the same way and never answered. Every refusal (steps 1–5, and a handler's own,
+such as a wrong proof or a second hello) is logged at info ("refused a call") and counted. `status.refusals` is
+`{count, last}`, the last 20 newest first, each `{at, method, code, class, path?}`. The log line and the entry carry
+only those: never the params or the message, since a decode error's message can quote a value (a key, a prompt).
+
+**Served by the front:** `hello`, `ping` `{pid}`, `status`, `subscribe` (the connection gets the broadcast events
+from now on), `shutdown` (answers `true`, then the hub stops as on SIGTERM) and `events/since`. `status` is `{pid,
+socket, started, proto, proto_min, records, drgnx_version, schema, read_only?, runtime, refusals, job_agents:
+"unsandboxed (as on main; the sandbox comes with phase 6)"}`. `events/since` reads work.db's `event` table: `{since,
+last, events: [{id, at, agent, job, task, kind, summary, data?}]}`, after `since` (0), at most `limit` (200, at most
+1000), `data` the parsed JSON object. `last` is the newest id answered, or `since` when there is none. Every other
+method goes to `dispatch::Forward` with the decoded params re-encoded; until the backend is wired in it answers
+`internal` "backend not running".
 
 ## Events
 

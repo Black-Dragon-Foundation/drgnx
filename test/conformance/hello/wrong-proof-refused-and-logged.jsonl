@@ -1,0 +1,9 @@
+{"scenario": "hello/wrong-proof-refused-and-logged", "requires": ["v1"], "doc": "A wrong proof is not-allowed, logged and counted; the connection stays service, so a user method is still refused."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h", "as": "service"}
+{"do": "hello", "conn": "c", "proof": "wrong", "expect_error": "not-allowed"}
+{"do": "file", "path": "$STATE/hub/log/hub-*.jsonl", "contains": "refused a hello with a wrong proof"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "events/since"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "error": {"code": "not-allowed"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"refusals": {"count": 2, "last": [{"method": "events/since", "code": "not-allowed", "class": "service"}, {"method": "hello", "code": "not-allowed", "class": "service"}]}}}}

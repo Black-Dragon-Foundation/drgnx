@@ -69,6 +69,18 @@ pub fn day(secs: u64) -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
+/// SECS since the epoch as RFC 3339 in UTC: `YYYY-MM-DDTHH:MM:SSZ` (`status`'s `started`, a refusal's `at`).
+pub fn rfc3339(secs: u64) -> String {
+    let s = secs % 86_400;
+    format!(
+        "{}T{:02}:{:02}:{:02}Z",
+        day(secs),
+        s / 3600,
+        s / 60 % 60,
+        s % 60
+    )
+}
+
 fn today() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -200,6 +212,13 @@ mod tests {
         assert_eq!(day(11_017 * 86_400), "2000-03-01");
         assert_eq!(day(19_782 * 86_400 + 3_600), "2024-02-29");
         assert_eq!(day(19_783 * 86_400), "2024-03-01");
+    }
+
+    #[test]
+    fn rfc3339_times() {
+        assert_eq!(rfc3339(0), "1970-01-01T00:00:00Z");
+        assert_eq!(rfc3339(19_782 * 86_400 + 3_661), "2024-02-29T01:01:01Z");
+        assert_eq!(rfc3339(86_399), "1970-01-01T23:59:59Z");
     }
 
     #[test]

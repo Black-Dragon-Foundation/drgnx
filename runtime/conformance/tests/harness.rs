@@ -57,7 +57,7 @@ fn serve(stream: UnixStream, v1: bool) {
     if v1 {
         send(json!({"event": "challenge", "data": {"nonce": HUB_NONCE}}));
     }
-    let mut first = true;
+    let (mut first, mut proven) = (true, false);
     for line in BufReader::new(stream).lines().map_while(Result::ok) {
         let Ok(req) = serde_json::from_str::<Value>(&line) else {
             continue;
@@ -69,6 +69,7 @@ fn serve(stream: UnixStream, v1: bool) {
                 let nonce = req["params"]["nonce"].as_str().unwrap_or("");
                 let want = hmac_hex(&format!("drgnx-hub client {HUB_NONCE} {nonce}"));
                 if first && req["params"]["proof"] == json!(want) {
+                    proven = true;
                     let proof = hmac_hex(&format!("drgnx-hub hub {nonce} {HUB_NONCE}"));
                     send(
                         json!({"id": id, "result": {"proto": 1, "class": "user", "proof": proof}}),
@@ -88,6 +89,15 @@ fn serve(stream: UnixStream, v1: bool) {
             },
             Some("t/broken") => {
                 send(json!({"id": id, "error": {"code": "invalid-params", "message": "somewhere"}}))
+            }
+            // for class_matrix: `t/user` and `t/end` only after a valid hello; `t/end` then ends the hub
+            Some("t/user" | "t/end") if !proven => send(
+                json!({"id": id, "error": {"code": "not-allowed", "message": "t/user needs the user's capability"}}),
+            ),
+            Some("t/user") => send(json!({"id": id, "result": true})),
+            Some("t/end") => {
+                send(json!({"id": id, "result": true}));
+                std::process::exit(0);
             }
             _ => send(json!({"id": id, "error": {"code": "no-method", "message": "scripted hub"}})),
         }
@@ -307,4 +317,61 @@ fn bad_params_sends_empty_and_a_wrong_type_to_every_method_with_required_params(
         "the wrong type for a list is true: {out}"
     );
     assert!(!out.contains("t/need"), "{out}");
+}
+
+const MATRIX_ROW: &str = r#"{"scenario": "class/m", "requires": ["v1"], "doc": "class_matrix over a table"}
+{"do": "class_matrix", "table": "TABLE", "last": ["t/end"], "env": {"RTSK_SCRIPTED_V1": "1"}}
+"#;
+
+#[test]
+fn class_matrix_calls_every_method_from_every_class_and_the_ending_ones_last() {
+    let dir = tempfile::tempdir().unwrap();
+    let hub = wrapper(dir.path());
+    let table = |name: &str, t: Value| {
+        let path = dir.path().join(name);
+        std::fs::write(&path, t.to_string()).unwrap();
+        path
+    };
+    // t/end ends the hub when a user calls it: sent last, in a hub of its own, or t/user after it would fail
+    let good = table(
+        "good.json",
+        json!({"ping": ["user", "service"], "t/user": ["user"], "t/end": ["user"]}),
+    );
+    let rows_dir = dir.path().join("good");
+    rows(
+        &rows_dir,
+        &[(
+            "class/m.jsonl",
+            &MATRIX_ROW.replace("TABLE", good.to_str().unwrap()),
+        )],
+    );
+    let (out, code) = run("ratatoskr", &hub, &rows_dir);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("PASS class/m"), "{out}");
+
+    // a table that allows more than the hub does, or less: each call that disagrees is named
+    let bad = table(
+        "bad.json",
+        json!({"ping": ["user"], "t/user": ["user", "service"], "t/end": ["user"]}),
+    );
+    let rows_dir = dir.path().join("bad");
+    rows(
+        &rows_dir,
+        &[(
+            "class/m.jsonl",
+            &MATRIX_ROW.replace("TABLE", bad.to_str().unwrap()),
+        )],
+    );
+    let (out, code) = run("ratatoskr", &hub, &rows_dir);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("FAIL class/m: step 1 (class_matrix)"), "{out}");
+    assert!(
+        out.contains("t/user as service: allowed, but refused"),
+        "{out}"
+    );
+    assert!(
+        out.contains("ping as service: not allowed, but got"),
+        "{out}"
+    );
+    assert!(!out.contains("t/end as"), "{out}");
 }

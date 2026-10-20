@@ -1,0 +1,12 @@
+{"scenario": "hello/no-hello-is-service", "requires": ["v1"], "doc": "A connection that proves nothing is service: ping and status answer, a user method is not-allowed with the update text, and a hello without a proof leaves it service."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h", "as": "service"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "ping"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"pid": "$PID(h)"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "job/status"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "error": {"code": "not-allowed", "message": "job/status needs the user's capability (an editor or CLI of an older drgnx: update it)"}}}
+{"do": "hello", "conn": "c", "proof": "none", "expect_class": "service"}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "subscribe"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "error": {"code": "not-allowed"}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"pid": "$PID(h)"}}}
