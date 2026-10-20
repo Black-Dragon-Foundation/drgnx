@@ -1273,8 +1273,8 @@ echo \"agent ${DRGNX_AGENT-unset} job ${DRGNX_JOB-unset} task ${DRGNX_TASK-unset
 (defun drgnx-bin-test--loops (tag)
   "How many busy loops of the stress run TAG run (their command line names the tag)."
   (with-temp-buffer
-    (call-process "pgrep" nil t nil "-fc" (concat "drgnx-stress-loop " tag))
-    (string-to-number (buffer-string))))
+    (call-process "pgrep" nil t nil "-f" (concat "drgnx-stress-loop " tag))   ; no -c: BSD pgrep (macOS) lacks it
+    (length (split-string (buffer-string) "\n" t))))
 
 (ert-deftest drgnx-bin/stress-kills-its-busy-loops ()
   (let* ((dir (make-temp-file "drgnx-bin-stress" t))
@@ -1290,7 +1290,7 @@ echo \"agent ${DRGNX_AGENT-unset} job ${DRGNX_JOB-unset} task ${DRGNX_TASK-unset
           (with-temp-file (expand-file-name "stress-test.el" suite)
             (insert (format "(require 'ert)
 (ert-deftest iso-stress/loops ()
-  (with-temp-buffer (call-process \"pgrep\" nil t nil \"-fc\" %S) (write-region (buffer-string) nil %S nil 'silent)))
+  (with-temp-buffer (call-process \"pgrep\" nil t nil \"-f\" %S) (write-region (number-to-string (length (split-string (buffer-string) \"\\n\" t))) nil %S nil 'silent)))
 (ert-deftest iso-stress/hangs-when-asked ()
   (when (file-exists-p %S) (sleep-for 3600)))
 " (concat "drgnx-stress-loop " tag) seen (expand-file-name "hang" dir))))

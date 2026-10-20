@@ -32,7 +32,7 @@
 
 (ert-deftest drgnx-live/panel-and-right-dock-are-pixel-stable ()
   ;; Real keys (VS Code profile): C-` toggles the panel, C-M-b the right dock — 10 times each, sizes
-  ;; ±0 px, focus never taken; C-h f car RET puts *Help* in the panel's Help tab.
+  ;; ±0 px, focus never taken; M-x describe-function car RET puts *Help* in the panel's Help tab.
   (let* ((root (make-temp-file "drgnx-wb" t))
          (process-environment (cons (concat "DRGNX_UI_STATE=" root) process-environment))
          (s (drgnx-ui-start "drgnx" nil 30))
@@ -54,7 +54,7 @@
             (let ((again (drgnx-ui-call sess probe)))
               (should (= (plist-get again :panel) (plist-get first :panel)))
               (should (= (plist-get again :right) (plist-get first :right))))
-            (drgnx-ui-measure sess (list (list :keys "C-h f") (list :type "car") (list :keys "RET")))
+            (drgnx-ui-measure sess (list (list :keys "M-x") (list :type "describe-function") (list :keys "RET") (list :type "car") (list :keys "RET")))
             (let ((help (drgnx-ui-call sess probe)))
               (should (equal (plist-get help :panel-buffer) "*Help*"))
               (should (= (plist-get help :panel) (plist-get first :panel))))))

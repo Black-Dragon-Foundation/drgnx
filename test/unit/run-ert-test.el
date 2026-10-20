@@ -185,7 +185,8 @@
         (progn
           (with-temp-file (concat tmp "sel-test.el")
             (insert "(require 'ert)\n(ert-deftest sel-fast () :tags '(:timing) (should t))\n(ert-deftest sel-plain () (should t))\n"))
-          (let ((process-environment (append (list (concat "DRGNX_TEST_RESULTS=" results) "DRGNX_TEST_SELECTOR=(tag :timing)")
+          (let ((process-environment (append (list (concat "DRGNX_TEST_RESULTS=" results) "DRGNX_TEST_SELECTOR=(tag :timing)"
+                                                   "DRGNX_TEST_NO_TIMING")   ; CI sets it: the run would leave :timing out
                                              process-environment))
                 (default-directory tmp))
             (call-process (expand-file-name invocation-name invocation-directory) nil nil nil
