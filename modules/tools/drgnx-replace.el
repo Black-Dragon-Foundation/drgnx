@@ -26,6 +26,7 @@
 (require 'drgnx-timer)
 (require 'drgnx-wb)
 (require 'drgnx-view)
+(require 'drgnx-large-file)             ; a large file: Replace needs it whole (lean), never asks; skips chunks and raw
 
 (declare-function eglot-current-server "eglot")
 (declare-function eglot-server-capable "eglot")
@@ -36,7 +37,6 @@
 (declare-function project-root "project")
 (defvar eglot-move-to-linepos-function)
 (defvar apheleia-format-after-save-in-progress) ; bound around our saves: no format on save (extra/format)
-(defvar drgnx-large-file-open)          ; core/drgnx-large-file.el: Replace needs a large file whole (lean), never asks
 
 (defvar drgnx-replace-context-chars 80 "Characters of the line kept before and after a match (:before, :after).")
 
@@ -448,6 +448,13 @@ name renamed (the server read older text) are left out, and (:error REASON) afte
                    (string= text (buffer-substring-no-properties pos (+ pos (length text)))))
           pos)))))
 
+(defun drgnx-replace--partial (buf)
+  "Why BUF, a file's visiting buffer (or nil), cannot take the whole file's lines and columns: a reason, else nil.
+A large file open in chunks holds one part of the file; one open raw holds its bytes undecoded."
+  (pcase (and buf (buffer-local-value 'drgnx-large-file buf))
+    ('chunks "open in chunks: Large File: Open Whole first")
+    ('raw "open raw: Large File: Open Whole first")))
+
 (defun drgnx-replace--save ()
   "Save this buffer quietly and without format on save (a formatter's rewrite would make Undo skip the file)."
   (let ((save-silently t) (apheleia-format-after-save-in-progress t))
@@ -456,10 +463,11 @@ name renamed (the server read older text) are left out, and (:error REASON) afte
 (defun drgnx-replace--apply-file (file ms new)
   "Replace FILE's matches MS by NEW in one change group: (WRITTEN SKIPPED UNDO-ENTRY-or-nil).
 The buffer is saved unless it held unsaved edits before."
-  (let ((buf (find-buffer-visiting file)))
+  (let* ((buf (find-buffer-visiting file)) (partial (drgnx-replace--partial buf)))
     (cond
      ((not (file-exists-p file))
       (list 0 (mapcar (lambda (m) (drgnx-replace--skip m "the file is gone")) ms) nil))
+     (partial (list 0 (mapcar (lambda (m) (drgnx-replace--skip m partial)) ms) nil))
      ((and buf (buffer-modified-p buf) (not (verify-visited-file-modtime buf)))
       (list 0 (mapcar (lambda (m) (drgnx-replace--skip m "changed on disk and in its buffer")) ms) nil))
      (t
@@ -960,7 +968,19 @@ from `drgnx-replace--new'.  The view's RENDER, in the view's buffer."
   (drgnx-replace--show-match (get-text-property (button-start button) 'drgnx-replace-match) t))
 
 (defun drgnx-replace--show-match (m select)
-  "Show match M in the editor, scrolled to it, marked; move there when SELECT."
+  "Show match M in the editor, scrolled to it, marked; move there when SELECT.
+A file open in chunks or raw has no place for the whole file's line and column: shown as it is, unmarked, and the
+echo area says why."
+  (let* ((visiting (find-buffer-visiting (plist-get m :file))) (partial (drgnx-replace--partial visiting)))
+    (if partial
+        (progn
+          (when (overlayp drgnx-replace--shown) (delete-overlay drgnx-replace--shown))
+          (drgnx-wb-show-in-editor visiting select)
+          (message "%s is %s" (file-name-nondirectory (plist-get m :file)) partial))
+      (drgnx-replace--show-match-at m select))))
+
+(defun drgnx-replace--show-match-at (m select)
+  "Show match M in the editor at its whole-file line and column, marked; move there when SELECT."
   (let* ((view (current-buffer))
          (buf (let ((large-file-warning-threshold nil) (drgnx-large-file-open 'whole)) (find-file-noselect (plist-get m :file))))
          (w (drgnx-wb-show-in-editor buf select)))

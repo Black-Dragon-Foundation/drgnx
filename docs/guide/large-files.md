@@ -32,13 +32,24 @@ drgnx remembers your answer for that file until you quit (for up to 256 files), 
 
 - `drgnx open BIG` and `drgnx -t BIG` from a terminal ([opening.md](opening.md)).
 - The windows drgnx brings back at start, and layouts.
+- Previews (a file shown while you move through a list).
 - Timers, agents and anything else drgnx does by itself.
 
 Some callers need the whole text and open it **lean**, without asking: `drgnx open --wait BIG` (drgnx as your
 `$EDITOR`), Replace, the AI's Apply Hunk and the agent edit review. Agents never read a large file from its buffer:
 they read the disk, and a file over their size limit is refused as before.
 
-A file that is already open is reused as it is, in the mode it has.
+A file that is already open is reused as it is, in the mode it has. So when it is open **in chunks** or **raw**:
+
+- Replace skips its matches, listed with the reason "open in chunks: Large File: Open Whole first" (or "open raw:
+  …"): a chunk holds only part of the file, and a raw buffer holds undecoded bytes, so the match's line and column
+  would land in the wrong place. Clicking such a match shows the buffer and says the same in the echo area. Switch
+  it to **Open Whole** and replace again.
+- `drgnx open --wait BIG` edits that buffer (the chunk), not the whole file.
+
+When `drgnx open BIG` finds a lean or raw buffer whose file changed on disk (a growing log), it reloads the buffer
+without asking. If that buffer has unsaved changes, it is left as it is (never reloaded behind your back), and the
+echo area says so: "big.log changed on disk; its buffer has unsaved changes and is left as it is".
 
 ## Switching
 
@@ -60,7 +71,12 @@ In chunks, **Large File: Next Chunk**, **Previous Chunk**, **Go to Line** (a lin
 
 A revert (by hand, or by auto-revert when an agent or a program writes the file) follows the size without asking. A
 lean file that shrinks to 50 MiB or less becomes a normal buffer again, with its colours, line numbers and language
-server. A normal file that grows past 50 MiB turns lean. A raw file stays raw, and a file in chunks stays in chunks.
+server. A normal file that grows past 50 MiB turns lean, and drops its tree-sitter parser and language server. A raw
+file stays raw.
+
+A file in chunks stays in chunks and never reloads by itself: it does not see the file grow, and its total number of
+chunks (`chunk 3/412`) stays what it was when you opened it. Open it again (switch to another mode and back) to see
+the new end. A modified chunk is saved only when you save it: Emacs's `auto-save-visited-mode` skips chunk buffers.
 
 ## Long lines
 
@@ -95,5 +111,5 @@ buttons can be clicked only when the mouse is on ([terminal.md](terminal.md)); t
 The chunks need the package vlf, which drgnx installs with the module `editor/large-files-chunks` (pinned in the
 shipped lock). Without it, every "chunks" becomes **raw**: the question has no `[c]`, and an automatic open gives a
 raw buffer. Turning the module `editor/large-files` off brings back Emacs's own behaviour: its own question above
-`large-file-warning-threshold` (10 MB unless you set it), and no lean, raw or chunks. Buffers that were lean keep their major mode until you
-revert them; buffers in chunks stay as they are.
+`large-file-warning-threshold` (10 MB unless you set it), and no lean, raw or chunks. Buffers that were lean keep
+the expensive extras off until you revert them; raw buffers stay literal; buffers in chunks stay as they are.

@@ -45,7 +45,8 @@ open as a directory listing. A **file** opens in the editor. drgnx started by ha
 
 A **large file** (above 50 MiB) never makes `drgnx open BIG`, `drgnx BIG` or `drgnx -t BIG` ask: it opens in
 chunks (or in the mode you chose for it before), with a header line that switches it to the whole file in one click.
-`drgnx open --wait BIG` opens the whole file, lean, without asking ([large-files.md](large-files.md)).
+`drgnx open --wait BIG` opens the whole file, lean, without asking; a file already open in chunks is edited in
+that chunk ([large-files.md](large-files.md)).
 
 Inside drgnx, **File → Open Folder…** (palette; `C-k C-o` in the VS Code profile, `SPC f o` in Vim's) asks for a
 folder and shows it the same way.

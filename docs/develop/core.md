@@ -2171,6 +2171,11 @@ too** and returns early. The callers that visit files bind `drgnx-large-file-ope
 and layouts (`drgnx-layouts--put-main`) bind `auto`; Replace's two visits and AI apply-hunk bind `whole`; the agent
 edit review sets it to `whole` in its diff buffer, where diff-mode visits the copy. They keep their
 `(large-file-warning-threshold nil)`: with the module off, Emacs's own question would come back at start.
+A caller that needs the whole file's lines and columns also checks the buffer it is handed: the door reuses an open
+buffer as it is, and a chunk buffer holds a part of the file, a raw one undecoded bytes. Replace
+(`drgnx-replace--partial`) skips every match of a file open in chunks or raw with a reason, and its Show says so
+instead of marking a position. The face module's line numbers (`drgnx-face--numbers-wanted-p`) skip lean and raw
+buffers.
 
 A caller that visits a file says what it needs if the file is large by binding `drgnx-large-file-open`: `auto`
 (never ask: the remembered answer, else chunks), `whole` (the whole file, lean, never ask) or nil (decided by
@@ -2181,29 +2186,38 @@ caller's buffer. A file that only binds it, without requiring `drgnx-large-file`
 **The door** (`modules/editor/drgnx-large-files.el`) is one named around-advice on `find-file-noselect`. It lets a
 visit through unchanged when RAWFILE is given, the name has wildcards, a buffer already visits the file, the file is
 missing, a directory or unreadable, or its size on disk is at or below `:ask-above` (one `file-attributes`, one
-`drgnx-config-get` and, for a local file, one `locate-dominating-file`). Above it, `drgnx-large-files--decide`
+`drgnx-config-get` of large-files.eld and, for a local file, one `locate-dominating-file`, plus one
+`drgnx-config-get` of the project's file when there is one). The header line shows the size the door read (the
+dynamically bound `drgnx-large-files--door-size`), without a second stat. Above it, `drgnx-large-files--decide`
 picks the mode. Only a command the user gave asks (`read-multiple-choice`, never a dialog box): `this-command` is
-set, `drgnx-guard-automatic-p` and `inhibit-interaction` are nil and the caller bound no `drgnx-large-file-open`.
+set, `drgnx-guard-automatic-p`, `inhibit-interaction` and `non-essential` (a preview from `post-command-hook`) are
+nil and the caller bound no `drgnx-large-file-open`.
 The answer is remembered for the session. Every other open takes the remembered answer, else chunks (raw without
 the chunks module, `drgnx-large-files-chunk-open-function` nil). A second advice, on `server-execute`, binds
 `drgnx-large-file-open`: `whole` for a client that waits for its files (`drgnx open --wait`), `auto` for every
-other request, the `-e (find-file …)` forms of `drgnx -t` included. Quit is a `user-error`; the door always
-returns a buffer. A large file's raw buffer is reused with RAWFILE t, because without it Emacs itself would ask
-to revisit the file normally, a timer's open included.
+other request, the `-e (find-file …)` forms of `drgnx -t` included. Emacs's `server-visit-files` reverts an open
+buffer whose file changed with `(revert-buffer t nil)`, which asks; for a lean or raw buffer of one of the request's
+files, the same advice (`drgnx-large-files--serve-unasked`) lets an unmodified one revert unasked (its exact name in
+`revert-without-query`) and leaves a modified one alone: its record of the file's time is made current while the
+request runs, then put back, and the echo area says so. Quit is a `user-error`; the door always returns a buffer. A
+raw buffer is reused with RAWFILE t, whatever the file's size now, because without it Emacs itself would ask to
+revisit the file normally, a timer's open included.
 
 **Lean** is `drgnx-large-file-mode`. While a lean open runs, `drgnx-large-file--opening` makes the predicate true,
 `treesit-max-buffer-size` is below the size (a `*-ts-mode` starts no parser, and its warning is suppressed) and a
 `:before-while` advice makes `eglot-ensure` a no-op. A revert runs the major mode again (`after-find-file` calls
 `normal-mode`): an around-advice on `normal-mode` binds the same size limit in a lean or raw buffer, so a buffer
 that stays large across a revert gets no parser either. The sweep, in `find-file-hook` at depth -90, turns the mode on
-for a large file, or for a buffer whose text is above `:ask-above` (a compressed file that expands). The mode turns
+for a large file, or for a buffer whose text is above `:ask-above` (a compressed file that expands), never for a
+chunk buffer. The mode turns
 off every mode of `so-long-minor-modes` that is on (the module adds indent-bars, blame, sticky and diff-hl's margin
-mode to that one list), then undo and auto-save. A raw visit (`find-file-noselect` with RAWFILE) runs no
+mode to that one list), deletes the buffer's tree-sitter parsers and ends eglot's management (a buffer that turns
+lean on a revert kept them: auto-revert keeps the modes), then undo and auto-save. A raw visit (`find-file-noselect` with RAWFILE) runs no
 `find-file-hook`, so the door runs the sweep itself. A major mode changed by hand (`M-x text-mode`) resets the
 minor modes but keeps the flag: `after-change-major-mode-hook`, at depth 90 (after the global modes' turn-on), turns
 the mode on again in a lean or raw buffer. An `after-revert-hook` follows the size across `:ask-above`
 without a question: a lean buffer at or below it turns lean off and runs `normal-mode` again (only safe local
-variables), a normal one above it turns lean; raw and chunk buffers stay. Before the revert reads a lean or raw
+variables: `drgnx-large-files--never-query` maps every `enable-local-variables` value that may query to `:safe`), a normal one above it turns lean; raw and chunk buffers stay. Before the revert reads a lean or raw
 buffer's file, a `before-revert-hook` makes the buffer's record of the file's time current
 (`set-visited-file-modtime`): Emacs 31.1 truncates a buffer whose file shrank to a prefix of its text (a file read
 without decoding, as raw is) with a change that asks `ask-user-about-supersession-threat` while that record is
@@ -2217,7 +2231,10 @@ selects the buffer it builds, so the function builds the buffer the same way and
 `generate-new-buffer`, `set-visited-file-name` (it runs the major mode on the still empty buffer; the flag is set
 first, so the producers stay quiet), `set-buffer-modified-p` nil, `vlf-mode`. `vlf-batch-size` is `:chunk-size`,
 and vlf's batch-size tuning is off in the buffer, so a chunk always holds that much. vlf runs no `find-file-hook`,
-so the lean sweep never sees a chunk buffer: undo stays on, and auto-save is turned off. `vlf-setup` is never
+so the lean sweep never sees a chunk buffer: undo stays on, and auto-save is turned off. The buffer-local
+`auto-save-visited-mode` is nil (set again after a major-mode change), so the user's `auto-save-visited-mode` timer
+never saves a chunk: vlf's save asks when the size changed. A chunk buffer's visited time stays unknown, so it never
+auto-reverts and its chunk total stays as it was at the open. `vlf-setup` is never
 loaded (its advice asks a question of its own). `drgnx-large-files-chunks-position` gives `(N . TOTAL)`, counted
 the way vlf's mode line counts. The module's teardown leaves chunk buffers as they are.
 

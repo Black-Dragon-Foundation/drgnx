@@ -14,6 +14,7 @@
 ;; the status bar is loaded first: editor/large-files defines its segment in its setup when the bar is there
 (load (expand-file-name "modules/ui/drgnx-face" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-statusbar" drgnx-dir) nil t)
+(load (expand-file-name "modules/tools/drgnx-replace" drgnx-dir) nil t)   ; Replace skips a file open in chunks
 
 (defconst drgnx-large-files-chunks-test--vlf
   (let ((elpa (expand-file-name (or (getenv "DRGNX_USER_ELPA") "~/.config/emacs/elpa"))))
@@ -172,6 +173,67 @@ large-files.eld and `drgnx-large-files-chunks-test--dir' a fresh folder whose bu
                 (should (eq drgnx-large-file 'lean))
                 (should (string-search ", lean: [Open in Chunks] [Open Raw]" drgnx-large-files--header))))
           (when (buffer-live-p old) (set-window-buffer (selected-window) old)))))))
+
+(defmacro drgnx-large-files-chunks-test--never-asks (&rest body)
+  "BODY with every question failing; it fails when one was asked, even if caught."
+  (declare (indent 0) (debug t))
+  `(let ((drgnx-large-files-chunks-test--asked nil))
+     (dolist (f '(read-multiple-choice y-or-n-p yes-or-no-p))
+       (advice-add f :override #'drgnx-large-files-chunks-test--no-question '((depth . 100))))
+     (unwind-protect (prog1 (progn ,@body) (should-not drgnx-large-files-chunks-test--asked))
+       (dolist (f '(read-multiple-choice y-or-n-p yes-or-no-p))
+         (advice-remove f #'drgnx-large-files-chunks-test--no-question)))))
+
+(defun drgnx-large-files-chunks-test--disk (file)
+  "FILE's bytes on disk."
+  (with-temp-buffer (insert-file-contents-literally file) (buffer-string)))
+
+(ert-deftest drgnx-large-files-chunks/replace-never-writes-a-file-open-in-chunks ()
+  ;; rg's match is at the whole file's line 10; on chunk 2 the buffer's line 10 is the file's line 522, and starts
+  ;; with the same ten zeros: Replace must not write there, and the row's Show must not mark it
+  (drgnx-large-files-chunks-test--with
+    (let* ((f (drgnx-large-files-chunks-test--file "big.log" 131072))
+           (disk (drgnx-large-files-chunks-test--disk f))
+           (buf (drgnx-large-files-chunks-test--open f))
+           (m (list :file f :line 10 :col 0 :text "0000000000")))
+      (with-current-buffer buf
+        (drgnx-large-files-chunks-test--run 'large-file-next-chunk)
+        (should (equal (drgnx-large-files-chunks-position) '(2 . 4))))
+      (drgnx-large-files-chunks-test--never-asks
+        (pcase-let ((`(,n ,skipped ,undo) (drgnx-replace--apply-file f (list m) "XXXXXXXXXX")))
+          (should (= n 0))
+          (should-not undo)
+          (should (equal (mapcar (lambda (s) (plist-get s :reason)) skipped)
+                         '("open in chunks: Large File: Open Whole first")))))
+      (should-not (buffer-modified-p buf))
+      (should (equal (drgnx-large-files-chunks-test--disk f) disk))
+      (with-temp-buffer                     ; the Replace view
+        (let ((said nil))
+          (cl-letf* (((symbol-function 'drgnx-wb-show-in-editor) (lambda (_buf _select) (selected-window)))
+                     (orig (symbol-function 'message))
+                     ((symbol-function 'message)
+                      (lambda (fmt &rest args)
+                        (when fmt (push (apply #'format fmt args) said))
+                        (apply orig fmt args))))
+            (drgnx-replace--show-match m nil))
+          (should-not drgnx-replace--shown)
+          (should (member "big.log is open in chunks: Large File: Open Whole first" said)))))))
+
+(ert-deftest drgnx-large-files-chunks/auto-save-visited-never-saves-a-chunk ()
+  ;; the user's `auto-save-visited-mode' would save a modified chunk from its timer, and vlf asks when the size changed
+  (drgnx-large-files-chunks-test--with
+    (let* ((f (drgnx-large-files-chunks-test--file "big.log" 131072))
+           (disk (drgnx-large-files-chunks-test--disk f))
+           (buf (drgnx-large-files-chunks-test--open f)))
+      (with-current-buffer buf (goto-char (point-min)) (insert "edit"))
+      (unwind-protect
+          (progn
+            (auto-save-visited-mode 1)
+            (drgnx-large-files-chunks-test--never-asks
+              (apply (timer--function auto-save--timer) (timer--args auto-save--timer))))
+        (auto-save-visited-mode -1))
+      (should (buffer-modified-p buf))
+      (should (equal (drgnx-large-files-chunks-test--disk f) disk)))))
 
 (ert-deftest drgnx-large-files-chunks/off-on-off-leaves-nothing ()
   (skip-unless drgnx-large-files-chunks-test--vlf)
