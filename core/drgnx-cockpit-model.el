@@ -165,7 +165,7 @@ Cached by modification time."
 here: (JOBS . (TASKS DEPS CARDS)), JOBS ((ID TITLE PLAN STATUS DATA)…) — DATA the job's `blocked' object as JSON text
 (task → reason) when it marks a task blocked, else nil — TASKS hash job → ((ID N TITLE STATUS AGENT)…) in order, DEPS
 hash task → (DEP…), CARDS ((ID JOB TASK TITLE AT)…).  A done job only with `drgnx-cockpit-include-closed-jobs'."
-  (let* ((db (drgnx-work-db))
+  (let* ((db (drgnx-work-db-read))
          (open (if drgnx-cockpit-include-closed-jobs "" " where j.status is not 'done'"))
          (jobs (sqlite-select db (concat "select j.id, j.title, j.plan, j.status, json_extract(j.data, '$.blocked')"
                                          " from job j" open " order by j.created desc, j.id")))
@@ -190,7 +190,7 @@ hash task → (DEP…), CARDS ((ID JOB TASK TITLE AT)…).  A done job only with
   "Hash agent → \"start\" or \"stop\", whichever of its life's events (`drgnx-cockpit--life-sql') came last."
   (let ((h (make-hash-table :test #'equal)))
     (pcase-dolist (`(,agent ,kind)
-                   (sqlite-select (drgnx-work-db) (concat "select agent, kind from event where id in
+                   (sqlite-select (drgnx-work-db-read) (concat "select agent, kind from event where id in
                                      (select max(id) from event where " drgnx-cockpit--life-sql " and agent is not null group by agent)")))
       (puthash agent kind h))
     h))
@@ -241,7 +241,7 @@ never joined to a job's or a plan's.  QUESTIONS: the open questions, each with t
         (let ((n (gethash id nodes)))
           (when (and (memq (plist-get n :kind) '(task todo)) (plist-get n :parent) (gethash (plist-get n :parent) nodes))
             (edge id (plist-get n :parent) 'implements))))
-      (pcase-dolist (`(,src ,dst) (sqlite-select (drgnx-work-db) "select src, dst from edge where kind = 'derives'"))
+      (pcase-dolist (`(,src ,dst) (sqlite-select (drgnx-work-db-read) "select src, dst from edge where kind = 'derives'"))
         (when (and (gethash src nodes) (gethash dst nodes)) (edge src dst 'derives)))
       ;; jobs (newest first: the newest job of a plan task is the one shown on it)
       (let ((deps nil) (status (make-hash-table :test #'equal)))
@@ -290,7 +290,7 @@ never joined to a job's or a plan's.  QUESTIONS: the open questions, each with t
             (unless (equal (gethash d status) "done") (edge b a 'blocks)))))
       ;; reviews: the last verdict of each job task
       (pcase-dolist (`(,task ,summary ,data)
-                     (sqlite-select (drgnx-work-db) "select task, summary, data from event where id in
+                     (sqlite-select (drgnx-work-db-read) "select task, summary, data from event where id in
                                       (select max(id) from event where kind = 'review' and task is not null group by task)"))
         (when-let* ((tn (gethash task jt-node)))
           (let* ((rid (concat "review:" task))
@@ -421,12 +421,12 @@ holds; states match a node's :state.  `drgnx-cockpit-filter-functions' may drop 
 ;;;; What happened, the timeline
 
 (defun drgnx-cockpit--events (sql args)
-  (mapcar #'drgnx-coord--event-plist (sqlite-select (drgnx-work-db) (format sql drgnx-coord--event-cols) args)))
+  (mapcar #'drgnx-coord--event-plist (sqlite-select (drgnx-work-db-read) (format sql drgnx-coord--event-cols) args)))
 
 (defun drgnx-cockpit--targeter ()
   "A function from an event to its target (:node ID :event ID): its task's node, else its agent's, else its job's."
   (let ((plans (make-hash-table :test #'equal)) (known (make-hash-table :test #'equal)))
-    (pcase-dolist (`(,id ,plan) (sqlite-select (drgnx-work-db) "select id, plan from job")) (puthash id plan plans))
+    (pcase-dolist (`(,id ,plan) (sqlite-select (drgnx-work-db-read) "select id, plan from job")) (puthash id plan plans))
     (lambda (e)
       (let* ((task (plist-get e :task)) (job (plist-get e :job)) (agent (plist-get e :agent))
              (plan (and job (gethash job plans)))
@@ -479,7 +479,7 @@ claims, statuses) and the cards, questions and answers about the job tasks it ho
 \(`drgnx-cockpit-happened-limit').  ((:at :kind :text :target (:node ID :event ID))…)."
   (let* ((limit (or limit drgnx-cockpit-happened-limit))
          (own (drgnx-cockpit--events "select %s from event where agent = ? order by id desc limit ?" (list agent limit)))
-         (about (cl-loop for (task job) in (sqlite-select (drgnx-work-db) "select id, job from jtask where agent = ?" (list agent))
+         (about (cl-loop for (task job) in (sqlite-select (drgnx-work-db-read) "select id, job from jtask where agent = ?" (list agent))
                          append (drgnx-cockpit--events
                                  "select %s from event where job = ? and task = ? and (agent is null or agent = 'user') order by id desc limit ?"
                                  (list job task limit))))
@@ -571,12 +571,12 @@ from its jtask row)."
          ;; its job task: the session's own, else the one it holds and works on (else the last one it held)
          (jt (and (stringp id)
                   (car (or (and (plist-get session :task)
-                                (sqlite-select (drgnx-work-db) "select id, job, n from jtask where id = ?" (list (plist-get session :task))))
-                           (sqlite-select (drgnx-work-db) "select id, job, n from jtask where agent = ?
+                                (sqlite-select (drgnx-work-db-read) "select id, job, n from jtask where id = ?" (list (plist-get session :task))))
+                           (sqlite-select (drgnx-work-db-read) "select id, job, n from jtask where agent = ?
                                                            order by status in ('claimed', 'running', 'needs-input', 'in-review') desc, n desc
                                                            limit 1"
                                           (list id))))))
-         (life (and (stringp id) (caar (sqlite-select (drgnx-work-db) (concat "select kind from event where agent = ? and " drgnx-cockpit--life-sql " order by id desc limit 1") (list id)))))
+         (life (and (stringp id) (caar (sqlite-select (drgnx-work-db-read) (concat "select kind from event where agent = ? and " drgnx-cockpit--life-sql " order by id desc limit 1") (list id)))))
          (others (lambda (dir) (seq-some (lambda (r) (and (not (equal (plist-get r :id) id))
                                                           (member dir (mapcar #'drgnx-cockpit--dir (delq nil (list (plist-get r :cwd) (plist-get r :worktree)))))))
                                          (drgnx-coord-agents)))))
@@ -878,7 +878,7 @@ FILE is the agent's name: its size is read from the true name it was checked by,
                     (append (cl-loop for r in (drgnx-coord-agents) append (list (plist-get r :cwd) (plist-get r :worktree)))
                             (mapcar (lambda (s) (plist-get s :cwd)) sessions)
                             ;; one query: each job with each of its task numbers (a job without tasks once, with nil)
-                            (cl-loop for (job repo n) in (sqlite-select (drgnx-work-db) "select j.id, j.repo, t.n from job j left join jtask t on t.job = j.id
+                            (cl-loop for (job repo n) in (sqlite-select (drgnx-work-db-read) "select j.id, j.repo, t.n from job j left join jtask t on t.job = j.id
                                                                                          where j.repo is not null")
                                      unless (drgnx-cockpit--remote-p repo)
                                      collect (expand-file-name (format ".claude/worktrees/%s/" job) repo)

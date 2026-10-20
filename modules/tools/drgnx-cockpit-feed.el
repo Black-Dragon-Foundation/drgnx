@@ -750,10 +750,10 @@ bar's `drgnx-statusbar-waiting-functions', next to the jobs count."
 (`drgnx-cockpit-feed--open-questions') names — as the model counts them: ((ID JOB TASK TITLE AT)…), oldest first."
   (let ((asked (delq nil (mapcar (lambda (q) (plist-get (plist-get q :data) :card)) (drgnx-cockpit-feed--open-questions)))))
     (seq-remove (lambda (c) (memql (car c) asked))
-                (sqlite-select (drgnx-work-db) (concat "select c.id, c.job, c.task, c.title, c.at from card c join job j on j.id = c.job"
-                                                       " where c.state = 'open' and c.kind = 'ask'"
-                                                       (if drgnx-cockpit-include-closed-jobs "" " and j.status is not 'done'")
-                                                       " order by c.id")))))
+                (sqlite-select (drgnx-work-db-read) (concat "select c.id, c.job, c.task, c.title, c.at from card c join job j on j.id = c.job"
+                                                            " where c.state = 'open' and c.kind = 'ask'"
+                                                            (if drgnx-cockpit-include-closed-jobs "" " and j.status is not 'done'")
+                                                            " order by c.id")))))
 
 (defun drgnx-cockpit-feed-tell-statusbar ()
   "Tell the status bar when `drgnx-cockpit-waiting-count' changed since it was last told (`drgnx-statusbar-refresh',

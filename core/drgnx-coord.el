@@ -38,7 +38,7 @@
 
 (defun drgnx-coord-version ()
   "The decision log's version."
-  (string-to-number (or (drgnx-coord--meta (drgnx-work-db) "log-version") "0")))
+  (string-to-number (or (drgnx-coord--meta (drgnx-work-db-read) "log-version") "0")))
 
 (defun drgnx-coord--bump (db)
   (let ((v (1+ (string-to-number (or (drgnx-coord--meta db "log-version") "0")))))
@@ -188,7 +188,7 @@ any other error is a message — for a periodic tick (the hub's)."
       (when task (add "task = ?" task))
       (when kinds (apply #'add (format "kind in (%s)" (mapconcat (lambda (_) "?") kinds ", ")) kinds)))
     (mapcar #'drgnx-coord--event-plist
-            (sqlite-select (drgnx-work-db)
+            (sqlite-select (drgnx-work-db-read)
                            (format "select %s from event%s order by id%s" drgnx-coord--event-cols
                                    (if conds (concat " where " (string-join (nreverse conds) " and ")) "")
                                    (if limit (format " limit %d" limit) ""))
@@ -239,14 +239,14 @@ omitted field, means \"keep\".  A nil ID is an error."
 
 (defun drgnx-coord-agent (id)
   "Agent ID: (:id :kind :name :cwd :worktree :branch :base :plan :task :pid :started :seen), or nil."
-  (when-let* ((row (car (sqlite-select (drgnx-work-db) (format "select %s from agent where id = ?" drgnx-coord--agent-cols)
+  (when-let* ((row (car (sqlite-select (drgnx-work-db-read) (format "select %s from agent where id = ?" drgnx-coord--agent-cols)
                                        (list id)))))
     (drgnx-coord--agent-plist row)))
 
 (defun drgnx-coord-agents ()
   "Every registered agent, the first to start first."
   (mapcar #'drgnx-coord--agent-plist
-          (sqlite-select (drgnx-work-db) (format "select %s from agent order by started, id" drgnx-coord--agent-cols))))
+          (sqlite-select (drgnx-work-db-read) (format "select %s from agent order by started, id" drgnx-coord--agent-cols))))
 
 (defun drgnx-coord-agent-seen (id)
   "Agent ID is alive now: stamp it (nil, and nothing written, when it was never registered).  The stamp.  Telemetry:
@@ -268,7 +268,7 @@ A review layer only: nothing in the files changes."
 (defun drgnx-coord-review-marks (agent)
   "AGENT's review marks: an alist PATH → (:state :hash :at), by path."
   (mapcar (lambda (r) (cons (car r) (list :state (nth 1 r) :hash (nth 2 r) :at (nth 3 r))))
-          (sqlite-select (drgnx-work-db) "select path, state, hash, at from review_mark where agent = ? order by path" (list agent))))
+          (sqlite-select (drgnx-work-db-read) "select path, state, hash, at from review_mark where agent = ? order by path" (list agent))))
 
 ;;;; Jobs and tasks
 
@@ -290,7 +290,7 @@ a plist kept with it (`drgnx-coord-job')."
 
 (defun drgnx-coord-job (id)
   "Job ID: (:id :title :plan :repo :status :created :data PLIST), or nil."
-  (pcase (car (sqlite-select (drgnx-work-db) "select id, title, plan, repo, status, created, data from job where id = ?" (list id)))
+  (pcase (car (sqlite-select (drgnx-work-db-read) "select id, title, plan, repo, status, created, data from job where id = ?" (list id)))
     ('nil nil)
     (`(,id ,title ,plan ,repo ,status ,created ,data)
      (list :id id :title title :plan plan :repo repo :status status :created created
@@ -298,7 +298,7 @@ a plist kept with it (`drgnx-coord-job')."
 
 (defun drgnx-coord-jobs (&optional status)
   "Every job's id (with STATUS when given), newest first."
-  (mapcar #'car (sqlite-select (drgnx-work-db) (concat "select id from job" (if status " where status = ?" "") " order by created desc")
+  (mapcar #'car (sqlite-select (drgnx-work-db-read) (concat "select id from job" (if status " where status = ?" "") " order by created desc")
                                (and status (list status)))))
 
 (cl-defun drgnx-coord-job-set (id &key status data)
@@ -345,13 +345,13 @@ a plist kept with it (`drgnx-coord-job')."
 
 (defun drgnx-coord-tasks (job)
   "JOB's tasks, in order: (:id :n :title :role :status :agent :lease_until :deps)."
-  (let ((db (drgnx-work-db)))
+  (let ((db (drgnx-work-db-read)))
     (mapcar (lambda (row) (drgnx-coord--task-plist db row))
             (sqlite-select db "select id, n, title, role, status, agent, lease_until from jtask where job = ? order by n"
                            (list job)))))
 
 (defun drgnx-coord-task (task)
-  (let ((db (drgnx-work-db))) (when-let* ((row (drgnx-coord--task-row db task))) (drgnx-coord--task-plist db row))))
+  (let ((db (drgnx-work-db-read))) (when-let* ((row (drgnx-coord--task-row db task))) (drgnx-coord--task-plist db row))))
 
 (defun drgnx-coord--lease () (+ (float-time) (* 60 drgnx-coord-lease-minutes)))
 
@@ -444,7 +444,7 @@ it.  Answers as `drgnx-coord-claim'."
 
 (defun drgnx-coord-decisions-since (n &optional job)
   "Decisions recorded, or whose status changed, after version N (newest first); JOB's only, when given."
-  (drgnx-coord--decisions-since (drgnx-work-db) n job))
+  (drgnx-coord--decisions-since (drgnx-work-db-read) n job))
 
 (defvar drgnx-coord-decision-rate 6 "Decisions one agent may record per minute; more are refused (no loops).")
 
@@ -532,7 +532,7 @@ from ID's recipient to \"user\" — nil for another agent's message, for a quest
 message's event was pruned (the answer is a column of the message)."
   (when-let* ((m (drgnx-coord-message id))
               ((equal (or (plist-get m :sender) "user") "user"))
-              (answers (caar (sqlite-select (drgnx-work-db) "select answers from message where id = ?" (list id))))
+              (answers (caar (sqlite-select (drgnx-work-db-read) "select answers from message where id = ?" (list id))))
               (q (drgnx-coord-message answers)))
     (and (equal (plist-get q :sender) (plist-get m :recipient)) (equal (plist-get q :recipient) "user") q)))
 
@@ -567,7 +567,7 @@ message's event was pruned (the answer is a column of the message)."
 (defun drgnx-coord-queued ()
   "Every message waiting to be delivered, oldest first."
   (mapcar #'drgnx-coord--message-plist
-          (sqlite-select (drgnx-work-db) (format "select %s from message where state = 'queued' order by id" drgnx-coord--message-cols))))
+          (sqlite-select (drgnx-work-db-read) (format "select %s from message where state = 'queued' order by id" drgnx-coord--message-cols))))
 
 (defun drgnx-coord-set-seen (agent version)
   "AGENT has read the decision log up to VERSION."
@@ -591,22 +591,22 @@ first five, quoted (an agent's subject never reads as a line from drgnx)."
 
 (defun drgnx-coord-held (agent)
   "AGENT's coordination writes held in a row (0 when its last went through)."
-  (string-to-number (or (drgnx-coord--meta (drgnx-work-db) (concat "held:" agent)) "0")))
+  (string-to-number (or (drgnx-coord--meta (drgnx-work-db-read) (concat "held:" agent)) "0")))
 
 (defun drgnx-coord-seen (agent)
   "The decision-log version AGENT last read (0 when never)."
-  (string-to-number (or (drgnx-coord--meta (drgnx-work-db) (concat "seen:" agent)) "0")))
+  (string-to-number (or (drgnx-coord--meta (drgnx-work-db-read) (concat "seen:" agent)) "0")))
 
 (defun drgnx-coord-inbox (recipient &optional states)
   "RECIPIENT's messages (in STATES when given), oldest first."
   (mapcar #'drgnx-coord--message-plist
-          (sqlite-select (drgnx-work-db)
+          (sqlite-select (drgnx-work-db-read)
                          (format "select %s from message where recipient = ?%s order by id" drgnx-coord--message-cols
                                  (if states (format " and state in (%s)" (mapconcat (lambda (_) "?") states ", ")) ""))
                          (cons recipient states))))
 
 (defun drgnx-coord-message (id)
-  (when-let* ((row (car (sqlite-select (drgnx-work-db) (format "select %s from message where id = ?" drgnx-coord--message-cols)
+  (when-let* ((row (car (sqlite-select (drgnx-work-db-read) (format "select %s from message where id = ?" drgnx-coord--message-cols)
                                        (list id)))))
     (drgnx-coord--message-plist row)))
 
@@ -650,12 +650,12 @@ first five, quoted (an agent's subject never reads as a line from drgnx)."
 (defun drgnx-coord-cards (job &optional state)
   "JOB's cards (in STATE when given), newest first."
   (mapcar #'drgnx-coord--card-plist
-          (sqlite-select (drgnx-work-db) (format "select %s from card where job = ?%s order by id desc" drgnx-coord--card-cols
-                                                 (if state " and state = ?" ""))
+          (sqlite-select (drgnx-work-db-read) (format "select %s from card where job = ?%s order by id desc" drgnx-coord--card-cols
+                                                      (if state " and state = ?" ""))
                          (if state (list job state) (list job)))))
 
 (defun drgnx-coord-card (id)
-  (when-let* ((row (car (sqlite-select (drgnx-work-db) (format "select %s from card where id = ?" drgnx-coord--card-cols) (list id)))))
+  (when-let* ((row (car (sqlite-select (drgnx-work-db-read) (format "select %s from card where id = ?" drgnx-coord--card-cols) (list id)))))
     (drgnx-coord--card-plist row)))
 
 (defun drgnx-coord-card-settle (id choice)

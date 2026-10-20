@@ -225,12 +225,57 @@ in `meta' `migrate-6-dropped'.  New columns: event.turn, message.answers, card.r
             (push (cons file db) drgnx-work-db--handles)
             db)))))
 
+(defvar drgnx-work-db--read-handles nil "Alist file → read-only database (`drgnx-work-db-read').")
+
+(defconst drgnx-work-db--writer-reads
+  '((drgnx-work-collect-jobs . "reads the collected-key, then writes the commits and the key: the check and the write share one connection")
+    (drgnx-coord-events-prune-daily . "reads the last prune time, then prunes and writes the new time"))
+  "(NAME . REASON) of the functions that may `sqlite-select' on `(drgnx-work-db)': a read followed by a write.
+Every other read goes through `drgnx-work-db-read' (checked by `drgnx-work-db/readers-use-the-read-only-path').")
+
+(define-error 'drgnx-work-db-too-new "work.db is too new for this drgnx" 'user-error)
+
+(defun drgnx-work-db--meta (db key)
+  (ignore-errors (caar (sqlite-select db "select value from meta where key = ?" (list key)))))
+
+(defun drgnx-work-db--open-read (file)
+  "FILE opened read-only with its schema number, or nil when it is missing or has no `meta' yet."
+  (when (file-exists-p file)
+    (let ((db (sqlite-open file t)))
+      (sqlite-pragma db "busy_timeout = 5000")
+      (let ((have (drgnx-work-db--meta db "schema")))
+        (if have (cons db (string-to-number have)) (sqlite-close db) nil)))))
+
+(defun drgnx-work-db-read ()
+  "A read-only handle on work.db: it never migrates and never runs a writing statement, and closing it
+never checkpoints.  A missing file, or one below `drgnx-work-db-schema-version', is first made by the
+writer (`drgnx-work-db'): every drgnx Emacs is still a writer.  A newer schema is read when its `compat-read'
+is at most `drgnx-work-db-compat-read'; else `drgnx-work-db-too-new'."
+  (let ((file (drgnx-work-db-file)))
+    (or (alist-get file drgnx-work-db--read-handles nil nil #'equal)
+        (let ((open (drgnx-work-db--open-read file)))
+          (when (or (null open) (< (cdr open) drgnx-work-db-schema-version))
+            (when open (sqlite-close (car open)))
+            (drgnx-work-db)
+            (setq open (drgnx-work-db--open-read file)))
+          (pcase-let ((`(,db . ,have) open))
+            (when (> have drgnx-work-db-schema-version)
+              (let ((compat (string-to-number (or (drgnx-work-db--meta db "compat-read") "999999"))))
+                (when (> compat drgnx-work-db-compat-read)
+                  (sqlite-close db)
+                  (signal 'drgnx-work-db-too-new
+                          (list (format "work.db is schema %d, which this drgnx cannot read: update drgnx" have))))))
+            (push (cons file db) drgnx-work-db--read-handles)
+            db)))))
+
 (defun drgnx-work-db-close-all ()
+  (dolist (h drgnx-work-db--read-handles) (ignore-errors (sqlite-close (cdr h))))   ; readers first: the writer closes last and checkpoints
+  (setq drgnx-work-db--read-handles nil)
   (dolist (h drgnx-work-db--handles) (ignore-errors (sqlite-close (cdr h))))
   (setq drgnx-work-db--handles nil))
 
 (defun drgnx-work-db-version ()
-  (string-to-number (caar (sqlite-select (drgnx-work-db) "select value from meta where key = 'schema'"))))
+  (string-to-number (caar (sqlite-select (drgnx-work-db-read) "select value from meta where key = 'schema'"))))
 
 ;;;; Nodes and edges
 
@@ -257,7 +302,7 @@ any other keys, kept in its data)."
 (defconst drgnx-work--select "select id, kind, title, path, line, status, parent, ord, source, data from node")
 
 (defun drgnx-work-node (id)
-  (when-let* ((row (car (sqlite-select (drgnx-work-db) (concat drgnx-work--select " where id = ?") (list id)))))
+  (when-let* ((row (car (sqlite-select (drgnx-work-db-read) (concat drgnx-work--select " where id = ?") (list id)))))
     (drgnx-work--row-node row)))
 
 (defun drgnx-work-update-node (id &rest props)
@@ -275,12 +320,12 @@ any other keys, kept in its data)."
 (defun drgnx-work-edges-to (dst kind)
   "((SRC . ORIGIN)…) of the KIND edges into DST."
   (mapcar (lambda (r) (cons (car r) (intern (cadr r))))
-          (sqlite-select (drgnx-work-db) "select src, origin from edge where dst = ? and kind = ? order by src" (list dst (symbol-name kind)))))
+          (sqlite-select (drgnx-work-db-read) "select src, origin from edge where dst = ? and kind = ? order by src" (list dst (symbol-name kind)))))
 
 (defun drgnx-work-edges-from (src kind)
   "((DST . ORIGIN)…) of the KIND edges out of SRC."
   (mapcar (lambda (r) (cons (car r) (intern (cadr r))))
-          (sqlite-select (drgnx-work-db) "select dst, origin from edge where src = ? and kind = ? order by dst" (list src (symbol-name kind)))))
+          (sqlite-select (drgnx-work-db-read) "select dst, origin from edge where src = ? and kind = ? order by dst" (list src (symbol-name kind)))))
 
 (defun drgnx-work-forget-source (source)
   "Forget every node and edge SOURCE gave (before reading SOURCE again)."
@@ -292,7 +337,7 @@ any other keys, kept in its data)."
 and the commits that implement it (newest first)."
   (append
    (mapcar #'drgnx-work--row-node
-           (sqlite-select (drgnx-work-db) (concat drgnx-work--select " where parent = ? order by ord, line, title") (list id)))
+           (sqlite-select (drgnx-work-db-read) (concat drgnx-work--select " where parent = ? order by ord, line, title") (list id)))
    (sort (delq nil (mapcar (lambda (e) (drgnx-work-node (car e)))
                            (append (drgnx-work-edges-to id 'derives) (drgnx-work-edges-to id 'implements))))
          (lambda (a b)
@@ -303,20 +348,20 @@ and the commits that implement it (newest first)."
 
 (defun drgnx-work-roots ()
   "The tree's roots: every spec, and the plans that name none."
-  (let ((specs (mapcar #'drgnx-work--row-node (sqlite-select (drgnx-work-db) (concat drgnx-work--select " where kind = 'spec' order by title"))))
+  (let ((specs (mapcar #'drgnx-work--row-node (sqlite-select (drgnx-work-db-read) (concat drgnx-work--select " where kind = 'spec' order by title"))))
         (lone (mapcar #'drgnx-work--row-node
-                      (sqlite-select (drgnx-work-db)
+                      (sqlite-select (drgnx-work-db-read)
                                      (concat drgnx-work--select " where kind = 'plan' and id not in (select e.src from edge e join node s on s.id = e.dst where e.kind = 'derives') order by title")))))
     (append specs lone)))
 
 (defun drgnx-work-nodes (kind)
-  (mapcar #'drgnx-work--row-node (sqlite-select (drgnx-work-db) (concat drgnx-work--select " where kind = ?") (list (symbol-name kind)))))
+  (mapcar #'drgnx-work--row-node (sqlite-select (drgnx-work-db-read) (concat drgnx-work--select " where kind = ?") (list (symbol-name kind)))))
 
 (defun drgnx-work-nodes-of-kinds (kinds)
   "The nodes of any of KINDS (symbols), in one query, by kind, path and order."
   (when kinds
     (mapcar #'drgnx-work--row-node
-            (sqlite-select (drgnx-work-db)
+            (sqlite-select (drgnx-work-db-read)
                            (format "%s where kind in (%s) order by kind, path, ord, line" drgnx-work--select
                                    (mapconcat (lambda (_) "?") kinds ", "))
                            (mapcar #'symbol-name kinds)))))
@@ -327,9 +372,9 @@ and the commits that implement it (newest first)."
 
 ;;;; Files seen
 
-(defun drgnx-work-file-mtime (path) (caar (sqlite-select (drgnx-work-db) "select mtime from file where path = ?" (list path))))
+(defun drgnx-work-file-mtime (path) (caar (sqlite-select (drgnx-work-db-read) "select mtime from file where path = ?" (list path))))
 (defun drgnx-work-set-file (path mtime) (sqlite-execute (drgnx-work-db) "insert or replace into file values (?, ?)" (list path mtime)))
-(defun drgnx-work-files () (mapcar #'car (sqlite-select (drgnx-work-db) "select path from file")))
+(defun drgnx-work-files () (mapcar #'car (sqlite-select (drgnx-work-db-read) "select path from file")))
 (defun drgnx-work-drop-file (path) (sqlite-execute (drgnx-work-db) "delete from file where path = ?" (list path)))
 
 ;;;; Spend (the gateway's requests)
@@ -343,7 +388,7 @@ and the commits that implement it (newest first)."
 (cl-defun drgnx-work-db-spend (&key job task agent)
   "What the requests of JOB, TASK and/or AGENT came to: (:input N :output N :cost USD :requests N)."
   (let* ((where (delq nil (list (and job "job = ?") (and task "task = ?") (and agent "agent = ?"))))
-         (row (car (sqlite-select (drgnx-work-db)
+         (row (car (sqlite-select (drgnx-work-db-read)
                                   (concat "select coalesce(sum(input), 0), coalesce(sum(output), 0), coalesce(sum(cost), 0.0), count(*)
                                            from spend" (if where (concat " where " (string-join where " and ")) ""))
                                   (delq nil (list job task agent))))))

@@ -390,7 +390,7 @@ no file name handler (an `a.zip/' folder reached tramp-archive; docs/develop/cor
           (puthash d w drgnx-cockpit-edits--watches))))))
 
 (defun drgnx-cockpit-edits--store-key ()
-  (car (sqlite-select (drgnx-work-db) "select (select data_version from pragma_data_version()), total_changes()")))
+  (car (sqlite-select (drgnx-work-db-read) "select (select data_version from pragma_data_version()), total_changes()")))
 
 (defun drgnx-cockpit-edits--read-marks ()
   "Read the agent's review marks; non-nil when they changed."
@@ -750,7 +750,7 @@ follows the agent's edits while it shows (`drgnx-cockpit-edits--follow'), and li
                 drgnx-cockpit-edits--dirty (make-hash-table :test #'equal)
                 drgnx-cockpit-edits--watches (make-hash-table :test #'equal)
                 drgnx-cockpit-edits--list-dirty t
-                drgnx-cockpit-edits--event-id (or (caar (sqlite-select (drgnx-work-db) "select max(id) from event")) 0))
+                drgnx-cockpit-edits--event-id (or (caar (sqlite-select (drgnx-work-db-read) "select max(id) from event")) 0))
           (ignore-errors (drgnx-cockpit-edits--read-marks))
           (drgnx-cockpit-edits--header-line)
           (drgnx-cockpit-edits--schedule 0)
@@ -953,7 +953,7 @@ claimed, running or waiting for input.  Any other agent (an outside one's stop e
   (when (eq (plist-get src :kind) 'job)
     (let ((s (drgnx-cockpit-edits--session drgnx-cockpit-edits--id))
           (status (and (plist-get src :task)
-                       (caar (sqlite-select (drgnx-work-db) "select status from jtask where id = ?" (list (plist-get src :task)))))))
+                       (caar (sqlite-select (drgnx-work-db-read) "select status from jtask where id = ?" (list (plist-get src :task)))))))
       (and s (memq (drgnx-agent-session-status s) '(exited failed))
            (stringp status) (not (member status '("claimed" "running" "needs-input")))
            t))))

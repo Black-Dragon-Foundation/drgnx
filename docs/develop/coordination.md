@@ -61,6 +61,24 @@ file ("a newer schema"). **To go back by hand:** stop the hub, then `mv work.db.
   reason (`queue full`, `too many between these two`); the user's own Emacs, which sends with no sender, counts as the sender
   `user` for both that limit and the replies it makes. Escalations to `user` are never held as a full queue.
 
+### Reading work.db
+
+Every function that only reads (outside a `drgnx-coord--tx` lambda) reads through `(drgnx-work-db-read)`: a
+read-only handle (`sqlite-open` with the read-only flag, `busy_timeout` 5000), cached per file, that never migrates
+and never writes. Closing it never checkpoints, so a reader that outlives the writer leaves the WAL as it is.
+`drgnx-work-db-close-all` closes the readers first, then the writers.
+
+- A missing file, or a schema below `drgnx-work-db-schema-version`, is first made or migrated by the writer
+  (`(drgnx-work-db)`, once): until the hub is Rust, every drgnx Emacs is still a writer.
+- A newer schema is read when its `meta` `compat-read` is at most `drgnx-work-db-compat-read`; otherwise
+  `drgnx-work-db-too-new` is signalled ("work.db is schema N, which this drgnx cannot read: update drgnx").
+- A select inside a transaction keeps the transaction's handle. A function that reads and then writes may read on the
+  writer: it is named, with the reason, in `drgnx-work-db--writer-reads`. The test
+  `drgnx-work-db/readers-use-the-read-only-path` walks the sources and fails on any other `sqlite-select` on
+  `(drgnx-work-db)`, direct or through a `let`-bound handle.
+- The cockpit's change stamps (`data_version`, `total_changes()`) run on the read handle: `data_version` moves when
+  the writer in the same Emacs commits.
+
 ### Events, the registry and review marks
 
 - **Events:** `drgnx-coord-event-add` (`:agent :job :task :kind :summary :data :at`) and `drgnx-coord-events` (`:since :agent

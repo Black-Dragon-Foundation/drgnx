@@ -295,7 +295,7 @@ query: the data version moves when another connection commits, the change count 
 (defun drgnx-cockpit--db-key ()
   "(DATA-VERSION TOTAL-CHANGES) of the store, in one query: the data version moves when another connection commits,
 the change count when this Emacs writes.  The graph's, the feed's and the waiting count's keys start with it."
-  (car (sqlite-select (drgnx-work-db) "select (select data_version from pragma_data_version()), total_changes()")))
+  (car (sqlite-select (drgnx-work-db-read) "select (select data_version from pragma_data_version()), total_changes()")))
 
 (defun drgnx-cockpit--check (buffer)
   "Every `drgnx-cockpit-check-interval' s while the graph's BUFFER shows (its timer `(cockpit-check . BUFFER)',
@@ -318,7 +318,7 @@ ask with no hub event.  One query when the store did not change."
   "The folders the store knows in repositories — jobs' repos, the tracker's plans' repos, registered agents' working
 folders and worktrees — that are local folders (git lists a repository's worktrees from any of them).  A remote name
 is left out by its syntax (`file-remote-p') before any `file-directory-p' runs."
-  (let ((dirs (append (mapcar #'car (sqlite-select (drgnx-work-db) "select distinct repo from job where repo is not null"))
+  (let ((dirs (append (mapcar #'car (sqlite-select (drgnx-work-db-read) "select distinct repo from job where repo is not null"))
                       (mapcar (lambda (p) (plist-get p :repo)) (drgnx-work-nodes 'plan))
                       (mapcan (lambda (r) (list (plist-get r :cwd) (plist-get r :worktree))) (drgnx-coord-agents)))))
     (seq-filter #'file-directory-p
