@@ -83,6 +83,35 @@ logging to PATHLOG), CONFIG (a DRGNX_CONFIG_DIR) and ENV (the environment lists 
       (should (string-search "install.sh" (cdr r))))
     (should (string-empty-p (drgnx-bin-test--slurp pathlog)))))
 
+(ert-deftest drgnx-bin/no-emacs-stops-every-subcommand-cleanly ()
+  ;; with no Emacs found, a subcommand prints the message and exits non-zero; it never runs an empty command
+  ;; (CI once ended in "env: '': No such file or directory", exit 127)
+  (drgnx-bin-test--with-setup ()
+    (delete-file (expand-file-name "nidhogg" pathdir))
+    (dolist (args '(("build") ("test") ("safe") ("search" "index")))
+      (let ((r (apply #'drgnx-bin-test--call drgnx-bin-test--bin env args)))
+        (should-not (eql 0 (car r)))
+        (should (string-search "no Nidhogg found" (cdr r)))
+        (should-not (string-search "No such file" (cdr r)))
+        (should-not (string-search "command not found" (cdr r)))))))
+
+(ert-deftest drgnx-bin/a-container-run-names-the-images-emacs ()
+  ;; the container has no Nidhogg and no record: the run passes DRGNX_EMACS, so drgnx needs no bare `emacs'
+  (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
+         (log (expand-file-name "rt.log" dir))
+         (rt (drgnx-bin-test--fake-emacs (expand-file-name "fake-rt" dir)
+                                         (format "for a in \"$@\"; do echo \"$a\" >> %s; done" log)))
+         (drgnx-bin-test--cwd dir))
+    (unwind-protect
+        (progn
+          (should (eql 0 (car (drgnx-bin-test--call
+                               drgnx-bin-test--bin
+                               (list (concat "HOME=" dir) (concat "DRGNX_CONFIG_DIR=" dir "/config")
+                                     (concat "DRGNX_CONTAINER=" rt) "DRGNX_TEST_IMAGE=an-image")
+                               "test" "--container"))))
+          (should (member "DRGNX_EMACS=/usr/bin/emacs" (split-string (drgnx-bin-test--slurp log) "\n" t))))
+      (delete-directory dir t))))
+
 (ert-deftest drgnx-bin/nidhogg-on-path-comes-before-emacs ()
   (drgnx-bin-test--with-setup ()
     (let ((nlog (expand-file-name "nidhogg.log" dir)))
