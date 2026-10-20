@@ -5,6 +5,7 @@
 
 (defconst drgnx-bin-test--root
   (expand-file-name "../../" (file-name-directory (or load-file-name buffer-file-name))))
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-bin-test--root) nil t)
 
 (defun drgnx-bin-test--fake (file log)
   "Make FILE an executable that appends its argv to LOG and exits 0; return FILE."
@@ -533,12 +534,11 @@ with a display: `drgnx open' stays graphical (the unit tier has no DISPLAY, and 
                                :noquery t :filter (lambda (_p s) (setq out (concat out s)))
                                :sentinel (lambda (_p _e) (setq done t)))))
       (unwind-protect
-          (let ((limit (+ (float-time) 2.5)))      ; the notice is due after 2 s, the daemon answers after 3 s
-            (while (and (not (string-search "still starting" out)) (< (float-time) limit))
-              (accept-process-output proc 0.1))
+          (progn                                   ; the notice is due after 2 s, the daemon answers after 3 s
+            (drgnx-test-wait (lambda () (string-search "still starting" out)) :what "the still-starting notice")
             (should (string-search "still starting" out))
             (should (process-live-p proc))
-            (while (not done) (accept-process-output proc 0.1))
+            (drgnx-test-wait (lambda () done) :what "bin/drgnx open's exit")
             (should (eql 0 (process-exit-status proc))))
         (when (process-live-p proc) (delete-process proc))))))
 
@@ -685,7 +685,8 @@ with a display: `drgnx open' stays graphical (the unit tier has no DISPLAY, and 
 
 (defun drgnx-bin-test--leaky-suite (dir probe &optional hang)
   "Write a one-test suite into DIR.  The test leaks a temp dir and a temp file, records its
-`temporary-file-directory' in PROBE and its Emacs pid in PROBE.pid and, with HANG, then waits for a signal."
+`temporary-file-directory' in PROBE and its Emacs pid in PROBE.pid and, with HANG, then waits for a signal (longer
+than any `drgnx-test-wait', so only the signal can end it while a test waits)."
   (with-temp-file (expand-file-name "leaky-test.el" dir)
     (insert (format "(require 'ert)
 (ert-deftest tmp-probe/leaks ()
@@ -695,7 +696,7 @@ with a display: `drgnx open' stays graphical (the unit tier has no DISPLAY, and 
   (write-region temporary-file-directory nil %S nil 'silent)
   %s
   (should t))
-" (concat probe ".pid") probe (if hang "(sleep-for 120)" "")))))
+" (concat probe ".pid") probe (if hang "(sleep-for 3600)" "")))))
 
 (defun drgnx-bin-test--left (parent)
   "What a test run left in PARENT."
@@ -713,17 +714,15 @@ with a display: `drgnx open' stays graphical (the unit tier has no DISPLAY, and 
   "Start bin/drgnx ARGS with ENV; return the process."
   (let ((process-environment (append env process-environment)))
     (make-process :name "drgnx-bin-test-run" :command (cons drgnx-bin-test--bin args)
-                  :buffer nil :noquery t :connection-type 'pipe)))
+                  :buffer nil :noquery t :connection-type 'pipe
+                  :sentinel (lambda (p _e) (process-put p :done t)))))
 
 (defun drgnx-bin-test--wait-for (pred secs)
-  (let ((until (+ (float-time) secs)))
-    (while (and (not (funcall pred)) (< (float-time) until)) (sleep-for 0.1))
-    (funcall pred)))
+  (drgnx-test-wait pred :secs (max 30 secs) :what "bin/drgnx's run"))
 
 (defun drgnx-bin-test--wait-exit (proc secs)
-  (let ((until (+ (float-time) secs)))
-    (while (and (process-live-p proc) (< (float-time) until)) (accept-process-output proc 0.1))
-    (not (process-live-p proc))))
+  "Wait for PROC (from `drgnx-bin-test--spawn') to end: its sentinel has run."
+  (drgnx-test-wait (lambda () (process-get proc :done)) :secs (max 30 secs) :what "bin/drgnx's exit"))
 
 (defun drgnx-bin-test--pid-alive-p (pid)
   "Whether PID runs (a zombie does not): `process-attributes', which reads /proc on Linux and asks the kernel on
@@ -1163,10 +1162,8 @@ echo \"agent ${DRGNX_AGENT-unset} job ${DRGNX_JOB-unset} task ${DRGNX_TASK-unset
         (progn
           (setq proc (make-process :name "drgnx-bin-stop" :buffer nil :noquery t :connection-type 'pipe
                                    :command (list drgnx-bin-test--bin "test" "--bootstrap")))
-          (let ((deadline (+ (float-time) 60)))
-            (while (and (< (float-time) deadline)
-                        (not (string-match-p "^run " (or (ignore-errors (drgnx-bin-test--slurp log)) ""))))
-              (accept-process-output nil 0.1)))
+          (drgnx-test-wait (lambda () (string-match-p "^run " (or (ignore-errors (drgnx-bin-test--slurp log)) "")))
+                           :secs 60 :what "the container's run")
           (should (string-match-p "^run .*--name drgnx-bootstrap-[0-9]+-keys " (drgnx-bin-test--slurp log)))
           (signal-process proc 'term)
           (let ((deadline (+ (float-time) 10)))

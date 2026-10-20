@@ -5,6 +5,7 @@
 (load (expand-file-name "modules/tools/drgnx-ai-ui" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-ai-ghost-test--with (spec &rest body)
   "BODY in an Emacs Lisp buffer with ghost text on, its `complete' role on provider `o' (Ollama) served by a mock
@@ -35,8 +36,7 @@ LLM answering SPEC; `o' found running."
        (delete-directory root t))))
 
 (defun drgnx-ai-ghost-test--wait (pred &optional secs)
-  (let ((deadline (+ (float-time) (or secs 5)))) (while (and (not (funcall pred)) (< (float-time) deadline)) (accept-process-output nil 0.02)))
-  (funcall pred))
+  (drgnx-test-wait pred :secs (max 30 (or secs 0)) :what "the ghost text's condition"))
 
 (ert-deftest drgnx-ai-ghost/a-pause-shows-the-model-s-middle-as-ghost-text ()
   (drgnx-ai-ghost-test--with '((:path "/api/generate" :body "{\"response\":\"(message \\\"hi %s\\\" name)\"}"))
@@ -83,7 +83,7 @@ LLM answering SPEC; `o' found running."
     (insert "x")                                                   ; typed while the model thinks
     (drgnx-ai-ghost--post-command)
     (accept-process-output nil 1.0)
-    (drgnx-ai-ghost-test--wait (lambda () nil) 1)
+    (drgnx-test-pause 1)                                           ; nothing may show
     (should-not (drgnx-ai-ghost-text))))
 
 (ert-deftest drgnx-ai-ghost/an-answer-after-a-change-no-command-made-never-shows ()

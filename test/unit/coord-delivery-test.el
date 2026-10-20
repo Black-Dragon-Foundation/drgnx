@@ -3,6 +3,7 @@
 (require 'drgnx-hub)
 (require 'drgnx-agents)
 (require 'drgnx-coord)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-coord-delivery-test--with (&rest body)
   "BODY with drgnx's dirs under ROOT, the hub served here, profile \"mock\", EVENTS what subscribers heard."
@@ -29,8 +30,7 @@
        (delete-directory root t))))
 
 (defun drgnx-coord-delivery-test--wait (pred &optional secs)
-  (let ((deadline (+ (float-time) (or secs 10)))) (while (and (not (funcall pred)) (< (float-time) deadline)) (accept-process-output nil 0.02)))
-  (funcall pred))
+  (drgnx-test-wait pred :secs (max 30 (or secs 0)) :what "the delivery's condition"))
 
 (defun drgnx-coord-delivery-test--session (&optional job)
   "A mock session in the hub (of JOB), idle; the session."

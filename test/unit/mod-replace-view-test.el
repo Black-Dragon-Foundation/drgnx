@@ -9,6 +9,7 @@
 (load (expand-file-name "modules/tools/drgnx-replace" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/view-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 (require 'drgnx-run-ert "run-ert")                     ; `drgnx-run-ert-time-factor'
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
@@ -52,11 +53,9 @@ bar's keymaps), one editor window, no view or bar left over."
 (defun drgnx-replace-view-test--view () (get-buffer drgnx-replace-buffer-name))
 
 (defun drgnx-replace-view-test--wait (&optional pred)
-  "Wait (at most 10 s) until PRED holds, by default until the view is idle (no timer, search or drawing pending)."
-  (let ((pred (or pred (lambda () (with-current-buffer (drgnx-replace-view-test--view) (not (drgnx-replace--busy-p))))))
-        (deadline (+ (float-time) 10)))
-    (while (and (not (funcall pred)) (< (float-time) deadline)) (accept-process-output nil 0.02))
-    (should (funcall pred))))
+  "Wait (`drgnx-test-wait') until PRED holds, by default until the view is idle (no timer, search or drawing pending)."
+  (should (drgnx-test-wait (or pred (lambda () (with-current-buffer (drgnx-replace-view-test--view) (not (drgnx-replace--busy-p)))))
+                           :what "the Search view's condition")))
 
 (defun drgnx-replace-view-test--set (name value)
   "Type VALUE into the view's field NAME (as the user would: the field's change hooks run)."

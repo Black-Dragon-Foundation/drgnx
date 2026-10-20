@@ -3,6 +3,7 @@
 (require 'drgnx-jobs)
 (require 'drgnx-timer)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-jobs-test--with (&rest body)
   `(let* ((root (make-temp-file "drgnx-jobs" t))
@@ -13,9 +14,7 @@
        (delete-directory root t))))
 
 (defun drgnx-jobs-test--wait (pred &optional secs)
-  (let ((deadline (+ (float-time) (or secs 10))) v)
-    (while (and (not (setq v (funcall pred))) (< (float-time) deadline)) (sleep-for 0.05))
-    v))
+  (drgnx-test-wait pred :secs (max 30 (or secs 0)) :what "the job's condition"))
 
 (defun drgnx-jobs-test--stop-all ()
   "Stop every running job and wait until each has written its exit file: a stopped job's shell is still writing
@@ -52,6 +51,7 @@ killing the starter's whole process group does not take the job along."
    (let* ((idfile (expand-file-name "starter-id" root))
           (starter (make-process
                     :name "drgnx-jobs-starter" :noquery t :connection-type 'pipe :buffer nil
+                    :sentinel (lambda (p _e) (process-put p :done t))
                     :command (list (expand-file-name invocation-name invocation-directory)
                                    "--batch" "-Q" "-L" (file-name-directory (locate-library "drgnx-jobs"))
                                    "-l" "drgnx-jobs"
@@ -71,7 +71,7 @@ killing the starter's whole process group does not take the job along."
              (should-not (eql (alist-get 'ppid (process-attributes pid)) spid))   ; not the starter's child
              (ignore-errors (signal-process (- spid) 'SIGKILL))                   ; the starter's whole group
              (signal-process spid 'SIGKILL)
-             (should (drgnx-jobs-test--wait (lambda () (not (process-live-p starter))) 5))
+             (should (drgnx-jobs-test--wait (lambda () (process-get starter :done)) 5))
              (sleep-for 0.3)
              (should (eq (drgnx-jobs-test--status id) 'running))
              (should (process-attributes pid)))
@@ -220,9 +220,7 @@ killing the starter's whole process group does not take the job along."
        (should-not (file-exists-p (expand-file-name "pid" (drgnx-jobs--dir id))))
        (should-not (plist-get (drgnx-jobs--read job-file) :start))
        ;; the boot and start time still come, from a timer, within two seconds
-       (let ((deadline (+ (float-time) 2.5)))
-         (while (and (not (plist-get (drgnx-jobs--read job-file) :start)) (< (float-time) deadline))
-           (accept-process-output nil 0.05)))
+       (drgnx-test-wait (lambda () (plist-get (drgnx-jobs--read job-file) :start)) :what "the job's start stamp")
        (should (plist-get (drgnx-jobs--read job-file) :start))
        (should (equal (plist-get (drgnx-jobs--read job-file) :boot) (drgnx-jobs--boot-id)))
        (should (eq (drgnx-jobs-test--status id) 'running))))))

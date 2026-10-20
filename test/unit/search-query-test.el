@@ -2,6 +2,8 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-search-query)
+(require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-search-query-test--dims 64)
 
@@ -422,7 +424,7 @@ config error, as the indexer does."
                          (funcall callback (vector (drgnx-search-query-test--embed-text (aref (plist-get payload :inputs) 0)))
                                   '(:provider stub :model "stub-1")))))
               (drgnx-search-async root "database" #'ignore)
-              (sleep-for 0.05))         ; the deferred search runs from a timer
+              (drgnx-test-wait (lambda () (cdr seen)) :what "the deferred search"))   ; it runs from a timer
             (should (equal seen (list root root))))
         (delete-directory elsewhere t)))))
 
@@ -441,9 +443,8 @@ config error, as the indexer does."
                  '(7 . "(defun f ()"))))
 
 (defun drgnx-search-query-test--await (pred)
-  "Let timers and processes run until PRED is non-nil (at most 2 s)."
-  (let ((until (+ (float-time) 2)))
-    (while (and (not (funcall pred)) (< (float-time) until)) (accept-process-output nil 0.01))))
+  "Let timers and processes run until PRED is non-nil (`drgnx-test-wait')."
+  (drgnx-test-wait pred :what "the search's answer"))
 
 (ert-deftest drgnx-search/the-int8-rescore-matches-the-float-cosine ()
   "On random unit vectors (the worst case for the fingerprints) the integer dot product ranks like the floats."

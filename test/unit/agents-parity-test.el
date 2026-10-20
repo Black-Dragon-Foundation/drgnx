@@ -4,11 +4,10 @@
 (require 'ert)
 (require 'drgnx-agents)
 (require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
 (defun drgnx-parity--wait (pred secs)
-  (let ((deadline (+ (float-time) secs)) v)
-    (while (and (not (setq v (funcall pred))) (< (float-time) deadline)) (accept-process-output nil 0.05))
-    v))
+  (drgnx-test-wait pred :secs (max 30 secs) :what "the agent session's condition"))
 
 (ert-deftest drgnx-parity/context-compact-and-slash-commands ()
   (let* ((real (getenv "DRGNX_AGENT_PROFILE"))

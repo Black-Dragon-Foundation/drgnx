@@ -4,6 +4,7 @@
 (require 'drgnx-paths)
 (require 'drgnx-timer)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-acp-test--mock (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir))
 (defconst drgnx-acp-test--wrapper (expand-file-name "test/fixtures/mock-acp-stdin.sh" drgnx-dir))
@@ -12,11 +13,8 @@
   (list "sh" drgnx-acp-test--wrapper (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "-l" drgnx-acp-test--mock))
 
 (defun drgnx-acp-test--wait (pred &optional secs)
-  "Run the event loop until PRED is non-nil (at most SECS, default 10); PRED's value."
-  (let ((deadline (+ (float-time) (or secs 10))) v)
-    (while (and (not (setq v (funcall pred))) (< (float-time) deadline))
-      (accept-process-output nil 0.02))
-    v))
+  "Run the event loop until PRED is non-nil (`drgnx-test-wait': at least 30 s, or SECS); PRED's value."
+  (drgnx-test-wait pred :secs (max 30 (or secs 0)) :what "an ACP test's condition"))
 
 (defmacro drgnx-acp-test--with (conn keys &rest body)
   (declare (indent 2))
@@ -95,7 +93,8 @@
          (process-environment (cons (concat "MOCK_ACP_IN=" fifo) process-environment))
          (p (make-process :name "mock" :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
                                                       "-l" drgnx-acp-test--mock)
-                          :connection-type 'pipe :noquery t :filter (lambda (_p s) (setq out (concat out s)))))
+                          :connection-type 'pipe :noquery t :filter (lambda (_p s) (setq out (concat out s)))
+                          :sentinel (lambda (p _e) (process-put p :done t))))
          (w (make-process :name "mock-writer" :command (list "sh" "-c" "exec cat >\"$0\"" fifo) :connection-type 'pipe
                           :noquery t)))
     (unwind-protect
@@ -103,21 +102,22 @@
           (process-send-string w "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":1}}\n")
           (should (drgnx-acp-test--wait (lambda () (string-search "protocolVersion" out))))
           (process-send-eof w)
-          (should (drgnx-acp-test--wait (lambda () (not (process-live-p p))))))     ; the FIFO's EOF ends the mock
+          (should (drgnx-acp-test--wait (lambda () (process-get p :done)))))     ; the FIFO's EOF ends the mock
       (delete-process w) (delete-process p) (delete-directory dir t))))
 
 (ert-deftest drgnx-acp/the-mock-wrapper-carries-stdin-through-a-fifo-it-removes ()
   (let* ((tmp (make-temp-file "drgnx-mock-tmp" t)) (out "")
          (process-environment (cons (concat "TMPDIR=" tmp) process-environment))
          (p (make-process :name "wrapped" :command (list "sh" drgnx-acp-test--wrapper "sh" "-c" "exec cat \"$MOCK_ACP_IN\"")
-                          :connection-type 'pipe :noquery t :filter (lambda (_p s) (setq out (concat out s))))))
+                          :connection-type 'pipe :noquery t :filter (lambda (_p s) (setq out (concat out s)))
+                          :sentinel (lambda (p _e) (process-put p :done t)))))
     (unwind-protect
         (progn
           (process-send-string p "hello\n")
           (should (drgnx-acp-test--wait (lambda () (equal out "hello\n"))))
           (should-not (directory-files tmp nil "\\`[^.]"))           ; both ends open: the FIFO's name is gone
           (process-send-eof p)
-          (should (drgnx-acp-test--wait (lambda () (not (process-live-p p)))))
+          (should (drgnx-acp-test--wait (lambda () (process-get p :done))))
           (should (eql (process-exit-status p) 0)))
       (delete-process p) (delete-directory tmp t))))
 
@@ -129,11 +129,11 @@
          (survivors (lambda () (seq-filter (lambda (pid) (string-search marker (or (alist-get 'args (process-attributes pid)) "")))
                                            (list-system-processes))))
          (p (make-process :name "wrapped" :command (list "sh" drgnx-acp-test--wrapper "true" marker)
-                          :connection-type 'pipe :noquery t)))
+                          :connection-type 'pipe :noquery t :sentinel (lambda (p _e) (process-put p :done t)))))
     (unwind-protect
         (progn
           (process-send-string p "hi\n")
-          (should (drgnx-acp-test--wait (lambda () (not (process-live-p p)))))
+          (should (drgnx-acp-test--wait (lambda () (process-get p :done))))
           (should (drgnx-acp-test--wait (lambda () (and (null (funcall survivors)) (null (directory-files tmp nil "\\`[^.]")))) 5))
           (should-not (funcall survivors))
           (should-not (directory-files tmp nil "\\`[^.]")))

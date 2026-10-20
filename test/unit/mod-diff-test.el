@@ -3,6 +3,7 @@
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-diff" drgnx-dir) nil t)
 
 (defconst drgnx-diff-test--two-files
@@ -103,8 +104,7 @@ new file mode 100644
     (goto-char (prop-match-beginning m))))
 
 (defun drgnx-diff-test--wait (buf)
-  (let ((deadline (+ (float-time) 10)))
-    (while (and (buffer-local-value 'drgnx-diff--proc buf) (< (float-time) deadline)) (accept-process-output nil 0.05))))
+  (drgnx-test-wait (lambda () (not (buffer-local-value 'drgnx-diff--proc buf))) :what "the diff's git"))
 
 (ert-deftest drgnx-diff/parse-files-and-hunks ()
   (let ((files (drgnx-diff-parse drgnx-diff-test--two-files)))

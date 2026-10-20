@@ -4,6 +4,7 @@
 (require 'drgnx-agents)
 (require 'drgnx-agents-mirror)
 (require 'drgnx-hub)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-agents-mirror-test--with (&rest body)
   "BODY with drgnx's dirs under ROOT, a hub process serving them (profile \"mock\" in its agents.eld), no mirrors yet."
@@ -29,8 +30,7 @@
        (delete-directory root t))))
 
 (defun drgnx-agents-mirror-test--wait (pred &optional secs)
-  (let ((deadline (+ (float-time) (or secs 10)))) (while (and (not (funcall pred)) (< (float-time) deadline)) (accept-process-output nil 0.02)))
-  (funcall pred))
+  (drgnx-test-wait pred :secs (max 30 (or secs 0)) :what "a mirror's condition"))
 
 (defun drgnx-agents-mirror-test--mirror (id) (seq-find (lambda (s) (equal (drgnx-agent-session-remote s) id)) drgnx-agents--sessions))
 

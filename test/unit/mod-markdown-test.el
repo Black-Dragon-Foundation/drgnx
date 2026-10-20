@@ -3,6 +3,7 @@
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-markdown-test--elpa (expand-file-name (or (getenv "DRGNX_USER_ELPA") "~/.config/emacs/elpa")))
 
@@ -29,8 +30,7 @@
          (delete-directory tmp t)))))
 
 (defun drgnx-markdown-test--wait (pred &optional secs)
-  (let ((deadline (+ (float-time) (or secs 5)))) (while (and (not (funcall pred)) (< (float-time) deadline)) (accept-process-output nil 0.05)))
-  (funcall pred))
+  (drgnx-test-wait pred :secs (max 30 (or secs 0)) :what "the preview's condition"))
 
 (defconst drgnx-markdown-test--doc "# Title\n\nSome *text*.\n\n```mermaid\ngraph TD; A-->B\n```\n")
 

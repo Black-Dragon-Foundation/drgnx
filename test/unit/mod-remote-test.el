@@ -10,6 +10,7 @@
 (require 'python)
 (load (expand-file-name "test/fixtures/tramp-mock" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/lang/drgnx-lang" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-remote" drgnx-dir) nil t)
 (defvar drgnx-remote-test--answers nil "The answers `completing-read' gives, in order.")
@@ -69,11 +70,12 @@ choice of two nobody has."
          (delete-directory dir t)))))
 
 (defun drgnx-remote-test--lose (root)
-  "Kill the connection of ROOT, as a network drop would, and wait until Emacs sees it dead."
-  (let ((proc (tramp-get-connection-process (tramp-dissect-file-name root))))
+  "Kill the connection of ROOT, as a network drop would, and wait until Emacs sees it dead: its sentinel has run."
+  (let* ((proc (tramp-get-connection-process (tramp-dissect-file-name root)))
+         (sentinel (process-sentinel proc)) (done nil))
+    (set-process-sentinel proc (lambda (p event) (when sentinel (funcall sentinel p event)) (setq done t)))
     (kill-process proc)
-    (with-timeout (5 (error "the connection process did not die"))
-      (while (process-live-p proc) (accept-process-output nil 0.05)))))
+    (drgnx-test-wait (lambda () done) :what "the connection's sentinel")))
 
 (defun drgnx-remote-test--root (dir)
   "The mock-remote name of DIR's src/ folder, as TRAMP spells it once it knows the host."
@@ -578,11 +580,11 @@ choice of two nobody has."
                 (run-at-time 0.05 nil try)
                 (run-at-time 0.05 nil (lambda () (with-local-quit (funcall try))))
                 (let ((p (make-process :name "drgnx-test-filter" :command '("sh" "-c" "echo hi") :noquery t
-                                       :filter (lambda (_p _s) (funcall try)) :sentinel #'ignore)))
-                  (while (process-live-p p) (accept-process-output p 0.1)))
+                                       :filter (lambda (_p _s) (funcall try)) :sentinel (lambda (p _e) (process-put p :done t)))))
+                  (drgnx-test-wait (lambda () (process-get p :done)) :what "the filter's process"))
                 (let ((p (make-process :name "drgnx-test-sentinel" :command '("sh" "-c" "true") :noquery t
-                                       :sentinel (lambda (&rest _) (funcall try)))))
-                  (while (process-live-p p) (accept-process-output p 0.1)))
+                                       :sentinel (lambda (p _e) (unwind-protect (funcall try) (process-put p :done t))))))
+                  (drgnx-test-wait (lambda () (process-get p :done)) :what "the sentinel's process"))
                 (accept-process-output nil 0.4)
                 (should (equal results '(refused refused refused refused)))
                 (should (= connects 0))

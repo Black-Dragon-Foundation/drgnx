@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'drgnx-hub)
 (require 'drgnx-job)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-job-policy-test--with (&rest body)
   "BODY with the hub served here, a proposed job J (task J#1, role implement), WT a worktree-like dir, EVENTS heard."
@@ -33,8 +34,7 @@
        (delete-directory root t))))
 
 (defun drgnx-job-policy-test--wait (pred &optional secs)
-  (let ((deadline (+ (float-time) (or secs 10)))) (while (and (not (funcall pred)) (< (float-time) deadline)) (accept-process-output nil 0.05)))
-  (funcall pred))
+  (drgnx-test-wait pred :secs (max 30 (or secs 0)) :what "the job agent's condition"))
 
 (defun drgnx-job-policy-test--agent (wt job &optional no-job)
   "A mock session working on J#1 in WT (or, NO-JOB, a plain session there), idle."

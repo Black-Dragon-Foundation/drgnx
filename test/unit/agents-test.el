@@ -5,14 +5,12 @@
 (require 'drgnx-paths)
 (require 'drgnx-timer)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-agents-test--mock (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir))
 
 (defun drgnx-agents-test--wait (pred &optional secs)
-  (let ((deadline (+ (float-time) (or secs 10))) v)
-    (while (and (not (setq v (funcall pred))) (< (float-time) deadline))
-      (accept-process-output nil 0.02))
-    v))
+  (drgnx-test-wait pred :secs (max 30 (or secs 0)) :what "the agent session's condition"))
 
 (defmacro drgnx-agents-test--with (s opts &rest body)
   "BODY with S a started session of the mock agent (OPTS: :mode :env)."

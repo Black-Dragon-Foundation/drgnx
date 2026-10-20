@@ -7,6 +7,7 @@
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-diff" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-review" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-review-test--answer
   "I read the diff.\nFINDING: src/b.el:4: minor: a long name\nFINDING: src/a.el:12: critical: the loop never ends\nFINDING: src/a.el:3: major: unchecked nil\nVERDICT: fail")
@@ -37,10 +38,9 @@
   (drgnx-review--changed s))
 
 (defun drgnx-review-test--wait-head ()
-  "Wait for the background check of HEAD the tab starts."
-  (let ((deadline (+ (float-time) 10)) (run (gethash drgnx-review--current drgnx-review--runs)))
-    (while (and (process-live-p (plist-get run :checking)) (< (float-time) deadline)) (accept-process-output nil 0.05))
-    (accept-process-output nil 0.05)))
+  "Wait for the background check of HEAD the tab starts: its sentinel has run (it kills the output buffer)."
+  (let ((proc (plist-get (gethash drgnx-review--current drgnx-review--runs) :checking)))
+    (drgnx-test-wait (lambda () (not (and proc (buffer-live-p (process-buffer proc))))) :what "the HEAD check's sentinel")))
 
 (defun drgnx-review-test--tab () (with-current-buffer "*drgnx review*" (buffer-string)))
 
