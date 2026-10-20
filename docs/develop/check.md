@@ -166,6 +166,14 @@ file's base name, so it is the same whether the file runs in its own Emacs (the 
 gives the same order on any machine for the same test names; a test added or renamed changes the orders. It combines with `--leaks`, `--one-process` and a name selector.
 Technically the runner turns the selected tests into a `(member …)` selector — ERT keeps the order of that.
 
+**A name selector and the prefilter.** `DRGNX_TEST_SELECTOR='"^drgnx-foo/"'` (a Lisp string: an Emacs regexp, so `\|`
+for alternation, never `|`) starts an Emacs only for the test files that can hold a matching test. The runner reads each
+file's top-level forms, and the first argument of every form whose head ends in `deftest` (`ert-deftest`, a file's own
+`…--deftest` macro) is a test name; a file with a computed name is always kept. So a test must be defined by such a
+form with its full name spelt out: a macro that builds the name, or a `dolist` around `ert-deftest`, hides the test from
+a name selector. A full run (no selector) fails on each test its file's index lacks (`unindexed test NAME in FILE: the
+selector prefilter cannot see it`), and a string selector that matches no test fails the run (`DRGNX_TEST_SELECTOR … matched 0 tests`).
+
 **`--find-polluter TEST [FILE…]`** answers "which test before TEST makes it fail?". TEST is a test name; FILEs are test
 files or directories (none: the file under `test/unit` that defines TEST). The tests before TEST are those a one-Emacs
 run of the files would run first — name order, or the shuffled order when `--shuffle=SEED` comes first. It runs, each
