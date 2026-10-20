@@ -141,8 +141,9 @@ The data directory and the socket path follow Lisp's `drgnx-paths-dir 'data` and
 `expand-file-name` does it, oddities kept (`/a/../../b` is `/../b`, `//a` stays `//a`); `sha1` of the data directory
 (with its trailing `/`), cut to 8 hex digits, names `hub-HASH.sock`; it is under `$XDG_RUNTIME_DIR/drgnx/` when that is a
 directory, else under `<state>/hub/`; a path over 103 bytes goes to `<tmp>/drgnx-hub-UID/`, where `<tmp>` is the first
-of `TMPDIR`, `TMP`, `TEMP` that is set, else `/tmp` (Emacs's `temporary-file-directory`). A relative value is out of
-scope.
+of `TMPDIR`, `TMP`, `TEMP` that is set, else `/tmp`. Lisp reads those variables itself, not Emacs's
+`temporary-file-directory`: on macOS that starts as `getconf DARWIN_USER_TEMP_DIR` when none of the three is set, and a
+user can change it, so only the environment gives one answer on both sides. A relative value is out of scope.
 
 `test/fixtures/hub-socket-cases.json` holds cases `{env, data_dir, socket}` (`$UID` stands for the uid); the Lisp test
 `drgnx-hub-socket-cases/lisp-agrees-with-the-fixture` and the Rust test `paths::tests::socket_cases_fixture` both read

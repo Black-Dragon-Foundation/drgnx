@@ -144,7 +144,8 @@ fn state_dir(env: &Env) -> String {
     dir(env, None, "XDG_STATE_HOME", ".local/state")
 }
 
-/// Emacs's `temporary-file-directory` on Linux and macOS: the first of TMPDIR, TMP, TEMP that is set, else /tmp (a relative one is out of scope).
+/// The socket's temporary directory, as `drgnx-hub-socket` reads it from the environment (not Emacs's
+/// `temporary-file-directory`): the first of TMPDIR, TMP, TEMP that is set, else /tmp (a relative one is out of scope).
 fn temporary_file_directory(env: &Env) -> String {
     let t = ["TMPDIR", "TMP", "TEMP"]
         .iter()
