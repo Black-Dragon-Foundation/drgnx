@@ -247,7 +247,7 @@ owned) and torn down after (the watchers go, the memo empties)."
               ((symbol-function 'drgnx-tty-sendable-key)
                (lambda (_frame key) (if (equal key "C-S-p") "M-P" key))))
       (should (string-match-p "M-P commands" (drgnx-topline-test--text))))
-    (drgnx-topline--forget)
+    (drgnx-memo-forget 'topline)
     (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
               ((symbol-function 'drgnx-tty-sendable-key) (lambda (_frame _key) (error "not on a window"))))
       (should (string-match-p "C-S-p commands" (drgnx-topline-test--text))))))
