@@ -67,6 +67,22 @@ PLATFORM (`linux' or `macos'): only run on that platform, as `drgnx-platform' sa
     (error (error-message-string err))))
 
 (declare-function drgnx-pkg-status "drgnx-pkg")
+(declare-function drgnx-pkg-service-unit-file "drgnx-pkg")
+(declare-function drgnx-pkg--unit-exec-start "drgnx-pkg")
+(declare-function drgnx-file-read-bounded "drgnx-file")
+
+(defun drgnx-doctor--service-unit ()
+  "The facts of the `service-unit' check: nil (no unit file), (:file F :emacs E :drgnx BOOL) or (:error MESSAGE)."
+  (condition-case err
+      (progn
+        (require 'drgnx-pkg)
+        (let* ((file (drgnx-pkg-service-unit-file))
+               (text (drgnx-file-read-bounded file)))
+          (when text
+            (pcase (drgnx-pkg--unit-exec-start text)
+              (`(,_ ,emacs ,drgnx) (list :file file :emacs emacs :drgnx (and drgnx t)))
+              (_ (list :file file :emacs nil :drgnx nil))))))
+    (error (list :error (error-message-string err)))))
 
 (declare-function drgnx-work-db-file "drgnx-work-db")
 (declare-function drgnx-work-nodes "drgnx-work-db")
@@ -342,6 +358,8 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
     (append
      (list :version emacs-version
            :nidhogg (bound-and-true-p nidhogg-version)
+           :running-emacs (expand-file-name invocation-name invocation-directory)
+           :service-unit (drgnx-doctor--service-unit)
            :native-available native
            :native-compiles (if native (drgnx-doctor--native-compiles) "not built with native compilation")
            :treesit (and (fboundp 'treesit-available-p) (treesit-available-p))
@@ -534,6 +552,19 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
                                                      (abbreviate-file-name (drgnx-user-dir))
                                                      (directory-file-name (plist-get c :dir)))))
                                       (t (list 'ok "init/ has no local changes" nil))))))
+
+(drgnx-doctor-define 'service-unit :group "drgnx" :platform 'linux
+                     :doc "The systemd unit starts the Emacs drgnx uses"
+                     :check (lambda (f)
+                              (let ((u (plist-get f :service-unit)) (running (plist-get f :running-emacs)))
+                                (cond ((null u) nil)
+                                      ((plist-get u :error) (list 'info (format "could not check: %s" (plist-get u :error)) nil))
+                                      ((not (plist-get u :drgnx))
+                                       (list 'info (format "%s is not drgnx's daemon unit: left alone" (abbreviate-file-name (plist-get u :file))) nil))
+                                      ((equal (file-truename (plist-get u :emacs)) (file-truename running))
+                                       (list 'ok (format "drgnx.service runs %s" (plist-get u :emacs)) nil))
+                                      (t (list 'warn (format "drgnx.service starts %s, but drgnx uses %s" (plist-get u :emacs) running)
+                                               "drgnx service-unit --refresh, then: systemctl --user restart drgnx"))))))
 
 (drgnx-doctor-define 'job-sandbox :group "Agents"
                      :doc "Jobs' agents run in a sandbox: bubblewrap (bwrap) on Linux, sandbox-exec on macOS"

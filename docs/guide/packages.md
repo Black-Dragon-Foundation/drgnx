@@ -19,7 +19,7 @@ drgnx lock                  what the lock pins (version, and the archive or, for
 drgnx lock --ship           (maintainers) write the known-good lock drgnx ships from yours
 drgnx safe                  Emacs with drgnx's core only: no modules, no packages
 drgnx bisect [-- CMD…]      find the module that breaks something
-drgnx service-unit [DIR]    the systemd user unit for a drgnx daemon (printed, or written to DIR)
+drgnx service-unit [DIR | --refresh]    the systemd user unit for a drgnx daemon (printed, or written to DIR; `--refresh` updates the installed one)
 ```
 
 ## What gets installed
@@ -247,6 +247,16 @@ drgnx service-unit ~/.config/systemd/user
 systemctl --user daemon-reload
 systemctl --user start drgnx                     # emacsclient -s drgnx -c
 ```
+
+**The unit follows the Emacs drgnx uses.** The unit names its Emacs by full path, so after a change of Emacs (stock
+Emacs to Nidhogg, a rebuild elsewhere) an installed unit would keep starting the old one. `drgnx service-unit --refresh`
+rewrites only the `ExecStart=` line of `$XDG_CONFIG_HOME/systemd/user/drgnx.service` (default
+`~/.config/systemd/user/`) to the Emacs running the command, keeps every other line (your `Environment=` lines),
+runs `systemctl --user daemon-reload`, and prints the change (`drgnx.service ran OLD; now NEW …`). It never restarts the
+service: restart drgnx when it suits you (`systemctl --user restart drgnx`). A unit that is not drgnx's daemon line, or
+none at all, is left alone and said so. `drgnx update` does this after every run (also when already up to date; not on
+macOS); a failure there is reported and does not fail the update. `drgnx doctor` warns when the unit starts another
+Emacs than drgnx uses (`service-unit`).
 
 Once the unit is enabled, `drgnx open` and `drgnx PATH` start it when drgnx is not running ([opening.md](opening.md)).
 Give the unit the same `Environment=`/`PATH` as your current daemon's unit if it has some. Switching for good is

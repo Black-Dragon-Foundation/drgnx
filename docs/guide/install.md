@@ -311,7 +311,9 @@ It works in the install's own checkout (the folder the `drgnx` command runs from
    checkout goes back to the commit it was on, that commit's packages are synced again (from the cache first) and it is
    rebuilt, and the message says how far that got. The same happens if the update is interrupted (Ctrl-C, a timeout,
    logout) before it finished. Output of the steps is kept in `~/.local/state/drgnx/update/last.log`.
-5. Prints what changed (`old..new`, one line per commit, at most 15) and ends with "Restart drgnx to use it": it
+5. Points an installed `drgnx.service` at the Emacs drgnx uses now (`drgnx service-unit --refresh`; only the
+   `ExecStart=` line changes; see [packages.md](packages.md#running-drgnx-as-a-daemon)). It never restarts the service.
+6. Prints what changed (`old..new`, one line per commit, at most 15) and ends with "Restart drgnx to use it": it
    never restarts or talks to a running drgnx unless you pass `--restart` (below). Restart it soon: a running drgnx still has the old code in memory, and
    files it loads later come from the new version.
 

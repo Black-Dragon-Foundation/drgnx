@@ -28,6 +28,18 @@
 (ert-deftest drgnx-doctor/facts-name-nidhogg ()
   (should (equal (plist-get (drgnx-doctor-facts) :nidhogg) (bound-and-true-p nidhogg-version))))
 
+(ert-deftest drgnx-doctor/service-unit ()
+  (should-not (drgnx-doctor-check 'service-unit (drgnx-doctor-test--facts :service-unit nil)))
+  (should (eq 'warn (drgnx-doctor-test--status 'service-unit (drgnx-doctor-test--facts
+                                                              :service-unit '(:file "/u" :emacs "/old/emacs" :drgnx t) :running-emacs "/new/nidhogg"))))
+  (should (string-search "service-unit --refresh"
+                         (nth 2 (drgnx-doctor-check 'service-unit (drgnx-doctor-test--facts
+                                                                   :service-unit '(:file "/u" :emacs "/old/emacs" :drgnx t) :running-emacs "/new/nidhogg")))))
+  (should (eq 'ok (drgnx-doctor-test--status 'service-unit (drgnx-doctor-test--facts
+                                                            :service-unit (list :file "/u" :emacs (car command-line-args) :drgnx t) :running-emacs (car command-line-args)))))
+  (should (eq 'info (drgnx-doctor-test--status 'service-unit (drgnx-doctor-test--facts
+                                                              :service-unit '(:file "/u" :emacs "/usr/bin/emacs" :drgnx nil) :running-emacs "/new/nidhogg")))))
+
 (ert-deftest drgnx-doctor/native-compilation ()
   (should (eq (drgnx-doctor-test--status 'native-compilation (drgnx-doctor-test--facts)) 'ok))
   (let ((r (drgnx-doctor-check 'native-compilation
