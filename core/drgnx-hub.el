@@ -480,7 +480,7 @@ merge and writes) go out too: the hub's tick, every 2 s."
 
 (defun drgnx-hub--event-rows (since limit)
   "The events after id SINCE, oldest first, at most LIMIT, for JSON: (:id :at :agent :job :task :kind :summary :data),
-DATA the Lisp text the store holds (read it with `read-eval' off) — never read and printed again here."
+DATA the JSON text the store holds (schema 6's checked column) — never parsed and printed again here."
   (mapcar (pcase-lambda (`(,id ,at ,agent ,job ,task ,kind ,summary ,data))
             (list :id id :at at :agent agent :job job :task task :kind kind :summary summary :data data))
           (sqlite-select (drgnx-work-db) (format "select %s from event where id > ? order by id limit ?" drgnx-coord--event-cols)

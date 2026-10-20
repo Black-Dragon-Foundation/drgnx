@@ -162,12 +162,12 @@ Cached by modification time."
 
 (defun drgnx-cockpit--jobs ()
   "The jobs the model shows, newest first, with their tasks, dependencies and open ask cards — four queries, grouped
-here: (JOBS . (TASKS DEPS CARDS)), JOBS ((ID TITLE PLAN STATUS DATA)…) — DATA the job's data as text when it marks a
-task blocked (:blocked, task → reason), else nil — TASKS hash job → ((ID N TITLE STATUS AGENT)…) in order, DEPS
+here: (JOBS . (TASKS DEPS CARDS)), JOBS ((ID TITLE PLAN STATUS DATA)…) — DATA the job's `blocked' object as JSON text
+(task → reason) when it marks a task blocked, else nil — TASKS hash job → ((ID N TITLE STATUS AGENT)…) in order, DEPS
 hash task → (DEP…), CARDS ((ID JOB TASK TITLE AT)…).  A done job only with `drgnx-cockpit-include-closed-jobs'."
   (let* ((db (drgnx-work-db))
          (open (if drgnx-cockpit-include-closed-jobs "" " where j.status is not 'done'"))
-         (jobs (sqlite-select db (concat "select j.id, j.title, j.plan, j.status, case when instr(j.data, ':blocked (') > 0 then j.data end"
+         (jobs (sqlite-select db (concat "select j.id, j.title, j.plan, j.status, json_extract(j.data, '$.blocked')"
                                          " from job j" open " order by j.created desc, j.id")))
          (tasks (make-hash-table :test #'equal)) (deps (make-hash-table :test #'equal)))
     (pcase-dolist (`(,id ,job ,n ,title ,status ,agent)
@@ -183,8 +183,8 @@ hash task → (DEP…), CARDS ((ID JOB TASK TITLE AT)…).  A done job only with
                                     (if drgnx-cockpit-include-closed-jobs "" " and j.status is not 'done'")
                                     " order by c.id")))))
 
-(defconst drgnx-cockpit--life-sql "kind in ('start', 'stop') and coalesce(data, '') not like '(:turn t%'"
-  "The events of an agent's life: its start and stop — not a turn's (the hub's turn events lead with :turn t).")
+(defconst drgnx-cockpit--life-sql "kind in ('start', 'stop') and turn is null"
+  "The events of an agent's life: its start and stop — not a turn's (the hub's turn events have the `turn' column set).")
 
 (defun drgnx-cockpit--life ()
   "Hash agent → \"start\" or \"stop\", whichever of its life's events (`drgnx-cockpit--life-sql') came last."
@@ -248,7 +248,8 @@ never joined to a job's or a plan's.  QUESTIONS: the open questions, each with t
         (pcase-dolist (`(,jid ,jtitle ,planf ,jstatus ,jdata) (car jobs-data))
           (let* ((pid (and planf (concat "plan:" planf))) (jnode (concat "job:" jid))
                  ;; its tasks marked blocked (the Work graph's Mark Blocked): their own state while no agent works on them
-                 (blocked (and jdata (plist-get (let ((read-eval nil)) (ignore-errors (car (read-from-string jdata)))) :blocked))))
+                 (blocked (and jdata (condition-case nil (drgnx-records-decode '(alist string (or string boolean)) jdata)
+                                       (drgnx-records-invalid nil)))))
             ;; a plan the tracker never scanned: its headings, read only
             (when (and planf (not (gethash pid nodes)))
               (pcase (drgnx-cockpit--plan-file planf)
@@ -293,7 +294,7 @@ never joined to a job's or a plan's.  QUESTIONS: the open questions, each with t
                                       (select max(id) from event where kind = 'review' and task is not null group by task)"))
         (when-let* ((tn (gethash task jt-node)))
           (let* ((rid (concat "review:" task))
-                 (verdict (plist-get (and data (let ((read-eval nil)) (ignore-errors (car (read-from-string data))))) :verdict)))
+                 (verdict (plist-get (drgnx-work-db-decode 'drgnx-records-event-data data) :verdict)))
             (unless (gethash rid nodes)
               (add (drgnx-cockpit--node rid 'review (format "review of %s" task) :state (drgnx-cockpit--status (or verdict "reviewed"))
                                         :summary summary :job (plist-get (gethash tn nodes) :job))))
@@ -523,7 +524,7 @@ A turn's start and stop (the hub's, data :turn t) are left out: an agent's life 
   (let ((target (drgnx-cockpit--targeter)))
     (mapcar (lambda (e) (list :id (plist-get e :id) :at (plist-get e :at) :agent (plist-get e :agent) :kind (plist-get e :kind)
                               :label (drgnx-cockpit--label e) :target (funcall target e)))
-            (nreverse (drgnx-cockpit--events (concat "select %s from event where id > ? and not (kind in ('start', 'stop') and coalesce(data, '') like '(:turn t%%')"
+            (nreverse (drgnx-cockpit--events (concat "select %s from event where id > ? and not (kind in ('start', 'stop') and turn is not null)"
                                                      " order by id desc limit ?")
                                              (list (or since 0) drgnx-cockpit-timeline-limit))))))
 

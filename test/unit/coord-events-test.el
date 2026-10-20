@@ -35,7 +35,7 @@
             (sqlite-execute db "insert into meta values ('schema', '4')")
             (sqlite-close db))
           (copy-file (concat old "work.db") (concat new "work.db"))   ; migrate a copy, as a user's file would be
-          (should (= (drgnx-work-db-version) 5))
+          (should (= (drgnx-work-db-version) drgnx-work-db-schema-version))
           (dolist (tb '("event" "agent" "review_mark")) (should (member tb (drgnx-coord-events-test--tables))))
           (should (equal (caar (sqlite-select (drgnx-work-db) "select status from job where id = 'j'")) "running"))
           (should (equal (caar (sqlite-select (drgnx-work-db) "select title from card")) "Q?"))
@@ -43,7 +43,7 @@
           ;; idempotent: the version row lost (a migration cut short), every step runs again over its own tables
           (sqlite-execute (drgnx-work-db) "update meta set value = '4' where key = 'schema'")
           (drgnx-work-db-close-all)
-          (should (= (drgnx-work-db-version) 5))
+          (should (= (drgnx-work-db-version) drgnx-work-db-schema-version))
           (should (equal (caar (sqlite-select (drgnx-work-db) "select title from card")) "Q?")))
       (drgnx-work-db-close-all)
       (delete-directory dir t))))
@@ -228,9 +228,11 @@
 
 (ert-deftest drgnx-coord-events/data-is-small-readable-data ()
   (drgnx-coord-events-test--with
-    ;; accepted: strings, numbers, symbols, lists of those
-    (let ((id (drgnx-coord-event-add :agent "a" :kind "edit" :summary "x" :data '(:path "x.el" :hash "h" :added 3 :removed 1 :tags (a "b" 2)))))
-      (should (equal (plist-get (car (drgnx-coord-events :since (1- id))) :data) '(:path "x.el" :hash "h" :added 3 :removed 1 :tags (a "b" 2)))))
+    ;; accepted: strings, numbers, t, lists of those, nested plists
+    (let ((id (drgnx-coord-event-add :agent "a" :kind "edit" :summary "x" :data '(:path "x.el" :hash "h" :added 3 :removed 1 :tags ("a" "b" 2)))))
+      (should (equal (plist-get (car (drgnx-coord-events :since (1- id))) :data) '(:path "x.el" :hash "h" :added 3 :removed 1 :tags ("a" "b" 2)))))
+    ;; a symbol no schema covers is refused, so is one in a list
+    (should-error (drgnx-coord-event-add :agent "a" :kind "edit" :summary "x" :data '(:tags (a "b"))))
     ;; refused: a buffer, a function, an odd plist, a non-plist, nested non-data
     (with-temp-buffer
       (should-error (drgnx-coord-event-add :agent "a" :kind "edit" :summary "x" :data (list :buf (current-buffer)))))
@@ -247,15 +249,16 @@
       (should (eq (plist-get data :truncated) t))
       (should (> (plist-get data :size) 4096))
       (should-not (plist-member data :contents)))
-    ;; a very long list is cut by print-length before it is measured
+    ;; a very long list is bounded too: the stored text is never longer than the limit
     (let* ((id (drgnx-coord-event-add :agent "a" :kind "edit" :summary "x" :data (list :l (number-sequence 1 5000))))
            (stored (caar (sqlite-select (drgnx-work-db) "select data from event where id = ?" (list id)))))
-      (should (<= (length stored) 4096)))
-    ;; and the stored text is read with read-eval off, whatever a caller bound
-    (let ((seen :unset) (orig (symbol-function 'read-from-string)))
-      (cl-letf (((symbol-function 'read-from-string) (lambda (&rest args) (setq seen read-eval) (apply orig args))))
-        (let ((read-eval t)) (drgnx-coord-events :kinds '("edit"))))
-      (should (null seen)))))
+      (should (<= (length stored) 4096))
+      (should (equal (drgnx-records-decode 'drgnx-records-event-data stored) (list :truncated t :size (plist-get (plist-get (car (drgnx-coord-events :since (1- id))) :data) :size)))))
+    ;; and reading never calls `read'
+    (let ((reads 0) (orig (symbol-function 'read-from-string)))
+      (cl-letf (((symbol-function 'read-from-string) (lambda (&rest args) (cl-incf reads) (apply orig args))))
+        (drgnx-coord-events :kinds '("edit")))
+      (should (zerop reads)))))
 
 (ert-deftest drgnx-coord-events/prune-forgets-old-events-but-never-questions-answers-or-decisions ()
   (drgnx-coord-events-test--with
@@ -294,7 +297,7 @@
 
 (ert-deftest drgnx-coord-events/deep-data-reads-back-whole ()
   (drgnx-coord-events-test--with
-    (let* ((deep '(:a (1 (2 (3 (4 (5 (6 (7 (8 "deep"))))))))))
+    (let* ((deep '(:a (:b (:c (:d (:e (:f (:g (:h "deep")))))))))
            (id (drgnx-coord-event-add :agent "a" :kind "edit" :summary "x" :data deep)))
       (should (equal (plist-get (car (drgnx-coord-events :since (1- id))) :data) deep)))))
 

@@ -331,11 +331,11 @@ its hello changes nothing of it, runs no git, and answers the hub's values."
   (append (list :root root :paths paths) (and (> more 0) (list :more more))))
 
 (defun drgnx-coord-mcp--fitting (root paths)
-  "The first of PATHS that an edit event's data keeps whole: printed as C1 prints it (`drgnx-coord--data-print': at
-most 100 elements of a list), within `drgnx-coord--data-max' characters."
+  "The first of PATHS (at most 100) that an edit event's data keeps whole: as JSON (`drgnx-coord--data-print'),
+within `drgnx-coord--data-max' characters."
   (let ((kept (seq-take paths 100)))
-    (while (and kept (> (length (let ((print-length 100) (print-level 6) (print-escape-newlines t))
-                                  (prin1-to-string (drgnx-coord-mcp--edit-data root kept (- (length paths) (length kept))))))
+    (while (and kept (> (length (drgnx-records-encode 'drgnx-records-event-data
+                                                      (drgnx-coord-mcp--edit-data root kept (- (length paths) (length kept)))))
                         drgnx-coord--data-max))
       (setq kept (butlast kept)))
     kept))

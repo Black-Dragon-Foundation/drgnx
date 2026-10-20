@@ -5,6 +5,7 @@
 ;; protocol", "age writes it", "a developer tool" or "Lisp source".
 (
  (:file "core/drgnx-bootstrap.el" :fn drgnx-bootstrap--git-clone :what rename-file :why "a directory move: a fresh clone renamed into the empty config dir" :until never)
+ (:file "core/drgnx-work-db.el" :fn drgnx-work-db--keep-schema-5 :what rename-file :why "a directory move: the schema-5 copy built as work.db.schema5.tmp, then renamed" :until never)
  (:file "core/drgnx-fmt.el" :fn drgnx-fmt--learn :what read-site :why "a user's file: Lisp source read to learn indentation" :until never)
  (:file "core/drgnx-fmt.el" :fn drgnx-fmt-file :what write-region :why "a user's file: bin/drgnx fmt rewrites source" :until never)
  (:file "core/drgnx-gateway.el" :fn drgnx-gateway--write-body :what write-region :why "a temporary file: a request body for curl" :until never)
