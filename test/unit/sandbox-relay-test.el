@@ -9,9 +9,11 @@
 (defvar drgnx-sandbox-relay-test--conns nil "The connections the fake upstream accepted, newest first.")
 
 (defun drgnx-sandbox-relay-test--upstream (sock &optional greeting)
-  "A fake upstream on SOCK: it sends GREETING (if any) on each connection, then echoes every byte it receives."
+  "A fake upstream on SOCK: it sends GREETING (if any) on each connection, then echoes every byte it receives.  Its
+listen queue holds every connection a test makes before this Emacs accepts one: on macOS a Unix socket's connect is
+refused once the queue (Emacs's default, 5) is full, where Linux waits."
   (make-network-process
-   :name "fake-upstream" :family 'local :server t :service sock :noquery t :coding 'binary
+   :name "fake-upstream" :family 'local :server 32 :service sock :noquery t :coding 'binary
    :log (lambda (_server conn _msg)
           (push conn drgnx-sandbox-relay-test--conns)
           (when greeting (process-send-string conn greeting)))

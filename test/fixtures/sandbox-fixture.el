@@ -4,7 +4,8 @@
 ;;   - a HOME with canaries of random text (~/.ssh/id_canary, ~/other-repo/secret) and an agents.eld;
 ;;   - a runtime dir with an Emacs server, a D-Bus `bus' and an ssh-agent socket (`SSH_AUTH_SOCK'), each a listener that
 ;;     records every connection, and the environment variables that name them;
-;;   - an abstract socket @drgnx-test-RAND and a TCP listener on the host's 127.0.0.1, the same;
+;;   - an abstract socket @drgnx-test-RAND (Linux only: other systems have no abstract sockets) and a TCP listener on
+;;     the host's 127.0.0.1, the same;
 ;;   - a repository with a tracked file changed and not committed, an untracked .env, a remote URL holding a token, a
 ;;     branch job/fixture, a linked worktree (the task's folder), another task's folder and a standalone repository
 ;;     (the agent's own copy of a .git);
@@ -30,7 +31,8 @@
 (defvar drgnx-sandbox-fixture-own nil "A standalone repository, as the agent's own copy of a .git would be.")
 (defvar drgnx-sandbox-fixture-cards nil "The two open cards' ids: (WITH-HELLO . WITHOUT-HELLO).")
 (defvar drgnx-sandbox-fixture-probe-env nil "The MOCK_PROBE_* environment, a list of \"NAME=VALUE\" strings.")
-(defvar drgnx-sandbox-fixture-abstract nil "The abstract socket's name, @drgnx-test-RAND.")
+(defvar drgnx-sandbox-fixture-abstract nil
+  "The abstract socket's name, @drgnx-test-RAND; nil off Linux, where there are no abstract sockets.")
 (defvar drgnx-sandbox-fixture-loopback nil "The TCP listener's \"127.0.0.1:PORT\".")
 (defvar drgnx-sandbox-fixture--canaries nil)
 (defvar drgnx-sandbox-fixture--listeners nil "The listening processes.")
@@ -124,7 +126,8 @@
          (home (concat root "home")) (run (concat root "run"))
          (drgnx-sandbox-fixture-root root) (drgnx-sandbox-fixture-home home) (drgnx-sandbox-fixture-run run)
          (drgnx-sandbox-fixture--canaries nil) (drgnx-sandbox-fixture--listeners nil) (drgnx-sandbox-fixture--connections nil)
-         (drgnx-sandbox-fixture-abstract (format "@drgnx-test-%s" (substring (drgnx-sandbox-fixture--random) 0 12)))
+         (drgnx-sandbox-fixture-abstract (and (eq system-type 'gnu/linux)
+                                              (format "@drgnx-test-%s" (substring (drgnx-sandbox-fixture--random) 0 12))))
          (drgnx-sandbox-fixture-loopback nil) (drgnx-sandbox-fixture-repo nil) (drgnx-sandbox-fixture-folder nil)
          (drgnx-sandbox-fixture-own nil) (drgnx-sandbox-fixture-cards nil) (drgnx-sandbox-fixture-probe-env nil)
          (api-key (drgnx-sandbox-fixture--canary))
@@ -155,7 +158,9 @@
             (drgnx-sandbox-fixture--listen "emacs-server" :family 'local :service (concat run "/emacs/server"))
             (drgnx-sandbox-fixture--listen "bus" :family 'local :service (concat run "/bus"))
             (drgnx-sandbox-fixture--listen "ssh-agent" :family 'local :service (concat run "/ssh-agent.sock"))
-            (drgnx-sandbox-fixture--listen "abstract" :family 'local :service (concat "\0" (substring drgnx-sandbox-fixture-abstract 1)))
+            (when drgnx-sandbox-fixture-abstract
+              (drgnx-sandbox-fixture--listen "abstract" :family 'local
+                                             :service (concat "\0" (substring drgnx-sandbox-fixture-abstract 1))))
             (let ((tcp (drgnx-sandbox-fixture--listen "loopback" :family 'ipv4 :host "127.0.0.1" :service t)))
               (setq drgnx-sandbox-fixture-loopback (format "127.0.0.1:%d" (aref (process-contact tcp :local) 4))))
             (drgnx-hub-serve (drgnx-hub-socket))
@@ -164,8 +169,8 @@
                   (cons (drgnx-coord-card-create :job "fixture" :kind "probe" :title "A card the agent must not answer")
                         (drgnx-coord-card-create :job "fixture" :kind "probe" :title "A second one, for the call without hello")))
             (setq drgnx-sandbox-fixture-probe-env
-                  (mapcar
-                   (lambda (kv) (concat "MOCK_PROBE_" (car kv) "=" (cdr kv)))
+                  (cl-loop
+                   for kv in
                    `(("HUB_SOCKET" . ,(drgnx-hub-socket))
                      ("HUB_CAP" . ,(concat (file-name-sans-extension (drgnx-hub-socket)) ".cap"))
                      ("CARD" . ,(format "%s" (car drgnx-sandbox-fixture-cards)))
@@ -183,7 +188,8 @@
                      ("OTHER_TASK" . ,(cdr (assq :other-task paths)))
                      ("NESTED" . ,(concat drgnx-sandbox-fixture-folder "/sub"))
                      ("OWN_GIT" . ,(concat drgnx-sandbox-fixture-own "/.git"))
-                     ("FSMONITOR_CANARY" . ,(concat root "fsmonitor-canary"))))))
+                     ("FSMONITOR_CANARY" . ,(concat root "fsmonitor-canary")))
+                   when (cdr kv) collect (concat "MOCK_PROBE_" (car kv) "=" (cdr kv)))))   ; no abstract socket off Linux
           (funcall body))
       (dolist (p drgnx-sandbox-fixture--listeners) (ignore-errors (delete-process p)))
       (dolist (p (process-list)) (when (string-prefix-p "fixture-" (process-name p)) (ignore-errors (delete-process p))))

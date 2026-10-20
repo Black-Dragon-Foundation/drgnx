@@ -439,18 +439,23 @@ as a program only root can change (`drgnx-sandbox-program')."
 (defun drgnx-sandbox-wrap (spec command)
   "The command line that runs COMMAND (a list) inside SPEC, for SPEC's `:backend' or else `drgnx-sandbox-backend':
 `drgnx-sandbox-bwrap-argv' on Linux; on macOS, sandbox-exec with SPEC's profile (`drgnx-sandbox-sbpl') written to
-its `:profile-file'.  The memory cap's scope (`drgnx-sandbox-memory-prefix') comes first, where there is one.  Signals
+its `:profile-file' (-f FILE), or given on the command line (-p PROFILE) when SPEC has none, as a short step's does.
+Seatbelt sets neither `:env' nor `:chdir': the caller starts the command with them (`drgnx-sandbox-run' does).
+The memory cap's scope (`drgnx-sandbox-memory-prefix') comes first, where there is one.  Signals
 `drgnx-sandbox-refused' when SPEC is refused or there is no sandbox: never the command as it was."
   (let ((argv (pcase (or (plist-get spec :backend) (drgnx-sandbox-backend))
                 ('bwrap (drgnx-sandbox-bwrap-argv spec command))
                 ('seatbelt
                  (drgnx-sandbox--assert spec command)
                  (let ((file (plist-get spec :profile-file)) (exe (drgnx-sandbox-program "sandbox-exec")))
-                   (unless file (signal 'drgnx-sandbox-refused (list "no :profile-file for the Seatbelt profile")))
                    (unless exe (signal 'drgnx-sandbox-refused (list "no sandbox-exec that only root can change")))
                    (unless (fboundp 'drgnx-sandbox-sbpl) (require 'drgnx-sandbox-macos))
-                   (drgnx-sandbox--write-private file (drgnx-sandbox-sbpl spec))
-                   (append (list exe "-f" file) command)))
+                   (let ((profile (drgnx-sandbox-sbpl spec)))
+                     (if (not file)
+                         ;; a short step of the hub's has no session dir to write it in: on the command line
+                         (append (list exe "-p" profile) command)
+                       (drgnx-sandbox--write-private file profile)
+                       (append (list exe "-f" file) command)))))
                 (_ (signal 'drgnx-sandbox-refused
                            (list "no sandbox on this system (Linux: install bubblewrap; macOS: sandbox-exec)"))))))
     (append (drgnx-sandbox-memory-prefix spec) argv)))
@@ -471,12 +476,12 @@ Signals `drgnx-sandbox-refused' when `:memory-max' is not a size (`drgnx-sandbox
 
 (defvar drgnx-job-git-timeout)
 
-(defun drgnx-sandbox--spawn (name argv timeout done)
-  "Run ARGV as process NAME, started in /, stdin closed, never waiting for it.  DONE gets (EXIT . OUTPUT) once it
-ended — OUTPUT is its stdout and stderr together, trimmed — or (:timeout . \"did not finish in TIMEOUT s\") when it
-ran past TIMEOUT seconds and was ended.  The process; signals when it cannot start, leaving nothing behind."
+(defun drgnx-sandbox--spawn (name argv timeout done &optional dir)
+  "Run ARGV as process NAME, started in DIR (default /), stdin closed, never waiting for it.  DONE gets (EXIT . OUTPUT)
+once it ended — OUTPUT is its stdout and stderr together, trimmed — or (:timeout . \"did not finish in TIMEOUT s\")
+when it ran past TIMEOUT seconds and was ended.  The process; signals when it cannot start, leaving nothing behind."
   (let* ((out (generate-new-buffer (format " *%s*" name) t))
-         (default-directory "/")
+         (default-directory (if dir (file-name-as-directory dir) "/"))
          (timer nil)
          (p (condition-case e
                 (make-process
@@ -500,11 +505,18 @@ ran past TIMEOUT seconds and was ended.  The process; signals when it cannot sta
 short step of the hub's, such as a checkout or a bundle.  It never blocks.  DONE gets (EXIT . OUTPUT), stdout and
 stderr together, trimmed; or (:timeout . MSG) when it ran past TIMEOUT seconds (default `drgnx-job-git-timeout') and
 was ended.  Returns the process.  Signals `drgnx-sandbox-refused' when SPEC is refused or there is no sandbox:
-nothing runs then."
-  (let ((timeout (or timeout (bound-and-true-p drgnx-job-git-timeout) 300)))
-    (drgnx-sandbox--spawn "drgnx-sandbox-step" (drgnx-sandbox-wrap spec argv) timeout
+nothing runs then.  On Seatbelt, which sets neither, the step starts in SPEC's `:chdir' with its `:env' alone: never
+the hub's environment."
+  (let* ((timeout (or timeout (bound-and-true-p drgnx-job-git-timeout) 300))
+         (wrapped (drgnx-sandbox-wrap spec argv))
+         (seatbelt (eq (or (plist-get spec :backend) (drgnx-sandbox-backend)) 'seatbelt))
+         (process-environment (if seatbelt
+                                  (cl-loop for (name . value) in (plist-get spec :env) collect (concat name "=" value))
+                                process-environment)))
+    (drgnx-sandbox--spawn "drgnx-sandbox-step" wrapped timeout
                           (lambda (r)
-                            (funcall done (if (eq (car r) :timeout) (cons :timeout (concat "the sandboxed step " (cdr r))) r))))))
+                            (funcall done (if (eq (car r) :timeout) (cons :timeout (concat "the sandboxed step " (cdr r))) r)))
+                          (and seatbelt (plist-get spec :chdir)))))
 
 ;;;; The check
 

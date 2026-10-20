@@ -495,8 +495,13 @@ a refused spec writes nothing."
         (setq seen nil)
         (should-error (drgnx-sandbox-wrap spec '("agent")) :type 'drgnx-sandbox-refused)
         (should (equal (with-temp-buffer (insert-file-contents target) (buffer-string)) "keep"))
-        (dolist (spec (list (drgnx-sandbox-spec :backend 'seatbelt :write (list folder))
-                            (drgnx-sandbox-spec :backend 'seatbelt :profile-file (concat folder "/p.sb"))
+        ;; no `:profile-file' (a short step of the hub's, which has no session): the profile on the command line
+        (let ((step (drgnx-sandbox-spec :backend 'seatbelt :write (list folder))))
+          (should (equal (drgnx-sandbox-wrap step '("git" "status"))
+                         (list "/usr/bin/sandbox-exec" "-p" "(version 1)\n(deny default)\n" "git" "status")))
+          (should (eq seen step)))
+        (setq seen nil)
+        (dolist (spec (list (drgnx-sandbox-spec :backend 'seatbelt :profile-file (concat folder "/p.sb"))
                             (drgnx-sandbox-spec :backend 'seatbelt :write (list home) :profile-file file)))
           (should-error (drgnx-sandbox-wrap spec '("agent")) :type 'drgnx-sandbox-refused))
         (should-not seen)
@@ -858,7 +863,7 @@ answer is not kept."
         (should (member "MemoryMax=3G" (drgnx-sandbox-memory-prefix (drgnx-sandbox-spec)))))
       (should-not (drgnx-sandbox-memory-prefix (drgnx-sandbox-spec :memory-max nil)))
       ;; `drgnx-sandbox-wrap' puts it first
-      (let ((spec (drgnx-sandbox-spec :write (list folder) :memory-max "2G")))
+      (let ((spec (drgnx-sandbox-spec :backend 'bwrap :write (list folder) :memory-max "2G")))
         (should (equal (drgnx-sandbox-wrap spec '("a"))
                        (append (drgnx-sandbox-memory-prefix spec) (drgnx-sandbox-bwrap-argv spec '("a"))))))
       ;; a size and nothing else, whoever asks
@@ -896,6 +901,24 @@ timeout it is ended and DONE gets (:timeout . MSG); a refused spec signals and s
           (should-error (drgnx-sandbox-run (drgnx-sandbox-spec :write (list home)) '("true") #'ignore)
                         :type 'drgnx-sandbox-refused)
           (should (= (length (process-list)) before)))))))
+
+(ert-deftest drgnx-sandbox/seatbelt-step-has-the-spec-env-and-dir ()
+  "Seatbelt has no --clearenv nor --chdir: a short step there starts in the spec's `:chdir' with its `:env' alone,
+never the hub's environment (its sockets, its HOME, its git config)."
+  (drgnx-sandbox-test--with
+    (drgnx-sandbox-test--quiet
+      (let ((r nil) (process-environment (cons "DRGNX_SANDBOX_TEST_LEAK=hub" process-environment)))
+        (cl-letf (((symbol-function 'drgnx-sandbox-wrap) (lambda (_spec argv) (cons "/bin/sh" (cons "-c" argv)))))
+          (drgnx-sandbox-run (drgnx-sandbox-spec :backend 'seatbelt :write (list folder) :chdir folder
+                                                 :env '(("HOME" . "/nonexistent") ("STEP" . "yes")))
+                             '("pwd; env") (lambda (x) (setq r x))))
+        (should (drgnx-sandbox-test--wait (lambda () r)))
+        (ert-info ((format "%S" r))
+          (should (eql (car r) 0))
+          (should (equal (car (split-string (cdr r) "\n")) folder))
+          (should (string-match-p "^STEP=yes$" (cdr r)))
+          (should (string-match-p "^HOME=/nonexistent$" (cdr r)))
+          (should-not (string-match-p "DRGNX_SANDBOX_TEST_LEAK\\|SSH_AUTH_SOCK\\|XDG_RUNTIME_DIR" (cdr r))))))))
 
 (ert-deftest drgnx-sandbox/wrapped-cat-cannot-read-the-canary ()
   "Under the real sandbox, a step given only the task folder cannot read a key in ~/.ssh nor list the runtime dir.

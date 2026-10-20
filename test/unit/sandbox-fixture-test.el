@@ -11,10 +11,11 @@
 (load (expand-file-name "test/fixtures/sandbox-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-sandbox-fixture-test--probes
-  '("hub-socket" "hub-card" "hub-card-no-hello" "work-db" "coord-forged" "git-config" "git-hooks" "git-ref-main"
+  `("hub-socket" "hub-card" "hub-card-no-hello" "work-db" "coord-forged" "git-config" "git-hooks" "git-ref-main"
     "git-ref-job" "git-pointer" "git-objects-delete" "dot-env" "dirty-file" "emacs-server" "bus" "ssh-agent"
-    "abstract-socket" "host-loopback" "ssh-key" "other-repo" "other-task" "env" "nested-git" "fsmonitor-plant")
-  "Every probe that takes no argument.")
+    ,@(and (eq system-type 'gnu/linux) '("abstract-socket"))   ; abstract sockets are Linux's alone
+    "host-loopback" "ssh-key" "other-repo" "other-task" "env" "nested-git" "fsmonitor-plant")
+  "Every probe that takes no argument (and has a target on this system).")
 
 (defun drgnx-sandbox-fixture-test--wait (pred &optional secs)
   (let ((deadline (+ (float-time) (or secs 60))) v)
@@ -55,7 +56,7 @@
                       (should (string-match-p (format "\\`probe %s: reached\\(?: (.*)\\)?\\'" name) line)))))
       ;; and each left its trace
       (let ((c (drgnx-sandbox-fixture-connections)))
-        (dolist (name '("emacs-server" "bus" "ssh-agent" "abstract"))
+        (dolist (name `("emacs-server" "bus" "ssh-agent" ,@(and (eq system-type 'gnu/linux) '("abstract"))))
           (ert-info (name) (should (= 1 (cdr (assoc name c))))))
         (should (>= (cdr (assoc "loopback" c)) 2)))                        ; host-loopback, and connect without a proxy
       (dolist (card (list (car drgnx-sandbox-fixture-cards) (cdr drgnx-sandbox-fixture-cards)))
