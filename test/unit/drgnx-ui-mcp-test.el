@@ -8,10 +8,14 @@
 (defmacro drgnx-ui-mcp-test--with-state (&rest body)
   (declare (indent 0))
   `(let* ((root (make-temp-file "drgnx-mcp-state" t))
+          ;; the sockets' base is short, as a real runtime dir is: under the run's temp dir a session's socket
+          ;; path passes macOS's 104 bytes (/private/tmp/drgnx-t-X/drgnx-run.X/ is 45 of them)
+          (runtime (make-temp-file "/tmp/drgnx-xdg" t))
           (process-environment (append (list (concat "DRGNX_UI_STATE=" root)
-                                             (concat "XDG_RUNTIME_DIR=" root))
+                                             (concat "XDG_RUNTIME_DIR=" runtime))
                                        process-environment)))
-     (unwind-protect (progn ,@body) (delete-directory root t))))
+     (set-file-modes runtime #o700)
+     (unwind-protect (progn ,@body) (delete-directory runtime t) (delete-directory root t))))
 
 (defun drgnx-ui-mcp-test--call (name args)
   (plist-get (drgnx-ui-mcp-handle (list :jsonrpc "2.0" :id 1 :method "tools/call"
