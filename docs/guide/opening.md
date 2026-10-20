@@ -43,6 +43,11 @@ A **folder** becomes the Explorer's first folder (the others stay) and the Explo
 open as a directory listing. A **file** opens in the editor. drgnx started by hand as a normal Emacs (not a daemon) answers
 `drgnx PATH` too, as long as no other drgnx does.
 
+A **file that is already open** and changed on disk since (a program or an agent wrote it) never makes `drgnx open`
+ask "Revert buffer from file …?": the buffer is reloaded from the file. If it has unsaved changes, it is left as it
+is (never reloaded behind your back, nothing asked) and the echo area says so: "a.txt changed on disk; its buffer
+has unsaved changes and is left as it is". Saving it later asks, as Emacs does for a file that changed under you.
+
 A **large file** (above 50 MiB) never makes `drgnx open BIG`, `drgnx BIG` or `drgnx -t BIG` ask: it opens in
 chunks (or in the mode you chose for it before), with a header line that switches it to the whole file in one click.
 `drgnx open --wait BIG` opens the whole file, lean, without asking; a file already open in chunks is edited in
@@ -207,7 +212,15 @@ a timer, [ai.md](ai.md#keys)), sends files as file arguments and each folder as
 `(drgnx-session-open-folder "…")`. Every call but `--wait`'s file call has `-n` (no waiting); with no display,
 `--wait` is just `emacsclient -t -- FILE…`. In drgnx's terminal (`INSIDE_EMACS` names eat and `DRGNX_SERVER_NAME`
 is set: the terminal's Emacs's socket) none of that runs: the files and folders go straight to that server, with
-neither `-c` nor `-t`, so they open in its selected frame. The daemon starts detached (`setsid`, else `perl` on macOS) as
+neither `-c` nor `-t`, so they open in its selected frame. `drgnx -t` sends each file as
+`(drgnx-session-open-file "…")`. Emacs asks in the server's process filter about an open buffer whose file changed
+(`server-visit-files` reverts it with `(revert-buffer t nil)`; `find-file` asks "Reread from disk?"), so an advice
+on `server-visit-files`, put there when `core/drgnx-session.el` loads, and `drgnx-session-open-file` run the visit
+through `drgnx-session-open-unasked`: it first runs `drgnx-session-before-open-functions` with the files (the
+large-files module reopens a file that grew large there, [large-files.md](large-files.md)), then reverts each
+unmodified changed buffer with `(revert-buffer t t)` (only safe local variables), and makes a modified one's record
+of the file's time current while the visit runs, then puts it back and says so. A file that is gone is left to
+Emacs. The daemon starts detached (`setsid`, else `perl` on macOS) as
 `emacs --bg-daemon=drgnx --init-directory=<checkout>/init`. The close button's `delete-frame` event and Close Window
 run `drgnx-session-close-frame`, as do `C-x C-c` and `C-x 5 0` (`drgnx-session-kill-terminal`,
 `drgnx-session-delete-frame`: remaps of the stock commands); Quit drgnx runs `drgnx-session-quit`. An `emacsclient -c` frame does not print Emacs's "When done with a buffer, type C-x 5 0"

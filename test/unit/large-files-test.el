@@ -360,7 +360,8 @@ Each question is pushed onto `drgnx-large-files-test--asked' as (PROMPT CHOICES 
 (defun drgnx-large-files-test--serve (files nowait commands)
   "Run `server-execute' as the server's process filter does, for a fake client: FILES ((NAME) …), NOWAIT,
 COMMANDS (functions, as -eval forms are run).  `this-command' is some earlier command, as it may be in a filter.
-Return the errors it sent the client."
+The core's advice on `server-visit-files' (`drgnx-session--visit-unasked') is on, as in drgnx.  Return the errors it
+sent the client."
   (let ((proc (make-pipe-process :name "drgnx-lf-test-client" :noquery t))
         (errors nil)
         (this-command 'find-file)
@@ -449,6 +450,60 @@ Return the errors it sent the client."
         (should (= (buffer-size) (+ 32768 7)))
         (should-not (verify-visited-file-modtime b)))     ; still stale: saving it asks, as a command may
       (should (member "big.log changed on disk; its buffer has unsaved changes and is left as it is" said)))))
+
+(ert-deftest drgnx-large-files/drgnx-open-reverts-a-changed-normal-buffer-unasked ()
+  ;; below `:ask-above' the module changes nothing: the core reverts it unasked, and it stays normal
+  (drgnx-large-files-test--door
+    (let* ((f (drgnx-large-files-test--file "small.log" 4096))
+           (b (find-file-noselect f)))
+      (drgnx-large-files-test--grow f 8192)
+      (drgnx-large-files-test--never-asks
+        (let ((revert-buffer-internal-hook nil))
+          (should-not (drgnx-large-files-test--serve (list (list f)) t nil))))
+      (should (eq (get-file-buffer f) b))
+      (should (= (buffer-size b) 8192))
+      (should-not (buffer-local-value 'drgnx-large-file b)))))
+
+(ert-deftest drgnx-large-files/drgnx-open-leaves-a-modified-normal-buffer-that-grew-large ()
+  ;; unsaved changes: never reopened, reverted or asked about, even past `:ask-above'
+  (drgnx-large-files-test--door
+    (let* ((f (drgnx-large-files-test--file "small.log" 4096))
+           (b (find-file-noselect f))
+           (said nil))
+      (with-current-buffer b (goto-char (point-min)) (insert "unsaved"))
+      (drgnx-large-files-test--grow f 32768)
+      (cl-letf* ((orig (symbol-function 'message))
+                 ((symbol-function 'message)
+                  (lambda (fmt &rest args) (when fmt (push (apply #'format fmt args) said)) (apply orig fmt args))))
+        (drgnx-large-files-test--never-asks
+          (should-not (drgnx-large-files-test--serve (list (list f)) t nil))))
+      (should (eq (get-file-buffer f) b))
+      (with-current-buffer b
+        (should (buffer-modified-p))
+        (should (= (buffer-size) (+ 4096 7)))
+        (should-not drgnx-large-file))
+      (should (member "small.log changed on disk; its buffer has unsaved changes and is left as it is" said)))))
+
+(ert-deftest drgnx-large-files/drgnx-open-reopens-a-normal-buffer-that-grew-large-unasked ()
+  ;; a normal buffer whose file grew past `:ask-above' goes through the door again, as an automatic open: raw here
+  ;; (chunks without the chunks module), never a question, never the whole file read into the normal buffer
+  (drgnx-large-files-test--door
+    (let* ((f (drgnx-large-files-test--file "grows.log" 4096))
+           (b (find-file-noselect f))
+           (c nil))
+      (should-not (buffer-local-value 'drgnx-large-file b))
+      (drgnx-large-files-test--grow f 32768)
+      (drgnx-large-files-test--never-asks
+        (should-not (drgnx-large-files-test--serve (list (list f)) t nil))
+        (should-not (buffer-live-p b))
+        (setq c (get-file-buffer f))
+        (should (eq (buffer-local-value 'drgnx-large-file c) 'raw))
+        ;; `drgnx -t' (an -e form): the raw buffer, after the file grew again, is reverted unasked
+        (drgnx-large-files-test--grow f 65536)
+        (let ((revert-buffer-internal-hook nil))     ; see `drgnx-large-files-test--revert'
+          (should-not (drgnx-large-files-test--serve nil nil (list (lambda () (drgnx-session-open-file f)))))))
+      (should (eq (get-file-buffer f) c))
+      (should (= (buffer-size c) 65536)))))
 
 ;;;;; A command asks
 

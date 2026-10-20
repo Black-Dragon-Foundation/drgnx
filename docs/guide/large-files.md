@@ -48,9 +48,12 @@ A file that is already open is reused as it is, in the mode it has. So when it i
   it to **Open Whole** and replace again.
 - `drgnx open --wait BIG` edits that buffer (the chunk), not the whole file.
 
-When `drgnx open BIG` finds a lean or raw buffer whose file changed on disk (a growing log), it reloads the buffer
-without asking. If that buffer has unsaved changes, it is left as it is (never reloaded behind your back), and the
-echo area says so: "big.log changed on disk; its buffer has unsaved changes and is left as it is".
+When `drgnx open BIG` finds a buffer whose file changed on disk (a growing log), it reloads the buffer without
+asking, as for any file ([opening.md](opening.md)): a lean or raw buffer stays lean or raw, a buffer in chunks
+reloads its chunk. A normal buffer whose file grew past 50 MiB is closed and opened again as `drgnx open BIG` opens
+a large file (in chunks; lean with `--wait`), so the whole file is never read into a normal buffer. If the buffer
+has unsaved changes, it is left as it is (never reloaded behind your back), and the echo area says so: "big.log
+changed on disk; its buffer has unsaved changes and is left as it is".
 
 ## Switching
 

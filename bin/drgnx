@@ -671,7 +671,7 @@ cmd_open() { # [--check] [--wait] [-t | --gui] [PATH…] — open PATHs (none: t
     if [[ -n "$wait" ]]; then open_terminfo_check || return 1; client -t -- "${files[@]}"; return; fi
     client -n -e "(progn (require 'drgnx-ai) (drgnx-ai-load-keys-soon))" >/dev/null 2>&1 || true   # once per daemon, as below
     local form=""
-    for p in ${files[@]+"${files[@]}"}; do form+=" (find-file \"$(elisp_string "$p")\")"; done
+    for p in ${files[@]+"${files[@]}"}; do form+=" (drgnx-session-open-file \"$(elisp_string "$p")\")"; done
     for p in ${dirs[@]+"${dirs[@]}"}; do form+=" (drgnx-session-open-folder \"$(elisp_string "$p")\")"; done
     open_terminal "${form:+(progn$form)}"; return
   fi

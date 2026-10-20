@@ -376,4 +376,121 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
               ((symbol-function 'frame-visible-p) (lambda (f) (not (eq f 'kx-hidden)))))
       (should (equal (drgnx-session--windows) '(kx-tty kx-gui))))))
 
+;;;; `drgnx open' never asks about a file that changed on disk (editor/large-files off: not set up here)
+
+(require 'server)
+(require 'drgnx-guard)
+
+(defvar drgnx-session-test--asked nil "The questions asked while `drgnx-session-test--never-asks' runs.")
+
+(defun drgnx-session-test--no-question (&rest args)
+  "In place of every question while `drgnx-session-test--never-asks' runs: record ARGS and fail."
+  (push args drgnx-session-test--asked)
+  (error "A question was asked: %S" args))
+
+(defmacro drgnx-session-test--never-asks (&rest body)
+  "BODY with `drgnx-guard-mode' on and every question failing; it fails when one was asked, even if caught."
+  (declare (indent 0) (debug t))
+  `(let ((was drgnx-guard-mode) (drgnx-session-test--asked nil))
+     (unless was (drgnx-guard-mode 1))
+     (dolist (f '(read-multiple-choice y-or-n-p yes-or-no-p))
+       (advice-add f :override #'drgnx-session-test--no-question '((depth . 100))))
+     (unwind-protect (prog1 (progn ,@body) (should-not drgnx-session-test--asked))
+       (dolist (f '(read-multiple-choice y-or-n-p yes-or-no-p))
+         (advice-remove f #'drgnx-session-test--no-question))
+       (unless was (drgnx-guard-mode -1)))))
+
+(defun drgnx-session-test--serve (files nowait commands)
+  "Run `server-execute' as the server's process filter does, for a fake client: FILES ((NAME) …), NOWAIT,
+COMMANDS (functions, as -eval forms are run).  Return the errors it sent the client."
+  (let ((proc (make-pipe-process :name "drgnx-session-test-client" :noquery t))
+        (errors nil)
+        (this-command 'find-file)
+        (pre-command-hook nil) (post-command-hook nil) (server-visit-hook nil) (server-switch-hook nil)
+        (server-after-make-frame-hook nil) (server-client-instructions nil) (file-name-history nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'server-delete-client) #'ignore)
+                  ((symbol-function 'server-switch-buffer) #'ignore)
+                  ((symbol-function 'server-return-error) (lambda (_proc err) (push err errors))))
+          (server-execute proc files nowait commands nil nil nil nil))
+      (let ((buf (process-buffer proc)))
+        (delete-process proc)
+        (when (buffer-live-p buf) (kill-buffer buf))))
+    errors))
+
+(defmacro drgnx-session-test--changed (bindings &rest body)
+  "BODY with each (VAR NAME TEXT NEW [EDIT]) of BINDINGS: VAR a buffer visiting file NAME (a temp folder) holding
+TEXT (EDIT inserted at its end: unsaved changes), the file then written again with NEW, its time moved on (it
+changed on disk).  The buffers and folder go after."
+  (declare (indent 1))
+  `(let* ((dir (file-name-as-directory (make-temp-file "drgnx-session-open" t)))
+          (kill-buffer-query-functions nil)
+          ,@(mapcar (lambda (b)
+                      `(,(car b) (let ((f (expand-file-name ,(nth 1 b) dir)))
+                                   (write-region ,(nth 2 b) nil f nil 'silent)
+                                   (prog1 (find-file-noselect f)
+                                     (when ,(nth 4 b)
+                                       (with-current-buffer (get-file-buffer f)
+                                         (goto-char (point-max))
+                                         (insert ,(nth 4 b))))
+                                     (write-region ,(nth 3 b) nil f nil 'silent)
+                                     (set-file-times f (time-add nil 10))))))
+                    bindings))
+     (unwind-protect (progn ,@body)
+       (dolist (b (buffer-list))
+         (when (string-prefix-p dir (or (buffer-local-value 'buffer-file-name b) ""))
+           (with-current-buffer b (set-buffer-modified-p nil))
+           (kill-buffer b)))
+       (delete-directory dir t))))
+
+(ert-deftest drgnx-session/loading-advises-the-servers-visit ()
+  ;; the core is never turned off: the advice is there as soon as drgnx-session is (drgnx requires it)
+  (should (advice-member-p #'drgnx-session--visit-unasked 'server-visit-files)))
+
+(ert-deftest drgnx-session/drgnx-open-reverts-a-changed-file-unasked ()
+  ;; `drgnx open a.txt' while an unmodified buffer holds it and the file changed: Emacs's `server-visit-files'
+  ;; reverts it with (revert-buffer t nil), which asks "Revert buffer from file …?"; drgnx reverts it unasked
+  (should-not (advice-member-p 'drgnx-editor/large-files--server 'server-execute))
+  (drgnx-session-test--changed ((b "a.txt" "one\n" "two\n"))
+    (drgnx-session-test--never-asks
+      (should-not (drgnx-session-test--serve (list (list (buffer-file-name b))) t nil)))
+    (with-current-buffer b
+      (should (equal (buffer-string) "two\n"))
+      (should (verify-visited-file-modtime b))
+      (should-not (buffer-modified-p)))))
+
+(ert-deftest drgnx-session/drgnx-open-t-reverts-a-changed-file-unasked ()
+  ;; `drgnx -t a.txt' sends -e (drgnx-session-open-file "a.txt"): `find-file' would ask "Reread from disk?"
+  (drgnx-session-test--changed ((b "a.txt" "one\n" "two\n"))
+    (drgnx-session-test--never-asks
+      (should-not (drgnx-session-test--serve
+                   nil nil (list (lambda () (should (eq (drgnx-session-open-file (buffer-file-name b)) b)))))))
+    (should (equal (with-current-buffer b (buffer-string)) "two\n"))))
+
+(ert-deftest drgnx-session/drgnx-open-leaves-a-modified-changed-file-and-says-so ()
+  ;; unsaved changes are never reverted silently, nor asked about: left as they are, the echo area says so
+  (drgnx-session-test--changed ((b "a.txt" "one\n" "two\n" "mine\n"))
+    (let ((said nil))
+      (cl-letf* ((orig (symbol-function 'message))
+                 ((symbol-function 'message)
+                  (lambda (fmt &rest args) (when fmt (push (apply #'format fmt args) said)) (apply orig fmt args))))
+        (drgnx-session-test--never-asks
+          (should-not (drgnx-session-test--serve (list (list (buffer-file-name b))) t nil))
+          (should-not (drgnx-session-test--serve
+                       nil nil (list (lambda () (drgnx-session-open-file (buffer-file-name b))))))))
+      (with-current-buffer b
+        (should (equal (buffer-string) "one\nmine\n"))
+        (should (buffer-modified-p))
+        (should-not (verify-visited-file-modtime b)))   ; still stale: saving it asks, as a command may
+      (should (= 2 (cl-count "a.txt changed on disk; its buffer has unsaved changes and is left as it is"
+                             said :test #'equal))))))
+
+(ert-deftest drgnx-session/drgnx-open-reverts-a-file-that-grew-large-unasked ()
+  ;; without editor/large-files a file that grew past Emacs's own large-file threshold is reverted as any other
+  (let ((large-file-warning-threshold 1000))
+    (drgnx-session-test--changed ((b "big.log" "one\n" (make-string 4000 ?x)))
+      (drgnx-session-test--never-asks
+        (should-not (drgnx-session-test--serve (list (list (buffer-file-name b))) t nil)))
+      (should (= (buffer-size b) 4000)))))
+
 ;;; session-test.el ends here
