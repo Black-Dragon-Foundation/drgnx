@@ -14,8 +14,8 @@
 ;; git, a process, the file system or a language server.  Each window's bar is the memo `statusbar-bar', keyed on six
 ;; epochs (`buffer-look', `flymake', `eglot', `git', `misc-info', `statusbar': bumped by hooks and variable watchers)
 ;; and plain values (buffer, point, text, width…), so a redisplay that changes nothing costs a few comparisons and
-;; allocates nothing.  Other packages' entries of the mode line stay real time: they are formatted once per redisplay
-;; for all windows (`drgnx-statusbar--misc'), and one too slow for that once a second.  drgnx's own segments (tests,
+;; allocates nothing.  Other packages' entries of the mode line stay real time: they are formatted once per buffer per
+;; redisplay, in that buffer (`drgnx-statusbar--misc'), and one too slow for that once a second.  drgnx's own segments (tests,
 ;; jobs, agents) are worked out when their hooks say something changed (`drgnx-statusbar-refresh', debounced), never on
 ;; redisplay.  See docs/guide/face.md ("The status bar").
 
@@ -115,7 +115,7 @@ the glyphs changed (`drgnx-statusbar--bump').")
 
 (drgnx-epoch-define 'redisplay
                     :doc "Bumped before each redisplay (`pre-redisplay-functions', while the status bar is on): other
-packages' entries of the mode line are formatted once per value, for all windows (`drgnx-statusbar--misc').")
+packages' entries of the mode line are formatted once per value, for each buffer a bar shows (`drgnx-statusbar--misc').")
 
 (defconst drgnx-statusbar--declared '(buffer-look flymake eglot git misc-info statusbar redisplay statusbar-bar)
   "The epochs and the memo `drgnx-statusbar-setup' activates: watched while `ui/face' is on, emptied when it is off.")
@@ -390,7 +390,7 @@ screen never shows Emacs's raw mode line."
       (push (substring s start) parts)
       (apply #'concat (nreverse parts)))))
 
-;;;; Other packages' entries: real time, formatted once per redisplay for all windows
+;;;; Other packages' entries: real time, formatted once per buffer per redisplay
 
 (defvar drgnx-statusbar-misc-exclude)
 (defvar drgnx-statusbar-misc-info-skip)
@@ -413,9 +413,13 @@ under half the limit."
 (defvar drgnx-statusbar--misc-all nil "The entries `misc' shows, in order (`drgnx-statusbar--misc-entries').")
 (defvar drgnx-statusbar--misc-split nil "(STATIC . LIVE): the entries of `drgnx-statusbar--misc-all', split.")
 (defvar drgnx-statusbar--misc-made nil "The value of the epoch `misc-info' the entries were read at; nil: never.")
-(defvar drgnx-statusbar--misc-at nil "The value of the epoch `redisplay' `drgnx-statusbar--misc-text' was made at.")
-(defvar drgnx-statusbar--misc-text nil "The text of the entries as of `drgnx-statusbar--misc-at', or nil.")
-(defvar drgnx-statusbar--misc-stale nil "Non-nil: a slow entry's text changed since the text was joined.")
+(defvar drgnx-statusbar--misc-read nil
+  "(MODE-LINE-MISC-INFO . GLOBAL-MODE-STRING): the values the entries were read from.  A value not `eq' to them (a
+`let' of one, which moves no epoch, or a buffer-local one) reads the entries again.")
+(defvar drgnx-statusbar--misc-texts (make-hash-table :test #'eq :weakness 'key)
+  "Buffer → [AT ALL TEXTS TEXT]: the text of other packages' entries in that buffer's bars (`drgnx-statusbar--misc'),
+made at the value AT of the epoch `redisplay' for the entries ALL (`drgnx-statusbar--misc-all'), TEXTS the live
+entries' texts it was joined from.  Weak on the buffer; emptied when the mode turns off.")
 (defvar drgnx-statusbar--misc-report-due nil "Non-nil: the set of slow entries changed since the report was written.")
 
 (defun drgnx-statusbar--static-p (c)
@@ -446,7 +450,8 @@ Nothing is formatted: a string is shown as it is, with its properties."
 (defun drgnx-statusbar--misc-forget ()
   "Forget the entries, their averages and their text: they are read again when next asked (the mode turned off)."
   (setq drgnx-statusbar--misc-all nil drgnx-statusbar--misc-split nil drgnx-statusbar--misc-made nil
-        drgnx-statusbar--misc-at nil drgnx-statusbar--misc-text nil drgnx-statusbar--misc-stale nil))
+        drgnx-statusbar--misc-read nil)
+  (clrhash drgnx-statusbar--misc-texts))
 
 (defun drgnx-statusbar--misc-format (x)
   "Format entry X, keep its text (the old string when `equal') and add how long that took to its moving average
@@ -466,10 +471,12 @@ formats as nothing."
 in order: those of `mode-line-misc-info' (not those of `drgnx-statusbar-misc-info-skip'), then those of
 `global-mode-string' (not those of `drgnx-statusbar-misc-exclude').  An entry is static when it holds only strings
 and `:propertize' of strings (`drgnx-statusbar--static-p'), else live.  Read again, and the static ones given their
-text (`drgnx-statusbar--static-text'), only when the epoch `misc-info' moved; that forgets every average, so a slow
-entry is live again."
-  (let ((epoch (drgnx-epoch 'misc-info)))
-    (unless (eq epoch drgnx-statusbar--misc-made)
+text (`drgnx-statusbar--static-text'), only when the epoch `misc-info' moved or one of the two variables is not the
+value they were read from (`drgnx-statusbar--misc-read': two `eq' tests, for a `let' or a buffer-local value); that
+forgets every average, so a slow entry is live again."
+  (let ((epoch (drgnx-epoch 'misc-info)) (read drgnx-statusbar--misc-read))
+    (unless (and (eq epoch drgnx-statusbar--misc-made)
+                 (eq (car read) mode-line-misc-info) (eq (cdr read) global-mode-string))
       (let ((all nil) (static nil) (live nil))
         (dolist (x drgnx-statusbar--misc-all)
           (when (drgnx-statusbar--entry-slow x) (setq drgnx-statusbar--misc-report-due t)))
@@ -488,7 +495,7 @@ entry is live again."
         (setq drgnx-statusbar--misc-all all
               drgnx-statusbar--misc-split (cons (nreverse static) (nreverse live))
               drgnx-statusbar--misc-made epoch
-              drgnx-statusbar--misc-at nil)))
+              drgnx-statusbar--misc-read (cons mode-line-misc-info global-mode-string))))
     drgnx-statusbar--misc-split))
 
 (defun drgnx-statusbar--misc-join ()
@@ -505,31 +512,35 @@ entry is live again."
             (t (concat o " " g))))))
 
 (defun drgnx-statusbar--misc ()
-  "The text of other packages' entries in the mode line for this redisplay, or nil: a key of every window's bar.
-Made again only when the epoch `redisplay' or `misc-info' moved (or a slow entry's text changed): each live entry
-that is not slow is formatted and timed, the static ones keep the text they got when read, the slow ones the text of
-their last tick.  A text `equal' to the last gives the last string back, so the bars' memo still hits.  So an entry is
-formatted once per redisplay however many windows show a bar, and one averaging over `drgnx-statusbar-misc-slow-ms'
-after 8 redisplays is formatted once a second instead (`drgnx-statusbar--misc-make-slow')."
-  (if (and (not drgnx-statusbar--misc-stale)
-           (eq drgnx-statusbar--misc-at (drgnx-epoch 'redisplay))
-           (eq drgnx-statusbar--misc-made (drgnx-epoch 'misc-info)))
-      drgnx-statusbar--misc-text
-    (let ((changed (or drgnx-statusbar--misc-stale (not (eq drgnx-statusbar--misc-made (drgnx-epoch 'misc-info))))))
-      (dolist (x (cdr (drgnx-statusbar--misc-entries)))
-        (unless (drgnx-statusbar--entry-slow x)
-          (let ((old (drgnx-statusbar--entry-text x)))
+  "The text of other packages' entries in this buffer's mode line for this redisplay, or nil: a key of the bar.
+Made again for the buffer only when the epoch `redisplay' moved or the entries were read again: each live entry that
+is not slow is formatted, in this buffer, and timed; the static ones keep the text they got when read, the slow ones
+the text of their last tick.  When no live entry's text differs from the last time in this buffer, the last string
+is given back, so the bars' memo still hits.  So an entry is formatted once per buffer per redisplay however many
+windows show it (an entry that reads buffer-local state shows each buffer's own value), and one averaging over
+`drgnx-statusbar-misc-slow-ms' after 8 samples is formatted once a second instead (`drgnx-statusbar--misc-make-slow')."
+  (let* ((live (cdr (drgnx-statusbar--misc-entries)))
+         (all drgnx-statusbar--misc-all)
+         (at (drgnx-epoch 'redisplay))
+         (rec (gethash (current-buffer) drgnx-statusbar--misc-texts)))
+    (if (and rec (eq (aref rec 0) at) (eq (aref rec 1) all))
+        (aref rec 3)
+      (let ((changed (not (and rec (eq (aref rec 1) all)))) (old (and rec (aref rec 2))))
+        (dolist (x live)
+          (unless (drgnx-statusbar--entry-slow x)
             (drgnx-statusbar--misc-format x)
-            (unless (eq old (drgnx-statusbar--entry-text x)) (setq changed t))
             (when (and (>= (drgnx-statusbar--entry-n x) 8)
                        (> (drgnx-statusbar--entry-avg x) drgnx-statusbar-misc-slow-ms))
-              (drgnx-statusbar--misc-make-slow x)))))
-      (when changed
-        (let ((text (drgnx-statusbar--misc-join)))
-          (unless (equal text drgnx-statusbar--misc-text) (setq drgnx-statusbar--misc-text text))))
-      (setq drgnx-statusbar--misc-stale nil
-            drgnx-statusbar--misc-at (drgnx-epoch 'redisplay))
-      drgnx-statusbar--misc-text)))
+              (drgnx-statusbar--misc-make-slow x)))
+          (unless (equal (drgnx-statusbar--entry-text x) (car old)) (setq changed t))
+          (setq old (cdr old)))
+        (if (not changed)
+            (aset rec 0 at)
+          (let ((text (drgnx-statusbar--misc-join)))
+            (when (and rec (equal text (aref rec 3))) (setq text (aref rec 3)))
+            (setq rec (vector at all (mapcar #'drgnx-statusbar--entry-text live) text))
+            (puthash (current-buffer) rec drgnx-statusbar--misc-texts)))
+        (aref rec 3)))))
 
 (defun drgnx-statusbar--misc-make-slow (x)
   "Entry X averages over `drgnx-statusbar-misc-slow-ms': from now on the timer `statusbar-misc-slow' formats it, once a
@@ -541,15 +552,15 @@ second, and the report names it.  Nothing changes when the timer cannot start (`
     (setq drgnx-statusbar--misc-report-due t)))
 
 (defun drgnx-statusbar--misc-slow-tick ()
-  "Once a second while an entry is slow (the timer `statusbar-misc-slow'): format each slow entry, and redraw the bars
-when one's text changed.  One that took under half of `drgnx-statusbar-misc-slow-ms' on 8 ticks in a row is live
-again.  The report is written when the set of slow entries changed (here, never on redisplay), and with no slow entry
-left the timer is cancelled."
-  (let ((inhibit-interaction t) (left nil))
+  "Once a second while an entry is slow (the timer `statusbar-misc-slow'): format each slow entry, in the buffer that
+is current (the selected window's), and redraw the bars when one's text changed.  One that took under half of
+`drgnx-statusbar-misc-slow-ms' on 8 ticks in a row is live again.  The report is written when the set of slow entries
+changed (here, never on redisplay), and with no slow entry left the timer is cancelled."
+  (let ((inhibit-interaction t) (left nil) (stale nil))
     (dolist (x drgnx-statusbar--misc-all)
       (when (drgnx-statusbar--entry-slow x)
         (let* ((old (drgnx-statusbar--entry-text x)) (ms (drgnx-statusbar--misc-format x)))
-          (unless (eq old (drgnx-statusbar--entry-text x)) (setq drgnx-statusbar--misc-stale t))
+          (unless (eq old (drgnx-statusbar--entry-text x)) (setq stale t))
           (setf (drgnx-statusbar--entry-fast x)
                 (if (< ms (/ drgnx-statusbar-misc-slow-ms 2.0)) (1+ (drgnx-statusbar--entry-fast x)) 0))
           (if (< (drgnx-statusbar--entry-fast x) 8)
@@ -557,9 +568,17 @@ left the timer is cancelled."
             (setf (drgnx-statusbar--entry-slow x) nil (drgnx-statusbar--entry-since x) nil
                   (drgnx-statusbar--entry-fast x) 0 (drgnx-statusbar--entry-n x) 0 (drgnx-statusbar--entry-avg x) 0.0)
             (setq drgnx-statusbar--misc-report-due t)))))
-    (when drgnx-statusbar--misc-stale (force-mode-line-update t))
+    (when stale (force-mode-line-update t))
     (when drgnx-statusbar--misc-report-due (drgnx-statusbar--misc-write-report))
     (unless left (drgnx-timer-cancel 'statusbar-misc-slow))))
+
+(defun drgnx-statusbar--misc-report-soon ()
+  "When the bar turns on and an earlier session left a report: rewrite it once, a second later, from the timer
+`statusbar-misc-report' (never from redisplay), with the slow entries of now (maybe none).  So an entry you removed,
+or that got fast, is not named by the doctor forever; one that is still slow is named again when it is found slow."
+  (when (and (fboundp 'drgnx-state-dir)
+             (file-exists-p (expand-file-name drgnx-statusbar-slow-report (drgnx-state-dir))))
+    (drgnx-timer-soon 'statusbar-misc-report 1 #'drgnx-statusbar--misc-write-report :owner 'ui/face)))
 
 (defun drgnx-statusbar--misc-write-report ()
   "Write the slow entries, ((:entry PRINTED :avg-ms N :since TIME)…), to `drgnx-statusbar-slow-report' in the state
@@ -842,6 +861,12 @@ follows reports that arrive while you do nothing.  Idempotent; removed with the 
   (setq drgnx-statusbar--redraw-wanted t)
   (drgnx-statusbar-refresh))
 
+(defun drgnx-statusbar--flymake-started (&rest _)
+  "After a flymake check started (advice on `flymake-start'), in its buffer: as after a report, the epoch `flymake'
+moves for the buffer and the bars are redrawn, debounced, so the problems segment shows the check running instead of
+the old counts.  Removed with the mode."
+  (drgnx-statusbar--flymake-reported))
+
 (defun drgnx-statusbar--flymake-changed ()
   "On `flymake-mode-hook': flymake turned on or off in this buffer."
   (drgnx-epoch-bump 'flymake (current-buffer)))
@@ -860,7 +885,7 @@ follows reports that arrive while you do nothing.  Idempotent; removed with the 
 
 (defun drgnx-statusbar--pre-redisplay (&rest _)
   "On `pre-redisplay-functions' (run for each window about to be redisplayed, before any is): the epoch `redisplay'
-moves, so other packages' entries are formatted again, once, for all the bars this redisplay draws."
+moves, so other packages' entries are formatted again, once per buffer the bars this redisplay draws show."
   (drgnx-epoch-bump 'redisplay))
 
 (defconst drgnx-statusbar--host '(:eval (drgnx-statusbar-mode-line)))
@@ -889,6 +914,8 @@ moves, so other packages' entries are formatted again, once, for all the bars th
         (drgnx-state-subscribe 'editor-changed #'drgnx-statusbar--editor-changed :lane 'now)
         (drgnx-signal-subscribe 'editor-changed #'drgnx-statusbar--ask-git)
         (advice-add 'flymake--handle-report :after #'drgnx-statusbar--flymake-reported)   ; flymake has no hook for this
+        (advice-add 'flymake-start :after #'drgnx-statusbar--flymake-started)               ; nor for this
+        (drgnx-statusbar--misc-report-soon)
         (when (fboundp 'drgnx-modal-indicator-off) (drgnx-modal-indicator-off))   ; the bar shows the modal state
         (setq drgnx-statusbar--agents-state (drgnx-statusbar--agent-counts))
         (when (drgnx-statusbar--hub-connected-p)            ; connected: count the jobs
@@ -898,8 +925,10 @@ moves, so other packages' entries are formatted again, once, for all the bars th
     (drgnx-state-unsubscribe 'editor-changed #'drgnx-statusbar--editor-changed)
     (drgnx-signal-unsubscribe 'editor-changed #'drgnx-statusbar--ask-git)
     (advice-remove 'flymake--handle-report #'drgnx-statusbar--flymake-reported)
+    (advice-remove 'flymake-start #'drgnx-statusbar--flymake-started)
     (drgnx-timer-cancel 'statusbar-refresh)
     (drgnx-timer-cancel 'statusbar-misc-slow)
+    (drgnx-timer-cancel 'statusbar-misc-report)
     (drgnx-memo-forget 'statusbar-bar)
     (drgnx-statusbar--misc-forget)
     (clrhash drgnx-statusbar--git-branches)
@@ -1111,7 +1140,7 @@ set up without editor/evil: `drgnx-modal-mode-line' is \"\")."
 (defun drgnx-statusbar--seg-misc ()
   "What stock Emacs would show beside the file: evil's state tag, keycast's key, a keyboard macro being recorded,
 narrowing, a remote directory, the process of the buffer, which-function's name, the entries other packages added to
-`mode-line-misc-info' and `global-mode-string' (without the job badge: `drgnx-statusbar--misc', once per redisplay)."
+`mode-line-misc-info' and `global-mode-string' (without the job badge: `drgnx-statusbar--misc', once per buffer per redisplay)."
   (let* ((global (drgnx-statusbar--misc))
          (which (drgnx-statusbar--which-func (drgnx-statusbar-source-window)))
          (parts (delq nil
