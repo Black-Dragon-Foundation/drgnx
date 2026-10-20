@@ -1006,6 +1006,29 @@ macOS (no /proc there)."
       (when (process-live-p users) (delete-process users))
       (delete-directory dir t))))
 
+(ert-deftest drgnx-bin/a-test-run-removes-podman-storage-through-unshare ()
+  ;; Podman storage in a run's temp HOME holds sub-UID files a plain `rm -rf' leaves behind (stood in for by an
+  ;; unwritable directory): the run removes it with `podman unshare rm -rf' first, so the run dir is fully gone.
+  (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
+         (parent (expand-file-name "parent" dir))
+         (podman (expand-file-name "podman" dir))
+         (emacs (drgnx-bin-test--fake-emacs
+                 (expand-file-name "fake-emacs" dir)
+                 "d=\"$TMPDIR/home/.local/share/containers/storage/stuck\"; mkdir -p \"$d\"; echo x > \"$d/f\"; chmod 500 \"$d\"")))
+    (unwind-protect
+        (progn
+          (make-directory parent)
+          (with-temp-file podman
+            (insert "#!/bin/sh\n[ \"$1 $2 $3\" = 'unshare rm -rf' ] || exit 2\nshift 3\nchmod -R u+w \"$@\"; exec rm -rf \"$@\"\n"))
+          (set-file-modes podman #o755)
+          (should (eql 0 (car (drgnx-bin-test--call drgnx-bin-test--bin
+                                                    (drgnx-bin-test--env dir parent (concat "DRGNX_EMACS=" emacs)
+                                                                         (concat "PATH=" dir ":" (getenv "PATH")))
+                                                    "test"))))
+          (should-not (drgnx-bin-test--left parent)))
+      (ignore-errors (call-process "chmod" nil nil nil "-R" "u+w" dir))
+      (delete-directory dir t))))
+
 (ert-deftest drgnx-bin/a-test-run-stopped-by-a-signal-leaves-nothing-and-no-emacs ()
   ;; TMP-1: a run stopped half way (INT/TERM/HUP, as systemd, Ctrl-C and a closing terminal send) removes its
   ;; TMPDIR and its Emacs is gone.

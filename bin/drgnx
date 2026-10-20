@@ -122,6 +122,12 @@ run_tmp_stop_pause() { # Rootless podman run by a test under the run's private X
     pid="$(head -n1 -- "$f" 2>/dev/null)"
     [[ "$pid" =~ ^[0-9]+$ ]] && [[ "$(cat "/proc/$pid/comm" 2>/dev/null)" == catatonit ]] && kill -TERM "$pid" 2>/dev/null
   done < <(find "$RUN_TMP" -path '*/libpod/tmp/pause.pid' -type f 2>/dev/null)
+  # Rootless podman storage holds sub-UID files a plain rm -rf cannot remove (it stops half way, gigabytes stay in /tmp):
+  # only under RUN_TMP, only when there is some.
+  if command -v podman >/dev/null 2>&1; then
+    while IFS= read -r f; do podman unshare rm -rf -- "$f" >/dev/null 2>&1 || true
+    done < <(find "$RUN_TMP" -maxdepth 6 -type d -name containers \( -path '*/.local/share/containers' -o -path '*/xdg-data/containers' \) -prune -print 2>/dev/null)
+  fi
   return 0
 }
 

@@ -486,9 +486,21 @@ outlives the run.  Only the pids in pid files under DIR, and only while the proc
                    (equal (cdr (assq 'comm (process-attributes pid))) "catatonit"))
           (ignore-errors (signal-process pid 'TERM)))))))
 
+(defun drgnx-run-ert--remove-podman-storage (dir)
+  "Remove the rootless podman storage under DIR with `podman unshare rm -rf'.
+Its files belong to sub-UIDs that a plain delete cannot remove: it stops half way and leaves gigabytes behind.
+Only directories under DIR (`.local/share/containers' of a temp HOME, `containers' of a temp XDG_DATA_HOME)."
+  (when-let* ((podman (executable-find "podman"))
+              (found (ignore-errors
+                       (process-lines "find" (expand-file-name dir) "-maxdepth" "6" "-type" "d" "-name" "containers"
+                                      "(" "-path" "*/.local/share/containers" "-o" "-path" "*/xdg-data/containers" ")"
+                                      "-prune" "-print"))))
+    (ignore-errors (apply #'call-process podman nil nil nil "unshare" "rm" "-rf" found))))
+
 (defun drgnx-run-ert--delete-run-dir (dir)
-  "Remove the run directory DIR, after stopping the podman pause processes made under it."
+  "Remove the run directory DIR, after stopping the podman pause processes and removing the storage made under it."
   (drgnx-run-ert--stop-podman-pause dir)
+  (drgnx-run-ert--remove-podman-storage dir)
   (delete-directory dir t))
 
 (defun drgnx-run-ert--end-files ()
