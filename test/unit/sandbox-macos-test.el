@@ -477,6 +477,37 @@ Xcode's under /Applications.  The profile reads that dir (the link's true name);
       (let ((drgnx-sandbox-macos-xcode-select-link (concat root "/none")))
         (should-not (drgnx-sandbox-macos-test--allowed-p (funcall rules) 'file-read-data (concat dev "/usr/bin/git")))))))
 
+(ert-deftest drgnx-sandbox-macos/a-step-runs-the-developer-dirs-git-not-xcruns-shim ()
+  "A short step's git found in /usr/bin is xcrun's shim, which cannot run in the sandbox (it writes a cache in the
+user's temp dir and reads all of Xcode's bundle; macOS CI): the step runs the developer dir's git, which the profile
+reads.  A git found first elsewhere on the step's PATH, or a developer dir without it, leaves the name as it was."
+  (drgnx-sandbox-macos-test--with
+    (let* ((dev (concat root "/Xcode.app/Contents/Developer")) (link (concat root "/xcode_select_link"))
+           (shims (concat root "/usr-bin")) (other (concat root "/local-bin"))
+           (drgnx-sandbox-macos-xcode-select-link link) (drgnx-sandbox-macos-shim-dir shims)
+           (drgnx-sandbox--programs '(("sandbox-exec" . "/usr/bin/sandbox-exec")))
+           (argv nil)
+           (step (lambda (path)
+                   (setq argv nil)
+                   (drgnx-sandbox-run (drgnx-sandbox-spec :backend 'seatbelt :read (list folder) :chdir folder
+                                                          :env (list (cons "PATH" path)) :net 'isolated)
+                                      '("git" "status") #'ignore)
+                   (nthcdr 3 (member "/usr/bin/sandbox-exec" argv)))))
+      (dolist (d (list (concat dev "/usr/bin") shims other)) (make-directory d t))
+      (dolist (f (list (concat dev "/usr/bin/git") (concat shims "/git")))
+        (write-region "" nil f nil 'silent)
+        (set-file-modes f #o755))
+      (make-symbolic-link dev link)
+      (cl-letf (((symbol-function 'drgnx-sandbox--spawn) (lambda (_name a &rest _) (setq argv a) nil)))
+        (should (equal (funcall step (concat other ":" shims)) (list (concat dev "/usr/bin/git") "status")))
+        ;; a real git before the shim on the step's PATH: that one, as sandbox-exec would find it
+        (write-region "" nil (concat other "/git") nil 'silent)
+        (set-file-modes (concat other "/git") #o755)
+        (should (equal (funcall step (concat other ":" shims)) '("git" "status")))
+        ;; no developer dir: the shim, as it was
+        (let ((drgnx-sandbox-macos-xcode-select-link (concat root "/none")))
+          (should (equal (funcall step shims) '("git" "status"))))))))
+
 (ert-deftest drgnx-sandbox-macos/tmpdir-is-private ()
   "The session's TMPDIR: a new dir under `temporary-file-directory', mode 0700, its true name; one per call.  A
 session id that is not a plain name is refused."
