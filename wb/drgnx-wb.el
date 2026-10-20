@@ -16,19 +16,18 @@
 (require 'drgnx-signal)
 (require 'drgnx-modules-helpers)
 (require 'drgnx-state-intent)
+(require 'drgnx-ui-kit)
 
 (defcustom drgnx-wb-dock-columns 32
   "Width of the left dock, in columns, the first time it shows (later: the width it had)."
   :type 'integer :group 'drgnx)
 
-(defface drgnx-wb-close '((t :inherit shadow))
-  "The close button (×) of a title, tab row or popup header." :group 'drgnx)
+;; The close button's face is the kit's; the old name stays, so a saved customization of it still applies.
+(put 'drgnx-wb-close 'face-alias 'drgnx-ui-close)
 
 (defface drgnx-wb-bar '((t :inherit tab-line :height 1.0 :box nil))
   "The band of a header row (breadcrumb, a dock section's title, a panel's tab row): the theme's tab-line
 background, not the header line's, so every row of chrome is one colour and follows the theme." :group 'drgnx)
-
-(declare-function drgnx-face-glyph "drgnx-face")
 
 (defvar drgnx-wb-dock-map (make-sparse-keymap)
   "Parent keymap of every dock section's mode (keys come from the key profiles).")
@@ -44,25 +43,13 @@ follower is not a jank-guard violation (invariant I9).")
 
 (defvar drgnx-wb--sections nil "Alist NAME → plist (:slot :title :buffer :view), the left dock's sections.")
 
-;;;; The close button
+;;;; The close button (the UI kit's: `drgnx-ui-close-button')
 
-(defun drgnx-wb-close-glyph ()
-  "The close glyph: ×, its ASCII form on a terminal that is not UTF-8 (`drgnx-face-glyph')."
-  (or (and (fboundp 'drgnx-face-glyph) (drgnx-face-glyph 'close)) "×"))
-
-(defvar drgnx-wb--close-maps nil
-  "Alist COMMAND → the keymap of a close button that runs it (one per command: there are three).")
+(defun drgnx-wb-close-glyph () "The close glyph (`drgnx-face-glyph' `close')." (drgnx-face-glyph 'close))
 
 (defun drgnx-wb-close-button (command help &rest props)
-  "The close glyph as a button: clickable (`mouse-1' in a header line runs COMMAND, which takes the click event),
-highlighted under the pointer, HELP as its `help-echo'.  PROPS are text properties the click handler reads.
-Built once when a title or tab row is set, never while drawing."
-  (let ((map (or (alist-get command drgnx-wb--close-maps)
-                 (let ((m (make-sparse-keymap)))
-                   (define-key m [header-line mouse-1] command)
-                   (setf (alist-get command drgnx-wb--close-maps) m)))))
-    (apply #'propertize (drgnx-wb-close-glyph)
-           'face 'drgnx-wb-close 'mouse-face 'highlight 'local-map map 'help-echo help props)))
+  "The kit's close button on a header line: `drgnx-ui-close-button' with COMMAND, HELP and PROPS."
+  (drgnx-ui-close-button command help :props props))
 
 (defun drgnx-wb-bar (string &optional filled)
   "STRING as a header row: `drgnx-wb-bar' behind it (under any face it has), and a filler to the window's right edge,
