@@ -447,13 +447,16 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
           (let* ((r (drgnx-run-ert-test--json results))
                  (names (mapcar (lambda (f) (plist-get f :name)) (plist-get r :failures))))
             (should (equal (plist-get r :passed) 1))
-            (should (equal (plist-get r :failed) 2))
+            (should (equal (plist-get r :failed) 3))           ; the crash, the hang, and the hang's test (quit by SIGUSR2)
             (should (seq-find (lambda (n) (string-match-p "crash-test\\.el" n)) names))
             (should (seq-find (lambda (n) (string-match-p "hang-test\\.el" n)) names))
             (should (string-match-p "timed out" (plist-get (seq-find (lambda (f) (string-match-p "hang-test" (plist-get f :name)))
                                                                      (plist-get r :failures))
                                                            :condition))))
-          (should (string-match-p "crash-test\\.el" out)))
+          (should (string-match-p "crash-test\\.el" out))
+          ;; a file that timed out says where it hangs (CI-REMOTE-MAC-1): its Lisp backtrace, asked for with SIGUSR2
+          (should (string-search "Debugger entered" out))
+          (should (string-search "sleep-for(60)" out)))
       (delete-directory tmp t))))
 
 (ert-deftest drgnx-run-ert/summaries-are-merged ()

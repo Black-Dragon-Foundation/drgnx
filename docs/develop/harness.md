@@ -48,8 +48,8 @@ make one three levels below a file's directory (`run/drgnx/hub-HASH.sock`), and 
 (`/var/folders/xx/…/T/`, 49 bytes) with two `drgnx-run.XXXXXX/` levels below it leaves no room. It writes its own
 summary; the runner merges them into one, in the same shape, plus `"files"`
 (`[{"file","exit","seconds"}]`). A file whose Emacs dies (a test calls `kill-emacs`), exits non-zero without a failed
-test, or runs longer than `$DRGNX_TEST_FILE_TIMEOUT` seconds (default 300; it gets TERM, 5 s, then KILL, with what it
-started) is a failure named `file NAME-test.el`, and the other files still run. Files run one after another;
+test, or runs longer than `$DRGNX_TEST_FILE_TIMEOUT` seconds (default 300; it gets USR2 first, which makes its Emacs print where it hangs, a Lisp backtrace in its output,
+then TERM, 5 s, then KILL, with what it started) is a failure named `file NAME-test.el`, and the other files still run. Files run one after another;
 `$DRGNX_TEST_JOBS` runs that many at once (their output is then printed whole as each ends, after a `drgnx: FILE`
 line; a file is over once its process sentinel has run, after Emacs has read the rest of its output, not when
 `process-live-p` turns nil; the merged summary and the exit status are the same as a serial run's). `bin/drgnx test

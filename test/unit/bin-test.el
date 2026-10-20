@@ -1022,7 +1022,9 @@ macOS (no /proc there)."
   ;; TEST-PODMAN-PAUSE-1: rootless podman under the run's private XDG_RUNTIME_DIR starts a `catatonit -P' pause
   ;; process (pid file RUN/libpod/tmp/pause.pid) that outlives the run, and the systemd scope it lives in.  The run
   ;; stops exactly that one at its end, and never another catatonit (the user's own, with its pid file elsewhere).
-  (skip-unless (executable-find "sleep"))
+  ;; Linux only: bin/drgnx tells catatonit by /proc/PID/comm, and on macOS podman runs in a VM, so a run leaves no
+  ;; local pause process.
+  (skip-unless (and (executable-find "sleep") (file-readable-p "/proc/self/comm")))
   (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
          (parent (expand-file-name "parent" dir))
          (ours (expand-file-name "ours.pid" dir))

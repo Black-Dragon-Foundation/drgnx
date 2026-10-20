@@ -62,7 +62,10 @@
           (drgnx-remote-may-prompt nil)
           (global-mode-string nil)
           (signal-was-on drgnx-signal-mode)
-          (root nil))
+          (root nil)
+          ;; The project of the "remote" is its folder, named at once: `project-try-vc' would list every parent folder
+          ;; up to / over the connection (a search for .git; /tmp alone took 50 s with a few thousand entries).
+          (project-find-functions (list (lambda (d) (and root (file-remote-p d) (cons 'transient root))))))
      (drgnx-remote-auto--write (expand-file-name "app.py" rdir) "def f():\n    return 1\n")
      (drgnx-remote-auto--write (expand-file-name "sub/x.txt" rdir) "x\n")
      (drgnx-remote-auto--write (expand-file-name "l.py" ldir) "def g():\n    return 2\n")

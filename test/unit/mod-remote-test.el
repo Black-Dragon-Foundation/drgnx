@@ -55,6 +55,10 @@ choice of two nobody has."
           ;; test: the ASCII test asks again itself
           (drgnx-remote--arrows (let ((h (make-hash-table :test #'eq :weakness 'key))) (puthash (frame-terminal) 'yes h) h))
           (explorer-roots nil)
+          ;; The project of the "remote" is its src/ folder, named at once.  `project-try-vc' would otherwise list
+          ;; every parent folder up to / over the connection (a search for .git: /tmp alone is 50 s when it holds a
+          ;; few thousand entries, one `stat' each) and the tests would time the machine's temp directory.
+          (project-find-functions (list (lambda (d) (and (file-remote-p d) (cons 'transient (drgnx-remote-test--root dir))))))
           (messages nil))
      (make-directory bin) (make-directory (expand-file-name "src" dir))
      (copy-file (expand-file-name "test/fixtures/lsp-stub.sh" drgnx-dir) (expand-file-name "drgnx-lsp" bin))
