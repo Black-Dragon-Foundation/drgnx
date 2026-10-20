@@ -162,6 +162,36 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
       (should (member "TimeoutStopSec=10" argv))
       (should (equal (seq-take (cdr (member "--" argv)) 2) '("env" "-i"))))))
 
+(ert-deftest drgnx-ui/an-interactive-session-holds-a-light-slot-while-it-lives ()
+  (skip-unless (executable-find "flock"))
+  (drgnx-ui-test--with-state
+    (let* ((process-environment (append '("DRGNX_LEASE_HELD" "DRGNX_LEASE" "CI=false" "DRGNX_LEASE_DIR=/leases/x/lease")
+                                        process-environment))
+           (s (drgnx-ui-prepare-run "drgnx-ui-6-00000a" nil "1600x900" root))
+           (argv (drgnx-ui-launch-argv s))
+           (lease (member "lease" argv)))
+      (should (member "DRGNX_LEASE_DIR=/leases/x/lease" argv))      ; the session's environment is `env -i'
+      (should (equal (seq-take lease 6) '("lease" "light" "--wait" "120" "--" "dbus-run-session")))
+      (should (string-suffix-p "/bin/drgnx" (car (last (butlast argv (length lease)) 1))))
+      (should (member "DRGNX_LEASE_CAP=off" argv))                  ; the unit is capped already
+      (drgnx-ui-stop "drgnx-ui-6-00000a"))))
+
+(ert-deftest drgnx-ui/a-test-session-takes-no-slot ()
+  (drgnx-ui-test--with-state
+    (dolist (off '("DRGNX_LEASE_HELD=light:1" "CI=true" "DRGNX_LEASE=off"))
+      (let* ((process-environment (append (list off "DRGNX_LEASE_DIR=/leases/x/lease") process-environment))
+             (s (drgnx-ui-prepare-run (format "drgnx-ui-%d-00000a" (+ 10 (length off))) nil "1600x900" root))
+             (argv (drgnx-ui-launch-argv s)))
+        (should-not (member "lease" argv))
+        (should-not (seq-find (lambda (a) (string-prefix-p "DRGNX_LEASE_DIR=" a)) argv))
+        (drgnx-ui-stop (plist-get s :name))))))
+
+(ert-deftest drgnx-ui/a-refused-lease-is-reported-with-its-holders ()
+  (should (equal "no light slot free in 120 s: light 1 42 /w bin/drgnx test since t; light 2 43 /w2 bin/drgnx test since t"
+                 (drgnx-ui--lease-refusal
+                  "x\ndrgnx lease: no light slot free in 120 s; holders:\nlight 1 42 /w bin/drgnx test since t\nlight 2 43 /w2 bin/drgnx test since t\n")))
+  (should-not (drgnx-ui--lease-refusal "dbus-run-session: failed\n")))
+
 (ert-deftest drgnx-ui/el-quoting-roundtrip ()
   (let ((s "he said \"hi\"\\ \n✓ \t"))
     (should (equal (car (read-from-string (drgnx-ui-el s))) s)))

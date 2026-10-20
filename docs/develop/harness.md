@@ -285,6 +285,15 @@ A `minimal` session runs at drgnx's GC settings (`drgnx-gc-setup`, so timings do
 default collecting every few keystrokes); a session of any other configuration brings its own.
 The Emacs binary is `$DRGNX_EMACS`, else `emacs-pgtk`, else `emacs`.
 
+## A session holds a light slot
+
+A session started interactively (`drgnx ui start`, MCP `ui_start`: `DRGNX_LEASE_HELD` unset) holds a light slot of the
+host lease (`docs/develop/check.md`, "The host lease") while it lives: its unit command is `bin/drgnx lease light
+--wait 120 -- <compositor command>`, with `DRGNX_LEASE_DIR` passed in the environment because a session's environment
+is `env -i`. With no slot free in 120 s the session exits, and `drgnx-ui-start` fails with `no light slot free in 120 s:
+HOLDERS`. Sessions started inside a leased command (`test`, `check`, `perf`) take none: `DRGNX_LEASE_HELD` reaches them
+through the session's allowlist. The lease is off in CI, in the detached launcher (containers) and without `flock`.
+
 ## Driving a session
 
 Input is synthetic but goes through Emacs' normal command loop: `harness/drgnx-uitest.el` queues events and

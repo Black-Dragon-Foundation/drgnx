@@ -492,6 +492,21 @@ lease_status() {
   lease_prune_and_list
 }
 
+lease_self() { # CLASS ARGS… — take the lease for this command: re-exec as `drgnx lease CLASS -- drgnx ARGS…`, whose child
+  # runs with DRGNX_LEASE_HELD set (so it takes nothing again); with the lease off, go on
+  local class="$1"; shift
+  if lease_off; then return 0; fi
+  exec "$here/bin/drgnx" lease "$class" -- "$here/bin/drgnx" "$@"
+}
+
+lease_test_class() { # ARGS of `drgnx test` → light (the batch tier), heavy (the GUI, tty and container tiers), exclusive (A/B perf)
+  case "${1:-}" in
+    --ui|--tty|--scenario|--bench|--soak|--container|--podman|--install|--bootstrap|--stress) echo heavy ;;
+    --perf) case " $* " in *" --ab "*) echo exclusive ;; *) echo heavy ;; esac ;;
+    *) echo light ;;
+  esac
+}
+
 lease_holder_done() { # EXIT trap of a lease: the holder file goes, the locks go with the process
   [[ -z "${LEASE_HOLDER:-}" ]] || rm -f -- "$LEASE_HOLDER"
   return 0
@@ -1387,7 +1402,7 @@ USAGE
 case "${1:-help}" in
   doctor) shift; cmd_doctor "$@" ;;
   build) cmd_build ;;
-  test) shift; cmd_test "$@" ;;
+  test) shift; lease_self "$(lease_test_class "$@")" test "$@"; cmd_test "$@" ;;
   lease) shift; cmd_lease "$@" ;;
   ui) shift; ui "$@" ;;
   sync|upgrade|rollback|generations|lock|bisect|service-unit)
@@ -1439,7 +1454,7 @@ case "${1:-help}" in
         DRGNX_STDIN_TTY=$([ -t 0 ] && echo 1 || echo 0) \
         "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-shell -f drgnx-shell-cli -- "$@" ;;
-  check) shift; run_in_tmp_shards check_emacs "$@" ;;
+  check) shift; lease_self exclusive check "$@"; run_in_tmp_shards check_emacs "$@" ;;
   fmt) shift
         "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-fmt -f drgnx-fmt-cli -- "$@" ;;

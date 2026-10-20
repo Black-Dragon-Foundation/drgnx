@@ -189,4 +189,41 @@ the temp dir) and sleeps.  Return the process."
       (should (equal '(6 2) (slots 16 24)))   ; min(24/3, 12/2), (16-8)/4
       (should (equal '(1 1) (slots 8 2))))))   ; never below one
 
+;;;; The commands take their lease themselves
+
+(defun drgnx-lease-test--stub-emacs ()
+  "A fake Emacs that records DRGNX_LEASE_HELD and DRGNX_LEASE_CAP to the file `held' in the temp dir; its path."
+  (let ((stub (drgnx-lease-test--file "stub-emacs")))
+    (write-region (format "#!/bin/sh\necho \"${DRGNX_LEASE_HELD:-none}\" > %s\n" (drgnx-lease-test--file "held"))
+                  nil stub)
+    (set-file-modes stub #o755)
+    stub))
+
+(defun drgnx-lease-test--held-by (env &rest args)
+  "Run bin/drgnx ARGS with a stub Emacs under ENV; what the stub saw of DRGNX_LEASE_HELD."
+  (let ((stub (drgnx-lease-test--stub-emacs)))
+    (delete-file (drgnx-lease-test--file "held"))
+    (apply #'drgnx-lease-test--call (cons (concat "DRGNX_EMACS=" stub) env) args)
+    (string-trim (drgnx-lease-test--slurp (drgnx-lease-test--file "held")))))
+
+(ert-deftest drgnx-lease/test-takes-a-light-slot ()
+  (drgnx-lease-test--with
+    (should (string-match-p "\\`light:[12]\\'" (drgnx-lease-test--held-by (drgnx-lease-test--env) "test")))
+    (should (string-match-p "\\`light:[12]\\'" (drgnx-lease-test--held-by (drgnx-lease-test--env) "test" "--one-process")))))
+
+(ert-deftest drgnx-lease/ui-takes-a-heavy-slot ()
+  (drgnx-lease-test--with
+    (dolist (flag '("--ui" "--scenario" "--bench" "--perf" "--soak"))   ; the ones that run in the harness's Emacs
+      (should (equal "heavy:1" (drgnx-lease-test--held-by (drgnx-lease-test--env) "test" flag))))))
+
+(ert-deftest drgnx-lease/check-takes-the-host ()
+  (drgnx-lease-test--with
+    (should (equal "exclusive:0" (drgnx-lease-test--held-by (drgnx-lease-test--env) "check")))))
+
+(ert-deftest drgnx-lease/a-nested-bin-drgnx-takes-nothing ()
+  (drgnx-lease-test--with
+    (should (equal "light:7" (drgnx-lease-test--held-by (drgnx-lease-test--env "DRGNX_LEASE_HELD=light:7") "test")))
+    (should (equal "light:7" (drgnx-lease-test--held-by (drgnx-lease-test--env "DRGNX_LEASE_HELD=light:7") "check")))
+    (should-not (file-exists-p (drgnx-lease-test--file "lease")))))
+
 (provide 'bin-lease-test)

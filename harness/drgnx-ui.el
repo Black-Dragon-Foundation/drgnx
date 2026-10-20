@@ -34,7 +34,7 @@
   "The MCP client's token (`drgnx-ui-mcp--token') while it starts a session: session.json's :owner :client.")
 (defconst drgnx-ui-keep-env
   '("HOME" "USER" "LOGNAME" "LANG" "LC_ALL" "PATH" "GRYPHN_EMACS_DIR" "DRGNX_STARTUP_TRACE"
-    "DRGNX_UITEST_SETTLE_SCALE" "DRGNX_MODAL_ELPA")
+    "DRGNX_UITEST_SETTLE_SCALE" "DRGNX_MODAL_ELPA" "DRGNX_LEASE_HELD")
   "The only variables a session inherits; everything else (keys, tokens) stays out.")
 (defconst drgnx-ui-link drgnx-test-env-config-links
   "Code directories of an external config, linked read-only into the session.")
@@ -665,6 +665,21 @@ a later entry wins, so one of those would move a session out of its run director
              ;; A daemon has no frame until a client asks for one (`drgnx-ui-new-frame').
              (if (eq (plist-get sess :daemon) t) '("--fg-daemon") '("--fullscreen"))))))
 
+(defun drgnx-ui--lease-dir ()
+  "The host lease's directory (bin/drgnx lease) when an interactive session takes a light slot, else nil.  Off, as
+in bin/drgnx: inside a leased command (DRGNX_LEASE_HELD: test, check, perf), in CI, DRGNX_LEASE=off, no `flock', no
+directory."
+  (unless (or (equal (getenv "CI") "true") (equal (getenv "DRGNX_LEASE") "off") (getenv "DRGNX_LEASE_HELD")
+              (not (executable-find "flock")))
+    (cond ((getenv "DRGNX_LEASE_DIR"))
+          ((getenv "XDG_RUNTIME_DIR") (expand-file-name "drgnx/lease" (getenv "XDG_RUNTIME_DIR"))))))
+
+(defun drgnx-ui--lease-refusal (log)
+  "\"no light slot free in 120 s: HOLDERS\" when LOG (a session's last lines) says the lease refused it, else nil."
+  (when (string-match "no light slot free in 120 s; holders:\n\\(\\(?:.*\n?\\)*\\)" log)
+    (format "no light slot free in 120 s: %s"
+            (mapconcat #'identity (split-string (match-string 1 log) "\n" t) "; "))))
+
 (defun drgnx-ui-launch-argv (sess)
   (append (list "systemd-run" "--user" "--quiet" "--collect" "--unit" (plist-get sess :name)
                 ;; a session never outlives its budget: 30 min, or $DRGNX_UI_MAX_RUNTIME s (the soak)
@@ -672,8 +687,15 @@ a later entry wins, so one of those would move a session out of its run director
                 ;; a stop kills what is left after 10 s (systemd's default is 90): with ask-to-exit (8 s at most) a
                 ;; session's stop takes 18 s at the very most, within bin/drgnx check's 25 s grace for an ended job
                 "-p" "TimeoutStopSec=10" "--")
-          (drgnx-ui-env-argv (drgnx-ui-session-env sess))
-          (drgnx-ui-compositor-argv sess)))
+          (let ((lease (drgnx-ui--lease-dir)))
+            ;; an interactive session holds a light slot while it lives: no slot in 120 s and it exits.  Its
+            ;; environment is `env -i', so the lease directory is passed; the unit is capped (3G) already.
+            (append (drgnx-ui-env-argv (append (drgnx-ui-session-env sess)
+                                               (and lease (append (list (concat "DRGNX_LEASE_DIR=" lease) "DRGNX_LEASE_CAP=off")
+                                                                  (delq nil (mapcar (lambda (k) (let ((v (getenv k))) (and v (concat k "=" v))))
+                                                                                    '("DRGNX_LEASE_LIGHT" "DRGNX_LEASE_HEAVY")))))))
+                    (and lease (list (expand-file-name "bin/drgnx" drgnx-ui-repo-dir) "lease" "light" "--wait" "120" "--"))
+                    (drgnx-ui-compositor-argv sess)))))
 
 ;;;; Lifecycle
 
@@ -908,13 +930,16 @@ many virtual monitors (default 1).  COMPOSITOR: mutter, sway, x11, i3, kwin or n
     (drgnx-ui--save sess)                 ; stop needs :launcher/:pgid from here on
     (let ((ready (expand-file-name "ready.json" run))
           (t0 (float-time))
-          (deadline (+ (float-time) (or timeout 60)))
+          ;; a session waiting for its lease slot (up to 120 s) is not slow to boot
+          (deadline (+ (float-time) (or timeout 60) (if (drgnx-ui--lease-dir) 120 0)))
           (next-probe 0) prompt)
       (while (and (not (file-exists-p ready)) (not prompt))
         (when (or (> (float-time) deadline) (not (drgnx-ui-alive-p sess)))
           (let ((log (drgnx-ui--log-tail sess)))
             (drgnx-ui-stop name)
-            (drgnx-ui--fail "%s did not become ready:\n%s" name log)))
+            (if-let* ((refusal (drgnx-ui--lease-refusal log)))
+                (drgnx-ui--fail "%s: %s" name refusal)
+              (drgnx-ui--fail "%s did not become ready:\n%s" name log))))
         ;; Still booting after 2 s: is the configuration asking something?  (The server
         ;; and harness agent start before the configuration's init.el.)
         (when (and (> (float-time) (+ t0 2)) (> (float-time) next-probe))

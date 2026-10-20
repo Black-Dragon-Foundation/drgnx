@@ -221,5 +221,15 @@ keeps them to what the memory and cores carry, across all checkouts.
 - **Off** (CMD runs directly, no cap): `CI=true`, `DRGNX_LEASE=off`, no `flock` on PATH (macOS), bash older than 4,
   no lease directory, or `DRGNX_LEASE_HELD` set (a nested call).
 
+**Which command takes which class.** You do not call `lease` yourself: `bin/drgnx` takes its own lease and re-runs
+itself inside it (the child has `DRGNX_LEASE_HELD` set, so everything it starts takes nothing again).
+
+| Command | Class |
+|---|---|
+| `test` (also `--one-process`, `--leaks`, `--shuffle`, `--find-polluter`) | light |
+| `test --ui`, `--tty`, `--scenario`, `--bench`, `--perf`, `--soak`, `--container`, `--podman`, `--install`, `--bootstrap` | heavy |
+| `test --perf --ab`, `check` | exclusive |
+| an interactive `drgnx ui start` or MCP `ui_start` | light, while the session lives (`docs/develop/harness.md`) |
+
 The tests are `test/unit/bin-lease-test.el`; they use a temp lease dir and unset `DRGNX_LEASE_HELD` and `CI` for the
 `bin/drgnx` they start.
