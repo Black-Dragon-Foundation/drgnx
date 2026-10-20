@@ -99,6 +99,12 @@ acted last beside your file.
 Nothing an agent asks is ever a question in the minibuffer: the agent waits, the Agents tab says "1 to answer",
 and you answer when you look.
 
+Each pending permission ("NAME asks: TITLE", opens Answer Agent) and each edit to review ("NAME wants to write FILE",
+opens Show Agents) is also one item of the one "needs you" count ([notices](../develop/core.md#notices-drgnx-noticeel)): source
+`agents`, scoped to the session's job, for sessions this Emacs runs and the hub's sessions it mirrors alike. It leaves
+the count when you answer it, when the turn is stopped, or when the session ends. Noting it costs nothing while an
+agent streams: the set is rebuilt only when a session's permissions or edits to review change.
+
 Each agent's own settings (its routes and billing, MCP servers, hooks and skills) are on its settings page: `,` on a session's row, or Agents: Settings ([agent-settings.md](agent-settings.md)).
 
 ## Reviewing an agent's edits
@@ -381,7 +387,8 @@ run it, with the plan's own encoding and line endings — and leaves alone a pla
   split / malformed / 1 MB lines, the agent exiting with its error output.
 - `test/unit/agents-test.el` — sessions: a turn's transcript, queueing during a turn (delivered in order, never
   cancelling), steering (and its fallback), Stop within a second, permissions, tool calls, plans and subagents, a
-  dying agent, Take Over, `/compact`.
+  dying agent, Take Over, `/compact`; what waits on you as the `agents` set of the "needs you" count (a mirror's
+  too, scoped by job, gone once answered or ended, and no allocation for a session that did not change).
 - `test/unit/agents-claude-options-test.el` — a job session's Claude cannot be pre-allowed
   ([above](#jobs-and-your-claude-settings)).
 - `test/unit/agents-adapter-test.el` — which adapter runs, from fake npm prefixes with `package.json` files only (no

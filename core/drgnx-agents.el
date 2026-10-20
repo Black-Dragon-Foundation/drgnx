@@ -23,6 +23,7 @@
 (require 'drgnx-timer)
 (require 'drgnx-agent-config)          ; `drgnx-agent-config-vendor-env'
 (require 'drgnx-large-file)            ; `drgnx-large-file-p': a large file is read from disk
+(require 'drgnx-notice)                 ; what waits on you is the `agents' set of the "needs you" count
 
 (declare-function drgnx-gateway--restrictions-check "drgnx-gateway")
 
@@ -254,7 +255,59 @@ typo never turns a restriction off.  One setting for every OpenRouter route; it 
                (list :data-collection (symbol-name (plist-get restrictions :data-collection))))
           (and (plist-get restrictions :zdr) (list :zdr t))))
 
-(defun drgnx-agents--changed (s) (run-hook-with-args 'drgnx-agents-changed-functions s))
+(defun drgnx-agents--changed (s)
+  (drgnx-agents--note-attention)
+  (run-hook-with-args 'drgnx-agents-changed-functions s))
+
+;;;; What waits on you: the `agents' set of the one "needs you" count
+
+(defvar drgnx-agents--attention-seen nil
+  "What `drgnx-agents--note-attention' last noted: one (SESSION PERMS . REVIEWS) per session, in the order of
+`drgnx-agents--sessions'; PERMS and REVIEWS are copies of its lists (nil for an exited session).")
+
+(defun drgnx-agents--same-items-p (a b)
+  "Non-nil if lists A and B hold the same objects (`eq'), in order; allocates nothing."
+  (while (and a b (eq (car a) (car b))) (setq a (cdr a) b (cdr b)))
+  (and (null a) (null b)))
+
+(defun drgnx-agents--attention-same-p ()
+  "Non-nil if no session came or went, and none's permissions or edits to review changed, since the last note."
+  (let ((ss drgnx-agents--sessions) (seen drgnx-agents--attention-seen) (same t))
+    (while (and same ss seen)
+      (let* ((s (car ss)) (e (car seen)) (live (not (eq (drgnx-agent-session-status s) 'exited))))
+        (setq same (and (eq s (car e))
+                        (drgnx-agents--same-items-p (and live (drgnx-agent-session-permissions s)) (cadr e))
+                        (drgnx-agents--same-items-p (and live (drgnx-agent-session-reviews s)) (cddr e)))
+              ss (cdr ss) seen (cdr seen))))
+    (and same (null ss) (null seen))))
+
+(defun drgnx-agents--note-attention ()
+  "Give the notice model the `agents' set: each live session's pending permissions and edits to review.
+Called on every change of a session (`drgnx-agents--changed', a mirror's too), so a streamed chunk costs a walk that
+allocates nothing; the set is built only when a list changed.  A review's path is the agent's: it is abbreviated
+with no file name handler."
+  (unless (drgnx-agents--attention-same-p)
+    (let ((seen nil) (items nil))
+      (dolist (s drgnx-agents--sessions)
+        (let* ((live (not (eq (drgnx-agent-session-status s) 'exited)))
+               (perms (and live (drgnx-agent-session-permissions s)))
+               (reviews (and live (drgnx-agent-session-reviews s)))
+               (sid (drgnx-agent-session-id s)) (name (drgnx-agent-session-name s)) (job (drgnx-agent-session-job s)))
+          (push (cons s (cons (copy-sequence perms) (copy-sequence reviews))) seen)
+          (dolist (p perms)
+            (push (list :id (cons 'permission (cons sid (plist-get p :id)))
+                        :text (format "%s asks: %s" name (or (plist-get p :title) "permission"))
+                        :command 'agents-answer :scope job)
+                  items))
+          (dolist (r reviews)
+            (push (list :id (cons 'review (cons sid (plist-get r :id)))
+                        :text (format "%s wants to write %s" name
+                                      (let ((path (plist-get r :path)) (file-name-handler-alist nil))
+                                        (if (stringp path) (abbreviate-file-name path) "a file")))
+                        :command 'agents-view :scope job)
+                  items))))
+      (setq drgnx-agents--attention-seen (nreverse seen))
+      (drgnx-notice-set 'agents (nreverse items)))))
 
 ;;;; Transcript
 
