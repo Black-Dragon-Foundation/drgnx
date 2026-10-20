@@ -272,6 +272,10 @@ the temp dir) and sleeps.  Return the process."
   (drgnx-lease-test--with
     (should (equal "exclusive:0" (drgnx-lease-test--held-by (drgnx-lease-test--env) "check")))))
 
+(ert-deftest drgnx-lease/perf-ab-takes-the-host ()
+  (drgnx-lease-test--with
+    (should (equal "exclusive:0" (drgnx-lease-test--held-by (drgnx-lease-test--env) "test" "--perf" "--ab" "HEAD")))))
+
 (ert-deftest drgnx-lease/a-nested-bin-drgnx-takes-nothing ()
   (drgnx-lease-test--with
     (should (equal "light:7" (drgnx-lease-test--held-by (drgnx-lease-test--env "DRGNX_LEASE_HELD=light:7") "test")))

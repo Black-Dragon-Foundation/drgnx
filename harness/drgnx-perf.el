@@ -373,6 +373,40 @@ and never fails on it — CI has no history and gates on budgets."
                         out))))))))
     (nreverse out)))
 
+;;;; Paired A/B: the bootstrap interval and the verdict (`drgnx-perf-ab' in drgnx-perf-run.el)
+
+(defun drgnx-perf--median (values)
+  "The median of the list or vector VALUES (the mean of the middle two for an even count)."
+  (let* ((v (sort (append values nil) #'<)) (n (length v)))
+    (if (cl-oddp n) (nth (/ n 2) v) (/ (+ (nth (1- (/ n 2)) v) (nth (/ n 2) v)) 2.0))))
+
+(cl-defun drgnx-perf-bootstrap-diff (a b &key (iterations 2000) (seed 1))
+  "(:diff D :lo L :hi H): the median of B minus the median of A, with a 95% interval from resampling both with
+replacement ITERATIONS times.  It draws from its own generator (a seeded linear congruential one, MINSTD), never
+from the global `random' state: the same samples and SEED give the same interval."
+  (let* ((state (max 1 (mod seed 2147483647)))
+         (va (vconcat a)) (vb (vconcat b)) (na (length va)) (nb (length vb)) diffs)
+    (cl-flet ((draw (vec n)
+                (setq state (mod (* state 48271) 2147483647))
+                (aref vec (mod state n))))
+      (dotimes (_ iterations)
+        (push (- (drgnx-perf--median (cl-loop repeat nb collect (draw vb nb)))
+                 (drgnx-perf--median (cl-loop repeat na collect (draw va na))))
+              diffs)))
+    (let ((d (vconcat (sort diffs #'<))))
+      (list :diff (- (drgnx-perf--median vb) (drgnx-perf--median va))
+            :lo (aref d (floor (* 0.025 iterations))) :hi (aref d (min (1- iterations) (floor (* 0.975 iterations))))))))
+
+(defun drgnx-perf-ab-verdict (a b)
+  "(:verdict V :diff :lo :hi :threshold T) for the wall-clock samples A (the REF) and B (the work tree): T is
+max(1 ms, 10% of A's median).  regressed: the whole interval is above T; no-regression: all of it at or below T;
+inconclusive: T is inside it."
+  (let* ((ci (drgnx-perf-bootstrap-diff a b)) (th (max 1.0 (* 0.10 (drgnx-perf--median a)))))
+    (append (list :verdict (cond ((> (plist-get ci :lo) th) 'regressed)
+                                 ((<= (plist-get ci :hi) th) 'no-regression)
+                                 (t 'inconclusive)))
+            ci (list :threshold th))))
+
 ;;;; Calibration: how much of a wall-clock number is the machine's
 
 (defun drgnx-perf-load ()

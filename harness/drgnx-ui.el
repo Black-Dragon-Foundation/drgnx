@@ -19,6 +19,10 @@
 
 (defconst drgnx-ui-harness-dir (file-name-directory (or load-file-name buffer-file-name)))
 (defconst drgnx-ui-repo-dir (file-name-directory (directory-file-name drgnx-ui-harness-dir)))
+(defvar drgnx-ui-session-repo nil
+  "The drgnx checkout whose init/, core/, wb/ and modules/ a session boots (nil: `drgnx-ui-repo-dir').  The harness
+(prelude, drgnx-uitest, the perf probes) always comes from the controller's own tree; `test --perf --ab REF' points
+this at an exported REF.")
 (defconst drgnx-ui-name-regexp "\\`drgnx-ui-[0-9]+-[0-9a-f]\\{6\\}\\'"
   "A session id: drgnx-ui-N-HEX (`drgnx-ui-next-name').  Never reused, so an id names one session only.")
 (defconst drgnx-ui-legacy-name-regexp "\\`drgnx-ui-[0-9]+\\'"
@@ -445,7 +449,7 @@ killed."
   (unless (member config '(nil "" "minimal"))
     (let ((dir (expand-file-name (pcase config
                                    ("gryphn" (or (getenv "DRGNX_GRYPHN_CONFIG") "~/.config/emacs"))
-                                   ("drgnx" (expand-file-name "init" drgnx-ui-repo-dir))
+                                   ("drgnx" (expand-file-name "init" (or drgnx-ui-session-repo drgnx-ui-repo-dir)))
                                    (_ config)))))
       (unless (file-regular-p (expand-file-name "init.el" dir))
         (drgnx-ui--fail "config %S: no init.el in %s" config dir))
@@ -1832,7 +1836,10 @@ a boolean flag (`drgnx-ui--boolean-flags') becomes :name t."
       ("test-scenario" (drgnx-ui-run-scenarios (plist-get opts :config) (plist-get opts :dir)))
       ("test-bench" (require 'drgnx-bench) (let ((drgnx-ui-session-tier 'bench)) (drgnx-bench-run)))
       ("test-perf" (require 'drgnx-perf-run)
-       (let ((drgnx-ui-session-tier 'perf)) (drgnx-perf-run (getenv "DRGNX_PERF_AUDIT"))))
+       (let ((drgnx-ui-session-tier 'perf))
+         (if-let* ((ref (getenv "DRGNX_PERF_AB")))
+             (drgnx-perf-ab ref :n (string-to-number (or (getenv "DRGNX_PERF_AB_N") "100")))
+           (drgnx-perf-run (getenv "DRGNX_PERF_AUDIT")))))
       ("test-soak" (require 'drgnx-perf-run)
        (let ((drgnx-ui-session-tier 'perf)) (drgnx-perf-soak (and (car pos) (string-to-number (car pos))))))
       ("mcp" (require 'drgnx-ui-mcp) (drgnx-ui-mcp-main))

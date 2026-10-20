@@ -1080,5 +1080,184 @@ each round; fails when RSS grows by more than 20% from the first round or passes
             (over 1)
             (t (princ "soak: memory holds\n") 0)))))
 
+;;;; Paired A/B: `drgnx test --perf --ab REF'
+
+(defun drgnx-perf-ab--shell (cmd)
+  "Run the shell command CMD; its exit code (the output is shown)."
+  (call-process-shell-command cmd nil t))
+
+(defun drgnx-perf-ab--export (ref dest)
+  "REF's files as they are in git, into DEST: an archive, not a worktree (no branch, no .git, nothing to remove)."
+  (make-directory dest t)
+  (let ((code (drgnx-perf-ab--shell (format "git -C %s archive %s | tar -x -C %s" (shell-quote-argument (directory-file-name drgnx-ui-repo-dir))
+                                            (shell-quote-argument ref) (shell-quote-argument dest)))))
+    (unless (eql code 0) (error "perf: cannot export %s (git archive failed)" ref))))
+
+(defun drgnx-perf-ab--build (tree)
+  "`bin/drgnx build' in TREE (its .elc files; the native-compilation cache is warmed by `drgnx-perf-ab--settle-form')."
+  (unless (eql 0 (drgnx-perf-ab--shell (format "%s build" (shell-quote-argument (expand-file-name "bin/drgnx" tree)))))
+    (error "perf: bin/drgnx build failed in %s" tree)))
+
+(defun drgnx-perf-ab--start (tree)
+  "A session whose init, core, wb and modules come from TREE (nil: the controller's own); the harness is ours."
+  (let ((drgnx-ui-session-repo tree))
+    (drgnx-ui-start "drgnx" "1400x800" 60)))
+
+(defconst drgnx-perf-ab--settle-form
+  "(progn (let ((d (+ (float-time) 180))) (while (and (fboundp 'comp--async-runnings) (boundp 'comp-files-queue)
+         (or comp-files-queue (> (comp--async-runnings) 0)) (< (float-time) d)) (accept-process-output nil 0.2))) t)"
+  "Wait until the session's background native compilation has drained (PERF-ELN-1: a fresh tree compiles its files
+to the eln cache while it runs, and the wall clock pays for it).")
+
+(defun drgnx-perf-ab--one (sess spec)
+  "One repeat of the input workload SPEC in SESS: (:samples (ms per command…) :run RESULT)."
+  (when (plist-get spec :each) (drgnx-perf-run--call sess (plist-get spec :each) 120) (drgnx-ui-measure sess nil))
+  (drgnx-perf-run--call sess "(progn (drgnx-perf-begin) t)")
+  (drgnx-ui-measure sess (plist-get spec :actions))
+  (let* ((run (append (drgnx-perf-run--call sess "(drgnx-perf-end)")
+                      (and (plist-get spec :measure) (drgnx-perf-run--call sess (plist-get spec :measure) 120))))
+         (samples (append (drgnx-perf-run--call sess "(vconcat drgnx-perf--latencies)") nil)))
+    (when (and (plist-get spec :check) (not (eq t (drgnx-perf-run--call sess (plist-get spec :check)))))
+      (error "The workload did not do what it measures (%s)" (plist-get spec :check)))
+    (list :samples samples :run run)))
+
+(defun drgnx-perf-ab-rounds (n run)
+  "Call RUN with a, b, a, b… (a run's wall samples each) until both sides have at least N samples and two runs.
+(:a SAMPLES :b SAMPLES :runs (SIDE…))."
+  (let (a b order (guard 0))
+    (while (or (< (length a) n) (< (length b) n) (< (/ (length order) 2) 2))
+      (when (> (cl-incf guard) 2000) (error "perf: no wall samples after 2000 rounds"))
+      (setq a (append a (funcall run 'a)) b (append b (funcall run 'b)) order (append order '(a b))))
+    (list :a a :b b :runs order)))
+
+(defun drgnx-perf-ab--budget-fails (workload stats budgets)
+  "The work tree's absolute wall-clock BUDGETS for WORKLOAD against STATS (of its samples), judged at n >= 100."
+  (let (out)
+    (dolist (b budgets)
+      (pcase-let ((`(,w ,path ,limit . ,_) b))
+        (when (and (eq w workload) (eq (car path) :input) (not (cdr (cdr path))))
+          (let ((v (plist-get stats (cadr path))))
+            (when (and (>= (plist-get stats :n) 100) (numberp v) (> v limit))
+              (push (format "%s input %s %s > %s" w (substring (symbol-name (cadr path)) 1) (drgnx-perf--round v) limit) out))))))
+    (nreverse out)))
+
+(defun drgnx-perf-ab--workload (name spec sa sb n)
+  "A/B workload NAME between sessions SA (the REF) and SB (the work tree): an entry plist, :status one of
+judged, not-comparable, error, not-judged."
+  (let ((call (lambda (s f) (drgnx-perf-run--call s f 120))))
+    (cond
+     ((or (plist-get spec :daemon) (null (plist-get spec :actions)))
+      (list :name name :status 'not-comparable :why "no per-command wall samples"))
+     (t
+      (condition-case err
+          (let (runs-a runs-b cal-a cal-b warm)
+            (unwind-protect
+                (progn
+                  (when (plist-get spec :setup)
+                    (condition-case e (funcall call sa (plist-get spec :setup))
+                      (error (signal 'drgnx-perf-ab-ref-error (list (error-message-string e)))))
+                    (funcall call sb (plist-get spec :setup)))
+                  (setq cal-a (list (funcall call sa "(drgnx-perf-calibrate)")) cal-b (list (funcall call sb "(drgnx-perf-calibrate)")))
+                  ;; one run each, discarded: the same warm-up for both (the first run pays for lazy loading and eln)
+                  (setq warm (list (plist-get (drgnx-perf-stats (plist-get (condition-case e (drgnx-perf-ab--one sa spec)
+                                                                             (error (signal 'drgnx-perf-ab-ref-error (list (error-message-string e)))))
+                                                                           :samples)) :p50)
+                                   (plist-get (drgnx-perf-stats (plist-get (drgnx-perf-ab--one sb spec) :samples)) :p50)))
+                  (let* ((r (drgnx-perf-ab-rounds n (lambda (side)
+                                                      (let ((one (drgnx-perf-ab--one (if (eq side 'a) sa sb) spec)))
+                                                        (push (plist-get one :run) (if (eq side 'a) runs-a runs-b))
+                                                        (plist-get one :samples)))))
+                         (a (plist-get r :a)) (b (plist-get r :b)))
+                    (push (funcall call sa "(drgnx-perf-calibrate)") cal-a)
+                    (push (funcall call sb "(drgnx-perf-calibrate)") cal-b)
+                    (let* ((loaded (seq-some (lambda (c) (plist-get c :loaded)) (append cal-a cal-b)))
+                           (sa-stats (drgnx-perf-stats a)) (sb-stats (drgnx-perf-stats b)))
+                      (append (list :name name :status (if loaded 'not-judged 'judged) :a sa-stats :b sb-stats
+                                    :warm warm :calibration (list :a cal-a :b cal-b)
+                                    :a-run (drgnx-perf-run--medians runs-a) :b-run (drgnx-perf-run--medians runs-b)
+                                    :runs (/ (length (plist-get r :runs)) 2))
+                              (and (not loaded) (list :verdict (drgnx-perf-ab-verdict a b)))
+                              (list :budget-fails (drgnx-perf-ab--budget-fails name sb-stats (drgnx-perf-run--budgets))))))
+                  )
+              (when (plist-get spec :teardown)
+                (ignore-errors (funcall call sa (plist-get spec :teardown)))
+                (ignore-errors (funcall call sb (plist-get spec :teardown))))))
+        (drgnx-perf-ab-ref-error (list :name name :status 'not-comparable :why (format "errors on REF: %s" (cadr err))))
+        (error (list :name name :status 'error :why (error-message-string err))))))))
+
+(define-error 'drgnx-perf-ab-ref-error "The workload failed on REF")
+
+(defun drgnx-perf-ab--line (e)
+  (let* ((st (plist-get e :status)) (v (plist-get e :verdict)) (a (plist-get e :a)) (b (plist-get e :b))
+         (side (lambda (x) (format "n=%s p50 %s p90 %s p95 %s" (plist-get x :n) (drgnx-perf--round (plist-get x :p50)) (drgnx-perf--round (plist-get x :p90))
+                                   (or (drgnx-perf--round (plist-get x :p95)) "-")))))
+    (pcase st
+      ('not-comparable (format "%-13s not comparable: %s" (plist-get e :name) (plist-get e :why)))
+      ('error (format "%-13s ERROR: %s" (plist-get e :name) (plist-get e :why)))
+      (_ (format "%-13s %s\n%-13s REF  %s\n%-13s tree %s\n%-13s diff %s ms [%s, %s] threshold %s; warm-up p50 REF %s tree %s; alloc p50 %s/%s, cpu p90 %s/%s, rows %s/%s"
+                 (plist-get e :name)
+                 (if (eq st 'not-judged) "not judged: loaded calibration (wall clock is the machine's)" (symbol-name (plist-get v :verdict)))
+                 "" (funcall side a) "" (funcall side b)
+                 "" (drgnx-perf--round2 (plist-get v :diff)) (drgnx-perf--round2 (plist-get v :lo)) (drgnx-perf--round2 (plist-get v :hi))
+                 (drgnx-perf--round2 (plist-get v :threshold)) (drgnx-perf--round (nth 0 (plist-get e :warm))) (drgnx-perf--round (nth 1 (plist-get e :warm)))
+                 (plist-get (plist-get (plist-get e :a-run) :alloc) :p50) (plist-get (plist-get (plist-get e :b-run) :alloc) :p50)
+                 (plist-get (plist-get (plist-get e :a-run) :cpu_ms) :p90) (plist-get (plist-get (plist-get e :b-run) :cpu_ms) :p90)
+                 (plist-get (plist-get e :a-run) :rows) (plist-get (plist-get e :b-run) :rows))))))
+
+(cl-defun drgnx-perf-ab (ref &key (n 100))
+  "`drgnx test --perf --ab REF': wall clock judged by interleaving two trees.  REF is exported with `git archive'
+and both trees are built; one session each; per workload one discarded warm-up run per side, then runs
+A, B, A, B… until each side has at least N per-command samples (and two runs), with the calibration before and
+after.  Per workload: both sides' stats, the bootstrap verdict (`drgnx-perf-ab-verdict'), both sides' allocation,
+CPU and rows, and the work tree's wall budgets (judged at n >= 100).  Exit: 0 judged and clean, 1 regressed or a
+budget fails, 3 not judged (a loaded calibration, a busy host, an inconclusive interval).  Results go to
+$DRGNX_PERF_RESULTS.  With DRGNX_LEASE_BUSY set it runs plain `--perf' on the work tree instead."
+  (if (getenv "DRGNX_LEASE_BUSY")
+      (let ((code (drgnx-perf-run)))
+        (princ "wall clock not judged: host busy\n")
+        (if (eql code 0) 3 code))
+    (let* ((tmp (or (getenv "DRGNX_RUN_TMP") (make-temp-file "drgnx-ab" t))) (ref-tree (expand-file-name "ab-ref" tmp))
+           (drgnx-perf-run--fixture (drgnx-perf-run--make-fixture))
+           (workloads (drgnx-perf-run--select (drgnx-perf-run--only (drgnx-perf-run--workloads))))
+           sa-name sb-name entries)
+      (unwind-protect
+          (progn
+            (drgnx-perf-ab--export ref ref-tree)
+            (drgnx-perf-ab--build ref-tree)
+            (drgnx-perf-ab--build drgnx-ui-repo-dir)
+            (setq sa-name (plist-get (drgnx-perf-ab--start ref-tree) :name) sb-name (plist-get (drgnx-perf-ab--start nil) :name))
+            (let ((sa (drgnx-ui-own-session sa-name)) (sb (drgnx-ui-own-session sb-name)))
+              (drgnx-perf-run--call sa drgnx-perf-ab--settle-form 200)
+              (drgnx-perf-run--call sb drgnx-perf-ab--settle-form 200)
+              (dolist (w workloads)
+                (message "perf ab: %s…" (car w))
+                (push (drgnx-perf-ab--workload (car w) (cdr w) sa sb n) entries))))
+        (when sa-name (ignore-errors (drgnx-ui-stop sa-name)))
+        (when sb-name (ignore-errors (drgnx-ui-stop sb-name)))
+        (delete-file drgnx-perf-run--fixture))
+      (setq entries (nreverse entries))
+      (dolist (e entries) (princ (concat (drgnx-perf-ab--line e) "\n")))
+      (when-let* ((file (getenv "DRGNX_PERF_RESULTS")))
+        (unless (string-empty-p file)
+          (drgnx-perf-run--write-results
+           file (mapcar (lambda (e)
+                          (let ((v (plist-get e :verdict)))
+                            (cons (plist-get e :name)
+                                  (list :status (symbol-name (plist-get e :status))
+                                        :verdict (and v (symbol-name (plist-get v :verdict)))
+                                        :diff (and v (list :diff (plist-get v :diff) :lo (plist-get v :lo) :hi (plist-get v :hi)))
+                                        :a (plist-get e :a) :b (plist-get e :b)
+                                        :a_run (plist-get e :a-run) :b_run (plist-get e :b-run) :why (plist-get e :why)))))
+                        entries))))
+      (let* ((verdicts (mapcar (lambda (e) (plist-get (plist-get e :verdict) :verdict)) entries))
+             (fails (append (seq-mapcat (lambda (e) (plist-get e :budget-fails)) entries)
+                            (seq-filter (lambda (e) (eq (plist-get e :status) 'error)) entries))))
+        (dolist (f (seq-filter #'stringp fails)) (princ (format "FAIL %s\n" f)))
+        (cond ((or (memq 'regressed verdicts) fails) 1)
+              ((or (memq 'inconclusive verdicts) (seq-some (lambda (e) (eq (plist-get e :status) 'not-judged)) entries)
+                   (null (seq-filter (lambda (e) (eq (plist-get e :status) 'judged)) entries)))
+               (princ "wall clock not judged: loaded calibration, inconclusive interval or nothing comparable\n") 3)
+              (t (princ "perf ab: no regression, wall budgets hold\n") 0))))))
+
 (provide 'drgnx-perf-run)
 ;;; drgnx-perf-run.el ends here
