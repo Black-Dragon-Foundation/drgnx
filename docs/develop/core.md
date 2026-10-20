@@ -2461,6 +2461,10 @@ returns PRED's first non-nil value, polling with `(accept-process-output nil 0.0
   under `test/` whose PRED mentions `process-live-p`.
 - **Inside the clock fixture** (`drgnx-test-with-clock`) it works unchanged: the deadline is read through
   `drgnx-test-real-time`, and each timed `accept-process-output` advances virtual time by the real wait.
+- **A GUI test that makes a frame waits for it to be mapped**: `(drgnx-test-wait (lambda () (eq (frame-visible-p F)
+  t)) :what "…")` before it redisplays. The compositor maps a new frame when it gets to it (pgtk under mutter:
+  after `make-frame` has returned), and redisplay skips a frame that is not mapped, so its mode lines are never
+  drawn (`drgnx-statusbar-ui/each-frame-has-its-own-full-bar`).
 
 Load it as the other fixtures are loaded: `(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)`.
 
