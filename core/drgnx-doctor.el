@@ -21,12 +21,18 @@
 (require 'drgnx-tty-recommend)   ; the terminal table, tmux, the fallback keys and the recommendation (all read-only)
 (require 'drgnx-platform)        ; the window manager (the Desktop row)
 
+(defvar nidhogg-version)   ; bound by Nidhogg, drgnx's own Emacs build
+
 (declare-function package-built-in-p "package")
 (declare-function drgnx-portable-config-problems "drgnx-portable")
 
 (defconst drgnx-doctor-install-hint
   "run the installer: curl -fsSL https://raw.githubusercontent.com/Black-Dragon-Foundation/drgnx/main/install.sh | bash  (see docs/guide/install.md)"
   "How to get a suitable Emacs.")
+
+(defconst drgnx-doctor-nidhogg-hint
+  "run the installer again: it builds Nidhogg (see docs/guide/install.md, \"Nidhogg\")"
+  "How to get Nidhogg, drgnx's own Emacs build.")
 
 (defconst drgnx-doctor-security-issues
   '(("CVE-2026-108976" "TRAMP: the first fix left user names with ! # & , and control characters" "31.2")
@@ -335,6 +341,7 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
   (let ((native (and (fboundp 'native-comp-available-p) (native-comp-available-p))))
     (append
      (list :version emacs-version
+           :nidhogg (bound-and-true-p nidhogg-version)
            :native-available native
            :native-compiles (if native (drgnx-doctor--native-compiles) "not built with native compilation")
            :treesit (and (fboundp 'treesit-available-p) (treesit-available-p))
@@ -407,11 +414,14 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
 
 (defun drgnx-doctor--version< (a b) (version< a b))
 
-(drgnx-doctor-define 'emacs-version :group "Emacs" :doc "GNU Emacs 31.1 or newer"
+(drgnx-doctor-define 'emacs-version :group "Emacs" :doc "Nidhogg, drgnx's own Emacs build (stock GNU Emacs 31.1 warns)"
                      :check (lambda (f)
-                              (let ((v (plist-get f :version)))
-                                (cond ((not (drgnx-doctor--version< v "31.1")) (list 'ok (format "Emacs %s" v) nil))
-                                      (t (list 'fail (format "Emacs %s is too old (31.1 or newer needed)" v) drgnx-doctor-install-hint))))))
+                              (let ((v (plist-get f :version)) (n (plist-get f :nidhogg)))
+                                (cond ((drgnx-doctor--version< v "31.1")
+                                       (list 'fail (format "Emacs %s is too old (31.1 or newer needed)" v) drgnx-doctor-install-hint))
+                                      (n (list 'ok (format "Nidhogg %s (GNU Emacs %s)" n v) nil))
+                                      (t (list 'warn (format "GNU Emacs %s is not Nidhogg, drgnx's own Emacs build: drgnx still runs on it for now" v)
+                                               drgnx-doctor-nidhogg-hint))))))
 
 (drgnx-doctor-define 'native-compilation :group "Emacs" :doc "Native compilation works (drgnx's speed depends on it)"
                      :check (lambda (f)

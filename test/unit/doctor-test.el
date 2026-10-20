@@ -5,17 +5,28 @@
 (load (expand-file-name "test/fixtures/scripted-process" drgnx-dir) nil t)
 
 (defun drgnx-doctor-test--facts (&rest kv)
-  (append kv (list :version "31.1" :native-available t :native-compiles t :treesit t :gui 'pgtk :git t :sqlite t)))
+  (append kv (list :version "31.1" :nidhogg "31.1-nidhogg.1" :native-available t :native-compiles t :treesit t
+                   :gui 'pgtk :git t :sqlite t)))
 
 (defun drgnx-doctor-test--status (name facts)
   (car (drgnx-doctor-check name facts)))
 
 (ert-deftest drgnx-doctor/emacs-version ()
-  (should (eq (drgnx-doctor-test--status 'emacs-version (drgnx-doctor-test--facts)) 'ok))
-  (should (eq (drgnx-doctor-test--status 'emacs-version (drgnx-doctor-test--facts :version "31.2")) 'ok))
-  (should (eq (drgnx-doctor-test--status 'emacs-version (drgnx-doctor-test--facts :version "30.2")) 'fail))
+  (let ((nid (drgnx-doctor-test--facts)))
+    (should (eq (drgnx-doctor-test--status 'emacs-version nid) 'ok))
+    (should (string-search "Nidhogg 31.1-nidhogg.1 (GNU Emacs 31.1)" (nth 1 (drgnx-doctor-check 'emacs-version nid)))))
+  (let ((stock (drgnx-doctor-test--facts :nidhogg nil)))
+    (should (eq (drgnx-doctor-test--status 'emacs-version stock) 'warn))
+    (should (string-search "not Nidhogg" (nth 1 (drgnx-doctor-check 'emacs-version stock))))
+    (should (string-search "installer" (nth 2 (drgnx-doctor-check 'emacs-version stock)))))
+  (should (eq (drgnx-doctor-test--status 'emacs-version (drgnx-doctor-test--facts :nidhogg nil :version "31.2")) 'warn))
+  (should (eq (drgnx-doctor-test--status 'emacs-version (drgnx-doctor-test--facts :nidhogg nil :version "30.2")) 'fail))
   (should (eq (drgnx-doctor-test--status 'emacs-version (drgnx-doctor-test--facts :version "29.4")) 'fail))
-  (should (string-search "31.1 or newer needed" (nth 1 (drgnx-doctor-check 'emacs-version (drgnx-doctor-test--facts :version "30.2"))))))
+  (should (string-search "31.1 or newer needed"
+                         (nth 1 (drgnx-doctor-check 'emacs-version (drgnx-doctor-test--facts :nidhogg nil :version "30.2"))))))
+
+(ert-deftest drgnx-doctor/facts-name-nidhogg ()
+  (should (equal (plist-get (drgnx-doctor-facts) :nidhogg) (bound-and-true-p nidhogg-version))))
 
 (ert-deftest drgnx-doctor/native-compilation ()
   (should (eq (drgnx-doctor-test--status 'native-compilation (drgnx-doctor-test--facts)) 'ok))

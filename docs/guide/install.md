@@ -206,6 +206,14 @@ Expect 10–40 minutes depending on the machine (most of it is compiling the Lis
 
 To do it by hand, follow the same steps; any Emacs ≥ 31.1 built with `--with-native-compilation` works.
 
+## Nidhogg
+
+Nidhogg is drgnx's own Emacs build: GNU Emacs 31.1 plus a small patch series, with the command `nidhogg` and the
+variable `nidhogg-version` (for example `31.1-nidhogg.1`; `emacs-version` stays GNU's own, `"31.1"`). `drgnx doctor`'s
+`emacs-version` check says `OK` on Nidhogg. A stock GNU Emacs 31.1 or newer still runs drgnx for now, with a `WARN` ("not
+Nidhogg"); that warning becomes a failure when drgnx first needs a Nidhogg patch. Fix: run the installer again, which
+builds Nidhogg. Anything older than 31.1 fails the check either way.
+
 ## Older Emacs
 
 Anything older than 31.1 is not supported. `drgnx doctor` fails the `emacs-version` check and points to the installer; the
