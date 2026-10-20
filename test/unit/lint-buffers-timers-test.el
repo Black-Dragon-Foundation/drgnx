@@ -185,7 +185,7 @@ lambda or not)."
     (nreverse out)))
 
 (defconst drgnx-lint-timers--not-yet
-  '(("wb/drgnx-explorer.el" 4))
+  '()
   "Timer sites that do not go through `drgnx-timer-*' yet: (FILE COUNT).
 Counts can only fall; teardown's Task 24 needs this list empty.  A branch merged later adds its
 files' counts in its merge commit.")

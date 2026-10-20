@@ -2,7 +2,9 @@
 (require 'ert)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (require 'drgnx-explorer)
+(require 'drgnx-timer)
 
 (defun drgnx-explorer-test--tree (root paths)
   "Create PATHS under ROOT (a trailing / makes a directory)."
@@ -231,6 +233,37 @@
           (should (equal (drgnx-explorer-node-at (window-start w)) (expand-file-name "f200.txt" big)))
           (should (equal (drgnx-explorer-node-at (window-point w)) (expand-file-name "f205.txt" big))))))))
 
+(ert-deftest drgnx-explorer/a-render-keeps-each-window-on-its-path ()
+  ;; Two windows on the Explorer and the buffer's own point: a render with a row added above them all keeps each
+  ;; start and point on its path, at the same place in the row (a redraw never moves the cursor under the user).
+  (drgnx-explorer-test--with root
+    (let ((big (expand-file-name "big" root)))
+      (make-directory big)
+      (dotimes (i 300) (write-region "" nil (expand-file-name (format "f%03d.txt" i) big) nil 'silent))
+      (drgnx-explorer-refresh)
+      (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "big"))
+      (drgnx-wb-show-sidebar)
+      (select-window (drgnx-wb-editor-window))
+      (let ((w1 (drgnx-wb-section-window 'explorer)) (w2 (split-window (drgnx-wb-editor-window)))
+            (pos (lambda (name) (drgnx-explorer--row-pos (expand-file-name name big)))))
+        (set-window-buffer w2 drgnx-explorer-buffer-name)
+        (with-current-buffer drgnx-explorer-buffer-name
+          (set-window-start w1 (funcall pos "f200.txt"))
+          (set-window-point w1 (+ (funcall pos "f205.txt") 3))
+          (set-window-start w2 (funcall pos "f100.txt"))
+          (set-window-point w2 (+ (funcall pos "f110.txt") 2))
+          (goto-char (1+ (funcall pos "f150.txt"))))
+        (write-region "" nil (expand-file-name "e.txt" big) nil 'silent) ; sorts above every fNNN row
+        (drgnx-cache-remove 'explorer-listing (file-name-as-directory big))
+        (drgnx-explorer-refresh)
+        (with-current-buffer drgnx-explorer-buffer-name
+          (should (equal (drgnx-explorer-node-at (funcall pos "e.txt")) (expand-file-name "e.txt" big)))
+          (should (= (window-start w1) (funcall pos "f200.txt")))
+          (should (= (window-point w1) (+ (funcall pos "f205.txt") 3)))
+          (should (= (window-start w2) (funcall pos "f100.txt")))
+          (should (= (window-point w2) (+ (funcall pos "f110.txt") 2)))
+          (should (= (point) (1+ (funcall pos "f150.txt")))))))))
+
 (ert-deftest drgnx-explorer/a-click-never-scrolls-the-dock ()
   ;; Pressing a partly visible bottom row must not scroll (the row would move under the pointer).
   (drgnx-explorer-test--with root
@@ -296,6 +329,86 @@
       (setq drgnx-explorer--pressed nil)
       (drgnx-explorer--apply-file-events)
       (should (member '(1 "held.txt") (drgnx-explorer-test--rows))))))
+
+;;;; Timers: on the layer, keyed, owned by the Explorer buffer (virtual time)
+
+(defun drgnx-explorer-test--timers (key list)
+  "How many of the timers in LIST are the layer's timer of KEY."
+  (cl-count-if (lambda (tm) (equal (plist-get (drgnx-timer-describe tm) :key) key)) list))
+
+(ert-deftest drgnx-explorer/file-events-coalesce ()
+  (drgnx-test-with-clock (:allow-pending t)
+    (drgnx-explorer-test--with root
+      (let ((root-dir (directory-file-name root)) (drgnx-explorer--relists 0) (drgnx-explorer-event-delay 0.15))
+        ;; a burst: one timer, the folder shown once, 0.15 s after the first event (wall time, as before)
+        (drgnx-explorer--file-event (list 'desc 'created (expand-file-name "a" root)) root-dir)
+        (drgnx-test-advance 0.1)
+        (drgnx-explorer--file-event (list 'desc 'created (expand-file-name "b" root)) root-dir)
+        (should (= 1 (drgnx-explorer-test--timers 'explorer-file-events timer-list)))
+        (should (eq (nth 1 (assoc 'explorer-file-events (drgnx-timer-pending))) (get-buffer drgnx-explorer-buffer-name)))
+        (drgnx-test-advance 0.06)
+        (should (= drgnx-explorer--relists 1))
+        (should-not (drgnx-timer-active-p 'explorer-file-events))
+        ;; a held button: the timer waits again (still one), and shows the folder once the button is up
+        (setq drgnx-explorer--pressed t)
+        (drgnx-explorer--file-event (list 'desc 'created (expand-file-name "c" root)) root-dir)
+        (drgnx-test-advance 0.3)
+        (should (= drgnx-explorer--relists 1))
+        (should (= 1 (drgnx-explorer-test--timers 'explorer-file-events timer-list)))
+        (setq drgnx-explorer--pressed nil)
+        (drgnx-test-advance 0.15)
+        (should (= drgnx-explorer--relists 2))
+        ;; the timer dies with the Explorer
+        (drgnx-explorer--file-event (list 'desc 'created (expand-file-name "d" root)) root-dir)
+        (kill-buffer drgnx-explorer-buffer-name)
+        (should-not (drgnx-timer-active-p 'explorer-file-events))
+        (drgnx-test-advance 1)
+        (should (= drgnx-explorer--relists 2))))))
+
+(ert-deftest drgnx-explorer/git-refresh-is-one-idle-timer-of-the-explorer ()
+  (drgnx-test-with-clock (:allow-pending t)
+    (drgnx-explorer-test--with root
+      (let ((drgnx-explorer-git t) (calls nil))
+        (cl-letf (((symbol-function 'drgnx-git-refresh-tree) (lambda (dirs &rest _) (push dirs calls))))
+          (drgnx-test-idle 0.1)                         ; what the setup's render armed
+          (setq calls nil)
+          (drgnx-explorer--git-refresh)
+          (drgnx-explorer--git-refresh)
+          (should (= 1 (drgnx-explorer-test--timers 'explorer-git timer-idle-list)))
+          (should (eq (nth 1 (assoc 'explorer-git (drgnx-timer-pending))) (get-buffer drgnx-explorer-buffer-name)))
+          (drgnx-test-advance 1)
+          (should-not calls)                            ; idle time, not wall time
+          (drgnx-test-idle 0.1)
+          (should (equal calls (list drgnx-explorer--roots)))
+          (drgnx-explorer--git-refresh)
+          (kill-buffer drgnx-explorer-buffer-name)
+          (should-not (drgnx-timer-active-p 'explorer-git))
+          (drgnx-explorer--git-refresh)                 ; no Explorer: nothing to read for
+          (should-not (drgnx-timer-active-p 'explorer-git))
+          (drgnx-test-idle 0.1)
+          (should (= 1 (length calls))))))))
+
+(ert-deftest drgnx-explorer/find-runs-once-typing-pauses ()
+  (drgnx-test-with-clock (:allow-pending t)
+    (drgnx-explorer-test--with root
+      (let ((queries nil))
+        (cl-letf (((symbol-function 'drgnx-explorer--find-apply) (lambda (q) (push q queries))))
+          (with-temp-buffer                             ; the minibuffer's text
+            (dolist (c '("m" "a" "i"))
+              (insert c)
+              (drgnx-explorer--find-changed))
+            (should (= 1 (drgnx-explorer-test--timers 'explorer-find timer-idle-list)))
+            (should (eq (nth 1 (assoc 'explorer-find (drgnx-timer-pending))) (get-buffer drgnx-explorer-buffer-name)))
+            (drgnx-test-advance 1)
+            (should-not queries)                        ; a pause in typing, not wall time
+            (drgnx-test-idle 0.2)
+            (should (equal queries '("mai")))
+            (insert "n")
+            (drgnx-explorer--find-changed)
+            (kill-buffer drgnx-explorer-buffer-name)
+            (should-not (drgnx-timer-active-p 'explorer-find))
+            (drgnx-test-idle 0.2)
+            (should (equal queries '("mai")))))))))
 
 ;;;; File operations (M3b)
 

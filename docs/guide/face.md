@@ -202,8 +202,15 @@ cockpit adds the questions no job holds; an ask card or a job's message to you i
 A module of your own can add a function and call `drgnx-statusbar-refresh` when its count changes.
 
 **Other modules' marks.** Anything a package puts on `global-mode-string` or `mode-line-misc-info` shows in `misc`,
-with no change to the bar; such entries are formatted at each redisplay of the bar, as stock Emacs does, and with
-none there nothing is. Three packages that write into the stock mode line are read from what they already hold
+with no change to the bar, and stays real time: a clock, a battery or a mark whose text changes with nothing to
+announce it is formatted again at every redisplay, as stock Emacs does, but once per buffer, not once per window, and
+in each window's own buffer, so a mark that depends on the buffer shows that buffer's value. An entry of plain strings
+(no `%`) is read only when the lists are set again (or bound for a moment, or set in one buffer only). One that takes more than
+`drgnx-statusbar-misc-slow-ms` (1 ms) on average, over its last 8 redisplays, is formatted once a second instead,
+alone (the others stay real time) and in the selected window's buffer, until it is fast again for 8 seconds;
+`drgnx doctor` names it, with its cost and how long ago it was reported, in its `statusbar-misc` check. The report is
+written again a second after the bar turns on, so once you remove the entry (or its package makes it cheaper) the
+doctor stops naming it. With no entry there nothing is formatted. Three packages that write into the stock mode line are read from what they already hold
 instead: keycast (Show Keys As I Type: its key and command, which change with every command, so while it is on every
 command redraws the bars), `which-function-mode` (the name its idle timer cached for the window; nothing when you
 asked for it in the header line) and evil (its state tag). eglot's entry in `mode-line-misc-info` is left out: the
@@ -215,10 +222,12 @@ window on the first redraw, in every frame: the bar asks the workbench state sto
 window answers for, and keeps no rule of its own. It is also redrawn when
 agents, the hub or git report a change (`drgnx-statusbar-refresh`: at most one redraw every 0.2 seconds, however many
 changes come in, and only when a count changed; git redraws when a repository's branch or its ahead and behind counts changed). Each window keeps the bar it last drew, with
-what it was drawn from (the buffer, point, the text's change count, the width, full or compact, the counts above and
-the buffer's version-control, selection, encoding, indentation width, mode, narrowing, checker and language-server state): a
-redisplay that changes none of these reuses it, so a window you do not type in costs almost nothing however often
-Emacs redraws the screen. Shown up to one keystroke late, because nothing announces them: a failed segment's retry
+what it was drawn from: the buffer, point, the text's change count, the narrowing, the width, full or compact, the
+selection, and six change counters that hooks and settings move — how the buffer looks (mode, version control,
+encoding, indentation, modal state), its checker, its language server, git, other packages' entries, and drgnx's own
+state and settings. A redisplay that changes none of these reuses the bar and allocates nothing, so a window you do
+not type in costs almost nothing however often Emacs redraws the screen. A `let` that binds `tab-width` or
+`indent-tabs-mode` for a moment changes nothing; setting them does. Shown up to one keystroke late, because nothing announces them: a failed segment's retry
 after 10 seconds, a change inside the buffer's process indicator (`mode-line-process`) that keeps the same construct,
 and a segment of your own that has not called `(drgnx-statusbar-refresh t)`.
 
@@ -236,6 +245,7 @@ and a segment of your own that has not called `(drgnx-statusbar-refresh t)`.
 | `drgnx-statusbar-quiet` | `(folder branch agents jobs tests misc)` | the quiet bar's segments, on the left |
 | `drgnx-statusbar-misc-exclude` | the job badge and the Restricted Mode mark | entries of `global-mode-string` that `misc` leaves out |
 | `drgnx-statusbar-misc-info-skip` | `global-mode-string`, which-function's and eglot's entries | entries of `mode-line-misc-info` that `misc` does not format (shown another way) |
+| `drgnx-statusbar-misc-slow-ms` | `1.0` | milliseconds another package's entry may take, on average, per redisplay; a slower one is formatted once a second and named by `drgnx doctor` |
 | `drgnx-statusbar-test-command-regexp` | `\_<test\_>` | a compilation whose command matches is a test run |
 | `drgnx-statusbar-test-count-regexps` | ERT's and `bin/drgnx test --ui`'s summary lines | where the counts come from |
 | `drgnx-statusbar-waiting` (face) | inherits `error` | the colour of the waiting count |
@@ -286,7 +296,9 @@ The line is Emacs's tab bar with no tabs, since drgnx has no workspaces. It only
 branch from drgnx's git cache, as the status bar reads it (until the cache has read the repository, the file's
 version-control text; never by running git), and the project from the same cache the breadcrumb
 keeps, which is filled when you switch editor, so a directory it has not met yet shows `drgnx` for a moment. Nothing
-in it touches the disk or a process while you type. If something in it fails it shows the mark alone for ten seconds
+in it touches the disk or a process while you type, and a redraw that changes nothing reads no cache: the line is
+made again only when the editor, its version-control text, the frame's width or the keys change, or when git has
+read a repository again. If something in it fails it shows the mark alone for ten seconds
 rather than disappearing; when the ten seconds are over the line is made again and redrawn in every frame, without a
 key press, so a frame you left alone gets its line back. A resize redraws the line at the new width, and a new or
 resized terminal frame gets its number of lines decided once Emacs is idle (that can resize the windows, so it never

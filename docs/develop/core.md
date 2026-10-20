@@ -1035,6 +1035,12 @@ swap in one window); a feed buffer's `(cockpit-feed-check . BUFFER)` (also on
 (its setup's: the status bar's count of what waits on you, every `drgnx-cockpit-check-interval`); its `:teardown`
 kills the cockpit's buffers, so turning it off leaves no timer.
 
+The Explorer's three timers are owned by its buffer, so killing it ends them (and with no Explorer none starts):
+`explorer-file-events` (`drgnx-timer-soon`, a wall timer `drgnx-explorer-event-delay` after a burst's first file event;
+while a button is held or Find is on it waits again, so a redraw never lands under a press), `explorer-git` (soon, 0.05 s
+into a pause: the git status of every root, read once the tree is on screen) and `explorer-find` (Find's idle debounce,
+0.1 s after typing pauses; the command cancels it when the minibuffer ends).
+
 `core/drgnx-platform.el` (window-manager calls) owns its timers as `:core`: each belongs to one call that ends itself
 (its answer, its error) and cancels the timer, so no module's end or process's death may drop one and leave the
 callback uncalled. They are keyed per call: `(platform-call . PROCESS)` (the tool's time limit),
@@ -1218,8 +1224,12 @@ such as `tab-width`, `indent-tabs-mode` or `buffer-file-coding-system`:
 - not local in the buffer: a `let` binds the *default*, and Emacs 30 reports the binding and the unbinding as a
   `set` with no buffer. Bound to the value it already has, nothing moves. Bound to a *different* value, each of the two
   reports is a global `set`: it bumps the base and moves every buffer's epoch, twice per `let`. A consumer's watched
-  list must not include a per-buffer variable that other code often rebinds to other values (Task 16 checks its list
-  against this);
+  list must not include a per-buffer variable that other code often rebinds to other values. The status bar's
+  `buffer-look` watches `tab-width`, `indent-tabs-mode` and `buffer-file-coding-system`: Emacs 30's own Lisp binds
+  `indent-tabs-mode` to nil in a handful of commands (Dired, Org, picture, texinfo, chart), none on a per-keystroke
+  path, and so do drgnx's config writer and formatter (`(let ((indent-tabs-mode nil)) …)`), so such a rebind rebuilds
+  every bar once (pinned by `drgnx-statusbar/a-let-of-tab-width-to-another-value-rebuilds-every-bar`; a `let` to the
+  same value or of a local variable rebuilds nothing);
 - a buffer-local set bumps that buffer's own count (the watcher's WHERE); a global set (`setq-default`) bumps the base.
 
 `drgnx-memo--watched` maps each variable that is watched now to its epochs.
@@ -1254,6 +1264,31 @@ What redisplay reads, built once per change (PERF-L L6):
 | `sticky-segment` (`drgnx-sticky.el`) | window | the window's start moves, it shows another buffer, or the epoch `sticky` of its buffer moves | `sticky` (per buffer), bumped by an edit at or above the start of a window showing the buffer |
 | `job-badge` (`drgnx-job-ui.el`) | none | `drgnx-job-ui--badge` is set to another string (the count changed) | none: the badge string is the key |
 | `live-header` (`drgnx-live.el`) | buffer | the epoch `live-tabs` of the view moves | `live-tabs` (per buffer), bumped where the tabs, the watched tab or driving change (`drgnx-live--tabs-changed`) |
+| `statusbar-bar` (`drgnx-statusbar.el`) | window | one of six epochs moves, or a plain value: point, the change tick, the narrowing, width, full or compact, the selection, the buffer, `default-directory`, `mode-line-process`, a macro being recorded, keycast's keys, which-function's name, the text of other packages' entries this redisplay (21 keys) |
+| `topline` (`drgnx-topline.el`) | frame | the editor buffer, its directory, file or breadcrumb project cache, the frame's width, the drawn title, the glyphs, the count of folders whose repository the git cache knows, or one of the three hint commands or its keys changes, or an epoch moves (16 keys; the git cache itself is read only to build) | the status bar's `buffer-look` (its `vc-mode` text) and `git`; while the status bar is off, the line's own `drgnx-git-changed-functions` hook moves `git` for the root that was read. Named through constants (`drgnx-topline--look-epoch`, `--git-epoch`), because the build compiles the file alone | `buffer-look` (per buffer, `:redisplay`: `after-change-major-mode-hook`; watches `vc-mode`, the encoding, `tab-width`, `indent-tabs-mode`, `drgnx-statusbar-indent-vars`, the modal state, evil's tag, trust, the large-file flag `drgnx-large-file`), `flymake` (per buffer: `flymake-mode-hook`, a backend's report), `eglot` (per buffer: `eglot-managed-mode-hook`; the base: `eglot-server-initialized-hook`), `git` (per root: a branch or its ahead/behind changed), `misc-info` (watches `global-mode-string`, `mode-line-misc-info` and the two lists of what the bar leaves out), `statusbar` (`drgnx-statusbar--bump`; watches the glyphs, the job badge, the Explorer's roots, the segment lists) |
+
+**Other packages' entries** (`mode-line-misc-info`, `global-mode-string`) stay real time, the user's call, but are
+formatted once per buffer per redisplay: `drgnx-statusbar--misc` is a key of the bar, made again for a buffer when a
+seventh epoch, `redisplay`, moves (bumped on `pre-redisplay-functions`, which runs for each window before any is
+drawn). It is formatted in each bar's own buffer, so an entry that reads buffer-local state (lsp-mode's `(:eval …)`
+entries, a minor mode's conditional) shows each buffer's value; four windows on one buffer still format it once
+(`drgnx-statusbar--misc-texts`, buffer → text, weak). An entry of strings and `:propertize` of strings with no `%` is
+*static*: its text is taken when the entries are read, which is when `misc-info` moves or when `mode-line-misc-info`
+or `global-mode-string` is not `eq` to the value read (a `let`, which moves no epoch, or a buffer-local value: two
+`eq` tests per bar). Every other one is *live*, formatted and timed with `drgnx-timer-now`; when no live text in a
+buffer differs from its last, the buffer's old string comes back, so the memo still hits. A live entry whose moving average (`avg += (ms - avg) / 8`, judged from the 8th
+sample) passes `drgnx-statusbar-misc-slow-ms` is *slow*: the timer `statusbar-misc-slow` (1 s repeat, owner
+`ui/face`, started only while a slow entry exists) formats it instead, in the buffer that is current then (the
+selected window's: a slow entry shows that text in every bar until its next tick), and after 8 ticks in a row under
+half the limit it is live again; with none left the tick cancels the timer. Reading the entries again forgets every
+average. The slow set is written to `statusbar-slow.eld` in the state dir from the tick, never from redisplay, and
+once more a second after the bar turns on when an earlier session left one (`statusbar-misc-report`,
+`drgnx-timer-soon`, owner `ui/face`), so an entry that is gone stops being named; the doctor's `statusbar-misc` check
+reads it and says how old it is. A flymake check's start (`flymake-start`, an `:after` advice added and removed with
+the mode) moves `flymake` like a report does. Tests: `drgnx-statusbar/` (`a-memo-hit-allocates-nothing`,
+`each-epoch-rebuilds-the-bar-*`, `a-live-entry-is-formatted-once-per-redisplay-for-four-windows-on-one-buffer`,
+`a-buffer-dependent-entry-shows-each-buffers-own-value`, `a-let-of-global-mode-string-is-seen`,
+`a-slow-entry-falls-back-alone`) and `drgnx-doctor/statusbar-*`.
 
 Each module activates its memo in its `:setup` (`drgnx-memo-activate`), so turning the module off empties it. The Live
 view bumps by hand rather than by `:watch`: its tests and its use do not wait for the module's setup, and the sites are
@@ -1344,9 +1379,9 @@ variable. START to the end of the buffer belongs to the view: text there that is
 (the self-check below). When START is `point-min` the buffer becomes read-only; otherwise each drawn row gets
 `read-only t` and `front-sticky (read-only)`, so typing at START, inside a row, between two rows or after the last
 row is refused (`text-read-only`), while text above START (replace's widgets) stays editable. A widget field that
-ends exactly at START cannot grow at its end: end the text above START with a newline. Attaching also puts
-`drgnx-view--buffer-shown` on the buffer's own `window-buffer-change-functions`. Attaching again removes the old
-view's rows first and releases its marker.
+ends exactly at START cannot grow at its end: end the text above START with a newline. Attaching adds the view to
+`drgnx-view--live` (weak), whose views the workbench state store's events update (Visibility, below), and adds
+nothing to a window hook. Attaching again removes the old view's rows first and releases its marker.
 
 ### Marks
 
@@ -1422,21 +1457,30 @@ the slice stops when the deadline has passed or `input-pending-p`. The first che
 draws at least `min(8, work)` rows, and its rows are a multiple of 8 except the last. Views ripe in one timer pass
 share the deadline while it is unspent: a view that finishes early leaves the next the rest of the slice. A view
 that finds the deadline already spent starts a fresh one, so N sliced views that each use a whole slice cost
-N × SLICE in one gap; the spec's "at most 4 ms per gap for all views" needs a timer-pass identity (the store,
-Task 15). Views are not queued or ranked: each one's timer fires in turn. Each slice draws the **visible rows first** (for each window on a visible frame, the
+N × SLICE in one gap; the spec's "at most 4 ms per gap for all views" needs a timer-pass identity, which nothing
+gives yet. Views are not queued or ranked: each one's timer fires in turn. Each slice draws the **visible rows first** (for each window on a visible frame, the
 entries from the one at `window-start`, `window-body-height` of them), then the rest, each sweep in buffer order.
 `:slices` counts the slices of SLICE types and `:max-slice-rows` the most rows one drew. When a draw leaves no view
 with work (and the view is not stale), the gap is quiet: `drgnx-gc-gap` runs (when `drgnx-gc` is loaded).
 
-**Visibility (before the store).** `(drgnx-view-shown-p VIEW)` is non-nil when a window on a visible frame shows the
-buffer, as `get-buffer-window` with `'visible` answers but without its window list: it walks the frames `next-frame`
-reaches from the selected one and their window trees, allocating nothing. (That is the selected frame's terminal: a
-view shown only on another terminal counts as hidden until a window change there.) The view keeps the last answer
-in its `shown`. A timer draw of a hidden view sets `stale`, adds 1 to `:stale-skips` and returns: **a hidden view
-draws nothing and allocates nothing**. While it is stale its marks arm no timer (they cost a hash put and the frame
-walk). When a window starts showing the buffer, `drgnx-view--buffer-shown` (on the buffer's own
-`window-buffer-change-functions`, which redisplay runs) arms the draw of a stale view; a mark on a stale view that
-shows again does too. Store Task 15 replaces this with the store's visibility.
+**Visibility: from the workbench state store.** `(drgnx-view-shown-p VIEW)` is non-nil when a window on a visible
+frame shows the buffer. It has one source at a time. While `drgnx-state-mode` is on (core/workbench turns it on),
+the answer is the view's `shown`, which only the store's events set: `drgnx-view--windows-changed`, subscribed in
+core/workbench's setup on the `now` lane to `windows-changed`, `frame-visibility` and `frame-removed` (before the
+store first observes), sets every attached view's `shown` from the store's records: some window the store recorded
+(`drgnx-state-windows` over `drgnx-state-frames`, every terminal's frames) on a frame that `frame-visible-p` calls
+visible shows the buffer. Attaching sets it the same way. For a stale view that shows now, the subscriber also arms
+the draw. It only marks and arms, never draws: it runs inside the observation, possibly during redisplay (the
+store's `now` lane). So a view shown only on another terminal's frame (a daemon with a graphical and a terminal
+client) draws, and a stale view wakes when its frame is shown again (de-iconified: `frame-visibility`), not only on
+a window change. The store observes at the end of each command and on window changes during redisplay, so a frame
+shown again by the window manager alone is seen at the next command in it. With the store off (core/workbench
+turned off), the answer is the live windows': the frames `next-frame` reaches from the selected one (that
+terminal's) and their window trees, as `get-buffer-window` with `'visible` answers but without its window list;
+then a stale view wakes only on its next mark. Either way the answer allocates nothing. A timer draw of a hidden
+view sets `stale`, adds 1 to `:stale-skips` and returns: **a hidden view draws nothing and allocates nothing**.
+While it is stale its marks arm no timer (they cost a hash put and the visibility read). No view adds a function to
+a window-change hook.
 
 ### Keeping places
 
@@ -1457,10 +1501,14 @@ Buffers that are not views keep places with the same idea:
 ```
 
 `(drgnx-view-save-places KEY-AT)` returns the buffer's point and each showing window's start and point as `(KEY
-OFFSET LINE)`, KEY being `(funcall KEY-AT POS)` and OFFSET the distance from the start of KEY's row (the first line
-above POS with the same key). `(drgnx-view-restore-places PLACES POS-OF)` puts each back at `(+ (funcall POS-OF KEY)
-OFFSET)`, or at the start of LINE (clamped) when POS-OF returns nil; dead windows are skipped, and the windows move
-inside `drgnx-wb-with-owned-windows`. The macro is save, BODY, restore, and returns BODY's value.
+OFFSET LINE ROW-LINE)`, KEY being `(funcall KEY-AT POS)`, OFFSET the distance from the start of KEY's row (the first
+line above POS with the same key) and ROW-LINE POS's line within that row. `(drgnx-view-restore-places PLACES
+POS-OF)` puts each back at `(+ (funcall POS-OF KEY) OFFSET)`, but no further than the end of the row's ROW-LINE (a row
+drawn shorter keeps the cursor on it, never on the next row); when POS-OF returns nil (the row went), at the start of
+LINE, or of the last line when the rows now end above it. Dead windows are skipped, and the windows move inside
+`drgnx-wb-with-owned-windows`. The macro is save, BODY, restore, and returns BODY's value. The Explorer and the
+Buffers panel keep their places this way (keyed by path and by buffer), as do the Agents list and the cockpit's
+edits pane.
 
 ### Reads
 
@@ -1565,9 +1613,10 @@ buffer. Otherwise it names the first fault. Tests: `test/unit/wb-view-test.el` (
 seeded random marks checked against a plain list and an append that stays in place) and
 `test/unit/wb-view-live-test.el` (prefix `drgnx-view-live/`: the timer, visibility, slices, places, all on the
 virtual clock; slices replace `drgnx-timer-now` with a clock that steps per read, and since batch Emacs runs no
-redisplay the visibility tests call `drgnx-view--buffer-shown` as redisplay would). Helpers in
-`test/fixtures/view-fixture.el` (`drgnx-view-test-with-type`, `drgnx-view-test--text`, `drgnx-view-test--expected`,
-`drgnx-view-test--alloc`).
+redisplay the visibility tests turn the store on with `drgnx-view-test-store-on`, inside `drgnx-test-with-state`, and
+call `drgnx-state-sync` where a command's end or redisplay would observe; a frame shown again is a stubbed
+`frame-visible-p`). Helpers in `test/fixtures/view-fixture.el` (`drgnx-view-test-with-type`, `drgnx-view-test--text`,
+`drgnx-view-test--expected`, `drgnx-view-test--alloc`, `drgnx-view-test-store-on`).
 
 ### Mark, don't erase
 
@@ -2562,6 +2611,7 @@ computed. In one observation they go out in this order; `frame-removed` comes on
 | `frame-added` | a `gui` or `tty` frame is first recorded | `:frame :kind` |
 | `frame-kind` | its kind, `drgnx-frame-role` or `drgnx-monitor` changed (seen at `drgnx-state-sync`) | `:frame :old :new`, each `(:kind :role :monitor)` |
 | `frame-resized` | its text columns or lines, or its pixel size, changed | `:frame :old :new`, each `(:cols :lines :width :height)` |
+| `frame-visibility` | its `frame-visible-p` changed: iconified, made invisible, shown again (no window changes) | `:frame :old :new`, each `t`, `icon` or nil |
 | `windows-changed` | a window came or went, or shows another buffer or role | `:frame :windows` |
 | `groups-changed` | editor windows came or went | `:frame :added :removed` |
 | `pane-hidden` | a pane kind stopped showing in a window: its window went, an area's front tab changed, a dock shows another section | `:frame :kind :window :cause :by` |
@@ -2601,7 +2651,9 @@ and cancel each pane's check (and an agent's edits' file watches), so a hidden p
 and bus and the store's hooks off. It saves every bound variable listed in `drgnx-state-test--variables` (the
 store's tables, its subscribers and idle queue, `drgnx-signal--subscribers`, `--state`, `--posted`, `--timer`,
 `--editor`, `--switched`, `drgnx-signal-errors`) and restores them with `set` afterwards, never `let`; timers are
-cancelled on the way in and out. A batch test delivers the idle lane by calling `drgnx-signal--flush` (or only
+cancelled on the way in and out, and `global-minor-modes` lists `drgnx-state-mode` again only if it did before (a
+mode turned on inside and restored by value would stay listed, and a module recorder that later sees the mode turned
+on would push no undo for it). A batch test delivers the idle lane by calling `drgnx-signal--flush` (or only
 `drgnx-state--deliver-idle`). A task that adds store or bus state adds its variable there. `(drgnx-test-use-editor
 WINDOW)` makes WINDOW the MRU editor through `drgnx-state-use-editor`. Tests never set bus internals by hand. Tests: `test/unit/wb-state-test.el`, `test/unit/wb-state-events-test.el`
 (one per event, the lanes, `:cause`); the terminal tier's `test/tty/state-test.el` (a split made by a timer is seen
@@ -2616,7 +2668,8 @@ is `(eq W (drgnx-state-editor-window (window-frame W)))` and `drgnx-statusbar-so
 `drgnx-state-editor-window`; the bar keeps no window of its own and posts nothing to the bus. Its post-command check
 compares the buffer, point, change tick and mark only. Its git read stays on the bus's idle `editor-changed`. Its
 debounced refresh is the layer timer `statusbar-refresh` (`drgnx-timer-soon`, owner `:core`, cancelled when the mode
-turns off). Tests: `drgnx-statusbar/` in `test/unit/mod-statusbar-test.el`; `drgnx-statusbar-ui/` in
+turns off); a slow entry of another package is refreshed by `statusbar-misc-slow` (owner `ui/face`; "Memo clients"
+above). Each window's bar is the memo `statusbar-bar` on six epochs, which `drgnx-statusbar-setup` activates. Tests: `drgnx-statusbar/` in `test/unit/mod-statusbar-test.el`; `drgnx-statusbar-ui/` in
 `test/ui/statusbar-state-ui-test.el`.
 
 ### Intent (`wb/drgnx-state-intent.el`)

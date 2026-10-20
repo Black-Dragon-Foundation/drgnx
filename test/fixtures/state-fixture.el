@@ -28,9 +28,17 @@ way in and out.")
 (defun drgnx-state-test--cancel-timers ()
   (mapc #'drgnx-timer-cancel drgnx-state-test--timers))
 
+(defun drgnx-state-test--listed (on)
+  "Make `global-minor-modes' list `drgnx-state-mode' when ON, else not: `define-minor-mode' keeps that list, and a
+mode variable restored by value leaves it wrong (a module recorder that later sees the mode turned on finds it
+listed already, pushes no undo, and the mode stays on after the module's teardown)."
+  (setq global-minor-modes (delq 'drgnx-state-mode global-minor-modes))
+  (when on (push 'drgnx-state-mode global-minor-modes)))
+
 (defun drgnx-state-test--call (fn)
   "Call FN with a fresh store and bus, the store's hooks off; restore everything by value (`set') after."
   (let ((on (bound-and-true-p drgnx-state-mode))
+        (listed (and (memq 'drgnx-state-mode global-minor-modes) t))
         (saved (let (acc)
                  (dolist (entry drgnx-state-test--variables (nreverse acc))
                    (when (boundp (car entry)) (push (cons (car entry) (symbol-value (car entry))) acc))))))
@@ -40,11 +48,13 @@ way in and out.")
           (drgnx-state--install nil)
           (dolist (entry drgnx-state-test--variables)
             (when (boundp (car entry)) (set (car entry) (eval (cdr entry) t))))
+          (drgnx-state-test--listed nil)
           (funcall fn))
       (drgnx-state-test--cancel-timers)
       (drgnx-state--install nil)        ; BODY may have turned the mode on
       (pcase-dolist (`(,var . ,value) saved)
         (set var value))
+      (drgnx-state-test--listed listed)
       (when on (drgnx-state--install t)))))
 
 (defmacro drgnx-test-with-state (&rest body)

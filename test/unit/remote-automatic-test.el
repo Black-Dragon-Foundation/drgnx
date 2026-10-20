@@ -147,8 +147,7 @@
       (with-current-buffer lbuf (goto-char (point-max)) (insert "# edited\n"))
       (should (buffer-modified-p rbuf))
       (should (> drgnx-tramp-mock-sends 0))                       ; the user's own work did use the remote
-      (ignore-errors (when (timerp drgnx-explorer--git-timer) (cancel-timer drgnx-explorer--git-timer)))
-      (setq drgnx-explorer--git-timer nil)
+      (drgnx-timer-cancel 'explorer-git)
       ;; from here on, only automatic paths; TRAMP's attribute cache would hide a call (the mock keeps it for ever)
       (setq drgnx-tramp-mock-sends 0 remote-file-name-inhibit-cache t)
       ;; 1. every pending timer, as the timer loop runs it (idle ones too)

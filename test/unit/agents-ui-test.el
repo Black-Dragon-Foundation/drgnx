@@ -365,30 +365,33 @@ three runs after two warm ones)."
     (should (<= big (ceiling (* 1.25 small))))))
 
 (ert-deftest drgnx-agents-ui/a-hidden-transcript-costs-nothing ()
-  (drgnx-agents-ui-test--with-transcript (s b v :status 'busy :entries (list (list :type 'agent :text "a")))
-    (let ((other (get-buffer-create " *drgnx-agents-ui-other*"))
-          (drawn (drgnx-agents-ui-test--stat v :rows-drawn)) (grown (drgnx-agents-ui-test--stat v :rows-grown)))
-      (unwind-protect
-          (progn
-            (set-window-buffer (selected-window) other)
-            (dotimes (_ 100)                                           ; 50 a second
-              (drgnx-agents-ui-test--chunk s (make-string 100 ?y))
-              (drgnx-test-advance 0.02))
-            (should (= drawn (drgnx-agents-ui-test--stat v :rows-drawn)))
-            (should (= grown (drgnx-agents-ui-test--stat v :rows-grown)))
-            (should (> (drgnx-agents-ui-test--stat v :stale-skips) 0))
-            (drgnx-agents-ui-test--compile)
-            (should (= 0 (drgnx-view-test--alloc (lambda () (drgnx-view--draw-buffer b)))))
-            ;; shown again: one catch-up draw
-            (set-window-buffer (selected-window) b)
-            (drgnx-view--buffer-shown (selected-window))                 ; what redisplay runs
-            (let ((slices (drgnx-agents-ui-test--stat v :slices)))
-              (drgnx-agents-ui-test--draw)
-              (should (= (1+ slices) (drgnx-agents-ui-test--stat v :slices)))
-              (should (= 1 (- (drgnx-agents-ui-test--stat v :rows-grown) grown)))
+  (drgnx-test-with-state
+    (drgnx-agents-ui-test--with-transcript (s b v :status 'busy :entries (list (list :type 'agent :text "a")))
+      (drgnx-view-test-store-on)                                         ; views follow the store, as in the workbench
+      (let ((other (get-buffer-create " *drgnx-agents-ui-other*"))
+            (drawn (drgnx-agents-ui-test--stat v :rows-drawn)) (grown (drgnx-agents-ui-test--stat v :rows-grown)))
+        (unwind-protect
+            (progn
+              (set-window-buffer (selected-window) other)
+              (drgnx-state-sync)                                         ; what a command's end runs
+              (dotimes (_ 100)                                           ; 50 a second
+                (drgnx-agents-ui-test--chunk s (make-string 100 ?y))
+                (drgnx-test-advance 0.02))
               (should (= drawn (drgnx-agents-ui-test--stat v :rows-drawn)))
-              (should (equal (drgnx-agents-ui-test--fresh s) (drgnx-agents-ui-test--text b)))))
-        (kill-buffer other)))))
+              (should (= grown (drgnx-agents-ui-test--stat v :rows-grown)))
+              (should (> (drgnx-agents-ui-test--stat v :stale-skips) 0))
+              (drgnx-agents-ui-test--compile)
+              (should (= 0 (drgnx-view-test--alloc (lambda () (drgnx-view--draw-buffer b)))))
+              ;; shown again: one catch-up draw
+              (set-window-buffer (selected-window) b)
+              (drgnx-state-sync)                                         ; the store sees it shown: the draw is armed
+              (let ((slices (drgnx-agents-ui-test--stat v :slices)))
+                (drgnx-agents-ui-test--draw)
+                (should (= (1+ slices) (drgnx-agents-ui-test--stat v :slices)))
+                (should (= 1 (- (drgnx-agents-ui-test--stat v :rows-grown) grown)))
+                (should (= drawn (drgnx-agents-ui-test--stat v :rows-drawn)))
+                (should (equal (drgnx-agents-ui-test--fresh s) (drgnx-agents-ui-test--text b)))))
+          (kill-buffer other))))))
 
 (ert-deftest drgnx-agents-ui/a-tool-status-change-redraws-one-row ()
   (drgnx-agents-ui-test--with-transcript (s b v :status 'busy
@@ -657,6 +660,7 @@ mirror does nothing."
   (drgnx-agents-ui-test--with-list ('(("a" :status idle) ("b" :status idle)) b)
     (let* ((v drgnx-view) (sb (nth 1 drgnx-agents--sessions)) (other (get-buffer-create " *drgnx-agents-ui-other*"))
            (text (buffer-string)) (tick (buffer-modified-tick)))
+      (drgnx-view-test-store-on)                        ; views follow the store, as in the workbench
       (unwind-protect
           (progn
             (set-window-buffer (selected-window) other)
@@ -672,8 +676,7 @@ mirror does nothing."
             (should (= 0 (drgnx-view-test--alloc (lambda () (drgnx-view--draw-buffer b)))))
             ;; shown again: the list is drawn
             (set-window-buffer (selected-window) b)
-            (drgnx-agents-ui-test--settle)
-            (drgnx-view--buffer-shown (selected-window))      ; what redisplay runs
+            (drgnx-agents-ui-test--settle)                    ; the store sees it shown: the draw is armed
             (drgnx-test-advance 0.2)
             (should (string-match-p "b +busy" (buffer-string))))
         (kill-buffer other)))))

@@ -57,7 +57,9 @@ file you are editing.
 
 The **Buffers** panel lists open files in the order you opened them — switching never re-sorts it, so a row never
 moves under the pointer. Each row: `×` closes, `●` marks unsaved changes, then the name and its folder; the file
-in the active editor is in bold. Click a row to show it; `RET` too; `Delete` (`d`/`k` in Emacs, `x` in Vim) closes.
+in the active editor is in bold. When rows come or go, every window on the panel (and the Explorer likewise) keeps
+its first row and its cursor on the same buffer (file), at the same place in the row; a window whose row closed
+stays at the same height, on the row that took its place, instead of jumping to the top. Click a row to show it; `RET` too; `Delete` (`d`/`k` in Emacs, `x` in Vim) closes.
 
 ### Outline
 

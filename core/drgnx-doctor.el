@@ -372,6 +372,8 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
            :config-files (drgnx-doctor--config-files)
            :checkout-init (drgnx-doctor--checkout-init drgnx-dir)
            :timers-report (drgnx-doctor--timers-report)
+           :statusbar-slow (drgnx-doctor--state-file "statusbar-slow.eld")   ; the status bar's slow entries
+           :statusbar-slow-time (drgnx-doctor--state-file-time "statusbar-slow.eld")
            ;; file names only: a key found in the config dir is never part of the facts
            :portable (condition-case err (progn (require 'drgnx-portable) (drgnx-portable-config-problems))
                        (error (list :error (error-message-string err)))))
@@ -1041,6 +1043,20 @@ state dir): a list of (:file NAME :stopped PLISTS :time WRITTEN), one per file t
                                                            stopped "; ")
                                                 (if time (format " (from the last session, %s)" (drgnx-doctor--age time)) ""))
                                         "report the error; drgnx starts the timer again at the next start")))))
+
+(drgnx-doctor-define 'statusbar-misc :group "drgnx"
+                     :doc "Mode-line entries of other packages too slow to format on every redisplay (from the last session)"
+                     :check (lambda (f)
+                              (let ((slow (plist-get f :statusbar-slow)))
+                                (if (null slow)
+                                    (list 'ok "every entry is formatted in real time" nil)
+                                  (list 'warn
+                                        (concat (mapconcat (lambda (r) (format "%s takes %.1f ms per redisplay: refreshed once a second"
+                                                                               (plist-get r :entry) (or (plist-get r :avg-ms) 0)))
+                                                           slow "; ")
+                                                (when-let* ((time (plist-get f :statusbar-slow-time)))
+                                                  (format " (reported %s)" (drgnx-doctor--age time))))
+                                        "ask its package for a cheaper `:eval', or remove it from `mode-line-misc-info'")))))
 
 ;;;; Running and reporting
 

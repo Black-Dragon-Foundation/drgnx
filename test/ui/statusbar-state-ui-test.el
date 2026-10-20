@@ -22,7 +22,6 @@ moved the bar), and the status bar mode on; the session's modes and variables co
          (drgnx-signal-delay 3600)
          (drgnx-statusbar--segments (make-hash-table :test #'eq))
          (drgnx-statusbar--errors nil)
-         (drgnx-statusbar--memo (make-hash-table :test #'eq :weakness 'key))
          (drgnx-statusbar-left '(fprobe))
          (drgnx-statusbar-right nil)
          (drgnx-statusbar-compact '(cprobe)))
