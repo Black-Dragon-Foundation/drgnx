@@ -432,8 +432,13 @@ takes its key with it."
             (should (eq (car r) :timeout))
             (should-not (drgnx-timer-active-p key))
             (setq r nil)
-            (let ((q (drgnx-job-worktree--run dir '("true") nil (lambda (x) (setq r x)))))
+            ;; a git still running when its key is looked at (a `true' may have exited before its timer started, and a
+            ;; gone owner starts none): it ends when the test lets it go
+            (let* ((go (expand-file-name "go" dir))
+                   (q (drgnx-job-worktree--run dir '("sh" "-c" "while [ ! -e go ]; do sleep 0.01; done") nil
+                                               (lambda (x) (setq r x)))))
               (should (drgnx-timer-active-p (cons 'job-worktree-timeout q)))
+              (write-region "" nil go nil 'silent)
               (should (drgnx-test-wait (lambda () r) :what "the git's sentinel"))
               (should (eql 0 (car r)))
               (should-not (drgnx-timer-active-p (cons 'job-worktree-timeout q)))))

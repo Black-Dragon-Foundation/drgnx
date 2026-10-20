@@ -201,7 +201,8 @@ seconds (it is killed).  Never asks: no terminal, its stdin closed at once."
             (progn
               (setq proc (make-process :name "drgnx-coord-git" :buffer out :stderr err :command (cons "git" args)
                                        :connection-type 'pipe :noquery t :sentinel #'ignore))
-              (process-send-eof proc)
+              ;; a fast git (rev-parse) may have exited already, and Emacs knows: no error, its output is in OUT
+              (ignore-errors (process-send-eof proc))
               (while (and (process-live-p proc) (< (float-time) deadline)) (accept-process-output proc 0.05))
               (if (process-live-p proc) nil   ; too slow: given up (killed below)
                 (while (accept-process-output proc 0))

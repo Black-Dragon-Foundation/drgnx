@@ -145,8 +145,12 @@ End with VERDICT: pass or VERDICT: fail." base))
 
 (defun drgnx-review--check-head (run)
   "Ask git in the background where HEAD is now; the answer lands in RUN's :now and the tab is drawn again when
-that changes whether HEAD has moved.  One check at a time; the summary never runs git itself."
-  (unless (process-live-p (plist-get run :checking))
+that changes whether HEAD has moved.  One check at a time; the summary never runs git itself.  A check asked for while
+one runs is coalesced into one more check after it (the running one may have read HEAD before it moved), and only the
+run's latest check (its :checking) sets :now: an older one's answer, come late, is stale."
+  (if (process-live-p (plist-get run :checking))
+      (plist-put run :recheck t)
+    (plist-put run :recheck nil)
     (let* ((out (generate-new-buffer " *drgnx-review head*" t)) (default-directory (plist-get run :root)))
       (plist-put run :checking
                  (condition-case nil               ; the root may be gone by now
@@ -160,11 +164,14 @@ that changes whether HEAD has moved.  One check at a time; the summary never run
                                                       (let ((s (string-trim (buffer-string)))) ; a sha only: stderr shares the buffer
                                                         (and (string-match-p "\\`[0-9a-f]\\{40,64\\}\\'" s) s))))))
                                       (kill-buffer out)
-                                      (when (and now (not (equal now (plist-get run :now))))
-                                        (let ((was (drgnx-review--moved-p run)))
-                                          (plist-put run :now now)
-                                          (unless (eq was (drgnx-review--moved-p run))
-                                            (when (equal (gethash drgnx-review--current drgnx-review--runs) run) (drgnx-review--draw)))))))))
+                                      (when (eq proc (plist-get run :checking))
+                                        (when (and now (not (equal now (plist-get run :now))))
+                                          (let ((was (drgnx-review--moved-p run)))
+                                            (plist-put run :now now)
+                                            (unless (eq was (drgnx-review--moved-p run))
+                                              (when (equal (gethash drgnx-review--current drgnx-review--runs) run) (drgnx-review--draw)))))
+                                        (when (and (plist-get run :recheck) (equal (gethash drgnx-review--current drgnx-review--runs) run))
+                                          (drgnx-review--check-head run)))))))
                    (error (kill-buffer out) nil))))))
 
 (defun drgnx-review--moved-p (run)

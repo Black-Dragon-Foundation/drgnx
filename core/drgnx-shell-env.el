@@ -160,7 +160,7 @@ one line in *Messages*."
                                       (drgnx-shell-env--finish output (or why (process-get p :why)) callback)))))))
           (drgnx-timer-start (cons 'shell-env-timeout proc) drgnx-shell-env-timeout #'drgnx-shell-env--timed-out
                              :args (list proc) :owner proc)
-          (process-send-eof proc)
+          (ignore-errors (process-send-eof proc))   ; a fast shell may have exited already: its sentinel has the answer
           proc)
       (error (drgnx-shell-env--fail (error-message-string err)) nil))))
 

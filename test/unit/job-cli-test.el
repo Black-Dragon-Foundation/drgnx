@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'drgnx-paths)
 (require 'drgnx-hub)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
 (ert-deftest drgnx-job-cli/propose-then-approve-then-status ()
   (let* ((root (file-name-as-directory (make-temp-file "drgnx-job-cli" t)))
@@ -63,6 +64,10 @@
             (should (= (car (funcall cli "job" "approve" "job-nope")) 1))))
       (funcall cli "hub" "stop")
       (let ((deadline (+ (float-time) 5))) (while (and (drgnx-hub-running-p) (< (float-time) deadline)) (sleep-for 0.1)))
+      ;; the socket goes while the hub still exits; its job's wrapper then writes the exit code into ROOT: ROOT is
+      ;; removed once no job of it runs (the wrapper has ended)
+      (ignore-errors (drgnx-test-wait (lambda () (not (seq-find (lambda (j) (eq (plist-get j :status) 'running)) (drgnx-jobs-list))))
+                                      :what "the hub's job ended"))
       (delete-directory root t))))
 
 ;; the job window needs a hub; here it is stubbed: what `drgnx job' prints and when it refuses

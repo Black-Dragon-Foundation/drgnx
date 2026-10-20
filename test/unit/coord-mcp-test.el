@@ -4,6 +4,7 @@
 (require 'drgnx-coord)
 (require 'drgnx-coord-mcp)
 (require 'drgnx-work)
+(load (expand-file-name "test/fixtures/scripted-process" drgnx-dir) nil t)
 
 (defvar drgnx-coord-mcp-test--out nil)
 
@@ -513,6 +514,23 @@ data dir (job j: tasks 1, 2); the clock at `drgnx-coord-mcp-test--clock'."
             (should (< (- (float-time) start) 3)))
           (with-temp-file git (insert "#!/bin/sh\necho one; echo two\n"))
           (should (equal (drgnx-coord-mcp--git bin "x") "one")))
+      (delete-directory bin t))))
+
+(ert-deftest drgnx-coord-mcp/a-git-that-ends-before-its-stdin-is-closed-still-answers ()
+  ;; a fast git (rev-parse) on a busy machine has exited, and Emacs knows, before its stdin is closed: its answer
+  ;; stands (the closing raised "not running", and a hello lost its base).  The race made certain.
+  (let* ((bin (make-temp-file "drgnx-coord-bin" t))
+         (git (expand-file-name "git" bin))
+         (exec-path (cons bin exec-path))
+         (process-environment (cons (concat "PATH=" bin path-separator (getenv "PATH")) process-environment)))
+    (unwind-protect
+        (progn
+          (with-temp-file git (insert "#!/bin/sh\necho one; echo two\n"))
+          (set-file-modes git #o755)
+          (drgnx-test-with-exit-before-read
+            (should (equal (drgnx-coord-mcp--git bin "x") "one"))
+            (with-temp-file git (insert "#!/bin/sh\nexit 3\n"))
+            (should-not (drgnx-coord-mcp--git bin "x"))))   ; a failed git is still nil
       (delete-directory bin t))))
 
 (ert-deftest drgnx-coord-mcp/report-test-is-an-event ()

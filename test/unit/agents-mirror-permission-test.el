@@ -25,6 +25,10 @@
            ,@body)
        (ignore-errors (drgnx-hub-call-sync "shutdown" nil 3))
        (ignore-errors (drgnx-test-wait (lambda () (not (drgnx-hub-running-p))) :what "the hub gone"))
+       ;; the socket goes while the hub still exits; its job's wrapper then writes the exit code into ROOT: ROOT is
+       ;; removed once no job of it runs (the wrapper has ended)
+       (ignore-errors (drgnx-test-wait (lambda () (not (seq-find (lambda (j) (eq (plist-get j :status) 'running)) (drgnx-jobs-list))))
+                                       :what "the hub's job ended"))
        (drgnx-agents-mirror-stop)
        (drgnx-hub-disconnect)
        (delete-directory root t))))

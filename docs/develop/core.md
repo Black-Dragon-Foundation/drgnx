@@ -2929,7 +2929,14 @@ What Emacs guarantees, and what the tests (`drgnx-test-proc/`, each ordering 100
   a synchronous request) lets the last output and the sentinel run before the call goes on. Code after a wait in a
   filter must expect the process to be finished.
 - **`process-send-eof` after the exit** signals `Process NAME not running: finished` (A-44), before the sentinel and
-  after it: a runner that sends EOF to a child that may already have exited handles that error.
+  after it: a runner that sends EOF to a child that may already have exited handles that error
+  (`(ignore-errors (process-send-eof p))`), and still reads the output the child left.
+- **Sentinels of two processes may run in either order** (Emacs ran the newer one's first): code that starts the same
+  check again keeps the latest process and ignores an older one's late answer, and a request while a check runs is
+  coalesced into one more check after it, never dropped (Review's HEAD check, `drgnx-review--check-head`).
+- **A fast child may be gone one line after `make-process`**: a test that asserts something while the child runs
+  (a timer it owns, a live process) uses a child that waits until the test lets it go (a file it polls for), never
+  `true`.
 
 Concurrency tests use explicit barriers (A-23) — a scripted step, a done flag, a marker the child writes — and never
 sleeps: a sleep only makes the race rarer.

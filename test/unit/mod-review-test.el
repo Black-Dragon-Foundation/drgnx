@@ -8,6 +8,7 @@
 (load (expand-file-name "modules/tools/drgnx-diff" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-review" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/scripted-process" drgnx-dir) nil t)
 
 (defconst drgnx-review-test--answer
   "I read the diff.\nFINDING: src/b.el:4: minor: a long name\nFINDING: src/a.el:12: critical: the loop never ends\nFINDING: src/a.el:3: major: unchecked nil\nVERDICT: fail")
@@ -38,9 +39,12 @@
   (drgnx-review--changed s))
 
 (defun drgnx-review-test--wait-head ()
-  "Wait for the background check of HEAD the tab starts: its sentinel has run (it kills the output buffer)."
-  (let ((proc (plist-get (gethash drgnx-review--current drgnx-review--runs) :checking)))
-    (drgnx-test-wait (lambda () (not (and proc (buffer-live-p (process-buffer proc))))) :what "the HEAD check's sentinel")))
+  "Wait for the background checks of HEAD the tab starts: the latest one's sentinel has run (it kills the output
+buffer) and no check asked for meanwhile is still to follow it."
+  (let ((run (gethash drgnx-review--current drgnx-review--runs)))
+    (drgnx-test-wait (lambda () (let ((proc (plist-get run :checking)))
+                                  (not (or (plist-get run :recheck) (and proc (buffer-live-p (process-buffer proc)))))))
+                     :what "the HEAD check's sentinel")))
 
 (defun drgnx-review-test--tab () (with-current-buffer "*drgnx review*" (buffer-string)))
 
@@ -103,6 +107,55 @@
     (drgnx-review-refresh)
     (drgnx-review-test--wait-head)
     (should (string-search "HEAD has moved" (drgnx-review-test--tab)))))
+
+(ert-deftest drgnx-review/a-refresh-during-a-head-check-is-not-lost ()
+  ;; a refresh while a check runs that read HEAD before a commit: one more check follows it (it was dropped, so the
+  ;; tab never said HEAD had moved).  The race made certain: the first check's git answers only when let go.
+  (drgnx-review-test--branch
+    (drgnx-review-branch)
+    (drgnx-review--changed s)
+    (drgnx-review-test--answer s drgnx-review-test--answer)
+    (drgnx-review-test--wait-head)
+    (let* ((real (executable-find "git")) (bin (make-temp-file "drgnx-review-bin" t)) (hold (expand-file-name "hold" bin))
+           (exec-path (cons bin exec-path)))
+      (unwind-protect
+          (progn
+            (with-temp-file (expand-file-name "git" bin)   ; rev-parse HEAD answers once HOLD is gone; the rest as git
+              (insert "#!/bin/sh\n[ \"$*\" = \"rev-parse HEAD\" ] || exec " (shell-quote-argument real) " \"$@\"\n"
+                      "out=$(" (shell-quote-argument real) " rev-parse HEAD); rc=$?\n"
+                      "while [ -e " (shell-quote-argument hold) " ]; do sleep 0.01; done\n"
+                      "printf '%s\\n' \"$out\"; exit $rc\n"))
+            (set-file-modes (expand-file-name "git" bin) #o755)
+            (write-region "" nil hold nil 'silent)
+            (drgnx-review-refresh)                                 ; a check of the reviewed HEAD, held
+            (drgnx-git-test-write repo "c.el" "c\n")
+            (drgnx-git-test repo "add" "-A") (drgnx-git-test repo "commit" "-q" "-m" "c")
+            (drgnx-review-refresh)                                 ; while it runs
+            (delete-file hold)
+            (drgnx-review-test--wait-head)
+            (should (string-search "HEAD has moved" (drgnx-review-test--tab))))
+        (delete-directory bin t)))))
+
+(ert-deftest drgnx-review/an-older-head-check-answering-late-is-stale ()
+  ;; two checks whose gits have both ended, the older before a commit, before either sentinel runs: only the latest
+  ;; check's answer sets HEAD (Emacs ran the newer sentinel first, and the older one's HEAD overwrote it)
+  (drgnx-review-test--branch
+    (drgnx-review-branch)
+    (drgnx-review--changed s)
+    (drgnx-review-test--answer s drgnx-review-test--answer)
+    (drgnx-review-test--wait-head)
+    (let* ((run (gethash drgnx-review--current drgnx-review--runs)) older newer)
+      (drgnx-test-with-exit-before-read
+        (drgnx-review-refresh)                                     ; it read the reviewed HEAD; its sentinel waits
+        (setq older (plist-get run :checking))
+        (drgnx-git-test-write repo "c.el" "c\n")
+        (drgnx-git-test repo "add" "-A") (drgnx-git-test repo "commit" "-q" "-m" "c")   ; `call-process': no sentinel
+        (drgnx-review-refresh)
+        (setq newer (plist-get run :checking)))
+      (should-not (eq older newer))
+      (drgnx-test-wait (lambda () (not (or (buffer-live-p (process-buffer older)) (buffer-live-p (process-buffer newer)))))
+                       :what "both checks' sentinels")
+      (should (string-search "HEAD has moved" (drgnx-review-test--tab))))))
 
 (ert-deftest drgnx-review/ret-opens-the-finding ()
   (drgnx-review-test--branch

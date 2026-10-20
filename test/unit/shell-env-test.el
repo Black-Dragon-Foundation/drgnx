@@ -7,6 +7,7 @@
 (require 'subr-x)
 (require 'drgnx-shell-env)
 (require 'drgnx-hub)
+(load (expand-file-name "test/fixtures/scripted-process" drgnx-dir) nil t)
 
 (defmacro drgnx-shell-env-test--with (&rest body)
   "BODY in a temp dir DIR, as an interactive Emacs (`noninteractive' nil), with this Emacs's environment and
@@ -127,6 +128,18 @@ its environment, then AFTER."
     (let ((r (drgnx-shell-env-test--run)))
       (should-not (process-live-p (car r)))
       (should (equal (getenv "MANPATH") "/read/man")))))
+
+(ert-deftest drgnx-shell-env/a-shell-that-exited-before-its-input-is-closed-still-answers ()
+  ;; a fast shell has exited, and Emacs knows, before its input is closed: its environment is read, no failure said
+  ;; (the closing raised "not running": no process, a failure, and the sentinel's answer too).  The race made certain.
+  (drgnx-shell-env-test--with
+    (drgnx-shell-env-test--env-shell dir nil (list "PATH=/usr/bin" "MANPATH=/fast/man"))
+    (let* ((done nil)
+           (proc (drgnx-test-with-exit-before-read (drgnx-shell-env-start (lambda (_) (setq done t))))))
+      (should (processp proc))
+      (should (drgnx-test-wait (lambda () done) :what "the shell's answer")))
+    (should (equal (getenv "MANPATH") "/fast/man"))
+    (should-not (seq-find #'drgnx-shell-env-test--failure-p messages))))
 
 (ert-deftest drgnx-shell-env/path-merges-shell-first ()
   (drgnx-shell-env-test--with
