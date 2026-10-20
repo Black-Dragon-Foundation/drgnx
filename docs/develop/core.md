@@ -1053,7 +1053,9 @@ such as `tab-width`, `indent-tabs-mode` or `buffer-file-coding-system`:
   list must not include a per-buffer variable that other code often rebinds to other values. The status bar's
   `buffer-look` watches `tab-width`, `indent-tabs-mode` and `buffer-file-coding-system`: Emacs 30's own Lisp binds
   `indent-tabs-mode` to nil in a handful of commands (Dired, Org, picture, texinfo, chart), none on a per-keystroke
-  path, so such a rebind rebuilds every bar once;
+  path, and so do drgnx's config writer and formatter (`(let ((indent-tabs-mode nil)) …)`), so such a rebind rebuilds
+  every bar once (pinned by `drgnx-statusbar/a-let-of-tab-width-to-another-value-rebuilds-every-bar`; a `let` to the
+  same value or of a local variable rebuilds nothing);
 - a buffer-local set bumps that buffer's own count (the watcher's WHERE); a global set (`setq-default`) bumps the base.
 
 `drgnx-memo--watched` maps each variable that is watched now to its epochs.
@@ -1092,18 +1094,27 @@ What redisplay reads, built once per change (PERF-L L6):
 | `topline` (`drgnx-topline.el`) | frame | the editor buffer, its directory, file or breadcrumb project cache, the frame's width, the drawn title, the glyphs, the count of folders whose repository the git cache knows, or one of the three hint commands or its keys changes, or an epoch moves (16 keys; the git cache itself is read only to build) | the status bar's `buffer-look` (its `vc-mode` text) and `git`; while the status bar is off, the line's own `drgnx-git-changed-functions` hook moves `git` for the root that was read. Named through constants (`drgnx-topline--look-epoch`, `--git-epoch`), because the build compiles the file alone | `buffer-look` (per buffer, `:redisplay`: `after-change-major-mode-hook`; watches `vc-mode`, the encoding, `tab-width`, `indent-tabs-mode`, `drgnx-statusbar-indent-vars`, the modal state, evil's tag, trust), `flymake` (per buffer: `flymake-mode-hook`, a backend's report), `eglot` (per buffer: `eglot-managed-mode-hook`; the base: `eglot-server-initialized-hook`), `git` (per root: a branch or its ahead/behind changed), `misc-info` (watches `global-mode-string`, `mode-line-misc-info` and the two lists of what the bar leaves out), `statusbar` (`drgnx-statusbar--bump`; watches the glyphs, the job badge, the Explorer's roots, the segment lists) |
 
 **Other packages' entries** (`mode-line-misc-info`, `global-mode-string`) stay real time, the user's call, but are
-formatted once per redisplay for all windows: `drgnx-statusbar--misc` is a key of the bar, made again when a seventh
-epoch, `redisplay`, moves (bumped on `pre-redisplay-functions`, which runs for each window before any is drawn). An
-entry of strings and `:propertize` of strings with no `%` is *static*: its text is taken when `misc-info` moves.
-Every other one is *live*, formatted and timed with `drgnx-timer-now`; a text `equal` to the last keeps the old
-string, so the memo still hits. A live entry whose moving average (`avg += (ms - avg) / 8`, judged from the 8th
+formatted once per buffer per redisplay: `drgnx-statusbar--misc` is a key of the bar, made again for a buffer when a
+seventh epoch, `redisplay`, moves (bumped on `pre-redisplay-functions`, which runs for each window before any is
+drawn). It is formatted in each bar's own buffer, so an entry that reads buffer-local state (lsp-mode's `(:eval …)`
+entries, a minor mode's conditional) shows each buffer's value; four windows on one buffer still format it once
+(`drgnx-statusbar--misc-texts`, buffer → text, weak). An entry of strings and `:propertize` of strings with no `%` is
+*static*: its text is taken when the entries are read, which is when `misc-info` moves or when `mode-line-misc-info`
+or `global-mode-string` is not `eq` to the value read (a `let`, which moves no epoch, or a buffer-local value: two
+`eq` tests per bar). Every other one is *live*, formatted and timed with `drgnx-timer-now`; when no live text in a
+buffer differs from its last, the buffer's old string comes back, so the memo still hits. A live entry whose moving average (`avg += (ms - avg) / 8`, judged from the 8th
 sample) passes `drgnx-statusbar-misc-slow-ms` is *slow*: the timer `statusbar-misc-slow` (1 s repeat, owner
-`ui/face`, started only while a slow entry exists) formats it instead, and after 8 ticks in a row under half the limit
-it is live again; with none left the tick cancels the timer. A `misc-info` move forgets every average. The slow set is
-written to `statusbar-slow.eld` in the state dir from the tick, never from redisplay; the doctor's `statusbar-misc`
-check reads it. Tests: `drgnx-statusbar/` (`a-memo-hit-allocates-nothing`, `each-epoch-rebuilds-the-bar-*`,
-`a-live-entry-is-formatted-once-per-redisplay-for-four-windows`, `a-slow-entry-falls-back-alone`) and
-`drgnx-doctor/statusbar-*`.
+`ui/face`, started only while a slow entry exists) formats it instead, in the buffer that is current then (the
+selected window's: a slow entry shows that text in every bar until its next tick), and after 8 ticks in a row under
+half the limit it is live again; with none left the tick cancels the timer. Reading the entries again forgets every
+average. The slow set is written to `statusbar-slow.eld` in the state dir from the tick, never from redisplay, and
+once more a second after the bar turns on when an earlier session left one (`statusbar-misc-report`,
+`drgnx-timer-soon`, owner `ui/face`), so an entry that is gone stops being named; the doctor's `statusbar-misc` check
+reads it and says how old it is. A flymake check's start (`flymake-start`, an `:after` advice added and removed with
+the mode) moves `flymake` like a report does. Tests: `drgnx-statusbar/` (`a-memo-hit-allocates-nothing`,
+`each-epoch-rebuilds-the-bar-*`, `a-live-entry-is-formatted-once-per-redisplay-for-four-windows-on-one-buffer`,
+`a-buffer-dependent-entry-shows-each-buffers-own-value`, `a-let-of-global-mode-string-is-seen`,
+`a-slow-entry-falls-back-alone`) and `drgnx-doctor/statusbar-*`.
 
 Each module activates its memo in its `:setup` (`drgnx-memo-activate`), so turning the module off empties it. The Live
 view bumps by hand rather than by `:watch`: its tests and its use do not wait for the module's setup, and the sites are
@@ -2462,6 +2473,10 @@ returns PRED's first non-nil value, polling with `(accept-process-output nil 0.0
   under `test/` whose PRED mentions `process-live-p`.
 - **Inside the clock fixture** (`drgnx-test-with-clock`) it works unchanged: the deadline is read through
   `drgnx-test-real-time`, and each timed `accept-process-output` advances virtual time by the real wait.
+- **A GUI test that makes a frame waits for it to be mapped**: `(drgnx-test-wait (lambda () (eq (frame-visible-p F)
+  t)) :what "…")` before it redisplays. The compositor maps a new frame when it gets to it (pgtk under mutter:
+  after `make-frame` has returned), and redisplay skips a frame that is not mapped, so its mode lines are never
+  drawn (`drgnx-statusbar-ui/each-frame-has-its-own-full-bar`).
 
 Load it as the other fixtures are loaded: `(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)`.
 

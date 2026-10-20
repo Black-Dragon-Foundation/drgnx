@@ -190,11 +190,14 @@ A module of your own can add a function and call `drgnx-statusbar-refresh` when 
 
 **Other modules' marks.** Anything a package puts on `global-mode-string` or `mode-line-misc-info` shows in `misc`,
 with no change to the bar, and stays real time: a clock, a battery or a mark whose text changes with nothing to
-announce it is formatted again at every redisplay, as stock Emacs does, but once for all windows, not once per window.
-An entry of plain strings (no `%`) is read only when the lists are set again. One that takes more than
+announce it is formatted again at every redisplay, as stock Emacs does, but once per buffer, not once per window, and
+in each window's own buffer, so a mark that depends on the buffer shows that buffer's value. An entry of plain strings
+(no `%`) is read only when the lists are set again (or bound for a moment, or set in one buffer only). One that takes more than
 `drgnx-statusbar-misc-slow-ms` (1 ms) on average, over its last 8 redisplays, is formatted once a second instead,
-alone (the others stay real time), until it is fast again for 8 seconds; `drgnx doctor` names it, with its cost, in
-its `statusbar-misc` check (from the last session). With no entry there nothing is formatted. Three packages that write into the stock mode line are read from what they already hold
+alone (the others stay real time) and in the selected window's buffer, until it is fast again for 8 seconds;
+`drgnx doctor` names it, with its cost and how long ago it was reported, in its `statusbar-misc` check. The report is
+written again a second after the bar turns on, so once you remove the entry (or its package makes it cheaper) the
+doctor stops naming it. With no entry there nothing is formatted. Three packages that write into the stock mode line are read from what they already hold
 instead: keycast (Show Keys As I Type: its key and command, which change with every command, so while it is on every
 command redraws the bars), `which-function-mode` (the name its idle timer cached for the window; nothing when you
 asked for it in the header line) and evil (its state tag). eglot's entry in `mode-line-misc-info` is left out: the

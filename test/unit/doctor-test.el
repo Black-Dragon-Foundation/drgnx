@@ -704,9 +704,14 @@
           (make-directory (expand-file-name "drgnx" state))
           (with-temp-file (expand-file-name "drgnx/statusbar-slow.eld" state)
             (prin1 '((:entry "(:eval (my-clock))" :avg-ms 2.5 :since 1.0)) (current-buffer)))
+          (set-file-times (expand-file-name "drgnx/statusbar-slow.eld" state) (time-subtract nil 7200))
           (let* ((slow (drgnx-doctor--state-file "statusbar-slow.eld"))
-                 (r (drgnx-doctor-check 'statusbar-misc (drgnx-doctor-test--facts :statusbar-slow slow))))
+                 (r (drgnx-doctor-check 'statusbar-misc
+                                        (drgnx-doctor-test--facts
+                                         :statusbar-slow slow
+                                         :statusbar-slow-time (drgnx-doctor--state-file-time "statusbar-slow.eld")))))
             (should (eq (car r) 'warn))
-            (should (equal (nth 1 r) "(:eval (my-clock)) takes 2.5 ms per redisplay: refreshed once a second"))
+            (should (equal (nth 1 r) (concat "(:eval (my-clock)) takes 2.5 ms per redisplay: refreshed once a second"
+                                             " (reported 2 h ago)")))
             (should (equal (nth 2 r) "ask its package for a cheaper `:eval', or remove it from `mode-line-misc-info'"))))
       (delete-directory state t))))
