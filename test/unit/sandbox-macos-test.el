@@ -457,6 +457,26 @@ sandbox-exec -f FILE COMMAND."
       (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) (drgnx-sandbox-sbpl spec)))
       (should (= (file-modes file) #o600)))))
 
+(ert-deftest drgnx-sandbox-macos/reads-the-selected-developer-dir ()
+  "/usr/bin/git is xcrun's shim: it runs the git of the developer dir xcode-select's link names, which may be
+Xcode's under /Applications.  The profile reads that dir (the link's true name); no link, nothing more."
+  (drgnx-sandbox-macos-test--with
+    (let ((dev (concat root "/Xcode.app/Contents/Developer")) (link (concat root "/xcode_select_link"))
+          (rules (lambda () (drgnx-sandbox-macos-test--rules
+                             (drgnx-sandbox-sbpl (drgnx-sandbox-spec :backend 'seatbelt :net 'isolated))))))
+      (make-directory dev t)
+      (make-symbolic-link dev link)
+      (let ((drgnx-sandbox-macos-xcode-select-link link))
+        (should (drgnx-sandbox-macos-test--allowed-p (funcall rules) 'file-read-data (concat dev "/usr/bin/git")))
+        (should-not (drgnx-sandbox-macos-test--allowed-p (funcall rules) 'file-write-data (concat dev "/usr/bin/git")))
+        (should-not (drgnx-sandbox-macos-test--allowed-p (funcall rules) 'file-read-data (concat root "/Xcode.app/x"))))
+      ;; a link to / (or anything holding /Users) gives nothing
+      (make-symbolic-link "/" (concat root "/to-root"))
+      (let ((drgnx-sandbox-macos-xcode-select-link (concat root "/to-root")))
+        (should-not (drgnx-sandbox-macos--developer-dir)))
+      (let ((drgnx-sandbox-macos-xcode-select-link (concat root "/none")))
+        (should-not (drgnx-sandbox-macos-test--allowed-p (funcall rules) 'file-read-data (concat dev "/usr/bin/git")))))))
+
 (ert-deftest drgnx-sandbox-macos/tmpdir-is-private ()
   "The session's TMPDIR: a new dir under `temporary-file-directory', mode 0700, its true name; one per call.  A
 session id that is not a plain name is refused."

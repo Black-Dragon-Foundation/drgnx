@@ -168,7 +168,10 @@ or `sandbox-exec` (root's only, see above), else nil. `(drgnx-sandbox-wrap SPEC 
 
 - **Linux**: `drgnx-sandbox-bwrap-argv`.
 - **macOS**: the SBPL profile (`drgnx-sandbox-sbpl`, `core/drgnx-sandbox-macos.el`) is written to `:profile-file`,
-  mode 0600, as a new file, and the command line is `/usr/bin/sandbox-exec -f FILE COMMAND…`.
+  mode 0600, as a new file, and the command line is `/usr/bin/sandbox-exec -f FILE COMMAND…`. A spec without
+  `:profile-file` (a short step of the hub's, which has no session dir) gets `sandbox-exec -p PROFILE COMMAND…`: the
+  profile on the command line, nothing written. Seatbelt sets neither `:env` nor `:chdir`: `drgnx-sandbox-run`
+  starts the step in `:chdir` with `:env` as its whole environment.
 - **Neither**: `drgnx-sandbox-refused`. A missing sandbox is never a silent fallback to the bare command.
 
 Where there is a memory cap (below), its scope comes first: `systemd-run … -- bwrap … -- COMMAND`.
@@ -345,7 +348,8 @@ touch is the profile's allow list.
 - **`:binds`**: each is at its own path. One whose INSIDE is not its OUTSIDE is refused.
 - **`:run`**: readable at its own path (there is no `/run/drgnx`), never writable.
 - **`:sockets`**: the only Unix sockets the agent may connect to, one by one.
-- **`:env`, `:chdir`, `:memory-max`**: not in the profile. The caller sets the environment and the directory.
+- **`:env`, `:chdir`, `:memory-max`**: not in the profile. The caller sets the environment and the directory
+  (`drgnx-sandbox-run` does, for a short step).
 
 ### The profile, in order
 
@@ -374,8 +378,10 @@ SBPL decides by the **last rule that matches**, so the order is the policy:
 
 - **The system's roots** (`drgnx-sandbox-macos-system-read`): `/usr`, `/bin`, `/sbin`, `/System`, `/Library`,
   `/opt/homebrew`, `/private/etc`; `/dev/fd` (the process's own descriptors); `/private/var/select` (the link
-  `/bin/sh` and `xcrun` follow), the time zones and the selected developer directory (the git of the Command Line
-  Tools). Homebrew's data (`/opt/homebrew/var`, `/usr/local/var`: the databases of Postgres, MySQL, Redis) is
+  `/bin/sh` and `xcrun` follow), the time zones and xcode-select's link (`/private/var/db/xcode_select_link`).
+  The developer directory that link selects is read by its true name (`drgnx-sandbox-macos--developer-dir`):
+  `/usr/bin/git` is xcrun's shim, which runs the git there — the Command Line Tools' under `/Library`, or Xcode's
+  under `/Applications`, which nothing else reads. A link to `/` or to a dir holding `/Users` gives nothing. Homebrew's data (`/opt/homebrew/var`, `/usr/local/var`: the databases of Postgres, MySQL, Redis) is
   denied after every read, so a spec that reads `/opt/homebrew` does not reach it.
 - **Devices, each by name** (`drgnx-sandbox-macos-devices`): `/dev/null`, `/dev/zero`, `/dev/random`,
   `/dev/urandom`, `/dev/tty` (the controlling terminal) and `/dev/dtracehelper`. Never all of `/dev`: the user's
@@ -765,8 +771,6 @@ each):
 Most of the step inside is the sandbox's start (the scope and bwrap, about 30 ms), not git.
 
 **Limits:**
-- macOS: a step needs the session's `:profile-file` for its Seatbelt profile, which the step spec does not give
-  yet. On macOS the steps are refused until the job's session supplies one.
 - Between the hub's check of `task.bundle` and git opening it, only something that can write OUT could swap it.
   No sandbox has OUT once the bundle step has ended.
 

@@ -164,6 +164,19 @@ allowed or not by its true name (/private/tmp, /private/var/…, /private/etc)."
 (defconst drgnx-sandbox-macos-users "/Users"
   "Where the users' homes are: denied before every allow, so only what the spec allows there is readable.")
 
+(defvar drgnx-sandbox-macos-xcode-select-link "/private/var/db/xcode_select_link"
+  "xcode-select's link to the selected developer dir.  /usr/bin/git and the other shims run xcrun, which runs the tool
+of the dir the link leads to: the Command Line Tools under /Library, or Xcode's (/Applications/Xcode.app/Contents/
+Developer), which no other rule reads.  Seatbelt checks the path a link resolves to, so the profile reads that dir by
+its true name (`drgnx-sandbox-macos--developer-dir').")
+
+(defun drgnx-sandbox-macos--developer-dir ()
+  "The true name of the dir `drgnx-sandbox-macos-xcode-select-link' leads to, or nil when it is no link to a dir, or
+to / or another dir that holds /Users."
+  (let* ((file-name-handler-alist nil) (link drgnx-sandbox-macos-xcode-select-link)
+         (dir (and (file-symlink-p link) (file-directory-p link) (drgnx-sandbox--truename link))))
+    (and dir (not (drgnx-sandbox--within-p drgnx-sandbox-macos-users dir)) dir)))
+
 (defconst drgnx-sandbox-macos-dns-socket "/private/var/run/mDNSResponder"
   "The system resolver's socket: every host name lookup goes through it.  Allowed with `:net shared' only.")
 
@@ -275,7 +288,8 @@ PROTECTED (the read-only pins and the hidden paths) inside it.  The PROTECTED th
 - AF_UNIX sockets may be made (pipes to child processes); connecting to one is decided at the end;
 - `(deny file-read* (subpath \"/Users\"))', before every allow;
 - reads: / itself, the metadata of every directory above an allowed path and of /tmp, /var and /etc (links), the
-  system's roots (`drgnx-sandbox-macos-system-read') and devices (`drgnx-sandbox-macos-devices'), `:read', `:write',
+  system's roots (`drgnx-sandbox-macos-system-read'), the selected developer dir
+  (`drgnx-sandbox-macos--developer-dir') and devices (`drgnx-sandbox-macos-devices'), `:read', `:write',
   `:home' (the private home, at its own path: the session's HOME names it), `:run' and `:tmp'; then Homebrew's data
   denied (`drgnx-sandbox-macos-system-hidden');
 - writes: `:write', `:home', `:tmp';
@@ -301,7 +315,9 @@ or a `:home' whose INSIDE is not its OUTSIDE, a port out of range or a path SBPL
          (proxy (drgnx-sandbox-macos--port spec :proxy)) (gateway (drgnx-sandbox-macos--port spec :gateway))
          (home (car (plist-get spec :home))) (run (plist-get spec :run)) (tmp (plist-get spec :tmp))
          (binds (plist-get spec :binds))
-         (reads (delete-dups (append drgnx-sandbox-macos-system-read (and shared drgnx-sandbox-macos-dns-files)
+         (dev (drgnx-sandbox-macos--developer-dir))
+         (reads (delete-dups (append drgnx-sandbox-macos-system-read (and dev (list dev))
+                                     (and shared drgnx-sandbox-macos-dns-files)
                                      (plist-get spec :read) (plist-get spec :write) (and home (list home))
                                      (and run (list run)) (and tmp (list tmp)))))
          (writes (append (plist-get spec :write) (and home (list home)) (and tmp (list tmp))))
