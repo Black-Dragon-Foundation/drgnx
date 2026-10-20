@@ -606,14 +606,15 @@ Returns an alist NAME → window, NAME one of buffers explorer outline g1 g2 pan
             (drgnx-state-define-role 'st-inside :chrome nil)
             (drgnx-state-sync)
             (setq drgnx-signal--subscribers '((other g)) drgnx-signal-errors '("new"))
-            (setq timer (run-with-idle-timer 60 nil #'ignore) drgnx-signal--timer timer))
+            (drgnx-signal--schedule)
+            (setq timer (drgnx-timer-active-p 'signal-flush)))
           (should (eq tbl drgnx-state--frames))
           (should (eq rec (gethash (selected-frame) drgnx-state--frames)))
           (should (equal '((st-event st-fn)) drgnx-signal--subscribers))
           (should (equal '("old") drgnx-signal-errors))
           (should-not (assq 'st-inside drgnx-state--roles))
-          (should-not (memq timer timer-idle-list))          ; the timer armed inside was cancelled
-          (should-not drgnx-signal--timer)
+          (should timer)                                     ; the flush armed inside…
+          (should-not (drgnx-timer-active-p 'signal-flush))  ; …was cancelled
           (pcase-dolist (`(,hook . ,fn) drgnx-state-test--mode-hooks)
             (should (memq fn (default-value hook)))))        ; and the hooks are back
       (drgnx-state-mode -1))))

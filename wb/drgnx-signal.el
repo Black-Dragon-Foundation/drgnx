@@ -21,11 +21,11 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'drgnx-modules-record)
-(require 'drgnx-state)                  ; also `drgnx-signal-delay' and `drgnx-signal-errors'
+(require 'drgnx-timer)
+(require 'drgnx-state)                 ; also `drgnx-signal-delay' and `drgnx-signal-errors'
 
 (defvar drgnx-signal--subscribers nil "Alist EVENT → list of functions, in subscription order.")
 (defvar drgnx-signal--state nil "The buffer state at the last flush: (:set :modified :names :point).")
-(defvar drgnx-signal--timer nil "The armed idle flush, or nil (the store's idle lane arms it too).")
 (defvar drgnx-signal--editor nil
   "The buffer the bus's `editor-changed' subscribers got last (the store has the window).")
 (defvar drgnx-signal--switched nil
@@ -129,7 +129,7 @@ then compare the buffer state with the last flush and emit the edges.
 last: two windows on one buffer are one edge.  Only the parts in `drgnx-signal--dirty' are rebuilt: `set'
 \(the user buffers and their names), `modified' (their flags; a new set needs them too).  The mode off, no hook
 says what changed, so all of it is rebuilt."
-  (setq drgnx-signal--timer nil)
+  (drgnx-timer-cancel 'signal-flush)    ; called directly, this flush is the pending one
   (drgnx-state-sync)
   (drgnx-state--deliver-idle)
   (let* ((window (drgnx-signal-editor-window))
@@ -215,9 +215,9 @@ sends `frame-changed' with it."
 `now' lane, and unsubscribes them).")
 
 (defun drgnx-signal--schedule (&rest _)
-  "Raw hooks land here: arm one idle flush, nothing else."
-  (unless (timerp drgnx-signal--timer)
-    (setq drgnx-signal--timer (run-with-idle-timer drgnx-signal-delay nil #'drgnx-signal--flush))))
+  "Raw hooks land here: arm one idle flush, nothing else (the timer layer's `signal-flush', owned by `:core'; a
+burst arms it once).  The store's idle lane arms it too."
+  (drgnx-timer-soon 'signal-flush drgnx-signal-delay #'drgnx-signal--flush :idle t :owner :core))
 
 (defun drgnx-signal--mark (part)
   "Note that the flush has to rebuild PART."

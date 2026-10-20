@@ -333,7 +333,7 @@
       (window-resize panel 1) (drgnx-state-sync f)
       (window-resize panel 1) (drgnx-state-sync f)
       (should-not drgnx-state-events-test--inside)    ; nothing yet
-      (should (timerp drgnx-signal--timer))           ; the bus's idle flush delivers them
+      (should (drgnx-timer-active-p 'signal-flush))   ; the bus's idle flush delivers them
       (drgnx-state--deliver-idle)
       ;; one call per kind (the panel's `terminal', the editor group's nil), each with the last data
       (should (= 2 (length drgnx-state-events-test--inside)))

@@ -5,6 +5,10 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-job-worktree)
+(require 'drgnx-paths)
+(require 'drgnx-timer)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
 (defun drgnx-job-worktree-test--git (dir &rest args)
   "Git ARGS in DIR (the test's own fixture: a plain synchronous git), its output; an error when it fails."
@@ -409,5 +413,31 @@ opening its files: it is a failure the scrub raises, after the rest is done and 
       (should (file-regular-p (concat wt "logs/HEAD")))
       ;; the trash is removed though the scrub failed
       (should (drgnx-job-worktree-test--wait-gone git)))))
+
+(ert-deftest drgnx-job-worktree/a-git-deadline-is-a-layer-timer-of-its-process ()
+  "The time limit of a worktree's git is the timer layer's, keyed by the process and owned by it: past
+`drgnx-job-worktree-timeout' (virtual time) the process is ended and DONE gets :timeout; a git that ends first
+takes its key with it."
+  (drgnx-test-with-clock ()
+    (let* ((drgnx-job-worktree-timeout 5) (r nil) (dir (make-temp-file "drgnx-worktree-run" t))
+           (p (drgnx-job-worktree--run dir '("sleep" "30") nil (lambda (x) (setq r x))))
+           (key (cons 'job-worktree-timeout p)))
+      (unwind-protect
+          (progn
+            (should (equal (assoc key (drgnx-timer-pending)) (list key p 'start)))
+            (drgnx-test-advance 4)
+            (should (process-live-p p))
+            (drgnx-test-advance 1)
+            (should (drgnx-test-wait (lambda () r) :what "the timed-out git's sentinel"))
+            (should (eq (car r) :timeout))
+            (should-not (drgnx-timer-active-p key))
+            (setq r nil)
+            (let ((q (drgnx-job-worktree--run dir '("true") nil (lambda (x) (setq r x)))))
+              (should (drgnx-timer-active-p (cons 'job-worktree-timeout q)))
+              (should (drgnx-test-wait (lambda () r) :what "the git's sentinel"))
+              (should (eql 0 (car r)))
+              (should-not (drgnx-timer-active-p (cons 'job-worktree-timeout q)))))
+        (when (process-live-p p) (delete-process p))
+        (delete-directory dir t)))))
 
 ;;; job-worktree-test.el ends here

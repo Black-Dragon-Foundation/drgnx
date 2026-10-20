@@ -1016,7 +1016,11 @@ once). Then
   `(ai-grep . PROCESS)` by the search process (its sentinel cancels it). With no run of the owner nothing starts.
   Core process timeouts are keyed by their process and owned by it, so the layer drops them when it dies: a check's
   limit `(agent-check-limit . PROC)` with its 3 s backstop and tree kill, the hung `systemctl` kill, a `claude` command's
-  limit `(claude-cli-limit . PROC)` and the gateway's `(gateway-close . CONN)`. Three core timers have no process to own
+  limit `(claude-cli-limit . PROC)`, the gateway's `(gateway-close . CONN)`, a sandboxed step's
+  `(sandbox-step-timeout . PROC)`, worktree mode's git `(job-worktree-timeout . PROC)` (both cancelled by their
+  sentinel) and, in a job proxy's own batch Emacs, each client's head deadline `(sandbox-proxy-head . CONN)` (a whole
+  head cancels it). The change bus's one idle flush is `drgnx-timer-soon` `signal-flush` (`:core`): a burst of raw
+  hooks arms it once, and a flush called directly cancels the pending one. Three core timers have no process to own
   them and belong to `:core`: `ai-load-keys` (once per daemon, after `drgnx open`), `ai-first-window` (the idle look at
   the local AI runner) and a finished check's 0.1 s `(agent-check-finish . PROC)`, whose process is already dead. The status bar's debounced refresh is a fourth, `statusbar-refresh`, cancelled when the bar's mode turns off."
 

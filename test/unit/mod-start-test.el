@@ -7,7 +7,6 @@
 (load (expand-file-name "modules/ui/drgnx-face" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-start" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
-(defvar drgnx-signal--timer)
 (defvar drgnx-signal--subscribers)
 (defvar drgnx-persist-after-restore-functions)
 (defvar drgnx-first-gui-frame-hook)
@@ -43,10 +42,10 @@ window showing `*scratch*'.  `y-or-n-p' and every `read-*' fail: nothing here ma
             (drgnx-persist-after-restore-functions nil) (drgnx-first-gui-frame-hook nil)
             (server-after-make-frame-hook nil) (window-setup-hook nil)
             (drgnx-start--after-file nil)
-            (drgnx-signal--timer (timer-create))             ; a timer already armed: nothing is scheduled
             (drgnx-modules--runs (list (list 'ui/face 'ui/face)))   ; ui/face is on: its timers start
             (old (window-buffer (selected-window))))
-       (cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) (lambda (&optional _f) nil))   ; the batch terminal is not UTF-8
+       (cl-letf (((symbol-function 'drgnx-signal--schedule) #'ignore)                    ; the bus's flush is never scheduled
+                 ((symbol-function 'drgnx-ui-ascii-frame-p) (lambda (&optional _f) nil))   ; the batch terminal is not UTF-8
                  ((symbol-function 'drgnx-onboard--welcome-due-p) (lambda () nil))      ; no first-run Welcome in the way
                  ((symbol-function 'y-or-n-p) (lambda (&rest _) (error "asked y-or-n-p")))
                  ((symbol-function 'yes-or-no-p) (lambda (&rest _) (error "asked yes-or-no-p")))

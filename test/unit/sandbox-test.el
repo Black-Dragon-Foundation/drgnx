@@ -7,6 +7,9 @@
 (require 'cl-lib)
 (require 'drgnx-sandbox)
 (require 'drgnx-ai)
+(require 'drgnx-timer)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-sandbox-test--system-read drgnx-sandbox-system-read "The real system reads, for the smoke tests.")
 
@@ -943,5 +946,30 @@ Skipped with the check's reason where the sandbox cannot run."
           (should (string-match-p "STARTED" (cdr r)))
           (should-not (string-match-p canary (cdr r)))
           (should-not (string-match-p listed (cdr r))))))))
+
+(ert-deftest drgnx-sandbox/a-step-deadline-is-a-layer-timer-of-its-process ()
+  "A sandboxed step's TIMEOUT is the timer layer's, keyed by the process and owned by it: past it (virtual time)
+the step is ended and DONE gets (:timeout . MSG); a step that ends first takes its key with it."
+  (drgnx-test-with-clock ()
+    (let* ((r nil)
+           (p (drgnx-sandbox--spawn "drgnx-sandbox-test-step" '("/bin/sh" "-c" "sleep 30") 5 (lambda (x) (setq r x))))
+           (key (cons 'sandbox-step-timeout p)))
+      (unwind-protect
+          (progn
+            (should (equal (assoc key (drgnx-timer-pending)) (list key p 'start)))
+            (drgnx-test-advance 4)
+            (should (process-live-p p))
+            (drgnx-test-advance 1)
+            (should (drgnx-test-wait (lambda () r) :what "the timed-out step's sentinel"))
+            (should (eq (car r) :timeout))
+            (should (string-match-p "5 s" (cdr r)))
+            (should-not (drgnx-timer-active-p key))
+            (setq r nil)
+            (let ((q (drgnx-sandbox--spawn "drgnx-sandbox-test-step" '("/bin/sh" "-c" "true") 5 (lambda (x) (setq r x)))))
+              (should (drgnx-timer-active-p (cons 'sandbox-step-timeout q)))
+              (should (drgnx-test-wait (lambda () r) :what "the step's sentinel"))
+              (should (eql 0 (car r)))
+              (should-not (drgnx-timer-active-p (cons 'sandbox-step-timeout q)))))
+        (when (process-live-p p) (delete-process p))))))
 
 ;;; sandbox-test.el ends here

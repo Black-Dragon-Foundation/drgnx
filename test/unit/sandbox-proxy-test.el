@@ -6,6 +6,9 @@
 (require 'cl-lib)
 (require 'drgnx-sandbox-proxy)
 (require 'drgnx-paths)
+(require 'drgnx-timer)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
 (defvar drgnx-sandbox-proxy-test--got nil "What the upstream received, per connection: (CONN . BYTES), newest first.")
 (defvar drgnx-sandbox-proxy-test--conns nil "The connections the upstream accepted.")
@@ -236,6 +239,44 @@ form that may use `port') and `denied' (the reports, oldest first).  PINS are na
       ;; and `deny' takes it away again
       (drgnx-sandbox-proxy-send proxy "deny" hp)
       (should (drgnx-sandbox-proxy-test--wait (lambda () (eql 403 (drgnx-sandbox-proxy-test--try sock hp))))))))
+
+(defun drgnx-sandbox-proxy-test--heads ()
+  "The connections whose head deadline is pending: the OBJECTs of the timer layer's `sandbox-proxy-head' keys."
+  (delq nil (mapcar (lambda (e) (and (eq (car-safe (car e)) 'sandbox-proxy-head) (cdr (car e)))) (drgnx-timer-pending))))
+
+(ert-deftest drgnx-sandbox-proxy/the-head-deadline-is-a-layer-timer-of-its-connection ()
+  "In this Emacs, on virtual time: each client's head deadline is the timer layer's (sandbox-proxy-head . CONN),
+owned by CONN.  A client that went away takes its deadline with it; a whole head cancels it; past
+`drgnx-sandbox-proxy-head-timeout' a client still sending its head is answered 403."
+  (drgnx-test-with-clock ()
+    (let* ((dir (make-temp-file "px" t)) (sock (expand-file-name "p.sock" dir))
+           (drgnx-sandbox-proxy-head-timeout 10)
+           (server (make-network-process :name "drgnx-sandbox-proxy-test" :server t :family 'local :service sock
+                                         :noquery t :coding 'binary :log #'drgnx-sandbox-proxy--accept
+                                         :filter #'drgnx-sandbox-proxy--client-filter
+                                         :sentinel #'drgnx-sandbox-proxy--client-sentinel))
+           (gone nil) (slow nil) (bad nil))
+      (unwind-protect
+          (progn
+            (setq gone (drgnx-sandbox-proxy-test--connect sock "CONNECT "))
+            (should (drgnx-test-wait (lambda () (drgnx-sandbox-proxy-test--heads)) :secs 5 :what "a head deadline"))
+            (let* ((conn (car (drgnx-sandbox-proxy-test--heads))) (key (cons 'sandbox-proxy-head conn)))
+              (should (equal (assoc key (drgnx-timer-pending)) (list key conn 'start)))
+              (delete-process gone)
+              (should (drgnx-test-wait (lambda () (eq (process-get conn :phase) 'closed))   ; its sentinel closed it
+                                       :what "the server side of the client")))
+            (setq slow (drgnx-sandbox-proxy-test--connect sock "CONNECT "))
+            (should (drgnx-test-wait (lambda () (= 2 (length (drgnx-sandbox-proxy-test--heads)))) :what "a second deadline"))
+            (setq bad (drgnx-sandbox-proxy-test--connect sock "GET / HTTP/1.1\r\n\r\n"))
+            (should (eql 403 (drgnx-sandbox-proxy-test--status bad)))
+            (should (= 2 (length (drgnx-sandbox-proxy-test--heads))))      ; the whole head cancelled its deadline
+            (drgnx-test-advance 9)
+            (should (equal (process-get slow :in) ""))
+            (drgnx-test-advance 1)
+            (should (eql 403 (drgnx-sandbox-proxy-test--status slow)))
+            (should-not (drgnx-sandbox-proxy-test--heads)))              ; the gone client's: dropped, never called
+        (dolist (p (list gone slow bad server)) (when (processp p) (delete-process p)))
+        (delete-directory dir t)))))
 
 (ert-deftest drgnx-sandbox-proxy/denials-reported-once-per-host ()
   (drgnx-sandbox-proxy-test--with nil '("other.test" "third.test")

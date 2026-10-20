@@ -177,13 +177,12 @@
 
 (ert-deftest drgnx-signal/every-command-arms-a-flush ()
   ;; Undo back to the saved state flips the modified flag without any buffer hook.
-  (let ((drgnx-signal--timer nil))
-    (unwind-protect
-        (progn (drgnx-signal-mode 1)
-               (cancel-timer drgnx-signal--timer) (setq drgnx-signal--timer nil)   ; enabling arms one itself
-               (run-hooks 'post-command-hook)
-               (should (timerp drgnx-signal--timer)))
-      (when (timerp drgnx-signal--timer) (cancel-timer drgnx-signal--timer)))))
+  (unwind-protect
+      (progn (drgnx-signal-mode 1)
+             (drgnx-timer-cancel 'signal-flush)                    ; enabling arms one itself
+             (run-hooks 'post-command-hook)
+             (should (drgnx-timer-active-p 'signal-flush)))
+    (drgnx-timer-cancel 'signal-flush)))
 
 ;;;; Actions (M3b)
 

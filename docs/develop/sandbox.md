@@ -282,7 +282,8 @@ is an operational guard, not a security boundary.
 the memory cap) as a process of its own, started in `/` with stdin closed, and returns the process. It is for the
 hub's short steps (a checkout, a bundle) and never blocks. DONE gets `(EXIT . OUTPUT)`, stdout and stderr together
 and trimmed, or `(:timeout . MSG)` when it ran past TIMEOUT seconds (default `drgnx-job-git-timeout`) and was ended.
-A refused spec signals `drgnx-sandbox-refused`, and nothing runs.
+The deadline is the timer layer's `(sandbox-step-timeout . PROCESS)`, owned by the process; its sentinel cancels it
+([core.md](core.md#timers)). A refused spec signals `drgnx-sandbox-refused`, and nothing runs.
 
 ## Cost
 
@@ -928,7 +929,7 @@ temporary file and rename, and its gap is below.
 start (a commit the hub recorded, 40 or 64 hex digits) or a branch. Check a running task against its start. A
 branch's tip moves as other tasks merge, and a parallel task's branch does not descend from it. It runs two
 gits in the main repository, whose config the agent cannot write, each as a process of its own with the deadline
-`drgnx-job-worktree-timeout`:
+`drgnx-job-worktree-timeout` (the timer layer's `(job-worktree-timeout . PROCESS)`, owned by the process):
 1. `for-each-ref` reads the branch. Its `%(symref)` must be empty and its object name 40 or 64 hex digits. A link in
    the ref directory (lstat) counts as no branch.
 2. `merge-base --is-ancestor`.
@@ -1146,7 +1147,8 @@ drgnx-sandbox-proxy-denied-functions                ; called with (JOB HOST-PORT
 and from then on the bytes are spliced both ways as they are: TLS is not terminated, the agent's ClientHello reaches
 the server, and the server's certificate the agent. Everything else gets `403` and the connection is closed: another
 method (plain `GET http://…` too), a request line that is not `CONNECT TARGET HTTP/1.x`, a head (line and headers)
-over `drgnx-sandbox-proxy-max-head` (8 KiB) or not complete within `drgnx-sandbox-proxy-head-timeout` (10 s), a
+over `drgnx-sandbox-proxy-max-head` (8 KiB) or not complete within `drgnx-sandbox-proxy-head-timeout` (10 s; the
+timer layer's `(sandbox-proxy-head . CONN)`, owned by the connection, so the proxy loads `drgnx-timer`), a
 wildcard target (`CONNECT *.example.com:443`), a connection past `drgnx-sandbox-proxy-max-connections` (64 at once),
 and a target not on the list. Only the last is said on stdout, as `denied HOST:PORT`, once per target and proxy; the
 hub turns it into a `network` card. A bad request, another method or a wildcard gets no card: **Allow** could not

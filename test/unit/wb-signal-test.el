@@ -2,7 +2,9 @@
 (require 'ert)
 (require 'drgnx-paths)
 (require 'drgnx-signal)
+(require 'drgnx-timer)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-signal-test--with (events-var &rest body)
   "BODY with a fresh bus; every emission is pushed onto EVENTS-VAR as (EVENT . DATA)."
@@ -80,17 +82,21 @@
     (should (assq 'buffer-set-changed events))
     (should (seq-find (lambda (m) (string-search "Subscriber broke" m)) drgnx-signal-errors))))
 
-(ert-deftest drgnx-signal/raw-hooks-only-schedule ()
-  ;; Raw hooks do no work: they arm one idle flush.
-  (let ((drgnx-signal--timer nil))
-    (unwind-protect
-        (progn (drgnx-signal--schedule)
-               (let ((armed drgnx-signal--timer))
-                 (should (timerp armed))
-                 (should (memq armed timer-idle-list))
-                 (drgnx-signal--schedule)
-                 (should (eq drgnx-signal--timer armed))))
-      (when (timerp drgnx-signal--timer) (cancel-timer drgnx-signal--timer)))))
+(ert-deftest drgnx-signal/one-flush-per-burst ()
+  ;; Raw hooks do no work: a burst arms one idle flush, the timer layer's `signal-flush' (owned by `:core'), which
+  ;; runs once in the next pause; the next burst arms it again.
+  (let ((n 0))
+    (cl-letf (((symbol-function 'drgnx-signal--flush) (lambda () (cl-incf n))))
+      (drgnx-test-with-clock ()
+        (dotimes (_ 3) (drgnx-signal--schedule))
+        (should (equal (assq 'signal-flush (drgnx-timer-pending)) '(signal-flush :core soon)))
+        (drgnx-test-idle (* 2 drgnx-signal-delay))
+        (should (= n 1))
+        (should-not (drgnx-timer-active-p 'signal-flush))
+        (drgnx-signal--schedule)
+        (drgnx-signal--schedule)
+        (drgnx-test-idle (* 2 drgnx-signal-delay))
+        (should (= n 2))))))
 
 (ert-deftest drgnx-signal/editor-point-changed-is-an-edge ()
   ;; DEFERRED M3d-6: the point of the editor's window moving (same buffer) is an edge, for followers such as
@@ -198,7 +204,7 @@ and only when it differs from the last one it got."
             ;; the store saw another frame become the selected one
             (drgnx-state--emit 'selected-changed (list :frame (selected-frame) :window (selected-window)
                                                        :old-window nil :old-frame 'drgnx-signal-test-other))
-            (should (timerp drgnx-signal--timer))      ; the bus's `now' subscriber arms the flush…
+            (should (drgnx-timer-active-p 'signal-flush))   ; the bus's `now' subscriber arms the flush…
             (should-not seen)
             (drgnx-signal--flush)                      ; …which says it
             (should (equal (list (selected-frame)) seen)))
@@ -244,11 +250,10 @@ and only when it differs from the last one it got."
     (split-window nil nil 'right)
     (drgnx-state-sync)                                 ; an idle call waits…
     (should-not drgnx-signal-test--store)
-    (should (timerp drgnx-signal--timer))              ; …for the bus's one flush
-    (should (eq #'drgnx-signal--flush (timer--function drgnx-signal--timer)))
+    (should (equal (assq 'signal-flush (drgnx-timer-pending)) '(signal-flush :core soon)))   ; …for the bus's one flush
     (drgnx-signal--flush)
     (should drgnx-signal-test--store)
-    (should-not drgnx-signal--timer)))
+    (should-not (drgnx-timer-active-p 'signal-flush))))
 
 (ert-deftest drgnx-signal/the-editor-window-variable-is-gone ()
   (let ((name (concat "drgnx-signal--" "editor-window")) (hits nil))
