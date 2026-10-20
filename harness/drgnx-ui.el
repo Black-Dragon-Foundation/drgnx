@@ -1342,13 +1342,20 @@ environment; return (EXIT STDOUT STDERR), EXIT `timeout' when it had to be kille
          (err (generate-new-buffer " *drgnx-ui-wm-stderr*" t))
          (proc (make-process :name "drgnx-ui-wm" :buffer out :stderr err :command (cons program args)
                              :connection-type 'pipe :noquery t :coding 'utf-8-unix :sentinel #'ignore))
+         (stderr (get-buffer-process err))
          (deadline (+ (float-time) drgnx-ui--wm-timeout)))
+    (set-process-sentinel stderr #'ignore)    ; no "finished" line in ERR
     (unwind-protect
         (progn
           (while (and (process-live-p proc) (< (float-time) deadline))
             (accept-process-output proc 0.05))
           (let ((live (process-live-p proc)))
-            (unless live (while (accept-process-output proc 0)))
+            (unless live
+              (while (accept-process-output proc 0))
+              ;; stderr is a pipe of its own, which reading PROC's output once it exited does not read: read it to
+              ;; its end (it closes), within the same deadline
+              (while (and (process-live-p stderr) (< (float-time) deadline))
+                (accept-process-output stderr 0.05)))
             (list (if live 'timeout (process-exit-status proc))
                   (with-current-buffer out (buffer-string))
                   (with-current-buffer err (buffer-string)))))
