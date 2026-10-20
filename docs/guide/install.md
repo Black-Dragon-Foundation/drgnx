@@ -279,7 +279,7 @@ the first line of `~/.local/share/drgnx/emacs` (drgnx's data dir: `$DRGNX_DATA_D
 usually not on PATH. The path is this machine's, so it is not in your config folder, which travels to your other
 machines ([second-machine.md](second-machine.md)). Older installs wrote it to `~/.config/drgnx/emacs`: that
 file is still read when the data dir has no usable record, and `drgnx doctor` asks you to move it. If neither names
-an executable file, drgnx falls back to PATH's `nidhogg`, then `emacs`. Edit the file, or set `DRGNX_EMACS`, to use another.
+an executable file, drgnx falls back to PATH's `nidhogg`; with none it stops and tells you to run `install.sh` (it never runs a bare `emacs`). Edit the file, or set `DRGNX_EMACS`, to use another.
 
 ## drgnx doctor
 

@@ -12,7 +12,7 @@ by \\037, one line per call), says the server runs (`-e t') and has a window (`(
   (let ((pathdir (expand-file-name "path" dir))
         (log (shell-quote-argument (expand-file-name "client.log" dir))))
     (make-directory pathdir)
-    (dolist (spec `(("emacs" . "exit 0")
+    (dolist (spec `(("nidhogg" . "exit 0")
                     ("emacsclient" . ,(format "printf '%%s\\037' \"$@\" >> %s; echo >> %s
 for a in \"$@\"; do last=\"$a\"; done
 case \"$last\" in '(drgnx-session-gui-frame-p)') echo t ;; esac" log log))))

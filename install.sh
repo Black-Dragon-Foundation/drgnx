@@ -426,7 +426,7 @@ planned_emacs() { # the Emacs this run leaves behind, as far as the plan can tel
     formula) if [[ -n "$BREW" ]]; then echo "$(dirname "$(dirname "$BREW")")/opt/emacs-plus@31/bin/emacs"
              else echo "emacs-plus@31's bin/emacs"; fi ;;
     source) echo "$PREFIX/bin/emacs" ;;
-    *) echo emacs ;;
+    *) nidhogg_bin ;;
   esac
 }
 

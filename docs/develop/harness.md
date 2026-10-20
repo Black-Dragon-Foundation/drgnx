@@ -287,7 +287,7 @@ Unix socket paths are limited to ~108 bytes; the hash keeps two state roots (say
 `init.el`. Emacs is launched with `--init-directory` and without `-Q` (which would skip the init file).
 A `minimal` session runs at drgnx's GC settings (`drgnx-gc-setup`, so timings do not include Emacs' 800 kB
 default collecting every few keystrokes); a session of any other configuration brings its own.
-The Emacs binary is `$DRGNX_EMACS`, else the one install.sh recorded (`drgnx-paths-recorded-emacs`), else `nidhogg`, else `emacs-pgtk`, else `emacs`.
+The Emacs binary is `$DRGNX_EMACS`, else the one install.sh recorded (`drgnx-paths-recorded-emacs`), else `nidhogg`, else `emacs-pgtk`, else the Emacs that is running the harness (`drgnx-emacs-program`; never a bare `emacs`).
 
 ## A session holds a light slot
 

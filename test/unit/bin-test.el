@@ -41,7 +41,7 @@ stderr included.  DRGNX_EMACS is unset unless ENV sets it; HOME is the caller's 
       (kill-buffer buf))))
 
 (defmacro drgnx-bin-test--with-setup (vars &rest body)
-  "Bind VARS: DIR (temp directory, deleted afterwards), PATHDIR (first on PATH, holds a fake `emacs'
+  "Bind VARS: DIR (temp directory, deleted afterwards), PATHDIR (first on PATH, holds a fake `nidhogg'
 logging to PATHLOG), CONFIG (a DRGNX_CONFIG_DIR) and ENV (the environment lists that isolate the run)."
   (declare (indent 1))
   `(let* ((dir (make-temp-file "drgnx-bin-test" t))
@@ -54,7 +54,7 @@ logging to PATHLOG), CONFIG (a DRGNX_CONFIG_DIR) and ENV (the environment lists 
      (ignore pathlog config env)
      (make-directory pathdir)
      (make-directory config)
-     (drgnx-bin-test--fake (expand-file-name "emacs" pathdir) pathlog)
+     (drgnx-bin-test--fake (expand-file-name "nidhogg" pathdir) pathlog)
      (unwind-protect (let ,vars ,@body)
        (delete-directory dir t))))
 
@@ -71,6 +71,17 @@ logging to PATHLOG), CONFIG (a DRGNX_CONFIG_DIR) and ENV (the environment lists 
         (apply #'drgnx-bin-test--call drgnx-bin-test--bin env args)
         (should (string-search fake (drgnx-bin-test--slurp log))))
       (should (string-empty-p (drgnx-bin-test--slurp pathlog))))))
+
+(ert-deftest drgnx-bin/no-nidhogg-is-an-error-never-a-bare-emacs ()
+  ;; drgnx runs only on Nidhogg: with no $DRGNX_EMACS, no record and no nidhogg on PATH, a bare `emacs' there is
+  ;; not run; the error names the installer
+  (drgnx-bin-test--with-setup ()
+    (delete-file (expand-file-name "nidhogg" pathdir))
+    (drgnx-bin-test--fake (expand-file-name "emacs" pathdir) pathlog)
+    (let ((r (drgnx-bin-test--call drgnx-bin-test--bin env "build")))
+      (should-not (eql 0 (car r)))
+      (should (string-search "install.sh" (cdr r))))
+    (should (string-empty-p (drgnx-bin-test--slurp pathlog)))))
 
 (ert-deftest drgnx-bin/nidhogg-on-path-comes-before-emacs ()
   (drgnx-bin-test--with-setup ()
@@ -108,7 +119,7 @@ logging to PATHLOG), CONFIG (a DRGNX_CONFIG_DIR) and ENV (the environment lists 
   (drgnx-bin-test--with-setup ()
     (write-region (concat (expand-file-name "no-such-emacs" dir) "\n") nil (expand-file-name "emacs" config))
     (drgnx-bin-test--call drgnx-bin-test--bin env "build")
-    (should (string-search "emacs" (drgnx-bin-test--slurp pathlog)))
+    (should (string-search "nidhogg" (drgnx-bin-test--slurp pathlog)))
     (should (string-search "--batch" (drgnx-bin-test--slurp pathlog)))))
 
 (ert-deftest drgnx-bin/only-the-first-line-of-the-record-counts-and-is-never-run-as-shell ()
@@ -219,10 +230,10 @@ logging to PATHLOG), CONFIG (a DRGNX_CONFIG_DIR) and ENV (the environment lists 
   "The server name the open tests use: never `drgnx' (the user's may be running), except where faked.")
 
 (defun drgnx-bin-test--open-fakes (dir pathdir)
-  "Fake `emacs', `emacsclient' and `systemctl' in PATHDIR.  State files in DIR: running (the server
+  "Fake `nidhogg', `emacsclient' and `systemctl' in PATHDIR.  State files in DIR: running (the server
 answers), gui (a window is open), enabled (the systemd unit is), slow-probe (each `-e t' takes 0.3 s), delay (seconds the daemon takes to answer
 once started, or `never'; absent: at once).  emacsclient logs each call to
-client.log, one line per call, every argument followed by \\037; emacs and systemctl log theirs."
+client.log, one line per call, every argument followed by \\037; nidhogg and systemctl log theirs."
   (let ((f (lambda (name) (shell-quote-argument (expand-file-name name dir)))))
     (dolist (spec `(("emacsclient"
                      ,(format "printf '%%s\\037' \"$@\" >> %s; echo >> %s
@@ -241,15 +252,15 @@ esac"
                               (funcall f "client.log") (funcall f "client.log")
                               (funcall f "slow-c") (funcall f "gui") (funcall f "gui")
                               (funcall f "running") (funcall f "gui") (funcall f "running")))
-                    ("emacs" ,(format "echo \"$*\" >> %s
+                    ("nidhogg" ,(format "echo \"$*\" >> %s
 case \"$*\" in *--bg-daemon=*)
   echo \"fake daemon started\"
   d=0; [ -f %s ] && d=$(cat %s)
   if [ \"$d\" = 0 ]; then touch %s
   elif [ \"$d\" != never ]; then (sleep \"$d\"; touch %s) >/dev/null 2>&1 & fi ;;
 esac"
-                                      (funcall f "emacs.log") (funcall f "delay") (funcall f "delay")
-                                      (funcall f "running") (funcall f "running")))
+                                        (funcall f "emacs.log") (funcall f "delay") (funcall f "delay")
+                                        (funcall f "running") (funcall f "running")))
                     ("infocmp" "exit 0")      ; the terminal's description is known (a terminal frame checks it)
                     ("systemctl" ,(format "echo \"$*\" >> %s
 case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
@@ -439,7 +450,7 @@ with a display: `drgnx open' stays graphical (the unit tier has no DISPLAY, and 
   (drgnx-bin-test--with-open
     (let ((log (expand-file-name "gtk.log" dir))
           (face (expand-file-name "state/drgnx/face.eld" dir))
-          (fake (expand-file-name "emacs" pathdir)))
+          (fake (expand-file-name "nidhogg" pathdir)))
       (write-region (format "#!/bin/sh\necho \"${GTK_THEME-unset}\" >> '%s'\ntouch '%s'\n" log (expand-file-name "running" dir))
                     nil fake)
       (set-file-modes fake #o755)

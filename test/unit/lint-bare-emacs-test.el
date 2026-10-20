@@ -20,11 +20,12 @@
     "(start-process[ \t]+[^ \t]+[ \t]+[^ \t]+[ \t]+\"emacs\""
     "(list[ \t]+\"emacs\"[ \t]+\"-"
     "'(\"emacs\"[ \t]+\"-"
-    "\"-c\"[ \t]+\"emacs\\b")
+    "\"-c\"[ \t]+\"emacs\\b"
+    "[ \t]\"emacs\"[ \t]*)+[ \t]*$")
   "Regexps for a Lisp line that starts the bare name as a subprocess.")
 
 (defconst drgnx-lint-bare-emacs--shell-pattern
-  "\\(^\\|[;&|(`]\\|\\bexec \\|\\$(\\)[ \t]*emacs\\([ \t]\\|$\\)"
+  "\\(\\(^\\|[;&|(`]\\|\\bexec \\|\\$(\\)[ \t]*emacs\\([ \t]\\|$\\)\\|\\b\\(echo\\|printf '%s\\\\n'\\)[ \t]+emacs\\b\\)"
   "A shell line that runs `emacs' in command position.")
 
 (defun drgnx-lint-bare-emacs--files ()
@@ -42,7 +43,7 @@
 
 (defun drgnx-lint-bare-emacs--hits (rel)
   "Lines (\"REL:N: TEXT\") of file REL that start a bare `emacs'."
-  (let* ((lisp (string-suffix-p ".el" rel)) hits (n 0))
+  (let* ((lisp (string-suffix-p ".el" rel)) hits (n 0) (case-fold-search nil))   ; "Emacs" the profile is not `emacs'
     (with-temp-buffer
       (let ((coding-system-for-read 'utf-8-unix))
         (condition-case nil (insert-file-contents (expand-file-name rel drgnx-dir)) (error nil)))
@@ -75,9 +76,9 @@
 
 (ert-deftest drgnx-lint-bare-emacs/patterns-catch-the-forms ()
   (dolist (s '("(executable-find \"emacs\")" "(call-process \"emacs\" nil nil nil)" "  :command (list \"emacs\" \"--batch\")"
-               "(start-process \"x\" nil \"emacs\" \"-Q\")" "(list \"sh\" \"-c\" \"emacs --batch -Q\")"))
+               "(start-process \"x\" nil \"emacs\" \"-Q\")" "(or (executable-find \"nidhogg\") \"emacs\"))" "(list \"sh\" \"-c\" \"emacs --batch -Q\")"))
     (should (seq-some (lambda (re) (string-match-p re s)) drgnx-lint-bare-emacs--lisp-patterns)))
-  (dolist (s '("emacs --batch -Q" "x && emacs -Q" "exec emacs -nw" "y=$(emacs --version)"))
+  (dolist (s '("emacs --batch -Q" "x && emacs -Q" "exec emacs -nw" "y=$(emacs --version)" "else echo emacs; fi"))
     (should (string-match-p drgnx-lint-bare-emacs--shell-pattern s)))
   (dolist (s '("$(emacs_bin) --batch" "\"$DRGNX_EMACS\" --batch" "say emacs is here"))
     (should-not (string-match-p drgnx-lint-bare-emacs--shell-pattern s))))

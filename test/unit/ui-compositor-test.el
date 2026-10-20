@@ -230,7 +230,7 @@ paths no WM serves."
     (unwind-protect
         (progn
           (make-directory data) (make-directory bindir)
-          (should (equal (drgnx-ui-emacs-bin) "emacs"))
+          (should (equal (drgnx-ui-emacs-bin) (drgnx-emacs-program)))
           (let ((pgtk (expand-file-name "emacs-pgtk" bindir)) (nid (expand-file-name "nidhogg" bindir)))
             (dolist (f (list pgtk nid rec)) (write-region "#!/bin/sh\n" nil f) (set-file-modes f #o755))
             (delete-file nid)
