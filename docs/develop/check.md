@@ -54,8 +54,9 @@ like this.
 The summary lists every job — ok, FAILED (exit N), TIMED OUT, NOT JUDGED or skipped — with its time and log, then
 the wall time against the time the same jobs take one after another. The exit status is 0 only when all passed.
 
-Shards are balanced by how long each test file took last time (`check/durations.eld`, kept from the shards'
-results). Sessions started at the same moment never share a name:
+Shards are balanced by how long each test file took last time (`check/durations/<8 hex of the checkout's path>.eld`, one per checkout, kept
+from the shards' per-file times, each including its Emacs's start; the old shared `check/durations.eld` is read as a
+fallback until a checkout has its own, and never written). Sessions started at the same moment never share a name:
 - within one state root, a name is claimed by creating its run directory;
 - across roots, a unit name another session holds (systemd: "already loaded", "has a fragment file" or "already exists") is passed over for the next one.
 
