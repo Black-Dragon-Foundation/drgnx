@@ -72,8 +72,9 @@ manual install and uninstall: [docs/guide/install.md](docs/guide/install.md). Ch
   collapse per step type that remembers your choice; an agent runtime written in Rust.
 - **Extensions:** WebAssembly extensions, so tools can be written in any language (agent tools first). Community
   Emacs packages keep working.
-- **Also planned:** editor amenities to match VS Code and Zed (language servers, debugging, multi-cursor, a settings
-  and shortcuts editor), a Meow modal module, then the public launch.
+- **Also planned:** a settings editor, a Meow modal module, then the public launch. (Language servers, a debugger,
+  multiple cursors and the keyboard shortcuts editor are already modules: `lang/eglot`, `extra/debug`, `extra/mc`,
+  `tools/shortcuts`.)
 
 No dates and no promises: this is the direction, not a schedule.
 
