@@ -176,6 +176,7 @@ case $cmd in
     fi ;;
   update)
     _arguments '--quiet[one line, for the timer]' '--back[return to the commit before the last update]' \
+      '--restart[restart the drgnx service after a successful update]' \
       '--auto[a daily timer]:state:(on off status)' ;;
   coord)
     if (( CURRENT == 2 )); then
