@@ -4,8 +4,13 @@
 # build and run: podman build --memory 3g --memory-swap 3g -t drgnx-test-tools:f45 -f Containerfile.tools .
 # (docs/develop/harness.md, "Real-tool tests").
 FROM registry.fedoraproject.org/fedora:45
-RUN dnf -y install emacs-pgtk diffutils git python3 python3-pip nodejs nodejs-npm chromium-headless curl \
+RUN dnf -y install diffutils git python3 python3-pip nodejs nodejs-npm chromium-headless curl \
     && dnf clean all
+
+# Emacs is Nidhogg 31.1 from its release tarball (nidhogg.sh pins it).
+COPY nidhogg.sh /tmp/nidhogg.sh
+RUN bash /tmp/nidhogg.sh fedora-45 && rm /tmp/nidhogg.sh
+ENV DRGNX_EMACS=/opt/nidhogg/31.1-nidhogg.1/bin/nidhogg
 
 # debugpy (Fedora has no package for it).
 RUN python3 -m pip install --no-cache-dir debugpy==1.8.22

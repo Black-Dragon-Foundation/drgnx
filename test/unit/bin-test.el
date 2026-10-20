@@ -109,7 +109,7 @@ logging to PATHLOG), CONFIG (a DRGNX_CONFIG_DIR) and ENV (the environment lists 
                                (list (concat "HOME=" dir) (concat "DRGNX_CONFIG_DIR=" dir "/config")
                                      (concat "DRGNX_CONTAINER=" rt) "DRGNX_TEST_IMAGE=an-image")
                                "test" "--container"))))
-          (should (member "DRGNX_EMACS=/usr/bin/emacs" (split-string (drgnx-bin-test--slurp log) "\n" t))))
+          (should (member "DRGNX_EMACS=/usr/local/bin/emacs" (split-string (drgnx-bin-test--slurp log) "\n" t))))
       (delete-directory dir t))))
 
 (ert-deftest drgnx-bin/nidhogg-on-path-comes-before-emacs ()

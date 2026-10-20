@@ -4,12 +4,12 @@ GitHub Actions runs the same commands you run locally; nothing in CI is CI-only.
 
 | Workflow | When | What |
 |---|---|---|
-| `CI` (`.github/workflows/ci.yml`) | every push to `main`, every pull request, on demand | the unit suite on **Emacs 31.1** (Fedora 45, `bin/drgnx test --container`) its files in parallel, a failed file rerun once, the `:timing` tests left out by name ([Parallel files](#parallel-files)); `shellcheck --severity=warning` on `install.sh`, `bin/drgnx` and the pre-commit hook; the leak scan |
+| `CI` (`.github/workflows/ci.yml`) | every push to `main`, every pull request, on demand | the unit suite on **Nidhogg 31.1** (drgnx's own Emacs build, from its release tarball; Fedora 45, `bin/drgnx test --container`) its files in parallel, a failed file rerun once, the `:timing` tests left out by name ([Parallel files](#parallel-files)); `shellcheck --severity=warning` on `install.sh`, `bin/drgnx` and the pre-commit hook; the leak scan |
 | `GUI tier` (`.github/workflows/gui.yml`) | every push to `main`, nightly, on demand | real Emacs 31.1 (pgtk) sessions under headless mutter, three jobs: `ui` (`bin/drgnx test --container --ui`, `DRGNX_TEST_NO_TIMING=1`: the GUI and live tiers, the `:timing` tests left out), `scenario` (`--container --scenario`, `DRGNX_TEST_NO_TIMING=1`: the frame budget is reported, not judged) and `perf` (`--container --perf`, `DRGNX_PERF_CPU_FACTOR=2`, `DRGNX_PERF_RESULTS=perf-results.json` uploaded as the `perf-results` artifact, also when the run fails). A newer push cancels an older run of the same ref |
 | `Terminal tier` (`.github/workflows/tty.yml`) | nightly, on demand | `bin/drgnx test --container --tty --fedora 45`: the terminal tests (Emacs in tmux) on Emacs 31.1 |
 | `Bootstrap` (`.github/workflows/bootstrap.yml`) | weekly (Monday), on demand with a Fedora release (45 by default, 44 builds Emacs from source) | `bin/drgnx test --bootstrap --fedora N`: the exit test of a second machine — `install.sh --yes --config … --identity …` in a fresh Fedora container reaches a green doctor with the configuration, the locked packages and the provider keys back, and a second run changes nothing ([harness.md](harness.md)) |
-| `macOS` (`.github/workflows/macos.yml`) | `unit`: every push to `main`, every pull request, on demand; `install`: weekly (Wednesday), on demand | on macOS 27 (`xcode-27`, Apple silicon: GitHub names macOS images after their Xcode now): `unit` installs Emacs and ripgrep with Homebrew, checks that `install.sh` parses under macOS's bash 3.2 (`/bin/bash -n`), prints its plan (`--dry-run`) and runs `bin/drgnx test` the same way ([Parallel files](#parallel-files)), with no time factor (CI runs no `:timing` test); `install` runs `install.sh --yes` for real on the checkout (Homebrew's emacs-plus), then `drgnx doctor`, `drgnx sync` (a first sync from the shipped lock), `drgnx macos-app` and `drgnx open --check`. A newer run cancels an older one of the same event and ref only, so a push to `main` never cancels the weekly install |
 | `Runtime` (`.github/workflows/runtime.yml`) | every push to `main`, every pull request, on demand; `deny` also daily | the Rust workspace in `runtime/` ([runtime.md](runtime.md)): `linux` (Fedora 45: `cargo fmt --check`, `clippy -D warnings`, `cargo test --locked`), `msrv` (Rust 1.88.0, `cargo build --locked`), `deny` (cargo-deny 0.20.2, its checksum verified: advisories, licenses, bans, sources) and `macos` (macOS 27: `cargo test --locked`). The daily run is `deny` alone: advisories land with no change on our side |
+| `macOS` (`.github/workflows/macos.yml`) | `unit`: every push to `main`, every pull request, on demand; `install`: weekly (Wednesday), on demand | on macOS 27 (`xcode-27`, Apple silicon: GitHub names macOS images after their Xcode now): `unit` installs ripgrep with Homebrew and Nidhogg from its release tarball (`test/container/nidhogg.sh macos`, which sets `DRGNX_EMACS`), checks that `install.sh` parses under macOS's bash 3.2 (`/bin/bash -n`), prints its plan (`--dry-run`) and runs `bin/drgnx test` the same way ([Parallel files](#parallel-files)), with no time factor (CI runs no `:timing` test); `install` (timeout 180 minutes: it builds Nidhogg) runs `install.sh --yes` for real on the checkout, then `drgnx doctor`, `drgnx sync` (a first sync from the shipped lock), `drgnx macos-app` and `drgnx open --check`. A newer run cancels an older one of the same event and ref only, so a push to `main` never cancels the weekly install |
 | `Test images` (`.github/workflows/images.yml`) | a push changing `test/container/`, weekly, on demand | builds the three Fedora test images and pushes them to `ghcr.io/black-dragon-foundation/drgnx-test`, `drgnx-test-gui` and `drgnx-test-tty`, tagged with the Containerfile's hash (and `f45`) |
 
 The unit suite includes formatting (`bin/drgnx fmt`), the byte-compile with no warnings and the lints, so they
@@ -101,7 +101,14 @@ always sets `DRGNX_LEASE=off`.
 ## Prebuilt images (the cache)
 
 Installing Emacs and the GUI stack into Fedora took about a minute per job, so the images are built once by
-`Test images` and pulled. A job pulls the image tagged with the hash of the Containerfile it checked out; when
+`Test images` and pulled. Every image's Emacs is Nidhogg: `test/container/nidhogg.sh DISTRO` downloads the release
+tarball, checks its pinned sha256, unpacks it to `/opt/nidhogg/VERSION`, installs its `deps.runtime` and links
+`nidhogg`, `nidhoggclient`, `emacs` and `emacsclient` into `/usr/local/bin`; each Containerfile sets
+`DRGNX_EMACS` to the same path. The script is the one place the version and the checksums (one per distro) are
+bumped, together with `NIDHOGG_VERSION` in `install.sh` and the `ENV DRGNX_EMACS` line of each Containerfile
+(`drgnx-ci/nidhogg-pin-matches-install-sh`, `drgnx-ci/containerfiles-name-the-pinned-version`); the Containerfile
+edit is what changes the image tag. `Containerfile.gui` keeps `emacs-lucid` for the X11/i3 sessions (Nidhogg has no X11
+build; DEFERRED NIDHOGG-X11-1). A job pulls the image tagged with the hash of the Containerfile it checked out; when
 there is none yet (the push that changes the Containerfile), it builds the image itself, so a job never runs on
 an image from another Containerfile. `bin/drgnx test --container` uses `DRGNX_TEST_IMAGE` (and `--ui`
 `DRGNX_TEST_GUI_IMAGE`; `--ui --compositor kwin|niri` `DRGNX_TEST_WM_IMAGE`, from `Containerfile.wm`, which no CI job
@@ -140,7 +147,8 @@ Deliberately not cached:
   --bootstrap` and the macOS `install` job, both weekly), the point is a fresh machine, and a `actions/cache` entry
   not read for 7 days is evicted, which a weekly job never beats ([GitHub's cache rules](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching)). drgnx's own package cache
   (`cache/packages`) is checked against the lock's sha256 on every use, so it would be safe to add if a job ever needs it.
-- **Homebrew on macOS.** `brew install emacs ripgrep` is 8 s on the runner, less than restoring a cache.
+- **Homebrew and Nidhogg on macOS.** `brew install ripgrep` and Nidhogg's tarball (about 70 MB, plus its Homebrew
+  dependencies) are a short step on the runner, less than restoring a cache.
 - **Image layers of `Test images`.** It builds with `--pull=always` on purpose (the weekly run is the refresh).
 
 A new `actions/cache` step needs a `key` with `hashFiles(...)` of its inputs and `restore-keys` only where a partial

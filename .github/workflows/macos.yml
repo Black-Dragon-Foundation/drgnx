@@ -1,5 +1,5 @@
 # macOS 27 (Apple silicon; GitHub names its image after its Xcode: xcode-27). Every push to main and every pull
-# request: the unit suite and the install plan, with Homebrew's Emacs and macOS's own bash 3.2. Weekly and on demand: a real install.sh --yes, then the
+# request: the unit suite and the install plan, with Nidhogg's release tarball and macOS's own bash 3.2. Weekly and on demand: a real install.sh --yes, then the
 # first sync from the shipped lock, the app bundle and a headless start. The GUI tier stays Linux-only.
 # docs/develop/ci.md
 name: macOS
@@ -29,16 +29,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Emacs and ripgrep (Homebrew)
-        run: brew install emacs ripgrep
+      - name: ripgrep (Homebrew)
+        run: brew install ripgrep
       - name: install.sh parses under macOS's bash 3.2
         run: /bin/bash -n install.sh
       - name: install.sh prints the macOS plan and changes nothing
         run: /bin/bash install.sh --dry-run
-      - name: Emacs (Homebrew's) for the suite
-        run: |
-          echo "DRGNX_EMACS=$(brew --prefix)/bin/emacs" >> "$GITHUB_ENV"
-          "$(brew --prefix)/bin/emacs" --version | head -1
+      - name: Nidhogg (the release tarball) for the suite
+        run: /bin/bash test/container/nidhogg.sh macos
       # the files a core each at once, a failed file rerun once, the :timing tests left out by name (docs/develop/ci.md)
       - name: Unit suite, the files in parallel (no :timing tests)
         env:
@@ -50,7 +48,7 @@ jobs:
     name: Real install (macOS 27)
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: xcode-27
-    timeout-minutes: 90
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
