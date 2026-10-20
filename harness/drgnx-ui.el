@@ -145,8 +145,15 @@ EXIT is the symbol `timeout' when the process had to be killed."
        (require 'drgnx-paths (expand-file-name "core/drgnx-paths" drgnx-ui-repo-dir))
        (expand-file-name "ui" (drgnx-state-dir))))))
 
+(declare-function drgnx-paths-recorded-emacs "drgnx-paths")
+
 (defun drgnx-ui-emacs-bin ()
-  (or (getenv "DRGNX_EMACS") (executable-find "emacs-pgtk") "emacs"))
+  "The Emacs sessions run: $DRGNX_EMACS, else the one install.sh recorded, else Nidhogg, a pgtk Emacs, \"emacs\"."
+  (or (getenv "DRGNX_EMACS")
+      (progn   ; by file: `bin/drgnx ui-launcher' loads this with the harness alone on `load-path'
+        (require 'drgnx-paths (expand-file-name "core/drgnx-paths" drgnx-ui-repo-dir))
+        (drgnx-paths-recorded-emacs))
+      (executable-find "nidhogg") (executable-find "emacs-pgtk") "emacs"))
 
 ;;;; Compositors
 

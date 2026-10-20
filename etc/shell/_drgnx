@@ -155,7 +155,7 @@ case $cmd in
       esac
     fi ;;
   service-unit)
-    _arguments '*:directory:_files -/' ;;
+    _arguments '--refresh[point the installed unit at the Emacs drgnx uses]' '*:directory:_files -/' ;;
   shell)
     if (( CURRENT == 2 )); then
       _values 'shell command' 'install[add the line to your rc file, after you say yes]' 'line[print the line]'

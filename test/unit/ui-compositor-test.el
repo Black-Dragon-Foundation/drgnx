@@ -219,6 +219,30 @@ paths no WM serves."
                                                 :type 'drgnx-ui-error))))
     (should-not (file-exists-p (expand-file-name "drgnx-ui-2-00000a" root)))))
 
+(ert-deftest drgnx-ui/emacs-bin-order ()
+  (let* ((dir (make-temp-file "drgnx-ui-bin" t))
+         (data (expand-file-name "data" dir)) (bindir (expand-file-name "bin" dir))
+         (rec (expand-file-name "rec" dir))
+         (process-environment (append (list (concat "DRGNX_DATA_DIR=" data) (concat "DRGNX_CONFIG_DIR=" dir "/config")
+                                            "DRGNX_EMACS")
+                                      process-environment))
+         (exec-path (list bindir)))
+    (unwind-protect
+        (progn
+          (make-directory data) (make-directory bindir)
+          (should (equal (drgnx-ui-emacs-bin) "emacs"))
+          (let ((pgtk (expand-file-name "emacs-pgtk" bindir)) (nid (expand-file-name "nidhogg" bindir)))
+            (dolist (f (list pgtk nid rec)) (write-region "#!/bin/sh\n" nil f) (set-file-modes f #o755))
+            (delete-file nid)
+            (should (equal (drgnx-ui-emacs-bin) pgtk))
+            (write-region "#!/bin/sh\n" nil nid) (set-file-modes nid #o755)
+            (should (equal (drgnx-ui-emacs-bin) nid))
+            (write-region (concat rec "\n") nil (expand-file-name "emacs" data))
+            (should (equal (drgnx-ui-emacs-bin) rec)))
+          (setenv "DRGNX_EMACS" "/opt/chosen")
+          (should (equal (drgnx-ui-emacs-bin) "/opt/chosen")))
+      (delete-directory dir t))))
+
 (ert-deftest drgnx-ui-compositor/kwin-and-niri-take-only-plain-paths ()
   (drgnx-ui-compositor-test--with
     ;; KWin splits its session command at spaces

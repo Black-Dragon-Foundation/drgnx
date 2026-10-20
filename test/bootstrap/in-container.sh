@@ -74,7 +74,10 @@ doctor_row() { awk '$1 == "doctor" {print $2}' "$1"; }   # bootstrap's rows: STE
 # ---- 1: the one command --------------------------------------------------------------------------------------------
 step "1. install.sh --yes --config … --identity …"
 rc=0
-bash /src/install.sh --yes --config /srv/config.git --identity "$HOME/identity.txt" >/tmp/run1.out 2>&1 || rc=$?
+# stock Emacs for now (--method): this test is about the second machine, and Nidhogg's pinned release arrives with the CI
+# task (DEFERRED NIDHOGG-BOOTSTRAP-1)
+if [[ "$(. /etc/os-release; echo "$VERSION_ID")" == 44 ]]; then stock=source; else stock=package; fi
+bash /src/install.sh --yes --method "$stock" --config /srv/config.git --identity "$HOME/identity.txt" >/tmp/run1.out 2>&1 || rc=$?
 cat /tmp/run1.out
 ((rc == 0)) || fail "the one command exited $rc"
 

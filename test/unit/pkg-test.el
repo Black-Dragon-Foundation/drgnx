@@ -696,6 +696,108 @@
   (let ((invocation-directory "/usr/bin/") (invocation-name "emacs") (drgnx-dir "/src/drgnx/"))
     (should (string-match-p "\nExecStart=/usr/bin/emacs --fg-daemon=drgnx --init-directory=/src/drgnx/init\n" (drgnx-pkg-service-unit)))))
 
+(defmacro drgnx-pkg-test--with-unit (vars unit-text &rest body)
+  "BODY with XDG_CONFIG_HOME a temp dir (VARS: ROOT UNIT RELOADS), UNIT-TEXT written as its drgnx.service
+\(nil: no file), and the systemctl reload replaced by a counter: nothing reaches the real unit or systemd."
+  (declare (indent 2))
+  (pcase-let ((`(,root ,unit ,reloads) vars))
+    `(drgnx-pkg-test--with ,root
+       (let* ((process-environment (cons (concat "XDG_CONFIG_HOME=" ,root "xdg") process-environment))
+              (,unit (expand-file-name "systemd/user/drgnx.service" (concat ,root "xdg")))
+              (,reloads 0))
+         (when ,unit-text
+           (make-directory (file-name-directory ,unit) t)
+           (write-region ,unit-text nil ,unit nil 'silent))
+         (cl-letf (((symbol-function 'drgnx-pkg--systemctl-reload) (lambda () (cl-incf ,reloads) 'ok)))
+           ,@body)))))
+
+(defun drgnx-pkg-test--slurp (file)
+  (with-temp-buffer (insert-file-contents file) (buffer-string)))
+
+(defun drgnx-pkg-test--old-unit (exec)
+  (format "[Unit]\nDescription=drgnx (Emacs daemon)\n\n[Service]\nType=notify\nExecStart=%s --fg-daemon=drgnx --init-directory=/x/init\nEnvironment=FOO=1\nRestart=on-failure\n" exec))
+
+(ert-deftest drgnx-pkg/refresh-rewrites-only-execstart-emacs ()
+  (drgnx-pkg-test--with-unit (root unit reload-calls) (drgnx-pkg-test--old-unit "/old/bin/emacs")
+    (let ((r (drgnx-pkg-service-unit-refresh)))
+      (should (eq (plist-get r :status) 'rewritten))
+      (should (equal (plist-get r :old) "/old/bin/emacs"))
+      (should (eq (plist-get r :reload) 'ok))
+      (should (string-search "Environment=FOO=1\n" (drgnx-pkg-test--slurp unit)))
+      (should (= 1 (with-temp-buffer (insert-file-contents unit) (how-many "^ExecStart=" (point-min) (point-max)))))
+      (should (equal (nth 0 (drgnx-pkg--unit-exec-start (drgnx-pkg-test--slurp unit)))
+                     (nth 0 (drgnx-pkg--unit-exec-start (drgnx-pkg-service-unit)))))
+      (should (equal reload-calls 1)))))
+
+(ert-deftest drgnx-pkg/refresh-shows-old-and-new-before-it-writes ()
+  (drgnx-pkg-test--with-unit (root unit reload-calls) (drgnx-pkg-test--old-unit "/old/bin/emacs")
+    (let (seen)
+      (drgnx-pkg-service-unit-refresh
+       nil (lambda (old new)
+             ;; called with the file still as it was, nothing reloaded yet
+             (setq seen (list old new (drgnx-pkg-test--slurp unit) reload-calls))))
+      (should (equal (nth 0 seen) (car (drgnx-pkg--unit-exec-start (drgnx-pkg-test--old-unit "/old/bin/emacs")))))
+      (should (equal (nth 1 seen) (car (drgnx-pkg--unit-exec-start (drgnx-pkg-service-unit)))))
+      (should (equal (nth 2 seen) (drgnx-pkg-test--old-unit "/old/bin/emacs")))
+      (should (= (nth 3 seen) 0))
+      (should (string-search (nth 1 seen) (drgnx-pkg-test--slurp unit))))))
+
+(ert-deftest drgnx-pkg/refresh-leaves-a-current-unit ()
+  (drgnx-pkg-test--with-unit (root unit reload-calls) nil
+    (make-directory (file-name-directory unit) t)
+    (write-region (drgnx-pkg-service-unit) nil unit nil 'silent)
+    (let ((before (drgnx-pkg-test--slurp unit)))
+      (should (eq (plist-get (drgnx-pkg-service-unit-refresh) :status) 'current))
+      (should (equal (drgnx-pkg-test--slurp unit) before))
+      (should (= reload-calls 0)))))
+
+(ert-deftest drgnx-pkg/refresh-current-through-a-symlink ()
+  (drgnx-pkg-test--with-unit (root unit reload-calls) nil
+    (let ((link (concat root "emacs-link")))
+      (make-symbolic-link (expand-file-name invocation-name invocation-directory) link)
+      (make-directory (file-name-directory unit) t)
+      (write-region (drgnx-pkg-test--old-unit link) nil unit nil 'silent)
+      (should (eq (plist-get (drgnx-pkg-service-unit-refresh) :status) 'current))
+      (should (string-search link (drgnx-pkg-test--slurp unit)))
+      (should (= reload-calls 0)))))
+
+(ert-deftest drgnx-pkg/refresh-never-touches-a-foreign-unit ()
+  (drgnx-pkg-test--with-unit (root unit reload-calls)
+      "[Service]\nExecStart=/usr/bin/emacs --fg-daemon\n"
+    (should (eq (plist-get (drgnx-pkg-service-unit-refresh) :status) 'foreign))
+    (should (equal (drgnx-pkg-test--slurp unit) "[Service]\nExecStart=/usr/bin/emacs --fg-daemon\n"))
+    (should (= reload-calls 0))))
+
+(ert-deftest drgnx-pkg/refresh-without-a-unit ()
+  (drgnx-pkg-test--with-unit (root unit reload-calls) nil
+    (should (eq (plist-get (drgnx-pkg-service-unit-refresh) :status) 'none))
+    (should-not (file-exists-p unit))))
+
+(ert-deftest drgnx-pkg/unit-words-round-trip ()
+  (dolist (s '("/a b/emacs" "/x/100%/emacs" "/x/$HOME/emacs" "/q\"x/emacs" "/plain/emacs"))
+    (should (equal (drgnx-pkg--systemd-unword (drgnx-pkg--systemd-word s)) s))))
+
+(ert-deftest drgnx-pkg/refresh-cli-lines ()
+  (let ((new (expand-file-name invocation-name invocation-directory)))
+    (drgnx-pkg-test--with-unit (root unit reload-calls) nil
+      (should (equal (with-output-to-string (should (eql 0 (drgnx-pkg-cli-run '("service-unit" "--refresh")))))
+                     (format "drgnx.service is not installed (%s): nothing to refresh\n" unit)))
+      (make-directory (file-name-directory unit) t)
+      (write-region (drgnx-pkg-test--old-unit "/old/bin/emacs") nil unit nil 'silent)
+      (should (equal (with-output-to-string (should (eql 0 (drgnx-pkg-cli-run '("service-unit" "--refresh")))))
+                     (format "drgnx.service ExecStart changes:\n- %s\n+ %s\ndrgnx.service ran /old/bin/emacs; now %s (systemd reloaded). Restart drgnx to use it: systemctl --user restart drgnx\n"
+                             (car (drgnx-pkg--unit-exec-start (drgnx-pkg-test--old-unit "/old/bin/emacs")))
+                             (car (drgnx-pkg--unit-exec-start (drgnx-pkg-service-unit))) new)))
+      (should (equal (with-output-to-string (drgnx-pkg-cli-run '("service-unit" "--refresh")))
+                     (format "drgnx.service runs %s: up to date\n" new)))
+      (write-region "[Service]\nExecStart=/usr/bin/emacs --fg-daemon\n" nil unit nil 'silent)
+      (should (equal (with-output-to-string (drgnx-pkg-cli-run '("service-unit" "--refresh")))
+                     "drgnx.service's ExecStart is not drgnx's daemon line, left as it is: ExecStart=/usr/bin/emacs --fg-daemon\n"))
+      (write-region (drgnx-pkg-test--old-unit "/old/bin/emacs") nil unit nil 'silent)
+      (cl-letf (((symbol-function 'drgnx-pkg--systemctl-reload) (lambda () 'failed)))
+        (should (string-search "(run: systemctl --user daemon-reload)"
+                               (with-output-to-string (drgnx-pkg-cli-run '("service-unit" "--refresh")))))))))
+
 (ert-deftest drgnx-pkg/no-temp-files-are-left-behind ()
   ;; M5-14: a write or a download that stops half way (an error, C-g) leaves no temp file; one left by a
   ;; killed run is removed by the next sync.

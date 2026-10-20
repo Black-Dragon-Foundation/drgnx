@@ -1186,6 +1186,62 @@ user's step (docs/guide/packages.md)."
       (drgnx-file-write-text (expand-file-name "drgnx.service" dir) unit))
     unit))
 
+;; SVC-EMACS-STALE-1: the unit names the Emacs by full path, so an Emacs that changes (stock to Nidhogg, a rebuild in
+;; another prefix) leaves the installed unit starting the old one.  `drgnx update' refreshes it; the doctor warns.
+(defun drgnx-pkg-service-unit-file ()
+  "The user's unit: $XDG_CONFIG_HOME/systemd/user/drgnx.service, else ~/.config/systemd/user/drgnx.service."
+  (let ((default-directory "/") (file-name-handler-alist nil))
+    (expand-file-name "systemd/user/drgnx.service" (or (drgnx-paths-env-dir "XDG_CONFIG_HOME") "~/.config"))))
+
+(defun drgnx-pkg--systemd-unword (word)
+  "The inverse of `drgnx-pkg--systemd-word': WORD without its double quotes, \\\" and \\\\ unescaped, %% and $$ single."
+  (let ((w (if (and (> (length word) 1) (string-prefix-p "\"" word) (string-suffix-p "\"" word))
+               (replace-regexp-in-string "\\\\\\([\"\\\\]\\)" "\\1" (substring word 1 -1))
+             word)))
+    (replace-regexp-in-string "%%\\|\\$\\$" (lambda (m) (substring m 0 1)) w t t)))
+
+(defun drgnx-pkg--unit-exec-start (text)
+  "(LINE EMACS DRGNX-P) of the first ExecStart= line of the unit TEXT, or nil: EMACS is its first word unworded,
+DRGNX-P whether LINE starts drgnx's daemon (--fg-daemon=drgnx)."
+  (when (string-match "^ExecStart=\\(\"\\(?:[^\"\\\\]\\|\\\\.\\)*\"\\|[^ \t\n]+\\)[^\n]*" text)
+    (let ((line (match-string 0 text)))
+      (list line (drgnx-pkg--systemd-unword (match-string 1 text)) (string-search " --fg-daemon=drgnx" line)))))
+
+(defun drgnx-pkg--systemctl-reload ()
+  "Run `systemctl --user daemon-reload' (10 s at most, never asking): `ok', `failed' or `absent' (no systemctl)."
+  (if-let* ((systemctl (executable-find "systemctl")))
+      (let* ((proc (make-process :name "drgnx-daemon-reload" :buffer nil :noquery t :connection-type 'pipe
+                                 :command (list systemctl "--user" "--no-ask-password" "daemon-reload")
+                                 :stderr nil :sentinel #'ignore))
+             (deadline (+ (float-time) 10)))
+        (while (and (process-live-p proc) (< (float-time) deadline)) (accept-process-output proc 0.05))
+        (cond ((process-live-p proc) (delete-process proc) 'failed)
+              ((eql (process-exit-status proc) 0) 'ok)
+              (t 'failed)))
+    'absent))
+
+(defun drgnx-pkg-service-unit-refresh (&optional file before)
+  "Point FILE (default `drgnx-pkg-service-unit-file') at the Emacs running this: plist (:status :file :old :new :reload).
+:status is `none' (no file), `foreign' (no drgnx daemon line: left alone; :line holds the ExecStart= line), `current'
+\(same Emacs, by truename: untouched) or `rewritten' (only the ExecStart= line replaced, every other line kept; :reload
+is `ok', `failed' or `absent' from systemd's daemon-reload).  BEFORE, a function, is called with the old and the new
+ExecStart= line after the check and before anything is written.  Never restarts the service and never asks."
+  (let* ((file (or file (drgnx-pkg-service-unit-file)))
+         (text (drgnx-file-read-bounded file))
+         (new (expand-file-name invocation-name invocation-directory)))
+    (if (null text)
+        (list :status 'none :file file :new new)
+      (pcase (drgnx-pkg--unit-exec-start text)
+        ((and `(,line ,old ,drgnx) (guard drgnx))
+         (if (equal (file-truename old) (file-truename new))
+             (list :status 'current :file file :old old :new new)
+           (let ((fresh (car (drgnx-pkg--unit-exec-start (drgnx-pkg-service-unit)))))
+             (when before (funcall before line fresh))
+             (drgnx-file-write-text file (string-replace line fresh text))
+             (list :status 'rewritten :file file :old old :new new :reload (drgnx-pkg--systemctl-reload)))))
+        (`(,line . ,_) (list :status 'foreign :file file :line line))
+        (_ (list :status 'foreign :file file :line "(no ExecStart= line)"))))))
+
 ;;;; Status (for the doctor)
 
 (defun drgnx-pkg-status (&optional modules-dir)
@@ -1281,12 +1337,24 @@ user's step (docs/guide/packages.md)."
            (drgnx-pkg--print (if (eq m :not-a-module) "the problem shows with every module off: not a module (try drgnx safe)"
                                (format "the problem comes with module %s (turn it off in Preferences: Modules)" m)))
            0))
+        (`("service-unit" "--refresh")
+         (let* ((r (drgnx-pkg-service-unit-refresh
+                    nil (lambda (old new) (drgnx-pkg--print "drgnx.service ExecStart changes:\n- %s\n+ %s" old new))))
+                (file (plist-get r :file)))
+           (pcase (plist-get r :status)
+             ('none (drgnx-pkg--print "drgnx.service is not installed (%s): nothing to refresh" file))
+             ('current (drgnx-pkg--print "drgnx.service runs %s: up to date" (plist-get r :new)))
+             ('rewritten (drgnx-pkg--print "drgnx.service ran %s; now %s (%s). Restart drgnx to use it: systemctl --user restart drgnx"
+                                           (plist-get r :old) (plist-get r :new)
+                                           (if (eq (plist-get r :reload) 'ok) "systemd reloaded" "run: systemctl --user daemon-reload")))
+             ('foreign (drgnx-pkg--print "drgnx.service's ExecStart is not drgnx's daemon line, left as it is: %s" (plist-get r :line))))
+           0))
         (`("service-unit" . ,dir)
          (let ((unit (drgnx-pkg-service-unit (car dir))))
            (if dir (drgnx-pkg--print "wrote %s (not installed: see docs/guide/packages.md)" (expand-file-name "drgnx.service" (car dir)))
              (princ unit)))
          0)
-        (_ (drgnx-pkg--print "usage: drgnx sync [--offline] [--seed DIR] [--prune] | upgrade | rollback [N] | generations | lock [--ship] | bisect [-- CMD…] | service-unit [DIR]")
+        (_ (drgnx-pkg--print "usage: drgnx sync [--offline] [--seed DIR] [--prune] | upgrade | rollback [N] | generations | lock [--ship] | bisect [-- CMD…] | service-unit [DIR | --refresh]")
            2))
     (drgnx-pkg-error (drgnx-pkg--print "drgnx: %s" (cadr err)) 1)
     (error (drgnx-pkg--print "drgnx: unexpected error: %s" (error-message-string err)) 1)))

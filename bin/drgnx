@@ -4,7 +4,7 @@ set -euo pipefail
 here="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 . "$here/bin/drgnx-paths.sh"   # drgnx_dir KIND: where drgnx keeps its files (as core/drgnx-paths.el)
 
-emacs_bin() { # the one Emacs every subcommand runs in: $DRGNX_EMACS, else the one install.sh recorded (an absolute path), else PATH's
+emacs_bin() { # the one Emacs every subcommand runs in: $DRGNX_EMACS, else the one install.sh recorded (an absolute path), else PATH's nidhogg, else PATH's emacs
   if [[ -n "${DRGNX_EMACS:-}" ]]; then printf '%s\n' "$DRGNX_EMACS"; return; fi
   local file line
   # the record is machine-local, so it lives in the data dir; the config dir's is where older installs wrote it
@@ -15,7 +15,7 @@ emacs_bin() { # the one Emacs every subcommand runs in: $DRGNX_EMACS, else the o
     line="${line#"${line%%[![:space:]]*}"}"; line="${line%"${line##*[![:space:]]}"}"
     if [[ "$line" == /* && -f "$line" && -x "$line" ]]; then printf '%s\n' "$line"; return; fi
   done
-  echo emacs
+  if command -v nidhogg >/dev/null 2>&1; then echo nidhogg; else echo emacs; fi
 }
 
 emacsclient_bin() { # the emacsclient of emacs_bin's Emacs: beside it (Emacs.app: Contents/MacOS/bin/), else PATH's
@@ -304,12 +304,18 @@ test_install() { # [NAME…] — install.sh end to end in fresh containers (slow
   test_snapshot "$snap"
   local limit=()   # an hour per image: timeout (GNU coreutils), gtimeout (Homebrew's coreutils on macOS), else none
   test_time_limit 3600
+  local nidhogg=()   # DRGNX_INSTALL_NIDHOGG_REPO (a local directory) and _COMMIT: Nidhogg from there, not from GitHub
+  if [[ -d "${DRGNX_INSTALL_NIDHOGG_REPO:-}" ]]; then
+    nidhogg=(-v "$DRGNX_INSTALL_NIDHOGG_REPO:/nidhogg-src:ro" -e DRGNX_INSTALL_NIDHOGG_REPO=/nidhogg-src)
+    [ "$rt" = podman ] && nidhogg+=(--security-opt label=disable)
+    if [[ -n "${DRGNX_INSTALL_NIDHOGG_COMMIT:-}" ]]; then nidhogg+=(-e "DRGNX_INSTALL_NIDHOGG_COMMIT=$DRGNX_INSTALL_NIDHOGG_COMMIT"); fi
+  fi
   for name in "${names[@]}"; do
     for entry in "${INSTALL_IMAGES[@]}"; do [[ "${entry%%=*}" == "$name" ]] && image="${entry#*=}"; done
     log="$logs/$name.log"
     printf '%-14s %s … ' "$name" "$image" >&2
     # --memory: a test must never push the host into the OOM killer (install.sh sizes make -j from the limit)
-    if test_run "drgnx-install-$$-$name" --memory 6g -v "$snap:/src:ro$([ "$rt" = podman ] && echo ,Z)" "$image" \
+    if test_run "drgnx-install-$$-$name" --memory 6g -v "$snap:/src:ro$([ "$rt" = podman ] && echo ,Z)" ${nidhogg[@]+"${nidhogg[@]}"} "$image" \
          bash /src/test/install/in-container.sh >"$log" 2>&1; then
       echo "ok" >&2
     else
@@ -1305,6 +1311,14 @@ update_restart() { # after a successful update or --back: restart drgnx's own da
   fi
 }
 
+update_refresh_unit() { # an installed drgnx.service starts the Emacs drgnx uses now (core/drgnx-pkg.el); never restarts it
+  if [[ "$(update_platform)" == Darwin ]]; then return 0; fi
+  if ! update_step service-unit "${DRGNX_UPDATE_UNIT_CMD:-}" --refresh; then
+    update_err "could not check drgnx.service (log: $(update_state_dir)/last.log)"
+  fi
+  return 0
+}
+
 cmd_update() { # [--quiet] [--back] [--restart] [--auto on|off|status]
   local back=0 auto="" restart=0 rc=0
   UPD_QUIET=0 UPD_RESTART=0
@@ -1324,6 +1338,7 @@ cmd_update() { # [--quiet] [--back] [--restart] [--auto on|off|status]
   command -v git >/dev/null 2>&1 || { update_err "git not found"; return 1; }
   update_lock || return 1
   if ((back)); then update_back || rc=$?; else update_run || rc=$?; fi
+  if [[ "$rc" == 0 ]]; then update_refresh_unit; fi
   if [[ "$rc" == 0 && "$restart" == 1 ]]; then update_restart || rc=$?; fi
   return "$rc"
 }
@@ -1470,8 +1485,9 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
                                keys, desktop and shell (--yes: never the rc line or the desktop entry)
        drgnx safe              Emacs with drgnx's core only: no modules, no packages
        drgnx bisect [-- CMD…]  find the module that breaks (CMD fails, or you say so)
-       drgnx service-unit [DIR]
-                               the systemd user unit (printed, or written to DIR; never installed)
+       drgnx service-unit [DIR | --refresh]
+                               the systemd user unit (printed, or written to DIR; never installed);
+                               --refresh points an installed unit at the Emacs drgnx uses
        drgnx shell install [--shell zsh|bash|fish] [--yes]
                                add one line to your shell's rc file, after you say yes (--yes: print it,
                                write nothing); drgnx shell line prints the line (docs/guide/shell.md)

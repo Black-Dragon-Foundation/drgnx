@@ -15,7 +15,8 @@
                 (concat "PATH=" dir "/stubs:/usr/bin:/bin") "GIT_CONFIG_GLOBAL=/dev/null" "GIT_CONFIG_NOSYSTEM=1"
                 "GIT_AUTHOR_NAME=t" "GIT_AUTHOR_EMAIL=t@example.org" "GIT_COMMITTER_NAME=t" "GIT_COMMITTER_EMAIL=t@example.org"
                 (concat "DRGNX_UPDATE_SYNC_CMD=echo sync $* >> " dir "/hooks.log")
-                (concat "DRGNX_UPDATE_BUILD_CMD=echo build $* >> " dir "/hooks.log"))))
+                (concat "DRGNX_UPDATE_BUILD_CMD=echo build $* >> " dir "/hooks.log")
+                (concat "DRGNX_UPDATE_UNIT_CMD=echo unit $* >> " dir "/unit.log"))))   ; never the real service-unit
 
 (defun drgnx-update-test--run (dir extra-env program &rest args)
   "Run PROGRAM with ARGS in DIR's environment (plus EXTRA-ENV); return (EXIT . OUTPUT), stderr included."
@@ -380,3 +381,34 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
         (should-not (file-exists-p (expand-file-name "launchctl.log" dir)))))))
 
 ;;; update-test.el ends here
+
+;;; The systemd unit follows the Emacs drgnx uses (SVC-EMACS-STALE-1): `drgnx update' runs `service-unit --refresh'.
+
+(defun drgnx-update-test--unit-log (dir)
+  (split-string (drgnx-update-test--slurp (expand-file-name "unit.log" dir)) "\n" t))
+
+(ert-deftest drgnx-update/refreshes-the-unit-after-an-update ()
+  (drgnx-update-test--with-install
+    (drgnx-update-test--push dir "README" "two\n" "second")
+    (let ((r (drgnx-update-test--run dir nil bin "update")))
+      (should (eq (car r) 0))
+      (should (equal (split-string (drgnx-update-test--hooks dir) "\n" t) '("sync" "build")))
+      (should (equal (drgnx-update-test--unit-log dir) '("unit --refresh"))))))
+
+(ert-deftest drgnx-update/already-current-still-refreshes-the-unit ()
+  (drgnx-update-test--with-install
+    (let ((r (drgnx-update-test--run dir nil bin "update")))
+      (should (eq (car r) 0))
+      (should (equal (drgnx-update-test--unit-log dir) '("unit --refresh"))))))
+
+(ert-deftest drgnx-update/a-failed-unit-refresh-does-not-fail-the-update ()
+  (drgnx-update-test--with-install
+    (let ((r (drgnx-update-test--run dir (list "DRGNX_UPDATE_UNIT_CMD=false") bin "update")))
+      (should (eq (car r) 0))
+      (should (string-search "could not check drgnx.service" (cdr r))))))
+
+(ert-deftest drgnx-update/no-unit-refresh-on-macos ()
+  (drgnx-update-test--with-install
+    (let ((r (drgnx-update-test--run dir (list "DRGNX_UPDATE_PLATFORM=Darwin") bin "update")))
+      (should (eq (car r) 0))
+      (should-not (drgnx-update-test--unit-log dir)))))
