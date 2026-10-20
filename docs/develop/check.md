@@ -85,6 +85,24 @@ The counts can only fall: a batch that migrates a site lowers its file's count i
 empty. A branch merged later that adds raw timers adds its files' counts in its merge commit. The rule itself is in
 [core.md](core.md#timers).
 
+**Process callbacks run inside the guard** (`test/unit/lint-guard-test.el`). For every `.el` under `core/`, `wb/` and
+`modules/`, read with the Lisp reader, a site is a `make-process`, `make-network-process`, `make-pipe-process` or
+`make-serial-process` form with a `:filter` or `:sentinel` value, or a `set-process-filter` or `set-process-sentinel`
+call, whose callback is not `(drgnx-guard-wrap …)`, `nil`, `#'ignore` or `#'internal-default-process-sentinel`
+(`drgnx-proc-start` wraps its own). Each site is `(FILE CALL DEFUN)`, DEFUN the definition holding it.
+
+- `drgnx-lint/process-callbacks-are-guarded`: a site with no row in `test/lint-guard-allowed.eld` fails, naming the
+  file, the definition and the call ("wrap it: `(drgnx-guard-wrap #'FN "LABEL")`", [core.md](core.md#no-prompts-in-automatic-paths-drgnx-guardel)).
+- `drgnx-lint/no-stale-guard-allowlist-entries`: a row with no site left (or more rows than sites), or a malformed
+  row, fails.
+- `drgnx-lint/the-guard-lint-sees-each-form`: the scanner on a scratch checkout, one string per form.
+
+A row is `(:file F :form CALL :near DEFUN :why WHY :until TASK)`, one per site (two sites of one call in one
+definition are two equal rows). TASK is `18` (notices Task 18: core and `wb`), `"td-t15"` … `"td-t23"` (the
+teardown batch whose rider wraps the module) or `"runner"` (the hub-protocol sweep moves the site to
+`drgnx-proc-start`). The list only shrinks: the change that wraps a site deletes its row in the same commit; a branch
+merged later that adds a site adds its row in its merge commit.
+
 ## The leak census (`--leaks`)
 
 `bin/drgnx test --leaks` (and `bin/drgnx check --leaks`, for the unit shards and the timing job) turns on a census of
