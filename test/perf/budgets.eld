@@ -67,5 +67,8 @@
  (diff-scrolling (:alloc :p50) 6027) (diff-scrolling (:cpu_ms :p90) 26.7) (diff-scrolling (:rows) 0)
  (typing-with-ghost (:alloc :p50) 18385) (typing-with-ghost (:cpu_ms :p50) 30) (typing-with-ghost (:cpu_ms :p90) 402.9) (typing-with-ghost (:rows) 1)
  (replace-typing (:alloc :p50) 41340) (replace-typing (:cpu_ms :p90) 183.7) (replace-typing (:rows) 1)
+ ;; replace-retype seeded 2026-10-20 from two GUI-container runs at --cpus 2 (alloc 4097 / 4097, cpu p90 4.97 / 5.93,
+ ;; rows 0 / 0; a third at --cpus 1 gave 4097, 6.22, 0): the keys only edit the field, the rows are patched by timers
+ (replace-retype (:alloc :p50) 5122) (replace-retype (:cpu_ms :p90) 11.9) (replace-retype (:rows) 0)
  (remote-typing (:alloc :p50) 17300) (remote-typing (:cpu_ms :p50) 30) (remote-typing (:cpu_ms :p90) 349.0) (remote-typing (:rows) 1)
  (window-switch (:alloc :p50) 29638) (window-switch (:cpu_ms :p90) 43.6) (window-switch (:rows) 0))

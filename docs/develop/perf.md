@@ -165,6 +165,18 @@ the allocation. So the budget follows the larger of the two CI-image measurement
 laptop's number; the other allocation rows, whose commands do not wait on a stream, agree to a few percent between
 machines and keep their seeds. A row of this kind that moves again is judged by `--ab` first, not by re-seeding.
 
+## Waiting for a view inside a workload (`replace-retype`)
+
+A workload step that waits for a view to finish drawing (`drgnx-perf--replace-idle`: the arm, the measure and the
+check of both replace workloads) polls with `(accept-process-output nil 0)` while a timer is due and 50 ms otherwise,
+and signals an error if the view still has work after 100 s. One `accept-process-output` runs one link of a chain of
+zero-delay timers however long it waits ([core.md](core.md), "Waits"), so a plain 50 ms poll gave the Search view one
+4 ms slice per poll. The wait then gave up at its deadline with rows left, and the command loop finished them: it
+runs a zero-delay chain link after link, with a redisplay between, and reads no socket until the chain ends. The
+harness's next call (`drgnx-uitest-api-measure-begin`) got no answer in 20 s (CI run of 83e460be; locally at
+`--cpus 2`: the arm's 30 s wait left 1,400 of 10,100 rows, the second repeat's left about 11,000 row changes). A view step
+must not return while the view is busy, and `drgnx-ui-call`'s "no answer" error names the form it sent.
+
 ## Judging wall clock: `--perf --ab REF`
 
 ```sh

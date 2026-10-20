@@ -72,9 +72,7 @@ ones are counted while the view streams."
       (defun drgnx-perf--replace-check ()
         "Keys were typed while it streamed, and it listed all 10k matches."
         (remove-hook 'post-command-hook #'drgnx-perf--replace-key)
-        (let ((d (+ (float-time) 20)))
-          (while (and (with-current-buffer (drgnx-perf--replace-view) (drgnx-replace--busy-p)) (< (float-time) d))
-            (accept-process-output nil 0.05)))
+        (drgnx-perf--replace-idle)
         (and (>= drgnx-perf--replace-typed 5)
              (= 10000 (with-current-buffer (drgnx-perf--replace-view) (length drgnx-replace--matches)))
              t))
@@ -94,9 +92,16 @@ ones are counted while the view streams."
         (let ((t0 (float-time)))
           (prog1 (funcall orig buffer) (push (* 1000 (- (float-time) t0)) drgnx-perf--slices))))
       (defun drgnx-perf--replace-idle ()
-        (let ((d (+ (float-time) 30)))
+        "Wait until the Search view has no work left; an error if it still has after 100 s (the arm's and measure's calls allow 120).
+One `accept-process-output' runs one link of the view's chain of zero-delay slices however long it waits, so while a
+timer is due the wait polls without a timeout: the chain runs back to back, as in the command loop.  A 50 ms poll
+gave it one 4 ms slice per poll; the wait gave up with rows left, and the command loop, which runs a zero-delay
+chain without reading any socket, finished them while the harness's next call got no answer (PERF-SEED-1)."
+        (let ((d (+ (float-time) 100)))
           (while (and (with-current-buffer (drgnx-perf--replace-view) (drgnx-replace--busy-p)) (< (float-time) d))
-            (accept-process-output nil 0.05))))
+            (accept-process-output nil (if (and timer-list (not (time-less-p nil (timer--time (car timer-list))))) 0 0.05)))
+          (when (with-current-buffer (drgnx-perf--replace-view) (drgnx-replace--busy-p))
+            (error "The Search view still has work after 100 s"))))
       (defun drgnx-perf--retype-arm ()
         "The Search view lists the 10k matches, drawn and settled, its Replace field empty; point in that field."
         (drgnx-replace--open :text "needle" :replace ""
@@ -931,7 +936,6 @@ version and the commit, as JSON in FILE."
 (defconst drgnx-perf-run-unseeded
   '((agent-stream . "errored in the Emacs 31.1 container: the mock agent was not busy at the end (2026-10-20)")
     (cockpit-cards . "errored in the container: no agent busy at the end")
-    (replace-retype . "errored in the container: the session stopped answering (a prompt)")
     (live-view . "the container image has no websocket package")
     (typing-with-index . "the container's /src is not a git project; the workload indexes the repo")
     (terminal-typing . "the container image has no eat package")

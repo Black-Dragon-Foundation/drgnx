@@ -1258,8 +1258,8 @@ session (HARNESS-SESS-1).  A session that does not know `drgnx-uitest-api-as' wa
                                         (format "(drgnx-uitest-api-as %s %s)" (drgnx-ui-el (plist-get sess :name)) form))))
     (pcase r
       (`(timeout ,_)
-       (drgnx-ui--fail "%s: no answer in %ss (stuck on a prompt? take a ui_screenshot)"
-                       (plist-get sess :name) timeout))
+       (drgnx-ui--fail "%s: no answer in %ss (stuck on a prompt? take a ui_screenshot) [%s]"
+                       (plist-get sess :name) timeout (truncate-string-to-width form 90 nil nil t)))
       (`(0 ,out) (drgnx-ui-parse-reply out))
       (`(,_ ,out)
        (if (string-match-p "void.*drgnx-uitest-api-as" out)
