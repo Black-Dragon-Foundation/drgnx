@@ -256,8 +256,12 @@ Unix socket paths are limited to ~108 bytes; the hash keeps two state roots (say
   other state files are not brought in.
 - No network and no installs: `url-retrieve*`, `package-install`/`-refresh-contents`/`-vc-install`/`-upgrade*`
   and `treesit-install-language-grammar` signal an error.
-- No secrets: the environment is rebuilt from an allowlist (`HOME USER LOGNAME LANG LC_ALL PATH
+- No secrets: the environment is rebuilt from an allowlist (`USER LOGNAME LANG LC_ALL PATH
   XDG_RUNTIME_DIR GRYPHN_EMACS_DIR DRGNX_UITEST_SETTLE_SCALE` + `DRGNX_UI_*`), `auth-sources` is nil.
+- A session's home is its run's: `drgnx-test-env` (tier `ui`; `scenario`, `bench` or `perf` when `--scenario`,
+  `--bench` or `--perf` start it, via `drgnx-ui-session-tier`) gives it `HOME=RUN/home`, the XDG directories under
+  RUN, a dead session bus and no provider keys; the compositor's own variables (`XDG_CACHE_HOME`, KWin's
+  `XDG_CONFIG_HOME` …) come after and win. No tier reads or writes `~`.
 - Your drgnx files are never touched: a session gets its own `DRGNX_CONFIG_DIR` (`RUN/drgnx-config`) and
   `XDG_STATE_HOME` (`RUN/state`), so it neither reads `~/.config/drgnx` (keys.eld, …) nor writes
   `~/.local/state` (the key report). Caches too: `XDG_CACHE_HOME` and `MESA_SHADER_CACHE_DIR` are under `RUN/xdg/cache`
