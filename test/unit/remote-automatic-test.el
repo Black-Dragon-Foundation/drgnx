@@ -309,7 +309,11 @@ buffer is not affected."
     (should (member "made.py" (drgnx-remote-auto--row-names)))
     (should-not drgnx-explorer--remote-reads)
     (drgnx-remote-auto--write (expand-file-name "found.py" rdir) "")
+    (drgnx-remote-auto--write (expand-file-name "app.elc" rdir) "")   ; ignored (`grep-find-ignored-files')
+    ;; Find's listing is a line a macOS terminal takes (the mock fails a longer one: `drgnx-tramp-mock-line-max')
     (drgnx-explorer--find-apply "app")
+    (should (member "app.py" (drgnx-remote-auto--row-names)))
+    (should-not (member "app.elc" (drgnx-remote-auto--row-names)))
     (should-not (member "made.py" (drgnx-remote-auto--row-names)))
     (setq drgnx-tramp-mock-sends 0)
     (drgnx-explorer-find-clear)                                     ; leaving Find draws the tree again

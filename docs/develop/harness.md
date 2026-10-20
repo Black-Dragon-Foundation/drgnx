@@ -931,7 +931,12 @@ configuration directory whose code directories (`drgnx-test-env-config-links`) a
 stay readable, read-only, through `DRGNX_USER_ELPA`.
 
 The unit runner (`drgnx-run-ert-batch`) calls it for `unit` and adds only its own variables (the native-compilation
-directory, the runner's switches). `drgnx-test-env-outer` is the part a parent sets in a child's C environment before
+directory, the runner's switches), and makes the result the top-level `process-environment`, as the startup
+environment is in a user's Emacs: TRAMP gives a remote process only what differs from the top-level value, so a
+let-bound test environment put ~1.7 KB of variables and unsets on every remote command line. The mock TRAMP method
+(`test/fixtures/tramp-mock.el`) fails any command line over `drgnx-tramp-mock-line-max` (1000 bytes): TRAMP's shell
+reads from a terminal, a macOS terminal takes 1024 bytes per line (MAX_CANON), and a longer line never runs there
+(TRAMP waits for ever), so Linux runs catch what would hang on macOS. `drgnx-test-env-outer` is the part a parent sets in a child's C environment before
 Emacs starts, because dbus.el reads that one: the dead bus and the desktop variables unset. `bin/drgnx` repeats those
 lines in bash for the unit tier, and a test (`drgnx-test-env/bin-drgnx-matches-it`) fails if they drift.
 

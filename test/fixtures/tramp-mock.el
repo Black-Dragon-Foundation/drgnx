@@ -18,6 +18,19 @@
 
 (defun drgnx-tramp-mock--count (&rest _) (setq drgnx-tramp-mock-sends (1+ drgnx-tramp-mock-sends)))
 
+(defconst drgnx-tramp-mock-line-max 1000
+  "The longest command line the mock lets through, in bytes.  TRAMP talks to the remote shell through a terminal in
+canonical mode, and a macOS terminal takes at most 1024 bytes per line (MAX_CANON): it drops the rest, the newline
+too, so the shell never runs the line and TRAMP waits for its prompt forever (Linux takes 4096).  TRAMP adds its echo
+mark and line end to what it sends, so the mock stops at 1000: a line that would hang on macOS fails here at once.")
+
+(defun drgnx-tramp-mock--check-line (_vec command &rest _)
+  "Signal an error when a line of COMMAND is longer than `drgnx-tramp-mock-line-max'."
+  (dolist (line (split-string command "\n"))
+    (when (> (string-bytes line) drgnx-tramp-mock-line-max)
+      (error "TRAMP command line of %d bytes (a macOS terminal takes 1024): %s…"
+             (string-bytes line) (substring line 0 200)))))
+
 (defvar drgnx-tramp-mock--saved nil
   "What `drgnx-tramp-mock-setup' changed, as it was before: a plist; nil while the mock is not set up.")
 
@@ -46,12 +59,14 @@ everything changed here.  No file under the home is written."
   (setq tramp-persistency-file-name nil tramp-verbose 0 remote-file-name-inhibit-cache nil
         drgnx-tramp-mock-sends 0)
   (advice-add 'tramp-maybe-open-connection :before #'drgnx-tramp-mock--count)
-  (advice-add 'tramp-send-command :before #'drgnx-tramp-mock--count))
+  (advice-add 'tramp-send-command :before #'drgnx-tramp-mock--count)
+  (advice-add 'tramp-send-command :before #'drgnx-tramp-mock--check-line))
 
 (defun drgnx-tramp-mock-teardown ()
   "Close every connection, stop counting and put back what the setup changed."
   (advice-remove 'tramp-maybe-open-connection #'drgnx-tramp-mock--count)
   (advice-remove 'tramp-send-command #'drgnx-tramp-mock--count)
+  (advice-remove 'tramp-send-command #'drgnx-tramp-mock--check-line)
   (ignore-errors (tramp-cleanup-all-connections))
   (when-let* ((saved drgnx-tramp-mock--saved))
     (setq drgnx-tramp-mock--saved nil)

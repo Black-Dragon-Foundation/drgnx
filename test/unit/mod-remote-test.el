@@ -190,6 +190,20 @@ choice of two nobody has."
       (drgnx-lang-probe-remote root)
       (should (< drgnx-tramp-mock-sends 8)))))
 
+(ert-deftest drgnx-remote/the-probe-of-every-stock-server-keeps-each-line-short ()
+  ;; eglot's own list names ~1.1 KB of programs; one line that long never runs on a macOS terminal (1024 bytes per
+  ;; line) and TRAMP waits for ever; the mock fails such a line (`drgnx-tramp-mock-line-max'), so the last entry,
+  ;; one the host has, is found only when the probe splits the names
+  (drgnx-remote-test--with
+    (let ((eglot-server-programs (append (default-toplevel-value 'eglot-server-programs)
+                                         '((drgnx-last-mode . ("drgnx-lsp")))))
+          (root (drgnx-remote-test--root dir)))
+      (should (> (length (mapconcat #'identity (apply #'append (mapcar (lambda (e) (drgnx-lang--names (cdr e)))
+                                                                       eglot-server-programs))
+                                    " "))
+                 drgnx-tramp-mock-line-max))
+      (should (equal (cdr (assq 'drgnx-last-mode (drgnx-lang-probe-remote root))) "drgnx-lsp")))))
+
 (ert-deftest drgnx-remote/probe-finds-and-misses ()
   (drgnx-remote-test--with
     (let* ((root (drgnx-remote-test--root dir)) (result (drgnx-lang-probe-remote root)))
