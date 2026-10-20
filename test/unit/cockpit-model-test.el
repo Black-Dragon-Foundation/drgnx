@@ -432,6 +432,16 @@
       (should (<= checked 5))
       (should (plist-get (car (last (car files))) :more)))))
 
+(ert-deftest drgnx-cockpit-model/git-answers-once-however-often-its-sentinel-runs ()
+  ;; macOS reports a process ended in its filter twice (the kill, then the exit); the second must say nothing
+  (drgnx-cockpit-fixture-with
+    (let* ((calls 0)
+           (p (drgnx-cockpit--git wt-a '("--version") (lambda (_) (cl-incf calls)))))
+      (should (drgnx-cockpit-fixture-wait (lambda () (> calls 0))))
+      (funcall (process-sentinel p) p "finished\n")
+      (funcall (process-sentinel p) p "exited abnormally with code 1\n")
+      (should (= calls 1)))))
+
 (ert-deftest drgnx-cockpit-model/changed-files-listing-is-capped-and-answers-once ()
   (drgnx-cockpit-fixture-with
     (dotimes (i 200) (write-region "x\n" nil (format "%suntracked-file-with-a-long-name-%04d.txt" wt-a i) nil 'silent))

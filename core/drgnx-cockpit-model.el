@@ -656,7 +656,10 @@ tramp-archive)."
                                   (with-current-buffer (process-buffer p) (goto-char (point-max)) (insert s))))))
                        :sentinel
                        (lambda (p _)
-                         (unless (process-live-p p)
+                         ;; once: ending a process in its filter (:too-large) reports its end again where the system
+                         ;; tells the kill and the exit apart (macOS)
+                         (unless (or (process-live-p p) (process-get p :answered))
+                           (process-put p :answered t)
                            (drgnx-timer-cancel (cons 'cockpit-git-timeout p))
                            (let ((r (cond
                                      ((process-get p :too-large) (list :too-large (process-get p :too-large)))
