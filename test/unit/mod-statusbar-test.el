@@ -3,6 +3,7 @@
 (require 'cl-lib)
 (require 'drgnx)
 (require 'drgnx-chrome)
+(require 'drgnx-modules-fingerprint)
 (require 'drgnx-agents)                 ; at load: the tests' `setf' of a session's slots expands with its accessors
 (load (expand-file-name "modules/ui/drgnx-face" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-statusbar" drgnx-dir) nil t)
@@ -1963,6 +1964,46 @@ of other packages' entries; the rest are the six epochs and plain values."
               (should (eq 'ok (car (drgnx-doctor-check 'statusbar-misc
                                                        (list :statusbar-slow (drgnx-statusbar-test--report)))))))
           (drgnx-statusbar-mode (if was 1 -1)))))))
+
+;;;; A module's segments go with it (module teardown, Task 23)
+
+(defmacro drgnx-statusbar-test--as-module (module &rest body)
+  "Run BODY as MODULE's setup would: the undos it pushes are recorded onto MODULE."
+  (declare (indent 1))
+  `(let ((drgnx-modules--current ,module) (drgnx-modules--setup-load load-file-name)) ,@body))
+
+(ert-deftest drgnx-statusbar/a-segment-goes-with-the-module-that-defined-it ()
+  (let ((drgnx-statusbar--segments (make-hash-table :test #'eq))
+        (drgnx-module--claims (make-hash-table :test 'equal)) (drgnx-modules--stacks nil) (drgnx-modules--current nil))
+    (drgnx-statusbar-define-segment 'mine :fn #'ignore :help "the user's")
+    (let ((users (gethash 'mine drgnx-statusbar--segments)))
+      ;; a module replaces the user's `mine' and adds `new'; turned off, `mine' is the user's again and `new' gone
+      (drgnx-statusbar-test--as-module 'test/seg
+        (drgnx-statusbar-define-segment 'mine :fn #'ignore :help "the module's")
+        (drgnx-statusbar-define-segment 'new :fn #'ignore))
+      (should (equal (plist-get (gethash 'mine drgnx-statusbar--segments) :help) "the module's"))
+      (let ((epoch (drgnx-epoch 'statusbar)))
+        (should-not (drgnx-modules--unwind 'test/seg))
+        (should (> (drgnx-epoch 'statusbar) epoch)))       ; the bars' memo is keyed on it: they are drawn again
+      (should (eq (gethash 'mine drgnx-statusbar--segments) users))
+      (should-not (gethash 'new drgnx-statusbar--segments))
+      ;; redefined by someone else since: the teardown leaves it
+      (drgnx-statusbar-test--as-module 'test/seg (drgnx-statusbar-define-segment 'new :fn #'ignore))
+      (drgnx-statusbar-define-segment 'new :fn #'ignore :help "someone else's")
+      (should-not (drgnx-modules--unwind 'test/seg))
+      (should (equal (plist-get (gethash 'new drgnx-statusbar--segments) :help) "someone else's")))))
+
+(ert-deftest drgnx-statusbar/undefine-segment ()
+  (let ((drgnx-statusbar--segments (make-hash-table :test #'eq)) (drgnx-statusbar--errors '((x "boom" . 0))))
+    (drgnx-statusbar-define-segment 'x :fn #'ignore)
+    (let ((epoch (drgnx-epoch 'statusbar)))
+      (should (drgnx-statusbar-undefine-segment 'x))
+      (should (> (drgnx-epoch 'statusbar) epoch)))
+    (should-not (gethash 'x drgnx-statusbar--segments))
+    (should-not (drgnx-statusbar-undefine-segment 'x))))   ; not defined: nil, no error
+
+(ert-deftest drgnx-statusbar/the-segments-are-in-the-fingerprint ()
+  (should (memq 'drgnx-statusbar--segments drgnx-modules-fingerprint-registries)))
 
 (provide 'mod-statusbar-test)
 ;;; mod-statusbar-test.el ends here

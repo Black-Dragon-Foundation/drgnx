@@ -53,7 +53,7 @@ waiting; a click shows the job with the newest card in the Work cockpit, or ever
 disappears when the hub cannot be asked, rather than showing the last count). What needs you's first line shows
 the same number, counted the same way. With the status bar on, its jobs
 count does the same, and each new card is a desktop notification (D-Bus on Linux; `osascript` on macOS; else a message
-in the echo area — `drgnx-job-ui-notify` nil turns them off). Neither ever asks you anything. Turning `tools/jobs`
+in the echo area — `drgnx-job-ui-notify` nil turns them off; the backends are [Notices](notices.md#on-the-desktop)). Neither ever asks you anything. Turning `tools/jobs`
 off (Preferences: Modules) removes the badge; open job windows stay as they are but no longer follow the hub (the
 job goes on). What needs you is a **card** with its actions — the proposal (Approve, Reject), a permission (Allow, Reject),
 a merge conflict (let the agent resolve it, merge again after you resolved it, drop the task), a review that failed

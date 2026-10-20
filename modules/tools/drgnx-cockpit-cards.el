@@ -46,7 +46,6 @@
 (declare-function drgnx-layouts-apply "drgnx-layouts")
 (declare-function drgnx-layouts-names "drgnx-layouts")
 (declare-function drgnx-cockpit-schedule "drgnx-cockpit")
-(declare-function evil-set-initial-state "evil-core")
 (defvar drgnx-cockpit-graph-current-filter)
 (defvar drgnx-hub-event-functions)
 (defvar drgnx-hub-disconnect-functions)
@@ -79,10 +78,6 @@ the decision log: :log, or :no-log.")
 (define-derived-mode drgnx-cockpit-decisions-mode special-mode "Decisions"
   "A job's decision log, newest first (docs/guide/jobs.md)."
   (drgnx-cockpit-cards--setup-buffer))
-
-(with-eval-after-load 'evil                     ; buttons and g, also in the Vim profile
-  (when (fboundp 'evil-set-initial-state)
-    (dolist (m '(drgnx-cockpit-cards-mode drgnx-cockpit-decisions-mode)) (evil-set-initial-state m 'emacs))))
 
 (defun drgnx-cockpit-cards--setup-buffer ()
   "What both parts do: a generated, read-only buffer that owns the parts' hooks while it lives; long lines wrap at

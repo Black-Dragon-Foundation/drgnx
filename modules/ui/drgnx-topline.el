@@ -399,7 +399,10 @@ text frame, whose size and parameters (the top line's among them) the window's f
   (unless drgnx-topline--saved
     (setq drgnx-topline--saved (list :mode tab-bar-mode :format (default-value 'tab-bar-format)
                                      :show (default-value 'tab-bar-show)
-                                     :face (get 'tab-bar 'face-defface-spec))))
+                                     :face (get 'tab-bar 'face-defface-spec)
+                                     ;; `tab-bar-mode' writes this key of `default-frame-alist'
+                                     :lines (let ((c (assq 'tab-bar-lines default-frame-alist)))
+                                              (and c (cons (car c) (cdr c)))))))
   (setq drgnx-topline--format (drgnx-topline-format))
   ;; No tabs to size: auto-width walks the items and makes strings on every redisplay.  A value of the user's stays.
   (when (and (not (plist-member drgnx-topline--saved :auto-width))
@@ -446,7 +449,10 @@ text frame, whose size and parameters (the top line's among them) the window's f
       (when (and (plist-member saved :auto-width) (null (default-value 'tab-bar-auto-width)))   ; still ours
         (setq-default tab-bar-auto-width (plist-get saved :auto-width)))
       (unless (plist-get saved :mode) (tab-bar-mode -1))
-      (tab-bar--update-tab-bar-lines t))))
+      (tab-bar--update-tab-bar-lines t)
+      (unless tab-bar-mode            ; the key `tab-bar-mode' wrote into `default-frame-alist' goes back as it was
+        (setq default-frame-alist (assq-delete-all 'tab-bar-lines (copy-sequence default-frame-alist)))
+        (when-let* ((cell (plist-get saved :lines))) (push cell default-frame-alist))))))
 
 (defun drgnx-topline--apply ()
   "Make the line match `drgnx-topline': on unless it is off, the user has a tab-bar format of their own, or the

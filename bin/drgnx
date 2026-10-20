@@ -671,7 +671,7 @@ cmd_open() { # [--check] [--wait] [-t | --gui] [PATH…] — open PATHs (none: t
     if [[ -n "$wait" ]]; then open_terminfo_check || return 1; client -t -- "${files[@]}"; return; fi
     client -n -e "(progn (require 'drgnx-ai) (drgnx-ai-load-keys-soon))" >/dev/null 2>&1 || true   # once per daemon, as below
     local form=""
-    for p in ${files[@]+"${files[@]}"}; do form+=" (find-file \"$(elisp_string "$p")\")"; done
+    for p in ${files[@]+"${files[@]}"}; do form+=" (drgnx-session-open-file \"$(elisp_string "$p")\")"; done
     for p in ${dirs[@]+"${dirs[@]}"}; do form+=" (drgnx-session-open-folder \"$(elisp_string "$p")\")"; done
     open_terminal "${form:+(progn$form)}"; return
   fi
@@ -821,7 +821,7 @@ update_fail() { # MESSAGE — the one line a failure gets (quiet or not), and th
   update_record_run "failed: $1"
 }
 
-update_restart_note() { update_say "Restart drgnx to use it (a running drgnx keeps the old version until then)."; }
+update_restart_note() { if [[ "${UPD_RESTART:-0}" == 1 ]]; then return 0; fi; update_say "Restart drgnx to use it (a running drgnx keeps the old version until then)."; }
 
 update_summary() { # OLD NEW — what changed, one line per commit, capped
   local old="$1" new="$2" n cap=15 s=s
@@ -1052,23 +1052,44 @@ cmd_secrets() { # export|import|ls — provider keys through age (docs/guide/sec
   return "$rc"
 }
 
-cmd_update() { # [--quiet] [--back] [--auto on|off|status]
-  local back=0 auto=""
-  UPD_QUIET=0
+update_restart() { # after a successful update or --back: restart drgnx's own daemon service, nothing else
+  if [[ "$(update_platform)" == Darwin ]]; then
+    echo "drgnx update: no drgnx service is installed here (on macOS drgnx runs from its app or drgnx open), so nothing was restarted; quit and reopen drgnx."
+    return 0
+  fi
+  if command -v systemctl >/dev/null 2>&1 && systemctl --user is-enabled --quiet drgnx 2>/dev/null; then
+    if systemctl --user restart drgnx; then
+      echo "drgnx update: restarted the drgnx service (systemctl --user restart drgnx). Its windows closed and emacsclient sessions lost their server; run drgnx to open a window again."
+    else
+      update_err "systemctl --user restart drgnx failed; restart drgnx yourself."
+      return 1
+    fi
+  else
+    echo "drgnx update: no drgnx service is installed (systemd user unit drgnx), so nothing was restarted. Restart drgnx yourself."
+  fi
+}
+
+cmd_update() { # [--quiet] [--back] [--restart] [--auto on|off|status]
+  local back=0 auto="" restart=0 rc=0
+  UPD_QUIET=0 UPD_RESTART=0
   while (($#)); do
     case "$1" in
       --quiet|-q) UPD_QUIET=1 ;;
       --back) back=1 ;;
+      --restart) restart=1; UPD_RESTART=1 ;;
       --auto) shift; auto="${1:-}"
               case "$auto" in on|off|status) ;; *) echo "usage: drgnx update --auto on|off|status" >&2; return 2 ;; esac ;;
-      *) echo "usage: drgnx update [--quiet] | --back | --auto on|off|status" >&2; return 2 ;;
+      *) echo "usage: drgnx update [--quiet] [--restart] | --back [--restart] | --auto on|off|status" >&2; return 2 ;;
     esac
     shift
   done
+  if [[ -n "$auto" && "$restart" == 1 ]]; then echo "usage: drgnx update --auto on|off|status (no --restart: the timer never restarts)" >&2; return 2; fi
   if [[ -n "$auto" ]]; then update_auto "$auto"; return; fi
   command -v git >/dev/null 2>&1 || { update_err "git not found"; return 1; }
   update_lock || return 1
-  if ((back)); then update_back; else update_run; fi
+  if ((back)); then update_back || rc=$?; else update_run || rc=$?; fi
+  if [[ "$rc" == 0 && "$restart" == 1 ]]; then update_restart || rc=$?; fi
+  return "$rc"
 }
 
 bootstrap_dir=""
@@ -1127,6 +1148,7 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx build             byte-compile drgnx (core, wb, modules); native compilation follows on load
        drgnx update [--quiet]  update this install to GitHub main: fast-forward, then sync and build; the previous
                                commit is kept and comes back if sync or build fails (docs/guide/install.md)
+       drgnx update --restart  after a successful update (or --back), restart the drgnx service (systemd)
        drgnx update --back     return to the commit before the last update (re-sync, rebuild)
        drgnx update --auto on|off|status
                                a daily timer (systemd user timer; launchd agent on macOS) running update --quiet

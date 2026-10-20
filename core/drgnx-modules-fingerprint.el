@@ -37,7 +37,7 @@
                      drgnx-signal-window-functions drgnx-rules-mode-hook drgnx-persist-state-functions
                      drgnx-persist-after-restore-functions drgnx-modules-after-stage-functions drgnx-job-tick-functions
                      drgnx-job-clash-answer-functions drgnx-job-card-action-functions drgnx-job-before-review-functions
-                     drgnx-ai-refused-functions drgnx-ai-probe-done-hook
+                     drgnx-ai-refused-functions drgnx-ai-probe-done-hook drgnx-session-before-open-functions
                      tty-setup-hook server-visit-hook pre-redisplay-functions kkp-terminal-setup-complete-hook
                      kkp-terminal-teardown-complete-hook
                      after-change-major-mode-hook evil-local-mode-hook evil-normal-state-entry-hook
@@ -58,7 +58,7 @@ symbol with one line; the FULL scan finds the rest.")
                           drgnx-layouts-pane-fillers drgnx-config--defs drgnx-memo--watched
                           drgnx-view--types (drgnx-state--now . :functions) (drgnx-state--idle . :functions)
                           drgnx-state--roles drgnx-pane--kinds drgnx-modal-engines
-                          drgnx-notice--sources)
+                          drgnx-notice--sources drgnx-statusbar--segments)
   "drgnx's registries whose keys the fingerprint reads: a variable that holds a hash table, an alist or a
 list of conses (the key is the car).  `(VAR . :functions)' is an alist KEY → list of functions: each
 function is read too.  Unbound variables are skipped.  Branches that add a registry add one line.")

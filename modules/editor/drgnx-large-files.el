@@ -33,6 +33,7 @@
 (require 'drgnx-memo)
 (require 'drgnx-guard)
 (require 'drgnx-large-file)
+(require 'drgnx-session)                ; `drgnx-session-before-open-functions': the server's opens never ask
 (require 'so-long)
 
 (defvar treesit-max-buffer-size)
@@ -43,6 +44,7 @@
 (defvar warning-suppress-log-types)
 (defvar warning-suppress-types)
 (declare-function server-execute "server")   ; advised before server.el loads; it applies once it does
+(defvar server-buffer-clients)
 
 (defconst drgnx-large-files--mib 1048576 "Bytes in a MiB: the config's sizes are numbers of MiB.")
 
@@ -270,30 +272,23 @@ asks once, everything else never asks.  Anything else goes to ORIG unchanged."
          (drgnx-large-files--open-as answer orig file nowarn size th)))
       (_ (drgnx-large-files--open-as mode orig file nowarn size th)))))
 
-(defun drgnx-large-files--serve-unasked (files fn)
-  "Call FN, the server's request for FILES ((NAME . POSITION) …), so that it asks nothing about a lean or raw buffer
-already holding one of them whose file changed on disk (a growing log).  Emacs's `server-visit-files' reverts such
-a buffer with (revert-buffer t nil), which asks: an unmodified one is reverted without the question (its exact name
-in `revert-without-query'); a modified one is never reverted silently, so it is left as it is (its record of the
-file's time is current while FN runs, then stale again) and the echo area says so."
-  (let ((quiet nil) (kept nil))
-    (dolist (f files)
-      (when-let* ((b (get-file-buffer (car f))))
-        (when (and (memq (buffer-local-value 'drgnx-large-file b) '(lean raw))
-                   (not (verify-visited-file-modtime b))
-                   (file-exists-p (car f)))
-          (with-current-buffer b
-            (if (not (buffer-modified-p))
-                (push (concat "\\`" (regexp-quote buffer-file-name) "\\'") quiet)
-              (push (cons b (visited-file-modtime)) kept)
-              (set-visited-file-modtime))))))
-    (let ((revert-without-query (append quiet revert-without-query)))
-      (unwind-protect (funcall fn)
-        (pcase-dolist (`(,b . ,time) kept)
-          (when (buffer-live-p b)
-            (with-current-buffer b (set-visited-file-modtime time))
-            (message "%s changed on disk; its buffer has unsaved changes and is left as it is"
-                     (file-name-nondirectory (buffer-file-name b)))))))))
+(defun drgnx-large-files--reopen-grown (files)
+  "Before `drgnx open' reverts the buffers of FILES (absolute names) whose file changed on disk
+\(`drgnx-session-before-open-functions'): an unmodified normal buffer whose file grew past `:ask-above' is killed,
+so the visit goes through the door again, as the server's opens do (chunks, else raw; lean for `drgnx open
+--wait'), without a question and without reading the whole file into a normal buffer.  A buffer a client waits for
+\(`server-buffer-clients') is reverted instead, and turns lean (`drgnx-large-files--after-revert')."
+  (dolist (file files)
+    (when-let* ((b (find-buffer-visiting file)))
+      (when (and (null (buffer-local-value 'drgnx-large-file b))
+                 (not (buffer-modified-p b))
+                 (not (and (boundp 'server-buffer-clients) (buffer-local-value 'server-buffer-clients b)))
+                 (not (verify-visited-file-modtime b))
+                 (file-readable-p file))
+        (let ((size (drgnx-large-files--size file))
+              (ask (plist-get (drgnx-large-files-thresholds file) :ask-above)))
+          (when (and size ask (> size ask))
+            (let ((kill-buffer-query-functions nil)) (kill-buffer b))))))))
 
 ;;;; Switching and the header line
 
@@ -419,7 +414,6 @@ Outside a large file's buffer it takes the header out."
 ;;;; The status bar segment
 
 (defvar drgnx-statusbar-right)
-(defvar drgnx-statusbar--segments)
 (declare-function drgnx-statusbar-define-segment "drgnx-statusbar")
 (declare-function drgnx-statusbar-source-window "drgnx-statusbar")
 (declare-function drgnx-large-files-chunks-position "drgnx-large-files-chunks")
@@ -501,17 +495,13 @@ A revert, auto-revert's from a timer too, never asks: it replaces the text with 
 
 (defun drgnx-large-files--teardown ()
   "Turn lean off in every lean or raw buffer, without running major modes again on huge buffers (it says so).
-Chunk buffers stay, without the header.  The status bar's segment goes (its place in the bar is the setup's
-recorded `drgnx-module-set')."
+Chunk buffers stay, without the header.  The status bar's segment and its place in the bar are the setup's (its
+`drgnx-statusbar-define-segment' and `drgnx-module-set' record their undo)."
   (let ((any nil))
     (dolist (b (buffer-list))
       (pcase (buffer-local-value 'drgnx-large-file b)
         ((or 'lean 'raw) (with-current-buffer b (drgnx-large-file-mode -1)) (setq any t))
         ('chunks (with-current-buffer b (drgnx-large-files--header-clear)))))
-    ;; `drgnx-statusbar-define-segment' records no undo yet (teardown Task 23): removed by hand
-    (when (boundp 'drgnx-statusbar--segments)
-      (remhash 'large-file drgnx-statusbar--segments)
-      (force-mode-line-update t))
     (when any (message "Large files off: lean buffers keep their mode until you revert them"))))
 
 (defconst drgnx-large-files--sweep-modes '(indent-bars-mode drgnx-blame-mode drgnx-sticky-mode diff-hl-margin-mode)
@@ -539,8 +529,11 @@ recorded `drgnx-module-set')."
                               (drgnx-module-advice #'server-execute :around server (orig proc files nowait &rest rest)
                                 ;; `drgnx open --wait': drgnx as $EDITOR needs the whole file
                                 (let ((drgnx-large-file-open (if (and files (not nowait)) 'whole 'auto)))
-                                  (drgnx-large-files--serve-unasked
-                                   files (lambda () (apply orig proc files nowait rest)))))
+                                  (apply orig proc files nowait rest)))
+                              ;; the core reverts a changed buffer of the request unasked; one that grew large
+                              ;; comes through the door again
+                              (drgnx-module-hook 'drgnx-session-before-open-functions reopen-grown (files)
+                                (drgnx-large-files--reopen-grown files))
                               ;; lean: the gate, the sweep, the revert
                               (drgnx-module-advice #'eglot-ensure :before-while not-large ()
                                 (not (drgnx-large-file-p)))

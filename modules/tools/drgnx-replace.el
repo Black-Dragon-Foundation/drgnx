@@ -1431,7 +1431,7 @@ match left loses its header too."
         (widget-insert " ")
         (drgnx-replace--insert-button nil "↑" "Previous match (S-RET)" (lambda () (drgnx-replace--bar-step -1)))
         (drgnx-replace--insert-button nil "↓" "Next match (RET)" (lambda () (drgnx-replace--bar-step 1)))
-        (drgnx-replace--insert-button nil "×" "Close (ESC)" #'drgnx-replace-bar-close)
+        (drgnx-replace--insert-button nil (drgnx-face-glyph 'close) "Close (ESC)" #'drgnx-replace-bar-close)
         (widget-insert "\n")
         (drgnx-replace--insert-field 'replace "Replace " 24)
         (widget-insert " ")

@@ -304,12 +304,18 @@ It works in the install's own checkout (the folder the `drgnx` command runs from
    rebuilt, and the message says how far that got. The same happens if the update is interrupted (Ctrl-C, a timeout,
    logout) before it finished. Output of the steps is kept in `~/.local/state/drgnx/update/last.log`.
 5. Prints what changed (`old..new`, one line per commit, at most 15) and ends with "Restart drgnx to use it": it
-   never restarts or talks to a running drgnx. Restart it soon: a running drgnx still has the old code in memory, and
+   never restarts or talks to a running drgnx unless you pass `--restart` (below). Restart it soon: a running drgnx still has the old code in memory, and
    files it loads later come from the new version.
 
 `drgnx update --back` returns to the commit before the last update (and re-syncs and rebuilds); it refuses when you
  changed the checkout's history since, so that commit is no longer part of it. It is named `--back`
 because `drgnx rollback` already exists for *packages*. A second `--back` goes forward again.
+
+`drgnx update --restart` (also with `--back`) restarts drgnx for you after a successful update: on Linux it runs
+`systemctl --user restart drgnx` when the drgnx systemd user unit is enabled. The restart ends the daemon, so its
+windows close and `emacsclient` sessions lose their server; run `drgnx` to open a window again. A failed update or
+rollback never restarts, and with no drgnx service installed (and on macOS, which has none) it says so and changes
+nothing. The daily timer never restarts.
 
 ### Updating by itself
 

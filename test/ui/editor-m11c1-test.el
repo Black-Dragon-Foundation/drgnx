@@ -20,6 +20,7 @@
 (require 'drgnx-keys-edit)
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-m11c1-ui-test--repo) nil t)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-m11c1-ui-test--repo) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-m11c1-ui-test--repo) nil t)
 (dolist (m '("tools/drgnx-replace" "tools/drgnx-agents-ui" "tools/drgnx-layouts" "tools/drgnx-browser" "tools/drgnx-live"
              "tools/drgnx-shortcuts"))
   (load (expand-file-name (concat "modules/" m) drgnx-m11c1-ui-test--repo) nil t))
@@ -36,10 +37,8 @@
   (load (expand-file-name "test/fixtures/mock-cdp" drgnx-m11c1-ui-test--repo) nil t))
 
 (defun drgnx-m11c1-ui-test--wait (pred &optional secs)
-  "Wait (SECS, default 10) until PRED holds, reading process output; PRED's last value."
-  (let ((deadline (+ (float-time) (or secs 10))))
-    (while (and (not (funcall pred)) (< (float-time) deadline)) (accept-process-output nil 0.05)))
-  (funcall pred))
+  "Wait until PRED holds, reading process output: PRED's value (`drgnx-test-wait', at least 30 s or SECS)."
+  (drgnx-test-wait pred :secs (max 30 (or secs 0)) :what "the M11c-1 GUI test's predicate"))
 
 (defun drgnx-m11c1-ui-test--shot (dir name)
   "Capture the root frame into DIR and keep it as NAME in the session's temp dir; print where."

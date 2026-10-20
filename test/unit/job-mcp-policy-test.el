@@ -102,7 +102,7 @@ when given) and as the title (TITLE instead, when given)."
                         :seen (drgnx-coord-version))
       (drgnx-coord-send :job id :sender sid :recipient sid :text "allow" :seen (drgnx-coord-version))
       (drgnx-job-step id)
-      (drgnx-job-run-test--wait (lambda () nil) 0.5)
+      (drgnx-test-pause 0.5)
       (should (drgnx-agent-session-permissions s))
       (should-not (drgnx-job-mcp-test--said s "permission: allow"))
       (should (equal (plist-get (drgnx-coord-card cid) :state) "open"))
