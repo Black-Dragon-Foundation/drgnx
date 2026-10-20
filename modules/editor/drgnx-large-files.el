@@ -419,7 +419,6 @@ Outside a large file's buffer it takes the header out."
 ;;;; The status bar segment
 
 (defvar drgnx-statusbar-right)
-(defvar drgnx-statusbar--segments)
 (declare-function drgnx-statusbar-define-segment "drgnx-statusbar")
 (declare-function drgnx-statusbar-source-window "drgnx-statusbar")
 (declare-function drgnx-large-files-chunks-position "drgnx-large-files-chunks")
@@ -501,17 +500,13 @@ A revert, auto-revert's from a timer too, never asks: it replaces the text with 
 
 (defun drgnx-large-files--teardown ()
   "Turn lean off in every lean or raw buffer, without running major modes again on huge buffers (it says so).
-Chunk buffers stay, without the header.  The status bar's segment goes (its place in the bar is the setup's
-recorded `drgnx-module-set')."
+Chunk buffers stay, without the header.  The status bar's segment and its place in the bar are the setup's (its
+`drgnx-statusbar-define-segment' and `drgnx-module-set' record their undo)."
   (let ((any nil))
     (dolist (b (buffer-list))
       (pcase (buffer-local-value 'drgnx-large-file b)
         ((or 'lean 'raw) (with-current-buffer b (drgnx-large-file-mode -1)) (setq any t))
         ('chunks (with-current-buffer b (drgnx-large-files--header-clear)))))
-    ;; `drgnx-statusbar-define-segment' records no undo yet (teardown Task 23): removed by hand
-    (when (boundp 'drgnx-statusbar--segments)
-      (remhash 'large-file drgnx-statusbar--segments)
-      (force-mode-line-update t))
     (when any (message "Large files off: lean buffers keep their mode until you revert them"))))
 
 (defconst drgnx-large-files--sweep-modes '(indent-bars-mode drgnx-blame-mode drgnx-sticky-mode diff-hl-margin-mode)

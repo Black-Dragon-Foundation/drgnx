@@ -22,11 +22,19 @@
 (defvar display-line-numbers-width-start)
 (defvar display-line-numbers-grow-only)
 (declare-function window-divider-mode "frame")
+;; the parts of the module, beside this file: set up by its setup, turned off by its teardown
+(dolist (part (quote (drgnx-close drgnx-statusbar drgnx-quickhelp drgnx-topline drgnx-start)))
+  (unless (featurep part)
+    (load (expand-file-name (symbol-name part) (file-name-directory (or load-file-name buffer-file-name))) nil t)))
+(defvar drgnx-topline--active)
 (declare-function drgnx-close-setup "drgnx-close")
 (declare-function drgnx-statusbar-setup "drgnx-statusbar")
 (declare-function drgnx-quickhelp-setup "drgnx-quickhelp")
+(declare-function drgnx-quickhelp-off "drgnx-quickhelp")
 (declare-function drgnx-topline-setup "drgnx-topline")
+(declare-function drgnx-topline--off "drgnx-topline")
 (declare-function drgnx-start-setup "drgnx-start")
+(declare-function drgnx-start-teardown "drgnx-start")
 (declare-function drgnx-platform-wm "drgnx-platform-wm")
 (declare-function x-change-window-property "xfns.c")
 (declare-function x-delete-window-property "xfns.c")
@@ -43,19 +51,30 @@
 
 ;;;; Settings
 
+(defvar drgnx-face--as-module nil
+  "While the module is on: a function that applies the setting `drgnx-face--changed' names as the module's own code
+\(`drgnx-modules-with-owner'), so what it changes — an option, a frame default, a face spec — is undone when the
+module is turned off.  Made by the setup.")
+
+(defvar drgnx-face--changed nil "The setting being applied (bound by `drgnx-face--set').")
+
 (defun drgnx-face--set (symbol value)
-  "Set SYMBOL to VALUE; when the module is running, apply it to every open frame and buffer."
+  "Set SYMBOL to VALUE; when the module is running, apply it to every open frame and buffer, as the module."
   (set-default symbol value)
-  (when drgnx-face--active
-    (pcase symbol
-      ((or 'drgnx-face-menu-bar 'drgnx-face-scroll-bars) (drgnx-face--apply-frames))
-      ((or 'drgnx-face-dividers 'drgnx-face-divider-width) (drgnx-face--apply-dividers))
-      ('drgnx-face-line-numbers-modes (drgnx-face--apply-line-numbers))
-      ('drgnx-face-inline-problems (drgnx-face--apply-inline-problems))
-      ('drgnx-face-line-spacing (drgnx-face--apply-line-spacing))
-      ('drgnx-face-line-wrap (drgnx-face--apply-line-wrap))
-      ('drgnx-face-frame-title (drgnx-face--apply-frame-title))
-      ((or 'drgnx-face-title-bar 'drgnx-face-gtk-theme) (drgnx-face--apply-title-all)))))
+  (when (and drgnx-face--active drgnx-face--as-module)
+    (let ((drgnx-face--changed symbol)) (funcall drgnx-face--as-module))))
+
+(defun drgnx-face--apply-changed ()
+  "Apply the setting `drgnx-face--changed' names to every open frame and buffer."
+  (pcase drgnx-face--changed
+    ((or 'drgnx-face-menu-bar 'drgnx-face-scroll-bars) (drgnx-face--apply-frames))
+    ((or 'drgnx-face-dividers 'drgnx-face-divider-width) (drgnx-face--apply-dividers))
+    ('drgnx-face-line-numbers-modes (drgnx-face--apply-line-numbers))
+    ('drgnx-face-inline-problems (drgnx-face--apply-inline-problems))
+    ('drgnx-face-line-spacing (drgnx-face--apply-line-spacing))
+    ('drgnx-face-line-wrap (drgnx-face--apply-line-wrap))
+    ('drgnx-face-frame-title (drgnx-face--apply-frame-title))
+    ((or 'drgnx-face-title-bar 'drgnx-face-gtk-theme) (drgnx-face--apply-title-all))))
 
 (defcustom drgnx-face-menu-bar nil
   "Non-nil: show Emacs's menu bar (hidden, the commands are in the palette,
@@ -133,24 +152,51 @@ On `after-make-frame-functions'; a child frame (a popup) is left alone."
       (drgnx-face--sync-state))))   ; the first graphical frame of a daemon is where the variant first becomes known
 
 (defun drgnx-face--apply-frames ()
-  "The settings on every open frame, and on the frames made later (`default-frame-alist')."
+  "The settings on every open frame, and on the frames made later (`default-frame-alist', whose keys the module's
+teardown puts back)."
   (dolist (p (drgnx-face--frame-params))
-    (setq default-frame-alist (cons (cons (car p) (cdr p)) (assq-delete-all (car p) default-frame-alist))))
+    (drgnx-module-alist-put 'default-frame-alist (car p) (cdr p)))
   (mapc #'drgnx-face-apply-frame (frame-list)))
+
+(defun drgnx-face--restore-frames (had)
+  "Undo of the setup (pushed first, so it runs after `default-frame-alist' is put back): each open frame's menu bar
+and scroll bars, where they are still what the settings ask for, go back to what the frame had when the module was
+set up (HAD: a weak table frame → its parameters then), or for a frame made since to `default-frame-alist's value
+\(else Emacs's own: `menu-bar-mode', `scroll-bar-mode')."
+  (let ((ours (drgnx-face--frame-params)))
+    (dolist (f (frame-list))
+      (unless (eq (drgnx-state-frame-kind f) 'child)
+        (let ((then (gethash f had)) (params nil))
+          (pcase-dolist (`(,p . ,v) ours)
+            (when (equal (frame-parameter f p) v)
+              (push (cons p (cond ((assq p then) (cdr (assq p then)))
+                                  ((assq p default-frame-alist) (cdr (assq p default-frame-alist)))
+                                  ((eq p 'menu-bar-lines) (if menu-bar-mode 1 0))
+                                  (t scroll-bar-mode)))
+                    params)))
+          (when params (modify-frame-parameters f params)))))))
+
+(defun drgnx-face--frames-then ()
+  "A weak table: each open frame → its menu bar and scroll bar parameters now."
+  (let ((had (make-hash-table :test #'eq :weakness 'key)))
+    (dolist (f (frame-list))
+      (puthash f (mapcar (lambda (p) (cons (car p) (frame-parameter f (car p)))) (drgnx-face--frame-params)) had))
+    had))
 
 (defvar drgnx-face--dividers-owned nil
   "Non-nil when this module turned `window-divider-mode' on (so only then does it turn it off).")
 
 (defun drgnx-face--apply-dividers ()
   "Thin dividers on or off; their faces inherit the theme's (a theme's own choice still wins).
-Turning them off leaves `window-divider-mode' alone unless this module turned it on."
+Turning them off leaves `window-divider-mode' alone unless this module turned it on.  The options and face specs
+go back when the module is turned off (`drgnx-module-set', `drgnx-module-face-spec')."
   (if drgnx-face-dividers
       (progn
-        (setq-default window-divider-default-places t
-                      window-divider-default-right-width drgnx-face-divider-width
-                      window-divider-default-bottom-width drgnx-face-divider-width)
+        (drgnx-module-set 'window-divider-default-places t)
+        (drgnx-module-set 'window-divider-default-right-width drgnx-face-divider-width)
+        (drgnx-module-set 'window-divider-default-bottom-width drgnx-face-divider-width)
         (dolist (f '(window-divider window-divider-first-pixel window-divider-last-pixel vertical-border))
-          (face-spec-set f '((t :inherit shadow)) 'face-defface-spec))
+          (drgnx-module-face-spec f '((t :inherit shadow))))
         (unless (bound-and-true-p window-divider-mode) (setq drgnx-face--dividers-owned t))
         (window-divider-mode 1))
     (when drgnx-face--dividers-owned
@@ -296,13 +342,13 @@ On `after-change-major-mode-hook'."
 (defun drgnx-face--apply-inline-problems ()
   "`drgnx-face-inline-problems' into flymake's variable: now when flymake is loaded, else once it loads."
   (cond ((drgnx-face--flymake-ready-p)
-         (funcall (or (get 'flymake-show-diagnostics-at-end-of-line 'custom-set) #'set-default)
-                  'flymake-show-diagnostics-at-end-of-line drgnx-face-inline-problems))
+         (drgnx-module-set 'flymake-show-diagnostics-at-end-of-line drgnx-face-inline-problems))
         ((not drgnx-face--flymake-waiting)
          (setq drgnx-face--flymake-waiting t)
-         (with-eval-after-load 'flymake
-           (setq drgnx-face--flymake-waiting nil)
-           (when (drgnx-face--flymake-ready-p) (drgnx-face--apply-inline-problems))))))
+         (eval-after-load 'flymake
+           (drgnx-modules-with-owner                ; flymake's option is set as the module: undone with it
+             (setq drgnx-face--flymake-waiting nil)
+             (when (drgnx-face--flymake-ready-p) (drgnx-face--apply-inline-problems)))))))
 
 (defvar drgnx-face--line-spacing-saved nil
   "(VALUE) the default `line-spacing' this module replaced, to give back when the setting returns to nil.")
@@ -410,16 +456,20 @@ F10's `menu-bar-open' has no menu to open on a toolkit frame whose bar is hidden
   (drgnx-command-define 'face-preferences :category "Preferences" :title "Look and Layout Settings…" :menu '("Options")
                         :command #'drgnx-face-preferences
                         :doc "How drgnx looks: the frame, status bar, top line, quick help, start page (Customize)")
-  (define-key global-map [remap menu-bar-open] #'drgnx-face-menu)   ; F10 opens the menu as text while the bar is hidden
-  (when (fboundp 'drgnx-close-setup) (drgnx-close-setup))   ; Esc and q close panes (drgnx-close.el)
-  (when (fboundp 'drgnx-statusbar-setup) (drgnx-statusbar-setup))   ; the status bar (drgnx-statusbar.el)
-  (when (fboundp 'drgnx-quickhelp-setup) (drgnx-quickhelp-setup))   ; quick help (drgnx-quickhelp.el)
-  (when (fboundp 'drgnx-topline-setup) (drgnx-topline-setup))   ; the top line (drgnx-topline.el)
-  (when (fboundp 'drgnx-start-setup) (drgnx-start-setup))   ; the start page (drgnx-start.el)
+  (drgnx-module-define-key 'global-map [remap menu-bar-open] #'drgnx-face-menu)   ; F10: the menu as text while the bar is hidden
+  (drgnx-close-setup)                   ; Esc and q close panes (drgnx-close.el)
+  (drgnx-statusbar-setup)               ; the status bar (drgnx-statusbar.el)
+  (drgnx-quickhelp-setup)               ; quick help (drgnx-quickhelp.el)
+  (drgnx-topline-setup)                 ; the top line (drgnx-topline.el)
+  (drgnx-start-setup)                   ; the start page (drgnx-start.el)
   (add-hook 'after-make-frame-functions #'drgnx-face-apply-frame)
   (add-hook 'enable-theme-functions #'drgnx-face--on-theme)
   (add-hook 'after-change-major-mode-hook #'drgnx-face-line-numbers-maybe)
-  (setq drgnx-face--active t)
+  ;; first on the stack, so last to run: the open frames go back once `default-frame-alist' has
+  (let ((had (drgnx-face--frames-then)))
+    (drgnx-modules-push-undo "ui/face open frames" (lambda () (drgnx-face--restore-frames had))))
+  (setq drgnx-face--active t
+        drgnx-face--as-module (drgnx-modules-with-owner (drgnx-face--apply-changed)))
   (drgnx-face--apply-frames)
   (drgnx-face--sync-state)
   (drgnx-face--apply-dividers)
@@ -429,10 +479,34 @@ F10's `menu-bar-open' has no menu to open on a toolkit frame whose bar is hidden
   (drgnx-face--apply-line-wrap)
   (drgnx-face--apply-frame-title))
 
+(defun drgnx-face--teardown ()
+  "ui/face's `:teardown': what its cleanup stack cannot see — the parts' own state (the top line's tab bar and
+frame parameters, quick help's card, the start page's hooks), the title bar of the open frames, line numbers in the
+open buffers, and the defaults it keeps a saved value of (line spacing, line wrap, the frame title).  The stack then
+puts back its options, `default-frame-alist' keys, face specs, the F10 remap, hooks and modes, the open frames' menu
+bar and scroll bars, and the status bar's segments and commands.  Idempotent."
+  (setq drgnx-face--active nil drgnx-face--as-module nil drgnx-face--flymake-waiting nil
+        drgnx-topline--active nil)
+  (drgnx-topline--off)
+  (drgnx-quickhelp-off)
+  (drgnx-start-teardown)
+  (let ((drgnx-face-title-bar 'system))  ; the system's title bar: GTK variant, appearance and decorations taken back
+    (dolist (f (frame-list)) (unless (eq (drgnx-state-frame-kind f) 'child) (drgnx-face--apply-title f))))
+  (dolist (b (buffer-list))
+    (when (buffer-local-value 'drgnx-face--numbers-p b)
+      (with-current-buffer b (setq drgnx-face--numbers-p nil) (display-line-numbers-mode -1))))
+  (let ((drgnx-face-dividers nil) (drgnx-face-line-spacing nil) (drgnx-face-line-wrap nil)
+        (drgnx-face-frame-title nil))
+    (drgnx-face--apply-dividers)         ; the mode off, if the module turned it on
+    (drgnx-face--apply-line-spacing)
+    (drgnx-face--apply-line-wrap)
+    (drgnx-face--apply-frame-title))
+  (force-mode-line-update t))
+
 (drgnx-module-define 'ui/face
                      :doc "The frame and the buffers: no menu bar or scroll bar, thin themed dividers, line numbers in code, problems at the end of the line."
                      :stage 'startup :requires '(core/workbench)
-                     :setup #'drgnx-face--setup
+                     :setup #'drgnx-face--setup :teardown #'drgnx-face--teardown
                      :settings '((drgnx-face-menu-bar . "show Emacs's menu bar (default: hidden)")
                                  (drgnx-face-scroll-bars . "none (default) or native")
                                  (drgnx-face-dividers . "thin themed lines between windows")

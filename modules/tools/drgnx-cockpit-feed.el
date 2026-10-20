@@ -311,10 +311,6 @@ drawn again (`drgnx-view-sync-rows'), each window keeping its start and point on
   "Every agent's events as chips, one row per agent (docs/guide/cockpit.md)."
   (drgnx-cockpit-feed--setup-buffer 'cockpit-timeline))
 
-(with-eval-after-load 'evil                     ; their own letters, also in the Vim profile
-  (when (fboundp 'evil-set-initial-state)
-    (dolist (m '(drgnx-cockpit-happened-mode drgnx-cockpit-timeline-mode)) (evil-set-initial-state m 'emacs))))
-
 (defun drgnx-cockpit-feed--revert (&rest _)
   "g: draw the buffer anew from the store."
   (drgnx-cockpit-feed--draw-now))

@@ -728,6 +728,12 @@ they started whichever is torn down first.
 The `add-function` on `after-focus-change-function` (Explorer and Buffers panel) pushes its `remove-function`
 beside it, by the advice's name. Areas (`drgnx-wb-define-area`) are not undone: they belong to the workbench.
 
+The status bar's segments (`modules/ui/drgnx-statusbar.el`) work the same way: `drgnx-statusbar-define-segment`
+in a setup claims the segment by id and pushes its undo — the segment it replaced back, or
+`(drgnx-statusbar-undefine-segment ID)` — only while the id still holds the definition made there. Defining and
+undefining both bump the epoch `statusbar`, which the bars' memo is keyed on, so every bar is drawn again.
+`drgnx-statusbar--segments` is in `drgnx-modules-fingerprint-registries`.
+
 #### Helpers that undo themselves (`drgnx-modules-helpers.el`)
 
 Four changes a setup makes to global state are done through a helper that makes the change and pushes its own
@@ -959,10 +965,10 @@ tests you add.
   hook (name it) and `drgnx-modules-with-owner` directly inside `with-eval-after-load` (evaluated only when the
   feature loads, it names no module and never runs).
 
-Modules not converted yet are on `drgnx-teardown--not-yet`, each with the migration batch that converts it; the
+Modules not converted yet go on `drgnx-teardown--not-yet`, each with the migration batch that converts it; the
 dynamic check and the raw-forms lint skip them, and the test's message counts them. Known top-level registrations
-waiting for their batch are on `drgnx-teardown--load-registrations`; an entry whose registration is gone fails
-too. Both lists shrink to empty. A file under `modules/` that defines no module is listed in
+waiting for their batch go on `drgnx-teardown--load-registrations`; an entry whose registration is gone fails
+too. Since the last batch (M12f: `ui/face`, `tools/cockpit`) both lists are empty: every shipped module is checked. A file under `modules/` that defines no module is listed in
 `drgnx-teardown--library-files` with the module that uses it.
 
 ## Timers
@@ -2507,8 +2513,8 @@ properties show) with the size text cached beside it. The header line shows that
 A major-mode change resets both, and `after-change-major-mode-hook` builds them again. The status-bar segment
 `large-file` reads only the flag, the cached size and the chunk position. It is defined by
 `(eval-after-load 'drgnx-statusbar (drgnx-modules-with-owner …))` and put before `position` with
-`drgnx-module-set`. `drgnx-statusbar-define-segment` records no undo yet (teardown Task 23), so the module's teardown
-removes the segment from `drgnx-statusbar--segments` by hand, and the header from chunk buffers.
+`drgnx-module-set`; both record their undo, so turning the module off takes the segment and its place away. The
+module's teardown removes the header from chunk buffers.
 
 ## The workbench state store (`wb/drgnx-state.el`, `core/drgnx-frame-kind.el`)
 

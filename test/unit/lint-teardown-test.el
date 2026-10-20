@@ -17,15 +17,12 @@
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-teardown--not-yet
-  '((tools/cockpit :until 23) (ui/face :until 23))
+  nil
   "Shipped modules not yet converted to turn off cleanly: (MODULE :until BATCH), BATCH the number of the
 migration batch that converts it and takes it off.  The dynamic check and the raw-forms lint skip them.")
 
 (defconst drgnx-teardown--load-registrations
-  '(("modules/tools/drgnx-cockpit.el" with-eval-after-load :until 23)
-    ("modules/tools/drgnx-cockpit-cards.el" with-eval-after-load :until 23)
-    ("modules/tools/drgnx-cockpit-edits.el" with-eval-after-load :until 23)
-    ("modules/tools/drgnx-cockpit-feed.el" with-eval-after-load :until 23))
+  nil
   "Registrations at the top level of a module file that are known and wait for their batch: (FILE CALL :until
 BATCH).  One that is gone fails the lint too, so the entry goes with it.")
 
