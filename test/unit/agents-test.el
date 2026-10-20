@@ -504,9 +504,10 @@ marked as a large file: the answer plist."
     (unwind-protect
         (cl-letf (((symbol-function 'drgnx-hub-call) #'ignore))
           (push (drgnx-agents--make :remote "s-m" :id "s-m") drgnx-agents--sessions)
-          (drgnx-agents-mirror--event "agent" (list :id "s-m" :seq 1 :lisp "(:id \"s-m\" :name \"m\" :status busy :permissions ((:id 3 :title \"Edit\")))"))
+          ;; the snapshot as the hub sends it (records 2): JSON, decoded by the session schema
+          (drgnx-agents-mirror--event "agent" (list :id "s-m" :seq 1 :session '(:id "s-m" :name "m" :status "busy" :permissions ((:id 3 :title "Edit")))))
           (should (equal (plist-get (drgnx-agents-test--item '(permission "s-m" . 3)) :text) "m asks: Edit"))
-          (drgnx-agents-mirror--event "agent" (list :id "s-m" :seq 2 :lisp "(:id \"s-m\" :name \"m\" :status idle)"))
+          (drgnx-agents-mirror--event "agent" (list :id "s-m" :seq 2 :session '(:id "s-m" :name "m" :status "idle")))
           (should (= (drgnx-needs-you-count) 0)))
       (drgnx-agents-mirror-stop))))
 
