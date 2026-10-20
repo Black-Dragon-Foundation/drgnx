@@ -982,3 +982,58 @@ this test are not passed on."
       (should (= 1 (length (plist-get json :failures))))
       (should (equal (plist-get (aref (plist-get json :failures) 0) :name) "iso-red/always"))
       (should (equal (list (plist-get json :total) (plist-get json :passed)) '(2 1))))))
+
+;;;; --stress (det Task 23)
+
+(defun drgnx-run-ert-test--stress (suite results &rest env)
+  "Run `drgnx-run-ert-stress-batch' over SUITE with ENV; return (EXIT . OUTPUT).  The summary goes to RESULTS."
+  (let ((process-environment (append (cons (concat "DRGNX_TEST_RESULTS=" results) env)
+                                     (list "DRGNX_TEST_SELECTOR" "DRGNX_TEST_STRESS" "DRGNX_TEST_LOAD" "DRGNX_TEST_RERUN"
+                                           "DRGNX_TEST_NO_TIMING" "DRGNX_TEST_NO_SKIP" "DRGNX_RUN_TMP")
+                                     process-environment))
+        (default-directory temporary-file-directory))
+    (with-temp-buffer
+      (cons (call-process (expand-file-name invocation-name invocation-directory) nil t nil
+                          "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
+                          "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-stress-batch" suite)
+            (buffer-string)))))
+
+(defconst drgnx-run-ert-test--stressed
+  '(("stress-test.el" . "(ert-deftest iso-stress/flip ()
+  ;; the odd runs (1st, 3rd) fail: the notes file gains a line per run
+  (let ((notes (getenv \"ISO_STRESS_NOTES\")))
+    (write-region (format \"%d\\n\" (emacs-pid)) nil notes t 'silent)
+    (should (cl-evenp (with-temp-buffer (insert-file-contents notes) (count-lines (point-min) (point-max)))))))
+(ert-deftest iso-stress/steady () (should t))"))
+  "A suite whose test fails on every odd run, and notes its Emacs's pid in ISO_STRESS_NOTES.")
+
+(ert-deftest drgnx-run-ert/stress-runs-n-times-in-fresh-emacsen ()
+  (drgnx-run-ert-test--with-suite (tmp suite results '(("stress-test.el" . "(ert-deftest iso-stress/ok ()
+  (write-region (format \"%d\\n\" (emacs-pid)) nil (getenv \"ISO_STRESS_NOTES\") t 'silent))")))
+    (let* ((notes (expand-file-name "notes" tmp))
+           (r (drgnx-run-ert-test--stress suite results "DRGNX_TEST_STRESS=3" "DRGNX_TEST_LOAD=0"
+                                          "DRGNX_TEST_SELECTOR=\"^iso-stress/\"" (concat "ISO_STRESS_NOTES=" notes)))
+           (stress (plist-get (drgnx-run-ert-test--json results) :stress)))
+      (should (eql 0 (car r)))
+      (should (string-match-p "stress: 3 runs at load 0: 3 passed, 0 failed" (cdr r)))
+      (should (= 3 (length (delete-dups (split-string (with-temp-buffer (insert-file-contents notes) (buffer-string)) "\n" t)))))
+      (should (equal (list (plist-get stress :runs) (plist-get stress :load) (plist-get stress :failures)) '(3 0 []))))))
+
+(ert-deftest drgnx-run-ert/stress-counts-failures-per-test ()
+  (drgnx-run-ert-test--with-suite (tmp suite results drgnx-run-ert-test--stressed)
+    (let* ((notes (expand-file-name "notes" tmp))
+           (r (drgnx-run-ert-test--stress suite results "DRGNX_TEST_STRESS=3" "DRGNX_TEST_LOAD=0"
+                                          "DRGNX_TEST_SELECTOR=\"^iso-stress/\"" (concat "ISO_STRESS_NOTES=" notes)))
+           (failures (plist-get (plist-get (drgnx-run-ert-test--json results) :stress) :failures)))
+      (should (eql 1 (car r)))
+      (should (string-match-p "stress: 3 runs at load 0: 1 passed, 2 failed" (cdr r)))
+      (should (= 1 (length failures)))
+      (should (equal (plist-get (aref failures 0) :name) "iso-stress/flip"))
+      (should (= 2 (plist-get (aref failures 0) :count)))
+      (should (string-match-p "iso-stress/flip.* 2" (cdr r))))))
+
+(ert-deftest drgnx-run-ert/stress-needs-a-selector ()
+  (drgnx-run-ert-test--with-suite (tmp suite results drgnx-run-ert-test--stressed)
+    (let ((r (drgnx-run-ert-test--stress suite results "DRGNX_TEST_STRESS=2")))
+      (should (eql 2 (car r)))
+      (should (string-match-p "--stress needs DRGNX_TEST_SELECTOR" (cdr r))))))

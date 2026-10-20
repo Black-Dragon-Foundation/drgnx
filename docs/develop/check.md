@@ -136,6 +136,20 @@ file's.
 prints `flaky (listed: REASON)` and passes. `drgnx-lint/flaky-entries-have-a-reason-and-a-stress-run` checks every
 entry; a flake without a cause is fixed, not listed. `DRGNX_TEST_FLAKY=FILE` names another list (the runner's own tests).
 
+## Stress (`bin/drgnx test --stress N [--load K]`)
+
+`DRGNX_TEST_SELECTOR='"^drgnx-ai-embed/"' bin/drgnx test --stress 20 --load 8` runs the selected tests 20 times, each run
+a plain unit run (a fresh Emacs for each file, as CI runs it; the rerun is off, so a flake shows), while 8 busy loops
+(`sh -c 'while :; do :; done'`) take the CPUs. The loops are killed with the command, on every exit, by their exact pids.
+It takes the heavy lease and needs `DRGNX_TEST_SELECTOR` (without one it exits 2: `--stress needs DRGNX_TEST_SELECTOR`).
+
+It prints `stress: 20 runs at load 8: 19 passed, 1 failed` and, for each test that failed, how often. The summary gains
+`:stress (:runs N :load K :failures [(:name N :count C)…])`. Exit 0 only when every run passed. With `--ui`, `--tty` or
+`--scenario` each repeat is one session of that tier and the failed tests are counted from its `FAILED` lines.
+
+A flake row in `DEFERRED.md` closes only with a stress run (the command and its result, quoted in the fixing commit
+and in a `test/flaky.eld` entry if it stays) or with a named cause.
+
 ## The leak census (`--leaks`)
 
 

@@ -59,6 +59,7 @@ case $cmd in
     _arguments '--one-process[every test file in one Emacs]' '--ui[GUI tests in a headless session]' '--scenario[behaviour scenarios]' \
       '--leaks[report what each test file leaves behind]' '--shuffle=-[each file'"'"'s tests in a random order]::seed' \
       '--find-polluter[bisect to the test that breaks TEST]:test' \
+      '--stress[run the selected tests N times]:runs' '--load[busy loops beside a --stress run]:loops' \
       '--compositor[compositor of the GUI session]:compositor:(mutter sway x11 i3 kwin niri)' '--tty[terminal tests in private tmux servers]' \
       '--config[configuration of the session]:configuration:(drgnx gryphn)' \
       '--bench[the workbench vs treemacs and ibuffer]' '--perf[input latency, redisplay, frames, GC]' \

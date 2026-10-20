@@ -959,5 +959,66 @@ exit 0 or 1."
     (when own (delete-directory own t))
     (kill-emacs (if ok 0 1))))
 
+;;;; Stress: the same tests, again and again
+
+;; `bin/drgnx test --stress N [--load K]' (DRGNX_TEST_STRESS=N, DRGNX_TEST_LOAD=K): the selected tests run N times, each
+;; run a plain `drgnx-run-ert-batch' (a fresh Emacs for each file, as CI runs), while bin/drgnx keeps K busy loops
+;; going.  A flake closes with a stress run or a named cause (docs/develop/check.md, "Stress").
+
+(defun drgnx-run-ert-stress (args results-file n load)
+  "Run the tests of ARGS (a test directory, or files) N times, each in fresh Emacsen, and say how many runs failed and
+which tests failed how often, as `bin/drgnx test --stress' does at LOAD busy loops (only reported here).  The summary
+\(:stress (:runs N :load K :failures [(:name :count)…])) goes to RESULTS-FILE.  Return t when every run passed."
+  (let ((work (make-temp-file "drgnx-stress" t)) (counts nil) (failed 0)
+        (emacs (expand-file-name invocation-name invocation-directory)))
+    (unwind-protect
+        (dotimes (i n)
+          (let* ((json (expand-file-name (format "%d.json" i) work))
+                 ;; the rerun would hide a failure: off; the run's own directory and the stress variables are not inherited
+                 (process-environment (append (list (concat "DRGNX_TEST_RESULTS=" json) "DRGNX_RUN_TMP" "DRGNX_TEST_STRESS"
+                                                    "DRGNX_TEST_LOAD" "DRGNX_TEST_RERUN")
+                                              process-environment))
+                 (exit (apply #'call-process "sh" nil nil nil "-c" "trap '' PIPE; exec \"$0\" \"$@\"" emacs "--batch" "-Q"
+                              "--eval" (format "(setq load-prefer-newer %S load-path '%S)" load-prefer-newer load-path)
+                              "-l" drgnx-run-ert--self "-f" "drgnx-run-ert-batch" args))
+                 (summary (drgnx-run-ert--read-summary json))
+                 (names (if summary
+                            (mapcar (lambda (x) (plist-get x :name)) (plist-get summary :failures))
+                          (list (format "run %d: no summary (exit %s)" (1+ i) exit)))))
+            (when (and (null names) (not (eql exit 0))) (setq names (list (format "run %d: exit %s" (1+ i) exit))))
+            (when names (cl-incf failed))
+            (dolist (name names) (cl-incf (alist-get name counts 0 nil #'equal)))
+            (message "drgnx: stress run %d/%d: %s" (1+ i) n (if names (format "%d failed" (length names)) "passed"))))
+      (delete-directory work t))
+    (message "stress: %d runs at load %d: %d passed, %d failed" n load (- n failed) failed)
+    (setq counts (sort counts (lambda (a b) (> (cdr a) (cdr b)))))
+    (dolist (c counts) (message "   %s  failed %d of %d" (car c) (cdr c) n))
+    (when results-file
+      (let ((coding-system-for-write 'utf-8-unix))
+        (write-region
+         (decode-coding-string
+          (json-serialize
+           (list :total n :passed (- n failed) :failed failed
+                 :failures (vconcat (mapcar (lambda (c) (list :name (car c) :condition (format "failed %d of %d runs" (cdr c) n))) counts))
+                 :known_red [] :tests []
+                 :stress (list :runs n :load load
+                               :failures (vconcat (mapcar (lambda (c) (list :name (car c) :count (cdr c))) counts)))))
+          'utf-8)
+         nil results-file nil 'silent)))
+    (zerop failed)))
+
+(defun drgnx-run-ert-stress-batch ()
+  "Batch entry point of `bin/drgnx test --stress': DRGNX_TEST_STRESS runs (DRGNX_TEST_LOAD busy loops, which bin/drgnx
+starts) of the suite in the remaining arguments.  Exit 0 when every run passed, 1 when one failed, 2 on a wrong call."
+  (setq default-directory (expand-file-name default-directory)
+        load-path (mapcar (lambda (d) (if (stringp d) (expand-file-name d) d)) load-path))
+  (let* ((args (prog1 (mapcar #'expand-file-name command-line-args-left) (setq command-line-args-left nil)))
+         (n (string-to-number (or (drgnx-run-ert--env "DRGNX_TEST_STRESS") "0")))
+         (load (string-to-number (or (drgnx-run-ert--env "DRGNX_TEST_LOAD") "0"))))
+    (cond ((not (drgnx-run-ert--env "DRGNX_TEST_SELECTOR"))
+           (message "drgnx: --stress needs DRGNX_TEST_SELECTOR (the tests to run again and again)") (kill-emacs 2))
+          ((< n 1) (message "drgnx: --stress takes a whole number of runs above 0") (kill-emacs 2))
+          (t (kill-emacs (if (drgnx-run-ert-stress args (drgnx-run-ert--env "DRGNX_TEST_RESULTS") n load) 0 1))))))
+
 (provide 'drgnx-run-ert)
 ;;; run-ert.el ends here
