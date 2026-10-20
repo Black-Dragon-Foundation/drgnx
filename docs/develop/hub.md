@@ -46,6 +46,43 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   The config has `suppress-connect-headers`: behind an HTTPS proxy curl's `include` would otherwise print the
   proxy's CONNECT head first, and the gateway would take it for the provider's answer.
 
+### Ratatoskr's children (`drgnx-proc`)
+
+`runtime/crates/drgnx-proc` is how the Rust runtime starts and ends processes.
+
+- **Environment:** `env::build(allow, allow_prefixes, set)` copies only the allowed names (and names starting with
+  an allowed prefix) from the runtime's environment, then applies `set`. The child starts from an empty environment
+  plus that list, so a provider key the runtime holds never reaches it unless a caller names it.
+- **Spawning:** every child leads its own process group, gets SIGPIPE back to ignored before `exec` (std resets it
+  to the default; a write to a pipe whose reader left must be an error, as for the Lisp hub's children), has stdin
+  `/dev/null` unless the caller wants a pipe, and stdout and stderr piped. The last 8000 characters of stderr are
+  kept (`Child::stderr_tail`). `Child::wait` reports the exit status once; later calls return nothing. There is no
+  `PR_SET_PDEATHSIG`: it fires when the forking *thread* exits, and tokio's threads come and go.
+- **Start times:** `start_time(pid)` is field 22 of `/proc/PID/stat` on Linux (clock ticks since boot, read after
+  the last `)` of the command name) and `proc_pidinfo`'s start in microseconds on macOS. `boot_id()` is Linux's
+  `/proc/sys/kernel/random/boot_id` and macOS's `kern.bootsessionuuid`, as for the Lisp hub's jobs.
+- **The orphan reaper:** at start Ratatoskr reaps the process rows (pid, start time, pgid, boot id) a crashed run
+  left in `runtime.db`. For each row, in this order:
+  1. any of the four is NULL → skipped, nothing signalled (a crash between a row's insert and its update leaves
+     one, and `kill(-0)` would be our own group);
+  2. pgid ≤ 1, our own group, our session leader's group, or our own pid → refused;
+  3. another boot → skipped;
+  4. the leader is alive, not a zombie, and has the recorded start time → the group is killed;
+  5. the leader is alive with another start time → left alone (the pid was reused, and so may the group id be);
+  6. the leader is gone but `kill(-pgid, 0)` still finds the group → the group is killed: POSIX does not reuse a
+     process-group id while the group exists, so it is still the one recorded (the orphan case the reaper is for);
+  7. otherwise gone.
+
+  Killing a group is SIGTERM, SIGKILL after 2 s, then a wait for `kill(-pgid, 0)` to fail with ESRCH (at most 5 s
+  more; a group that outlives that is reported as failed). `kill_group` stops one group the same way, with rule 2's
+  refusals. Every signal, the `0` probes included, goes through a `Signaller`; the tests of the guards use a spy
+  that sends nothing, so a broken guard turns a test red instead of signalling `-1`.
+
+  **The window left open:** the recorded group died, the leader's pid was then reused by a process that made its
+  own group (pgid = that pid) and exited while members of its group lived on, all between the crash and the next
+  start. Rule 6 would then kill that unrelated group. It needs a pid reuse plus a leader that exits before its
+  children within that interval; a start-time check cannot catch it, because the group's leader is gone.
+
 ## The control socket
 
 `drgnx-hub-socket`: `$XDG_RUNTIME_DIR/drgnx/hub-HASH.sock` (HASH: the first 8 hex digits of the SHA-1 of the data

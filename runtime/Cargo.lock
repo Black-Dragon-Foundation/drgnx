@@ -177,6 +177,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "drgnx-proc"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "tokio",
+]
+
+[[package]]
 name = "drgnx-proto"
 version = "0.1.0"
 dependencies = [

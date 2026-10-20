@@ -33,6 +33,7 @@ runtime/
 | `drgnx-ratatoskr` (binary `ratatoskr`, symlink `rtsk`) | the runtime: the hub protocol's server |
 | `drgnx-proto` | the hub protocol's contract: wire types, strict lines, typed decode, proofs, paths ([below](#drgnx-proto-the-contract)) |
 | `urdr` | the SQLite store; self-contained, its public API names no drgnx type |
+| `drgnx-proc` | spawning (explicit environments, own process groups, one exit) and the orphan reaper ([hub.md](hub.md#ratatoskrs-children-drgnx-proc)) |
 | `gleipnir` | the sandbox; self-contained |
 | `hrafn` | search and the indexer |
 | `drgnx-conformance` | the conformance harness (this page) |
