@@ -152,6 +152,7 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n '__fish_seen_subcommand_from secrets; and __fish_seen_subcommand_from import ls' -l identity -r -d 'age identity file'
     complete -c drgnx -n '__fish_seen_subcommand_from secrets; and __fish_seen_subcommand_from import' -l replace -d 'Overwrite a different key in the keyring'
 
+    complete -c drgnx -n '__fish_seen_subcommand_from service-unit' -l refresh -d 'Point the installed unit at the Emacs drgnx uses'
     # update, coord
     complete -c drgnx -n '__fish_seen_subcommand_from update' -f
     complete -c drgnx -n '__fish_seen_subcommand_from update' -l quiet -d 'One line, for the timer'

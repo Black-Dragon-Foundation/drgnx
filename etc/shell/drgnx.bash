@@ -101,6 +101,7 @@ _drgnx() {
           shell) words='install line' ;;
           secrets) words='export import ls' ;;
           coord) words='mcp' ;;
+          service-unit) words='--refresh' ;;
         esac
       elif [[ $cmd == test ]]; then   # test --install NAME…
         for ((i = 2; i < n; i++)); do

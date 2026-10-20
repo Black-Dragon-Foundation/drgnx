@@ -36,8 +36,10 @@ machine at any time.
 3. **Asks** "Go ahead?" and before **every** root step (`As root: …`). Questions are read from the terminal
    (`/dev/tty`), so `curl … | bash` can still ask. Without a terminal it refuses (exit 3) unless you pass
    `--yes`; with `--yes` root steps are still announced, and `sudo` may still ask for your password.
-4. **Emacs:** keeps an installed Emacs ≥ 31.1 whose native compilation works and that is graphical;
-   otherwise installs one (table below).
+4. **Emacs:** keeps an installed Nidhogg of the version the installer pins; otherwise, where there is a build
+   recipe (Fedora 44/45, Ubuntu 26.04, macOS), builds [Nidhogg](#nidhogg) — also over a stock GNU Emacs 31.1 or an older
+   Nidhogg; elsewhere keeps an installed Emacs ≥ 31.1 whose native compilation works and that is graphical, or
+   installs a stock one (table below), and says so in the plan (`drgnx doctor` warns about stock Emacs).
 5. **drgnx:** clones it into `~/.local/share/drgnx/drgnx` (or fast-forwards an existing checkout, never
    discarding local changes), installing git first if it is missing, and links `~/.local/bin/drgnx`.
 6. **Compiles drgnx** (`drgnx build`).
@@ -70,7 +72,7 @@ runs nothing.
 | `--prefix DIR` | where a source-built Emacs and the `drgnx` command go (default `~/.local`) |
 | `--dir DIR` | where drgnx is checked out (default `~/.local/share/drgnx/drgnx`; it does not follow `DRGNX_DATA_DIR` or `XDG_DATA_HOME`) |
 | `--source-dir DIR` | use an existing drgnx checkout instead of cloning |
-| `--method M` | `auto` (default), `package`, `source`, `keep` (do not touch Emacs), or `formula` (macOS only: Homebrew's `emacs-plus@31`, built from source — also on Apple silicon, beside an older `/Applications/Emacs.app`); `package` and `source` only where the platform has that recipe (Fedora and Arch packages; Fedora and Debian-family source builds) — elsewhere it stops before the plan (exit 2) |
+| `--method M` | `auto` (default), `nidhogg` (build [Nidhogg](#nidhogg); only where there is a recipe — Fedora 44/45, Ubuntu 26.04, macOS — else exit 2), `keep` (do not touch Emacs), or the stock GNU Emacs methods `package`, `source`, `cask` and `formula` (macOS only: Homebrew's `emacs-plus-app` / `emacs-plus@31`, built from source — also on Apple silicon, beside an older `/Applications/Emacs.app`); `package` and `source` only where the platform has that recipe (Fedora and Arch packages; Fedora and Debian-family source builds) — elsewhere it stops before the plan (exit 2) |
 | `--branch B` | drgnx branch to clone (default `main`) |
 | `--config URL` | after installing, set this machine up from your configuration repository: hands over to `drgnx bootstrap --config URL` ([below](#on-a-second-machine)); an `https://` URL or a local path |
 | `--chezmoi URL` | the same with a chezmoi source repository (`drgnx bootstrap --chezmoi URL`); not together with `--config` |
@@ -116,6 +118,7 @@ it. `bootstrap` asks on your terminal (`/dev/tty`), even when the script itself 
 
 | Platform | Emacs comes from | Notes |
 |---|---|---|
+| Fedora 44/45, Ubuntu 26.04, macOS | **Nidhogg**, built from source ([below](#nidhogg)) | the default; the stock rows below are `--method package` / `source` / `cask` / `formula` there |
 | Arch, EndeavourOS, Manjaro, … | `pacman -Syu emacs-wayland` (Wayland) / `emacs` (X11) | 31.1, native compilation; `-Syu` because Arch supports no partial upgrades |
 | Fedora 45+ | `dnf install emacs-pgtk` (Wayland) / `emacs-gtk+x11` (X11) | 31.1, native compilation, tree-sitter |
 | Fedora 44, Fedora remixes (Nobara, …) below 45 | source build (`dnf builddep emacs`) | |
@@ -213,6 +216,22 @@ variable `nidhogg-version` (for example `31.1-nidhogg.1`; `emacs-version` stays 
 `emacs-version` check says `OK` on Nidhogg. A stock GNU Emacs 31.1 or newer still runs drgnx for now, with a `WARN` ("not
 Nidhogg"); that warning becomes a failure when drgnx first needs a Nidhogg patch. Fix: run the installer again, which
 builds Nidhogg. Anything older than 31.1 fails the check either way.
+
+The installer builds Nidhogg from a pinned release: it fetches the tag (`v31.1-nidhogg.1`) of the Nidhogg repository and
+checks that it is the exact commit the installer pins, before building anything. Where it goes: `~/.local/opt/nidhogg/<version>`
+(under `--prefix`), with `~/.local/bin/nidhogg` and `nidhoggclient` linking to it; the Emacs drgnx records is that
+`nidhogg`. A Nidhogg of the pinned version that is already installed is kept (no rebuild, no root step); an older one is
+rebuilt beside it.
+
+Where `podman` can run containers, the build happens in a podman container (Fedora 44/45, Ubuntu 26.04 image) capped at
+min(6 GiB, available memory − 1 GiB) of memory, with `make -jN`, N = one job per 1.5 GiB of the cap (at most one per CPU);
+the host gets only the runtime libraries (as root, asked, unless all are there). Without podman, or when `podman info`
+fails, or inside a container, the plan says why and builds on the machine instead (the build dependencies as root,
+asked). On macOS the build always runs on the machine (Homebrew formulae, then `Nidhogg.app`). Below 3 GiB of
+usable memory the container build is refused (exit 1) instead of being killed by the kernel. A Nidhogg build takes
+about 30–60 minutes.
+
+Debian, Arch and other systems have no Nidhogg recipe yet: the plan says so and installs GNU Emacs 31.1 as before.
 
 ## Older Emacs
 

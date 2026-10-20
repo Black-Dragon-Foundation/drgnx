@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# drgnx installer — gets GNU Emacs 31.1 with native compilation, then drgnx.
+# drgnx installer — gets Nidhogg (drgnx's own Emacs, GNU Emacs 31.1 with drgnx's patches), then drgnx.
 #
 #   curl -fsSL https://raw.githubusercontent.com/Black-Dragon-Foundation/drgnx/main/install.sh | bash
 #
@@ -20,6 +20,12 @@
 set -euo pipefail
 
 EMACS_VERSION=31.1
+NIDHOGG_VERSION=31.1-nidhogg.1
+NIDHOGG_TAG="v$NIDHOGG_VERSION"
+NIDHOGG_REPO="${DRGNX_INSTALL_NIDHOGG_REPO:-https://github.com/Black-Dragon-Foundation/nidhogg.git}"
+# The commit $NIDHOGG_TAG must be: a moved or replaced tag installs nothing.  All zeros until the release is published
+# (DEFERRED NIDHOGG-PIN-1): every install of Nidhogg stops at the check.
+NIDHOGG_COMMIT="${DRGNX_INSTALL_NIDHOGG_COMMIT:-0000000000000000000000000000000000000000}"
 DRGNX_REPO="${DRGNX_INSTALL_REPO:-https://github.com/Black-Dragon-Foundation/drgnx.git}"
 DOCS_URL=https://github.com/Black-Dragon-Foundation/drgnx/blob/main/docs/guide/install.md
 GNU_MIRROR="${DRGNX_INSTALL_MIRROR:-https://ftpmirror.gnu.org/emacs}"         # overridable for tests
@@ -73,8 +79,9 @@ usage: install.sh [options]
   --prefix DIR       where a source-built Emacs and the drgnx command go (default ~/.local)
   --dir DIR          where drgnx is checked out (default ~/.local/share/drgnx/drgnx)
   --source-dir DIR   use this existing drgnx checkout instead of cloning
-  --method M         auto (default) | package | source | keep (do not install Emacs)
-                     | formula (macOS: Homebrew's emacs-plus@31, built from source)
+  --method M         auto (default) | nidhogg (drgnx's own Emacs, built from source: Fedora 44/45,
+                     Ubuntu 26.04, macOS) | keep (do not install Emacs) | package | source
+                     | cask | formula (macOS: Homebrew's emacs-plus; stock GNU Emacs, drgnx doctor warns)
   --branch B         drgnx branch to check out (default main)
   --config URL       then set this machine up from your configuration repository: runs
                      "drgnx bootstrap --config URL" (an https URL or a local path; asks before keys,
@@ -106,7 +113,7 @@ parse_args() {
     esac
     shift
   done
-  case "$METHOD" in auto|package|source|keep|formula) ;; *) die 2 "--method must be auto, package, source, keep or formula" ;; esac
+  case "$METHOD" in auto|nidhogg|package|source|keep|cask|formula) ;; *) die 2 "--method must be auto, nidhogg, keep, package, source, cask or formula" ;; esac
   if [[ -n "$CONFIG" && -n "$CHEZMOI" ]]; then die 2 "--config and --chezmoi cannot be used together"; fi
   if [[ -n "$IDENTITY" && -z "$CONFIG$CHEZMOI" ]]; then die 2 "--identity needs --config or --chezmoi"; fi
   HANDOVER=0 BOOTSTRAP_ARGS=()   # the hand-over to `drgnx bootstrap' (Task 12): always an array, never a string to eval
@@ -116,6 +123,7 @@ parse_args() {
   if ((YES)); then BOOTSTRAP_ARGS+=(--yes); fi
   if [[ -n "$SOURCE_DIR" ]]; then DIR="$SOURCE_DIR"; fi
   PREFIX="$(abs_path "$PREFIX")" DIR="$(abs_path "$DIR")"   # links and the build tree need absolute paths
+  NIDHOGG_PREFIX="$PREFIX/opt/nidhogg/$NIDHOGG_VERSION"
 }
 
 need_value() { [[ -n "$2" ]] || { usage >&2; die 2 "$1 needs $3"; }; }   # OPTION VALUE WHAT — a bad option: exit 2
@@ -193,14 +201,29 @@ version_ge() { # A B → true if A >= B
   [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1)" == "$2" ]]
 }
 
+emacs_info() { # EMACS → "VERSION NATIVE GUI NIDHOGG" (NATIVE: t when native compilation compiles; GUI: pgtk, ns, x or nil;
+                # NIDHOGG: nidhogg-version, or - for a stock GNU Emacs); nothing when EMACS does not run
+  "$1" --batch -Q --eval '(princ (format "%s %s %s %s" emacs-version
+             (and (fboundp (quote native-comp-available-p)) (native-comp-available-p)
+                  (condition-case nil (progn (native-compile (quote (lambda () 1))) t) (error nil)))
+             (cond ((featurep (quote pgtk)) "pgtk") ((featurep (quote ns)) "ns") ((featurep (quote x)) "x") (t "nil"))
+             (if (boundp (quote nidhogg-version)) nidhogg-version "-")))' 2>/dev/null || true
+}
+
+nidhogg_bin() { # the Nidhogg this version installs
+  if [[ "$FAMILY" == macos ]]; then printf '%s' "$NIDHOGG_PREFIX/Nidhogg.app/Contents/MacOS/Emacs"
+  else printf '%s' "$NIDHOGG_PREFIX/bin/nidhogg"; fi
+}
+
 probe_emacs() {
   # Is there already an Emacs that is good for drgnx (>= 31.1, native compilation that compiles, graphical)?
+  # EMACS_NIDHOGG: the one found is a Nidhogg of this version ("" for stock GNU Emacs).
   # On macOS also /Applications/Emacs.app, which is usually not on PATH (DRGNX_INSTALL_MACOS_APP=none|PATH overrides
   # it: tests). APP_OLD: that app is there but not good enough — what it is ("Emacs 30.2", say, or "unknown"; anything below 31.1 is not good enough).
-  EMACS_FOUND="" EMACS_INFO="" APP_OLD=""
+  EMACS_FOUND="" EMACS_INFO="" APP_OLD="" EMACS_NIDHOGG=""
   local candidates=() app=""
   if [[ -n "${DRGNX_INSTALL_EMACS:-}" ]]; then candidates=("$DRGNX_INSTALL_EMACS")
-  else candidates=("$PREFIX/bin/emacs" emacs); fi
+  else candidates=("$(nidhogg_bin)" "$PREFIX/bin/nidhogg" "$PREFIX/bin/emacs" emacs); fi
   if [[ "$FAMILY" == macos ]]; then
     app="${DRGNX_INSTALL_MACOS_APP:-/Applications/Emacs.app/Contents/MacOS/Emacs}"
     if [[ "$app" == none ]]; then app=""; else candidates+=("$app"); fi
@@ -209,28 +232,93 @@ probe_emacs() {
   for e in "${candidates[@]}"; do
     [[ "$e" == none ]] && continue
     command -v "$e" >/dev/null 2>&1 || continue
-    info="$("$e" --batch -Q --eval '(princ (format "%s %s %s" emacs-version
-             (and (fboundp (quote native-comp-available-p)) (native-comp-available-p)
-                  (condition-case nil (progn (native-compile (quote (lambda () 1))) t) (error nil)))
-             (cond ((featurep (quote pgtk)) "pgtk") ((featurep (quote ns)) "ns") ((featurep (quote x)) "x") (t "nil"))))' 2>/dev/null || true)"
+    info="$(emacs_info "$e")"
     if [[ -z "$info" ]]; then
       if [[ -n "$app" && "$e" == "$app" ]]; then APP_OLD=unknown; fi
       continue
     fi
     EMACS_INFO="$info"
-    local v native gui
-    read -r v native gui <<<"$info"
+    local v native gui nidhogg
+    read -r v native gui nidhogg <<<"$info"
     if version_ge "$v" "$EMACS_VERSION" && [[ "$native" == t && "$gui" != nil ]]; then
-      EMACS_FOUND="$(command -v "$e")" APP_OLD=""; return
+      EMACS_FOUND="$(command -v "$e")" APP_OLD=""
+      if [[ "${nidhogg:--}" != - ]]; then EMACS_NIDHOGG="$nidhogg"; fi
+      return
     fi
     if [[ -n "$app" && "$e" == "$app" ]]; then APP_OLD="Emacs $v"; fi
   done
 }
 
+nidhogg_distro() { # NIDHOGG_DISTRO: the build recipe this system has (nidhogg/deps/NAME.*), "" for none
+  NIDHOGG_DISTRO=""
+  case "$FAMILY" in
+    macos) NIDHOGG_DISTRO=macos ;;
+    fedora) if ((!OSTREE)) && [[ "$FEDORA_VERSION" == 44 || "$FEDORA_VERSION" == 45 ]]; then NIDHOGG_DISTRO="fedora-$FEDORA_VERSION"; fi ;;
+    debian) if [[ "$ID" == ubuntu && "$VERSION_ID" == 26.04 ]]; then NIDHOGG_DISTRO=ubuntu-26.04; fi ;;
+  esac
+}
+
+podman_usable() { # → true when podman can run a container here; else NIDHOGG_WHY says why not (Linux)
+  local podman="${DRGNX_INSTALL_PODMAN:-podman}" inside=0
+  NIDHOGG_WHY=""
+  if [[ "$podman" == none ]] || ! command -v "$podman" >/dev/null 2>&1; then NIDHOGG_WHY="podman is not installed"; return 1; fi
+  case "${DRGNX_INSTALL_IN_CONTAINER:-}" in
+    yes) inside=1 ;;
+    no) ;;
+    *) if [[ -e /run/.containerenv || -e /.dockerenv ]]; then inside=1; fi ;;
+  esac
+  if ((inside)); then NIDHOGG_WHY="you are inside a container"; return 1; fi
+  if ! "$podman" info >/dev/null 2>&1; then NIDHOGG_WHY="podman cannot run containers here"; return 1; fi
+}
+
+mem_available_kb() {
+  local kb max
+  kb="${DRGNX_INSTALL_MEMORY_KB:-}"
+  if [[ -z "$kb" ]]; then
+    kb="$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo 2>/dev/null || true)"
+    [[ -n "$kb" ]] || kb=$((4 * 1024 * 1024))
+    max="$(cat /sys/fs/cgroup/memory.max 2>/dev/null || true)"     # a container's limit is below MemAvailable
+    if [[ "$max" =~ ^[0-9]+$ ]] && ((max / 1024 < kb)); then kb=$((max / 1024)); fi
+  fi
+  printf '%s' "$kb"
+}
+
+build_memory() { # NIDHOGG_MEM (GiB) = min(6, available - 1): the container's cap; refused below 3 GiB, not an OOM kill
+  local gib
+  gib=$(($(mem_available_kb) / 1024 / 1024))
+  NIDHOGG_MEM=$((gib - 1))
+  ((NIDHOGG_MEM <= 6)) || NIDHOGG_MEM=6
+  if ((NIDHOGG_MEM < 3)); then
+    die 1 "Building Nidhogg needs 3 GiB of free memory (and 1 GiB left for the system); $gib GiB are available: close some programs and run this again"
+  fi
+}
+
+choose_nidhogg_mode() { # NIDHOGG_MODE container | host, NIDHOGG_WHY, NIDHOGG_MEM, IMAGE, JOBS
+  NIDHOGG_MODE=host IMAGE="" NIDHOGG_MEM=""
+  if [[ "$FAMILY" == macos ]]; then NIDHOGG_WHY=""
+  elif podman_usable; then
+    NIDHOGG_MODE=container
+    case "$NIDHOGG_DISTRO" in
+      fedora-*) IMAGE="registry.fedoraproject.org/fedora:${NIDHOGG_DISTRO#fedora-}" ;;
+      ubuntu-26.04) IMAGE=docker.io/library/ubuntu:26.04 ;;
+    esac
+    build_memory
+    JOBS=$((NIDHOGG_MEM * 1024 / 1536))     # one job per 1.5 GiB of the cap
+    local cpus="${DRGNX_INSTALL_NPROC:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)}"
+    ((JOBS <= cpus)) || JOBS=$cpus
+    ((JOBS >= 1)) || JOBS=1
+  fi
+}
+
 choose_method() {
+  nidhogg_distro
+  NO_NIDHOGG=0     # 1: auto found no Nidhogg recipe and goes on with a stock GNU Emacs (the plan says so)
   if [[ "$METHOD" != auto ]]; then CHOSEN="$METHOD"
-  elif [[ -n "$EMACS_FOUND" ]]; then CHOSEN=keep
+  elif [[ -n "$EMACS_FOUND" && "$EMACS_NIDHOGG" == "$NIDHOGG_VERSION" ]]; then CHOSEN=keep
+  elif [[ -n "$NIDHOGG_DISTRO" ]]; then CHOSEN=nidhogg
+  elif [[ -n "$EMACS_FOUND" ]]; then CHOSEN=keep NO_NIDHOGG=1
   else
+    NO_NIDHOGG=1
     case "$FAMILY" in
       macos) if [[ "$ARCH" == arm64 ]] && version_ge "$VERSION_ID" 15; then CHOSEN=cask; else CHOSEN=formula; fi ;;
       fedora) if version_ge "${FEDORA_VERSION:-0}" 45; then CHOSEN=package; else CHOSEN=source; fi ;;
@@ -240,11 +328,12 @@ choose_method() {
     esac
   fi
   if [[ "$CHOSEN" == formula && "$FAMILY" != macos ]]; then die 2 "--method formula is for macOS (Homebrew's emacs-plus@31)"; fi
+  if [[ "$CHOSEN" == cask && "$FAMILY" != macos ]]; then die 2 "--method cask is for macOS (Homebrew's emacs-plus-app)"; fi
   if [[ "$CHOSEN" == cask && -n "$APP_OLD" ]]; then   # the cask installs /Applications/Emacs.app: never over yours
     die 2 "an older Emacs.app is in /Applications ($APP_OLD): move it aside, or run with --method formula (emacs-plus@31, built from source beside it) — see $DOCS_URL"
   fi
   if [[ "$CHOSEN" == package && "$FAMILY" == debian ]]; then CHOSEN=source; fi   # no 31.1 packages there yet
-  if ((OSTREE)) && [[ "$FAMILY" == fedora && ( "$CHOSEN" == package || "$CHOSEN" == source ) ]]; then
+  if ((OSTREE)) && [[ "$FAMILY" == fedora && ( "$CHOSEN" == package || "$CHOSEN" == source || "$CHOSEN" == nidhogg ) ]]; then
     die 2 "${PRETTY:-this system} is image-based (rpm-ostree): dnf cannot install here. Either run this installer inside a toolbox (toolbox create, toolbox enter, then bash install.sh), or layer Emacs: rpm-ostree install emacs-pgtk, reboot, then run: bash install.sh --method keep (see $DOCS_URL)"
   fi
   case "$FAMILY:$SESSION" in
@@ -263,9 +352,13 @@ choose_method() {
   if [[ ( "$CHOSEN" == package && ${#PKG[@]} -eq 0 ) || ( "$CHOSEN" == source && ${#DEPS[@]} -eq 0 ) ]]; then
     die 2 "no --method $CHOSEN recipe for ${PRETTY:-this system} — use --method auto, or install GNU Emacs $EMACS_VERSION yourself (see $DOCS_URL), then run: bash install.sh --method keep"
   fi
+  if [[ "$CHOSEN" == nidhogg && -z "$NIDHOGG_DISTRO" ]]; then
+    die 2 "no Nidhogg build recipe for ${PRETTY:-this system} (Fedora 44/45, Ubuntu 26.04, macOS) — see $DOCS_URL"
+  fi
   BUILD_DIR="$(drgnx_dir cache)/build"
   CONFIGURE=(./configure "--prefix=$PREFIX" --with-native-compilation=aot --with-tree-sitter "$GUI_FLAG")
   JOBS="$(build_jobs)"
+  if [[ "$CHOSEN" == nidhogg ]]; then choose_nidhogg_mode; fi
 }
 
 find_brew() {
@@ -289,15 +382,9 @@ find_brew() {
 build_jobs() {
   # Parallel make jobs. Native compilation runs one Emacs per job, so: one per CPU, but at most one per
   # 1.5 GiB of available memory — one per CPU on a 16-thread machine starved a desktop into the OOM killer.
-  local cpus kb max
+  local cpus kb
   cpus="${DRGNX_INSTALL_NPROC:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)}"
-  kb="${DRGNX_INSTALL_MEMORY_KB:-}"
-  if [[ -z "$kb" ]]; then
-    kb="$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo 2>/dev/null || true)"
-    [[ -n "$kb" ]] || kb=$((4 * 1024 * 1024))
-    max="$(cat /sys/fs/cgroup/memory.max 2>/dev/null || true)"     # a container's limit is below MemAvailable
-    if [[ "$max" =~ ^[0-9]+$ ]] && ((max / 1024 < kb)); then kb=$((max / 1024)); fi
-  fi
+  kb="$(mem_available_kb)"
   local jobs=$((kb / (1536 * 1024)))
   ((jobs <= cpus)) || jobs=$cpus
   ((jobs >= 1)) || jobs=1
@@ -320,6 +407,7 @@ planned_emacs() { # the Emacs this run leaves behind, as far as the plan can tel
                   # beside brew; the run records `brew --prefix emacs-plus@31` itself)
   case "$CHOSEN" in
     keep) echo "${EMACS_FOUND:-emacs}" ;;
+    nidhogg) nidhogg_bin ;;
     cask) echo /Applications/Emacs.app/Contents/MacOS/Emacs ;;
     formula) if [[ -n "$BREW" ]]; then echo "$(dirname "$(dirname "$BREW")")/opt/emacs-plus@31/bin/emacs"
              else echo "emacs-plus@31's bin/emacs"; fi ;;
@@ -332,9 +420,29 @@ print_plan() {
   say "drgnx install — ${PRETTY:-$OS}"
   say ""
   say "1. Emacs:"
+  if ((NO_NIDHOGG)); then
+    if [[ "$CHOSEN" == keep ]]; then note "Nidhogg has no build recipe for ${PRETTY:-this system} yet: the installed GNU Emacs is kept (drgnx doctor warns about it)"
+    else note "Nidhogg has no build recipe for ${PRETTY:-this system} yet: GNU Emacs $EMACS_VERSION is installed instead (drgnx doctor warns about it)"; fi
+  fi
   case "$CHOSEN" in
-    keep) if [[ -n "$EMACS_FOUND" ]]; then note "keep the installed Emacs ${EMACS_INFO%% *} ($EMACS_FOUND): native compilation works"
+    keep) if [[ -n "$EMACS_NIDHOGG" ]]; then note "keep the installed Nidhogg $EMACS_NIDHOGG ($EMACS_FOUND)"
+          elif [[ -n "$EMACS_FOUND" ]]; then note "keep the installed Emacs ${EMACS_INFO%% *} ($EMACS_FOUND): native compilation works"
           else note "keep the installed Emacs (--method keep)${EMACS_INFO:+: $EMACS_INFO}"; fi ;;
+    nidhogg)
+      note "build Nidhogg $NIDHOGG_VERSION (drgnx's own Emacs: GNU Emacs $EMACS_VERSION with drgnx's patches) into $NIDHOGG_PREFIX (about 30-60 minutes)"
+      note "fetch $NIDHOGG_REPO at $NIDHOGG_TAG and check that it is commit ${NIDHOGG_COMMIT:0:12} before building anything"
+      if [[ "$FAMILY" == macos ]]; then
+        plan_homebrew
+        note "Homebrew formulae from nidhogg/deps/macos.build (brew install)"
+        note "build on this machine: make -j$JOBS (logs: $BUILD_DIR/nidhogg-build), then Nidhogg.app into $NIDHOGG_PREFIX"
+      elif [[ "$NIDHOGG_MODE" == container ]]; then
+        note "runtime libraries from nidhogg/deps/$NIDHOGG_DISTRO.runtime: installed as root (asked), unless all are there"
+        note "build in a podman container ($IMAGE), capped at ${NIDHOGG_MEM}g of memory: make -j$JOBS (logs: $BUILD_DIR/nidhogg-build)"
+      else
+        note "build dependencies from nidhogg/deps/$NIDHOGG_DISTRO.build: installed as root (asked), unless all are there"
+        note "build on this machine ($NIDHOGG_WHY): make -j$JOBS (logs: $BUILD_DIR/nidhogg-build)"
+      fi
+      note "link $PREFIX/bin/nidhogg and $PREFIX/bin/nidhoggclient to it" ;;
     package) note "install with: sudo ${PKG[*]}" ;;
     cask) plan_homebrew
           note "${BREW:-brew} trust d12frosted/emacs-plus && ${BREW:-brew} tap d12frosted/emacs-plus"
@@ -363,6 +471,7 @@ print_plan() {
   elif ((!HANDOVER)); then
     say "5. Run drgnx doctor"
   fi
+  if [[ "$OS" == linux ]]; then note "refresh drgnx.service's Emacs if it is installed (drgnx service-unit --refresh)"; fi
   if ((HANDOVER)); then   # bootstrap runs the doctor, and the desktop step opens drgnx
     local line
     printf -v line '%q ' "${BOOTSTRAP_ARGS[@]}"
