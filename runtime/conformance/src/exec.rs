@@ -82,6 +82,30 @@ fn str_of<'a>(o: &'a Map<String, Value>, k: &str) -> Option<&'a str> {
     o.get(k).and_then(Value::as_str)
 }
 
+/// PATH, or, when its last component has `*` or `?`, the first entry of its directory (in name order) that matches it;
+/// a pattern that matches nothing stays as it is (a file that does not exist).
+fn glob_file(path: &str) -> String {
+    let p = Path::new(path);
+    let (Some(dir), Some(name)) = (p.parent(), p.file_name().and_then(|n| n.to_str())) else {
+        return path.to_string();
+    };
+    if !name.contains(['*', '?']) {
+        return path.to_string();
+    }
+    let mut hits: Vec<String> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| crate::scenario::glob(name, n))
+        .collect();
+    hits.sort();
+    hits.first().map_or_else(
+        || path.to_string(),
+        |n| dir.join(n).to_string_lossy().into_owned(),
+    )
+}
+
 fn ms(o: &Map<String, Value>, k: &str, default: u64) -> Duration {
     Duration::from_millis(o.get(k).and_then(Value::as_u64).unwrap_or(default))
 }
@@ -770,7 +794,17 @@ impl Runner<'_> {
         if newline {
             data.push(b'\n');
         }
-        self.conn(step)?.send_bytes(&data)
+        let eof = step
+            .obj
+            .get("eof")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let conn = self.conn(step)?;
+        conn.send_bytes(&data)?;
+        if eof {
+            conn.close_write()?;
+        }
+        Ok(())
     }
 
     fn expect(&mut self, step: &Step) -> R {
@@ -948,12 +982,24 @@ impl Runner<'_> {
 
     fn file(&mut self, step: &Step) -> R {
         let idx = self.hub_index(None).ok();
-        let path = self.text(idx, step, "path")?;
+        let pattern = self.text(idx, step, "path")?;
         let want = step
             .obj
             .get("exists")
             .and_then(Value::as_bool)
             .unwrap_or(true);
+        if want && step.obj.contains_key("contains") {
+            let text = self.text(idx, step, "contains")?;
+            let deadline = Instant::now() + ms(&step.obj, "within_ms", 5000);
+            // a log is written a moment later: wait for it
+            while !std::fs::read_to_string(glob_file(&pattern)).is_ok_and(|t| t.contains(&text)) {
+                if Instant::now() > deadline {
+                    return Err(format!("{pattern} does not contain {text:?}"));
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+        let path = glob_file(&pattern);
         let meta = std::fs::metadata(&path);
         if !want {
             return if meta.is_err() {

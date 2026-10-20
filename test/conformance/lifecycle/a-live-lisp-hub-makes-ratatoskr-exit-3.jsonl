@@ -1,0 +1,10 @@
+{"scenario": "lifecycle/a-live-lisp-hub-makes-ratatoskr-exit-3", "requires": ["v1", "lisp-backend"], "doc": "A Lisp hub from before Ratatoskr serves the data dir: Ratatoskr exits 3 and says so, and the Lisp hub's socket and lock are untouched."}
+{"do": "start", "hub": "lisp", "bin": "lisp"}
+{"do": "start", "hub": "r", "same_root_as": "lisp", "wait": false}
+{"do": "expect_exit", "hub": "r", "code": 3, "within_ms": 5000}
+{"do": "file", "path": "$ROOT/r-2.log", "contains": "a Lisp hub from before Ratatoskr serves here: drgnx hub stop"}
+{"do": "file", "path": "$SOCKET", "exists": true}
+{"do": "file", "path": "$LOCK/pid", "contains": "$PID(lisp)"}
+{"do": "connect", "conn": "c", "hub": "lisp", "as": "service"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "ping"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"pid": "$PID(lisp)"}}}

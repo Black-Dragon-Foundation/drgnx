@@ -101,6 +101,8 @@ Every scenario gets fresh temporary roots under `/tmp/rtsk-XXXXXX/` (`/tmp`, not
 short) holding `home run state data config cache tmp`, and the hub's `HOME`, `XDG_*`, `DRGNX_DATA_DIR`,
 `DRGNX_CONFIG_DIR` and `TMPDIR` point there. A hub is started with `--parent-pid` of the harness, so it ends with the
 test, and `RATATOSKR_SUPERVISOR=none` keeps a supervisor out of it. Only `PATH` and `DRGNX_EMACS` are inherited.
+`DRGNX_CONFORMANCE_ROOTS=DIR/PREFIX` makes the roots `DIR/PREFIXXXXXXX/` instead. Keep DIR short: the socket path
+must stay within 103 bytes.
 
 ```
 drgnx-conformance --target lisp|ratatoskr --hub-bin PATH --scenarios DIR
@@ -120,7 +122,7 @@ drgnx-conformance connect-as --socket PATH
   `macos` skips on the other host and `sudo` skips where neither root nor passwordless sudo exists.
 - `--perf OUT.json` runs the `perf` rows and writes every `measure` step's timings to the file.
 - `connect-as` connects to the socket and relays stdin and stdout over it: the other-uid connection runs it as
-  uid 65534 (`setpriv` as root, else `sudo -n -u nobody`; `$SUDO` names the sudo command).
+  uid 65534 (`setpriv` as root where util-linux has it, else `sudo -n -u nobody`; `$SUDO` names the sudo command).
 
 ### The scenario format
 
@@ -144,14 +146,14 @@ Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in fai
 | `connect` | `conn` (default `c`), `hub`, `socket` (`"main"` or `"agent:SID"`), `as` | open a connection; lines are buffered per connection. `"user"` (default) on a v1 target performs the `hello` macro with a valid proof and consumes the `challenge`; on `--target lisp` it does nothing. `"service"` connects raw (the `challenge` stays buffered). `"other-uid"` needs `sudo`: it runs `connect-as` as another uid, and makes the root directory 0711 for it |
 | `hello` | `conn`, `proof`, `proto`, `expect_class`, `expect_error`, `capture` | the v1 macro: read the `challenge`, send `hello` with the proof, check the class and, for `valid`, the hub's proof. `proof` is `valid`, `wrong`, `none` or `replay:NAME`. `capture: NAME` keeps the line it sent; `replay:NAME` sends such a line again, as is. `expect_error: CODE` wants the refusal with that code |
 | `chmod` | `path`, `mode` | change a mode (octal string) |
-| `send` | `conn`, one of `json`, `raw`, `bytes` | write one line. `raw` is the text as is, plus `\n` unless `"no_newline": true`; `bytes` is `{fill, n, newline}`. A write the hub closed meanwhile is no error: the next `expect_closed` says so |
+| `send` | `conn`, one of `json`, `raw`, `bytes` | write one line. `raw` is the text as is, plus `\n` unless `"no_newline": true`; `bytes` is `{fill, n, newline}`. `"eof": true` then closes the sending side (a client that vanished mid-line). A write the hub closed meanwhile is no error: the next `expect_closed` says so |
 | `expect` | `conn`, `json` (pattern), `within_ms` (5000) | the first buffered or arriving line that matches; earlier non-matching lines stay buffered |
 | `expect_next` | as `expect` | the very next line must match |
 | `expect_closed` | `conn`, `within_ms` | the hub closed the connection |
 | `expect_silent` | `conn`, `for_ms` (300) | no line arrives |
 | `kill` | `hub` or `pid`, `signal` (`TERM KILL STOP CONT INT HUP QUIT USR1 USR2`) | signal the hub (or a captured pid) |
 | `expect_exit` | `hub` or `pid`, `code`, `signal`, `within_ms` (10000) | the process ended with this status (a `pid` must be one the scenario spawned) |
-| `file` | `path`, `exists`, `mode`, `owner` (`"user"` or a uid), `json` | inspect a file the contract names |
+| `file` | `path`, `exists`, `mode`, `owner` (`"user"` or a uid), `json`, `contains`, `within_ms` (5000) | inspect a file the contract names. A `*` or `?` in the last component picks the first matching name (`hub-*.jsonl`). `contains` waits up to `within_ms` until the file's text holds the string (a log is written a moment later) |
 | `write_file` | `path`, `text` | set up an input |
 | `sqlite` | `path`, `sql: [...]` | set up a database (bundled SQLite) |
 | `backend_log` | `hub`, `expect_line`, `expect_no_line`, `within_ms`, `for_ms` | lines the fake backend received (`$STATE/fake-backend.log`): a substring, or a pattern for lines that are JSON |
@@ -213,7 +215,30 @@ cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-conformance
 runtime/target/debug/drgnx-conformance --target lisp --hub-bin test/conformance/lisp-hub.sh --scenarios test/conformance
 ```
 
-Green is 11 `PASS` for these rows (plus the 2 `self/` rows). In CI the `conformance-lisp` step runs this in the Linux job
+Green is 11 `PASS` for these rows (plus the 2 `self/` rows).
+
+### Ratatoskr's server-core rows
+
+`v1` rows (Ratatoskr only) pin the server core ([hub.md](hub.md#the-control-socket)):
+
+| Group | Rows |
+|---|---|
+| `framing/` | `a-partial-line-then-eof-closes-only-that-connection` |
+| `basics/` | `two-hundred-connections-each-get-an-answer` |
+| `lifecycle/` | `socket-dir-0700-cap-0600`, `sigterm-removes-socket-and-cap`, `parent-pid-gone-ends-the-hub`, `a-newer-runtime-db-is-moved-aside`; with `lisp-backend` (a Lisp hub started through `--lisp-hub`): `a-live-lisp-hub-makes-ratatoskr-exit-3`, `a-busy-lisp-hub-is-not-taken-over` (stopped with SIGSTOP), `a-stale-lisp-lock-directory-is-taken-over`, `a-lisp-lock-naming-another-program-is-taken-over` |
+| `security/` | `another-uid-is-refused` (`sudo`: as root in the Fedora 45 test image, or through passwordless sudo on macOS) |
+
+```
+cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p drgnx-conformance --features drgnx-ratatoskr/test-hooks
+cargo test  --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features test-hooks
+runtime/target/debug/drgnx-conformance --target ratatoskr --hub-bin runtime/target/debug/ratatoskr \
+    --lisp-hub test/conformance/lisp-hub.sh --scenarios test/conformance --only 'lifecycle/*'
+```
+
+`tests/server.rs` starts the real binary in roots under `$TMPDIR`. It covers two hubs on one lock (the second exits
+3), the cap (64 hex, 0600, gone after SIGTERM, never in the log) and the lock file's `PID START_TIME`. With
+`test-hooks` it also covers a reader that stops while a `__test_flood` of 32 MiB comes. That reader is dropped past
+16 MiB while another reader gets every line. In CI the `conformance-lisp` step runs this in the Linux job
 (Nidhogg from `test/container/nidhogg.sh fedora-45`) and the macOS job (`nidhogg.sh macos`, which sets `DRGNX_EMACS`).
 
 ### The v1 rows

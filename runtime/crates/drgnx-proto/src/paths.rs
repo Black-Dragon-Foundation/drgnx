@@ -169,8 +169,13 @@ pub fn data_dir(env: &Env) -> PathBuf {
     ))
 }
 
-fn state_dir(env: &Env) -> String {
+fn state(env: &Env) -> String {
     dir(env, None, "XDG_STATE_HOME", ".local/state")
+}
+
+/// `(drgnx-state-dir)`: a name ending in "/" (`runtime.db` and the hub's log are under its `hub/`).
+pub fn state_dir(env: &Env) -> PathBuf {
+    PathBuf::from(state(env))
 }
 
 /// `<tmp>`, Emacs's `temporary-file-directory` on Linux and macOS: the first of TMPDIR, TMP, TEMP that is set, else
@@ -212,7 +217,7 @@ pub fn socket_path(env: &Env) -> PathBuf {
         .filter(|r| std::fs::metadata(r).is_ok_and(|m| m.is_dir()))
     {
         Some(run) => expand_in(&name, &expand_in("drgnx", run)),
-        None => expand_in(&name, &expand_in("hub", &state_dir(env))),
+        None => expand_in(&name, &expand_in("hub", &state(env))),
     };
     if path.len() <= MAX_SOCKET_PATH {
         return PathBuf::from(path);

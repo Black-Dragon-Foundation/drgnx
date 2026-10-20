@@ -1,0 +1,7 @@
+{"scenario": "lifecycle/parent-pid-gone-ends-the-hub", "requires": ["v1"], "doc": "A hub started with --parent-pid ends (exit 0) within seconds of that process ending; the last --parent-pid counts."}
+{"do": "spawn", "capture": "parent", "argv": ["sleep", "60"]}
+{"do": "start", "hub": "h", "args": ["--parent-pid", "$parent"]}
+{"do": "kill", "pid": "$parent", "signal": "KILL"}
+{"do": "expect_exit", "pid": "$parent", "signal": "KILL"}
+{"do": "expect_exit", "hub": "h", "code": 0, "within_ms": 5000}
+{"do": "file", "path": "$SOCKET", "exists": false}

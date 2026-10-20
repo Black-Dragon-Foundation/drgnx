@@ -1,0 +1,9 @@
+{"scenario": "lifecycle/a-lisp-lock-naming-another-program-is-taken-over", "requires": ["v1", "lisp-backend"], "doc": "A Lisp lock directory whose pid is alive but is not a drgnx hub (a reused pid; here the harness's own) is taken over."}
+{"do": "start", "hub": "lisp", "bin": "lisp"}
+{"do": "kill", "hub": "lisp", "signal": "KILL"}
+{"do": "expect_exit", "hub": "lisp", "signal": "KILL"}
+{"do": "write_file", "path": "$LOCK/pid", "text": "$HARNESS_PID"}
+{"do": "start", "hub": "r", "same_root_as": "lisp"}
+{"do": "connect", "conn": "c", "hub": "r"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "ping"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"pid": "$PID(r)"}}}

@@ -47,16 +47,26 @@ pub fn random_hex(bytes: usize) -> String {
 // ---------------------------------------------------------------- the root every hub lives in
 
 /// `/tmp/rtsk-XXXXXX/` with `home run state data config cache tmp`: `/tmp`, not `$TMPDIR`, so macOS socket paths stay short.
+/// `DRGNX_CONFORMANCE_ROOTS=DIR/PREFIX` makes them `DIR/PREFIXXXXXXX/` instead (a short DIR: the socket path must stay
+/// within 103 bytes).
 pub struct Root {
     dir: tempfile::TempDir,
 }
 
 impl Root {
     pub fn new() -> Result<Arc<Root>, String> {
+        let roots = std::env::var_os("DRGNX_CONFORMANCE_ROOTS").map(PathBuf::from);
+        let (parent, prefix) = match &roots {
+            Some(r) => (
+                r.parent().unwrap_or(Path::new("/")),
+                r.file_name().unwrap_or_default(),
+            ),
+            None => (Path::new("/tmp"), std::ffi::OsStr::new("rtsk-")),
+        };
         let dir = tempfile::Builder::new()
-            .prefix("rtsk-")
-            .tempdir_in("/tmp")
-            .map_err(|e| format!("cannot make a root in /tmp: {e}"))?;
+            .prefix(prefix)
+            .tempdir_in(parent)
+            .map_err(|e| format!("cannot make a root in {}: {e}", parent.display()))?;
         for sub in ["home", "run", "state", "data", "config", "cache", "tmp"] {
             std::fs::create_dir(dir.path().join(sub))
                 .map_err(|e| format!("cannot make {sub} in the root: {e}"))?;
@@ -305,6 +315,8 @@ enum Msg {
 
 pub struct Conn {
     writer: Box<dyn Write + Send>,
+    /// The socket itself, for `close_write` (none for the other uid's relay, whose stdin is closed instead).
+    socket: Option<UnixStream>,
     rx: Receiver<Msg>,
     /// Lines read but not yet consumed by an `expect` (earlier non-matching lines stay here).
     buf: VecDeque<String>,
@@ -359,8 +371,10 @@ impl Conn {
         };
         let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
         let reader = stream.try_clone().map_err(|e| e.to_string())?;
+        let socket = stream.try_clone().map_err(|e| e.to_string())?;
         Ok(Conn {
             writer: Box::new(stream),
+            socket: Some(socket),
             rx: spawn_reader(reader),
             buf: VecDeque::new(),
             eof: false,
@@ -380,7 +394,14 @@ impl Conn {
             .map_err(|e| e.to_string())?;
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o711))
             .map_err(|e| e.to_string())?;
-        let mut cmd = if unsafe { libc::geteuid() } == 0 {
+        // setpriv is util-linux's (Fedora's util-linux-core has none): without it root goes through sudo too
+        let setpriv = Command::new("setpriv")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        let mut cmd = if unsafe { libc::geteuid() } == 0 && setpriv {
             let mut c = Command::new("setpriv");
             c.args(["--reuid", "65534", "--regid", "65534", "--clear-groups"]);
             c
@@ -402,6 +423,7 @@ impl Conn {
         let reader = child.stdout.take().expect("piped");
         Ok(Conn {
             writer: Box::new(writer),
+            socket: None,
             rx: spawn_reader(reader),
             buf: VecDeque::new(),
             eof: false,
@@ -435,6 +457,20 @@ impl Conn {
                 Ok(())
             }
             Err(e) => Err(format!("write failed: {e}")),
+        }
+    }
+
+    /// End what this side sends (the hub reads EOF; the connection still reads): a client that vanished mid-line.
+    pub fn close_write(&mut self) -> Result<(), String> {
+        match &self.socket {
+            Some(s) => s
+                .shutdown(std::net::Shutdown::Write)
+                .map_err(|e| format!("shutdown failed: {e}")),
+            None => {
+                // the relay's stdin closed: it shuts its socket's write side
+                self.writer = Box::new(std::io::sink());
+                Ok(())
+            }
         }
     }
 
