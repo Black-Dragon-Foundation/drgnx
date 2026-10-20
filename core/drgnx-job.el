@@ -1070,8 +1070,8 @@ none, only the tool); `user' otherwise, for the user's servers and anything that
 (defun drgnx-job--agent-config-p (path tree)
   "Does PATH, inside TREE, configure the agents that work in TREE — a `.claude' directory or anything in it, at any
 depth (settings: a permission mode, allow rules, hooks; skills), or a `.mcp.json' anywhere in TREE?  Once `//', `..'
-and symlinks are resolved, with no file name handler; case ignored, for a file system that ignores it.  A PATH that cannot be placed inside TREE
-counts as one (fail closed)."
+and symlinks are resolved, with no file name handler; case ignored, for a file system that ignores it.  A PATH that
+cannot be placed inside TREE counts as one (fail closed)."
   (let* ((file-name-handler-alist nil)                ; the agent's name: resolved with no handler (`drgnx-file-truename')
          (true (drgnx-file-truename (replace-regexp-in-string "\\`//+" "/" (expand-file-name path tree))))
          (top (drgnx-file-truename tree))
