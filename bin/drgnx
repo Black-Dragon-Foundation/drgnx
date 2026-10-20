@@ -555,7 +555,7 @@ cmd_lease() { # light|heavy|exclusive [--wait SECS] -- CMD… | status
     "$(printf '%s' "$*" | tr -d '"\\' | cut -c1-200)" "$since" >"$LEASE_HOLDER"
   if [[ "$class" != exclusive && "${DRGNX_LEASE_CAP:-}" != off ]] && command -v systemd-run >/dev/null 2>&1 \
      && [[ "$(timeout 5 systemctl --user is-system-running 2>/dev/null || true)" =~ ^(running|degraded|starting)$ ]]; then
-    lcap=(systemd-run --user --scope -q -p "MemoryMax=$([[ "$class" == heavy ]] && echo 4G || echo 1G)" -p MemorySwapMax=0 --)
+    lcap=(systemd-run --user --scope -q -p "MemoryMax=$([[ "$class" == heavy ]] && echo 4G || echo 2G)" -p MemorySwapMax=0 --)
   fi
   # CMD inherits the lock fds: the slot is held by the command itself, so killing this shell (the OOM killer, a scope
   # kill) does not free it while CMD runs.  A daemon CMD leaves behind keeps the slot until it ends.

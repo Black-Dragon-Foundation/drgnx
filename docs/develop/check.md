@@ -206,7 +206,7 @@ keeps them to what the memory and cores carry, across all checkouts.
 
   | Class | Holds | Memory cap |
   |---|---|---|
-  | light | `host` shared, one `light-k` | `MemoryMax=1G` |
+  | light | `host` shared, one `light-k` | `MemoryMax=2G` (the slot script's; L is sized at 2 GiB per light slot) |
   | heavy | `host` shared, one `heavy-k` and one `light-k` | `MemoryMax=4G` |
   | exclusive | `host` exclusive | none |
 

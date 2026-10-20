@@ -145,8 +145,9 @@ the temp dir) and sleeps.  Return the process."
            (p (drgnx-lease-test--holder env "light" "r1")))
       (drgnx-lease-test--ready "r1")
       (should (= 75 (car (drgnx-lease-test--call env "lease" "light" "--wait" "1" "--" "true"))))
-      (signal-process p 'KILL)
-      (drgnx-test-wait (lambda () (not (process-live-p p))) :what "the wrapper dies")
+      (let ((pid (process-id p)))
+        (signal-process p 'KILL)
+        (drgnx-test-wait (lambda () (not (zerop (signal-process pid 0)))) :what "the wrapper dies"))
       ;; the command (sleep) still runs, still holds the slot
       (should (= 75 (car (drgnx-lease-test--call env "lease" "light" "--wait" "1" "--" "true"))))
       ;; its end frees the slot
@@ -183,6 +184,25 @@ the temp dir) and sleeps.  Return the process."
               (should (string-match-p "DRGNX_LEASE_WAIT" (buffer-string)))))))
       ;; the default is half an hour: long enough for a queue of test runs, short enough that a hung holder shows
       (should (string-search ":-1800}" (with-temp-buffer (insert-file-contents drgnx-lease-test--bin) (buffer-string)))))))
+
+;; DET-LEASE-1: the light cap is 2G (the slot script's), heavy 4G
+(ert-deftest drgnx-lease/the-memory-caps-are-2g-light-and-4g-heavy ()
+  (drgnx-lease-test--with
+    (let* ((bindir (drgnx-lease-test--file "fakebin"))
+           (log (drgnx-lease-test--file "systemd-run.log"))
+           (env (drgnx-lease-test--env "DRGNX_LEASE_CAP=on" (concat "PATH=" bindir ":" (getenv "PATH")))))
+      (make-directory bindir)
+      (dolist (f `(("systemctl" . "echo running\n")
+                   ("systemd-run" . ,(format "echo \"$*\" >> %s\nwhile [ \"$1\" != -- ]; do shift; done; shift\nexec \"$@\"\n" log))))
+        (let ((file (expand-file-name (car f) bindir)))
+          (write-region (concat "#!/bin/sh\n" (cdr f)) nil file)
+          (set-file-modes file #o755)))
+      (should (= 0 (car (drgnx-lease-test--call env "lease" "light" "--" "true"))))
+      (should (= 0 (car (drgnx-lease-test--call env "lease" "heavy" "--" "true"))))
+      (let ((lines (split-string (drgnx-lease-test--slurp log) "\n" t)))
+        (should (= 2 (length lines)))
+        (should (string-match-p "MemoryMax=2G" (nth 0 lines)))
+        (should (string-match-p "MemoryMax=4G" (nth 1 lines)))))))
 
 (ert-deftest drgnx-lease/nested-and-ci-are-off ()
   (dolist (off '("DRGNX_LEASE_HELD=light:1" "CI=true" "DRGNX_LEASE=off"))
