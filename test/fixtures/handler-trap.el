@@ -2,7 +2,8 @@
 ;;
 ;; (drgnx-test-with-handler-trap BODY...)  BODY with the file name handlers of Tramp, tramp-archive, jka-compr,
 ;;                                         EasyPG and quoted (`/:') names replaced by one that records each call in
-;;                                         `drgnx-test-handler-calls', then does the operation without it
+;;                                         `drgnx-test-handler-calls', then does the operation without it (names in
+;;                                         a `load-path' directory — Emacs loading a library — keep the real ones)
 ;; (drgnx-test-hostile-paths TREE)         links planted in the worktree TREE, and the paths an agent would send
 ;;                                         through them: (:outside PATHS :inside PATHS :back PATH :real FILE)
 ;; (drgnx-test-visit HOW NAME ROOT)        open NAME (relative to ROOT, as an agent or a model names it) the way a
@@ -15,6 +16,7 @@
 (require 'cl-lib)
 
 (defvar drgnx-test-handler-calls nil "The calls (OPERATION ARGS...) the trap handler saw, newest first.")
+(defvar drgnx-test--handlers-outside nil "The file name handlers outside the trap, for Emacs's own libraries.")
 (defvar drgnx-review--runs)
 (defvar drgnx-review--current)
 (defvar drgnx-cockpit-edits--source)
@@ -26,19 +28,31 @@
 (declare-function drgnx-work-ui--graph-open "drgnx-work-ui")
 (declare-function drgnx-cockpit--open-file "drgnx-cockpit")
 
+(defun drgnx-test--library-name-p (name)
+  "Non-nil if NAME is an absolute file name in a `load-path' directory (a test's temp tree never is)."
+  (and (stringp name)
+       (let* ((file-name-handler-alist nil) (dir (and (file-name-absolute-p name) (file-name-directory name))))
+         (and dir (cl-some (lambda (d) (and (stringp d) (string= (file-name-as-directory d) dir))) load-path)))))
+
 (defun drgnx-test--handler-trap (operation &rest args)
-  "A file name handler that records (OPERATION . ARGS), then runs OPERATION without itself."
-  (push (cons operation args) drgnx-test-handler-calls)
-  (let ((inhibit-file-name-handlers (cons #'drgnx-test--handler-trap
-                                          (and (eq inhibit-file-name-operation operation) inhibit-file-name-handlers)))
-        (inhibit-file-name-operation operation))
-    (apply operation args)))
+  "A file name handler that records (OPERATION . ARGS), then runs OPERATION without itself.
+A name in a `load-path' directory is Emacs looking for or loading a library (Homebrew, Debian/Ubuntu and Fedora ship
+Emacs's as `.el.gz'; a visit autoloads image.el, a warning warnings.el): never an agent's, it goes to the handlers
+outside the trap, unrecorded."
+  (if (drgnx-test--library-name-p (car args))
+      (let ((file-name-handler-alist drgnx-test--handlers-outside)) (apply operation args))
+    (push (cons operation args) drgnx-test-handler-calls)
+    (let ((inhibit-file-name-handlers (cons #'drgnx-test--handler-trap
+                                            (and (eq inhibit-file-name-operation operation) inhibit-file-name-handlers)))
+          (inhibit-file-name-operation operation))
+      (apply operation args))))
 
 (defmacro drgnx-test-with-handler-trap (&rest body)
   "BODY with the trap handler on remote (Tramp), archive, compressed, `.gpg' and quoted (`/:', which
 `file-name-non-special' unquotes) names, and no other handler."
   (declare (indent 0) (debug t))
   `(let ((drgnx-test-handler-calls nil)
+         (drgnx-test--handlers-outside file-name-handler-alist)
          (file-name-handler-alist
           (mapcar (lambda (re) (cons re #'drgnx-test--handler-trap))
                   '("\\`/[^/|:]+:" "\\.zip\\(?:/\\|\\'\\)" "\\.g?z\\'" "\\.gpg\\'" "\\`/:"))))
