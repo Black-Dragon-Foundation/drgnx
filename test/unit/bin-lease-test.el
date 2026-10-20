@@ -52,13 +52,18 @@ the temp dir) and sleeps.  Return the process."
              :name (concat "lease-" class) :noquery t :connection-type 'pipe :buffer nil
              :command (append (list drgnx-lease-test--bin "lease" class) wait-args
                               (list "--" "sh" "-c"
-                                    (format "touch %s; exec sleep 30 # drgnx-lease-test-marker %s"
-                                            (drgnx-lease-test--file ready) drgnx-lease-test--dir))))))
+                                    (format "echo $$ > %s.pid; touch %s; exec sleep 30 # drgnx-lease-test-marker %s"
+                                            (drgnx-lease-test--file ready) (drgnx-lease-test--file ready) drgnx-lease-test--dir))))))
     (push p drgnx-lease-test--procs)
     p))
 
 (defun drgnx-lease-test--ready (name)
   (drgnx-test-wait (lambda () (file-exists-p (drgnx-lease-test--file name))) :what (concat "holder " name)))
+
+(defun drgnx-lease-test--kill-command (ready)
+  "Kill the command of the holder that touched READY (its pid is in READY.pid)."
+  (let ((pid (string-trim (drgnx-lease-test--slurp (drgnx-lease-test--file (concat ready ".pid"))))))
+    (call-process "kill" nil nil nil "-KILL" pid)))
 
 (defun drgnx-lease-test--slurp (file)
   (if (file-exists-p file) (with-temp-buffer (insert-file-contents file) (buffer-string)) ""))
@@ -132,25 +137,52 @@ the temp dir) and sleeps.  Return the process."
         (should (string-match-p "wall clock not judged: host busy" (cdr r)))
         (should (equal "busy=1\n" (drgnx-lease-test--slurp (drgnx-lease-test--file "o"))))))))
 
-(ert-deftest drgnx-lease/a-leftover-daemon-holds-no-slot ()
-  (drgnx-lease-test--with
-    (let ((env (drgnx-lease-test--env "DRGNX_LEASE_LIGHT=1")))
-      (let ((r (drgnx-lease-test--call
-                env "lease" "light" "--" "sh" "-c"
-                (format "setsid sleep 30 </dev/null >/dev/null 2>&1 & # drgnx-lease-test-marker %s" drgnx-lease-test--dir))))
-        (should (= 0 (car r))))
-      ;; the only slot is free again at once although the daemon still runs
-      (should (= 0 (car (drgnx-lease-test--call env "lease" "light" "--wait" "5" "--" "true")))))))
-
-(ert-deftest drgnx-lease/a-killed-holder-frees-its-slot ()
+;; review det10-13 #3: the command itself holds the slot — the lock fds are inherited, so killing the lease's bash
+;; (OOM killer, a scope kill) does not free the slot while the command runs
+(ert-deftest drgnx-lease/killing-the-wrapper-keeps-the-slot-while-the-command-runs ()
   (drgnx-lease-test--with
     (let* ((env (drgnx-lease-test--env "DRGNX_LEASE_LIGHT=1"))
            (p (drgnx-lease-test--holder env "light" "r1")))
       (drgnx-lease-test--ready "r1")
       (should (= 75 (car (drgnx-lease-test--call env "lease" "light" "--wait" "1" "--" "true"))))
       (signal-process p 'KILL)
-      ;; the lease's bash is gone and with it its locks; its command (sleep) holds none
-      (should (= 0 (car (drgnx-lease-test--call env "lease" "light" "--wait" "5" "--" "true")))))))
+      (drgnx-test-wait (lambda () (not (process-live-p p))) :what "the wrapper dies")
+      ;; the command (sleep) still runs, still holds the slot
+      (should (= 75 (car (drgnx-lease-test--call env "lease" "light" "--wait" "1" "--" "true"))))
+      ;; its end frees the slot
+      (drgnx-lease-test--kill-command "r1")
+      (should (= 0 (car (drgnx-lease-test--call env "lease" "light" "--wait" "10" "--" "true")))))))
+
+(ert-deftest drgnx-lease/a-leftover-daemon-keeps-the-slot-until-it-ends ()
+  (drgnx-lease-test--with
+    (let ((env (drgnx-lease-test--env "DRGNX_LEASE_LIGHT=1")))
+      (let ((r (drgnx-lease-test--call
+                env "lease" "light" "--" "sh" "-c"
+                (format "setsid sh -c 'echo $$ > %s; exec sleep 30' </dev/null >/dev/null 2>&1 & # drgnx-lease-test-marker %s"
+                        (drgnx-lease-test--file "d.pid") drgnx-lease-test--dir))))
+        (should (= 0 (car r))))
+      (drgnx-test-wait (lambda () (not (string-empty-p (drgnx-lease-test--slurp (drgnx-lease-test--file "d.pid"))))) :what "the daemon")
+      (should (= 75 (car (drgnx-lease-test--call env "lease" "light" "--wait" "1" "--" "true"))))
+      (call-process "kill" nil nil nil "-KILL" (string-trim (drgnx-lease-test--slurp (drgnx-lease-test--file "d.pid"))))
+      (should (= 0 (car (drgnx-lease-test--call env "lease" "light" "--wait" "10" "--" "true")))))))
+
+;; review det10-13 minor: light and heavy never block without end
+(ert-deftest drgnx-lease/light-and-heavy-wait-a-bounded-default ()
+  (skip-unless (executable-find "timeout"))
+  (drgnx-lease-test--with
+    (let ((env (drgnx-lease-test--env "DRGNX_LEASE_LIGHT=1" "DRGNX_LEASE_HEAVY=1" "DRGNX_LEASE_WAIT=1")))
+      (drgnx-lease-test--holder env "heavy" "r1")      ; holds the heavy slot and the only light slot
+      (drgnx-lease-test--ready "r1")
+      (dolist (class '("light" "heavy"))
+        (let ((process-environment env))
+          (with-temp-buffer
+            ;; `timeout' only guards the test: the lease itself ends the wait
+            (let ((rc (call-process "timeout" nil t nil "20" drgnx-lease-test--bin "lease" class "--" "true")))
+              (should (= 75 rc))
+              (should (string-match-p (format "no %s slot free in 1 s" class) (buffer-string)))
+              (should (string-match-p "DRGNX_LEASE_WAIT" (buffer-string)))))))
+      ;; the default is half an hour: long enough for a queue of test runs, short enough that a hung holder shows
+      (should (string-search ":-1800}" (with-temp-buffer (insert-file-contents drgnx-lease-test--bin) (buffer-string)))))))
 
 (ert-deftest drgnx-lease/nested-and-ci-are-off ()
   (dolist (off '("DRGNX_LEASE_HELD=light:1" "CI=true" "DRGNX_LEASE=off"))

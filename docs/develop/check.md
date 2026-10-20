@@ -212,10 +212,14 @@ keeps them to what the memory and cores carry, across all checkouts.
 
   The cap is a `systemd-run --user --scope` when a user manager answers, and none otherwise
   (`DRGNX_LEASE_CAP=off` turns it off).
-- **Holding:** the lease's bash keeps the locks and runs CMD with those descriptors closed, so a daemon CMD leaves
-  behind holds no slot. CMD gets `DRGNX_LEASE_HELD=CLASS:K`.
-- **Waiting:** a slot is polled every 2 s (`DRGNX_LEASE_POLL`, for tests). Light and heavy wait forever unless
-  `--wait SECS`; on timeout the exit status is 75 and the holders are printed. Exclusive only polls (`--wait`, default
+- **Holding:** the lease's bash takes the locks and CMD inherits the descriptors, so the command itself holds the
+  slot: killing the lease's bash (the OOM killer, a scope kill) does not free it while CMD runs, and a daemon CMD
+  leaves behind keeps it until that daemon ends. CMD gets `DRGNX_LEASE_HELD=CLASS:K`; a shell that leaks
+  `DRGNX_LEASE_HELD` silently turns leasing off.
+- **Waiting:** a slot is polled every 2 s (`DRGNX_LEASE_POLL`, for tests). Light and heavy wait `--wait SECS`, else
+  `$DRGNX_LEASE_WAIT`, else 1800 (30 minutes: a queue of test runs; longer is a hung holder, and `drgnx test` and
+  `drgnx check` end with the same message instead of blocking); on timeout the exit status is 75 and the holders are
+  printed. Exclusive only polls (`--wait`, default
   600) and never blocks the others, so nothing deadlocks; on timeout it prints `wall clock not judged: host busy`,
   runs CMD anyway and sets `DRGNX_LEASE_BUSY=1` (a perf run then judges no wall clock).
 - **Status:** `lease status` prints one line per live holder (class, slot, pid, worktree, command, since) and removes the
