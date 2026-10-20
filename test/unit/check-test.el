@@ -7,11 +7,25 @@
   `(let ((,dir (file-name-as-directory (make-temp-file "drgnx-check" t))))
      (unwind-protect (progn ,@body) (delete-directory ,dir t))))
 
+(defun drgnx-check-test--wait-for (dir names)
+  "Shell that, once this job is up, waits until every job of NAMES is: running together is then not left to
+how long the jobs sleep.  Bounded (20 s), so a run that never starts them together fails on the overlap."
+  (format "i=0; while [ $i -lt 400 ]; do ok=1; for n in %s; do [ -e %sup-$n ] || ok=0; done; [ $ok = 1 ] && break; i=$((i+1)); sleep 0.05; done; "
+          (mapconcat #'identity names " ") dir))
+
 (defun drgnx-check-test--job (dir name phase &rest props)
-  "A fake job NAME of PHASE: writes when it starts and ends into DIR/times, sleeps SLEEP, exits CODE."
+  "A fake job NAME of PHASE: writes when it starts and ends into DIR/times, sleeps SLEEP, exits CODE.
+WAIT-FOR (names): after starting, it waits until those jobs have started too.  UNTIL (a file name in DIR): it waits
+for that file to exist (up to 20 s) instead of sleeping."
   (append (list :name name :phase phase
-                :command (list "sh" "-c" (format "echo \"%s start $(date +%%s.%%N)\" >> %stimes; sleep %s; echo \"%s end $(date +%%s.%%N)\" >> %stimes; exit %d"
-                                                 name dir (or (plist-get props :sleep) 0.3) name dir (or (plist-get props :code) 0))))
+                :command (list "sh" "-c" (format "touch %sup-%s; echo \"%s start $(date +%%s.%%N)\" >> %stimes; %s%ssleep %s; echo \"%s end $(date +%%s.%%N)\" >> %stimes; exit %d"
+                                                 dir name name dir
+                                                 (if (plist-get props :wait-for) (drgnx-check-test--wait-for dir (plist-get props :wait-for)) "")
+                                                 (if (plist-get props :until)
+                                                     (format "i=0; while [ $i -lt 400 ] && [ ! -e %s%s ]; do i=$((i+1)); sleep 0.05; done; " dir (plist-get props :until))
+                                                   "")
+                                                 (if (plist-get props :until) 0 (or (plist-get props :sleep) 0.3))
+                                                 name dir (or (plist-get props :code) 0))))
           props))
 
 (defun drgnx-check-test--times (dir)
@@ -30,10 +44,10 @@
     (apply #'max (mapcar (lambda (s) (seq-count (lambda (o) (and (<= (car o) (car s)) (< (car s) (cdr o)))) spans)) spans))))
 
 (ert-deftest drgnx-check/phases-run-in-order-and-jobs-of-a-phase-together ()
-  :tags '(:timing)                                      ; overlaps of 0.3 s sleeps: a quiet machine
   (drgnx-check-test--with dir
     (let* ((jobs (list (drgnx-check-test--job dir "build" 1)
-                       (drgnx-check-test--job dir "u1" 2) (drgnx-check-test--job dir "u2" 2) (drgnx-check-test--job dir "u3" 2)
+                       (drgnx-check-test--job dir "u1" 2 :wait-for '("u1" "u2" "u3")) (drgnx-check-test--job dir "u2" 2 :wait-for '("u1" "u2" "u3"))
+                       (drgnx-check-test--job dir "u3" 2 :wait-for '("u1" "u2" "u3"))
                        (drgnx-check-test--job dir "perf" 4)))
            (r (drgnx-check-run jobs :dir dir :jobs 8 :gui-slots 2))
            (tm (drgnx-check-test--times dir)))
@@ -43,10 +57,12 @@
       (dolist (u '("u1" "u2" "u3")) (should (<= (cddr (assoc u tm)) (cadr (assoc "perf" tm))))))))   ; perf alone, last
 
 (ert-deftest drgnx-check/gui-jobs-never-exceed-the-slots-memory-allows ()
-  :tags '(:timing)                                      ; overlaps of 0.3 s sleeps: a quiet machine
+  ;; u1 and the first two GUI jobs wait for each other, so the three run together whatever the machine does; a third
+  ;; GUI job started early would overlap them (the sleep after the wait is what gives it the chance).
   (drgnx-check-test--with dir
-    (let* ((jobs (mapcar (lambda (n) (drgnx-check-test--job dir n 2 :gui t)) '("g1" "g2" "g3" "g4")))
-           (r (drgnx-check-run (cons (drgnx-check-test--job dir "u1" 2 :sleep 0.8) jobs) :dir dir :jobs 8 :gui-slots 2))
+    (let* ((jobs (list (drgnx-check-test--job dir "g1" 2 :gui t :wait-for '("u1" "g1" "g2")) (drgnx-check-test--job dir "g2" 2 :gui t :wait-for '("u1" "g1" "g2"))
+                       (drgnx-check-test--job dir "g3" 2 :gui t) (drgnx-check-test--job dir "g4" 2 :gui t)))
+           (r (drgnx-check-run (cons (drgnx-check-test--job dir "u1" 2 :sleep 0.8 :wait-for '("u1" "g1" "g2")) jobs) :dir dir :jobs 8 :gui-slots 2))
            (tm (drgnx-check-test--times dir)))
       (should (plist-get r :ok))
       (should (= 2 (drgnx-check-test--overlap tm '("g1" "g2" "g3" "g4"))))
@@ -72,13 +88,20 @@
       (should (eql (drgnx-check-exit-code r) 1)))))
 
 (ert-deftest drgnx-check/a-short-job-is-seen-ending-while-a-long-one-runs ()
-  :tags '(:timing)                                      ; within 1.5 s: a quiet machine
-  ;; the first real run noticed every job of the parallel phase only when the last ended
+  ;; the first real run noticed every job of the parallel phase only when the last ended.  The long job ends when the
+  ;; run has said (verbose) that the short one is done: a run that noticed it only at the end finds it after the long
+  ;; job's 20 s bound, with the short job's seconds above the long one's; the long job must end well under that bound (10 s).
   (drgnx-check-test--with dir
-    (let* ((r (drgnx-check-run (list (drgnx-check-test--job dir "short" 2 :sleep 0.3) (drgnx-check-test--job dir "long" 2 :sleep 4))
-                               :dir dir :jobs 4 :gui-slots 1))
-           (short (seq-find (lambda (j) (equal (plist-get j :name) "short")) (plist-get r :jobs))))
-      (should (< (plist-get short :seconds) 1.5)))))
+    (let* ((said "")
+           (r (let ((standard-output (lambda (c) (setq said (concat said (string c)))
+                                       (when (string-search "short ok" said) (write-region "" nil (concat dir "seen") nil 'silent)))))
+                (drgnx-check-run (list (drgnx-check-test--job dir "short" 2 :sleep 0.3) (drgnx-check-test--job dir "long" 2 :until "seen"))
+                                 :dir dir :jobs 4 :gui-slots 1 :verbose t)))
+           (short (seq-find (lambda (j) (equal (plist-get j :name) "short")) (plist-get r :jobs)))
+           (long (seq-find (lambda (j) (equal (plist-get j :name) "long")) (plist-get r :jobs))))
+      (should (plist-get r :ok))
+      (should (< (plist-get short :seconds) (plist-get long :seconds)))
+      (should (< (plist-get long :seconds) 10)))))
 
 (ert-deftest drgnx-check/a-failing-build-stops-everything ()
   (drgnx-check-test--with dir

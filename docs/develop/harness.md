@@ -153,8 +153,8 @@ advised. Fields only one of two fingerprints has are skipped, so a full one comp
 The cheap fingerprint is meant for around every test: about 0.4 ms with drgnx, org, dired and eshell loaded (27,000
 symbols; about 90 hooks), nothing that grows with the number of symbols. The full scan costs about 12 ms; run from an uncompiled
 checkout it compiles its scanner once first (interpreted, the scan takes ~110 ms; a built drgnx skips that). Both only
-read: no prompt, no display. The `drgnx-fingerprint/cheap-costs-under-2-ms` and `…/full-costs-under-50-ms` tests
-(tag `:timing`) hold the costs.
+read: no prompt, no display. The `drgnx-fingerprint/the-cheap-one-allocates-a-thirtieth-of-the-full-scan` and `…/the-full-scan-allocates-what-it-did` tests
+hold the costs as allocation (no wall clock).
 
 The census that reads it around every test, `bin/drgnx test --leaks`, is described in
 [check.md](check.md#the-leak-census---leaks).
