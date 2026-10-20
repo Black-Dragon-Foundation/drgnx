@@ -306,16 +306,23 @@ DIR/NAME with SWAP-FROM replaced by that title (what the window manager would re
                               (drgnx-platform-hn-test--session 'hyprland (drgnx-platform-hn-test--hypr-files)
                                                                "-j clients clients\ndispatch hl\\.dsp ok"
                                 (let ((hook (drgnx-platform-hn-test--placing-title-hook dir "clients" "hyprland/clients.json" "drgnx - workbench"))
-                                      (orig (symbol-function 'set-frame-parameter)))
-                                  ;; the title shows in the replies only 0.4 s after it is set: the polls at 0.1 and 0.3 s find nothing
+                                      (orig-set (symbol-function 'set-frame-parameter))
+                                      (orig-call (symbol-function 'drgnx-platform-ctx-call))
+                                      (title nil) (reads 0))
+                                  ;; the title shows in the replies only from the third read on: the first two find nothing.
+                                  ;; Counted in reads, not seconds: on a loaded runner one read can outlast the poll times
                                   (cl-letf (((symbol-function 'set-frame-parameter)
                                              (lambda (f p v)
-                                               (if (and (eq p 'title) (stringp v) (string-prefix-p "drgnx [placing" v))
-                                                   (progn (funcall orig f p v)
-                                                          (run-at-time 0.4 nil (lambda () (funcall hook f p v))))
-                                                 (funcall orig f p v)))))
+                                               (when (and (eq p 'title) (stringp v) (string-prefix-p "drgnx [placing" v))
+                                                 (setq title (list f p v)))
+                                               (funcall orig-set f p v)))
+                                            ((symbol-function 'drgnx-platform-ctx-call)
+                                             (lambda (ctx argv cb)
+                                               (when (and (member "clients" argv) (= (cl-incf reads) 3))
+                                                 (apply hook title))
+                                               (funcall orig-call ctx argv cb))))
                                     (should (eq 'ok (drgnx-platform-hn-test--do #'drgnx-platform-place-frame frame '(:name "HDMI-A-1"))))
-                                    (should (>= (length (seq-filter (lambda (l) (string-match-p "-j clients" l)) (drgnx-platform-test--log-lines))) 3))))))
+                                    (should (= (length (seq-filter (lambda (l) (string-match-p "-j clients" l)) (drgnx-platform-test--log-lines))) 3))))))
 
 ;;;; One deadline for a move that makes several calls
 

@@ -28,7 +28,13 @@ of an optional C feature is bound with `dlet` (Homebrew's Emacs has no D-Bus, so
 not special there and a `let` binds it lexically); only tools the system has are linked into a fake PATH (macOS has no `setsid`), and only
 POSIX options are used (no `timeout`, `dd iflag=`, GNU grep's `--exclude`); a test puts back the mode tables it
 changes (`major-mode-remap-alist`: Emacs 31 asks to install a missing grammar, which in batch reads stdin); native
-compilation is optional (Homebrew's Emacs has none). A test of a Linux-only branch pins the system too: `system-type`
+compilation is optional (Homebrew's Emacs has none: a test that counts allocations calls compiled functions of fixed
+arity, since a byte-compiled `&rest` function such as `ignore` conses its argument list where the native one does
+not). A socket's whole path stays under 104 bytes: a session's socket goes under a short runtime directory of its own
+(`/tmp/drgnx-xdg…`), never under the run's temp directory (`/private/tmp/drgnx-t-…/drgnx-run.…/`, 45 bytes on
+macOS). Module teardown re-applies the keys on the host's platform (`drgnx--after-teardown`), so on macOS it sets the
+Mac modifiers and binds Cmd chords; `drgnx-test-with-modules` puts both back. A test of a poll counts reads, not
+seconds: on a loaded runner one call to a tool can outlast the poll times. A test of a Linux-only branch pins the system too: `system-type`
 in Lisp, a fake `uname` on the fake PATH or `DRGNX_UPDATE_PLATFORM` for `bin/drgnx`. Shell scripts and the snippets
 tests run run under macOS's `/bin/bash` 3.2: no `source <(…)` (it sources nothing; `eval "$(…)"` works), no `read -N` (`dd bs=1 count=N` reads N bytes), and a
 variable before a non-ASCII character takes braces (`${name}…`: macOS's bash reads `$name…` as an unknown variable;

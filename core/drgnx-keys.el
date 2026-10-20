@@ -544,16 +544,22 @@ with OPTION `characters', `drgnx-keys--option-types-characters'; otherwise put b
 
 (defun drgnx-keys--bind (mapsym key def)
   "Bind KEY in MAPSYM's keymap, remembering what was there; a command blocking KEY as a prefix
-is lifted first (and remembered).  Returns what was lifted, \"COMMAND (PREFIX)\", or nil."
+is lifted first (and remembered).  The prefix maps the binding makes are remembered too (with no command), so
+that `drgnx-keys--restore' takes each out again once it is empty and every apply records the same.  Returns what
+was lifted, \"COMMAND (PREFIX)\", or nil."
   (let* ((map (symbol-value mapsym)) (prev (drgnx-keys--lookup map key)) (lifted nil))
     (when (numberp prev)
-      ;; a number also when the prefix is unbound (an empty map): then there is nothing to lift
-      (let* ((prefix (key-description (seq-take (key-parse key) prev))) (cmd (drgnx-keys--lookup map prefix)))
+      ;; a number also when the prefix is unbound: then there is nothing to lift; either way the prefix maps from
+      ;; there on are made here (the restore removes them newest first: the deepest goes before its parent)
+      (let* ((keys (key-parse key)) (n prev)
+             (prefix (key-description (seq-take keys n))) (cmd (drgnx-keys--lookup map prefix)))
         (setq prev nil)
+        (push (list mapsym prefix cmd :prefix) drgnx-keys--applied)
         (when cmd
-          (push (list mapsym prefix cmd :prefix) drgnx-keys--applied)
           (keymap-unset map prefix t)
-          (setq lifted (format "%s (%s)" cmd prefix)))))
+          (setq lifted (format "%s (%s)" cmd prefix)))
+        (while (< (setq n (1+ n)) (length keys))
+          (push (list mapsym (key-description (seq-take keys n)) nil :prefix) drgnx-keys--applied))))
     (push (list mapsym key prev def) drgnx-keys--applied)
     (define-key map (key-parse key) def)
     lifted))
