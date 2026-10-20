@@ -43,6 +43,7 @@
 
 (declare-function drgnx-state-sync "drgnx-state")
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)   ; `drgnx-test-with-state'
+(require 'drgnx-wait-fixture (expand-file-name "wait-fixture" (file-name-directory (macroexp-file-name))))
 
 (defmacro drgnx-cockpit-fixture-after-setup (&rest body)
   "Run tools/cockpit's setup outside a module run (its pane kinds as the test stubs them), then BODY, in a fresh
@@ -81,10 +82,8 @@ the state store sees it."
   (drgnx-state-sync))
 
 (defun drgnx-cockpit-fixture-wait (pred &optional secs)
-  "Wait (processes run) until PRED is non-nil, at most SECS (10): PRED's value."
-  (let ((deadline (+ (float-time) (or secs 10))))
-    (while (and (not (funcall pred)) (< (float-time) deadline)) (accept-process-output nil 0.05)))
-  (funcall pred))
+  "Wait (processes run) until PRED is non-nil: PRED's value (`drgnx-test-wait', at least 30 s or SECS)."
+  (drgnx-test-wait pred :secs (max 30 (or secs 0)) :what "the cockpit fixture's predicate"))
 
 (defmacro drgnx-cockpit-fixture-with (&rest body)
   "BODY in the cockpit fixture (see the commentary): ROOT REPO SPEC PLAN BOARD WT-A WT-B TREE SHA SESSIONS are bound,

@@ -251,7 +251,7 @@ show (`drgnx-cockpit-edit-source', `drgnx-cockpit-file-diff'), or HASH."
       (should (drgnx-job-run-test--wait (lambda () (string-search "not at the tip of its branch" (plist-get (drgnx-job-cockpit-test--gate-card id) :title))) 15))
       (drgnx-job-cockpit-test--accept agent "task.txt")
       (drgnx-job-cockpit-test--accept agent "decoy.txt")
-      (drgnx-job-run-test--wait (lambda () nil) 3)
+      (drgnx-test-pause 3)
       (should (string-search "not at the tip of its branch" (plist-get (drgnx-job-cockpit-test--gate-card id) :title)))
       (should-not (equal (drgnx-job-run-test--status id 1) "done"))
       ;; back on its branch: what it shows is what merges — task.txt, accepted

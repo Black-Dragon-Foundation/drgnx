@@ -4,6 +4,7 @@
 ;; (`drgnx check''s live shards are sandboxed too).  Without a systemd user manager they skip.
 (require 'ert)
 (require 'drgnx-jobs)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 
 (defmacro drgnx-jobs-test--with (&rest body)
   `(let* ((root (make-temp-file "drgnx-jobs" t))
@@ -14,9 +15,7 @@
        (delete-directory root t))))
 
 (defun drgnx-jobs-test--wait (pred &optional secs)
-  (let ((deadline (+ (float-time) (or secs 10))) v)
-    (while (and (not (setq v (funcall pred))) (< (float-time) deadline)) (sleep-for 0.05))
-    v))
+  (drgnx-test-wait pred :secs (max 30 (or secs 0)) :what "the systemd jobs test's predicate"))
 
 (defun drgnx-jobs-test--stop-all ()
   "Stop every running job and wait until each has written its exit file."

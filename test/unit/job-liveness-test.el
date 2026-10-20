@@ -15,7 +15,7 @@
       (should (drgnx-job-run-test--wait (lambda () (equal (drgnx-job-run-test--status id 1) "needs-input")) 15))
       (let ((n (length drgnx-agents--sessions)))
         (should (<= n drgnx-job-start-tries))
-        (drgnx-job-run-test--wait #'ignore 2.5)                                 ; a tick and more: nothing new
+        (drgnx-test-pause 2.5)                                 ; a tick and more: nothing new
         (should (= (length drgnx-agents--sessions) n)))
       (should (seq-find (lambda (m) (string-prefix-p "[agent]" (plist-get m :text))) (drgnx-coord-inbox "user"))))))
 

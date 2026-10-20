@@ -3,15 +3,14 @@
 ;; the transcript is in the editor and the list in the right dock, nothing unrouted.
 (require 'ert)
 (require 'drgnx-ui)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-ui-repo-dir) nil t)
 
 (defun drgnx-live-ag--q (sess form)
   (car (read-from-string (plist-get (drgnx-ui-call sess (format "(drgnx-uitest--json (list :v (prin1-to-string %s)))" form) 60) :v))))
 
 (defun drgnx-live-ag--until (sess form secs)
-  "Poll FORM in SESS until non-nil (SECS at most); its value."
-  (let ((deadline (+ (float-time) secs)) v)
-    (while (and (not (setq v (drgnx-live-ag--q sess form))) (< (float-time) deadline)) (sleep-for 0.1))
-    v))
+  "Poll FORM in SESS until non-nil; its value (`drgnx-test-wait', at least 30 s or SECS)."
+  (drgnx-test-wait (lambda () (drgnx-live-ag--q sess form)) :secs (max 30 secs) :what form))
 
 (ert-deftest drgnx-live/agents-queue-stop-and-the-dock ()
   (skip-unless (file-readable-p "/proc/self/fd/0"))

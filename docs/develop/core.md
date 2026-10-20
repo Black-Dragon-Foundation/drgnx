@@ -2791,6 +2791,14 @@ returns PRED's first non-nil value, polling with `(accept-process-output nil 0.0
   `(process-get p :done)`. `process-live-p` turns nil before the sentinel has run, so a wait on it races the
   sentinel (M3b-19). `drgnx-lint/test-waits-read-a-done-flag-not-process-live-p` fails for any `drgnx-test-wait`
   under `test/` whose PRED mentions `process-live-p`.
+- **A chain of timers runs back to back.** One `accept-process-output` runs one link of a chain of zero-delay
+  timers (a view drawing in slices) however long it waits, so while a timer is due the wait polls without a timeout.
+  A 20 ms poll per link starved the Search view's 10,100 rows (`drgnx-view-ui/replace-retype-has-no-jank`).
+- **A window for what must not happen.** A test that asserts something does *not* happen (a second answer, a tick
+  that starts nothing) lets processes and timers run with `(drgnx-test-pause SECS)` and then asserts. It is the only
+  fixed real-time window in a test, and it can only miss a bug on a loaded machine, never fail a correct one. Not
+  `sleep-for`: that runs one link of a timer chain. A helper converted to `drgnx-test-wait` never takes
+  `(lambda () nil)` or `#'ignore` for a pause, since that now fails at the deadline.
 - **Inside the clock fixture** (`drgnx-test-with-clock`) it works unchanged: the deadline is read through
   `drgnx-test-real-time`, and each timed `accept-process-output` advances virtual time by the real wait.
 - **A GUI test that makes a frame waits for it to be mapped**: `(drgnx-test-wait (lambda () (eq (frame-visible-p F)
