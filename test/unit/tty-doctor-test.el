@@ -6,6 +6,7 @@
 (require 'drgnx)
 (require 'drgnx-doctor)
 (require 'drgnx-tty-recommend)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (load (expand-file-name "modules/ui/drgnx-tty-frames" drgnx-dir) nil t)
 
 (defconst drgnx-tty-doctor-test--fedora '(:system linux :ostree nil :ids ("fedora")))
@@ -285,14 +286,17 @@
       (delete-directory state t))))
 
 (ert-deftest drgnx-tty-doctor/terminal-check-in-a-graphical-window ()
-  (let (said (buffers (buffer-list)))
+  (let (said (buffers (drgnx-test-buffer-list)))
     (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t))
               ((symbol-function 'message) (lambda (fmt &rest args) (setq said (apply #'format fmt args)))))
-      (drgnx-tty-frames-terminal-check))
+      (drgnx-tty-frames-terminal-check)
+      ;; what a cold eln cache does mid-test: the native compiler opens its own log buffers
+      (get-buffer-create "*Native-compile-Log*")
+      (get-buffer-create "*Async-native-compile-log*"))
     (should (string-search "terminal window" said))
     (should (string-search "drgnx doctor" said))
     (should-not (get-buffer "*drgnx terminal*"))
-    (should (equal buffers (buffer-list)))))
+    (should (equal buffers (drgnx-test-buffer-list)))))
 
 (ert-deftest drgnx-tty-doctor/terminal-check-in-a-terminal-window-shows-the-group ()
   (let ((caps '(:id vte :keys legacy :c-g always :folded nil :osc52 nil :colors 256 :mouse t)))

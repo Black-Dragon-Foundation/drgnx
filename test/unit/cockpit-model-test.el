@@ -466,12 +466,12 @@
 
 (ert-deftest drgnx-cockpit-model/a-git-that-cannot-start-leaves-no-buffers ()
   (drgnx-cockpit-fixture-with
-    (let ((before (length (buffer-list))) r)
+    (let ((before (length (drgnx-test-buffer-list))) r)
       (cl-letf (((symbol-function 'make-process) (lambda (&rest _) (error "No git here"))))
         (drgnx-cockpit--git repo '("status") (lambda (x) (setq r x))))
       (should (drgnx-cockpit-fixture-wait (lambda () r)))
       (should (equal (plist-get r :error) "No git here"))
-      (should (= (length (buffer-list)) before)))))
+      (should (= (length (drgnx-test-buffer-list)) before)))))
 
 (ert-deftest drgnx-cockpit-model/closed-jobs-deps-are-not-read ()
   (drgnx-cockpit-fixture-with
