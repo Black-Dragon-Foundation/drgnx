@@ -1,0 +1,4554 @@
+{
+  "events": [
+    {
+      "data": {
+        "$defs": {
+          "Mode": {
+            "description": "What a message sent while the session works does.",
+            "enum": [
+              "queue",
+              "steer",
+              "interrupt"
+            ],
+            "type": "string"
+          },
+          "Permission": {
+            "additionalProperties": false,
+            "description": "A permission request the agent waits on.",
+            "properties": {
+              "id": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RpcId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "options": {
+                "default": [],
+                "items": true,
+                "type": "array"
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tool": true
+            },
+            "type": "object"
+          },
+          "Review": {
+            "additionalProperties": false,
+            "description": "A write held for the user's review.",
+            "properties": {
+              "content": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RpcId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "RpcId": {
+            "anyOf": [
+              {
+                "format": "int64",
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "A JSON-RPC id, as the agent chose it."
+          },
+          "SessionStatus": {
+            "enum": [
+              "starting",
+              "idle",
+              "busy",
+              "exited"
+            ],
+            "type": "string"
+          },
+          "Snapshot": {
+            "additionalProperties": false,
+            "description": "What an editor mirrors of a session, everything but its transcript.  A `service` or `agent` caller of\n`agents/list` gets only `{id, name, job, task}`.",
+            "properties": {
+              "capabilities": true,
+              "commands": {
+                "default": [],
+                "items": true,
+                "type": "array"
+              },
+              "cwd": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "enforced": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "entries-count": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "exit": {
+                "description": "The agent process's exit status.",
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "job": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "mode": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Mode"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "paused": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "permissions": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/Permission"
+                },
+                "type": "array"
+              },
+              "profile": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "queue": {
+                "default": [],
+                "description": "Messages waiting for the turn to end.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "reviews": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/Review"
+                },
+                "type": "array"
+              },
+              "status": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/SessionStatus"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "stderr": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "task": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "usage": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Usage"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "via": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Via"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          },
+          "Usage": {
+            "additionalProperties": false,
+            "properties": {
+              "cost": true,
+              "size": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "used": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "Via": {
+            "description": "Whether a session's traffic goes through the gateway.",
+            "enum": [
+              "gateway",
+              "direct"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A session's snapshot changed.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "seq": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "session": {
+            "$ref": "#/$defs/Snapshot"
+          }
+        },
+        "required": [
+          "id",
+          "seq",
+          "session"
+        ],
+        "title": "AgentEvent",
+        "type": "object"
+      },
+      "doc": "a session's snapshot changed (at most one per session per 50 ms)",
+      "name": "agent"
+    },
+    {
+      "data": {
+        "$defs": {
+          "Entry": {
+            "additionalProperties": true,
+            "description": "One transcript entry: its `type`, and the rest as the backend sent it (ACP's fields; phase 5 types them).",
+            "properties": {
+              "type": {
+                "$ref": "#/$defs/EntryType"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          "EntryType": {
+            "description": "What a transcript entry is (`usage`, `notice` and `compaction` are reserved).",
+            "enum": [
+              "user",
+              "agent",
+              "thought",
+              "tool",
+              "plan",
+              "stop",
+              "error",
+              "usage",
+              "notice",
+              "compaction"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "Entries new or changed since the last time, `[index, Entry]` each.",
+        "properties": {
+          "entries": {
+            "default": [],
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "$ref": "#/$defs/Entry"
+                }
+              ],
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "seq": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "seq"
+        ],
+        "title": "AgentEntries",
+        "type": "object"
+      },
+      "doc": "a session's entries new or changed since the last time",
+      "name": "agent-entries"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "budget": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "job": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "spent": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "title": "Budget",
+        "type": "object"
+      },
+      "doc": "a job's spend reached its budget",
+      "name": "budget"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "job": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "task": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "Card",
+        "type": "object"
+      },
+      "doc": "a job's card needs the user",
+      "name": "card"
+    },
+    {
+      "data": {
+        "$defs": {
+          "Nonce": {
+            "description": "a nonce: 32 lowercase hex digits",
+            "maxLength": 32,
+            "pattern": "^[0-9a-f]{32}$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The front's nonce, sent on accept: the client's proof covers it.",
+        "properties": {
+          "nonce": {
+            "$ref": "#/$defs/Nonce"
+          }
+        },
+        "required": [
+          "nonce"
+        ],
+        "title": "Challenge",
+        "type": "object"
+      },
+      "doc": "the hub's nonce, sent on accept",
+      "name": "challenge"
+    },
+    {
+      "data": {
+        "$defs": {
+          "EventRow": {
+            "additionalProperties": false,
+            "description": "One row of the store's event log; `data` is the stored JSON object, absent when there is none.",
+            "properties": {
+              "agent": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "at": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "data": {
+                "additionalProperties": true,
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "id": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "job": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "summary": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "task": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "Events oldest first: those after `since`, up to `last`.  `events/since`'s answer and the `events` event.",
+        "properties": {
+          "events": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/EventRow"
+            },
+            "type": "array"
+          },
+          "last": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "since": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "since",
+          "last"
+        ],
+        "title": "EventsPage",
+        "type": "object"
+      },
+      "doc": "the event log's new rows (at most 200 a time, every 0.25 s at most)",
+      "name": "events"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A request or a task moved to the next provider or profile: the gateway's `{agent, from, to, why}`, a job's with\n`job` and `task` too.",
+        "properties": {
+          "agent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "from": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "job": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "task": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "why": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "Fallback",
+        "type": "object"
+      },
+      "doc": "a request or a task moved to the next provider or profile",
+      "name": "fallback"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A job's status, tasks or open cards changed.",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "JobChanged",
+        "type": "object"
+      },
+      "doc": "a job's status, tasks or open cards changed",
+      "name": "job"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "job": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "task": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "LeaseReleased",
+        "type": "object"
+      },
+      "doc": "a task's claim ran out",
+      "name": "lease-released"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A message for the user from the hub itself (the notices' shape).",
+        "properties": {
+          "command": {
+            "description": "The command that acts on it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "life": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "severity",
+          "id",
+          "life",
+          "text"
+        ],
+        "title": "Notice",
+        "type": "object"
+      },
+      "doc": "a message for the user from the hub itself",
+      "name": "notice"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "One request the gateway forwarded, and what it cost.",
+        "properties": {
+          "agent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cost": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "input": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "job": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "output": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "provider": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "task": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "Request",
+        "type": "object"
+      },
+      "doc": "the gateway forwarded a request: its tokens and cost",
+      "name": "request"
+    }
+  ],
+  "methods": [
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the user's other actions on a session: deliver-queue, unqueue, requeue, review",
+      "name": "agents/do",
+      "params": {
+        "$defs": {
+          "AgentOp": {
+            "enum": [
+              "deliver-queue",
+              "unqueue",
+              "requeue",
+              "review"
+            ],
+            "type": "string"
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "Prompt": {
+            "description": "a prompt or a message: at most 1 MiB (1048576 characters)",
+            "maxLength": 1048576,
+            "type": "string"
+          },
+          "RequestId": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "maxLength": 128,
+                "type": "string"
+              }
+            ],
+            "description": "a permission request's or a review's id"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          },
+          "item": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RequestId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "n": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "op": {
+            "$ref": "#/$defs/AgentOp"
+          },
+          "reject": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "text": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Prompt"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "op"
+        ],
+        "title": "DoParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a session's snapshot, whole transcript and change number",
+      "name": "agents/get",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ById",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Entry": {
+            "additionalProperties": true,
+            "description": "One transcript entry: its `type`, and the rest as the backend sent it (ACP's fields; phase 5 types them).",
+            "properties": {
+              "type": {
+                "$ref": "#/$defs/EntryType"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          "EntryType": {
+            "description": "What a transcript entry is (`usage`, `notice` and `compaction` are reserved).",
+            "enum": [
+              "user",
+              "agent",
+              "thought",
+              "tool",
+              "plan",
+              "stop",
+              "error",
+              "usage",
+              "notice",
+              "compaction"
+            ],
+            "type": "string"
+          },
+          "Mode": {
+            "description": "What a message sent while the session works does.",
+            "enum": [
+              "queue",
+              "steer",
+              "interrupt"
+            ],
+            "type": "string"
+          },
+          "Permission": {
+            "additionalProperties": false,
+            "description": "A permission request the agent waits on.",
+            "properties": {
+              "id": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RpcId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "options": {
+                "default": [],
+                "items": true,
+                "type": "array"
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tool": true
+            },
+            "type": "object"
+          },
+          "Review": {
+            "additionalProperties": false,
+            "description": "A write held for the user's review.",
+            "properties": {
+              "content": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RpcId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "RpcId": {
+            "anyOf": [
+              {
+                "format": "int64",
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "A JSON-RPC id, as the agent chose it."
+          },
+          "SessionStatus": {
+            "enum": [
+              "starting",
+              "idle",
+              "busy",
+              "exited"
+            ],
+            "type": "string"
+          },
+          "Snapshot": {
+            "additionalProperties": false,
+            "description": "What an editor mirrors of a session, everything but its transcript.  A `service` or `agent` caller of\n`agents/list` gets only `{id, name, job, task}`.",
+            "properties": {
+              "capabilities": true,
+              "commands": {
+                "default": [],
+                "items": true,
+                "type": "array"
+              },
+              "cwd": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "enforced": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "entries-count": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "exit": {
+                "description": "The agent process's exit status.",
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "job": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "mode": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Mode"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "paused": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "permissions": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/Permission"
+                },
+                "type": "array"
+              },
+              "profile": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "queue": {
+                "default": [],
+                "description": "Messages waiting for the turn to end.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "reviews": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/Review"
+                },
+                "type": "array"
+              },
+              "status": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/SessionStatus"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "stderr": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "task": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "usage": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Usage"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "via": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Via"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          },
+          "Usage": {
+            "additionalProperties": false,
+            "properties": {
+              "cost": true,
+              "size": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "used": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "Via": {
+            "description": "Whether a session's traffic goes through the gateway.",
+            "enum": [
+              "gateway",
+              "direct"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A session, its whole transcript and its change number.",
+        "properties": {
+          "entries": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Entry"
+            },
+            "type": "array"
+          },
+          "seq": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "session": {
+            "$ref": "#/$defs/Snapshot"
+          }
+        },
+        "required": [
+          "session",
+          "seq"
+        ],
+        "title": "Transcript",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the session ends",
+      "name": "agents/kill",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ById",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user",
+        "agent",
+        "service"
+      ],
+      "doc": "the sessions: snapshots for the user, {id, name, job, task} for the others (an agent: its own job's)",
+      "name": "agents/list",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Mode": {
+            "description": "What a message sent while the session works does.",
+            "enum": [
+              "queue",
+              "steer",
+              "interrupt"
+            ],
+            "type": "string"
+          },
+          "Permission": {
+            "additionalProperties": false,
+            "description": "A permission request the agent waits on.",
+            "properties": {
+              "id": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RpcId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "options": {
+                "default": [],
+                "items": true,
+                "type": "array"
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tool": true
+            },
+            "type": "object"
+          },
+          "Review": {
+            "additionalProperties": false,
+            "description": "A write held for the user's review.",
+            "properties": {
+              "content": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RpcId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "RpcId": {
+            "anyOf": [
+              {
+                "format": "int64",
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "A JSON-RPC id, as the agent chose it."
+          },
+          "SessionStatus": {
+            "enum": [
+              "starting",
+              "idle",
+              "busy",
+              "exited"
+            ],
+            "type": "string"
+          },
+          "Snapshot": {
+            "additionalProperties": false,
+            "description": "What an editor mirrors of a session, everything but its transcript.  A `service` or `agent` caller of\n`agents/list` gets only `{id, name, job, task}`.",
+            "properties": {
+              "capabilities": true,
+              "commands": {
+                "default": [],
+                "items": true,
+                "type": "array"
+              },
+              "cwd": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "enforced": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "entries-count": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "exit": {
+                "description": "The agent process's exit status.",
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "job": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "mode": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Mode"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "paused": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "permissions": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/Permission"
+                },
+                "type": "array"
+              },
+              "profile": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "queue": {
+                "default": [],
+                "description": "Messages waiting for the turn to end.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "reviews": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/Review"
+                },
+                "type": "array"
+              },
+              "status": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/SessionStatus"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "stderr": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "task": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "usage": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Usage"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "via": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Via"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          },
+          "Usage": {
+            "additionalProperties": false,
+            "properties": {
+              "cost": true,
+              "size": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "used": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "Via": {
+            "description": "Whether a session's traffic goes through the gateway.",
+            "enum": [
+              "gateway",
+              "direct"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "sessions": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Snapshot"
+            },
+            "type": "array"
+          }
+        },
+        "title": "Sessions",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the user's answer to a permission request: the only way one is answered",
+      "name": "agents/permission",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "RequestId": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "maxLength": 128,
+                "type": "string"
+              }
+            ],
+            "description": "a permission request's or a review's id"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          },
+          "option": {
+            "description": "The option chosen; none rejects.",
+            "maxLength": 256,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "request": {
+            "$ref": "#/$defs/RequestId"
+          }
+        },
+        "required": [
+          "id",
+          "request"
+        ],
+        "title": "PermissionParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a prompt to the session (queued or steering as its mode says)",
+      "name": "agents/send",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "Prompt": {
+            "description": "a prompt or a message: at most 1 MiB (1048576 characters)",
+            "maxLength": 1048576,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          },
+          "text": {
+            "$ref": "#/$defs/Prompt"
+          }
+        },
+        "required": [
+          "id",
+          "text"
+        ],
+        "title": "SendParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a session the hub holds",
+      "name": "agents/start",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "TaskRef": {
+            "description": "a task: no control characters, 1 to 512 characters",
+            "maxLength": 512,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cwd": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "job": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "profile": {
+            "description": "The agent profile's name.",
+            "maxLength": 128,
+            "type": "string"
+          },
+          "task": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TaskRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "profile"
+        ],
+        "title": "StartParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "Started",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the session's turn stops",
+      "name": "agents/stop",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ById",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user",
+        "agent",
+        "service"
+      ],
+      "doc": "a coordination server wrote: delivery runs now and the new events go out (a notification; users too, SB-T12-4)",
+      "name": "coord/notify",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the user's login-shell variables the hub allows, for the agents and jobs it starts next",
+      "name": "env/set",
+      "params": {
+        "$defs": {
+          "EnvName": {
+            "description": "an environment variable's name: ASCII letters, digits and _ (not a digit first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "type": "string"
+          },
+          "EnvVar": {
+            "description": "One variable from the user's login shell.",
+            "properties": {
+              "name": {
+                "$ref": "#/$defs/EnvName"
+              },
+              "value": {
+                "maxLength": 32768,
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "value"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "env": {
+            "description": "At most 16; the `{NAME: value}` object form is refused.",
+            "items": {
+              "$ref": "#/$defs/EnvVar"
+            },
+            "maxItems": 16,
+            "type": "array"
+          }
+        },
+        "required": [
+          "env"
+        ],
+        "title": "EnvSetParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "applied": {
+            "default": [],
+            "description": "The names the hub allowed and applied.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "title": "EnvSetResult",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the event log after since (0), oldest first, at most limit (200; at most 1000)",
+      "name": "events/since",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "limit": {
+            "description": "At most this many (default 200, at most 1000).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "since": {
+            "description": "The events after this id (default 0).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "title": "EventsSinceParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "EventRow": {
+            "additionalProperties": false,
+            "description": "One row of the store's event log; `data` is the stored JSON object, absent when there is none.",
+            "properties": {
+              "agent": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "at": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "data": {
+                "additionalProperties": true,
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "id": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "job": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "summary": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "task": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "Events oldest first: those after `since`, up to `last`.  `events/since`'s answer and the `events` event.",
+        "properties": {
+          "events": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/EventRow"
+            },
+            "type": "array"
+          },
+          "last": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "since": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "since",
+          "last"
+        ],
+        "title": "EventsPage",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "provider keys to the gateway's memory (never a file)",
+      "name": "gateway/keys",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "ProviderKeys": {
+            "additionalProperties": {
+              "maxLength": 4096,
+              "type": "string"
+            },
+            "description": "provider id → key",
+            "maxProperties": 32,
+            "propertyNames": {
+              "$ref": "#/$defs/Id"
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "No `Debug`: it holds keys.",
+        "properties": {
+          "keys": {
+            "$ref": "#/$defs/ProviderKeys"
+          }
+        },
+        "required": [
+          "keys"
+        ],
+        "title": "KeysParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "an agent's token and the gateway's URL; its keys go to the gateway's memory",
+      "name": "gateway/register",
+      "params": {
+        "$defs": {
+          "AgentName": {
+            "description": "an agent's name: no control characters, at most 256",
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]*$",
+            "type": "string"
+          },
+          "DataCollection": {
+            "enum": [
+              "deny",
+              "allow"
+            ],
+            "type": "string"
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "OpenrouterRestrictions": {
+            "additionalProperties": false,
+            "description": "OpenRouter restrictions (agents.eld's `:openrouter`): an unknown one is refused.",
+            "properties": {
+              "data-collection": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DataCollection"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "ignore": {
+                "items": {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                "maxItems": 64,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "only": {
+                "items": {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                "maxItems": 64,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "zdr": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "ProviderKeys": {
+            "additionalProperties": {
+              "maxLength": 4096,
+              "type": "string"
+            },
+            "description": "provider id → key",
+            "maxProperties": 32,
+            "propertyNames": {
+              "$ref": "#/$defs/Id"
+            },
+            "type": "object"
+          },
+          "TaskRef": {
+            "description": "a task: no control characters, 1 to 512 characters",
+            "maxLength": 512,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+            "type": "string"
+          },
+          "Usd": {
+            "description": "an amount of US dollars",
+            "maximum": 1000000,
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "No `Debug`: it may hold keys.",
+        "properties": {
+          "agent": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AgentName"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "budget": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Usd"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "chain": {
+            "description": "The providers to try in turn: `[[provider, model-or-null]…]`, at most 16.",
+            "items": {
+              "items": {
+                "maxLength": 128,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "maxItems": 2,
+              "type": "array"
+            },
+            "maxItems": 16,
+            "type": "array"
+          },
+          "job": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "keys": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ProviderKeys"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "openrouter": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/OpenrouterRestrictions"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "owner": {
+            "description": "The pid of the Emacs whose agent it is: its registrations go when it does.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "task": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TaskRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "chain"
+        ],
+        "title": "RegisterParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "openrouter": {
+            "description": "The restrictions kept; absent when none."
+          },
+          "token": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "url"
+        ],
+        "title": "Registration",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the token no longer forwards",
+      "name": "gateway/unregister",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "token": {
+            "maxLength": 128,
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "title": "UnregisterParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user",
+        "agent",
+        "service"
+      ],
+      "doc": "a connection's first line: versions, and the proofs that make it a user connection",
+      "name": "hello",
+      "params": {
+        "$defs": {
+          "Hex64": {
+            "description": "64 lowercase hex digits",
+            "maxLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "Nonce": {
+            "description": "a nonce: 32 lowercase hex digits",
+            "maxLength": 32,
+            "pattern": "^[0-9a-f]{32}$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "client": {
+            "description": "`editor`, `cli`, `mcp-bridge`, …",
+            "maxLength": 32,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "drgnx_version": {
+            "maxLength": 64,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "nonce": {
+            "$ref": "#/$defs/Nonce",
+            "description": "The client's nonce for the proofs."
+          },
+          "proof": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Hex64"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "HMAC-SHA256 with the cap of `\"drgnx-hub client \" + hub nonce + \" \" + nonce`."
+          },
+          "proto": {
+            "description": "The newest protocol the client speaks.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "records": {
+            "description": "The records layout the client reads.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "schema": {
+            "description": "The work.db schema the client's code knows.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "proto",
+          "nonce"
+        ],
+        "title": "HelloParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Class": {
+            "description": "What a connection proved (design 4.2): `user` a valid `hello` proof, `agent` the agent socket it came in on,\n`service` nothing.",
+            "enum": [
+              "user",
+              "agent",
+              "service"
+            ],
+            "type": "string"
+          },
+          "Runtime": {
+            "additionalProperties": false,
+            "description": "The binary that serves: its version and build commit.",
+            "properties": {
+              "commit": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "version",
+              "commit"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The hub's answer to `hello`.",
+        "properties": {
+          "class": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Class"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "drgnx_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "methods": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "proof": {
+            "description": "The hub's own proof, only after a valid client proof.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "proto": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "proto_min": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "records": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "runtime": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Runtime"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "schema": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "proto",
+          "proto_min"
+        ],
+        "title": "HelloReply",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a proposed job runs, with an optional budget",
+      "name": "job/approve",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "Usd": {
+            "description": "an amount of US dollars",
+            "maximum": 1000000,
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "budget": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Usd"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "WithBudget",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A job as `drgnx-job-summary` has it.  Its lists are `[]` when empty, also when the backend sent `null`.",
+        "properties": {
+          "agents": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "budget": {
+            "description": "US dollars.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cards": {
+            "default": [],
+            "description": "Open cards.",
+            "items": true,
+            "type": "array"
+          },
+          "decisions": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "estimate": true,
+          "id": {
+            "type": "string"
+          },
+          "messages": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "order": {
+            "default": [],
+            "description": "The run order: task numbers.",
+            "items": true,
+            "type": "array"
+          },
+          "permissions": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "plan": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repo": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "spent": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tasks": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "warnings": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "JobSummary",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a task waits for the user, with a reason (the Work graph)",
+      "name": "job/block",
+      "params": {
+        "$defs": {
+          "TaskRef": {
+            "description": "a task: no control characters, 1 to 512 characters",
+            "maxLength": 512,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+            "type": "string"
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Text"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "task": {
+            "$ref": "#/$defs/TaskRef"
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "title": "BlockParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A job as `drgnx-job-summary` has it.  Its lists are `[]` when empty, also when the backend sent `null`.",
+        "properties": {
+          "agents": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "budget": {
+            "description": "US dollars.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cards": {
+            "default": [],
+            "description": "Open cards.",
+            "items": true,
+            "type": "array"
+          },
+          "decisions": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "estimate": true,
+          "id": {
+            "type": "string"
+          },
+          "messages": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "order": {
+            "default": [],
+            "description": "The run order: task numbers.",
+            "items": true,
+            "type": "array"
+          },
+          "permissions": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "plan": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repo": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "spent": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tasks": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "warnings": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "JobSummary",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the user's action on a card (once: a settled card is an error)",
+      "name": "job/card",
+      "params": {
+        "$defs": {
+          "CardAction": {
+            "description": "a card's action: lowercase letters and -, a letter first, at most 32",
+            "maxLength": 32,
+            "pattern": "^[a-z][a-z-]*$",
+            "type": "string"
+          },
+          "StringOrNumber": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "action": {
+            "$ref": "#/$defs/CardAction"
+          },
+          "arg": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/StringOrNumber"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "card": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "card",
+          "action"
+        ],
+        "title": "CardParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A job as `drgnx-job-summary` has it.  Its lists are `[]` when empty, also when the backend sent `null`.",
+        "properties": {
+          "agents": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "budget": {
+            "description": "US dollars.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cards": {
+            "default": [],
+            "description": "Open cards.",
+            "items": true,
+            "type": "array"
+          },
+          "decisions": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "estimate": true,
+          "id": {
+            "type": "string"
+          },
+          "messages": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "order": {
+            "default": [],
+            "description": "The run order: task numbers.",
+            "items": true,
+            "type": "array"
+          },
+          "permissions": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "plan": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repo": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "spent": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tasks": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "warnings": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "JobSummary",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a message acted on without an answer",
+      "name": "job/dismiss",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "message": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "ByMessage",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a task moves in its job's run order (the Work graph)",
+      "name": "job/order",
+      "params": {
+        "$defs": {
+          "Delta": {
+            "description": "a move in a job's run order",
+            "maximum": 1000,
+            "minimum": -1000,
+            "type": "integer"
+          },
+          "TaskRef": {
+            "description": "a task: no control characters, 1 to 512 characters",
+            "maxLength": 512,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "delta": {
+            "$ref": "#/$defs/Delta"
+          },
+          "task": {
+            "$ref": "#/$defs/TaskRef"
+          }
+        },
+        "required": [
+          "task",
+          "delta"
+        ],
+        "title": "OrderParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A job as `drgnx-job-summary` has it.  Its lists are `[]` when empty, also when the backend sent `null`.",
+        "properties": {
+          "agents": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "budget": {
+            "description": "US dollars.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cards": {
+            "default": [],
+            "description": "Open cards.",
+            "items": true,
+            "type": "array"
+          },
+          "decisions": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "estimate": true,
+          "id": {
+            "type": "string"
+          },
+          "messages": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "order": {
+            "default": [],
+            "description": "The run order: task numbers.",
+            "items": true,
+            "type": "array"
+          },
+          "permissions": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "plan": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repo": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "spent": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tasks": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "warnings": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "JobSummary",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a job from a plan, proposed (approved at once with auto)",
+      "name": "job/propose",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "MergeGate": {
+            "description": "What gates a job's merge.",
+            "enum": [
+              "review",
+              "review+accept"
+            ],
+            "type": "string"
+          },
+          "Usd": {
+            "description": "an amount of US dollars",
+            "maximum": 1000000,
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "auto": {
+            "description": "Approve at once.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "budget": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Usd"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "gate": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/MergeGate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "plan": {
+            "$ref": "#/$defs/AbsPath",
+            "description": "The plan's file."
+          },
+          "repo": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "plan"
+        ],
+        "title": "ProposeParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A job as `drgnx-job-summary` has it.  Its lists are `[]` when empty, also when the backend sent `null`.",
+        "properties": {
+          "agents": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "budget": {
+            "description": "US dollars.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cards": {
+            "default": [],
+            "description": "Open cards.",
+            "items": true,
+            "type": "array"
+          },
+          "decisions": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "estimate": true,
+          "id": {
+            "type": "string"
+          },
+          "messages": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "order": {
+            "default": [],
+            "description": "The run order: task numbers.",
+            "items": true,
+            "type": "array"
+          },
+          "permissions": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "plan": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repo": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "spent": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tasks": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "warnings": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "JobSummary",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a task goes to another profile (the Work graph)",
+      "name": "job/reassign",
+      "params": {
+        "$defs": {
+          "TaskRef": {
+            "description": "a task: no control characters, 1 to 512 characters",
+            "maxLength": 512,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "profile": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "task": {
+            "$ref": "#/$defs/TaskRef"
+          }
+        },
+        "required": [
+          "task",
+          "profile"
+        ],
+        "title": "ReassignParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A job as `drgnx-job-summary` has it.  Its lists are `[]` when empty, also when the backend sent `null`.",
+        "properties": {
+          "agents": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "budget": {
+            "description": "US dollars.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cards": {
+            "default": [],
+            "description": "Open cards.",
+            "items": true,
+            "type": "array"
+          },
+          "decisions": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "estimate": true,
+          "id": {
+            "type": "string"
+          },
+          "messages": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "order": {
+            "default": [],
+            "description": "The run order: task numbers.",
+            "items": true,
+            "type": "array"
+          },
+          "permissions": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "plan": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repo": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "spent": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tasks": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "warnings": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "JobSummary",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the user's answer to an agent's message",
+      "name": "job/reply",
+      "params": {
+        "$defs": {
+          "Prompt": {
+            "description": "a prompt or a message: at most 1 MiB (1048576 characters)",
+            "maxLength": 1048576,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "message": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "text": {
+            "$ref": "#/$defs/Prompt"
+          }
+        },
+        "required": [
+          "message",
+          "text"
+        ],
+        "title": "ReplyParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a stopped job runs again, with an optional new budget",
+      "name": "job/resume",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "Usd": {
+            "description": "an amount of US dollars",
+            "maximum": 1000000,
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "budget": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Usd"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "WithBudget",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A job as `drgnx-job-summary` has it.  Its lists are `[]` when empty, also when the backend sent `null`.",
+        "properties": {
+          "agents": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "budget": {
+            "description": "US dollars.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cards": {
+            "default": [],
+            "description": "Open cards.",
+            "items": true,
+            "type": "array"
+          },
+          "decisions": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "estimate": true,
+          "id": {
+            "type": "string"
+          },
+          "messages": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "order": {
+            "default": [],
+            "description": "The run order: task numbers.",
+            "items": true,
+            "type": "array"
+          },
+          "permissions": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "plan": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repo": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "spent": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tasks": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "warnings": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "JobSummary",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "Start as Job: task n of a plan and the tasks it needs, proposed; the plan is only read",
+      "name": "job/start-task",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "MergeGate": {
+            "description": "What gates a job's merge.",
+            "enum": [
+              "review",
+              "review+accept"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "auto": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "gate": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/MergeGate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "n": {
+            "description": "The task's number in the plan.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "plan": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "plan",
+          "n"
+        ],
+        "title": "StartTaskParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A job as `drgnx-job-summary` has it.  Its lists are `[]` when empty, also when the backend sent `null`.",
+        "properties": {
+          "agents": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "budget": {
+            "description": "US dollars.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cards": {
+            "default": [],
+            "description": "Open cards.",
+            "items": true,
+            "type": "array"
+          },
+          "decisions": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "estimate": true,
+          "id": {
+            "type": "string"
+          },
+          "messages": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "order": {
+            "default": [],
+            "description": "The run order: task numbers.",
+            "items": true,
+            "type": "array"
+          },
+          "permissions": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "plan": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repo": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "spent": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tasks": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "warnings": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "JobSummary",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "one job (with its decision log when asked), or every job",
+      "name": "job/status",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "decisions": {
+            "description": "With its decision log.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "id": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Id"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "One job; every job without it."
+          }
+        },
+        "title": "StatusParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "JobSummary": {
+            "additionalProperties": false,
+            "description": "A job as `drgnx-job-summary` has it.  Its lists are `[]` when empty, also when the backend sent `null`.",
+            "properties": {
+              "agents": {
+                "default": [],
+                "items": true,
+                "type": "array"
+              },
+              "budget": {
+                "description": "US dollars.",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "cards": {
+                "default": [],
+                "description": "Open cards.",
+                "items": true,
+                "type": "array"
+              },
+              "decisions": {
+                "default": [],
+                "items": true,
+                "type": "array"
+              },
+              "estimate": true,
+              "id": {
+                "type": "string"
+              },
+              "messages": {
+                "default": [],
+                "items": true,
+                "type": "array"
+              },
+              "order": {
+                "default": [],
+                "description": "The run order: task numbers.",
+                "items": true,
+                "type": "array"
+              },
+              "permissions": {
+                "default": [],
+                "items": true,
+                "type": "array"
+              },
+              "plan": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "repo": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "spent": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tasks": {
+                "default": [],
+                "items": true,
+                "type": "array"
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "warnings": {
+                "default": [],
+                "items": true,
+                "type": "array"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/JobSummary"
+          },
+          {
+            "properties": {
+              "jobs": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/JobSummary"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          }
+        ],
+        "description": "`job/status`'s answer: one job, or every job.",
+        "title": "JobStatusResult"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a job's agents stop and it waits",
+      "name": "job/stop",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ById",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A job as `drgnx-job-summary` has it.  Its lists are `[]` when empty, also when the backend sent `null`.",
+        "properties": {
+          "agents": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "budget": {
+            "description": "US dollars.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cards": {
+            "default": [],
+            "description": "Open cards.",
+            "items": true,
+            "type": "array"
+          },
+          "decisions": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "estimate": true,
+          "id": {
+            "type": "string"
+          },
+          "messages": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "order": {
+            "default": [],
+            "description": "The run order: task numbers.",
+            "items": true,
+            "type": "array"
+          },
+          "permissions": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "plan": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repo": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "spent": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tasks": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "warnings": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "JobSummary",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a blocked task may run again (the Work graph)",
+      "name": "job/unblock",
+      "params": {
+        "$defs": {
+          "TaskRef": {
+            "description": "a task: no control characters, 1 to 512 characters",
+            "maxLength": 512,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "task": {
+            "$ref": "#/$defs/TaskRef"
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "title": "ByTask",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A job as `drgnx-job-summary` has it.  Its lists are `[]` when empty, also when the backend sent `null`.",
+        "properties": {
+          "agents": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "budget": {
+            "description": "US dollars.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cards": {
+            "default": [],
+            "description": "Open cards.",
+            "items": true,
+            "type": "array"
+          },
+          "decisions": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "estimate": true,
+          "id": {
+            "type": "string"
+          },
+          "messages": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "order": {
+            "default": [],
+            "description": "The run order: task numbers.",
+            "items": true,
+            "type": "array"
+          },
+          "permissions": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "plan": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repo": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "spent": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tasks": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "warnings": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "JobSummary",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user",
+        "agent",
+        "service"
+      ],
+      "doc": "the hub's pid",
+      "name": "ping",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "pid": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pid"
+        ],
+        "title": "PingResult",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "answers true, then the hub exits 75 for its supervisor to start it again",
+      "name": "restart",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "answers true, then the hub exits",
+      "name": "shutdown",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user",
+        "agent",
+        "service"
+      ],
+      "doc": "what a job's, task's or agent's requests came to (an agent: its own job's)",
+      "name": "spend",
+      "params": {
+        "$defs": {
+          "AgentName": {
+            "description": "an agent's name: no control characters, at most 256",
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]*$",
+            "type": "string"
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "TaskRef": {
+            "description": "a task: no control characters, 1 to 512 characters",
+            "maxLength": 512,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "agent": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AgentName"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "job": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "task": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TaskRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "SpendParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "What the requests came to.",
+        "properties": {
+          "cost": {
+            "description": "US dollars.",
+            "format": "double",
+            "type": "number"
+          },
+          "input": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "output": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "requests": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "input",
+          "output",
+          "cost",
+          "requests"
+        ],
+        "title": "Spend",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user",
+        "agent",
+        "service"
+      ],
+      "doc": "the hub's state: versions, refusals, read-only, the backend",
+      "name": "status",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Backend": {
+            "additionalProperties": false,
+            "description": "The Lisp backend behind the front (phases 1–6).",
+            "properties": {
+              "pid": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "state": {
+                "$ref": "#/$defs/BackendState"
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          "BackendState": {
+            "enum": [
+              "running",
+              "starting",
+              "missing",
+              "failed"
+            ],
+            "type": "string"
+          },
+          "Refusals": {
+            "additionalProperties": false,
+            "description": "The refusals the hub counted, and the last ones (method, code, class, path; never params).",
+            "properties": {
+              "count": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "last": {
+                "default": [],
+                "items": true,
+                "type": "array"
+              }
+            },
+            "required": [
+              "count"
+            ],
+            "type": "object"
+          },
+          "Runtime": {
+            "additionalProperties": false,
+            "description": "The binary that serves: its version and build commit.",
+            "properties": {
+              "commit": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "version",
+              "commit"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The hub's status: the Lisp hub's keys and the front's.",
+        "properties": {
+          "backend": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Backend"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "drgnx_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "gateway_port": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "job_agents": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pid": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "proto": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "proto_min": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "read_only": {
+            "description": "work.db's schema, when it is newer than the hub's and so the hub is read-only.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "records": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "refusals": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Refusals"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "registrations": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "runtime": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Runtime"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "schema": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "socket": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "pid"
+        ],
+        "title": "HubStatus",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "this connection receives the events from now on",
+      "name": "subscribe",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    }
+  ],
+  "proto": 1,
+  "proto_min": 1,
+  "records": 2,
+  "schema": 6
+}

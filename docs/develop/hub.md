@@ -197,6 +197,139 @@ What crosses the socket is JSON shaped by the record schemas of `core/drgnx-reco
   symbols, and a record that does not decode (an unknown type, a wrong shape) is skipped with one message.
 - `env/set` takes `{env: [{name, value}]}` only (see the method table).
 
+## The registry (protocol v1)
+
+Every method of the hub protocol is one Rust definition in `runtime/crates/drgnx-proto/src/methods/` (`hub.rs`,
+`gateway.rs`, `agents.rs`, `jobs.rs`, `coord.rs`): its name, the classes that may call it, its params type, its result
+type, whether it writes work.db, and a line of doc. `drgnx_proto::registry::registry()` lists them sorted by name and
+`find(NAME)` looks one up. Each method's `decode` is the typed decode the dispatcher runs: a value that does not fit
+is `invalid-params` with its `path` (a missing key is named too: `{}` for `job/stop` is refused at `id`), and unknown
+keys are dropped and listed in `ignored`. Its `check_result` decodes a result into the result type and encodes it
+again: strict, so a key the registry does not know is an error with its path, and a `null` where a list belongs comes
+out `[]` (A-17). `PROTO` is 1, `PROTO_MIN` 1, `RECORDS` 2 and `SCHEMA` 6.
+
+From the registry come `runtime/protocol/methods.json` (`{proto, proto_min, records, schema, methods: [{name, classes,
+writes, doc, params, result}], events: [{name, doc, data}]}`, each schema JSON Schema 2020-12 with the named types
+under `$defs`, keys sorted) and the table below (`registry::markdown_table()`). Tests fail when either is out of date;
+`UPDATE_METHODS_JSON=1 cargo test -p drgnx-proto registry` (through the cargo wrapper) writes both again. In the table
+`{a: T, b?: T}` is an object with `a` required and `b` optional (absent or `null`), `[T]` a list, `A | B` either, and
+a capitalised name a named type (below) or, in results, a record (`JobSummary`, `Snapshot`, `Entry`, `EventRow`,
+`HubStatus`, `HelloReply`: their fields are in `methods.json`). A params schema never holds an unconstrained value (`any`); a
+result may (a transcript entry's ACP fields, a job's tasks).
+
+<!-- hub-methods:begin -->
+| Method | Class | Params | Result | Writes |
+|---|---|---|---|---|
+| `agents/do` | user | `{id: Id, item?: RequestId, n?: natnum, op: "deliver-queue" \| "unqueue" \| "requeue" \| "review", reject?: boolean, text?: Prompt}` | `boolean` | yes |
+| `agents/get` | user | `{id: Id}` | `{entries?: [Entry], seq: natnum, session: Snapshot}` | no |
+| `agents/kill` | user | `{id: Id}` | `boolean` | yes |
+| `agents/list` | user, agent, service | `{}` | `{sessions?: [Snapshot]}` | no |
+| `agents/permission` | user | `{id: Id, option?: string, request: RequestId}` | `boolean` | yes |
+| `agents/send` | user | `{id: Id, text: Prompt}` | `boolean` | yes |
+| `agents/start` | user | `{cwd?: AbsPath, job?: Id, profile: string, task?: TaskRef}` | `{id: string, name: string}` | yes |
+| `agents/stop` | user | `{id: Id}` | `boolean` | yes |
+| `coord/notify` | user, agent, service | `{}` | `boolean` | no |
+| `env/set` | user | `{env: [{name: EnvName, value: string}]}` | `{applied?: [string]}` | no |
+| `events/since` | user | `{limit?: natnum, since?: natnum}` | `{events?: [EventRow], last: natnum, since: natnum}` | no |
+| `gateway/keys` | user | `{keys: ProviderKeys}` | `boolean` | no |
+| `gateway/register` | user | `{agent?: AgentName, budget?: Usd, chain: [[string \| null]], job?: Id, keys?: ProviderKeys, openrouter?: {data-collection?: "deny" \| "allow", ignore?: [string], only?: [string], zdr?: boolean}, owner?: natnum, task?: TaskRef}` | `{openrouter?: any, token: string, url: string}` | yes |
+| `gateway/unregister` | user | `{token: string}` | `boolean` | yes |
+| `hello` | user, agent, service | `{client?: string, drgnx_version?: string, nonce: Nonce, proof?: Hex64, proto: natnum, records?: natnum, schema?: natnum}` | `HelloReply` | no |
+| `job/approve` | user | `{budget?: Usd, id: Id}` | `JobSummary` | yes |
+| `job/block` | user | `{reason?: Text, task: TaskRef}` | `JobSummary` | yes |
+| `job/card` | user | `{action: CardAction, arg?: StringOrNumber, card: natnum}` | `JobSummary` | yes |
+| `job/dismiss` | user | `{message: natnum}` | `boolean` | yes |
+| `job/order` | user | `{delta: Delta, task: TaskRef}` | `JobSummary` | yes |
+| `job/propose` | user | `{auto?: boolean, budget?: Usd, gate?: "review" \| "review+accept", plan: AbsPath, repo?: AbsPath}` | `JobSummary` | yes |
+| `job/reassign` | user | `{profile: string, task: TaskRef}` | `JobSummary` | yes |
+| `job/reply` | user | `{message: natnum, text: Prompt}` | `boolean` | yes |
+| `job/resume` | user | `{budget?: Usd, id: Id}` | `JobSummary` | yes |
+| `job/start-task` | user | `{auto?: boolean, gate?: "review" \| "review+accept", n: natnum, plan: AbsPath}` | `JobSummary` | yes |
+| `job/status` | user | `{decisions?: boolean, id?: Id}` | `JobSummary \| {jobs?: [JobSummary]}` | no |
+| `job/stop` | user | `{id: Id}` | `JobSummary` | yes |
+| `job/unblock` | user | `{task: TaskRef}` | `JobSummary` | yes |
+| `ping` | user, agent, service | `{}` | `{pid: natnum}` | no |
+| `restart` | user | `{}` | `boolean` | no |
+| `shutdown` | user | `{}` | `boolean` | no |
+| `spend` | user, agent, service | `{agent?: AgentName, job?: Id, task?: TaskRef}` | `{cost: number, input: natnum, output: natnum, requests: natnum}` | no |
+| `status` | user, agent, service | `{}` | `HubStatus` | no |
+| `subscribe` | user | `{}` | `boolean` | no |
+<!-- hub-methods:end -->
+
+### Classes
+
+A connection's class is what it proved. `test/conformance/class-matrix.json` is a hand-written copy of every
+method's classes (a test checks that it and the registry agree; the conformance row `class/matrix` calls every
+method from every class).
+
+| Class | Who | What proves it |
+|---|---|---|
+| `user` | the editor, the CLI, the Lisp backend hub during migration | a `hello` whose `proof` is HMAC-SHA256 with the cap of `"drgnx-hub client " + hub nonce + " " + nonce`: it read the cap file beside the socket |
+| `agent` | a sandboxed job agent and the servers the hub starts for it | the socket it came in on (the session's own): its session is bound to the connection |
+| `service` | outside agents' coordination bridges, probes, anything without a proof | nothing (the default) |
+
+| Classes | Methods |
+|---|---|
+| user, agent, service | `hello`, `ping`, `status`, `coord/notify` (users too: SB-T12-4), `agents/list`, `spend` |
+| user | `restart`, `shutdown`, `subscribe`, `events/since`, `env/set`, `gateway/register`, `gateway/unregister`, `gateway/keys`, `agents/{start,get,send,stop,kill,permission,do}`, `job/{propose,start-task,reassign,block,unblock,order,approve,stop,resume,card,reply,dismiss,status}` |
+
+Everything that answers, approves, starts, stops, configures or reads a transcript is `user` only. What the other
+classes see of the shared methods: `agents/list` gives a `service` the `{id, name, job, task}` of every session and an
+`agent` the same of its own job's; `spend` of an `agent` is its own job's. The methods that write work.db (`writes`,
+refused with `schema` while the hub is read-only) are `gateway/register`, `gateway/unregister`,
+`agents/{start,send,stop,kill,permission,do}` and every `job/…` but `job/status`.
+
+### Types
+
+The named input types (`runtime/crates/drgnx-proto/src/types.rs`): each validates as it decodes, and a value that does
+not fit is refused with its path, never rewritten. Lengths count characters, as JSON Schema's `maxLength` does; each
+type's schema carries the same `pattern` and `maxLength`.
+
+| Type | Rule |
+|---|---|
+| `Id` | `^[A-Za-z0-9][A-Za-z0-9._:+-]*$`, at most 128 |
+| `AbsPath` | `^/[^/:\0]*(/[^\0]*)?$`, at most 4096: absolute, no NUL, and no `:` in the first component, so a TRAMP name (`/ssh:host:/x`) is refused |
+| `EnvName` | `^[A-Za-z_][A-Za-z0-9_]*$`, at most 128 |
+| `Prompt` | at most 1 MiB (1048576 characters) |
+| `Text` | at most 64 KiB (65536 characters) |
+| `Nonce` | `^[0-9a-f]{32}$` |
+| `Hex64` | `^[0-9a-f]{64}$` |
+| `TaskRef` | no control characters, 1 to 512 |
+| `AgentName` | no control characters, at most 256 |
+| `CardAction` | `^[a-z][a-z-]*$`, at most 32 |
+| `RequestId` | a natural number, or a string of at most 128 |
+| `Usd` | a number in 0..=1000000 |
+| `Delta` | an integer in -1000..=1000 (`job/order`) |
+| `StringOrNumber` | a string of at most 4096, or a number (`job/card`'s `arg`) |
+| `ProviderKeys` | an object `Id` → key, at most 32 keys of at most 4096 each; kept secret (no `Debug`), serialised only when the params go on to the backend |
+| `Bounded<T, MAX>` | a string or list of at most MAX: every bound of the contract (`env/set`'s list: 16, a value 32768; a chain: 16 steps of `[provider, model-or-null]`; a profile: 128) |
+
+`env/set`'s value for `PATH`, `MANPATH` and `INFOPATH` must be a `:`-separated list of absolute directories (no
+empty, relative, `~` or remote entry; SB-T12-7): another is refused at `env[N].value`. Whether each directory exists
+is the backend's check.
+
+### Event types
+
+`drgnx_proto::events::events()` (`src/events.rs`), each with the type of its `data`, decoded and encoded again as a
+result is (`event(NAME).check`):
+
+| Event | From | Data |
+|---|---|---|
+| `agent` | sessions | `{id, seq, session: Snapshot}` |
+| `agent-entries` | sessions | `{id, seq, entries: [[index, Entry]]}` |
+| `events` | the event log | `{since, last, events: [{id, at, agent, job, task, kind, summary, data?}]}` |
+| `lease-released` | the hub's housekeeping | `{task, agent, job}` |
+| `fallback` | the gateway, jobs | `{agent, from, to, why}`, from a job with `job` and `task` too |
+| `card` | jobs | `{id, job, task, kind, title}` |
+| `job` | jobs | `{id}`: its status, tasks or open cards changed |
+| `budget` | the gateway | `{job, spent, budget}` |
+| `request` | the gateway | `{job, task, agent, provider, model, status, input, output, cost}` |
+| `challenge` | the front, on accept | `{nonce}` |
+| `notice` | the front | `{source, severity, id, life, text, command?}` |
+
+The first nine are what the Lisp backend broadcasts on main; a test reads `core/*.el` for its `(drgnx-hub--broadcast
+'NAME`, `(drgnx-job--broadcast 'NAME` and `drgnx-gateway--emit 'NAME` calls and fails when the two lists differ.
+
 ## Per-session sockets
 
 A sandboxed session's agent reaches drgnx's MCP servers through a dir of its own, served by the hub

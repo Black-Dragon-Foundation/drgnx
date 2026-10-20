@@ -1,0 +1,266 @@
+//! The hub's own methods: `hello`, `ping`, `status`, the subscription, the event log, `env/set`, ending and
+//! restarting.
+
+use super::{Empty, method};
+use crate::registry::{Class, Method};
+use crate::types::{Bounded, EnvName, Hex64, Nonce, null_as_empty};
+use crate::wire::{Error, ErrorCode};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct HelloParams {
+    /// The newest protocol the client speaks.
+    pub proto: u64,
+    /// The client's nonce for the proofs.
+    pub nonce: Nonce,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drgnx_version: Option<Bounded<String, 64>>,
+    /// The work.db schema the client's code knows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<u64>,
+    /// The records layout the client reads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub records: Option<u64>,
+    /// `editor`, `cli`, `mcp-bridge`, …
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client: Option<Bounded<String, 32>>,
+    /// HMAC-SHA256 with the cap of `"drgnx-hub client " + hub nonce + " " + nonce`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proof: Option<Hex64>,
+}
+
+/// The binary that serves: its version and build commit.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Runtime {
+    pub version: String,
+    pub commit: String,
+}
+
+/// The hub's answer to `hello`.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HelloReply {
+    pub proto: u64,
+    pub proto_min: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drgnx_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub records: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class: Option<Class>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub methods: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<Runtime>,
+    /// The hub's own proof, only after a valid client proof.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proof: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PingResult {
+    pub pid: u64,
+}
+
+/// The refusals the hub counted, and the last ones (method, code, class, path; never params).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Refusals {
+    pub count: u64,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub last: Vec<Value>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum BackendState {
+    Running,
+    Starting,
+    Missing,
+    Failed,
+}
+
+/// The Lisp backend behind the front (phases 1–6).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Backend {
+    pub state: BackendState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u64>,
+}
+
+/// The hub's status: the Lisp hub's keys and the front's.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HubStatus {
+    pub pid: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub socket: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proto: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proto_min: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub records: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drgnx_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<u64>,
+    /// work.db's schema, when it is newer than the hub's and so the hub is read-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_only: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<Runtime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refusals: Option<Refusals>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_agents: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<Backend>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway_port: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registrations: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct EventsSinceParams {
+    /// The events after this id (default 0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<u64>,
+    /// At most this many (default 200, at most 1000).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u64>,
+}
+
+/// One row of the store's event log; `data` is the stored JSON object, absent when there is none.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EventRow {
+    pub id: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<Map<String, Value>>,
+}
+
+/// Events oldest first: those after `since`, up to `last`.  `events/since`'s answer and the `events` event.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EventsPage {
+    pub since: u64,
+    pub last: u64,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub events: Vec<EventRow>,
+}
+
+/// One variable from the user's login shell.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct EnvVar {
+    pub name: EnvName,
+    pub value: Bounded<String, 32768>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct EnvSetParams {
+    /// At most 16; the `{NAME: value}` object form is refused.
+    pub env: Bounded<Vec<EnvVar>, 16>,
+}
+
+/// The variables whose value is a `:`-separated list of directories.
+pub const DIR_LISTS: [&str; 3] = ["PATH", "MANPATH", "INFOPATH"];
+
+/// `PATH`, `MANPATH` and `INFOPATH` must be `:`-separated absolute directories (SB-T12-7): no empty, relative, `~`
+/// or remote entry.  Whether each exists is the backend's check.
+fn check_env(p: &EnvSetParams) -> Result<(), Error> {
+    for (i, var) in p.env.iter().enumerate() {
+        if DIR_LISTS.contains(&var.name.as_str())
+            && !var
+                .value
+                .split(':')
+                .all(|d| d.starts_with('/') && !d.contains('\0'))
+        {
+            return Err(Error {
+                code: ErrorCode::InvalidParams,
+                message: format!(
+                    "{} is a `:`-separated list of absolute directories",
+                    var.name.as_str()
+                ),
+                path: Some(format!("env[{i}].value")),
+            });
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EnvSetResult {
+    /// The names the hub allowed and applied.
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub applied: Vec<String>,
+}
+
+pub(crate) fn methods() -> Vec<Method> {
+    vec![
+        method!(
+            "hello", Hello(HelloParams) -> HelloReply,
+            classes: [User, Agent, Service], writes: false,
+            doc: "a connection's first line: versions, and the proofs that make it a user connection",
+        ),
+        method!(
+            "ping", Ping(Empty) -> PingResult,
+            classes: [User, Agent, Service], writes: false,
+            doc: "the hub's pid",
+        ),
+        method!(
+            "status", Status(Empty) -> HubStatus,
+            classes: [User, Agent, Service], writes: false,
+            doc: "the hub's state: versions, refusals, read-only, the backend",
+        ),
+        method!(
+            "restart", Restart(Empty) -> bool,
+            classes: [User], writes: false,
+            doc: "answers true, then the hub exits 75 for its supervisor to start it again",
+        ),
+        method!(
+            "shutdown", Shutdown(Empty) -> bool,
+            classes: [User], writes: false,
+            doc: "answers true, then the hub exits",
+        ),
+        method!(
+            "subscribe", Subscribe(Empty) -> bool,
+            classes: [User], writes: false,
+            doc: "this connection receives the events from now on",
+        ),
+        method!(
+            "events/since", EventsSince(EventsSinceParams) -> EventsPage,
+            classes: [User], writes: false,
+            doc: "the event log after since (0), oldest first, at most limit (200; at most 1000)",
+        ),
+        method!(
+            "env/set", EnvSet(EnvSetParams) -> EnvSetResult,
+            classes: [User], writes: false,
+            doc: "the user's login-shell variables the hub allows, for the agents and jobs it starts next",
+            check: check_env,
+        ),
+    ]
+}

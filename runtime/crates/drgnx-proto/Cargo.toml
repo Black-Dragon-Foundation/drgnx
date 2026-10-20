@@ -11,6 +11,7 @@ publish = false
 tokio-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+schemars.workspace = true
 serde_path_to_error.workspace = true
 serde_ignored.workspace = true
 hmac.workspace = true
