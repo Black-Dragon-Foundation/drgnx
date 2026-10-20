@@ -201,6 +201,17 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
     (:path "/or/v1/completions" :body "{\"choices\":[{\"text\":\"ok\"}]}"))
   "What the fake LM Studio serves (OpenRouter too, under /or).")
 
+(defun drgnx-ai-onboard-test--stop-jobs ()
+  "Stop every running job and wait until each has written its exit file: a stopped job's shell is still writing
+\(head, exit) when the signal returns, and the fixture's clean-up deleting its directory under it fails (macOS)."
+  (require 'drgnx-jobs)
+  (let ((ids (delq nil (mapcar (lambda (j) (and (eq (plist-get j :status) 'running) (plist-get j :id)))
+                               (drgnx-jobs-list)))))
+    (dolist (id ids) (drgnx-jobs-stop id))
+    (dolist (id ids)
+      (drgnx-test-wait (lambda () (file-exists-p (expand-file-name "exit" (drgnx-jobs--dir id)))) :secs 10
+                       :what "a stopped job's exit file"))))
+
 (defmacro drgnx-ai-onboard-test--with-mac (answers &rest body)
   "BODY on a pretend Mac (16 GiB) where no AI is set up yet.  ROOT is a temp dir holding HOME, the config, state
 and data dirs; BIN, first on the path, has fake `brew', `sysctl', `open' and `security' — `brew install ollama'
@@ -270,8 +281,7 @@ with BODY."
            (drgnx-ai-onboard-test--script (concat bin "fake-serve") (concat (funcall log-line "fake-serve") "exec sleep 30\n"))
            (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'macos)))
              ,@body))
-       (require 'drgnx-jobs)
-       (dolist (j (drgnx-jobs-list)) (drgnx-jobs-stop (plist-get j :id)))
+       (drgnx-ai-onboard-test--stop-jobs)
        (let ((pid (string-to-number (string-trim (drgnx-ai-onboard-test--slurp (concat root "mock.pid"))))))
          (when (and (> pid 0) (process-attributes pid)) (signal-process pid 'SIGTERM)))
        (delete-directory root t))))

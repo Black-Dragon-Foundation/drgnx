@@ -427,7 +427,9 @@
          (cl-letf (((symbol-function 'read-string) (lambda (&rest _) (pop queue)))
                    ((symbol-function 'read-from-minibuffer) (lambda (&rest _) (pop queue)))
                    ((symbol-function 'y-or-n-p) (lambda (&rest _) (pop queue)))
-                   ((symbol-function 'yes-or-no-p) (lambda (&rest _) (pop queue))))
+                   ((symbol-function 'yes-or-no-p) (lambda (&rest _) (pop queue)))
+                   ;; macOS defines it (the system Trash, which ignores `trash-directory' and is the user's own)
+                   ((symbol-function 'system-move-file-to-trash) nil))
            ,@body)
        (delete-directory trash t))))
 

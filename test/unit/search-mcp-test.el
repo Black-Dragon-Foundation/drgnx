@@ -248,7 +248,8 @@
          (dead (drgnx-test-free-port))
          ;; the child never reaches a real embedding provider: its config has an embed role on a dead local port
          (process-environment (append (list (concat "XDG_STATE_HOME=" state) (concat "XDG_CONFIG_HOME=" conf)
-                                            (concat "DRGNX_CONFIG_DIR=" conf "/drgnx"))
+                                            (concat "DRGNX_CONFIG_DIR=" conf "/drgnx")
+                                            (concat "DRGNX_EMACS=" (drgnx-emacs-program)))   ; bin/drgnx's emacs_bin: no bare `emacs'
                                       process-environment))
          (script (expand-file-name "bin/drgnx" drgnx-dir)))
     (unwind-protect

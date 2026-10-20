@@ -450,7 +450,7 @@ pending at the end is cancelled."
            (pid (process-id proc))
            (lock (drgnx-search-index--lock-file root))
            (job (list :status 'running :name "search-index: proj" :pid pid
-                      :command (list "emacs" "--batch" "-f" "drgnx-search-index-cli" (directory-file-name root)))))
+                      :command (list (drgnx-emacs-program) "--batch" "-f" "drgnx-search-index-cli" (directory-file-name root)))))
       (unwind-protect
           (progn
             (make-directory (file-name-directory lock) t)

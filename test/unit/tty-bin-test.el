@@ -41,7 +41,7 @@ case \"$last\" in
 esac"
              (funcall f "client.log") (funcall f "client.log") (funcall f "running") (funcall f "gui")
              (funcall f "capable") (funcall f "capable")))
-    (tty-bin-test--script (expand-file-name "emacs" pathdir)
+    (tty-bin-test--script (expand-file-name "nidhogg" pathdir)
                           (format "echo \"$*\" >> %s\ncase \"$*\" in *--bg-daemon=*) touch %s ;; esac"
                                   (funcall f "emacs.log") (funcall f "running")))
     (tty-bin-test--script (expand-file-name "infocmp" pathdir)
@@ -299,7 +299,7 @@ terminal, as when a person types the command; else /dev/null and a pipe) → (EX
 (ert-deftest drgnx-bin/test-tty-runs-the-tty-directory-with-sigpipe-ignored ()
   (tty-bin-test--with
     (let ((seen (expand-file-name "seen" dir)))
-      (tty-bin-test--script (expand-file-name "emacs" pathdir)
+      (tty-bin-test--script (expand-file-name "nidhogg" pathdir)
                             ;; SIGPIPE ignored: `yes' into a closed pipe gets a write error (exit 1), not the signal
                             ;; (141); no /proc on macOS
                             (format "printf '%%s\\n' \"$@\" > %s\necho \"ENV ${DISPLAY-unset} ${WAYLAND_DISPLAY-unset} ${SWAYSOCK-unset} $DBUS_SESSION_BUS_ADDRESS\" >> %s\n{ yes 2>/dev/null; echo \"PIPE $?\" >> %s; } | head -n 1 >/dev/null" seen seen seen))
