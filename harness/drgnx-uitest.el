@@ -218,6 +218,23 @@ the drag was asked for between two different pixels."
         (drgnx-uitest--release-for button start end)
       (list (drgnx-uitest--mouse-event-head "drag" button) start end))))
 
+(defvar drgnx-uitest--pointer nil
+  "Frame pixel (X . Y) of the pointer as the queued mouse events put it, or nil when none is being delivered.")
+
+(defun drgnx-uitest--pointer-advice (orig &rest args)
+  "`mouse-absolute-pixel-position' while queued mouse events are delivered: their position, not the real pointer's.
+`mouse-drag-line' (a divider, a mode line) measures a drag by the pointer's position, which a synthesized event does not move."
+  (or drgnx-uitest--pointer (apply orig args)))
+
+(advice-add 'mouse-absolute-pixel-position :around #'drgnx-uitest--pointer-advice)
+
+(defun drgnx-uitest--note-pointer (ev)
+  "Remember where the mouse event EV puts the pointer (`drgnx-uitest--pointer'); other events leave it."
+  (when (and (consp ev) (symbolp (car ev)) (string-match-p "mouse" (symbol-name (car ev))))
+    (let ((posn (if (string-prefix-p "drag-" (symbol-name (car ev))) (nth 2 ev) (nth 1 ev))))
+      (when (and (consp posn) (ignore-errors (posn-window posn)))
+        (setq drgnx-uitest--pointer (drgnx-uitest--posn-frame-xy posn))))))
+
 (defun drgnx-uitest-enqueue (events)
   "Queue EVENTS for paced delivery; return the queue length."
   (setq drgnx-uitest--queue (append drgnx-uitest--queue events))
@@ -231,7 +248,8 @@ the drag was asked for between two different pixels."
     (cond
      ((null ev)
       (when (timerp drgnx-uitest--timer) (cancel-timer drgnx-uitest--timer))
-      (setq drgnx-uitest--timer nil))
+      (setq drgnx-uitest--timer nil
+            drgnx-uitest--pointer nil))
      ((eq (car-safe ev) 'drgnx-uitest-pause)
       (setcar drgnx-uitest--queue (cons 'drgnx-uitest-until (+ (float-time) (cdr ev)))))
      ((eq (car-safe ev) 'drgnx-uitest-until)
@@ -245,6 +263,7 @@ the drag was asked for between two different pixels."
         ('drgnx-uitest-drag-end
          (setq ev (drgnx-uitest--drag-end-event (nth 1 ev) (nth 2 ev)
                                                 (drgnx-uitest-posn (nth 3 ev) (nth 4 ev))))))
+      (drgnx-uitest--note-pointer ev)
       (setq unread-command-events (append unread-command-events (list ev))
             drgnx-uitest--last-delivery (float-time))))))
 

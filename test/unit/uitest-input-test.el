@@ -96,6 +96,22 @@
                            (list 'drag-mouse-3 start (drgnx-uitest-posn 35 5)))))
       (setq unread-command-events nil))))
 
+(ert-deftest drgnx-uitest/queued-mouse-events-move-the-pointer-a-drag-line-reads ()
+  ;; `mouse-drag-line' measures a drag by `mouse-absolute-pixel-position'; a synthesized event moves no real pointer,
+  ;; so the delivery of each event says where it is (the dock-drag GUI test never resized anything without it)
+  (drgnx-uitest-input-test--in-window nil
+    (let* ((from (drgnx-uitest-input-test--posn 5 5))
+           (drgnx-uitest--queue (list (list 'down-mouse-1 from) '(drgnx-uitest-move 25 5)))
+           (unread-command-events nil) (drgnx-uitest--timer 'dummy) (drgnx-uitest--pointer nil))
+      (should-not drgnx-uitest--pointer)
+      (drgnx-uitest--tick)
+      (should (equal (mouse-absolute-pixel-position) (drgnx-uitest--posn-frame-xy from)))
+      (drgnx-uitest--tick)
+      (should (equal (mouse-absolute-pixel-position) (drgnx-uitest--posn-frame-xy (drgnx-uitest-posn 25 5))))
+      (drgnx-uitest--tick)                   ; the queue is empty: the real pointer again
+      (should-not drgnx-uitest--pointer)
+      (setq unread-command-events nil))))
+
 (ert-deftest drgnx-uitest/a-lazy-drag-from-a-header-line-stays-a-drag ()
   (drgnx-uitest-input-test--in-window t
     (let* ((top (nth 1 (window-pixel-edges)))
