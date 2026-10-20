@@ -123,17 +123,24 @@
 
 (ert-deftest drgnx-job/a-git-process-has-its-deadline-in-the-timer-layer ()
   ;; The deadline is a one-shot keyed by the process and owned by it; the sentinel ends it with the process.
+  ;; git waits for a line on a FIFO: a git that has ended already has no deadline (its owner is gone)
   (let* ((dir (make-temp-file "drgnx-git-timer" t)) (done nil)
-         (p (drgnx-job--git-async dir '("--version") (lambda (r) (setq done r))))
+         (fifo (expand-file-name "go" dir))
+         (_ (should (eql 0 (call-process "mkfifo" nil nil nil fifo))))
+         (p (drgnx-job--git-async dir (list "-c" (concat "alias.wait-for-go=!read line < " (shell-quote-argument fifo))
+                                            "wait-for-go")
+                                  (lambda (r) (setq done r))))
          (key (cons 'job-git-timeout p)))
     (unwind-protect
         (progn
           (should (drgnx-timer-active-p key))
           (should (eq (cadr (assoc key (drgnx-timer-pending))) p))
+          (write-region "go\n" nil fifo t 'silent)                ; git ends
           (let ((deadline (+ (float-time) 10)))
             (while (and (not done) (< (float-time) deadline)) (accept-process-output nil 0.05)))
           (should (eql 0 (car done)))
           (should-not (drgnx-timer-active-p key)))
+      (when (process-live-p p) (write-region "go\n" nil fifo t 'silent))   ; a failed check: git still ends
       (drgnx-timer-cancel key)
       (delete-directory dir t))))
 
