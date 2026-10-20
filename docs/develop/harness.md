@@ -618,7 +618,7 @@ run ends, so nothing it started outlives it.
 `i3-msg -s SOCK -t get_tree`. SOCK comes from the harness's own state, never from session.json — sway's pinned
 socket in the session's runtime directory, i3's `ipc-socket` from the i3.conf it wrote — and must be a socket of yours
 (not a symlink); the tools run without the caller's `$SWAYSOCK`/`$I3SOCK`, so it can never read your desktop's WM. A
-failure quotes the tool's stderr. Tests may also send the session's WM a command with `drgnx-ui-wm-command` (not offered by
+failure quotes the tool's stderr, read to its end (a pipe of its own: it may still hold output after the tool exited). Tests may also send the session's WM a command with `drgnx-ui-wm-command` (not offered by
 the CLI or MCP). Under KWin and niri `ui_wm` answers `{wm: "kwin"}` or `{wm: "niri"}` and reads no window list (KWin
 has no tool; its scripting API is on the session's private bus): their live tests ask Emacs which monitor a frame is
 on (`frame-monitor-attributes`, from the compositor's Wayland output events).

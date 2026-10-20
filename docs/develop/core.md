@@ -232,6 +232,8 @@ check passes. `find-file` on `TREE/x` then resolves it again, with handlers on, 
   - For a session whose folder is remote, handlers stay on: its paths are remote by design.
 - Tests use `test/fixtures/handler-trap.el`:
   - it plants the links in a temp worktree, and the trap replaces the handlers with one that records every call;
+  - a name in a `load-path` directory is Emacs looking for or loading a library (Emacs's own are `.el.gz` on
+    Homebrew, Debian/Ubuntu and Fedora; a visit can autoload `image.el`): it keeps the real handlers, unrecorded;
   - `drgnx-test-visit` opens a name the way each command above does;
   - two tests check end to end in a fresh `emacs -Q`: `drgnx-job/planted-links-never-load-tramp-jka-compr-or-epa`
     (the policy) and `drgnx-cockpit-edits/visiting-a-link-out-through-a-remote-name-never-loads-tramp` (the visits).

@@ -382,7 +382,10 @@ SBPL decides by the **last rule that matches**, so the order is the policy:
   `/bin/sh` and `xcrun` follow), the time zones and xcode-select's link (`/private/var/db/xcode_select_link`).
   The developer directory that link selects is read by its true name (`drgnx-sandbox-macos--developer-dir`):
   `/usr/bin/git` is xcrun's shim, which runs the git there — the Command Line Tools' under `/Library`, or Xcode's
-  under `/Applications`, which nothing else reads. A link to `/` or to a dir holding `/Users` gives nothing. Homebrew's data (`/opt/homebrew/var`, `/usr/local/var`: the databases of Postgres, MySQL, Redis) is
+  under `/Applications`, which nothing else reads. A link to `/` or to a dir holding `/Users` gives nothing.
+  The shim itself does not run in the sandbox (xcrun writes a cache in the user's temp dir and reads the rest of
+  Xcode's bundle), so a short step of the hub's (`drgnx-sandbox-run`) whose program its `PATH` finds in `/usr/bin`
+  runs the developer directory's tool by its absolute name (`drgnx-sandbox-macos-program`). Homebrew's data (`/opt/homebrew/var`, `/usr/local/var`: the databases of Postgres, MySQL, Redis) is
   denied after every read, so a spec that reads `/opt/homebrew` does not reach it.
 - **Devices, each by name** (`drgnx-sandbox-macos-devices`): `/dev/null`, `/dev/zero`, `/dev/random`,
   `/dev/urandom`, `/dev/tty` (the controlling terminal) and `/dev/dtracehelper`. Never all of `/dev`: the user's
