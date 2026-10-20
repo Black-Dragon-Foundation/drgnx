@@ -119,35 +119,9 @@ anything (`drgnx-hub--untrusted`): the directory a real directory (not a link) o
 others, and the socket the user's; a directory that is missing is refused too (what is checked is then connected to
 by path, and a missing one could be another user's by then). Otherwise it refuses ("Not connecting to the drgnx hub: … is open to other users")
 and never hands over keys — on the `/tmp` fallback another local user could have made the directory first. The
-coordination server's `coord/notify` checks the same. One JSON object per line:
-
-| Request (`{"id", "method", "params"}`) | Result |
-|---|---|
-| `ping` | `{pid}` |
-| `status` | `{pid, socket, gateway_port, registrations, started}` |
-| `subscribe` | `true`; then events `{"event", "data"}` on this connection |
-| `gateway/register` `{job, task, agent, chain: [[provider, model-or-null]…], budget, keys: {provider: key}, owner, openrouter}` | `{token, url, openrouter}` (the restrictions kept; absent when none; restrictions that do not read are an error) |
-| `gateway/unregister` `{token}` | `true` |
-| `gateway/keys` `{keys: {provider: key}}` | `true`: the keys go to the gateway's memory |
-| `env/set` `{env: [{name, value}…]}` (at most 16, a value at most 32768 characters; the `{NAME: value}` object form is refused as `invalid params`) | `{applied: [NAME…]}`: the names `drgnx-shell-env-names` allows (never a key, `drgnx-shell-env-refused-p`) go into the hub's environment (`drgnx-shell-env-apply`: `PATH` merged, the sender's dirs first) |
-| `spend` `{job?, task?, agent?}` | `{input, output, cost, requests}` |
-| `shutdown` | `true`, then the hub exits |
-
-| `agents/start` `{profile, cwd, task?, job?}` | `{id, name}`: a session held by the hub |
-| `agents/list` | `{sessions: [Snapshot…]}` |
-| `agents/get` `{id}` | `{session: Snapshot, entries: [Entry…], seq}` (the snapshot, the whole transcript, the change number) |
-| `agents/send` `{id, text}`, `agents/stop` `{id}`, `agents/kill` `{id}` | `true` |
-| `agents/permission` `{id, request, option}` | `true` — the user's answer: the only way a permission is answered |
-| `agents/do` `{id, op, n?, text?, item?, reject?}` | `true`: `deliver-queue`, `unqueue`, `requeue`, `review` |
-| `coord/notify` (a notification: no id, no answer) | delivery runs now ([coordination.md](coordination.md)), and the new events go out |
-| `events/since` `{since?, limit?}` | `{since, last, events: [...]}`: the events after `since` (0), oldest first, at most `limit` (200; at most 1000) |
-| `job/propose` `{plan, repo?, budget?, auto?, gate?}`, `job/approve` `{id, budget?}`, `job/stop` `{id}`, `job/resume` `{id, budget?}` | the job (`drgnx-job-summary`); `gate`: `review` or `review+accept`, kept with the job (default: the hub's `drgnx-job-merge-gate`) |
-| `job/start-task` `{plan, n, auto?, gate?}` | the job: a proposal of task `n` and the tasks it needs (Start as Job); the plan is only read |
-| `job/reassign` `{task, profile}`, `job/block` `{task, reason}`, `job/unblock` `{task}`, `job/order` `{task, delta}` | the job, after the user's change from the Work graph (job data `:profiles`, `:blocked`, `:order`); a done or dropped task is an error |
-| `job/status` `{id?, decisions?}` | the job (with its decision log when `decisions` is true), or `{jobs: [...]}` |
-| `job/card` `{card, action, arg?}` | the job, after the user's action on a card (once: a settled card is an error) |
-| `job/reply` `{message, text}` | `true`: the user's answer to an agent's message, which reaches the agent as the user's answer to that question ([coordination.md](coordination.md#delivery-the-hub)) |
-| `job/dismiss` `{message}` | `true`: the message is acted on without an answer (the badge stops counting it) |
+coordination server's `coord/notify` checks the same. One JSON object per line: requests `{"id", "method",
+"params"}`, answers and events. Every method, its classes, its params and its result are in [The
+registry](#the-registry-protocol-v1), generated from the Rust definitions.
 
 Errors: `{"id", "error": {"message"}}`. A line that is not JSON is answered with an error too when its `"id"` can be
 read (otherwise it is dropped); a line over 1 MiB closes its connection. A client that reads slowly is never dropped for it: once its

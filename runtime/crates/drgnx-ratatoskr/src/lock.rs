@@ -307,10 +307,8 @@ mod tests {
         assert!(start_time(me).is_some_and(|t| t > 0));
         // pid 1 exists and is not ours: EPERM counts as alive
         assert!(alive(1));
-        let mut child = std::process::Command::new("true").spawn().unwrap();
-        let gone = child.id();
-        child.wait().unwrap();
-        assert!(!alive(gone) || command_line(gone).is_none_or(|a| a.is_empty()));
+        // no child is spawned here: a fork in this process would hold the other test's lock until its exec
+        assert!(!alive(0) && !alive(u32::MAX), "not pids");
     }
 
     #[test]
