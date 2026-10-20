@@ -469,6 +469,14 @@ to clean up, then KILL."
   (ignore-errors (signal-process (- (process-id p)) 'KILL))
   (while (process-live-p p) (accept-process-output p 0.05)))
 
+(defun drgnx-run-ert--backtrace-process (p &optional grace)
+  "Ask the file's Emacs P where it hangs: SIGUSR2, which its `debug-on-event' (set at its start,
+`drgnx-run-ert--start-file') turns into a Lisp backtrace on its output, wait GRACE seconds (default 3) for it to
+end, whatever it is waiting in.  Not for a process group: only the Emacs itself gets the signal."
+  (ignore-errors (signal-process (process-id p) 'USR2))
+  (let ((deadline (+ (float-time) (or grace 3))))
+    (while (and (process-live-p p) (< (float-time) deadline)) (accept-process-output p 0.05))))
+
 (defun drgnx-run-ert--stop-podman-pause (dir)
   "Stop the podman pause processes a test made under DIR (TEST-PODMAN-PAUSE-1).
 Rootless podman looks for its pause process in $XDG_RUNTIME_DIR/libpod/tmp/pause.pid; the run's private
@@ -543,7 +551,8 @@ to BUFFER, or to this Emacs's standard error when BUFFER is nil."
              ;; Emacs with no summary (`drgnx-command-ignoring-sigpipe', which the harness cannot load)
              :command (append (and (not (eq system-type 'windows-nt)) (list "sh" "-c" "trap '' PIPE; exec \"$0\" \"$@\""))
                               (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
-                                    "--eval" (format "(setq load-prefer-newer %S load-path '%S)" load-prefer-newer load-path)
+                                    "--eval" (format "(setq load-prefer-newer %S load-path '%S debug-on-event 'sigusr2)"
+                                                     load-prefer-newer load-path)
                                     "-l" drgnx-run-ert--self "-f" "drgnx-run-ert-batch" file))
              :filter (lambda (_ s) (if buffer
                                        (with-current-buffer buffer (goto-char (point-max)) (insert s))
@@ -698,6 +707,7 @@ file passed."
                 (when (and (process-live-p p) (> (- (float-time) (plist-get f :start)) timeout))
                   (message "drgnx: %s ran %d s: ending it" (plist-get f :file) timeout)
                   (plist-put f :timed-out t)
+                  (drgnx-run-ert--backtrace-process p)     ; where it hangs, in the file's output (CI-REMOTE-MAC-1)
                   (drgnx-run-ert--end-process p))
                 (when (process-get p :ended)    ; its output is whole (`drgnx-run-ert--file-ended')
                   (setq running (delq f running)
