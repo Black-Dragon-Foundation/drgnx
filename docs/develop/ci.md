@@ -9,7 +9,7 @@ GitHub Actions runs the same commands you run locally; nothing in CI is CI-only.
 | `Terminal tier` (`.github/workflows/tty.yml`) | nightly, on demand | `bin/drgnx test --container --tty --fedora 45`: the terminal tests (Emacs in tmux) on Emacs 31.1 |
 | `Bootstrap` (`.github/workflows/bootstrap.yml`) | weekly (Monday), on demand with a Fedora release (45 by default, 44 builds Emacs from source) | `bin/drgnx test --bootstrap --fedora N`: the exit test of a second machine — `install.sh --yes --config … --identity …` in a fresh Fedora container reaches a green doctor with the configuration, the locked packages and the provider keys back, and a second run changes nothing ([harness.md](harness.md)) |
 | `macOS` (`.github/workflows/macos.yml`) | `unit`: every push to `main`, every pull request, on demand; `install`: weekly (Wednesday), on demand | on macOS 27 (`xcode-27`, Apple silicon: GitHub names macOS images after their Xcode now): `unit` installs Emacs and ripgrep with Homebrew, checks that `install.sh` parses under macOS's bash 3.2 (`/bin/bash -n`), prints its plan (`--dry-run`) and runs `bin/drgnx test` the same way ([Parallel files](#parallel-files)), with no time factor (CI runs no `:timing` test); `install` runs `install.sh --yes` for real on the checkout (Homebrew's emacs-plus), then `drgnx doctor`, `drgnx sync` (a first sync from the shipped lock), `drgnx macos-app` and `drgnx open --check`. A newer run cancels an older one of the same event and ref only, so a push to `main` never cancels the weekly install |
-| `Test images` (`.github/workflows/images.yml`) | a push changing `test/container/`, weekly, on demand | builds the two Fedora test images and pushes them to `ghcr.io/black-dragon-foundation/drgnx-test` and `drgnx-test-gui`, tagged with the Containerfile's hash (and `f45`) |
+| `Test images` (`.github/workflows/images.yml`) | a push changing `test/container/`, weekly, on demand | builds the three Fedora test images and pushes them to `ghcr.io/black-dragon-foundation/drgnx-test`, `drgnx-test-gui` and `drgnx-test-tty`, tagged with the Containerfile's hash (and `f45`) |
 
 The unit suite includes formatting (`bin/drgnx fmt`), the byte-compile with no warnings and the lints, so they
 need no jobs of their own. Tests that need what an Emacs build lacks skip themselves (for example the Work
@@ -115,6 +115,36 @@ The weekly rebuild picks up Fedora's updates under the same tags. The Ubuntu job
 (fish is optional; its parts skip). It runs as root on a workspace the runner's user owns, so it marks the checkout
 as a git `safe.directory` system-wide (the tests run git with a temporary `HOME`); without that, every git command
 on the checkout fails with "dubious ownership" (`drgnx test --bootstrap`'s snapshot did).
+
+## What is cached
+
+Measured on the runs of 2026-10-19/20 (`gh run view ID --json jobs`): the unit suite is 3.5–4 min on Linux and about
+16 min on macOS, a GUI job 1.5–5.5 min, the image pull 18–28 s, `brew install emacs ripgrep` 8 s. Nothing in the unit
+suite downloads: no ELPA package, no grammar, no `drgnx sync` (CI sets no `DRGNX_USER_ELPA` or `DRGNX_MODAL_ELPA`,
+so the tests that need those packages skip). So the caches are few:
+
+| What | Key | Saves | Bust it |
+|---|---|---|---|
+| the three test images (`Test images`, GHCR) | tag = first 16 hex of `sha256sum test/container/Containerfile{,.gui,.tty}` (and `f45`) | an install of Emacs and the GUI/terminal stack into Fedora per job: about 1.5–2 min (the tty tier now pulls instead of building every night) | edit the Containerfile, or run `Test images` by hand (the weekly run refreshes the tag with Fedora's updates) |
+
+An image is addressed by the hash of the file it is built from, and a job whose hash has no image builds it itself, so
+a job never runs on an image from another Containerfile; a cold cache (no image) gives the same result, only slower.
+
+Deliberately not cached:
+
+- **Byte-compile, native-compile (`.eln`) and test temp state.** The lints and the byte-compile test are tests: a cached
+  `.elc` or `.eln` would let a stale file stand in for compiling the current source. The trampolines a run compiles
+  (`DRGNX_TEST_ELN_DIR`) are per run and tiny.
+- **ELPA packages, `drgnx sync`, tree-sitter grammars.** Not used by the CI suites (above). Where they are (`drgnx test
+  --bootstrap` and the macOS `install` job, both weekly), the point is a fresh machine, and a `actions/cache` entry
+  not read for 7 days is evicted, which a weekly job never beats ([GitHub's cache rules](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching)). drgnx's own package cache
+  (`cache/packages`) is checked against the lock's sha256 on every use, so it would be safe to add if a job ever needs it.
+- **Homebrew on macOS.** `brew install emacs ripgrep` is 8 s on the runner, less than restoring a cache.
+- **Image layers of `Test images`.** It builds with `--pull=always` on purpose (the weekly run is the refresh).
+
+A new `actions/cache` step needs a `key` with `hashFiles(...)` of its inputs and `restore-keys` only where a partial
+match cannot change a result; `drgnx-ci/every-actions-cache-key-hashes-its-inputs` checks it, and
+`drgnx-ci/prebuilt-images-are-addressed-by-their-containerfile-hash` checks the image tags.
 
 ## Rules for workflows
 
