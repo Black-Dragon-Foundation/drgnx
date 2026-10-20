@@ -524,7 +524,8 @@ wedged server is the hub's to end. The limits, for any server that did more:
   `sampling/createMessage`, `roots/list` or `ping` while a `tools/call` is pending and then waits for the client's
   reply, the bridge writes the request to stdout but does not read the reply from stdin until the call's answer
   comes, which never does. Both sides wait for ever (until the hub closes the connection).
-- A message the server sends while no request is pending reaches the agent only when the agent next writes.
+- A message the server sends while no request is pending reaches the agent at the latest with its next line, and
+  before that line's answer; a macOS Emacs reads the socket while it waits for a line, a Linux one only when the agent next writes.
 - A `notifications/cancelled` from the agent is forwarded only after the answer it meant to cancel.
 - A server close while the bridge waits for input is noticed at the agent's next line (or at the end of stdin).
 

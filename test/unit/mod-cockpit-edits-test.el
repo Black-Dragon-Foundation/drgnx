@@ -164,7 +164,9 @@ subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E c
               ;; a diff in flight finishes in real time, which costs no virtual time: the 0.3 s tick counts only the test's steps
               (let ((until (+ (drgnx-test-real-time) 20)))
                 (while (and drgnx-cockpit-edits--busy (< (drgnx-test-real-time) until))
-                  (funcall drgnx-test--accept nil 0.005)))))
+                  (funcall drgnx-test--accept nil 0.005))
+                (when drgnx-cockpit-edits--busy
+                  (ert-fail (format "diff still in flight after 20 s real time (write %d)" i))))))
           (drgnx-cockpit-edits-test--settle e)
           ;; one redraw per 0.3 s, not one per write, and not held back by the listing: 3 or 4 in all
           (should (<= 3 (- drgnx-cockpit-edits--draws draws) 4))
