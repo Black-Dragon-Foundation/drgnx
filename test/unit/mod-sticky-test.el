@@ -173,7 +173,7 @@
         (let ((near (at 1000)) (far (at 9000)))
           (should (string-search "class Big:" (drgnx-sticky--segment w)))
           (should (<= far (* 1.25 near)))
-          (should (<= far 319)))))))                         ; ceil(1.25 × 255): 255 on 30.2 and on 31.1
+          (should (<= far 319)))))))                         ; ceil(1.25 × 255): 255 measured
 
 (ert-deftest drgnx-sticky/turning-the-module-off-turns-sticky-scroll-off-in-live-buffers ()
   (let ((b (generate-new-buffer "sticky-off")))

@@ -18,7 +18,7 @@
 ;;   kitty keyboard protocol is ui/terminal-keys' (it needs the kkp package); this works without it.
 ;; - The mouse: `xterm-mouse-mode' (SGR reports) on while `drgnx-tty-mouse' is t, started from a terminal frame's
 ;;   setup, never for a graphical frame; Toggle Mouse in Terminal Windows.  The terminal's own selection is then
-;;   Shift+drag.  Each terminal keeps its own enable and disable strings (Emacs 30.2 puts them on the selected one).
+;;   Shift+drag.  Each terminal keeps its own enable and disable strings (a terminal's setup can put them on the selected one).
 ;; - `drgnx-tty-frames-write-report': terminal-report.eld in the state dir — each terminal's capabilities and
 ;;   the active profile's keys it cannot send — for the doctor and the key sheet; read and written through the
 ;;   file layer (core/drgnx-file.el: written whole, then renamed into place).  `drgnx-tty-frames-refresh-report'
@@ -330,12 +330,12 @@ setting).  Nil: the terminal keeps the mouse.  Toggle Mouse in Terminal Windows 
   (seq-filter (lambda (f) (eq (drgnx-state-frame-kind f) 'tty)) (frame-list)))
 
 (defvar drgnx-tty-frames--mouse-turned-on nil
-  "Non-nil while `xterm-mouse-mode' is on because `drgnx-tty-frames-mouse-apply' turned it on (Emacs 30.2 leaves
-it off; 31 turns it on by itself): turning the module off turns it off then, and only then.")
+  "Non-nil while `xterm-mouse-mode' is on because `drgnx-tty-frames-mouse-apply' turned it on (Emacs turns it on
+by itself): turning the module off turns it off then, and only then.")
 
 (defun drgnx-tty-frames-mouse-apply ()
   "Make the terminals follow `drgnx-tty-mouse': mouse reports on in the terminals that can send them while it
-is t, off in all of them when it is nil (Emacs 31 turns the mode on by itself).  A session without a terminal
+is t, off in all of them when it is nil (Emacs turns the mode on by itself).  A session without a terminal
 frame is left alone: a graphical frame never gets `xterm-mouse-mode'.  Never asks a terminal anything."
   (when-let* ((frames (drgnx-tty-frames--tty-frames)))
     (let ((wanted (and drgnx-tty-mouse
@@ -350,7 +350,7 @@ frame is left alone: a graphical frame never gets `xterm-mouse-mode'.  Never ask
         (when xterm-mouse-mode
           (xterm-mouse-mode -1)
           (setq drgnx-tty-frames--mouse-turned-on nil)))
-      ;; Emacs 30.2's turn-on and turn-off keep the enable and disable strings on the SELECTED terminal: each
+      ;; Emacs's turn-on and turn-off keep the enable and disable strings on the SELECTED terminal: each
       ;; terminal is handled from a frame of its own
       (dolist (f frames)
         (with-selected-frame f
@@ -361,7 +361,7 @@ frame is left alone: a graphical frame never gets `xterm-mouse-mode'.  Never ask
 
 (defun drgnx-tty-frames--mouse-strings (frames)
   "Each terminal of FRAMES re-sends the mouse enable string on resume (and the disable string on suspend or
-exit) once while its mouse is on, never while it is off.  Emacs 30.2 may have left them on another terminal
+exit) once while its mouse is on, never while it is off.  Emacs may have left them on another terminal
 \(`xterm-mouse-mode' turns every terminal on from the selected one), and its turn-off removes them with `remq',
 which misses them."
   (let ((on (xterm-mouse-tracking-enable-sequence)) (off (xterm-mouse-tracking-disable-sequence)))
@@ -625,7 +625,7 @@ now.  (The server runs this hook outside a minibuffer and isearch: `server-goto-
 
 ;;;; Colours
 
-;; Emacs's terminal setup (`init_tty' in term.c, 30.2 and 31.1) takes 24-bit colour from the terminfo (the `RGB'
+;; Emacs's terminal setup (`init_tty' in term.c) takes 24-bit colour from the terminfo (the `RGB'
 ;; flag, or `setf24' with `setb24') or from COLORTERM=truecolor, and it reads COLORTERM with C's getenv: the
 ;; *daemon's* environment, not the environment `emacsclient' sent (`server-create-tty-frame' only binds that in
 ;; Lisp).  And the frame parameter `tty-color-mode' cannot raise the colours (its modes are 8, none and "as set

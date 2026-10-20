@@ -11,7 +11,7 @@
 ;;
 ;; The card never covers the line being edited: in a graphical frame it is a child frame below the symbol's line
 ;; (above it when there is no room below), inside the window (`drgnx-quickhelp-placement'); in a terminal frame
-;; (30.2 has no child frames there) it is a strip of `drgnx-quickhelp-strip-lines' under the editor window, which
+;; it is a strip of `drgnx-quickhelp-strip-lines' under the editor window, which
 ;; gets its rows back when the strip goes.  It goes away as soon as you type, run another command, change window
 ;; or buffer, press C-g, Esc or q, or click its ✕.  See docs/guide/face.md ("Quick help").
 
@@ -417,7 +417,7 @@ another display)."
     (set-window-dedicated-p win t)
     (dolist (p '(mode-line-format header-line-format tab-line-format)) (set-window-parameter win p 'none)))
   ;; the 1px border from the theme's colours, read at show time: the `child-frame-border' face where the toolkit
-  ;; draws the border from it, and the frame's background colour where it paints the border with that (pgtk, 30.2);
+  ;; draws the border from it, and the frame's background colour where it paints the border with that (pgtk);
   ;; the text and its margins have the card's own background, from the buffer's face remapping (`drgnx-quickhelp--render')
   (when-let* ((colors (drgnx-quickhelp-colors parent)))
     (unless (equal (frame-parameter drgnx-quickhelp--frame 'background-color) (cdr colors))
@@ -448,8 +448,8 @@ another display)."
         (cons (+ w border) (+ h border))))))
 
 (defun drgnx-quickhelp--text-edges (win)
-  "WIN's text area (LEFT TOP RIGHT BOTTOM) in frame pixels: below its tab and header lines (Emacs 30's
-`window-body-pixel-edges' counts a tab line as body)."
+  "WIN's text area (LEFT TOP RIGHT BOTTOM) in frame pixels: below its tab and header lines (`window-body-pixel-edges'
+counts a tab line as body)."
   (let ((body (window-body-pixel-edges win)))
     (list (nth 0 body)
           (+ (nth 1 (window-pixel-edges win)) (window-tab-line-height win) (window-header-line-height win))

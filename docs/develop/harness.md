@@ -13,7 +13,7 @@ how every drgnx UI change is developed and verified.
 | `bin/drgnx test --container` | the batch tier in a `fedora:45` container (Emacs 31.1, drgnx's baseline); `DRGNX_TEST_IMAGE` / `DRGNX_TEST_GUI_IMAGE` use a prebuilt image ([ci.md](ci.md)) | podman, docker or nerdctl |
 | `bin/drgnx test --container --ui [--compositor C]` | the GUI tier in a container (mutter renders without a GPU; sway, Xvfb and i3 are in the image too; `kwin` and `niri` run in an image of their own — see [Compositors](#compositors)), capped at 3 GB with no swap on top (`--memory 3g --memory-swap 3g`; `DRGNX_TEST_GUI_MEMORY` sets another size) | podman, docker or nerdctl |
 | `bin/drgnx test --ui [--compositor C]` | GUI ERT suites in `test/ui/` inside a headless session, then live ERT suites in `test/live/` (batch Emacs starting real sessions); `--compositor sway\|x11\|i3\|kwin\|niri` runs every session of the tier under that compositor (`DRGNX_UI_COMPOSITOR`) | the host (needs mutter, or that compositor) |
-| `bin/drgnx test --tty` / `--container --tty [--fedora 44 or 45]` | the terminal tier in `test/tty/`: drgnx in Emacs sessions inside private tmux servers — see [Terminal tier](#terminal-tier) | the host (needs tmux); a container |
+| `bin/drgnx test --tty` / `--container --tty [--fedora 45]` | the terminal tier in `test/tty/`: drgnx in Emacs sessions inside private tmux servers — see [Terminal tier](#terminal-tier) | the host (needs tmux); a container |
 | `bin/drgnx test --bench` | the workbench timed against treemacs and ibuffer in a GUI session on a 25k-file project — see [workbench.md](../guide/workbench.md#performance) | the host (needs mutter); treemacs from `$DRGNX_BENCH_ELPA` |
 | `bin/drgnx test --perf` / `--soak [MIN]` | input latency, frames, GC, startup and memory against budgets; the memory soak — see [perf.md](perf.md) | the host (needs mutter) |
 | `bin/drgnx test --install [NAME…]` | `install.sh` end to end in fresh distribution containers: source builds on Fedora 44, Debian 13, Ubuntu 26.04, packages on Fedora 45 and Arch; then the doctor, a second run (no-op), on Fedora packages emacs-nw installed beside emacs-pgtk (`emacs` must stay the pgtk build) and `--dry-run` (no changes) — see [install.md](../guide/install.md) | podman, docker or nerdctl; slow, network |
@@ -216,8 +216,7 @@ Inside BODY, `drgnx-modules--table` holds only the selected modules and the modu
 
 Prefer the `ert-x` helpers over hand-written equivalents in new and touched tests: `ert-with-temp-directory` (and
 `ert-with-temp-file`) for files, `ert-with-message-capture` for what a function says, `ert-simulate-command` to run a
-command as the command loop would, `ert-run-idle-timers` to run idle timers now. On Emacs 30.2 `(require 'ert-x)`;
-on 31 some of the macros are in `ert`, and the `require` is harmless.
+command as the command loop would, `ert-run-idle-timers` to run idle timers now. `(require 'ert-x)`; some of the macros are in `ert`, and the `require` is harmless.
 
 ## Sessions
 
@@ -876,7 +875,6 @@ Run it:
 ```
 bin/drgnx test --tty                          # on the host (needs tmux)
 bin/drgnx test --container --tty              # in a Fedora 45 container, Emacs 31.1
-bin/drgnx test --container --tty --fedora 44  # Fedora 44, Emacs 30.2
 ```
 
 `bin/drgnx test --tty` is `drgnx-run-ert-batch` on `test/tty`, every file in an Emacs of its own like the unit tier,

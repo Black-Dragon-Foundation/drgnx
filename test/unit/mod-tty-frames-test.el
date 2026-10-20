@@ -302,8 +302,8 @@ strings; the real frame is not touched), an empty cache and no terminal to ask: 
         (should (equal (terminal-parameter 'kx-b 'tty-mode-reset-strings) '("\e[?1004l")))))))
 
 (ert-deftest drgnx-tty-frames/turning-it-off-turns-off-only-the-mouse-it-turned-on ()
-  ;; Emacs 30.2 leaves `xterm-mouse-mode' off, so the module turns it on, and turned off it turns it off again (the
-  ;; terminals' tracking too); Emacs 31 turns it on by itself, and then it stays on
+  ;; with `xterm-mouse-mode' off the module turns it on, and turned off it turns it off again (the
+  ;; terminals' tracking too); with it on already (Emacs turns it on by itself), it stays on
   (require 'xt-mouse)
   (dolist (emacs-on '(nil t))
     (let ((xterm-mouse-mode emacs-on) (drgnx-tty-mouse t) (calls nil))

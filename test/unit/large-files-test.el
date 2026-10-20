@@ -809,7 +809,7 @@ Return the errors it sent the client."
         ;; the file shrinks to a prefix of the buffer's text, and its time moves on (as an agent's log does)
         (drgnx-large-files-test--file "big.log" 1024)
         (set-file-times f (time-add nil 10))
-        ;; Emacs 31.1 truncates the buffer with a change that asks `ask-user-about-supersession-threat' while
+        ;; Emacs truncates the buffer with a change that asks `ask-user-about-supersession-threat' while
         ;; the buffer's record of the file's time is stale: the revert reads with it current
         (let ((drgnx-large-files-test--current nil)
               (revert-buffer-insert-file-contents-function #'drgnx-large-files-test--note-current))

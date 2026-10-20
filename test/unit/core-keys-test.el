@@ -714,7 +714,7 @@ keys); every binding is undone after."
     ("s-=" text-scale-adjust) ("s--" text-scale-adjust) ("s-0" text-scale-adjust) ("s-|" shell-command-on-region)
     ("s-<right>" move-end-of-line) ("s-<left>" move-beginning-of-line) ("<home>" beginning-of-buffer)
     ("<end>" end-of-buffer))
-  "The global keys Emacs' term/ns-win.el binds on macOS (Emacs 30), which a Linux test cannot load.")
+  "The global keys Emacs' term/ns-win.el binds on macOS, which a Linux test cannot load.")
 
 (defun drgnx-keys-test--ns-global ()
   "Emacs' global keymap as it is on macOS: the Linux defaults plus ns-win's keys."

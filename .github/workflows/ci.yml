@@ -1,5 +1,5 @@
 # Every push to main and every pull request: the unit suite (formatting, byte-compile with no warnings
-# and the lints are tests in it) on Emacs 31.1 and 30.2, shellcheck, and the leak scan.
+# and the lints are tests in it) on Emacs 31.1, shellcheck, and the leak scan.
 # docs/develop/ci.md
 name: CI
 
@@ -48,36 +48,6 @@ jobs:
           DRGNX_CONTAINER: podman
           DRGNX_TEST_SELECTOR: "(tag :timing)"
         run: bin/drgnx test --container
-
-  emacs-30:
-    name: Emacs 30.2 (Ubuntu 26.04)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    container: docker.io/library/ubuntu:26.04
-    steps:
-      - name: Emacs, git, curl (the AI client) and zsh (the shell-file and completion tests; bash is there)
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          apt-get update -qq
-          apt-get install -y -qq --no-install-recommends emacs-nox git ca-certificates curl zsh
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # the job runs as root on a workspace the runner's user owns: git refuses it ("dubious ownership") once
-      # checkout's temporary setting is gone; system-wide, because the tests run git with a HOME of their own
-      - name: The checkout is a safe directory for git
-        run: git config --system --add safe.directory "$GITHUB_WORKSPACE"
-      - run: emacs --version | head -1
-      - name: Unit suite, the files in parallel (all but the :timing tests)
-        env:
-          DRGNX_TEST_SELECTOR: "(not (tag :timing))"
-        run: DRGNX_TEST_JOBS="$(nproc)" bin/drgnx test
-      - name: The :timing tests, a file at a time
-        if: ${{ !cancelled() }}
-        env:
-          DRGNX_TEST_SELECTOR: "(tag :timing)"
-        run: bin/drgnx test
 
   scripts:
     name: Shell scripts and leak scan

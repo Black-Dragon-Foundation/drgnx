@@ -103,7 +103,6 @@ later (Meow is the candidate):
   keep the cursor they set — mostly none. In a terminal, Emacs 31.1 draws the shape too: while Vim editing runs
   drgnx sets `xterm-update-cursor` to `type` (the shape only, never the colour) and sets up a terminal that was
   already running; it works in Xterm-compatible terminals, and the default shape returns when Vim editing stops.
-  Emacs 30.2 has no cursor shapes in terminals.
 - **Panels are in Emacs state.** They keep their own keys and get `SPC` leader and `j` / `k` for rows; forms (the
   Search/Replace view) take typed text and have no Vim keys.
 - **Inputs are in insert state.** Shells (eshell, comint, term, eat) and commit messages start where you type.

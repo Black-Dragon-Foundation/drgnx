@@ -290,7 +290,7 @@ On `after-change-major-mode-hook'."
   "Non-nil while one after-load hook waits for flymake (so a setting changed often adds only one).")
 
 (defun drgnx-face--flymake-ready-p ()
-  "Non-nil when flymake is loaded and this Emacs has its end-of-line variable (30.1 and later)."
+  "Non-nil when flymake is loaded and has its end-of-line variable."
   (boundp 'flymake-show-diagnostics-at-end-of-line))
 
 (defun drgnx-face--apply-inline-problems ()

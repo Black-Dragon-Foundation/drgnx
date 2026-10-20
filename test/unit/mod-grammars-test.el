@@ -107,27 +107,22 @@ start `python-ts-mode', which on Emacs 31 asks to install a missing grammar (in 
 
 
 (ert-deftest drgnx-grammars/every-language-is-pinned-for-abi-14 ()
-  ;; M11a-3: a known-good tag per language, so Emacs 30's tree-sitter (grammar ABI 14) loads what is built
+  ;; M11a-3: a known-good tag per language, so a tree-sitter library of grammar ABI 14 loads what is built
   (dolist (e drgnx-grammars-sources)
     (should (equal (list (car e) t) (list (car e) (and (stringp (nth 2 e)) (string-match-p "\\`v[0-9]+\\.[0-9]+\\.[0-9]+\\'" (nth 2 e)) t)))))
   (dolist (l (mapcar #'car drgnx-grammars-modes))
     (should (assq l drgnx-grammars-sources))))
 
-(ert-deftest drgnx-grammars/emacs-30-always-pins-and-emacs-31-takes-the-default-branch-with-abi-15 ()
-  (let ((emacs-major-version 30))
-    (dolist (abi '(14 15 nil))                                   ; Emacs 30: the pin, whatever the library
-      (cl-letf (((symbol-function 'drgnx-grammars--abi) (lambda () abi)))
-        (should (equal (drgnx-grammars-recipe 'python) '(python "https://github.com/tree-sitter/tree-sitter-python" "v0.23.6")))
-        (should (equal (drgnx-grammars-recipe 'tsx) '(tsx "https://github.com/tree-sitter/tree-sitter-typescript" "v0.23.2" "tsx/src")))
-        (should (string-search "v0.23.6" (format "%S" (drgnx-grammars--job-command '(python))))))))
-  (let ((emacs-major-version 31))
-    (dolist (abi '(14 nil))                                      ; Emacs 31 with a library that may be ABI 14: the pin loads
-      (cl-letf (((symbol-function 'drgnx-grammars--abi) (lambda () abi)))
-        (should (equal (nth 2 (drgnx-grammars-recipe 'python)) "v0.23.6"))))
-    (cl-letf (((symbol-function 'drgnx-grammars--abi) (lambda () 15)))
-      (should (equal (drgnx-grammars-recipe 'python) '(python "https://github.com/tree-sitter/tree-sitter-python" nil)))
-      (should (equal (drgnx-grammars-recipe 'tsx) '(tsx "https://github.com/tree-sitter/tree-sitter-typescript" nil "tsx/src")))
-      (should-not (string-search "v0.23.6" (format "%S" (drgnx-grammars--job-command '(python)))))))
+(ert-deftest drgnx-grammars/a-library-that-may-be-abi-14-gets-the-pin-and-abi-15-the-default-branch ()
+  (dolist (abi '(14 nil))                                        ; a library that may be ABI 14: the pin loads
+    (cl-letf (((symbol-function 'drgnx-grammars--abi) (lambda () abi)))
+      (should (equal (drgnx-grammars-recipe 'python) '(python "https://github.com/tree-sitter/tree-sitter-python" "v0.23.6")))
+      (should (equal (drgnx-grammars-recipe 'tsx) '(tsx "https://github.com/tree-sitter/tree-sitter-typescript" "v0.23.2" "tsx/src")))
+      (should (string-search "v0.23.6" (format "%S" (drgnx-grammars--job-command '(python)))))))
+  (cl-letf (((symbol-function 'drgnx-grammars--abi) (lambda () 15)))
+    (should (equal (drgnx-grammars-recipe 'python) '(python "https://github.com/tree-sitter/tree-sitter-python" nil)))
+    (should (equal (drgnx-grammars-recipe 'tsx) '(tsx "https://github.com/tree-sitter/tree-sitter-typescript" nil "tsx/src")))
+    (should-not (string-search "v0.23.6" (format "%S" (drgnx-grammars--job-command '(python))))))
   (should-not (drgnx-grammars-recipe 'cobol)))
 
 (ert-deftest drgnx-grammars/the-watch-waits-for-the-job-and-ends-with-it ()

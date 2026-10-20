@@ -25,7 +25,7 @@ whole Emacs package ecosystem. Light on memory: the target is a daemon under 400
 
 ## Requirements
 
-- GNU Emacs **31.1+** with native compilation (30.2 still works); pgtk on Wayland, X11 and macOS builds
+- GNU Emacs **31.1+** with native compilation (older Emacs is not supported); pgtk on Wayland, X11 and macOS builds
 - Linux (GNOME, KDE, XFCE, Cinnamon, tiling window managers) and macOS
 
 ## Install

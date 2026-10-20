@@ -64,7 +64,7 @@
 ;;;; Small helpers
 
 (defun drgnx-ui--json (value)
-  "VALUE as JSON text (decoded: Emacs 30's `json-serialize' returns unibyte UTF-8)."
+  "VALUE as JSON text (decoded: `json-serialize' returns unibyte UTF-8)."
   (decode-coding-string (json-serialize value) 'utf-8))
 
 (defun drgnx-ui--parse-json (text)

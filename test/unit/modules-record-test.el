@@ -513,9 +513,8 @@ Returns (STATUSES COMMANDS STACKS), STACKS the number of modules with a cleanup 
            (should (drgnx-modules-record-test--timer-p jit-lock-context-timer))
            (let ((left (drgnx-modules-record-test--left 'test/a)))   ; and said so
              (should (cl-some (lambda (l) (string-prefix-p "timer undo-auto--boundary-timer (" l)) left))
-             ;; jit-lock's context timer: a lambda up to Emacs 30, a named function from 31
-             (should (or (member "timer a lambda" left)
-                         (cl-some (lambda (l) (string-prefix-p "timer jit-lock-context--update (" l)) left)))))
+             ;; jit-lock's context timer is a named function
+             (should (cl-some (lambda (l) (string-prefix-p "timer jit-lock-context--update (" l)) left))))
        (kill-buffer buf)))))
 
 (ert-deftest drgnx-modules-record/a-helpers-mode-stays-while-another-module-claims-it ()

@@ -9,7 +9,7 @@
 ;; it.  While it runs: panels and forms are in emacs state and inputs (shells, commit messages) in insert
 ;; state; every state change goes to `drgnx-modal-set-state' (leader and panel maps, the mode-line indicator);
 ;; the cursor has a shape per state, and in a panel stays what the panel set (none, mostly); in a terminal
-;; Emacs 31.1 follows the shape (`xterm-update-cursor'); the built-in which-key shows the leader's keys; AI ghost
+;; Emacs follows the shape (`xterm-update-cursor'); the built-in which-key shows the leader's keys; AI ghost
 ;; text is asked for only in insert state, and the visual selection is what Edit with AI rewrites.
 ;; Toggle Modal Editing turns the engine off and on for this session.  See docs/guide/keys.md ("Vim keys").
 
@@ -243,8 +243,8 @@ so it did not install the cursor hook)."
               (frame-list)))
 
 (defun drgnx-evil--xterm ()
-  "Let Emacs 31.1 draw the cursor shape (`type': the shape only, no colour sequences) in Xterm-compatible
-terminals; 30.2 has no such option and the cursor stays the terminal's own.  A terminal that initialised
+  "Let Emacs draw the cursor shape (`type': the shape only, no colour sequences) in Xterm-compatible
+terminals.  A terminal that initialised
 before the option was set is set up now, unless the cursor hook is installed already."
   (when (and drgnx-evil--active (boundp 'xterm-update-cursor))
     (drgnx-evil--save 'xterm-update-cursor 'type)

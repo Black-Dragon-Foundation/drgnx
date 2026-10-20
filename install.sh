@@ -196,7 +196,7 @@ version_ge() { # A B → true if A >= B
 probe_emacs() {
   # Is there already an Emacs that is good for drgnx (>= 31.1, native compilation that compiles, graphical)?
   # On macOS also /Applications/Emacs.app, which is usually not on PATH (DRGNX_INSTALL_MACOS_APP=none|PATH overrides
-  # it: tests). APP_OLD: that app is there but not good enough — what it is ("Emacs 30.2", or "unknown").
+  # it: tests). APP_OLD: that app is there but not good enough — what it is ("Emacs 30.2", say, or "unknown"; anything below 31.1 is not good enough).
   EMACS_FOUND="" EMACS_INFO="" APP_OLD=""
   local candidates=() app=""
   if [[ -n "${DRGNX_INSTALL_EMACS:-}" ]]; then candidates=("$DRGNX_INSTALL_EMACS")
