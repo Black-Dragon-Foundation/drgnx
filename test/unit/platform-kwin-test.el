@@ -258,27 +258,29 @@ temporary directory is private to the test."
 (drgnx-platform-test--deftest drgnx-platform-kwin/place-moves-again-while-kwin-shows-the-window-elsewhere ()
                               ;; KWin places a new window when it first shows it, which can come after a move made at once
                               ;; (seen on KWin 6.7.5: the restored window ended up back on the first screen): the move is made
-                              ;; again until Emacs sees the frame on the target screen, within the one deadline
-                              (let ((monitor (list :name "Virtual-1" :geometry '(1280 0 1280 800))))
-                                (drgnx-platform-kwin-test--with-kwin (lambda (_s) "{\"ok\":true}")
-                                  (cl-letf (((symbol-function 'frame-monitor-attributes)
-                                             (lambda (&optional _)
-                                               (if (>= (seq-count (lambda (m) (equal m "loadScript")) (drgnx-platform-kwin-test--methods)) 2)
-                                                   '((geometry 1280 0 1280 800))
-                                                 '((geometry 0 0 1280 800))))))
-                                    (should (eq 'ok (drgnx-platform-kwin-test--ask
-                                                     (lambda (cb) (drgnx-platform-kwin--place (drgnx-platform-ctx nil 5.0) monitor cb)))))
-                                    (should (= 2 (seq-count (lambda (m) (equal m "loadScript")) (drgnx-platform-kwin-test--methods)))))))
-                              ;; it never gets there: an error once the deadline has passed, never a success
-                              (let ((monitor (list :name "Virtual-1" :geometry '(1280 0 1280 800))))
-                                (drgnx-platform-kwin-test--with-kwin (lambda (_s) "{\"ok\":true}")
-                                  (cl-letf (((symbol-function 'frame-monitor-attributes) (lambda (&optional _) '((geometry 0 0 1280 800)))))
-                                    (let* ((t0 (float-time))
-                                           (r (drgnx-platform-kwin-test--ask
-                                               (lambda (cb) (drgnx-platform-kwin--place (drgnx-platform-ctx nil 1.0) monitor cb)))))
-                                      (should (eq :error (car-safe r)))
-                                      (should (string-match-p "another screen" (cadr r)))
-                                      (should (< (- (float-time) t0) 1.5)))))))
+                              ;; again until Emacs sees the frame on the target screen, within the one deadline.  On virtual
+                              ;; time: on a loaded runner the last try began with 0.05 s left and KWin's own limit answered
+                              (drgnx-test-with-clock ()
+                                (let ((monitor (list :name "Virtual-1" :geometry '(1280 0 1280 800))))
+                                  (drgnx-platform-kwin-test--with-kwin (lambda (_s) "{\"ok\":true}")
+                                    (cl-letf (((symbol-function 'frame-monitor-attributes)
+                                               (lambda (&optional _)
+                                                 (if (>= (seq-count (lambda (m) (equal m "loadScript")) (drgnx-platform-kwin-test--methods)) 2)
+                                                     '((geometry 1280 0 1280 800))
+                                                   '((geometry 0 0 1280 800))))))
+                                      (should (eq 'ok (drgnx-platform-kwin-test--ask
+                                                       (lambda (cb) (drgnx-platform-kwin--place (drgnx-platform-ctx nil 5.0) monitor cb)))))
+                                      (should (= 2 (seq-count (lambda (m) (equal m "loadScript")) (drgnx-platform-kwin-test--methods)))))))
+                                ;; it never gets there: an error once the deadline has passed, never a success
+                                (let ((monitor (list :name "Virtual-1" :geometry '(1280 0 1280 800))))
+                                  (drgnx-platform-kwin-test--with-kwin (lambda (_s) "{\"ok\":true}")
+                                    (cl-letf (((symbol-function 'frame-monitor-attributes) (lambda (&optional _) '((geometry 0 0 1280 800)))))
+                                      (let* ((t0 (float-time))
+                                             (r (drgnx-platform-kwin-test--ask
+                                                 (lambda (cb) (drgnx-platform-kwin--place (drgnx-platform-ctx nil 1.0) monitor cb)))))
+                                        (should (eq :error (car-safe r)))
+                                        (should (string-match-p "another screen" (cadr r)))
+                                        (should (< (- (float-time) t0) 1.5))))))))
 
 (drgnx-platform-test--deftest drgnx-platform-kwin/the-move-script-selects-by-pid-then-caption ()
                               ;; The search in the script is plain JavaScript; run the same selection in Lisp over the recorded windows to
