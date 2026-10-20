@@ -370,7 +370,8 @@ and review to answer, `:status' (working or exited) and `:queue' (when messages 
                (mapconcat (lambda (text)
                             (let ((n (setq i (1+ i))))
                               (concat "\n  " (propertize text 'face 'drgnx-agents-ui-dim) " "
-                                      (drgnx-agents-ui--button "[×]" (lambda () (drgnx-agents-unqueue s n))))))
+                                      (drgnx-agents-ui--button (concat "[" (drgnx-face-glyph 'unqueue) "]")
+                                                               (lambda () (drgnx-agents-unqueue s n))))))
                           (drgnx-agent-session-queue s))
                "\n")))
     ((guard (plist-get key :type)) (drgnx-agents-ui--entry-row key))

@@ -12,7 +12,7 @@ init/init.el         core/ on the load path, (require 'drgnx), (drgnx-init); a p
 core/drgnx.el        drgnx-init: guard on, staged hooks armed, keep-running choice read, the first window's Welcome
                      (a first start only), packages activated, core commands, modules, surfaces (DRGNX_SAFE — drgnx
                      safe — skips packages and modules)
-core/drgnx-ui-kit.el  the UI kit: glyphs by meaning, status faces (the UI kit section)
+core/drgnx-ui-kit.el  the UI kit: glyphs by meaning, status faces, buttons, the close button (the UI kit section)
 core/drgnx-session.el  drgnx PATH's Emacs side, Open Folder…, keep running or quit, Quit drgnx; session.eld is a config file (../guide/opening.md)
 core/drgnx-macos.el  the drgnx app on macOS (drgnx macos-app; ../guide/opening.md)
 core/drgnx-tty.el    terminals, batch-safe: which one, what it can do, keys it can send, terminfo, tmux (../guide/terminal.md)
@@ -454,13 +454,33 @@ signal `drgnx-prompt-in-automatic-path` instead — naming the prompt and where 
 
 - from a timer (detected by wrapping `timer-event-handler`; commands run by a nested command loop, such as a
   minibuffer opened by a command, are not timer code);
-- inside `(drgnx-automatic …)` — use it for hook functions, process filters and sentinels (Emacs calls those
-  from C, so they cannot be detected);
+- inside `(drgnx-automatic …)`, which `drgnx-guard-wrap` and `drgnx-guard-run-hook` (below) put around process
+  callbacks and hook functions;
 - while a daemon initialises — until the last `window-setup-hook` function, so `after-init-hook` and
   `emacs-startup-hook` count too.
 
 `(drgnx-guard-automatic-p)` says whether the code running now is such a path, for code that would rather not ask
 than signal (choosing a Vim stack records it as pending instead of offering to install evil).
+
+**Process callbacks and hooks run inside the guard.** Emacs calls a process filter or sentinel from C, so nothing
+can tell it from a command; the guard is put on where the callback is handed over:
+
+- `(drgnx-guard-wrap FN LABEL)` returns a function of any arguments that applies FN inside `drgnx-automatic`. What FN
+  raises is not signalled again (no "error in process sentinel" line), the wrapper returns nil, and it becomes a
+  notice of source `guard` with id LABEL ([Notices](#notices-drgnx-noticeel)): a refused prompt is a `fail` event
+  ("LABEL asked a question from a process callback; drgnx refused (it would freeze Emacs)"), any other error a `warn`
+  event ("LABEL: MESSAGE"); a repeat counts. LABEL names the process's purpose (`"hub events"`, `"ACP NAME"`);
+  default FN printed. The debugger opens only with `debug-on-error` and a frame to show it in, the timer layer's
+  rule: never in batch or in a daemon with no client.
+- `(drgnx-guard-run-hook HOOK &rest ARGS)` calls each function of HOOK that way, with the label `"HOOK FN"`: one
+  that fails or asks is recorded and the next still runs. The hub's `drgnx-hub-event-functions` and
+  `drgnx-hub-disconnect-functions` run through it.
+- Write `:filter (drgnx-guard-wrap #'NAME "LABEL")` (`:sentinel`, `set-process-filter`, `set-process-sentinel`
+  likewise), with a named function. `nil`, `#'ignore` and `#'internal-default-process-sentinel` need no guard, and
+  `drgnx-proc-start` wraps its own callbacks. The lint `drgnx-lint/process-callbacks-are-guarded`
+  ([check.md](check.md#lints-on-the-source)) holds the sites not wrapped yet in an allowlist that only shrinks.
+
+The model is loaded at the first catch, not when the guard loads (`drgnx-notice` requires `drgnx-guard`).
 
 ## Notices (`drgnx-notice.el`)
 
@@ -537,6 +557,20 @@ real work. An error is recorded in `drgnx-notice--hook-errors` (the last 20) wit
 never posted back into the model. A notice a hook function posts updates the model at once, but its own hook call
 is queued and runs after the current one returns — never recursively; past 100 queued changes in one pass the rest
 are dropped, with one message. The change plist is built only when the hook has functions.
+
+**The desktop route** (`drgnx-notice-desktop.el`). `(drgnx-notice-desktop-take ITEM)` says whether an attention
+item goes to the desktop: non-nil when `drgnx-notice-desktop-mode` is on and `drgnx-notice-desktop` non-nil, the
+item's `:echo` is not nil, its id was not sent yet, no drgnx frame has focus (a live frame not on the initial
+terminal whose `frame-focus-state` is `t`; `unknown` is not focus) and a backend is there. It marks the id sent and
+queues `("drgnx: SOURCE-TITLE" . TEXT)`; the layer timer `notice-desktop` (0 s, `:core`) sends the queue off the
+caller, each send under `with-demoted-errors`, so `-take` is safe inside a `drgnx-notice-functions` function. The
+echo route asks it for each new item; nothing else sends. The mode puts `drgnx-notice-desktop--prune` on
+`drgnx-notice-functions`: after a set change that removed ids, the sent ids are pruned to the union, so the table
+is bounded by what waits now and a thing that comes back notifies again. `(drgnx-notice-desktop-send TITLE BODY)`
+is the backend, asked once (`drgnx-notice-desktop--available-p`): macOS `osascript` with a fixed script and the
+text as its arguments; elsewhere the freedesktop `Notify` method by `dbus-call-method-asynchronously` with no
+handler, so no reply is awaited (`notifications-notify` waits for two synchronous calls); else a `message`. Tests
+stub the send or `make-process`/`dbus-call-method-asynchronously`: none reaches a bus (`test/unit/core-notice-desktop-test.el`).
 
 **Cost** (allocation is the gate; `test/unit/core-notice-test.el`, byte-compiled): a count read 0 conses; a new
 event 14 (22 with one hook function); a repeat 1 (its key). Replacing three sets of 40/40/20 items (80 ids) in
@@ -2375,8 +2409,9 @@ What the `areas` backend does with the edges:
 
 ## The UI kit (`drgnx-ui-kit.el`)
 
-What every surface that draws a mark shares. It is in core and requires nothing beyond `subr-x`, so the status bar,
-the lists and the notices work without the `ui/face` module.
+What every surface that draws a mark or a button shares. It is in core and requires only the registry and the
+surfaces (for buttons that run registry commands), so the status bar, the lists and the notices work without the
+`ui/face` module.
 
 - `drgnx-face-glyphs` (group `drgnx`; the name is kept so a saved value still applies, and a name a saved value
   lacks comes from the standard table, `drgnx-ui--default-glyphs`) and
@@ -2388,6 +2423,20 @@ the lists and the notices work without the `ui/face` module.
 - Faces `drgnx-status-ok`, `-info`, `-warn`, `-fail` and `-needs-you`. They inherit theme faces only.
 - `(drgnx-ui-status SEVERITY &optional TEXT)`: the glyph for `ok`, `info`, `warn`, `fail` or `needs-you` (glyph
   `waiting`), then a space and TEXT, in the status face. The module list and the onboarding steps use it.
+- `(drgnx-ui-button LABEL ACTION &key help face where props)`: LABEL as a button. ACTION is a registry id (run
+  through `drgnx-surfaces-run`, so `drgnx-surfaces-run-functions` count its use and the key tip shows), else a
+  command (`call-interactively`), else a function of no arguments. WHERE is `text` (the default: `mouse-1` and RET,
+  `follow-link`), `header-line`, `mode-line` or `tab-line` (`mouse-1` there, through `local-map`). FACE defaults to
+  `drgnx-ui-button` (inherits `button`); HELP is the `help-echo`; PROPS are more text properties. The keymap is built
+  once per (ACTION . WHERE) in `drgnx-ui--button-maps`, a table weak on ACTION, so drawing a named action builds
+  nothing and a closure's keymaps go with it. `(drgnx-ui-insert-button LABEL ACTION &rest KEYS)` inserts it at point.
+- `(drgnx-ui-close-button COMMAND HELP &key where props)`: the `close` glyph in face `drgnx-ui-close` (inherits
+  `shadow`) as a button on WHERE (default `header-line`); `mouse-1` runs COMMAND itself, so it gets the click event
+  and reads PROPS from the clicked string. One keymap per (COMMAND . WHERE). Build it when a title or row is set,
+  never while drawing. The workbench's `drgnx-wb-close-button`, `drgnx-wb-close-glyph` and
+  `drgnx-wb-header-with-close` are one-line wrappers over it, and the face `drgnx-wb-close` is an alias of
+  `drgnx-ui-close`. No close or unqueue mark is a literal `×`: the Buffers panel's rows, the find bar and the agents
+  queue (glyph `unqueue`) draw kit glyphs, so a terminal that is not UTF-8 shows `x`, `x` and `-`.
 
 ## Read and write through drgnx-file
 

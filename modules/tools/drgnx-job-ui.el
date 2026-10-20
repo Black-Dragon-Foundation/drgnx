@@ -18,6 +18,7 @@
 (require 'drgnx-registry)
 (require 'drgnx-timer)
 (require 'drgnx-memo)
+(require 'drgnx-notice-desktop)
 
 (declare-function drgnx-hub-call "drgnx-hub")
 (declare-function drgnx-hub-call-sync "drgnx-hub")
@@ -64,7 +65,6 @@ own (`(drgnx-job-ui-show ID)') restores as the cockpit filtered to that job."
 (defvar drgnx-job-ui--badge "" "The mode line's badge: \" ⚑N\" while N things of jobs need you, else empty.")
 (defvar drgnx-job-ui--badge-job nil "The job with the newest card: the one the badge opens.")
 (defvar drgnx-job-ui--notified (make-hash-table :test #'equal) "Card ids already notified.")
-(defvar drgnx-job-ui--desktop :unknown "Whether desktop notifications can be sent (asked once).")
 
 (defvar drgnx-job-ui-badge-map
   (let ((m (make-sparse-keymap)))
@@ -153,12 +153,6 @@ for redisplay code (the status bar's jobs segment)."
     (when (equal event "card") (drgnx-job-ui--notify data))
     (when drgnx-job-ui-badge-mode (drgnx-job-ui--schedule-recount))))
 
-(defun drgnx-job-ui--desktop-p ()
-  "Can a desktop notification be sent?  (D-Bus with a session bus: asked once.)"
-  (when (eq drgnx-job-ui--desktop :unknown)
-    (setq drgnx-job-ui--desktop (and (featurep 'dbusbind) (require 'notifications nil t) (getenv "DBUS_SESSION_BUS_ADDRESS") t)))
-  drgnx-job-ui--desktop)
-
 (defun drgnx-job-ui--notify (data)
   "A new card (DATA of its event): a desktop notification, once per card — or a message.  Never a prompt."
   (let ((id (plist-get data :id)))
@@ -168,24 +162,8 @@ for redisplay code (the status bar's jobs segment)."
         ;; later, not in the hub's event handler: a D-Bus call that hangs must not hold the filter
         (run-at-time 0 nil (lambda () (with-demoted-errors "drgnx: %S" (drgnx-job-ui--send "drgnx: a job needs you" body))))))))
 
-(defun drgnx-job-ui--send (title body)
-  "Tell the user TITLE and BODY where the platform has a notification: macOS through `osascript' (a process that
-never waits; a fixed script, the text only as arguments to it: nothing of it is script, no shell), elsewhere D-Bus;
-else a message.  A failed osascript says so once.  Never a prompt."
-  (cond ((and (eq system-type 'darwin) (executable-find "osascript"))
-         (make-process :name "drgnx-notify" :noquery t :connection-type 'pipe
-                       :command (list "osascript" "-e" "on run argv"
-                                      "-e" "display notification (item 1 of argv) with title (item 2 of argv)"
-                                      "-e" "end run" "--"
-                                      (replace-regexp-in-string "[\n\r]+" " " body) (replace-regexp-in-string "[\n\r]+" " " title))
-                       :sentinel (lambda (p _event)
-                                   (when (and (memq (process-status p) '(exit signal)) (/= 0 (process-exit-status p)))
-                                     (message "drgnx: the macOS notification failed (%s — %s)" title body)))))
-        ((and (not (memq system-type '(darwin windows-nt))) (drgnx-job-ui--desktop-p))
-         (notifications-notify :title title :body body))
-        (t (message "%s — %s" title body))))
-
-(declare-function notifications-notify "notifications")
+;; The backends moved to core (drgnx-notice-desktop.el); notices Task 14 makes cards an attention source.
+(defalias 'drgnx-job-ui--send #'drgnx-notice-desktop-send)
 
 (define-minor-mode drgnx-job-ui-badge-mode
   "A badge in the mode line while something of a job needs you (and a notification when it starts to)."

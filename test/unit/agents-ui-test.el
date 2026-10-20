@@ -213,9 +213,10 @@ answers recorded in ANSWERS)."
   (let ((s (drgnx-agents--make :name "x" :status 'busy :queue '("one" "two") :paused nil
                                :commands '((:name "compact" :description "c") (:name "review" :description "r")))))
     (with-temp-buffer
-      (drgnx-agents-ui-render s)
+      (cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) (lambda (&optional _f) nil))) ; a UTF-8 frame
+        (drgnx-agents-ui-render s))
       (let ((text (buffer-string)))
-        (dolist (want '("[Stop]" "/compact" "/review" "one [×]" "two [×]")) (should (string-search want text)))))
+        (dolist (want '("[Stop]" "/compact" "/review" "one [−]" "two [−]")) (should (string-search want text)))))
     (setf (drgnx-agent-session-status s) 'idle (drgnx-agent-session-paused s) t)
     (with-temp-buffer (drgnx-agents-ui-render s) (should (string-search "[Deliver]" (buffer-string))))))
 
@@ -459,13 +460,14 @@ three runs after two warm ones)."
 
 (ert-deftest drgnx-agents-ui/an-edited-queued-message-is-redrawn ()
   ;; `drgnx-agents-requeue' replaces the text in place: the queue is the same list
-  (drgnx-agents-ui-test--with-transcript (s b v :status 'busy :queue (list "one" "two")
-                                            :entries (list (list :type 'agent :text "a")))
-    (should (string-search "  two [×]" (drgnx-agents-ui-test--text b)))
-    (drgnx-agents-requeue s 1 "TWO, edited")
-    (drgnx-agents-ui-test--draw)
-    (should (string-search "  TWO, edited [×]" (drgnx-agents-ui-test--text b)))
-    (should (equal (drgnx-agents-ui-test--fresh s) (drgnx-agents-ui-test--text b)))))
+  (cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) (lambda (&optional _f) nil))) ; a UTF-8 frame
+    (drgnx-agents-ui-test--with-transcript (s b v :status 'busy :queue (list "one" "two")
+                                              :entries (list (list :type 'agent :text "a")))
+      (should (string-search "  two [−]" (drgnx-agents-ui-test--text b)))
+      (drgnx-agents-requeue s 1 "TWO, edited")
+      (drgnx-agents-ui-test--draw)
+      (should (string-search "  TWO, edited [−]" (drgnx-agents-ui-test--text b)))
+      (should (equal (drgnx-agents-ui-test--fresh s) (drgnx-agents-ui-test--text b))))))
 
 (ert-deftest drgnx-agents-ui/a-steer-removed-from-the-entries-removes-its-row ()
   (drgnx-agents-ui-test--with-transcript (s b v :status 'busy

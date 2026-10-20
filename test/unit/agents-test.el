@@ -435,4 +435,105 @@ marked as a large file: the answer plist."
                       :deferred)))
       (delete-directory root t))))
 
+;;;; What waits on you: the `agents' set of the one "needs you" count (notices Task 15)
+
+(require 'drgnx-agents-mirror)
+(load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
+
+(defmacro drgnx-agents-test--with-attention (&rest body)
+  "BODY with no sessions, nothing noted yet, a fresh notice model, and nothing else following the sessions."
+  (declare (indent 0) (debug t))
+  `(drgnx-notice-test-with-model
+     (let ((drgnx-agents--sessions nil) (drgnx-agents--attention-seen nil) (drgnx-agents-changed-functions nil))
+       ,@body)))
+
+(defun drgnx-agents-test--item (id)
+  "The \"needs you\" item with ID, or nil."
+  (seq-find (lambda (i) (equal (plist-get i :id) id)) (drgnx-needs-you-items)))
+
+(defun drgnx-agents-test--waiting (&rest slots)
+  "A busy session made of SLOTS, in the session list."
+  (let ((s (apply #'drgnx-agents--make :status 'busy slots)))
+    (push s drgnx-agents--sessions)
+    s))
+
+(ert-deftest drgnx-agents/permissions-and-reviews-are-the-agents-set ()
+  (drgnx-agents-test--with-attention
+    (let* ((file (expand-file-name "proj/a.txt" "~"))
+           (s (drgnx-agents-test--waiting :name "mock · proj" :id "s-a" :job "j1"
+                                          :permissions (list (list :id 4 :title "Run\nmake"))
+                                          :reviews (list (list :id 7 :path file :content "y")))))
+      (drgnx-agents--changed s)
+      (should (= (drgnx-needs-you-count) 2))
+      (let ((p (drgnx-agents-test--item '(permission "s-a" . 4))) (r (drgnx-agents-test--item '(review "s-a" . 7))))
+        (should (equal (plist-get p :text) "mock · proj asks: Run make"))
+        (should (eq (plist-get p :command) 'agents-answer))
+        (should (eq (plist-get p :source) 'agents))
+        (should (equal (plist-get r :text) "mock · proj wants to write ~/proj/a.txt"))
+        (should (eq (plist-get r :command) 'agents-view))))))
+
+(ert-deftest drgnx-agents/an-unchanged-session-allocates-nothing ()
+  ;; `drgnx-agents--changed' runs on every streamed chunk: when no list changed, noting costs no cons and no tick
+  (drgnx-agents-test--with-attention
+    (let ((s (drgnx-agents-test--waiting :name "a" :id "s-q" :permissions (list (list :id 1 :title "x"))
+                                         :reviews (list (list :id 2 :path "/tmp/x" :content "y")))))
+      (drgnx-agents-test--waiting :name "b" :id "s-r" :status 'idle)
+      (drgnx-agents--changed s)
+      (dolist (f '(drgnx-agents--note-attention drgnx-agents--attention-same-p drgnx-agents--same-items-p))
+        (unless (compiled-function-p (indirect-function f)) (let ((byte-compile-warnings nil)) (byte-compile f))))
+      (let ((tick (drgnx-notice-tick)))
+        (should (= 0 (drgnx-notice-test--alloc (drgnx-agents--note-attention))))
+        (should (= tick (drgnx-notice-tick)))
+        (should (= 2 (drgnx-needs-you-count)))))))
+
+(ert-deftest drgnx-agents/answering-removes-the-item ()
+  (drgnx-agents-test--with-attention
+    (let ((s (drgnx-agents-test--waiting :name "a" :id "s-b" :acp-id "x"
+                                         :permissions (list (list :id 1 :title "x") (list :id 3 :title "z"))
+                                         :reviews (list (list :id 2 :path "/tmp/x" :content "y")))))
+      (drgnx-agents--changed s)
+      (should (= (drgnx-needs-you-count) 3))
+      (cl-letf (((symbol-function 'drgnx-acp-respond) #'ignore))
+        ;; the last of two: `delq' keeps the list's head, the item still goes
+        (drgnx-agents-answer-permission s (cadr (drgnx-agent-session-permissions s)) "allow")
+        (should (= (drgnx-needs-you-count) 2))
+        (should-not (drgnx-agents-test--item '(permission "s-b" . 3)))
+        (drgnx-agents-answer-permission s (car (drgnx-agent-session-permissions s)) "allow")
+        (drgnx-agents-finish-review s (car (drgnx-agent-session-reviews s)))
+        (should (= (drgnx-needs-you-count) 0))))))
+
+(ert-deftest drgnx-agents/a-mirror-update-is-seen ()
+  ;; a hub session's permission reaches this Emacs's count through the mirror's snapshot
+  (drgnx-agents-test--with-attention
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-hub-call) #'ignore))
+          (push (drgnx-agents--make :remote "s-m" :id "s-m") drgnx-agents--sessions)
+          (drgnx-agents-mirror--event "agent" (list :id "s-m" :seq 1 :lisp "(:id \"s-m\" :name \"m\" :status busy :permissions ((:id 3 :title \"Edit\")))"))
+          (should (equal (plist-get (drgnx-agents-test--item '(permission "s-m" . 3)) :text) "m asks: Edit"))
+          (drgnx-agents-mirror--event "agent" (list :id "s-m" :seq 2 :lisp "(:id \"s-m\" :name \"m\" :status idle)"))
+          (should (= (drgnx-needs-you-count) 0)))
+      (drgnx-agents-mirror-stop))))
+
+(ert-deftest drgnx-agents/scope-is-the-sessions-job ()
+  (drgnx-agents-test--with-attention
+    (drgnx-agents-test--waiting :name "a" :id "s-j" :job "j1" :permissions (list (list :id 1 :title "x")))
+    (let ((s (drgnx-agents-test--waiting :name "b" :id "s-n" :reviews (list (list :id 2 :path "/tmp/x" :content "y")))))
+      (drgnx-agents--changed s)
+      (should (= (drgnx-needs-you-count) 2))
+      (should (= (drgnx-needs-you-count "j1") 1))
+      (should (equal (plist-get (drgnx-agents-test--item '(permission "s-j" . 1)) :scope) "j1"))
+      (should-not (plist-get (drgnx-agents-test--item '(review "s-n" . 2)) :scope)))))
+
+(ert-deftest drgnx-agents/an-exited-session-leaves-nothing ()
+  ;; whatever its lists still hold, nobody can answer an ended session
+  (drgnx-agents-test--with-attention
+    (let ((s (drgnx-agents-test--waiting :name "a" :id "s-x" :permissions (list (list :id 1 :title "x"))
+                                         :reviews (list (list :id 2 :path "/tmp/x" :content "y")))))
+      (drgnx-agents--changed s)
+      (should (= (drgnx-needs-you-count) 2))
+      (setf (drgnx-agent-session-status s) 'exited)
+      (drgnx-agents--changed s)
+      (should (= (drgnx-needs-you-count) 0))
+      (should-not (drgnx-needs-you-items)))))
+
 ;;; agents-test.el ends here
