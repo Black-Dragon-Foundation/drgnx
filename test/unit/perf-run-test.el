@@ -213,3 +213,11 @@ without them would pass unjudged), unless `drgnx-perf-run-unseeded' says why it 
 
 
 ;;; perf-run-test.el ends here
+
+(ert-deftest drgnx-perf-run/the-typing-workloads-gate-a-normal-keys-cpu-too ()
+  "p90 sits on the 1-in-10 key spike (PERF-KEYSPIKE-1); the p50 row gates the keys that are not spikes."
+  (let ((budgets (drgnx-perf-run--budgets)))
+    (dolist (w '(typing typing-with-ghost remote-typing))
+      (let ((b (seq-find (lambda (b) (and (eq (car b) w) (equal (cadr b) '(:cpu_ms :p50)))) budgets)))
+        (should b)
+        (should (<= (nth 2 b) 30))))))
