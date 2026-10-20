@@ -1035,3 +1035,12 @@ timer errors and a state dir of its own.  The hub's tables are fresh; nothing is
       (should-not (file-exists-p (expand-file-name "timers-report.eld" (drgnx-state-dir)))))))
 
 ;;; hub-test.el ends here
+
+(ert-deftest drgnx-hub/main-runs-at-batch-gc-settings ()
+  (drgnx-hub-test--timed
+    (let ((seen nil) (gc-cons-threshold 800000) (gc-cons-percentage 0.1))
+      (cl-letf (((symbol-function 'drgnx-hub-serve)
+                 (lambda (_s) (setq seen (cons gc-cons-threshold gc-cons-percentage)) (error "stop here")))
+                ((symbol-function 'kill-emacs) (lambda (&rest _) (throw 'drgnx-hub-test--out nil))))
+        (catch 'drgnx-hub-test--out (drgnx-hub-main)))
+      (should (equal seen (cons drgnx-gc-batch-threshold 0.2))))))

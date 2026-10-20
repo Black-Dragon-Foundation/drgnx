@@ -342,3 +342,16 @@
 
 (provide 'search-mcp-test)
 ;;; search-mcp-test.el ends here
+
+(ert-deftest drgnx-search/index-and-mcp-run-at-batch-gc-settings ()
+  (require 'drgnx-search-index)
+  (let ((seen nil) (command-line-args-left nil))
+    (cl-letf (((symbol-function 'kill-emacs) #'ignore)
+              ((symbol-function 'princ) #'ignore)
+              ((symbol-function 'drgnx-mcp-serve) (lambda (&rest _) (push (cons gc-cons-threshold gc-cons-percentage) seen))))
+      (let ((gc-cons-threshold 800000) (gc-cons-percentage 0.1))
+        (drgnx-search-index-cli)               ; no ROOT: prints usage, exits
+        (push (cons gc-cons-threshold gc-cons-percentage) seen))
+      (let ((gc-cons-threshold 800000) (gc-cons-percentage 0.1))
+        (drgnx-search-mcp-main)))
+    (should (equal seen (list (cons drgnx-gc-batch-threshold 0.2) (cons drgnx-gc-batch-threshold 0.2))))))

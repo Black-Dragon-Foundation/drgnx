@@ -16,6 +16,7 @@
 (require 'drgnx-file)
 (require 'drgnx-gateway)
 (require 'drgnx-jobs)
+(require 'drgnx-gc)
 (require 'drgnx-agents)
 (require 'drgnx-coord)
 (require 'drgnx-job)
@@ -890,6 +891,7 @@ Signals an error when a hub already serves there."
 (defun drgnx-hub-main ()
   "The hub process's entry point (batch): serve until `shutdown' or SIGTERM.  Exit 3 when a hub already serves, 1
 when it cannot start for any other reason."
+  (drgnx-gc-batch-setup)
   (setq drgnx-timer-report-file "hub-timers-report.eld")   ; the hub's stopped timers go to a file of their own
   (drgnx-sandbox-vc-mode 1)                       ; the hub's own git never runs in a job's folder either
   (condition-case err

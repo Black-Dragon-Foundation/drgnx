@@ -22,6 +22,7 @@
 (require 'drgnx-search-chunk)
 (require 'drgnx-ai-client)
 (require 'drgnx-jobs)
+(require 'drgnx-gc)
 
 (defconst drgnx-search-index-default-batch 32
   "Chunks per embedding request: TEI's default max-client-batch-size (a 413 halves it for the rest of the run).")
@@ -277,6 +278,7 @@ with are an :error.  A project that is no git project, has search off, or whose 
   "Batch entry: `emacs --batch -L core -l drgnx-search-index -f drgnx-search-index-cli ROOT [--rebuild]'.
 ROOT may be any directory of the project: its git top level is indexed (`drgnx-search-toplevel').
 Prints one summary line; exits 0, or 1 on an error."
+  (drgnx-gc-batch-setup)
   (let* ((args command-line-args-left) (rebuild (member "--rebuild" args)) (root (car (delete "--rebuild" (copy-sequence args)))))
     (setq command-line-args-left nil)
     (if (null root)
