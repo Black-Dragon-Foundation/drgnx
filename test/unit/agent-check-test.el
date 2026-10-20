@@ -633,6 +633,23 @@ with the HTTP mock stopped afterwards."
             ('gemini (should (equal (plist-get r :stdout) (concat dir "|" dir))))
             (_ (should (equal (plist-get r :stdout) "x|")))))))))
 
+(ert-deftest drgnx-agent-check/a-hook-that-never-reads-its-stdin-keeps-its-output ()
+  ;; AGENT-CHECK-CI-1: Emacs never writes to a hook's stdin pipe.  A hook that ends before the write meets a closed
+  ;; pipe (EPIPE) in the instant before Emacs sees the child end; Emacs then drops the process's output and calls
+  ;; it "exit 256".  The shell feeds the event instead (a race this narrow cannot be made to happen on demand).
+  (drgnx-agent-check-test-env
+    (let* ((item (list :kind 'claude :section 'hook :name "h" :file "/f"
+                       :spec (list :event "Stop" :command "printf ok")))
+           (wrote nil) (note (lambda (&rest _) (setq wrote t)))
+           (r (progn
+                (advice-add 'process-send-string :before note)
+                (unwind-protect
+                    (drgnx-agent-check-test--wait (lambda (cb) (drgnx-agent-check-hook item root cb)))
+                  (advice-remove 'process-send-string note)))))
+      (should-not wrote)
+      (should (eql (plist-get r :exit) 0))
+      (should (equal (plist-get r :stdout) "ok")))))
+
 (ert-deftest drgnx-agent-check/no-vendor-key-reaches-a-tested-server-or-hook ()
   ;; the agents' scrub list applies to Test too: a project's server or hook never gets this Emacs's provider keys;
   ;; a key the item's own spec sets still reaches it (names only are compared: values are masked anyway)
