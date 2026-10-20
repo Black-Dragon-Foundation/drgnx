@@ -2,6 +2,7 @@
 ;; The server runs as a child batch Emacs, as an agent would start it; the test speaks JSON-RPC over its stdio.
 (require 'ert)
 (require 'drgnx-coord)
+(require 'drgnx-records)
 (require 'drgnx-coord-mcp)
 (require 'drgnx-work)
 (load (expand-file-name "test/fixtures/scripted-process" drgnx-dir) nil t)
@@ -128,7 +129,9 @@
                    ((symbol-function 'drgnx-hub-call-sync)
                     (lambda (method &rest _) (push method calls)
                       (if (eq ,sessions 'error) (error "drgnx hub: broken")
-                        (list :sessions (vconcat (mapcar #'prin1-to-string ,sessions)))))))
+                        (list :sessions (mapcar (lambda (s) (json-parse-string (drgnx-records-encode 'drgnx-records-session s) :object-type 'plist
+                                                                               :array-type 'list :null-object nil :false-object nil))
+                                                ,sessions))))))
            (drgnx-coord-job-create :id "j" :tasks '((:n 1 :title "one") (:n 2 :title "two")))
            (drgnx-coord-claim "j#1" "t1" 0)
            ,@body)

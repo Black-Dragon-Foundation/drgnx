@@ -14,6 +14,7 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'drgnx-agents)
+(require 'drgnx-records)
 (require 'drgnx-hub-client)
 
 (defvar drgnx-agents-mirror--fetching (make-hash-table :test #'equal)
@@ -28,14 +29,12 @@
 
 (defun drgnx-agents-mirror--fetching-p (id) (not (eq (gethash id drgnx-agents-mirror--fetching :none) :none)))
 
-(defun drgnx-agents-mirror--read (text)
-  "The record TEXT holds (a non-empty list), as a one-element list; nil if TEXT is unreadable, empty or of another
-type.  One damaged record from the hub is skipped (and said so), never allowed to stop the records after it."
+(defun drgnx-agents-mirror--decode (schema json)
+  "The record SCHEMA describes, from JSON the hub sent (parsed), as a one-element list; nil if it does not decode.
+One damaged record from the hub is skipped (and said so), never allowed to stop the records after it."
   (condition-case err
-      (let ((v (car (read-from-string text))))
-        (cond ((consp v) (list v))
-              (v (message "drgnx: skipped a record from the hub that is not a list (a %s)" (type-of v)) nil)))
-    (error (message "drgnx: skipped an unreadable record from the hub (%s)" (error-message-string err)) nil)))
+      (list (drgnx-records-from-json schema json))
+    (error (message "drgnx: skipped a record from the hub that does not decode (%s)" (error-message-string err)) nil)))
 
 (defun drgnx-agents-mirror--apply-snapshot (snap)
   "Make (or update) the mirror of SNAP (a hub snapshot); returns (MIRROR . NEW-P)."
@@ -48,10 +47,10 @@ type.  One damaged record from the hub is skipped (and said so), never allowed t
     (cons m new)))
 
 (defun drgnx-agents-mirror--apply-entries (m entries)
-  "Put ENTRIES ((INDEX LISP)…, as the hub's JSON arrays arrive) into mirror M's transcript."
+  "Put ENTRIES ((INDEX ENTRY)…, as the hub's JSON arrays arrive) into mirror M's transcript."
   (let ((v (vconcat (drgnx-agent-session-entries m))))
     (mapc (lambda (pair)
-            (when-let* ((read (drgnx-agents-mirror--read (elt pair 1))) (i (elt pair 0)))
+            (when-let* ((read (drgnx-agents-mirror--decode 'drgnx-records-entry (elt pair 1))) (i (elt pair 0)))
               (when (>= i (length v)) (setq v (vconcat v (make-vector (- (1+ i) (length v)) nil))))
               (aset v i (car read))))
           entries)
@@ -66,10 +65,11 @@ type.  One damaged record from the hub is skipped (and said so), never allowed t
                       (let ((waiting (gethash id drgnx-agents-mirror--fetching)) (seq (or (plist-get r :seq) 0)))
                         (remhash id drgnx-agents-mirror--fetching)
                         (when r
-                          (when-let* ((snap (drgnx-agents-mirror--read (plist-get r :lisp))))
+                          (when-let* ((snap (drgnx-agents-mirror--decode 'drgnx-records-session (plist-get r :session))))
                             (drgnx-agents-mirror--apply-snapshot (car snap)))
-                          (when-let* ((entries (drgnx-agents-mirror--read (plist-get r :entries))))
-                            (setf (drgnx-agent-session-entries m) (car entries)))
+                          (setf (drgnx-agent-session-entries m) nil)
+                          (drgnx-agents-mirror--apply-entries m (let ((i -1)) (mapcar (lambda (e) (list (cl-incf i) e))
+                                                                                      (plist-get r :entries))))
                           (puthash id seq drgnx-agents-mirror--seq))
                         (dolist (ev (reverse waiting)) (drgnx-agents-mirror--event (car ev) (cdr ev)))
                         (drgnx-agents--changed m))))))
@@ -85,7 +85,7 @@ type.  One damaged record from the hub is skipped (and said so), never allowed t
        ;; older than what the mirror has (a snapshot or entries that waited for the transcript, numbered before it)
        ((and (gethash id drgnx-agents-mirror--seq) (<= seq (gethash id drgnx-agents-mirror--seq))))
        ((equal event "agent")
-        (when-let* ((snap (drgnx-agents-mirror--read (plist-get data :lisp))))
+        (when-let* ((snap (drgnx-agents-mirror--decode 'drgnx-records-session (plist-get data :session))))
           (pcase-let ((`(,m . ,new) (drgnx-agents-mirror--apply-snapshot (car snap))))
             (if new (drgnx-agents-mirror--fetch m)
               (drgnx-agents--changed m)))))
@@ -110,8 +110,8 @@ type.  One damaged record from the hub is skipped (and said so), never allowed t
   (drgnx-hub-connect)
   (drgnx-hub-call "agents/list" nil
                   (lambda (r _err)
-                    (mapc (lambda (lisp)
-                            (when-let* ((snap (drgnx-agents-mirror--read lisp)))
+                    (mapc (lambda (json)
+                            (when-let* ((snap (drgnx-agents-mirror--decode 'drgnx-records-session json)))
                               (pcase-let ((`(,m . ,_) (drgnx-agents-mirror--apply-snapshot (car snap))))
                                 (drgnx-agents-mirror--fetch m))))
                           (plist-get r :sessions)))))

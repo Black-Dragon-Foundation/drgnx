@@ -111,7 +111,7 @@ and `exec-path' follows; other names are replaced.  The names that changed."
       (progn (require 'drgnx-hub-client)
              (when (drgnx-hub-running-p)
                (drgnx-hub-call "env/set"
-                               (list :env (mapcan (lambda (c) (list (intern (concat ":" (car c))) (cdr c))) alist))
+                               (list :env (mapcar (lambda (c) (list :name (car c) :value (cdr c))) alist))
                                #'ignore)))
     (error nil)))
 

@@ -18,6 +18,7 @@
 (require 'subr-x)
 (require 'drgnx-mcp)
 (require 'drgnx-coord)
+(require 'drgnx-records)
 (require 'drgnx-paths)
 (require 'drgnx-gc)
 
@@ -434,7 +435,6 @@ within `drgnx-coord--data-max' characters."
      (ignore-errors (drgnx-coord-note-held (drgnx-coord-mcp--me) (and (consp r) (plist-get r :held))))   ; stale twice: a card
      (prog1 (drgnx-coord-mcp--answer r) (drgnx-coord-mcp--notify-hub))))
 
-(defvar read-eval)                      ; `let'-bound in `--hub-agents': must be dynamic once compiled
 (declare-function drgnx-hub-running-p "drgnx-hub-client")
 (declare-function drgnx-hub-call-sync "drgnx-hub-client")
 
@@ -444,9 +444,8 @@ within `drgnx-coord--data-max' characters."
       (progn
         (require 'drgnx-hub-client)
         (if (not (drgnx-hub-running-p)) 'none
-          (let ((read-eval nil))
-            (mapcar (lambda (lisp) (car (read-from-string lisp)))
-                    (plist-get (drgnx-hub-call-sync "agents/list" nil 2) :sessions)))))
+          (mapcar (lambda (json) (drgnx-records-from-json 'drgnx-records-session json))
+                  (plist-get (drgnx-hub-call-sync "agents/list" nil 2) :sessions))))
     (error 'none)))
 
 (defun drgnx-coord-mcp--agents ()

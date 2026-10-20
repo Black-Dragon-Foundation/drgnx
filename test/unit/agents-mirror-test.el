@@ -3,6 +3,7 @@
 (require 'ert)
 (require 'drgnx-agents)
 (require 'drgnx-agents-mirror)
+(require 'drgnx-records)
 (require 'drgnx-hub)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
@@ -44,7 +45,7 @@
 (defun drgnx-agents-mirror-test--start ()
   (let ((id (plist-get (drgnx-hub-call-sync "agents/start" (list :profile "mock" :cwd temporary-file-directory)) :id)))
     (drgnx-agents-mirror-test--wait
-     (lambda () (eq (plist-get (car (read-from-string (plist-get (drgnx-hub-call-sync "agents/get" (list :id id)) :lisp))) :status) 'idle)))
+     (lambda () (equal (plist-get (plist-get (drgnx-hub-call-sync "agents/get" (list :id id)) :session) :status) "idle")))
     id))
 
 (ert-deftest drgnx-agents-mirror/hub-sessions-appear-and-stay-current ()
@@ -89,14 +90,15 @@
       (drgnx-hub-call-sync "agents/send" (list :id id :text "slow work"))       ; it streams while this Emacs goes away
       (drgnx-agents-mirror-test--wait (lambda () (string-search "part 1" (drgnx-agents-mirror-test--text (drgnx-agents-mirror-test--mirror id)))))
       (drgnx-agents-mirror-stop) (drgnx-hub-disconnect) (setq drgnx-agents--sessions nil)
-      (drgnx-agents-mirror-test--wait (lambda () (string-search "part 3" (plist-get (drgnx-hub-call-sync "agents/get" (list :id id)) :entries))))   ; it went on in the hub
+      (drgnx-agents-mirror-test--wait (lambda () (string-search "part 3" (format "%S" (plist-get (drgnx-hub-call-sync "agents/get" (list :id id)) :entries)))))   ; it went on in the hub
       (drgnx-agents-mirror-sync)                                             ; a new editor
       (should (drgnx-agents-mirror-test--wait (lambda () (let ((m (drgnx-agents-mirror-test--mirror id)))
                                                            (and m (string-search "part 10" (drgnx-agents-mirror-test--text m)))))
                                               15))
       (drgnx-agents-mirror-test--wait (lambda () (eq (drgnx-agent-session-status (drgnx-agents-mirror-test--mirror id)) 'idle)))
       ;; nothing lost: the mirror's transcript is the hub's
-      (let ((hub (car (read-from-string (plist-get (drgnx-hub-call-sync "agents/get" (list :id id)) :entries)))))
+      (let ((hub (mapcar (lambda (e) (drgnx-records-from-json 'drgnx-records-entry e))
+                         (plist-get (drgnx-hub-call-sync "agents/get" (list :id id)) :entries))))
         (should (drgnx-agents-mirror-test--wait (lambda () (equal (drgnx-agent-session-entries (drgnx-agents-mirror-test--mirror id)) hub))))
         ;; and once the session is quiet (no event will come): a new editor still gets the whole transcript
         (drgnx-agents-mirror-stop) (drgnx-hub-disconnect) (setq drgnx-agents--sessions nil)
@@ -114,9 +116,10 @@
                   ((symbol-function 'drgnx-hub-call)
                    (lambda (method _params &optional cb)
                      (when (equal method "agents/list")
-                       (funcall cb (list :sessions '("(:id \"bad\" :name \"cut off"
-                                                     "(:id \"s-good\" :name \"Good\" :status idle)"
-                                                     ")")) nil))))
+                       (funcall cb (list :sessions '((:id "bad" :name "cut off" :status "nonsense")
+                                                     (:id "s-good" :name "Good" :status "idle")
+                                                     42))
+                                nil))))
                   ((symbol-function 'drgnx-agents-mirror--fetch) #'ignore))
           (let ((inhibit-message t)) (drgnx-agents-mirror-sync))
           (should (drgnx-agents-mirror-test--mirror "s-good"))
@@ -126,7 +129,7 @@
 (ert-deftest drgnx-agents-mirror/a-malformed-transcript-entry-does-not-lose-the-others ()
   (let ((m (drgnx-agents--make :remote "s-x" :id "s-x")))
     (let ((inhibit-message t))
-      (drgnx-agents-mirror--apply-entries m '((0 "(:text \"one\")") (1 "(:text \"cut off") (2 "(:text \"three\")"))))
+      (drgnx-agents-mirror--apply-entries m '((0 (:text "one")) (1 (:type "bogus")) (2 (:text "three")))))
     (should (equal (plist-get (nth 0 (drgnx-agent-session-entries m)) :text) "one"))
     (should (equal (plist-get (nth 2 (drgnx-agent-session-entries m)) :text) "three"))))
 
@@ -139,24 +142,54 @@
           (let ((m (drgnx-agents--make :remote "s-o" :id "s-o")))
             (push m drgnx-agents--sessions)
             (drgnx-agents-mirror--fetch m)
-            (drgnx-agents-mirror--event "agent" (list :id "s-o" :seq 3 :lisp "(:id \"s-o\" :name \"old\" :status busy)"))
-            (funcall answer (list :seq 5 :lisp "(:id \"s-o\" :name \"new\" :status idle)" :entries "((:text \"hi\"))") nil)
+            (drgnx-agents-mirror--event "agent" (list :id "s-o" :seq 3 :session '(:id "s-o" :name "old" :status "busy")))
+            (funcall answer (list :seq 5 :session '(:id "s-o" :name "new" :status "idle") :entries '((:text "hi"))) nil)
             (should (equal (drgnx-agent-session-name m) "new"))
+            (should (eq (drgnx-agent-session-status m) 'idle))
             ;; and later, live: an older number is skipped, a newer one applied
-            (drgnx-agents-mirror--event "agent" (list :id "s-o" :seq 5 :lisp "(:id \"s-o\" :name \"old\" :status busy)"))
+            (drgnx-agents-mirror--event "agent" (list :id "s-o" :seq 5 :session '(:id "s-o" :name "old" :status "busy")))
             (should (equal (drgnx-agent-session-name m) "new"))
-            (drgnx-agents-mirror--event "agent" (list :id "s-o" :seq 6 :lisp "(:id \"s-o\" :name \"newer\" :status idle)"))
+            (drgnx-agents-mirror--event "agent" (list :id "s-o" :seq 6 :session '(:id "s-o" :name "newer" :status "idle")))
             (should (equal (drgnx-agent-session-name m) "newer"))))
       (drgnx-agents-mirror-stop))))
 
-(ert-deftest drgnx-agents-mirror/a-non-list-record-is-skipped ()
-  ;; readable but of the wrong type (a number, a string, nil): never a snapshot or an entry
+(ert-deftest drgnx-agents-mirror/a-record-that-does-not-decode-is-skipped ()
+  ;; not an object, or an unknown entry type: never a snapshot or an entry
+  (let ((drgnx-agents--sessions nil) (inhibit-message t) (m (drgnx-agents--make :remote "s-n" :id "s-n")))
+    (drgnx-agents-mirror--event "agent" (list :id "s-n" :seq 1 :session 42))
+    (should-not drgnx-agents--sessions)
+    (drgnx-agents-mirror--apply-entries m '((0 (:type "no-such-type" :text "x")) (1 (:type "agent" :text "y"))))
+    (should (equal (mapcar (lambda (e) (plist-get e :text)) (drgnx-agent-session-entries m)) '(nil "y")))))
+
+(ert-deftest drgnx-agents-mirror/sessions-and-entries-arrive-as-json ()
+  ;; a session from a mock-acp agent in a hub: status and entry types reach the mirror as symbols
+  (drgnx-agents-mirror-test--with
+    (let ((id (drgnx-agents-mirror-test--start)))
+      (drgnx-hub-call-sync "agents/send" (list :id id :text "hello json"))
+      (drgnx-agents-mirror-sync)
+      (should (drgnx-agents-mirror-test--wait
+               (lambda () (let ((m (drgnx-agents-mirror-test--mirror id)))
+                            (and m (string-search "You said: hello json" (drgnx-agents-mirror-test--text m)))))))
+      (let ((m (drgnx-agents-mirror-test--mirror id)))
+        (should (memq (drgnx-agent-session-status m) '(busy idle)))
+        (should (cl-every (lambda (e) (symbolp (plist-get e :type))) (drgnx-agent-session-entries m)))
+        (should (memq 'agent (mapcar (lambda (e) (plist-get e :type)) (drgnx-agent-session-entries m))))))))
+
+(ert-deftest drgnx-agents-mirror/no-read-of-hub-data ()
   (let ((drgnx-agents--sessions nil) (inhibit-message t))
-    (should-not (drgnx-agents-mirror--read "42"))
-    (should-not (drgnx-agents-mirror--read "\"text\""))
-    (should-not (drgnx-agents-mirror--read "nil"))
-    (should (equal (drgnx-agents-mirror--read "(:id \"s\")") '((:id "s"))))
-    (drgnx-agents-mirror--event "agent" (list :id "s-n" :seq 1 :lisp "42"))
-    (should-not drgnx-agents--sessions)))
+    (cl-letf (((symbol-function 'drgnx-hub-call) #'ignore))
+      (advice-add 'read-from-string :before #'drgnx-agents-mirror-test--no-read)
+      (advice-add 'read :before #'drgnx-agents-mirror-test--no-read)
+      (unwind-protect
+          (progn
+            (drgnx-agents-mirror--event "agent" (list :id "s-r" :seq 1 :session '(:id "s-r" :name "r" :status "idle")))
+            (let ((m (drgnx-agents-mirror--find "s-r")))
+              (should m)
+              (drgnx-agents-mirror--event "agent-entries" (list :id "s-r" :seq 2 :entries '((0 (:type "agent" :text "hi")))))
+              (should (equal (plist-get (car (drgnx-agent-session-entries m)) :text) "hi"))))
+        (advice-remove 'read-from-string #'drgnx-agents-mirror-test--no-read)
+        (advice-remove 'read #'drgnx-agents-mirror-test--no-read)))))
+
+(defun drgnx-agents-mirror-test--no-read (&rest _) (error "The mirror read hub data as Lisp"))
 
 ;;; agents-mirror-test.el ends here

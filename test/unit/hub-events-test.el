@@ -175,8 +175,8 @@
           (should (eql (plist-get d :since) before))
           (should (= (length (plist-get d :events)) 50))
           (should (equal (plist-get (car (plist-get d :events)) :summary) "run 0"))
-          ;; data comes as Lisp text, read back whole
-          (should (equal (car (read-from-string (plist-get (car (last (plist-get d :events))) :data))) '(:passed 49 :failed 0))))))))
+          ;; data comes as a JSON object (Records 2), never as text
+          (should (equal (plist-get (car (last (plist-get d :events))) :data) '(:passed 49 :failed 0))))))))
 
 (ert-deftest drgnx-hub-events/test-events-reach-the-status-bar ()
   (drgnx-hub-events-test--with "# P\n\n### Task 1: one\n"

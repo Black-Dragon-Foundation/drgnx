@@ -68,13 +68,13 @@ coordination server's `coord/notify` checks the same. One JSON object per line:
 | `gateway/register` `{job, task, agent, chain: [[provider, model-or-null]…], budget, keys: {provider: key}, owner, openrouter}` | `{token, url, openrouter}` (the restrictions kept; absent when none; restrictions that do not read are an error) |
 | `gateway/unregister` `{token}` | `true` |
 | `gateway/keys` `{keys: {provider: key}}` | `true`: the keys go to the gateway's memory |
-| `env/set` `{env: {NAME: value}}` | `true`: the names `drgnx-shell-env-names` allows (never a key, `drgnx-shell-env-refused-p`) go into the hub's environment (`drgnx-shell-env-apply`: `PATH` merged, the sender's dirs first) |
+| `env/set` `{env: [{name, value}…]}` (at most 16, a value at most 32768 characters; the `{NAME: value}` object form is refused as `invalid params`) | `{applied: [NAME…]}`: the names `drgnx-shell-env-names` allows (never a key, `drgnx-shell-env-refused-p`) go into the hub's environment (`drgnx-shell-env-apply`: `PATH` merged, the sender's dirs first) |
 | `spend` `{job?, task?, agent?}` | `{input, output, cost, requests}` |
 | `shutdown` | `true`, then the hub exits |
 
 | `agents/start` `{profile, cwd, task?, job?}` | `{id, name}`: a session held by the hub |
-| `agents/list` | `{sessions: [LISP…]}` (snapshots) |
-| `agents/get` `{id}` | `{lisp, entries, seq}` (snapshot, the whole transcript, the change number) |
+| `agents/list` | `{sessions: [Snapshot…]}` |
+| `agents/get` `{id}` | `{session: Snapshot, entries: [Entry…], seq}` (the snapshot, the whole transcript, the change number) |
 | `agents/send` `{id, text}`, `agents/stop` `{id}`, `agents/kill` `{id}` | `true` |
 | `agents/permission` `{id, request, option}` | `true` — the user's answer: the only way a permission is answered |
 | `agents/do` `{id, op, n?, text?, item?, reject?}` | `true`: `deliver-queue`, `unqueue`, `requeue`, `review` |
@@ -103,11 +103,10 @@ the innermost write in progress is judged by time (`drgnx-hub--writing`): one be
 back the time each write above it took (only that: a stopped client beneath writes to others is still dropped); its Emacs
 connects again (the Agents module's idle timer, the Work cockpit's What needs you refresh) — meanwhile it shows the hub's sessions as
 ended.
-Snapshots and transcript entries travel as **printed Lisp** (`lisp`,
-`entries`): JSON would lose the difference between a symbol and a string in an entry; both ends are Emacs. Events: from the gateway `request` (job, task, agent, provider, model, status, input, output, cost), `fallback`
+Snapshots and transcript entries travel as **JSON objects** ("Records 2" below). Events: from the gateway `request` (job, task, agent, provider, model, status, input, output, cost), `fallback`
 (agent, from, to, why), `budget` (job, spent, budget); from jobs `card` (id, job, task, kind, title), `job` (id: its status, tasks or open cards changed) and `fallback` (job, task,
-agent, from, to, why); from sessions `agent` (id, seq, lisp — the snapshot) and
-`agent-entries` (id, seq, entries: [[index, lisp]…], the entries new or changed since the last time — entries change
+agent, from, to, why); from sessions `agent` (id, seq, session — the snapshot) and
+`agent-entries` (id, seq, entries: [[index, Entry]…], the entries new or changed since the last time — entries change
 in place: chunks appended, tool calls updated), at most one of each per session per 50 ms; `lease-released` (task,
 agent, job); `events` (below).
 
@@ -163,7 +162,7 @@ The hub turns what happens into events in the store's event log ([coordination.m
   a day, and on every call the row cap (`drgnx-coord-event-max-rows`).
 
 Subscribers get them as `events` (`:since ID :last ID :events [{id, at, agent, job, task, kind, summary, data}…]`,
-`data` as printed Lisp, the text the store holds, never read and printed again — read it with `read-eval` off), at
+`data` a JSON object parsed from the store's column, absent when there is none), at
 most one every `drgnx-hub-events-interval` (0.25 s) and 200 a time. The hub's session events and `coord/notify`
 schedule a broadcast at once; its tick (2 s) catches what other processes wrote and the job events above, which go out
 within those 2 s. Event ids are never reused (`autoincrement`), so a pruned log never sends an id twice. A new hub
@@ -183,6 +182,20 @@ backup keeps the bytes): the agent replays the
 history into the transcript and the session is idle; an editor that reconnects fetches it again (`agents/get`). A
 session whose agent cannot load sessions (no `loadSession`, or an error) ends and says why, and so leaves the file.
 What was in flight is gone: a turn that was running, the queue, a pending permission or edit.
+
+## Records 2
+
+What crosses the socket is JSON shaped by the record schemas of `core/drgnx-records.el` (docs/develop/core.md,
+"Records"); the Lisp side never prints Lisp to a peer and never calls `read` on what a peer sent.
+
+- A `Snapshot` is `drgnx-records-session` (`status`, `via`, `mode` are strings of closed lists), an `Entry` is
+  `drgnx-records-entry` (its `text` joined by the hub, `drgnx-agents-join-text`).
+- `agents/list` answers `{sessions: [Snapshot]}`, `agents/get` `{session, entries, seq}`; the events `agent`
+  `{id, seq, session}` and `agent-entries` `{id, seq, entries: [[index, Entry]]}`.
+- `events` and `events/since` rows carry `data` as an object (the store's column, parsed), or no `data`.
+- The editor's mirror (`drgnx-agents-mirror`) decodes with `drgnx-records-from-json`: status and entry types become
+  symbols, and a record that does not decode (an unknown type, a wrong shape) is skipped with one message.
+- `env/set` takes `{env: [{name, value}]}` only (see the method table).
 
 ## Per-session sockets
 

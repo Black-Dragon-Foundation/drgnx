@@ -332,7 +332,6 @@ hand it the keys this Emacs holds.  t, or an error saying why not."
       (with-demoted-errors "drgnx hub: keys not handed over: %S" (drgnx-hub--send-keys)))))
 
 (declare-function drgnx-statusbar-note-tests "drgnx-statusbar")
-(defvar read-eval)                      ; so a let binds it dynamically in compiled code
 
 (defun drgnx-hub--note-tests (event data)
   "In an editor: the test runs among the `events' the hub sent reach the status bar (`drgnx-statusbar-note-tests',
@@ -340,7 +339,7 @@ when it is loaded)."
   (when (and (equal event "events") (fboundp 'drgnx-statusbar-note-tests))
     (dolist (e (append (plist-get data :events) nil))
       (when (equal (plist-get e :kind) "test")
-        (let ((d (and (stringp (plist-get e :data)) (ignore-errors (let ((read-eval nil)) (car (read-from-string (plist-get e :data))))))))
+        (let ((d (plist-get e :data)))
           (when (and (proper-list-p d) (or (natnump (plist-get d :passed)) (natnump (plist-get d :failed))))
             (drgnx-statusbar-note-tests (or (plist-get d :passed) 0) (or (plist-get d :failed) 0) (plist-get e :agent))))))))
 

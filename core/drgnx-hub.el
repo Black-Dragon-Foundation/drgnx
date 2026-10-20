@@ -21,6 +21,7 @@
 (require 'drgnx-gc)
 (require 'drgnx-agents)
 (require 'drgnx-coord)
+(require 'drgnx-records)
 (require 'drgnx-job)
 (require 'drgnx-job-clash)
 (require 'drgnx-timer)
@@ -154,7 +155,7 @@ a pid.  How many went."
     ("gateway/unregister" (drgnx-gateway-unregister (plist-get params :token)) (drgnx-hub--save-registrations) t)
     ("gateway/keys" (drgnx-hub--set-keys (plist-get params :keys)) t)
     ("events/since" (drgnx-hub--events-since params))
-    ("env/set" (drgnx-hub--set-env (plist-get params :env)) t)
+    ("env/set" (drgnx-hub--set-env (plist-get params :env)))
     ("coord/notify" (run-at-time 0 nil #'drgnx-hub--deliver)   ; a coordination server wrote: deliver now, look for clashes
      (drgnx-hub--events-soon)                                    ; and send its events
      (run-at-time 0 nil (lambda () (dolist (j (drgnx-coord-jobs "running")) (with-demoted-errors "drgnx job: %S" (drgnx-job-clash-scan j)))))
@@ -163,10 +164,11 @@ a pid.  How many went."
     ("agents/start"
      (let ((s (drgnx-agents-start (plist-get params :profile) (plist-get params :cwd) (plist-get params :task) (plist-get params :job))))
        (list :id (drgnx-agent-session-id s) :name (drgnx-agent-session-name s))))
-    ("agents/list" (list :sessions (vconcat (mapcar #'drgnx-hub--snapshot-lisp (drgnx-agents-sessions)))))
+    ("agents/list" (list :sessions (vconcat (mapcar #'drgnx-hub--snapshot-json (drgnx-agents-sessions)))))
     ("agents/get" (let ((s (drgnx-hub--session params)))
                     (drgnx-agents-join-text s)          ; the wire carries whole texts
-                    (list :lisp (drgnx-hub--snapshot-lisp s) :entries (drgnx-hub--lisp (drgnx-agent-session-entries s))
+                    (list :session (drgnx-hub--snapshot-json s)
+                          :entries (vconcat (mapcar #'drgnx-hub--entry-json (drgnx-agent-session-entries s)))
                           :seq (gethash (drgnx-agent-session-id s) drgnx-hub--seq 0))))
     ("agents/send" (drgnx-agents-send (drgnx-hub--session params) (plist-get params :text)) t)
     ("agents/stop" (drgnx-agents-stop (drgnx-hub--session params)) t)
@@ -245,16 +247,21 @@ this Emacs found (`drgnx-ai--keys'), which the agents the hub starts read withou
                 (puthash id v drgnx-ai--keys))))
 
 (defun drgnx-hub--set-env (env)
-  "ENV, the variables an Emacs read from the user's login shell — ((NAME . VALUE)…), or {NAME: VALUE} from JSON —
-applied to the hub's own environment (`drgnx-shell-env-apply'), only the names `drgnx-shell-env-names' allows and
-never a key: the agents and jobs the hub starts from now on get the new PATH (running ones keep theirs)."
-  (let ((allowed (drgnx-shell-env--names)))
-    (drgnx-shell-env-apply
-     (cl-loop for c in (if (keywordp (car-safe env))
-                           (cl-loop for (k v) on env by #'cddr collect (cons (substring (symbol-name k) 1) v))
-                         env)
-              when (and (consp c) (stringp (car c)) (stringp (cdr c)) (member (car c) allowed))
-              collect c))))
+  "ENV, the variables an Emacs read from the user's login shell — a list of (:name NAME :value VALUE), at most 16, a
+value at most 32768 characters (the contract's `env/set'; the {NAME: VALUE} object form is refused) — applied to the
+hub's own environment (`drgnx-shell-env-apply'), only the names `drgnx-shell-env-names' allows and never a key: the
+agents and jobs the hub starts from now on get the new PATH (running ones keep theirs).  Answers (:applied [NAME…])."
+  (unless (and (proper-list-p env) (<= (length env) 16)
+               (cl-every (lambda (c) (and (proper-list-p c) (keywordp (car-safe c)) (stringp (plist-get c :name))
+                                          (stringp (plist-get c :value)) (<= (length (plist-get c :value)) 32768)))
+                         env))
+    (error "invalid params: env is a list of {name, value}, at most 16, values at most 32768 characters"))
+  (let* ((allowed (drgnx-shell-env--names))
+         (pairs (cl-loop for c in env
+                         when (member (plist-get c :name) allowed)
+                         collect (cons (plist-get c :name) (plist-get c :value)))))
+    (drgnx-shell-env-apply pairs)
+    (list :applied (vconcat (mapcar #'car pairs)))))
 
 (defun drgnx-hub-register (params)
   "Register an agent with the gateway: PARAMS (:job :task :agent :chain ((PROVIDER MODEL)…) :budget :openrouter (the
@@ -276,7 +283,9 @@ editor check that they all were.  Restrictions that do not read refuse the regis
 
 ;;;; Agent sessions (held here; editors mirror them)
 
-(defun drgnx-hub--lisp (v) (let ((print-length nil) (print-level nil) (print-circle nil)) (prin1-to-string v)))
+(defun drgnx-hub--entry-json (e)
+  "Transcript entry E as the wire's JSON value (`drgnx-records-entry')."
+  (drgnx-records-to-json 'drgnx-records-entry e))
 
 (defun drgnx-hub--session (params)
   (or (drgnx-agents-get (plist-get params :id)) (error "No agent session %s" (plist-get params :id))))
@@ -300,7 +309,9 @@ editor check that they all were.  Restrictions that do not read refuse the regis
         ;; not held while it is behind the decision log — only its coordination writes are
         :enforced (drgnx-job-enforced-p s)))
 
-(defun drgnx-hub--snapshot-lisp (s) (drgnx-hub--lisp (drgnx-hub--snapshot s)))
+(defun drgnx-hub--snapshot-json (s)
+  "Session S's snapshot as the wire's JSON value (`drgnx-records-session')."
+  (drgnx-records-to-json 'drgnx-records-session (drgnx-hub--snapshot s)))
 
 (defvar drgnx-hub--sent (make-hash-table :test #'equal) "Session id → the entries last sent to subscribers (copies).")
 (defvar drgnx-hub--seq (make-hash-table :test #'equal)
@@ -480,9 +491,13 @@ merge and writes) go out too: the hub's tick, every 2 s."
 
 (defun drgnx-hub--event-rows (since limit)
   "The events after id SINCE, oldest first, at most LIMIT, for JSON: (:id :at :agent :job :task :kind :summary :data),
-DATA the JSON text the store holds (schema 6's checked column) — never parsed and printed again here."
+DATA the JSON object the store's checked column holds (schema 6), parsed; absent when there is none."
   (mapcar (pcase-lambda (`(,id ,at ,agent ,job ,task ,kind ,summary ,data))
-            (list :id id :at at :agent agent :job job :task task :kind kind :summary summary :data data))
+            (let ((d (and (stringp data)
+                          (ignore-errors (json-parse-string data :object-type 'plist :array-type 'array
+                                                            :null-object :null :false-object :false)))))
+              (append (list :id id :at at :agent agent :job job :task task :kind kind :summary summary)
+                      (and d (list :data d)))))
           (sqlite-select (drgnx-work-db) (format "select %s from event where id > ? order by id limit ?" drgnx-coord--event-cols)
                          (list since limit))))
 
@@ -562,11 +577,11 @@ for an agent that is not here (or exited) stays queued."
     (drgnx-agents-join-text s)                  ; the wire carries whole texts (RP7-e: send deltas instead)
     (dolist (e (drgnx-agent-session-entries s))
       (unless (equal e (and sent (< i (length sent)) (aref sent i)))
-        (push (vector i (drgnx-hub--lisp e)) changed))
+        (push (vector i (drgnx-hub--entry-json e)) changed))
       (setq i (1+ i)))
     (puthash id (vconcat (mapcar #'copy-tree (drgnx-agent-session-entries s))) drgnx-hub--sent)
     (let ((seq (puthash id (1+ (gethash id drgnx-hub--seq 0)) drgnx-hub--seq)))
-      (drgnx-hub--broadcast 'agent (list :id id :seq seq :lisp (drgnx-hub--snapshot-lisp s)))
+      (drgnx-hub--broadcast 'agent (list :id id :seq seq :session (drgnx-hub--snapshot-json s)))
       (when changed (drgnx-hub--broadcast 'agent-entries (list :id id :seq seq :entries (vconcat (nreverse changed))))))))
 
 (defun drgnx-hub--exit-now (exit)
