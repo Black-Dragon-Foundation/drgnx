@@ -1162,4 +1162,4 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
 
 (ert-deftest drgnx-install/the-pin-is-the-published-series-head ()
   (drgnx-install-test--expect (drgnx-install-test--plan "fedora-44" "--method" "nidhogg")
-                              "at v31.1-nidhogg.1" "commit 49c0d3575d5b"))
+                              "at v31.1-nidhogg.1" "commit 29f76866bd1d"))

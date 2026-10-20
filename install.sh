@@ -25,7 +25,7 @@ NIDHOGG_TAG="v$NIDHOGG_VERSION"
 NIDHOGG_REPO="${DRGNX_INSTALL_NIDHOGG_REPO:-https://github.com/Black-Dragon-Foundation/nidhogg.git}"
 # The commit $NIDHOGG_TAG must be: a moved or replaced tag installs nothing.  The head of the published series;
 # the tag is created on this commit at release (until then the fetch of the tag fails and nothing is installed).
-NIDHOGG_COMMIT="${DRGNX_INSTALL_NIDHOGG_COMMIT:-49c0d3575d5b758ac29714035dd66ebf84c2ed1f}"
+NIDHOGG_COMMIT="${DRGNX_INSTALL_NIDHOGG_COMMIT:-29f76866bd1d7a19307ffe2eb330556c5291e0cf}"
 DRGNX_REPO="${DRGNX_INSTALL_REPO:-https://github.com/Black-Dragon-Foundation/drgnx.git}"
 DOCS_URL=https://github.com/Black-Dragon-Foundation/drgnx/blob/main/docs/guide/install.md
 GNU_MIRROR="${DRGNX_INSTALL_MIRROR:-https://ftpmirror.gnu.org/emacs}"         # overridable for tests
