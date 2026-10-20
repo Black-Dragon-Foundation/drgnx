@@ -23,13 +23,16 @@
 (require 'drgnx-timer)
 (require 'drgnx-sandbox-vc)
 (require 'drgnx-shell-env)
+(require 'drgnx-guard)
 
 (defvar drgnx-hub-event-functions nil
   "Functions called with (EVENT DATA) for each event the hub sends this Emacs (after `drgnx-hub-connect'); EVENT a
-string (\"request\", \"fallback\", \"budget\"), DATA a plist.")
+string (\"request\", \"fallback\", \"budget\"), DATA a plist.  Each runs inside the guard (`drgnx-guard-run-hook'):
+one that fails or asks is recorded as a notice, and the next still runs.")
 
 (defvar drgnx-hub-disconnect-functions nil
-  "Called when this Emacs's event connection to the hub closes (the hub ended, or `drgnx-hub-disconnect').")
+  "Called when this Emacs's event connection to the hub closes (the hub ended, or `drgnx-hub-disconnect'); each
+inside the guard, as `drgnx-hub-event-functions'.")
 
 (defvar drgnx-hub--server nil "This Emacs's hub socket, when it is the hub.")
 (defvar drgnx-hub--subscribers nil "Connections that asked for events.")
@@ -1004,7 +1007,7 @@ hand it the keys this Emacs holds.  t, or an error saying why not."
                 (drgnx-hub--lines conn chunk
                                   (lambda (json)
                                     (cond ((plist-get json :event)
-                                           (run-hook-with-args 'drgnx-hub-event-functions (plist-get json :event) (plist-get json :data)))
+                                           (drgnx-guard-run-hook 'drgnx-hub-event-functions (plist-get json :event) (plist-get json :data)))
                                           ((plist-get json :id)
                                            (setq drgnx-hub--events conn)
                                            (when (eq drgnx-hub--subscribing conn) (setq drgnx-hub--subscribing nil))))))))))
@@ -1015,7 +1018,7 @@ hand it the keys this Emacs holds.  t, or an error saying why not."
                                 (unless (process-live-p p)
                                   (when (eq drgnx-hub--events p) (setq drgnx-hub--events nil))
                                   (when (eq drgnx-hub--subscribing p) (setq drgnx-hub--subscribing nil))
-                                  (run-hooks 'drgnx-hub-disconnect-functions))))
+                                  (drgnx-guard-run-hook 'drgnx-hub-disconnect-functions))))
       (drgnx-hub--send c (list :id 0 :method "subscribe" :params (make-hash-table)))
       (add-hook 'drgnx-hub-event-functions #'drgnx-hub--note-tests)   ; removed by `drgnx-hub-disconnect'
       ;; a hub keeps keys in memory only: one that restarted has none, so each new subscription gives them again

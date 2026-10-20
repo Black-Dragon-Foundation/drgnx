@@ -267,4 +267,37 @@
       (should (eql (plist-get r :since) 0))
       (should (= (length (plist-get r :events)) 200)))))
 
+(load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
+
+(ert-deftest drgnx-hub/events-dispatch-through-the-guard ()
+  ;; An event or disconnect function that fails or asks is recorded by the guard; the next one still runs.
+  (drgnx-notice-test-with-model
+    (let* ((filter nil) (heard nil) (was drgnx-guard-mode)
+           (conn (make-pipe-process :name "drgnx-hub-guard-test" :noquery t))
+           (drgnx-hub--events nil) (drgnx-hub--subscribing nil)
+           (drgnx-hub-event-functions (list (lambda (_e _d) (error "Boom")) (lambda (e d) (push (cons e d) heard))))
+           (drgnx-hub-disconnect-functions (list (lambda () (y-or-n-p "Restart? ")) (lambda () (push 'gone heard)))))
+      (drgnx-guard-mode 1)
+      (unwind-protect
+          (cl-letf (((symbol-function 'drgnx-hub--connect-socket) (lambda (f) (setq filter f) conn))
+                    ((symbol-function 'drgnx-hub--send) #'ignore)
+                    ((symbol-function 'drgnx-hub--send-keys) #'ignore))
+            (drgnx-hub-connect)
+            (funcall filter conn "{\"event\":\"x\",\"data\":{\"a\":1}}\n{\"event\":\"y\",\"data\":{}}\n")
+            (should (equal heard '(("y") ("x" :a 1))))         ; both lines, past the failing function
+            (let ((sentinel (process-sentinel conn)))
+              (set-process-sentinel conn #'ignore)
+              (delete-process conn)
+              (funcall sentinel conn "deleted\n"))
+            (should (eq (car heard) 'gone))
+            (let ((by (lambda (prefix)
+                        (seq-filter (lambda (n) (string-prefix-p prefix (plist-get n :id))) (drgnx-notices :source 'guard)))))
+              (should (equal (mapcar (lambda (n) (plist-get n :severity)) (funcall by "drgnx-hub-event-functions "))
+                             '(warn)))
+              (should (= (plist-get (car (funcall by "drgnx-hub-event-functions ")) :count) 2))
+              (should (equal (mapcar (lambda (n) (plist-get n :severity)) (funcall by "drgnx-hub-disconnect-functions "))
+                             '(fail)))))
+        (unless was (drgnx-guard-mode -1))
+        (when (process-live-p conn) (delete-process conn))))))
+
 ;;; hub-events-test.el ends here

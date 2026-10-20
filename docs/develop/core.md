@@ -454,13 +454,33 @@ signal `drgnx-prompt-in-automatic-path` instead — naming the prompt and where 
 
 - from a timer (detected by wrapping `timer-event-handler`; commands run by a nested command loop, such as a
   minibuffer opened by a command, are not timer code);
-- inside `(drgnx-automatic …)` — use it for hook functions, process filters and sentinels (Emacs calls those
-  from C, so they cannot be detected);
+- inside `(drgnx-automatic …)`, which `drgnx-guard-wrap` and `drgnx-guard-run-hook` (below) put around process
+  callbacks and hook functions;
 - while a daemon initialises — until the last `window-setup-hook` function, so `after-init-hook` and
   `emacs-startup-hook` count too.
 
 `(drgnx-guard-automatic-p)` says whether the code running now is such a path, for code that would rather not ask
 than signal (choosing a Vim stack records it as pending instead of offering to install evil).
+
+**Process callbacks and hooks run inside the guard.** Emacs calls a process filter or sentinel from C, so nothing
+can tell it from a command; the guard is put on where the callback is handed over:
+
+- `(drgnx-guard-wrap FN LABEL)` returns a function of any arguments that applies FN inside `drgnx-automatic`. What FN
+  raises is not signalled again (no "error in process sentinel" line), the wrapper returns nil, and it becomes a
+  notice of source `guard` with id LABEL ([Notices](#notices-drgnx-noticeel)): a refused prompt is a `fail` event
+  ("LABEL asked a question from a process callback; drgnx refused (it would freeze Emacs)"), any other error a `warn`
+  event ("LABEL: MESSAGE"); a repeat counts. LABEL names the process's purpose (`"hub events"`, `"ACP NAME"`);
+  default FN printed. The debugger opens only with `debug-on-error` and a frame to show it in, the timer layer's
+  rule: never in batch or in a daemon with no client.
+- `(drgnx-guard-run-hook HOOK &rest ARGS)` calls each function of HOOK that way, with the label `"HOOK FN"`: one
+  that fails or asks is recorded and the next still runs. The hub's `drgnx-hub-event-functions` and
+  `drgnx-hub-disconnect-functions` run through it.
+- Write `:filter (drgnx-guard-wrap #'NAME "LABEL")` (`:sentinel`, `set-process-filter`, `set-process-sentinel`
+  likewise), with a named function. `nil`, `#'ignore` and `#'internal-default-process-sentinel` need no guard, and
+  `drgnx-proc-start` wraps its own callbacks. The lint `drgnx-lint/process-callbacks-are-guarded`
+  ([check.md](check.md#lints-on-the-source)) holds the sites not wrapped yet in an allowlist that only shrinks.
+
+The model is loaded at the first catch, not when the guard loads (`drgnx-notice` requires `drgnx-guard`).
 
 ## Notices (`drgnx-notice.el`)
 
