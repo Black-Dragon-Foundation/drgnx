@@ -334,4 +334,48 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
       (dolist (s '("drgnx update" "update --back" "update --auto on|off|status"))
         (should (string-search s help))))))
 
+(ert-deftest drgnx-update/restart-restarts-the-service-only-after-a-success ()
+  (drgnx-update-test--with-install
+    (let ((log (expand-file-name "systemctl.log" dir)))
+      ;; --auto never takes it, and the timer's own run (--quiet) never restarts
+      (should (eq 2 (car (drgnx-update-test--run dir nil bin "update" "--auto" "on" "--restart"))))
+      (drgnx-update-test--push dir "README" "two\n" "second")
+      (should (eq 0 (car (drgnx-update-test--run dir nil bin "update" "--quiet"))))
+      (should-not (string-match-p "restart" (if (file-exists-p log) (drgnx-update-test--slurp log) "")))
+      ;; a failed update never restarts
+      (drgnx-update-test--push dir "README" "three\n" "third")
+      (let ((r (drgnx-update-test--run dir '("DRGNX_UPDATE_BUILD_CMD=false") bin "update" "--restart")))
+        (should (eq 1 (car r)))
+        (should-not (string-match-p "restart" (drgnx-update-test--slurp log))))
+      ;; a successful one restarts the drgnx unit and says what that does; no "Restart drgnx to use it" nag
+      (let ((r (drgnx-update-test--run dir nil bin "update" "--restart")))
+        (should (eq 0 (car r)))
+        (should (string-match-p "--user restart drgnx$" (drgnx-update-test--slurp log)))
+        (should (string-match-p "restarted the drgnx service" (cdr r)))
+        (should (string-match-p "windows closed" (cdr r)))
+        (should-not (string-match-p "Restart drgnx to use it" (cdr r))))
+      ;; --back too
+      (write-region "" nil log)
+      (let ((r (drgnx-update-test--run dir nil bin "update" "--back" "--restart")))
+        (should (eq 0 (car r)))
+        (should (string-match-p "--user restart drgnx" (drgnx-update-test--slurp log)))))))
+
+(ert-deftest drgnx-update/restart-without-a-service-says-so-and-does-nothing-else ()
+  (drgnx-update-test--with-install
+    (let ((log (expand-file-name "systemctl.log" dir))
+          (f (expand-file-name "stubs/systemctl" dir)))
+      (write-region "#!/bin/sh\necho \"$*\" >> '" nil f)
+      (write-region (format "%s'\nexit 1\n" log) nil f t)
+      (drgnx-update-test--push dir "README" "two\n" "second")
+      (let ((r (drgnx-update-test--run dir nil bin "update" "--restart")))
+        (should (eq 0 (car r)))
+        (should (string-match-p "no drgnx service is installed" (cdr r)))
+        (should-not (string-match-p "--user restart" (drgnx-update-test--slurp log))))
+      ;; macOS: no daemon service of drgnx's own exists, so launchctl is never called
+      (drgnx-update-test--push dir "README" "three\n" "third")
+      (let ((r (drgnx-update-test--run dir '("DRGNX_UPDATE_PLATFORM=Darwin") bin "update" "--restart")))
+        (should (eq 0 (car r)))
+        (should (string-match-p "nothing was restarted" (cdr r)))
+        (should-not (file-exists-p (expand-file-name "launchctl.log" dir)))))))
+
 ;;; update-test.el ends here
