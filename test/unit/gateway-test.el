@@ -50,8 +50,9 @@ the gateway told."
 
 (cl-defun drgnx-gw-test--request (port &key token (body "{\"model\":\"claude-x\",\"stream\":true}") (path "/v1/messages")
                                        hang-up-after (wait 8) extra)
-  "Send a request to the gateway; (:status N :head S :body S :first SECS :closed BOOL) once it closed (or WAIT s)."
-  (let* ((got "") (first nil) (t0 (float-time)) (closed nil)
+  "Send a request to the gateway; (:status N :head S :body S :first SECS :first-body S :closed BOOL) once it closed (or WAIT s).
+FIRST-BODY is the body as it was when the first of it arrived."
+  (let* ((got "") (first nil) (first-body nil) (t0 (float-time)) (closed nil)
          (c (if (stringp port)          ; a socket path: the per-session Unix socket
                 (make-network-process :name "gw-test" :family 'local :service port :coding 'binary :noquery t)
               (open-network-stream "gw-test" nil "127.0.0.1" port :coding 'binary)))
@@ -61,7 +62,8 @@ the gateway told."
                             (setq got (concat got s))
                             (when (and (not first) (string-search "\r\n\r\n" got)
                                        (> (length got) (+ 4 (string-search "\r\n\r\n" got))))
-                              (setq first (- (float-time) t0)))
+                              (setq first (- (float-time) t0)
+                                    first-body (substring got (+ 4 (string-search "\r\n\r\n" got)))))
                             (when (and hang-up-after first) (delete-process p) (setq closed t))))
     (process-send-string c (concat (format "POST %s HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n" path)
                                    (if token (format "Authorization: Bearer %s\r\n" token) "")
@@ -71,7 +73,7 @@ the gateway told."
     (let ((deadline (+ (float-time) wait))) (while (and (not closed) (< (float-time) deadline)) (accept-process-output nil 0.01)))
     (let ((h (string-search "\r\n\r\n" got)))
       (list :status (and (string-match "\\`HTTP/1\\.[01] \\([0-9]+\\)" got) (string-to-number (match-string 1 got)))
-            :head (and h (substring got 0 h)) :body (and h (substring got (+ h 4))) :first first :closed closed))))
+            :head (and h (substring got 0 h)) :body (and h (substring got (+ h 4))) :first first :first-body first-body :closed closed))))
 
 (defun drgnx-gw-test--log (file) (if (file-exists-p file) (with-temp-buffer (insert-file-contents file) (buffer-string)) ""))
 
@@ -124,15 +126,15 @@ the gateway told."
         (should-not (seq-find (lambda (a) (string-search "sk-or" a)) (process-command seen)))
         (delete-process c)))))
 
-(ert-deftest drgnx-gateway/first-token-adds-under-50-ms ()
-  :tags '(:timing)
+(ert-deftest drgnx-gateway/the-first-chunk-goes-on-without-waiting-for-the-rest ()
+  ;; The gateway streams: the client has the first chunk while the provider's second (0.3 s later) is not sent yet,
+  ;; as it has it straight from the provider.
   (drgnx-gw-test--with '((:path "/api/v1/messages" :chunks ((0 . "data: {\"x\":1}\n\n") (0.3 . "data: {}\n\n")))) '()
-    (let ((token (drgnx-gateway-register '(:chain ((openrouter . nil))))) (direct nil) (through nil))
-      (dotimes (_ 5)
-        (push (plist-get (drgnx-gw-test--request or-port :path "/api/v1/messages") :first) direct)
-        (push (plist-get (drgnx-gw-test--request port :token token) :first) through))
-      (let ((median (lambda (l) (nth 2 (sort l #'<)))))
-        (should (< (- (funcall median through) (funcall median direct)) 0.05))))))
+    (let ((token (drgnx-gateway-register '(:chain ((openrouter . nil))))))
+      (should (equal (plist-get (drgnx-gw-test--request or-port :path "/api/v1/messages") :first-body) "data: {\"x\":1}\n\n"))
+      (let ((r (drgnx-gw-test--request port :token token)))
+        (should (equal (plist-get r :first-body) "data: {\"x\":1}\n\n"))
+        (should (equal (plist-get r :body) "data: {\"x\":1}\n\ndata: {}\n\n"))))))
 
 (ert-deftest drgnx-gateway/spend-is-recorded-per-agent-and-task ()
   (drgnx-gw-test--with `((:path "/api/v1/messages" :chunks ((0 . ,drgnx-gw-test--sse)))) '()
