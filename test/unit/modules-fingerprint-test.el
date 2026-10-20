@@ -30,6 +30,7 @@
 (defvaralias 'fp-test-aliased-hooks 'fp-test-aliased-hook)
 (defvar fp-test-weird-functions nil "Gets a dotted list.")
 (require 'drgnx-paths)                  ; drgnx-dir, let-bound by one test
+(load (expand-file-name "test/fixtures/measure-fixture" drgnx-dir) nil t)
 (require 'drgnx-hooks)
 (require 'drgnx-guard)
 
@@ -263,18 +264,16 @@
                          (drgnx-modules-fingerprint--normalize-file (expand-file-name "drgnx-other/x.el" root)))))
       (delete-directory root t))))
 
-(defun drgnx-fp-test--median-ms (fn &optional n)
-  "The median wall time of FN over N runs (default 21), in milliseconds."
-  (funcall fn)                                          ; warm up
-  (let ((times (cl-loop repeat (or n 21)
-                        collect (let ((t0 (float-time))) (funcall fn) (* 1000 (- (float-time) t0))))))
-    (nth (/ (length times) 2) (sort times #'<))))
-
-(ert-deftest drgnx-fingerprint/cheap-costs-under-2-ms ()
-  :tags '(:timing)
-  (let ((ms (drgnx-fp-test--median-ms #'drgnx-modules-fingerprint)))
-    (message "cheap fingerprint: %.3f ms (median)" ms)
-    (should (< ms 2))))
+(ert-deftest drgnx-fingerprint/the-cheap-one-allocates-a-thirtieth-of-the-full-scan ()
+  ;; The cheap fingerprint never runs the scan; it allocates a thirtieth of what the scan does (1961 and 89245
+  ;; measured), whatever else this Emacs has loaded (the wall-clock form, 2 ms, missed under load).
+  (drgnx-test-compile "drgnx-modules-fingerprint")
+  (let ((scans 0) (orig (symbol-function 'drgnx-modules-fingerprint--scan)))
+    (cl-letf (((symbol-function 'drgnx-modules-fingerprint--scan) (lambda () (cl-incf scans) (funcall orig))))
+      (let ((cheap (drgnx-test-alloc (drgnx-modules-fingerprint))))
+        (should (= 0 scans))
+        (let ((full (drgnx-test-alloc (drgnx-modules-fingerprint t))))
+          (should (<= (* 30 cheap) full)))))))
 
 (ert-deftest drgnx-fingerprint/the-full-scan-runs-compiled ()
   ;; Interpreted the scan costs ~10× more.  In an Emacs that has not loaded bytecomp (Emacs 31's ERT no longer loads
@@ -291,19 +290,17 @@
                                                     (symbol-function 'drgnx-modules-fingerprint--scan)))))))
     (should (string-search "bytecomp=t compiled=t" (buffer-string)))))
 
-(ert-deftest drgnx-fingerprint/full-costs-under-50-ms ()
-  :tags '(:timing)
-  (let ((ms (drgnx-fp-test--median-ms (lambda () (drgnx-modules-fingerprint t)) 11)))
-    (message "full fingerprint: %.3f ms (median)" ms)
-    (should (< ms 50))))
+(ert-deftest drgnx-fingerprint/the-full-scan-allocates-what-it-did ()
+  ;; 89245 measured (Emacs 31.1, this file's own Emacs); the wall-clock form, 50 ms, missed under load.  A scan that
+  ;; reads every hook twice, or builds a list per hook, passes 111557 only by shrinking the hooks.
+  (drgnx-test-compile "drgnx-modules-fingerprint")
+  (should (<= (drgnx-test-alloc (drgnx-modules-fingerprint t)) 111557)))
 
-(ert-deftest drgnx-fingerprint/the-first-scan-of-drgnx-symbols-costs-under-20-ms ()
-  :tags '(:timing)
-  (let ((drgnx-modules-fingerprint--own nil) (t0 (float-time)))
-    (drgnx-modules-fingerprint--hook-names)
-    (let ((ms (* 1000 (- (float-time) t0))))
-      (message "first scan of drgnx-* hooks: %.2f ms" ms)
-      (should (< ms 20)))))
+(ert-deftest drgnx-fingerprint/the-first-scan-of-drgnx-symbols-allocates-what-it-did ()
+  ;; One `apropos-internal' over the obarray: 180 measured (Emacs 31.1, this file's own Emacs); the wall-clock form,
+  ;; 20 ms, missed under load.
+  (drgnx-test-compile "drgnx-modules-fingerprint")
+  (should (<= (drgnx-test-alloc (let ((drgnx-modules-fingerprint--own nil)) (drgnx-modules-fingerprint--hook-names))) 225)))
 
 (provide 'modules-fingerprint-test)
 ;;; modules-fingerprint-test.el ends here

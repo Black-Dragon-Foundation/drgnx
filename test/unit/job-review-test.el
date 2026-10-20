@@ -117,7 +117,7 @@
   ;; the merge runs in a git process of its own: the hub goes on, the task says "merging", then it is done
   (drgnx-job-run-test--with "# One\n\n### Task 1: first\n"
     (let* ((drgnx-job-max-agents 0) (drgnx-job-review nil) (id (drgnx-job-propose plan)) (tid (concat id "#1"))
-           (hook (concat repo ".git/hooks/pre-merge-commit")) (t0 nil))
+           (hook (concat repo ".git/hooks/pre-merge-commit")))
       (drgnx-job-approve id)
       (let ((tree (drgnx-job--task-tree id 1)))
         (drgnx-job--git repo "worktree" "add" "-q" "-b" (format "job/%s-1" id) tree (concat "job/" id))
@@ -126,9 +126,7 @@
         (drgnx-job-run-test--git tree "commit" "-q" "-m" "work"))
       (write-region "#!/bin/sh\nsleep 2\n" nil hook nil 'silent)
       (set-file-modes hook #o755)
-      (setq t0 (float-time))
-      (drgnx-job--merge id (drgnx-coord-task tid))
-      (should (< (- (float-time) t0) 1.5))
+      (drgnx-job--merge id (drgnx-coord-task tid))                      ; returns while the 2 s hook runs: still "merging"
       (should (equal (plist-get (car (plist-get (drgnx-job-summary id) :tasks)) :status) "merging"))
       (drgnx-job--merge id (drgnx-coord-task tid))                      ; asked again meanwhile: one merge
       (should (drgnx-job-run-test--wait (lambda () (equal (drgnx-job-run-test--status id 1) "done")) 15))

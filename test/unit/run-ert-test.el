@@ -589,6 +589,83 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
             (should (eql (plist-get r :failed) 0))))
       (delete-directory tmp t))))
 
+;;;; The selector prefilter reads every deftest form (TEST-SEL-1)
+
+(defun drgnx-run-ert-test--run-files (suite results &rest env)
+  "Run SUITE (per-file Emacsen) with ENV; return (EXIT . the names of the files that ran)."
+  (let ((exit (apply #'drgnx-run-ert-test--batch suite results env)))
+    (cons exit (mapcar (lambda (f) (file-name-nondirectory (plist-get f :file)))
+                       (plist-get (drgnx-run-ert-test--json results) :files)))))
+
+(ert-deftest drgnx-run-ert/a-macro-defined-test-is-selected ()
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-iso" t)))
+         (suite (expand-file-name "suite" tmp)) (results (expand-file-name "r.json" tmp)))
+    (unwind-protect
+        (progn
+          (drgnx-run-ert-test--suite
+           suite '(("macro-test.el" . "(defmacro iso-m--deftest (name &rest body) `(ert-deftest ,name () ,@body))
+(iso-m--deftest iso-m/a (should t))")
+                   ("other-test.el" . "(ert-deftest iso-o/b () (should t))")))
+          (should (equal (drgnx-run-ert-test--run-files suite results "DRGNX_TEST_SELECTOR=\"^iso-m/\"")
+                         '(0 "macro-test.el")))
+          (should (equal (plist-get (drgnx-run-ert-test--json results) :total) 1)))
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-run-ert/a-computed-name-selects-its-file ()
+  ;; a name the prefilter cannot read keeps its file (fail open); a file with plain names that do not match is skipped
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-iso" t)))
+         (suite (expand-file-name "suite" tmp)) (results (expand-file-name "r.json" tmp)))
+    (unwind-protect
+        (progn
+          (drgnx-run-ert-test--suite
+           suite '(("computed-test.el" . "(dolist (n '(a b)) (eval `(ert-deftest ,(intern (format \"iso-c/%s\" n)) () (should t)) t))
+(ert-deftest ,(intern \"iso-c/z\") () (should t))")
+                   ("plain-test.el" . "(ert-deftest iso-p/b () (should t))")))
+          (should (equal (cdr (drgnx-run-ert-test--run-files suite results "DRGNX_TEST_SELECTOR=\"^iso-c/\""))
+                         '("computed-test.el"))))
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-run-ert/an-unindexed-test-fails-a-full-run ()
+  ;; a test made inside a form the prefilter does not read fails the full run, and names the test and file
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-iso" t)))
+         (suite (expand-file-name "suite" tmp)) (results (expand-file-name "r.json" tmp)))
+    (unwind-protect
+        (progn
+          (drgnx-run-ert-test--suite
+           suite '(("hidden-test.el" . "(ert-deftest iso-h/seen () (should t))
+(dolist (n '(a)) (eval `(ert-deftest ,(intern \"iso-h/hidden\") () (should t)) t))")))
+          (should (equal (drgnx-run-ert-test--batch suite results) 1))
+          (let ((r (drgnx-run-ert-test--json results)))
+            (should (equal (plist-get r :failed) 1))
+            (should (equal (plist-get (aref (plist-get r :failures) 0) :condition)
+                           "unindexed test iso-h/hidden in hidden-test.el: the selector prefilter cannot see it"))))
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-run-ert/a-selector-matching-nothing-fails ()
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-iso" t)))
+         (suite (expand-file-name "suite" tmp)) (results (expand-file-name "r.json" tmp)))
+    (unwind-protect
+        (progn
+          (drgnx-run-ert-test--suite suite '(("one-test.el" . "(ert-deftest iso-one/a () (should t))")))
+          (should (equal (drgnx-run-ert-test--batch suite results "DRGNX_TEST_SELECTOR=\"^nothing/\"") 1))
+          (should (string-match-p "DRGNX_TEST_SELECTOR \"\\^nothing/\" matched 0 tests"
+                                  (plist-get (aref (plist-get (drgnx-run-ert-test--json results) :failures) 0) :condition)))
+          ;; one process too
+          (should (equal (drgnx-run-ert-test--batch suite results "DRGNX_TEST_SELECTOR=\"^nothing/\"" "DRGNX_TEST_ONE_PROCESS=1") 1)))
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-run-ert/a-pipe-selector-fails-with-the-hint ()
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-iso" t)))
+         (suite (expand-file-name "suite" tmp)) (results (expand-file-name "r.json" tmp)))
+    (unwind-protect
+        (progn
+          (drgnx-run-ert-test--suite suite '(("one-test.el" . "(ert-deftest iso-one/a () (should t))
+(ert-deftest iso-two/b () (should t))")))
+          (should (equal (drgnx-run-ert-test--batch suite results "DRGNX_TEST_SELECTOR=\"^iso-one/|^iso-two/\"") 1))
+          (should (string-match-p "\\\\| for alternation, not |"
+                                  (plist-get (aref (plist-get (drgnx-run-ert-test--json results) :failures) 0) :condition))))
+      (delete-directory tmp t))))
+
 ;;;; The leak census
 
 (defconst drgnx-run-ert-test--leaky

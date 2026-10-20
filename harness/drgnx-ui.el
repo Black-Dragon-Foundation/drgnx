@@ -15,6 +15,7 @@
 (require 'json)
 (require 'subr-x)
 (require 'drgnx-env)
+(require 'drgnx-test-env (expand-file-name "drgnx-test-env" (file-name-directory (or load-file-name buffer-file-name))))
 
 (defconst drgnx-ui-harness-dir (file-name-directory (or load-file-name buffer-file-name)))
 (defconst drgnx-ui-repo-dir (file-name-directory (directory-file-name drgnx-ui-harness-dir)))
@@ -32,10 +33,14 @@
 (defvar drgnx-ui-owner-client nil
   "The MCP client's token (`drgnx-ui-mcp--token') while it starts a session: session.json's :owner :client.")
 (defconst drgnx-ui-keep-env
-  '("HOME" "USER" "LOGNAME" "LANG" "LC_ALL" "PATH" "GRYPHN_EMACS_DIR" "DRGNX_STARTUP_TRACE"
-    "DRGNX_UITEST_SETTLE_SCALE" "DRGNX_MODAL_ELPA")
-  "The only variables a session inherits; everything else (keys, tokens) stays out.")
-(defconst drgnx-ui-link '("extras" "lisp" "site-lisp" "tree-sitter" "snippets" "themes")
+  '("USER" "LOGNAME" "LANG" "LC_ALL" "PATH" "GRYPHN_EMACS_DIR" "DRGNX_STARTUP_TRACE"
+    "DRGNX_UITEST_SETTLE_SCALE" "DRGNX_MODAL_ELPA" "DRGNX_LEASE_HELD")
+  "The only variables a session inherits; everything else (keys, tokens) stays out.  Not HOME: a session's is
+RUN/home (`drgnx-ui-session-env').")
+(defvar drgnx-ui-session-tier 'ui
+  "The `drgnx-test-env' tier of the sessions started now: ui, or scenario, bench or perf, which those controllers
+bind around their `drgnx-ui-start'.")
+(defconst drgnx-ui-link drgnx-test-env-config-links
   "Code directories of an external config, linked read-only into the session.")
 (defconst drgnx-ui-copy '("custom.el") "Files of an external config the session may write: copied.")
 
@@ -522,6 +527,7 @@ RUN/niri.kdl and RUN/niri-session.sh."
       (make-directory init)
       (make-directory (expand-file-name "out" run))
       (make-directory (expand-file-name "tmp" run))     ; the session's TMPDIR: gone with the run dir
+      (make-directory (expand-file-name "home" run))    ; its HOME, too
       (when (file-directory-p sock) (delete-directory sock t))   ; stale, from a crashed session
       (drgnx-ui--make-private-dir sock)
       (drgnx-ui--write (expand-file-name "early-init.el" init) drgnx-ui--early-init)
@@ -583,60 +589,73 @@ a later entry wins, so one of those would move a session out of its run director
         (drgnx-ui--fail "drgnx-ui-session-extra-env: %S is not one of %s" kv
                         (string-join drgnx-ui-session-extra-env-names ", "))))))
 
+(defun drgnx-ui--last-wins (env)
+  "ENV (\"K=V\" strings) with one entry per name, the last one, in order."
+  (let (seen out)
+    (dolist (kv (reverse env))
+      (let ((name (car (split-string kv "="))))
+        (unless (member name seen) (push name seen) (push kv out))))
+    out))
+
 (defun drgnx-ui-session-env (sess &optional extra)
-  "Environment (\"K=V\" strings) for SESS: the allowlist, the session's variables, its compositor's,
-`drgnx-ui-session-extra-env' (checked: `drgnx-ui--check-extra-env'), EXTRA."
-  (append (delq nil (mapcar (lambda (k) (let ((v (getenv k))) (and v (concat k "=" v))))
-                            drgnx-ui-keep-env))
-          (list (concat "DRGNX_UI_NAME=" (plist-get sess :name))
-                (concat "DRGNX_UI_RUN=" (plist-get sess :run))
-                (concat "TMPDIR=" (expand-file-name "tmp" (plist-get sess :run)))
-                (concat "DRGNX_UI_HARNESS=" (directory-file-name drgnx-ui-harness-dir))
-                (concat "DRGNX_UI_CONFIG=" (plist-get sess :config_dir))
-                ;; sway, x11, i3: the session's own runtime dir, so its sockets are never the caller's
-                (concat "XDG_RUNTIME_DIR=" (or (plist-get sess :xdg_runtime_dir) (drgnx-ui-runtime-dir)))
-                (concat "DRGNX_UI_SOCKET_DIR=" (directory-file-name (file-name-directory (plist-get sess :socket))))
-                (concat "EMACS_SOCKET_NAME=" (plist-get sess :socket))
-                ;; no language server per fixture project (12 pyrights in one scenario run); a test that wants
-                ;; one sets this to "" in its session
-                "DRGNX_NO_LANGUAGE_SERVERS=1"
-                "DRGNX_NO_SHELL_ENV=1"     ; the session's PATH, never the login shell's (a test clears it)
-                ;; drgnx's own config and state stay in the run dir: a session never reads the
-                ;; user's ~/.config/drgnx or writes ~/.local/state.
-                (concat "DRGNX_CONFIG_DIR=" (expand-file-name "drgnx-config" (plist-get sess :run)))
-                (concat "XDG_STATE_HOME=" (expand-file-name "state" (plist-get sess :run)))
-                ;; …and its packages: never the user's ~/.local/share/drgnx (M5 review I9)
-                (concat "DRGNX_DATA_DIR=" (expand-file-name "drgnx-data" (plist-get sess :run))))
-          (pcase (plist-get sess :compositor)
-            ;; mutter and the session's Emacs keep their font and GL shader caches in the run dir, never ~/.cache
-            ;; (rebuilt on every start: a test never writes the user's home)
-            ("mutter" (list (concat "XDG_CACHE_HOME=" (drgnx-ui--session-cache sess))
-                            (concat "MESA_SHADER_CACHE_DIR=" (expand-file-name "mesa" (drgnx-ui--session-cache sess)))))
-            ;; wlroots without a GPU, a seat or input devices; one output per monitor
-            ;; (sway takes SWAYSOCK as the path to listen on, and gives it to its children)
-            ;; niri: the same sway, with one output, runs niri (its winit backend: one window, one output)
-            ((or "sway" "niri") (delq nil (list "WLR_BACKENDS=headless" "WLR_RENDERER=pixman" "WLR_LIBINPUT_NO_DEVICES=1"
-                                                (format "WLR_HEADLESS_OUTPUTS=%d" (or (plist-get sess :monitors) 1))
-                                                (concat "SWAYSOCK=" (drgnx-ui--sway-socket (plist-get sess :name)
-                                                                                           (file-name-directory (plist-get sess :run))))
-                                                ;; niri renders with GL: Mesa's shader cache stays in the run directory
-                                                (and (equal (plist-get sess :compositor) "niri")
-                                                     (concat "XDG_CACHE_HOME=" (drgnx-ui--session-cache sess)))
-                                                (and (equal (plist-get sess :compositor) "niri")
-                                                     (concat "MESA_SHADER_CACHE_DIR=" (expand-file-name "mesa" (drgnx-ui--session-cache sess)))))))
-            ;; no WAYLAND_DISPLAY (`env -i'): the X11 Emacs only sees its own X display, with its cookie
-            ((or "x11" "i3") (list (concat "DISPLAY=" (plist-get sess :display))
-                                   (concat "XAUTHORITY=" (expand-file-name "Xauthority" (plist-get sess :run)))))
-            ;; what a Plasma session sets (drgnx detects KWin by XDG_CURRENT_DESKTOP); KWin reads and writes its
-            ;; config (kwinrc, kwinoutputconfig.json), data and caches in the run directory, never in ~
-            ("kwin" (let ((xdg (expand-file-name "xdg" (plist-get sess :run))))
-                      (list "XDG_CURRENT_DESKTOP=KDE" "KDE_FULL_SESSION=true" "XDG_SESSION_TYPE=wayland"
-                            (concat "XDG_CONFIG_HOME=" (expand-file-name "config" xdg))
-                            (concat "XDG_DATA_HOME=" (expand-file-name "data" xdg))
-                            (concat "XDG_CACHE_HOME=" (drgnx-ui--session-cache sess))
-                            (concat "MESA_SHADER_CACHE_DIR=" (expand-file-name "mesa" (drgnx-ui--session-cache sess)))))))
-          (drgnx-ui--check-extra-env drgnx-ui-session-extra-env)
-          extra))
+  "Environment (\"K=V\" strings) for SESS: `drgnx-test-env' of `drgnx-ui-session-tier' in the run directory (its
+HOME, XDG directories, dead bus), the allowlist, the session's variables, its compositor's,
+`drgnx-ui-session-extra-env' (checked: `drgnx-ui--check-extra-env'), EXTRA.  A later entry replaces an earlier one
+of the same name."
+  (drgnx-ui--last-wins
+   (append (seq-filter (lambda (kv) (string-search "=" kv))   ; `env -i' already drops the unset ones
+                       (drgnx-test-env drgnx-ui-session-tier (plist-get sess :run)))
+           (delq nil (mapcar (lambda (k) (let ((v (getenv k))) (and v (concat k "=" v))))
+                             drgnx-ui-keep-env))
+           (list (concat "DRGNX_UI_NAME=" (plist-get sess :name))
+                 (concat "DRGNX_UI_RUN=" (plist-get sess :run))
+                 (concat "TMPDIR=" (expand-file-name "tmp" (plist-get sess :run)))
+                 (concat "DRGNX_UI_HARNESS=" (directory-file-name drgnx-ui-harness-dir))
+                 (concat "DRGNX_UI_CONFIG=" (plist-get sess :config_dir))
+                 ;; sway, x11, i3: the session's own runtime dir, so its sockets are never the caller's
+                 (concat "XDG_RUNTIME_DIR=" (or (plist-get sess :xdg_runtime_dir) (drgnx-ui-runtime-dir)))
+                 (concat "DRGNX_UI_SOCKET_DIR=" (directory-file-name (file-name-directory (plist-get sess :socket))))
+                 (concat "EMACS_SOCKET_NAME=" (plist-get sess :socket))
+                 ;; no language server per fixture project (12 pyrights in one scenario run); a test that wants
+                 ;; one sets this to "" in its session
+                 "DRGNX_NO_LANGUAGE_SERVERS=1"
+                 "DRGNX_NO_SHELL_ENV=1"     ; the session's PATH, never the login shell's (a test clears it)
+                 ;; drgnx's own config and state stay in the run dir: a session never reads the
+                 ;; user's ~/.config/drgnx or writes ~/.local/state.
+                 (concat "DRGNX_CONFIG_DIR=" (expand-file-name "drgnx-config" (plist-get sess :run)))
+                 (concat "XDG_STATE_HOME=" (expand-file-name "state" (plist-get sess :run)))
+                 ;; …and its packages: never the user's ~/.local/share/drgnx (M5 review I9)
+                 (concat "DRGNX_DATA_DIR=" (expand-file-name "drgnx-data" (plist-get sess :run))))
+           (pcase (plist-get sess :compositor)
+             ;; mutter and the session's Emacs keep their font and GL shader caches in the run dir, never ~/.cache
+             ;; (rebuilt on every start: a test never writes the user's home)
+             ("mutter" (list (concat "XDG_CACHE_HOME=" (drgnx-ui--session-cache sess))
+                             (concat "MESA_SHADER_CACHE_DIR=" (expand-file-name "mesa" (drgnx-ui--session-cache sess)))))
+             ;; wlroots without a GPU, a seat or input devices; one output per monitor
+             ;; (sway takes SWAYSOCK as the path to listen on, and gives it to its children)
+             ;; niri: the same sway, with one output, runs niri (its winit backend: one window, one output)
+             ((or "sway" "niri") (delq nil (list "WLR_BACKENDS=headless" "WLR_RENDERER=pixman" "WLR_LIBINPUT_NO_DEVICES=1"
+                                                 (format "WLR_HEADLESS_OUTPUTS=%d" (or (plist-get sess :monitors) 1))
+                                                 (concat "SWAYSOCK=" (drgnx-ui--sway-socket (plist-get sess :name)
+                                                                                            (file-name-directory (plist-get sess :run))))
+                                                 ;; niri renders with GL: Mesa's shader cache stays in the run directory
+                                                 (and (equal (plist-get sess :compositor) "niri")
+                                                      (concat "XDG_CACHE_HOME=" (drgnx-ui--session-cache sess)))
+                                                 (and (equal (plist-get sess :compositor) "niri")
+                                                      (concat "MESA_SHADER_CACHE_DIR=" (expand-file-name "mesa" (drgnx-ui--session-cache sess)))))))
+             ;; no WAYLAND_DISPLAY (`env -i'): the X11 Emacs only sees its own X display, with its cookie
+             ((or "x11" "i3") (list (concat "DISPLAY=" (plist-get sess :display))
+                                    (concat "XAUTHORITY=" (expand-file-name "Xauthority" (plist-get sess :run)))))
+             ;; what a Plasma session sets (drgnx detects KWin by XDG_CURRENT_DESKTOP); KWin reads and writes its
+             ;; config (kwinrc, kwinoutputconfig.json), data and caches in the run directory, never in ~
+             ("kwin" (let ((xdg (expand-file-name "xdg" (plist-get sess :run))))
+                       (list "XDG_CURRENT_DESKTOP=KDE" "KDE_FULL_SESSION=true" "XDG_SESSION_TYPE=wayland"
+                             (concat "XDG_CONFIG_HOME=" (expand-file-name "config" xdg))
+                             (concat "XDG_DATA_HOME=" (expand-file-name "data" xdg))
+                             (concat "XDG_CACHE_HOME=" (drgnx-ui--session-cache sess))
+                             (concat "MESA_SHADER_CACHE_DIR=" (expand-file-name "mesa" (drgnx-ui--session-cache sess)))))))
+           (drgnx-ui--check-extra-env drgnx-ui-session-extra-env)
+           extra)))
 
 (defun drgnx-ui--session-cache (sess)
   "RUN/xdg/cache: the cache directory of SESS's mutter, KWin or niri (and of what renders with GL in it), never ~/.cache."
@@ -664,6 +683,21 @@ a later entry wins, so one of those would move a session out of its run director
              ;; A daemon has no frame until a client asks for one (`drgnx-ui-new-frame').
              (if (eq (plist-get sess :daemon) t) '("--fg-daemon") '("--fullscreen"))))))
 
+(defun drgnx-ui--lease-dir ()
+  "The host lease's directory (bin/drgnx lease) when an interactive session takes a light slot, else nil.  Off, as
+in bin/drgnx: inside a leased command (DRGNX_LEASE_HELD: test, check, perf), in CI, DRGNX_LEASE=off, no `flock', no
+directory."
+  (unless (or (equal (getenv "CI") "true") (equal (getenv "DRGNX_LEASE") "off") (getenv "DRGNX_LEASE_HELD")
+              (not (executable-find "flock")))
+    (cond ((getenv "DRGNX_LEASE_DIR"))
+          ((getenv "XDG_RUNTIME_DIR") (expand-file-name "drgnx/lease" (getenv "XDG_RUNTIME_DIR"))))))
+
+(defun drgnx-ui--lease-refusal (log)
+  "\"no light slot free in 120 s: HOLDERS\" when LOG (a session's last lines) says the lease refused it, else nil."
+  (when (string-match "no light slot free in 120 s; holders:\n\\(\\(?:.*\n?\\)*\\)" log)
+    (format "no light slot free in 120 s: %s"
+            (mapconcat #'identity (split-string (match-string 1 log) "\n" t) "; "))))
+
 (defun drgnx-ui-launch-argv (sess)
   (append (list "systemd-run" "--user" "--quiet" "--collect" "--unit" (plist-get sess :name)
                 ;; a session never outlives its budget: 30 min, or $DRGNX_UI_MAX_RUNTIME s (the soak)
@@ -671,8 +705,15 @@ a later entry wins, so one of those would move a session out of its run director
                 ;; a stop kills what is left after 10 s (systemd's default is 90): with ask-to-exit (8 s at most) a
                 ;; session's stop takes 18 s at the very most, within bin/drgnx check's 25 s grace for an ended job
                 "-p" "TimeoutStopSec=10" "--")
-          (drgnx-ui-env-argv (drgnx-ui-session-env sess))
-          (drgnx-ui-compositor-argv sess)))
+          (let ((lease (drgnx-ui--lease-dir)))
+            ;; an interactive session holds a light slot while it lives: no slot in 120 s and it exits.  Its
+            ;; environment is `env -i', so the lease directory is passed; the unit is capped (3G) already.
+            (append (drgnx-ui-env-argv (append (drgnx-ui-session-env sess)
+                                               (and lease (append (list (concat "DRGNX_LEASE_DIR=" lease) "DRGNX_LEASE_CAP=off")
+                                                                  (delq nil (mapcar (lambda (k) (let ((v (getenv k))) (and v (concat k "=" v))))
+                                                                                    '("DRGNX_LEASE_LIGHT" "DRGNX_LEASE_HEAVY")))))))
+                    (and lease (list (expand-file-name "bin/drgnx" drgnx-ui-repo-dir) "lease" "light" "--wait" "120" "--"))
+                    (drgnx-ui-compositor-argv sess)))))
 
 ;;;; Lifecycle
 
@@ -907,13 +948,16 @@ many virtual monitors (default 1).  COMPOSITOR: mutter, sway, x11, i3, kwin or n
     (drgnx-ui--save sess)                 ; stop needs :launcher/:pgid from here on
     (let ((ready (expand-file-name "ready.json" run))
           (t0 (float-time))
-          (deadline (+ (float-time) (or timeout 60)))
+          ;; a session waiting for its lease slot (up to 120 s) is not slow to boot
+          (deadline (+ (float-time) (or timeout 60) (if (drgnx-ui--lease-dir) 120 0)))
           (next-probe 0) prompt)
       (while (and (not (file-exists-p ready)) (not prompt))
         (when (or (> (float-time) deadline) (not (drgnx-ui-alive-p sess)))
           (let ((log (drgnx-ui--log-tail sess)))
             (drgnx-ui-stop name)
-            (drgnx-ui--fail "%s did not become ready:\n%s" name log)))
+            (if-let* ((refusal (drgnx-ui--lease-refusal log)))
+                (drgnx-ui--fail "%s: %s" name refusal)
+              (drgnx-ui--fail "%s did not become ready:\n%s" name log))))
         ;; Still booting after 2 s: is the configuration asking something?  (The server
         ;; and harness agent start before the configuration's init.el.)
         (when (and (> (float-time) (+ t0 2)) (> (float-time) next-probe))
@@ -1444,7 +1488,8 @@ The runtime directory and the X display are the ones the harness made and reserv
 SESS's display, nothing else of the caller's.  server.el gives a frame its client's environment and drgnx reads
 the window-manager variables from the frame first, so the caller's SWAYSOCK, NIRI_SOCKET, XDG_CURRENT_DESKTOP or
 session bus would point the frame at the caller's own desktop; without them it falls back to the session's."
-  (append (delq nil (mapcar (lambda (k) (let ((v (getenv k))) (and v (concat k "=" v)))) drgnx-ui-keep-env))
+  (append (list (concat "HOME=" (expand-file-name "home" (plist-get sess :run))))
+          (delq nil (mapcar (lambda (k) (let ((v (getenv k))) (and v (concat k "=" v)))) drgnx-ui-keep-env))
           (seq-filter (lambda (kv) (string-search "=" kv)) (drgnx-ui--display-env sess))))
 
 (defun drgnx-ui-new-frame (sess &optional timeout)
@@ -1549,11 +1594,32 @@ with EXTRA-ENV (\"K=V\" strings).  Return (RC RESULTS RUN)."
           (and (file-exists-p results) (drgnx-ui--read-json results))
           run)))
 
+(defun drgnx-ui-run-live-tests (&optional dir)
+  "The live suite (DIR, default test/live) the way bin/drgnx check's live shards run it: in a child Emacs under
+`drgnx-run-ert-batch' (`drgnx-test-env': a temp HOME, state directory and runtime directory, a dead session bus, no
+provider key), its files in one process.  Never in this process: its environment is the user's (URGENT-3-UI-LIVE).
+Print the child's output; return non-nil when it passed."
+  (let* ((dir (or dir (expand-file-name "test/live" drgnx-ui-repo-dir)))
+         (done nil) (code nil)
+         (process-environment (append (list "DRGNX_TEST_ONE_PROCESS=1") (drgnx-test-env-outer) process-environment))
+         (p (make-process
+             :name "drgnx-ui-live" :noquery t :connection-type 'pipe :buffer nil
+             :command (list (or (getenv "DRGNX_EMACS") (expand-file-name invocation-name invocation-directory))
+                            "--batch" "-Q" "--eval" "(setq load-prefer-newer t)" "-L" (directory-file-name drgnx-ui-harness-dir) "-L" (expand-file-name "core" drgnx-ui-repo-dir)
+                            "-L" (expand-file-name "wb" drgnx-ui-repo-dir)
+                            "-l" "drgnx-ui" "-l" (expand-file-name "run-ert.el" drgnx-ui-harness-dir)
+                            "-f" "drgnx-run-ert-batch" (expand-file-name dir))
+             :filter (lambda (_p s) (princ s))
+             :sentinel (lambda (proc _e)
+                         (unless (process-live-p proc) (setq code (process-exit-status proc) done t))))))
+    (while (not done) (accept-process-output p 0.2))
+    (eql code 0)))
+
 (defun drgnx-ui-run-ui-tests ()
-  "`drgnx test --ui': the GUI suite in a session, then the live suite here.  Return an exit code."
+  "`drgnx test --ui': the GUI suite in a session, then the live suite in a sandboxed Emacs.  Return an exit code."
   (let* ((t0 (float-time))
          (ok (eq 0 (drgnx-ui-run-ui-session-tests))))
-    (setq ok (and (drgnx-run-ert (expand-file-name "test/live" drgnx-ui-repo-dir)) ok))
+    (setq ok (and (drgnx-ui-run-live-tests) ok))
     (princ (format "ui tier: %s in %.1fs\n" (if ok "green" "RED") (- (float-time) t0)))
     (if ok 0 1)))
 
@@ -1641,7 +1707,8 @@ failed — never a known red)."
 CONFIG (default drgnx) and print each scenario: green, red (known) with its trace, RED
 (unexpected) or skipped.  Return an exit code: 0 unless a result was unexpected."
   (require 'drgnx-run-ert (expand-file-name "run-ert.el" drgnx-ui-harness-dir))
-  (let ((config (or config "drgnx"))
+  (let ((drgnx-ui-session-tier 'scenario)
+        (config (or config "drgnx"))
         (dir (expand-file-name (or dir "test/scenario") drgnx-ui-repo-dir))
         (t0 (float-time)))
     (cond
@@ -1763,9 +1830,11 @@ a boolean flag (`drgnx-ui--boolean-flags') becomes :name t."
       ("test-ui" (drgnx-ui-run-ui-tests))
       ("test-ui-session" (drgnx-ui-run-ui-session-tests))
       ("test-scenario" (drgnx-ui-run-scenarios (plist-get opts :config) (plist-get opts :dir)))
-      ("test-bench" (require 'drgnx-bench) (drgnx-bench-run))
-      ("test-perf" (require 'drgnx-perf-run) (drgnx-perf-run (getenv "DRGNX_PERF_AUDIT")))
-      ("test-soak" (require 'drgnx-perf-run) (drgnx-perf-soak (and (car pos) (string-to-number (car pos)))))
+      ("test-bench" (require 'drgnx-bench) (let ((drgnx-ui-session-tier 'bench)) (drgnx-bench-run)))
+      ("test-perf" (require 'drgnx-perf-run)
+       (let ((drgnx-ui-session-tier 'perf)) (drgnx-perf-run (getenv "DRGNX_PERF_AUDIT"))))
+      ("test-soak" (require 'drgnx-perf-run)
+       (let ((drgnx-ui-session-tier 'perf)) (drgnx-perf-soak (and (car pos) (string-to-number (car pos))))))
       ("mcp" (require 'drgnx-ui-mcp) (drgnx-ui-mcp-main))
       (_ (drgnx-ui--fail "unknown command %S\n%s" cmd drgnx-ui-usage)))))
 

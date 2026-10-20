@@ -11,6 +11,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'ert)
+(require 'drgnx-test-env (expand-file-name "drgnx-test-env" (file-name-directory (or load-file-name buffer-file-name))))
 
 (defun drgnx-run-ert-drain-events ()
   "Handle the events queued for a command loop batch Emacs does not have (file-notify events from a test's
@@ -218,6 +219,10 @@ order whether it runs alone or with the others."
 (defvar drgnx-run-ert--order-out nil
   "DRGNX_TEST_ORDER_OUT as `drgnx-run-ert-batch' read it before it scrubbed the environment for the tests, or nil.")
 
+(defvar drgnx-run-ert--file-child nil
+  "Non-nil in the Emacs of one test file (DRGNX_TEST_FILE_CHILD as `drgnx-run-ert-batch' read it): its parent counts
+the run's tests.")
+
 (defun drgnx-run-ert--env (var)
   "The value of the environment variable VAR, or nil when it is unset or empty."
   (let ((s (getenv var))) (and s (not (string-empty-p s)) s)))
@@ -269,6 +274,14 @@ summary to RESULTS-FILE.  Return t if every test passed."
          (seed (drgnx-run-ert--shuffle-seed))
          (_ (when (and seed (not drgnx-run-ert--leaks-quiet)) (drgnx-run-ert--say-seed seed)))
          (stats (ert-run-tests-batch (drgnx-run-ert--selector)))
+         ;; a test the prefilter could not see (a full run), a name selector that picked nothing (not in a file's own
+         ;; Emacs: its parent counts)
+         (load-failures
+          (append load-failures
+                  (and (null selector) (not drgnx-run-ert--order-in) (drgnx-run-ert--unindexed stats dir))
+                  (and (stringp selector) (not drgnx-run-ert--file-child)
+                       (zerop (+ (ert-stats-total stats) (length load-failures)))
+                       (list (drgnx-run-ert--matched-nothing selector)))))
          (leaks (and census (drgnx-run-ert--census-finish)))
          (tests nil) (known-red nil) (failures nil))
     (cl-loop
@@ -399,7 +412,7 @@ chunk's filter fail, which ends a batch Emacs (the whole run)."
   "Start an Emacs that runs the test FILE alone (`drgnx-run-ert-batch', this Emacs's `load-path' and environment),
 in the temp directory TMP (its DRGNX_RUN_TMP: used, never deleted, by it), its summary to JSON.  Its output goes
 to BUFFER, or to this Emacs's standard error when BUFFER is nil."
-  (let* ((process-environment (append (list (concat "DRGNX_TEST_RESULTS=" json) "DRGNX_TEST_ONE_PROCESS=1" "DRGNX_TEST_LEAKS_QUIET=1"
+  (let* ((process-environment (append (list (concat "DRGNX_TEST_RESULTS=" json) "DRGNX_TEST_ONE_PROCESS=1" "DRGNX_TEST_LEAKS_QUIET=1" "DRGNX_TEST_FILE_CHILD=1"
                                             (concat "DRGNX_RUN_TMP=" tmp)
                                             ;; the run's own: a test that runs the runner again runs its files
                                             ;; one at a time, as in a serial run
@@ -454,17 +467,58 @@ failed test is a failure named after the file."
                   :known_red (vconcat known-red) :tests (vconcat tests) :files (vconcat (nreverse files)))
             (and census (list :leaks (vconcat leaks))))))
 
+(defun drgnx-run-ert--index (file)
+  "What the selector prefilter knows of the test FILE: (NAMES . OPEN).  NAMES: the first argument of every top-level
+form whose head symbol's name ends in `deftest' (`ert-deftest', a file's own `…--deftest' macro), as strings.  OPEN: t
+when such a form's first argument is not a plain symbol (a computed name), or the file does not read: the file may
+hold any test."
+  (let ((names nil) (open nil) (obarray (obarray-make)))
+    (condition-case nil
+        (with-temp-buffer
+          (insert-file-contents file)
+          (condition-case nil
+              (while t
+                (let ((form (read (current-buffer))))
+                  (when (and (consp form) (symbolp (car form)) (string-suffix-p "deftest" (symbol-name (car form))))
+                    (if (and (cdr form) (symbolp (cadr form)))
+                        (push (symbol-name (cadr form)) names)
+                      (setq open t)))))
+            (end-of-file nil)))
+      (error (setq open t)))
+    (cons (nreverse names) open)))
+
 (defun drgnx-run-ert--file-selected-p (file selector)
   "Whether the test FILE can hold a test SELECTOR picks: with a string selector (a regexp on test names), only a
-file that defines such a test by name; any other selector, every file.  A narrow run then starts an Emacs only for
-the files it needs."
+file that defines such a test (`drgnx-run-ert--index') or may (a computed name); any other selector, every file.  A
+narrow run then starts an Emacs only for the files it needs."
   (or (not (stringp selector))
-      (with-temp-buffer
-        (insert-file-contents file)
-        (let ((found nil))
-          (while (and (not found) (re-search-forward "(ert-deftest[ \t\n]+\\([^][ \t\n()\"';]+\\)" nil t))
-            (setq found (string-match-p selector (match-string 1))))
-          found))))
+      (let ((index (drgnx-run-ert--index file)))
+        (or (cdr index) (cl-some (lambda (n) (string-match-p selector n)) (car index))))))
+
+(defun drgnx-run-ert--unindexed (stats dir)
+  "Failures (:name :condition), one for each test of STATS in a test file of DIR that its file's index does not
+name: a name selector could not see it.  A file with a computed name (OPEN) is not checked."
+  (let ((files (mapcar #'file-truename (drgnx-run-ert--files dir))) (indexes nil) failures)
+    (cl-loop
+     for test across (ert--stats-tests stats)
+     for file = (ignore-errors (ert-test-file-name test))
+     for truename = (and file (ignore-errors (file-truename file)))
+     for el = (and truename (cl-find-if (lambda (f) (string= (file-name-sans-extension f) (file-name-sans-extension truename))) files))
+     when el
+     do (let ((index (or (alist-get el indexes nil nil #'equal)
+                         (setf (alist-get el indexes nil nil #'equal) (drgnx-run-ert--index el))))
+              (name (symbol-name (ert-test-name test))))
+          (unless (or (cdr index) (member name (car index)))
+            (push (list :name name
+                        :condition (format "unindexed test %s in %s: the selector prefilter cannot see it"
+                                           name (file-name-nondirectory el)))
+                  failures))))
+    (nreverse failures)))
+
+(defun drgnx-run-ert--matched-nothing (selector)
+  "The failure (:name :condition) of a run whose string SELECTOR matched no test."
+  (list :name "selector"
+        :condition (format "DRGNX_TEST_SELECTOR %S matched 0 tests (an Emacs regexp: \\| for alternation, not |)" selector)))
 
 (defun drgnx-run-ert-files (files results-file)
   "Run each test file of FILES in an Emacs of its own, as Emacs's own `make check' does: a hook, timer, feature or
@@ -523,6 +577,11 @@ file passed."
     (let ((summary (drgnx-run-ert--merge (sort done (lambda (a b) (< (cl-position (plist-get a :file) files :test #'equal)
                                                                      (cl-position (plist-get b :file) files :test #'equal))))
                                          timeout)))
+      (when (and (stringp selector) (zerop (plist-get summary :total)))
+        (let ((f (drgnx-run-ert--matched-nothing selector)))
+          (setq summary (plist-put (plist-put (plist-put (plist-put summary :total 1) :failed 1)
+                                              :failures (vector f))
+                                   :passed 0))))
       (when seed (setq summary (append summary (list :seed seed))))
       (message "\ndrgnx: %d test files, each in an Emacs of its own: %d tests, %d as expected, %d unexpected (%.0f s)"
                count (plist-get summary :total) (plist-get summary :passed) (plist-get summary :failed) (- (float-time) t0))
@@ -682,19 +741,6 @@ passes after all the tests before it, 2 when it cannot run."
 
 (defvar project-list-file)
 
-(defconst drgnx-run-ert--dead-bus "unix:path=/nonexistent/drgnx-unit-test"
-  "The session bus address a unit test sees: no listener, so nothing reaches the user's desktop.")
-
-(defconst drgnx-run-ert--desktop-variables
-  '("DISPLAY" "WAYLAND_DISPLAY" "SWAYSOCK" "I3SOCK" "HYPRLAND_INSTANCE_SIGNATURE" "NIRI_SOCKET")
-  "Variables that point a program at the user's display or compositor; unset for the unit tier.")
-
-(defun drgnx-run-ert--private-dir (dir)
-  "Make DIR (mode 700) and return it."
-  (make-directory dir t)
-  (set-file-modes dir #o700)
-  dir)
-
 (defun drgnx-run-ert--given-tmp ()
   "The directory bin/drgnx made for this run (DRGNX_RUN_TMP), or nil: it must be absolute, named
 drgnx-run.XXXXXX, a real directory (no symlink) of the user's."
@@ -747,6 +793,7 @@ exit 0 or 1."
          ;; each test file in an Emacs of its own, unless DRGNX_TEST_ONE_PROCESS=1 (`bin/drgnx test --one-process')
          (one-process (equal (getenv "DRGNX_TEST_ONE_PROCESS") "1"))
          (drgnx-run-ert--leaks-quiet (equal (getenv "DRGNX_TEST_LEAKS_QUIET") "1"))
+         (drgnx-run-ert--file-child (equal (getenv "DRGNX_TEST_FILE_CHILD") "1"))
          ;; …the bisect's variables are the runner's alone, like the one above: no test (or runner it starts) sees them
          (drgnx-run-ert--order-in (drgnx-run-ert--env "DRGNX_TEST_ORDER_IN"))
          (drgnx-run-ert--order-out (drgnx-run-ert--env "DRGNX_TEST_ORDER_OUT"))
@@ -771,44 +818,21 @@ exit 0 or 1."
          ;; tests that load packages from it, read-only, through DRGNX_USER_ELPA)
          (elpa (expand-file-name "~/.config/emacs/elpa"))
          (process-environment
-          (append (mapcar (lambda (v) (format "%s=%s" (car v) (expand-file-name (cdr v) tmp)))
-                          '(("DRGNX_CONFIG_DIR" . "config") ("DRGNX_DATA_DIR" . "data")
-                            ("XDG_STATE_HOME" . "state") ("XDG_CACHE_HOME" . "cache") ("HOME" . "home")
-                            ;; …nor the user's XDG config and data homes: a test that unsets DRGNX_CONFIG_DIR or
-                            ;; DRGNX_DATA_DIR lands here, never in ~/.config/drgnx or ~/.local/share/drgnx
-                            ("XDG_CONFIG_HOME" . "xdg-config") ("XDG_DATA_HOME" . "xdg-data")
-                            ("TMPDIR" . ".")))
-                  (list "DRGNX_TEST_ISOLATED=1")
+          (append (drgnx-test-env 'unit tmp)      ; HOME, XDG, the hub, provider keys, bus, desktop: one list for every tier
                   ;; …every Emacs this run starts compiles its trampolines into the same directory, once
                   (and eln (list (concat "DRGNX_TEST_ELN_DIR=" eln)))
                   ;; …a test that runs the runner gets one Emacs per file unless it says otherwise
-                  (list "DRGNX_TEST_ONE_PROCESS" "DRGNX_TEST_LEAKS_QUIET" "DRGNX_TEST_ORDER_IN" "DRGNX_TEST_ORDER_OUT")
+                  (list "DRGNX_TEST_ONE_PROCESS" "DRGNX_TEST_FILE_CHILD" "DRGNX_TEST_LEAKS_QUIET" "DRGNX_TEST_ORDER_IN" "DRGNX_TEST_ORDER_OUT")
                   ;; …a test that runs the runner or bin/drgnx again must not reuse (and delete) this directory
                   (list "DRGNX_RUN_TMP")
-                  ;; …nor start a durable hub that would outlive it (the hub's own tests unset this)
-                  (list "DRGNX_NO_HUB_START=1")
-                  ;; …and a hub one starts anyway ends with this Emacs (an interrupted run leaves none)
-                  (list (format "DRGNX_HUB_PARENT_PID=%d" (emacs-pid)))
-                  ;; …nor the user's provider keys: no test may reach a paid model (bare names unset them) — and
-                  ;; not the agents' home directories, which would point a test at the user's real settings
-                  (list "OPENROUTER_API_KEY" "ANTHROPIC_API_KEY" "ANTHROPIC_AUTH_TOKEN" "OPENAI_API_KEY"
-                        "MOONSHOT_API_KEY" "DEEPSEEK_API_KEY" "GEMINI_API_KEY" "GOOGLE_API_KEY" "OPENAI_BASE_URL"
-                        "ANTHROPIC_BASE_URL" "ANTHROPIC_MODEL" "ANTHROPIC_SMALL_FAST_MODEL"
-                        "ANTHROPIC_DEFAULT_HAIKU_MODEL" "ANTHROPIC_DEFAULT_SONNET_MODEL" "ANTHROPIC_DEFAULT_OPUS_MODEL"
-                        "ANTHROPIC_DEFAULT_FABLE_MODEL" "CLAUDE_CODE_SUBAGENT_MODEL" "CLAUDE_CODE_OAUTH_TOKEN"
-                        "CLAUDE_CODE_USE_BEDROCK" "CLAUDE_CODE_USE_VERTEX"
-                        "CLAUDE_CONFIG_DIR" "CODEX_HOME" "KIMI_CODE_HOME")
-                  ;; …nor the user's desktop: no display, no compositor socket, no session bus, a private
-                  ;; runtime directory (bin/drgnx and `drgnx check' do the same for the process itself: dbus.el
-                  ;; connects with the C environment, which this binding does not reach)
-                  (list (concat "DBUS_SESSION_BUS_ADDRESS=" drgnx-run-ert--dead-bus)
-                        (concat "XDG_RUNTIME_DIR=" (drgnx-run-ert--private-dir (expand-file-name "run" tmp))))
-                  drgnx-run-ert--desktop-variables
                   (and (getenv "DRGNX_USER_ELPA") (list (concat "DRGNX_USER_ELPA=" (getenv "DRGNX_USER_ELPA"))))
                   (and (not (getenv "DRGNX_USER_ELPA")) (file-directory-p elpa) (list (concat "DRGNX_USER_ELPA=" elpa)))
                   process-environment))
          (_ (make-directory (expand-file-name "home" tmp) t))
          (abbreviated-home-dir nil)                     ; recomputed for the temp home
+         ;; Emacs computed this at startup from the real HOME (~/.emacs.d or ~/.config/emacs): a test that writes under it
+         ;; (the custom file, eln-cache, auto-save lists …) lands in the run
+         (user-emacs-directory (file-name-as-directory (expand-file-name "emacs" tmp)))
          ;; project.el remembers projects it sees: never in the user's own Emacs's list
          (project-list-file (expand-file-name "projects" tmp))
          (ok (if one-process
