@@ -73,6 +73,8 @@ directory whose code directories (`drgnx-test-env-config-links') are linked into
             ;; … and a hub one starts anyway ends with this Emacs (an interrupted run leaves none)
             (list (format "DRGNX_HUB_PARENT_PID=%d" (emacs-pid)))
             drgnx-test-env-provider-variables
+            ;; the harness keeps its sessions under XDG_STATE_HOME unless this says otherwise: not the caller's
+            (list "DRGNX_UI_STATE")
             (list (concat "DBUS_SESSION_BUS_ADDRESS=" drgnx-test-env-dead-bus)
                   (concat "XDG_RUNTIME_DIR=" (drgnx-test-env--private-dir (expand-file-name "run" run))))
             (cl-remove-if (lambda (v) (member v shown)) drgnx-test-env-desktop-variables)

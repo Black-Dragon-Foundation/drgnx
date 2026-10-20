@@ -24,7 +24,7 @@
         (dolist (tier drgnx-test-env-tiers)
           (let* ((process-environment
                   (append '("HOME=/real-home" "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus" "DISPLAY=:0"
-                            "WAYLAND_DISPLAY=wayland-0" "OPENROUTER_API_KEY=sk-real" "XDG_CONFIG_HOME=/real-home/.config")
+                            "WAYLAND_DISPLAY=wayland-0" "DRGNX_UI_STATE=/real-home/state" "OPENROUTER_API_KEY=sk-real" "XDG_CONFIG_HOME=/real-home/.config")
                           process-environment))
                  (env (drgnx-test-env tier run))
                  (all (append env process-environment))
@@ -32,6 +32,7 @@
             ;; what the test sees is the environment with ENV on top: the real values are gone
             (let ((process-environment (append env process-environment)))
               (should-not (getenv "OPENROUTER_API_KEY"))
+              (should-not (getenv "DRGNX_UI_STATE"))     ; the harness state follows XDG_STATE_HOME into RUN
               (should-not (getenv "WAYLAND_DISPLAY"))
               (should-not (getenv "DISPLAY"))
               (should (equal (getenv "DBUS_SESSION_BUS_ADDRESS") drgnx-test-env-dead-bus)))

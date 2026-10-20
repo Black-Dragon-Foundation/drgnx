@@ -145,6 +145,15 @@
       (dolist (v '("DISPLAY" "WAYLAND_DISPLAY" "SWAYSOCK" "I3SOCK" "HYPRLAND_INSTANCE_SIGNATURE" "NIRI_SOCKET"))
         (should (member v env))))))
 
+(ert-deftest drgnx-check/shards-take-the-outer-env-from-drgnx-test-env ()
+  (require 'drgnx-test-env (expand-file-name "harness/drgnx-test-env" drgnx-dir))
+  (should-not (boundp 'drgnx-check-unit-env))               ; one list, not a copy
+  (dolist (n '("unit-1" "unit-timing" "live-1" "tty"))
+    (let ((env (plist-get (seq-find (lambda (j) (equal (plist-get j :name) n))
+                                    (drgnx-check-plan :root drgnx-dir :tty t))
+                          :env)))
+      (dolist (e (drgnx-test-env-outer)) (should (member e env))))))
+
 (ert-deftest drgnx-check/a-live-shard-never-sees-the-real-home-or-provider-keys ()
   ;; A live shard ran with the environment check was started in: the real HOME, session bus and API keys.  It runs
   ;; in the unit tier's sandbox (harness/run-ert.el): a temp HOME, a dead bus, the keys unset.

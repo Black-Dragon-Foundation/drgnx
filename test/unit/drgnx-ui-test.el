@@ -162,6 +162,48 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
       (should (member "TimeoutStopSec=10" argv))
       (should (equal (seq-take (cdr (member "--" argv)) 2) '("env" "-i"))))))
 
+;; URGENT-3-UI-LIVE: `test --ui' ran test/live in its own process with the real HOME, state directory, bus and keys
+(ert-deftest drgnx-ui/the-ui-tiers-live-half-runs-sandboxed ()
+  (let* ((base (make-temp-file "drgnx-ui-live" t))
+         (real-home (expand-file-name "real-home" base))
+         (suite (expand-file-name "suite" base))
+         (out (expand-file-name "seen.eld" base)))
+    (unwind-protect
+        (progn
+          (make-directory real-home)
+          (make-directory suite)
+          (with-temp-file (expand-file-name "probe-test.el" suite)
+            (insert (format "(require 'ert)\n(require 'drgnx-ui)
+(ert-deftest live-probe/record ()
+  (let ((root (drgnx-ui-state-root)))
+    (make-directory (expand-file-name \"scenarios\" root) t)
+    (write-region \"x\" nil (expand-file-name \"scenarios/minimal.json\" root))
+    (with-temp-file %S
+      (prin1 (list (getenv \"HOME\") (getenv \"OPENROUTER_API_KEY\") (getenv \"DISPLAY\") (getenv \"DBUS_SESSION_BUS_ADDRESS\") root
+                   (expand-file-name \"~/probe\") (getenv \"XDG_STATE_HOME\"))
+             (current-buffer)))))\n" out)))
+          (let ((process-environment
+                 (append (list (concat "HOME=" real-home) (concat "XDG_STATE_HOME=" real-home "/.local/state")
+                               (concat "DRGNX_UI_STATE=" real-home "/ui-state") "OPENROUTER_API_KEY=sk-x" "DISPLAY=:0"
+                               "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1/bus" "DRGNX_TEST_SELECTOR")
+                         process-environment))
+                ok)
+            (with-output-to-string (setq ok (drgnx-ui-run-live-tests suite)))
+            (should ok))
+          (pcase-let ((`(,home ,key ,display ,bus ,state ,tilde ,xdg-state)
+                       (with-temp-buffer (insert-file-contents out) (read (current-buffer)))))
+            (should-not key)
+            (should-not display)
+            (should (equal bus "unix:path=/nonexistent/drgnx-unit-test"))
+            ;; everything it wrote is under the run's temp directory, nothing under the real home
+            (should-not (string-prefix-p real-home home))
+            (should (string-prefix-p (file-name-directory home) state))
+            (should (string-prefix-p (file-name-directory home) xdg-state))
+            (should (string-prefix-p home tilde))
+            (should-not (directory-files-recursively real-home ".")))
+          )
+      (delete-directory base t))))
+
 (ert-deftest drgnx-ui/an-interactive-session-holds-a-light-slot-while-it-lives ()
   (skip-unless (executable-find "flock"))
   (drgnx-ui-test--with-state

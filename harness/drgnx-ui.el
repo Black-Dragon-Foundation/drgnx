@@ -1575,11 +1575,32 @@ with EXTRA-ENV (\"K=V\" strings).  Return (RC RESULTS RUN)."
           (and (file-exists-p results) (drgnx-ui--read-json results))
           run)))
 
+(defun drgnx-ui-run-live-tests (&optional dir)
+  "The live suite (DIR, default test/live) the way bin/drgnx check's live shards run it: in a child Emacs under
+`drgnx-run-ert-batch' (`drgnx-test-env': a temp HOME, state directory and runtime directory, a dead session bus, no
+provider key), its files in one process.  Never in this process: its environment is the user's (URGENT-3-UI-LIVE).
+Print the child's output; return non-nil when it passed."
+  (let* ((dir (or dir (expand-file-name "test/live" drgnx-ui-repo-dir)))
+         (done nil) (code nil)
+         (process-environment (append (list "DRGNX_TEST_ONE_PROCESS=1") (drgnx-test-env-outer) process-environment))
+         (p (make-process
+             :name "drgnx-ui-live" :noquery t :connection-type 'pipe :buffer nil
+             :command (list (or (getenv "DRGNX_EMACS") (expand-file-name invocation-name invocation-directory))
+                            "--batch" "-Q" "--eval" "(setq load-prefer-newer t)" "-L" (directory-file-name drgnx-ui-harness-dir) "-L" (expand-file-name "core" drgnx-ui-repo-dir)
+                            "-L" (expand-file-name "wb" drgnx-ui-repo-dir)
+                            "-l" "drgnx-ui" "-l" (expand-file-name "run-ert.el" drgnx-ui-harness-dir)
+                            "-f" "drgnx-run-ert-batch" (expand-file-name dir))
+             :filter (lambda (_p s) (princ s))
+             :sentinel (lambda (proc _e)
+                         (unless (process-live-p proc) (setq code (process-exit-status proc) done t))))))
+    (while (not done) (accept-process-output p 0.2))
+    (eql code 0)))
+
 (defun drgnx-ui-run-ui-tests ()
-  "`drgnx test --ui': the GUI suite in a session, then the live suite here.  Return an exit code."
+  "`drgnx test --ui': the GUI suite in a session, then the live suite in a sandboxed Emacs.  Return an exit code."
   (let* ((t0 (float-time))
          (ok (eq 0 (drgnx-ui-run-ui-session-tests))))
-    (setq ok (and (drgnx-run-ert (expand-file-name "test/live" drgnx-ui-repo-dir)) ok))
+    (setq ok (and (drgnx-ui-run-live-tests) ok))
     (princ (format "ui tier: %s in %.1fs\n" (if ok "green" "RED") (- (float-time) t0)))
     (if ok 0 1)))
 
