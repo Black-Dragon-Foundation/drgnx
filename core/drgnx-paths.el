@@ -62,6 +62,24 @@ never makes Tramp connect.  Nothing is memoized; bin/drgnx-paths.sh's drgnx_dir 
             (and (eq kind 'config) (drgnx-paths-config-moved-p) "~/.config/drgnx")
             (expand-file-name "drgnx" (or (drgnx-paths-env-dir xdg) base))))))))
 
+(declare-function drgnx-file-read-bounded "drgnx-file")
+
+(defun drgnx-paths-recorded-emacs ()
+  "The Emacs install.sh recorded: the first line of `emacs' in the data dir, else in the config dir (where older installs
+wrote it), trimmed, when it is an absolute name of an executable regular file; else nil.  Never evaluated, never
+prompts.  bin/drgnx's emacs_bin has the same rule."
+  (require 'drgnx-file (expand-file-name "core/drgnx-file" drgnx-dir))   ; by file: the harness loads this alone
+  (catch 'found
+    (dolist (kind '(data config))
+      (let* ((file (expand-file-name "emacs" (drgnx-paths-dir kind)))
+             (text (condition-case nil (drgnx-file-read-bounded file :max-bytes 4096) (error nil)))
+             (line (and text (string-trim (car (split-string text "\n"))))))
+        (when (and line (string-prefix-p "/" line))
+          (let ((default-directory "/") (file-name-handler-alist nil))
+            (when (and (file-regular-p line) (file-executable-p line))
+              (throw 'found line))))))
+    nil))
+
 (defun drgnx-paths-ignored ()
   "The path variables of `drgnx-paths-dir' set to a value that does not count (neither empty nor absolute):
 a list of (VAR VALUE DIR), DIR being the folder drgnx uses instead.  The doctor's `config-dir' check names them."

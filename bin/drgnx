@@ -4,7 +4,7 @@ set -euo pipefail
 here="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 . "$here/bin/drgnx-paths.sh"   # drgnx_dir KIND: where drgnx keeps its files (as core/drgnx-paths.el)
 
-emacs_bin() { # the one Emacs every subcommand runs in: $DRGNX_EMACS, else the one install.sh recorded (an absolute path), else PATH's
+emacs_bin() { # the one Emacs every subcommand runs in: $DRGNX_EMACS, else the one install.sh recorded (an absolute path), else PATH's nidhogg, else PATH's emacs
   if [[ -n "${DRGNX_EMACS:-}" ]]; then printf '%s\n' "$DRGNX_EMACS"; return; fi
   local file line
   # the record is machine-local, so it lives in the data dir; the config dir's is where older installs wrote it
@@ -15,7 +15,7 @@ emacs_bin() { # the one Emacs every subcommand runs in: $DRGNX_EMACS, else the o
     line="${line#"${line%%[![:space:]]*}"}"; line="${line%"${line##*[![:space:]]}"}"
     if [[ "$line" == /* && -f "$line" && -x "$line" ]]; then printf '%s\n' "$line"; return; fi
   done
-  echo emacs
+  if command -v nidhogg >/dev/null 2>&1; then echo nidhogg; else echo emacs; fi
 }
 
 emacsclient_bin() { # the emacsclient of emacs_bin's Emacs: beside it (Emacs.app: Contents/MacOS/bin/), else PATH's

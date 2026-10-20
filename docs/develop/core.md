@@ -1885,7 +1885,7 @@ warning a newer Emacs adds never stops an install or an update.
 The shell function `emacs_bin` picks the one Emacs every subcommand uses: `$DRGNX_EMACS`, else the first line of
 the data dir's `emacs` (`$DRGNX_DATA_DIR/emacs`, default `~/.local/share/drgnx/emacs`, written by `install.sh`'s
 `remember_emacs`) when it names an executable file, then the same of `$DRGNX_CONFIG_DIR/emacs` (where older
-installs wrote it), else `emacs`. The files are read as paths, never evaluated. A new subcommand calls
+installs wrote it), else `nidhogg` when PATH has one, else `emacs`. `(drgnx-paths-recorded-emacs)` is the same record rule in Lisp (the harness's `drgnx-ui-emacs-bin` uses it). The files are read as paths, never evaluated. A new subcommand calls
 `"$(emacs_bin)"`, never a bare `emacs`. All of them run with `load-prefer-newer`, so a stale `.elc` after a pull
 never prints before the output. `emacsclient_bin` is that Emacs's `emacsclient` (beside it, or in an Emacs.app's
 `Contents/MacOS/bin/`; else PATH's) — what `drgnx open` and `drgnx PATH` talk to the daemon with

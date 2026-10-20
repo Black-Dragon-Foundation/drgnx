@@ -302,3 +302,26 @@ and data dirs, whose init.el is INIT (text); what it prints, read."
         (should (equal (car (drgnx-paths-test--start tmp (concat "DRGNX_UI_RUN=" tmp "run")))
                        (concat tmp "init/")))
       (delete-directory tmp t))))
+
+(ert-deftest drgnx-paths/recorded-emacs ()
+  (let* ((dir (make-temp-file "drgnx-paths-rec" t))
+         (data (expand-file-name "data" dir)) (config (expand-file-name "config" dir))
+         (exe (expand-file-name "exe" dir)) (exe2 (expand-file-name "exe2" dir)) (plain (expand-file-name "plain" dir))
+         (process-environment (append (list (concat "DRGNX_DATA_DIR=" data) (concat "DRGNX_CONFIG_DIR=" config))
+                                      process-environment)))
+    (unwind-protect
+        (progn
+          (make-directory data) (make-directory config)
+          (dolist (f (list exe exe2)) (write-region "#!/bin/sh\n" nil f) (set-file-modes f #o755))
+          (write-region "" nil plain)
+          (should-not (drgnx-paths-recorded-emacs))
+          (write-region (concat "  " exe2 "  \nsecond line\n") nil (expand-file-name "emacs" config))
+          (should (equal (drgnx-paths-recorded-emacs) exe2))
+          (write-region (concat exe "\n") nil (expand-file-name "emacs" data))
+          (should (equal (drgnx-paths-recorded-emacs) exe))   ; the data dir's beats the config dir's
+          (write-region "exe\n" nil (expand-file-name "emacs" data))   ; relative
+          (should (equal (drgnx-paths-recorded-emacs) exe2))   ; unusable: the config dir's record is read next
+          (write-region (concat plain "\n") nil (expand-file-name "emacs" data))   ; not executable
+          (delete-file (expand-file-name "emacs" config))
+          (should-not (drgnx-paths-recorded-emacs)))
+      (delete-directory dir t))))

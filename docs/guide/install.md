@@ -233,13 +233,13 @@ installer never keeps an Emacs older than 31.1.
 ## Which Emacs drgnx runs in
 
 Every `drgnx` subcommand (build, doctor, test, sync, …) runs in one Emacs: `$DRGNX_EMACS` if set, else the one the
-installer recorded, else `emacs` on your PATH. The installer writes the path of the Emacs it installed or kept to
+installer recorded, else `nidhogg` on your PATH (see [Nidhogg](#nidhogg)), else `emacs` on your PATH. The installer writes the path of the Emacs it installed or kept to
 the first line of `~/.local/share/drgnx/emacs` (drgnx's data dir: `$DRGNX_DATA_DIR/emacs`, else
 `$XDG_DATA_HOME/drgnx/emacs`); this matters on macOS, where `/Applications/Emacs.app/Contents/MacOS/Emacs` is
 usually not on PATH. The path is this machine's, so it is not in your config folder, which travels to your other
 machines ([second-machine.md](second-machine.md)). Older installs wrote it to `~/.config/drgnx/emacs`: that
 file is still read when the data dir has no usable record, and `drgnx doctor` asks you to move it. If neither names
-an executable file, drgnx falls back to PATH's `emacs`. Edit the file, or set `DRGNX_EMACS`, to use another.
+an executable file, drgnx falls back to PATH's `nidhogg`, then `emacs`. Edit the file, or set `DRGNX_EMACS`, to use another.
 
 ## drgnx doctor
 
