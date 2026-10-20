@@ -2452,11 +2452,14 @@ nil and the caller bound no `drgnx-large-file-open`.
 The answer is remembered for the session. Every other open takes the remembered answer, else chunks (raw without
 the chunks module, `drgnx-large-files-chunk-open-function` nil). A second advice, on `server-execute`, binds
 `drgnx-large-file-open`: `whole` for a client that waits for its files (`drgnx open --wait`), `auto` for every
-other request, the `-e (find-file …)` forms of `drgnx -t` included. Emacs's `server-visit-files` reverts an open
-buffer whose file changed with `(revert-buffer t nil)`, which asks; for a lean or raw buffer of one of the request's
-files, the same advice (`drgnx-large-files--serve-unasked`) lets an unmodified one revert unasked (its exact name in
-`revert-without-query`) and leaves a modified one alone: its record of the file's time is made current while the
-request runs, then put back, and the echo area says so. Quit is a `user-error`; the door always returns a buffer. A
+other request, the `-e (drgnx-session-open-file …)` forms of `drgnx -t` included. An open buffer of a request's
+file whose file changed on disk is the core's (`drgnx-session-open-unasked`, [opening.md](../guide/opening.md#how-it-works)): reverted
+unasked when unmodified, left with a note when modified, with the module on or off. The module adds one step, on
+`drgnx-session-before-open-functions` (`drgnx-large-files--reopen-grown`): an unmodified normal buffer whose file
+grew past `:ask-above` is killed first, so the request's visit comes through the door again (chunks, else raw; lean
+for `--wait`) instead of reading the whole file into a normal buffer. A buffer a waiting client holds
+(`server-buffer-clients`) is reverted instead and turns lean after the revert. Lean and raw buffers are reverted by
+the core like any other. Quit is a `user-error`; the door always returns a buffer. A
 raw buffer is reused with RAWFILE t, whatever the file's size now, because without it Emacs itself would ask to
 revisit the file normally, a timer's open included.
 

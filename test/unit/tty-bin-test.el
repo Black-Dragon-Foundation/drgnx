@@ -228,7 +228,7 @@ terminal, as when a person types the command; else /dev/null and a pipe) → (EX
       (should (eql 0 (car (call (list "-t" "My \"Project\"" "café.py")))))
       (let ((form (tty-bin-test--form (car (last (tty-bin-test--calls dir))))))
         (should (equal (read form)
-                       `(progn (find-file ,file) (drgnx-session-open-folder ,folder))))
+                       `(progn (drgnx-session-open-file ,file) (drgnx-session-open-folder ,folder))))
         (should (string-search "My \\\"Project\\\"" form))))))
 
 (ert-deftest drgnx-bin/open-t-in-a-capable-terminal-when-opted-in ()
