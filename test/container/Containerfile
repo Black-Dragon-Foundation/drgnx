@@ -1,5 +1,5 @@
 # Batch test tier: Fedora 45 ships Emacs 31.1, drgnx's baseline. emacs-pgtk, named: Fedora's "emacs" may
 # resolve to emacs-nw, which has no SVG (the Work graph tests); diffutils for the review tests; zsh and fish
-# for the shell-file and completion tests (bash is already there).
+# for the shell-file and completion tests (bash is already there); procps-ng for pgrep/pkill (the lease and stress tests).
 FROM registry.fedoraproject.org/fedora:45
-RUN dnf -y install emacs-pgtk diffutils git zsh fish && dnf clean all
+RUN dnf -y install emacs-pgtk diffutils git zsh fish procps-ng && dnf clean all
