@@ -116,7 +116,7 @@ Emacs with `DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/drgnx-unit-test` (db
 environment, which a Lisp `setenv` does not reach, so a test that loads it would otherwise talk to the real session bus)
 and without `DISPLAY`, `WAYLAND_DISPLAY`, `SWAYSOCK`, `I3SOCK`, `HYPRLAND_INSTANCE_SIGNATURE` and `NIRI_SOCKET`; the runner
 binds the same inside Emacs and gives `XDG_RUNTIME_DIR` a private directory (mode 700) in the run's temp directory. A test
-that needs a bus, a display or a runtime directory sets its own with `process-environment`. The GUI tiers run their own
+that needs a bus, a display or a runtime directory sets its own with `process-environment`. Rootless podman run under that private runtime directory starts a pause process (`catatonit -P`) of its own; the runner and `bin/drgnx test` stop the ones whose `libpod/tmp/pause.pid` is under the run directory before removing it (never another). The GUI tiers run their own
 session and are not changed. `bin/drgnx test --container` passes `$DRGNX_TEST_SELECTOR` into the container, and `bin/drgnx
 test --ui` into the session that runs `test/ui/`, so a narrowed GUI run stays narrow. A test file that
 does not read or load (an unbalanced paren) fails the run: the runner prints the file and the error and counts it as a

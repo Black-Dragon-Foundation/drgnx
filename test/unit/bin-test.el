@@ -974,6 +974,38 @@ macOS (no /proc there)."
           (should-not (drgnx-bin-test--left parent)))
       (delete-directory dir t))))
 
+(ert-deftest drgnx-bin/a-test-run-stops-the-podman-pause-process-it-made ()
+  ;; TEST-PODMAN-PAUSE-1: rootless podman under the run's private XDG_RUNTIME_DIR starts a `catatonit -P' pause
+  ;; process (pid file RUN/libpod/tmp/pause.pid) that outlives the run, and the systemd scope it lives in.  The run
+  ;; stops exactly that one at its end, and never another catatonit (the user's own, with its pid file elsewhere).
+  (skip-unless (executable-find "sleep"))
+  (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
+         (parent (expand-file-name "parent" dir))
+         (ours (expand-file-name "ours.pid" dir))
+         (other (expand-file-name "other" dir))
+         (catatonit (expand-file-name "catatonit" dir))
+         (emacs (drgnx-bin-test--fake-emacs
+                 (expand-file-name "fake-emacs" dir)
+                 (format "mkdir -p \"$XDG_RUNTIME_DIR/libpod/tmp\"; %s 300 >/dev/null 2>&1 </dev/null & echo $! > \"$XDG_RUNTIME_DIR/libpod/tmp/pause.pid\"; echo $! > %s"
+                         catatonit ours)))
+         (users nil))
+    (unwind-protect
+        (progn
+          (make-directory parent)
+          (make-symbolic-link (executable-find "sleep") catatonit)
+          (setq users (start-process "drgnx-bin-test-catatonit" nil catatonit "300"))
+          (make-directory (expand-file-name "libpod/tmp" other) t)
+          (with-temp-file (expand-file-name "libpod/tmp/pause.pid" other) (insert (format "%d\n" (process-id users))))
+          (should (eql 0 (car (drgnx-bin-test--call drgnx-bin-test--bin
+                                                    (drgnx-bin-test--env dir parent (concat "DRGNX_EMACS=" emacs))
+                                                    "test"))))
+          (let ((pid (drgnx-bin-test--slurp-number ours)))
+            (should (> pid 0))
+            (should-not (drgnx-bin-test--pid-alive-p pid)))
+          (should (process-live-p users)))
+      (when (process-live-p users) (delete-process users))
+      (delete-directory dir t))))
+
 (ert-deftest drgnx-bin/a-test-run-stopped-by-a-signal-leaves-nothing-and-no-emacs ()
   ;; TMP-1: a run stopped half way (INT/TERM/HUP, as systemd, Ctrl-C and a closing terminal send) removes its
   ;; TMPDIR and its Emacs is gone.

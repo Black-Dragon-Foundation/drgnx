@@ -469,6 +469,28 @@ to clean up, then KILL."
   (ignore-errors (signal-process (- (process-id p)) 'KILL))
   (while (process-live-p p) (accept-process-output p 0.05)))
 
+(defun drgnx-run-ert--stop-podman-pause (dir)
+  "Stop the podman pause processes a test made under DIR (TEST-PODMAN-PAUSE-1).
+Rootless podman looks for its pause process in $XDG_RUNTIME_DIR/libpod/tmp/pause.pid; the run's private
+XDG_RUNTIME_DIR has none, so a test that runs podman starts a `catatonit -P' (in a systemd scope of its own) that
+outlives the run.  Only the pids in pid files under DIR, and only while the process is a catatonit: never another
+(the user's own keeps its pid file in their runtime directory)."
+  (dolist (f (ignore-errors
+               (directory-files-recursively
+                dir "\\`pause\\.pid\\'" nil
+                (lambda (d) (not (member (file-name-nondirectory d) '("home" "xdg-data" "data" "eln" "storage")))))))
+    (when (string-suffix-p "/libpod/tmp/pause.pid" f)
+      (let ((pid (ignore-errors
+                   (string-to-number (with-temp-buffer (insert-file-contents f) (buffer-string))))))
+        (when (and pid (> pid 1)
+                   (equal (cdr (assq 'comm (process-attributes pid))) "catatonit"))
+          (ignore-errors (signal-process pid 'TERM)))))))
+
+(defun drgnx-run-ert--delete-run-dir (dir)
+  "Remove the run directory DIR, after stopping the podman pause processes made under it."
+  (drgnx-run-ert--stop-podman-pause dir)
+  (delete-directory dir t))
+
 (defun drgnx-run-ert--end-files ()
   "`kill-emacs-hook' of a per-file run (C-c, TERM): end the files' Emacsen, which run in process groups of their own,
 and remove their temp directories and the root they are in.  The Emacsen get up to 2 s to end first, so none
@@ -478,10 +500,10 @@ writes into a directory being removed; a root that cannot be removed is reported
   (let ((deadline (+ (float-time) 2)))
     (while (and (cl-some #'process-live-p drgnx-run-ert--file-processes) (< (float-time) deadline))
       (accept-process-output nil 0.05)))
-  (dolist (d drgnx-run-ert--file-dirs) (ignore-errors (delete-directory d t)))
+  (dolist (d drgnx-run-ert--file-dirs) (ignore-errors (drgnx-run-ert--delete-run-dir d)))
   (when drgnx-run-ert--file-root
     (condition-case err
-        (delete-directory drgnx-run-ert--file-root t)
+        (drgnx-run-ert--delete-run-dir drgnx-run-ert--file-root)
       (error (message "drgnx: could not remove %s: %s" drgnx-run-ert--file-root (error-message-string err))))
     (setq drgnx-run-ert--file-root nil)))
 
@@ -669,7 +691,7 @@ file passed."
                   (setq running (delq f running)
                         drgnx-run-ert--file-processes (delq p drgnx-run-ert--file-processes)
                         drgnx-run-ert--file-dirs (delete (plist-get f :tmp) drgnx-run-ert--file-dirs))
-                  (ignore-errors (delete-directory (plist-get f :tmp) t))
+                  (ignore-errors (drgnx-run-ert--delete-run-dir (plist-get f :tmp)))
                   (when-let* ((buffer (plist-get f :buffer)))
                     (message "drgnx: %s" (plist-get f :file))
                     (princ (with-current-buffer buffer (buffer-string)) #'external-debugging-output)
@@ -751,7 +773,7 @@ file passed."
           (setq drgnx-run-ert--file-processes (delq p drgnx-run-ert--file-processes))
           (list :exit (process-exit-status p) :timed-out timed-out :output (with-current-buffer out (buffer-string))))
       (kill-buffer out)
-      (ignore-errors (delete-directory tmp t)))))
+      (ignore-errors (drgnx-run-ert--delete-run-dir tmp)))))
 
 (defun drgnx-run-ert--child-error (what child)
   "Signal a `user-error' that WHAT (a string) failed, with the tail of the output of CHILD (see `drgnx-run-ert--child')."
@@ -929,7 +951,7 @@ exit 0 or 1."
          ;; Everything a test makes with `make-temp-file' (and every child process) lands in TMP too, so
          ;; removing OWN below, or from `kill-emacs-hook' when the run dies, leaves nothing in /tmp.
          (temporary-file-directory (file-name-as-directory tmp))
-         (_ (when own (add-hook 'kill-emacs-hook (lambda () (ignore-errors (delete-directory own t))))))
+         (_ (when own (add-hook 'kill-emacs-hook (lambda () (ignore-errors (drgnx-run-ert--delete-run-dir own))))))
          (eln (drgnx-run-ert--use-eln-dir eln (expand-file-name "eln/" tmp) user-eln))
          ;; …nor anything else under ~ (HOME is a temp dir; the user's ELPA stays readable for the
          ;; tests that load packages from it, read-only, through DRGNX_USER_ELPA)
@@ -956,7 +978,7 @@ exit 0 or 1."
                  (drgnx-run-ert dir (getenv "DRGNX_TEST_RESULTS"))
                ;; each file's directory in a short root of its own (a socket path has at most 103 bytes on macOS)
                (drgnx-run-ert-files (drgnx-run-ert--files dir) (getenv "DRGNX_TEST_RESULTS")))))
-    (when own (delete-directory own t))
+    (when own (drgnx-run-ert--delete-run-dir own))
     (kill-emacs (if ok 0 1))))
 
 ;;;; Stress: the same tests, again and again
