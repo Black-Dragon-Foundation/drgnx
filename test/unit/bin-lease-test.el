@@ -23,11 +23,19 @@
                 (concat "HOME=" drgnx-lease-test--dir) "DRGNX_LEASE_HELD" "DRGNX_LEASE")
           process-environment))
 
+(defun drgnx-lease-test--available ()
+  "Whether this host can take a lease: bin/drgnx turns it off without flock or with bash older than 4 (macOS)."
+  (and (executable-find "flock")
+       (with-temp-buffer
+         (and (eql 0 (call-process "bash" nil t nil "-c" "echo ${BASH_VERSINFO[0]}"))
+              (>= (string-to-number (buffer-string)) 4)))))
+
 (defmacro drgnx-lease-test--with (&rest body)
   "Run BODY with a temp directory; kill the holders it started, then delete the directory."
   (declare (indent 0))
   `(let ((drgnx-lease-test--dir (make-temp-file "drgnx-lease-test" t))
          (drgnx-lease-test--procs nil))
+     (skip-unless (drgnx-lease-test--available))
      (unwind-protect (progn ,@body)
        (dolist (p drgnx-lease-test--procs)
          (when (process-live-p p) (signal-process p 'KILL)))
