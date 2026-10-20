@@ -252,7 +252,8 @@ systemctl --user start drgnx                     # emacsclient -s drgnx -c
 Emacs to Nidhogg, a rebuild elsewhere) an installed unit would keep starting the old one. `drgnx service-unit --refresh`
 rewrites only the `ExecStart=` line of `$XDG_CONFIG_HOME/systemd/user/drgnx.service` (default
 `~/.config/systemd/user/`) to the Emacs running the command, keeps every other line (your `Environment=` lines),
-runs `systemctl --user daemon-reload`, and prints the change (`drgnx.service ran OLD; now NEW …`). It never restarts the
+shows the old and the new `ExecStart=` line (`- OLD` / `+ NEW`) before it writes, runs `systemctl --user daemon-reload`, and
+prints the change (`drgnx.service ran OLD; now NEW …`). It never restarts the
 service: restart drgnx when it suits you (`systemctl --user restart drgnx`). A unit that is not drgnx's daemon line, or
 none at all, is left alone and said so. `drgnx update` does this after every run (also when already up to date; not on
 macOS); a failure there is reported and does not fail the update. `drgnx doctor` warns when the unit starts another

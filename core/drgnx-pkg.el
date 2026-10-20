@@ -1220,11 +1220,12 @@ DRGNX-P whether LINE starts drgnx's daemon (--fg-daemon=drgnx)."
               (t 'failed)))
     'absent))
 
-(defun drgnx-pkg-service-unit-refresh (&optional file)
+(defun drgnx-pkg-service-unit-refresh (&optional file before)
   "Point FILE (default `drgnx-pkg-service-unit-file') at the Emacs running this: plist (:status :file :old :new :reload).
 :status is `none' (no file), `foreign' (no drgnx daemon line: left alone; :line holds the ExecStart= line), `current'
 \(same Emacs, by truename: untouched) or `rewritten' (only the ExecStart= line replaced, every other line kept; :reload
-is `ok', `failed' or `absent' from systemd's daemon-reload).  Never restarts the service and never asks."
+is `ok', `failed' or `absent' from systemd's daemon-reload).  BEFORE, a function, is called with the old and the new
+ExecStart= line after the check and before anything is written.  Never restarts the service and never asks."
   (let* ((file (or file (drgnx-pkg-service-unit-file)))
          (text (drgnx-file-read-bounded file))
          (new (expand-file-name invocation-name invocation-directory)))
@@ -1235,6 +1236,7 @@ is `ok', `failed' or `absent' from systemd's daemon-reload).  Never restarts the
          (if (equal (file-truename old) (file-truename new))
              (list :status 'current :file file :old old :new new)
            (let ((fresh (car (drgnx-pkg--unit-exec-start (drgnx-pkg-service-unit)))))
+             (when before (funcall before line fresh))
              (drgnx-file-write-text file (string-replace line fresh text))
              (list :status 'rewritten :file file :old old :new new :reload (drgnx-pkg--systemctl-reload)))))
         (`(,line . ,_) (list :status 'foreign :file file :line line))
@@ -1336,7 +1338,9 @@ is `ok', `failed' or `absent' from systemd's daemon-reload).  Never restarts the
                                (format "the problem comes with module %s (turn it off in Preferences: Modules)" m)))
            0))
         (`("service-unit" "--refresh")
-         (let* ((r (drgnx-pkg-service-unit-refresh)) (file (plist-get r :file)))
+         (let* ((r (drgnx-pkg-service-unit-refresh
+                    nil (lambda (old new) (drgnx-pkg--print "drgnx.service ExecStart changes:\n- %s\n+ %s" old new))))
+                (file (plist-get r :file)))
            (pcase (plist-get r :status)
              ('none (drgnx-pkg--print "drgnx.service is not installed (%s): nothing to refresh" file))
              ('current (drgnx-pkg--print "drgnx.service runs %s: up to date" (plist-get r :new)))

@@ -729,6 +729,19 @@
                      (nth 0 (drgnx-pkg--unit-exec-start (drgnx-pkg-service-unit)))))
       (should (equal reload-calls 1)))))
 
+(ert-deftest drgnx-pkg/refresh-shows-old-and-new-before-it-writes ()
+  (drgnx-pkg-test--with-unit (root unit reload-calls) (drgnx-pkg-test--old-unit "/old/bin/emacs")
+    (let (seen)
+      (drgnx-pkg-service-unit-refresh
+       nil (lambda (old new)
+             ;; called with the file still as it was, nothing reloaded yet
+             (setq seen (list old new (drgnx-pkg-test--slurp unit) reload-calls))))
+      (should (equal (nth 0 seen) (car (drgnx-pkg--unit-exec-start (drgnx-pkg-test--old-unit "/old/bin/emacs")))))
+      (should (equal (nth 1 seen) (car (drgnx-pkg--unit-exec-start (drgnx-pkg-service-unit)))))
+      (should (equal (nth 2 seen) (drgnx-pkg-test--old-unit "/old/bin/emacs")))
+      (should (= (nth 3 seen) 0))
+      (should (string-search (nth 1 seen) (drgnx-pkg-test--slurp unit))))))
+
 (ert-deftest drgnx-pkg/refresh-leaves-a-current-unit ()
   (drgnx-pkg-test--with-unit (root unit reload-calls) nil
     (make-directory (file-name-directory unit) t)
@@ -772,7 +785,9 @@
       (make-directory (file-name-directory unit) t)
       (write-region (drgnx-pkg-test--old-unit "/old/bin/emacs") nil unit nil 'silent)
       (should (equal (with-output-to-string (should (eql 0 (drgnx-pkg-cli-run '("service-unit" "--refresh")))))
-                     (format "drgnx.service ran /old/bin/emacs; now %s (systemd reloaded). Restart drgnx to use it: systemctl --user restart drgnx\n" new)))
+                     (format "drgnx.service ExecStart changes:\n- %s\n+ %s\ndrgnx.service ran /old/bin/emacs; now %s (systemd reloaded). Restart drgnx to use it: systemctl --user restart drgnx\n"
+                             (car (drgnx-pkg--unit-exec-start (drgnx-pkg-test--old-unit "/old/bin/emacs")))
+                             (car (drgnx-pkg--unit-exec-start (drgnx-pkg-service-unit))) new)))
       (should (equal (with-output-to-string (drgnx-pkg-cli-run '("service-unit" "--refresh")))
                      (format "drgnx.service runs %s: up to date\n" new)))
       (write-region "[Service]\nExecStart=/usr/bin/emacs --fg-daemon\n" nil unit nil 'silent)
