@@ -178,6 +178,19 @@ subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E c
           (should (= line (count-lines (window-start) (line-beginning-position))))
           (should (equal (buffer-substring-no-properties (line-beginning-position) (point)) "+4")))))))
 
+(ert-deftest drgnx-cockpit-edits/a-listing-less-than-a-millisecond-early-is-due ()
+  ;; COCKPIT-BURST-LOAD-1: a turn timer for a wait of microseconds never moves the virtual clock (a delay that short
+  ;; is lost in the jitter of when the timer was stamped), so the tick re-armed it 10000 times.  Such a wait is due.
+  (drgnx-test-with-clock ()
+    (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
+      (setq drgnx-cockpit-edits--list-every 1.5
+            drgnx-cockpit-edits--listed-at (- (+ (float-time) 0.000002) 1.5)
+            drgnx-cockpit-edits--list-dirty t)
+      (drgnx-cockpit-edits--tick e)
+      (should-not (drgnx-timer-active-p (cons 'cockpit-edits-turn e)))
+      (should drgnx-cockpit-edits--busy)
+      (drgnx-cockpit-edits-test--settle e))))
+
 (ert-deftest drgnx-cockpit-edits/accept-marks-and-a-change-unmarks ()
   (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
     (let ((ext drgnx-cockpit-edits-test--ext))

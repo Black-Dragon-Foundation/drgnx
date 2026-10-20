@@ -450,7 +450,7 @@ running goes first."
       (drgnx-cockpit-edits--busy (drgnx-cockpit-edits--schedule))
       (t
        (let* ((wait (- (+ drgnx-cockpit-edits--listed-at drgnx-cockpit-edits--list-every) (float-time)))
-              (list (and drgnx-cockpit-edits--list-dirty (<= wait 0)))
+              (list (and drgnx-cockpit-edits--list-dirty (<= wait 0.001)))   ; under a millisecond early is due: no timer is that precise
               (files (hash-table-keys drgnx-cockpit-edits--dirty)))
          (when (and drgnx-cockpit-edits--list-dirty (not list)) (drgnx-cockpit-edits--schedule-turn wait))   ; its turn comes
          (when (or list files)
