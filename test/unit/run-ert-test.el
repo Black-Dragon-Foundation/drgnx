@@ -923,3 +923,62 @@ this test are not passed on."
   (drgnx-run-ert-test--with-suite (tmp suite results drgnx-run-ert-test--skipper)
     (let ((listed (drgnx-run-ert-test--no-skip tmp (format "((%s \"iso-skip/needs\"))" system-type))))
       (should (eql 0 (car (drgnx-run-ert-test--go suite results listed "DRGNX_TEST_SELECTOR=\"^iso-skip/\"")))))))
+
+;;;; A flake is a result (det Task 22)
+
+(defconst drgnx-run-ert-test--flaker
+  '(("flake-test.el" . "(ert-deftest iso-flake/once ()
+  ;; red while its marker is absent; makes it, so the rerun in a fresh Emacs passes
+  (let ((marker (getenv \"ISO_FLAKE_MARKER\")))
+    (unless (file-exists-p marker) (write-region \"x\" nil marker nil 'silent) (should nil))))
+(ert-deftest iso-flake/fine () (should t))"))
+  "A suite with one test that fails the first time it runs and passes after.")
+
+(defun drgnx-run-ert-test--flaky-file (tmp text)
+  "TMP's flaky list holding TEXT, as an environment entry."
+  (let ((f (expand-file-name "flaky.eld" tmp))) (with-temp-file f (insert text)) (concat "DRGNX_TEST_FLAKY=" f)))
+
+(ert-deftest drgnx-run-ert/a-pass-on-rerun-is-flaky-and-fails-unless-listed ()
+  (drgnx-run-ert-test--with-suite (tmp suite results drgnx-run-ert-test--flaker)
+    (let* ((marker (expand-file-name "marker" tmp))
+           (r (drgnx-run-ert-test--go suite results "DRGNX_TEST_RERUN=1" (concat "ISO_FLAKE_MARKER=" marker)
+                                      (drgnx-run-ert-test--flaky-file tmp "()")))
+           (json (drgnx-run-ert-test--json results)) (flaky (plist-get json :flaky)))
+      (should (eql 1 (car r)))
+      (should (= 1 (length flaky)))
+      (should (equal (plist-get (aref flaky 0) :name) "iso-flake/once"))
+      (should (string-suffix-p "flake-test.el" (plist-get (aref flaky 0) :file)))
+      (should (plist-get (aref flaky 0) :condition))
+      ;; the run fails because of it, and the rerun's tests passed
+      (should (equal (plist-get (aref (plist-get json :failures) 0) :name) "iso-flake/once"))
+      (should (string-match-p "flaky" (plist-get (aref (plist-get json :failures) 0) :condition)))
+      (should (string-match-p "Flaky (1):" (cdr r))))))
+
+(ert-deftest drgnx-run-ert/a-listed-flake-passes-and-is-printed ()
+  (drgnx-run-ert-test--with-suite (tmp suite results drgnx-run-ert-test--flaker)
+    (let* ((marker (expand-file-name "marker" tmp))
+           (r (drgnx-run-ert-test--go
+               suite results "DRGNX_TEST_RERUN=1" (concat "ISO_FLAKE_MARKER=" marker)
+               (drgnx-run-ert-test--flaky-file
+                tmp "((iso-flake/once :reason \"first start\" :stress \"stress 20: 20 passed\"))"))))
+      (should (eql 0 (car r)))
+      (should (string-match-p "flaky (listed: first start)" (cdr r)))
+      (should (= 1 (length (plist-get (drgnx-run-ert-test--json results) :flaky)))))))
+
+(ert-deftest drgnx-run-ert/rerun-is-off-by-default ()
+  (drgnx-run-ert-test--with-suite (tmp suite results drgnx-run-ert-test--flaker)
+    (let ((r (drgnx-run-ert-test--go suite results (concat "ISO_FLAKE_MARKER=" (expand-file-name "marker" tmp)))))
+      (should (eql 1 (car r)))
+      (should-not (string-match-p "Flaky" (cdr r)))
+      (should (equal (plist-get (drgnx-run-ert-test--json results) :flaky) [])))))
+
+(ert-deftest drgnx-run-ert/a-test-red-twice-is-a-failure ()
+  (drgnx-run-ert-test--with-suite (tmp suite results '(("red-test.el" . "(ert-deftest iso-red/always () (should nil))
+(ert-deftest iso-red/fine () (should t))")))
+    (let* ((r (drgnx-run-ert-test--go suite results "DRGNX_TEST_RERUN=1"))
+           (json (drgnx-run-ert-test--json results)))
+      (should (eql 1 (car r)))
+      (should (equal (plist-get json :flaky) []))
+      (should (= 1 (length (plist-get json :failures))))
+      (should (equal (plist-get (aref (plist-get json :failures) 0) :name) "iso-red/always"))
+      (should (equal (list (plist-get json :total) (plist-get json :passed)) '(2 1))))))

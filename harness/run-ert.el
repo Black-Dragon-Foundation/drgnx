@@ -259,6 +259,41 @@ this `system-type'.  The list is `((PLATFORM NAME…)…)'; a file that is missi
                   failures)))))
     (nreverse failures)))
 
+(defun drgnx-run-ert--flaky-file ()
+  "The listed flakes: DRGNX_TEST_FLAKY (a file), else test/flaky.eld of this checkout."
+  (let ((given (drgnx-run-ert--env "DRGNX_TEST_FLAKY")))
+    (if given (expand-file-name given)
+      (expand-file-name "../test/flaky.eld" (file-name-directory drgnx-run-ert--self)))))
+
+(defun drgnx-run-ert--flaky-listed (name)
+  "The :reason of the flake NAME in the flaky list, or nil when it is not listed."
+  (let ((file (drgnx-run-ert--flaky-file)))
+    (when (file-readable-p file)
+      (cl-loop for e in (with-temp-buffer (insert-file-contents file) (read (current-buffer)))
+               when (equal (format "%s" (car e)) name) return (or (plist-get (cdr e) :reason) "no reason")))))
+
+(defun drgnx-run-ert--judge-flaky (summary)
+  "SUMMARY (a merged one) with each flake it holds judged: one the flaky list names is printed and passes, any other
+is a failure.  Prints the flakes."
+  (let ((flaky (append (plist-get summary :flaky) nil)))
+    (when flaky
+      (message "\nFlaky (%d): failed first, passed on the rerun" (length flaky))
+      (dolist (x flaky)
+        (let* ((name (plist-get x :name)) (reason (drgnx-run-ert--flaky-listed name)))
+          (if reason
+              (message "   %s  flaky (listed: %s)" name reason)
+            (message "   %s  flaky: %s" name (plist-get x :condition))
+            (let ((whole (string-prefix-p "file " name)))
+              (setq summary
+                    (plist-put (plist-put (plist-put (plist-put summary :failed (1+ (plist-get summary :failed)))
+                                                     :passed (if whole (plist-get summary :passed) (1- (plist-get summary :passed))))
+                                          :total (if whole (1+ (plist-get summary :total)) (plist-get summary :total)))
+                               :failures (vconcat (plist-get summary :failures)
+                                                  (list (list :name name :condition
+                                                              (format "flaky: failed first (%s), passed on rerun; fix it, or list it in test/flaky.eld with a cause and a stress run"
+                                                                      (plist-get x :condition)))))))))))))
+  summary)
+
 (defun drgnx-run-ert--say-skipped (skipped)
   "Print the SKIPPED entries (:name :reason), if any."
   (when skipped
@@ -488,16 +523,35 @@ to BUFFER, or to this Emacs's standard error when BUFFER is nil."
   "The summary in the file JSON, or nil (missing or unreadable)."
   (ignore-errors (json-parse-string (with-temp-buffer (insert-file-contents json) (buffer-string)) :object-type 'plist)))
 
+(defun drgnx-run-ert--file-why (f timeout)
+  "Why the ended file F (:file :exit :timed-out :summary) failed as a whole, or nil: its Emacs timed out (after TIMEOUT
+s), died or exited non-zero without a failed test.  A failed test is not a whole-file failure."
+  (let ((s (plist-get f :summary)) (exit (plist-get f :exit)))
+    (cond ((plist-get f :timed-out) (format "its Emacs timed out after %d s (DRGNX_TEST_FILE_TIMEOUT)" timeout))
+          ((null s) (format "its Emacs ended (exit %s) without a summary" exit))
+          ((and (not (eql exit 0)) (eql 0 (plist-get s :failed))) (format "its Emacs exited %s" exit)))))
+
+(defun drgnx-run-ert--file-failures (f timeout)
+  "The unexpected results of the ended file F, as (NAME . CONDITION): its failed tests, and `file NAME' when it failed as
+a whole (`drgnx-run-ert--file-why')."
+  (append (cl-loop for x across (or (plist-get (plist-get f :summary) :failures) []) collect (cons (plist-get x :name) (plist-get x :condition)))
+          (when-let* ((why (drgnx-run-ert--file-why f timeout)))
+            (list (cons (concat "file " (file-name-nondirectory (plist-get f :file))) why)))))
+
 (defun drgnx-run-ert--merge (done timeout)
   "One summary of the ended files DONE (each :file :exit :seconds :timed-out :summary), in the shape of a
 one-Emacs run plus :files.  A file whose Emacs timed out (after TIMEOUT s), died or exited non-zero without a
 failed test is a failure named after the file."
-  (let ((total 0) (passed 0) failures known-red tests files leaks skipped (census nil))
+  (let ((total 0) (passed 0) failures known-red tests files leaks skipped flaky (census nil))
     (dolist (f done)
       (let* ((s (plist-get f :summary)) (exit (plist-get f :exit))
-             (why (cond ((plist-get f :timed-out) (format "its Emacs timed out after %d s (DRGNX_TEST_FILE_TIMEOUT)" timeout))
-                        ((null s) (format "its Emacs ended (exit %s) without a summary" exit))
-                        ((and (not (eql exit 0)) (eql 0 (plist-get s :failed))) (format "its Emacs exited %s" exit)))))
+             (why (drgnx-run-ert--file-why f timeout)))
+        ;; a file that failed and passed on its rerun (`DRGNX_TEST_RERUN'): what failed first and not again is a flake
+        (when-let* ((first (plist-get f :rerun)))
+          (let ((again (mapcar #'car (drgnx-run-ert--file-failures f timeout))))
+            (dolist (x (drgnx-run-ert--file-failures first timeout))
+              (unless (member (car x) again)
+                (push (list :name (car x) :file (plist-get f :file) :condition (format "%s" (cdr x))) flaky)))))
         (when s
           (cl-incf total (plist-get s :total))
           (cl-incf passed (plist-get s :passed))
@@ -513,7 +567,7 @@ failed test is a failure named after the file."
                                                       :condition why)))))
         (push (list :file (plist-get f :file) :exit exit :seconds (plist-get f :seconds)) files)))
     (append (list :total total :passed passed :failed (length failures) :failures (vconcat failures)
-                  :known_red (vconcat known-red) :tests (vconcat tests) :skipped (vconcat skipped)
+                  :known_red (vconcat known-red) :tests (vconcat tests) :skipped (vconcat skipped) :flaky (vconcat (nreverse flaky))
                   :files (vconcat (nreverse files)))
             (and census (list :leaks (vconcat leaks))))))
 
@@ -586,6 +640,7 @@ file passed."
          (queue (cl-loop for file in files for i from 1
                          collect (list :file file :json (expand-file-name (format "%d.json" i) out-dir))))
          (count (length queue)) (running nil) (done nil) (t0 (float-time))
+         (rerun (equal (drgnx-run-ert--env "DRGNX_TEST_RERUN") "1"))
          (seed (drgnx-run-ert--shuffle-seed)))     ; the files' Emacsen inherit it; this one says it once
     (when seed (drgnx-run-ert--say-seed seed))
     (add-hook 'kill-emacs-hook #'drgnx-run-ert--end-files)
@@ -619,9 +674,13 @@ file passed."
                     (message "drgnx: %s" (plist-get f :file))
                     (princ (with-current-buffer buffer (buffer-string)) #'external-debugging-output)
                     (kill-buffer buffer))
-                  (push (append f (list :exit (process-exit-status p) :seconds (- (float-time) (plist-get f :start))
-                                        :summary (drgnx-run-ert--read-summary (plist-get f :json))))
-                        done))))))
+                  (let ((entry (append f (list :exit (process-exit-status p) :seconds (- (float-time) (plist-get f :start))
+                                               :summary (drgnx-run-ert--read-summary (plist-get f :json))))))
+                    (if (and rerun (not (plist-get f :rerun)) (drgnx-run-ert--file-failures entry timeout))
+                        ;; once more, in a fresh Emacs: the whole file, so the order effects stay
+                        (progn (message "drgnx: %s had an unexpected result: once more" (plist-get f :file))
+                               (push (list :file (plist-get f :file) :json (concat (plist-get f :json) ".again") :rerun entry) queue))
+                      (push entry done))))))))
       (drgnx-run-ert--end-files)
       (delete-directory out-dir t))
     (let ((summary (drgnx-run-ert--merge (sort done (lambda (a b) (< (cl-position (plist-get a :file) files :test #'equal)
@@ -632,6 +691,7 @@ file passed."
           (setq summary (plist-put (plist-put (plist-put (plist-put summary :total 1) :failed 1)
                                               :failures (vector f))
                                    :passed 0))))
+      (setq summary (drgnx-run-ert--judge-flaky summary))
       ;; a must-run test that skipped, in a full run (the files' own Emacsen leave it to this one)
       (when (and (null selector) (not drgnx-run-ert--order-in))
         (when-let* ((more (drgnx-run-ert--no-skip-failures (append (plist-get summary :skipped) nil))))
