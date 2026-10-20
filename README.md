@@ -1,6 +1,6 @@
-# drgnx
+# dragonX (`drgnx`)
 
-**A modern, workbench-first Emacs framework.** VS Code / Zed / Cursor ergonomics — stable docks and
+**A modern, workbench-first Emacs framework**, by the Black Dragon Foundation. VS Code / Zed / Cursor ergonomics — stable docks and
 editor groups, a command palette, mouse-first discoverability, AI completion and agents with any model —
 on top of everything that makes Emacs worth it: org, deep programmability, a persistent daemon and the
 whole Emacs package ecosystem. Light on memory: the target is a daemon under 400 MB with all modules on.
@@ -25,8 +25,12 @@ whole Emacs package ecosystem. Light on memory: the target is a daemon under 400
 
 ## Requirements
 
-- GNU Emacs **31.1+** with native compilation (older Emacs is not supported); pgtk on Wayland, X11 and macOS builds
+- GNU Emacs **31.1 or newer**, with native compilation. Emacs 30 and older are no longer supported.
 - Linux (GNOME, KDE, XFCE, Cinnamon, tiling window managers) and macOS
+
+**Coming next: Nidhogg**, dragonX's own Emacs build: GNU Emacs 31 with dragonX's patches
+([Black-Dragon-Foundation/nidhogg](https://github.com/Black-Dragon-Foundation/nidhogg)). dragonX will run on it, and
+the installer will build and install it for you. It is in progress and not released yet.
 
 ## Install
 
@@ -43,7 +47,7 @@ AI and Claude Code; afterwards open drgnx with Spotlight (⌘Space, type "drgnx"
 project, like `code .`; to keep it in the Dock, drag `~/Applications/drgnx.app` there.
 `--dry-run` shows the plan only. On a second machine, `bash -s -- --config URL` (after the `| bash`) also sets it up from
 your configuration repository ([docs/guide/second-machine.md](docs/guide/second-machine.md)). Details,
-manual install and uninstall: [docs/guide/install.md](docs/guide/install.md). Check a machine with `drgnx doctor`.
+manual install and uninstall: [docs/guide/install.md](docs/guide/install.md). Check a machine with `drgnx doctor`. Keep it current with `drgnx update` (`--restart` restarts drgnx afterwards; `--back` undoes the last update).
 
 ## Documentation
 
@@ -53,7 +57,7 @@ manual install and uninstall: [docs/guide/install.md](docs/guide/install.md). Ch
 ## Roadmap
 
 - **Done:** the test harness for agents, the installer and `drgnx doctor`, VS Code / Emacs / Vim key profiles,
-  modal Vim editing on evil (M12d: states, the `SPC` leader, ex commands that keep the workbench's groups, panels and
+  modal Vim editing on evil (states, the `SPC` leader, ex commands that keep the workbench's groups, panels and
   AI working with it), the workbench (Explorer, Buffers, docks, panel, editor groups, several windows, layout that
   survives restarts), modules, reproducible packages with rollback, onboarding, AI agents with queued input and edit
   review, the perf lab, the work tracker, AI completion and inline edits with any model (local runners first),
@@ -61,9 +65,17 @@ manual install and uninstall: [docs/guide/install.md](docs/guide/install.md). Ch
   monitors under sway, i3, Hyprland, niri, KDE Plasma, X11 and macOS (move a window to another monitor, restore each
   window to its own; GNOME explains its key), your own shell in drgnx's terminal, and a second machine from one command
   (`drgnx bootstrap`).
-- **Later:** editor amenities to match VS Code and Zed (tree-sitter, language servers, formatting, debugging,
-  multi-cursor, git gutter, a settings and shortcuts editor), platforms (macOS, a Meow modal module), then the public
-  launch.
+- **Next:** **Nidhogg**, dragonX's own Emacs build (see Requirements); dragonX then runs on it.
+- **Polish:** a compositor for rounded, shadowed, animated popups and panels. Linux Wayland first, then macOS.
+- **Speed:** no freezes while Lisp works; parsing, process output and JSON move off the main thread; smooth scrolling.
+- **Agents:** a panel that shows what agents do in detail (each step, diffs, permissions, context and cost), with
+  collapse per step type that remembers your choice; an agent runtime written in Rust.
+- **Extensions:** WebAssembly extensions, so tools can be written in any language (agent tools first). Community
+  Emacs packages keep working.
+- **Also planned:** editor amenities to match VS Code and Zed (language servers, debugging, multi-cursor, a settings
+  and shortcuts editor), a Meow modal module, then the public launch.
+
+No dates and no promises: this is the direction, not a schedule.
 
 ## License
 
