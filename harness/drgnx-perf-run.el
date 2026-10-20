@@ -1229,7 +1229,8 @@ $DRGNX_PERF_RESULTS.  With DRGNX_LEASE_BUSY set it runs plain `--perf' on the wo
       (let ((code (drgnx-perf-run)))
         (princ "wall clock not judged: host busy\n")
         (if (eql code 0) 3 code))
-    (let* ((tmp (or (getenv "DRGNX_RUN_TMP") (make-temp-file "drgnx-ab" t))) (ref-tree (expand-file-name "ab-ref" tmp))
+    (let* ((own-tmp (unless (getenv "DRGNX_RUN_TMP") (make-temp-file "drgnx-ab" t)))
+           (tmp (or (getenv "DRGNX_RUN_TMP") own-tmp)) (ref-tree (expand-file-name "ab-ref" tmp))
            (drgnx-perf-run--fixture (drgnx-perf-run--make-fixture))
            (workloads (drgnx-perf-run--select (drgnx-perf-run--only (drgnx-perf-run--workloads))))
            sa-name sb-name entries)
@@ -1247,6 +1248,8 @@ $DRGNX_PERF_RESULTS.  With DRGNX_LEASE_BUSY set it runs plain `--perf' on the wo
                 (push (drgnx-perf-ab--workload (car w) (cdr w) sa sb n) entries))))
         (when sa-name (ignore-errors (drgnx-ui-stop sa-name)))
         (when sb-name (ignore-errors (drgnx-ui-stop sb-name)))
+        ;; the runner deletes its DRGNX_RUN_TMP; a directory made here is removed here
+        (when own-tmp (ignore-errors (delete-directory own-tmp t)))
         (delete-file drgnx-perf-run--fixture))
       (setq entries (nreverse entries))
       (dolist (e entries) (princ (concat (drgnx-perf-ab--line e) "\n")))

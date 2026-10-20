@@ -135,3 +135,16 @@ B's is round 1 (+/-4 ms)."
                   (drgnx-perf-ab-test--samples (+ 10 (if (cl-evenp n) 1.5 0)) 25))))
          (v (drgnx-perf-ab-verdict (plist-get r :a) (plist-get r :b) (plist-get r :rounds))))
     (should (eq (plist-get v :verdict) 'no-regression))))
+
+(ert-deftest drgnx-perf-ab/its-own-temp-dir-is-removed-but-the-runners-is-kept ()
+  (let (made)
+    (drgnx-perf-ab-test--with-fake 0
+      (let ((orig (symbol-function 'make-temp-file)) (process-environment (cons "DRGNX_RUN_TMP" process-environment)))
+        (cl-letf (((symbol-function 'make-temp-file)
+                   (lambda (prefix &rest args)
+                     (let ((f (apply orig prefix args))) (when (equal prefix "drgnx-ab") (push f made)) f))))
+          (with-output-to-string (drgnx-perf-ab "HEAD" :n 50))
+          (should (= (length made) 1))
+          (should-not (file-exists-p (car made)))
+          ;; the runner's directory (DRGNX_RUN_TMP set) is its own to delete
+          (should (file-directory-p dir)))))))
