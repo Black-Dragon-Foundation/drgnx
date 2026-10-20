@@ -90,7 +90,7 @@ for that file to exist (up to 20 s) instead of sleeping."
 (ert-deftest drgnx-check/a-short-job-is-seen-ending-while-a-long-one-runs ()
   ;; the first real run noticed every job of the parallel phase only when the last ended.  The long job ends when the
   ;; run has said (verbose) that the short one is done: a run that noticed it only at the end finds it after the long
-  ;; job's 20 s bound, with the short job's seconds above the long one's.
+  ;; job's 20 s bound, with the short job's seconds above the long one's; the long job must end well under that bound (10 s).
   (drgnx-check-test--with dir
     (let* ((said "")
            (r (let ((standard-output (lambda (c) (setq said (concat said (string c)))
@@ -100,7 +100,8 @@ for that file to exist (up to 20 s) instead of sleeping."
            (short (seq-find (lambda (j) (equal (plist-get j :name) "short")) (plist-get r :jobs)))
            (long (seq-find (lambda (j) (equal (plist-get j :name) "long")) (plist-get r :jobs))))
       (should (plist-get r :ok))
-      (should (< (plist-get short :seconds) (plist-get long :seconds))))))
+      (should (< (plist-get short :seconds) (plist-get long :seconds)))
+      (should (< (plist-get long :seconds) 10)))))
 
 (ert-deftest drgnx-check/a-failing-build-stops-everything ()
   (drgnx-check-test--with dir
