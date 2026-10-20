@@ -1121,14 +1121,24 @@ to the eln cache while it runs, and the wall clock pays for it).")
       (error "The workload did not do what it measures (%s)" (plist-get spec :check)))
     (list :samples samples :run run)))
 
+(defconst drgnx-perf-ab-min-rounds 8
+  "The fewest rounds (a run of each side) an A/B is judged on: the interval is over the rounds, not the samples.")
+
 (defun drgnx-perf-ab-rounds (n run)
-  "Call RUN with a, b, a, b… (a run's wall samples each) until both sides have at least N samples and two runs.
-(:a SAMPLES :b SAMPLES :runs (SIDE…))."
-  (let (a b order (guard 0))
-    (while (or (< (length a) n) (< (length b) n) (< (/ (length order) 2) 2))
+  "Call RUN with a, b, a, b… (a run's wall samples each) until both sides have at least N samples and
+`drgnx-perf-ab-min-rounds' rounds.  (:a SAMPLES :b SAMPLES :rounds ((:a S :b S)…) :runs (SIDE…))."
+  (let (rounds order (guard 0))
+    (while (or (< (length rounds) drgnx-perf-ab-min-rounds)
+               (< (apply #'+ (mapcar (lambda (r) (length (plist-get r :a))) rounds)) n)
+               (< (apply #'+ (mapcar (lambda (r) (length (plist-get r :b))) rounds)) n))
       (when (> (cl-incf guard) 2000) (error "perf: no wall samples after 2000 rounds"))
-      (setq a (append a (funcall run 'a)) b (append b (funcall run 'b)) order (append order '(a b))))
-    (list :a a :b b :runs order)))
+      (let* ((sa (funcall run 'a)) (sb (funcall run 'b)))
+        (push (list :a sa :b sb) rounds)
+        (setq order (append order '(a b)))))
+    (setq rounds (nreverse rounds))
+    (list :a (apply #'append (mapcar (lambda (r) (plist-get r :a)) rounds))
+          :b (apply #'append (mapcar (lambda (r) (plist-get r :b)) rounds))
+          :rounds rounds :runs order)))
 
 (defun drgnx-perf-ab--budget-fails (workload stats budgets)
   "The work tree's absolute wall-clock BUDGETS for WORKLOAD against STATS (of its samples), judged at n >= 100."
@@ -1176,7 +1186,7 @@ judged, not-comparable, error, not-judged."
                                     :warm warm :calibration (list :a cal-a :b cal-b)
                                     :a-run (drgnx-perf-run--medians runs-a) :b-run (drgnx-perf-run--medians runs-b)
                                     :runs (/ (length (plist-get r :runs)) 2))
-                              (and (not loaded) (list :verdict (drgnx-perf-ab-verdict a b)))
+                              (and (not loaded) (list :verdict (drgnx-perf-ab-verdict a b (plist-get r :rounds))))
                               (list :budget-fails (drgnx-perf-ab--budget-fails name sb-stats (drgnx-perf-run--budgets))))))
                   )
               (when (plist-get spec :teardown)
@@ -1207,7 +1217,7 @@ judged, not-comparable, error, not-judged."
 (cl-defun drgnx-perf-ab (ref &key (n 100))
   "`drgnx test --perf --ab REF': wall clock judged by interleaving two trees.  REF is exported with `git archive'
 and both trees are built; one session each; per workload one discarded warm-up run per side, then runs
-A, B, A, B… until each side has at least N per-command samples (and two runs), with the calibration before and
+A, B, A, B… until each side has at least N per-command samples (and `drgnx-perf-ab-min-rounds' rounds), with the calibration before and
 after.  Per workload: both sides' stats, the bootstrap verdict (`drgnx-perf-ab-verdict'), both sides' allocation,
 CPU and rows, and the work tree's wall budgets (judged at n >= 100).  Exit: 0 judged and clean, 1 regressed or a
 budget fails, 3 not judged (a loaded calibration, a busy host, an inconclusive interval).  Results go to

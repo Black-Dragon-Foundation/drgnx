@@ -33,15 +33,15 @@
   (let ((v (drgnx-perf-ab-verdict '(1 30 2 29 3 28 4 27 5 26) '(2 31 3 30 4 29 5 28 6 27))))
     (should (eq (plist-get v :verdict) 'inconclusive))))
 
-(ert-deftest drgnx-perf-ab/rounds-alternate-until-n ()
+(ert-deftest drgnx-perf-ab/rounds-run-until-n-and-the-minimum-of-rounds ()
   (let (order)
     (let ((r (drgnx-perf-ab-rounds 10 (lambda (side) (push side order) (list 1.0 2.0 3.0 4.0)))))
-      (should (equal (nreverse order) '(a b a b a b)))
-      (should (= (length (plist-get r :a)) 12)))
-    ;; at least two runs per side even when one run reaches n
-    (setq order nil)
-    (drgnx-perf-ab-rounds 3 (lambda (side) (push side order) (list 1.0 2.0 3.0 4.0)))
-    (should (equal (nreverse order) '(a b a b)))))
+      (should (= (length (plist-get r :rounds)) drgnx-perf-ab-min-rounds))
+      (should (= (length order) (* 2 drgnx-perf-ab-min-rounds)))
+      (should (= (length (plist-get r :a)) (* 4 drgnx-perf-ab-min-rounds))))
+    ;; more samples than the minimum of rounds gives: it goes on until each side has N
+    (let ((r (drgnx-perf-ab-rounds 100 (lambda (_side) (list 1.0 2.0 3.0 4.0)))))
+      (should (= (length (plist-get r :rounds)) 25)))))
 
 (ert-deftest drgnx-perf-ab/the-ref-tree-is-an-archive-not-a-worktree ()
   (let (cmds (dest (make-temp-file "drgnx-ab" t)))
@@ -99,3 +99,22 @@
       (setq out (with-output-to-string (setq code (drgnx-perf-ab "HEAD" :n 50))))
       (should (eql code 3))
       (should (string-match-p "not judged: .*calibration" out)))))
+
+(defun drgnx-perf-ab-test--run-effect-rounds ()
+  "Four rounds, no real difference between the sides, but each run has its own offset: A's slow run is round 4,
+B's is round 1 (+/-4 ms)."
+  (cl-loop for off-a in '(0 0 0 4) for off-b in '(4 0 0 0)
+           collect (list :a (drgnx-perf-ab-test--samples (+ 10 off-a) 25) :b (drgnx-perf-ab-test--samples (+ 10 off-b) 25))))
+
+(ert-deftest drgnx-perf-ab/the-unit-is-the-run-not-the-sample ()
+  (let* ((rounds (drgnx-perf-ab-test--run-effect-rounds))
+         (a (apply #'append (mapcar (lambda (r) (plist-get r :a)) rounds)))
+         (b (apply #'append (mapcar (lambda (r) (plist-get r :b)) rounds)))
+         (pooled (drgnx-perf-ab-verdict a b))
+         (per-round (drgnx-perf-ab-verdict a b rounds)))
+    ;; 100 samples a side look like a precise answer ...
+    (should (eq (plist-get pooled :verdict) 'no-regression))
+    ;; ... but there are four runs a side: the interval over the rounds is wider and says so
+    (should (> (- (plist-get per-round :hi) (plist-get per-round :lo))
+               (* 2 (- (plist-get pooled :hi) (plist-get pooled :lo)))))
+    (should (eq (plist-get per-round :verdict) 'inconclusive))))

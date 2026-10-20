@@ -397,11 +397,26 @@ from the global `random' state: the same samples and SEED give the same interval
       (list :diff (- (drgnx-perf--median vb) (drgnx-perf--median va))
             :lo (aref d (floor (* 0.025 iterations))) :hi (aref d (min (1- iterations) (floor (* 0.975 iterations))))))))
 
-(defun drgnx-perf-ab-verdict (a b)
+(cl-defun drgnx-perf-bootstrap-rounds (rounds &key (iterations 2000) (seed 1))
+  "(:diff D :lo L :hi H) from ROUNDS, a list of (:a SAMPLES :b SAMPLES): the unit is the round (a run of each side),
+not the sample, because samples within a run share a spike, a GC and a cache state.  Per round the statistic is
+the median of B minus the median of A; D is the median of those differences and the 95% interval resamples the
+rounds with replacement.  Its own seeded generator, like `drgnx-perf-bootstrap-diff'."
+  (let* ((diffs (vconcat (mapcar (lambda (r) (- (drgnx-perf--median (plist-get r :b)) (drgnx-perf--median (plist-get r :a)))) rounds)))
+         (n (length diffs)) (state (max 1 (mod seed 2147483647))) out)
+    (dotimes (_ iterations)
+      (push (drgnx-perf--median (cl-loop repeat n collect (progn (setq state (mod (* state 48271) 2147483647)) (aref diffs (mod state n)))))
+            out))
+    (let ((d (vconcat (sort out #'<))))
+      (list :diff (drgnx-perf--median diffs)
+            :lo (aref d (floor (* 0.025 iterations))) :hi (aref d (min (1- iterations) (floor (* 0.975 iterations))))))))
+
+(defun drgnx-perf-ab-verdict (a b &optional rounds)
   "(:verdict V :diff :lo :hi :threshold T) for the wall-clock samples A (the REF) and B (the work tree): T is
 max(1 ms, 10% of A's median).  regressed: the whole interval is above T; no-regression: all of it at or below T;
-inconclusive: T is inside it."
-  (let* ((ci (drgnx-perf-bootstrap-diff a b)) (th (max 1.0 (* 0.10 (drgnx-perf--median a)))))
+inconclusive: T is inside it.  With ROUNDS (see `drgnx-perf-bootstrap-rounds') the interval is over the
+rounds, not the pooled samples A and B (which then only give the median T is taken from)."
+  (let* ((ci (if rounds (drgnx-perf-bootstrap-rounds rounds) (drgnx-perf-bootstrap-diff a b))) (th (max 1.0 (* 0.10 (drgnx-perf--median a)))))
     (append (list :verdict (cond ((> (plist-get ci :lo) th) 'regressed)
                                  ((<= (plist-get ci :hi) th) 'no-regression)
                                  (t 'inconclusive)))
