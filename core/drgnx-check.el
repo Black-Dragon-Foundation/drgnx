@@ -306,7 +306,7 @@ reaps (GitHub's job containers), an ended job's processes stay as zombies and si
              (_ (princ (format "check: %d jobs, %d GUI at a time (%s MiB free), logs in %s\n"
                                (length jobs) slots (or (drgnx-check--mem-available) "?") dir)))
              (r (drgnx-check-run jobs :dir dir :jobs (plist-get o :jobs) :gui-slots slots :verbose t)))
-        (ignore-errors (drgnx-check--save-durations dir))
+        (ignore-errors (drgnx-check--save-durations dir drgnx-dir))
         (princ (drgnx-check-summary r))
         ;; the census is report-only: the exit status is the jobs'
         (when (plist-get o :leaks) (princ (drgnx-check-leaks-report (drgnx-check-leaks dir))))
