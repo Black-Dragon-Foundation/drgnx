@@ -9,7 +9,7 @@
   (let ((root (make-temp-file "drgnx-build" t)))
     (unwind-protect
         (progn
-          (dolist (d '("core" "wb" "modules"))
+          (dolist (d '("core" "wb" "modules" "harness"))
             (copy-directory (expand-file-name d drgnx-dir) (expand-file-name d root)))
           (let ((r (drgnx-build-test--build root)))
             (should (null (plist-get r :errors)))
