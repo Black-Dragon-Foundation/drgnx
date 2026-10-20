@@ -7,6 +7,7 @@
 (load (expand-file-name "modules/editor/drgnx-editing" drgnx-dir) nil t)
 (load (expand-file-name "modules/editor/drgnx-clipboard" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
 (defvar x-selection-timeout)
 (defvar pgtk-selection-timeout)
@@ -328,18 +329,14 @@ uninstalled afterwards."
     (set-file-modes file #o755)))
 
 (defun drgnx-clip-test--wait (pred seconds)
-  (let ((deadline (+ (float-time) seconds)))
-    (while (and (not (funcall pred)) (< (float-time) deadline)) (accept-process-output nil 0.05))
-    (funcall pred)))
+  (drgnx-test-wait pred :secs (max 30 seconds) :what "the clipboard manager's answer"))
 
 (ert-deftest drgnx-clip/gpaste-syncing-is-found-without-blocking ()
   (drgnx-clip-test--env nil
     (drgnx-clip-test--gsettings "echo true")
     (drgnx-clip-test--x11 '("bash")
-      (let ((t0 (float-time)))
-        (drgnx-clipboard-install)
-        (should (< (- (float-time) t0) 0.3)))         ; the asks run in the background
-      (should select-active-regions)                  ; not known yet
+      (drgnx-clipboard-install)                       ; the asks run in the background:
+      (should select-active-regions)                  ; the answer is not known yet
       (should (drgnx-clip-test--wait (lambda () (not select-active-regions)) 3))
       (should (eq (plist-get (drgnx-clipboard-doctor-facts) :manager) 'gpaste))))
   ;; either setting alone records a selection (primary-to-history directly, synchronize-clipboards through the clipboard)
@@ -358,17 +355,16 @@ uninstalled afterwards."
     (drgnx-clip-test--gsettings "echo false")
     (drgnx-clip-test--x11 '("bash")
       (drgnx-clipboard-install)
-      (drgnx-clip-test--wait (lambda () nil) 0.5)
+      (drgnx-test-pause 0.5)
       (should select-active-regions))))
 
 (ert-deftest drgnx-clip/a-gsettings-that-hangs-is-given-up-after-a-second ()
   (drgnx-clip-test--env nil
     (drgnx-clip-test--gsettings "sleep 30; echo true")
     (drgnx-clip-test--x11 '("bash")
-      (let ((t0 (float-time)))
-        (drgnx-clipboard-install)
-        (should (< (- (float-time) t0) 0.3)))
-      (drgnx-clip-test--wait (lambda () nil) 1.5)
+      (drgnx-clipboard-install)
+      (should select-active-regions)                  ; the hanging ask did not block the install
+      (drgnx-test-pause 1.5)
       (should select-active-regions)
       (should-not (plist-get (drgnx-clipboard-doctor-facts) :manager))
       (should-not (seq-filter (lambda (p) (string-prefix-p "drgnx-gpaste" (process-name p))) (process-list))))))

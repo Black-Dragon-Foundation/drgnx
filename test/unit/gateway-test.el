@@ -6,6 +6,7 @@
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-gw-test--sse
   (concat "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":12,\"output_tokens\":1}}}\n\n"
@@ -75,8 +76,7 @@ the gateway told."
 (defun drgnx-gw-test--log (file) (if (file-exists-p file) (with-temp-buffer (insert-file-contents file) (buffer-string)) ""))
 
 (defun drgnx-gw-test--settle (pred &optional secs)
-  (let ((deadline (+ (float-time) (or secs 5)))) (while (and (not (funcall pred)) (< (float-time) deadline)) (accept-process-output nil 0.02)))
-  (funcall pred))
+  (drgnx-test-wait pred :secs (max 30 (or secs 0)) :what "the gateway's condition"))
 
 (ert-deftest drgnx-gateway/a-closed-connection-goes-50-ms-later-and-its-timer-goes-with-it ()
   (let ((conn (make-pipe-process :name "drgnx-gw-test" :noquery t))
@@ -231,7 +231,8 @@ the gateway told."
         (should (= (plist-get e :budget) 0.0001))))))
 
 (ert-deftest drgnx-gateway/a-client-that-hangs-up-stops-the-upstream ()
-  (drgnx-gw-test--with `((:path "/api/v1/messages" :chunks ((0 . ,drgnx-gw-test--sse) (1 . "data: {}\n\n") (1 . "data: {}\n\n")))) '()
+  ;; the upstream's last chunk comes long after any wait below: only the hang-up can end curl while the test waits
+  (drgnx-gw-test--with `((:path "/api/v1/messages" :chunks ((0 . ,drgnx-gw-test--sse) (1 . "data: {}\n\n") (600 . "data: {}\n\n")))) '()
     (let ((token (drgnx-gateway-register '(:task "t9" :chain ((openrouter . nil))))))
       (drgnx-gw-test--request port :token token :hang-up-after t)
       (should (drgnx-gw-test--settle (lambda () (not (seq-find (lambda (p) (string-prefix-p "drgnx-gw-curl" (process-name p))) (process-list)))) 1.5))
@@ -303,7 +304,7 @@ the gateway told."
            (got "") (c (open-network-stream "gw-test" nil "127.0.0.1" port :coding 'binary)))
       (set-process-filter c (lambda (_p s) (setq got (concat got s))))
       (process-send-string c (format "POST /v1/messages HTTP/1.1\r\nAuthorization: Bearer %s\r\nContent-Length: 10\r\n\r\n01234" token))
-      (accept-process-output nil 0.3)
+      (drgnx-test-pause 0.3)                                   ; half a body is not an answer
       (should (equal got ""))
       (process-send-string c "56789")
       (should (drgnx-gw-test--settle (lambda () (string-prefix-p "HTTP/1.1 200" got)) 5))

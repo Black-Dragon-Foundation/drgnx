@@ -5,6 +5,7 @@
 (require 'drgnx-jobs)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-ai-onboard-test--with (&rest body)
   "BODY with only provider `o' (Ollama, a mock serving two models and answering chat and fill-in-the-middle)
@@ -449,17 +450,24 @@ with BODY."
     (unwind-protect
         (progn
           (make-directory (concat root "home") t)
+          ;; the job sleeps far longer than any wait below: only the stop can end it while the test waits
           (setq child (make-process :name "drgnx-sigint" :connection-type 'pipe :noquery t :buffer nil
                                     :command (list "env" "--default-signal=INT" (expand-file-name invocation-name invocation-directory)
                                                    "--batch" "-Q" "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-onboard"
-                                                   "--eval" "(drgnx-onboard--job \"Sleeping\" (list \"sleep\" \"60\"))")))
-          (should (drgnx-onboard--wait (lambda () (seq-find (lambda (j) (eq (plist-get j :status) 'running)) (drgnx-jobs-list))) 20))
-          (sleep-for 1)                 ; the child has put its hook in
+                                                   ;; the marker is written from a timer, which first runs inside the job's wait: after the hook
+                                                   "--eval" (format "(progn (run-at-time 0.1 nil (lambda () (write-region \"\" nil %S nil 'silent))) (drgnx-onboard--job \"Sleeping\" (list \"sleep\" \"3600\")))"
+                                                                    (concat root "hooked")))
+                                    :sentinel (lambda (p _e) (process-put p :done t))))
+          (should (drgnx-test-wait (lambda () (seq-find (lambda (j) (eq (plist-get j :status) 'running)) (drgnx-jobs-list)))
+                                   :what "the child's job running"))
+          (should (drgnx-test-wait (lambda () (file-exists-p (concat root "hooked"))) :what "the child's hook in"))
           (signal-process child 'SIGINT)
-          (should (drgnx-onboard--wait (lambda () (not (process-live-p child))) 10))
-          (should (drgnx-onboard--wait (lambda () (not (seq-find (lambda (j) (eq (plist-get j :status) 'running)) (drgnx-jobs-list)))) 10)))
-      (when (and child (process-live-p child)) (kill-process child))
-      (dolist (j (drgnx-jobs-list)) (ignore-errors (drgnx-jobs-stop (plist-get j :id))))
+          (should (drgnx-test-wait (lambda () (process-get child :done)) :what "the child's exit"))
+          (should (drgnx-test-wait (lambda () (not (seq-find (lambda (j) (eq (plist-get j :status) 'running)) (drgnx-jobs-list))))
+                                   :what "the job stopped")))
+      (when (and child (process-live-p child)) (signal-process child 'SIGKILL))
+      (dolist (j (drgnx-jobs-list))   ; the job's `sleep 3600' (not the child's child: detached) is stopped here
+        (ignore-errors (drgnx-jobs-stop (plist-get j :id))))
       (delete-directory root t))))
 
 (defvar drgnx-ai-onboard-test--job-what nil "The job `drgnx-onboard--job' is waiting on (the test's view).")
@@ -662,10 +670,8 @@ with BODY."
   (seq-filter (lambda (j) (and (eq (plist-get j :status) 'running) (equal (plist-get j :command) command))) (drgnx-jobs-list)))
 
 (defun drgnx-ai-onboard-test--settle (pred &optional secs)
-  "Wait until PRED, at most SECS (2): the probe and the start are asynchronous."
-  (let ((deadline (+ (float-time) (or secs 2))))
-    (while (and (not (funcall pred)) (< (float-time) deadline)) (accept-process-output nil 0.05))
-    (funcall pred)))
+  "Wait until PRED (`drgnx-test-wait': at least 30 s, or SECS): the probe and the start are asynchronous."
+  (drgnx-test-wait pred :secs (max 30 (or secs 0)) :what "the runner's job"))
 
 (ert-deftest drgnx-ai/ensure-local-starts-the-runner-when-it-is-down ()
   (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--ollama-answers
@@ -678,7 +684,7 @@ with BODY."
         ;; a job runs it already: not a second one
         (setq drgnx-ai--ensure-time nil)
         (drgnx-ai-ensure-local)
-        (drgnx-ai-onboard-test--settle #'ignore 1.5)
+        (drgnx-test-pause 1.5)                              ; a second one may not come
         (should (= 1 (length (drgnx-ai-onboard-test--serving serve))))
         ;; it answers: nothing started
         (dolist (j (drgnx-jobs-list)) (drgnx-jobs-stop (plist-get j :id)))
@@ -687,7 +693,7 @@ with BODY."
           (unwind-protect
               (progn (setq drgnx-ai--ensure-time nil)
                      (drgnx-ai-ensure-local)
-                     (drgnx-ai-onboard-test--settle #'ignore 1.5)
+                     (drgnx-test-pause 1.5)                 ; nothing may start
                      (should-not (drgnx-ai-onboard-test--serving serve)))
             (delete-process mock)))))))
 
@@ -705,12 +711,12 @@ with BODY."
         (dolist (j (drgnx-jobs-list)) (drgnx-jobs-stop (plist-get j :id)))
         (should (drgnx-ai-onboard-test--settle (lambda () (null (drgnx-ai-onboard-test--serving serve)))))
         (funcall ask)                                       ; again within the minute: left alone
-        (drgnx-ai-onboard-test--settle #'ignore 1.5)
+        (drgnx-test-pause 1.5)                              ; nothing may start
         (should-not (drgnx-ai-onboard-test--serving serve))
         ;; another provider refusing never starts it
         (setq drgnx-ai--ensure-time nil)
         (drgnx-ai--refused 'lmstudio)
-        (drgnx-ai-onboard-test--settle #'ignore 1.5)
+        (drgnx-test-pause 1.5)                              ; nothing may start
         (should-not (drgnx-ai-onboard-test--serving serve))))))
 
 (ert-deftest drgnx-ai/ensure-local-never-waits-for-the-job ()

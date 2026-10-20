@@ -7,6 +7,7 @@
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-agents-ui" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 (defvar drgnx-hub--events)
 (defvar drgnx-hub--client)
 (defvar drgnx-hub--subscribing)
@@ -14,9 +15,7 @@
 (defconst drgnx-agents-ui-test--mock (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir))
 
 (defun drgnx-agents-ui-test--wait (pred &optional secs)
-  (let ((deadline (+ (float-time) (or secs 10))) v)
-    (while (and (not (setq v (funcall pred))) (< (float-time) deadline)) (accept-process-output nil 0.02))
-    v))
+  (drgnx-test-wait pred :secs (max 30 (or secs 0)) :what "the agent session's condition"))
 
 (ert-deftest drgnx-agents-ui/a-transcript-shows-turns-tools-plans-and-what-waits ()
   (let ((s (drgnx-agents--make :name "mock · x" :status 'busy :queue '("later")

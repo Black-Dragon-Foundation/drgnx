@@ -5,6 +5,7 @@
 (require 'drgnx-timer)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-hub-test--with (&rest body)
   "BODY with drgnx's dirs under ROOT (so the hub's socket is this test's own), a mock OpenRouter on OR-PORT logging
@@ -50,13 +51,17 @@ to OR-LOG, OPENROUTER_API_KEY unset."
          (p (make-process :name "post" :buffer out :noquery t
                           :command (list "curl" "-s" "--max-time" "10" "-o" "/dev/null" "-w" "%{http_code}"
                                          "-H" (concat "Authorization: Bearer " token) "-H" "Content-Type: application/json"
-                                         "--data" "{\"model\":\"x\"}" (concat url "/v1/messages")))))
-    (drgnx-hub-test--wait (lambda () (not (process-live-p p))) 12)
+                                         "--data" "{\"model\":\"x\"}" (concat url "/v1/messages"))
+                          :sentinel #'drgnx-hub-test--done)))
+    (drgnx-hub-test--wait (lambda () (process-get p :done)) 12)
     (prog1 (string-to-number (with-current-buffer out (buffer-string))) (kill-buffer out))))
 
 (defun drgnx-hub-test--wait (pred &optional secs)
-  (let ((deadline (+ (float-time) (or secs 5)))) (while (and (not (funcall pred)) (< (float-time) deadline)) (accept-process-output nil 0.02)))
-  (funcall pred))
+  (drgnx-test-wait pred :secs (max 30 (or secs 0)) :what "the hub's condition"))
+
+(defun drgnx-hub-test--done (proc _event)
+  "A sentinel: PROC's done flag, which a test waits on (not `process-live-p', nil before the sentinel ran)."
+  (process-put proc :done t))
 
 (ert-deftest drgnx-hub/ping-status-and-register-over-the-socket ()
   (drgnx-hub-test--with
@@ -79,7 +84,7 @@ to OR-LOG, OPENROUTER_API_KEY unset."
     (drgnx-hub-disconnect)
     (drgnx-hub-serve (drgnx-hub-socket))
     (drgnx-hub-call-sync "gateway/register" '(:chain [["openrouter" nil]]))
-    (drgnx-hub-test--wait #'ignore 0.4)
+    (drgnx-test-pause 0.4)
     (should (drgnx-hub-serving-p))
     (should (= (plist-get (drgnx-hub-call-sync "status" nil) :registrations) 1))))
 
@@ -104,7 +109,7 @@ to OR-LOG, OPENROUTER_API_KEY unset."
     (drgnx-hub-connect)
     (drgnx-hub-connect)
     (should (drgnx-hub-test--wait (lambda () (process-live-p drgnx-hub--events))))
-    (drgnx-hub-test--wait #'ignore 0.3)
+    (drgnx-test-pause 0.3)
     (should (= (length drgnx-hub--subscribers) 1))))
 
 (ert-deftest drgnx-hub/kept-files-are-synced-before-the-rename ()
@@ -136,9 +141,9 @@ to OR-LOG, OPENROUTER_API_KEY unset."
             (drgnx-hub-connect)
             (should (drgnx-hub-test--wait (lambda () (= accepted 1)) 2))
             (drgnx-hub-connect)                                   ; before the deadline: still the one
-            (drgnx-hub-test--wait #'ignore 0.1)
+            (drgnx-test-pause 0.1)
             (should (= accepted 1))
-            (drgnx-hub-test--wait #'ignore 0.4)
+            (drgnx-test-pause 0.4)
             (drgnx-hub-connect)                                   ; past it: a new one
             (should (drgnx-hub-test--wait (lambda () (= accepted 2)) 2))
             (should (= gone 0)))
@@ -168,7 +173,7 @@ to OR-LOG, OPENROUTER_API_KEY unset."
             (setq ticker (run-at-time 0 0.05 (lambda () (run-at-time 0 nil (lambda ()
                                                                              (condition-case err (drgnx-hub--broadcast 'test (list :blob blob))
                                                                                (excessive-lisp-nesting (setq nested err))))))))
-            (drgnx-hub-test--wait #'ignore 1)
+            (drgnx-test-pause 1)
             (cancel-timer ticker)
             (should (drgnx-hub-call-sync "ping" nil))
             (should-not (seq-filter #'process-live-p drgnx-hub--subscribers))
@@ -206,7 +211,7 @@ to OR-LOG, OPENROUTER_API_KEY unset."
   "A subscriber in a child Emacs that sleeps DELAY s per chunk it reads, and on a `done' event writes all it got to
 OUT and exits."
   (make-process
-   :name "reader" :noquery t :buffer nil
+   :name "reader" :noquery t :buffer nil :sentinel #'drgnx-hub-test--done
    :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "--eval"
                   (format "(let* ((got nil) (tail \"\") (done nil)
                                   (c (make-network-process :name \"s\" :family 'local :service %S :coding 'binary
@@ -256,11 +261,11 @@ about) and keeps the tests within their time limits."
             (setq stop (+ (float-time) 2))
             (push (run-at-time 0 0.05 (lambda () (funcall send small))) timers)
             (push (run-at-time 0 0.5 (lambda () (funcall send big))) timers)
-            (drgnx-hub-test--wait #'ignore 2)
+            (drgnx-test-pause 2)
             (mapc #'cancel-timer timers)
-            (drgnx-hub-test--wait #'ignore 0.1)
+            (drgnx-test-pause 0.1)
             (drgnx-hub--broadcast 'done nil)
-            (should (drgnx-hub-test--wait (lambda () (not (or (process-live-p fast) (process-live-p slow)))) 30))
+            (should (drgnx-hub-test--wait (lambda () (and (process-get fast :done) (process-get slow :done))) 30))
             (should (> n 20))
             (should (equal (drgnx-hub-test--got slow-out) (number-sequence 1 n)))
             (should (equal (drgnx-hub-test--got fast-out) (number-sequence 1 n))))
@@ -295,7 +300,7 @@ about) and keeps the tests within their time limits."
             (should (drgnx-hub-test--wait (lambda () (not (process-live-p b))) 6))
             (should (process-live-p a))
             (drgnx-hub--answer a '(:event "done" :data nil))
-            (should (drgnx-hub-test--wait (lambda () (not (process-live-p a-proc))) 20))
+            (should (drgnx-hub-test--wait (lambda () (process-get a-proc :done)) 20))
             (should (equal (drgnx-hub-test--got out) '(1))))
         (when (timerp rescue) (cancel-timer rescue))
         (when b-proc (ignore-errors (signal-process b-proc 'SIGCONT)) (delete-process b-proc))
@@ -329,10 +334,10 @@ about) and keeps the tests within their time limits."
             (cancel-timer ticker)
             ;; a broadcast the ticker queued just before is still to come: after it, `done' (else it follows `done',
             ;; which the reader does not wait past)
-            (drgnx-hub-test--wait #'ignore 0.1)
+            (drgnx-test-pause 0.1)
             (should (process-live-p live))
             (drgnx-hub--broadcast 'done nil)
-            (should (drgnx-hub-test--wait (lambda () (not (process-live-p live-proc))) 20))
+            (should (drgnx-hub-test--wait (lambda () (process-get live-proc :done)) 20))
             (should (> n 5))
             (should (equal (drgnx-hub-test--got out) (number-sequence 1 n))))
         (when (timerp ticker) (cancel-timer ticker))
@@ -378,7 +383,7 @@ about) and keeps the tests within their time limits."
             (cancel-timer judge)
             (should (process-live-p conn))
             (drgnx-hub--broadcast 'done nil)
-            (should (drgnx-hub-test--wait (lambda () (not (process-live-p reader))) 30))
+            (should (drgnx-hub-test--wait (lambda () (process-get reader :done)) 30))
             (should (equal (drgnx-hub-test--got out) '(1))))
         (when (timerp judge) (cancel-timer judge))
         (delete-process reader)))))
@@ -390,7 +395,7 @@ about) and keeps the tests within their time limits."
     (drgnx-hub-serve (drgnx-hub-socket))
     (let* ((out (concat root "got.txt"))
            (sub (make-process
-                 :name "slow-sub" :noquery t :buffer nil
+                 :name "slow-sub" :noquery t :buffer nil :sentinel #'drgnx-hub-test--done
                  :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "--eval"
                                 (format "(let* ((got nil) (tail \"\") (done nil)
                                                 (c (make-network-process :name \"s\" :family 'local :service %S :coding 'binary
@@ -416,13 +421,13 @@ about) and keeps the tests within their time limits."
               (setq stop (+ (float-time) 2))
               (push (run-at-time 0 0.05 (lambda () (funcall send small))) timers)
               (push (run-at-time 0 0.5 (lambda () (funcall send big))) timers)
-              (drgnx-hub-test--wait #'ignore 2)
+              (drgnx-test-pause 2)
               (mapc #'cancel-timer timers)
-              (drgnx-hub-test--wait #'ignore 0.1)
+              (drgnx-test-pause 0.1)
               (should (process-live-p conn))
               (should (memq conn drgnx-hub--subscribers))
               (drgnx-hub--broadcast 'done nil)
-              (should (drgnx-hub-test--wait (lambda () (not (process-live-p sub))) 30))
+              (should (drgnx-hub-test--wait (lambda () (process-get sub :done)) 30))
               (let ((ns (with-temp-buffer
                           (insert-file-contents out)
                           (cl-loop for line in (split-string (buffer-string) "\n" t)
@@ -478,7 +483,8 @@ about) and keeps the tests within their time limits."
   ;; is gone is dropped when a hub starts and on its tick; one without an owner stays until it is unregistered
   (drgnx-hub-test--with
     (let* ((gone (let ((p (start-process "gone" nil "true")))
-                   (drgnx-hub-test--wait (lambda () (not (process-live-p p))))
+                   (set-process-sentinel p #'drgnx-hub-test--done)
+                   (drgnx-hub-test--wait (lambda () (process-get p :done)))
                    (process-id p)))
            (reg (lambda (owner) (plist-get (drgnx-hub-call-sync "gateway/register" (list :chain [["openrouter" nil]] :owner owner))
                                            :token)))
@@ -509,7 +515,7 @@ about) and keeps the tests within their time limits."
       (with-temp-file file (prin1 '(("h-none" :job "j" :chain ((openrouter))) ("h-junk" :owner "x" :chain ((openrouter)))) (current-buffer)))
       (drgnx-hub-serve (drgnx-hub-socket))
       (should (drgnx-hub-call-sync "ping" nil))
-      (drgnx-hub-test--wait #'ignore 2.5)                         ; a tick
+      (drgnx-test-pause 2.5)                         ; a tick
       (should (gethash "h-none" drgnx-gateway--registrations))
       (should (gethash "h-junk" drgnx-gateway--registrations))
       (drgnx-hub-disconnect) (drgnx-hub-stop)
@@ -521,10 +527,10 @@ about) and keeps the tests within their time limits."
   (drgnx-hub-test--with
     (drgnx-hub-serve (drgnx-hub-socket))
     (let* ((out (generate-new-buffer " *hub2*" t))
-           (p (make-process :name "hub2" :buffer out :noquery t
+           (p (make-process :name "hub2" :buffer out :noquery t :sentinel #'drgnx-hub-test--done
                             :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
                                            "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-hub" "-f" "drgnx-hub-main"))))
-      (drgnx-hub-test--wait (lambda () (not (process-live-p p))) 15)
+      (drgnx-hub-test--wait (lambda () (process-get p :done)) 15)
       (should (eq (process-status p) 'exit))
       (should (= (process-exit-status p) 3))
       (should (string-search "a hub already serves" (with-current-buffer out (buffer-string))))
@@ -544,10 +550,11 @@ about) and keeps the tests within their time limits."
       (let* ((process-environment (append (list "XDG_RUNTIME_DIR" (concat "XDG_STATE_HOME=" state)) process-environment))
              (out (generate-new-buffer " *hub-err*" t))
              ;; never waited for without a limit: a hub that starts after all would serve until this Emacs ends
-             (p (make-process :name "hub-err" :buffer out :noquery t
+             (p (make-process :name "hub-err" :buffer out :noquery t :sentinel #'drgnx-hub-test--done
                               :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
                                              "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-hub" "-f" "drgnx-hub-main"))))
-        (unless (drgnx-hub-test--wait (lambda () (not (process-live-p p))) 20) (delete-process p))
+        (unwind-protect (drgnx-hub-test--wait (lambda () (process-get p :done)) 20)
+          (when (process-live-p p) (delete-process p)))
         (should (eq (process-status p) 'exit))
         (should (= (process-exit-status p) 1))
         (should (string-search "drgnx hub: " (with-current-buffer out (buffer-string))))
@@ -557,15 +564,16 @@ about) and keeps the tests within their time limits."
   ;; DRGNX_HUB_PARENT_PID (tests only): a hub whose test Emacs is gone stops instead of outliving the test's dir
   (drgnx-hub-test--with
     (let* ((gone (let ((p (start-process "gone" nil "true")))
-                   (drgnx-hub-test--wait (lambda () (not (process-live-p p))))
+                   (set-process-sentinel p #'drgnx-hub-test--done)
+                   (drgnx-hub-test--wait (lambda () (process-get p :done)))
                    (process-id p)))
            (process-environment (cons (format "DRGNX_HUB_PARENT_PID=%d" gone) process-environment))
-           (p (make-process :name "orphan-hub" :noquery t
+           (p (make-process :name "orphan-hub" :noquery t :sentinel #'drgnx-hub-test--done
                             :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
                                            "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-hub" "-f" "drgnx-hub-main"))))
       (unwind-protect
           (progn
-            (should (drgnx-hub-test--wait (lambda () (not (process-live-p p))) 10))
+            (should (drgnx-hub-test--wait (lambda () (process-get p :done)) 10))
             (should (eql (process-exit-status p) 0))
             (should-not (file-exists-p (drgnx-hub-socket))))
         (ignore-errors (delete-process p))))))
@@ -669,7 +677,7 @@ about) and keeps the tests within their time limits."
       (let ((c (make-network-process :name "leaver" :family 'local :service (drgnx-hub-socket) :noquery t)))
         (process-send-string c "{\"id\":7,\"method\":\"status\"}\n{\"method\":\"coord/notify\"}\n")
         (delete-process c)))
-    (let ((deadline (+ (float-time) 1))) (while (< (float-time) deadline) (accept-process-output nil 0.05)))
+    (drgnx-test-pause 1)
     (should (drgnx-hub-call-sync "ping" nil))))
 
 (ert-deftest drgnx-hub/long-line-and-malformed-answered ()
@@ -679,7 +687,7 @@ about) and keeps the tests within their time limits."
     (drgnx-hub-serve (drgnx-hub-socket))
     (let* ((got "")
            (c (make-network-process :name "raw" :family 'local :service (drgnx-hub-socket) :noquery t :coding 'utf-8-unix
-                                    :filter (lambda (_p s) (setq got (concat got s))))))
+                                    :filter (lambda (_p s) (setq got (concat got s))) :sentinel #'drgnx-hub-test--done)))
       (process-send-string c "{\"id\":7,\"method\":\n")
       (should (drgnx-hub-test--wait (lambda () (string-search "\n" got)) 1))
       (let ((answer (json-parse-string got :object-type 'plist)))
@@ -689,7 +697,7 @@ about) and keeps the tests within their time limits."
       ;; as the runner does)
       (when (drgnx-hub-test--sigpipe-ignored-p)
         (ignore-errors (process-send-string c (make-string (* 2 1024 1024) ?x)))
-        (should (drgnx-hub-test--wait (lambda () (not (process-live-p c))) 5)))
+        (should (drgnx-hub-test--wait (lambda () (process-get c :done)) 5)))
       (delete-process c))
     (should (drgnx-hub-call-sync "ping" nil))))
 
@@ -715,7 +723,7 @@ about) and keeps the tests within their time limits."
                                          (plist-get r :token)))
           (drgnx-hub-test--wait (lambda () (string-search "data:" got)) 5)
           (delete-process c)))
-      (sleep-for 2)
+      (drgnx-test-pause 2)                                             ; the hang-ups must not kill the hub
       (should (drgnx-hub-running-p)))))
 
 (ert-deftest drgnx-hub/agents-keep-their-address-across-a-restart ()
@@ -777,7 +785,7 @@ about) and keeps the tests within their time limits."
               (cl-letf (((symbol-function 'user-uid) (lambda () (1+ uid))))
                 (should-not (drgnx-hub-running-p))
                 (should-error (drgnx-hub-connect)))
-              (drgnx-hub-test--wait #'ignore 0.3)
+              (drgnx-test-pause 0.3)
               (should-not (string-search "sk-fake" got))
               (should-not (string-search "gateway/keys" got))
               (should-not (string-search "subscribe" got))

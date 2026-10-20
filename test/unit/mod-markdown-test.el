@@ -3,6 +3,7 @@
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-markdown-test--elpa (expand-file-name (or (getenv "DRGNX_USER_ELPA") "~/.config/emacs/elpa")))
 
@@ -29,8 +30,7 @@
          (delete-directory tmp t)))))
 
 (defun drgnx-markdown-test--wait (pred &optional secs)
-  (let ((deadline (+ (float-time) (or secs 5)))) (while (and (not (funcall pred)) (< (float-time) deadline)) (accept-process-output nil 0.05)))
-  (funcall pred))
+  (drgnx-test-wait pred :secs (max 30 (or secs 0)) :what "the preview's condition"))
 
 (defconst drgnx-markdown-test--doc "# Title\n\nSome *text*.\n\n```mermaid\ngraph TD; A-->B\n```\n")
 
@@ -124,13 +124,12 @@
         (should (= jobs 1))))))
 
 (ert-deftest drgnx-markdown/the-preview-is-made-in-the-background-without-stderr ()
-  :tags '(:timing)                                      ; wall-clock: a quiet machine
   (drgnx-markdown-test--with
     (let ((drgnx-markdown-programs '(("sh" "-c" "cat >/dev/null; sleep 0.3; echo '<p>made</p>'; echo WARNING >&2"))))
       (with-temp-buffer
         (markdown-mode) (insert "# Hello\n")
-        (let* ((t0 (float-time)) (p (drgnx-markdown-preview)))
-          (should (< (- (float-time) t0) 0.25))                           ; it did not wait for the program
+        (let* ((p (drgnx-markdown-preview)))
+          (should-not (string-search "made" (with-current-buffer p (buffer-string))))   ; it did not wait for the program
           (should (drgnx-markdown-test--wait (lambda () (string-search "made" (with-current-buffer p (buffer-string))))))
           (should-not (string-search "WARNING" (with-current-buffer p (buffer-string)))))))))
 

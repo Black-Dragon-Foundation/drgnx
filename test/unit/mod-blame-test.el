@@ -3,6 +3,7 @@
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/scripted-process" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/extra/drgnx-blame" drgnx-dir) nil t)
 
 (defconst drgnx-blame-test--committed
@@ -37,8 +38,7 @@ filename a.txt
        (let ((s (overlay-get drgnx-blame--overlay 'after-string))) (and s (substring-no-properties s)))))
 
 (defun drgnx-blame-test--wait-for (pred)
-  (let ((deadline (+ (float-time) 5))) (while (and (not (funcall pred)) (< (float-time) deadline)) (accept-process-output nil 0.05)))
-  (funcall pred))
+  (drgnx-test-wait pred :what "the blame's condition"))
 
 (defun drgnx-blame-test--live ()
   (seq-count (lambda (p) (and (process-live-p p) (eq (process-type p) 'real) (string-prefix-p "drgnx-blame" (process-name p)))) (process-list)))
