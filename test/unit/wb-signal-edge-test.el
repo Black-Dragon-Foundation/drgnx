@@ -1,6 +1,8 @@
 ;;; wb-signal-edge-test.el --- batch tests: the change bus, edge cases -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx-signal)
+(require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/measure-fixture" drgnx-dir) nil t)
 
 (ert-deftest drgnx-signal-edge/a-failing-window-function-is-recorded-and-the-flush-still-armed ()
   "M3d-3: an error in one `drgnx-signal-window-functions' function neither skips the others nor the
@@ -18,21 +20,21 @@ flush schedule, and it is recorded."
       (drgnx-timer-cancel 'signal-flush))))
 
 (ert-deftest drgnx-signal-edge/a-flush-with-many-buffers-is-cheap ()
-  "M3d-8: a flush with 1500 file buffers takes under 10 ms — the best of five, so one slice of a
-busy machine is not judged."
-  :tags '(:timing)                                      ; a quiet machine: bin/drgnx check runs it alone
+  "M3d-8: a flush with 1500 file buffers allocates five times what it does with 300, not twenty-five (the wall-clock
+form, 10 ms, missed under load)."
+  (drgnx-test-compile "drgnx-signal")
   (let ((drgnx-signal--subscribers nil) (drgnx-signal--state nil) (drgnx-signal-errors nil)
         (dir (make-temp-file "drgnx-signal-edge" t)))
     (unwind-protect
-        (progn
-          (dotimes (i 1500)
-            (let ((f (expand-file-name (format "f%04d.txt" i) dir)))
-              (write-region "x\n" nil f nil 'silent)
-              (find-file-noselect f)))
-          (drgnx-signal--flush)                       ; the starting state
-          (should (< (cl-loop repeat 5
-                              minimize (let ((t0 (float-time))) (drgnx-signal--flush) (- (float-time) t0)))
-                     0.01)))
+        (cl-flet ((open-files (from to)
+                    (cl-loop for i from from below to
+                             do (let ((f (expand-file-name (format "f%04d.txt" i) dir)))
+                                  (write-region "x\n" nil f nil 'silent)
+                                  (find-file-noselect f)))
+                    (drgnx-signal--flush)             ; the starting state
+                    (drgnx-test-alloc (drgnx-signal--flush))))
+          (let* ((small (open-files 0 300)) (big (open-files 300 1500)))
+            (should (<= big (* 6.25 small)))))
       (dolist (b (buffer-list))
         (when (and (buffer-file-name b) (string-prefix-p dir (buffer-file-name b))) (kill-buffer b)))
       (drgnx-timer-cancel 'signal-flush)
@@ -193,25 +195,23 @@ Every emission is pushed onto EVENTS-VAR as (EVENT . DATA)."
       (should (equal (cdr (assq 'modified-changed events)) (list b))))))
 
 (ert-deftest drgnx-signal-edge/a-keystroke-flush-with-300-buffers-is-cheap ()
-  "A keystroke that changed no buffer: the hook and the flush take a median of 50 µs at most with 300 buffers
-\(479 µs when the flush scanned them all)."
-  :tags '(:timing)
+  "A keystroke that changed no buffer: the hook and the flush allocate what they do with 30 buffers, with 300
+\(they did not when the flush scanned them all; the wall-clock form, 50 µs, missed under load)."
+  (drgnx-test-compile "drgnx-signal")
   (drgnx-signal-edge--with-hooks events
     (let ((bufs nil))
       (unwind-protect
-          (progn
-            (dotimes (i 300)
-              (with-current-buffer (generate-new-buffer (format "edge-%d" i))
-                (setq buffer-file-name (expand-file-name (format "edge-%d.txt" i) dir))
-                (push (current-buffer) bufs)))
-            (drgnx-signal--flush)
-            (with-current-buffer (car bufs)
-              (drgnx-signal-edge--keystroke)
-              (let ((samples nil))
-                (dotimes (_ 200)
-                  (let ((t0 (float-time))) (drgnx-signal-edge--keystroke) (push (- (float-time) t0) samples)))
-                (setq samples (sort samples #'<))
-                (should (< (nth 100 samples) 50e-6)))))
+          (cl-flet ((open-buffers (from to)
+                      (cl-loop for i from from below to
+                               do (with-current-buffer (generate-new-buffer (format "edge-%d" i))
+                                    (setq buffer-file-name (expand-file-name (format "edge-%d.txt" i) dir))
+                                    (push (current-buffer) bufs)))
+                      (drgnx-signal--flush)
+                      (with-current-buffer (car bufs)
+                        (drgnx-signal-edge--keystroke)
+                        (drgnx-test-alloc (drgnx-signal-edge--keystroke)))))
+            (let* ((small (open-buffers 0 30)) (big (open-buffers 30 300)))
+              (should (<= big (* 1.25 small)))))
         (dolist (b bufs) (with-current-buffer b (set-buffer-modified-p nil) (setq buffer-file-name nil)) (kill-buffer b))))))
 
 ;;; wb-signal-edge-test.el ends here

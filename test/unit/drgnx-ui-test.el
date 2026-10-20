@@ -162,6 +162,13 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
       (should (member "TimeoutStopSec=10" argv))
       (should (equal (seq-take (cdr (member "--" argv)) 2) '("env" "-i"))))))
 
+;; every variable that could carry the real home's paths into a test: the child must see it unset or inside its run
+(defconst drgnx-ui-test--path-classes
+  '("XDG_CONFIG_HOME" "XDG_DATA_HOME" "XDG_CACHE_HOME" "XDG_RUNTIME_DIR" "XDG_DATA_DIRS" "XDG_CONFIG_DIRS"
+    "DRGNX_CONFIG_DIR" "DRGNX_DATA_DIR" "DRGNX_UI_STATE" "TMPDIR" "SSH_AUTH_SOCK" "SSH_AGENT_PID" "GNUPGHOME" "XAUTHORITY"
+    "CLAUDE_CONFIG_DIR" "CODEX_HOME" "KIMI_CODE_HOME" "GIT_CONFIG_GLOBAL" "SOME_TOOL_DIR"))
+;; (EMACSLOADPATH is read by the child Emacs itself at startup, before the runner can unset it: test-env-test covers it)
+
 ;; URGENT-3-UI-LIVE: `test --ui' ran test/live in its own process with the real HOME, state directory, bus and keys
 (ert-deftest drgnx-ui/the-ui-tiers-live-half-runs-sandboxed ()
   (let* ((base (make-temp-file "drgnx-ui-live" t))
@@ -172,6 +179,7 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
         (progn
           (make-directory real-home)
           (make-directory suite)
+          (make-directory (expand-file-name "tmpdir" base))          ; the fake TMPDIR must exist, as the real one does
           (with-temp-file (expand-file-name "probe-test.el" suite)
             (insert (format "(require 'ert)\n(require 'drgnx-ui)
 (ert-deftest live-probe/record ()
@@ -180,17 +188,24 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
     (write-region \"x\" nil (expand-file-name \"scenarios/minimal.json\" root))
     (with-temp-file %S
       (prin1 (list (getenv \"HOME\") (getenv \"OPENROUTER_API_KEY\") (getenv \"DISPLAY\") (getenv \"DBUS_SESSION_BUS_ADDRESS\") root
-                   (expand-file-name \"~/probe\") (getenv \"XDG_STATE_HOME\"))
-             (current-buffer)))))\n" out)))
+                   (expand-file-name \"~/probe\") (getenv \"XDG_STATE_HOME\")
+                   ;; every path class: its value in this process, and Emacs' own directory
+                   (mapcar (lambda (v) (cons v (getenv v))) '%S)
+                   user-emacs-directory)
+             (current-buffer)))))\n" out drgnx-ui-test--path-classes)))
           (let ((process-environment
                  (append (list (concat "HOME=" real-home) (concat "XDG_STATE_HOME=" real-home "/.local/state")
                                (concat "DRGNX_UI_STATE=" real-home "/ui-state") "OPENROUTER_API_KEY=sk-x" "DISPLAY=:0"
                                "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1/bus" "DRGNX_TEST_SELECTOR")
+                         (mapcar (lambda (v) (format "%s=%s/%s" v real-home (downcase v))) (remove "TMPDIR" drgnx-ui-test--path-classes))
+                         ;; (the runner makes its own directory under TMPDIR before anything is faked: outside the real home)
+                         (list (concat "TMPDIR=" base "/tmpdir"))
                          process-environment))
                 ok)
-            (with-output-to-string (setq ok (drgnx-ui-run-live-tests suite)))
+            (let ((log (with-output-to-string (setq ok (drgnx-ui-run-live-tests suite)))))
+              (unless ok (message "live child:\n%s" log)))
             (should ok))
-          (pcase-let ((`(,home ,key ,display ,bus ,state ,tilde ,xdg-state)
+          (pcase-let ((`(,home ,key ,display ,bus ,state ,tilde ,xdg-state ,classes ,emacs-dir)
                        (with-temp-buffer (insert-file-contents out) (read (current-buffer)))))
             (should-not key)
             (should-not display)
@@ -200,6 +215,13 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
             (should (string-prefix-p (file-name-directory home) state))
             (should (string-prefix-p (file-name-directory home) xdg-state))
             (should (string-prefix-p home tilde))
+            ;; every path class is unset or inside the run; user-emacs-directory too
+            (should (equal (mapcar #'car classes) drgnx-ui-test--path-classes))
+            (dolist (c classes)
+              (should-not (and (cdr c) (string-search real-home (cdr c)))))
+            (should-not (string-search real-home emacs-dir))
+            (should-not (equal (cdr (assoc "TMPDIR" classes)) (concat base "/tmpdir")))
+            (should (string-prefix-p (file-name-directory home) emacs-dir))
             (should-not (directory-files-recursively real-home ".")))
           )
       (delete-directory base t))))
@@ -420,7 +442,7 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
       (should (equal (car (cadr calls)) 'run)))))
 
 (ert-deftest drgnx-ui/a-session-runs-at-most-its-budget ()
-  (let ((sess (list :name "drgnx-ui-9-00000a" :run "/tmp/x" :size "800x600" :socket "/tmp/s")))
+  (let ((sess (list :name "drgnx-ui-9-00000a" :run (make-temp-file "dux" t) :size "800x600" :socket "/tmp/s")))
     (should (member "RuntimeMaxSec=1800" (let ((process-environment (cons "DRGNX_UI_MAX_RUNTIME" process-environment)))
                                            (drgnx-ui-launch-argv sess))))
     (should (member "RuntimeMaxSec=2700" (let ((process-environment (cons "DRGNX_UI_MAX_RUNTIME=2700" process-environment)))
@@ -428,7 +450,7 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
 
 (ert-deftest drgnx-ui/detached-launch-is-capped ()
   ;; DEFERRED M1-6: the systemd launcher has RuntimeMaxSec and MemoryMax; the detached one needs the same caps
-  (let ((sess (list :name "drgnx-ui-9-00000a" :run "/tmp/x" :size "800x600" :socket "/tmp/s"))
+  (let ((sess (list :name "drgnx-ui-9-00000a" :run (make-temp-file "dux" t) :size "800x600" :socket "/tmp/s"))
         (calls nil))
     (cl-letf (((symbol-function 'call-process) (lambda (&rest a) (push a calls) 0))
               ((symbol-function 'drgnx-ui--read-pgid) (lambda (&rest _) "123")))
@@ -867,3 +889,56 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
           (drgnx-ui-run-scenarios "minimal" root)))
       (should (member "DRGNX_TEST_SELECTOR=\"^drgnx-scn/\"" env))
       (should (member "DRGNX_SCENARIO_CONFIG=minimal" env)))))
+
+(defun drgnx-ui-test--env-value (env name)
+  "The value of NAME in ENV (\"K=V\" strings) as `env -i' sees it: the last entry wins."
+  (let (v) (dolist (kv env v) (when (string-prefix-p (concat name "=") kv) (setq v (substring kv (1+ (length name))))))))
+
+(ert-deftest drgnx-ui/a-session-home-is-in-its-run ()
+  (drgnx-ui-test--with-state
+    (let* ((process-environment (cons "HOME=/home/not-the-sessions" process-environment))
+           (s (drgnx-ui-prepare-run "drgnx-ui-1-00000a"))
+           (env (drgnx-ui-session-env s)))
+      (should (equal (drgnx-ui-test--env-value env "HOME") (expand-file-name "home" (plist-get s :run))))
+      (should (file-directory-p (expand-file-name "home" (plist-get s :run))))
+      (should-not (member "HOME" drgnx-ui-keep-env))
+      (should (member (concat "HOME=" (expand-file-name "home" (plist-get s :run))) (drgnx-ui--client-env s)))
+      (drgnx-ui-stop "drgnx-ui-1-00000a"))))
+
+(ert-deftest drgnx-ui/a-session-never-sees-the-callers-xdg-dirs ()
+  (drgnx-ui-test--with-state
+    (let* ((process-environment (append '("XDG_CONFIG_HOME=/caller/c" "XDG_DATA_HOME=/caller/d" "XDG_CACHE_HOME=/caller/k"
+                                          "XDG_STATE_HOME=/caller/s")
+                                        process-environment))
+           (s (drgnx-ui-prepare-run "drgnx-ui-1-00000a"))
+           (run (plist-get s :run))
+           (env (drgnx-ui-session-env s)))
+      (dolist (n '("XDG_CONFIG_HOME" "XDG_DATA_HOME" "XDG_CACHE_HOME" "XDG_STATE_HOME"))
+        (should (string-prefix-p run (drgnx-ui-test--env-value env n))))
+      (should-not (seq-find (lambda (kv) (string-search "/caller/" kv)) env))
+      (drgnx-ui-stop "drgnx-ui-1-00000a"))))
+
+(ert-deftest drgnx-ui/the-gryphn-config-is-still-linked-read-only ()
+  (drgnx-ui-test--with-state
+    (let ((cfg (expand-file-name "cfg" root)))
+      (make-directory (expand-file-name "lisp" cfg) t)
+      (with-temp-file (expand-file-name "init.el" cfg) (insert ";; i\n"))
+      (with-temp-file (expand-file-name "custom.el" cfg) (insert ";; c\n"))
+      (let* ((s (drgnx-ui-prepare-run "drgnx-ui-1-00000a" cfg))
+             (init (expand-file-name "init" (plist-get s :run))))
+        (should (file-symlink-p (expand-file-name "lisp" init)))
+        (should-not (file-symlink-p (expand-file-name "custom.el" init)))
+        (should (file-exists-p (expand-file-name "custom.el" init)))
+        (drgnx-ui-stop "drgnx-ui-1-00000a")))))
+
+(ert-deftest drgnx-ui/the-tier-of-a-session-is-ui-unless-a-controller-says-so ()
+  (should (eq drgnx-ui-session-tier 'ui))
+  (drgnx-ui-test--with-state
+    (let ((drgnx-ui-session-tier 'bench))
+      (let* ((s (drgnx-ui-prepare-run "drgnx-ui-1-00000a")))
+        ;; every tier's session gets the run's home and the dead bus
+        (should (string-prefix-p (plist-get s :run)
+                                 (drgnx-ui-test--env-value (drgnx-ui-session-env s) "HOME")))
+        (should (string-prefix-p "unix:path=/nonexistent"
+                                 (drgnx-ui-test--env-value (drgnx-ui-session-env s) "DBUS_SESSION_BUS_ADDRESS")))
+        (drgnx-ui-stop "drgnx-ui-1-00000a")))))

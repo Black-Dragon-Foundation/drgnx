@@ -92,14 +92,15 @@
     (should-not (local-variable-p 'drgnx-chrome-header-tail))))
 
 (ert-deftest drgnx-sticky/a-scroll-step-is-cheap ()
-  :tags '(:timing)                                      ; wall-clock: a quiet machine
-  ;; a 10k-line file: each new window start costs < 2 ms on average
-  (drgnx-sticky-test--in (mapconcat (lambda (i) (drgnx-sticky-test--elisp 48)) (number-sequence 1 200) "") #'emacs-lisp-mode
-    (let ((t0 (float-time)))
-      (dotimes (i 200)
-        (drgnx-sticky-test--start-at-line (+ 10 (* i 50)))
-        (drgnx-sticky--segment (selected-window)))
-      (should (< (/ (- (float-time) t0) 200) 0.002)))))
+  ;; a 10k-line file: 200 new window starts allocate the same as they do in a file a tenth the size (the wall-clock
+  ;; form, 2 ms a step, missed under load)
+  (drgnx-test-compile "drgnx-sticky-" "drgnx-memo" "drgnx-epoch" "drgnx-cache")
+  (cl-flet ((steps (defuns) (drgnx-sticky-test--in (mapconcat (lambda (i) (drgnx-sticky-test--elisp 48)) (number-sequence 1 defuns) "") #'emacs-lisp-mode
+                              (drgnx-test-alloc (dotimes (i 200)
+                                                  (drgnx-sticky-test--start-at-line (+ 10 (* (% i defuns) 50)))
+                                                  (drgnx-sticky--segment (selected-window)))))))
+    (let ((small (steps 20)) (big (steps 200)))
+      (should (<= big (* 1.25 small))))))
 
 (ert-deftest drgnx-sticky/string-lines-are-no-scopes ()
   ;; a docstring's second line starts at column 0: not a scope (the GUI test found it)

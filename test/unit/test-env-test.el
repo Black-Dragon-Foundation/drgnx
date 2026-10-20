@@ -49,6 +49,42 @@
             (ignore all)))
       (delete-directory run t))))
 
+(defconst drgnx-test-env-test--real-home-vars
+  '(("SSH_AUTH_SOCK" . "/real-home/.ssh/agent.sock") ("SSH_AGENT_PID" . "4242") ("GPG_AGENT_INFO" . "/real-home/.gnupg/S.gpg-agent:1:1")
+    ("GNUPGHOME" . "/real-home/.gnupg") ("XAUTHORITY" . "/real-home/.Xauthority")
+    ("XDG_DATA_DIRS" . "/real-home/.local/share/flatpak/exports/share:/usr/share")
+    ("XDG_CONFIG_DIRS" . "/real-home/.config/xdg:/etc/xdg") ("GIT_CONFIG_GLOBAL" . "/real-home/.gitconfig")
+    ("GIT_SSH_COMMAND" . "ssh -i /real-home/.ssh/id") ("EMACSLOADPATH" . "/real-home/.emacs.d/lisp:")
+    ("CLAUDE_CODE_MESSAGING_SOCKET" . "/real-home/.claude/sock") ("CLAUDE_CODE_EXECPATH" . "/real-home/.local/bin/claude")
+    ("SOME_TOOL_DIR" . "/real-home/.cache/some-tool"))
+  "Variables a caller's environment holds that point at the real home or an agent: a test sees none of them.")
+
+(ert-deftest drgnx-test-env/every-path-class-is-faked-or-unset ()
+  "SSH agent, GnuPG, X authority, data/config dirs, git config, Emacs load path, agent sockets — and any other
+variable holding a path under the real HOME — are unset or point into the run, in every tier."
+  (let ((run (make-temp-file "drgnx-test-env" t)))
+    (unwind-protect
+        (dolist (tier drgnx-test-env-tiers)
+          (let* ((process-environment
+                  (append (list "HOME=/real-home" "PATH=/real-home/bin:/usr/bin" "DRGNX_USER_ELPA=/real-home/.config/emacs/elpa")
+                          (mapcar (lambda (kv) (concat (car kv) "=" (cdr kv))) drgnx-test-env-test--real-home-vars)
+                          process-environment))
+                 (env (drgnx-test-env tier run :display '("DISPLAY=:77")))
+                 (seen (lambda (name) (drgnx-test-env-test--lookup env name))))
+            (dolist (kv drgnx-test-env-test--real-home-vars)
+              (let ((val (funcall seen (car kv))))
+                (should (or (eq val 'unset) (and (stringp val) (drgnx-test-env-test--under run val))))
+                (should-not (and (stringp val) (string-search "/real-home" val)))))
+            (should (eq 'unset (funcall seen "SSH_AUTH_SOCK")))
+            (should (eq 'unset (funcall seen "SSH_AGENT_PID")))
+            (should (eq 'unset (funcall seen "XAUTHORITY")))
+            (should (drgnx-test-env-test--under run (funcall seen "GNUPGHOME")))
+            (should (= #o700 (logand #o777 (file-modes (funcall seen "GNUPGHOME")))))
+            ;; the deliberate exceptions stay: the tools on PATH, the read-only package directory
+            (should-not (funcall seen "PATH"))
+            (should-not (funcall seen "DRGNX_USER_ELPA"))))
+      (delete-directory run t))))
+
 (ert-deftest drgnx-test-env/gui-tiers-get-only-the-harness-display ()
   (let ((run (make-temp-file "drgnx-test-env" t))
         (display '("DISPLAY=:77" "XAUTHORITY=/x/y")))
@@ -63,7 +99,7 @@
                     (should (eq 'unset (drgnx-test-env-test--lookup env v)))))
               (dolist (v drgnx-test-env-desktop-variables)
                 (should (eq 'unset (drgnx-test-env-test--lookup env v))))
-              (should-not (drgnx-test-env-test--lookup env "XAUTHORITY")))))
+              (should (eq 'unset (drgnx-test-env-test--lookup env "XAUTHORITY"))))))
       (delete-directory run t))))
 
 (ert-deftest drgnx-test-env/an-external-config-is-linked-into-the-run ()

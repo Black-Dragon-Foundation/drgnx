@@ -18,6 +18,7 @@
 (require 'drgnx-ui-kit)                     ; the glyph table and `drgnx-face-glyph' live in core
 (require 'drgnx-frame-kind)
 (require 'drgnx-large-file)
+(defvar scroll-bar-mode)
 (defvar flymake-show-diagnostics-at-end-of-line)
 (defvar display-line-numbers-width-start)
 (defvar display-line-numbers-grow-only)

@@ -513,7 +513,7 @@ lease_holder_done() { # EXIT trap of a lease: the holder file goes, the locks go
 }
 
 cmd_lease() { # light|heavy|exclusive [--wait SECS] -- CMD… | status
-  local class maxwait="" lcap=() child rc since started fd
+  local class maxwait="" lcap=() child rc since started
   case "${1:-}" in
     status) lease_status; return ;;
     light|heavy|exclusive) class="$1"; shift ;;
@@ -529,7 +529,12 @@ cmd_lease() { # light|heavy|exclusive [--wait SECS] -- CMD… | status
   LEASE_DIR="$(lease_dir)"
   mkdir -p "$LEASE_DIR/holders" && chmod 700 "$LEASE_DIR" "${LEASE_DIR%/*}" 2>/dev/null || true
   lease_slots
-  [[ "$class" != exclusive || -n "$maxwait" ]] || maxwait=600
+  # No wait is endless: exclusive gives up after 10 minutes (and runs anyway), light and heavy after DRGNX_LEASE_WAIT
+  # seconds (default 30 minutes: a queue of test runs; a longer wait is a hung holder) with the holders listed
+  if [[ -z "$maxwait" ]]; then
+    if [[ "$class" == exclusive ]]; then maxwait=600
+    else maxwait="${DRGNX_LEASE_WAIT:-1800}"; [[ "$maxwait" =~ ^[0-9]+$ ]] || maxwait=1800; fi
+  fi
   started=$SECONDS
   while ! lease_try "$class"; do
     if [[ -n "$maxwait" ]] && ((SECONDS - started >= maxwait)); then
@@ -537,7 +542,8 @@ cmd_lease() { # light|heavy|exclusive [--wait SECS] -- CMD… | status
         echo "drgnx lease: wall clock not judged: host busy; holders:" >&2; lease_prune_and_list >&2
         DRGNX_LEASE_BUSY=1 DRGNX_LEASE_HELD="exclusive:0" exec "$@"
       fi
-      echo "drgnx lease: no $class slot free in $maxwait s; holders:" >&2; lease_prune_and_list >&2
+      echo "drgnx lease: no $class slot free in $maxwait s (--wait SECS or DRGNX_LEASE_WAIT waits longer); holders:" >&2
+      lease_prune_and_list >&2
       exit 75
     fi
     sleep "${DRGNX_LEASE_POLL:-2}"
@@ -549,11 +555,11 @@ cmd_lease() { # light|heavy|exclusive [--wait SECS] -- CMD… | status
     "$(printf '%s' "$*" | tr -d '"\\' | cut -c1-200)" "$since" >"$LEASE_HOLDER"
   if [[ "$class" != exclusive && "${DRGNX_LEASE_CAP:-}" != off ]] && command -v systemd-run >/dev/null 2>&1 \
      && [[ "$(timeout 5 systemctl --user is-system-running 2>/dev/null || true)" =~ ^(running|degraded|starting)$ ]]; then
-    lcap=(systemd-run --user --scope -q -p "MemoryMax=$([[ "$class" == heavy ]] && echo 4G || echo 1G)" -p MemorySwapMax=0 --)
+    lcap=(systemd-run --user --scope -q -p "MemoryMax=$([[ "$class" == heavy ]] && echo 4G || echo 2G)" -p MemorySwapMax=0 --)
   fi
-  # CMD runs with the lock fds closed: nothing it leaves behind holds a slot; this shell keeps them until CMD ends
+  # CMD inherits the lock fds: the slot is held by the command itself, so killing this shell (the OOM killer, a scope
+  # kill) does not free it while CMD runs.  A daemon CMD leaves behind keeps the slot until it ends.
   (
-    for fd in "${LEASE_FDS[@]}"; do eval "exec $fd>&-"; done
     export DRGNX_LEASE_HELD="$class:$LEASE_SLOT"
     exec ${lcap[@]+"${lcap[@]}"} "$@"
   ) <&0 &

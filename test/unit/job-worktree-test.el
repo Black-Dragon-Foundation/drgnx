@@ -265,14 +265,12 @@ the one against job/7's tip would not.  A start that is no commit fails the chec
       (should (eql 0 (call-process "mkfifo" nil nil nil (concat dir "/" (substring sha 2)))))
       (write-region (concat sha "\n") nil (concat git "/refs/heads/job/7-1/work") nil 'silent)
       (let* ((drgnx-job-worktree-timeout 1)
-             (start (float-time))
+             (deadline (+ (float-time) 5))
              (got :none))
         (drgnx-job-worktree-check repo "7" 1 "job/7" (lambda (r &optional _tip) (setq got r)))
-        (should (< (- (float-time) start) 0.5))                       ; the call returns at once
-        (let ((deadline (+ start 10)))
-          (while (and (eq got :none) (< (float-time) deadline)) (accept-process-output nil 0.05)))
-        (should (eq (car-safe got) :error))                          ; a timeout is a failure, never a pass
-        (should (< (- (float-time) start) 5))))))
+        (should (eq got :none))                                       ; the call returned with git still blocked in open()
+        (while (and (eq got :none) (< (float-time) deadline)) (accept-process-output nil 0.05))
+        (should (eq (car-safe got) :error))))))                       ; a timeout is a failure, never a pass
 
 ;;;; The scrub: the per-worktree state the user's git would trust
 
@@ -352,7 +350,7 @@ the one against job/7's tip would not.  A start that is no commit fails the chec
 
 (ert-deftest drgnx-job-worktree/scrub-follows-no-link ()
   "A link in place of a directory or a file is removed itself: what it points at is never touched."
-  :tags '(:timing)
+  :tags '(:timing)                                      ; the scrub must not wait for a FIFO's writer (2 s): a wall bound, a quiet machine
   (drgnx-job-worktree-test--with
     (should (equal (drgnx-job-worktree-test--add repo folder "7" 1 "job/7") '(:name "7-1")))
     (let* ((wt (concat git "/worktrees/7-1/"))

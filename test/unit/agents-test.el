@@ -76,16 +76,15 @@
     (drgnx-agents-send s "go left")
     (should (equal (drgnx-agent-session-queue s) '("go left")))))
 
-(ert-deftest drgnx-agents/stop-ends-the-turn-within-a-second-and-keeps-the-queue ()
-  :tags '(:timing)                                      ; a quiet machine: bin/drgnx check runs it alone
+(ert-deftest drgnx-agents/stop-ends-the-turn-before-it-would-have-ended-and-keeps-the-queue ()
+  ;; The slow turn is ten chunks 0.3 s apart: a stop that waited for it would leave "part 10" in the transcript.
   (drgnx-agents-test--with s nil
     (drgnx-agents-send s "slow one")
     (drgnx-agents-send s "later")
     (drgnx-agents-test--wait (lambda () (drgnx-agents-test--texts s 'agent)))     ; the slow turn has begun
-    (let ((t0 (float-time)))
-      (drgnx-agents-stop s)
-      (should (drgnx-agents-test--idle s))
-      (should (< (- (float-time) t0) 1.0)))
+    (drgnx-agents-stop s)
+    (should (drgnx-agents-test--idle s))
+    (should-not (string-match-p "part 10" (mapconcat #'identity (drgnx-agents-test--texts s 'agent) "")))
     (should (seq-find (lambda (e) (equal (plist-get e :stop) "cancelled")) (drgnx-agent-session-entries s)))
     (should (equal (drgnx-agent-session-queue s) '("later")))             ; kept, not sent (paused)
     (drgnx-test-pause 0.5)                                                  ; no second send

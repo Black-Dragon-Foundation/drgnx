@@ -3,6 +3,7 @@
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/measure-fixture" drgnx-dir) nil t)
 (require 'drgnx-explorer)
 (require 'drgnx-timer)
 
@@ -140,13 +141,17 @@
 
 (ert-deftest drgnx-explorer/a-big-folder-expands-fast ()
   (drgnx-explorer-test--with root
-    (let ((big (expand-file-name "big" root)))
-      (make-directory big)
+    (let ((big (expand-file-name "big" root)) (small (expand-file-name "small" root)))
+      (make-directory big) (make-directory small)
       (dotimes (i 5000) (write-region "" nil (expand-file-name (format "f%04d.txt" i) big) nil 'silent))
+      (dotimes (i 1000) (write-region "" nil (expand-file-name (format "f%04d.txt" i) small) nil 'silent))
       (drgnx-explorer-refresh)
-      (let ((t0 (float-time)))
-        (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "big"))
-        (should (< (- (float-time) t0) 0.5)))     ; batch, generous; the GUI budget is in test/bench
+      (drgnx-test-compile "drgnx-explorer-" "drgnx-wb-" "drgnx-view" "drgnx-memo")
+      ;; linear: a folder of 5× the entries expands and collapses for about 5× the allocation (the GUI budget is in test/bench)
+      (cl-flet ((cost (name) (drgnx-test-alloc (drgnx-explorer-toggle-at (drgnx-explorer-test--goto name))
+                                               (drgnx-explorer-toggle-at (drgnx-explorer-test--goto name)))))
+        (should (<= (cost "big") (* 1.25 5 (cost "small")))))
+      (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "big"))
       (should (= 5000 (seq-count (lambda (r) (= (car r) 2)) (drgnx-explorer-test--rows)))))))
 
 (ert-deftest drgnx-explorer/showing-the-sidebar-reveals-the-editors-file ()
@@ -201,8 +206,10 @@
         (search-forward "d.txt")
         (should (equal (drgnx-explorer-node-at (point)) (expand-file-name "d.txt" odd)))))))
 
-(ert-deftest drgnx-explorer/going-to-the-parent-is-fast ()
-  :tags '(:timing)                                      ; a quiet machine: bin/drgnx check runs it alone
+(ert-deftest drgnx-explorer/going-to-the-parent-is-cheap-in-cpu ()
+  ;; The parent is found by walking back over the folder's rows, which allocates nothing: CPU time, the median of 50
+  ;; runs, 3 times the host's median (the wall-clock form, 15 ms, missed under load).
+  (drgnx-test-compile "drgnx-explorer")
   (drgnx-explorer-test--with root
     (let ((big (expand-file-name "big" root)))
       (make-directory big)
@@ -210,11 +217,10 @@
       (drgnx-explorer-refresh)
       (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "big"))
       (with-current-buffer drgnx-explorer-buffer-name
-        (goto-char (drgnx-explorer-test--goto "f4999.txt"))
-        (let ((t0 (float-time)))
-          (drgnx-explorer-collapse)
-          (should (< (- (float-time) t0) 0.015)))
-        (should (equal (drgnx-explorer-node-at (point)) big))))))
+        (let* ((pos (drgnx-explorer-test--goto "f4999.txt"))
+               (ms (drgnx-test-cpu-ms () (goto-char pos) (drgnx-explorer-collapse))))
+          (should (equal (drgnx-explorer-node-at (point)) big))
+          (should (< ms 2)))))))                              ; 0.64 ms measured
 
 (ert-deftest drgnx-explorer/refresh-keeps-every-windows-view ()
   (drgnx-explorer-test--with root

@@ -49,24 +49,38 @@ far.  DURATIONS: alist file → seconds (a file it lacks weighs 1)."
         (aset load i (+ (aref load i) (or (alist-get f durations nil nil #'equal) 1)))))
     (seq-remove #'null (mapcar #'nreverse (append shards nil)))))
 
-(defun drgnx-check-durations-file () (expand-file-name "check/durations.eld" (drgnx-state-dir)))
+(defun drgnx-check-durations-file (&optional root)
+  "The durations file of the checkout ROOT (default `drgnx-dir'): per checkout, so two checkouts never
+overwrite each other's balance."
+  (expand-file-name (format "check/durations/%s.eld" (substring (md5 (file-truename (or root drgnx-dir))) 0 8))
+                    (drgnx-state-dir)))
 
-(defun drgnx-check-durations ()
-  "The seconds per test file the last runs took, an alist (FILE . SECONDS), or nil (none, or a file with a mistake)."
-  (let ((r (drgnx-file-read (drgnx-check-durations-file))))
+(defun drgnx-check--read-durations (file)
+  (let ((r (drgnx-file-read file)))
     (and (eq (plist-get r :status) 'ok) (listp (plist-get r :data)) (plist-get r :data))))
 
-(defun drgnx-check--save-durations (dir)
-  "Seconds per test file from the shards' results in DIR, kept for the next run's balance."
-  (let ((now nil) (per (drgnx-check-durations)))
+(defun drgnx-check-durations (&optional root)
+  "The seconds per test file the last runs of ROOT took, an alist (FILE . SECONDS), or nil (none, or a file with
+a mistake).  The old shared `check/durations.eld' is the fallback until ROOT has its own; it is never written."
+  (let ((file (drgnx-check-durations-file root)))
+    (if (file-exists-p file)
+        (drgnx-check--read-durations file)
+      (drgnx-check--read-durations (expand-file-name "check/durations.eld" (drgnx-state-dir))))))
+
+(defun drgnx-check--save-durations (dir &optional root)
+  "Seconds per test file from the shards' summaries in DIR (each file's `:files' entry: its Emacs's start
+included), kept for ROOT's next run's balance."
+  (let ((now nil) (per (drgnx-check-durations root)))
     (dolist (f (directory-files dir t "\\`\\(unit\\|live\\)-[0-9]+\\.json\\'"))
-      (seq-doseq (te (plist-get (ignore-errors (json-parse-string (with-temp-buffer (insert-file-contents f) (buffer-string))
+      (seq-doseq (fe (plist-get (ignore-errors (json-parse-string (with-temp-buffer (insert-file-contents f) (buffer-string))
                                                                   :object-type 'plist :null-object nil))
-                                :tests))
-        (when-let* ((file (plist-get te :file)))
-          (cl-incf (alist-get file now 0 nil #'equal) (or (plist-get te :seconds) 0)))))
+                                :files))
+        (when-let* ((file (plist-get fe :file)))
+          (cl-incf (alist-get file now 0 nil #'equal) (or (plist-get fe :seconds) 0)))))
     (pcase-dolist (`(,file . ,secs) now) (setf (alist-get file per nil nil #'equal) secs))   ; this run's times win
-    (drgnx-file-write (drgnx-check-durations-file) per :fsync nil)))
+    (let ((out (drgnx-check-durations-file root)))
+      (make-directory (file-name-directory out) t)
+      (drgnx-file-write out per :fsync nil))))
 
 ;;;; The leak census, merged
 
@@ -97,7 +111,7 @@ A summary that is missing, unreadable or has no :leaks (the census was off) adds
 results go (default: none).  TTY (default: tmux is installed): with GUI, the terminal tier, `bin/drgnx test --tty'.
 LEAKS: the unit jobs (not the live ones) run with the leak census on (`drgnx-check-leaks' merges what they find)."
   (let* ((bin (expand-file-name "bin/drgnx" root))
-         (durations (drgnx-check-durations))
+         (durations (drgnx-check-durations root))
          (paths (list "-L" (expand-file-name "harness" root) "-L" (expand-file-name "core" root) "-L" (expand-file-name "wb" root)))
          (run-ert (expand-file-name "harness/run-ert.el" root))
          (results (lambda (name) (and dir (list (concat "DRGNX_TEST_RESULTS=" (expand-file-name (concat name ".json") dir))))))
@@ -145,8 +159,7 @@ LEAKS: the unit jobs (not the live ones) run with the leak census on (`drgnx-che
                      :env (list "DRGNX_SCENARIO_TIMEOUT=600"))
             jobs)
       (push (funcall job "bench" 5 'bench (list bin "test" "--bench") :gui t) jobs)
-      ;; exit 3: the machine stayed too busy to measure — not judged, and not a pass
-      (when perf (push (funcall job "perf" 6 'perf (list bin "test" "--perf") :gui t :not-judged 3) jobs)))
+      (when perf (push (funcall job "perf" 6 'perf (list bin "test" "--perf") :gui t) jobs)))
     (nreverse jobs)))
 
 ;;;; Running
@@ -186,8 +199,6 @@ each logging to DIR/NAME.log.  A failing phase 1 (the build) stops the rest.  Re
                   (plist-put j :exit (process-exit-status p))
                   (unless (eq (plist-get j :status) 'timeout)
                     (plist-put j :status (cond ((eql (process-exit-status p) 0) 'ok)
-                                               ;; perf: the machine was too busy to measure (not a pass)
-                                               ((eql (process-exit-status p) (plist-get j :not-judged)) 'not-judged)
                                                (t 'failed))))
                   (when verbose (princ (format "check: %s %s (%.0f s)\n" (plist-get j :name) (plist-get j :status) (plist-get j :seconds)))))))))
         (when (and (eql phase 1) (seq-find (lambda (j) (and (eql (plist-get j :phase) 1) (not (eq (plist-get j :status) 'ok)))) all))
@@ -247,7 +258,7 @@ reaps (GitHub's job containers), an ended job's processes stay as zombies and si
      (mapconcat (lambda (j)
                   (format "%-10s %-16s %7.1f s  %s" (plist-get j :name)
                           (pcase (plist-get j :status)
-                            ('ok "ok") ('skipped "skipped") ('timeout "TIMED OUT") ('not-judged "NOT JUDGED (busy)")
+                            ('ok "ok") ('skipped "skipped") ('timeout "TIMED OUT")
                             (_ (format "FAILED (exit %s)" (plist-get j :exit))))
                           (or (plist-get j :seconds) 0) (or (plist-get j :log) "")))
                 jobs "\n")
@@ -292,7 +303,7 @@ reaps (GitHub's job containers), an ended job's processes stay as zombies and si
              (_ (princ (format "check: %d jobs, %d GUI at a time (%s MiB free), logs in %s\n"
                                (length jobs) slots (or (drgnx-check--mem-available) "?") dir)))
              (r (drgnx-check-run jobs :dir dir :jobs (plist-get o :jobs) :gui-slots slots :verbose t)))
-        (ignore-errors (drgnx-check--save-durations dir))
+        (ignore-errors (drgnx-check--save-durations dir drgnx-dir))
         (princ (drgnx-check-summary r))
         ;; the census is report-only: the exit status is the jobs'
         (when (plist-get o :leaks) (princ (drgnx-check-leaks-report (drgnx-check-leaks dir))))

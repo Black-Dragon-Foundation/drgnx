@@ -348,7 +348,8 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
         (should (eq 1 (car r)))
         (should-not (string-match-p "restart" (drgnx-update-test--slurp log))))
       ;; a successful one restarts the drgnx unit and says what that does; no "Restart drgnx to use it" nag
-      (let ((r (drgnx-update-test--run dir nil bin "update" "--restart")))
+      ;; (systemd's service: Linux, whatever the host; macOS has none, see the next test)
+      (let ((r (drgnx-update-test--run dir '("DRGNX_UPDATE_PLATFORM=Linux") bin "update" "--restart")))
         (should (eq 0 (car r)))
         (should (string-match-p "--user restart drgnx$" (drgnx-update-test--slurp log)))
         (should (string-match-p "restarted the drgnx service" (cdr r)))
@@ -356,7 +357,7 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
         (should-not (string-match-p "Restart drgnx to use it" (cdr r))))
       ;; --back too
       (write-region "" nil log)
-      (let ((r (drgnx-update-test--run dir nil bin "update" "--back" "--restart")))
+      (let ((r (drgnx-update-test--run dir '("DRGNX_UPDATE_PLATFORM=Linux") bin "update" "--back" "--restart")))
         (should (eq 0 (car r)))
         (should (string-match-p "--user restart drgnx" (drgnx-update-test--slurp log)))))))
 

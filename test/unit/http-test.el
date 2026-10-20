@@ -70,22 +70,21 @@
     (should-not (multibyte-string-p (plist-get r :body)))))
 
 (ert-deftest drgnx-http/the-mock-streams-chunks ()
-  :tags '(:timing)
   (let* ((dir (make-temp-file "drgnx-http" t)) (script (expand-file-name "s.eld" dir)) (port nil)
-         (mock nil) (got nil) (times nil))
+         (mock nil) (got nil) (seen nil))
     (unwind-protect
         (progn
           (with-temp-file script (prin1 '((:path "/s" :chunks ((0 . "aa") (0.3 . "bb")))) (current-buffer)))
           (setq mock (drgnx-ai-test-mock-llm nil script) port (process-get mock :port))
-          (let ((c (open-network-stream "c" nil "127.0.0.1" port :coding 'binary)) (t0 (float-time)))
-            (set-process-filter c (lambda (_p s) (setq got (concat got s)) (push (- (float-time) t0) times)))
+          (let ((c (open-network-stream "c" nil "127.0.0.1" port :coding 'binary)))
+            (set-process-filter c (lambda (_p s) (setq got (concat got s)) (push got seen)))
             (process-send-string c "GET /s HTTP/1.1\r\n\r\n")
             (let ((deadline (+ (float-time) 5)))
               (while (and (process-live-p c) (< (float-time) deadline)) (accept-process-output nil 0.02)))
             (should (string-match-p "\\`HTTP/1.1 200" got))
             (should-not (string-match-p "Content-Length" got))
             (should (string-suffix-p "\r\n\r\naabb" got))
-            (should (>= (- (car times) (car (last times))) 0.25))))     ; "bb" came later
+            (should (seq-find (lambda (s) (string-suffix-p "\r\n\r\naa" s)) seen))))   ; "aa" came before "bb"
       (when mock (delete-process mock))
       (delete-directory dir t))))
 

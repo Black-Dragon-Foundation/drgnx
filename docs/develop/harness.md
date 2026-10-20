@@ -153,8 +153,8 @@ advised. Fields only one of two fingerprints has are skipped, so a full one comp
 The cheap fingerprint is meant for around every test: about 0.4 ms with drgnx, org, dired and eshell loaded (27,000
 symbols; about 90 hooks), nothing that grows with the number of symbols. The full scan costs about 12 ms; run from an uncompiled
 checkout it compiles its scanner once first (interpreted, the scan takes ~110 ms; a built drgnx skips that). Both only
-read: no prompt, no display. The `drgnx-fingerprint/cheap-costs-under-2-ms` and `…/full-costs-under-50-ms` tests
-(tag `:timing`) hold the costs.
+read: no prompt, no display. The `drgnx-fingerprint/the-cheap-one-allocates-a-thirtieth-of-the-full-scan` and `…/the-full-scan-allocates-what-it-did` tests
+hold the costs as allocation (no wall clock).
 
 The census that reads it around every test, `bin/drgnx test --leaks`, is described in
 [check.md](check.md#the-leak-census---leaks).
@@ -256,8 +256,12 @@ Unix socket paths are limited to ~108 bytes; the hash keeps two state roots (say
   other state files are not brought in.
 - No network and no installs: `url-retrieve*`, `package-install`/`-refresh-contents`/`-vc-install`/`-upgrade*`
   and `treesit-install-language-grammar` signal an error.
-- No secrets: the environment is rebuilt from an allowlist (`HOME USER LOGNAME LANG LC_ALL PATH
+- No secrets: the environment is rebuilt from an allowlist (`USER LOGNAME LANG LC_ALL PATH
   XDG_RUNTIME_DIR GRYPHN_EMACS_DIR DRGNX_UITEST_SETTLE_SCALE` + `DRGNX_UI_*`), `auth-sources` is nil.
+- A session's home is its run's: `drgnx-test-env` (tier `ui`; `scenario`, `bench` or `perf` when `--scenario`,
+  `--bench` or `--perf` start it, via `drgnx-ui-session-tier`) gives it `HOME=RUN/home`, the XDG directories under
+  RUN, a dead session bus and no provider keys; the compositor's own variables (`XDG_CACHE_HOME`, KWin's
+  `XDG_CONFIG_HOME` …) come after and win. No tier reads or writes `~`.
 - Your drgnx files are never touched: a session gets its own `DRGNX_CONFIG_DIR` (`RUN/drgnx-config`) and
   `XDG_STATE_HOME` (`RUN/state`), so it neither reads `~/.config/drgnx` (keys.eld, …) nor writes
   `~/.local/state` (the key report). Caches too: `XDG_CACHE_HOME` and `MESA_SHADER_CACHE_DIR` are under `RUN/xdg/cache`
@@ -912,6 +916,14 @@ Every tier gets:
 - `DRGNX_TEST_ISOLATED=1`, `DRGNX_NO_HUB_START=1`, `DRGNX_HUB_PARENT_PID` (the hub ends with this Emacs);
 - a dead session bus (`drgnx-test-env-dead-bus`), and no provider key or agent home
   (`drgnx-test-env-provider-variables`).
+
+Also unset: `drgnx-test-env-ambient-variables` (the SSH agent, `GPG_AGENT_INFO`, the caller's `XAUTHORITY`, the system
+`XDG_DATA_DIRS`/`XDG_CONFIG_DIRS`, git's global configuration and ssh command, `EMACSLOADPATH`, the Claude Code
+socket and token) and every other variable of the caller that holds a path under the real HOME (found by a scan; the
+only exceptions are `PATH`, `PWD`, `OLDPWD` and `DRGNX_USER_ELPA`). `GNUPGHOME` is RUN/gnupg (mode 700). The unit
+runner also binds `user-emacs-directory` to RUN/emacs, so nothing under `~/.emacs.d` or `~/.config/emacs` is written.
+`DRGNX_USER_ELPA` (the real `~/.config/emacs/elpa`, read-only) is the deliberate exception: tests that load packages
+read it and never write it. `TMPDIR` the runner reads before it fakes anything (its own run directory is made there).
 
 The display and compositor variables (`drgnx-test-env-desktop-variables`) are unset, except in the GUI tiers (`ui`,
 `scenario`, `bench`, `perf`), which get only the `:display` strings of the harness compositor. `:config` is an external

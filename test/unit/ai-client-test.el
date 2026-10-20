@@ -139,7 +139,6 @@
       (should-not (process-live-p (drgnx-ai-request-process h))))))
 
 (ert-deftest drgnx-ai-probe/finds-running-providers-and-tells-tei-from-localai ()
-  :tags '(:timing)                                      ; "returns at once" (< 50 ms): a quiet machine
   (drgnx-ai-client-test--with
       '((:path "/api/tags" :body "{\"models\":[{\"name\":\"qwen2.5-coder:1.5b\"}]}")
         (:path "/info" :body "{\"model_id\":\"BAAI/bge\",\"max_input_length\":512}"))
@@ -148,9 +147,9 @@
                                       (t1 :name "TEI" :kind tei :url ,(format "http://127.0.0.1:%d" port) :caps (embed))
                                       (gone :name "Gone" :kind ollama :url ,(format "http://127.0.0.1:%d" dead) :caps (chat))))
              (current-buffer)))
-    (let ((done nil) (t0 (float-time)))
+    (let ((done nil))
       (drgnx-ai-probe (lambda () (setq done t)) '(o t1 gone))
-      (should (< (- (float-time) t0) 0.05))                                     ; returns at once: never blocks
+      (should-not done)                                                         ; returns at once: the answers come later
       (let ((deadline (+ (float-time) 10))) (while (and (not done) (< (float-time) deadline)) (accept-process-output nil 0.02)))
       (should done)
       (should (equal (plist-get (alist-get 'o drgnx-ai-detected) :models) '("qwen2.5-coder:1.5b")))

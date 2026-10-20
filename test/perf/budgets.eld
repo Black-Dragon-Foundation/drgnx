@@ -48,4 +48,21 @@
  ;; collection no longer lands in a keystroke (that was the failure before: 3 of 10 runs over 50); what is left comes from
  ;; the length of eat's output batches (20-60 ms under load), not from GC: DEFERRED M12e-5-1.  See docs/develop/perf.md.
  (terminal-typing (:input :p95) 7) (terminal-typing (:input :max) 13)
- (terminal-output (:input :p95) 6) (terminal-output (:input :max) 50))
+ (terminal-output (:input :p95) 6) (terminal-output (:input :max) 50)
+;; Gated budgets (Task 16 of the determinism plan), seeded 2026-10-20 from two runs of the perf tier in the Emacs 31.1 GUI
+;; container (source, not built: compiled code allocates less): :alloc :p50 = the larger of the runs x 1.25, rounded up;
+;; :rows = exact (equal in both runs); :cpu_ms :p90 = the larger of the runs' p90 x 2 (scaled by DRGNX_PERF_CPU_FACTOR; 2
+;; on hosted runners).  The CPU rows of the typing workloads are large because about one key in ten spends 100-200 ms of
+;; CPU in these runs (DEFERRED PERF-KEYSPIKE-1); they tighten when that is fixed.  Workloads that could not run in the
+;; container are in `drgnx-perf-run-unseeded'.  Raise a row only in the commit that needs it, with the reason.
+ (typing (:alloc :p50) 13757) (typing (:cpu_ms :p90) 420.1) (typing (:rows) 1)
+ (scrolling (:alloc :p50) 14840) (scrolling (:cpu_ms :p90) 28.4) (scrolling (:rows) 0)
+ (tabs (:alloc :p50) 6234) (tabs (:cpu_ms :p90) 11.2) (tabs (:rows) 0)
+ (explorer (:alloc :p50) 5115) (explorer (:cpu_ms :p90) 6.0) (explorer (:rows) 0)
+ (agent-typing (:alloc :p50) 15008) (agent-typing (:cpu_ms :p90) 23.1) (agent-typing (:rows) 1)
+ (code-scrolling (:alloc :p50) 15439) (code-scrolling (:cpu_ms :p90) 26.9) (code-scrolling (:rows) 0)
+ (diff-scrolling (:alloc :p50) 6027) (diff-scrolling (:cpu_ms :p90) 26.7) (diff-scrolling (:rows) 0)
+ (typing-with-ghost (:alloc :p50) 18385) (typing-with-ghost (:cpu_ms :p90) 402.9) (typing-with-ghost (:rows) 1)
+ (replace-typing (:alloc :p50) 31565) (replace-typing (:cpu_ms :p90) 183.7) (replace-typing (:rows) 1)
+ (remote-typing (:alloc :p50) 17300) (remote-typing (:cpu_ms :p90) 349.0) (remote-typing (:rows) 1)
+ (window-switch (:alloc :p50) 29638) (window-switch (:cpu_ms :p90) 43.6) (window-switch (:rows) 0))

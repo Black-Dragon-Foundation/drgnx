@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/measure-fixture" drgnx-dir) nil t)
 (require 'drgnx-buffers)
 (require 'drgnx-explorer)
 (require 'drgnx-frames)
@@ -133,9 +134,9 @@
           (should (equal (drgnx-buffers--in-window) (list (nth 1 bufs) (nth 3 bufs)))))
       (drgnx-buffers-edge--kill bufs))))
 
-(defun drgnx-buffers-edge--ms (n)
-  "Milliseconds (best of 3) to order N buffers, pick one window's half and work out the main window's."
-  (let ((bufs (drgnx-buffers-edge--fake-files n)) (gc-cons-threshold most-positive-fixnum) (best nil))
+(defun drgnx-buffers-edge--alloc (n)
+  "What ordering N buffers, picking one window's half and working out the main window's allocates."
+  (let ((bufs (drgnx-buffers-edge--fake-files n)) (best nil))
     (unwind-protect
         (cl-letf (((symbol-function 'drgnx-frames-count) (lambda () 2))
                   ((symbol-function 'drgnx-frame-role) (lambda (&optional _) 'main))
@@ -143,21 +144,20 @@
                   ((symbol-function 'drgnx-frames--workbench-p) (lambda (_) t))
                   ((symbol-function 'drgnx-frames--tabs)
                    (lambda (f) (if (eq f 'other) (seq-drop bufs (/ n 2)) (seq-take bufs (/ n 3))))))
-          (dotimes (_ 3)
-            (let ((drgnx-buffers--order (reverse bufs)) (t0 (float-time)))
-              (drgnx-buffers--update-order)
-              (drgnx-buffers--in-window)
-              (setq best (min (or best most-positive-fixnum) (* 1000 (- (float-time) t0)))))))
+          (setq best (drgnx-test-alloc
+                       (let ((drgnx-buffers--order (reverse bufs)))
+                         (drgnx-buffers--update-order)
+                         (drgnx-buffers--in-window)))))
       (drgnx-buffers-edge--kill bufs))
     best))
 
 (ert-deftest drgnx-buffers/thousands-of-buffers-stay-linear ()
-  ;; M3e-7: membership by hash sets.  Four times the buffers must cost about four times as much, not
-  ;; sixteen (quadratic `memq' filters: ~10x measured, against ~4x); and 4000 buffers stay fast.
-  :tags '(:timing)
-  (let* ((small (drgnx-buffers-edge--ms 1000)) (big (drgnx-buffers-edge--ms 4000)))
-    (should (< big 100))
-    (should (< big (* 7 (max small 0.5))))))
+  ;; M3e-7: membership by hash sets.  Four times the buffers must allocate about four times as much, not
+  ;; sixteen (quadratic `memq' filters); allocation does not move with the machine's load, where the wall-clock
+  ;; form (7x, and 100 ms for 4000 buffers) missed under it.
+  (drgnx-test-compile "drgnx-buffers-" "drgnx-frames")
+  (let* ((small (drgnx-buffers-edge--alloc 1000)) (big (drgnx-buffers-edge--alloc 4000)))
+    (should (<= big (* 5 small)))))
 
 (provide 'wb-buffers-edge-test)
 ;;; wb-buffers-edge-test.el ends here

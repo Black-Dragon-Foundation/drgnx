@@ -78,9 +78,9 @@ ${{ !cancelled() }}`), so one run shows both; either failing fails the job. `bin
 only: only `:timing` tests read it.
 
 Unlike `check`'s `unit-timing` job, the second step does not load every file into one Emacs
-(`DRGNX_TEST_ONE_PROCESS=1`): there a timing test that scans drgnx's symbols
-(`drgnx-fingerprint/the-first-scan-of-drgnx-symbols-costs-under-20-ms`) scans every test file's too and misses its
-budget. A file at a time, each timing test sees what it sees in a plain `bin/drgnx test`; the price is an Emacs start
+(`DRGNX_TEST_ONE_PROCESS=1`): there a test that scans drgnx's symbols
+(`drgnx-fingerprint/the-first-scan-of-drgnx-symbols-allocates-what-it-did`) scans every test file's too and misses its
+allocation bound. A file at a time, each such test sees what it sees in a plain `bin/drgnx test`; the price is an Emacs start
 for every file, most of which then run no test.
 
 The same locally (the Emacs 31.1 job's steps, without the container):
