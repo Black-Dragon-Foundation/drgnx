@@ -36,9 +36,10 @@ jobs:
           image="ghcr.io/black-dragon-foundation/drgnx-test-gui:$(sha256sum test/container/Containerfile.gui | cut -c1-16)"
           printf '%s' "$TOKEN" | podman login ghcr.io -u "$ACTOR" --password-stdin || true
           if podman pull -q "$image"; then echo "DRGNX_TEST_GUI_IMAGE=$image" >> "$GITHUB_ENV"; else echo "no $image yet: building"; fi
-      - name: GUI tier in test/container/Containerfile.gui
+      - name: GUI tier in test/container/Containerfile.gui (the :timing tests left out by name)
         env:
           DRGNX_CONTAINER: podman
+          DRGNX_TEST_NO_TIMING: "1"
         run: bin/drgnx test --container --ui
 
   scenario:

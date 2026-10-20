@@ -2,7 +2,7 @@
 ;; ((PLATFORM NAME…)…): PLATFORM is a `system-type' (gnu/linux, darwin).  In a run without a selector, a test
 ;; listed for the platform it runs on that skips fails the run (harness/run-ert.el).  Seeded for gnu/linux with
 ;; the tests that skip unless a tool is on PATH that the CI images install (test/container/Containerfile*:
-;; git, zsh, coreutils, bash).  Task 26 adds darwin from CI's first summaries.
+;; git, zsh, coreutils, bash).  Never a test tagged :timing: CI leaves those out on purpose.  Task 26 adds darwin from CI's first summaries.
 ((gnu/linux
   "drgnx-agents-adapter/a-package-json-that-is-a-fifo-is-never-read"
   "drgnx-agents/reads-refuse-fifos-devices-remote-paths-and-big-files"
@@ -26,11 +26,8 @@
   "drgnx-git/the-status-run-reads-the-branch-from-the-cache"
   "drgnx-portable/the-pre-commit-hook-knows-the-new-formats"
   "drgnx-search-config/a-fifo-is-refused"
-  "drgnx-search-files/a-git-gone-before-its-stderr-ends-is-not-waited-for"
-  "drgnx-search-files/a-git-timeout-cuts-a-slow-git-off"
   "drgnx-search-files/a-submodule-is-not-listed-nor-its-files"
   "drgnx-search-files/config-fails-closed-fifo"
-  "drgnx-search-files/git-input-has-a-deadline"
   "drgnx-search-files/only-regular-files"
   "drgnx-search-files/timed-git-gets-all-of-a-big-input"
   "drgnx-search-mcp/the-project-is-the-git-toplevel"

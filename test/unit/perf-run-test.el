@@ -198,6 +198,14 @@ without them would pass unjudged), unless `drgnx-perf-run-unseeded' says why it 
       (should (assq (car u) (drgnx-perf-run--workloads)))
       (should (stringp (cdr u))))))
 
+(ert-deftest drgnx-perf-run/the-container-skip-list-names-workloads-with-reasons-and-seeds-none ()
+  ;; a workload the GUI container cannot run is named and left out there (it would fail the lab); it is also unseeded
+  (let ((process-environment (cons "DRGNX_MODAL_ELPA=/tmp/drgnx-elpa-x" process-environment)))
+    (dolist (u drgnx-perf-run-container-skipped)
+      (should (assq (car u) (drgnx-perf-run--workloads)))
+      (should (assq (car u) drgnx-perf-run-unseeded))
+      (should (stringp (cdr u))))))
+
 (ert-deftest drgnx-perf-run/the-terminal-workloads-run-a-program-not-a-shell ()
   "terminal-typing runs cat, terminal-output a seq loop; their setup forms are readable and name no shell config."
   (let ((ws (drgnx-perf-run--workloads)))

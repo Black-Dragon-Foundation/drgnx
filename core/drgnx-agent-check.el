@@ -1025,9 +1025,11 @@ fields.  The tool is always a Bash command that echoes `drgnx-hook-test'."
           (t timeout))))
 
 (defun drgnx-agent-check--hook-argv (_item &optional unit)
-  "The command line of a hook run: the hook's command travels in the environment, not in the command line."
+  "The command line of a hook run: the hook's command and its sample event travel in the environment, not in the
+command line.  The shell feeds the event to the hook's stdin: a hook that never reads it (and ends first) must not
+make Emacs write to a closed pipe, which makes Emacs drop the process's output and report exit 256."
   (drgnx-agent-check--wrap
-   (list "sh" "-c" "c=$DRGNX_HOOK_COMMAND; unset DRGNX_HOOK_COMMAND; eval \"$c\"")
+   (list "sh" "-c" "c=$DRGNX_HOOK_COMMAND; e=$DRGNX_HOOK_EVENT; unset DRGNX_HOOK_COMMAND DRGNX_HOOK_EVENT; printf '%s\\n' \"$e\" | eval \"$c\"")
    unit))
 
 (defun drgnx-agent-check--hook-environment (kind root)
@@ -1054,9 +1056,10 @@ CALLBACK gets (:exit N :stdout S :stderr S :time F), masked; a hook that ran out
       (condition-case failure
           (drgnx-agent-check--start
            (drgnx-agent-check--hook-argv item unit)
-           :input (concat (decode-coding-string event 'utf-8) "\n") :dir root :limit limit :unit unit
-           :env (cons (concat "DRGNX_HOOK_COMMAND=" (or (plist-get spec :command) ""))
-                      (drgnx-agent-check--hook-environment kind root))
+           :dir root :limit limit :unit unit
+           :env (append (list (concat "DRGNX_HOOK_COMMAND=" (or (plist-get spec :command) ""))
+                              (concat "DRGNX_HOOK_EVENT=" event))
+                        (drgnx-agent-check--hook-environment kind root))
            :done
            (lambda (proc out err timed-out time)
              (let* ((status (process-status proc))

@@ -1570,6 +1570,11 @@ leaves behind can be stopped as one, and it ends 60 s after TIMEOUT at the lates
                            "-p" "MemoryMax=3G" "-p" (format "RuntimeMaxSec=%d" (+ timeout 60)) "--"))
           (list "setsid" "-w" "sh" "-c" script)))
 
+(defun drgnx-ui--run-control-env ()
+  "The run-control variables of this process that the session's Emacs (started under `env -i') must see:
+DRGNX_TEST_NO_TIMING=1 leaves the tests tagged `:timing' out there as it does in a batch run."
+  (and (equal (getenv "DRGNX_TEST_NO_TIMING") "1") (list "DRGNX_TEST_NO_TIMING=1")))
+
 (defun drgnx-ui-run-ert-session (tests-dir &optional timeout config extra-env)
   "Run the ERT suite in TESTS-DIR inside a foreground session of CONFIG (default minimal),
 with EXTRA-ENV (\"K=V\" strings).  Return (RC RESULTS RUN)."
@@ -1582,6 +1587,7 @@ with EXTRA-ENV (\"K=V\" strings).  Return (RC RESULTS RUN)."
          (pgid-file (expand-file-name "pgid" run))
          (env (drgnx-ui-session-env sess (append (list (concat "DRGNX_UI_TEST=" (expand-file-name tests-dir))
                                                        (concat "DRGNX_UI_RESULTS=" results))
+                                                 (drgnx-ui--run-control-env)
                                                  extra-env)))
          (cmd (mapconcat #'shell-quote-argument
                          (append (drgnx-ui-env-argv env) (drgnx-ui-compositor-argv sess)) " "))

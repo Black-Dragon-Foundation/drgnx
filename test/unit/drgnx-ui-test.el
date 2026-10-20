@@ -93,6 +93,13 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
       (should (member (concat "EMACS_SOCKET_NAME=" (plist-get s :socket)) env))
       (should (equal (drgnx-ui-env-argv '("A=1")) '("env" "-i" "A=1"))))))
 
+(ert-deftest drgnx-ui/a-session-test-run-keeps-the-no-timing-switch ()
+  ;; CI's GUI jobs say DRGNX_TEST_NO_TIMING=1; the session's Emacs starts under `env -i', so it is passed on by name
+  (let ((process-environment (cons "DRGNX_TEST_NO_TIMING=1" process-environment)))
+    (should (equal (drgnx-ui--run-control-env) '("DRGNX_TEST_NO_TIMING=1"))))
+  (let ((process-environment (cons "DRGNX_TEST_NO_TIMING=" process-environment)))
+    (should-not (drgnx-ui--run-control-env))))
+
 (ert-deftest drgnx-ui/a-session-never-gets-the-provider-keys ()
   ;; the session's processes start under `env -i' with the allowlist: no key of the starting process reaches them
   (drgnx-ui-test--with-state
