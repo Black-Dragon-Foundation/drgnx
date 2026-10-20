@@ -176,10 +176,12 @@
     conn))
 
 (defun drgnx-acp-test--kill (conn)
-  "Kill CONN's process and wait (real time, in polls: the clock is virtual) until it is dead."
+  "Kill CONN's process and wait (real time, in polls) until it is dead; the virtual clock stays where it is.
+The fixture's `accept-process-output' moves virtual time by the real time it waits, so a slow reaping (a loaded
+macOS runner) would run the watchdog during the kill: the polls use the original one."
   (let ((p (drgnx-acp-conn-process conn)) (n 0))
     (kill-process p)
-    (while (and (process-live-p p) (< (cl-incf n) 500)) (accept-process-output nil 0.02))
+    (while (and (process-live-p p) (< (cl-incf n) 500)) (funcall drgnx-test--accept nil 0.02))
     (should-not (process-live-p p))))
 
 (ert-deftest drgnx-acp/the-watchdog-reports-a-dead-agent ()

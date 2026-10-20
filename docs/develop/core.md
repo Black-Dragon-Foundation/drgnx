@@ -2509,6 +2509,9 @@ Emacs's own. `drgnx-test-clock-now` is the virtual seconds so far (0.0 at entry)
   at once with a zero wait. `sit-for` returns nil only when simulated input is pending, and simulated input ends it
   early;
 - a timed `accept-process-output` moves it by the real time it waited (`drgnx-test-real-time`), then the due timers run.
+  A test that must wait for a real process (a killed one to be reaped) while the clock stays put polls with the
+  original, `(funcall drgnx-test--accept nil 0.02)`: on a loaded runner the advised wait would run the timers the
+  test means to step through itself (`test/unit/acp-test.el`).
 
 A polling loop with a `float-time` deadline therefore ends at once under virtual time; a test that polls a real
 process keeps a realistic deadline. More than `drgnx-test-clock-max-runs` (10000) timer runs in one
