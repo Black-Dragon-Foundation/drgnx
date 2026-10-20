@@ -400,9 +400,13 @@ from the global `random' state: the same samples and SEED give the same interval
 (cl-defun drgnx-perf-bootstrap-rounds (rounds &key (iterations 2000) (seed 1))
   "(:diff D :lo L :hi H) from ROUNDS, a list of (:a SAMPLES :b SAMPLES): the unit is the round (a run of each side),
 not the sample, because samples within a run share a spike, a GC and a cache state.  Per round the statistic is
-the median of B minus the median of A; D is the median of those differences and the 95% interval resamples the
-rounds with replacement.  Its own seeded generator, like `drgnx-perf-bootstrap-diff'."
-  (let* ((diffs (vconcat (mapcar (lambda (r) (- (drgnx-perf--median (plist-get r :b)) (drgnx-perf--median (plist-get r :a)))) rounds)))
+the median of B minus the median of A; consecutive rounds run in opposite order (`drgnx-perf-ab-rounds'), so
+the unit is a pair of them, the mean of its two differences.  D is the median of those and the 95% interval
+resamples the pairs with replacement.  Its own seeded generator, like `drgnx-perf-bootstrap-diff'."
+  (let* ((per-round (mapcar (lambda (r) (- (drgnx-perf--median (plist-get r :b)) (drgnx-perf--median (plist-get r :a)))) rounds))
+         ;; the unit is a pair of rounds (ABBA, the order reversed in the second): an order bias cancels inside it
+         (diffs (vconcat (cl-loop while per-round
+                                  collect (if (cdr per-round) (/ (+ (pop per-round) (pop per-round)) 2.0) (pop per-round)))))
          (n (length diffs)) (state (max 1 (mod seed 2147483647))) out)
     (dotimes (_ iterations)
       (push (drgnx-perf--median (cl-loop repeat n collect (progn (setq state (mod (* state 48271) 2147483647)) (aref diffs (mod state n)))))

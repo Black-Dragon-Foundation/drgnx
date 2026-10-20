@@ -41,7 +41,7 @@
       (should (= (length (plist-get r :a)) (* 4 drgnx-perf-ab-min-rounds))))
     ;; more samples than the minimum of rounds gives: it goes on until each side has N
     (let ((r (drgnx-perf-ab-rounds 100 (lambda (_side) (list 1.0 2.0 3.0 4.0)))))
-      (should (= (length (plist-get r :rounds)) 25)))))
+      (should (= (length (plist-get r :rounds)) 26))))) ; 25 would be odd: ABBA needs pairs
 
 (ert-deftest drgnx-perf-ab/the-ref-tree-is-an-archive-not-a-worktree ()
   (let (cmds (dest (make-temp-file "drgnx-ab" t)))
@@ -118,3 +118,20 @@ B's is round 1 (+/-4 ms)."
     (should (> (- (plist-get per-round :hi) (plist-get per-round :lo))
                (* 2 (- (plist-get pooled :hi) (plist-get pooled :lo)))))
     (should (eq (plist-get per-round :verdict) 'inconclusive))))
+
+(ert-deftest drgnx-perf-ab/rounds-alternate-the-order-abba ()
+  (let (order)
+    (let ((r (drgnx-perf-ab-rounds 10 (lambda (side) (push side order) (list 1.0 2.0 3.0 4.0)))))
+      (should (equal (nreverse order) '(a b b a a b b a a b b a a b b a)))
+      (should (equal (plist-get r :order) '(a b b a a b b a a b b a a b b a)))
+      (should (cl-evenp (length (plist-get r :rounds)))))))
+
+(ert-deftest drgnx-perf-ab/a-fixed-order-bias-is-no-regression-after-abba ()
+  ;; the side that runs second in a round is 1.5 ms slower (the other's allocation, a later warm-up): same tree
+  (let* ((n 0)
+         (r (drgnx-perf-ab-rounds
+             10 (lambda (_side)
+                  (setq n (1+ n))
+                  (drgnx-perf-ab-test--samples (+ 10 (if (cl-evenp n) 1.5 0)) 25))))
+         (v (drgnx-perf-ab-verdict (plist-get r :a) (plist-get r :b) (plist-get r :rounds))))
+    (should (eq (plist-get v :verdict) 'no-regression))))

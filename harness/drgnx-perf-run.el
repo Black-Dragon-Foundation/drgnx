@@ -1125,20 +1125,23 @@ to the eln cache while it runs, and the wall clock pays for it).")
   "The fewest rounds (a run of each side) an A/B is judged on: the interval is over the rounds, not the samples.")
 
 (defun drgnx-perf-ab-rounds (n run)
-  "Call RUN with a, b, a, b… (a run's wall samples each) until both sides have at least N samples and
-`drgnx-perf-ab-min-rounds' rounds.  (:a SAMPLES :b SAMPLES :rounds ((:a S :b S)…) :runs (SIDE…))."
+  "Call RUN with a side (its wall samples come back) until both sides have at least N samples and
+`drgnx-perf-ab-min-rounds' rounds, an even number.  The order alternates, ABBA: round 1 runs a then b, round 2
+b then a…, so a fixed order bias (the side that runs second pays for the first's allocation) falls on both sides alike.
+(:a SAMPLES :b SAMPLES :rounds ((:a S :b S)…) :order (SIDE…) in the order they ran)."
   (let (rounds order (guard 0))
-    (while (or (< (length rounds) drgnx-perf-ab-min-rounds)
+    (while (or (< (length rounds) drgnx-perf-ab-min-rounds) (cl-oddp (length rounds))
                (< (apply #'+ (mapcar (lambda (r) (length (plist-get r :a))) rounds)) n)
                (< (apply #'+ (mapcar (lambda (r) (length (plist-get r :b))) rounds)) n))
       (when (> (cl-incf guard) 2000) (error "perf: no wall samples after 2000 rounds"))
-      (let* ((sa (funcall run 'a)) (sb (funcall run 'b)))
-        (push (list :a sa :b sb) rounds)
-        (setq order (append order '(a b)))))
+      (let* ((sides (if (cl-evenp (length rounds)) '(a b) '(b a)))
+             (first (funcall run (car sides))) (second (funcall run (cadr sides))))
+        (push (if (eq (car sides) 'a) (list :a first :b second) (list :a second :b first)) rounds)
+        (setq order (append order sides))))
     (setq rounds (nreverse rounds))
     (list :a (apply #'append (mapcar (lambda (r) (plist-get r :a)) rounds))
           :b (apply #'append (mapcar (lambda (r) (plist-get r :b)) rounds))
-          :rounds rounds :runs order)))
+          :rounds rounds :order order)))
 
 (defun drgnx-perf-ab--budget-fails (workload stats budgets)
   "The work tree's absolute wall-clock BUDGETS for WORKLOAD against STATS (of its samples), judged at n >= 100."
@@ -1185,7 +1188,7 @@ judged, not-comparable, error, not-judged."
                       (append (list :name name :status (if loaded 'not-judged 'judged) :a sa-stats :b sb-stats
                                     :warm warm :calibration (list :a cal-a :b cal-b)
                                     :a-run (drgnx-perf-run--medians runs-a) :b-run (drgnx-perf-run--medians runs-b)
-                                    :runs (/ (length (plist-get r :runs)) 2))
+                                    :runs (/ (length (plist-get r :order)) 2) :order (plist-get r :order))
                               (and (not loaded) (list :verdict (drgnx-perf-ab-verdict a b (plist-get r :rounds))))
                               (list :budget-fails (drgnx-perf-ab--budget-fails name sb-stats (drgnx-perf-run--budgets))))))
                   )
@@ -1257,7 +1260,7 @@ $DRGNX_PERF_RESULTS.  With DRGNX_LEASE_BUSY set it runs plain `--perf' on the wo
                                         :verdict (and v (symbol-name (plist-get v :verdict)))
                                         :diff (and v (list :diff (plist-get v :diff) :lo (plist-get v :lo) :hi (plist-get v :hi)))
                                         :a (plist-get e :a) :b (plist-get e :b)
-                                        :a_run (plist-get e :a-run) :b_run (plist-get e :b-run) :why (plist-get e :why)))))
+                                        :a_run (plist-get e :a-run) :b_run (plist-get e :b-run) :order (mapcar (function symbol-name) (plist-get e :order)) :why (plist-get e :why)))))
                         entries))))
       (let* ((verdicts (mapcar (lambda (e) (plist-get (plist-get e :verdict) :verdict)) entries))
              (fails (append (seq-mapcat (lambda (e) (plist-get e :budget-fails)) entries)
