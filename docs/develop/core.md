@@ -558,6 +558,20 @@ never posted back into the model. A notice a hook function posts updates the mod
 is queued and runs after the current one returns — never recursively; past 100 queued changes in one pass the rest
 are dropped, with one message. The change plist is built only when the hook has functions.
 
+**The desktop route** (`drgnx-notice-desktop.el`). `(drgnx-notice-desktop-take ITEM)` says whether an attention
+item goes to the desktop: non-nil when `drgnx-notice-desktop-mode` is on and `drgnx-notice-desktop` non-nil, the
+item's `:echo` is not nil, its id was not sent yet, no drgnx frame has focus (a live frame not on the initial
+terminal whose `frame-focus-state` is `t`; `unknown` is not focus) and a backend is there. It marks the id sent and
+queues `("drgnx: SOURCE-TITLE" . TEXT)`; the layer timer `notice-desktop` (0 s, `:core`) sends the queue off the
+caller, each send under `with-demoted-errors`, so `-take` is safe inside a `drgnx-notice-functions` function. The
+echo route asks it for each new item; nothing else sends. The mode puts `drgnx-notice-desktop--prune` on
+`drgnx-notice-functions`: after a set change that removed ids, the sent ids are pruned to the union, so the table
+is bounded by what waits now and a thing that comes back notifies again. `(drgnx-notice-desktop-send TITLE BODY)`
+is the backend, asked once (`drgnx-notice-desktop--available-p`): macOS `osascript` with a fixed script and the
+text as its arguments; elsewhere the freedesktop `Notify` method by `dbus-call-method-asynchronously` with no
+handler, so no reply is awaited (`notifications-notify` waits for two synchronous calls); else a `message`. Tests
+stub the send or `make-process`/`dbus-call-method-asynchronously`: none reaches a bus (`test/unit/core-notice-desktop-test.el`).
+
 **Cost** (allocation is the gate; `test/unit/core-notice-test.el`, byte-compiled): a count read 0 conses; a new
 event 14 (22 with one hook function); a repeat 1 (its key). Replacing three sets of 40/40/20 items (80 ids) in
 which three items change and three ids come and go, then reading the count, 250 conses (gated at 275; the wall

@@ -145,56 +145,7 @@
     (drgnx-job-ui--badge-clear)                           ; the hub cannot be asked: not known
     (should-not (drgnx-job-ui-needs-you))))
 
-;; M9b4-14: the notification goes where the platform has one.
-(ert-deftest drgnx-job-ui/notify-backend-choice ()
-  (let ((made nil) (said nil))
-    (cl-letf (((symbol-function 'make-process) (lambda (&rest args) (push args made) 'proc))
-              ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said)))
-              ((symbol-function 'executable-find) (lambda (c &rest _) (and (equal c "osascript") "/usr/bin/osascript")))
-              ((symbol-function 'drgnx-job-ui--desktop-p) (lambda () nil))
-              ((symbol-function 'notifications-notify) (lambda (&rest _) (push 'dbus made))))
-      ;; macOS: a fixed script (`on run argv'), the text only as argv items after "--": nothing of it is ever script
-      (let ((system-type 'darwin))
-        (drgnx-job-ui--send "say \"hi\" \\ \" & (do shell script \"touch x\") & \"" "j1 — body\nnext -e"))
-      (should (= 1 (length made)))
-      (should (equal (plist-get (car made) :command)
-                     '("osascript" "-e" "on run argv"
-                       "-e" "display notification (item 1 of argv) with title (item 2 of argv)"
-                       "-e" "end run" "--"
-                       "j1 — body next -e" "say \"hi\" \\ \" & (do shell script \"touch x\") & \"")))
-      (should-not said)
-      ;; macOS without osascript, Linux without D-Bus, Windows: the message
-      (setq made nil)
-      (cl-letf (((symbol-function 'executable-find) #'ignore))
-        (let ((system-type 'darwin)) (drgnx-job-ui--send "t" "b")))
-      (dolist (type '(gnu/linux windows-nt)) (let ((system-type type)) (drgnx-job-ui--send "t" "b")))
-      (should-not made)
-      (should (= 3 (length said)))
-      ;; Linux with D-Bus: notifications
-      (cl-letf (((symbol-function 'drgnx-job-ui--desktop-p) (lambda () t)))
-        (let ((system-type 'gnu/linux)) (drgnx-job-ui--send "t" "b")))
-      (should (equal made '(dbus))))))
-
-;; a failed osascript says so once and is not tried again
-(ert-deftest drgnx-job-ui/a-failed-osascript-says-so-once ()
-  (let ((made nil) (said nil) (sentinel nil))
-    (cl-letf (((symbol-function 'make-process) (lambda (&rest args) (push args made) (setq sentinel (plist-get args :sentinel)) 'proc))
-              ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said)))
-              ((symbol-function 'executable-find) (lambda (&rest _) "/usr/bin/osascript"))
-              ((symbol-function 'process-status) (lambda (_p) 'exit))
-              ((symbol-function 'process-exit-status) (lambda (_p) 1)))
-      (let ((system-type 'darwin)) (drgnx-job-ui--send "t" "b"))
-      (should (functionp sentinel))
-      (funcall sentinel 'proc "exited abnormally with code 1\n")
-      (should (= 1 (length said)))
-      (should (string-search "b" (car said)))
-      (should (= 1 (length made))))                         ; no second try
-    (setq said nil)
-    (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said)))
-              ((symbol-function 'process-status) (lambda (_p) 'exit))
-              ((symbol-function 'process-exit-status) (lambda (_p) 0)))
-      (funcall sentinel 'proc "finished\n")
-      (should-not said))))
+;; M9b4-14: where the notification goes (osascript, D-Bus, a message) is core's: core-notice-desktop-test.el.
 
 ;; M12a-70
 (ert-deftest drgnx-job-ui/badge-mode-adds-and-removes-its-disconnect-hook ()
