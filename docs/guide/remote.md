@@ -92,8 +92,10 @@ file of a container that runs as root), from a visit, a daemon or a sentinel ali
 - Eglot's own hook, which runs when a buffer's major mode changes, asks the project of the buffer and so would reach the
   host (about forty TRAMP calls). For a remote buffer drgnx lets it run only inside a command of yours (the visit of
   the file), or when a server you started has answered (then the open files of that server's project are attached).
-  A remote buffer whose mode changes outside a command, from a timer or a revert, say, stays unattached to its language
-  server until you reopen it, revert it in a command, or run Reconnect. Remote files are never restored at the next
+  A file of the project opened outside a command while its server starts (within `eglot-connect-timeout` of the
+  start) joins it as soon as both the server has answered and the file's mode is set: on a slow host the answer often
+  comes while that file is still being read. After that, a remote buffer whose mode changes outside a command, from a
+  timer or a revert, say, stays unattached to its language server until you reopen it, revert it in a command, or run Reconnect. Remote files are never restored at the next
   start, so nothing is waiting to be attached then.
 - The private auto-save folder helps only while drgnx's state directory is outside the temp directory
   (`temporary-file-directory`), as it is by default. With `XDG_STATE_HOME` inside `$TMPDIR`, TRAMP asks again on the

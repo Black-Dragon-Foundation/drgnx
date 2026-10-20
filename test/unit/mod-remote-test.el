@@ -666,6 +666,33 @@ is attached by the next start (a Reconnect) and one of another host never is."
       (let ((drgnx-lang--user-command t)) (drgnx-lang-start-remote-server b))   ; Reconnect repairs it
       (should (drgnx-remote-test--managed-p b)))))
 
+(ert-deftest drgnx-remote/a-file-opened-while-the-server-starts-joins-it ()
+  "The server may answer while a file opened outside a command is still being read (its mode not set yet, so the
+connect hook passes it by), or before that file's buffer exists: on a macOS runner it always did.  Once its mode is
+set, the file joins the server of that start; after the start's `eglot-connect-timeout' it does not (the limit)."
+  (drgnx-remote-test--with
+    (let* ((root (drgnx-remote-test--root dir)) (prog-mode-hook (list #'drgnx-lang--maybe-eglot))
+           (eglot-sync-connect nil) (python-mode-hook nil) a b c d
+           (answer-first (lambda (&rest _)                         ; the visit of c.py waits for the answer midway
+                           (when (string-suffix-p "/c.py" buffer-file-name)
+                             (drgnx-test-wait (lambda () (with-current-buffer a eglot--managed-mode)) :what "the server's answer")))))
+      (dolist (n '("a.py" "b.py" "c.py" "d.py")) (with-temp-file (expand-file-name n (concat dir "src")) (insert "x = 1\n")))
+      (drgnx-lang-probe-remote root)
+      (advice-add 'after-find-file :before answer-first)
+      (unwind-protect
+          (progn
+            (let ((drgnx-lang--user-command t)) (setq a (find-file-noselect (concat root "a.py"))))
+            (setq c (find-file-noselect (concat root "c.py")))           ; a timer opens it; the server answers meanwhile
+            (should (eq (buffer-local-value 'major-mode c) 'python-mode))
+            (should (drgnx-remote-test--managed-p a))
+            (should (drgnx-remote-test--managed-p c))
+            (setq b (find-file-noselect (concat root "b.py")))           ; after the answer, still in the start
+            (should (drgnx-remote-test--managed-p b))
+            (setq drgnx-lang--remote-pending nil)                       ; the start is long past
+            (setq d (find-file-noselect (concat root "d.py")))
+            (should-not (drgnx-remote-test--managed-p d)))
+        (advice-remove 'after-find-file answer-first)))))
+
 (ert-deftest drgnx-remote/open-remote-manages-the-buffers-it-started-servers-for ()
   (drgnx-remote-test--with
     (let* ((root (drgnx-remote-test--root dir)) (prog-mode-hook nil) (eglot-sync-connect nil) (python-mode-hook nil) a b)

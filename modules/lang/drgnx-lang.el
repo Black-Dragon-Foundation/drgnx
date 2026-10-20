@@ -149,12 +149,16 @@ it: ((MODES . PROGRAM-or-nil)…).  This may open the connection, so it is only 
     (seq-filter (lambda (e) (seq-some (lambda (m) (derived-mode-p (if (consp m) (car m) m))) (ensure-list (car e))))
                 result)))
 
-(defun drgnx-lang--remote-pending-p (key)
-  "Was a server for KEY started in the last `eglot-connect-timeout' seconds (30 without it)?"
+(defun drgnx-lang--remote-pending-live ()
+  "The entries of `drgnx-lang--remote-pending' of the last `eglot-connect-timeout' seconds (30 without it); the older
+ones are dropped."
   (let ((limit (or (and (boundp 'eglot-connect-timeout) eglot-connect-timeout) 30)))
     (setq drgnx-lang--remote-pending
-          (seq-filter (lambda (p) (< (- (float-time) (cdr p)) limit)) drgnx-lang--remote-pending))
-    (assoc key drgnx-lang--remote-pending)))
+          (seq-filter (lambda (p) (< (- (float-time) (cdr p)) limit)) drgnx-lang--remote-pending))))
+
+(defun drgnx-lang--remote-pending-p (key)
+  "Was a server for KEY started in the last `eglot-connect-timeout' seconds (30 without it)?"
+  (assoc key (drgnx-lang--remote-pending-live)))
 
 (defun drgnx-lang-start-remote-server (&optional buffer)
   "Start now the language server for the remote code BUFFER (default: the current one), when the probe found one
@@ -212,11 +216,32 @@ ACTIVATE with ARGS, except in a remote buffer outside a command of the user's.  
 for a remote buffer that is a round trip (about forty TRAMP calls).  Nothing is asked when skipped; in the command
 that visits the file, eglot attaches the buffer to the running server as usual.  Eglot's own loop over all buffers
 when a server has answered runs in a process filter, so it is skipped for remote buffers too; the buffers of a
-server's project are attached by `drgnx-lang--attach-buffers' (which binds `drgnx-lang--attaching')."
+server's project are attached by `drgnx-lang--attach-buffers' (which binds `drgnx-lang--attaching'), and a buffer
+whose mode is set while its project's server starts joins it once it has answered (`drgnx-lang--joins-a-start-p')."
   (when (or (and drgnx-lang--attaching buffer-file-name (string-prefix-p drgnx-lang--attaching buffer-file-name))
             (drgnx-lang--user-command-p)
-            (not (file-remote-p default-directory)))
+            (not (file-remote-p default-directory))
+            (drgnx-lang--joins-a-start-p))
     (apply activate args)))
+
+(defun drgnx-lang--joins-a-start-p ()
+  "Is the current remote buffer's file under the root of a server started in the last `eglot-connect-timeout' seconds
+\(`drgnx-lang--remote-pending') that has answered?  The connect hook attaches the project's buffers when the server
+answers, but a file opened outside a command while the server starts may get its major mode only after that: on a
+slow host the answer comes while the file is still being read (no mode yet), or before its buffer exists.  Prefix
+tests of names; nothing is asked of a host but the expansion of a `~' root started on this buffer's connection, as
+the attaching does (TRAMP keeps the home)."
+  (when-let* ((file buffer-file-name)
+              (key (file-remote-p file))
+              ((boundp 'eglot--servers-by-project))
+              (started (seq-filter (lambda (root) (and (equal (file-remote-p root) key)
+                                                       (string-prefix-p (file-name-as-directory (expand-file-name root)) file)))
+                                   (mapcar #'caar (drgnx-lang--remote-pending-live)))))
+    (catch 'answered                    ; a server registers in the table when it has answered
+      (maphash (lambda (project servers)
+                 (when (and servers (member (ignore-errors (project-root project)) started)) (throw 'answered t)))
+               eglot--servers-by-project)
+      nil)))
 
 (defun drgnx-lang--attach-buffers (server)
   "Attach the unmanaged buffers under the remote project of SERVER to it (`eglot-connect-hook', and a start that
