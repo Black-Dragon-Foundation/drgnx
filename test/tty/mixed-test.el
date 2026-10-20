@@ -112,10 +112,9 @@ window is driven by calls, the terminal window by real keys."
   (drgnx-tty-session-require-packages '(corfu compat)))
 
 (ert-deftest drgnx-tty-mixed/corfu-s-popup-belongs-to-its-frame ()
-  ;; 31.1: the child frame's parent is the frame typed in — the terminal's, then the graphical one's
+  ;; the child frame's parent is the frame typed in — the terminal's, then the graphical one's
   (let ((dirs (drgnx-tty-mixed-test--corfu-dirs)))
     (drgnx-tty-mixed-test--with (gui tty)
-      (skip-unless (drgnx-tty-session-eval gui '(featurep 'tty-child-frames)))
       (let ((a (expand-file-name "a.el" (plist-get tty :run))) (b (expand-file-name "b.el" (plist-get tty :run))))
         (should (drgnx-tty-session-eval
                  gui `(progn (dolist (d ',dirs) (add-to-list 'load-path d))
@@ -146,30 +145,5 @@ window is driven by calls, the terminal window by real keys."
           (drgnx-tty-mixed-test--wait gui `(and ,visible-child t))
           (should (eq (drgnx-tty-session-eval gui parent-kind) 'gui))
           (should (drgnx-tty-session-eval gui `(eq (frame-parent ,visible-child) ,drgnx-tty-mixed-test--gui-frame))))))))
-
-(ert-deftest drgnx-tty-mixed/30-2-completion-as-you-type-stays-in-the-terminal ()
-  ;; 30.2: the candidates typed in the terminal window show in that window's popup lane; the graphical window
-  ;; (corfu's own popup there) is not touched
-  (let ((dirs (drgnx-tty-mixed-test--corfu-dirs)))
-    (drgnx-tty-mixed-test--with (gui tty)
-      (skip-when (drgnx-tty-session-eval gui '(featurep 'tty-child-frames)))
-      (let ((a (expand-file-name "a.el" (plist-get tty :run))))
-        (should (drgnx-tty-session-eval
-                 gui `(progn (dolist (d ',dirs) (add-to-list 'load-path d))
-                             (require 'corfu)
-                             (setq corfu-auto t corfu-auto-delay 0.1 corfu-auto-prefix 2)
-                             (global-corfu-mode 1)
-                             (with-selected-frame ,drgnx-tty-mixed-test--tty-frame
-                               (drgnx-wb-show-in-editor (find-file-noselect ,a) t) (emacs-lisp-mode) (corfu-mode 1))
-                             t)))
-        (let ((before (drgnx-tty-mixed-test--state gui)))
-          (drgnx-tty-session-send tty "(with-")
-          (drgnx-tty-mixed-test--wait
-           gui `(let ((w (get-buffer-window "*Completions*" t)))
-                  (and w (eq (window-frame w) ,drgnx-tty-mixed-test--tty-frame) t)))
-          (should (equal (plist-get (drgnx-tty-mixed-test--state gui) :gui) (plist-get before :gui)))
-          (drgnx-tty-session-key tty "C-g" 'legacy)
-          (drgnx-tty-mixed-test--wait gui '(null (get-buffer-window "*Completions*" t)))
-          (should (equal (plist-get (drgnx-tty-mixed-test--state gui) :gui) (plist-get before :gui))))))))
 
 ;;; mixed-test.el ends here

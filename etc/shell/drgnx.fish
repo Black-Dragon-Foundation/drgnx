@@ -154,6 +154,7 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n '__fish_seen_subcommand_from update' -f
     complete -c drgnx -n '__fish_seen_subcommand_from update' -l quiet -d 'One line, for the timer'
     complete -c drgnx -n '__fish_seen_subcommand_from update' -l back -d 'Return to the commit before the last update'
+    complete -c drgnx -n '__fish_seen_subcommand_from update' -l restart -d 'Restart the drgnx service after a successful update'
     complete -c drgnx -n '__fish_seen_subcommand_from update' -l auto -x -a 'on off status' -d 'A daily timer'
     complete -c drgnx -n '__fish_seen_subcommand_from coord' -f
     complete -c drgnx -n '__fish_seen_subcommand_from coord; and not __fish_seen_subcommand_from mcp' -a mcp -d 'Serve the coordination tools over stdio'

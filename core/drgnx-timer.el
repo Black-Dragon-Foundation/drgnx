@@ -136,7 +136,7 @@ starts and this returns nil.  A one-shot owned by a module runs as the module's 
 when the module is turned off).
 FN must be a non-nil symbol, and KEY a symbol or (SYMBOL . OBJECT) with OBJECT a symbol, number, string, buffer,
 process, frame or window; anything else signals `wrong-type-argument', as does a wall timer's REPEAT that is not a
-number (Emacs 31 refuses it; Emacs 30 ran the timer once).  See docs/develop/core.md, \"Timers\"."
+number (Emacs refuses it).  See docs/develop/core.md, \"Timers\"."
   (drgnx-timer--check key fn)
   (unless (or idle (null repeat) (numberp repeat)) (signal 'wrong-type-argument (list 'numberp repeat)))
   (let ((cell (drgnx-timer--owner owner)))

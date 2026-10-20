@@ -51,7 +51,7 @@ checks that this column says "verified" exactly for the rows the table's data ma
 | [Linux console](https://man7.org/linux/man-pages/man4/console_codes.4.html) | no (unconfirmed) | no (unconfirmed) | no | no (unconfirmed) | no (unconfirmed) | (unconfirmed) `M-<f1>`…`M-<f12>`, `C-M-<f1>`…`C-M-<f12>` (switch consoles) | reported |
 | [tmux](https://man.openbsd.org/tmux) | no | no | no | no | yes (unconfirmed) | `C-b` (its prefix) | verified |
 
-- **kitty, verified:** `emacsclient -t` in kitty 0.48 (Fedora 44 and 45, so Emacs 30.2 and 31.1; `bin/drgnx test
+- **kitty, verified:** `emacsclient -t` in kitty 0.48 (Fedora 45, Emacs 31.1; `bin/drgnx test
   --container --tty`) gets kkp, with no Alt+Shift or F6 layer and no hint. `C-S-p`, `C-S-f`, `C-S-e`, `` C-` `` and
   `C-.` reach their commands through kitty's own key encoder. A copy (`S-<right>`, `C-c`) reaches the clipboard,
   there are 16777216 colours, and `C-g` stops a program Emacs waits for. Still unconfirmed: the mouse reports kitty
@@ -375,16 +375,10 @@ while a popup is open the editor above it is a little shorter and the line you a
 ends, every window has its size back. A popup in one window never appears in another: with a graphical window and a
 terminal window on one daemon, a transient in one leaves the other alone.
 
-- **Emacs 31.1 and later** draws the completion popup (corfu, when you have it) as a floating child frame of the
+- **Completion** (corfu, when you have it) draws its popup (corfu, when you have it) as a floating child frame of the
   terminal window, as in a graphical window. A child frame with a border draws it with box-drawing characters
   (`┌ ─ ┐ │ └ ┘`) while every terminal on the daemon writes UTF-8, and with `+ - |` as soon as one does not. The border
   glyphs are one shared table, so the choice follows the terminals that are connected.
-- **Emacs 30.2** has no child frames in a terminal. Corfu's own commands (the completion key) fall back to Emacs's
-  `*Completions*` list there, but its completion as you type shows nothing. drgnx fills the gap: in a terminal window,
-  with corfu on and `corfu-auto` set, the candidates for the word you are typing show in `*Completions*` in the popup
-  lane, refreshed as you type. Nothing is inserted; `C-g` or moving off the word removes the list. A graphical window
-  keeps corfu's own popup. The setting `drgnx-tty-popups-auto-completions` (`M-x customize-variable`) set to `nil`
-  turns this off in terminal windows without touching `corfu-auto` in graphical ones.
 - **A terminal that does not write UTF-8** (a window started with `LANG=C`) cannot show `×`, `●`, `›`, `▾`, `▸` or
   `│`. drgnx draws ASCII marks in their place in that window only (`x`, `*`, `>`, `v`, `>`, `|`), in the tab line,
   the breadcrumb, the Explorer and the docks' headings, instead of Emacs's `\u00D7` escapes. A UTF-8 terminal is not
@@ -515,7 +509,6 @@ WARN  terminal-keys        neither the kitty keyboard protocol nor modifyOtherKe
            (drgnx never installs one for you): xterm: sudo dnf install xterm; foot: sudo dnf install foot. …
 WARN  terminal-clipboard   copy stays in drgnx: nothing carries OSC 52 to your clipboard
       fix: none: VTE does not take OSC 52 (GNOME VTE issue 2495); copy stays in drgnx
-INFO  terminal-popups      popups in the bottom lane; 31.1 has floating ones
 ```
 
 - **`terminal`:** which terminal this is (from the environment; inside tmux, tmux and the terminal around it), its
@@ -537,7 +530,6 @@ INFO  terminal-popups      popups in the bottom lane; 31.1 has floating ones
   to check there.
 - **`terminal-ssh`** (over SSH only): whether this machine has your terminal's terminfo entry; if not, the fixes from
   [SSH](#ssh).
-- **`terminal-popups`:** `popups in the bottom lane; 31.1 has floating ones` on Emacs 30.2.
 
 The doctor describes the newest window of the same kind of terminal that drgnx has opened (the capabilities it measured
 are in `terminal-report.eld`); Check This Terminal measures the window you are in.
@@ -546,5 +538,4 @@ are in `terminal-report.eld`); Check This Terminal measures the window you are i
 
 - **Images:** the commit graph, image previews and other pictures need a graphical window; in a terminal they say so.
 - **One font size:** a terminal shows one font in one size; headings and zoom do not change it.
-- **Popups on Emacs 30.2:** child frames need Emacs 31 in a terminal. On 30.2, completion shows at the bottom.
 - **Super (`s-`) keys:** only through kkp, and never inside tmux.

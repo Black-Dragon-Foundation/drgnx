@@ -18,6 +18,7 @@
 
 (declare-function drgnx-hub-socket "drgnx-hub" ())
 (declare-function drgnx-sandbox-sbpl "drgnx-sandbox-macos" (spec))
+(declare-function drgnx-sandbox-macos-program "drgnx-sandbox-macos" (program path))
 
 (define-error 'drgnx-sandbox-refused "Sandbox refused")
 
@@ -511,10 +512,14 @@ short step of the hub's, such as a checkout or a bundle.  It never blocks.  DONE
 stderr together, trimmed; or (:timeout . MSG) when it ran past TIMEOUT seconds (default `drgnx-job-git-timeout') and
 was ended.  Returns the process.  Signals `drgnx-sandbox-refused' when SPEC is refused or there is no sandbox:
 nothing runs then.  On Seatbelt, which sets neither, the step starts in SPEC's `:chdir' with its `:env' alone: never
-the hub's environment."
+the hub's environment, and an xcrun shim it would run is the developer dir's tool (`drgnx-sandbox-macos-program')."
   (let* ((timeout (or timeout (bound-and-true-p drgnx-job-git-timeout) 300))
-         (wrapped (drgnx-sandbox-wrap spec argv))
          (seatbelt (eq (or (plist-get spec :backend) (drgnx-sandbox-backend)) 'seatbelt))
+         (wrapped (drgnx-sandbox-wrap spec (if (not seatbelt) argv
+                                             (require 'drgnx-sandbox-macos)
+                                             (cons (drgnx-sandbox-macos-program
+                                                    (car argv) (cdr (assoc "PATH" (plist-get spec :env))))
+                                                   (cdr argv)))))
          (process-environment (if seatbelt
                                   (cl-loop for (name . value) in (plist-get spec :env) collect (concat name "=" value))
                                 process-environment)))

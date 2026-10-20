@@ -10,7 +10,9 @@
   '(("sway" . "exit 0")
     ;; the args and the WM variables a client saw, as its JSON reply
     ;; (the command "fail" fails as swaymsg does: not JSON on stdout, the reason on stderr, exit 2)
+    ;; ("late": the reason reaches stderr only once Emacs has reaped it — the order a loaded macOS runner gave)
     ("swaymsg" . "for last; do :; done; if [ \"$last\" = fail ]; then printf 'not json'; echo boom >&2; exit 2; fi
+if [ \"$last\" = late ]; then (while kill -0 $$ 2>/dev/null; do :; done; echo late-boom >&2) & printf 'not json'; exit 2; fi
 printf '{\"args\":\"%s\",\"swaysock\":\"%s\",\"i3sock\":\"%s\"}' \"$*\" \"${SWAYSOCK-unset}\" \"${I3SOCK-unset}\"")
     ("i3-msg" . "printf '{\"args\":\"%s\",\"swaysock\":\"%s\",\"i3sock\":\"%s\"}' \"$*\" \"${SWAYSOCK-unset}\" \"${I3SOCK-unset}\"")
     ("Xvfb" . "exit 0") ("xrandr" . "exit 0") ("i3" . "exit 0") ("emacs-lucid" . "exit 0")
@@ -461,6 +463,10 @@ paths no WM serves."
                            (concat "-s " sock " -r -- output HEADLESS-2 disable")))
             ;; a failure says what the tool printed on stderr
             (should (string-search "boom" (cadr (should-error (drgnx-ui-wm-command s "fail") :type 'drgnx-ui-error))))
+            ;; all of it: stderr is a pipe of its own, read to its end after the tool exited
+            (let ((msg (cadr (should-error (drgnx-ui-wm-command s "late") :type 'drgnx-ui-error))))
+              (should (string-search "late-boom" msg))
+              (should-not (string-search "finished" msg)))
             ;; i3: the socket its i3.conf names, not anything on the display
             (let ((tree (plist-get (drgnx-ui-wm s2) :tree)))
               (should (equal (plist-get tree :args) (concat "-s " sock2 " -t get_tree")))

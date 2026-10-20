@@ -42,20 +42,19 @@
     (typescript "https://github.com/tree-sitter/tree-sitter-typescript" "v0.23.2" "typescript/src")
     (yaml "https://github.com/tree-sitter-grammars/tree-sitter-yaml" "v0.7.2"))
   "LANGUAGE URL REVISION [SOURCE-DIR]: where a grammar comes from (`treesit-language-source-alist' entries).  REVISION is
-the newest tag whose parser is tree-sitter ABI 14 (what Emacs 30 loads, and what its tree-sitter modes' queries were
-written against); `drgnx-grammars-recipe' drops it on Emacs 31 or later with an ABI 15 library.")
+the newest tag whose parser is tree-sitter ABI 14 (what an ABI 14 library loads, and what the tree-sitter modes'
+queries were written against); `drgnx-grammars-recipe' drops it with an ABI 15 library.")
 
 (defun drgnx-grammars--abi ()
   "The tree-sitter ABI version of this Emacs's library, or nil when it cannot say."
   (and (fboundp 'treesit-library-abi-version) (treesit-library-abi-version)))
 
 (defun drgnx-grammars-recipe (lang)
-  "LANG's `drgnx-grammars-sources' entry, as built here: pinned to its ABI 14 tag on Emacs 30 whatever the library's
-ABI (a pinned parser loads in a newer library, and Emacs 30's modes were written against those grammars); the default
-branch (no revision) only on Emacs 31 or later with an ABI 15 library.  Nil if LANG is unknown."
+  "LANG's `drgnx-grammars-sources' entry, as built here: pinned to its ABI 14 tag unless the library
+is ABI 15 (a pinned parser loads in a newer library); then the default branch (no revision).  Nil if LANG is unknown."
   (when-let* ((e (assq lang drgnx-grammars-sources)))
     (let ((abi (drgnx-grammars--abi)))
-      (if (and (>= emacs-major-version 31) abi (>= abi 15)) (append (list (nth 0 e) (nth 1 e) nil) (nthcdr 3 e)) e))))
+      (if (and abi (>= abi 15)) (append (list (nth 0 e) (nth 1 e) nil) (nthcdr 3 e)) e))))
 
 (defvar drgnx-grammars--hinted nil "Languages whose missing grammar was mentioned this session.")
 

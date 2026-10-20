@@ -125,7 +125,7 @@ run changes nothing. A failed `preflight`, `config` or `sync` stops the steps af
 | `onboard` | `drgnx onboard --non-interactive`: records what is set up, changes nothing ([onboarding.md](onboarding.md)) | nothing |
 | `desktop` | onboarding's Daemon and Desktop step: the systemd service and desktop entry (Linux) or the drgnx app (macOS); installed already: ok | its own questions |
 | `shell` | the rc line of your shell ([shell.md](shell.md)) | "Add this line to ~/.zshrc?" |
-| `doctor` | `drgnx doctor`: a FAIL fails the step, naming the checks; a WARN does not (Emacs 30.2, say, is supported and warns): the step is ok and names the checks that warn | nothing |
+| `doctor` | `drgnx doctor`: a FAIL fails the step, naming the checks; a WARN does not (a missing tree-sitter, say, warns): the step is ok and names the checks that warn | nothing |
 
 **Questions** are asked on the terminal only. Without one (stdin not a terminal) nothing is asked: what would be
 asked is skipped, with its command. **`--yes`** answers yes for the announced age or chezmoi install, the key import

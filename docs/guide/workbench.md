@@ -384,8 +384,8 @@ The lane always has a one-line header: the popup's name (`Calendar`, `which-key`
 click it, or press `Esc` or `q` while the lane has focus (**Close Pane**), to end the popup. Because the header is
 there whether the popup borrows the panel or has a window of its own, borrowing never changes the header's height.
 
-In a terminal window the lane works the same, and the line you are on stays visible. On Emacs 30.2 completion as you
-type (corfu) also shows there, as `*Completions*`; on 31.1 corfu's popup is a child frame. See
+In a terminal window the lane works the same, and the line you are on stays visible. Completion as you type
+(corfu) shows as a child frame there. See
 [terminal.md](terminal.md#popups).
 
 ### The panel and the right dock

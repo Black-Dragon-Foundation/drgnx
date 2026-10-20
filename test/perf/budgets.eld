@@ -19,7 +19,7 @@
  (code-scrolling (:input :p95) 16) (code-scrolling (:input :max) 50)
  (typing-with-ghost (:input :p95) 16) (typing-with-ghost (:input :max) 50)
  (diff-scrolling (:input :p95) 16) (diff-scrolling (:input :max) 50)
- (replace-typing (:input :p95) 16) (replace-typing (:input :max) 50)
+ (replace-typing (:input :p95) 16) (replace-typing (:input :max) 50) (replace-typing (:slice_ms :max) 16)   ; the view draws while 10k matches stream (was a :timing unit test, PERF-MAC-1)
  ;; replace-retype (render pipeline Task 6): a view slice is 4 ms of rows plus the 8-row grain; 6 ms leaves the rest
  (replace-retype (:input :p95) 16) (replace-retype (:input :max) 50) (replace-retype (:slice_ms :max) 6)
  (live-view (:input :p95) 16) (live-view (:input :max) 50)

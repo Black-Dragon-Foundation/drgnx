@@ -136,8 +136,21 @@ place (ID X Y W H).  The same again: a redraw changes only band images (`drgnx-c
   (setq-local revert-buffer-function #'drgnx-cockpit--revert)
   (add-hook 'kill-buffer-hook #'drgnx-cockpit--unwatch nil t))
 
-(with-eval-after-load 'evil                     ; its own letters, also in the Vim profile
-  (when (fboundp 'evil-set-initial-state) (evil-set-initial-state 'drgnx-cockpit-graph-mode 'emacs)))
+(declare-function evil-initial-state "evil-core")
+(defconst drgnx-cockpit--emacs-state-modes
+  '(drgnx-cockpit-graph-mode drgnx-cockpit-edits-mode drgnx-cockpit-happened-mode drgnx-cockpit-timeline-mode
+                             drgnx-cockpit-cards-mode drgnx-cockpit-decisions-mode)
+  "The cockpit's modes that start in Emacs state: their own letters and buttons, also in the Vim profile.")
+
+(defun drgnx-cockpit--evil-states ()
+  "The cockpit's modes start in Emacs state (the setup runs this once evil is loaded).  The undo puts each mode's
+earlier state back, only while it is still Emacs state."
+  (when (fboundp 'evil-set-initial-state)
+    (dolist (mode drgnx-cockpit--emacs-state-modes)
+      (let ((old (evil-initial-state mode)))
+        (evil-set-initial-state mode 'emacs)
+        (drgnx-modules-push-undo (format "evil state %s" mode)
+                                 (lambda () (when (eq (evil-initial-state mode) 'emacs) (evil-set-initial-state mode old))))))))
 
 (defun drgnx-cockpit--view ()
   "The Work graph's view, or nil (no graph buffer)."
@@ -797,6 +810,7 @@ store, the status bar's look at what waits on you, and its parts'."
   (drgnx-pane-define-kind 'work-graph :title " WORK GRAPH" :home 'left :view 'work
                           :buffer #'drgnx-cockpit-graph-buffer)
   (drgnx-cockpit--subscribe)
+  (eval-after-load 'evil (drgnx-modules-with-owner (drgnx-cockpit--evil-states)))   ; its own letters in the Vim profile
   (drgnx-timer-start 'cockpit-waiting drgnx-cockpit-check-interval #'drgnx-cockpit--waiting
                      :repeat drgnx-cockpit-check-interval)
   (pcase-dolist (`(,id ,title ,fn ,doc)

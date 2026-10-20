@@ -177,6 +177,23 @@ to / or another dir that holds /Users."
          (dir (and (file-symlink-p link) (file-directory-p link) (drgnx-sandbox--truename link))))
     (and dir (not (drgnx-sandbox--within-p drgnx-sandbox-macos-users dir)) dir)))
 
+(defvar drgnx-sandbox-macos-shim-dir "/usr/bin"
+  "Where xcrun's shims are (/usr/bin/git and the other developer tools).  A shim cannot run in the sandbox: xcrun
+writes a cache in the user's temp dir and reads the rest of Xcode's bundle.  A step runs the developer dir's tool
+itself (`drgnx-sandbox-macos-program').")
+
+(defun drgnx-sandbox-macos-program (program path)
+  "The program a step runs for PROGRAM, found on PATH (the step's, a colon-separated string) as sandbox-exec finds
+it: PROGRAM, unless that is a shim in `drgnx-sandbox-macos-shim-dir' whose tool the selected developer dir has
+\(`drgnx-sandbox-macos--developer-dir', which the profile reads); then that tool by its absolute name."
+  (let* ((file-name-handler-alist nil)
+         (found (if (file-name-absolute-p program) program
+                  (locate-file program (and path (split-string path ":" t)) nil #'file-executable-p)))
+         (dev (and found (equal (file-name-directory found) (file-name-as-directory drgnx-sandbox-macos-shim-dir))
+                   (drgnx-sandbox-macos--developer-dir)))
+         (tool (and dev (expand-file-name (concat "usr/bin/" (file-name-nondirectory found)) dev))))
+    (if (and tool (file-executable-p tool)) tool program)))
+
 (defconst drgnx-sandbox-macos-dns-socket "/private/var/run/mDNSResponder"
   "The system resolver's socket: every host name lookup goes through it.  Allowed with `:net shared' only.")
 

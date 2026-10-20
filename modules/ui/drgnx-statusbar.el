@@ -190,12 +190,42 @@ again: success clears the entry, failure records it anew.")
   "Define (or replace) the segment ID.
 FN takes no arguments and returns a string or nil; it runs with the buffer of `drgnx-statusbar-source-window'
 current and may read only cached state.  CLICK is a command symbol or a function, run when the text is clicked.
-HELP is the text shown when the pointer rests on the segment."
-  (puthash id (list :fn fn :click click :help help) drgnx-statusbar--segments)
+HELP is the text shown when the pointer rests on the segment.
+Called from a module's setup, the definition claims ID and records its undo \"statusbar segment ID\": the segment
+it replaced put back, or `drgnx-statusbar-undefine-segment' — only while ID is still the one defined here.  Two
+modules defining the same ID may be torn down in either order (`drgnx-module--claim').  Either way the epoch
+`statusbar' moves, so every bar is drawn again."
+  (let* ((rec (drgnx-modules--recording-p))
+         (old (gethash id drgnx-statusbar--segments))
+         (spec (list :fn fn :click click :help help)))
+    (drgnx-statusbar--put-segment id spec)
+    (when rec
+      (let* ((target (list 'statusbar-segment id)) (box (drgnx-module--claim target old)))
+        (drgnx-modules-push-undo
+         (format "statusbar segment %s" id)
+         (lambda ()
+           (drgnx-module--release target box
+                                  (lambda () (eq (gethash id drgnx-statusbar--segments) spec))
+                                  (lambda (prev) (if prev (drgnx-statusbar--put-segment id prev)
+                                                   (drgnx-statusbar-undefine-segment id))))))))
+    id))
+
+(defun drgnx-statusbar--put-segment (id spec)
+  "Make SPEC the definition of segment ID: a new chance after an error, and the bars drawn again."
+  (puthash id spec drgnx-statusbar--segments)
   (setq drgnx-statusbar--errors (assq-delete-all id drgnx-statusbar--errors))   ; a new definition gets a new chance
   (drgnx-statusbar--bump)
-  (force-mode-line-update t)
-  id)
+  (force-mode-line-update t))
+
+(defun drgnx-statusbar-undefine-segment (id)
+  "Remove the segment ID, and draw the bars again (the epoch `statusbar' moves): an ID in `drgnx-statusbar-left' or
+`-right' then shows nothing.  Non-nil if ID was defined."
+  (when (gethash id drgnx-statusbar--segments)
+    (remhash id drgnx-statusbar--segments)
+    (setq drgnx-statusbar--errors (assq-delete-all id drgnx-statusbar--errors))
+    (drgnx-statusbar--bump)
+    (force-mode-line-update t)
+    t))
 
 (defun drgnx-statusbar-source-window ()
   "The window whose buffer the segment functions read: the window the bar is drawn for, else the most recently

@@ -2,7 +2,8 @@
 
 How drgnx looks. The aim is a calm editor like Zed that is as informed as VS Code: nothing on screen that you did
 not ask for, everything you need one glance away. Every choice below is a setting of the module `ui/face`
-(Preferences: Modules turns the module off; **Preferences: Look and Layout Settings…** in the palette or the Options
+(Preferences: Modules turns the module off at once: the menu bar, scroll bars, title bar, dividers, tab bar and the
+other defaults go back to what they were, and the status bar, top line, quick help and start page go; **Preferences: Look and Layout Settings…** in the palette or the Options
 menu opens them all in Customize, group `drgnx-face`), every one applies
 at once when you change it, and every one works in a terminal as well as in a window.
 
@@ -99,7 +100,8 @@ turns them off in one buffer.
 drgnx draws a few symbols (a drag handle, a close mark, a branch sign, warnings, checks, busy and waiting marks,
 ahead and behind arrows, the bullet). They all come from one table, `drgnx-face-glyphs`: NAME → (UNICODE . ASCII). In a terminal
 whose encoding is not UTF-8 (a bare Linux console, an old `LANG=C` session), the ASCII form is used so nothing shows
-as a box. Every close button (the editor's tabs, the panes' and popups' headers, the dock's sections, quick help, the
+as a box. Every close button (the editor's tabs, the panes' and popups' headers, the dock's sections, the Buffers
+panel's rows, the find bar, quick help, the
 drawn title bar) uses the one `close` glyph, `×`, which every monospace font has. Change one for your font:
 
 ```elisp
@@ -269,6 +271,8 @@ with faces: a `%` is a percent sign (not a mode-line construct) and `display` pr
 count its columns. One that signals an error shows nothing, is skipped for 10 seconds and then tried again (when it
 works, it comes back; when it fails again, it is skipped for another 10 seconds), and the message is kept in
 `drgnx-statusbar--errors` (no message per redisplay). Defining it again gives it a new chance at once.
+`(drgnx-statusbar-undefine-segment 'clock)` removes it. A segment a module defines in its setup goes when the module
+is turned off (Preferences: Modules), and the one it replaced, if any, comes back.
 
 ## The top line
 
@@ -341,8 +345,7 @@ point's line, or above the symbol's. It never leaves the window either: when not
 the line, a hover shows nothing and the key puts the first line in the echo area. It moves out of the way as soon as
 you type, and goes when the window scrolls, moves or changes size under it, or when windows come or go, or the
 selection moves, with no command run (a timer's split, a window-manager resize): it hears these from the workbench
-state store at once and only looks at the mouse and the scrolling while it is idle. In a terminal, which has no pop-up frames in
-Emacs 30, it is a strip of a few lines at the bottom of the editor (`…` while the docs are on their way): the editor
+state store at once and only looks at the mouse and the scrolling while it is idle. In a terminal it is a strip of a few lines at the bottom of the editor (`…` while the docs are on their way): the editor
 gives up those rows while it shows and gets them back, at the same size, when it goes. Point always stays visible.
 In a terminal, `C-g` closes the strip (`Esc` is the Meta prefix there), as does typing anything; `q` closes it in a
 read-only buffer.
@@ -404,4 +407,5 @@ styles `window-divider` itself keeps its choice, and every colour you see comes 
 (Preferences: Color Theme). The quick help card is `drgnx-quickhelp` (inherits `tooltip`) with the symbol's name in
 `drgnx-quickhelp-title` (inherits `bold`); its border is Emacs's `child-frame-border` face. The start page uses
 `drgnx-start-title` (inherits `bold`), `drgnx-start-key` (inherits `bold`) and `drgnx-start-quiet` (inherits `shadow`).
-The × of the panes, popups and dock sections is `drgnx-wb-close` (inherits `shadow`).
+The × of the panes, popups and dock sections is `drgnx-ui-close` (inherits `shadow`; `drgnx-wb-close`, its old
+name, is the same face). The UI kit's buttons are `drgnx-ui-button` (inherits `button`).

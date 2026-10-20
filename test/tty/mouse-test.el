@@ -252,7 +252,7 @@ tab before b.txt replaces it.  Tabs are apart by a gap of spaces (wb/drgnx-chrom
 on suspend or exit.")
 
 (ert-deftest drgnx-tty-mouse/toggling-keeps-each-terminal-s-strings-on-itself ()
-  ;; Emacs 30.2 stores a terminal's enable and disable strings on the selected terminal: toggled from one client,
+  ;; Emacs stores a terminal's enable and disable strings on the selected terminal: toggled from one client,
   ;; the other's must still be its own, once each, and none when off (a resume must not turn it back on)
   (drgnx-tty-session-with (s :daemon t :size "120x40")
     (let ((c (drgnx-tty-session-client s)))

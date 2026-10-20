@@ -51,7 +51,6 @@
 (declare-function drgnx-agent-session-status "drgnx-agents")
 (declare-function drgnx-hub-socket "drgnx-hub")
 (declare-function drgnx-hub-call "drgnx-hub")
-(declare-function evil-set-initial-state "evil-core")
 (defvar drgnx-cockpit-graph-buffer-name)
 (defvar drgnx-cockpit--model)
 
@@ -734,9 +733,6 @@ watches) and the pane's placeholder.  Nothing else of it is global (its state su
     (when (eq (buffer-local-value 'major-mode b) 'drgnx-cockpit-edits-mode) (kill-buffer b)))
   (when-let* ((b (get-buffer " *drgnx agent-edits*"))) (kill-buffer b))
   (setq drgnx-cockpit-edits--last nil))
-
-(with-eval-after-load 'evil                     ; its own letters, also in the Vim profile
-  (when (fboundp 'evil-set-initial-state) (evil-set-initial-state 'drgnx-cockpit-edits-mode 'emacs)))
 
 (defun drgnx-cockpit-edits--agent-id (agent) (if (consp agent) (plist-get agent :id) agent))
 

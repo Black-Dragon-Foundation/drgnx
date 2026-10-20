@@ -214,6 +214,54 @@ not, and `drgnx PATH' (bin/drgnx runs emacsclient without it there) must find th
   (when (eq system-type 'darwin)
     (setq server-socket-dir (drgnx-session--darwin-socket-dir))))
 
+;;;; `drgnx open' never asks about a file that changed on disk
+
+(defvar drgnx-session-before-open-functions nil
+  "Functions called with the files (absolute names) `drgnx open' is about to visit, before
+`drgnx-session-open-unasked' reverts their buffers whose file changed on disk.  editor/large-files reopens a buffer
+whose file grew past `:ask-above' here.  They run in the server's process filter: they never ask.")
+
+(defun drgnx-session-open-unasked (files fn)
+  "Call FN, which visits FILES (absolute names) for `drgnx open', so that it asks nothing about a buffer already
+holding one of them whose file changed on disk.  Emacs asks there, in the server's process filter:
+`server-visit-files' reverts such a buffer with (revert-buffer t nil), `find-file' asks \"Reread from disk?\".
+Here an unmodified one is reverted first, without a question (only safe local variables are set); a modified one is
+never reverted silently: it is left as it is (its record of the file's time is current while FN runs, then stale
+again, so saving it still asks, as a command may) and the echo area says so.  A file that is gone is left to FN."
+  (run-hook-with-args 'drgnx-session-before-open-functions files)
+  (let ((kept nil))
+    (dolist (file files)
+      (when-let* ((b (find-buffer-visiting file)))
+        (when (and (not (verify-visited-file-modtime b)) (file-exists-p file))
+          (with-current-buffer b
+            (if (buffer-modified-p)
+                (progn (push (cons b (visited-file-modtime)) kept)
+                       (set-visited-file-modtime))
+              (let ((enable-local-variables (if (memq enable-local-variables '(nil :all :safe))
+                                                enable-local-variables
+                                              :safe)))
+                (revert-buffer t t)))))))
+    (unwind-protect (funcall fn)
+      (pcase-dolist (`(,b . ,time) kept)
+        (when (buffer-live-p b)
+          (with-current-buffer b (set-visited-file-modtime time))
+          (message "%s changed on disk; its buffer has unsaved changes and is left as it is"
+                   (file-name-nondirectory (buffer-file-name b))))))))
+
+(defun drgnx-session--visit-unasked (orig files &rest args)
+  "Around `server-visit-files' (ORIG, FILES ((NAME . POSITION) …), ARGS): the files of a request to drgnx's server,
+`drgnx open FILE' and `drgnx open --wait FILE', are visited without a question (`drgnx-session-open-unasked')."
+  (drgnx-session-open-unasked (mapcar #'car files) (lambda () (apply orig files args))))
+
+;; The core is never turned off: the advice is on from the load (it applies once server.el is loaded)
+(advice-add 'server-visit-files :around #'drgnx-session--visit-unasked)
+
+(defun drgnx-session-open-file (file)
+  "Show FILE in the selected window as `drgnx -t FILE' does (its -e form), without a question about a buffer whose
+file changed on disk (`drgnx-session-open-unasked'); return its buffer."
+  (let ((file (expand-file-name file)))
+    (drgnx-session-open-unasked (list file) (lambda () (find-file file)))))
+
 (defun drgnx-session-start-server ()
   "In a drgnx started as a plain graphical Emacs (not a daemon, not drgnx safe, not a harness session),
 serve `drgnx-session-server-name' so `drgnx PATH' opens there — unless another drgnx already does."

@@ -605,7 +605,7 @@
 (ert-deftest drgnx-pkg/every-package-compiles-when-bytecomp-was-not-loaded ()
   ;; macOS install: in an Emacs that had not loaded bytecomp, the first package compiled and every later one failed
   ;; ("symbolp, (autoload \"bytecomp\" …)"): the byte-compile-file wrapper put back the autoload it had found.  A fresh
-  ;; Emacs, then: bytecomp unloaded where something loads it (Emacs 30's package.el), two packages synced.
+  ;; Emacs, then: bytecomp unloaded where something loads it (package.el), two packages synced.
   (let* ((form `(progn
                   (when (featurep 'bytecomp) (unload-feature 'bytecomp t))
                   (unless (autoloadp (symbol-function 'byte-compile-file)) (error "Bytecomp still loaded"))

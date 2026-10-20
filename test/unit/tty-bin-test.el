@@ -228,7 +228,7 @@ terminal, as when a person types the command; else /dev/null and a pipe) → (EX
       (should (eql 0 (car (call (list "-t" "My \"Project\"" "café.py")))))
       (let ((form (tty-bin-test--form (car (last (tty-bin-test--calls dir))))))
         (should (equal (read form)
-                       `(progn (find-file ,file) (drgnx-session-open-folder ,folder))))
+                       `(progn (drgnx-session-open-file ,file) (drgnx-session-open-folder ,folder))))
         (should (string-search "My \\\"Project\\\"" form))))))
 
 (ert-deftest drgnx-bin/open-t-in-a-capable-terminal-when-opted-in ()
@@ -315,7 +315,7 @@ terminal, as when a person types the command; else /dev/null and a pipe) → (EX
   (tty-bin-test--with
     (let ((log (expand-file-name "rt.log" dir)))
       (tty-bin-test--script (expand-file-name "fake-rt" dir) (format "echo \"$*\" >> %s" log))
-      (dolist (case '((nil "45") (("--fedora" "44") "44")))
+      (dolist (case '((nil "45") (("--fedora" "45") "45")))
         (when (file-exists-p log) (delete-file log))
         (let ((env `(("DRGNX_CONTAINER" . ,(expand-file-name "fake-rt" dir)) ("DRGNX_TEST_TTY_IMAGE")
                      ("DRGNX_TEST_SELECTOR" . "\"x\""))))
@@ -334,6 +334,7 @@ terminal, as when a person types the command; else /dev/null and a pipe) → (EX
       ;; a Fedora we have no image for is refused, and --fedora belongs to --tty
       (should (eql 2 (car (call '("test" "--container" "--ui" "--tty") `(("DRGNX_CONTAINER" . ,(expand-file-name "fake-rt" dir)))))))
       (should (eql 2 (car (call '("test" "--container" "--tty" "--ui") `(("DRGNX_CONTAINER" . ,(expand-file-name "fake-rt" dir)))))))
+      (should (eql 2 (car (call '("test" "--container" "--tty" "--fedora" "44") `(("DRGNX_CONTAINER" . ,(expand-file-name "fake-rt" dir)))))))
       (should (eql 2 (car (call '("test" "--container" "--tty" "--fedora" "43") `(("DRGNX_CONTAINER" . ,(expand-file-name "fake-rt" dir)))))))
       (should (eql 2 (car (call '("test" "--container" "--fedora" "44") `(("DRGNX_CONTAINER" . ,(expand-file-name "fake-rt" dir))))))))))
 
@@ -360,11 +361,11 @@ terminal, as when a person types the command; else /dev/null and a pipe) → (EX
         (should (eql 2 (car (call '("test" "--container" "--tty") `(,rt ("DRGNX_TEST_TTY_IMAGE") ("DRGNX_USER_ELPA" . ,colon))))))
         (should-not (file-exists-p log))))))
 
-(ert-deftest drgnx-bin/the-tty-workflow-runs-both-fedoras-like-the-gui-one ()
+(ert-deftest drgnx-bin/the-tty-workflow-runs-the-fedora-matrix-like-the-gui-one ()
   (let ((yml (tty-bin-test--slurp (expand-file-name ".github/workflows/tty.yml" tty-bin-test--root)))
         (gui (tty-bin-test--slurp (expand-file-name ".github/workflows/gui.yml" tty-bin-test--root))))
     (skip-unless (not (string-empty-p yml)))
-    (dolist (s '("schedule:" "workflow_dispatch:" "fedora: [44, 45]" "bin/drgnx test --container --tty --fedora ${{ matrix.fedora }}"
+    (dolist (s '("schedule:" "workflow_dispatch:" "fedora: [45]" "bin/drgnx test --container --tty --fedora ${{ matrix.fedora }}"
                  "permissions:\n  contents: read" "persist-credentials: false"))
       (should (string-search s yml)))
     ;; the checkout action is the one gui.yml pins, by hash

@@ -13,8 +13,9 @@
 (ert-deftest drgnx-doctor/emacs-version ()
   (should (eq (drgnx-doctor-test--status 'emacs-version (drgnx-doctor-test--facts)) 'ok))
   (should (eq (drgnx-doctor-test--status 'emacs-version (drgnx-doctor-test--facts :version "31.2")) 'ok))
-  (should (eq (drgnx-doctor-test--status 'emacs-version (drgnx-doctor-test--facts :version "30.2")) 'warn))
-  (should (eq (drgnx-doctor-test--status 'emacs-version (drgnx-doctor-test--facts :version "29.4")) 'fail)))
+  (should (eq (drgnx-doctor-test--status 'emacs-version (drgnx-doctor-test--facts :version "30.2")) 'fail))
+  (should (eq (drgnx-doctor-test--status 'emacs-version (drgnx-doctor-test--facts :version "29.4")) 'fail))
+  (should (string-search "31.1 or newer needed" (nth 1 (drgnx-doctor-check 'emacs-version (drgnx-doctor-test--facts :version "30.2"))))))
 
 (ert-deftest drgnx-doctor/native-compilation ()
   (should (eq (drgnx-doctor-test--status 'native-compilation (drgnx-doctor-test--facts)) 'ok))
@@ -33,7 +34,6 @@
 (ert-deftest drgnx-doctor/security-notice-until-31.2 ()
   (should (eq (drgnx-doctor-test--status 'security (drgnx-doctor-test--facts)) 'warn))
   (should (string-search "31.2" (nth 1 (drgnx-doctor-check 'security (drgnx-doctor-test--facts)))))
-  (should (eq (drgnx-doctor-test--status 'security (drgnx-doctor-test--facts :version "30.2")) 'warn))
   (should (eq (drgnx-doctor-test--status 'security (drgnx-doctor-test--facts :version "31.2")) 'ok)))
 
 (ert-deftest drgnx-doctor/dev-checks-only-with-dev ()

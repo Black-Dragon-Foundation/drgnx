@@ -86,7 +86,7 @@ _drgnx() {
           'secrets import') words='--identity --replace' ;;
           'secrets ls') words='--identity' ;;
           'bootstrap '*) words='--config --chezmoi --identity --step --dry-run --yes --replace' ;;
-          'update '*) words='--quiet --back --auto' ;;
+          'update '*) words='--quiet --back --restart --auto' ;;
           'coord mcp') words='--kind' ;;
         esac
       elif [[ $n -eq 2 ]]; then   # the word after the command

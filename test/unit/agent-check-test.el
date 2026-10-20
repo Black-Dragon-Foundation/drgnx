@@ -627,10 +627,11 @@ with the HTTP mock stopped afterwards."
                          :spec (list :event "Stop" :command (format "printf '%%s|%%s' \"%s\" \"%s\"" (nth 1 case) (or (nth 2 case) "")))))
              (r (drgnx-agent-check-test--wait (lambda (cb) (drgnx-agent-check-hook item root cb))))
              (dir (directory-file-name (expand-file-name root))))
-        (pcase (car case)
-          ((or 'claude 'kimi) (should (equal (plist-get r :stdout) (concat dir "|"))))
-          ('gemini (should (equal (plist-get r :stdout) (concat dir "|" dir))))
-          (_ (should (equal (plist-get r :stdout) "x|"))))))))
+        (ert-info ((format "hook result: %S" r))
+          (pcase (car case)
+            ((or 'claude 'kimi) (should (equal (plist-get r :stdout) (concat dir "|"))))
+            ('gemini (should (equal (plist-get r :stdout) (concat dir "|" dir))))
+            (_ (should (equal (plist-get r :stdout) "x|")))))))))
 
 (ert-deftest drgnx-agent-check/no-vendor-key-reaches-a-tested-server-or-hook ()
   ;; the agents' scrub list applies to Test too: a project's server or hook never gets this Emacs's provider keys;

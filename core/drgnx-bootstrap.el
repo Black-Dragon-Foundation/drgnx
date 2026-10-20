@@ -548,7 +548,7 @@ and not under --yes; else how to do it."
 
 (defun drgnx-bootstrap--doctor (ctx)
   "The doctor: `failed' when a check fails (`drgnx-doctor-exit-code'), naming those checks; else `ok', naming the
-checks that warn (a WARN is fine: Emacs 30.2, say, is supported and warns)."
+checks that warn (a WARN is fine: a missing tree-sitter, say, only warns)."
   (if (plist-get ctx :dry-run) (list 'skipped "would: run drgnx doctor (it fails only on a FAIL)")
     (let* ((results (drgnx-doctor-run (drgnx-doctor-facts)))
            (with (lambda (status) (seq-filter (lambda (r) (eq (plist-get r :status) status)) results)))

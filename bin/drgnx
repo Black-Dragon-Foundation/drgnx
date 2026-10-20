@@ -151,9 +151,9 @@ env_eval() { # FORM — evaluate with harness/drgnx-env.el loaded, print the res
   "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -l drgnx-env --eval "(princ (or $1 \"\"))"
 }
 
-test_container() { # [--ui [--compositor C] | --tty [--fedora 44|45]] — the batch (GUI, terminal) tier inside a fedora:45 / Emacs 31.1 container
+test_container() { # [--ui [--compositor C] | --tty [--fedora 45]] — the batch (GUI, terminal) tier inside a fedora:45 / Emacs 31.1 container
   # DRGNX_TEST_IMAGE / DRGNX_TEST_GUI_IMAGE / DRGNX_TEST_TTY_IMAGE: use that image (CI pulls a prebuilt one) instead of building it
-  # --tty --fedora 44 runs the terminal tier on Fedora 44's Emacs 30.2 (default 45: Emacs 31.1)
+  # --tty --fedora 45 (the default): Fedora 44's Emacs is 30.2, which drgnx no longer supports
   local rt mount image file elpa prebuilt="${DRGNX_TEST_IMAGE:-}" args=() cmd=(bin/drgnx test) build=() tier="" fedora="" compositor=""
   while (($#)); do
     case "$1" in
@@ -162,12 +162,12 @@ test_container() { # [--ui [--compositor C] | --tty [--fedora 44|45]] — the ba
         tier="${1#--}" ;;
       --fedora) fedora="${2:-?}"; if (($# > 1)); then shift; fi ;;
       --compositor) compositor="${2:-}"; ui_compositor_ok "$compositor" || return 2; shift ;;
-      *) echo "drgnx: unknown option for test --container: $1 (--ui [--compositor C] | --tty [--fedora 44|45])" >&2; return 2 ;;
+      *) echo "drgnx: unknown option for test --container: $1 (--ui [--compositor C] | --tty [--fedora 45])" >&2; return 2 ;;
     esac
     shift
   done
-  if [ -n "$fedora" ] && { [ "$tier" != tty ] || [[ ! "$fedora" =~ ^(44|45)$ ]]; }; then
-    echo "drgnx: --fedora 44|45 goes with --tty (the terminal tier's image); got: $fedora" >&2; return 2
+  if [ -n "$fedora" ] && { [ "$tier" != tty ] || [[ ! "$fedora" =~ ^45$ ]]; }; then
+    echo "drgnx: --fedora 45 goes with --tty (the terminal tier's image); got: $fedora" >&2; return 2
   fi
   if [ -n "$compositor" ] && [ "$tier" != ui ]; then
     echo "drgnx: --compositor goes with --ui (the GUI tier)" >&2; return 2
@@ -405,7 +405,7 @@ cmd_test() {
     --soak) shift; run_in_tmp ui_exec test-soak "${1:-30}" ;;
     --container) shift; test_container "$@" ;;
     --podman) shift; DRGNX_CONTAINER=podman test_container "$@" ;;
-    *) echo "usage: drgnx test [--one-process] [--leaks] [--shuffle[=SEED]] | drgnx test [--shuffle=SEED] --find-polluter TEST [FILE…] | drgnx test [--ui [--compositor C] | --tty | --scenario [--config C] | --bench | --perf [--audit] | --soak [MIN] | --container [--ui [--compositor C] | --tty [--fedora 44|45]] | --install [NAME…] | --bootstrap [--fedora 44|45]]" >&2; exit 2 ;;
+    *) echo "usage: drgnx test [--one-process] [--leaks] [--shuffle[=SEED]] | drgnx test [--shuffle=SEED] --find-polluter TEST [FILE…] | drgnx test [--ui [--compositor C] | --tty | --scenario [--config C] | --bench | --perf [--audit] | --soak [MIN] | --container [--ui [--compositor C] | --tty [--fedora 45]] | --install [NAME…] | --bootstrap [--fedora 44|45]]" >&2; exit 2 ;;
   esac
 }
 
@@ -671,7 +671,7 @@ cmd_open() { # [--check] [--wait] [-t | --gui] [PATH…] — open PATHs (none: t
     if [[ -n "$wait" ]]; then open_terminfo_check || return 1; client -t -- "${files[@]}"; return; fi
     client -n -e "(progn (require 'drgnx-ai) (drgnx-ai-load-keys-soon))" >/dev/null 2>&1 || true   # once per daemon, as below
     local form=""
-    for p in ${files[@]+"${files[@]}"}; do form+=" (find-file \"$(elisp_string "$p")\")"; done
+    for p in ${files[@]+"${files[@]}"}; do form+=" (drgnx-session-open-file \"$(elisp_string "$p")\")"; done
     for p in ${dirs[@]+"${dirs[@]}"}; do form+=" (drgnx-session-open-folder \"$(elisp_string "$p")\")"; done
     open_terminal "${form:+(progn$form)}"; return
   fi
@@ -821,7 +821,7 @@ update_fail() { # MESSAGE — the one line a failure gets (quiet or not), and th
   update_record_run "failed: $1"
 }
 
-update_restart_note() { update_say "Restart drgnx to use it (a running drgnx keeps the old version until then)."; }
+update_restart_note() { if [[ "${UPD_RESTART:-0}" == 1 ]]; then return 0; fi; update_say "Restart drgnx to use it (a running drgnx keeps the old version until then)."; }
 
 update_summary() { # OLD NEW — what changed, one line per commit, capped
   local old="$1" new="$2" n cap=15 s=s
@@ -1052,23 +1052,44 @@ cmd_secrets() { # export|import|ls — provider keys through age (docs/guide/sec
   return "$rc"
 }
 
-cmd_update() { # [--quiet] [--back] [--auto on|off|status]
-  local back=0 auto=""
-  UPD_QUIET=0
+update_restart() { # after a successful update or --back: restart drgnx's own daemon service, nothing else
+  if [[ "$(update_platform)" == Darwin ]]; then
+    echo "drgnx update: no drgnx service is installed here (on macOS drgnx runs from its app or drgnx open), so nothing was restarted; quit and reopen drgnx."
+    return 0
+  fi
+  if command -v systemctl >/dev/null 2>&1 && systemctl --user is-enabled --quiet drgnx 2>/dev/null; then
+    if systemctl --user restart drgnx; then
+      echo "drgnx update: restarted the drgnx service (systemctl --user restart drgnx). Its windows closed and emacsclient sessions lost their server; run drgnx to open a window again."
+    else
+      update_err "systemctl --user restart drgnx failed; restart drgnx yourself."
+      return 1
+    fi
+  else
+    echo "drgnx update: no drgnx service is installed (systemd user unit drgnx), so nothing was restarted. Restart drgnx yourself."
+  fi
+}
+
+cmd_update() { # [--quiet] [--back] [--restart] [--auto on|off|status]
+  local back=0 auto="" restart=0 rc=0
+  UPD_QUIET=0 UPD_RESTART=0
   while (($#)); do
     case "$1" in
       --quiet|-q) UPD_QUIET=1 ;;
       --back) back=1 ;;
+      --restart) restart=1; UPD_RESTART=1 ;;
       --auto) shift; auto="${1:-}"
               case "$auto" in on|off|status) ;; *) echo "usage: drgnx update --auto on|off|status" >&2; return 2 ;; esac ;;
-      *) echo "usage: drgnx update [--quiet] | --back | --auto on|off|status" >&2; return 2 ;;
+      *) echo "usage: drgnx update [--quiet] [--restart] | --back [--restart] | --auto on|off|status" >&2; return 2 ;;
     esac
     shift
   done
+  if [[ -n "$auto" && "$restart" == 1 ]]; then echo "usage: drgnx update --auto on|off|status (no --restart: the timer never restarts)" >&2; return 2; fi
   if [[ -n "$auto" ]]; then update_auto "$auto"; return; fi
   command -v git >/dev/null 2>&1 || { update_err "git not found"; return 1; }
   update_lock || return 1
-  if ((back)); then update_back; else update_run; fi
+  if ((back)); then update_back || rc=$?; else update_run || rc=$?; fi
+  if [[ "$rc" == 0 && "$restart" == 1 ]]; then update_restart || rc=$?; fi
+  return "$rc"
 }
 
 bootstrap_dir=""
@@ -1127,6 +1148,7 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx build             byte-compile drgnx (core, wb, modules); native compilation follows on load
        drgnx update [--quiet]  update this install to GitHub main: fast-forward, then sync and build; the previous
                                commit is kept and comes back if sync or build fails (docs/guide/install.md)
+       drgnx update --restart  after a successful update (or --back), restart the drgnx service (systemd)
        drgnx update --back     return to the commit before the last update (re-sync, rebuild)
        drgnx update --auto on|off|status
                                a daily timer (systemd user timer; launchd agent on macOS) running update --quiet
@@ -1153,8 +1175,8 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
                                the same inside a fedora:45 / Emacs 31.1 container (GUI: capped at 3 GB, no swap;
                                DRGNX_TEST_GUI_MEMORY overrides; image builds 3 GB, DRGNX_TEST_BUILD_MEMORY)
                                (podman, else docker, else nerdctl; DRGNX_CONTAINER overrides)
-       drgnx test --container --tty [--fedora 44|45]
-                               the terminal tier in a container (44: Emacs 30.2, 45: Emacs 31.1; default 45)
+       drgnx test --container --tty [--fedora 45]
+                               the terminal tier in a container (45: Emacs 31.1, the default; 44's 30.2 is no longer supported)
        drgnx test --install [NAME…]
                                install.sh end to end in fresh distribution containers (slow;
                                names: fedora-44 debian-trixie ubuntu-26.04 fedora-45 archlinux)

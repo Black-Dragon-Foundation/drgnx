@@ -56,7 +56,7 @@ Falls back to the selected frame (a daemon's terminal frame, or batch)."
 (defun drgnx-uitest--text-origin (window)
   "Frame pixel (X . Y) of the top-left corner of WINDOW's text area — the origin of
 `posn-x-y' for text-area positions.  Computed from the window's outer edges plus its tab
-line and header line: `window-body-pixel-edges' counts a tab line as body (Emacs 30)."
+line and header line: `window-body-pixel-edges' counts a tab line as body."
   (let ((edges (window-pixel-edges window)))
     (cons (nth 0 (window-body-pixel-edges window))
           (+ (nth 1 edges) (window-tab-line-height window) (window-header-line-height window)))))
@@ -608,7 +608,7 @@ offset (parent-relative native edges) for compositing."
 ;;;; JSON API (for emacsclient; see harness/drgnx-ui.el)
 
 (defun drgnx-uitest--json (plist)
-  "PLIST as JSON text.  Emacs 30's `json-serialize' returns unibyte UTF-8, which
+  "PLIST as JSON text.  `json-serialize' returns unibyte UTF-8, which
 prints as raw bytes; decode it so non-ASCII text survives emacsclient."
   (decode-coding-string (json-serialize plist) 'utf-8))
 

@@ -4,9 +4,9 @@ GitHub Actions runs the same commands you run locally; nothing in CI is CI-only.
 
 | Workflow | When | What |
 |---|---|---|
-| `CI` (`.github/workflows/ci.yml`) | every push to `main`, every pull request, on demand | the unit suite on **Emacs 31.1** (Fedora 45, `bin/drgnx test --container`) and **Emacs 30.2** (Ubuntu 26.04, `bin/drgnx test`), its files in parallel and then the `:timing` tests alone ([Parallel files](#parallel-files)); `shellcheck --severity=warning` on `install.sh`, `bin/drgnx` and the pre-commit hook; the leak scan |
+| `CI` (`.github/workflows/ci.yml`) | every push to `main`, every pull request, on demand | the unit suite on **Emacs 31.1** (Fedora 45, `bin/drgnx test --container`) its files in parallel and then the `:timing` tests alone ([Parallel files](#parallel-files)); `shellcheck --severity=warning` on `install.sh`, `bin/drgnx` and the pre-commit hook; the leak scan |
 | `GUI tier` (`.github/workflows/gui.yml`) | nightly, on demand | `bin/drgnx test --container --ui`: real Emacs 31.1 (pgtk) sessions under headless mutter |
-| `Terminal tier` (`.github/workflows/tty.yml`) | nightly, on demand | `bin/drgnx test --container --tty --fedora 44` and `45`: the terminal tests (Emacs in tmux) on Emacs 30.2 and 31.1 |
+| `Terminal tier` (`.github/workflows/tty.yml`) | nightly, on demand | `bin/drgnx test --container --tty --fedora 45`: the terminal tests (Emacs in tmux) on Emacs 31.1 |
 | `Bootstrap` (`.github/workflows/bootstrap.yml`) | weekly (Monday), on demand with a Fedora release (45 by default, 44 builds Emacs from source) | `bin/drgnx test --bootstrap --fedora N`: the exit test of a second machine — `install.sh --yes --config … --identity …` in a fresh Fedora container reaches a green doctor with the configuration, the locked packages and the provider keys back, and a second run changes nothing ([harness.md](harness.md)) |
 | `macOS` (`.github/workflows/macos.yml`) | `unit`: every push to `main`, every pull request, on demand; `install`: weekly (Wednesday), on demand | on macOS 27 (`xcode-27`, Apple silicon: GitHub names macOS images after their Xcode now): `unit` installs Emacs and ripgrep with Homebrew, checks that `install.sh` parses under macOS's bash 3.2 (`/bin/bash -n`), prints its plan (`--dry-run`) and runs `bin/drgnx test` the same way ([Parallel files](#parallel-files)); `install` runs `install.sh --yes` for real on the checkout (Homebrew's emacs-plus), then `drgnx doctor`, `drgnx sync` (a first sync from the shipped lock), `drgnx macos-app` and `drgnx open --check`. A newer run cancels an older one of the same event and ref only, so a push to `main` never cancels the weekly install |
 | `Test images` (`.github/workflows/images.yml`) | a push changing `test/container/`, weekly, on demand | builds the two Fedora test images and pushes them to `ghcr.io/black-dragon-foundation/drgnx-test` and `drgnx-test-gui`, tagged with the Containerfile's hash (and `f45`) |
@@ -42,9 +42,9 @@ variable before a non-ASCII character takes braces (`${name}…`: macOS's bash r
 (the zpty fixture `test/fixtures/zsh-complete.zsh`) types only once the shell's prompt is on the screen: text typed
 before meets the terminal's own line editing (^U erases the line in the kernel), which macOS's slower runners show.
 
-The two Emacs versions differ too. Emacs 31's ERT no longer loads bytecomp, so code that let-binds
+Emacs 31's ERT no longer loads bytecomp, so code that let-binds
 `byte-compile-warnings` (or any variable of a library not loaded yet) requires the library first: bound before, the
-variable is lexical and loading the library fails. Emacs 31 rejects a wall timer's `:repeat t` (30 ran it once):
+variable is lexical and loading the library fails. Emacs rejects a wall timer's `:repeat t`:
 a repeat is a number of seconds. Ubuntu's `emacs-nox` has no image functions (`image-flush` is declared, not
 assumed), and without a UTF-8 locale Emacs quotes messages `like this', so a test matches either quote. On Linux,
 `TMPDIR` set to a symlinked or long directory shows most of these before macOS CI does; `LC_ALL=en_US.iso88591` shows
@@ -60,7 +60,7 @@ locale's share locally.
 
 ## Parallel files
 
-Each unit-suite job (Emacs 31.1, Emacs 30.2, macOS) runs the suite in two steps:
+Each unit-suite job (Emacs 31.1, macOS) runs the suite in two steps:
 
 1. Every test but the `:timing` ones (`DRGNX_TEST_SELECTOR='(not (tag :timing))'`) with `DRGNX_TEST_JOBS` set to
    the runner's cores (`nproc` on Linux: 4 on `ubuntu-24.04`, 16 GB; `sysctl -n hw.ncpu` on macOS: 3, 7 GB; three
@@ -83,7 +83,7 @@ Unlike `check`'s `unit-timing` job, the second step does not load every file int
 budget. A file at a time, each timing test sees what it sees in a plain `bin/drgnx test`; the price is an Emacs start
 for every file, most of which then run no test.
 
-The same locally (the Emacs 30.2 job's steps):
+The same locally (the Emacs 31.1 job's steps, without the container):
 
 ```
 DRGNX_TEST_JOBS=4 DRGNX_TEST_SELECTOR='(not (tag :timing))' bin/drgnx test
@@ -95,7 +95,7 @@ DRGNX_TEST_SELECTOR='(tag :timing)' bin/drgnx test
 ```
 bin/drgnx test --container          # the Emacs 31.1 job in one step (podman, docker or nerdctl; see "Parallel files")
 bin/drgnx test --container --ui     # the nightly GUI tier
-bin/drgnx test --container --tty --fedora 44   # the nightly terminal tier (44: Emacs 30.2, 45: Emacs 31.1)
+bin/drgnx test --container --tty                # the nightly terminal tier (Fedora 45, Emacs 31.1)
 bin/drgnx test --bootstrap          # the weekly second-machine exit test (fedora:45; --fedora 44 for the source build)
 .githooks/pre-commit --all          # the leak scan over every tracked file
 ```

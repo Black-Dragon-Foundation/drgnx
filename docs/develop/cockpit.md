@@ -604,7 +604,9 @@ side is in [jobs.md](../guide/jobs.md#a-job-in-the-work-cockpit).
   and a reviewer's transcript still to open (`(cockpit-cards-transcript . ID)`) (idempotent). `drgnx-cockpit--teardown`,
   tools/cockpit's `:teardown`, runs it, the feed's and the edits' teardowns and kills the Work graph's buffer; its
   setup's stack undoes the pane kinds, commands, state subscriptions and `cockpit-waiting`. Turned off, the module
-  leaves no timer, subscription, hook or buffer.
+  leaves no timer, subscription, hook or buffer. Its six modes start in Emacs state under evil
+  (`drgnx-cockpit--evil-states`, run by the setup through `eval-after-load 'evil` as the module): the stack puts each
+  mode's earlier state back, and no file of the cockpit registers anything when it loads.
 - **Kept in `drgnx-job-ui.el`:** the Plan Job commands (`job-show` is now "Show Job in Work…"), the ⚑ badge mode for
   those without the status bar (a click: `drgnx-job-ui-show` of the newest card's job, else
   `drgnx-cockpit-show-jobs`), and notifications.

@@ -128,14 +128,14 @@
         (when timer (cancel-timer timer))))))
 
 (ert-deftest drgnx-mcp-bridge/an-idle-notification-waits-for-the-next-line ()
-  ;; the documented limit: what the server sends while no request is pending reaches the agent with its next line
+  ;; the documented limit: what the server sends while no request is pending reaches the agent at the latest with its
+  ;; next line, and before that line's answer.  Not that it is held back until then: a macOS Emacs reads the socket
+  ;; while it waits for a line, a Linux one does not (the bridge's own order is what is promised, not the delay)
   (drgnx-mcp-bridge-test--with #'drgnx-mcp-bridge-test--echo
     (setq bridge (drgnx-mcp-bridge-test--start sock))
     (should (drgnx-mcp-bridge-test--wait (lambda () drgnx-mcp-bridge-test--conns)))
     (process-send-string (car drgnx-mcp-bridge-test--conns)
                          "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/message\",\"params\":{}}\n")
-    (accept-process-output nil 0.5)
-    (should (equal (drgnx-mcp-bridge-test--written bridge) ""))
     (drgnx-mcp-bridge-test--send bridge '(:jsonrpc "2.0" :id 1 :method "ping"))
     (should (drgnx-mcp-bridge-test--wait (lambda () (= 2 (length (drgnx-mcp-bridge-test--out bridge))))))
     (let ((out (drgnx-mcp-bridge-test--out bridge)))

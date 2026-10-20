@@ -16,7 +16,7 @@ The command builds the grammar in the background (a durable job: Show Job Log â†
 compiler) into `~/.local/share/drgnx/tree-sitter/`; when it is done, open files of that language switch to its
 tree-sitter mode, and new ones open in it. A grammar counts as installed only when it was built and this Emacs can
 load it â€” otherwise the job says it failed (its log tells why: no `git`, no compiler, a grammar newer than this
-Emacs's tree-sitter). On Emacs 31 a tree-sitter mode that names its own grammar version is built at that version; otherwise each grammar is built at a pinned release tag whose parser is tree-sitter ABI 14. Emacs 30 always builds the pinned tags, whatever its tree-sitter library supports (a pinned parser loads in a newer library, and Emacs 30's tree-sitter modes were written against those grammar versions); Emacs 31 or later with an ABI 15 library (`treesit-library-abi-version`) builds the default branch instead. Languages: bash, c, cpp, css, go, html, java, javascript, json, lua,
+Emacs's tree-sitter). A tree-sitter mode that names its own grammar version is built at that version; otherwise each grammar is built at a pinned release tag whose parser is tree-sitter ABI 14. Emacs 30 always builds the pinned tags, whatever its tree-sitter library supports (a pinned parser loads in a newer library, and Emacs 30's tree-sitter modes were written against those grammar versions); Emacs 31 or later with an ABI 15 library (`treesit-library-abi-version`) builds the default branch instead. Languages: bash, c, cpp, css, go, html, java, javascript, json, lua,
 python, ruby, rust, toml, tsx, typescript, yaml (module `lang/grammars`, sources in `drgnx-grammars-sources`).
 
 ## Faster language servers
@@ -123,8 +123,8 @@ history) keep every change of the clipboard, and Emacs by default changes it a l
 
   | Where | Guarantee |
   |---|---|
-  | X11 (Emacs built for X) | `x-selection-timeout` bounds the read (Emacs 30 `src/xselect.c`). Read from the source; not run here. |
-  | Wayland (pgtk build) | `pgtk-selection-timeout` bounds the read (Emacs 30 `src/pgtkselect.c`, `pgtk_get_foreign_selection`). Run: in a headless compositor with a clipboard owner stopped with SIGSTOP, the read ends with an error after 1.50 s; with the timeout at 0 it never ends. An owner reached through XWayland was not tried. |
+  | X11 (Emacs built for X) | `x-selection-timeout` bounds the read (Emacs `src/xselect.c`). Read from the source; not run here. |
+  | Wayland (pgtk build) | `pgtk-selection-timeout` bounds the read (Emacs `src/pgtkselect.c`, `pgtk_get_foreign_selection`). Run: in a headless compositor with a clipboard owner stopped with SIGSTOP, the read ends with an error after 1.50 s; with the timeout at 0 it never ends. An owner reached through XWayland was not tried. |
   | macOS | Untouched: Emacs has no selection timeout there (the pasteboard is read in the same process), so drgnx claims nothing. |
   | Terminal window | Nothing to bound: drgnx never reads the terminal's clipboard unless you turn that on ([terminal.md](terminal.md#clipboard)). |
 - **Selecting text does not create clipboard entries.** Some managers copy the selection (PRIMARY) into the

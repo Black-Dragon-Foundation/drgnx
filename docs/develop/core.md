@@ -12,7 +12,7 @@ init/init.el         core/ on the load path, (require 'drgnx), (drgnx-init); a p
 core/drgnx.el        drgnx-init: guard on, staged hooks armed, keep-running choice read, the first window's Welcome
                      (a first start only), packages activated, core commands, modules, surfaces (DRGNX_SAFE — drgnx
                      safe — skips packages and modules)
-core/drgnx-ui-kit.el  the UI kit: glyphs by meaning, status faces (the UI kit section)
+core/drgnx-ui-kit.el  the UI kit: glyphs by meaning, status faces, buttons, the close button (the UI kit section)
 core/drgnx-session.el  drgnx PATH's Emacs side, Open Folder…, keep running or quit, Quit drgnx; session.eld is a config file (../guide/opening.md)
 core/drgnx-macos.el  the drgnx app on macOS (drgnx macos-app; ../guide/opening.md)
 core/drgnx-tty.el    terminals, batch-safe: which one, what it can do, keys it can send, terminfo, tmux (../guide/terminal.md)
@@ -179,7 +179,7 @@ worktree, the folders an agent registers, and the files of Work rows.
 Why handlers must be off: with handlers on, `file-truename` looks a handler up again at every link it follows, so
 checking the literal string with `file-remote-p` is not enough. An agent can plant a link in its worktree that climbs
 `../` to the root and goes on to `ssh:host:`. Resolving `TREE/link/y` then loads Tramp and connects (`sudo::` starts
-sudo), in the hub or in the user's Emacs. A link straight to `/ssh:host:/` is quoted by Emacs 30, but nothing else
+sudo), in the hub or in the user's Emacs. A link straight to `/ssh:host:/` is quoted by Emacs, but nothing else
 is. Names ending in `.gz`, `.gpg` or an archive suffix (`a.zip/y`) reach jka-compr, EasyPG (gpg, pinentry) and
 tramp-archive the same way.
 
@@ -232,6 +232,8 @@ check passes. `find-file` on `TREE/x` then resolves it again, with handlers on, 
   - For a session whose folder is remote, handlers stay on: its paths are remote by design.
 - Tests use `test/fixtures/handler-trap.el`:
   - it plants the links in a temp worktree, and the trap replaces the handlers with one that records every call;
+  - a name in a `load-path` directory is Emacs looking for or loading a library (Emacs's own are `.el.gz` on
+    Homebrew, Debian/Ubuntu and Fedora; a visit can autoload `image.el`): it keeps the real handlers, unrecorded;
   - `drgnx-test-visit` opens a name the way each command above does;
   - two tests check end to end in a fresh `emacs -Q`: `drgnx-job/planted-links-never-load-tramp-jka-compr-or-epa`
     (the policy) and `drgnx-cockpit-edits/visiting-a-link-out-through-a-remote-name-never-loads-tramp` (the visits).
@@ -454,13 +456,33 @@ signal `drgnx-prompt-in-automatic-path` instead — naming the prompt and where 
 
 - from a timer (detected by wrapping `timer-event-handler`; commands run by a nested command loop, such as a
   minibuffer opened by a command, are not timer code);
-- inside `(drgnx-automatic …)` — use it for hook functions, process filters and sentinels (Emacs calls those
-  from C, so they cannot be detected);
+- inside `(drgnx-automatic …)`, which `drgnx-guard-wrap` and `drgnx-guard-run-hook` (below) put around process
+  callbacks and hook functions;
 - while a daemon initialises — until the last `window-setup-hook` function, so `after-init-hook` and
   `emacs-startup-hook` count too.
 
 `(drgnx-guard-automatic-p)` says whether the code running now is such a path, for code that would rather not ask
 than signal (choosing a Vim stack records it as pending instead of offering to install evil).
+
+**Process callbacks and hooks run inside the guard.** Emacs calls a process filter or sentinel from C, so nothing
+can tell it from a command; the guard is put on where the callback is handed over:
+
+- `(drgnx-guard-wrap FN LABEL)` returns a function of any arguments that applies FN inside `drgnx-automatic`. What FN
+  raises is not signalled again (no "error in process sentinel" line), the wrapper returns nil, and it becomes a
+  notice of source `guard` with id LABEL ([Notices](#notices-drgnx-noticeel)): a refused prompt is a `fail` event
+  ("LABEL asked a question from a process callback; drgnx refused (it would freeze Emacs)"), any other error a `warn`
+  event ("LABEL: MESSAGE"); a repeat counts. LABEL names the process's purpose (`"hub events"`, `"ACP NAME"`);
+  default FN printed. The debugger opens only with `debug-on-error` and a frame to show it in, the timer layer's
+  rule: never in batch or in a daemon with no client.
+- `(drgnx-guard-run-hook HOOK &rest ARGS)` calls each function of HOOK that way, with the label `"HOOK FN"`: one
+  that fails or asks is recorded and the next still runs. The hub's `drgnx-hub-event-functions` and
+  `drgnx-hub-disconnect-functions` run through it.
+- Write `:filter (drgnx-guard-wrap #'NAME "LABEL")` (`:sentinel`, `set-process-filter`, `set-process-sentinel`
+  likewise), with a named function. `nil`, `#'ignore` and `#'internal-default-process-sentinel` need no guard, and
+  `drgnx-proc-start` wraps its own callbacks. The lint `drgnx-lint/process-callbacks-are-guarded`
+  ([check.md](check.md#lints-on-the-source)) holds the sites not wrapped yet in an allowlist that only shrinks.
+
+The model is loaded at the first catch, not when the guard loads (`drgnx-notice` requires `drgnx-guard`).
 
 ## Notices (`drgnx-notice.el`)
 
@@ -537,6 +559,20 @@ real work. An error is recorded in `drgnx-notice--hook-errors` (the last 20) wit
 never posted back into the model. A notice a hook function posts updates the model at once, but its own hook call
 is queued and runs after the current one returns — never recursively; past 100 queued changes in one pass the rest
 are dropped, with one message. The change plist is built only when the hook has functions.
+
+**The desktop route** (`drgnx-notice-desktop.el`). `(drgnx-notice-desktop-take ITEM)` says whether an attention
+item goes to the desktop: non-nil when `drgnx-notice-desktop-mode` is on and `drgnx-notice-desktop` non-nil, the
+item's `:echo` is not nil, its id was not sent yet, no drgnx frame has focus (a live frame not on the initial
+terminal whose `frame-focus-state` is `t`; `unknown` is not focus) and a backend is there. It marks the id sent and
+queues `("drgnx: SOURCE-TITLE" . TEXT)`; the layer timer `notice-desktop` (0 s, `:core`) sends the queue off the
+caller, each send under `with-demoted-errors`, so `-take` is safe inside a `drgnx-notice-functions` function. The
+echo route asks it for each new item; nothing else sends. The mode puts `drgnx-notice-desktop--prune` on
+`drgnx-notice-functions`: after a set change that removed ids, the sent ids are pruned to the union, so the table
+is bounded by what waits now and a thing that comes back notifies again. `(drgnx-notice-desktop-send TITLE BODY)`
+is the backend, asked once (`drgnx-notice-desktop--available-p`): macOS `osascript` with a fixed script and the
+text as its arguments; elsewhere the freedesktop `Notify` method by `dbus-call-method-asynchronously` with no
+handler, so no reply is awaited (`notifications-notify` waits for two synchronous calls); else a `message`. Tests
+stub the send or `make-process`/`dbus-call-method-asynchronously`: none reaches a bus (`test/unit/core-notice-desktop-test.el`).
 
 **Cost** (allocation is the gate; `test/unit/core-notice-test.el`, byte-compiled): a count read 0 conses; a new
 event 14 (22 with one hook function); a repeat 1 (its key). Replacing three sets of 40/40/20 items (80 ids) in
@@ -728,6 +764,12 @@ they started whichever is torn down first.
 The `add-function` on `after-focus-change-function` (Explorer and Buffers panel) pushes its `remove-function`
 beside it, by the advice's name. Areas (`drgnx-wb-define-area`) are not undone: they belong to the workbench.
 
+The status bar's segments (`modules/ui/drgnx-statusbar.el`) work the same way: `drgnx-statusbar-define-segment`
+in a setup claims the segment by id and pushes its undo — the segment it replaced back, or
+`(drgnx-statusbar-undefine-segment ID)` — only while the id still holds the definition made there. Defining and
+undefining both bump the epoch `statusbar`, which the bars' memo is keyed on, so every bar is drawn again.
+`drgnx-statusbar--segments` is in `drgnx-modules-fingerprint-registries`.
+
 #### Helpers that undo themselves (`drgnx-modules-helpers.el`)
 
 Four changes a setup makes to global state are done through a helper that makes the change and pushes its own
@@ -890,7 +932,7 @@ What it does **not** record:
 - **`add-to-list` that the compiler rewrote.** Its compiler macro turns `(add-to-list 'VAR …)` into a plain
   `push` when VAR is not special at compile time — a lexical variable, or one whose `defvar` the compiling Emacs
   has not run, such as one defined in the caller's own file or declared with a bare `(defvar VAR)`
-  (`drgnx-search.el`'s `drgnx-ai-retrievers`). Checked on 30.2 and 31.1. Use `drgnx-modules-push-undo` (or the
+  (`drgnx-search.el`'s `drgnx-ai-retrievers`). Checked on 31.1. Use `drgnx-modules-push-undo` (or the
   module helpers) for such a list.
 - `setq`, `setf`, `put`, `add-function`, key bindings, faces, frames: the module's own undo or `:teardown`.
 
@@ -912,7 +954,7 @@ late `eval-after-load` or idle step of a turned-off module never runs and an off
 work twice. Evaluated outside a setup, it just runs BODY. Each call installs the safety net for its extent (about
 20 µs): for one-off work, not for a hook that runs on every command.
 
-**Cost.** The safety net around a setup costs 16–22 µs (byte-compiled, 30.2, measured with four doors: four `advice-add` and
+**Cost.** The safety net around a setup costs 16–22 µs (byte-compiled, measured with four doors: four `advice-add` and
 `advice-remove`, two snapshots and their comparison), and up to about 70 µs in runs where the garbage it makes
 brings a collection forward (65–73 µs measured so); 41 setups × 75 µs ≈ 3 ms at worst. The shipped startup stage (16 modules, batch) took 29.4 ms with
 it and 28.2 ms without (5 runs each, within the runs' noise); the budget is 5 ms across all setups. The fifth door
@@ -959,10 +1001,10 @@ tests you add.
   hook (name it) and `drgnx-modules-with-owner` directly inside `with-eval-after-load` (evaluated only when the
   feature loads, it names no module and never runs).
 
-Modules not converted yet are on `drgnx-teardown--not-yet`, each with the migration batch that converts it; the
+Modules not converted yet go on `drgnx-teardown--not-yet`, each with the migration batch that converts it; the
 dynamic check and the raw-forms lint skip them, and the test's message counts them. Known top-level registrations
-waiting for their batch are on `drgnx-teardown--load-registrations`; an entry whose registration is gone fails
-too. Both lists shrink to empty. A file under `modules/` that defines no module is listed in
+waiting for their batch go on `drgnx-teardown--load-registrations`; an entry whose registration is gone fails
+too. Since the last batch (M12f: `ui/face`, `tools/cockpit`) both lists are empty: every shipped module is checked. A file under `modules/` that defines no module is listed in
 `drgnx-teardown--library-files` with the module that uses it.
 
 ## Timers
@@ -979,8 +1021,7 @@ A timer that outlives the current command goes through one door:
 
 FN (with ARGS) runs after SECS, or after SECS of idleness with `:idle t`. `:repeat` is a number of seconds for a wall
 timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run-with-idle-timer`; a wall timer's
-`:repeat t` signals `wrong-type-argument` on every Emacs (Emacs 31's `run-at-time` refuses it, Emacs 30 ran the timer
-once). Then
+`:repeat t` signals `wrong-type-argument` on every Emacs (`run-at-time` refuses it). Then
 `(drgnx-timer-cancel KEY)`, `(drgnx-timer-active-p KEY)` and `(drgnx-timer-cancel-owner OWNER)` (→ how many).
 
 - **The key.** A second start of a KEY cancels its pending timer first, whatever started it: a setup run twice keeps
@@ -1004,7 +1045,7 @@ once). Then
   turning the module off ends it. Timers started later (from a command or a hook) name their module with `:owner`:
   `tools/agents` owns the Agents list's 30 s tick `agents-ui-tick` (it only marks the list's view, and runs only while a window shows the list; see Views),
   `ui/face` owns quick help's `quickhelp-timeout`, `-unmap`, `-look`, `-away` and `-hover` and the start page's
-  `start-first-frame`, `ui/terminal-popups` the debounced `tty-popups-show`, `ui/terminal` the per-frame
+  `start-first-frame`, `ui/terminal` the per-frame
   `(tty-fallback-hint . FRAME)`, `tools/jobs` the coalesced `job-ui-recount`, `tools/ai` the `ai-probe` one-shot; the
   ghost-text pause is an idle debounce `(ai-ghost . BUFFER)` owned by the buffer, the Search view's typing pause
   and its pause after a listed file changed are debounces `(replace-pause . BUFFER)` and `(replace-refresh . BUFFER)`
@@ -1223,11 +1264,11 @@ it replaces (a cons is never skipped: an in-place edit keeps its head). What tha
 such as `tab-width`, `indent-tabs-mode` or `buffer-file-coding-system`:
 
 - already local in the buffer: `let` and `unlet` are reported as such and ignored;
-- not local in the buffer: a `let` binds the *default*, and Emacs 30 reports the binding and the unbinding as a
+- not local in the buffer: a `let` binds the *default*, and Emacs reports the binding and the unbinding as a
   `set` with no buffer. Bound to the value it already has, nothing moves. Bound to a *different* value, each of the two
   reports is a global `set`: it bumps the base and moves every buffer's epoch, twice per `let`. A consumer's watched
   list must not include a per-buffer variable that other code often rebinds to other values. The status bar's
-  `buffer-look` watches `tab-width`, `indent-tabs-mode` and `buffer-file-coding-system`: Emacs 30's own Lisp binds
+  `buffer-look` watches `tab-width`, `indent-tabs-mode` and `buffer-file-coding-system`: Emacs's own Lisp binds
   `indent-tabs-mode` to nil in a handful of commands (Dired, Org, picture, texinfo, chart), none on a per-keystroke
   path, and so do drgnx's config writer and formatter (`(let ((indent-tabs-mode nil)) …)`), so such a rebind rebuilds
   every bar once (pinned by `drgnx-statusbar/a-let-of-tab-width-to-another-value-rebuilds-every-bar`; a `let` to the
@@ -2086,7 +2127,7 @@ The only file written is `agent-checks.eld`; the child Emacs writes nothing.
 machine is ready, and gives a fix for anything that is not:
 
 ```
-OK    emacs-version        Emacs 31.1                 (30.2: WARN — works, 31.1 recommended; older: FAIL)
+OK    emacs-version        Emacs 31.1                 (older than 31.1: FAIL)
 OK    native-compilation   native compilation works   (built without it, or libgccjit broken: FAIL)
 OK    tree-sitter          tree-sitter available
 OK    gui                  graphical build (pgtk)     (terminal-only: OK, with a note)
@@ -2131,7 +2172,7 @@ PATH, `/opt/homebrew/bin/brew` or `/usr/local/bin/brew`; the doctor may run with
 
 A check that returns nil is absent from the results; `drgnx-doctor-run` also takes a group name to run one group.
 The **Terminal** group (`terminal`, `terminal-colours`, `terminal-mouse`, `terminal-keys`, `terminal-clipboard`,
-`terminal-tmux`, `terminal-ssh`, `terminal-popups`) reads the fact `:terminal`, which `drgnx-doctor-terminal-facts`
+`terminal-tmux`, `terminal-ssh`) reads the fact `:terminal`, which `drgnx-doctor-terminal-facts`
 gathers: `drgnx-tty-facts` (the environment of the process the doctor runs in; inside tmux one `tmux show`, 1 s),
 `:caps` and the fallback rows from the newest entry of `terminal-report.eld` for that kind of terminal, and `:os`.
 Check This Terminal (`ui/terminal`) runs the same group with the selected terminal window's own capabilities and its
@@ -2375,8 +2416,9 @@ What the `areas` backend does with the edges:
 
 ## The UI kit (`drgnx-ui-kit.el`)
 
-What every surface that draws a mark shares. It is in core and requires nothing beyond `subr-x`, so the status bar,
-the lists and the notices work without the `ui/face` module.
+What every surface that draws a mark or a button shares. It is in core and requires only the registry and the
+surfaces (for buttons that run registry commands), so the status bar, the lists and the notices work without the
+`ui/face` module.
 
 - `drgnx-face-glyphs` (group `drgnx`; the name is kept so a saved value still applies, and a name a saved value
   lacks comes from the standard table, `drgnx-ui--default-glyphs`) and
@@ -2388,6 +2430,20 @@ the lists and the notices work without the `ui/face` module.
 - Faces `drgnx-status-ok`, `-info`, `-warn`, `-fail` and `-needs-you`. They inherit theme faces only.
 - `(drgnx-ui-status SEVERITY &optional TEXT)`: the glyph for `ok`, `info`, `warn`, `fail` or `needs-you` (glyph
   `waiting`), then a space and TEXT, in the status face. The module list and the onboarding steps use it.
+- `(drgnx-ui-button LABEL ACTION &key help face where props)`: LABEL as a button. ACTION is a registry id (run
+  through `drgnx-surfaces-run`, so `drgnx-surfaces-run-functions` count its use and the key tip shows), else a
+  command (`call-interactively`), else a function of no arguments. WHERE is `text` (the default: `mouse-1` and RET,
+  `follow-link`), `header-line`, `mode-line` or `tab-line` (`mouse-1` there, through `local-map`). FACE defaults to
+  `drgnx-ui-button` (inherits `button`); HELP is the `help-echo`; PROPS are more text properties. The keymap is built
+  once per (ACTION . WHERE) in `drgnx-ui--button-maps`, a table weak on ACTION, so drawing a named action builds
+  nothing and a closure's keymaps go with it. `(drgnx-ui-insert-button LABEL ACTION &rest KEYS)` inserts it at point.
+- `(drgnx-ui-close-button COMMAND HELP &key where props)`: the `close` glyph in face `drgnx-ui-close` (inherits
+  `shadow`) as a button on WHERE (default `header-line`); `mouse-1` runs COMMAND itself, so it gets the click event
+  and reads PROPS from the clicked string. One keymap per (COMMAND . WHERE). Build it when a title or row is set,
+  never while drawing. The workbench's `drgnx-wb-close-button`, `drgnx-wb-close-glyph` and
+  `drgnx-wb-header-with-close` are one-line wrappers over it, and the face `drgnx-wb-close` is an alias of
+  `drgnx-ui-close`. No close or unqueue mark is a literal `×`: the Buffers panel's rows, the find bar and the agents
+  queue (glyph `unqueue`) draw kit glyphs, so a terminal that is not UTF-8 shows `x`, `x` and `-`.
 
 ## Read and write through drgnx-file
 
@@ -2452,11 +2508,14 @@ nil and the caller bound no `drgnx-large-file-open`.
 The answer is remembered for the session. Every other open takes the remembered answer, else chunks (raw without
 the chunks module, `drgnx-large-files-chunk-open-function` nil). A second advice, on `server-execute`, binds
 `drgnx-large-file-open`: `whole` for a client that waits for its files (`drgnx open --wait`), `auto` for every
-other request, the `-e (find-file …)` forms of `drgnx -t` included. Emacs's `server-visit-files` reverts an open
-buffer whose file changed with `(revert-buffer t nil)`, which asks; for a lean or raw buffer of one of the request's
-files, the same advice (`drgnx-large-files--serve-unasked`) lets an unmodified one revert unasked (its exact name in
-`revert-without-query`) and leaves a modified one alone: its record of the file's time is made current while the
-request runs, then put back, and the echo area says so. Quit is a `user-error`; the door always returns a buffer. A
+other request, the `-e (drgnx-session-open-file …)` forms of `drgnx -t` included. An open buffer of a request's
+file whose file changed on disk is the core's (`drgnx-session-open-unasked`, [opening.md](../guide/opening.md#how-it-works)): reverted
+unasked when unmodified, left with a note when modified, with the module on or off. The module adds one step, on
+`drgnx-session-before-open-functions` (`drgnx-large-files--reopen-grown`): an unmodified normal buffer whose file
+grew past `:ask-above` is killed first, so the request's visit comes through the door again (chunks, else raw; lean
+for `--wait`) instead of reading the whole file into a normal buffer. A buffer a waiting client holds
+(`server-buffer-clients`) is reverted instead and turns lean after the revert. Lean and raw buffers are reverted by
+the core like any other. Quit is a `user-error`; the door always returns a buffer. A
 raw buffer is reused with RAWFILE t, whatever the file's size now, because without it Emacs itself would ask to
 revisit the file normally, a timer's open included.
 
@@ -2507,8 +2566,8 @@ properties show) with the size text cached beside it. The header line shows that
 A major-mode change resets both, and `after-change-major-mode-hook` builds them again. The status-bar segment
 `large-file` reads only the flag, the cached size and the chunk position. It is defined by
 `(eval-after-load 'drgnx-statusbar (drgnx-modules-with-owner …))` and put before `position` with
-`drgnx-module-set`. `drgnx-statusbar-define-segment` records no undo yet (teardown Task 23), so the module's teardown
-removes the segment from `drgnx-statusbar--segments` by hand, and the header from chunk buffers.
+`drgnx-module-set`; both record their undo, so turning the module off takes the segment and its place away. The
+module's teardown removes the header from chunk buffers.
 
 ## The workbench state store (`wb/drgnx-state.el`, `core/drgnx-frame-kind.el`)
 
@@ -2628,7 +2687,7 @@ A frame's first record emits `frame-added`, then everything it shows as new: `wi
 
 **`:cause` and `:by`** say who changed a pane. `write` with `:by` from the write (`user`, `auto`, `layout`,
 `restore`, `teardown`, `other`; `drgnx-state-with-write`). `user` with `:by user`: a command in
-`drgnx-state-user-resize-commands` (a user option), or any step of a mouse drag on a divider (Emacs 30+ runs the steps as commands of a transient
+`drgnx-state-user-resize-commands` (a user option), or any step of a mouse drag on a divider (Emacs runs the steps as commands of a transient
 map, `this-command` is a closure, and `track-mouse` is `dragging`). Else `other` with `:by` nil: Emacs fitting a popup, the minibuffer growing, the
 window manager resizing the frame, a package.
 
@@ -2827,7 +2886,7 @@ A test that guards a cost asserts what load does not move. Load the fixture as t
   measured runs of the `memory-use-counts` delta summed over its seven kinds (conses, floats, vector cells, symbols,
   string characters, intervals, strings), less the 7 conses the reading itself makes, so an empty BODY gives 0. The
   same code on the same Emacs gives the same number however loaded the machine is. A bound is
-  `ceil(1.25 × max(measured on 30.2, measured on 31.1))`, both numbers in the commit message; "stays linear" or "does
+  `ceil(1.25 × measured on 31.1)`, the number in the commit message; "stays linear" or "does
   not scan the whole file" is a ratio between two sizes (A-45: the sticky segment at line 9000 allocates at most
   1.25 × the one at line 1000; a walk over the lines between allocates 45231 against 5231).
 - **Compile what you measure.** Tests load code from source when it is newer than its `.elc`, and interpreted code

@@ -9,6 +9,7 @@
 (require 'drgnx-large-file)
 (require 'drgnx-agents)
 (require 'so-long)
+(require 'server)                       ; `drgnx open' runs `server-execute'
 (load (expand-file-name "test/fixtures/config-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 ;; the status bar is loaded first: editor/large-files defines its segment in its setup when the bar is there
@@ -265,5 +266,44 @@ large-files.eld and `drgnx-large-files-chunks-test--dir' a fresh folder whose bu
                              (should (eq (plist-get (alist-get 'editor/large-files (drgnx-modules-report)) :status) 'ok))
                              (should-not drgnx-large-files-chunk-open-function)
                              (should-not (drgnx-commands-get 'large-file-next-chunk)))))
+
+(ert-deftest drgnx-large-files-chunks/drgnx-open-never-asks-about-a-changed-file ()
+  ;; `drgnx open F': a normal buffer whose file grew past `:ask-above' opens again in chunks (an automatic open); a
+  ;; buffer in chunks whose file changed reloads its chunk.  Never a question (vlf's revert asks by itself).
+  (drgnx-large-files-chunks-test--with
+    (let* ((f (drgnx-large-files-chunks-test--file "grows.log" 4096))
+           (b (find-file-noselect f))
+           (proc (make-pipe-process :name "drgnx-lf-chunks-client" :noquery t))
+           (drgnx-large-files-chunks-test--asked nil)
+           (serve (lambda ()
+                    (let ((this-command 'find-file) (pre-command-hook nil) (post-command-hook nil)
+                          (server-visit-hook nil) (server-switch-hook nil) (file-name-history nil))
+                      (cl-letf (((symbol-function 'server-delete-client) #'ignore)
+                                ((symbol-function 'server-switch-buffer) #'ignore)
+                                ((symbol-function 'server-return-error)
+                                 (lambda (_proc err) (push err drgnx-large-files-chunks-test--asked))))
+                        (server-execute proc (list (list f)) t nil nil nil nil nil))))))
+      (dolist (q '(read-multiple-choice y-or-n-p yes-or-no-p))
+        (advice-add q :override #'drgnx-large-files-chunks-test--no-question '((depth . 100))))
+      (unwind-protect
+          (progn
+            (drgnx-large-files-chunks-test--file "grows.log" 131072)
+            (set-file-times f (time-add nil 10))
+            (funcall serve)
+            (should-not (buffer-live-p b))
+            (let ((c (get-file-buffer f)))
+              (should (eq (buffer-local-value 'drgnx-large-file c) 'chunks))
+              (drgnx-large-files-chunks-test--file "grows.log" 196608)
+              (set-file-times f (time-add nil 20))
+              (funcall serve)
+              (should (eq (get-file-buffer f) c))
+              (should (verify-visited-file-modtime c))
+              (should-not (buffer-modified-p c)))
+            (should-not drgnx-large-files-chunks-test--asked))
+        (dolist (q '(read-multiple-choice y-or-n-p yes-or-no-p))
+          (advice-remove q #'drgnx-large-files-chunks-test--no-question))
+        (let ((pb (process-buffer proc)))
+          (delete-process proc)
+          (when (buffer-live-p pb) (kill-buffer pb)))))))
 
 ;;; large-files-chunks-test.el ends here
