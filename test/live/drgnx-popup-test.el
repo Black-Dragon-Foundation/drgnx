@@ -51,7 +51,7 @@ BORROWED: while open, no window moved either (the popup is in the panel's window
 
 (ert-deftest drgnx-live/help-from-the-minibuffer-keeps-it-focused ()
   (drgnx-live-popup--with sess
-    (drgnx-ui-measure sess (list (list :keys "M-x") (list :keys "C-h f") (list :type "car") (list :keys "RET")))
+    (drgnx-ui-measure sess (list (list :keys "M-x") (list :keys "<help> f") (list :type "car") (list :keys "RET")))
     (let ((r (drgnx-ui-call sess drgnx-live-popup--edges)))
       (should (equal (plist-get r :panel) "*Help*"))
       (should (eq (plist-get r :minibuffer) t)))

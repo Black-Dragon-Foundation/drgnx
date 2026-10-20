@@ -89,7 +89,7 @@ settled within 250 ms."
       (dotimes (_ 10)
         (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "C-b") (list :keys "C-`") (list :keys "C-`")
                                      (list :keys "C-M-b") (list :keys "C-M-b"))))
-      (drgnx-ui-measure sess (list (list :keys "C-h f") (list :type "car") (list :keys "RET")))   ; a tab switch
+      (drgnx-ui-measure sess (list (list :keys "M-x") (list :type "describe-function") (list :keys "RET") (list :type "car") (list :keys "RET")))   ; a tab switch
       (drgnx-ui-measure sess (list (list :keys "<f19>")))                                       ; a popup
       (let ((open (drgnx-inv--probe sess)))
         (should (equal (plist-get open :geometry) (plist-get first :geometry))))
