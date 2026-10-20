@@ -34,6 +34,30 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   never the hub's end. The ACP agents it runs and their MCP servers (coordination, search) start the same way —
   `drgnx-command-ignoring-sigpipe`, `sh -c "trap '' PIPE; exec …"`, off Windows — because libuv resets SIGPIPE in an
   agent's children, and a write to a pipe whose reader left would otherwise end the server.
+- **Ratatoskr** (`runtime/crates/drgnx-ratatoskr`, binary `ratatoskr`; [runtime.md](runtime.md)), the Rust hub that
+  replaces the Lisp server half. `ratatoskr serve [--foreground] [--parent-pid PID]` and `ratatoskr version [--json]`
+  (`{version, commit, proto: 1, records: 2, sqlite, test_hooks}`; the commit is `DRGNX_BUILD_COMMIT` at build time,
+  else `unknown`). Exit codes: **0** asked to stop, **1** cannot start, **2** usage, **3** another hub serves, **75**
+  restart requested. `main` builds the tokio runtime by hand (multi-thread, 2 workers), after the command line is
+  read and before anything else. Start order:
+  1. The SQLite floor: below 3.51.3 it exits 1.
+  2. The socket's directory, `<state>/hub` and `<state>/hub/log` are made private (`private_dir`), then logging
+     starts.
+  3. The lock (below).
+  4. Only while holding the lock: a stale socket is removed, the cap is written (0600, a temporary file and a
+     rename), and the socket is bound and made 0600.
+  5. `<state>/hub/runtime.db` is opened through urdr (0600, WAL, `synchronous=FULL`; schema 1: the `proc` table the
+     orphan reaper fills). A newer schema (after `update --back`) is moved aside with its `-wal` and `-shm` as
+     `runtime.db.newer-N-UNIXTIME` and a new file is made: nothing in it outlives a hub in phase 1.
+
+  It stops on SIGTERM, on SIGINT, or one second after the `--parent-pid` process is gone (`kill(pid, 0)`; the last
+  `--parent-pid` counts). It stops accepting, then removes the socket and the cap while the lock is still held, and
+  exits 0. The log is tracing JSON, one object per line, in `<state>/hub/log/hub-YYYY-MM-DD.jsonl` (UTC days, 0600,
+  the newest 7 kept, written by tracing-appender's non-blocking worker). Warnings and errors also go to stderr, behind
+  `<4>` / `<3>` when `JOURNAL_STREAM` is set (the journal under systemd). `DRGNX_RATATOSKR_LOG` takes a `Targets`
+  string (`info`, the default; `warn,drgnx_ratatoskr::conn=debug`). The cap, keys and params are never logged. The
+  cargo feature `test-hooks` (off in the binary install.sh builds) holds the test-only surfaces: the `__test_flood`
+  method, and `--agent-socket SID[:JOB]`, which is refused without `--foreground`.
 - **The gateway** (`core/drgnx-gateway.el`) runs inside the hub: never in the editing Emacs, so streaming cannot
   touch the keystroke budget.
   Besides the 127.0.0.1 port it can listen on **per-session Unix sockets** (`drgnx-gateway-listen-socket PATH`, for
@@ -95,35 +119,9 @@ anything (`drgnx-hub--untrusted`): the directory a real directory (not a link) o
 others, and the socket the user's; a directory that is missing is refused too (what is checked is then connected to
 by path, and a missing one could be another user's by then). Otherwise it refuses ("Not connecting to the drgnx hub: … is open to other users")
 and never hands over keys — on the `/tmp` fallback another local user could have made the directory first. The
-coordination server's `coord/notify` checks the same. One JSON object per line:
-
-| Request (`{"id", "method", "params"}`) | Result |
-|---|---|
-| `ping` | `{pid}` |
-| `status` | `{pid, socket, gateway_port, registrations, started}` |
-| `subscribe` | `true`; then events `{"event", "data"}` on this connection |
-| `gateway/register` `{job, task, agent, chain: [[provider, model-or-null]…], budget, keys: {provider: key}, owner, openrouter}` | `{token, url, openrouter}` (the restrictions kept; absent when none; restrictions that do not read are an error) |
-| `gateway/unregister` `{token}` | `true` |
-| `gateway/keys` `{keys: {provider: key}}` | `true`: the keys go to the gateway's memory |
-| `env/set` `{env: [{name, value}…]}` (at most 16, a value at most 32768 characters; the `{NAME: value}` object form is refused as `invalid params`) | `{applied: [NAME…]}`: the names `drgnx-shell-env-names` allows (never a key, `drgnx-shell-env-refused-p`) go into the hub's environment (`drgnx-shell-env-apply`: `PATH` merged, the sender's dirs first) |
-| `spend` `{job?, task?, agent?}` | `{input, output, cost, requests}` |
-| `shutdown` | `true`, then the hub exits |
-
-| `agents/start` `{profile, cwd, task?, job?}` | `{id, name}`: a session held by the hub |
-| `agents/list` | `{sessions: [Snapshot…]}` |
-| `agents/get` `{id}` | `{session: Snapshot, entries: [Entry…], seq}` (the snapshot, the whole transcript, the change number) |
-| `agents/send` `{id, text}`, `agents/stop` `{id}`, `agents/kill` `{id}` | `true` |
-| `agents/permission` `{id, request, option}` | `true` — the user's answer: the only way a permission is answered |
-| `agents/do` `{id, op, n?, text?, item?, reject?}` | `true`: `deliver-queue`, `unqueue`, `requeue`, `review` |
-| `coord/notify` (a notification: no id, no answer) | delivery runs now ([coordination.md](coordination.md)), and the new events go out |
-| `events/since` `{since?, limit?}` | `{since, last, events: [...]}`: the events after `since` (0), oldest first, at most `limit` (200; at most 1000) |
-| `job/propose` `{plan, repo?, budget?, auto?, gate?}`, `job/approve` `{id, budget?}`, `job/stop` `{id}`, `job/resume` `{id, budget?}` | the job (`drgnx-job-summary`); `gate`: `review` or `review+accept`, kept with the job (default: the hub's `drgnx-job-merge-gate`) |
-| `job/start-task` `{plan, n, auto?, gate?}` | the job: a proposal of task `n` and the tasks it needs (Start as Job); the plan is only read |
-| `job/reassign` `{task, profile}`, `job/block` `{task, reason}`, `job/unblock` `{task}`, `job/order` `{task, delta}` | the job, after the user's change from the Work graph (job data `:profiles`, `:blocked`, `:order`); a done or dropped task is an error |
-| `job/status` `{id?, decisions?}` | the job (with its decision log when `decisions` is true), or `{jobs: [...]}` |
-| `job/card` `{card, action, arg?}` | the job, after the user's action on a card (once: a settled card is an error) |
-| `job/reply` `{message, text}` | `true`: the user's answer to an agent's message, which reaches the agent as the user's answer to that question ([coordination.md](coordination.md#delivery-the-hub)) |
-| `job/dismiss` `{message}` | `true`: the message is acted on without an answer (the badge stops counting it) |
+coordination server's `coord/notify` checks the same. One JSON object per line: requests `{"id", "method",
+"params"}`, answers and events. Every method, its classes, its params and its result are in [The
+registry](#the-registry-protocol-v1), generated from the Rust definitions.
 
 Errors: `{"id", "error": {"message"}}`. A line that is not JSON is answered with an error too when its `"id"` can be
 read (otherwise it is dropped); a line over 1 MiB closes its connection. A client that reads slowly is never dropped for it: once its
@@ -167,6 +165,37 @@ and the next call subscribes again; each new one hands over the keys this Emacs 
 runner sets `DRGNX_NO_HUB_START=1`: a test never starts a hub that would outlive the suite unless it unsets it (the
 hub's own tests do, and stop what they start). It also sets `DRGNX_HUB_PARENT_PID` to its own pid, which a hub
 inherits: a hub whose parent is gone exits (checked each second), so an interrupted run leaves none behind.
+
+**Ratatoskr's socket** (`runtime/crates/drgnx-ratatoskr`: `lock.rs`, `conn.rs`, `server.rs`) keeps the same path,
+lines and limits, with these differences:
+- **The lock is a file**, `hub-HASH.sock.lock`, under an exclusive `flock` held for the hub's life. The kernel drops
+  the lock with the process, so a crashed Ratatoskr leaves no stale lock. The file holds `"PID START_TIME\n"` for
+  display (Linux `/proc/PID/stat` field 22; macOS `proc_pidinfo`, microseconds) and stays after a stop. A lock that is
+  held makes `serve` exit 3 ("another hub serves here").
+- **A Lisp hub's lock directory** (`SOCKET.lock/` with `pid`, from before Ratatoskr) is judged from its `pid`, never
+  from a ping. Ratatoskr exits 3 ("a Lisp hub from before Ratatoskr serves here: drgnx hub stop") and touches nothing
+  in two cases:
+  - the pid is alive (`kill(pid, 0)` succeeds or fails with EPERM) and its command line has `drgnx-hub-main` (Linux
+    `/proc/PID/cmdline`, macOS `sysctl KERN_PROCARGS2`), whether the hub answers a ping or not;
+  - `pid` does not read and the directory is younger than 10 s (a Lisp hub between its `mkdir` and its pid write).
+
+  In every other case the directory is removed and the takeover is logged with the pid: the pid is gone, it names
+  another program, or `pid` does not read in an older directory.
+- **Peer credentials:** on accept, before any line, the peer's uid is read (`SO_PEERCRED` on Linux, `getpeereid` on
+  macOS, through tokio's `peer_cred`). A peer of another uid (root included) is closed at once and logged with its
+  pid and uid (`conn::peer_allowed`).
+- **The first line on a connection is the hub's challenge** `{"event":"challenge","data":{"nonce"}}` (hello v1). Until
+  the hello task's dispatcher, the server core answers only `ping` `{pid}` and a minimal `hello`. A valid proof over
+  both nonces makes the connection `user` and is answered with the hub's proof, a wrong one is `not-allowed`, and
+  none leaves it `service`. Any other method is `no-method`.
+- **Lines in:** the 1 MiB codec (`drgnx_proto::line::codec`). A codec error (a line too long, not UTF-8) closes the
+  connection. A line that fails `parse_strict` is answered `invalid-params` (with its `path`) when its id reads, and
+  is otherwise dropped and logged. On EOF a partial line is dropped and what is queued is still written, then the
+  connection closes. Other connections are not touched.
+- **Lines out** go through a writer task per connection with its own queue. Queueing never waits. A client is dropped
+  (logged) when more than 16 MiB is queued for it (the line being written included), or when one write makes no
+  progress for 10 s, so a stopped reader never stalls another client. An answer over 16 MiB is replaced by `internal`
+  "answer over 16 MiB", and an event over 16 MiB is not sent (logged).
 
 ## Events
 

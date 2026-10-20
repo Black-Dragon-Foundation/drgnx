@@ -1,0 +1,13 @@
+{"scenario": "security/another-uid-is-refused", "requires": ["v1", "sudo"], "doc": "With the socket opened up to everyone by mistake, a connection from another uid is still closed at once, before any line, and the hub logs it with the peer's pid; the user's own connection is served."}
+{"do": "start", "hub": "h"}
+{"do": "chmod", "path": "$RUN", "mode": "0711"}
+{"do": "chmod", "path": "$SOCKET_DIR", "mode": "0711"}
+{"do": "chmod", "path": "$SOCKET", "mode": "0777"}
+{"do": "connect", "conn": "o", "hub": "h", "as": "other-uid"}
+{"do": "send", "conn": "o", "json": {"id": 1, "method": "ping"}}
+{"do": "expect_closed", "conn": "o"}
+{"do": "file", "path": "$STATE/hub/log/hub-*.jsonl", "contains": "refused a connection from another uid"}
+{"do": "file", "path": "$STATE/hub/log/hub-*.jsonl", "contains": "peer_pid"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "ping"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"pid": "$PID(h)"}}}

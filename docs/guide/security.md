@@ -69,6 +69,13 @@ shorthands come back, without reopening them.
   directory-local variables and auto-revert away from remote files; drgnx leaves them as they are.
 - **Auto-saving remote files.** If you turn on `auto-save-visited-mode`, it saves local files only:
   `remote-file-name-inhibit-auto-save-visited` is set to t while you leave it at its default (nil).
+- **The hub's socket (Ratatoskr).** Its directory is yours and mode 0700, and the socket, the cap file
+  (`hub-HASH.cap`) and the lock are 0600. Ratatoskr also asks the system who connected (the peer's uid) and closes a
+  connection from any other user at once, root included, with the peer's pid in its log. That holds even when a socket
+  was opened up by mistake. The cap proves an editor or the CLI to the hub, and the hub to them. It keeps out
+  a connection that reaches a socket it should not have, such as one bound into a container. It is worth nothing
+  against unsandboxed programs running as you: they can read the cap file. The agent sandbox is the boundary
+  there, not the cap.
 
 ## When something you trust is held back
 

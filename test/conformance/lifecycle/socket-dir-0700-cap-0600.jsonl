@@ -1,0 +1,6 @@
+{"scenario": "lifecycle/socket-dir-0700-cap-0600", "requires": ["v1"], "doc": "The socket's directory is the user's and 0700; the socket, the cap and the lock are 0600."}
+{"do": "start", "hub": "h"}
+{"do": "file", "path": "$SOCKET_DIR", "mode": "0700", "owner": "user"}
+{"do": "file", "path": "$SOCKET", "mode": "0600", "owner": "user"}
+{"do": "file", "path": "$CAP", "mode": "0600", "owner": "user"}
+{"do": "file", "path": "$LOCK", "mode": "0600", "owner": "user"}

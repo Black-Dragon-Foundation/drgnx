@@ -1,0 +1,8 @@
+{"scenario": "framing/a-partial-line-then-eof-closes-only-that-connection", "requires": ["v1"], "doc": "A client that vanishes mid-line (a killed Emacs) closes only its own connection; another connection is answered."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "d", "hub": "h"}
+{"do": "send", "conn": "c", "raw": "{\"id\":1,\"method\":\"pi", "no_newline": true, "eof": true}
+{"do": "expect_closed", "conn": "c"}
+{"do": "send", "conn": "d", "json": {"id": 2, "method": "ping"}}
+{"do": "expect", "conn": "d", "json": {"id": 2, "result": {"pid": "$PID(h)"}}}

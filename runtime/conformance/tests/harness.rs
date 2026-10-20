@@ -174,6 +174,43 @@ fn a_scenario_against_a_scripted_hub() {
     assert!(out.contains("0 passed, 0 skipped, 1 failed"), "{out}");
 }
 
+const FILES_ROW: &str = r#"{"scenario": "ok/files-and-eof", "requires": ["v0"], "doc": "file globs and contains; send with eof"}
+{"do": "start", "hub": "h"}
+{"do": "write_file", "path": "$ROOT/x/a-1.txt", "text": "hello $PID(h)"}
+{"do": "file", "path": "$ROOT/x/a-*.txt", "contains": "WANT"}
+{"do": "file", "path": "$ROOT/x/b-*.txt", "exists": false}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "raw": "{\"id\":1", "no_newline": true, "eof": true}
+{"do": "expect_closed", "conn": "c"}
+"#;
+
+#[test]
+fn file_globs_contains_and_a_send_with_eof() {
+    let dir = tempfile::tempdir().unwrap();
+    let hub = wrapper(dir.path());
+    let good = dir.path().join("good");
+    rows(
+        &good,
+        &[(
+            "ok/files-and-eof.jsonl",
+            &FILES_ROW.replace("WANT", "$PID(h)"),
+        )],
+    );
+    let (out, code) = run("lisp", &hub, &good);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("PASS ok/files-and-eof"), "{out}");
+
+    // text that is not there fails the step, after its wait
+    let bad = dir.path().join("bad");
+    let row = FILES_ROW
+        .replace("\"WANT\"", "\"nowhere\", \"within_ms\": 100")
+        .replace("ok/files-and-eof", "bad/files");
+    rows(&bad, &[("bad/files.jsonl", &row)]);
+    let (out, code) = run("lisp", &hub, &bad);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("FAIL bad/files: step 3 (file)"), "{out}");
+}
+
 const USER_ROW: &str = r#"{"scenario": "hello/user-connect", "requires": ["REQ"], "doc": "a user connect, then ping"}
 {"do": "start", "hub": "h", "env": {"RTSK_SCRIPTED_V1": "V1"}}
 {"do": "connect", "conn": "c", "hub": "h", "as": "user"}

@@ -1,0 +1,11 @@
+{"scenario": "lifecycle/a-busy-lisp-hub-is-not-taken-over", "requires": ["v1", "lisp-backend"], "doc": "A Lisp hub too busy to answer (stopped) still holds its lock: Ratatoskr exits 3 without touching the socket or the lock, and the Lisp hub answers once it runs again."}
+{"do": "start", "hub": "lisp", "bin": "lisp"}
+{"do": "kill", "hub": "lisp", "signal": "STOP"}
+{"do": "start", "hub": "r", "same_root_as": "lisp", "wait": false}
+{"do": "expect_exit", "hub": "r", "code": 3, "within_ms": 5000}
+{"do": "file", "path": "$SOCKET", "exists": true}
+{"do": "file", "path": "$LOCK/pid", "contains": "$PID(lisp)"}
+{"do": "kill", "hub": "lisp", "signal": "CONT"}
+{"do": "connect", "conn": "c", "hub": "lisp", "as": "service"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "ping"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"pid": "$PID(lisp)"}}}

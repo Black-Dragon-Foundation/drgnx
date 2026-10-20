@@ -1,0 +1,10 @@
+{"scenario": "lifecycle/a-stale-lisp-lock-directory-is-taken-over", "requires": ["v1", "lisp-backend"], "doc": "A Lisp hub that died left its lock directory (its pid gone) and its socket: Ratatoskr takes both over and serves."}
+{"do": "start", "hub": "lisp", "bin": "lisp"}
+{"do": "kill", "hub": "lisp", "signal": "KILL"}
+{"do": "expect_exit", "hub": "lisp", "signal": "KILL"}
+{"do": "file", "path": "$LOCK/pid", "contains": "$PID(lisp)"}
+{"do": "start", "hub": "r", "same_root_as": "lisp"}
+{"do": "connect", "conn": "c", "hub": "r"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "ping"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"pid": "$PID(r)"}}}
+{"do": "file", "path": "$LOCK", "contains": "$PID(r)"}
