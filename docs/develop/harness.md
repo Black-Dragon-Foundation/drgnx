@@ -914,6 +914,8 @@ Every tier gets:
 - `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME`, `DRGNX_CONFIG_DIR`, `DRGNX_DATA_DIR`
   and `TMPDIR` under RUN, and a private `XDG_RUNTIME_DIR` (RUN/run, mode 700);
 - `DRGNX_TEST_ISOLATED=1`, `DRGNX_NO_HUB_START=1`, `DRGNX_HUB_PARENT_PID` (the hub ends with this Emacs);
+- `DRGNX_EMACS`: the Emacs the run is on, so a test's `bin/drgnx` or child Emacs runs that one, whatever PATH holds
+  and wherever it lives (macOS CI's `Nidhogg.app` is under HOME, where the scan below would drop a caller's value);
 - a dead session bus (`drgnx-test-env-dead-bus`), and no provider key or agent home
   (`drgnx-test-env-provider-variables`).
 
