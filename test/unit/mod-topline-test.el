@@ -6,10 +6,16 @@
 (require 'drgnx-signal)                 ; the editor-changed edge it subscribes to
 (require 'drgnx-git)                    ; the git cache the branch comes from
 (load (expand-file-name "modules/ui/drgnx-face" drgnx-dir) nil t)
+(load (expand-file-name "modules/ui/drgnx-statusbar" drgnx-dir) nil t)   ; the epochs the line is keyed on, as in a session
 (load (expand-file-name "modules/ui/drgnx-topline" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/memo-alloc-fixture" drgnx-dir) nil t)
 (defvar drgnx-chrome--root)
+
+(defun drgnx-topline-test--activate ()
+  "The setup of the tests' own `ui/face': what `drgnx-topline-setup' activates."
+  (apply #'drgnx-memo-activate drgnx-topline--declared))
 
 (defvar drgnx-topline-test--ran nil "The stub commands that ran (newest first).")
 (defvar drgnx-topline-test--wcc 0 "Runs of `window-configuration-change-hook' counted by `drgnx-topline-test--count-wcc'.")
@@ -30,14 +36,27 @@
 (defmacro drgnx-topline-test--with (profile &rest body)
   "BODY with a registry of its own holding the three commands the hint names, bound as PROFILE (a symbol) binds them,
 the line's state and the tab bar's settings kept away from the rest of the test process, and the line showing the
-buffer of the selected window (a temp buffer in project `proj', no git).  Faces and the project lookup are stubs."
+buffer of the selected window (a temp buffer in project `proj', no git).  Faces and the project lookup are stubs.
+`ui/face' is set up in a module table of the test's own (its timers start; the line's epochs watch and its memo is
+owned) and torn down after (the watchers go, the memo empties)."
   (declare (indent 1))
   `(drgnx-test-with-state
+     (let ((drgnx-modules--table (list (list 'ui/face :setup #'drgnx-topline-test--activate)))
+           (drgnx-modules--report nil) (drgnx-modules--stacks nil) (drgnx-modules--runs nil)
+           (drgnx-modules--features nil) (drgnx-modules--left nil))
+       (drgnx-memo-forget 'topline)
+       (drgnx-modules--run-one 'ui/face (alist-get 'ui/face drgnx-modules--table) 'startup)
+       (unwind-protect (drgnx-topline-test--with-1 ,profile ,@body)
+         (drgnx-module-teardown 'ui/face)))))
+
+(defmacro drgnx-topline-test--with-1 (profile &rest body)
+  "The inside of `drgnx-topline-test--with'."
+  (declare (indent 1))
+  `(progn
      (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
            (drgnx-topline-test--ran nil)
            (drgnx-topline--error nil) (drgnx-topline--error-at nil)
-           (drgnx-modules--runs (list (list 'ui/face 'ui/face)))   ; ui/face is on: its timers start
-           (drgnx-topline--memo (make-hash-table :test #'eq :weakness 'key)) (drgnx-topline--saved nil) (drgnx-topline--format nil) (drgnx-topline--active nil)
+           (drgnx-topline--saved nil) (drgnx-topline--format nil) (drgnx-topline--active nil)
            (drgnx-topline drgnx-topline) (drgnx-topline-min-lines drgnx-topline-min-lines)
            (default-frame-alist (copy-alist default-frame-alist))
            (tab-bar-format (default-value 'tab-bar-format)) (tab-bar-show (default-value 'tab-bar-show))
@@ -422,20 +441,25 @@ buffer of the selected window (a temp buffer in project `proj', no git).  Faces 
       (setq-local buffer-file-name "/tmp/drgnx-tl-repo/src/new.el")
       (setq-local vc-mode nil)
       (should (string-match-p "◆ proj +⌕" (drgnx-topline-test--text)))   ; the cache has not read it yet
-      ;; the cache finds the repository, then a status run reads its branch: the line is made again each time
+      ;; the cache finds the repository, then a status run reads its branch (`drgnx-git-changed-functions', with the
+      ;; status bar off the line's own hook moves the epoch `git'): the line is made again each time
       (puthash "/tmp/drgnx-tl-repo/src/" root drgnx-git--roots)
       (should (string-match-p "◆ proj +⌕" (drgnx-topline-test--text)))
       (drgnx-cache-put 'git-status root (list :branch (list :head "main")))
+      (drgnx-topline--git-changed root)
       (should (string-match-p "◆ proj · main" (drgnx-topline-test--text)))
       (drgnx-cache-put 'git-status root (list :branch (list :head "feature")))
+      (drgnx-topline--git-changed root)
       (should (string-match-p "◆ proj · feature" (drgnx-topline-test--text)))
       ;; `vc-mode' is only the fallback (the same as the status bar's)
       (setq-local vc-mode " Git-other")
       (should (string-match-p "· feature" (drgnx-topline-test--text)))
       (drgnx-cache-put 'git-status root (list :branch (list :head nil :detached t)))
+      (drgnx-topline--git-changed root)
       (should (string-match-p "· (detached)" (drgnx-topline-test--text)))
       ;; no cache entry: vc-mode's branch
       (drgnx-cache-remove 'git-status root)
+      (drgnx-topline--git-changed root)
       (should (string-match-p "· other" (drgnx-topline-test--text))))))
 
 (ert-deftest drgnx-topline/a-memo-hit-allocates-nothing ()
@@ -443,22 +467,72 @@ buffer of the selected window (a temp buffer in project `proj', no git).  Faces 
   (drgnx-topline-test--with 'vscode
     (setq-local vc-mode " Git-main")
     (drgnx-test-use-editor (selected-window))                ; as in a session: else the window is searched for
-    ;; interpreted code conses for its own bookkeeping, and the runner loads a file's source when it is newer than its
-    ;; .elc: measure the line and everything it calls on a hit compiled
-    (dolist (fn '(drgnx-topline--line drgnx-topline--same-p drgnx-topline--failing-p drgnx-topline--drawn-title-p
-                                      drgnx-face-drawn-title-p drgnx-state-editor-window drgnx-state--record
-                                      drgnx-commands-get drgnx-cmd-command drgnx-cmd-bound
-                                      drgnx-git-branch drgnx-git-roots-known))
-      (unless (byte-code-function-p (symbol-function fn)) (byte-compile fn)))
-    (let ((first (drgnx-topline--line))
-          (loop (byte-compile (lambda () (dotimes (_ 1000) (drgnx-topline--line))))))   ; a compiled loop
-      (funcall loop)
-      (memory-use-counts)                                    ; (its own list is not the line's)
-      (let ((before (car (memory-use-counts))))
-        (funcall loop)
-        (let ((conses (- (car (memory-use-counts)) before)))
-          (should (< conses 30))))                           ; 1000 calls; the counter's own list is all there is
-      (should (eq first (drgnx-topline--line))))))
+    (setq-local buffer-file-name "/tmp/drgnx-tl-repo/a.el")
+    ;; the line and everything it calls on a hit, compiled (interpreted code conses for its own bookkeeping): nothing
+    ;; at all is allocated, and the git cache is not read
+    (let ((first (drgnx-topline--line)))
+      (cl-letf (((symbol-function 'drgnx-git-branch) (lambda (_) (error "read the git cache")))
+                ((symbol-function 'drgnx-git-cached-root) (lambda (_) (error "read the git cache"))))
+        (should (= 0 (drgnx-memo-fixture-alloc #'drgnx-topline--line
+                                               'drgnx-topline--line 'drgnx-topline--failing-p
+                                               'drgnx-topline--drawn-title-p 'drgnx-face-drawn-title-p
+                                               'drgnx-state-editor-window 'drgnx-state--record 'drgnx-commands-get
+                                               'drgnx-cmd-command 'drgnx-cmd-bound 'drgnx-topline--hint-command
+                                               'drgnx-topline--hint-bound 'drgnx-git-roots-known)))
+        (should (eq first (drgnx-topline--line)))))))
+
+(ert-deftest drgnx-topline/a-git-change-rebuilds-the-line ()
+  "The branch is read when the epoch `git' moves, not per redisplay: a status run that read it moves the epoch (the
+status bar's hook while it is on, only for a new branch; the line's own while it is off)."
+  (drgnx-topline-test--with 'vscode
+    (let ((drgnx-git--roots (make-hash-table :test #'equal))
+          (root "/tmp/drgnx-tl-repo/"))
+      (drgnx-cache--clear 'git-status)
+      (setq-local buffer-file-name "/tmp/drgnx-tl-repo/a.el")
+      (setq-local vc-mode nil)
+      (puthash "/tmp/drgnx-tl-repo/" root drgnx-git--roots)
+      (drgnx-cache-put 'git-status root (list :branch (list :head "main")))
+      (drgnx-topline--git-changed root)
+      (let* ((tab-bar-mode nil) (_ (drgnx-topline--on)) (first (drgnx-topline--line)))
+        (should (string-match-p "· main" (drgnx-topline-test--text)))
+        ;; the cache changed, nobody said so: the line is not made again (it does not read the cache)
+        (drgnx-cache-put 'git-status root (list :branch (list :head "feature")))
+        (should (eq first (drgnx-topline--line)))
+        ;; the status bar is on: it moves the epoch, for a new branch only; the line's hook leaves it alone
+        (let ((drgnx-statusbar-mode t) (before (drgnx-epoch 'git)))
+          (run-hook-with-args 'drgnx-git-changed-functions root)
+          (should (eq first (drgnx-topline--line)))
+          (should (eql before (drgnx-epoch 'git))))
+        ;; the status bar is off: the status run's hook moves the epoch, and the line shows the new branch
+        (let ((drgnx-statusbar-mode nil))
+          (run-hook-with-args 'drgnx-git-changed-functions root))
+        (let ((second (drgnx-topline--line)))
+          (should-not (eq first second))
+          (should (string-match-p "· feature" (drgnx-topline-test--text)))
+          ;; the bump the status bar makes rebuilds it too
+          (drgnx-cache-put 'git-status root (list :branch (list :head "other")))
+          (drgnx-epoch-bump 'git root)
+          (should-not (eq second (drgnx-topline--line)))
+          (should (string-match-p "· other" (drgnx-topline-test--text))))
+        (drgnx-topline--off)
+        (should-not (memq #'drgnx-topline--git-changed drgnx-git-changed-functions))))))
+
+(ert-deftest drgnx-topline/a-vc-mode-change-rebuilds-the-line ()
+  "`vc-mode' is not a key: setting it moves the epoch `buffer-look' of its buffer (a watcher), which rebuilds the
+line."
+  (drgnx-topline-test--with 'vscode
+    (setq-local vc-mode " Git-main")
+    (let ((first (drgnx-topline--line)))
+      (should (string-match-p "· main" (drgnx-topline-test--text)))
+      (should (eq first (drgnx-topline--line)))
+      (setq-local vc-mode " Git-other")
+      (let ((second (drgnx-topline--line)))
+        (should-not (eq first second))
+        (should (string-match-p "· other" (drgnx-topline-test--text)))
+        ;; another buffer's `vc-mode' moves only that buffer's epoch
+        (with-temp-buffer
+          (setq-local vc-mode " Git-elsewhere"))
+        (should (eq second (drgnx-topline--line)))))))
 
 (ert-deftest drgnx-topline/the-tab-bar-sizes-no-tabs ()
   (drgnx-topline-test--with 'vscode
@@ -484,14 +558,14 @@ buffer of the selected window (a temp buffer in project `proj', no git).  Faces 
         (cl-letf* ((real (symbol-function 'set-frame-parameter))
                    ((symbol-function 'set-frame-parameter) (lambda (f p v) (setq param-sets (1+ param-sets)) (funcall real f p v))))
           (drgnx-topline--line)
-          (drgnx-topline--resized (list :frame frame))       ; the width it was made for
+          ;; taller only: the same columns
+          (drgnx-topline--resized (list :frame frame :old (list :cols 80 :lines 30) :new (list :cols 80 :lines 40)))
           (should (= 0 updates))
           (setq width 100)
-          (drgnx-topline--resized (list :frame frame))
+          (drgnx-topline--resized (list :frame frame :old (list :cols 80 :lines 40) :new (list :cols 100 :lines 40)))
           (should (= 1 updates))
           (drgnx-topline--line)                              ; the tab bar asked: made for 100
-          (drgnx-topline--resized (list :frame frame))
-          (should (= 1 updates))
+          (should (string-match-p "⌕" (drgnx-topline-test--text)))
           (should (= 0 param-sets)))))))
 
 (ert-deftest drgnx-topline/the-mark-leaves-room-for-the-controls ()
@@ -569,7 +643,7 @@ buffer of the selected window (a temp buffer in project `proj', no git).  Faces 
                    ((symbol-function 'set-frame-parameter) (lambda (f p v) (setq param-sets (1+ param-sets)) (funcall real f p v))))
           (drgnx-topline--line)
           (setq width 100)
-          (drgnx-state--emit 'frame-resized (list :frame frame :old nil :new nil))   ; as the observer delivers it
+          (drgnx-state--emit 'frame-resized (list :frame frame :old (list :cols 80) :new (list :cols 100)))   ; as the observer delivers it
           (should (= 1 updates))
           (should (= 0 param-sets))))))
   ;; off: nothing is called any more

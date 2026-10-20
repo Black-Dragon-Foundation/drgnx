@@ -280,7 +280,9 @@ The line is Emacs's tab bar with no tabs, since drgnx has no workspaces. It only
 branch from drgnx's git cache, as the status bar reads it (until the cache has read the repository, the file's
 version-control text; never by running git), and the project from the same cache the breadcrumb
 keeps, which is filled when you switch editor, so a directory it has not met yet shows `drgnx` for a moment. Nothing
-in it touches the disk or a process while you type. If something in it fails it shows the mark alone for ten seconds
+in it touches the disk or a process while you type, and a redraw that changes nothing reads no cache: the line is
+made again only when the editor, its version-control text, the frame's width or the keys change, or when git has
+read a repository again. If something in it fails it shows the mark alone for ten seconds
 rather than disappearing; when the ten seconds are over the line is made again and redrawn in every frame, without a
 key press, so a frame you left alone gets its line back. A resize redraws the line at the new width, and a new or
 resized terminal frame gets its number of lines decided once Emacs is idle (that can resize the windows, so it never
