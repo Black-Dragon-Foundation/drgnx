@@ -154,6 +154,17 @@ loop of 2,000,000 iterations timed on the wall clock and on the process's CPU cl
 line still records the highest load average seen (`load`). A wall-clock judgement is made by the paired A/B run at
 n >= 100, not by one run.
 
+## Allocation that follows the wall clock (`replace-typing`)
+
+`replace-typing` types while 10k matches stream into a view, and the view draws its rows in time-boxed slices that run
+between the keys. A slower machine therefore runs more slices inside each of the 22 commands, and the per-command
+allocation grows with the command's wall time: in the Emacs 31.1 GUI container on the same tree, input p50 19 / 37 ms gave
+`:alloc :p50` 12732 / 15755, CI's slower runner (input p50 51 ms) gave 33072 against a seed run of 25252 (budget 31565).
+An A/B run against the seed commit (047955be, host, n=176 per side) found 8074 against 8379 objects: no code change in
+the allocation. So the budget follows the larger of the two CI-image measurements, 33072 x 1.25 = 41340, and not a
+laptop's number; the other allocation rows, whose commands do not wait on a stream, agree to a few percent between
+machines and keep their seeds. A row of this kind that moves again is judged by `--ab` first, not by re-seeding.
+
 ## Judging wall clock: `--perf --ab REF`
 
 ```sh

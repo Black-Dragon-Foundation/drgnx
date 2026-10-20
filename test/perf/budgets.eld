@@ -55,6 +55,8 @@
 ;; on hosted runners).  The CPU rows of the typing workloads are large because about one key in ten spends 100-200 ms of
 ;; CPU in these runs (DEFERRED PERF-KEYSPIKE-1); they tighten when that is fixed.  Workloads that could not run in the
 ;; container are in `drgnx-perf-run-unseeded'.  Raise a row only in the commit that needs it, with the reason.
+;; replace-typing :alloc :p50 41340 = 33072 x 1.25 (CI's GUI-container run of 83e460be; the seed run was 25252): the number is
+;; timing-coupled, not a code cost (docs/develop/perf.md, "Allocation that follows the wall clock").
 ;; :cpu_ms :p50 (typing, typing-with-ghost, remote-typing) ~30 ms: a normal key, which the p90 (the 1-in-10 spike, PERF-KEYSPIKE-1) does not gate.
  (typing (:alloc :p50) 13757) (typing (:cpu_ms :p50) 30) (typing (:cpu_ms :p90) 420.1) (typing (:rows) 1)
  (scrolling (:alloc :p50) 14840) (scrolling (:cpu_ms :p90) 28.4) (scrolling (:rows) 0)
@@ -64,6 +66,6 @@
  (code-scrolling (:alloc :p50) 15439) (code-scrolling (:cpu_ms :p90) 26.9) (code-scrolling (:rows) 0)
  (diff-scrolling (:alloc :p50) 6027) (diff-scrolling (:cpu_ms :p90) 26.7) (diff-scrolling (:rows) 0)
  (typing-with-ghost (:alloc :p50) 18385) (typing-with-ghost (:cpu_ms :p50) 30) (typing-with-ghost (:cpu_ms :p90) 402.9) (typing-with-ghost (:rows) 1)
- (replace-typing (:alloc :p50) 31565) (replace-typing (:cpu_ms :p90) 183.7) (replace-typing (:rows) 1)
+ (replace-typing (:alloc :p50) 41340) (replace-typing (:cpu_ms :p90) 183.7) (replace-typing (:rows) 1)
  (remote-typing (:alloc :p50) 17300) (remote-typing (:cpu_ms :p50) 30) (remote-typing (:cpu_ms :p90) 349.0) (remote-typing (:rows) 1)
  (window-switch (:alloc :p50) 29638) (window-switch (:cpu_ms :p90) 43.6) (window-switch (:rows) 0))
