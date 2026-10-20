@@ -83,8 +83,7 @@ GC, another process — then does not decide the number."
 
 (defun drgnx-bench--no-git-timer ()
   "Cancel a pending background git refresh (it would run inside a later measurement)."
-  (when (timerp drgnx-explorer--git-timer) (cancel-timer drgnx-explorer--git-timer))
-  (setq drgnx-explorer--git-timer nil))
+  (drgnx-timer-cancel 'explorer-git))
 
 (defun drgnx-bench--drgnx (root)
   (let* ((big (expand-file-name "big" root))
@@ -163,8 +162,8 @@ GC, another process — then does not decide the number."
                                                                        (unless (= (+ n 100) (with-current-buffer drgnx-explorer-buffer-name
                                                                                               (count-lines (point-min) (point-max))))
                                                                          (error "refresh did not show the 100 new files")))))))))
-    (when (timerp drgnx-explorer--event-timer) (cancel-timer drgnx-explorer--event-timer))
-    (setq drgnx-explorer--event-timer nil drgnx-explorer--dirty nil)
+    (drgnx-timer-cancel 'explorer-file-events)
+    (setq drgnx-explorer--dirty nil)
     r))
 
 ;;;; treemacs
