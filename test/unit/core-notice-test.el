@@ -477,6 +477,11 @@
 (defvar drgnx-notice-test--texts nil)
 (defvar drgnx-notice-test--i 0)
 
+;; The hook function of the cost test: compiled, one argument.  Not `ignore': its &rest list is a cons on an Emacs
+;; without native compilation (Homebrew's, macOS CI) and none where it is native code, so the count would vary
+;; with the build, not with the notice model.
+(defalias 'drgnx-notice-test--hook (byte-compile '(lambda (_change) nil)))
+
 (ert-deftest drgnx-notice/a-count-read-allocates-nothing ()
   (drgnx-notice-test-with-model
     (drgnx-notice-set 'agents '((:id a :text "a" :scope "s") (:id b :text "b")))
@@ -494,7 +499,7 @@
                                                (setq drgnx-notice-test--i (1+ drgnx-notice-test--i)))))))
       (message "a new post: %d conses" n)
       (should (<= n 15)))
-    (add-hook 'drgnx-notice-functions #'ignore)
+    (add-hook 'drgnx-notice-functions #'drgnx-notice-test--hook)
     (let ((n (drgnx-notice-test--alloc
               (drgnx-notify 'hooks 'fail (aref drgnx-notice-test--texts
                                                (setq drgnx-notice-test--i (1+ drgnx-notice-test--i)))))))
