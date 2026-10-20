@@ -1,0 +1,5 @@
+{"scenario": "self/ping", "requires": ["v0"], "doc": "The harness's own row: a started hub answers ping with the pid the harness started."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "ping"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"pid": "$PID(h)"}}}

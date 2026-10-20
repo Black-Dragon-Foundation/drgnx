@@ -56,6 +56,7 @@ How drgnx is built, tested and measured.
 - [Formatting](develop/formatting.md): `bin/drgnx fmt` — the Emacs Lisp formatter, and where it is enforced.
 - [bin/drgnx check](develop/check.md): build and every test tier in one parallel run; shards, GUI slots, phases, the leak census, the shuffled test order and the polluter bisect.
 - [CI](develop/ci.md): the GitHub Actions workflows — Emacs 31.1 suite, shellcheck, leak scan, nightly GUI tier.
+- [The runtime workspace](develop/runtime.md): `runtime/`, the Cargo workspace (MSRV, deny policy, locked builds), the crate names, and the conformance harness: scenario files run against a hub binary, one socket-path fixture for Lisp and Rust.
 - [The hub and the gateway](develop/hub.md): the durable process behind agents, its socket protocol, the traffic gateway.
 - [Agent coordination](develop/coordination.md): jobs, tasks and leases, the decision log, messages, the MCP tools (and the identity and limits of agents outside drgnx), delivery.
 - [The Work cockpit's model](develop/cockpit.md): one model of specs, plans, tasks, agents, jobs and reviews from the live store; what happened, the timeline; each agent's edits (async git, regular files only); the Work graph's redraws, cost and tests; an agent's edits pane: live patches, accept, revert, comment; what happened, the timeline and answers: appends, routes, cost and tests; what needs you and the decisions: the job window's parts, the job filter, its saved state.
