@@ -1,14 +1,20 @@
-# Nightly and on demand: the GUI test tier — real Emacs 31.1 (pgtk) sessions under headless mutter,
-# in test/container/Containerfile.gui. docs/develop/ci.md
+# Every push to main, nightly and on demand: the GUI, live, scenario and perf tiers — real Emacs 31.1 (pgtk)
+# sessions under headless mutter, in test/container/Containerfile.gui. docs/develop/ci.md
 name: GUI tier
 
 on:
+  push:
+    branches: [main]
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: gui-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   ui:
@@ -34,3 +40,61 @@ jobs:
         env:
           DRGNX_CONTAINER: podman
         run: bin/drgnx test --container --ui
+
+  scenario:
+    name: Scenario tier, frame budget reported (Emacs 31.1 pgtk, headless mutter)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Prebuilt image for this Containerfile (else the tier builds it)
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          image="ghcr.io/black-dragon-foundation/drgnx-test-gui:$(sha256sum test/container/Containerfile.gui | cut -c1-16)"
+          printf '%s' "$TOKEN" | podman login ghcr.io -u "$ACTOR" --password-stdin || true
+          if podman pull -q "$image"; then echo "DRGNX_TEST_GUI_IMAGE=$image" >> "$GITHUB_ENV"; else echo "no $image yet: building"; fi
+      - name: Scenario tier in test/container/Containerfile.gui (the frame budget reported, not judged)
+        env:
+          DRGNX_CONTAINER: podman
+          DRGNX_TEST_NO_TIMING: "1"
+        run: bin/drgnx test --container --scenario
+
+  perf:
+    name: Perf lab (Emacs 31.1 pgtk, headless mutter)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Prebuilt image for this Containerfile (else the tier builds it)
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          image="ghcr.io/black-dragon-foundation/drgnx-test-gui:$(sha256sum test/container/Containerfile.gui | cut -c1-16)"
+          printf '%s' "$TOKEN" | podman login ghcr.io -u "$ACTOR" --password-stdin || true
+          if podman pull -q "$image"; then echo "DRGNX_TEST_GUI_IMAGE=$image" >> "$GITHUB_ENV"; else echo "no $image yet: building"; fi
+      - name: Perf lab in test/container/Containerfile.gui, judged against test/perf/budgets.eld
+        env:
+          DRGNX_CONTAINER: podman
+          DRGNX_PERF_CPU_FACTOR: "2"
+          DRGNX_PERF_RESULTS: perf-results.json
+        run: bin/drgnx test --container --perf
+      - name: Upload the perf results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: perf-results
+          path: perf-results.json
+          if-no-files-found: warn

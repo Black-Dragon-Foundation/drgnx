@@ -192,6 +192,15 @@ judged on its `:p90` against `drgnx-perf-run-hook-command-budget` (1.5 ms: twice
 2026-10-20, `typing` 0.46 and `explorer` 0.67 ms; the plan's starting value was 4). The probe's own timer, which holds the
 redisplay, is left out. Process filters are not timed yet.
 
+PERF-HOOKS-2: CI's perf job runs `--perf`, not `--audit`, so it does not enforce the `:hooks` budget; it is enforced
+only in a local audit, and stays gated off in CI until it is measured on every seeded workload.
+
+## In CI
+
+The `perf` job of `gui.yml` runs `bin/drgnx test --container --perf` on every push to `main` with
+`DRGNX_PERF_CPU_FACTOR=2` and writes `perf-results.json`, uploaded as the `perf-results` artifact (also when the run
+fails). It gates on the budgets, not on history, and not on wall clock (the runner's clock is not the budgets' machine).
+
 ## Where things stood (2026-10-17, this machine)
 
 | | before tuning | after |

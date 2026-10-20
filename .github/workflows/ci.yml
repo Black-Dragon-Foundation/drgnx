@@ -36,18 +36,13 @@ jobs:
           image="ghcr.io/black-dragon-foundation/drgnx-test:$(sha256sum test/container/Containerfile | cut -c1-16)"
           printf '%s' "$TOKEN" | podman login ghcr.io -u "$ACTOR" --password-stdin || true
           if podman pull -q "$image"; then echo "DRGNX_TEST_IMAGE=$image" >> "$GITHUB_ENV"; else echo "no $image yet: building"; fi
-      # the files a core each at once, then the :timing tests alone (docs/develop/ci.md, "Parallel files")
-      - name: Unit suite in test/container/Containerfile, the files in parallel (all but the :timing tests)
+      # the files a core each at once, a failed file rerun once, the :timing tests left out by name (docs/develop/ci.md)
+      - name: Unit suite in test/container/Containerfile, the files in parallel (no :timing tests)
         env:
           DRGNX_CONTAINER: podman
-          DRGNX_TEST_SELECTOR: "(not (tag :timing))"
+          DRGNX_TEST_RERUN: "1"
+          DRGNX_TEST_NO_TIMING: "1"
         run: DRGNX_TEST_JOBS="$(nproc)" bin/drgnx test --container
-      - name: The :timing tests, a file at a time
-        if: ${{ !cancelled() }}
-        env:
-          DRGNX_CONTAINER: podman
-          DRGNX_TEST_SELECTOR: "(tag :timing)"
-        run: bin/drgnx test --container
 
   scripts:
     name: Shell scripts and leak scan

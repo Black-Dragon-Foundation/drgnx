@@ -151,18 +151,18 @@ env_eval() { # FORM — evaluate with harness/drgnx-env.el loaded, print the res
   "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -l drgnx-env --eval "(princ (or $1 \"\"))"
 }
 
-test_container() { # [--ui [--compositor C] | --tty [--fedora 45]] — the batch (GUI, terminal) tier inside a fedora:45 / Emacs 31.1 container
+test_container() { # [--ui [--compositor C] | --scenario | --perf | --tty [--fedora 45]] — the batch (GUI, scenario, perf, terminal) tier inside a fedora:45 / Emacs 31.1 container
   # DRGNX_TEST_IMAGE / DRGNX_TEST_GUI_IMAGE / DRGNX_TEST_TTY_IMAGE: use that image (CI pulls a prebuilt one) instead of building it
   # --tty --fedora 45 (the default): Fedora 44's Emacs is 30.2, which drgnx no longer supports
   local rt mount image file elpa prebuilt="${DRGNX_TEST_IMAGE:-}" args=() cmd=(bin/drgnx test) build=() tier="" fedora="" compositor=""
   while (($#)); do
     case "$1" in
-      --ui|--tty)
-        if [[ -n "$tier" && "$tier" != "${1#--}" ]]; then echo "drgnx: test --container takes --ui or --tty, not both" >&2; return 2; fi
+      --ui|--tty|--scenario|--perf)
+        if [[ -n "$tier" && "$tier" != "${1#--}" ]]; then echo "drgnx: test --container takes one of --ui, --scenario, --perf, --tty" >&2; return 2; fi
         tier="${1#--}" ;;
       --fedora) fedora="${2:-?}"; if (($# > 1)); then shift; fi ;;
       --compositor) compositor="${2:-}"; ui_compositor_ok "$compositor" || return 2; shift ;;
-      *) echo "drgnx: unknown option for test --container: $1 (--ui [--compositor C] | --tty [--fedora 45])" >&2; return 2 ;;
+      *) echo "drgnx: unknown option for test --container: $1 (--ui [--compositor C] | --scenario | --perf | --tty [--fedora 45])" >&2; return 2 ;;
     esac
     shift
   done
@@ -176,8 +176,10 @@ test_container() { # [--ui [--compositor C] | --tty [--fedora 45]] — the batch
   [ -n "$rt" ] || { echo "drgnx: no container runtime found (podman, docker, nerdctl); set DRGNX_CONTAINER" >&2; return 1; }
   mount="$here:/src:ro"; [ "$rt" = podman ] && mount="$mount,Z"
   image=drgnx-test:f45; file=Containerfile
-  if [ "$tier" = ui ]; then
+  if [ "$tier" = ui ] || [ "$tier" = scenario ] || [ "$tier" = perf ]; then   # the GUI image: sessions under headless mutter
     image=drgnx-test-gui:f45; file=Containerfile.gui; cmd=(bin/drgnx test --ui); prebuilt="${DRGNX_TEST_GUI_IMAGE:-}"
+    [ "$tier" = scenario ] && cmd=(bin/drgnx test --scenario --config drgnx)
+    [ "$tier" = perf ] && cmd=(bin/drgnx test --perf)
     local comp="${DRGNX_UI_COMPOSITOR:-}"
     if [ -n "$compositor" ]; then cmd+=(--compositor "$compositor"); comp="$compositor"; fi
     # KWin and niri are in an image of their own (Containerfile.wm); DRGNX_TEST_WM_IMAGE: a prebuilt one
@@ -214,10 +216,22 @@ test_container() { # [--ui [--compositor C] | --tty [--fedora 45]] — the batch
     [ "$rt" = podman ] && bargs=(--memory "$bmem" --memory-swap "$bmem")
     "$rt" build ${bargs[@]+"${bargs[@]}"} -q -t "$image" ${build[@]+"${build[@]}"} -f "$here/test/container/$file" "$here/test/container" >/dev/null
   fi
-  # a narrowed run stays narrow inside the container: the selector goes in with its value
-  if [ -n "${DRGNX_TEST_SELECTOR:-}" ]; then args+=(-e "DRGNX_TEST_SELECTOR=$DRGNX_TEST_SELECTOR"); fi
-  # …and so does the number of files run at once (CI: the runner's cores)
-  if [ -n "${DRGNX_TEST_JOBS:-}" ]; then args+=(-e "DRGNX_TEST_JOBS=$DRGNX_TEST_JOBS"); fi
+  # the run-control variables go in with their values when set: a narrowed run stays narrow, the files run at once
+  # (CI: the runner's cores), a failed file reruns once, wall clock is skipped, the perf run's results and factors
+  local v pass=(DRGNX_TEST_SELECTOR DRGNX_TEST_JOBS DRGNX_TEST_RERUN DRGNX_TEST_NO_TIMING DRGNX_PERF_RESULTS
+                DRGNX_PERF_CPU_FACTOR DRGNX_PERF_WORKLOADS DRGNX_UITEST_SETTLE_SCALE)
+  for v in "${pass[@]}"; do
+    [ "$v" = DRGNX_PERF_RESULTS ] && continue   # below: the checkout is read-only, so the file goes through a mount
+    if [ -n "${!v:-}" ]; then args+=(-e "$v=${!v}"); fi
+  done
+  if [ -n "${DRGNX_PERF_RESULTS:-}" ]; then   # FILE on the host (relative: to here), written through /out
+    local res="$DRGNX_PERF_RESULTS" resdir
+    case "$res" in /*) ;; *) res="$PWD/$res" ;; esac
+    resdir="$(dirname "$res")"; mkdir -p "$resdir"; resdir="$(cd "$resdir" && pwd -P)"
+    case "$resdir" in *:*) echo "drgnx: DRGNX_PERF_RESULTS must not be under a directory with ':' (it is mounted with -v): $resdir" >&2; return 2 ;; esac
+    args+=(-v "$resdir:/out" -e "DRGNX_PERF_RESULTS=/out/$(basename "$res")")
+  fi
+  args+=(-e DRGNX_LEASE=off)   # the host's lease is not the container's: one run owns it
   # evil for the modal tests (DRGNX_MODAL_ELPA), read-only; ,z: a shared label, other containers may read it too
   if [ -n "${DRGNX_MODAL_ELPA:-}" ] && [ -d "$DRGNX_MODAL_ELPA" ]; then
     local elpa; elpa="$(cd "$DRGNX_MODAL_ELPA" && pwd -P):/modal-elpa:ro"
@@ -466,7 +480,7 @@ cmd_test() {
     --soak) shift; run_in_tmp ui_exec test-soak "${1:-30}" ;;
     --container) shift; test_container "$@" ;;
     --podman) shift; DRGNX_CONTAINER=podman test_container "$@" ;;
-    *) echo "usage: drgnx test [--one-process] [--leaks] [--shuffle[=SEED]] | drgnx test [--shuffle=SEED] --find-polluter TEST [FILE…] | drgnx test --stress N [--load K] [--ui|--tty|--scenario] | drgnx test [--ui [--compositor C] | --tty | --scenario [--config C] | --bench | --perf [--audit | --ab REF [--n N]] | --soak [MIN] | --container [--ui [--compositor C] | --tty [--fedora 45]] | --install [NAME…] | --bootstrap [--fedora 44|45]]" >&2; exit 2 ;;
+    *) echo "usage: drgnx test [--one-process] [--leaks] [--shuffle[=SEED]] | drgnx test [--shuffle=SEED] --find-polluter TEST [FILE…] | drgnx test --stress N [--load K] [--ui|--tty|--scenario] | drgnx test [--ui [--compositor C] | --tty | --scenario [--config C] | --bench | --perf [--audit | --ab REF [--n N]] | --soak [MIN] | --container [--ui [--compositor C] | --scenario | --perf | --tty [--fedora 45]] | --install [NAME…] | --bootstrap [--fedora 44|45]]" >&2; exit 2 ;;
   esac
 }
 

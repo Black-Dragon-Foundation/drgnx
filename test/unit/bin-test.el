@@ -842,6 +842,70 @@ macOS (no /proc there)."
               (should-not (seq-find (lambda (a) (string-search "DRGNX_TEST_JOBS" a)) args)))))
       (delete-directory dir t))))
 
+;; The argv of one `bin/drgnx test --container ARGS' run on a stub runtime, as a list; ENV is extra "NAME=VALUE" strings.
+(defun drgnx-bin-test--container-argv (dir env &rest args)
+  (let* ((log (expand-file-name "rt.log" dir))
+         (rt (drgnx-bin-test--fake-emacs (expand-file-name "fake-rt" dir)
+                                         (format "for a in \"$@\"; do echo \"$a\" >> %s; done" log)))
+         (drgnx-bin-test--cwd dir))
+    (when (file-exists-p log) (delete-file log))
+    (should (eql 0 (car (apply #'drgnx-bin-test--call
+                               drgnx-bin-test--bin
+                               (append (list (concat "HOME=" dir) (concat "DRGNX_CONFIG_DIR=" dir "/config")
+                                             (concat "DRGNX_CONTAINER=" rt) "DRGNX_TEST_IMAGE=cpu-image")
+                                       env)
+                               "test" "--container" args))))
+    (split-string (drgnx-bin-test--slurp log) "\n" t)))
+
+(ert-deftest drgnx-bin/container-scenario-and-perf-use-the-gui-image ()
+  ;; --scenario and --perf run on Containerfile.gui's image (DRGNX_TEST_GUI_IMAGE honoured), not the unit image, with
+  ;; their own command; --compositor still belongs to --ui alone; two tiers at once are refused.
+  (let ((dir (make-temp-file "drgnx-bin-tmp" t)))
+    (unwind-protect
+        (progn
+          (dolist (case '(("--scenario" "bin/drgnx" "test" "--scenario" "--config" "drgnx")
+                          ("--perf" "bin/drgnx" "test" "--perf")))
+            (let* ((args (drgnx-bin-test--container-argv dir '("DRGNX_TEST_GUI_IMAGE=gui-image") (car case)))
+                   (tail (member "gui-image" args)))
+              (should tail)
+              (should (equal (cdr tail) (cdr case)))
+              (should-not (member "cpu-image" args))
+              (should (member "--security-opt" args))))
+          (should-not (eql 0 (car (let ((drgnx-bin-test--cwd dir))
+                                    (drgnx-bin-test--call drgnx-bin-test--bin
+                                                          (list (concat "HOME=" dir) "DRGNX_CONTAINER=true")
+                                                          "test" "--container" "--perf" "--scenario")))))
+          (should-not (eql 0 (car (let ((drgnx-bin-test--cwd dir))
+                                    (drgnx-bin-test--call drgnx-bin-test--bin
+                                                          (list (concat "HOME=" dir) "DRGNX_CONTAINER=true")
+                                                          "test" "--container" "--perf" "--compositor" "kwin"))))))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-bin/container-passes-the-run-control-variables-and-turns-the-lease-off ()
+  ;; The run-control variables go in with their values when set (and not when unset); the host's lease never applies
+  ;; inside; the perf results file goes through a writable /out mount, since the checkout is read-only.
+  (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
+         (vars '("DRGNX_TEST_SELECTOR=\"x\"" "DRGNX_TEST_JOBS=4" "DRGNX_TEST_RERUN=1" "DRGNX_TEST_NO_TIMING=1"
+                 "DRGNX_PERF_CPU_FACTOR=2" "DRGNX_PERF_WORKLOADS=typing" "DRGNX_UITEST_SETTLE_SCALE=3")))
+    (unwind-protect
+        (progn
+          (let ((args (drgnx-bin-test--container-argv
+                       dir (append vars (list (concat "DRGNX_PERF_RESULTS=" dir "/out/perf-results.json")
+                                              "DRGNX_TEST_GUI_IMAGE=gui-image"))
+                       "--perf")))
+            (dolist (v vars) (should (member v args)))
+            (should (member "DRGNX_LEASE=off" args))
+            (should (member (concat (file-truename (expand-file-name "out" dir)) ":/out") args))
+            (should (member "DRGNX_PERF_RESULTS=/out/perf-results.json" args)))
+          (let ((args (drgnx-bin-test--container-argv   ; unset in the environment: a bare NAME removes it
+                       dir '("DRGNX_TEST_SELECTOR" "DRGNX_TEST_JOBS" "DRGNX_TEST_RERUN" "DRGNX_TEST_NO_TIMING"
+                             "DRGNX_PERF_RESULTS" "DRGNX_PERF_CPU_FACTOR" "DRGNX_PERF_WORKLOADS"
+                             "DRGNX_UITEST_SETTLE_SCALE"))))
+            (should (member "DRGNX_LEASE=off" args))
+            (should-not (seq-find (lambda (a) (string-match-p "\\`DRGNX_\\(TEST_\\|PERF_\\|UITEST_\\)[A-Z_]+=" a)) args))
+            (should-not (member "/out" (mapcar (lambda (a) (car (last (split-string a ":")))) args)))))
+      (delete-directory dir t))))
+
 (ert-deftest drgnx-bin/a-container-run-gets-the-modal-elpa ()
   ;; DRGNX_MODAL_ELPA (evil for the modal tests) is mounted read-only into the container and named there, so the
   ;; 31.1 container runs the evil tests instead of skipping them.

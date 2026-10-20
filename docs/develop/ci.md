@@ -4,11 +4,11 @@ GitHub Actions runs the same commands you run locally; nothing in CI is CI-only.
 
 | Workflow | When | What |
 |---|---|---|
-| `CI` (`.github/workflows/ci.yml`) | every push to `main`, every pull request, on demand | the unit suite on **Emacs 31.1** (Fedora 45, `bin/drgnx test --container`) its files in parallel and then the `:timing` tests alone ([Parallel files](#parallel-files)); `shellcheck --severity=warning` on `install.sh`, `bin/drgnx` and the pre-commit hook; the leak scan |
-| `GUI tier` (`.github/workflows/gui.yml`) | nightly, on demand | `bin/drgnx test --container --ui`: real Emacs 31.1 (pgtk) sessions under headless mutter |
+| `CI` (`.github/workflows/ci.yml`) | every push to `main`, every pull request, on demand | the unit suite on **Emacs 31.1** (Fedora 45, `bin/drgnx test --container`) its files in parallel, a failed file rerun once, the `:timing` tests left out by name ([Parallel files](#parallel-files)); `shellcheck --severity=warning` on `install.sh`, `bin/drgnx` and the pre-commit hook; the leak scan |
+| `GUI tier` (`.github/workflows/gui.yml`) | every push to `main`, nightly, on demand | real Emacs 31.1 (pgtk) sessions under headless mutter, three jobs: `ui` (`bin/drgnx test --container --ui`: the GUI and live tiers), `scenario` (`--container --scenario`, `DRGNX_TEST_NO_TIMING=1`: the frame budget is reported, not judged) and `perf` (`--container --perf`, `DRGNX_PERF_CPU_FACTOR=2`, `DRGNX_PERF_RESULTS=perf-results.json` uploaded as the `perf-results` artifact, also when the run fails). A newer push cancels an older run of the same ref |
 | `Terminal tier` (`.github/workflows/tty.yml`) | nightly, on demand | `bin/drgnx test --container --tty --fedora 45`: the terminal tests (Emacs in tmux) on Emacs 31.1 |
 | `Bootstrap` (`.github/workflows/bootstrap.yml`) | weekly (Monday), on demand with a Fedora release (45 by default, 44 builds Emacs from source) | `bin/drgnx test --bootstrap --fedora N`: the exit test of a second machine — `install.sh --yes --config … --identity …` in a fresh Fedora container reaches a green doctor with the configuration, the locked packages and the provider keys back, and a second run changes nothing ([harness.md](harness.md)) |
-| `macOS` (`.github/workflows/macos.yml`) | `unit`: every push to `main`, every pull request, on demand; `install`: weekly (Wednesday), on demand | on macOS 27 (`xcode-27`, Apple silicon: GitHub names macOS images after their Xcode now): `unit` installs Emacs and ripgrep with Homebrew, checks that `install.sh` parses under macOS's bash 3.2 (`/bin/bash -n`), prints its plan (`--dry-run`) and runs `bin/drgnx test` the same way ([Parallel files](#parallel-files)); `install` runs `install.sh --yes` for real on the checkout (Homebrew's emacs-plus), then `drgnx doctor`, `drgnx sync` (a first sync from the shipped lock), `drgnx macos-app` and `drgnx open --check`. A newer run cancels an older one of the same event and ref only, so a push to `main` never cancels the weekly install |
+| `macOS` (`.github/workflows/macos.yml`) | `unit`: every push to `main`, every pull request, on demand; `install`: weekly (Wednesday), on demand | on macOS 27 (`xcode-27`, Apple silicon: GitHub names macOS images after their Xcode now): `unit` installs Emacs and ripgrep with Homebrew, checks that `install.sh` parses under macOS's bash 3.2 (`/bin/bash -n`), prints its plan (`--dry-run`) and runs `bin/drgnx test` the same way ([Parallel files](#parallel-files)), with no time factor (CI runs no `:timing` test); `install` runs `install.sh --yes` for real on the checkout (Homebrew's emacs-plus), then `drgnx doctor`, `drgnx sync` (a first sync from the shipped lock), `drgnx macos-app` and `drgnx open --check`. A newer run cancels an older one of the same event and ref only, so a push to `main` never cancels the weekly install |
 | `Test images` (`.github/workflows/images.yml`) | a push changing `test/container/`, weekly, on demand | builds the two Fedora test images and pushes them to `ghcr.io/black-dragon-foundation/drgnx-test` and `drgnx-test-gui`, tagged with the Containerfile's hash (and `f45`) |
 
 The unit suite includes formatting (`bin/drgnx fmt`), the byte-compile with no warnings and the lints, so they
@@ -60,45 +60,40 @@ locale's share locally.
 
 ## Parallel files
 
-Each unit-suite job (Emacs 31.1, macOS) runs the suite in two steps:
+Each unit-suite job (Emacs 31.1, macOS) runs the suite in one step: `DRGNX_TEST_JOBS` is the runner's cores
+(`nproc` on Linux: 4 on `ubuntu-24.04`, 16 GB; `sysctl -n hw.ncpu` on macOS: 3, 7 GB), `DRGNX_TEST_RERUN=1` reruns a
+failed file once (a file that fails and then passes is reported as a flake, not a failure) and `DRGNX_TEST_NO_TIMING=1`
+leaves out the tests tagged `:timing` (wall-clock assertions) and lists them as skipped. That many test files run at
+once, each in an Emacs of its own as always; a file's output is printed whole when it ends, after a `drgnx: FILE`
+line, and the summary at the end lists every unexpected result.
 
-1. Every test but the `:timing` ones (`DRGNX_TEST_SELECTOR='(not (tag :timing))'`) with `DRGNX_TEST_JOBS` set to
-   the runner's cores (`nproc` on Linux: 4 on `ubuntu-24.04`, 16 GB; `sysctl -n hw.ncpu` on macOS: 3, 7 GB; three
-   files at once, the slowest among them, peaked at about 1 GB together). That many test files run at once, each in
-   an Emacs of its own as always; a file's output is printed whole when it ends, after a `drgnx: FILE` line, and the
-   summary at the end lists every unexpected result. One file at a time, the Emacs 31.1 job took 785 s, 733 of them
-   inside tests; three at a time, 30 of the slowest files took 160 s instead of 427.
-2. Then the `:timing` tests (`DRGNX_TEST_SELECTOR='(tag :timing)'`), which hold wall-clock budgets, with nothing
-   else running, a file at a time: the selector `bin/drgnx check` uses for its `unit-timing` job
-   ([check.md](check.md)).
+No CI job runs a `:timing` test: a shared runner's clock judges nothing, so a budget in wall time lives where the
+machine is quiet (`bin/drgnx check`'s `unit-timing` job, [check.md](check.md)) and, for the frame and the work in a
+command, in the perf job (allocation, CPU time and counts; [perf.md](perf.md)). `bin/drgnx check` stays as the local
+equivalent of the merge wave; no workflow runs it.
 
-The two selectors take every test exactly once. The second step runs even when the first failed (`if:
-${{ !cancelled() }}`), so one run shows both; either failing fails the job. `bin/drgnx test --container` passes
-`DRGNX_TEST_JOBS` and the selector into the container. `DRGNX_TEST_TIME_FACTOR` (macOS) is set for the second step
-only: only `:timing` tests read it.
+DEFERRED DET-CI-ENV-1: the step uses `DRGNX_TEST_NO_TIMING=1` rather than `(not (tag :timing))`, and
+`test/no-skip.eld` has no darwin or Ubuntu rows until the first CI summaries list their skips.
 
-Unlike `check`'s `unit-timing` job, the second step does not load every file into one Emacs
-(`DRGNX_TEST_ONE_PROCESS=1`): there a test that scans drgnx's symbols
-(`drgnx-fingerprint/the-first-scan-of-drgnx-symbols-allocates-what-it-did`) scans every test file's too and misses its
-allocation bound. A file at a time, each such test sees what it sees in a plain `bin/drgnx test`; the price is an Emacs start
-for every file, most of which then run no test.
-
-The same locally (the Emacs 31.1 job's steps, without the container):
+The same locally (the Emacs 31.1 job's step, without the container):
 
 ```
-DRGNX_TEST_JOBS=4 DRGNX_TEST_SELECTOR='(not (tag :timing))' bin/drgnx test
-DRGNX_TEST_SELECTOR='(tag :timing)' bin/drgnx test
+DRGNX_TEST_JOBS=4 DRGNX_TEST_RERUN=1 DRGNX_TEST_NO_TIMING=1 bin/drgnx test
 ```
 
 ## Reproduce a job locally
 
 ```
 bin/drgnx test --container          # the Emacs 31.1 job in one step (podman, docker or nerdctl; see "Parallel files")
-bin/drgnx test --container --ui     # the nightly GUI tier
+bin/drgnx test --container --ui     # the GUI tier's ui job (--scenario, --perf: its other two)
 bin/drgnx test --container --tty                # the nightly terminal tier (Fedora 45, Emacs 31.1)
 bin/drgnx test --bootstrap          # the weekly second-machine exit test (fedora:45; --fedora 44 for the source build)
 .githooks/pre-commit --all          # the leak scan over every tracked file
 ```
+
+`bin/drgnx test --container` passes the run-control variables (`DRGNX_TEST_SELECTOR`, `_JOBS`, `_RERUN`, `_NO_TIMING`,
+`DRGNX_PERF_RESULTS` through a mount, `_CPU_FACTOR`, `_WORKLOADS`, `DRGNX_UITEST_SETTLE_SCALE`) into the container and
+always sets `DRGNX_LEASE=off`.
 
 `DRGNX_CONTAINER=podman` names the container runtime without asking a host Emacs (CI has none).
 
@@ -127,5 +122,5 @@ on the checkout fails with "dubious ownership" (`drgnx test --bootstrap`'s snaps
   updates weekly.
 - `permissions: contents: read` and `persist-credentials: false`: no workflow can write to the repository. Only
   `Test images` may write packages; the test jobs may read them. None uses a secret beyond the built-in token.
-- Heavy tiers stay out of the per-push run: the GUI tier is nightly, the macOS real install and the second-machine exit test weekly; `drgnx test --install` (source
-  builds in fresh containers) and `--perf` (needs a quiet machine) run locally.
+- The GUI, scenario and perf jobs run on every push to `main` (not on pull requests); the terminal tier is nightly, the macOS real install and the second-machine exit test weekly; `drgnx test --install` (source
+  builds in fresh containers) runs locally. The Emacs install step of each workflow is one step (the image pull, Homebrew's `brew install`), so one change swaps it.
