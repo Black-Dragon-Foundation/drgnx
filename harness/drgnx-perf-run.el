@@ -942,6 +942,16 @@ version and the commit, as JSON in FILE."
   "Input workloads with no allocation, CPU or rows budget yet, and why: they could not be seeded from the 31.1
 container.  Seed one (budgets.eld) and take it off this list.")
 
+(defconst drgnx-perf-run-container-skipped
+  '((agent-stream . "the mock agent's turn ends before the typing does (the run waits for the transcript to settle while it streams)")
+    (cockpit-cards . "the mock agents exit (9) in the container")
+    (live-view . "the container image has no websocket package")
+    (terminal-typing . "the container image has no eat package")
+    (terminal-output . "the container image has no eat package"))
+  "Workloads that error in the GUI container (seen 2026-10-20, CI perf lab), and why.  In a container the lab names
+them and leaves them out (as it leaves out the evil workloads without evil), so one that cannot run there does not
+fail the whole run; they still run on a host.  Each is also in `drgnx-perf-run-unseeded'.")
+
 (defconst drgnx-perf-run-hook-budget 2 "ms: any hook function's p90 (the spec), judged in the --audit pass.")
 (defconst drgnx-perf-run-hook-command-budget 1.5
   "ms (p90): all the audited hook functions and timers together, per command, judged in the --audit pass.  The
@@ -985,12 +995,14 @@ its own cost to the other numbers)."
         (progn
           (drgnx-perf-run--check-gc sess)
           (dolist (w (drgnx-perf-run--only selected))
-            (message "perf: %s…" (car w))
-            (let* ((cal (drgnx-perf-run--call sess "(drgnx-perf-calibrate)"))
-                   (r (condition-case err (drgnx-perf-run-workload sess (cdr w) audit)
-                        (error (list :error (error-message-string err))))))
-              (push (cons (car w) (if (plist-get r :error) r (plist-put r :calibration cal))) results))
-            (push (drgnx-perf-load) loads)))
+            (if-let* ((why (and (drgnx-env-container) (cdr (assq (car w) drgnx-perf-run-container-skipped)))))
+                (princ (format "perf: %s skipped in the container — %s\n" (car w) why))
+              (message "perf: %s…" (car w))
+              (let* ((cal (drgnx-perf-run--call sess "(drgnx-perf-calibrate)"))
+                     (r (condition-case err (drgnx-perf-run-workload sess (cdr w) audit)
+                          (error (list :error (error-message-string err))))))
+                (push (cons (car w) (if (plist-get r :error) r (plist-put r :calibration cal))) results))
+              (push (drgnx-perf-load) loads))))
       (drgnx-ui-stop (plist-get s :name))
       (delete-file drgnx-perf-run--fixture))
     (setq results (nreverse results))

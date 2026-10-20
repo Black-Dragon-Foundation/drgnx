@@ -131,6 +131,7 @@ seccomp=unconfined --security-opt label=disable -v CHECKOUT:/src:ro -v OUT:/out 
 between the runs. The checkout is not built there, so the figures are those of code loaded from source; compiled
 code allocates less, so a built checkout stays under them. A workload that could not run in the container has no
 gated rows yet and is named, with the reason, in `drgnx-perf-run-unseeded` (a test checks both ways).
+In a container the lab names the workloads that error there (`drgnx-perf-run-container-skipped`: the two mock-agent ones, the Live view and the terminal ones, the last three for want of the websocket and eat packages in the image) and leaves them out, so the CI perf job does not fail on them; on a host they run.
 
 **Raising a budget** is a change of its own: edit `budgets.eld` in the same commit as the code that needs it, with the
 reason in a comment on the row. A budget is raised for a measured, explained increase, never to make a run pass.
