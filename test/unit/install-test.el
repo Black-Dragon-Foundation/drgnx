@@ -1159,3 +1159,7 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
            (log (drgnx-install-test--file (expand-file-name "log" tmp))))
       (should (= (car r) 0))
       (should (string-search "build.sh --container fedora-44 --memory 5g --jobs 2 --prefix " log)))))
+
+(ert-deftest drgnx-install/the-pin-is-the-published-series-head ()
+  (drgnx-install-test--expect (drgnx-install-test--plan "fedora-44" "--method" "nidhogg")
+                              "at v31.1-nidhogg.1" "commit 66a3e65fee59"))

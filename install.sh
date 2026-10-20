@@ -23,9 +23,9 @@ EMACS_VERSION=31.1
 NIDHOGG_VERSION=31.1-nidhogg.1
 NIDHOGG_TAG="v$NIDHOGG_VERSION"
 NIDHOGG_REPO="${DRGNX_INSTALL_NIDHOGG_REPO:-https://github.com/Black-Dragon-Foundation/nidhogg.git}"
-# The commit $NIDHOGG_TAG must be: a moved or replaced tag installs nothing.  All zeros until the release is published
-# (DEFERRED NIDHOGG-PIN-1): every install of Nidhogg stops at the check.
-NIDHOGG_COMMIT="${DRGNX_INSTALL_NIDHOGG_COMMIT:-0000000000000000000000000000000000000000}"
+# The commit $NIDHOGG_TAG must be: a moved or replaced tag installs nothing.  The head of the published series;
+# the tag is created on this commit at release (until then the fetch of the tag fails and nothing is installed).
+NIDHOGG_COMMIT="${DRGNX_INSTALL_NIDHOGG_COMMIT:-66a3e65fee590fd28ef88c07e63e2cde28cee594}"
 DRGNX_REPO="${DRGNX_INSTALL_REPO:-https://github.com/Black-Dragon-Foundation/drgnx.git}"
 DOCS_URL=https://github.com/Black-Dragon-Foundation/drgnx/blob/main/docs/guide/install.md
 GNU_MIRROR="${DRGNX_INSTALL_MIRROR:-https://ftpmirror.gnu.org/emacs}"         # overridable for tests
