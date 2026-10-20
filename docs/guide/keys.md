@@ -597,7 +597,8 @@ Emacs' default bindings in; winning bindings, conflicts and problems out (`drgnx
 `macos` or `linux`; on macOS Emacs' defaults include its Mac port's `s-` keys, so taking `s-k` for VS Code's
 Cmd+K chords is a reported prefix conflict, as `C-k` over `kill-line` is on Linux). `drgnx-keys-apply` binds the result and
 remembers what each binding replaced, so the next switch restores Emacs' own bindings first (and leaves alone a
-binding someone else changed since). The active keys of each command are in its `bound` slot, which every surface
+binding someone else changed since); a prefix a binding made (`s-k` for the Cmd+K chords where Emacs binds no `s-k`,
+as in a terminal) goes again once it is empty. The active keys of each command are in its `bound` slot, which every surface
 reads. Tests: `test/unit/core-keys-test.el` (resolution, switching, keys.eld, surfaces) and
 `test/live/drgnx-keys-test.el` (real key presses in a headless session).
 

@@ -148,7 +148,11 @@ The features come back after (unless BODY loaded them again)."
 (defun drgnx-test-modules--ui-snapshot ()
   "The key and surface state that `drgnx-modules-after-teardown-functions' change."
   (list :variables (delq nil (mapcar (lambda (v) (and (boundp v) (cons v (symbol-value v))))
-                                     drgnx-test-modules--ui-variables))
+                                     ;; with the record of the Mac modifiers the apply saved, their values: on macOS
+                                     ;; the apply sets them for VS Code's keys (`drgnx-keys--set-mac-modifiers')
+                                     (append drgnx-test-modules--ui-variables
+                                             (and (boundp 'drgnx-keys--mac-modifiers)
+                                                  (mapcar #'car (symbol-value 'drgnx-keys--mac-modifiers))))))
         ;; `drgnx-modal-order-alists' keeps the everywhere alist in its place even while it holds no key;
         ;; `drgnx-keys--restore' (and an apply with no `:everywhere' key) takes it out
         :everywhere-at (seq-position emulation-mode-map-alists 'drgnx-keys--everywhere-alist)

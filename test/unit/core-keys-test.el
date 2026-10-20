@@ -434,12 +434,19 @@ keys); every binding is undone after."
 (defvar drgnx-keys-test-empty-map (make-sparse-keymap))
 
 (ert-deftest drgnx-keys/binding-into-an-empty-map-lifts-nothing ()
-  ;; `keymap-lookup' answers 1 for "SPC f f" in an empty map (SPC is unbound, not a command): no prefix is lifted or
-  ;; recorded, so the first apply records what every later one does.  A command on the prefix is still lifted.
-  (let ((drgnx-keys--applied nil))
+  ;; `keymap-lookup' answers 1 for "SPC f f" in an empty map (SPC is unbound, not a command): no prefix is lifted;
+  ;; the prefix maps made are recorded with no command, and the restore takes them out, so the first apply records
+  ;; what every later one does.  A command on the prefix is still lifted.
+  (let ((drgnx-keys--applied nil) (record '((drgnx-keys-test-empty-map "SPC f f" nil ignore)
+                                            (drgnx-keys-test-empty-map "SPC f" nil :prefix)
+                                            (drgnx-keys-test-empty-map "SPC" nil :prefix))))
     (setq drgnx-keys-test-empty-map (make-sparse-keymap))
     (should (null (drgnx-keys--bind 'drgnx-keys-test-empty-map "SPC f f" #'ignore)))
-    (should (equal drgnx-keys--applied '((drgnx-keys-test-empty-map "SPC f f" nil ignore))))
+    (should (equal drgnx-keys--applied record))
+    (drgnx-keys--restore)
+    (should (equal drgnx-keys-test-empty-map '(keymap)))
+    (should (null (drgnx-keys--bind 'drgnx-keys-test-empty-map "SPC f f" #'ignore)))
+    (should (equal drgnx-keys--applied record))
     (setq drgnx-keys--applied nil drgnx-keys-test-empty-map (make-sparse-keymap))
     (keymap-set drgnx-keys-test-empty-map "SPC" #'forward-char)
     (should (equal (drgnx-keys--bind 'drgnx-keys-test-empty-map "SPC f f" #'ignore) "forward-char (SPC)"))
@@ -666,6 +673,24 @@ keys); every binding is undone after."
    (should-not (memq 'drgnx-keys--everywhere-alist emulation-mode-map-alists))
    (should-not (cdr drgnx-keys--everywhere-map))
    (should-not drgnx-keys--everywhere-on)))
+
+(defvar drgnx-keys-test--map nil)
+
+(ert-deftest drgnx-keys/a-prefix-made-for-a-key-goes-with-it ()
+  ;; VS Code's Cmd chords on macOS (s-k s-r …) make the prefix s-k where Emacs has none (a batch or terminal Emacs:
+  ;; ns-win's s-k is not there); restoring takes it out again, and one lifted from a command goes back as before
+  (let ((drgnx-keys-test--map (make-sparse-keymap)) (drgnx-keys--applied nil))
+    (keymap-set drgnx-keys-test--map "C-k" #'kill-line)
+    (let ((before (copy-keymap drgnx-keys-test--map)))
+      (drgnx-keys--bind 'drgnx-keys-test--map "s-k s-r" #'forward-char)
+      (drgnx-keys--bind 'drgnx-keys-test--map "s-k s-0" #'backward-char)
+      (drgnx-keys--bind 'drgnx-keys-test--map "C-k C-r" #'forward-word)
+      (should (eq (keymap-lookup drgnx-keys-test--map "s-k s-0") #'backward-char))
+      (should (eq (keymap-lookup drgnx-keys-test--map "C-k C-r") #'forward-word))
+      (drgnx-keys--restore)
+      (should (equal (keymap-lookup drgnx-keys-test--map "C-k") #'kill-line))
+      (should-not (keymap-lookup drgnx-keys-test--map "s-k"))
+      (should (= (length drgnx-keys-test--map) (length before))))))
 
 ;;;; macOS (M12a)
 
