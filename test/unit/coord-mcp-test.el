@@ -728,3 +728,10 @@ data dir (job j: tasks 1, 2); the clock at `drgnx-coord-mcp-test--clock'."
       (should (equal (plist-get prop :items) '(:type "string"))))))
 
 ;;; coord-mcp-test.el ends here
+
+(ert-deftest drgnx-coord-mcp/runs-at-batch-gc-settings ()
+  (let ((seen nil) (gc-cons-threshold 800000) (gc-cons-percentage 0.1))
+    (cl-letf (((symbol-function 'drgnx-coord-mcp--parent) #'ignore)
+              ((symbol-function 'drgnx-mcp-serve) (lambda (&rest _) (setq seen (cons gc-cons-threshold gc-cons-percentage)))))
+      (drgnx-coord-mcp-main))
+    (should (equal seen (cons drgnx-gc-batch-threshold 0.2)))))

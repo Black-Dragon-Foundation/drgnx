@@ -15,6 +15,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'drgnx-paths)
+(require 'drgnx-gc)
 (require 'drgnx-mcp)
 (require 'drgnx-search-store)
 (require 'drgnx-search-query)
@@ -90,6 +91,7 @@ nothing runs where PATH points: no git, no other project's index."
 (defun drgnx-search-mcp-main ()
   "Batch entry: `emacs --batch -L core -l drgnx-search-mcp -f drgnx-search-mcp-main [-- ROOT]'.
 Serves the `search' tool on stdin/stdout for the project at ROOT (default: the working directory)."
+  (drgnx-gc-batch-setup)
   (let* ((args (cdr (member "--" command-line-args-left)))
          (root (expand-file-name (or (car args) default-directory))))
     (setq command-line-args-left nil)

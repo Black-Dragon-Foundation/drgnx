@@ -19,6 +19,7 @@
 (require 'drgnx-mcp)
 (require 'drgnx-coord)
 (require 'drgnx-paths)
+(require 'drgnx-gc)
 
 (declare-function drgnx-hub-socket "drgnx-hub")
 (declare-function drgnx-work--status-rows "drgnx-work")
@@ -611,6 +612,7 @@ error, nothing is sent.  The hub is asked only when the cheap checks fail."
 
 (defun drgnx-coord-mcp-main ()
   "Batch entry: serve the coordination tools on stdin/stdout."
+  (drgnx-gc-batch-setup)
   (drgnx-coord-mcp--parent)   ; the agent's process, read now: while it surely is this server's parent
   (drgnx-mcp-serve "drgnx" (drgnx-coord-mcp-tools)))
 
