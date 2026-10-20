@@ -2275,11 +2275,12 @@ could not read or one a newer drgnx wrote. Do not call `with-temp-file`, `write-
 a file by `insert-file-contents` followed by `read`, in `core/`, `wb/` or `modules/`.
 `test/unit/lint-files-test.el` reads those files form by form and fails on such a form (a flagged site is
 `(FILE FN WHAT)`; `WHAT` is the function, or `read-site`) unless `test/lint-files-allowed.eld` has a row
-`(:file F :fn FN :what WHAT :why "…" :until N)`. `:until` is the task of the config-layer plan that ports the
-site, and the port deletes the row (a row that matches nothing fails the second test). A row marked `never` is a
-site that is not drgnx's own file, and its `:why` starts with the reason: `"a user's file"`, `"a temporary file"`,
-`"a directory move"`, `"its own lock protocol"`, `"age writes it"`, `"a developer tool"` or `"Lisp source"` (a module's source read, never run). A new site is a new
-row only when it is one of those.
+`(:file F :fn FN :what WHAT :why "…" :until never)`. Every port of the config-layer plan is done, so every row
+is `never` (`drgnx-lint/only-permanent-file-exceptions-remain` fails on any other `:until`), and a row that
+matches nothing fails the second test. A row is a site that is not drgnx's own file, and its `:why` starts with
+the reason: `"a user's file"`, `"a temporary file"`, `"a directory move"`, `"its own lock protocol"`, `"age
+writes it"`, `"a developer tool"` or `"Lisp source"` (a module's source read, never run). A new site is a new row
+only when it is one of those; any other file goes through `drgnx-file`.
 
 ## Large files: the flag producers check (`core/drgnx-large-file.el`)
 

@@ -1,8 +1,8 @@
 ;; drgnx's file reads and writes outside drgnx-file (core/drgnx-file.el), the baseline of
 ;; test/unit/lint-files-test.el.  Each row: :file, :fn and :what name the site; :why says what the
-;; file is; :until is the task of the config-layer plan that ports the site (its port removes the
-;; row), or `never' with a :why that starts with its category: "a user's file", "a temporary file",
-;; "a directory move", "its own lock protocol", "age writes it", "a developer tool" or "Lisp source".
+;; file is.  Every port of the config-layer plan is done, so :until is always `never' and :why starts
+;; with its category: "a user's file", "a temporary file", "a directory move", "its own lock
+;; protocol", "age writes it", "a developer tool" or "Lisp source".
 (
  (:file "core/drgnx-bootstrap.el" :fn drgnx-bootstrap--git-clone :what rename-file :why "a directory move: a fresh clone renamed into the empty config dir" :until never)
  (:file "core/drgnx-fmt.el" :fn drgnx-fmt--learn :what read-site :why "a user's file: Lisp source read to learn indentation" :until never)
