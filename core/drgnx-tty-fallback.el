@@ -213,6 +213,25 @@ chord the profile needs no fallback for (one a plain terminal sends, or no key o
                                 (format "keys.eld :tty-fallback %s: the profile needs no fallback for it" (car o)))))
                        overrides)))))
 
+(declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
+(declare-function drgnx-notice-clear "drgnx-notice" (source &optional id))
+(declare-function drgnx-notices "drgnx-notice" (&rest args))
+
+(defun drgnx-tty-fallback-notify (term table &optional overrides)
+  "Make `drgnx-tty-fallback-problems' of TABLE (and OVERRIDES) the `warn' conditions of TERM, a terminal's name.
+They are of source `terminal', id (TERM . LINE); those of TERM that are no longer a problem go, other
+terminals' stay.  Never signals."
+  (condition-case err
+      (let ((lines (drgnx-tty-fallback-problems table overrides)))
+        (require 'drgnx-notice)
+        (dolist (n (drgnx-notices :source 'terminal :life 'condition))
+          (let ((id (plist-get n :id)))
+            (when (and (consp id) (equal (car id) term) (not (member (cdr id) lines)))
+              (drgnx-notice-clear 'terminal id))))
+        (dolist (line lines)
+          (drgnx-notify 'terminal 'warn line :id (cons term line) :life 'condition)))
+    (error (message "drgnx: terminal fallback problems not recorded as notices: %s" (error-message-string err)))))
+
 ;;;; The active profile's table
 
 (defvar drgnx-tty-fallback--cache nil "(KEYS-LAST . TABLE): the table of the `drgnx-keys-last' it was made from.")

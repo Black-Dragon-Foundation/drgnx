@@ -477,7 +477,8 @@ that mean it. The theme hook passes TIMEOUT 0 and skips when `drgnx-file-busy`; 
 Work that need not happen at startup hangs on a stage and runs once, when the stage is first reached:
 `drgnx-first-input-hook` (before the first command), `drgnx-first-file-hook` (first visited file),
 `drgnx-first-gui-frame-hook` (first graphical frame — for a daemon, the first `emacsclient -c`). Each function
-runs under its own error guard; errors are collected in `drgnx-hooks-problems`, never shown as prompts.
+runs under its own error guard; an error is a `warn` event of notice source `hooks` (id `(HOOK . FN)`), never shown
+as a prompt.
 
 ## No prompts in automatic paths (`drgnx-guard.el`)
 
@@ -646,6 +647,19 @@ memoised on the model's tick, the glyph table and the model's table (`eq`), so a
 `mode-line` button (`drgnx-ui-button`). A click on the needs-you count runs `drgnx-notice-needs-you-click`: with
 every item from one source it does what the newest item's `:command` says, else it opens the list; the problems
 count opens the list.
+
+**Core producers** (they load the model on their first post, so none needs it at startup; none ever signals):
+
+| Source | Posts | Id |
+|---|---|---|
+| `keys` | After each `drgnx-keys-apply`, `drgnx-notice-clear` of the source, then one `warn` condition per entry of `drgnx-keys-last`' `:problems` (a keys.eld mistake, an unknown profile, a binding that could not be made). `warn`, so never echoed. `drgnx-keys-problems` stays the input list. | the problem text |
+| `hooks` | A `warn` event for an error in a staged-hook function (`drgnx-hooks-run-once`): `HOOK: FN: MESSAGE`. | `(HOOK . FN)` |
+| `commands` | Nothing yet. `drgnx-commands-problems`, which nothing wrote, is gone; a registry problem is a `commands` notice. | |
+| `timers` | A `warn` condition when the layer stops a timer at its `drgnx-timer-failure-limit`-th failure in a row: `timer KEY (FN) stopped after N failures: ERROR`, with a fix line. Cleared when KEY starts again. `timers-report.eld` and the doctor's `timers` check are unchanged. | the timer key |
+| `terminal` | `drgnx-tty-fallback-notify`: a `warn` condition per line of `drgnx-tty-fallback-problems` for a frame's terminal; lines that stopped being a problem go, other terminals' stay. | `(TERMINAL . LINE)` |
+
+The terminal modules still push their own caught errors to `drgnx-hooks-problems` (terminal mode is frozen); only
+staged-hook errors are notices.
 
 **Cost** (allocation is the gate; `test/unit/core-notice-test.el`, byte-compiled): a count read 0 conses; a new
 event 14 (22 with one hook function); a repeat 1 (its key). Replacing three sets of 40/40/20 items (80 ids) in

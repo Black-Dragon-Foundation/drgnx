@@ -304,6 +304,7 @@ newest `drgnx-tty-frames-report-terminals' (16) only;
                                 :fallbacks (drgnx-tty-fallback-report-rows
                                             table caps (terminal-parameter (frame-terminal frame) 'drgnx-tty-fallback-table))
                                 :fallback-problems (drgnx-tty-fallback-problems table (drgnx-tty-fallback--overrides))))))
+      (drgnx-tty-fallback-notify key table (drgnx-tty-fallback--overrides))
       (drgnx-tty-frames--save-report
        (append (list :terminals (seq-take (cons (cons key entry) (assoc-delete-all key (copy-sequence old)))
                                           drgnx-tty-frames-report-terminals))

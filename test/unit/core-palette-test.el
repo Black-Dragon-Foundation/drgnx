@@ -7,7 +7,7 @@
 
 (ert-deftest drgnx-palette/candidates-and-run ()
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-        (drgnx-commands-problems nil) (drgnx-test--palette-ran nil))
+        (drgnx-test--palette-ran nil))
     (drgnx-command-define 'p :title "Do It" :category "Test" :command #'drgnx-test--palette-cmd)
     (drgnx-command-define 'gone :title "Gone" :category "Test" :command 'drgnx-test--missing)
     (should (equal (mapcar #'car (drgnx-palette-candidates)) '("Test: Do It")))
@@ -20,7 +20,7 @@
 (defun drgnx-test--palette-with-search (answer styles &rest opts)
   "Run the palette with ANSWER typed, under completion STYLES; return (SEARCH-ARGS REQUIRE-MATCH RAN)."
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-        (drgnx-commands-problems nil) (asked nil) (require-match 'unset) (drgnx-test--palette-ran nil)
+        (asked nil) (require-match 'unset) (drgnx-test--palette-ran nil)
         (completion-styles styles))
     (drgnx-command-define 'p :title "Do It" :category "Test" :command #'drgnx-test--palette-cmd)
     (when (plist-get opts :extra)
@@ -54,7 +54,7 @@
 
 (ert-deftest drgnx-palette/a-label-starting-with-hash-wins ()
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-        (drgnx-commands-problems nil) (drgnx-test--palette-ran nil) (asked nil))
+        (drgnx-test--palette-ran nil) (asked nil))
     (drgnx-command-define 'h :title "tag" :category "#" :command #'drgnx-test--palette-cmd)
     (drgnx-command-define 'search-semantic :title "Semantic Search" :category "Search"
                           :command (lambda (&optional q) (interactive) (push q asked)))
@@ -76,7 +76,7 @@
 ;; has one prefix, `#', and says so in its prompt; anything else it cannot resolve is a plain user error.
 (ert-deftest drgnx-palette/the-prompt-names-the-prefix ()
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-        (drgnx-commands-problems nil) prompt)
+        prompt)
     (cl-letf (((symbol-function 'completing-read) (lambda (p &rest _) (setq prompt p) "")))
       (drgnx-palette))
     (should (string-match-p "#" prompt))))

@@ -27,7 +27,6 @@ that took VS Code's C-S-h and F2 (the rest of the replace module is not modelled
 `drgnx-keys-test--later-stages', the commands of the later stages' modules whose packages need nothing installed.
 The modules are set up by `drgnx-test-with-modules' and torn down after BODY, what they hooked into with them."
   `(let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-         (drgnx-commands-problems nil)
          ;; the trust guards add drgnx's folders to `trusted-content' and turning them off leaves them there
          (trusted-content trusted-content))
      (drgnx--core-commands)
@@ -241,6 +240,37 @@ keys); every binding is undone after."
    (drgnx-keys-apply)
    (should (seq-find (lambda (p) (string-search "keys.eld" p)) (plist-get drgnx-keys-last :problems)))
    (should (eq (keymap-lookup global-map "C-o") #'find-file))))
+
+(load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
+
+(ert-deftest drgnx-notice-core/keys-problems-are-warn-conditions ()
+  (drgnx-notice-test-with-model
+    (drgnx-keys-test--live
+     (make-directory (drgnx-user-dir) t)
+     (with-temp-file (expand-file-name "keys.eld" (drgnx-user-dir)) (insert "(:bind ((palette \"C-c p\")"))
+     (drgnx-keys-apply)
+     (let ((problems (plist-get drgnx-keys-last :problems))
+           (ns (drgnx-notices :source 'keys)))
+       (should problems)
+       (should (= (length ns) (length (delete-dups (copy-sequence problems)))))
+       (dolist (n ns)
+         (should (eq (plist-get n :severity) 'warn))
+         (should (eq (plist-get n :life) 'condition))
+         (should (member (plist-get n :id) problems))
+         (should (equal (plist-get n :id) (plist-get n :text))))
+       (should-not (drgnx-notices :source 'keys :severity 'fail))))))
+
+(ert-deftest drgnx-notice-core/a-second-apply-replaces-them ()
+  (drgnx-notice-test-with-model
+    (drgnx-keys-test--live
+     (make-directory (drgnx-user-dir) t)
+     (with-temp-file (expand-file-name "keys.eld" (drgnx-user-dir)) (insert "(:bind ((palette \"C-c p\")"))
+     (drgnx-keys-apply)
+     (should (drgnx-notices :source 'keys))
+     (delete-file (expand-file-name "keys.eld" (drgnx-user-dir)))
+     (drgnx-keys-apply)
+     (should-not (plist-get drgnx-keys-last :problems))
+     (should-not (drgnx-notices :source 'keys)))))
 
 (ert-deftest drgnx-keys/keyboard-profile-command-switches-and-saves ()
   (drgnx-keys-test--live
