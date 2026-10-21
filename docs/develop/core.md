@@ -70,7 +70,8 @@ handlers, so a read at startup or from the palette never connects; an entry that
 once per change of an unusable file. The mode body reads under `condition-case`, so a bad file never keeps a guard
 off. Untrust This Folder takes effect in the session (`drgnx-trust--added`) even when the file cannot be changed.
 
-The report files in the state folder go this way: `wb-report.eld` (`drgnx-rules--write-report`, a startup hook: an
+The report files in the state folder go this way: `wb-report.eld` (`drgnx-rules--write-report`, a startup hook, which
+also posts the `(wb . display-buffer-entry)` warn condition, cleared when the entry is back: an
 error becomes one `message`), `agent-checks.eld` (`drgnx-agent-check-remember`, `:private t`) and `check/durations.eld`
 (`drgnx-check--save-durations`) and `terminal-report.eld` (`drgnx-tty-frames--save-report`, from a terminal frame's
 hooks: an error goes to `drgnx-hooks-problems`) are written with `drgnx-file-write ... :fsync nil`, so a failed write
@@ -2771,7 +2772,9 @@ counts a window it moves. `idle` (the default) queues the call: one per FN, even
 `:kind`), with the last data. The bus's idle flush (`drgnx-signal--flush`, `drgnx-signal-delay`, 0.05 s) makes
 them, oldest first, after observing the selected frame; the store has no timer of its own. The handler reads the
 records then. Every call binds `inhibit-interaction`, so a subscriber that prompts gets an error.
-An error is recorded in `drgnx-signal-errors` as `"EVENT FN: message"` (newest first, at most 20), never raised.
+An error is a `warn` event (`drgnx-state--error`: source `store` here, `bus` for `drgnx-signal--call`, which runs FN
+inside `drgnx-automatic`) keyed `(EVENT . FN)`, text `"EVENT FN: message"`, and is mirrored in `drgnx-signal-errors`
+(newest first, at most 20; kept one release for its tests), never raised.
 Subscribers of one event run in subscription order.
 
 The Work cockpit's panes are such consumers ([cockpit.md](cockpit.md)): `pane-shown` and `pane-hidden` on `now` start

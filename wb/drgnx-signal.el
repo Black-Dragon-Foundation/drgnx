@@ -22,6 +22,7 @@
 (require 'seq)
 (require 'drgnx-modules-record)
 (require 'drgnx-notice)
+(require 'drgnx-guard)
 (require 'drgnx-timer)
 (require 'drgnx-state)                 ; also `drgnx-signal-delay' and `drgnx-signal-errors'
 
@@ -83,10 +84,10 @@ When the store has none — the frame not observed yet, or its editor deleted si
       (progn (drgnx-state-sync) (drgnx-state-editor-window))))
 
 (defun drgnx-signal--call (event fn data)
-  "Call FN with DATA; an error is recorded in `drgnx-signal-errors' (under EVENT), never raised."
-  (condition-case err (funcall fn data)
-    (error (push (format "%s %s: %s" event fn (error-message-string err)) drgnx-signal-errors)
-           (setq drgnx-signal-errors (seq-take drgnx-signal-errors 20)))))
+  "Call FN with DATA as automatic code (a prompt signals); an error is a `warn' event of source `bus' keyed
+by (EVENT . FN) and a line in `drgnx-signal-errors', never raised."
+  (condition-case err (drgnx-automatic (funcall fn data))
+    (error (drgnx-state--error event fn err 'bus))))
 
 (defun drgnx-signal--emit (event data)
   (dolist (fn (alist-get event drgnx-signal--subscribers))
