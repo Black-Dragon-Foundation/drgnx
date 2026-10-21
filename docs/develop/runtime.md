@@ -259,3 +259,33 @@ root's own path must leave room for them within 103 bytes (a short link to a dee
 
 `test/conformance/class-matrix.json` is not a row: it is the hand-written class table (`{method: [classes]}`) that the
 registry's test and the `class_matrix` step read.
+
+## Fuzzing
+
+`runtime/fuzz/` is a cargo-fuzz crate with its own `[workspace]` (the product workspace excludes it). It builds on
+nightly only: the pin is `nightly-2026-10-15`, set by the CI job and by local runs, never by a `rust-toolchain.toml`
+(a toolchain file would make a plain `cargo` there install a nightly). cargo-fuzz needs a C++ compiler for libFuzzer.
+
+| Target | What it feeds |
+|---|---|
+| `line_codec` | arbitrary bytes, cut into chunks of a size the input picks, through the client line codec, then `parse_strict` on every line |
+| `request_prelude` | a line through `dispatch::prelude` (steps 1 to 5, no handler) for every class and several protocol states |
+| `hello` | hello params decoded from arbitrary JSON, then `hello()` against a fixed cap: as given, with the correct proof, on a main and on an agent socket, and a second hello |
+
+The seed corpus in `fuzz/corpus/<target>/` is the request lines of the conformance rows. A run adds files to the
+corpus directory, so run on a scratch copy and keep the repository's seeds as they are.
+
+Local run (keep the toolchain and the crate cache out of `~`: point `RUSTUP_HOME` and `CARGO_HOME` at a scratch
+directory):
+
+```
+export RUSTUP_HOME=/path/to/scratch/rustup CARGO_HOME=/path/to/scratch/cargo
+rustup toolchain install nightly-2026-10-15 --profile minimal
+cargo install cargo-fuzz --locked
+cp -r runtime/fuzz/corpus /path/to/scratch/corpus
+cargo +nightly-2026-10-15 fuzz run line_codec --fuzz-dir runtime/fuzz /path/to/scratch/corpus/line_codec \
+  -- -max_total_time=60 -rss_limit_mb=2048
+```
+
+A crash is written to `runtime/fuzz/artifacts/<target>/` (ignored by git). Commit the input as a regression test in
+`drgnx-proto` (or the crate that owns the parser) before fixing it.
