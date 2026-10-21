@@ -281,6 +281,8 @@ pub struct RunData {
     /// `(listener, connections)` for each of the row's `listeners_silent`.
     pub silent: Vec<(String, usize)>,
     pub events: Vec<String>,
+    /// The row's `proxy_events` with placeholders filled (`None`: take the row's text as it is).
+    pub events_wanted: Option<Vec<String>>,
     /// Paths of `files_absent` that exist.
     pub present: Vec<String>,
     pub gone_failure: Option<String>,
@@ -304,7 +306,9 @@ pub fn judge_run(row: &Row, d: &RunData, canaries: &[Canary]) -> Result<(), Stri
     if let Some(raw) = &row.raw {
         return judge_raw(raw, d);
     }
-    if !d.direct {
+    // A row that kills the `sandbox run` process itself leaves no result file to judge.
+    let run_killed = row.after.as_ref().is_some_and(|a| a.kill == KillWho::Run);
+    if !d.direct && !run_killed {
         let r = d
             .result_file
             .as_ref()
@@ -336,7 +340,7 @@ pub fn judge_run(row: &Row, d: &RunData, canaries: &[Canary]) -> Result<(), Stri
                 }
             }
         }
-    } else if d.lines.len() != row.probes.len() {
+    } else if d.direct && d.lines.len() != row.probes.len() {
         return Err(format!(
             "{} lines for {} probes",
             d.lines.len(),
@@ -347,7 +351,7 @@ pub fn judge_run(row: &Row, d: &RunData, canaries: &[Canary]) -> Result<(), Stri
     if let Some((name, n)) = d.silent.iter().find(|(_, n)| *n > 0) {
         return Err(format!("listener {name} saw {n} connection(s)"));
     }
-    if let Some(want) = &row.proxy_events {
+    if let Some(want) = d.events_wanted.as_ref().or(row.proxy_events.as_ref()) {
         let mut want = want.clone();
         want.sort();
         if d.events != want {
@@ -970,6 +974,11 @@ fn finish(
             .map(|n| (n.clone(), fx.seen(n)))
             .collect(),
         events: fx.proxy_events(),
+        events_wanted: row
+            .proxy_events
+            .as_ref()
+            .map(|w| expand_list(&fx, w))
+            .transpose()?,
         present,
         gone_failure: d.gone_failure,
         exit: d.exit,

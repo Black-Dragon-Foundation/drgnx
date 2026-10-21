@@ -1,0 +1,1 @@
+{"row":"check-in-a-container","raw":{"args":["sandbox","check","--json"],"exit":1,"json":{"ok":false,"reason_contains":"inside a container","fix":null}}}

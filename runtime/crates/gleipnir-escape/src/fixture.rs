@@ -10,7 +10,7 @@
 //! | | |
 //! |---|---|
 //! | `home/` (`${HOME}`) | `.ssh/id_canary`, `other-repo/secret`, `canary-dir/canary.txt` (`${CANARY_DIR}`) |
-//! | `run/` (`${RUNTIME}`) | `drgnx/hub-0000.sock`, `emacs/server`, `bus`, `ssh-agent.sock`; `drgnx/s/S1` is `${RUN}`, holding `proxy.sock` and `gateway.sock` |
+//! | `run/` (`${RUNTIME}`) | `drgnx/hub-0000.sock`, `drgnx/hub-0000.d/backend.sock`, `emacs/server`, `bus`, `ssh-agent.sock`; `drgnx/s/S1` is `${RUN}`, holding `proxy.sock` and `gateway.sock`; `drgnx/s/S2/hub.sock` is another session's |
 //! | `data/` (`${DATA}`) | `work.db` |
 //! | `tasks/t1`, `tasks/t2` | `${TASK}`, `${TASK2}` (`t2/canary`) |
 //! | `w/` | `${W}`, an empty work dir; `t/` is `${TMP}` |
@@ -102,6 +102,8 @@ impl Fixture {
             "bin",
             "config",
             "run/drgnx/s/S1",
+            "run/drgnx/s/S2",
+            "run/drgnx/hub-0000.d",
             "run/emacs",
         ] {
             std::fs::create_dir_all(p(d))?;
@@ -135,6 +137,9 @@ impl Fixture {
             };
             for (name, rel) in [
                 ("hub", "run/drgnx/hub-0000.sock"),
+                // The Lisp backend's socket beside the hub's, and another session's dir (Task 13b's layout).
+                ("backend", "run/drgnx/hub-0000.d/backend.sock"),
+                ("session2", "run/drgnx/s/S2/hub.sock"),
                 ("emacs", "run/emacs/server"),
                 ("bus", "run/bus"),
                 ("ssh-agent", "run/ssh-agent.sock"),
