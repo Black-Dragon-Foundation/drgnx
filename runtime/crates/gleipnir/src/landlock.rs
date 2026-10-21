@@ -55,6 +55,10 @@ pub struct LandlockPlan {
     pub unix_connect_roots: Vec<PathBuf>,
     /// `Some`: TCP connects only to these ports (ABI ≥ 4). `None`: TCP is not handled.
     pub tcp_connect_ports: Option<Vec<u16>>,
+    /// `Some`: TCP binds only to these ports (ABI ≥ 4), the relay's; the inner helper then adds a layer that refuses
+    /// every bind before the program runs ([`forbid_tcp_bind`]). `None`: binds are not handled (the full tier, whose
+    /// network namespace isolates a server inside).
+    pub tcp_bind_ports: Option<Vec<u16>>,
 }
 
 /// One Landlock filesystem right, by the `landlock` crate's name. Ordered as the kernel's bits.
@@ -113,10 +117,13 @@ impl FsRight {
     }
 }
 
-/// A Landlock network right. Only `connect_tcp` is ever handled; `bind_tcp` is not (servers inside must work).
+/// A Landlock network right, ordered as the kernel's bits. The full tier handles `connect_tcp` under
+/// `Net::Isolated` and never `bind_tcp` (servers inside its network namespace must work); the reduced tier handles
+/// both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NetRight {
+    BindTcp,
     ConnectTcp,
 }
 
@@ -147,6 +154,8 @@ pub struct RulesetDesc {
     pub path_rules: Vec<PathRule>,
     /// Allowed when `handled_net` has `connect_tcp`; empty otherwise.
     pub tcp_connect_ports: Vec<u16>,
+    /// Allowed when `handled_net` has `bind_tcp`; empty otherwise.
+    pub tcp_bind_ports: Vec<u16>,
 }
 
 /// What [`restrict`] applied.
@@ -268,6 +277,7 @@ pub fn plan_for(spec: &ValidSpec, tier: Tier) -> LandlockPlan {
                 dev_write_files: path_list([], FULL_DEV_WRITE),
                 unix_connect_roots: path_list(s.run.iter().map(|b| &b.dest), &[]),
                 tcp_connect_ports,
+                tcp_bind_ports: None,
             }
         }
         Tier::Reduced => {
@@ -288,6 +298,17 @@ pub fn plan_for(spec: &ValidSpec, tier: Tier) -> LandlockPlan {
                 .chain(rw_binds.map(|b| &b.source))
                 .chain(rw_home.map(|b| &b.source))
                 .chain(&s.tmp);
+            // Not network-open (the manager's call on Task 5, 2026-10-21): TCP connects only to the relay's ports,
+            // which forward to the proxy, and binds only there too (the relay's own; the helper then refuses every
+            // bind before the program runs). `extra_tcp_ports` are not granted: without a network namespace a port
+            // rule reaches every host, and with binds refused there is no server inside to reach. `Net::Shared`
+            // gets no TCP at all.
+            let mut relay_ports: Vec<u16> = match &s.net {
+                Net::Shared => vec![],
+                Net::Isolated { relay, .. } => relay.iter().map(|r| r.port).collect(),
+            };
+            relay_ports.sort_unstable();
+            relay_ports.dedup();
             LandlockPlan {
                 tier,
                 min_abi,
@@ -295,7 +316,8 @@ pub fn plan_for(spec: &ValidSpec, tier: Tier) -> LandlockPlan {
                 write_roots: path_list(write, &[]),
                 dev_write_files: path_list([], REDUCED_DEV_WRITE),
                 unix_connect_roots: path_list(s.run.iter().map(|b| &b.source), &[]),
-                tcp_connect_ports: None,
+                tcp_connect_ports: Some(relay_ports.clone()),
+                tcp_bind_ports: Some(relay_ports),
             }
         }
     }
@@ -307,8 +329,8 @@ const READ_RIGHTS: [FsRight; 3] = [FsRight::Execute, FsRight::ReadFile, FsRight:
 ///
 /// Handled: every fs right of the ABI except `ioctl_dev` (seccomp covers TIOCSTI; ioctls on ttys and pipes must
 /// work). Granted: read and execute on the read roots; every write right on the write roots except making device
-/// nodes; `write_file` on the device files; `resolve_unix` (ABI 9) on the connect roots only. `connect_tcp` (ABI 4)
-/// is handled only when the plan has ports; scopes (ABI 6) always.
+/// nodes; `write_file` on the device files; `resolve_unix` (ABI 9) on the connect roots only. `connect_tcp` and
+/// `bind_tcp` (ABI 4) are each handled only when the plan has ports for them; scopes (ABI 6) always.
 pub fn rules_for_abi(plan: &LandlockPlan, abi: u8) -> RulesetDesc {
     let abi = abi.min(LANDLOCK_ABI_MAX);
     let handled: BTreeSet<FsRight> = FsRight::ALL
@@ -342,15 +364,21 @@ pub fn rules_for_abi(plan: &LandlockPlan, abi: u8) -> RulesetDesc {
     grant(&plan.write_roots, &write);
     grant(&plan.dev_write_files, &only(&[FsRight::WriteFile]));
     grant(&plan.unix_connect_roots, &only(&[FsRight::ResolveUnix]));
-    let (handled_net, tcp_connect_ports) = match &plan.tcp_connect_ports {
-        Some(ports) if abi >= 4 => {
-            let mut ports = ports.clone();
-            ports.sort_unstable();
-            ports.dedup();
-            (vec![NetRight::ConnectTcp], ports)
+    let mut handled_net = vec![];
+    let mut net = |ports: &Option<Vec<u16>>, right: NetRight| -> Vec<u16> {
+        match ports {
+            Some(ports) if abi >= 4 => {
+                handled_net.push(right);
+                let mut ports = ports.clone();
+                ports.sort_unstable();
+                ports.dedup();
+                ports
+            }
+            _ => vec![],
         }
-        _ => (vec![], vec![]),
     };
+    let tcp_bind_ports = net(&plan.tcp_bind_ports, NetRight::BindTcp);
+    let tcp_connect_ports = net(&plan.tcp_connect_ports, NetRight::ConnectTcp);
     let scoped = if abi >= 6 {
         vec![ScopeRight::AbstractUnixSocket, ScopeRight::Signal]
     } else {
@@ -369,6 +397,7 @@ pub fn rules_for_abi(plan: &LandlockPlan, abi: u8) -> RulesetDesc {
             })
             .collect(),
         tcp_connect_ports,
+        tcp_bind_ports,
     }
 }
 
@@ -424,6 +453,22 @@ pub fn restrict(plan: &LandlockPlan, abi_cap: Option<u8>) -> Result<Applied, Lan
 #[cfg(not(target_os = "linux"))]
 pub fn restrict(plan: &LandlockPlan, abi_cap: Option<u8>) -> Result<Applied, LandlockError> {
     let _ = (plan, abi_cap);
+    Err(LandlockError::Unsupported)
+}
+
+/// One more layer on the calling thread: `bind_tcp` handled with no port allowed, so nothing it execs can bind a TCP
+/// port. The inner helper adds it after the relay has bound its ports under the first layer, when the plan has
+/// `tcp_bind_ports` (the reduced tier). Layers only ever narrow; a hard requirement (ABI ≥ 4).
+// Linux only. Android: no backend; apps get no user namespaces; fails closed.
+#[cfg(target_os = "linux")]
+pub fn forbid_tcp_bind() -> Result<(), LandlockError> {
+    linux::forbid_tcp_bind()
+}
+
+/// Not Linux: always [`LandlockError::Unsupported`].
+// Android among them: no backend; apps get no user namespaces; fails closed.
+#[cfg(not(target_os = "linux"))]
+pub fn forbid_tcp_bind() -> Result<(), LandlockError> {
     Err(LandlockError::Unsupported)
 }
 
@@ -530,6 +575,11 @@ mod linux {
                 .handle_access(AccessNet::ConnectTcp)
                 .map_err(ruleset_err)?;
         }
+        if desc.handled_net.contains(&NetRight::BindTcp) {
+            ruleset = ruleset
+                .handle_access(AccessNet::BindTcp)
+                .map_err(ruleset_err)?;
+        }
         if !desc.scoped.is_empty() {
             let scopes = desc.scoped.iter().fold(BitFlags::<Scope>::EMPTY, |a, s| {
                 a | match s {
@@ -567,14 +617,32 @@ mod linux {
                 .add_rule(NetPort::new(*port, AccessNet::ConnectTcp))
                 .map_err(ruleset_err)?;
         }
-        let status = created.restrict_self().map_err(ruleset_err)?;
-        if status.ruleset != RulesetStatus::FullyEnforced {
+        for port in &desc.tcp_bind_ports {
+            created = created
+                .add_rule(NetPort::new(*port, AccessNet::BindTcp))
+                .map_err(ruleset_err)?;
+        }
+        enforced(created.restrict_self().map_err(ruleset_err)?.ruleset)
+    }
+
+    fn enforced(status: RulesetStatus) -> Result<(), LandlockError> {
+        if status != RulesetStatus::FullyEnforced {
             return Err(LandlockError::Ruleset(format!(
-                "not fully enforced ({:?})",
-                status.ruleset
+                "not fully enforced ({status:?})"
             )));
         }
         Ok(())
+    }
+
+    /// A layer that handles `bind_tcp` and allows no port.
+    pub(super) fn forbid_tcp_bind() -> Result<(), LandlockError> {
+        let created = Ruleset::default()
+            .set_compatibility(CompatLevel::HardRequirement)
+            .handle_access(AccessNet::BindTcp)
+            .map_err(ruleset_err)?
+            .create()
+            .map_err(ruleset_err)?;
+        enforced(created.restrict_self().map_err(ruleset_err)?.ruleset)
     }
 }
 
@@ -680,6 +748,10 @@ mod tests {
         writeln!(out, "dev_write_files: {}", ps(&plan.dev_write_files)).unwrap();
         writeln!(out, "unix_connect_roots: {}", ps(&plan.unix_connect_roots)).unwrap();
         writeln!(out, "tcp_connect_ports: {:?}", plan.tcp_connect_ports).unwrap();
+        // Only plans that handle binds show them, so the full tier's goldens stay as Task 5 made them.
+        if plan.tcp_bind_ports.is_some() {
+            writeln!(out, "tcp_bind_ports: {:?}", plan.tcp_bind_ports).unwrap();
+        }
         for abi in 1..=9 {
             let d = rules_for_abi(plan, abi);
             writeln!(out, "\n== ABI {abi}").unwrap();
@@ -687,6 +759,9 @@ mod tests {
             writeln!(out, "handled net: {}", names(&d.handled_net)).unwrap();
             writeln!(out, "scoped: {}", names(&d.scoped)).unwrap();
             writeln!(out, "tcp ports: {:?}", d.tcp_connect_ports).unwrap();
+            if plan.tcp_bind_ports.is_some() {
+                writeln!(out, "tcp bind ports: {:?}", d.tcp_bind_ports).unwrap();
+            }
             for r in &d.path_rules {
                 writeln!(out, "{}: {}", r.path.display(), names(&r.allow)).unwrap();
             }
@@ -765,13 +840,28 @@ mod tests {
             assert!(d.handled_net.is_empty(), "abi {abi}");
             assert!(d.tcp_connect_ports.is_empty(), "abi {abi}");
         }
+        assert_eq!(p.tcp_bind_ports, None, "the full tier never handles binds");
+    }
+
+    /// The reduced tier is not network-open (the manager's call on Task 5): TCP connects and binds only on the relay's
+    /// ports, never `extra_tcp_ports`; `Net::Shared` gets no TCP at all.
+    #[test]
+    fn reduced_tcp_only_relay_ports_and_binds_handled() {
         let mut red = reduced_spec();
         red.net = isolated();
         let p = plan(red, Target::LinuxReduced, Tier::Reduced);
-        assert_eq!(
-            p.tcp_connect_ports, None,
-            "the reduced tier's network is open"
-        );
+        assert_eq!(p.tcp_connect_ports, Some(vec![3128, 3129]));
+        assert_eq!(p.tcp_bind_ports, Some(vec![3128, 3129]));
+        let d = rules_for_abi(&p, 9);
+        assert_eq!(d.handled_net, vec![NetRight::BindTcp, NetRight::ConnectTcp]);
+        assert_eq!(d.tcp_connect_ports, vec![3128, 3129]);
+        assert_eq!(d.tcp_bind_ports, vec![3128, 3129]);
+        let shared = plan(reduced_spec(), Target::LinuxReduced, Tier::Reduced);
+        assert_eq!(shared.tcp_connect_ports, Some(vec![]));
+        assert_eq!(shared.tcp_bind_ports, Some(vec![]));
+        let d = rules_for_abi(&shared, 9);
+        assert_eq!(d.handled_net, vec![NetRight::BindTcp, NetRight::ConnectTcp]);
+        assert!(d.tcp_connect_ports.is_empty() && d.tcp_bind_ports.is_empty());
     }
 
     #[test]
@@ -936,6 +1026,7 @@ mod tests {
             dev_write_files: vec![],
             unix_connect_roots: vec![],
             tcp_connect_ports: None,
+            tcp_bind_ports: None,
         }
     }
 
@@ -1081,6 +1172,10 @@ mod tests {
 
     /// A reduced plan for a spec rooted in `dir`: write `dir/w`, tmp `dir/t`, run `dir/run`.
     fn reduced_plan_in(dir: &Path) -> LandlockPlan {
+        reduced_plan_net(dir, Net::Shared)
+    }
+
+    fn reduced_plan_net(dir: &Path, net: Net) -> LandlockPlan {
         for d in ["w", "t", "run", "out"] {
             std::fs::create_dir(dir.join(d)).unwrap();
         }
@@ -1100,7 +1195,7 @@ mod tests {
             }),
             env: vec![],
             chdir: p("w"),
-            net: Net::Shared,
+            net,
             tmp: Some(p("t")),
             layers: Layers::for_target(Target::LinuxReduced),
             extra_tcp_ports: vec![],
@@ -1199,6 +1294,51 @@ mod tests {
                 errno(std::fs::write(dir.path().join("out/f"), "x")),
                 Some(libc::EACCES)
             );
+        });
+    }
+
+    /// The reduced tier's TCP (ABI 9): a connect reaches a relay port and nothing else; a bind works only on a relay
+    /// port (the relay's own, under the first layer), and after [`forbid_tcp_bind`] on none.
+    #[test]
+    fn reduced_tcp_relay_ports_only_then_no_bind() {
+        in_child("reduced_tcp_relay_ports_only_then_no_bind", 9, &[], || {
+            use std::net::{TcpListener, TcpStream};
+            let dir = fixture_dir();
+            let port = |l: &TcpListener| l.local_addr().unwrap().port();
+            let other = TcpListener::bind("127.0.0.1:0").unwrap();
+            let relay_up = TcpListener::bind("127.0.0.1:0").unwrap();
+            let relay_free = port(&TcpListener::bind("127.0.0.1:0").unwrap());
+            let relay = [port(&relay_up), relay_free]
+                .into_iter()
+                .map(|port| RelayPort {
+                    port,
+                    socket: dir.path().join("run/proxy.sock"),
+                })
+                .collect();
+            let p = reduced_plan_net(
+                dir.path(),
+                Net::Isolated {
+                    relay,
+                    mac_tcp_ports: vec![],
+                },
+            );
+            TcpStream::connect(other.local_addr().unwrap()).expect("control: reachable before");
+            assert_eq!(restrict(&p, None).unwrap().abi, 9);
+            assert_eq!(
+                errno(TcpStream::connect(other.local_addr().unwrap())),
+                Some(libc::EACCES)
+            );
+            TcpStream::connect(relay_up.local_addr().unwrap()).expect("a relay port is reached");
+            drop(
+                TcpListener::bind(("127.0.0.1", relay_free)).expect("the relay may bind its port"),
+            );
+            assert_eq!(errno(TcpListener::bind("127.0.0.1:0")), Some(libc::EACCES));
+            forbid_tcp_bind().unwrap();
+            assert_eq!(
+                errno(TcpListener::bind(("127.0.0.1", relay_free))),
+                Some(libc::EACCES)
+            );
+            TcpStream::connect(relay_up.local_addr().unwrap()).expect("connects are unchanged");
         });
     }
 

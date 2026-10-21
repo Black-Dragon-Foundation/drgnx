@@ -7,13 +7,15 @@ read_roots: /bin /dev/full /dev/null /dev/random /dev/tty /dev/urandom /dev/zero
 write_roots: /state/home-1 /state/tmp-1 /work/out /work/task
 dev_write_files: /dev/full /dev/null /dev/zero
 unix_connect_roots: /rt/s/S1
-tcp_connect_ports: None
+tcp_connect_ports: Some([])
+tcp_bind_ports: Some([])
 
 == ABI 1
 handled fs: execute write_file read_file read_dir remove_dir remove_file make_char make_dir make_reg make_sock make_fifo make_block make_sym
 handled net: -
 scoped: -
 tcp ports: []
+tcp bind ports: []
 /bin: execute read_file read_dir
 /dev/full: execute write_file read_file read_dir
 /dev/null: execute write_file read_file read_dir
@@ -43,6 +45,7 @@ handled fs: execute write_file read_file read_dir remove_dir remove_file make_ch
 handled net: -
 scoped: -
 tcp ports: []
+tcp bind ports: []
 /bin: execute read_file read_dir
 /dev/full: execute write_file read_file read_dir
 /dev/null: execute write_file read_file read_dir
@@ -72,6 +75,7 @@ handled fs: execute write_file read_file read_dir remove_dir remove_file make_ch
 handled net: -
 scoped: -
 tcp ports: []
+tcp bind ports: []
 /bin: execute read_file read_dir
 /dev/full: execute write_file read_file read_dir
 /dev/null: execute write_file read_file read_dir
@@ -98,9 +102,10 @@ tcp ports: []
 
 == ABI 4
 handled fs: execute write_file read_file read_dir remove_dir remove_file make_char make_dir make_reg make_sock make_fifo make_block make_sym refer truncate
-handled net: -
+handled net: bind_tcp connect_tcp
 scoped: -
 tcp ports: []
+tcp bind ports: []
 /bin: execute read_file read_dir
 /dev/full: execute write_file read_file read_dir
 /dev/null: execute write_file read_file read_dir
@@ -127,9 +132,10 @@ tcp ports: []
 
 == ABI 5
 handled fs: execute write_file read_file read_dir remove_dir remove_file make_char make_dir make_reg make_sock make_fifo make_block make_sym refer truncate
-handled net: -
+handled net: bind_tcp connect_tcp
 scoped: -
 tcp ports: []
+tcp bind ports: []
 /bin: execute read_file read_dir
 /dev/full: execute write_file read_file read_dir
 /dev/null: execute write_file read_file read_dir
@@ -156,9 +162,10 @@ tcp ports: []
 
 == ABI 6
 handled fs: execute write_file read_file read_dir remove_dir remove_file make_char make_dir make_reg make_sock make_fifo make_block make_sym refer truncate
-handled net: -
+handled net: bind_tcp connect_tcp
 scoped: abstract_unix_socket signal
 tcp ports: []
+tcp bind ports: []
 /bin: execute read_file read_dir
 /dev/full: execute write_file read_file read_dir
 /dev/null: execute write_file read_file read_dir
@@ -185,9 +192,10 @@ tcp ports: []
 
 == ABI 7
 handled fs: execute write_file read_file read_dir remove_dir remove_file make_char make_dir make_reg make_sock make_fifo make_block make_sym refer truncate
-handled net: -
+handled net: bind_tcp connect_tcp
 scoped: abstract_unix_socket signal
 tcp ports: []
+tcp bind ports: []
 /bin: execute read_file read_dir
 /dev/full: execute write_file read_file read_dir
 /dev/null: execute write_file read_file read_dir
@@ -214,9 +222,10 @@ tcp ports: []
 
 == ABI 8
 handled fs: execute write_file read_file read_dir remove_dir remove_file make_char make_dir make_reg make_sock make_fifo make_block make_sym refer truncate
-handled net: -
+handled net: bind_tcp connect_tcp
 scoped: abstract_unix_socket signal
 tcp ports: []
+tcp bind ports: []
 /bin: execute read_file read_dir
 /dev/full: execute write_file read_file read_dir
 /dev/null: execute write_file read_file read_dir
@@ -243,9 +252,10 @@ tcp ports: []
 
 == ABI 9
 handled fs: execute write_file read_file read_dir remove_dir remove_file make_char make_dir make_reg make_sock make_fifo make_block make_sym refer truncate resolve_unix
-handled net: -
+handled net: bind_tcp connect_tcp
 scoped: abstract_unix_socket signal
 tcp ports: []
+tcp bind ports: []
 /bin: execute read_file read_dir
 /dev/full: execute write_file read_file read_dir
 /dev/null: execute write_file read_file read_dir
