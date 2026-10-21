@@ -237,9 +237,11 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf | --tty [--fed
     "$rt" build ${bargs[@]+"${bargs[@]}"} -q -t "$image" ${build[@]+"${build[@]}"} -f "$here/test/container/$file" "$here/test/container" >/dev/null
   fi
   # the run-control variables go in with their values when set: a narrowed run stays narrow, the files run at once
-  # (CI: the runner's cores), a failed file reruns once, wall clock is skipped, the perf run's results and factors
+  # (CI: the runner's cores), a failed file reruns once, wall clock is skipped, the perf run's results and factors,
+  # the sessions' monitor size and scales
   local v pass=(DRGNX_TEST_SELECTOR DRGNX_TEST_JOBS DRGNX_TEST_RERUN DRGNX_TEST_NO_TIMING DRGNX_PERF_RESULTS
-                DRGNX_PERF_CPU_FACTOR DRGNX_PERF_WORKLOADS DRGNX_UITEST_SETTLE_SCALE)
+                DRGNX_PERF_CPU_FACTOR DRGNX_PERF_WORKLOADS DRGNX_UITEST_SETTLE_SCALE
+                DRGNX_UI_SIZE DRGNX_UI_SCALE DRGNX_UI_SCALES)
   for v in "${pass[@]}"; do
     [ "$v" = DRGNX_PERF_RESULTS ] && continue   # below: the checkout is read-only, so the file goes through a mount
     if [ -n "${!v:-}" ]; then args+=(-e "$v=${!v}"); fi

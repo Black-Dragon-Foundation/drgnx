@@ -951,7 +951,9 @@ macOS (no /proc there)."
   ;; inside; the perf results file goes through a writable /out mount, since the checkout is read-only.
   (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
          (vars '("DRGNX_TEST_SELECTOR=\"x\"" "DRGNX_TEST_JOBS=4" "DRGNX_TEST_RERUN=1" "DRGNX_TEST_NO_TIMING=1"
-                 "DRGNX_PERF_CPU_FACTOR=2" "DRGNX_PERF_WORKLOADS=typing" "DRGNX_UITEST_SETTLE_SCALE=3")))
+                 "DRGNX_PERF_CPU_FACTOR=2" "DRGNX_PERF_WORKLOADS=typing" "DRGNX_UITEST_SETTLE_SCALE=3"
+                 ;; UI-SCALE-1: the sessions' size and scale (without them a container run was silently 1600x900 at 1)
+                 "DRGNX_UI_SIZE=2880x1800" "DRGNX_UI_SCALE=1.5" "DRGNX_UI_SCALES=1 2")))
     (unwind-protect
         (progn
           (let ((args (drgnx-bin-test--container-argv
@@ -965,9 +967,9 @@ macOS (no /proc there)."
           (let ((args (drgnx-bin-test--container-argv   ; unset in the environment: a bare NAME removes it
                        dir '("DRGNX_TEST_SELECTOR" "DRGNX_TEST_JOBS" "DRGNX_TEST_RERUN" "DRGNX_TEST_NO_TIMING"
                              "DRGNX_PERF_RESULTS" "DRGNX_PERF_CPU_FACTOR" "DRGNX_PERF_WORKLOADS"
-                             "DRGNX_UITEST_SETTLE_SCALE"))))
+                             "DRGNX_UITEST_SETTLE_SCALE" "DRGNX_UI_SIZE" "DRGNX_UI_SCALE" "DRGNX_UI_SCALES"))))
             (should (member "DRGNX_LEASE=off" args))
-            (should-not (seq-find (lambda (a) (string-match-p "\\`DRGNX_\\(TEST_\\|PERF_\\|UITEST_\\)[A-Z_]+=" a)) args))
+            (should-not (seq-find (lambda (a) (string-match-p "\\`DRGNX_\\(TEST_\\|PERF_\\|UITEST_\\|UI_S\\)[A-Z_]+=" a)) args))
             (should-not (member "/out" (mapcar (lambda (a) (car (last (split-string a ":")))) args)))))
       (delete-directory dir t))))
 
