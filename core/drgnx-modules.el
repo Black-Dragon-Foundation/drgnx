@@ -23,6 +23,7 @@
 (require 'drgnx-hooks)
 (require 'drgnx-ui-kit)
 (require 'drgnx-pkg-activate)
+(require 'drgnx-notice)
 (require 'drgnx-modules-record)
 (require 'drgnx-timer)
 (require 'drgnx-modules-helpers)
@@ -133,10 +134,38 @@ the new state; `drgnx-config-refused' for a file with a mistake or a newer one."
 
 ;;;; Running
 
+(defun drgnx-modules--notice (name status err missing problems)
+  "Say module NAME's STATUS as a notice: a condition that stays until it works or is turned off."
+  (pcase status
+    ('failed (drgnx-notify 'modules 'fail (format "%s did not start: %s" name err) :id name :life 'condition
+                           :fix "Turn it off in Preferences: Modules, or report the error"
+                           :command 'preferences-modules))
+    ('missing-packages (drgnx-notify 'modules 'warn (format "%s waits for packages: %s" name
+                                                            (mapconcat #'symbol-name missing " "))
+                                     :id name :life 'condition :fix "drgnx sync installs them"))
+    ('missing-requires (drgnx-notify 'modules 'warn (format "%s needs %s, which did not start" name
+                                                            (mapconcat #'symbol-name missing ", "))
+                                     :id name :life 'condition))
+    (_ (if (and (eq status 'ok) problems)
+           (drgnx-notify 'modules 'warn (format "%s: %s" name (string-join problems "; ")) :id name :life 'condition)
+         (drgnx-notice-clear 'modules name)))))
+
+(defun drgnx-modules--notice-off ()
+  "One info condition naming the modules that are off (`modules' . `off'); cleared when none is."
+  (let ((off (delq nil (mapcar (lambda (r) (and (eq (plist-get (cdr r) :status) 'off) (car r)))
+                               drgnx-modules--report))))
+    (if off
+        (drgnx-notify 'modules 'info (format (if (cdr off) "%d modules are off: %s" "%d module is off: %s")
+                                             (length off) (mapconcat #'symbol-name (reverse off) ", "))
+                      :id 'off :life 'condition :command 'preferences-modules)
+      (drgnx-notice-clear 'modules 'off))))
+
 (defun drgnx-modules--record (name stage ms status &optional err missing problems)
   (setf (alist-get name drgnx-modules--report)
         (list :stage stage :ms ms :status status :error err :missing missing :problems problems
-              :left (alist-get name drgnx-modules--left))))
+              :left (alist-get name drgnx-modules--left)))
+  (drgnx-modules--notice name status err missing problems)
+  (drgnx-modules--notice-off))
 
 (defun drgnx-modules--ok-p (name) (eq (plist-get (alist-get name drgnx-modules--report) :status) 'ok))
 
