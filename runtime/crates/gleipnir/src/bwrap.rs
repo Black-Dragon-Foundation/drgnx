@@ -92,6 +92,7 @@ impl Opened {
 }
 
 /// One source of the spec to open and bind: the key it came from, what it must be, and how it is bound.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))] // used by backend::linux (built on Linux only)
 pub(crate) struct Planned<'a> {
     pub(crate) key: String,
     pub(crate) source: &'a Path,
@@ -102,6 +103,7 @@ pub(crate) struct Planned<'a> {
 
 /// The spec's sources in argv order, each with the mode it is bound with: the home with its own mode (never widened),
 /// reads read-only, writes read-write, `run` read-only whatever its mode says, binds with their own modes.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))] // used by backend::linux (built on Linux only)
 pub(crate) fn planned(spec: &Spec) -> Vec<Planned<'_>> {
     fn one(key: String, b: &Bind, mode: Mode, kind: Kind) -> Planned<'_> {
         Planned {
@@ -177,6 +179,7 @@ pub fn version_at_floor(out: &str) -> Result<(u32, u32, u32), Refusal> {
 
 /// May the resolver's file (the true name of `/etc/resolv.conf`) be bound back on top of the empty `/run`? Only a
 /// file under `/run`, outside every closed system dir (`/run/user`) and every reserved dest.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))] // used by backend::linux (built on Linux only)
 pub(crate) fn resolver_bindable(resolved: &Path) -> bool {
     resolved.starts_with("/run")
         && resolved != Path::new("/run")

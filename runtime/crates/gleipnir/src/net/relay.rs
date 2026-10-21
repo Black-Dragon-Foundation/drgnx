@@ -403,6 +403,7 @@ mod tests {
         std::process::exit(main(args.into_iter()));
     }
 
+    #[cfg(any(target_os = "linux", target_os = "android"))] // only the /proc liveness probe below uses it
     fn state_of(pid: u32) -> Option<char> {
         let s = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
         s.rsplit(')').next()?.trim().chars().next()
