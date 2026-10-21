@@ -33,6 +33,9 @@
 (defvar drgnx-hub--subscribers nil "Connections that asked for events.")
 (defvar drgnx-hub--started nil)
 (defvar drgnx-hub--exit-function (lambda () (kill-emacs 0)) "What `shutdown' does (tests: stop serving).")
+(defvar drgnx-hub--secret nil
+  "Ratatoskr's secret (DRGNX_HUB_SERVE_SECRET) when this hub is its Lisp backend, else nil.  Then every connection's
+first line must be {\"auth\": SECRET}: any other closes it before a method runs (`drgnx-hub--receive').")
 
 ;;;; Where
 
@@ -603,6 +606,27 @@ for an agent that is not here (or exited) stays queued."
                                                 (list :id id :error (list :message (cadr r)))
                                               (list :id id :result r)))))))))
 
+(defun drgnx-hub--admitted-p (conn json)
+  "Is CONN past the backend's door?  Its first line JSON (nil: not JSON) must carry the secret; any other first line
+closes CONN, logged without what it said.  Always so for a hub with no `drgnx-hub--secret'."
+  (cond ((or (null drgnx-hub--secret) (process-get conn 'drgnx-hub-admitted)) t)
+        ((let ((auth (plist-get json :auth)))
+           ;; the digests, not the strings: no early exit on the secret's own bytes
+           (and (stringp auth) (string= (secure-hash 'sha256 auth) (secure-hash 'sha256 drgnx-hub--secret))))
+         (process-put conn 'drgnx-hub-admitted t)
+         nil)
+        (t (message "drgnx hub: refused a connection without the backend secret")
+           (delete-process conn)
+           nil)))
+
+(defun drgnx-hub--receive (conn json)
+  "A request JSON from CONN, served once CONN is admitted (`drgnx-hub--admitted-p'); its first line is the door's."
+  (when (drgnx-hub--admitted-p conn json) (drgnx-hub--serve-request conn json)))
+
+(defun drgnx-hub--receive-malformed (conn line)
+  "LINE from CONN is not JSON: an error answer once CONN is admitted; as its first line, the door closes CONN."
+  (when (drgnx-hub--admitted-p conn nil) (drgnx-hub--malformed conn line)))
+
 (defun drgnx-hub--broadcast (event data)
   "Send EVENT with DATA to every subscriber: queued for each first, then written — so while one waits (a slow
 reader), a newer event never reaches another before this one."
@@ -643,8 +667,9 @@ Signals an error when a hub already serves there."
         (make-network-process :name "drgnx-hub" :family 'local :server t :service socket :noquery t
                               :coding 'utf-8-unix
                               :filter (lambda (conn chunk)
-                                        (drgnx-hub--lines conn chunk (lambda (j) (drgnx-hub--serve-request conn j))
-                                                          (lambda (line) (drgnx-hub--malformed conn line)) drgnx-hub--max-line))))
+                                        (drgnx-hub--lines conn chunk (lambda (j) (drgnx-hub--receive conn j))
+                                                          (lambda (line) (drgnx-hub--receive-malformed conn line))
+                                                          drgnx-hub--max-line))))
   ;; serving now: a resumed agent registers with this hub's gateway directly
   (drgnx-hub--resume-sessions)
   drgnx-hub--server)
@@ -678,31 +703,39 @@ Signals an error when a hub already serves there."
   (clrhash drgnx-gateway--registrations))
 
 (defun drgnx-hub--take-serve-env ()
-  "(SOCKET . PARENT-PID) from DRGNX_HUB_SERVE_SOCKET (an absolute name; nil when unset or empty; (:invalid VALUE)
-when set to anything else) and DRGNX_HUB_PARENT_PID (0 when unset), both then unset in this Emacs: nothing it starts
-afterwards (agents, their coordination servers, an agent's `drgnx job', a test run inside a job) sees them.
-Ratatoskr starts the Lisp hub as its backend on a socket of its own; those children find the hub through
-`drgnx-hub-socket', the front, never the backend."
+  "(SOCKET PARENT-PID SECRET) from DRGNX_HUB_SERVE_SOCKET (an absolute name; nil when unset or empty; (:invalid
+VALUE) when set to anything else), DRGNX_HUB_PARENT_PID (0 when unset) and DRGNX_HUB_SERVE_SECRET (nil when unset or
+empty), all then unset in this Emacs: nothing it starts afterwards (agents, their coordination servers, an agent's
+`drgnx job', a test run inside a job) sees them.  Ratatoskr starts the Lisp hub as its backend on a socket of its
+own, with the secret its connections must show; those children find the hub through `drgnx-hub-socket', the front,
+never the backend."
   (let ((socket (getenv "DRGNX_HUB_SERVE_SOCKET"))
-        (parent (string-to-number (or (getenv "DRGNX_HUB_PARENT_PID") "0"))))
-    (setenv "DRGNX_HUB_SERVE_SOCKET" nil)
-    (setenv "DRGNX_HUB_PARENT_PID" nil)
-    (cons (cond ((or (null socket) (string-empty-p socket)) nil)
+        (parent (string-to-number (or (getenv "DRGNX_HUB_PARENT_PID") "0")))
+        (secret (getenv "DRGNX_HUB_SERVE_SECRET")))
+    (dolist (name '("DRGNX_HUB_SERVE_SOCKET" "DRGNX_HUB_PARENT_PID" "DRGNX_HUB_SERVE_SECRET"))
+      (setenv name nil))
+    (list (cond ((or (null socket) (string-empty-p socket)) nil)
                 ((string-prefix-p "/" socket) socket)
                 (t (list :invalid socket)))
-          parent)))
+          parent
+          (and secret (not (string-empty-p secret)) secret))))
 
 (defun drgnx-hub-main ()
   "The hub process's entry point (batch): serve until `shutdown' or SIGTERM.  Exit 3 when a hub already serves, 1
 when it cannot start for any other reason.  It serves on DRGNX_HUB_SERVE_SOCKET when that is set (Ratatoskr's Lisp
 backend), else on `drgnx-hub-socket'; both that and DRGNX_HUB_PARENT_PID are read and unset before anything starts a
 process (`drgnx-hub--take-serve-env').  A DRGNX_HUB_SERVE_SOCKET that is set but not an absolute name is exit 1: it
-never falls back to the front's socket."
-  (pcase-let* ((`(,serve . ,parent) (drgnx-hub--take-serve-env))
-               (socket (if (consp serve)
-                           (progn (message "drgnx hub: DRGNX_HUB_SERVE_SOCKET is not an absolute name: %s" (cadr serve))
-                                  (kill-emacs 1))
-                         (or serve (drgnx-hub-socket)))))
+never falls back to the front's socket.  So is one without DRGNX_HUB_SERVE_SECRET: the backend serves only Ratatoskr
+(`drgnx-hub--secret')."
+  (pcase-let* ((`(,serve ,parent ,secret) (drgnx-hub--take-serve-env))
+               (socket (cond ((consp serve)
+                              (message "drgnx hub: DRGNX_HUB_SERVE_SOCKET is not an absolute name: %s" (cadr serve))
+                              (kill-emacs 1))
+                             ((and serve (not secret))
+                              (message "drgnx hub: DRGNX_HUB_SERVE_SOCKET is set without DRGNX_HUB_SERVE_SECRET")
+                              (kill-emacs 1))
+                             (t (or serve (drgnx-hub-socket))))))
+    (setq drgnx-hub--secret (and serve secret))
     (drgnx-gc-batch-setup)
     (setq drgnx-timer-report-file "hub-timers-report.eld")   ; the hub's stopped timers go to a file of their own
     (drgnx-sandbox-vc-mode 1)                       ; the hub's own git never runs in a job's folder either

@@ -6,7 +6,10 @@
 //!   Emacs install.sh recorded (`drgnx-paths-recorded-emacs`), DRGNX `DRGNX_DIR` or the checkout the binary was built
 //!   from.  Without either the backend is `missing` and every forwarded call `internal`.
 //! - **Its environment:** only [`ENV_ALLOW`] (and `LC_*`), so a provider key never reaches it; plus
-//!   `DRGNX_HUB_SERVE_SOCKET` (where it serves, which `drgnx-hub-main` reads and unsets) and `DRGNX_HUB_PARENT_PID`.
+//!   `DRGNX_HUB_SERVE_SOCKET` (where it serves, which `drgnx-hub-main` reads and unsets), `DRGNX_HUB_PARENT_PID` and
+//!   [`SECRET_ENV`].
+//! - **Only Ratatoskr reaches it** (review M10): each start gets a new secret (64 hex) in its environment, never in its
+//!   argv, a file or a log; it closes every connection whose first line is not [`auth_line`] before any method runs.
 //! - **Its record:** a `proc` row (purpose `backend`) is inserted before the spawn and given the pid, start time and
 //!   group right after it; it goes when the exit is seen.  At start every recorded row is reaped ([`reap_recorded`]).
 //! - **One connection** to it (its peer checked: our uid and the child's pid), on which the front subscribes once and
@@ -19,6 +22,7 @@ use bytes::BytesMut;
 use draugr::{self as proc, RealSignaller, Record};
 use runstav::line::MAX_HUB_LINE;
 use runstav::methods::hub::{Backend as BackendStatus, BackendState};
+use runstav::proof::Cap;
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -184,12 +188,16 @@ fn recorded_emacs(dir: &Path) -> Option<PathBuf> {
     (meta.is_file() && meta.permissions().mode() & 0o111 != 0).then(|| PathBuf::from(line))
 }
 
+/// Where the backend finds its secret (`drgnx-hub--take-serve-env` reads and unsets it).
+pub const SECRET_ENV: &str = "DRGNX_HUB_SERVE_SECRET";
+
 /// The backend's whole environment: [`ENV_ALLOW`] and [`ENV_PREFIXES`] from ours (a test backend's
-/// `DRGNX_FAKE_BACKEND_*` too), then the socket it serves on and our pid.
+/// `DRGNX_FAKE_BACKEND_*` too), then the socket it serves on, our pid and its SECRET.
 pub fn environment(
     test_backend: bool,
     serve_socket: &Path,
     parent: u32,
+    secret: &Cap,
 ) -> Vec<(OsString, OsString)> {
     let mut prefixes = ENV_PREFIXES.to_vec();
     if test_backend {
@@ -202,8 +210,15 @@ pub fn environment(
         &[
             ("DRGNX_HUB_SERVE_SOCKET", serve_socket.as_os_str()),
             ("DRGNX_HUB_PARENT_PID", OsStr::new(&parent)),
+            (SECRET_ENV, OsStr::new(secret.expose())),
         ],
     )
+}
+
+/// The first line of every connection to the backend, which proves it is Ratatoskr's: `{"auth":"SECRET"}` (with
+/// its newline), wiped when dropped.
+pub fn auth_line(secret: &Cap) -> Zeroizing<String> {
+    Zeroizing::new(format!("{}\n", json!({ "auth": secret.expose() })))
 }
 
 fn internal(message: impl Into<String>) -> Error {
@@ -625,6 +640,11 @@ impl Backend {
                 socket.display()
             ));
         }
+        // new at each start: what an earlier backend was given opens nothing now
+        let secret = match Cap::generate() {
+            Ok(s) => s,
+            Err(e) => return End::Gone(format!("cannot start: no secret for it: {e}")),
+        };
         let row = match self.record_insert().await {
             Ok(r) => r,
             Err(e) => return End::Gone(format!("cannot start: {e}")),
@@ -632,7 +652,7 @@ impl Backend {
         let spec = proc::Spec {
             program: program.program.clone(),
             args: program.args.clone(),
-            env: environment(program.test_backend, socket, std::process::id()),
+            env: environment(program.test_backend, socket, std::process::id(), &secret),
             cwd: Some(self.home.clone()),
             stdin_null: true,
             pass_fds: Vec::new(),
@@ -658,7 +678,7 @@ impl Backend {
         let mut served = false;
         let end = 'life: {
             let ready = tokio::select! {
-                r = timeout(READY_WITHIN, connect_ready(socket, pid)) => match r {
+                r = timeout(READY_WITHIN, connect_ready(socket, pid, &secret)) => match r {
                     Ok(r) => r,
                     Err(_) => Err(format!("did not answer ping within {} s", READY_WITHIN.as_secs())),
                 },
@@ -816,8 +836,13 @@ fn describe(s: std::io::Result<Option<std::process::ExitStatus>>) -> String {
 }
 
 /// Connect to the backend's SOCKET until it answers a raw `ping` (polled every 50 ms): its peer must be our uid
-/// and PID.  The stream, and what was read after the ping's answer.
-async fn connect_ready(socket: &Path, pid: i32) -> Result<(UnixStream, BytesMut), String> {
+/// and PID, and the first line it gets is [`auth_line`] with SECRET.  The stream, and what was read after the ping's
+/// answer.
+async fn connect_ready(
+    socket: &Path,
+    pid: i32,
+    secret: &Cap,
+) -> Result<(UnixStream, BytesMut), String> {
     let uid = rustix::process::geteuid().as_raw();
     loop {
         if let Ok(mut s) = UnixStream::connect(socket).await {
@@ -831,9 +856,12 @@ async fn connect_ready(socket: &Path, pid: i32) -> Result<(UnixStream, BytesMut)
                     cred.pid()
                 ));
             }
-            if s.write_all(b"{\"id\":0,\"method\":\"ping\"}\n")
-                .await
-                .is_ok()
+            // the secret only once the peer is known to be the child we started
+            let auth = auth_line(secret);
+            if s.write_all(auth.as_bytes()).await.is_ok()
+                && s.write_all(b"{\"id\":0,\"method\":\"ping\"}\n")
+                    .await
+                    .is_ok()
             {
                 let mut codec = LinesCodec::new_with_max_length(MAX_HUB_LINE);
                 let mut buf = BytesMut::with_capacity(4096);
@@ -1075,6 +1103,45 @@ mod tests {
             link.send(2, "{}", Duration::from_millis(200)).await,
             Err(None)
         ));
+    }
+
+    /// Review M10: the secret goes in the environment (its own variable, set, never copied from ours) and in the first
+    /// line; never in the argv.
+    #[test]
+    fn the_secret_is_in_the_environment_and_the_first_line_only() {
+        let secret = Cap::generate().unwrap();
+        let env = environment(false, Path::new("/r/b.sock"), 7, &secret);
+        let got: Vec<_> = env
+            .iter()
+            .filter(|(k, _)| k == SECRET_ENV)
+            .map(|(_, v)| v.clone())
+            .collect();
+        assert_eq!(got, [OsString::from(secret.expose())]);
+        assert_eq!(secret.expose().len(), 64);
+        // a new one at each start
+        assert_ne!(Cap::generate().unwrap().expose(), secret.expose());
+        let line = auth_line(&secret);
+        assert!(line.ends_with('\n') && line.matches('\n').count() == 1);
+        let v: Value = serde_json::from_str(line.trim_end()).unwrap();
+        assert_eq!(v, json!({"auth": secret.expose()}));
+        // the command never carries it
+        let p = program(
+            &|k: &str| {
+                [("DRGNX_EMACS", "/e/emacs"), ("DRGNX_DIR", "/src/d")]
+                    .iter()
+                    .find(|(n, _)| *n == k)
+                    .map(|(_, v)| v.to_string())
+            },
+            Path::new("/d"),
+            Path::new("/c"),
+            "",
+        )
+        .unwrap();
+        assert!(
+            p.args
+                .iter()
+                .all(|a| !a.to_string_lossy().contains(secret.expose()))
+        );
     }
 
     #[test]
