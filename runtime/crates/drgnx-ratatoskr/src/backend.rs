@@ -1029,6 +1029,10 @@ mod tests {
         remove_stale_lock(&lock).unwrap();
         assert!(std::fs::symlink_metadata(&lock).is_err());
         assert!(target.join("pid").exists());
+        // one that cannot be looked at (a file where its directory should be) is an error, not "none there"
+        let file = dir.path().join("a-file");
+        std::fs::write(&file, "").unwrap();
+        assert!(remove_stale_lock(&file.join("backend.sock.lock")).is_err());
     }
 
     #[tokio::test]
@@ -1036,6 +1040,12 @@ mod tests {
         let (ours, theirs) = UnixStream::pair().unwrap();
         let (_r, w) = ours.into_split();
         let link = Link::new(1, w);
+        // a connection in use is not closed
+        assert!(
+            timeout(Duration::from_millis(50), link.closed())
+                .await
+                .is_err()
+        );
         // far more than a socket's buffer, and a backend that does not read
         let big = "x".repeat(16 << 20);
         let sent = link.send(1, &big, Duration::from_millis(200)).await;
