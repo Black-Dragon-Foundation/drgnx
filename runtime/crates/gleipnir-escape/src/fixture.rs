@@ -311,6 +311,9 @@ impl Fixture {
                 .map(|c| c.id().to_string())
                 .ok_or("${SLEEP_PID} needs the start-sleep setup step")?,
             "MARKER" => s(self.path("marker")),
+            "GIT" => s(draugr::git::git_program()
+                .map_err(|e| format!("${{GIT}}: no trusted git here: {e}"))?
+                .path),
             "FAKE_BWRAP" => s(self
                 .root_dirs
                 .first()

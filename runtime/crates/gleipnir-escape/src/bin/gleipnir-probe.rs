@@ -118,6 +118,13 @@ fn probe(name: &str, a: &[String]) -> Full {
             .map(|_| None)
             .map_err(os),
         "clone" => clone(&need(name, a, 2)[0], &a[1]),
+        "mkdir" => std::fs::create_dir(&need(name, a, 1)[0])
+            .map(|_| None)
+            .map_err(os),
+        "unlink" => std::fs::remove_file(&need(name, a, 1)[0])
+            .map(|_| None)
+            .map_err(os),
+        "swap" => swap(&need(name, a, 2)[0], &a[1]),
         "connect-unix" => UnixStream::connect(&need(name, a, 1)[0])
             .map(|_| None)
             .map_err(os),
@@ -176,6 +183,37 @@ fn clone(a: &str, b: &str) -> Res {
 #[cfg(not(target_os = "macos"))]
 fn clone(_: &str, _: &str) -> Res {
     Err(unsupported("clonefile needs macos"))
+}
+
+/// Exchanges two paths in one step: `renamex_np(RENAME_SWAP)` on macOS, `renameat2(RENAME_EXCHANGE)` on Linux.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn swap(a: &str, b: &str) -> Res {
+    use std::ffi::CString;
+    let (a, b) = (
+        CString::new(a).map_err(|_| (libc::EINVAL, None))?,
+        CString::new(b).map_err(|_| (libc::EINVAL, None))?,
+    );
+    #[cfg(target_os = "macos")]
+    // SAFETY: two valid NUL-terminated strings.
+    let r = unsafe { libc::renamex_np(a.as_ptr(), b.as_ptr(), libc::RENAME_SWAP) as libc::c_long };
+    #[cfg(target_os = "linux")]
+    // SAFETY: two valid NUL-terminated strings; 2 is RENAME_EXCHANGE.
+    let r = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            libc::AT_FDCWD,
+            a.as_ptr(),
+            libc::AT_FDCWD,
+            b.as_ptr(),
+            2u32,
+        )
+    };
+    if r == 0 { Ok(None) } else { Err(last_errno()) }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn swap(_: &str, _: &str) -> Res {
+    Err(unsupported("swap needs macos or linux"))
 }
 
 #[cfg(target_os = "linux")]

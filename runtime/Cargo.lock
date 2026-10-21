@@ -375,6 +375,7 @@ dependencies = [
 name = "gleipnir-escape"
 version = "0.1.0"
 dependencies = [
+ "draugr",
  "gleipnir",
  "libc",
  "rustix",
