@@ -58,7 +58,9 @@ An empty section says "Nothing here." The list follows changes by itself; `g` dr
 
 Everything that waits on you — an agent asking for permission, an edit to review, a question, a job's card — is
 a desktop notification when it is new, once, while no drgnx window has focus. While you are in drgnx you see it
-there instead. A thing that stops waiting and starts again notifies again.
+there instead. A thing that stops waiting and starts again notifies again. What already waits when drgnx starts
+(left from an earlier session) is counted but not announced, and a source that loses touch for a while (the hub
+restarting) does not announce again what it held.
 
 - **Linux and the BSDs:** the desktop's notification server, over D-Bus (GNOME, KDE, sway with mako or dunst, …).
   The notification is sent without waiting for an answer, so a notification server that hangs never holds drgnx.

@@ -73,6 +73,10 @@ ID → (ITEM NOTICE . MARK), ITEM the plist it gave for ID, NOTICE the item as t
 
 (defvar drgnx-notice--heard (make-hash-table :test #'eq) "SOURCE → the time of its last `drgnx-notice-set'.")
 
+(defvar drgnx-notice--was (make-hash-table :test #'eq)
+  "SOURCE → the ids (a hash table ID → t) it held when it became `:unknown', until its next list: an id it gives
+again then is not new (a hub that reconnects does not announce every open card again).")
+
 (defvar drgnx-notice--union (make-hash-table :test #'equal)
   "ID → the attention item counted for it: of the sources holding ID, the item with the later :at, on a tie the
 source defined first.  Updated, id by id, when a set changes.")
@@ -96,7 +100,9 @@ text; dropped when it comes back with other text, falls off the ring, or its sou
 (defvar drgnx-notice-functions nil
   "Abnormal hook: the `now' lane.  Each function is called with CHANGE, a plist (:op OP :key KEY :source SOURCE
 :notice NOTICE :added IDS :removed IDS) holding only its non-nil keys, OP one of `post' `clear' `set' `unknown'
-`dismiss' `undefine'.  NOTICE is the plist the model holds: read it, never change it.  Synchronous, inside
+`dismiss' `undefine'.  A set's :added are the ids new to the union (not one another source holds already, nor one
+the source held before it became `:unknown'); :removed the ids that left the source's set.  NOTICE is the plist the
+model holds: read it, never change it.  Synchronous, inside
 `drgnx-automatic' with `inhibit-interaction': cheap reactions only (set a flag, `force-mode-line-update', start a
 timer).  An error is recorded in `drgnx-notice--hook-errors'; a change made meanwhile is queued, never recursive.")
 
@@ -417,9 +423,14 @@ then applied in order, so a later item with the same ID wins.  An ID no item rea
           (puthash source (nreverse set) drgnx-notice--sets))
         (when (or dirty (eq prev :unknown))
           (when (eq prev :unknown) (drgnx-notice-clear source 'unknown))
-          (dolist (id dirty) (drgnx-notice--elect id))
-          (setq drgnx-notice--needs-you (hash-table-count drgnx-notice--union))
-          (drgnx-notice--changed 'set nil source nil (nreverse added) removed)
+          ;; 5. new: not in the union yet (no other source holds it), and not held before an `:unknown'
+          (let ((was (gethash source drgnx-notice--was)) (new nil))
+            (dolist (id added)
+              (unless (or (gethash id drgnx-notice--union) (and was (gethash id was))) (push id new)))
+            (remhash source drgnx-notice--was)
+            (dolist (id dirty) (drgnx-notice--elect id))
+            (setq drgnx-notice--needs-you (hash-table-count drgnx-notice--union))
+            (drgnx-notice--changed 'set nil source nil new removed))
           t)))))
 
 (defun drgnx-notice--unknown (source reason)
@@ -428,6 +439,10 @@ then applied in order, so a later item with the same ID wins.  An ID no item rea
     (let ((ids (unless (eq prev :unknown)
                  (puthash source :unknown drgnx-notice--sets)
                  (drgnx-notice--drop-index source))))
+      (when ids
+        (let ((was (make-hash-table :test #'equal :size (length ids))))
+          (dolist (id ids) (puthash id t was))
+          (puthash source was drgnx-notice--was)))
       (drgnx-notify source 'warn (or reason "not known") :id 'unknown :life 'condition
                     :command (plist-get (gethash source drgnx-notice--sources) :command))
       (unless (eq prev :unknown)
@@ -495,6 +510,7 @@ sources (`drgnx-notice-core-sources') need no definition, and defining one signa
       (remhash source drgnx-notice--sets)
       (remhash source drgnx-notice--heard)
       (remhash source drgnx-notice--more)
+      (remhash source drgnx-notice--was)
       (drgnx-notice--changed 'undefine nil source nil nil (append keys (drgnx-notice--drop-index source))))
     source))
 

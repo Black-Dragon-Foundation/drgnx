@@ -510,7 +510,8 @@ can tell it from a command; the guard is put on where the callback is handed ove
   raises is not signalled again (no "error in process sentinel" line), the wrapper returns nil, and it becomes a
   notice of source `guard` with id LABEL ([Notices](#notices-drgnx-noticeel)): a refused prompt is a `fail` event
   ("LABEL asked a question from a process callback; drgnx refused (it would freeze Emacs)"), any other error a `warn`
-  event ("LABEL: MESSAGE"); a repeat counts. LABEL names the process's purpose (`"hub events"`, `"ACP NAME"`);
+  event ("LABEL: MESSAGE"), said in the echo area the first time LABEL fails (as Emacs said a failed filter); a
+  repeat only counts. LABEL names the process's purpose (`"hub events"`, `"ACP NAME"`);
   default FN printed. The debugger opens only with `debug-on-error` and a frame to show it in, the timer layer's
   rule: never in batch or in a daemon with no client.
 - `(drgnx-guard-run-hook HOOK &rest ARGS)` calls each function of HOOK that way, with the label `"HOOK FN"`: one
@@ -592,7 +593,10 @@ session file's save timer.
 
 **The `now` lane.** `drgnx-notice-functions` is called synchronously with each change, a plist `(:op OP :key KEY
 :source SOURCE :notice NOTICE :added IDS :removed IDS)` holding only its non-nil keys, OP one of `post clear set
-unknown dismiss undefine`. Each function runs inside `drgnx-automatic` with `inhibit-interaction`, so it cannot
+unknown dismiss undefine`. A `set`'s `:added` are the ids new to the union: not one another source holds already (one
+card from `jobs` and `questions` is new once), nor one the source held before it went `:unknown`
+(`drgnx-notice--was`; a hub that reconnects announces nothing again); `:removed` are the ids that left the source's
+set. Each function runs inside `drgnx-automatic` with `inhibit-interaction`, so it cannot
 ask. What a hook function may do: set a flag, `force-mode-line-update`, start a timer (`drgnx-timer-start`) for the
 real work. An error is recorded in `drgnx-notice--hook-errors` (the last 20) with one `message` per function, and
 never posted back into the model. A notice a hook function posts updates the model at once, but its own hook call
@@ -616,7 +620,8 @@ stub the send or `make-process`/`dbus-call-method-asynchronously`: none reaches 
 **The echo route** (`drgnx-notice-echo.el`, `drgnx-notice-echo-mode`; `drgnx-init` turns it and the desktop mode on
 before the modules run). `drgnx-notice--echo-change` is on `drgnx-notice-functions` and queues a line per the rule
 (spec §4, one test per cell): a `fail` event or condition when new; `info`/`warn` only with `:echo t`; an attention id
-new to a `set` (`:added`) unless `drgnx-notice-desktop-take` took it (it is asked for every new item, started or not);
+new to the union (`:added`) unless `drgnx-notice-desktop-take` took it (it is asked only once startup is over: what
+waits at startup is old, left from an earlier session, and only counted);
 `:echo nil` never, `:echo t` always. Pacing: `drgnx-notice--echo-pending` (oldest first, at most 50) and
 `drgnx-notice--echo-last`; within `drgnx-notice-echo-interval` the layer timer `notice-echo` (`:core`) flushes them as
 one merged line. A line waits (`drgnx-notice--echo-waiting`) while the minibuffer is active, `this-command` is set
@@ -673,7 +678,7 @@ count opens the list.
 | `keys` | After each `drgnx-keys-apply`, `drgnx-notice-clear` of the source, then one `warn` condition per entry of `drgnx-keys-last`' `:problems` (a keys.eld mistake, an unknown profile, a binding that could not be made). `warn`, so never echoed. `drgnx-keys-problems` stays the input list. | the problem text |
 | `hooks` | A `warn` event for an error in a staged-hook function (`drgnx-hooks-run-once`): `HOOK: FN: MESSAGE`. | `(HOOK . FN)` |
 | `commands` | Nothing yet. `drgnx-commands-problems`, which nothing wrote, is gone; a registry problem is a `commands` notice. | |
-| `timers` | A `warn` condition when the layer stops a timer at its `drgnx-timer-failure-limit`-th failure in a row: `timer KEY (FN) stopped after N failures: ERROR`, with a fix line. Cleared when KEY starts again. `timers-report.eld` and the doctor's `timers` check are unchanged. | the timer key |
+| `timers` | A `warn` event per failing timer, `timer KEY (FN) failed: ERROR` (a debounce failing after every pause only counts), and a `warn` condition when the layer stops a timer at its `drgnx-timer-failure-limit`-th failure in a row: `timer KEY (FN) stopped after N failures: ERROR`, with a fix line. The condition is cleared when KEY starts again. `timers-report.eld` and the doctor's `timers` check are unchanged. | the event `(failed . KEY)`, the condition the timer key |
 | `terminal` | `drgnx-tty-fallback-notify`: a `warn` condition per line of `drgnx-tty-fallback-problems` for a frame's terminal; lines that stopped being a problem go, other terminals' stay. | `(TERMINAL . LINE)` |
 
 The terminal modules still push their own caught errors to `drgnx-hooks-problems` (terminal mode is frozen); only
@@ -688,7 +693,10 @@ time, about 55 µs, is a perf number and not tested).
 model and sets the model it found back afterwards, variable by variable (`drgnx-notice-test--variables`), with
 `set`; `drgnx-notice-test--alloc` counts the conses a byte-compiled body allocates (the fewest of 3 warm runs).
 
-**What stays a message.** A `message` that is the direct reply to a command just run stays one. Anything drgnx says on
+**What stays a message.** A `message` that is the direct reply to a command just run stays one. A reply that comes
+later (a sentinel or hub callback of a command the user ran: Save Workbench, Show Changes' fetch, Reload Environment,
+an agent's stop, answer or send) is a reply too: post it with `:echo t`, after clearing its key so a second run says
+it again (a repeat only counts), or `user-error` on a synchronous path. Never a silent `warn`. Anything drgnx says on
 its own (a filter, sentinel, timer or hook: a state file that did not save, a startup restore that failed, a hook
 function that signalled) is a notice, with the severity and lifetime of the table above, so it shows in the Notices
 list and, when it matters, once in the echo area. The core sources in use are `config` (state files, the shell
@@ -1221,7 +1229,8 @@ Every layer timer's Emacs function is `drgnx-timer--fire` with the entry as its 
    poll, idle steps, their ON-TIMEOUT and ON-DONE) do not install the safety net, so they must not register hooks,
    advice or global modes.
 5. Every error is caught: pushed on `drgnx-timer-errors` (newest first, at most 50 plists
-   `(:key :owner :fn :error :failures :stopped :time)`) and shown once as `drgnx: timer KEY failed: MESSAGE`. A
+   `(:key :owner :fn :error :failures :stopped :time)`) and posted as a `timers` `warn` event
+   `timer KEY (FN) failed: MESSAGE` (a repeat only counts; a `message` only when the model cannot record it). A
    success resets the count. A timer that would run again (repeating, a poll, idle steps) stops at its
    `drgnx-timer-failure-limit`-th failure in a row (3): it is cancelled, its record says `:stopped t`, and
    `timers-report.eld` in the state dir (`drgnx-timer-report-file`; the hub writes `hub-timers-report.eld`) is
