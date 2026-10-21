@@ -1,0 +1,92 @@
+---
+source: crates/gleipnir/src/sbpl.rs
+expression: "&p[BASE.len()..]"
+---
+
+; gleipnir: the rules from the spec (gleipnir::sbpl::profile)
+(allow system-socket (socket-domain AF_UNIX))
+(deny file-read*
+  (subpath "/Users")
+  (regex "^/[Uu][Ss][Ee][Rr][Ss](/.*)?$"))
+(allow file-read*
+  (literal "/"))
+(allow file-read-metadata
+  (literal "/tmp")
+  (literal "/var")
+  (literal "/etc")
+  (literal "/opt")
+  (literal "/private")
+  (literal "/dev")
+  (literal "/private/var")
+  (literal "/private/var/db")
+  (literal "/opt/tools")
+  (literal "/w")
+  (literal "/w/state")
+  (literal "/w/run/s")
+  (literal "/w/run")
+  (literal "/private/var/folders/zz/T")
+  (literal "/private/var/folders/zz")
+  (literal "/private/var/folders")
+  (literal "/w/task")
+  (literal "/w/run/s/S1"))
+(allow file-read*
+  (subpath "/usr")
+  (subpath "/bin")
+  (subpath "/sbin")
+  (subpath "/System")
+  (subpath "/Library")
+  (subpath "/opt/homebrew")
+  (subpath "/private/etc")
+  (subpath "/dev/fd")
+  (subpath "/private/var/select")
+  (subpath "/private/var/db/timezone")
+  (subpath "/private/var/db/xcode_select_link")
+  (subpath "/opt/tools/node")
+  (subpath "/w/task")
+  (subpath "/w/state/home-1")
+  (subpath "/w/run/s/S1")
+  (subpath "/private/var/folders/zz/T/gleipnir-S1-0123"))
+(allow file-read*
+  (literal "/dev/null")
+  (literal "/dev/zero")
+  (literal "/dev/random")
+  (literal "/dev/urandom")
+  (literal "/dev/tty")
+  (literal "/dev/dtracehelper"))
+(deny file-read*
+  (subpath "/opt/homebrew/var")
+  (regex "^/[Oo][Pp][Tt]/[Hh][Oo][Mm][Ee][Bb][Rr][Ee][Ww]/[Vv][Aa][Rr](/.*)?$")
+  (subpath "/usr/local/var")
+  (regex "^/[Uu][Ss][Rr]/[Ll][Oo][Cc][Aa][Ll]/[Vv][Aa][Rr](/.*)?$"))
+(allow file-write*
+  (subpath "/w/task")
+  (subpath "/w/state/home-1")
+  (subpath "/private/var/folders/zz/T/gleipnir-S1-0123"))
+(allow file-read*
+  (subpath "/w/task/.git"))
+(deny file-write*
+  (subpath "/w/task/.git")
+  (regex "^/[Ww]/[Tt][Aa][Ss][Kk]/\\.[Gg][Ii][Tt](/.*)?$"))
+(allow file-read*
+  (subpath "/w/objects"))
+(allow file-write*
+  (subpath "/w/objects"))
+(deny file-read* file-write*
+  (subpath "/w/task/conf/.env")
+  (regex "^/[Ww]/[Tt][Aa][Ss][Kk]/[Cc][Oo][Nn][Ff]/\\.[Ee][Nn][Vv](/.*)?$"))
+(deny file-write-unlink
+  (literal "/w/task")
+  (regex "^/[Ww]/[Tt][Aa][Ss][Kk]$")
+  (literal "/w/state/home-1")
+  (regex "^/[Ww]/[Ss][Tt][Aa][Tt][Ee]/[Hh][Oo][Mm][Ee]-1$")
+  (literal "/private/var/folders/zz/T/gleipnir-S1-0123")
+  (regex "^/[Pp][Rr][Ii][Vv][Aa][Tt][Ee]/[Vv][Aa][Rr]/[Ff][Oo][Ll][Dd][Ee][Rr][Ss]/[Zz][Zz]/[Tt]/[Gg][Ll][Ee][Ii][Pp][Nn][Ii][Rr]-[Ss]1-0123$")
+  (literal "/w/objects")
+  (regex "^/[Ww]/[Oo][Bb][Jj][Ee][Cc][Tt][Ss]$")
+  (literal "/w/task/conf")
+  (regex "^/[Ww]/[Tt][Aa][Ss][Kk]/[Cc][Oo][Nn][Ff]$"))
+(deny network*)
+(allow network-outbound (remote ip "localhost:3128"))
+(allow network-outbound (remote ip "localhost:3129"))
+(deny network-outbound (remote unix-socket))
+(allow network-outbound (remote unix-socket (path-literal "/w/run/s/S1/gw.sock")))

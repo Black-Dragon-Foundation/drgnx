@@ -97,7 +97,7 @@ modules. `BackendKind` is `Bwrap`, `Reduced`, `Seatbelt` or `None`; Task 13 dete
 | spec, validation, bwrap argv, SBPL text, hosts, relay, proxy | `spec`, `validate`, `bwrap`, `sbpl`, `net` | none: pure, built and tested on every target (the goldens run on Linux) | builds; nothing runs it |
 | bwrap, the reduced tier | `backend::linux` | `target_os = "linux"` | no backend; apps get no user namespaces; fails closed |
 | inner helper, Landlock, seccomp | `inner`, `landlock`, `seccomp` | body `target_os = "linux"`, an `Unsupported` stub elsewhere | the stub |
-| Seatbelt | `backend::macos` | `target_os = "macos"` | not applicable |
+| Seatbelt | `backend::macos` | `target_os = "macos"` (and `test`, so its tests run on Linux) | not applicable |
 | anything else | `backend::none` | always | a refusal |
 
 `landlock` and `seccompiler` are Linux-only dependencies. Every `cfg(target_os)` names its Android stance in a
@@ -380,7 +380,153 @@ Tests (`seccomp::tests`):
   there. They run wherever no container filter is in the way. The calls the kernel already refuses to an unprivileged process (`setns`, `pivot_root`,
   the new mount API, `bpf`, `userfaultfd`) are covered by the interpreter only.
 
-## macOS: Seatbelt (Task 9)
+## macOS: Seatbelt
+
+`gleipnir::sbpl` turns a spec validated for `Target::Macos` into a Seatbelt profile (SBPL, the policy language of
+`sandbox-exec`); `gleipnir::backend::macos` runs it. `sbpl::profile(&spec, &MacContext)` is pure text, so its goldens
+and order checks run on Linux (`sbpl::tests`, snapshots in `src/snapshots/gleipnir__sbpl__*`). It is unverified on a
+Mac until the MAC-SB rows pass (Task 16 on macOS CI, MAC-SB-11/12 on the user's Mac).
+
+### What differs from Linux
+
+macOS has no mount namespace and no Landlock. Nothing is bound anywhere: every path is seen at its own place, and what
+the program may touch is the profile's allow list.
+
+- **Validation** (`What is refused`): a `Macos` spec has `landlock_min_abi` 0, every bind's, the home's and `run`'s
+  dest equals its source (the session's `HOME` names the home), and paths compare without case.
+- **`home`**: readable, and writable only when its mode is `rw`. **`run`**: readable at its own path, never
+  writable. **`sockets`**: the only Unix sockets the program may connect to.
+- **`env`, `chdir`**: not in the profile; `backend::macos::prepare` sets them on the invocation.
+- **`MacContext`** carries the caller's facts: `users_dir` (`/Users`) and `developer_dir`, the true name of the dir
+  xcode-select's link selects. `/usr/bin/git` is xcrun's shim and runs the git there (the Command Line Tools under
+  `/Library`, or Xcode's under `/Applications`, which nothing else reads), so the profile reads it. Both must be
+  absolute and in canonical form; a developer dir that is `/` or holds `users_dir` is refused.
+
+### The profile, in order
+
+SBPL decides by the **last rule that matches** (sandbox-runtime: "Seatbelt is last-match-wins"), so the order is the
+policy:
+
+```
+(version 1) (deny default) …                    ; 1. the base: sbpl/base.sbpl (Codex's, below)
+(allow system-socket (socket-domain AF_UNIX))   ; 2. pipes to children; connecting is decided at 13
+(deny file-read* (subpath "/Users") (regex …))  ; 3. before every allow: only what is allowed below is readable there
+(allow file-read* (literal "/"))                ; 4. / itself, and the metadata of /tmp, /var, /etc and of every
+(allow file-read-metadata (literal …))          ;    directory above an allowed path (stat, never list)
+(allow file-read* (subpath …))                  ; 5. system roots, developer dir, read, write, home, run, tmp
+(allow file-read* (literal "/dev/null") …)      ; 6. the devices, each by name
+(deny file-read* (subpath "/opt/homebrew/var") (regex …) …)          ; 7. Homebrew's data
+(allow file-write* (subpath …))                 ; 8. write, home (rw), tmp
+(allow file-read* (subpath B)) (allow file-write* (subpath B))       ; 9. each bind, in order: rw…
+                               (deny file-write* (subpath B) (regex …))   ; …or ro (the pins)
+(deny file-read* file-write* (subpath H) (regex …) …)                ; 10. hide
+(deny file-write-unlink (literal D) (regex …) …)                     ; 11. no rename of a root or a pin's parents
+(allow network-outbound (remote ip "*:*"))      ; 12. shared, with AF_SYSTEM and the network mach services
+  — or, isolated: (deny network*) (allow network-outbound (remote ip "localhost:PORT")) per mac_tcp_ports
+(deny network-outbound (remote unix-socket))    ; 13. every Unix socket…
+(allow network-outbound (remote unix-socket (path-literal S)))   ; …but each of sockets (and, shared, the resolver's)
+```
+
+- **The system's roots** (`sbpl::SYSTEM_READ`): `/usr`, `/bin`, `/sbin`, `/System`, `/Library`, `/opt/homebrew`,
+  `/private/etc`, `/dev/fd` (the process's own descriptors), `/private/var/select` (the link `/bin/sh` and xcrun
+  follow), the time zones and xcode-select's link. Homebrew's data (`/opt/homebrew/var`, `/usr/local/var`: the
+  databases of Postgres, MySQL, Redis) is denied after every read.
+- **Devices by name** (`sbpl::DEVICES`): `/dev/null`, `/dev/zero`, `/dev/random`, `/dev/urandom`, `/dev/tty` (the
+  controlling terminal) and `/dev/dtracehelper`. Never all of `/dev`: the user's other terminals (`/dev/ttysN`)
+  belong to the same user, and a process that reads one races the shell for its keystrokes. The base allows only the
+  ptys the sandbox opened itself.
+- **`subpath` or `literal`**: every allowed or hidden path is a `subpath` (a file, or a whole directory component by
+  component). `literal` is only for `/`, the metadata of ancestors (`realpath()` stats each; none can be listed) and
+  the unlink denies. Sockets are `path-literal`.
+- **One kind of operation per path.** A deny of a specific operation can win over a later allow of a wildcard, so
+  allows and denies on a path use the same wildcards (`file-read*`, `file-write*`) and the later one wins. The one
+  specific deny is the rename block, which is meant to win.
+- **No rename past a deny.** Seatbelt matches paths, not files: renaming a directory above a pin or a hidden path would
+  carry it to a name no deny covers (`mv conf c2; cat c2/.env`). So `(deny file-write-unlink (literal D))` (a rename's
+  source is an unlink) covers every writable root (`write`, a `rw` home, `tmp`, the `rw` binds) and every directory
+  from such a root down to the parent of each `ro` bind and `hide` path. Files in those directories can still be
+  removed and renamed. This is sandbox-runtime's move-blocking deny (anthropics/sandbox-runtime,
+  `src/sandbox/macos-sandbox-utils.ts`, Apache-2.0), cut to what the spec needs.
+- **Every deny holds in every case.** APFS is case-insensitive by default, so `.GIT/config` is `.git/config`. Reports
+  disagree on whether Seatbelt compares paths that way, so each deny (`/Users`, the pins, `hide`, the rename blocks,
+  Homebrew's data) also carries a `regex` of character classes (`\.[Gg][Ii][Tt](/.*)?$`; a non-ASCII letter as
+  `(é|É)`; no `(?i)`). Allows stay exact: a path spelled otherwise is simply not allowed, which fails closed. The regex
+  is about four times its path, so a deny path of more than about 250 bytes refuses the profile (1024 bytes, below).
+- **`/tmp`, `/var` and `/etc` are links into `/private`.** Seatbelt matches the resolved path, so every rule names
+  `/private/…`. Spec paths are true names already (validation), and the links themselves get their metadata only.
+- **No escape through other processes.** No `appleevent-send` (an AppleEvent to Terminal runs anything), no `lsopen`
+  (LaunchServices starts apps outside the sandbox), no mach-lookup of `com.apple.coreservices.launchservicesd`, and no
+  Keychain (`com.apple.SecurityServer`).
+- **Network.** Shared allows outbound IP anywhere and nothing inbound, plus the AF_SYSTEM socket and the network mach
+  services (`sbpl::NET_SERVICES`: TLS trust, the network's configuration, user dirs), the resolver's socket
+  (`/private/var/run/mDNSResponder`: every lookup on macOS goes through it) and `/private/var/run/resolv.conf` (Go's
+  resolver). Isolated denies all network, then allows outbound to `localhost` on `mac_tcp_ports` only: macOS has no
+  network namespace, so the ports are what isolates, and there is no relay. The mach services and the resolver come
+  with shared only, as in Codex: `trustd` and `ocspd` fetch a certificate's AIA, OCSP and CRL URLs outside the sandbox,
+  a way past `(deny network*)`. So tools that verify TLS through Apple's frameworks (`curl` and `git` from the Command
+  Line Tools) may fail when isolated, even through the proxy (SB-T4-3, a Mac row).
+
+### Quoting
+
+Every path is one SBPL string made by `sbpl::quote`: in double quotes, with `"` and `\` escaped by a backslash (the
+escaping Zed and sandbox-runtime use too). A control character (newline, tab, NUL, DEL, C1) is refused: SBPL's reader
+would take some as escapes, and validation already refuses newlines and NULs. So is a string of more than 1024 bytes
+between its quotes, escapes counted: `sandbox-exec` refuses a longer literal ("Error reading string"; sandbox-runtime
+measured the limit at 1025). A folder named `x") (allow default) ("` stays one path in one rule
+(`golden_hostile_names`). `sbpl::sexp` (tests and the `fuzzing` feature) reads a profile back as data for the order
+checks and the `sbpl_quote` fuzz target.
+
+### Where the profile goes, and the run
+
+`backend::macos::prepare(&spec, &mac, &sandbox_exec, command)` (review S8). The profile is never written where the
+program can write, and never into `tmp`:
+
+- with a `run` (a session dir: readable inside, not writable), it goes to `<run.source>/profile.sb`, 0600, made with
+  `O_EXCL` and `O_NOFOLLOW` after a stale file (or link) there is removed; a session dir that lies under a writable
+  root or `tmp` is refused (validation already refuses it);
+- without a `run` (the check, short steps), it travels in argv: `-p PROFILE` (CI3-SB-1). argv and the environment
+  share `ARG_MAX` (1 MiB on macOS), so a profile over 256 KiB is refused with the reason instead of an `E2BIG`.
+
+The invocation is `/usr/bin/sandbox-exec -f FILE CMD…` or `-p TEXT CMD…`, with exactly the spec's environment and
+`chdir` as its directory. `sandbox-exec` comes from `backend::macos::find()`, which accepts only
+`/usr/bin/sandbox-exec` when only root can change it (`eitri::trusted_program`), never one on `PATH`. A command whose
+program is empty or starts with `-` is refused (`sandbox-exec` would read it as an option). There is no inner helper
+and no status fd on macOS: the layers are reported as Seatbelt's once `sandbox-exec` runs (Task 13), and draugr's
+close-on-exec loop is what keeps inherited fds out (review S7). `sandbox-exec` is deprecated but still works on macOS
+15 and 26; Apple does not document SBPL as an API, so the macOS CI rows are the check on every runner image.
+
+### The session's TMPDIR
+
+`sbpl::session_tmpdir(parent, sid)` makes `parent/gleipnir-SID-RANDOM` (16 hex digits from `/dev/urandom`) with
+`mkdir`, so nothing planted before is used, sets it to 0700 through a no-follow fd, and returns its true name, for
+the spec's `tmp` and the session's `TMPDIR`. On macOS `parent` is the user's own `/private/var/folders/…/T`. `sid` must
+be a plain name. Removing it is the caller's job.
+
+### The base policy
+
+`src/sbpl/base.sbpl` is the Seatbelt base policy of OpenAI's Codex, unchanged below its attribution header:
+[`codex-rs/sandboxing/src/seatbelt_base_policy.sbpl`](https://github.com/openai/codex/blob/8c076942cb70fba8e5c4732c23f1faabc4aed484/codex-rs/sandboxing/src/seatbelt_base_policy.sbpl)
+at commit `8c07694`, Copyright 2025 OpenAI, under the [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0),
+whose text is `LICENSES/Apache-2.0.txt`. It holds `(deny default)`, process exec and fork, the `hw.*`/`kern.*` sysctl
+allowlist (zsh exits silently without it on macOS 26.5), user lookup, POSIX IPC and pseudo-terminals. The network mach
+services are Codex's `seatbelt_network_policy.sbpl` at the same commit, without `com.apple.SecurityServer`. Apache-2.0
+is compatible with GPL-3.0-or-later. Codex's base was chosen over sandbox-runtime's (also Apache-2.0) because it is a
+published policy file of its own and holds no LaunchServices or Keychain service.
+
+### Limits (macOS)
+
+- **Unverified on a Mac** until the MAC-SB rows pass. There is no SBPL evaluator here (review M6): it would have to
+  model Seatbelt's regex and last-match rules without being checked against them. The goldens pin the text, the order
+  checks pin the rule order, and the macOS rows run the real `sandbox-exec`.
+- **Case** is handled on the deny side only, and Unicode normalization not at all (APFS is normalization-insensitive;
+  GL-T2-1).
+- **Links and clones.** Whether `file-link` and `file-clone` of a hidden file fall under `file-write*` or under
+  `(deny default)` is a Mac row (`mac-renames-links-clones`).
+- **Existence.** A denied path probably fails with EPERM and a missing one with ENOENT, so names in `~` can be probed
+  one by one, never listed. Linux gives ENOENT for both.
+- **Tools' own Unix sockets** (a language server's socket in `TMPDIR`) cannot be connected to, and nothing can listen
+  on a port. Only `sockets`, the resolver's socket and outbound IP are allowed.
+- **No nesting.** A `sandbox-exec` inside the sandbox is believed to fail.
 
 ## The relay (Task 11)
 
