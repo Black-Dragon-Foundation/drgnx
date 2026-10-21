@@ -4,7 +4,7 @@
 # the outcome is checked.  Run as root; it prepares, then runs itself again as the user `tester` inside a D-Bus session.
 # The snapshot of the drgnx tree is /src (read-only): /src/drgnx.bundle, /src/config.git (the configuration, with
 # secrets.age encrypted to /src/identity.txt) and /src/config-pass.git (secrets.age locked with a passphrase).
-# Bash, not Emacs Lisp: no Emacs exists here until install.sh has put one in.
+# Bash, not Emacs Lisp: no Emacs exists here until Nidhogg's release has been put in (below).
 set -euo pipefail
 
 step() { printf '\n=== %s\n' "$*"; }
@@ -21,6 +21,10 @@ if [[ "${1:-}" != --as-tester ]]; then
   # fedora's updates-testing repository is flaky (a corrupt metadata download failed a run) and tests nothing of ours
   for f in /etc/yum.repos.d/*testing*.repo; do [[ -e "$f" ]] && sed -i 's/^enabled=1/enabled=0/' "$f"; done
   dnf -y -q install sudo dbus-daemon gnome-keyring libsecret /usr/bin/script >/dev/null
+  # The Nidhogg a second machine already has: the pinned release (a build from source takes 30-60 minutes, which
+  # `drgnx test --install' covers).  install.sh finds it and keeps it, the way it does for a user who installed the release.
+  step "Nidhogg: the pinned release for Fedora $VERSION_ID"
+  bash /src/test/container/nidhogg.sh "fedora-$VERSION_ID" >/dev/null
   useradd -m tester
   echo 'tester ALL=(ALL) NOPASSWD: ALL' >/etc/sudoers.d/tester
   chmod 440 /etc/sudoers.d/tester
@@ -74,10 +78,7 @@ doctor_row() { awk '$1 == "doctor" {print $2}' "$1"; }   # bootstrap's rows: STE
 # ---- 1: the one command --------------------------------------------------------------------------------------------
 step "1. install.sh --yes --config … --identity …"
 rc=0
-# stock Emacs for now (--method): this test is about the second machine, and Nidhogg's pinned release arrives with the CI
-# task (DEFERRED NIDHOGG-BOOTSTRAP-1)
-if [[ "$(. /etc/os-release; echo "$VERSION_ID")" == 44 ]]; then stock=source; else stock=package; fi
-bash /src/install.sh --yes --method "$stock" --config /srv/config.git --identity "$HOME/identity.txt" >/tmp/run1.out 2>&1 || rc=$?
+bash /src/install.sh --yes --config /srv/config.git --identity "$HOME/identity.txt" >/tmp/run1.out 2>&1 || rc=$?
 cat /tmp/run1.out
 ((rc == 0)) || fail "the one command exited $rc"
 
@@ -92,7 +93,7 @@ done
 ! grep -q ':from-shipped' "$CONFIG/drgnx.lock.eld" || fail "the first sync did not complete the lock"
 echo "config dir: the fixture, clean"
 
-emacs --batch -Q --eval '(let ((l (with-temp-buffer (insert-file-contents "/src/etc/drgnx.lock.eld") (read (current-buffer)))))
+nidhogg --batch -Q --eval '(let ((l (with-temp-buffer (insert-file-contents "/src/etc/drgnx.lock.eld") (read (current-buffer)))))
   (dolist (p (plist-get l :packages)) (princ (format "%s %s\n" (car p) (plist-get (cdr p) :version)))))' >/tmp/lock.list </dev/null
 # the fixture's modules (a minimal preset) need some of the lock's packages, not all of them: what is installed is
 # exactly a locked NAME-VERSION, never another version of it
@@ -106,7 +107,7 @@ for d in "$ELPA"/*/; do
 done
 # and everything the configuration needs is there: its modules' packages and what they require, as the lock pins them
 # (drgnx's own reading of the config, with this Emacs: a package a built-in satisfies is not needed)
-emacs --batch -Q -L "$HOME/.local/share/drgnx/drgnx/core" --eval '(progn (require (quote drgnx-pkg))
+nidhogg --batch -Q -L "$HOME/.local/share/drgnx/drgnx/core" --eval '(progn (require (quote drgnx-pkg))
   (let ((lock (drgnx-pkg-read-lock)))
     (dolist (n (drgnx-pkg--lock-closure (drgnx-pkg-manifest) lock))
       (princ (format "%s-%s\n" n (plist-get (alist-get n lock) :version))))))' >/tmp/needed.dirs </dev/null
