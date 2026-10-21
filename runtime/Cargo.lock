@@ -212,7 +212,9 @@ dependencies = [
 name = "draugr"
 version = "0.1.0"
 dependencies = [
+ "eitri",
  "libc",
+ "tempfile",
  "tokio",
 ]
 

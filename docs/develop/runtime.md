@@ -33,7 +33,7 @@ runtime/
 | `drgnx-ratatoskr` (binary `ratatoskr`, symlink `rtsk`) | the runtime: the hub protocol's server |
 | `runstav` (formerly `drgnx-proto`) | the hub protocol's contract: wire types, strict lines, typed decode, proofs, paths ([below](#runstav-the-contract)) |
 | `urdr` | the SQLite store; self-contained, its public API names no drgnx type |
-| `draugr` (formerly `drgnx-proc`) | spawning (explicit environments, own process groups, one exit) and the orphan reaper ([hub.md](hub.md#ratatoskrs-children-draugr)) |
+| `draugr` (formerly `drgnx-proc`) | spawning (explicit environments, own process groups, one exit) and the orphan reaper ([hub.md](hub.md#ratatoskrs-children-draugr)); passed fds, the pinned spawner and the git runner ([below](#draugr-passed-fds-and-git)) |
 | `gleipnir` | the sandbox: the spec and its validation, bwrap, Landlock, seccomp, Seatbelt, the relay and the CONNECT proxy; self-contained ([gleipnir.md](gleipnir.md)) |
 | `eitri` | file access that never follows a link: opens pinned by fd, bounded reads, writes by rename, root-owned programs; generic, used by `gleipnir` and `draugr` ([below](#eitri-no-link-file-access)) |
 | `gleipnir-escape` | test tooling, never shipped: the probe binary and the escape harness ([gleipnir.md](gleipnir.md), "Proving it") |
@@ -141,6 +141,94 @@ injected through a test seam, each `Untrusted.why`) and the proptest `tests/tree
 inside, outside and `/`, where every `Ok` is the `(dev, ino)` an `lstat` walk finds and every path through a link is
 `Link`. The fixtures that need root-owned ancestors (`/var/lib/glp-…`) run as uid 0, as in the build container, and
 are skipped otherwise.
+
+## draugr: passed fds and git
+
+`crates/draugr` starts and ends Ratatoskr's processes ([hub.md](hub.md#ratatoskrs-children-draugr)). For the sandbox it also
+passes descriptors at fixed numbers, forks sandboxes from one pinned thread, and runs git.
+
+**Passed descriptors.** `spawn::Spec` has `pass_fds: Vec<PassFd>`, each `PassFd { fd: Arc<OwnedFd>, target }`. The
+child gets exactly 0–2 and the targets, in this order:
+
+1. The targets are checked: each 3 or more, each once (else `InvalidInput`). In the parent, every source is copied
+   with `fcntl(F_DUPFD_CLOEXEC, highest target + 1)`, so no `dup2` in the child overwrites a source it still needs.
+2. Every free number from 3 to the highest target is held with a close-on-exec copy until the child is started.
+   std reports a failed exec over a socket it opens just before the fork, at the lowest free number; on a target
+   the child's `dup2` would close it, and a failed exec would look like a start. Another thread that closes a low
+   descriptor during the spawn can still free a number for it. A failed exec then shows as a child that exits 1 at
+   once, and std's 8 bytes go to the passed descriptor at that number. The callers fail closed on both (no status
+   line from the helper).
+3. In the child (`pre_exec`, no allocation): every descriptor from 3 up is marked close-on-exec, with
+   `close_range(3, ~0, CLOSE_RANGE_CLOEXEC)` on Linux and Android. Before Linux 5.11, and on macOS, an
+   `fcntl(F_SETFD, FD_CLOEXEC)` loop up to `RLIMIT_NOFILE` (at most 2^20) does it. Then each source is `dup2`'d to
+   its target, and `dup2` clears close-on-exec on the copy. So a descriptor the hub inherited without close-on-exec
+   (from systemd, launchd or Emacs) reaches no child. This holds for every spawn, not only those with `pass_fds`.
+
+`spawn` consumes its `Spec` and drops the `PassFd`s once the child is started, so the parent keeps no copy of a pipe
+end it waits on for EOF. Never keep a clone of a `Spec` that has `pass_fds`.
+
+**`spawn_pinned`.** bwrap's `--die-with-parent` and the reduced helper's `PR_SET_PDEATHSIG` fire when the *thread*
+that forked them exits. A spawn from a tokio blocking-pool thread would kill the sandbox when that thread retires.
+`spawn_pinned` hands the spec to one thread, `draugr-spawner`, which is started on first use and lives as long as
+the process. That thread enters the caller's runtime and spawns. If the caller stopped waiting, the thread kills the
+child's group. Every sandboxed spawn goes through it; other spawns keep `spawn`.
+
+**git.**
+- `git::git_program()` gives git from a root-owned path (`eitri::trusted_program`), never through `PATH`.
+  - Linux: `/usr/bin/git`.
+  - macOS: never the `/usr/bin/git` shim, which runs whatever developer dir is selected. It reads the link
+    `/private/var/db/xcode_select_link`. That link and every directory up to `/` must be root's and not group- or
+    world-writable. The program is then `<developer dir>/usr/bin/git`, which must pass `trusted_program`. The
+    Command Line Tools pass; Xcode under the admin-writable `/Applications` is refused.
+  - Any other OS (Android included): `Unsupported`.
+- `git::command(&GitCall { place, allow_protocols, args })` returns the argv after the program, and the environment
+  to add.
+  - **The argv.** Every call starts with `-c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.pager=cat -c
+    core.editor=false -c protocol.ext.allow=never`. `Place::Trusted { read_only: true }` adds
+    `--no-optional-locks`. Then come `args`.
+  - **The environment.** Every call gets `GIT_TERMINAL_PROMPT=0` and `GIT_ALLOW_PROTOCOL` (the protocols joined by
+    `:`; `ext` is refused, since that variable overrides `protocol.ext.allow`). `Place::InSandbox` adds
+    `GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 HOME=/nonexistent
+    GIT_LFS_SKIP_SMUDGE=1`. It never sets `DEVELOPER_DIR`, `TOOLCHAINS` or `SDKROOT`, and the caller's part of the
+    environment must not either.
+  - **Refused anywhere in `args`**, also as `--NAME=VALUE` and as any abbreviation git accepts (a prefix of the name,
+    so `--text` too: use `-a`):
+    - config: `-c`, `--config`, `--config-env`;
+    - programs: `--textconv`, `--ext-diff`, `--extcmd`, `--upload-pack`, `--receive-pack`, `--exec`, `--exec-path`,
+      `-O`, `--open-files-in-pager`;
+    - files: `--output`, `--template`;
+    - repository location: `--git-dir`, `--work-tree`, `-C` (they would bypass `check_trusted_repo`).
+    A short letter is refused alone, with a value attached (`-Ovim`) or in a cluster (`-iO`).
+  - **Refused after a subcommand:** `-u` after `clone`, `fetch`, `pull`, `ls-remote` or `archive`; `-x` after
+    `rebase` or `difftool`.
+  - **The rule for callers:** values that came from an agent go after `--`, or are checked as hex object ids. Phase 6
+    may narrow this to an allowlist of the subcommands it uses.
+- `git::check_trusted_repo(repo, in_ledger)` refuses `InLedger { path }` when any of these lies in a folder for which
+  `in_ledger` is true (it is asked about the path and every folder above it):
+  - the git dir: `repo/.git` as a directory, or what a `.git` file's `gitdir:` line names (read with `read_regular`,
+    at most 4 KiB, relative to `repo`);
+  - the common dir: what `<git dir>/commondir` names, or the git dir;
+  - `config` and `config.worktree` in both, and every `<common dir>/worktrees/*/config.worktree`.
+  Every path is opened without links, and a link anywhere is refused, since git would follow it. `..` is resolved by
+  components, which is safe because no link was followed. A `gitdir:` line that looks like a remote
+  (`/ssh:host:/x`) is just a missing path. Phase 6 passes the ledger.
+
+`cargo test -p draugr` covers this:
+- `spawn::tests`: three pipes at 3, 4 and 5, and at the sources' own numbers rotated; a parent fd without
+  close-on-exec that the child never sees (the child lists its descriptors through `/dev/fd`); the passed fds
+  dropped after the spawn; bad targets; a `setpriv --pdeathsig KILL` child that `spawn_pinned` started from a
+  blocking-pool thread, alive 1.2 s after that thread retired.
+- `tests/fds.rs`: a failed exec with targets 3–63 is still an error. It is its own test binary, so no other test
+  frees a number during the spawn.
+- `git::tests`: the argv, the environment, and a table of every refused form with controls. The macOS resolver also
+  runs against a fixture under `/var/lib/glp-…`, as uid 0.
+- `tests/git.rs`:
+  - a planted `core.fsmonitor` and `post-checkout` hook run under plain git, the control, and never through
+    `command`;
+  - a `.git` file, a `.git` directory and a `commondir` into a ledger folder are refused;
+  - a real `git worktree` passes, and is refused when its main repository is in the ledger;
+  - links in the metadata are refused;
+  - a remote-looking `gitdir:` is not found.
 
 ## The conformance harness
 
