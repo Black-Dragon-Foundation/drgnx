@@ -978,7 +978,10 @@ Each run gets a fixture under `/tmp/glp-XXXXXX/`; the control run and the sandbo
 that moves or creates things in one cannot disturb the other. `ratatoskr` runs with an empty environment plus
 `HOME`, `XDG_RUNTIME_DIR`, `DRGNX_DATA_DIR`, `DRGNX_CONFIG_DIR`, `SSH_AUTH_SOCK`, `DBUS_SESSION_BUS_ADDRESS`,
 `DISPLAY`, `WAYLAND_DISPLAY`, `OPENROUTER_API_KEY` (a canary) and `PATH`, all pointing into the fixture: nothing
-reaches the real home, the user's sockets, D-Bus or a display.
+reaches the real home, the user's sockets, D-Bus or a display. A probe run without a sandbox (a control run, an
+`unsandboxed` row) gets descriptors 0–2 only (`only_stdio`), whatever the harness inherited: a GitHub Actions step
+inherits two of the runner's IPC pipes. `ratatoskr` keeps what the harness inherited, so those are closed by the
+sandbox like the `canary-fd` ones.
 
 | Path | Holds |
 |---|---|

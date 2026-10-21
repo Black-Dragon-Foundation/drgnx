@@ -16,6 +16,21 @@ pub mod run;
 
 use serde::{Deserialize, Serialize};
 
+/// A probe run without a sandbox (the control run, an `unsandboxed` row, the probe's own tests) gets 0–2 and nothing
+/// the harness inherited: every descriptor from 3 up is closed at the exec. A GitHub Actions step inherits the
+/// runner's IPC pipes (Runner.Worker gets them as inheritable handles), which `fds` would list. The sandboxed runs
+/// keep whatever `ratatoskr` inherited on purpose: closing it is the sandbox's job (the `fds-closed` rows).
+pub fn only_stdio(cmd: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt;
+    // SAFETY: between the fork and the exec; cloexec_from makes system calls only and allocates nothing.
+    unsafe {
+        cmd.pre_exec(|| {
+            draugr::spawn::cloexec_from(3);
+            Ok(())
+        });
+    }
+}
+
 /// The line `gleipnir-probe` prints for each probe. `result` is `reached` or `blocked`; `errno` is a name from
 /// [`ERRNOS`] (or `E<number>`); `detail` is the probe's own word (a size, a status code, a pid, a list).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

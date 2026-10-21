@@ -49,10 +49,11 @@ jobs:
       run:
         working-directory: runtime
     steps:
-      # root in this container: the `sudo` rows (another uid on the socket) run, through setpriv
+      # root in this container: the `sudo` rows (another uid on the socket) run, through setpriv. setpriv is in
+      # util-linux; the fedora image has only util-linux-core (draugr's pdeathsig test runs it too)
       - name: Tools
         working-directory: /
-        run: dnf -y install git cargo rust gcc clippy rustfmt tar zstd gzip procps-ng bubblewrap
+        run: dnf -y install git cargo rust gcc clippy rustfmt tar zstd gzip procps-ng util-linux bubblewrap
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -322,6 +323,14 @@ jobs:
             ~/.cargo/registry
             runtime/target
           key: cargo-${{ runner.os }}-brew-${{ hashFiles('runtime/Cargo.lock') }}
+      # draugr runs only the git of the developer dir xcode-select's link names, and refuses Xcode under the
+      # admin-writable /Applications (on the runner even its git is the runner user's); the Command Line Tools, which
+      # the image installs, pass. Before the tests: draugr's git tests and the escape rows run that git.
+      - name: xcode-select points at the Command Line Tools (the git draugr trusts)
+        run: |
+          xcode-select -p
+          sudo xcode-select -s /Library/Developer/CommandLineTools
+          xcode-select -p
       - run: cargo test --locked --manifest-path runtime/Cargo.toml --workspace --features drgnx-ratatoskr/test-hooks
       # (+ gleipnir-probe and gleipnir-escape for the Seatbelt rows below). The workspace tests above already run
       # `eitri` and `draugr` on macOS (their O_NOFOLLOW_ANY, xcode-select-link and CLOEXEC-loop paths).
@@ -351,14 +360,12 @@ jobs:
           if-no-files-found: error
       # The Seatbelt rows run for real, with the real /usr/bin/sandbox-exec. --require-all: a skip fails the job. Last
       # in the job, so a failing row never skips the conformance and perf steps above (gate review B1); ci.yml's
-      # emacs-31 job runs whatever this job's result. mac-works-git needs the git draugr trusts: the Command Line Tools
-      # pass, Xcode under /Applications is refused, so point xcode-select at the CLT when the runner has them.
+      # emacs-31 job runs whatever this job's result. mac-works-git needs the git draugr trusts: xcode-select points
+      # at the Command Line Tools since the step before the tests.
       # mac-net-* need a non-loopback address (the fixture takes the one the default route uses); the step prints
       # what the runner has.
       - name: escape suite (Seatbelt, required)
         run: |
-          xcode-select -p
-          if [ -d /Library/Developer/CommandLineTools ]; then sudo xcode-select -s /Library/Developer/CommandLineTools; fi
           xcode-select -p
           route -n get default | grep -E 'interface|gateway' || true
           ifconfig | grep 'inet ' || true

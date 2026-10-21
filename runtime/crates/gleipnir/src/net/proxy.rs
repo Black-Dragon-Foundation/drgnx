@@ -240,6 +240,10 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> Client for T {}
 struct Slot(Arc<Shared>);
 
 impl Slot {
+    #[allow(
+        deprecated,
+        reason = "fetch_update is deprecated since 1.99 as an alias of try_update, which needs 1.95 (MSRV 1.88)"
+    )]
     fn take(sh: &Arc<Shared>) -> Option<Slot> {
         sh.conns
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {

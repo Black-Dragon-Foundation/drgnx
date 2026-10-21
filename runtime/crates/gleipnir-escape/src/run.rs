@@ -962,6 +962,7 @@ fn run_direct(opts: &Opts, row: &Row) -> Result<(Fixture, RunData), String> {
         .env_clear()
         .envs(fx.env("/usr/bin:/bin"))
         .current_dir(fx.path("w"));
+    crate::only_stdio(&mut cmd);
     let tty = controlling_tty(row, &mut cmd)?;
     let d = drive(cmd, None, None)?;
     drop(tty);

@@ -1,5 +1,6 @@
 //! The git runner against real repositories: planted hooks never run, and a repository whose git dir, common dir or
-//! config lies in a ledger folder is refused. Needs `/usr/bin/git` (root-owned, as in the build container).
+//! config lies in a ledger folder is refused. Needs `/usr/bin/git` (root-owned, as in the build container); on
+//! macOS, xcode-select naming the Command Line Tools (Xcode under `/Applications` is refused; CI selects the CLT).
 
 use std::ffi::OsString;
 use std::fs;
