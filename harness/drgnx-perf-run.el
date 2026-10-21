@@ -702,7 +702,7 @@ error if it does not hold).  With :actions, :measure runs after the input and it
   "The popup workloads, or nil without $DRGNX_CHILDFRAME_ELPA (`drgnx-perf-run-childframe-skipped' says so), and the
 full-window one (it needs no package): `popup-typing' (corfu open, 200 characters), `popup-churn' (a posframe shown,
 moved and hidden 200 times; the hides are measured), `scroll-under-popup' (eldoc-box at point, 60 <next> then 60
-<prior>), `scroll-full-window' (one window filling the frame, C-n x 300).  Glitnir's frame-time record joins each run
+<prior>), `scroll-full-window' (one window filling the frame, <down> x 300).  Glitnir's frame-time record joins each run
 under :compose (the compose probe)."
   (let ((keys (lambda (k n) (make-list n (list :keys k))))
         (kill-fixture (format "(when-let* ((b (find-buffer-visiting %S))) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b))"
@@ -715,7 +715,7 @@ under :compose (the compose probe)."
                            (setq corfu-auto t corfu-auto-delay 0 corfu-auto-prefix 1) (global-corfu-mode 1) t)")
           :each ,drgnx-perf-run--popup-scratch-form
           :actions ,(make-list 10 (list :type "(car (cdr (list buff "))   ; 21 characters each: 210 in all
-          :check "(and (bound-and-true-p corfu-mode) (> (buffer-size) 200))"
+          :check "(with-current-buffer (window-buffer (selected-window)) (and (bound-and-true-p corfu-mode) (> (buffer-size) 200)))"
           :teardown ,(concat "(progn (global-corfu-mode -1) " drgnx-perf-run--popup-scratch-teardown " t)"))
          ;; one key = one show, one move and one hide of a posframe (F9 is bound for the workload only)
          (popup-churn
@@ -739,12 +739,12 @@ under :compose (the compose probe)."
           :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form)
                          " (goto-char (point-min)) (eldoc-box--display \"perf popup\\nunder the scroll\") t)")
           :actions ,(append (funcall keys "<next>" 60) (funcall keys "<prior>" 60))
-          :check "(> (buffer-size) 100000)"
+          :check "(with-current-buffer (window-buffer (selected-window)) (> (buffer-size) 100000))"
           :teardown ,(concat "(progn (ignore-errors (eldoc-box-quit-frame)) " kill-fixture " t)"))))
      `((scroll-full-window
         :each ,(concat "(progn " only-window " " (drgnx-perf-run--visit-fixture-form) " (goto-char (point-min)) t)")
-        :actions ,(funcall keys "C-n" 300)
-        :check "(> (line-number-at-pos) 250)"
+        :actions ,(funcall keys "<down>" 300)   ; C-n is File > New in the default key stack
+        :check "(with-current-buffer (window-buffer (selected-window)) (> (line-number-at-pos) 250))"
         :teardown ,(concat "(progn " kill-fixture " t)"))))))
 
 ;;;; Typing, motions and the Explorer with evil (Vim keys)

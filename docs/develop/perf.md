@@ -235,7 +235,7 @@ passes it on to the session.
 **The P1 workloads.** `popup-typing` (corfu open, 200+ characters), `popup-churn` (a posframe shown, moved and
 hidden 200 times; the hides are measured), `scroll-under-popup` (an eldoc-box at point, 60 `<next>` then 60
 `<prior>`: 120 samples, above the 100 that make p95 non-null) and `scroll-full-window` (one window filling the frame,
-`C-n` 300 times). The first three need the pinned child-frame packages: set `DRGNX_CHILDFRAME_ELPA`
+`<down>` 300 times (C-n is File > New)). The first three need the pinned child-frame packages: set `DRGNX_CHILDFRAME_ELPA`
 ([harness.md](harness.md), "Child-frame packages"); without it `--perf` prints `perf: popup workloads skipped` and
 runs the rest (`scroll-full-window` needs no package).
 
