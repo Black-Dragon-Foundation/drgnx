@@ -202,6 +202,22 @@ has no per-command samples (frames, startup, memory), is reported "not comparabl
 Exit: 0 judged, no regression, budgets hold; 1 regressed or a wall budget fails; 3 not judged (a loaded calibration,
 a busy host, an inconclusive interval). `DRGNX_PERF_RESULTS` gets the verdicts and both sides' stats.
 
+**p95 and probe verdicts.** The median verdict above cannot see a tail that moves while the median stays, and the
+gate is "at most +1 ms **p95**". `drgnx-perf-bootstrap-rounds` and `drgnx-perf-ab-verdict` therefore take
+`:stat p95`: the same pairs of rounds are resampled with replacement, each side's samples of the drawn pairs are pooled
+and the statistic is the nearest-rank p95 of the work tree minus that of REF (`:diff` is the same over all samples).
+`:threshold` overrides T. A verdict `improved` (the whole interval below 0) also counts as no regression. The
+`:compose` rows are wall clock too (reported by `--perf`, never gated), so a probe value gets its own verdict,
+`drgnx-perf-ab-probe-verdict ROUNDS PATH`: each round carries both sides' run results, the statistic per round is the
+value at PATH (e.g. `(:compose :draw-ms :p95)`) of the work tree minus REF's, pairs and bootstrap as for the median,
+T = max(1 ms, 10 % of REF's median value); `not comparable` when a side lacks the number.
+
+`--ab REF` still judges the median only and also prints the p95 verdict (T = 1 ms). `--ab-env` prints, per workload,
+the median verdict, the p95 verdict at T = 1 ms and, when the runs carry it, the probe verdict on
+`(:compose :draw-ms :p95)`; any of them `regressed` is exit 1, any `inconclusive` is exit 3. It also judges the judged
+side's `:compose` budget rows (the median of the value over its rounds) at n >= 100, n being `(:compose :count)` summed
+over its rounds.
+
 **Fresh builds and the eln cache (PERF-ELN-1).** A tree that was just built has no native-compiled files yet: its
 session compiles them in the background while it runs, and the first runs cost several times more. Both sessions
 therefore wait until their native compilation has drained, and both run a discarded warm-up before the samples; the

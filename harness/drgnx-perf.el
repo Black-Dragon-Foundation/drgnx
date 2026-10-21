@@ -416,34 +416,89 @@ from the global `random' state: the same samples and SEED give the same interval
       (list :diff (- (drgnx-perf--median vb) (drgnx-perf--median va))
             :lo (aref d (floor (* 0.025 iterations))) :hi (aref d (min (1- iterations) (floor (* 0.975 iterations))))))))
 
-(cl-defun drgnx-perf-bootstrap-rounds (rounds &key (iterations 2000) (seed 1))
-  "(:diff D :lo L :hi H) from ROUNDS, a list of (:a SAMPLES :b SAMPLES): the unit is the round (a run of each side),
-not the sample, because samples within a run share a spike, a GC and a cache state.  Per round the statistic is
-the median of B minus the median of A; consecutive rounds run in opposite order (`drgnx-perf-ab-rounds'), so
-the unit is a pair of them, the mean of its two differences.  D is the median of those and the 95% interval
-resamples the pairs with replacement.  Its own seeded generator, like `drgnx-perf-bootstrap-diff'."
-  (let* ((per-round (mapcar (lambda (r) (- (drgnx-perf--median (plist-get r :b)) (drgnx-perf--median (plist-get r :a)))) rounds))
-         ;; the unit is a pair of rounds (ABBA, the order reversed in the second): an order bias cancels inside it
-         (diffs (vconcat (cl-loop while per-round
-                                  collect (if (cdr per-round) (/ (+ (pop per-round) (pop per-round)) 2.0) (pop per-round)))))
-         (n (length diffs)) (state (max 1 (mod seed 2147483647))) out)
-    (dotimes (_ iterations)
-      (push (drgnx-perf--median (cl-loop repeat n collect (progn (setq state (mod (* state 48271) 2147483647)) (aref diffs (mod state n)))))
-            out))
-    (let ((d (vconcat (sort out #'<))))
-      (list :diff (drgnx-perf--median diffs)
-            :lo (aref d (floor (* 0.025 iterations))) :hi (aref d (min (1- iterations) (floor (* 0.975 iterations))))))))
+(defun drgnx-perf--p95 (values)
+  "The nearest-rank 95th percentile of the list or vector VALUES."
+  (let ((v (vconcat (sort (append values nil) #'<))))
+    (aref v (1- (ceiling (* 0.95 (length v)))))))
 
-(defun drgnx-perf-ab-verdict (a b &optional rounds)
+(defun drgnx-perf--pairs (list)
+  "LIST in consecutive pairs (the last may be alone): the unit of the round bootstrap (ABBA, the order reversed in
+the second round of a pair, so an order bias cancels inside it)."
+  (cl-loop while list collect (if (cdr list) (list (pop list) (pop list)) (list (pop list)))))
+
+(defun drgnx-perf--resample (items iterations seed stat)
+  "The sorted vector of ITERATIONS values of STAT (a function of a list of ITEMS) over draws of (length ITEMS)
+items with replacement, from its own MINSTD generator seeded with SEED."
+  (let* ((v (vconcat items)) (n (length v)) (state (max 1 (mod seed 2147483647))) out)
+    (dotimes (_ iterations)
+      (push (funcall stat (cl-loop repeat n collect (progn (setq state (mod (* state 48271) 2147483647)) (aref v (mod state n)))))
+            out))
+    (vconcat (sort out #'<))))
+
+(defun drgnx-perf--interval (d diff iterations)
+  "(:diff DIFF :lo L :hi H): the 95% interval of the sorted vector D of ITERATIONS resampled statistics."
+  (list :diff diff :lo (aref d (floor (* 0.025 iterations))) :hi (aref d (min (1- iterations) (floor (* 0.975 iterations))))))
+
+(defun drgnx-perf--bootstrap-per-round (per-round iterations seed)
+  "(:diff D :lo L :hi H) from PER-ROUND, one difference (B minus A) per round: the unit is a pair of rounds, the mean
+of its two differences; D is the median of those and the interval resamples the pairs with replacement."
+  (let ((diffs (mapcar (lambda (p) (/ (apply #'+ p) (float (length p)))) (drgnx-perf--pairs per-round))))
+    (drgnx-perf--interval (drgnx-perf--resample diffs iterations seed #'drgnx-perf--median) (drgnx-perf--median diffs) iterations)))
+
+(cl-defun drgnx-perf-bootstrap-rounds (rounds &key (iterations 2000) (seed 1) (stat 'median))
+  "(:diff D :lo L :hi H) from ROUNDS, a list of (:a SAMPLES :b SAMPLES): the unit is the round (a run of each side),
+not the sample, because samples within a run share a spike, a GC and a cache state.  Consecutive rounds run in
+opposite order (`drgnx-perf-ab-rounds'), so the unit is a pair of them.  STAT `median' (default): per round the
+median of B minus the median of A, a pair's statistic is the mean of its two; D is the median of those and the 95%
+interval resamples the pairs with replacement.  STAT `p95': the pairs are resampled with replacement, each side's
+samples of the drawn pairs are pooled and the statistic is the nearest-rank p95 of B minus that of A; D is the same
+over all samples.  Its own seeded generator, like `drgnx-perf-bootstrap-diff'."
+  (pcase stat
+    ('median (drgnx-perf--bootstrap-per-round
+              (mapcar (lambda (r) (- (drgnx-perf--median (plist-get r :b)) (drgnx-perf--median (plist-get r :a)))) rounds)
+              iterations seed))
+    ('p95 (let ((pool (lambda (rs key) (apply #'append (mapcar (lambda (r) (plist-get r key)) rs)))))
+            (cl-flet ((diff (pairs) (let ((rs (apply #'append pairs)))
+                                      (- (drgnx-perf--p95 (funcall pool rs :b)) (drgnx-perf--p95 (funcall pool rs :a))))))
+              (drgnx-perf--interval (drgnx-perf--resample (drgnx-perf--pairs rounds) iterations seed #'diff)
+                                    (diff (list rounds)) iterations))))
+    (_ (error "perf: unknown statistic %S" stat))))
+
+(defun drgnx-perf--classify (ci th)
+  "The verdict symbol for the interval CI against the threshold TH: regressed (all above TH), improved (all below
+0; it counts as no regression), no-regression (all at or below TH), else inconclusive."
+  (cond ((> (plist-get ci :lo) th) 'regressed)
+        ((< (plist-get ci :hi) 0) 'improved)
+        ((<= (plist-get ci :hi) th) 'no-regression)
+        (t 'inconclusive)))
+
+(cl-defun drgnx-perf-ab-verdict (a b &optional rounds &key (stat 'median) threshold)
   "(:verdict V :diff :lo :hi :threshold T) for the wall-clock samples A (the REF) and B (the work tree): T is
-max(1 ms, 10% of A's median).  regressed: the whole interval is above T; no-regression: all of it at or below T;
-inconclusive: T is inside it.  With ROUNDS (see `drgnx-perf-bootstrap-rounds') the interval is over the
-rounds, not the pooled samples A and B (which then only give the median T is taken from)."
-  (let* ((ci (if rounds (drgnx-perf-bootstrap-rounds rounds) (drgnx-perf-bootstrap-diff a b))) (th (max 1.0 (* 0.10 (drgnx-perf--median a)))))
-    (append (list :verdict (cond ((> (plist-get ci :lo) th) 'regressed)
-                                 ((<= (plist-get ci :hi) th) 'no-regression)
-                                 (t 'inconclusive)))
-            ci (list :threshold th))))
+THRESHOLD, else max(1 ms, 10% of A's median).  regressed: the whole interval is above T; improved: all of it below
+0; no-regression: all of it at or below T; inconclusive: T is inside it.  With ROUNDS (see
+`drgnx-perf-bootstrap-rounds') the interval is over the rounds, not the pooled samples A and B (which then only
+give the median T is taken from).  STAT `p95' needs ROUNDS."
+  (let* ((ci (cond (rounds (drgnx-perf-bootstrap-rounds rounds :stat stat))
+                   ((eq stat 'median) (drgnx-perf-bootstrap-diff a b))
+                   (t (error "perf: the %s verdict needs rounds" stat))))
+         (th (or threshold (max 1.0 (* 0.10 (drgnx-perf--median a))))))
+    (append (list :verdict (drgnx-perf--classify ci th)) ci (list :threshold th))))
+
+(defun drgnx-perf-ab-probe-verdict (rounds path)
+  "The verdict on a probe value: ROUNDS is a list of (:a PLIST :b PLIST), both sides' probe plists of a round (a
+run's result); PATH, e.g. (:compose :draw-ms :p95), is read from each.  Per round B minus A; pairs and bootstrap as
+the median statistic; T = max(1 ms, 10% of A's median value).  (:verdict not-comparable) when a side of a round
+lacks a number at PATH."
+  (let ((as (mapcar (lambda (r) (drgnx-perf--path-value (plist-get r :a) path)) rounds))
+        (bs (mapcar (lambda (r) (drgnx-perf--path-value (plist-get r :b) path)) rounds)))
+    (if (or (null rounds) (not (seq-every-p #'numberp as)) (not (seq-every-p #'numberp bs)))
+        (list :verdict 'not-comparable)
+      (let ((ci (drgnx-perf--bootstrap-per-round (cl-mapcar #'- bs as) 2000 1)) (th (max 1.0 (* 0.10 (drgnx-perf--median as)))))
+        (append (list :verdict (drgnx-perf--classify ci th)) ci (list :threshold th))))))
+
+(defun drgnx-perf--path-value (plist path)
+  "The value at PATH (a list of keys) in the nested PLIST."
+  (dolist (k path plist) (setq plist (and (consp plist) (plist-get plist k)))))
 
 ;;;; Calibration: how much of a wall-clock number is the machine's
 

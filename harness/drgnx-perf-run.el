@@ -1241,15 +1241,23 @@ b then a…, so a fixed order bias (the side that runs second pays for the first
           :b (apply #'append (mapcar (lambda (r) (plist-get r :b)) rounds))
           :rounds rounds :order order)))
 
-(defun drgnx-perf-ab--budget-fails (workload stats budgets)
-  "The work tree's absolute wall-clock BUDGETS for WORKLOAD against STATS (of its samples), judged at n >= 100."
+(defun drgnx-perf-ab--budget-fails (workload stats budgets &optional run compose-n)
+  "The work tree's absolute wall-clock BUDGETS for WORKLOAD against STATS (of its samples), judged at n >= 100.
+`:compose' rows are read from RUN (the work tree's run, median-reduced over its rounds) and judged at COMPOSE-N
+(`(:compose :count)' summed over its rounds) >= 100."
   (let (out)
     (dolist (b budgets)
       (pcase-let ((`(,w ,path ,limit . ,_) b))
-        (when (and (eq w workload) (eq (car path) :input) (not (cdr (cdr path))))
+        (cond
+         ((not (eq w workload)))
+         ((and (eq (car path) :input) (not (cdr (cdr path))))
           (let ((v (plist-get stats (cadr path))))
             (when (and (>= (plist-get stats :n) 100) (numberp v) (> v limit))
-              (push (format "%s input %s %s > %s" w (substring (symbol-name (cadr path)) 1) (drgnx-perf--round v) limit) out))))))
+              (push (format "%s input %s %s > %s" w (substring (symbol-name (cadr path)) 1) (drgnx-perf--round v) limit) out))))
+         ((eq (car path) :compose)
+          (let ((v (drgnx-perf--path-value run path)))
+            (when (and (>= (or compose-n 0) 100) (numberp v) (> v limit))
+              (push (format "%s %s %s > %s" w (drgnx-perf--path-name path) (drgnx-perf--round v) limit) out)))))))
     (nreverse out)))
 
 (defun drgnx-perf-ab--workload (name spec sa sb n)
@@ -1287,8 +1295,16 @@ judged, not-comparable, error, not-judged."
                                     :warm warm :calibration (list :a cal-a :b cal-b)
                                     :a-run (drgnx-perf-run--medians runs-a) :b-run (drgnx-perf-run--medians runs-b)
                                     :runs (/ (length (plist-get r :order)) 2) :order (plist-get r :order))
-                              (and (not loaded) (list :verdict (drgnx-perf-ab-verdict a b (plist-get r :rounds))))
-                              (list :budget-fails (drgnx-perf-ab--budget-fails name sb-stats (drgnx-perf-run--budgets))))))
+                              (and (not loaded)
+                                   (list :verdict (drgnx-perf-ab-verdict a b (plist-get r :rounds))
+                                         :p95-verdict (drgnx-perf-ab-verdict a b (plist-get r :rounds) :stat 'p95 :threshold 1.0)
+                                         :probe-verdict (drgnx-perf-ab-probe-verdict
+                                                         (cl-mapcar (lambda (x y) (list :a x :b y)) (reverse runs-a) (reverse runs-b))
+                                                         '(:compose :draw-ms :p95))))
+                              (list :budget-fails
+                                    (drgnx-perf-ab--budget-fails
+                                     name sb-stats (drgnx-perf-run--budgets) (drgnx-perf-run--medians runs-b)
+                                     (apply #'+ (mapcar (lambda (x) (or (drgnx-perf--path-value x '(:compose :count)) 0)) runs-b)))))))
                   )
               (when (plist-get spec :teardown)
                 (ignore-errors (funcall call sa (plist-get spec :teardown)))
@@ -1315,6 +1331,19 @@ judged, not-comparable, error, not-judged."
                  (plist-get (plist-get (plist-get e :a-run) :cpu_ms) :p90) (plist-get (plist-get (plist-get e :b-run) :cpu_ms) :p90)
                  (plist-get (plist-get e :a-run) :rows) (plist-get (plist-get e :b-run) :rows))))))
 
+(defun drgnx-perf-ab--verdict-line (label v)
+  "One report line for the verdict plist V named LABEL."
+  (format "%-13s %s %s (diff %s ms [%s, %s] threshold %s)" "" label (symbol-name (plist-get v :verdict))
+          (drgnx-perf--round2 (plist-get v :diff)) (drgnx-perf--round2 (plist-get v :lo)) (drgnx-perf--round2 (plist-get v :hi))
+          (drgnx-perf--round2 (plist-get v :threshold))))
+
+(defun drgnx-perf-ab--extra-lines (e)
+  "The p95 verdict and, when the runs carry it, the probe verdict of the judged entry E, each on a line of its own."
+  (let ((p95 (plist-get e :p95-verdict)) (probe (plist-get e :probe-verdict)))
+    (concat (and p95 (concat "\n" (drgnx-perf-ab--verdict-line "p95" p95)))
+            (and probe (not (eq (plist-get probe :verdict) 'not-comparable))
+                 (concat "\n" (drgnx-perf-ab--verdict-line "probe compose draw-ms p95" probe))))))
+
 (cl-defun drgnx-perf-ab (ref &key (n 100) env)
   "`drgnx test --perf --ab REF': wall clock judged by interleaving two trees.  REF is exported with `git archive'
 and both trees are built; one session each; per workload one discarded warm-up run per side, then runs
@@ -1323,6 +1352,8 @@ after.  Per workload: both sides' stats, the bootstrap verdict (`drgnx-perf-ab-v
 CPU and rows, and the work tree's wall budgets (judged at n >= 100).  Exit: 0 judged and clean, 1 regressed or a
 budget fails, 3 not judged (a loaded calibration, a busy host, an inconclusive interval).  Results go to
 $DRGNX_PERF_RESULTS.  With DRGNX_LEASE_BUSY set it runs plain `--perf' on the work tree instead.
+Each judged workload also prints the p95 verdict (T = 1 ms) and, when the runs carry it, the verdict on
+`(:compose :draw-ms :p95)'; with ENV they count in the exit code as well, and `:compose' budget rows are judged.
 ENV, (VAR JUDGED REF) from `drgnx-perf-ab-env-parse', makes it an A/B on one tree (REF is nil, nothing is exported):
 the work-tree side (the judged one) runs with VAR=JUDGED, the REF side with VAR=REF."
   (if (getenv "DRGNX_LEASE_BUSY")
@@ -1356,7 +1387,7 @@ the work-tree side (the judged one) runs with VAR=JUDGED, the REF side with VAR=
         (when own-tmp (ignore-errors (delete-directory own-tmp t)))
         (delete-file drgnx-perf-run--fixture))
       (setq entries (nreverse entries))
-      (dolist (e entries) (princ (concat (drgnx-perf-ab--line e) "\n")))
+      (dolist (e entries) (princ (concat (drgnx-perf-ab--line e) (drgnx-perf-ab--extra-lines e) "\n")))
       (when-let* ((file (getenv "DRGNX_PERF_RESULTS")))
         (unless (string-empty-p file)
           (drgnx-perf-run--write-results
@@ -1366,10 +1397,15 @@ the work-tree side (the judged one) runs with VAR=JUDGED, the REF side with VAR=
                                   (list :status (symbol-name (plist-get e :status))
                                         :verdict (and v (symbol-name (plist-get v :verdict)))
                                         :diff (and v (list :diff (plist-get v :diff) :lo (plist-get v :lo) :hi (plist-get v :hi)))
+                                        :p95_verdict (and (plist-get e :p95-verdict) (symbol-name (plist-get (plist-get e :p95-verdict) :verdict)))
+                                        :probe_verdict (and (plist-get e :probe-verdict) (symbol-name (plist-get (plist-get e :probe-verdict) :verdict)))
                                         :a (plist-get e :a) :b (plist-get e :b)
                                         :a_run (plist-get e :a-run) :b_run (plist-get e :b-run) :order (mapcar (function symbol-name) (plist-get e :order)) :why (plist-get e :why)))))
                         entries))))
-      (let* ((verdicts (mapcar (lambda (e) (plist-get (plist-get e :verdict) :verdict)) entries))
+      (let* ((verdicts (append (mapcar (lambda (e) (plist-get (plist-get e :verdict) :verdict)) entries)
+                               ;; --ab-env also judges the p95 and the probe verdicts; --ab only prints the p95 one
+                               (and env (mapcar (lambda (e) (plist-get (plist-get e :p95-verdict) :verdict)) entries))
+                               (and env (mapcar (lambda (e) (plist-get (plist-get e :probe-verdict) :verdict)) entries))))
              (fails (append (seq-mapcat (lambda (e) (plist-get e :budget-fails)) entries)
                             (seq-filter (lambda (e) (eq (plist-get e :status) 'error)) entries))))
         (dolist (f (seq-filter #'stringp fails)) (princ (format "FAIL %s\n" f)))
