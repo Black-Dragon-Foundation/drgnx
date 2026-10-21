@@ -17,9 +17,10 @@ file that does not load says `(in <library>)` when the error came from a library
 `needs <module>`, `disabled`, `off` (turned off in this session) — its stage, how long it took, and whether it runs at
 the next start (`on`, `off`, or `off at next start` for a module that is still running); `RET` turns the module on
 that row off or back on, now (below). A column header sorts by it (ms as a number, Stage
-in the order of the stages); an external module's row says its path and features. `drgnx doctor` reports failed modules and modules
-waiting for packages, from the last session; when all is well it counts the modules that run and those that are
-off ("12 ok, 3 off"), and every answer says how old the report is ("from the last session, 2 h ago").
+in the order of the stages); an external module's row says its path and features. `drgnx doctor` (the `modules` check) says what
+the running drgnx says about modules that failed, wait for packages or for a module, report a problem, or are off
+(`(this session)`); with none running it says what the last session said (`(from the last session, 2 h ago)`).
+There is no module report file any more: the doctor reads the same notices as the status bar.
 
 ## When a module does not start
 
@@ -46,7 +47,7 @@ Modules. Packages that were not activated and modules that did not start at all 
   (`needs …`); if its stage has not come yet (`idle`, `first-file`, …) it runs when it does. Its keys and menu
   entries come back with it, whatever its stage.
 - A problem while turning a module off (an undo that failed) is shown in the echo area, named by its label, and
-  kept for `drgnx doctor`.
+  kept in the module's notice, which `drgnx doctor` reads.
 - **`restart` modules.** A module defined with `:teardown 'restart` (and external modules) is not turned off while
   Emacs runs: the choice is only written, nothing is torn down and nothing is asked, the row says `off at next
   start`, and it stops then. The same holds for a module that a running `restart` module needs: it cannot stop

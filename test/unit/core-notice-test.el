@@ -472,6 +472,20 @@
                                (should (equal (drgnx-problems-count) '(0 . 0)))
                                (should-error (drgnx-notify 'test-src 'warn "x") :type 'wrong-type-argument)))))
 
+(ert-deftest drgnx-notice/a-turned-off-module-keeps-no-notice ()
+  ;; N-T10-3: a module with a doctor problem (or a failure) that is turned off keeps no notice of its own;
+  ;; only the one quiet "off" line names it.
+  (drgnx-notice-test-with-model
+    (drgnx-notice-test--with-modules
+      (drgnx-modules--record 'test/a 'startup 1 'ok nil nil '("the example program is missing"))
+      (drgnx-modules--record 'test/b 'startup 1 'failed "boom")
+      (should (= 2 (length (seq-filter (lambda (n) (memq (plist-get n :id) '(test/a test/b)))
+                                       (drgnx-notices :source 'modules)))))
+      (drgnx-modules--record 'test/a 'startup 0 'off)
+      (drgnx-modules--record 'test/b 'startup 0 'disabled)
+      (should-not (seq-filter (lambda (n) (memq (plist-get n :id) '(test/a test/b))) (drgnx-notices :source 'modules)))
+      (should (equal (mapcar (lambda (n) (plist-get n :id)) (drgnx-notices :source 'modules)) '(off))))))
+
 ;;;; Cost
 
 (defvar drgnx-notice-test--texts nil)

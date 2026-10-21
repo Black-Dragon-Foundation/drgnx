@@ -125,16 +125,15 @@
    (drgnx-modules-toggle 'test/a)
    (should-not (memq 'test/a (plist-get (drgnx-modules-read-state) :disabled)))))
 
-(ert-deftest drgnx-modules/the-doctor-reads-the-last-session ()
+(ert-deftest drgnx-modules/no-report-file-is-written ()
+  ;; the doctor reads the `modules' notices of the session files; modules-report.eld is gone, the in-memory report stays
   (drgnx-modules-test--with-config
    (drgnx-module-define 'test/broken :doc "b" :setup (lambda () (error "kaputt")))
    (drgnx-module-define 'test/needs-pkg :doc "p" :packages '(drgnx-no-such-package) :setup #'ignore)
    (drgnx-modules-run 'startup)
-   (drgnx-modules-write-report)
-   (require 'drgnx-doctor)
-   (let ((r (drgnx-doctor-check 'modules (cl-letf (((symbol-function 'drgnx-doctor--search) #'ignore)) (drgnx-doctor-facts)))))
-     (should (eq (car r) 'fail))
-     (should (string-search "test/broken" (nth 1 r))))))
+   (should-not (fboundp 'drgnx-modules-write-report))
+   (should (eq (drgnx-modules-test--status 'test/broken) 'failed))
+   (should-not (directory-files-recursively st "modules-report"))))
 
 ;;;; M4 review fixes
 
@@ -212,16 +211,13 @@
              (should (memq 'kx-not-installed (plist-get r :missing)))))
        (delete-directory dir t)))))
 
-(ert-deftest drgnx-modules/module-doctor-checks-reach-the-doctor ()
-  ;; I5: a module's :doctor problems are in the report the doctor reads.
+(ert-deftest drgnx-modules/module-doctor-checks-reach-the-report ()
+  ;; I5: a module's :doctor problems are in the in-memory report (and so in its notice).
   (drgnx-modules-test--with-config
    (drgnx-module-define 'test/doc :doc "d" :setup #'ignore :doctor (lambda () '("the example program is missing")))
    (drgnx-modules-run 'startup)
-   (drgnx-modules-write-report)
-   (require 'drgnx-doctor)
-   (let ((r (drgnx-doctor-check 'modules (cl-letf (((symbol-function 'drgnx-doctor--search) #'ignore)) (drgnx-doctor-facts)))))
-     (should (eq (car r) 'warn))
-     (should (string-search "the example program is missing" (nth 1 r))))))
+   (should (equal (plist-get (alist-get 'test/doc (drgnx-modules-report)) :problems)
+                  '("the example program is missing")))))
 
 (ert-deftest drgnx-modules/keys-are-re-applied-only-after-a-stage-that-ran ()
   ;; Minor 1 (re-graded): re-applying keys costs ~30 ms; a stage with no module must not pay it.
@@ -260,8 +256,7 @@
      (unwind-protect                      ; the stubbed timers are lists: a failure must not leave them in the table
          (cl-letf (((symbol-function 'run-with-idle-timer)
                     (lambda (secs repeat fn &rest args) (should-not repeat) (push (list secs fn args) timers)))
-                   ((symbol-function 'drgnx-modules-load-external) (lambda () (push 'external log)))
-                   ((symbol-function 'drgnx-modules-write-report) (lambda () (push 'report log))))
+                   ((symbol-function 'drgnx-modules-load-external) (lambda () (push 'external log))))
            (drgnx-modules-start cfg)
            (setq log nil timers (sort timers (lambda (a b) (< (car a) (car b)))))
            (should (= (length timers) 4))
@@ -269,7 +264,7 @@
            (should (= (length (drgnx-modules-test--idle-keys)) 4))  ; four keys in the timer layer, owned by :core
            (should (drgnx-timer-active-p '(modules-idle-step . 0)))
            (pcase-dolist (`(,_ ,fn ,args) timers) (apply fn args) (push '| log))
-           (should (equal (reverse log) '(external | i1 | i2 | (after idle) report |)))
+           (should (equal (reverse log) '(external | i1 | i2 | (after idle) |)))
            (should-not (drgnx-modules-test--idle-keys)))           ; one-shots: nothing left
        (drgnx-timer-reset)))))
 

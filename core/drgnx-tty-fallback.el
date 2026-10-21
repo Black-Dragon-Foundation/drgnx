@@ -196,7 +196,7 @@ chords.  Empty when TABLE is clean."
     (nreverse out)))
 
 (defun drgnx-tty-fallback-problems (table &optional overrides)
-  "The keys.eld :tty-fallback entries TABLE could not apply, as lines (terminal-report.eld's :fallback-problems).
+  "The keys.eld :tty-fallback entries TABLE could not apply, as lines (`drgnx-tty-fallback-notify' makes them notices).
 With OVERRIDES (the :tty-fallback value TABLE was made with), also each entry that is not (CHORD . KEY) or names a
 chord the profile needs no fallback for (one a plain terminal sends, or no key of the profile)."
   (append
@@ -367,7 +367,7 @@ LAYER, the rows installed on it (nil without the layer)."
 
 (defun drgnx-tty-fallback-facts (&optional report)
   "What the doctor shows for the fallback layer, from REPORT (default terminal-report.eld): one plist per terminal,
-\(:tty TTY :id ID :keys MODE :layer BOOL :rows ((CHORD NATIVE-P ALT PREFIX)…) :problems LINES), newest first.
+\(:tty TTY :id ID :keys MODE :layer BOOL :rows ((CHORD NATIVE-P ALT PREFIX)…)), newest first.
 The doctor prints :rows as three columns: native, fallback (ALT, \"Alt+Shift+F\"), prefix (\"F6 p\"); a row with
 none of them cannot be typed in that terminal."
   (let ((report (or report (drgnx-tty--read-report))))
@@ -375,8 +375,7 @@ none of them cannot be typed in that terminal."
               (let ((caps (plist-get entry :caps)))
                 (list :tty tty :id (plist-get caps :id) :keys (plist-get caps :keys)
                       :layer (and (plist-get entry :fallback) t)
-                      :rows (plist-get entry :fallbacks)
-                      :problems (plist-get entry :fallback-problems))))
+                      :rows (plist-get entry :fallbacks))))
             (seq-filter #'consp (plist-get report :terminals)))))
 
 (provide 'drgnx-tty-fallback)

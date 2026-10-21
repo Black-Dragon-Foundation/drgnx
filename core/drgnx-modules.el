@@ -234,18 +234,6 @@ load is reported as module <category>/<file name>, naming the library it loaded 
 
 (defun drgnx-modules-report () drgnx-modules--report)
 
-(defun drgnx-modules-write-report ()
-  "Save the report for `drgnx doctor' (it runs in another process)."
-  (ignore-errors
-    (drgnx-file-write (expand-file-name "modules-report.eld" (drgnx-state-dir))
-                      (mapcar (lambda (m) (cons (car m) (list :status (plist-get (cdr m) :status)
-                                                              :error (plist-get (cdr m) :error)
-                                                              :missing (plist-get (cdr m) :missing)
-                                                              :problems (plist-get (cdr m) :problems)
-                                                              :left (plist-get (cdr m) :left))))
-                              drgnx-modules--report)
-                      :fsync nil)))
-
 (defvar use-package-ensure-function)
 (declare-function package-desc-name "package")
 
@@ -311,14 +299,13 @@ never stops Emacs — nothing is installed (the module waits for the package, as
   (drgnx-modules-load-directory dir)
   (drgnx-modules-run 'startup)
   ;; The idle stage: one idle timer per module, staggered, so input between them is handled first.  The
-  ;; external modules load before them (the end of the stage re-applies keys), the last writes the report.
+  ;; external modules load before them (the end of the stage re-applies keys), the last runs the stage hook.
   (let* ((ran nil)
          (steps (append (list #'drgnx-modules-load-external)
                         (mapcar (lambda (m) (lambda () (when (drgnx-modules--run-one (car m) (cdr m) 'idle) (setq ran t))))
                                 (drgnx-modules--in-order 'idle))
                         (list (lambda ()
-                                (when ran (run-hook-with-args 'drgnx-modules-after-stage-functions 'idle))
-                                (drgnx-modules-write-report))))))
+                                (when ran (run-hook-with-args 'drgnx-modules-after-stage-functions 'idle)))))))
     ;; Emacs-lifetime startup work with no module to own it: `:core'.
     (seq-do-indexed (lambda (step i)
                       (drgnx-timer-start (cons 'modules-idle-step i) (+ 1 (* 0.05 i)) #'drgnx-modules--idle-step
@@ -326,8 +313,7 @@ never stops Emacs — nothing is installed (the module waits for the package, as
                     steps))
   (pcase-dolist (`(,hook . ,stage) '((drgnx-first-gui-frame-hook . first-frame) (drgnx-first-file-hook . first-file)
                                      (drgnx-first-input-hook . first-input)))
-    (add-hook hook (lambda () (drgnx-modules-run stage))))
-  (drgnx-modules-write-report))
+    (add-hook hook (lambda () (drgnx-modules-run stage)))))
 
 ;;;; Preferences: Modules
 
@@ -439,7 +425,6 @@ is torn down, nothing is asked, and it stops at the next start.  Returns nil, el
                 (now (drgnx-module-teardown m)))))
       (drgnx-modules-set-enabled module nil)
       (when now (run-hooks 'drgnx-modules-after-teardown-functions))
-      (drgnx-modules-write-report)
       (drgnx-modules--refresh-list)
       nil)))
 
@@ -453,12 +438,11 @@ Keys and menus follow the registry afterwards, whatever the stage (`drgnx-module
     (when (and spec r (not (drgnx-modules--ok-p module)))
       (when (drgnx-modules--run-one module (cdr spec) (plist-get (cdr spec) :stage))
         (run-hooks 'drgnx-modules-after-teardown-functions))))
-  (drgnx-modules-write-report)
   (drgnx-modules--refresh-list)
   nil)
 
 (defun drgnx-modules--say-problems (modules)
-  "Say what went wrong while MODULES were turned off or on (the doctor's report keeps it too)."
+  "Say what went wrong while MODULES were turned off or on (their notices keep it too)."
   (dolist (m modules)
     (when-let* ((p (plist-get (alist-get m drgnx-modules--report) :problems)))
       (message "drgnx: %s: %s" m (mapconcat #'identity p "; ")))))

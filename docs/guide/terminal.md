@@ -255,7 +255,7 @@ Settings (`M-x customize-variable`):
 - **`drgnx-tty-fallback-hint`** (`t`): `nil`, no message.
 - **`keys.eld`'s `:tty-fallback`** gives a chord another Alt key: `(:tty-fallback (("C-S-p" . "M-Z")))`. The key must
   be Alt with a character key, unused by Emacs and your profile, not reserved, and not another chord's; otherwise it
-  is not used and `terminal-report.eld` says why (`:fallback-problems`), as it does for an entry that is not
+  is not used and a notice says why (the doctor's `terminal-keys` row shows it), as it does for an entry that is not
   `(CHORD . KEY)` or names a chord your profile needs no fallback for.
 
 With VS Code keys (the rows are what `drgnx-tty-fallback-table` computes from the profile; a test fails if this table and the profile differ):

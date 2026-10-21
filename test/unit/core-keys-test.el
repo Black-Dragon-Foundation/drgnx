@@ -287,6 +287,25 @@ keys); every binding is undone after."
 
 ;;;; The report
 
+(ert-deftest drgnx-keys/the-report-has-no-problems ()
+  ;; problems are the notices of source `keys' (key-problems in the doctor); keys-report.eld keeps conflicts and :modal
+  (let* ((state (make-temp-file "drgnx-state" t))
+         (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment)))
+    (unwind-protect
+        (drgnx-keys-test--live
+         (drgnx-keys-test--write-user '(:bind ((nope "C-c n"))))
+         (drgnx-keys-apply)
+         (should (plist-get drgnx-keys-last :problems))
+         (let ((report (with-temp-buffer (insert-file-contents (expand-file-name "keys-report.eld" (drgnx-state-dir)))
+                                         (read (current-buffer)))))
+           (should-not (plist-member report :problems))
+           (should (plist-member report :conflicts))
+           (should (plist-member report :modal)))
+         (let ((n (seq-find (lambda (n) (string-search "nope" (plist-get n :text))) (drgnx-notices :source 'keys))))
+           (should n)
+           (should (string-search "keys.eld" (plist-get n :fix)))))
+      (delete-directory state t))))
+
 (ert-deftest drgnx-keys/conflicts-on-the-sheet-and-in-the-report-file ()
   (let* ((state (make-temp-file "drgnx-state" t))
          (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment)))
@@ -299,7 +318,7 @@ keys); every binding is undone after."
            (should (equal (plist-get report :layers) '((emacs editing) (vscode app window))))
            (should (seq-find (lambda (s) (string-match-p "\\`C-o .*Open File.*vscode.*open-line.*emacs" s))
                              (plist-get report :conflicts)))
-           (should (seq-find (lambda (s) (string-search "nope" s)) (plist-get report :problems))))
+           (should-not (plist-member report :problems)))
          (drgnx-surfaces-cheatsheet)
          (with-current-buffer "*drgnx keys*"
            (should (string-search "Key conflicts" (buffer-string)))
@@ -510,8 +529,11 @@ keys); every binding is undone after."
    (provide 'drgnx-keys-test-feature-d)
    (let ((report (with-temp-buffer (insert-file-contents (expand-file-name "keys-report.eld" (drgnx-state-dir)))
                                    (read (current-buffer)))))
-     (dolist (problems (list (plist-get drgnx-keys-last :problems) (plist-get report :problems)))
-       (should (seq-find (lambda (p) (string-search "drgnx-keys-test-no-such-map" p)) problems)))
+     (should (seq-find (lambda (p) (string-search "drgnx-keys-test-no-such-map" p)) (plist-get drgnx-keys-last :problems)))
+     (should-not (plist-member report :problems))
+     ;; the doctor's source for problems: the late one is a notice too
+     (should (seq-find (lambda (n) (string-search "drgnx-keys-test-no-such-map" (plist-get n :text)))
+                       (drgnx-notices :source 'keys)))
      (should (eq (plist-get (drgnx-keys-test--conflict drgnx-keys-last "C-c s") :kind) 'prefix))
      (should (seq-find (lambda (s) (string-match-p "\\`C-c s .*drgnx-keys-test--other" s)) (plist-get report :conflicts))))))
 
