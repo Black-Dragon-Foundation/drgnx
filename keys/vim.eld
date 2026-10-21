@@ -390,6 +390,7 @@
         (config-migrate :none "a rare, deliberate choice; in the palette")
         (notices :none "the status bar's counts and the echo line; the palette")
         (notices-dismiss :none "the Dismiss button on each row; the palette")
+        (gc-census :none "Help → GC Census")
         (large-file-next-chunk :none "vlf's own C-c C-v n; in the palette")
         (large-file-previous-chunk :none "vlf's own C-c C-v p; in the palette")
         (large-file-go-to-line :none "vlf's own C-c C-v l; in the palette")

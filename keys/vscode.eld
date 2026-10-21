@@ -375,6 +375,7 @@
         (config-migrate :none "a rare, deliberate choice; in the palette")
         (notices :none "the status bar's counts and the echo line; the palette")
         (notices-dismiss :none "the Dismiss button on each row; the palette")
+        (gc-census :none "Help → GC Census")
         (large-file-next-chunk "M-<next>")
         (large-file-previous-chunk "M-<prior>")
         (large-file-go-to-line "M-g g")

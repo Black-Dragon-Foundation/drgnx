@@ -207,3 +207,13 @@ Whether drgnx keeps running when its last window closes (read at every start).
 | --- | --- | --- | --- |
 | `:keep-running` | boolean | no | Keep drgnx running when its last window closes |
 
+## speed.eld
+
+Folder: config. Format: 1. Read: at start. On a mistake: its last good copy, else the defaults.
+
+Speed measurements you turn on (read at every start).
+
+| Key | Type | Required | What |
+| --- | --- | --- | --- |
+| `:gc-census` | boolean | no | Record every garbage collection (Help → GC Census) |
+

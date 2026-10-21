@@ -140,6 +140,10 @@ The text files drgnx writes all use it: the markdown export (`drgnx-surfaces-exp
 modes, a new one gets 0644), the systemd unit (`drgnx-pkg-service-unit`), the Linux desktop entry, the `config.el`
 template (made only when the file is missing) and the agents' settings files and their backups (below).
 
+`(drgnx-file-append-line FILE LINE)` appends LINE and a newline to a log drgnx keeps (JSON Lines: the GC census's day
+files, [perf.md](perf.md)): one `write-region` append, no read back, backup, lock or fsync; a new file is 0600 and
+missing folders 0700. A LINE with a newline, a remote name and anything there that is not a regular file are refused.
+
 **The locked update.** `(drgnx-file-update FILE FN &key on-unreadable (timeout 1.0) max-bytes header pretty render)`
 takes the lock, reads the file fresh, and writes `(FN DATA)`. FN gets a deep copy of the data, so a `plist-put` in
 place is a change like any other, and nil for an absent file. When FN's result is `equal` to the data, nothing is

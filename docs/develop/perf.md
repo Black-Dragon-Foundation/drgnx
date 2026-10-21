@@ -311,6 +311,9 @@ terminal-typing's p95 is 7 ms: the worst of 16 runs with the module active (1.9 
     `drgnx-search-mcp-main` and `drgnx-coord-mcp-main`; short CLI commands keep Emacs's defaults.
   - **Harness sessions** of the minimal configuration run at the same settings (`drgnx-ui-gc-early` and
     `drgnx-ui-gc-setup` in `harness/init/prelude.el`); a session of an external configuration brings its own.
+  - **The origin of a collection:** `drgnx-gc--idle` binds `nidhogg-watchdog-gc-origin` to `idle` around its
+    `garbage-collect`, `drgnx-gc-gap` to `gap`, the heap audit to `audit`; nil reads as `auto`. The GC census
+    (below) records it.
 - **The Outline** keeps no imenu markers: each refresh turns them into integer positions and releases them, since a
   marker in the source buffer costs every edit of that buffer until a collection frees it. Its rows are patched by key
   (an edit that moves definitions redraws none). Wall numbers: perf deferred.
@@ -318,6 +321,42 @@ terminal-typing's p95 is 7 ms: the worst of 16 runs with the module active (1.9 
   caches parsed keys and compares only keys in one keymap with the same first event.
 - **Harness sessions** share one native-code cache per state root, so advice trampolines (the no-prompt guard
   advises built-in functions) are compiled once, not on every session start (~150 ms each).
+
+## GC census
+
+The first measure of the stall watchdog (V2 engine item A): what every garbage collection costs in a real session,
+before anything is changed. `core/drgnx-gc-census.el`, off by default.
+
+- **Turning it on:** `(:gc-census t)` in `speed.eld` (the config folder, read at every start; `drgnx-gc-setup` starts
+  it), or `M-x drgnx-gc-census-mode` for this session. **Help → GC Census** (`gc-census`) shows the report, with a
+  Copy button.
+- **The hook records only.** `drgnx-gc-census--note` on `post-gc-hook` fills one slot of a 64-slot ring that was made
+  when the mode started: the pause (the change in `gc-elapsed` since the last note; Emacs adds the collection's time
+  before it runs the hook), the origin, `felt`, `gcs-done`, the time, `(garbage-collect-heapsize)` and the threshold.
+  It does no file I/O, no `process-attributes` and no message, and never calls `input-pending-p` (on pgtk that can
+  dispatch GLib events inside the collection's span). It allocates the heap-size list and two floats, nothing else
+  (`drgnx-gc-census/hook-does-no-io` measures it with `memory-use-counts`). A full ring counts the collection as
+  dropped (shown in the report).
+- **`felt` is coarse here:** t when the collection ran inside a command or a timer, not at idle
+  (`current-idle-time` is nil). The watchdog's C GC row replaces it with "input arrived in its span, or its span ran a
+  command".
+- **The writer** is the idle timer `gc-census` (1 s, once per pause, owner `:core`). It writes each entry as a
+  collection line, the watchdog's log format, to `$XDG_STATE_HOME/drgnx/watchdog/YYYY-MM-DD.jsonl` through
+  `drgnx-file-append-line`:
+  `{"v":1,"type":"gc","at":"…","pid":…,"pause_ms":118.4,"origin":"auto","felt":false,"gcs_done":4711,"heap":{"live_mb":…,"free_mb":…,"conses_mb":…,"strings_mb":…,"string_bytes_mb":…,"vectors_mb":…,"symbols_mb":…,"intervals_mb":…,"floats_mb":…,"buffers_mb":…},"rss_mb":2410,"threshold_mb":74.2}`.
+  The heap is SIZE × USED per type in MiB (vector slots count with vectors; malloc's own `heap` entry is not the
+  Lisp heap and is left out), `free_mb` is SIZE × FREE. `rss_mb` is read when the writer runs, not at the
+  collection. `threshold_mb` is the threshold in effect: `gc-cons-threshold`, or `gc-cons-percentage` of the live heap
+  when that is more. The watchdog's own lines add `span_wall_ms` and `span_nongc_ms`, which only C can know.
+- **Day files older than 14 days** are deleted when the mode starts (by the date in the name).
+- **One writer:** while `nidhogg-watchdog-mode` is on, the hook and the writer do nothing; the watchdog's GC row writes
+  the same lines.
+- **The report** (`(drgnx-gc-census-report :days 7)`, the newest day files) gives per day the count, max, total
+  seconds, the buckets `<4, <8, <16, <33, <50, <100, <250, <1000, ≥1000` ms with p50/p95/p99 estimated from them
+  (linear inside a bucket, never above the max), the share by origin and the felt count; over all the days the same,
+  the slope of pause against live heap (least squares, ms per 100 MB) with its point count, and the live heap by type
+  after the last collection. The target it is read against: p95 ≤ 50 ms over 7 days with at least 20 collections, no
+  collection ≥ 250 ms in a day.
 
 ## Where startup time goes
 
@@ -347,7 +386,8 @@ The audit lists the hook functions that ran while the frame opened (`after-make-
 ## Tests
 
 `test/unit/perf-modal-test.el` (the evil workloads, their budget rows, the 1 ms rule, `DRGNX_PERF_ONLY`), `test/unit/perf-test.el` (statistics, the probes, the audit — including that it never stops a function from removing
-itself — budgets, history), `test/unit/core-gc-test.el`; the workloads run with `drgnx test --perf`.
+itself — budgets, history), `test/unit/core-gc-test.el`, `test/unit/gc-census-test.el` (the census); the workloads run
+with `drgnx test --perf`.
 
 ### typing-with-index: provisional budget
 

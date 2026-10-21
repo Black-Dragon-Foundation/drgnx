@@ -282,6 +282,7 @@ off), or inside a session, the mode is read as it is and never switched: an off 
     drgnx-search-chunk
     drgnx-onboard
     drgnx-face-state
+    drgnx-gc-census
     )
   "The core features whose loading defines config files, for the `config-files' check.")
 
