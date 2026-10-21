@@ -34,7 +34,9 @@ runtime/
 | `runstav` (formerly `drgnx-proto`) | the hub protocol's contract: wire types, strict lines, typed decode, proofs, paths ([below](#runstav-the-contract)) |
 | `urdr` | the SQLite store; self-contained, its public API names no drgnx type |
 | `draugr` (formerly `drgnx-proc`) | spawning (explicit environments, own process groups, one exit) and the orphan reaper ([hub.md](hub.md#ratatoskrs-children-draugr)) |
-| `gleipnir` | the sandbox; self-contained |
+| `gleipnir` | the sandbox: the spec and its validation, bwrap, Landlock, seccomp, Seatbelt, the relay and the CONNECT proxy; self-contained ([gleipnir.md](gleipnir.md)) |
+| `eitri` | file access that never follows a link: opens pinned by fd, bounded reads, writes by rename, root-owned programs; generic, used by `gleipnir` and `draugr` |
+| `gleipnir-escape` | test tooling, never shipped: the probe binary and the escape harness ([gleipnir.md](gleipnir.md), "Proving it") |
 | `hrafn` | search and the indexer |
 | `domr` (formerly `drgnx-conformance`; lives in `runtime/conformance/`) | the conformance harness (this page) |
 
@@ -63,7 +65,7 @@ Android stance. Rust's Android target is `target_os = "android"`, not `"linux"`,
 bwrap) `target_os = "linux"` alone with the Android stance (a stub, or "unsupported") in a comment. Every `cfg` chain
 ends in a fallback that returns `None` or `Unsupported`, never a missing item. Platform code sits in one module or
 function per crate. The type-check (`rustup target add aarch64-linux-android` first) is
-`cargo check --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android -p runstav -p draugr -p drgnx-ratatoskr`.
+`cargo check --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android -p runstav -p draugr -p eitri -p gleipnir -p drgnx-ratatoskr`.
 `drgnx-ratatoskr` depends on `urdr`, whose bundled SQLite is C, and compiling C for Android needs the NDK. A type-check
 does not link, so without the NDK stub the C compiler and archiver: `CC_aarch64_linux_android=/usr/bin/true
 AR_aarch64_linux_android=/usr/bin/true` (the Rust is still checked in full; only the C object files are fake).

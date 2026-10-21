@@ -1,0 +1,32 @@
+[package]
+name = "gleipnir"
+description = "The sandbox: a spec, its validation, and the bwrap, Landlock, seccomp and Seatbelt layers that enforce it"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+# InnerSpec's `landlock_omit` and `abi_cap` (the escape rows); turned on only by drgnx-ratatoskr's own `test-hooks`.
+test-hooks = []
+# Exposes `sbpl::sexp` to the fuzz crate.
+fuzzing = []
+
+[dependencies]
+eitri = { path = "../eitri", version = "0.1.0" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+rustix.workspace = true
+libc.workspace = true
+
+# Linux only. Android: no backend (apps get no user namespaces), so neither layer is built there; fails closed.
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock.workspace = true
+seccompiler.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+proptest.workspace = true
+tempfile.workspace = true

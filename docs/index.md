@@ -62,5 +62,6 @@ How drgnx is built, tested and measured.
 - [The Work cockpit's model](develop/cockpit.md): one model of specs, plans, tasks, agents, jobs and reviews from the live store; what happened, the timeline; each agent's edits (async git, regular files only); the Work graph's redraws, cost and tests; an agent's edits pane: live patches, accept, revert, comment; what happened, the timeline and answers: appends, routes, cost and tests; what needs you and the decisions: the job window's parts, the job filter, its saved state.
 - [The job sandbox](develop/sandbox.md): what a job agent can see — the spec, what it refuses, the bubblewrap argv
   and why each flag, the MCP bridge into the sandbox, the Seatbelt profile on macOS, phase 2's network relay, proxy and gateway socket.
+- [Gleipnir](develop/gleipnir.md): the Rust sandbox in `runtime/` — its spec and what it refuses, bwrap, the inner helper, Landlock, seccomp, Seatbelt, the relay and the proxy, the check, and the escape rows that prove it. Not used by drgnx yet.
 
 Docs are updated in the same commit as the code they describe.

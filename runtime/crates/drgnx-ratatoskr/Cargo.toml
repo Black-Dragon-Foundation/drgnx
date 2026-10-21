@@ -16,13 +16,16 @@ name = "ratatoskr"
 path = "src/main.rs"
 
 [features]
-# Every test-only surface (the `__test_flood` method, `--agent-socket`): off in the binary install.sh builds.
-test-hooks = []
+# Every test-only surface (the `__test_flood` method, `--agent-socket`, `sandbox run`): off in the binary install.sh
+# builds.
+test-hooks = ["gleipnir/test-hooks"]
 
 [dependencies]
 runstav = { path = "../runstav", version = "0.1.0" }
 draugr = { path = "../draugr", version = "0.1.0" }
 urdr = { path = "../urdr", version = "0.1.0" }
+gleipnir = { path = "../gleipnir", version = "0.1.0" }
+eitri = { path = "../eitri", version = "0.1.0" }
 tokio.workspace = true
 tokio-util.workspace = true
 bytes = "1"               # the read buffer the line codec decodes from (already in the tree through tokio)

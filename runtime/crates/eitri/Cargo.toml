@@ -1,0 +1,16 @@
+[package]
+name = "eitri"
+description = "File access that never follows a link: opens pinned by fd, bounded reads, writes by rename, root-owned programs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+rustix.workspace = true
+libc.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+tempfile.workspace = true
