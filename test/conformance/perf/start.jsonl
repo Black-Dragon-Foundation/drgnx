@@ -1,0 +1,2 @@
+{"scenario": "perf/start", "requires": ["v1", "perf"], "doc": "The baseline of a cold start: from starting the hub to its first answered ping on a connection that proved itself (one sample; --perf records it, no budget)."}
+{"do": "measure", "name": "start-to-first-ping", "repeat": 1, "steps": [{"do": "start", "hub": "h"}, {"do": "connect", "conn": "c", "hub": "h"}, {"do": "send", "conn": "c", "json": {"id": 1, "method": "ping"}}, {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"pid": "$PID(h)"}}}]}
