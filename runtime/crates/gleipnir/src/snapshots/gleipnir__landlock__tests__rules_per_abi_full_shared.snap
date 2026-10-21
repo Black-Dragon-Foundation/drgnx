@@ -1,0 +1,182 @@
+---
+source: crates/gleipnir/src/landlock.rs
+expression: render(&full_shared)
+---
+tier Full, min_abi 1
+read_roots: /
+write_roots: /dev/pts /dev/shm /home/agent /mnt/out /tmp /var/tmp /work/task
+dev_write_files: /dev/full /dev/null /dev/ptmx /dev/tty /dev/zero
+unix_connect_roots: /run/drgnx
+tcp_connect_ports: None
+
+== ABI 1
+handled fs: execute write_file read_file read_dir remove_dir remove_file make_char make_dir make_reg make_sock make_fifo make_block make_sym
+handled net: -
+scoped: -
+tcp ports: []
+/: execute read_file read_dir
+/dev/full: write_file
+/dev/null: write_file
+/dev/ptmx: write_file
+/dev/pts: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym
+/dev/shm: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym
+/dev/tty: write_file
+/dev/zero: write_file
+/home/agent: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym
+/mnt/out: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym
+/tmp: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym
+/var/tmp: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym
+/work/task: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym
+
+== ABI 2
+handled fs: execute write_file read_file read_dir remove_dir remove_file make_char make_dir make_reg make_sock make_fifo make_block make_sym refer
+handled net: -
+scoped: -
+tcp ports: []
+/: execute read_file read_dir
+/dev/full: write_file
+/dev/null: write_file
+/dev/ptmx: write_file
+/dev/pts: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer
+/dev/shm: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer
+/dev/tty: write_file
+/dev/zero: write_file
+/home/agent: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer
+/mnt/out: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer
+/tmp: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer
+/var/tmp: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer
+/work/task: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer
+
+== ABI 3
+handled fs: execute write_file read_file read_dir remove_dir remove_file make_char make_dir make_reg make_sock make_fifo make_block make_sym refer truncate
+handled net: -
+scoped: -
+tcp ports: []
+/: execute read_file read_dir
+/dev/full: write_file
+/dev/null: write_file
+/dev/ptmx: write_file
+/dev/pts: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/dev/shm: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/dev/tty: write_file
+/dev/zero: write_file
+/home/agent: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/mnt/out: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/tmp: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/var/tmp: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/work/task: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+
+== ABI 4
+handled fs: execute write_file read_file read_dir remove_dir remove_file make_char make_dir make_reg make_sock make_fifo make_block make_sym refer truncate
+handled net: -
+scoped: -
+tcp ports: []
+/: execute read_file read_dir
+/dev/full: write_file
+/dev/null: write_file
+/dev/ptmx: write_file
+/dev/pts: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/dev/shm: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/dev/tty: write_file
+/dev/zero: write_file
+/home/agent: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/mnt/out: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/tmp: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/var/tmp: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/work/task: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+
+== ABI 5
+handled fs: execute write_file read_file read_dir remove_dir remove_file make_char make_dir make_reg make_sock make_fifo make_block make_sym refer truncate
+handled net: -
+scoped: -
+tcp ports: []
+/: execute read_file read_dir
+/dev/full: write_file
+/dev/null: write_file
+/dev/ptmx: write_file
+/dev/pts: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/dev/shm: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/dev/tty: write_file
+/dev/zero: write_file
+/home/agent: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/mnt/out: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/tmp: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/var/tmp: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/work/task: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+
+== ABI 6
+handled fs: execute write_file read_file read_dir remove_dir remove_file make_char make_dir make_reg make_sock make_fifo make_block make_sym refer truncate
+handled net: -
+scoped: abstract_unix_socket signal
+tcp ports: []
+/: execute read_file read_dir
+/dev/full: write_file
+/dev/null: write_file
+/dev/ptmx: write_file
+/dev/pts: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/dev/shm: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/dev/tty: write_file
+/dev/zero: write_file
+/home/agent: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/mnt/out: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/tmp: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/var/tmp: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/work/task: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+
+== ABI 7
+handled fs: execute write_file read_file read_dir remove_dir remove_file make_char make_dir make_reg make_sock make_fifo make_block make_sym refer truncate
+handled net: -
+scoped: abstract_unix_socket signal
+tcp ports: []
+/: execute read_file read_dir
+/dev/full: write_file
+/dev/null: write_file
+/dev/ptmx: write_file
+/dev/pts: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/dev/shm: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/dev/tty: write_file
+/dev/zero: write_file
+/home/agent: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/mnt/out: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/tmp: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/var/tmp: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/work/task: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+
+== ABI 8
+handled fs: execute write_file read_file read_dir remove_dir remove_file make_char make_dir make_reg make_sock make_fifo make_block make_sym refer truncate
+handled net: -
+scoped: abstract_unix_socket signal
+tcp ports: []
+/: execute read_file read_dir
+/dev/full: write_file
+/dev/null: write_file
+/dev/ptmx: write_file
+/dev/pts: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/dev/shm: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/dev/tty: write_file
+/dev/zero: write_file
+/home/agent: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/mnt/out: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/tmp: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/var/tmp: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/work/task: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+
+== ABI 9
+handled fs: execute write_file read_file read_dir remove_dir remove_file make_char make_dir make_reg make_sock make_fifo make_block make_sym refer truncate resolve_unix
+handled net: -
+scoped: abstract_unix_socket signal
+tcp ports: []
+/: execute read_file read_dir
+/dev/full: write_file
+/dev/null: write_file
+/dev/ptmx: write_file
+/dev/pts: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/dev/shm: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/dev/tty: write_file
+/dev/zero: write_file
+/home/agent: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/mnt/out: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/run/drgnx: resolve_unix
+/tmp: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/var/tmp: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/work/task: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
