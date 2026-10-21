@@ -1,0 +1,342 @@
+use super::*;
+use crate::row::Row;
+use serde_json::json;
+
+fn row(v: Value) -> Row {
+    let r: Row = serde_json::from_value(v).unwrap();
+    r.check().unwrap();
+    r
+}
+
+fn line(probe: &str, result: &str, errno: Option<&str>, detail: Option<&str>) -> ProbeLine {
+    ProbeLine {
+        probe: probe.into(),
+        arg: "x".into(),
+        result: result.into(),
+        errno: errno.map(Into::into),
+        detail: detail.map(Into::into),
+        out_bytes: None,
+    }
+}
+
+fn canaries() -> Vec<Canary> {
+    vec![Canary {
+        name: "ssh-key",
+        text: "glp-canary-0123456789ab".into(),
+    }]
+}
+
+fn ok_data(lines: Vec<ProbeLine>) -> RunData {
+    RunData {
+        result_file: Some(json!({"refused": null, "exit": 0, "layers": {}})),
+        lines,
+        ..RunData::default()
+    }
+}
+
+fn blocked_row() -> Row {
+    row(json!({
+        "row": "r", "control": true,
+        "probes": [["read", "/x"]],
+        "expect": [{"result": "blocked", "errno": ["ENOENT"]}],
+    }))
+}
+
+#[test]
+fn control_not_reached_fails_the_row() {
+    let r = blocked_row();
+    let e = judge_control(&r, &[line("read", "blocked", Some("ENOENT"), None)]).unwrap_err();
+    assert!(e.starts_with("control did not reach"), "{e}");
+    judge_control(&r, &[line("read", "reached", None, Some("5"))]).unwrap();
+    // No line at all is not a reach either.
+    assert!(
+        judge_control(&r, &[])
+            .unwrap_err()
+            .starts_with("control did not reach")
+    );
+}
+
+#[test]
+fn control_expect_replaces_reached() {
+    let r = row(json!({
+        "row": "r", "control": true,
+        "probes": [["syscall", "mount-missing"]],
+        "expect": [{"result": "blocked", "errno": ["EPERM"]}],
+        "control_expect": [{"result": "blocked", "errno": ["ENOENT"]}],
+    }));
+    judge_control(&r, &[line("syscall", "blocked", Some("ENOENT"), None)]).unwrap();
+    assert!(judge_control(&r, &[line("syscall", "reached", None, None)]).is_err());
+}
+
+#[test]
+fn an_unlisted_skip_reason_is_a_fail() {
+    // The skip reasons are a closed enum with the plan's words.
+    let all = [
+        (Skip::InContainer, "inside a container"),
+        (Skip::NeedsMacos, "needs macos"),
+        (Skip::NeedsLinux, "needs linux"),
+        (Skip::NeedsX86_64, "needs x86_64"),
+        (Skip::X32Off, "x32 is off"),
+        (Skip::NeedsRoot, "needs root"),
+        (
+            Skip::LandlockBelow { have: 7, need: 9 },
+            "Landlock ABI 7 below 9",
+        ),
+    ];
+    for (s, text) in all {
+        assert_eq!(s.to_string(), text);
+    }
+    // A sandbox refusal is a fail, with or without `--require-all`, not a skip.
+    let r = row(json!({"row": "r", "probes": [["fds"]], "expect": [{"result": "reached"}]}));
+    let mut d = ok_data(vec![]);
+    d.result_file =
+        Some(json!({"refused": {"rule": "Setup", "message": "no bwrap"}, "exit": null}));
+    let e = judge_run(&r, &d, &canaries()).unwrap_err();
+    assert!(e.contains("the sandbox refused the run"), "{e}");
+    // And a host that has everything skips nothing.
+    let host = Host {
+        in_container: false,
+        root: true,
+        landlock_abi: 9,
+        x32: true,
+    };
+    let needy = row(
+        json!({"row": "r", "needs": ["bwrap", "reduced", "root"], "probes": [["fds"]], "expect": [{"result": "reached"}]}),
+    );
+    assert_eq!(skip_reason(&needy, &host), None);
+    let host = Host {
+        in_container: true,
+        ..host
+    };
+    assert_eq!(skip_reason(&needy, &host), Some(Skip::InContainer));
+    let host = Host {
+        in_container: false,
+        landlock_abi: 7,
+        ..host
+    };
+    assert_eq!(
+        skip_reason(&needy, &host),
+        Some(Skip::LandlockBelow { have: 7, need: 9 })
+    );
+}
+
+#[test]
+fn a_row_without_result_asserts_exit_0_and_one_line_per_probe() {
+    let r = row(json!({
+        "row": "r", "probes": [["fds"], ["fds"]],
+        "expect": [{"result": "reached"}, {"result": "reached"}],
+    }));
+    let two = vec![
+        line("fds", "reached", None, Some("0,1,2")),
+        line("fds", "reached", None, Some("0,1,2")),
+    ];
+    judge_run(&r, &ok_data(two.clone()), &canaries()).unwrap();
+    // One line short.
+    let e = judge_run(&r, &ok_data(two[..1].to_vec()), &canaries()).unwrap_err();
+    assert!(e.contains("1 lines for 2 probes"), "{e}");
+    // A non-zero exit, judged from the result file.
+    let mut d = ok_data(two.clone());
+    d.result_file = Some(json!({"refused": null, "exit": 3}));
+    assert!(
+        judge_run(&r, &d, &canaries())
+            .unwrap_err()
+            .contains("exited 3")
+    );
+    // No result file at all.
+    let mut d = ok_data(two);
+    d.result_file = None;
+    assert!(
+        judge_run(&r, &d, &canaries())
+            .unwrap_err()
+            .contains("no result file")
+    );
+}
+
+#[test]
+fn a_row_with_result_compares_a_subset() {
+    let r = row(json!({
+        "row": "r", "probes": [["fds"]],
+        "result": {"refused": {"rule": "Setup", "message_contains": "ABI 8, needs 9"}},
+    }));
+    let mut d = ok_data(vec![]);
+    d.result_file = Some(
+        json!({"refused": {"rule": "Setup", "message": "Landlock is at ABI 8, needs 9", "path": null}, "exit": null}),
+    );
+    judge_run(&r, &d, &canaries()).unwrap();
+    d.result_file = Some(json!({"refused": {"rule": "Setup", "message": "other"}}));
+    assert!(
+        judge_run(&r, &d, &canaries())
+            .unwrap_err()
+            .contains("lacks")
+    );
+    d.result_file = Some(json!({"refused": null}));
+    assert!(judge_run(&r, &d, &canaries()).is_err());
+}
+
+#[test]
+fn canary_in_output_fails_the_row() {
+    let r = row(json!({"row": "r", "probes": [["fds"]], "expect": [{"result": "reached"}]}));
+    let l = vec![line("fds", "reached", None, None)];
+    judge_run(&r, &ok_data(l.clone()), &canaries()).unwrap();
+    for field in 0..3 {
+        let mut d = ok_data(l.clone());
+        let leak = "found glp-canary-0123456789ab here".to_string();
+        match field {
+            0 => d.stdout = leak,
+            1 => d.stderr = leak,
+            _ => d.result_text = leak,
+        }
+        let e = judge_run(&r, &d, &canaries()).unwrap_err();
+        assert!(e.contains("canary text (ssh-key)"), "{e}");
+    }
+}
+
+#[test]
+fn expectations_check_errno_and_detail() {
+    let r = blocked_row();
+    judge_run(
+        &r,
+        &RunData {
+            direct: false,
+            ..ok_data(vec![line("read", "blocked", Some("ENOENT"), None)])
+        },
+        &canaries(),
+    )
+    .unwrap();
+    let e = judge_run(
+        &r,
+        &ok_data(vec![line("read", "blocked", Some("EACCES"), None)]),
+        &canaries(),
+    )
+    .unwrap_err();
+    assert!(e.contains("wanted errno"), "{e}");
+    let e = judge_run(
+        &r,
+        &ok_data(vec![line("read", "reached", None, None)]),
+        &canaries(),
+    )
+    .unwrap_err();
+    assert!(e.contains("wanted blocked"), "{e}");
+    let d = row(
+        json!({"row": "d", "probes": [["http-connect", "x:1"]], "expect": [{"result": "reached", "detail": "200"}]}),
+    );
+    assert!(
+        judge_run(
+            &d,
+            &ok_data(vec![line("http-connect", "reached", None, Some("403"))]),
+            &canaries()
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn silent_listeners_events_and_files() {
+    let r = row(json!({
+        "row": "r", "probes": [["fds"]], "expect": [{"result": "reached"}],
+        "listeners_silent": ["hub"], "proxy_events": ["Denied b.test:443", "Denied a.test:443"],
+        "files_absent": ["${MARKER}"],
+    }));
+    let l = vec![line("fds", "reached", None, None)];
+    let mut d = ok_data(l);
+    d.events = vec!["Denied a.test:443".into(), "Denied b.test:443".into()];
+    judge_run(&r, &d, &canaries()).unwrap();
+    d.silent = vec![("hub".into(), 1)];
+    assert!(
+        judge_run(&r, &d, &canaries())
+            .unwrap_err()
+            .contains("listener hub saw 1")
+    );
+    d.silent = vec![];
+    d.events.pop();
+    assert!(
+        judge_run(&r, &d, &canaries())
+            .unwrap_err()
+            .contains("proxy events")
+    );
+    d.events = vec!["Denied a.test:443".into(), "Denied b.test:443".into()];
+    d.present = vec!["/tmp/glp-x/marker".into()];
+    assert!(
+        judge_run(&r, &d, &canaries())
+            .unwrap_err()
+            .contains("exists after the run")
+    );
+}
+
+#[test]
+fn subset_rules() {
+    let a = json!({"ok": false, "reason": "inside a container", "fix": null, "n": [1, 2]});
+    subset(&a, &json!({"ok": false, "fix": null})).unwrap();
+    subset(&a, &json!({"reason_contains": "container"})).unwrap();
+    assert!(subset(&a, &json!({"ok": true})).is_err());
+    assert!(subset(&a, &json!({"missing": 1})).is_err());
+    assert!(
+        subset(&a, &json!({"n": [1]})).is_err(),
+        "arrays are compared whole"
+    );
+}
+
+#[test]
+fn spec_defaults_and_the_probe_dir() {
+    let fx = Fixture::new().unwrap();
+    let r = row(
+        json!({"row": "r", "tier": "reduced", "spec": {"write": ["${W}"]}, "probes": [["fds"]], "expect": [{"result": "reached"}]}),
+    );
+    let bin = fx.path("bin");
+    let spec = build_spec(&fx, &r, &bin).unwrap();
+    assert_eq!(spec["chdir"], fx.path("w").to_string_lossy().as_ref());
+    assert_eq!(spec["tmp"], fx.path("t").to_string_lossy().as_ref());
+    assert_eq!(spec["layers"]["landlock_min_abi"], 9);
+    assert_eq!(spec["read"], json!([bin.to_string_lossy()]));
+    let relay = &spec["net"]["isolated"]["relay"][0];
+    assert_eq!(
+        relay["socket"],
+        fx.path("run/drgnx/s/S1/proxy.sock")
+            .to_string_lossy()
+            .as_ref()
+    );
+    assert!(relay["port"].as_u64().unwrap() > 0);
+    assert_eq!(spec["run"]["source"], spec["run"]["dest"]);
+    // A row that says `net` itself gets no relay, run or sockets.
+    let r = row(
+        json!({"row": "r", "spec": {"net": "shared"}, "probes": [["fds"]], "expect": [{"result": "reached"}]}),
+    );
+    let spec = build_spec(&fx, &r, &bin).unwrap();
+    assert_eq!(spec["net"], "shared");
+    assert!(spec.get("run").is_none() && spec.get("sockets").is_none());
+    // The spec the harness builds is one gleipnir parses.
+    serde_json::from_value::<gleipnir::Spec>(spec).unwrap();
+}
+
+#[test]
+fn the_pause_dance_swaps_a_path_for_a_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let fifo = dir.path().join("f");
+    let c = std::ffi::CString::new(fifo.to_string_lossy().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+    let (task, target) = (dir.path().join("task"), dir.path().join("elsewhere"));
+    std::fs::create_dir(&task).unwrap();
+    std::fs::create_dir(&target).unwrap();
+    // A stand-in for `ratatoskr --pause-before-spawn`: writes "opened", waits for a line.
+    let f2 = fifo.clone();
+    let mut child = Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "echo opened > '{0}'; read line < '{0}'; echo got-$line",
+            f2.display()
+        ))
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    pause_dance(&fifo, &[(task.clone(), target.clone())], &mut child).unwrap();
+    let mut out = String::new();
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_string(&mut out)
+        .unwrap();
+    assert_eq!(out.trim(), "got-go");
+    assert!(task.is_symlink());
+    assert!(dir.path().join("task.orig").is_dir());
+}

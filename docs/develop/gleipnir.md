@@ -812,4 +812,114 @@ that changes after the check (rebinding) cannot lead it anywhere else.
 
 ## Proving it (Tasks 14 and 15)
 
+The escape suite is the crate `gleipnir-escape` (test tooling: never shipped, never installed, and it never turns on
+gleipnir's `test-hooks`). It has two binaries and a directory of rows:
+
+- `gleipnir-probe` tries one channel per probe from inside the sandbox;
+- `gleipnir-escape` runs each row: it builds a fixture, runs `ratatoskr sandbox run` with the probe as the program,
+  and compares what the probe saw with what the row expects;
+- `rows/{any,linux,macos}/*.jsonl` are the rows, as data.
+
+Build both with `cargo build -p gleipnir-escape`, and `ratatoskr` with `--features test-hooks`. The probe uses `std`
+and `libc` only and needs glibc 2.39 at most, so a binary built in the Fedora 45 dev container runs on the Fedora 44
+VM; there is no toolchain on the VM.
+
+```
+gleipnir-escape --ratatoskr BIN --probe BIN --rows DIR… [--only GLOB] [--require-all] --report FILE
+```
+
+`--rows` takes a directory of `.jsonl` files, or a directory holding `any/`, `linux/` and `macos/`. `--only` is a
+glob on row names (`*` and `?`). The report is `[{row, status: pass|fail|skip, reason}]`; the exit is 1 on a fail,
+and with `--require-all` on a skip too. The VM script copies the three binaries and the rows over and runs this
+there (`gleipnir-vm.sh run`).
+
+### The probe
+
+Probes are separated by `--and`. Each prints one JSON line `{"probe", "arg", "result": "reached"|"blocked",
+"errno"?, "detail"?}` (`errno` is a name such as `ENOENT`). The probe never prints file contents: `read` reports the
+size.
+
+| Group | Probes |
+|---|---|
+| files | `read PATH` (size), `write PATH` (opens for writing, writes nothing), `create PATH`, `list DIR` (names, sorted), `stat PATH`, `rename A B`, `link A B` (hard link), `clone A B` (macOS `clonefile`, a directory too; elsewhere blocked `EOPNOTSUPP`) |
+| sockets | `connect-unix PATH`, `connect-abstract NAME` (Linux), `connect-tcp HOST:PORT`, `tfo HOST:PORT` (`sendto(MSG_FASTOPEN)`, Linux), `udp HOST:PORT` (sends, waits 500 ms for the echo; no echo is blocked with no errno), `unix-self PATH` (listens there, then connects; the detail says which step failed) |
+| environment | `env-has NAME…`: reached when any is set, the detail names which (never a value) |
+| syscalls | `syscall NAME` for `unshare-user io-uring keyctl add-key vsock clone3 clone-newuser mount-missing tiocsti-own-pty tiocsti-high-own-pty ptrace-own-child x32-getpid i386-int80`. Each runs in a forked child, so a kill by the filter is a result: blocked, no errno, detail `killed by SIGSYS`. `x32-getpid` and `i386-int80` are x86_64 only (elsewhere ENOSYS) |
+| process | `status-field NAME` (from `/proc/self/status`), `fds` (the open descriptors below 1024, `0,1,2`), `proc-read PID FILE` (size), `spawn-sleep N` (a child that sleeps N seconds without exec and without the probe's pipes; the detail is its pid), `kill PID SIG` |
+| other | `run CMD…` (a child; reached when it exits 0, the detail is the exit code, `out_bytes` counts what it wrote and nothing is printed), `http-connect TARGET` (CONNECT through `$HTTPS_PROXY`; the detail is the status code, reached only for 200), `landlock-abi` (the detail is the version) |
+
+Each `syscall` is chosen so that its unfiltered result differs from the filter's: `mount-missing` mounts on a path
+that does not exist (ENOENT unfiltered, EPERM filtered), `clone3` gets a null argument block (EINVAL, ENOSYS),
+`tiocsti-*` use a pty the probe opens itself (the unfiltered kernel says EIO or works; the filter says EPERM), and
+`tiocsti-high-own-pty` sets bit 32 of the request register, which the kernel ignores and a 64-bit compare would not.
+
+### Rows
+
+One JSON object per line; unknown keys are a parse error.
+
+| Key | Meaning |
+|---|---|
+| `row` | the name (unique across all files) |
+| `needs` | `bwrap reduced landlock seccomp netns root macos linux x86_64 x32` |
+| `tier` | `full` (default) or `reduced` |
+| `spec` | the spec, with placeholders. The harness fills what is left out: `chdir` (`${W}`); `net` (isolated, with a relay from a free port to `${RUN}/proxy.sock`, and then `run`, `sockets` and an `HTTPS_PROXY` in the default `env` to match); `env` (a `PATH`); `layers` (the tier's floor); `tmp` (reduced: `${TMP}`). The probe's directory is added to `read` |
+| `setup` | steps: `fake-bwrap {version}`, `path-bwrap {name?}`, `swap-to-link {path, target}` (done while `ratatoskr` waits at `--pause-before-spawn`), `plant-link {path, target}`, `canary-fd {n}`, `start-sleep` |
+| `probes`, `expect` | one argument list per probe; one `{result, errno?: [names], detail?}` per probe. `errno` is a list so the layer that blocked is visible |
+| `control`, `control_expect` | see below |
+| `listeners_silent` | listeners that must have seen no connection: `hub emacs bus ssh-agent abstract tcp-lo tcp-nl udp-lo udp-nl upstream gateway` |
+| `result` | a subset of the result file `{refused, layers, exit}` (`NAME_contains` asks for a part of a string). Without it the run itself is asserted: not refused, exit 0, one line per probe |
+| `unsandboxed` | run the probes with no sandbox and judge `expect` on them: the probes are real |
+| `bwrap`, `landlock_omit`, `landlock_abi_cap` | `--bwrap`, `--landlock-omit`, `--landlock-abi-cap` |
+| `files_absent` | paths that must not exist after the run (a marker a refused run must not write) |
+| `proxy_events` | the proxy's events, exactly: `Denied host:port`, `Refused <Why> target` |
+| `after` | `{after_lines, kill: run\|group, signal?, gone?: {match, within_ms}}`: once N lines are read, kill the `sandbox run` process or the sandbox's process group, and require that no process whose command line contains `match` is left within the time |
+| `raw` | `{args, exit?, json?, stdout_contains?}`: run `ratatoskr` with these arguments and no probe (`sandbox check`) |
+
+**Placeholders** are a closed list; an undefined one fails the parse. Paths: `${HOME} ${RUNTIME} ${RUN} ${TASK}
+${TASK2} ${W} ${DATA} ${CANARY_DIR} ${FIXTURE} ${TMP} ${MARKER}`, and on macOS `${USERS_SHARED}`. Addresses:
+`${ABSTRACT}` (`@glp-…`), `${TCP_LO} ${TCP_NL} ${UDP_LO} ${UDP_NL}` (`host:port`; the `_NL` ones are the first
+non-loopback address), `${UPSTREAM}` (`upstream.test:PORT`, pinned in the proxy), `${PROXY_TCP}`. Others:
+`${HARNESS_PID}`, `${SLEEP_PID}` (the `start-sleep` step), `${FAKE_BWRAP}` (the `fake-bwrap` step).
+
+**`control: true` is mandatory for every expectation that says `blocked`** (the parse fails otherwise). The control
+run executes the same probes with no sandbox, in a fixture of its own, and each must give its unfiltered result:
+`reached`, or what `control_expect` says (`mount-missing` gives ENOENT). So a typo or a wrong path can never pass as
+ENOENT. Steps that belong to the sandboxed run (`swap-to-link`, `canary-fd`, the bwrap fakes) are not run in it.
+
+**Skips.** Only these reasons skip a row: "inside a container" (`/run/.containerenv`; for `bwrap` and `netns`),
+"needs macos", "needs linux", "needs x86_64", "x32 is off", "needs root" (uid 0 or `sudo -n true`), and "Landlock ABI
+N below M" (from the probe's `landlock-abi`). Any other cause is a **fail**, a sandbox refusal among them, so a
+regression that refuses every spec cannot look green.
+
+**What a run checks, in order:** no canary text in stdout, stderr or the result file; the sandbox's outcome from the
+`--result` file (never from the exit code, since a child may exit 3 itself); the probe lines against `expect`;
+`listeners_silent`; `proxy_events`; `files_absent`; and `after`'s `gone`.
+
+### The fixture
+
+Each run gets a fixture under `/tmp/glp-XXXXXX/`; the control run and the sandboxed run get one each, so a probe
+that moves or creates things in one cannot disturb the other. `ratatoskr` runs with an empty environment plus
+`HOME`, `XDG_RUNTIME_DIR`, `DRGNX_DATA_DIR`, `DRGNX_CONFIG_DIR`, `SSH_AUTH_SOCK`, `DBUS_SESSION_BUS_ADDRESS`,
+`DISPLAY`, `WAYLAND_DISPLAY`, `OPENROUTER_API_KEY` (a canary) and `PATH`, all pointing into the fixture: nothing
+reaches the real home, the user's sockets, D-Bus or a display.
+
+| Path | Holds |
+|---|---|
+| `home/` | `.ssh/id_canary`, `other-repo/secret`, `canary-dir/canary.txt`, each random text |
+| `run/` | listeners that count connections: `drgnx/hub-0000.sock`, `emacs/server`, `bus`, `ssh-agent.sock`; `drgnx/s/S1` (`${RUN}`) with `proxy.sock` (served by `gleipnir::net::proxy`, allowing `upstream.test:PORT`) and `gateway.sock` (an echo) |
+| `data/` | `work.db` (a canary) |
+| `tasks/t1`, `tasks/t2`, `w/`, `t/` | `${TASK}`, `${TASK2}` (holds a canary), `${W}`, `${TMP}` |
+| `bin/` | a copy of the probe, bound read-only into the sandbox (the helper's own directory is closed, so the probe cannot run from beside `ratatoskr`) |
+
+Besides the files: an abstract listener, TCP and UDP listeners on `127.0.0.1` and on the first non-loopback address,
+and an upstream, all of which echo. Setup that needs root (`fake-bwrap`: a script in a root-owned `/var/lib/glp-…/`
+that prints `bubblewrap VERSION` for `--version` and writes `${MARKER}` for any other argv) runs through `sudo -n`.
+
+### The rows shipped with the harness
+
+`any/probes-reach-without-sandbox` (and its `-non-loopback` and `-linux` companions) runs every fixture-facing probe
+with no sandbox and requires `reached`: the probes are real. `any/works` runs `sh -c 'echo ok'` and `git --version`
+under the full tier; it skips in a container. Task 15 adds the Linux rows and the channel table (row, what it
+proves).
+
 ## What this does not claim yet (Task 19)

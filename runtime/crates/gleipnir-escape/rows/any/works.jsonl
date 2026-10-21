@@ -1,0 +1,1 @@
+{"row":"works","needs":["bwrap"],"spec":{"write":["${W}"]},"probes":[["run","sh","-c","echo ok"],["run","git","--version"]],"expect":[{"result":"reached","detail":"0"},{"result":"reached","detail":"0"}]}
