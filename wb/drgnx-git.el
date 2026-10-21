@@ -211,8 +211,9 @@ WAIT: until done, for tests."
 Only ROOT's current run counts: one already finished, or one a newer run replaced (it ended before its
 sentinel ran, and a refresh started another), just gives its buffer back.  Its late sentinel must not
 clear the newer run's :proc, or a wait on that run stops before it is read.  A ROOT the cache evicted while PROC
-ran has no entry: PROC is still its run (unless it was read already), and its result puts the root back."
-  (let* ((buf (process-buffer proc)) (repo (drgnx-cache-get 'git-status root)))
+ran has no entry: PROC is still its run (unless it was read already), and its result puts the root back.
+The look is a peek: a late sentinel is no use of ROOT, and a stamp would evict another root in its place."
+  (let* ((buf (process-buffer proc)) (repo (drgnx-cache-peek 'git-status root)))
     (when (memq (process-status proc) '(exit signal))
       (if (if repo (not (eq proc (plist-get repo :proc))) (process-get proc 'drgnx-git-read))
           (when (buffer-live-p buf) (kill-buffer buf))

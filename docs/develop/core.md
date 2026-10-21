@@ -1469,7 +1469,8 @@ all in one file. The segment and the header are read per redisplay; a hit alloca
 `window-live-p`, `frame-live-p` or `process-live-p` and drops a dead entry. `key` `string` is an `equal` table with an
 LRU; `cap` is required and positive. A get stamps the entry; a put past the cap evicts the oldest stamp (a scan of the
 table, on put only). `drgnx-cache-get`, `-put`, `-remove` and `-size` take the NAME and the key; `drgnx-cache-keys NAME` lists the keys (a pass over the
-table, stamping nothing: not for redisplay). **Every cache has a
+table, stamping nothing: not for redisplay). `drgnx-cache-peek` reads one value without stamping it, for a look that
+is no use of the entry: a late process sentinel checking whether its result still counts (`wb/drgnx-git.el`). **Every cache has a
 cap or is weak**; the docstring or `:doc` says which event or cap bounds it.
 
 The workbench has two string caches, both activated by `core/workbench`: `git-status` (repository root → its status
