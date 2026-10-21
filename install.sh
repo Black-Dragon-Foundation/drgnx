@@ -851,7 +851,7 @@ rust_version() { # PROGRAM (rustc) → its X.Y.Z, nothing when it does not run
 rust_candidate() { # the version of the distro's default Rust package, nothing when unknown
   local v=""
   case "$FAMILY" in
-    fedora) v="$(dnf repoquery --qf '%{version}' rust 2>/dev/null | sort -V | tail -1 || true)" ;;
+    fedora) v="$(dnf repoquery --qf '%{version}\n' rust 2>/dev/null | sort -V | tail -1 || true)" ;;
     debian) v="$(apt-cache policy rustc 2>/dev/null | sed -n 's/^ *Candidate: *//p' | head -1 || true)" ;;
     arch) v="$(pacman -Si rust 2>/dev/null | sed -n 's/^Version *: *//p' | head -1 || true)" ;;
     macos) if [[ -n "$BREW" ]]; then

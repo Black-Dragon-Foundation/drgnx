@@ -16,6 +16,13 @@ case "$ID" in
   arch) pacman -Syu --noconfirm --needed sudo >/dev/null ;;
   *) fail "no preparation recipe for $ID" ;;
 esac
+case "$ID:$VERSION_ID" in
+  fedora:44|fedora:45|ubuntu:26.04)
+    # The Nidhogg a user who installed the release has: install.sh keeps it (a build from source takes 30-60 minutes);
+    # this test is about the Ratatoskr build step.  Fedora's updates-testing is off: a metalink flake once broke dnf there.
+    for f in /etc/yum.repos.d/*testing*.repo; do [[ -e "$f" ]] && sed -i 's/^enabled=1/enabled=0/' "$f"; done
+    bash /src/test/container/nidhogg.sh "$ID-$VERSION_ID" >/dev/null ;;
+esac
 useradd -m tester
 echo 'tester ALL=(ALL) NOPASSWD: ALL' >/etc/sudoers.d/tester
 home="$(getent passwd tester | cut -d: -f6)"
@@ -49,7 +56,7 @@ grep -q '^OK    tree-sitter ' <<<"$out" || fail "no tree-sitter"
 grep -q '^OK    ratatoskr ' <<<"$out" || fail "the ratatoskr check is not ok"
 
 step "ratatoskr: built from this snapshot, no test hooks, linked as rtsk"
-head="$(git -C "$home/.local/share/drgnx/drgnx" rev-parse HEAD)"
+head="$(as_tester git -C "$home/.local/share/drgnx/drgnx" rev-parse HEAD)"
 for bin in ratatoskr rtsk; do
   json="$(as_tester "$bin" version --json)" || fail "$bin version --json failed"
   printf '%s: %s\n' "$bin" "$json"
