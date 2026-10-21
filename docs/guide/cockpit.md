@@ -285,7 +285,7 @@ a job window of their own; [jobs.md](jobs.md#a-job-in-the-work-cockpit) has the 
   log.
 
 Both live in the right dock, stacked with What happened. **Show Job in Work…** (`job-show`), opening a job or review
-node, a click on a job's name in What needs you, or the badge filter the cockpit to one job: the graph keeps that
+node, or a click on a job's name in What needs you filter the cockpit to one job: the graph keeps that
 job's nodes and their ancestors (its first line says `job ID`), What needs you adds the job's tasks, agents and
 spend, and Decisions shows its log. **Show What Needs You** (and the status bar's jobs count) shows every job again.
 The filter is kept with the saved workbench. In the Vim profile both buffers start in Emacs state; `RET` or a

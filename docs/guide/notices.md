@@ -47,4 +47,4 @@ Something its producer marks as not interrupting (a job's `overlap` card, for ex
 Nothing here ever asks you anything.
 
 **Turning it off:** set `drgnx-notice-desktop` to nil (Customize, group `drgnx`), or turn off
-`drgnx-notice-desktop-mode`. Job cards still follow `drgnx-job-ui-notify` until they join the notice model.
+`drgnx-notice-desktop-mode`. `drgnx-job-ui-notify` is the obsolete name of `drgnx-notice-desktop`; job cards are the Jobs source of the model.
