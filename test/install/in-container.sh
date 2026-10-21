@@ -16,6 +16,13 @@ case "$ID" in
   arch) pacman -Syu --noconfirm --needed sudo >/dev/null ;;
   *) fail "no preparation recipe for $ID" ;;
 esac
+case "$ID:$VERSION_ID" in
+  fedora:44|fedora:45|ubuntu:26.04)
+    # The Nidhogg a user who installed the release has: install.sh keeps it (a build from source takes 30-60 minutes);
+    # this test is about the Ratatoskr build step.  Fedora's updates-testing is off: a metalink flake once broke dnf there.
+    for f in /etc/yum.repos.d/*testing*.repo; do [[ -e "$f" ]] && sed -i 's/^enabled=1/enabled=0/' "$f"; done
+    bash /src/test/container/nidhogg.sh "$ID-$VERSION_ID" >/dev/null ;;
+esac
 useradd -m tester
 echo 'tester ALL=(ALL) NOPASSWD: ALL' >/etc/sudoers.d/tester
 home="$(getent passwd tester | cut -d: -f6)"
@@ -27,7 +34,8 @@ if [[ -n "${DRGNX_INSTALL_NIDHOGG_REPO:-}" ]]; then nidhogg_env+=("DRGNX_INSTALL
 if [[ -n "${DRGNX_INSTALL_NIDHOGG_COMMIT:-}" ]]; then nidhogg_env+=("DRGNX_INSTALL_NIDHOGG_COMMIT=$DRGNX_INSTALL_NIDHOGG_COMMIT"); fi
 as_tester() { sudo -u tester -H env PATH="$home/.local/bin:/usr/local/bin:/usr/bin:/bin" \
                  DRGNX_INSTALL_REPO=/src/drgnx.bundle ${nidhogg_env[@]+"${nidhogg_env[@]}"} "$@"; }
-sudo -u tester -H git config --global --add safe.directory '*'   # the mounted Nidhogg repository is root's
+# the mounted Nidhogg repository is root's; written as a file, since git may not be installed yet (install.sh installs it)
+printf '[safe]\n\tdirectory = *\n' >"$home/.gitconfig" && chown tester "$home/.gitconfig"
 
 step "install.sh --yes"
 as_tester bash /src/install.sh --yes || fail "install.sh exited $?"
@@ -45,6 +53,17 @@ esac
 grep -q '^OK    native-compilation ' <<<"$out" || fail "native compilation is not ok"
 grep -q '^OK    gui ' <<<"$out" || fail "not a graphical build"
 grep -q '^OK    tree-sitter ' <<<"$out" || fail "no tree-sitter"
+grep -q '^OK    ratatoskr ' <<<"$out" || fail "the ratatoskr check is not ok"
+
+step "ratatoskr: built from this snapshot, no test hooks, linked as rtsk"
+head="$(as_tester git -C "$home/.local/share/drgnx/drgnx" rev-parse HEAD)"
+for bin in ratatoskr rtsk; do
+  json="$(as_tester "$bin" version --json)" || fail "$bin version --json failed"
+  printf '%s: %s\n' "$bin" "$json"
+  grep -Eq "\"commit\": *\"$head\"" <<<"$json" || fail "$bin is not built from the snapshot's commit $head"
+  grep -Eq '"test_hooks": *false' <<<"$json" || fail "$bin has test hooks"
+done
+[[ "$(as_tester rtsk version)" == "$(as_tester ratatoskr version)" ]] || fail "rtsk version differs from ratatoskr version"
 
 step "second run is a no-op"
 rc=0; out="$(as_tester bash /src/install.sh --yes)" || rc=$?

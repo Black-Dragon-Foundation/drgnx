@@ -33,6 +33,13 @@ GNU_KEYRING="${DRGNX_INSTALL_KEYRING:-https://ftp.gnu.org/gnu/gnu-keyring.gpg}"
 EMACS_SIGNER="${DRGNX_INSTALL_SIGNER:-8DC2487E51ABDD90B5C4753F0F56D0553B6D411B}"   # who signs $EMACS_VERSION (docs/guide/install.md)
 APT_DIR="${DRGNX_INSTALL_APT_DIR:-/etc/apt}"
 HOMEBREW_INSTALLER_URL=https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh
+# Ratatoskr (the agent runtime, Rust) is built from source: the oldest Rust that builds it, the toolchain a private
+# rustup installs when the distro has none new enough, and the rustup release that installs it.  rustup-init comes from
+# the versioned archive (the unversioned file changes under a pinned hash); one sha256 per target, from static.rust-lang.org.
+RUST_MIN=1.88
+RUST_PRIVATE=1.93.1
+RUSTUP_VERSION=1.28.2
+RUSTUP_URL=https://static.rust-lang.org/rustup/archive
 
 say()  { printf '%s\n' "$*"; }
 note() { printf '  %s\n' "$*"; }
@@ -480,6 +487,7 @@ print_plan() {
   say "3. Link $PREFIX/bin/drgnx → $DIR/bin/drgnx"
   note "Remember Emacs: $(planned_emacs)"
   say "4. Compile drgnx (drgnx build: byte-compiled, natively compiled as it loads)"
+  plan_ratatoskr
   if [[ "$OS" == macos ]]; then
     say "5. Install the drgnx app into $HOME/Applications/drgnx.app (Finder, Spotlight, the Dock, Open With)"
     if ((!HANDOVER)); then say "6. Run drgnx doctor"; say "7. Open the drgnx app"; fi
@@ -808,6 +816,210 @@ link_drgnx() {
   ln -sfn "$DIR/bin/drgnx" "$PREFIX/bin/drgnx"
 }
 
+# --- Ratatoskr: the Rust toolchain and the build -----------------------------------------------------------
+# Ratatoskr (runtime/, Rust) is built from source here and by `drgnx update'.  Which cargo builds it, first match wins:
+# cargo and rustc >= $RUST_MIN on PATH; the distro's default package when its candidate is new enough; a versioned
+# distro package (Ubuntu 24.04: rustc-1.91); else a private rustup under the data dir.  No rust-toolchain.toml:
+# a distro cargo ignores it.  The choice is recorded in <data>/cargo for the update timer, whose PATH lacks it.
+
+rustup_target() { # the rustup-init target of this machine, nothing for an unknown one
+  local a="$ARCH"
+  if [[ "$a" == arm64 ]]; then a=aarch64; fi
+  case "$OS:$a" in
+    linux:x86_64|linux:aarch64) printf '%s-unknown-linux-gnu' "$a" ;;
+    macos:x86_64|macos:aarch64) printf '%s-apple-darwin' "$a" ;;
+  esac
+}
+
+rustup_sha256() { # TARGET → the sha256 of that target's rustup-init $RUSTUP_VERSION
+  case "$1" in
+    x86_64-unknown-linux-gnu) echo 20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c ;;
+    aarch64-unknown-linux-gnu) echo e3853c5a252fca15252d07cb23a1bdd9377a8c6f3efa01531109281ae47f841c ;;
+    x86_64-apple-darwin) echo 9c331076f62b4d0edeae63d9d1c9442d5fe39b37b05025ec8d41c5ed35486496 ;;
+    aarch64-apple-darwin) echo 20ef5516c31b1ac2290084199ba77dbbcaa1406c45c1d978ca68558ef5964ef5 ;;
+  esac
+}
+
+sha256_of() { # FILE → its sha256
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'; else shasum -a 256 "$1" | awk '{print $1}'; fi
+}
+
+rust_version() { # PROGRAM (rustc) → its X.Y.Z, nothing when it does not run
+  "$1" --version 2>/dev/null | sed -n 's/^rustc \([0-9][0-9.]*\).*/\1/p' | head -1 || true
+}
+
+rust_candidate() { # the version of the distro's default Rust package, nothing when unknown
+  local v=""
+  case "$FAMILY" in
+    fedora) v="$(dnf repoquery --qf '%{version}\n' rust 2>/dev/null | sort -V | tail -1 || true)" ;;
+    debian) v="$(apt-cache policy rustc 2>/dev/null | sed -n 's/^ *Candidate: *//p' | head -1 || true)" ;;
+    arch) v="$(pacman -Si rust 2>/dev/null | sed -n 's/^Version *: *//p' | head -1 || true)" ;;
+    macos) if [[ -n "$BREW" ]]; then
+             v="$("$BREW" info --json=v2 rust 2>/dev/null | sed -n 's/.*"stable":"\([^"]*\)".*/\1/p' | head -1 || true)"
+           fi ;;
+  esac
+  v="$(printf '%s' "$v" | sed 's/^[0-9]*://; s/^\([0-9][0-9]*\(\.[0-9][0-9]*\)*\).*/\1/')"   # no epoch, no package revision
+  if [[ "$v" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then printf '%s' "$v"; fi
+}
+
+rust_versioned() { # the newest X.Y >= $RUST_MIN for which the distro lists both rustc-X.Y and cargo-X.Y (Debian family)
+  local listed n v best=""
+  listed="$(apt-cache search --names-only '^(rustc|cargo)-[0-9]+\.[0-9]+$' 2>/dev/null | awk '{print $1}' || true)"
+  for n in $listed; do
+    case "$n" in rustc-*) ;; *) continue ;; esac
+    v="${n#rustc-}"
+    version_ge "$v" "$RUST_MIN" || continue
+    printf '%s\n' "$listed" | grep -qx "cargo-$v" || continue
+    if [[ -z "$best" ]] || version_ge "$v" "$best"; then best="$v"; fi
+  done
+  printf '%s' "$best"
+}
+
+rust_toolchain() { # RUST_HOW path | distro | versioned | rustup | none, RUST_VERSION, RUST_PKGS, RUST_CMD, RUST_BINDIR, CC_CMD
+  RUST_HOW="" RUST_VERSION="" RUST_PKGS=() RUST_CMD=() RUST_BINDIR="" CC_CMD=() CC_FOUND=0
+  RUST_SKIP=0
+  if [[ "${DRGNX_INSTALL_RUNTIME:-}" == none ]]; then RUST_SKIP=1; return 0; fi   # tests: no toolchain probe, no build
+  local v cand
+  if command -v cargo >/dev/null 2>&1 && command -v rustc >/dev/null 2>&1; then
+    v="$(rust_version rustc)"
+    if [[ -n "$v" ]] && version_ge "$v" "$RUST_MIN"; then RUST_HOW=path RUST_VERSION="$v"; fi
+  fi
+  if [[ -z "$RUST_HOW" ]]; then
+    cand="$(rust_candidate)"
+    if [[ -n "$cand" ]] && version_ge "$cand" "$RUST_MIN"; then
+      RUST_HOW=distro RUST_VERSION="$cand"
+      case "$FAMILY" in
+        fedora) RUST_PKGS=(cargo rust gcc) RUST_CMD=(dnf install -y cargo rust gcc) ;;
+        debian) RUST_PKGS=(cargo rustc gcc) RUST_CMD=(apt-get install -y cargo rustc gcc) ;;
+        arch) RUST_PKGS=(rust gcc) RUST_CMD=(pacman -S --needed --noconfirm rust gcc) ;;
+        macos) RUST_PKGS=(rust) RUST_CMD=("${BREW:-brew}" install rust) ;;
+      esac
+    elif [[ "$FAMILY" == debian ]] && v="$(rust_versioned)" && [[ -n "$v" ]]; then
+      RUST_HOW=versioned RUST_VERSION="$v" RUST_PKGS=("rustc-$v" "cargo-$v" gcc) RUST_BINDIR="/usr/lib/rust-$v/bin"
+      RUST_CMD=(apt-get install -y "rustc-$v" "cargo-$v" gcc)
+    elif [[ -n "$(rustup_target)" ]]; then RUST_HOW=rustup RUST_VERSION="$RUST_PRIVATE"
+    else RUST_HOW=none
+    fi
+  fi
+  if command -v cc >/dev/null 2>&1; then CC_FOUND=1
+  else
+    case " ${RUST_PKGS[*]-} " in
+      *" gcc "*) ;;   # the packages bring it
+      *) case "$FAMILY" in
+           fedora) CC_CMD=(dnf install -y gcc) ;;
+           debian) CC_CMD=(apt-get install -y gcc) ;;
+           arch) CC_CMD=(pacman -S --needed --noconfirm gcc) ;;
+           macos) CC_CMD=(xcode-select --install) ;;
+         esac ;;
+    esac
+  fi
+}
+
+plan_ratatoskr() { # the Ratatoskr lines of the plan
+  ((!RUST_SKIP)) || return 0
+  local sudo="sudo " target
+  if [[ "$FAMILY" == macos ]]; then sudo=""; fi
+  note "build Ratatoskr (the agent runtime, Rust) from source, locked and memory-capped where this system can (a few minutes), and link $PREFIX/bin/ratatoskr and rtsk"
+  case "$RUST_HOW" in
+    path) note "Rust toolchain: cargo and rustc $RUST_VERSION on PATH" ;;
+    distro) note "Rust toolchain: $sudo${RUST_CMD[*]} (the distro's rust $RUST_VERSION)" ;;
+    versioned) note "Rust toolchain: ${sudo}${RUST_CMD[*]} (the distro's versioned package $RUST_VERSION; its binaries are in $RUST_BINDIR)" ;;
+    rustup)
+      target="$(rustup_target)"
+      note "Rust toolchain: a private rustup $RUSTUP_VERSION in $(drgnx_dir data)/rustup with Rust $RUST_PRIVATE (no distro package is new enough)"
+      note "download $RUSTUP_URL/$RUSTUP_VERSION/$target/rustup-init and check its sha256 before running it" ;;
+    *) note "Rust toolchain: none found, and none can be installed for ${ARCH} here: Ratatoskr is not built (drgnx runs; agents fail)" ;;
+  esac
+  if ((CC_FOUND)); then note "C compiler: cc found"
+  elif ((${#CC_CMD[@]})); then
+    if [[ "$FAMILY" == macos ]]; then note "C compiler: ${CC_CMD[*]} (Apple's Command Line Tools; asked)"; else note "C compiler: sudo ${CC_CMD[*]}"; fi
+  else note "C compiler: gcc comes with the packages above"; fi
+  note "record the toolchain in $(drgnx_dir data)/cargo (the update timer finds the same cargo)"
+}
+
+rust_install_packages() { # the distro packages of RUST_CMD, as root (asked)
+  if [[ "$FAMILY" == debian ]]; then
+    as_root apt-get update -qq || return 1
+    as_root env DEBIAN_FRONTEND=noninteractive "${RUST_CMD[@]}"
+  else
+    as_root "${RUST_CMD[@]}"
+  fi
+}
+
+install_rustup() { # a private rustup: rustup-init from the versioned archive, its sha256 checked, then a pinned toolchain
+  local target sha dir tmp got
+  target="$(rustup_target)" sha="$(rustup_sha256 "$(rustup_target)")" dir="$(drgnx_dir data)/rustup"
+  [[ -n "$target" && -n "$sha" ]] || { warn "there is no rustup-init for ${ARCH} on $OS"; return 1; }
+  if ! command -v curl >/dev/null 2>&1; then (download_tools) || return 1; fi
+  mkdir -p "$dir" || return 1
+  tmp="$(mktemp -d "$dir/init.XXXXXX")" || return 1
+  say "Downloading rustup-init $RUSTUP_VERSION ($target)…"
+  if ! curl -fsSL -o "$tmp/rustup-init" "$RUSTUP_URL/$RUSTUP_VERSION/$target/rustup-init"; then
+    rm -rf "${tmp:?}"; warn "could not download rustup-init (no network?)"; return 1
+  fi
+  got="$(sha256_of "$tmp/rustup-init")"
+  if [[ "$got" != "$sha" ]]; then
+    rm -rf "${tmp:?}"; warn "rustup-init is not the file install.sh pins (sha256 $got, expected $sha): nothing was run"; return 1
+  fi
+  chmod +x "$tmp/rustup-init"
+  if ! RUSTUP_HOME="$dir/home" CARGO_HOME="$dir/cargo" "$tmp/rustup-init" -y --no-modify-path --profile minimal \
+         --default-toolchain "$RUST_PRIVATE" </dev/null; then
+    rm -rf "${tmp:?}"; warn "rustup-init failed (above)"; return 1
+  fi
+  rm -rf "${tmp:?}"
+  RUST_CARGO="$dir/cargo/bin/cargo" RUST_ENV=("RUSTUP_HOME=$dir/home" "CARGO_HOME=$dir/cargo")
+}
+
+install_rust() { # make what the plan said true; RUST_CARGO is the cargo to record, RUST_ENV its environment lines
+  RUST_CARGO="" RUST_ENV=()
+  case "$RUST_HOW" in
+    path) RUST_CARGO="$(command -v cargo)" ;;
+    distro|versioned)
+      # a subshell: a refused sudo (die) ends this step, not the install
+      if [[ "$FAMILY" == macos ]]; then "${RUST_CMD[@]}" || return 1; else (rust_install_packages) || return 1; fi
+      if [[ -n "$RUST_BINDIR" ]]; then RUST_CARGO="$RUST_BINDIR/cargo"
+      else
+        RUST_CARGO="$(command -v cargo 2>/dev/null || true)"
+        if [[ -z "$RUST_CARGO" && -n "$BREW" ]]; then RUST_CARGO="$("$BREW" --prefix)/bin/cargo"; fi
+      fi ;;
+    rustup) install_rustup || return 1 ;;
+    *) return 1 ;;
+  esac
+  [[ -x "$RUST_CARGO" ]] || { warn "no cargo at ${RUST_CARGO:-?} after the install"; return 1; }
+  if ! command -v cc >/dev/null 2>&1 && ((${#CC_CMD[@]})); then
+    if [[ "$FAMILY" == macos ]]; then warn "no C compiler: run xcode-select --install, then drgnx runtime build"; return 1; fi
+    (as_root "${CC_CMD[@]}") || return 1
+  fi
+}
+
+record_cargo() { # <data>/cargo: line 1 the cargo, then RUSTUP_HOME=… and CARGO_HOME=… of a private rustup (as <data>/emacs)
+  local dir l; dir="$(drgnx_dir data)"
+  if ! { mkdir -p "$dir" && {
+           printf '%s\n' "$RUST_CARGO"
+           for l in ${RUST_ENV[@]+"${RUST_ENV[@]}"}; do printf '%s\n' "$l"; done
+         } >"$dir/cargo.new" && mv -f "$dir/cargo.new" "$dir/cargo"; }; then
+    warn "could not record the Rust toolchain in $dir/cargo: drgnx update will not find $RUST_CARGO (run install.sh again)"
+  fi
+}
+
+build_ratatoskr() { # the toolchain, then `drgnx runtime build' and `runtime install'; a failure warns and the run goes on
+  ((!RUST_SKIP)) || return 0
+  local log; log="$(drgnx_dir state)/runtime-build.log"
+  say ""
+  if ! install_rust; then
+    warn "no Rust toolchain was set up (above): drgnx runs, but agents fail with \"Ratatoskr is not built\". Fix it, then run: drgnx runtime build --install"
+    return 0
+  fi
+  record_cargo
+  mkdir -p "$(dirname "$log")"
+  say "Building Ratatoskr (Rust; a few minutes, log: $log)…"
+  if ! "$DIR/bin/drgnx" runtime build >"$log" 2>&1; then
+    warn "the Ratatoskr build failed (log: $log): drgnx runs, but agents fail with \"Ratatoskr is not built\". Fix the cause, then run: drgnx runtime build --install"
+    return 0
+  fi
+  "$DIR/bin/drgnx" runtime install --prefix "$PREFIX" || warn "could not install Ratatoskr: run drgnx runtime install --prefix $PREFIX"
+}
+
 remember_emacs() { # drgnx commands run in the Emacs just installed, even when it is not `emacs' on PATH (macOS)
   # in drgnx's data dir: the path is this machine's, and the config dir travels to others
   local dir e
@@ -886,6 +1098,7 @@ main() {
   probe_emacs
   choose_method
   find_brew
+  rust_toolchain
   print_plan
   if ((DRY_RUN)); then exit 0; fi
   check_handover
@@ -912,6 +1125,7 @@ main() {
   remember_emacs
   say ""
   DRGNX_EMACS="$EMACS_BIN" "$DIR/bin/drgnx" build >/dev/null || warn "drgnx build failed: run $DIR/bin/drgnx build to see why (drgnx still runs, uncompiled)"
+  build_ratatoskr
   if [[ "$OS" == linux ]]; then   # a unit that names the Emacs it was made for would keep running that one
     DRGNX_EMACS="$EMACS_BIN" "$DIR/bin/drgnx" service-unit --refresh || warn "could not check drgnx.service: run drgnx service-unit --refresh"
   fi

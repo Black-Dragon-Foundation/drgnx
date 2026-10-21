@@ -25,6 +25,7 @@ machine has."
                                       (unless (cl-some (lambda (e) (string-prefix-p "DRGNX_INSTALL_IN_CONTAINER=" e)) env)
                                         (list "DRGNX_INSTALL_IN_CONTAINER=no"))
                                       (list "DRGNX_INSTALL_EMACS=none" "DRGNX_INSTALL_TTY=none"
+                                            "DRGNX_INSTALL_RUNTIME=none"   ; no Rust toolchain probe or build, unless a test asks
                                             "DRGNX_INSTALL_MACOS_APP=none"   ; never this Mac's /Applications/Emacs.app
                                             (concat "HOME=" home)
                                             ;; never this machine's drgnx config (a DRGNX_CONFIG_DIR in the caller's environment)
@@ -1163,3 +1164,138 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
 (ert-deftest drgnx-install/the-pin-is-the-published-series-head ()
   (drgnx-install-test--expect (drgnx-install-test--plan "fedora-44" "--method" "nidhogg")
                               "at v31.1-nidhogg.1" "commit 29f76866bd1d"))
+
+;;; Ratatoskr: the Rust toolchain and the build (Task 19)
+;; A PATH of its own (symlinks to the basic tools plus stubs) keeps this machine's cargo, dnf and apt out of the plan.
+;; The other tests run with DRGNX_INSTALL_RUNTIME=none (no Ratatoskr step); these name it empty.
+
+(defconst drgnx-install-test--basic-tools
+  '("sed" "awk" "sort" "head" "tail" "cat" "getconf" "uname" "grep" "dirname" "basename" "tr" "cut" "ls" "rm" "mkdir" "mv"
+    "ln" "mktemp" "id" "date" "env" "chmod" "cp" "tee" "git" "sleep" "wc" "xargs" "sha256sum")
+  "What install.sh needs on PATH for a plan or a keep run.")
+
+(defun drgnx-install-test--rust-path (tmp stubs)
+  "PATH=… of TMP/rbin: the basic tools and STUBS, an alist (NAME . SHELL-BODY)."
+  (let ((bin (expand-file-name "rbin" tmp)))
+    (when (file-exists-p bin) (delete-directory bin t))   ; the stubs of an earlier case in this test
+    (make-directory bin t)
+    (dolist (tool drgnx-install-test--basic-tools)
+      (when-let* ((p (executable-find tool))) (make-symbolic-link p(expand-file-name tool bin) t)))
+    (pcase-dolist (`(,name . ,body) stubs)
+      (drgnx-install-test--script (expand-file-name name bin) (concat "#!/bin/sh\n" body "\n")))
+    (concat "PATH=" bin)))
+
+(defconst drgnx-install-test--rustc '("rustc" . "echo 'rustc 1.99.0 (abc 2026-01-01)'"))
+(defconst drgnx-install-test--cargo '("cargo" . "echo cargo"))
+(defconst drgnx-install-test--cc '("cc" . "exit 0"))
+(defconst drgnx-install-test--dnf '("dnf" . "[ \"$1\" = repoquery ] && echo \"$RUST_CAND\"; exit 0"))
+(defconst drgnx-install-test--apt-cache
+  '("apt-cache" . "case \"$1\" in policy) printf 'rustc:\\n  Installed: (none)\\n  Candidate: %s\\n' \"$RUST_CAND\" ;; search) printf '%s\\n' \"$APT_SEARCH\" ;; esac"))
+
+(defun drgnx-install-test--rust-plan (os tmp stubs &rest env)
+  (apply #'drgnx-install-test--plan os "DRGNX_INSTALL_RUNTIME=" (drgnx-install-test--rust-path tmp stubs) env))
+
+(ert-deftest drgnx-install/plan-names-the-rust-toolchain-path ()
+  (drgnx-install-test--with-tmp tmp
+    ;; 1. cargo and rustc >= 1.88 on PATH
+    (let ((out (cdr (drgnx-install-test--rust-plan "fedora-45" tmp (list drgnx-install-test--cargo drgnx-install-test--rustc
+                                                                         drgnx-install-test--cc drgnx-install-test--dnf)
+                                                   "RUST_CAND=1.99.0"))))
+      (should (string-search "Rust toolchain: cargo and rustc 1.99.0 on PATH" out))
+      (should (string-search "C compiler: cc" out))
+      (should-not (string-search "dnf install -y cargo" out))
+      (should (string-search "/cargo (the update timer finds the same cargo)" out)))
+    ;; 2. the distro's default package, when its candidate is >= 1.88
+    (let ((out (cdr (drgnx-install-test--rust-plan "fedora-45" tmp (list drgnx-install-test--dnf) "RUST_CAND=1.99.0"))))
+      (should (string-search "Rust toolchain: sudo dnf install -y cargo rust gcc (the distro's rust 1.99.0)" out)))
+    (let ((out (cdr (drgnx-install-test--rust-plan "ubuntu-26.04" tmp (list drgnx-install-test--apt-cache) "RUST_CAND=1.93.1+dfsg1-0ubuntu1"))))
+      (should (string-search "Rust toolchain: sudo apt-get install -y cargo rustc gcc (the distro's rust 1.93.1)" out)))
+    ;; 3. a versioned package where the default is too old (Ubuntu 24.04: 1.75 and rustc-1.91); the newest >= 1.88 is taken
+    (let ((out (cdr (drgnx-install-test--rust-plan
+                     "ubuntu-26.04" tmp (list drgnx-install-test--apt-cache) "RUST_CAND=1.75.0+dfsg0ubuntu1"
+                     (concat "APT_SEARCH=rustc-1.91 - Rust\ncargo-1.91 - Cargo\nrustc-1.85 - Rust\ncargo-1.85 - Cargo\n"
+                             "rustc-1.89 - Rust\nrustc-1.75 - Rust\ncargo-1.75 - Cargo\n")))))
+      (should (string-search "Rust toolchain: sudo apt-get install -y rustc-1.91 cargo-1.91 gcc" out))
+      (should (string-search "/usr/lib/rust-1.91/bin" out))
+      (should-not (string-search "1.75" out)))
+    ;; 4. Debian trixie (1.85) and no versioned package: a private rustup, from the versioned archive
+    (let ((out (cdr (drgnx-install-test--rust-plan "debian-13" tmp (list drgnx-install-test--apt-cache) "RUST_CAND=1.85.0+dfsg1-1"
+                                                   "APT_SEARCH=rustc-1.85 - Rust\ncargo-1.85 - Cargo\n"))))
+      (should (string-search "Rust toolchain: a private rustup 1.28.2" out))
+      (should (string-search "/rustup with Rust 1.93.1" out))
+      (should (string-search "https://static.rust-lang.org/rustup/archive/1.28.2/x86_64-unknown-linux-gnu/rustup-init" out))
+      (should (string-search "sha256" out)))))
+
+(ert-deftest drgnx-install/a-too-old-default-package-is-not-offered ()
+  (drgnx-install-test--with-tmp tmp
+    (let ((out (cdr (drgnx-install-test--rust-plan "fedora-45" tmp (list drgnx-install-test--dnf) "RUST_CAND=1.75.0"))))
+      (should-not (string-search "dnf install -y cargo" out))
+      (should-not (string-search "1.75" out))
+      (should (string-search "a private rustup" out)))))
+
+(ert-deftest drgnx-install/no-cc-names-its-package ()
+  (drgnx-install-test--with-tmp tmp
+    (let ((stubs (list drgnx-install-test--cargo drgnx-install-test--rustc)))
+      (should (string-search "C compiler: sudo dnf install -y gcc"
+                             (cdr (drgnx-install-test--rust-plan "fedora-45" tmp stubs))))
+      (should (string-search "C compiler: sudo apt-get install -y gcc"
+                             (cdr (drgnx-install-test--rust-plan "ubuntu-26.04" tmp stubs))))
+      (should (string-search "C compiler: sudo pacman -S --needed --noconfirm gcc"
+                             (cdr (drgnx-install-test--rust-plan "arch" tmp stubs))))
+      (should (string-search "C compiler: xcode-select --install"
+                             (cdr (apply #'drgnx-install-test--run
+                                         (append (list "DRGNX_INSTALL_RUNTIME=" (drgnx-install-test--rust-path tmp stubs)
+                                                       "DRGNX_INSTALL_BREW=none")
+                                                 drgnx-install-test--macos)
+                                         '("--dry-run" "--method" "cask")))))
+      ;; the packages of a distro install bring gcc themselves
+      (should-not (string-search "C compiler: sudo"
+                                 (cdr (drgnx-install-test--rust-plan "fedora-45" tmp (list drgnx-install-test--dnf) "RUST_CAND=1.99.0")))))))
+
+(defun drgnx-install-test--keep-run (tmp stubs &rest env)
+  "A real `--yes --method keep' run in TMP with a stub checkout (bin/drgnx logs to TMP/drgnx.log; RT_FAIL=1 fails
+`runtime build') and a fake Emacs, on Fedora 45, with the Ratatoskr step on.  Return (EXIT . OUTPUT)."
+  (let* ((checkout (expand-file-name "drgnx" tmp)) (home (expand-file-name "home" tmp)))
+    (make-directory (expand-file-name "bin" checkout) t)
+    (make-directory home t)
+    (drgnx-install-test--script
+     (expand-file-name "bin/drgnx" checkout)
+     (concat "#!/bin/sh\necho \"drgnx $*\" >> \"$DRGNX_LOG\"\n"
+             "[ \"$1 $2\" = 'runtime build' ] && [ -n \"$RT_FAIL\" ] && exit 1\nexit 0\n"))
+    (apply #'drgnx-install-test--run
+           (append env
+                   (list "DRGNX_INSTALL_RUNTIME=" (drgnx-install-test--rust-path tmp stubs)
+                         (concat "DRGNX_LOG=" tmp "/drgnx.log") (concat "HOME=" home)
+                         (concat "DRGNX_DATA_DIR=" home "/.local/share/drgnx") (concat "DRGNX_CONFIG_DIR=" home "/.config/drgnx")
+                         (concat "XDG_CACHE_HOME=" tmp "/cache") (concat "XDG_STATE_HOME=" tmp "/state")
+                         (concat "DRGNX_INSTALL_EMACS=" (drgnx-install-test--fake-emacs tmp "31.1 t pgtk"))
+                         (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os "fedora-45")) "DRGNX_INSTALL_UNAME=Linux"
+                         "DRGNX_INSTALL_ARCH=x86_64"))
+           "--yes" "--method" "keep" "--prefix" (expand-file-name "prefix" tmp) (list "--source-dir" checkout))))
+
+(ert-deftest drgnx-install/the-toolchain-is-recorded ()
+  (drgnx-install-test--with-tmp tmp
+    (let* ((r (drgnx-install-test--keep-run tmp (list drgnx-install-test--cargo drgnx-install-test--rustc drgnx-install-test--cc)))
+           (record (drgnx-install-test--file (expand-file-name "home/.local/share/drgnx/cargo" tmp)))
+           (log (drgnx-install-test--file (expand-file-name "drgnx.log" tmp))))
+      (should (= (car r) 0))
+      ;; line 1: the absolute path of the cargo that was found; a distro or PATH cargo adds no other lines
+      (should (equal record (concat tmp "/rbin/cargo\n")))
+      ;; the build, then the install into the prefix, both after drgnx build
+      (should (< (string-search "drgnx build" log) (string-search "drgnx runtime build" log)))
+      (should (< (string-search "drgnx runtime build" log)
+                 (string-search (concat "drgnx runtime install --prefix " tmp "/prefix") log))))))
+
+(ert-deftest drgnx-install/a-failed-runtime-build-warns-and-goes-on ()
+  (drgnx-install-test--with-tmp tmp
+    (let* ((r (drgnx-install-test--keep-run tmp (list drgnx-install-test--cargo drgnx-install-test--rustc drgnx-install-test--cc)
+                                            "RT_FAIL=1"))
+           (log (drgnx-install-test--file (expand-file-name "drgnx.log" tmp))))
+      (should (= (car r) 0))
+      (should (string-search "the Ratatoskr build failed" (cdr r)))
+      (should (string-search (concat tmp "/state/drgnx/runtime-build.log") (cdr r)))   ; the log path
+      (should (string-search "drgnx runtime build" (cdr r)))                           ; the fix
+      (should (string-search "Ratatoskr is not built" (cdr r)))
+      (should-not (string-search "runtime install" log))
+      (should (string-search "drgnx doctor" log))                                       ; drgnx still runs
+      (should (file-exists-p (expand-file-name "home/.local/share/drgnx/cargo" tmp))))))

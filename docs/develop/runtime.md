@@ -306,6 +306,29 @@ root's own path must leave room for them within 103 bytes (a short link to a dee
 `test/conformance/class-matrix.json` is not a row: it is the hand-written class table (`{method: [classes]}`) that the
 registry's test and the `class_matrix` step read.
 
+## Building and installing Ratatoskr
+
+Users get the binary from install.sh and `drgnx update`; both call `drgnx runtime` (bin/drgnx, plain bash):
+
+- `drgnx runtime build [--install] [--prefix DIR]`: `cargo build --release --locked -j N --manifest-path
+  runtime/Cargo.toml -p drgnx-ratatoskr`, with **no** `test-hooks` feature. The cargo is the one in `<data>/cargo`
+  (install.sh records it, with `RUSTUP_HOME`/`CARGO_HOME` lines for a private rustup), else `cargo` on `PATH`; neither:
+  exit 1, "no Rust toolchain: run install.sh again". `CARGO_TARGET_DIR` is `<cache>/ratatoskr-target`, `CARGO_HOME`
+  `<cache>/cargo` unless the record sets it, `DRGNX_BUILD_COMMIT` is the checkout's HEAD (plus `-dirty`) and
+  `DRGNX_CHECKOUT` the checkout, so `ratatoskr version --json` says what it was built from. On Linux with a user systemd
+  the build runs in `systemd-run --user --scope` with `MemoryMax` min(jobs x 1536 MiB + 1 GiB, available - 1 GiB) and
+  `MemorySwapMax=0`; without one, `-j` alone and a note. macOS has no cap.
+- `drgnx runtime install [--prefix DIR]`: refuses a binary whose `version --json` says `"test_hooks": true` (or says
+  nothing), copies it to `<data>/bin/ratatoskr.new` and renames it to `ratatoskr` (a running hub sees a new inode at
+  its resolved path); with `--prefix` links `DIR/bin/ratatoskr` and `DIR/bin/rtsk`.
+- `drgnx update` runs `runtime build --install` as its third step; a failure rolls the update back
+  (`DRGNX_UPDATE_RUNTIME_CMD` replaces the step in tests). The doctor's `ratatoskr` check (group Agents) reads
+  `ratatoskr doctor --json`: no binary, test hooks or a bad socket directory fail; a failed runtime update, a binary or
+  hub older than the checkout, or an Emacs SQLite in 3.7.0 to 3.51.2 (WAL bug) warn.
+
+Tests set `DRGNX_INSTALL_RUNTIME=none` so install.sh runs no toolchain probe or build; `bin/drgnx test --install` builds
+for real.
+
 ## Fuzzing
 
 `runtime/fuzz/` is a cargo-fuzz crate with its own `[workspace]` (the product workspace excludes it). It builds on
