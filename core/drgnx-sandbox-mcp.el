@@ -21,6 +21,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'drgnx-paths)
+(require 'drgnx-guard)
 (require 'drgnx-hub-client)
 (require 'drgnx-agents)
 (require 'drgnx-mcp-bridge)
@@ -121,8 +122,9 @@ to call again."
     (ignore-errors (delete-file path))          ; a hub that ended without closing left it
     (let ((p (make-network-process :name (format "drgnx-sandbox-mcp %s %s" (drgnx-agent-session-id s) name)
                                    :family 'local :server t :service path :noquery t :coding 'binary
-                                   :log #'drgnx-sandbox-mcp--accept :filter #'drgnx-sandbox-mcp--from-agent
-                                   :sentinel #'drgnx-sandbox-mcp--conn-sentinel)))
+                                   :log #'drgnx-sandbox-mcp--accept
+                                   :filter (drgnx-guard-wrap #'drgnx-sandbox-mcp--from-agent "sandbox MCP agent")
+                                   :sentinel (drgnx-guard-wrap #'drgnx-sandbox-mcp--conn-sentinel "sandbox MCP agent"))))
       ;; copied to each connection's plist
       (process-put p :drgnx-sandbox-mcp (drgnx-agent-session-id s))
       (process-put p :session s)
@@ -179,8 +181,9 @@ coordination server runs git where it starts."
                         (make-process :name (format "drgnx-sandbox-mcp %s server" sid)
                                       :command (cons (plist-get spec :command) (append (plist-get spec :args) nil))
                                       :connection-type 'pipe :coding 'binary :noquery t :stderr err
-                                      :filter #'drgnx-sandbox-mcp--from-server
-                                      :sentinel #'drgnx-sandbox-mcp--server-sentinel))))
+                                      :filter (drgnx-guard-wrap #'drgnx-sandbox-mcp--from-server "sandbox MCP server")
+                                      :sentinel (drgnx-guard-wrap #'drgnx-sandbox-mcp--server-sentinel
+                                                                  "sandbox MCP server")))))
     (process-put server :drgnx-sandbox-mcp sid)
     (process-put server :conn conn)
     (process-put server :stderr err)

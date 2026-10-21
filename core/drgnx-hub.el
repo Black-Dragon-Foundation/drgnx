@@ -642,9 +642,11 @@ Signals an error when a hub already serves there."
         drgnx-hub--server
         (make-network-process :name "drgnx-hub" :family 'local :server t :service socket :noquery t
                               :coding 'utf-8-unix
-                              :filter (lambda (conn chunk)
-                                        (drgnx-hub--lines conn chunk (lambda (j) (drgnx-hub--serve-request conn j))
-                                                          (lambda (line) (drgnx-hub--malformed conn line)) drgnx-hub--max-line))))
+                              :filter (drgnx-guard-wrap
+                                       (lambda (conn chunk)
+                                         (drgnx-hub--lines conn chunk (lambda (j) (drgnx-hub--serve-request conn j))
+                                                           (lambda (line) (drgnx-hub--malformed conn line)) drgnx-hub--max-line))
+                                       "hub requests")))
   ;; serving now: a resumed agent registers with this hub's gateway directly
   (drgnx-hub--resume-sessions)
   drgnx-hub--server)

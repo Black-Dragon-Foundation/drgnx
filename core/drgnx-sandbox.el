@@ -14,6 +14,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'drgnx-paths)
+(require 'drgnx-guard)
 (require 'drgnx-timer)
 
 (declare-function drgnx-hub-socket "drgnx-hub-client" ())
@@ -492,15 +493,17 @@ ended.  The process; signals when it cannot start, leaving nothing behind."
          (p (condition-case e
                 (make-process
                  :name name :buffer out :noquery t :connection-type 'pipe :command argv
-                 :sentinel (lambda (p _event)
-                             (unless (process-live-p p)
-                               (drgnx-timer-cancel (cons 'sandbox-step-timeout p))
-                               (let ((text (string-trim (with-current-buffer out (buffer-string)))))
-                                 (kill-buffer out)
-                                 (with-demoted-errors "drgnx sandbox: %S"
-                                   (funcall done (if (process-get p :timed-out)
-                                                     (cons :timeout (format "did not finish in %s s" timeout))
-                                                   (cons (process-exit-status p) text))))))))
+                 :sentinel (drgnx-guard-wrap
+                            (lambda (p _event)
+                              (unless (process-live-p p)
+                                (drgnx-timer-cancel (cons 'sandbox-step-timeout p))
+                                (let ((text (string-trim (with-current-buffer out (buffer-string)))))
+                                  (kill-buffer out)
+                                  (with-demoted-errors "drgnx sandbox: %S"
+                                    (funcall done (if (process-get p :timed-out)
+                                                      (cons :timeout (format "did not finish in %s s" timeout))
+                                                    (cons (process-exit-status p) text)))))))
+                            "sandbox helper"))
               (error (kill-buffer out) (signal (car e) (cdr e))))))
     (drgnx-timer-start (cons 'sandbox-step-timeout p) timeout #'drgnx-sandbox--timed-out :args (list p) :owner p)
     (ignore-errors (process-send-eof p))

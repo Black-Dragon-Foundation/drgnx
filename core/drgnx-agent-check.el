@@ -23,6 +23,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'json)
+(require 'drgnx-guard)
 (require 'url-parse)
 (require 'url-util)
 (require 'drgnx-agent-config)
@@ -457,7 +458,7 @@ then the oldest while it would not fit under the reader's cap (`drgnx-agent-chec
          (process-environment (append (mapcar (lambda (c) (format "%s=%s" (car c) (cdr c))) (alist-get 'env spec))
                                       process-environment))
          (err (make-pipe-process :name "drgnx-check-stderr" :noquery t :coding 'utf-8-unix
-                                 :filter #'drgnx-agent-check--stderr-filter))
+                                 :filter (drgnx-guard-wrap #'drgnx-agent-check--stderr-filter "MCP check stderr")))
          proc)
     (unwind-protect
         (progn
@@ -468,7 +469,8 @@ then the oldest while it would not fit under the reader's cap (`drgnx-agent-chec
           (setq proc (condition-case nil
                          (make-process :name "drgnx-check-server" :command (cons command args) :connection-type 'pipe
                                        :noquery t :coding 'utf-8-unix :stderr err
-                                       :filter #'drgnx-agent-check--stdout-filter :sentinel #'ignore)
+                                       :filter (drgnx-guard-wrap #'drgnx-agent-check--stdout-filter "MCP check server")
+                                       :sentinel #'ignore)
                        (file-missing (drgnx-agent-check--fail 'failed "The command %s was not found." command))
                        (file-error (drgnx-agent-check--fail 'failed "The command %s cannot be run." command))))
           (drgnx-agent-check--session
@@ -592,8 +594,10 @@ is told as such."
          (raw "") (answer nil)
          (proc (drgnx-agent-check--http-connect target)))
     (set-process-coding-system proc 'binary 'binary)
-    (set-process-filter proc (lambda (_p s) (when (< (length raw) drgnx-agent-check--message-limit)
-                                              (setq raw (concat raw s)))))
+    (set-process-filter proc (drgnx-guard-wrap
+                              (lambda (_p s) (when (< (length raw) drgnx-agent-check--message-limit)
+                                               (setq raw (concat raw s))))
+                              "MCP check HTTP"))
     (set-process-sentinel proc #'ignore)
     (unwind-protect
         (progn

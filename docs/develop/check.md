@@ -101,9 +101,9 @@ call, whose callback is not `(drgnx-guard-wrap …)`, `nil`, `#'ignore` or `#'in
 - `drgnx-lint/the-guard-lint-sees-each-form`: the scanner on a scratch checkout, one string per form.
 
 A row is `(:file F :form CALL :near DEFUN :why WHY :until TASK)`, one per site (two sites of one call in one
-definition are two equal rows). TASK is `18` (notices Task 18: core and `wb`), `"td-t15"` … `"td-t23"` (the
+definition are two equal rows). TASK is `"td-t15"` … `"td-t23"` (the
 teardown batch whose rider wraps the module) or `"runner"` (the hub-protocol sweep moves the site to
-`drgnx-proc-start`). The list only shrinks: the change that wraps a site deletes its row in the same commit; a branch
+`drgnx-proc-start`); core and `wb` have no rows left except the runner's. The list only shrinks: the change that wraps a site deletes its row in the same commit; a branch
 merged later that adds a site adds its row in its merge commit.
 
 ## Skips are listed, and some must not happen

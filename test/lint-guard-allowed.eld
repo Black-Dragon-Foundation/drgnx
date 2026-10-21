@@ -2,41 +2,10 @@
 ;; One row per site: (:file F :form CALL :near DEFUN :why STRING :until TASK).  CALL is the watched call
 ;; (make-process, make-network-process, make-pipe-process, make-serial-process, set-process-filter,
 ;; set-process-sentinel); DEFUN the name of the definition holding it ("top-level" outside any); two sites of one
-;; call in one definition are two equal rows.  TASK: 18 (notices Task 18 wraps core and wb), td-t15 … td-t23 (the
-;; teardown batch whose rider wraps the module), or "runner" (the hub-protocol sweep moves the site to
-;; `drgnx-proc-start', which wraps its own callbacks).  Rows can only go: the task that wraps a site deletes its row.
+;; call in one definition are two equal rows.  TASK: td-t15 … td-t23 (the teardown batch whose rider wraps the
+;; module), or "runner" (the hub-protocol sweep moves the site to `drgnx-proc-start', which wraps its own
+;; callbacks).  Core and `wb' are guarded (notices Task 18).  Rows can only go: the task that wraps a site deletes its row.
 (
- ;; core: notices Task 18
- (:file "core/drgnx-acp.el" :form make-pipe-process :near "drgnx-acp-start" :why "an agent's stderr, kept to its tail" :until 18)
- (:file "core/drgnx-acp.el" :form make-process :near "drgnx-acp-start" :why "an ACP agent's JSON-RPC stream and its exit" :until 18)
- (:file "core/drgnx-agent-check.el" :form make-pipe-process :near "drgnx-agent-check--stdio" :why "a checked MCP server's stderr" :until 18)
- (:file "core/drgnx-agent-check.el" :form make-process :near "drgnx-agent-check--stdio" :why "a checked MCP server over stdio" :until 18)
- (:file "core/drgnx-agent-check.el" :form set-process-filter :near "drgnx-agent-check--http-post" :why "a checked MCP server over HTTP" :until 18)
- (:file "core/drgnx-build.el" :form make-process :near "drgnx-build" :why "the byte-compile job's end" :until 18)
- (:file "core/drgnx-doctor.el" :form make-process :near "drgnx-doctor--checkout-init" :why "the doctor's git read of the checkout" :until 18)
- (:file "core/drgnx-gateway.el" :form make-network-process :near "drgnx-gateway-start" :why "the gateway's TCP clients" :until 18)
- (:file "core/drgnx-gateway.el" :form make-network-process :near "drgnx-gateway-listen-socket" :why "the gateway's socket clients" :until 18)
- (:file "core/drgnx-gateway.el" :form make-process :near "drgnx-gateway--forward" :why "the upstream curl of a forwarded request" :until 18)
- (:file "core/drgnx-hub-client.el" :form make-network-process :near "drgnx-hub--ping-socket" :why "the probe of a running hub" :until 18)
- (:file "core/drgnx-hub.el" :form make-network-process :near "drgnx-hub-serve" :why "the hub's clients' requests" :until 18)
- (:file "core/drgnx-hub-client.el" :form make-network-process :near "drgnx-hub--connect-socket" :why "a client connection's filter, handed in by the caller" :until 18)
- (:file "core/drgnx-job-snapshot.el" :form make-process :near "drgnx-job-snapshot--run" :why "a job snapshot's commands" :until 18)
- (:file "core/drgnx-job-worktree.el" :form make-process :near "drgnx-job-worktree--run" :why "a job worktree's commands" :until 18)
- (:file "core/drgnx-mcp-bridge.el" :form make-network-process :near "drgnx-mcp-bridge-main" :why "the MCP bridge's hub socket (a batch Emacs)" :until 18)
- (:file "core/drgnx-onboard.el" :form make-process :near "drgnx-onboard--claude-login-state" :why "claude auth status, read once" :until 18)
- (:file "core/drgnx-sandbox-mcp.el" :form make-network-process :near "drgnx-sandbox-mcp--listen" :why "a sandboxed agent's MCP socket" :until 18)
- (:file "core/drgnx-sandbox-mcp.el" :form make-process :near "drgnx-sandbox-mcp--start" :why "a sandboxed MCP server" :until 18)
- (:file "core/drgnx-sandbox-proxy.el" :form make-network-process :near "drgnx-sandbox-proxy--connect" :why "the proxy's upstream connection (a batch Emacs)" :until 18)
- (:file "core/drgnx-sandbox-proxy.el" :form make-process :near "drgnx-sandbox-proxy-main" :why "the proxy's control pipe (a batch Emacs)" :until 18)
- (:file "core/drgnx-sandbox-proxy.el" :form make-network-process :near "drgnx-sandbox-proxy-main" :why "the proxy's listener, socket form (a batch Emacs)" :until 18)
- (:file "core/drgnx-sandbox-proxy.el" :form make-network-process :near "drgnx-sandbox-proxy-main" :why "the proxy's listener, TCP form (a batch Emacs)" :until 18)
- (:file "core/drgnx-sandbox-proxy.el" :form make-process :near "drgnx-sandbox-proxy-start" :why "the proxy process's end" :until 18)
- (:file "core/drgnx-sandbox-relay.el" :form make-network-process :near "drgnx-sandbox-relay--accept" :why "the relay's upstream (a batch Emacs)" :until 18)
- (:file "core/drgnx-sandbox-relay.el" :form make-network-process :near "drgnx-sandbox-relay-main" :why "the relay's listener (a batch Emacs)" :until 18)
- (:file "core/drgnx-sandbox.el" :form make-process :near "drgnx-sandbox--spawn" :why "a sandbox helper's end" :until 18)
- (:file "core/drgnx-secrets.el" :form make-pipe-process :near "drgnx-secrets-decrypt" :why "age's stderr" :until 18)
- (:file "core/drgnx-secrets.el" :form make-process :near "drgnx-secrets-decrypt" :why "age's decrypted output" :until 18)
- (:file "wb/drgnx-explorer.el" :form make-process :near "drgnx-explorer--gio-trash" :why "gio trash's end" :until 18)
  ;; core and wb: moved to `drgnx-proc-start' / `drgnx-git' by the hub-protocol sweep (Tasks 5–8)
  (:file "core/drgnx-agent-check.el" :form set-process-sentinel :near "drgnx-agent-check--kill-unit" :why "systemctl kill of a check's scope (sweep Task 8)" :until "runner")
  (:file "core/drgnx-agent-check.el" :form make-pipe-process :near "drgnx-agent-check--start" :why "a checked agent's stderr (sweep Task 8)" :until "runner")

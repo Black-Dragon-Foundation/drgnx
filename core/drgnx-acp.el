@@ -16,6 +16,7 @@
 (require 'subr-x)
 (require 'drgnx-paths)
 (require 'drgnx-timer)
+(require 'drgnx-guard)
 
 (cl-defstruct (drgnx-acp-conn (:constructor drgnx-acp--make) (:copier nil))
   process stderr-process (next-id 0) (pending (make-hash-table :test #'eql)) input-buffer (stderr "")
@@ -95,10 +96,12 @@ ON-NOTIFICATION: (CONN METHOD PARAMS); ON-REQUEST: (CONN METHOD PARAMS ID) → (
          (default-directory (file-name-as-directory (expand-file-name (or cwd default-directory))))
          (process-environment (append env process-environment))
          (stderr (make-pipe-process :name "drgnx-acp-stderr" :noquery t :coding 'utf-8
-                                    :filter (lambda (_p s)
-                                              (let ((all (concat (drgnx-acp-conn-stderr conn) s)))
-                                                (setf (drgnx-acp-conn-stderr conn)
-                                                      (substring all (max 0 (- (length all) drgnx-acp--stderr-max))))))
+                                    :filter (drgnx-guard-wrap
+                                             (lambda (_p s)
+                                               (let ((all (concat (drgnx-acp-conn-stderr conn) s)))
+                                                 (setf (drgnx-acp-conn-stderr conn)
+                                                       (substring all (max 0 (- (length all) drgnx-acp--stderr-max))))))
+                                             "ACP stderr")
                                     :sentinel #'ignore))
          (proc (condition-case err
                    (make-process :name "drgnx-acp" :connection-type 'pipe :noquery t
@@ -107,9 +110,11 @@ ON-NOTIFICATION: (CONN METHOD PARAMS); ON-REQUEST: (CONN METHOD PARAMS ID) → (
                                               (drgnx-command-ignoring-sigpipe (cons program (cdr command)))
                                             command)
                                  :coding 'utf-8-unix :stderr stderr
-                                 :filter (lambda (_p s) (drgnx-acp--input conn s))
-                                 :sentinel (lambda (p _event)
-                                             (unless (process-live-p p) (drgnx-acp--exited conn p))))
+                                 :filter (drgnx-guard-wrap (lambda (_p s) (drgnx-acp--input conn s)) "ACP agent")
+                                 :sentinel (drgnx-guard-wrap
+                                            (lambda (p _event)
+                                              (unless (process-live-p p) (drgnx-acp--exited conn p)))
+                                            "ACP agent exit"))
                  (error (delete-process stderr) (signal (car err) (cdr err))))))
     (setf (drgnx-acp-conn-process conn) proc (drgnx-acp-conn-stderr-process conn) stderr)
     ;; A sentinel can go uncalled (seen in the unit suite after the Explorer's tests): a watchdog
