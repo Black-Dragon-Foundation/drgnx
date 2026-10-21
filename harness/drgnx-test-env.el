@@ -37,9 +37,10 @@
 XAUTHORITY is the caller's; a GUI tier gets the harness compositor's own (from `:display').  The system data and
 configuration directories fall back to /usr/share and /etc/xdg when unset.")
 
-(defconst drgnx-test-env-scan-exempt '("HOME" "PATH" "PWD" "OLDPWD" "DRGNX_USER_ELPA")
-  "Variables that may hold a path under the real HOME: the tools on PATH, the working directory, and the read-only
-package directory (`DRGNX_USER_ELPA', deliberate: tests that load packages read it, never write it).")
+(defconst drgnx-test-env-scan-exempt '("HOME" "PATH" "PWD" "OLDPWD" "DRGNX_USER_ELPA" "DRGNX_RATATOSKR_BIN")
+  "Variables that may hold a path under the real HOME: the tools on PATH, the working directory, the read-only
+package directory (`DRGNX_USER_ELPA', deliberate: tests that load packages read it, never write it), and the
+Ratatoskr the client's tests run (`DRGNX_RATATOSKR_BIN': macOS CI builds it in the checkout, which is under HOME).")
 
 (defconst drgnx-test-env-set-variables
   '("HOME" "XDG_CONFIG_HOME" "XDG_DATA_HOME" "XDG_STATE_HOME" "XDG_CACHE_HOME" "XDG_RUNTIME_DIR" "DRGNX_CONFIG_DIR"
