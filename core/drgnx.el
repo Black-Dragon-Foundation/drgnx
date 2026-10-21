@@ -31,6 +31,7 @@
 (require 'drgnx-config)
 (require 'drgnx-shell-env)
 (require 'drgnx-notice-echo)
+(require 'drgnx-notice-save)
 (require 'drgnx-notices)
 
 (defgroup drgnx nil "drgnx, a workbench-first Emacs framework." :group 'convenience)
@@ -114,6 +115,7 @@ The steady GC threshold is set at the end, also when a step fails (early-init de
         (drgnx-session-setup)                         ; keep running or quit; the close button
         (drgnx-shell-env-start)                        ; the login shell's PATH, asynchronously
         (drgnx-notice-mode-line-mode 1)                ; the needs-you and problems counts in the mode line
+        (drgnx-notice-save-mode 1)                     ; this Emacs's notices in its session file, for the doctor
         (add-hook 'drgnx-first-gui-frame-hook #'drgnx-onboard--on-first-window)   ; a first start: the Welcome
         (add-hook 'drgnx-first-gui-frame-hook #'drgnx-ai--on-first-window)        ; the local AI runner, started again
         (let ((safe (getenv "DRGNX_SAFE")))            ; drgnx safe: the core only

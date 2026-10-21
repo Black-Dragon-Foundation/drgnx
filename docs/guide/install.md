@@ -264,6 +264,14 @@ run, without running it. It wants `@agentclientprotocol/claude-agent-acp` 0.93.0
 `@zed-industries/claude-agent-acp`, an older version, or a program of no package drgnx knows is a warning, with the
 one-line command that fixes it, or advice when the adapter is not in a global npm prefix ([agents.md](agents.md#sessions)). No adapter is only a notice. Details: [core.md](../develop/core.md#doctor-drgnx-doctorel).
 
+**What drgnx has told you.** Each running drgnx writes the problems it knows (the notices that are still true, and
+the last 50 warnings and failures) to its own file in `~/.local/state/drgnx/notices/`, two seconds after a change; at
+exit the file becomes `last.eld`. The doctor only reads them. A check of this kind prints what the running drgnx says
+and ends with `(this session)`, or `(this session, pid 1234, 5678)` when more than one drgnx is running; with none
+running, it prints the last session's, `(from the last session, 3 h ago)`, and those of a drgnx that died without
+exiting. Before the first start it says `no session recorded yet — start drgnx once`. The file of a dead drgnx is
+deleted after 7 days.
+
 A terminal-only Emacs (no graphical build) passes the `gui` check: drgnx runs in terminals, with no images and one font
 size.
 

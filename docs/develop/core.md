@@ -624,6 +624,19 @@ line over the `fail` conditions present. A single line names the item's `:comman
 command's key; a merged line and the startup line name the Notices list and its key. Lines go out as
 `(let ((message-truncate-lines t)) (message "%s" LINE))`.
 
+**The session file** (`core/drgnx-notice-save.el`, `drgnx-notice-save-mode`, on in `drgnx-init`).
+`drgnx-notice--save-soon` is on `drgnx-notice-functions`: unless it is already pending, it starts the idle timer
+`notices-save` (2 s, `:core`), whose write sees every change made meanwhile. `(drgnx-notice--save)` writes
+`<state>/notices/<PID>.eld` (`drgnx-notice-save-file`) through `drgnx-file-write` (`:fsync nil`): `(:version 1 :pid P
+:emacs V :daemon D :started S :written W :notices …)`, the conditions (oldest first) then the newest 50 `warn`/`fail`
+events. A notice is written without text properties and without any property that does not read back (a `:command`
+that does not goes; an unreadable `:id` becomes its printed form). The first write of a session deletes
+`notices/<PID>.eld` files of dead processes older than 7 days. `drgnx-notice--save-at-exit` (`kill-emacs-hook`) writes
+and renames the file to `last.eld` (`rename-file … t`); a failure there is a message. One file per process, so two
+running Emacsen never overwrite each other. `drgnx-notice-save-pid-live-p` is the liveness test (the pid's process
+name starts with `emacs` or `nidhogg`). The doctor reads the files; see "Doctor" (`drgnx-doctor-define-notices`).
+Tests: `test/unit/core-notice-save-test.el`.
+
 **The list and the mode-line pair** (`core/drgnx-notices.el`). `(drgnx-notices-show)` (command `notices`) pops to
 `*drgnx Notices*`, in `drgnx-notices-mode` (a `special-mode`; `g` redraws). It is drawn through the render
 pipeline's views (`wb/drgnx-view.el`, required when the list is first shown, so the rest of the file needs nothing
@@ -2271,6 +2284,17 @@ state dir (`drgnx-doctor--timers-report`), which the last session and the last h
 after failing 3 times in a row ([Timers](#timers)). OK "no timer stopped"; else WARN `KEY (FN): ERROR; …` with the
 report's age, fix "report the error; drgnx starts the timer again at the next start". A report stays until the next
 stop rewrites it, so an old one shows its age.
+
+**Notices in the doctor.** The fact `:notices`, `(drgnx-doctor--notices)`, reads the session files of
+`drgnx-notice-save` (never writes): `(:live (DATA…) :last DATA :crashed (DATA…))`. A file is *live* when its pid is a
+running Emacs (`drgnx-notice-save-pid-live-p`); `last.eld` is the last session; a dead pid's file is *crashed*, and
+ignored when its mtime is over 7 days old. `(drgnx-doctor-define-notices SOURCE &key group doc name)` defines the check
+NAME (default SOURCE) from them: SOURCE's notices from the live files merged by key (the later `:at` wins), else from
+`last.eld` and the crashed files; the status is the worst severity (else OK "no problems"); the detail is the texts
+joined by "; " (the first 5, then "and N more") and " (this session)", " (this session, pid P, Q)" when more than one
+is live, or " (from the last session, AGE)"; the fix is the first `:fix`; with no file at all, INFO "no session
+recorded yet — start drgnx once". Tests: `test/unit/doctor-test.el` (`drgnx-doctor/notices-*`,
+`define-notices-*`).
 
 ## Window managers (`drgnx-platform.el`)
 

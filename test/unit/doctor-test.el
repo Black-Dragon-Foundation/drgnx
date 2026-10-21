@@ -754,3 +754,126 @@
                                              " (reported 2 h ago)")))
             (should (equal (nth 2 r) "ask its package for a cheaper `:eval', or remove it from `mode-line-misc-info'"))))
       (delete-directory state t))))
+
+;;;; Notices: the doctor reads the session files and writes nothing
+
+(defmacro drgnx-doctor-test--with-notices (&rest body)
+  "BODY with an empty state dir (XDG_STATE_HOME) and `process-attributes' stubbed: only the pids in `live' are
+emacs processes, and `drgnx-doctor--checks' is restored afterwards."
+  (declare (indent 0) (debug t))
+  `(let* ((state (make-temp-file "drgnx-state" t))
+          (live nil)
+          (drgnx-doctor--checks (copy-tree drgnx-doctor--checks))   ; a redefinition changes the entry in place
+          (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment)))
+     (unwind-protect
+         (cl-letf (((symbol-function 'process-attributes)
+                    (lambda (pid) (and (memq pid live) '((comm . "emacs"))))))
+           ,@body)
+       (delete-directory state t))))
+
+(defun drgnx-doctor-test--session (name written notices &optional age)
+  "Write the session file NAME (\"4242\" or \"last\") written WRITTEN seconds ago, holding NOTICES; its mtime is
+AGE seconds ago (default WRITTEN).  The pid in the data is NAME's number."
+  (let ((file (expand-file-name (concat "drgnx/notices/" name ".eld") (getenv "XDG_STATE_HOME"))))
+    (make-directory (file-name-directory file) t)
+    (with-temp-file file
+      (prin1 (list :version 1 :pid (string-to-number name) :emacs "31.1" :daemon nil :started 1.0
+                   :written (- (float-time) written) :notices notices)
+             (current-buffer)))
+    (set-file-times file (time-subtract nil (or age written)))
+    file))
+
+(defun drgnx-doctor-test--note (source severity text &optional fix)
+  (append (list :source source :id text :severity severity :life 'condition :text text :at 1.0)
+          (and fix (list :fix fix))))
+
+(ert-deftest drgnx-doctor/notices-live-session ()
+  (drgnx-doctor-test--with-notices
+    (setq live '(4242))
+    (drgnx-doctor-test--session "4242" 5 (list (drgnx-doctor-test--note 'keys 'warn "clash")))
+    (let ((n (drgnx-doctor--notices)))
+      (should (= 1 (length (plist-get n :live))))
+      (should (= 4242 (plist-get (car (plist-get n :live)) :pid)))
+      (should-not (plist-get n :last))
+      (should-not (plist-get n :crashed)))))
+
+(ert-deftest drgnx-doctor/notices-last-session-with-its-age ()
+  (drgnx-doctor-test--with-notices
+    (drgnx-doctor-test--session "last" 10800 (list (drgnx-doctor-test--note 'keys 'warn "clash")))
+    (drgnx-doctor-define-notices 'keys :group "drgnx" :doc "d" :name 'keys-notices)
+    (let ((n (drgnx-doctor--notices)))
+      (should (plist-get n :last))
+      (should-not (plist-get n :live)))
+    (should (equal (drgnx-doctor-check 'keys-notices (list :notices (drgnx-doctor--notices)))
+                   '(warn "clash (from the last session, 3 h ago)" nil)))))
+
+(ert-deftest drgnx-doctor/notices-a-crashed-session ()
+  (drgnx-doctor-test--with-notices
+    (drgnx-doctor-test--session "5151" 120 (list (drgnx-doctor-test--note 'keys 'fail "boom")))
+    (drgnx-doctor-test--session "5152" (* 8 86400) (list (drgnx-doctor-test--note 'keys 'fail "ancient")))
+    (let ((n (drgnx-doctor--notices)))
+      (should (equal '(5151) (mapcar (lambda (d) (plist-get d :pid)) (plist-get n :crashed))))   ; 7 days: ignored
+      (should-not (plist-get n :live))
+      (drgnx-doctor-define-notices 'keys :group "drgnx" :doc "d" :name 'keys-notices)
+      (should (equal '(fail "boom (from the last session, 2 min ago)" nil)
+                     (drgnx-doctor-check 'keys-notices (list :notices n)))))))
+
+(ert-deftest drgnx-doctor/notices-two-live-sessions ()
+  (drgnx-doctor-test--with-notices
+    (setq live '(4242 4343))
+    (drgnx-doctor-test--session "4242" 5 (list (drgnx-doctor-test--note 'keys 'warn "clash")))
+    (drgnx-doctor-test--session "4343" 5 (list (drgnx-doctor-test--note 'keys 'warn "other")))
+    (drgnx-doctor-test--session "last" 50 (list (drgnx-doctor-test--note 'keys 'fail "old news")))
+    (drgnx-doctor-define-notices 'keys :group "drgnx" :doc "d" :name 'keys-notices)
+    (let* ((n (drgnx-doctor--notices))
+           (r (drgnx-doctor-check 'keys-notices (list :notices n))))
+      (should (= 2 (length (plist-get n :live))))
+      (should (eq 'warn (car r)))
+      (should (string-search "clash" (nth 1 r)))
+      (should (string-search "other" (nth 1 r)))
+      (should-not (string-search "old news" (nth 1 r)))
+      (should (string-match-p "(this session, pid 4242, 4343)\\'" (nth 1 r))))))
+
+(ert-deftest drgnx-doctor/notices-no-session-yet ()
+  (drgnx-doctor-test--with-notices
+    (drgnx-doctor-define-notices 'keys :group "drgnx" :doc "d" :name 'keys-notices)
+    (should (equal (plist-get (drgnx-doctor--notices) :live) nil))
+    (should (equal '(info "no session recorded yet — start drgnx once" nil)
+                   (drgnx-doctor-check 'keys-notices (list :notices (drgnx-doctor--notices)))))))
+
+(ert-deftest drgnx-doctor/define-notices-worst-severity-texts-fix ()
+  (drgnx-doctor-test--with-notices
+    (setq live '(4242))
+    (drgnx-doctor-test--session
+     "4242" 5
+     (append (list (drgnx-doctor-test--note 'keys 'info "i1")
+                   (drgnx-doctor-test--note 'keys 'warn "w1" "fix w1")
+                   (drgnx-doctor-test--note 'keys 'fail "f1" "fix f1")
+                   (drgnx-doctor-test--note 'hooks 'fail "not mine"))
+             (cl-loop for i from 2 to 7 collect (drgnx-doctor-test--note 'keys 'info (format "i%d" i)))))
+    (drgnx-doctor-define-notices 'keys :group "drgnx" :doc "d")
+    (drgnx-doctor-define-notices 'timers :group "drgnx" :doc "d")
+    (let ((r (drgnx-doctor-check 'keys (list :notices (drgnx-doctor--notices)))))
+      (should (eq 'fail (car r)))
+      (should (string-prefix-p "i1; w1; f1; i2; i3; and 4 more" (nth 1 r)))   ; the first 5, then "and N more"
+      (should (string-suffix-p "(this session)" (nth 1 r)))
+      (should (equal "fix w1" (nth 2 r))))
+    (should (equal '(ok "no problems" nil)
+                   (drgnx-doctor-check 'timers (list :notices (drgnx-doctor--notices)))))))
+
+(ert-deftest drgnx-doctor/the-doctor-writes-nothing ()
+  (drgnx-doctor-test--with-notices
+    (setq live '(4242))
+    (drgnx-doctor-test--session "4242" 5 (list (drgnx-doctor-test--note 'keys 'warn "clash")))
+    (drgnx-doctor-test--session "5151" 400 (list (drgnx-doctor-test--note 'keys 'warn "crash")))
+    (drgnx-doctor-test--session "last" 50 nil)
+    (drgnx-doctor-define-notices 'keys :group "drgnx" :doc "d")
+    (let ((listing (lambda ()
+                     (mapcar (lambda (f) (list f (file-attribute-size (file-attributes f))
+                                               (file-attribute-modification-time (file-attributes f))))
+                             (directory-files-recursively state "")))))
+      (let ((before (funcall listing)))
+        (drgnx-doctor-check 'keys (list :notices (drgnx-doctor--notices)))
+        (drgnx-doctor--notices)
+        (should (equal before (funcall listing)))
+        (should (= 3 (length before)))))))
