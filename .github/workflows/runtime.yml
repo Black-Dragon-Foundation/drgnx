@@ -190,10 +190,12 @@ jobs:
           echo "9760d007363e3abba7c747489910f9f82d9fca53ba3bd3282e396fa3c97a3314  $RUNNER_TEMP/bwrap.tar.xz" | sha256sum -c -
           tar -xJf "$RUNNER_TEMP/bwrap.tar.xz" -C "$RUNNER_TEMP"
           cd "$RUNNER_TEMP/bubblewrap-0.12.0"
-          meson setup _build -Dman=disabled -Dbash_completion=disabled -Dzsh_completion=disabled -Dselinux=disabled -Dtests=false
+          # --prefix=/usr: Gleipnir trusts a bwrap only where root alone can change it, and the runner image makes
+          # /usr/local group-writable (Gleipnir rightly refuses /usr/local/bin/bwrap there)
+          meson setup _build --prefix=/usr -Dman=disabled -Dbash_completion=disabled -Dzsh_completion=disabled -Dselinux=disabled -Dtests=false
           ninja -C _build
           sudo ninja -C _build install
-          bwrap --version
+          ls -l /usr/bin/bwrap; /usr/bin/bwrap --version
       - name: user namespaces for unprivileged processes (AppArmor's restriction lifted)
         run: |
           uname -r
