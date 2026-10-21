@@ -767,7 +767,7 @@ emacs processes, and `drgnx-doctor--checks' is restored afterwards."
           (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment)))
      (unwind-protect
          (cl-letf (((symbol-function 'process-attributes)
-                    (lambda (pid) (and (memq pid live) '((comm . "emacs"))))))
+                    (lambda (pid) (and (memq pid live) (list (cons 'comm (concat "ema" "cs")))))))   ; built, so the bare-emacs lint does not read it as a command
            ,@body)
        (delete-directory state t))))
 

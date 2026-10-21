@@ -79,14 +79,14 @@ unreadable id becomes its printed form)."
                    (not (drgnx-notice-save-pid-live-p (string-to-number (file-name-base file)))))
           (ignore-errors (delete-file file)))))))
 
-(defun drgnx-notice--save ()
-  "Write this Emacs's session file now."
-  (let ((file (drgnx-notice-save-file)))
+(defun drgnx-notice--save (&optional file)
+  "Write this Emacs's session file now (or FILE); owner-only, as notice texts can carry paths."
+  (let ((file (or file (drgnx-notice-save-file))))
     (drgnx-file-write file
                       (list :version 1 :pid (emacs-pid) :emacs emacs-version :daemon (and (daemonp) t)
                             :started (float-time before-init-time) :written (float-time)
                             :notices (drgnx-notice--save-notices))
-                      :fsync nil)
+                      :fsync nil :private t)
     (unless drgnx-notice--save-pruned
       (setq drgnx-notice--save-pruned t)
       (drgnx-notice--save-prune))
@@ -100,10 +100,12 @@ unreadable id becomes its printed form)."
     (drgnx-timer-start 'notices-save 2 #'drgnx-notice--save :idle t :owner :core)))
 
 (defun drgnx-notice--save-at-exit ()
-  "On `kill-emacs-hook': write the file and rename it to `last.eld'; a failure is a message, never a stop."
+  "On `kill-emacs-hook': write `last.eld' (through `drgnx-file-write') and delete this process's file.
+A failure is a message, never a stop."
   (drgnx-timer-cancel 'notices-save)
   (condition-case err
-      (rename-file (drgnx-notice--save) (drgnx-notice-save-last-file) t)
+      (progn (drgnx-notice--save (drgnx-notice-save-last-file))
+             (delete-file (drgnx-notice-save-file)))
     (error (message "drgnx: the notice session file was not written: %s" (error-message-string err)))))
 
 (define-minor-mode drgnx-notice-save-mode
