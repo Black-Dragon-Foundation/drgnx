@@ -267,7 +267,8 @@ A file with a mistake gives its last good copy, else no projects (`drgnx-config-
 
 (defun drgnx-projects--remember (entries)
   "Add the ENTRIES (plists :name :root :url) whose root is not in projects.eld yet, and tell project.el about them.
-`drgnx-config-refused' when the file has a mistake or is newer: it is not changed."
+`drgnx-config-refused' when the file has a mistake or is newer: it is not changed.  project.el's list is changed by
+`drgnx-file-update' (`drgnx-file-busy' while another holds its lock past the timeout)."
   (drgnx-config-update
    'projects
    (lambda (data)
@@ -281,17 +282,30 @@ A file with a mistake gives its last good copy, else no projects (`drgnx-config-
              ;; written "~/…" under home, so the file travels (compared above as true names)
              (push (drgnx-projects--with-root e #'drgnx-portable-path) new))))
        (if new (plist-put data :projects (append old (nreverse new))) data))))
-  ;; project.el's list in drgnx's state dir: the session's own list when it already uses that file
-  ;; (so it learns them too), else a fresh read of that file (the command line).
-  (let ((ours (expand-file-name "projects" (drgnx-state-dir))))
-    (make-directory (drgnx-state-dir) t)
-    (cl-flet ((remember ()
-                (dolist (e entries)
-                  (when-let* ((p (ignore-errors (project-current nil (plist-get e :root)))))
-                    (project-remember-project p)))))
-      (if (equal (expand-file-name project-list-file) ours)
-          (remember)
-        (let ((project-list-file ours) (project--list 'unset)) (remember))))))
+  ;; project.el's list in drgnx's state dir, changed like drgnx's own files: under its lock, read fresh and replaced
+  ;; whole (project.el writes it in place with no lock, so two imports at once read each other's cut-off file).
+  ;; project.el still decides what is remembered (`project-list-exclude', the order); the session learns the result
+  ;; when it uses that file.
+  (let ((ours (expand-file-name "projects" (drgnx-state-dir))) (now nil))
+    (drgnx-file-update
+     ours
+     (lambda (old)
+       (let ((project-list-file ours)
+             (project--list (mapcar (lambda (e)   ; as `project--read-project-list' reads it
+                                      (let ((name (car e)))
+                                        (list (if (file-remote-p name) name
+                                                (file-name-as-directory (abbreviate-file-name name))))))
+                                    (seq-filter (lambda (e) (stringp (car-safe e))) (and (proper-list-p old) old)))))
+         (dolist (e entries)
+           (when-let* ((p (ignore-errors (project-current nil (plist-get e :root)))))
+             (project-remember-project p t)))
+         (setq now project--list)
+         (mapcar (lambda (e)                      ; as `project--write-project-list' writes it
+                   (let ((name (car e))) (list (if (file-remote-p name) name (expand-file-name name)))))
+                 project--list)))
+     :on-unreadable 'backup :header ";;; -*- lisp-data -*-" :pretty t)
+    (when (equal (expand-file-name project-list-file) ours)
+      (setq project--list now))))
 
 (defun drgnx-projects--refuse-bad-file ()
   "Signal `drgnx-config-refused' when projects.eld has a mistake or is newer: Import Projects changes nothing then,

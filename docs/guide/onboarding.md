@@ -208,8 +208,9 @@ your home is written `~/…`, so the file works on another machine: [second-mach
 remembered by project.el (its list lives in `~/.local/state/drgnx/projects`). A `projects.eld` with a mistake is never
 overwritten: Import Projects stops before it touches the board and says where the mistake is (and likewise for a file a
 newer drgnx wrote); the work tracker and search keep using its last good copy meanwhile. Two imports at once both land:
-`projects.eld` and the record of what was imported (`projects-imported.eld`) are changed under a lock, adding to what is
-there. Comments and keys of your own in `projects.eld` stay as they are.
+`projects.eld`, the record of what was imported (`projects-imported.eld`) and project.el's list are changed under a
+lock, adding to what is there, and each is replaced whole, so nothing ever reads a half-written one. Comments and keys
+of your own in `projects.eld` stay as they are.
 
 ### What `--non-interactive` writes
 
