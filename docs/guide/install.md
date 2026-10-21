@@ -255,7 +255,9 @@ drgnx app is installed (fix: `drgnx macos-app`), that Homebrew is there (also lo
 `/usr/local/bin`, in case it is not on PATH) and that the `drgnx` command is on PATH (fix: add `~/.local/bin` to PATH in
 your shell's profile, `~/.zprofile` for zsh or, with `SHELL` unset, when it exists; else `~/.profile`) — each only a warning. `portable-config` warns when the config dir holds a key in plain text (it names the file,
 never the key) or a machine-local file such as the old `emacs` record, and says which `projects.eld` roots are not
-cloned on this machine (info only; [second-machine.md](second-machine.md#the-doctors-check)). With Vim keys the `modal` check warns when the stack needs evil and it is not
+cloned on this machine (info only; [second-machine.md](second-machine.md#the-doctors-check)). The `modules`, `display-rules` and `key-problems` checks (and the problems under the Terminal group's keys row) are
+what the running drgnx says as notices (see below); `modules-report.eld` and `wb-report.eld` are no longer written, and
+`key-conflicts` still reads the conflict table of `keys-report.eld`. With Vim keys the `modal` check warns when the stack needs evil and it is not
 installed or not running (fix: `drgnx sync`, then restart, or choose another Keyboard Profile…), says when Vim waits for `drgnx sync`, and on
 GNOME notes that Alt+Space opens the window menu before drgnx sees it (Settings → Keyboard → Keyboard Shortcuts → Windows; the Leader
 Menu is on `M-SPC`, which replaces Emacs' `cycle-spacing`).

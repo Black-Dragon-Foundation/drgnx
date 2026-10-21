@@ -70,9 +70,12 @@ handlers, so a read at startup or from the palette never connects; an entry that
 once per change of an unusable file. The mode body reads under `condition-case`, so a bad file never keeps a guard
 off. Untrust This Folder takes effect in the session (`drgnx-trust--added`) even when the file cannot be changed.
 
-The report files in the state folder go this way: `wb-report.eld` (`drgnx-rules--write-report`, a startup hook, which
-also posts the `(wb . display-buffer-entry)` warn condition, cleared when the entry is back: an
-error becomes one `message`), `agent-checks.eld` (`drgnx-agent-check-remember`, `:private t`) and `check/durations.eld`
+The display-buffer entry is checked by `drgnx-rules--sync-entry-notice` (a startup hook), which posts the
+`(wb . display-buffer-entry)` warn condition, cleared when the entry is back; there is no `wb-report.eld`, no
+`modules-report.eld` (`drgnx-modules-report` stays in memory) and no `:problems` in `keys-report.eld` or
+`:fallback-problems` in `terminal-report.eld`: the doctor's `modules`, `display-rules` and `key-problems` checks are
+`drgnx-doctor-define-notices` declarations, and the Terminal keys row appends the `terminal` notices. The report files
+in the state folder go this way: `agent-checks.eld` (`drgnx-agent-check-remember`, `:private t`) and `check/durations.eld`
 (`drgnx-check--save-durations`) and `terminal-report.eld` (`drgnx-tty-frames--save-report`, from a terminal frame's
 hooks: an error goes to `drgnx-hooks-problems`) are written with `drgnx-file-write ... :fsync nil`, so a failed write
 keeps the old report. They are read with `drgnx-file-read`: `drgnx-tty--read-report` (which ui/terminal's
@@ -1011,7 +1014,7 @@ What it does **not** record:
   jit-lock its context timer) and kept in a variable; cancelled, it would stay dead for the session (undo boundaries
   for process output would stop). Such a timer stays pending, and the module's report says so: `:left`, a list of
   `"timer FN (FILE)"` (FILE is where FN is defined, `no file` when it is not) or `"timer a lambda"`, newest first. It
-  is cleared when the module's run starts and is in `modules-report.eld`. Read it as "this module's setup started
+  is cleared when the module's run starts and is in `drgnx-modules-report`. Read it as "this module's setup started
   these, and turning it off did not stop them": a line for a function that is the module's own means the module should
   start it through `drgnx-timer-start`, which ends it with the run.
 - **Global modes are owned by the first module that turns them on.** "Newly on" is all the net sees: when module

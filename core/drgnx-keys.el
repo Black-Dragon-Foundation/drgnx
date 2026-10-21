@@ -623,6 +623,7 @@ adds what it finds (a failure, a lifted prefix) to `drgnx-keys-last' and rewrite
                                     (when late
                                       (setq drgnx-keys-last (plist-put drgnx-keys-last :problems
                                                                        (append (plist-get drgnx-keys-last :problems) (list p))))
+                                      (drgnx-keys--notify-problems (plist-get drgnx-keys-last :problems))
                                       (drgnx-keys--write-report)))))))))
     (cond ((and feature (not (featurep feature))) (with-eval-after-load feature (funcall bind t)))
           ((and (boundp mapsym) (keymapp (symbol-value mapsym))) (funcall bind))
@@ -649,7 +650,9 @@ Keys problems are `warn', so they never echo.  Never signals."
         (drgnx-notice-clear 'keys)
         (dolist (p problems)
           (let ((text (format "%s" p)))
-            (drgnx-notify 'keys 'warn text :id text :life 'condition))))
+            (drgnx-notify 'keys 'warn text :id text :life 'condition
+                          :fix (format "fix %s (docs/guide/keys.md)"
+                                       (abbreviate-file-name (expand-file-name "keys.eld" (drgnx-user-dir))))))))
     (error (message "drgnx: key problems not recorded as notices: %s" (error-message-string err)))))
 
 (defun drgnx-keys-apply ()
@@ -774,7 +777,8 @@ Code's C-k chords over kill-line) are one line."
 (defvar drgnx-modal-suspended)
 
 (defun drgnx-keys--report-modal ()
-  "The report's `:modal': (:engine ENGINE :module MODULE :running BOOL :pending LAYERS :suspended BOOL).  ENGINE is
+  "The report's `:modal': (:engine ENGINE :module MODULE :running BOOL :pending LAYERS :suspended BOOL
+:module-status STATUS).  STATUS is MODULE's status in `drgnx-modules-report' (left out when it has none).  ENGINE is
 the modal engine the stack in force needs (nil without one, and nil while the user has turned modal editing off for
 these layers: the engine is not wanted, not missing; SUSPENDED says so), MODULE the module that provides it (for the
 doctor, which runs without the modal core), RUNNING whether it runs, PENDING the layers a non-interactive choice of
@@ -783,11 +787,15 @@ Vim keys left waiting for `drgnx sync' (`:pending-layers' in keys.eld, read as d
          (suspended (and (bound-and-true-p drgnx-modal-suspended) (equal (car drgnx-modal-suspended) layers) t))
          (engine (and (fboundp 'drgnx-modal-engine-for) (not suspended)
                       (ignore-errors (drgnx-modal-engine-for layers)))))
-    (list :engine engine
-          :module (and engine (fboundp 'drgnx-modal--engine-module) (drgnx-modal--engine-module engine))
-          :running (and engine (eq engine drgnx-modal-running) t)
-          :pending (let ((drgnx-keys-problems nil)) (plist-get (drgnx-keys-read-user) :pending-layers))
-          :suspended suspended)))
+    (let* ((module (and engine (fboundp 'drgnx-modal--engine-module) (drgnx-modal--engine-module engine)))
+           (status (and module (fboundp 'drgnx-modules-report)
+                        (plist-get (alist-get module (drgnx-modules-report)) :status))))
+      (append (list :engine engine
+                    :module module
+                    :running (and engine (eq engine drgnx-modal-running) t)
+                    :pending (let ((drgnx-keys-problems nil)) (plist-get (drgnx-keys-read-user) :pending-layers))
+                    :suspended suspended)
+              (and status (list :module-status status))))))
 
 (defun drgnx-keys--leader-menu-key ()
   "The key the Leader Menu is on in the global map (\"M-SPC\" in the Vim profile), or nil."
@@ -795,14 +803,14 @@ Vim keys left waiting for `drgnx sync' (`:pending-layers' in keys.eld, read as d
     (car (seq-find (lambda (b) (eq (cdr (drgnx-commands--keymap-spec (cdr b))) 'global-map)) (drgnx-cmd-bound cmd)))))
 
 (defun drgnx-keys--write-report ()
-  "Write the conflicts and problems to the state dir for `drgnx doctor' (never prompts).  The conflicts end with the
-modal core's notes (`drgnx-modal-default-notes'); `:modal' says which engine the stack needs and whether it runs."
+  "Write the conflicts to the state dir for `drgnx doctor' (never prompts); the problems are notices of source `keys'.
+The conflicts end with the modal core's notes (`drgnx-modal-default-notes'); `:modal' says which engine the stack
+needs and whether it runs."
   (condition-case err
       (drgnx-file-write (expand-file-name "keys-report.eld" (drgnx-state-dir))
                         (list :time (format-time-string "%FT%T%z") :layers (plist-get drgnx-keys-last :layers)
                               :conflicts (append (drgnx-keys-conflict-lines)
                                                  (and (fboundp 'drgnx-modal-default-notes) (drgnx-modal-default-notes)))
-                              :problems (plist-get drgnx-keys-last :problems)
                               :modal (drgnx-keys--report-modal) :leader-menu-key (drgnx-keys--leader-menu-key))
                         :fsync nil)
     (error (push (format "cannot write the key report: %s" (error-message-string err))

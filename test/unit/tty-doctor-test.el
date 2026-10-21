@@ -86,6 +86,23 @@
       (should (eq (drgnx-tty-doctor-test--get results 'terminal :status) 'ok))
       (should-not (seq-find (lambda (r) (eq (plist-get (cdr r) :status) 'fail)) results)))))
 
+(ert-deftest drgnx-tty-doctor/fallback-problems-come-from-notices ()
+  ;; the keys row shows the `terminal' notices of the session files, not a :problems list of terminal-report.eld
+  (let* ((line "keys.eld :tty-fallback C-S-p → M-j not used: x")
+         (notices (list :live (list (list :pid 1 :written (float-time)
+                                          :notices (list (list :source 'terminal :id (cons "/dev/pts/7" line) :severity 'warn
+                                                               :life 'condition :text line :at 1.0)
+                                                         (list :source 'keys :id "k" :severity 'warn :life 'condition
+                                                               :text "not terminal" :at 1.0))))))
+         (tf (drgnx-tty-doctor-test--tf))
+         (r (drgnx-doctor-check 'terminal-keys (drgnx-tty-doctor-test--facts tf :notices notices))))
+    (should (eq (car r) 'warn))
+    (should (string-search line (nth 1 r)))
+    (should (string-search "kitty keyboard protocol" (nth 1 r)))
+    (should-not (string-search "not terminal" (nth 1 r)))
+    ;; without notices the row is as it was
+    (should (eq (car (drgnx-doctor-check 'terminal-keys (drgnx-tty-doctor-test--facts tf))) 'ok))))
+
 (ert-deftest drgnx-tty-doctor/keys-without-a-report-say-to-open-drgnx-once ()
   (drgnx-tty-doctor-test--with-path nil
     (let* ((tf (apply #'drgnx-tty-doctor-test--tf :caps nil :fallbacks nil drgnx-tty-doctor-test--ptyxis))   ; the first value of a key wins

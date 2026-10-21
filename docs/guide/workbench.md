@@ -166,9 +166,10 @@ The table is one entry at the **end** of `display-buffer-alist`, so your own ent
 `display-buffer-overriding-action` still win, and so does a caller that asks for a frame or for no window (`C-x 5 b`,
 `display-buffer-no-window`). `C-x 4 b` shows the buffer in another editor when there is one; a window you locked with
 `C-x w d` is left alone. If your configuration replaces the variable after drgnx started (`(setq display-buffer-alist …)`
-instead of `add-to-list`), drgnx's entry is gone and buffers go wherever Emacs puts them: every start writes
-`wb-report.eld` (in `~/.local/state/drgnx/`) once init is done, and `drgnx doctor` (`display-rules`) warns when the
-entry is missing. Add or change a rule with `drgnx-wb-place`:
+instead of `add-to-list`), drgnx's entry is gone and buffers go wherever Emacs puts them: once init is done,
+every start checks the entry and posts a warning notice (source `wb`) when it is missing, and `drgnx doctor`
+(`display-rules`) shows it. Buffers no rule matched are one quiet notice too; opening the Unrouted list shows them
+once and empties the list. Add or change a rule with `drgnx-wb-place`:
 
 ```elisp
 (drgnx-wb-place 'my-log-mode 'editor)                 ; a major mode (derived modes too)

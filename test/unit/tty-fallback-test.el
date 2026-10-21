@@ -259,11 +259,8 @@ binding are taken off afterwards."
           (drgnx-keys-last (list :bindings (tty-fallback-test--bindings "VS Code"))))
       (cl-letf (((symbol-function 'drgnx-tty-fallback--overrides) (lambda () '(("C-S-p" . "M-j") ("C-p" . "M-Z")))))
         (drgnx-tty-frames-write-report (selected-frame))
-        (let ((problems (plist-get (cdr (assoc "kx-a" (plist-get (tty-fallback-test--report) :terminals)))
-                                   :fallback-problems)))
-          (should (= (length problems) 2))
-          (should (string-match-p "M-j" (car problems)))
-          (should (string-match-p "C-p" (cadr problems))))))))
+        ;; the entry has no problems list: the notices of source `terminal' carry them
+        (should-not (plist-member (cdr (assoc "kx-a" (plist-get (tty-fallback-test--report) :terminals))) :fallback-problems))))))
 
 (ert-deftest drgnx-tty-fallback/a-bad-row-never-breaks-the-layer ()
   ;; a row whose key has no bytes (it cannot come from the table any more) is skipped: the rest is installed, the
@@ -579,16 +576,14 @@ binding are taken off afterwards."
 
 (ert-deftest drgnx-tty-fallback/facts-for-the-doctor ()
   (let ((report '(:terminals (("/dev/pts/3" :caps (:id vte :keys legacy) :fallback t
-                               :fallbacks (("C-S-f" nil "M-F" "<f6> f") ("C-S-p" nil nil "<f6> p"))
-                               :fallback-problems ("keys.eld :tty-fallback C-S-p → M-j not used: …"))
+                               :fallbacks (("C-S-f" nil "M-F" "<f6> f") ("C-S-p" nil nil "<f6> p")))
                               ("/dev/pts/4" :caps (:id kitty :keys kkp) :fallback nil
                                :fallbacks (("C-S-f" t nil nil))))
                              :hinted (vte))))
     (should (equal (drgnx-tty-fallback-facts report)
                    '((:tty "/dev/pts/3" :id vte :keys legacy :layer t
-                           :rows (("C-S-f" nil "M-F" "<f6> f") ("C-S-p" nil nil "<f6> p"))
-                           :problems ("keys.eld :tty-fallback C-S-p → M-j not used: …"))
-                     (:tty "/dev/pts/4" :id kitty :keys kkp :layer nil :rows (("C-S-f" t nil nil)) :problems nil))))))
+                           :rows (("C-S-f" nil "M-F" "<f6> f") ("C-S-p" nil nil "<f6> p")))
+                     (:tty "/dev/pts/4" :id kitty :keys kkp :layer nil :rows (("C-S-f" t nil nil))))))))
 
 (provide 'tty-fallback-test)
 ;;; tty-fallback-test.el ends here
