@@ -43,16 +43,19 @@
 
 (declare-function drgnx-state-sync "drgnx-state")
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)   ; `drgnx-test-with-state'
+(load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)   ; `drgnx-notice-test-with-model'
 (require 'drgnx-wait-fixture (expand-file-name "wait-fixture" (file-name-directory (macroexp-file-name))))
 
 (defmacro drgnx-cockpit-fixture-after-setup (&rest body)
   "Run tools/cockpit's setup outside a module run (its pane kinds as the test stubs them), then BODY, in a fresh
-workbench state store: its subscriptions go with the store afterwards, and its `cockpit-waiting' timer is cancelled."
+workbench state store and a fresh notice model (the setup defines the `questions' source): its subscriptions go with
+the store afterwards, and its `cockpit-waiting' timer is cancelled."
   (declare (indent 0))
   `(drgnx-test-with-state
-     (unwind-protect
-         (progn (funcall (plist-get (alist-get 'tools/cockpit drgnx-modules--table) :setup)) ,@body)
-       (drgnx-timer-cancel 'cockpit-waiting))))
+     (drgnx-notice-test-with-model
+       (unwind-protect
+           (progn (funcall (plist-get (alist-get 'tools/cockpit drgnx-modules--table) :setup)) ,@body)
+         (drgnx-timer-cancel 'cockpit-waiting)))))
 
 (defun drgnx-cockpit-fixture-show-pane (kind buffer home)
   "Show BUFFER as pane KIND in its HOME (`left', `right', `bottom' or `editor') of the selected frame, marked as the

@@ -169,7 +169,7 @@ fixture is a temp project with:
   `drgnx-cockpit-feed-schedule` only touches every feed buffer's view: one draw per DELAY, only while it shows (a
   hidden one's first draw counts a stale skip, then its marks arm nothing until it shows). Its SYNC,
   `drgnx-cockpit-feed--update`, first compares its key with the buffer's: `drgnx-cockpit--db-key` (`(data_version
-  total_changes())`, one query, shared with the graph's key and the waiting count) and the ids of the sessions in this
+  total_changes())`, one query, shared with the graph's key and the questions set's) and the ids of the sessions in this
   Emacs (their transcript links), and the window's fit. The key is stored only after a successful update, so a failed
   one is tried again; one buffer's error leaves the other's update. A new buffer, and `g`, read the store anew and draw
   at once (`drgnx-cockpit-feed--draw-now`).
@@ -204,18 +204,20 @@ fixture is a temp project with:
     (owned by the buffer, every `drgnx-cockpit-check-interval`: when the store changed since its update, another
     process wrote it, and its view is touched), and a buffer that starts showing catches up; any other loses its
     check. `pane-resized` (lane `idle`) touches the resized pane's view: it fits its window again.
-- **`(drgnx-cockpit-waiting-count)`**: the open questions (escalations, `ask_user`) that the jobs count
-  (`drgnx-job-ui-needs-you`) does not already hold: not an ask card (a question whose data names `:card`) and not a
-  job's message to you (data with `:message` and a `:job`). tools/cockpit's setup puts it on the status bar's
-  `drgnx-statusbar-waiting-functions`, so an ask card shows once there, as the jobs segment's ⚑.
-  `(drgnx-cockpit-feed--head-count)` is the timeline head's number: every open question and the open ask cards not
-  asked again, the model's `:questions` without permissions. Both come from `drgnx-cockpit-feed--waiting-pair`, cached
-  as `(STORE-KEY QUESTIONS . TOTAL)`: one query when nothing changed. Its key also holds
-  `drgnx-cockpit-include-closed-jobs`.
-- **`(drgnx-cockpit-feed-tell-statusbar)`**: calls `drgnx-statusbar-refresh` (when it is loaded) when the waiting count
-  changed since the bar was last told (it counts as told once the refresh returned). `cockpit-waiting`
-  (`drgnx-cockpit--waiting`, tools/cockpit's setup's timer) calls it every `drgnx-cockpit-check-interval` while the
-  module runs, whatever shows, so the bar moves when another process asks, without a hub event.
+- **`(drgnx-cockpit-feed-note-questions)`**: makes the `questions` notice set (`drgnx-notice-set`) when
+  `(drgnx-cockpit--db-key)` or `drgnx-cockpit-include-closed-jobs` changed since the last call (`drgnx-cockpit-feed--noted`;
+  one query when nothing changed, the key is kept only once the set was made). One item per open question
+  (escalations, `ask_user`), `:text` its `drgnx-cockpit-feed--describe`, `:command` `cockpit-answer`, `:scope` its job. The id
+  (`drgnx-cockpit-feed--question-id`) is `(card . CID)` when its data names `:card`, `(message . MID)` when it names
+  `:message` and has a `:job`, else `(question . QID)`; those are the ids the jobs set uses, so an ask card or a job's
+  message held by both counts once (the model dedupes). One `(card . CID)` item per open ask card no question names
+  (`drgnx-cockpit-feed--open-cards`). tools/cockpit's setup defines the source (`drgnx-notice-define-source
+  'questions`), so turning the module off clears it, and makes the first set. It is called by `cockpit-waiting`
+  (`drgnx-cockpit--waiting`, tools/cockpit's setup's timer, every `drgnx-cockpit-check-interval` while the module
+  runs, whatever shows, so the count moves when another process asks), by the graph's and the feed's checks, by
+  `drgnx-cockpit-feed--changed` (something was answered or sent) and by `drgnx-cockpit-feed--hub-event` on an
+  `events` event. It does nothing while the source is not defined. The cockpit never calls the status bar. The heads
+  show the model's count: the timeline's `◐ N waiting on you` reads `(drgnx-needs-you-count)`.
 - **`(drgnx-cockpit-answer QUESTION TEXT)`**: QUESTION is one of `drgnx-cockpit-feed--questions` (the model's
   `:questions`, then each session's permissions as `(:kind "permission" :agent :permission :summary :node)`).
   - An ask card: `drgnx-coord-card-settle`, which writes the `answer` event.
@@ -247,8 +249,8 @@ and render layers are built, so these are to be measured again):
 |---|---|
 | An update when nothing changed | 0.022 ms |
 | An update after one new event (both panes: a line appended, a row rewritten) | 1.7 ms, about 6,700 conses |
-| `drgnx-cockpit-waiting-count`, the store changed | 0.12 ms |
-| `drgnx-cockpit-waiting-count`, cached | 0.018 ms |
+| `drgnx-cockpit-feed-note-questions`, the store changed | not measured since Task 16 (it was 0.12 ms as the count) |
+| `drgnx-cockpit-feed-note-questions`, the store unchanged | one `db-key` query |
 
 ### Tests
 
@@ -261,8 +263,9 @@ stubbed. It covers:
   or starts a turn when idle);
 - the timeline's rows and chips in time order, a new chip changing only its row, rows that fit with the older
   chips one click away; waiting chips (questions, open ask cards) pinned past 80 newer chips, `‹ N ◐`;
-- a question in the graph, `drgnx-cockpit-waiting-count` and the timeline, then calm once answered; the
-  status bar told by tools/cockpit's look (`cockpit-waiting`) when the count changes;
+- a question in the graph, the `questions` set (`drgnx-needs-you-count`) and the timeline, then calm once answered; the
+  count moved by tools/cockpit's look (`cockpit-waiting`) when another process asks; an ask card and a job's message
+  counted once; the status bar never called;
 - `A` from a chip and from the graph;
 - the ASCII form, the buffers owning their hooks;
 - with a fresh state store (`drgnx-cockpit-fixture-show-pane`): a hidden pane keeps no timer and draws nothing (a
@@ -323,8 +326,8 @@ Owners:
   `drgnx-cockpit-check-interval`) looks for another process's writes and silent worktrees, and when it starts the view
   is touched to catch up; otherwise the check is cancelled. A resize touches the view (the drawing may now fit). Hidden,
   the graph keeps no timer.
-- `cockpit-waiting` (owned by tools/cockpit's run, every `drgnx-cockpit-check-interval`) tells the status bar of a new
-  waiting count (`drgnx-cockpit-feed-tell-statusbar`), whatever shows.
+- `cockpit-waiting` (owned by tools/cockpit's run, every `drgnx-cockpit-check-interval`) makes the `questions` set again
+  when the store changed (`drgnx-cockpit-feed-note-questions`), whatever shows.
 - `drgnx-cockpit-graph--encoded` (the SVG form of a text) is emptied at 4,096 texts.
 
 ### Cost
@@ -615,15 +618,16 @@ side is in [jobs.md](../guide/jobs.md#a-job-in-the-work-cockpit).
   Neither is a raw prompt (`agents/send`): the hub gives both under the user's header (`drgnx-coord-message-prompt`),
   and the agent's own words (the question answered) only on a quoted line. Discuss is the clash code's
   (`drgnx-job-card-act`), which quotes the user's text to the reviewer.
-- **One count of what needs you,** in `drgnx-job-ui.el`: `drgnx-job-ui-needs-you-count JOBS` gives `(N . NEWEST-JOB)`
-  (open cards and messages not acted on, of proposed, running and paused jobs), and `drgnx-job-ui-waiting-p JOB` says
-  whether a job counts. `drgnx-job-ui-note-jobs JOBS` makes them the `jobs` set (`drgnx-notice-set`; one item per
+- **One count of what needs you,** the notice model's `drgnx-needs-you-count` (Task 16 removed
+  `drgnx-job-ui-needs-you-count`): `drgnx-job-ui-waiting-p JOB` says whether a job (open cards and messages not acted on,
+  of proposed, running and paused jobs) counts. `drgnx-job-ui-note-jobs JOBS` makes them the `jobs` set (`drgnx-notice-set`; one item per
   open card `(card . CID)` and per message not acted on `(message . MID)`, scoped to the job, an `overlap` card
   with `:echo nil`); the recount's own `job/status` and the every-job pane's both call it, so a refresh of that pane
   counts for the notice model too and an action asks the hub once. A recount the hub does not answer, or a
   disconnect, makes the set `:unknown` ("Jobs: not known — …"). `drgnx-job-ui-needs-you` is the obsolete name of
-  `drgnx-needs-you-count`: the status bar's jobs segment reads it until Task 17 replaces the bar. Both heads show the count: `What needs you: N`,
-  `What needs you — every job: N`.
+  `drgnx-needs-you-count`: the status bar's jobs segment reads it until Task 17 replaces the bar. Both heads show the model's count:
+  `What needs you: N` is `(drgnx-needs-you-count JOB-ID)` and `What needs you — every job: N` is `(drgnx-needs-you-count)`;
+  the questions source's items count in both.
 
 ### Cost
 
