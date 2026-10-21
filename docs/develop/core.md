@@ -634,7 +634,8 @@ command's key; a merged line and the startup line name the Notices list and its 
 events. A notice is written without text properties and without any property that does not read back (a `:command`
 that does not goes; an unreadable `:id` becomes its printed form). The first write of a session deletes
 `notices/<PID>.eld` files of dead processes older than 7 days. `drgnx-notice--save-at-exit` (`kill-emacs-hook`) writes
-and renames the file to `last.eld` (`rename-file … t`); a failure there is a message. One file per process, so two
+`last.eld` the same way and deletes the process's own file; a failure there is a message. The files are written
+owner-only (`:private t`, 0600): notice texts can carry paths. One file per process, so two
 running Emacsen never overwrite each other. `drgnx-notice-save-pid-live-p` is the liveness test (the pid's process
 name starts with `emacs` or `nidhogg`). The doctor reads the files; see "Doctor" (`drgnx-doctor-define-notices`).
 Tests: `test/unit/core-notice-save-test.el`.

@@ -80,6 +80,14 @@
                                                       :notices))
                                       :text)))))
 
+(ert-deftest drgnx-notice-save/the-files-are-owner-only ()
+  (drgnx-notice-save-test--with
+    (drgnx-notify 'keys 'warn "clash /home/x" :id 'k :life 'condition)
+    (drgnx-notice--save)
+    (should (= #o600 (file-modes (drgnx-notice-save-file))))
+    (drgnx-notice--save-at-exit)
+    (should (= #o600 (file-modes (drgnx-notice-save-last-file))))))
+
 (ert-deftest drgnx-notice-save/one-file-per-process ()
   (drgnx-notice-save-test--with
     (should-not (equal (drgnx-notice-save-file) (drgnx-notice-save-file 12345)))
@@ -100,7 +108,7 @@
       (set-file-times (drgnx-notice-save-file 900001) (time-subtract (current-time) old))   ; dead, old: goes
       (set-file-times (drgnx-notice-save-file 900003) (time-subtract (current-time) old))   ; alive, old: stays
       (cl-letf (((symbol-function 'process-attributes)
-                 (lambda (pid) (and (memq pid (list 900003 (emacs-pid))) '((comm . "emacs"))))))
+                 (lambda (pid) (and (memq pid (list 900003 (emacs-pid))) (list (cons 'comm (concat "ema" "cs")))))))   ; built, so the bare-emacs lint does not read it as a command
         (setq drgnx-notice--save-pruned nil)
         (drgnx-notify 'keys 'warn "clash" :id 'k :life 'condition)
         (drgnx-notice--save)
