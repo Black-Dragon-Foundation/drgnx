@@ -82,12 +82,12 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
 `ratatoskr ensure [--timeout SECS]` (default 5) pings; when nothing answers it starts a hub and waits up to the timeout
 for `ping`. It prints the socket path and exits **0**; **1** when it could not start one (the reason, from the hub's
 log when the wait timed out, and the log's directory); **3** when a Lisp hub from before Ratatoskr holds the lock
-(checked before anything is started). How the hub is started:
+(checked first, before the ping: such a hub answers one, and `ensure` still says it as `serve` does). How the hub is started:
 
 | Where | How | Restarted |
 |---|---|---|
 | Linux with a user systemd (the manager's `systemd` directory in `XDG_RUNTIME_DIR`) | `systemd-run --user --unit=ratatoskr-HASH --collect -p Restart=on-failure -p RestartForceExitStatus=75 -p "RestartPreventExitStatus=1 2 3" -p KillMode=mixed --setenv=NAME… ratatoskr serve`; "unit already exists" counts as success (two `ensure`s racing both then ping) | on a crash and on 75; never on 1, 2, 3 (`Restart=on-failure` alone restarts every non-zero exit until the start limit) |
-| macOS with a `gui/UID` domain | `<state>/hub/launchd.plist` (0600; label `org.blackdragonfoundation.ratatoskr.HASH`; `KeepAlive {SuccessfulExit: false}`, `ProcessType Background`; `serve --supervisor launchd`), then `launchctl bootstrap gui/UID <plist>`, or `kickstart` when `launchctl print gui/UID/LABEL` finds it loaded (a second `bootstrap` fails). No domain (an SSH session): the self-detach row, with a line on stderr saying why | on a crash and on 75; `serve --supervisor launchd` maps exits 1, 2 and 3 to 0 after logging the real code, because launchd restarts on every non-zero exit |
+| macOS with a `gui/UID` domain | `<state>/hub/launchd.plist` (0600; label `org.blackdragonfoundation.ratatoskr.HASH`; `KeepAlive {SuccessfulExit: false}`, `ProcessType Background`; `serve --supervisor launchd`), then `launchctl bootstrap gui/UID <plist>`, or `kickstart` when `launchctl print gui/UID/LABEL` finds it loaded (a second `bootstrap` fails); a loaded label whose plist text changed (a new `DRGNX_EMACS`, a new `SSH_AUTH_SOCK`) gets `bootout`, then `bootstrap`, since `kickstart` would keep the old arguments and environment until logout. No domain (an SSH session): the self-detach row, with a line on stderr saying why | on a crash and on 75; `serve --supervisor launchd` maps exits 1, 2 and 3 to 0 after logging the real code, because launchd restarts on every non-zero exit |
 | none (`RATATOSKR_SUPERVISOR=none`, containers, no user manager) | the binary starts itself: `serve --supervisor self` in a session of its own (`setsid`), stdio on `/dev/null`; every descriptor is close-on-exec | no: a `restart` re-executes the binary instead |
 
 Only variable *names* go to a supervisor (`--setenv=NAME`, the plist's environment from the same names), each only
@@ -131,11 +131,13 @@ at start names the file on disk; macOS `_NSGetExecutablePath` and `realpath`) an
 and mtime. Every 2 s it `stat`s **that path**, never `/proc/self/exe`: the link follows the running inode, which a
 rename-replace (an update) leaves alone, so it would never change. A changed stamp runs `<path> version --json` with a
 5 s deadline; only an answer with another `commit` counts, and a missing, half-written or failing file is logged and
-looked at again at the next tick (the same commit under a new stamp becomes the baseline). Then the `notice` event
+looked at again at the next tick (the same commit under a new stamp becomes the baseline, so a rebuild that says the
+same commit — `unknown`, a build without `DRGNX_BUILD_COMMIT`, the same `HEAD-dirty` while developing — is never
+picked up: `drgnx hub stop` by hand, and the next start runs the new build). Once another build is confirmed, the `notice` event
 `{source: "hub", severity: "warn", id: "restart-when-idle", life: "condition", text: "drgnx was updated; the hub
 restarts when its N running turns finish", command: "hub-restart-now"}` is sent (again when N changes), and the hub
 exits 75 the first time nothing is busy. **Idle in phase 1** is the backend's `agents/list` having no session with
-status `busy` and `job/status` no job `running` (each asked through the private socket within 2 s). An answer that does
+status `busy` or `starting` (one being started or resumed) and `job/status` no job `running` (each asked through the private socket within 2 s). An answer that does
 not come or does not fit is not idle, so a busy hub is never restarted; a hub whose backend cannot exist (`missing`)
 has nothing running. Phase 5 replaces this with the hub's own turn state.
 
@@ -364,15 +366,21 @@ is over 103 bytes), in a directory made private under Ratatoskr's lock. `drgnx-h
 `DRGNX_HUB_SERVE_SOCKET` and `DRGNX_HUB_PARENT_PID` and unsets both before it starts anything
 (`drgnx-hub--take-serve-env`), so its agents, their coordination servers, an agent's `drgnx job …` and a test inside
 a job find the hub through `drgnx-hub-socket`, which is the front's socket: they never reach the backend past the
-front's checks. `drgnx-hub-socket` itself never reads a socket from the environment, for the same reason. Ratatoskr
-connects to the backend socket only after checking its peer: our uid, and the pid it spawned (`lisp-hub.sh` `exec`s
-Emacs, so the pid is the same).
+front's checks. `drgnx-hub-socket` itself never reads a socket from the environment, for the same reason. A
+`DRGNX_HUB_SERVE_SOCKET` that is set but not an absolute name ends the backend with exit 1 rather than falling back
+to the front's socket. Ratatoskr connects to the backend socket only after checking its peer: our uid, and the pid it
+spawned (`lisp-hub.sh` `exec`s Emacs, so the pid is the same). Before each start it removes the backend socket's
+`backend.sock.lock` directory: one a killed backend left would name a pid that may be another process's by then (a
+reboot), and the backend would take it for a live hub and exit 3 at every start. Its stderr, when it ends before it
+serves, is logged as a warning.
 
 **Forwarding.** The front sends `{id, method, params, caller: {class, sid?, job?}}`: the params re-encoded from their
 typed decode (a key the method does not know was dropped and listed in the client's `ignored`; a duplicate key was
 refused), never the client's line, and the caller as the front established it. The backend never trusts a class from
-anywhere else (the v0 backend ignores `caller`). Provider keys are exposed only while that line is serialised, and the
-line is wiped once written.
+anywhere else (the v0 backend ignores `caller`). Provider keys are never logged and never serialised except into that
+line to the backend, and that line is wiped once written. They are not wiped from memory otherwise: on their way in
+they pass through the request line, its parsed JSON and a plain string before the secret type holds them (review
+M12), so this is no claim of zeroisation.
 - A line over 1 MiB (the Lisp hub's `drgnx-hub--max-line`) is `invalid-params` "the request is too large for the Lisp
   backend" and never sent: the backend would drop the front's whole connection.
 - At most 64 calls per client connection are in flight; past that the front reads no more of that connection until
@@ -394,8 +402,10 @@ name, or one whose data does not decode, is dropped and logged ("dropped a backe
 
 **Its life.** The backend must answer a `ping` on its socket within 10 s of its start. When it exits, or its
 connection ends, the calls in flight fail once (`internal` "the Lisp backend restarted"), calls sent meanwhile wait
-for the next one, and it starts again after 1 s, doubling to 30 s (back to 1 s after a run of 30 s or more). When
-Ratatoskr stops, the backend's group gets SIGTERM, SIGKILL 2 s later.
+for the next one, and it starts again after 1 s, doubling to 30 s (back to 1 s after a run of 30 s or more). A line the backend does not take whole within its call's
+deadline ends that connection too (its writer is shut, the backend stopped and started again): part of the line may
+be in the socket, and the next line would be appended to it. When Ratatoskr stops, the backend's group gets SIGTERM,
+SIGKILL 2 s later.
 
 **Its record and the reaper.** Before the spawn a `proc` row (purpose `backend`, boot id) goes into `runtime.db`;
 right after it, the row gets the pid, start time and group (the pid: every child leads its own group), and it goes
@@ -428,7 +438,10 @@ back again. `drgnx-hub-call-sync` (commands and the CLI only) waits for the same
    keys never leave the process): the connection is proven at once. Nothing is sent first and nothing is waited for.
 2. Otherwise it **waits for the hub's challenge**, at most 2 s (a layer timer `(hub-challenge . CONNECTION)`), and
    sends a `ping` at once. Ratatoskr's challenge is always its first line, so a ping answered first means a hub of
-   before protocol 1: that one is `legacy` at once, without the 2 s wait. No line at all within 2 s is `legacy` too.
+   before protocol 1: that one is `legacy` at once, without the 2 s wait. Only that makes a hub `legacy`. When the
+   2 s pass, what already arrived is read first (an Emacs busy past the wait runs the timer before it reads a
+   challenge waiting in the socket); still no line, and the connection is closed and its calls fail (the next call
+   connects again). A challenge that comes on a connection taken for `legacy` closes it the same way.
 3. On the challenge it sends **`hello`**: `proto` 1, a fresh `nonce`, `drgnx_version` (the commit of the binary on
    disk, `drgnx-hub-client-binary-version`, when it is known), `schema` (`drgnx-work-db-schema-version`), `records` 2,
    `client` (`"cli"` in a batch Emacs, else `"editor"`) and `proof`: `HMAC-SHA256(cap, "drgnx-hub client " +

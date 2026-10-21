@@ -223,19 +223,27 @@ pub enum Launched {
 }
 
 /// Load the job at PLIST for LABEL in `gui/UID`: `bootstrap`, or `kickstart` when the label is already loaded (a
-/// second `bootstrap` fails).
+/// second `bootstrap` fails).  A loaded label whose plist CHANGED (a new `DRGNX_EMACS`, a new `SSH_AUTH_SOCK` after
+/// logging in again) is `bootout` first and bootstrapped again: `kickstart` would run it with the old arguments and
+/// environment until logout (review M8).
 pub fn launchd_start(
     ctl: &dyn Launchctl,
     uid: u32,
     label: &str,
     plist: &Path,
+    changed: bool,
 ) -> Result<Launched, String> {
     let domain = format!("gui/{uid}");
     if !ctl.ok(&["print", &domain]) {
         return Ok(Launched::NoDomain);
     }
     let target = format!("{domain}/{label}");
-    let (verb, arg): (&str, String) = if ctl.ok(&["print", &target]) {
+    let loaded = ctl.ok(&["print", &target]);
+    // a failed bootout leaves it loaded: the bootstrap below then fails and says so
+    if loaded && changed {
+        ctl.ok(&["bootout", &target]);
+    }
+    let (verb, arg): (&str, String) = if loaded && !changed {
         ("kickstart", target)
     } else {
         ("bootstrap", plist.to_string_lossy().into_owned())
@@ -355,8 +363,9 @@ fn start(env: &Env, socket: &Path, exe: &Path) -> Result<Option<std::process::Ch
                 .filter_map(|n| env.vars.get(n).map(|v| (n.to_string(), v.clone())))
                 .collect();
             let text = launchd_plist(&label(&h), exe, &vars, &state.join("launchd.log"));
+            let changed = std::fs::read_to_string(&plist).ok().as_deref() != Some(text.as_str());
             write_private(&plist, &text).map_err(|e| format!("{}: {e}", plist.display()))?;
-            match launchd_start(&RealLaunchctl(prog), env.uid, &label(&h), &plist)? {
+            match launchd_start(&RealLaunchctl(prog), env.uid, &label(&h), &plist, changed)? {
                 Launched::Started => Ok(None),
                 Launched::NoDomain => {
                     eprintln!(
@@ -408,10 +417,7 @@ pub fn ensure(env: &Env, timeout: Duration) -> i32 {
         eprintln!("ratatoskr ensure: {why}");
         return 1;
     }
-    if client::ping(&socket, Duration::from_secs(1)).is_some() {
-        println!("{}", socket.display());
-        return 0;
-    }
+    // a Lisp hub from before Ratatoskr serves here, answering a ping or not: said as `serve` says it (review M1)
     let lock_path = paths::lock_path(&socket);
     if let Some((pid, lock::LispLock::Respect)) = lock::lisp_dir(&lock_path, &lock::System) {
         eprintln!(
@@ -420,6 +426,10 @@ pub fn ensure(env: &Env, timeout: Duration) -> i32 {
             pid.map_or_else(|| "unknown".to_string(), |p| p.to_string())
         );
         return 3;
+    }
+    if client::ping(&socket, Duration::from_secs(1)).is_some() {
+        println!("{}", socket.display());
+        return 0;
     }
     let exe = match crate::idle::resolve_exe() {
         Ok(e) => e,
@@ -819,7 +829,7 @@ mod tests {
             loaded: true,
             domain: true,
         };
-        let r = launchd_start(&stub, 501, "L", Path::new("/p.plist"));
+        let r = launchd_start(&stub, 501, "L", Path::new("/p.plist"), false);
         assert_eq!(r, Ok(Launched::Started));
         let calls = stub.calls.borrow();
         assert!(
@@ -829,6 +839,24 @@ mod tests {
             "{calls:?}"
         );
         assert!(calls.iter().all(|c| c[0] != "bootstrap"), "{calls:?}");
+        // loaded, but its plist changed: out and in again, never kickstarted with the old one
+        let stub = Stub {
+            calls: RefCell::new(vec![]),
+            loaded: true,
+            domain: true,
+        };
+        assert_eq!(
+            launchd_start(&stub, 501, "L", Path::new("/p.plist"), true),
+            Ok(Launched::Started)
+        );
+        let calls = stub.calls.borrow();
+        let at = |verb: &str| calls.iter().position(|c| c[0] == verb);
+        assert!(
+            at("bootout").is_some_and(|b| calls[b] == ["bootout", "gui/501/L"]),
+            "{calls:?}"
+        );
+        assert!(at("bootout") < at("bootstrap"), "{calls:?}");
+        assert!(at("kickstart").is_none(), "{calls:?}");
         // not loaded: bootstrap into the domain with the plist
         let stub = Stub {
             calls: RefCell::new(vec![]),
@@ -836,7 +864,7 @@ mod tests {
             domain: true,
         };
         assert_eq!(
-            launchd_start(&stub, 501, "L", Path::new("/p.plist")),
+            launchd_start(&stub, 501, "L", Path::new("/p.plist"), true),
             Ok(Launched::Started)
         );
         let calls = stub.calls.borrow();
@@ -853,7 +881,7 @@ mod tests {
             domain: false,
         };
         assert_eq!(
-            launchd_start(&stub, 501, "L", Path::new("/p")),
+            launchd_start(&stub, 501, "L", Path::new("/p"), true),
             Ok(Launched::NoDomain)
         );
         assert!(stub.calls.borrow().iter().all(|c| c[0] == "print"));

@@ -549,6 +549,26 @@ mod tests {
         assert!(private_dir(&file).is_err());
     }
 
+    #[test]
+    fn private_dir_refuses_another_users_directory() {
+        // review M14: only root can make one here (the container's root job)
+        if !rustix::process::geteuid().is_root() {
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let theirs = root.path().join("theirs");
+        std::fs::create_dir(&theirs).unwrap();
+        std::fs::set_permissions(&theirs, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::os::unix::fs::chown(&theirs, Some(65534), Some(65534)).unwrap();
+        let e = private_dir(&theirs).unwrap_err();
+        assert!(e.to_string().ends_with("belongs to another user"), "{e}");
+        // and it is not chmodded
+        assert_eq!(
+            std::fs::metadata(&theirs).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+    }
+
     /// The refusal's text, or "ok".
     fn judged(dir: &Path) -> String {
         match trusted_dir(dir) {

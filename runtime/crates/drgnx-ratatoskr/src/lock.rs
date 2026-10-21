@@ -460,7 +460,8 @@ mod tests {
         let yes = |_: u32| true;
         assert_eq!(signal_target(Some(9), Some(5), same, yes), Ok(9));
         // a reused pid (another start time) and a gone one are refused
-        assert!(signal_target(Some(9), Some(4), same, yes).is_err());
+        let e = signal_target(Some(9), Some(4), same, yes).unwrap_err();
+        assert!(e.contains("(another process)"), "{e}");
         assert!(signal_target(Some(9), Some(5), |_| None, yes).is_err());
         // a lock that names nobody
         assert!(signal_target(None, Some(5), same, yes).is_err());
@@ -496,6 +497,15 @@ mod tests {
             holder(&path, &Fake(vec![])).unwrap(),
             Holder::Ratatoskr { pid: Some(_), .. }
         ));
+        // a held lock whose text names pid 0: no process
+        std::fs::write(&path, "0 5\n").unwrap();
+        assert_eq!(
+            holder(&path, &Fake(vec![])).unwrap(),
+            Holder::Ratatoskr {
+                pid: None,
+                start: Some(5)
+            }
+        );
         // the same lock with the directory open to others: refused, never "held by" what the file names
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
         let e = holder(&path, &Fake(vec![])).unwrap_err();

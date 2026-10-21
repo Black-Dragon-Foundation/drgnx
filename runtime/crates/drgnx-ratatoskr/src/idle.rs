@@ -110,8 +110,9 @@ pub enum Build {
     Unknown,
 }
 
-/// The turns running, from `agents/list`'s and `job/status`'s results: `busy` sessions plus `running` jobs.  None
-/// when either does not have the shape (an answer that does not fit is no answer: not idle).
+/// The turns running, from `agents/list`'s and `job/status`'s results: `busy` and `starting` sessions (one being
+/// started or resumed would be killed by a restart: review M4) plus `running` jobs.  None when either does not have the
+/// shape (an answer that does not fit is no answer: not idle).
 pub fn count_busy(agents: &Value, jobs: &Value) -> Option<u64> {
     fn list<'a>(v: &'a Value, key: &str) -> Option<&'a [Value]> {
         match v.get(key)? {
@@ -122,7 +123,7 @@ pub fn count_busy(agents: &Value, jobs: &Value) -> Option<u64> {
     }
     let busy = list(agents, "sessions")?
         .iter()
-        .filter(|s| s["status"] == "busy")
+        .filter(|s| s["status"] == "busy" || s["status"] == "starting")
         .count();
     let running = list(jobs, "jobs")?
         .iter()
@@ -412,6 +413,9 @@ mod tests {
             json!({"jobs": [{"id": "j", "status": "running"}, {"id": "k", "status": "done"}]});
         assert_eq!(count_busy(&idle_a, &run_j), Some(1));
         assert_eq!(count_busy(&busy_a, &run_j), Some(2));
+        // a session being started or resumed counts too
+        let starting = json!({"sessions": [{"id": "a", "status": "starting"}]});
+        assert_eq!(count_busy(&starting, &none_j), Some(1));
         // null lists are empty; anything else is no answer
         assert_eq!(
             count_busy(&json!({"sessions": null}), &json!({"jobs": null})),

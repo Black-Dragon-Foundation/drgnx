@@ -1,8 +1,8 @@
 //! Hubs under test (a process in its own temporary root) and the connections to them.
 
 use crate::matcher::{self, Captures};
-use crate::paths::{self, Env};
 use hmac::{Hmac, KeyInit, Mac};
+use runstav::paths::{self, Env};
 use serde_json::Value;
 use sha2::Sha256;
 use std::collections::{BTreeMap, VecDeque};

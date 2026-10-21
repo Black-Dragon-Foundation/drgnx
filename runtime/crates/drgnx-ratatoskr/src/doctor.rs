@@ -15,6 +15,15 @@ use std::time::Duration;
 
 const ASK: Duration = Duration::from_secs(5);
 
+/// `doctor`'s whole ask of a running hub (the user connection and its `status`, whose backend part takes up to 1 s),
+/// and the least a ping after it gets: together under the 2 s the editor's doctor waits for the report (review M2),
+/// so a slow hub is reported as running, not as a binary that gave no answer.
+const DOCTOR_ASK: Duration = Duration::from_millis(1500);
+const DOCTOR_PING: Duration = Duration::from_millis(300);
+// core/drgnx-doctor.el waits 2 s for `doctor --json`; the ask leaves room for the backend's 1 s status
+const _: () = assert!(DOCTOR_ASK.as_millis() + DOCTOR_PING.as_millis() < 2000);
+const _: () = assert!(DOCTOR_ASK.as_millis() > crate::backend::STATUS_DEADLINE.as_millis());
+
 /// The running hub's pid and commit, for the report.
 pub struct Running {
     pub pid: u32,
@@ -129,8 +138,10 @@ pub fn doctor(env: &Env) -> i32 {
     let binary = crate::idle::resolve_exe()
         .map(Path::to_path_buf)
         .unwrap_or_default();
-    let running = Client::user(env, ASK)
-        .and_then(|mut c| c.call("status", json!({}), ASK))
+    let deadline = std::time::Instant::now() + DOCTOR_ASK;
+    let left = || deadline.saturating_duration_since(std::time::Instant::now());
+    let running = Client::user(env, left())
+        .and_then(|mut c| c.call("status", json!({}), left()))
         .ok()
         .map(|s| Running {
             pid: s["pid"]
@@ -140,7 +151,7 @@ pub fn doctor(env: &Env) -> i32 {
             commit: s["runtime"]["commit"].as_str().map(str::to_string),
         })
         .or_else(|| {
-            client::ping(&socket, Duration::from_secs(1)).map(|pid| Running { pid, commit: None })
+            client::ping(&socket, left().max(DOCTOR_PING)).map(|pid| Running { pid, commit: None })
         });
     println!("{}", report(env, &binary, running));
     0

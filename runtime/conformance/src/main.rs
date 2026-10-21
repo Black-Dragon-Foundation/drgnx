@@ -7,7 +7,6 @@
 mod exec;
 mod hub;
 mod matcher;
-mod paths;
 mod report;
 mod scenario;
 

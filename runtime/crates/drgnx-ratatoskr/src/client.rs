@@ -300,6 +300,18 @@ mod tests {
         );
         // a missing directory is no hub, not a refusal
         assert_eq!(refused(&root.path().join("gone/hub-x.sock")), None);
+        // a socket of another user's in a private directory (only root can make one here): not connected to
+        if rustix::process::geteuid().is_root() {
+            let before = taken.load(std::sync::atomic::Ordering::SeqCst);
+            std::os::unix::fs::lchown(&socket, Some(65534), Some(65534)).unwrap();
+            assert_eq!(ping(&socket, Duration::from_secs(2)), None);
+            let e = Client::user_at(&socket, Duration::from_secs(2))
+                .err()
+                .unwrap();
+            assert!(e.ends_with("belongs to another user"), "{e}");
+            std::thread::sleep(Duration::from_millis(100));
+            assert_eq!(taken.load(std::sync::atomic::Ordering::SeqCst), before);
+        }
     }
 
     #[test]

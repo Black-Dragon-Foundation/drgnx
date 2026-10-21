@@ -212,7 +212,7 @@ Special strings: `"$any"`, `"$string"`, `"$number"`, `"$hex64"`, `"$absent"` (th
 ### Where the socket is: one fixture for Lisp and Rust
 
 The data directory and the socket path follow Lisp's `drgnx-paths-dir 'data` and `drgnx-hub-socket` exactly
-(`crates/runstav/src/paths.rs` and, until it switches to that module, `conformance/src/paths.rs` are the Rust side): only an absolute environment value counts; names are normalised as Emacs's
+(`crates/runstav/src/paths.rs` is the Rust side, for the hub and the harness alike): only an absolute environment value counts; names are normalised as Emacs's
 `expand-file-name` does it, oddities kept (`/a/../../b` is `/../b`, `//a` stays `//a`); `sha1` of the data directory
 (with its trailing `/`), cut to 8 hex digits, names `hub-HASH.sock`; it is under `$XDG_RUNTIME_DIR/drgnx/` when that is a
 directory, else under `<state>/hub/`; a path over 103 bytes goes to `<tmp>/drgnx-hub-UID/`, where `<tmp>` is the first
