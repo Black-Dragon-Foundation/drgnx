@@ -90,6 +90,14 @@ unit run compiles ~60 trampolines at ~0.2 s each, which would cost every run 12â
 trampolines (~1 MB); delete it at any time. When it cannot be made, the run's temp directory (`eln/`) is used.
 `$DRGNX_TEST_ELN_DIR` set from outside (an absolute path) chooses another.
 
+A trampoline is compiled when a primitive is first replaced and none is in that directory yet, so inside whatever the
+test has replaced so far: the compile reads and writes files and spawns an Emacs with `call-process`. A test that
+stubs `call-process` (a spy that fails the test, or a fake result) and then a primitive with no trampoline yet would
+catch Emacs's own compile, but only on a cold directory (a fresh container, or no other file of the run compiled it
+first). The runner records every primitive before the tests and compiles each trampoline with the real ones: around
+`comp-subr-trampoline-install` it puts back each primitive a test replaced and restores the test's definitions after,
+with `native-comp-enable-subr-trampolines` off for those swaps, so they install nothing.
+
 An installed trampoline is what all native code then calls for that primitive, and `comp-installed-trampolines-h` is
 what keeps it from being collected. A test that let-binds that table to a fresh one (to compile trampolines cold)
 puts what it installed into Emacs's own table before it returns: dropped with the binding, the next garbage
