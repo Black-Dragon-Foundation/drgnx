@@ -13,7 +13,7 @@
 
 use drgnx_proto::line;
 use drgnx_proto::methods::Params;
-use drgnx_proto::methods::hub::Refusals as RefusalsResult;
+use drgnx_proto::methods::hub::{Backend, Refusals as RefusalsResult};
 use drgnx_proto::registry::{self, Class, Method};
 use drgnx_proto::wire::{Error, ErrorCode, Id, Request};
 use serde_json::{Value, json};
@@ -246,17 +246,31 @@ pub struct Caller {
 /// What a forwarded call answers.
 pub type Answer<'a> = Pin<Box<dyn Future<Output = Result<Value, Error>> + Send + 'a>>;
 
-/// The methods the front does not serve itself go here (the Lisp backend, from the forwarding task on).  PARAMS are
-/// the decoded params re-encoded, never the line as it came.
-pub trait Forward: Send + Sync {
-    fn call<'a>(&'a self, caller: Caller, method: &'static Method, params: Value) -> Answer<'a>;
+/// What `status` says of the backend: its state and pid, and the gateway's port and registrations from the
+/// backend's own `status` (left out when it does not answer).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BackendInfo {
+    pub backend: Option<Backend>,
+    pub gateway_port: Option<u64>,
+    pub registrations: Option<u64>,
 }
 
-/// No backend yet: every forwarded call is `internal` "backend not running".
+/// The methods the front does not serve itself go here (the Lisp backend: [`crate::forward`]).  PARAMS are the
+/// decoded params, re-encoded only into the line sent on, never the line as it came.
+pub trait Forward: Send + Sync {
+    fn call<'a>(&'a self, caller: Caller, method: &'static Method, params: Params) -> Answer<'a>;
+
+    /// What `status` says of the backend (nothing, without one).
+    fn status<'a>(&'a self) -> Pin<Box<dyn Future<Output = BackendInfo> + Send + 'a>> {
+        Box::pin(async { BackendInfo::default() })
+    }
+}
+
+/// No backend: every forwarded call is `internal` "backend not running".
 pub struct NoBackend;
 
 impl Forward for NoBackend {
-    fn call<'a>(&'a self, _: Caller, _: &'static Method, _: Value) -> Answer<'a> {
+    fn call<'a>(&'a self, _: Caller, _: &'static Method, _: Params) -> Answer<'a> {
         Box::pin(async {
             Err(Error {
                 code: ErrorCode::Internal,
@@ -451,7 +465,7 @@ mod tests {
     struct Spy(AtomicUsize);
 
     impl Forward for Spy {
-        fn call<'a>(&'a self, _: Caller, _: &'static Method, _: Value) -> Answer<'a> {
+        fn call<'a>(&'a self, _: Caller, _: &'static Method, _: Params) -> Answer<'a> {
             self.0.fetch_add(1, Ordering::SeqCst);
             Box::pin(async { Ok(json!(true)) })
         }

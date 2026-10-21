@@ -1,0 +1,10 @@
+{"scenario": "reaper/a-row-without-a-pid-is-dropped-and-kills-nothing", "requires": ["v1"], "doc": "A process row with no pid, group or start time (a crash between its insert and its update) is skipped, never signalled (kill(0) would end the harness, whose group the hub is in), and removed (review C2)."}
+{"do": "start", "hub": "h"}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0}
+{"do": "sqlite", "path": "$STATE/hub/runtime.db", "sql": ["insert into proc (purpose, pid, start_time, pgid, boot_id, at) values ('backend', null, null, null, 'some-boot', 1.5)", "insert into proc (purpose, pid, start_time, pgid, boot_id, at) values ('backend', 0, 0, 0, null, 1.5)"], "query": "select count(*) from proc", "expect": [[2]]}
+{"do": "start", "hub": "h2", "same_root_as": "h"}
+{"do": "connect", "conn": "c", "hub": "h2"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "ping"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"pid": "$PID(h2)"}}}
+{"do": "sqlite", "path": "$STATE/hub/runtime.db", "query": "select count(*) from proc", "expect": [[0]]}

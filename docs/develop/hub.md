@@ -49,10 +49,12 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   5. `<state>/hub/runtime.db` is opened through urdr (0600, WAL, `synchronous=FULL`; schema 1: the `proc` table the
      orphan reaper fills). A newer schema (after `update --back`) is moved aside with its `-wal` and `-shm` as
      `runtime.db.newer-N-UNIXTIME` and a new file is made: nothing in it outlives a hub in phase 1.
+  6. The processes `runtime.db` recorded (a crashed run's backend) are reaped, then the Lisp backend is started
+     ([Ratatoskr and the Lisp backend](#ratatoskr-and-the-lisp-backend)).
 
   It stops on SIGTERM, on SIGINT, or one second after the `--parent-pid` process is gone (`kill(pid, 0)`; the last
-  `--parent-pid` counts). It stops accepting, then removes the socket and the cap while the lock is still held, and
-  exits 0. The log is tracing JSON, one object per line, in `<state>/hub/log/hub-YYYY-MM-DD.jsonl` (UTC days, 0600,
+  `--parent-pid` counts). It stops accepting, stops the Lisp backend (its group: SIGTERM, SIGKILL after 2 s; at most
+  10 s), then removes the socket and the cap while the lock is still held, and exits 0. The log is tracing JSON, one object per line, in `<state>/hub/log/hub-YYYY-MM-DD.jsonl` (UTC days, 0600,
   the newest 7 kept, written by tracing-appender's non-blocking worker). Warnings and errors also go to stderr, behind
   `<4>` / `<3>` when `JOURNAL_STREAM` is set (the journal under systemd). `DRGNX_RATATOSKR_LOG` takes a `Targets`
   string (`info`, the default; `warn,drgnx_ratatoskr::conn=debug`). The cap, keys and params are never logged. The
@@ -258,9 +260,85 @@ from now on), `shutdown` (answers `true`, then the hub stops as on SIGTERM) and 
 socket, started, proto, proto_min, records, drgnx_version, schema, read_only?, runtime, refusals, job_agents:
 "unsandboxed (as on main; the sandbox comes with phase 6)"}`. `events/since` reads work.db's `event` table: `{since,
 last, events: [{id, at, agent, job, task, kind, summary, data?}]}`, after `since` (0), at most `limit` (200, at most
-1000), `data` the parsed JSON object. `last` is the newest id answered, or `since` when there is none. Every other
-method goes to `dispatch::Forward` with the decoded params re-encoded; until the backend is wired in it answers
-`internal` "backend not running".
+1000), `data` the parsed JSON object. `last` is the newest id answered, or `since` when there is none. `status` also
+says `backend: {state: running|starting|missing|failed, pid?}`, and `gateway_port` and `registrations` from the
+backend's own `status` (1 s; left out when it does not answer). Every other method goes to the Lisp backend (next
+section).
+
+## Ratatoskr and the Lisp backend
+
+Until each part moves to Rust, Ratatoskr runs the Lisp hub as its child, the **backend**, and forwards to it every
+method the front does not serve (`runtime/crates/drgnx-ratatoskr/src/{backend,forward,relay,shape}.rs`).
+
+**The command.** `DRGNX_RATATOSKR_BACKEND` when set (an absolute executable, no arguments: the tests' fake backend or
+`test/conformance/lisp-hub.sh`), else `EMACS --batch -Q --eval "(setq load-prefer-newer t)" -L DRGNX/core -l
+drgnx-hub -f drgnx-hub-main` with HOME as its directory. EMACS is `DRGNX_EMACS` (absolute), else the first line of
+`emacs` in the data dir or the config dir when it names an executable file (`drgnx-paths-recorded-emacs`'s rule).
+DRGNX is `DRGNX_DIR`, else the checkout the binary was built from (`DRGNX_CHECKOUT`, which install.sh and `drgnx
+update` set). With neither, the backend is `missing`: the hub still starts and serves what the front serves, and every
+forwarded call is `internal` "the Lisp backend cannot start: …".
+
+**Its environment** is built from an allowlist, so a provider key in Ratatoskr's environment never reaches the
+backend or the agents it starts (keys come over the socket, `gateway/keys`): `PATH HOME USER LOGNAME SHELL LANG
+LANGUAGE TZ TMPDIR TMP TEMP XDG_RUNTIME_DIR XDG_STATE_HOME XDG_DATA_HOME XDG_CONFIG_HOME XDG_CACHE_HOME`, `LC_*`,
+`DRGNX_DATA_DIR DRGNX_CONFIG_DIR DRGNX_EMACS DRGNX_DIR DRGNX_JOBS_LAUNCHER DRGNX_NO_LANGUAGE_SERVERS`, and what agents
+and git use on main: `SSH_AUTH_SOCK`, `HTTP_PROXY HTTPS_PROXY NO_PROXY ALL_PROXY` in both cases, `SSL_CERT_FILE
+SSL_CERT_DIR NODE_EXTRA_CA_CERTS`, `CLAUDE_CONFIG_DIR`, `TERM COLORTERM`, `DISPLAY WAYLAND_DISPLAY`, each when set.
+A `DRGNX_RATATOSKR_BACKEND` child also gets `DRGNX_FAKE_BACKEND_*`. Ratatoskr sets `DRGNX_HUB_SERVE_SOCKET` and
+`DRGNX_HUB_PARENT_PID` (its own pid: the backend ends when Ratatoskr is gone).
+
+**The serve socket.** The backend serves on `<socket dir>/hub-HASH.d/backend.sock` (`<tmp>/drgnx-hub-UID/` when that
+is over 103 bytes), in a directory made private under Ratatoskr's lock. `drgnx-hub-main` reads
+`DRGNX_HUB_SERVE_SOCKET` and `DRGNX_HUB_PARENT_PID` and unsets both before it starts anything
+(`drgnx-hub--take-serve-env`), so its agents, their coordination servers, an agent's `drgnx job …` and a test inside
+a job find the hub through `drgnx-hub-socket`, which is the front's socket: they never reach the backend past the
+front's checks. `drgnx-hub-socket` itself never reads a socket from the environment, for the same reason. Ratatoskr
+connects to the backend socket only after checking its peer: our uid, and the pid it spawned (`lisp-hub.sh` `exec`s
+Emacs, so the pid is the same).
+
+**Forwarding.** The front sends `{id, method, params, caller: {class, sid?, job?}}`: the params re-encoded from their
+typed decode (a key the method does not know was dropped and listed in the client's `ignored`; a duplicate key was
+refused), never the client's line, and the caller as the front established it. The backend never trusts a class from
+anywhere else (the v0 backend ignores `caller`). Provider keys are exposed only while that line is serialised, and the
+line is wiped once written.
+- A line over 1 MiB (the Lisp hub's `drgnx-hub--max-line`) is `invalid-params` "the request is too large for the Lisp
+  backend" and never sent: the backend would drop the front's whole connection.
+- At most 64 calls per client connection are in flight; past that the front reads no more of that connection until
+  one ends. A connection that sends EOF still gets the answers of its calls in flight.
+- The front reads the backend with lines of up to 16 MiB (an `agents/get` of 4 MB arrives).
+- Each call has 30 s: then `internal` "the Lisp backend did not answer METHOD".
+- The backend's `{error: {message}}` is `internal` with that message (job-ui's "No job " prefix still matches). A
+  `result` goes through the method's `check_result`; one that does not fit is `internal` "the backend's answer to
+  METHOD does not match its schema: PATH", logged with the path (never the data). A `null` list comes out `[]`.
+- By class (`shape.rs`): `agents/list` for a `service` connection is `{sessions: [{id, name, job, task}]}`, for an
+  `agent` the same for its own job's sessions (and its own); an agent's `spend` reads its own job (`job` defaults to
+  it, another is `not-allowed`). `gateway/keys` and `gateway/register`'s keys come from user connections only (the
+  class check).
+
+**Events.** The front subscribes to the backend once per backend start and relays its events to the front's
+subscribers. Only the nine kinds main broadcasts are relayed (`agent`, `agent-entries`, `events`, `lease-released`,
+`fallback`, `card`, `job`, `budget`, `request`), each decoded against its registry type first; an event of another
+name, or one whose data does not decode, is dropped and logged ("dropped a backend event", its name and the path).
+
+**Its life.** The backend must answer a `ping` on its socket within 10 s of its start. When it exits, or its
+connection ends, the calls in flight fail once (`internal` "the Lisp backend restarted"), calls sent meanwhile wait
+for the next one, and it starts again after 1 s, doubling to 30 s (back to 1 s after a run of 30 s or more). When
+Ratatoskr stops, the backend's group gets SIGTERM, SIGKILL 2 s later.
+
+**Its record and the reaper.** Before the spawn a `proc` row (purpose `backend`, boot id) goes into `runtime.db`;
+right after it, the row gets the pid, start time and group (the pid: every child leads its own group), and it goes
+when the exit is seen. At start, before the backend is spawned, Ratatoskr reaps every recorded row with
+`drgnx-proc`'s rules (above: a row with a NULL pid, group, start time or boot id is skipped and never signalled) and
+then deletes them all, so a backend a crashed (SIGKILLed) Ratatoskr left is killed with its group. Two windows stay
+open:
+- **the unrecorded spawn:** between the spawn and the row's update the child is not recorded (unavoidable without a
+  stopped child); a crash there leaves a backend the reaper does not know, which ends on its own within a second,
+  since it watches its parent pid (`DRGNX_HUB_PARENT_PID`);
+- **the reused leader** ("The window left open", above): the recorded group died and its leader's pid went to another
+  process's group before the next start.
+
+Phase 1 reaps only the backend's group. An agent of a SIGKILLed backend that is not in that group survives outside
+systemd until phases 5 and 6 move agents into Ratatoskr (review I15).
 
 ## Events
 

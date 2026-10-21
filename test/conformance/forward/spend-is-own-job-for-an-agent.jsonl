@@ -1,0 +1,9 @@
+{"scenario": "forward/spend-is-own-job-for-an-agent", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "spend from an agent socket reads its own job: job defaults to it, another job is not-allowed and never reaches the backend; the backend gets the agent's session and job as the caller."}
+{"do": "start", "hub": "h", "args": ["--agent-socket", "s1:j1"], "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"spend\": {\"result\": {\"input\": 1, \"output\": 2, \"cost\": 0.5, \"requests\": 1}}}"}}
+{"do": "connect", "conn": "a", "hub": "h", "socket": "agent:s1", "as": "service"}
+{"do": "send", "conn": "a", "json": {"id": 1, "method": "spend"}}
+{"do": "expect", "conn": "a", "json": {"id": 1, "result": {"input": 1, "output": 2, "requests": 1}}}
+{"do": "backend_log", "hub": "h", "expect_line": {"method": "spend", "params": {"job": "j1"}, "caller": {"class": "agent", "sid": "s1", "job": "j1"}}}
+{"do": "send", "conn": "a", "json": {"id": 2, "method": "spend", "params": {"job": "j2"}}}
+{"do": "expect", "conn": "a", "json": {"id": 2, "error": {"code": "not-allowed", "path": "job"}}}
+{"do": "backend_log", "hub": "h", "expect_no_line": "j2"}

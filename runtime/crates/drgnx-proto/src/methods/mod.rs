@@ -60,6 +60,16 @@ macro_rules! params {
                 .expect("params encode as JSON")
             }
         }
+
+        /// The params as `to_value` has them, written straight into the line the front sends the backend (keys are
+        /// exposed only while that line is serialised).
+        impl Serialize for Params {
+            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                match self {
+                    $(Params::$variant(p) => p.serialize(s)),+
+                }
+            }
+        }
     };
 }
 
@@ -108,4 +118,22 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(agents::methods());
     v.extend(jobs::methods());
     v
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::registry::find;
+    use serde_json::json;
+
+    #[test]
+    fn params_serialize_as_to_value_has_them() {
+        for (method, params) in [
+            ("gateway/keys", json!({"keys": {"openrouter": "sk-x"}})),
+            ("job/stop", json!({"id": "j", "x": 1})),
+            ("spend", json!({})),
+        ] {
+            let (p, _) = (find(method).unwrap().decode)(&params).unwrap();
+            assert_eq!(serde_json::to_value(&p).unwrap(), p.to_value(), "{method}");
+        }
+    }
 }

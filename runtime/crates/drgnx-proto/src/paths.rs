@@ -169,6 +169,16 @@ pub fn data_dir(env: &Env) -> PathBuf {
     ))
 }
 
+/// `(drgnx-paths-dir 'config)`: a name ending in "/".
+pub fn config_dir(env: &Env) -> PathBuf {
+    PathBuf::from(dir(
+        env,
+        Some("DRGNX_CONFIG_DIR"),
+        "XDG_CONFIG_HOME",
+        ".config",
+    ))
+}
+
 fn state(env: &Env) -> String {
     dir(env, None, "XDG_STATE_HOME", ".local/state")
 }
@@ -329,6 +339,24 @@ mod tests {
                 c["env"]
             );
         }
+    }
+
+    #[test]
+    fn config_dir_follows_drgnx_paths_dir() {
+        let e = |vars: &[(&str, &str)]| config_dir(&Env::new(vars, 1));
+        assert_eq!(
+            e(&[("HOME", "/hm"), ("DRGNX_CONFIG_DIR", "/c/x")]),
+            Path::new("/c/x/")
+        );
+        assert_eq!(
+            e(&[("HOME", "/hm"), ("XDG_CONFIG_HOME", "/xc")]),
+            Path::new("/xc/drgnx/")
+        );
+        // a relative value counts for nothing
+        assert_eq!(
+            e(&[("HOME", "/hm"), ("DRGNX_CONFIG_DIR", "c")]),
+            Path::new("/hm/.config/drgnx/")
+        );
     }
 
     #[test]

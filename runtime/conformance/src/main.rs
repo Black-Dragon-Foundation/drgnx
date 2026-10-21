@@ -171,6 +171,8 @@ fn main() -> ExitCode {
         hub_bin: args.hub_bin.clone(),
         lisp_hub: args.lisp_hub.clone(),
         fake_backend: args.fake_backend.clone(),
+        scenarios: std::fs::canonicalize(&args.scenarios)
+            .unwrap_or_else(|_| args.scenarios.clone()),
     };
     let mut report = Report::default();
     for s in &scenarios {

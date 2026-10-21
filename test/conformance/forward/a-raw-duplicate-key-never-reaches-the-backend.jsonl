@@ -1,0 +1,7 @@
+{"scenario": "forward/a-raw-duplicate-key-never-reaches-the-backend", "requires": ["v1", "fake-backend"], "doc": "A line with a duplicate key is refused invalid-params by the front; the backend never gets the call."}
+{"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"job/stop\": {\"result\": {\"id\": \"a\"}}}"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "backend_log", "hub": "h", "expect_line": {"method": "subscribe"}}
+{"do": "send", "conn": "c", "raw": "{\"id\":1,\"method\":\"job/stop\",\"params\":{\"id\":\"a\",\"id\":\"b\"}}"}
+{"do": "expect", "conn": "c", "json": {"id": 1, "error": {"code": "invalid-params", "path": "params.id"}}}
+{"do": "backend_log", "hub": "h", "expect_no_line": "job/stop"}

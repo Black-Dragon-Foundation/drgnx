@@ -2,7 +2,7 @@
 
 use serde_json::{Map, Value};
 
-pub const VERBS: [&str; 20] = [
+pub const VERBS: [&str; 21] = [
     "start",
     "run",
     "spawn",
@@ -10,6 +10,7 @@ pub const VERBS: [&str; 20] = [
     "hello",
     "chmod",
     "send",
+    "pause",
     "expect",
     "expect_next",
     "expect_closed",
@@ -259,6 +260,7 @@ mod tests {
 {"do": "hello", "conn": "c", "proof": "valid", "proto": 1, "expect_class": "user"}
 {"do": "chmod", "path": "$SOCKET_DIR", "mode": "0711"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "ping"}}
+{"do": "pause", "conn": "c"}
 {"do": "expect", "conn": "c", "json": {"id": 1}, "within_ms": 100}
 {"do": "expect_next", "conn": "c", "json": {"id": 2}}
 {"do": "expect_closed", "conn": "c"}

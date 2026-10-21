@@ -1,0 +1,4 @@
+{"scenario": "forward/the-backend-gets-the-serve-socket-only", "requires": ["v1", "fake-backend"], "doc": "The backend is told where to serve (DRGNX_HUB_SERVE_SOCKET, the private backend socket) and whose child it is, and never gets a DRGNX_HUB_SOCKET (review C1)."}
+{"do": "start", "hub": "h", "env": {"DRGNX_HUB_SOCKET": "/elsewhere/hub.sock"}}
+{"do": "backend_log", "hub": "h", "expect_line": {"method": "subscribe"}}
+{"do": "file", "path": "$STATE/fake-backend.env", "json": {"DRGNX_HUB_SERVE_SOCKET": "$BACKEND_SOCKET", "DRGNX_HUB_PARENT_PID": "$string", "DRGNX_HUB_SOCKET": "$absent"}, "lacks": "/elsewhere"}

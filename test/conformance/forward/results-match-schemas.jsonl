@@ -1,0 +1,31 @@
+{"scenario": "forward/results-match-schemas", "requires": ["v1", "lisp-backend"], "doc": "Against a populated Lisp-backend store (a proposed job with tasks and an estimate, an open review card, a mock-acp session with entries, the events they made) every read method answers through the front's registry checks without internal (review I6, R-T12-1)."}
+{"do": "start", "hub": "h"}
+{"do": "write_file", "path": "$CONFIG/agents.eld", "text": "(:profiles ((\"mock-acp\" :command (\"sh\" \"$SCENARIOS/../fixtures/mock-acp-stdin.sh\" \"$EMACS\" \"--batch\" \"-Q\" \"-l\" \"$SCENARIOS/../fixtures/mock-acp.el\"))))\n"}
+{"do": "write_file", "path": "$ROOT/plan.md", "text": "# Two tasks\n\n**Repo:** $ROOT/repo\n\n### Task 1: Do the thing\n\n**Role:** implement\n\nNothing to do.\n\n### Task 2: Check the thing\n\n**Role:** review\n\nNeeds Task 1.\n"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": true}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "job/propose", "params": {"plan": "$ROOT/plan.md"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:job", "estimate": "$any", "tasks": [{"n": 1, "role": "implement"}, {"n": 2, "role": "review"}]}}, "within_ms": 30000}
+{"do": "sqlite", "path": "$DATA/work.db", "sql": ["insert into card (job, task, kind, title, data, state, at) values ('$job', null, 'review', 'review it', '{\"review\": true}', 'open', 1.5)"]}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/start", "params": {"profile": "mock-acp", "cwd": "$ROOT"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/send", "params": {"id": "$sid", "text": "hello"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"event": "agent-entries", "data": {"id": "$sid", "entries": {"$contains": [["$number", {"type": "stop"}]]}}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "ping"}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"pid": "$PID(h)"}}}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"backend": {"state": "running"}, "gateway_port": "$number", "registrations": "$number"}}}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "agents/list"}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": {"sessions": [{"id": "$sid", "profile": "mock-acp"}]}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 8, "method": "agents/get", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 8, "result": {"session": {"id": "$sid"}, "entries": {"$contains": [{"type": "user"}, {"type": "agent"}]}, "seq": "$number"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 9, "method": "job/status"}}
+{"do": "expect", "conn": "c", "json": {"id": 9, "result": {"jobs": [{"id": "$job", "cards": {"$contains": [{"kind": "review", "data": {"review": true}}]}}]}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 10, "method": "job/status", "params": {"id": "$job", "decisions": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 10, "result": {"id": "$job"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 11, "method": "spend", "params": {"job": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 11, "result": {"input": 0, "output": 0, "requests": 0}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 12, "method": "events/since", "params": {"since": 0}}}
+{"do": "expect", "conn": "c", "json": {"id": 12, "result": {"since": 0, "events": {"$contains": [{"kind": "start", "agent": "$sid"}]}}}}

@@ -923,7 +923,8 @@ about) and keeps the tests within their time limits."
 timer errors and a state dir of its own.  The hub's tables are fresh; nothing is served."
   (declare (indent 0))
   `(let* ((state (make-temp-file "drgnx-hub-state" t))
-          (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment))
+          ;; a copy: `drgnx-hub-main' unsets DRGNX_HUB_PARENT_PID in place (`setenv' changes the shared cell)
+          (process-environment (cons (concat "XDG_STATE_HOME=" state) (copy-sequence process-environment)))
           (drgnx-timer-errors nil) (drgnx-timer-report-file drgnx-timer-report-file) (drgnx-hub-test--calls nil)
           (drgnx-hub--event-state (make-hash-table :test #'equal)) (drgnx-hub--told (make-hash-table :test #'equal))
           (drgnx-hub--sent (make-hash-table :test #'equal)) (drgnx-hub--subscribers nil) (drgnx-hub--server nil)

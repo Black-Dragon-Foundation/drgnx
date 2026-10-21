@@ -16,6 +16,16 @@ pub struct Config {
     pub hub_bin: PathBuf,
     pub lisp_hub: Option<PathBuf>,
     pub fake_backend: Option<PathBuf>,
+    /// The scenarios' directory, absolute (`$SCENARIOS`: fixtures beside the rows).
+    pub scenarios: PathBuf,
+}
+
+/// The Emacs the harness and the Lisp hub use: `$DRGNX_EMACS`, else `emacs` (`$EMACS`).
+fn emacs() -> String {
+    std::env::var("DRGNX_EMACS")
+        .ok()
+        .filter(|e| !e.is_empty())
+        .unwrap_or_else(|| "emacs".into())
 }
 
 pub struct Runner<'a> {
@@ -32,9 +42,12 @@ pub struct Runner<'a> {
 type R<T = ()> = Result<T, String>;
 
 /// Longest first, so `$SOCKET_DIR` is not read as `$SOCKET` and `_DIR`.
-const VAR_NAMES: [&str; 11] = [
+const VAR_NAMES: [&str; 14] = [
+    "BACKEND_SOCKET",
+    "SCENARIOS",
     "SOCKET_DIR",
     "HARNESS_PID",
+    "EMACS",
     "SOCKET",
     "CONFIG",
     "STATE",
@@ -106,6 +119,27 @@ fn glob_file(path: &str) -> String {
     )
 }
 
+/// V with each `{"$repeat": TEXT, "times": N}` replaced by TEXT N times (a long string without a long row).
+fn repeat(v: &Value) -> R<Value> {
+    Ok(match v {
+        Value::Object(o) if o.contains_key("$repeat") => {
+            let text = str_of(o, "$repeat").ok_or("\"$repeat\" is a string")?;
+            let n = o
+                .get("times")
+                .and_then(Value::as_u64)
+                .ok_or("\"$repeat\" needs \"times\"")?;
+            Value::String(text.repeat(n as usize))
+        }
+        Value::Object(o) => Value::Object(
+            o.iter()
+                .map(|(k, x)| Ok((k.clone(), repeat(x)?)))
+                .collect::<R<_>>()?,
+        ),
+        Value::Array(a) => Value::Array(a.iter().map(repeat).collect::<R<_>>()?),
+        other => other.clone(),
+    })
+}
+
 fn ms(o: &Map<String, Value>, k: &str, default: u64) -> Duration {
     Duration::from_millis(o.get(k).and_then(Value::as_u64).unwrap_or(default))
 }
@@ -161,6 +195,27 @@ fn accepts_array(root: &Value, schema: &Value) -> bool {
         })
 }
 
+/// SQL's rows as JSON: an array of arrays, each value an integer, a real, a string or null (a blob as null).
+fn query_rows(db: &rusqlite::Connection, sql: &str) -> rusqlite::Result<Value> {
+    use rusqlite::types::ValueRef;
+    let mut st = db.prepare(sql)?;
+    let n = st.column_count();
+    let rows = st.query_map([], |r| {
+        (0..n)
+            .map(|i| {
+                Ok(match r.get_ref(i)? {
+                    ValueRef::Integer(x) => json!(x),
+                    ValueRef::Real(x) => json!(x),
+                    ValueRef::Text(t) => json!(String::from_utf8_lossy(t)),
+                    ValueRef::Null | ValueRef::Blob(_) => Value::Null,
+                })
+            })
+            .collect::<rusqlite::Result<Vec<Value>>>()
+            .map(Value::Array)
+    })?;
+    Ok(Value::Array(rows.collect::<rusqlite::Result<_>>()?))
+}
+
 fn is_zombie(pid: u32) -> bool {
     if let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
         return stat
@@ -206,6 +261,11 @@ impl Runner<'_> {
             })
             .unwrap_or_default();
         m.insert("HARNESS_PID".into(), std::process::id().to_string());
+        m.insert(
+            "SCENARIOS".into(),
+            self.cfg.scenarios.to_string_lossy().into_owned(),
+        );
+        m.insert("EMACS".into(), emacs());
         m
     }
 
@@ -387,6 +447,10 @@ impl Runner<'_> {
             "hello" => self.hello(step),
             "chmod" => self.chmod(step),
             "send" => self.send(step),
+            "pause" => {
+                self.conn(step)?.pause();
+                Ok(())
+            }
             "expect" | "expect_next" => self.expect(step),
             "expect_closed" => self
                 .conn(step)?
@@ -432,6 +496,11 @@ impl Runner<'_> {
             ("DATA", format!("{r}/data")),
             ("CONFIG", format!("{r}/config")),
             ("STATE", format!("{r}/state/drgnx")),
+            (
+                "SCENARIOS",
+                self.cfg.scenarios.to_string_lossy().into_owned(),
+            ),
+            ("EMACS", emacs()),
         ]);
         let pre_sub = |s: String| -> String {
             let mut out = s;
@@ -451,7 +520,12 @@ impl Runner<'_> {
             .map(|(k, v)| (k, pre_sub(v)))
             .collect();
         if !self.cfg.lisp_target {
-            if self.requires.iter().any(|t| t == "lisp-backend") {
+            // a v0 row runs through the front against the Lisp backend (review I1)
+            if self
+                .requires
+                .iter()
+                .any(|t| t == "lisp-backend" || t == "v0")
+            {
                 if let Some(p) = &self.cfg.lisp_hub {
                     env.push((
                         "DRGNX_RATATOSKR_BACKEND".into(),
@@ -754,7 +828,10 @@ impl Runner<'_> {
     fn send(&mut self, step: &Step) -> R {
         let idx = self.hub_index(None).ok();
         let (data, newline): (Vec<u8>, bool) = if let Some(j) = step.obj.get("json") {
-            (self.subst(idx, j, true).to_string().into_bytes(), true)
+            (
+                repeat(&self.subst(idx, j, true))?.to_string().into_bytes(),
+                true,
+            )
         } else if step.obj.contains_key("raw") {
             let nl = !step
                 .obj
@@ -1111,6 +1188,12 @@ impl Runner<'_> {
             };
         }
         let meta = meta.map_err(|e| format!("{path}: {e}"))?;
+        if step.obj.contains_key("lacks") {
+            let text = self.text(idx, step, "lacks")?;
+            if std::fs::read_to_string(&path).is_ok_and(|t| t.contains(&text)) {
+                return Err(format!("{path} contains {text:?}"));
+            }
+        }
         if let Some(mode) = str_of(&step.obj, "mode") {
             let bits = u32::from_str_radix(mode, 8).map_err(|_| format!("bad mode {mode:?}"))?;
             if meta.permissions().mode() & 0o7777 != bits {
@@ -1164,6 +1247,16 @@ impl Runner<'_> {
             rusqlite::Connection::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         for sql in self.strings(idx, step, "sql")? {
             db.execute_batch(&sql).map_err(|e| format!("{sql}: {e}"))?;
+        }
+        if step.obj.contains_key("query") {
+            let sql = self.text(idx, step, "query")?;
+            let rows = query_rows(&db, &sql).map_err(|e| format!("{sql}: {e}"))?;
+            let pattern = self.subst(
+                idx,
+                step.obj.get("expect").ok_or("\"query\" needs \"expect\"")?,
+                false,
+            );
+            matcher::matches(&pattern, &rows, &mut self.caps).map_err(|e| format!("{sql}: {e}"))?;
         }
         Ok(())
     }

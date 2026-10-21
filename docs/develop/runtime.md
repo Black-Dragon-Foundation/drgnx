@@ -115,7 +115,19 @@ drgnx-conformance connect-as --socket PATH
   `serve --foreground --parent-pid PID` to `emacs --batch -Q -L core -l drgnx-hub -f drgnx-hub-main` using
   `$DRGNX_EMACS`). `--target ratatoskr` runs every row, the `v0` ones too: they must pass both ways.
 - `--lisp-hub` and `--fake-backend` are what a `lisp-backend` / `fake-backend` row hands Ratatoskr as
-  `DRGNX_RATATOSKR_BACKEND`.
+  `DRGNX_RATATOSKR_BACKEND`; with `--target ratatoskr`, a `v0` row gets the Lisp hub as its backend too, so the v0 rows
+  run through the front (`--target ratatoskr --lisp-hub test/conformance/lisp-hub.sh --only-tag v0`). A row with
+  neither runs with the backend `missing` (the harness sets no `DRGNX_DIR`).
+- **The fake backend** (`runtime/target/debug/ratatoskr-fake-backend`, `conformance/src/bin/`) stands in for the
+  Lisp backend: it serves `DRGNX_HUB_SERVE_SOCKET` the v0 way, appends every line it gets to
+  `$STATE/fake-backend.log` and writes its environment as a JSON object to `$STATE/fake-backend.env`. It answers from
+  the JSON script in `DRGNX_FAKE_BACKEND_SCRIPT` (a row's `start` `env`): `{METHOD: ANSWER}`, ANSWER an object with
+  `result` or `error` (sent with the request's id), a string (the whole line, `$ID` the id), `null` (never
+  answered) or `{"exit": CODE}` (it exits). Without a script: `ping`, `status` (`gateway_port` and `registrations`
+  0), `subscribe` and `coord/notify` answer, anything else is an error. When the script's `trigger` method
+  (`coord/notify`) is called, it sends its subscribers the events of the file `events` (a JSON array of `{event,
+  data}`), then `flood` `card` events with a title of `flood_size` bytes (65536). It ends with its parent
+  (`DRGNX_HUB_PARENT_PID`) unless the script says `"ignore_parent": true`.
 - `--only GLOB` matches the scenario name (`*` and `?`); `--only-tag TAG` the rows that require the tag.
 - Output: one `PASS name`, `SKIP name (reason)` or `FAIL name: step N (VERB): what` line per scenario, then
   `N passed, N skipped, N failed`. Exit 0 only with no FAIL. With `--require-all` a SKIP fails too, except `linux` /
@@ -146,24 +158,26 @@ Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in fai
 | `connect` | `conn` (default `c`), `hub`, `socket` (`"main"` or `"agent:SID"`), `as` | open a connection; lines are buffered per connection. `"user"` (default) on a v1 target performs the `hello` macro with a valid proof and consumes the `challenge`; on `--target lisp` it does nothing. `"service"` connects raw (the `challenge` stays buffered). `"other-uid"` needs `sudo`: it runs `connect-as` as another uid, and makes the root directory 0711 for it |
 | `hello` | `conn`, `proof`, `proto`, `expect_class`, `expect_error`, `expect_result`, `capture` | the v1 macro: read the `challenge`, send `hello` with the proof, check the class and, for `valid`, the hub's proof. `proof` is `valid`, `wrong`, `none` or `replay:NAME`. `capture: NAME` keeps the line it sent; `replay:NAME` sends such a line again, as is. `expect_error: CODE` wants the refusal with that code; `expect_result` is a pattern for the reply. A connection is challenged once: a second `hello` on it uses the nonce the first one read |
 | `chmod` | `path`, `mode` | change a mode (octal string) |
-| `send` | `conn`, one of `json`, `raw`, `bytes` | write one line. `raw` is the text as is, plus `\n` unless `"no_newline": true`; `bytes` is `{fill, n, newline}`. `"eof": true` then closes the sending side (a client that vanished mid-line). A write the hub closed meanwhile is no error: the next `expect_closed` says so |
+| `send` | `conn`, one of `json`, `raw`, `bytes` | write one line. `raw` is the text as is, plus `\n` unless `"no_newline": true`; `bytes` is `{fill, n, newline}`. In `json`, `{"$repeat": TEXT, "times": N}` is TEXT N times (a long string without a long row). `"eof": true` then closes the sending side (a client that vanished mid-line). A write the hub closed meanwhile is no error: the next `expect_closed` says so |
+| `pause` | `conn` | stop reading the connection (what arrives stays in the socket): a client that stopped reading. The next step that reads it reads again |
 | `expect` | `conn`, `json` (pattern), `within_ms` (5000) | the first buffered or arriving line that matches; earlier non-matching lines stay buffered |
 | `expect_next` | as `expect` | the very next line must match |
 | `expect_closed` | `conn`, `within_ms` | the hub closed the connection |
 | `expect_silent` | `conn`, `for_ms` (300) | no line arrives |
 | `kill` | `hub` or `pid`, `signal` (`TERM KILL STOP CONT INT HUP QUIT USR1 USR2`) | signal the hub (or a captured pid) |
 | `expect_exit` | `hub` or `pid`, `code`, `signal`, `within_ms` (10000) | the process ended with this status (a `pid` must be one the scenario spawned) |
-| `file` | `path`, `exists`, `mode`, `owner` (`"user"` or a uid), `json`, `contains`, `within_ms` (5000) | inspect a file the contract names. A `*` or `?` in the last component picks the first matching name (`hub-*.jsonl`). `contains` waits up to `within_ms` until the file's text holds the string (a log is written a moment later) |
+| `file` | `path`, `exists`, `mode`, `owner` (`"user"` or a uid), `json`, `contains`, `lacks`, `within_ms` (5000) | inspect a file the contract names. A `*` or `?` in the last component picks the first matching name (`hub-*.jsonl`). `contains` waits up to `within_ms` until the file's text holds the string (a log is written a moment later); `lacks` is a string the text must not hold |
 | `write_file` | `path`, `text` | set up an input |
-| `sqlite` | `path`, `sql: [...]` | set up a database (bundled SQLite) |
+| `sqlite` | `path`, `sql: [...]`, `query`, `expect` | set up a database (bundled SQLite); `query`'s rows, as `[[value…]…]`, must match the pattern `expect` |
 | `backend_log` | `hub`, `expect_line`, `expect_no_line`, `within_ms`, `for_ms` | lines the fake backend received (`$STATE/fake-backend.log`): a substring, or a pattern for lines that are JSON |
 | `pid` | `capture`, `alive` (true), `within_ms` (5000) | a captured pid is (or is no longer) running; a reused pid does not count |
 | `class_matrix` | `table`, `args`, `env`, `agent`, `last`, `within_ms` | every method of `table` (`{method: [classes]}`, `class-matrix.json`) gets `{}` from `user` (a valid hello), `service` (no hello) and, with `agent: SID`, `agent` (that session's socket, which `args` such as `["--agent-socket", "s1:j1"]` makes the hub serve). A listed class must not get `not-allowed`; any other must. The step starts its own hubs with `args` and `env`: one for the table, and for each method of `last` (default `restart`, `shutdown`, which a user call runs) one per class |
 | `bad_params` | `conn`, `registry`, `within_ms` | every method of the registry file (`methods.json`; a relative path is from the current directory) with required params gets `{}` and a wrong type for its first required key (`true` where a list belongs, else `[]`) on `conn`; each must be `invalid-params` with a `path` (one of the required keys, then that key). `hello` goes on a fresh connection each time |
 | `measure` | `name`, `repeat`, `steps` | times the steps, `repeat` times, and records the milliseconds for `--perf` |
 
-**Variables** in strings: `$ROOT $HOME $RUN $STATE $DATA $CONFIG $SOCKET $SOCKET_DIR $CAP $LOCK $PID(hub) $HARNESS_PID`
-(of the step's `hub`, else the latest started), and `$NAME` for a capture. A string that is just `$PID(hub)`,
+**Variables** in strings: `$ROOT $HOME $RUN $STATE $DATA $CONFIG $SOCKET $SOCKET_DIR $BACKEND_SOCKET $CAP $LOCK $PID(hub)
+$HARNESS_PID` (of the step's `hub`, else the latest started), `$SCENARIOS` (the scenarios' directory, absolute: its
+`fixtures/`), `$EMACS` (`$DRGNX_EMACS`, else `emacs`), and `$NAME` for a capture. A string that is just `$PID(hub)`,
 `$HARNESS_PID` or a capture keeps its JSON type (a number stays a number). Agent sockets are
 `$SOCKET_DIR/hub-HASH.d/agent-SID.sock`.
 
@@ -250,9 +264,22 @@ Rows with `"requires": ["v1"]` run only against Ratatoskr (`--target ratatoskr`)
 | `params/` | `bad-params-are-refused-with-a-path` (`bad_params` over `runtime/protocol/methods.json`), `named-types-refuse` (ids, absolute local paths, a 17-item `env/set`, an uppercase nonce: each `invalid-params` with its path), `duplicate-key-refused`, `unknown-keys-dropped-and-listed` |
 | `hello/` | `challenge-on-accept`, `valid-proof-makes-user-and-hub-proves`, `wrong-proof-refused-and-logged`, `replayed-hello-is-refused` (SB-T12-6), `no-hello-is-service`, `newer-proto-refused`, `a-second-hello-is-refused`; with `test-hooks`: `an-agent-socket-is-agent-class` |
 | `class/` | `matrix` (`test-hooks`: `class_matrix` over `class-matrix.json`, the agent class through `--agent-socket s1:j1`) |
-| `errors/` | `every-error-has-a-code` (each code but `schema`; a refused notification gets no answer) |
+| `errors/` | `every-error-has-a-code` (each code but `schema`; a refused notification gets no answer; `internal` from a fake backend's answer that does not fit) |
 | `readonly/` | `a-newer-work-db-refuses-writes` (work.db at schema 9: `schema` for a writing method within the 2 s tick) |
-| `basics/` | `status-shape-v1`, `events-since-without-a-work-db`; with `fake-backend`: `events-since-from-the-store` (rows written into work.db with `sqlite`) |
+| `basics/` | `status-shape-v1`, `events-since-without-a-work-db`, `events-since-from-the-store` (rows written into work.db with `sqlite`) |
+| `forward/` (`fake-backend`) | `a-raw-duplicate-key-never-reaches-the-backend`, `a-tramp-path-never-reaches-the-backend`, `params-are-re-encoded-with-the-caller`, `a-malformed-backend-answer-is-internal`, `keys-only-from-a-proven-user`, `the-backend-gets-no-provider-key`, `the-backend-keeps-ssh-and-proxy-env`, `the-backend-gets-the-serve-socket-only`, `events-are-relayed-and-decoded`, `every-backend-event-kind-is-relayed` (`fixtures/backend-events.json`: one event of each of the nine kinds, as main sends it), `a-malformed-backend-event-is-dropped`, `backend-gone-calls-fail-once-and-it-restarts`, `an-oversized-forward-is-refused`; with `test-hooks` too: `agents-list-is-shaped-per-class`, `spend-is-own-job-for-an-agent` |
+| `forward/` (`lisp-backend`) | `empty-lists-are-arrays` (A-17), `results-match-schemas` (a populated store: a proposed job, a review card, a mock-acp session with entries; every read method answers without `internal`) |
+| `backpressure/` (`fake-backend`) | `a-stopped-reader-is-dropped-others-keep-going` (the backend floods 400 events of 64 KiB; a subscriber that `pause`d is closed, another gets every event) |
+| `reaper/` | `a-recorded-orphan-backend-is-killed-at-start` (`fake-backend`: the hub SIGKILLed, its backend ignoring its parent; the next hub kills it within 4 s), `a-row-without-a-pid-is-dropped-and-kills-nothing` (NULL rows in `runtime.db`: removed, nothing signalled) |
+
+The forwarding rows run with both helpers:
+
+```
+cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p drgnx-conformance --features drgnx-ratatoskr/test-hooks
+runtime/target/debug/drgnx-conformance --target ratatoskr --hub-bin runtime/target/debug/ratatoskr \
+    --lisp-hub test/conformance/lisp-hub.sh --fake-backend runtime/target/debug/ratatoskr-fake-backend \
+    --scenarios test/conformance
+```
 
 Paths: the agent sockets are `<root>/run/drgnx/hub-HASH.d/agent-SID.sock`, so with `DRGNX_CONFORMANCE_ROOTS` the
 root's own path must leave room for them within 103 bytes (a short link to a deeper directory works).

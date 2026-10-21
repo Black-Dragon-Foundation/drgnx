@@ -1,0 +1,5 @@
+{"scenario": "forward/empty-lists-are-arrays", "requires": ["v1", "lisp-backend"], "doc": "An empty list the Lisp backend sends as null reaches the client as [] (A-17): job/status with no job is {jobs: []}."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/status"}}
+{"do": "expect_next", "conn": "c", "json": {"id": 1, "result": {"jobs": []}}, "within_ms": 30000}
