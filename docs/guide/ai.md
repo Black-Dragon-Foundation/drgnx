@@ -117,7 +117,9 @@ says when not to ask through `drgnx-ai-ghost-inhibit-functions` (an abnormal hoo
 stops the question); with VS Code or Emacs keys it is empty and ghost text asks as it always did.
 
 **Accept Suggestion Line** and **Toggle AI Completion** are in the palette. With no `complete` provider running,
-nothing is asked, and drgnx says so once; it looks for running providers again at most once a minute. Turning
+nothing is asked, and drgnx posts the notice "No AI provider for completion" (source `ai`; Enter on it runs
+**Choose AI Provider/Model…**). It stays in the Notices list until a provider answers, then goes by itself; drgnx
+looks for running providers again at most once a minute. Turning
 `tools/ai` off (Preferences: Modules) takes ghost text out of the buffers that have it, with any showing suggestion.
 
 **Tab is one key for everything.** It does the first of these that applies:
@@ -250,8 +252,8 @@ keyring on Linux), because that is where onboarding puts the key. Background fea
 (ghost text, the hub, agents) never read them — they use the environment or a key this drgnx read earlier. So that
 they have it after a restart, `drgnx open` (which the drgnx app runs) has drgnx read the keys of the providers your
 roles name once per start, a moment after its window shows (macOS may ask whether Emacs may use the Keychain).
-**AI: Load Keys** does the same at any time — needed when drgnx was started some other way; ghost text says once
-"AI: Load Keys reads your key from the Keychain" when its provider's key is not loaded. The `drgnx` command-line
+**AI: Load Keys** does the same at any time — needed when drgnx was started some other way; ghost text posts a notice
+("No key for … loaded: AI: Load Keys reads it from the Keychain") when its provider's key is not loaded. The `drgnx` command-line
 tool, which runs in batch Emacs, never reads the Keychain or keyring: set `OPENROUTER_API_KEY` for it. In short: the
 key you gave onboarding works in the drgnx app; in a terminal (`drgnx onboard`, `drgnx search`, …) use the
 environment variable. The one exception is `drgnx secrets` (below), which you run on a terminal to carry your keys

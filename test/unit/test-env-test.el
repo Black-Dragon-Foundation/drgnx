@@ -66,7 +66,9 @@ variable holding a path under the real HOME — are unset or point into the run,
     (unwind-protect
         (dolist (tier drgnx-test-env-tiers)
           (let* ((process-environment
-                  (append (list "HOME=/real-home" "PATH=/real-home/bin:/usr/bin" "DRGNX_USER_ELPA=/real-home/.config/emacs/elpa")
+                  (append (list "HOME=/real-home" "PATH=/real-home/bin:/usr/bin" "DRGNX_USER_ELPA=/real-home/.config/emacs/elpa"
+                                ;; macOS CI: the checkout, and the Ratatoskr built in it, are under HOME
+                                "DRGNX_RATATOSKR_BIN=/real-home/work/drgnx/runtime/target/debug/ratatoskr")
                           (mapcar (lambda (kv) (concat (car kv) "=" (cdr kv))) drgnx-test-env-test--real-home-vars)
                           process-environment))
                  (env (drgnx-test-env tier run :display '("DISPLAY=:77")))
@@ -80,9 +82,10 @@ variable holding a path under the real HOME — are unset or point into the run,
             (should (eq 'unset (funcall seen "XAUTHORITY")))
             (should (drgnx-test-env-test--under run (funcall seen "GNUPGHOME")))
             (should (= #o700 (logand #o777 (file-modes (funcall seen "GNUPGHOME")))))
-            ;; the deliberate exceptions stay: the tools on PATH, the read-only package directory
+            ;; the deliberate exceptions stay: the tools on PATH, the read-only package directory, the client's Ratatoskr
             (should-not (funcall seen "PATH"))
-            (should-not (funcall seen "DRGNX_USER_ELPA"))))
+            (should-not (funcall seen "DRGNX_USER_ELPA"))
+            (should-not (funcall seen "DRGNX_RATATOSKR_BIN"))))
       (delete-directory run t))))
 
 (ert-deftest drgnx-test-env/drgnx-emacs-is-the-runs-own ()

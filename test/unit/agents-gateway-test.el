@@ -109,7 +109,8 @@
   (let ((drgnx-agents-env-functions (list (lambda (_s) (error "Boom")) (lambda (_s) "BARE=string")
                                           (lambda (_s) (list "A=1" 42)) (lambda (_s) nil) (lambda (_s) '("B=2"))))
         (said nil))
-    (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+    (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said)))
+              ((symbol-function 'drgnx-notify) (lambda (_s _v text &rest _) (push text said) nil)))   ; a notice, Task 20
       (let ((env (drgnx-agents--env (drgnx-agents--make :name "a" :profile "claude"))))
         ;; …and the rest is the bare names of `drgnx-agents-scrubbed-env' (variables the agent does not inherit)
         (should (equal (seq-filter (lambda (e) (string-search "=" e)) env) '("A=1" "B=2")))

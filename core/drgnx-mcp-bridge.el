@@ -20,6 +20,7 @@
 
 ;;; Code:
 (require 'subr-x)
+(require 'drgnx-guard)
 
 (defvar drgnx-mcp-bridge-max-line (* 16 1024 1024)
   "The largest message, in bytes, either way: a longer one ends the bridge.")
@@ -100,8 +101,8 @@ or not a JSON object."
     (unless socket (drgnx-mcp-bridge--die 1 "usage: drgnx-mcp-bridge-main SOCKET"))
     (setq proc (condition-case err
                    (make-network-process :name "drgnx-mcp-bridge" :family 'local :service socket :noquery t
-                                         :coding 'utf-8-unix :filter #'drgnx-mcp-bridge--filter
-                                         :sentinel #'drgnx-mcp-bridge--sentinel)
+                                         :coding 'utf-8-unix :filter (drgnx-guard-wrap #'drgnx-mcp-bridge--filter "MCP bridge")
+                                         :sentinel (drgnx-guard-wrap #'drgnx-mcp-bridge--sentinel "MCP bridge"))
                  (error (drgnx-mcp-bridge--die 1 (format "cannot connect to %s: %s" socket (error-message-string err))))))
     (process-put proc :lines (drgnx-mcp-bridge--state))
     (condition-case nil

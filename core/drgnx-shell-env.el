@@ -15,6 +15,7 @@
 (require 'drgnx-timer)
 
 (declare-function drgnx-command-define "drgnx-registry")
+(declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
 (declare-function drgnx-ai-providers "drgnx-ai")
 (declare-function drgnx-hub-running-p "drgnx-hub-client")
 (declare-function drgnx-hub-call "drgnx-hub-client")
@@ -97,7 +98,8 @@ and `exec-path' follows; other names are replaced.  The names that changed."
 
 (defun drgnx-shell-env--fail (why)
   "Say, in one line, that the shell's environment was not read, and WHY (never its output)."
-  (message "drgnx: your login shell's environment was not read (%s)" why))
+  (require 'drgnx-notice)
+  (drgnx-notify 'config 'warn (format "your login shell's environment was not read (%s)" why) :id 'shell-env))
 
 (defun drgnx-shell-env--skip-reason ()
   "Why the shell's environment is not read in this Emacs, or nil."

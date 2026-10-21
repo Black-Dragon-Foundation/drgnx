@@ -14,6 +14,16 @@
     (call-process "git" nil nil nil "init" "-q")
     (when todo (write-region todo nil "TODO.md" nil 'silent))))
 
+(defun drgnx-live-ob--ratatoskr (root)
+  "A Ratatoskr in ROOT for the session, as an install has one: a script that answers `doctor --json' with a healthy
+report (the doctor fails without one); its name."
+  (let ((bin (concat root "ratatoskr")))
+    (with-temp-file bin
+      (insert "#!/bin/sh\necho '{\"binary\":{\"path\":\"" bin "\",\"commit\":null,\"test_hooks\":false},\"running\":null,"
+              "\"socket_dir\":{\"path\":\"/run/ratatoskr\",\"mode\":\"0700\",\"ok\":true},\"job_agents\":\"none\"}'\n"))
+    (set-file-modes bin #o755)
+    bin))
+
 (ert-deftest drgnx-live/onboarding-in-a-fresh-session ()
   (let* ((root (file-name-as-directory (make-temp-file "drgnx-onboard-live" t)))
          (ws (concat root "ws/"))
@@ -24,8 +34,8 @@
            (run (format "(drgnx-onboard-run :non-interactive t :options '(:preset ide :roots (%S) :todos t))" ws)))
       (unwind-protect
           (progn
-            (drgnx-live-ob--q sess (format "(setq org-directory %S drgnx-projects-gryphn-file %S)"
-                                           (concat root "org/") (concat root "no-gryphn.tsv")))
+            (drgnx-live-ob--q sess (format "(progn (setq org-directory %S drgnx-projects-gryphn-file %S) (setenv \"DRGNX_RATATOSKR_BIN\" %S))"
+                                           (concat root "org/") (concat root "no-gryphn.tsv") (drgnx-live-ob--ratatoskr root)))
             (let ((r (drgnx-live-ob--q sess run)))
               (should (equal (seq-filter (lambda (x) (eq (cadr x) 'fail)) r) nil))
               (should (memq 'projects (mapcar #'car r))))

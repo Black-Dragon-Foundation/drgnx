@@ -40,6 +40,7 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n __fish_use_subcommand -a fmt -d "Format drgnx's Emacs Lisp"
     complete -c drgnx -n __fish_use_subcommand -a work -d 'The work tracker'
     complete -c drgnx -n __fish_use_subcommand -a hub -d 'The hub behind agents and jobs'
+    complete -c drgnx -n __fish_use_subcommand -a runtime -d 'Build and install Ratatoskr, the agent runtime'
     complete -c drgnx -n __fish_use_subcommand -a job -d 'Jobs from plans'
     complete -c drgnx -n __fish_use_subcommand -a search -d 'Semantic search'
     complete -c drgnx -n __fish_use_subcommand -a keys -d 'Compare key profiles'
@@ -105,7 +106,7 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n '__fish_seen_subcommand_from lease' -l wait -x -d 'Seconds to wait for a slot'
     complete -c drgnx -n '__fish_seen_subcommand_from fmt' -l check -d 'Only report'
 
-    # work, hub, job, search, keys, ui
+    # work, hub, runtime, job, search, keys, ui
     complete -c drgnx -n '__fish_seen_subcommand_from work; and not __fish_seen_subcommand_from record scan status' -f -a record -d 'Link commits to a task'
     complete -c drgnx -n '__fish_seen_subcommand_from work; and not __fish_seen_subcommand_from record scan status' -f -a scan -d 'Read specs, plans and the board'
     complete -c drgnx -n '__fish_seen_subcommand_from work; and not __fish_seen_subcommand_from record scan status' -f -a status -d 'Every plan'
@@ -116,6 +117,11 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n '__fish_seen_subcommand_from hub; and not __fish_seen_subcommand_from start stop status' -f -a stop -d 'Stop the hub'
     complete -c drgnx -n '__fish_seen_subcommand_from hub; and not __fish_seen_subcommand_from start stop status' -f -a status -d 'Is it running?'
     complete -c drgnx -n '__fish_seen_subcommand_from hub' -l json -d 'Machine-readable'
+    complete -c drgnx -n '__fish_seen_subcommand_from runtime' -f
+    complete -c drgnx -n '__fish_seen_subcommand_from runtime; and not __fish_seen_subcommand_from build install' -a build -d 'Cargo build of Ratatoskr'
+    complete -c drgnx -n '__fish_seen_subcommand_from runtime; and not __fish_seen_subcommand_from build install' -a install -d "The built binary into drgnx's data folder"
+    complete -c drgnx -n '__fish_seen_subcommand_from runtime; and __fish_seen_subcommand_from build' -l install -d 'Install it after the build'
+    complete -c drgnx -n '__fish_seen_subcommand_from runtime; and __fish_seen_subcommand_from build install' -l prefix -x -a '(__fish_complete_directories)' -d 'Also link bin/ratatoskr and bin/rtsk here'
     complete -c drgnx -n '__fish_seen_subcommand_from job; and not __fish_seen_subcommand_from propose approve resume stop status' -f -a propose -d 'A job from a plan'
     complete -c drgnx -n '__fish_seen_subcommand_from job; and not __fish_seen_subcommand_from propose approve resume stop status' -f -a approve -d 'Run a proposed job'
     complete -c drgnx -n '__fish_seen_subcommand_from job; and not __fish_seen_subcommand_from propose approve resume stop status' -f -a resume -d 'Resume a paused job'

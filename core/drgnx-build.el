@@ -14,6 +14,8 @@
 (require 'bytecomp)
 (require 'seq)
 
+(declare-function drgnx-guard-wrap "drgnx-guard")
+
 (defconst drgnx-build-dirs '("core" "wb" "modules") "What `drgnx build' compiles, under the checkout.")
 
 (defun drgnx-build-files (root)
@@ -85,6 +87,7 @@ in its pipe; `process-status' says `exit' as soon as the process is reaped, whil
 Each file compiles in a fresh batch Emacs, as the native compiler compiles it when a session loads the .elc: a
 function another file's compile happened to load cannot hide a missing `declare-function' or `require'.
 `drgnx-build-jobs' of them run at once."
+  (require 'drgnx-guard)                ; not at load: the compiling children load this file with -Q, no load-path
   (let* ((files (drgnx-build-files root))
          (emacs (expand-file-name invocation-name invocation-directory))
          (self (or (locate-library "drgnx-build.el") (error "drgnx-build.el is not on load-path")))
@@ -96,7 +99,7 @@ function another file's compile happened to load cannot hide a missing `declare-
             (let* ((file (pop queue))
                    (proc (make-process
                           :name "drgnx-build" :buffer (generate-new-buffer " *drgnx-build*" t) :noquery t
-                          :connection-type 'pipe :sentinel #'drgnx-build--sentinel
+                          :connection-type 'pipe :sentinel (drgnx-guard-wrap #'drgnx-build--sentinel "build compile")
                           :command (list emacs "--batch" "-Q" "-l" self
                                          "--eval" (prin1-to-string `(drgnx-build--child ,file ,root))))))
               (push (list proc file (+ (float-time) drgnx-build-file-timeout)) running)))

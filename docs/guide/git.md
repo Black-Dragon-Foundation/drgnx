@@ -86,8 +86,10 @@ Merged and closed ones are hidden until **Pull Requests: Show Closed**; when onl
   against its base in the diff view.
 - **Pull Requests: Fetch** asks the forge for the list (`forge-pull`). It and Show Changes (which runs
   `git fetch` for the one pull request) are the only things here that use the network, and only when you run
-  them. git never asks on a terminal in the background (a configured credential helper may still ask): when a fetch fails, the echo area shows git's last line
-  (for example that it could not read a username). Fetch needs a forge token in auth-source: see forge's manual. GitHub works;
+  them. git never asks on a terminal in the background (a configured credential helper may still ask): when a fetch fails, a notice (source `prs`)
+  carries git's last line (for example that it could not read a username). When the tab cannot read forge's
+  database, it says "Pull requests: the forge did not answer: REASON" in place of the usual placeholder, and the same
+  text stays in the Notices list until a read works. Fetch needs a forge token in auth-source: see forge's manual. GitHub works;
   Codeberg/Forgejo works as far as forge supports it.
 - In a commit message, `#` completes pull request and issue numbers (forge).
 

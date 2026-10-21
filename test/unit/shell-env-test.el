@@ -6,6 +6,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-shell-env)
+(require 'drgnx-notice)
 (require 'drgnx-hub)
 (load (expand-file-name "test/fixtures/scripted-process" drgnx-dir) nil t)
 
@@ -25,7 +26,9 @@ MESSAGES the messages said."
           (drgnx-shell-env-extra-names nil)
           (drgnx-shell-env-timeout 5))
      (cl-letf (((symbol-function 'message)
-                (lambda (fmt &rest args) (when fmt (push (apply #'format fmt args) messages)))))
+                (lambda (fmt &rest args) (when fmt (push (apply #'format fmt args) messages))))
+               ;; the failure line is a notice (Task 20): its text is collected like a message
+               ((symbol-function 'drgnx-notify) (lambda (_s _v text &rest _) (push text messages) nil)))
        (unwind-protect (progn ,@body)
          (delete-directory dir t)))))
 
@@ -58,7 +61,7 @@ its environment, then AFTER."
     (cons proc changed)))
 
 (defun drgnx-shell-env-test--failure-p (m)
-  (string-prefix-p "drgnx: your login shell's environment was not read" m))
+  (string-prefix-p "your login shell's environment was not read" m))
 
 (ert-deftest drgnx-shell-env/only-the-allowlist-is-taken ()
   (drgnx-shell-env-test--with

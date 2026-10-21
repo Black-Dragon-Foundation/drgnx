@@ -4,6 +4,7 @@
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/measure-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-diff" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-prs" drgnx-dir) nil t)
 
@@ -13,13 +14,15 @@
 (defmacro drgnx-prs-test--with (prs &rest body)
   "BODY in a repo whose forge PRs are PRS (`drgnx-prs--pullreqs' stubbed)."
   (declare (indent 1))
-  `(drgnx-git-test-with-repo
-     (drgnx-git-test-write repo "a" "a\n")
-     (drgnx-git-test repo "add" "-A") (drgnx-git-test repo "commit" "-q" "-m" "a")
-     (let ((default-directory repo))
-       (cl-letf (((symbol-function 'drgnx-prs--pullreqs) (lambda (_root) ,prs)))
-         (unwind-protect (progn ,@body)
-           (when (get-buffer "*drgnx pull requests*") (kill-buffer "*drgnx pull requests*")))))))
+  `(drgnx-notice-test-with-model
+     (drgnx-notice-define-source 'prs :title "Pull requests" :command 'prs-fetch)
+     (drgnx-git-test-with-repo
+       (drgnx-git-test-write repo "a" "a\n")
+       (drgnx-git-test repo "add" "-A") (drgnx-git-test repo "commit" "-q" "-m" "a")
+       (let ((default-directory repo))
+         (cl-letf (((symbol-function 'drgnx-prs--pullreqs) (lambda (_root) ,prs)))
+           (unwind-protect (progn ,@body)
+             (when (get-buffer "*drgnx pull requests*") (kill-buffer "*drgnx pull requests*"))))))))
 
 (defun drgnx-prs-test--rows ()
   (with-current-buffer "*drgnx pull requests*"
@@ -112,17 +115,36 @@
         (should (bufferp err))
         (with-current-buffer err (insert "fatal: could not read Username for 'https://example.org'\n"))
         (funcall sentinel 'fake "exited abnormally with code 128\n")
-        (should (seq-some (lambda (m) (string-search "could not read Username" m)) messages))
+        (should-not (seq-some (lambda (m) (string-prefix-p "drgnx: fetching pull request #5 failed" m)) messages))
+        (should (seq-some (lambda (n) (string-search "could not read Username" (plist-get n :text)))
+                          (drgnx-notices :source 'prs)))
         (should-not (buffer-live-p err))))))
 
-(ert-deftest drgnx-prs/wrong-slot-shows-placeholder ()
-  ;; M11b-8: a forge whose classes differ from what we read is a message and the placeholder, not an error
+(ert-deftest drgnx-prs/a-fetch-failure-is-a-condition-and-the-placeholder-says-why ()
+  ;; M11b-8 / A-32: a forge whose classes differ from what we read is a warn condition, and the tab says why
   (let ((messages nil))
     (drgnx-prs-test--with (error "Invalid slot name: draft-p")
       (cl-letf (((symbol-function 'message) (lambda (fmt &rest a) (push (apply #'format fmt a) messages))))
         (drgnx-prs-view))
-      (should (string-search "No pull requests here yet" (with-current-buffer "*drgnx pull requests*" (buffer-string))))
-      (should (seq-some (lambda (m) (string-search "Invalid slot name" m)) messages)))))
+      (let ((text (with-current-buffer "*drgnx pull requests*" (buffer-string)))
+            (n (car (drgnx-notices :source 'prs))))
+        (should (string-search "the forge did not answer: Invalid slot name" text))
+        (should-not (string-search "Fetch (forge) gets them" text))
+        (should (eq (plist-get n :severity) 'warn))
+        (should (eq (plist-get n :life) 'condition))
+        (should (equal (plist-get n :id) 'fetch))
+        (should (eq (plist-get n :command) 'prs-fetch))
+        (should (string-prefix-p "Pull requests: the forge did not answer: Invalid slot name" (plist-get n :text))))
+      (should-not messages))))
+
+(ert-deftest drgnx-prs/a-good-read-clears-the-condition ()
+  (drgnx-prs-test--with (error "Invalid slot name: draft-p")
+    (drgnx-prs-view)
+    (should (drgnx-notices :source 'prs))
+    (cl-letf (((symbol-function 'drgnx-prs--pullreqs) (lambda (_root) nil)))
+      (drgnx-prs-view))
+    (should-not (drgnx-notices :source 'prs))
+    (should (string-search "Fetch (forge) gets them" (with-current-buffer "*drgnx pull requests*" (buffer-string))))))
 
 (defun drgnx-prs-test--stacks-reference (prs)
   "The quadratic first version of `drgnx-prs-stacks', kept to compare the order against."

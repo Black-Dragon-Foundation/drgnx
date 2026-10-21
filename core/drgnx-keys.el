@@ -703,7 +703,9 @@ Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolut
   (let ((layers (plist-get drgnx-keys-last :layers)))
     (dolist (fn (default-value 'drgnx-keys-after-apply-functions))
       (condition-case err (funcall fn layers)
-        (error (message "drgnx: %S failed after applying keys: %s" fn (error-message-string err))))))
+        (error (require 'drgnx-notice)
+               (drgnx-notify 'keys 'warn (format "%S failed after applying keys: %s" fn (error-message-string err))
+                             :id (cons 'after-apply fn))))))
   drgnx-keys-last)
 
 ;;;; Reporting

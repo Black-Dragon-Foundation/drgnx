@@ -291,17 +291,19 @@
 
 (ert-deftest drgnx-wb-undefine/a-rule-naming-an-undefined-place-falls-back-to-the-editor ()
   (drgnx-wb-undefine-test--with
-   (let ((messages nil) (buf (get-buffer-create "*drgnx-test-notes*")))
+   (let ((notices nil) (buf (get-buffer-create "*drgnx-test-notes*")))
      (drgnx-wb-undefine-test--setup 'test/p
        (drgnx-wb-define-place 'gone (lambda (&rest _) (error "should not run")))
        (drgnx-wb-place "\\`\\*drgnx-test-notes\\*\\'" 'gone))
      (drgnx-wb-undefine-place 'gone)
-     (cl-letf (((symbol-function 'message) (lambda (&rest a) (push a messages))))
+     ;; the missing place is a `wb' warn notice (Notices Task 20), once per place
+     (cl-letf (((symbol-function 'drgnx-notify) (lambda (&rest a) (push a notices))))
        (let ((w (drgnx-rules--display buf nil)))
          (should (window-live-p w))
          (should (drgnx-signal-editor-window-p w)))
        (drgnx-rules--display buf nil))
-     (should (= 1 (length messages))))))
+     (should (= 1 (length notices)))
+     (should (equal (seq-take (car notices) 2) '(wb warn))))))
 
 (ert-deftest drgnx-wb-undefine/focus-function-is-recorded ()
   (drgnx-wb-undefine-test--with

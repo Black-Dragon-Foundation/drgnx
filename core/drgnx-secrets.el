@@ -19,6 +19,7 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
+(require 'drgnx-guard)
 (require 'url-parse)
 (require 'drgnx-paths)
 (require 'drgnx-ai)
@@ -184,16 +185,18 @@ which a program Emacs starts never has (see `drgnx-secrets-export'): it fails, a
     (unwind-protect
         (progn
           (setq errproc (make-pipe-process :name "drgnx-age-err" :buffer nil :noquery t :coding 'utf-8-unix
-                                           :filter (lambda (_p s) (push s err))))
+                                           :filter (drgnx-guard-wrap (lambda (_p s) (push s err)) "age stderr")))
           (setq proc (make-process :name "drgnx-age" :buffer nil :connection-type 'pipe :noquery t
                                    :command (append (list age "-d") (and identity (list "-i" (expand-file-name identity)))
                                                     (list file))
                                    :coding 'no-conversion :stderr errproc
-                                   :filter (lambda (p s)
-                                             (setq size (+ size (length s)))
-                                             (if (> size drgnx-secrets-max-size)
-                                                 (progn (drgnx-secrets--wipe s) (delete-process p))
-                                               (push s chunks)))
+                                   :filter (drgnx-guard-wrap
+                                            (lambda (p s)
+                                              (setq size (+ size (length s)))
+                                              (if (> size drgnx-secrets-max-size)
+                                                  (progn (drgnx-secrets--wipe s) (delete-process p))
+                                                (push s chunks)))
+                                            "age output")
                                    :sentinel #'ignore))
           (ignore-errors (process-send-eof proc)) ; age may be gone already (it reads the file): never an error
           (let ((deadline (+ (float-time) 600)))

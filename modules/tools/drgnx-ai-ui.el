@@ -16,6 +16,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-modal)
+(require 'drgnx-notice)
 (require 'drgnx-timer)
 (require 'drgnx-ai)
 (require 'drgnx-ai-client)
@@ -92,20 +93,27 @@ normal and visual state), so moving around never asks.  Runs once per pause, not
   (not (run-hook-with-args-until-success 'drgnx-ai-ghost-inhibit-functions)))
 
 (defun drgnx-ai-ghost--trigger ()
-  "Ask for a suggestion at point (the pause has come).  Says once when no provider completes."
+  "Ask for a suggestion at point (the pause has come).  When no provider completes, that is a warn condition of
+source `ai' (no key loaded, or none running), posted once and cleared when a provider answers."
   (when (and drgnx-ai-ghost-mode (not buffer-read-only) (drgnx-ai-ghost--typing-p))
     (if (not (drgnx-ai-ghost--available-p))
         (progn
           (unless drgnx-ai-ghost--said-unavailable
             (setq drgnx-ai-ghost--said-unavailable t)
             (if-let* ((id (drgnx-ai-ghost--keyless)))
-                (message "AI completion: no key for %s loaded — AI: Load Keys reads your key from %s" id
-                         (if (eq (drgnx-platform) 'macos) "the Keychain" "your keyring"))
-              (message "AI completion: no provider for `complete' is running (AI: Choose Provider/Model)")))
+                (drgnx-notify 'ai 'warn
+                              (format "No key for %s loaded: AI: Load Keys reads it from %s" id
+                                      (if (eq (drgnx-platform) 'macos) "the Keychain" "your keyring"))
+                              :id 'no-key :life 'condition :command 'ai-load-keys)
+              (drgnx-notify 'ai 'warn "No AI provider for completion"
+                            :id 'no-provider :life 'condition :command 'ai-choose)))
           ;; a runner started since: looked for at most once a minute (in the background)
           (when (> (- (float-time) drgnx-ai-ghost--last-probe) 60)
             (setq drgnx-ai-ghost--last-probe (float-time))
             (drgnx-ai-probe nil)))
+      (when drgnx-ai-ghost--said-unavailable        ; a provider answers now: the condition is over
+        (setq drgnx-ai-ghost--said-unavailable nil)
+        (drgnx-notice-clear 'ai))
       (when drgnx-ai-ghost--request (drgnx-ai-cancel drgnx-ai-ghost--request))
       (let ((buf (current-buffer)) (tick (buffer-chars-modified-tick)) (pt (point)))
         (setq drgnx-ai-ghost--request
@@ -604,6 +612,7 @@ the commands go with the cleanup stack; the probe's timer ends with the module's
                      (lambda ()
                        (add-to-list 'emulation-mode-map-alists 'drgnx-ai-ghost--emulation)   ; a suggestion's keys
                        (add-hook 'prog-mode-hook #'drgnx-ai-ghost--maybe-enable)
+                       (drgnx-notice-define-source 'ai :title "AI" :command 'ai-choose)
                        ;; which providers run here: asked once Emacs is idle, never while it works
                        (drgnx-timer-start 'ai-probe 2 #'drgnx-ai-probe :args '(nil) :idle t)
                        (pcase-dolist (`(,id ,title ,fn ,doc ,map)

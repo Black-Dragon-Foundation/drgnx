@@ -59,10 +59,12 @@ killing the starter's whole process group does not take the job along."
                                    "--batch" "-Q" "-L" (file-name-directory (locate-library "drgnx-jobs"))
                                    "-l" "drgnx-jobs"
                                    "--eval" (format "(setq drgnx-jobs--setsid %S)" drgnx-jobs--setsid)
+                                   ;; the id goes in whole, by a rename: `write-region' creates the file before it
+                                   ;; writes, and a wait on the file's existence could read it empty (macOS CI)
                                    "--eval" (format (concat "(progn (write-region (drgnx-jobs-start \"test\" "
                                                             "'(\"sh\" \"-c\" \"sleep 4; echo done\")) "
-                                                            "nil %S) (sleep-for 60))")
-                                                    idfile))))
+                                                            "nil %S) (rename-file %S %S) (sleep-for 60))")
+                                                    (concat idfile ".new") (concat idfile ".new") idfile))))
           (spid (process-id starter)) id)
      (unwind-protect
          (progn

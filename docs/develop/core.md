@@ -688,6 +688,17 @@ time, about 55 µs, is a perf number and not tested).
 model and sets the model it found back afterwards, variable by variable (`drgnx-notice-test--variables`), with
 `set`; `drgnx-notice-test--alloc` counts the conses a byte-compiled body allocates (the fewest of 3 warm runs).
 
+**What stays a message.** A `message` that is the direct reply to a command just run stays one. Anything drgnx says on
+its own (a filter, sentinel, timer or hook: a state file that did not save, a startup restore that failed, a hook
+function that signalled) is a notice, with the severity and lifetime of the table above, so it shows in the Notices
+list and, when it matters, once in the echo area. The core sources in use are `config` (state files, the shell
+environment, packages, trust), `keys` (modal engines and key hooks), `agents` (agent sessions, jobs, the AI probe),
+`hub` (the mirror of the agent hub), `render` (the cockpit's views), `guard` and `wb` (the workbench: restore,
+monitors, panes, rules). The lint `drgnx-lint/echo-messages-only-fall` (`test/unit/lint-echo-test.el`, see
+[check.md](check.md)) counts `(message "drgnx` in `core/` and `wb/` per file against a table that can only fall: what
+remains is a command's reply, a line of a process with no notice model (the hub, the sandbox plumbing, the MCP
+bridge), or the last resort of the recorder itself.
+
 ## Command registry (`drgnx-registry.el`)
 
 Every command is registered once, without keys:

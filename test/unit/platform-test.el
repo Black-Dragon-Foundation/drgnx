@@ -4,6 +4,7 @@
 (require 'seq)
 (require 'drgnx-paths)
 (require 'drgnx-platform)
+(require 'drgnx-notice)
 (require 'drgnx-timer)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
@@ -387,7 +388,8 @@ OPTS: (:delay SECONDS :exit CODE :out TEXT :stderr TEXT :map \"ARGS-REGEXP FILE\
 (drgnx-platform-test--deftest drgnx-platform/an-error-in-a-callback-is-a-message ()
                               (drgnx-platform-test--with-fake-wm ()
                                 (let ((msgs nil) (n 0))
-                                  (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) msgs))))
+                                  (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) msgs)))
+                                            ((symbol-function 'drgnx-notify) (lambda (_s _v text &rest _) (push text msgs) nil)))   ; a notice, Task 20
                                     (drgnx-platform-call '("swaymsg") :callback (lambda (_s _o) (cl-incf n) (error "boom")))
                                     (should (drgnx-platform-test--await (lambda () msgs)))
                                     (sleep-for 0.1))

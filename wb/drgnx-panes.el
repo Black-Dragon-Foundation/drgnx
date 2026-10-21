@@ -20,6 +20,7 @@
 
 (require 'drgnx-modules-helpers)
 (require 'drgnx-frame-kind)
+(require 'drgnx-notice)
 
 (declare-function drgnx-layouts-define-pane "drgnx-layouts")
 
@@ -266,7 +267,8 @@ module it belongs to was turned off, and on again, while the area stayed up."
       (when (and (drgnx-state-workbench-frame-p frame) (eq (drgnx-state-intent frame :front area) kind)
                  (drgnx-wb-area-window area frame))
         (condition-case err (with-selected-frame frame (drgnx-pane-show kind :by 'teardown))
-          (error (message "drgnx: showing pane %s again failed: %s" kind (error-message-string err))))))))
+          (error (drgnx-notify 'wb 'warn (format "showing pane %s again failed: %s" kind (error-message-string err))
+                               :id (cons 'pane-show kind))))))))
 
 ;;;; The API
 

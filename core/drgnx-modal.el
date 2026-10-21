@@ -233,6 +233,13 @@ definition is still this one: the engine stops first if it runs."
     (drgnx-modules-push-undo (format "modal engine %s" name) (lambda () (drgnx-modal-undefine-engine name spec))))
   name)
 
+(declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
+
+(defun drgnx-modal--warn (text)
+  "TEXT, a modal engine's failure, as a `warn' event of source `keys'."
+  (require 'drgnx-notice)
+  (drgnx-notify 'keys 'warn text))
+
 (defun drgnx-modal--stop-running ()
   "Stop the engine that runs (its stop function, under an error guard), then clear every buffer's state and the
 indicator, whether or not the stop worked: no buffer keeps the modal keys of an engine that is not running."
@@ -240,7 +247,7 @@ indicator, whether or not the stop worked: no buffer keeps the modal keys of an 
     (let ((stop (plist-get (alist-get drgnx-modal-running drgnx-modal-engines) :stop)))
       (condition-case err
           (when stop (funcall stop))
-        (error (message "drgnx: stopping %s failed: %s" drgnx-modal-running (error-message-string err))))
+        (error (drgnx-modal--warn (format "stopping %s failed: %s" drgnx-modal-running (error-message-string err)))))
       (drgnx-modal--reset-buffers)
       (setq drgnx-modal-running nil))))
 
@@ -313,10 +320,10 @@ is written again (it said what ran before the after-apply functions started it) 
                      (funcall start))
                    (setq drgnx-modal-running want)
                    (drgnx-modal-order-alists))
-          (error (message "drgnx: starting %s failed: %s" want (error-message-string err))))))
+          (error (drgnx-modal--warn (format "starting %s failed: %s" want (error-message-string err)))))))
     (dolist (fn drgnx-modal-sync-functions)
       (condition-case err (funcall fn layers)
-        (error (message "drgnx: %S failed: %s" fn (error-message-string err)))))
+        (error (drgnx-modal--warn (format "%S failed: %s" fn (error-message-string err))))))
     (when (and drgnx-keys-last (not (eq was drgnx-modal-running)))
       (drgnx-keys--write-report)
       (when (fboundp 'drgnx-surfaces-apply-which-key) (drgnx-surfaces-apply-which-key)))

@@ -559,30 +559,18 @@ mod tests {
 
     #[tokio::test]
     async fn own_process_group_and_sigpipe_ignored() {
-        #[cfg(target_os = "linux")]
-        let script = "grep SigIgn /proc/$$/status; read x; exit 0";
-        #[cfg(not(target_os = "linux"))]
-        let script = "trap; echo end; read x; exit 0";
-        let mut child = spawn(sh(script, false)).await.unwrap();
+        // The shell sends itself SIGPIPE and lives to say so only if it started with SIGPIPE ignored. (Reading the
+        // disposition back is not portable: macOS's /bin/sh, bash 3.2, leaves a signal ignored at entry out of `trap`.)
+        let mut child = spawn(sh("kill -s PIPE $$; echo alive; read x; exit 0", false))
+            .await
+            .unwrap();
         let pid = child.id();
         let mut lines = BufReader::new(child.take_stdout().unwrap()).lines();
-        let first = lines.next_line().await.unwrap().unwrap();
+        let first = lines.next_line().await.unwrap();
+        assert_eq!(first.as_deref(), Some("alive"), "the child died of SIGPIPE");
         // While the child waits on its stdin: it leads its own group, not ours.
         assert_eq!(unsafe { libc::getpgid(pid) }, pid);
         assert_ne!(pid, unsafe { libc::getpgrp() });
-        #[cfg(target_os = "linux")]
-        {
-            let mask = u64::from_str_radix(first.trim_start_matches("SigIgn:").trim(), 16).unwrap();
-            assert_ne!(mask & (1 << (libc::SIGPIPE - 1)), 0, "{first}");
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            let mut out = first;
-            while !out.ends_with("end") {
-                out.push_str(&lines.next_line().await.unwrap().unwrap());
-            }
-            assert!(out.contains("PIPE"), "{out}");
-        }
         drop(child.take_stdin());
         assert!(child.wait().await.unwrap().unwrap().success());
     }

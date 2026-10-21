@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'drgnx-surfaces)
 (require 'drgnx-timer)
+(require 'drgnx-notice)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
 (defvar drgnx-test--run-ran nil)
@@ -235,6 +236,7 @@
   (drgnx-test--with-usage
    (let ((said nil) (err "first"))
      (cl-letf (((symbol-function 'message) (lambda (&rest a) (push a said)))
+               ((symbol-function 'drgnx-notify) (lambda (&rest a) (push a said)))   ; said as a notice (Task 20)
                ((symbol-function 'drgnx-file-update) (lambda (&rest _) (error "%s" err))))
        (drgnx-surfaces--count-run 'run-cmd)
        (dotimes (_ 3) (setq drgnx-surfaces--usage-saved nil) (drgnx-surfaces--usage-flush))

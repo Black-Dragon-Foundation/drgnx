@@ -15,6 +15,7 @@
 ;; `exec') once a second.
 
 ;;; Code:
+(require 'drgnx-guard)
 
 (defvar drgnx-dir)
 
@@ -49,7 +50,8 @@
   (let* ((socket (process-get server :socket))
          (up (condition-case err
                  (make-network-process :name "drgnx-relay-up" :family 'local :service socket :noquery t :coding 'binary
-                                       :filter #'drgnx-sandbox-relay--to-peer :sentinel #'drgnx-sandbox-relay--closed)
+                                       :filter (drgnx-guard-wrap #'drgnx-sandbox-relay--to-peer "sandbox relay")
+                                       :sentinel (drgnx-guard-wrap #'drgnx-sandbox-relay--closed "sandbox relay"))
                (error (message "drgnx-sandbox-relay: cannot reach %s: %s" socket (error-message-string err)) nil))))
     (if (not up) (delete-process client)
       (process-put up :peer client)
@@ -72,8 +74,9 @@ Writes `ready' to stdout once every port listens, and ends (status 0) when its p
       (condition-case err
           (process-put (make-network-process :name "drgnx-relay" :server t :host "127.0.0.1" :service (car pair)
                                              :family 'ipv4 :noquery t :coding 'binary
-                                             :log #'drgnx-sandbox-relay--accept :filter #'drgnx-sandbox-relay--to-peer
-                                             :sentinel #'drgnx-sandbox-relay--closed)
+                                             :log #'drgnx-sandbox-relay--accept
+                                             :filter (drgnx-guard-wrap #'drgnx-sandbox-relay--to-peer "sandbox relay")
+                                             :sentinel (drgnx-guard-wrap #'drgnx-sandbox-relay--closed "sandbox relay"))
                        :socket (cdr pair))
         (error (drgnx-sandbox-relay--die 1 (format "cannot listen on 127.0.0.1:%d: %s"
                                                    (car pair) (error-message-string err))))))

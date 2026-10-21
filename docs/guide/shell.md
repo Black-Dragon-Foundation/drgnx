@@ -76,7 +76,7 @@ holds it under 5 ms.
 files and folders of the current directory, since `drgnx PATH` opens them. `drgnx -<TAB>` offers `-h` and `--help`.
 After a command, `-<TAB>` offers that command's options (`drgnx onboard --<TAB>`, `drgnx test --<TAB>`, `drgnx doctor
 --<TAB>`), and the commands that have subcommands offer them (`drgnx work <TAB>`: `record`, `scan`, `status`;
-likewise `hub`, `job`, `search`, `keys` and `ui`). Options that take a value complete it:
+likewise `hub`, `runtime`, `job`, `search`, `keys` and `ui`). Options that take a value complete it:
 
 - `drgnx onboard --step` the step ids, `--preset` the presets (`minimal`, `ide`, `full-ai`), `--keys` the key profiles
   (the names of the files in the checkout's `keys/`, found when you press TAB);

@@ -519,7 +519,8 @@ without the binary."
   (drgnx-hub-client-test--with
     (let ((process-environment (cons "DRGNX_RATATOSKR_BIN" process-environment)))
       (dolist (f '(drgnx-hub-ensure drgnx-hub-restart-now))
-        (should (string-search "Ratatoskr is not built: run `drgnx runtime build'"
+        ;; `error' quotes as `text-quoting-style' says: curved under a UTF-8 locale (macOS CI), grave elsewhere
+        (should (string-search (format-message "Ratatoskr is not built: run `drgnx runtime build'")
                                (error-message-string (should-error (funcall f)))))))))
 
 (ert-deftest drgnx-hub-client/the-first-hello-carries-the-binary-version ()

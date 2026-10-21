@@ -15,6 +15,7 @@
 (require 'cl-lib)
 (require 'json)
 (require 'seq)
+(require 'drgnx-guard)
 (require 'subr-x)
 (require 'drgnx-paths)
 (require 'drgnx-file)
@@ -342,7 +343,9 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
                (proc (make-process :name "drgnx-doctor-git" :buffer buf :noquery t :connection-type 'pipe
                                    ;; done once Emacs has read all of git's output (`process-live-p' turns nil
                                    ;; before that); the default sentinel would write "Process … finished" into BUF
-                                   :sentinel (lambda (p _event) (unless (process-live-p p) (process-put p :done t)))
+                                   :sentinel (drgnx-guard-wrap
+                                              (lambda (p _event) (unless (process-live-p p) (process-put p :done t)))
+                                              "doctor git")
                                    :command (list "git" "-C" (directory-file-name default-directory)
                                                   "status" "--porcelain" "--" "init/")))
                (deadline (+ (float-time) 5)))

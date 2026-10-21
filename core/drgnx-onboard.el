@@ -15,6 +15,7 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
+(require 'drgnx-guard)
 (require 'tabulated-list)
 (require 'drgnx-paths)
 (require 'drgnx-ui-kit)
@@ -1178,7 +1179,7 @@ end: a program you chose earlier on the PATH keeps winning."
     (unwind-protect
         (progn
           (setq p (make-process :name "drgnx-claude-auth" :command (list claude "auth" "status") :connection-type 'pipe :noquery t
-                                :filter (lambda (_p s) (setq out (concat out s)))))
+                                :filter (drgnx-guard-wrap (lambda (_p s) (setq out (concat out s))) "claude auth status")))
           (unless (drgnx-onboard--wait (lambda () (not (process-live-p p))) drgnx-onboard-login-wait)
             (delete-process p))
           (setq done t))

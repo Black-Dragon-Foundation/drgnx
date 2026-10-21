@@ -36,6 +36,18 @@
       (write-region text nil (expand-file-name name) nil 'silent)))
   (file-name-as-directory dir))
 
+(defun drgnx-onboard-test--installed-ratatoskr (root)
+  "Install a Ratatoskr in ROOT's data folder, as install.sh does: a script that answers `doctor --json' with a
+healthy report (the doctor fails without one).  A caller's DRGNX_RATATOSKR_BIN (CI's test-hooks build) must be
+unset around its use, or it wins."
+  (let ((bin (concat root "data/bin/ratatoskr")))
+    (make-directory (file-name-directory bin) t)
+    (with-temp-file bin
+      (insert "#!/bin/sh\necho '{\"binary\":{\"path\":\"" bin "\",\"commit\":null,\"test_hooks\":false},\"running\":null,"
+              "\"socket_dir\":{\"path\":\"/run/ratatoskr\",\"mode\":\"0700\",\"ok\":true},\"job_agents\":\"none\"}'\n"))
+    (set-file-modes bin #o755)
+    bin))
+
 (defun drgnx-onboard-test--board () (with-temp-buffer (insert-file-contents (drgnx-projects-board-file)) (buffer-string)))
 
 (defun drgnx-onboard-test--read (file) (with-temp-buffer (insert-file-contents file) (read (current-buffer))))
@@ -356,7 +368,8 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
   ;; The M6 exit, in batch: a fresh config onboarded non-interactively with fixture repos; the board
   ;; is not touched (it only reports); the doctor has no failure; the second run changes nothing.
   (drgnx-onboard-test--with root
-    (let ((ws (concat root "ws/")))
+    (drgnx-onboard-test--installed-ratatoskr root)   ; an install has its runtime
+    (let ((ws (concat root "ws/")) (process-environment (cons "DRGNX_RATATOSKR_BIN" process-environment)))
       (drgnx-onboard-test--repo (concat ws "alpha") '("TODO.md" . "- [ ] one\n- [ ] two\n"))
       (drgnx-onboard-test--repo (concat ws "beta"))
       (let ((r (drgnx-onboard-run :non-interactive t :options `(:preset ide :roots (,ws) :todos t))))

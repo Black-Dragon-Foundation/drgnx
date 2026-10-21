@@ -27,6 +27,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'drgnx-timer)
+(require 'drgnx-guard)
 (require 'drgnx-sandbox)
 
 ;; drgnx-sandbox-vc.el: the VC guard's exemption, let-bound around the hub's own unsandboxed steps alone
@@ -219,21 +220,23 @@ start, this signals, and leaves no process or buffer behind."
         (setq errp (make-pipe-process :name "drgnx-snapshot-err" :buffer err :noquery t :sentinel #'ignore)
               p (make-process
                  :name "drgnx-snapshot" :buffer out :stderr errp :noquery t :connection-type 'pipe :command argv
-                 :sentinel (lambda (p _event)
-                             (unless (process-live-p p)
-                               (drgnx-timer-cancel (cons 'job-snapshot-timeout p))
-                               ;; what is still in the stderr pipe: read without waiting, so no message is cut short
-                               (while (and (process-live-p errp) (accept-process-output errp 0 nil 1)))   ; 1: no timers run here
-                               (let ((stdout (with-current-buffer out (buffer-string)))
-                                     (stderr (string-trim (with-current-buffer err (buffer-string)))))
-                                 (delete-process errp)
-                                 (kill-buffer out)
-                                 (kill-buffer err)
-                                 (with-demoted-errors "drgnx snapshot: %S"
-                                   (funcall done (cons (cond ((process-get p :stopped) :stopped)
-                                                             ((process-get p :timed-out) :timeout)
-                                                             (t (process-exit-status p)))
-                                                       (cons stdout stderr)))))))))
+                 :sentinel (drgnx-guard-wrap
+                            (lambda (p _event)
+                              (unless (process-live-p p)
+                                (drgnx-timer-cancel (cons 'job-snapshot-timeout p))
+                                ;; what is still in the stderr pipe: read without waiting, so no message is cut short
+                                (while (and (process-live-p errp) (accept-process-output errp 0 nil 1)))   ; 1: no timers run here
+                                (let ((stdout (with-current-buffer out (buffer-string)))
+                                      (stderr (string-trim (with-current-buffer err (buffer-string)))))
+                                  (delete-process errp)
+                                  (kill-buffer out)
+                                  (kill-buffer err)
+                                  (with-demoted-errors "drgnx snapshot: %S"
+                                    (funcall done (cons (cond ((process-get p :stopped) :stopped)
+                                                              ((process-get p :timed-out) :timeout)
+                                                              (t (process-exit-status p)))
+                                                        (cons stdout stderr)))))))
+                            "job snapshot")))
       (error (when errp (delete-process errp))
              (kill-buffer out)
              (kill-buffer err)

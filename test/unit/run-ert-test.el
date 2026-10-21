@@ -347,6 +347,26 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
     (should (equal (file-name-as-directory (getenv "DRGNX_TEST_ELN_DIR"))
                    (file-name-as-directory (car native-comp-eln-load-path))))))
 
+(ert-deftest drgnx-run-ert/a-trampoline-compiles-past-the-tests-stubs ()
+  ;; N-T17-2: a test that stubs `call-process' with a spy, then a primitive with no trampoline yet (a cold eln dir):
+  ;; Emacs compiles that trampoline inside the stub, and its compile spawns Emacs with `call-process'.  The runner
+  ;; gives the compile the real primitives, so the spy sees only the test's own calls.
+  (skip-unless (and (fboundp 'native-comp-available-p) (native-comp-available-p)))
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-eln" t)))
+         (suite (expand-file-name "suite" tmp)) (eln (expand-file-name "eln/" tmp)))
+    (unwind-protect
+        (progn
+          (drgnx-run-ert-test--suite
+           suite `(("spy-test.el" . ,(concat "(require 'cl-lib)\n"
+                                             "(ert-deftest spy-sees-no-compile ()\n"
+                                             "  (cl-letf (((symbol-function 'call-process) (lambda (&rest a) (ert-fail (list 'spawned a)))))\n"
+                                             "    (cl-letf (((symbol-function 'buffer-list) (lambda (&rest _) '(stub))))\n"
+                                             "      (should (equal (buffer-list) '(stub))))\n"
+                                             "    (should-error (call-process \"true\") :type 'ert-test-failed)))"))))
+          (should (eql 0 (drgnx-run-ert-test--run-suite suite (concat "DRGNX_TEST_ELN_DIR=" eln))))
+          (should (directory-files-recursively eln "\\`subr--trampoline-.*_buffer_list_")))
+      (delete-directory tmp t))))
+
 (defun drgnx-run-ert-test--suite (dir files)
   "Write FILES, an alist NAME → contents, into the directory DIR (made)."
   (make-directory dir t)

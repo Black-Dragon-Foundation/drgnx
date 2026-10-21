@@ -17,6 +17,7 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
+(require 'drgnx-guard)
 (require 'text-property-search)
 (require 'hl-line)
 (require 'project)
@@ -946,20 +947,22 @@ is refreshed if it is shown."
             (make-process
              :name "drgnx-gio-trash" :command (list "gio" "trash" "--" path) :buffer out
              :connection-type 'pipe :noquery t
-             :sentinel (lambda (_proc event)
-                         (let ((drgnx-explorer--remote-reads nil)) ; a sentinel is not the command that happens to wait
-                           (let ((why (if (buffer-live-p out) (string-trim (with-current-buffer out (buffer-string))) "")))
-                             (when (buffer-live-p out) (kill-buffer out))
-                             (condition-case nil
-                                 (progn
-                                   (unless (string-prefix-p "finished" event)
-                                     (drgnx-explorer--trash-sync path))
-                                   (drgnx-explorer--close-buffers (list path)))
-                               (error (message "Could not move %s to the trash: %s"
-                                               (file-name-nondirectory path)
-                                               (if (string-empty-p why) (string-trim event) why)))))
-                           (when-let* ((explorer (get-buffer drgnx-explorer-buffer-name))) ; its rows are buffer-local
-                             (with-current-buffer explorer (ignore-errors (drgnx-explorer--refresh-dir dir)))))))
+             :sentinel (drgnx-guard-wrap
+                        (lambda (_proc event)
+                          (let ((drgnx-explorer--remote-reads nil)) ; a sentinel is not the command that happens to wait
+                            (let ((why (if (buffer-live-p out) (string-trim (with-current-buffer out (buffer-string))) "")))
+                              (when (buffer-live-p out) (kill-buffer out))
+                              (condition-case nil
+                                  (progn
+                                    (unless (string-prefix-p "finished" event)
+                                      (drgnx-explorer--trash-sync path))
+                                    (drgnx-explorer--close-buffers (list path)))
+                                (error (message "Could not move %s to the trash: %s"
+                                                (file-name-nondirectory path)
+                                                (if (string-empty-p why) (string-trim event) why)))))
+                            (when-let* ((explorer (get-buffer drgnx-explorer-buffer-name))) ; its rows are buffer-local
+                              (with-current-buffer explorer (ignore-errors (drgnx-explorer--refresh-dir dir))))))
+                        "gio trash"))
             t)
         (error (kill-buffer out) nil)))))
 

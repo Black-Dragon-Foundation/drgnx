@@ -54,6 +54,7 @@ the terminal sends it, or when the terminal has no fallback layer."
                        (key-parse key) " "))))
       key))
 
+(declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
 (declare-function drgnx-modal-where "drgnx-modal")
 (declare-function drgnx-modal-default-notes "drgnx-modal")
 
@@ -232,7 +233,8 @@ backup before it is replaced."
           (error (let ((text (error-message-string err)))   ; said once, again only when the text changes
                    (unless (equal text drgnx-surfaces--usage-last-error)
                      (setq drgnx-surfaces--usage-last-error text)
-                     (message "drgnx: the usage counts were not saved: %s" text)))
+                     (require 'drgnx-notice)
+                     (drgnx-notify 'config 'warn (format "the usage counts were not saved: %s" text) :id 'usage-counts)))
                  (drgnx-surfaces--usage-arm)))))))
 
 (add-hook 'drgnx-surfaces-run-functions #'drgnx-surfaces--count-run)
