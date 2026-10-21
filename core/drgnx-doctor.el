@@ -594,7 +594,8 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
       (kill-buffer buf))))
 
 (defun drgnx-doctor--ratatoskr ()
-  "The facts of the `ratatoskr' check: (:binary FILE-or-nil :report PLIST-or-nil :head SHA :update-run LINE :emacs-sqlite V)."
+  "The facts of the `ratatoskr' check:
+\(:binary FILE-or-nil :report PLIST-or-nil :head SHA :update-run LINE :emacs-sqlite V)."
   (condition-case err
       (let* ((bin (progn (require 'drgnx-hub-client) (drgnx-hub-client-binary)))
              (head (ignore-errors

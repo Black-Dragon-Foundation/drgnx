@@ -59,6 +59,7 @@ sources nothing from `<(…)'."
                   (list (concat "DRGNX_INSTALL_OS_RELEASE="
                                 (expand-file-name "test/fixtures/os-release/fedora-45" drgnx-install-config-test--root))
                         "DRGNX_INSTALL_UNAME=Linux" "DRGNX_INSTALL_ARCH=x86_64" "DRGNX_INSTALL_TTY=none"
+                        "DRGNX_INSTALL_RUNTIME=none"   ; no Rust toolchain probe or Ratatoskr build here
                         "DRGNX_INSTALL_MACOS_APP=none" (concat "HOME=" home)
                         (concat "DRGNX_CONFIG_DIR=" home "/.config/drgnx")
                         (concat "DRGNX_DATA_DIR=" home "/.local/share/drgnx")
