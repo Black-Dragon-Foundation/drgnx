@@ -8,6 +8,7 @@
 //! - [`registry`]: every method, its classes, schemas and `writes` flag; `methods.json` and the docs table.
 //! - [`methods`]: each method's params and result types; [`types`]: the named input types; [`events`]: the event
 //!   types.
+//! - [`text`]: the one sanitizer for user-visible text; [`url`]: the URL rule and the provider-base rule.
 
 pub mod decode;
 pub mod events;
@@ -16,5 +17,7 @@ pub mod methods;
 pub mod paths;
 pub mod proof;
 pub mod registry;
+pub mod text;
 pub mod types;
+pub mod url;
 pub mod wire;

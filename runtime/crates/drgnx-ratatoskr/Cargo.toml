@@ -26,6 +26,9 @@ draugr = { path = "../draugr", version = "0.1.0" }
 urdr = { path = "../urdr", version = "0.1.0" }
 gleipnir = { path = "../gleipnir", version = "0.1.0" }
 eitri = { path = "../eitri", version = "0.1.0" }
+mimir = { path = "../mimir", version = "0.1.0" }
+norn = { path = "../norn", version = "0.1.0" }
+bifrost = { path = "../bifrost", version = "0.1.0" }
 tokio.workspace = true
 tokio-util.workspace = true
 bytes = "1"               # the read buffer the line codec decodes from (already in the tree through tokio)

@@ -1,0 +1,23 @@
+[package]
+name = "mimir"
+description = "A tools-only MCP server for both protocol eras (initialize, and the stateless 2026-07-28), and the bridge's redial"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+runstav = { path = "../runstav", version = "0.1.0" }
+tokio.workspace = true
+tokio-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+serde_path_to_error.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+rmcp = { workspace = true, features = ["client", "transport-async-rw"] }
+tempfile.workspace = true
+proptest.workspace = true

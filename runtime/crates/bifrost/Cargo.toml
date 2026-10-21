@@ -1,0 +1,35 @@
+[package]
+name = "bifrost"
+description = "The gateway: admission, tokens, chain fallback, the SSE usage scanner, budget and spend, the HTTP/1.1 upstream client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+# Certificate verification through the platform's verifier (the Android build needs JNI set up at run time; port map
+# §6), so an Android build can turn it off.
+default = ["platform-verifier"]
+platform-verifier = ["dep:rustls-platform-verifier", "hyper-rustls/rustls-platform-verifier"]
+
+[dependencies]
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+hyper-rustls.workspace = true
+rustls.workspace = true
+rustls-platform-verifier = { workspace = true, optional = true }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+secrecy.workspace = true
+zeroize.workspace = true
+sha2.workspace = true
+tracing.workspace = true
+bytes = "1"               # request and response bodies (already in the tree through hyper)
+http = "1"                # request, response and header types (already in the tree through hyper)
+
+[dev-dependencies]
+tempfile.workspace = true
+proptest.workspace = true

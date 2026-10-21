@@ -37,6 +37,9 @@ runtime/
 | `gleipnir` | the sandbox: the spec and its validation, bwrap, Landlock, seccomp, Seatbelt, the relay and the CONNECT proxy; self-contained ([gleipnir.md](gleipnir.md)) |
 | `eitri` | file access that never follows a link: opens pinned by fd, bounded reads, writes by rename, root-owned programs; generic, used by `gleipnir` and `draugr` ([below](#eitri-no-link-file-access)) |
 | `gleipnir-escape` | test tooling, never shipped: the probe binary and the escape harness ([gleipnir.md](gleipnir.md), "Proving it") |
+| `mimir` | a tools-only MCP server for both protocol eras (`initialize`, and the stateless 2026-07-28) and the bridge's redial; self-contained, pure Rust |
+| `norn` | `work.db`'s coordination writer, its readers and the 16 coordination tools on `mimir` ([coordination.md](coordination.md)); pure Rust but for urdr's bundled SQLite, so off the Android cross-check |
+| `bifrost` | the gateway: admission, tokens, chain fallback, the SSE usage scanner, budget, the HTTP/1.1 upstream client over rustls; self-contained (certificate checks behind its default feature `platform-verifier`). Rust but for `ring`'s C and assembly, so its cross-checks stub the C compiler as urdr's do (below) |
 | `hrafn` | search and the indexer |
 | `domr` (formerly `drgnx-conformance`; lives in `runtime/conformance/`) | the conformance harness (this page) |
 
