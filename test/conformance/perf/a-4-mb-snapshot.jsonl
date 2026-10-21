@@ -1,0 +1,6 @@
+{"scenario": "perf/a-4-mb-snapshot", "requires": ["v1", "fake-backend", "perf"], "doc": "The baseline of a large answer: agents/get with a transcript of about 4 MB from the fake backend, decoded by the front and written to the client, 10 times (--perf records every sample, no budget)."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/answers/transcript.json", "json": {"result": {"session": {"id": "s1", "profile": "p", "queue": []}, "entries": [{"type": "agent", "text": {"$repeat": "x", "times": 4000000}}], "seq": 1}}}
+{"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"agents/get\": {\"from_file\": \"$ROOT/answers/transcript.json\"}}"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "measure", "name": "snapshot-4-mb", "repeat": 10, "steps": [{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/get", "params": {"id": "s1"}}}, {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"session": {"id": "s1"}, "entries": [{"type": "agent"}], "seq": 1}}, "within_ms": 10000}]}

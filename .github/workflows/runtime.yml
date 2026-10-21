@@ -1,15 +1,28 @@
-# The Rust runtime (runtime/): every push to main and every pull request, on Linux (Fedora 45) and macOS 27, plus the
-# oldest supported compiler (MSRV 1.88) and the supply-chain policy. The policy also runs daily on its own: advisories
-# land without any change on our side. docs/develop/runtime.md, docs/develop/ci.md
+# The Rust runtime (runtime/), Ratatoskr: on Linux (Fedora 45) and macOS 27 the unit tests, the conformance suite
+# against the built binary (every row, the v0 rows through the front too), a release build and the recorded perf
+# baseline; plus the oldest supported compiler (MSRV 1.88), the supply-chain policy and the fuzz targets.
+#
+# Push and pull-request runs come from ci.yml, which calls this file (`workflow_call`): its emacs-31 job needs the
+# binary built here (a `needs:` cannot reach another workflow file, so the call is the only way). Running this file on
+# push as well would build everything twice, so its own triggers are the daily run (deny, and the fuzz targets for 10
+# minutes each) and a manual one (`fuzz_minutes` per target). docs/develop/ci.md, docs/develop/runtime.md
 name: Runtime
 
 on:
-  push:
-    branches: [main]
-  pull_request:
   schedule:
     - cron: "17 5 * * *"
   workflow_dispatch:
+    inputs:
+      fuzz_minutes:
+        description: Minutes of fuzzing per target (default 10)
+        type: string
+        default: "10"
+  workflow_call:
+    inputs:
+      fuzz_minutes:
+        description: Minutes of fuzzing per target (empty means 1 minute on a push to main, none on a pull request)
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -23,24 +36,39 @@ env:
 
 jobs:
   linux:
-    name: fmt, clippy, tests (Fedora 45)
+    name: fmt, clippy, tests, conformance, perf (Fedora 45)
     if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     container: registry.fedoraproject.org/fedora:45
-    timeout-minutes: 30
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: runtime
     steps:
+      # root in this container: the `sudo` rows (another uid on the socket) run, through setpriv
       - name: Tools
         working-directory: /
-        run: dnf -y install git cargo rust gcc clippy rustfmt
+        run: dnf -y install git cargo rust gcc clippy rustfmt tar zstd gzip
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            runtime/target
+          key: cargo-${{ runner.os }}-fedora45-${{ hashFiles('runtime/Cargo.lock') }}
       - run: cargo fmt --check
-      - run: cargo clippy --locked --all-targets -- -D warnings
-      - run: cargo test --locked
+      - run: cargo clippy --locked --workspace --all-targets --features drgnx-ratatoskr/test-hooks -- -D warnings
+      - run: cargo test --locked --workspace --features drgnx-ratatoskr/test-hooks
+      # the test-hooks binary and the harness: ci.yml's emacs-31 job runs the editor's tests against this ratatoskr
+      - run: cargo build --locked -p drgnx-ratatoskr -p domr --features drgnx-ratatoskr/test-hooks
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ratatoskr
+          path: runtime/target/debug/ratatoskr
+          if-no-files-found: error
+          retention-days: 7
       - name: Nidhogg 31.1 (the Emacs drgnx ships on)
         working-directory: ${{ github.workspace }}
         run: |
@@ -48,9 +76,33 @@ jobs:
           bash test/container/nidhogg.sh fedora-45
       - name: conformance-lisp (the v0 rows against the Lisp hub)
         working-directory: ${{ github.workspace }}
+        run: runtime/target/debug/domr --target lisp --hub-bin test/conformance/lisp-hub.sh --scenarios test/conformance
+      # every row against Ratatoskr, the v0 rows through the front against the Lisp backend (design 8.4, "both ways").
+      # --require-all: a skipped row fails the job, except a macOS-only row here and the perf rows (they run below)
+      - name: conformance (Ratatoskr in front of the Lisp backend and the fake backend)
+        working-directory: ${{ github.workspace }}
         run: |
-          cargo build --locked --manifest-path runtime/Cargo.toml -p domr
-          runtime/target/debug/domr --target lisp --hub-bin test/conformance/lisp-hub.sh --scenarios test/conformance
+          runtime/target/debug/domr --target ratatoskr --hub-bin runtime/target/debug/ratatoskr \
+            --lisp-hub test/conformance/lisp-hub.sh --fake-backend runtime/target/debug/ratatoskr-fake-backend \
+            --scenarios test/conformance --require-all
+      # the build install.sh makes: no test hooks in it, and it says so
+      - name: release build says test_hooks false
+        run: |
+          cargo build --locked --release -p drgnx-ratatoskr -p domr
+          target/release/ratatoskr version --json | tee "$RUNNER_TEMP/version.json"
+          grep -q '"test_hooks":false' "$RUNNER_TEMP/version.json"
+      # a recorded baseline, no budgets (perf regression runs are deferred)
+      - name: perf baseline
+        working-directory: ${{ github.workspace }}
+        run: |
+          runtime/target/release/domr --target ratatoskr --hub-bin runtime/target/release/ratatoskr \
+            --fake-backend runtime/target/release/ratatoskr-fake-backend --scenarios test/conformance \
+            --only 'perf/*' --perf perf-linux.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ratatoskr-perf-linux
+          path: perf-linux.json
+          if-no-files-found: error
 
   msrv:
     name: MSRV 1.88 builds
@@ -61,6 +113,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            runtime/target
+          key: cargo-${{ runner.os }}-msrv188-${{ hashFiles('runtime/Cargo.lock') }}
       - run: rustup toolchain install 1.88.0 --profile minimal
       - run: cargo +1.88.0 build --locked --manifest-path runtime/Cargo.toml
 
@@ -82,20 +140,93 @@ jobs:
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
       - run: cargo-deny --manifest-path runtime/Cargo.toml check
 
+  # libFuzzer targets on the pinned nightly (the ledger's: nightly-2026-10-15, cargo-fuzz 0.13.2). The ubuntu runner has
+  # g++ for libfuzzer-sys. 60 s a target on a push to main, 10 minutes a target nightly, `fuzz_minutes` when dispatched;
+  # a pull request runs none. A crash uploads its input.
+  fuzz:
+    name: fuzz (line_codec, request_prelude, hello)
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    env:
+      NIGHTLY: nightly-2026-10-15
+      EVENT: ${{ github.event_name }}
+      MINUTES: ${{ inputs.fuzz_minutes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: How long
+        run: |
+          case "$EVENT" in
+            schedule) secs=600 ;;
+            workflow_dispatch) m=${MINUTES:-10}; case "$m" in ''|*[!0-9]*) echo "fuzz_minutes is a whole number" >&2; exit 2 ;; esac; secs=$((m * 60)) ;;
+            *) secs=60 ;;
+          esac
+          echo "FUZZ_SECONDS=$secs" >> "$GITHUB_ENV"
+      - run: rustup toolchain install "$NIGHTLY" --profile minimal
+      # the key hashes this file too: it names the nightly and the cargo-fuzz version, so a bump is a new cache
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/bin/cargo-fuzz
+            ~/.cargo/registry
+            runtime/fuzz/target
+          key: cargo-${{ runner.os }}-fuzz-${{ hashFiles('runtime/fuzz/Cargo.lock', '.github/workflows/runtime.yml') }}
+      - name: cargo-fuzz 0.13.2
+        run: test -x ~/.cargo/bin/cargo-fuzz || cargo "+$NIGHTLY" install cargo-fuzz --version 0.13.2 --locked
+      - name: Run each target
+        run: |
+          for target in line_codec request_prelude hello; do
+            echo "::group::$target ($FUZZ_SECONDS s)"
+            cargo "+$NIGHTLY" fuzz run "$target" --fuzz-dir runtime/fuzz -- "-max_total_time=$FUZZ_SECONDS"
+            echo "::endgroup::"
+          done
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure()
+        with:
+          name: fuzz-crashes
+          path: runtime/fuzz/artifacts
+          if-no-files-found: ignore
+
   macos:
-    name: tests (macOS 27)
+    name: tests, conformance, perf (macOS 27)
     if: github.event_name != 'schedule'
     runs-on: xcode-27
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - run: brew install rust
-      - run: cargo test --locked --manifest-path runtime/Cargo.toml
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            runtime/target
+          key: cargo-${{ runner.os }}-brew-${{ hashFiles('runtime/Cargo.lock') }}
+      - run: cargo test --locked --manifest-path runtime/Cargo.toml --workspace --features drgnx-ratatoskr/test-hooks
+      - run: cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr --features drgnx-ratatoskr/test-hooks
       - name: Nidhogg 31.1 (writes DRGNX_EMACS to the environment)
         run: /bin/bash test/container/nidhogg.sh macos
       - name: conformance-lisp (the v0 rows against the Lisp hub)
+        run: runtime/target/debug/domr --target lisp --hub-bin test/conformance/lisp-hub.sh --scenarios test/conformance
+      # as the runner user; the `sudo` rows reach the socket as nobody through passwordless `sudo -n -u nobody`, so
+      # security/another-uid-is-refused covers tokio's getpeereid path. --require-all fails it if it is skipped
+      - name: conformance (Ratatoskr in front of the Lisp backend and the fake backend)
         run: |
-          cargo build --locked --manifest-path runtime/Cargo.toml -p domr
-          runtime/target/debug/domr --target lisp --hub-bin test/conformance/lisp-hub.sh --scenarios test/conformance
+          sudo -n true
+          runtime/target/debug/domr --target ratatoskr --hub-bin runtime/target/debug/ratatoskr \
+            --lisp-hub test/conformance/lisp-hub.sh --fake-backend runtime/target/debug/ratatoskr-fake-backend \
+            --scenarios test/conformance --require-all
+      - name: perf baseline (release build)
+        run: |
+          cargo build --locked --release --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr
+          runtime/target/release/domr --target ratatoskr --hub-bin runtime/target/release/ratatoskr \
+            --fake-backend runtime/target/release/ratatoskr-fake-backend --scenarios test/conformance \
+            --only 'perf/*' --perf perf-macos.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ratatoskr-perf-macos
+          path: perf-macos.json
+          if-no-files-found: error

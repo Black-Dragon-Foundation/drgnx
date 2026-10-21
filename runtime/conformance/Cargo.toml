@@ -17,7 +17,7 @@ tempfile.workspace = true
 rusqlite.workspace = true
 hmac.workspace = true
 sha2.workspace = true
-sha1.workspace = true
+runstav = { path = "../crates/runstav", version = "0.1.0" }   # the paths rule (socket, data dir) the hub itself uses
 getrandom.workspace = true
 serde_json.workspace = true
 libc.workspace = true

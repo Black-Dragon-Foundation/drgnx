@@ -1,0 +1,4 @@
+{"scenario": "perf/hello-round-trip", "requires": ["v1", "perf"], "doc": "The baseline of a round trip on a proven connection: ping and its answer, 100 times (--perf records every sample, no budget)."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "measure", "name": "ping-round-trip", "repeat": 100, "steps": [{"do": "send", "conn": "c", "json": {"id": 1, "method": "ping"}}, {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"pid": "$PID(h)"}}}]}

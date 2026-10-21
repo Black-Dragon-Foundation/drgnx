@@ -190,9 +190,9 @@ dependencies = [
  "getrandom",
  "hmac",
  "libc",
+ "runstav",
  "rusqlite",
  "serde_json",
- "sha1",
  "sha2",
  "tempfile",
 ]
