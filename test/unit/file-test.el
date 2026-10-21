@@ -523,4 +523,123 @@
       (should-not (drgnx-file-sealed-p name dir)))
     (should-not (drgnx-file-sealed-p nil dir))))
 
+;;;; The data subset both settings readers share (design §11.2)
+
+(defun drgnx-file-test--cases ()
+  "The rows of the shared case table, test/fixtures/huginn/cases.json (huginn's read::tests read it too), as plists."
+  (with-temp-buffer
+    (let ((coding-system-for-read 'utf-8-unix))
+      (insert-file-contents (expand-file-name "test/fixtures/huginn/cases.json" drgnx-dir)))
+    (json-parse-buffer :object-type 'plist :array-type 'list)))
+
+(defun drgnx-file-test--row-bytes (row)
+  "ROW's file bytes: its text in UTF-8, or, for an id starting \"bytes-\", one byte per character."
+  (let ((text (plist-get row :text)))
+    (if (string-prefix-p "bytes-" (plist-get row :id))
+        (apply #'unibyte-string (append text nil))
+      (encode-coding-string text 'utf-8-unix))))
+
+(defun drgnx-file-test--float-text (f)
+  "The float F's text in a dump: Emacs's `prin1' text, any NaN \"NaN\"."
+  (if (isnan f) "NaN" (let ((float-output-format nil)) (prin1-to-string f))))
+
+(defun drgnx-file-test--dump (x)
+  "The datum X in the shared table's dump format (test/fixtures/huginn/README.md), as lists."
+  (cond ((integerp x) (list "int" (number-to-string x)))
+        ((floatp x) (list "float" (drgnx-file-test--float-text x)))
+        ((stringp x) (list "str" x))
+        ((symbolp x) (list "sym" (symbol-name x)))
+        ((vectorp x) (list "vec" (mapcar #'drgnx-file-test--dump x)))
+        ((proper-list-p x) (list "list" (mapcar #'drgnx-file-test--dump x)))
+        (t (let ((items nil))
+             (while (consp x) (push (drgnx-file-test--dump (pop x)) items))
+             (list "cons" (nreverse items) (drgnx-file-test--dump x))))))
+
+(defun drgnx-file-test--canonical (dump)
+  "The parsed JSON DUMP with each float's text as `drgnx-file-test--dump' writes it (floats compare by value)."
+  (pcase dump
+    (`("float" ,text) (list "float" (drgnx-file-test--float-text (car (read-from-string text)))))
+    (`(,(and kind (or "list" "vec")) ,items) (list kind (mapcar #'drgnx-file-test--canonical items)))
+    (`("cons" ,items ,tail) (list "cons" (mapcar #'drgnx-file-test--canonical items) (drgnx-file-test--canonical tail)))
+    (_ dump)))
+
+(defun drgnx-file-test--line-column (row)
+  "Where ROW's `at' (a byte offset) is in its decoded text: (LINE COLUMN), both 1-based, the column in characters."
+  (let* ((before (decode-coding-string (substring (drgnx-file-test--row-bytes row) 0 (plist-get row :at)) 'utf-8-unix t))
+         (newline (cl-position ?\n before :from-end t)))
+    (list (1+ (cl-count ?\n before)) (- (length before) (or newline -1)))))
+
+(ert-deftest drgnx-file/every-case-in-the-shared-table ()
+  ;; accept: the data read equal the dump; refuse: a problem at `at' (Emacs's own syntax errors, and the size limit,
+  ;; are placed by Emacs: only refused there); refuse-rust-only (\N{NAME}): Emacs reads it
+  (let ((rows (drgnx-file-test--cases)) (ids nil))
+    (should (>= (length rows) 50))
+    (dolist (row rows)
+      (let* ((id (plist-get row :id)) (expect (plist-get row :expect))
+             (r (drgnx-file--parse (decode-coding-string (drgnx-file-test--row-bytes row) 'utf-8-unix t) t)))
+        (ert-info ((format "row %s: %S" id r))
+          (should-not (member id ids))
+          (push id ids)
+          (pcase expect
+            ("accept"
+             (should (memq (car r) '(ok absent)))
+             (should (equal (mapcar #'drgnx-file-test--dump (cdr r))
+                            (mapcar #'drgnx-file-test--canonical (plist-get row :dump)))))
+            ("refuse-rust-only" (should (memq (car r) '(ok absent))))
+            ("refuse"
+             (should (eq (car r) 'problem))
+             (unless (member (plist-get row :kind) '("Syntax" "Unterminated" "TooBig"))
+               (should (equal (list (plist-get (cdr r) :line) (plist-get (cdr r) :column))
+                              (drgnx-file-test--line-column row)))))
+            (_ (ert-fail (format "row %s: unknown expect %S" id expect)))))))))
+
+(ert-deftest drgnx-file/the-token-check-says-why-and-where ()
+  (should (equal (drgnx-file--token-check "(a `b)") '(3 . backquote)))
+  (should (equal (drgnx-file--token-check "(a ,b)") '(3 . comma)))
+  (should (equal (drgnx-file--token-check "(a ,@b)") '(3 . comma)))
+  (should (equal (drgnx-file--token-check "(:a\n #s(x))") '(5 . reader-macro)))
+  (should (equal (drgnx-file--token-check "(\"é\" #$)") '(5 . reader-macro)))
+  (should-not (drgnx-file--token-check "(a 'b #'c #x10 #24r1k (d . e) .5 \"\\xe9\")"))
+  (let ((p (drgnx-file-test--problem "(:a 1\n :b `c)")))
+    (should (equal (list (plist-get p :line) (plist-get p :column)) '(2 5)))
+    (should (string-match-p "backquote" (plist-get p :text))))
+  (let ((p (drgnx-file-test--problem "(:a 1\n :b #$)")))
+    (should (string-match-p "#\\$" (plist-get p :text)))))
+
+(ert-deftest drgnx-file/backquote-in-a-string-or-comment-is-fine ()
+  (let ((text ";; `(a ,b) #s(x) #1=y\n(:a \"`(a ,@b) #1=c #$\" ; ,d `e #.f\n :b c)\n"))
+    (should-not (drgnx-file--token-check text))
+    (should (equal (drgnx-file-test--ok text) '(:a "`(a ,@b) #1=c #$" :b c)))))
+
+(ert-deftest drgnx-file/char-literals-of-refused-tokens-are-fine ()
+  (let ((text "(?` ?, ?# ?\\` ?\\, ?\\# ?\\C-` \\`a \\,b \\#c)"))
+    (should-not (drgnx-file--token-check text))
+    (should (equal (drgnx-file-test--ok text) (list ?\` ?\, ?# ?\` ?\, ?# ?\C-\` '\`a '\,b '\#c)))))
+
+(ert-deftest drgnx-file/values-beyond-the-subset-are-never-written ()
+  ;; the walk refuses them in data too; a write reads its file back, so it refuses them before the rename
+  (should (equal (drgnx-file--walk (list :a (unibyte-string #xe9))) '(unibyte)))
+  (should (equal (drgnx-file--walk (vector (string ?é #x3fffe9))) '(raw-byte)))
+  (should (equal (drgnx-file--walk '(1 . 9223372036854775808)) '(integer-range)))
+  (should (equal (drgnx-file--walk (list -9223372036854775809)) '(integer-range)))
+  (should-not (drgnx-file--walk (list "é" (unibyte-string #x7f) -9223372036854775808 9223372036854775807 1.0e+INF)))
+  (drgnx-file-test--with-dir dir
+    (let ((f (expand-file-name "v.eld" dir)))
+      (dolist (bad (list (unibyte-string #xe9) (string ?é #x3fffe9) 9223372036854775808))
+        (should-error (drgnx-file-write f (list :a bad)) :type 'drgnx-file-refused))
+      (should-not (file-exists-p f))
+      (should-not (drgnx-file-test--leftovers dir)))))
+
+(ert-deftest drgnx-file/every-shipped-eld-still-reads ()
+  ;; keys/*.eld, settings/**/*.eld and the test fixtures the config layer reads: the new checks refuse none
+  (let* ((in (lambda (sub) (expand-file-name sub drgnx-dir)))
+         (files (append (directory-files (funcall in "keys") t "\\.eld\\'")
+                        (and (file-directory-p (funcall in "settings"))
+                             (directory-files-recursively (funcall in "settings") "\\.eld\\'"))
+                        (directory-files-recursively (funcall in "test/fixtures") "\\.eld\\'"))))
+    (should (>= (length files) 20))
+    (dolist (f files)
+      (ert-info (f)
+        (should (eq (plist-get (drgnx-file-read f) :status) 'ok))))))
+
 ;;; file-test.el ends here

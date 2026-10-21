@@ -29,6 +29,29 @@ text, so it can only make drgnx do less: it can lower your `:ask-above` and `:ch
 never raise them or set the chunk size ([large-files.md](large-files.md#the-settings)). With a mistake it is ignored,
 with one notice.
 
+## What a drgnx data file may contain
+
+drgnx's files hold data, never code: drgnx reads them, it never loads them. A file may contain:
+
+- numbers: `80`, `-3`, `1.5`, `#x1F`, `#o17`, `#b101`, `#24r1k` (whole numbers up to 64 bits);
+- strings, with any escape: `"tab\there"`, `"é"`, `"\N{U+E9}"`;
+- characters: `?a`, `?\n`, `?\C-a`;
+- symbols and keywords: `fill-column`, `nil`, `t`, `:mode`;
+- lists, dotted pairs and vectors: `(a b)`, `(a . b)`, `[1 2]`;
+- `'x` and `#'f`, which read as `(quote x)` and `(function f)`;
+- comments (`;`) anywhere.
+
+These are mistakes, at the line and column where they start (the file falls back to its last good copy, as below):
+
+- a backquote or a comma (`` `(a ,b) ``): that is code. Write the value itself, `(a b)`;
+- any other `#` syntax: `#s(…)`, `#(…)`, `#[…]`, `#1=`, `#$`, `#:x` and the rest;
+- a byte above 127 written as `"\xe9"`, `"\351"` or `"\M-a"`: write the character `"é"`, or `"é"`;
+- a whole number beyond 64 bits;
+- text that is not valid UTF-8.
+
+Inside a string or a comment these characters are just text: `` "`(a ,b)" `` and `;; ,x` are fine, and so are the
+characters `` ?` ``, `?,` and `?#`.
+
 ## When a file has a mistake
 
 A file with a mistake (a missing bracket, a value of the wrong kind) is never applied half way. You see one

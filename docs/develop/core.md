@@ -108,6 +108,21 @@ A file swapped for a FIFO between the check and the open would still block: Emac
   after the form, lists or vectors nested deeper than `drgnx-file-max-depth` (64), and any object other than a
   symbol, a number, a string without text properties, a cons or a vector (records, `#s(hash-table …)`, byte-code,
   bool-vectors, char-tables).
+- Before `read`, the text is held to the data subset both settings readers share (Ratatoskr's `huginn` is the
+  other; the table is in [settings.md](settings.md#the-data-subset)), because `read` alone accepts code and syntax
+  huginn reads differently. In this order, the first one found is the problem, at its line and column:
+  - a raw byte (charset `eight-bit`): what decoding makes of bytes that are not valid UTF-8 ("not valid UTF-8");
+  - the token check, `drgnx-file--scan` (`drgnx-file--token-check` gives `(POS . WHY)` for a string): a backquote,
+    a comma (`,` and `,@`), and every `#` syntax except `#'`, `#x`, `#o`, `#b` and `#NrDIGITS` (`#s(`, `#(`, `#[`,
+    `#&`, `#^[`, `#N=`, `#N#`, `#@`, `#$`, `#.`, `##`, `#_`, `#:`, `#!`). It walks the tokens as lread.c's `read0`
+    does and reads each atom with `read` itself, so a string, a comment, a character literal (`?\``, `?,`) or an
+    escaped symbol character (`\,x`) never trips it;
+  - the atoms it reads (`drgnx-file--atom-why`): a unibyte string with a byte above 127 (`"\xe9"`, `"\351"`,
+    `"\M-a"`), a multibyte string holding a raw byte (`"é\xe9"`), and an integer beyond 64 bits.
+  `drgnx-file--walk` checks the same atoms in the data read, so a write's read back refuses them too: drgnx never
+  writes them. `\N{NAME}` stays accepted here (huginn refuses it: the listed divergence). Both readers' tests read
+  one case table, `test/fixtures/huginn/cases.json` (its README has the format); a case goes there, never to one
+  side only.
 - P is `(:text STRING :line N :column N)`, both 1-based. A refusal of the bounded read is a problem at line 1.
 - ST is `(drgnx-file-stamp FILE)`: `(INODE MTIME SIZE)` of the truename from one `file-attributes` call. The inode
   sees a file renamed over another within one mtime tick. The stamp is taken before the read, so a change in between
