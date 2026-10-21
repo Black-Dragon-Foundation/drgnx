@@ -246,11 +246,13 @@ you            answered
 **Questions everywhere.** A question waiting on you shows in the graph (`◐` and a red dot) and in the timeline (a
 `◐` chip in the waiting face, red). What happened marks its line the same way, and its first line names the agent's
 oldest open question, so it stays in view after its line scrolls away. An answered question loses the mark.
-The timeline's head counts escalations, `ask_user` questions and ask cards. The status bar's "waiting on you" adds
-the questions no job holds (`drgnx-cockpit-waiting-count`); an ask card and a job's message to you are its jobs
-segment's ⚑, so each shows once. Permissions show in the graph, and their
-own count is the status bar's. While the cockpit module runs, a look every `drgnx-cockpit-check-interval` tells the
-status bar when the number changed, so it moves even when another process asked, whatever shows.
+The open questions (escalations, `ask_user` questions and ask cards) are the `questions` source of the notice model,
+so they count in the one "needs you" count (`drgnx-needs-you-count`) with everything else that waits on you. An ask
+card, or a job's message to you, that the jobs source holds too counts once. The timeline's head, "◐ N waiting on
+you", and the cards pane's "What needs you" show that count (for one job, that job's part of it). Permissions show in
+the graph, and their own count is the agents'. While the cockpit module runs, a look every
+`drgnx-cockpit-check-interval` makes the questions set again when the store changed, so the count moves even when
+another process asked, whatever shows. The cockpit does not call the status bar: the bar reads the count.
 
 **Answer Question…** (`cockpit-answer`, `A` in the graph, What happened and the timeline) answers the question
 under point: a line or a chip, or the graph node on this line or selected. Otherwise it answers the agent of What
@@ -324,8 +326,8 @@ shows; hidden, it keeps no timer and catches up when it shows (one agent's What 
 pane counts too). When the store did not change, an update ends after one query. Otherwise only the lines and rows
 that changed are drawn: a new event adds its line under What happened's last one and redraws its agent's row of the
 timeline, an answered question redraws its line or row, and only when a window's size changes is every row fitted
-again. Your place stays on its line. `drgnx-cockpit-waiting-count` returns a cached number, counted again only when
-the store changed.
+again. Your place stays on its line. The questions set is made again only when
+the store changed (one query otherwise).
 
 What needs you and Decisions ask the hub (never waiting for it) after a job, card, agent or lease event that
 concerns the job they show, at most once per 0.5 s and only while one shows; one that shows again asks at once, and

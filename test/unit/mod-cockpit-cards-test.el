@@ -12,7 +12,6 @@
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/cockpit-fixture" drgnx-dir) nil t)   ; panes the state store sees; a project
-(defvar drgnx-statusbar-waiting-functions)             ; the setup adds the cockpit's count to it
 
 (defconst drgnx-cockpit-cards-test--summary
   ;; as `job/status' gives it back through JSON: nil as :null, false as :false
@@ -404,6 +403,26 @@ their hooks and timers."
         (drgnx-cockpit-cards-refresh)
         (should (string-search "What needs you: 3" (drgnx-cockpit-cards-test--text 'cards)))))))
 
+(ert-deftest drgnx-cockpit-cards/heads-show-the-one-count ()
+  ;; the heads read the model, which holds more than the jobs set: another source's item scoped to j1 counts in both
+  (drgnx-cockpit-cards-test--with
+    (drgnx-notice-test-with-model
+      (drgnx-notice-define-source 'jobs :title "Jobs" :command 'cockpit-needs-you)
+      (drgnx-notice-define-source 'questions :title "Questions" :command 'cockpit-answer)
+      (let* ((j2 (list :id "j2" :title "Other" :status "paused" :repo "/q/"
+                       :cards '((:id 9 :kind "budget" :task :null :title "paused" :actions (("stop" "Stop")) :data :null))
+                       :messages :null))
+             (drgnx-cockpit-cards-test--answer (lambda (_m _p) (list (list :jobs (list drgnx-cockpit-cards-test--summary j2)) nil))))
+        (drgnx-notice-set 'questions (list (list :id '(question . 99) :text "asked" :scope "j1")))
+        (drgnx-cockpit-cards-test--show)
+        (drgnx-cockpit-cards-refresh)
+        (should (= 5 (drgnx-needs-you-count)))
+        (should (string-search "What needs you — every job: 5" (drgnx-cockpit-cards-test--text 'cards)))
+        (setq drgnx-cockpit-graph-current-filter '(:job "j1")
+              drgnx-cockpit-cards-test--answer (lambda (_m _p) (list drgnx-cockpit-cards-test--summary nil)))
+        (drgnx-cockpit-cards-refresh)
+        (should (string-search "What needs you: 4" (drgnx-cockpit-cards-test--text 'cards)))))))
+
 ;;;; A workbench saved before M12f
 
 (ert-deftest drgnx-cockpit-cards/an-old-job-window-state-opens-the-cockpit ()
@@ -470,8 +489,7 @@ their hooks and timers."
 (ert-deftest drgnx-cockpit-cards/the-commands-are-registered ()
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
         (drgnx-pane--kinds nil) (drgnx-cockpit-filter-functions nil)
-        (drgnx-persist-state-functions nil) (drgnx-persist-after-restore-functions nil)
-        (drgnx-statusbar-waiting-functions nil))
+        (drgnx-persist-state-functions nil) (drgnx-persist-after-restore-functions nil))
     (cl-letf (((symbol-function 'drgnx-pane--call) #'ignore))
       (drgnx-cockpit-fixture-after-setup
         ;; the parts hear from the workbench state store when they show and are hidden
@@ -496,8 +514,7 @@ their hooks and timers."
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
         (drgnx-pane--kinds nil) (drgnx-cockpit-filter-functions nil)
         (drgnx-persist-state-functions nil) (drgnx-persist-after-restore-functions nil)
-        (drgnx-hub-event-functions nil) (drgnx-hub-disconnect-functions nil)
-        (drgnx-statusbar-waiting-functions nil))
+        (drgnx-hub-event-functions nil) (drgnx-hub-disconnect-functions nil))
     (cl-letf (((symbol-function 'drgnx-pane--call) #'ignore))
       (drgnx-cockpit-fixture-after-setup))           ; its subscriptions go with the state store afterwards
     (drgnx-cockpit-cards-buffer)
@@ -532,7 +549,7 @@ their hooks and timers."
              (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
              (drgnx-pane--kinds nil) (drgnx-cockpit-filter-functions nil)
              (drgnx-persist-state-functions nil) (drgnx-persist-after-restore-functions nil)
-             (drgnx-statusbar-waiting-functions nil) (drgnx-cockpit-feed--buffers nil) (drgnx-cockpit-edits--last nil)
+             (drgnx-cockpit-feed--buffers nil) (drgnx-cockpit-edits--last nil)
              (drgnx-cockpit-graph-current-filter nil)
              (temporary-file-directory (let ((d (concat root "tmp/"))) (make-directory d t) d))
              (config (current-window-configuration))
@@ -555,7 +572,9 @@ their hooks and timers."
                 (drgnx-state-sync) (drgnx-state--deliver-idle) ; the edits pane hears `windows-changed' on `idle'
                 (should (drgnx-timer-active-p (cons 'cockpit-feed-check tl)))
                 (should (drgnx-timer-active-p (cons 'cockpit-edits-check e))))
+              (should (gethash 'questions drgnx-notice--sources))
               (should-not (drgnx-module-teardown 'tools/cockpit))
+              (should-not (gethash 'questions drgnx-notice--sources))
               (should-not (seq-find (lambda (b) (string-match-p drgnx-cockpit-cards-test--buffer-names (buffer-name b))) (buffer-list)))
               (should-not (seq-find (lambda (p) (let ((k (car p))) (string-prefix-p "cockpit-" (symbol-name (if (consp k) (car k) k)))))
                                     (drgnx-timer-pending)))
@@ -563,7 +582,6 @@ their hooks and timers."
                 (dolist (entry lane) (should-not (seq-find cockpit-p (cdr entry)))))
               (should-not (seq-find cockpit-p (bound-and-true-p drgnx-hub-event-functions)))
               (should-not (seq-find cockpit-p (bound-and-true-p drgnx-agents-changed-functions)))
-              (should-not (memq #'drgnx-cockpit-waiting-count (bound-and-true-p drgnx-statusbar-waiting-functions)))
               (should-not drgnx-cockpit-filter-functions))
           (drgnx-module-teardown 'tools/cockpit)
           (set-window-configuration config))))))

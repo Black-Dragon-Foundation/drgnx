@@ -26,11 +26,11 @@
 (require 'drgnx-view)
 (require 'drgnx-coord)                                ; Message…: the user's text, left in the store
 (require 'drgnx-cockpit-model)                        ; `drgnx-cockpit-shown-p', `drgnx-cockpit-row-cell'
-;; the jobs module's count of what needs you (the badge's), beside this file
+(require 'drgnx-notice)                               ; `drgnx-needs-you-count': the one count the heads show
+;; the jobs module's source of what needs you, beside this file
 (unless (featurep 'drgnx-job-ui)
   (load (expand-file-name "drgnx-job-ui" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (declare-function drgnx-job-ui-waiting-p "drgnx-job-ui")
-(declare-function drgnx-job-ui-needs-you-count "drgnx-job-ui")
 (declare-function drgnx-job-ui-note-jobs "drgnx-job-ui")
 
 (declare-function drgnx-hub-call "drgnx-hub-client")
@@ -194,7 +194,7 @@ spaces (a dock is narrow: a button is never cut in two)."
           (insert "\n"))))))
 
 (defun drgnx-cockpit-cards--insert-cards (job s)
-  (insert (propertize (format "What needs you: %d\n\n" (car (drgnx-job-ui-needs-you-count (list s)))) 'face 'bold))
+  (insert (propertize (format "What needs you: %d\n\n" (drgnx-needs-you-count (plist-get s :id))) 'face 'bold))
   (unless (or (drgnx-cockpit-cards--v (plist-get s :cards)) (drgnx-cockpit-cards--v (plist-get s :messages)))
     (insert "Nothing needs you.\n"))
   (drgnx-cockpit-cards--insert-items job s))
@@ -271,10 +271,11 @@ and spend — and its decision log; a row only when its part of the job changed.
 
 (defun drgnx-cockpit-cards--draw-all (jobs)
   "Draw what needs you of every job of JOBS (as `job/status' lists them) that waits on the user
-\(`drgnx-job-ui-waiting-p'), and tell the badge the count (`drgnx-job-ui-note-jobs': one count, no second question);
-the decision log says it is per job.  A row per job, drawn again only when what it shows of it changed."
+\(`drgnx-job-ui-waiting-p'), and tell the notice model (`drgnx-job-ui-note-jobs'), whose count
+\(`drgnx-needs-you-count') the head shows; the decision log says it is per job.  A row per job, drawn again
+only when what it shows of it changed."
   (drgnx-job-ui-note-jobs jobs)
-  (let ((open (seq-filter #'drgnx-job-ui-waiting-p jobs)) (n (car (drgnx-job-ui-needs-you-count jobs))))
+  (let ((open (seq-filter #'drgnx-job-ui-waiting-p jobs)) (n (drgnx-needs-you-count)))
     (drgnx-cockpit-cards--put 'cards
                               (cons (list :head (list n (null open)) (lambda () (drgnx-cockpit-cards--insert-all-head n (null open))))
                                     (mapcar (lambda (j)

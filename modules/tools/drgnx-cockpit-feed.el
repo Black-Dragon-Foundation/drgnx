@@ -7,8 +7,8 @@
 ;; (`drgnx-cockpit-happened': decisions, edits with file counts, tests `12/12 ✓', questions, reviews), each a button
 ;; to its target, the full transcript one click away and a reply field that queues — and the timeline: one row per
 ;; agent, chips left to right by time, the newest shown, the older ones one click away.  A question waiting on you is
-;; marked ◐ (`drgnx-cockpit-waiting') in both, in the graph (drgnx-cockpit.el) and, through
-;; `drgnx-cockpit-waiting-count', in the status bar.  `drgnx-cockpit-answer' (A) answers it from any of them: queued
+;; marked ◐ (`drgnx-cockpit-waiting') in both, in the graph (drgnx-cockpit.el) and, as the notice source `questions'
+;; (`drgnx-cockpit-feed-note-questions'), in the one "needs you" count.  `drgnx-cockpit-answer' (A) answers it from any of them: queued
 ;; to its agent, never interrupting it, and an `answer' event closes it.
 ;; The feed's buffers are views (wb/drgnx-view.el; types `cockpit-happened' and `cockpit-timeline'): one row per event
 ;; line, per agent's row of chips, per head and last lines, drawn again only when it changed.  They follow the store
@@ -24,6 +24,7 @@
 (require 'button)
 (require 'text-property-search)
 (require 'drgnx-timer)
+(require 'drgnx-notice)
 (require 'drgnx-cockpit-model)
 (require 'drgnx-state)
 (require 'drgnx-view)
@@ -51,7 +52,6 @@
 (declare-function drgnx-agent-session-mode "drgnx-agents")
 (declare-function drgnx-agent-session-status "drgnx-agents")
 (declare-function drgnx-hub-call "drgnx-hub-client")
-(declare-function drgnx-statusbar-refresh "drgnx-statusbar")
 (defvar drgnx-cockpit-graph-mode-map)
 (defvar drgnx-cockpit-graph-buffer-name)
 (defvar drgnx-cockpit-open-functions)
@@ -73,9 +73,8 @@
 
 (defvar drgnx-cockpit-feed--buffers nil
   "The feed's live buffers (what happened, the timeline): they own its hooks while one lives.")
-(defvar drgnx-cockpit-feed--waiting nil
-  "(KEY QUESTIONS . TOTAL): `drgnx-cockpit-feed--waiting-pair' for the store at KEY.")
-(defvar drgnx-cockpit-feed--told nil "The waiting count the status bar was last told of (`drgnx-cockpit-feed-tell-statusbar').")
+(defvar drgnx-cockpit-feed--noted nil
+  "The key (include-closed-jobs . `drgnx-cockpit--db-key') at the last `drgnx-cockpit-feed-note-questions'.")
 (defvar drgnx-cockpit-feed--in-flight nil
   "The questions whose answer is on its way to the hub: ((QUESTION . SENT-AT)…), QUESTION an event id or (card . ID).
 A second answer is refused until the hub answers, the call fails, or `drgnx-cockpit-feed-in-flight-timeout' passes
@@ -85,7 +84,7 @@ A second answer is refused until the hub answers, the call fails, or `drgnx-cock
   "Seconds after which an answer still on its way to the hub no longer blocks a second one.")
 
 (defvar drgnx-cockpit-feed--questions-now nil
-  "While an update runs: a box (READ . QUESTIONS), so that its buffers and the waiting count read the open questions
+  "While an update runs: a box (READ . QUESTIONS), so that its buffers read the open questions
 once (`drgnx-cockpit-feed--open-questions'); nil outside an update.")
 
 (defvar-local drgnx-cockpit-feed--key nil
@@ -156,7 +155,9 @@ with it."
     (remove-hook 'drgnx-agents-changed-functions #'drgnx-cockpit-feed--agent-changed)))
 
 (defun drgnx-cockpit-feed--hub-event (event _data)
-  "`drgnx-hub-event-functions': a job, a card, an agent or a lease changed — the feed updates soon."
+  "`drgnx-hub-event-functions': a job, a card, an agent or a lease changed — the feed updates soon, and the
+`questions' set is made again when the store changed (`drgnx-cockpit-feed-note-questions') on an `events' event."
+  (when (equal event "events") (drgnx-cockpit--call #'drgnx-cockpit-feed-note-questions))
   (unless (member event drgnx-cockpit--quiet-events) (drgnx-cockpit-feed-schedule)))
 
 (defun drgnx-cockpit-feed--agent-changed (_session)
@@ -178,10 +179,11 @@ only the rows that changed are drawn.  Cheap: called from every event (a flag an
 (defun drgnx-cockpit-feed--check (buffer)
   "Every `drgnx-cockpit-check-interval' s while the feed BUFFER shows (its timer `(cockpit-feed-check . BUFFER)',
 started and cancelled by `drgnx-cockpit-feed--follow-shown'): when the store changed since its update (another process
-wrote it), ask for one."
+wrote it), ask for one; the `questions' set follows the store too (`drgnx-cockpit-feed-note-questions')."
   (when-let* ((view (drgnx-cockpit-feed--view buffer)))
     (drgnx-cockpit--call
      (lambda ()
+       (drgnx-cockpit-feed-note-questions)
        (unless (equal (drgnx-cockpit-feed--key-now) (buffer-local-value 'drgnx-cockpit-feed--key buffer))
          (drgnx-view-touch view))))))
 
@@ -672,7 +674,7 @@ text changed are drawn.  FORCE: read the store anew."
          (all (or (eq touched t) (not (eql width drgnx-cockpit-feed--fit))))
          (old drgnx-cockpit-feed--cells) (cells (make-hash-table :test #'equal))
          (keys (list :head)))
-    (puthash :head (let ((head (drgnx-cockpit-feed--head-text (drgnx-cockpit-feed--head-count))))
+    (puthash :head (let ((head (drgnx-cockpit-feed--head-text (drgnx-needs-you-count))))
                      (drgnx-cockpit-row-cell old :head head head))
              cells)
     (dolist (row drgnx-cockpit-feed--rows)
@@ -721,30 +723,6 @@ text changed are drawn.  FORCE: read the store anew."
 
 ;;;; Questions everywhere
 
-(defun drgnx-cockpit-feed--waiting-pair ()
-  "(QUESTIONS . TOTAL), cached as `(STORE-KEY QUESTIONS . TOTAL)' in `drgnx-cockpit-feed--waiting'.
-QUESTIONS: the open questions the jobs count does not hold — not an ask card (`:card' in its data) and not a job's
-message (`:message' in its data and a `:job').  TOTAL: today's number (every open question, and the open ask cards
-no question names), which the timeline's head shows."
-  (let ((key (cons drgnx-cockpit-include-closed-jobs (drgnx-cockpit--db-key))))
-    (if (equal key (car drgnx-cockpit-feed--waiting)) (cdr drgnx-cockpit-feed--waiting)
-      (let* ((qs (drgnx-cockpit-feed--open-questions))
-             (own (seq-count (lambda (q) (let ((d (plist-get q :data)))
-                                           (not (or (plist-get d :card) (and (plist-get d :message) (plist-get q :job))))))
-                             qs))
-             (pair (cons own (+ (length qs) (length (drgnx-cockpit-feed--open-cards))))))
-        (setq drgnx-cockpit-feed--waiting (cons key pair))
-        pair))))
-
-(defun drgnx-cockpit-waiting-count ()
-  "How many questions wait on you that no other count holds (see `drgnx-cockpit-feed--waiting-pair'): for the status
-bar's `drgnx-statusbar-waiting-functions', next to the jobs count."
-  (car (drgnx-cockpit-feed--waiting-pair)))
-
-(defun drgnx-cockpit-feed--head-count ()
-  "Everything waiting on you that the timeline marks: its head's number."
-  (cdr (drgnx-cockpit-feed--waiting-pair)))
-
 (defun drgnx-cockpit-feed--open-cards ()
   "The open ask cards (of open jobs, unless `drgnx-cockpit-include-closed-jobs') that no open question
 (`drgnx-cockpit-feed--open-questions') names — as the model counts them: ((ID JOB TASK TITLE AT)…), oldest first."
@@ -755,15 +733,35 @@ bar's `drgnx-statusbar-waiting-functions', next to the jobs count."
                                                             (if drgnx-cockpit-include-closed-jobs "" " and j.status is not 'done'")
                                                             " order by c.id")))))
 
-(defun drgnx-cockpit-feed-tell-statusbar ()
-  "Tell the status bar when `drgnx-cockpit-waiting-count' changed since it was last told (`drgnx-statusbar-refresh',
-when it is loaded): so its count moves when another process asks, with no hub event.  One query when the store did
-not change.  Called by the graph's and the feed's checks (timers).  The count counts as told only once the refresh
-returned: a failed one is tried again at the next check."
-  (let ((n (drgnx-cockpit-waiting-count)))
-    (when (and (not (eql n drgnx-cockpit-feed--told)) (fboundp 'drgnx-statusbar-refresh))
-      (drgnx-statusbar-refresh)
-      (setq drgnx-cockpit-feed--told n))))
+(defun drgnx-cockpit-feed--question-id (q)
+  "The notice id of open question Q: `(card . CID)' when its data names a card, `(message . MID)' when it names a
+message and Q has a job (the jobs source holds that message), else `(question . QID)'."
+  (let ((d (plist-get q :data)))
+    (cond ((plist-get d :card) (cons 'card (plist-get d :card)))
+          ((and (plist-get d :message) (plist-get q :job)) (cons 'message (plist-get d :message)))
+          (t (cons 'question (plist-get q :id))))))
+
+(defun drgnx-cockpit-feed-note-questions ()
+  "Make the `questions' notice set from the store when it changed since the last call (or the include-closed option
+did): one item per open question, and one `(card . CID)' per open ask card no question names.  An id the jobs set
+holds too counts once (the model dedupes).  One query when nothing changed.  Called by the graph's and the feed's
+checks (timers), when something was answered or sent, on a hub `events' event and in the setup.  The key is kept
+only once the set was made, so a failure is tried again.  Does nothing while the source is not defined."
+  (when (gethash 'questions drgnx-notice--sources)
+    (let ((key (cons drgnx-cockpit-include-closed-jobs (drgnx-cockpit--db-key))))
+      (unless (equal key drgnx-cockpit-feed--noted)
+        (let ((items (nconc
+                      (mapcar (lambda (q)
+                                (list :id (drgnx-cockpit-feed--question-id q) :text (drgnx-cockpit-feed--describe q)
+                                      :command 'cockpit-answer :scope (plist-get q :job)))
+                              (drgnx-cockpit-feed--open-questions))
+                      (mapcar (lambda (c)
+                                (list :id (cons 'card (nth 0 c))
+                                      :text (format "%s: %s" (drgnx-cockpit-feed--name (nth 1 c)) (drgnx-cockpit--line (nth 3 c) 100))
+                                      :command 'cockpit-answer :scope (nth 1 c)))
+                              (drgnx-cockpit-feed--open-cards)))))
+          (drgnx-notice-set 'questions items)
+          (setq drgnx-cockpit-feed--noted key))))))
 
 (defun drgnx-cockpit-feed--questions ()
   "Everything waiting on you that can be answered: the model's open questions (each with the :node it is about),
@@ -822,10 +820,10 @@ until the hub answers, the call fails or `drgnx-cockpit-feed-in-flight-timeout' 
       (error (funcall land) (signal (car err) (cdr err))))))
 
 (defun drgnx-cockpit-feed--changed ()
-  "Something was answered or sent: the feed, the graph and the status bar look again soon."
+  "Something was answered or sent: the `questions' set is made again, and the feed and the graph look again soon."
+  (drgnx-cockpit--call #'drgnx-cockpit-feed-note-questions)
   (drgnx-cockpit-feed-schedule 0)
-  (drgnx-cockpit-schedule 0)
-  (when (fboundp 'drgnx-statusbar-refresh) (drgnx-statusbar-refresh)))
+  (drgnx-cockpit-schedule 0))
 
 (defun drgnx-cockpit-feed--queue (agent text done &optional flight answers)
   "Queue TEXT for AGENT, never interrupting it, then DONE (FLIGHT: as `drgnx-cockpit-feed--hub''s; ANSWERS: the id of
@@ -930,8 +928,7 @@ when it has one (`drgnx-cockpit-answer'), else a message it gets when its turn e
 
 (defun drgnx-cockpit-feed--setup ()
   "tools/cockpit's setup, the feed's part: the `happened' and `timeline' pane kinds, their commands, their
-subscriptions to the workbench state store, and the questions only the cockpit counts in the status bar
-\(`drgnx-cockpit-waiting-count')."
+subscriptions to the workbench state store, and the `questions' attention source (`drgnx-cockpit-feed-note-questions')."
   (drgnx-pane-define-kind 'happened :title " WHAT HAPPENED" :home 'right :placeholder #'drgnx-cockpit-feed--happened-placeholder)
   (drgnx-pane-define-kind 'timeline :title " TIMELINE" :home 'bottom :buffer #'drgnx-cockpit-timeline-buffer)
   (drgnx-cockpit-feed--subscribe)
@@ -941,13 +938,14 @@ subscriptions to the workbench state store, and the questions only the cockpit c
                         :doc "One agent's events, one line each: decisions, edits, tests, questions")
   (drgnx-command-define 'cockpit-timeline :category "Work" :title "Show Timeline" :command #'drgnx-cockpit-timeline-show
                         :doc "Every agent's events as chips, one row per agent")
-  ;; the questions no jobs count holds join the status bar's "waiting on you"
-  (add-hook 'drgnx-statusbar-waiting-functions #'drgnx-cockpit-waiting-count))
+  (drgnx-notice-define-source 'questions :title "Questions" :command 'cockpit-answer)
+  (setq drgnx-cockpit-feed--noted nil)
+  (drgnx-cockpit--call #'drgnx-cockpit-feed-note-questions))
 
 (defun drgnx-cockpit-feed--teardown ()
   "Undo the feed's part of the module: kill its buffers — What happened, the timeline, the timeline's earlier chips
 and the `happened' placeholder; the last feed buffer's `kill-buffer-hook' takes out its hub hooks, and each owns its
-timers.  Its pane kinds, commands, state subscriptions and status-bar hook are the setup's."
+timers.  Its pane kinds, commands, state subscriptions and `questions' source are the setup's."
   (dolist (b (buffer-list))
     (when (or (memq b drgnx-cockpit-feed--buffers)
               (string-match-p "\\`\\(\\*timeline: .*\\*\\| \\*happened\\*\\)\\'" (buffer-name b)))
