@@ -8,11 +8,12 @@
 ;; ring: the pause (the change in `gc-elapsed', which Emacs updates before it runs the hook), the origin
 ;; (`nidhogg-watchdog-gc-origin', bound by drgnx's own collections), whether it ran inside a command or a timer
 ;; rather than at idle, `gcs-done', the time, the live heap by type (`garbage-collect-heapsize') and the threshold.
-;; It does no I/O, never asks whether input is pending and allocates only that heap list.  An idle timer writes the ring as collection lines (JSON Lines, the
-;; watchdog's format) into (drgnx-state-dir)/watchdog/YYYY-MM-DD.jsonl; day files older than 14 days are deleted when
-;; the mode starts.  `drgnx-gc-census-report' reads the day files back; the command `gc-census' (Help) shows it.
-;; Off by default: speed.eld's :gc-census turns it on at start, `drgnx-gc-census-mode' for this session.  While the
-;; watchdog's own mode (`nidhogg-watchdog-mode') is on, the census stands down: one writer.
+;; It does no I/O, never asks whether input is pending and allocates only that heap list.  An idle timer writes
+;; the ring as collection lines (JSON Lines, the watchdog's format) into
+;; (drgnx-state-dir)/watchdog/YYYY-MM-DD.jsonl; day files older than 14 days are deleted when the mode starts.
+;; `drgnx-gc-census-report' reads the day files back; the command `gc-census' (Help) shows it.  Off by default:
+;; speed.eld's :gc-census turns it on at start, `drgnx-gc-census-mode' for this session.  While the watchdog's own
+;; mode (`nidhogg-watchdog-mode') is on, the census stands down: one writer.
 
 ;;; Code:
 (require 'cl-lib)
