@@ -1002,6 +1002,8 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
       (should-not (string-search "1.75" out)))
     ;; 4. Debian trixie (1.85) and no versioned package: a private rustup, from the versioned archive
     (let ((out (cdr (drgnx-install-test--rust-plan "debian-13" tmp (list drgnx-install-test--apt-cache) "RUST_CAND=1.85.0+dfsg1-1"
+                                                   ;; no Nidhogg recipe for Debian 13: a Nidhogg already installed is kept
+                                                   (concat "DRGNX_INSTALL_EMACS=" (drgnx-install-test--fake-emacs tmp "31.1 t pgtk 31.1-nidhogg.1"))
                                                    "APT_SEARCH=rustc-1.85 - Rust\ncargo-1.85 - Cargo\n"))))
       (should (string-search "Rust toolchain: a private rustup 1.28.2" out))
       (should (string-search "/rustup with Rust 1.93.1" out))
@@ -1023,13 +1025,15 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
       (should (string-search "C compiler: sudo apt-get install -y gcc"
                              (cdr (drgnx-install-test--rust-plan "ubuntu-26.04" tmp stubs))))
       (should (string-search "C compiler: sudo pacman -S --needed --noconfirm gcc"
-                             (cdr (drgnx-install-test--rust-plan "arch" tmp stubs))))
+                             (cdr (drgnx-install-test--rust-plan   ; no recipe for Arch: an installed Nidhogg is kept
+                                   "arch" tmp stubs
+                                   (concat "DRGNX_INSTALL_EMACS=" (drgnx-install-test--fake-emacs tmp "31.1 t pgtk 31.1-nidhogg.1"))))))
       (should (string-search "C compiler: xcode-select --install"
                              (cdr (apply #'drgnx-install-test--run
                                          (append (list "DRGNX_INSTALL_RUNTIME=" (drgnx-install-test--rust-path tmp stubs)
                                                        "DRGNX_INSTALL_BREW=none")
                                                  drgnx-install-test--macos)
-                                         '("--dry-run" "--method" "cask")))))
+                                         '("--dry-run")))))
       ;; the packages of a distro install bring gcc themselves
       (should-not (string-search "C compiler: sudo"
                                  (cdr (drgnx-install-test--rust-plan "fedora-45" tmp (list drgnx-install-test--dnf) "RUST_CAND=1.99.0")))))))

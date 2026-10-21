@@ -180,7 +180,8 @@ domr connect-as --socket PATH
 - `--only GLOB` matches the scenario name (`*` and `?`); `--only-tag TAG` the rows that require the tag.
 - Output: one `PASS name`, `SKIP name (reason)` or `FAIL name: step N (VERB): what` line per scenario, then
   `N passed, N skipped, N failed`. Exit 0 only with no FAIL. With `--require-all` a SKIP fails too, except `linux` /
-  `macos` skips on the other host and `sudo` skips where neither root nor passwordless sudo exists.
+  `macos` skips on the other host, `sudo` skips where neither root nor passwordless sudo exists, and `perf` rows
+  without `--perf`.
 - `--perf OUT.json` runs the `perf` rows and writes every `measure` step's timings to the file.
 - `connect-as` connects to the socket and relays stdin and stdout over it: the other-uid connection runs it as
   uid 65534 (`setpriv` as root where util-linux has it, else `sudo -n -u nobody`; `$SUDO` names the sudo command).
@@ -219,7 +220,7 @@ Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in fai
 | `kill` | `hub` or `pid`, `signal` (`TERM KILL STOP CONT INT HUP QUIT USR1 USR2`) | signal the hub (or a captured pid) |
 | `expect_exit` | `hub` or `pid`, `code`, `signal`, `within_ms` (10000) | the process ended with this status (a `pid` must be one the scenario spawned) |
 | `file` | `path`, `exists`, `mode`, `owner` (`"user"` or a uid), `json`, `contains`, `count` (1), `lacks`, `within_ms` (5000) | inspect a file the contract names. A `*` or `?` in the last component picks the first matching name (`hub-*.jsonl`). `contains` waits up to `within_ms` until the file's text holds the string `count` times (a log is written a moment later); `lacks` is a string the text must not hold |
-| `write_file` | `path`, `text`, `mode` (octal string) | set up an input |
+| `write_file` | `path`, `text` or `json` (a JSON value; `{"$repeat": TEXT, "times": N}` expands, as in `send`), `mode` (octal string) | set up an input |
 | `sqlite` | `path`, `sql: [...]`, `query`, `expect` | set up a database (bundled SQLite); `query`'s rows, as `[[value…]…]`, must match the pattern `expect` |
 | `backend_log` | `hub`, `expect_line`, `expect_no_line`, `within_ms`, `for_ms` | lines the fake backend received (`$STATE/fake-backend.log`): a substring, or a pattern for lines that are JSON |
 | `pid` | `capture`, `alive` (true), `within_ms` (5000), `stays_for_ms` | a captured pid is (or is no longer) running; a reused pid does not count. With `stays_for_ms` a pid that is running must stay so that long (a signal sent a moment ago has landed by then) |
@@ -342,6 +343,29 @@ root's own path must leave room for them within 103 bytes (a short link to a dee
 `test/conformance/class-matrix.json` is not a row: it is the hand-written class table (`{method: [classes]}`) that the
 registry's test and the `class_matrix` step read.
 
+### The perf rows
+
+`perf/` rows (`requires` `v1` and `perf`) run only with `--perf OUT.json`; without it they are skipped, and
+`--require-all` lets that be. Each is a `measure` step; the file lists every sample and the median. There are no
+budgets: this is a recorded baseline, not a regression gate.
+
+| Row | Measures | Samples |
+|---|---|---|
+| `start` | starting the hub to its first answered `ping` on a proven connection | 1 |
+| `hello-round-trip` | `ping` and its answer on a proven connection | 100 |
+| `a-1-mib-request-line` | an `agents/send` line of about 1 MiB read, re-encoded, forwarded to the fake backend and answered | 20 |
+| `a-4-mb-snapshot` | `agents/get` with a transcript of about 4 MB from the fake backend, to the client | 10 |
+
+```
+cargo build --locked --release --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr
+runtime/target/release/domr --target ratatoskr --hub-bin runtime/target/release/ratatoskr \
+    --fake-backend runtime/target/release/ratatoskr-fake-backend --scenarios test/conformance \
+    --only 'perf/*' --perf perf.json
+```
+
+CI runs this on Linux and macOS and keeps the files as artifacts ([ci.md](ci.md)). Numbers are for a release build on a
+quiet machine.
+
 ## Building and installing Ratatoskr
 
 Users get the binary from install.sh and `drgnx update`; both call `drgnx runtime` (bin/drgnx, plain bash):
@@ -369,7 +393,9 @@ for real.
 
 `runtime/fuzz/` is a cargo-fuzz crate with its own `[workspace]` (the product workspace excludes it). It builds on
 nightly only: the pin is `nightly-2026-10-15`, set by the CI job and by local runs, never by a `rust-toolchain.toml`
-(a toolchain file would make a plain `cargo` there install a nightly). cargo-fuzz needs a C++ compiler for libFuzzer.
+(a toolchain file would make a plain `cargo` there install a nightly). cargo-fuzz needs a C++ compiler for libFuzzer
+(`g++`: CI's `fuzz` job runs on the Ubuntu runner, which has it; 60 s a target on a push to `main`, 10 minutes a target
+daily, `fuzz_minutes` on demand: [ci.md](ci.md)).
 
 | Target | What it feeds |
 |---|---|

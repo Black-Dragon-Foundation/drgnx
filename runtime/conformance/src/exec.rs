@@ -1356,7 +1356,11 @@ impl Runner<'_> {
     fn write_file(&mut self, step: &Step) -> R {
         let idx = self.hub_index(None).ok();
         let path = PathBuf::from(self.text(idx, step, "path")?);
-        let text = self.text(idx, step, "text")?;
+        // "json" writes a JSON value (with `$repeat` expanded: a multi-megabyte answer without a multi-megabyte row)
+        let text = match step.obj.get("json") {
+            Some(j) => repeat(&self.subst(idx, j, true))?.to_string(),
+            None => self.text(idx, step, "text")?,
+        };
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
         }

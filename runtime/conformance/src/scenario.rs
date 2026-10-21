@@ -2,7 +2,7 @@
 
 use serde_json::{Map, Value};
 
-pub const VERBS: [&str; 25] = [
+pub const VERBS: [&str; 26] = [
     "start",
     "root",
     "rename",
@@ -28,6 +28,7 @@ pub const VERBS: [&str; 25] = [
     "pid",
     "class_matrix",
     "bad_params",
+    "measure",
 ];
 
 #[derive(Debug)]
@@ -229,7 +230,7 @@ pub fn gate(s: &Scenario, h: &Host) -> Gate {
         return skip("the hub binary is built without test-hooks", false);
     }
     if has("perf") && !h.perf {
-        return skip("needs --perf", false);
+        return skip("needs --perf", true); // a mode of the run, not a missing capability: --require-all lets it be
     }
     Gate::Run
 }
@@ -282,6 +283,7 @@ mod tests {
 {"do": "pid", "capture": "s", "alive": false}
 {"do": "class_matrix", "table": "t.json"}
 {"do": "bad_params", "registry": "r.json"}
+{"do": "measure", "name": "m", "repeat": 2, "steps": []}
 "#;
 
     #[test]
@@ -362,6 +364,11 @@ mod tests {
             lisp_target: true,
             ..host.clone()
         };
+        // the perf rows wait for --perf; a run without it (CI's --require-all) is not failed by them
+        assert!(matches!(
+            gate(&row("\"perf\""), &host),
+            Gate::Skip { excused: true, .. }
+        ));
         assert_eq!(gate(&row("\"v1\""), &lisp), Gate::Exclude);
         assert_eq!(gate(&row("\"v0\""), &lisp), Gate::Run);
     }
