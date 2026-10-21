@@ -267,3 +267,34 @@ fn the_landlock_probe_reports_a_version_or_why_not() {
         assert!(l[0].errno.is_some());
     }
 }
+
+#[test]
+fn mkdir_unlink_and_swap() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = |n: &str| dir.path().join(n).to_string_lossy().into_owned();
+    let (d, a, b) = (p("d"), p("a"), p("b"));
+    std::fs::write(&a, "A").unwrap();
+    std::fs::create_dir(&b).unwrap();
+    let (l, _) = probe(&[
+        "mkdir", &d, "--and", "mkdir", &d, "--and", "unlink", &a, "--and", "unlink", &a,
+    ]);
+    let r: Vec<(&str, Option<&str>)> = l
+        .iter()
+        .map(|x| (x.result.as_str(), x.errno.as_deref()))
+        .collect();
+    assert_eq!(
+        r,
+        [
+            ("reached", None),
+            ("blocked", Some("EEXIST")),
+            ("reached", None),
+            ("blocked", Some("ENOENT"))
+        ]
+    );
+    // swap exchanges a file and a directory in place; both names keep existing (Linux renameat2, macOS renamex_np).
+    std::fs::write(&a, "A").unwrap();
+    let (l, _) = probe(&["swap", &a, &b]);
+    assert_eq!(l[0].result, "reached", "{l:?}");
+    assert!(std::fs::metadata(&a).unwrap().is_dir());
+    assert_eq!(std::fs::read_to_string(&b).unwrap(), "A");
+}

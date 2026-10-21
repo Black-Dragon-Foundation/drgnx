@@ -340,3 +340,111 @@ fn the_pause_dance_swaps_a_path_for_a_link() {
     assert!(task.is_symlink());
     assert!(dir.path().join("task.orig").is_dir());
 }
+
+fn mac_rows() -> Vec<Row> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("rows/macos");
+    crate::row::load_dir(&dir).unwrap()
+}
+
+#[test]
+fn macos_rows_cover_mac_sb_10_and_skip_elsewhere() {
+    let rows = mac_rows();
+    let names: Vec<&str> = rows.iter().map(|r| r.row.as_str()).collect();
+    // The plan's table (Task 16) and the Mac checklist's (a)-(j): one row at least for each.
+    for want in [
+        "mac-profile-accepted",
+        "mac-works",
+        "mac-works-git",
+        "mac-devices",
+        "mac-tmp-metadata-only",
+        "mac-home-closed",
+        "mac-users-shared-closed",
+        "mac-fds-closed",
+        "mac-writes",
+        "mac-case",
+        "mac-rename-hidden-dir",
+        "mac-rename-task-out",
+        "mac-rename-over-root",
+        "mac-rename-binds-out",
+        "mac-link-hidden-pinned",
+        "mac-swap-and-dir-clone",
+        "mac-renames-still-work",
+        "mac-sockets",
+        "mac-net-shared",
+        "mac-net-isolated",
+        "mac-env-clean",
+        "mac-k1",
+        "mac-k2",
+        "mac-k8",
+    ] {
+        assert!(names.contains(&want), "no row {want}");
+    }
+    let host = Host {
+        in_container: false,
+        root: false,
+        landlock_abi: 0,
+        x32: false,
+    };
+    for r in &rows {
+        assert_eq!(r.platform(), Platform::Macos, "{}", r.row);
+        if !cfg!(target_os = "macos") {
+            assert_eq!(skip_reason(r, &host), Some(Skip::NeedsMacos), "{}", r.row);
+        }
+        // Every refusing expectation names Seatbelt's errnos or none; a Linux-only errno would never match there.
+        for e in &r.expect {
+            assert!(
+                e.errno.iter().all(|n| n == "EPERM" || n == "EACCES"),
+                "{}",
+                r.row
+            );
+        }
+    }
+}
+
+/// The specs the macOS rows carry are ones gleipnir accepts for the macOS target and turns into a profile. This is
+/// what Linux CI can know about them; whether Seatbelt behaves as they say is the macOS run's.
+#[test]
+fn macos_row_specs_validate_and_make_a_profile() {
+    for r in mac_rows() {
+        let mut fx = Fixture::new().unwrap();
+        setup(&mut fx, &r, false).unwrap();
+        let spec = build_spec_for(&fx, &r, &fx.path("bin"), false).unwrap();
+        let spec: gleipnir::Spec =
+            serde_json::from_value(spec).unwrap_or_else(|e| panic!("{}: {e}", r.row));
+        let p = |rel: &str| fx.path(rel);
+        let ctx = gleipnir::Context {
+            home: p("home"),
+            closed: vec![p("data"), p("config")],
+            user_sockets: vec![
+                p("run/drgnx/hub-0000.sock"),
+                p("run/emacs/server"),
+                p("run/bus"),
+                p("run/ssh-agent.sock"),
+            ],
+            run_parents: vec![p("run/drgnx/s")],
+            program_dirs: vec!["/usr/bin".into()],
+            ..gleipnir::Context::default()
+        };
+        let valid = gleipnir::validate(spec, &ctx, gleipnir::Target::Macos)
+            .unwrap_or_else(|e| panic!("{}: {e}", r.row));
+        let profile = gleipnir::sbpl::profile(&valid, &gleipnir::sbpl::MacContext::default())
+            .unwrap_or_else(|e| panic!("{}: {e}", r.row));
+        if r.row == "mac-case" {
+            // The case-insensitive denies the row exists to test.
+            for want in [
+                "[Cc][Oo][Mm][Mm][Oo][Nn][Dd][Ii][Rr]",
+                "[Ee][Nn][Vv]",
+                "[Gg][Ii][Tt]",
+            ] {
+                assert!(profile.contains(want), "mac-case: no deny for {want}");
+            }
+        }
+        if r.row == "mac-net-isolated" {
+            let port = fx.addrs.proxy_tcp.port();
+            assert!(
+                profile.contains(&format!("localhost:{port}")),
+                "the proxy port is listed"
+            );
+        }
+    }
+}

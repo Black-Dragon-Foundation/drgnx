@@ -848,7 +848,7 @@ The bwrap and user-namespace rows apply to the full tier only: the reduced tier 
 switches count only when the failure was bwrap's (or there was no run), so a Landlock failure on a restricted Ubuntu
 is not blamed on AppArmor.
 
-## Proving it (Tasks 14 and 15)
+## Proving it (Tasks 14, 15 and 16)
 
 The escape suite is the crate `gleipnir-escape` (test tooling: never shipped, never installed, and it never turns on
 gleipnir's `test-hooks`). It has two binaries and a directory of rows:
@@ -879,7 +879,7 @@ size.
 
 | Group | Probes |
 |---|---|
-| files | `read PATH` (size), `write PATH` (opens for writing, writes nothing), `create PATH`, `list DIR` (names, sorted), `stat PATH`, `rename A B`, `link A B` (hard link), `clone A B` (macOS `clonefile`, a directory too; elsewhere blocked `EOPNOTSUPP`) |
+| files | `read PATH` (size), `write PATH` (opens for writing, writes nothing), `create PATH`, `list DIR` (names, sorted), `stat PATH`, `rename A B`, `link A B` (hard link), `clone A B` (macOS `clonefile`, a directory too; elsewhere blocked `EOPNOTSUPP`), `mkdir PATH`, `unlink PATH`, `swap A B` (exchange two paths in one step: macOS `renamex_np(RENAME_SWAP)`, Linux `renameat2(RENAME_EXCHANGE)`) |
 | sockets | `connect-unix PATH`, `connect-abstract NAME` (Linux), `connect-tcp HOST:PORT`, `tfo HOST:PORT` (`sendto(MSG_FASTOPEN)`, Linux), `udp HOST:PORT` (sends, waits 500 ms for the echo; no echo is blocked with no errno), `unix-self PATH` (listens there, then connects; the detail says which step failed) |
 | environment | `env-has NAME…`: reached when any is set, the detail names which (never a value) |
 | syscalls | `syscall NAME` for `unshare-user io-uring keyctl add-key vsock clone3 clone-newuser mount-missing tiocsti-own-pty tiocsti-high-own-pty ptrace-own-child x32-getpid i386-int80`. Each runs in a forked child, so a kill by the filter is a result: blocked, no errno, detail `killed by SIGSYS`. `x32-getpid` and `i386-int80` are x86_64 only (elsewhere ENOSYS) |
@@ -900,8 +900,8 @@ One JSON object per line; unknown keys are a parse error.
 | `row` | the name (unique across all files) |
 | `needs` | `bwrap reduced landlock seccomp netns root macos linux x86_64 x32` |
 | `tier` | `full` (default) or `reduced` |
-| `spec` | the spec, with placeholders. The harness fills what is left out: `chdir` (`${W}`); `net` (isolated, with a relay from a free port to `${RUN}/proxy.sock`, and then `run`, `sockets` and an `HTTPS_PROXY` in the default `env` to match); `env` (a `PATH`); `layers` (the tier's floor); `tmp` (reduced: `${TMP}`). The probe's directory is added to `read` |
-| `setup` | steps: `fake-bwrap {version}`, `path-bwrap {name?}`, `swap-to-link {path, target}` (done while `ratatoskr` waits at `--pause-before-spawn`), `plant-link {path, target}`, `canary-fd {n}`, `start-sleep` |
+| `spec` | the spec, with placeholders. The harness fills what is left out: `chdir` (`${W}`); `net` (Linux: isolated, with a relay from a free port to `${RUN}/proxy.sock`, and then `run`, `sockets` and an `HTTPS_PROXY` in the default `env` to match; macOS: isolated with `mac_tcp_ports` the proxy's TCP port, and the same `HTTPS_PROXY`); `env` (a `PATH`); `layers` (the tier's floor; on macOS 0, since a macOS spec may not ask for Landlock); `tmp` (reduced: `${TMP}`). The probe's directory is added to `read` |
+| `setup` | steps: `fake-bwrap {version}`, `path-bwrap {name?}`, `swap-to-link {path, target}` (done while `ratatoskr` waits at `--pause-before-spawn`), `plant-link {path, target}`, `canary-fd {n}`, `start-sleep`, `make-dir {path}`, `make-file {path, text?}` (the last two, like `plant-link`, run in the control run's fixture too) |
 | `probes`, `expect` | one argument list per probe; one `{result, errno?: [names], detail?}` per probe. `errno` is a list so the layer that blocked is visible |
 | `control`, `control_expect` | see below |
 | `listeners_silent` | listeners that must have seen no connection: `hub emacs bus ssh-agent abstract tcp-lo tcp-nl udp-lo udp-nl upstream gateway` |
@@ -917,7 +917,8 @@ One JSON object per line; unknown keys are a parse error.
 ${TASK2} ${W} ${DATA} ${CANARY_DIR} ${FIXTURE} ${TMP} ${MARKER}`, and on macOS `${USERS_SHARED}`. Addresses:
 `${ABSTRACT}` (`@glp-…`), `${TCP_LO} ${TCP_NL} ${UDP_LO} ${UDP_NL}` (`host:port`; the `_NL` ones are the first
 non-loopback address), `${UPSTREAM}` (`upstream.test:PORT`, pinned in the proxy), `${PROXY_TCP}`. Others:
-`${HARNESS_PID}`, `${SLEEP_PID}` (the `start-sleep` step), `${FAKE_BWRAP}` (the `fake-bwrap` step).
+`${HARNESS_PID}`, `${SLEEP_PID}` (the `start-sleep` step), `${FAKE_BWRAP}` (the `fake-bwrap` step), `${GIT}` (the
+git draugr runs: `draugr::git::git_program()`, so on macOS the developer dir's, not the `/usr/bin/git` shim).
 
 **`control: true` is mandatory for every expectation that says `blocked`** (the parse fails otherwise). The control
 run executes the same probes with no sandbox, in a fixture of its own, and each must give its unfiltered result:
@@ -959,5 +960,39 @@ that prints `bubblewrap VERSION` for `--version` and writes `${MARKER}` for any 
 with no sandbox and requires `reached`: the probes are real. `any/works` runs `sh -c 'echo ok'` and `git --version`
 under the full tier; it skips in a container. Task 15 adds the Linux rows and the channel table (row, what it
 proves).
+
+### The macOS rows (Task 16)
+
+`rows/macos/*.jsonl` are the Mac checklist's MAC-SB-10 (a)-(j) and the K table as data. There is no Mac in the dev
+loop, so they are checked in two places. On Linux, `parses_every_shipped_row` parses them, a test checks that each
+skips with "needs macos", and another builds every row's spec the way macOS would (`build_spec_for(.., linux:
+false)`), validates it for the macOS target and renders the Seatbelt profile, so a row that gleipnir would refuse, or
+whose `regex` denies are missing, fails on Linux. On macOS CI (Task 18) they run for real; a failing row goes to the
+fix round and the MAC-SB-10 item behind it stays open.
+
+The layout every filesystem row shares (made by `setup`, so a row needs no edits to run): `${TASK}` is a write root,
+holding a `.git` pin (a file, or a directory in `mac-case`) and a hidden `conf/.env`; `${W}` is an `rw` bind with an
+`ro` pin `commondir`; the program's home is `${HOME}/agent-home` (`rw`), so `${HOME}` is only an ancestor
+(`stat` works, `list` does not); `${TMP}` is the `tmp`; `${FIXTURE}/q"x\y` is a hostile write root. A refusing probe
+expects `EPERM` or `EACCES`: Seatbelt denies with EPERM, and a row that gets another errno fails and shows it.
+
+| Row | Checklist | Proves |
+|---|---|---|
+| `mac-profile-accepted` | (a) | `sandbox-exec` accepts the profile with `regex` filters, a name with `"` and `\`, a name that looks like SBPL (`x") (allow default) ("`) and isolated ports; none of those names opens anything |
+| `mac-works`, `mac-works-git` | (b) | `/bin/ls /usr/bin`, `/bin/date`, `/dev/urandom` and `/dev/null` work; the trusted git (`${GIT}`) runs. Git is its own row: draugr refuses Xcode under `/Applications`, and a runner like that must fail one row, not all |
+| `mac-devices`, `mac-tmp-metadata-only` | (b), (e) | a device outside the list (`/dev/ptmx`; `/dev/ttys000` is not on every runner), `list /dev` and `list /opt/homebrew/var` are closed; `/tmp` can be `stat`ed (a `cd` works) but not listed |
+| `mac-home-closed`, `mac-users-shared-closed` | (c) | `~/.ssh`, `list ~` and listing another user's folder (the one every Mac has, `Shared`) are closed, `stat ~` works; a canary in `${USERS_SHARED}` (a `glp-*` folder there) is closed (only the users-folder deny does it, review S20) |
+| `mac-fds-closed` | review S7 | a canary fd 7 is not in the child: no helper exists on macOS, so draugr's close-on-exec loop is the guard |
+| `mac-writes` | (d) | writes work in the task folder, home, TMPDIR and `q"x\y`; they fail in a pinned `.git`, in `commondir`, outside every grant (`${FIXTURE}/outside`, under `/private/tmp`) and in `~`; the hidden `.env` is unreadable |
+| `mac-case` | (h), GL-T9-1 | `.GIT/config`, `.Git/hooks/x`, `COMMONDIR`, `.ENV` and `CONF/.env` are closed. The control run must reach them too (APFS ignores case), so this row needs the default case-insensitive volume |
+| `mac-rename-hidden-dir`, `-case`, `mac-rename-task-out`, `mac-rename-over-root`, `mac-rename-binds-out`, `mac-link-hidden-pinned` | (i) | `mv conf c2` and `mv CONF c2` (then the `.env` is still closed), the task folder moved out or replaced, `${W}` and the home moved, a hard link to the hidden `.env` and to the `.git` pin, and an APFS clone of the `.env` all fail. One row each for what changes the fixture, so the control run can do all of them |
+| `mac-swap-and-dir-clone` | (j) | a swap-rename of the protected dir and a `clonefile` of it fail; writing `/dev/stderr` works |
+| `mac-renames-still-work` | (i) | `mv a b`, `rm`, `mkdir d && mv d e` inside the task folder work |
+| `mac-sockets` | (f), K1, K5 | the session's gateway socket connects; the hub, `SSH_AUTH_SOCK`, the Emacs server and the bus do not, and their listeners stay silent |
+| `mac-net-shared`, `mac-net-isolated` | (g) | shared: TCP to the host's loopback and non-loopback listeners works, Unix sockets stay closed. Isolated: only the proxy's `localhost:PORT` connects (`http-connect` gets 200, an unlisted target 403 and one `Denied`); other loopback and non-loopback TCP and UDP are closed |
+| `mac-env-clean`, `mac-k1`, `mac-k2`, `mac-k8` | K | as on Linux: none of the user's variables, the hub socket, `work.db` and the canaries |
+
+Not in a row, so the Mac session keeps them (MAC-SB-12): `curl` through the proxy without `trustd` (needs TLS to a
+real host; the proxy path itself is `mac-net-isolated`), and the `log show` look at every `deny` line.
 
 ## What this does not claim yet (Task 19)

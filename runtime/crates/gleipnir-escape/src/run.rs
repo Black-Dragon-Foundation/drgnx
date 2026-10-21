@@ -431,6 +431,11 @@ fn expand_all(fx: &Fixture, v: &Value) -> Result<Value, String> {
 
 /// The row's spec with the harness's defaults, placeholders filled. `bin` (the probe's directory) joins `read`.
 pub fn build_spec(fx: &Fixture, row: &Row, bin: &Path) -> Result<Value, String> {
+    build_spec_for(fx, row, bin, cfg!(target_os = "linux"))
+}
+
+/// [`build_spec`] for a Linux or a macOS target, so the macOS defaults are tested on Linux too.
+pub fn build_spec_for(fx: &Fixture, row: &Row, bin: &Path, linux: bool) -> Result<Value, String> {
     let mut spec = match &row.spec {
         Value::Null => serde_json::json!({}),
         v @ Value::Object(_) => v.clone(),
@@ -449,7 +454,7 @@ pub fn build_spec(fx: &Fixture, row: &Row, bin: &Path) -> Result<Value, String> 
             } else {
                 gleipnir::Tier::Full
             };
-            if cfg!(target_os = "linux") {
+            if linux {
                 let port = gleipnir::backend::relay_ports(tier, &[3128])
                     .map_err(|e| format!("relay port: {e}"))?[0];
                 m.insert("net".into(), serde_json::json!({"isolated": {"relay": [{"port": port, "socket": "${RUN}/proxy.sock"}]}}));
@@ -463,12 +468,27 @@ pub fn build_spec(fx: &Fixture, row: &Row, bin: &Path) -> Result<Value, String> 
                     format!("http://127.0.0.1:{port}")
                 ]));
             } else {
-                m.insert("net".into(), serde_json::json!({"isolated": {}}));
+                // macOS: no relay and no namespace; Seatbelt lists the one loopback port the proxy listens on.
+                let port = fx.addrs.proxy_tcp.port();
+                m.insert(
+                    "net".into(),
+                    serde_json::json!({"isolated": {"mac_tcp_ports": [port]}}),
+                );
+                env.as_array_mut().expect("array").push(serde_json::json!([
+                    "HTTPS_PROXY",
+                    format!("http://127.0.0.1:{port}")
+                ]));
             }
         }
         m.entry("env").or_insert(env);
         m.entry("layers").or_insert_with(|| {
-            serde_json::json!({"landlock_min_abi": if reduced { gleipnir::LANDLOCK_FLOOR_REDUCED } else { gleipnir::LANDLOCK_FLOOR_FULL }})
+            // macOS has no Landlock: its only valid minimum is 0.
+            let abi = match (linux, reduced) {
+                (false, _) => 0,
+                (true, true) => gleipnir::LANDLOCK_FLOOR_REDUCED,
+                (true, false) => gleipnir::LANDLOCK_FLOOR_FULL,
+            };
+            serde_json::json!({"landlock_min_abi": abi})
         });
         if reduced {
             m.entry("tmp").or_insert_with(|| "${TMP}".into());
@@ -755,6 +775,17 @@ fn setup(fx: &mut Fixture, row: &Row, control: bool) -> Result<Prepared, String>
                 }
                 std::os::unix::fs::symlink(&target, &path)
                     .map_err(|e| format!("plant-link {path}: {e}"))?;
+            }
+            Setup::MakeDir { path } => {
+                let path = fx.expand(path)?;
+                std::fs::create_dir_all(&path).map_err(|e| format!("make-dir {path}: {e}"))?;
+            }
+            Setup::MakeFile { path, text } => {
+                let (path, text) = (fx.expand(path)?, fx.expand(text)?);
+                if let Some(parent) = Path::new(&path).parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| format!("make-file: {e}"))?;
+                }
+                std::fs::write(&path, text).map_err(|e| format!("make-file {path}: {e}"))?;
             }
             // The rest belong to the sandboxed run alone: the control would only trip over them.
             _ if control => {}

@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 /// The closed list of placeholders a row may use. An undefined one fails the parse (review B2).
 ///
 /// The plan's list is the first eleven. The rest are what Tasks 15 and 16 need to name things the fixture makes at
-/// run time (addresses and ports, the abstract socket, a pid, the fake bwrap and its marker).
+/// run time (addresses and ports, the abstract socket, a pid, the fake bwrap and its marker, the git).
 pub const PLACEHOLDERS: &[&str] = &[
     "HOME",
     "RUNTIME",
@@ -38,6 +38,8 @@ pub const PLACEHOLDERS: &[&str] = &[
     "SLEEP_PID",
     "FAKE_BWRAP",
     "MARKER",
+    // Added by Task 16: the git draugr runs (`draugr::git::git_program()`; on macOS the developer dir's, not the shim).
+    "GIT",
 ];
 
 /// The listeners a row may name in `listeners_silent`.
@@ -132,6 +134,14 @@ pub enum Setup {
     CanaryFd { n: i32 },
     /// A `sleep` the harness starts; `${SLEEP_PID}` is its pid.
     StartSleep {},
+    /// Before the run, in the control run's fixture too: a directory `path` (parents made).
+    MakeDir { path: String },
+    /// Before the run, in the control run's fixture too: a file `path` holding `text` (parents made).
+    MakeFile {
+        path: String,
+        #[serde(default)]
+        text: String,
+    },
 }
 
 /// Something the harness does to the run while it is going.
@@ -284,6 +294,11 @@ impl Row {
                 Setup::SwapToLink { path, target } | Setup::PlantLink { path, target } => {
                     t.push(path.clone());
                     t.push(target.clone());
+                }
+                Setup::MakeDir { path } => t.push(path.clone()),
+                Setup::MakeFile { path, text } => {
+                    t.push(path.clone());
+                    t.push(text.clone());
                 }
                 _ => {}
             }
