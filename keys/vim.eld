@@ -377,7 +377,7 @@
         (cockpit-edits-visit "RET")
         (cockpit-edits-next-hunk "TAB")
         (cockpit-edits-previous-hunk "<backtab>")
-        (cockpit-needs-you :none "the status bar's jobs, the badge; the palette")
+        (cockpit-needs-you :none "the status bar's jobs; the palette")
         (cockpit-decisions :none "the right dock's tab; the palette")
         (cockpit-reassign "R")
         (cockpit-block "b")

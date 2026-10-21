@@ -607,9 +607,9 @@ side is in [jobs.md](../guide/jobs.md#a-job-in-the-work-cockpit).
   leaves no timer, subscription, hook or buffer. Its six modes start in Emacs state under evil
   (`drgnx-cockpit--evil-states`, run by the setup through `eval-after-load 'evil` as the module): the stack puts each
   mode's earlier state back, and no file of the cockpit registers anything when it loads.
-- **Kept in `drgnx-job-ui.el`:** the Plan Job commands (`job-show` is now "Show Job in Work…"), the ⚑ badge mode for
-  those without the status bar (a click: `drgnx-job-ui-show` of the newest card's job, else
-  `drgnx-cockpit-show-jobs`), and notifications.
+- **Kept in `drgnx-job-ui.el`:** the Plan Job commands (`job-show` is now "Show Job in Work…"), and the `jobs` source of the
+  notice model (`drgnx-job-ui-attention-mode`; the ⚑ mode-line badge and the job notifications are gone, the notice
+  routes send new cards to the desktop).
 - **What reaches an agent.** Reply… is the hub's `job/reply` (`drgnx-job-reply`: `drgnx-coord-send` from the user,
   `:answers` the agent's message); Message… is `drgnx-coord-send` from the user to the agent, then `coord/notify`.
   Neither is a raw prompt (`agents/send`): the hub gives both under the user's header (`drgnx-coord-message-prompt`),
@@ -617,10 +617,12 @@ side is in [jobs.md](../guide/jobs.md#a-job-in-the-work-cockpit).
   (`drgnx-job-card-act`), which quotes the user's text to the reviewer.
 - **One count of what needs you,** in `drgnx-job-ui.el`: `drgnx-job-ui-needs-you-count JOBS` gives `(N . NEWEST-JOB)`
   (open cards and messages not acted on, of proposed, running and paused jobs), and `drgnx-job-ui-waiting-p JOB` says
-  whether a job counts. `drgnx-job-ui-note-jobs JOBS` keeps the count and the badge; the badge's own `job/status` and
-  the every-job pane's both call it, so a refresh of that pane counts for the badge too and an action asks the hub
-  once. `drgnx-job-ui-needs-you` returns the cached count, or nil when it is not known: the status bar's jobs segment
-  reads it (part A), never the badge string. Both heads show the count: `What needs you: N`,
+  whether a job counts. `drgnx-job-ui-note-jobs JOBS` makes them the `jobs` set (`drgnx-notice-set`; one item per
+  open card `(card . CID)` and per message not acted on `(message . MID)`, scoped to the job, an `overlap` card
+  with `:echo nil`); the recount's own `job/status` and the every-job pane's both call it, so a refresh of that pane
+  counts for the notice model too and an action asks the hub once. A recount the hub does not answer, or a
+  disconnect, makes the set `:unknown` ("Jobs: not known — …"). `drgnx-job-ui-needs-you` is the obsolete name of
+  `drgnx-needs-you-count`: the status bar's jobs segment reads it until Task 17 replaces the bar. Both heads show the count: `What needs you: N`,
   `What needs you — every job: N`.
 
 ### Cost
@@ -644,9 +646,8 @@ no collateral moves and no layout changes.
 - one pane for every job or one, and the graph filtered by job;
 - an old job window's state restoring with no frame, the filter set and the frame not moved;
 - the filter kept with the workbench, and a bad saved value refused;
-- the badge;
 - the kinds, commands and key rows.
 
 `test/ui/job-window-test.el` (GUI) checks that the right dock shows the job and that a click on `[Retry]` acts, and
-that a hidden pane asks nothing and catches up when it shows. `job-ui-test.el` keeps the badge and notification
-tests.
+that a hidden pane asks nothing and catches up when it shows. `job-ui-test.el` keeps the `jobs` source and
+notification tests.
