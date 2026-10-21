@@ -126,7 +126,10 @@ of `/` (no home known: its secret dirs would be `/.ssh` and so on, never the use
 
 The rules apply in this order, each over the whole spec, and the first that applies wins (`validate::Rule`). They
 port the parked Lisp rules (`drgnx-sandbox-validate`). On macOS, path comparisons ignore case (APFS does), which can
-only refuse more.
+only refuse more. On a case-insensitive volume, macOS's `realpath` gives an existing path's stored case, so a path
+spelled in another case than its existing part is refused by rule 1 (a context path: `Malformed`); the fold catches
+the parts that do not exist yet. macOS's own links count like any other: `/tmp` is `/private/tmp` and `/home` is
+`/System/Volumes/Data/home`, so a no-mount dest under `/home` is refused.
 
 1. **`NotUtf8`, `NotCanonical`.** Every path is UTF-8, absolute, free of NUL and newline, and has no `//`, no `.` or
    `..` component and no trailing slash: otherwise a prefix check can be talked past. Every host path (the sources,

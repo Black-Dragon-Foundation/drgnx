@@ -482,8 +482,15 @@ mod tests {
             );
         }
         assert_ne!(a.root, b.root);
+        // The root is a true name, and /tmp's is /private/tmp on macOS (/tmp is a link there).
+        let tmp = std::fs::canonicalize("/tmp").unwrap();
         assert!(
-            a.root.to_string_lossy().starts_with("/tmp/glp-"),
+            a.root.parent() == Some(tmp.as_path())
+                && a.root
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("glp-"),
             "{}",
             a.root.display()
         );
