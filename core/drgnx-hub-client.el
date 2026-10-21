@@ -424,13 +424,14 @@ subscribed connection) goes to `drgnx-hub-event-functions'."
 
 (defun drgnx-hub--settle (id result error)
   "Call the callback of call ID with RESULT and ERROR (the hub's error object, or this side's message) — once: the
-call is forgotten first and its deadline cancelled."
+call is forgotten first and its deadline cancelled.  The callback runs in the guard (`drgnx-guard--call'): what it
+raises is recorded, and the lines after its answer are still read."
   (when-let* ((entry (gethash id drgnx-hub--pending)))
     (remhash id drgnx-hub--pending)
     (drgnx-timer-cancel (cons 'hub-call id))
     (let ((err (cond ((null error) nil) ((stringp error) (list :message error)) (t error))))
-      (funcall (plist-get entry :cb) (and (not err) result)
-               (and err (if (plist-get entry :full) err (plist-get err :message)))))))
+      (drgnx-guard--call (plist-get entry :cb) (format "hub answer %s" (plist-get entry :method))
+                         (list (and (not err) result) (and err (if (plist-get entry :full) err (plist-get err :message))))))))
 
 (defun drgnx-hub--call-expired (id)
   "Call ID's deadline passed: its callback gets an error."
@@ -718,7 +719,7 @@ or the user is told, when the start ends."
                       (t (format "Ratatoskr did not start: %s" (if (string-empty-p out) "ratatoskr ensure failed" out)))))
            (callbacks (reverse (process-get p :callbacks))))
       (when (buffer-live-p (process-buffer p)) (kill-buffer (process-buffer p)))
-      (dolist (f callbacks) (funcall f err)))))
+      (dolist (f callbacks) (drgnx-guard--call f "hub start" (list err))))))
 
 (defun drgnx-hub--ensure-sentinel (p _event)
   (unless (process-live-p p) (drgnx-hub--ensure-done p)))

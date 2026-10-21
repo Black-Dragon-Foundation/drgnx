@@ -80,9 +80,12 @@ a prompt, and with `drgnx-guard-mode' on one would signal."
   "LABEL as text: a string, or (HOOK . FN) from `drgnx-guard-run-hook', made a string only when something failed."
   (if (consp label) (format "%s %s" (car label) (cdr label)) label))
 
+(defvar drgnx-notice--table)
+
 (defun drgnx-guard--record (label err)
   "Record ERR, caught around LABEL, as a notice of source `guard' (the model loads on the first catch, not before:
-no require cycle).  A refused prompt is a `fail' event, any other error a `warn' event.  Never signals."
+no require cycle).  A refused prompt is a `fail' event, any other error a `warn' event, said in the echo area
+when LABEL has none yet (the first catch; repeats only count), as Emacs said a failed filter.  Never signals."
   (let ((label (drgnx-guard--label label)))
     (condition-case failed
         (progn
@@ -92,7 +95,8 @@ no require cycle).  A refused prompt is a `fail' event, any other error a `warn'
                             (format "%s asked a question from a process callback; drgnx refused (it would freeze Emacs)"
                                     label)
                             :id label)
-            (drgnx-notify 'guard 'warn (format "%s: %s" label (error-message-string err)) :id label)))
+            (drgnx-notify 'guard 'warn (format "%s: %s" label (error-message-string err)) :id label
+                          :echo (not (gethash (cons 'guard label) drgnx-notice--table)))))
       (error (message "drgnx: %s: %s (not recorded: %s)" label (error-message-string err)
                       (error-message-string failed))))))
 

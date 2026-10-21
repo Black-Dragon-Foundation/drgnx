@@ -138,6 +138,21 @@
       (should (= (length (drgnx-notices :source 'guard)) 1))
       (should (= (plist-get (drgnx-guard-test--guard-notice "writer") :count) 2)))))
 
+(ert-deftest drgnx-guard/the-first-catch-of-a-label-is-said ()
+  ;; S4: Emacs said a failed filter; the guard says the first catch per label in the echo area (repeats only count)
+  (drgnx-notice-test-with-model
+    (let ((said 0))
+      (add-hook 'drgnx-notice-functions
+                (lambda (c) (when (and (eq (plist-get c :op) 'post) (plist-get (plist-get c :notice) :echo))
+                              (setq said (1+ said)))))
+      (let ((f (drgnx-guard-wrap (lambda () (error "Disk full")) "writer")))
+        (funcall f) (funcall f))
+      (should (= said 1))
+      (funcall (drgnx-guard-wrap (lambda () (error "Disk gone")) "writer"))   ; another error, the same label
+      (should (= said 1))
+      (funcall (drgnx-guard-wrap (lambda () (error "Boom")) "reader"))
+      (should (= said 2)))))
+
 (defvar drgnx-guard-test--hook nil)
 (defvar drgnx-guard-test--heard nil)
 (defun drgnx-guard-test--fails (&rest _) (error "Boom"))
