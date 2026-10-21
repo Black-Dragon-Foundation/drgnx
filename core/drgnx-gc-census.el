@@ -3,8 +3,8 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; The first measure of the stall watchdog (docs/develop/perf.md, "GC census").  `drgnx-gc-census-mode' puts one
-;; function on `post-gc-hook', `drgnx-gc-census--note', which only records numbers into a fixed ring: the pause (the
+;; The first measure of the stall watchdog (docs/develop/perf.md, "GC census").  While `drgnx-gc-census-mode' is on, the GC
+;; owner's `post-gc-hook' function calls `drgnx-gc-census--note', which only records numbers into a fixed ring: the pause (the
 ;; change in `gc-elapsed', which Emacs updates before it runs the hook), the origin (`nidhogg-watchdog-gc-origin',
 ;; bound by drgnx's own collections), whether it ran inside a command or a timer rather than at idle, `gcs-done', the
 ;; time, the live heap by type (`garbage-collect-heapsize') and the threshold.  It does no I/O, never asks whether input
@@ -78,7 +78,7 @@ once by `drgnx-gc-census--reset' so that recording a collection fills a slot and
           drgnx-gc-census--last-elapsed gc-elapsed)))
 
 (defun drgnx-gc-census--note ()
-  "On `post-gc-hook': record this collection in the ring, or count it as dropped when the ring is full.
+  "After each collection (the GC owner's `drgnx-gc--note' calls it): record this collection in the ring, or count it as dropped when the ring is full.
 Numbers only, for it runs inside every collection: no file I/O, no `process-attributes', no message, and no
 `input-pending-p' (on pgtk it can dispatch GLib events inside the collection's span); FELT is only whether it ran
 inside a command or a timer rather than at idle.  It allocates `garbage-collect-heapsize''s small list and two floats.
@@ -184,13 +184,14 @@ Nothing while the watchdog's own mode is on."
   "The GC census: every collection's pause, origin and live heap, written at idle to the watchdog's day files.
 Turned on at start by speed.eld's :gc-census; Help → GC Census shows what it recorded."
   :global t :group 'drgnx
+  ;; The GC owner's `post-gc-hook' function (drgnx-gc.el) calls `drgnx-gc-census--note' while this mode is on: only
+  ;; the owner touches the hook (drgnx-lint/garbage-collect-only-in-the-gc-owner).
   (cond (drgnx-gc-census-mode
          (drgnx-gc-census--reset)
          (drgnx-gc-census--prune)
-         (add-hook 'post-gc-hook #'drgnx-gc-census--note)
+         (drgnx-gc-mode 1)
          (drgnx-timer-start 'gc-census 1 #'drgnx-gc-census--write :repeat t :idle t :owner :core))
-        (t (remove-hook 'post-gc-hook #'drgnx-gc-census--note)
-           (drgnx-timer-cancel 'gc-census)
+        (t (drgnx-timer-cancel 'gc-census)
            (drgnx-gc-census--write))))                 ; what the ring still holds
 
 ;;;; The report

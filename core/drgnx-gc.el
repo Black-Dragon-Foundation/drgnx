@@ -42,8 +42,13 @@ it on `post-gc-hook'.  Nidhogg's watchdog defines the same variable.")
     (+ (* 16 (nth 0 c)) (* 8 (nth 1 c)) (* 8 (nth 2 c)) (* 48 (nth 3 c)) (nth 4 c) (* 56 (nth 5 c))
        (* 32 (nth 6 c)))))
 
+(defvar drgnx-gc-census-mode)
+(declare-function drgnx-gc-census--note "drgnx-gc-census")
+
 (defun drgnx-gc--note ()
-  "On `post-gc-hook': remember how much was allocated at this collection."
+  "On `post-gc-hook': the GC census's record of this collection when the census is on (first, before this
+function allocates), then how much was allocated at it."
+  (when (bound-and-true-p drgnx-gc-census-mode) (drgnx-gc-census--note))
   (setq drgnx-gc--base (drgnx-gc--consed)))
 
 (defun drgnx-gc--idle ()

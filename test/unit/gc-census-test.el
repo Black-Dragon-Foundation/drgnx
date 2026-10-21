@@ -209,12 +209,13 @@
               (progn
                 (drgnx-gc-setup)
                 (should drgnx-gc-census-mode)
-                (should (memq #'drgnx-gc-census--note post-gc-hook))
+                (should (memq #'drgnx-gc--note post-gc-hook))           ; the owner's hook calls the census
                 (should (drgnx-timer-active-p 'gc-census)))
             (drgnx-gc-census-mode -1)
             (drgnx-gc-mode -1)
             (drgnx-timer-cancel 'gc-idle))))
-      (should-not (memq #'drgnx-gc-census--note post-gc-hook))
+      (should-not drgnx-gc-census-mode)
+      (should-not (memq #'drgnx-gc--note post-gc-hook))
       (should (equal (sort (directory-files dir nil "\\`[^.]") #'string<)
                      (sort (list recent today "notes.txt" (concat "heap-" (string-remove-suffix ".jsonl" old) ".json"))
                            #'string<))))))

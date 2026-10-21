@@ -330,7 +330,8 @@ before anything is changed. `core/drgnx-gc-census.el`, off by default.
 - **Turning it on:** `(:gc-census t)` in `speed.eld` (the config folder, read at every start; `drgnx-gc-setup` starts
   it), or `M-x drgnx-gc-census-mode` for this session. **Help → GC Census** (`gc-census`) shows the report, with a
   Copy button.
-- **The hook records only.** `drgnx-gc-census--note` on `post-gc-hook` fills one slot of a 64-slot ring that was made
+- **The hook records only.** `drgnx-gc-census--note`, called by the GC owner's `post-gc-hook` function
+  (`drgnx-gc--note`; only `core/drgnx-gc.el` touches the hook), fills one slot of a 64-slot ring that was made
   when the mode started: the pause (the change in `gc-elapsed` since the last note; Emacs adds the collection's time
   before it runs the hook), the origin, `felt`, `gcs-done`, the time, `(garbage-collect-heapsize)` and the threshold.
   It does no file I/O, no `process-attributes` and no message, and never calls `input-pending-p` (on pgtk that can
