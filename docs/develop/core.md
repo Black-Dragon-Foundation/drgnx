@@ -608,6 +608,22 @@ text as its arguments; elsewhere the freedesktop `Notify` method by `dbus-call-m
 handler, so no reply is awaited (`notifications-notify` waits for two synchronous calls); else a `message`. Tests
 stub the send or `make-process`/`dbus-call-method-asynchronously`: none reaches a bus (`test/unit/core-notice-desktop-test.el`).
 
+**The echo route** (`drgnx-notice-echo.el`, `drgnx-notice-echo-mode`; `drgnx-init` turns it and the desktop mode on
+before the modules run). `drgnx-notice--echo-change` is on `drgnx-notice-functions` and queues a line per the rule
+(spec §4, one test per cell): a `fail` event or condition when new; `info`/`warn` only with `:echo t`; an attention id
+new to a `set` (`:added`) unless `drgnx-notice-desktop-take` took it (it is asked for every new item, started or not);
+`:echo nil` never, `:echo t` always. Pacing: `drgnx-notice--echo-pending` (oldest first, at most 50) and
+`drgnx-notice--echo-last`; within `drgnx-notice-echo-interval` the layer timer `notice-echo` (`:core`) flushes them as
+one merged line. A line waits (`drgnx-notice--echo-waiting`) while the minibuffer is active, `this-command` is set
+or `(current-message)` is another message than our last line; `drgnx-notice--post-command` (`post-command-hook`,
+depth 90) is `(when drgnx-notice--echo-waiting …)`, 0 conses otherwise, and shows the line with `this-command` bound
+to nil. Never: `drgnx-notice--can-echo-p` (the seam tests stub) is nil in batch and in a daemon with no client frame
+(held until `server-after-make-frame-hook`), and `drgnx-notice--started` is nil until `emacs-startup-hook` (depth 90)
+or a daemon's first client frame, so nothing is echoed during startup; `drgnx-notice--startup-done` then queues one
+line over the `fail` conditions present. A single line names the item's `:command` by its registry title and that
+command's key; a merged line and the startup line name the Notices list and its key. Lines go out as
+`(let ((message-truncate-lines t)) (message "%s" LINE))`.
+
 **Cost** (allocation is the gate; `test/unit/core-notice-test.el`, byte-compiled): a count read 0 conses; a new
 event 14 (22 with one hook function); a repeat 1 (its key). Replacing three sets of 40/40/20 items (80 ids) in
 which three items change and three ids come and go, then reading the count, 250 conses (gated at 275; the wall

@@ -30,6 +30,7 @@
 (require 'drgnx-session)
 (require 'drgnx-config)
 (require 'drgnx-shell-env)
+(require 'drgnx-notice-echo)
 
 (defgroup drgnx nil "drgnx, a workbench-first Emacs framework." :group 'convenience)
 
@@ -106,7 +107,9 @@ The steady GC threshold is set at the end, also when a step fails (early-init de
         (drgnx-guard-mode 1)
         (drgnx-sandbox-vc-mode 1)                      ; no git in a job's folder outside its sandbox
         (drgnx-hooks-install)
-        (drgnx-session-setup)                          ; keep running or quit; the close button
+        (drgnx-notice-desktop-mode 1)                  ; new things waiting on you, on the desktop while you are away
+        (drgnx-notice-echo-mode 1)                     ; failures and new things waiting on you, in the echo area
+        (drgnx-session-setup)                         ; keep running or quit; the close button
         (drgnx-shell-env-start)                        ; the login shell's PATH, asynchronously
         (add-hook 'drgnx-first-gui-frame-hook #'drgnx-onboard--on-first-window)   ; a first start: the Welcome
         (add-hook 'drgnx-first-gui-frame-hook #'drgnx-ai--on-first-window)        ; the local AI runner, started again

@@ -4,6 +4,32 @@ drgnx tells you things in one way: each notice has a severity (`info`, `warn`, `
 a condition until it is fixed, or something waiting on you), and a rule decides where it shows. This page grows
 with the notice routes; how the model works is in [Core: Notices](../develop/core.md#notices-drgnx-noticeel).
 
+## What interrupts you
+
+Only two things reach the echo area on their own:
+
+- **A failure,** once, when it is new: `drgnx: TEXT`, followed by the command that helps, when there is one
+  (`drgnx: boom — Fix X (F9)`).
+- **A new thing that waits on you** (an agent asking, an edit to review, a job's card): `drgnx: waiting on you: TEXT`.
+  When the desktop already told you (see below), the echo area stays quiet.
+
+Everything else — information, warnings, a condition that is not a failure — shows in the status bar's counts and in
+the Notices list, and the echo area only when its producer asks for it. A producer that says it must never interrupt
+you is never echoed.
+
+The echo is polite:
+
+- **At most one line every 2 seconds** (`drgnx-notice-echo-interval`). What comes meanwhile is merged: `drgnx: 2 new
+  problems — Show Notices (KEY)`, `drgnx: 2 new things wait on you — Show Notices (KEY)`, or both.
+- **Never over your command's message,** while a command runs or while the minibuffer is in use: the line waits for
+  the end of the next command after which the echo area is empty.
+- **Not while drgnx starts.** When startup is over, one line sums up what failed: `drgnx: 1 module did not start
+  (tools/agents-ui) — Show Notices (KEY)` (up to three names, then "and N more"), or `drgnx: N problems at startup`.
+  Nothing is said when nothing failed.
+- **Not in batch,** and a daemon with no window yet holds its lines until the first one opens.
+
+Every line also lands in `*Messages*`. Turn the echo off with `drgnx-notice-echo-mode`.
+
 ## On the desktop
 
 Everything that waits on you — an agent asking for permission, an edit to review, a question, a job's card — is
