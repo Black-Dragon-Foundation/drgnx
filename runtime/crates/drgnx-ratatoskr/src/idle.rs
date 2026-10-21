@@ -35,15 +35,15 @@ pub fn start_exe() -> Option<&'static Path> {
     START_EXE.get().map(PathBuf::as_path)
 }
 
-/// Resolve the running executable's path once.  Linux: `readlink /proc/self/exe`, which at start names the file on
+/// Resolve the running executable's path once.  Linux and Android: `readlink /proc/self/exe`, which at start names the file on
 /// disk; macOS: `_NSGetExecutablePath` (what `current_exe` calls) and `realpath`.
 pub fn resolve_exe() -> std::io::Result<&'static Path> {
     if let Some(p) = START_EXE.get() {
         return Ok(p);
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     let path = std::fs::read_link("/proc/self/exe")?;
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
     let path = std::fs::canonicalize(std::env::current_exe()?)?;
     Ok(START_EXE.get_or_init(|| path).as_path())
 }

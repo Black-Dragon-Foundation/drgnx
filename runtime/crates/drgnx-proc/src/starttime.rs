@@ -3,6 +3,9 @@
 //! A pid alone names a process only until it is reused; the pair (pid, start time) names one process. Linux start
 //! times count clock ticks since boot and `runtime.db` survives a reboot, so a record is only ever compared within
 //! its own boot ([`boot_id`]).
+//!
+//! Platforms: `/proc` is a Linux-kernel fact, so Linux and Android share it; macOS has its own; any other platform
+//! gets `Unsupported` from the `os` module below.
 
 use std::io;
 
@@ -40,7 +43,7 @@ pub(crate) fn stat(pid: i32) -> io::Result<Stat> {
     os::stat(pid)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 mod os {
     use super::{Stat, parse_linux_stat};
     use std::io;
@@ -61,7 +64,7 @@ mod os {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
 mod os {
     use super::Stat;
     use std::io;
@@ -77,7 +80,7 @@ mod os {
 
 /// `/proc/PID/stat`: `pid (comm) state …`, where comm may hold spaces and parens; the fields are counted from after
 /// the last `)`. State is field 3, starttime field 22.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn parse_linux_stat(line: &str) -> io::Result<Stat> {
     let bad = || io::Error::new(io::ErrorKind::InvalidData, "unreadable /proc/PID/stat");
     let rest = &line[line.rfind(')').ok_or_else(bad)? + 1..];

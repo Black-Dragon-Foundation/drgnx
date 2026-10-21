@@ -233,8 +233,9 @@ pub fn alive(pid: u32) -> bool {
     i32::try_from(pid).is_ok_and(drgnx_proc::alive)
 }
 
-/// The arguments of PID (Linux `/proc/PID/cmdline`, macOS `sysctl KERN_PROCARGS2`); none when they cannot be read.
-#[cfg(target_os = "linux")]
+/// The arguments of PID (Linux and Android `/proc/PID/cmdline`, macOS `sysctl KERN_PROCARGS2`; any other platform has
+/// none, below); none when they cannot be read.
+#[cfg(any(target_os = "linux", target_os = "android"))]
 pub fn command_line(pid: u32) -> Option<Vec<Vec<u8>>> {
     let mut raw = Vec::new();
     File::open(format!("/proc/{pid}/cmdline"))
@@ -299,6 +300,13 @@ pub fn command_line(pid: u32) -> Option<Vec<Vec<u8>>> {
             .map_while(|_| parts.next().map(<[u8]>::to_vec))
             .collect(),
     )
+}
+
+/// The arguments of PID on a platform with no way to read them: none, so a lock holder is never taken for a Rust hub
+/// and the lock is not stolen (Android stance: unsupported here; Android has `/proc`, so it takes the Linux branch).
+#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
+pub fn command_line(_pid: u32) -> Option<Vec<Vec<u8>>> {
+    None
 }
 
 #[cfg(test)]
