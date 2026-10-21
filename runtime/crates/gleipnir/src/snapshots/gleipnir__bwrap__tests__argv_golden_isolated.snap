@@ -1,0 +1,44 @@
+---
+source: crates/gleipnir/src/bwrap.rs
+expression: "render(&argv, &fds)"
+---
+--unshare-all
+--unshare-user
+--disable-userns
+--die-with-parent
+--new-session
+--clearenv
+--ro-bind /usr /usr
+--ro-bind-try /etc /etc
+--ro-bind-try /opt /opt
+--ro-bind-try /nix /nix
+--ro-bind-try /gnu /gnu
+--ro-bind-try /var/lib/flatpak /var/lib/flatpak
+--symlink usr/bin /bin
+--symlink usr/lib /lib
+--symlink usr/lib64 /lib64
+--symlink usr/sbin /sbin
+--dev /dev
+--proc /proc
+--tmpfs /tmp
+--tmpfs /run
+--tmpfs /var/tmp
+--ro-bind-try /run/systemd/resolve/stub-resolv.conf /run/systemd/resolve/stub-resolv.conf
+--bind-fd 5 /agent
+--ro-bind-fd 6 /work/docs
+--ro-bind-fd 7 /tools/node
+--bind-fd 8 /work/task
+--ro-bind-fd 9 /run/drgnx
+--ro-bind-fd 10 /work/task/.git
+--bind-fd 11 /mnt/out
+--ro-bind /dev/null /work/task/.env
+--tmpfs /state/home-1/.cache/creds
+--tmpfs /agent/.cache/creds
+--ro-bind-fd 12 /run/gleipnir/helper
+--chdir /work/task
+-- /run/gleipnir/helper sandbox-inner
+--spec-fd 3
+-- /usr/bin/agent
+--x
+
+fds passed: 5 6 7 8 9 10 11 12

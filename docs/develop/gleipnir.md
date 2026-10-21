@@ -106,7 +106,93 @@ in `validate` follow the spec's `Target`, not the host, so the macOS rules are t
 
 ## Toolchain roots (Task 3)
 
-## The bubblewrap argv (Task 7)
+## The bubblewrap argv
+
+The full tier runs bubblewrap, which builds the namespaces and the new root, then starts the inner helper (the
+`ratatoskr` binary, bound at `/run/gleipnir/helper`), which applies Landlock and seccomp and execs the program. Three
+steps (Task 7):
+
+- `backend::linux::bwrap::find()` picks bwrap from `/usr/bin/bwrap`, `/bin/bwrap` and `/usr/local/bin/bwrap`
+  (`find_in` takes the list), never through `PATH`. The first one only root can change (`eitri::trusted_program`:
+  root-owned, not group- or world-writable, in root-owned directories, no link in its path) is run as `--version`,
+  with an empty environment and a 2 s deadline. Its answer must be exactly `bubblewrap X.Y.Z`, at or above
+  `bwrap::FLOOR` (0.12.0); anything else, a failing exit or no answer in time is refused (`Malformed`).
+- `backend::linux::bwrap::open_sources(spec, helper)` opens every source of a spec validated for `LinuxBwrap`, and
+  the helper, with `eitri::open_path`: no link is followed in any component, and the fd that was checked is the one
+  that gets mounted. The home and `run` must be directories and the helper a regular file; `read`, `write` and
+  `binds` may be either. A link met here (swapped in after validation) is `NotCanonical`, a missing source
+  `Missing`, a kind mismatch `Malformed`. Each `hide` entry is lstat'ed the same way, for its kind. It also records
+  the host's layout: which of `/bin /lib /lib64 /sbin` are links, and where `/etc/resolv.conf` leads.
+- `bwrap::argv(spec, opened, command)` is pure (built and tested on every target). It returns bwrap's arguments and
+  the fds to pass, each with its number inside: 3 is the inner spec (a sealed memfd), 4 the status pipe (both the
+  caller's, Task 8), and the binds from 5 upward in argv order, the helper's last.
+
+The argv, in this order (`argv_golden_shared` and `argv_golden_isolated` pin it):
+
+```
+--unshare-all --unshare-user [--share-net] --disable-userns --die-with-parent --new-session --clearenv
+--ro-bind /usr /usr
+--ro-bind-try /etc /etc  (and /opt /nix /gnu /var/lib/flatpak)
+--symlink usr/bin /bin   (where the host's /bin is a link; else --ro-bind-try /bin /bin; also lib lib64 sbin)
+--dev /dev --proc /proc --tmpfs /tmp --tmpfs /run --tmpfs /var/tmp
+--ro-bind-try RESOLVER RESOLVER                  where /etc/resolv.conf leads under /run
+--bind-fd 5 HOME-DEST                            the home (--ro-bind-fd when its mode is ro)
+--ro-bind-fd N READ   --bind-fd N WRITE          at their own paths
+--ro-bind-fd N RUN-DEST                          the session dir, always read-only
+--ro-bind-fd N DEST  /  --bind-fd N DEST         binds, in order, each with its mode
+--ro-bind /dev/null FILE  /  --tmpfs DIR         hide
+--ro-bind-fd N /run/gleipnir/helper              the helper, last
+--chdir DIR -- /run/gleipnir/helper INNER-ARGS --spec-fd 3 -- COMMAND…
+```
+
+Why each part:
+
+- **`--unshare-all`**: new pid, ipc, uts, cgroup, network and mount namespaces. The pid namespace hides the user's
+  other processes (no `/proc/PID/environ` of the hub); the mount namespace is what makes paths absent.
+- **`--unshare-user`**: the user namespace for certain (`--unshare-all` only tries). `--disable-userns` needs it.
+- **`--share-net`**, only for `Net::Shared`. Under `Net::Isolated` the program has its own empty network namespace and
+  reaches the outside only through the relay (loopback ports inside → Unix sockets in `run`).
+- **`--disable-userns`**: nothing inside can make nested namespaces (a nested bwrap, rootless podman), so this
+  sandbox stays the boundary.
+- **`--die-with-parent`**: the sandbox ends when the process that started it ends. That is the forking thread, so
+  sandboxed spawns go through draugr's pinned spawner thread (Task 6).
+- **`--new-session`**: a new session id, so no `TIOCSTI` into the caller's terminal (seccomp refuses `TIOCSTI` too).
+- **`--clearenv` and never `--setenv`**: the environment starts empty, and the program's environment travels in the
+  inner spec over fd 3, so no secret is ever in argv (where `/proc/PID/cmdline` would show it).
+- **No `--cap-drop ALL`**: in an unprivileged user namespace the process has no capabilities, and the helper sets
+  `no_new_privs`.
+- **The system's reads by path**: `/usr` and the rest are root-owned, so a path cannot be redirected by the agent.
+  On a merged-/usr host `/bin` and friends are links into `/usr`, recreated as the same links inside.
+- **`--tmpfs /run`**: `/run/user` (the user's runtime dir: D-Bus, the ssh agent, the hub's sockets) is absent. The
+  resolver's file is bound back on top of it alone, or `/etc/resolv.conf` (a link to systemd-resolved's stub on
+  Fedora and Ubuntu) would dangle. Only a file under `/run` outside `/run/user` and `/run/gleipnir` is bound.
+- **Every source of the spec by fd** (`--bind-fd`, `--ro-bind-fd`; bwrap ≥ 0.10). A source given by path is resolved
+  by bwrap later, when an agent may have swapped a link into it; an fd is what was checked. This is Flatpak's
+  CVE-2024-42472 pattern, whose full fix needed exactly these flags.
+- **Each bind keeps its mode, and none is widened**: a home asked `ro` is bound read-only, `run` is read-only even if a
+  spec that skipped validation says `rw`, and reads are read-only.
+- **The order of the spec's binds**: the home first, then reads and writes on top of it (a task folder under the home
+  shows at its path), then the session dir, then the binds, which must cover what came before (a git pin over a
+  folder's `.git`), then the hides, which must cover files inside everything bound before them. A `read` inside a
+  `write` is seen read-write, as the write grants (Landlock agrees: the write is a write root).
+- **Hides follow the binds**: a hide is covered at its own path (where a read, a write or a system tree shows it) and,
+  for every bind or home whose dest differs from its source and that holds it, at the same place under that dest. A
+  directory gets an empty tmpfs (Landlock does not let the program write to it), anything else `/dev/null`.
+- **The helper last** (review S1): no later mount can cover it, and validation's rule 11 also keeps every dest off
+  `/run/gleipnir` and `run`'s dest. A bind over the helper would make bwrap exec a program that applies neither
+  Landlock nor seccomp.
+- **The spec's `tmp` is not bound**: under bwrap `/tmp` is a private tmpfs (and a Landlock write root). `tmp` is the
+  reduced tier's temporary directory.
+
+**The floor: bubblewrap ≥ 0.12.0.** 0.12.0 fixes CVE-2026-87766 (GHSA-pxhw-h44j-8pfx, high): a link met through
+`/oldroot` while bwrap sets up its mounts let a sandbox write files outside it. Its own example is this sandbox's case:
+binding an agent-written folder and making mount points under it. Fedora 44 ships 0.12.0; Ubuntu 26.04's 0.11.1
+dropped the backported fix again (2026-09-17), so it is refused there, with the fix text of the check (Task 12).
+Fd binds do not replace the floor: the dest side of a mount (a link inside a bound folder) is bwrap's to resolve, and
+0.12.0 does it with `openat2(RESOLVE_IN_ROOT)`.
+
+There is no unit test that runs a real bwrap (review S15): containers skip it. The escape rows `any/works`,
+`bind-fd-link-swap` and `dest-link-stays-inside` (Task 15) run the argv on a real bwrap on the VM.
 
 ## The inner helper (Task 8)
 
