@@ -44,6 +44,9 @@ pub enum Rule {
     EnvDenied,
     DestDiffers,
     ReservedDest,
+    /// Not a validation rule: the sandbox did not start. The inner helper's status line said why, or none came
+    /// before the deadline ([`crate::inner::read_status`]).
+    Setup,
 }
 
 /// Why a spec was refused: the rule, the path it applies to (when it is about a path) and a sentence naming the key.

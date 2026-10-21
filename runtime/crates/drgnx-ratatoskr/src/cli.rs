@@ -1,6 +1,7 @@
 //! The command line (lexopt): `ratatoskr serve [--foreground] [--parent-pid PID] [--supervisor none|self|launchd]`,
-//! `ensure`, `stop`, `status`, `doctor`, `restart`, `version [--json]` and `methods --json|--markdown`.  A line that
-//! does not parse exits 2 ([`crate::Exit::Usage`]).
+//! `ensure`, `stop`, `status`, `doctor`, `restart`, `version [--json]`, `methods --json|--markdown` and
+//! `sandbox-inner …` (the sandbox's inner helper, its arguments taken raw).  A line that does not parse exits 2
+//! ([`crate::Exit::Usage`]).
 
 use std::ffi::OsString;
 use std::time::Duration;
@@ -12,7 +13,8 @@ pub const USAGE: &str = "usage: ratatoskr serve [--foreground] [--parent-pid PID
     \x20      ratatoskr doctor [--json]\n\
     \x20      ratatoskr restart\n\
     \x20      ratatoskr version [--json]\n\
-    \x20      ratatoskr methods --json|--markdown";
+    \x20      ratatoskr methods --json|--markdown\n\
+    \x20      ratatoskr sandbox-inner --spec-fd 3 -- CMD...   (the sandbox's inner helper; run by the sandbox only)";
 
 /// How long `ensure` waits for the hub to answer `ping`.
 pub const ENSURE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -44,6 +46,11 @@ pub enum Command {
     Doctor,
     /// Ask the running hub to restart (the editor's Hub: Restart Now).
     Restart,
+    /// The sandbox's inner helper (`gleipnir::inner::inner_main`): every argument after the command is its own,
+    /// untouched. `main` runs it before any thread or runtime exists.
+    SandboxInner {
+        args: Vec<OsString>,
+    },
 }
 
 /// What restarts a hub that exits 75 (and what `serve` maps its exits for).
@@ -199,6 +206,10 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
             let markdown = markdown.ok_or("methods takes --json or --markdown")?;
             Ok(Command::Methods { markdown })
         }
+        // The helper reads its own arguments (`--spec-fd N -- CMD…`): nothing here may interpret the command's.
+        "sandbox-inner" => Ok(Command::SandboxInner {
+            args: p.raw_args().map_err(e)?.collect(),
+        }),
         other => Err(format!("unknown command {other:?}")),
     }
 }
@@ -301,6 +312,33 @@ mod tests {
         assert_eq!(
             p(&["methods", "--markdown"]),
             Ok(Command::Methods { markdown: true })
+        );
+    }
+
+    /// `sandbox-inner` takes its arguments raw: nothing after it is read as an option of ratatoskr's, so a
+    /// command's own flags reach the helper unchanged, and no runtime is involved in parsing it.
+    #[test]
+    fn sandbox_inner_parses_without_a_runtime() {
+        let rest = [
+            "--spec-fd",
+            "3",
+            "--",
+            "/bin/sh",
+            "-c",
+            "echo --json",
+            "--nope",
+        ];
+        let mut all = vec!["sandbox-inner"];
+        all.extend(rest);
+        assert_eq!(
+            p(&all),
+            Ok(Command::SandboxInner {
+                args: rest.map(OsString::from).to_vec()
+            })
+        );
+        assert_eq!(
+            p(&["sandbox-inner"]),
+            Ok(Command::SandboxInner { args: vec![] })
         );
     }
 

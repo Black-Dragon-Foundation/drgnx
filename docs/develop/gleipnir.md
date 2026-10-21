@@ -31,7 +31,7 @@ seen inside.
 | `net` | `"shared"` or `{"isolated": {"relay": [{port, socket}], "mac_tcp_ports": [port]}}` | Linux isolation is a new network namespace plus the relay (loopback port inside → Unix socket); macOS allows only `localhost` on `mac_tcp_ports` |
 | `tmp` | path or absent | the temporary directory; required by the reduced tier, which has no private `/tmp` |
 | `layers` | `{landlock_min_abi}` | the lowest Landlock ABI the run accepts; seccomp is not a field (always on) |
-| `extra_tcp_ports` | ports | TCP ports besides the relay's (Landlock's port rule, never counted as isolation) |
+| `extra_tcp_ports` | ports | TCP ports besides the relay's (Landlock's port rule, never counted as isolation); the full tier only, the reduced tier grants none |
 
 `gleipnir::validate::validate(spec, &ctx, target)` checks a spec for one `Target` (`LinuxBwrap`, `LinuxReduced`,
 `Macos`) against a `Context` and returns a `ValidSpec` or a `Refusal { rule, path, message }`. Only a `ValidSpec`
@@ -108,7 +108,79 @@ in `validate` follow the spec's `Target`, not the host, so the macOS rules are t
 
 ## The bubblewrap argv (Task 7)
 
-## The inner helper (Task 8)
+## The inner helper
+
+`gleipnir::inner` (Task 8). The helper is the `ratatoskr` binary itself: `ratatoskr sandbox-inner --spec-fd 3 --
+CMD…`. bwrap runs it as `/run/gleipnir/helper` (the full tier); the reduced tier runs it directly. It runs between
+the namespace setup and the program, and it is the only code that applies Landlock and seccomp. `main` dispatches it
+before any thread or tokio runtime exists.
+
+**Its input.** An `InnerSpec` (JSON, `deny_unknown_fields`) on a memfd at fd 3, made by `spec_memfd` and sealed
+against every change (`F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL`), at most 1 MiB. The helper refuses
+an fd that is not sealed so. The program's environment travels here, never in argv.
+
+| Field | What |
+|---|---|
+| `version` | 1 |
+| `env` | the program's whole environment, exactly |
+| `chdir` | where the program starts |
+| `landlock` | the `LandlockPlan`; never optional (the floors are ABI ≥ 1 and ≥ 9). seccomp has no field: it is always on |
+| `new_session` | `setsid()` before Landlock; true for the reduced tier (no bwrap `--new-session` there), whose spec is refused without it |
+| `relay` | `{argv, ready_timeout_ms}` (5000), or absent |
+| `landlock_omit`, `abi_cap` | only with gleipnir's `test-hooks` feature (the escape rows); a release build refuses them as unknown fields |
+
+**The order** (pinned):
+
+- **1.** Read the spec from fd 3 and close it.
+- **2.** Assert one thread (`/proc/self/status`), else fail. Landlock restricts the calling thread only.
+- **3.** `PR_SET_NO_NEW_PRIVS`; `PR_SET_PDEATHSIG` SIGKILL, then fail if the parent changed since the helper started.
+  The parent is bwrap, or draugr's pinned spawner thread: the death signal fires when the *forking thread* exits.
+  Grandchildren do not inherit it, so the reduced tier is ended by killing its process group.
+- **3a.** `setsid()` when `new_session`. A helper its spawner already made a session leader is accepted; one that
+  leads only a process group (`setpgid`) cannot start a session and is refused. **The reduced tier must be spawned
+  with `setsid` before exec**, which also makes its pid the group's, for the kill.
+- **4.** Landlock `restrict(plan, abi_cap)`.
+- **5.** seccomp: `install(compile(native()))`.
+- **6.** The relay, if any: forked under both layers, exec'd with an empty environment, stdin and stdout on
+  `/dev/null`, its ready pipe at fd 3 and no other fd above 2. The helper waits for exactly `ready\n` within the
+  timeout; a relay that exits first, says something else or is late fails the run (and is killed). The relay's parent
+  is the helper, alive until `ready`, so the relay's parent check cannot miss a parent that died before it started.
+  Then, when the plan has `tcp_bind_ports` (the reduced tier), one more Landlock layer refuses every TCP bind: the
+  relay bound its ports under the first layer, and the program gets none.
+- **7.** One status line on fd 4, then fd 4 is closed.
+- **8.** Close every fd ≥ 3 (`close_range`).
+- **9.** `chdir`; `execve` of `CMD[0]` with exactly the spec's environment. A program with a `/` runs as given; a bare
+  name is searched in the spec environment's `PATH` (absolute entries only).
+
+A failure in steps 1–7 writes `{"ok":false,"error":"…"}` to fd 4 and exits 125, and nothing is exec'd. Not found
+exits 127, found but not runnable 126; a `chdir` that fails after the status line exits 125 with a stderr line
+only. The status line of a run is
+`{"ok":true,"landlock_abi":N,"landlock":"enforced","seccomp":true,"no_new_privs":true,"new_session":B,"relay":B}`.
+On other systems `sandbox-inner` exits 125 with "the inner helper is Linux only".
+
+**Reading the status.** `status_pipe()` gives the parent's read end and the write end the spawn moves to fd 4.
+`read_status(read_end, stderr_tail, deadline)` returns the `LayersReport`, or a `Refusal` with `Rule::Setup`:
+- `ok: false` → "sandbox setup failed: " and the helper's error;
+- EOF with no line (the helper, or bwrap before it, failed) → "sandbox setup failed: " and the first stderr line;
+- a line that claims less than Landlock enforced, seccomp and `no_new_privs` → refused;
+- past the deadline (`status_deadline`: 5 s plus the relay's ready timeout) → "sandbox setup timed out", and the
+  caller kills the process group.
+
+EOF needs every write end closed: bwrap's monitor closes its copy, and draugr's `spawn` drops the hub's.
+
+**The reduced run path** (`backend::linux::reduced`). `inner_spec(spec, helper, relay_args)` takes a `LinuxReduced`
+`ValidSpec`: the reduced plan, the spec's environment and `chdir`, a new session, and under `Net::Isolated` the relay
+`helper relay_args… --ready-fd 3 PORT=SOCK…`. The relay is exec'd under Landlock, so the helper file joins the read
+roots then. `prepare(inner, helper, inner_args, command)` gives the program (the helper), its argv (`inner_args…
+--spec-fd 3 -- command…`), the fds (the spec at 3, the status write end at 4) and the status read end. Task 13 turns
+it into an `Invocation`; the environment is empty.
+
+Tests: `inner::tests` (the arguments, the thread check in a threaded process, the status lines, the sealed memfd,
+`read_status` on EOF, in pieces and at its deadline, the test-hook fields), `backend::linux::reduced::tests`, and
+`runtime/crates/drgnx-ratatoskr/tests/sandbox_inner.rs`, which runs the built `ratatoskr` as the helper without
+bwrap: the layers reported, exactly the spec's environment, no fd above 2, `NoNewPrivs` and one more seccomp filter,
+a floor refusal, the relay ready before the program (and three relay failures), an unsealed spec, the new session,
+a seccomp or Landlock install that an outer filter makes fail, and the reduced run end to end (ABI 9).
 
 ## Landlock
 
@@ -138,7 +210,8 @@ in `validate` follow the spec's `Target`, not the host, so the macOS rules are t
 | Write | `write` entries, rw binds, an rw home, `/tmp`, `/var/tmp`, `/dev/shm`, `/dev/pts` (bwrap's private mounts) | `write` entries, rw binds, an rw home, the spec's `tmp`. Never the host's `/tmp`, `/var/tmp` or `/dev/shm`: without a mount namespace they are the user's own |
 | Device files written | `/dev/{null,zero,full,tty,ptmx}` | `/dev/{null,zero,full}` |
 | Unix connect (ABI 9) | the `run` dest | the `run` source |
-| TCP connect (ABI 4) | relay ports and `extra_tcp_ports` under `Net::Isolated`; not handled under `Net::Shared` | not handled: the network is open |
+| TCP connect (ABI 4) | relay ports and `extra_tcp_ports` under `Net::Isolated`; not handled under `Net::Shared` | handled: only the relay ports (`Net::Isolated`); none under `Net::Shared`. Never `extra_tcp_ports` |
+| TCP bind (ABI 4) | not handled: the network namespace isolates a server inside | handled: only the relay ports, for the relay; the helper then adds a layer that refuses every bind (`forbid_tcp_bind`) |
 
 **Per ABI.**
 
@@ -147,7 +220,7 @@ in `validate` follow the spec's `Target`, not the host, so the macOS rules are t
 | 1 | the first fs rights | all handled. Read and execute on the read roots. Every write right on the write roots except `make_char` and `make_block`: those are handled and never granted, since an agent has no use for device nodes. `write_file` on the device files |
 | 2 | `refer` | handled; granted on the write roots |
 | 3 | `truncate` | the same. `O_TRUNC` on a device ignores it, so `> /dev/null` works |
-| 4 | TCP bind and connect | `connect_tcp` handled only when the plan has ports; `bind_tcp` never, since servers inside must work |
+| 4 | TCP bind and connect | each handled only when the plan has ports for it: `connect_tcp` in the full tier under `Net::Isolated`, both in the reduced tier. The full tier never handles `bind_tcp`, since servers inside its network namespace must work |
 | 5 | `ioctl_dev` | never handled: ioctls on ttys and pipes must work, and seccomp blocks TIOCSTI and TIOCLINUX |
 | 6 | scopes | abstract Unix sockets and signals scoped: nothing made outside the sandbox can be reached or signalled |
 | 7, 8 | logging, thread sync | nothing used here |
@@ -167,6 +240,15 @@ signals that the namespaces do not cover.
 on every kernel with ABI ≥ 4. The fix (mainline 33cb713db016, 7.2-rc4) came with no ABI bump, so a process cannot
 tell a fixed kernel from an unfixed one. Landlock has no UDP rules before ABI 10 either. Isolation is
 `--unshare-net` plus the relay and the proxy; the TCP rule stays inside that namespace as a second layer.
+
+**The reduced tier's network is narrowed, not isolated.** It has no network namespace, so Landlock's TCP rules are
+all it has (2026-10-21, the manager's call on Task 5). A connect is allowed only to the relay's ports, which forward
+to the session's proxy, so DNS and HTTPS go through the proxy too. A bind is allowed only on those ports, under the
+first layer, for the relay; the inner helper then adds a second layer that refuses every bind before the program
+runs. `extra_tcp_ports` are not granted: a port rule has no address, so it would reach that port on every host. What
+stays open, and why this is not isolation: a connect to a relay port on *any* host (the rule names a port, not an
+address), UDP (no Landlock rule before ABI 10, and the crate stops at 9), and the TCP Fast Open bypass on unfixed
+kernels. The reduced badge (phase 6) keeps saying the network is not isolated.
 
 **The reduced tier's floor is ABI 9.** This is the user's ruling on review B1, stricter than the design's 6. Only
 ABI 9 controls connecting to pathname Unix sockets. Without a mount namespace, ABI 6–8 would leave the hub socket,

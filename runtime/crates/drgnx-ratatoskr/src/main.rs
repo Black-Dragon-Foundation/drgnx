@@ -35,6 +35,11 @@ fn main() -> ExitCode {
         Command::Status { json } => return code(doctor::status(&Env::process(), json)),
         Command::Doctor => return code(doctor::doctor(&Env::process())),
         Command::Restart => return code(doctor::restart(&Env::process())),
+        // Before any thread or runtime exists: the helper asserts it is single-threaded. Not Linux: it exits 125 with
+        // "the inner helper is Linux only" (Android: no backend; apps get no user namespaces; fails closed).
+        Command::SandboxInner { args } => {
+            return code(gleipnir::inner::inner_main(args.into_iter()));
+        }
         Command::Serve(args) => {
             let supervisor = args.supervisor;
             let runtime = match tokio::runtime::Builder::new_multi_thread()
