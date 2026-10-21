@@ -175,14 +175,18 @@
     (should (equal (drgnx-mcp-bridge-test--written bridge) ""))))
 
 (ert-deftest drgnx-mcp-bridge/exits-when-the-socket-closes-while-idle ()
-  ;; the server closes while the bridge waits for input: it notices at its next line and forwards nothing
+  ;; the server closes while the bridge waits for input: it ends with status 0 and forwards nothing.  On Linux it
+  ;; notices at its next line; a macOS Emacs reads the socket while it waits for a line, so it may end at once
+  ;; (an-idle-notification-waits-for-the-next-line)
   (drgnx-mcp-bridge-test--with #'drgnx-mcp-bridge-test--echo
     (setq bridge (drgnx-mcp-bridge-test--start sock))
     (should (drgnx-mcp-bridge-test--wait (lambda () drgnx-mcp-bridge-test--conns)))
     (mapc #'delete-process drgnx-mcp-bridge-test--conns)
     (accept-process-output nil 0.2)
-    (should (process-live-p bridge))
-    (drgnx-mcp-bridge-test--send bridge '(:jsonrpc "2.0" :id 1 :method "ping"))
+    (if (eq system-type 'darwin)
+        (ignore-errors (drgnx-mcp-bridge-test--send bridge '(:jsonrpc "2.0" :id 1 :method "ping")))
+      (should (process-live-p bridge))
+      (drgnx-mcp-bridge-test--send bridge '(:jsonrpc "2.0" :id 1 :method "ping")))
     (should (equal (drgnx-mcp-bridge-test--exit bridge) 0))
     (should-not drgnx-mcp-bridge-test--got)))
 
