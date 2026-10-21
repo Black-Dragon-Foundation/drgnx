@@ -62,6 +62,7 @@ mod tests {
             cwd: None,
             stdin_null: true,
             pass_fds: vec![],
+            new_session: false,
         })
         .await
         .unwrap();

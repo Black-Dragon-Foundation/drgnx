@@ -6,7 +6,8 @@
 //! `~/.cargo/bin`. Everything here is pure path and metadata reading (no process, no write), identical on every
 //! unix target; nothing is `cfg`-gated, so Android builds it unchanged (it has no backend to use it).
 
-use crate::spec::SECRET_DIRS;
+use crate::spec::{Layers, Net, SECRET_DIRS, Spec, Target};
+use crate::validate::{Context, validate};
 use std::collections::BTreeSet;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -112,7 +113,16 @@ pub fn roots(
     Roots { dirs, files }
 }
 
-/// The credential files inside the directory roots: each existing `root/SECRET_FILES[i]`, as its true name.
+/// How deep [`hide_list`] looks below a directory root for the dot-names of [`SECRET_FILES`]: `root/NAME`,
+/// `root/a/NAME` and `root/a/b/NAME` (GL-T3-3). It reads every directory down to `root/a/b` once.
+pub const SCAN_DEPTH: usize = 3;
+
+/// The credential files inside the directory roots, as true names:
+/// - each existing `root/SECRET_FILES[i]` (the fixed places: `etc/npmrc`, `credentials.toml`, …);
+/// - each file or link named like one of the dot-names of [`SECRET_FILES`] (`.npmrc`, `.pypirc`, `.env`, …) down to
+///   [`SCAN_DEPTH`], following no link while walking. The plain names (`credentials`, `auth.json`, …) are common
+///   file names inside packages, and hiding a package's own data file would break it, so they count only at their
+///   fixed place.
 pub fn hide_list(roots: &Roots) -> Vec<PathBuf> {
     let mut out = BTreeSet::new();
     for root in &roots.dirs {
@@ -122,8 +132,67 @@ pub fn hide_list(roots: &Roots) -> Vec<PathBuf> {
                 out.insert(t);
             }
         }
+        scan(root, 1, &mut out);
     }
     out.into_iter().collect()
+}
+
+/// The dot-names [`hide_list`] looks for at every depth.
+fn scanned(name: &std::ffi::OsStr) -> bool {
+    SECRET_FILES
+        .iter()
+        .any(|s| s.starts_with('.') && !s.contains('/') && name == *s)
+}
+
+/// Every entry of `dir` named by [`scanned`], and the directories below it down to [`SCAN_DEPTH`]. A link is
+/// hidden at its true name, as the fixed places are, but never walked into.
+fn scan(dir: &Path, depth: usize, out: &mut BTreeSet<PathBuf>) {
+    let Ok(rd) = fs::read_dir(dir) else { return };
+    for entry in rd.flatten() {
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if scanned(&entry.file_name()) && !kind.is_dir() {
+            if let Ok(t) = fs::canonicalize(entry.path()) {
+                out.insert(t);
+            }
+        } else if kind.is_dir() && depth < SCAN_DEPTH {
+            scan(&entry.path(), depth + 1, out);
+        }
+    }
+}
+
+/// The roots `ctx` lets a sandbox read for `target` (GL-T3-1): each root is checked as a spec's lone `read` entry,
+/// and one that is refused (it holds the home, a closed or secret dir, a session dir, …) or no longer exists is
+/// dropped. A context that is itself refused drops every root. The read rules do not depend on the Linux tier, so
+/// the reduced tier is checked as the full one.
+pub fn readable(roots: Roots, ctx: &Context, target: Target) -> Roots {
+    let target = match target {
+        Target::Macos => Target::Macos,
+        Target::LinuxBwrap | Target::LinuxReduced => Target::LinuxBwrap,
+    };
+    let ok = |p: &PathBuf| {
+        let spec = Spec {
+            read: vec![p.clone()],
+            write: vec![],
+            hide: vec![],
+            sockets: vec![],
+            binds: vec![],
+            home: None,
+            run: None,
+            env: vec![],
+            chdir: PathBuf::from("/"),
+            net: Net::Shared,
+            tmp: None,
+            layers: Layers::for_target(target),
+            extra_tcp_ports: vec![],
+        };
+        validate(spec, ctx, target).is_ok_and(|v| v.spec().read.len() == 1)
+    };
+    Roots {
+        dirs: roots.dirs.into_iter().filter(ok).collect(),
+        files: roots.files.into_iter().filter(ok).collect(),
+    }
 }
 
 fn canon(p: &Path) -> PathBuf {
@@ -326,6 +395,76 @@ mod tests {
         );
         assert_eq!(r.dirs, vec![f.p(".cargo/bin"), f.p(".npm-global")]);
         assert_eq!(hide_list(&r), vec![npmrc]);
+    }
+
+    /// GL-T3-3: a dot-named credential file nested in a root is hidden down to depth 3; deeper, a plain name away
+    /// from its fixed place, or a dir walked through a link, is not.
+    #[test]
+    fn nested_dot_credentials_hidden_to_depth_3() {
+        let f = fx();
+        f.file(".local/share/mise/installs/node/22.1/bin/node", 0o755);
+        let n = ".local/share/mise/installs/node/22.1";
+        let d1 = f.file(&format!("{n}/.npmrc"), 0o600);
+        let d2 = f.file(&format!("{n}/lib/.pypirc"), 0o600);
+        let d3 = f.file(&format!("{n}/lib/node_modules/.env"), 0o600);
+        f.file(&format!("{n}/lib/node_modules/pkg/.npmrc"), 0o600); // depth 4
+        f.file(&format!("{n}/lib/node_modules/auth.json"), 0o644); // a plain name, not at its place
+        let fixed = f.file(&format!("{n}/auth.json"), 0o600);
+        let outside = f.file("elsewhere/deep/.netrc", 0o600);
+        f.link(&format!("{n}/lib/linked"), &f.p("elsewhere"));
+        let linked = f.file("other/.git-credentials", 0o600);
+        f.link(&format!("{n}/lib/.git-credentials"), &linked);
+        let r = roots(&[f.p(&format!("{n}/bin"))], &f.home, None, &[]);
+        assert_eq!(r.dirs, vec![f.p(n)]);
+        let mut want = vec![d1, d2, d3, fixed, linked];
+        want.sort();
+        assert_eq!(hide_list(&r), want);
+        assert!(!hide_list(&r).contains(&outside));
+    }
+
+    /// GL-T3-1: every root is checked by validation's read rules for the target; a refused one is dropped.
+    #[test]
+    fn readable_drops_what_validation_refuses() {
+        let f = fx();
+        f.file(".cargo/bin/cargo", 0o755);
+        f.file(".local/share/mise/installs/node/22.1/bin/node", 0o755);
+        f.file("state/drgnx/bin/x", 0o755);
+        let tool = f.file("state/drgnx/tool", 0o755);
+        let ok_tool = f.file("dotfiles/sync.sh", 0o755);
+        let r = Roots {
+            dirs: vec![
+                f.p(".cargo/bin"),
+                f.p(".local/share/mise/installs/node/22.1"),
+                f.p("state/drgnx/bin"),
+                f.p("gone"),
+            ],
+            files: vec![tool, ok_tool.clone()],
+        };
+        let ctx = Context {
+            home: f.home.clone(),
+            closed: vec![f.p("state/drgnx")],
+            ..Context::default()
+        };
+        for t in [Target::LinuxBwrap, Target::LinuxReduced, Target::Macos] {
+            let kept = readable(r.clone(), &ctx, t);
+            assert_eq!(
+                kept,
+                Roots {
+                    dirs: vec![
+                        f.p(".cargo/bin"),
+                        f.p(".local/share/mise/installs/node/22.1")
+                    ],
+                    files: vec![ok_tool.clone()],
+                },
+                "{t:?}"
+            );
+        }
+        // A context that is refused (a relative PATH entry) keeps nothing.
+        let bad = Context {
+            program_dirs: vec![".".into()],
+            ..ctx
+        };
+        assert_eq!(readable(r, &bad, Target::LinuxBwrap), Roots::default());
     }
 
     #[test]

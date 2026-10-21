@@ -98,11 +98,22 @@ async fn parent_gone(initial: Option<rustix::process::Pid>) {
     }
 }
 
-fn parse_args(
-    args: impl Iterator<Item = OsString>,
-) -> Result<(Option<OwnedFd>, Vec<RelayPair>), String> {
+/// The option that names the relay's expected parent; the inner helper appends it, with its own pid, last.
+pub const PARENT_PID_ARG: &str = "--parent-pid";
+
+const USAGE: &str = "usage: relay --parent-pid PID [--ready-fd N] PORT=SOCKET...";
+
+struct Args {
+    parent: rustix::process::Pid,
+    ready: Option<OwnedFd>,
+    pairs: Vec<RelayPair>,
+}
+
+/// The options may come anywhere among the pairs (the helper appends `--parent-pid` after them).
+fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Args, String> {
     let mut args = args;
     let mut ready = None;
+    let mut parent = None;
     let mut pairs = Vec::new();
     while let Some(a) = args.next() {
         if a == "--ready-fd" {
@@ -113,28 +124,64 @@ fn parse_args(
                 .ok_or("--ready-fd needs a file descriptor number")?;
             // The caller passed this fd for us to own; nothing else in this process holds it.
             ready = Some(unsafe { OwnedFd::from_raw_fd(n) });
+        } else if a == PARENT_PID_ARG {
+            let pid = args
+                .next()
+                .and_then(|v| v.to_str().and_then(|v| v.parse::<i32>().ok()))
+                .and_then(rustix::process::Pid::from_raw)
+                .ok_or("--parent-pid needs a pid above 0")?;
+            parent = Some(pid);
         } else {
             let s = a.to_str().ok_or("relay pair is not UTF-8")?;
             pairs.push(parse_pair(s)?);
         }
     }
-    if pairs.is_empty() {
-        return Err("usage: relay [--ready-fd N] PORT=SOCKET...".into());
+    match parent {
+        Some(parent) if !pairs.is_empty() => Ok(Args {
+            parent,
+            ready,
+            pairs,
+        }),
+        _ => Err(USAGE.into()),
     }
-    Ok((ready, pairs))
 }
 
-/// `--ready-fd N PAIR...`; returns the exit code: 0 when the parent changes or on SIGTERM, 1 on a runtime
-/// failure (a port cannot be bound), 2 on bad arguments.
+/// Ask for SIGTERM when the parent thread exits (Linux and Android), then check that the parent is `expected`. In
+/// that order, a parent that dies after the check is caught by the signal, and one that died before it by the check.
+fn adopt_parent(expected: rustix::process::Pid) -> Result<(), String> {
+    // A Linux prctl (Android: the same kernel). Elsewhere (macOS) only the check and the poll below.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    rustix::process::set_parent_process_death_signal(Some(rustix::process::Signal::TERM))
+        .map_err(|e| format!("PR_SET_PDEATHSIG: {e}"))?;
+    match rustix::process::getppid() {
+        Some(p) if p == expected => Ok(()),
+        got => Err(format!(
+            "the parent is {}, not {}: it has gone",
+            got.map_or(0, |p| p.as_raw_nonzero().get()),
+            expected.as_raw_nonzero()
+        )),
+    }
+}
+
+/// `--parent-pid PID [--ready-fd N] PAIR...`; returns the exit code: 0 when the parent changes or on SIGTERM, 1 on
+/// a runtime failure (a port cannot be bound, the parent is not PID), 2 on bad arguments.
 pub fn main(args: impl Iterator<Item = OsString>) -> i32 {
-    let (ready, pairs) = match parse_args(args) {
+    let Args {
+        parent,
+        ready,
+        pairs,
+    } = match parse_args(args) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("gleipnir relay: {e}");
             return 2;
         }
     };
-    let initial = rustix::process::getppid();
+    if let Err(e) = adopt_parent(parent) {
+        eprintln!("gleipnir relay: {e}");
+        return 1;
+    }
+    let initial = Some(parent);
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -403,6 +450,44 @@ mod tests {
         std::process::exit(main(args.into_iter()));
     }
 
+    /// Gleipnir T11-1: a relay whose parent is not the one it was told (that parent died before the relay ran, and it
+    /// was reparented) refuses to start: exit 1, no port bound, the ready pipe closed unwritten. Without the option
+    /// it does not start either.
+    #[test]
+    fn refuses_a_parent_it_was_not_given() {
+        use std::process::Command;
+        let exe = std::env::current_exe().unwrap();
+        let port = free_port();
+        let pair = format!("{port}=/nonexistent/s.sock");
+        let run = |args: String| {
+            Command::new(&exe)
+                .args(["--exact", "net::relay::tests::child_entry", "--nocapture"])
+                .arg("--test-threads=1")
+                .env("GLEIPNIR_RELAY_CHILD", args)
+                .output()
+                .unwrap()
+        };
+        // The child's parent is this process; ours is someone else.
+        let out = run(format!(
+            "{pair} --parent-pid {}",
+            std::os::unix::process::parent_id()
+        ));
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(String::from_utf8_lossy(&out.stderr).contains("it has gone"));
+        assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_err());
+        let out = run(pair);
+        assert_eq!(out.status.code(), Some(2), "no --parent-pid: usage");
+        let parse = |a: &[&str]| parse_args(a.iter().map(OsString::from)).map(|a| a.pairs.len());
+        assert_eq!(parse(&["--parent-pid", "5", "1=/a"]), Ok(1), "the control");
+        assert!(parse(&["--parent-pid", "0", "1=/a"]).is_err());
+        assert!(parse(&["--parent-pid", "5"]).is_err(), "no pair");
+    }
+
     #[cfg(any(target_os = "linux", target_os = "android"))] // only the /proc liveness probe below uses it
     fn state_of(pid: u32) -> Option<char> {
         let s = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
@@ -421,17 +506,16 @@ mod tests {
         let mut sh = Command::new("sh")
             .arg("-c")
             .arg(
-                r#"GLEIPNIR_RELAY_CHILD="$1 $2" "$0" --exact net::relay::tests::child_entry --nocapture --test-threads=1 </dev/null >/dev/null 2>&1 &
+                r#"GLEIPNIR_RELAY_CHILD="$1 --parent-pid $$" "$0" --exact net::relay::tests::child_entry --nocapture --test-threads=1 </dev/null >/dev/null 2>&1 &
 echo $!; read x"#,
             )
             .arg(&exe)
             .arg(format!("{port}={}", dir.path().join("s.sock").display()))
-            .arg("")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
             .unwrap();
-        // GLEIPNIR_RELAY_CHILD carries only the pair here: "$1 $2" = "PAIR ".
+        // GLEIPNIR_RELAY_CHILD: the pair, then the shell's own pid as the expected parent.
         let mut out = String::new();
         {
             let mut line = Vec::new();

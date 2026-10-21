@@ -77,17 +77,36 @@ pub struct RelayPlan {
 }
 
 /// What the helper's status line says it applied. Every field is checked by [`read_status`]: a line that claims less
-/// than Landlock enforced, seccomp and `no_new_privs` is a refusal.
+/// than Landlock enforced, seccomp and `no_new_privs` is a refusal. On macOS there is no helper and no status line:
+/// [`LayersReport::seatbelt`] is the whole report.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LayersReport {
     pub landlock_abi: u8,
-    /// Always `"enforced"`.
+    /// `"enforced"` from the helper; `"none"` on macOS.
     pub landlock: String,
     pub seccomp: bool,
     pub no_new_privs: bool,
     pub new_session: bool,
     pub relay: bool,
+    /// The run is under a Seatbelt profile (macOS); never set by the helper.
+    #[serde(default)]
+    pub seatbelt: bool,
+}
+
+impl LayersReport {
+    /// macOS: `sandbox-exec` applies the profile before the program runs, and nothing else is layered.
+    pub fn seatbelt() -> LayersReport {
+        LayersReport {
+            landlock_abi: 0,
+            landlock: "none".into(),
+            seccomp: false,
+            no_new_privs: false,
+            new_session: false,
+            relay: false,
+            seatbelt: true,
+        }
+    }
 }
 
 impl InnerSpec {
@@ -442,6 +461,7 @@ pub fn inner_main(args: impl Iterator<Item = OsString>) -> i32 {
 #[cfg(target_os = "linux")]
 mod linux {
     use super::*;
+    use crate::net::relay::PARENT_PID_ARG;
     use crate::{landlock, seccomp};
     use rustix::fs::SealFlags;
     use std::ffi::CString;
@@ -523,9 +543,9 @@ mod linux {
         }
         // 4. Landlock.
         let applied = landlock::restrict(&plan, abi_cap).map_err(|e| format!("Landlock: {e}"))?;
-        // 5. seccomp.
+        // 5. seccomp: the reduced tier's filter also refuses every socket but TCP that reaches past the host.
         let arch = seccomp::native().ok_or("seccomp: no filter for this architecture")?;
-        let prog = seccomp::compile(arch).map_err(|e| format!("seccomp: {e}"))?;
+        let prog = seccomp::compile_for(arch, plan.tier).map_err(|e| format!("seccomp: {e}"))?;
         seccomp::install(&prog).map_err(|e| format!("seccomp: {e}"))?;
         // 6. The relay, under both layers; then no TCP bind for anything after it (the reduced tier).
         let relay = spec.relay.as_ref().map(start_relay).transpose()?;
@@ -540,6 +560,7 @@ mod linux {
             no_new_privs: true,
             new_session: spec.new_session,
             relay: relay.is_some(),
+            seatbelt: false,
         };
         write_all(STATUS_FD, status_ok_line(&report).as_bytes())
             .map_err(|e| format!("the status line: {e}"))?;
@@ -709,14 +730,19 @@ mod linux {
     }
 
     /// Fork the relay and wait for its `ready` line. In the child: stdin and stdout on `/dev/null`, the ready pipe's
-    /// write end at fd 3, every other fd above 2 closed, an empty environment.
+    /// write end at fd 3, every other fd above 2 closed, an empty environment. Its argv gets `--parent-pid` and this
+    /// process's pid last: the relay refuses to start under any other parent, so one whose parent died before it
+    /// ran ends at once (Gleipnir T11-1).
     fn start_relay(r: &RelayPlan) -> Result<RelayGuard, String> {
         if r.argv.first().is_none_or(|p| !p.starts_with('/')) {
             return Err("the relay's program must be an absolute path".into());
         }
+        let me = rustix::process::getpid().as_raw_nonzero().to_string();
         let argv = r
             .argv
             .iter()
+            .map(String::as_str)
+            .chain([PARENT_PID_ARG, me.as_str()])
             .map(|a| cstring(a.as_bytes(), "the relay's argv"))
             .collect::<Result<Vec<_>, _>>()?;
         let argv_p = nul_terminated(&argv);
@@ -912,6 +938,7 @@ mod tests {
             no_new_privs: true,
             new_session: true,
             relay: false,
+            seatbelt: false,
         }
     }
 

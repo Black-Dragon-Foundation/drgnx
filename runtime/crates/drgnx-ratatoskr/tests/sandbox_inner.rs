@@ -217,6 +217,7 @@ fn status_reports_layers() {
             no_new_privs: true,
             new_session: false,
             relay: false,
+            seatbelt: false,
         }
     );
     assert_eq!(o.code, Some(0), "{}", o.stderr);

@@ -8,7 +8,81 @@ agents run as before until phase 6. The Lisp libraries on main are described in 
 
 Each section below is written by the task named in it.
 
-## Using it (Task 13)
+## Using it
+
+One API runs a command in every backend (`gleipnir::backend`, re-exported at the crate root):
+
+1. `Sandbox::detect(tier, helper, bwrap_override)` picks the backend for a `Tier` (`Full` or `Reduced`):
+   - Linux, full: bwrap ≥ 0.12.0 from a root-owned path ([The bubblewrap argv](#the-bubblewrap-argv)). Without one
+     the full tier is **refused; it never falls back to the reduced tier**, which only the caller chooses (phase 6:
+     a job's opt-in). `bwrap_override` is passed only by Ratatoskr's `test-hooks` code and is held to the same
+     root-owned rule.
+   - Linux, reduced: the inner helper alone. Both Linux tiers also need a seccomp filter for this architecture.
+   - macOS: Seatbelt (a root-owned `/usr/bin/sandbox-exec`), whatever the tier. `Sandbox::with_mac(MacContext)`
+     gives it the developer dir; gleipnir reads none itself.
+   - Anything else (Android among them): refused (`BackendKind::None`).
+
+   `helper` is an `InnerCommand`: the helper binary's path outside, its `inner_args` (`sandbox-inner`) and its
+   `relay_args` (`relay`).
+2. `gleipnir::validate(spec, &ctx, sandbox.target()?)` checks the spec for that backend's `Target`.
+3. `sandbox.prepare(valid, command)` returns a `Prepared { invocation, status, layers }`. Nothing is spawned; the
+   full tier's sources are opened here, so what was checked is what gets mounted. `Invocation` is the program, its
+   args, its exact environment, its cwd, the fds to pass at fixed numbers, and `new_session`:
+
+   | Backend | Program and args | Env | fds | `new_session` |
+   |---|---|---|---|---|
+   | bwrap | bwrap's argv, ending `-- /run/gleipnir/helper sandbox-inner --spec-fd 3 -- CMD…` | none | 3 the inner spec (sealed memfd), 4 the status pipe's write end, 5… the binds | no (bwrap's `--new-session`) |
+   | reduced | `HELPER sandbox-inner --spec-fd 3 -- CMD…` | none | 3, 4 | **yes**: the helper calls `setsid()` itself, which a process-group leader cannot |
+   | Seatbelt | `sandbox-exec -f PROFILE CMD…` or `-p TEXT CMD…` | the spec's | none | no |
+
+   The program's environment travels in the inner spec, never in argv. The relay is `/run/gleipnir/helper relay …`
+   under bwrap and the helper's own path in the reduced tier. `status` is the read end of the status pipe; its only
+   write end is in `invocation.fds`, so it moves into the spawn and is gone once the spawn returns, and EOF means the
+   helper (or bwrap before it) failed (review S6). Seatbelt has no status line: `layers` is
+   `LayersReport::seatbelt()` at once.
+4. The caller spawns the invocation from one long-lived thread (Ratatoskr: `draugr::spawn_pinned`, with `pass_fds`
+   and, for `new_session`, `setsid` before exec instead of a process group of its own) and reads
+   `gleipnir::read_status(status, stderr_tail, deadline)`. On a refusal or a timeout it kills the process group.
+
+With the `test-hooks` feature, `prepare` takes a third argument, `TestHooks { landlock_omit, abi_cap }`, which goes
+into the inner spec (Task 15's rows `landlock-layer-2` and `landlock-below-required-refused`). A release build has
+neither the type nor the parameter.
+
+**What the reduced tier refuses besides.** Without a mount namespace nothing can be laid over a file, and Landlock
+only ever adds rights, so a `hide` entry inside a root the reduced tier grants (a read, write or session root, a
+system root, the helper) is refused (`Malformed`), never left readable. A hide outside every granted root is
+unreachable anyway and passes.
+
+**Relay ports.** `backend::relay_ports(tier, wanted)` gives one session's ports. The full tier's network namespace
+is the session's own, so `wanted` (3128, 3129) is used as given. The reduced tier's relay binds on the host's
+loopback, where another session's relay may hold the same port, so it gets free ports from the kernel, held all at
+once so they differ from each other and from every port bound now (GL-T8-3). A port taken by someone else between
+the call and the relay's bind fails that run; it is never shared. The program's `HTTPS_PROXY` must name the ports
+this returns.
+
+### Ratatoskr's side
+
+`drgnx-ratatoskr/src/sandbox.rs`:
+
+- `context(env)` is the `Context`, every path taken to its true name on disk (a link resolved; a path that does
+  not exist keeps the true name of its deepest existing ancestor):
+  - `closed`: drgnx's data, config and state dirs; every socket dir a hub may use (`<runtime>/drgnx`,
+    `<state>/hub`, `<tmp>/drgnx-hub-UID`); `DRGNX_DIR`; Emacs's server dirs (`<tmp>/emacsUID`, `/tmp/emacsUID`,
+    `<runtime>/emacs`); and the helper binary's own dir (review M12), so no write bind can replace the helper;
+  - `user_sockets`: `SSH_AUTH_SOCK` and the D-Bus session bus's `unix:path=` (and `runtime=yes`);
+  - `run_parents`: `<socket dir>/s`; `program_dirs`: the absolute `PATH` entries; `env_deny`: `DRGNX_DATA_DIR
+    DRGNX_CONFIG_DIR DRGNX_AGENT DRGNX_HUB_SERVE_SOCKET DRGNX_HUB_PARENT_PID`.
+- `helper()` is this binary (its path resolved at start) with `sandbox-inner` and `relay`.
+- `to_draugr(invocation)` is the `draugr::Spec` (stdin `/dev/null`, the fds as `PassFd`s, `new_session`).
+- `ratatoskr relay --parent-pid PID [--ready-fd N] PORT=SOCKET…` runs [the relay](#the-relay-task-11).
+- `ratatoskr sandbox run --spec FILE --result FILE [--tier full|reduced] [--bwrap PATH] [--pause-before-spawn FIFO]
+  [--landlock-omit PATH]… [--landlock-abi-cap N] -- CMD…` exists only with `test-hooks`, for the escape rows. It
+  detects, validates the spec against `context`, prepares, and with `--pause-before-spawn` writes `opened` to the
+  FIFO once the sources are open and waits for a line back. It spawns through `draugr::spawn_pinned` (stdin
+  `/dev/null`, the child's stdout passed through, its stderr's tail written once it has exited), reads the status
+  line within its deadline, waits, and writes `{"refused": null|{rule, path, message}, "layers": …, "exit": N}` to
+  `--result`. A refusal exits 3, otherwise the child's code; rows judge by the result file alone, since a child may
+  exit 3 itself.
 
 ## The spec
 
@@ -39,7 +113,9 @@ reaches a backend: it is not `Deserialize`, has no mutable access, and only `val
 constructor takes a token whose field is private to that file). The `Context` holds the caller's facts, all true
 names: `home`, `closed` and `open_inside_closed`, `user_sockets`, `run_parents` (where session dirs are made),
 `program_dirs` (the caller's `PATH`) and `env_deny`. Gleipnir names none of them itself; a context path that is not
-absolute and canonical refuses the spec (`Malformed`), so a sloppy context never weakens a check.
+absolute and canonical refuses the spec (`Malformed`), so a sloppy context never weakens a check. Context paths are
+looked up too (GL-T2-2): one that exists must be its own true name, and one that does not must have a true-named
+deepest existing ancestor, as a spec's own paths must; a home given through a link is `Malformed`.
 
 ## What is refused
 
@@ -90,7 +166,8 @@ Apart from rule 11, a dest may be any canonical absolute path: only sources expo
 ## Platforms
 
 The platform boundary is `gleipnir::backend` (`src/backend/mod.rs` holds the table) plus the three Linux layer
-modules. `BackendKind` is `Bwrap`, `Reduced`, `Seatbelt` or `None`; Task 13 detects which one a host gets.
+modules. `BackendKind` is `Bwrap`, `Reduced`, `Seatbelt` or `None`; `Sandbox::detect` picks one
+([Using it](#using-it)).
 
 | What | Where | Gate | Android |
 |---|---|---|---|
@@ -135,13 +212,26 @@ A known layout gives its install root, matched on whole path components:
 - A root inside another is left to the outer one; dirs outside the home are the system's reads already.
 
 Bin dirs rather than whole tool homes keep the credentials beside them out (`~/.cargo/credentials.toml` is not in
-`~/.cargo/bin`). `hide_list(&roots)` is the `hide` list for the ones inside a root: each existing
-`root/<name>` for `SECRET_FILES` (`.npmrc`, `etc/npmrc`, `.yarnrc`, `.yarnrc.yml`, `.pypirc`, `.netrc`,
-`.git-credentials`, `.env`, `credentials`, `credentials.toml`, `credentials.json`, `auth.json`), as true names.
+`~/.cargo/bin`). `hide_list(&roots)` is the `hide` list for the ones inside a root, as true names:
+
+- each existing `root/<name>` for `SECRET_FILES` (`.npmrc`, `etc/npmrc`, `.yarnrc`, `.yarnrc.yml`, `.pypirc`,
+  `.netrc`, `.git-credentials`, `.env`, `credentials`, `credentials.toml`, `credentials.json`, `auth.json`);
+- every file or link named like one of the dot-names among them (`.npmrc`, `.yarnrc`, `.yarnrc.yml`, `.pypirc`,
+  `.netrc`, `.git-credentials`, `.env`) down to `SCAN_DEPTH` = 3 below the root (`root/x`, `root/a/x`,
+  `root/a/b/x`), walking no link (GL-T3-3). The scan reads each directory down to `root/a/b` once: measured on a
+  developer machine, 19 directories and 78 entries for `~/.rustup/toolchains`, and 86 and 534 for the largest mise
+  install there (a JDK); three walks of the Rust root took 10 ms in all, with the cache warm. The plain
+  names count only at their fixed place: `auth.json` or `credentials` deep in a package is that package's data,
+  and hiding it would break the package. Deeper than 3 lies package content (`lib/node_modules/PKG/…`), whose
+  dotfiles are the package author's, not the user's; the places a user's own credentials go in a toolchain root
+  (`etc/npmrc`, a root-level `.npmrc`) are fixed and shallow.
 
 The module reads paths and metadata only and has no `cfg` gate: it builds the same on every unix target, Android
-included (which has no backend to use it). Roots still go through `validate`'s `read` rules; what those refuse is
-dropped by the caller.
+included (which has no backend to use it). `readable(roots, &ctx, target)` runs every root through `validate`'s
+`read` rules, as a spec's lone `read` entry, and drops each one refused or gone (GL-T3-1); the caller passes the
+roots it returns. In the reduced tier a hide cannot be honoured inside a granted root ([Using it](#using-it)), so
+there a root holding a credential file is refused at `prepare`; phase 6 leaves such a root out of a reduced-tier
+spec.
 
 ## The bubblewrap argv
 
@@ -263,11 +353,12 @@ an fd that is not sealed so. The program's environment travels here, never in ar
   leads only a process group (`setpgid`) cannot start a session and is refused. **The reduced tier must be spawned
   with `setsid` before exec**, which also makes its pid the group's, for the kill.
 - **4.** Landlock `restrict(plan, abi_cap)`.
-- **5.** seccomp: `install(compile(native()))`.
+- **5.** seccomp: `install(compile_for(native(), plan.tier))`; the reduced tier's filter adds its socket rules.
 - **6.** The relay, if any: forked under both layers, exec'd with an empty environment, stdin and stdout on
   `/dev/null`, its ready pipe at fd 3 and no other fd above 2. The helper waits for exactly `ready\n` within the
   timeout; a relay that exits first, says something else or is late fails the run (and is killed). The relay's parent
-  is the helper, alive until `ready`, so the relay's parent check cannot miss a parent that died before it started.
+  is the helper, which appends `--parent-pid` and its own pid to the relay's argv: the relay refuses to start under
+  any other parent ([The relay](#the-relay-task-11)).
   Then, when the plan has `tcp_bind_ports` (the reduced tier), one more Landlock layer refuses every TCP bind: the
   relay bound its ports under the first layer, and the program gets none.
 - **7.** One status line on fd 4, then fd 4 is closed.
@@ -278,7 +369,8 @@ an fd that is not sealed so. The program's environment travels here, never in ar
 A failure in steps 1–7 writes `{"ok":false,"error":"…"}` to fd 4 and exits 125, and nothing is exec'd. Not found
 exits 127, found but not runnable 126; a `chdir` that fails after the status line exits 125 with a stderr line
 only. The status line of a run is
-`{"ok":true,"landlock_abi":N,"landlock":"enforced","seccomp":true,"no_new_privs":true,"new_session":B,"relay":B}`.
+`{"ok":true,"landlock_abi":N,"landlock":"enforced","seccomp":true,"no_new_privs":true,"new_session":B,"relay":B,"seatbelt":false}`
+(`seatbelt` is true only in `LayersReport::seatbelt()`, the macOS report, which no helper sends).
 On other systems `sandbox-inner` exits 125 with "the inner helper is Linux only".
 
 **Reading the status.** `status_pipe()` gives the parent's read end and the write end the spawn moves to fd 4.
@@ -295,8 +387,8 @@ EOF needs every write end closed: bwrap's monitor closes its copy, and draugr's 
 `ValidSpec`: the reduced plan, the spec's environment and `chdir`, a new session, and under `Net::Isolated` the relay
 `helper relay_args… --ready-fd 3 PORT=SOCK…`. The relay is exec'd under Landlock, so the helper file joins the read
 roots then. `prepare(inner, helper, inner_args, command)` gives the program (the helper), its argv (`inner_args…
---spec-fd 3 -- command…`), the fds (the spec at 3, the status write end at 4) and the status read end. Task 13 turns
-it into an `Invocation`; the environment is empty.
+--spec-fd 3 -- command…`), the fds (the spec at 3, the status write end at 4) and the status read end.
+`Sandbox::prepare` turns it into an `Invocation` with an empty environment and `new_session` set.
 
 Tests: `inner::tests` (the arguments, the thread check in a threaded process, the status lines, the sealed memfd,
 `read_status` on EOF, in pieces and at its deadline, the test-hook fields), `backend::linux::reduced::tests`, and
@@ -411,11 +503,22 @@ The filter allows every call by default and refuses this list (`seccomp::rules()
 | `socket(AF_VSOCK)` | EPERM | vsock reaches the host or the hypervisor, past the network namespace. |
 | `clone3` | ENOSYS | Its flags sit in a struct that seccomp cannot read. On ENOSYS, libc falls back to `clone`, which the rules above check. EPERM would break thread creation instead. |
 
-Argument checks compare only the **low 32 bits** of the argument. The kernel reads an `ioctl` request and a `socket`
-domain as 32-bit ints, so `TIOCSTI | 1 << 32` is TIOCSTI to the kernel, and the filter must see it that way too. The
-`CLONE_NEW*` bits all sit in the low half, and legacy `clone` ignores the high half.
+**The reduced tier adds socket rules** (`seccomp::reduced_rules()`; `rules_for(tier)` is the whole list). It has no
+network namespace, and Landlock's network rules cover TCP only, so the only sockets it may make that reach past the
+host are TCP ones, which Landlock holds to the relay's ports:
 
-`seccomp::compile(arch)` builds the BPF for `X86_64` or `Aarch64` on any Linux host. The call numbers come from a table
+| Refused (reduced tier) | Result | Why |
+|---|---|---|
+| `socket(domain)` for every domain but `AF_UNIX`, `AF_INET`, `AF_INET6`, `AF_NETLINK` | EPERM | Families whose connects Landlock does not see (SMC, which talks TCP from inside the kernel; RDS; TIPC; packet; vsock). One rule of four "not equal" conditions. |
+| `socket(AF_INET or AF_INET6, type)` unless `type & 0xf` is `SOCK_STREAM` | EPERM | No UDP (so no DNS past the proxy) and no raw sockets. `0xf` is `SOCK_TYPE_MASK`: `SOCK_NONBLOCK` and `SOCK_CLOEXEC` sit above it and are allowed. seccompiler has no masked "not equal", so it is one rule per other type value (15 per family). |
+| `socket(AF_INET or AF_INET6, SOCK_STREAM, protocol)` unless the protocol is 0 or `IPPROTO_TCP` | EPERM | SCTP and MPTCP stream sockets are not TCP to Landlock, which then leaves their connects alone. |
+
+Argument checks compare only the **low 32 bits** of the argument. The kernel reads an `ioctl` request and a `socket`
+domain, type and protocol as 32-bit ints, so `TIOCSTI | 1 << 32` is TIOCSTI to the kernel, and the filter must see it
+that way too. The `CLONE_NEW*` bits all sit in the low half, and legacy `clone` ignores the high half.
+
+`seccomp::compile_for(arch, tier)` builds the BPF for `X86_64` or `Aarch64` on any Linux host (`compile(arch)` is
+the full tier's); the inner helper compiles its plan's tier. The call numbers come from a table
 in the module, so neither filter depends on the host's libc. seccompiler `=0.5.0` compiles the EPERM rules. Its
 architecture check kills a call that comes from any other audit arch. Before seccompiler's code there is a short
 hand-written prologue. None of its jumps leave it, and none of seccompiler's jumps enter it:
@@ -455,7 +558,12 @@ Tests (`seccomp::tests`):
   - `mount` on a missing target: ENOENT unfiltered, EPERM filtered;
   - `TIOCSTI | 1 << 32` on a pty the child makes its controlling terminal: EIO or success unfiltered, EPERM filtered;
   - x32 `getpid`: killed;
-  - `getpid` and `socket(AF_UNIX)` still work.
+  - `getpid` and `socket(AF_UNIX)` still work;
+  - under the reduced tier's filter, a UDP socket and an MPTCP stream socket: EPERM; a TCP one (with
+    `SOCK_CLOEXEC | SOCK_NONBLOCK`) still works; under the full tier's, the UDP socket works.
+- `bpf_golden_{x86_64,aarch64}_reduced`, `reduced_rules_are_the_socket_set`, `reduced_socket_table` (every domain,
+  type value with and without flags and high bits, and protocol, through both programs) and
+  `reduced_differs_from_full_only_on_socket` (every other number, both argument extremes, the foreign-arch kill).
 
   A case is skipped, with the reason printed, when its control does not give the unfiltered result. Inside a podman
   container, the container's own filter already refuses `io_uring_setup`, `add_key` and vsock, so those three skip
@@ -573,7 +681,7 @@ The invocation is `/usr/bin/sandbox-exec -f FILE CMD…` or `-p TEXT CMD…`, wi
 `chdir` as its directory. `sandbox-exec` comes from `backend::macos::find()`, which accepts only
 `/usr/bin/sandbox-exec` when only root can change it (`eitri::trusted_program`), never one on `PATH`. A command whose
 program is empty or starts with `-` is refused (`sandbox-exec` would read it as an option). There is no inner helper
-and no status fd on macOS: the layers are reported as Seatbelt's once `sandbox-exec` runs (Task 13), and draugr's
+and no status fd on macOS: `Sandbox::prepare` reports the layers as `LayersReport::seatbelt()`, and draugr's
 close-on-exec loop is what keeps inherited fds out (review S7). `sandbox-exec` is deprecated but still works on macOS
 15 and 26; Apple does not document SBPL as an API, so the macOS CI rows are the check on every runner image.
 
@@ -626,9 +734,15 @@ The relay (`gleipnir::net::relay`) is the process that makes those ports: for ea
   small default).
 - **It ends with its parent.** It runs on a `current_thread` runtime, polls `getppid` each second and exits 0 when it
   changes (the sandbox's init is gone), and exits 0 on SIGTERM.
+- **It starts only under the parent it was given** (Gleipnir T11-1). `--parent-pid PID` is required: the relay asks
+  for SIGTERM when its parent exits (`PR_SET_PDEATHSIG`, Linux), then checks that `getppid` is `PID`, and exits 1
+  otherwise. In that order a parent that dies after the check is caught by the signal, and one that died before it
+  (the relay was reparented before it ran) by the check. The inner helper appends `--parent-pid` and its own pid to
+  the relay's argv; under the reduced tier the signal also ends the relay when the program exits.
 - **Interface:** `RelayPair`, `parse_pair` (port 1-65535, absolute path), `run(pairs, ready)` and
-  `main(args)` (`--ready-fd N PAIR...`; exit 0 normal, 1 failed to bind, 2 bad arguments). It builds on every target;
-  nothing starts it on Android, which has no sandbox backend.
+  `main(args)` (`--parent-pid PID [--ready-fd N] PAIR...`, the options anywhere; exit 0 normal, 1 failed to bind or
+  not under `PID`, 2 bad arguments). Ratatoskr runs it as `ratatoskr relay`. It builds on every target; nothing
+  starts it on Android, which has no sandbox backend.
 
 ## The proxy (Task 10)
 
