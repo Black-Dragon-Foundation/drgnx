@@ -368,3 +368,92 @@
        (should (eql (plist-get written :version) 2))
        (should (equal (plist-get written :enabled) '(editor/evil)))
        (should (equal (plist-get written :disabled) '(test/a)))))))
+
+;;;; Notices (a failed module shows at once)
+
+(require 'drgnx-notice)
+(load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
+
+(defmacro drgnx-modules-test--noticing (&rest body)
+  "BODY on a fresh module table, report and notice model."
+  (declare (indent 0))
+  `(drgnx-notice-test-with-model (drgnx-test--fresh-modules ,@body)))
+
+(defun drgnx-modules-test--notice (id)
+  "The `modules' notice at ID, or nil."
+  (seq-find (lambda (n) (and (eq (plist-get n :source) 'modules) (eq (plist-get n :id) id))) (drgnx-notices)))
+
+(ert-deftest drgnx-modules/a-failed-module-posts-a-fail-condition ()
+  (drgnx-modules-test--noticing
+    (drgnx-module-define 'test/broken :doc "b" :stage 'startup :setup (lambda () (error "kaputt")))
+    (drgnx-modules-run 'startup)
+    (let ((n (drgnx-modules-test--notice 'test/broken)))
+      (should (eq (plist-get n :severity) 'fail))
+      (should (eq (plist-get n :life) 'condition))
+      (should (equal (plist-get n :text) "test/broken did not start: kaputt"))
+      (should (equal (plist-get n :fix) "Turn it off in Preferences: Modules, or report the error"))
+      (should (eq (plist-get n :command) 'preferences-modules)))))
+
+(ert-deftest drgnx-modules/ok-later-clears-it ()
+  (drgnx-modules-test--noticing
+    (drgnx-modules--record 'test/m 'startup 1 'failed "kaputt")
+    (should (drgnx-modules-test--notice 'test/m))
+    (drgnx-modules--record 'test/m 'startup 1 'ok)
+    (should-not (drgnx-modules-test--notice 'test/m))))
+
+(ert-deftest drgnx-modules/turning-it-off-clears-it ()
+  (drgnx-modules-test--noticing
+    (drgnx-modules--record 'test/m 'startup 1 'failed "kaputt")
+    (drgnx-modules--record 'test/m 'startup nil 'off)
+    (should-not (drgnx-modules-test--notice 'test/m))
+    (drgnx-modules--record 'test/m 'startup 1 'failed "kaputt")
+    (drgnx-modules--record 'test/m 'startup 0 'disabled)
+    (should-not (drgnx-modules-test--notice 'test/m))))
+
+(ert-deftest drgnx-modules/missing-packages-and-requires-are-warn ()
+  (drgnx-modules-test--noticing
+    (drgnx-modules--record 'test/p 'startup 0 'missing-packages nil '(foo bar))
+    (drgnx-modules--record 'test/r 'startup 0 'missing-requires nil '(test/p))
+    (let ((p (drgnx-modules-test--notice 'test/p)) (r (drgnx-modules-test--notice 'test/r)))
+      (should (eq (plist-get p :severity) 'warn))
+      (should (equal (plist-get p :text) "test/p waits for packages: foo bar"))
+      (should (equal (plist-get p :fix) "drgnx sync installs them"))
+      (should (eq (plist-get r :severity) 'warn))
+      (should (equal (plist-get r :text) "test/r needs test/p, which did not start")))))
+
+(ert-deftest drgnx-modules/problems-are-warn ()
+  (drgnx-modules-test--noticing
+    (drgnx-modules--record 'test/m 'startup 1 'ok nil nil '("a" "b"))
+    (let ((n (drgnx-modules-test--notice 'test/m)))
+      (should (eq (plist-get n :severity) 'warn))
+      (should (equal (plist-get n :text) "test/m: a; b")))
+    (drgnx-modules--record 'test/m 'startup 1 'ok)
+    (should-not (drgnx-modules-test--notice 'test/m))))
+
+(ert-deftest drgnx-modules/off-modules-are-one-info-condition ()
+  (drgnx-modules-test--noticing
+    (should-not (drgnx-modules-test--notice 'off))
+    (drgnx-modules--record 'test/a 'startup nil 'off)
+    (drgnx-modules--record 'test/b 'startup nil 'off)
+    (let ((n (drgnx-modules-test--notice 'off)))
+      (should (eq (plist-get n :severity) 'info))
+      (should (eq (plist-get n :life) 'condition))
+      (should (equal (plist-get n :text) "2 modules are off: test/a, test/b"))
+      (should (eq (plist-get n :command) 'preferences-modules)))
+    (drgnx-modules--record 'test/a 'startup 1 'ok)
+    (should (equal (plist-get (drgnx-modules-test--notice 'off) :text) "1 module is off: test/b"))
+    (drgnx-modules--record 'test/b 'startup 1 'ok)
+    (should-not (drgnx-modules-test--notice 'off))))
+
+(ert-deftest drgnx-modules/a-load-failure-is-a-fail-condition ()
+  (drgnx-modules-test--noticing
+    (let ((dir (make-temp-file "drgnx-mods" t)))
+      (unwind-protect
+          (progn
+            (make-directory (expand-file-name "cat" dir))
+            (write-region "(error \"kx-load\")\n" nil (expand-file-name "cat/drgnx-bad.el" dir) nil 'silent)
+            (drgnx-modules-load-directory dir)
+            (let ((n (drgnx-modules-test--notice 'cat/drgnx-bad)))
+              (should (eq (plist-get n :severity) 'fail))
+              (should (string-search "kx-load" (plist-get n :text)))))
+        (delete-directory dir t)))))

@@ -21,6 +21,14 @@ in the order of the stages); an external module's row says its path and features
 waiting for packages, from the last session; when all is well it counts the modules that run and those that are
 off ("12 ok, 3 off"), and every answer says how old the report is ("from the last session, 2 h ago").
 
+## When a module does not start
+
+A module that fails, waits for packages or for a module it needs, or reports a problem from its doctor check shows at
+once as a notice (source `modules`), not only in the report: after startup the status bar has the count, the echo area
+names the module once, and a click opens the Notices list. The notice stays until the module works or you turn it off
+(`ok` or `off` clears it). Modules that are off are one quiet line, "N modules are off: …", which opens Preferences:
+Modules. Packages that were not activated and modules that did not start at all are notices too.
+
 ## Turning a module off and on now
 
 `RET` (Turn On / Off) on a row in Preferences: Modules takes effect in the running Emacs; no restart.
@@ -102,8 +110,8 @@ for any other change to the file, `(drgnx-modules-update-state FN)` (FN gets the
 `~/.config/drgnx/config.el` (in your config folder: [where drgnx keeps its files](files.md#where-drgnx-keeps-its-files)) is your own Emacs Lisp. It loads at the end of every start,
 after the `startup` modules, so what you set there wins; for a package that loads later, use
 `with-eval-after-load`. **Preferences: Open User Config** (palette, Options menu) opens it, made from a short
-template the first time. An error in it is said in `*Messages*` (what came before it ran, the rest did not) and
-drgnx starts anyway; `drgnx safe` skips it. Code you want reported as a module, with its own row in
+template the first time. An error in it is a notice (`✕` in the status bar, one line in the echo area at startup;
+what came before the error ran, the rest did not) and drgnx starts anyway; `drgnx safe` skips it. Code you want reported as a module, with its own row in
 Preferences: Modules, is an external module (below).
 
 What Customize saves (and `M-x package-install`'s list of packages) goes to `custom.el` beside it, which loads in every

@@ -307,7 +307,9 @@ buffers excepted."
                                   (drgnx-test-modules--without-emacs-timers (drgnx-modules-fingerprint)))))
                 (ert-fail (cons "modules left state behind after their teardown:" lines))))
             value))
-      (when snap (drgnx-test-modules--restore snap))
+      (when snap
+        (drgnx-test-modules--restore snap)
+        (drgnx-notice-clear 'modules))       ; the notices its modules' records posted (failed, off) go with them
       (delete-directory cfg t))))
 
 (defmacro drgnx-test-with-modules (modules &rest body)

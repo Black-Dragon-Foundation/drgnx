@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'drgnx-file)
 (require 'drgnx)
+(load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-user-config-test--with (dir &rest body)
   "BODY with DRGNX_CONFIG_DIR a temp directory DIR."
@@ -26,11 +27,12 @@
   (drgnx-user-config-test--with dir
     (write-region "(setq drgnx-user-config-test--ran 'before)\n(error \"kx-broken\")\n(setq drgnx-user-config-test--ran 'after)\n"
                   nil (drgnx-user-config-file) nil 'silent)
-    (let (said)
-      (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
-        (drgnx--load-user-config))
+    (drgnx-notice-test-with-model
+      (drgnx--load-user-config)
       (should (eq drgnx-user-config-test--ran 'before))
-      (should (seq-some (lambda (m) (string-match-p "config\\.el.*kx-broken" m)) said)))))
+      (should (seq-some (lambda (n) (and (eq (plist-get n :source) 'config)
+                                         (string-match-p "config\\.el.*kx-broken" (plist-get n :text))))
+                        (drgnx-notices))))))
 
 (ert-deftest drgnx-user-config/open-makes-it-from-a-template ()
   (drgnx-user-config-test--with dir
