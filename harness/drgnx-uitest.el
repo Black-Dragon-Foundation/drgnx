@@ -27,6 +27,18 @@
 
 ;;;; Frames and windows
 
+(defun drgnx-uitest-scale-ready-p (scale size factor geometry)
+  "Non-nil when a root frame on a monitor of SIZE (\"WxH\", device pixels) at SCALE shows FACTOR (its
+`frame-scale-factor') and GEOMETRY (the monitor's (X Y W H)).  GTK 3 knows only integer scales: a fractional
+SCALE reaches Emacs as (ceiling SCALE), and the geometry is (W / SCALE) * (ceiling SCALE) (2880x1800 at 1.25:
+4608x2880), within one logical pixel."
+  (let ((c (ceiling scale)))
+    (and (= factor c)
+         (or (= scale c)
+             (let ((px (mapcar #'string-to-number (split-string size "x"))))
+               (and (<= (abs (- (nth 2 geometry) (* c (round (/ (float (nth 0 px)) scale))))) c)
+                    (<= (abs (- (nth 3 geometry) (* c (round (/ (float (nth 1 px)) scale))))) c)))))))
+
 (defun drgnx-uitest-root-frame ()
   "The session's root frame: the first visible graphical frame that is not a child frame.
 Falls back to the selected frame (a daemon's terminal frame, or batch)."

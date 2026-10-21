@@ -594,6 +594,28 @@ process group) with the same caps (`MemoryMax=3G`, `RuntimeMaxSec`) and the same
 | `kwin` | `dbus-run-session -- kwin_wayland --virtual --width W --height H --output-count N --socket wayland-1 --no-lockscreen --no-global-shortcuts --exit-with-session "EMACS ARGS"` (outputs `Virtual-0…`, side by side), with `XDG_CURRENT_DESKTOP=KDE`, `KDE_FULL_SESSION=true`, `XDG_SESSION_TYPE=wayland` | pgtk, placed by KWin; KWin exits when it does | its own bus (KWin's scripting API, which the adapter uses, is on it) and runtime directory (as sway); no XWayland; `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_CACHE_HOME` (and `MESA_SHADER_CACHE_DIR`) under `RUN/xdg/`, so KWin never reads or writes `~/.config/kwinrc` or `kwinoutputconfig.json` — the session's Emacs gets them too (fontconfig, GTK settings), so a kwin session reads less of `~` than the others |
 | `niri` | the sway session with one output, whose config runs `niri -c RUN/niri.kdl` instead of Emacs; niri (its winit backend, a window on sway: niri has no headless backend) spawns `sh RUN/niri-session.sh` | pgtk, without sway's `SWAYSOCK`/`I3SOCK` (Emacs must see niri); after it, `niri msg action quit` ends niri and sway | as sway; `xwayland-satellite { off; }`, so no X display in the shared `/tmp`; `XDG_CACHE_HOME` and `MESA_SHADER_CACHE_DIR` under `RUN/xdg/cache`, so niri's GL writes no shader cache to `~/.cache`. **One output only** (`winit`): `--monitors 2` is refused |
 
+### Size and scale
+
+`DRGNX_UI_SIZE=3840x2160` sets the monitor size in device pixels (a size given to `ui start --size` or `ui_start`
+wins; default 1600x900). `DRGNX_UI_SCALE=2` puts every monitor at that scale, `DRGNX_UI_SCALES="1 2"` gives one scale
+per monitor (a count other than the monitors' fails with "scales need one per monitor"); in Lisp,
+`(drgnx-ui-start nil size nil nil monitors compositor SCALES)`. Scale 1 is the default and changes nothing. The
+scale is applied before Emacs starts, and `ui start` then waits up to 10 s for the root frame to show the first
+monitor's scale, else stops the session and fails with `scale S not applied`.
+
+| Compositor | How the scale is applied |
+|---|---|
+| `mutter` | `gdctl set --logical-monitor [--primary] --monitor Meta-k --scale S --x X --y 0` per monitor, run (retried) in front of Emacs; X is the sum of the monitors' logical widths (W / S). mutter 50 takes fractional scales on its headless virtual monitor |
+| `sway` | `output HEADLESS-k scale S` in `sway.conf`, positions in logical pixels |
+| `kwin` | `kwin_wayland --scale S` when every scale is the same and the binary has the flag, else `kscreen-doctor output.k.scale.S` per output, run by `RUN/kwin-session.sh` in front of Emacs (not exercised on the dev host: no KWin there) |
+| `x11`, `i3`, `niri` | refused: they have no monitor scale |
+
+The wait condition: GTK 3 knows only integer scales. At an integer S the root's `(frame-scale-factor)` is S; at a
+fractional S it is `(ceiling S)` and the monitor's `geometry` in `display-monitor-attributes-list` is (W / S) ·
+`(ceiling S)` (R12: 2880×1800 at 1.25 gives 4608×2880), within one logical pixel. The session's tests see
+`DRGNX_UI_SESSION_SIZE` and `DRGNX_UI_SESSION_SCALES` (the latter empty at scale 1). The 125 % matrix is 1920×1080,
+2560×1440, 2560×1600, 2880×1800 and 3840×2160 at `DRGNX_UI_SCALE=1.25`.
+
 The configs are generated per session: `sway.conf` (one `output HEADLESS-k resolution WxH position X 0` per monitor,
 `default_border none`, `exec` of the session's Emacs followed by `swaymsg exit` — sway lives as long as Emacs, as mutter
 does with `--`) and `i3.conf`. Nothing is included: never `~/.config/sway`, `~/.config/i3` or `/etc/sway`. The X11

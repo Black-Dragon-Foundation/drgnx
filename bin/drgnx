@@ -1443,6 +1443,7 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
                                run; prints the runs that failed and how often each test did (heavy lease)
        drgnx test --ui [--compositor mutter|sway|x11|i3|kwin|niri]
                                GUI tests in a headless session (mutter; or sway, Xvfb, Xvfb with i3, KWin, niri)
+                               (sessions: DRGNX_UI_SIZE=WxH, DRGNX_UI_SCALE=S or DRGNX_UI_SCALES="S1 S2"; mutter/sway/kwin)
        drgnx test --tty        terminal tests: Emacs in private tmux servers (needs tmux; docs/develop/harness.md)
        drgnx test --bench      the workbench vs treemacs and ibuffer, timed in a GUI session
        drgnx test --perf [--audit | --ab REF [--n N]]
