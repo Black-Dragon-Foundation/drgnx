@@ -1432,3 +1432,36 @@ echo \"agent ${DRGNX_AGENT-unset} job ${DRGNX_JOB-unset} task ${DRGNX_TASK-unset
       (call-process "pkill" nil nil nil "-KILL" "-f" (concat "drgnx-stress-loop " tag))
       (delete-directory parent t)
       (delete-directory dir t))))
+
+;;;; drgnx childframe-elpa — the pinned child-frame packages (test/fixtures/childframe-packages.eld)
+
+(defun drgnx-bin-test--childframe-run (hash)
+  "Run `drgnx childframe-elpa' on a local archive of two packages whose pins say HASH for corfu (nil: its real hash);
+return (EXIT OUTPUT INSTALLED-DIRECTORY-NAMES)."
+  (load (expand-file-name "test/fixtures/pkg-fixture" drgnx-bin-test--root) nil t)
+  (drgnx-bin-test--with-setup ((emacs (expand-file-name invocation-name invocation-directory)))
+    (let* ((arch (expand-file-name "arch" dir)) (out (expand-file-name "out" dir)) (pins (expand-file-name "pins.eld" dir))
+           (sha (lambda (f) (secure-hash 'sha256 (drgnx-pkg-test--bytes (expand-file-name f arch))))))
+      (drgnx-pkg-test--archive arch '((posframe "1.5.3") (corfu "2.16")))
+      (with-temp-file pins
+        (prin1 `((posframe "1.5.3" :archive "fx" :sha256 ,(funcall sha "posframe-1.5.3.el"))
+                 (corfu "2.16" :archive "fx" :sha256 ,(or hash (funcall sha "corfu-2.16.el"))))
+               (current-buffer)))
+      (let ((r (drgnx-bin-test--call drgnx-bin-test--bin
+                                     (append env (list (concat "DRGNX_EMACS=" emacs) (concat "DRGNX_CHILDFRAME_PINS=" pins)
+                                                       (concat "DRGNX_CHILDFRAME_ARCHIVES=fx=" arch)))
+                                     "childframe-elpa" out)))
+        (list (car r) (cdr r)
+              (and (file-directory-p out) (seq-remove (lambda (f) (string-prefix-p "." f)) (directory-files out))))))))
+
+(ert-deftest drgnx-bin/childframe-elpa-installs-the-pins ()
+  (pcase-let ((`(,exit ,output ,dirs) (drgnx-bin-test--childframe-run nil)))
+    (ert-info (output) (should (eql 0 exit)))
+    (should (member "posframe-1.5.3" dirs))
+    (should (member "corfu-2.16" dirs))))
+
+(ert-deftest drgnx-bin/childframe-elpa-refuses-a-bad-hash ()
+  (pcase-let ((`(,exit ,output ,dirs) (drgnx-bin-test--childframe-run (make-string 64 ?0))))
+    (should-not (eql exit 0))
+    (should (string-match-p "sha256" output))
+    (should-not (member "corfu-2.16" dirs))))

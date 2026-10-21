@@ -1016,6 +1016,27 @@ for a timer. Load it with `(load (expand-file-name "test/fixtures/clock-fixture"
   clock; a delay counts from the virtual start; one `drgnx-test-idle` call is one pause; pending layer timers are named
   and cleared at the end.
 
+## Child-frame packages
+
+Tests of child frames against real packages (the compositor's popups, the popup perf workloads) use posframe, corfu,
+eldoc-box, company-box, which-key-posframe, transient-posframe, vertico-posframe and mini-frame, pinned in
+`test/fixtures/childframe-packages.eld`: `(NAME VERSION :archive ARCHIVE :sha256 HASH)`, the hash of the archive file.
+`bin/drgnx childframe-elpa DIR` installs exactly those versions into the new directory `DIR` the way `drgnx sync`
+does, in a private data directory (never your configuration or `elpa`): the hash is checked before the file enters
+the cache, the signature where the archive signs (GNU ELPA), and a hash that differs is refused and leaves `DIR`
+absent. What the packages need (compat, dash, company, vertico, …) comes along at the archives' newest, unpinned.
+MELPA serves only its newest build of a package, so when one is replaced the install fails until its pin is bumped.
+
+```sh
+bin/drgnx childframe-elpa .claude/tmp/childframe-elpa
+DRGNX_CHILDFRAME_ELPA="$PWD/.claude/tmp/childframe-elpa" bin/drgnx test ...
+```
+
+`(drgnx-uitest-childframe-packages)` puts the pinned packages from `DRGNX_CHILDFRAME_ELPA` on `load-path` and returns
+their names, or nil when the variable is unset or the directory lacks one, so tests `skip-unless` it, as the modal
+tests do with `DRGNX_MODAL_ELPA`. A session inherits the variable (`drgnx-ui-keep-env`). The tests of the command
+point `DRGNX_CHILDFRAME_PINS` and `DRGNX_CHILDFRAME_ARCHIVES` (`NAME=DIR,…`) at a local archive.
+
 ## Modal tests
 
 Loading evil cannot be undone in a process (its hooks and advice stay), and ERT runs tests by name, so the tests that

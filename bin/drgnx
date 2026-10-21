@@ -1523,6 +1523,8 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
                                lists the holders; docs/develop/check.md)
        drgnx ui COMMAND        headless GUI Emacs sessions: start, stop, ls, reap, state, shot,
                                click, keys, type, measure (drgnx ui --help; docs/develop/harness.md)
+       drgnx childframe-elpa DIR
+                               (tests) install the pinned child-frame packages (posframe, corfu, …) into the new DIR
 USAGE
 }
 
@@ -1538,6 +1540,9 @@ case "${1:-help}" in
   onboard) shift
         "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" -L "$here/wb" \
               -l drgnx-onboard -f drgnx-onboard-cli -- "$@" ;;
+  childframe-elpa) shift   # the pinned child-frame packages into a new DIR (docs/develop/harness.md)
+        "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
+              -l drgnx-uitest -f drgnx-uitest-childframe-cli -- "$@" ;;
   safe) shift; DRGNX_SAFE=1 exec "$(emacs_bin || echo false)" --init-directory="$here/init" "$@" ;;
   hub) shift
         "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \

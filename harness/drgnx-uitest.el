@@ -798,5 +798,99 @@ Removes the timing advice: it must not stay and slow down what is measured later
                                                    :timer (plist-get g :timer)))
                                  (plist-get r :guard)))))))
 
+;;;; The child-frame packages (posframe, corfu, …): pinned, installed once, read-only in tests
+
+(defvar drgnx-pkg-native-compile)
+(defvar drgnx-pkg-shipped-lock)
+(defvar drgnx-pkg-default-archives)
+(declare-function drgnx-pkg-sync "drgnx-pkg")
+(declare-function drgnx-pkg-write-lock "drgnx-pkg")
+(declare-function drgnx-pkg--desc-entry "drgnx-pkg")
+(declare-function drgnx-pkg--file "drgnx-pkg")
+(defvar package-gnupghome-dir)
+(declare-function drgnx-elpa-dir "drgnx-paths")
+
+(defconst drgnx-uitest--childframe-pins-file
+  (expand-file-name "../test/fixtures/childframe-packages.eld"
+                    (file-name-directory (or load-file-name buffer-file-name default-directory)))
+  "The pins: (NAME VERSION :archive ARCHIVE :sha256 HASH), the file's only form.")
+
+(defun drgnx-uitest--childframe-pins ()
+  "The pins; $DRGNX_CHILDFRAME_PINS names another file (the tests' own)."
+  (with-temp-buffer
+    (insert-file-contents (or (getenv "DRGNX_CHILDFRAME_PINS") drgnx-uitest--childframe-pins-file))
+    (read (current-buffer))))
+
+(defun drgnx-uitest--childframe-archives ()
+  "The archives: $DRGNX_CHILDFRAME_ARCHIVES (\"NAME=URL-or-DIR,…\", the tests' local ones), else drgnx's."
+  (if-let* ((env (getenv "DRGNX_CHILDFRAME_ARCHIVES")))
+      (mapcar (lambda (s) (let ((i (string-search "=" s))) (cons (substring s 0 i) (file-name-as-directory (substring s (1+ i))))))
+              (split-string env "," t))
+    drgnx-pkg-default-archives))
+
+(defun drgnx-uitest-childframe-install (dir)
+  "Install the pinned packages (and what they need) into the new directory DIR, as `drgnx sync' does, in a private
+data directory: the files' hashes are checked against the pins and the archives' signatures where they sign.  A hash
+that differs, or any package that cannot be had, is an error and leaves DIR alone."
+  (require 'drgnx-pkg)
+  (let* ((pins (drgnx-uitest--childframe-pins))
+         (root (file-name-as-directory (make-temp-file "drgnx-childframe" t)))
+         (process-environment (append (mapcar (lambda (kv) (concat (car kv) "=" root (cdr kv)))
+                                              '(("DRGNX_DATA_DIR" . "data") ("DRGNX_CONFIG_DIR" . "config")
+                                                ("XDG_CACHE_HOME" . "cache") ("XDG_STATE_HOME" . "state")))
+                                      process-environment))
+         (drgnx-pkg-native-compile nil)
+         (drgnx-pkg-shipped-lock (concat root "no-shipped.lock.eld")))
+    (unwind-protect
+        (progn
+          (make-directory (concat root "config") t)
+          (make-directory (concat root "mods") t)
+          (with-temp-file (expand-file-name "packages.eld" (concat root "config"))
+            (prin1 (list :packages (mapcar #'car pins)) (current-buffer)))
+          ;; the lock: each pin as the archive describes it (kind, file, requirements, so what a package needs is
+          ;; installed too) with the pin's hash, which the sync then enforces
+          (let ((package-archives (drgnx-uitest--childframe-archives))
+                (package-user-dir (concat root "refresh")) (package-alist nil) (package-archive-contents nil)
+                (package--initialized t) (package-gnupghome-dir (concat root "data/gnupg"))
+                (package-quickstart nil))
+            (package-refresh-contents)
+            (drgnx-pkg-write-lock
+             (mapcar (lambda (p)
+                       (pcase-let* ((`(,name ,version . ,plist) p)
+                                    (desc (seq-find (lambda (d) (and (equal (package-desc-archive d) (plist-get plist :archive))
+                                                                     (equal (package-version-join (package-desc-version d)) version)))
+                                                    (alist-get name package-archive-contents))))
+                         (unless desc (error "%s %s: archive %s does not serve it" name version (plist-get plist :archive)))
+                         (drgnx-pkg--desc-entry desc (drgnx-pkg--file desc) (plist-get plist :sha256))))
+                     pins)))
+          (let ((r (drgnx-pkg-sync :archives (drgnx-uitest--childframe-archives) :modules-dir (concat root "mods"))))
+            (unless (plist-get r :ok)
+              (error "%s" (mapconcat (lambda (m) (format "%s: %s" (car m) (cdr m))) (plist-get r :missing) "; ")))
+            (copy-directory (drgnx-elpa-dir) dir nil t t)))
+      (delete-directory root t))))
+
+(defun drgnx-uitest-childframe-cli ()
+  "`drgnx childframe-elpa DIR': the arguments after --."
+  (let ((args (cdr (member "--" command-line-args-left))))
+    (setq command-line-args-left nil)
+    (kill-emacs
+     (condition-case err
+         (progn
+           (unless (and (= (length args) 1) (not (file-exists-p (car args))))
+             (error "usage: drgnx childframe-elpa DIR   (DIR must not exist yet)"))
+           (drgnx-uitest-childframe-install (expand-file-name (car args)))
+           0)
+       (error (message "drgnx: childframe-elpa: %s" (error-message-string err)) 1)))))
+
+(defun drgnx-uitest-childframe-packages ()
+  "Put the pinned child-frame packages from $DRGNX_CHILDFRAME_ELPA on `load-path'; their names, or nil when that is
+unset or lacks one (tests then `skip-unless', as with $DRGNX_MODAL_ELPA).  The directory is only read."
+  (when-let* ((dir (getenv "DRGNX_CHILDFRAME_ELPA")) ((file-directory-p dir)))
+    (let ((dirs (mapcar (lambda (p) (expand-file-name (format "%s-%s" (car p) (cadr p)) dir))
+                        (drgnx-uitest--childframe-pins))))
+      (when (seq-every-p #'file-directory-p dirs)
+        (dolist (d dirs) (add-to-list 'load-path d))
+        (mapcar #'car (drgnx-uitest--childframe-pins))))))
+
 (provide 'drgnx-uitest)
 ;;; drgnx-uitest.el ends here
