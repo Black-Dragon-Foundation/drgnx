@@ -2,7 +2,7 @@
 
 use serde_json::{Map, Value};
 
-pub const VERBS: [&str; 26] = [
+pub const VERBS: [&str; 27] = [
     "start",
     "root",
     "rename",
@@ -22,6 +22,7 @@ pub const VERBS: [&str; 26] = [
     "kill",
     "expect_exit",
     "file",
+    "proc",
     "write_file",
     "sqlite",
     "backend_log",
@@ -277,6 +278,7 @@ mod tests {
 {"do": "kill", "hub": "h", "signal": "TERM"}
 {"do": "expect_exit", "hub": "h", "code": 0}
 {"do": "file", "path": "$CAP", "exists": true, "mode": "0600"}
+{"do": "proc", "pid": "$PID(h)", "part": "argv", "lacks": "x"}
 {"do": "write_file", "path": "$ROOT/x", "text": "t"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql": ["select 1"]}
 {"do": "backend_log", "expect_line": "x"}

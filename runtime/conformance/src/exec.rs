@@ -262,6 +262,100 @@ fn is_zombie(pid: u32) -> bool {
         })
 }
 
+/// A process's argv (`environ` false) or the environment it started with, as the system shows them to the same
+/// user: `/proc/PID/cmdline` and `/proc/PID/environ` on Linux, `sysctl kern.procargs2` on macOS (no `/proc` there).
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn proc_strings(pid: u32, environ: bool) -> R<Vec<String>> {
+    let path = format!(
+        "/proc/{pid}/{}",
+        if environ { "environ" } else { "cmdline" }
+    );
+    let bytes = std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?;
+    Ok(bytes
+        .split(|&b| b == 0)
+        .filter(|s| !s.is_empty())
+        .map(|s| String::from_utf8_lossy(s).into_owned())
+        .collect())
+}
+
+#[cfg(target_os = "macos")]
+fn proc_strings(pid: u32, environ: bool) -> R<Vec<String>> {
+    let mut argmax: libc::c_int = 0;
+    let mut size = std::mem::size_of::<libc::c_int>();
+    let mut mib = [libc::CTL_KERN, libc::KERN_ARGMAX];
+    let argmax_ptr: *mut libc::c_int = &mut argmax;
+    if unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            2,
+            argmax_ptr.cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    } != 0
+    {
+        return Err(format!(
+            "sysctl kern.argmax: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let mut buf =
+        vec![0u8; usize::try_from(argmax).map_err(|_| format!("kern.argmax is {argmax}"))?];
+    let mut size = buf.len();
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as libc::c_int];
+    if unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            3,
+            buf.as_mut_ptr().cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    } != 0
+    {
+        return Err(format!(
+            "sysctl kern.procargs2 of pid {pid}: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    buf.truncate(size);
+    let (argv, env) = split_procargs2(&buf)?;
+    Ok(if environ { env } else { argv })
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
+fn proc_strings(_pid: u32, _environ: bool) -> R<Vec<String>> {
+    Err("reading a process's argv or environment is not implemented on this system".into())
+}
+
+/// `kern.procargs2`'s buffer: argc (a native-endian i32), the executable's path, NUL padding, argc arguments, then the
+/// environment up to the first empty string.
+#[cfg(any(test, target_os = "macos"))]
+fn split_procargs2(buf: &[u8]) -> R<(Vec<String>, Vec<String>)> {
+    let head: [u8; 4] = buf
+        .get(..4)
+        .and_then(|h| h.try_into().ok())
+        .ok_or("kern.procargs2 is shorter than its argc")?;
+    let argc = usize::try_from(i32::from_ne_bytes(head))
+        .map_err(|_| "kern.procargs2 has a negative argc")?;
+    let rest = &buf[4..];
+    let rest = &rest[rest.iter().position(|&b| b == 0).unwrap_or(rest.len())..];
+    let rest = &rest[rest.iter().position(|&b| b != 0).unwrap_or(rest.len())..];
+    let mut pieces = rest
+        .split(|&b| b == 0)
+        .map(|s| String::from_utf8_lossy(s).into_owned());
+    let argv: Vec<String> = pieces.by_ref().take(argc).collect();
+    if argv.len() < argc {
+        return Err(format!(
+            "kern.procargs2 has {} of its {argc} arguments",
+            argv.len()
+        ));
+    }
+    Ok((argv, pieces.take_while(|s| !s.is_empty()).collect()))
+}
+
 impl Runner<'_> {
     // ------------------------------------------------------------ names, variables, captures
 
@@ -546,6 +640,7 @@ impl Runner<'_> {
             "kill" => self.kill(step),
             "expect_exit" => self.expect_exit(step),
             "file" => self.file(step),
+            "proc" => self.proc(step),
             "write_file" => self.write_file(step),
             "sqlite" => self.sqlite(step),
             "backend_log" => self.backend_log(step),
@@ -1412,6 +1507,38 @@ impl Runner<'_> {
         Ok(())
     }
 
+    /// A process's argv or the environment it started with (`proc_strings`): `contains` / `lacks` a string.
+    fn proc(&mut self, step: &Step) -> R {
+        let idx = self.hub_index(None).ok();
+        let pid_text = self.text(idx, step, "pid")?;
+        let pid: u32 = pid_text
+            .parse()
+            .map_err(|_| format!("\"pid\" is not a pid: {pid_text:?}"))?;
+        let (part, environ) = match str_of(&step.obj, "part") {
+            Some("argv") => ("argv", false),
+            Some("environ") => ("environ", true),
+            _ => return Err("\"part\" is \"argv\" or \"environ\"".into()),
+        };
+        let strings = proc_strings(pid, environ)?;
+        // nothing read would pass any `lacks`
+        if strings.is_empty() {
+            return Err(format!("pid {pid} shows an empty {part}"));
+        }
+        if step.obj.contains_key("contains") {
+            let text = self.text(idx, step, "contains")?;
+            if !strings.iter().any(|s| s.contains(&text)) {
+                return Err(format!("the {part} of pid {pid} does not contain {text:?}"));
+            }
+        }
+        if step.obj.contains_key("lacks") {
+            let text = self.text(idx, step, "lacks")?;
+            if strings.iter().any(|s| s.contains(&text)) {
+                return Err(format!("the {part} of pid {pid} contains {text:?}"));
+            }
+        }
+        Ok(())
+    }
+
     fn write_file(&mut self, step: &Step) -> R {
         let idx = self.hub_index(None).ok();
         let path = PathBuf::from(self.text(idx, step, "path")?);
@@ -1601,4 +1728,35 @@ fn agent_socket(hub: &Hub, sid: &str) -> R<PathBuf> {
     runstav::paths::session_dir(&hub.env, &hub.socket, sid)
         .map(|d| d.join(runstav::paths::SESSION_HUB_SOCKET))
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn procargs2_splits_argv_from_the_environment() {
+        let mut buf = 2i32.to_ne_bytes().to_vec();
+        buf.extend_from_slice(b"/bin/x\0\0\0\0x\0--flag\0A=1\0B=2\0\0junk\0");
+        let (argv, env) = split_procargs2(&buf).unwrap();
+        assert_eq!(argv, ["x", "--flag"]);
+        assert_eq!(env, ["A=1", "B=2"]);
+        assert!(split_procargs2(&buf[..3]).is_err(), "no argc");
+        let mut short = 3i32.to_ne_bytes().to_vec();
+        short.extend_from_slice(b"/bin/x\0x\0");
+        assert!(
+            split_procargs2(&short).is_err(),
+            "fewer arguments than argc"
+        );
+    }
+
+    #[test]
+    fn this_process_shows_its_argv_and_environment() {
+        let argv = proc_strings(std::process::id(), false).unwrap();
+        let me = std::env::args().next().unwrap();
+        assert_eq!(argv.first(), Some(&me));
+        let env = proc_strings(std::process::id(), true).unwrap();
+        let path = std::env::var("PATH").unwrap();
+        assert!(env.contains(&format!("PATH={path}")), "{env:?}");
+    }
 }
