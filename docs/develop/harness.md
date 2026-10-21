@@ -1058,6 +1058,14 @@ their names, or nil when the variable is unset or the directory lacks one, so te
 tests do with `DRGNX_MODAL_ELPA`. A session inherits the variable (`drgnx-ui-keep-env`). The tests of the command
 point `DRGNX_CHILDFRAME_PINS` and `DRGNX_CHILDFRAME_ARCHIVES` (`NAME=DIR,…`) at a local archive.
 
+`test/ui/childframe-chrome-test.el` holds the compositor's four popup scenarios (`drgnx-ui-chrome/…`: corfu with
+popupinfo, posframe shown and hidden 100 times, eldoc-box beside corfu, a popup at the right and bottom edge). Each
+skips unless Glitnir (the compositor) is active and the packages are present, so on a stock Nidhogg a run reports them
+as skipped. Active, they set `child-frame-chrome` to drgnx's defaults and `glitnir-debug` to `verify`, and compare
+snapshots in device pixels: inside a popup away from its corners equals the Glitnir-off picture, a corner pixel equals
+the no-popup picture, 4 px outside the right edge is darker than the no-popup picture, and after the hide the popup
+plus its shadow margin equals the no-popup picture; the verifier must report no violations.
+
 ## Modal tests
 
 Loading evil cannot be undone in a process (its hooks and advice stay), and ERT runs tests by name, so the tests that
