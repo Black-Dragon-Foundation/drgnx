@@ -358,7 +358,7 @@ ui_compositor_ok() { # C — is C a compositor a GUI session can run under (harn
 test_bootstrap() { # [--fedora 44|45] — the exit test of a second machine: one command on a fresh Fedora reaches a green doctor
   # Container 1 makes the encrypted key bundle (age) and commits it into a bare copy of the fixture configuration;
   # container 2, a fresh Fedora with only what a desktop has, runs install.sh --yes --config … --identity … and checks
-  # the outcome (test/bootstrap/in-container.sh; docs/develop/harness.md).  Fedora 44 builds Emacs from source (slow).
+  # the outcome (test/bootstrap/in-container.sh; docs/develop/harness.md).  Nidhogg is the pinned release, put in before install.sh runs (which keeps it); building it is `--install`'s job.
   local rt fedora=45 logs snap fixture log image rcc=0 mount tmproot home
   while (($#)); do
     case "$1" in

@@ -1273,6 +1273,16 @@ echo \"agent ${DRGNX_AGENT-unset} job ${DRGNX_JOB-unset} task ${DRGNX_TASK-unset
       (should (= 2 (apply #'call-process drgnx-bin-test--bin nil t nil "test" "--bootstrap" args)))
       (should (string-match-p "usage: drgnx test --bootstrap\\|--fedora is 44 or 45" (buffer-string))))))
 
+(ert-deftest drgnx-bin/test-bootstrap-installs-the-way-a-user-does-now ()
+  ;; NH-BOOTSTRAP-1: install.sh dropped --method source|package (exit 2) when drgnx required Nidhogg; the second machine
+  ;; gets the pinned Nidhogg release (test/container/nidhogg.sh) and install.sh keeps it, and no step runs a bare emacs
+  (let ((text (with-temp-buffer
+                (insert-file-contents (expand-file-name "test/bootstrap/in-container.sh" drgnx-bin-test--root))
+                (buffer-string))))
+    (should-not (string-match-p "install\\.sh[^\n]*--method" text))
+    (should-not (string-match-p "stock=" text))
+    (should (string-search "test/container/nidhogg.sh" text))))
+
 ;; the fake runtime copies what each container would mount (the run removes its temporary directory when it succeeds);
 ;; $((…)) because macOS's wc pads the count with blanks
 (defun drgnx-bin-test--bootstrap-rt (dir)
