@@ -62,6 +62,7 @@ without the binary."
                                                (concat "DRGNX_EMACS=" (expand-file-name invocation-name invocation-directory)))
                                          process-environment))
             (hub (make-process :name "ratatoskr" :noquery t :connection-type 'pipe :buffer (generate-new-buffer " *ratatoskr*")
+                               :sentinel (lambda (p _event) (unless (process-live-p p) (process-put p :done t)))
                                :command (let ((s (if drgnx-hub-client-test--serve-fn
                                                      (funcall drgnx-hub-client-test--serve-fn root)
                                                    (list (drgnx-hub-client-test--bin)))))
@@ -73,7 +74,7 @@ without the binary."
                   ,@body)
          (drgnx-hub-disconnect)
          (when (process-live-p hub) (signal-process hub 'term))
-         (ignore-errors (drgnx-test-wait (lambda () (not (process-live-p hub))) :secs 10 :what "Ratatoskr ends"))
+         (ignore-errors (drgnx-test-wait (lambda () (process-get hub :done)) :secs 10 :what "Ratatoskr ends"))
          (when (process-live-p hub) (signal-process hub 'kill))
          (kill-buffer (process-buffer hub))))))
 
@@ -359,8 +360,8 @@ without the binary."
         (let ((conn drgnx-hub--client))
           (drgnx-hub-client-test--wait (lambda () (member "ping" (drgnx-fake-hub-methods hub))) "the probe reaches the hub")
           (drgnx-test-advance drgnx-hub--challenge-wait)
-          (should (= (length (car got)) 1))
-          (should (string-match-p "sent nothing within" (cadr (car (car got)))))
+          (should (= (length (car (car got))) 1))
+          (should (string-match-p "sent nothing within" (cadr (car (car (car got))))))
           (should-not (process-live-p conn))
           (should-not (eq drgnx-hub--last-hello :legacy))
           (should-not (member "agents/list" (drgnx-fake-hub-methods hub))))))))
