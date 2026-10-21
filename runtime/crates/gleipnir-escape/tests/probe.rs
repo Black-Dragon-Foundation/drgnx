@@ -6,8 +6,11 @@ use std::process::Command;
 
 const PROBE: &str = env!("CARGO_BIN_EXE_gleipnir-probe");
 
+/// The probe with 0–2 only, whatever this test inherited (a GitHub runner's pipes: `fds` would list them).
 fn probe(args: &[&str]) -> (Vec<ProbeLine>, i32) {
-    let out = Command::new(PROBE).args(args).output().unwrap();
+    let mut cmd = Command::new(PROBE);
+    gleipnir_escape::only_stdio(cmd.args(args));
+    let out = cmd.output().unwrap();
     let lines = String::from_utf8(out.stdout)
         .unwrap()
         .lines()

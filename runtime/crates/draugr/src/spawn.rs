@@ -260,8 +260,9 @@ fn child_fds(pairs: &[(RawFd, RawFd)]) -> io::Result<()> {
 
 /// Marks every descriptor from `first` up close-on-exec. Linux and Android (the same kernel call):
 /// `close_range(first, ~0, CLOSE_RANGE_CLOEXEC)`; a kernel before 5.11 refuses it and the loop does the work.
+/// No allocation, so it may run between a fork and an exec (the escape harness's runs without a sandbox use it too).
 #[cfg(any(target_os = "linux", target_os = "android"))]
-fn cloexec_from(first: RawFd) {
+pub fn cloexec_from(first: RawFd) {
     const CLOSE_RANGE_CLOEXEC: libc::c_uint = 1 << 2;
     // SAFETY: a raw system call with integer arguments.
     let r = unsafe {
@@ -280,7 +281,7 @@ fn cloexec_from(first: RawFd) {
 /// Marks every descriptor from `first` up close-on-exec. macOS and the rest: no `close_range` with a close-on-exec
 /// flag, so the loop. (Android is the branch above.)
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
-fn cloexec_from(first: RawFd) {
+pub fn cloexec_from(first: RawFd) {
     cloexec_loop(first);
 }
 
