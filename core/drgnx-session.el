@@ -23,6 +23,7 @@
 (defvar server-socket-dir)
 (defvar server-client-instructions)
 (declare-function server-running-p "server")
+(declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
 (declare-function drgnx-explorer-roots "drgnx-explorer")
 (declare-function drgnx-explorer-set-roots "drgnx-explorer")
 (declare-function drgnx-explorer-focus "drgnx-explorer")
@@ -271,7 +272,9 @@ serve `drgnx-session-server-name' so `drgnx PATH' opens there — unless another
                 (eq t (server-running-p drgnx-session-server-name)))
       (setq server-name drgnx-session-server-name)
       (condition-case err (server-start)
-        (error (message "drgnx: no server for drgnx PATH: %s" (error-message-string err)))))))
+        (error (require 'drgnx-notice)
+               (drgnx-notify 'config 'warn (format "no server for drgnx PATH: %s" (error-message-string err))
+                             :id 'session-server))))))
 
 (provide 'drgnx-session)
 ;;; drgnx-session.el ends here

@@ -17,6 +17,8 @@
 (require 'sqlite)                   ; with-sqlite-transaction
 (require 'drgnx-records)
 
+(declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
+
 (defconst drgnx-work-db--steps
   '((1 "create table if not exists node (id text primary key, kind text, title text, path text, line integer,
         status text, parent text, ord integer, source text, data text, updated real)"
@@ -189,8 +191,11 @@ in `meta' `migrate-6-dropped'.  New columns: event.turn, message.answers, card.r
                 '("create index jtask_job on jtask(job)") 'any))
       (sqlite-execute db "insert or replace into meta values ('migrate-6-dropped', ?)" (list (number-to-string dropped)))
       (when (> dropped 0)
-        (message "drgnx: work.db schema 6: %d data value%s could not be converted and %s now empty (the schema-5 copy is work.db.schema5)"
-                 dropped (if (= dropped 1) "" "s") (if (= dropped 1) "is" "are")))))
+        (require 'drgnx-notice)
+        (drgnx-notify 'store 'warn
+                      (format "work.db schema 6: %d data value%s could not be converted and %s now empty (the schema-5 copy is work.db.schema5)"
+                              dropped (if (= dropped 1) "" "s") (if (= dropped 1) "is" "are"))
+                      :echo t))))
   (sqlite-execute db "insert or replace into meta values ('compat-read', ?)" (list (number-to-string drgnx-work-db-compat-read))))
 
 (defun drgnx-work-db--migrate (db)

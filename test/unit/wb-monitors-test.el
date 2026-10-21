@@ -93,7 +93,9 @@ pgtk Emacs does: its geometry only, no name, make, model or serial)."
         (drgnx-platform-test--with-frame 'pgtk '("FAKEMON=1")
           (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
                     ((symbol-function 'message)
-                     (lambda (fmt &rest args) (when fmt (push (apply #'format fmt args) messages)) nil)))
+                     (lambda (fmt &rest args) (when fmt (push (apply #'format fmt args) messages)) nil))
+                    ;; what the monitor code says is a notice (Task 20): its text is collected like a message
+                    ((symbol-function 'drgnx-notify) (lambda (_s _v text &rest _) (push text messages) nil)))
             (unwind-protect (progn ,@body)
               (drgnx-timer-cancel 'monitors-refresh)
               (modify-frame-parameters frame '((drgnx-monitor))))))))))
@@ -607,7 +609,7 @@ pgtk Emacs does: its geometry only, no name, make, model or serial)."
                                     (drgnx-platform-test--await (lambda () nil) 0.1)
                                     (should (equal drgnx-monitors-test--places (list (cons home "DP-1"))))   ; the missing one is not placed
                                     (should (equal messages
-                                                   '("drgnx: 1 window's monitor is not connected (DELL U2720Q); the window manager placed it")))
+                                                   '("monitors: 1 window's monitor is not connected (DELL U2720Q); the window manager placed it")))
                                     (should-not (frame-parameter one 'fullscreen))))))
 
 (drgnx-platform-test--deftest drgnx-monitors/several-missing-monitors-are-one-message ()
@@ -621,7 +623,7 @@ pgtk Emacs does: its geometry only, no name, make, model or serial)."
                                   (drgnx-platform-test--await (lambda () nil) 0.1)
                                   (should (equal drgnx-monitors-test--places nil))
                                   (should (equal messages
-                                                 '("drgnx: 3 windows' monitors are not connected (DELL U2720Q, 800×600 at 5000,0); the window manager placed them"))))))
+                                                 '("monitors: 3 windows' monitors are not connected (DELL U2720Q, 800×600 at 5000,0); the window manager placed them"))))))
 
 (drgnx-platform-test--deftest drgnx-monitors/an-older-state-file-restores-as-before ()
                               ;; Format 2 without :extra (or with extras of other modules only): nothing placed, no message,

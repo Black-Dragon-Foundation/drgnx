@@ -36,9 +36,12 @@ so a mirror never reads a record it would misread.  A hub of this drgnx's layout
 (defun drgnx-agents-mirror--skew (_skew reply)
   "The hub said hello with REPLY (`drgnx-hub-skew-functions'): mirroring pauses while its `records' differ."
   (let ((paused (and (consp reply) (not (eql (plist-get reply :records) drgnx-hub-records)))))
-    (when (and paused (not drgnx-agents-mirror--paused))
-      (message "drgnx: the agent hub is another drgnx (records %s, not %d): its sessions are not mirrored until it restarts"
-               (plist-get reply :records) drgnx-hub-records))
+    (cond ((and paused (not drgnx-agents-mirror--paused))
+           (drgnx-notify 'hub 'warn
+                         (format "the agent hub is another drgnx (records %s, not %d): its sessions are not mirrored until it restarts"
+                                 (plist-get reply :records) drgnx-hub-records)
+                         :id 'records-skew :life 'condition))
+          ((and drgnx-agents-mirror--paused (not paused)) (drgnx-notice-clear 'hub 'records-skew)))
     (setq drgnx-agents-mirror--paused paused)))
 
 (defun drgnx-agents-mirror--decode (schema json)
@@ -46,7 +49,9 @@ so a mirror never reads a record it would misread.  A hub of this drgnx's layout
 One damaged record from the hub is skipped (and said so), never allowed to stop the records after it."
   (condition-case err
       (list (drgnx-records-from-json schema json))
-    (error (message "drgnx: skipped a record from the hub that does not decode (%s)" (error-message-string err)) nil)))
+    (error (drgnx-notify 'hub 'warn (format "skipped a record from the hub that does not decode (%s)"
+                                            (error-message-string err)))
+           nil)))
 
 (defun drgnx-agents-mirror--apply-snapshot (snap)
   "Make (or update) the mirror of SNAP (a hub snapshot); returns (MIRROR . NEW-P)."

@@ -182,6 +182,7 @@ sends are recorded in `sent' as (TITLE . BODY), oldest first, instead of made."
   (let ((made nil) (said nil) (sentinel nil) (drgnx-notice-desktop--backend :unknown) (system-type 'darwin))
     (cl-letf (((symbol-function 'make-process) (lambda (&rest args) (push args made) (setq sentinel (plist-get args :sentinel)) 'proc))
               ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said)))
+              ((symbol-function 'drgnx-notify) (lambda (_s _v text &rest _) (push text said) nil))   ; a notice, Task 20
               ((symbol-function 'executable-find) (lambda (&rest _) "/usr/bin/osascript"))
               ((symbol-function 'process-status) (lambda (_p) 'exit))
               ((symbol-function 'process-exit-status) (lambda (_p) 1)))

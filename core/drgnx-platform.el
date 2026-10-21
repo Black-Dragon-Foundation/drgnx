@@ -95,7 +95,9 @@ is cancelled by the call's own finish, so no module's end and no process's death
         (when callback
           (condition-case err
               (drgnx-automatic (apply callback args))
-            (error (message "drgnx-platform: callback failed: %s" (error-message-string err)))))))))
+            (error (require 'drgnx-notice)
+                   (drgnx-notify 'guard 'warn (format "platform callback failed: %s" (error-message-string err))
+                                 :id 'platform-callback))))))))
 
 (cl-defun drgnx-platform-call (argv &key env timeout callback)
   "Run ARGV (program and arguments) without blocking; call CALLBACK once with STATUS and OUTPUT.
@@ -1211,7 +1213,8 @@ cursor to the target output when a window is moved with `--id', and this cannot 
 
 (require 'json)
 (declare-function dbus-get-unique-name "dbusbind.c" (bus))
-(declare-function dbus-register-method "dbus" (bus service path interface method handler &optional dont-register-service))
+(declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
+(declare-function dbus-register-method "dbus"(bus service path interface method handler &optional dont-register-service))
 (declare-function dbus-unregister-object "dbus" (object))
 (declare-function dbus-call-method-asynchronously "dbus" (bus service path interface method handler &rest args))
 

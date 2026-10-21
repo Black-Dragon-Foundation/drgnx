@@ -20,6 +20,8 @@ window (its terminal is \"/dev/pts/9\").  `messages' collects what `message' say
          (cl-letf (((symbol-function 'terminal-name) (lambda (&optional _) "/dev/pts/9"))
                    ((symbol-function 'message)
                     (lambda (fmt &rest args) (push (apply #'format fmt args) messages) nil))
+                   ;; what persist says is a notice (Task 20): its text is collected like a message
+                   ((symbol-function 'drgnx-notify) (lambda (_source _severity text &rest _) (push text messages) nil))
                    ((symbol-function 'select-frame-set-input-focus) #'ignore))
            ,@body)
        (delete-directory ,dir t))))
@@ -107,6 +109,7 @@ first; the store calls it `initial'), so no terminal guard applies."
      (unwind-protect
          (cl-letf (((symbol-function 'message)
                     (lambda (fmt &rest args) (push (apply #'format fmt args) messages) nil))
+                   ((symbol-function 'drgnx-notify) (lambda (_source _severity text &rest _) (push text messages) nil))
                    ((symbol-function 'drgnx-state-frame-kind) (lambda (f) (and (framep f) 'initial)))
                    ((symbol-function 'select-frame-set-input-focus) #'ignore))
            ,@body)
@@ -134,7 +137,7 @@ first; the store calls it `initial'), so no terminal guard applies."
       (cl-letf (((symbol-function 'tty-persist-test--rebuild) (lambda (&rest _) (cl-incf rebuilt) nil)))
         (should (drgnx-persist-restore))
         (should (= rebuilt 0))
-        (should (equal messages '("drgnx: a window was not restored: no graphical display")))))))
+        (should (equal messages '("a window was not restored: no graphical display")))))))
 
 (ert-deftest drgnx-persist/the-graphical-frame-is-never-a-child-frame ()
   (cl-letf (((symbol-function 'frame-list) (lambda () (list (selected-frame) 'top)))

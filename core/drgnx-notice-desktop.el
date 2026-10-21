@@ -64,7 +64,9 @@ cannot hold Emacs).  Else a message.  Never a prompt."
                    :sentinel (drgnx-guard-wrap
                               (lambda (p _event)
                                 (when (and (memq (process-status p) '(exit signal)) (/= 0 (process-exit-status p)))
-                                  (message "drgnx: the macOS notification failed (%s — %s)" title body)))
+                                  (drgnx-notify 'notice 'warn
+                                                (format "the macOS notification failed (%s — %s)" title body)
+                                                :id 'desktop :echo nil)))
                               "desktop notification")))
     ('dbus
      (condition-case err

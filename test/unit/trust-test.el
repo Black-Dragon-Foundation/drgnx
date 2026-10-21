@@ -5,6 +5,7 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'drgnx-trust)
+(require 'drgnx-notice)
 (require 'tramp)
 (require 'tramp-sh)
 (require 'flymake)
@@ -317,7 +318,9 @@ nobody trusted.  Buffers BODY opens are killed after it."
   (drgnx-trust-test--with (_dir)
     (let* ((told nil) (file (drgnx-trust-folders-file)) (name (file-name-nondirectory file)))
       (cl-letf (((symbol-function 'message)
-                 (lambda (fmt &rest args) (when fmt (push (apply #'format-message fmt args) told)))))
+                 (lambda (fmt &rest args) (when fmt (push (apply #'format-message fmt args) told))))
+                ;; told as a notice (Task 20): its text is collected like a message
+                ((symbol-function 'drgnx-notify) (lambda (_s _v text &rest _) (push text told) nil)))
         (drgnx-trust-test--put "(:version 1 :folders (\"/x/\"")
         (dotimes (_ 3) (should-not (drgnx-trust-folders)))
         (should (= (length told) 1))
