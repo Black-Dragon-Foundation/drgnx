@@ -2,7 +2,7 @@
 source: crates/gleipnir/src/landlock.rs
 expression: render(&full_shared)
 ---
-tier Full, min_abi 1
+tier Full, min_abi 6
 read_roots: /
 write_roots: /dev/pts /dev/shm /home/agent /mnt/out /tmp /var/tmp /work/task
 dev_write_files: /dev/full /dev/null /dev/ptmx /dev/tty /dev/zero
