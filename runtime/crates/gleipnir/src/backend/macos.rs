@@ -391,6 +391,15 @@ mod tests {
         }
     }
 
+    /// Only a name that exists is retried: any other error (a session dir that is gone) is reported as it is.
+    #[test]
+    fn a_profile_write_error_is_reported_not_retried() {
+        let (top, _s) = fixture();
+        let gone = top.path().join("no-such-session");
+        let e = write_profile(&gone, "(version 1)").unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::NotFound, "{e}");
+    }
+
     #[test]
     fn commands_sandbox_exec_would_misread_are_refused() {
         let (_top, s) = fixture();

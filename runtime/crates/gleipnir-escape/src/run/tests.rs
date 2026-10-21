@@ -258,6 +258,41 @@ fn expectations_check_errno_and_detail() {
     );
 }
 
+/// The judge's line count and listener checks bite where the gate's mutants found no test (gate review fix round):
+/// a listener that saw nothing passes, a control run with a line missing fails, and a row that kills its run is
+/// judged without the exit or the line count a plain run needs.
+#[test]
+fn quiet_listeners_missing_control_lines_and_killed_runs() {
+    let r = row(json!({
+        "row": "r", "probes": [["fds"], ["fds"]],
+        "expect": [{"result": "reached"}, {"result": "reached"}],
+        "listeners_silent": ["hub"],
+    }));
+    let two = vec![
+        line("fds", "reached", None, None),
+        line("fds", "reached", None, None),
+    ];
+    let mut d = ok_data(two.clone());
+    d.silent = vec![("hub".into(), 0)];
+    judge_run(&r, &d, &canaries()).unwrap();
+    let direct = RunData {
+        direct: true,
+        result_file: None,
+        lines: two[..1].to_vec(),
+        ..RunData::default()
+    };
+    let e = judge_run(&r, &direct, &canaries()).unwrap_err();
+    assert!(e.contains("1 lines for 2 probes"), "{e}");
+    let killed = row(json!({
+        "row": "k", "probes": [["spawn-sleep", "9"], ["run", "sleep", "3"]],
+        "expect": [{"result": "reached"}],
+        "after": {"after_lines": 1, "kill": "group", "gone": {"match": "spawn-sleep 9", "within_ms": 1500}},
+    }));
+    let mut d = ok_data(vec![line("spawn-sleep", "reached", None, Some("7"))]);
+    d.result_file = Some(json!({"refused": null, "exit": 137}));
+    judge_run(&killed, &d, &canaries()).unwrap();
+}
+
 #[test]
 fn silent_listeners_events_and_files() {
     let r = row(json!({

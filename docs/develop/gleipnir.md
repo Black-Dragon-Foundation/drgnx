@@ -309,7 +309,8 @@ Why each part:
   `write` is seen read-write, as the write grants (Landlock agrees: the write is a write root).
 - **Hides follow the binds**: a hide is covered at its own path (where a read, a write or a system tree shows it) and,
   for every bind or home whose dest differs from its source and that holds it, at the same place under that dest. A
-  directory gets an empty tmpfs (Landlock does not let the program write to it), anything else `/dev/null`.
+  directory gets an empty tmpfs (Landlock does not let the program write to it), anything else `/dev/null`, which
+  cannot even be opened there: a `--ro-bind` is `nodev` (row `hides-covered`).
 - **The helper last** (review S1): no later mount can cover it, and validation's rule 11 also keeps every dest off
   `/run/gleipnir` and `run`'s dest. A bind over the helper would make bwrap exec a program that applies neither
   Landlock nor seccomp.
@@ -1036,7 +1037,7 @@ layer alone cap Landlock (`landlock_abi_cap: 3` takes its TCP rules away) or omi
 | `k6-shared-tcp-the-gap` | `Net::Shared` reaches the host's TCP listeners: recorded, and no phase uses it for jobs |
 | `k6-shared-abstract-scoped`, `k6-shared-below-abi-6-refused` | with a shared network, Landlock's scoping (ABI 6) is what refuses the host's abstract socket, and below ABI 6 the run is refused before anything runs (gate review S3) |
 | `real-layout-absent`, `reduced-real-layout-closed` | the real `/home` and `/run/user` (full: ENOENT) or `/home` and `/run` (reduced: EACCES) are closed, each against a control: the fixture lives under `/tmp`, so the k-rows alone would pass with `/home` bound (gate review S11) |
-| `hides-read-empty` | a hidden file reads 0 bytes and a hidden directory lists empty, against a control that reads them (gate review S13) |
+| `hides-covered` | a hidden file cannot be opened (EACCES: the `/dev/null` over it is a `--ro-bind`, which bwrap mounts `nodev`) and a hidden directory lists empty, with nothing under it, against a control that reads them (gate review S13) |
 | `run-dir-read-only`, `reduced-run-dir-read-only` | the session dir cannot be written or have its sockets unlinked (full: EROFS; reduced: EACCES) |
 | `no-controlling-tty`, `…-reduced`, `mac-no-controlling-tty` | started from a shell (a pty the harness makes Ratatoskr's controlling terminal), the program has none: `/dev/tty` gives ENXIO, against a control that opens it (gate review S6) |
 | `k8-canaries-absent`, `k8-reduced` | `~/.ssh`, another repository, another task folder and the home itself are invisible (full) or unreadable (reduced) |
