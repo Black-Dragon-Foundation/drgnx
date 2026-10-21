@@ -39,7 +39,11 @@ jobs:
     name: fmt, clippy, tests, conformance, perf (Fedora 45)
     if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
-    container: registry.fedoraproject.org/fedora:45
+    container:
+      image: registry.fedoraproject.org/fedora:45
+      # a real PID 1 that reaps orphans: draugr's reap tests check a killed group is gone, and an unreaped zombie
+      # still answers kill(-pgid, 0) (the same reason ctr.sh runs podman with --init)
+      options: --init
     timeout-minutes: 45
     defaults:
       run:
