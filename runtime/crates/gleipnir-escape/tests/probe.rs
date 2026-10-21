@@ -170,8 +170,12 @@ fn http_connect_reads_the_status_code() {
     let t = std::thread::spawn(move || {
         for status in ["200 Connection established", "403 Forbidden"] {
             let (mut s, _) = l.accept().unwrap();
-            let mut buf = [0u8; 512];
-            let _ = s.read(&mut buf);
+            // The whole request head before the answer: the probe sends it in several writes, and closing with
+            // some of it unread resets the connection (Linux), which fails the probe's next write.
+            let (mut head, mut b) = (Vec::new(), [0u8; 1]);
+            while !head.ends_with(b"\r\n\r\n") && s.read(&mut b).unwrap() == 1 {
+                head.push(b[0]);
+            }
             write!(s, "HTTP/1.1 {status}\r\n\r\n").unwrap();
         }
     });
