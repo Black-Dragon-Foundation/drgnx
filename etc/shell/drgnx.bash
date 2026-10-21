@@ -12,7 +12,7 @@ case ${BASH_SOURCE[0]-} in
   */*) _drgnx_dir=$PWD/${BASH_SOURCE[0]%/*} ;;
   *) _drgnx_dir=$PWD ;;
 esac
-_drgnx_commands='open doctor build test ui macos-app sync upgrade rollback generations lock bisect service-unit onboard check lease fmt work hub job search keys safe help shell secrets bootstrap update coord'
+_drgnx_commands='open doctor build test ui macos-app sync upgrade rollback generations lock bisect service-unit onboard check lease fmt work hub runtime job search keys safe help shell secrets bootstrap update coord'
 _drgnx_steps='environment look-and-keys projects ai search agents daemon portability finish'
 _drgnx_bootstrap_steps='preflight config keys sync onboard desktop shell doctor'
 _drgnx_presets='minimal ide full-ai'
@@ -73,6 +73,8 @@ _drgnx() {
           'work scan') words='--board' ;;
           'work status') words='--json' ;;
           'hub '*) words='--json' ;;
+          'runtime build') words='--install --prefix' ;;
+          'runtime install') words='--prefix' ;;
           'job propose') words='--repo --budget --auto' ;;
           'job approve' | 'job resume') words='--budget' ;;
           'job status') words='--json' ;;
@@ -94,6 +96,7 @@ _drgnx() {
         case $cmd in
           work) words='record scan status' ;;
           hub) words='start stop status' ;;
+          runtime) words='build install' ;;
           job) words='propose approve resume stop status' ;;
           search) words='index query mcp' ;;
           keys) words='diff' ;;

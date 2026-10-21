@@ -25,6 +25,7 @@ commands=(
   'fmt:format drgnx'"'"'s Emacs Lisp'
   'work:the work tracker'
   'hub:the hub behind agents and jobs'
+  'runtime:build and install Ratatoskr, the agent runtime'
   'job:jobs from plans'
   'search:semantic search'
   'keys:compare key profiles'
@@ -107,6 +108,16 @@ case $cmd in
     else
       shift words; (( CURRENT-- ))
       _arguments '--json[machine-readable]'
+    fi ;;
+  runtime)
+    if (( CURRENT == 2 )); then
+      _values 'runtime command' 'build[cargo build of Ratatoskr]' 'install[the built binary into drgnx'"'"'s data folder]'
+    else
+      shift words; (( CURRENT-- ))
+      case $sub in
+        build) _arguments '--install[install it after the build]' '--prefix[also link bin/ratatoskr and bin/rtsk here]:directory:_files -/' ;;
+        install) _arguments '--prefix[also link bin/ratatoskr and bin/rtsk here]:directory:_files -/' ;;
+      esac
     fi ;;
   job)
     if (( CURRENT == 2 )); then
