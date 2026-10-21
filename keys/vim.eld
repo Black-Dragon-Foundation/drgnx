@@ -42,6 +42,7 @@
         (jobs-stop :none "the Agents tab and transcripts; the palette")
         (job-start :none "the palette")
         (job-approve :none "the palette")
+        (hub-restart-now :none "rare: from the notice or the palette")
         (job-status :none "the palette")
         (job-stop :none "the palette")
         (job-show :none "the palette")

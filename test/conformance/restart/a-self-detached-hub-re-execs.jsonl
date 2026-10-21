@@ -1,0 +1,9 @@
+{"scenario": "restart/a-self-detached-hub-re-execs", "requires": ["v1"], "doc": "`ensure` with no supervisor starts a self-detached hub; `restart` then makes it release its socket and cap and execute its own binary again (nothing would restart an exit 75). The pid stays (execv), the log shows a second start, and the lock passed to the new image: it answers `ping`/`status` again within 8 s."}
+{"do": "root"}
+{"do": "run", "args": ["ensure"], "expect_code": 0, "expect_stdout": "$SOCKET"}
+{"do": "run", "args": ["status", "--json"], "expect_code": 0, "expect_stdout": {"running": true, "pid": "$capture:before"}}
+{"do": "run", "args": ["restart"], "expect_code": 0, "expect_stdout": "restarting"}
+{"do": "file", "path": "$STATE/hub/log/hub-*.jsonl", "contains": "serving on", "count": 2, "within_ms": 10000}
+{"do": "run", "args": ["status", "--json"], "retry_ms": 8000, "expect_code": 0, "expect_stdout": {"running": true, "pid": "$before"}}
+{"do": "file", "path": "$STATE/hub/log/hub-*.jsonl", "contains": "executing"}
+{"do": "run", "args": ["stop"], "expect_code": 0, "expect_stdout": "stopped Ratatoskr (pid $before)"}

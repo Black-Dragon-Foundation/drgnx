@@ -1,0 +1,40 @@
+[package]
+name = "drgnx-ratatoskr"
+description = "Ratatoskr, drgnx's agent runtime: the hub protocol's server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "drgnx_ratatoskr"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ratatoskr"
+path = "src/main.rs"
+
+[features]
+# Every test-only surface (the `__test_flood` method, `--agent-socket`): off in the binary install.sh builds.
+test-hooks = []
+
+[dependencies]
+runstav = { path = "../runstav", version = "0.1.0" }
+draugr = { path = "../draugr", version = "0.1.0" }
+urdr = { path = "../urdr", version = "0.1.0" }
+tokio.workspace = true
+tokio-util.workspace = true
+bytes = "1"               # the read buffer the line codec decodes from (already in the tree through tokio)
+serde.workspace = true
+serde_json.workspace = true
+rustix.workspace = true
+libc.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+lexopt.workspace = true
+zeroize.workspace = true  # the line that carries provider keys to the backend is wiped once written
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,0 +1,21 @@
+{"scenario": "errors/every-error-has-a-code", "requires": ["v1", "fake-backend"], "doc": "Each refusal of the dispatcher, and a handler's failure (a backend answer that does not fit job/status's result), is {id, error: {code, message}} with one of the contract's codes; a refused notification gets no answer. (schema: readonly/a-newer-work-db-refuses-writes.)"}
+{"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"job/status\": {\"result\": {\"jobs\": [{\"bogus\": 1}]}}}"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "s", "hub": "h", "as": "service"}
+{"do": "connect", "conn": "n", "hub": "h", "as": "service"}
+{"do": "hello", "conn": "n", "proof": "valid", "proto": 2, "expect_class": "user"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "no/such-method"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "error": {"code": "no-method", "message": "$string"}}}
+{"do": "send", "conn": "s", "json": {"id": 2, "method": "job/status"}}
+{"do": "expect", "conn": "s", "json": {"id": 2, "error": {"code": "not-allowed", "message": "$string"}}}
+{"do": "send", "conn": "n", "json": {"id": 3, "method": "job/status"}}
+{"do": "expect", "conn": "n", "json": {"id": 3, "error": {"code": "proto", "message": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "job/stop", "params": {"id": 5}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "error": {"code": "invalid-params", "message": "$string", "path": "id"}}}
+{"do": "send", "conn": "c", "raw": "{\"id\":5,\"method\":"}
+{"do": "expect", "conn": "c", "json": {"id": 5, "error": {"code": "invalid-params", "message": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "job/status"}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "error": {"code": "internal", "message": "$string"}}}
+{"do": "send", "conn": "c", "json": {"method": "no/such-method"}}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "ping"}}
+{"do": "expect_next", "conn": "c", "json": {"id": 7, "result": {"pid": "$PID(h)"}}}

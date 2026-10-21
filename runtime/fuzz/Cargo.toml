@@ -1,0 +1,42 @@
+# cargo-fuzz targets for the parsers of phase 1 (docs/develop/runtime.md, "Fuzzing").  Its own workspace: the product
+# workspace excludes it, and it builds on the pinned nightly only.
+[package]
+name = "drgnx-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+bytes = "1"
+tokio-util = { version = "0.7", features = ["codec"] }
+serde_json = "1"
+runstav = { path = "../crates/runstav" }
+drgnx-ratatoskr = { path = "../crates/drgnx-ratatoskr" }
+
+[workspace]
+
+[[bin]]
+name = "line_codec"
+path = "fuzz_targets/line_codec.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "request_prelude"
+path = "fuzz_targets/request_prelude.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hello"
+path = "fuzz_targets/hello.rs"
+test = false
+doc = false
+bench = false

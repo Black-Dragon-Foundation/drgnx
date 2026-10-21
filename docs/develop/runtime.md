@@ -11,7 +11,7 @@ runtime/
   Cargo.toml        workspace: members = ["conformance", "crates/*"], exclude = ["fuzz"], resolver 3
   Cargo.lock        committed; every build is --locked
   deny.toml         the supply-chain policy (cargo deny check)
-  conformance/      drgnx-conformance, the harness below
+  conformance/      domr, the harness below
   crates/           the runtime's crates (one directory each)
   fuzz/             cargo-fuzz targets: its own workspace, nightly only
 ```
@@ -31,10 +31,12 @@ runtime/
 | Name | What it is |
 |---|---|
 | `drgnx-ratatoskr` (binary `ratatoskr`, symlink `rtsk`) | the runtime: the hub protocol's server |
+| `runstav` (formerly `drgnx-proto`) | the hub protocol's contract: wire types, strict lines, typed decode, proofs, paths ([below](#runstav-the-contract)) |
 | `urdr` | the SQLite store; self-contained, its public API names no drgnx type |
+| `draugr` (formerly `drgnx-proc`) | spawning (explicit environments, own process groups, one exit) and the orphan reaper ([hub.md](hub.md#ratatoskrs-children-draugr)) |
 | `gleipnir` | the sandbox; self-contained |
 | `hrafn` | search and the indexer |
-| `drgnx-conformance` | the conformance harness (this page) |
+| `domr` (formerly `drgnx-conformance`; lives in `runtime/conformance/`) | the conformance harness (this page) |
 
 The protocol is still called "the hub protocol", and the socket, cap and lock files keep their `hub-HASH.*` names.
 
@@ -53,33 +55,101 @@ cargo deny  --manifest-path runtime/Cargo.toml check
 
 Only `Cargo.lock` regeneration (`cargo generate-lockfile`, `cargo update -w`) runs without `--locked`.
 
+### Platforms
+
+Linux and macOS are supported; Android is not a target, but the door stays open. Every `cfg(target_os)` gate names its
+Android stance. Rust's Android target is `target_os = "android"`, not `"linux"`, so a Linux-kernel fact (`/proc`,
+`SO_PEERCRED`, inotify) is gated `any(target_os = "linux", target_os = "android")`, and a desktop-distro fact (systemd,
+bwrap) `target_os = "linux"` alone with the Android stance (a stub, or "unsupported") in a comment. Every `cfg` chain
+ends in a fallback that returns `None` or `Unsupported`, never a missing item. Platform code sits in one module or
+function per crate. The type-check (`rustup target add aarch64-linux-android` first) is
+`cargo check --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android -p runstav -p draugr -p drgnx-ratatoskr`.
+`drgnx-ratatoskr` depends on `urdr`, whose bundled SQLite is C, and compiling C for Android needs the NDK. A type-check
+does not link, so without the NDK stub the C compiler and archiver: `CC_aarch64_linux_android=/usr/bin/true
+AR_aarch64_linux_android=/usr/bin/true` (the Rust is still checked in full; only the C object files are fake).
+
+## runstav: the contract
+
+`crates/runstav` holds what the hub protocol is on the Rust side; the server, the client half and the tests share it.
+
+- **`wire`**: `Request {id?, method, params}` (`params` is `{}` when absent; no `id` makes a notification), `Answer {id,
+  result, ignored?}` (`ignored` left out when empty), `ErrorAnswer {id, error}`, `Error {code, message, path?}` and
+  `Event {event, data}`. An `Id` is a number or a string. The codes are `no-method`, `not-allowed`, `proto`,
+  `invalid-params`, `schema` and `internal`. Not JSON-RPC: no `jsonrpc` key.
+- **`line`**: a client line is at most `MAX_CLIENT_LINE` (1 MiB) and `codec()` enforces it (a longer line is an error,
+  and the connection is closed); a hub line is at most `MAX_HUB_LINE` (16 MiB). `parse_strict` refuses a duplicate key at
+  any depth, nesting deeper than 64 (the top object is depth 1) and anything but an object at the top. Its `LineError`
+  carries the path (`params.env[1].k`) and the line's `id` when it can be read: the top-level `id` of a line that is JSON
+  (duplicates and depth aside), else the Lisp hub's rule (the first `"id": <digits>` followed by `,` or `}`), so the
+  sender gets an `invalid-params` answer instead of waiting.
+- **`decode`**: `typed::<T>(&params)` decodes through `serde_path_to_error` around `serde_ignored`. It returns the value
+  and the keys `T` has no field for, as paths (`env[0].x`), which become the answer's `ignored`. A value that does not
+  fit is `invalid-params` with the path of the part that did not; a field missing at the top has no path.
+- **`proof`**: `Cap` is 32 random bytes as 64 lowercase hex, kept in a `secrecy` string (no `Debug`, zeroed on drop);
+  `Cap::read` refuses a file over 256 bytes or one that is not exactly 64 lowercase hex. `nonce()` is 16 random bytes as
+  32 hex. The client proves `HMAC-SHA256(cap, "drgnx-hub client " + hub_nonce + " " + client_nonce)` and the hub
+  `HMAC-SHA256(cap, "drgnx-hub hub " + client_nonce + " " + hub_nonce)`, keyed with the cap's 64 hex characters as ASCII
+  (as the Lisp `drgnx-hub-hmac`). `verify` decodes both proofs to 32 bytes (a malformed one, uppercase included, is never
+  valid) and compares the bytes in constant time (`subtle`).
+- **`paths`**: `data_dir`, `socket_path`, `cap_path` (`hub-HASH.cap`), `lock_path` (`hub-HASH.sock.lock`) and
+  `backend_socket_path`, the Lisp backend's private socket `<socket dir>/hub-HASH.d/backend.sock` (one per data dir, so
+  two data dirs sharing a runtime dir never collide). Over 103 bytes it goes to `<tmp>/drgnx-hub-UID/hub-HASH.d/`, and
+  past 103 bytes there too it is `PathError::TooLong`. `private_dir` makes a directory 0700 (parents too) when it is not
+  there, refuses one that is a link, not a directory or another user's, and chmods it 0700 through the descriptor it
+  checked (opened with `O_NOFOLLOW`), as the Lisp `drgnx-hub--private-dir` does.
+- **`registry`**, **`methods`**, **`types`**, **`events`**: every method with its classes, typed params and result,
+  `writes` flag and doc; the named input types; the event types. `runtime/protocol/methods.json` and the method table
+  in `docs/develop/hub.md` are generated from them and checked by tests. See
+  [hub.md, "The registry"](hub.md#the-registry-protocol-v1).
+
+`cargo test -p runstav` runs the unit tests (RFC 4231 case 2 for the HMAC, the socket fixture below), a
+compile-fail doc test that `Cap` has no `Debug`, and the proptest `tests/proptest_line.rs`: random byte streams, read in
+random pieces, through the codec and `parse_strict` never panic, and the codec never holds more than one line's limit
+plus the read that went past it.
+
 ## The conformance harness
 
-`drgnx-conformance` runs **scenarios** (data) against a hub binary: a process that answers the hub protocol on its socket.
+`domr` runs **scenarios** (data) against a hub binary: a process that answers the hub protocol on its socket.
 Every scenario gets fresh temporary roots under `/tmp/rtsk-XXXXXX/` (`/tmp`, not `$TMPDIR`, so macOS socket paths stay
 short) holding `home run state data config cache tmp`, and the hub's `HOME`, `XDG_*`, `DRGNX_DATA_DIR`,
 `DRGNX_CONFIG_DIR` and `TMPDIR` point there. A hub is started with `--parent-pid` of the harness, so it ends with the
 test, and `RATATOSKR_SUPERVISOR=none` keeps a supervisor out of it. Only `PATH` and `DRGNX_EMACS` are inherited.
+`DRGNX_CONFORMANCE_ROOTS=DIR/PREFIX` makes the roots `DIR/PREFIXXXXXXX/` instead. Keep DIR short: the socket path
+must stay within 103 bytes.
 
 ```
-drgnx-conformance --target lisp|ratatoskr --hub-bin PATH --scenarios DIR
+domr --target lisp|ratatoskr --hub-bin PATH --scenarios DIR
                   [--lisp-hub PATH] [--fake-backend PATH]
                   [--only GLOB] [--only-tag TAG] [--require-all] [--perf OUT.json]
-drgnx-conformance connect-as --socket PATH
+domr connect-as --socket PATH
 ```
 
 - `--target lisp` runs only the `v0` rows, against the Lisp hub (through `test/conformance/lisp-hub.sh`, which maps
   `serve --foreground --parent-pid PID` to `emacs --batch -Q -L core -l drgnx-hub -f drgnx-hub-main` using
   `$DRGNX_EMACS`). `--target ratatoskr` runs every row, the `v0` ones too: they must pass both ways.
 - `--lisp-hub` and `--fake-backend` are what a `lisp-backend` / `fake-backend` row hands Ratatoskr as
-  `DRGNX_RATATOSKR_BACKEND`.
+  `DRGNX_RATATOSKR_BACKEND`; with `--target ratatoskr`, a `v0` row gets the Lisp hub as its backend too, so the v0 rows
+  run through the front (`--target ratatoskr --lisp-hub test/conformance/lisp-hub.sh --only-tag v0`). A row with
+  neither runs with the backend `missing` (the harness sets no `DRGNX_DIR`).
+- **The fake backend** (`runtime/target/debug/ratatoskr-fake-backend`, `conformance/src/bin/`) stands in for the
+  Lisp backend: it serves `DRGNX_HUB_SERVE_SOCKET` the v0 way, appends every line it gets to
+  `$STATE/fake-backend.log` and writes its environment as a JSON object to `$STATE/fake-backend.env`. It answers from
+  the JSON script in `DRGNX_FAKE_BACKEND_SCRIPT` (a row's `start` `env`): `{METHOD: ANSWER}`, ANSWER an object with
+  `result` or `error` (sent with the request's id), a string (the whole line, `$ID` the id), `null` (never
+  answered), `{"exit": CODE}` (it exits) or `{"from_file": PATH}` (the answer object is read from PATH at each call,
+  which a row rewrites meanwhile). Without a script: `ping`, `status` (`gateway_port` and `registrations`
+  0), `subscribe` and `coord/notify` answer, anything else is an error. When the script's `trigger` method
+  (`coord/notify`) is called, it sends its subscribers the events of the file `events` (a JSON array of `{event,
+  data}`), then `flood` `card` events with a title of `flood_size` bytes (65536). It ends with its parent
+  (`DRGNX_HUB_PARENT_PID`) unless the script says `"ignore_parent": true`.
 - `--only GLOB` matches the scenario name (`*` and `?`); `--only-tag TAG` the rows that require the tag.
 - Output: one `PASS name`, `SKIP name (reason)` or `FAIL name: step N (VERB): what` line per scenario, then
   `N passed, N skipped, N failed`. Exit 0 only with no FAIL. With `--require-all` a SKIP fails too, except `linux` /
-  `macos` skips on the other host and `sudo` skips where neither root nor passwordless sudo exists.
+  `macos` skips on the other host, `sudo` skips where neither root nor passwordless sudo exists, and `perf` rows
+  without `--perf`.
 - `--perf OUT.json` runs the `perf` rows and writes every `measure` step's timings to the file.
 - `connect-as` connects to the socket and relays stdin and stdout over it: the other-uid connection runs it as
-  uid 65534 (`setpriv` as root, else `sudo -n -u nobody`; `$SUDO` names the sudo command).
+  uid 65534 (`setpriv` as root where util-linux has it, else `sudo -n -u nobody`; `$SUDO` names the sudo command).
 
 ### The scenario format
 
@@ -97,30 +167,35 @@ Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in fai
 
 | VERB | Keys | Meaning |
 |---|---|---|
-| `start` | `hub` (a name, default `hub`), `bin` (`"under-test"` or `"lisp"`), `args`, `env`, `same_root_as`, `wait` | start `BIN serve --foreground --parent-pid <harness pid> ARGS` in a fresh root (or another hub's root); with `wait` (default true) it waits up to 10 s until `ping` answers; `wait: false` is for a start expected to exit |
-| `run` | `capture`, `bin`, `args`, `env`, `hub`, `expect_code`, `expect_stdout` | run `BIN ARGS` to completion (30 s) in the hub's root: `ensure`, `stop`, `status`. The capture is `{stdout, code, json}`; `expect_stdout` is a string the output contains or a pattern for its JSON |
+| `start` | `hub` (a name, default `hub`), `bin` (`"under-test"`, `"lisp"` or an absolute path, `$ROOT` being the root: a copy `install_bin` made), `args`, `env`, `same_root_as`, `wait` | start `BIN serve --foreground --parent-pid <harness pid> ARGS` in a fresh root (the `root` step's, or another hub's root); with `wait` (default true) it waits up to 10 s until `ping` answers; `wait: false` is for a start expected to exit |
+| `root` | none | make a root with no hub in it (`$ROOT $SOCKET $LOCK …` name its paths). The `run`, `start` and file steps after it work in that root; what `ensure` started there, detached, is stopped when the scenario ends (the lock file's pid, while its start time is the recorded one) |
+| `run` | `capture`, `bin`, `args`, `env`, `hub`, `concurrent`, `retry_ms`, `expect_code`, `expect_stdout`, `expect_stderr` | run `BIN ARGS` to completion (30 s) in the hub's root (else the `root` step's): `ensure`, `stop`, `status`, `restart`. `DRGNX_HUB_PARENT_PID` is the harness's, so a hub it starts detached ends with the harness. `concurrent: N` runs N copies at once, each of which must satisfy the expectations; `retry_ms` repeats the run until they hold. The capture is `{stdout, code, json}`; `expect_stdout` is a string the output contains or a pattern for its JSON (`$capture:NAME` / `$NAME` work in both); `expect_stderr` is a string the error output contains |
+| `rename`, `remove` | `from`, `to` / `path` | rename-replace a file, remove one (an update of a binary on disk) |
+| `install_bin` | `to` | copy the hub under test to `to` (0755), a binary a scenario can replace |
 | `spawn` | `capture`, `argv` | start a helper (for example `sleep 60`); the capture is its pid, and `NAME_start` its start time. Killed when the scenario ends |
 | `connect` | `conn` (default `c`), `hub`, `socket` (`"main"` or `"agent:SID"`), `as` | open a connection; lines are buffered per connection. `"user"` (default) on a v1 target performs the `hello` macro with a valid proof and consumes the `challenge`; on `--target lisp` it does nothing. `"service"` connects raw (the `challenge` stays buffered). `"other-uid"` needs `sudo`: it runs `connect-as` as another uid, and makes the root directory 0711 for it |
-| `hello` | `conn`, `proof`, `proto`, `expect_class`, `expect_error`, `capture` | the v1 macro: read the `challenge`, send `hello` with the proof, check the class and, for `valid`, the hub's proof. `proof` is `valid`, `wrong`, `none` or `replay:NAME`. `capture: NAME` keeps the line it sent; `replay:NAME` sends such a line again, as is. `expect_error: CODE` wants the refusal with that code |
-| `chmod` | `path`, `mode` | change a mode (octal string) |
-| `send` | `conn`, one of `json`, `raw`, `bytes` | write one line. `raw` is the text as is, plus `\n` unless `"no_newline": true`; `bytes` is `{fill, n, newline}`. A write the hub closed meanwhile is no error: the next `expect_closed` says so |
+| `hello` | `conn`, `proof`, `proto`, `expect_class`, `expect_error`, `expect_result`, `capture` | the v1 macro: read the `challenge`, send `hello` with the proof, check the class and, for `valid`, the hub's proof. `proof` is `valid`, `wrong`, `none` or `replay:NAME`. `capture: NAME` keeps the line it sent; `replay:NAME` sends such a line again, as is. `expect_error: CODE` wants the refusal with that code; `expect_result` is a pattern for the reply. A connection is challenged once: a second `hello` on it uses the nonce the first one read |
+| `chmod` | `path`, `mode`, `owner` | change a mode (octal string) and/or the owner: `"other"` gives the path to uid and gid 65534, `"self"` back to the harness's (root does it itself; anyone else through passwordless `sudo -n chown`, so such a row needs `sudo`) |
+| `send` | `conn`, one of `json`, `raw`, `bytes` | write one line. `raw` is the text as is, plus `\n` unless `"no_newline": true`; `bytes` is `{fill, n, newline}`. In `json`, `{"$repeat": TEXT, "times": N}` is TEXT N times (a long string without a long row). `"eof": true` then closes the sending side (a client that vanished mid-line). A write the hub closed meanwhile is no error: the next `expect_closed` says so |
+| `pause` | `conn` | stop reading the connection (what arrives stays in the socket): a client that stopped reading. The next step that reads it reads again |
 | `expect` | `conn`, `json` (pattern), `within_ms` (5000) | the first buffered or arriving line that matches; earlier non-matching lines stay buffered |
 | `expect_next` | as `expect` | the very next line must match |
 | `expect_closed` | `conn`, `within_ms` | the hub closed the connection |
 | `expect_silent` | `conn`, `for_ms` (300) | no line arrives |
 | `kill` | `hub` or `pid`, `signal` (`TERM KILL STOP CONT INT HUP QUIT USR1 USR2`) | signal the hub (or a captured pid) |
 | `expect_exit` | `hub` or `pid`, `code`, `signal`, `within_ms` (10000) | the process ended with this status (a `pid` must be one the scenario spawned) |
-| `file` | `path`, `exists`, `mode`, `owner` (`"user"` or a uid), `json` | inspect a file the contract names |
-| `write_file` | `path`, `text` | set up an input |
-| `sqlite` | `path`, `sql: [...]` | set up a database (bundled SQLite) |
+| `file` | `path`, `exists`, `mode`, `owner` (`"user"` or a uid), `json`, `contains`, `count` (1), `lacks`, `within_ms` (5000) | inspect a file the contract names. A `*` or `?` in the last component picks the first matching name (`hub-*.jsonl`). `contains` waits up to `within_ms` until the file's text holds the string `count` times (a log is written a moment later); `lacks` is a string the text must not hold |
+| `write_file` | `path`, `text` or `json` (a JSON value; `{"$repeat": TEXT, "times": N}` expands, as in `send`), `mode` (octal string) | set up an input |
+| `sqlite` | `path`, `sql: [...]`, `query`, `expect` | set up a database (bundled SQLite); `query`'s rows, as `[[value…]…]`, must match the pattern `expect` |
 | `backend_log` | `hub`, `expect_line`, `expect_no_line`, `within_ms`, `for_ms` | lines the fake backend received (`$STATE/fake-backend.log`): a substring, or a pattern for lines that are JSON |
-| `pid` | `capture`, `alive` (true), `within_ms` (5000) | a captured pid is (or is no longer) running; a reused pid does not count |
-| `class_matrix` | `table` | generated checks over the class table: the reader arrives with the hello task |
-| `bad_params` | `registry` | generated checks over the registry: the reader arrives with the registry task |
+| `pid` | `capture`, `alive` (true), `within_ms` (5000), `stays_for_ms` | a captured pid is (or is no longer) running; a reused pid does not count. With `stays_for_ms` a pid that is running must stay so that long (a signal sent a moment ago has landed by then) |
+| `class_matrix` | `table`, `args`, `env`, `agent`, `last`, `within_ms` | every method of `table` (`{method: [classes]}`, `class-matrix.json`) gets `{}` from `user` (a valid hello), `service` (no hello) and, with `agent: SID`, `agent` (that session's socket, which `args` such as `["--agent-socket", "s1:j1"]` makes the hub serve). A listed class must not get `not-allowed`; any other must. The step starts its own hubs with `args` and `env`: one for the table, and for each method of `last` (default `restart`, `shutdown`, which a user call runs) one per class |
+| `bad_params` | `conn`, `registry`, `within_ms` | every method of the registry file (`methods.json`; a relative path is from the current directory) with required params gets `{}` and a wrong type for its first required key (`true` where a list belongs, else `[]`) on `conn`; each must be `invalid-params` with a `path` (one of the required keys, then that key). `hello` goes on a fresh connection each time |
 | `measure` | `name`, `repeat`, `steps` | times the steps, `repeat` times, and records the milliseconds for `--perf` |
 
-**Variables** in strings: `$ROOT $HOME $RUN $STATE $DATA $CONFIG $SOCKET $SOCKET_DIR $CAP $LOCK $PID(hub) $HARNESS_PID`
-(of the step's `hub`, else the latest started), and `$NAME` for a capture. A string that is just `$PID(hub)`,
+**Variables** in strings: `$ROOT $HOME $RUN $STATE $DATA $CONFIG $SOCKET $SOCKET_DIR $BACKEND_SOCKET $CAP $LOCK $PID(hub)
+$HARNESS_PID` (of the step's `hub`, else the latest started), `$SCENARIOS` (the scenarios' directory, absolute: its
+`fixtures/`), `$EMACS` (`$DRGNX_EMACS`, else `emacs`), and `$NAME` for a capture. A string that is just `$PID(hub)`,
 `$HARNESS_PID` or a capture keeps its JSON type (a number stays a number). Agent sockets are
 `$SOCKET_DIR/hub-HASH.d/agent-SID.sock`.
 
@@ -137,7 +212,7 @@ Special strings: `"$any"`, `"$string"`, `"$number"`, `"$hex64"`, `"$absent"` (th
 ### Where the socket is: one fixture for Lisp and Rust
 
 The data directory and the socket path follow Lisp's `drgnx-paths-dir 'data` and `drgnx-hub-socket` exactly
-(`conformance/src/paths.rs` is the Rust side): only an absolute environment value counts; names are normalised as Emacs's
+(`crates/runstav/src/paths.rs` is the Rust side, for the hub and the harness alike): only an absolute environment value counts; names are normalised as Emacs's
 `expand-file-name` does it, oddities kept (`/a/../../b` is `/../b`, `//a` stays `//a`); `sha1` of the data directory
 (with its trailing `/`), cut to 8 hex digits, names `hub-HASH.sock`; it is under `$XDG_RUNTIME_DIR/drgnx/` when that is a
 directory, else under `<state>/hub/`; a path over 103 bytes goes to `<tmp>/drgnx-hub-UID/`, where `<tmp>` is the first
@@ -146,12 +221,12 @@ of `TMPDIR`, `TMP`, `TEMP` that is set, else `/tmp`. Lisp reads those variables 
 user can change it, so only the environment gives one answer on both sides. A relative value is out of scope.
 
 `test/fixtures/hub-socket-cases.json` holds cases `{env, data_dir, socket}` (`$UID` stands for the uid); the Lisp test
-`drgnx-hub-socket-cases/lisp-agrees-with-the-fixture` and the Rust test `paths::tests::socket_cases_fixture` both read
-it. To add a case, run the Lisp side to measure it and put the result in; never write an expected value by hand.
+`drgnx-hub-socket-cases/lisp-agrees-with-the-fixture` and the Rust tests `paths::tests::socket_cases_fixture` (in the
+harness and in `runstav`) all read it. To add a case, run the Lisp side to measure it and put the result in; never write an expected value by hand.
 
 ### Testing the harness
 
-`cargo test -p drgnx-conformance` covers the parser, the matcher, the paths, the proofs and, in `tests/harness.rs`, whole
+`cargo test -p domr` covers the parser, the matcher, the paths, the proofs and, in `tests/harness.rs`, whole
 runs against a scripted hub (a small hub inside the test binary). `test/conformance/self/*.jsonl` are the harness's own
 rows: they are valid against any hub, so they also run against the Lisp hub.
 
@@ -169,9 +244,144 @@ default `"as": "user"`, so the same rows run through Ratatoskr's front once it e
 Run them against the Lisp hub (Emacs from `$DRGNX_EMACS`, else `emacs` on `PATH`):
 
 ```
-cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-conformance
-runtime/target/debug/drgnx-conformance --target lisp --hub-bin test/conformance/lisp-hub.sh --scenarios test/conformance
+cargo build --locked --manifest-path runtime/Cargo.toml -p domr
+runtime/target/debug/domr --target lisp --hub-bin test/conformance/lisp-hub.sh --scenarios test/conformance
 ```
 
-Green is 11 `PASS` for these rows (plus the 2 `self/` rows). In CI the `conformance-lisp` step runs this in the Linux job
+Green is 11 `PASS` for these rows (plus the 2 `self/` rows).
+
+### Ratatoskr's server-core rows
+
+`v1` rows (Ratatoskr only) pin the server core ([hub.md](hub.md#the-control-socket)):
+
+| Group | Rows |
+|---|---|
+| `framing/` | `a-partial-line-then-eof-closes-only-that-connection` |
+| `basics/` | `two-hundred-connections-each-get-an-answer` |
+| `lifecycle/` | `socket-dir-0700-cap-0600`, `sigterm-removes-socket-and-cap`, `parent-pid-gone-ends-the-hub`, `a-newer-runtime-db-is-moved-aside`; with `lisp-backend` (a Lisp hub started through `--lisp-hub`): `a-live-lisp-hub-makes-ratatoskr-exit-3`, `a-busy-lisp-hub-is-not-taken-over` (stopped with SIGSTOP), `a-stale-lisp-lock-directory-is-taken-over`, `a-lisp-lock-naming-another-program-is-taken-over` |
+| `security/` | `another-uid-is-refused` (`sudo`: as root in the Fedora 45 test image, or through passwordless sudo on macOS) |
+
+```
+cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr --features drgnx-ratatoskr/test-hooks
+cargo test  --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features test-hooks
+runtime/target/debug/domr --target ratatoskr --hub-bin runtime/target/debug/ratatoskr \
+    --lisp-hub test/conformance/lisp-hub.sh --scenarios test/conformance --only 'lifecycle/*'
+```
+
+`tests/server.rs` starts the real binary in roots under `$TMPDIR`. It covers two hubs on one lock (the second exits
+3), the cap (64 hex, 0600, gone after SIGTERM, never in the log) and the lock file's `PID START_TIME`. With
+`test-hooks` it also covers a reader that stops while a `__test_flood` of 32 MiB comes. That reader is dropped past
+16 MiB while another reader gets every line. In CI the `conformance-lisp` step runs this in the Linux job
 (Nidhogg from `test/container/nidhogg.sh fedora-45`) and the macOS job (`nidhogg.sh macos`, which sets `DRGNX_EMACS`).
+
+### The v1 rows
+
+Rows with `"requires": ["v1"]` run only against Ratatoskr (`--target ratatoskr`):
+
+| Group | Rows |
+|---|---|
+| `params/` | `bad-params-are-refused-with-a-path` (`bad_params` over `runtime/protocol/methods.json`), `named-types-refuse` (ids, absolute local paths, a 17-item `env/set`, an uppercase nonce: each `invalid-params` with its path), `duplicate-key-refused`, `unknown-keys-dropped-and-listed` |
+| `hello/` | `challenge-on-accept`, `valid-proof-makes-user-and-hub-proves`, `wrong-proof-refused-and-logged`, `replayed-hello-is-refused` (SB-T12-6), `no-hello-is-service`, `newer-proto-refused`, `a-second-hello-is-refused`; with `test-hooks`: `an-agent-socket-is-agent-class` |
+| `class/` | `matrix` (`test-hooks`: `class_matrix` over `class-matrix.json`, the agent class through `--agent-socket s1:j1`) |
+| `errors/` | `every-error-has-a-code` (each code but `schema`; a refused notification gets no answer; `internal` from a fake backend's answer that does not fit) |
+| `readonly/` | `a-newer-work-db-refuses-writes` (work.db at schema 9: `schema` for a writing method within the 2 s tick) |
+| `basics/` | `status-shape-v1`, `events-since-without-a-work-db`, `events-since-from-the-store` (rows written into work.db with `sqlite`) |
+| `forward/` (`fake-backend`) | `a-raw-duplicate-key-never-reaches-the-backend`, `a-tramp-path-never-reaches-the-backend`, `params-are-re-encoded-with-the-caller`, `a-malformed-backend-answer-is-internal`, `keys-only-from-a-proven-user`, `the-backend-gets-no-provider-key`, `the-backend-keeps-ssh-and-proxy-env`, `the-backend-gets-the-serve-socket-only`, `events-are-relayed-and-decoded`, `every-backend-event-kind-is-relayed` (`fixtures/backend-events.json`: one event of each of the nine kinds, as main sends it), `a-malformed-backend-event-is-dropped`, `backend-gone-calls-fail-once-and-it-restarts`, `an-oversized-forward-is-refused`; with `test-hooks` too: `agents-list-is-shaped-per-class`, `spend-is-own-job-for-an-agent` |
+| `forward/` (`lisp-backend`) | `empty-lists-are-arrays` (A-17), `results-match-schemas` (a populated store: a proposed job, a review card, a mock-acp session with entries; every read method answers without `internal`) |
+| `backpressure/` (`fake-backend`) | `a-stopped-reader-is-dropped-others-keep-going` (the backend floods 400 events of 64 KiB; a subscriber that `pause`d is closed, another gets every event) |
+| `lifecycle/` (Task 16) | `ensure-starts-once` (two `ensure`s at once with no supervisor: one hub), `stop-ends-it`, `kill-9-then-ensure-restarts`, `stop-with-a-stale-lock-signals-nothing` (a lock file naming a live `sleep` that nobody holds: not running, no signal), `stop-ends-a-lisp-hub` (`lisp-backend`) |
+| `restart/` | `the-restart-method-exits-75`, `a-self-detached-hub-re-execs`; with `fake-backend` and `test-hooks` (`--idle-tick-ms 200`; the answers of `agents/list` come from a file the row rewrites): `a-changed-binary-sends-the-notice`, `a-busy-backend-delays-it`, `a-missing-or-broken-new-binary-never-restarts` |
+| `reaper/` | `a-recorded-orphan-backend-is-killed-at-start` (`fake-backend`: the hub SIGKILLed, its backend ignoring its parent; the next hub kills it within 4 s), `a-row-without-a-pid-is-dropped-and-kills-nothing` (NULL rows in `runtime.db`: removed, nothing signalled) |
+
+The forwarding rows run with both helpers:
+
+```
+cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr --features drgnx-ratatoskr/test-hooks
+runtime/target/debug/domr --target ratatoskr --hub-bin runtime/target/debug/ratatoskr \
+    --lisp-hub test/conformance/lisp-hub.sh --fake-backend runtime/target/debug/ratatoskr-fake-backend \
+    --scenarios test/conformance
+```
+
+Paths: the agent sockets are `<root>/run/drgnx/hub-HASH.d/agent-SID.sock`, so with `DRGNX_CONFORMANCE_ROOTS` the
+root's own path must leave room for them within 103 bytes (a short link to a deeper directory works).
+
+`test/conformance/class-matrix.json` is not a row: it is the hand-written class table (`{method: [classes]}`) that the
+registry's test and the `class_matrix` step read.
+
+### The perf rows
+
+`perf/` rows (`requires` `v1` and `perf`) run only with `--perf OUT.json`; without it they are skipped, and
+`--require-all` lets that be. Each is a `measure` step; the file lists every sample and the median. There are no
+budgets: this is a recorded baseline, not a regression gate.
+
+| Row | Measures | Samples |
+|---|---|---|
+| `start` | starting the hub to its first answered `ping` on a proven connection | 1 |
+| `hello-round-trip` | `ping` and its answer on a proven connection | 100 |
+| `a-1-mib-request-line` | an `agents/send` line of about 1 MiB read, re-encoded, forwarded to the fake backend and answered | 20 |
+| `a-4-mb-snapshot` | `agents/get` with a transcript of about 4 MB from the fake backend, to the client | 10 |
+
+```
+cargo build --locked --release --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr
+runtime/target/release/domr --target ratatoskr --hub-bin runtime/target/release/ratatoskr \
+    --fake-backend runtime/target/release/ratatoskr-fake-backend --scenarios test/conformance \
+    --only 'perf/*' --perf perf.json
+```
+
+CI runs this on Linux and macOS and keeps the files as artifacts ([ci.md](ci.md)). Numbers are for a release build on a
+quiet machine.
+
+## Building and installing Ratatoskr
+
+Users get the binary from install.sh and `drgnx update`; both call `drgnx runtime` (bin/drgnx, plain bash):
+
+- `drgnx runtime build [--install] [--prefix DIR]`: `cargo build --release --locked -j N --manifest-path
+  runtime/Cargo.toml -p drgnx-ratatoskr`, with **no** `test-hooks` feature. The cargo is the one in `<data>/cargo`
+  (install.sh records it, with `RUSTUP_HOME`/`CARGO_HOME` lines for a private rustup), else `cargo` on `PATH`; neither:
+  exit 1, "no Rust toolchain: run install.sh again". `CARGO_TARGET_DIR` is `<cache>/ratatoskr-target`, `CARGO_HOME`
+  `<cache>/cargo` unless the record sets it, `DRGNX_BUILD_COMMIT` is the checkout's HEAD (plus `-dirty`) and
+  `DRGNX_CHECKOUT` the checkout, so `ratatoskr version --json` says what it was built from. On Linux with a user systemd
+  the build runs in `systemd-run --user --scope` with `MemoryMax` min(jobs x 1536 MiB + 1 GiB, available - 1 GiB) and
+  `MemorySwapMax=0`; without one, `-j` alone and a note. macOS has no cap.
+- `drgnx runtime install [--prefix DIR]`: refuses a binary whose `version --json` says `"test_hooks": true` (or says
+  nothing), copies it to `<data>/bin/ratatoskr.new` and renames it to `ratatoskr` (a running hub sees a new inode at
+  its resolved path); with `--prefix` links `DIR/bin/ratatoskr` and `DIR/bin/rtsk`.
+- `drgnx update` runs `runtime build --install` as its third step; a failure rolls the update back
+  (`DRGNX_UPDATE_RUNTIME_CMD` replaces the step in tests). The doctor's `ratatoskr` check (group Agents) reads
+  `ratatoskr doctor --json`: no binary, test hooks or a bad socket directory fail; a failed runtime update, a binary or
+  hub older than the checkout, or an Emacs SQLite in 3.7.0 to 3.51.2 (WAL bug) warn.
+
+Tests set `DRGNX_INSTALL_RUNTIME=none` so install.sh runs no toolchain probe or build; `bin/drgnx test --install` builds
+for real.
+
+## Fuzzing
+
+`runtime/fuzz/` is a cargo-fuzz crate with its own `[workspace]` (the product workspace excludes it). It builds on
+nightly only: the pin is `nightly-2026-10-15`, set by the CI job and by local runs, never by a `rust-toolchain.toml`
+(a toolchain file would make a plain `cargo` there install a nightly). cargo-fuzz needs a C++ compiler for libFuzzer
+(`g++`: CI's `fuzz` job runs on the Ubuntu runner, which has it; 60 s a target on a push to `main`, 10 minutes a target
+daily, `fuzz_minutes` on demand: [ci.md](ci.md)).
+
+| Target | What it feeds |
+|---|---|
+| `line_codec` | arbitrary bytes, cut into chunks of a size the input picks, through the client line codec, then `parse_strict` on every line |
+| `request_prelude` | a line through `dispatch::prelude` (steps 1 to 5, no handler) for every class and several protocol states |
+| `hello` | hello params decoded from arbitrary JSON, then `hello()` against a fixed cap: as given, with the correct proof, on a main and on an agent socket, and a second hello |
+
+The seed corpus in `fuzz/corpus/<target>/` is the request lines of the conformance rows. A run adds files to the
+corpus directory, so run on a scratch copy and keep the repository's seeds as they are.
+
+Local run (keep the toolchain and the crate cache out of `~`: point `RUSTUP_HOME` and `CARGO_HOME` at a scratch
+directory):
+
+```
+export RUSTUP_HOME=/path/to/scratch/rustup CARGO_HOME=/path/to/scratch/cargo
+rustup toolchain install nightly-2026-10-15 --profile minimal
+cargo install cargo-fuzz --locked
+cp -r runtime/fuzz/corpus /path/to/scratch/corpus
+cargo +nightly-2026-10-15 fuzz run line_codec --fuzz-dir runtime/fuzz /path/to/scratch/corpus/line_codec \
+  -- -max_total_time=60 -rss_limit_mb=2048
+```
+
+A crash is written to `runtime/fuzz/artifacts/<target>/` (ignored by git). Commit the input as a regression test in
+`runstav` (or the crate that owns the parser) before fixing it.

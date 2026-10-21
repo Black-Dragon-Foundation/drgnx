@@ -69,6 +69,27 @@ shorthands come back, without reopening them.
   directory-local variables and auto-revert away from remote files; drgnx leaves them as they are.
 - **Auto-saving remote files.** If you turn on `auto-save-visited-mode`, it saves local files only:
   `remote-file-name-inhibit-auto-save-visited` is set to t while you leave it at its default (nil).
+- **The hub's socket (Ratatoskr).** Its directory is yours and mode 0700, and the socket, the cap file
+  (`hub-HASH.cap`) and the lock are 0600. Ratatoskr also asks the system who connected (the peer's uid) and closes a
+  connection from any other user at once, root included, with the peer's pid in its log. That holds even when a socket
+  was opened up by mistake. The cap proves an editor or the CLI to the hub, and the hub to them. Each proof covers
+  that connection's own challenge, so a hello line someone captured does not work on another connection. Without a
+  proof a connection may only ping, read the hub's status, list the sessions (names and jobs), read spending and
+  send coordination notices; everything that starts, stops, answers, approves, configures or reads a transcript needs
+  it. The cap keeps out
+  a connection that reaches a socket it should not have, such as one bound into a container. It is worth nothing
+  against unsandboxed programs running as you: they can read the cap file. The agent sandbox is the boundary
+  there, not the cap.
+- **The Lisp hub behind Ratatoskr.** Until each part moves to Rust, Ratatoskr runs the Lisp hub as its child on a
+  private socket of its own and checks every call (who may make it, and every value in it) before passing it on, so
+  the Lisp hub only ever gets calls the front accepted. Only the front knows that socket: the Lisp hub forgets it at
+  start, so the agents it runs reach the hub through the front like everyone else. Its environment is a fixed list
+  (paths, locale, the ssh agent, proxies and certificates, the terminal and display): a provider key set in the
+  environment that starts the hub never reaches it, or its agents. Keys reach the hub over the socket, from you.
+- **Your keys go only to a hub that proved itself.** Your editor and the CLI hand provider keys over only after the
+  hub showed, in its answer to their hello, that it read the same cap file. A hub that cannot show it is closed and
+  you are told; a hub of an older drgnx (before Ratatoskr) still gets your editor's calls but never a key. The
+  coordination servers your agents run never read the cap: they stay at the level of a connection without a proof.
 
 ## When something you trust is held back
 

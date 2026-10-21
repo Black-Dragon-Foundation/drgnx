@@ -1,8 +1,8 @@
 //! Hubs under test (a process in its own temporary root) and the connections to them.
 
 use crate::matcher::{self, Captures};
-use crate::paths::{self, Env};
 use hmac::{Hmac, KeyInit, Mac};
+use runstav::paths::{self, Env};
 use serde_json::Value;
 use sha2::Sha256;
 use std::collections::{BTreeMap, VecDeque};
@@ -12,6 +12,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::time::{Duration, Instant};
 
@@ -47,16 +48,26 @@ pub fn random_hex(bytes: usize) -> String {
 // ---------------------------------------------------------------- the root every hub lives in
 
 /// `/tmp/rtsk-XXXXXX/` with `home run state data config cache tmp`: `/tmp`, not `$TMPDIR`, so macOS socket paths stay short.
+/// `DRGNX_CONFORMANCE_ROOTS=DIR/PREFIX` makes them `DIR/PREFIXXXXXXX/` instead (a short DIR: the socket path must stay
+/// within 103 bytes).
 pub struct Root {
     dir: tempfile::TempDir,
 }
 
 impl Root {
     pub fn new() -> Result<Arc<Root>, String> {
+        let roots = std::env::var_os("DRGNX_CONFORMANCE_ROOTS").map(PathBuf::from);
+        let (parent, prefix) = match &roots {
+            Some(r) => (
+                r.parent().unwrap_or(Path::new("/")),
+                r.file_name().unwrap_or_default(),
+            ),
+            None => (Path::new("/tmp"), std::ffi::OsStr::new("rtsk-")),
+        };
         let dir = tempfile::Builder::new()
-            .prefix("rtsk-")
-            .tempdir_in("/tmp")
-            .map_err(|e| format!("cannot make a root in /tmp: {e}"))?;
+            .prefix(prefix)
+            .tempdir_in(parent)
+            .map_err(|e| format!("cannot make a root in {}: {e}", parent.display()))?;
         for sub in ["home", "run", "state", "data", "config", "cache", "tmp"] {
             std::fs::create_dir(dir.path().join(sub))
                 .map_err(|e| format!("cannot make {sub} in the root: {e}"))?;
@@ -99,6 +110,90 @@ impl Root {
         }
         vars.extend(extra);
         vars
+    }
+}
+
+/// The variables of ROOT's paths (`$ROOT $SOCKET $CAP $LOCK …`): what a hub started there would use, whether or not
+/// one runs (a `root` step, or a detached hub that `ensure` started).
+pub fn root_vars(root: &Root) -> BTreeMap<&'static str, String> {
+    layout_vars(
+        root,
+        &Env {
+            vars: root.base_env(vec![]),
+            uid: unsafe { libc::geteuid() },
+        },
+    )
+}
+
+/// The variables of ROOT's paths under the environment ENV.
+fn layout_vars(root: &Root, env: &Env) -> BTreeMap<&'static str, String> {
+    let socket = paths::socket_path(env);
+    let s = |p: &Path| p.to_string_lossy().into_owned();
+    let data = s(&paths::data_dir(env));
+    let socket_dir = socket.parent().map(Path::to_path_buf).unwrap_or_default();
+    let stem = socket
+        .file_stem()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut lock = socket.clone().into_os_string();
+    lock.push(".lock");
+    BTreeMap::from([
+        ("ROOT", s(root.path())),
+        ("HOME", s(&root.path().join("home"))),
+        ("RUN", s(&root.path().join("run"))),
+        ("STATE", s(&root.path().join("state").join("drgnx"))),
+        ("DATA", data.trim_end_matches('/').to_string()),
+        ("CONFIG", s(&root.path().join("config"))),
+        ("SOCKET", s(&socket)),
+        ("SOCKET_DIR", s(&socket_dir)),
+        (
+            "BACKEND_SOCKET",
+            s(&socket_dir.join(format!("{stem}.d")).join("backend.sock")),
+        ),
+        ("CAP", s(&socket.with_extension("cap"))),
+        ("LOCK", s(Path::new(&lock))),
+    ])
+}
+
+/// Stop what `ensure` started in ROOT, which no step of a scenario owns: the process named in each `*.sock.lock`
+/// under it, when it still has the start time the lock file recorded (SIGTERM, then SIGKILL after 3 s).
+pub fn stop_detached(root: &Root) {
+    fn locks(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in rd.flatten() {
+            let p = e.path();
+            let Ok(t) = e.file_type() else { continue };
+            if t.is_dir() && depth > 0 {
+                locks(&p, depth - 1, out);
+            } else if t.is_file() && p.to_string_lossy().ends_with(".sock.lock") {
+                out.push(p);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    locks(root.path(), 4, &mut files);
+    for f in files {
+        let text = std::fs::read_to_string(&f).unwrap_or_default();
+        let mut it = text.split_whitespace();
+        let (Some(pid), Some(start)) = (it.next(), it.next()) else {
+            continue;
+        };
+        let Ok(pid) = pid.parse::<u32>() else {
+            continue;
+        };
+        if crate::exec::start_time(pid).as_deref() != Some(start) {
+            continue;
+        }
+        unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while unsafe { libc::kill(pid as i32, 0) } == 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        if unsafe { libc::kill(pid as i32, 0) } == 0 {
+            unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+        }
     }
 }
 
@@ -177,32 +272,13 @@ impl Hub {
         self.socket.with_extension("cap")
     }
 
-    pub fn lock(&self) -> PathBuf {
-        let mut s = self.socket.clone().into_os_string();
-        s.push(".lock");
-        PathBuf::from(s)
-    }
-
     pub fn state_dir(&self) -> PathBuf {
         self.root.path().join("state").join("drgnx")
     }
 
     /// The variables a step can use in its strings (`$PID(name)` and `$HARNESS_PID` are the executor's).
     pub fn vars(&self) -> BTreeMap<&'static str, String> {
-        let s = |p: &Path| p.to_string_lossy().into_owned();
-        let data = s(&paths::data_dir(&self.env));
-        BTreeMap::from([
-            ("ROOT", s(self.root.path())),
-            ("HOME", s(&self.root.path().join("home"))),
-            ("RUN", s(&self.root.path().join("run"))),
-            ("STATE", s(&self.state_dir())),
-            ("DATA", data.trim_end_matches('/').to_string()),
-            ("CONFIG", s(&self.root.path().join("config"))),
-            ("SOCKET", s(&self.socket)),
-            ("SOCKET_DIR", s(&self.socket_dir())),
-            ("CAP", s(&self.cap())),
-            ("LOCK", s(&self.lock())),
-        ])
+        layout_vars(&self.root, &self.env)
     }
 
     /// Has the process ended?  (Reaps it.)
@@ -211,6 +287,24 @@ impl Hub {
             self.exit = self.child.try_wait().ok().flatten();
         }
         self.exit
+    }
+
+    /// The last lines of the hub's own log (`<state>/hub/log/hub-*.jsonl`), for a failure message.
+    pub fn jsonl_tail(&self) -> String {
+        let dir = self.state_dir().join("hub").join("log");
+        let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .collect();
+        files.sort();
+        let text = files
+            .last()
+            .and_then(|f| std::fs::read_to_string(f).ok())
+            .unwrap_or_default();
+        let lines: Vec<&str> = text.lines().collect();
+        lines[lines.len().saturating_sub(12)..].join("\n")
     }
 
     pub fn log_tail(&self) -> String {
@@ -305,20 +399,30 @@ enum Msg {
 
 pub struct Conn {
     writer: Box<dyn Write + Send>,
+    /// The socket itself, for `close_write` (none for the other uid's relay, whose stdin is closed instead).
+    socket: Option<UnixStream>,
     rx: Receiver<Msg>,
+    /// While set (the `pause` step), the reader stops reading the socket: a client that stopped reading.  A step
+    /// that reads clears it.
+    pause: Arc<AtomicBool>,
     /// Lines read but not yet consumed by an `expect` (earlier non-matching lines stay here).
     buf: VecDeque<String>,
     eof: bool,
     helper: Option<Child>,
+    /// The hub's challenge nonce, once read.
+    hub_nonce: Option<String>,
     pub next_id: u64,
 }
 
-fn spawn_reader(r: impl Read + Send + 'static) -> Receiver<Msg> {
+fn spawn_reader(r: impl Read + Send + 'static, pause: Arc<AtomicBool>) -> Receiver<Msg> {
     let (tx, rx) = channel();
     std::thread::spawn(move || {
         let mut r = BufReader::new(r);
         let mut raw = Vec::new();
         loop {
+            while pause.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(20));
+            }
             raw.clear();
             match r.read_until(b'\n', &mut raw) {
                 Ok(0) | Err(_) => break,
@@ -345,6 +449,11 @@ fn as_json(line: &str) -> Value {
 }
 
 impl Conn {
+    /// Stop reading the socket (what arrives stays in the socket's buffer) until a step reads again.
+    pub fn pause(&self) {
+        self.pause.store(true, Ordering::SeqCst);
+    }
+
     /// Connect to a Unix socket, retrying for up to `retry` (agent sockets appear a moment after the hub).
     pub fn open(path: &Path, retry: Duration) -> Result<Conn, String> {
         let deadline = Instant::now() + retry;
@@ -359,12 +468,17 @@ impl Conn {
         };
         let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
         let reader = stream.try_clone().map_err(|e| e.to_string())?;
+        let socket = stream.try_clone().map_err(|e| e.to_string())?;
+        let pause = Arc::new(AtomicBool::new(false));
         Ok(Conn {
             writer: Box::new(stream),
-            rx: spawn_reader(reader),
+            socket: Some(socket),
+            rx: spawn_reader(reader, pause.clone()),
+            pause,
             buf: VecDeque::new(),
             eof: false,
             helper: None,
+            hub_nonce: None,
             next_id: 1,
         })
     }
@@ -380,7 +494,14 @@ impl Conn {
             .map_err(|e| e.to_string())?;
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o711))
             .map_err(|e| e.to_string())?;
-        let mut cmd = if unsafe { libc::geteuid() } == 0 {
+        // setpriv is util-linux's (Fedora's util-linux-core has none): without it root goes through sudo too
+        let setpriv = Command::new("setpriv")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        let mut cmd = if unsafe { libc::geteuid() } == 0 && setpriv {
             let mut c = Command::new("setpriv");
             c.args(["--reuid", "65534", "--regid", "65534", "--clear-groups"]);
             c
@@ -402,10 +523,13 @@ impl Conn {
         let reader = child.stdout.take().expect("piped");
         Ok(Conn {
             writer: Box::new(writer),
-            rx: spawn_reader(reader),
+            socket: None,
+            rx: spawn_reader(reader, Arc::new(AtomicBool::new(false))),
+            pause: Arc::new(AtomicBool::new(false)),
             buf: VecDeque::new(),
             eof: false,
             helper: Some(child),
+            hub_nonce: None,
             next_id: 1,
         })
     }
@@ -438,6 +562,20 @@ impl Conn {
         }
     }
 
+    /// End what this side sends (the hub reads EOF; the connection still reads): a client that vanished mid-line.
+    pub fn close_write(&mut self) -> Result<(), String> {
+        match &self.socket {
+            Some(s) => s
+                .shutdown(std::net::Shutdown::Write)
+                .map_err(|e| format!("shutdown failed: {e}")),
+            None => {
+                // the relay's stdin closed: it shuts its socket's write side
+                self.writer = Box::new(std::io::sink());
+                Ok(())
+            }
+        }
+    }
+
     fn pull(&mut self, wait: Duration) -> Result<Option<String>, RecvTimeoutError> {
         if let Some(l) = self.buf.pop_front() {
             return Ok(Some(l));
@@ -450,6 +588,7 @@ impl Conn {
         if self.eof {
             return Ok(None);
         }
+        self.pause.store(false, Ordering::SeqCst);
         match self.rx.recv_timeout(wait)? {
             Msg::Line(l) => Ok(Some(l)),
             Msg::Eof => {
@@ -579,15 +718,21 @@ impl Conn {
         }
     }
 
-    /// Wait for the `challenge` event and return the hub's nonce (earlier lines stay buffered).
+    /// Wait for the `challenge` event and return the hub's nonce (earlier lines stay buffered).  A connection is
+    /// challenged once: a second hello on it uses the nonce the first one read.
     pub fn challenge(&mut self, within: Duration) -> Result<String, String> {
+        if let Some(n) = &self.hub_nonce {
+            return Ok(n.clone());
+        }
         let mut caps = Captures::default();
         let v = self.expect(
             &serde_json::json!({"event": "challenge", "data": {"nonce": "$capture:n"}}),
             within,
             &mut caps,
         )?;
-        Ok(v["data"]["nonce"].as_str().unwrap_or_default().to_string())
+        let n = v["data"]["nonce"].as_str().unwrap_or_default().to_string();
+        self.hub_nonce = Some(n.clone());
+        Ok(n)
     }
 }
 

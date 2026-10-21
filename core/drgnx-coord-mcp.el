@@ -26,6 +26,7 @@
 (declare-function drgnx-work--status-rows "drgnx-work")
 (declare-function drgnx-work--json-row "drgnx-work")
 (declare-function drgnx-hub--untrusted "drgnx-hub-client")
+(defvar drgnx-hub-client-proves)
 
 ;;;; Who this server speaks for
 
@@ -614,7 +615,10 @@ error, nothing is sent.  The hub is asked only when the cheap checks fail."
   "Batch entry: serve the coordination tools on stdin/stdout."
   (drgnx-gc-batch-setup)
   (drgnx-coord-mcp--parent)   ; the agent's process, read now: while it surely is this server's parent
-  (drgnx-mcp-serve "drgnx" (drgnx-coord-mcp-tools)))
+  (require 'drgnx-hub-client)
+  ;; an agent started this server: it never reads the hub's cap, so its connections stay service class (review C1)
+  (let ((drgnx-hub-client-proves nil))
+    (drgnx-mcp-serve "drgnx" (drgnx-coord-mcp-tools))))
 
 (defun drgnx-coord-mcp-server-spec (agent &rest props)
   "The ACP `mcpServers' entry that gives AGENT (its session's id, s-XXXXXXXX) the coordination tools.  PROPS: :job,

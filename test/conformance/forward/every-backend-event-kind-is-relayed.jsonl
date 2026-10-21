@@ -1,0 +1,16 @@
+{"scenario": "forward/every-backend-event-kind-is-relayed", "requires": ["v1", "fake-backend"], "doc": "Each of the nine kinds the Lisp backend broadcasts on main (fixtures/backend-events.json, data as main sends it) reaches a subscribed user connection with its data (review C5)."}
+{"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"events\": \"$SCENARIOS/fixtures/backend-events.json\"}"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "coord/notify"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "c", "json": {"event": "agent", "data": {"id": "agent-1", "seq": 3, "session": {"id": "agent-1", "status": "idle", "via": "direct", "entries-count": 2, "paused": false}}}}
+{"do": "expect", "conn": "c", "json": {"event": "agent-entries", "data": {"id": "agent-1", "seq": 3, "entries": [[0, {"type": "user", "text": "hi"}], [1, {"type": "agent", "text": "You said: hi"}]]}}}
+{"do": "expect", "conn": "c", "json": {"event": "events", "data": {"since": 0, "last": 2, "events": [{"id": 1, "kind": "start", "job": "$absent"}, {"id": 2, "kind": "stop", "data": {"turn": true}}]}}}
+{"do": "expect", "conn": "c", "json": {"event": "lease-released", "data": {"task": "j1-1", "agent": "agent-2", "job": "j1"}}}
+{"do": "expect", "conn": "c", "json": {"event": "fallback", "data": {"agent": "agent-2", "from": "openrouter", "to": "anthropic", "why": "HTTP 429"}}}
+{"do": "expect", "conn": "c", "json": {"event": "card", "data": {"id": 7, "job": "j1", "task": "j1-1", "kind": "review", "title": "review j1-1"}}}
+{"do": "expect", "conn": "c", "json": {"event": "job", "data": {"id": "j1"}}}
+{"do": "expect", "conn": "c", "json": {"event": "budget", "data": {"job": "j1", "spent": 2.5, "budget": 2.0}}}
+{"do": "expect", "conn": "c", "json": {"event": "request", "data": {"job": "j1", "provider": "openrouter", "input": 100, "output": 20, "cost": 0.01, "status": 200}}}

@@ -6,6 +6,7 @@
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/lisp-hub-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-hub-test--with (&rest body)
   "BODY with drgnx's dirs under ROOT (so the hub's socket is this test's own), a mock OpenRouter on OR-PORT logging
@@ -582,7 +583,8 @@ about) and keeps the tests within their time limits."
   (drgnx-hub-test--with
     (let ((rc (call-process (expand-file-name invocation-name invocation-directory) nil nil nil "--batch" "-Q"
                             "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-hub"
-                            "--eval" "(kill-emacs (if (drgnx-hub-ensure) 0 1))")))
+                            "-l" (expand-file-name "test/fixtures/lisp-hub-fixture" drgnx-dir)
+                            "--eval" "(kill-emacs (if (drgnx-test-lisp-hub-ensure) 0 1))")))
       (should (= rc 0)))
     (should (drgnx-hub-running-p))                    ; the starter is gone; the hub serves
     (let* ((pid (plist-get (drgnx-hub-call-sync "status" nil) :pid))
@@ -590,10 +592,10 @@ about) and keeps the tests within their time limits."
                         (shell-command-to-string (format "ps -ww -o command= -p %d" pid)))))
       (should (/= pid (emacs-pid)))
       (should (string-search "drgnx-hub-main" cmdline))
-      ;; keys sent over the socket: in the hub's memory only
+      ;; a Lisp hub of protocol 0 (no proof): the register goes, its keys stay here
       (let ((r (drgnx-hub-call-sync "gateway/register" (list :chain [["openrouter" nil]] :keys '(:openrouter "sk-sock-only")))))
-        (should (= (drgnx-hub-test--post (plist-get r :url) (plist-get r :token)) 200))
-        (should (string-search "Bearer sk-sock-only" (with-temp-buffer (insert-file-contents or-log) (buffer-string)))))
+        (should (= (drgnx-hub-test--post (plist-get r :url) (plist-get r :token)) 502))
+        (should-not (file-exists-p or-log)))                ; nothing reached the provider
       (should-not (string-search "sk-sock" cmdline))
       (dolist (f (directory-files-recursively root "" nil))
         (unless (or (equal (file-name-nondirectory f) "or.log") (not (file-regular-p f)))   ; the socket, without XDG_RUNTIME_DIR
@@ -608,7 +610,8 @@ about) and keeps the tests within their time limits."
   "Start the hub from another Emacs with ENV (\"NAME=value\"…) added, as an editor or the CLI does; its exit status."
   (let ((process-environment (append env process-environment)))
     (call-process (expand-file-name invocation-name invocation-directory) nil nil nil "--batch" "-Q"
-                  "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-hub" "--eval" "(kill-emacs (if (drgnx-hub-ensure) 0 1))")))
+                  "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-hub" "-l" (expand-file-name "test/fixtures/lisp-hub-fixture" drgnx-dir)
+                  "--eval" "(kill-emacs (if (drgnx-test-lisp-hub-ensure) 0 1))")))
 
 (ert-deftest drgnx-hub/no-key-in-unit-environment ()
   ;; a key in the starting Emacs's environment never becomes the hub's (a systemd unit's --setenv is kept in the
@@ -619,44 +622,46 @@ about) and keeps the tests within their time limits."
       (cl-letf (((symbol-function 'drgnx-jobs-start)
                  (lambda (&rest args) (setq started args) (drgnx-hub-serve (drgnx-hub-socket)))))
         (let ((process-environment (cons "OPENROUTER_API_KEY=sk-fake-env" process-environment)))
-          (drgnx-hub-ensure)))
+          (drgnx-test-lisp-hub-ensure)))
       (should started)
       (should-not (string-search "sk-fake-env" (prin1-to-string started)))
       (should-not (string-search "API_KEY" (prin1-to-string started))))
     (drgnx-hub-disconnect)
     (drgnx-hub-stop)
     (clrhash drgnx-gateway--keys)
-    ;; a real hub, started by an Emacs that has the key: not in its environment, yet its agents' requests carry it
+    ;; a real hub, started by an Emacs that has the key: not in its environment.  It is a Lisp hub of protocol 0 (no
+    ;; challenge, no proof): the client never hands it the key over the socket either (keys go only to a hub that
+    ;; proved itself), so its agents' requests carry none
     (should (= (drgnx-hub-test--start-elsewhere "OPENROUTER_API_KEY=sk-fake-env") 0))
     (let* ((pid (plist-get (drgnx-hub-call-sync "status" nil) :pid))
            (environ (with-temp-buffer (set-buffer-multibyte nil)
                                       (insert-file-contents-literally (format "/proc/%d/environ" pid)) (buffer-string))))
       (let ((leaked (and (string-search "sk-fake-env" environ) t))) (should-not leaked))   ; (never the environment printed)
       (let ((r (drgnx-hub-call-sync "gateway/register" '(:chain [["openrouter" nil]]))))
-        (should (= (drgnx-hub-test--post (plist-get r :url) (plist-get r :token)) 200))
-        (should (string-search "Bearer sk-fake-env" (with-temp-buffer (insert-file-contents or-log) (buffer-string))))))))
+        (should (= (drgnx-hub-test--post (plist-get r :url) (plist-get r :token)) 502))
+        (should-not (file-exists-p or-log))))))             ; nothing reached the provider
 
 (ert-deftest drgnx-hub/an-editor-gives-its-keys-again-to-a-restarted-hub ()
-  ;; a key this Emacs loaded (a .gpg file: in no environment) lives in the hub's memory only: a restarted hub has
-  ;; none until the editor connects again, which hands it over again
+  ;; a key this Emacs loaded (a .gpg file: in no environment) goes over the socket only to a hub that proved itself.
+  ;; The hub started elsewhere is a Lisp hub of protocol 0 (no challenge): it gets the editor's calls, but neither
+  ;; on the first connection nor after a restart a key (keys again after a restart, over Ratatoskr: Task 18)
   (drgnx-hub-test--with
     (puthash 'openrouter "sk-fake-loaded" drgnx-ai--keys)
     (should (= (drgnx-hub-test--start-elsewhere) 0))
     (drgnx-hub-connect)
     (should (drgnx-hub-test--wait (lambda () (process-live-p drgnx-hub--events))))
     (let ((r (drgnx-hub-call-sync "gateway/register" '(:chain [["openrouter" nil]]))))
-      (should (= (drgnx-hub-test--post (plist-get r :url) (plist-get r :token)) 200))
+      (should (eq drgnx-hub--last-hello :legacy))
+      (should (= (drgnx-hub-test--post (plist-get r :url) (plist-get r :token)) 502))
       (drgnx-hub-call-sync "shutdown" nil)
       (should (drgnx-hub-test--wait (lambda () (not (process-live-p drgnx-hub--events))) 5))
       (should (drgnx-hub-test--wait (lambda () (not (drgnx-hub-running-p))) 5))
       (should (= (drgnx-hub-test--start-elsewhere) 0))
-      (should (= (drgnx-hub-test--post (plist-get r :url) (plist-get r :token)) 502))   ; the same token: no key yet
       (drgnx-hub-connect)                                                               ; (the editor's idle timer)
       (should (drgnx-hub-test--wait (lambda () (process-live-p drgnx-hub--events))))
       (drgnx-hub-call-sync "ping" nil)
-      (should (= (drgnx-hub-test--post (plist-get r :url) (plist-get r :token)) 200))
-      (should (= (with-temp-buffer (insert-file-contents or-log) (how-many "Bearer sk-fake-loaded" (point-min) (point-max)))
-                 2)))))
+      (should (= (drgnx-hub-test--post (plist-get r :url) (plist-get r :token)) 502))
+      (should-not (file-exists-p or-log)))))                ; nothing reached the provider
 
 (defun drgnx-hub-test--sigpipe-ignored-p ()
   "Does this Emacs ignore SIGPIPE, as every hub does (Linux: SigIgn in /proc/self/status)?"
@@ -710,10 +715,16 @@ about) and keeps the tests within their time limits."
                                                   (0.2 . "data: {}\n\n") (0.2 . "data: {}\n\n") (0.2 . "data: {}\n\n"))))
              (current-buffer)))
     (delete-process mock) (setq mock (drgnx-ai-test-mock-llm or-port (concat root "or.eld") or-log))
+    ;; a provider that needs no key: the hub started here is of protocol 0, which never gets this Emacs's keys
+    (with-temp-file (concat root "config/ai.eld")
+      (prin1 `(:version 1 :providers ((openrouter :name "OR" :kind openai :url ,(format "http://127.0.0.1:%d/api/v1" or-port)
+                                                  :caps (chat) :messages t)))
+             (current-buffer)))
     (should (= 0 (call-process "sh" nil nil nil "-c" "trap - PIPE; exec \"$0\" \"$@\""
                                (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
                                "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-hub"
-                               "--eval" "(kill-emacs (if (drgnx-hub-ensure) 0 1))")))
+                               "-l" (expand-file-name "test/fixtures/lisp-hub-fixture" drgnx-dir)
+                               "--eval" "(kill-emacs (if (drgnx-test-lisp-hub-ensure) 0 1))")))
     (let* ((r (drgnx-hub-call-sync "gateway/register" (list :chain [["openrouter" nil]] :keys '(:openrouter "sk-k"))))
            (port (string-to-number (car (last (split-string (plist-get r :url) ":"))))))
       (dotimes (_ 3)                                                   ; three agents hang up mid-answer
@@ -901,19 +912,6 @@ about) and keeps the tests within their time limits."
       (drgnx-hub-serve (drgnx-hub-socket))            ; one that runs is used
       (should (drgnx-hub-ensure)))))
 
-(ert-deftest drgnx-hub/the-cli ()
-  (drgnx-hub-test--with
-    (let ((cli (lambda (&rest args)
-                 (with-temp-buffer
-                   (cons (apply #'call-process (expand-file-name "bin/drgnx" drgnx-dir) nil t nil "hub" args) (buffer-string))))))
-      (should (= (car (funcall cli "status" "--json")) 1))
-      (should (= (car (funcall cli "start")) 0))
-      (let ((s (funcall cli "status" "--json")))
-        (should (= (car s) 0))
-        (should (integerp (plist-get (json-parse-string (cdr s) :object-type 'plist) :gateway_port))))
-      (should (= (car (funcall cli "stop")) 0))
-      (should (drgnx-hub-test--wait (lambda () (not (drgnx-hub-running-p))) 5)))))
-
 ;;;; The hub's timers, on the timer layer (virtual time; no socket, no gateway)
 
 (defvar drgnx-hub-test--calls nil "What the stubbed hub functions saw, newest first.")
@@ -923,7 +921,8 @@ about) and keeps the tests within their time limits."
 timer errors and a state dir of its own.  The hub's tables are fresh; nothing is served."
   (declare (indent 0))
   `(let* ((state (make-temp-file "drgnx-hub-state" t))
-          (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment))
+          ;; a copy: `drgnx-hub-main' unsets DRGNX_HUB_PARENT_PID in place (`setenv' changes the shared cell)
+          (process-environment (cons (concat "XDG_STATE_HOME=" state) (copy-sequence process-environment)))
           (drgnx-timer-errors nil) (drgnx-timer-report-file drgnx-timer-report-file) (drgnx-hub-test--calls nil)
           (drgnx-hub--event-state (make-hash-table :test #'equal)) (drgnx-hub--told (make-hash-table :test #'equal))
           (drgnx-hub--sent (make-hash-table :test #'equal)) (drgnx-hub--subscribers nil) (drgnx-hub--server nil)

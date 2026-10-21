@@ -2,14 +2,19 @@
 
 use serde_json::{Map, Value};
 
-pub const VERBS: [&str; 20] = [
+pub const VERBS: [&str; 26] = [
     "start",
+    "root",
+    "rename",
+    "remove",
+    "install_bin",
     "run",
     "spawn",
     "connect",
     "hello",
     "chmod",
     "send",
+    "pause",
     "expect",
     "expect_next",
     "expect_closed",
@@ -23,6 +28,7 @@ pub const VERBS: [&str; 20] = [
     "pid",
     "class_matrix",
     "bad_params",
+    "measure",
 ];
 
 #[derive(Debug)]
@@ -224,7 +230,7 @@ pub fn gate(s: &Scenario, h: &Host) -> Gate {
         return skip("the hub binary is built without test-hooks", false);
     }
     if has("perf") && !h.perf {
-        return skip("needs --perf", false);
+        return skip("needs --perf", true); // a mode of the run, not a missing capability: --require-all lets it be
     }
     Gate::Run
 }
@@ -253,12 +259,17 @@ mod tests {
     const EVERY_VERB: &str = r#"
 {"scenario": "t/every", "requires": ["v0", "v1", "fake-backend", "lisp-backend", "sudo", "test-hooks", "linux", "macos", "perf"], "doc": "d"}
 {"do": "start", "hub": "h"}
+{"do": "root"}
+{"do": "rename", "from": "$ROOT/a", "to": "$ROOT/b"}
+{"do": "remove", "path": "$ROOT/b"}
+{"do": "install_bin", "to": "$ROOT/bin/x"}
 {"do": "run", "capture": "r", "args": ["status"]}
 {"do": "spawn", "capture": "s", "argv": ["sleep", "60"]}
 {"do": "connect", "conn": "c", "hub": "h", "socket": "main", "as": "user"}
 {"do": "hello", "conn": "c", "proof": "valid", "proto": 1, "expect_class": "user"}
 {"do": "chmod", "path": "$SOCKET_DIR", "mode": "0711"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "ping"}}
+{"do": "pause", "conn": "c"}
 {"do": "expect", "conn": "c", "json": {"id": 1}, "within_ms": 100}
 {"do": "expect_next", "conn": "c", "json": {"id": 2}}
 {"do": "expect_closed", "conn": "c"}
@@ -272,6 +283,7 @@ mod tests {
 {"do": "pid", "capture": "s", "alive": false}
 {"do": "class_matrix", "table": "t.json"}
 {"do": "bad_params", "registry": "r.json"}
+{"do": "measure", "name": "m", "repeat": 2, "steps": []}
 "#;
 
     #[test]
@@ -352,6 +364,11 @@ mod tests {
             lisp_target: true,
             ..host.clone()
         };
+        // the perf rows wait for --perf; a run without it (CI's --require-all) is not failed by them
+        assert!(matches!(
+            gate(&row("\"perf\""), &host),
+            Gate::Skip { excused: true, .. }
+        ));
         assert_eq!(gate(&row("\"v1\""), &lisp), Gate::Exclude);
         assert_eq!(gate(&row("\"v0\""), &lisp), Gate::Run);
     }

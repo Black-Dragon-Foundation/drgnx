@@ -1,0 +1,10 @@
+{"scenario": "security/a-socket-dir-of-another-user-is-refused", "requires": ["v1", "sudo"], "doc": "Review B1, the /tmp fallback case: the socket directory belongs to another user (uid 65534), its held lock names one of ours (a `sleep`, with its right start time) and there is no cap. `stop` refuses (exit 1) and signals nothing: the `sleep` lives. `ensure` refuses before it pings. The directory is given back at the end."}
+{"do": "start", "hub": "h"}
+{"do": "spawn", "capture": "P", "argv": ["sleep", "60"]}
+{"do": "write_file", "path": "$LOCK", "text": "$P $P_start\n"}
+{"do": "remove", "path": "$CAP"}
+{"do": "chmod", "path": "$SOCKET_DIR", "owner": "other"}
+{"do": "run", "args": ["stop", "--timeout", "1"], "expect_code": 1, "expect_stderr": "belongs to another user"}
+{"do": "pid", "capture": "P", "alive": true, "stays_for_ms": 500}
+{"do": "run", "args": ["ensure"], "expect_code": 1, "expect_stderr": "belongs to another user"}
+{"do": "chmod", "path": "$SOCKET_DIR", "owner": "self"}

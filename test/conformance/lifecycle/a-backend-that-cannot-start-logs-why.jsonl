@@ -1,0 +1,6 @@
+{"scenario": "lifecycle/a-backend-that-cannot-start-logs-why", "requires": ["v1"], "doc": "Review M6: a backend that ends before it serves (a load error, a wrong Emacs) has its stderr, the reason, logged as a warning, not only at debug."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/bin/broken-backend", "text": "#!/bin/sh\necho 'Cannot open load file: drgnx-nonesuch' >&2\nexit 1\n", "mode": "755"}
+{"do": "start", "hub": "h", "env": {"DRGNX_RATATOSKR_BACKEND": "$ROOT/bin/broken-backend"}}
+{"do": "file", "path": "$STATE/hub/log/hub-*.jsonl", "contains": "ended before it served", "within_ms": 10000}
+{"do": "file", "path": "$STATE/hub/log/hub-*.jsonl", "contains": "Cannot open load file: drgnx-nonesuch"}

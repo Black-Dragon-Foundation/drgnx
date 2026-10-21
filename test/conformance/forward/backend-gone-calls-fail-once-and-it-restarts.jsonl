@@ -1,0 +1,15 @@
+{"scenario": "forward/backend-gone-calls-fail-once-and-it-restarts", "requires": ["v1", "fake-backend"], "doc": "The backend exits: the call in flight fails once (internal, the Lisp backend restarted), the backend starts again and the next call is answered; status says it runs."}
+{"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"job/stop\": {\"exit\": 9}, \"job/status\": {\"result\": {\"jobs\": []}}}"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/status"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"jobs": []}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"backend": {"state": "running", "pid": "$capture:first"}, "gateway_port": 0, "registrations": 0}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "job/stop", "params": {"id": "j"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "error": {"code": "internal", "message": "the Lisp backend restarted"}}}
+{"do": "pid", "capture": "first", "alive": false}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "job/status"}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"jobs": []}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"backend": {"state": "running", "pid": "$number"}}}}
+{"do": "file", "path": "$STATE/hub/log/hub-*.jsonl", "contains": "starting it again in 1 s"}

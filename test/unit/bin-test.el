@@ -72,6 +72,27 @@ logging to PATHLOG), CONFIG (a DRGNX_CONFIG_DIR) and ENV (the environment lists 
         (should (string-search fake (drgnx-bin-test--slurp log))))
       (should (string-empty-p (drgnx-bin-test--slurp pathlog))))))
 
+(ert-deftest drgnx-bin/hub-subcommands-call-ratatoskr ()
+  ;; drgnx hub start|stop|status are ratatoskr ensure|stop|status (the rest of the arguments go on, the exit status
+  ;; comes back), told which Emacs and checkout to serve; no Emacs runs; with no binary the message says how to build
+  (drgnx-bin-test--with-setup ()
+    (let* ((log (expand-file-name "rtsk.log" dir)) (fake (expand-file-name "ratatoskr" dir))
+           (env (append (list (concat "DRGNX_RATATOSKR_BIN=" fake) "DRGNX_EMACS=/an/emacs") env))
+           (call (lambda (env &rest args) (apply #'drgnx-bin-test--call drgnx-bin-test--bin env "hub" args))))
+      (write-region (format "#!/bin/sh\necho \"$* emacs=$DRGNX_EMACS dir=$DRGNX_DIR\" >> '%s'\nexit ${FAKE_EXIT:-0}\n" log) nil fake)
+      (set-file-modes fake #o755)
+      (dolist (args '(("start") ("stop") ("status" "--json") ("start" "--timeout" "9")))
+        (should (eql 0 (car (apply call env args)))))
+      (should (equal (split-string (drgnx-bin-test--slurp log) "\n" t)
+                     (mapcar (lambda (a) (format "%s emacs=/an/emacs dir=%s" a (directory-file-name drgnx-bin-test--root)))
+                             '("ensure" "stop" "status --json" "ensure --timeout 9"))))
+      (should (string-empty-p (drgnx-bin-test--slurp pathlog)))
+      (should (eql 3 (car (funcall call (cons "FAKE_EXIT=3" env) "stop"))))
+      (should (eql 2 (car (funcall call env "bogus"))))
+      (let ((r (funcall call (cons "DRGNX_RATATOSKR_BIN=/nonexistent/ratatoskr" env) "status")))
+        (should (eql 1 (car r)))
+        (should (string-search "Ratatoskr is not built: run `drgnx runtime build'" (cdr r)))))))
+
 (ert-deftest drgnx-bin/no-nidhogg-is-an-error-never-a-bare-emacs ()
   ;; drgnx runs only on Nidhogg: with no $DRGNX_EMACS, no record and no nidhogg on PATH, a bare `emacs' there is
   ;; not run; the error names the installer

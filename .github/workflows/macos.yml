@@ -1,5 +1,5 @@
 # macOS 27 (Apple silicon; GitHub names its image after its Xcode: xcode-27). Every push to main and every pull
-# request: the unit suite and the install plan, with Nidhogg's release tarball and macOS's own bash 3.2. Weekly and on demand: a real install.sh --yes, then the
+# request: the unit suite (the client's tests run against a Ratatoskr built here) and the install plan, with Nidhogg's release tarball and macOS's own bash 3.2. Weekly and on demand: a real install.sh --yes, then the
 # first sync from the shipped lock, the app bundle and a headless start. The GUI tier stays Linux-only.
 # docs/develop/ci.md
 name: macOS
@@ -29,8 +29,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: ripgrep (Homebrew)
-        run: brew install ripgrep
+      - name: ripgrep and Rust (Homebrew)
+        run: brew install ripgrep rust
+      # the editor's tests run against Ratatoskr; runtime.yml's macos job tests the runtime itself, so this is the build only.
+      # With the test hooks: some client tests need --idle-tick-ms (a test binary, never installed)
+      - name: Ratatoskr (cargo build, for the client's tests)
+        run: |
+          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features test-hooks
+          echo "DRGNX_RATATOSKR_BIN=$GITHUB_WORKSPACE/runtime/target/debug/ratatoskr" >> "$GITHUB_ENV"
       - name: install.sh parses under macOS's bash 3.2
         run: /bin/bash -n install.sh
       - name: install.sh prints the macOS plan and changes nothing

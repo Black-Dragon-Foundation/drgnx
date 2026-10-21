@@ -1,0 +1,17 @@
+{"scenario": "reaper/a-recorded-orphan-backend-is-killed-at-start", "requires": ["v1", "fake-backend"], "doc": "A hub killed with SIGKILL leaves its backend running (one that ignores its parent); the next hub on the data dir reaps the recorded backend at start, before it starts its own."}
+{"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"ignore_parent\": true, \"job/status\": {\"result\": {\"jobs\": []}}}"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/status"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"jobs": []}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"backend": {"state": "running", "pid": "$capture:orphan"}}}}
+{"do": "sqlite", "path": "$STATE/hub/runtime.db", "query": "select purpose, pid = pgid, start_time is not null, boot_id is not null from proc where pid = $orphan", "expect": [["backend", 1, 1, 1]]}
+{"do": "kill", "hub": "h", "signal": "KILL"}
+{"do": "expect_exit", "hub": "h", "signal": "KILL"}
+{"do": "pid", "capture": "orphan", "alive": true, "within_ms": 1000}
+{"do": "start", "hub": "h2", "same_root_as": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"job/status\": {\"result\": {\"jobs\": []}}}"}}
+{"do": "pid", "capture": "orphan", "alive": false, "within_ms": 4000}
+{"do": "connect", "conn": "d", "hub": "h2"}
+{"do": "send", "conn": "d", "json": {"id": 3, "method": "job/status"}}
+{"do": "expect", "conn": "d", "json": {"id": 3, "result": {"jobs": []}}}
+{"do": "file", "path": "$STATE/hub/log/hub-*.jsonl", "contains": "killed an orphan a crashed hub left"}

@@ -1,0 +1,11 @@
+{"scenario": "lifecycle/a-newer-runtime-db-is-moved-aside", "requires": ["v1"], "doc": "A runtime.db of a newer schema (an update --back) is moved aside as runtime.db.newer-N-UNIXTIME and the hub serves with a new one."}
+{"do": "start", "hub": "h"}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0}
+{"do": "sqlite", "path": "$STATE/hub/runtime.db", "sql": ["update meta set value = '99' where key = 'schema'"]}
+{"do": "start", "hub": "h2", "same_root_as": "h"}
+{"do": "file", "path": "$STATE/hub/runtime.db.newer-99-*", "exists": true}
+{"do": "file", "path": "$STATE/hub/runtime.db", "exists": true, "mode": "0600"}
+{"do": "connect", "conn": "c", "hub": "h2"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "ping"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"pid": "$PID(h2)"}}}

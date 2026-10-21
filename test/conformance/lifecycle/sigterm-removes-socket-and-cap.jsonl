@@ -1,0 +1,7 @@
+{"scenario": "lifecycle/sigterm-removes-socket-and-cap", "requires": ["v1"], "doc": "SIGTERM: the hub stops accepting, removes its socket and its cap, and exits 0."}
+{"do": "start", "hub": "h"}
+{"do": "file", "path": "$CAP", "exists": true}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0, "within_ms": 5000}
+{"do": "file", "path": "$SOCKET", "exists": false}
+{"do": "file", "path": "$CAP", "exists": false}

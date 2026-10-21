@@ -59,6 +59,125 @@ cmd_build() { # byte-compile core/, wb/, modules/ in place (core/drgnx-build.el)
   "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" -l drgnx-build -f drgnx-build-cli
 }
 
+# --- drgnx runtime: Ratatoskr, built from source (runtime/; docs/develop/runtime.md) ----------------------------------
+# Plain bash on purpose, like `drgnx update': it runs when the Emacs side is what is broken.  The cargo is the one
+# install.sh recorded in <data>/cargo (line 1 its path; RUSTUP_HOME=… and CARGO_HOME=… lines for a private rustup), else
+# the one on PATH: the update timer's PATH lacks ~/.cargo/bin and /usr/lib/rust-1.91/bin.
+rt_err() { printf 'drgnx runtime: %s\n' "$*" >&2; }
+
+rt_mem_kb() { # available memory in KiB (as install.sh's mem_available_kb: a container's cgroup limit counts)
+  local kb max
+  kb="${DRGNX_INSTALL_MEMORY_KB:-}"
+  if [[ -z "$kb" ]]; then
+    kb="$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo 2>/dev/null || true)"
+    [[ -n "$kb" ]] || kb=$((4 * 1024 * 1024))
+    max="$(cat /sys/fs/cgroup/memory.max 2>/dev/null || true)"
+    if [[ "$max" =~ ^[0-9]+$ ]] && ((max / 1024 < kb)); then kb=$((max / 1024)); fi
+  fi
+  printf '%s' "$kb"
+}
+
+rt_jobs() { # one job per CPU, at most one per 1.5 GiB available (install.sh's build_jobs)
+  local cpus jobs
+  cpus="${DRGNX_INSTALL_NPROC:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)}"
+  jobs=$(($(rt_mem_kb) / (1536 * 1024)))
+  ((jobs <= cpus)) || jobs=$cpus
+  ((jobs >= 1)) || jobs=1
+  printf '%s' "$jobs"
+}
+
+rt_toolchain() { # RT_CARGO and RT_ENV (the record's RUSTUP_HOME/CARGO_HOME lines); 1 with a message when there is no cargo
+  local file line first=""
+  RT_CARGO="" RT_ENV=()
+  file="$(drgnx_dir data)/cargo"
+  if [[ -f "$file" ]]; then   # read as data, never evaluated
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      if [[ -z "$first" ]]; then first="$line"; continue; fi
+      case "$line" in RUSTUP_HOME=/*|CARGO_HOME=/*) RT_ENV+=("$line") ;; esac
+    done <"$file"
+    if [[ "$first" == /* && -x "$first" ]]; then RT_CARGO="$first"; else RT_ENV=(); fi
+  fi
+  if [[ -z "$RT_CARGO" ]]; then RT_CARGO="$(command -v cargo 2>/dev/null || true)"; fi
+  if [[ -z "$RT_CARGO" ]]; then rt_err "no Rust toolchain: run install.sh again"; return 1; fi
+}
+
+rt_cap() { # RT_CAP: the systemd-run words that cap the build's memory (Linux with a user systemd), else nothing and a note
+  local jobs="$1" avail mb
+  RT_CAP=()
+  [[ "$(update_platform)" == Linux ]] || return 0   # macOS has no memory cap (docs/guide/install.md)
+  if command -v systemd-run >/dev/null 2>&1 && systemd-run --user --scope -q -- true >/dev/null 2>&1; then
+    avail=$(($(rt_mem_kb) / 1024 - 1024))
+    mb=$((jobs * 1536 + 1024))
+    ((mb <= avail)) || mb=$avail
+    ((mb >= 1024)) || mb=1024
+    RT_CAP=(systemd-run --user --scope -q -p "MemoryMax=${mb}M" -p MemorySwapMax=0 --)
+  else
+    rt_err "no memory cap here (no user systemd); building with -j$jobs alone"
+  fi
+}
+
+rt_build() { # [--install] [--prefix DIR] — cargo build --release --locked of drgnx-ratatoskr; then rt_install when asked
+  local install=0 prefix="" jobs commit cache l
+  while (($#)); do
+    case "$1" in
+      --install) install=1 ;;
+      --prefix) [[ -n "${2:-}" ]] || { rt_err "--prefix needs a directory"; return 2; }; prefix="$2"; shift ;;
+      *) rt_err "unknown option: $1"; return 2 ;;
+    esac
+    shift
+  done
+  rt_toolchain || return 1
+  cache="$(drgnx_dir cache)"
+  commit="$(git -C "$here" rev-parse HEAD 2>/dev/null || echo unknown)"
+  if [[ -n "$(git -C "$here" status --porcelain --untracked-files=no 2>/dev/null)" ]]; then commit="$commit-dirty"; fi
+  jobs="$(rt_jobs)"
+  local envs=("PATH=${RT_CARGO%/*}:$PATH" "CARGO_TARGET_DIR=$cache/ratatoskr-target" "DRGNX_BUILD_COMMIT=$commit" "DRGNX_CHECKOUT=$here")
+  case " ${RT_ENV[*]-} " in *" CARGO_HOME="*) ;; *) envs+=("CARGO_HOME=$cache/cargo") ;; esac
+  for l in ${RT_ENV[@]+"${RT_ENV[@]}"}; do envs+=("$l"); done
+  rt_cap "$jobs"
+  printf 'drgnx runtime: building Ratatoskr %s with %s (-j%s)\n' "${commit:0:12}" "$RT_CARGO" "$jobs"
+  (cd "$here" && "${RT_CAP[@]+"${RT_CAP[@]}"}" env "${envs[@]}" "$RT_CARGO" build --release --locked -j "$jobs" \
+        --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr) || { rt_err "the build failed"; return 1; }
+  if ((install)); then
+    if [[ -n "$prefix" ]]; then rt_install --prefix "$prefix"; else rt_install; fi
+  fi
+}
+
+rt_install() { # [--prefix DIR] — the built binary to <data>/bin/ratatoskr by rename; with a prefix, $PREFIX/bin/{ratatoskr,rtsk} link to it
+  local prefix="" built dir answer re_true='"test_hooks": *true' re_false='"test_hooks": *false' n
+  while (($#)); do
+    case "$1" in
+      --prefix) [[ -n "${2:-}" ]] || { rt_err "--prefix needs a directory"; return 2; }; prefix="$2"; shift ;;
+      *) rt_err "unknown option: $1"; return 2 ;;
+    esac
+    shift
+  done
+  built="$(drgnx_dir cache)/ratatoskr-target/release/ratatoskr"
+  if [[ ! -x "$built" ]]; then rt_err "nothing is built at $built: run drgnx runtime build"; return 1; fi
+  answer="$("$built" version --json 2>/dev/null || true)"
+  if [[ "$answer" =~ $re_true ]]; then rt_err "$built was built with test hooks (a debug surface): not installed; run drgnx runtime build"; return 1; fi
+  if [[ ! "$answer" =~ $re_false ]]; then rt_err "$built does not answer version --json: not installed"; return 1; fi
+  dir="$(drgnx_dir data)/bin"
+  mkdir -p "$dir"
+  cp "$built" "$dir/ratatoskr.new" && chmod 755 "$dir/ratatoskr.new" && mv -f "$dir/ratatoskr.new" "$dir/ratatoskr" ||
+    { rt_err "could not install into $dir"; return 1; }   # a rename: a running hub sees a new inode at its resolved path
+  if [[ -n "$prefix" ]]; then
+    mkdir -p "$prefix/bin"
+    for n in ratatoskr rtsk; do ln -sfn "$dir/ratatoskr" "$prefix/bin/$n"; done
+  fi
+  printf 'drgnx runtime: installed %s\n' "$dir/ratatoskr"
+}
+
+cmd_runtime() { # build [--install] | install [--prefix DIR]
+  local sub="${1:-}"
+  if (($#)); then shift; fi
+  case "$sub" in
+    build) rt_build "$@" ;;
+    install) rt_install "$@" ;;
+    *) echo "usage: drgnx runtime build [--install] [--prefix DIR] | install [--prefix DIR]" >&2; return 2 ;;
+  esac
+}
+
 ui() { # the harness controller, in batch Emacs (harness/drgnx-ui.el)
   "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
         -l drgnx-ui -f drgnx-ui-cli -- "$@"
@@ -250,6 +369,15 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf | --tty [--fed
     resdir="$(dirname "$res")"; mkdir -p "$resdir"; resdir="$(cd "$resdir" && pwd -P)"
     case "$resdir" in *:*) echo "drgnx: DRGNX_PERF_RESULTS must not be under a directory with ':' (it is mounted with -v): $resdir" >&2; return 2 ;; esac
     args+=(-v "$resdir:/out" -e "DRGNX_PERF_RESULTS=/out/$(basename "$res")")
+  fi
+  # Ratatoskr for the client's binary tests: one in this checkout is seen at /src, any other is mounted read-only
+  if [ -n "${DRGNX_RATATOSKR_BIN:-}" ] && [ -x "$DRGNX_RATATOSKR_BIN" ]; then
+    local rbin; rbin="$(cd "$(dirname "$DRGNX_RATATOSKR_BIN")" && pwd -P)/$(basename "$DRGNX_RATATOSKR_BIN")"
+    case "$rbin" in
+      "$(cd "$here" && pwd -P)"/*) args+=(-e "DRGNX_RATATOSKR_BIN=/src/${rbin#"$(cd "$here" && pwd -P)"/}") ;;
+      *:*) echo "drgnx: DRGNX_RATATOSKR_BIN must not contain ':' (it is mounted with -v): $rbin" >&2; return 2 ;;
+      *) args+=(-v "$rbin:/opt/ratatoskr/ratatoskr:ro" -e DRGNX_RATATOSKR_BIN=/opt/ratatoskr/ratatoskr) ;;
+    esac
   fi
   args+=(-e DRGNX_LEASE=off)   # the host's lease is not the container's: one run owns it
   # the image's own Emacs, named: drgnx never falls back to a bare `emacs' (Nidhogg, which test/container/nidhogg.sh links
@@ -1071,13 +1199,23 @@ update_step() { # NAME HOOK [ARG…] — `drgnx NAME ARG…' (or the test hook H
   fi
 }
 
-update_apply() { # sync + build for the checkout as it is now; 0 when both worked, else 1 with UPD_WHY naming the step
+update_apply() { # sync, build and the runtime build for the checkout as it is now; 0 when all worked, else 1 with UPD_WHY naming the step
   update_step sync "${DRGNX_UPDATE_SYNC_CMD:-}" || { UPD_WHY="sync failed"; return 1; }
   update_step build "${DRGNX_UPDATE_BUILD_CMD:-}" || { UPD_WHY="build failed"; return 1; }
+  # Ratatoskr last: the install follows a good build only, so a failure leaves the old binary, and the whole update is
+  # rolled back (the Lisp and the binary stay in lockstep)
+  update_step runtime "${DRGNX_UPDATE_RUNTIME_CMD:-}" build --install ||
+    { UPD_WHY="runtime build failed (see $(update_state_dir)/last.log; the toolchain: $(drgnx_dir data)/cargo)"; return 1; }
+}
+
+update_binary_commit() { # the commit the installed Ratatoskr was built from; nothing when there is none
+  local bin; bin="$(drgnx_dir data)/bin/ratatoskr"
+  [[ -x "$bin" ]] || return 0
+  "$bin" version --json 2>/dev/null | sed -n 's/.*"commit": *"\([^"]*\)".*/\1/p' | head -1 || true
 }
 
 update_rollback() { # OLD — put the checkout, its packages and its build back at OLD; UPD_BACK_NOTE says how far that got
-  local old="$1" log; log="$(update_state_dir)/last.log"
+  local old="$1" log bc; log="$(update_state_dir)/last.log"
   UPD_ROLLBACK_TO=""
   if ! ugit reset --hard --quiet "$old" >>"$log" 2>&1; then
     UPD_BACK_NOTE="git reset failed: the checkout is still on the new commit; fix: git -C $here reset --hard ${old:0:7}, then drgnx sync and drgnx build"
@@ -1092,6 +1230,11 @@ update_rollback() { # OLD — put the checkout, its packages and its build back 
   fi
   if update_step build "${DRGNX_UPDATE_BUILD_CMD:-}" >/dev/null 2>&1; then UPD_BACK_NOTE+=" and rebuilt it"
   else UPD_BACK_NOTE+="; its build failed (run drgnx build)"; fi
+  bc="$(update_binary_commit)"   # a binary of another commit than the one now checked out: build the old one again
+  if [[ -n "$bc" && "${bc%-dirty}" != "$old" ]]; then
+    if update_step runtime "${DRGNX_UPDATE_RUNTIME_CMD:-}" build --install >/dev/null 2>&1; then UPD_BACK_NOTE+=" and rebuilt Ratatoskr"
+    else UPD_BACK_NOTE+="; its Ratatoskr build failed (run drgnx runtime build --install)"; fi
+  fi
   UPD_BACK_NOTE+=". Log: $log"
 }
 
@@ -1434,6 +1577,8 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx open --check      start drgnx's daemon if needed, print its Emacs version, stop it if this started it
        drgnx macos-app         macOS: install drgnx.app into ~/Applications (Finder, Spotlight, Dock, Open With)
        drgnx build             byte-compile drgnx (core, wb, modules); native compilation follows on load
+       drgnx runtime build [--install] [--prefix DIR] | install [--prefix DIR]
+                               build Ratatoskr (Rust) from source / install the built binary (docs/guide/install.md)
        drgnx update [--quiet]  update this install to GitHub main: fast-forward, then sync and build; the previous
                                commit is kept and comes back if sync or build fails (docs/guide/install.md)
        drgnx update --restart  after a successful update (or --back), restart the drgnx service (systemd)
@@ -1539,6 +1684,7 @@ USAGE
 case "${1:-help}" in
   doctor) shift; cmd_doctor "$@" ;;
   build) cmd_build ;;
+  runtime) shift; cmd_runtime "$@" ;;
   test) shift; lease_self "$(lease_test_class "$@")" test "$@"; cmd_test "$@" ;;
   lease) shift; cmd_lease "$@" ;;
   ui) shift; ui "$@" ;;
@@ -1549,9 +1695,14 @@ case "${1:-help}" in
         "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" -L "$here/wb" \
               -l drgnx-onboard -f drgnx-onboard-cli -- "$@" ;;
   safe) shift; DRGNX_SAFE=1 exec "$(emacs_bin || echo false)" --init-directory="$here/init" "$@" ;;
-  hub) shift
-        "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
-              -l drgnx-hub-client -f drgnx-hub-cli -- "$@" ;;
+  hub) shift   # Ratatoskr's own CLI: start is ensure; no Emacs runs, but a hub it starts serves this Emacs and checkout
+        sub="${1:-}"; [ "$#" -gt 0 ] && shift
+        case "$sub" in start) sub=ensure ;; stop | status) ;; *) echo "usage: drgnx hub start|stop|status [--json]" >&2; exit 2 ;; esac
+        rtsk="${DRGNX_RATATOSKR_BIN:-}"
+        if [[ "$rtsk" != /* || ! -f "$rtsk" || ! -x "$rtsk" ]]; then rtsk="$(drgnx_dir data)/bin/ratatoskr"; fi
+        if [[ ! -f "$rtsk" || ! -x "$rtsk" ]]; then echo "drgnx: Ratatoskr is not built: run \`drgnx runtime build'" >&2; exit 1; fi
+        if [[ -z "${DRGNX_EMACS:-}" ]] && DRGNX_EMACS="$(emacs_bin 2>/dev/null)"; then export DRGNX_EMACS; fi
+        DRGNX_DIR="$here" exec "$rtsk" "$sub" "$@" ;;
   job) shift
         "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-hub -f drgnx-job-cli -- "$@" ;;

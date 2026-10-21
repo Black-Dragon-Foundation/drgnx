@@ -390,6 +390,7 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
            :ai-complete (ignore-errors (require 'drgnx-ai) (cdr (car (drgnx-ai-role 'complete))))
            :claude-adapter (drgnx-doctor--claude-adapter)
            :sandbox (drgnx-doctor--sandbox)
+           :ratatoskr (drgnx-doctor--ratatoskr)
            :vram (ignore-errors (require 'drgnx-ai-probe) (drgnx-ai-vram))
            :trust-guards (drgnx-doctor--trust-guards)
            :config-dir (drgnx-doctor--config-dir)
@@ -650,6 +651,85 @@ severity, the fix the first `:fix'."
                      :check (lambda (f) (drgnx-doctor--job-sandbox-check (plist-get f :sandbox))))
 
 (drgnx-doctor-define-notices 'modules :group "drgnx" :doc "Modules that failed, wait or are off (this session, or the last one)")
+
+;; Ratatoskr, the agent runtime (runtime/): its binary's own report (`ratatoskr doctor --json', 2 s), the checkout's HEAD,
+;; the last update's record and this Emacs's SQLite.  Nothing here starts a hub or prompts.
+(declare-function drgnx-hub-client-binary "drgnx-hub-client")
+(declare-function drgnx-state-dir "drgnx-paths")
+(declare-function drgnx-data-dir "drgnx-paths")
+
+(defun drgnx-doctor--ratatoskr-report (binary)
+  "BINARY's `doctor --json' parsed (plists, false and null as nil), or nil when it does not answer within 2 s."
+  (let* ((buf (generate-new-buffer " *ratatoskr doctor*" t))
+         (p (make-process :name "ratatoskr-doctor" :buffer buf :noquery t :connection-type 'pipe
+                          ;; no default sentinel: it would append "Process … finished" to the JSON
+                          :command (list binary "doctor" "--json") :sentinel #'ignore))
+         (limit (+ (float-time) 2)))
+    (unwind-protect
+        (progn
+          (while (and (process-live-p p) (< (float-time) limit)) (accept-process-output p 0.05))
+          (when (and (eq (process-status p) 'exit) (eql (process-exit-status p) 0))
+            (with-current-buffer buf
+              (ignore-errors (json-parse-string (buffer-string) :object-type 'plist :false-object nil :null-object nil)))))
+      (when (process-live-p p) (delete-process p))
+      (kill-buffer buf))))
+
+(defun drgnx-doctor--ratatoskr ()
+  "The facts of the `ratatoskr' check:
+\(:binary FILE-or-nil :report PLIST-or-nil :head SHA :update-run LINE :emacs-sqlite V)."
+  (condition-case err
+      (let* ((bin (progn (require 'drgnx-hub-client) (drgnx-hub-client-binary)))
+             (head (ignore-errors
+                     (car (process-lines "git" "-C" (expand-file-name drgnx-dir) "rev-parse" "HEAD"))))
+             (run (ignore-errors
+                    (drgnx-file-read-bounded (expand-file-name "update/last-run" (drgnx-state-dir)) :max-bytes 4096))))
+        (list :binary bin :report (and bin (drgnx-doctor--ratatoskr-report bin)) :head head
+              :update-run (and run (string-trim run))
+              :emacs-sqlite (and (fboundp 'sqlite-version) (ignore-errors (sqlite-version)))))
+    (error (list :error (error-message-string err)))))
+
+(defun drgnx-doctor--sqlite-wal-bug-p (v)
+  "Whether the SQLite version string V is in 3.7.0 to 3.51.2, which has the WAL-reset bug (storage design, section 2)."
+  (and (stringp v) (version<= "3.7.0" v) (version<= v "3.51.2")))
+
+(defun drgnx-doctor--ratatoskr-check (f)
+  "The `ratatoskr' check of the fact F (`drgnx-doctor--ratatoskr'): failures first, then warnings."
+  (let* ((report (plist-get f :report))
+         (bin (plist-get report :binary))
+         (running (plist-get report :running))
+         (sock (plist-get report :socket_dir))
+         (commit (plist-get bin :commit))
+         (head (plist-get f :head))
+         (run (plist-get f :update-run))
+         (esql (plist-get f :emacs-sqlite)))
+    (cond
+     ((plist-get f :error) (list 'warn (format "could not check: %s" (plist-get f :error)) "run drgnx doctor again"))
+     ((null (plist-get f :binary))
+      (list 'fail "no Ratatoskr binary: agents cannot start" "drgnx runtime build --install (install.sh builds it)"))
+     ((null report)
+      (list 'fail (format "%s gave no answer to doctor --json within 2 s" (abbreviate-file-name (plist-get f :binary)))
+            "drgnx runtime build --install"))
+     ((plist-get bin :test_hooks)
+      (list 'fail "the binary was built with test hooks (a debug surface)" "drgnx runtime build --install"))
+     ((not (plist-get sock :ok))
+      (list 'fail (format "the socket directory %s is mode %s, not private (0700) or not yours" (plist-get sock :path) (plist-get sock :mode))
+            (format "chmod 700 %s (and check who owns it)" (plist-get sock :path))))
+     ((and run (string-search "failed: runtime build failed" run))
+      (list 'warn (substring run (string-search "failed: runtime build failed" run))
+            "the update was rolled back; fix the toolchain, then drgnx update"))
+     ((and head commit (not (equal (string-remove-suffix "-dirty" commit) head)))
+      (list 'warn (format "the binary is from %s, the checkout is at %s" (substring commit 0 (min 7 (length commit))) (substring head 0 (min 7 (length head))))
+            "run drgnx runtime build --install"))
+     ((and running (plist-get running :commit) commit (not (equal (plist-get running :commit) commit)))
+      (list 'warn (format "the running hub is %s, the binary %s" (plist-get running :commit) commit) "Hub: Restart Now"))
+     ((drgnx-doctor--sqlite-wal-bug-p esql)
+      (list 'warn (format "this Emacs's SQLite %s has a bug in its write-ahead log (3.7.0 to 3.51.2)" esql)
+            "use an Emacs built with SQLite 3.51.3 or newer (Nidhogg); Ratatoskr's own SQLite is not affected"))
+     (t (list 'ok (format "Ratatoskr %s; job agents: %s" (or commit "?") (or (plist-get report :job_agents) "unknown")) nil)))))
+
+(drgnx-doctor-define 'ratatoskr :group "Agents"
+                     :doc "Ratatoskr, the agent runtime: built, current, no test hooks, a private socket directory"
+                     :check (lambda (f) (drgnx-doctor--ratatoskr-check (plist-get f :ratatoskr))))
 
 (drgnx-doctor-define 'packages :group "drgnx" :doc "The packages drgnx needs are installed (drgnx sync), with a lock"
                      :check (lambda (f)

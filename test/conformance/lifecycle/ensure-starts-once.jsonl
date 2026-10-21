@@ -1,0 +1,6 @@
+{"scenario": "lifecycle/ensure-starts-once", "requires": ["v1"], "doc": "Two `ensure` processes at once with no supervisor (RATATOSKR_SUPERVISOR=none): both exit 0 and print the socket, and one hub answers. The loser of the lock exits 3 on its own and is never seen. `stop` ends it, and `status --json` then says it is not running (exit 1)."}
+{"do": "root"}
+{"do": "run", "args": ["ensure"], "concurrent": 2, "expect_code": 0, "expect_stdout": "$SOCKET"}
+{"do": "run", "args": ["status", "--json"], "expect_code": 0, "expect_stdout": {"running": true, "pid": "$capture:hubpid", "job_agents": "unsandboxed (as on main; the sandbox comes with phase 6)"}}
+{"do": "run", "args": ["stop"], "expect_code": 0, "expect_stdout": "stopped Ratatoskr (pid $hubpid)"}
+{"do": "run", "args": ["status", "--json"], "expect_code": 1, "expect_stdout": {"running": false}}

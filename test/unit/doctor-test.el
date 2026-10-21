@@ -6,7 +6,11 @@
 
 (defun drgnx-doctor-test--facts (&rest kv)
   (append kv (list :version "31.1" :nidhogg "31.1-nidhogg.1" :native-available t :native-compiles t :treesit t
-                   :gui 'pgtk :git t :sqlite t)))
+                   :gui 'pgtk :git t :sqlite t
+                   ;; a healthy Ratatoskr, so a test about something else sees no failure from it
+                   :ratatoskr '(:binary "/data/bin/ratatoskr" :head "abc1234" :emacs-sqlite "3.53.0"
+                                        :report (:binary (:commit "abc1234" :test_hooks nil)
+                                                         :socket_dir (:path "/s" :mode "0700" :ok t))))))
 
 (defun drgnx-doctor-test--status (name facts)
   (car (drgnx-doctor-check name facts)))
@@ -864,3 +868,85 @@ AGE seconds ago (default WRITTEN).  The pid in the data is NAME's number."
         (should (string-search "1 key conflicts" (nth 1 c)))
         (should-not (string-search "nope" (nth 1 c)))))
     (should (equal (plist-get (alist-get 'key-problems drgnx-doctor--checks) :doc) "keys.eld and profile problems"))))
+
+;;; Ratatoskr (Task 19)
+
+(defun drgnx-doctor-test--rtsk (&rest over)
+  "The `ratatoskr' fact of a healthy install, with OVER (keys of the fact; :commit, :running, :socket and :hooks change
+what `ratatoskr doctor --json' said)."
+  (let* ((commit (or (plist-get over :commit) "abc1234"))
+         (report (list :binary (list :path "/data/bin/ratatoskr" :commit commit :test_hooks (plist-get over :hooks))
+                       :running (if (plist-member over :running) (plist-get over :running) (list :commit commit :pid 42))
+                       :socket_dir (or (plist-get over :socket) (list :path "/run/user/1000/drgnx-1" :mode "0700" :ok t))
+                       :sqlite "3.53.0" :job_agents "unsandboxed (as on main; the sandbox comes with phase 6)"))
+         (fact (list :binary "/data/bin/ratatoskr" :report report :head "abc1234" :emacs-sqlite "3.53.0")))
+    (cl-loop for (k v) on over by #'cddr
+             unless (memq k '(:commit :running :socket :hooks)) do (setq fact (plist-put fact k v)))
+    (drgnx-doctor-test--facts :ratatoskr fact)))
+
+(ert-deftest drgnx-doctor/ratatoskr-report-is-read-from-the-binary ()
+  ;; the report is exactly the binary's output: no "Process finished" line from a default sentinel (found by the e2e run)
+  (let* ((dir (make-temp-file "drgnx-rtsk" t)) (bin (expand-file-name "ratatoskr" dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file bin
+            (insert "#!/bin/sh\necho '{\"binary\":{\"commit\":\"abc\",\"test_hooks\":false},\"socket_dir\":{\"ok\":true,\"mode\":null}}'\n"))
+          (set-file-modes bin #o755)
+          (let ((r (drgnx-doctor--ratatoskr-report bin)))
+            (should (equal (plist-get (plist-get r :binary) :commit) "abc"))
+            (should-not (plist-get (plist-get r :binary) :test_hooks))
+            (should (plist-get (plist-get r :socket_dir) :ok)))
+          (with-temp-file bin (insert "#!/bin/sh\nexit 1\n"))
+          (should-not (drgnx-doctor--ratatoskr-report bin)))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-doctor/ratatoskr-check-cases ()
+  (should (equal (plist-get (alist-get 'ratatoskr drgnx-doctor--checks) :group) "Agents"))
+  (let ((check (lambda (&rest over) (drgnx-doctor-check 'ratatoskr (apply #'drgnx-doctor-test--rtsk over)))))
+    ;; ok, with the job agents sentence and never the word "sandboxed" as a claim
+    (let ((r (funcall check)))
+      (should (eq (car r) 'ok))
+      (should (string-search "job agents: unsandboxed (as on main; the sandbox comes with phase 6)" (nth 1 r)))
+      (should (string-search "abc1234" (nth 1 r))))
+    (should (eq (car (funcall check :running nil)) 'ok))                       ; no hub running is fine
+    (should (eq (car (funcall check :commit "abc1234-dirty")) 'ok))           ; a developer's build of this HEAD
+    ;; missing: no binary, and a binary that does not answer
+    (let ((r (funcall check :binary nil :report nil)))
+      (should (eq (car r) 'fail))
+      (should (string-search "drgnx runtime build" (nth 2 r))))
+    (let ((r (funcall check :report nil)))
+      (should (eq (car r) 'fail))
+      (should (string-search "--json" (nth 1 r))))
+    ;; test hooks on
+    (let ((r (funcall check :hooks t)))
+      (should (eq (car r) 'fail))
+      (should (string-search "test hooks" (nth 1 r)))
+      (should (string-search "drgnx runtime build" (nth 2 r))))
+    ;; the socket directory
+    (let ((r (funcall check :socket '(:path "/run/user/1000/drgnx-1" :mode "0755" :ok nil))))
+      (should (eq (car r) 'fail))
+      (should (string-search "/run/user/1000/drgnx-1" (nth 1 r)))
+      (should (string-search "0755" (nth 1 r))))
+    ;; stale: the binary is not this checkout's HEAD; a running hub is not the binary
+    (let ((r (funcall check :commit "def5678")))
+      (should (eq (car r) 'warn))
+      (should (string-search "drgnx runtime build" (nth 2 r))))
+    (let ((r (funcall check :running '(:commit "def5678" :pid 42))))
+      (should (eq (car r) 'warn))
+      (should (string-search "Hub: Restart Now" (nth 2 r))))
+    ;; a failed runtime update, shown as it is
+    (let* ((run "2026-10-21 10:00:00+0000 auto: failed: runtime build failed (see last.log; the toolchain: /d/cargo) for abc1234; moved the checkout back")
+           (r (funcall check :update-run run)))
+      (should (eq (car r) 'warn))
+      (should (string-search "failed: runtime build failed (see last.log; the toolchain: /d/cargo)" (nth 1 r)))
+      (should (string-search "the update was rolled back; fix the toolchain, then drgnx update" (nth 2 r))))
+    (should (eq (car (funcall check :update-run "2026-10-21 10:00:00+0000 auto: updated abc1234..def5678")) 'ok))
+    ;; the fail wins over the warn
+    (should (eq (car (funcall check :hooks t :update-run "x auto: failed: runtime build failed (y)")) 'fail))
+    ;; Emacs's SQLite with the WAL bug (3.7.0 to 3.51.2)
+    (dolist (v '("3.7.0" "3.45.1" "3.51.2"))
+      (let ((r (funcall check :emacs-sqlite v)))
+        (should (eq (car r) 'warn))
+        (should (string-search v (nth 1 r)))))
+    (dolist (v '("3.6.23" "3.51.3" "3.53.0" nil))
+      (should (eq (car (funcall check :emacs-sqlite v)) 'ok)))))

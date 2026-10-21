@@ -40,12 +40,27 @@
     (should-not (string-search "DRGNX_TEST_TIME_FACTOR" yml))))
 
 (ert-deftest drgnx-ci/actions-are-pinned-by-sha ()
-  (dolist (f '("ci.yml" "gui.yml" "macos.yml" "tty.yml"))
+  (dolist (f '("ci.yml" "gui.yml" "macos.yml" "tty.yml" "runtime.yml"))
     (let ((yml (drgnx-ci-test--yml f)) (pos 0))
       (skip-unless yml)
       (while (string-match "uses: \\([^ \n]+\\)" yml pos)
         (setq pos (match-end 0))
-        (should (string-match-p "@[0-9a-f]\\{40\\}\\'" (match-string 1 yml)))))))
+        ;; a workflow of this repository (ci.yml calls runtime.yml) is a path, not an action
+        (unless (string-prefix-p "./.github/workflows/" (match-string 1 yml))
+          (should (string-match-p "@[0-9a-f]\\{40\\}\\'" (match-string 1 yml))))))))
+
+(ert-deftest drgnx-ci/ci-calls-the-runtime-and-runs-the-editor-tests-on-its-binary ()
+  (let ((ci (drgnx-ci-test--yml "ci.yml")) (rt (drgnx-ci-test--yml "runtime.yml")) (macos (drgnx-ci-test--yml "macos.yml")))
+    (skip-unless (and ci rt macos))
+    ;; a `needs:' cannot reach another workflow file, so ci.yml calls runtime.yml and downloads its artifact
+    (drgnx-ci-test--has ci "uses: ./.github/workflows/runtime.yml" "needs: runtime" "name: ratatoskr" "DRGNX_RATATOSKR_BIN=")
+    (drgnx-ci-test--has rt "workflow_call:" "name: ratatoskr\n" "path: runtime/target/debug/ratatoskr" "--require-all"
+                        "xcode-27" "nightly-2026-10-15" "cargo-fuzz --version 0.13.2" "--perf perf-")
+    ;; its own triggers carry no push or pull_request: ci.yml's call is that run (a second one would build everything twice)
+    (should-not (string-match-p "^  \\(push\\|pull_request\\):" rt))
+    (drgnx-ci-test--has macos "DRGNX_RATATOSKR_BIN=" "brew install ripgrep rust")
+    ;; the client's tests that need --idle-tick-ms are on darwin's no-skip list: the binary they use has the test hooks
+    (drgnx-ci-test--has macos "-p drgnx-ratatoskr --features test-hooks")))
 
 ;; Caches: a cached input is addressed by a hash of what it is built from, so a stale one cannot be restored.
 (defun drgnx-ci-test--matches (re text)
@@ -54,7 +69,7 @@
     (nreverse out)))
 
 (ert-deftest drgnx-ci/every-actions-cache-key-hashes-its-inputs ()
-  (dolist (f '("ci.yml" "macos.yml" "gui.yml" "tty.yml" "images.yml" "bootstrap.yml"))
+  (dolist (f '("ci.yml" "macos.yml" "gui.yml" "tty.yml" "images.yml" "bootstrap.yml" "runtime.yml"))
     (let ((yml (drgnx-ci-test--yml f)))
       (skip-unless yml)
       ;; each actions/cache step: its key line hashes files (hashFiles) and a restore-keys line, when there is one,

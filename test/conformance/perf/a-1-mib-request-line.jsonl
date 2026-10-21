@@ -1,0 +1,4 @@
+{"scenario": "perf/a-1-mib-request-line", "requires": ["v1", "fake-backend", "perf"], "doc": "The baseline of the largest request: an agents/send line of about 1 MiB (the client limit) read, decoded, re-encoded and forwarded to the backend and answered, 20 times (--perf records every sample, no budget)."}
+{"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"agents/send\": {\"result\": true}}"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "measure", "name": "request-line-1-mib", "repeat": 20, "steps": [{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/send", "params": {"id": "s1", "text": {"$repeat": "x", "times": 1040000}}}}, {"do": "expect", "conn": "c", "json": {"id": 1, "result": true}, "within_ms": 10000}]}

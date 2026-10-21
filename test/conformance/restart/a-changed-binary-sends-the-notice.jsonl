@@ -1,0 +1,14 @@
+{"scenario": "restart/a-changed-binary-sends-the-notice", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "The hub runs from a copy in $ROOT/bin. A different build is renamed over that path (a rename-replace, which a stat of /proc/self/exe would never see); at the next idle tick the hub runs `<path> version --json`, sees another commit and sends the `restart-when-idle` notice with the number of turns it waits for. The backend has a busy session, so the hub keeps serving."}
+{"do": "root"}
+{"do": "install_bin", "to": "$ROOT/bin/ratatoskr"}
+{"do": "write_file", "path": "$ROOT/answers/agents.json", "text": "{\"result\": {\"sessions\": [{\"id\": \"s1\", \"status\": \"busy\"}]}}"}
+{"do": "start", "hub": "h", "bin": "$ROOT/bin/ratatoskr", "args": ["--idle-tick-ms", "200"], "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"agents/list\": {\"from_file\": \"$ROOT/answers/agents.json\"}, \"job/status\": {\"result\": {\"jobs\": []}}}"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": true}}
+{"do": "expect_silent", "conn": "c", "for_ms": 800}
+{"do": "write_file", "path": "$ROOT/bin/ratatoskr.new", "text": "#!/bin/sh\necho '{\"commit\": \"another-build\"}'\n", "mode": "755"}
+{"do": "rename", "from": "$ROOT/bin/ratatoskr.new", "to": "$ROOT/bin/ratatoskr"}
+{"do": "expect", "conn": "c", "json": {"event": "notice", "data": {"source": "hub", "severity": "warn", "id": "restart-when-idle", "life": "condition", "command": "hub-restart-now", "text": "drgnx was updated; the hub restarts when its 1 running turn finishes"}}, "within_ms": 5000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "ping"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"pid": "$PID(h)"}}}

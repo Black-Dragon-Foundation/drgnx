@@ -1,0 +1,28 @@
+[package]
+name = "runstav"
+description = "The hub protocol's contract: wire types, strict lines, typed decode, HMAC proofs, the socket paths"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+tokio-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+serde_path_to_error.workspace = true
+serde_ignored.workspace = true
+hmac.workspace = true
+sha2.workspace = true
+sha1.workspace = true
+subtle.workspace = true
+getrandom.workspace = true
+rustix.workspace = true
+secrecy.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+tempfile.workspace = true

@@ -5,12 +5,15 @@
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
 (ert-deftest drgnx-job-cli/propose-then-approve-then-status ()
+  ;; the CLI starts the hub: Ratatoskr (DRGNX_RATATOSKR_BIN), detached from the test but ending with it
+  (skip-unless (getenv "DRGNX_RATATOSKR_BIN"))
   (let* ((root (file-name-as-directory (make-temp-file "drgnx-job-cli" t)))
          (repo (concat root "repo/")) (plan (concat repo "docs/plans/p.md"))
          (bin (expand-file-name "bin/drgnx" drgnx-dir))
          (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" root "config") (concat "DRGNX_DATA_DIR=" root "data")
                                             (concat "XDG_STATE_HOME=" root "state") (concat "HOME=" root "home")
                                             "DRGNX_JOBS_LAUNCHER=detached" "DRGNX_NO_HUB_START"   ; the CLI starts the hub
+                                            "RATATOSKR_SUPERVISOR=none" (format "DRGNX_HUB_PARENT_PID=%d" (emacs-pid))
                                             "GIT_AUTHOR_NAME=t" "GIT_AUTHOR_EMAIL=t@t.invalid" "GIT_COMMITTER_NAME=t"
                                             "GIT_COMMITTER_EMAIL=t@t.invalid")
                                       process-environment))
@@ -36,7 +39,7 @@
             (should (string-search "Task 2: two" (cdr p)))
             (should (string-search "estimate" (cdr p)))
             (should (equal (plist-get (funcall status) :status) "proposed"))
-            (should (equal (plist-get (funcall status) :budget) 2))
+            (should (= (plist-get (funcall status) :budget) 2))             ; (Ratatoskr answers 2.0)
             (let ((before (mapcar (lambda (task) (plist-get task :status)) (plist-get (funcall status) :tasks))))
               (should (= (car (funcall cli "job" "approve" id)) 0))
               ;; started: running, or already done (a fast machine finishes the mock's tasks before this asks)
@@ -60,7 +63,7 @@
             (should (equal (plist-get (funcall status) :status) "stopped"))
             (should (= (car (funcall cli "job" "resume" id "--budget" "5")) 0))
             (should (member (plist-get (funcall status) :status) '("running" "done")))
-            (should (equal (plist-get (funcall status) :budget) 5))
+            (should (= (plist-get (funcall status) :budget) 5))
             (should (= (car (funcall cli "job" "approve" "job-nope")) 1))))
       (funcall cli "hub" "stop")
       (let ((deadline (+ (float-time) 5))) (while (and (drgnx-hub-running-p) (< (float-time) deadline)) (sleep-for 0.1)))

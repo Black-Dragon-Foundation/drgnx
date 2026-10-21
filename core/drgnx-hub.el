@@ -677,21 +677,44 @@ Signals an error when a hub already serves there."
   (drgnx-gateway-stop)
   (clrhash drgnx-gateway--registrations))
 
+(defun drgnx-hub--take-serve-env ()
+  "(SOCKET . PARENT-PID) from DRGNX_HUB_SERVE_SOCKET (an absolute name; nil when unset or empty; (:invalid VALUE)
+when set to anything else) and DRGNX_HUB_PARENT_PID (0 when unset), both then unset in this Emacs: nothing it starts
+afterwards (agents, their coordination servers, an agent's `drgnx job', a test run inside a job) sees them.
+Ratatoskr starts the Lisp hub as its backend on a socket of its own; those children find the hub through
+`drgnx-hub-socket', the front, never the backend."
+  (let ((socket (getenv "DRGNX_HUB_SERVE_SOCKET"))
+        (parent (string-to-number (or (getenv "DRGNX_HUB_PARENT_PID") "0"))))
+    (setenv "DRGNX_HUB_SERVE_SOCKET" nil)
+    (setenv "DRGNX_HUB_PARENT_PID" nil)
+    (cons (cond ((or (null socket) (string-empty-p socket)) nil)
+                ((string-prefix-p "/" socket) socket)
+                (t (list :invalid socket)))
+          parent)))
+
 (defun drgnx-hub-main ()
   "The hub process's entry point (batch): serve until `shutdown' or SIGTERM.  Exit 3 when a hub already serves, 1
-when it cannot start for any other reason."
-  (drgnx-gc-batch-setup)
-  (setq drgnx-timer-report-file "hub-timers-report.eld")   ; the hub's stopped timers go to a file of their own
-  (drgnx-sandbox-vc-mode 1)                       ; the hub's own git never runs in a job's folder either
-  (condition-case err
-      (drgnx-hub-serve (drgnx-hub-socket))
-    (error (let ((already (string-prefix-p "a hub already serves" (error-message-string err))))
-             (message "drgnx hub: %s" (if already "a hub already serves" (error-message-string err)))
-             (kill-emacs (if already 3 1)))))
-  (add-hook 'kill-emacs-hook #'drgnx-hub-stop)
-  (message "drgnx hub: serving on %s, gateway on 127.0.0.1:%d" (drgnx-hub-socket) (drgnx-gateway-port))
-  ;; a test's hub (DRGNX_HUB_PARENT_PID: its test Emacs) ends with it, never outliving the test's dir
-  (let ((parent (string-to-number (or (getenv "DRGNX_HUB_PARENT_PID") "0"))))
+when it cannot start for any other reason.  It serves on DRGNX_HUB_SERVE_SOCKET when that is set (Ratatoskr's Lisp
+backend), else on `drgnx-hub-socket'; both that and DRGNX_HUB_PARENT_PID are read and unset before anything starts a
+process (`drgnx-hub--take-serve-env').  A DRGNX_HUB_SERVE_SOCKET that is set but not an absolute name is exit 1: it
+never falls back to the front's socket."
+  (pcase-let* ((`(,serve . ,parent) (drgnx-hub--take-serve-env))
+               (socket (if (consp serve)
+                           (progn (message "drgnx hub: DRGNX_HUB_SERVE_SOCKET is not an absolute name: %s" (cadr serve))
+                                  (kill-emacs 1))
+                         (or serve (drgnx-hub-socket)))))
+    (drgnx-gc-batch-setup)
+    (setq drgnx-timer-report-file "hub-timers-report.eld")   ; the hub's stopped timers go to a file of their own
+    (drgnx-sandbox-vc-mode 1)                       ; the hub's own git never runs in a job's folder either
+    (condition-case err
+        (drgnx-hub-serve socket)
+      (error (let ((already (string-prefix-p "a hub already serves" (error-message-string err))))
+               (message "drgnx hub: %s" (if already "a hub already serves" (error-message-string err)))
+               (kill-emacs (if already 3 1)))))
+    (add-hook 'kill-emacs-hook #'drgnx-hub-stop)
+    (message "drgnx hub: serving on %s, gateway on 127.0.0.1:%d" socket (drgnx-gateway-port))
+    ;; a test's hub (DRGNX_HUB_PARENT_PID: its test Emacs) and Ratatoskr's backend end with their parent, never
+    ;; outliving it
     (while t
       (accept-process-output nil 1)
       (dotimes (_ 2) (read-event nil nil 0.002))     ; queued events would hold back process sentinels

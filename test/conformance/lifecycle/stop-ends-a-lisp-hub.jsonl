@@ -1,0 +1,6 @@
+{"scenario": "lifecycle/stop-ends-a-lisp-hub", "requires": ["v1", "lisp-backend"], "doc": "`stop` also ends a Lisp hub from before Ratatoskr (its lock is a directory): a v0 `shutdown` on the socket, then it prints the pid it stopped, the Lisp hub exits 0 and its lock directory is gone."}
+{"do": "start", "hub": "lisp", "bin": "lisp"}
+{"do": "file", "path": "$LOCK/pid", "contains": "$PID(lisp)"}
+{"do": "run", "hub": "lisp", "args": ["stop"], "expect_code": 0, "expect_stdout": "stopped the Lisp hub (pid $PID(lisp))"}
+{"do": "expect_exit", "hub": "lisp", "code": 0, "within_ms": 5000}
+{"do": "file", "path": "$LOCK", "exists": false}

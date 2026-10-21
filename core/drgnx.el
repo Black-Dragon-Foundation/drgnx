@@ -24,6 +24,7 @@
 (require 'drgnx-onboard)
 (require 'drgnx-modal-choose)
 (autoload 'drgnx-ai--on-first-window "drgnx-ai-probe")
+(autoload 'drgnx-hub-restart-now "drgnx-hub-client" nil t)
 (autoload 'drgnx-secrets-export-keys "drgnx-secrets" nil t)
 (autoload 'drgnx-secrets-import-keys "drgnx-secrets" nil t)
 (require 'drgnx-gc)
@@ -89,6 +90,8 @@ the start."
   (drgnx-command-define 'keyboard-profile :category "Preferences" :title "Keyboard Profile…"
                         :command #'drgnx-keys-choose-profile :menu '("Options")
                         :doc "VS Code, Emacs or Vim keys, or Emacs/Vim editing with VS Code app keys")
+  (drgnx-command-define 'hub-restart-now :category "Agents" :title "Hub: Restart Now" :command #'drgnx-hub-restart-now
+                        :doc "Restart the agent hub (Ratatoskr) now, e.g. after drgnx was updated; the agent sessions it runs end")
   (drgnx-command-define 'portability-export-keys :category "Portability" :title "Export Keys"
                         :command #'drgnx-secrets-export-keys
                         :doc "Your provider keys into secrets.age (age, a passphrase), for a second machine")
