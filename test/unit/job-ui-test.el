@@ -3,6 +3,7 @@
 (require 'drgnx)
 (require 'drgnx-timer)
 (require 'drgnx-notice-desktop)
+(require 'drgnx-notice-echo)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-job-ui" drgnx-dir) nil t)
@@ -124,21 +125,19 @@
         :cards (list (list :id id :kind kind :title (format "card %d" id)))))
 
 (ert-deftest drgnx-job-ui/a-new-card-reaches-the-desktop-once ()
-  ;; the echo route (Task 7) asks the desktop route for each `:added' item; here a stand-in does the same
+  ;; the echo route asks the desktop route for each `:added' item (core-notice-echo)
   (drgnx-job-ui-test--with
     (drgnx-test-with-clock ()
-      (let ((sent nil) (drgnx-notice-desktop t) (drgnx-notice-desktop--backend 'dbus)
+      (let ((sent nil) (after-init-time (current-time))(drgnx-notice-desktop t) (drgnx-notice-desktop--backend 'dbus)
             (drgnx-notice-desktop--seen (make-hash-table :test #'equal)) (drgnx-notice-desktop--queue nil)
             (drgnx-notice-functions nil))
         (cl-letf (((symbol-function 'drgnx-notice-desktop-send) (lambda (title body) (push (cons title body) sent)))
+                  ((symbol-function 'drgnx-notice--can-echo-p) (lambda () t))
                   ((symbol-function 'frame-focus-state) #'ignore))
-          (add-hook 'drgnx-notice-functions
-                    (lambda (change)
-                      (dolist (id (plist-get change :added))
-                        (drgnx-notice-desktop-take (drgnx-job-ui-test--item id)))))
           (unwind-protect
               (progn
                 (drgnx-notice-desktop-mode 1)
+                (drgnx-notice-echo-mode 1)
                 (drgnx-job-ui-note-jobs (list (drgnx-job-ui-test--card-job 11 "budget")))
                 (drgnx-job-ui-note-jobs (list (drgnx-job-ui-test--card-job 11 "budget")))   ; the same card again
                 (drgnx-test-advance 0)
@@ -149,6 +148,7 @@
                                                              (:id 12 :kind "stalled" :title "card 12")))))
                 (drgnx-test-advance 0)
                 (should (equal (mapcar #'cdr sent) '("j1 — card 12" "j1 — card 11"))))
+            (drgnx-notice-echo-mode -1)
             (drgnx-notice-desktop-mode -1)))))))
 
 (ert-deftest drgnx-job-ui/overlap-cards-count-but-never-interrupt ()
