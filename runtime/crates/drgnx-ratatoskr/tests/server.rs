@@ -66,6 +66,10 @@ struct Hub {
 
 impl Hub {
     fn start(root: &Root, n: usize) -> Hub {
+        Hub::start_with(root, n, &[])
+    }
+
+    fn start_with(root: &Root, n: usize, extra: &[&str]) -> Hub {
         let stderr = root.dir.path().join(format!("hub-{n}.err"));
         let child = Command::new(BIN)
             .args([
@@ -74,6 +78,7 @@ impl Hub {
                 "--parent-pid",
                 &std::process::id().to_string(),
             ])
+            .args(extra)
             .env_clear()
             .envs(root.vars())
             .current_dir(root.dir.path())
@@ -269,6 +274,109 @@ fn two_hubs_one_lock_second_exits_3() {
     // the first one still serves, its socket untouched
     assert!(ping(&socket));
     assert!(first.exited().is_none());
+}
+
+#[test]
+fn the_path_is_statted_not_proc_self_exe() {
+    use drgnx_ratatoskr::idle::ExeWatch;
+    let dir = tempfile::tempdir().unwrap();
+    let sleep = ["/usr/bin/sleep", "/bin/sleep"]
+        .into_iter()
+        .find(|p| Path::new(p).exists())
+        .expect("a sleep binary");
+    let (live, other) = (dir.path().join("live"), dir.path().join("other"));
+    std::fs::copy(sleep, &live).unwrap();
+    std::fs::copy(sleep, &other).unwrap();
+    // a running process whose image is `live` (a file just written can be busy for a moment while another thread forks)
+    let mut child = (0..50)
+        .find_map(|_| {
+            Command::new(&live)
+                .arg("60")
+                .spawn()
+                .map_err(|_| std::thread::sleep(Duration::from_millis(20)))
+                .ok()
+        })
+        .expect("the copied sleep starts");
+    let by_path = ExeWatch::new(&live).unwrap();
+    #[cfg(target_os = "linux")]
+    let by_link = ExeWatch::new(Path::new(&format!("/proc/{}/exe", child.id()))).unwrap();
+    assert!(!by_path.changed());
+    // the update: a rename-replace of the file at the path
+    std::fs::rename(&other, &live).unwrap();
+    assert!(by_path.changed(), "the path now holds another file");
+    #[cfg(target_os = "linux")]
+    assert!(
+        !by_link.changed(),
+        "/proc/PID/exe follows the running inode, which a rename leaves alone"
+    );
+    // a missing file has not changed (it is looked at again later)
+    std::fs::remove_file(&live).unwrap();
+    assert!(!by_path.changed());
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[test]
+fn launchd_never_loops_on_exit_3() {
+    // launchd restarts on every non-zero exit: under `--supervisor launchd` "another hub serves" ends 0, with the
+    // real code and reason in the hub's log and on stderr; without it the same start ends 3 (the test above)
+    let root = Root::new();
+    let socket = root.socket();
+    let mut first = Hub::start(&root, 1);
+    first.wait_ready(&socket);
+    let mut second = Hub::start_with(&root, 2, &["--supervisor", "launchd"]);
+    let status = second.wait_exit(Duration::from_secs(10));
+    assert_eq!(status.code(), Some(0), "{}", second.stderr_text());
+    assert!(
+        second.stderr_text().contains("another hub serves here"),
+        "{}",
+        second.stderr_text()
+    );
+    assert!(
+        second.stderr_text().contains("exit 3 mapped to 0"),
+        "{}",
+        second.stderr_text()
+    );
+    assert!(ping(&socket));
+}
+
+#[test]
+fn the_stop_command_ends_a_hub_and_signals_nothing_for_a_stale_lock() {
+    let root = Root::new();
+    let socket = root.socket();
+    let stop = |extra: &[&str]| {
+        Command::new(BIN)
+            .arg("stop")
+            .args(extra)
+            .env_clear()
+            .envs(root.vars())
+            .output()
+            .unwrap()
+    };
+    // a stale lock file naming a live process nobody holds: not running, and the process lives
+    let mut sleeper = Command::new("sleep").arg("60").spawn().unwrap();
+    std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
+    std::fs::write(paths::lock_path(&socket), format!("{} 1\n", sleeper.id())).unwrap();
+    let out = stop(&[]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(String::from_utf8_lossy(&out.stdout).contains("not running"));
+    assert!(
+        sleeper.try_wait().unwrap().is_none(),
+        "stop signalled a stale lock's pid"
+    );
+    let _ = sleeper.kill();
+    let _ = sleeper.wait();
+    // a running hub: stopped by name and pid
+    let mut hub = Hub::start(&root, 1);
+    hub.wait_ready(&socket);
+    let out = stop(&["--timeout", "10"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?} {}", hub.stderr_text());
+    assert!(
+        String::from_utf8_lossy(&out.stdout)
+            .contains(&format!("stopped Ratatoskr (pid {})", hub.pid())),
+        "{out:?}"
+    );
+    assert_eq!(hub.wait_exit(Duration::from_secs(10)).code(), Some(0));
 }
 
 #[test]

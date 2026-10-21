@@ -12,11 +12,12 @@
 //! stops accepting and removes the sockets and the cap while the lock is still held.
 
 use crate::backend::{self, Backend};
-use crate::cli::{AgentSocket, ServeArgs};
+use crate::cli::{AgentSocket, ServeArgs, Supervisor};
 use crate::conn;
 use crate::forward::ToBackend;
 use crate::front::Front;
 use crate::hello::Socket;
+use crate::idle;
 use crate::lock::{self, LockError};
 use crate::relay;
 use crate::store::WorkDb;
@@ -41,6 +42,10 @@ pub const SCHEMA_TICK: Duration = Duration::from_secs(2);
 const BACKEND_STOP: Duration = Duration::from_secs(10);
 
 pub async fn run(args: ServeArgs) -> Exit {
+    // the executable's path, once, while it still names the file on disk (restart-when-idle, re-exec)
+    if let Err(e) = idle::resolve_exe() {
+        eprintln!("ratatoskr: cannot resolve its own path ({e}): restart-when-idle is off");
+    }
     if let Err(e) = urdr::check_floor(SQLITE_FLOOR) {
         let have = urdr::sqlite_version_number();
         eprintln!(
@@ -162,6 +167,11 @@ pub async fn run(args: ServeArgs) -> Exit {
     tokio::spawn(watch_schema(front.clone()));
     tokio::spawn(relay::run(events_rx, front.clone()));
     let supervisor = tokio::spawn(backend.clone().supervise());
+    #[cfg(feature = "test-hooks")]
+    let tick = args.idle_tick_ms.map_or(idle::TICK, Duration::from_millis);
+    #[cfg(not(feature = "test-hooks"))]
+    let tick = idle::TICK;
+    tokio::spawn(idle::run(front.clone(), backend.clone(), tick));
     for (l, s) in agents {
         tokio::spawn(accept(l, front.clone(), s));
     }
@@ -172,7 +182,14 @@ pub async fn run(args: ServeArgs) -> Exit {
         socket.display()
     );
 
-    let mut parent = args.parent_pid.map(|p| {
+    // `--parent-pid`, else `DRGNX_HUB_PARENT_PID` (the Lisp hub's name for it): tests end a hub with their process
+    let parent_pid = args.parent_pid.or_else(|| {
+        env.vars
+            .get("DRGNX_HUB_PARENT_PID")
+            .and_then(|p| p.parse().ok())
+            .filter(|p| *p > 0)
+    });
+    let mut parent = parent_pid.map(|p| {
         let mut every = tokio::time::interval(Duration::from_secs(1));
         every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         (p, every)
@@ -200,9 +217,9 @@ pub async fn run(args: ServeArgs) -> Exit {
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }
             },
-            () = front.stopped() => {
-                tracing::info!("shutdown: stopping");
-                break Exit::Stopped;
+            how = front.stopped() => {
+                tracing::info!(exit = how as u8, "shutdown or restart asked: stopping");
+                break how;
             }
             _ = term.recv() => {
                 tracing::info!("SIGTERM: stopping");
@@ -231,7 +248,17 @@ pub async fn run(args: ServeArgs) -> Exit {
     remove_all(&agent_paths);
     remove(&socket, &cap_path);
     let _ = tokio::task::spawn_blocking(move || store.shutdown()).await;
-    drop(lock);
+    if exit == Exit::Restart && args.supervisor == Supervisor::SelfDetached {
+        // nothing supervises this hub, so `main` executes the binary again: the lock stays held until the exec
+        // closes it (every descriptor is close-on-exec), and the new image takes it
+        tracing::info!(
+            "restart: executing {} again",
+            idle::start_exe().map_or_else(String::new, |p| p.display().to_string())
+        );
+        std::mem::forget(lock);
+    } else {
+        drop(lock);
+    }
     exit
 }
 

@@ -35,11 +35,14 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   `drgnx-command-ignoring-sigpipe`, `sh -c "trap '' PIPE; exec …"`, off Windows — because libuv resets SIGPIPE in an
   agent's children, and a write to a pipe whose reader left would otherwise end the server.
 - **Ratatoskr** (`runtime/crates/drgnx-ratatoskr`, binary `ratatoskr`; [runtime.md](runtime.md)), the Rust hub that
-  replaces the Lisp server half. `ratatoskr serve [--foreground] [--parent-pid PID]` and `ratatoskr version [--json]`
+  replaces the Lisp server half. `ratatoskr serve [--foreground] [--parent-pid PID] [--supervisor none|self|launchd]`,
+  `ensure`, `stop`, `status`, `doctor --json`, `restart` ([below](#starting-stopping-and-restarting-ratatoskr)) and
+  `ratatoskr version [--json]`
   (`{version, commit, proto: 1, records: 2, sqlite, test_hooks}`; the commit is `DRGNX_BUILD_COMMIT` at build time,
-  else `unknown`). Exit codes: **0** asked to stop, **1** cannot start, **2** usage, **3** another hub serves, **75**
-  restart requested. `main` builds the tokio runtime by hand (multi-thread, 2 workers), after the command line is
-  read and before anything else. Start order:
+  else `unknown`). The binary answers to any name (`rtsk` is a symlink to it): argv[0] is never consulted. Exit codes:
+  **0** asked to stop, **1** cannot start, **2** usage, **3** another hub serves, **75** restart requested.
+  `main` builds the tokio runtime by hand (multi-thread, 2 workers), after the command line is
+  read and before anything else (the commands that only talk to a hub never build one). Start order:
   1. The SQLite floor: below 3.51.3 it exits 1.
   2. The socket's directory, `<state>/hub` and `<state>/hub/log` are made private (`private_dir`), then logging
      starts.
@@ -59,7 +62,9 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   `<4>` / `<3>` when `JOURNAL_STREAM` is set (the journal under systemd). `DRGNX_RATATOSKR_LOG` takes a `Targets`
   string (`info`, the default; `warn,drgnx_ratatoskr::conn=debug`). The cap, keys and params are never logged. The
   cargo feature `test-hooks` (off in the binary install.sh builds) holds the test-only surfaces: the `__test_flood`
-  method, and `--agent-socket SID[:JOB]`, which is refused without `--foreground`.
+  method, `--idle-tick-ms N` (the restart-when-idle tick), and `--agent-socket SID[:JOB]`, which is refused without
+  `--foreground`. `DRGNX_HUB_PARENT_PID` does what `--parent-pid` does when the flag is absent (the Lisp hub's name
+  for it), so a hub a test starts through `ensure` ends with the test.
 - **The gateway** (`core/drgnx-gateway.el`) runs inside the hub: never in the editing Emacs, so streaming cannot
   touch the keystroke budget.
   Besides the 127.0.0.1 port it can listen on **per-session Unix sockets** (`drgnx-gateway-listen-socket PATH`, for
@@ -71,6 +76,62 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   request body never appear in its argv.
   The config has `suppress-connect-headers`: behind an HTTPS proxy curl's `include` would otherwise print the
   proxy's CONNECT head first, and the gateway would take it for the provider's answer.
+
+### Starting, stopping and restarting Ratatoskr
+
+`ratatoskr ensure [--timeout SECS]` (default 5) pings; when nothing answers it starts a hub and waits up to the timeout
+for `ping`. It prints the socket path and exits **0**; **1** when it could not start one (the reason, from the hub's
+log when the wait timed out, and the log's directory); **3** when a Lisp hub from before Ratatoskr holds the lock
+(checked before anything is started). How the hub is started:
+
+| Where | How | Restarted |
+|---|---|---|
+| Linux with a user systemd (the manager's `systemd` directory in `XDG_RUNTIME_DIR`) | `systemd-run --user --unit=ratatoskr-HASH --collect -p Restart=on-failure -p RestartForceExitStatus=75 -p "RestartPreventExitStatus=1 2 3" -p KillMode=mixed --setenv=NAME… ratatoskr serve`; "unit already exists" counts as success (two `ensure`s racing both then ping) | on a crash and on 75; never on 1, 2, 3 (`Restart=on-failure` alone restarts every non-zero exit until the start limit) |
+| macOS with a `gui/UID` domain | `<state>/hub/launchd.plist` (0600; label `org.blackdragonfoundation.ratatoskr.HASH`; `KeepAlive {SuccessfulExit: false}`, `ProcessType Background`; `serve --supervisor launchd`), then `launchctl bootstrap gui/UID <plist>`, or `kickstart` when `launchctl print gui/UID/LABEL` finds it loaded (a second `bootstrap` fails). No domain (an SSH session): the self-detach row, with a line on stderr saying why | on a crash and on 75; `serve --supervisor launchd` maps exits 1, 2 and 3 to 0 after logging the real code, because launchd restarts on every non-zero exit |
+| none (`RATATOSKR_SUPERVISOR=none`, containers, no user manager) | the binary starts itself: `serve --supervisor self` in a session of its own (`setsid`), stdio on `/dev/null`; every descriptor is close-on-exec | no: a `restart` re-executes the binary instead |
+
+Only variable *names* go to a supervisor (`--setenv=NAME`, the plist's environment from the same names), each only
+when set: `DRGNX_DATA_DIR DRGNX_CONFIG_DIR XDG_RUNTIME_DIR XDG_STATE_HOME XDG_DATA_HOME XDG_CONFIG_HOME XDG_CACHE_HOME
+HOME TMPDIR TMP TEMP DRGNX_EMACS DRGNX_DIR DRGNX_RATATOSKR_LOG` and the backend's agent names (`SSH_AUTH_SOCK`, the proxy
+and CA variables, `CLAUDE_CONFIG_DIR`, `TERM COLORTERM DISPLAY WAYLAND_DISPLAY`). Without `TMPDIR` and `HOME` a long
+socket path would resolve differently under systemd or launchd than in the editor. No value, and no provider key, is ever
+in a command line. `systemd-run` and `launchctl` are the root-owned programs at fixed paths, never found through
+`PATH`.
+
+`ratatoskr stop [--timeout SECS]` (default 15: the hub stops its backend first) signals nothing unless the lock is
+really held:
+
+- **Ratatoskr's lock** (a file): `flock(LOCK_EX|LOCK_NB)` is tried first. If it succeeds nobody holds the lock (a stale
+  file naming a live, reused pid, say): it prints `not running` and exits 0 without a signal. If it fails the hub is
+  asked to `shutdown` as a user client, and `stop` waits for the lock to be released and prints `stopped Ratatoskr (pid
+  N)`. Only when it is not released is the pid in the lock file sent SIGTERM, and only if that pid's start time is
+  still the one recorded in the file (else it prints the mismatch and exits 1).
+- **A Lisp hub's lock** (a directory): a v0 `shutdown` goes to the socket (a Lisp hub serves it without a hello) and
+  `stop` waits for the directory to go (`stopped the Lisp hub (pid N)`). If it stays, `lock/pid` gets SIGTERM only
+  when it is alive and its command line names `drgnx-hub-main`; else it prints `the lock names pid N, which is not a
+  drgnx hub: remove LOCKDIR` and exits 1.
+
+`ratatoskr status [--json]` is `status` as a user client (with `"running": true` added with `--json`); with no hub it
+prints `{"running": false}` and exits 1. `ratatoskr doctor --json` prints `{binary: {path, commit, test_hooks},
+running: {commit, pid}?, socket_dir: {path, mode, ok}, sqlite, job_agents}`. `ratatoskr restart` calls `restart`.
+
+**`restart`** (user class) answers `true`, then the hub stops as for `shutdown` (its backend first; in phase 1 there
+are no turns to cancel) and exits **75**. Under `--supervisor self`, where nothing would start it again, it releases
+its socket and cap and executes the binary again with the same arguments instead (the pid stays; the lock descriptor is
+close-on-exec, so the new image takes the lock at the exec).
+
+**Restart-when-idle.** At start the hub resolves its executable's path once (Linux `readlink /proc/self/exe`, which
+at start names the file on disk; macOS `_NSGetExecutablePath` and `realpath`) and records that path's device, inode
+and mtime. Every 2 s it `stat`s **that path**, never `/proc/self/exe`: the link follows the running inode, which a
+rename-replace (an update) leaves alone, so it would never change. A changed stamp runs `<path> version --json` with a
+5 s deadline; only an answer with another `commit` counts, and a missing, half-written or failing file is logged and
+looked at again at the next tick (the same commit under a new stamp becomes the baseline). Then the `notice` event
+`{source: "hub", severity: "warn", id: "restart-when-idle", life: "condition", text: "drgnx was updated; the hub
+restarts when its N running turns finish", command: "hub-restart-now"}` is sent (again when N changes), and the hub
+exits 75 the first time nothing is busy. **Idle in phase 1** is the backend's `agents/list` having no session with
+status `busy` and `job/status` no job `running` (each asked through the private socket within 2 s). An answer that does
+not come or does not fit is not idle, so a busy hub is never restarted; a hub whose backend cannot exist (`missing`)
+has nothing running. Phase 5 replaces this with the hub's own turn state.
 
 ### Ratatoskr's children (`drgnx-proc`)
 

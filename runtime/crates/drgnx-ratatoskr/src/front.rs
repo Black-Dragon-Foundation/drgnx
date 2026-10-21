@@ -5,6 +5,7 @@
 //! queued.  [`Front::start_line`] is the same for the connection loop, except that a forwarded call runs on a task
 //! of its own (at most [`MAX_IN_FLIGHT`] per connection; past that the connection is not read until one ends).
 
+use crate::Exit;
 use crate::conn::Outbox;
 use crate::dispatch::{self, Call, Caller, ErrorAnswerOrDrop, Forward, Refusals};
 use crate::hello::{self, Session};
@@ -20,7 +21,7 @@ use drgnx_proto::wire::{Answer, Error, ErrorAnswer, ErrorCode, Event, Id};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::Notify;
@@ -62,6 +63,8 @@ pub struct Front {
     read_only: AtomicU32,
     subscribers: Mutex<BTreeMap<u64, Arc<Outbox>>>,
     stop: Notify,
+    /// The stop asked for is a restart.
+    restart: AtomicBool,
     next_conn: AtomicU64,
 }
 
@@ -80,6 +83,7 @@ impl Front {
             read_only: AtomicU32::new(0),
             subscribers: Mutex::new(BTreeMap::new()),
             stop: Notify::new(),
+            restart: AtomicBool::new(false),
             next_conn: AtomicU64::new(1),
         }
     }
@@ -117,9 +121,21 @@ impl Front {
         }
     }
 
-    /// Wait until `shutdown` asks the hub to stop.
-    pub async fn stopped(&self) {
+    /// Wait until `shutdown` or `restart` (or restart-when-idle) asks the hub to stop: how it should end.
+    pub async fn stopped(&self) -> Exit {
         self.stop.notified().await;
+        if self.restart.load(Ordering::SeqCst) {
+            Exit::Restart
+        } else {
+            Exit::Stopped
+        }
+    }
+
+    /// Ask the hub to end with exit 75 (`restart`, restart-when-idle).  In phase 1 the backend has no turns to
+    /// cancel: the stop that follows shuts it down first.
+    pub fn ask_restart(&self) {
+        self.restart.store(true, Ordering::SeqCst);
+        self.stop.notify_one();
     }
 
     /// The connection CONN is gone: no more events for it.
@@ -269,6 +285,7 @@ impl Front {
             ignored,
         } = call;
         let mut stop = false;
+        let mut restart = false;
         let result = match params {
             Params::Hello(p) => {
                 let schema = self.schema.load(Ordering::Relaxed);
@@ -285,6 +302,10 @@ impl Front {
             }
             Params::Shutdown(_) => {
                 stop = true;
+                Ok(json!(true))
+            }
+            Params::Restart(_) => {
+                restart = true;
                 Ok(json!(true))
             }
             Params::EventsSince(p) => self
@@ -311,10 +332,14 @@ impl Front {
         if let Some(id) = id {
             out.push(answer_line(s.conn, id, result, ignored));
         }
-        if stop {
-            // the answer first, then the Task 13 stop
+        if stop || restart {
+            // the answer first, then the stop
             out.flushed(SHUTDOWN_FLUSH).await;
-            self.stop.notify_one();
+            if restart {
+                self.ask_restart();
+            } else {
+                self.stop.notify_one();
+            }
         }
         None
     }
@@ -500,6 +525,31 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(5), stop)
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn restart_answers_true_then_ends_the_hub_with_75() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        let mut s = Session::new(f.next_conn(), Socket::Main);
+        s.class = Class::User;
+        let out = Arc::new(Outbox::new(s.conn));
+        f.line(&mut s, &out, r#"{"id":1,"method":"restart"}"#).await;
+        assert_eq!(answers(&out), vec![json!({"id": 1, "result": true})]);
+        let how = tokio::time::timeout(Duration::from_secs(5), f.stopped())
+            .await
+            .unwrap();
+        assert_eq!(how, Exit::Restart);
+        // a plain shutdown is still a plain stop
+        let g = front(dir.path());
+        g.line(&mut s, &out, r#"{"id":2,"method":"shutdown"}"#)
+            .await;
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), g.stopped())
+                .await
+                .unwrap(),
+            Exit::Stopped
+        );
     }
 
     /// A backend whose calls each wait for a permit of its gate, and whose status says it runs.

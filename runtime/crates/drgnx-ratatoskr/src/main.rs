@@ -1,10 +1,17 @@
 //! `ratatoskr`: drgnx's agent runtime (docs/develop/hub.md).  The tokio runtime is built by hand, after the command
-//! line is read (and, from the supervise task on, after any self-detach): multi-thread, two workers.
+//! line is read (the commands that only talk to a hub never build one): multi-thread, two workers.  The same binary
+//! answers to any name (`rtsk`): argv[0] is never consulted.
 
-use drgnx_ratatoskr::cli::{self, Command};
-use drgnx_ratatoskr::{Exit, server, version};
+use drgnx_proto::paths::Env;
+use drgnx_ratatoskr::cli::{self, Command, Supervisor};
+use drgnx_ratatoskr::{Exit, doctor, idle, server, supervise, version};
+use std::os::unix::process::CommandExt;
 use std::process::ExitCode;
 use std::time::Duration;
+
+fn code(c: i32) -> ExitCode {
+    ExitCode::from(u8::try_from(c).unwrap_or(1))
+}
 
 fn main() -> ExitCode {
     let command = match cli::parse(std::env::args_os().skip(1)) {
@@ -23,7 +30,13 @@ fn main() -> ExitCode {
         Command::Methods { markdown: true } => {
             print!("{}", drgnx_proto::registry::markdown_table())
         }
+        Command::Ensure { timeout } => return code(supervise::ensure(&Env::process(), timeout)),
+        Command::Stop { timeout } => return code(supervise::stop(&Env::process(), timeout)),
+        Command::Status { json } => return code(doctor::status(&Env::process(), json)),
+        Command::Doctor => return code(doctor::doctor(&Env::process())),
+        Command::Restart => return code(doctor::restart(&Env::process())),
         Command::Serve(args) => {
+            let supervisor = args.supervisor;
             let runtime = match tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
                 .enable_all()
@@ -37,8 +50,34 @@ fn main() -> ExitCode {
             };
             let exit = runtime.block_on(server::run(args));
             runtime.shutdown_timeout(Duration::from_secs(1));
-            return ExitCode::from(exit as u8);
+            return match (exit, supervisor) {
+                // nothing supervises this hub: run the binary at the path resolved at start again
+                (Exit::Restart, Supervisor::SelfDetached) => reexec(),
+                // launchd restarts on every non-zero exit, so only 75 and a crash may reach it
+                (Exit::CannotStart | Exit::Usage | Exit::AnotherHub, Supervisor::Launchd) => {
+                    eprintln!(
+                        "ratatoskr: exit {} mapped to 0 for launchd (the reason is in the hub's log)",
+                        exit as u8
+                    );
+                    ExitCode::SUCCESS
+                }
+                _ => ExitCode::from(exit as u8),
+            };
         }
     }
     ExitCode::SUCCESS
+}
+
+/// Replace this process with the binary at the path resolved at start, the same arguments.  The lock was kept open
+/// across this call and goes with the exec (every descriptor is close-on-exec); only a failed exec returns.
+fn reexec() -> ExitCode {
+    let Some(exe) = idle::start_exe() else {
+        eprintln!("ratatoskr: cannot restart: no resolved executable path");
+        return ExitCode::from(Exit::CannotStart as u8);
+    };
+    let err = std::process::Command::new(exe)
+        .args(std::env::args_os().skip(1))
+        .exec();
+    eprintln!("ratatoskr: cannot execute {} again: {err}", exe.display());
+    ExitCode::from(Exit::CannotStart as u8)
 }

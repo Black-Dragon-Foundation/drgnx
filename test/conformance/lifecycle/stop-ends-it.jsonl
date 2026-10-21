@@ -1,0 +1,6 @@
+{"scenario": "lifecycle/stop-ends-it", "requires": ["v1"], "doc": "`stop` on a running hub: it sends `shutdown` as a user client, waits for the lock to be released and prints what it stopped; the hub exits 0 and removes its socket. A second `stop` says it is not running (exit 0)."}
+{"do": "start", "hub": "h"}
+{"do": "run", "args": ["stop"], "expect_code": 0, "expect_stdout": "stopped Ratatoskr (pid $PID(h))"}
+{"do": "expect_exit", "hub": "h", "code": 0, "within_ms": 8000}
+{"do": "file", "path": "$SOCKET", "exists": false}
+{"do": "run", "args": ["stop"], "expect_code": 0, "expect_stdout": "not running"}

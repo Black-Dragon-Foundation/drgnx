@@ -41,6 +41,8 @@ pub const READY_WITHIN: Duration = Duration::from_secs(10);
 pub const CALL_DEADLINE: Duration = Duration::from_secs(30);
 /// How long `status` waits for the backend's own `status`.
 pub const STATUS_DEADLINE: Duration = Duration::from_secs(1);
+/// How long restart-when-idle waits for each of the backend's two lists.
+pub const IDLE_DEADLINE: Duration = Duration::from_secs(2);
 /// The first wait before a restart, doubled after each early exit up to [`BACKOFF_MAX`].
 pub const BACKOFF_FIRST: Duration = Duration::from_secs(1);
 pub const BACKOFF_MAX: Duration = Duration::from_secs(30);
@@ -522,6 +524,28 @@ impl Backend {
         info
     }
 
+    /// The turns running (restart-when-idle, [`crate::idle`]): the backend's `busy` sessions plus its `running` jobs,
+    /// each list asked within [`IDLE_DEADLINE`].  A backend that cannot exist (`missing`) has none.  None when the
+    /// backend does not answer or answers with something else: that is not idle.
+    pub async fn busy(&self) -> Option<u64> {
+        if matches!(&*self.phase.borrow(), Phase::Missing(_)) {
+            return Some(0);
+        }
+        let ask = |method: &'static str| async move {
+            let id = self.next_id();
+            let line = Zeroizing::new(
+                json!({"id": id, "method": method, "params": {}, "caller": {"class": "user"}})
+                    .to_string(),
+            );
+            self.request_within(id, method, line, IDLE_DEADLINE)
+                .await
+                .ok()
+        };
+        let agents = ask("agents/list").await?;
+        let jobs = ask("job/status").await?;
+        crate::idle::count_busy(&agents, &jobs)
+    }
+
     /// Run the backend until the hub stops: start it, restart it when it is gone (after a backoff), and stop it at
     /// the end.  Returns at once when it is `missing`.
     pub async fn supervise(self: Arc<Self>) {
@@ -660,9 +684,13 @@ impl Backend {
             end
         };
         if !exited {
-            // never reaped yet, so its group is still ours: stop it
-            let _ = proc::kill_group(pid, proc::reap::GRACE, &RealSignaller).await;
-            let _ = child.wait().await;
+            // never reaped yet, so its group is still ours: stop it.  The leader is reaped meanwhile: an unreaped
+            // zombie keeps its group "there" for `kill(-pgid, 0)`, and the stop would wait out SIGKILL's whole
+            // limit (7 s) for a backend that died at SIGTERM.
+            let _ = tokio::join!(
+                proc::kill_group(pid, proc::reap::GRACE, &RealSignaller),
+                child.wait()
+            );
         }
         tracing::debug!(pid, stderr = %child.stderr_tail(), "the Lisp backend's stderr");
         self.record_delete(row).await;
