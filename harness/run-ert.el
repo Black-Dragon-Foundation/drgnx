@@ -330,7 +330,6 @@ names the run would run, in that order, to FILE and runs none."
   "Load every *-test.el under DIR (or the files of the list DIR: a shard), run all tests, write a JSON
 summary to RESULTS-FILE.  Return t if every test passed."
   (advice-add 'ert-run-test :after (lambda (&rest _) (drgnx-run-ert-drain-events)) '((name . drgnx-run-ert-drain)))
-  (drgnx-run-ert--trampolines-see-real-primitives)
   (let* ((census (and (drgnx-run-ert--leaks-on-p) (progn (drgnx-run-ert--census-start) t)))
          ;; the RAW selector, for the file filter: `drgnx-run-ert--selector' needs the files loaded, and with a
          ;; shuffle it is a `(member …)', not a string (which would load every file)
@@ -943,36 +942,6 @@ Return the directory, or nil without native compilation."
                                                        user-cache))
                                     native-comp-eln-load-path)))
       dir)))
-
-(defvar native-comp-enable-subr-trampolines)
-
-(defvar drgnx-run-ert--primitives nil
-  "Every primitive as the run found it, before any test: an alist (SYMBOL . SUBR).")
-
-(defun drgnx-run-ert--install-with-real-primitives (install subr-name)
-  "Around `comp-subr-trampoline-install': INSTALL SUBR-NAME's trampoline with every primitive a test replaced its own.
-A test that stubs one primitive and then another Emacs has no trampoline for yet (a cold eln dir) makes Emacs compile
-that trampoline inside the first stub, and the compile spawns an Emacs with `call-process' and reads and writes files:
-a spy of `call-process' failed the test (N-T17-2), a stub's fake result would break the compile.  The swaps install no
-trampoline (each replaced primitive has its own already); the test's definitions are back afterwards."
-  (let ((replaced (cl-loop for (sym . subr) in drgnx-run-ert--primitives
-                           for now = (symbol-function sym)
-                           unless (eq now subr) collect (list sym subr now))))
-    (unwind-protect
-        (progn (let ((native-comp-enable-subr-trampolines nil))
-                 (dolist (r replaced) (fset (nth 0 r) (nth 1 r))))
-               (funcall install subr-name))
-      (let ((native-comp-enable-subr-trampolines nil))
-        (dolist (r replaced) (fset (nth 0 r) (nth 2 r)))))))
-
-(defun drgnx-run-ert--trampolines-see-real-primitives ()
-  "Record every primitive once, before the tests, and compile each trampoline with them (see
-`drgnx-run-ert--install-with-real-primitives')."
-  (when (and (fboundp 'native-comp-available-p) (native-comp-available-p) (not drgnx-run-ert--primitives))
-    (mapatoms (lambda (sym)
-                (when (and (fboundp sym) (subr-primitive-p (symbol-function sym)))
-                  (push (cons sym (symbol-function sym)) drgnx-run-ert--primitives))))
-    (advice-add 'comp-subr-trampoline-install :around #'drgnx-run-ert--install-with-real-primitives)))
 
 (defun drgnx-run-ert-batch ()
   "Batch entry point: run the suite in the remaining arguments — a directory, or test files (a shard) —
