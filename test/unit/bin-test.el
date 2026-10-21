@@ -971,6 +971,35 @@ macOS (no /proc there)."
             (should-not (member "/out" (mapcar (lambda (a) (car (last (split-string a ":")))) args)))))
       (delete-directory dir t))))
 
+(ert-deftest drgnx-bin/a-container-run-from-a-worktree-mounts-the-git-dir ()
+  ;; In a git worktree `.git' is a file naming an absolute host path; the container mounts only the checkout, so git
+  ;; there exited 128.  The common git dir goes in read-only at the same absolute path; a plain checkout gets no extra mount.
+  (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
+         (main (expand-file-name "main" dir))
+         (wt (expand-file-name "wt" dir)))
+    (unwind-protect
+        (progn
+          (dolist (cmd `(("git" "init" "-q" ,main)
+                         ("git" "-C" ,main "-c" "user.name=t" "-c" "user.email=t@t" "commit" "-q" "--allow-empty" "-m" "x")
+                         ("git" "-C" ,main "worktree" "add" "-q" ,wt)))
+            (should (eql 0 (apply #'call-process (car cmd) nil nil nil (cdr cmd)))))
+          (make-directory (expand-file-name "bin" wt) t)
+          (dolist (f '("drgnx" "drgnx-paths.sh"))
+            (copy-file (expand-file-name (concat "bin/" f) drgnx-bin-test--root) (expand-file-name (concat "bin/" f) wt))
+            (set-file-modes (expand-file-name (concat "bin/" f) wt) #o755))
+          (let* ((common (concat (file-truename main) "/.git"))
+                 (drgnx-bin-test--bin (expand-file-name "bin/drgnx" wt))
+                 (args (drgnx-bin-test--container-argv dir nil)))
+            (should (member (format "%s:%s:ro" common common) args)))
+          ;; the main checkout, where `.git' is a directory: no extra mount
+          (let* ((drgnx-bin-test--bin (expand-file-name "bin/drgnx" main))
+                 (args (progn (make-directory (expand-file-name "bin" main) t)
+                              (dolist (f '("drgnx" "drgnx-paths.sh"))
+                                (copy-file (expand-file-name (concat "bin/" f) wt) (expand-file-name (concat "bin/" f) main) t))
+                              (drgnx-bin-test--container-argv dir nil))))
+            (should-not (seq-find (lambda (a) (string-suffix-p "/.git:ro" a)) args))))
+      (delete-directory dir t))))
+
 (ert-deftest drgnx-bin/a-container-run-gets-the-modal-elpa ()
   ;; DRGNX_MODAL_ELPA (evil for the modal tests) is mounted read-only into the container and named there, so the
   ;; 31.1 container runs the evil tests instead of skipping them.
