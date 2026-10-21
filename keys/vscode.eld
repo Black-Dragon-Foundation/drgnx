@@ -382,4 +382,5 @@
         (large-file-search :none "vlf's own C-c C-v s; in the palette")
         (large-file-open-chunks :none "the header line's button; in the palette")
         (large-file-open-whole :none "the header line's button; in the palette")
-        (large-file-open-raw :none "the header line's button; in the palette")))
+        (large-file-open-raw :none "the header line's button; in the palette")
+        (heap-audit :none "Help → Heap Audit")))

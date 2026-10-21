@@ -35,6 +35,7 @@ Using drgnx.
 - [Your files](guide/files.md): when a settings file has a mistake (the last good copy, Open and Reset), backups, locks and `config-good/`, two machines sharing one folder.
 - [A second machine](guide/second-machine.md): what travels (the whole config dir), what stays on this machine (the data, state and cache dirs), paths written `~/…`, the doctor's `portable-config` check, provider keys in `secrets.age`, the one command `drgnx bootstrap`.
 - [Notices](guide/notices.md): how drgnx tells you things; the two counts in the mode line and the Notices list; desktop notifications for everything waiting on you, once each, while no drgnx window has focus (D-Bus, `osascript` on macOS), and the off switch.
+- [Speed: freezes, GC and the heap](guide/speed.md): the GC census (one line per collection, Help → GC Census) and the Heap Audit (Help → Heap Audit: what keeps the Lisp heap large, by owner, against budgets; it asks first, because Emacs stops for seconds).
 - [Your shell](guide/shell.md): the one line for zsh, bash and fish — `drgnx` completion, eat's shell integration in the terminal, why an idle shell never blocks quit, `EDITOR`, your login shell's `PATH` in drgnx, prompt themes, fish's limits.
 
 ## Reference

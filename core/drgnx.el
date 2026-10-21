@@ -27,6 +27,7 @@
 (autoload 'drgnx-hub-restart-now "drgnx-hub-client" nil t)
 (autoload 'drgnx-secrets-export-keys "drgnx-secrets" nil t)
 (autoload 'drgnx-secrets-import-keys "drgnx-secrets" nil t)
+(autoload 'drgnx-heap-audit-command "drgnx-heap" nil t)
 (require 'drgnx-gc)
 (require 'drgnx-gc-census)
 (require 'drgnx-session)
@@ -79,6 +80,8 @@ the start."
                         :command #'drgnx-surfaces-cheatsheet :menu '("Help") :doc "Every command, its key and where to click")
   (drgnx-command-define 'modules-report :category "Help" :title "Module Report"
                         :command #'drgnx-modules-show-report :menu '("Help") :doc "Which modules loaded, how long they took, what failed")
+  (drgnx-command-define 'heap-audit :category "Help" :title "Heap Audit" :command #'drgnx-heap-audit-command
+                        :menu '("Help") :doc "What keeps the Lisp heap large, by owner (asks first: Emacs stops for seconds)")
   (drgnx-command-define 'preferences-modules :category "Preferences" :title "Modules"
                         :command #'drgnx-modules-list :menu '("Options") :doc "Every module, its status; turn modules on and off")
   (drgnx-command-define 'preferences-user-config :category "Preferences" :title "Open User Config"

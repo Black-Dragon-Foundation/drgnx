@@ -21,6 +21,9 @@ core/drgnx-tty-fallback.el   keys a legacy terminal cannot send: their Alt+Shift
 core/drgnx-file.el   files drgnx keeps: the bounded reader, the atomic writer, the locked update, backups (below)
 core/drgnx-shell-env.el  PATH, MANPATH, INFOPATH from the login shell, once per start, asynchronously; never a key;
                      the hub follows (env/set); Shell: Reload Environment (../guide/shell.md)
+core/drgnx-owner.el  who owns a Lisp file: a package (its directory), emacs (lisp-directory), drgnx (the module)
+core/drgnx-heap.el   Help → Heap Audit: the live heap by owner, shared data counted once; snapshots; the budget
+                     table and drgnx-heap-check (autoloaded; ../guide/speed.md)
 modules/<category>/drgnx-<name>.el   one drgnx-module-define per file
 ```
 
