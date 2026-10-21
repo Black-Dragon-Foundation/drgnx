@@ -75,6 +75,8 @@ this returns.
 - `helper()` is this binary (its path resolved at start) with `sandbox-inner` and `relay`.
 - `to_draugr(invocation)` is the `draugr::Spec` (stdin `/dev/null`, the fds as `PassFd`s, `new_session`).
 - `ratatoskr relay --parent-pid PID [--ready-fd N] PORT=SOCKET…` runs [the relay](#the-relay-task-11).
+- `ratatoskr sandbox check` and the doctor's `sandbox` section run [the check](#the-check); `sandbox::run_probe`
+  spawns its probe, and `sandbox::check_blocking` gives it a runtime of its own.
 - `ratatoskr sandbox run --spec FILE --result FILE [--tier full|reduced] [--bwrap PATH] [--pause-before-spawn FIFO]
   [--landlock-omit PATH]… [--landlock-abi-cap N] -- CMD…` exists only with `test-hooks`, for the escape rows. It
   detects, validates the spec against `context`, prepares, and with `--pause-before-spawn` writes `opened` to the
@@ -808,7 +810,43 @@ that changes after the check (rebinding) cannot lead it anywhere else.
   connect does. Both hold one of the `max_conns` places meanwhile.
 - The proxy speaks HTTP CONNECT only: no plain HTTP forwarding and no SOCKS.
 
-## The check (Task 12)
+## The check
+
+`gleipnir::check` (`src/check.rs`) says whether the sandbox starts on this host, and when it does not, why and what
+to do. `ratatoskr sandbox check [--json] [--tier full|reduced]` runs it (exit 0 when it works, else 1; the text is
+`backend bwrap 0.12.0: ok (Landlock ABI 10, seccomp)`, or `not available: REASON` and `fix: FIX`), and
+`ratatoskr doctor` carries its answer as a `sandbox` section `{backend, version, ok, reason, fix, landlock_abi,
+in_use}`. `in_use` is false until jobs run in the sandbox (phase 6), and nothing says a job is sandboxed.
+
+**The probe is the real invocation.** `check(helper, tier, bwrap_override, timeout, run)` detects the backend, makes a
+temp dir, and builds a spec as hard as a job's: the isolated network with one relay port to a real Unix socket in a
+session dir (Linux), the tier's Landlock floor, seccomp. It validates the spec, prepares it, and `run` (Ratatoskr:
+`sandbox::run_probe`, through `draugr::spawn_pinned`, the way jobs start) spawns it within 5 s (1.4 s in the doctor).
+The command is `/bin/sh -c 'cat "$1" >/dev/null 2>&1 && exit 9; exit 0' sh CANARY`, where CANARY is a file the spec
+does not grant. Exit 0 means the read was blocked. Exit 9 means "the sandbox ran but did not block a read", which
+fails the check; this is what makes it prove the sandbox, and on macOS that the profile enforces something. A relay
+that cannot start, a kernel below the tier's Landlock floor and Ubuntu 25.10's `RTM_NEWADDR` failure all fail the
+check, not only a job. Gleipnir spawns nothing itself: `run` returns a `Ran { layers, exit, stderr }`.
+
+**The reason and the fix** come from `explain(stderr, facts, tier, need_abi)`. `facts()` reads the machine once:
+`/run/.containerenv` or `/.dockerenv`, `/etc/os-release` (`ID`, `ID_LIKE`, `VERSION_ID`), the AppArmor and user
+namespace switches under `/proc/sys`, a root-owned bwrap and its version, the Landlock ABI, and on macOS a root-owned
+`sandbox-exec`. The first row that matches wins:
+
+| When | Reason | Fix |
+|---|---|---|
+| a container | inside a container: bubblewrap needs user namespaces the container does not give | none |
+| macOS, no trusted `sandbox-exec` | sandbox-exec was not found where only root can change it | it ships with macOS at `/usr/bin/sandbox-exec` |
+| full tier, no trusted bwrap | bubblewrap (bwrap) is not installed where only root can change it | the distribution's install command (`dnf`, `apt`, `pacman`, `zypper`; else "install bubblewrap 0.12.0 or newer with your package manager") |
+| full tier, bwrap below 0.12.0 | bubblewrap X is older than 0.12.0, which fixes a sandbox escape (CVE-2026-87766) | install 0.12.0 or newer; no older version is accepted, even with a distribution's backport. On Ubuntu 26.04 it adds that the update removed the fix again (0.11.1-1ubuntu0.3) and 26.10 ships 0.12.0 |
+| `setting up uid map: Permission denied`, or (full tier, bwrap's own failure) `apparmor_restrict_unprivileged_userns` | AppArmor restricts unprivileged user namespaces (Ubuntu 23.10 and later) | load `bwrap-userns-restrict` (`sudo cp /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/ && sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict`). Never the global sysctl |
+| bwrap's namespace message, or (full tier, bwrap's own failure) `max_user_namespaces == 0` or `unprivileged_userns_clone == 0` | the kernel does not allow unprivileged user namespaces | `sudo sysctl -w user.max_user_namespaces=15000` (Debian: `kernel.unprivileged_userns_clone=1`) |
+| Landlock ABI below the tier's floor (1 full, 9 reduced) | Landlock is off or too old (ABI N; the sandbox needs ABI M) | boot with Landlock in the kernel's `lsm=` list, on a kernel with ABI M or newer |
+| anything else | the sandbox cannot start here: the first stderr line | run `ratatoskr sandbox check --json` and see the stderr |
+
+The bwrap and user-namespace rows apply to the full tier only: the reduced tier makes no namespaces. The kernel
+switches count only when the failure was bwrap's (or there was no run), so a Landlock failure on a restricted Ubuntu
+is not blamed on AppArmor.
 
 ## Proving it (Tasks 14 and 15)
 

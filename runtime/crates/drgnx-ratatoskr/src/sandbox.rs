@@ -3,14 +3,18 @@
 //! `sandbox run` ([`run`]) for the escape rows. Nothing here runs a job yet (phase 6), and nothing is called
 //! sandboxed.
 
+use crate::cli::SandboxCheckArgs;
 use draugr::PassFd;
-use gleipnir::{Context, InnerCommand, Invocation};
+use gleipnir::check::{Check, Ran};
+use gleipnir::{Context, InnerCommand, Invocation, Prepared, Refusal, Rule, Tier};
 use runstav::paths::{self, Env};
 use std::ffi::{CStr, OsStr, OsString};
 use std::io;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// Environment names never passed into a sandbox beside `gleipnir::BASE_ENV_DENY`: drgnx's own dirs, the agent's
 /// identity and the hub's socket and pid.
@@ -247,6 +251,96 @@ pub fn mac_context() -> gleipnir::sbpl::MacContext {
     }
 }
 
+/// A start that failed before the program ran, as a refusal.
+fn setup(message: String) -> Refusal {
+    Refusal {
+        rule: Rule::Setup,
+        path: None,
+        message,
+    }
+}
+
+/// The check's spawn: the prepared probe started the way a job is (`draugr::spawn_pinned`), its status line read, and
+/// its exit awaited, all within `timeout`. Whatever is still running at the deadline is killed.
+pub async fn run_probe(prepared: Prepared, timeout: Duration) -> Ran {
+    let end = Instant::now() + timeout;
+    let left = || end.saturating_duration_since(Instant::now());
+    let Prepared {
+        invocation,
+        status,
+        layers,
+    } = prepared;
+    let mut child = match draugr::spawn_pinned(to_draugr(invocation)).await {
+        Ok(c) => c,
+        Err(e) => {
+            return Ran {
+                layers: Err(setup(format!("cannot start the sandbox: {e}"))),
+                exit: None,
+                stderr: String::new(),
+            };
+        }
+    };
+    let report = match status {
+        // Blocking, on the thread that drives this future; the runtime's worker keeps reading the stderr tail.
+        Some(fd) => gleipnir::read_status(fd, &|| child.stderr_tail(), left()),
+        None => layers.ok_or_else(|| setup("no status line and no layers".into())),
+    };
+    let mut exit = None;
+    let finished = report.is_ok()
+        && match tokio::time::timeout(left(), child.wait()).await {
+            Ok(Ok(Some(s))) => {
+                exit = Some(s.code().unwrap_or_else(|| 128 + s.signal().unwrap_or(0)));
+                true
+            }
+            _ => false,
+        };
+    if !finished {
+        // The group cannot go while its leader is an unreaped zombie (a start that failed at once): reap it while
+        // the group is ended.
+        let _ = tokio::join!(
+            draugr::kill_group(child.id(), draugr::reap::GRACE, &draugr::RealSignaller),
+            tokio::time::timeout(Duration::from_secs(7), child.wait())
+        );
+    }
+    Ran {
+        layers: report,
+        exit,
+        stderr: child.stderr_tail(),
+    }
+}
+
+/// The check for `tier` here, on a runtime of its own (the doctor and the command line have none), within `timeout`.
+pub fn check_blocking(tier: Tier, bwrap: Option<PathBuf>, timeout: Duration) -> Check {
+    let helper = match helper() {
+        Ok(h) => h,
+        Err(e) => return Check::failed(format!("the helper's own path: {e}"), None),
+    };
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build();
+    match runtime {
+        Ok(rt) => rt.block_on(gleipnir::check::check(
+            helper, tier, bwrap, timeout, run_probe,
+        )),
+        Err(e) => Check::failed(format!("no async runtime: {e}"), None),
+    }
+}
+
+/// How long `sandbox check` lets the probe run (review S16).
+pub const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// `ratatoskr sandbox check`: the text form or `--json`; exit 0 when the sandbox starts here, else 1.
+pub fn check_command(args: SandboxCheckArgs) -> i32 {
+    let check = check_blocking(args.tier, args.bwrap, CHECK_TIMEOUT);
+    if args.json {
+        println!("{}", check.to_json());
+    } else {
+        println!("{}", check.text());
+    }
+    i32::from(!check.ok)
+}
+
 #[cfg(feature = "test-hooks")]
 pub use run::run;
 
@@ -268,14 +362,6 @@ mod run {
         refused: Option<Refusal>,
         layers: Option<LayersReport>,
         exit: Option<i32>,
-    }
-
-    fn setup(message: String) -> Refusal {
-        Refusal {
-            rule: Rule::Setup,
-            path: None,
-            message,
-        }
     }
 
     /// Detect, validate against [`context`], prepare, (pause,) spawn through `draugr::spawn_pinned`, read the
@@ -374,14 +460,25 @@ mod run {
             None => layers.ok_or_else(|| setup("no status line and no layers".into())),
         };
         let mut out = Outcome::default();
+        let mut waited = None;
         match report {
             Ok(l) => out.layers = Some(l),
             Err(r) => {
-                draugr::kill_group(child.id(), draugr::reap::GRACE, &draugr::RealSignaller).await;
+                // The group cannot go while its leader is an unreaped zombie (a start that failed at once):
+                // reap it while the group is ended, or this waits out the whole grace and kill time.
+                let (_, status) = tokio::join!(
+                    draugr::kill_group(child.id(), draugr::reap::GRACE, &draugr::RealSignaller),
+                    child.wait()
+                );
+                waited = Some(status);
                 out.refused = Some(r);
             }
         }
-        out.exit = match child.wait().await {
+        let status = match waited {
+            Some(status) => status,
+            None => child.wait().await,
+        };
+        out.exit = match status {
             Ok(Some(s)) => Some(s.code().unwrap_or_else(|| 128 + s.signal().unwrap_or(0))),
             _ => None,
         };

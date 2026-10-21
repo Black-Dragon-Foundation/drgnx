@@ -33,7 +33,8 @@ fn main() -> ExitCode {
         Command::Ensure { timeout } => return code(supervise::ensure(&Env::process(), timeout)),
         Command::Stop { timeout } => return code(supervise::stop(&Env::process(), timeout)),
         Command::Status { json } => return code(doctor::status(&Env::process(), json)),
-        Command::Doctor => return code(doctor::doctor(&Env::process())),
+        Command::Doctor { json } => return code(doctor::doctor(&Env::process(), json)),
+        Command::SandboxCheck(args) => return code(drgnx_ratatoskr::sandbox::check_command(args)),
         Command::Restart => return code(doctor::restart(&Env::process())),
         // Before any thread or runtime exists: the helper asserts it is single-threaded. Not Linux: it exits 125 with
         // "the inner helper is Linux only" (Android: no backend; apps get no user namespaces; fails closed).
