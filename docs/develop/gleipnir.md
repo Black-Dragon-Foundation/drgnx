@@ -119,7 +119,8 @@ names: `home`, `closed` and `open_inside_closed`, `user_sockets`, `run_parents` 
 `program_dirs` (the caller's `PATH`) and `env_deny`. Gleipnir names none of them itself; a context path that is not
 absolute and canonical refuses the spec (`Malformed`), so a sloppy context never weakens a check. Context paths are
 looked up too (GL-T2-2): one that exists must be its own true name, and one that does not must have a true-named
-deepest existing ancestor, as a spec's own paths must; a home given through a link is `Malformed`.
+deepest existing ancestor, as a spec's own paths must; a home given through a link is `Malformed`, and so is a home
+of `/` (no home known: its secret dirs would be `/.ssh` and so on, never the user's; gate review M16).
 
 ## What is refused
 
@@ -322,7 +323,7 @@ dropped the backported fix again (2026-09-17), so it is refused there, with the 
 Fd binds do not replace the floor: the dest side of a mount (a link inside a bound folder) is bwrap's to resolve, and
 0.12.0 does it with `openat2(RESOLVE_IN_ROOT)`.
 
-There is no unit test that runs a real bwrap (review S15): containers skip it. The escape rows `any/works`,
+There is no unit test that runs a real bwrap (review S15): containers skip it. The escape rows `linux/works`,
 `bind-fd-link-swap` and `dest-link-stays-inside` (Task 15) run the argv on a real bwrap on the VM.
 
 ## The inner helper
@@ -408,7 +409,8 @@ a seccomp or Landlock install that an outer filter makes fail, and the reduced r
 
 - `plan_for(spec, tier)` gives a `LandlockPlan`: the read roots, write roots, device files that may be written, the
   roots under which pathname Unix sockets may be connected to, and the TCP ports (or none). Its `min_abi` is the
-  spec's `layers.landlock_min_abi`, raised to the tier's floor. The plan travels in the inner spec.
+  spec's `layers.landlock_min_abi`, raised to the tier's floor, and in the full tier under `Net::Shared` to 6
+  (`LANDLOCK_FLOOR_SHARED_NET`, below). The plan travels in the inner spec.
 - `rules_for_abi(plan, abi)` gives the `RulesetDesc` for one ABI: what is handled (denied unless allowed) and what is
   allowed where. It asks only for rights that ABI has. An ABI above 9 gets the ABI-9 set.
 - `gate(plan, kernel, cap)` is the floor. The effective ABI is `min(kernel_abi(), abi_cap, 9)`. It is refused when
@@ -424,13 +426,13 @@ a seccomp or Landlock install that an outer filter makes fail, and the reduced r
 | | Full (under bwrap) | Reduced (no namespaces) |
 |---|---|---|
 | Paths | inside paths (bind dests) | the host's own (sources) |
-| Floor | ABI ≥ 1 | ABI ≥ 9, plus seccomp |
+| Floor | ABI ≥ 1; ABI ≥ 6 under `Net::Shared` | ABI ≥ 9, plus seccomp |
 | Read and execute | `/` | `/usr /etc /opt /nix /gnu /bin /lib /lib64 /sbin /proc`, `/dev/{null,zero,full,random,urandom,tty}`, and the spec's read, write, bind, home, run and tmp sources |
 | Write | `write` entries, rw binds, an rw home, `/tmp`, `/var/tmp`, `/dev/shm`, `/dev/pts` (bwrap's private mounts) | `write` entries, rw binds, an rw home, the spec's `tmp`. Never the host's `/tmp`, `/var/tmp` or `/dev/shm`: without a mount namespace they are the user's own |
 | Device files written | `/dev/{null,zero,full,tty,ptmx}` | `/dev/{null,zero,full}` |
 | Unix connect (ABI 9) | the `run` dest | the `run` source |
 | TCP connect (ABI 4) | relay ports and `extra_tcp_ports` under `Net::Isolated`; not handled under `Net::Shared` | handled: only the relay ports (`Net::Isolated`); none under `Net::Shared`. Never `extra_tcp_ports` |
-| TCP bind (ABI 4) | not handled: the network namespace isolates a server inside | handled: only the relay ports, for the relay; the helper then adds a layer that refuses every bind (`forbid_tcp_bind`) |
+| TCP bind (ABI 4) | not handled: the network namespace isolates a server inside | handled: only the relay ports, for the relay; the helper then adds a layer that refuses every bind and scopes signals and abstract sockets to itself, so the program cannot kill the relay (`forbid_tcp_bind`) |
 
 **Per ABI.**
 
@@ -455,19 +457,30 @@ not a directory gets only the rights that apply to files.
 what exists. Landlock also holds if a bind turns out wider than meant, and its scopes stop abstract sockets and
 signals that the namespaces do not cover.
 
+**A shared network needs ABI 6** (gate review S3). Under `Net::Shared` (`--share-net`) the sandbox is in the host's
+network namespace, and abstract Unix socket names are per network namespace: X11's `@/tmp/.X11-unix/X0` (with
+`SI:localuser`, the server checks only the peer's uid, so a sandboxed program could type into the user's session) and
+a `unix:abstract=` D-Bus bus would be reachable. Only ABI 6 scopes them, so `plan_for` raises a full-tier shared plan's
+`min_abi` to 6, and `gate` refuses a kernel below it ("Landlock ABI 5 is below the 6 this run requires"). Tests:
+`full_shared_net_needs_abi_6`, the row `k6-shared-below-abi-6-refused`.
+
 **Landlock's TCP rule is never network isolation.** A TCP Fast Open `sendto(MSG_FASTOPEN)` bypassed `connect_tcp`
 on every kernel with ABI ≥ 4. The fix (mainline 33cb713db016, 7.2-rc4) came with no ABI bump, so a process cannot
 tell a fixed kernel from an unfixed one. Landlock has no UDP rules before ABI 10 either. Isolation is
-`--unshare-net` plus the relay and the proxy; the TCP rule stays inside that namespace as a second layer.
+`--unshare-net` plus the relay and the proxy; the TCP rule stays inside that namespace as a second layer. The reduced
+tier, which has no namespace, refuses Fast Open sends in seccomp instead ([seccomp](#seccomp)).
 
 **The reduced tier's network is narrowed, not isolated.** It has no network namespace, so Landlock's TCP rules are
 all it has (2026-10-21, the manager's call on Task 5). A connect is allowed only to the relay's ports, which forward
 to the session's proxy, so DNS and HTTPS go through the proxy too. A bind is allowed only on those ports, under the
 first layer, for the relay; the inner helper then adds a second layer that refuses every bind before the program
-runs. `extra_tcp_ports` are not granted: a port rule has no address, so it would reach that port on every host. What
-stays open, and why this is not isolation: a connect to a relay port on *any* host (the rule names a port, not an
-address), UDP (no Landlock rule before ABI 10, and the crate stops at 9), and the TCP Fast Open bypass on unfixed
-kernels. The reduced badge (phase 6) keeps saying the network is not isolated.
+runs. `extra_tcp_ports` are not granted: a port rule has no address, so it would reach that port on every host.
+UDP, raw and other non-TCP sockets are refused by seccomp (`reduced_rules`), and so is a TCP Fast Open send, which
+unfixed kernels never show Landlock. What stays open, and why this is not isolation: a connect to a relay port on
+*any* host (the rule names a port, not an address), the relay's port on the host's loopback, which other local users
+can reach too (DEFERRED), and `listen(2)` on a socket never bound, which the kernel binds to a free port itself
+without asking Landlock (the row `reduced-listen-autobind` records what the kernel does). The reduced badge (phase 6)
+keeps saying the network is not isolated.
 
 **The reduced tier's floor is ABI 9.** This is the user's ruling on review B1, stricter than the design's 6. Only
 ABI 9 controls connecting to pathname Unix sockets. Without a mount namespace, ABI 6–8 would leave the hub socket,
@@ -502,20 +515,23 @@ The filter allows every call by default and refuses this list (`seccomp::rules()
 | `unshare`, `setns` | EPERM | A new namespace gives a namespaced root, kernel attack surface, and a way around the mount layout. |
 | `clone` with any `CLONE_NEW*` bit in its flags | EPERM | The same, through `clone`. These are seven rules, one per bit of `0x7E020000`, because seccompiler cannot express "masked value is not zero". |
 | `mount`, `umount2`, `pivot_root` | EPERM | The sandbox's view of the file system stays as bwrap built it. |
-| `open_tree`, `move_mount`, `fsopen`, `fsconfig`, `fsmount`, `fspick`, `mount_setattr` | EPERM | The same, for the new mount API. |
+| `open_tree`, `open_tree_attr`, `move_mount`, `fsopen`, `fsconfig`, `fsmount`, `fspick`, `mount_setattr` | EPERM | The same, for the new mount API (`open_tree_attr` is Linux 6.15, call 467 on both arches). |
 | `ioctl` with `TIOCSTI` (`0x5412`) or `TIOCLINUX` (`0x541C`) | EPERM | Both push input into a terminal (CVE-2017-5226), and `TIOCLINUX` also reads the console selection. |
 | `socket(AF_VSOCK)` | EPERM | vsock reaches the host or the hypervisor, past the network namespace. |
 | `clone3` | ENOSYS | Its flags sit in a struct that seccomp cannot read. On ENOSYS, libc falls back to `clone`, which the rules above check. EPERM would break thread creation instead. |
 
-**The reduced tier adds socket rules** (`seccomp::reduced_rules()`; `rules_for(tier)` is the whole list). It has no
-network namespace, and Landlock's network rules cover TCP only, so the only sockets it may make that reach past the
-host are TCP ones, which Landlock holds to the relay's ports:
+**The reduced tier adds socket, Fast Open and process-group rules** (`seccomp::reduced_rules()`; `rules_for(tier)` is
+the whole list). It has no network namespace, and Landlock's network rules cover TCP only, so the only sockets it may
+make that reach past the host are TCP ones, which Landlock holds to the relay's ports. It has no pid namespace or
+cgroup either, so the process group the helper leads is what ends the run:
 
 | Refused (reduced tier) | Result | Why |
 |---|---|---|
 | `socket(domain)` for every domain but `AF_UNIX`, `AF_INET`, `AF_INET6`, `AF_NETLINK` | EPERM | Families whose connects Landlock does not see (SMC, which talks TCP from inside the kernel; RDS; TIPC; packet; vsock). One rule of four "not equal" conditions. |
 | `socket(AF_INET or AF_INET6, type)` unless `type & 0xf` is `SOCK_STREAM` | EPERM | No UDP (so no DNS past the proxy) and no raw sockets. `0xf` is `SOCK_TYPE_MASK`: `SOCK_NONBLOCK` and `SOCK_CLOEXEC` sit above it and are allowed. seccompiler has no masked "not equal", so it is one rule per other type value (15 per family). |
 | `socket(AF_INET or AF_INET6, SOCK_STREAM, protocol)` unless the protocol is 0 or `IPPROTO_TCP` | EPERM | SCTP and MPTCP stream sockets are not TCP to Landlock, which then leaves their connects alone. |
+| `sendto` (flags: argument 3), `sendmsg` (argument 2) and `sendmmsg` (argument 3) with `MSG_FASTOPEN` (`0x20000000`) in the flags | EPERM | A TCP Fast Open send connects without `connect(2)`. Kernels with ABI 9 but without the fix "landlock: fix TCP Fast Open connection bypass" (7.2-rc4, no ABI bump) never ask Landlock, so the program would reach any host on any port (gate review S2). A masked compare (`MaskedEq`), so other flags change nothing. `TCP_FASTOPEN_CONNECT` goes through `connect(2)`, which Landlock sees. |
+| `setsid`, `setpgid` | EPERM | Leaving the helper's process group (and session) would outlive the run: the group kill would miss the process, which keeps its Landlock grants (gate review S1). The helper's own `setsid` runs before the filter. Shells lose job control (`set -m`), and a `daemon(3)` fails. |
 
 Argument checks compare only the **low 32 bits** of the argument. The kernel reads an `ioctl` request and a `socket`
 domain, type and protocol as 32-bit ints, so `TIOCSTI | 1 << 32` is TIOCSTI to the kernel, and the filter must see it
@@ -564,10 +580,15 @@ Tests (`seccomp::tests`):
   - x32 `getpid`: killed;
   - `getpid` and `socket(AF_UNIX)` still work;
   - under the reduced tier's filter, a UDP socket and an MPTCP stream socket: EPERM; a TCP one (with
-    `SOCK_CLOEXEC | SOCK_NONBLOCK`) still works; under the full tier's, the UDP socket works.
-- `bpf_golden_{x86_64,aarch64}_reduced`, `reduced_rules_are_the_socket_set`, `reduced_socket_table` (every domain,
-  type value with and without flags and high bits, and protocol, through both programs) and
-  `reduced_differs_from_full_only_on_socket` (every other number, both argument extremes, the foreign-arch kill).
+    `SOCK_CLOEXEC | SOCK_NONBLOCK`) still works; under the full tier's, the UDP socket works;
+  - under the reduced tier's filter, `setsid`, `setpgid(0, 0)` and a Fast Open `sendto` to a listener of the child's
+    own: EPERM (unfiltered: done, or EOPNOTSUPP with client Fast Open off); a plain `send` on a socket pair still
+    works; under the full tier's, `setsid` works.
+- `bpf_golden_{x86_64,aarch64}_reduced`, `reduced_rules_are_the_socket_fastopen_and_group_set`, `reduced_socket_table`
+  (every domain, type value with and without flags and high bits, and protocol, through both programs),
+  `reduced_group_and_fastopen_table` (the flags with and without Fast Open, other flags and high bits, Fast Open in
+  another argument) and `reduced_differs_from_full_only_on_its_rules` (every other number, both argument extremes, the
+  foreign-arch kill).
 
   A case is skipped, with the reason printed, when its control does not give the unfiltered result. Inside a podman
   container, the container's own filter already refuses `io_uring_setup`, `add_key` and vsock, so those three skip
@@ -644,8 +665,11 @@ policy:
 - **Every deny holds in every case.** APFS is case-insensitive by default, so `.GIT/config` is `.git/config`. Reports
   disagree on whether Seatbelt compares paths that way, so each deny (`/Users`, the pins, `hide`, the rename blocks,
   Homebrew's data) also carries a `regex` of character classes (`\.[Gg][Ii][Tt](/.*)?$`; a non-ASCII letter as
-  `(é|É)`; no `(?i)`). Allows stay exact: a path spelled otherwise is simply not allowed, which fails closed. The regex
-  is about four times its path, so a deny path of more than about 250 bytes refuses the profile (1024 bytes, below).
+  `(é|É)`; no `(?i)`). APFS's case folding also takes the Kelvin sign `K` for `k`, the long `ſ` for `s` and the Angstrom
+  sign `Å` for `å`, so those letters get a group with the odd spelling too (`(k|K|K)`, `(s|S|ſ)`; gate review S8:
+  `.ſecrets` is `.secrets` on disk). Allows stay exact: a path spelled otherwise is simply not allowed, which fails
+  closed. The regex is about four times its path, so a deny path of more than about 250 bytes refuses the profile
+  (1024 bytes, below).
 - **`/tmp`, `/var` and `/etc` are links into `/private`.** Seatbelt matches the resolved path, so every rule names
   `/private/…`. Spec paths are true names already (validation), and the links themselves get their metadata only.
 - **No escape through other processes.** No `appleevent-send` (an AppleEvent to Terminal runs anything), no `lsopen`
@@ -675,9 +699,11 @@ checks and the `sbpl_quote` fuzz target.
 `backend::macos::prepare(&spec, &mac, &sandbox_exec, command)` (review S8). The profile is never written where the
 program can write, and never into `tmp`:
 
-- with a `run` (a session dir: readable inside, not writable), it goes to `<run.source>/profile.sb`, 0600, made with
-  `O_EXCL` and `O_NOFOLLOW` after a stale file (or link) there is removed; a session dir that lies under a writable
-  root or `tmp` is refused (validation already refuses it);
+- with a `run` (a session dir: readable inside, not writable), it goes to a new file for each run,
+  `<run.source>/profile-RANDOM.sb` (16 hex digits from `/dev/urandom`), 0600, made with `O_EXCL` and `O_NOFOLLOW`; a
+  name that exists is never reused or removed, so two runs started at once in one session (an agent and a git step)
+  never read each other's profile (gate review S7). The files go when the session dir goes. A session dir that lies
+  under a writable root or `tmp` is refused (validation already refuses it);
 - without a `run` (the check, short steps), it travels in argv: `-p PROFILE` (CI3-SB-1). argv and the environment
   share `ARG_MAX` (1 MiB on macOS), so a profile over 256 KiB is refused with the reason instead of an `E2BIG`.
 
@@ -686,7 +712,10 @@ The invocation is `/usr/bin/sandbox-exec -f FILE CMD…` or `-p TEXT CMD…`, wi
 `/usr/bin/sandbox-exec` when only root can change it (`eitri::trusted_program`), never one on `PATH`. A command whose
 program is empty or starts with `-` is refused (`sandbox-exec` would read it as an option). There is no inner helper
 and no status fd on macOS: `Sandbox::prepare` reports the layers as `LayersReport::seatbelt()`, and draugr's
-close-on-exec loop is what keeps inherited fds out (review S7). `sandbox-exec` is deprecated but still works on macOS
+close-on-exec loop is what keeps inherited fds out (review S7). The invocation has `new_session` (draugr's `setsid`
+before the exec; gate review S6): the profile lets the program read `/dev/tty` and ioctl `ttysN`, so it must have no
+controlling terminal to reach when Ratatoskr has one (`sandbox check` or `serve` started from a shell); XNU still
+honours TIOCSTI on the caller's own controlling tty. Row: `mac-no-controlling-tty` (`/dev/tty` gives ENXIO). `sandbox-exec` is deprecated but still works on macOS
 15 and 26; Apple does not document SBPL as an API, so the macOS CI rows are the check on every runner image.
 
 ### The session's TMPDIR
@@ -713,7 +742,12 @@ published policy file of its own and holds no LaunchServices or Keychain service
   model Seatbelt's regex and last-match rules without being checked against them. The goldens pin the text, the order
   checks pin the rule order, and the macOS rows run the real `sandbox-exec`.
 - **Case** is handled on the deny side only, and Unicode normalization not at all (APFS is normalization-insensitive;
-  GL-T2-1).
+  GL-T2-1): a hide or pin with a non-ASCII name may be missed when the program types its other normal form (NFD for
+  NFC). The rows `mac-case-kelvin` and `mac-case-long-s` show the deny holds for the odd spellings, whichever
+  spelling Seatbelt compares; no row yet shows whether it compares the typed one (an NFD row would; DEFERRED).
+- **A process can leave its group.** Seatbelt filters no `setsid` or `setpgid`, and macOS has no pid namespace, cgroup
+  or `PR_SET_PDEATHSIG`: a program that starts a session of its own outlives a kill of the run's group (the row
+  `mac-leaves-group-the-gap` records it). Phase 6's lifecycle closes it (DEFERRED).
 - **Links and clones.** Whether `file-link` and `file-clone` of a hidden file fall under `file-write*` or under
   `(deny default)` is a Mac row (`mac-renames-links-clones`).
 - **Existence.** A denied path probably fails with EPERM and a missing one with ENOENT, so names in `~` can be probed
@@ -960,8 +994,16 @@ that prints `bubblewrap VERSION` for `--version` and writes `${MARKER}` for any 
 ### The rows shipped with the harness
 
 `any/probes-reach-without-sandbox` (and its `-non-loopback` and `-linux` companions) runs every fixture-facing probe
-with no sandbox and requires `reached`: the probes are real. `any/works` runs `sh -c 'echo ok'` and `git --version`
-under the full tier; it skips in a container.
+with no sandbox and requires `reached`: the probes are real. `linux/works` runs `sh -c 'echo ok'` and `git --version`
+under the full tier; it skips in a container. `rows/any` runs on macOS with `--require-all`, so no row there may need
+Linux (`any_rows_run_on_macos`; gate review B1).
+
+A row whose `result` says the run was refused also requires that nothing ran: no output line at all, and usually a
+`create ${W}/ran` probe with `${W}/ran` in `files_absent`. A wanted object never matches `null`, so
+`{"refused": {}}` needs a refusal (gate review S12). `after.gone.match` takes placeholders: a row names its own
+probe copy (`${FIXTURE}/bin/gleipnir-probe …`), so a process its control run left behind never stands in for it. The
+setup step `controlling-tty` starts the run (the control's probe, or `ratatoskr`) in a session of its own whose
+controlling terminal is a pty the harness holds.
 
 ### The Linux rows (Task 15)
 
@@ -974,8 +1016,8 @@ too when its kernel has it. Two places run them:
   skip with "inside a container";
 - the Fedora VM (`gleipnir-vm.sh run`): `--rows rows/linux --rows rows/any --require-all`. Every row runs; none may
   skip;
-- GitHub CI (`runtime.yml`, [ci.md](ci.md)): the container run above in the Fedora job, the 25 macOS rows plus
-  `rows/any` with `--require-all` on the macOS runner, and `rows/linux` + `rows/any` on the Ubuntu 24.04 runners
+- GitHub CI (`runtime.yml`, [ci.md](ci.md)): the container run above in the Fedora job, the macOS rows plus
+  `rows/any` with `--require-all` on the macOS runner (the job's last step), and `rows/linux` + `rows/any` on the Ubuntu 24.04 runners
   (x86_64 and arm64) with a lifted AppArmor user-namespace restriction and bubblewrap 0.12.0 built from source.
 
 Each blocked expectation names the errno of the layer that answered, so a row also says which layer holds: ENOENT is
@@ -988,24 +1030,30 @@ layer alone cap Landlock (`landlock_abi_cap: 3` takes its TCP rules away) or omi
 | `k1-hub-socket-absent`, `k1-reduced` | the hub's socket is not there (full) or not connectable (reduced, Landlock ABI 9); the listener sees nothing |
 | `k1-backend-socket-absent`, `k1-backend-socket-reduced` | the Lisp backend's `hub-HASH.d/backend.sock` and another session's `s/S2/hub.sock` cannot be seen or connected to; `s/` lists only the session's own `S1` (full) or cannot be listed (reduced) |
 | `k2-work-db-absent`, `k2-reduced` | drgnx's data (`work.db`) can be neither read nor opened for writing |
-| `k5-user-sockets-absent`, `k5-reduced` | the Emacs server, the session bus and the ssh agent cannot be connected to |
+| `k5-user-sockets-absent`, `k5-reduced` | the Emacs server, the session bus and the ssh agent cannot be connected to; in the reduced tier the host's abstract socket neither (EPERM, Landlock's scope) |
 | `k6-isolated-refused` | the network namespace alone (Landlock's TCP rules capped away): the host's abstract socket, its loopback and its non-loopback listeners are unreachable |
 | `k6-isolated-landlock-tcp` | inside that namespace Landlock's TCP rule refuses every port but the relay's (EACCES) |
 | `k6-shared-tcp-the-gap` | `Net::Shared` reaches the host's TCP listeners: recorded, and no phase uses it for jobs |
-| `k6-shared-abstract-scoped`, `…-unscoped-at-abi-5` | with a shared network, Landlock's scoping (ABI 6) is what refuses the host's abstract socket |
+| `k6-shared-abstract-scoped`, `k6-shared-below-abi-6-refused` | with a shared network, Landlock's scoping (ABI 6) is what refuses the host's abstract socket, and below ABI 6 the run is refused before anything runs (gate review S3) |
+| `real-layout-absent`, `reduced-real-layout-closed` | the real `/home` and `/run/user` (full: ENOENT) or `/home` and `/run` (reduced: EACCES) are closed, each against a control: the fixture lives under `/tmp`, so the k-rows alone would pass with `/home` bound (gate review S11) |
+| `hides-read-empty` | a hidden file reads 0 bytes and a hidden directory lists empty, against a control that reads them (gate review S13) |
+| `run-dir-read-only`, `reduced-run-dir-read-only` | the session dir cannot be written or have its sockets unlinked (full: EROFS; reduced: EACCES) |
+| `no-controlling-tty`, `…-reduced`, `mac-no-controlling-tty` | started from a shell (a pty the harness makes Ratatoskr's controlling terminal), the program has none: `/dev/tty` gives ENXIO, against a control that opens it (gate review S6) |
 | `k8-canaries-absent`, `k8-reduced` | `~/.ssh`, another repository, another task folder and the home itself are invisible (full) or unreadable (reduced) |
 | `k10-env-clean`, `k10-env-clean-reduced` | none of the user's session variables, the API key or drgnx's dirs reach the program |
 | `reduced-below-abi-9-refused` | the reduced tier refuses ABI 8 before anything runs, so the user's sockets stay unreached |
 | `reduced-no-host-tmp-writes` | the reduced tier writes its own `tmp`, never the host's `/tmp` |
 | `reduced-signals-scoped` | the reduced tier cannot signal a process outside it (Landlock ABI 6) |
-| `reduced-group-killed`, `die-with-parent` | killing the sandbox's group (reduced) or `sandbox run` itself (full) ends a grandchild within 1.5 s |
+| `reduced-group-killed`, `die-with-parent` | killing the sandbox's group (reduced) or `sandbox run` itself (full) ends a grandchild within 1.5 s. In the reduced row the grandchild first tries `setsid()`: it gets EPERM (seccomp), against a control where it leaves the group, so without the rule the row fails twice (the line, and the process outlives the kill; gate review S1) |
+| `reduced-tfo-refused` | a TCP Fast Open send to the host's listeners is refused by seccomp (EPERM, not Landlock's EACCES), on fixed and unfixed kernels alike (gate review S2) |
+| `reduced-listen-autobind` | what `listen(2)` on a never-bound TCP socket does in the reduced tier (gate review S5): it listens, since the kernel binds the port itself without asking Landlock. A recorded gap |
 | `reduced-proc-environ-denied`, `pid-namespace-hides-others` | another process's `/proc/PID/environ` (the backend's secret lives there) is unreadable (reduced: EACCES) or absent (full: the pid namespace) |
 | `reduced-proc-cmdline-the-gap` | the accepted gap: the reduced tier reads other processes' command lines |
 | `reduced-tcp-only-to-the-relay`, `reduced-bind-refused` | the reduced tier connects over TCP only to its relay (and through it to the proxy), and binds no TCP port |
 | `reduced-udp-and-icmp-refused` | the reduced tier makes no UDP, ICMP or MPTCP socket (seccomp), so no DNS or datagram leaves past the proxy |
 | `reduced-no-pty` | the reduced tier opens no pty at all (Landlock: `/dev/ptmx` is not granted), so TIOCSTI never gets that far there |
 | `no-new-privs`, `no-new-privs-reduced` | `NoNewPrivs` 1 and seccomp mode 2 in the program |
-| `seccomp-denies`, `seccomp-denies-reduced` | each refused call against its unfiltered result on the same kernel |
+| `seccomp-denies`, `seccomp-denies-reduced` | each refused call against its unfiltered result on the same kernel; the reduced row also `setsid` and `setpgid` |
 | `seccomp-kills-other-abis`, `…-reduced` | `int 0x80` and an x32 call kill the process (the prologue) |
 | `landlock-layer-2` | a write the mount namespace allows is still refused by Landlock when Landlock is not told about it |
 | `landlock-below-required-refused` | a spec's `landlock_min_abi` above the effective ABI refuses the run before the program |
@@ -1019,7 +1067,7 @@ layer alone cap Landlock (`landlock_abi_cap: 3` takes its TCP rules away) or omi
 | `fail-closed-no-bwrap`, `…-check` | without a bwrap nothing runs; the check names the install command |
 | `bind-fd-link-swap` | a task folder swapped for a link after the check is still the folder that gets mounted (the fd), and the link's target is untouched |
 | `dest-link-stays-inside`, `…-plain`, `dest-link-inside-the-root-is-followed-there` | bwrap 0.12.0 refuses a bind whose dest runs through a link leading out of the new root (through `/oldroot`, or to a host path), and follows one that stays inside |
-| `helper-cannot-be-shadowed` | a bind over `/run/gleipnir` is refused by validation, so nothing can take the helper's place |
+| `helper-cannot-be-shadowed` | a bind over `/run/gleipnir` is refused by validation, so nothing can take the helper's place, and nothing ran (no line, no `${W}/ran`) |
 | `check-in-a-container` (`rows/container/`) | `sandbox check` says why it cannot work in a container, with no fix |
 
 **Mutations.** Each was built on a scratch copy of the tree and run on the VM (the plan's table, plus three for the
@@ -1038,9 +1086,10 @@ reduced tier's network); every one turned its row red, and no other row changed:
 | the reduced tier's TCP connect rule dropped | `reduced-tcp-only-to-the-relay` |
 | the reduced tier's seccomp socket rules dropped | `reduced-udp-and-icmp-refused` |
 
-Not covered by a row: the reduced tier's second Landlock layer (`forbid_tcp_bind`) on the relay's own port, which no
-placeholder names (the unit test `reduced_tcp_relay_ports_only_then_no_bind` holds it), and raw sockets, which an
-unprivileged control cannot open either (the BPF interpreter's table holds them).
+Not covered by a row: the reduced tier's second Landlock layer (`forbid_tcp_bind`) on the relay's own port and its
+signal scope over the relay, which no placeholder names (the unit test `reduced_tcp_relay_ports_only_then_no_bind`
+holds both, against controls), and raw sockets, which an unprivileged control cannot open either (the BPF
+interpreter's table holds them).
 
 ### The macOS rows (Task 16)
 
@@ -1061,13 +1110,16 @@ expects `EPERM` or `EACCES`: Seatbelt denies with EPERM, and a row that gets ano
 |---|---|---|
 | `mac-profile-accepted` | (a) | `sandbox-exec` accepts the profile with `regex` filters, a name with `"` and `\`, a name that looks like SBPL (`x") (allow default) ("`) and isolated ports; none of those names opens anything |
 | `mac-works`, `mac-works-git` | (b) | `/bin/ls /usr/bin`, `/bin/date`, `/dev/urandom` and `/dev/null` work; the trusted git (`${GIT}`) runs. Git is its own row: draugr refuses Xcode under `/Applications`, and a runner like that must fail one row, not all |
-| `mac-devices`, `mac-tmp-metadata-only` | (b), (e) | a device outside the list (`/dev/ptmx`; `/dev/ttys000` is not on every runner), `list /dev` and `list /opt/homebrew/var` are closed; `/tmp` can be `stat`ed (a `cd` works) but not listed |
-| `mac-home-closed`, `mac-users-shared-closed` | (c) | `~/.ssh`, `list ~` and listing another user's folder (the one every Mac has, `Shared`) are closed, `stat ~` works; a canary in `${USERS_SHARED}` (a `glp-*` folder there) is closed (only the users-folder deny does it, review S20) |
+| `mac-devices`, `mac-tmp-metadata-only` | (b), (e) | `/dev/ptmx` opens (the Codex base allows it: a new pty master, not the user's terminal), while `list /dev` and `list /opt/homebrew/var` are closed (`/dev/ttys000` is not on every runner, and a control could not open it either); `/tmp` can be `stat`ed (a `cd` works) but not listed |
+| `mac-home-closed`, `mac-users-shared-closed` | (c) | `~/.ssh`, `list ~` and listing another user's folder (the one every Mac has, `Shared`) are closed, `stat ~` works; a canary in `${USERS_SHARED}` (a `glp-*` folder there) is closed (review S20). `(deny default)` already holds it: the users-folder deny comes before every allow and Seatbelt takes the last match, so dropping that deny leaves the row green (gate review S15); it is a second statement of the same rule |
 | `mac-fds-closed` | review S7 | a canary fd 7 is not in the child: no helper exists on macOS, so draugr's close-on-exec loop is the guard |
 | `mac-writes` | (d) | writes work in the task folder, home, TMPDIR and `q"x\y`; they fail in a pinned `.git`, in `commondir`, outside every grant (`${FIXTURE}/outside`, under `/private/tmp`) and in `~`; the hidden `.env` is unreadable |
 | `mac-case` | (h), GL-T9-1 | `.GIT/config`, `.Git/hooks/x`, `COMMONDIR`, `.ENV` and `CONF/.env` are closed. The control run must reach them too (APFS ignores case), so this row needs the default case-insensitive volume |
+| `mac-case-kelvin`, `mac-case-long-s` | gate review S8 | a hidden `kube` read with the Kelvin sign (U+212A) for its `k` and a hidden `.secrets` as `.ſecrets` are closed; the control shows APFS takes those spellings for the file |
+| `mac-no-controlling-tty` | gate review S6 | with Ratatoskr on a terminal, the program has none (`/dev/tty`: ENXIO) |
+| `mac-leaves-group-the-gap` | gate review S1 | the recorded gap: the program can `setsid` and `setpgid` (DEFERRED: phase 6's lifecycle) |
 | `mac-rename-hidden-dir`, `-case`, `mac-rename-task-out`, `mac-rename-over-root`, `mac-rename-binds-out`, `mac-link-hidden-pinned` | (i) | `mv conf c2` and `mv CONF c2` (then the `.env` is still closed), the task folder moved out or replaced, `${W}` and the home moved, a hard link to the hidden `.env` and to the `.git` pin, and an APFS clone of the `.env` all fail. One row each for what changes the fixture, so the control run can do all of them |
-| `mac-swap-and-dir-clone` | (j) | a swap-rename of the protected dir and a `clonefile` of it fail; writing `/dev/stderr` works |
+| `mac-swap-and-dir-clone` | (j) | a swap-rename of the protected dir and a `clonefile` of it fail. Writing `/dev/stderr` (a reopen through `/dev/fd`, which the profile only reads) is left to the Mac session: it is likely EPERM (gate review B1; DEFERRED) |
 | `mac-renames-still-work` | (i) | `mv a b`, `rm`, `mkdir d && mv d e` inside the task folder work |
 | `mac-sockets` | (f), K1, K5 | the session's gateway socket connects; the hub, `SSH_AUTH_SOCK`, the Emacs server and the bus do not, and their listeners stay silent |
 | `mac-net-shared`, `mac-net-isolated` | (g) | shared: TCP to the host's loopback and non-loopback listeners works, Unix sockets stay closed. Isolated: only the proxy's `localhost:PORT` connects (`http-connect` gets 200, an unlisted target 403 and one `Denied`); other loopback and non-loopback TCP and UDP are closed |
@@ -1077,3 +1129,28 @@ Not in a row, so the Mac session keeps them (MAC-SB-12): `curl` through the prox
 real host; the proxy path itself is `mac-net-isolated`), and the `log show` look at every `deny` line.
 
 ## What this does not claim yet (Task 19)
+
+Nothing in drgnx runs an agent or a job under Gleipnir yet (phase 6 wires it), and nothing calls one "sandboxed".
+What the rows above hold is probe-level. These gaps are known, recorded by a row or a test where one can show them,
+and each has a DEFERRED row:
+
+- **Reduced tier, `/proc`:** other processes' `cmdline` and `stat` are readable (accepted 2026-10-21;
+  `reduced-proc-cmdline-the-gap`). Real secrets sit in command lines (`curl -H …`, `mysql -p…`), so the reduced badge
+  says so. `/proc/net/*` and a `NETLINK_SOCK_DIAG` socket list the host's sockets the same way (names and ports only).
+- **Reduced tier, network:** a connect to a relay port reaches that port on any host (a port rule has no address);
+  the relay listens on the host's loopback, where another local user can reach it, and through it the session's
+  proxy (before phase 6 wires reduced-tier relays); `listen(2)` on a socket never bound autobinds a port without
+  Landlock (`reduced-listen-autobind`). It is "network narrowed", never "isolated".
+- **Reduced tier, lifetime:** with `setsid`/`setpgid` refused, everything the program starts stays in the group that
+  is killed. `PR_SET_PDEATHSIG` is not inherited across `fork`, so if Ratatoskr itself dies, the program dies with it
+  but its children live until the group is killed; phase 6's cgroup scope (the memory cap) ends them.
+- **Full tier, `Net::Shared`:** TCP to the host's listeners is reached (`k6-shared-tcp-the-gap`); no phase uses a
+  shared network for jobs. Below Landlock ABI 6 it is refused.
+- **macOS:** a program can leave its process group (`mac-leaves-group-the-gap`); a non-ASCII hide may miss another
+  normal form (GL-T2-1); the proxy's `127.0.0.1` listener is reachable by other local users; Codex's base allows
+  `process-exec` anywhere (a binary in a hidden folder still runs), POSIX semaphores of any name and `kern.proc.pid.*`
+  (every process's name and uid). All of it is unverified on a Mac until the MAC-SB rows pass.
+- **Outside the sandbox:** a same-uid process outside it can read the backend's secret from `/proc/PID/environ`,
+  as it can the cap file (the same trust boundary as the user). The git runner's `check_trusted_repo` checks paths:
+  phase 6 must keep `.git` pinned while agents run. The proxy says one `Denied` per new target, with no cap (phase 6's
+  cards).

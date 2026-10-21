@@ -223,6 +223,13 @@ tier needs it: its helper starts a session itself (GL-T8-1). Either way the chil
   Every path is opened without links, and a link anywhere is refused, since git would follow it. `..` is resolved by
   components, which is safe because no link was followed. A `gitdir:` line that looks like a remote
   (`/ssh:host:/x`) is just a missing path. Phase 6 passes the ledger.
+  **What it does not hold (gate review S9, DEFERRED):** the check reads paths once, and git later opens them by path
+  again, so an agent that can write the worktree could swap `.git` (a directory or a `gitdir:` file) in between. The
+  repository's own config can still name programs the overrides above do not cover (`filter.*.clean`/`smudge`/
+  `process`, `diff.*.command` and `textconv`, `diff.external`, `core.sshCommand`, `credential.helper`,
+  `core.askPass`), and `status` and `diff` read each populated submodule's own config. So phase 6 must keep `.git`
+  pinned (not writable by any agent) while agents run, and pick its trusted subcommands with this in mind; blanking
+  those keys here would also drop the user's own global helpers for a trusted fetch.
 
 `cargo test -p draugr` covers this:
 - `spawn::tests`: three pipes at 3, 4 and 5, and at the sources' own numbers rotated; a parent fd without
