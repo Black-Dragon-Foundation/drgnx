@@ -10,17 +10,25 @@
 //! - [`store`]: `work.db`, read-only, on a thread of its own.
 //! - [`log`]: tracing to `<state>/hub/log/hub-YYYY-MM-DD.jsonl` and warnings to stderr.
 //! - [`runtime_db`]: `<state>/hub/runtime.db`, the hub's own recovery state.
+//! - [`backend`]: the Lisp backend: its command, environment, record, connection and restarts.
+//! - [`forward`]: what goes to the backend (re-encoded typed params with the caller) and what comes back (checked).
+//! - [`relay`]: the backend's events, checked against the registry, to the front's subscribers.
+//! - [`shape`]: what a caller of each class may ask and see of a forwarded method.
 //! - [`version`]: what `version --json` says.
 
+pub mod backend;
 pub mod cli;
 pub mod conn;
 pub mod dispatch;
+pub mod forward;
 pub mod front;
 pub mod hello;
 pub mod lock;
 pub mod log;
+pub mod relay;
 pub mod runtime_db;
 pub mod server;
+pub mod shape;
 pub mod store;
 pub mod version;
 

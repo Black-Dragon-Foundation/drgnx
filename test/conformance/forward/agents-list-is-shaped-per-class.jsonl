@@ -1,0 +1,11 @@
+{"scenario": "forward/agents-list-is-shaped-per-class", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "agents/list: the user gets the backend's snapshots; a service connection {id, name, job, task} of each; an agent only its own job's sessions, the same way."}
+{"do": "start", "hub": "h", "args": ["--agent-socket", "s1:j1"], "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"agents/list\": {\"result\": {\"sessions\": [{\"id\": \"s1\", \"name\": \"agent-1\", \"job\": \"j1\", \"task\": \"T#1\", \"profile\": \"p\", \"cwd\": \"/w\", \"status\": \"idle\", \"queue\": []}, {\"id\": \"s2\", \"name\": \"agent-2\", \"job\": \"j2\", \"profile\": \"p\", \"queue\": []}]}}}"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "s", "hub": "h", "as": "service"}
+{"do": "connect", "conn": "a", "hub": "h", "socket": "agent:s1", "as": "service"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/list"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"sessions": [{"id": "s1", "profile": "p", "cwd": "/w", "status": "idle"}, {"id": "s2", "profile": "p"}]}}}
+{"do": "send", "conn": "s", "json": {"id": 2, "method": "agents/list"}}
+{"do": "expect", "conn": "s", "json": {"id": 2, "result": {"sessions": [{"id": "s1", "name": "agent-1", "job": "j1", "task": "T#1", "profile": "$absent", "cwd": "$absent", "status": "$absent", "queue": "$absent"}, {"id": "s2", "name": "agent-2", "job": "j2", "profile": "$absent", "queue": "$absent"}]}}}
+{"do": "send", "conn": "a", "json": {"id": 3, "method": "agents/list"}}
+{"do": "expect", "conn": "a", "json": {"id": 3, "result": {"sessions": [{"id": "s1", "name": "agent-1", "job": "j1", "task": "T#1", "profile": "$absent", "queue": "$absent"}]}}}

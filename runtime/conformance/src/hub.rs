@@ -12,6 +12,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::time::{Duration, Instant};
 
@@ -183,6 +184,18 @@ impl Hub {
             .unwrap_or_default()
     }
 
+    /// Where Ratatoskr's Lisp backend serves: `hub-HASH.d/backend.sock` beside the socket (the roots keep it short).
+    pub fn backend_socket(&self) -> PathBuf {
+        let stem = self
+            .socket
+            .file_stem()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.socket_dir()
+            .join(format!("{stem}.d"))
+            .join("backend.sock")
+    }
+
     pub fn cap(&self) -> PathBuf {
         self.socket.with_extension("cap")
     }
@@ -210,6 +223,7 @@ impl Hub {
             ("CONFIG", s(&self.root.path().join("config"))),
             ("SOCKET", s(&self.socket)),
             ("SOCKET_DIR", s(&self.socket_dir())),
+            ("BACKEND_SOCKET", s(&self.backend_socket())),
             ("CAP", s(&self.cap())),
             ("LOCK", s(&self.lock())),
         ])
@@ -318,6 +332,9 @@ pub struct Conn {
     /// The socket itself, for `close_write` (none for the other uid's relay, whose stdin is closed instead).
     socket: Option<UnixStream>,
     rx: Receiver<Msg>,
+    /// While set (the `pause` step), the reader stops reading the socket: a client that stopped reading.  A step
+    /// that reads clears it.
+    pause: Arc<AtomicBool>,
     /// Lines read but not yet consumed by an `expect` (earlier non-matching lines stay here).
     buf: VecDeque<String>,
     eof: bool,
@@ -327,12 +344,15 @@ pub struct Conn {
     pub next_id: u64,
 }
 
-fn spawn_reader(r: impl Read + Send + 'static) -> Receiver<Msg> {
+fn spawn_reader(r: impl Read + Send + 'static, pause: Arc<AtomicBool>) -> Receiver<Msg> {
     let (tx, rx) = channel();
     std::thread::spawn(move || {
         let mut r = BufReader::new(r);
         let mut raw = Vec::new();
         loop {
+            while pause.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(20));
+            }
             raw.clear();
             match r.read_until(b'\n', &mut raw) {
                 Ok(0) | Err(_) => break,
@@ -359,6 +379,11 @@ fn as_json(line: &str) -> Value {
 }
 
 impl Conn {
+    /// Stop reading the socket (what arrives stays in the socket's buffer) until a step reads again.
+    pub fn pause(&self) {
+        self.pause.store(true, Ordering::SeqCst);
+    }
+
     /// Connect to a Unix socket, retrying for up to `retry` (agent sockets appear a moment after the hub).
     pub fn open(path: &Path, retry: Duration) -> Result<Conn, String> {
         let deadline = Instant::now() + retry;
@@ -374,10 +399,12 @@ impl Conn {
         let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
         let reader = stream.try_clone().map_err(|e| e.to_string())?;
         let socket = stream.try_clone().map_err(|e| e.to_string())?;
+        let pause = Arc::new(AtomicBool::new(false));
         Ok(Conn {
             writer: Box::new(stream),
             socket: Some(socket),
-            rx: spawn_reader(reader),
+            rx: spawn_reader(reader, pause.clone()),
+            pause,
             buf: VecDeque::new(),
             eof: false,
             helper: None,
@@ -427,7 +454,8 @@ impl Conn {
         Ok(Conn {
             writer: Box::new(writer),
             socket: None,
-            rx: spawn_reader(reader),
+            rx: spawn_reader(reader, Arc::new(AtomicBool::new(false))),
+            pause: Arc::new(AtomicBool::new(false)),
             buf: VecDeque::new(),
             eof: false,
             helper: Some(child),
@@ -490,6 +518,7 @@ impl Conn {
         if self.eof {
             return Ok(None);
         }
+        self.pause.store(false, Ordering::SeqCst);
         match self.rx.recv_timeout(wait)? {
             Msg::Line(l) => Ok(Some(l)),
             Msg::Eof => {

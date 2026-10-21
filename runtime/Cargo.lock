@@ -246,6 +246,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "urdr",
+ "zeroize",
 ]
 
 [[package]]

@@ -1,0 +1,11 @@
+{"scenario": "forward/a-malformed-backend-event-is-dropped", "requires": ["v1", "fake-backend"], "doc": "A backend event of a name it does not send, or whose data does not decode, is dropped and logged; the good one after them is the first a subscriber gets."}
+{"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"events\": \"$ROOT/events.json\"}"}}
+{"do": "write_file", "path": "$ROOT/events.json", "text": "[{\"event\": \"challenge\", \"data\": {\"nonce\": \"00112233445566778899aabbccddeeff\"}}, {\"event\": \"no-such\", \"data\": {}}, {\"event\": \"job\", \"data\": {\"id\": \"j1\", \"bogus\": true}}, {\"event\": \"card\", \"data\": {\"id\": \"not a number\"}}, {\"event\": \"job\"}, {\"event\": \"job\", \"data\": {\"id\": \"good\"}}]"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "coord/notify"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect_next", "conn": "c", "json": {"event": "job", "data": {"id": "good"}}}
+{"do": "expect_silent", "conn": "c", "for_ms": 300}
+{"do": "file", "path": "$STATE/hub/log/hub-*.jsonl", "contains": "dropped a backend event"}

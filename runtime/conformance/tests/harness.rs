@@ -221,6 +221,56 @@ fn file_globs_contains_and_a_send_with_eof() {
     assert!(out.contains("FAIL bad/files: step 3 (file)"), "{out}");
 }
 
+const TASK15_ROW: &str = r#"{"scenario": "ok/task15-verbs", "requires": ["v0"], "doc": "$repeat, pause, file lacks, sqlite query, $SCENARIOS"}
+{"do": "start", "hub": "h"}
+{"do": "write_file", "path": "$ROOT/a.txt", "text": "abc $SCENARIOS"}
+{"do": "file", "path": "$ROOT/a.txt", "lacks": "LACKS", "contains": "abc /"}
+{"do": "sqlite", "path": "$ROOT/t.db", "sql": ["create table t (a, b, c)", "insert into t values (1, 'x', null)"], "query": "select a, b, c from t", "expect": [[1, "x", null]]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "pause", "conn": "c"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "t/need", "params": {"a": {"$repeat": "xy", "times": 3}}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": true}}
+"#;
+
+#[test]
+fn repeat_pause_lacks_and_sqlite_queries() {
+    let dir = tempfile::tempdir().unwrap();
+    let hub = wrapper(dir.path());
+    let good = dir.path().join("good");
+    rows(
+        &good,
+        &[("ok/task15-verbs.jsonl", &TASK15_ROW.replace("LACKS", "zzz"))],
+    );
+    let (out, code) = run("lisp", &hub, &good);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("PASS ok/task15-verbs"), "{out}");
+
+    // text the file has fails `lacks`; a row the query does not match fails the step
+    let bad = dir.path().join("bad");
+    rows(
+        &bad,
+        &[
+            (
+                "bad/lacks.jsonl",
+                &TASK15_ROW
+                    .replace("LACKS", "abc")
+                    .replace("ok/task15-verbs", "bad/lacks"),
+            ),
+            (
+                "bad/query.jsonl",
+                &TASK15_ROW
+                    .replace("LACKS", "zzz")
+                    .replace("[[1, \"x\", null]]", "[[2, \"x\", null]]")
+                    .replace("ok/task15-verbs", "bad/query"),
+            ),
+        ],
+    );
+    let (out, code) = run("lisp", &hub, &bad);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("FAIL bad/lacks: step 3 (file)"), "{out}");
+    assert!(out.contains("FAIL bad/query: step 4 (sqlite)"), "{out}");
+}
+
 const USER_ROW: &str = r#"{"scenario": "hello/user-connect", "requires": ["REQ"], "doc": "a user connect, then ping"}
 {"do": "start", "hub": "h", "env": {"RTSK_SCRIPTED_V1": "V1"}}
 {"do": "connect", "conn": "c", "hub": "h", "as": "user"}

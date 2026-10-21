@@ -1,10 +1,10 @@
 //! One connection (design 4.1, 5.3): the peer-uid check first, then the hub's challenge, then lines in through the
-//! 1 MiB codec to [`Front::line`], and lines out through a writer task of its own with a queue that drops a client
-//! that stopped reading (16 MiB queued, or 10 s without the write making progress), so one stopped client never
-//! stalls another.  With the `test-hooks` feature a line calling `__test_flood` is served here, before the
+//! 1 MiB codec to [`Front::start_line`] (at most 64 forwarded calls in flight), and lines out through a writer task
+//! of its own with a queue that drops a client that stopped reading (16 MiB queued, or 10 s without the write making
+//! progress), so one stopped client never stalls another.  With the `test-hooks` feature a line calling `__test_flood` is served here, before the
 //! dispatcher (it is no method of the registry).
 
-use crate::front::Front;
+use crate::front::{Front, MAX_IN_FLIGHT};
 use crate::hello::{Session, Socket};
 use bytes::BytesMut;
 use drgnx_proto::line;
@@ -17,7 +17,7 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tokio::net::unix::OwnedWriteHalf;
-use tokio::sync::{Notify, watch};
+use tokio::sync::{Notify, Semaphore, watch};
 use tokio_util::codec::Decoder;
 
 /// A client is dropped when more than this is queued for it (bytes, the line being written included).
@@ -243,6 +243,8 @@ pub async fn serve(stream: UnixStream, front: Arc<Front>, socket: Socket) {
     }
     let mut codec = line::codec();
     let mut buf = BytesMut::with_capacity(8192);
+    // this connection's forwarded calls in flight
+    let slots = Arc::new(Semaphore::new(MAX_IN_FLIGHT));
     'read: loop {
         loop {
             match codec.decode(&mut buf) {
@@ -251,7 +253,7 @@ pub async fn serve(stream: UnixStream, front: Arc<Front>, socket: Socket) {
                     if flood::serve(&out, &l).await {
                         continue;
                     }
-                    front.line(&mut session, &out, &l).await;
+                    front.start_line(&mut session, &out, &l, &slots).await;
                 }
                 Ok(None) => break,
                 Err(e) => {
@@ -265,8 +267,10 @@ pub async fn serve(stream: UnixStream, front: Arc<Front>, socket: Socket) {
             () = out.closed() => break,
         };
         match n {
-            // EOF: a partial line is dropped with the connection; what is queued is still written
+            // EOF: a partial line is dropped with the connection; what is queued is still written, the answers of
+            // the calls in flight too (each ends by its deadline)
             Ok(0) => {
+                let _ = slots.acquire_many(MAX_IN_FLIGHT as u32).await;
                 out.finish();
                 break;
             }

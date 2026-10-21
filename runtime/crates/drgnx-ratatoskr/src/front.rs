@@ -2,10 +2,11 @@
 //! `subscribe`, `shutdown` and `events/since`.  Every other method goes to [`Forward`].
 //!
 //! [`Front::line`] is one line of one connection: [`dispatch::prelude`], the refusal noted, the handler, the answer
-//! queued.
+//! queued.  [`Front::start_line`] is the same for the connection loop, except that a forwarded call runs on a task
+//! of its own (at most [`MAX_IN_FLIGHT`] per connection; past that the connection is not read until one ends).
 
 use crate::conn::Outbox;
-use crate::dispatch::{self, Call, ErrorAnswerOrDrop, Forward, Refusals};
+use crate::dispatch::{self, Call, Caller, ErrorAnswerOrDrop, Forward, Refusals};
 use crate::hello::{self, Session};
 use crate::store::WorkDb;
 use crate::version::COMMIT;
@@ -14,6 +15,7 @@ use drgnx_proto::methods::Params;
 use drgnx_proto::methods::hub::{HubStatus, Runtime};
 use drgnx_proto::proof::Cap;
 use drgnx_proto::registry;
+use drgnx_proto::registry::{Class, Method};
 use drgnx_proto::wire::{Answer, Error, ErrorAnswer, ErrorCode, Event, Id};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -22,12 +24,25 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::Notify;
+use tokio::sync::Semaphore;
 
 /// What `status` and the doctor say of job agents in this phase.
 pub const JOB_AGENTS: &str = "unsandboxed (as on main; the sandbox comes with phase 6)";
 
 /// How long `shutdown` waits for its answer to be written before the hub stops.
 const SHUTDOWN_FLUSH: Duration = Duration::from_secs(1);
+
+/// Forwarded calls one connection may have in flight.
+pub const MAX_IN_FLIGHT: usize = 64;
+
+/// A call that passed the dispatcher and goes on to [`Forward`].
+pub struct Forwarded {
+    id: Option<Id>,
+    method: &'static Method,
+    params: Params,
+    ignored: Vec<String>,
+    caller: Caller,
+}
 
 /// What every connection shares.
 pub struct Front {
@@ -158,12 +173,22 @@ impl Front {
         }
     }
 
-    /// Count and log a refusal on S.
-    fn refused(&self, s: &Session, method: Option<&str>, error: &Error) {
+    /// `status`: the front's keys, and the backend's state with what its own `status` says of the gateway.
+    pub async fn status_with_backend(&self) -> HubStatus {
+        let mut st = self.status();
+        let b = self.forward.status().await;
+        st.backend = b.backend;
+        st.gateway_port = b.gateway_port;
+        st.registrations = b.registrations;
+        st
+    }
+
+    /// Count and log a refusal on connection CONN of CLASS.
+    fn refused(&self, conn: u64, class: Class, method: Option<&str>, error: &Error) {
         self.refusals.lock().expect("refusals").note(
             crate::log::rfc3339(now()),
-            s.conn,
-            s.class,
+            conn,
+            class,
             method,
             error,
         );
@@ -171,20 +196,70 @@ impl Front {
 
     /// One line of the connection S, whose answers go to OUT: the dispatcher's checks, then the handler (a failure
     /// is `internal`; a refusal of its own, such as a wrong proof, is counted like the dispatcher's).  A
-    /// notification is dispatched and never answered.
+    /// notification is dispatched and never answered.  A forwarded call is waited for here.
     pub async fn line(&self, s: &mut Session, out: &Arc<Outbox>, text: &str) {
+        if let Some(f) = self.begin(s, out, text).await {
+            self.finish(out, f).await;
+        }
+    }
+
+    /// [`Front::line`] for the connection loop: a forwarded call runs on a task of its own, holding one of SLOTS
+    /// (this connection's [`MAX_IN_FLIGHT`]); with none free, this waits, so the connection is not read meanwhile.
+    pub async fn start_line(
+        self: &Arc<Self>,
+        s: &mut Session,
+        out: &Arc<Outbox>,
+        text: &str,
+        slots: &Arc<Semaphore>,
+    ) {
+        let Some(f) = self.begin(s, out, text).await else {
+            return;
+        };
+        let Ok(slot) = slots.clone().acquire_owned().await else {
+            return;
+        };
+        let (front, out) = (self.clone(), out.clone());
+        tokio::spawn(async move {
+            front.finish(&out, f).await;
+            drop(slot);
+        });
+    }
+
+    /// The forwarded call F, answered on OUT.
+    async fn finish(&self, out: &Arc<Outbox>, f: Forwarded) {
+        let Forwarded {
+            id,
+            method,
+            params,
+            ignored,
+            caller,
+        } = f;
+        let (conn, class) = (caller.conn_id, caller.class);
+        let result = self.forward.call(caller, method, params).await;
+        if let Err(e) = &result
+            && e.code != ErrorCode::Internal
+        {
+            self.refused(conn, class, Some(method.name), e);
+        }
+        if let Some(id) = id {
+            out.push(answer_line(conn, id, result, ignored));
+        }
+    }
+
+    /// Everything of a line but a forwarded call, which it gives back.
+    async fn begin(&self, s: &mut Session, out: &Arc<Outbox>, text: &str) -> Option<Forwarded> {
         let call = match dispatch::prelude(s.class, s.proto, self.read_only(), text) {
             Ok(c) => c,
             Err(ErrorAnswerOrDrop::Drop(why)) => {
                 tracing::info!(conn = s.conn, "dropped {why}");
-                return;
+                return None;
             }
             Err(ErrorAnswerOrDrop::Refused(r)) => {
-                self.refused(s, r.method.as_deref(), &r.error);
+                self.refused(s.conn, s.class, r.method.as_deref(), &r.error);
                 if let Some(id) = r.id {
                     out.push(answer_line(s.conn, id, Err(r.error), vec![]));
                 }
-                return;
+                return None;
             }
         };
         let Call {
@@ -200,7 +275,7 @@ impl Front {
                 hello::hello(s, &self.cap, &p, schema).map(|r| json!(r))
             }
             Params::Ping(_) => Ok(json!({"pid": self.pid})),
-            Params::Status(_) => Ok(json!(self.status())),
+            Params::Status(_) => Ok(json!(self.status_with_backend().await)),
             Params::Subscribe(_) => {
                 self.subscribers
                     .lock()
@@ -219,15 +294,19 @@ impl Front {
                 .map(|page| json!(page))
                 .map_err(internal),
             other => {
-                self.forward
-                    .call(s.caller(), method, other.to_value())
-                    .await
+                return Some(Forwarded {
+                    id,
+                    method,
+                    params: other,
+                    ignored,
+                    caller: s.caller(),
+                });
             }
         };
         if let Err(e) = &result
             && e.code != ErrorCode::Internal
         {
-            self.refused(s, Some(method.name), e);
+            self.refused(s.conn, s.class, Some(method.name), e);
         }
         if let Some(id) = id {
             out.push(answer_line(s.conn, id, result, ignored));
@@ -237,6 +316,7 @@ impl Front {
             out.flushed(SHUTDOWN_FLUSH).await;
             self.stop.notify_one();
         }
+        None
     }
 }
 
@@ -420,6 +500,112 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(5), stop)
             .await
             .unwrap();
+    }
+
+    /// A backend whose calls each wait for a permit of its gate, and whose status says it runs.
+    struct Gated(Arc<Semaphore>);
+
+    impl Forward for Gated {
+        fn call<'a>(&'a self, _: Caller, _: &'static Method, _: Params) -> dispatch::Answer<'a> {
+            Box::pin(async {
+                self.0.acquire().await.unwrap().forget();
+                Ok(json!(true))
+            })
+        }
+
+        fn status<'a>(
+            &'a self,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = dispatch::BackendInfo> + Send + 'a>>
+        {
+            Box::pin(async {
+                dispatch::BackendInfo {
+                    backend: Some(drgnx_proto::methods::hub::Backend {
+                        state: drgnx_proto::methods::hub::BackendState::Running,
+                        pid: Some(42),
+                    }),
+                    gateway_port: Some(7),
+                    registrations: Some(2),
+                }
+            })
+        }
+    }
+
+    fn gated(dir: &std::path::Path, gate: Arc<Semaphore>) -> Arc<Front> {
+        Arc::new(Front::new(
+            Cap::generate().unwrap(),
+            dir.join("hub-x.sock"),
+            WorkDb::spawn(dir.join("work.db")).unwrap(),
+            Arc::new(Gated(gate)),
+        ))
+    }
+
+    #[tokio::test]
+    async fn a_connection_has_at_most_64_forwarded_calls_in_flight() {
+        let dir = tempfile::tempdir().unwrap();
+        let gate = Arc::new(Semaphore::new(0));
+        let f = gated(dir.path(), gate.clone());
+        let mut s = Session::new(f.next_conn(), Socket::Main);
+        s.class = Class::User;
+        let out = Arc::new(Outbox::new(s.conn));
+        let slots = Arc::new(Semaphore::new(MAX_IN_FLIGHT));
+        let call = |i: usize| format!(r#"{{"id":{i},"method":"job/status"}}"#);
+        for i in 0..MAX_IN_FLIGHT {
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                f.start_line(&mut s, &out, &call(i), &slots),
+            )
+            .await
+            .expect("a call within the limit is taken at once");
+        }
+        // the front-served methods still answer at once
+        f.start_line(&mut s, &out, r#"{"id":"p","method":"ping"}"#, &slots)
+            .await;
+        assert_eq!(answers(&out).len(), 1, "only ping is answered");
+        // the 65th waits for a slot: the connection is not read meanwhile
+        let next = call(MAX_IN_FLIGHT);
+        let fut = f.start_line(&mut s, &out, &next, &slots);
+        tokio::pin!(fut);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), &mut fut)
+                .await
+                .is_err(),
+            "a 65th call in flight"
+        );
+        gate.add_permits(1);
+        tokio::time::timeout(Duration::from_secs(5), &mut fut)
+            .await
+            .expect("taken once one call ended");
+        gate.add_permits(1000);
+        let mut got = 0;
+        for _ in 0..500 {
+            got += answers(&out).len();
+            if got == MAX_IN_FLIGHT + 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(got, MAX_IN_FLIGHT + 1, "every call answered");
+    }
+
+    #[tokio::test]
+    async fn status_has_the_backends_state_and_the_gateways_numbers() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = gated(dir.path(), Arc::new(Semaphore::new(0)));
+        let v = serde_json::to_value(f.status_with_backend().await).unwrap();
+        assert_eq!(v["backend"], json!({"state": "running", "pid": 42}));
+        assert_eq!(
+            (v["gateway_port"].clone(), v["registrations"].clone()),
+            (json!(7), json!(2))
+        );
+        let m = registry::find("status").unwrap();
+        assert_eq!((m.check_result)(&v).unwrap(), v);
+        // without a backend there is nothing to say of it
+        let f = front(dir.path());
+        let v = serde_json::to_value(f.status_with_backend().await).unwrap();
+        assert!(
+            v.get("backend").is_none() && v.get("gateway_port").is_none(),
+            "{v}"
+        );
     }
 
     #[tokio::test]

@@ -80,6 +80,12 @@ shorthands come back, without reopening them.
   a connection that reaches a socket it should not have, such as one bound into a container. It is worth nothing
   against unsandboxed programs running as you: they can read the cap file. The agent sandbox is the boundary
   there, not the cap.
+- **The Lisp hub behind Ratatoskr.** Until each part moves to Rust, Ratatoskr runs the Lisp hub as its child on a
+  private socket of its own and checks every call (who may make it, and every value in it) before passing it on, so
+  the Lisp hub only ever gets calls the front accepted. Only the front knows that socket: the Lisp hub forgets it at
+  start, so the agents it runs reach the hub through the front like everyone else. Its environment is a fixed list
+  (paths, locale, the ssh agent, proxies and certificates, the terminal and display): a provider key set in the
+  environment that starts the hub never reaches it, or its agents. Keys reach the hub over the socket, from you.
 
 ## When something you trust is held back
 

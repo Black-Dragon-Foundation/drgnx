@@ -1,0 +1,4 @@
+{"scenario": "forward/the-backend-keeps-ssh-and-proxy-env", "requires": ["v1", "fake-backend"], "doc": "The backend keeps what agents and git use on main (the ssh agent, the proxy variables in both cases), and no key (review I7)."}
+{"do": "start", "hub": "h", "env": {"SSH_AUTH_SOCK": "/x/agent.sock", "HTTPS_PROXY": "http://p:1", "no_proxy": "localhost", "ANTHROPIC_API_KEY": "canary"}}
+{"do": "backend_log", "hub": "h", "expect_line": {"method": "subscribe"}}
+{"do": "file", "path": "$STATE/fake-backend.env", "json": {"SSH_AUTH_SOCK": "/x/agent.sock", "HTTPS_PROXY": "http://p:1", "no_proxy": "localhost", "ANTHROPIC_API_KEY": "$absent"}, "lacks": "canary"}

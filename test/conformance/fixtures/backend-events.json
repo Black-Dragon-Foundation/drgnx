@@ -1,0 +1,11 @@
+[
+  {"event": "agent", "data": {"id": "agent-1", "seq": 3, "session": {"id": "agent-1", "name": "agent-1", "profile": "mock", "cwd": "/tmp/w", "status": "idle", "via": "direct", "mode": "queue", "queue": [], "paused": false, "permissions": [], "reviews": [], "usage": {"used": 120, "size": 1000}, "commands": [], "entries-count": 2, "enforced": false}}},
+  {"event": "agent-entries", "data": {"id": "agent-1", "seq": 3, "entries": [[0, {"type": "user", "text": "hi"}], [1, {"type": "agent", "text": "You said: hi"}]]}},
+  {"event": "events", "data": {"since": 0, "last": 2, "events": [{"id": 1, "at": 1.5, "agent": "agent-1", "job": null, "task": null, "kind": "start", "summary": "session started"}, {"id": 2, "at": 2.5, "agent": "agent-1", "job": null, "task": null, "kind": "stop", "summary": "turn ended", "data": {"turn": true}}]}},
+  {"event": "lease-released", "data": {"task": "j1-1", "agent": "agent-2", "job": "j1"}},
+  {"event": "fallback", "data": {"agent": "agent-2", "from": "openrouter", "to": "anthropic", "why": "HTTP 429"}},
+  {"event": "card", "data": {"id": 7, "job": "j1", "task": "j1-1", "kind": "review", "title": "review j1-1"}},
+  {"event": "job", "data": {"id": "j1"}},
+  {"event": "budget", "data": {"job": "j1", "spent": 2.5, "budget": 2.0}},
+  {"event": "request", "data": {"job": "j1", "task": "j1-1", "agent": "agent-2", "provider": "openrouter", "model": "anthropic/claude-sonnet", "input": 100, "output": 20, "cost": 0.01, "status": 200}}
+]

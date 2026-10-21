@@ -5,17 +5,20 @@
 //! 3. the lock ([`crate::lock`]); signals are caught from here on;
 //! 4. only while holding it: a stale socket removed, the cap written (0600, temp + rename), the socket bound and made
 //!    0600, and the agent sockets (test-hooks) bound in `hub-HASH.d/` beside it;
-//! 5. `runtime.db`, then the read-only `work.db` reader, whose schema is read now and at each 2 s tick.
+//! 5. `runtime.db`, then the read-only `work.db` reader, whose schema is read now and at each 2 s tick;
+//! 6. the processes `runtime.db` recorded reaped, then the Lisp backend started (and kept running) on its own socket.
 //!
 //! It serves until SIGTERM, SIGINT, `shutdown` or the `--parent-pid` process is gone (checked each second), then
 //! stops accepting and removes the sockets and the cap while the lock is still held.
 
+use crate::backend::{self, Backend};
 use crate::cli::{AgentSocket, ServeArgs};
 use crate::conn;
-use crate::dispatch::NoBackend;
+use crate::forward::ToBackend;
 use crate::front::Front;
 use crate::hello::Socket;
 use crate::lock::{self, LockError};
+use crate::relay;
 use crate::store::WorkDb;
 use crate::{Exit, log, runtime_db};
 use drgnx_proto::paths::{self, Env};
@@ -33,6 +36,9 @@ pub const SQLITE_FLOOR: i32 = 3_051_003;
 
 /// How often work.db's schema is read (read-only while it is newer).
 pub const SCHEMA_TICK: Duration = Duration::from_secs(2);
+
+/// How long the stop waits for the backend to end (its group gets SIGKILL 2 s after SIGTERM).
+const BACKEND_STOP: Duration = Duration::from_secs(10);
 
 pub async fn run(args: ServeArgs) -> Exit {
     if let Err(e) = urdr::check_floor(SQLITE_FLOOR) {
@@ -120,8 +126,8 @@ pub async fn run(args: ServeArgs) -> Exit {
             }
         }
     }
-    let store = match runtime_db::open(&hub_dir) {
-        Ok((store, _handle)) => store,
+    let (store, runtime) = match runtime_db::open(&hub_dir) {
+        Ok(x) => x,
         Err(e) => {
             tracing::error!("cannot start: {e}");
             drop(listener);
@@ -139,15 +145,23 @@ pub async fn run(args: ServeArgs) -> Exit {
             return Exit::CannotStart;
         }
     };
+    // what a crashed run left (its backend's group): killed before a new backend starts
+    if let Err(e) = backend::reap_recorded(&runtime).await {
+        tracing::warn!("{e}");
+    }
+    let (events_tx, events_rx) = tokio::sync::mpsc::channel(relay::QUEUE);
+    let backend = new_backend(&env, &socket, runtime, events_tx);
     let front = Arc::new(Front::new(
         cap,
         socket.clone(),
         work_db,
-        Arc::new(NoBackend),
+        Arc::new(ToBackend(backend.clone())),
     ));
     // read-only at start and at each tick while work.db is newer than this hub
     front.set_schema(front.work_db.schema().await.unwrap_or(0));
     tokio::spawn(watch_schema(front.clone()));
+    tokio::spawn(relay::run(events_rx, front.clone()));
+    let supervisor = tokio::spawn(backend.clone().supervise());
     for (l, s) in agents {
         tokio::spawn(accept(l, front.clone(), s));
     }
@@ -205,12 +219,48 @@ pub async fn run(args: ServeArgs) -> Exit {
         }
     };
     drop(listener);
+    // the backend stopped (its group: SIGTERM, then SIGKILL) and its row gone, while runtime.db is still open
+    backend.stop();
+    if tokio::time::timeout(BACKEND_STOP, supervisor)
+        .await
+        .is_err()
+    {
+        tracing::warn!("the Lisp backend did not stop within 10 s");
+    }
     // the lock is still held: these are ours
     remove_all(&agent_paths);
     remove(&socket, &cap_path);
     let _ = tokio::task::spawn_blocking(move || store.shutdown()).await;
     drop(lock);
     exit
+}
+
+/// The Lisp backend for this hub (its socket's directory made private here, under the lock), its events to EVENTS;
+/// `missing` when there is no command or no socket path for it.
+fn new_backend(
+    env: &Env,
+    socket: &Path,
+    runtime: urdr::Handle,
+    events: tokio::sync::mpsc::Sender<(String, serde_json::Value)>,
+) -> Arc<Backend> {
+    let get = |k: &str| env.vars.get(k).cloned();
+    let program = backend::program(
+        &get,
+        &paths::data_dir(env),
+        &paths::config_dir(env),
+        backend::CHECKOUT,
+    );
+    // its directory only for a backend that can start
+    let serve = paths::backend_socket_path(env, socket)
+        .map_err(|e| e.to_string())
+        .and_then(|p| match &program {
+            Err(_) => Ok(p),
+            Ok(_) => paths::private_dir(p.parent().unwrap_or(Path::new("/")))
+                .map(|()| p.clone())
+                .map_err(|e| format!("its socket's directory: {e}")),
+        });
+    let home = PathBuf::from(get("HOME").unwrap_or_else(|| "/".into()));
+    Backend::new(program, serve, home, runtime, events)
 }
 
 /// Accept on an agent socket for as long as the hub serves.

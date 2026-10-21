@@ -1,0 +1,10 @@
+{"scenario": "forward/keys-only-from-a-proven-user", "requires": ["v1", "fake-backend"], "doc": "gateway/keys is forwarded from a user connection only: a service connection's keys are refused and never reach the backend."}
+{"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"gateway/keys\": {\"result\": true}}"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "s", "hub": "h", "as": "service"}
+{"do": "send", "conn": "s", "json": {"id": 1, "method": "gateway/keys", "params": {"keys": {"openrouter": "sk-service-canary"}}}}
+{"do": "expect", "conn": "s", "json": {"id": 1, "error": {"code": "not-allowed"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/keys", "params": {"keys": {"openrouter": "sk-user-1"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "backend_log", "hub": "h", "expect_line": {"method": "gateway/keys", "params": {"keys": {"openrouter": "sk-user-1"}}, "caller": {"class": "user"}}}
+{"do": "backend_log", "hub": "h", "expect_no_line": "sk-service-canary"}

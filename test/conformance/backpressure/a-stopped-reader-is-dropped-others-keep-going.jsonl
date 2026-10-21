@@ -1,0 +1,16 @@
+{"scenario": "backpressure/a-stopped-reader-is-dropped-others-keep-going", "requires": ["v1", "fake-backend"], "doc": "The backend floods events (400 of 64 KiB): a subscriber that stopped reading is closed once over 16 MiB is queued for it, and another subscriber gets every event."}
+{"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"flood\": 400, \"flood_size\": 65536}"}}
+{"do": "connect", "conn": "a", "hub": "h"}
+{"do": "send", "conn": "a", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "a", "json": {"id": 1, "result": true}}
+{"do": "pause", "conn": "a"}
+{"do": "connect", "conn": "b", "hub": "h"}
+{"do": "send", "conn": "b", "json": {"id": 2, "method": "subscribe"}}
+{"do": "expect", "conn": "b", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "b", "json": {"id": 3, "method": "coord/notify"}}
+{"do": "expect", "conn": "b", "json": {"id": 3, "result": true}}
+{"do": "expect", "conn": "b", "json": {"event": "card", "data": {"id": 0}}, "within_ms": 20000}
+{"do": "expect", "conn": "b", "json": {"event": "card", "data": {"id": 199}}, "within_ms": 20000}
+{"do": "expect", "conn": "b", "json": {"event": "card", "data": {"id": 399}}, "within_ms": 20000}
+{"do": "expect_closed", "conn": "a", "within_ms": 20000}
+{"do": "file", "path": "$STATE/hub/log/hub-*.jsonl", "contains": "dropped a client that stopped reading"}

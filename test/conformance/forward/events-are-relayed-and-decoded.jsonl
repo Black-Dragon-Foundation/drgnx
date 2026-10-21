@@ -1,0 +1,10 @@
+{"scenario": "forward/events-are-relayed-and-decoded", "requires": ["v1", "fake-backend"], "doc": "The backend's events reach the front's subscribers decoded against their registry type (a null key comes out absent)."}
+{"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"events\": \"$ROOT/events.json\"}"}}
+{"do": "write_file", "path": "$ROOT/events.json", "text": "[{\"event\": \"job\", \"data\": {\"id\": \"j1\"}}, {\"event\": \"events\", \"data\": {\"since\": 0, \"last\": 1, \"events\": [{\"id\": 1, \"at\": 1.5, \"agent\": null, \"job\": \"j1\", \"kind\": \"job\", \"summary\": \"job j1 stopped\", \"data\": {\"status\": \"stopped\"}}]}}]"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "coord/notify"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "c", "json": {"event": "job", "data": {"id": "j1"}}}
+{"do": "expect", "conn": "c", "json": {"event": "events", "data": {"since": 0, "last": 1, "events": [{"id": 1, "agent": "$absent", "job": "j1", "data": {"status": "stopped"}}]}}}
