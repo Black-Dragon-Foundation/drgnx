@@ -144,6 +144,10 @@ pub enum Setup {
         #[serde(default)]
         text: String,
     },
+    /// The run starts in a session of its own whose controlling terminal is a pty the harness opened (the control
+    /// run's probe, or `ratatoskr`): what the sandboxed program sees of the terminal of whoever started Ratatoskr
+    /// (gate review S6).
+    ControllingTty {},
 }
 
 /// Something the harness does to the run while it is going.
@@ -307,6 +311,9 @@ impl Row {
         }
         if let Some(r) = &self.raw {
             t.extend(r.args.iter().cloned());
+        }
+        if let Some(g) = self.after.as_ref().and_then(|a| a.gone.as_ref()) {
+            t.push(g.matching.clone());
         }
         for e in self
             .expect

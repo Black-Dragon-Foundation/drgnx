@@ -242,10 +242,14 @@ pub fn judge_control(row: &Row, lines: &[ProbeLine]) -> Result<(), String> {
 }
 
 /// `want` is contained in `actual`: objects key by key, other values equal. A key `NAME_contains` asks that the
-/// string at `NAME` contain the text.
+/// string at `NAME` contain the text. A wanted object needs an object (even `{}`: `{"refused": {}}` against a
+/// `refused` of `null` fails, gate review S12).
 pub fn subset(actual: &Value, want: &Value) -> Result<(), String> {
     fn go(path: &str, a: &Value, w: &Value) -> Result<(), String> {
         match (a, w) {
+            (a, Value::Object(_)) if !a.is_object() => {
+                Err(format!("{path}: wanted an object, got {a}"))
+            }
             (_, Value::Object(wm)) => {
                 for (k, wv) in wm {
                     if let Some(base) = k.strip_suffix("_contains") {
@@ -314,7 +318,16 @@ pub fn judge_run(row: &Row, d: &RunData, canaries: &[Canary]) -> Result<(), Stri
             .as_ref()
             .ok_or_else(|| format!("no result file; stderr: {}", tail(&d.stderr)))?;
         match &row.result {
-            Some(want) => subset(r, want).map_err(|e| format!("result: {e}"))?,
+            Some(want) => {
+                subset(r, want).map_err(|e| format!("result: {e}"))?;
+                // A refused row expects no line: the program never ran, so it printed nothing (gate review S12).
+                if row.expect.is_empty() && !d.stdout.trim().is_empty() {
+                    return Err(format!(
+                        "the run was to print nothing, yet it printed: {}",
+                        tail(&d.stdout)
+                    ));
+                }
+            }
             None if row.after.is_some() => {}
             None => {
                 if !r["refused"].is_null() {
@@ -791,6 +804,8 @@ fn setup(fx: &mut Fixture, row: &Row, control: bool) -> Result<Prepared, String>
                 }
                 std::fs::write(&path, text).map_err(|e| format!("make-file {path}: {e}"))?;
             }
+            // Applied to the command itself, in both runs ([`controlling_tty`]).
+            Setup::ControllingTty {} => {}
             // The rest belong to the sandboxed run alone: the control would only trip over them.
             _ if control => {}
             Setup::SwapToLink { path, target } => p
@@ -855,6 +870,75 @@ fn setup(fx: &mut Fixture, row: &Row, control: bool) -> Result<Prepared, String>
     Ok(p)
 }
 
+/// A pty's two ends, held open until the run has ended (closing the master would hang up the session).
+struct Tty {
+    _master: std::os::fd::OwnedFd,
+    _slave: std::os::fd::OwnedFd,
+}
+
+/// The `controlling-tty` setup, when the row has it: `cmd` starts in a new session (`setsid`) whose controlling
+/// terminal is a fresh pty's slave (`TIOCSCTTY`); the returned ends must outlive the run.
+fn controlling_tty(row: &Row, cmd: &mut Command) -> Result<Option<Tty>, String> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    if !row
+        .setup
+        .iter()
+        .any(|s| matches!(s, Setup::ControllingTty {}))
+    {
+        return Ok(None);
+    }
+    let err = |what: &str| {
+        format!(
+            "controlling-tty: {what}: {}",
+            std::io::Error::last_os_error()
+        )
+    };
+    // SAFETY: posix_openpt/grantpt/unlockpt/ptsname/open on fds we own; ptsname's static buffer is copied at once,
+    // and no other harness thread calls it.
+    let (master, slave) = unsafe {
+        // macOS's posix_openpt takes only O_RDWR and O_NOCTTY: close-on-exec is set after.
+        let m = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+        if m < 0 {
+            return Err(err("posix_openpt"));
+        }
+        let master = OwnedFd::from_raw_fd(m);
+        if libc::fcntl(m, libc::F_SETFD, libc::FD_CLOEXEC) != 0 {
+            return Err(err("FD_CLOEXEC"));
+        }
+        if libc::grantpt(m) != 0 || libc::unlockpt(m) != 0 {
+            return Err(err("grantpt/unlockpt"));
+        }
+        let name = libc::ptsname(m);
+        if name.is_null() {
+            return Err(err("ptsname"));
+        }
+        let name = std::ffi::CStr::from_ptr(name).to_owned();
+        let s = libc::open(
+            name.as_ptr(),
+            libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC,
+        );
+        if s < 0 {
+            return Err(err("open the slave"));
+        }
+        (master, OwnedFd::from_raw_fd(s))
+    };
+    let fd = slave.as_raw_fd();
+    // SAFETY: setsid(2) and ioctl(2) between the fork and the exec; nothing allocates. The slave is still open in
+    // the child here (close-on-exec closes it only at the exec), and the terminal stays its controlling one after.
+    unsafe {
+        cmd.pre_exec(move || {
+            if libc::setsid() < 0 || libc::ioctl(fd, libc::TIOCSCTTY as _, 0) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    Ok(Some(Tty {
+        _master: master,
+        _slave: slave,
+    }))
+}
+
 fn set_mode(p: &Path, mode: u32) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode)).map_err(|e| e.to_string())
@@ -878,7 +962,9 @@ fn run_direct(opts: &Opts, row: &Row) -> Result<(Fixture, RunData), String> {
         .env_clear()
         .envs(fx.env("/usr/bin:/bin"))
         .current_dir(fx.path("w"));
+    let tty = controlling_tty(row, &mut cmd)?;
     let d = drive(cmd, None, None)?;
+    drop(tty);
     let (lines, bad) = parse_lines(&d.stdout_lines);
     let data = RunData {
         direct: true,
@@ -965,7 +1051,21 @@ fn run_sandboxed(opts: &Opts, row: &Row) -> Result<(Fixture, RunData), String> {
         canary_file = Some(canary);
     }
     let pause = (!prep.swaps.is_empty()).then_some((fifo.as_path(), prep.swaps.as_slice()));
-    let d = drive(cmd, row.after.as_ref(), pause);
+    // `gone.match` may name the fixture (`${FIXTURE}/bin/gleipnir-probe …`), so a process the control run left
+    // behind never stands in for this run's.
+    let after = match &row.after {
+        Some(a) => {
+            let mut a = a.clone();
+            if let Some(g) = &mut a.gone {
+                g.matching = fx.expand(&g.matching)?;
+            }
+            Some(a)
+        }
+        None => None,
+    };
+    let tty = controlling_tty(row, &mut cmd)?;
+    let d = drive(cmd, after.as_ref(), pause);
+    drop(tty);
     drop(canary_file);
     finish(row, fx, d, &result_path)
 }
