@@ -8,5 +8,9 @@ license.workspace = true
 publish = false
 
 [dependencies]
+eitri = { path = "../eitri", version = "0.1.0" }
 tokio.workspace = true
 libc.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

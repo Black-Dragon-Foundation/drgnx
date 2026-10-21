@@ -605,6 +605,7 @@ impl Backend {
             env: environment(program.test_backend, socket, std::process::id()),
             cwd: Some(self.home.clone()),
             stdin_null: true,
+            pass_fds: Vec::new(),
         };
         let mut child = match proc::spawn(spec).await {
             Ok(c) => c,

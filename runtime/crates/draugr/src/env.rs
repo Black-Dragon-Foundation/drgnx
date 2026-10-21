@@ -61,6 +61,7 @@ mod tests {
             env: env.clone(),
             cwd: None,
             stdin_null: true,
+            pass_fds: vec![],
         })
         .await
         .unwrap();
