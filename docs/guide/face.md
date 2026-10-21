@@ -148,8 +148,8 @@ Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch.
 | `trust` | `Restricted Mode` while the file's folder is not trusted: its Flymake checkers and symbol shorthands are off (hover for what that means) | **Trust This Folder** |
 | `problems` | `✓` when flymake finds nothing, `◐` while a checker has not reported yet, `● 3` (dimmed) when it finds only notes, else `⚠ 1 2`: the errors, then the warnings, each in its own colour | the problems list |
 | `tests` | `✓ tests 41/41` or `× tests 2 failed`: the last test run | its output |
-| `jobs` | `◎ 2 jobs` while jobs run | What Needs You, every job's |
-| `agents` | `◎ 1 busy` | the Agents tab |
+| `jobs` | `◎ 2 jobs` while jobs run (the Jobs module's: gone when it is off) | What Needs You, every job's |
+| `agents` | `◎ 1 busy` (the Agents module's: gone when it is off) | the Agents tab |
 | `needs-you` | `◐ 2 waiting on you` (in the needs-you colour): the one count of everything that waits for you | the newest item's own command when every item comes from one source, else the Notices list |
 | `drgnx` | `✕ 1`, `⚠ 2` or `✕ 1 ⚠ 2`: drgnx's own failed and warned conditions (a module that did not start …) | the Notices list |
 | `modal` | the modal-editing state (`NORMAL`, `INSERT` …), when that module is loaded | |
@@ -195,9 +195,9 @@ linter) redraws the bars a moment later: flymake has no hook for it, so the bar 
 `drgnx-statusbar--flymake-reported`, on `flymake--handle-report`, which only asks for a redraw; it comes off when
 `drgnx-statusbar-mode` is turned off.
 
-**Jobs.** `◎ 2 jobs` counts the jobs the hub says are running (asked when the mode starts or the first hub event
-arrives, then when a job or a card changes — one question at a time, never on redisplay; nothing while there is no
-hub). A click opens What Needs You for every job in the Work cockpit.
+**Jobs.** `◎ 2 jobs` counts the jobs the hub says are running. The Jobs module defines the segment and counts them from the
+same `job/status` answer that feeds the notice model (when a job or a card changes, never on redisplay; nothing while
+there is no hub, and nothing shown when the count is not known). A click opens What Needs You for every job in the Work cockpit.
 
 **Waiting on you.** The number in `◐ 2 waiting on you` is the notice model's one count (`drgnx-needs-you-count`): the
 agents' permission requests and edits to review, the cards and messages of jobs, and the questions no job holds, each
@@ -225,8 +225,8 @@ The bar is redrawn after every command that moved point or changed the text. Whe
 recently used editor window (`C-x o` between two windows of one buffer too), the full and the compact bar trade places in every
 window on the first redraw, in every frame: the bar asks the workbench state store, which a frame's own editor
 window answers for, and keeps no rule of its own. It is also redrawn when
-agents, the hub or git report a change (`drgnx-statusbar-refresh`: at most one redraw every 0.2 seconds, however many
-changes come in, and only when a count changed; git redraws when a repository's branch or its ahead and behind counts changed). Each window keeps the bar it last drew, with
+a module or git report a change (`drgnx-statusbar-refresh`: at most one redraw every 0.2 seconds, however many
+changes come in; the Agents module asks for one only when its busy count changed; git redraws when a repository's branch or its ahead and behind counts changed). Each window keeps the bar it last drew, with
 what it was drawn from: the buffer, point, the text's change count, the narrowing, the width, full or compact, the
 selection, and six change counters that hooks and settings move — how the buffer looks (mode, version control,
 encoding, indentation, modal state), its checker, its language server, git, other packages' entries, and drgnx's own

@@ -5,6 +5,7 @@
 (require 'drgnx-timer)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
+(load (expand-file-name "modules/ui/drgnx-statusbar" drgnx-dir) nil t)   ; the `agents' segment is defined into its table
 (load (expand-file-name "modules/tools/drgnx-agents-ui" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
@@ -110,6 +111,30 @@
                            (dolist (id '(agents-view agents-new agents-send agents-stop agents-deliver agents-take-over agents-answer jobs-log jobs-stop agents-open agents-reply agents-review-done agents-review-reject
                                                      agents-new-durable))
                              (should (drgnx-commands-get id)))))
+
+(ert-deftest drgnx-agents-ui/defines-the-agents-segment ()
+  (let ((drgnx-agents--sessions (list (drgnx-agents--make :name "a" :status 'busy)
+                                      (drgnx-agents--make :name "b" :status 'idle)))
+        (drgnx-agents-ui--busy 0))
+    (drgnx-test-with-modules '(tools/agents) :strict t
+                             (let ((spec (gethash 'agents drgnx-statusbar--segments)) (before (drgnx-epoch 'statusbar)))
+                               (should spec)
+                               (should (eq (plist-get spec :click) 'drgnx-agents-ui-view))
+                               (should (string-suffix-p "1 busy" (substring-no-properties (funcall (plist-get spec :fn)))))
+                               ;; the same count redraws nothing; a changed one moves the epoch and the text
+                               (drgnx-agents-ui--count-busy)
+                               (should (eql before (drgnx-epoch 'statusbar)))
+                               (setf (drgnx-agent-session-status (cadr drgnx-agents--sessions)) 'busy)
+                               (drgnx-agents-ui--count-busy)
+                               (should-not (eql before (drgnx-epoch 'statusbar)))
+                               (should (string-suffix-p "2 busy" (substring-no-properties (funcall (plist-get spec :fn)))))
+                               (setf (drgnx-agent-session-status (car drgnx-agents--sessions)) 'idle)
+                               (setf (drgnx-agent-session-status (cadr drgnx-agents--sessions)) 'idle)
+                               (drgnx-agents-ui--count-busy)
+                               (should-not (funcall (plist-get spec :fn)))
+                               (drgnx-module-teardown 'tools/agents)
+                               (should-not (gethash 'agents drgnx-statusbar--segments))
+                               (drgnx-timer-cancel 'statusbar-refresh)))))
 
 (ert-deftest drgnx-agents-ui/turned-off-it-stops-mirroring-and-closes-the-hub-events ()
   ;; what no door records: the mirror's hooks (added at idle, outside the setup) and the event connection
