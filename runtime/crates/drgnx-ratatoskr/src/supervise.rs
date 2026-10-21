@@ -11,11 +11,14 @@
 //! Only variable *names* go in an argv (`--setenv=NAME`), so no value, and no key, is ever in a command line.
 //! Programs are the root-owned ones at fixed paths, never found through `PATH`.
 //!
+//! Both refuse a socket directory that is not this user's private one ([`client::trusted`]): a `/tmp` fallback
+//! directory another user made first would otherwise name any of this user's processes in its lock.
+//!
 //! `stop` signals nothing unless the lock is really held: the lock file is probed with `flock` first, so a stale file
 //! naming a live pid (a reused one) is "not running".  A held lock gets a `shutdown` over the socket; only when that
 //! does not release it is the pid in the file sent SIGTERM, and then only if its start time is still the recorded
-//! one.  A Lisp hub from before Ratatoskr (a lock directory) gets the v0 `shutdown`, and SIGTERM only for a pid
-//! whose command line names `drgnx-hub-main`.
+//! one and its executable is this ratatoskr.  A Lisp hub from before Ratatoskr (a lock directory) gets the v0
+//! `shutdown`, and SIGTERM only for a pid whose command line names `drgnx-hub-main`.
 
 use crate::client::{self, Client};
 use crate::lock::{self, Holder, Procs};
@@ -400,6 +403,11 @@ fn log_reason(env: &Env) -> Option<(String, PathBuf)> {
 /// `ensure`: the exit code (0 running, 1 not started, 3 a Lisp hub serves).
 pub fn ensure(env: &Env, timeout: Duration) -> i32 {
     let socket = paths::socket_path(env);
+    // a socket directory that is not this user's private one: nothing there is trusted, and no hub could start there
+    if let Some(why) = client::refused(&socket) {
+        eprintln!("ratatoskr ensure: {why}");
+        return 1;
+    }
     if client::ping(&socket, Duration::from_secs(1)).is_some() {
         println!("{}", socket.display());
         return 0;
@@ -512,6 +520,11 @@ pub fn stop(env: &Env, timeout: Duration) -> i32 {
     let socket = paths::socket_path(env);
     let lock_path = paths::lock_path(&socket);
     match lock::holder(&lock_path, &lock::System) {
+        // a refused directory says why itself
+        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
+            eprintln!("ratatoskr stop: {e}");
+            1
+        }
         Err(e) => {
             eprintln!(
                 "ratatoskr stop: cannot look at {}: {e}",
@@ -551,7 +564,7 @@ fn stop_ratatoskr(
         println!("stopped Ratatoskr{}", named(pid));
         return 0;
     }
-    match lock::signal_target(pid, start, start_time_of) {
+    match lock::signal_target(pid, start, start_time_of, lock::is_ratatoskr) {
         Ok(p) => {
             term(p);
             if wait_released(lock_path, timeout) {

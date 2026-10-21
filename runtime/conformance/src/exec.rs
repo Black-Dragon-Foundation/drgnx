@@ -227,6 +227,25 @@ fn query_rows(db: &rusqlite::Connection, sql: &str) -> rusqlite::Result<Value> {
     Ok(Value::Array(rows.collect::<rusqlite::Result<_>>()?))
 }
 
+/// PATH given to (UID, GID): root does it itself, anyone else through passwordless `$SUDO -n chown`.
+fn chown(path: &str, (uid, gid): (u32, u32)) -> R {
+    if unsafe { libc::geteuid() } == 0 {
+        return std::os::unix::fs::chown(path, Some(uid), Some(gid))
+            .map_err(|e| format!("chown {path}: {e}"));
+    }
+    let sudo = std::env::var("SUDO").unwrap_or_else(|_| "sudo".into());
+    let ok = Command::new(&sudo)
+        .args(["-n", "chown", &format!("{uid}:{gid}"), path])
+        .stdin(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if ok {
+        Ok(())
+    } else {
+        Err(format!("{sudo} -n chown {uid}:{gid} {path} failed"))
+    }
+}
+
 fn is_zombie(pid: u32) -> bool {
     if let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
         return stat
@@ -743,6 +762,14 @@ impl Runner<'_> {
                     stderr.trim()
                 ));
             }
+            if let Some(want) = str_of(&step.obj, "expect_stderr")
+                && !stderr.contains(want)
+            {
+                return Err(format!(
+                    "stderr lacks {want:?}: {}; exit code {code:?}",
+                    stderr.trim()
+                ));
+            }
             if let Some(want) = step.obj.get("expect_stdout") {
                 let want = self.subst(idx, want, true);
                 match &want {
@@ -937,13 +964,37 @@ impl Runner<'_> {
         Ok(())
     }
 
+    /// `chmod`: `mode` (octal) and/or `owner`: `"other"` gives PATH to uid and gid 65534, `"self"` back to this
+    /// process's (root does it itself; anyone else through passwordless `$SUDO chown`, so the row needs `sudo`).
     fn chmod(&mut self, step: &Step) -> R {
         let idx = self.hub_index(str_of(&step.obj, "hub")).ok();
         let path = self.text(idx, step, "path")?;
-        let mode = str_of(&step.obj, "mode").ok_or("\"mode\" is an octal string")?;
-        let bits = u32::from_str_radix(mode, 8).map_err(|_| format!("bad mode {mode:?}"))?;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(bits))
-            .map_err(|e| format!("chmod {path}: {e}"))
+        let owner = str_of(&step.obj, "owner");
+        let ids = match owner {
+            None => None,
+            Some("other") => Some((65534, 65534)),
+            Some("self") => Some(unsafe { (libc::geteuid(), libc::getegid()) }),
+            Some(o) => return Err(format!("\"owner\" is other or self, not {o:?}")),
+        };
+        // back to this user first (its mode can then be set), to another one last
+        if owner == Some("self")
+            && let Some(ids) = ids
+        {
+            chown(&path, ids)?;
+        }
+        if let Some(mode) = str_of(&step.obj, "mode") {
+            let bits = u32::from_str_radix(mode, 8).map_err(|_| format!("bad mode {mode:?}"))?;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(bits))
+                .map_err(|e| format!("chmod {path}: {e}"))?;
+        } else if owner.is_none() {
+            return Err("chmod needs \"mode\" (an octal string) or \"owner\"".into());
+        }
+        if owner == Some("other")
+            && let Some(ids) = ids
+        {
+            chown(&path, ids)?;
+        }
+        Ok(())
     }
 
     fn send(&mut self, step: &Step) -> R {

@@ -105,7 +105,13 @@ really held:
   file naming a live, reused pid, say): it prints `not running` and exits 0 without a signal. If it fails the hub is
   asked to `shutdown` as a user client, and `stop` waits for the lock to be released and prints `stopped Ratatoskr (pid
   N)`. Only when it is not released is the pid in the lock file sent SIGTERM, and only if that pid's start time is
-  still the one recorded in the file (else it prints the mismatch and exits 1).
+  still the one recorded in the file and its executable (`/proc/PID/exe`; macOS `proc_pidpath`) resolves to this
+  ratatoskr's own path (else it prints why and exits 1).
+- **Before any of it**, the socket's directory must pass the client check below (a real directory of the user's,
+  not a link, no access for others), and the lock and the cap are read through that checked directory, without
+  following a link, only when they are the user's. Else `stop`, `ensure` and `status` print the refusal (`… belongs to
+  another user`, `… is open to other users (mode 755; it must be 700)`) and exit 1, having read and signalled
+  nothing. A directory that is not there is no hub.
 - **A Lisp hub's lock** (a directory): a v0 `shutdown` goes to the socket (a Lisp hub serves it without a hello) and
   `stop` waits for the directory to go (`stopped the Lisp hub (pid N)`). If it stays, `lock/pid` gets SIGTERM only
   when it is alive and its command line names `drgnx-hub-main`; else it prints `the lock names pid N, which is not a
@@ -183,7 +189,11 @@ anything (`drgnx-hub--untrusted`): the directory a real directory (not a link) o
 others, and the socket the user's; a directory that is missing is refused too (what is checked is then connected to
 by path, and a missing one could be another user's by then). Otherwise it refuses ("Not connecting to the drgnx hub: … is open to other users")
 and never hands over keys — on the `/tmp` fallback another local user could have made the directory first. The
-coordination server's `coord/notify` checks the same. One JSON object per line: requests `{"id", "method",
+coordination server's `coord/notify` checks the same, and so does every path of Ratatoskr's command-line client
+(`runstav::paths::trusted_dir`: `ping`, the v0 calls, user connections and the lock's holder, so `ensure`, `stop`,
+`status`, `doctor` and `restart`); it opens the directory without following a link and reads the cap and the lock
+through it. Unlike the Lisp client it takes a missing directory as no hub (`ensure` then starts one, which makes the
+directory private itself). One JSON object per line: requests `{"id", "method",
 "params"}`, answers and events. Every method, its classes, its params and its result are in [The
 registry](#the-registry-protocol-v1), generated from the Rust definitions.
 

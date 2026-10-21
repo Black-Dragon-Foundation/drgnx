@@ -301,6 +301,102 @@ pub fn private_dir(dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Why a hub directory fails [`trusted_dir`], in the Lisp client's words (`drgnx-hub--untrusted`).
+fn untrusted(dir: &Path, is_dir: bool, uid: u32, mode: u32) -> Option<String> {
+    let mode = mode & 0o777;
+    if !is_dir {
+        Some(format!("{} is not a directory", dir.display()))
+    } else if uid != rustix::process::geteuid().as_raw() {
+        Some(format!("{} belongs to another user", dir.display()))
+    } else if mode & 0o077 != 0 {
+        Some(format!(
+            "{} is open to other users (mode {mode:o}; it must be 700)",
+            dir.display()
+        ))
+    } else {
+        None
+    }
+}
+
+/// The hub directory DIR (the socket's), opened without following a link, once it is a real directory owned by this
+/// euid with no access for others (`mode & 0o077 == 0`): nothing but this user can then have made what is in it.
+/// Every client path (a ping, a v0 call, a user connection, the lock's holder, and so `ensure`, `stop`, `status`,
+/// `doctor` and `restart`) checks it before it reads, connects to or signals anything.  A refusal is
+/// `PermissionDenied` with the Lisp client's text; a directory that is not there is `NotFound` (no hub).  What is in it
+/// is read through the descriptor ([`open_in_trusted`]), so a directory swapped in after the check is never read.
+pub fn trusted_dir(dir: &Path) -> io::Result<std::os::fd::OwnedFd> {
+    let refuse = |why: String| io::Error::new(io::ErrorKind::PermissionDenied, why);
+    let fd = match rustix::fs::open(
+        dir,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    ) {
+        Ok(fd) => fd,
+        Err(rustix::io::Errno::NOENT) => {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("{} does not exist (no hub)", dir.display()),
+            ));
+        }
+        // a link (ELOOP), a file (ENOTDIR), another user's (EACCES): say which from what is there
+        Err(e) => {
+            let why = std::fs::symlink_metadata(dir).ok().and_then(|m| {
+                use std::os::unix::fs::MetadataExt;
+                untrusted(dir, m.is_dir(), m.uid(), m.mode())
+            });
+            return Err(refuse(why.unwrap_or_else(|| {
+                format!("{} cannot be opened: {e}", dir.display())
+            })));
+        }
+    };
+    let st = rustix::fs::fstat(&fd)?;
+    let is_dir = FileType::from_raw_mode(st.st_mode as _) == FileType::Directory;
+    match untrusted(dir, is_dir, st.st_uid, st.st_mode as u32) {
+        Some(why) => Err(refuse(why)),
+        None => Ok(fd),
+    }
+}
+
+/// The file NAME in a directory [`trusted_dir`] gave, opened for reading without following a link, when it is a
+/// regular file owned by this euid (`NotFound` when it is not there; else a refusal).
+pub fn open_in_trusted(dir: &std::os::fd::OwnedFd, name: &Path) -> io::Result<std::fs::File> {
+    let fd = rustix::fs::openat(
+        dir,
+        name,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(io::Error::from)?;
+    let st = rustix::fs::fstat(&fd)?;
+    let refuse = |why: &str| {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{} {why}", name.display()),
+        )
+    };
+    if FileType::from_raw_mode(st.st_mode as _) != FileType::RegularFile {
+        return Err(refuse("is not a file"));
+    }
+    if st.st_uid != rustix::process::geteuid().as_raw() {
+        return Err(refuse("belongs to another user"));
+    }
+    Ok(std::fs::File::from(fd))
+}
+
+/// Refused unless NAME in a directory [`trusted_dir`] gave is this euid's (it is not followed when a link); `NotFound`
+/// when it is not there.  The socket, before a client connects to it.
+pub fn owned_in_trusted(dir: &std::os::fd::OwnedFd, name: &Path) -> io::Result<()> {
+    let st = rustix::fs::statat(dir, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+        .map_err(io::Error::from)?;
+    if st.st_uid != rustix::process::geteuid().as_raw() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{} belongs to another user", name.display()),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -451,5 +547,121 @@ mod tests {
         let file = root.path().join("file");
         std::fs::write(&file, "").unwrap();
         assert!(private_dir(&file).is_err());
+    }
+
+    /// The refusal's text, or "ok".
+    fn judged(dir: &Path) -> String {
+        match trusted_dir(dir) {
+            Ok(_) => "ok".into(),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => format!("missing: {e}"),
+            Err(e) => {
+                assert_eq!(e.kind(), io::ErrorKind::PermissionDenied, "{e}");
+                e.to_string()
+            }
+        }
+    }
+
+    #[test]
+    fn trusted_dir_takes_only_a_private_directory_of_this_user() {
+        let root = tempfile::tempdir().unwrap();
+        let d = root.path().join("drgnx");
+        assert!(judged(&d).starts_with("missing: "), "{}", judged(&d));
+        std::fs::create_dir(&d).unwrap();
+        for (mode, ok) in [
+            (0o700, true),
+            (0o500, true),
+            (0o755, false),
+            (0o711, false),
+            (0o770, false),
+            (0o701, false),
+        ] {
+            std::fs::set_permissions(&d, std::fs::Permissions::from_mode(mode)).unwrap();
+            let got = judged(&d);
+            if ok {
+                assert_eq!(got, "ok", "mode {mode:o}");
+            } else {
+                assert!(
+                    got.ends_with(&format!(
+                        "is open to other users (mode {mode:o}; it must be 700)"
+                    )),
+                    "{got}"
+                );
+            }
+        }
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o700)).unwrap();
+        // a link to a private directory is refused (never followed), and so is a file
+        let link = root.path().join("link");
+        std::os::unix::fs::symlink(&d, &link).unwrap();
+        assert!(
+            judged(&link).ends_with("is not a directory"),
+            "{}",
+            judged(&link)
+        );
+        let file = root.path().join("file");
+        std::fs::write(&file, "").unwrap();
+        assert!(
+            judged(&file).ends_with("is not a directory"),
+            "{}",
+            judged(&file)
+        );
+        // another user's (only root can make one here)
+        if rustix::process::geteuid().is_root() {
+            let theirs = root.path().join("theirs");
+            std::fs::create_dir(&theirs).unwrap();
+            std::fs::set_permissions(&theirs, std::fs::Permissions::from_mode(0o700)).unwrap();
+            std::os::unix::fs::chown(&theirs, Some(65534), Some(65534)).unwrap();
+            assert!(
+                judged(&theirs).ends_with("belongs to another user"),
+                "{}",
+                judged(&theirs)
+            );
+        }
+    }
+
+    #[test]
+    fn what_is_in_a_trusted_dir_is_read_through_it_never_through_a_link() {
+        let root = tempfile::tempdir().unwrap();
+        let d = root.path().join("drgnx");
+        std::fs::create_dir(&d).unwrap();
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let fd = trusted_dir(&d).unwrap();
+        std::fs::write(d.join("hub-x.cap"), "c").unwrap();
+        let mut text = String::new();
+        std::io::Read::read_to_string(
+            &mut open_in_trusted(&fd, Path::new("hub-x.cap")).unwrap(),
+            &mut text,
+        )
+        .unwrap();
+        assert_eq!(text, "c");
+        assert!(owned_in_trusted(&fd, Path::new("hub-x.cap")).is_ok());
+        // not there
+        let missing = open_in_trusted(&fd, Path::new("nope")).unwrap_err();
+        assert_eq!(missing.kind(), io::ErrorKind::NotFound);
+        assert_eq!(
+            owned_in_trusted(&fd, Path::new("nope")).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+        // a link to a file elsewhere is not followed
+        let outside = root.path().join("outside");
+        std::fs::write(&outside, "secret").unwrap();
+        std::os::unix::fs::symlink(&outside, d.join("hub-y.cap")).unwrap();
+        assert!(open_in_trusted(&fd, Path::new("hub-y.cap")).is_err());
+        // a directory is no file
+        std::fs::create_dir(d.join("sub")).unwrap();
+        assert!(
+            open_in_trusted(&fd, Path::new("sub"))
+                .unwrap_err()
+                .to_string()
+                .ends_with("is not a file")
+        );
+        if rustix::process::geteuid().is_root() {
+            std::os::unix::fs::chown(d.join("hub-x.cap"), Some(65534), Some(65534)).unwrap();
+            for e in [
+                open_in_trusted(&fd, Path::new("hub-x.cap")).unwrap_err(),
+                owned_in_trusted(&fd, Path::new("hub-x.cap")).unwrap_err(),
+            ] {
+                assert!(e.to_string().ends_with("belongs to another user"), "{e}");
+            }
+        }
     }
 }

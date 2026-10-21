@@ -2,6 +2,7 @@
 {"do": "root"}
 {"do": "spawn", "capture": "P", "argv": ["sleep", "60"]}
 {"do": "write_file", "path": "$LOCK", "text": "$P 1\n"}
+{"do": "chmod", "path": "$SOCKET_DIR", "mode": "0700"}
 {"do": "run", "args": ["stop"], "expect_code": 0, "expect_stdout": "not running"}
 {"do": "pid", "capture": "P", "alive": true, "stays_for_ms": 500}
 {"do": "write_file", "path": "$LOCK", "text": "$P $P_start\n"}

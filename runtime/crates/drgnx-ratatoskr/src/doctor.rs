@@ -59,6 +59,13 @@ pub fn report(env: &Env, binary: &Path, running: Option<Running>) -> Value {
 /// `status`: the hub's `status` (with `"running": true`), or `{"running": false}` and exit 1 when none answers.
 pub fn status(env: &Env, json_out: bool) -> i32 {
     let socket = paths::socket_path(env);
+    if let Some(why) = client::refused(&socket) {
+        if json_out {
+            println!("{}", json!({"running": false, "error": why}));
+        }
+        eprintln!("ratatoskr status: {why}");
+        return 1;
+    }
     let asked = Client::user(env, ASK).and_then(|mut c| c.call("status", json!({}), ASK));
     match asked {
         Ok(mut v) => {
