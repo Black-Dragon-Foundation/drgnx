@@ -8,7 +8,7 @@
 //! | the spec, validation, the bwrap argv, the SBPL text, hosts, relay, proxy | `spec`, `validate`, `bwrap`, `sbpl`, `net` | none: pure, built and tested on every target | builds; nothing runs it |
 //! | bwrap, the reduced tier | `backend::linux::{bwrap, reduced}` | `target_os = "linux"` | no backend; apps get no user namespaces; fails closed |
 //! | the inner helper, Landlock, seccomp | `inner`, `landlock`, `seccomp` | body `target_os = "linux"`, an `Unsupported` stub elsewhere | the stub: fails closed |
-//! | Seatbelt | `backend::macos` | `target_os = "macos"` | not applicable (no Seatbelt) |
+//! | Seatbelt | `backend::macos` | `target_os = "macos"` (and `test`, so its tests run on Linux) | not applicable (no Seatbelt) |
 //! | everything else | `backend::none` | always built | the answer there: a refusal |
 //! | no-link opens (`openat2`), `/proc` | `eitri`, `draugr` | `any(target_os = "linux", target_os = "android")` | a kernel fact: Android has them |
 //!
@@ -20,8 +20,9 @@
 #[cfg(target_os = "linux")]
 pub mod linux;
 
-// Seatbelt through /usr/bin/sandbox-exec. Android: not applicable (no Seatbelt).
-#[cfg(target_os = "macos")]
+// Seatbelt through /usr/bin/sandbox-exec. Android: not applicable (no Seatbelt). Built in tests on every target too:
+// its code is plain Unix (a file and an argv), so where the profile goes is tested on Linux; only macOS runs it.
+#[cfg(any(target_os = "macos", test))]
 pub mod macos;
 
 // Every other target, Android among them: a refusal, never an unconfined run.
