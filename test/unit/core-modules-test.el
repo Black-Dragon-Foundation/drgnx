@@ -438,7 +438,14 @@
     (drgnx-modules--record 'test/a 'startup 1 'ok)
     (should (equal (plist-get (drgnx-modules-test--notice 'off) :text) "1 module is off: test/b"))
     (drgnx-modules--record 'test/b 'startup 1 'ok)
-    (should-not (drgnx-modules-test--notice 'off))))
+    (should-not (drgnx-modules-test--notice 'off))
+    ;; after a restart, a module turned off is `disabled' (modules.eld): it is named too (M4-4); one that is off
+    ;; until chosen is not
+    (drgnx-module-define 'test/opt :doc "o" :stage 'startup :default 'off :setup #'ignore)
+    (drgnx-modules--record 'test/opt 'startup 0 'disabled)
+    (should-not (drgnx-modules-test--notice 'off))
+    (drgnx-modules--record 'test/c 'startup 0 'disabled)
+    (should (equal (plist-get (drgnx-modules-test--notice 'off) :text) "1 module is off: test/c"))))
 
 (ert-deftest drgnx-modules/a-load-failure-is-a-fail-condition ()
   (drgnx-modules-test--noticing
