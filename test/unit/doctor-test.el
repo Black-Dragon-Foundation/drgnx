@@ -902,6 +902,18 @@ what `ratatoskr doctor --json' said)."
           (should-not (drgnx-doctor--ratatoskr-report bin)))
       (delete-directory dir t))))
 
+(ert-deftest drgnx-doctor/ratatoskr-report-of-a-binary-that-exited-before-the-read ()
+  ;; a fast binary has exited, and Emacs knows, before its output is read: the report is still its output (Fedora CI:
+  ;; "gave no answer to doctor --json within 2 s" failed onboarding's finish step)
+  (let* ((dir (make-temp-file "drgnx-rtsk" t)) (bin (expand-file-name "ratatoskr" dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file bin (insert "#!/bin/sh\necho '{\"binary\":{\"commit\":\"abc\"},\"socket_dir\":{\"ok\":true}}'\n"))
+          (set-file-modes bin #o755)
+          (let ((r (drgnx-test-with-exit-before-read (drgnx-doctor--ratatoskr-report bin))))
+            (should (equal (plist-get (plist-get r :binary) :commit) "abc"))))
+      (delete-directory dir t))))
+
 (ert-deftest drgnx-doctor/ratatoskr-shows-the-sandbox-line ()
   ;; the job sandbox's check, from `ratatoskr doctor --json' (stubbed): a detail line only, never a status
   (let ((check (lambda (&rest over) (drgnx-doctor-check 'ratatoskr (apply #'drgnx-doctor-test--rtsk over)))))

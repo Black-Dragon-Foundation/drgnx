@@ -671,6 +671,9 @@ severity, the fix the first `:fix'."
     (unwind-protect
         (progn
           (while (and (process-live-p p) (< (float-time) limit)) (accept-process-output p 0.05))
+          ;; a fast binary counts as exited before its output is read (Emacs's SIGCHLD handler records the exit): read
+          ;; what it left
+          (unless (process-live-p p) (while (accept-process-output p 0)))
           (when (and (eq (process-status p) 'exit) (eql (process-exit-status p) 0))
             (with-current-buffer buf
               (ignore-errors (json-parse-string (buffer-string) :object-type 'plist :false-object nil :null-object nil)))))
