@@ -749,7 +749,9 @@ of the same name."
 (defun drgnx-ui--mutter-scale-prefix (sess)
   "The command words that run before SESS's Emacs under mutter when it has scales, else nil: `gdctl set' puts
 each virtual monitor (Meta-0, Meta-1, …) in a logical monitor of its scale (R12: mutter 50 takes a fractional
-scale on a headless monitor), retried while mutter's display config service comes up; then it execs Emacs."
+scale on a headless monitor), retried while mutter's display config service comes up; then it execs Emacs.  When
+every try failed it prints gdctl's last error and exits without Emacs, so the session fails to start with that error in
+its log (UI-SCALE-1: an image without gdctl's python3-gobject started every session at scale 1)."
   (when (plist-get sess :scales)
     (let ((args (cl-loop for (x _w _h) in (drgnx-ui--monitor-geometries sess)
                          for s across (plist-get sess :scales) for k from 0
@@ -757,7 +759,11 @@ scale on a headless monitor), retried while mutter's display config service come
                                         (list "--monitor" (format "Meta-%d" k) "--scale" (number-to-string s)
                                               "--x" (number-to-string x) "--y" "0")))))
       (list "sh" "-c"
-            (format "i=0; while [ $i -lt 50 ]; do gdctl set %s && break; i=$((i+1)); sleep 0.2; done; exec \"$@\""
+            (format (concat "i=0; until err=$(gdctl set %s 2>&1); do i=$((i+1)); if [ $i -ge 50 ]; then "
+                            ;; one line: the error's last (a Python traceback ends with the exception)
+                            "echo \"drgnx harness: scale not applied: gdctl set failed $i times: "
+                            "$(printf '%%s\\n' \"$err\" | tail -n 1)\" >&2; exit 1; fi; "
+                            "sleep 0.2; done; exec \"$@\"")
                     (mapconcat #'shell-quote-argument args " "))
             "sh"))))
 
@@ -1739,6 +1745,13 @@ Print the child's output; return non-nil when it passed."
     (princ (format "ui tier: %s in %.1fs\n" (if ok "green" "RED") (- (float-time) t0)))
     (if ok 0 1)))
 
+(defun drgnx-ui--harness-lines (log)
+  "The lines of the file LOG that the harness's session scripts wrote (they start with \"drgnx harness: \")."
+  (and (file-readable-p log)
+       (with-temp-buffer
+         (insert-file-contents log)
+         (seq-filter (lambda (l) (string-prefix-p "drgnx harness: " l)) (split-string (buffer-string) "\n" t)))))
+
 (defun drgnx-ui-run-ui-session-tests ()
   "The GUI suite (test/ui) in a session — the first half of `drgnx test --ui', alone for bin/drgnx check (which
 runs the live suite in shards).  Return an exit code."
@@ -1761,7 +1774,9 @@ runs the live suite in shards).  Return an exit code."
                          (if selector (format " (selector %s)" selector) "")))
           (seq-doseq (f (plist-get results :failures))
             (princ (format "  FAIL %s: %s\n" (plist-get f :name) (plist-get f :condition)))))
-      (princ (format "ui ERT: no results (exit %s); log kept in %s\n" rc run)))
+      (princ (format "ui ERT: no results (exit %s); log kept in %s\n" rc run))
+      ;; what the harness wrote to the session's log (a scale gdctl could not set): in a container, the log goes with it
+      (dolist (l (drgnx-ui--harness-lines (expand-file-name "session.log" run))) (princ (concat "  " l "\n"))))
     (when ok (delete-directory run t))
     (if ok 0 1)))
 

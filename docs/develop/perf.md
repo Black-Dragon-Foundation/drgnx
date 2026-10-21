@@ -15,7 +15,8 @@ DRGNX_PERF_RESULTS=FILE     write the results as JSON: every metric (wall clock 
                             the Emacs version and the commit
 DRGNX_PERF_ONLY=REGEXP      run only the workloads whose name matches (an Emacs regexp: `\|` for alternation): judged
                             against their own budgets, the history is not written
-DRGNX_UI_SIZE=WxH           the perf sessions' monitor size (default 1400x800); DRGNX_UI_SCALE=S their scale
+DRGNX_UI_SIZE=WxH           the perf sessions' monitor size (default 1400x800); DRGNX_UI_SCALE=S their scale (a session
+                            that cannot apply it fails to start: exit 1, nothing measured)
 DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the three evil workloads
 ```
 

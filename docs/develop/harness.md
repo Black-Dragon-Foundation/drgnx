@@ -626,7 +626,7 @@ monitor's scale, else stops the session and fails with `scale S not applied`.
 
 | Compositor | How the scale is applied |
 |---|---|
-| `mutter` | `gdctl set --logical-monitor [--primary] --monitor Meta-k --scale S --x X --y 0` per monitor, run (retried) in front of Emacs; X is the sum of the monitors' logical widths (W / S). mutter 50 takes fractional scales on its headless virtual monitor |
+| `mutter` | `gdctl set --logical-monitor [--primary] --monitor Meta-k --scale S --x X --y 0` per monitor, run (retried) in front of Emacs; X is the sum of the monitors' logical widths (W / S). mutter 50 takes fractional scales on its headless virtual monitor. `gdctl` is a Python script that needs `python3-gobject-base` (in `Containerfile.gui`); when all 50 tries (10 s) fail, the session's log gets `scale not applied: gdctl set failed 50 times: ERROR` and Emacs never starts, so `ui start` fails with it |
 | `sway` | `output HEADLESS-k scale S` in `sway.conf`, positions in logical pixels |
 | `kwin` | `kwin_wayland --scale S` when every scale is the same and the binary has the flag, else `kscreen-doctor output.k.scale.S` per output, run by `RUN/kwin-session.sh` in front of Emacs (not exercised on the dev host: no KWin there) |
 | `x11`, `i3`, `niri` | refused: they have no monitor scale |

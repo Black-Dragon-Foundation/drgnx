@@ -971,6 +971,31 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
       (should-not (plist-get s :scales))
       (should-not (member "sh" argv)))))
 
+(ert-deftest drgnx-ui/scale-gdctl-failure-is-loud ()
+  ;; UI-SCALE-1: the image lacked gdctl's python3-gobject; every `gdctl set' failed, the loop gave up silently and
+  ;; Emacs started at scale 1.  Now the last error is printed and the session's command never runs.
+  (drgnx-ui-test--with-state
+    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-7-00000b" nil "2880x1800" root nil 1 "mutter" 2))
+           (argv (drgnx-ui-compositor-argv s))
+           (script (nth (1+ (cl-position "-c" argv :test #'equal)) argv))
+           (bin (expand-file-name "fake-bin" root)))
+      (make-directory bin t)
+      ;; a `sleep' that returns at once: the 50 tries take no time
+      (dolist (f '(("sleep" . "exit 0")
+                   ("gdctl" . "echo 'Traceback (most recent call last):' >&2; echo \"ModuleNotFoundError: No module named 'gi'\" >&2; exit 1")))
+        (with-temp-file (expand-file-name (car f) bin) (insert "#!/bin/sh\n" (cdr f) "\n"))
+        (set-file-modes (expand-file-name (car f) bin) #o755))
+      (let ((process-environment (cons (concat "PATH=" bin ":" (getenv "PATH")) process-environment)))
+        (with-temp-buffer
+          (should-not (eq 0 (call-process "sh" nil t nil "-c" script "sh" "echo" "EMACS-RAN")))
+          (should (string-match-p "scale not applied: gdctl set failed .*No module named 'gi'" (buffer-string)))
+          (should-not (string-search "EMACS-RAN" (buffer-string))))
+        ;; gdctl works: the session's command runs
+        (with-temp-file (expand-file-name "gdctl" bin) (insert "#!/bin/sh\nexit 0\n"))
+        (with-temp-buffer
+          (should (eq 0 (call-process "sh" nil t nil "-c" script "sh" "echo" "EMACS-RAN")))
+          (should (string-search "EMACS-RAN" (buffer-string))))))))
+
 (ert-deftest drgnx-ui/scale-sway-conf ()
   (drgnx-ui-test--with-state
     (cl-letf (((symbol-function 'drgnx-ui--check-compositor) #'ignore))
