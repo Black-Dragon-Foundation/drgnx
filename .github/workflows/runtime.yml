@@ -333,7 +333,8 @@ jobs:
           xcode-select -p
           sudo xcode-select -s /Library/Developer/CommandLineTools
           xcode-select -p
-      - run: cargo test --locked --manifest-path runtime/Cargo.toml --workspace --features drgnx-ratatoskr/test-hooks
+      # --no-fail-fast: every crate's failures in one run (no Mac to try them on before CI)
+      - run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml --workspace --features drgnx-ratatoskr/test-hooks
       # (+ gleipnir-probe and gleipnir-escape for the Seatbelt rows below). The workspace tests above already run
       # `eitri` and `draugr` on macOS (their O_NOFOLLOW_ANY, xcode-select-link and CLOEXEC-loop paths).
       - run: cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr -p gleipnir-escape --features drgnx-ratatoskr/test-hooks

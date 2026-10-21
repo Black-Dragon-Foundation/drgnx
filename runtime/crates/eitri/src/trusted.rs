@@ -200,7 +200,8 @@ mod tests {
     #[test]
     fn a_user_owned_file_is_refused() {
         let dir = tempfile::tempdir().unwrap();
-        let prog = dir.path().join("prog");
+        // the true name: on macOS the temp dir is under /var, a link to /private/var (refused as a link first)
+        let prog = fs::canonicalize(dir.path()).unwrap().join("prog");
         fs::write(&prog, b"#!/bin/sh\n").unwrap();
         chmod(&prog, 0o755);
         if rustix::process::geteuid().is_root() {
