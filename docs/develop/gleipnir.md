@@ -973,7 +973,10 @@ too when its kernel has it. Two places run them:
   PATH rows, `fail-closed-no-bwrap`, `helper-cannot-be-shadowed` and `check-in-a-container` run; the full-tier rows
   skip with "inside a container";
 - the Fedora VM (`gleipnir-vm.sh run`): `--rows rows/linux --rows rows/any --require-all`. Every row runs; none may
-  skip.
+  skip;
+- GitHub CI (`runtime.yml`, [ci.md](ci.md)): the container run above in the Fedora job, the 25 macOS rows plus
+  `rows/any` with `--require-all` on the macOS runner, and `rows/linux` + `rows/any` on the Ubuntu 24.04 runners
+  (x86_64 and arm64) with a lifted AppArmor user-namespace restriction and bubblewrap 0.12.0 built from source.
 
 Each blocked expectation names the errno of the layer that answered, so a row also says which layer holds: ENOENT is
 the mount namespace (the path is not there), EACCES is Landlock, EPERM or ENOSYS is seccomp (EPERM is also Landlock's
