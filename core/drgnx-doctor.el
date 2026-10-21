@@ -25,6 +25,9 @@
 
 (declare-function package-built-in-p "package")
 (declare-function drgnx-portable-config-problems "drgnx-portable")
+(declare-function drgnx-notice-save-dir "drgnx-notice-save")
+(declare-function drgnx-notice-save-last-file "drgnx-notice-save")
+(declare-function drgnx-notice-save-pid-live-p "drgnx-notice-save")
 
 (defconst drgnx-doctor-install-hint
   "run the installer: curl -fsSL https://raw.githubusercontent.com/Black-Dragon-Foundation/drgnx/main/install.sh | bash  (see docs/guide/install.md)"
@@ -396,6 +399,7 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
            :config-files (drgnx-doctor--config-files)
            :checkout-init (drgnx-doctor--checkout-init drgnx-dir)
            :timers-report (drgnx-doctor--timers-report)
+           :notices (drgnx-doctor--notices)
            :statusbar-slow (drgnx-doctor--state-file "statusbar-slow.eld")   ; the status bar's slow entries
            :statusbar-slow-time (drgnx-doctor--state-file-time "statusbar-slow.eld")
            ;; file names only: a key found in the config dir is never part of the facts
@@ -423,6 +427,68 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
     (cond ((< s 3600) (format "%d min ago" (floor s 60)))
           ((< s 172800) (format "%d h ago" (floor s 3600)))
           (t (format "%d d ago" (floor s 86400))))))
+
+(defun drgnx-doctor--notices ()
+  "The notice session files (`drgnx-notice-save'), read, never written: (:live DATAS :last DATA :crashed DATAS).
+A file is live when its pid is a running Emacs; `last.eld' is the last session; the file of a dead pid is crashed,
+and ignored when older than 7 days."
+  (require 'drgnx-notice-save)
+  (let ((dir (drgnx-notice-save-dir)) (limit (- (float-time) (* 7 86400))) (live nil) (crashed nil))
+    (dolist (file (and (file-directory-p dir) (directory-files dir t "\\`[0-9]+\\.eld\\'")))
+      (let* ((alive (drgnx-notice-save-pid-live-p (string-to-number (file-name-base file))))
+             (mtime (float-time (file-attribute-modification-time (file-attributes file)))))
+        (when (or alive (>= mtime limit))
+          (let ((r (drgnx-file-read file)))
+            (when (eq (plist-get r :status) 'ok)
+              (if alive (push (plist-get r :data) live) (push (plist-get r :data) crashed)))))))
+    (let ((r (drgnx-file-read (drgnx-notice-save-last-file))))
+      (list :live (nreverse live) :crashed (nreverse crashed)
+            :last (and (eq (plist-get r :status) 'ok) (plist-get r :data))))))
+
+(defun drgnx-doctor--notices-found (source datas)
+  "SOURCE's notices in the session DATAS merged by key, the later :at winning: a list of (NOTICE . PID)."
+  (let ((found nil))
+    (dolist (data datas)
+      (dolist (n (plist-get data :notices))
+        (when (eq (plist-get n :source) source)
+          (let* ((key (plist-get n :id)) (old (assoc key found)))
+            (cond ((null old) (push (cons key (cons n (plist-get data :pid))) found))
+                  ((> (or (plist-get n :at) 0) (or (plist-get (cadr old) :at) 0))
+                   (setcdr old (cons n (plist-get data :pid)))))))))
+    (mapcar #'cdr (nreverse found))))
+
+(defun drgnx-doctor--notices-check (source notices)
+  "The check result (STATUS DETAIL FIX) of SOURCE's notices in NOTICES, the `:notices' fact."
+  (let* ((live (plist-get notices :live)) (last (plist-get notices :last)) (crashed (plist-get notices :crashed))
+         (datas (or live (append crashed (and last (list last))))))
+    (if (null datas)
+        (list 'info "no session recorded yet — start drgnx once" nil)
+      (let ((found (drgnx-doctor--notices-found source datas)))
+        (if (null found)
+            (list 'ok "no problems" nil)
+          (let* ((texts (mapcar (lambda (f) (plist-get (car f) :text)) found))
+                 (shown (append (seq-take texts 5)
+                                (and (nthcdr 5 texts) (list (format "and %d more" (- (length texts) 5))))))
+                 (rank '((info . 0) (warn . 1) (fail . 2)))
+                 (worst (car (sort (mapcar (lambda (f) (plist-get (car f) :severity)) found)
+                                   (lambda (a b) (> (alist-get a rank 0) (alist-get b rank 0))))))
+                 (where (cond ((null live)
+                               (format " (from the last session, %s)"
+                                       (drgnx-doctor--age (apply #'max (mapcar (lambda (d) (or (plist-get d :written) 0))
+                                                                               datas)))))
+                              ((cdr live)
+                               (format " (this session, pid %s)"
+                                       (mapconcat #'number-to-string (seq-uniq (mapcar #'cdr found)) ", ")))
+                              (t " (this session)"))))
+            (list worst (concat (string-join shown "; ") where)
+                  (seq-some (lambda (f) (plist-get (car f) :fix)) found))))))))
+
+(cl-defun drgnx-doctor-define-notices (source &key group doc name)
+  "Define the check NAME (default SOURCE) in GROUP: what notice source SOURCE says in the session files.
+It reads the live sessions (merged by key), else the last session and the crashed ones; the status is the worst
+severity, the fix the first `:fix'."
+  (drgnx-doctor-define (or name source) :group group :doc doc
+                       :check (lambda (f) (drgnx-doctor--notices-check source (plist-get f :notices)))))
 
 (defun drgnx-doctor--keys-report ()
   "The key report the last drgnx session wrote (keys-report.eld in the state dir), or nil."
