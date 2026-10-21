@@ -39,11 +39,14 @@
   (directory-files (file-name-directory (drgnx-config-test--file)) nil "\\`t\\.eld\\.bak-"))
 
 (defmacro drgnx-config-test--messages (&rest body)
-  "BODY run; the messages it said, oldest first."
+  "BODY run; what it told the user, oldest first: each message, and the text of each `drgnx-notify' call.
+A file's mistake is a notice (`drgnx-config--notify'): `drgnx-modules', required above, loads the notice model."
   (declare (indent 0))
   `(let ((said nil))
      (cl-letf (((symbol-function 'message)
-                (lambda (fmt &rest args) (when fmt (push (apply #'format-message fmt args) said)))))
+                (lambda (fmt &rest args) (when fmt (push (apply #'format-message fmt args) said))))
+               ((symbol-function 'drgnx-notify)
+                (lambda (_source _severity text &rest _) (push text said))))
        ,@body)
      (nreverse said)))
 
@@ -201,7 +204,7 @@
                   (drgnx-config-reread 'drgnx-config-test)
                   (drgnx-test-config-put 'drgnx-config-test "(:a \"oops\")  ")   ; the same mistake, a new stamp
                   (drgnx-config-get 'drgnx-config-test))))
-      (should (equal said (list (format "drgnx: %s: :a: expected an integer, got string (line 1) — using the defaults"
+      (should (equal said (list (format "%s: :a: expected an integer, got string (line 1) — using the defaults"
                                         (abbreviate-file-name (drgnx-config-test--file)))))))
     (should (equal (mapcar (lambda (p) (plist-get p :name)) (drgnx-config-problems)) '(drgnx-config-test)))
     (should (= 1 (length (drgnx-config-test--messages
