@@ -86,6 +86,10 @@ shorthands come back, without reopening them.
   start, so the agents it runs reach the hub through the front like everyone else. Its environment is a fixed list
   (paths, locale, the ssh agent, proxies and certificates, the terminal and display): a provider key set in the
   environment that starts the hub never reaches it, or its agents. Keys reach the hub over the socket, from you.
+- **Your keys go only to a hub that proved itself.** Your editor and the CLI hand provider keys over only after the
+  hub showed, in its answer to their hello, that it read the same cap file. A hub that cannot show it is closed and
+  you are told; a hub of an older drgnx (before Ratatoskr) still gets your editor's calls but never a key. The
+  coordination servers your agents run never read the cap: they stay at the level of a connection without a proof.
 
 ## When something you trust is held back
 
