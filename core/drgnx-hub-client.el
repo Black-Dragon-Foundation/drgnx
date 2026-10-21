@@ -347,11 +347,13 @@ the CLI proves it read in its hello."
 
 (defun drgnx-hub--with-binary-version (fn)
   "Call FN once Ratatoskr's binary version is known or cannot be: at once when it is cached or there is no binary, else
-when the read that runs ends (at most 2 s).  Never waits."
+when the read that runs ends (at most 2 s).  Never waits.
+The read has ended when its sentinel or its expiry ran, not when its child exited: a fast child is reaped (no
+longer live) before the sentinel stores its commit."
   (if (drgnx-hub-client-binary-version t)
       (funcall fn)
     (let ((p drgnx-hub--binary-reading))
-      (if (process-live-p p)
+      (if (and (processp p) (not (process-get p :done)))
           (process-put p :then (cons fn (process-get p :then)))
         (funcall fn)))))
 

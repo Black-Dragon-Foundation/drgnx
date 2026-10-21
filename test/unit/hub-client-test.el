@@ -562,6 +562,22 @@ without the binary."
       (let ((hello (seq-find (lambda (l) (equal (plist-get l :method) "hello")) (drgnx-fake-hub-lines hub))))
         (should (equal (plist-get (plist-get hello :params) :drgnx_version) "abc123"))))))
 
+(ert-deftest drgnx-hub-client/a-version-read-whose-child-has-exited-still-holds-the-hello ()
+  ;; A fast `version --json' child is reaped (no longer live) before its sentinel stores the commit: the hello waits
+  ;; for the read to end (its sentinel, or the 2 s expiry), not for the child's exit (Fedora CI: a hello without
+  ;; drgnx_version when the challenge came in between)
+  (let* ((process-environment (cons "DRGNX_RATATOSKR_BIN" process-environment))
+         (drgnx-hub--binary-version nil)
+         (p (make-process :name "drgnx-test-version" :command '("true") :noquery t :connection-type 'pipe
+                          :sentinel #'ignore))
+         (drgnx-hub--binary-reading p)
+         (ran 0))
+    (while (process-live-p p) (accept-process-output p 0.01))
+    (drgnx-hub--with-binary-version (lambda () (cl-incf ran)))
+    (should (= ran 0))
+    (drgnx-hub--version-read-ended p)
+    (should (= ran 1))))
+
 (ert-deftest drgnx-hub-client/a-current-hello-clears-the-restart-notice ()
   ;; the notice is a condition: a hub that comes back from the binary's own commit takes it away
   (drgnx-hub-client-test--with-fake ()
