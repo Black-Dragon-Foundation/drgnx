@@ -261,6 +261,17 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf | --tty [--fed
     [ "$rt" = podman ] && [ "${1:-}" != --ui ] && elpa="$elpa,z"
     args+=(-v "$elpa" -e DRGNX_MODAL_ELPA=/modal-elpa)
   fi
+  # a git worktree's `.git' is a file naming an absolute host path (the common git dir's worktrees/NAME): mount that
+  # dir read-only at the same path, or git in the container exits 128. Read-only is enough: the tests only read the
+  # repository (a test that commits does so in a repository of its own under a temporary directory)
+  if [ -f "$here/.git" ]; then
+    local gcommon; gcommon="$(git -C "$here" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+    if [ -d "$gcommon" ]; then
+      case "$gcommon" in *:*) echo "drgnx: the git dir must not contain ':' (it is mounted with -v): $gcommon" >&2; return 2 ;; esac
+      local gmount="$gcommon:$gcommon:ro"; [ "$rt" = podman ] && gmount="$gmount,z"
+      args+=(-v "$gmount")
+    fi
+  fi
   "$rt" run --rm ${args[@]+"${args[@]}"} -v "$mount" -w /src "$image" "${cmd[@]}"
 }
 
