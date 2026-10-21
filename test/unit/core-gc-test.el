@@ -48,15 +48,17 @@
 
 (ert-deftest drgnx-gc/a-failing-drgnx-init-still-sets-the-steady-threshold ()
   (require 'drgnx)
+  ;; on the virtual clock: the timers the steps before the failure start (the notice session file's, …) end with it
   (let ((gc-cons-threshold most-positive-fixnum))
-    (cl-letf (((symbol-function 'drgnx-guard-mode) #'ignore) ((symbol-function 'drgnx-hooks-install) #'ignore)
-              ((symbol-function 'drgnx-pkg-activate) #'ignore) ((symbol-function 'drgnx-pkg-guard-mode) #'ignore)
-              ((symbol-function 'drgnx--core-commands) (lambda () (error "Broken"))))
-      (unwind-protect
-          (progn (should-error (drgnx-init))
-                 (should (= gc-cons-threshold drgnx-gc-cons-threshold)))
-        (drgnx-gc-mode -1)
-        (drgnx-timer-cancel 'gc-idle)))))
+    (drgnx-test-with-clock (:allow-pending t)
+      (cl-letf (((symbol-function 'drgnx-guard-mode) #'ignore) ((symbol-function 'drgnx-hooks-install) #'ignore)
+                ((symbol-function 'drgnx-pkg-activate) #'ignore) ((symbol-function 'drgnx-pkg-guard-mode) #'ignore)
+                ((symbol-function 'drgnx--core-commands) (lambda () (error "Broken"))))
+        (unwind-protect
+            (progn (should-error (drgnx-init))
+                   (should (= gc-cons-threshold drgnx-gc-cons-threshold)))
+          (drgnx-gc-mode -1)
+          (drgnx-timer-cancel 'gc-idle))))))
 
 (ert-deftest drgnx-gc/the-users-own-threshold-is-kept ()
   ;; M8-5: a threshold the user set (no longer early-init's startup value) is left alone.
