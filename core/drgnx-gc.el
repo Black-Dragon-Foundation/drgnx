@@ -108,8 +108,6 @@ threshold only while it is early-init's startup value (a user's own is kept).  T
   "The settings of a long-lived batch Emacs (hub, workers): a modest threshold, a low percentage."
   (setq gc-cons-threshold drgnx-gc-batch-threshold gc-cons-percentage 0.2))
 
-(defvar nidhogg-watchdog-gc-origin)
-
 (defun drgnx-gc-collect (origin)
   "Collect now on a caller's request, with `nidhogg-watchdog-gc-origin' bound to ORIGIN (e.g. `audit', the heap
 audit's own collection), so the census and the watchdog's GC row say why; `garbage-collect''s value."

@@ -16,8 +16,9 @@ Two things are counted apart:
 
 The census writes one line per collection: how long it paused, why it ran (`auto`, drgnx's `idle` collection, a
 `gap` a producer chose, the Heap Audit's own `audit`), whether it came while you were working or while Emacs was idle,
-the live heap by type, and the process's size. It is off by default; turn it on with its setting, or for this session
-with `M-x drgnx-gc-census-mode`. It only notes numbers during a collection and writes them when Emacs is idle, into one
+the live heap by type, and the process's size. It is off by default; `(:gc-census t)` in `speed.eld` (your config
+folder, [Config files](../reference/config.md)) turns it on at every start, `M-x drgnx-gc-census-mode` for this
+session. It only notes numbers during a collection and writes them when Emacs is idle, into one
 file per day in `watchdog/` in drgnx's state folder (`~/.local/state/drgnx/watchdog/YYYY-MM-DD.jsonl`; files older
 than 14 days are deleted). **Help → GC Census** sums up the days: collections per day, the longest, p50/p95/p99, the
 share by origin, and how much each 100 MB of live heap adds to a pause on this machine. Once the stall watchdog runs,

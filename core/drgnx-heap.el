@@ -27,6 +27,7 @@
 (require 'drgnx-paths)
 (require 'drgnx-file)
 (require 'drgnx-gc)
+(require 'drgnx-gc-census)
 (require 'drgnx-owner)
 (require 'drgnx-timer)
 
@@ -62,8 +63,6 @@ yet); SETTING is what enforces it; FIX is the doctor's fix line.  The values com
 \(buffer-name REGEXP LABEL) or (buffer-mode MODE LABEL); the first that matches gives a retainer its label.")
 
 (defvar drgnx-heap--last nil "The last snapshot this Emacs took, or nil.")
-
-(defvar nidhogg-watchdog-gc-origin)
 
 ;;;; Owners
 
@@ -311,8 +310,8 @@ are opened one level: OBJECT itself, or one that a list (a hook) or a vector OBJ
     (sort sums (lambda (a b) (> (cdr a) (cdr b))))))
 
 (defun drgnx-heap-dir ()
-  "Where audits keep their snapshots: the GC census's log directory, watchdog/ in the state dir."
-  (expand-file-name "watchdog/" (drgnx-state-dir)))
+  "Where audits keep their snapshots: beside the GC census's day files (`drgnx-gc-census-directory')."
+  (drgnx-gc-census-directory))
 
 (defun drgnx-heap--json (x)
   "X, a snapshot or a part of it, as `json-serialize' takes it: a plist becomes an object with snake_case keys, any
