@@ -168,8 +168,9 @@ most one every `drgnx-hub-events-interval` (0.25 s) and 200 a time. The hub's se
 schedule a broadcast at once; its tick (2 s) catches what other processes wrote and the job events above, which go out
 within those 2 s. Event ids are never reused (`autoincrement`), so a pruned log never sends an id twice. A new hub
 starts after the last event there is; a client catching up asks `events/since`. In an editor, the `test` events with
-counts reach the status bar (`drgnx-statusbar-note-tests`, when it is loaded) through `drgnx-hub--note-tests`, which
-`drgnx-hub-connect` adds to `drgnx-hub-event-functions` and `drgnx-hub-disconnect` removes.
+counts reach the status bar (`drgnx-statusbar-note-tests`) through `drgnx-statusbar--hub-tests`, which
+`drgnx-statusbar-mode` adds to `drgnx-hub-event-functions` and removes when it is off; the hub client knows nothing of
+the status bar.
 
 ## Sessions across a restart
 
