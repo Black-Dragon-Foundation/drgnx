@@ -60,6 +60,7 @@
 (declare-function drgnx-wb-focus-panel "drgnx-area")
 (declare-function drgnx-wb-toggle-right-dock "drgnx-area")
 (declare-function drgnx-wb-show-unrouted "drgnx-rules")
+(declare-function drgnx-wb-place "drgnx-rules")
 (declare-function drgnx-explorer-focus "drgnx-explorer")
 (declare-function drgnx-buffers-setup "drgnx-buffers")
 (declare-function drgnx-buffers-focus "drgnx-buffers")
