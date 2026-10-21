@@ -1,7 +1,7 @@
 ;;; lint-echo-test.el --- lint: drgnx's own messages on automatic paths only fall -*- lexical-binding: t -*-
 ;; A `message' that is the direct reply to a command just run stays a message.  Anything else that drgnx says on its
 ;; own (a filter, sentinel, timer or hook) is a notice (docs/develop/core.md "Notices"), so the user sees it in the
-;; Notices list and, when it matters, once in the echo area.  This lint counts `(message "drgnx' in `core/' and `wb/'
+;; Notices list and, when it matters, once in the echo area.  This lint counts `(message "drgnx' in `core/', `wb/' and `modules/'
 ;; against `drgnx-lint-echo--counts'.  What is left there is one of: a command's reply, a line of a process that has
 ;; no notice model of its own (the hub, the sandbox relay and proxy, the MCP bridge, batch entry points), a last
 ;; resort for the notice model itself (the recorder could not record), or a fallback for code that runs before the
@@ -38,20 +38,39 @@
     ("core/drgnx-sandbox-relay.el" . 2)
     ("core/drgnx-search-mcp.el" . 1)
     ;; gryphn is dead: no work on or for it
-    ("core/drgnx-compat-gryphn.el" . 1))
+    ("core/drgnx-compat-gryphn.el" . 1)
+    ;; modules/: replies to a command just run
+    ("modules/tools/drgnx-prs.el" . 1)           ; "fetching pull request #N…" (Show Changes, a progress line)
+    ("modules/tools/drgnx-commit-message.el" . 4) ; Generate Commit Message's own answer: progress, no answer, kill ring
+    ("modules/tools/drgnx-browser.el" . 7)       ; Test Report / Show Browser: a command's refusals (NT-T21-1: the sentinel ones)
+    ("modules/tools/drgnx-cockpit-cards.el" . 8) ; card commands' errors (NT-T21-1: the callbacks among them)
+    ("modules/tools/drgnx-cockpit-graph.el" . 1)
+    ("modules/tools/drgnx-cockpit-edits.el" . 1)
+    ("modules/tools/drgnx-cockpit.el" . 1)
+    ("modules/ui/drgnx-statusbar.el" . 1)        ; Show Test Output: no output to show
+    ;; modules/: automatic paths still messages, waiting for their module's own source (NT-T21-1)
+    ("modules/editor/drgnx-clipboard.el" . 1)
+    ("modules/editor/drgnx-evil.el" . 1)
+    ("modules/lang/drgnx-markdown.el" . 1)
+    ("modules/tools/drgnx-layouts.el" . 2)
+    ("modules/tools/drgnx-replace.el" . 3)
+    ("modules/ui/drgnx-face.el" . 2)
+    ("modules/ui/drgnx-look.el" . 1)
+    ("modules/ui/drgnx-start.el" . 1))
   "File (relative to the checkout) → how many `(message \"drgnx' it has.  The count can only fall: lower it in the
 change that makes a site a notice.")
 
 (defun drgnx-lint-echo--actual ()
-  "The alist FILE → count, over `core/' and `wb/', for the files that have any."
+  "The alist FILE → count, over `core/', `wb/' and `modules/' (every group), for the files that have any."
   (let (rows)
-    (dolist (dir '("core" "wb"))
-      (dolist (f (directory-files (expand-file-name dir drgnx-dir) t "\\.el\\'"))
-        (with-temp-buffer
-          (insert-file-contents f)
-          (let ((n 0))
-            (while (re-search-forward "(message \"drgnx" nil t) (setq n (1+ n)))
-            (when (> n 0) (push (cons (concat dir "/" (file-name-nondirectory f)) n) rows))))))
+    (dolist (f (append (directory-files (expand-file-name "core" drgnx-dir) t "\\.el\\'")
+                       (directory-files (expand-file-name "wb" drgnx-dir) t "\\.el\\'")
+                       (directory-files-recursively (expand-file-name "modules" drgnx-dir) "\\.el\\'")))
+      (with-temp-buffer
+        (insert-file-contents f)
+        (let ((n 0))
+          (while (re-search-forward "(message \"drgnx" nil t) (setq n (1+ n)))
+          (when (> n 0) (push (cons (file-relative-name f drgnx-dir) n) rows)))))
     (sort rows (lambda (a b) (string< (car a) (car b))))))
 
 (ert-deftest drgnx-lint/echo-messages-only-fall ()
