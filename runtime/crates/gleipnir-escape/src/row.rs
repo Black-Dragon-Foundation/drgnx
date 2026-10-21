@@ -45,6 +45,8 @@ pub const PLACEHOLDERS: &[&str] = &[
 /// The listeners a row may name in `listeners_silent`.
 pub const LISTENERS: &[&str] = &[
     "hub",
+    "backend",
+    "session2",
     "emacs",
     "bus",
     "ssh-agent",
@@ -466,6 +468,13 @@ mod tests {
     fn parses_every_shipped_row() {
         let rows = load_dir(&rows_dir()).unwrap();
         assert!(rows.len() >= 2, "the shipped rows are missing");
+        // `rows/container/` holds what only a container shows (`--rows rows/container`, never on the VM).
+        let inside = load_dir(&rows_dir().join("container")).unwrap();
+        assert!(!inside.is_empty(), "the container rows are missing");
+        let mut names: BTreeSet<&str> = rows.iter().map(|r| r.row.as_str()).collect();
+        for r in &inside {
+            assert!(names.insert(&r.row), "{} appears twice", r.row);
+        }
     }
 
     #[test]

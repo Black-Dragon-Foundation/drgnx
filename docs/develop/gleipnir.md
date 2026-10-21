@@ -858,7 +858,8 @@ gleipnir's `test-hooks`). It has two binaries and a directory of rows:
 - `gleipnir-probe` tries one channel per probe from inside the sandbox;
 - `gleipnir-escape` runs each row: it builds a fixture, runs `ratatoskr sandbox run` with the probe as the program,
   and compares what the probe saw with what the row expects;
-- `rows/{any,linux,macos}/*.jsonl` are the rows, as data.
+- `rows/{any,linux,macos}/*.jsonl` are the rows, as data; `rows/container/` holds the rows that only hold inside a
+  container (`check-in-a-container`), which only the container run passes (`--rows rows/container`).
 
 Build both with `cargo build -p gleipnir-escape`, and `ratatoskr` with `--features test-hooks`. The probe uses `std`
 and `libc` only and needs glibc 2.39 at most, so a binary built in the Fedora 45 dev container runs on the Fedora 44
@@ -882,7 +883,7 @@ size.
 | Group | Probes |
 |---|---|
 | files | `read PATH` (size), `write PATH` (opens for writing, writes nothing), `create PATH`, `list DIR` (names, sorted), `stat PATH`, `rename A B`, `link A B` (hard link), `clone A B` (macOS `clonefile`, a directory too; elsewhere blocked `EOPNOTSUPP`), `mkdir PATH`, `unlink PATH`, `swap A B` (exchange two paths in one step: macOS `renamex_np(RENAME_SWAP)`, Linux `renameat2(RENAME_EXCHANGE)`) |
-| sockets | `connect-unix PATH`, `connect-abstract NAME` (Linux), `connect-tcp HOST:PORT`, `tfo HOST:PORT` (`sendto(MSG_FASTOPEN)`, Linux), `udp HOST:PORT` (sends, waits 500 ms for the echo; no echo is blocked with no errno), `unix-self PATH` (listens there, then connects; the detail says which step failed) |
+| sockets | `connect-unix PATH`, `connect-abstract NAME` (Linux), `connect-tcp HOST:PORT`, `tfo HOST:PORT` (`sendto(MSG_FASTOPEN)`, Linux), `udp HOST:PORT` (sends, waits 500 ms for the echo; no echo is blocked with no errno), `unix-self PATH` (listens there, then connects; the detail says which step failed), `bind-tcp HOST:PORT` (bind only), `socket DOMAIN TYPE [PROTO]` (Linux: `socket(2)` alone; DOMAIN `unix inet inet6 netlink packet vsock`, TYPE `stream dgram raw seqpacket`, PROTO a number or `tcp udp icmp icmpv6 sctp mptcp`) |
 | environment | `env-has NAME…`: reached when any is set, the detail names which (never a value) |
 | syscalls | `syscall NAME` for `unshare-user io-uring keyctl add-key vsock clone3 clone-newuser mount-missing tiocsti-own-pty tiocsti-high-own-pty ptrace-own-child x32-getpid i386-int80`. Each runs in a forked child, so a kill by the filter is a result: blocked, no errno, detail `killed by SIGSYS`. `x32-getpid` and `i386-int80` are x86_64 only (elsewhere ENOSYS) |
 | process | `status-field NAME` (from `/proc/self/status`), `fds` (the open descriptors below 1024, `0,1,2`), `proc-read PID FILE` (size), `spawn-sleep N` (a child that sleeps N seconds without exec and without the probe's pipes; the detail is its pid), `kill PID SIG` |
@@ -906,13 +907,13 @@ One JSON object per line; unknown keys are a parse error.
 | `setup` | steps: `fake-bwrap {version}`, `path-bwrap {name?}`, `swap-to-link {path, target}` (done while `ratatoskr` waits at `--pause-before-spawn`), `plant-link {path, target}`, `canary-fd {n}`, `start-sleep`, `make-dir {path}`, `make-file {path, text?}` (the last two, like `plant-link`, run in the control run's fixture too) |
 | `probes`, `expect` | one argument list per probe; one `{result, errno?: [names], detail?}` per probe. `errno` is a list so the layer that blocked is visible |
 | `control`, `control_expect` | see below |
-| `listeners_silent` | listeners that must have seen no connection: `hub emacs bus ssh-agent abstract tcp-lo tcp-nl udp-lo udp-nl upstream gateway` |
+| `listeners_silent` | listeners that must have seen no connection: `hub backend session2 emacs bus ssh-agent abstract tcp-lo tcp-nl udp-lo udp-nl upstream gateway` |
 | `result` | a subset of the result file `{refused, layers, exit}` (`NAME_contains` asks for a part of a string). Without it the run itself is asserted: not refused, exit 0, one line per probe |
 | `unsandboxed` | run the probes with no sandbox and judge `expect` on them: the probes are real |
 | `bwrap`, `landlock_omit`, `landlock_abi_cap` | `--bwrap`, `--landlock-omit`, `--landlock-abi-cap` |
 | `files_absent` | paths that must not exist after the run (a marker a refused run must not write) |
-| `proxy_events` | the proxy's events, exactly: `Denied host:port`, `Refused <Why> target` |
-| `after` | `{after_lines, kill: run\|group, signal?, gone?: {match, within_ms}}`: once N lines are read, kill the `sandbox run` process or the sandbox's process group, and require that no process whose command line contains `match` is left within the time |
+| `proxy_events` | the proxy's events, exactly (placeholders filled): `Denied host:port`, `Refused <Why> target` |
+| `after` | `{after_lines, kill: run\|group, signal?, gone?: {match, within_ms}}`: once N lines are read, kill the `sandbox run` process or the sandbox's process group, and require that no process whose command line contains `match` is left within the time. A killed `sandbox run` writes no result file, so `kill: run` judges the lines and `gone` alone |
 | `raw` | `{args, exit?, json?, stdout_contains?}`: run `ratatoskr` with these arguments and no probe (`sandbox check`) |
 
 **Placeholders** are a closed list; an undefined one fails the parse. Paths: `${HOME} ${RUNTIME} ${RUN} ${TASK}
@@ -947,7 +948,7 @@ reaches the real home, the user's sockets, D-Bus or a display.
 | Path | Holds |
 |---|---|
 | `home/` | `.ssh/id_canary`, `other-repo/secret`, `canary-dir/canary.txt`, each random text |
-| `run/` | listeners that count connections: `drgnx/hub-0000.sock`, `emacs/server`, `bus`, `ssh-agent.sock`; `drgnx/s/S1` (`${RUN}`) with `proxy.sock` (served by `gleipnir::net::proxy`, allowing `upstream.test:PORT`) and `gateway.sock` (an echo) |
+| `run/` | listeners that count connections: `drgnx/hub-0000.sock`, the backend's `drgnx/hub-0000.d/backend.sock`, `emacs/server`, `bus`, `ssh-agent.sock`; `drgnx/s/S1` (`${RUN}`) with `proxy.sock` (served by `gleipnir::net::proxy`, allowing `upstream.test:PORT`) and `gateway.sock` (an echo); another session's `drgnx/s/S2/hub.sock` (the layout of [hub.md](hub.md)) |
 | `data/` | `work.db` (a canary) |
 | `tasks/t1`, `tasks/t2`, `w/`, `t/` | `${TASK}`, `${TASK2}` (holds a canary), `${W}`, `${TMP}` |
 | `bin/` | a copy of the probe, bound read-only into the sandbox (the helper's own directory is closed, so the probe cannot run from beside `ratatoskr`) |
@@ -960,8 +961,83 @@ that prints `bubblewrap VERSION` for `--version` and writes `${MARKER}` for any 
 
 `any/probes-reach-without-sandbox` (and its `-non-loopback` and `-linux` companions) runs every fixture-facing probe
 with no sandbox and requires `reached`: the probes are real. `any/works` runs `sh -c 'echo ok'` and `git --version`
-under the full tier; it skips in a container. Task 15 adds the Linux rows and the channel table (row, what it
-proves).
+under the full tier; it skips in a container.
+
+### The Linux rows (Task 15)
+
+`rows/linux/` holds the probe-level escape rows: every channel that needs no agent, in both tiers. Full-tier rows
+need `bwrap` and skip inside a container; reduced-tier rows need `reduced` (Landlock ABI 9) and run in a container
+too when its kernel has it. Two places run them:
+
+- the container (`ctr.sh`, as its root): `--rows rows --rows rows/container`. The reduced rows, the bwrap floor and
+  PATH rows, `fail-closed-no-bwrap`, `helper-cannot-be-shadowed` and `check-in-a-container` run; the full-tier rows
+  skip with "inside a container";
+- the Fedora VM (`gleipnir-vm.sh run`): `--rows rows/linux --rows rows/any --require-all`. Every row runs; none may
+  skip.
+
+Each blocked expectation names the errno of the layer that answered, so a row also says which layer holds: ENOENT is
+the mount namespace (the path is not there), EACCES is Landlock, EPERM or ENOSYS is seccomp (EPERM is also Landlock's
+scoping of abstract sockets and signals), ECONNREFUSED and ENETUNREACH are the network namespace. Rows that prove one
+layer alone cap Landlock (`landlock_abi_cap: 3` takes its TCP rules away) or omit a path from it.
+
+| Row | What it proves |
+|---|---|
+| `k1-hub-socket-absent`, `k1-reduced` | the hub's socket is not there (full) or not connectable (reduced, Landlock ABI 9); the listener sees nothing |
+| `k1-backend-socket-absent`, `k1-backend-socket-reduced` | the Lisp backend's `hub-HASH.d/backend.sock` and another session's `s/S2/hub.sock` cannot be seen or connected to; `s/` lists only the session's own `S1` (full) or cannot be listed (reduced) |
+| `k2-work-db-absent`, `k2-reduced` | drgnx's data (`work.db`) can be neither read nor opened for writing |
+| `k5-user-sockets-absent`, `k5-reduced` | the Emacs server, the session bus and the ssh agent cannot be connected to |
+| `k6-isolated-refused` | the network namespace alone (Landlock's TCP rules capped away): the host's abstract socket, its loopback and its non-loopback listeners are unreachable |
+| `k6-isolated-landlock-tcp` | inside that namespace Landlock's TCP rule refuses every port but the relay's (EACCES) |
+| `k6-shared-tcp-the-gap` | `Net::Shared` reaches the host's TCP listeners: recorded, and no phase uses it for jobs |
+| `k6-shared-abstract-scoped`, `…-unscoped-at-abi-5` | with a shared network, Landlock's scoping (ABI 6) is what refuses the host's abstract socket |
+| `k8-canaries-absent`, `k8-reduced` | `~/.ssh`, another repository, another task folder and the home itself are invisible (full) or unreadable (reduced) |
+| `k10-env-clean`, `k10-env-clean-reduced` | none of the user's session variables, the API key or drgnx's dirs reach the program |
+| `reduced-below-abi-9-refused` | the reduced tier refuses ABI 8 before anything runs, so the user's sockets stay unreached |
+| `reduced-no-host-tmp-writes` | the reduced tier writes its own `tmp`, never the host's `/tmp` |
+| `reduced-signals-scoped` | the reduced tier cannot signal a process outside it (Landlock ABI 6) |
+| `reduced-group-killed`, `die-with-parent` | killing the sandbox's group (reduced) or `sandbox run` itself (full) ends a grandchild within 1.5 s |
+| `reduced-proc-environ-denied`, `pid-namespace-hides-others` | another process's `/proc/PID/environ` (the backend's secret lives there) is unreadable (reduced: EACCES) or absent (full: the pid namespace) |
+| `reduced-proc-cmdline-the-gap` | the accepted gap: the reduced tier reads other processes' command lines |
+| `reduced-tcp-only-to-the-relay`, `reduced-bind-refused` | the reduced tier connects over TCP only to its relay (and through it to the proxy), and binds no TCP port |
+| `reduced-udp-and-icmp-refused` | the reduced tier makes no UDP, ICMP or MPTCP socket (seccomp), so no DNS or datagram leaves past the proxy |
+| `reduced-no-pty` | the reduced tier opens no pty at all (Landlock: `/dev/ptmx` is not granted), so TIOCSTI never gets that far there |
+| `no-new-privs`, `no-new-privs-reduced` | `NoNewPrivs` 1 and seccomp mode 2 in the program |
+| `seccomp-denies`, `seccomp-denies-reduced` | each refused call against its unfiltered result on the same kernel |
+| `seccomp-kills-other-abis`, `…-reduced` | `int 0x80` and an x32 call kill the process (the prologue) |
+| `landlock-layer-2` | a write the mount namespace allows is still refused by Landlock when Landlock is not told about it |
+| `landlock-below-required-refused` | a spec's `landlock_min_abi` above the effective ABI refuses the run before the program |
+| `fds-closed`, `fds-closed-reduced` | an fd the caller leaked does not reach the program |
+| `tfo-blocked`, `udp-blocked` | TCP Fast Open and UDP leave the network namespace for neither the host's loopback nor its non-loopback address |
+| `relay-reaches-the-proxy` | the relay reaches the session's proxy: a listed target connects, another is a `Denied` |
+| `connect-wildcard-refused`, `connect-private-literal-refused` | `*` and private literals (the metadata address, loopback, `::1`, `0.0.0.0`) are `Refused`, never `Denied`, and reach nothing |
+| `own-tmp-unix-socket` | a server the program makes itself in its `/tmp` is reachable (Landlock's same-domain rule, ABI 9), as design §5.11 needs |
+| `bwrap-below-floor-run`, `bwrap-below-floor-check` | a root-owned bwrap 0.11.1 is refused for its version (the CVE named) and never run beyond `--version` |
+| `path-bwrap-never-run`, `…-check` | a `bwrap` first on `PATH` is never run; the root-owned one is |
+| `fail-closed-no-bwrap`, `…-check` | without a bwrap nothing runs; the check names the install command |
+| `bind-fd-link-swap` | a task folder swapped for a link after the check is still the folder that gets mounted (the fd), and the link's target is untouched |
+| `dest-link-stays-inside`, `…-plain`, `dest-link-inside-the-root-is-followed-there` | bwrap 0.12.0 refuses a bind whose dest runs through a link leading out of the new root (through `/oldroot`, or to a host path), and follows one that stays inside |
+| `helper-cannot-be-shadowed` | a bind over `/run/gleipnir` is refused by validation, so nothing can take the helper's place |
+| `check-in-a-container` (`rows/container/`) | `sandbox check` says why it cannot work in a container, with no fix |
+
+**Mutations.** Each was built on a scratch copy of the tree and run on the VM (the plan's table, plus three for the
+reduced tier's network); every one turned its row red, and no other row changed:
+
+| Mutation | Row that turned red |
+|---|---|
+| the runtime dir bound read-only into the sandbox | `k1-hub-socket-absent`, `k1-backend-socket-absent`, `k5-user-sockets-absent` (EACCES, not ENOENT) |
+| the Landlock floor check removed from `gate` | `landlock-below-required-refused`, `reduced-below-abi-9-refused` |
+| the reduced floor 9 → 6 (harness built with it too) | `reduced-below-abi-9-refused`; at cap 8 the bus is reached |
+| binds by path instead of by fd | `bind-fd-link-swap` (the canary dir was mounted) |
+| no bwrap floor | `bwrap-below-floor-run`, `bwrap-below-floor-check` (the fake ran) |
+| `--share-net` always, Landlock's TCP rule still on | `k6-isolated-refused`, `tfo-blocked`, `udp-blocked`; `k6-isolated-landlock-tcp` stays green: Landlock holds TCP, never UDP |
+| `io_uring_*` dropped from seccomp | `seccomp-denies`, and `seccomp::tests::installed_filter_denies` on the VM |
+| rule 11 dropped and the helper bound before the binds | `helper-cannot-be-shadowed` (the planted program ran as the helper) |
+| the reduced tier's TCP connect rule dropped | `reduced-tcp-only-to-the-relay` |
+| the reduced tier's seccomp socket rules dropped | `reduced-udp-and-icmp-refused` |
+
+Not covered by a row: the reduced tier's second Landlock layer (`forbid_tcp_bind`) on the relay's own port, which no
+placeholder names (the unit test `reduced_tcp_relay_ports_only_then_no_bind` holds it), and raw sockets, which an
+unprivileged control cannot open either (the BPF interpreter's table holds them).
 
 ### The macOS rows (Task 16)
 

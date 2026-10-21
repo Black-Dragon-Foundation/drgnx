@@ -264,6 +264,63 @@ fn silent_listeners_events_and_files() {
 }
 
 #[test]
+fn proxy_events_are_judged_with_placeholders_filled() {
+    let r = row(json!({
+        "row": "r", "probes": [["fds"]], "expect": [{"result": "reached"}],
+        "proxy_events": ["Refused Private ${TCP_LO}"],
+    }));
+    let mut d = ok_data(vec![line("fds", "reached", None, None)]);
+    d.events = vec!["Refused Private 127.0.0.1:4000".into()];
+    d.events_wanted = Some(vec!["Refused Private 127.0.0.1:4000".into()]);
+    judge_run(&r, &d, &canaries()).unwrap();
+    d.events_wanted = Some(vec!["Refused Private 127.0.0.1:4001".into()]);
+    assert!(
+        judge_run(&r, &d, &canaries())
+            .unwrap_err()
+            .contains("proxy events")
+    );
+}
+
+#[test]
+fn a_killed_run_needs_no_result_file_but_its_lines_still_count() {
+    let r = row(json!({
+        "row": "r", "probes": [["spawn-sleep", "61"], ["run", "sleep", "30"]],
+        "expect": [{"result": "reached"}],
+        "after": {"after_lines": 1, "kill": "run", "gone": {"match": "spawn-sleep 61", "within_ms": 1000}},
+    }));
+    let d = RunData {
+        lines: vec![line("spawn-sleep", "reached", None, Some("7"))],
+        ..RunData::default()
+    };
+    judge_run(&r, &d, &canaries()).unwrap();
+    let blocked = RunData {
+        lines: vec![line("spawn-sleep", "blocked", Some("EPERM"), None)],
+        ..RunData::default()
+    };
+    assert!(judge_run(&r, &blocked, &canaries()).is_err());
+    let gone = RunData {
+        gone_failure: Some("still there".into()),
+        ..d
+    };
+    assert!(judge_run(&r, &gone, &canaries()).is_err());
+    // Killing the sandbox's group leaves `sandbox run` alive: its result file is still required.
+    let g = row(json!({
+        "row": "g", "probes": [["spawn-sleep", "61"], ["run", "sleep", "30"]],
+        "expect": [{"result": "reached"}],
+        "after": {"after_lines": 1, "kill": "group"},
+    }));
+    let none = RunData {
+        lines: vec![line("spawn-sleep", "reached", None, Some("7"))],
+        ..RunData::default()
+    };
+    assert!(
+        judge_run(&g, &none, &canaries())
+            .unwrap_err()
+            .contains("no result file")
+    );
+}
+
+#[test]
 fn subset_rules() {
     let a = json!({"ok": false, "reason": "inside a container", "fix": null, "n": [1, 2]});
     subset(&a, &json!({"ok": false, "fix": null})).unwrap();

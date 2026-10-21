@@ -240,6 +240,51 @@ fn every_syscall_name_runs_to_a_result() {
     );
 }
 
+/// `bind-tcp` and `socket` (Task 15, for the reduced tier's network rows).
+#[cfg(target_os = "linux")]
+#[test]
+fn bind_and_socket_probes() {
+    let (l, code) = probe(&[
+        "bind-tcp",
+        "127.0.0.1:0",
+        "--and",
+        "socket",
+        "unix",
+        "stream",
+        "--and",
+        "socket",
+        "inet",
+        "stream",
+        "tcp",
+        "--and",
+        "socket",
+        "inet6",
+        "dgram",
+        "--and",
+        "socket",
+        "inet",
+        "stream",
+        "200",
+    ]);
+    assert_eq!(code, 0);
+    let got: Vec<&str> = l.iter().map(|l| l.result.as_str()).collect();
+    assert_eq!(got[..3], ["reached", "reached", "reached"], "{l:?}");
+    // IPv6 may be off in a container: reached, or a refusal by errno, never a bad line.
+    assert!(
+        l[3].result == "reached" || l[3].errno.is_some(),
+        "{:?}",
+        l[3]
+    );
+    assert_eq!(
+        (l[4].result.as_str(), l[4].errno.as_deref()),
+        ("blocked", Some("EPROTONOSUPPORT"))
+    );
+    for args in [&["socket", "nope", "stream"][..], &["socket", "inet"]] {
+        let out = Command::new(PROBE).args(args).output().unwrap();
+        assert_eq!(out.status.code(), Some(2), "{args:?}");
+    }
+}
+
 #[test]
 fn bad_usage_exits_2() {
     for args in [

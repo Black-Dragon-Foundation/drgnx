@@ -133,6 +133,10 @@ fn probe(name: &str, a: &[String]) -> Full {
         "tfo" => tfo(&need(name, a, 1)[0]),
         "udp" => udp(&need(name, a, 1)[0]),
         "unix-self" => unix_self(&need(name, a, 1)[0]),
+        "bind-tcp" => resolve(&need(name, a, 1)[0])
+            .and_then(|addr| std::net::TcpListener::bind(addr).map_err(os))
+            .map(|_| None),
+        "socket" => socket(need(name, a, 2)),
         "env-has" => env_has(need(name, a, 1)),
         "syscall" => syscall(&need(name, a, 1)[0]),
         "status-field" => status_field(&need(name, a, 1)[0]),
@@ -354,6 +358,53 @@ fn unix_self(path: &str) -> Res {
     drop(listener);
     let _ = std::fs::remove_file(path);
     r
+}
+
+/// `socket(DOMAIN, TYPE, PROTO)` and nothing more: the reduced tier's seccomp rules refuse by these three alone.
+/// DOMAIN is `unix inet inet6 netlink packet vsock`, TYPE `stream dgram raw seqpacket`, PROTO a number or `tcp udp
+/// icmp icmpv6 sctp mptcp` (default 0). Linux only (the reduced tier's rules; macOS has no such tier).
+#[cfg(not(target_os = "linux"))]
+fn socket(_: &[String]) -> Res {
+    Err(unsupported("the socket probe needs linux"))
+}
+
+#[cfg(target_os = "linux")]
+fn socket(a: &[String]) -> Res {
+    let domain = match a[0].as_str() {
+        "unix" => libc::AF_UNIX,
+        "inet" => libc::AF_INET,
+        "inet6" => libc::AF_INET6,
+        "netlink" => libc::AF_NETLINK,
+        "packet" => libc::AF_PACKET,
+        "vsock" => libc::AF_VSOCK,
+        other => usage(&format!("socket: unknown domain {other:?}")),
+    };
+    let ty = match a[1].as_str() {
+        "stream" => libc::SOCK_STREAM,
+        "dgram" => libc::SOCK_DGRAM,
+        "raw" => libc::SOCK_RAW,
+        "seqpacket" => libc::SOCK_SEQPACKET,
+        other => usage(&format!("socket: unknown type {other:?}")),
+    };
+    let proto = match a.get(2).map_or("0", String::as_str) {
+        "tcp" => libc::IPPROTO_TCP,
+        "udp" => libc::IPPROTO_UDP,
+        "icmp" => libc::IPPROTO_ICMP,
+        "icmpv6" => libc::IPPROTO_ICMPV6,
+        "sctp" => libc::IPPROTO_SCTP,
+        "mptcp" => libc::IPPROTO_MPTCP,
+        n => n
+            .parse()
+            .unwrap_or_else(|_| usage(&format!("socket: unknown protocol {n:?}"))),
+    };
+    // SAFETY: a plain socket(2); the fd is closed at once.
+    let fd = unsafe { libc::socket(domain, ty | libc::SOCK_CLOEXEC, proto) };
+    if fd < 0 {
+        return Err(last_errno());
+    }
+    // SAFETY: `fd` was just returned by socket(2).
+    unsafe { libc::close(fd) };
+    Ok(None)
 }
 
 /// Reached when any name is set; the detail names which (names only, never values).
