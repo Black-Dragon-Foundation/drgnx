@@ -6,7 +6,8 @@
 //!   JSON object, to `$XDG_STATE_HOME/drgnx/fake-backend.env`;
 //! - answers from the script in `DRGNX_FAKE_BACKEND_SCRIPT` (JSON): `{METHOD: ANSWER}`, ANSWER being an object
 //!   with `result` or `error` (sent with the request's id), a string (sent as the whole line, `$ID` replaced by the
-//!   id), `null` (never answered) or `{"exit": CODE}` (it exits at once).  Without one: `ping` `{pid}`, `subscribe`
+//!   id), `null` (never answered), `{"exit": CODE}` (it exits at once) or `{"from_file": PATH}` (the answer object
+//!   is read from PATH at each call, which a scenario rewrites meanwhile).  Without one: `ping` `{pid}`, `subscribe`
 //!   and `coord/notify` `true`, `status` `{pid, gateway_port: 0, registrations: 0}`, anything else an error;
 //! - when the script's `trigger` method (default `coord/notify`) is called, sends its subscribers the events of the
 //!   file `events` (a JSON array of `{event, data}`), then `flood` `card` events of `flood_size` bytes of title;
@@ -157,6 +158,17 @@ fn answer(script: &Map<String, Value>, method: &str) -> Answer {
         Some(Value::String(s)) => Answer::Raw(s.clone()),
         Some(Value::Object(o)) if o.contains_key("exit") => {
             Answer::Exit(o["exit"].as_i64().unwrap_or(1) as i32)
+        }
+        // `{"from_file": PATH}`: the answer object is read from PATH at each call (a scenario rewrites it meanwhile)
+        Some(Value::Object(o)) if o.contains_key("from_file") => {
+            let file = o["from_file"].as_str().unwrap_or_default();
+            match std::fs::read_to_string(file)
+                .ok()
+                .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            {
+                Some(v) => Answer::Line(v),
+                None => Answer::Never,
+            }
         }
         Some(v) => Answer::Line(v.clone()),
         None => Answer::Line(match method {

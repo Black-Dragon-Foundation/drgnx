@@ -113,6 +113,90 @@ impl Root {
     }
 }
 
+/// The variables of ROOT's paths (`$ROOT $SOCKET $CAP $LOCK …`): what a hub started there would use, whether or not
+/// one runs (a `root` step, or a detached hub that `ensure` started).
+pub fn root_vars(root: &Root) -> BTreeMap<&'static str, String> {
+    layout_vars(
+        root,
+        &Env {
+            vars: root.base_env(vec![]),
+            uid: unsafe { libc::geteuid() },
+        },
+    )
+}
+
+/// The variables of ROOT's paths under the environment ENV.
+fn layout_vars(root: &Root, env: &Env) -> BTreeMap<&'static str, String> {
+    let socket = paths::socket_path(env);
+    let s = |p: &Path| p.to_string_lossy().into_owned();
+    let data = s(&paths::data_dir(env));
+    let socket_dir = socket.parent().map(Path::to_path_buf).unwrap_or_default();
+    let stem = socket
+        .file_stem()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut lock = socket.clone().into_os_string();
+    lock.push(".lock");
+    BTreeMap::from([
+        ("ROOT", s(root.path())),
+        ("HOME", s(&root.path().join("home"))),
+        ("RUN", s(&root.path().join("run"))),
+        ("STATE", s(&root.path().join("state").join("drgnx"))),
+        ("DATA", data.trim_end_matches('/').to_string()),
+        ("CONFIG", s(&root.path().join("config"))),
+        ("SOCKET", s(&socket)),
+        ("SOCKET_DIR", s(&socket_dir)),
+        (
+            "BACKEND_SOCKET",
+            s(&socket_dir.join(format!("{stem}.d")).join("backend.sock")),
+        ),
+        ("CAP", s(&socket.with_extension("cap"))),
+        ("LOCK", s(Path::new(&lock))),
+    ])
+}
+
+/// Stop what `ensure` started in ROOT, which no step of a scenario owns: the process named in each `*.sock.lock`
+/// under it, when it still has the start time the lock file recorded (SIGTERM, then SIGKILL after 3 s).
+pub fn stop_detached(root: &Root) {
+    fn locks(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in rd.flatten() {
+            let p = e.path();
+            let Ok(t) = e.file_type() else { continue };
+            if t.is_dir() && depth > 0 {
+                locks(&p, depth - 1, out);
+            } else if t.is_file() && p.to_string_lossy().ends_with(".sock.lock") {
+                out.push(p);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    locks(root.path(), 4, &mut files);
+    for f in files {
+        let text = std::fs::read_to_string(&f).unwrap_or_default();
+        let mut it = text.split_whitespace();
+        let (Some(pid), Some(start)) = (it.next(), it.next()) else {
+            continue;
+        };
+        let Ok(pid) = pid.parse::<u32>() else {
+            continue;
+        };
+        if crate::exec::start_time(pid).as_deref() != Some(start) {
+            continue;
+        }
+        unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while unsafe { libc::kill(pid as i32, 0) } == 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        if unsafe { libc::kill(pid as i32, 0) } == 0 {
+            unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+        }
+    }
+}
+
 // ---------------------------------------------------------------- hubs
 
 pub struct Hub {
@@ -184,26 +268,8 @@ impl Hub {
             .unwrap_or_default()
     }
 
-    /// Where Ratatoskr's Lisp backend serves: `hub-HASH.d/backend.sock` beside the socket (the roots keep it short).
-    pub fn backend_socket(&self) -> PathBuf {
-        let stem = self
-            .socket
-            .file_stem()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        self.socket_dir()
-            .join(format!("{stem}.d"))
-            .join("backend.sock")
-    }
-
     pub fn cap(&self) -> PathBuf {
         self.socket.with_extension("cap")
-    }
-
-    pub fn lock(&self) -> PathBuf {
-        let mut s = self.socket.clone().into_os_string();
-        s.push(".lock");
-        PathBuf::from(s)
     }
 
     pub fn state_dir(&self) -> PathBuf {
@@ -212,21 +278,7 @@ impl Hub {
 
     /// The variables a step can use in its strings (`$PID(name)` and `$HARNESS_PID` are the executor's).
     pub fn vars(&self) -> BTreeMap<&'static str, String> {
-        let s = |p: &Path| p.to_string_lossy().into_owned();
-        let data = s(&paths::data_dir(&self.env));
-        BTreeMap::from([
-            ("ROOT", s(self.root.path())),
-            ("HOME", s(&self.root.path().join("home"))),
-            ("RUN", s(&self.root.path().join("run"))),
-            ("STATE", s(&self.state_dir())),
-            ("DATA", data.trim_end_matches('/').to_string()),
-            ("CONFIG", s(&self.root.path().join("config"))),
-            ("SOCKET", s(&self.socket)),
-            ("SOCKET_DIR", s(&self.socket_dir())),
-            ("BACKEND_SOCKET", s(&self.backend_socket())),
-            ("CAP", s(&self.cap())),
-            ("LOCK", s(&self.lock())),
-        ])
+        layout_vars(&self.root, &self.env)
     }
 
     /// Has the process ended?  (Reaps it.)
@@ -235,6 +287,24 @@ impl Hub {
             self.exit = self.child.try_wait().ok().flatten();
         }
         self.exit
+    }
+
+    /// The last lines of the hub's own log (`<state>/hub/log/hub-*.jsonl`), for a failure message.
+    pub fn jsonl_tail(&self) -> String {
+        let dir = self.state_dir().join("hub").join("log");
+        let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .collect();
+        files.sort();
+        let text = files
+            .last()
+            .and_then(|f| std::fs::read_to_string(f).ok())
+            .unwrap_or_default();
+        let lines: Vec<&str> = text.lines().collect();
+        lines[lines.len().saturating_sub(12)..].join("\n")
     }
 
     pub fn log_tail(&self) -> String {

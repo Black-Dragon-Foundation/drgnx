@@ -1,0 +1,9 @@
+{"scenario": "lifecycle/stop-with-a-stale-lock-signals-nothing", "requires": ["v1"], "doc": "A lock file names a live process (a `sleep`) but nobody holds the lock: `stop` probes the flock first, prints `not running`, exits 0 and sends no signal. Once with a wrong start time and once with the process's right one (the case that only the flock probe protects)."}
+{"do": "root"}
+{"do": "spawn", "capture": "P", "argv": ["sleep", "60"]}
+{"do": "write_file", "path": "$LOCK", "text": "$P 1\n"}
+{"do": "run", "args": ["stop"], "expect_code": 0, "expect_stdout": "not running"}
+{"do": "pid", "capture": "P", "alive": true, "stays_for_ms": 500}
+{"do": "write_file", "path": "$LOCK", "text": "$P $P_start\n"}
+{"do": "run", "args": ["stop"], "expect_code": 0, "expect_stdout": "not running"}
+{"do": "pid", "capture": "P", "alive": true, "stays_for_ms": 500}

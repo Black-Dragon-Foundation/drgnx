@@ -1,0 +1,10 @@
+{"scenario": "restart/the-restart-method-exits-75", "requires": ["v1"], "doc": "`restart` is a user-class method: a service connection is refused (`not-allowed`); a user connection gets `true`, and the hub stops its backend, removes its socket and exits 75 (what a supervisor restarts on)."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "s", "hub": "h", "as": "service"}
+{"do": "send", "conn": "s", "json": {"id": 1, "method": "restart"}}
+{"do": "expect", "conn": "s", "json": {"id": 1, "error": {"code": "not-allowed"}}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "restart"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect_exit", "hub": "h", "code": 75, "within_ms": 8000}
+{"do": "file", "path": "$SOCKET", "exists": false}

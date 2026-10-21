@@ -1,0 +1,9 @@
+{"scenario": "lifecycle/kill-9-then-ensure-restarts", "requires": ["v1"], "doc": "A hub killed with SIGKILL leaves its socket and its lock file behind (the kernel drops the flock). `ensure` finds nothing answering, starts a new hub (which removes the stale socket under the lock), and it answers."}
+{"do": "start", "hub": "h"}
+{"do": "kill", "hub": "h", "signal": "KILL"}
+{"do": "expect_exit", "hub": "h", "signal": "KILL"}
+{"do": "file", "path": "$SOCKET", "exists": true}
+{"do": "file", "path": "$LOCK", "exists": true}
+{"do": "run", "args": ["ensure"], "expect_code": 0, "expect_stdout": "$SOCKET"}
+{"do": "run", "args": ["status", "--json"], "expect_code": 0, "expect_stdout": {"running": true}}
+{"do": "run", "args": ["stop"], "expect_code": 0, "expect_stdout": "stopped Ratatoskr"}

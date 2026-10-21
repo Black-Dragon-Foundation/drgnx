@@ -1,12 +1,24 @@
-//! The command line (lexopt): `ratatoskr serve [--foreground] [--parent-pid PID] [--agent-socket SID[:JOB]]…`,
-//! `ratatoskr version [--json]` and `ratatoskr methods --json|--markdown`.  A line that does not parse exits 2
-//! ([`crate::Exit::Usage`]).
+//! The command line (lexopt): `ratatoskr serve [--foreground] [--parent-pid PID] [--supervisor none|self|launchd]`,
+//! `ensure`, `stop`, `status`, `doctor`, `restart`, `version [--json]` and `methods --json|--markdown`.  A line that
+//! does not parse exits 2 ([`crate::Exit::Usage`]).
 
 use std::ffi::OsString;
+use std::time::Duration;
 
-pub const USAGE: &str = "usage: ratatoskr serve [--foreground] [--parent-pid PID]\n\
+pub const USAGE: &str = "usage: ratatoskr serve [--foreground] [--parent-pid PID] [--supervisor none|self|launchd]\n\
+    \x20      ratatoskr ensure [--timeout SECS]\n\
+    \x20      ratatoskr stop [--timeout SECS]\n\
+    \x20      ratatoskr status [--json]\n\
+    \x20      ratatoskr doctor [--json]\n\
+    \x20      ratatoskr restart\n\
     \x20      ratatoskr version [--json]\n\
     \x20      ratatoskr methods --json|--markdown";
+
+/// How long `ensure` waits for the hub to answer `ping`.
+pub const ENSURE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long `stop` waits for the lock to be released (the hub stops its backend for up to 10 s first).
+pub const STOP_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
@@ -18,6 +30,32 @@ pub enum Command {
     Methods {
         markdown: bool,
     },
+    /// Ping; start a hub when nothing answers; wait for it.
+    Ensure {
+        timeout: Duration,
+    },
+    /// End the hub (a Lisp hub from before Ratatoskr too).
+    Stop {
+        timeout: Duration,
+    },
+    Status {
+        json: bool,
+    },
+    Doctor,
+    /// Ask the running hub to restart (the editor's Hub: Restart Now).
+    Restart,
+}
+
+/// What restarts a hub that exits 75 (and what `serve` maps its exits for).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Supervisor {
+    /// Nothing is said (a test, a unit systemd restarts on its own): 75 is just the exit code.
+    #[default]
+    None,
+    /// `ensure` detached this hub itself: nothing would restart it, so it re-executes itself on a restart.
+    SelfDetached,
+    /// launchd restarts on every non-zero exit: exits 1, 2 and 3 are mapped to 0 so it never loops on them.
+    Launchd,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -26,6 +64,9 @@ pub struct ServeArgs {
     pub foreground: bool,
     /// End when this process is gone (checked each second); the last `--parent-pid` counts.
     pub parent_pid: Option<u32>,
+    pub supervisor: Supervisor,
+    /// `--idle-tick-ms N` (test-hooks only): the restart-when-idle tick, 2 s otherwise.
+    pub idle_tick_ms: Option<u64>,
     /// `--agent-socket SID[:JOB]` (test-hooks only, and only with `--foreground`): the hello task serves them.
     pub agent_sockets: Vec<AgentSocket>,
 }
@@ -58,6 +99,26 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
                         }
                         a.parent_pid = Some(pid);
                     }
+                    Long("supervisor") => {
+                        a.supervisor = match p.value().map_err(e)?.string().map_err(e)?.as_str() {
+                            "none" => Supervisor::None,
+                            "self" => Supervisor::SelfDetached,
+                            "launchd" => Supervisor::Launchd,
+                            other => {
+                                return Err(format!(
+                                    "--supervisor takes none, self or launchd, not {other:?}"
+                                ));
+                            }
+                        };
+                    }
+                    #[cfg(feature = "test-hooks")]
+                    Long("idle-tick-ms") => {
+                        let ms: u64 = p.value().map_err(e)?.parse().map_err(e)?;
+                        if ms == 0 {
+                            return Err("--idle-tick-ms takes a number above 0".into());
+                        }
+                        a.idle_tick_ms = Some(ms);
+                    }
                     #[cfg(feature = "test-hooks")]
                     Long("agent-socket") => {
                         let v = p.value().map_err(e)?.string().map_err(e)?;
@@ -71,6 +132,51 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
             }
             Ok(Command::Serve(a))
         }
+        "ensure" | "stop" => {
+            let mut timeout = if command == "ensure" {
+                ENSURE_TIMEOUT
+            } else {
+                STOP_TIMEOUT
+            };
+            while let Some(arg) = p.next().map_err(e)? {
+                match arg {
+                    Long("timeout") => {
+                        let secs: u64 = p.value().map_err(e)?.parse().map_err(e)?;
+                        timeout = Duration::from_secs(secs);
+                    }
+                    other => return Err(other.unexpected().to_string()),
+                }
+            }
+            Ok(if command == "ensure" {
+                Command::Ensure { timeout }
+            } else {
+                Command::Stop { timeout }
+            })
+        }
+        "status" => {
+            let mut json = false;
+            while let Some(arg) = p.next().map_err(e)? {
+                match arg {
+                    Long("json") => json = true,
+                    other => return Err(other.unexpected().to_string()),
+                }
+            }
+            Ok(Command::Status { json })
+        }
+        // the report is JSON; --json is accepted for the plan's spelling
+        "doctor" => {
+            while let Some(arg) = p.next().map_err(e)? {
+                match arg {
+                    Long("json") => {}
+                    other => return Err(other.unexpected().to_string()),
+                }
+            }
+            Ok(Command::Doctor)
+        }
+        "restart" => match p.next().map_err(e)? {
+            None => Ok(Command::Restart),
+            Some(other) => Err(other.unexpected().to_string()),
+        },
         "version" => {
             let mut json = false;
             while let Some(arg) = p.next().map_err(e)? {
@@ -136,18 +242,53 @@ mod tests {
             Ok(Command::Serve(ServeArgs {
                 foreground: true,
                 parent_pid: Some(42),
-                agent_sockets: vec![],
+                ..ServeArgs::default()
             }))
         );
         // the last --parent-pid counts (a test can name its own parent after the harness's)
         assert_eq!(
             p(&["serve", "--parent-pid", "42", "--parent-pid", "43"]),
             Ok(Command::Serve(ServeArgs {
-                foreground: false,
                 parent_pid: Some(43),
-                agent_sockets: vec![],
+                ..ServeArgs::default()
             }))
         );
+        assert_eq!(
+            p(&["serve", "--supervisor", "launchd"]),
+            Ok(Command::Serve(ServeArgs {
+                supervisor: Supervisor::Launchd,
+                ..ServeArgs::default()
+            }))
+        );
+        assert_eq!(
+            p(&["serve", "--supervisor", "self"]),
+            Ok(Command::Serve(ServeArgs {
+                supervisor: Supervisor::SelfDetached,
+                ..ServeArgs::default()
+            }))
+        );
+        assert_eq!(
+            p(&["ensure"]),
+            Ok(Command::Ensure {
+                timeout: ENSURE_TIMEOUT
+            })
+        );
+        assert_eq!(
+            p(&["ensure", "--timeout", "9"]),
+            Ok(Command::Ensure {
+                timeout: Duration::from_secs(9)
+            })
+        );
+        assert_eq!(
+            p(&["stop"]),
+            Ok(Command::Stop {
+                timeout: STOP_TIMEOUT
+            })
+        );
+        assert_eq!(p(&["status"]), Ok(Command::Status { json: false }));
+        assert_eq!(p(&["status", "--json"]), Ok(Command::Status { json: true }));
+        assert_eq!(p(&["doctor", "--json"]), Ok(Command::Doctor));
+        assert_eq!(p(&["restart"]), Ok(Command::Restart));
         assert_eq!(p(&["version"]), Ok(Command::Version { json: false }));
         assert_eq!(
             p(&["version", "--json"]),
@@ -173,6 +314,13 @@ mod tests {
             &["serve", "--parent-pid", "x"],
             &["serve", "--parent-pid", "0"],
             &["serve", "extra"],
+            &["serve", "--supervisor"],
+            &["serve", "--supervisor", "systemd"],
+            &["ensure", "--timeout"],
+            &["ensure", "--timeout", "x"],
+            &["stop", "extra"],
+            &["status", "--yaml"],
+            &["restart", "now"],
             &["version", "--yaml"],
             &["methods"],
             &["methods", "--json", "--markdown"],
@@ -202,7 +350,6 @@ mod tests {
             ]),
             Ok(Command::Serve(ServeArgs {
                 foreground: true,
-                parent_pid: None,
                 agent_sockets: vec![
                     AgentSocket {
                         sid: "s1".into(),
@@ -213,8 +360,17 @@ mod tests {
                         job: None
                     },
                 ],
+                ..ServeArgs::default()
             }))
         );
+        assert_eq!(
+            p(&["serve", "--idle-tick-ms", "200"]),
+            Ok(Command::Serve(ServeArgs {
+                idle_tick_ms: Some(200),
+                ..ServeArgs::default()
+            }))
+        );
+        assert!(p(&["serve", "--idle-tick-ms", "0"]).is_err());
         assert!(
             p(&["serve", "--agent-socket", "s1"]).is_err(),
             "without --foreground"

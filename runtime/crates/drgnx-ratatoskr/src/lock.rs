@@ -135,6 +135,88 @@ pub fn acquire(path: &Path, procs: &impl Procs) -> Result<Lock, LockError> {
     })
 }
 
+/// What holds the lock at a path, seen from another process (`ensure`, `stop`).
+#[derive(Debug, PartialEq, Eq)]
+pub enum Holder {
+    /// Nothing: no file, a file nobody holds, or a stale Lisp lock directory.
+    Nobody,
+    /// A Ratatoskr holds the `flock`; the file says `"PID START_TIME"` (none where it does not read).
+    Ratatoskr {
+        pid: Option<u32>,
+        start: Option<u64>,
+    },
+    /// A Lisp hub's lock directory that [`judge_lisp_lock`] respects (its pid, when it reads).
+    Lisp { pid: Option<u32> },
+}
+
+/// The Lisp lock directory at PATH, as [`acquire`] would judge it: its pid and whether it is respected.  None when
+/// PATH is not a directory.
+pub fn lisp_dir(path: &Path, procs: &impl Procs) -> Option<(Option<u32>, LispLock)> {
+    let meta = std::fs::symlink_metadata(path)
+        .ok()
+        .filter(|m| m.is_dir())?;
+    let pid = read_pid(&path.join("pid"));
+    let age = meta
+        .modified()
+        .ok()
+        .and_then(|t| SystemTime::now().duration_since(t).ok())
+        .unwrap_or(Duration::ZERO);
+    Some((pid, judge_lisp_lock(pid, age, procs)))
+}
+
+/// Who holds the lock at PATH.  A Ratatoskr's file is probed with `flock(LOCK_EX|LOCK_NB)`: it succeeding means
+/// nobody holds it (released again at once), so a stale file naming a live pid is no holder at all.
+pub fn holder(path: &Path, procs: &impl Procs) -> io::Result<Holder> {
+    if let Some((pid, verdict)) = lisp_dir(path, procs) {
+        return Ok(match verdict {
+            LispLock::Respect => Holder::Lisp { pid },
+            LispLock::TakeOver => Holder::Nobody,
+        });
+    }
+    let mut file = match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+    {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Holder::Nobody),
+        Err(e) => return Err(e),
+    };
+    match rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
+        Ok(()) => return Ok(Holder::Nobody),
+        Err(rustix::io::Errno::WOULDBLOCK) => {}
+        Err(e) => return Err(e.into()),
+    }
+    let mut text = String::new();
+    let _ = (&mut file).take(64).read_to_string(&mut text);
+    let mut fields = text.split_whitespace();
+    let pid = fields
+        .next()
+        .and_then(|p| p.parse().ok())
+        .filter(|p| *p > 0);
+    let start = fields.next().and_then(|s| s.parse().ok());
+    Ok(Holder::Ratatoskr { pid, start })
+}
+
+/// The pid `stop` may signal for a held lock that names PID and START: only the process whose start time now is
+/// the recorded one (a pid reused since is another process).  CURRENT is that pid's start time now (none: gone).
+pub fn signal_target(
+    pid: Option<u32>,
+    start: Option<u64>,
+    current: impl Fn(u32) -> Option<u64>,
+) -> Result<u32, String> {
+    let (Some(pid), Some(start)) = (pid, start) else {
+        return Err("the lock is held but does not name a process".into());
+    };
+    match current(pid) {
+        Some(now) if now == start => Ok(pid),
+        Some(now) => Err(format!(
+            "the lock names pid {pid} started at {start}, but that pid started at {now} (another process): not signalling it"
+        )),
+        None => Err(format!("the lock names pid {pid}, which is gone")),
+    }
+}
+
 /// The pid in a Lisp lock directory's `pid` file (at most 32 bytes; anything but a number is none).
 fn read_pid(file: &Path) -> Option<u32> {
     let mut text = String::new();
@@ -270,6 +352,53 @@ mod tests {
         assert!(alive(1));
         // no child is spawned here: a fork in this process would hold the other test's lock until its exec
         assert!(!alive(0) && !alive(u32::MAX), "not pids");
+    }
+
+    #[test]
+    fn the_holder_is_probed_not_believed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hub-x.sock.lock");
+        assert_eq!(holder(&path, &Fake(vec![])).unwrap(), Holder::Nobody);
+        // a file naming a live pid that nobody holds: no holder
+        std::fs::write(&path, "100 7\n").unwrap();
+        assert_eq!(
+            holder(&path, &Fake(vec![(100, false)])).unwrap(),
+            Holder::Nobody
+        );
+        // held: the file's pid and start time
+        let held = acquire(&path, &Fake(vec![])).unwrap();
+        let me = std::process::id();
+        match holder(&path, &Fake(vec![])).unwrap() {
+            Holder::Ratatoskr {
+                pid: Some(p),
+                start: Some(_),
+            } => assert_eq!(p, me),
+            other => panic!("{other:?}"),
+        }
+        drop(held);
+        // the probe released what it took: the lock can be taken
+        drop(acquire(&path, &Fake(vec![])).unwrap());
+        std::fs::remove_file(&path).unwrap();
+        // a Lisp directory: respected while its hub lives, else nobody
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("pid"), "100").unwrap();
+        assert_eq!(
+            holder(&path, &Fake(vec![(100, true)])).unwrap(),
+            Holder::Lisp { pid: Some(100) }
+        );
+        assert_eq!(holder(&path, &Fake(vec![])).unwrap(), Holder::Nobody);
+    }
+
+    #[test]
+    fn only_the_recorded_process_is_a_signal_target() {
+        let same = |_: u32| Some(5);
+        assert_eq!(signal_target(Some(9), Some(5), same), Ok(9));
+        // a reused pid (another start time) and a gone one are refused
+        assert!(signal_target(Some(9), Some(4), same).is_err());
+        assert!(signal_target(Some(9), Some(5), |_| None).is_err());
+        // a lock that names nobody
+        assert!(signal_target(None, Some(5), same).is_err());
+        assert!(signal_target(Some(9), None, same).is_err());
     }
 
     #[test]

@@ -37,6 +37,9 @@ pub struct Runner<'a> {
     caps: Captures,
     perf: &'a mut Vec<(String, Vec<f64>)>,
     started: usize,
+    /// The root a `root` step made: later `run` and `start` steps with no hub use it, and what `ensure` starts there
+    /// is stopped with the scenario.
+    active_root: Option<Arc<Root>>,
 }
 
 type R<T = ()> = Result<T, String>;
@@ -70,6 +73,7 @@ pub fn run_scenario(cfg: &Config, s: &Scenario, perf: &mut Vec<(String, Vec<f64>
         caps: Captures::default(),
         perf,
         started: 0,
+        active_root: None,
     };
     for (i, step) in s.steps.iter().enumerate() {
         r.step(step)
@@ -83,6 +87,13 @@ impl Drop for Runner<'_> {
         self.conns.clear();
         for h in &mut self.hubs {
             h.terminate();
+        }
+        // hubs `ensure` started detached, in the roots of this scenario
+        for h in &self.hubs {
+            hub::stop_detached(&h.root);
+        }
+        if let Some(r) = &self.active_root {
+            hub::stop_detached(r);
         }
         for c in self.spawned.values_mut() {
             let _ = c.kill();
@@ -251,14 +262,10 @@ impl Runner<'_> {
     }
 
     fn vars_of(&self, hub: Option<usize>) -> BTreeMap<String, String> {
-        let mut m: BTreeMap<String, String> = hub
-            .and_then(|i| self.hubs.get(i))
-            .map(|h| {
-                h.vars()
-                    .into_iter()
-                    .map(|(k, v)| (k.to_string(), v))
-                    .collect()
-            })
+        let from_hub = hub.and_then(|i| self.hubs.get(i)).map(Hub::vars);
+        let mut m: BTreeMap<String, String> = from_hub
+            .or_else(|| self.active_root.as_deref().map(hub::root_vars))
+            .map(|v| v.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
             .unwrap_or_default();
         m.insert("HARNESS_PID".into(), std::process::id().to_string());
         m.insert(
@@ -383,7 +390,9 @@ impl Runner<'_> {
             .collect())
     }
 
-    fn bin(&self, step: &Step) -> R<PathBuf> {
+    /// The program a `start` or `run` step uses: the one under test, the Lisp hub, or an absolute path (`$ROOT` is
+    /// ROOT's: a copy that `install_bin` made there).
+    fn bin(&self, step: &Step, root: &Root) -> R<PathBuf> {
         match str_of(&step.obj, "bin").unwrap_or("under-test") {
             "under-test" => Ok(self.cfg.hub_bin.clone()),
             "lisp" => self
@@ -391,10 +400,56 @@ impl Runner<'_> {
                 .lisp_hub
                 .clone()
                 .ok_or_else(|| "bin \"lisp\" needs --lisp-hub".to_string()),
-            other => Err(format!(
-                "\"bin\" is \"under-test\" or \"lisp\", not {other:?}"
-            )),
+            other => {
+                let p = other.replace("$ROOT", &root.path().to_string_lossy());
+                if p.starts_with('/') {
+                    Ok(PathBuf::from(p))
+                } else {
+                    Err(format!(
+                        "\"bin\" is \"under-test\", \"lisp\" or an absolute path, not {other:?}"
+                    ))
+                }
+            }
         }
+    }
+
+    /// The root a step without a hub of its own works in: the `root` step's, else the last hub's.
+    fn current_root(&self, hub: Option<&str>) -> R<Option<Arc<Root>>> {
+        Ok(match hub {
+            Some(n) => Some(Arc::clone(&self.hubs[self.hub_index(Some(n))?].root)),
+            None => self
+                .active_root
+                .clone()
+                .or_else(|| self.hubs.last().map(|h| Arc::clone(&h.root))),
+        })
+    }
+
+    /// `$VAR`s and `$ROOT`-style paths of the current root, for the file steps.
+    fn path_of(&self, step: &Step, key: &str) -> R<PathBuf> {
+        let idx = self.hub_index(None).ok();
+        Ok(PathBuf::from(self.text(idx, step, key)?))
+    }
+
+    fn rename(&mut self, step: &Step) -> R {
+        let (from, to) = (self.path_of(step, "from")?, self.path_of(step, "to")?);
+        std::fs::rename(&from, &to)
+            .map_err(|e| format!("{} -> {}: {e}", from.display(), to.display()))
+    }
+
+    fn remove(&mut self, step: &Step) -> R {
+        let path = self.path_of(step, "path")?;
+        std::fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))
+    }
+
+    /// Copy the hub under test to `to` (mode 0755): a binary that a scenario can replace on disk.
+    fn install_bin(&mut self, step: &Step) -> R {
+        let to = self.path_of(step, "to")?;
+        if let Some(parent) = to.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
+        std::fs::copy(&self.cfg.hub_bin, &to).map_err(|e| format!("{}: {e}", to.display()))?;
+        std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| e.to_string())
     }
 
     fn pid_arg(&self, step: &Step) -> R<u32> {
@@ -441,6 +496,13 @@ impl Runner<'_> {
     fn step(&mut self, step: &Step) -> R {
         match step.verb.as_str() {
             "start" => self.start(step),
+            "root" => {
+                self.active_root = Some(Root::new()?);
+                Ok(())
+            }
+            "rename" => self.rename(step),
+            "remove" => self.remove(step),
+            "install_bin" => self.install_bin(step),
             "run" => self.run(step),
             "spawn" => self.spawn(step),
             "connect" => self.connect(step),
@@ -479,14 +541,15 @@ impl Runner<'_> {
 
     fn start(&mut self, step: &Step) -> R {
         let name = str_of(&step.obj, "hub").unwrap_or("hub").to_string();
-        let bin = self.bin(step)?;
         let same = str_of(&step.obj, "same_root_as")
             .map(|n| self.hub_index(Some(n)))
             .transpose()?;
-        let root = match same {
-            Some(i) => Arc::clone(&self.hubs[i].root),
-            None => Root::new()?,
+        let root = match (same, &self.active_root) {
+            (Some(i), _) => Arc::clone(&self.hubs[i].root),
+            (None, Some(r)) => Arc::clone(r),
+            (None, None) => Root::new()?,
         };
+        let bin = self.bin(step, &root)?;
         // variables that exist before the hub does: the root's own directories
         let r = root.path().to_string_lossy().into_owned();
         let pre: BTreeMap<&str, String> = BTreeMap::from([
@@ -565,76 +628,134 @@ impl Runner<'_> {
         ready
     }
 
-    fn run(&mut self, step: &Step) -> R {
-        let bin = self.bin(step)?;
-        let idx = match str_of(&step.obj, "hub") {
-            Some(n) => Some(self.hub_index(Some(n))?),
-            None => self.hub_index(None).ok(),
-        };
-        let root = match idx {
-            Some(i) => Arc::clone(&self.hubs[i].root),
-            None => Root::new()?,
-        };
-        let args = self.strings(idx, step, "args")?;
-        let env = root.base_env(self.env_pairs(idx, step)?);
-        self.started += 1;
-        let (out_path, err_path) = (
-            root.path().join(format!("run-{}.out", self.started)),
-            root.path().join(format!("run-{}.err", self.started)),
-        );
-        let mut child = Command::new(&bin)
-            .args(&args)
-            .env_clear()
-            .envs(&env)
-            .current_dir(root.path())
-            .stdin(Stdio::null())
-            .stdout(std::fs::File::create(&out_path).map_err(|e| e.to_string())?)
-            .stderr(std::fs::File::create(&err_path).map_err(|e| e.to_string())?)
-            .spawn()
-            .map_err(|e| format!("cannot run {}: {e}", bin.display()))?;
-        let deadline = Instant::now() + Duration::from_secs(30);
-        let status = loop {
-            if let Some(s) = child.try_wait().map_err(|e| e.to_string())? {
-                break s;
-            }
-            if Instant::now() > deadline {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!(
-                    "{} {} did not end within 30 s",
-                    bin.display(),
-                    args.join(" ")
-                ));
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        };
-        let stdout = std::fs::read_to_string(&out_path).unwrap_or_default();
-        let stderr = std::fs::read_to_string(&err_path).unwrap_or_default();
-        let code = status.code();
-        if let Some(name) = str_of(&step.obj, "capture") {
-            self.caps.0.insert(name.to_string(), json!({"stdout": stdout, "code": code, "json": serde_json::from_str::<Value>(&stdout).ok()}));
+    /// Run the program with ARGS in ROOT, COPIES at once, and wait for all (30 s): each one's exit code and output.
+    fn run_copies(
+        &mut self,
+        bin: &Path,
+        args: &[String],
+        env: &BTreeMap<String, String>,
+        root: &Root,
+        copies: u64,
+    ) -> R<Vec<(Option<i32>, String, String)>> {
+        let mut children = Vec::new();
+        for _ in 0..copies {
+            self.started += 1;
+            let (out_path, err_path) = (
+                root.path().join(format!("run-{}.out", self.started)),
+                root.path().join(format!("run-{}.err", self.started)),
+            );
+            let child = Command::new(bin)
+                .args(args)
+                .env_clear()
+                .envs(env)
+                .current_dir(root.path())
+                .stdin(Stdio::null())
+                .stdout(std::fs::File::create(&out_path).map_err(|e| e.to_string())?)
+                .stderr(std::fs::File::create(&err_path).map_err(|e| e.to_string())?)
+                .spawn()
+                .map_err(|e| format!("cannot run {}: {e}", bin.display()))?;
+            children.push((child, out_path, err_path));
         }
-        if let Some(want) = step.obj.get("expect_code").and_then(Value::as_i64)
-            && code != Some(want as i32)
-        {
-            return Err(format!(
-                "exit code {code:?}, wanted {want}; stdout: {} stderr: {}",
-                stdout.trim(),
-                stderr.trim()
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut done = Vec::new();
+        for (mut child, out_path, err_path) in children {
+            let status = loop {
+                if let Some(s) = child.try_wait().map_err(|e| e.to_string())? {
+                    break s;
+                }
+                if Instant::now() > deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "{} {} did not end within 30 s",
+                        bin.display(),
+                        args.join(" ")
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            };
+            done.push((
+                status.code(),
+                std::fs::read_to_string(&out_path).unwrap_or_default(),
+                std::fs::read_to_string(&err_path).unwrap_or_default(),
             ));
         }
-        if let Some(want) = step.obj.get("expect_stdout") {
-            let want = self.subst(idx, want, false);
-            match &want {
-                Value::String(s) if !stdout.contains(s.as_str()) => {
-                    return Err(format!("stdout lacks {s:?}: {}", stdout.trim()));
+        Ok(done)
+    }
+
+    /// `run`: the program with `args` in the hub's root (else the `root` step's, else a new one), its environment
+    /// the root's (and `DRGNX_HUB_PARENT_PID` the harness's, so a hub it starts detached ends with the scenario).
+    /// `concurrent` N starts N copies at once; `retry_ms` tries again until `expect_code` and `expect_stdout` hold.
+    fn run(&mut self, step: &Step) -> R {
+        let hub_name = str_of(&step.obj, "hub");
+        let idx = match hub_name {
+            Some(n) => Some(self.hub_index(Some(n))?),
+            None if self.active_root.is_some() => None,
+            None => self.hub_index(None).ok(),
+        };
+        let root = match self.current_root(hub_name)? {
+            Some(r) => r,
+            None => Root::new()?,
+        };
+        let bin = self.bin(step, &root)?;
+        let args = self.strings(idx, step, "args")?;
+        let mut extra = vec![(
+            "DRGNX_HUB_PARENT_PID".to_string(),
+            std::process::id().to_string(),
+        )];
+        extra.extend(self.env_pairs(idx, step)?);
+        let env = root.base_env(extra);
+        let copies = step
+            .obj
+            .get("concurrent")
+            .and_then(Value::as_u64)
+            .unwrap_or(1);
+        let retry_until = Instant::now() + ms(&step.obj, "retry_ms", 0);
+        loop {
+            let outs = self.run_copies(&bin, &args, &env, &root, copies)?;
+            match self.check_run(idx, step, &outs) {
+                Ok(()) => return Ok(()),
+                Err(_) if Instant::now() < retry_until => {
+                    std::thread::sleep(Duration::from_millis(100))
                 }
-                Value::String(_) => {}
-                pattern => {
-                    let got: Value = serde_json::from_str(&stdout)
-                        .map_err(|_| format!("stdout is not JSON: {}", stdout.trim()))?;
-                    matcher::matches(pattern, &got, &mut self.caps)
-                        .map_err(|e| format!("stdout: {e}"))?;
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    /// The `run` step's captures and expectations against the outputs of its copies (each one must hold).
+    fn check_run(
+        &mut self,
+        idx: Option<usize>,
+        step: &Step,
+        outs: &[(Option<i32>, String, String)],
+    ) -> R {
+        for (code, stdout, stderr) in outs {
+            if let Some(name) = str_of(&step.obj, "capture") {
+                self.caps.0.insert(name.to_string(), json!({"stdout": stdout, "code": code, "json": serde_json::from_str::<Value>(stdout).ok()}));
+            }
+            if let Some(want) = step.obj.get("expect_code").and_then(Value::as_i64)
+                && *code != Some(want as i32)
+            {
+                return Err(format!(
+                    "exit code {code:?}, wanted {want}; stdout: {} stderr: {}",
+                    stdout.trim(),
+                    stderr.trim()
+                ));
+            }
+            if let Some(want) = step.obj.get("expect_stdout") {
+                let want = self.subst(idx, want, true);
+                match &want {
+                    Value::String(s) if !stdout.contains(s.as_str()) => {
+                        return Err(format!("stdout lacks {s:?}: {}", stdout.trim()));
+                    }
+                    Value::String(_) => {}
+                    pattern => {
+                        let got: Value = serde_json::from_str(stdout)
+                            .map_err(|_| format!("stdout is not JSON: {}", stdout.trim()))?;
+                        matcher::matches(pattern, &got, &mut self.caps)
+                            .map_err(|e| format!("stdout: {e}"))?;
+                    }
                 }
             }
         }
@@ -1112,8 +1233,9 @@ impl Runner<'_> {
                 }
                 if Instant::now() > deadline {
                     return Err(format!(
-                        "the hub is still running after {} ms",
-                        within.as_millis()
+                        "the hub is still running after {} ms; its log:\n{}",
+                        within.as_millis(),
+                        self.hubs[i].jsonl_tail()
                     ));
                 }
                 std::thread::sleep(Duration::from_millis(20));
@@ -1170,8 +1292,12 @@ impl Runner<'_> {
         if want && step.obj.contains_key("contains") {
             let text = self.text(idx, step, "contains")?;
             let deadline = Instant::now() + ms(&step.obj, "within_ms", 5000);
+            // "count" N: at least N times
+            let need = step.obj.get("count").and_then(Value::as_u64).unwrap_or(1) as usize;
             // a log is written a moment later: wait for it
-            while !std::fs::read_to_string(glob_file(&pattern)).is_ok_and(|t| t.contains(&text)) {
+            while !std::fs::read_to_string(glob_file(&pattern))
+                .is_ok_and(|t| t.matches(text.as_str()).count() >= need)
+            {
                 if Instant::now() > deadline {
                     return Err(format!("{pattern} does not contain {text:?}"));
                 }
@@ -1234,7 +1360,14 @@ impl Runner<'_> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
         }
-        std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))
+        std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+        if let Some(mode) = str_of(&step.obj, "mode") {
+            let mode = u32::from_str_radix(mode, 8)
+                .map_err(|_| format!("\"mode\" is octal, not {mode:?}"))?;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        Ok(())
     }
 
     fn sqlite(&mut self, step: &Step) -> R {
@@ -1323,6 +1456,16 @@ impl Runner<'_> {
                 ));
             }
             std::thread::sleep(Duration::from_millis(20));
+        }
+        // "stays_for_ms": and it is still there that long after (a signal sent a moment ago has landed by then)
+        if want && let Some(stay) = step.obj.get("stays_for_ms").and_then(Value::as_u64) {
+            let until = Instant::now() + Duration::from_millis(stay);
+            while Instant::now() < until {
+                if !self.process_alive(Some(&name), pid) {
+                    return Err(format!("pid {pid} ({name}) ended within {stay} ms"));
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
         }
         Ok(())
     }

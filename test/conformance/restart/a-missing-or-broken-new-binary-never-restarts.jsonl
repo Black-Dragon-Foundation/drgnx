@@ -1,0 +1,14 @@
+{"scenario": "restart/a-missing-or-broken-new-binary-never-restarts", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "The backend is idle, so a good new build would restart the hub at once. The binary's path is removed, then a half-written file takes its place (it prints an unfinished JSON object): neither makes the hub restart or send a notice for 6 s, and it still serves."}
+{"do": "root"}
+{"do": "install_bin", "to": "$ROOT/bin/ratatoskr"}
+{"do": "write_file", "path": "$ROOT/answers/agents.json", "text": "{\"result\": {\"sessions\": []}}"}
+{"do": "start", "hub": "h", "bin": "$ROOT/bin/ratatoskr", "args": ["--idle-tick-ms", "200"], "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"agents/list\": {\"from_file\": \"$ROOT/answers/agents.json\"}, \"job/status\": {\"result\": {\"jobs\": []}}}"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": true}}
+{"do": "remove", "path": "$ROOT/bin/ratatoskr"}
+{"do": "expect_silent", "conn": "c", "for_ms": 3000}
+{"do": "write_file", "path": "$ROOT/bin/ratatoskr", "text": "#!/bin/sh\necho '{\"commit\": '\n", "mode": "755"}
+{"do": "expect_silent", "conn": "c", "for_ms": 3000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "ping"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"pid": "$PID(h)"}}}

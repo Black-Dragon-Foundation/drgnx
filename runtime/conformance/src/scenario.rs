@@ -2,8 +2,12 @@
 
 use serde_json::{Map, Value};
 
-pub const VERBS: [&str; 21] = [
+pub const VERBS: [&str; 25] = [
     "start",
+    "root",
+    "rename",
+    "remove",
+    "install_bin",
     "run",
     "spawn",
     "connect",
@@ -254,6 +258,10 @@ mod tests {
     const EVERY_VERB: &str = r#"
 {"scenario": "t/every", "requires": ["v0", "v1", "fake-backend", "lisp-backend", "sudo", "test-hooks", "linux", "macos", "perf"], "doc": "d"}
 {"do": "start", "hub": "h"}
+{"do": "root"}
+{"do": "rename", "from": "$ROOT/a", "to": "$ROOT/b"}
+{"do": "remove", "path": "$ROOT/b"}
+{"do": "install_bin", "to": "$ROOT/bin/x"}
 {"do": "run", "capture": "r", "args": ["status"]}
 {"do": "spawn", "capture": "s", "argv": ["sleep", "60"]}
 {"do": "connect", "conn": "c", "hub": "h", "socket": "main", "as": "user"}

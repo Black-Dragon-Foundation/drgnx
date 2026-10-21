@@ -1,6 +1,11 @@
 //! Ratatoskr, drgnx's agent runtime: the hub protocol's server (docs/develop/hub.md, docs/develop/runtime.md).
 //!
-//! - [`cli`]: the command line (`serve`, `version`, `methods`) and the exit codes.
+//! - [`cli`]: the command line (`serve`, `ensure`, `stop`, `status`, `doctor`, `restart`, `version`, `methods`) and
+//!   the exit codes.
+//! - [`supervise`]: `ensure` (a transient systemd unit, launchd or a detached process) and `stop`.
+//! - [`client`]: the blocking client those commands use (a raw ping, a proven user connection).
+//! - [`idle`]: restart-when-idle: the binary on disk changed, restart between turns.
+//! - [`doctor`]: `status`, `doctor --json` and `restart`.
 //! - [`lock`]: one hub per data dir (an exclusive `flock`; a Lisp hub's lock directory respected).
 //! - [`server`]: the start order, the accept loops, signals, the parent watch, the schema tick and the stop.
 //! - [`conn`]: one connection: the peer-uid check, the challenge, lines, the writer queue that drops a stopped reader.
@@ -18,11 +23,14 @@
 
 pub mod backend;
 pub mod cli;
+pub mod client;
 pub mod conn;
 pub mod dispatch;
+pub mod doctor;
 pub mod forward;
 pub mod front;
 pub mod hello;
+pub mod idle;
 pub mod lock;
 pub mod log;
 pub mod relay;
@@ -30,6 +38,7 @@ pub mod runtime_db;
 pub mod server;
 pub mod shape;
 pub mod store;
+pub mod supervise;
 pub mod version;
 
 /// How the process ends (design 3.2): supervisors restart on 75 and never on 1, 2 or 3.
