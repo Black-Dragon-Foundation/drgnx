@@ -883,12 +883,15 @@ outside, as S."
 (declare-function drgnx-hub-call "drgnx-hub-client")
 
 (defun drgnx-agents--remote (s method params)
-  "Ask the hub to do METHOD (with PARAMS) on mirror S's session; asynchronous, never waits."
+  "Ask the hub to do METHOD (with PARAMS) on mirror S's session; asynchronous, never waits.  An error is the reply to
+the command that asked (stop, answer, send): said in the echo area each time."
   (require 'drgnx-hub-client)
   (drgnx-hub-call method (append (list :id (drgnx-agent-session-remote s)) params)
                   (lambda (_r err)
                     (when err
-                      (drgnx-notify 'agents 'warn (format "agent %s: %s" (drgnx-agent-session-name s) err))))))
+                      (let ((text (format "agent %s: %s" (drgnx-agent-session-name s) err)))
+                        (drgnx-notice-clear 'agents text)
+                        (drgnx-notify 'agents 'warn text :id text :echo t))))))
 
 (defun drgnx-agents--new (profile cwd &optional task job)
   (let* ((base (format "%s · %s" profile (file-name-nondirectory (directory-file-name (expand-file-name cwd)))))

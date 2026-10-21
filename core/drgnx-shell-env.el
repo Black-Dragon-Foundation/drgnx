@@ -16,6 +16,7 @@
 
 (declare-function drgnx-command-define "drgnx-registry")
 (declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
+(declare-function drgnx-notice-clear "drgnx-notice" (source &optional id))
 (declare-function drgnx-ai-providers "drgnx-ai")
 (declare-function drgnx-hub-running-p "drgnx-hub-client")
 (declare-function drgnx-hub-call "drgnx-hub-client")
@@ -96,10 +97,13 @@ and `exec-path' follows; other names are replaced.  The names that changed."
       (setq exec-path (append (parse-colon-path (getenv "PATH")) (list exec-directory))))
     (nreverse changed)))
 
-(defun drgnx-shell-env--fail (why)
-  "Say, in one line, that the shell's environment was not read, and WHY (never its output)."
+(defun drgnx-shell-env--fail (why &optional echo)
+  "Say, in one line, that the shell's environment was not read, and WHY (never its output).  ECHO: it is the reply
+to a command (Reload Environment), said in the echo area each time."
   (require 'drgnx-notice)
-  (drgnx-notify 'config 'warn (format "your login shell's environment was not read (%s)" why) :id 'shell-env))
+  (when echo (drgnx-notice-clear 'config 'shell-env))
+  (drgnx-notify 'config 'warn (format "your login shell's environment was not read (%s)" why) :id 'shell-env
+                :echo (and echo t)))
 
 (defun drgnx-shell-env--skip-reason ()
   "Why the shell's environment is not read in this Emacs, or nil."
@@ -123,11 +127,11 @@ that changed."
   (condition-case err
       (let ((alist (and (not why) (drgnx-shell-env-parse output (drgnx-shell-env--names)))))
         (if (not alist)
-            (drgnx-shell-env--fail (or why "it printed no environment"))
+            (drgnx-shell-env--fail (or why "it printed no environment") callback)
           (let ((changed (drgnx-shell-env-apply alist)))
             (when (member "PATH" changed) (drgnx-shell-env--tell-hub alist))
             (when callback (funcall callback changed)))))
-    (error (drgnx-shell-env--fail (error-message-string err)))))
+    (error (drgnx-shell-env--fail (error-message-string err) callback))))
 
 (defun drgnx-shell-env--timed-out (p)
   "The deadline of the shell process P (`drgnx-shell-env-start'): say why, and end it (its sentinel says so)."
@@ -140,7 +144,7 @@ that changed."
 it, without waiting: the process, or nil when skipped (a batch Emacs, Windows, DRGNX_NO_SHELL_ENV set) or it could
 not start.  The shell's input is closed at once and it is stopped after `drgnx-shell-env-timeout'; it never asks
 anything.  When PATH changed and a hub runs, the hub gets it too.  CALLBACK gets the names that changed; a failure is
-one line in *Messages*."
+a notice, said in the echo area when there is a CALLBACK (a command waits for its reply)."
   (unless (drgnx-shell-env--skip-reason)
     (condition-case err
         (let* ((shell (or (getenv "SHELL") shell-file-name))
@@ -174,7 +178,7 @@ one line in *Messages*."
          (message (if changed "drgnx: from your login shell: %s" "drgnx: nothing changed: this Emacs has your login shell's %s")
                   (string-join (or changed (drgnx-shell-env--names)) ", "))))
       (message "drgnx: reading your login shell's environment…")
-    (message "drgnx: your login shell's environment is not read here (%s)" (or (drgnx-shell-env--skip-reason) "see *Messages*"))))
+    (message "drgnx: your login shell's environment is not read here (%s)" (or (drgnx-shell-env--skip-reason) "see Notices"))))
 
 (defun drgnx-shell-env-register-commands ()
   "Shell: Reload Environment, in the registry."

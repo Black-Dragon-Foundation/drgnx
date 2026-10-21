@@ -118,6 +118,10 @@
         (should-not (seq-some (lambda (m) (string-prefix-p "drgnx: fetching pull request #5 failed" m)) messages))
         (should (seq-some (lambda (n) (string-search "could not read Username" (plist-get n :text)))
                           (drgnx-notices :source 'prs)))
+        ;; the reply to Show Changes is said in the echo area
+        (should (eq (plist-get (seq-find (lambda (n) (eq (plist-get n :id) 'fetch-failed)) (drgnx-notices :source 'prs))
+                               :echo)
+                    t))
         (should-not (buffer-live-p err))))))
 
 (ert-deftest drgnx-prs/a-fetch-failure-is-a-condition-and-the-placeholder-says-why ()
