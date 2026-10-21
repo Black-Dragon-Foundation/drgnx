@@ -19,8 +19,8 @@ key out, so a missing key and a nil are the same. Three facts that used to be ma
 
 **The migration** (`drgnx-work-db--migrate-6`, one `begin immediate` transaction: all or nothing) rebuilds the five
 tables, keeping ids, `sqlite_sequence` and indexes. Each old `data` is read with `read-eval` off and encoded with its
-record schema; a row that does not read (cut short, `#<buffer>`) or that no schema covers (a symbol in a key outside
-the enums) gets NULL, is counted in `meta` `migrate-6-dropped` and is said once in one message. It is safe to run
+record schema; a row that does not read (cut short, `#<buffer>`), that no schema covers (a symbol in a key outside
+the enums) or that anything else fails on (any error while it is read or encoded is that row's alone) gets NULL, is counted in `meta` `migrate-6-dropped` and is said once in one message. It is safe to run
 twice: once the tables have their new columns it does nothing. Before the transaction a pre-6 file is copied with
 `VACUUM INTO` to `work.db.schema5` (only when that file does not exist yet). An older drgnx refuses the migrated
 file ("a newer schema"). **To go back by hand:** stop the hub, then `mv work.db.schema5 work.db` and remove

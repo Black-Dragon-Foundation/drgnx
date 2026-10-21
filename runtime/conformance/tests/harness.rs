@@ -2,6 +2,7 @@
 //! wrapper script) that answers `ping` and, with RTSK_SCRIPTED_V1=1, speaks the v1 challenge and `hello`.
 
 use hmac::{Hmac, KeyInit, Mac};
+use runstav::paths;
 use serde_json::{Value, json};
 use sha2::Sha256;
 use std::io::{BufRead, BufReader, Write};
@@ -9,10 +10,6 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-
-#[allow(dead_code)]
-#[path = "../src/paths.rs"]
-mod paths;
 
 const CONFORMANCE: &str = env!("CARGO_BIN_EXE_domr");
 const HUB_NONCE: &str = "00112233445566778899aabbccddeeff";

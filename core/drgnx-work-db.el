@@ -100,12 +100,13 @@ docs/develop/coordination.md says how to move the copy back by hand."
 
 (defun drgnx-work-db--6-convert(schema text)
   "TEXT, a printed plist, as (JSON . VALUE) for record SCHEMA; (nil) for NULL or nil; `bad' when it does not read
-\(`read-eval' off) or SCHEMA refuses it."
+\(`read-eval' off), SCHEMA refuses it, or anything else fails on it: any error is this row's alone (review S3: one
+that escaped would roll the whole migration back at every open)."
   (if (null text) '(nil)
     (condition-case nil
         (let ((value (let ((read-eval nil)) (car (read-from-string text)))))
           (cons (and value (drgnx-records-encode schema value)) value))
-      ((invalid-read-syntax end-of-file drgnx-records-invalid) 'bad))))
+      (error 'bad))))
 
 (defun drgnx-work-db--6-rebuild (db table ddl indexes schema &optional extra extra-fn)
   "Rebuild TABLE (created from DDL, with INDEXES) with its `data' converted to JSON for SCHEMA.

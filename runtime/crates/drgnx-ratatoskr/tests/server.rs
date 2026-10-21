@@ -356,6 +356,8 @@ fn the_stop_command_ends_a_hub_and_signals_nothing_for_a_stale_lock() {
     // a stale lock file naming a live process nobody holds: not running, and the process lives
     let mut sleeper = Command::new("sleep").arg("60").spawn().unwrap();
     std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
+    // private, as a hub makes it (stop refuses a directory open to others)
+    paths::private_dir(socket.parent().unwrap()).unwrap();
     std::fs::write(paths::lock_path(&socket), format!("{} 1\n", sleeper.id())).unwrap();
     let out = stop(&[]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
