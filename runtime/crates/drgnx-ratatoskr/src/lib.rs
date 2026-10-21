@@ -18,6 +18,7 @@
 //! - [`backend`]: the Lisp backend: its command, environment, record, connection and restarts.
 //! - [`forward`]: what goes to the backend (re-encoded typed params with the caller) and what comes back (checked).
 //! - [`relay`]: the backend's events, checked against the registry, to the front's subscribers.
+//! - [`sandbox`]: Gleipnir as Ratatoskr uses it: the context of closed paths, the helper, the spawn, `sandbox run`.
 //! - [`shape`]: what a caller of each class may ask and see of a forwarded method.
 //! - [`version`]: what `version --json` says.
 
@@ -35,6 +36,7 @@ pub mod lock;
 pub mod log;
 pub mod relay;
 pub mod runtime_db;
+pub mod sandbox;
 pub mod server;
 pub mod shape;
 pub mod store;

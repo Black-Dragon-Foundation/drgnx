@@ -40,6 +40,12 @@ fn main() -> ExitCode {
         Command::SandboxInner { args } => {
             return code(gleipnir::inner::inner_main(args.into_iter()));
         }
+        // The relay builds its own single-threaded runtime; it refuses to start under another parent than its
+        // `--parent-pid`.
+        Command::Relay { args } => return code(gleipnir::net::relay::main(args.into_iter())),
+        // Test builds only: one command under the sandbox, judged by its --result file.
+        #[cfg(feature = "test-hooks")]
+        Command::SandboxRun(args) => return code(drgnx_ratatoskr::sandbox::run(args)),
         Command::Serve(args) => {
             let supervisor = args.supervisor;
             let runtime = match tokio::runtime::Builder::new_multi_thread()

@@ -33,7 +33,7 @@ pub const USR_MERGED: &[&str] = &["bin", "lib", "lib64", "sbin"];
 
 /// How the helper (the `ratatoskr` binary) is started inside: `source` is its path outside, bound read-only at
 /// [`HELPER_INSIDE`] and run as `HELPER_INSIDE <inner_args> --spec-fd 3 -- <command>`. `relay_args` are what the
-/// inner spec's relay runs (Task 13); the argv does not use them.
+/// inner spec's relay runs (`Sandbox::prepare`); the argv does not use them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InnerCommand {
     pub source: PathBuf,

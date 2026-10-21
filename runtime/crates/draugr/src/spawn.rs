@@ -20,7 +20,9 @@ pub const STDERR_TAIL_CHARS: usize = 8000;
 
 /// What to start. `env` is the child's whole environment (build it with [`crate::env::build`]); `cwd` `None` keeps
 /// the hub's. With `stdin_null` the child's stdin is `/dev/null`, otherwise a pipe ([`Child::take_stdin`]).
-/// `pass_fds` are the descriptors the child gets beside 0–2, each at its `target` number.
+/// `pass_fds` are the descriptors the child gets beside 0–2, each at its `target` number. With `new_session` the child
+/// leads a session of its own (`setsid` before exec) instead of only a process group: gleipnir's reduced-tier helper
+/// must call `setsid()` itself, which a process-group leader cannot. Either way the child's pid is its group's.
 ///
 /// [`spawn`] consumes the spec and drops its `PassFd`s once the child is started, so the parent keeps no copy of a
 /// pipe end it waits on for EOF. Never keep a clone of a spec that has `pass_fds`.
@@ -32,6 +34,7 @@ pub struct Spec {
     pub cwd: Option<PathBuf>,
     pub stdin_null: bool,
     pub pass_fds: Vec<PassFd>,
+    pub new_session: bool,
 }
 
 /// A descriptor the child gets at the number `target` (3 or more; each target once). The same `fd` may go to
@@ -57,7 +60,8 @@ pub struct Child {
     exited: bool,
 }
 
-/// Start `spec`'s program in a process group of its own, with exactly `spec.env` as its environment and SIGPIPE
+/// Start `spec`'s program in a process group of its own (a session of its own with `new_session`), with exactly
+/// `spec.env` as its environment and SIGPIPE
 /// ignored (std resets it to the default in a child; a child writing to a pipe whose reader left gets EPIPE
 /// instead of dying). No `PR_SET_PDEATHSIG`: it fires when the forking thread exits, and tokio's threads come and go.
 ///
@@ -127,17 +131,24 @@ fn start(spec: Spec) -> io::Result<Child> {
             Stdio::piped()
         })
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
+        .stderr(Stdio::piped());
+    // std's setpgid runs before the pre_exec closure, and a group leader cannot setsid: so one or the other.
+    let new_session = spec.new_session;
+    if !new_session {
+        cmd.process_group(0);
+    }
     if let Some(cwd) = &spec.cwd {
         cmd.current_dir(cwd);
     }
     let pairs = moved.pairs.clone();
-    // SAFETY: runs in the forked child before exec; signal(2), close_range(2), fcntl(2), getrlimit(2) and dup2(2)
-    // are async-signal-safe and nothing here allocates (`pairs` was built in the parent). std runs pre_exec
+    // SAFETY: runs in the forked child before exec; setsid(2), signal(2), close_range(2), fcntl(2), getrlimit(2) and
+    // dup2(2) are async-signal-safe and nothing here allocates (`pairs` was built in the parent). std runs pre_exec
     // closures after it has reset SIGPIPE to the default and set up 0–2.
     unsafe {
         cmd.pre_exec(move || {
+            if new_session && libc::setsid() < 0 {
+                return Err(io::Error::last_os_error());
+            }
             if libc::signal(libc::SIGPIPE, libc::SIG_IGN) == libc::SIG_ERR {
                 return Err(io::Error::last_os_error());
             }
@@ -342,6 +353,7 @@ mod tests {
             cwd: None,
             stdin_null,
             pass_fds: vec![],
+            new_session: false,
         }
     }
 
@@ -573,6 +585,29 @@ mod tests {
         }
         drop(child.take_stdin());
         assert!(child.wait().await.unwrap().unwrap().success());
+    }
+
+    /// `new_session`: the child leads a session of its own (so it can never take this process's terminal, and the
+    /// reduced-tier helper's own `setsid()` is not refused), and its pid is still its process group's, so the
+    /// group can be killed as one.
+    #[tokio::test]
+    async fn new_session_leads_a_session_and_its_group() {
+        for new_session in [false, true] {
+            let mut spec = sh("read x; exit 0", false);
+            spec.new_session = new_session;
+            let mut child = spawn_pinned(spec).await.unwrap();
+            let pid = child.id();
+            // SAFETY: plain queries about our own child.
+            let (pgid, sid) = unsafe { (libc::getpgid(pid), libc::getsid(pid)) };
+            drop(child.take_stdin());
+            assert!(child.wait().await.unwrap().unwrap().success());
+            assert_eq!(pgid, pid, "new_session {new_session}: leads its group");
+            if new_session {
+                assert_eq!(sid, pid, "leads a session of its own");
+            } else {
+                assert_eq!(sid, unsafe { libc::getsid(0) }, "stays in ours");
+            }
+        }
     }
 
     #[tokio::test]

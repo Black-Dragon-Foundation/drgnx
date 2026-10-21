@@ -1,9 +1,11 @@
 //! The command line (lexopt): `ratatoskr serve [--foreground] [--parent-pid PID] [--supervisor none|self|launchd]`,
-//! `ensure`, `stop`, `status`, `doctor`, `restart`, `version [--json]`, `methods --json|--markdown` and
-//! `sandbox-inner …` (the sandbox's inner helper, its arguments taken raw).  A line that does not parse exits 2
-//! ([`crate::Exit::Usage`]).
+//! `ensure`, `stop`, `status`, `doctor`, `restart`, `version [--json]`, `methods --json|--markdown`,
+//! `sandbox-inner …` and `relay …` (the sandbox's inner helper and its relay, their arguments taken raw), and with
+//! the `test-hooks` feature `sandbox run …`.  A line that does not parse exits 2 ([`crate::Exit::Usage`]).
 
 use std::ffi::OsString;
+#[cfg(feature = "test-hooks")]
+use std::path::PathBuf;
 use std::time::Duration;
 
 pub const USAGE: &str = "usage: ratatoskr serve [--foreground] [--parent-pid PID] [--supervisor none|self|launchd]\n\
@@ -14,7 +16,10 @@ pub const USAGE: &str = "usage: ratatoskr serve [--foreground] [--parent-pid PID
     \x20      ratatoskr restart\n\
     \x20      ratatoskr version [--json]\n\
     \x20      ratatoskr methods --json|--markdown\n\
-    \x20      ratatoskr sandbox-inner --spec-fd 3 -- CMD...   (the sandbox's inner helper; run by the sandbox only)";
+    \x20      ratatoskr sandbox-inner --spec-fd 3 -- CMD...   (the sandbox's inner helper; run by the sandbox only)\n\
+    \x20      ratatoskr relay --parent-pid PID [--ready-fd N] PORT=SOCKET...   (the sandbox's relay; run by the sandbox only)\n\
+    \x20      ratatoskr sandbox run --spec FILE --result FILE [--tier full|reduced] [--bwrap PATH]\n\
+    \x20          [--pause-before-spawn FIFO] [--landlock-omit PATH]... [--landlock-abi-cap N] -- CMD...   (test builds only)";
 
 /// How long `ensure` waits for the hub to answer `ping`.
 pub const ENSURE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -51,6 +56,30 @@ pub enum Command {
     SandboxInner {
         args: Vec<OsString>,
     },
+    /// The sandbox's relay (`gleipnir::net::relay::main`), its arguments untouched. It builds its own runtime.
+    Relay {
+        args: Vec<OsString>,
+    },
+    /// `sandbox run` (test-hooks only): one command under the sandbox, for the escape rows.
+    #[cfg(feature = "test-hooks")]
+    SandboxRun(SandboxRunArgs),
+}
+
+/// `sandbox run`'s arguments (test-hooks only).
+#[cfg(feature = "test-hooks")]
+#[derive(Debug, PartialEq, Eq)]
+pub struct SandboxRunArgs {
+    /// The spec, as `gleipnir::Spec` JSON.
+    pub spec: PathBuf,
+    /// Where `{"refused", "layers", "exit"}` is written.
+    pub result: PathBuf,
+    pub tier: gleipnir::Tier,
+    pub bwrap: Option<PathBuf>,
+    /// Write `opened\n` here once the sources are opened, then wait for one line back.
+    pub pause_before_spawn: Option<PathBuf>,
+    pub landlock_omit: Vec<PathBuf>,
+    pub landlock_abi_cap: Option<u8>,
+    pub command: Vec<String>,
 }
 
 /// What restarts a hub that exits 75 (and what `serve` maps its exits for).
@@ -210,8 +239,80 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
         "sandbox-inner" => Ok(Command::SandboxInner {
             args: p.raw_args().map_err(e)?.collect(),
         }),
+        // The relay parses its own arguments too (`gleipnir::net::relay::main`).
+        "relay" => Ok(Command::Relay {
+            args: p.raw_args().map_err(e)?.collect(),
+        }),
+        "sandbox" => {
+            let sub = match p.next().map_err(e)? {
+                Some(Value(v)) => v.string().map_err(e)?,
+                Some(other) => return Err(other.unexpected().to_string()),
+                None => return Err("sandbox needs a subcommand".into()),
+            };
+            match sub.as_str() {
+                #[cfg(feature = "test-hooks")]
+                "run" => sandbox_run(&mut p).map(Command::SandboxRun),
+                // Without the test hooks there is no `sandbox run`: a release build cannot run a spec from a file.
+                #[cfg(not(feature = "test-hooks"))]
+                "run" => Err("sandbox run exists only in a test-hooks build".into()),
+                other => Err(format!("unknown sandbox subcommand {other:?}")),
+            }
+        }
         other => Err(format!("unknown command {other:?}")),
     }
+}
+
+/// `sandbox run`'s options, then the command: everything from the first argument that is not an option (after
+/// `--`) is the command's, untouched.
+#[cfg(feature = "test-hooks")]
+fn sandbox_run(p: &mut lexopt::Parser) -> Result<SandboxRunArgs, String> {
+    use lexopt::prelude::*;
+    let e = |e: lexopt::Error| e.to_string();
+    let (mut spec, mut result, mut tier) = (None, None, gleipnir::Tier::Full);
+    let (mut bwrap, mut pause, mut omit, mut cap) = (None, None, Vec::new(), None);
+    let mut command: Vec<OsString> = Vec::new();
+    while let Some(arg) = p.next().map_err(e)? {
+        match arg {
+            Long("spec") => spec = Some(PathBuf::from(p.value().map_err(e)?)),
+            Long("result") => result = Some(PathBuf::from(p.value().map_err(e)?)),
+            Long("tier") => {
+                tier = match p.value().map_err(e)?.string().map_err(e)?.as_str() {
+                    "full" => gleipnir::Tier::Full,
+                    "reduced" => gleipnir::Tier::Reduced,
+                    other => return Err(format!("--tier takes full or reduced, not {other:?}")),
+                }
+            }
+            Long("bwrap") => bwrap = Some(PathBuf::from(p.value().map_err(e)?)),
+            Long("pause-before-spawn") => pause = Some(PathBuf::from(p.value().map_err(e)?)),
+            Long("landlock-omit") => omit.push(PathBuf::from(p.value().map_err(e)?)),
+            Long("landlock-abi-cap") => cap = Some(p.value().map_err(e)?.parse().map_err(e)?),
+            Value(first) => {
+                command.push(first);
+                command.extend(p.raw_args().map_err(e)?);
+                break;
+            }
+            other => return Err(other.unexpected().to_string()),
+        }
+    }
+    let command = command
+        .into_iter()
+        .map(|a| {
+            a.into_string()
+                .map_err(|a| format!("the command is not UTF-8: {a:?}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(SandboxRunArgs {
+        spec: spec.ok_or("sandbox run needs --spec FILE")?,
+        result: result.ok_or("sandbox run needs --result FILE")?,
+        tier,
+        bwrap,
+        pause_before_spawn: pause,
+        landlock_omit: omit,
+        landlock_abi_cap: cap,
+        command: (!command.is_empty())
+            .then_some(command)
+            .ok_or("sandbox run needs a command after --")?,
+    })
 }
 
 /// `SID[:JOB]`, each a name of letters, digits, `-` and `_` (it becomes part of a socket's file name).
@@ -342,6 +443,112 @@ mod tests {
         );
     }
 
+    /// `relay` takes its arguments raw, like `sandbox-inner`: the relay parses its own.
+    #[test]
+    fn relay_parses_raw() {
+        let rest = [
+            "--ready-fd",
+            "3",
+            "3128=/run/drgnx/proxy.sock",
+            "--parent-pid",
+            "7",
+        ];
+        let mut all = vec!["relay"];
+        all.extend(rest);
+        assert_eq!(
+            p(&all),
+            Ok(Command::Relay {
+                args: rest.map(OsString::from).to_vec()
+            })
+        );
+    }
+
+    /// A release build has no `sandbox run`: a spec from a file never runs there.
+    #[cfg(not(feature = "test-hooks"))]
+    #[test]
+    fn sandbox_run_refused_without_test_hooks() {
+        let r = p(&[
+            "sandbox",
+            "run",
+            "--spec",
+            "/s",
+            "--result",
+            "/r",
+            "--",
+            "/bin/true",
+        ]);
+        assert!(r.unwrap_err().contains("test-hooks"));
+    }
+
+    #[cfg(feature = "test-hooks")]
+    #[test]
+    fn sandbox_run_parses() {
+        assert_eq!(
+            p(&[
+                "sandbox",
+                "run",
+                "--spec",
+                "/s.json",
+                "--result",
+                "/r.json",
+                "--tier",
+                "reduced",
+                "--bwrap",
+                "/b",
+                "--pause-before-spawn",
+                "/f",
+                "--landlock-omit",
+                "/a",
+                "--landlock-omit",
+                "/b",
+                "--landlock-abi-cap",
+                "8",
+                "--",
+                "/bin/sh",
+                "-c",
+                "echo --spec",
+            ]),
+            Ok(Command::SandboxRun(SandboxRunArgs {
+                spec: "/s.json".into(),
+                result: "/r.json".into(),
+                tier: gleipnir::Tier::Reduced,
+                bwrap: Some("/b".into()),
+                pause_before_spawn: Some("/f".into()),
+                landlock_omit: vec!["/a".into(), "/b".into()],
+                landlock_abi_cap: Some(8),
+                command: vec!["/bin/sh".into(), "-c".into(), "echo --spec".into()],
+            }))
+        );
+        let Ok(Command::SandboxRun(a)) =
+            p(&["sandbox", "run", "--spec", "s", "--result", "r", "--", "x"])
+        else {
+            panic!("parses");
+        };
+        assert_eq!(a.tier, gleipnir::Tier::Full, "the default tier");
+        for bad in [
+            &["sandbox", "run", "--result", "r", "--", "x"][..],
+            &["sandbox", "run", "--spec", "s", "--", "x"],
+            &["sandbox", "run", "--spec", "s", "--result", "r"],
+            &[
+                "sandbox", "run", "--spec", "s", "--result", "r", "--tier", "half", "--", "x",
+            ],
+            &[
+                "sandbox",
+                "run",
+                "--spec",
+                "s",
+                "--result",
+                "r",
+                "--landlock-abi-cap",
+                "x",
+                "--",
+                "x",
+            ],
+        ] {
+            assert!(p(bad).is_err(), "{bad:?} parsed");
+        }
+    }
+
     #[test]
     fn usage_errors() {
         for bad in [
@@ -363,6 +570,8 @@ mod tests {
             &["methods"],
             &["methods", "--json", "--markdown"],
             &["methods", "--yaml"],
+            &["sandbox"],
+            &["sandbox", "frobnicate"],
         ] {
             assert!(p(bad).is_err(), "{bad:?} parsed");
         }

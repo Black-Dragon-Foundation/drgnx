@@ -606,6 +606,7 @@ impl Backend {
             cwd: Some(self.home.clone()),
             stdin_null: true,
             pass_fds: Vec::new(),
+            new_session: false,
         };
         let mut child = match proc::spawn(spec).await {
             Ok(c) => c,

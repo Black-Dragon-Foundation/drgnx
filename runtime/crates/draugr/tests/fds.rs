@@ -30,6 +30,7 @@ async fn exec_failure_is_reported_when_targets_cover_low_numbers() {
                 target,
             })
             .collect(),
+        new_session: false,
     };
     let err = spawn(spec).await.err().expect("an exec failure");
     assert_eq!(err.kind(), io::ErrorKind::NotFound, "{err}");

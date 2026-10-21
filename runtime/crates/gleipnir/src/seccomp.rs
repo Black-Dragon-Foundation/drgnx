@@ -7,6 +7,7 @@
 //! The filter allows by default and denies a fixed list (docs/develop/gleipnir.md, "seccomp"). No spec can turn it
 //! off or change it.
 
+use crate::landlock::Tier;
 use std::fmt;
 
 /// An architecture the filter is compiled for.
@@ -90,24 +91,29 @@ pub fn native() -> Option<Arch> {
     }
 }
 
-/// A condition on one argument. Both compare the argument's **low 32 bits** only (a seccomp "Dword"): the kernel
-/// reads `ioctl`'s request and `socket`'s domain as 32-bit ints, so `TIOCSTI | 1 << 32` is TIOCSTI to the kernel and
-/// must be TIOCSTI to the filter too; `clone`'s `CLONE_NEW*` bits all sit in the low half, and legacy `clone`
-/// ignores the high half.
+/// A condition on one argument. Each compares the argument's **low 32 bits** only (a seccomp "Dword"): the kernel
+/// reads `ioctl`'s request and `socket`'s domain, type and protocol as 32-bit ints, so `TIOCSTI | 1 << 32` is TIOCSTI
+/// to the kernel and must be TIOCSTI to the filter too; `clone`'s `CLONE_NEW*` bits all sit in the low half, and
+/// legacy `clone` ignores the high half.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ArgMatch {
     /// `args[index] as u32 == value`.
     Eq { index: u8, value: u32 },
+    /// `args[index] as u32 != value`.
+    Ne { index: u8, value: u32 },
     /// `args[index] as u32 & mask == mask`.
     MaskedEq { index: u8, mask: u32 },
+    /// `args[index] as u32 & mask == value`.
+    MaskedValue { index: u8, mask: u32, value: u32 },
 }
 
-/// One entry of the deny-list: `syscall` fails with `errno` (Linux's number), when `arg` holds or always.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// One entry of the deny-list: `syscall` fails with `errno` (Linux's number) when every one of `args` holds; with no
+/// `args`, always.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DenyRule {
     pub syscall: &'static str,
     pub errno: i32,
-    pub arg: Option<ArgMatch>,
+    pub args: Vec<ArgMatch>,
 }
 
 /// One classic-BPF instruction, a plain copy of the kernel's `struct sock_filter`.
@@ -202,42 +208,106 @@ const TIOCSTI: u32 = 0x5412;
 const TIOCLINUX: u32 = 0x541C;
 const AF_VSOCK: u32 = 40;
 
-/// The deny-list (design §5.11, library evaluation §7, plus the new mount API); docs/develop/gleipnir.md says why
-/// each entry is on it.
-pub fn rules() -> Vec<DenyRule> {
-    let deny = |syscall, errno, arg| DenyRule {
+// The reduced tier's socket rules (Linux's numbers, whatever the host).
+const AF_UNIX: u32 = 1;
+const AF_INET: u32 = 2;
+const AF_INET6: u32 = 10;
+const AF_NETLINK: u32 = 16;
+const SOCK_STREAM: u32 = 1;
+/// `SOCK_TYPE_MASK`: the type's own bits, below `SOCK_NONBLOCK` and `SOCK_CLOEXEC`.
+const SOCK_TYPE_MASK: u32 = 0xf;
+const IPPROTO_TCP: u32 = 6;
+
+fn deny(syscall: &'static str, errno: i32, args: Vec<ArgMatch>) -> DenyRule {
+    DenyRule {
         syscall,
         errno,
-        arg,
-    };
+        args,
+    }
+}
+
+/// The deny-list both Linux tiers install (design §5.11, library evaluation §7, plus the new mount API);
+/// docs/develop/gleipnir.md says why each entry is on it. The reduced tier adds [`reduced_rules`].
+pub fn rules() -> Vec<DenyRule> {
     let mut rules: Vec<DenyRule> = DENIED_ALWAYS
         .iter()
-        .map(|&s| deny(s, EPERM, None))
+        .map(|&s| deny(s, EPERM, vec![]))
         .collect();
     for mask in CLONE_NEW {
         rules.push(deny(
             "clone",
             EPERM,
-            Some(ArgMatch::MaskedEq { index: 0, mask }),
+            vec![ArgMatch::MaskedEq { index: 0, mask }],
         ));
     }
     for value in [TIOCSTI, TIOCLINUX] {
-        rules.push(deny("ioctl", EPERM, Some(ArgMatch::Eq { index: 1, value })));
+        rules.push(deny("ioctl", EPERM, vec![ArgMatch::Eq { index: 1, value }]));
     }
     rules.push(deny(
         "socket",
         EPERM,
-        Some(ArgMatch::Eq {
+        vec![ArgMatch::Eq {
             index: 0,
             value: AF_VSOCK,
-        }),
+        }],
     ));
     // Its flags sit in a struct seccomp cannot read; on ENOSYS libc falls back to clone, which the rules above see.
-    rules.push(deny("clone3", ENOSYS, None));
+    rules.push(deny("clone3", ENOSYS, vec![]));
     rules
 }
 
-/// Compiles [`rules`] for `arch`: allow by default, the EPERM rules through seccompiler `=0.5.0` (whose own
+/// What the reduced tier adds: it has no network namespace, and Landlock's network rules cover TCP only (the
+/// manager's call on Task 8), so the only sockets that reach past the host are TCP ones, which Landlock holds to the
+/// relay's ports:
+/// - `socket(domain)` for any domain but `AF_UNIX`, `AF_INET`, `AF_INET6` and `AF_NETLINK` (no SMC, RDS, TIPC,
+///   packet or other family whose connects Landlock does not see);
+/// - `socket(AF_INET | AF_INET6, type)` unless `type & SOCK_TYPE_MASK == SOCK_STREAM` (no UDP, so no DNS around the
+///   proxy, and no raw sockets); seccompiler has no masked not-equal, so one rule per other type value;
+/// - `socket(AF_INET | AF_INET6, SOCK_STREAM, protocol)` unless the protocol is 0 or `IPPROTO_TCP` (SCTP and
+///   MPTCP stream sockets are not TCP to Landlock, which then leaves their connects alone).
+pub fn reduced_rules() -> Vec<DenyRule> {
+    let mut rules = vec![deny(
+        "socket",
+        EPERM,
+        [AF_UNIX, AF_INET, AF_INET6, AF_NETLINK]
+            .map(|value| ArgMatch::Ne { index: 0, value })
+            .to_vec(),
+    )];
+    for domain in [AF_INET, AF_INET6] {
+        let family = ArgMatch::Eq {
+            index: 0,
+            value: domain,
+        };
+        for value in (0..=SOCK_TYPE_MASK).filter(|&t| t != SOCK_STREAM) {
+            let kind = ArgMatch::MaskedValue {
+                index: 1,
+                mask: SOCK_TYPE_MASK,
+                value,
+            };
+            rules.push(deny("socket", EPERM, vec![family, kind]));
+        }
+        let not_tcp = [0, IPPROTO_TCP].map(|value| ArgMatch::Ne { index: 2, value });
+        rules.push(deny("socket", EPERM, [&[family][..], &not_tcp].concat()));
+    }
+    rules
+}
+
+/// The deny-list of `tier`: [`rules`], and for the reduced tier [`reduced_rules`] too.
+pub fn rules_for(tier: Tier) -> Vec<DenyRule> {
+    let mut all = rules();
+    if tier == Tier::Reduced {
+        all.extend(reduced_rules());
+    }
+    all
+}
+
+/// [`compile_for`] the full tier: the base deny-list alone.
+#[cfg(target_os = "linux")]
+pub fn compile(arch: Arch) -> Result<Vec<SockFilter>, SeccompError> {
+    compile_for(arch, Tier::Full)
+}
+
+/// Compiles [`rules_for`] `tier` for `arch`: allow by default, the EPERM rules through seccompiler `=0.5.0` (whose own
 /// architecture check kills a non-native audit arch), and in front of that a short hand-written prologue:
 ///
 /// - x86_64: `ld arch; jeq AUDIT_ARCH_X86_64 ? next : skip two; ld nr; jset 0x40000000 ? next : skip one;
@@ -249,7 +319,7 @@ pub fn rules() -> Vec<DenyRule> {
 /// No jump crosses from one part into the other: the prologue's jumps stay inside it, and seccompiler's program
 /// follows it unchanged.
 #[cfg(target_os = "linux")]
-pub fn compile(arch: Arch) -> Result<Vec<SockFilter>, SeccompError> {
+pub fn compile_for(arch: Arch, tier: Tier) -> Result<Vec<SockFilter>, SeccompError> {
     use seccompiler::{
         BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompFilter,
         SeccompRule, TargetArch,
@@ -282,29 +352,29 @@ pub fn compile(arch: Arch) -> Result<Vec<SockFilter>, SeccompError> {
         ],
     };
 
-    // Per call: None = denied whatever the arguments; Some(conditions) = denied when any of them holds. An
-    // unconditional entry wins over conditional ones for the same call (never narrows a denial).
-    let mut eperm: BTreeMap<i64, Option<Vec<ArgMatch>>> = BTreeMap::new();
-    for rule in rules() {
+    // Per call: None = denied whatever the arguments; Some(rules) = denied when every condition of any one rule
+    // holds. An unconditional entry wins over conditional ones for the same call (never narrows a denial).
+    let mut eperm: BTreeMap<i64, Option<Vec<Vec<ArgMatch>>>> = BTreeMap::new();
+    for rule in rules_for(tier) {
         let nr = arch
             .syscall_nr(rule.syscall)
             .ok_or(SeccompError::UnknownSyscall {
                 syscall: rule.syscall,
                 arch,
             })?;
-        match (rule.errno, rule.arg) {
-            (EPERM, None) => {
+        match (rule.errno, rule.args.is_empty()) {
+            (EPERM, true) => {
                 eperm.insert(i64::from(nr), None);
             }
-            (EPERM, Some(arg)) => {
-                if let Some(conditions) = eperm
+            (EPERM, false) => {
+                if let Some(conjunctions) = eperm
                     .entry(i64::from(nr))
                     .or_insert_with(|| Some(Vec::new()))
                 {
-                    conditions.push(arg);
+                    conjunctions.push(rule.args);
                 }
             }
-            (errno @ 1..=4095, None) => {
+            (errno @ 1..=4095, true) => {
                 prog.push(op(JEQ_K, nr, 0, 1));
                 prog.push(op(RET_K, RET_ERRNO | errno as u32, 0, 0));
             }
@@ -313,21 +383,31 @@ pub fn compile(arch: Arch) -> Result<Vec<SockFilter>, SeccompError> {
     }
 
     let compile_err = |e: seccompiler::BackendError| SeccompError::Compile(e.to_string());
+    let condition = |arg: ArgMatch| {
+        let (index, cmp, value) = match arg {
+            ArgMatch::Eq { index, value } => (index, SeccompCmpOp::Eq, value),
+            ArgMatch::Ne { index, value } => (index, SeccompCmpOp::Ne, value),
+            ArgMatch::MaskedEq { index, mask } => {
+                (index, SeccompCmpOp::MaskedEq(u64::from(mask)), mask)
+            }
+            ArgMatch::MaskedValue { index, mask, value } => {
+                (index, SeccompCmpOp::MaskedEq(u64::from(mask)), value)
+            }
+        };
+        SeccompCondition::new(index, SeccompCmpArgLen::Dword, cmp, u64::from(value))
+            .map_err(compile_err)
+    };
     let mut chains = BTreeMap::new();
-    for (nr, conditions) in eperm {
-        let chain = conditions
+    for (nr, conjunctions) in eperm {
+        let chain = conjunctions
             .unwrap_or_default()
             .into_iter()
-            .map(|arg| {
-                let (index, cmp, value) = match arg {
-                    ArgMatch::Eq { index, value } => (index, SeccompCmpOp::Eq, value),
-                    ArgMatch::MaskedEq { index, mask } => {
-                        (index, SeccompCmpOp::MaskedEq(u64::from(mask)), mask)
-                    }
-                };
-                let cond =
-                    SeccompCondition::new(index, SeccompCmpArgLen::Dword, cmp, u64::from(value));
-                SeccompRule::new(vec![cond.map_err(compile_err)?]).map_err(compile_err)
+            .map(|args| {
+                let conds = args
+                    .into_iter()
+                    .map(condition)
+                    .collect::<Result<Vec<_>, _>>()?;
+                SeccompRule::new(conds).map_err(compile_err)
             })
             .collect::<Result<Vec<_>, _>>()?;
         chains.insert(nr, chain);
@@ -360,7 +440,14 @@ pub fn compile(arch: Arch) -> Result<Vec<SockFilter>, SeccompError> {
 /// closed).
 #[cfg(not(target_os = "linux"))]
 pub fn compile(arch: Arch) -> Result<Vec<SockFilter>, SeccompError> {
-    let _ = arch;
+    compile_for(arch, Tier::Full)
+}
+
+/// Compiles [`rules_for`] `tier` for `arch`: Unsupported off Linux (Android: no backend; apps get no user
+/// namespaces; fails closed).
+#[cfg(not(target_os = "linux"))]
+pub fn compile_for(arch: Arch, tier: Tier) -> Result<Vec<SockFilter>, SeccompError> {
+    let _ = (arch, tier);
     Err(SeccompError::Unsupported)
 }
 
@@ -453,44 +540,93 @@ mod tests {
             .map(|&syscall| DenyRule {
                 syscall,
                 errno: EPERM_,
-                arg: None,
+                args: vec![],
             })
             .collect();
         for mask in CLONE_NEW {
-            let arg = Some(ArgMatch::MaskedEq { index: 0, mask });
+            let args = vec![ArgMatch::MaskedEq { index: 0, mask }];
             want.push(DenyRule {
                 syscall: "clone",
                 errno: EPERM_,
-                arg,
+                args,
             });
         }
         for value in [0x5412, 0x541C] {
-            let arg = Some(ArgMatch::Eq { index: 1, value });
+            let args = vec![ArgMatch::Eq { index: 1, value }];
             want.push(DenyRule {
                 syscall: "ioctl",
                 errno: EPERM_,
-                arg,
+                args,
             });
         }
-        let arg = Some(ArgMatch::Eq {
+        let args = vec![ArgMatch::Eq {
             index: 0,
             value: 40,
-        });
+        }];
         want.push(DenyRule {
             syscall: "socket",
             errno: EPERM_,
-            arg,
+            args,
         });
         want.push(DenyRule {
             syscall: "clone3",
             errno: ENOSYS_,
-            arg: None,
+            args: vec![],
         });
         assert_eq!(CLONE_NEW.iter().fold(0, |a, b| a | b), 0x7E02_0000);
         let mut got = rules();
         want.sort();
         got.sort();
         assert_eq!(got, want);
+        assert_eq!(rules_for(Tier::Full), rules(), "the full tier adds nothing");
+    }
+
+    /// The reduced tier's socket rules, written out (AF_UNIX 1, AF_INET 2, AF_INET6 10, AF_NETLINK 16; the type's
+    /// own bits are `& 0xf`, SOCK_STREAM 1; IPPROTO_TCP 6).
+    #[test]
+    fn reduced_rules_are_the_socket_set() {
+        let socket = |args: Vec<ArgMatch>| DenyRule {
+            syscall: "socket",
+            errno: EPERM_,
+            args,
+        };
+        let ne = |index, value| ArgMatch::Ne { index, value };
+        let mut want = vec![socket(vec![ne(0, 1), ne(0, 2), ne(0, 10), ne(0, 16)])];
+        for domain in [2, 10] {
+            let family = ArgMatch::Eq {
+                index: 0,
+                value: domain,
+            };
+            for value in [0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] {
+                let kind = ArgMatch::MaskedValue {
+                    index: 1,
+                    mask: 0xf,
+                    value,
+                };
+                want.push(socket(vec![family, kind]));
+            }
+            want.push(socket(vec![family, ne(2, 0), ne(2, 6)]));
+        }
+        let mut got = reduced_rules();
+        want.sort();
+        got.sort();
+        assert_eq!(got, want);
+        let mut all = rules();
+        all.extend(want);
+        all.sort();
+        let mut reduced = rules_for(Tier::Reduced);
+        reduced.sort();
+        assert_eq!(reduced, all);
+        assert_eq!(
+            [
+                libc::AF_UNIX,
+                libc::AF_INET,
+                libc::AF_INET6,
+                libc::AF_NETLINK
+            ],
+            [1, 2, 10, 16]
+        );
+        assert_eq!((libc::SOCK_STREAM, libc::IPPROTO_TCP), (1, 6));
     }
 
     #[test]
@@ -593,6 +729,16 @@ mod tests {
     #[test]
     fn bpf_golden_aarch64() {
         insta::assert_json_snapshot!(listing(&compile(Arch::Aarch64).unwrap()));
+    }
+
+    #[test]
+    fn bpf_golden_x86_64_reduced() {
+        insta::assert_json_snapshot!(listing(&compile_for(Arch::X86_64, Tier::Reduced).unwrap()));
+    }
+
+    #[test]
+    fn bpf_golden_aarch64_reduced() {
+        insta::assert_json_snapshot!(listing(&compile_for(Arch::Aarch64, Tier::Reduced).unwrap()));
     }
 
     // ---- a classic-BPF interpreter over the compiled program (review B2) ----
@@ -872,12 +1018,93 @@ mod tests {
             .into_iter()
             .find(|r| r.syscall == "clone3")
             .expect("clone3 is in the list");
-        assert_eq!((rule.errno, rule.arg), (ENOSYS_, None));
+        assert_eq!((rule.errno, rule.args.is_empty()), (ENOSYS_, true));
         for arch in ARCHES {
             let prog = compile(arch).unwrap();
             let d = Data::call(arch, nr(arch, "clone3"), &[0, 0]);
             assert_eq!(run(&prog, &d), Act::Errno(ENOSYS_), "{arch:?}");
         }
+    }
+
+    /// The reduced tier's socket rules over every domain, type and protocol edge: only `AF_UNIX`, `AF_NETLINK`, and
+    /// TCP stream sockets of `AF_INET`/`AF_INET6` are made (with any `SOCK_NONBLOCK`/`SOCK_CLOEXEC` flags, and
+    /// whatever sits in the arguments' high halves, which the kernel ignores). The full tier refuses only vsock.
+    #[test]
+    fn reduced_socket_table() {
+        const FLAGS: [u64; 3] = [0, 0x0008_0800, 0xFFFF_FFFF_0000_0000];
+        let domains: [u64; 12] = [0, 1, 2, 10, 16, 17, 38, 40, 43, 2 | 1 << 32, 1 << 32, 41];
+        let protocols: [u64; 7] = [0, 6, 17, 132, 262, 6 | 1 << 32, 1 << 32];
+        let mut wrong = Vec::new();
+        let mut cases = 0;
+        for arch in ARCHES {
+            let full = compile(arch).unwrap();
+            let reduced = compile_for(arch, Tier::Reduced).unwrap();
+            let socket = nr(arch, "socket");
+            for &domain in &domains {
+                for kind in 0..16u64 {
+                    for flags in FLAGS {
+                        for &proto in &protocols {
+                            let d = Data::call(arch, socket, &[domain, kind | flags, proto]);
+                            let (dom, ty, pr) = (domain as u32, kind as u32, proto as u32);
+                            let inet = dom == 2 || dom == 10;
+                            let made = matches!(dom, 1 | 16)
+                                || (inet && ty == 1 && pr == 0)
+                                || (inet && ty == 1 && pr == 6);
+                            let want_reduced = if made { Act::Allow } else { Act::Errno(EPERM_) };
+                            let want_full = if dom == 40 {
+                                Act::Errno(EPERM_)
+                            } else {
+                                Act::Allow
+                            };
+                            for (tier, prog, want) in [
+                                ("reduced", &reduced, want_reduced),
+                                ("full", &full, want_full),
+                            ] {
+                                cases += 1;
+                                let got = run(prog, &d);
+                                if got != want {
+                                    wrong.push(format!(
+                                        "{arch:?} {tier} socket({domain:#x}, {:#x}, {proto:#x}): got {got:?}, want {want:?}",
+                                        kind | flags
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "{} of {cases} cases wrong:\n{}",
+            wrong.len(),
+            wrong.join("\n")
+        );
+    }
+
+    /// Apart from `socket`, the reduced program answers every call exactly as the full one does (every number, with
+    /// zero and all-ones arguments, and the x32 and foreign-arch kills).
+    #[test]
+    fn reduced_differs_from_full_only_on_socket() {
+        for arch in ARCHES {
+            let full = compile(arch).unwrap();
+            let reduced = compile_for(arch, Tier::Reduced).unwrap();
+            let socket = nr(arch, "socket");
+            for n in (0..1024).filter(|&n| n != socket) {
+                for args in [[0; 6], [u64::MAX; 6]] {
+                    let d = Data::call(arch, n, &args);
+                    assert_eq!(run(&full, &d), run(&reduced, &d), "{arch:?} nr {n}");
+                }
+                let foreign = Data {
+                    arch: AUDIT_I386,
+                    ..Data::call(arch, n, &[])
+                };
+                assert_eq!(run(&reduced, &foreign), Act::Kill, "{arch:?} i386 {n}");
+            }
+        }
+        let x32 = Data::call(Arch::X86_64, nr(Arch::X86_64, "socket") | X32_BIT, &[2, 1]);
+        let reduced = compile_for(Arch::X86_64, Tier::Reduced).unwrap();
+        assert_eq!(run(&reduced, &x32), Act::Kill);
     }
 
     // ---- the real install, in a child process per case ----
@@ -971,7 +1198,38 @@ mod tests {
             unfiltered: &[Outcome::Ok],
             filtered: Outcome::Ok,
         },
+        // The full tier leaves UDP alone (its network namespace isolates it); the reduced tier refuses it.
+        Case {
+            name: "socket-udp",
+            unfiltered: &[Outcome::Ok],
+            filtered: Outcome::Ok,
+        },
+        Case {
+            name: "reduced-socket-udp",
+            unfiltered: &[Outcome::Ok],
+            filtered: Outcome::Errno(EPERM_),
+        },
+        Case {
+            name: "reduced-socket-tcp",
+            unfiltered: &[Outcome::Ok],
+            filtered: Outcome::Ok,
+        },
+        // Made (MPTCP on), or EPROTONOSUPPORT (off): the filter refuses it before the kernel looks.
+        Case {
+            name: "reduced-socket-mptcp",
+            unfiltered: &[Outcome::Ok, Outcome::Errno(libc::EPROTONOSUPPORT)],
+            filtered: Outcome::Errno(EPERM_),
+        },
     ];
+
+    /// The filter a case runs under: the reduced tier's for `reduced-…`, the full tier's otherwise.
+    fn tier_of(name: &str) -> Tier {
+        if name.starts_with("reduced-") {
+            Tier::Reduced
+        } else {
+            Tier::Full
+        }
+    }
 
     fn errno() -> i32 {
         std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
@@ -1136,6 +1394,31 @@ mod tests {
                     }
                     result(i64::from(libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0)))
                 }
+                "socket-udp" | "reduced-socket-udp" => {
+                    if !install_now() {
+                        return 254;
+                    }
+                    let kind = libc::SOCK_DGRAM | libc::SOCK_CLOEXEC;
+                    result(i64::from(libc::socket(libc::AF_INET, kind, 0)))
+                }
+                "reduced-socket-tcp" => {
+                    if !install_now() {
+                        return 254;
+                    }
+                    let kind = libc::SOCK_STREAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK;
+                    result(i64::from(libc::socket(libc::AF_INET6, kind, 0)))
+                }
+                "reduced-socket-mptcp" => {
+                    if !install_now() {
+                        return 254;
+                    }
+                    const IPPROTO_MPTCP: libc::c_int = 262;
+                    result(i64::from(libc::socket(
+                        libc::AF_INET,
+                        libc::SOCK_STREAM,
+                        IPPROTO_MPTCP,
+                    )))
+                }
                 _ => 200,
             }
         }
@@ -1171,7 +1454,8 @@ mod tests {
             return;
         };
         let case = CASES.iter().find(|c| c.name == name).expect("a known case");
-        let prog = compile(native().expect("a native arch")).expect("compiles");
+        let prog =
+            compile_for(native().expect("a native arch"), tier_of(case.name)).expect("compiles");
         let control = fork_run(case.name, None);
         if !case.unfiltered.contains(&control) {
             eprintln!(

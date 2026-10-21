@@ -188,14 +188,26 @@ fn prepare(ctx: &Context, cmp: Cmp, target: Target) -> Result<Ctx<'_>, Refusal> 
         ("run_parents", &ctx.run_parents),
         ("program_dirs", &ctx.program_dirs),
     ];
+    let mut named = Vec::new();
     for (key, list) in lists {
-        for p in list {
+        for (i, p) in list.iter().enumerate() {
             if let Some((_, why)) = form_problem(p) {
                 let msg = format!("the context's {key}: {} {why}", p.display());
                 return Err(refusal(Rule::Malformed, Some(p.as_path()), msg));
             }
+            named.push(Named {
+                key: format!("the context's {key}[{i}]"),
+                path: p,
+                host: true,
+            });
         }
     }
+    // True names on disk too (GL-T2-2): a home or closed dir given through a link would weaken every prefix rule.
+    // One that does not exist needs a true-named deepest existing ancestor, as a spec's paths do.
+    true_names(&named).map_err(|r| Refusal {
+        rule: Rule::Malformed,
+        ..r
+    })?;
     let norm = |list: &[PathBuf]| list.iter().map(|p| cmp.norm(p)).collect::<Vec<_>>();
     Ok(Ctx {
         home: cmp.norm(&ctx.home),
@@ -1624,6 +1636,53 @@ mod tests {
         ] {
             let r = validate(fx.spec(t), &ctx, t).unwrap_err();
             assert_eq!(r.rule, Rule::Malformed, "{row}: {}", r.message);
+        }
+    }
+
+    /// GL-T2-2: the context's paths are true names on disk too. A home or closed dir named through a link would make
+    /// every prefix rule compare against a name no source has; one that does not exist passes when its existing part
+    /// is a true name.
+    #[test]
+    fn context_paths_are_true_names() {
+        let fx = Fx::new();
+        base_passes(&fx);
+        std::os::unix::fs::symlink(fx.p("home"), fx.p("hlink")).unwrap();
+        std::os::unix::fs::symlink(fx.p("state"), fx.p("slink")).unwrap();
+        let ok = Context {
+            closed: vec![fx.p("state"), fx.p("rt"), fx.p("rt/not-yet/there")],
+            ..fx.ctx()
+        };
+        for t in TARGETS {
+            validate(fx.spec(t), &ok, t).expect("a missing tail under a true name passes");
+        }
+        for (row, ctx) in [
+            (
+                "home through a link",
+                Context {
+                    home: fx.p("hlink/u"),
+                    ..fx.ctx()
+                },
+            ),
+            (
+                "closed through a link",
+                Context {
+                    closed: vec![fx.p("slink"), fx.p("rt")],
+                    ..fx.ctx()
+                },
+            ),
+            (
+                "a missing PATH dir under a link",
+                Context {
+                    program_dirs: vec![fx.p("hlink/u/nope/bin")],
+                    ..fx.ctx()
+                },
+            ),
+        ] {
+            for t in TARGETS {
+                let r = validate(fx.spec(t), &ctx, t).unwrap_err();
+                assert_eq!(r.rule, Rule::Malformed, "{row} {t:?}: {}", r.message);
+                assert!(r.message.contains("the context's"), "{row}: {}", r.message);
+            }
         }
     }
 

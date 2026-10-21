@@ -173,6 +173,11 @@ that forked them exits. A spawn from a tokio blocking-pool thread would kill the
 the process. That thread enters the caller's runtime and spawns. If the caller stopped waiting, the thread kills the
 child's group. Every sandboxed spawn goes through it; other spawns keep `spawn`.
 
+**`new_session`.** A `Spec` with `new_session` starts its child with `setsid()` before exec instead of a process
+group of its own (std's `setpgid` runs before `pre_exec`, and a group leader cannot `setsid`). Gleipnir's reduced
+tier needs it: its helper starts a session itself (GL-T8-1). Either way the child's pid is its group's, so
+`kill_group` ends it.
+
 **git.**
 - `git::git_program()` gives git from a root-owned path (`eitri::trusted_program`), never through `PATH`.
   - Linux: `/usr/bin/git`.
