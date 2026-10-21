@@ -230,3 +230,43 @@
                                         :time)
                              "old")))
       (delete-directory state t))))
+
+;;;; Notices (Task 12)
+
+(load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
+
+(ert-deftest drgnx-notice-wb/unrouted-is-one-info-condition ()
+  (drgnx-notice-test-with-model
+    (drgnx-rules-test--with
+     (let ((editor (car (drgnx-rules-test--editors))))
+       (drgnx-test-use-editor editor)
+       (display-buffer (get-buffer-create "zz-unrouted"))
+       (let ((n (car (drgnx-notices :source 'wb))))
+         (should (equal (plist-get n :id) 'unrouted))
+         (should (eq (plist-get n :severity) 'info))
+         (should (eq (plist-get n :life) 'condition))
+         (should (equal (plist-get n :text) "1 buffer matched no placement rule"))
+         (should (eq (plist-get n :command) 'wb-unrouted))
+         (should (string-match-p "workbench.md" (plist-get n :fix))))
+       (display-buffer (get-buffer-create "*t1*"))
+       (should (= 1 (length (drgnx-notices :source 'wb))))
+       (should (equal (plist-get (car (drgnx-notices :source 'wb)) :text) "2 buffers matched no placement rule"))
+       (setq drgnx-wb-unrouted nil)
+       (drgnx-rules--sync-unrouted)
+       (should-not (drgnx-notices :source 'wb))))))
+
+(ert-deftest drgnx-notice-wb/a-lost-display-buffer-entry-is-warn ()
+  (drgnx-notice-test-with-model
+    (drgnx-rules-test--with
+     (let ((inhibit-message t))
+       (cl-letf (((symbol-function 'drgnx-file-write) #'ignore))
+         (setq display-buffer-alist nil)
+         (drgnx-rules--write-report)
+         (let ((n (car (drgnx-notices :source 'wb))))
+           (should (equal (plist-get n :id) 'display-buffer-entry))
+           (should (eq (plist-get n :severity) 'warn))
+           (should (eq (plist-get n :life) 'condition))
+           (should (string-match-p "add-to-list" (plist-get n :fix))))
+         (push drgnx-rules--entry display-buffer-alist)
+         (drgnx-rules--write-report)
+         (should-not (drgnx-notices :source 'wb)))))))
