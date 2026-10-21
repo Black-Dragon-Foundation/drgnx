@@ -1,5 +1,5 @@
 //! `ratatoskr sandbox check` and the doctor's `sandbox` section through the real binary, in the reduced tier (the
-//! container has no bwrap that works; the full tier's real run is the row `any/works`, Task 14).
+//! container has no bwrap that works; the full tier's real run is the row `linux/works`, Task 14).
 // Linux only: the reduced tier is Linux's (Android: no backend; fails closed).
 #![cfg(target_os = "linux")]
 

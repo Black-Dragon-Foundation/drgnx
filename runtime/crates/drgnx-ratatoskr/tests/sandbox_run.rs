@@ -1,6 +1,6 @@
 //! `ratatoskr sandbox run` (test-hooks) end to end, in the reduced tier: the spec validated against Ratatoskr's
 //! context, `Sandbox::prepare`, the helper spawned through `draugr::spawn_pinned` in a session of its own (GL-T8-1),
-//! the status line, the exit and the result file. The full tier's real run is the row `any/works` (Task 14): the
+//! the status line, the exit and the result file. The full tier's real run is the row `linux/works` (Task 14): the
 //! container has no bwrap that works. Fixtures live under /tmp/glp-*, and HOME points there.
 // Linux only: the reduced tier is Linux's (Android: no backend; fails closed). The command exists only with test-hooks.
 #![cfg(all(target_os = "linux", feature = "test-hooks"))]
