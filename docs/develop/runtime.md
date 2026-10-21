@@ -35,7 +35,7 @@ runtime/
 | `urdr` | the SQLite store; self-contained, its public API names no drgnx type |
 | `draugr` (formerly `drgnx-proc`) | spawning (explicit environments, own process groups, one exit) and the orphan reaper ([hub.md](hub.md#ratatoskrs-children-draugr)) |
 | `gleipnir` | the sandbox: the spec and its validation, bwrap, Landlock, seccomp, Seatbelt, the relay and the CONNECT proxy; self-contained ([gleipnir.md](gleipnir.md)) |
-| `eitri` | file access that never follows a link: opens pinned by fd, bounded reads, writes by rename, root-owned programs; generic, used by `gleipnir` and `draugr` |
+| `eitri` | file access that never follows a link: opens pinned by fd, bounded reads, writes by rename, root-owned programs; generic, used by `gleipnir` and `draugr` ([below](#eitri-no-link-file-access)) |
 | `gleipnir-escape` | test tooling, never shipped: the probe binary and the escape harness ([gleipnir.md](gleipnir.md), "Proving it") |
 | `hrafn` | search and the indexer |
 | `domr` (formerly `drgnx-conformance`; lives in `runtime/conformance/`) | the conformance harness (this page) |
@@ -108,6 +108,39 @@ AR_aarch64_linux_android=/usr/bin/true` (the Rust is still checked in full; only
 compile-fail doc test that `Cap` has no `Debug`, and the proptest `tests/proptest_line.rs`: random byte streams, read in
 random pieces, through the codec and `parse_strict` never panic, and the codec never holds more than one line's limit
 plus the read that went past it.
+
+## eitri: no-link file access
+
+`crates/eitri` is how the runtime touches a path someone else can change (an agent's tree, a candidate program):
+every open refuses a link in any component and hands back the fd it checked, so what was checked is what is used.
+It names no drgnx type or path. Every error is an `FsError`: `Link { path }`, `NotRegular`, `NotDir`, `TooLarge {
+cap }`, `Escapes`, `Untrusted { path, why }`, `Unsupported` or `Io`.
+
+- **`open_path(abs, kind)`** and **`open_beneath(dir, rel, kind)`** return a `Pinned { fd, dev, ino, is_dir }`.
+  `kind` is `Dir`, `File` (a regular file) or `Any`, checked with `fstat` on the fd. Linux and Android use
+  `openat2(O_PATH | O_CLOEXEC, RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS)`, plus `RESOLVE_BENEATH` for
+  `open_beneath`; macOS uses `open`/`openat` with `O_NOFOLLOW_ANY | O_NONBLOCK | O_NOCTTY`. A `rel` that is absolute
+  or has a `..` component is `Escapes` before any syscall. A kernel without `openat2` (before 5.6, or one that
+  refuses its flags) gives `Unsupported`: there is no fallback that resolves by path. Any other OS is `Unsupported`.
+- **`read_regular(dir, rel, cap)`** opens `O_RDONLY | O_NONBLOCK | O_NOCTTY` with the same resolution, refuses
+  anything but a regular file (a FIFO opens at once and is never read) and reads at most `cap + 1` bytes; one more
+  than `cap` is `TooLarge`.
+- **`write_regular(dir, rel, bytes, mode)`** opens the parent with `open_beneath`, creates `.eitri-<16 hex>` in it
+  with `O_CREAT | O_EXCL | O_NOFOLLOW` and `mode` (at most 0o777, less the umask), writes, `fsync`s and `renameat`s
+  it over `rel`. A link at `rel` is replaced, never followed; anything else that is not a regular file is
+  `NotRegular`. The temporary file is removed on every error.
+- **`trusted_program(candidates)`** returns the first candidate that only root can change, as a `TrustedProgram {
+  path, dev, ino }`: an absolute path with no `.` or `..`, opened with `open_path`, a regular file with an execute
+  bit, owned by uid 0 and not group- or world-writable, in directories up to `/` that are owned by uid 0 and not
+  group- or world-writable (so never under `/tmp`). Otherwise the last candidate's `Untrusted { path, why }`.
+  Callers pass fixed candidates (bwrap, `sandbox-exec`, git); `PATH` is never searched.
+
+`cargo test -p eitri` runs the unit tests (links in every component, `..` refused with no syscall made, a FIFO
+refused within 100 ms, the cap, a write over a link, no temporary file left, `ENOSYS`/`EINVAL` from `openat2`
+injected through a test seam, each `Untrusted.why`) and the proptest `tests/tree.rs`: random trees with links to
+inside, outside and `/`, where every `Ok` is the `(dev, ino)` an `lstat` walk finds and every path through a link is
+`Link`. The fixtures that need root-owned ancestors (`/var/lib/glp-…`) run as uid 0, as in the build container, and
+are skipped otherwise.
 
 ## The conformance harness
 
