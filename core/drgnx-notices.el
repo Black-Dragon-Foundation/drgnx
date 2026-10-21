@@ -42,7 +42,8 @@
 (defun drgnx-notices--action (command)
   "COMMAND (a registry id, a command, or (FN . ARGS)) as an action for `drgnx-ui-button'."
   (if (consp command)
-      (lambda () (apply (car command) (cdr command)))
+      (lambda () (if (fboundp (car command)) (apply (car command) (cdr command))
+                   (user-error "%s is not available (its module is off)" (car command))))
     command))
 
 (defun drgnx-notices--command-title (command)

@@ -150,11 +150,12 @@ that is not our own last line."
     (if echo (and (cadr echo) t) (eq (plist-get notice :severity) 'fail))))
 
 (defun drgnx-notice--echo-attention (item)
-  "A new attention ITEM: the desktop may take it; the echo shows it unless it did (`:echo t' shows it anyway)."
+  "A new attention ITEM: the desktop may take it; the echo shows it unless it did (`:echo t' shows it anyway).
+Neither before startup is over: what waits then is old (left from an earlier session), and the bar counts it."
   (let* ((echo (plist-member item :echo)) (on (and echo (cadr echo))))
-    (unless (and echo (not on))
+    (when (and drgnx-notice--started (not (and echo (not on))))
       (let ((taken (drgnx-notice-desktop-take item)))
-        (when (and drgnx-notice--started (or on (not taken)))
+        (when (or on (not taken))
           (drgnx-notice--echo-enqueue 'waiting item))))))
 
 (defun drgnx-notice--echo-change (change)

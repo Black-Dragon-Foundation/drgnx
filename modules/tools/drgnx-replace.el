@@ -304,8 +304,9 @@ this one; a stopped search calls CALLBACK no more."
                      (make-process :name (format "drgnx-replace-%s" backend) :buffer nil :stderr err :noquery t
                                    :connection-type 'pipe :coding 'utf-8-unix
                                    :command (drgnx-replace--command backend query)
-                                   :filter #'drgnx-replace--output
-                                   :sentinel (lambda (p _event) (drgnx-replace--finished p)))
+                                   :filter (drgnx-guard-wrap #'drgnx-replace--output "the search behind Replace")
+                                   :sentinel (drgnx-guard-wrap (lambda (p _event) (drgnx-replace--finished p))
+                                                               "the search behind Replace"))
                    (error (kill-buffer err)
                           (funcall callback (list :error (error-message-string e)))
                           (funcall callback :done)

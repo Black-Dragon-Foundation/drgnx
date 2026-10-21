@@ -195,18 +195,22 @@ newest first at each level.  Every PR appears once, a cycle cut where it is foun
     (message "drgnx: fetching pull request #%d…" n)
     (make-process :name "drgnx-prs-fetch" :buffer nil :stderr err :noquery t :connection-type 'pipe
                   :command (list "git" "fetch" remote (format "+refs/pull/%d/head:%s" n ref))
-                  :sentinel (lambda (_proc event)
-                              (let ((why (and (buffer-live-p err)
-                                              (with-current-buffer err
-                                                (car (last (split-string (string-trim (buffer-string)) "\n" t)))))))
-                                (cond ((equal event "finished\n")
-                                       (when (buffer-live-p err) (when-let* ((ep (get-buffer-process err))) (delete-process ep)) (kill-buffer err))
-                                       (drgnx-diff-show (list 'range (format "%s/%s" remote (plist-get p :base)) ref) root))
-                                      ((string-match-p "exited\\|failed\\|signal" event)
-                                       (when (buffer-live-p err) (when-let* ((ep (get-buffer-process err))) (delete-process ep)) (kill-buffer err))
-                                       (drgnx-notify 'prs 'warn
-                                                     (format "Fetching pull request #%d failed: %s" n (or why (string-trim event)))
-                                                     :command 'prs-fetch))))))))
+                  :sentinel (drgnx-guard-wrap
+                             (lambda (_proc event)
+                               (let ((why (and (buffer-live-p err)
+                                               (with-current-buffer err
+                                                 (car (last (split-string (string-trim (buffer-string)) "\n" t)))))))
+                                 (cond ((equal event "finished\n")
+                                        (when (buffer-live-p err) (when-let* ((ep (get-buffer-process err))) (delete-process ep)) (kill-buffer err))
+                                        (drgnx-diff-show (list 'range (format "%s/%s" remote (plist-get p :base)) ref) root))
+                                       ((string-match-p "exited\\|failed\\|signal" event)
+                                        (when (buffer-live-p err) (when-let* ((ep (get-buffer-process err))) (delete-process ep)) (kill-buffer err))
+                                        ;; the reply to Show Changes: said in the echo area each time
+                                        (drgnx-notice-clear 'prs 'fetch-failed)
+                                        (drgnx-notify 'prs 'warn
+                                                      (format "Fetching pull request #%d failed: %s" n (or why (string-trim event)))
+                                                      :id 'fetch-failed :command 'prs-fetch :echo t)))))
+                             "a pull request's fetch"))))
 
 (defun drgnx-prs--commit-setup ()
   "`git-commit-setup-hook': # completes PR and issue numbers (forge)."

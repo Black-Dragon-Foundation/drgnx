@@ -45,9 +45,10 @@
   (drgnx-notice-core-test--timers
    (drgnx-timer-start 'nc-k 1 #'drgnx-notice-core-test--boom :repeat 1)
    (drgnx-test-advance 2)
-   (should-not (drgnx-notices :source 'timers))          ; two failures: still running
+   (should-not (drgnx-notices :source 'timers :life 'condition))   ; two failures: still running (two events)
+   (should (= 2 (plist-get (car (drgnx-notices :source 'timers :life 'event)) :count)))
    (drgnx-test-advance 1)
-   (let ((ns (drgnx-notices :source 'timers)))
+   (let ((ns (drgnx-notices :source 'timers :life 'condition)))
      (should (= (length ns) 1))
      (should (eq (plist-get (car ns) :severity) 'warn))
      (should (eq (plist-get (car ns) :life) 'condition))
@@ -60,9 +61,9 @@
   (drgnx-notice-core-test--timers
    (drgnx-timer-start 'nc-k 1 #'drgnx-notice-core-test--boom :repeat 1)
    (drgnx-test-advance 3)
-   (should (drgnx-notices :source 'timers))
+   (should (drgnx-notices :source 'timers :life 'condition))
    (drgnx-timer-start 'nc-k 1 #'drgnx-notice-core-test--ok :repeat 1)
-   (should-not (drgnx-notices :source 'timers))
+   (should-not (drgnx-notices :source 'timers :life 'condition))
    (drgnx-timer-cancel 'nc-k)))
 
 (ert-deftest drgnx-notice-core/terminal-fallback-problems-are-conditions ()

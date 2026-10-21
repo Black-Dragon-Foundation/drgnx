@@ -313,6 +313,23 @@
    (should-not (drgnx-timer-active-p 'tm-k))
    (should-not (file-exists-p (drgnx-timer-test--report-file)))))   ; nothing stopped: no report
 
+(load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
+
+(ert-deftest drgnx-timer/a-one-shot-failure-is-a-notice-not-a-message ()
+  ;; a debounce that fails after every pause in typing: one `warn' event whose repeats count, never a message
+  (drgnx-notice-test-with-model
+    (drgnx-timer-test--with
+     (let ((said nil))
+       (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+         (dotimes (_ 3) (drgnx-timer-start 'tm-k 1 #'drgnx-timer-test--fail) (drgnx-test-advance 1)))
+       (should (= 3 (length drgnx-timer-test--calls)))
+       (should-not said)
+       (let ((ns (drgnx-notices :source 'timers)))
+         (should (= 1 (length ns)))
+         (should (eq (plist-get (car ns) :life) 'event))
+         (should (eq (plist-get (car ns) :severity) 'warn))
+         (should (= 3 (plist-get (car ns) :count))))))))
+
 (ert-deftest drgnx-timer/errors-are-capped-at-50 ()
   (drgnx-timer-test--with
    ;; due 10 ms apart, so they run in the order started (Emacs leaves the order of equal times open)

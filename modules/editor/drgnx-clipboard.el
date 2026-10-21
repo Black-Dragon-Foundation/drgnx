@@ -235,12 +235,14 @@ Either setting is enough: `primary-to-history' puts every selection (PRIMARY) in
                       (make-process
                        :name (format "drgnx-gpaste-%s" key) :buffer nil :noquery t :connection-type 'pipe
                        :command (list program "get" "org.gnome.GPaste" key)
-                       :filter (lambda (_p s) (setq out (concat out s)))
-                       :sentinel (lambda (p _e)
-                                   (unless (process-live-p p)
-                                     (push (cons key (equal (string-trim out) "true")) answers)
-                                     (when (= (length answers) (length keys))
-                                       (finish (cl-some #'cdr answers))))))
+                       :filter (drgnx-guard-wrap (lambda (_p s) (setq out (concat out s))) "GPaste's answer")
+                       :sentinel (drgnx-guard-wrap
+                                  (lambda (p _e)
+                                    (unless (process-live-p p)
+                                      (push (cons key (equal (string-trim out) "true")) answers)
+                                      (when (= (length answers) (length keys))
+                                        (finish (cl-some #'cdr answers)))))
+                                  "GPaste's answer"))
                     (error nil))
                   procs)))
         (unless (cl-every #'identity procs) (finish nil))))))

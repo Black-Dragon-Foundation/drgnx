@@ -151,8 +151,12 @@ the new state; `drgnx-config-refused' for a file with a mistake or a newer one."
          (drgnx-notice-clear 'modules name)))))
 
 (defun drgnx-modules--notice-off ()
-  "One info condition naming the modules that are off (`modules' . `off'); cleared when none is."
-  (let ((off (delq nil (mapcar (lambda (r) (and (eq (plist-get (cdr r) :status) 'off) (car r)))
+  "One info condition naming the modules that are off (`modules' . `off'); cleared when none is.  Off: turned off
+in this session, or disabled in modules.eld though on by default (one that is off until chosen is not named)."
+  (let ((off (delq nil (mapcar (lambda (r) (and (pcase (plist-get (cdr r) :status)
+                                                  ('off t)
+                                                  ('disabled (not (drgnx-module-default-off-p (car r)))))
+                                                (car r)))
                                drgnx-modules--report))))
     (if off
         (drgnx-notify 'modules 'info (format (if (cdr off) "%d modules are off: %s" "%d module is off: %s")

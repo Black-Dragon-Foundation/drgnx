@@ -66,6 +66,48 @@ SEVERITY must be there.  Returns it."
   (drgnx-notice-echo-pass-test--notice 'config 'warn
     (drgnx-shell-env--fail "it timed out")))
 
+;;;; A command's reply that comes later is said in the echo area, each time (S5)
+
+(defun drgnx-notice-echo-pass-test--said (source)
+  "Start counting the posts of SOURCE that are said in the echo area (`:echo t'); a function that gives the count."
+  (let ((n 0))
+    (add-hook 'drgnx-notice-functions
+              (lambda (c) (when (and (eq (plist-get c :op) 'post) (eq (plist-get c :source) source)
+                                     (eq (plist-get (plist-get c :notice) :echo) t))
+                            (setq n (1+ n)))))
+    (lambda () n)))
+
+(ert-deftest drgnx-notice-core/an-agent-operation-error-is-said-each-time ()
+  (drgnx-notice-test-with-model
+    (let ((said (drgnx-notice-echo-pass-test--said 'agents)))
+      (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (_m _p cb) (funcall cb nil "no such session"))))
+        (drgnx-agents--remote (drgnx-agents--make :name "a1" :remote "r1") "stop" nil)
+        (drgnx-agents--remote (drgnx-agents--make :name "a1" :remote "r1") "stop" nil))
+      (should (= (funcall said) 2))
+      (should (= (length (drgnx-notices :source 'agents)) 1)))))
+
+(ert-deftest drgnx-notice-core/reload-environment-hears-its-failure ()
+  (drgnx-notice-test-with-model
+    (let ((said (drgnx-notice-echo-pass-test--said 'config)))
+      (drgnx-shell-env--finish "" nil #'ignore)             ; Reload Environment waits for a reply
+      (drgnx-shell-env--finish "" nil #'ignore)
+      (should (= (funcall said) 2))
+      (drgnx-shell-env--finish "" nil nil)                  ; at start nobody waits: a quiet notice
+      (should (= (funcall said) 2)))))
+
+(ert-deftest drgnx-notice-wb/save-workbench-says-it-did-not-save ()
+  (require 'drgnx-persist)
+  (drgnx-notice-test-with-model
+    (let ((said (drgnx-notice-echo-pass-test--said 'wb)))
+      (cl-letf (((symbol-function 'drgnx-persist--save-skipped-p) #'ignore)
+                ((symbol-function 'drgnx-persist--frames) #'ignore)
+                ((symbol-function 'drgnx-file-update) (lambda (_file fn &rest _) (funcall fn '(:version 999)))))
+        (should-not (drgnx-persist-save "/nonexistent/workbench.eld"))   ; from a hook: quiet
+        (should (= (funcall said) 0))
+        (call-interactively #'drgnx-persist-save)
+        (call-interactively #'drgnx-persist-save)
+        (should (= (funcall said) 2))))))
+
 (ert-deftest drgnx-notice-core/a-pending-key-stack-failure-is-a-notice ()
   (drgnx-notice-echo-pass-test--notice 'keys 'warn
     (cl-letf (((symbol-function 'drgnx-modal--pending) (lambda () (error "Boom"))))

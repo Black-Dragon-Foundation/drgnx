@@ -22,6 +22,7 @@
     (drgnx-notice--sets . (make-hash-table :test #'eq))
     (drgnx-notice--index . (make-hash-table :test #'eq))
     (drgnx-notice--heard . (make-hash-table :test #'eq))
+    (drgnx-notice--was . (make-hash-table :test #'eq))
     (drgnx-notice--union . (make-hash-table :test #'equal))
     (drgnx-notice--needs-you . 0)
     (drgnx-notice--scoped . (make-hash-table :test #'equal))

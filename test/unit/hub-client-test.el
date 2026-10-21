@@ -464,6 +464,34 @@ without the binary."
           (should (< drgnx-hub-client-test--searched (* 2 n (length chunk)))))
       (delete-process p))))
 
+(load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
+
+(ert-deftest drgnx-hub-client/a-failing-callback-does-not-drop-the-rest-of-the-chunk ()
+  ;; each answer's callback runs in the guard: the answers after it in the chunk, and its open line, still go on
+  (drgnx-notice-test-with-model
+    (let ((p (make-pipe-process :name "drgnx-settle" :noquery t)) (drgnx-hub--pending (make-hash-table)) (got nil))
+      (unwind-protect
+          (progn
+            (puthash 1 (list :cb (lambda (_r _e) (error "Bad data")) :conn p :method "job/status") drgnx-hub--pending)
+            (dolist (id '(2 3)) (puthash id (list :cb (lambda (r _e) (push r got)) :conn p :method "ping") drgnx-hub--pending))
+            (funcall (drgnx-guard-wrap #'drgnx-hub--client-filter "hub connection") p
+                     "{\"id\":1,\"result\":{\"x\":1}}\n{\"id\":2,\"result\":{\"a\":2}}\n{\"id\":3,\"res")
+            (should (equal got '((:a 2))))
+            (drgnx-hub--client-filter p "ult\":{\"b\":3}}\n")
+            (should (equal got '((:b 3) (:a 2))))
+            (should (equal (mapcar (lambda (n) (plist-get n :text)) (drgnx-notices :source 'guard))
+                           '("hub answer job/status: Bad data"))))
+        (delete-process p)))))
+
+(ert-deftest drgnx-hub-client/a-failing-should-in-a-callback-fails-its-test ()
+  ;; the guard around each answer's callback lets ERT's failure through
+  (let* ((drgnx-hub--pending (make-hash-table))
+         (inner (make-ert-test :name 'drgnx-hub-client-test--inner
+                               :body (lambda ()
+                                       (puthash 1 (list :cb (lambda (_r _e) (should nil)) :method "ping") drgnx-hub--pending)
+                                       (drgnx-hub--settle 1 '(:ok t) nil)))))
+    (should (ert-test-failed-p (ert-run-test inner)))))
+
 ;;;; Starting Ratatoskr, and Hub: Restart Now
 
 (defun drgnx-hub-client-test--stub (root body)

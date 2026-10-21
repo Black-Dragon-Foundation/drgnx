@@ -80,9 +80,10 @@ An unknown SEVERITY is `info'."
 
 (defun drgnx-ui--run (action)
   "Run ACTION: a registry id through `drgnx-surfaces-run' (the usage count and the key tip follow), else a command
-called interactively, else a function of no arguments."
+called interactively, else a function of no arguments.  A symbol that is none of these (its module is off) says so."
   (cond ((and (symbolp action) (drgnx-commands-get action)) (drgnx-surfaces-run action))
         ((commandp action) (call-interactively action))
+        ((and (symbolp action) (not (fboundp action))) (user-error "%s is not available (its module is off)" action))
         (t (funcall action))))
 
 (defun drgnx-ui--button-map (action where)

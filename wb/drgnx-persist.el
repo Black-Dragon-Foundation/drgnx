@@ -198,11 +198,12 @@ main one) first, then the others, oldest first."
   "Write the workbench of FRAMES (default: every window, the main one first) to FILE (default:
 `drgnx-persist-file').  Tabs not visited yet (restored at idle) are kept.  Called from a terminal window
 \(and with no FRAMES) it writes nothing, whatever FILE is: a terminal frame has no layout to export, and a terminal
-session never overwrites the desktop layout."
+session never overwrites the desktop layout.  Run as a command, a save it refuses says so in the echo area."
   (interactive)
   (if (drgnx-persist--save-skipped-p frames)
       (drgnx-persist--graphical-only)
-    (let ((file (or file (drgnx-persist--file)))
+    (let ((say (called-interactively-p 'any))
+          (file (or file (drgnx-persist--file)))
           (state (list :version drgnx-persist-version
                        :frames (mapcar (lambda (f) (drgnx-persist--no-props (drgnx-persist-state f)))
                                        (or frames (drgnx-persist--frames))))))
@@ -212,8 +213,9 @@ session never overwrites the desktop layout."
                                            state)
                                     :on-unreadable 'backup :max-bytes drgnx-persist--max-bytes)
                  file)
-        (drgnx-persist-newer (drgnx-notify 'wb 'warn "workbench.eld was written by a newer drgnx: not saved"
-                                           :id 'workbench-newer)
+        (drgnx-persist-newer (when say (drgnx-notice-clear 'wb 'workbench-newer))   ; a command's reply: each time
+                             (drgnx-notify 'wb 'warn "workbench.eld was written by a newer drgnx: not saved"
+                                           :id 'workbench-newer :echo (and say t))
                              nil)))))
 
 (defun drgnx-persist--newer-p (data)

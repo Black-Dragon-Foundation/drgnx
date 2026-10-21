@@ -14,6 +14,22 @@
 (defvar drgnx-notice-echo-test--minibuffer nil "Non-nil: the minibuffer is active.")
 (defvar drgnx-notice-echo-test--take nil "What the stubbed `drgnx-notice-desktop-take' answers.")
 
+(defconst drgnx-notice-echo-test--real-take (symbol-function 'drgnx-notice-desktop-take)
+  "The desktop route's take as the library defines it, before a test stubs it.")
+
+(defmacro drgnx-notice-echo-test--with-desktop (&rest body)
+  "BODY (inside `drgnx-notice-echo-test--with') with the real desktop route on: a backend there, no frame with focus;
+the bodies sent are in `sent', oldest first."
+  (declare (indent 0) (debug t))
+  `(let ((sent nil) (drgnx-notice-desktop t) (drgnx-notice-desktop--backend 'dbus)
+         (drgnx-notice-desktop--seen (make-hash-table :test #'equal)) (drgnx-notice-desktop--queue nil))
+     (cl-letf (((symbol-function 'drgnx-notice-desktop-take) drgnx-notice-echo-test--real-take)
+               ((symbol-function 'drgnx-notice-desktop-send)
+                (lambda (_title body) (setq sent (append sent (list body)))))
+               ((symbol-function 'frame-focus-state) #'ignore))
+       (unwind-protect (progn (drgnx-notice-desktop-mode 1) ,@body)
+         (drgnx-notice-desktop-mode -1)))))
+
 (defmacro drgnx-notice-echo-test--with (&rest body)
   "BODY on a fresh notice model and virtual time, the echo mode on after init, an echo area that can show, a notices
 key (C-c n) and a titled command `x-fix' (key F9).  `lines' is the list of lines echoed, oldest first."
@@ -94,6 +110,58 @@ key (C-c n) and a titled command `x-fix' (key F9).  `lines' is the list of lines
     (setq drgnx-notice-echo-test--take t)
     (drgnx-notice-set 'agents (list (list :id 'a :text "s1 asks?")))
     (should-not (lines))))
+
+;;;; What is new: decided on the union, and not again after `:unknown'
+
+(ert-deftest drgnx-notice-echo/one-id-in-two-sources-is-new-once ()
+  (drgnx-notice-echo-test--with
+    (drgnx-notice-set 'hub (list (list :id '(card . 12) :text "j1 — ask")))
+    (drgnx-notice-set 'agents (list (list :id '(card . 12) :text "j1: ask")))   ; the same card, another source
+    (drgnx-test-advance 5)
+    (should (equal (lines) '("drgnx: waiting on you: j1 — ask")))))
+
+(ert-deftest drgnx-notice-echo/a-source-back-from-unknown-announces-nothing-again ()
+  (drgnx-notice-echo-test--with
+    (drgnx-notice-set 'hub (list (list :id '(card . 12) :text "ask")))
+    (drgnx-test-advance 5)
+    (drgnx-notice-set 'hub :unknown :reason "the hub went away")
+    (drgnx-notice-set 'hub (list (list :id '(card . 12) :text "ask")))   ; back: the same card
+    (drgnx-test-advance 5)
+    (should (equal (lines) '("drgnx: waiting on you: ask")))
+    (drgnx-notice-set 'hub (list (list :id '(card . 12) :text "ask") (list :id '(card . 13) :text "other")))
+    (drgnx-test-advance 5)
+    (drgnx-notice-set 'hub (list (list :id '(card . 13) :text "other")))   ; a known set drops 12 ...
+    (drgnx-notice-set 'hub (list (list :id '(card . 13) :text "other") (list :id '(card . 12) :text "ask")))
+    (drgnx-test-advance 5)                              ; ... so 12 is new when it comes back
+    (should (equal (lines) '("drgnx: waiting on you: ask" "drgnx: waiting on you: other"
+                             "drgnx: waiting on you: ask")))))
+
+(ert-deftest drgnx-notice-echo/the-desktop-gets-each-new-thing-once ()
+  (drgnx-notice-echo-test--with
+    (drgnx-notice-echo-test--with-desktop
+      (drgnx-notice-set 'hub (list (list :id '(card . 12) :text "j1 — ask")))
+      (drgnx-notice-set 'agents (list (list :id '(card . 12) :text "j1: ask")))
+      (drgnx-notice-set 'agents nil)
+      (drgnx-notice-set 'hub :unknown :reason "the hub went away")   ; 12 leaves the union, the desktop forgets it
+      (drgnx-notice-set 'hub (list (list :id '(card . 12) :text "j1 — ask")))
+      (drgnx-test-advance 5)
+      (should (equal sent '("j1 — ask")))
+      (should-not (lines)))))                           ; the desktop took it: no line
+
+(ert-deftest drgnx-notice-echo/what-waits-at-startup-is-not-new ()
+  (drgnx-notice-echo-test--with
+    (drgnx-notice-echo-test--with-desktop
+      (drgnx-notice-echo-mode -1)
+      (let ((after-init-time nil))                      ; init: a startup-stage module sets what it finds
+        (drgnx-notice-echo-mode 1)
+        (drgnx-notice-set 'agents (list (list :id 'old :text "left from yesterday")))
+        (drgnx-notice--startup-hook))
+      (drgnx-test-advance 5)
+      (should-not sent)
+      (drgnx-notice-set 'agents (list (list :id 'old :text "left from yesterday") (list :id 'new :text "just now")))
+      (drgnx-test-advance 5)
+      (should (equal sent '("just now")))
+      (should-not (lines)))))
 
 (ert-deftest drgnx-notice-echo/echo-nil-overrides ()
   (drgnx-notice-echo-test--with

@@ -459,37 +459,39 @@ Returns the search process (or nil), so that a stopped Ask can end it.  A search
               (make-process
                :name "drgnx-ai-grep" :buffer out :command cmd :noquery t :connection-type 'pipe
                :sentinel
-               (lambda (p _)
-                 (unless (process-live-p p)
-                   (drgnx-timer-cancel-owner p)
-                   (let ((hits (make-hash-table :test #'equal)))
-                     (with-current-buffer out
-                       (goto-char (point-min))
-                       (while (and (not (process-get p :cut)) (not (process-get p :dropped))
-                                   ;; a hit's text is cut at the line maximum: a minified file is one huge line
-                                   (re-search-forward "^\\(?:\\./\\)?\\([^:\n]+\\):\\([0-9]+\\):\\(.\\{0,500\\}\\).*$" nil t))
-                         (let* ((file (match-string 1)) (line (string-to-number (match-string 2))) (text (downcase (match-string 3)))
-                                (e (or (gethash file hits) (puthash file (list :line line :kws nil) hits))))
-                           (dolist (k kws) (when (string-search k text) (cl-pushnew k (plist-get e :kws) :test #'equal)))
-                           (puthash file (plist-put e :kws (plist-get e :kws)) hits))))
-                     (kill-buffer out)
-                     (cond
-                      ((process-get p :dropped))                     ; stopped: nobody waits for the answer
-                      ((process-get p :cut) (funcall done nil))
-                      (t
-                       (let ((ranked (seq-take (sort (let (l) (maphash (lambda (f e) (push (cons f e) l)) hits) l)
-                                                     (lambda (a b) (> (length (plist-get (cdr a) :kws)) (length (plist-get (cdr b) :kws)))))
-                                               5)))
-                         (funcall done
-                                  (mapcar (lambda (fe)
-                                            (let ((line (plist-get (cdr fe) :line)))
-                                              (list :file (car fe) :line line
-                                                    :text (with-temp-buffer
-                                                            (insert-file-contents (expand-file-name (car fe) root) nil 0 2000000)
-                                                            (goto-char (point-min)) (forward-line (max 0 (- line 4)))
-                                                            (drgnx-ai--cut-lines
-                                                             (buffer-substring-no-properties (point) (progn (forward-line 10) (point))))))))
-                                          ranked)))))))))))
+               (drgnx-guard-wrap
+                (lambda (p _)
+                  (unless (process-live-p p)
+                    (drgnx-timer-cancel-owner p)
+                    (let ((hits (make-hash-table :test #'equal)))
+                      (with-current-buffer out
+                        (goto-char (point-min))
+                        (while (and (not (process-get p :cut)) (not (process-get p :dropped))
+                                    ;; a hit's text is cut at the line maximum: a minified file is one huge line
+                                    (re-search-forward "^\\(?:\\./\\)?\\([^:\n]+\\):\\([0-9]+\\):\\(.\\{0,500\\}\\).*$" nil t))
+                          (let* ((file (match-string 1)) (line (string-to-number (match-string 2))) (text (downcase (match-string 3)))
+                                 (e (or (gethash file hits) (puthash file (list :line line :kws nil) hits))))
+                            (dolist (k kws) (when (string-search k text) (cl-pushnew k (plist-get e :kws) :test #'equal)))
+                            (puthash file (plist-put e :kws (plist-get e :kws)) hits))))
+                      (kill-buffer out)
+                      (cond
+                       ((process-get p :dropped))                     ; stopped: nobody waits for the answer
+                       ((process-get p :cut) (funcall done nil))
+                       (t
+                        (let ((ranked (seq-take (sort (let (l) (maphash (lambda (f e) (push (cons f e) l)) hits) l)
+                                                      (lambda (a b) (> (length (plist-get (cdr a) :kws)) (length (plist-get (cdr b) :kws)))))
+                                                5)))
+                          (funcall done
+                                   (mapcar (lambda (fe)
+                                             (let ((line (plist-get (cdr fe) :line)))
+                                               (list :file (car fe) :line line
+                                                     :text (with-temp-buffer
+                                                             (insert-file-contents (expand-file-name (car fe) root) nil 0 2000000)
+                                                             (goto-char (point-min)) (forward-line (max 0 (- line 4)))
+                                                             (drgnx-ai--cut-lines
+                                                              (buffer-substring-no-properties (point) (progn (forward-line 10) (point))))))))
+                                           ranked))))))))
+                "the AI context's grep"))))
         (drgnx-timer-start (cons 'ai-grep proc) drgnx-ai-search-timeout #'drgnx-ai--grep-cut
                            :args (list proc) :owner proc)
         proc))))

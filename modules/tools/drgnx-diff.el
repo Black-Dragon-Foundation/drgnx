@@ -316,25 +316,27 @@
              :name "drgnx-diff" :buffer out :stderr err :noquery t :connection-type 'pipe
              :coding 'utf-8-unix
              :command (append '("git" "-c" "core.quotePath=false") (drgnx-diff--args drgnx-diff--source))
-             :sentinel (lambda (proc _event)
-                         (unless (process-live-p proc)
-                           (when (and (buffer-live-p buf) (eq proc (buffer-local-value 'drgnx-diff--proc buf)))
-                             (with-current-buffer buf
-                               (setq drgnx-diff--proc nil)
-                               (if (eql (process-exit-status proc) 0)
-                                   (progn (setq drgnx-diff--files (drgnx-diff-parse (with-current-buffer out (buffer-string)))
-                                                drgnx-diff--folded nil)
-                                          (drgnx-diff--render)
-                                          (goto-char (point-min))
-                                          (when drgnx-diff--landing
-                                            (let ((i (seq-position drgnx-diff--files drgnx-diff--landing
-                                                                   (lambda (f path) (equal (plist-get f :new) path)))))
-                                              (when i (drgnx-diff--goto i -1)))))
-                                 (let ((inhibit-read-only t))
-                                   (erase-buffer)
-                                   (insert "git failed:\n" (with-current-buffer err (buffer-string)))))))
-                           (when-let* ((ep (get-buffer-process err))) (delete-process ep))
-                           (kill-buffer out) (kill-buffer err)))))
+             :sentinel (drgnx-guard-wrap
+                        (lambda (proc _event)
+                          (unless (process-live-p proc)
+                            (when (and (buffer-live-p buf) (eq proc (buffer-local-value 'drgnx-diff--proc buf)))
+                              (with-current-buffer buf
+                                (setq drgnx-diff--proc nil)
+                                (if (eql (process-exit-status proc) 0)
+                                    (progn (setq drgnx-diff--files (drgnx-diff-parse (with-current-buffer out (buffer-string)))
+                                                 drgnx-diff--folded nil)
+                                           (drgnx-diff--render)
+                                           (goto-char (point-min))
+                                           (when drgnx-diff--landing
+                                             (let ((i (seq-position drgnx-diff--files drgnx-diff--landing
+                                                                    (lambda (f path) (equal (plist-get f :new) path)))))
+                                               (when i (drgnx-diff--goto i -1)))))
+                                  (let ((inhibit-read-only t))
+                                    (erase-buffer)
+                                    (insert "git failed:\n" (with-current-buffer err (buffer-string)))))))
+                            (when-let* ((ep (get-buffer-process err))) (delete-process ep))
+                            (kill-buffer out) (kill-buffer err)))
+                        "the diff's git")))
     (setq drgnx-diff--proc p)))
 
 (defun drgnx-diff--revert (_ignore-auto _noconfirm)

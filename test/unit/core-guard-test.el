@@ -138,6 +138,32 @@
       (should (= (length (drgnx-notices :source 'guard)) 1))
       (should (= (plist-get (drgnx-guard-test--guard-notice "writer") :count) 2)))))
 
+(ert-deftest drgnx-guard/a-failing-should-in-a-guarded-callback-fails-its-test ()
+  ;; ERT's own signals pass through the guard: a test's failure is never turned into a notice
+  (drgnx-notice-test-with-model
+    (let ((failing (make-ert-test :name 'drgnx-guard-test--inner-fail
+                                  :body (lambda () (funcall (drgnx-guard-wrap (lambda () (should (= 1 2))) "cb")))))
+          (skipping (make-ert-test :name 'drgnx-guard-test--inner-skip
+                                   :body (lambda () (funcall (drgnx-guard-wrap (lambda () (skip-unless nil)) "cb"))))))
+      (should (ert-test-failed-p (ert-run-test failing)))
+      (should (ert-test-skipped-p (ert-run-test skipping)))
+      (should-not (drgnx-notices :source 'guard)))))
+
+(ert-deftest drgnx-guard/the-first-catch-of-a-label-is-said ()
+  ;; S4: Emacs said a failed filter; the guard says the first catch per label in the echo area (repeats only count)
+  (drgnx-notice-test-with-model
+    (let ((said 0))
+      (add-hook 'drgnx-notice-functions
+                (lambda (c) (when (and (eq (plist-get c :op) 'post) (plist-get (plist-get c :notice) :echo))
+                              (setq said (1+ said)))))
+      (let ((f (drgnx-guard-wrap (lambda () (error "Disk full")) "writer")))
+        (funcall f) (funcall f))
+      (should (= said 1))
+      (funcall (drgnx-guard-wrap (lambda () (error "Disk gone")) "writer"))   ; another error, the same label
+      (should (= said 1))
+      (funcall (drgnx-guard-wrap (lambda () (error "Boom")) "reader"))
+      (should (= said 2)))))
+
 (defvar drgnx-guard-test--hook nil)
 (defvar drgnx-guard-test--heard nil)
 (defun drgnx-guard-test--fails (&rest _) (error "Boom"))

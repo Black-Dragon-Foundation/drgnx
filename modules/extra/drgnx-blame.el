@@ -142,21 +142,23 @@ has not answered).  The empty line after the last newline has none."
                    :name "drgnx-blame" :buffer out :stderr err :noquery t :connection-type 'pipe :coding 'utf-8-unix
                    :command (drgnx-blame--command line modified)
                    :sentinel
-                   (lambda (proc _event)
-                     (unless (process-live-p proc)
-                       (when (and (buffer-live-p buf) (eq proc (buffer-local-value 'drgnx-blame--proc buf)))
-                         (with-current-buffer buf
-                           (setq drgnx-blame--proc nil)
-                           (if (not (eql (process-exit-status proc) 0))
-                               ;; untracked, outside a repository: never again; anything else may pass
-                               (when (drgnx-blame--refused-p (with-current-buffer err (buffer-string)))
-                                 (setq drgnx-blame--off t))
-                             (when-let* ((info (drgnx-blame--parse (with-current-buffer out (buffer-string)))))
-                               (unless drgnx-blame--cache (setq drgnx-blame--cache (make-hash-table)))
-                               (puthash line (cons (float-time) info) drgnx-blame--cache)
-                               (when (= (line-beginning-position) bol) (drgnx-blame--show info))))))
-                       (when-let* ((ep (get-buffer-process err))) (delete-process ep))
-                       (kill-buffer out) (kill-buffer err))))))
+                   (drgnx-guard-wrap
+                    (lambda (proc _event)
+                      (unless (process-live-p proc)
+                        (when (and (buffer-live-p buf) (eq proc (buffer-local-value 'drgnx-blame--proc buf)))
+                          (with-current-buffer buf
+                            (setq drgnx-blame--proc nil)
+                            (if (not (eql (process-exit-status proc) 0))
+                                ;; untracked, outside a repository: never again; anything else may pass
+                                (when (drgnx-blame--refused-p (with-current-buffer err (buffer-string)))
+                                  (setq drgnx-blame--off t))
+                              (when-let* ((info (drgnx-blame--parse (with-current-buffer out (buffer-string)))))
+                                (unless drgnx-blame--cache (setq drgnx-blame--cache (make-hash-table)))
+                                (puthash line (cons (float-time) info) drgnx-blame--cache)
+                                (when (= (line-beginning-position) bol) (drgnx-blame--show info))))))
+                        (when-let* ((ep (get-buffer-process err))) (delete-process ep))
+                        (kill-buffer out) (kill-buffer err)))
+                    "git blame"))))
           (setq drgnx-blame--proc p)
           ;; git may have ended already (it refuses an untracked file at once): its sentinel has the answer
           (condition-case err
