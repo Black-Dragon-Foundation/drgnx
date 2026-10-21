@@ -177,7 +177,6 @@
                                (should (memq #'drgnx-job-ui--event drgnx-hub-event-functions))
                                (drgnx-job-ui-note-jobs (list drgnx-job-ui-test--summary))
                                (should (= 3 (drgnx-needs-you-count)))
-                               (should (eql (drgnx-job-ui-needs-you) 3))             ; the obsolete name, the same count
                                (drgnx-module-teardown 'tools/jobs)
                                (should-not (gethash 'jobs drgnx-notice--sources))
                                (should (= 0 (drgnx-needs-you-count)))

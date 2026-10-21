@@ -13,6 +13,9 @@ Only two things reach the echo area on their own:
 - **A new thing that waits on you** (an agent asking, an edit to review, a job's card): `drgnx: waiting on you: TEXT`.
   When the desktop already told you (see below), the echo area stays quiet.
 
+The two counts are segments of the status bar (`needs-you`: `◐ 2 waiting on you`, a click does what the newest item
+says; `drgnx`: `✕ 1 ⚠ 2`, a click shows the list; see [The face](face.md)).
+
 Everything else — information, warnings, a condition that is not a failure — shows in the status bar's counts and in
 the Notices list, and the echo area only when its producer asks for it. A producer that says it must never interrupt
 you is never echoed.

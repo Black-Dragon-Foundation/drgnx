@@ -256,7 +256,6 @@ error, or when it does not answer."
 (defun drgnx-hub-disconnect ()
   (dolist (c (list drgnx-hub--client drgnx-hub--events drgnx-hub--subscribing)) (when (process-live-p c) (delete-process c)))
   (setq drgnx-hub--client nil drgnx-hub--events nil drgnx-hub--subscribing nil)
-  (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--note-tests)
   (clrhash drgnx-hub--pending))
 
 (defun drgnx-hub-running-p ()
@@ -330,21 +329,8 @@ hand it the keys this Emacs holds.  t, or an error saying why not."
                                   (when (eq drgnx-hub--subscribing p) (setq drgnx-hub--subscribing nil))
                                   (drgnx-guard-run-hook 'drgnx-hub-disconnect-functions))))
       (drgnx-hub--send c (list :id 0 :method "subscribe" :params (make-hash-table)))
-      (add-hook 'drgnx-hub-event-functions #'drgnx-hub--note-tests)   ; removed by `drgnx-hub-disconnect'
       ;; a hub keeps keys in memory only: one that restarted has none, so each new subscription gives them again
       (with-demoted-errors "drgnx hub: keys not handed over: %S" (drgnx-hub--send-keys)))))
-
-(declare-function drgnx-statusbar-note-tests "drgnx-statusbar")
-
-(defun drgnx-hub--note-tests (event data)
-  "In an editor: the test runs among the `events' the hub sent reach the status bar (`drgnx-statusbar-note-tests',
-when it is loaded)."
-  (when (and (equal event "events") (fboundp 'drgnx-statusbar-note-tests))
-    (dolist (e (append (plist-get data :events) nil))
-      (when (equal (plist-get e :kind) "test")
-        (let ((d (plist-get e :data)))
-          (when (and (proper-list-p d) (or (natnump (plist-get d :passed)) (natnump (plist-get d :failed))))
-            (drgnx-statusbar-note-tests (or (plist-get d :passed) 0) (or (plist-get d :failed) 0) (plist-get e :agent))))))))
 
 ;;;; CLI
 

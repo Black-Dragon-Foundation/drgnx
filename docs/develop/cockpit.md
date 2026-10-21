@@ -624,8 +624,8 @@ side is in [jobs.md](../guide/jobs.md#a-job-in-the-work-cockpit).
   open card `(card . CID)` and per message not acted on `(message . MID)`, scoped to the job, an `overlap` card
   with `:echo nil`); the recount's own `job/status` and the every-job pane's both call it, so a refresh of that pane
   counts for the notice model too and an action asks the hub once. A recount the hub does not answer, or a
-  disconnect, makes the set `:unknown` ("Jobs: not known — …"). `drgnx-job-ui-needs-you` is the obsolete name of
-  `drgnx-needs-you-count`: the status bar's jobs segment reads it until Task 17 replaces the bar. Both heads show the model's count:
+  disconnect, makes the set `:unknown` ("Jobs: not known — …"). The status bar's `needs-you` segment reads the model's count
+  (`drgnx-notice-needs-you-text`); the `jobs` segment shows only the running jobs. Both heads show the model's count:
   `What needs you: N` is `(drgnx-needs-you-count JOB-ID)` and `What needs you — every job: N` is `(drgnx-needs-you-count)`;
   the questions source's items count in both.
 

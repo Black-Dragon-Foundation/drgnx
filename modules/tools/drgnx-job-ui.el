@@ -77,8 +77,6 @@ running or paused; else nil."
 message to the user not acted on."
   (and (drgnx-job-ui--open-items job) t))
 
-(define-obsolete-function-alias 'drgnx-job-ui-needs-you #'drgnx-needs-you-count "drgnx M12f")
-
 (defun drgnx-job-ui--source-p ()
   "Non-nil while the `jobs' notice source is defined: the module `tools/jobs' is on."
   (and (gethash 'jobs drgnx-notice--sources) t))
