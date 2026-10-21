@@ -880,8 +880,10 @@ what `ratatoskr doctor --json' said)."
                        :socket_dir (or (plist-get over :socket) (list :path "/run/user/1000/drgnx-1" :mode "0700" :ok t))
                        :sqlite "3.53.0" :job_agents "unsandboxed (as on main; the sandbox comes with phase 6)"))
          (fact (list :binary "/data/bin/ratatoskr" :report report :head "abc1234" :emacs-sqlite "3.53.0")))
+    (when (plist-get over :sandbox) (setq report (plist-put report :sandbox (plist-get over :sandbox))
+                                          fact (plist-put fact :report report)))
     (cl-loop for (k v) on over by #'cddr
-             unless (memq k '(:commit :running :socket :hooks)) do (setq fact (plist-put fact k v)))
+             unless (memq k '(:commit :running :socket :hooks :sandbox)) do (setq fact (plist-put fact k v)))
     (drgnx-doctor-test--facts :ratatoskr fact)))
 
 (ert-deftest drgnx-doctor/ratatoskr-report-is-read-from-the-binary ()
@@ -899,6 +901,29 @@ what `ratatoskr doctor --json' said)."
           (with-temp-file bin (insert "#!/bin/sh\nexit 1\n"))
           (should-not (drgnx-doctor--ratatoskr-report bin)))
       (delete-directory dir t))))
+
+(ert-deftest drgnx-doctor/ratatoskr-shows-the-sandbox-line ()
+  ;; the job sandbox's check, from `ratatoskr doctor --json' (stubbed): a detail line only, never a status
+  (let ((check (lambda (&rest over) (drgnx-doctor-check 'ratatoskr (apply #'drgnx-doctor-test--rtsk over)))))
+    (let ((r (funcall check :sandbox '(:backend "bwrap" :version "0.12.0" :ok t :landlock_abi 10 :in_use nil))))
+      (should (eq (car r) 'ok))
+      (should (string-search "job sandbox backend: bwrap 0.12.0 works here (Landlock ABI 10, seccomp); job agents do not use it yet (phase 6)"
+                             (nth 1 r))))
+    (let ((r (funcall check :sandbox '(:backend "seatbelt" :ok t :landlock_abi 0))))
+      (should (string-search "job sandbox backend: seatbelt works here (Seatbelt);" (nth 1 r))))
+    ;; unavailable: the reason and the fix, and the status is the one without a sandbox section
+    (let ((r (funcall check :sandbox '(:backend "none" :ok nil :landlock_abi 0 :reason "inside a container: bubblewrap needs user namespaces the container does not give"))))
+      (should (eq (car r) 'ok))
+      (should (string-search "job sandbox backend: not available here: inside a container" (nth 1 r)))
+      (should-not (string-search "—" (nth 1 r))))
+    (let ((r (funcall check :sandbox '(:backend "none" :ok nil :reason "Landlock is off" :fix "boot with Landlock"))))
+      (should (string-search "not available here: Landlock is off — boot with Landlock" (nth 1 r))))
+    (should (equal (car (funcall check :sandbox '(:backend "none" :ok nil :reason "x"))) (car (funcall check))))
+    ;; an older binary without the section, and a failing check, show no line
+    (should-not (string-search "job sandbox" (nth 1 (funcall check))))
+    (let ((r (funcall check :hooks t :sandbox '(:backend "none" :ok nil :reason "x"))))
+      (should (eq (car r) 'fail))
+      (should-not (string-search "job sandbox" (nth 1 r))))))
 
 (ert-deftest drgnx-doctor/ratatoskr-check-cases ()
   (should (equal (plist-get (alist-get 'ratatoskr drgnx-doctor--checks) :group) "Agents"))

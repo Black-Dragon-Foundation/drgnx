@@ -1,6 +1,7 @@
 //! The command line (lexopt): `ratatoskr serve [--foreground] [--parent-pid PID] [--supervisor none|self|launchd]`,
 //! `ensure`, `stop`, `status`, `doctor`, `restart`, `version [--json]`, `methods --json|--markdown`,
-//! `sandbox-inner …` and `relay …` (the sandbox's inner helper and its relay, their arguments taken raw), and with
+//! `sandbox check`, `sandbox-inner …` and `relay …` (the sandbox's inner helper and its relay, their arguments taken
+//! raw), and with
 //! the `test-hooks` feature `sandbox run …`.  A line that does not parse exits 2 ([`crate::Exit::Usage`]).
 
 use std::ffi::OsString;
@@ -18,6 +19,7 @@ pub const USAGE: &str = "usage: ratatoskr serve [--foreground] [--parent-pid PID
     \x20      ratatoskr methods --json|--markdown\n\
     \x20      ratatoskr sandbox-inner --spec-fd 3 -- CMD...   (the sandbox's inner helper; run by the sandbox only)\n\
     \x20      ratatoskr relay --parent-pid PID [--ready-fd N] PORT=SOCKET...   (the sandbox's relay; run by the sandbox only)\n\
+    \x20      ratatoskr sandbox check [--json] [--tier full|reduced]   (does the job sandbox start here?)\n\
     \x20      ratatoskr sandbox run --spec FILE --result FILE [--tier full|reduced] [--bwrap PATH]\n\
     \x20          [--pause-before-spawn FIFO] [--landlock-omit PATH]... [--landlock-abi-cap N] -- CMD...   (test builds only)";
 
@@ -48,7 +50,12 @@ pub enum Command {
     Status {
         json: bool,
     },
-    Doctor,
+    /// The machine's report: JSON with `--json` (the editor's doctor), else a few lines of text.
+    Doctor {
+        json: bool,
+    },
+    /// `sandbox check`: whether the job sandbox starts here, the real invocation as the probe.
+    SandboxCheck(SandboxCheckArgs),
     /// Ask the running hub to restart (the editor's Hub: Restart Now).
     Restart,
     /// The sandbox's inner helper (`gleipnir::inner::inner_main`): every argument after the command is its own,
@@ -63,6 +70,15 @@ pub enum Command {
     /// `sandbox run` (test-hooks only): one command under the sandbox, for the escape rows.
     #[cfg(feature = "test-hooks")]
     SandboxRun(SandboxRunArgs),
+}
+
+/// `sandbox check`'s arguments.
+#[derive(Debug, PartialEq, Eq)]
+pub struct SandboxCheckArgs {
+    pub json: bool,
+    pub tier: gleipnir::Tier,
+    /// `--bwrap PATH` (test-hooks only): the only bwrap looked at, held to the same rules.
+    pub bwrap: Option<std::path::PathBuf>,
 }
 
 /// `sandbox run`'s arguments (test-hooks only).
@@ -199,15 +215,15 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
             }
             Ok(Command::Status { json })
         }
-        // the report is JSON; --json is accepted for the plan's spelling
         "doctor" => {
+            let mut json = false;
             while let Some(arg) = p.next().map_err(e)? {
                 match arg {
-                    Long("json") => {}
+                    Long("json") => json = true,
                     other => return Err(other.unexpected().to_string()),
                 }
             }
-            Ok(Command::Doctor)
+            Ok(Command::Doctor { json })
         }
         "restart" => match p.next().map_err(e)? {
             None => Ok(Command::Restart),
@@ -250,6 +266,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
                 None => return Err("sandbox needs a subcommand".into()),
             };
             match sub.as_str() {
+                "check" => sandbox_check(&mut p).map(Command::SandboxCheck),
                 #[cfg(feature = "test-hooks")]
                 "run" => sandbox_run(&mut p).map(Command::SandboxRun),
                 // Without the test hooks there is no `sandbox run`: a release build cannot run a spec from a file.
@@ -260,6 +277,33 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
         }
         other => Err(format!("unknown command {other:?}")),
     }
+}
+
+/// `sandbox check [--json] [--tier full|reduced]`, and with test-hooks `[--bwrap PATH]`.
+fn sandbox_check(p: &mut lexopt::Parser) -> Result<SandboxCheckArgs, String> {
+    use lexopt::prelude::*;
+    let e = |e: lexopt::Error| e.to_string();
+    let mut a = SandboxCheckArgs {
+        json: false,
+        tier: gleipnir::Tier::Full,
+        bwrap: None,
+    };
+    while let Some(arg) = p.next().map_err(e)? {
+        match arg {
+            Long("json") => a.json = true,
+            Long("tier") => {
+                a.tier = match p.value().map_err(e)?.string().map_err(e)?.as_str() {
+                    "full" => gleipnir::Tier::Full,
+                    "reduced" => gleipnir::Tier::Reduced,
+                    other => return Err(format!("--tier takes full or reduced, not {other:?}")),
+                }
+            }
+            #[cfg(feature = "test-hooks")]
+            Long("bwrap") => a.bwrap = Some(PathBuf::from(p.value().map_err(e)?)),
+            other => return Err(other.unexpected().to_string()),
+        }
+    }
+    Ok(a)
 }
 
 /// `sandbox run`'s options, then the command: everything from the first argument that is not an option (after
@@ -399,7 +443,8 @@ mod tests {
         );
         assert_eq!(p(&["status"]), Ok(Command::Status { json: false }));
         assert_eq!(p(&["status", "--json"]), Ok(Command::Status { json: true }));
-        assert_eq!(p(&["doctor", "--json"]), Ok(Command::Doctor));
+        assert_eq!(p(&["doctor", "--json"]), Ok(Command::Doctor { json: true }));
+        assert_eq!(p(&["doctor"]), Ok(Command::Doctor { json: false }));
         assert_eq!(p(&["restart"]), Ok(Command::Restart));
         assert_eq!(p(&["version"]), Ok(Command::Version { json: false }));
         assert_eq!(
@@ -461,6 +506,51 @@ mod tests {
                 args: rest.map(OsString::from).to_vec()
             })
         );
+    }
+
+    #[test]
+    fn sandbox_check_parses() {
+        let args = |json, tier| {
+            Ok(Command::SandboxCheck(SandboxCheckArgs {
+                json,
+                tier,
+                bwrap: None,
+            }))
+        };
+        assert_eq!(p(&["sandbox", "check"]), args(false, gleipnir::Tier::Full));
+        assert_eq!(
+            p(&["sandbox", "check", "--json", "--tier", "reduced"]),
+            args(true, gleipnir::Tier::Reduced)
+        );
+        assert_eq!(
+            p(&["sandbox", "check", "--tier", "full"]),
+            args(false, gleipnir::Tier::Full)
+        );
+        for bad in [
+            &["sandbox", "check", "--tier", "half"][..],
+            &["sandbox", "check", "--tier"],
+            &["sandbox", "check", "extra"],
+            &["sandbox", "check", "--yaml"],
+        ] {
+            assert!(p(bad).is_err(), "{bad:?} parsed");
+        }
+    }
+
+    /// `--bwrap` is a test hook: a release build refuses it, a test build takes it.
+    #[test]
+    fn bwrap_override_needs_test_hooks() {
+        let r = p(&["sandbox", "check", "--bwrap", "/opt/bwrap"]);
+        #[cfg(feature = "test-hooks")]
+        assert_eq!(
+            r,
+            Ok(Command::SandboxCheck(SandboxCheckArgs {
+                json: false,
+                tier: gleipnir::Tier::Full,
+                bwrap: Some("/opt/bwrap".into()),
+            }))
+        );
+        #[cfg(not(feature = "test-hooks"))]
+        assert!(r.unwrap_err().contains("--bwrap"));
     }
 
     /// A release build has no `sandbox run`: a spec from a file never runs there.

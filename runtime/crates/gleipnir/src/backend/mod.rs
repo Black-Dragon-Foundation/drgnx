@@ -57,6 +57,16 @@ pub enum BackendKind {
 }
 
 impl BackendKind {
+    /// The name the check and the doctor print.
+    pub fn name(self) -> &'static str {
+        match self {
+            BackendKind::Bwrap => "bwrap",
+            BackendKind::Reduced => "reduced",
+            BackendKind::Seatbelt => "seatbelt",
+            BackendKind::None => "none",
+        }
+    }
+
     /// The target a spec is validated for to run under this backend; `None` has none.
     pub fn target(self) -> Option<Target> {
         match self {
@@ -273,6 +283,31 @@ fn seatbelt_prepared(run: macos::Run) -> Prepared {
         },
         status: None,
         layers: Some(LayersReport::seatbelt()),
+    }
+}
+
+/// The bwrap this host has and its version, for the check's facts: root-owned only, any version (Linux; else `None`).
+pub(crate) fn host_bwrap(only: Option<&std::path::Path>) -> Option<(PathBuf, (u32, u32, u32))> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::bwrap::probe(only)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = only;
+        None
+    }
+}
+
+/// Whether this host is macOS, and then whether `/usr/bin/sandbox-exec` is there where only root can change it.
+pub(crate) fn host_macos() -> (bool, bool) {
+    #[cfg(target_os = "macos")]
+    {
+        (true, macos::find().is_ok())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        (false, false)
     }
 }
 

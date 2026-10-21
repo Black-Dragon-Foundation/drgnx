@@ -26,6 +26,19 @@ pub fn find() -> Result<(TrustedProgram, (u32, u32, u32)), Refusal> {
     find_in(&candidates)
 }
 
+/// The bwrap the check reports: the first root-owned candidate (or `only`) and the version it prints, whatever the
+/// version is (the floor is [`find`]'s to enforce). `None` when none is root-owned or its version is unreadable.
+pub fn probe(only: Option<&Path>) -> Option<(std::path::PathBuf, (u32, u32, u32))> {
+    let all: Vec<&Path> = match only {
+        Some(p) => vec![p],
+        None => CANDIDATES.iter().map(Path::new).collect(),
+    };
+    let prog = trusted_program(&all).ok()?;
+    let out = version_output(&prog.path, VERSION_DEADLINE).ok()?;
+    let version = crate::bwrap::parse_version(&out).ok()?;
+    Some((prog.path, version))
+}
+
 /// The first of `candidates` that only root can change (`eitri::trusted_program`), run with `--version` within
 /// [`VERSION_DEADLINE`] and accepted only at or above the floor.
 pub fn find_in(candidates: &[&Path]) -> Result<(TrustedProgram, (u32, u32, u32)), Refusal> {
