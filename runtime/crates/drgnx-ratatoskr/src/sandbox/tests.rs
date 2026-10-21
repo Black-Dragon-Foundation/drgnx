@@ -100,7 +100,10 @@ fn context_closes_data_state_config_and_sockets() {
         !ctx.closed.contains(&fx.p("data-link/drgnx")),
         "never the link"
     );
-    assert_eq!(ctx.run_parents, vec![fx.p("run/drgnx/s")]);
+    assert_eq!(
+        ctx.run_parents,
+        vec![fx.p("run/drgnx/s"), fx.p("t/drgnx-hub-1000/s")]
+    );
     let mut sockets = vec![fx.p("agent.sock"), fx.p("run/bus,x"), fx.p("run/bus")];
     sockets.sort();
     assert_eq!(ctx.user_sockets, sockets);
@@ -142,6 +145,76 @@ fn context_closes_data_state_config_and_sockets() {
     }
     let r = validate(spec(fx.p("realbin")), &ctx, Target::LinuxBwrap).unwrap_err();
     assert_eq!(r.rule, Rule::ProgramDir, "{}", r.message);
+}
+
+/// Review M10: what an agent session is given is its session dir (`s/SID`, from `paths::make_session_dir`), which
+/// Gleipnir takes as a run source; the backend's directory is never one, nor can any other source reach it, and a
+/// session dir holds no `backend.sock`.
+#[test]
+fn an_agent_session_dir_never_reaches_the_backend_socket() {
+    let fx = Fx::new();
+    let env = fx.env();
+    let ctx = context_for(&env, Some(&fx.p("bin/ratatoskr")));
+    let socket = paths::socket_path(&env);
+    let session = paths::make_session_dir(&env, &socket, "0123456789ab").unwrap();
+    fs::write(session.join(paths::SESSION_HUB_SOCKET), "").unwrap();
+    let backend = paths::backend_socket_path(&env, &socket).unwrap();
+    let backend_dir = backend.parent().unwrap().to_path_buf();
+    paths::private_dir(&backend_dir).unwrap();
+    fs::write(&backend, "").unwrap();
+    assert!(!session.join("backend.sock").exists());
+    assert!(!backend.starts_with(&session) && !session.starts_with(&backend_dir));
+    let spec = |run: Option<Bind>, read: Vec<PathBuf>, sockets: Vec<PathBuf>| Spec {
+        read,
+        write: vec![fx.p("home/proj")],
+        hide: vec![],
+        sockets,
+        binds: vec![],
+        home: None,
+        run,
+        env: vec![],
+        chdir: fx.p("home/proj"),
+        net: Net::Shared,
+        tmp: None,
+        layers: Layers::for_target(Target::LinuxBwrap),
+        extra_tcp_ports: vec![],
+    };
+    let run = |source: &Path| {
+        Some(Bind {
+            mode: Mode::Ro,
+            source: source.to_path_buf(),
+            dest: "/run/drgnx".into(),
+        })
+    };
+    // the session dir is a run source, its hub.sock a socket inside it
+    validate(
+        spec(
+            run(&session),
+            vec![],
+            vec![session.join(paths::SESSION_HUB_SOCKET)],
+        ),
+        &ctx,
+        Target::LinuxBwrap,
+    )
+    .expect("a session dir passes");
+    // the backend's dir is no run source, nor readable, nor a socket's place
+    for (what, s) in [
+        ("run", spec(run(&backend_dir), vec![], vec![])),
+        ("read", spec(None, vec![backend_dir.clone()], vec![])),
+        ("read socket", spec(None, vec![backend.clone()], vec![])),
+        ("socket", spec(run(&session), vec![], vec![backend.clone()])),
+        // s/ whole would hold every session's sockets
+        (
+            "run s/",
+            spec(run(session.parent().unwrap()), vec![], vec![]),
+        ),
+    ] {
+        let r = validate(s, &ctx, Target::LinuxBwrap).unwrap_err();
+        assert!(
+            matches!(r.rule, Rule::Closed | Rule::SessionDir | Rule::ExposesUser),
+            "{what}: {r:?}"
+        );
+    }
 }
 
 /// Review M12: the helper's own dir is closed, so no spec can write over the binary bwrap runs as the helper.

@@ -2,7 +2,9 @@
 //! (docs/develop/runtime.md).  Ratatoskr starts it as `DRGNX_RATATOSKR_BACKEND`; it
 //!
 //! - serves `DRGNX_HUB_SERVE_SOCKET` the v0 way (one JSON object per line, no hello), a stale socket file replaced;
-//! - appends every line it receives to `$XDG_STATE_HOME/drgnx/fake-backend.log` and writes its own environment, as a
+//! - as the Lisp backend, takes a connection only when its first line is `{"auth": DRGNX_HUB_SERVE_SECRET}` (which
+//!   must be set), else closes it; that line is not logged;
+//! - appends every other line it receives to `$XDG_STATE_HOME/drgnx/fake-backend.log` and writes its own environment, as a
 //!   JSON object, to `$XDG_STATE_HOME/drgnx/fake-backend.env`;
 //! - answers from the script in `DRGNX_FAKE_BACKEND_SCRIPT` (JSON): `{METHOD: ANSWER}`, ANSWER being an object
 //!   with `result` or `error` (sent with the request's id), a string (sent as the whole line, `$ID` replaced by the
@@ -21,6 +23,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 struct Shared {
+    secret: String,
     script: Map<String, Value>,
     log: Mutex<std::fs::File>,
     subscribers: Mutex<Vec<UnixStream>>,
@@ -34,6 +37,10 @@ fn die(why: &str) -> ! {
 fn main() {
     let socket = std::env::var("DRGNX_HUB_SERVE_SOCKET")
         .unwrap_or_else(|_| die("DRGNX_HUB_SERVE_SOCKET is not set"));
+    let secret = std::env::var("DRGNX_HUB_SERVE_SECRET")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| die("DRGNX_HUB_SERVE_SECRET is not set"));
     let state = PathBuf::from(
         std::env::var("XDG_STATE_HOME").unwrap_or_else(|_| die("XDG_STATE_HOME is not set")),
     )
@@ -79,6 +86,7 @@ fn main() {
     let listener = UnixListener::bind(Path::new(&socket))
         .unwrap_or_else(|e| die(&format!("cannot bind {socket}: {e}")));
     let shared = Arc::new(Shared {
+        secret,
         script,
         log: Mutex::new(log),
         subscribers: Mutex::new(Vec::new()),
@@ -99,6 +107,16 @@ fn serve(stream: UnixStream, shared: &Shared) {
     };
     let mut r = BufReader::new(stream);
     let mut line = String::new();
+    // the first line proves the client is Ratatoskr, or the connection ends
+    if !matches!(r.read_line(&mut line), Ok(1..))
+        || serde_json::from_str::<Value>(line.trim_end())
+            .ok()
+            .and_then(|v| v.get("auth").and_then(Value::as_str).map(str::to_string))
+            .is_none_or(|a| !runstav::proof::verify(&shared.secret, &a))
+    {
+        eprintln!("ratatoskr-fake-backend: refused a connection without the secret");
+        return;
+    }
     loop {
         line.clear();
         match r.read_line(&mut line) {

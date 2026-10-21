@@ -13,13 +13,14 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 /// Environment names never passed into a sandbox beside `gleipnir::BASE_ENV_DENY`: drgnx's own dirs, the agent's
-/// identity and the hub's socket and pid.
+/// identity, and the backend's socket, parent pid and secret.
 pub const ENV_DENY: &[&str] = &[
     "DRGNX_DATA_DIR",
     "DRGNX_CONFIG_DIR",
     "DRGNX_AGENT",
     "DRGNX_HUB_SERVE_SOCKET",
     "DRGNX_HUB_PARENT_PID",
+    crate::backend::SECRET_ENV,
 ];
 
 /// What no spec may expose, for the hub `env` describes, as true names (GL-T2-2):
@@ -27,7 +28,8 @@ pub const ENV_DENY: &[&str] = &[
 ///   `<tmp>/drgnx-hub-UID`); `DRGNX_DIR` (the checkout); Emacs's server dirs (`<tmp>/emacsUID`, `/tmp/emacsUID`,
 ///   `<runtime>/emacs`); and this binary's own dir (review M12), so no write bind can replace the helper;
 /// - `user_sockets`: `SSH_AUTH_SOCK` and the D-Bus session bus's `unix:path=`;
-/// - `run_parents`: `<socket dir>/s`, where session dirs are made;
+/// - `run_parents`: `paths::session_parents`, where session dirs are made (`<socket dir>/s`, and the fallback
+///   `<tmp>/drgnx-hub-UID/s`), never the backend's `hub-HASH.d/` (review M10);
 /// - `program_dirs`: the absolute `PATH` entries (a relative one names no fixed place and is left out; Task 2);
 /// - `env_deny`: [`ENV_DENY`].
 ///
@@ -95,7 +97,7 @@ pub fn context_for(env: &Env, helper: Option<&Path>) -> Context {
         closed: true_names(closed),
         open_inside_closed: vec![],
         user_sockets: true_names(user_sockets),
-        run_parents: true_names([socket_dir.join("s")]),
+        run_parents: true_names(paths::session_parents(env, &socket)),
         program_dirs: true_names(program_dirs),
         env_deny: ENV_DENY.iter().map(|s| s.to_string()).collect(),
     }

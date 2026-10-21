@@ -296,10 +296,14 @@ it holds, and changes nothing. A hello refused for its params (`invalid-params`)
 proof does. The protocol a user connection's hello said is kept: when it is newer than the hub's, every call on it but
 `hello` is `proto` ("this hub speaks protocol 1, the connection's hello said N: restart the hub (drgnx hub stop)").
 
-**Agent sockets.** With the `test-hooks` feature, `serve --foreground --agent-socket SID[:JOB]` binds
-`<socket dir>/hub-HASH.d/agent-SID.sock` (the directory private, the socket 0600, removed at the stop). A connection
-there is `agent` class, bound to SID and JOB: the forwarded calls carry them (`Caller {class, sid, job, conn_id}`). The
-sandbox phase binds the real per-session sockets.
+**Agent sockets.** With the `test-hooks` feature, `serve --foreground --agent-socket SID[:JOB]` binds `hub.sock` in
+the session's own directory, `<socket dir>/s/SID/` (`runstav::paths::session_dir`; `<tmp>/drgnx-hub-UID/s/SID/` when
+its longest socket, `gateway.sock`, would be over 103 bytes). `s/` and `s/SID/` are made private (0700, the user's,
+never a link) and checked with `trusted_dir`, the socket is 0600, and the session dir goes at the stop. A connection
+there is `agent` class, bound to SID and JOB: the forwarded calls carry them (`Caller {class, sid, job, conn_id}`). A
+session dir is never the backend's `hub-HASH.d/` (review M10): a sandbox is given `s/SID` alone, so nothing bound into
+it reaches `backend.sock`. The per-session sockets of later phases (`mcp.sock`, `search.sock`, `gateway.sock`) go in
+the same directory.
 
 **`work.db` read-only.** The front reads work.db through `urdr::open_readonly` on a thread of its own (`store.rs`),
 and never writes it. It reads `meta.schema` at the start and every 2 s. While it is above this hub's 6, the hub is
@@ -358,12 +362,23 @@ LANGUAGE TZ TMPDIR TMP TEMP XDG_RUNTIME_DIR XDG_STATE_HOME XDG_DATA_HOME XDG_CON
 `DRGNX_DATA_DIR DRGNX_CONFIG_DIR DRGNX_EMACS DRGNX_DIR DRGNX_JOBS_LAUNCHER DRGNX_NO_LANGUAGE_SERVERS`, and what agents
 and git use on main: `SSH_AUTH_SOCK`, `HTTP_PROXY HTTPS_PROXY NO_PROXY ALL_PROXY` in both cases, `SSL_CERT_FILE
 SSL_CERT_DIR NODE_EXTRA_CA_CERTS`, `CLAUDE_CONFIG_DIR`, `TERM COLORTERM`, `DISPLAY WAYLAND_DISPLAY`, each when set.
-A `DRGNX_RATATOSKR_BACKEND` child also gets `DRGNX_FAKE_BACKEND_*`. Ratatoskr sets `DRGNX_HUB_SERVE_SOCKET` and
-`DRGNX_HUB_PARENT_PID` (its own pid: the backend ends when Ratatoskr is gone).
+A `DRGNX_RATATOSKR_BACKEND` child also gets `DRGNX_FAKE_BACKEND_*`. Ratatoskr sets `DRGNX_HUB_SERVE_SOCKET`,
+`DRGNX_HUB_PARENT_PID` (its own pid: the backend ends when Ratatoskr is gone) and `DRGNX_HUB_SERVE_SECRET`.
+
+**Only Ratatoskr reaches the backend** (review M10). Each start of the backend gets a new secret, 32 random bytes as
+64 hex, in `DRGNX_HUB_SERVE_SECRET`: never in its argv, a file or a log. The first line Ratatoskr sends on its
+connection, after the peer check, is `{"auth": SECRET}`. The backend closes any connection whose first line is
+anything else (another key, a wrong secret, a line that is not JSON) before a method runs, answers nothing and logs
+"refused a connection without the backend secret" to its stderr. It compares the SHA-256 digests, not the strings.
+`drgnx-hub-main` refuses to serve a `DRGNX_HUB_SERVE_SOCKET` without a secret (exit 1). A Lisp hub serving on its
+own socket (the v0 hub) has no secret and no such check. A same-uid process outside a sandbox can still read the
+backend's `/proc/PID/environ`; it can read the cap too, so this guards against sandboxed agents (no access to the
+backend's `/proc` entry or its directory), not against unsandboxed code.
 
 **The serve socket.** The backend serves on `<socket dir>/hub-HASH.d/backend.sock` (`<tmp>/drgnx-hub-UID/` when that
-is over 103 bytes), in a directory made private under Ratatoskr's lock. `drgnx-hub-main` reads
-`DRGNX_HUB_SERVE_SOCKET` and `DRGNX_HUB_PARENT_PID` and unsets both before it starts anything
+is over 103 bytes), in a directory made private (and checked with `trusted_dir`) under Ratatoskr's lock, apart from
+every agent session's directory. `drgnx-hub-main` reads `DRGNX_HUB_SERVE_SOCKET`, `DRGNX_HUB_PARENT_PID` and
+`DRGNX_HUB_SERVE_SECRET` and unsets all three before it starts anything
 (`drgnx-hub--take-serve-env`), so its agents, their coordination servers, an agent's `drgnx job …` and a test inside
 a job find the hub through `drgnx-hub-socket`, which is the front's socket: they never reach the backend past the
 front's checks. `drgnx-hub-socket` itself never reads a socket from the environment, for the same reason. A

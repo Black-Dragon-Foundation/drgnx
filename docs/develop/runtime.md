@@ -96,7 +96,13 @@ AR_aarch64_linux_android=/usr/bin/true` (the Rust is still checked in full; only
 - **`paths`**: `data_dir`, `socket_path`, `cap_path` (`hub-HASH.cap`), `lock_path` (`hub-HASH.sock.lock`) and
   `backend_socket_path`, the Lisp backend's private socket `<socket dir>/hub-HASH.d/backend.sock` (one per data dir, so
   two data dirs sharing a runtime dir never collide). Over 103 bytes it goes to `<tmp>/drgnx-hub-UID/hub-HASH.d/`, and
-  past 103 bytes there too it is `PathError::TooLong`. `private_dir` makes a directory 0700 (parents too) when it is not
+  past 103 bytes there too it is `PathError::TooLong`. `session_dir(env, socket, SID)` is one agent session's
+  directory, `<socket dir>/s/SID/` (design §4.2): it holds that session's sockets, `hub.sock` (agent class) today and
+  `mcp.sock`, `search.sock` and `gateway.sock` later, and never the backend's (review M10): a sandbox is given `s/SID`
+  alone (Gleipnir's run parent is `s/`), so nothing bound into it reaches `backend.sock`. Over 103 bytes for its longest
+  socket (`gateway.sock`) it is `<tmp>/drgnx-hub-UID/s/SID/`; a SID that is not letters, digits, `-` and `_` is
+  `PathError::BadName`. `make_session_dir` makes the socket dir (or that `<tmp>` one), `s/` and `s/SID/` with
+  `private_dir` and checks each with `trusted_dir`. `private_dir` makes a directory 0700 (parents too) when it is not
   there, refuses one that is a link, not a directory or another user's, and chmods it 0700 through the descriptor it
   checked (opened with `O_NOFOLLOW`), as the Lisp `drgnx-hub--private-dir` does.
 - **`registry`**, **`methods`**, **`types`**, **`events`**: every method with its classes, typed params and result,
@@ -260,7 +266,8 @@ domr connect-as --socket PATH
   run through the front (`--target ratatoskr --lisp-hub test/conformance/lisp-hub.sh --only-tag v0`). A row with
   neither runs with the backend `missing` (the harness sets no `DRGNX_DIR`).
 - **The fake backend** (`runtime/target/debug/ratatoskr-fake-backend`, `conformance/src/bin/`) stands in for the
-  Lisp backend: it serves `DRGNX_HUB_SERVE_SOCKET` the v0 way, appends every line it gets to
+  Lisp backend: it serves `DRGNX_HUB_SERVE_SOCKET` the v0 way, closes a connection whose first line is not `{"auth":
+  DRGNX_HUB_SERVE_SECRET}` (as the Lisp backend does; that line is not logged), appends every other line it gets to
   `$STATE/fake-backend.log` and writes its environment as a JSON object to `$STATE/fake-backend.env`. It answers from
   the JSON script in `DRGNX_FAKE_BACKEND_SCRIPT` (a row's `start` `env`): `{METHOD: ANSWER}`, ANSWER an object with
   `result` or `error` (sent with the request's id), a string (the whole line, `$ID` the id), `null` (never
@@ -301,14 +308,14 @@ Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in fai
 | `rename`, `remove` | `from`, `to` / `path` | rename-replace a file, remove one (an update of a binary on disk) |
 | `install_bin` | `to` | copy the hub under test to `to` (0755), a binary a scenario can replace |
 | `spawn` | `capture`, `argv` | start a helper (for example `sleep 60`); the capture is its pid, and `NAME_start` its start time. Killed when the scenario ends |
-| `connect` | `conn` (default `c`), `hub`, `socket` (`"main"` or `"agent:SID"`), `as` | open a connection; lines are buffered per connection. `"user"` (default) on a v1 target performs the `hello` macro with a valid proof and consumes the `challenge`; on `--target lisp` it does nothing. `"service"` connects raw (the `challenge` stays buffered). `"other-uid"` needs `sudo`: it runs `connect-as` as another uid, and makes the root directory 0711 for it |
+| `connect` | `conn` (default `c`), `hub`, `socket` (`"main"`, `"backend"`, the Lisp backend's own socket, or `"agent:SID"`), `as` | open a connection; lines are buffered per connection. `"user"` (default) on a v1 target performs the `hello` macro with a valid proof and consumes the `challenge`; on `--target lisp` it does nothing. `"service"` connects raw (the `challenge` stays buffered). `"other-uid"` needs `sudo`: it runs `connect-as` as another uid, and makes the root directory 0711 for it |
 | `hello` | `conn`, `proof`, `proto`, `expect_class`, `expect_error`, `expect_result`, `capture` | the v1 macro: read the `challenge`, send `hello` with the proof, check the class and, for `valid`, the hub's proof. `proof` is `valid`, `wrong`, `none` or `replay:NAME`. `capture: NAME` keeps the line it sent; `replay:NAME` sends such a line again, as is. `expect_error: CODE` wants the refusal with that code; `expect_result` is a pattern for the reply. A connection is challenged once: a second `hello` on it uses the nonce the first one read |
 | `chmod` | `path`, `mode`, `owner` | change a mode (octal string) and/or the owner: `"other"` gives the path to uid and gid 65534, `"self"` back to the harness's (root does it itself; anyone else through passwordless `sudo -n chown`, so such a row needs `sudo`) |
 | `send` | `conn`, one of `json`, `raw`, `bytes` | write one line. `raw` is the text as is, plus `\n` unless `"no_newline": true`; `bytes` is `{fill, n, newline}`. In `json`, `{"$repeat": TEXT, "times": N}` is TEXT N times (a long string without a long row). `"eof": true` then closes the sending side (a client that vanished mid-line). A write the hub closed meanwhile is no error: the next `expect_closed` says so |
 | `pause` | `conn` | stop reading the connection (what arrives stays in the socket): a client that stopped reading. The next step that reads it reads again |
 | `expect` | `conn`, `json` (pattern), `within_ms` (5000) | the first buffered or arriving line that matches; earlier non-matching lines stay buffered |
 | `expect_next` | as `expect` | the very next line must match |
-| `expect_closed` | `conn`, `within_ms` | the hub closed the connection |
+| `expect_closed` | `conn`, `within_ms`, `silent` | the hub closed the connection; with `"silent": true`, without sending a line first (a refusal answers nothing) |
 | `expect_silent` | `conn`, `for_ms` (300) | no line arrives |
 | `kill` | `hub` or `pid`, `signal` (`TERM KILL STOP CONT INT HUP QUIT USR1 USR2`) | signal the hub (or a captured pid) |
 | `expect_exit` | `hub` or `pid`, `code`, `signal`, `within_ms` (10000) | the process ended with this status (a `pid` must be one the scenario spawned) |
@@ -325,7 +332,7 @@ Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in fai
 $HARNESS_PID` (of the step's `hub`, else the latest started), `$SCENARIOS` (the scenarios' directory, absolute: its
 `fixtures/`), `$EMACS` (`$DRGNX_EMACS`, else `emacs`), and `$NAME` for a capture. A string that is just `$PID(hub)`,
 `$HARNESS_PID` or a capture keeps its JSON type (a number stays a number). Agent sockets are
-`$SOCKET_DIR/hub-HASH.d/agent-SID.sock`.
+`$SOCKET_DIR/s/SID/hub.sock` (`paths::session_dir`).
 
 **Patterns** are JSON. An object matches when it has every key of the pattern (extra keys are fine). Arrays match element
 by element and in length, unless the pattern is `{"$contains": [...]}` (every listed pattern matches some element).
@@ -430,8 +437,8 @@ runtime/target/debug/domr --target ratatoskr --hub-bin runtime/target/debug/rata
     --scenarios test/conformance
 ```
 
-Paths: the agent sockets are `<root>/run/drgnx/hub-HASH.d/agent-SID.sock`, so with `DRGNX_CONFORMANCE_ROOTS` the
-root's own path must leave room for them within 103 bytes (a short link to a deeper directory works).
+Paths: the agent sockets are `<root>/run/drgnx/s/SID/hub.sock`; past 103 bytes (sized for the longest session socket,
+`gateway.sock`) a session dir goes to `<tmp>/drgnx-hub-UID/s/SID/`.
 
 `test/conformance/class-matrix.json` is not a row: it is the hand-written class table (`{method: [classes]}`) that the
 registry's test and the `class_matrix` step read.

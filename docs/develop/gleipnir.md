@@ -70,8 +70,10 @@ this returns.
     `<state>/hub`, `<tmp>/drgnx-hub-UID`); `DRGNX_DIR`; Emacs's server dirs (`<tmp>/emacsUID`, `/tmp/emacsUID`,
     `<runtime>/emacs`); and the helper binary's own dir (review M12), so no write bind can replace the helper;
   - `user_sockets`: `SSH_AUTH_SOCK` and the D-Bus session bus's `unix:path=` (and `runtime=yes`);
-  - `run_parents`: `<socket dir>/s`; `program_dirs`: the absolute `PATH` entries; `env_deny`: `DRGNX_DATA_DIR
-    DRGNX_CONFIG_DIR DRGNX_AGENT DRGNX_HUB_SERVE_SOCKET DRGNX_HUB_PARENT_PID`.
+  - `run_parents`: `runstav::paths::session_parents`, `<socket dir>/s` and the fallback `<tmp>/drgnx-hub-UID/s`
+    (a session's dir is `s/SID/`, never the backend's `hub-HASH.d/`); `program_dirs`: the absolute `PATH` entries;
+    `env_deny`: `DRGNX_DATA_DIR DRGNX_CONFIG_DIR DRGNX_AGENT DRGNX_HUB_SERVE_SOCKET DRGNX_HUB_PARENT_PID
+    DRGNX_HUB_SERVE_SECRET`.
 - `helper()` is this binary (its path resolved at start) with `sandbox-inner` and `relay`.
 - `to_draugr(invocation)` is the `draugr::Spec` (stdin `/dev/null`, the fds as `PassFd`s, `new_session`).
 - `ratatoskr relay --parent-pid PID [--ready-fd N] PORT=SOCKET…` runs [the relay](#the-relay-task-11).

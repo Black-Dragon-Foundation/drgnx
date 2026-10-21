@@ -4,7 +4,8 @@
 //! 2. the socket's directory made private (`private_dir`), and `<state>/hub` and its `log/`, then logging;
 //! 3. the lock ([`crate::lock`]); signals are caught from here on;
 //! 4. only while holding it: a stale socket removed, the cap written (0600, temp + rename), the socket bound and made
-//!    0600, and the agent sockets (test-hooks) bound in `hub-HASH.d/` beside it;
+//!    0600, and the agent sockets (test-hooks) bound as `s/SID/hub.sock`, each session's dir private and apart from
+//!    the backend's `hub-HASH.d/` (review M10);
 //! 5. `runtime.db`, then the read-only `work.db` reader, whose schema is read now and at each 2 s tick;
 //! 6. the processes `runtime.db` recorded reaped, then the Lisp backend started (and kept running) on its own socket.
 //!
@@ -118,9 +119,9 @@ pub async fn run(args: ServeArgs) -> Exit {
     // the agent sockets (test-hooks: `--agent-socket SID[:JOB]`), bound under the lock too
     let (mut agents, mut agent_paths) = (Vec::new(), Vec::new());
     for a in &args.agent_sockets {
-        match bind_agent(&socket, a) {
-            Ok((path, l, s)) => {
-                agent_paths.push(path);
+        match bind_agent(&env, &socket, a) {
+            Ok((dir, l, s)) => {
+                agent_paths.push(dir);
                 agents.push((l, s));
             }
             Err(e) => {
@@ -282,9 +283,13 @@ fn new_backend(
         .map_err(|e| e.to_string())
         .and_then(|p| match &program {
             Err(_) => Ok(p),
-            Ok(_) => paths::private_dir(p.parent().unwrap_or(Path::new("/")))
-                .map(|()| p.clone())
-                .map_err(|e| format!("its socket's directory: {e}")),
+            Ok(_) => {
+                let dir = p.parent().unwrap_or(Path::new("/"));
+                paths::private_dir(dir)
+                    .and_then(|()| paths::trusted_dir(dir))
+                    .map(|_| p.clone())
+                    .map_err(|e| format!("its socket's directory: {e}"))
+            }
         });
     let home = PathBuf::from(get("HOME").unwrap_or_else(|| "/".into()));
     Backend::new(program, serve, home, runtime, events)
@@ -319,16 +324,15 @@ async fn watch_schema(front: Arc<Front>) {
     }
 }
 
-/// Under the lock: agent socket A at `<socket dir>/hub-HASH.d/agent-SID.sock` (the directory private, a stale
-/// socket removed, the socket 0600).
-fn bind_agent(socket: &Path, a: &AgentSocket) -> Result<(PathBuf, UnixListener, Socket), String> {
-    let stem = socket.file_stem().unwrap_or_default().to_string_lossy();
-    let dir = socket
-        .parent()
-        .unwrap_or(Path::new("/"))
-        .join(format!("{stem}.d"));
-    paths::private_dir(&dir).map_err(|e| e.to_string())?;
-    let path = dir.join(format!("agent-{}.sock", a.sid));
+/// Under the lock: agent socket A at `hub.sock` in its session dir, `<socket dir>/s/SID/` (`paths::make_session_dir`:
+/// each level private and checked; a stale socket removed, the socket 0600).  The session dir, which the stop removes.
+fn bind_agent(
+    env: &Env,
+    socket: &Path,
+    a: &AgentSocket,
+) -> Result<(PathBuf, UnixListener, Socket), String> {
+    let dir = paths::make_session_dir(env, socket, &a.sid).map_err(|e| e.to_string())?;
+    let path = dir.join(paths::SESSION_HUB_SOCKET);
     match std::fs::remove_file(&path) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
             return Err(format!(
@@ -347,12 +351,13 @@ fn bind_agent(socket: &Path, a: &AgentSocket) -> Result<(PathBuf, UnixListener, 
         sid: a.sid.clone(),
         job: a.job.clone(),
     };
-    Ok((path, listener, s))
+    Ok((dir, listener, s))
 }
 
-fn remove_all(files: &[PathBuf]) {
-    for f in files {
-        match std::fs::remove_file(f) {
+/// The session dirs this hub made, with what is in them (under the lock: they are ours).
+fn remove_all(dirs: &[PathBuf]) {
+    for f in dirs {
+        match std::fs::remove_dir_all(f) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
                 tracing::warn!("cannot remove {}: {e}", f.display());
             }
