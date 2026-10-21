@@ -104,7 +104,44 @@ modules. `BackendKind` is `Bwrap`, `Reduced`, `Seatbelt` or `None`; Task 13 dete
 comment, and every chain ends in `BackendKind::None` or an `Unsupported` refusal, never an unconfined run. The rules
 in `validate` follow the spec's `Target`, not the host, so the macOS rules are tested on Linux.
 
-## Toolchain roots (Task 3)
+## Toolchain roots
+
+`gleipnir::toolchain` finds the read-only roots under the home that the `PATH` entries need, so an agent can run
+the user's compilers without binding `~`. `roots(path_dirs, home, mise_data_dir, exclude)` returns `Roots { dirs,
+files }`, sorted true names. `path_dirs` must be absolute (a relative entry is skipped, and the spec validator
+refuses relative paths anyway), as must the home and the exclude entries (drgnx's checkout and data dir).
+
+A known layout gives its install root, matched on whole path components:
+
+| Layout | Root |
+|---|---|
+| mise `DATA/installs/TOOL/VER/…` (`DATA` is `mise_data_dir`, else `~/.local/share/mise`) | `…/installs/TOOL/VER` |
+| `~/.cargo/bin` | itself, and `~/.rustup/toolchains` where it exists (cargo's proxies run them) |
+| `~/.rustup/toolchains/…` | `~/.rustup/toolchains` |
+| `~/go/bin` | itself |
+| `~/.nvm/versions/node/V/…` | `…/node/V` |
+| npm's prefix `~/.npm-global/…`; `~/.local/lib/node_modules/PKG/…` | the prefix; that package |
+| pipx `~/.local/share/pipx/venvs/APP/…`, `~/.local/pipx/venvs/APP/…` | the venv |
+| uv `~/.local/share/uv/tools/APP/…`, `~/.local/share/uv/python/V/…` | the tool's venv, the Python |
+| `~/.local/share/claude/versions/…` | `~/.local/share/claude/versions` |
+
+- Each `PATH` dir inside the home, links resolved, gives its layout's root, else the dir itself.
+- Each link inside it gives the root of the layout it leads into. A link into no layout gives its **target file
+  alone**, when that is an executable regular file, not directly in `~`, outside the config areas, with a name that
+  is not a `SECRET_FILES` entry. A link to a directory in no layout gives nothing.
+- A link (or a `PATH` dir) into `exclude` gives nothing.
+- Never a root: the home or a parent of it, `~/.local` itself, anything inside `SECRET_DIRS`; a plain dir that is
+  or lies in `~/.config`, `~/.local/share`, `~/.local/state` or `~/.cache` (only a layout root may).
+- A root inside another is left to the outer one; dirs outside the home are the system's reads already.
+
+Bin dirs rather than whole tool homes keep the credentials beside them out (`~/.cargo/credentials.toml` is not in
+`~/.cargo/bin`). `hide_list(&roots)` is the `hide` list for the ones inside a root: each existing
+`root/<name>` for `SECRET_FILES` (`.npmrc`, `etc/npmrc`, `.yarnrc`, `.yarnrc.yml`, `.pypirc`, `.netrc`,
+`.git-credentials`, `.env`, `credentials`, `credentials.toml`, `credentials.json`, `auth.json`), as true names.
+
+The module reads paths and metadata only and has no `cfg` gate: it builds the same on every unix target, Android
+included (which has no backend to use it). Roots still go through `validate`'s `read` rules; what those refuse is
+dropped by the caller.
 
 ## The bubblewrap argv (Task 7)
 
