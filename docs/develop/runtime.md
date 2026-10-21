@@ -502,7 +502,7 @@ for real.
 `runtime/fuzz/` is a cargo-fuzz crate with its own `[workspace]` (the product workspace excludes it). It builds on
 nightly only: the pin is `nightly-2026-10-15`, set by the CI job and by local runs, never by a `rust-toolchain.toml`
 (a toolchain file would make a plain `cargo` there install a nightly). cargo-fuzz needs a C++ compiler for libFuzzer
-(`g++`: CI's `fuzz` job runs on the Ubuntu runner, which has it; 60 s a target on a push to `main`, 10 minutes a target
+(`g++`: CI's `fuzz` job runs on the Ubuntu runner, which has it; 60 s a target on a push to `main` or `ci/*`, 10 minutes a target
 daily, `fuzz_minutes` on demand: [ci.md](ci.md)).
 
 | Target | What it feeds |

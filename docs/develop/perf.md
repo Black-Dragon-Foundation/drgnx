@@ -221,7 +221,7 @@ only in a local audit, and stays gated off in CI until it is measured on every s
 
 ## In CI
 
-The `perf` job of `gui.yml` runs `bin/drgnx test --container --perf` on every push to `main` with
+The `perf` job of `gui.yml` runs `bin/drgnx test --container --perf` on every push to `main` or `ci/*` with
 `DRGNX_PERF_CPU_FACTOR=2` and writes `perf-results.json`, uploaded as the `perf-results` artifact (also when the run
 fails). It gates on the budgets, not on history, and not on wall clock (the runner's clock is not the budgets' machine).
 

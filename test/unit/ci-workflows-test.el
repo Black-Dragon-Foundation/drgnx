@@ -17,7 +17,8 @@
 (ert-deftest drgnx-ci/gui-runs-on-push-to-main ()
   (let ((gui (drgnx-ci-test--yml "gui.yml")))
     (skip-unless gui)
-    (drgnx-ci-test--has gui "push:\n    branches: [main]" "schedule:" "workflow_dispatch:" "group: gui-${{ github.ref }}"
+    (drgnx-ci-test--has gui "push:\n    branches: [main, \"ci/**\"]" "schedule:" "workflow_dispatch:"
+                        "group: gui-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}"
                         "bin/drgnx test --container --ui" "bin/drgnx test --container --scenario" "DRGNX_TEST_NO_TIMING: \"1\""
                         "bin/drgnx test --container --perf" "DRGNX_PERF_CPU_FACTOR: \"2\""
                         "DRGNX_PERF_RESULTS: perf-results.json" "if: always()" "name: perf-results")
@@ -49,18 +50,59 @@
         (unless (string-prefix-p "./.github/workflows/" (match-string 1 yml))
           (should (string-match-p "@[0-9a-f]\\{40\\}\\'" (match-string 1 yml))))))))
 
-(ert-deftest drgnx-ci/ci-calls-the-runtime-and-runs-the-editor-tests-on-its-binary ()
+(ert-deftest drgnx-ci/ci-calls-the-runtime-and-runs-the-editor-tests-on-its-own-binary ()
   (let ((ci (drgnx-ci-test--yml "ci.yml")) (rt (drgnx-ci-test--yml "runtime.yml")) (macos (drgnx-ci-test--yml "macos.yml")))
     (skip-unless (and ci rt macos))
-    ;; a `needs:' cannot reach another workflow file, so ci.yml calls runtime.yml and downloads its artifact
-    (drgnx-ci-test--has ci "uses: ./.github/workflows/runtime.yml" "needs: runtime" "name: ratatoskr" "DRGNX_RATATOSKR_BIN=")
-    (drgnx-ci-test--has rt "workflow_call:" "name: ratatoskr\n" "path: runtime/target/debug/ratatoskr" "--require-all"
+    ;; ci.yml calls runtime.yml (so its jobs are in the CI gate); the unit suite builds its own Ratatoskr, so a red
+    ;; runtime job never skips it (no `needs: runtime', no artifact to miss)
+    (drgnx-ci-test--has ci "uses: ./.github/workflows/runtime.yml" "DRGNX_RATATOSKR_BIN=")
+    (should-not (string-search "download-artifact" ci))
+    (drgnx-ci-test--has rt "workflow_call:" "--require-all"
                         "xcode-27" "nightly-2026-10-15" "cargo-fuzz --version 0.13.2" "--perf perf-")
     ;; its own triggers carry no push or pull_request: ci.yml's call is that run (a second one would build everything twice)
     (should-not (string-match-p "^  \\(push\\|pull_request\\):" rt))
     (drgnx-ci-test--has macos "DRGNX_RATATOSKR_BIN=" "brew install ripgrep rust")
-    ;; the client's tests that need --idle-tick-ms are on darwin's no-skip list: the binary they use has the test hooks
-    (drgnx-ci-test--has macos "-p drgnx-ratatoskr --features test-hooks")))
+    ;; the client's tests that need --idle-tick-ms are on the no-skip lists: the binary they use has the test hooks
+    (dolist (yml (list ci macos))
+      (drgnx-ci-test--has yml "-p drgnx-ratatoskr --features test-hooks"))))
+
+;; CI runs on a ci/* branch before main moves, and one always-run gate per push workflow is what branch protection
+;; requires: it fails unless every push job succeeded (docs/develop/ci.md, "Gates").
+(defun drgnx-ci-test--job-ids (yml)
+  (drgnx-ci-test--matches "^  \\([a-z0-9-]+\\):$" (substring yml (string-search "\njobs:\n" yml))))
+
+(ert-deftest drgnx-ci/each-push-workflow-ends-in-one-gate-over-its-push-jobs ()
+  ;; (file, the gate's name, the jobs that never run on a push)
+  (dolist (spec '(("ci.yml" "CI gate" nil) ("macos.yml" "macOS gate" ("install")) ("gui.yml" "GUI tier gate" nil)))
+    (let ((yml (drgnx-ci-test--yml (car spec))))
+      (skip-unless yml)
+      (drgnx-ci-test--has yml "push:\n    branches: [main, \"ci/**\"]"
+                          "cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}"
+                          "'refs/heads/main' && github.run_id || github.ref }}"
+                          (concat "  gate:\n    name: " (nth 1 spec) "\n")
+                          "jq -e 'all(.[]; .result == \"success\")'")
+      (let* ((gate (substring yml (string-search "\n  gate:\n" yml)))
+             (needs (and (string-match "^    needs: \\[\\([^]]*\\)\\]$" gate)
+                         (split-string (match-string 1 gate) ", *" t))))
+        (should (string-match-p "^    if: \\${{ always() \\|^    if: always()$" gate))
+        (should (equal (sort (copy-sequence needs) #'string<)
+                       (sort (cl-set-difference (drgnx-ci-test--job-ids yml) (cons "gate" (nth 2 spec)) :test #'equal)
+                             #'string<)))
+        ;; the gate's are the only `needs:' (no job waits on another it does not take data from)
+        (should (= 1 (length (let ((case-fold-search nil)) ; not the gate's NEEDS variable
+                               (drgnx-ci-test--matches "^ +\\(needs\\):" yml)))))))))
+
+(ert-deftest drgnx-ci/nothing-stops-early ()
+  (dolist (f '("ci.yml" "macos.yml" "gui.yml" "tty.yml" "images.yml" "bootstrap.yml" "runtime.yml"))
+    (let ((yml (drgnx-ci-test--yml f)))
+      (skip-unless yml)
+      ;; every cargo test runs every crate's tests, every matrix every row, and no job's failure is let off
+      (dolist (line (drgnx-ci-test--matches "^\\(.*cargo[^\n]* test .*\\)$" yml))
+        (should (string-search "--no-fail-fast" line)))
+      (should (= (length (drgnx-ci-test--matches "\\(strategy:\\)" yml))
+                 (length (drgnx-ci-test--matches "\\(fail-fast: false\\)" yml))))
+      (should-not (string-search "continue-on-error" yml))
+      (should-not (string-search "needs: runtime" yml)))))
 
 ;; Caches: a cached input is addressed by a hash of what it is built from, so a stale one cannot be restored.
 (defun drgnx-ci-test--matches (re text)

@@ -1,12 +1,12 @@
-# Every push to main and every pull request: the Rust runtime (runtime.yml, called as the `runtime` job), the unit suite
-# (formatting, byte-compile with no warnings and the lints are tests in it) on Emacs 31.1 against the `ratatoskr` that
-# runtime.yml built in the same run, shellcheck, and the leak scan.
-# docs/develop/ci.md
+# Every push to main or a ci/* branch and every pull request: the Rust runtime (runtime.yml, called as the `runtime`
+# job), the unit suite (formatting, byte-compile with no warnings and the lints are tests in it) on Emacs 31.1 against a
+# test-hooks `ratatoskr` it builds itself, shellcheck, and the leak scan. The `gate` job ("CI gate") is the check
+# branch protection requires. docs/develop/ci.md
 name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "ci/**"]
   pull_request:
   workflow_dispatch:
     inputs:
@@ -18,9 +18,10 @@ on:
 permissions:
   contents: read
 
+# a newer push to the same ci/* branch (or pull request) cancels the older run; a run on main is never cancelled
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   # Ratatoskr's CI (a `needs:` cannot reach a job of another workflow file, so the call is the job)
@@ -32,13 +33,10 @@ jobs:
     with:
       fuzz_minutes: ${{ inputs.fuzz_minutes }}
 
-  # It needs only the `ratatoskr` artifact of runtime.yml's Linux job, so it runs whatever runtime's other jobs say
-  # (a red macOS escape row must not skip the editor's tests: gate review B1). If the Linux job never uploaded the
-  # artifact, the download below fails this job, so it never runs against a missing binary.
+  # No `needs:`: it builds the Ratatoskr its tests use, so a red runtime job never skips or starves it (a `needs:
+  # runtime` skipped this suite on three pushes in a row and failed it for a missing artifact on a fourth).
   emacs-31:
     name: Nidhogg 31.1 (Fedora 45)
-    needs: runtime
-    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -48,16 +46,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # the test-hooks ratatoskr runtime.yml built (Fedora 45, like the image below); the client's tests run against it
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          name: ratatoskr
-          path: ${{ runner.temp }}/ratatoskr
-      - name: DRGNX_RATATOSKR_BIN
+          path: |
+            ~/.cargo/registry
+            runtime/target
+          key: cargo-${{ runner.os }}-unit-ratatoskr-${{ hashFiles('runtime/Cargo.lock') }}
+      # the client's tests run against Ratatoskr (DRGNX_RATATOSKR_BIN; those that need it fail rather than skip,
+      # test/no-skip.eld), with its test hooks: some need --idle-tick-ms. Built on the runner (glibc older than Fedora
+      # 45's, so it runs in the test container); runtime.yml's linux job tests the runtime itself.
+      - name: Ratatoskr (cargo build, for the client's tests)
         run: |
-          chmod +x "$RUNNER_TEMP/ratatoskr/ratatoskr"
-          echo "DRGNX_RATATOSKR_BIN=$RUNNER_TEMP/ratatoskr/ratatoskr" >> "$GITHUB_ENV"
+          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features test-hooks
+          echo "DRGNX_RATATOSKR_BIN=$GITHUB_WORKSPACE/runtime/target/debug/ratatoskr" >> "$GITHUB_ENV"
       - name: Prebuilt image for this Containerfile (else the suite builds it)
+        if: ${{ !cancelled() }}
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ACTOR: ${{ github.actor }}
@@ -65,8 +68,10 @@ jobs:
           image="ghcr.io/black-dragon-foundation/drgnx-test:$(sha256sum test/container/Containerfile | cut -c1-16)"
           printf '%s' "$TOKEN" | podman login ghcr.io -u "$ACTOR" --password-stdin || true
           if podman pull -q "$image"; then echo "DRGNX_TEST_IMAGE=$image" >> "$GITHUB_ENV"; else echo "no $image yet: building"; fi
-      # the files a core each at once, a failed file rerun once, the :timing tests left out by name (docs/develop/ci.md)
+      # the files a core each at once, a failed file rerun once, the :timing tests left out by name (docs/develop/ci.md).
+      # Whatever the Ratatoskr build said: without the binary only the tests that need it fail
       - name: Unit suite in test/container/Containerfile, the files in parallel (no :timing tests)
+        if: ${{ !cancelled() }}
         env:
           DRGNX_CONTAINER: podman
           DRGNX_TEST_RERUN: "1"
@@ -84,4 +89,21 @@ jobs:
       - name: shellcheck
         run: shellcheck --severity=warning install.sh bin/drgnx .githooks/pre-commit
       - name: Leak scan (the pre-commit hook's patterns over every tracked file)
+        if: ${{ !cancelled() }}
         run: .githooks/pre-commit --all
+
+  # The one check branch protection requires of this workflow: every job above succeeded. It always runs, and a
+  # failed, cancelled or skipped job fails it (docs/develop/ci.md, "Gates").
+  gate:
+    name: CI gate
+    if: always()
+    needs: [runtime, emacs-31, scripts]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every needed job succeeded
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<<"$NEEDS"
+          jq -e 'all(.[]; .result == "success")' <<<"$NEEDS" >/dev/null
