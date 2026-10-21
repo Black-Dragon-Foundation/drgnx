@@ -253,7 +253,7 @@ above 0) and the value is nil.  The debugger opens only with `debug-on-error' an
   (or (drgnx-timer--entry-repeat entry) (memq (drgnx-timer--entry-kind entry) '(poll steps))))
 
 (defun drgnx-timer--failed (entry err)
-  "Record ERR, raised by ENTRY's FN, in `drgnx-timer-errors' and say it once with `message'.
+  "Record ERR, raised by ENTRY's FN, in `drgnx-timer-errors' and as a notice (`drgnx-timer--notify').
 At its `drgnx-timer-failure-limit'-th failure in a row an ENTRY that would run again is cancelled, marked
 `:stopped', and the report file rewritten (`drgnx-timer--write-report')."
   (let* ((n (1+ (drgnx-timer--entry-failures entry)))
@@ -265,27 +265,29 @@ At its `drgnx-timer-failure-limit'-th failure in a row an ENTRY that would run a
                 :error msg :failures n :stopped stop :time (drgnx-timer--now))
           drgnx-timer-errors)
     (let ((tail (nthcdr 49 drgnx-timer-errors))) (when tail (setcdr tail nil)))
-    (message "drgnx: timer %S failed: %s" key msg)
     (when stop
       (drgnx-timer--drop entry)
-      (drgnx-timer--write-report)
-      (drgnx-timer--notify-stopped entry n msg))))
+      (drgnx-timer--write-report))
+    (drgnx-timer--notify entry n msg stop)))
 
 (declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
 (declare-function drgnx-notice-clear "drgnx-notice" (source &optional id))
 
-(defun drgnx-timer--notify-stopped (entry n msg)
-  "Post ENTRY, stopped after N failures (the last one MSG), as a `warn' condition of source `timers'.
-The model needs this layer, so it loads at the first stop.  Never signals."
-  (let ((key (drgnx-timer--entry-key entry)))
+(defun drgnx-timer--notify (entry n msg stop)
+  "Post ENTRY's failure (MSG) to source `timers': a `warn' event with id (failed . KEY), so a timer that fails again
+and again (a debounce after every pause in typing) only counts; when STOP, ENTRY stopped after N failures: a `warn'
+condition with id KEY.  The model needs this layer, so it loads at the first failure.  Never signals."
+  (let ((key (drgnx-timer--entry-key entry)) (fn (drgnx-timer--entry-fn entry)))
     (condition-case failed
         (progn
           (require 'drgnx-notice)
-          (drgnx-notify 'timers 'warn
-                        (format "timer %S (%s) stopped after %d failures: %s" key (drgnx-timer--entry-fn entry) n msg)
-                        :id key :life 'condition
-                        :fix "report the error; drgnx starts the timer again at the next start"))
-      (error (message "drgnx: timer %S stopped (not recorded: %s)" key (error-message-string failed))))))
+          (if stop
+              (drgnx-notify 'timers 'warn (format "timer %S (%s) stopped after %d failures: %s" key fn n msg)
+                            :id key :life 'condition
+                            :fix "report the error; drgnx starts the timer again at the next start")
+            (drgnx-notify 'timers 'warn (format "timer %S (%s) failed: %s" key fn msg) :id (cons 'failed key))))
+      (error (message "drgnx: timer %S failed%s: %s (not recorded: %s)" key (if stop ", stopped" "") msg
+                      (error-message-string failed))))))
 
 (defun drgnx-timer--restarted (key)
   "KEY starts again: its \"stopped\" notice, if any, goes (nothing when the model is not loaded)."

@@ -25,7 +25,7 @@
     ("core/drgnx-keys.el" . 1)
     ("core/drgnx-notice.el" . 2)
     ("core/drgnx-notice-save.el" . 1)
-    ("core/drgnx-timer.el" . 2)
+    ("core/drgnx-timer.el" . 1)
     ("core/drgnx-tty-fallback.el" . 1)
     ;; processes with no notice model of their own: the hub, the sandbox plumbing, the MCP bridge, batch entry
     ;; points (their lines are their log; Rust-bound)
